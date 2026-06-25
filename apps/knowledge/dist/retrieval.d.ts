@@ -66,6 +66,7 @@ export interface KnowledgeContextPack {
     notes: {
         permissions: string[];
         freshness: string[];
+        stability: string[];
     };
 }
 export declare function retrieveKnowledgeContext(options: RetrievalOptions): Promise<KnowledgeContextPack>;

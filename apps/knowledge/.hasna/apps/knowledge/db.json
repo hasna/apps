@@ -1,0 +1,49 @@
+{
+  "items": [
+    {
+      "id": "k_mq6edjzl_rfnn7i",
+      "title": "open-knowledge architecture boundary",
+      "content": "open-knowledge exposes the user-facing knowledge CLI and knowledge-mcp MCP binary. The package is @hasna/knowledge, while open-knowledge is the repo/product name. Project state lives under .hasna/apps/knowledge with config.json, db.json, knowledge.db, and generated artifacts. open-files remains the source of truth for raw files and documents; knowledge stores source refs, revisions/hashes, redacted chunks, citations, embeddings, generated wiki artifacts, indexes, logs, runs, safety/audit records, and durable reviewed knowledge.",
+      "url": null,
+      "tags": [],
+      "created_at": "2026-06-09T08:48:14.961Z",
+      "updated_at": "2026-06-09T08:48:14.961Z"
+    },
+    {
+      "id": "k_mq6edk0b_brmawc",
+      "title": "Hasna machine topology for knowledge sync on 2026-06-09",
+      "content": "Current host is spark02. todos machines currently registers only spark02 and reports no primary machine. Tailscale is running on spark02 and sees spark01 online at 100.71.123.34, with SSH aliases spark01 for LAN and remote-spark01 for Tailscale. SSH to both spark01 and remote-spark01 works, and spark01 has bun, knowledge, the open-knowledge repo, and global/project knowledge directories. Tailscale also reports apple01, apple03, apple06, apple07, machine001, and an iOS device in the tailnet, so the product machine registry should reconcile with Tailscale instead of assuming todos machines is complete.",
+      "url": null,
+      "tags": [],
+      "created_at": "2026-06-09T08:48:14.987Z",
+      "updated_at": "2026-06-09T08:48:14.987Z"
+    },
+    {
+      "id": "k_mq6edk1d_mxksh9",
+      "title": "Knowledge multi-machine sync direction",
+      "content": "The best first sync path is local-first over Tailscale/SSH for trusted machines, with a hosted/API path for remote/cloud machines later. Each knowledge workspace should have a machine registry with stable machine_id, hostname, tailscale DNS/IP, ssh alias, OS, user, workspace path mapping, last_seen_at, and sync capabilities. Sync must use immutable object identity and content hashes for generated artifacts, stable row ids for catalog records, and explicit origin_machine_id/updated_by_machine_id metadata so agents know which machine created or last changed each record. Current db storage sync can push/pull catalog tables to Postgres when HASNA_KNOWLEDGE_DATABASE_URL or KNOWLEDGE_DATABASE_URL is configured, but it is not yet a conflict-aware machine sync engine.",
+      "url": null,
+      "tags": [],
+      "created_at": "2026-06-09T08:48:15.025Z",
+      "updated_at": "2026-06-09T08:48:15.025Z"
+    },
+    {
+      "id": "k_mq6edk3p_jvt79y",
+      "title": "Knowledge conflict and dedupe model",
+      "content": "Knowledge sync should behave like a small GitHub for knowledge: content-address generated artifacts, dedupe source-derived rows by source_ref plus revision/hash plus chunk offsets, dedupe durable knowledge by canonical id and normalized title/content hash, and detect collisions when the same logical record changes on multiple machines after the last common sync clock. Automatic merge is allowed for append-only logs, non-overlapping metadata/tag additions, identical content hashes, and independent generated artifacts. Conflicting durable knowledge/wiki edits should create conflict records and review tasks, then use AI SDK agent mode to propose a cited merge without committing durable writes until approved.",
+      "url": null,
+      "tags": [],
+      "created_at": "2026-06-09T08:48:15.109Z",
+      "updated_at": "2026-06-09T08:48:15.109Z"
+    },
+    {
+      "id": "k_mq6f3ma4_exg2op",
+      "title": "open-machines optional SDK boundary for knowledge",
+      "content": "open-machines is published as @hasna/machines and already has CLI/MCP/agent binaries, manifests, SSH route resolution, heartbeats, local SQLite, and Postgres storage-sync helpers. For open-knowledge, it should not be a hard runtime dependency. The right boundary is a small optional machine-topology SDK/adapter: if @hasna/machines is installed, knowledge can dynamically import it to discover machine identity, Tailscale/SSH routes, workspace paths, and status; if it is missing, knowledge falls back to its own local machine registry and direct Tailscale/SSH probes. open-machines should improve by exposing stable discovery/status APIs instead of forcing consumers to import CLI command modules or broad internals.",
+      "url": null,
+      "tags": [],
+      "created_at": "2026-06-09T09:08:30.988Z",
+      "updated_at": "2026-06-09T09:08:30.988Z"
+    }
+  ]
+}

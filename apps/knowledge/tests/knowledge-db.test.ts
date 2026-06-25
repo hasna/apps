@@ -16,7 +16,7 @@ describe('knowledge sqlite store', () => {
     const dbPath = join(dir, 'knowledge.db');
 
     const migration = migrateKnowledgeDb(dbPath);
-    expect(migration.schema_version).toBe(7);
+    expect(migration.schema_version).toBe(8);
 
     const db = openKnowledgeDb(dbPath);
     try {
@@ -43,12 +43,20 @@ describe('knowledge sqlite store', () => {
       expect(tables).toContain('knowledge_sync_conflicts');
       expect(tables).toContain('knowledge_sync_table_clocks');
       expect(tables).toContain('knowledge_sync_imports');
+      const wikiColumns = db.query<{ name: string }, []>('PRAGMA table_info(wiki_pages)').all()
+        .map((row) => row.name);
+      expect(wikiColumns).toContain('valid_from');
+      expect(wikiColumns).toContain('valid_to');
+      expect(wikiColumns).toContain('supersedes');
+      expect(wikiColumns).toContain('superseded_by');
+      expect(wikiColumns).toContain('confidence');
+      expect(wikiColumns).toContain('last_verified_at');
     } finally {
       db.close();
     }
 
     const stats = getKnowledgeDbStats(dbPath);
-    expect(stats.schema_version).toBe(7);
+    expect(stats.schema_version).toBe(8);
     expect(stats.sources).toBe(0);
     expect(stats.runs).toBe(0);
     expect(stats.redaction_findings).toBe(0);
@@ -63,7 +71,7 @@ describe('knowledge sqlite store', () => {
     expect(stats.sync_imports).toBe(0);
   });
 
-  test('recovers schema v7 when the migration marker is missing after v7 artifacts exist', () => {
+  test('recovers schema v8 when the migration marker is missing after v7 artifacts exist', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-db-v7-replay-'));
     const dbPath = join(dir, 'knowledge.db');
     migrateKnowledgeDb(dbPath);
@@ -152,13 +160,13 @@ describe('knowledge sqlite store', () => {
         '2026-06-09T00:00:01.000Z',
         '{}',
       );
-      db.run('DELETE FROM schema_versions WHERE version = 7');
+      db.run('DELETE FROM schema_versions WHERE version = 8');
     } finally {
       db.close();
     }
 
     const migration = migrateKnowledgeDb(dbPath);
-    expect(migration.schema_version).toBe(7);
+    expect(migration.schema_version).toBe(8);
 
     const recovered = openKnowledgeDb(dbPath);
     try {
@@ -181,7 +189,7 @@ describe('knowledge sqlite store', () => {
     }
   });
 
-  test('recovers schema v7 when sync columns exist but v7 tables are missing', () => {
+  test('recovers schema v8 when sync columns exist but v7 tables are missing', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-db-v7-tables-'));
     const dbPath = join(dir, 'knowledge.db');
     migrateKnowledgeDb(dbPath);
@@ -190,13 +198,13 @@ describe('knowledge sqlite store', () => {
     try {
       db.run('DROP TABLE knowledge_sync_table_clocks');
       db.run('DROP TABLE knowledge_sync_imports');
-      db.run('DELETE FROM schema_versions WHERE version = 7');
+      db.run('DELETE FROM schema_versions WHERE version = 8');
     } finally {
       db.close();
     }
 
     const migration = migrateKnowledgeDb(dbPath);
-    expect(migration.schema_version).toBe(7);
+    expect(migration.schema_version).toBe(8);
 
     const stats = getKnowledgeDbStats(dbPath);
     expect(stats.sync_table_clocks).toBe(0);
@@ -214,6 +222,61 @@ describe('knowledge sqlite store', () => {
       ).all().map((row) => row.name);
       expect(indexes).toContain('idx_sync_changes_bundle');
       expect(indexes).toContain('idx_sync_imports_status');
+    } finally {
+      recovered.close();
+    }
+  });
+
+  test('recovers schema v8 lifecycle defaults when the migration marker is missing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-db-v8-lifecycle-'));
+    const dbPath = join(dir, 'knowledge.db');
+    migrateKnowledgeDb(dbPath);
+
+    const db = openKnowledgeDb(dbPath);
+    try {
+      db.run(
+        `INSERT INTO wiki_pages (
+          id, path, title, artifact_uri, content_hash, status, metadata_json,
+          valid_from, valid_to, supersedes, superseded_by, confidence, last_verified_at,
+          created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        'wiki_lifecycle',
+        'wiki/lifecycle.md',
+        'Lifecycle',
+        'file:///tmp/wiki/lifecycle.md',
+        'sha256:lifecycle',
+        'active',
+        '{}',
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        '2026-06-01T00:00:00.000Z',
+        '2026-06-02T00:00:00.000Z',
+      );
+      db.run('DELETE FROM schema_versions WHERE version = 8');
+    } finally {
+      db.close();
+    }
+
+    const migration = migrateKnowledgeDb(dbPath);
+    expect(migration.schema_version).toBe(8);
+
+    const recovered = openKnowledgeDb(dbPath);
+    try {
+      const page = recovered.query<{
+        valid_from: string;
+        last_verified_at: string;
+        confidence: number;
+      }, [string]>('SELECT valid_from, last_verified_at, confidence FROM wiki_pages WHERE id = ?').get('wiki_lifecycle');
+      expect(page).toMatchObject({
+        valid_from: '2026-06-01T00:00:00.000Z',
+        last_verified_at: '2026-06-02T00:00:00.000Z',
+        confidence: 0.8,
+      });
     } finally {
       recovered.close();
     }
@@ -260,7 +323,7 @@ describe('knowledge sqlite store', () => {
     });
 
     const stats = getKnowledgeDbStats(dbPath);
-    expect(stats.schema_version).toBe(7);
+    expect(stats.schema_version).toBe(8);
     expect(stats.sources).toBe(2);
     expect(stats.source_revisions).toBe(2);
     expect(stats.chunks).toBe(1);
@@ -462,6 +525,21 @@ describe('knowledge sqlite store', () => {
     expect(policy.network.webSearchEnabled).toBe(false);
     expect(policy.network.s3ReadsEnabled).toBe(false);
     expect(policy.redaction.enabled).toBe(true);
+
+    const previousWebSearch = process.env.HASNA_KNOWLEDGE_WEB_SEARCH;
+    const previousS3Reads = process.env.HASNA_KNOWLEDGE_ALLOW_S3_READS;
+    try {
+      process.env.HASNA_KNOWLEDGE_WEB_SEARCH = '1';
+      process.env.HASNA_KNOWLEDGE_ALLOW_S3_READS = 'true';
+      const envPolicy = resolveSafetyPolicy(defaultKnowledgeConfig(), workspace);
+      expect(envPolicy.network.webSearchEnabled).toBe(true);
+      expect(envPolicy.network.s3ReadsEnabled).toBe(true);
+    } finally {
+      if (previousWebSearch === undefined) delete process.env.HASNA_KNOWLEDGE_WEB_SEARCH;
+      else process.env.HASNA_KNOWLEDGE_WEB_SEARCH = previousWebSearch;
+      if (previousS3Reads === undefined) delete process.env.HASNA_KNOWLEDGE_ALLOW_S3_READS;
+      else process.env.HASNA_KNOWLEDGE_ALLOW_S3_READS = previousS3Reads;
+    }
 
     const redacted = redactSecrets('token=sk-testsecretkeyvalue1234567890');
     expect(redacted.text).toBe('[REDACTED:secret_assignment]');

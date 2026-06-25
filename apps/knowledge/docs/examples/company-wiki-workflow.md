@@ -106,6 +106,8 @@ Compile a cited page from indexed chunks:
 ```bash
 knowledge wiki compile "expense policy" \
   --title "Expense Policy" \
+  --approve-write \
+  --approved-by local-review \
   --scope project \
   --json
 ```
@@ -116,6 +118,7 @@ File an approved answer note:
 knowledge wiki file-answer "How do we approve expenses?" \
   --content "Use manager approval and cite the policy source." \
   --approve-write \
+  --approved-by local-review \
   --scope project \
   --json
 ```
@@ -129,6 +132,17 @@ knowledge wiki lint --scope project --json
 Generated pages are written through the artifact store and cataloged in
 `knowledge.db`; index rows and logs are sharded rather than stored in one large
 Markdown file.
+
+Protect the workspace before handing it to agents:
+
+```bash
+knowledge storage protect --scope project --json
+knowledge storage validate --strict --scope project --json
+```
+
+Agents should read `.hasna/apps/knowledge` as generated state and write durable
+knowledge only through the CLI, MCP tools, or SDK. Strict validation catches
+untracked artifact files and direct edits to cataloged artifacts.
 
 ## 6. Keep Sources Fresh
 

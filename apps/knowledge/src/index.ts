@@ -22,6 +22,8 @@ export {
   type KnowledgeInventoryOptions as KnowledgeServiceInventoryOptions,
   type KnowledgeInventoryResult,
   type KnowledgeOpenFilesBoundaryStatus,
+  type KnowledgeProvenanceIssue,
+  type KnowledgeProvenanceStatus,
   type KnowledgePathsResult,
   type KnowledgePeerSyncOptions,
   type KnowledgeSyncConflictAiProposalServiceOptions,
@@ -147,6 +149,10 @@ export {
   type StorageContract,
   type StorageValidationResult,
 } from './storage-contract.js';
+export {
+  provenanceStatusFor,
+  type KnowledgeProvenanceIssueSeverity,
+} from './provenance-validate.js';
 export {
   KNOWLEDGE_STORAGE_ENV,
   KNOWLEDGE_STORAGE_FALLBACK_ENV,

@@ -56,6 +56,7 @@ describe('knowledge embeddings and vector index', () => {
       fake: true,
       dimensions: 8,
       limit: 5,
+      purpose: 'knowledge_index',
     });
     expect(search.results).toHaveLength(1);
     expect(search.results[0].text).toContain('Semantic indexing');

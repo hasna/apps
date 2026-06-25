@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "protected": true,
+  "protected_at": "2026-06-18T11:30:20.113Z",
+  "workspace_home": "/home/hasna/workspace/hasna/opensource/open-knowledge/.hasna/apps/knowledge",
+  "policy": "Agents must use knowledge CLI, knowledge-mcp, or @hasna/knowledge SDK for durable writes.",
+  "rules": [
+    "Agents must not write directly to .hasna/apps/knowledge or generated artifact files.",
+    "Use knowledge CLI, knowledge-mcp, or the @hasna/knowledge SDK for every durable knowledge write.",
+    "Use --approve-write --approved-by <name> for generated wiki or repair writes that require approval.",
+    "Run knowledge storage validate --strict after changes to detect direct artifact writes."
+  ],
+  "validation_command": "knowledge storage validate --strict --scope project",
+  "allowed_writers": [
+    "knowledge CLI",
+    "knowledge-mcp",
+    "@hasna/knowledge SDK"
+  ],
+  "forbidden_paths": [
+    ".hasna/apps/knowledge/** direct file writes"
+  ]
+}

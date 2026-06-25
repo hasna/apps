@@ -46,7 +46,7 @@ const knowledge = createKnowledgeClient({
 });
 
 await knowledge.setup({ mode: 'hosted', canonicalHasnaXyz: true });
-await knowledge.ingest.source('file:///absolute/path/to/handbook.md', 'knowledge_index');
+await knowledge.ingest.source('file:///absolute/path/to/handbook.md', 'knowledge_answer');
 
 const results = await knowledge.search({
   query: 'company wiki policy',
@@ -116,6 +116,8 @@ knowledge paths --scope project --json
 
 # Inspect local/S3 artifact storage and source ownership
 knowledge storage status --scope project --json
+knowledge storage protect --scope project --json
+knowledge storage validate --strict --scope project --json
 
 # Inspect optional machine topology for future sync
 knowledge machines topology --scope project --json
@@ -147,16 +149,16 @@ HASNA_KNOWLEDGE_DATABASE_URL=postgres://... knowledge db storage push --scope pr
 # Initialize scalable wiki/schema/index/log artifacts
 knowledge wiki init --scope project
 
-# Compile cited wiki pages, file approved answers, and lint wiki health
-knowledge wiki compile "handbook policy" --title "Handbook Policy" --scope project --json
-knowledge wiki file-answer "How do we cite policy?" --content "Use cited source context." --approve-write --scope project --json
+# Compile cited wiki pages from knowledge_index sources, file approved answers, and lint wiki health
+knowledge wiki compile "handbook policy" --title "Handbook Policy" --approve-write --approved-by local-review --scope project --json
+knowledge wiki file-answer "How do we cite policy?" --content "Use cited source context." --approve-write --approved-by local-review --scope project --json
 knowledge wiki lint --scope project --json
 
 # Ingest an open-files source manifest into the project SQLite catalog
 knowledge ingest manifest ./open-files-manifest.jsonl --scope project --json
 
-# Ingest one read-only source ref directly
-knowledge ingest source file:///absolute/path/to/handbook.md --purpose knowledge_index --scope project --json
+# Ingest one read-only source ref directly for answer retrieval
+knowledge ingest source file:///absolute/path/to/handbook.md --scope project --json
 
 # Consume open-files change events and invalidate stale source chunks
 knowledge reindex outbox ./open-files-outbox.jsonl --scope project --json
@@ -308,7 +310,8 @@ artifact directories, and config.
 ### storage
 ```bash
 knowledge storage status [--scope project] [--json]
-knowledge storage validate [--scope project] [--json]
+knowledge storage protect [--scope project] [--json]
+knowledge storage validate [--strict] [--scope project] [--json]
 knowledge storage repair-artifact-keys [--approve-write --approved-by <name>] [--scope project] [--json]
 ```
 Show the storage contract for local or S3-backed generated artifacts. Local mode
@@ -317,6 +320,19 @@ runs, and exports. S3 mode stores generated artifacts under the configured
 knowledge bucket/prefix while `open-files` remains the source of truth for raw
 source bytes. The command also reports artifact classes, allowed source ref
 schemes, and warnings for non-scalable or unsafe config.
+
+`storage protect` writes a local `write-boundary.json` policy and
+`WRITE_BOUNDARY.md` instructions into `.hasna/apps/knowledge`. Agents must not
+write files directly under that app workspace or its generated artifact tree;
+durable knowledge writes must go through the CLI, MCP server, or SDK so
+provenance, citations, storage manifests, and audit events stay intact.
+`storage validate --strict` fails when the boundary is missing, when an
+artifact file is not cataloged in `storage_objects`, when a cataloged artifact's
+hash was changed by a direct edit, when a root workspace file is unexpected,
+when symlinks/hardlinks could escape the app boundary, or when generated files
+appear outside the configured artifact store. Local mode is tamper-evident and
+CI-enforceable; true prevention against a same-user process requires sandboxing,
+separate writer authority, or hosted/server-side enforcement.
 
 `storage repair-artifact-keys` previews legacy `storage_objects` rows where the
 portable artifact key accidentally includes the configured S3 prefix. It only
@@ -506,19 +522,20 @@ The sync table list excludes local derived FTS indexes such as `chunks_fts`.
 ### wiki
 ```bash
 knowledge wiki init [--scope project]
-knowledge wiki compile [query|source-ref...] [--title <title>] [--limit <n>] [--scope project] [--json]
-knowledge wiki file-answer <prompt> --content <answer> [--approve-write] [--scope project] [--json]
+knowledge wiki compile [query|source-ref...] [--title <title>] --approve-write [--approved-by <name>] [--limit <n>] [--scope project] [--json]
+knowledge wiki file-answer <prompt> --content <answer> [--approve-write] [--approved-by <name>] [--scope project] [--json]
 knowledge wiki lint [--scope project] [--json]
 ```
 Create starter generated-knowledge artifacts through the artifact store:
 `schemas/v1.md`, `indexes/root.md`, `wiki/README.md`, and a dated JSONL log
 partition.
 
-`wiki compile` turns existing source chunks into a cited Markdown page under
+`wiki compile` turns existing `knowledge_index` source chunks into a cited Markdown page under
 `wiki/generated/`, updates `knowledge_indexes`, records citations and a concept
-backlink, and appends a JSONL log partition. `wiki file-answer` keeps answer
-filing as a dry run unless `--approve-write` is supplied, then writes a cited
-answer note under `wiki/answers/`. `wiki lint` checks generated pages for
+backlink, appends a JSONL log partition, and requires explicit `--approve-write`
+approval because it performs durable generated writes. `wiki file-answer` keeps
+answer filing as a dry run unless `--approve-write` is supplied, then writes a cited
+answer note under `wiki/answers/` and records approval/audit evidence. `wiki lint` checks generated pages for
 missing citations, stale citations, duplicate titles, orphan pages, unresolved
 source refs, contradiction markers, and new article candidates.
 
@@ -534,7 +551,7 @@ raw source retrieval remains owned by `open-files`.
 ### ingest
 ```bash
 knowledge ingest manifest <file|s3://bucket/key> [--scope project] [--json]
-knowledge ingest source <source-ref> [--purpose knowledge_index] [--scope project] [--json]
+knowledge ingest source <source-ref> [--purpose knowledge_answer|knowledge_index] [--scope project] [--json]
 ```
 Import an open-files JSON or JSONL source manifest into `knowledge.db`. This
 upserts sources and source revisions, stores hash/MIME/status/permission
@@ -543,7 +560,9 @@ metadata, and chunks embedded extracted text when the manifest includes it.
 `ingest source` accepts `open-files://`, `file://`, `s3://`, and `https://`
 refs. It reads source content through a read-only boundary, redacts known
 secrets before storage, records hashes/revisions, and stores only derived chunks
-and citation spans. Web and S3 reads remain opt-in through the safety policy.
+and citation spans. Direct source ingest defaults to `knowledge_answer`; use
+`--purpose knowledge_index` for material intended only for wiki compilation or
+maintenance search. Web and S3 reads remain opt-in through the safety policy.
 For `open-files://` refs, the source must already be present in the local
 knowledge catalog through a manifest or extracted-text ref until the open-files
 resolver API lands.
@@ -570,15 +589,17 @@ remain owned by `open-files`.
 
 ### search
 ```bash
-knowledge search <query> [--scope project] [--limit <n>] [--json]
-knowledge search <query> --semantic [--model openai:text-embedding-3-small] [--scope project] [--json]
-knowledge search <query> --context [--semantic] [--scope project] [--json]
+knowledge search <query> [--purpose knowledge_answer|knowledge_index] [--scope project] [--limit <n>] [--json]
+knowledge search <query> --semantic [--purpose knowledge_answer|knowledge_index] [--model openai:text-embedding-3-small] [--scope project] [--json]
+knowledge search <query> --context [--semantic] [--purpose knowledge_answer|knowledge_index] [--scope project] [--json]
 ```
 Run hybrid search over `chunks_fts`, generated wiki chunks, wiki/index catalog
 rows, and optional vector results. The default path is local-only keyword and
 catalog search. `--semantic` embeds the query and merges vector results from
 `vector_index_entries`, preserving source refs, artifact URIs, citations,
 revision/hash metadata, and provenance in each structured result.
+Source-backed retrieval enforces source ACL purpose and drops stale, deleted, or
+reindex-required revisions before context assembly.
 
 `--context` returns a reranked context pack for agents: selected excerpts,
 assembled citations, freshness and permission notes, graph evidence from
@@ -639,7 +660,7 @@ reasoning, embeddings, and native web-search support.
 ```bash
 knowledge embeddings status [--scope project] [--json]
 knowledge embeddings index [--model openai:text-embedding-3-small] [--limit <n>] [--scope project] [--json]
-knowledge embeddings search <query> [--model openai:text-embedding-3-small] [--limit <n>] [--scope project] [--json]
+knowledge embeddings search <query> [--purpose knowledge_answer|knowledge_index] [--model openai:text-embedding-3-small] [--limit <n>] [--scope project] [--json]
 ```
 Build and query the local vector index over derived knowledge chunks. The first
 implementation stores vectors in SQLite as JSON rows in `chunk_embeddings` and
@@ -696,7 +717,10 @@ The stable agent-facing MCP tools are:
 - `knowledge_web_search`: run safety-gated provider-native web search.
 - `knowledge_lint`: lint generated wiki pages for citation/source issues.
 - `knowledge_run_status`: list recent runs or inspect one run ledger.
-- `knowledge_storage`: inspect the local/S3/hosted storage contract.
+- `knowledge_storage`: inspect the local/S3/hosted storage contract, with
+  optional strict write-boundary validation.
+- `knowledge_storage_protect`: enable the local write-boundary policy and write
+  agent instructions into the knowledge workspace.
 - `knowledge_resolve_source`: resolve indexed source chunks through the
   read-only source boundary.
 - `knowledge_machines_topology`: inspect optional machine topology and route

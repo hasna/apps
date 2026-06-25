@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 
 export const HASNA_KNOWLEDGE_APP_PATH = join('.hasna', 'apps', 'knowledge');
 
@@ -133,20 +133,57 @@ export function projectKnowledgeHome(cwd = process.cwd()): string {
 }
 
 export function workspaceForHome(home: string): KnowledgeWorkspace {
+  const normalizedHome = normalizeWorkspaceHome(home);
   return {
-    home,
-    configPath: join(home, 'config.json'),
-    jsonStorePath: join(home, 'db.json'),
-    knowledgeDbPath: join(home, 'knowledge.db'),
-    artifactsDir: join(home, 'artifacts'),
-    cacheDir: join(home, 'cache'),
-    exportsDir: join(home, 'exports'),
-    indexesDir: join(home, 'indexes'),
-    logsDir: join(home, 'logs'),
-    runsDir: join(home, 'runs'),
-    schemasDir: join(home, 'schemas'),
-    wikiDir: join(home, 'wiki'),
+    home: normalizedHome,
+    configPath: join(normalizedHome, 'config.json'),
+    jsonStorePath: join(normalizedHome, 'db.json'),
+    knowledgeDbPath: join(normalizedHome, 'knowledge.db'),
+    artifactsDir: join(normalizedHome, 'artifacts'),
+    cacheDir: join(normalizedHome, 'cache'),
+    exportsDir: join(normalizedHome, 'exports'),
+    indexesDir: join(normalizedHome, 'indexes'),
+    logsDir: join(normalizedHome, 'logs'),
+    runsDir: join(normalizedHome, 'runs'),
+    schemasDir: join(normalizedHome, 'schemas'),
+    wikiDir: join(normalizedHome, 'wiki'),
   };
+}
+
+function normalizeWorkspaceHome(home: string): string {
+  const resolved = resolve(home);
+  try {
+    return realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+export function pathIsInside(parent: string, target: string): boolean {
+  const rel = relative(resolve(parent), resolve(target));
+  return rel === '' || (!rel.startsWith('..') && rel !== '..' && !rel.startsWith(`..${sep}`));
+}
+
+function pathHasKnowledgeAppSegment(target: string): boolean {
+  const normalized = resolve(target).split(sep).join('/');
+  return normalized.endsWith('/.hasna/apps/knowledge') || normalized.includes('/.hasna/apps/knowledge/');
+}
+
+export function assertKnowledgeWritePathAllowed(
+  targetPath: string,
+  workspace: KnowledgeWorkspace,
+  options: { allowJsonStore?: boolean; operation?: string } = {},
+): void {
+  const resolvedTarget = resolve(targetPath);
+  const allowedJsonStore = options.allowJsonStore === true && resolvedTarget === resolve(workspace.jsonStorePath);
+  if (allowedJsonStore) return;
+  if (pathIsInside(workspace.home, resolvedTarget) || pathHasKnowledgeAppSegment(resolvedTarget)) {
+    const operation = options.operation ?? 'write';
+    throw new Error(
+      `Refusing ${operation} inside protected knowledge workspace: ${targetPath}. ` +
+      'Use the knowledge CLI/MCP/SDK storage and wiki commands instead of direct file writes.',
+    );
+  }
 }
 
 export function defaultKnowledgeConfig(): KnowledgeConfig {

@@ -4,6 +4,7 @@ import { type KnowledgeSyncConflictAiProposalOptions } from './conflict-agent';
 import { type EmbeddingIndexOptions, type EmbeddingSearchOptions } from './embeddings';
 import { type KnowledgeMachinePreflightOptions, type KnowledgeMachineRouteResolution, type KnowledgeMachineWorkspaceResolution, type KnowledgeMachineTopologyOptions } from './machines';
 import { type ProviderStatusResult, type ModelRegistryEntry } from './providers';
+import { type KnowledgeProvenanceStatus } from './provenance-validate';
 import { type ReindexRuntimeOptions } from './reindex';
 import { RemoteKnowledgeClient, type RemoteKnowledgeRegistryContract } from './remote-client';
 import { type RetrievalOptions } from './retrieval';
@@ -12,7 +13,10 @@ import { type WebSearchOptions } from './web-search';
 import { type KnowledgeSyncConflict, type KnowledgeSyncConflictResolutionProposal, type KnowledgePeerSyncResult, type KnowledgeSyncApplyResult, type KnowledgeSyncBundle, type KnowledgeSyncMachineRow, type KnowledgeSyncSnapshotResult, type KnowledgeSyncStatus } from './sync';
 import { type WikiCompileOptions } from './wiki-compiler';
 import { type StorageContract, type StorageValidationResult } from './storage-contract';
+import { type KnowledgeStorageProtectionResult, type KnowledgeWriteBoundaryStatus } from './write-boundary';
 import { type KnowledgeConfig, type KnowledgeWorkspace } from './workspace';
+export type { KnowledgeStorageProtectionResult, KnowledgeWriteBoundaryStatus, KnowledgeWriteBoundaryViolation, } from './write-boundary';
+export type { KnowledgeProvenanceStatus, KnowledgeProvenanceIssue } from './provenance-validate';
 export interface KnowledgeServiceOptions {
     scope?: string;
     cwd?: string;
@@ -323,6 +327,11 @@ export declare class KnowledgeService {
     artifactStore(): import("./artifact-store").ArtifactStore;
     storageContract(): StorageContract;
     validateStorage(): StorageValidationResult;
+    writeBoundaryStatus(options?: {
+        strict?: boolean;
+    }): KnowledgeWriteBoundaryStatus;
+    protectStorageBoundary(): KnowledgeStorageProtectionResult;
+    provenanceStatus(): KnowledgeProvenanceStatus;
     setup(options?: {
         mode?: string;
         apiUrl?: string;
@@ -353,11 +362,13 @@ export declare class KnowledgeService {
         prompt: string;
         answer: string;
         approveWrite?: boolean;
+        approvedBy?: string;
         limit?: number;
         semantic?: boolean;
         modelRef?: string;
         dimensions?: number;
         fake?: boolean;
+        purpose?: string;
     }): Promise<import("./wiki-compiler").WikiAnswerFileResult>;
     lintWiki(): import("./wiki-compiler").WikiLintResult;
     ingestManifest(input: string): Promise<import("./manifest-ingest").ManifestIngestResult>;

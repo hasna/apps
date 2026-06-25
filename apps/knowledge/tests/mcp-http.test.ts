@@ -9,6 +9,7 @@ import { buildServer } from '../src/mcp.js';
 import {
   DEFAULT_MCP_HTTP_PORT,
   isHttpMode,
+  resolveMcpHttpBearerToken,
   resolveMcpHttpPort,
   startMcpHttpServer,
 } from '../src/mcp-http.js';
@@ -27,6 +28,15 @@ describe('knowledge MCP HTTP transport', () => {
     expect(isHttpMode(['node'], {})).toBe(false);
     expect(isHttpMode(['node', '--http'], {})).toBe(true);
     expect(isHttpMode(['node'], { MCP_HTTP: '1' })).toBe(true);
+  });
+
+  test('resolves bearer token from supported env names', () => {
+    expect(resolveMcpHttpBearerToken({})).toBeNull();
+    expect(resolveMcpHttpBearerToken({ KNOWLEDGE_MCP_HTTP_TOKEN: 'knowledge-token' })).toBe('knowledge-token');
+    expect(resolveMcpHttpBearerToken({
+      MCP_HTTP_BEARER_TOKEN: 'mcp-token',
+      KNOWLEDGE_MCP_HTTP_TOKEN: 'knowledge-token',
+    })).toBe('mcp-token');
   });
 });
 
@@ -66,7 +76,7 @@ describe('knowledge streamable HTTP server', () => {
   test('GET /health returns ok', async () => {
     const res = await fetch(`http://${handle.host}:${handle.port}/health`);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ status: 'ok', name: 'knowledge' });
+    expect(await res.json()).toEqual({ status: 'ok', name: 'knowledge', auth_required: false });
   });
 
   test('initialize and call ok_stats over streamable HTTP', async () => {
@@ -98,5 +108,41 @@ describe('knowledge streamable HTTP server', () => {
 
     expect(clients.every((entry) => entry.count > 0)).toBe(true);
     await Promise.all(clients.map((entry) => entry.client.close()));
+  });
+
+  test('requires a bearer token when one is configured', async () => {
+    const secured = await startMcpHttpServer(buildServer, { port: 0, bearerToken: 'test-token' });
+    try {
+      const health = await fetch(`http://${secured.host}:${secured.port}/health`);
+      expect(health.status).toBe(200);
+      expect(await health.json()).toEqual({ status: 'ok', name: 'knowledge', auth_required: true });
+
+      const unauthorized = await fetch(`http://${secured.host}:${secured.port}/mcp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', id: 1 }),
+      });
+      expect(unauthorized.status).toBe(401);
+
+      const authorized = await fetch(`http://${secured.host}:${secured.port}/mcp`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer test-token',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', id: 1 }),
+      });
+      expect(authorized.status).not.toBe(401);
+    } finally {
+      await secured.close();
+    }
+  });
+
+  test('refuses non-loopback HTTP binds without a bearer token', async () => {
+    await expect(startMcpHttpServer(buildServer, {
+      host: '0.0.0.0',
+      port: 0,
+      env: {},
+    })).rejects.toThrow('MCP HTTP requires MCP_HTTP_BEARER_TOKEN');
   });
 });

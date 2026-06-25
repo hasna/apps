@@ -130,6 +130,7 @@ The local resolver is exposed through:
 
 ```bash
 knowledge source resolve <source-ref> --purpose knowledge_answer --json
+knowledge ingest source <source-ref> --purpose knowledge_answer --json
 knowledge ingest source <source-ref> --purpose knowledge_index --json
 ```
 
@@ -196,6 +197,8 @@ The storage contract is inspectable through:
 
 ```bash
 knowledge storage status --scope project --json
+knowledge storage protect --scope project --json
+knowledge storage validate --strict --scope project --json
 ```
 
 That contract names the local app path, SQLite catalog, generated artifact
@@ -203,6 +206,17 @@ classes, S3 bucket/prefix when configured, and the source ownership rule that
 raw source bytes stay in `open-files`. The `storage_objects` table catalogs
 generated artifacts by URI, kind, hash, size, and metadata so local mode and
 remote/S3 mode share the same DB-facing shape.
+
+The write boundary is intentionally simple: agents can inspect
+`.hasna/apps/knowledge`, but durable writes must go through `knowledge`, MCP, or
+the SDK. `storage protect` records the policy in the workspace, while
+`storage validate --strict` adversarially checks the local artifact tree against
+`storage_objects` hashes, root workspace entries, symlink/hardlink escapes, and
+legacy generated files written outside the artifact store. This keeps the app
+agent-friendly without adding a daemon or making the repo depend on OS-specific
+filesystem locks. In local same-user mode this is tamper-evident and
+CI-enforceable; true prevention requires sandboxing, separate writer authority,
+or hosted/server-side enforcement.
 
 ## Wiki Model
 
@@ -244,10 +258,11 @@ source citation, and generated artifact. Markdown remains the readable layer;
 SQLite/Postgres and object storage carry the scalable catalog.
 
 The first compile/write loop is local and approval-gated. `wiki compile`
-generates cited pages from derived source chunks, creates concept backlinks,
-updates index rows, records storage objects, and appends dated JSONL logs.
-`wiki file-answer` writes answer notes only with `--approve-write`; otherwise it
-returns the dry-run proposal. `wiki lint` checks missing/stale citations,
+generates cited pages from `knowledge_index` source chunks, creates concept
+backlinks, updates index rows, records storage objects, and appends dated JSONL
+logs. It requires `--approve-write` because it performs durable generated
+writes. `wiki file-answer` writes answer notes only with `--approve-write`;
+otherwise it returns the dry-run proposal. `wiki lint` checks missing/stale citations,
 duplicates, orphan pages, unresolved source refs, contradiction markers, and
 new-article candidates.
 

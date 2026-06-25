@@ -14,7 +14,7 @@ describe('knowledge retrieval context packs', () => {
     writeFileSync(source, 'Retrieval context should cite company handbook source evidence.');
     const sourceRef = `file://${source}`;
 
-    await ingestSourceRef({ dbPath, sourceRef, purpose: 'knowledge_index' });
+    await ingestSourceRef({ dbPath, sourceRef, purpose: 'knowledge_answer' });
     const db = openKnowledgeDb(dbPath);
     try {
       const chunk = db.query<{ id: string }, []>('SELECT id FROM chunks LIMIT 1').get();
@@ -57,5 +57,6 @@ describe('knowledge retrieval context packs', () => {
       source_uri: sourceRef,
     });
     expect(context.notes.permissions).toContain('All source-backed excerpts are read-only and citation-required.');
+    expect(context.notes.stability).toContain('Context evidence order is deterministic by final score and stable result id.');
   });
 });

@@ -64,6 +64,10 @@ function envEnabled(name: string): boolean {
   return value === '1' || value === 'true' || value === 'yes';
 }
 
+function configOrEnvEnabled(value: boolean | undefined, envName: string): boolean {
+  return value === true || envEnabled(envName);
+}
+
 export function resolveSafetyPolicy(config: KnowledgeConfig, workspace: KnowledgeWorkspace): SafetyPolicy {
   const extended = config as ConfigWithSafety;
   const configuredBuckets = new Set<string>(extended.safety?.network?.allowed_s3_buckets ?? []);
@@ -88,8 +92,8 @@ export function resolveSafetyPolicy(config: KnowledgeConfig, workspace: Knowledg
     ].map((entry) => resolve(entry)),
     readOnlySourceAccess: true,
     network: {
-      webSearchEnabled: extended.safety?.network?.web_search_enabled ?? envEnabled('HASNA_KNOWLEDGE_WEB_SEARCH'),
-      s3ReadsEnabled: extended.safety?.network?.s3_reads_enabled ?? envEnabled('HASNA_KNOWLEDGE_ALLOW_S3_READS'),
+      webSearchEnabled: configOrEnvEnabled(extended.safety?.network?.web_search_enabled, 'HASNA_KNOWLEDGE_WEB_SEARCH'),
+      s3ReadsEnabled: configOrEnvEnabled(extended.safety?.network?.s3_reads_enabled, 'HASNA_KNOWLEDGE_ALLOW_S3_READS'),
       allowedS3Buckets: [...configuredBuckets].sort(),
     },
     redaction: {

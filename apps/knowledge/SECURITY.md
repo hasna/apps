@@ -40,19 +40,19 @@ Default policy:
 Inspect the active policy:
 
 ```bash
-open-knowledge safety status --scope project --json
+knowledge safety status --scope project --json
 ```
 
 Approve a local generated write:
 
 ```bash
-open-knowledge safety approve generated_write wiki://answer --scope project --json
+knowledge safety approve generated_write wiki://answer --scope project --json
 ```
 
 Review the local audit log:
 
 ```bash
-open-knowledge safety audit --scope project --json
+knowledge safety audit --scope project --json
 ```
 
 ## Network And S3
@@ -60,10 +60,10 @@ open-knowledge safety audit --scope project --json
 Network behavior is opt-in. For local CLI use:
 
 ```bash
-HASNA_KNOWLEDGE_WEB_SEARCH=1 open-knowledge safety check web_search --json
+HASNA_KNOWLEDGE_WEB_SEARCH=1 knowledge safety check web_search --json
 HASNA_KNOWLEDGE_ALLOW_S3_READS=1 \
 HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS=my-bucket \
-open-knowledge ingest manifest s3://my-bucket/path/manifest.jsonl --json
+knowledge ingest manifest s3://my-bucket/path/manifest.jsonl --json
 ```
 
 For persistent config, set:
@@ -86,7 +86,7 @@ named AWS profiles or the runtime credential chain.
 ## Source And Artifact Boundary
 
 `open-files` owns raw source bytes, source snapshots, connector credentials,
-file revisions, hashes, MIME metadata, and storage locations. `open-knowledge`
+file revisions, hashes, MIME metadata, and storage locations. `knowledge`
 stores source refs, derived chunks, citations, embeddings, generated wiki pages,
 indexes, logs, and run ledgers.
 
@@ -106,8 +106,8 @@ Security expectations:
 The MCP server defaults to stdio. Streamable HTTP mode binds to `127.0.0.1`.
 
 ```bash
-open-knowledge-mcp
-open-knowledge-mcp --http --port 8819
+knowledge-mcp
+knowledge-mcp --http --port 8819
 ```
 
 MCP clients should prefer stable tools such as `knowledge_search`,

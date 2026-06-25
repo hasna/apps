@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LocalArtifactStore, S3ArtifactStore, normalizeArtifactKey } from '../src/artifact-store';
@@ -29,6 +29,20 @@ describe('knowledge artifact store', () => {
     expect(existsSync(join(dir, 'wiki', 'engineering', 'mcp.md'))).toBe(true);
     expect(await store.exists('wiki/engineering/mcp.md')).toBe(true);
     expect(await store.getText('wiki/engineering/mcp.md')).toContain('Agent-facing tools');
+  });
+
+  test('local store rejects symlinked artifact paths', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-artifacts-symlink-'));
+    const outside = mkdtempSync(join(tmpdir(), 'ok-artifacts-outside-'));
+    symlinkSync(outside, join(dir, 'wiki'), 'dir');
+    const store = new LocalArtifactStore(dir);
+
+    await expect(store.put({
+      key: 'wiki/escape.md',
+      body: '# Escape',
+      content_type: 'text/markdown',
+    })).rejects.toThrow('symlink');
+    expect(existsSync(join(outside, 'escape.md'))).toBe(false);
   });
 
   test('s3 store returns portable artifact keys while writing under configured prefix', async () => {

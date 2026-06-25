@@ -17,11 +17,29 @@ describe('wiki compile, answer filing, and lint loops', () => {
     const sourceRef = `file://${source}`;
     await ingestSourceRef({ dbPath, sourceRef, purpose: 'knowledge_index' });
 
+    await expect(compileWikiPage({
+      dbPath,
+      store: new LocalArtifactStore(join(dir, 'artifacts')),
+      title: 'Handbook Policy',
+      query: 'handbook source chunks',
+      now: new Date('2026-06-08T00:00:00.000Z'),
+    })).rejects.toThrow('requires --approve-write');
+    await expect(compileWikiPage({
+      dbPath,
+      store: new LocalArtifactStore(join(dir, 'artifacts')),
+      title: 'Handbook Policy',
+      query: 'handbook source chunks',
+      approveWrite: true,
+      now: new Date('2026-06-08T00:00:00.000Z'),
+    })).rejects.toThrow('requires --approved-by');
+
     const result = await compileWikiPage({
       dbPath,
       store: new LocalArtifactStore(join(dir, 'artifacts')),
       title: 'Handbook Policy',
       query: 'handbook source chunks',
+      approveWrite: true,
+      approvedBy: 'wiki-test',
       now: new Date('2026-06-08T00:00:00.000Z'),
     });
 
@@ -42,6 +60,8 @@ describe('wiki compile, answer filing, and lint loops', () => {
       expect(db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM citations').get()?.n).toBe(1);
       expect(db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM wiki_backlinks').get()?.n).toBe(1);
       expect(db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM knowledge_indexes WHERE kind = "wiki_topic"').get()?.n).toBe(1);
+      expect(db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM approval_gates WHERE action = "generated_write"').get()?.n).toBe(1);
+      expect(db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM audit_events WHERE action = "wiki_compile"').get()?.n).toBe(1);
     } finally {
       db.close();
     }
@@ -61,7 +81,7 @@ describe('wiki compile, answer filing, and lint loops', () => {
     const source = join(dir, 'source.md');
     writeFileSync(source, 'Answer filing should cite handbook evidence before durable wiki writes.');
     const sourceRef = `file://${source}`;
-    await ingestSourceRef({ dbPath, sourceRef, purpose: 'knowledge_index' });
+    await ingestSourceRef({ dbPath, sourceRef, purpose: 'knowledge_answer' });
     const context = await retrieveKnowledgeContext({
       dbPath,
       query: 'handbook evidence',
@@ -77,6 +97,15 @@ describe('wiki compile, answer filing, and lint loops', () => {
     });
     expect(dryRun.durable_writes_performed).toBe(false);
     expect(dryRun.page_id).toBeNull();
+    await expect(fileAnswerToWiki({
+      dbPath,
+      store: new LocalArtifactStore(join(dir, 'artifacts')),
+      prompt: 'How should answer filing cite evidence?',
+      answer: 'Use the cited handbook evidence.',
+      context,
+      approveWrite: true,
+      now: new Date('2026-06-08T00:00:00.000Z'),
+    })).rejects.toThrow('requires --approved-by');
 
     const filed = await fileAnswerToWiki({
       dbPath,
@@ -85,12 +114,20 @@ describe('wiki compile, answer filing, and lint loops', () => {
       answer: 'Use the cited handbook evidence.',
       context,
       approveWrite: true,
+      approvedBy: 'answer-test',
       now: new Date('2026-06-08T00:00:00.000Z'),
     });
     expect(filed.durable_writes_performed).toBe(true);
     expect(filed.path).toBe('wiki/answers/how-should-answer-filing-cite-evidence.md');
     expect(filed.citations_written).toBe(1);
     expect(filed.artifact_uri).toContain('/wiki/answers/how-should-answer-filing-cite-evidence.md');
+    const db = openKnowledgeDb(dbPath);
+    try {
+      expect(db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM approval_gates WHERE action = "generated_write"').get()?.n).toBe(1);
+      expect(db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM audit_events WHERE action = "wiki_answer_file"').get()?.n).toBe(1);
+    } finally {
+      db.close();
+    }
   });
 
   test('lint reports missing citations, stale citations, duplicate pages, and new article candidates', async () => {
@@ -112,6 +149,11 @@ describe('wiki compile, answer filing, and lint loops', () => {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ['wiki_duplicate', 'wiki/generated/duplicate.md', 'Duplicate', 'file:///duplicate.md', 'sha256:duplicate', 'active', '{}', '2026-06-08T00:00:00.000Z', '2026-06-08T00:00:00.000Z'],
       );
+      db.run(
+        `INSERT INTO wiki_pages (id, path, title, artifact_uri, content_hash, status, metadata_json, valid_to, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ['wiki_expired', 'wiki/generated/expired.md', 'Expired', 'file:///expired.md', 'sha256:expired', 'active', '{}', '2000-01-01T00:00:00.000Z', '2026-06-08T00:00:00.000Z', '2026-06-08T00:00:00.000Z'],
+      );
       const chunk = db.query<{ id: string; metadata_json: string }, []>('SELECT id, metadata_json FROM chunks WHERE kind = "source" LIMIT 1').get();
       expect(chunk?.id).toStartWith('chk_');
       const metadata = JSON.parse(chunk?.metadata_json ?? '{}');
@@ -131,6 +173,7 @@ describe('wiki compile, answer filing, and lint loops', () => {
     expect(lint.issues.some((issue) => issue.type === 'missing_citation')).toBe(true);
     expect(lint.issues.some((issue) => issue.type === 'stale_citation')).toBe(true);
     expect(lint.issues.some((issue) => issue.type === 'duplicate_page')).toBe(true);
+    expect(lint.issues.some((issue) => issue.type === 'expired_page')).toBe(true);
     expect(lint.issues.some((issue) => issue.type === 'new_article_candidate')).toBe(false);
   });
 });

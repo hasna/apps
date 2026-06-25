@@ -48,7 +48,7 @@ async function addSource(corpus: EvalCorpus, key: string, fileName: string, text
   await ingestSourceRef({
     dbPath: corpus.dbPath,
     sourceRef,
-    purpose: 'knowledge_index',
+    purpose: 'knowledge_answer',
     now: new Date('2026-06-08T00:00:00.000Z'),
   });
   const source = { key, sourceRef, path };

@@ -104,8 +104,7 @@ describe('semantic search and retrieval eval fixtures', () => {
       limit: 5,
     });
     expect(staleContext.results.some((entry) => entry.source?.uri === corpus.sources.stale.sourceRef)).toBe(false);
-    expect(staleContext.warnings.some((warning) => warning.startsWith('stale_filtered:'))).toBe(true);
-    expect(staleContext.notes.freshness).toContain('Dropped a stale result whose source status requires reindexing.');
+    expect(staleContext.warnings.some((warning) => warning.startsWith('stale_provenance:'))).toBe(true);
 
     const privateContext = await retrieveKnowledgeContext({
       dbPath: corpus.dbPath,

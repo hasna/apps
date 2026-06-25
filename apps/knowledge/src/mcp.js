@@ -8,6 +8,7 @@ import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db.ts';
 import { defaultStorePath, loadStore, saveStore, makeId, withLock } from './store.ts';
 import { parseSourceRef } from './source-ref.ts';
 import { createKnowledgeService } from './service.ts';
+import { assertKnowledgeWritePathAllowed } from './workspace.ts';
 import {
   getStorageStatus as getDatabaseStorageStatus,
   storagePull as databaseStoragePull,
@@ -31,11 +32,25 @@ function shortIdFor(id) {
 }
 
 function resolveStorePath(storePath, scope) {
-  if (storePath) return storePath;
-  if (scope === 'project' || scope === 'local') {
-    return createKnowledgeService({ scope }).jsonStorePath();
+  const service = createKnowledgeService({ scope });
+  if (storePath) {
+    assertKnowledgeWritePathAllowed(storePath, service.workspace, {
+      allowJsonStore: true,
+      operation: 'legacy JSON store access',
+    });
+    return storePath;
   }
-  return defaultStorePath();
+  let resolved;
+  if (scope === 'project' || scope === 'local') {
+    resolved = service.jsonStorePath();
+  } else {
+    resolved = defaultStorePath();
+  }
+  assertKnowledgeWritePathAllowed(resolved, service.workspace, {
+    allowJsonStore: true,
+    operation: 'legacy JSON store access',
+  });
+  return resolved;
 }
 
 function readStoreLocked(storePath, fn) {
@@ -165,14 +180,18 @@ function dbStatsSnapshot(service = projectService()) {
   }
 }
 
-function storageSnapshot(service = projectService()) {
+function storageSnapshot(service = projectService(), options = {}) {
   const validation = service.validateStorage();
+  const writeBoundary = service.writeBoundaryStatus({ strict: options.strict === true });
+  const provenance = service.provenanceStatus();
   return {
-    ok: validation.ok,
+    ok: validation.ok && writeBoundary.ok && provenance.ok,
     scope: 'project',
     paths: service.paths(),
     storage: service.storageContract(),
     validation,
+    write_boundary: writeBoundary,
+    provenance,
   };
 }
 
@@ -763,14 +782,41 @@ export function buildServer() {
 
   registerTool(server, 'ok_storage_status', 'Knowledge storage status', 'Inspect local/S3 artifact storage, source ownership, and scalability contract', {
     scope: scopeField,
-  }, async ({ scope }) => {
+    strict: z.boolean().optional().describe('Fail the write-boundary status when protection is missing or direct writes are detected'),
+  }, async ({ scope, strict }) => {
     const service = createKnowledgeService({ scope });
     const validation = service.validateStorage();
+    const writeBoundary = service.writeBoundaryStatus({ strict: strict === true });
+    const provenance = service.provenanceStatus();
     return jsonText({
-      ok: validation.ok,
+      ok: validation.ok && writeBoundary.ok && provenance.ok,
       ...service.storageContract(),
       validation,
+      write_boundary: writeBoundary,
+      provenance,
     });
+  });
+
+  registerTool(server, 'ok_storage_provenance', 'Knowledge provenance status', 'Read-only invariant check for generated artifact provenance, wiki catalog rows, and storage_objects manifest consistency', {
+    scope: scopeField,
+  }, async ({ scope }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText(service.provenanceStatus());
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'ok_storage_protect', 'Protect knowledge storage', 'Enable the local write-boundary policy and write agent instructions into the knowledge workspace', {
+    scope: scopeField,
+  }, async ({ scope }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText(service.protectStorageBoundary());
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
   });
 
   registerTool(server, 'knowledge_machines_topology', 'Knowledge machine topology', 'Inspect optional open-machines topology and local fallback routes for knowledge sync', {
@@ -1127,10 +1173,11 @@ export function buildServer() {
     model: z.string().optional().describe('Embedding model ref, default openai:text-embedding-3-small'),
     dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
     fake: z.boolean().optional().describe('Use deterministic fake embeddings for local tests'),
-  }, async ({ scope, query, limit, model, dimensions, fake }) => {
+    purpose: z.string().optional().describe('Read-only purpose label, default knowledge_answer'),
+  }, async ({ scope, query, limit, model, dimensions, fake, purpose }) => {
     const service = createKnowledgeService({ scope });
     try {
-      return jsonText({ ok: true, ...await service.semanticSearch({ query, limit, modelRef: model, dimensions, fake }) });
+      return jsonText({ ok: true, ...await service.semanticSearch({ query, limit, modelRef: model, dimensions, fake, purpose }) });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
@@ -1144,10 +1191,11 @@ export function buildServer() {
     model: z.string().optional().describe('Embedding model ref, default openai:text-embedding-3-small'),
     dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
     fake: z.boolean().optional().describe('Use deterministic fake embeddings for local tests'),
-  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
+    purpose: z.string().optional().describe('Read-only purpose label, default knowledge_answer'),
+  }, async ({ scope, query, limit, semantic, model, dimensions, fake, purpose }) => {
     const service = createKnowledgeService({ scope });
     try {
-      return jsonText({ ok: true, ...await service.search({ query, limit, semantic, modelRef: model, dimensions, fake }) });
+      return jsonText({ ok: true, ...await service.search({ query, limit, semantic, modelRef: model, dimensions, fake, purpose }) });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
@@ -1161,10 +1209,11 @@ export function buildServer() {
     model: z.string().optional().describe('Embedding model ref, default openai:text-embedding-3-small'),
     dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
     fake: z.boolean().optional().describe('Use deterministic fake embeddings for local tests'),
-  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
+    purpose: z.string().optional().describe('Read-only purpose label, default knowledge_answer'),
+  }, async ({ scope, query, limit, semantic, model, dimensions, fake, purpose }) => {
     const service = createKnowledgeService({ scope });
     try {
-      return jsonText({ ok: true, ...await service.retrieveContext({ query, limit, semantic, modelRef: model, dimensions, fake }) });
+      return jsonText({ ok: true, ...await service.retrieveContext({ query, limit, semantic, modelRef: model, dimensions, fake, purpose }) });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
@@ -1180,10 +1229,11 @@ export function buildServer() {
     model: z.string().optional().describe('Model alias/ref, default configured provider default'),
     dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
     fake: z.boolean().optional().describe('Use deterministic fake embeddings/generation for local tests'),
-  }, async ({ scope, prompt, limit, semantic, generate, approve_write, model, dimensions, fake }) => {
+    purpose: z.string().optional().describe('Read-only purpose label, default knowledge_answer'),
+  }, async ({ scope, prompt, limit, semantic, generate, approve_write, model, dimensions, fake, purpose }) => {
     const service = createKnowledgeService({ scope });
     try {
-      return jsonText({ ok: true, ...await service.runPrompt({ prompt, limit, semantic, generate, approveWrite: approve_write, modelRef: model, dimensions, fake }) });
+      return jsonText({ ok: true, ...await service.runPrompt({ prompt, limit, semantic, generate, approveWrite: approve_write, modelRef: model, dimensions, fake, purpose }) });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
@@ -1236,25 +1286,29 @@ export function buildServer() {
     semantic: z.boolean().optional().describe('Include vector semantic results'),
     generate: z.boolean().optional().describe('Call AI SDK text generation; omitted returns a local citation draft'),
     approve_write: z.boolean().optional().describe('Approve durable wiki filing for this call'),
+    approved_by: z.string().optional().describe('Approver label recorded with approve_write'),
     file_answer: z.boolean().optional().describe('Attempt wiki answer filing; writes only with approve_write=true'),
     model: z.string().optional().describe('Model alias/ref, default configured provider default'),
     dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
     fake: z.boolean().optional().describe('Use deterministic fake embeddings/generation for local tests'),
-  }, async ({ scope, prompt, limit, semantic, generate, approve_write, file_answer, model, dimensions, fake }) => {
+    purpose: z.string().optional().describe('Read-only purpose label, default knowledge_answer'),
+  }, async ({ scope, prompt, limit, semantic, generate, approve_write, approved_by, file_answer, model, dimensions, fake, purpose }) => {
     const service = createKnowledgeService({ scope });
     try {
-      const result = await service.runPrompt({ prompt, limit, semantic, generate, approveWrite: approve_write, modelRef: model, dimensions, fake });
+      const result = await service.runPrompt({ prompt, limit, semantic, generate, approveWrite: approve_write, modelRef: model, dimensions, fake, purpose });
       let wiki_file = null;
       if (file_answer === true || approve_write === true) {
         wiki_file = await service.fileAnswer({
           prompt,
           answer: result.answer,
           approveWrite: approve_write,
+          approvedBy: approved_by,
           limit,
           semantic,
           modelRef: model,
           dimensions,
           fake,
+          purpose,
         });
       }
       return jsonText({ ok: true, ...result, wiki_file });
@@ -1309,18 +1363,45 @@ export function buildServer() {
     }
   });
 
-  registerTool(server, 'knowledge_storage', 'Knowledge storage contract', 'Inspect local/S3 artifact storage, source ownership, and hosted/SaaS boundary metadata', {
+  registerTool(server, 'knowledge_storage', 'Knowledge storage contract', 'Inspect local/S3 artifact storage, source ownership, hosted/SaaS boundary metadata, and optional strict write-boundary validation', {
+    scope: scopeField,
+    strict: z.boolean().optional().describe('Fail the write-boundary status when protection is missing or direct writes are detected'),
+  }, async ({ scope, strict }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      const validation = service.validateStorage();
+      const writeBoundary = service.writeBoundaryStatus({ strict: strict === true });
+      const provenance = service.provenanceStatus();
+      return jsonText({
+        ok: validation.ok && writeBoundary.ok && provenance.ok,
+        ...service.storageContract(),
+        validation,
+        write_boundary: writeBoundary,
+        provenance,
+        remote_contract: service.remoteContract(),
+      });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'knowledge_storage_provenance', 'Knowledge provenance status', 'Read-only invariant check for generated artifact provenance, wiki catalog rows, and storage_objects manifest consistency', {
     scope: scopeField,
   }, async ({ scope }) => {
     const service = createKnowledgeService({ scope });
     try {
-      const validation = service.validateStorage();
-      return jsonText({
-        ok: validation.ok,
-        ...service.storageContract(),
-        validation,
-        remote_contract: service.remoteContract(),
-      });
+      return jsonText(service.provenanceStatus());
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'knowledge_storage_protect', 'Protect knowledge storage', 'Enable the local write-boundary policy and write agent instructions into the knowledge workspace', {
+    scope: scopeField,
+  }, async ({ scope }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return jsonText(service.protectStorageBoundary());
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
@@ -1669,9 +1750,13 @@ export function buildServer() {
     store_path: storePathField,
     scope: scopeField,
   }, async ({ file, store_path, scope }) => {
+    const service = createKnowledgeService({ scope });
     const storePath = resolveStorePath(store_path, scope);
     return readStoreLocked(storePath, (db) => {
       const filePath = file || './knowledge-export.json';
+      assertKnowledgeWritePathAllowed(filePath, service.workspace, {
+        operation: 'MCP export',
+      });
       writeFileSync(filePath, JSON.stringify(db, null, 2));
       return jsonText({ ok: true, file: filePath, count: db.items.length });
     });

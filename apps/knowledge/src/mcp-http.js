@@ -19,6 +19,10 @@ export function resolveMcpHttpPort(argv = process.argv, env = process.env) {
   return DEFAULT_MCP_HTTP_PORT;
 }
 
+export function resolveMcpHttpBearerToken(env = process.env) {
+  return env.MCP_HTTP_BEARER_TOKEN || env.KNOWLEDGE_MCP_HTTP_TOKEN || null;
+}
+
 function parsePort(raw, source) {
   const parsed = Number(raw);
   if (!Number.isInteger(parsed) || parsed < 0 || parsed > 65535) {
@@ -37,10 +41,24 @@ async function readJsonBody(req) {
   return JSON.parse(text);
 }
 
+function isLoopbackHost(host) {
+  return host === '127.0.0.1' || host === '::1' || host === 'localhost';
+}
+
+function requestAuthorized(req, token) {
+  if (!token) return true;
+  return req.headers.authorization === `Bearer ${token}`;
+}
+
 export async function startMcpHttpServer(buildServer, options = {}) {
   const host = options.host ?? '127.0.0.1';
   const requestedPort = options.port ?? resolveMcpHttpPort();
   const serviceName = options.serviceName ?? MCP_HTTP_SERVICE_NAME;
+  const bearerToken = options.bearerToken ?? resolveMcpHttpBearerToken(options.env ?? process.env);
+
+  if (!isLoopbackHost(host) && !bearerToken) {
+    throw new Error('MCP HTTP requires MCP_HTTP_BEARER_TOKEN or KNOWLEDGE_MCP_HTTP_TOKEN when binding outside loopback.');
+  }
 
   const httpServer = createServer(async (req, res) => {
     try {
@@ -48,13 +66,23 @@ export async function startMcpHttpServer(buildServer, options = {}) {
 
       if (req.method === 'GET' && url.pathname === '/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', name: serviceName }));
+        res.end(JSON.stringify({ status: 'ok', name: serviceName, auth_required: Boolean(bearerToken) }));
         return;
       }
 
       if (url.pathname !== '/mcp') {
         res.writeHead(404, { 'Content-Type': 'text/plain' });
         res.end('Not Found');
+        return;
+      }
+
+      if (!requestAuthorized(req, bearerToken)) {
+        res.writeHead(401, { 'Content-Type': 'application/json', 'WWW-Authenticate': 'Bearer' });
+        res.end(JSON.stringify({
+          jsonrpc: '2.0',
+          error: { code: -32001, message: 'Unauthorized' },
+          id: null,
+        }));
         return;
       }
 

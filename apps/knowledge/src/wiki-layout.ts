@@ -223,14 +223,22 @@ export function recordWikiLayoutCatalog(db: Database, artifacts: CatalogArtifact
   if (wikiReadme) {
     const wikiPageId = stableId('wiki', 'wiki/README.md');
     db.run(
-      `INSERT INTO wiki_pages (id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO wiki_pages (
+         id, path, title, artifact_uri, content_hash, status, metadata_json,
+         valid_from, valid_to, supersedes, superseded_by, confidence, last_verified_at,
+         created_at, updated_at
+       )
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(path) DO UPDATE SET
          title = excluded.title,
          artifact_uri = excluded.artifact_uri,
          content_hash = excluded.content_hash,
          status = excluded.status,
          metadata_json = excluded.metadata_json,
+         valid_from = COALESCE(wiki_pages.valid_from, excluded.valid_from),
+         valid_to = excluded.valid_to,
+         confidence = excluded.confidence,
+         last_verified_at = excluded.last_verified_at,
          updated_at = excluded.updated_at`,
       [
         wikiPageId,
@@ -243,6 +251,12 @@ export function recordWikiLayoutCatalog(db: Database, artifacts: CatalogArtifact
           artifact_key: wikiReadme.key,
           provenance: provenanceFor(wikiReadme),
         }),
+        timestamp,
+        null,
+        null,
+        null,
+        0.8,
+        timestamp,
         timestamp,
         timestamp,
       ],

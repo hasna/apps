@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { ensureParentDir } from './workspace';
 
-export const CURRENT_SCHEMA_VERSION = 7;
+export const CURRENT_SCHEMA_VERSION = 8;
 
 export interface KnowledgeDbStats {
   schema_version: number;
@@ -420,6 +420,16 @@ INSERT OR IGNORE INTO schema_versions(version, applied_at)
 VALUES (7, datetime('now'));
 `;
 
+const MIGRATION_8_TABLES_AND_INDEXES = `
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_lifecycle_status ON wiki_pages(status, valid_to);
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_last_verified ON wiki_pages(last_verified_at);
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_supersedes ON wiki_pages(supersedes);
+CREATE INDEX IF NOT EXISTS idx_wiki_pages_superseded_by ON wiki_pages(superseded_by);
+
+INSERT OR IGNORE INTO schema_versions(version, applied_at)
+VALUES (8, datetime('now'));
+`;
+
 export function openKnowledgeDb(path: string): Database {
   ensureParentDir(path);
   const db = new Database(path);
@@ -438,6 +448,7 @@ export function migrateKnowledgeDb(path: string): { path: string; schema_version
     if (getSchemaVersion(db) < 5) db.exec(MIGRATION_5);
     if (getSchemaVersion(db) < 6) db.exec(MIGRATION_6);
     if (needsMigration7(db)) applyMigration7(db);
+    if (needsMigration8(db)) applyMigration8(db);
     return { path, schema_version: getSchemaVersion(db) };
   } finally {
     db.close();
@@ -490,6 +501,34 @@ function applyMigration7(db: Database): void {
   ensureColumn(db, 'knowledge_sync_changes', 'logical_clock', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(db, 'knowledge_sync_changes', 'bundle_id', 'TEXT');
   db.exec(MIGRATION_7_TABLES_AND_INDEXES);
+}
+
+function needsMigration8(db: Database): boolean {
+  return getSchemaVersion(db) < 8
+    || !columnExists(db, 'wiki_pages', 'valid_from')
+    || !columnExists(db, 'wiki_pages', 'valid_to')
+    || !columnExists(db, 'wiki_pages', 'supersedes')
+    || !columnExists(db, 'wiki_pages', 'superseded_by')
+    || !columnExists(db, 'wiki_pages', 'confidence')
+    || !columnExists(db, 'wiki_pages', 'last_verified_at');
+}
+
+function applyMigration8(db: Database): void {
+  if (!tableExists(db, 'wiki_pages')) db.exec(MIGRATION_1);
+  ensureColumn(db, 'wiki_pages', 'valid_from', 'TEXT');
+  ensureColumn(db, 'wiki_pages', 'valid_to', 'TEXT');
+  ensureColumn(db, 'wiki_pages', 'supersedes', 'TEXT');
+  ensureColumn(db, 'wiki_pages', 'superseded_by', 'TEXT');
+  ensureColumn(db, 'wiki_pages', 'confidence', 'REAL');
+  ensureColumn(db, 'wiki_pages', 'last_verified_at', 'TEXT');
+  db.exec(`
+    UPDATE wiki_pages
+    SET valid_from = COALESCE(valid_from, created_at),
+        last_verified_at = COALESCE(last_verified_at, updated_at),
+        confidence = COALESCE(confidence, 0.8)
+    WHERE valid_from IS NULL OR last_verified_at IS NULL OR confidence IS NULL;
+  `);
+  db.exec(MIGRATION_8_TABLES_AND_INDEXES);
 }
 
 export function getKnowledgeDbStats(path: string): KnowledgeDbStats {

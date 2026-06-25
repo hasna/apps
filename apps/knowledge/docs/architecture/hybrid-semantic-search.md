@@ -49,13 +49,13 @@ contracts.
 The current local command surface is:
 
 ```bash
-knowledge search "company wiki policy" --scope project --json
-knowledge search "company wiki policy" --scope project --semantic --json
-knowledge search "company wiki policy" --scope project --context --json
+knowledge search "company wiki policy" --purpose knowledge_answer --scope project --json
+knowledge search "company wiki policy" --purpose knowledge_answer --scope project --semantic --json
+knowledge search "company wiki policy" --purpose knowledge_answer --scope project --context --json
 knowledge reindex status --scope project --json
 knowledge reindex embeddings --scope project --fake --json
 knowledge embeddings index --scope project --model openai:text-embedding-3-small
-knowledge embeddings search "company wiki policy" --scope project --json
+knowledge embeddings search "company wiki policy" --purpose knowledge_answer --scope project --json
 ```
 
 `search` is the structured hybrid layer for agents. `embeddings search` is the

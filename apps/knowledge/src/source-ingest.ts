@@ -163,7 +163,7 @@ async function readOpenFilesSourceText(options: SourceIngestOptions): Promise<Re
   const resolved = await resolveOpenFilesSource({
     dbPath: options.dbPath,
     sourceRef: options.sourceRef,
-    purpose: options.purpose ?? 'knowledge_index',
+    purpose: options.purpose ?? 'knowledge_answer',
     limit: 100,
     safetyPolicy: options.safetyPolicy,
     now: options.now,
@@ -244,7 +244,7 @@ function manifestItemForSource(sourceRef: string, parsed: SourceRef, resolved: R
 }
 
 export async function ingestSourceRef(options: SourceIngestOptions): Promise<SourceIngestResult> {
-  const purpose = options.purpose ?? 'knowledge_index';
+  const purpose = options.purpose ?? 'knowledge_answer';
   const parsed = parseSourceRef(options.sourceRef);
   const resolved = parsed.kind === 'open-files'
     ? await readOpenFilesSourceText(options)

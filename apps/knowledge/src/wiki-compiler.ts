@@ -4,6 +4,14 @@ import type { ArtifactStore, ArtifactWrite } from './artifact-store';
 import { hashArtifactBody, recordStorageObjects, type GeneratedStorageObject } from './storage-contract';
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { generatedArtifactProvenance } from './provenance';
+import { createApprovalGate, recordAuditEvent } from './safety';
+import {
+  KNOWLEDGE_ANSWER_PURPOSE,
+  KNOWLEDGE_INDEX_PURPOSE,
+  metadataIsStale,
+  parseJsonObject,
+  sourceAccessDecision,
+} from './source-access';
 import type { KnowledgeContextPack } from './retrieval';
 
 export interface WikiCompileOptions {
@@ -13,6 +21,8 @@ export interface WikiCompileOptions {
   query?: string;
   sourceRefs?: string[];
   limit?: number;
+  approveWrite?: boolean;
+  approvedBy?: string;
   now?: Date;
 }
 
@@ -36,6 +46,7 @@ export interface WikiAnswerFileOptions {
   answer: string;
   context: KnowledgeContextPack;
   approveWrite?: boolean;
+  approvedBy?: string;
   now?: Date;
 }
 
@@ -58,7 +69,8 @@ export interface WikiLintIssue {
     | 'orphan_page'
     | 'unresolved_source_ref'
     | 'contradiction_marker'
-    | 'new_article_candidate';
+    | 'new_article_candidate'
+    | 'expired_page';
   severity: 'info' | 'warn' | 'error';
   page_id?: string;
   path?: string;
@@ -86,10 +98,13 @@ interface SourceChunkRow {
   end_offset: number | null;
   metadata_json: string;
   source_revision_id: string | null;
+  revision_metadata_json: string | null;
   revision: string | null;
   hash: string | null;
   source_uri: string | null;
   source_title: string | null;
+  source_acl_json: string | null;
+  source_metadata_json: string | null;
 }
 
 interface CitationInput {
@@ -128,16 +143,6 @@ function estimateTokenCount(text: string): number {
   return Math.max(1, Math.ceil(words * 1.25));
 }
 
-function parseJsonObject(value: string | null | undefined): Record<string, unknown> {
-  if (!value) return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-  } catch {
-    return {};
-  }
-}
-
 function queryTerms(query: string | undefined): string[] {
   return Array.from(new Set((query ?? '').toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [])).slice(0, 12);
 }
@@ -174,10 +179,13 @@ function selectSourceChunks(db: Database, options: WikiCompileOptions): SourceCh
        c.end_offset,
        c.metadata_json,
        c.source_revision_id,
+       sr.metadata_json AS revision_metadata_json,
        sr.revision,
        sr.hash,
        s.uri AS source_uri,
-       s.title AS source_title
+       s.title AS source_title,
+       s.acl_json AS source_acl_json,
+       s.metadata_json AS source_metadata_json
      FROM chunks c
      JOIN source_revisions sr ON sr.id = c.source_revision_id
      JOIN sources s ON s.id = sr.source_id
@@ -185,6 +193,13 @@ function selectSourceChunks(db: Database, options: WikiCompileOptions): SourceCh
      ORDER BY c.created_at ASC, c.ordinal ASC
      LIMIT ?`,
   ).all(...params);
+}
+
+function sourceChunkAllowed(row: SourceChunkRow, purpose: string): boolean {
+  if (metadataIsStale(parseJsonObject(row.metadata_json))) return false;
+  if (metadataIsStale(parseJsonObject(row.revision_metadata_json))) return false;
+  if (metadataIsStale(parseJsonObject(row.source_metadata_json))) return false;
+  return sourceAccessDecision(parseJsonObject(row.source_acl_json), purpose).allowed;
 }
 
 function excerpt(text: string, max = 420): string {
@@ -275,14 +290,22 @@ function upsertWikiPage(db: Database, input: {
   now: string;
 }): void {
   db.run(
-    `INSERT INTO wiki_pages (id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO wiki_pages (
+       id, path, title, artifact_uri, content_hash, status, metadata_json,
+       valid_from, valid_to, supersedes, superseded_by, confidence, last_verified_at,
+       created_at, updated_at
+     )
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(path) DO UPDATE SET
        title = excluded.title,
        artifact_uri = excluded.artifact_uri,
        content_hash = excluded.content_hash,
        status = excluded.status,
        metadata_json = excluded.metadata_json,
+       valid_from = COALESCE(wiki_pages.valid_from, excluded.valid_from),
+       valid_to = excluded.valid_to,
+       confidence = excluded.confidence,
+       last_verified_at = excluded.last_verified_at,
        updated_at = excluded.updated_at`,
     [
       input.pageId,
@@ -295,6 +318,12 @@ function upsertWikiPage(db: Database, input: {
         artifact_key: input.path,
         provenance: input.provenance,
       }),
+      input.now,
+      null,
+      null,
+      null,
+      0.8,
+      input.now,
       input.now,
       input.now,
     ],
@@ -385,18 +414,87 @@ function firstConcept(title: string): string {
   return title.toLowerCase().match(/[a-z0-9][a-z0-9-]{2,}/)?.[0] ?? 'knowledge';
 }
 
+function validateAnswerCitations(dbPath: string, citations: KnowledgeContextPack['citations']): void {
+  if (citations.length === 0) {
+    throw new Error('Cannot file a durable answer without citations.');
+  }
+
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  let sourceBacked = 0;
+  try {
+    for (const citation of citations) {
+      if (!citation.chunk_id) continue;
+      const row = db.query<{
+        chunk_id: string;
+        kind: string;
+        chunk_metadata_json: string;
+        revision_metadata_json: string | null;
+        source_metadata_json: string | null;
+        source_acl_json: string | null;
+      }, [string]>(
+        `SELECT
+           c.id AS chunk_id,
+           c.kind,
+           c.metadata_json AS chunk_metadata_json,
+           sr.metadata_json AS revision_metadata_json,
+           s.metadata_json AS source_metadata_json,
+           s.acl_json AS source_acl_json
+         FROM chunks c
+         LEFT JOIN source_revisions sr ON sr.id = c.source_revision_id
+         LEFT JOIN sources s ON s.id = sr.source_id
+         WHERE c.id = ?`,
+      ).get(citation.chunk_id);
+      if (!row) {
+        throw new Error(`Cannot file durable answer with unresolved citation chunk: ${citation.chunk_id}`);
+      }
+      if (row.kind !== 'source') continue;
+      sourceBacked += 1;
+      if (
+        metadataIsStale(parseJsonObject(row.chunk_metadata_json))
+        || metadataIsStale(parseJsonObject(row.revision_metadata_json))
+        || metadataIsStale(parseJsonObject(row.source_metadata_json))
+      ) {
+        throw new Error(`Cannot file durable answer with stale citation chunk: ${citation.chunk_id}`);
+      }
+      const access = sourceAccessDecision(parseJsonObject(row.source_acl_json), KNOWLEDGE_ANSWER_PURPOSE);
+      if (!access.allowed) {
+        throw new Error(`Cannot file durable answer with citation disallowed for ${KNOWLEDGE_ANSWER_PURPOSE}: ${citation.chunk_id}. ${access.message}`);
+      }
+    }
+  } finally {
+    db.close();
+  }
+
+  if (sourceBacked === 0) {
+    throw new Error('Cannot file a durable answer without at least one source-backed citation.');
+  }
+}
+
+function requireApprover(approvedBy: string | undefined, action: string): string {
+  const approver = approvedBy?.trim();
+  if (!approver) {
+    throw new Error(`${action} requires --approved-by <name> when --approve-write is used.`);
+  }
+  return approver;
+}
+
 export async function compileWikiPage(options: WikiCompileOptions): Promise<WikiCompileResult> {
+  if (!options.approveWrite) {
+    throw new Error('Wiki compile writes generated pages and requires --approve-write.');
+  }
+  const approvedBy = requireApprover(options.approvedBy, 'Wiki compile');
   const nowDate = options.now ?? new Date();
   const now = nowDate.toISOString();
   migrateKnowledgeDb(options.dbPath);
   const readDb = openKnowledgeDb(options.dbPath);
   let rows: SourceChunkRow[];
   try {
-    rows = selectSourceChunks(readDb, options);
+    rows = selectSourceChunks(readDb, options).filter((row) => sourceChunkAllowed(row, KNOWLEDGE_INDEX_PURPOSE));
   } finally {
     readDb.close();
   }
-  if (rows.length === 0) throw new Error('No source chunks matched wiki compile input.');
+  if (rows.length === 0) throw new Error('No fresh knowledge_index source chunks matched wiki compile input.');
 
   const title = titleFor(options, rows);
   const slug = slugify(title);
@@ -458,6 +556,14 @@ export async function compileWikiPage(options: WikiCompileOptions): Promise<Wiki
 
   const db = openKnowledgeDb(options.dbPath);
   try {
+    const approval = createApprovalGate(db, {
+      action: 'generated_write',
+      target_uri: path,
+      reason: 'wiki compile generated page write',
+      approved_by: approvedBy,
+      metadata: { command: 'wiki compile', source_refs: sourceRefs, chunks_seen: rows.length },
+      created_at: now,
+    });
     recordStorageObjects(db, [pageArtifact, conceptArtifact, log], nowDate);
     upsertWikiPage(db, {
       pageId,
@@ -492,6 +598,22 @@ export async function compileWikiPage(options: WikiCompileOptions): Promise<Wiki
       contentHash: pageArtifact.hash ?? '',
       now,
     });
+    recordAuditEvent(db, {
+      event_type: 'write',
+      action: 'wiki_compile',
+      target_uri: path,
+      decision: 'allow',
+      metadata: {
+        approval_id: approval.id,
+        approved_by: approvedBy,
+        page_id: pageId,
+        concept_page_id: conceptPageId,
+        source_refs: sourceRefs,
+        chunks_seen: rows.length,
+        citations_written: citationsWritten,
+      },
+      created_at: now,
+    });
     return {
       page_id: pageId,
       path,
@@ -522,6 +644,7 @@ export async function fileAnswerToWiki(options: WikiAnswerFileOptions): Promise<
       message: 'Dry-run: answer filing requires --approve-write.',
     };
   }
+  const approvedBy = requireApprover(options.approvedBy, 'Wiki answer filing');
 
   const nowDate = options.now ?? new Date();
   const now = nowDate.toISOString();
@@ -529,6 +652,7 @@ export async function fileAnswerToWiki(options: WikiAnswerFileOptions): Promise<
   const slug = slugify(title);
   const path = `wiki/answers/${slug}.md`;
   const citations = options.context.citations;
+  validateAnswerCitations(options.dbPath, citations);
   const body = [
     `# ${title}`,
     '',
@@ -561,6 +685,14 @@ export async function fileAnswerToWiki(options: WikiAnswerFileOptions): Promise<
   const pageId = stableId('wiki', path);
   const db = openKnowledgeDb(options.dbPath);
   try {
+    const approval = createApprovalGate(db, {
+      action: 'generated_write',
+      target_uri: path,
+      reason: 'wiki answer generated page write',
+      approved_by: approvedBy,
+      metadata: { command: 'wiki file-answer', prompt: options.prompt, citations: citations.length },
+      created_at: now,
+    });
     recordStorageObjects(db, [artifact, log], nowDate);
     upsertWikiPage(db, {
       pageId,
@@ -592,6 +724,19 @@ export async function fileAnswerToWiki(options: WikiAnswerFileOptions): Promise<
       contentHash: artifact.hash ?? '',
       now,
     });
+    recordAuditEvent(db, {
+      event_type: 'write',
+      action: 'wiki_answer_file',
+      target_uri: path,
+      decision: 'allow',
+      metadata: {
+        approval_id: approval.id,
+        approved_by: approvedBy,
+        page_id: pageId,
+        citations_written: written,
+      },
+      created_at: now,
+    });
     return {
       approved: true,
       durable_writes_performed: true,
@@ -616,15 +761,26 @@ export function lintWiki(options: { dbPath: string }): WikiLintResult {
   const db = openKnowledgeDb(options.dbPath);
   const issues: WikiLintIssue[] = [];
   try {
-    const activePages = db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM wiki_pages WHERE status = 'active'").get()?.n ?? 0;
+    const activePageWhere = "status = 'active' AND (valid_to IS NULL OR valid_to > datetime('now'))";
+    const activePages = db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM wiki_pages WHERE ${activePageWhere}`).get()?.n ?? 0;
     const citationCount = db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM citations').get()?.n ?? 0;
     const backlinkCount = db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM wiki_backlinks').get()?.n ?? 0;
+
+    const expiredPages = db.query<{ id: string; path: string; valid_to: string }, []>(
+      `SELECT id, path, valid_to
+       FROM wiki_pages
+       WHERE status = 'active' AND valid_to IS NOT NULL AND valid_to <= datetime('now')`,
+    ).all();
+    for (const page of expiredPages) {
+      addIssue(issues, { type: 'expired_page', severity: 'warn', page_id: page.id, path: page.path, message: `Wiki page expired at ${page.valid_to}.` });
+    }
 
     const missingCitations = db.query<{ id: string; path: string }, []>(
       `SELECT wp.id, wp.path
        FROM wiki_pages wp
        LEFT JOIN citations c ON c.wiki_page_id = wp.id
-       WHERE wp.status = 'active' AND wp.path LIKE 'wiki/generated/%'
+       WHERE ${activePageWhere.replaceAll('status', 'wp.status').replaceAll('valid_to', 'wp.valid_to')}
+         AND wp.path LIKE 'wiki/generated/%'
        GROUP BY wp.id
        HAVING COUNT(c.id) = 0`,
     ).all();
@@ -646,7 +802,7 @@ export function lintWiki(options: { dbPath: string }): WikiLintResult {
     const duplicates = db.query<{ title: string; n: number }, []>(
       `SELECT lower(title) AS title, COUNT(*) AS n
        FROM wiki_pages
-       WHERE status = 'active'
+       WHERE ${activePageWhere}
        GROUP BY lower(title)
        HAVING COUNT(*) > 1`,
     ).all();
@@ -659,7 +815,7 @@ export function lintWiki(options: { dbPath: string }): WikiLintResult {
        FROM wiki_pages wp
        LEFT JOIN wiki_backlinks wb1 ON wb1.from_page_id = wp.id
        LEFT JOIN wiki_backlinks wb2 ON wb2.to_page_id = wp.id
-       WHERE wp.status = 'active'
+       WHERE ${activePageWhere.replaceAll('status', 'wp.status').replaceAll('valid_to', 'wp.valid_to')}
          AND wp.path NOT IN ('wiki/README.md')
        GROUP BY wp.id
        HAVING COUNT(wb1.to_page_id) = 0 AND COUNT(wb2.from_page_id) = 0`,

@@ -13,7 +13,7 @@ describe('knowledge prompt agent', () => {
     const source = join(dir, 'source.md');
     writeFileSync(source, 'Prompt agent should cite company handbook evidence from open-files sources.');
     const sourceRef = `file://${source}`;
-    await ingestSourceRef({ dbPath, sourceRef, purpose: 'knowledge_index' });
+    await ingestSourceRef({ dbPath, sourceRef, purpose: 'knowledge_answer' });
 
     const draft = await runKnowledgePrompt({
       dbPath,

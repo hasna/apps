@@ -293,6 +293,17 @@ function ensureRevision(db: Database, sourceId: string, event: NormalizedOutboxE
 }
 
 function revisionIdsForEvent(db: Database, sourceId: string, event: NormalizedOutboxEvent): string[] {
+  if (
+    isDeleteEvent(event.eventType, event.status)
+    || isMoveEvent(event.eventType)
+    || isPermissionEvent(event.eventType)
+    || isContentChangeEvent(event.eventType)
+  ) {
+    const rows = db.query<{ id: string }, [string]>(
+      'SELECT id FROM source_revisions WHERE source_id = ?',
+    ).all(sourceId);
+    return Array.from(new Set(rows.map((row) => row.id)));
+  }
   if (event.previousRevision) {
     const previous = db.query<{ id: string }, [string, string]>(
       'SELECT id FROM source_revisions WHERE source_id = ? AND revision = ?',
@@ -346,6 +357,10 @@ function isMoveEvent(eventType: string): boolean {
 
 function isPermissionEvent(eventType: string): boolean {
   return ['permission', 'permissions', 'permission_changed', 'acl_changed', 'acl_revoked'].includes(eventType);
+}
+
+function isContentChangeEvent(eventType: string): boolean {
+  return /(change|changed|update|updated|modify|modified|revision|extract|sync)/.test(eventType);
 }
 
 export async function consumeOpenFilesOutbox(options: OutboxConsumeOptions): Promise<OutboxConsumeResult> {

@@ -9,6 +9,7 @@ export interface EmbeddingRuntimeOptions {
     fake?: boolean;
     batchSize?: number;
     maxParallelCalls?: number;
+    purpose?: string;
 }
 export interface EmbeddingIndexOptions extends EmbeddingRuntimeOptions {
     dbPath: string;

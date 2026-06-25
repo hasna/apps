@@ -199,6 +199,12 @@ describe('public knowledge sdk', () => {
     expect(paths.home).toBe(join(dir, '.hasna', 'apps', 'knowledge'));
     expect(paths.config.storage.type).toBe('local');
 
+    expect(client.storage.writeBoundary({ strict: true }).ok).toBe(false);
+    const protection = client.storage.protect();
+    expect(protection.protected).toBe(true);
+    expect(protection.ok).toBe(true);
+    expect(client.storage.writeBoundary({ strict: true }).ok).toBe(true);
+
     const setup = client.setup({ mode: 'hosted', canonicalHasnaXyz: true });
     expect(setup.mode).toBe('hosted');
     expect(setup.storage_type).toBe('s3');
@@ -208,14 +214,15 @@ describe('public knowledge sdk', () => {
     expect(storage.source_ownership.owner).toBe('open-files');
     expect(storage.source_ownership.raw_source_bytes_stored_in_open_knowledge).toBe(false);
     expect(client.storage.validate().ok).toBe(true);
+    expect(client.storage.provenance().ok).toBe(true);
 
     const parsed = parseSourceRef(`file://${source}`);
     expect(parsed.kind).toBe('file');
 
     const migration = client.db.init();
-    expect(migration.schema_version).toBe(7);
+    expect(migration.schema_version).toBe(8);
 
-    const ingest = await client.ingest.source(`file://${source}`, 'knowledge_index');
+    const ingest = await client.ingest.source(`file://${source}`, 'knowledge_answer');
     expect(ingest.sources_upserted).toBe(1);
     expect(ingest.chunks_inserted).toBe(1);
 

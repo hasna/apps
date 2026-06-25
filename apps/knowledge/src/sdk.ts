@@ -42,6 +42,9 @@ export interface KnowledgeClient {
   readonly storage: {
     readonly status: () => ReturnType<KnowledgeService['storageContract']>;
     readonly validate: () => ReturnType<KnowledgeService['validateStorage']>;
+    readonly provenance: () => ReturnType<KnowledgeService['provenanceStatus']>;
+    readonly writeBoundary: (options?: Parameters<KnowledgeService['writeBoundaryStatus']>[0]) => ReturnType<KnowledgeService['writeBoundaryStatus']>;
+    readonly protect: () => ReturnType<KnowledgeService['protectStorageBoundary']>;
     readonly artifactStore: () => ReturnType<KnowledgeService['artifactStore']>;
   };
   readonly sync: {
@@ -125,6 +128,9 @@ export function createKnowledgeClient(options: KnowledgeClientOptions = {}): Kno
     storage: {
       status: () => service.storageContract(),
       validate: () => service.validateStorage(),
+      provenance: () => service.provenanceStatus(),
+      writeBoundary: (input = {}) => service.writeBoundaryStatus(input),
+      protect: () => service.protectStorageBoundary(),
       artifactStore: () => service.artifactStore(),
     },
     sync: {

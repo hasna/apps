@@ -90,8 +90,8 @@ knowledge source resolve open-files://file/file_123/revision/rev_456 \
 3. Initialize `knowledge.db` with `knowledge db init --scope project`.
 4. Ingest source manifests from `open-files` rather than copying raw files into
    `knowledge`.
-5. Run `knowledge search --scope project --json` to verify source chunks.
-6. Run `knowledge wiki compile` for durable cited pages.
+5. Run `knowledge search --scope project --json` to verify answer-purpose source chunks.
+6. Run `knowledge wiki compile --approve-write --approved-by <name>` for durable cited pages from `knowledge_index` chunks.
 7. Run `knowledge wiki lint --scope project --json` before treating pages
    as company knowledge.
 8. Use `knowledge export --format jsonl` if legacy notes need to be
@@ -134,7 +134,7 @@ HASNA_KNOWLEDGE_WEB_SEARCH=1 \
 knowledge web search "current policy source" --provider openai --json
 ```
 
-- Use `--approve-write` only when a generated wiki artifact should be durable.
+- Use `--approve-write --approved-by <name>` only when a generated wiki artifact should be durable.
 
 ## Hosted Migration
 

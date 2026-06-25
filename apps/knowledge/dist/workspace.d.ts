@@ -103,6 +103,11 @@ export declare function legacyGlobalStorePath(): string;
 export declare function globalKnowledgeHome(): string;
 export declare function projectKnowledgeHome(cwd?: string): string;
 export declare function workspaceForHome(home: string): KnowledgeWorkspace;
+export declare function pathIsInside(parent: string, target: string): boolean;
+export declare function assertKnowledgeWritePathAllowed(targetPath: string, workspace: KnowledgeWorkspace, options?: {
+    allowJsonStore?: boolean;
+    operation?: string;
+}): void;
 export declare function defaultKnowledgeConfig(): KnowledgeConfig;
 export declare function ensureKnowledgeWorkspace(home: string): KnowledgeWorkspace;
 export declare function resolveScopedWorkspace(scope: string | undefined, cwd?: string): KnowledgeWorkspace;

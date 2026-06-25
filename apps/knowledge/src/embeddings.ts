@@ -3,6 +3,12 @@ import type { Database } from 'bun:sqlite';
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { assertProviderCredentials, parseModelRef, providerSettings, type AiProviderId } from './providers';
 import { sourceProvenance, type KnowledgeProvenance } from './provenance';
+import {
+  KNOWLEDGE_ANSWER_PURPOSE,
+  metadataIsStale,
+  parseJsonObject,
+  sourceAccessDecision,
+} from './source-access';
 import type { KnowledgeConfig } from './workspace';
 
 export interface EmbeddingRuntimeOptions {
@@ -13,6 +19,7 @@ export interface EmbeddingRuntimeOptions {
   fake?: boolean;
   batchSize?: number;
   maxParallelCalls?: number;
+  purpose?: string;
 }
 
 export interface EmbeddingIndexOptions extends EmbeddingRuntimeOptions {
@@ -104,6 +111,9 @@ interface VectorRow {
   revision: string | null;
   hash: string | null;
   metadata_json: string;
+  source_acl_json: string | null;
+  source_metadata_json: string | null;
+  revision_metadata_json: string | null;
 }
 
 export const DEFAULT_EMBEDDING_MODEL_REF = 'openai:text-embedding-3-small';
@@ -122,16 +132,6 @@ function embeddingConfig(config?: KnowledgeConfig) {
 
 function stableId(prefix: string, value: string): string {
   return `${prefix}_${createHash('sha256').update(value).digest('hex').slice(0, 20)}`;
-}
-
-function parseJsonObject(value: string | null | undefined): Record<string, unknown> {
-  if (!value) return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-  } catch {
-    return {};
-  }
 }
 
 function metadataString(metadata: Record<string, unknown>, keys: string[]): string | null {
@@ -463,6 +463,7 @@ export async function searchVectorIndex(options: EmbeddingSearchOptions): Promis
   const modelRef = resolveEmbeddingModelRef(options.modelRef, options.config);
   const parsed = parseModelRef(modelRef);
   const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
+  const purpose = options.purpose ?? KNOWLEDGE_ANSWER_PURPOSE;
   const embedded = await embedTexts([options.query], options);
   const queryVector = embedded.vectors[0] ?? [];
 
@@ -479,19 +480,30 @@ export async function searchVectorIndex(options: EmbeddingSearchOptions): Promis
          v.source_ref,
          v.revision,
          v.hash,
-         v.metadata_json
+         v.metadata_json,
+         s.acl_json AS source_acl_json,
+         s.metadata_json AS source_metadata_json,
+         sr.metadata_json AS revision_metadata_json
        FROM vector_index_entries v
        JOIN chunks c ON c.id = v.chunk_id
+       LEFT JOIN source_revisions sr ON sr.id = v.source_revision_id
+       LEFT JOIN sources s ON s.id = sr.source_id
        WHERE v.provider = ? AND v.model = ? AND v.status = 'active'`,
     ).all(parsed.provider, parsed.model);
 
-    const scored = rows.map((row) => {
+    const scored = rows.flatMap((row) => {
+      if (metadataIsStale(parseJsonObject(row.revision_metadata_json)) || metadataIsStale(parseJsonObject(row.source_metadata_json))) {
+        return [];
+      }
+      const access = sourceAccessDecision(parseJsonObject(row.source_acl_json), purpose);
+      if (!access.allowed) return [];
       const vector = JSON.parse(row.vector_json) as number[];
       const metadata = parseJsonObject(row.metadata_json);
       const provenance = metadata.provenance && typeof metadata.provenance === 'object' && !Array.isArray(metadata.provenance)
         ? metadata.provenance as KnowledgeProvenance
         : null;
-      return {
+      if (provenance?.stale) return [];
+      return [{
         chunk_id: row.chunk_id,
         score: cosineSimilarity(queryVector, vector, row.vector_norm),
         text: row.text,
@@ -500,7 +512,7 @@ export async function searchVectorIndex(options: EmbeddingSearchOptions): Promis
         revision: row.revision,
         hash: row.hash,
         provenance,
-      };
+      }];
     }).sort((a, b) => b.score - a.score).slice(0, limit);
 
     return {

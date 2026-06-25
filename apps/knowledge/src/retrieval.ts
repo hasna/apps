@@ -75,6 +75,7 @@ export interface KnowledgeContextPack {
   notes: {
     permissions: string[];
     freshness: string[];
+    stability: string[];
   };
 }
 
@@ -273,6 +274,7 @@ export async function retrieveKnowledgeContext(options: RetrievalOptions): Promi
   const warnings = [...search.warnings];
   const permissionNotes = new Set<string>();
   const freshnessNotes = new Set<string>();
+  const stabilityNotes = new Set<string>();
 
   const filtered = search.results.filter((result) => {
     if (!hasReadOnlyProvenance(result.provenance)) {
@@ -292,6 +294,10 @@ export async function retrieveKnowledgeContext(options: RetrievalOptions): Promi
     .map((result) => rerank(result, terms))
     .sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
     .slice(0, search.limit);
+  stabilityNotes.add('Context evidence order is deterministic by final score and stable result id.');
+  if (results.length > 1 && Math.abs(results[0].score - results[1].score) <= 0.02) {
+    stabilityNotes.add('Top evidence scores are close; verify multiple citations before filing durable claims.');
+  }
 
   const citations = results.map(citationFor);
   const excerpts = results
@@ -321,6 +327,7 @@ export async function retrieveKnowledgeContext(options: RetrievalOptions): Promi
     notes: {
       permissions: Array.from(permissionNotes),
       freshness: Array.from(freshnessNotes),
+      stability: Array.from(stabilityNotes),
     },
   };
 }

@@ -7,6 +7,8 @@ export interface WikiCompileOptions {
     query?: string;
     sourceRefs?: string[];
     limit?: number;
+    approveWrite?: boolean;
+    approvedBy?: string;
     now?: Date;
 }
 export interface WikiCompileResult {
@@ -28,6 +30,7 @@ export interface WikiAnswerFileOptions {
     answer: string;
     context: KnowledgeContextPack;
     approveWrite?: boolean;
+    approvedBy?: string;
     now?: Date;
 }
 export interface WikiAnswerFileResult {
@@ -41,7 +44,7 @@ export interface WikiAnswerFileResult {
     message: string;
 }
 export interface WikiLintIssue {
-    type: 'missing_citation' | 'stale_citation' | 'duplicate_page' | 'orphan_page' | 'unresolved_source_ref' | 'contradiction_marker' | 'new_article_candidate';
+    type: 'missing_citation' | 'stale_citation' | 'duplicate_page' | 'orphan_page' | 'unresolved_source_ref' | 'contradiction_marker' | 'new_article_candidate' | 'expired_page';
     severity: 'info' | 'warn' | 'error';
     page_id?: string;
     path?: string;

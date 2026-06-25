@@ -20,7 +20,7 @@ describe('hybrid knowledge search', () => {
     await ingestSourceRef({
       dbPath,
       sourceRef,
-      purpose: 'knowledge_index',
+      purpose: 'knowledge_answer',
     });
 
     const store = new LocalArtifactStore(join(dir, 'artifacts'));
@@ -78,5 +78,64 @@ describe('hybrid knowledge search', () => {
     expect(semantic.results.some((result) => result.reasons.includes('semantic_match'))).toBe(true);
 
     migrateKnowledgeDb(dbPath);
+  });
+
+  test('filters source chunks outside the requested purpose', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-hybrid-purpose-'));
+    const dbPath = join(dir, 'knowledge.db');
+    const source = join(dir, 'index-only.md');
+    writeFileSync(source, 'Index-only material should not appear in answer retrieval.');
+    const sourceRef = `file://${source}`;
+
+    await ingestSourceRef({
+      dbPath,
+      sourceRef,
+      purpose: 'knowledge_index',
+    });
+
+    const answerSearch = await hybridSearch({
+      dbPath,
+      query: 'index-only material',
+      limit: 5,
+    });
+    expect(answerSearch.results.some((result) => result.source?.uri === sourceRef)).toBe(false);
+    expect(answerSearch.warnings.some((warning) => warning.startsWith('purpose_not_allowed:'))).toBe(true);
+
+    const indexSearch = await hybridSearch({
+      dbPath,
+      query: 'index-only material',
+      purpose: 'knowledge_index',
+      limit: 5,
+    });
+    expect(indexSearch.results.some((result) => result.source?.uri === sourceRef)).toBe(true);
+  });
+
+  test('filters expired wiki pages from catalog and FTS results', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-hybrid-expired-wiki-'));
+    const dbPath = join(dir, 'knowledge.db');
+    const store = new LocalArtifactStore(join(dir, 'artifacts'));
+    const wiki = await initializeWikiLayout(store, new Date('2026-06-08T00:00:00.000Z'));
+    migrateKnowledgeDb(dbPath);
+    const db = openKnowledgeDb(dbPath);
+    try {
+      recordWikiLayoutCatalog(db, wiki.artifacts, new Date('2026-06-08T00:00:00.000Z'));
+      db.run(
+        'UPDATE wiki_pages SET valid_to = ?, updated_at = ? WHERE path = ?',
+        '2000-01-01T00:00:00.000Z',
+        '2026-06-09T00:00:00.000Z',
+        'wiki/README.md',
+      );
+    } finally {
+      db.close();
+    }
+
+    const results = await hybridSearch({
+      dbPath,
+      query: 'Generated durable knowledge pages',
+      limit: 10,
+    });
+
+    expect(results.results.some((result) => result.kind === 'wiki_chunk')).toBe(false);
+    expect(results.results.some((result) => result.kind === 'wiki_page')).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative, sep } from 'node:path';
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
 
 interface S3ClientLike {
@@ -41,10 +41,50 @@ export function normalizeArtifactKey(key: string): string {
 }
 
 function assertInside(root: string, target: string): void {
-  const rel = relative(root, target);
+  const rel = relative(resolve(root), resolve(target));
   if (rel.startsWith('..') || rel === '..' || rel.startsWith(`..${sep}`)) {
     throw new Error(`Artifact path escapes root: ${target}`);
   }
+}
+
+function assertRealPathInside(root: string, target: string): void {
+  const rootReal = realpathSync(root);
+  const targetReal = realpathSync(target);
+  const rel = relative(rootReal, targetReal);
+  if (rel.startsWith('..') || rel === '..' || rel.startsWith(`..${sep}`)) {
+    throw new Error(`Artifact path escapes root: ${target}`);
+  }
+}
+
+function assertNoSymlinkSegments(root: string, target: string): void {
+  const rootResolved = resolve(root);
+  const targetResolved = resolve(target);
+  const rel = relative(rootResolved, targetResolved);
+  if (!rel) return;
+  let current = rootResolved;
+  for (const segment of rel.split(sep).filter(Boolean)) {
+    current = join(current, segment);
+    if (existsSync(current) && lstatSync(current).isSymbolicLink()) {
+      throw new Error(`Artifact path contains a symlink: ${current}`);
+    }
+  }
+}
+
+function assertExistingArtifactPathSafe(root: string, path: string): void {
+  if (!existsSync(path)) return;
+  assertNoSymlinkSegments(root, path);
+  const stats = statSync(path);
+  if (stats.isFile() && stats.nlink > 1) {
+    throw new Error(`Artifact path has multiple hard links: ${path}`);
+  }
+  assertRealPathInside(root, path);
+}
+
+function assertArtifactParentSafe(root: string, path: string): void {
+  const parent = dirname(path);
+  mkdirSync(parent, { recursive: true });
+  assertNoSymlinkSegments(root, parent);
+  assertRealPathInside(root, parent);
 }
 
 function s3UserMetadata(metadata: Record<string, unknown> | undefined): Record<string, string> | undefined {
@@ -70,8 +110,10 @@ export class LocalArtifactStore implements ArtifactStore {
     const key = normalizeArtifactKey(entry.key);
     const path = join(this.root, key);
     assertInside(this.root, path);
-    mkdirSync(dirname(path), { recursive: true });
+    assertArtifactParentSafe(this.root, path);
+    assertExistingArtifactPathSafe(this.root, path);
     writeFileSync(path, entry.body);
+    assertExistingArtifactPathSafe(this.root, path);
     return { key, uri: `file://${path}`, modified_at: statSync(path).mtime.toISOString() };
   }
 
@@ -79,6 +121,7 @@ export class LocalArtifactStore implements ArtifactStore {
     const normalizedKey = normalizeArtifactKey(key);
     const path = join(this.root, normalizedKey);
     assertInside(this.root, path);
+    assertExistingArtifactPathSafe(this.root, path);
     return readFileSync(path, 'utf8');
   }
 
@@ -86,6 +129,7 @@ export class LocalArtifactStore implements ArtifactStore {
     const normalizedKey = normalizeArtifactKey(key);
     const path = join(this.root, normalizedKey);
     assertInside(this.root, path);
+    assertExistingArtifactPathSafe(this.root, path);
     return existsSync(path);
   }
 }

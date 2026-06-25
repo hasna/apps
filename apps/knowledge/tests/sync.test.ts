@@ -235,7 +235,7 @@ describe('knowledge machine sync ledger', () => {
     expect(syncArtifactsFromSnapshot(snapshot.snapshot)).toHaveLength(1);
 
     const status = service.syncStatus();
-    expect(status.sqlite_schema_version).toBe(7);
+    expect(status.sqlite_schema_version).toBe(8);
     expect(status.machines.total).toBe(2);
     expect(status.snapshots.total).toBe(1);
     expect(status.clocks.total).toBeGreaterThan(0);

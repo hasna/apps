@@ -9,6 +9,7 @@ export interface HybridSearchOptions extends EmbeddingRuntimeOptions {
     limit?: number;
     semantic?: boolean;
     config?: KnowledgeConfig;
+    purpose?: string;
 }
 export interface HybridSearchResult {
     query: string;

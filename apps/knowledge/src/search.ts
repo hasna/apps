@@ -2,6 +2,15 @@ import type { Database } from 'bun:sqlite';
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { searchVectorIndex, type EmbeddingRuntimeOptions } from './embeddings';
 import { sourceProvenance, type GeneratedArtifactProvenance, type KnowledgeProvenance } from './provenance';
+import {
+  KNOWLEDGE_ANSWER_PURPOSE,
+  metadataIsStale,
+  parseJsonObject,
+  provenanceIsStale,
+  provenanceSourceRefs,
+  sourceAccessDecision,
+  sourceUriCandidates,
+} from './source-access';
 import type { KnowledgeConfig } from './workspace';
 
 export type SearchResultKind = 'source_chunk' | 'wiki_chunk' | 'wiki_page' | 'knowledge_index';
@@ -13,6 +22,7 @@ export interface HybridSearchOptions extends EmbeddingRuntimeOptions {
   limit?: number;
   semantic?: boolean;
   config?: KnowledgeConfig;
+  purpose?: string;
 }
 
 export interface HybridSearchResult {
@@ -79,11 +89,14 @@ interface FtsChunkRow {
   end_offset: number | null;
   chunk_metadata_json: string;
   source_revision_id: string | null;
+  revision_metadata_json: string | null;
   revision: string | null;
   hash: string | null;
   source_uri: string | null;
   source_kind: string | null;
   source_title: string | null;
+  source_acl_json: string | null;
+  source_metadata_json: string | null;
   wiki_path: string | null;
   wiki_title: string | null;
   wiki_artifact_uri: string | null;
@@ -110,16 +123,6 @@ interface IndexRow {
   artifact_uri: string | null;
   shard_key: string | null;
   metadata_json: string;
-}
-
-function parseJsonObject(value: string | null | undefined): Record<string, unknown> {
-  if (!value) return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-  } catch {
-    return {};
-  }
 }
 
 function metadataString(metadata: Record<string, unknown>, keys: string[]): string | null {
@@ -212,9 +215,19 @@ function provenanceForChunk(row: FtsChunkRow): SearchProvenance | null {
     chunk_id: row.chunk_id,
     start_offset: row.start_offset ?? metadataNumber(metadata, ['start_offset']),
     end_offset: row.end_offset ?? metadataNumber(metadata, ['end_offset']),
-    status: metadataString(metadata, ['status']),
+    status: statusForChunkRow(row),
     resolver: 'open-files-read-only',
   });
+}
+
+function statusForChunkRow(row: FtsChunkRow): string | null {
+  const metadata = parseJsonObject(row.chunk_metadata_json);
+  const revisionMetadata = parseJsonObject(row.revision_metadata_json);
+  const sourceMetadata = parseJsonObject(row.source_metadata_json);
+  if (metadataIsStale(revisionMetadata)) return 'reindex_required';
+  const sourceStatus = metadataString(sourceMetadata, ['status']);
+  if (sourceStatus) return sourceStatus;
+  return metadataString(metadata, ['status']);
 }
 
 function selectFtsChunks(db: Database, ftsQuery: string | null, limit: number): FtsChunkRow[] {
@@ -230,11 +243,14 @@ function selectFtsChunks(db: Database, ftsQuery: string | null, limit: number): 
        c.end_offset,
        c.metadata_json AS chunk_metadata_json,
        c.source_revision_id,
+       sr.metadata_json AS revision_metadata_json,
        sr.revision,
        sr.hash,
        s.uri AS source_uri,
        s.kind AS source_kind,
        s.title AS source_title,
+       s.acl_json AS source_acl_json,
+       s.metadata_json AS source_metadata_json,
        wp.path AS wiki_path,
        wp.title AS wiki_title,
        wp.artifact_uri AS wiki_artifact_uri,
@@ -248,9 +264,61 @@ function selectFtsChunks(db: Database, ftsQuery: string | null, limit: number): 
      LEFT JOIN sources s ON s.id = sr.source_id
      LEFT JOIN wiki_pages wp ON wp.id = c.wiki_page_id
      WHERE chunks_fts MATCH ?
+       AND (
+         c.wiki_page_id IS NULL
+         OR (wp.status = 'active' AND (wp.valid_to IS NULL OR wp.valid_to > datetime('now')))
+       )
      ORDER BY rank ASC
      LIMIT ?`,
   ).all(ftsQuery, limit);
+}
+
+interface SourceAccessRow {
+  acl_json: string | null;
+  metadata_json: string | null;
+}
+
+function sourceAccessForRef(db: Database, ref: string, purpose: string): SourceAccessDecisionWithRef {
+  const candidates = sourceUriCandidates(ref);
+  const placeholders = candidates.map(() => '?').join(', ');
+  const row = db.query<SourceAccessRow, string[]>(
+    `SELECT acl_json, metadata_json FROM sources WHERE uri IN (${placeholders}) LIMIT 1`,
+  ).get(...candidates);
+  if (!row) return { allowed: true, code: 'source_not_indexed', message: 'Source ref is not indexed locally.', ref };
+  if (metadataIsStale(parseJsonObject(row.metadata_json))) {
+    return { allowed: false, code: 'source_stale', message: 'Source metadata is stale or deleted.', ref };
+  }
+  const decision = sourceAccessDecision(parseJsonObject(row.acl_json), purpose);
+  return { ...decision, ref };
+}
+
+interface SourceAccessDecisionWithRef {
+  allowed: boolean;
+  code: string;
+  message: string;
+  ref: string;
+}
+
+function entryAccessDecision(db: Database, entry: HybridSearchEntry, purpose: string, row?: FtsChunkRow): SourceAccessDecisionWithRef {
+  if (provenanceIsStale(entry.provenance)) {
+    return { allowed: false, code: 'stale_provenance', message: 'Result provenance is stale or deleted.', ref: entry.id };
+  }
+  if (row?.source_revision_id) {
+    const revisionMetadata = parseJsonObject(row.revision_metadata_json);
+    const sourceMetadata = parseJsonObject(row.source_metadata_json);
+    if (metadataIsStale(revisionMetadata) || metadataIsStale(sourceMetadata)) {
+      return { allowed: false, code: 'stale_source', message: 'Source revision is stale or deleted.', ref: row.source_uri ?? entry.id };
+    }
+    const decision = sourceAccessDecision(parseJsonObject(row.source_acl_json), purpose);
+    return { ...decision, ref: row.source_uri ?? entry.source?.ref ?? entry.id };
+  }
+
+  const refs = provenanceSourceRefs(entry.provenance);
+  for (const ref of refs) {
+    const decision = sourceAccessForRef(db, ref, purpose);
+    if (!decision.allowed) return decision;
+  }
+  return { allowed: true, code: 'allow', message: 'Result is allowed for purpose.', ref: entry.id };
 }
 
 function catalogWhere(fields: string[], terms: string[]): string {
@@ -264,7 +332,9 @@ function selectWikiPages(db: Database, terms: string[], limit: number): WikiPage
   return db.query<WikiPageRow, [...string[], number]>(
     `SELECT id, path, title, artifact_uri, content_hash, status, metadata_json
      FROM wiki_pages
-     WHERE status = 'active' AND (${catalogWhere(fields, terms)})
+     WHERE status = 'active'
+       AND (valid_to IS NULL OR valid_to > datetime('now'))
+       AND (${catalogWhere(fields, terms)})
      ORDER BY updated_at DESC
      LIMIT ?`,
   ).all(...likeParams(terms, fields.length), limit);
@@ -408,6 +478,7 @@ export async function hybridSearch(options: HybridSearchOptions): Promise<Hybrid
   const query = options.query.trim();
   if (!query) throw new Error('Search query is required.');
   const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
+  const purpose = options.purpose ?? KNOWLEDGE_ANSWER_PURPOSE;
   const terms = queryTerms(query);
   const ftsQuery = ftsQueryForTerms(terms);
   const semanticEnabled = options.semantic === true || options.fake === true || Boolean(options.modelRef);
@@ -425,13 +496,37 @@ export async function hybridSearch(options: HybridSearchOptions): Promise<Hybrid
   try {
     const ftsRows = selectFtsChunks(db, ftsQuery, Math.max(limit * 3, 20));
     keywordCount = ftsRows.length;
-    ftsRows.forEach((row, index) => mergeResult(merged, chunkResult(row, scoreFromRank(row.rank, index))));
+    ftsRows.forEach((row, index) => {
+      const result = chunkResult(row, scoreFromRank(row.rank, index));
+      const access = entryAccessDecision(db, result, purpose, row);
+      if (!access.allowed) {
+        warnings.push(`${access.code}: ${result.kind}:${result.id} ${access.message}`);
+        return;
+      }
+      mergeResult(merged, result);
+    });
 
     const wikiRows = selectWikiPages(db, terms, Math.max(limit, 10));
     const indexRows = selectKnowledgeIndexes(db, terms, Math.max(limit, 10));
     catalogCount = wikiRows.length + indexRows.length;
-    wikiRows.forEach((row) => mergeResult(merged, wikiPageResult(row, terms)));
-    indexRows.forEach((row) => mergeResult(merged, indexResult(row, terms)));
+    wikiRows.forEach((row) => {
+      const result = wikiPageResult(row, terms);
+      const access = entryAccessDecision(db, result, purpose);
+      if (!access.allowed) {
+        warnings.push(`${access.code}: ${result.kind}:${result.id} ${access.message}`);
+        return;
+      }
+      mergeResult(merged, result);
+    });
+    indexRows.forEach((row) => {
+      const result = indexResult(row, terms);
+      const access = entryAccessDecision(db, result, purpose);
+      if (!access.allowed) {
+        warnings.push(`${access.code}: ${result.kind}:${result.id} ${access.message}`);
+        return;
+      }
+      mergeResult(merged, result);
+    });
   } finally {
     db.close();
   }
@@ -449,6 +544,7 @@ export async function hybridSearch(options: HybridSearchOptions): Promise<Hybrid
         fake: options.fake,
         batchSize: options.batchSize,
         maxParallelCalls: options.maxParallelCalls,
+        purpose,
       });
       semanticProvider = semantic.provider;
       semanticModel = semantic.model;

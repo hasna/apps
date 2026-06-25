@@ -214,6 +214,8 @@ describe('knowledge MCP', () => {
       expect(tools.tools.some((tool) => tool.name === 'ok_parse_source_ref')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_resolve_source')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_storage_status')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'ok_storage_protect')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'ok_storage_provenance')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_provider_status')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_embeddings_status')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_embeddings_index')).toBe(true);
@@ -232,6 +234,8 @@ describe('knowledge MCP', () => {
       expect(tools.tools.some((tool) => tool.name === 'knowledge_lint')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_run_status')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_storage')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_storage_protect')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_storage_provenance')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_machines_topology')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_machines_preflight')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_sync_status')).toBe(true);
@@ -274,7 +278,7 @@ describe('knowledge MCP', () => {
 
       const syncResource = parseResourceJson(await client.readResource({ uri: 'knowledge://project/sync' }));
       expect(syncResource.ok).toBe(true);
-      expect(syncResource.sqlite_schema_version).toBe(7);
+      expect(syncResource.sqlite_schema_version).toBe(8);
 
       const sourceResource = parseResourceJson(await client.readResource({ uri: 'knowledge://project/sources' }));
       expect(sourceResource.sources[0].uri).toBe('open-files://file/file_mcp');
@@ -484,6 +488,26 @@ describe('knowledge MCP', () => {
       expect(storageStatus.source_ownership.owner).toBe('open-files');
       expect(storageStatus.source_ownership.raw_source_bytes_stored_in_open_knowledge).toBe(false);
 
+      const strictBeforeProtect = parseToolJson(await client.callTool({
+        name: 'knowledge_storage',
+        arguments: { scope: 'project', strict: true },
+      }));
+      expect(strictBeforeProtect.ok).toBe(false);
+      expect(strictBeforeProtect.write_boundary.violations.some((entry: any) => entry.code === 'write_boundary_not_enabled')).toBe(true);
+
+      const protectedStorage = parseToolJson(await client.callTool({
+        name: 'knowledge_storage_protect',
+        arguments: { scope: 'project' },
+      }));
+      expect(protectedStorage.ok).toBe(true);
+      expect(protectedStorage.protected).toBe(true);
+
+      const strictAfterProtect = parseToolJson(await client.callTool({
+        name: 'ok_storage_status',
+        arguments: { scope: 'project', strict: true },
+      }));
+      expect(strictAfterProtect.ok).toBe(true);
+
       const stableStorage = parseToolJson(await client.callTool({
         name: 'knowledge_storage',
         arguments: { scope: 'project' },
@@ -620,6 +644,7 @@ describe('knowledge MCP', () => {
           fake: true,
           model: 'openai:gpt-5-mini',
           approve_write: true,
+          approved_by: 'mcp-reviewer',
         },
       }));
       expect(build.generated).toBe(true);

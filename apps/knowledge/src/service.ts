@@ -39,6 +39,7 @@ import {
 import { ingestSourceRef } from './source-ingest';
 import { resolveOpenFilesSource } from './source-resolver';
 import { providerStatus, listModelRegistry, type ProviderStatusResult, type ModelRegistryEntry } from './providers';
+import { provenanceStatusFor, type KnowledgeProvenanceStatus } from './provenance-validate';
 import { enqueueMissingEmbeddings, refreshEmbeddingIndex, reindexHealth, type ReindexRuntimeOptions } from './reindex';
 import { knowledgeRegistryContract, RemoteKnowledgeClient, type RemoteKnowledgeRegistryContract } from './remote-client';
 import { retrieveKnowledgeContext, type RetrievalOptions } from './retrieval';
@@ -78,6 +79,12 @@ import {
 import type { KnowledgeItem } from './store';
 import { initializeWikiLayout, recordWikiLayoutCatalog } from './wiki-layout';
 import {
+  protectKnowledgeStorageBoundary,
+  writeBoundaryStatusFor,
+  type KnowledgeStorageProtectionResult,
+  type KnowledgeWriteBoundaryStatus,
+} from './write-boundary';
+import {
   canonicalHasnaXyzKnowledgeStorage,
   ensureKnowledgeWorkspace,
   projectKnowledgeHome,
@@ -88,6 +95,13 @@ import {
   type KnowledgeConfig,
   type KnowledgeWorkspace,
 } from './workspace';
+
+export type {
+  KnowledgeStorageProtectionResult,
+  KnowledgeWriteBoundaryStatus,
+  KnowledgeWriteBoundaryViolation,
+} from './write-boundary';
+export type { KnowledgeProvenanceStatus, KnowledgeProvenanceIssue } from './provenance-validate';
 
 export interface KnowledgeServiceOptions {
   scope?: string;
@@ -1183,6 +1197,26 @@ export class KnowledgeService {
     return validateStorageConfig(this.config(), this.ensureWorkspace());
   }
 
+  writeBoundaryStatus(options: { strict?: boolean } = {}): KnowledgeWriteBoundaryStatus {
+    const workspace = this.ensureWorkspace();
+    return writeBoundaryStatusFor(workspace.knowledgeDbPath, workspace, this.storageContract(), options);
+  }
+
+  protectStorageBoundary(): KnowledgeStorageProtectionResult {
+    const workspace = this.ensureWorkspace();
+    return protectKnowledgeStorageBoundary({
+      dbPath: workspace.knowledgeDbPath,
+      workspace,
+      storage: this.storageContract(),
+      scope: this.scope,
+    });
+  }
+
+  provenanceStatus(): KnowledgeProvenanceStatus {
+    const workspace = this.ensureWorkspace();
+    return provenanceStatusFor(workspace.knowledgeDbPath, this.storageContract());
+  }
+
   setup(options: { mode?: string; apiUrl?: string; canonicalHasnaXyz?: boolean } = {}): KnowledgeSetupResult {
     const workspace = this.ensureWorkspace();
     const current = this.config();
@@ -1568,11 +1602,13 @@ export class KnowledgeService {
     prompt: string;
     answer: string;
     approveWrite?: boolean;
+    approvedBy?: string;
     limit?: number;
     semantic?: boolean;
     modelRef?: string;
     dimensions?: number;
     fake?: boolean;
+    purpose?: string;
   }) {
     const workspace = this.ensureWorkspace();
     const context = await this.retrieveContext({
@@ -1582,6 +1618,7 @@ export class KnowledgeService {
       modelRef: options.modelRef,
       dimensions: options.dimensions,
       fake: options.fake,
+      purpose: options.purpose,
     });
     return fileAnswerToWiki({
       dbPath: workspace.knowledgeDbPath,
@@ -1590,6 +1627,7 @@ export class KnowledgeService {
       answer: options.answer,
       context,
       approveWrite: options.approveWrite,
+      approvedBy: options.approvedBy,
     });
   }
 

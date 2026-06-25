@@ -4,7 +4,7 @@
  * Licensed under the Apache License, Version 2.0
  */
 import { describe, expect, test } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
@@ -18,6 +18,7 @@ import { defaultKnowledgeConfig, writeKnowledgeConfig } from '../src/workspace';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI = join(__dirname, '..', 'src', 'cli.ts');
+const BUILT_CLI = join(__dirname, '..', 'bin', 'knowledge.js');
 const packageJson = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')) as {
   name: string;
   version: string;
@@ -60,6 +61,15 @@ function runKnowledgeBin(args: string[], cwd?: string, env?: Record<string, stri
     '',
   ].join('\n'));
   return Bun.spawnSync(['bun', wrapper, ...args], {
+    cwd,
+    env: env ? { ...process.env, ...env } : undefined,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+}
+
+function runBuiltKnowledgeBin(args: string[], cwd?: string, env?: Record<string, string>) {
+  return Bun.spawnSync(['bun', BUILT_CLI, ...args], {
     cwd,
     env: env ? { ...process.env, ...env } : undefined,
     stdout: 'pipe',
@@ -181,6 +191,9 @@ describe('knowledge cli', () => {
     const out = new TextDecoder().decode(result.stdout);
     expect(out).toContain('knowledge - local agent knowledge store');
     expect(out).toContain('Commands:');
+    expect(out).toContain('events emit|list|replay');
+    expect(out).toContain('webhooks add|list|remove|test');
+    expect(out).toContain('storage status|validate|provenance|protect|repair-artifact-keys');
     expect(out).toContain('inventory');
 
     const sub = runCli(['help', 'list']);
@@ -191,6 +204,13 @@ describe('knowledge cli', () => {
     const inventory = runCli(['help', 'inventory']);
     expect(inventory.exitCode).toBe(0);
     expect(new TextDecoder().decode(inventory.stdout)).toContain('knowledge inventory');
+  });
+
+  test('events command uses shared help surface', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'knowledge-events-cli-'));
+    const result = runCli(['events', '--help'], undefined, { HASNA_EVENTS_DIR: dir });
+    expect(result.exitCode).toBe(0);
+    expect(new TextDecoder().decode(result.stdout)).toContain('Emit, list, and replay Hasna events');
   });
 
   test('version flag works', () => {
@@ -215,6 +235,28 @@ describe('knowledge cli', () => {
     expect(result.exitCode).toBe(1);
     const err = new TextDecoder().decode(result.stderr);
     expect(err).toContain("Did you mean 'list'");
+
+    const binResult = runKnowledgeBin(['lits']);
+    expect(binResult.exitCode).toBe(1);
+    const binErr = new TextDecoder().decode(binResult.stderr);
+    expect(binErr).toContain("Did you mean 'list'");
+  });
+
+  test('json failures emit a structured error object', () => {
+    const result = runCli(['lits', '--json']);
+    expect(result.exitCode).toBe(1);
+    const err = new TextDecoder().decode(result.stderr);
+    const parsed = JSON.parse(err);
+    expect(parsed.ok).toBe(false);
+    expect(parsed.error.message).toContain("Did you mean 'list'");
+    expect(new TextDecoder().decode(result.stdout)).toBe('');
+
+    const binResult = runBuiltKnowledgeBin(['lits', '--json']);
+    expect(binResult.exitCode).toBe(1);
+    const binErr = new TextDecoder().decode(binResult.stderr);
+    const binParsed = JSON.parse(binErr);
+    expect(binParsed.ok).toBe(false);
+    expect(binParsed.error.message).toContain("Did you mean 'list'");
   });
 
   test('add/list/get/update/archive/restore/untag/delete flow with json and confirmation', () => {
@@ -317,6 +359,58 @@ describe('knowledge cli', () => {
     const validate = runCli(['storage', 'validate', '--scope', 'project', '--json'], dir);
     expect(validate.exitCode).toBe(0);
     expect(JSON.parse(new TextDecoder().decode(validate.stdout)).ok).toBe(true);
+
+    const strictBeforeProtect = runCli(['storage', 'validate', '--strict', '--scope', 'project', '--json'], dir);
+    expect(strictBeforeProtect.exitCode).toBe(1);
+    const strictBeforeProtectOut = JSON.parse(new TextDecoder().decode(strictBeforeProtect.stdout));
+    expect(strictBeforeProtectOut.ok).toBe(false);
+    expect(strictBeforeProtectOut.write_boundary.violations[0].code).toBe('write_boundary_not_enabled');
+
+    const protect = runCli(['storage', 'protect', '--scope', 'project', '--json'], dir);
+    expect(protect.exitCode).toBe(0);
+    const protectOut = JSON.parse(new TextDecoder().decode(protect.stdout));
+    expect(protectOut.protected).toBe(true);
+    expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'write-boundary.json'))).toBe(true);
+    expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'WRITE_BOUNDARY.md'))).toBe(true);
+
+    const strictAfterProtect = runCli(['storage', 'validate', '--strict', '--scope', 'project', '--json'], dir);
+    expect(strictAfterProtect.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(strictAfterProtect.stdout)).ok).toBe(true);
+
+    const blockedStore = runCli([
+      'add',
+      'Blocked direct store',
+      'Should not write inside artifacts',
+      '--store',
+      join(dir, '.hasna', 'apps', 'knowledge', 'artifacts', 'rogue-store.json'),
+      '--scope',
+      'project',
+      '--json',
+    ], dir);
+    expect(blockedStore.exitCode).toBe(1);
+    expect(JSON.parse(new TextDecoder().decode(blockedStore.stderr)).error.message).toContain('protected knowledge workspace');
+
+    writeFileSync(join(dir, '.hasna', 'apps', 'knowledge', 'rogue-root.md'), '# direct root write');
+    const strictAfterRootWrite = runCli(['storage', 'validate', '--strict', '--scope', 'project', '--json'], dir);
+    expect(strictAfterRootWrite.exitCode).toBe(1);
+    const strictAfterRootWriteOut = JSON.parse(new TextDecoder().decode(strictAfterRootWrite.stdout));
+    expect(strictAfterRootWriteOut.ok).toBe(false);
+    expect(strictAfterRootWriteOut.write_boundary.violations.some((entry: any) => entry.code === 'unexpected_workspace_root_entry')).toBe(true);
+
+    const outside = mkdtempSync(join(tmpdir(), 'ok-workspace-outside-'));
+    symlinkSync(outside, join(dir, '.hasna', 'apps', 'knowledge', 'artifacts', 'escape'), 'dir');
+    const strictAfterSymlink = runCli(['storage', 'validate', '--strict', '--scope', 'project', '--json'], dir);
+    expect(strictAfterSymlink.exitCode).toBe(1);
+    const strictAfterSymlinkOut = JSON.parse(new TextDecoder().decode(strictAfterSymlink.stdout));
+    expect(strictAfterSymlinkOut.write_boundary.violations.some((entry: any) => entry.code === 'symlink_workspace_path')).toBe(true);
+
+    mkdirSync(join(dir, '.hasna', 'apps', 'knowledge', 'artifacts', 'wiki'), { recursive: true });
+    writeFileSync(join(dir, '.hasna', 'apps', 'knowledge', 'artifacts', 'wiki', 'rogue.md'), '# direct write');
+    const strictAfterDirectWrite = runCli(['storage', 'validate', '--strict', '--scope', 'project', '--json'], dir);
+    expect(strictAfterDirectWrite.exitCode).toBe(1);
+    const strictAfterDirectWriteOut = JSON.parse(new TextDecoder().decode(strictAfterDirectWrite.stdout));
+    expect(strictAfterDirectWriteOut.ok).toBe(false);
+    expect(strictAfterDirectWriteOut.write_boundary.violations.some((entry: any) => entry.code === 'untracked_artifact_file')).toBe(true);
 
     const add = runCli(['add', 'Project scoped', 'Stored in the Hasna app workspace', '--scope', 'project', '--json'], dir);
     expect(add.exitCode).toBe(0);
@@ -771,13 +865,13 @@ describe('knowledge cli', () => {
     const init = runCli(['db', 'init', '--scope', 'project', '--json'], dir);
     expect(init.exitCode).toBe(0);
     const initOut = JSON.parse(new TextDecoder().decode(init.stdout));
-    expect(initOut.schema_version).toBe(7);
+    expect(initOut.schema_version).toBe(8);
     expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'knowledge.db'))).toBe(true);
 
     const stats = runCli(['db', 'stats', '--scope', 'project', '--json'], dir);
     expect(stats.exitCode).toBe(0);
     const statsOut = JSON.parse(new TextDecoder().decode(stats.stdout));
-    expect(statsOut.schema_version).toBe(7);
+    expect(statsOut.schema_version).toBe(8);
     expect(statsOut.sources).toBe(0);
     expect(statsOut.runs).toBe(0);
 
@@ -796,7 +890,7 @@ describe('knowledge cli', () => {
     const status = runCli(['sync', 'status', '--scope', 'project', '--json'], dir);
     expect(status.exitCode).toBe(0);
     const statusOut = JSON.parse(new TextDecoder().decode(status.stdout));
-    expect(statusOut.sqlite_schema_version).toBe(7);
+    expect(statusOut.sqlite_schema_version).toBe(8);
     expect(statusOut.machines.total).toBe(0);
     expect(statusOut.conflicts.open).toBe(0);
 
@@ -1237,7 +1331,7 @@ describe('knowledge cli', () => {
     writeFileSync(source, 'CLI source ingestion reads file refs without copying raw files.');
     const sourceRef = `file://${source}`;
 
-    const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_index', '--scope', 'project', '--json'], dir);
+    const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_answer', '--scope', 'project', '--json'], dir);
     expect(ingest.exitCode).toBe(0);
     const ingestOut = JSON.parse(new TextDecoder().decode(ingest.stdout));
     expect(ingestOut.content_source).toBe('file');
@@ -1245,7 +1339,7 @@ describe('knowledge cli', () => {
     expect(ingestOut.chunks_inserted).toBe(1);
     expect(ingestOut.read_only).toBe(true);
 
-    const resolve = runCli(['source', 'resolve', sourceRef, '--purpose', 'knowledge_index', '--scope', 'project', '--json'], dir);
+    const resolve = runCli(['source', 'resolve', sourceRef, '--purpose', 'knowledge_answer', '--scope', 'project', '--json'], dir);
     expect(resolve.exitCode).toBe(0);
     const resolveOut = JSON.parse(new TextDecoder().decode(resolve.stdout));
     expect(resolveOut.resolved).toBe(true);
@@ -1260,7 +1354,7 @@ describe('knowledge cli', () => {
     writeFileSync(source, 'CLI semantic embeddings should find this company wiki source.');
     const sourceRef = `file://${source}`;
 
-    const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_index', '--scope', 'project', '--json'], dir);
+    const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_answer', '--scope', 'project', '--json'], dir);
     expect(ingest.exitCode).toBe(0);
 
     const index = runCli(['embeddings', 'index', '--scope', 'project', '--fake', '--dimensions', '8', '--json'], dir);
@@ -1287,7 +1381,7 @@ describe('knowledge cli', () => {
     writeFileSync(source, 'CLI reindex command should queue and refresh embeddings.');
     const sourceRef = `file://${source}`;
 
-    const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_index', '--scope', 'project', '--json'], dir);
+    const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_answer', '--scope', 'project', '--json'], dir);
     expect(ingest.exitCode).toBe(0);
 
     const status = runCli(['reindex', 'status', '--scope', 'project', '--fake', '--dimensions', '8', '--json'], dir);
@@ -1327,7 +1421,7 @@ describe('knowledge cli', () => {
     writeFileSync(source, 'CLI hybrid search should find source-governed company wiki content.');
     const sourceRef = `file://${source}`;
 
-    const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_index', '--scope', 'project', '--json'], dir);
+    const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_answer', '--scope', 'project', '--json'], dir);
     expect(ingest.exitCode).toBe(0);
 
     const wiki = runCli(['wiki', 'init', '--scope', 'project', '--json'], dir);
@@ -1366,7 +1460,7 @@ describe('knowledge cli', () => {
     writeFileSync(source, 'CLI ask command should cite company handbook source context.');
     const sourceRef = `file://${source}`;
 
-    const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_index', '--scope', 'project', '--json'], dir);
+    const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_answer', '--scope', 'project', '--json'], dir);
     expect(ingest.exitCode).toBe(0);
 
     const ask = runCli(['ask', 'How', 'should', 'we', 'cite', 'the', 'handbook?', '--scope', 'project', '--json'], dir);
@@ -1394,7 +1488,7 @@ describe('knowledge cli', () => {
     writeFileSync(source, 'CLI build contract should cite source context and keep wiki writes explicit.');
     const sourceRef = `file://${source}`;
 
-    const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_index', '--scope', 'project', '--json'], dir);
+    const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_answer', '--scope', 'project', '--json'], dir);
     expect(ingest.exitCode).toBe(0);
 
     const build = runCli(['build', 'Summarize', 'the', 'build', 'contract', '--scope', 'project', '--generate', '--fake', '--model', 'openai:gpt-5-mini', '--approve-write', '--json'], dir);
@@ -1442,24 +1536,33 @@ describe('knowledge cli', () => {
 
   test('wiki compile, file-answer, and lint commands manage durable cited pages', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-wiki-commands-cli-'));
-    const source = join(dir, 'source.md');
-    writeFileSync(source, 'CLI wiki compile should cite source chunks for durable wiki pages.');
-    const sourceRef = `file://${source}`;
+    const compileSource = join(dir, 'compile-source.md');
+    const answerSource = join(dir, 'answer-source.md');
+    writeFileSync(compileSource, 'CLI wiki compile should cite source chunks for durable wiki pages.');
+    writeFileSync(answerSource, 'CLI wiki file-answer should cite answer source chunks.');
+    const compileSourceRef = `file://${compileSource}`;
+    const answerSourceRef = `file://${answerSource}`;
 
-    const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_index', '--scope', 'project', '--json'], dir);
-    expect(ingest.exitCode).toBe(0);
+    const compileIngest = runCli(['ingest', 'source', compileSourceRef, '--purpose', 'knowledge_index', '--scope', 'project', '--json'], dir);
+    expect(compileIngest.exitCode).toBe(0);
+    const answerIngest = runCli(['ingest', 'source', answerSourceRef, '--purpose', 'knowledge_answer', '--scope', 'project', '--json'], dir);
+    expect(answerIngest.exitCode).toBe(0);
 
-    const compile = runCli(['wiki', 'compile', 'source', 'chunks', '--title', 'CLI Wiki Compile', '--scope', 'project', '--json'], dir);
+    const compileMissingApprover = runCli(['wiki', 'compile', 'source', 'chunks', '--title', 'CLI Wiki Compile', '--approve-write', '--scope', 'project', '--json'], dir);
+    expect(compileMissingApprover.exitCode).toBe(1);
+    expect(JSON.parse(new TextDecoder().decode(compileMissingApprover.stderr)).error.message).toContain('requires --approved-by');
+
+    const compile = runCli(['wiki', 'compile', 'source', 'chunks', '--title', 'CLI Wiki Compile', '--approve-write', '--approved-by', 'cli-test', '--scope', 'project', '--json'], dir);
     expect(compile.exitCode).toBe(0);
     const compileOut = JSON.parse(new TextDecoder().decode(compile.stdout));
     expect(compileOut.path).toBe('wiki/generated/cli-wiki-compile.md');
     expect(compileOut.citations_written).toBe(1);
 
-    const filed = runCli(['wiki', 'file-answer', 'How', 'should', 'wiki', 'compile', 'cite?', '--content', 'Use cited source chunks.', '--approve-write', '--scope', 'project', '--json'], dir);
+    const filed = runCli(['wiki', 'file-answer', 'How', 'should', 'wiki', 'file-answer', 'cite?', '--content', 'Use cited answer source chunks.', '--approve-write', '--approved-by', 'cli-test', '--scope', 'project', '--json'], dir);
     expect(filed.exitCode).toBe(0);
     const filedOut = JSON.parse(new TextDecoder().decode(filed.stdout));
     expect(filedOut.durable_writes_performed).toBe(true);
-    expect(filedOut.path).toBe('wiki/answers/how-should-wiki-compile-cite.md');
+    expect(filedOut.path).toBe('wiki/answers/how-should-wiki-file-answer-cite.md');
 
     const lint = runCli(['wiki', 'lint', '--scope', 'project', '--json'], dir);
     expect(lint.exitCode).toBe(0);
@@ -1492,6 +1595,15 @@ describe('knowledge cli', () => {
     expect(statusOut.network.webSearchEnabled).toBe(false);
     expect(statusOut.network.s3ReadsEnabled).toBe(false);
     expect(statusOut.redaction.enabled).toBe(true);
+
+    const webAllowed = runCli(
+      ['safety', 'check', 'web_search', 'eval://web', '--scope', 'project', '--json'],
+      dir,
+      { HASNA_KNOWLEDGE_WEB_SEARCH: '1' },
+    );
+    expect(webAllowed.exitCode).toBe(0);
+    const webAllowedOut = JSON.parse(new TextDecoder().decode(webAllowed.stdout));
+    expect(webAllowedOut.decision).toBe('allow');
 
     const check = runCli(['safety', 'check', 'generated_write', 'wiki://answer', '--scope', 'project', '--json'], dir);
     expect(check.exitCode).toBe(0);
@@ -1570,6 +1682,37 @@ describe('knowledge cli', () => {
     expect(statsOut.storage_objects).toBe(4);
     expect(statsOut.wiki_pages).toBe(1);
     expect(statsOut.indexes).toBe(1);
+
+    const protect = runCli(['storage', 'protect', '--scope', 'project', '--json'], dir);
+    expect(protect.exitCode).toBe(0);
+    const strictBeforeTamper = runCli(['storage', 'validate', '--strict', '--scope', 'project', '--json'], dir);
+    expect(strictBeforeTamper.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(strictBeforeTamper.stdout)).ok).toBe(true);
+
+    writeFileSync(join(dir, '.hasna', 'apps', 'knowledge', 'artifacts', 'wiki', 'README.md'), '# direct artifact edit');
+    const strictAfterTamper = runCli(['storage', 'validate', '--strict', '--scope', 'project', '--json'], dir);
+    expect(strictAfterTamper.exitCode).toBe(1);
+    const strictAfterTamperOut = JSON.parse(new TextDecoder().decode(strictAfterTamper.stdout));
+    expect(strictAfterTamperOut.ok).toBe(false);
+    expect(strictAfterTamperOut.write_boundary.violations.some((entry: any) => entry.code === 'artifact_hash_mismatch')).toBe(true);
+  });
+
+  test('built package entrypoints expose storage protection', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-built-storage-'));
+    const protect = runBuiltKnowledgeBin(['storage', 'protect', '--scope', 'project', '--json'], dir);
+    expect(protect.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(protect.stdout)).protected).toBe(true);
+
+    const validate = runBuiltKnowledgeBin(['storage', 'validate', '--strict', '--scope', 'project', '--json'], dir);
+    expect(validate.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(validate.stdout)).ok).toBe(true);
+
+    const dist = await import('../dist/index.js');
+    const client = dist.createKnowledgeClient({ scope: 'project', cwd: dir });
+    expect(typeof client.storage.protect).toBe('function');
+    expect(typeof client.storage.writeBoundary).toBe('function');
+    expect(typeof client.storage.provenance).toBe('function');
+    expect(client.storage.writeBoundary({ strict: true }).ok).toBe(true);
   });
 
   test('inventory retrieves legacy items and SQLite knowledge layers', () => {
