@@ -52,7 +52,15 @@ describe("cli command handling", () => {
       const added = runCli(["manifest", "add", "--from-stdin"], env, JSON.stringify(machine));
       expect(added.stderr).toBe("");
       expect(added.status).toBe(0);
-      const listed = runCli(["manifest", "list"], env);
+      const compact = runCli(["manifest", "list"], env);
+      expect(compact.status).toBe(0);
+      expect(compact.stdout).toContain("machines");
+      expect(compact.stdout).toContain("demo-mac-001");
+      expect(compact.stdout).not.toContain("operator@demo-mac-001");
+      expect(compact.stdout).not.toContain("\"metadata\"");
+      expect(() => JSON.parse(compact.stdout)).toThrow();
+
+      const listed = runCli(["manifest", "list", "--json"], env);
       expect(listed.status).toBe(0);
       expect(JSON.parse(listed.stdout).machines[0]).toMatchObject({ id: "demo-mac-001", metadata: { user: "operator" } });
     } finally {
@@ -542,7 +550,7 @@ describe("cli command handling", () => {
         transport: "cli",
         args: { machine_id: "demo-node-01" },
       }, { env: baseEnv, now: Date.now(), nonce: "right-cli" });
-      const removed = runCli(["manifest", "remove", "demo-node-01", "--approval-token", token], baseEnv);
+      const removed = runCli(["manifest", "remove", "demo-node-01", "--approval-token", token, "--json"], baseEnv);
       expect(removed.stderr).toBe("");
       expect(removed.status).toBe(0);
       expect(JSON.parse(removed.stdout).machines).toEqual([]);
@@ -590,7 +598,7 @@ describe("cli command handling", () => {
       expect(denied.stderr).toContain("requires operator approval");
       expect(denied.stderr).not.toContain(token);
 
-      const added = runCli(["manifest", "add", "--from-stdin", "--approval-token", token], baseEnv, JSON.stringify(approvedMachine));
+      const added = runCli(["manifest", "add", "--from-stdin", "--approval-token", token, "--json"], baseEnv, JSON.stringify(approvedMachine));
       expect(added.stderr).toBe("");
       expect(added.status).toBe(0);
       expect(JSON.parse(added.stdout).machines[0]).toMatchObject(approvedMachine);
@@ -620,7 +628,7 @@ describe("cli command handling", () => {
       expect(runCli(["manifest", "init"], setupEnv).status).toBe(0);
       expect(runCli(["manifest", "add", "--from-stdin"], setupEnv, JSON.stringify(machine)).status).toBe(0);
 
-      const planned = runCli(["apps", "plan", "--machine", "demo-node-03"], baseEnv);
+      const planned = runCli(["apps", "plan", "--machine", "demo-node-03", "--json"], baseEnv);
       expect(planned.status).toBe(0);
       const planDigest = JSON.parse(planned.stdout).planDigest;
       expect(planDigest).toMatch(/^[a-f0-9]{64}$/);
@@ -635,7 +643,7 @@ describe("cli command handling", () => {
         args: { machine_id: "demo-node-03", yes: true, plan_digest: planDigest },
       }, { env: baseEnv, now: Date.now(), nonce: "apps-plan-digest-cli" });
 
-      const applied = runCli(["apps", "apply", "--machine", "demo-node-03", "--yes", "--approval-token", token], baseEnv);
+      const applied = runCli(["apps", "apply", "--machine", "demo-node-03", "--yes", "--approval-token", token, "--json"], baseEnv);
       expect(applied.stderr).toBe("");
       expect(applied.status).toBe(0);
       expect(JSON.parse(applied.stdout)).toMatchObject({ machineId: "demo-node-03", mode: "apply", executed: 0, planDigest });

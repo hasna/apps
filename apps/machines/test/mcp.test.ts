@@ -65,6 +65,50 @@ test("exports expected MCP tool surface", () => {
   expect(createMcpServer("0.0.1")).toBeDefined();
 });
 
+test("MCP manifest defaults to compact text and supports verbose JSON", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "machines-mcp-compact-manifest-"));
+  process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
+  process.env["HASNA_MACHINES_DB_PATH"] = join(dir, "machines.db");
+  process.env["HASNA_MACHINES_MACHINE_ID"] = "control";
+  manifestInit();
+  manifestAdd({
+    id: "demo-node-compact",
+    platform: "linux" as const,
+    workspacePath: "/srv/private/workspace",
+    sshAddress: "operator@demo-node-compact.private.example",
+    metadata: { secretNote: "do not dump this by default" },
+  });
+
+  const server = createMcpServer("0.0.1");
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "compact-manifest-test", version: "0.0.1" });
+
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+
+  try {
+    const compactResult = await client.callTool({ name: "machines_manifest", arguments: {} });
+    const compactText = (compactResult.content as Array<{ type: string; text: string }>)[0]?.text;
+    expect(compactText).toContain("machines");
+    expect(compactText).toContain("demo-node-compact");
+    expect(compactText).toContain("verbose: true");
+    expect(compactText).not.toContain("operator@demo-node-compact.private.example");
+    expect(compactText).not.toContain("do not dump this by default");
+    expect(() => JSON.parse(compactText)).toThrow();
+
+    const verboseResult = await client.callTool({ name: "machines_manifest", arguments: { verbose: true } });
+    const verboseText = (verboseResult.content as Array<{ type: string; text: string }>)[0]?.text;
+    expect(JSON.parse(verboseText).machines[0]).toMatchObject({
+      id: "demo-node-compact",
+      metadata: { secretNote: "do not dump this by default" },
+    });
+  } finally {
+    await client.close();
+    await server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("MCP BrowserPlan fleet tool exposes target machines and operation hooks", async () => {
   const dir = mkdtempSync(join(tmpdir(), "machines-mcp-browserplan-"));
   process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
@@ -95,7 +139,7 @@ test("MCP BrowserPlan fleet tool exposes target machines and operation hooks", a
   try {
     const result = await client.callTool({
       name: "machines_browserplan_fleet",
-      arguments: { machine_ids: ["machine001", "spark01"], include_tailscale: false },
+      arguments: { machine_ids: ["machine001", "spark01"], include_tailscale: false, verbose: true },
     });
     const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
     const payload = JSON.parse(text);
@@ -227,7 +271,7 @@ test("MCP mutation tools accept scoped tokens only for the exact operation and m
 
     const result = await client.callTool({
       name: "machines_manifest_remove",
-      arguments: { machine_id: "demo-node-01", approval_token: token },
+      arguments: { machine_id: "demo-node-01", approval_token: token, verbose: true },
     });
     const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
     expect(JSON.parse(text)).toMatchObject({ version: 1, machines: [] });
@@ -287,7 +331,7 @@ test("MCP friendly-name tools use scoped approvals and topology pagination", asy
     }, { env: process.env, now: Date.now(), nonce: "mcp-friendly-name-set" });
     const set = await client.callTool({
       name: "machines_friendly_name_set",
-      arguments: { machine_id: setInput.machineId, friendly_name: setInput.friendlyName, approval_token: setToken },
+      arguments: { machine_id: setInput.machineId, friendly_name: setInput.friendlyName, approval_token: setToken, verbose: true },
     });
     const setText = (set.content as Array<{ type: string; text: string }>)[0]?.text;
     expect(JSON.parse(setText)).toMatchObject({
@@ -298,7 +342,7 @@ test("MCP friendly-name tools use scoped approvals and topology pagination", asy
 
     const topology = await client.callTool({
       name: "machines_topology",
-      arguments: { include_tailscale: false, limit: 1 },
+      arguments: { include_tailscale: false, limit: 1, verbose: true },
     });
     const topologyText = (topology.content as Array<{ type: string; text: string }>)[0]?.text;
     const topologyPayload = JSON.parse(topologyText);
@@ -340,7 +384,7 @@ test("MCP friendly-name tools use scoped approvals and topology pagination", asy
     }, { env: process.env, now: Date.now(), nonce: "mcp-friendly-name-clear" });
     const cleared = await client.callTool({
       name: "machines_friendly_name_clear",
-      arguments: { machine_id: clearInput.machineId, approval_token: clearToken },
+      arguments: { machine_id: clearInput.machineId, approval_token: clearToken, verbose: true },
     });
     const clearedText = (cleared.content as Array<{ type: string; text: string }>)[0]?.text;
     expect(JSON.parse(clearedText)).toMatchObject({
@@ -403,6 +447,7 @@ test("MCP note contract tools expose provenance and trash metadata", async () =>
         agent_id: "notes-agent",
         agent_name: "Notes Agent",
         source: "agent",
+        verbose: true,
       },
     });
     const contextText = (contextResult.content as Array<{ type: string; text: string }>)[0]?.text;
@@ -414,7 +459,7 @@ test("MCP note contract tools expose provenance and trash metadata", async () =>
 
     const detailsResult = await client.callTool({
       name: "machines_details",
-      arguments: { machine_id: "origin-node", include_tailscale: false },
+      arguments: { machine_id: "origin-node", include_tailscale: false, verbose: true },
     });
     const detailsText = (detailsResult.content as Array<{ type: string; text: string }>)[0]?.text;
     expect(JSON.parse(detailsText)).toMatchObject({
@@ -430,7 +475,7 @@ test("MCP note contract tools expose provenance and trash metadata", async () =>
 
     const trashResult = await client.callTool({
       name: "machines_notes_trash_policies",
-      arguments: { machine_id: "agent-node" },
+      arguments: { machine_id: "agent-node", verbose: true },
     });
     const trashText = (trashResult.content as Array<{ type: string; text: string }>)[0]?.text;
     expect(JSON.parse(trashText).policies[0]).toMatchObject({
@@ -507,6 +552,7 @@ test("MCP mutation tokens reject same-resource notification argument tampering",
         events: ["manual.test"],
         enabled: true,
         approval_token: token,
+        verbose: true,
       },
     });
     const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
@@ -543,7 +589,7 @@ test("MCP apps apply tokens are bound to the approved plan digest", async () => 
   try {
     const planResult = await client.callTool({
       name: "machines_apps_plan",
-      arguments: { machine_id: "demo-node-apply" },
+      arguments: { machine_id: "demo-node-apply", verbose: true },
     });
     const planText = (planResult.content as Array<{ type: string; text: string }>)[0]?.text;
     const planDigest = JSON.parse(planText).planDigest;
@@ -561,7 +607,7 @@ test("MCP apps apply tokens are bound to the approved plan digest", async () => 
 
     const applied = await client.callTool({
       name: "machines_apps_apply",
-      arguments: { machine_id: "demo-node-apply", yes: true, approval_token: token },
+      arguments: { machine_id: "demo-node-apply", yes: true, approval_token: token, verbose: true },
     });
     const appliedText = (applied.content as Array<{ type: string; text: string }>)[0]?.text;
     expect(JSON.parse(appliedText)).toMatchObject({ machineId: "demo-node-apply", mode: "apply", executed: 0, planDigest });

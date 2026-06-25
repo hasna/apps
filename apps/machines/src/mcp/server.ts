@@ -48,6 +48,7 @@ import { getBrowserPlanFleet } from "../browserplan.js";
 import { checkMachineCompatibility } from "../compatibility.js";
 import { getStorageStatus, resolveTables, storagePull, storagePush, storageSync } from "../storage.js";
 import { assertMutationApproved, createTrustedSdkMutationApproval, mutationPlanDigest } from "../commands/mutation-approval.js";
+import { renderMcpCompactResult } from "../compact-output.js";
 
 export const MACHINE_MCP_TOOL_NAMES = [
   "machines_status",
@@ -142,6 +143,25 @@ function appendWarnings<T>(payload: T, warnings: string[]): T {
 }
 
 const approvalTokenSchema = z.string().optional().describe("Operator mutation approval token");
+const verboseOutputSchema = z.boolean().optional().describe("Return full JSON output instead of the compact default");
+
+function mcpResult(data: unknown, label: string, verbose?: boolean) {
+  return {
+    content: [{
+      type: "text" as const,
+      text: verbose ? JSON.stringify(data, null, 2) : renderMcpCompactResult(label, data),
+    }],
+  };
+}
+
+function mcpRawText(fullText: string, compactText: string, verbose?: boolean) {
+  return {
+    content: [{
+      type: "text" as const,
+      text: verbose ? fullText : compactText,
+    }],
+  };
+}
 
 function mutationMachineId(machineId: string | null | undefined): string {
   return machineId?.trim() || "local";
@@ -210,58 +230,58 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
   server.tool(
     "machines_status",
     "Return local machine fleet status paths and machine identity.",
-    { private_metadata: z.boolean().optional().describe("Include private local paths and machine identifiers") },
-    async ({ private_metadata }) => {
+    { private_metadata: z.boolean().optional().describe("Include private local paths and machine identifiers"), verbose: verboseOutputSchema },
+    async ({ private_metadata, verbose }) => {
       const privateMetadata = privateMetadataAllowed(private_metadata);
       const warnings = privateOutputWarnings(private_metadata, privateMetadata);
-      return { content: [{ type: "text", text: JSON.stringify(appendWarnings(getStatus({ privateMetadata }), warnings), null, 2) }] };
+      return mcpResult(appendWarnings(getStatus({ privateMetadata }), warnings), "machines_status", verbose);
     }
   );
 
   server.tool(
     "machines_doctor",
     "Run machine preflight checks.",
-    { machine_id: z.string().optional().describe("Machine identifier") },
-    async ({ machine_id }) => ({ content: [{ type: "text", text: JSON.stringify(runDoctor(machine_id), null, 2) }] })
+    { machine_id: z.string().optional().describe("Machine identifier"), verbose: verboseOutputSchema },
+    async ({ machine_id, verbose }) => mcpResult(runDoctor(machine_id), "machines_doctor", verbose)
   );
 
-  server.tool("machines_self_test", "Run local package smoke checks.", {}, async () => ({
-    content: [{ type: "text", text: JSON.stringify(runSelfTest(), null, 2) }],
-  }));
+  server.tool("machines_self_test", "Run local package smoke checks.", { verbose: verboseOutputSchema }, async ({ verbose }) => (
+    mcpResult(runSelfTest(), "machines_self_test", verbose)
+  ));
 
   server.tool(
     "machines_apps_list",
     "List manifest-managed apps for a machine.",
-    { machine_id: z.string().optional().describe("Machine identifier") },
-    async ({ machine_id }) => ({ content: [{ type: "text", text: JSON.stringify(listApps(machine_id), null, 2) }] })
+    { machine_id: z.string().optional().describe("Machine identifier"), verbose: verboseOutputSchema },
+    async ({ machine_id, verbose }) => mcpResult(listApps(machine_id), "machines_apps_list", verbose)
   );
 
   server.tool(
     "machines_apps_status",
     "Check installed state for manifest-managed apps.",
-    { machine_id: z.string().optional().describe("Machine identifier") },
-    async ({ machine_id }) => ({ content: [{ type: "text", text: JSON.stringify(getAppsStatus(machine_id), null, 2) }] })
+    { machine_id: z.string().optional().describe("Machine identifier"), verbose: verboseOutputSchema },
+    async ({ machine_id, verbose }) => mcpResult(getAppsStatus(machine_id), "machines_apps_status", verbose)
   );
 
   server.tool(
     "machines_apps_diff",
     "Show missing and installed manifest-managed apps.",
-    { machine_id: z.string().optional().describe("Machine identifier") },
-    async ({ machine_id }) => ({ content: [{ type: "text", text: JSON.stringify(diffApps(machine_id), null, 2) }] })
+    { machine_id: z.string().optional().describe("Machine identifier"), verbose: verboseOutputSchema },
+    async ({ machine_id, verbose }) => mcpResult(diffApps(machine_id), "machines_apps_diff", verbose)
   );
 
   server.tool(
     "machines_apps_plan",
     "Preview app install steps for a machine.",
-    { machine_id: z.string().optional().describe("Machine identifier") },
-    async ({ machine_id }) => ({ content: [{ type: "text", text: JSON.stringify(buildAppsPlan(machine_id), null, 2) }] })
+    { machine_id: z.string().optional().describe("Machine identifier"), verbose: verboseOutputSchema },
+    async ({ machine_id, verbose }) => mcpResult(buildAppsPlan(machine_id), "machines_apps_plan", verbose)
   );
 
   server.tool(
     "machines_apps_apply",
     "Install manifest-managed apps for a machine.",
-    { machine_id: z.string().optional().describe("Machine identifier"), yes: z.boolean().describe("Confirmation flag for execution"), approval_token: approvalTokenSchema },
-    async ({ machine_id, yes, approval_token }) => {
+    { machine_id: z.string().optional().describe("Machine identifier"), yes: z.boolean().describe("Confirmation flag for execution"), approval_token: approvalTokenSchema, verbose: verboseOutputSchema },
+    async ({ machine_id, yes, approval_token, verbose }) => {
       const resolvedMachineId = mutationMachineId(machine_id);
       const plan = buildAppsPlan(machine_id);
       requireMcpMutation("machines_apps_apply", approval_token, {
@@ -269,36 +289,36 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
         resourceId: mcpPlanResourceId("machines_apps_apply", resolvedMachineId, plan),
         args: mcpPlanApprovalArgs({ machine_id: resolvedMachineId, yes }, plan),
       });
-      return { content: [{ type: "text", text: JSON.stringify(runAppsPlan(plan, { apply: true, yes }), null, 2) }] };
+      return mcpResult(runAppsPlan(plan, { apply: true, yes }), "machines_apps_apply", verbose);
     }
   );
 
-  server.tool("machines_manifest", "Read the current fleet manifest.", {}, async () => ({
-    content: [{ type: "text", text: JSON.stringify(manifestList(), null, 2) }],
-  }));
-  server.tool("machines_manifest_validate", "Validate the current fleet manifest.", {}, async () => ({
-    content: [{ type: "text", text: JSON.stringify(manifestValidate(), null, 2) }],
-  }));
+  server.tool("machines_manifest", "Read the current fleet manifest.", { verbose: verboseOutputSchema }, async ({ verbose }) => (
+    mcpResult(manifestList(), "machines_manifest", verbose)
+  ));
+  server.tool("machines_manifest_validate", "Validate the current fleet manifest.", { verbose: verboseOutputSchema }, async ({ verbose }) => (
+    mcpResult(manifestValidate(), "machines_manifest_validate", verbose)
+  ));
   server.tool(
     "machines_manifest_bootstrap",
     "Detect and upsert the current machine into the fleet manifest.",
-    { approval_token: approvalTokenSchema },
-    async ({ approval_token }) => {
+    { approval_token: approvalTokenSchema, verbose: verboseOutputSchema },
+    async ({ approval_token, verbose }) => {
       requireMcpMutation("machines_manifest_bootstrap", approval_token, { resourceId: "manifest:bootstrap", args: {} });
-      return { content: [{ type: "text", text: JSON.stringify(manifestBootstrapCurrentMachine(), null, 2) }] };
+      return mcpResult(manifestBootstrapCurrentMachine(), "machines_manifest_bootstrap", verbose);
     }
   );
   server.tool(
     "machines_manifest_get",
     "Read a single machine from the fleet manifest.",
-    { machine_id: z.string().describe("Machine identifier") },
-    async ({ machine_id }) => ({ content: [{ type: "text", text: JSON.stringify(manifestGet(machine_id), null, 2) }] })
+    { machine_id: z.string().describe("Machine identifier"), verbose: verboseOutputSchema },
+    async ({ machine_id, verbose }) => mcpResult(manifestGet(machine_id), "machines_manifest_get", verbose)
   );
   server.tool(
     "machines_friendly_name_get",
     "Read a machine friendly name and computed display name without changing the stable machine id.",
-    { machine_id: z.string().describe("Machine identifier") },
-    async ({ machine_id }) => ({ content: [{ type: "text", text: JSON.stringify(manifestGetFriendlyName(machine_id), null, 2) }] })
+    { machine_id: z.string().describe("Machine identifier"), verbose: verboseOutputSchema },
+    async ({ machine_id, verbose }) => mcpResult(manifestGetFriendlyName(machine_id), "machines_friendly_name_get", verbose)
   );
   server.tool(
     "machines_friendly_name_set",
@@ -307,15 +327,16 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
       machine_id: z.string().describe("Machine identifier"),
       friendly_name: z.string().describe("User-friendly display name"),
       approval_token: approvalTokenSchema,
+      verbose: verboseOutputSchema,
     },
-    async ({ machine_id, friendly_name, approval_token }) => {
+    async ({ machine_id, friendly_name, approval_token, verbose }) => {
       const input = { machineId: machine_id, friendlyName: friendly_name };
       requireMcpMutation("machines_friendly_name_set", approval_token, {
         machineId: input.machineId,
         resourceId: machineFriendlyNameResourceId(input.machineId),
         args: setMachineFriendlyNameMutationArgs(input),
       });
-      return { content: [{ type: "text", text: JSON.stringify(manifestSetFriendlyName(input), null, 2) }] };
+      return mcpResult(manifestSetFriendlyName(input), "machines_friendly_name_set", verbose);
     }
   );
   server.tool(
@@ -324,15 +345,16 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
     {
       machine_id: z.string().describe("Machine identifier"),
       approval_token: approvalTokenSchema,
+      verbose: verboseOutputSchema,
     },
-    async ({ machine_id, approval_token }) => {
+    async ({ machine_id, approval_token, verbose }) => {
       const input = { machineId: machine_id };
       requireMcpMutation("machines_friendly_name_clear", approval_token, {
         machineId: input.machineId,
         resourceId: machineFriendlyNameResourceId(input.machineId),
         args: clearMachineFriendlyNameMutationArgs(input),
       });
-      return { content: [{ type: "text", text: JSON.stringify(manifestClearFriendlyName(input), null, 2) }] };
+      return mcpResult(manifestClearFriendlyName(input), "machines_friendly_name_clear", verbose);
     }
   );
   server.tool(
@@ -341,15 +363,11 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
     {
       machine_id: z.string().optional().describe("Machine identifier; defaults to local"),
       include_tailscale: z.boolean().optional().describe("Whether to probe tailscale while resolving details"),
+      verbose: verboseOutputSchema,
     },
-    async ({ machine_id, include_tailscale }) => ({
-      content: [{
-        type: "text",
-        text: JSON.stringify(getMachineDetails(machine_id ?? "local", {
-          includeTailscale: include_tailscale,
-        }), null, 2),
-      }],
-    })
+    async ({ machine_id, include_tailscale, verbose }) => mcpResult(getMachineDetails(machine_id ?? "local", {
+      includeTailscale: include_tailscale,
+    }), "machines_details", verbose)
   );
   server.tool(
     "machines_browserplan_fleet",
@@ -358,17 +376,13 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
       machine_ids: z.array(z.string()).optional().describe("Optional BrowserPlan machine ids; spark01/spark02 are excluded"),
       include_tailscale: z.boolean().optional().describe("Whether to probe tailscale while resolving reachability"),
       check_installs: z.boolean().optional().describe("Run remote compatibility probes for browserplan/chrome/bun/git state"),
+      verbose: verboseOutputSchema,
     },
-    async ({ machine_ids, include_tailscale, check_installs }) => ({
-      content: [{
-        type: "text",
-        text: JSON.stringify(getBrowserPlanFleet({
-          machineIds: machine_ids,
-          includeTailscale: include_tailscale,
-          includeInstallState: check_installs,
-        }), null, 2),
-      }],
-    })
+    async ({ machine_ids, include_tailscale, check_installs, verbose }) => mcpResult(getBrowserPlanFleet({
+      machineIds: machine_ids,
+      includeTailscale: include_tailscale,
+      includeInstallState: check_installs,
+    }), "machines_browserplan_fleet", verbose)
   );
   server.tool(
     "machines_notes_context",
@@ -385,6 +399,7 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
       agent_name: z.string().optional().describe("Agent display name for agent-created notes"),
       source: z.enum(["open-notes", "agent", "sync", "import", "open-machines", "unknown"]).optional().describe("Provenance source"),
       include_tailscale: z.boolean().optional().describe("Whether to probe tailscale while building context"),
+      verbose: verboseOutputSchema,
     },
     async ({
       origin_machine_id,
@@ -398,26 +413,22 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
       agent_name,
       source,
       include_tailscale,
-    }) => ({
-      content: [{
-        type: "text",
-        text: JSON.stringify(resolveNoteMachineContext({
-          originMachineId: origin_machine_id,
-          sourceMachineId: source_machine_id,
-          targetMachineId: target_machine_id,
-          syncTargetMachineIds: sync_target_machine_ids,
-          includeTailscale: include_tailscale,
-          actor: {
-            actor_type,
-            actor_id,
-            actor_name,
-            agent_id,
-            agent_name,
-            source,
-          },
-        }), null, 2),
-      }],
-    })
+      verbose,
+    }) => mcpResult(resolveNoteMachineContext({
+      originMachineId: origin_machine_id,
+      sourceMachineId: source_machine_id,
+      targetMachineId: target_machine_id,
+      syncTargetMachineIds: sync_target_machine_ids,
+      includeTailscale: include_tailscale,
+      actor: {
+        actor_type,
+        actor_id,
+        actor_name,
+        agent_id,
+        agent_name,
+        source,
+      },
+    }), "machines_notes_context", verbose)
   );
   server.tool(
     "machines_notes_trash_policies",
@@ -427,60 +438,49 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
       limit: z.number().int().min(1).nullable().optional().describe("Maximum machines to return; default is 10, null returns all"),
       offset: z.number().int().min(0).optional().describe("Machine list offset for View more pagination"),
       include_tailscale: z.boolean().optional().describe("Whether to probe tailscale while listing policies"),
+      verbose: verboseOutputSchema,
     },
-    async ({ machine_id, limit, offset, include_tailscale }) => ({
-      content: [{
-        type: "text",
-        text: JSON.stringify(listMachineTrashPolicies({
-          machineId: machine_id,
-          limit,
-          offset,
-          includeTailscale: include_tailscale,
-        }), null, 2),
-      }],
-    })
+    async ({ machine_id, limit, offset, include_tailscale, verbose }) => mcpResult(listMachineTrashPolicies({
+      machineId: machine_id,
+      limit,
+      offset,
+      includeTailscale: include_tailscale,
+    }), "machines_notes_trash_policies", verbose)
   );
   server.tool(
     "machines_manifest_remove",
     "Remove a single machine from the fleet manifest.",
-    { machine_id: z.string().describe("Machine identifier"), approval_token: approvalTokenSchema },
-    async ({ machine_id, approval_token }) => {
+    { machine_id: z.string().describe("Machine identifier"), approval_token: approvalTokenSchema, verbose: verboseOutputSchema },
+    async ({ machine_id, approval_token, verbose }) => {
       requireMcpMutation("machines_manifest_remove", approval_token, { machineId: machine_id, args: { machine_id } });
-      return { content: [{ type: "text", text: JSON.stringify(manifestRemove(machine_id), null, 2) }] };
+      return mcpResult(manifestRemove(machine_id), "machines_manifest_remove", verbose);
     }
   );
 
   server.tool(
     "machines_agent_status",
     "List current machine agent heartbeats.",
-    { private_metadata: z.boolean().optional().describe("Include private heartbeat metadata") },
-    async ({ private_metadata }) => {
+    { private_metadata: z.boolean().optional().describe("Include private heartbeat metadata"), verbose: verboseOutputSchema },
+    async ({ private_metadata, verbose }) => {
       const privateMetadata = privateMetadataAllowed(private_metadata);
       const warnings = privateOutputWarnings(private_metadata, privateMetadata);
       const agents = getAgentStatus(undefined, { privateMetadata });
-      return {
-        content: [{ type: "text", text: JSON.stringify(warnings.length > 0 ? { agents, warnings } : agents, null, 2) }],
-      };
+      return mcpResult(warnings.length > 0 ? { agents, warnings } : agents, "machines_agent_status", verbose);
     }
   );
 
   server.tool(
     "machines_daemon_status",
     "List fleet daemon heartbeat status rows.",
-    { private_metadata: z.boolean().optional().describe("Include private heartbeat metadata") },
-    async ({ private_metadata }) => {
+    { private_metadata: z.boolean().optional().describe("Include private heartbeat metadata"), verbose: verboseOutputSchema },
+    async ({ private_metadata, verbose }) => {
       const privateMetadata = privateMetadataAllowed(private_metadata);
       const warnings = privateOutputWarnings(private_metadata, privateMetadata);
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify({
-            generated_at: new Date().toISOString(),
-            agents: getAgentStatus(undefined, { privateMetadata }),
-            ...(warnings.length > 0 ? { warnings } : {}),
-          }, null, 2),
-        }],
-      };
+      return mcpResult({
+        generated_at: new Date().toISOString(),
+        agents: getAgentStatus(undefined, { privateMetadata }),
+        ...(warnings.length > 0 ? { warnings } : {}),
+      }, "machines_daemon_status", verbose);
     }
   );
 
@@ -498,38 +498,34 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
       doctor_summary: z.boolean().optional().describe("Configure lightweight doctor summaries in heartbeat metadata"),
       private_metadata: z.boolean().optional().describe("Opt in to private heartbeat metadata"),
       env: z.array(z.string()).optional().describe("Environment variable names to include as placeholders"),
+      verbose: verboseOutputSchema,
     },
-    async ({ action, platform, mode, service_name, executable, interval_ms, storage_push, doctor_summary, private_metadata, env }) => ({
-      content: [{
-        type: "text",
-        text: JSON.stringify(buildDaemonServicePlan({
-          action,
-          platform,
-          mode,
-          serviceName: service_name,
-          executable,
-          intervalMs: interval_ms,
-          storagePush: storage_push,
-          doctorSummary: doctor_summary,
-          privateMetadata: private_metadata,
-          env,
-        }), null, 2),
-      }],
-    })
+    async ({ action, platform, mode, service_name, executable, interval_ms, storage_push, doctor_summary, private_metadata, env, verbose }) => mcpResult(buildDaemonServicePlan({
+      action,
+      platform,
+      mode,
+      serviceName: service_name,
+      executable,
+      intervalMs: interval_ms,
+      storagePush: storage_push,
+      doctorSummary: doctor_summary,
+      privateMetadata: private_metadata,
+      env,
+    }), "machines_daemon_service_plan", verbose)
   );
 
   server.tool(
     "machines_setup_preview",
     "Preview setup actions for a machine.",
-    { machine_id: z.string().optional().describe("Machine identifier") },
-    async ({ machine_id }) => ({ content: [{ type: "text", text: JSON.stringify(buildSetupPlan(machine_id), null, 2) }] })
+    { machine_id: z.string().optional().describe("Machine identifier"), verbose: verboseOutputSchema },
+    async ({ machine_id, verbose }) => mcpResult(buildSetupPlan(machine_id), "machines_setup_preview", verbose)
   );
 
   server.tool(
     "machines_setup_apply",
     "Execute setup actions for a machine.",
-    { machine_id: z.string().optional().describe("Machine identifier"), yes: z.boolean().describe("Confirmation flag for execution"), approval_token: approvalTokenSchema },
-    async ({ machine_id, yes, approval_token }) => {
+    { machine_id: z.string().optional().describe("Machine identifier"), yes: z.boolean().describe("Confirmation flag for execution"), approval_token: approvalTokenSchema, verbose: verboseOutputSchema },
+    async ({ machine_id, yes, approval_token, verbose }) => {
       const resolvedMachineId = mutationMachineId(machine_id);
       const plan = buildSetupPlan(machine_id);
       requireMcpMutation("machines_setup_apply", approval_token, {
@@ -537,22 +533,22 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
         resourceId: mcpPlanResourceId("machines_setup_apply", resolvedMachineId, plan),
         args: mcpPlanApprovalArgs({ machine_id: resolvedMachineId, yes }, plan),
       });
-      return { content: [{ type: "text", text: JSON.stringify(runSetupPlan(plan, { apply: true, yes }), null, 2) }] };
+      return mcpResult(runSetupPlan(plan, { apply: true, yes }), "machines_setup_apply", verbose);
     }
   );
 
   server.tool(
     "machines_sync_preview",
     "Preview sync actions for a machine.",
-    { machine_id: z.string().optional().describe("Machine identifier") },
-    async ({ machine_id }) => ({ content: [{ type: "text", text: JSON.stringify(buildSyncPlan(machine_id), null, 2) }] })
+    { machine_id: z.string().optional().describe("Machine identifier"), verbose: verboseOutputSchema },
+    async ({ machine_id, verbose }) => mcpResult(buildSyncPlan(machine_id), "machines_sync_preview", verbose)
   );
 
   server.tool(
     "machines_sync_apply",
     "Execute sync actions for a machine.",
-    { machine_id: z.string().optional().describe("Machine identifier"), yes: z.boolean().describe("Confirmation flag for execution"), approval_token: approvalTokenSchema },
-    async ({ machine_id, yes, approval_token }) => {
+    { machine_id: z.string().optional().describe("Machine identifier"), yes: z.boolean().describe("Confirmation flag for execution"), approval_token: approvalTokenSchema, verbose: verboseOutputSchema },
+    async ({ machine_id, yes, approval_token, verbose }) => {
       const resolvedMachineId = mutationMachineId(machine_id);
       const plan = buildSyncPlan(machine_id);
       requireMcpMutation("machines_sync_apply", approval_token, {
@@ -560,7 +556,7 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
         resourceId: mcpPlanResourceId("machines_sync_apply", resolvedMachineId, plan),
         args: mcpPlanApprovalArgs({ machine_id: resolvedMachineId, yes }, plan),
       });
-      return { content: [{ type: "text", text: JSON.stringify(runSyncPlan(plan, { apply: true, yes }), null, 2) }] };
+      return mcpResult(runSyncPlan(plan, { apply: true, yes }), "machines_sync_apply", verbose);
     }
   );
 
@@ -572,8 +568,9 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
       limit: z.number().int().min(1).nullable().optional().describe("Maximum machines to return; default is 10, null returns all"),
       offset: z.number().int().min(0).optional().describe("Machine list offset for View more pagination"),
       private_metadata: z.boolean().optional().describe("Include private host/network route fields"),
+      verbose: verboseOutputSchema,
     },
-    async ({ include_tailscale, limit, offset, private_metadata }) => {
+    async ({ include_tailscale, limit, offset, private_metadata, verbose }) => {
       const privateMetadata = privateMetadataAllowed(private_metadata);
       const warnings = privateOutputWarnings(private_metadata, privateMetadata);
       const topology = redactTopologyForOutput(discoverMachineTopology({
@@ -581,7 +578,7 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
         limit,
         offset,
       }), { privateMetadata });
-      return { content: [{ type: "text", text: JSON.stringify(appendWarnings(topology, warnings), null, 2) }] };
+      return mcpResult(appendWarnings(topology, warnings), "machines_topology", verbose);
     }
   );
 
@@ -609,10 +606,9 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
         expectedVersion: z.string().optional(),
         required: z.boolean().optional(),
       })).optional().describe("Workspace paths and package metadata to check"),
+      verbose: verboseOutputSchema,
     },
-    async ({ machine_id, commands, packages, workspaces }) => ({
-      content: [{ type: "text", text: JSON.stringify(checkMachineCompatibility({ machineId: machine_id, commands, packages, workspaces }), null, 2) }],
-    })
+    async ({ machine_id, commands, packages, workspaces, verbose }) => mcpResult(checkMachineCompatibility({ machineId: machine_id, commands, packages, workspaces }), "machines_compatibility", verbose)
   );
 
   server.tool(
@@ -621,10 +617,9 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
     {
       left_machine_id: z.string().describe("Left machine identifier"),
       right_machine_id: z.string().optional().describe("Right machine identifier"),
+      verbose: verboseOutputSchema,
     },
-    async ({ left_machine_id, right_machine_id }) => ({
-      content: [{ type: "text", text: JSON.stringify(diffMachines(left_machine_id, right_machine_id), null, 2) }],
-    })
+    async ({ left_machine_id, right_machine_id, verbose }) => mcpResult(diffMachines(left_machine_id, right_machine_id), "machines_diff", verbose)
   );
 
   server.tool(
@@ -633,8 +628,9 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
     {
       machine_id: z.string().optional().describe("Machine identifier"),
       tools: z.array(z.enum(["claude", "codex", "gemini"])).optional().describe("AI CLIs to inspect"),
+      verbose: verboseOutputSchema,
     },
-    async ({ machine_id, tools }) => ({ content: [{ type: "text", text: JSON.stringify(getClaudeCliStatus(machine_id, tools), null, 2) }] })
+    async ({ machine_id, tools, verbose }) => mcpResult(getClaudeCliStatus(machine_id, tools), "machines_install_claude_status", verbose)
   );
 
   server.tool(
@@ -643,8 +639,9 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
     {
       machine_id: z.string().optional().describe("Machine identifier"),
       tools: z.array(z.enum(["claude", "codex", "gemini"])).optional().describe("AI CLIs to inspect"),
+      verbose: verboseOutputSchema,
     },
-    async ({ machine_id, tools }) => ({ content: [{ type: "text", text: JSON.stringify(diffClaudeCli(machine_id, tools), null, 2) }] })
+    async ({ machine_id, tools, verbose }) => mcpResult(diffClaudeCli(machine_id, tools), "machines_install_claude_diff", verbose)
   );
 
   server.tool(
@@ -653,8 +650,9 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
     {
       machine_id: z.string().optional().describe("Machine identifier"),
       tools: z.array(z.enum(["claude", "codex", "gemini"])).optional().describe("AI CLIs to install"),
+      verbose: verboseOutputSchema,
     },
-    async ({ machine_id, tools }) => ({ content: [{ type: "text", text: JSON.stringify(buildClaudeInstallPlan(machine_id, tools), null, 2) }] })
+    async ({ machine_id, tools, verbose }) => mcpResult(buildClaudeInstallPlan(machine_id, tools), "machines_install_claude_preview", verbose)
   );
 
   server.tool(
@@ -665,8 +663,9 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
       tools: z.array(z.enum(["claude", "codex", "gemini"])).optional().describe("AI CLIs to install"),
       yes: z.boolean().describe("Confirmation flag for execution"),
       approval_token: approvalTokenSchema,
+      verbose: verboseOutputSchema,
     },
-    async ({ machine_id, tools, yes, approval_token }) => {
+    async ({ machine_id, tools, yes, approval_token, verbose }) => {
       const resolvedMachineId = mutationMachineId(machine_id);
       const plan = buildClaudeInstallPlan(machine_id, tools);
       requireMcpMutation("machines_install_claude_apply", approval_token, {
@@ -675,7 +674,7 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
         args: mcpPlanApprovalArgs({ machine_id: resolvedMachineId, tools, yes }, plan),
       });
       return {
-        content: [{ type: "text", text: JSON.stringify(runClaudeInstallPlan(plan, { apply: true, yes }), null, 2) }],
+        ...mcpResult(runClaudeInstallPlan(plan, { apply: true, yes }), "machines_install_claude_apply", verbose),
       };
     }
   );
@@ -683,15 +682,15 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
   server.tool(
     "machines_install_tailscale_preview",
     "Preview Tailscale install steps for a machine.",
-    { machine_id: z.string().optional().describe("Machine identifier") },
-    async ({ machine_id }) => ({ content: [{ type: "text", text: JSON.stringify(buildTailscaleInstallPlan(machine_id), null, 2) }] })
+    { machine_id: z.string().optional().describe("Machine identifier"), verbose: verboseOutputSchema },
+    async ({ machine_id, verbose }) => mcpResult(buildTailscaleInstallPlan(machine_id), "machines_install_tailscale_preview", verbose)
   );
 
   server.tool(
     "machines_install_tailscale_apply",
     "Execute Tailscale install steps for a machine.",
-    { machine_id: z.string().optional().describe("Machine identifier"), yes: z.boolean().describe("Confirmation flag for execution"), approval_token: approvalTokenSchema },
-    async ({ machine_id, yes, approval_token }) => {
+    { machine_id: z.string().optional().describe("Machine identifier"), yes: z.boolean().describe("Confirmation flag for execution"), approval_token: approvalTokenSchema, verbose: verboseOutputSchema },
+    async ({ machine_id, yes, approval_token, verbose }) => {
       const resolvedMachineId = mutationMachineId(machine_id);
       const plan = buildTailscaleInstallPlan(machine_id);
       requireMcpMutation("machines_install_tailscale_apply", approval_token, {
@@ -699,7 +698,7 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
         resourceId: mcpPlanResourceId("machines_install_tailscale_apply", resolvedMachineId, plan),
         args: mcpPlanApprovalArgs({ machine_id: resolvedMachineId, yes }, plan),
       });
-      return { content: [{ type: "text", text: JSON.stringify(runTailscaleInstallPlan(plan, { apply: true, yes }), null, 2) }] };
+      return mcpResult(runTailscaleInstallPlan(plan, { apply: true, yes }), "machines_install_tailscale_apply", verbose);
     }
   );
 
@@ -710,12 +709,13 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
       machine_id: z.string().describe("Machine identifier"),
       include_tailscale: z.boolean().optional().describe("Whether to probe tailscale status --json"),
       private_metadata: z.boolean().optional().describe("Include private route targets"),
+      verbose: verboseOutputSchema,
     },
-    async ({ machine_id, include_tailscale, private_metadata }) => {
+    async ({ machine_id, include_tailscale, private_metadata, verbose }) => {
       const privateMetadata = privateMetadataAllowed(private_metadata);
       const warnings = privateOutputWarnings(private_metadata, privateMetadata);
       const route = redactRouteForOutput(resolveMachineRoute(machine_id, { includeTailscale: include_tailscale !== false }), { privateMetadata });
-      return { content: [{ type: "text", text: JSON.stringify(appendWarnings(route, warnings), null, 2) }] };
+      return mcpResult(appendWarnings(route, warnings), "machines_route_resolve", verbose);
     }
   );
 
@@ -732,6 +732,7 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
       project_root: z.string().optional().describe("Override the resolved project root"),
       open_files_root: z.string().optional().describe("Override the resolved open-files root"),
       include_tailscale: z.boolean().optional().describe("Whether to probe tailscale status --json"),
+      verbose: verboseOutputSchema,
     },
     async ({
       machine_id,
@@ -743,22 +744,18 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
       project_root,
       open_files_root,
       include_tailscale,
-    }) => ({
-      content: [{
-        type: "text",
-        text: JSON.stringify(resolveMachineWorkspace({
-          machineId: machine_id,
-          projectId: project_id,
-          repoName: repo_name,
-          openFilesRepoName: open_files_repo_name,
-          primaryMachineId: primary_machine_id,
-          workspaceRoot: workspace_root,
-          projectRoot: project_root,
-          openFilesRoot: open_files_root,
-          includeTailscale: include_tailscale !== false,
-        }), null, 2),
-      }],
-    })
+      verbose,
+    }) => mcpResult(resolveMachineWorkspace({
+      machineId: machine_id,
+      projectId: project_id,
+      repoName: repo_name,
+      openFilesRepoName: open_files_repo_name,
+      primaryMachineId: primary_machine_id,
+      workspaceRoot: workspace_root,
+      projectRoot: project_root,
+      openFilesRoot: open_files_root,
+      includeTailscale: include_tailscale !== false,
+    }), "machines_workspace_resolve", verbose)
   );
 
   server.tool(
@@ -768,76 +765,72 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
       machine_id: z.string().describe("Machine identifier"),
       remote_command: z.string().optional().describe("Optional remote command"),
       private_metadata: z.boolean().optional().describe("Include private SSH target and command"),
+      verbose: verboseOutputSchema,
     },
-    async ({ machine_id, remote_command, private_metadata }) => {
+    async ({ machine_id, remote_command, private_metadata, verbose }) => {
       const privateMetadata = privateMetadataAllowed(private_metadata);
       const warnings = privateOutputWarnings(private_metadata, privateMetadata);
       const resolved = resolveMachineRoute(machine_id);
       const publicResolved = redactRouteForOutput(resolved, { privateMetadata });
       const command = resolved.ok && privateMetadata ? buildSshCommand(machine_id, remote_command) : resolved.ok ? "[redacted]" : null;
-      return {
-        content: [{
-          type: "text",
-          text: JSON.stringify(appendWarnings({ resolved: publicResolved, command }, warnings), null, 2),
-        }],
-      };
+      return mcpResult(appendWarnings({ resolved: publicResolved, command }, warnings), "machines_ssh_resolve", verbose);
     }
   );
 
-  server.tool("machines_ports", "List listening ports on a machine.", { machine_id: z.string().optional().describe("Machine identifier") }, async ({ machine_id }) => ({
-    content: [{ type: "text", text: JSON.stringify(listPorts(machine_id), null, 2) }],
-  }));
+  server.tool("machines_ports", "List listening ports on a machine.", { machine_id: z.string().optional().describe("Machine identifier"), verbose: verboseOutputSchema }, async ({ machine_id, verbose }) => (
+    mcpResult(listPorts(machine_id), "machines_ports", verbose)
+  ));
 
   server.tool(
     "machines_backup_preview",
     "Preview backup steps for the current machine.",
-    { bucket: z.string().optional().describe("S3 bucket name; defaults to HASNA_MACHINES_S3_BUCKET or MACHINES_S3_BUCKET"), prefix: z.string().optional().describe("S3 key prefix; defaults to HASNA_MACHINES_S3_PREFIX, MACHINES_S3_PREFIX, or machines") },
-    async ({ bucket, prefix }) => ({ content: [{ type: "text", text: JSON.stringify(buildBackupPlan(bucket, prefix), null, 2) }] })
+    { bucket: z.string().optional().describe("S3 bucket name; defaults to HASNA_MACHINES_S3_BUCKET or MACHINES_S3_BUCKET"), prefix: z.string().optional().describe("S3 key prefix; defaults to HASNA_MACHINES_S3_PREFIX, MACHINES_S3_PREFIX, or machines"), verbose: verboseOutputSchema },
+    async ({ bucket, prefix, verbose }) => mcpResult(buildBackupPlan(bucket, prefix), "machines_backup_preview", verbose)
   );
 
   server.tool(
     "machines_backup_apply",
     "Execute backup steps for the current machine.",
-    { bucket: z.string().optional().describe("S3 bucket name; defaults to HASNA_MACHINES_S3_BUCKET or MACHINES_S3_BUCKET"), prefix: z.string().optional().describe("S3 key prefix; defaults to HASNA_MACHINES_S3_PREFIX, MACHINES_S3_PREFIX, or machines"), yes: z.boolean().describe("Confirmation flag for execution"), approval_token: approvalTokenSchema },
-    async ({ bucket, prefix, yes, approval_token }) => {
+    { bucket: z.string().optional().describe("S3 bucket name; defaults to HASNA_MACHINES_S3_BUCKET or MACHINES_S3_BUCKET"), prefix: z.string().optional().describe("S3 key prefix; defaults to HASNA_MACHINES_S3_PREFIX, MACHINES_S3_PREFIX, or machines"), yes: z.boolean().describe("Confirmation flag for execution"), approval_token: approvalTokenSchema, verbose: verboseOutputSchema },
+    async ({ bucket, prefix, yes, approval_token, verbose }) => {
       requireMcpMutation("machines_backup_apply", approval_token, { resourceId: mutationResourceId("backup", bucket, prefix), args: { bucket, prefix, yes } });
-      return { content: [{ type: "text", text: JSON.stringify(runBackup(bucket, prefix, { apply: true, yes }), null, 2) }] };
+      return mcpResult(runBackup(bucket, prefix, { apply: true, yes }), "machines_backup_apply", verbose);
     }
   );
 
   server.tool(
     "machines_cert_preview",
     "Preview mkcert steps for one or more domains.",
-    { domains: z.array(z.string()).describe("Domains to issue certificates for") },
-    async ({ domains }) => ({ content: [{ type: "text", text: JSON.stringify(buildCertPlan(domains), null, 2) }] })
+    { domains: z.array(z.string()).describe("Domains to issue certificates for"), verbose: verboseOutputSchema },
+    async ({ domains, verbose }) => mcpResult(buildCertPlan(domains), "machines_cert_preview", verbose)
   );
 
   server.tool(
     "machines_cert_apply",
     "Execute mkcert steps for one or more domains.",
-    { domains: z.array(z.string()).describe("Domains to issue certificates for"), yes: z.boolean().describe("Confirmation flag for execution"), approval_token: approvalTokenSchema },
-    async ({ domains, yes, approval_token }) => {
+    { domains: z.array(z.string()).describe("Domains to issue certificates for"), yes: z.boolean().describe("Confirmation flag for execution"), approval_token: approvalTokenSchema, verbose: verboseOutputSchema },
+    async ({ domains, yes, approval_token, verbose }) => {
       requireMcpMutation("machines_cert_apply", approval_token, { resourceId: mutationResourceId("cert", domains.join(",")), args: { domains, yes } });
-      return { content: [{ type: "text", text: JSON.stringify(runCertPlan(domains, { apply: true, yes }), null, 2) }] };
+      return mcpResult(runCertPlan(domains, { apply: true, yes }), "machines_cert_apply", verbose);
     }
   );
 
   server.tool(
     "machines_dns_add",
     "Add or replace a local domain mapping.",
-    { domain: z.string().describe("Domain name"), port: z.number().describe("Target port"), target_host: z.string().optional().describe("Target host"), approval_token: approvalTokenSchema },
-    async ({ domain, port, target_host, approval_token }) => {
+    { domain: z.string().describe("Domain name"), port: z.number().describe("Target port"), target_host: z.string().optional().describe("Target host"), approval_token: approvalTokenSchema, verbose: verboseOutputSchema },
+    async ({ domain, port, target_host, approval_token, verbose }) => {
       const resolvedTargetHost = target_host ?? "127.0.0.1";
       requireMcpMutation("machines_dns_add", approval_token, { resourceId: mutationResourceId("dns", domain), args: { domain, port, target_host: resolvedTargetHost } });
-      return { content: [{ type: "text", text: JSON.stringify(addDomainMapping(domain, port, resolvedTargetHost), null, 2) }] };
+      return mcpResult(addDomainMapping(domain, port, resolvedTargetHost), "machines_dns_add", verbose);
     }
   );
-  server.tool("machines_dns_list", "List local domain mappings.", {}, async () => ({ content: [{ type: "text", text: JSON.stringify(listDomainMappings(), null, 2) }] }));
+  server.tool("machines_dns_list", "List local domain mappings.", { verbose: verboseOutputSchema }, async ({ verbose }) => mcpResult(listDomainMappings(), "machines_dns_list", verbose));
   server.tool(
     "machines_dns_render",
     "Render hosts/proxy configuration for a domain.",
-    { domain: z.string().describe("Domain name") },
-    async ({ domain }) => ({ content: [{ type: "text", text: JSON.stringify(renderDomainMapping(domain), null, 2) }] })
+    { domain: z.string().describe("Domain name"), verbose: verboseOutputSchema },
+    async ({ domain, verbose }) => mcpResult(renderDomainMapping(domain), "machines_dns_render", verbose)
   );
 
   server.tool(
@@ -851,51 +844,50 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
       events: z.array(z.string()).describe("Events routed to this channel"),
       enabled: z.boolean().optional().describe("Whether the channel is enabled"),
       approval_token: approvalTokenSchema,
+      verbose: verboseOutputSchema,
     },
-    async ({ channel_id, type, target, command_args, events, enabled, approval_token }) => {
+    async ({ channel_id, type, target, command_args, events, enabled, approval_token, verbose }) => {
       const resolvedEnabled = enabled ?? true;
       const resolvedEvents = [...new Set(events)];
       const commandArgs = command_args ?? [];
       requireMcpMutation("machines_notifications_add", approval_token, { resourceId: mutationResourceId("notification", channel_id), args: { channel_id, type, target, command_args: commandArgs, events: resolvedEvents, enabled: resolvedEnabled } });
       return {
-        content: [{ type: "text", text: JSON.stringify(addNotificationChannel({ id: channel_id, type, target, commandArgs: type === "command" && commandArgs.length > 0 ? commandArgs : undefined, events: resolvedEvents, enabled: resolvedEnabled }, { trustedApproval: trustedNotificationApproval }), null, 2) }],
+        ...mcpResult(addNotificationChannel({ id: channel_id, type, target, commandArgs: type === "command" && commandArgs.length > 0 ? commandArgs : undefined, events: resolvedEvents, enabled: resolvedEnabled }, { trustedApproval: trustedNotificationApproval }), "machines_notifications_add", verbose),
       };
     }
   );
 
-  server.tool("machines_notifications_list", "List notification channels.", {}, async () => ({
-    content: [{ type: "text", text: JSON.stringify(listNotificationChannels(), null, 2) }],
-  }));
+  server.tool("machines_notifications_list", "List notification channels.", { verbose: verboseOutputSchema }, async ({ verbose }) => (
+    mcpResult(listNotificationChannels(), "machines_notifications_list", verbose)
+  ));
 
   server.tool(
     "machines_notifications_test",
     "Preview or execute a notification test.",
-    { channel_id: z.string().describe("Channel identifier"), event: z.string().optional().describe("Event name"), message: z.string().optional().describe("Message body"), yes: z.boolean().optional().describe("Execute the test when true"), approval_token: approvalTokenSchema },
-    async ({ channel_id, event, message, yes, approval_token }) => {
+    { channel_id: z.string().describe("Channel identifier"), event: z.string().optional().describe("Event name"), message: z.string().optional().describe("Message body"), yes: z.boolean().optional().describe("Execute the test when true"), approval_token: approvalTokenSchema, verbose: verboseOutputSchema },
+    async ({ channel_id, event, message, yes, approval_token, verbose }) => {
       if (yes === true) requireMcpMutation("machines_notifications_test", approval_token, { resourceId: mutationResourceId("notification-test", channel_id, event), args: { channel_id, event, message, yes: true } });
-      return {
-        content: [{ type: "text", text: JSON.stringify(await testNotificationChannel(channel_id, event, message, { apply: Boolean(yes), yes, trustedApproval: yes === true ? trustedNotificationApproval : undefined }), null, 2) }],
-      };
+      return mcpResult(await testNotificationChannel(channel_id, event, message, { apply: Boolean(yes), yes, trustedApproval: yes === true ? trustedNotificationApproval : undefined }), "machines_notifications_test", verbose);
     }
   );
 
   server.tool(
     "machines_notifications_dispatch",
     "Dispatch an event to matching notification channels.",
-    { event: z.string().describe("Event name"), message: z.string().describe("Message body"), channel_id: z.string().optional().describe("Limit delivery to one channel"), approval_token: approvalTokenSchema },
-    async ({ event, message, channel_id, approval_token }) => {
+    { event: z.string().describe("Event name"), message: z.string().describe("Message body"), channel_id: z.string().optional().describe("Limit delivery to one channel"), approval_token: approvalTokenSchema, verbose: verboseOutputSchema },
+    async ({ event, message, channel_id, approval_token, verbose }) => {
       requireMcpMutation("machines_notifications_dispatch", approval_token, { resourceId: mutationResourceId("notification-dispatch", channel_id, event), args: { event, message, channel_id } });
-      return { content: [{ type: "text", text: JSON.stringify(await dispatchNotificationEvent(event, message, { channelId: channel_id, trustedApproval: trustedNotificationApproval }), null, 2) }] };
+      return mcpResult(await dispatchNotificationEvent(event, message, { channelId: channel_id, trustedApproval: trustedNotificationApproval }), "machines_notifications_dispatch", verbose);
     }
   );
 
   server.tool(
     "machines_notifications_remove",
     "Remove a notification channel.",
-    { channel_id: z.string().describe("Channel identifier"), approval_token: approvalTokenSchema },
-    async ({ channel_id, approval_token }) => {
+    { channel_id: z.string().describe("Channel identifier"), approval_token: approvalTokenSchema, verbose: verboseOutputSchema },
+    async ({ channel_id, approval_token, verbose }) => {
       requireMcpMutation("machines_notifications_remove", approval_token, { resourceId: mutationResourceId("notification", channel_id), args: { channel_id } });
-      return { content: [{ type: "text", text: JSON.stringify(removeNotificationChannel(channel_id), null, 2) }] };
+      return mcpResult(removeNotificationChannel(channel_id), "machines_notifications_remove", verbose);
     }
   );
 
@@ -910,8 +902,9 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
       secret: z.string().optional().describe("Optional HMAC secret"),
       enabled: z.boolean().optional().describe("Whether the channel is enabled"),
       approval_token: approvalTokenSchema,
+      verbose: verboseOutputSchema,
     },
-    async ({ channel_id, url, event_type, source, secret, enabled, approval_token }) => {
+    async ({ channel_id, url, event_type, source, secret, enabled, approval_token, verbose }) => {
       const resolvedEnabled = enabled ?? true;
       requireMcpMutation("machines_webhooks_add", approval_token, { resourceId: mutationResourceId("webhook", channel_id), args: { channel_id, url, event_type, source, secret, enabled: resolvedEnabled } });
       const now = new Date().toISOString();
@@ -924,33 +917,31 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
         createdAt: now,
         updatedAt: now,
       });
-      return { content: [{ type: "text", text: JSON.stringify(sanitizeChannelForOutput(channel), null, 2) }] };
+      return mcpResult(sanitizeChannelForOutput(channel), "machines_webhooks_add", verbose);
     }
   );
 
-  server.tool("machines_webhooks_list", "List shared event webhook channels.", {}, async () => ({
-    content: [{ type: "text", text: JSON.stringify(sanitizeChannelsForOutput(await events.listChannels()), null, 2) }],
-  }));
+  server.tool("machines_webhooks_list", "List shared event webhook channels.", { verbose: verboseOutputSchema }, async ({ verbose }) => (
+    mcpResult(sanitizeChannelsForOutput(await events.listChannels()), "machines_webhooks_list", verbose)
+  ));
 
   server.tool(
     "machines_webhooks_test",
     "Send a test event to one shared event channel.",
-    { channel_id: z.string().describe("Channel identifier"), event_type: z.string().optional().describe("Event type"), message: z.string().optional().describe("Message body"), approval_token: approvalTokenSchema },
-    async ({ channel_id, event_type, message, approval_token }) => {
+    { channel_id: z.string().describe("Channel identifier"), event_type: z.string().optional().describe("Event type"), message: z.string().optional().describe("Message body"), approval_token: approvalTokenSchema, verbose: verboseOutputSchema },
+    async ({ channel_id, event_type, message, approval_token, verbose }) => {
       requireMcpMutation("machines_webhooks_test", approval_token, { resourceId: mutationResourceId("webhook-test", channel_id, event_type), args: { channel_id, event_type, message } });
-      return {
-        content: [{ type: "text", text: JSON.stringify(await events.testChannel(channel_id, { source: "machines", type: event_type ?? "events.test", message }), null, 2) }],
-      };
+      return mcpResult(await events.testChannel(channel_id, { source: "machines", type: event_type ?? "events.test", message }), "machines_webhooks_test", verbose);
     }
   );
 
   server.tool(
     "machines_webhooks_remove",
     "Remove a shared event channel.",
-    { channel_id: z.string().describe("Channel identifier"), approval_token: approvalTokenSchema },
-    async ({ channel_id, approval_token }) => {
+    { channel_id: z.string().describe("Channel identifier"), approval_token: approvalTokenSchema, verbose: verboseOutputSchema },
+    async ({ channel_id, approval_token, verbose }) => {
       requireMcpMutation("machines_webhooks_remove", approval_token, { resourceId: mutationResourceId("webhook", channel_id), args: { channel_id } });
-      return { content: [{ type: "text", text: JSON.stringify({ removed: await events.removeChannel(channel_id) }, null, 2) }] };
+      return mcpResult({ removed: await events.removeChannel(channel_id) }, "machines_webhooks_remove", verbose);
     }
   );
 
@@ -967,14 +958,15 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
       dedupe_key: z.string().optional().describe("Dedupe key"),
       deliver: z.boolean().optional().describe("Deliver to matching channels"),
       approval_token: approvalTokenSchema,
+      verbose: verboseOutputSchema,
     },
-    async ({ event_type, subject, severity, message, data, metadata, dedupe_key, deliver, approval_token }) => {
+    async ({ event_type, subject, severity, message, data, metadata, dedupe_key, deliver, approval_token, verbose }) => {
       const resolvedData = data ?? {};
       const resolvedMetadata = metadata ?? {};
       const resolvedDeliver = deliver !== false;
       requireMcpMutation("machines_events_emit", approval_token, { resourceId: mutationResourceId("event", event_type, subject, dedupe_key), args: { event_type, subject, severity, message, data: resolvedData, metadata: resolvedMetadata, dedupe_key, deliver: resolvedDeliver } });
       return {
-        content: [{ type: "text", text: JSON.stringify(await events.emit({
+        ...mcpResult(await events.emit({
           source: "machines",
           type: event_type,
           subject,
@@ -983,72 +975,71 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
           data: resolvedData,
           metadata: resolvedMetadata,
           dedupeKey: dedupe_key,
-        }, { deliver: resolvedDeliver }), null, 2) }],
+        }, { deliver: resolvedDeliver }), "machines_events_emit", verbose),
       };
     }
   );
 
-  server.tool("machines_events_list", "List shared events.", {}, async () => ({
-    content: [{ type: "text", text: JSON.stringify(await events.listEvents(), null, 2) }],
-  }));
+  server.tool("machines_events_list", "List shared events.", { verbose: verboseOutputSchema }, async ({ verbose }) => (
+    mcpResult(await events.listEvents(), "machines_events_list", verbose)
+  ));
 
   server.tool(
     "machines_events_replay",
     "Replay shared events.",
-    { event_id: z.string().optional().describe("Event id"), source: z.string().optional().describe("Source filter"), event_type: z.string().optional().describe("Event type filter"), dry_run: z.boolean().optional().describe("Preview without delivery"), approval_token: approvalTokenSchema },
-    async ({ event_id, source, event_type, dry_run, approval_token }) => {
+    { event_id: z.string().optional().describe("Event id"), source: z.string().optional().describe("Source filter"), event_type: z.string().optional().describe("Event type filter"), dry_run: z.boolean().optional().describe("Preview without delivery"), approval_token: approvalTokenSchema, verbose: verboseOutputSchema },
+    async ({ event_id, source, event_type, dry_run, approval_token, verbose }) => {
       if (dry_run !== true) requireMcpMutation("machines_events_replay", approval_token, { resourceId: mutationResourceId("event-replay", event_id, source, event_type), args: { event_id, source, event_type, dry_run: false } });
-      return {
-        content: [{ type: "text", text: JSON.stringify(await events.replay({ eventId: event_id, source, type: event_type, dryRun: dry_run }), null, 2) }],
-      };
+      return mcpResult(await events.replay({ eventId: event_id, source, type: event_type, dryRun: dry_run }), "machines_events_replay", verbose);
     }
   );
 
   server.tool(
     "machines_serve_info",
     "Preview the dashboard server bind address and routes.",
-    { host: z.string().optional().describe("Host interface"), port: z.number().optional().describe("Port number") },
-    async ({ host, port }) => ({ content: [{ type: "text", text: JSON.stringify(getServeInfo({ host, port }), null, 2) }] })
+    { host: z.string().optional().describe("Host interface"), port: z.number().optional().describe("Port number"), verbose: verboseOutputSchema },
+    async ({ host, port, verbose }) => mcpResult(getServeInfo({ host, port }), "machines_serve_info", verbose)
   );
 
-  server.tool("machines_serve_dashboard", "Render the current dashboard HTML.", {}, async () => ({
-    content: [{ type: "text", text: renderDashboardHtml() }],
-  }));
+  server.tool("machines_serve_dashboard", "Render the current dashboard HTML.", { verbose: verboseOutputSchema }, async ({ verbose }) => {
+    const html = renderDashboardHtml();
+    return mcpRawText(html, `machines_serve_dashboard: ${html.length} bytes of HTML\nhint: pass verbose: true to return the full dashboard HTML.`, verbose);
+  });
 
-  server.tool("storage_status", "Show machines storage sync configuration and local sync history.", {}, async () => ({
-    content: [{ type: "text", text: JSON.stringify(getStorageStatus(), null, 2) }],
-  }));
+  server.tool("storage_status", "Show machines storage sync configuration and local sync history.", { verbose: verboseOutputSchema }, async ({ verbose }) => (
+    mcpResult(getStorageStatus(), "storage_status", verbose)
+  ));
 
   server.tool(
     "storage_push",
     "Push local machine runtime data to storage PostgreSQL.",
-    { tables: z.array(z.string()).optional().describe("Optional table list to push"), approval_token: approvalTokenSchema },
-    async ({ tables, approval_token }) => {
+    { tables: z.array(z.string()).optional().describe("Optional table list to push"), approval_token: approvalTokenSchema, verbose: verboseOutputSchema },
+    async ({ tables, approval_token, verbose }) => {
       const resolvedTables = resolveTables(tables);
       requireMcpMutation("storage_push", approval_token, { resourceId: mutationResourceId("storage-push", resolvedTables.join(",")), args: { tables: resolvedTables } });
-      return { content: [{ type: "text", text: JSON.stringify(await storagePush({ tables: resolvedTables, trustedLocalMutation: createTrustedSdkMutationApproval() }), null, 2) }] };
+      return mcpResult(await storagePush({ tables: resolvedTables, trustedLocalMutation: createTrustedSdkMutationApproval() }), "storage_push", verbose);
     }
   );
 
   server.tool(
     "storage_pull",
     "Pull machine runtime data from storage PostgreSQL to local SQLite.",
-    { tables: z.array(z.string()).optional().describe("Optional table list to pull"), approval_token: approvalTokenSchema },
-    async ({ tables, approval_token }) => {
+    { tables: z.array(z.string()).optional().describe("Optional table list to pull"), approval_token: approvalTokenSchema, verbose: verboseOutputSchema },
+    async ({ tables, approval_token, verbose }) => {
       const resolvedTables = resolveTables(tables);
       requireMcpMutation("storage_pull", approval_token, { resourceId: mutationResourceId("storage-pull", resolvedTables.join(",")), args: { tables: resolvedTables } });
-      return { content: [{ type: "text", text: JSON.stringify(await storagePull({ tables: resolvedTables, trustedLocalMutation: createTrustedSdkMutationApproval() }), null, 2) }] };
+      return mcpResult(await storagePull({ tables: resolvedTables, trustedLocalMutation: createTrustedSdkMutationApproval() }), "storage_pull", verbose);
     }
   );
 
   server.tool(
     "storage_sync",
     "Bidirectional machines storage sync: pull then push.",
-    { tables: z.array(z.string()).optional().describe("Optional table list to sync"), approval_token: approvalTokenSchema },
-    async ({ tables, approval_token }) => {
+    { tables: z.array(z.string()).optional().describe("Optional table list to sync"), approval_token: approvalTokenSchema, verbose: verboseOutputSchema },
+    async ({ tables, approval_token, verbose }) => {
       const resolvedTables = resolveTables(tables);
       requireMcpMutation("storage_sync", approval_token, { resourceId: mutationResourceId("storage-sync", resolvedTables.join(",")), args: { tables: resolvedTables } });
-      return { content: [{ type: "text", text: JSON.stringify(await storageSync({ tables: resolvedTables, trustedLocalMutation: createTrustedSdkMutationApproval() }), null, 2) }] };
+      return mcpResult(await storageSync({ tables: resolvedTables, trustedLocalMutation: createTrustedSdkMutationApproval() }), "storage_sync", verbose);
     }
   );
 

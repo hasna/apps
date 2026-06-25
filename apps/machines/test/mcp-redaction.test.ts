@@ -28,7 +28,7 @@ async function callTool(name: string, args: Record<string, unknown> = {}): Promi
   await server.connect(serverTransport);
   await client.connect(clientTransport);
   try {
-    const result = await client.callTool({ name, arguments: args });
+    const result = await client.callTool({ name, arguments: { verbose: true, ...args } });
     const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
     return JSON.parse(text ?? "null") as unknown;
   } finally {

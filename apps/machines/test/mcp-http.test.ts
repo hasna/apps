@@ -195,7 +195,7 @@ describe("MCP HTTP transport", () => {
     const tools = await client.listTools();
     expect(tools.tools.some((tool) => tool.name === "machines_status")).toBe(true);
 
-    const result = await client.callTool({ name: "machines_status", arguments: {} });
+    const result = await client.callTool({ name: "machines_status", arguments: { verbose: true } });
     const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
     expect(text).toBeTruthy();
     expect(JSON.parse(text)).toMatchObject({ machineId: expect.any(String) });
@@ -263,7 +263,7 @@ describe("MCP HTTP transport", () => {
       }, { env: process.env, now: Date.now(), nonce: "http-scoped" });
       const result = await client.callTool({
         name: "machines_manifest_remove",
-        arguments: { machine_id: "demo-node-01", approval_token: token },
+        arguments: { machine_id: "demo-node-01", approval_token: token, verbose: true },
       });
       const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
       expect(JSON.parse(text).machines).toEqual([]);
@@ -286,7 +286,7 @@ describe("MCP HTTP transport", () => {
     );
 
     const results = await Promise.all(
-      clients.map((client) => client.callTool({ name: "machines_self_test", arguments: {} }))
+      clients.map((client) => client.callTool({ name: "machines_self_test", arguments: { verbose: true } }))
     );
 
     expect(results).toHaveLength(3);

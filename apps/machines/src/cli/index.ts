@@ -114,6 +114,20 @@ import {
 } from "../commands/heal-daemon.js";
 import { getManifestPath, getClipboardKeyPath } from "../paths.js";
 import { parseIntegerOption, renderKeyValueTable, renderList } from "../cli-utils.js";
+import {
+  DEFAULT_COMPACT_LIMIT,
+  DEFAULT_HISTORY_LIMIT,
+  renderDiffSummary,
+  renderDomainMappingsSummary,
+  renderDomainRenderSummary,
+  renderManifestMutationSummary,
+  renderManifestSummary,
+  renderMachineSummary,
+  renderPlanSummary,
+  renderPortsSummary,
+  pageItems,
+  truncateText,
+} from "../compact-output.js";
 import type {
   AppsDiffResult,
   AppsStatusResult,
@@ -165,19 +179,28 @@ function printStorageError(error: unknown): never {
   process.exit(1);
 }
 
-function renderAppsListResult(result: ReturnType<typeof listApps>): string {
+function renderAppsListResult(result: ReturnType<typeof listApps>, options: { limit?: number; offset?: number; all?: boolean } = {}): string {
+  const page = pageItems(result.apps, options, DEFAULT_HISTORY_LIMIT);
   return [
     `machine: ${result.machineId}`,
-    renderList("apps", result.apps.map((app) => `${app.name}${app.manager ? ` (${app.manager})` : ""}`)),
+    `apps: ${page.items.length}/${page.total}`,
+    renderList("apps", page.items.map((app) => `${app.name}${app.manager ? ` (${app.manager})` : ""}`)),
+    page.hasMore ? `hint: use --cursor ${page.nextOffset} --limit ${page.limit ?? DEFAULT_HISTORY_LIMIT} for more apps, or --json for full output.` : "hint: use --json for full app specs.",
   ].join("\n");
 }
 
-function renderAppsStatusResult(result: AppsStatusResult): string {
-  const lines = result.apps.map((app) => {
+function renderAppsStatusResult(result: AppsStatusResult, options: { limit?: number; offset?: number; all?: boolean } = {}): string {
+  const page = pageItems(result.apps, options, DEFAULT_HISTORY_LIMIT);
+  const lines = page.items.map((app) => {
     const state = app.installed ? chalk.green("installed") : chalk.yellow("missing");
     return `${app.name.padEnd(18)} ${state} ${app.version ? `v${app.version}` : ""}`.trimEnd();
   });
-  return [`machine: ${result.machineId} (${result.source})`, ...lines].join("\n");
+  return [
+    `machine: ${result.machineId} (${result.source})`,
+    `apps: ${page.items.length}/${page.total}`,
+    ...lines,
+    page.hasMore ? `hint: use --cursor ${page.nextOffset} --limit ${page.limit ?? DEFAULT_HISTORY_LIMIT} for more apps, or --json for full output.` : "hint: use --json for full app status.",
+  ].join("\n");
 }
 
 function renderAppsDiffResult(result: AppsDiffResult): string {
@@ -204,13 +227,16 @@ function renderClaudeDiffResult(result: ClaudeCliDiffResult): string {
   ].join("\n");
 }
 
-function renderNotificationConfigResult(config: NotificationConfig): string {
+function renderNotificationConfigResult(config: NotificationConfig, options: { limit?: number; offset?: number; all?: boolean } = {}): string {
   if (config.channels.length === 0) {
     return "notification channels: none";
   }
-  return config.channels
-    .map((channel) => `${channel.id} ${channel.enabled ? chalk.green("enabled") : chalk.yellow("disabled")} ${channel.type} -> ${channel.target}`)
-    .join("\n");
+  const page = pageItems(config.channels, options, DEFAULT_HISTORY_LIMIT);
+  return [
+    `notification channels: ${page.items.length}/${page.total}`,
+    ...page.items.map((channel) => `${channel.id} ${channel.enabled ? chalk.green("enabled") : chalk.yellow("disabled")} ${channel.type} -> ${channel.target}`),
+    page.hasMore ? `hint: use --cursor ${page.nextOffset} --limit ${page.limit ?? DEFAULT_HISTORY_LIMIT} for more channels, or --json for full output.` : "hint: use --json for full channel config.",
+  ].join("\n");
 }
 
 function renderNotificationTestResult(result: NotificationTestResult): string {
@@ -362,13 +388,19 @@ function renderWorkspaceRepairResult(result: WorkspaceManifestRepairResult): str
   ].join("\n");
 }
 
-function renderProjectAssignments(result: MachineProjectAssignments): string {
+function renderProjectAssignments(result: MachineProjectAssignments, options: { limit?: number; offset?: number; all?: boolean } = {}): string {
   if (result.assignments.length === 0) return "project assignments: none";
-  return result.assignments.map((assignment) => {
+  const page = pageItems(result.assignments, options, DEFAULT_HISTORY_LIMIT);
+  const lines = page.items.map((assignment) => {
     const primary = assignment.is_primary ? " primary" : "";
     const path = assignment.path ?? "unresolved";
     return `${assignment.machine_id.padEnd(18)} ${assignment.project_id.padEnd(24)} ${path}${primary}`;
-  }).join("\n");
+  });
+  return [
+    `project assignments: ${page.items.length}/${page.total}`,
+    ...lines,
+    page.hasMore ? `hint: use --cursor ${page.nextOffset} --limit ${page.limit ?? DEFAULT_HISTORY_LIMIT} for more assignments, or --json for full output.` : "hint: use --json for full assignment details.",
+  ].join("\n");
 }
 
 function renderNoteMachineContext(result: NoteMachineContext): string {
@@ -452,22 +484,24 @@ function renderBrowserPlanFleet(result: BrowserPlanFleet): string {
   return lines.join("\n");
 }
 
-function renderFleetStatus(status: FleetStatus): string {
+function renderFleetStatus(status: FleetStatus, options: { limit?: number; offset?: number; all?: boolean } = {}): string {
+  const page = pageItems(status.machines, options, DEFAULT_COMPACT_LIMIT);
   return [
     renderKeyValueTable([
       ["machine", status.machineId],
       ["manifest", status.manifestPath],
       ["db", status.dbPath],
       ["notifications", status.notificationsPath],
-      ["manifest machines", String(status.manifestMachineCount)],
+      ["manifest machines", `${page.items.length}/${status.manifestMachineCount}`],
       ["heartbeats", String(status.heartbeatCount)],
       ["setup runs", String(status.recentSetupRuns)],
       ["sync runs", String(status.recentSyncRuns)],
     ]),
     "",
-    ...status.machines.map((machine) =>
+    ...page.items.map((machine) =>
       `${(machine.displayName ?? machine.machineId).padEnd(18)} ${machine.machineId.padEnd(18)} ${machine.platform || "unknown"} ${machine.heartbeatStatus} ${machine.agentMode || "agent:unknown"} ${machine.storageSyncStatus || "storage:unknown"} ${machine.updatedAt || machine.lastHeartbeatAt || "—"}`
     ),
+    page.hasMore ? `hint: use --cursor ${page.nextOffset} --limit ${page.limit ?? DEFAULT_COMPACT_LIMIT} for more machines, --all for all compact rows, or --json for full output.` : "hint: use --json for full status details.",
   ].join("\n");
 }
 
@@ -492,6 +526,28 @@ function renderDaemonPlan(plan: DaemonServicePlan): string {
     renderList("files", files),
     renderList("commands", commands),
     renderList("manual steps", plan.manualSteps),
+  ].join("\n");
+}
+
+function renderDaemonRunResult(result: ReturnType<typeof runDaemonServicePlan>, verbose = false): string {
+  const commandLines = result.commands.map((command) => {
+    const state = command.skipped ? "skipped" : command.exitCode === 0 ? "ok" : `exit:${command.exitCode ?? "unknown"}`;
+    const detail = command.error ? ` ${truncateText(command.error, 96)}` : "";
+    const commandPreview = verbose ? ` ${truncateText(command.command.join(" "), 140)}` : "";
+    return `${command.id.padEnd(24)} ${state.padEnd(12)}${commandPreview}${detail}`;
+  });
+  return [
+    renderKeyValueTable([
+      ["mode", result.mode],
+      ["applied", String(result.applied)],
+      ["service", result.plan.serviceName],
+      ["action", result.plan.action],
+      ["files written", String(result.filesWritten.length)],
+      ["commands", String(result.commands.length)],
+      ["warnings", result.warnings.join(", ") || "none"],
+    ]),
+    renderList("commands", commandLines),
+    "hint: use --verbose for command previews or --json for full run output.",
   ].join("\n");
 }
 
@@ -644,6 +700,14 @@ function parseNumberOption(value: string): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) throw new Error(`Expected a finite number, got ${value}`);
   return parsed;
+}
+
+function compactLimitOption(value: string | undefined, label = "limit", max = 500): number | undefined {
+  return value === undefined ? undefined : parseIntegerOption(value, label, { min: 1, max });
+}
+
+function compactCursorOption(value: string | undefined): number | undefined {
+  return value === undefined ? undefined : parseIntegerOption(value, "cursor", { min: 0 });
 }
 
 function parseJsonObjectOption(value: string | undefined, fallback: Record<string, unknown>): Record<string, unknown> {
@@ -832,7 +896,13 @@ eventWebhooksCommand
     printCommandResult(sanitizeChannelForOutput(saved), `Added ${saved.transport} channel ${saved.id}`, wantsCommandJson(options, command));
   });
 
-eventWebhooksCommand.command("list").description("List configured subscriptions").option("-j, --json", "Print JSON output", false).action(async (options: { json?: boolean }, command: Command) => {
+eventWebhooksCommand.command("list")
+  .description("List configured subscriptions")
+  .option("--limit <n>", `Maximum subscriptions to show (default ${DEFAULT_HISTORY_LIMIT})`)
+  .option("--cursor <n>", "Subscription cursor/offset")
+  .option("--all", "Show every subscription row in compact output", false)
+  .option("-j, --json", "Print JSON output", false)
+  .action(async (options: { limit?: string; cursor?: string; all?: boolean; json?: boolean }, command: Command) => {
   const channels = readEventChannelsWithoutInit();
   if (wantsCommandJson(options, command)) {
     console.log(JSON.stringify(sanitizeChannelsForOutput(channels), null, 2));
@@ -842,9 +912,16 @@ eventWebhooksCommand.command("list").description("List configured subscriptions"
     console.log("No channels configured.");
     return;
   }
-  for (const channel of channels) {
+  const page = pageItems(channels, {
+    limit: compactLimitOption(options.limit, "limit", 1000),
+    offset: compactCursorOption(options.cursor),
+    all: options.all,
+  }, DEFAULT_HISTORY_LIMIT);
+  console.log(`channels: ${page.items.length}/${page.total}`);
+  for (const channel of page.items) {
     console.log(`${channel.id}\t${channel.enabled ? "enabled" : "disabled"}\t${channel.transport}\t${channel.webhook?.url ?? channel.command?.command ?? channel.transport}`);
   }
+  if (page.hasMore) console.log(`hint: use --cursor ${page.nextOffset} --limit ${page.limit ?? DEFAULT_HISTORY_LIMIT} for more channels, or --json for full output.`);
 });
 
 eventWebhooksCommand
@@ -941,24 +1018,27 @@ eventsCommand
   .description("List recorded events")
   .option("--source <source>", "Filter by source")
   .option("--type <type>", "Filter by type")
-  .option("--limit <n>", "Limit results", parseNumberOption)
+  .option("--limit <n>", `Limit human results (default ${DEFAULT_HISTORY_LIMIT}); JSON remains uncapped unless set`, parseNumberOption)
   .option("-j, --json", "Print JSON output", false)
   .action(async (options: { source?: string; type?: string; limit?: number; json?: boolean }, command: Command) => {
     let rows = readEventsWithoutInit();
     if (options.source) rows = rows.filter((event) => event.source === options.source);
     if (options.type) rows = rows.filter((event) => event.type === options.type);
-    if (options.limit) rows = rows.slice(-options.limit);
     if (wantsCommandJson(options, command)) {
-      console.log(JSON.stringify(rows, null, 2));
+      console.log(JSON.stringify(options.limit ? rows.slice(-options.limit) : rows, null, 2));
       return;
     }
-    if (!rows.length) {
+    const total = rows.length;
+    rows = rows.slice(-(options.limit ?? DEFAULT_HISTORY_LIMIT));
+    if (!total) {
       console.log("No events recorded.");
       return;
     }
+    console.log(`events: ${rows.length}/${total}`);
     for (const event of rows) {
-      console.log(`${event.time}\t${event.id}\t${event.source}\t${event.type}\t${event.severity}`);
+      console.log(`${event.time}\t${event.id}\t${event.source}\t${event.type}\t${event.severity}\t${truncateText(event.message ?? "", 80)}`);
     }
+    if (rows.length < total) console.log(`hint: use --limit ${Math.min(total, rows.length + DEFAULT_HISTORY_LIMIT)} or --json for full event objects.`);
   });
 
 eventsCommand
@@ -1002,6 +1082,7 @@ function addDaemonLifecycleCommand(action: DaemonServiceAction, description: str
     .option("--apply", "Write service files and run planned commands", false)
     .option("--yes", "Confirm execution when using --apply", false)
     .option("--approval-token <token>", "Scoped mutation approval token")
+    .option("--verbose", "Include command previews in compact output", false)
     .option("-j, --json", "Print JSON output", false)
     .action((options: {
       platform?: string;
@@ -1016,6 +1097,7 @@ function addDaemonLifecycleCommand(action: DaemonServiceAction, description: str
       apply?: boolean;
       yes?: boolean;
       approvalToken?: string;
+      verbose?: boolean;
       json?: boolean;
     }) => {
       const planOptions = parseDaemonOptions(action, options);
@@ -1024,11 +1106,11 @@ function addDaemonLifecycleCommand(action: DaemonServiceAction, description: str
         requireCliMutation(`daemon_${action}`, options.approvalToken, { resourceId: cliResourceId("daemon", action, options.serviceName), args: planOptions });
       }
       const result = runDaemonServicePlan(plan, { apply: options.apply, yes: options.yes });
-      if (options.json || options.apply) {
+      if (options.json) {
         console.log(JSON.stringify(result, null, 2));
         return;
       }
-      console.log(renderDaemonPlan(plan));
+      console.log(options.apply ? renderDaemonRunResult(result, options.verbose) : renderDaemonPlan(plan));
     });
 }
 
@@ -1049,33 +1131,71 @@ manifestCommand.command("path").description("Print the manifest path").action(()
   console.log(getManifestPath());
 });
 
-manifestCommand.command("list").description("Print the fleet manifest").action(() => {
-  console.log(JSON.stringify(manifestList(), null, 2));
-});
+manifestCommand.command("list")
+  .description("List fleet manifest machines compactly")
+  .option("--limit <n>", `Maximum machines to show (default ${DEFAULT_COMPACT_LIMIT})`)
+  .option("--cursor <n>", "Machine list cursor/offset")
+  .option("--all", "Show every machine row in compact output", false)
+  .option("--verbose", "Include host/path previews in compact output", false)
+  .option("-j, --json", "Print full JSON output", false)
+  .action((options: { limit?: string; cursor?: string; all?: boolean; verbose?: boolean; json?: boolean }) => {
+    const manifest = manifestList();
+    if (options.json) {
+      console.log(JSON.stringify(manifest, null, 2));
+      return;
+    }
+    console.log(renderManifestSummary(manifest, {
+      limit: compactLimitOption(options.limit),
+      offset: compactCursorOption(options.cursor),
+      all: options.all,
+      verbose: options.verbose,
+    }));
+  });
 
-manifestCommand.command("validate").description("Validate the fleet manifest").action(() => {
-  console.log(JSON.stringify(manifestValidate(), null, 2));
-});
+manifestCommand.command("validate")
+  .description("Validate the fleet manifest")
+  .option("--limit <n>", `Maximum machines to show (default ${DEFAULT_COMPACT_LIMIT})`)
+  .option("--cursor <n>", "Machine list cursor/offset")
+  .option("--all", "Show every machine row in compact output", false)
+  .option("--verbose", "Include host/path previews in compact output", false)
+  .option("-j, --json", "Print full JSON output", false)
+  .action((options: { limit?: string; cursor?: string; all?: boolean; verbose?: boolean; json?: boolean }) => {
+    const manifest = manifestValidate();
+    if (options.json) {
+      console.log(JSON.stringify(manifest, null, 2));
+      return;
+    }
+    console.log(`manifest valid\n${renderManifestSummary(manifest, {
+      limit: compactLimitOption(options.limit),
+      offset: compactCursorOption(options.cursor),
+      all: options.all,
+      verbose: options.verbose,
+    })}`);
+  });
 
 manifestCommand.command("bootstrap").description("Detect and upsert the current machine into the manifest")
   .option("--approval-token <token>", "Scoped mutation approval token")
-  .action((options: { approvalToken?: string }) => {
+  .option("-j, --json", "Print full JSON output", false)
+  .action((options: { approvalToken?: string; json?: boolean }) => {
     requireCliMutation("manifest_bootstrap", options.approvalToken, { resourceId: "manifest:bootstrap", args: {} });
-    console.log(JSON.stringify(manifestBootstrapCurrentMachine(), null, 2));
+    const manifest = manifestBootstrapCurrentMachine();
+    printJsonOrText(manifest, renderManifestMutationSummary("bootstrap", manifest), options.json);
   });
 
 manifestCommand
   .command("get")
-  .description("Print a single machine from the manifest")
+  .description("Show one machine from the manifest")
   .argument("<id>", "Machine identifier")
-  .action((id: string) => {
+  .option("--verbose", "Include host/path previews in compact output", false)
+  .option("-j, --json", "Print full JSON output", false)
+  .action((id: string, options: { verbose?: boolean; json?: boolean }) => {
     const machine = manifestGet(id);
     if (!machine) {
       process.exitCode = 1;
       console.error(`Machine not found: ${id}`);
       return;
     }
-    console.log(JSON.stringify(machine, null, 2));
+    printJsonOrText(machine, renderMachineSummary(machine, { verbose: options.verbose }), options.json);
   });
 
 const manifestFriendlyNameCommand = manifestCommand
@@ -1142,9 +1262,11 @@ manifestCommand
   .description("Remove a machine from the manifest")
   .argument("<id>", "Machine identifier")
   .option("--approval-token <token>", "Scoped mutation approval token")
-  .action((id: string, options: { approvalToken?: string }) => {
+  .option("-j, --json", "Print full JSON output", false)
+  .action((id: string, options: { approvalToken?: string; json?: boolean }) => {
     requireCliMutation("manifest_remove", options.approvalToken, { machineId: id, args: { machine_id: id } });
-    console.log(JSON.stringify(manifestRemove(id), null, 2));
+    const manifest = manifestRemove(id);
+    printJsonOrText(manifest, renderManifestMutationSummary("removed", manifest, id), options.json);
   });
 
 manifestCommand
@@ -1166,8 +1288,10 @@ manifestCommand
   .option("--metadata <json>", "Machine metadata as JSON")
   .option("--from-stdin", "Read the full MachineManifest JSON from stdin")
   .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("-j, --json", "Print full JSON output", false)
   .action((options: Record<string, string | string[] | boolean | undefined>) => {
     const fromStdin = Boolean(options["fromStdin"] || options["from-stdin"]);
+    const json = Boolean(options["json"]);
     if (fromStdin) {
       if (process.stdin.isTTY) {
         console.error("error: --from-stdin requires piped input");
@@ -1176,7 +1300,8 @@ manifestCommand
       const input = readFileSync(0, "utf8");
       const machine = JSON.parse(input) as MachineManifest;
       requireCliMutation("manifest_add", typeof options["approvalToken"] === "string" ? options["approvalToken"] : undefined, { machineId: machine.id, args: machine });
-      console.log(JSON.stringify(manifestAdd(machine), null, 2));
+      const manifest = manifestAdd(machine);
+      printJsonOrText(manifest, renderManifestMutationSummary("added", manifest, machine.id), json);
       return;
     }
 
@@ -1225,27 +1350,42 @@ manifestCommand
       files,
     };
     requireCliMutation("manifest_add", typeof options["approvalToken"] === "string" ? options["approvalToken"] : undefined, { machineId: machine.id, args: machine });
-    console.log(JSON.stringify(manifestAdd(machine), null, 2));
+    const manifest = manifestAdd(machine);
+    printJsonOrText(manifest, renderManifestMutationSummary("added", manifest, machine.id), json);
   });
 
 appsCommand
   .command("list")
   .description("List manifest-managed apps for a machine")
   .option("--machine <id>", "Machine identifier")
+  .option("--limit <n>", `Maximum apps to show (default ${DEFAULT_HISTORY_LIMIT})`)
+  .option("--cursor <n>", "App cursor/offset")
+  .option("--all", "Show every app row in compact output", false)
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string; json?: boolean }) => {
+  .action((options: { machine?: string; limit?: string; cursor?: string; all?: boolean; json?: boolean }) => {
     const result = listApps(options.machine);
-    printJsonOrText(result, renderAppsListResult(result), options.json);
+    printJsonOrText(result, renderAppsListResult(result, {
+      limit: compactLimitOption(options.limit, "limit", 1000),
+      offset: compactCursorOption(options.cursor),
+      all: options.all,
+    }), options.json);
   });
 
 appsCommand
   .command("status")
   .description("Check installed state for manifest-managed apps")
   .option("--machine <id>", "Machine identifier")
+  .option("--limit <n>", `Maximum apps to show (default ${DEFAULT_HISTORY_LIMIT})`)
+  .option("--cursor <n>", "App cursor/offset")
+  .option("--all", "Show every app row in compact output", false)
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string; json?: boolean }) => {
+  .action((options: { machine?: string; limit?: string; cursor?: string; all?: boolean; json?: boolean }) => {
     const result = getAppsStatus(options.machine);
-    printJsonOrText(result, renderAppsStatusResult(result), options.json);
+    printJsonOrText(result, renderAppsStatusResult(result, {
+      limit: compactLimitOption(options.limit, "limit", 1000),
+      offset: compactCursorOption(options.cursor),
+      all: options.all,
+    }), options.json);
   });
 
 appsCommand
@@ -1262,9 +1402,17 @@ appsCommand
   .command("plan")
   .description("Preview app install steps for a machine")
   .option("--machine <id>", "Machine identifier")
-  .action((options: { machine?: string }) => {
+  .option("--limit <n>", `Maximum steps to show (default ${DEFAULT_COMPACT_LIMIT})`)
+  .option("--cursor <n>", "Step cursor/offset")
+  .option("--verbose", "Include command previews", false)
+  .option("-j, --json", "Print full JSON output", false)
+  .action((options: { machine?: string; limit?: string; cursor?: string; verbose?: boolean; json?: boolean }) => {
     const result = buildAppsPlan(options.machine);
-    console.log(JSON.stringify(result, null, 2));
+    printJsonOrText(result, renderPlanSummary(result, "steps", {
+      limit: compactLimitOption(options.limit),
+      offset: compactCursorOption(options.cursor),
+      verbose: options.verbose,
+    }), options.json);
   });
 
 appsCommand
@@ -1273,7 +1421,11 @@ appsCommand
   .option("--machine <id>", "Machine identifier")
   .option("--yes", "Confirm execution", false)
   .option("--approval-token <token>", "Scoped mutation approval token")
-  .action((options: { machine?: string; yes?: boolean; approvalToken?: string }) => {
+  .option("--limit <n>", `Maximum steps to show (default ${DEFAULT_COMPACT_LIMIT})`)
+  .option("--cursor <n>", "Step cursor/offset")
+  .option("--verbose", "Include command previews", false)
+  .option("-j, --json", "Print full JSON output", false)
+  .action((options: { machine?: string; yes?: boolean; approvalToken?: string; limit?: string; cursor?: string; verbose?: boolean; json?: boolean }) => {
     const resolvedMachineId = cliMachineId(options.machine);
     const plan = buildAppsPlan(options.machine);
     requireCliMutation("apps_apply", options.approvalToken, {
@@ -1282,7 +1434,11 @@ appsCommand
       args: cliPlanApprovalArgs({ machine_id: resolvedMachineId, yes: options.yes }, plan),
     });
     const result = runAppsPlan(plan, { apply: true, yes: options.yes });
-    console.log(JSON.stringify(result, null, 2));
+    printJsonOrText(result, renderPlanSummary(result, "steps", {
+      limit: compactLimitOption(options.limit),
+      offset: compactCursorOption(options.cursor),
+      verbose: options.verbose,
+    }), options.json);
   });
 
 program
@@ -1292,8 +1448,11 @@ program
   .option("--apply", "Execute provisioning commands instead of previewing the plan", false)
   .option("--yes", "Confirm execution when using --apply", false)
   .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("--limit <n>", `Maximum steps to show (default ${DEFAULT_COMPACT_LIMIT})`)
+  .option("--cursor <n>", "Step cursor/offset")
+  .option("--verbose", "Include command previews", false)
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string; apply?: boolean; yes?: boolean; approvalToken?: string; json?: boolean }) => {
+  .action((options: { machine?: string; apply?: boolean; yes?: boolean; approvalToken?: string; limit?: string; cursor?: string; verbose?: boolean; json?: boolean }) => {
     if (options.apply) {
       const resolvedMachineId = cliMachineId(options.machine);
       const plan = buildSetupPlan(options.machine);
@@ -1303,11 +1462,19 @@ program
         args: cliPlanApprovalArgs({ machine_id: resolvedMachineId, yes: options.yes }, plan),
       });
       const result = runSetupPlan(plan, { apply: true, yes: options.yes });
-      console.log(JSON.stringify(result, null, 2));
+      printJsonOrText(result, renderPlanSummary(result, "steps", {
+        limit: compactLimitOption(options.limit),
+        offset: compactCursorOption(options.cursor),
+        verbose: options.verbose,
+      }), options.json);
       return;
     }
     const result = buildSetupPlan(options.machine);
-    console.log(JSON.stringify(result, null, 2));
+    printJsonOrText(result, renderPlanSummary(result, "steps", {
+      limit: compactLimitOption(options.limit),
+      offset: compactCursorOption(options.cursor),
+      verbose: options.verbose,
+    }), options.json);
   });
 
 program
@@ -1317,8 +1484,11 @@ program
   .option("--apply", "Execute reconciliation commands instead of previewing the plan", false)
   .option("--yes", "Confirm execution when using --apply", false)
   .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("--limit <n>", `Maximum actions to show (default ${DEFAULT_COMPACT_LIMIT})`)
+  .option("--cursor <n>", "Action cursor/offset")
+  .option("--verbose", "Include command previews", false)
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string; apply?: boolean; yes?: boolean; approvalToken?: string; json?: boolean }) => {
+  .action((options: { machine?: string; apply?: boolean; yes?: boolean; approvalToken?: string; limit?: string; cursor?: string; verbose?: boolean; json?: boolean }) => {
     if (options.apply) {
       const resolvedMachineId = cliMachineId(options.machine);
       const plan = buildSyncPlan(options.machine);
@@ -1328,11 +1498,19 @@ program
         args: cliPlanApprovalArgs({ machine_id: resolvedMachineId, yes: options.yes }, plan),
       });
       const result = runSyncPlan(plan, { apply: true, yes: options.yes });
-      console.log(JSON.stringify(result, null, 2));
+      printJsonOrText(result, renderPlanSummary(result, "actions", {
+        limit: compactLimitOption(options.limit),
+        offset: compactCursorOption(options.cursor),
+        verbose: options.verbose,
+      }), options.json);
       return;
     }
     const result = buildSyncPlan(options.machine);
-    console.log(JSON.stringify(result, null, 2));
+    printJsonOrText(result, renderPlanSummary(result, "actions", {
+      limit: compactLimitOption(options.limit),
+      offset: compactCursorOption(options.cursor),
+      verbose: options.verbose,
+    }), options.json);
   });
 
 program
@@ -1502,13 +1680,20 @@ projectsAssignmentsCommand
   .description("List machine-to-project location assignments")
   .option("--machine <id>", "Filter by machine id")
   .option("--project <id>", "Filter by project/workspace id")
+  .option("--limit <n>", `Maximum assignments to show (default ${DEFAULT_HISTORY_LIMIT})`)
+  .option("--cursor <n>", "Assignment cursor/offset")
+  .option("--all", "Show every assignment row in compact output", false)
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string; project?: string; json?: boolean }) => {
+  .action((options: { machine?: string; project?: string; limit?: string; cursor?: string; all?: boolean; json?: boolean }) => {
     const result = listMachineProjectAssignments({
       machineId: options.machine,
       projectId: options.project,
     });
-    printJsonOrText(result, renderProjectAssignments(result), options.json);
+    printJsonOrText(result, renderProjectAssignments(result, {
+      limit: compactLimitOption(options.limit, "limit", 1000),
+      offset: compactCursorOption(options.cursor),
+      all: options.all,
+    }), options.json);
   });
 
 projectsAssignmentsCommand
@@ -1728,7 +1913,7 @@ program
   .option("-j, --json", "Print JSON output", false)
   .action((options: { left: string; right?: string; json?: boolean }) => {
     const result = diffMachines(options.left, options.right);
-    console.log(JSON.stringify(result, null, 2));
+    printJsonOrText(result, renderDiffSummary(result), options.json);
   });
 
 program
@@ -1739,8 +1924,11 @@ program
   .option("--apply", "Execute backup commands instead of previewing the plan", false)
   .option("--yes", "Confirm execution when using --apply", false)
   .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("--limit <n>", `Maximum steps to show (default ${DEFAULT_COMPACT_LIMIT})`)
+  .option("--cursor <n>", "Step cursor/offset")
+  .option("--verbose", "Include command previews", false)
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { bucket?: string; prefix?: string; apply?: boolean; yes?: boolean; approvalToken?: string; json?: boolean }) => {
+  .action((options: { bucket?: string; prefix?: string; apply?: boolean; yes?: boolean; approvalToken?: string; limit?: string; cursor?: string; verbose?: boolean; json?: boolean }) => {
     if (options.apply) {
       const target = resolveBackupTarget({ bucket: options.bucket, prefix: options.prefix });
       requireCliMutation("backup_apply", options.approvalToken, { resourceId: cliResourceId("backup", target.bucket, target.prefix), args: { bucket: target.bucket, prefix: target.prefix, yes: options.yes } });
@@ -1748,7 +1936,11 @@ program
     const result = options.apply
       ? runBackup(options.bucket, options.prefix, { apply: true, yes: options.yes })
       : buildBackupPlan(options.bucket, options.prefix);
-    console.log(JSON.stringify(result, null, 2));
+    printJsonOrText(result, renderPlanSummary(result, "steps", {
+      limit: compactLimitOption(options.limit),
+      offset: compactCursorOption(options.cursor),
+      verbose: options.verbose,
+    }), options.json);
   });
 
 const certCommand = program.command("cert").description("Manage mkcert-based local SSL certificates");
@@ -1760,11 +1952,18 @@ certCommand
   .option("--apply", "Execute certificate commands instead of previewing them", false)
   .option("--yes", "Confirm execution when using --apply", false)
   .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("--limit <n>", `Maximum steps to show (default ${DEFAULT_COMPACT_LIMIT})`)
+  .option("--cursor <n>", "Step cursor/offset")
+  .option("--verbose", "Include command previews", false)
   .option("-j, --json", "Print JSON output", false)
-  .action((domains: string[], options: { apply?: boolean; yes?: boolean; approvalToken?: string; json?: boolean }) => {
+  .action((domains: string[], options: { apply?: boolean; yes?: boolean; approvalToken?: string; limit?: string; cursor?: string; verbose?: boolean; json?: boolean }) => {
     if (options.apply) requireCliMutation("cert_apply", options.approvalToken, { resourceId: cliResourceId("cert", domains.join(",")), args: { domains, yes: options.yes } });
     const result = options.apply ? runCertPlan(domains, { apply: true, yes: options.yes }) : buildCertPlan(domains);
-    console.log(JSON.stringify(result, null, 2));
+    printJsonOrText(result, renderPlanSummary(result, "steps", {
+      limit: compactLimitOption(options.limit),
+      offset: compactCursorOption(options.cursor),
+      verbose: options.verbose,
+    }), options.json);
   });
 
 const dnsCommand = program.command("dns").description("Manage local domain mappings");
@@ -1781,31 +1980,49 @@ dnsCommand
     const port = parseIntegerOption(options.port, "port", { min: 1, max: 65535 });
     requireCliMutation("dns_add", options.approvalToken, { resourceId: cliResourceId("dns", options.domain), args: { domain: options.domain, port, target_host: options.targetHost } });
     const result = addDomainMapping(options.domain, port, options.targetHost);
-    console.log(JSON.stringify(result, null, 2));
+    printJsonOrText(result, renderDomainMappingsSummary(result), options.json);
   });
 
-dnsCommand.command("list").description("List saved local domain mappings").option("-j, --json", "Print JSON output", false).action(() => {
-  console.log(JSON.stringify(listDomainMappings(), null, 2));
+dnsCommand.command("list")
+  .description("List saved local domain mappings")
+  .option("--limit <n>", `Maximum mappings to show (default ${DEFAULT_HISTORY_LIMIT})`)
+  .option("--cursor <n>", "Mapping cursor/offset")
+  .option("--all", "Show every mapping row in compact output", false)
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { limit?: string; cursor?: string; all?: boolean; json?: boolean }) => {
+    const result = listDomainMappings();
+    printJsonOrText(result, renderDomainMappingsSummary(result, {
+      limit: compactLimitOption(options.limit, "limit", 1000),
+      offset: compactCursorOption(options.cursor),
+      all: options.all,
+    }), options.json);
 });
 
 dnsCommand
   .command("render")
   .description("Render hosts/proxy configuration for a domain")
   .argument("<domain>", "Domain name")
+  .option("--verbose", "Print the full config snippet", false)
   .option("-j, --json", "Print JSON output", false)
-  .action((domain: string) => {
-    console.log(JSON.stringify(renderDomainMapping(domain), null, 2));
+  .action((domain: string, options: { verbose?: boolean; json?: boolean }) => {
+    const result = renderDomainMapping(domain);
+    printJsonOrText(result, renderDomainRenderSummary(result, options.verbose), options.json);
   });
 
 const hostsCommand = program
   .command("hosts")
   .description("Sync fleet machine names into /etc/hosts so machine<NN>:port resolves on the LAN and tailnet");
 
-function printHostsResult(plan: ReturnType<typeof planFleetHosts>, applied: boolean, viaSudo = false): void {
+function printHostsResult(plan: ReturnType<typeof planFleetHosts>, applied: boolean, viaSudo = false, options: { limit?: number; offset?: number; all?: boolean } = {}): void {
+  const page = pageItems(plan.entries, options, DEFAULT_HISTORY_LIMIT);
   console.log(`hosts file: ${plan.hostsPath}`);
   console.log(`local subnets: ${plan.localSubnets.join(", ") || "none"}`);
-  for (const entry of plan.entries) {
+  console.log(`entries: ${page.items.length}/${page.total}`);
+  for (const entry of page.items) {
     console.log(`  ${entry.ip}\t${entry.names.join(" ")}\t(${entry.source})`);
+  }
+  if (page.hasMore) {
+    console.log(`hint: use --cursor ${page.nextOffset} --limit ${page.limit ?? DEFAULT_HISTORY_LIMIT} for more entries, --all for all compact rows, or --json for full output.`);
   }
   if (plan.unresolved.length > 0) {
     console.log(`unresolved: ${plan.unresolved.join(", ")}`);
@@ -1820,28 +2037,42 @@ hostsCommand
   .command("plan", { isDefault: true })
   .description("Preview the managed /etc/hosts block for the fleet (dry run)")
   .option("-j, --json", "Print JSON output", false)
+  .option("--limit <n>", `Maximum entries to show (default ${DEFAULT_HISTORY_LIMIT})`)
+  .option("--cursor <n>", "Entry cursor/offset")
+  .option("--all", "Show every entry row in compact output", false)
   .option("--no-warm", "Skip establishing direct Tailscale paths to discover LAN endpoints")
-  .action((options: { json?: boolean; warm?: boolean }) => {
+  .action((options: { json?: boolean; limit?: string; cursor?: string; all?: boolean; warm?: boolean }) => {
     const plan = planFleetHosts({ warm: options.warm });
     if (options.json) {
       console.log(JSON.stringify(plan, null, 2));
       return;
     }
-    printHostsResult(plan, false);
+    printHostsResult(plan, false, false, {
+      limit: compactLimitOption(options.limit, "limit", 1000),
+      offset: compactCursorOption(options.cursor),
+      all: options.all,
+    });
   });
 
 hostsCommand
   .command("apply")
   .description("Write the managed fleet block into /etc/hosts (uses sudo when required)")
   .option("-j, --json", "Print JSON output", false)
+  .option("--limit <n>", `Maximum entries to show (default ${DEFAULT_HISTORY_LIMIT})`)
+  .option("--cursor <n>", "Entry cursor/offset")
+  .option("--all", "Show every entry row in compact output", false)
   .option("--no-warm", "Skip establishing direct Tailscale paths to discover LAN endpoints")
-  .action((options: { json?: boolean; warm?: boolean }) => {
+  .action((options: { json?: boolean; limit?: string; cursor?: string; all?: boolean; warm?: boolean }) => {
     const result = applyFleetHosts({ warm: options.warm });
     if (options.json) {
       console.log(JSON.stringify(result, null, 2));
       return;
     }
-    printHostsResult(result, true, result.viaSudo);
+    printHostsResult(result, true, result.viaSudo, {
+      limit: compactLimitOption(options.limit, "limit", 1000),
+      offset: compactCursorOption(options.cursor),
+      all: options.all,
+    });
   });
 
 notificationsCommand
@@ -1871,9 +2102,19 @@ notificationsCommand
     printJsonOrText(result, renderNotificationConfigResult(result), options.json);
   });
 
-notificationsCommand.command("list").description("List configured notification channels").option("-j, --json", "Print JSON output", false).action((options: { json?: boolean }) => {
+notificationsCommand.command("list")
+  .description("List configured notification channels")
+  .option("--limit <n>", `Maximum channels to show (default ${DEFAULT_HISTORY_LIMIT})`)
+  .option("--cursor <n>", "Channel cursor/offset")
+  .option("--all", "Show every channel row in compact output", false)
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { limit?: string; cursor?: string; all?: boolean; json?: boolean }) => {
   const result = listNotificationChannels();
-  printJsonOrText(result, renderNotificationConfigResult(result), options.json);
+  printJsonOrText(result, renderNotificationConfigResult(result, {
+    limit: compactLimitOption(options.limit, "limit", 1000),
+    offset: compactCursorOption(options.cursor),
+    all: options.all,
+  }), options.json);
 });
 
 notificationsCommand
@@ -2065,9 +2306,9 @@ clipboardCommand
       return;
     }
     for (const entry of entries) {
-      const preview = entry.content.length > 80 ? `${entry.content.slice(0, 80)}...` : entry.content;
-      console.log(`${chalk.dim(entry.timestamp)} ${entry.sourceMachine.padEnd(12)} ${entry.contentType.padEnd(5)} ${preview.replace(/\n/g, " ")}`);
+      console.log(`${chalk.dim(entry.timestamp)} ${entry.sourceMachine.padEnd(12)} ${entry.contentType.padEnd(5)} ${truncateText(entry.content, 80)}`);
     }
+    console.log("hint: use --limit <n> for more entries or --json for full clipboard history.");
   });
 
 clipboardCommand
@@ -2140,10 +2381,17 @@ installClaudeCommand
   .description("Preview CLI install steps")
   .option("--machine <id>", "Machine identifier")
   .option("--tool <name...>", "CLI tools to install (claude, codex, gemini)")
+  .option("--limit <n>", `Maximum steps to show (default ${DEFAULT_COMPACT_LIMIT})`)
+  .option("--cursor <n>", "Step cursor/offset")
+  .option("--verbose", "Include command previews", false)
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string; tool?: string[]; json?: boolean }) => {
+  .action((options: { machine?: string; tool?: string[]; limit?: string; cursor?: string; verbose?: boolean; json?: boolean }) => {
     const result = buildClaudeInstallPlan(options.machine, options.tool);
-    console.log(JSON.stringify(result, null, 2));
+    printJsonOrText(result, renderPlanSummary(result, "steps", {
+      limit: compactLimitOption(options.limit),
+      offset: compactCursorOption(options.cursor),
+      verbose: options.verbose,
+    }), options.json);
   });
 
 installClaudeCommand
@@ -2153,8 +2401,11 @@ installClaudeCommand
   .option("--tool <name...>", "CLI tools to install (claude, codex, gemini)")
   .option("--yes", "Confirm execution when using apply", false)
   .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("--limit <n>", `Maximum steps to show (default ${DEFAULT_COMPACT_LIMIT})`)
+  .option("--cursor <n>", "Step cursor/offset")
+  .option("--verbose", "Include command previews", false)
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string; tool?: string[]; yes?: boolean; approvalToken?: string; json?: boolean }) => {
+  .action((options: { machine?: string; tool?: string[]; yes?: boolean; approvalToken?: string; limit?: string; cursor?: string; verbose?: boolean; json?: boolean }) => {
     const resolvedMachineId = cliMachineId(options.machine);
     const plan = buildClaudeInstallPlan(options.machine, options.tool);
     requireCliMutation("install_claude_apply", options.approvalToken, {
@@ -2163,7 +2414,11 @@ installClaudeCommand
       args: cliPlanApprovalArgs({ machine_id: resolvedMachineId, tools: options.tool, yes: options.yes }, plan),
     });
     const result = runClaudeInstallPlan(plan, { apply: true, yes: options.yes });
-    console.log(JSON.stringify(result, null, 2));
+    printJsonOrText(result, renderPlanSummary(result, "steps", {
+      limit: compactLimitOption(options.limit),
+      offset: compactCursorOption(options.cursor),
+      verbose: options.verbose,
+    }), options.json);
   });
 
 program
@@ -2173,8 +2428,11 @@ program
   .option("--apply", "Execute installation commands instead of previewing the plan", false)
   .option("--yes", "Confirm execution when using --apply", false)
   .option("--approval-token <token>", "Scoped mutation approval token")
+  .option("--limit <n>", `Maximum steps to show (default ${DEFAULT_COMPACT_LIMIT})`)
+  .option("--cursor <n>", "Step cursor/offset")
+  .option("--verbose", "Include command previews", false)
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string; apply?: boolean; yes?: boolean; approvalToken?: string; json?: boolean }) => {
+  .action((options: { machine?: string; apply?: boolean; yes?: boolean; approvalToken?: string; limit?: string; cursor?: string; verbose?: boolean; json?: boolean }) => {
     if (options.apply) {
       const resolvedMachineId = cliMachineId(options.machine);
       const plan = buildTailscaleInstallPlan(options.machine);
@@ -2184,11 +2442,19 @@ program
         args: cliPlanApprovalArgs({ machine_id: resolvedMachineId, yes: options.yes }, plan),
       });
       const result = runTailscaleInstallPlan(plan, { apply: true, yes: options.yes });
-      console.log(JSON.stringify(result, null, 2));
+      printJsonOrText(result, renderPlanSummary(result, "steps", {
+        limit: compactLimitOption(options.limit),
+        offset: compactCursorOption(options.cursor),
+        verbose: options.verbose,
+      }), options.json);
       return;
     }
     const result = buildTailscaleInstallPlan(options.machine);
-    console.log(JSON.stringify(result, null, 2));
+    printJsonOrText(result, renderPlanSummary(result, "steps", {
+      limit: compactLimitOption(options.limit),
+      offset: compactCursorOption(options.cursor),
+      verbose: options.verbose,
+    }), options.json);
   });
 
 program
@@ -2382,9 +2648,13 @@ program
     console.log(`  ${plan.command}`);
   });
 
-program.command("ports").description("List listening ports on a machine").option("--machine <id>", "Machine identifier").option("-j, --json", "Print JSON output", false).action((options: { machine?: string; json?: boolean }) => {
+program.command("ports").description("List listening ports on a machine").option("--machine <id>", "Machine identifier").option("--limit <n>", `Maximum ports to show (default ${DEFAULT_HISTORY_LIMIT})`).option("--cursor <n>", "Port cursor/offset").option("--all", "Show every port row in compact output", false).option("-j, --json", "Print JSON output", false).action((options: { machine?: string; limit?: string; cursor?: string; all?: boolean; json?: boolean }) => {
   const result = listPorts(options.machine);
-  console.log(JSON.stringify(result, null, 2));
+  printJsonOrText(result, renderPortsSummary(result, {
+    limit: compactLimitOption(options.limit, "limit", 1000),
+    offset: compactCursorOption(options.cursor),
+    all: options.all,
+  }), options.json);
 });
 
 const storageCommand = program.command("storage").description("Sync local machine runtime data with storage PostgreSQL");
@@ -2443,9 +2713,20 @@ storageCommand.command("sync").description("Bidirectional storage sync: pull the
   }
 });
 
-program.command("status").description("Print local machine and storage status").option("--private-metadata", "Print private local paths and machine identifiers", false).option("-j, --json", "Print JSON output", false).action((options: { privateMetadata?: boolean; json?: boolean }) => {
+program.command("status")
+  .description("Print local machine and storage status")
+  .option("--private-metadata", "Print private local paths and machine identifiers", false)
+  .option("--limit <n>", `Maximum machines to show (default ${DEFAULT_COMPACT_LIMIT})`)
+  .option("--cursor <n>", "Machine cursor/offset")
+  .option("--all", "Show every machine row in compact output", false)
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { privateMetadata?: boolean; limit?: string; cursor?: string; all?: boolean; json?: boolean }) => {
   const status = getStatus({ privateMetadata: options.privateMetadata });
-  printJsonOrText(status, renderFleetStatus(status), options.json);
+  printJsonOrText(status, renderFleetStatus(status, {
+    limit: compactLimitOption(options.limit),
+    offset: compactCursorOption(options.cursor),
+    all: options.all,
+  }), options.json);
 });
 
 program

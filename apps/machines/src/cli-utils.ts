@@ -14,6 +14,7 @@ export function parseIntegerOption(value: string, label: string, constraints: { 
 }
 
 export function renderKeyValueTable(entries: Array<[string, string]>): string {
+  if (entries.length === 0) return "";
   const width = entries.reduce((max, [key]) => Math.max(max, key.length), 0);
   return entries.map(([key, value]) => `${key.padEnd(width)}  ${value}`).join("\n");
 }
