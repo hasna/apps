@@ -1,5 +1,5 @@
 /**
- * PostgreSQL migrations for open-prompts cloud sync.
+ * PostgreSQL migrations for open-prompts remote storage sync.
  *
  * Equivalent to the SQLite schema in database.ts, translated for PostgreSQL.
  */

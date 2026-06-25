@@ -31,15 +31,21 @@ prompts-mcp
 prompts-serve
 ```
 
-## Cloud Sync
+## Storage Sync
 
-This package supports cloud sync via `@hasna/cloud`:
+This package has native local/remote sync. Local data stays in SQLite under
+`~/.hasna/prompts/`; remote sync uses PostgreSQL when
+`HASNA_PROMPTS_DATABASE_URL` is set or `~/.hasna/prompts/storage/config.json` is
+configured.
 
 ```bash
-cloud setup
-cloud sync push --service prompts
-cloud sync pull --service prompts
+prompts storage status
+prompts storage migrate
+prompts storage push
+prompts storage pull
 ```
+
+Programmatic storage helpers are available from `@hasna/prompts/storage`.
 
 ## Data Directory
 

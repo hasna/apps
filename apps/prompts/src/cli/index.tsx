@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { Command } from "commander"
+import { registerEventsCommands } from "@hasna/events/commander"
 import chalk from "chalk"
 import { createRequire } from "module"
 import { listCollections, movePrompt } from "../db/collections.js"
@@ -16,6 +17,7 @@ import { registerPromptCommands } from "./commands/prompts.js"
 import { registerVersionCommands } from "./commands/versions.js"
 import { registerQolCommands } from "./commands/qol.js"
 import { registerConfigCommands } from "./commands/config.js"
+import { registerStorageCommands } from "./commands/storage.js"
 
 const require = createRequire(import.meta.url)
 // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -40,6 +42,9 @@ registerQolCommands(program)
 
 // ── config management commands ────────────────────────────────────────────────
 registerConfigCommands(program)
+
+// ── storage sync ──────────────────────────────────────────────────────────────
+registerStorageCommands(program)
 
 // ── collections ───────────────────────────────────────────────────────────────
 program
@@ -723,5 +728,7 @@ scheduleCmd
       for (const r of runs) console.log(`  ${r}`)
     } catch (e) { handleError(program, e) }
   })
+registerEventsCommands(program, { source: "prompts" });
+
 
 program.parse()

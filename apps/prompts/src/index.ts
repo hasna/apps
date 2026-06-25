@@ -5,6 +5,39 @@ export { listCollections, getCollection, ensureCollection, movePrompt } from "./
 export { registerAgent, listAgents } from "./db/agents.js"
 export { getDatabase, getDbPath } from "./db/database.js"
 export { createProject, getProject, listProjects, deleteProject } from "./db/projects.js"
+export { PgAdapterAsync } from "./db/remote-storage.js"
+export {
+  PROMPTS_STORAGE_ENV,
+  PROMPTS_STORAGE_FALLBACK_ENV,
+  PROMPTS_STORAGE_MODE_ENV,
+  PROMPTS_STORAGE_MODE_FALLBACK_ENV,
+  STORAGE_DATABASE_ENV,
+  STORAGE_MODE_ENV,
+  getConnectionString,
+  getStorageDatabaseEnv,
+  getStorageDatabaseEnvName,
+  getStorageConfig,
+  getStorageConnectionString,
+  getStorageDatabaseUrl,
+  type StorageEnv,
+  type StorageConfig,
+  type StorageMode,
+} from "./db/storage-config.js"
+export {
+  PROMPTS_STORAGE_TABLES,
+  STORAGE_TABLES,
+  getStorageStatus,
+  getStoragePg,
+  runStorageMigrations,
+  pushStorageChanges,
+  pullStorageChanges,
+  syncStorageChanges,
+  parseStorageTables,
+  type StorageStatus,
+  type StorageSyncResult,
+  type SyncResult,
+} from "./db/storage-sync.js"
+export { applyPgMigrations, type PgMigrationResult } from "./db/pg-migrate.js"
 
 // Search
 export { searchPrompts, searchPromptsSlim, findSimilar } from "./lib/search.js"

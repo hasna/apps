@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
-import { registerCloudTools } from "@hasna/cloud"
 import { z } from "zod"
 import { getPrompt, listPrompts, listPromptsSlim, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats, pinPrompt, setNextPrompt, setExpiry, getTrending, promptToSaveResult } from "../db/prompts.js"
 import { listVersions, restoreVersion } from "../db/versions.js"
@@ -19,6 +18,7 @@ import { validateCron, getNextRunTime } from "../lib/cron.js"
 import { diffTexts, formatDiff } from "../lib/diff.js"
 import { lintAll } from "../lib/lint.js"
 import { runAudit } from "../lib/audit.js"
+import { registerPromptsStorageTools } from "./storage-tools.js"
 
 const server = new McpServer({ name: "open-prompts", version: "0.1.0" })
 
@@ -1321,5 +1321,5 @@ server.tool(
 );
 
 const transport = new StdioServerTransport()
-registerCloudTools(server, "prompts")
+registerPromptsStorageTools(server)
 await server.connect(transport)

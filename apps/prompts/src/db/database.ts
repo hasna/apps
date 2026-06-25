@@ -1,4 +1,4 @@
-import { SqliteAdapter as Database } from "@hasna/cloud"
+import { SqliteAdapter as Database } from "./sqlite-adapter.js"
 import { join } from "path"
 import { existsSync, mkdirSync, cpSync } from "fs"
 
