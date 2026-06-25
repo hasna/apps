@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { registerEventsCommands } from "@hasna/events/commander";
 import chalk from "chalk";
 import { createOrg, getOrg, getOrgBySlug, listOrgs, updateOrg, deleteOrg } from "../db/orgs.js";
 import { registerAgent, getAgentByName, listAgents, heartbeat, updateAgent, deleteAgent } from "../db/agents.js";
@@ -7,13 +8,15 @@ import { createEvent, getEvent, listEvents, updateEvent, deleteEvent, findConfli
 import { createAttendee, getAttendeesForEvent, updateAttendee, deleteAttendee } from "../db/attendees.js";
 import { getAvailabilityForAgent, upsertAgentAvailability, deleteAvailability } from "../db/availability.js";
 import { createMembership, getMembershipsForOrg, getOrgsForAgent, deleteMembershipByAgentAndOrg } from "../db/memberships.js";
+import { registerStorageCommands } from "./storage.js";
+import { VERSION } from "../version.js";
 
 const program = new Command();
 
 program
   .name("calendar")
   .description("Universal calendar management for AI coding agents")
-  .version("0.1.0");
+  .version(VERSION);
 
 // Global flags
 program.option("--agent <name>", "Agent name");
@@ -415,8 +418,12 @@ program
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+registerStorageCommands(program);
+
 function output(text: string) {
   console.log(text);
 }
+registerEventsCommands(program, { source: "calendar" });
+
 
 program.parse();

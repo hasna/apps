@@ -10,10 +10,12 @@ import {
   getAvailabilityForAgent, upsertAgentAvailability,
   createMembership, getMembershipsForOrg, getOrgsForAgent,
 } from "../index.js";
+import { getStorageStatus, storagePull, storagePush, storageSync } from "../db/storage-sync.js";
+import { VERSION } from "../version.js";
 
 const server = new McpServer({
   name: "open-calendar",
-  version: "0.1.0",
+  version: VERSION,
 });
 
 // ── Org tools ────────────────────────────────────────────────────────────────
@@ -316,6 +318,36 @@ server.tool("bootstrap",
     const events = calendars.length > 0 ? listEvents({ org_id: orgs[0]!.org_id, after: now, limit: 5 }) : [];
     return { content: [{ type: "text", text: JSON.stringify({ agent, orgs, calendars, upcoming: events }) }] };
   },
+);
+
+// ── Storage tools ───────────────────────────────────────────────────────────
+
+function storageResult(value: unknown) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
+}
+
+server.tool("storage_status",
+  "Show calendar storage sync configuration and local sync history",
+  {},
+  async () => storageResult(getStorageStatus()),
+);
+
+server.tool("storage_push",
+  "Push local calendar data to storage PostgreSQL",
+  { tables: z.array(z.string()).optional() },
+  async ({ tables }) => storageResult(await storagePush(tables ? { tables } : undefined)),
+);
+
+server.tool("storage_pull",
+  "Pull calendar data from storage PostgreSQL to local SQLite",
+  { tables: z.array(z.string()).optional() },
+  async ({ tables }) => storageResult(await storagePull(tables ? { tables } : undefined)),
+);
+
+server.tool("storage_sync",
+  "Bidirectional calendar sync: pull then push",
+  { tables: z.array(z.string()).optional() },
+  async ({ tables }) => storageResult(await storageSync(tables ? { tables } : undefined)),
 );
 
 // ── Start server ─────────────────────────────────────────────────────────────

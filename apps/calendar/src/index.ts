@@ -2,6 +2,9 @@ export * from "./types/index.js";
 
 // Database
 export { getDatabase, closeDatabase, resetDatabase } from "./db/database.js";
+export * from "./db/storage-sync.js";
+export * from "./db/remote-storage.js";
+export * from "./db/pg-migrations.js";
 
 // CRUD
 export * from "./db/orgs.js";
