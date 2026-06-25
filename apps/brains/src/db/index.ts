@@ -1,6 +1,6 @@
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
-import { SqliteAdapter } from "@hasna/cloud";
+import { SqliteAdapter } from "./sqlite-adapter.js";
 import { mkdirSync, existsSync, readdirSync, copyFileSync, statSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { homedir } from "os";
@@ -40,12 +40,16 @@ function resolveDefaultDbPath(): string {
 const DEFAULT_DB_PATH = resolveDefaultDbPath();
 
 function ensureDir(filePath: string) {
+  if (filePath === ":memory:" || filePath.startsWith("file::memory:")) return;
   mkdirSync(dirname(filePath), { recursive: true });
 }
 
+export function getBrainsDbPath(dbPath?: string): string {
+  return dbPath ?? process.env["HASNA_BRAINS_DB_PATH"] ?? process.env["BRAINS_DB_PATH"] ?? DEFAULT_DB_PATH;
+}
 
 export function getDb(dbPath?: string) {
-  const resolvedPath = dbPath ?? DEFAULT_DB_PATH;
+  const resolvedPath = getBrainsDbPath(dbPath);
   ensureDir(resolvedPath);
   const adapter = new SqliteAdapter(resolvedPath);
   const sqlite = adapter.raw;
@@ -113,7 +117,54 @@ export function getDb(dbPath?: string) {
 
 /** Get a raw SqliteAdapter for direct SQL queries (e.g. feedback table). */
 export function getRawDb(dbPath?: string): SqliteAdapter {
-  const resolvedPath = dbPath ?? DEFAULT_DB_PATH;
+  const resolvedPath = getBrainsDbPath(dbPath);
   ensureDir(resolvedPath);
-  return new SqliteAdapter(resolvedPath);
+  const adapter = new SqliteAdapter(resolvedPath);
+  adapter.raw.exec(`
+    CREATE TABLE IF NOT EXISTS fine_tuned_models (
+      id TEXT PRIMARY KEY,
+      base_model TEXT NOT NULL,
+      name TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      fine_tune_job_id TEXT,
+      display_name TEXT,
+      description TEXT,
+      collection TEXT,
+      tags TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS training_jobs (
+      id TEXT PRIMARY KEY,
+      model_id TEXT NOT NULL REFERENCES fine_tuned_models(id),
+      provider TEXT NOT NULL,
+      status TEXT NOT NULL,
+      started_at INTEGER NOT NULL,
+      finished_at INTEGER,
+      metrics TEXT,
+      error TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS training_datasets (
+      id TEXT PRIMARY KEY,
+      source TEXT NOT NULL,
+      file_path TEXT NOT NULL,
+      example_count INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      used_in_job_id TEXT REFERENCES training_jobs(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS feedback (
+      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+      message TEXT NOT NULL,
+      email TEXT,
+      category TEXT DEFAULT 'general',
+      version TEXT,
+      machine_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+  return adapter;
 }

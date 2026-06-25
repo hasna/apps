@@ -3,4 +3,9 @@
 
 export * from "./types/index.js";
 export * from "./db/index.js";
+export * from "./db/cloud-config.js";
+export * from "./db/cloud-sync.js";
+export * from "./db/pg-migrate.js";
+export * from "./db/remote-storage.js";
+export * from "./db/sqlite-adapter.js";
 export * from "./lib/index.js";

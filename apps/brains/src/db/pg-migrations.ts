@@ -1,5 +1,5 @@
 /**
- * PostgreSQL migrations for open-brains cloud sync.
+ * PostgreSQL migrations for open-brains remote storage sync.
  *
  * Equivalent to the SQLite schema in schema.ts + index.ts, translated for PostgreSQL.
  */
@@ -45,7 +45,7 @@ export const PG_MIGRATIONS: string[] = [
 
   // Migration 4: feedback table
   `CREATE TABLE IF NOT EXISTS feedback (
-    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+    id TEXT PRIMARY KEY DEFAULT md5(random()::text || clock_timestamp()::text),
     message TEXT NOT NULL,
     email TEXT,
     category TEXT DEFAULT 'general',

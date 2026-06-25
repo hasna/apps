@@ -19,7 +19,7 @@ import { gatherFromSessions } from "../lib/gatherers/sessions.js";
 import type { TrainingExample } from "../lib/gatherers/types.js";
 import { getPackageVersion } from "../lib/package-metadata.js";
 import { McpGatherSchema, McpFinetuneStartSchema, McpFinetuneStatusSchema } from "../lib/schemas.js";
-import { registerCloudTools } from "@hasna/cloud";
+import { BRAINS_STORAGE_TOOLS, handleBrainsStorageTool } from "./cloud-tools.js";
 
 // --- helpers ---
 
@@ -235,6 +235,7 @@ export function createMcpServer() {
           properties: {},
         },
       },
+      ...BRAINS_STORAGE_TOOLS,
     ],
   }));
 
@@ -242,6 +243,9 @@ export function createMcpServer() {
     const { name, arguments: args } = request.params;
 
     try {
+      const storageResult = await handleBrainsStorageTool(name, args);
+      if (storageResult) return storageResult;
+
       switch (name) {
       case "list_models": {
         const db = getDb();
@@ -564,7 +568,6 @@ export function createMcpServer() {
 
 export async function startMcpServer(transport = new StdioServerTransport()) {
   const server = createMcpServer();
-  registerCloudTools(server, "brains");
   await server.connect(transport);
   return server;
 }

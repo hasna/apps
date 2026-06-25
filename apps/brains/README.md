@@ -35,15 +35,19 @@ brains-mcp
 brains-serve
 ```
 
-## Cloud Sync
+## Storage Sync
 
-This package supports cloud sync via `@hasna/cloud`:
+This package supports package-native local/remote storage sync:
 
 ```bash
-cloud setup
-cloud sync push --service brains
-cloud sync pull --service brains
+brains storage status
+brains storage push
+brains storage pull
 ```
+
+Set `HASNA_BRAINS_DATABASE_URL` for a direct PostgreSQL connection, or configure `~/.hasna/brains/storage/config.json` for the brains RDS host settings.
+Deprecated migration aliases are still accepted: `HASNA_BRAINS_CLOUD_DATABASE_URL`,
+`OPEN_BRAINS_CLOUD_DATABASE_URL`, and `BRAINS_CLOUD_DATABASE_URL`.
 
 ## Data Directory
 

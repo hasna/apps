@@ -11,6 +11,7 @@ import { getDb, getRawDb, fineTunedModels, trainingJobs, trainingDatasets } from
 import * as openaiProvider from "../lib/providers/openai.js";
 import { ThinkerLabsProvider } from "../lib/providers/thinker-labs.js";
 import { printTable, printStatus, printJson, printError, printSuccess, printInfo } from "./ui.js";
+import { registerStorageCommands } from "./cloud.js";
 
 const program = new Command();
 
@@ -18,6 +19,8 @@ program
   .name("brains")
   .description("Fine-tuned model tracker and trainer")
   .version("0.0.1");
+
+registerStorageCommands(program);
 
 // ── models ────────────────────────────────────────────────────────────────────
 
