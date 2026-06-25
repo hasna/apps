@@ -26,6 +26,7 @@ function rowToSearch(row: SearchRow): Search {
 
 export function createSearch(
   data: {
+    id?: string;
     query: string;
     providers: SearchProviderName[];
     profileId?: string | null;
@@ -35,7 +36,7 @@ export function createSearch(
   db?: Database,
 ): Search {
   const d = db ?? getDb();
-  const id = generateId();
+  const id = data.id ?? generateId();
   const now = new Date().toISOString();
 
   d.prepare(

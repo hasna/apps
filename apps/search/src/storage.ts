@@ -9,6 +9,7 @@ export {
   getStorageConnectionString,
   getStorageDatabaseEnv,
   getStorageDatabaseEnvName,
+  getStorageConfigPath,
   getStorageDatabaseUrl,
 } from "./db/storage-config.js";
 export type { StorageConfig, StorageEnv, StorageMode } from "./db/storage-config.js";

@@ -12,11 +12,13 @@ describe("CLI", () => {
     await proc.exited;
     expect(output).toContain("Unified search");
     expect(output).toContain("query");
+    expect(output).toContain("events");
     expect(output).toContain("find");
     expect(output).toContain("index");
     expect(output).toContain("history");
     expect(output).toContain("providers");
     expect(output).toContain("profiles");
+    expect(output).toContain("webhooks");
   });
 
   it("should show version with --version", async () => {

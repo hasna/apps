@@ -1,13 +1,27 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
+import { registerEventsCommands } from "@hasna/events/commander";
 import chalk from "chalk";
 import { registerStorageCommands } from "./storage.js";
 import { registerLocalCommands } from "./local.js";
-import { PROVIDER_NAMES, type SearchProviderName, type ExportFormat } from "../types/index.js";
+import {
+  PROVIDER_NAMES,
+  validateSearchProviderNames,
+  type SearchProviderName,
+  type ExportFormat,
+} from "../types/index.js";
 import { unifiedSearch, searchSingleProvider } from "../lib/search.js";
 import { youtubeDeepSearch } from "../lib/youtube-deep.js";
 import { exportResults } from "../lib/export.js";
-import { getConfig, setConfigValue, resetConfig } from "../lib/config.js";
+import {
+  getConfig,
+  getConfigDiagnostics,
+  getConfigDir,
+  getConfigPath,
+  setConfigValue,
+  resetConfig,
+  hasConfigKey,
+} from "../lib/config.js";
 import { listSearches, getSearch, deleteSearch, getSearchStats } from "../db/searches.js";
 import { listResults } from "../db/results.js";
 import {
@@ -30,18 +44,94 @@ import {
   deleteProfile,
   getProfileByName,
 } from "../db/profiles.js";
+import { getIndexDbPath } from "../db/index-db.js";
+import { getDbPath } from "../db/database.js";
 
 const pkg = require("../../package.json") as { version: string };
 
 const program = new Command();
 
+function fail(message: string): void {
+  console.error(chalk.red(message));
+  process.exitCode = 1;
+}
+
+function parseProviderList(value: string | undefined): SearchProviderName[] | undefined {
+  if (!value) return undefined;
+  return validateSearchProviderNames(
+    value
+      .split(",")
+      .map((provider) => provider.trim())
+      .filter(Boolean),
+  );
+}
+
+function parseOptionalRateLimit(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`Invalid --rate-limit: ${value} (expected an integer >= 0)`);
+  }
+  return parsed;
+}
+
+function parseConfigInput(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
 program
   .name("search")
   .version(pkg.version)
+  .argument("[query...]", "Search query")
   .description("Unified search — local file index + 12 web providers, one interface");
 
 registerStorageCommands(program);
 registerLocalCommands(program);
+registerEventsCommands(program, { source: "search" });
+
+program
+  .command("doctor")
+  .description("Check local search configuration and storage paths")
+  .option("--json", "Output as JSON")
+  .action((opts) => {
+    const diagnostics = getConfigDiagnostics();
+    const providers = listProviders().map((provider) => ({
+      name: provider.name,
+      enabled: provider.enabled,
+      configured: isProviderConfigured(provider),
+    }));
+    const report = {
+      ok: diagnostics.valid,
+      dataDir: getConfigDir(),
+      configPath: getConfigPath(),
+      config: diagnostics,
+      dataDbPath: getDbPath(),
+      indexDbPath: getIndexDbPath(),
+      providers,
+    };
+
+    if (opts.json) {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+
+    console.log(chalk.bold("Search Doctor"));
+    console.log(`  Data dir:  ${report.dataDir}`);
+    console.log(`  Config:    ${report.configPath}`);
+    console.log(`  History DB: ${report.dataDbPath}`);
+    console.log(`  Index DB:   ${report.indexDbPath}`);
+    console.log(
+      `  Config status: ${
+        diagnostics.valid ? chalk.green("valid") : chalk.red(`invalid (${diagnostics.errors.join("; ")})`)
+      }`,
+    );
+    console.log(`  Providers enabled: ${providers.filter((provider) => provider.enabled).length}/${providers.length}`);
+    if (!diagnostics.valid) process.exitCode = 1;
+  });
 
 // --- Main search command ---
 program
@@ -52,19 +142,19 @@ program
   .option("--profile <name>", "Use a search profile")
   .option("-l, --limit <n>", "Max results per provider", "10")
   .option("-f, --format <format>", "Output format: table, json", "table")
+  .option("--smart", "Route the query to the best configured providers with the smart router")
   .option("--no-dedup", "Disable deduplication")
   .action(async (queryParts: string[], opts) => {
     const query = queryParts.join(" ");
-    const providers = opts.providers
-      ? (opts.providers.split(",") as SearchProviderName[])
-      : undefined;
 
     try {
+      const providers = parseProviderList(opts.providers);
       const response = await unifiedSearch(query, {
         providers,
         profile: opts.profile,
         options: { limit: parseInt(opts.limit) },
         dedup: opts.dedup,
+        smart: opts.smart,
       });
 
       if (opts.format === "json") {
@@ -154,7 +244,7 @@ history
   .action((id: string) => {
     const search = getSearch(id);
     if (!search) {
-      console.error(chalk.red(`Search not found: ${id}`));
+      fail(`Search not found: ${id}`);
       return;
     }
     console.log(chalk.bold(`Query: ${search.query}`));
@@ -171,7 +261,7 @@ history
     if (deleteSearch(id)) {
       console.log(chalk.green("Search deleted"));
     } else {
-      console.error(chalk.red(`Search not found: ${id}`));
+      fail(`Search not found: ${id}`);
     }
   });
 
@@ -197,11 +287,13 @@ saved
   .option("--profile <name>", "Search profile")
   .action((name: string, queryParts: string[], opts) => {
     const query = queryParts.join(" ");
-    const providers = opts.providers
-      ? (opts.providers.split(",") as SearchProviderName[])
-      : [];
-    const s = createSavedSearch({ name, query, providers, profileId: opts.profile });
-    console.log(chalk.green(`Saved search created: ${s.id}`));
+    try {
+      const providers = parseProviderList(opts.providers) ?? [];
+      const s = createSavedSearch({ name, query, providers, profileId: opts.profile });
+      console.log(chalk.green(`Saved search created: ${s.id}`));
+    } catch (err) {
+      fail(`Error: ${err instanceof Error ? err.message : err}`);
+    }
   });
 
 saved
@@ -209,7 +301,7 @@ saved
   .action(async (id: string) => {
     const s = getSavedSearch(id);
     if (!s) {
-      console.error(chalk.red(`Saved search not found: ${id}`));
+      fail(`Saved search not found: ${id}`);
       return;
     }
     updateSavedSearchLastRun(id);
@@ -226,7 +318,7 @@ saved
     if (deleteSavedSearch(id)) {
       console.log(chalk.green("Saved search deleted"));
     } else {
-      console.error(chalk.red(`Not found: ${id}`));
+      fail(`Not found: ${id}`);
     }
   });
 
@@ -255,7 +347,7 @@ providers
     if (enableProvider(name)) {
       console.log(chalk.green(`Provider ${name} enabled`));
     } else {
-      console.error(chalk.red(`Provider not found: ${name}`));
+      fail(`Provider not found: ${name}`);
     }
   });
 
@@ -265,7 +357,7 @@ providers
     if (disableProvider(name)) {
       console.log(chalk.green(`Provider ${name} disabled`));
     } else {
-      console.error(chalk.red(`Provider not found: ${name}`));
+      fail(`Provider not found: ${name}`);
     }
   });
 
@@ -274,13 +366,18 @@ providers
   .option("--key-env <env>", "API key env var name")
   .option("--rate-limit <n>", "Requests per minute")
   .action((name: string, opts) => {
-    const updates: Record<string, unknown> = {};
-    if (opts.keyEnv) updates.apiKeyEnv = opts.keyEnv;
-    if (opts.rateLimit) updates.rateLimit = parseInt(opts.rateLimit);
-    if (updateProvider(name, updates)) {
-      console.log(chalk.green(`Provider ${name} updated`));
-    } else {
-      console.error(chalk.red(`Provider not found: ${name}`));
+    try {
+      const updates: { apiKeyEnv?: string; rateLimit?: number } = {};
+      if (opts.keyEnv) updates.apiKeyEnv = opts.keyEnv;
+      const rateLimit = parseOptionalRateLimit(opts.rateLimit);
+      if (rateLimit !== undefined) updates.rateLimit = rateLimit;
+      if (updateProvider(name, updates)) {
+        console.log(chalk.green(`Provider ${name} updated`));
+      } else {
+        fail(`Provider not found: ${name}`);
+      }
+    } catch (err) {
+      fail(`Error: ${err instanceof Error ? err.message : err}`);
     }
   });
 
@@ -301,11 +398,13 @@ profiles
   .option("-p, --providers <providers>", "Comma-separated providers")
   .option("-d, --description <desc>", "Description")
   .action((name: string, opts) => {
-    const providerList = opts.providers
-      ? (opts.providers.split(",") as SearchProviderName[])
-      : [];
-    const p = createProfile({ name, providers: providerList, description: opts.description });
-    console.log(chalk.green(`Profile created: ${p.id}`));
+    try {
+      const providerList = parseProviderList(opts.providers) ?? [];
+      const p = createProfile({ name, providers: providerList, description: opts.description });
+      console.log(chalk.green(`Profile created: ${p.id}`));
+    } catch (err) {
+      fail(`Error: ${err instanceof Error ? err.message : err}`);
+    }
   });
 
 profiles
@@ -314,7 +413,7 @@ profiles
     if (deleteProfile(id)) {
       console.log(chalk.green("Profile deleted"));
     } else {
-      console.error(chalk.red(`Profile not found: ${id}`));
+      fail(`Profile not found: ${id}`);
     }
   });
 
@@ -324,7 +423,7 @@ profiles
     const query = queryParts.join(" ");
     const profile = getProfileByName(name);
     if (!profile) {
-      console.error(chalk.red(`Profile not found: ${name}`));
+      fail(`Profile not found: ${name}`);
       return;
     }
     const response = await unifiedSearch(query, { profile: name });
@@ -347,6 +446,7 @@ program
       }
     } catch (err) {
       console.error(chalk.red(`Error: ${err instanceof Error ? err.message : err}`));
+      process.exitCode = 1;
     }
   });
 
@@ -354,10 +454,18 @@ program
 const config = program.command("config").description("Configuration");
 
 config.command("get [key]").action((key?: string) => {
+  const diagnostics = getConfigDiagnostics();
+  if (!diagnostics.valid) {
+    console.error(chalk.yellow(`Warning: invalid config at ${diagnostics.path}; using defaults.`));
+    for (const error of diagnostics.errors) console.error(chalk.yellow(`  ${error}`));
+  }
   const cfg = getConfig();
   if (key) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const value = (cfg as any)[key];
+    if (!hasConfigKey(key)) {
+      fail(`Unknown config key: ${key}`);
+      return;
+    }
+    const value = cfg[key];
     console.log(JSON.stringify(value, null, 2));
   } else {
     console.log(JSON.stringify(cfg, null, 2));
@@ -368,12 +476,14 @@ config
   .command("set <key> <value>")
   .action((key: string, value: string) => {
     try {
-      const parsed = JSON.parse(value);
-      setConfigValue(key as keyof typeof import("../types/index.js").DEFAULT_CONFIG, parsed);
-    } catch {
-      setConfigValue(key as keyof typeof import("../types/index.js").DEFAULT_CONFIG, value);
+      if (!hasConfigKey(key)) {
+        throw new Error(`Unknown config key: ${key}`);
+      }
+      setConfigValue(key, parseConfigInput(value));
+      console.log(chalk.green(`Config ${key} updated`));
+    } catch (err) {
+      fail(`Error: ${err instanceof Error ? err.message : err}`);
     }
-    console.log(chalk.green(`Config ${key} updated`));
   });
 
 config.command("reset").action(() => {
@@ -435,11 +545,10 @@ function printResults(
 }
 
 // Default action: if first arg isn't a known command, treat it as a search query
-program.action(async (_, cmd) => {
-  const args = cmd.args;
-  if (args.length > 0) {
+program.action(async (queryParts: string[] = []) => {
+  if (queryParts.length > 0) {
     // Treat as search query
-    const query = args.join(" ");
+    const query = queryParts.join(" ");
     try {
       const response = await unifiedSearch(query);
       printResults(response.results, response.search.duration, response.errors);

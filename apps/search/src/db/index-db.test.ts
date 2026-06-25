@@ -12,16 +12,18 @@ describe("index db", () => {
     expect(tables).toContain("index_roots");
     expect(tables).toContain("files");
     expect(tables).toContain("files_fts");
+    expect(tables).toContain("file_content_grams");
     expect(tables).toContain("file_content_fts");
     expect(tables).toContain("_migrations");
   });
 
   test("migrations are idempotent", () => {
     const db = getIndexDbForTesting();
+    const before = db.query("SELECT COUNT(*) as c FROM _migrations").get() as { c: number };
     const { runIndexMigrations } = require("./index-migrations.js");
     runIndexMigrations(db);
     const count = db.query("SELECT COUNT(*) as c FROM _migrations").get() as { c: number };
-    expect(count.c).toBe(1);
+    expect(count.c).toBe(before.c);
   });
 
   test("files_fts trigram supports substring matching via triggers", () => {

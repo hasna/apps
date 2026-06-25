@@ -14,6 +14,7 @@ export {
   getStorageConnectionString,
   getStorageDatabaseEnv,
   getStorageDatabaseEnvName,
+  getStorageConfigPath,
   getStorageDatabaseUrl,
   type StorageEnv,
   type StorageConfig,
@@ -39,10 +40,27 @@ export { getProvider, listProviders, enableProvider, disableProvider, updateProv
 export { getProfile, getProfileByName, listProfiles, createProfile, deleteProfile } from "./db/profiles.js";
 
 // Config
-export { getConfig, setConfig, resetConfig, getConfigValue, setConfigValue } from "./lib/config.js";
+export {
+  getConfig,
+  getConfigDir,
+  getConfigPath,
+  getConfigDiagnostics,
+  setConfig,
+  resetConfig,
+  getConfigValue,
+  setConfigValue,
+} from "./lib/config.js";
 
 // Search engine
 export { unifiedSearch, searchSingleProvider } from "./lib/search.js";
+export { clearRouterCache, routeSearchProviders, routeSearchProvidersHeuristic } from "./lib/router.js";
+export {
+  DEFAULT_ROUTER_EVAL_CASES,
+  evaluateRouterHeuristic,
+  type RouterEvalCase,
+  type RouterEvalReport,
+  type RouterEvalResult,
+} from "./lib/router-eval.js";
 export { exportResults } from "./lib/export.js";
 
 // Local file index
@@ -57,6 +75,7 @@ export {
   hasReadyRoot,
   refreshStaleRoots,
   autoRefreshStaleRoots,
+  scheduleAutoRefreshStaleRoots,
   normalizeRootPath,
   type IndexRoot,
   type IndexStats,
@@ -76,3 +95,9 @@ export {
   type FindOptions,
   type FindResponse,
 } from "./lib/local/find.js";
+export {
+  benchmarkLocalSearch,
+  type LocalBenchmarkOptions,
+  type LocalBenchmarkReport,
+  type LocalBenchmarkRow,
+} from "./lib/local/benchmark.js";

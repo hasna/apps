@@ -1,6 +1,6 @@
 import type { SearchOptions } from "../../types/index.js";
 import type { SearchProvider, RawSearchResult } from "./types.js";
-import { hasReadyRoot, autoRefreshStaleRoots } from "../local/indexer.js";
+import { hasReadyRoot, scheduleAutoRefreshStaleRoots } from "../local/indexer.js";
 import { searchFileContent } from "../local/query.js";
 
 export class ContentProvider implements SearchProvider {
@@ -12,7 +12,7 @@ export class ContentProvider implements SearchProvider {
   }
 
   async search(query: string, options?: SearchOptions): Promise<RawSearchResult[]> {
-    autoRefreshStaleRoots();
+    scheduleAutoRefreshStaleRoots();
     const hits = searchFileContent(query, { limit: options?.limit ?? 10 });
 
     return hits.map((hit) => ({

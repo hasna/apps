@@ -14,6 +14,49 @@ import { createSearch, updateSearchResults } from "../db/searches.js";
 import { createResults } from "../db/results.js";
 import { getProfileByName } from "../db/profiles.js";
 import { listProviders as listDbProviders, updateProviderLastUsed } from "../db/providers.js";
+import { routeSearchProviders } from "./router.js";
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise;
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function allSettledLimited<T, R>(
+  items: T[],
+  concurrency: number,
+  task: (item: T) => Promise<R>,
+): Promise<Array<PromiseSettledResult<R>>> {
+  const results: Array<PromiseSettledResult<R>> = new Array(items.length);
+  let next = 0;
+
+  async function worker(): Promise<void> {
+    while (next < items.length) {
+      const index = next++;
+      const item = items[index]!;
+      try {
+        results[index] = { status: "fulfilled", value: await task(item) };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+    }
+  }
+
+  const workerCount = Math.min(Math.max(1, Math.floor(concurrency)), items.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
 
 export async function unifiedSearch(
   query: string,
@@ -22,6 +65,7 @@ export async function unifiedSearch(
     profile?: string;
     options?: SearchOptions;
     dedup?: boolean;
+    smart?: boolean;
     db?: Database;
   } = {},
 ): Promise<UnifiedSearchResponse> {
@@ -31,9 +75,10 @@ export async function unifiedSearch(
 
   // Resolve which providers to use
   let providerNames = opts.providers ?? [];
+  const smartProfile = opts.profile === "smart";
 
   // If a profile is specified, use its providers
-  if (opts.profile) {
+  if (opts.profile && !smartProfile) {
     const profile = getProfileByName(opts.profile, db);
     if (profile) {
       providerNames = profile.providers;
@@ -57,10 +102,23 @@ export async function unifiedSearch(
   // request for e.g. ["files"] with no index roots fails visibly.
   const errors: Array<{ provider: SearchProviderName; error: string }> = [];
   const explicitRequest = (opts.providers?.length ?? 0) > 0 || Boolean(opts.profile);
-  const activeProviders = providerNames.filter((name) => {
+  const routingRequested = opts.smart === true || smartProfile || (!explicitRequest && config.router.enabled);
+  const reportDroppedProviders = explicitRequest || routingRequested;
+  const dbProviderMap = new Map(listDbProviders(db).map((provider) => [provider.name, provider]));
+  let activeProviders = providerNames.filter((name) => {
     try {
+      const dbProvider = dbProviderMap.get(name);
+      if (dbProvider && !dbProvider.enabled) {
+        if (reportDroppedProviders) {
+          errors.push({
+            provider: name,
+            error: "provider disabled — enable it before searching",
+          });
+        }
+        return false;
+      }
       if (getProvider(name).isConfigured()) return true;
-      if (explicitRequest) {
+      if (reportDroppedProviders) {
         errors.push({
           provider: name,
           error: LOCAL_PROVIDER_NAMES.has(name)
@@ -69,24 +127,45 @@ export async function unifiedSearch(
         });
       }
       return false;
-    } catch {
+    } catch (err) {
+      if (reportDroppedProviders) {
+        errors.push({
+          provider: name,
+          error: err instanceof Error ? err.message : "unknown provider",
+        });
+      }
       return false;
     }
   });
+  let routing: UnifiedSearchResponse["routing"];
+  if (routingRequested && activeProviders.length > 0) {
+    routing = await routeSearchProviders(query, activeProviders, {
+      maxProviders: config.router.maxProviders,
+      timeoutMs: config.router.timeoutMs,
+      model: config.router.model,
+    });
+    activeProviders = routing.selectedProviders;
+  }
 
   const searchOptions: SearchOptions = {
     limit: config.defaultLimit,
     ...opts.options,
   };
 
-  // Query all providers concurrently
-  const results = await Promise.allSettled(
-    activeProviders.map(async (name) => {
+  // Query providers with bounded concurrency and a per-provider timeout.
+  const results = await allSettledLimited(
+    activeProviders,
+    config.maxConcurrent,
+    async (name) => {
       const provider = getProvider(name);
-      const rawResults = await provider.search(query, searchOptions);
+      const rawResults = await withTimeout(
+        provider.search(query, searchOptions),
+        config.providerTimeoutMs,
+        provider.displayName,
+      );
       updateProviderLastUsed(name, db);
       return { name, results: rawResults };
-    }),
+    },
   );
 
   // Collect results and errors
@@ -153,6 +232,7 @@ export async function unifiedSearch(
       },
       results: finalResults,
       errors,
+      ...(routing && { routing }),
     };
   }
 
@@ -166,6 +246,7 @@ export async function unifiedSearch(
 
   const search = createSearch(
     {
+      id: searchId,
       query,
       providers: activeProviders,
       resultCount: persistable.length,
@@ -178,6 +259,7 @@ export async function unifiedSearch(
     createResults(
       persistable.map((r) => ({
         searchId: search.id,
+        id: r.id,
         title: r.title,
         url: r.url,
         snippet: r.snippet,
@@ -199,6 +281,7 @@ export async function unifiedSearch(
     search: { ...search, resultCount: finalResults.length, duration },
     results: finalResults,
     errors,
+    ...(routing && { routing }),
   };
 }
 

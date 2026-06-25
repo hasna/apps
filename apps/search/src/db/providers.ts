@@ -61,6 +61,9 @@ export function updateProvider(
     params.push(updates.apiKeyEnv);
   }
   if (updates.rateLimit !== undefined) {
+    if (!Number.isInteger(updates.rateLimit) || updates.rateLimit < 0) {
+      throw new Error("rateLimit must be an integer >= 0");
+    }
     sets.push("rate_limit = ?");
     params.push(updates.rateLimit);
   }

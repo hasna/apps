@@ -5,6 +5,7 @@ import {
   type SearchProviderName,
   type SearchOptions,
   generateId,
+  validateSearchProviderNames,
 } from "../types/index.js";
 
 interface ProfileRow {
@@ -61,6 +62,14 @@ export function createProfile(
   db?: Database,
 ): SearchProfile {
   const d = db ?? getDb();
+  const name = data.name.trim();
+  if (!name) throw new Error("Profile name is required");
+  validateSearchProviderNames(data.providers);
+  const existing = d
+    .prepare("SELECT id FROM search_profiles WHERE name = ? LIMIT 1")
+    .get(name) as { id: string } | null;
+  if (existing) throw new Error(`Profile already exists: ${name}`);
+
   const id = generateId();
   const now = new Date().toISOString();
 
@@ -69,7 +78,7 @@ export function createProfile(
      VALUES (?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
-    data.name,
+    name,
     data.description ?? null,
     JSON.stringify(data.providers),
     JSON.stringify(data.options ?? {}),
@@ -78,7 +87,7 @@ export function createProfile(
 
   return {
     id,
-    name: data.name,
+    name,
     description: data.description ?? null,
     providers: data.providers,
     options: data.options ?? {},

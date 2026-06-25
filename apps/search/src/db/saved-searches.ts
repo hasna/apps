@@ -42,6 +42,15 @@ export function createSavedSearch(
   db?: Database,
 ): SavedSearch {
   const d = db ?? getDb();
+  const name = data.name.trim();
+  const query = data.query.trim();
+  if (!name) throw new Error("Saved search name is required");
+  if (!query) throw new Error("Saved search query is required");
+  const existing = d
+    .prepare("SELECT id FROM saved_searches WHERE name = ? LIMIT 1")
+    .get(name) as { id: string } | null;
+  if (existing) throw new Error(`Saved search already exists: ${name}`);
+
   const id = generateId();
   const now = new Date().toISOString();
 
@@ -50,8 +59,8 @@ export function createSavedSearch(
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     id,
-    data.name,
-    data.query,
+    name,
+    query,
     JSON.stringify(data.providers),
     data.profileId ?? null,
     JSON.stringify(data.options ?? {}),
@@ -60,8 +69,8 @@ export function createSavedSearch(
 
   return {
     id,
-    name: data.name,
-    query: data.query,
+    name,
+    query,
     providers: data.providers,
     profileId: data.profileId ?? null,
     options: data.options ?? {},
