@@ -491,8 +491,8 @@ describe("read-only tools work without from", () => {
       name: "list_sessions",
       arguments: {},
     });
-    const sessions = parseResult(result as any) as any[];
-    expect(Array.isArray(sessions)).toBe(true);
+    const data = parseResult(result as any) as any;
+    expect(Array.isArray(data.sessions)).toBe(true);
   });
 
   test("list_channels returns channels", async () => {
@@ -500,8 +500,8 @@ describe("read-only tools work without from", () => {
       name: "list_channels",
       arguments: {},
     });
-    const channels = parseResult(result as any) as any[];
-    expect(Array.isArray(channels)).toBe(true);
+    const data = parseResult(result as any) as any;
+    expect(Array.isArray(data.channels)).toBe(true);
   });
 
   test("list_projects returns projects", async () => {
@@ -509,8 +509,8 @@ describe("read-only tools work without from", () => {
       name: "list_projects",
       arguments: {},
     });
-    const projects = parseResult(result as any) as any[];
-    expect(Array.isArray(projects)).toBe(true);
+    const data = parseResult(result as any) as any;
+    expect(Array.isArray(data.projects)).toBe(true);
   });
 
   test("list_agents returns agents", async () => {
@@ -518,8 +518,8 @@ describe("read-only tools work without from", () => {
       name: "list_agents",
       arguments: {},
     });
-    const agents = parseResult(result as any) as any[];
-    expect(Array.isArray(agents)).toBe(true);
+    const data = parseResult(result as any) as any;
+    expect(Array.isArray(data.agents)).toBe(true);
   });
 });
 
@@ -793,7 +793,7 @@ describe("task tools", () => {
       arguments: { task_id: created.id },
     }) as any) as any;
     expect(result.count).toBeGreaterThanOrEqual(1);
-    expect(result.comments.some((c: any) => c.content === "MCP comment")).toBe(true);
+    expect(result.comments.some((c: any) => c.preview === "MCP comment")).toBe(true);
   });
 
   test("subtask creation and get_subtasks", async () => {
@@ -940,9 +940,9 @@ describe("task tools", () => {
       name: "get_task_tree",
       arguments: { parent_id: root.id },
     }) as any) as any;
-    expect(result.subject).toBe("Tree root");
-    expect(result.children).toHaveLength(1);
-    expect(result.children[0].children).toHaveLength(1);
+    expect(result.tree.subject).toBe("Tree root");
+    expect(result.tree.children).toHaveLength(1);
+    expect(result.tree.children[0].children).toHaveLength(1);
   });
 
   test("delete_task removes a task", async () => {

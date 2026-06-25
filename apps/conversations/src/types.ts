@@ -154,6 +154,7 @@ export interface SearchMessagesOptions {
   limit?: number;
   sort?: "relevance" | "recent";
   snippet_length?: number;
+  offset?: number;
 }
 
 export interface SearchResult extends Message {
@@ -265,6 +266,7 @@ export interface SearchTasksOptions {
   channel?: string;
   priority?: TaskPriority;
   limit?: number;
+  offset?: number;
   sort?: "relevance" | "recent";
   include_archived?: boolean;
 }

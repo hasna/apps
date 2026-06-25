@@ -32,6 +32,30 @@ import {
   searchTasks,
 } from "../../lib/tasks.js";
 import { resolveIdentity } from "../../lib/identity.js";
+import { previewText, summarizeTask } from "../../lib/compact-output.js";
+import { compactQueriedTasks, jsonText, resolveMcpWindow } from "../compact.js";
+import type { TaskInfo } from "../../types.js";
+
+function compactComments(comments: Array<{ id: number; task_id: number; agent: string; content: string; created_at: string }>) {
+  return comments.map((comment) => ({
+    id: comment.id,
+    task_id: comment.task_id,
+    agent: comment.agent,
+    created_at: comment.created_at,
+    preview: previewText(comment.content),
+    truncated: previewText(comment.content) !== comment.content.replace(/\s+/g, " ").trim(),
+  }));
+}
+
+type TaskTreeNode = TaskInfo & { children: TaskTreeNode[] };
+type CompactTaskTreeNode = ReturnType<typeof summarizeTask> & { children: CompactTaskTreeNode[] };
+
+function compactTaskTree(node: TaskTreeNode): CompactTaskTreeNode {
+  return {
+    ...summarizeTask(node),
+    children: (node.children ?? []).map((child) => compactTaskTree(child)),
+  };
+}
 
 export function registerTaskTools(server: McpServer): void {
 
@@ -104,11 +128,24 @@ export function registerTaskTools(server: McpServer): void {
       metadata: z.record(z.string(), z.unknown()).optional(),
       limit: z.coerce.number().optional(),
       offset: z.coerce.number().optional(),
+      cursor: z.coerce.number().optional().describe("Alias for offset"),
       include_archived: z.coerce.boolean().optional(),
+      verbose: z.coerce.boolean().optional().describe("Return full raw task records instead of compact summaries"),
     },
   }, async (args: Record<string, any>) => {
-    const tasks = listTasks(args);
-    return { content: [{ type: "text", text: JSON.stringify({ tasks, count: tasks.length }) }] };
+    const window = resolveMcpWindow(args);
+    const verbose = args.verbose === true;
+    const tasks = listTasks({
+      ...args,
+      limit: verbose ? args.limit : window.limit + 1,
+      offset: verbose ? (args.offset ?? args.cursor) : window.offset,
+    });
+    return {
+      content: [{
+        type: "text",
+        text: jsonText(verbose ? { tasks, count: tasks.length, compact: false } : compactQueriedTasks(tasks, args)),
+      }],
+    };
   });
 
   // ---- Start Task ----
@@ -260,10 +297,32 @@ export function registerTaskTools(server: McpServer): void {
     description: "Get all comments on a task, ordered by creation time.",
     inputSchema: {
       task_id: z.coerce.number(),
+      limit: z.coerce.number().optional(),
+      cursor: z.coerce.number().optional(),
+      verbose: z.coerce.boolean().optional().describe("Return full raw comments instead of previews"),
     },
   }, async (args: Record<string, any>) => {
     const comments = getComments(args.task_id);
-    return { content: [{ type: "text", text: JSON.stringify({ comments, count: comments.length }) }] };
+    if (args.verbose) return { content: [{ type: "text", text: jsonText({ comments, count: comments.length, compact: false }) }] };
+    const window = resolveMcpWindow(args);
+    const page = comments.slice(window.offset, window.offset + window.limit);
+    const hasMore = window.offset + window.limit < comments.length;
+    return {
+      content: [{
+        type: "text",
+        text: jsonText({
+          comments: compactComments(page),
+          count: page.length,
+          total: comments.length,
+          limit: window.limit,
+          cursor: window.offset,
+          next_cursor: hasMore ? window.offset + page.length : null,
+          has_more: hasMore,
+          compact: true,
+          hint: "Use verbose:true for full comment bodies.",
+        }),
+      }],
+    };
   });
 
   // ---- Get Subtasks ----
@@ -283,10 +342,20 @@ export function registerTaskTools(server: McpServer): void {
     inputSchema: {
       parent_id: z.coerce.number(),
       max_depth: z.coerce.number().optional(),
+      verbose: z.coerce.boolean().optional().describe("Return full raw recursive task tree"),
     },
   }, async (args: Record<string, any>) => {
     const tree = getTaskTree(args.parent_id, args.max_depth ?? 5);
-    return { content: [{ type: "text", text: JSON.stringify(tree) }] };
+    return {
+      content: [{
+        type: "text",
+        text: jsonText(args.verbose ? tree : {
+          tree: compactTaskTree(tree as TaskTreeNode),
+          compact: true,
+          hint: "Use verbose:true for full task tree records.",
+        }),
+      }],
+    };
   });
 
   // ---- Add Dependency ----
@@ -384,11 +453,25 @@ export function registerTaskTools(server: McpServer): void {
       channel: z.string().optional(),
       priority: z.enum(["low", "medium", "high", "critical"]).optional(),
       limit: z.coerce.number().optional(),
+      cursor: z.coerce.number().optional(),
       sort: z.enum(["relevance", "recent"]).optional(),
       include_archived: z.coerce.boolean().optional(),
+      verbose: z.coerce.boolean().optional().describe("Return full raw task records instead of compact summaries"),
     },
   }, async (args: Record<string, any>) => {
-    const results = searchTasks({ query: args.query, ...args });
-    return { content: [{ type: "text", text: JSON.stringify({ tasks: results, count: results.length }) }] };
+    const window = resolveMcpWindow(args);
+    const verbose = args.verbose === true;
+    const results = searchTasks({
+      query: args.query,
+      ...args,
+      limit: verbose ? args.limit : window.limit + 1,
+      offset: verbose ? args.cursor : window.offset,
+    });
+    return {
+      content: [{
+        type: "text",
+        text: jsonText(verbose ? { tasks: results, count: results.length, compact: false } : compactQueriedTasks(results, args)),
+      }],
+    };
   });
 }

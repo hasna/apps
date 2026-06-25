@@ -139,17 +139,18 @@ describe("agent MCP tools", () => {
       const result = parseResult(await client.callTool({
         name: "list_agents",
         arguments: {},
-      }) as any) as any[];
-      expect(Array.isArray(result)).toBe(true);
-      expect(result.length).toBeGreaterThanOrEqual(2);
+      }) as any) as any;
+      expect(Array.isArray(result.agents)).toBe(true);
+      expect(result.agents.length).toBeGreaterThanOrEqual(2);
+      expect(result.compact).toBe(true);
     });
 
     test("filters to online_only", async () => {
       const result = parseResult(await client.callTool({
         name: "list_agents",
         arguments: { online_only: true },
-      }) as any) as any[];
-      expect(Array.isArray(result)).toBe(true);
+      }) as any) as any;
+      expect(Array.isArray(result.agents)).toBe(true);
     });
   });
 
@@ -279,7 +280,8 @@ describe("agent MCP tools", () => {
         name: "get_blockers",
         arguments: { from: "blocker-agent" },
       }) as any) as any;
-      expect(Array.isArray(result)).toBe(true);
+      expect(Array.isArray(result.messages)).toBe(true);
+      expect(result.compact).toBe(true);
     });
 
     test("returns blocking messages when they exist", async () => {
@@ -297,8 +299,9 @@ describe("agent MCP tools", () => {
         name: "get_blockers",
         arguments: { from: "blocker-target" },
       }) as any) as any;
-      expect(Array.isArray(result)).toBe(true);
-      expect(result.length).toBe(1);
+      expect(Array.isArray(result.messages)).toBe(true);
+      expect(result.messages).toHaveLength(1);
+      expect(result.messages[0].preview).toContain("BLOCK");
     });
   });
 });

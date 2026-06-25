@@ -5,7 +5,9 @@ import { createChannel, updateChannel, archiveChannel, unarchiveChannel, listCha
 import { listChannelNotificationSubscriptions, markChannelNotificationsRead, subscribeToChannelNotifications, unsubscribeFromChannelNotifications } from "../../lib/channel-notifications.js";
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
-import { renderContent } from "../../lib/terminal-markdown.js";
+import { previewText, windowItems } from "../../lib/compact-output.js";
+import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor } from "../compact.js";
+import { printMessageEntry } from "../message-output.js";
 
 export function registerChannelCommands(program: Command): void {
   const channel = program
@@ -65,6 +67,8 @@ export function registerChannelCommands(program: Command): void {
     .description("List all channels")
     .option("--project <id>", "Filter by project ID")
     .option("--archived", "Include archived channels")
+    .option("--limit <n>", "Max channels to show", parseInt)
+    .option("--cursor <n>", "Skip first N channels for pagination", parseInt)
     .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const listOpts: { project_id?: string; include_archived?: boolean } = {};
@@ -72,6 +76,8 @@ export function registerChannelCommands(program: Command): void {
       if (opts.archived) listOpts.include_archived = true;
 
       const channels = listChannels(listOpts);
+      const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
+      const page = windowItems(channels, window);
 
       if (opts.json) {
         console.log(JSON.stringify(channels, null, 2));
@@ -79,11 +85,20 @@ export function registerChannelCommands(program: Command): void {
         if (channels.length === 0) {
           console.log(chalk.dim("No channels found."));
         } else {
-          for (const sp of channels) {
-            const desc = sp.description ? chalk.dim(` — ${sp.description}`) : "";
+          for (const sp of page.items) {
+            const desc = sp.description ? chalk.dim(` - ${previewText(sp.description, 90)}`) : "";
+            const topic = sp.topic ? chalk.dim(` topic: ${previewText(sp.topic, 70)}`) : "";
             const archived = sp.archived_at ? chalk.yellow(" [archived]") : "";
-            console.log(`${chalk.magenta(`#${sp.name}`)}${desc}${archived}  ${sp.member_count} members, ${sp.message_count} messages`);
+            console.log(`${chalk.magenta(`#${sp.name}`)}${desc}${archived}  ${sp.member_count} members, ${sp.message_count} messages${topic}`);
           }
+          printCompactFooter({
+            shown: page.count,
+            total: page.total,
+            hasMore: page.hasMore,
+            nextCursor: page.nextCursor,
+            limitCapped: window.limitCapped,
+            detailHint: "Use conversations channel read <name> --verbose for message bodies.",
+          });
         }
       }
       closeDb();
@@ -231,6 +246,8 @@ export function registerChannelCommands(program: Command): void {
     .option("--from <agent>", "Agent reading the channel")
     .option("--since <timestamp>", "Messages after this ISO timestamp")
     .option("--limit <n>", "Max messages to return", parseInt)
+    .option("--cursor <n>", "Skip first N messages for pagination", parseInt)
+    .option("--verbose", "Show full message bodies")
     .option("-j, --json", "Output as JSON")
     .action((channelName, opts) => {
       const channelArg = typeof channelName === "string" ? channelName.trim() : "";
@@ -238,20 +255,25 @@ export function registerChannelCommands(program: Command): void {
         console.error(chalk.red("Channel name cannot be empty."));
         process.exit(1);
       }
+      const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
       const messages = readMessages({
         channel: channelArg,
         since: opts.since,
-        limit: opts.limit,
+        limit: opts.json ? opts.limit : queryLimitFor(window),
+        offset: opts.json ? opts.cursor : window.offset,
       });
+      const page = opts.json
+        ? { items: messages, count: messages.length, hasMore: false, nextCursor: null }
+        : pageFromQuery(messages, window);
 
-      if (opts.from && messages.length > 0) {
+      if (opts.from && page.items.length > 0) {
         const agent = resolveIdentity(opts.from).trim();
         if (!agent) {
           console.error(chalk.red("Agent identity is required."));
           process.exit(1);
         }
-        recordReadReceiptsBatch(messages.map((m) => m.id), agent);
-        markChannelNotificationsRead(agent, messages.map((m) => m.id));
+        recordReadReceiptsBatch(page.items.map((m) => m.id), agent);
+        markChannelNotificationsRead(agent, page.items.map((m) => m.id));
       }
 
       if (opts.json) {
@@ -260,15 +282,14 @@ export function registerChannelCommands(program: Command): void {
         if (messages.length === 0) {
           console.log(chalk.dim(`No messages in #${channelArg}.`));
         } else {
-          for (const msg of messages) {
-            const time = chalk.dim(msg.created_at.slice(11, 19));
-            const from = chalk.cyan(msg.from_agent);
-            const priority = msg.priority !== "normal" ? chalk.red(` [${msg.priority}]`) : "";
-            console.log(`${time} ${from} → ${chalk.magenta(`#${channelArg}`)}${priority}`);
-            const rendered = renderContent(msg.content);
-            const indented = rendered.split("\n").map((l: string) => "  " + l).join("\n");
-            console.log(indented);
-          }
+          for (const msg of page.items) printMessageEntry(msg, { verbose: opts.verbose, destination: chalk.magenta(`#${channelArg}`) });
+          printCompactFooter({
+            shown: page.count,
+            hasMore: page.hasMore,
+            nextCursor: page.nextCursor,
+            limitCapped: window.limitCapped,
+            detailHint: opts.verbose ? "Use conversations show <id> for one message." : "Use --verbose for full bodies or conversations show <id> for one message.",
+          });
         }
       }
       closeDb();
@@ -410,6 +431,8 @@ export function registerChannelCommands(program: Command): void {
     .description("List preview-only channel notification subscriptions")
     .option("--from <agent>", "Agent ID")
     .option("--channel <name>", "Filter by channel")
+    .option("--limit <n>", "Max subscriptions to show", parseInt)
+    .option("--cursor <n>", "Skip first N subscriptions for pagination", parseInt)
     .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const agent = resolveIdentity(opts.from).trim();
@@ -422,6 +445,8 @@ export function registerChannelCommands(program: Command): void {
       if (opts.channel) {
         subscriptions = subscriptions.filter((row) => row.channel === opts.channel);
       }
+      const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
+      const page = windowItems(subscriptions, window);
 
       if (opts.json) {
         console.log(JSON.stringify(subscriptions, null, 2));
@@ -429,9 +454,16 @@ export function registerChannelCommands(program: Command): void {
         console.log(chalk.dim(`No notification subscriptions for ${agent}.`));
       } else {
         console.log(chalk.bold(`${agent} notification subscriptions:`));
-        for (const row of subscriptions) {
+        for (const row of page.items) {
           console.log(`  ${chalk.magenta(`#${row.channel}`)} ${chalk.dim(`preview ${row.preview_chars} chars`)}`);
         }
+        printCompactFooter({
+          shown: page.count,
+          total: page.total,
+          hasMore: page.hasMore,
+          nextCursor: page.nextCursor,
+          limitCapped: window.limitCapped,
+        });
       }
       closeDb();
     });
@@ -440,6 +472,8 @@ export function registerChannelCommands(program: Command): void {
     .command("members")
     .description("List channel members")
     .argument("<channel>", "Channel name")
+    .option("--limit <n>", "Max members to show", parseInt)
+    .option("--cursor <n>", "Skip first N members for pagination", parseInt)
     .option("-j, --json", "Output as JSON")
     .action((channelName, opts) => {
       const channelArg = typeof channelName === "string" ? channelName.trim() : "";
@@ -448,6 +482,8 @@ export function registerChannelCommands(program: Command): void {
         process.exit(1);
       }
       const members = getChannelMembers(channelArg);
+      const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
+      const page = windowItems(members, window);
 
       if (opts.json) {
         console.log(JSON.stringify(members, null, 2));
@@ -456,9 +492,16 @@ export function registerChannelCommands(program: Command): void {
           console.log(chalk.dim(`No members in #${channelArg}.`));
         } else {
           console.log(chalk.magenta(`#${channelArg}`) + chalk.dim(` — ${members.length} member(s)`));
-          for (const m of members) {
+          for (const m of page.items) {
             console.log(`  ${chalk.cyan(m.agent)} ${chalk.dim(`joined ${m.joined_at.slice(0, 10)}`)}`);
           }
+          printCompactFooter({
+            shown: page.count,
+            total: page.total,
+            hasMore: page.hasMore,
+            nextCursor: page.nextCursor,
+            limitCapped: window.limitCapped,
+          });
         }
       }
       closeDb();

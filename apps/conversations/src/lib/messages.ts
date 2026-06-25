@@ -544,7 +544,7 @@ export function unpinMessage(id: number): Message | null {
   return row ? parseMessage(row) : null;
 }
 
-export function getPinnedMessages(opts?: { channel?: string; session_id?: string; limit?: number }): Message[] {
+export function getPinnedMessages(opts?: { channel?: string; session_id?: string; limit?: number; offset?: number }): Message[] {
   const db = getDb();
   const conditions: string[] = ["pinned_at IS NOT NULL"];
   const params: (string | number)[] = [];
@@ -563,17 +563,29 @@ export function getPinnedMessages(opts?: { channel?: string; session_id?: string
   const safeLimit = Number.isFinite(opts?.limit) && (opts!.limit as number) > 0
     ? Math.floor(opts!.limit as number)
     : 0;
-  const limitClause = safeLimit > 0 ? `LIMIT ${safeLimit}` : "";
+  const safeOffset = Number.isFinite(opts?.offset) && (opts!.offset as number) > 0
+    ? Math.floor(opts!.offset as number)
+    : 0;
+  const limitClause = safeLimit > 0 ? `LIMIT ${safeLimit}` : safeOffset > 0 ? "LIMIT -1" : "";
+  const offsetClause = safeOffset > 0 ? `OFFSET ${safeOffset}` : "";
 
   const rows = db.prepare(
-    `SELECT * FROM messages ${where} ORDER BY pinned_at DESC, id DESC ${limitClause}`
+    `SELECT * FROM messages ${where} ORDER BY pinned_at DESC, id DESC ${limitClause} ${offsetClause}`
   ).all(...params) as Record<string, unknown>[];
 
   return rows.map(parseMessage);
 }
 
-export function getUnreadBlockers(agent: string): Message[] {
+export function getUnreadBlockers(agent: string, opts?: { limit?: number; offset?: number }): Message[] {
   const db = getDb();
+  const safeLimit = Number.isFinite(opts?.limit) && (opts!.limit as number) > 0
+    ? Math.floor(opts!.limit as number)
+    : 0;
+  const safeOffset = Number.isFinite(opts?.offset) && (opts!.offset as number) > 0
+    ? Math.floor(opts!.offset as number)
+    : 0;
+  const limitClause = safeLimit > 0 ? `LIMIT ${safeLimit}` : safeOffset > 0 ? "LIMIT -1" : "";
+  const offsetClause = safeOffset > 0 ? `OFFSET ${safeOffset}` : "";
   const rows = db.prepare(`
     SELECT * FROM messages
     WHERE blocking = 1 AND read_at IS NULL
@@ -582,6 +594,7 @@ export function getUnreadBlockers(agent: string): Message[] {
       OR channel IN (SELECT channel FROM channel_members WHERE agent = ?)
     )
     ORDER BY created_at ASC, id ASC
+    ${limitClause} ${offsetClause}
   `).all(agent, agent) as Record<string, unknown>[];
   return rows.map(parseMessage);
 }
@@ -600,6 +613,9 @@ export function searchMessages(opts: SearchMessagesOptions): SearchResult[] {
   const limit = Number.isFinite(opts.limit) && (opts.limit as number) > 0
     ? Math.floor(opts.limit as number)
     : 20;
+  const offset = Number.isFinite(opts.offset) && (opts.offset as number) > 0
+    ? Math.floor(opts.offset as number)
+    : 0;
   const sortByRelevance = opts.sort !== "recent";
 
   // Priority weight map for scoring boost
@@ -638,7 +654,7 @@ export function searchMessages(opts: SearchMessagesOptions): SearchResult[] {
        FROM messages m
        JOIN messages_fts ON messages_fts.rowid = m.id
        WHERE messages_fts MATCH ?${extraWhere}
-       ${orderClause} LIMIT ${limit}`
+       ${orderClause} LIMIT ${limit} OFFSET ${offset}`
     ).all(...ftsParams) as Record<string, unknown>[];
 
     // Normalize: FTS5 rank is negative (closer to 0 = better). Convert to positive scale.
@@ -671,7 +687,7 @@ export function searchMessages(opts: SearchMessagesOptions): SearchResult[] {
   const where = `WHERE ${conditions.join(" AND ")}`;
 
   const rows = db.prepare(
-    `SELECT * FROM messages ${where} ORDER BY created_at DESC, id DESC LIMIT ${limit}`
+    `SELECT * FROM messages ${where} ORDER BY created_at DESC, id DESC LIMIT ${limit} OFFSET ${offset}`
   ).all(...params) as Record<string, unknown>[];
 
   return rows.map((row) => {

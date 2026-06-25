@@ -10,6 +10,7 @@ import { heartbeat, registerAgent, listAgents, removePresence, renameAgent, getP
 import { setSessionAgent, setClaudeSessionId } from "../channel.js";
 import { getSessionActivity } from "../../lib/sessions.js";
 import { getUnreadBlockers } from "../../lib/messages.js";
+import { compactQueriedMessages, compactWindowedAgents, jsonText, resolveMcpWindow } from "../compact.js";
 
 export function registerAgentTools(
   server: McpServer,
@@ -75,13 +76,16 @@ export function registerAgentTools(
     description: "List agents with presence status.",
     inputSchema: {
       online_only: z.coerce.boolean().optional(),
+      limit: z.coerce.number().optional(),
+      cursor: z.coerce.number().optional(),
+      verbose: z.coerce.boolean().optional().describe("Return legacy raw agent array"),
     },
   }, async (args: Record<string, any>) => {
     const { online_only } = args;
     const agents = listAgents({ online_only });
 
     return {
-      content: [{ type: "text", text: JSON.stringify(agents) }],
+      content: [{ type: "text", text: jsonText(args.verbose ? agents : compactWindowedAgents(agents, args)) }],
     };
   });
 
@@ -229,14 +233,21 @@ export function registerAgentTools(
     description: "Check for unread blocking messages.",
     inputSchema: {
       from: z.string().optional(),
+      limit: z.coerce.number().optional(),
+      cursor: z.coerce.number().optional(),
+      verbose: z.coerce.boolean().optional().describe("Return full raw blocker messages instead of previews"),
     },
   }, async (args: Record<string, any>) => {
     const { from: fromParam } = args;
     const agent = resolveIdentity(fromParam);
-    const blockers = getUnreadBlockers(agent);
+    const window = resolveMcpWindow(args);
+    const blockers = getUnreadBlockers(
+      agent,
+      args.verbose ? undefined : { limit: window.limit + 1, offset: window.offset },
+    );
 
     return {
-      content: [{ type: "text", text: JSON.stringify(blockers) }],
+      content: [{ type: "text", text: jsonText(args.verbose ? blockers : compactQueriedMessages(blockers, args)) }],
     };
   });
 }

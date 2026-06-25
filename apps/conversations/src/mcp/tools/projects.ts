@@ -6,6 +6,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createProject, listProjects, getProject, getProjectByName, updateProject, deleteProject } from "../../lib/projects.js";
 import { resolveIdentity } from "../../lib/identity.js";
+import { compactWindowedProjects, jsonText } from "../compact.js";
 
 export function registerProjectTools(server: McpServer): void {
 
@@ -94,13 +95,16 @@ export function registerProjectTools(server: McpServer): void {
     description: "List all projects.",
     inputSchema: {
       status: z.string().optional(),
+      limit: z.coerce.number().optional(),
+      cursor: z.coerce.number().optional(),
+      verbose: z.coerce.boolean().optional().describe("Return legacy raw project array"),
     },
   }, async (args: Record<string, any>) => {
     const { status } = args;
     const projects = listProjects(status ? { status } : undefined);
 
     return {
-      content: [{ type: "text", text: JSON.stringify(projects) }],
+      content: [{ type: "text", text: jsonText(args.verbose ? projects : compactWindowedProjects(projects, args)) }],
     };
   });
 

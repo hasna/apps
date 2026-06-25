@@ -1,11 +1,14 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { sendMessage, readMessages, readDigest, markRead, markSessionRead, markChannelRead, markAllRead, getMessageById, searchMessages, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers } from "../../lib/messages.js";
+import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSessionRead, markChannelRead, markAllRead, getMessageById, searchMessages, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, getUnreadBlockers } from "../../lib/messages.js";
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { renderContent } from "../../lib/terminal-markdown.js";
 import { heartbeat } from "../../lib/presence.js";
 import { buildMessagePreview, listChannelNotificationSubscriptions, markAllChannelNotificationsRead, readChannelNotifications } from "../../lib/channel-notifications.js";
+import { previewText } from "../../lib/compact-output.js";
+import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor } from "../compact.js";
+import { printMessageEntry } from "../message-output.js";
 
 export function registerMessagingCommands(program: Command): void {
   // ---- send ----
@@ -90,30 +93,31 @@ export function registerMessagingCommands(program: Command): void {
     .option("--channel <name>", "Filter by channel")
     .option("--since <timestamp>", "Messages after this ISO timestamp")
     .option("--limit <n>", "Max messages to return", parseInt)
+    .option("--cursor <n>", "Skip first N messages for pagination", parseInt)
     .option("--unread", "Only unread messages")
     .option("--mark-read", "Mark returned messages as read")
+    .option("--verbose", "Show full message bodies")
     .option("-j, --json", "Output as JSON")
     .action((opts) => {
+      const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
       const messages = readMessages({
         session_id: opts.session,
         from: opts.from,
         to: opts.to,
         channel: opts.channel,
         since: opts.since,
-        limit: opts.limit,
+        limit: opts.json ? opts.limit : queryLimitFor(window),
+        offset: opts.json ? opts.cursor : window.offset,
         unread_only: opts.unread,
       });
+      const page = opts.json
+        ? { items: messages, hasMore: false, nextCursor: null, count: messages.length }
+        : pageFromQuery(messages, window);
 
       if (opts.markRead) {
         const reader = resolveIdentity(opts.to);
-        if (opts.channel) {
-          markChannelRead(opts.channel, reader);
-        } else if (opts.session) {
-          markSessionRead(opts.session, reader);
-        } else {
-          const ids = messages.filter((m) => m.to_agent === reader && !m.read_at).map((m) => m.id);
-          if (ids.length > 0) markRead(ids, reader);
-        }
+        const ids = page.items.filter((m) => !m.read_at).map((m) => m.id);
+        if (ids.length > 0) markReadByIds(ids, reader);
       }
 
       if (opts.json) {
@@ -122,17 +126,14 @@ export function registerMessagingCommands(program: Command): void {
         if (messages.length === 0) {
           console.log(chalk.dim("No messages found."));
         } else {
-          for (const msg of messages) {
-            const time = chalk.dim(msg.created_at.slice(11, 19));
-            const from = chalk.cyan(msg.from_agent);
-            const to = msg.channel ? chalk.magenta(`#${msg.channel}`) : chalk.yellow(msg.to_agent);
-            const priority = msg.priority !== "normal" ? chalk.red(` [${msg.priority}]`) : "";
-            const unread = !msg.read_at ? chalk.green(" *") : "";
-            console.log(`${time} ${from} → ${to}${priority}${unread}`);
-            const rendered = renderContent(msg.content);
-            const indented = rendered.split("\n").map((l: string) => "  " + l).join("\n");
-            console.log(indented);
-          }
+          for (const msg of page.items) printMessageEntry(msg, { verbose: opts.verbose });
+          printCompactFooter({
+            shown: page.count,
+            hasMore: page.hasMore,
+            nextCursor: page.nextCursor,
+            limitCapped: window.limitCapped,
+            detailHint: opts.verbose ? "Use conversations show <id> for one message." : "Use --verbose for full bodies or conversations show <id> for one message.",
+          });
         }
       }
       closeDb();
@@ -220,6 +221,8 @@ export function registerMessagingCommands(program: Command): void {
     .option("--from <agent>", "Filter by sender")
     .option("--to <agent>", "Filter by recipient")
     .option("--limit <n>", "Max results to return", parseInt)
+    .option("--cursor <n>", "Skip first N results for pagination", parseInt)
+    .option("--verbose", "Show full message bodies")
     .option("-j, --json", "Output as JSON")
     .action((query, opts) => {
       const q = typeof query === "string" ? query.trim() : "";
@@ -227,14 +230,19 @@ export function registerMessagingCommands(program: Command): void {
         console.error(chalk.red("Search query cannot be empty."));
         process.exit(1);
       }
+      const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
 
       const messages = searchMessages({
         query: q,
         channel: opts.channel,
         from: opts.from,
         to: opts.to,
-        limit: opts.limit,
+        limit: opts.json ? opts.limit : queryLimitFor(window),
+        offset: opts.json ? opts.cursor : window.offset,
       });
+      const page = opts.json
+        ? { items: messages, count: messages.length, total: messages.length, hasMore: false, nextCursor: null }
+        : pageFromQuery(messages, window);
 
       if (opts.json) {
         console.log(JSON.stringify(messages, null, 2));
@@ -242,15 +250,15 @@ export function registerMessagingCommands(program: Command): void {
         if (messages.length === 0) {
           console.log(chalk.dim("No messages found."));
         } else {
-          console.log(chalk.dim(`Found ${messages.length} result(s) for "${q}":\n`));
-          for (const msg of messages) {
-            const time = chalk.dim(msg.created_at.slice(11, 19));
-            const from = chalk.cyan(msg.from_agent);
-            const to = msg.channel ? chalk.magenta(`#${msg.channel}`) : chalk.yellow(msg.to_agent);
-            const priority = msg.priority !== "normal" ? chalk.red(` [${msg.priority}]`) : "";
-            const unread = !msg.read_at ? chalk.green(" *") : "";
-            console.log(`${time} ${from} → ${to}${priority}${unread}: ${msg.content}`);
-          }
+          console.log(chalk.dim(`Search results for "${q}":\n`));
+          for (const msg of page.items) printMessageEntry(msg, { verbose: opts.verbose });
+          printCompactFooter({
+            shown: page.count,
+            hasMore: page.hasMore,
+            nextCursor: page.nextCursor,
+            limitCapped: window.limitCapped,
+            detailHint: opts.verbose ? "Use conversations show <id> for one message." : "Use --verbose for full bodies or conversations show <id> for one message.",
+          });
         }
       }
       closeDb();
@@ -261,6 +269,9 @@ export function registerMessagingCommands(program: Command): void {
     .command("since")
     .description("Show all activity (DMs + channels) since a duration ago")
     .argument("<duration>", "Duration: e.g. 30m, 2h, 1d")
+    .option("--limit <n>", "Max messages to show", parseInt)
+    .option("--cursor <n>", "Skip first N messages for pagination", parseInt)
+    .option("--verbose", "Show full message bodies")
     .option("-j, --json", "Output as JSON")
     .action((duration, opts) => {
       // Parse duration string: 30m, 2h, 1d
@@ -273,8 +284,17 @@ export function registerMessagingCommands(program: Command): void {
       const unit = match[2] as "m" | "h" | "d";
       const msMap = { m: 60_000, h: 3_600_000, d: 86_400_000 };
       const since = new Date(Date.now() - value * msMap[unit]).toISOString().replace("T", "T").slice(0, 23);
+      const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
 
-      const messages = readMessages({ since, order: "asc", limit: 200 });
+      const messages = readMessages({
+        since,
+        order: "asc",
+        limit: opts.json ? (opts.limit ?? 200) : queryLimitFor(window),
+        offset: opts.json ? opts.cursor : window.offset,
+      });
+      const page = opts.json
+        ? { items: messages, count: messages.length, hasMore: false, nextCursor: null }
+        : pageFromQuery(messages, window);
 
       if (opts.json) {
         console.log(JSON.stringify(messages, null, 2));
@@ -282,17 +302,15 @@ export function registerMessagingCommands(program: Command): void {
         if (messages.length === 0) {
           console.log(chalk.dim(`No activity in the last ${duration}.`));
         } else {
-          console.log(chalk.bold(`Activity since ${duration} ago (${messages.length} message(s)):\n`));
-          for (const msg of messages) {
-            const time = chalk.dim(msg.created_at.slice(11, 19));
-            const from = chalk.cyan(msg.from_agent);
-            const where = msg.channel ? chalk.magenta(`#${msg.channel}`) : chalk.yellow(`→ ${msg.to_agent}`);
-            const priority = msg.priority !== "normal" ? chalk.red(` [${msg.priority}]`) : "";
-            const unread = !msg.read_at ? chalk.green(" •") : "";
-            const content = renderContent(msg.content);
-            console.log(`${time} ${from} ${where}${priority}${unread}`);
-            console.log(`       ${content}\n`);
-          }
+          console.log(chalk.bold(`Activity since ${duration} ago\n`));
+          for (const msg of page.items) printMessageEntry(msg, { verbose: opts.verbose });
+          printCompactFooter({
+            shown: page.count,
+            hasMore: page.hasMore,
+            nextCursor: page.nextCursor,
+            limitCapped: window.limitCapped,
+            detailHint: opts.verbose ? "Use conversations show <id> for one message." : "Use --verbose for full bodies or conversations show <id> for one message.",
+          });
         }
       }
       closeDb();
@@ -521,22 +539,35 @@ export function registerMessagingCommands(program: Command): void {
     .option("--channel <name>", "Filter by channel")
     .option("--session <id>", "Filter by session ID")
     .option("--limit <n>", "Max results", parseInt)
+    .option("--cursor <n>", "Skip first N results for pagination", parseInt)
+    .option("--verbose", "Show full message bodies")
     .option("-j, --json", "Output as JSON")
     .action((opts) => {
-      const messages = getPinnedMessages({ channel: opts.channel, session_id: opts.session, limit: opts.limit });
+      const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
+      const messages = getPinnedMessages({
+        channel: opts.channel,
+        session_id: opts.session,
+        limit: opts.json ? opts.limit : queryLimitFor(window),
+        offset: opts.json ? opts.cursor : window.offset,
+      });
+      const page = opts.json
+        ? { items: messages, count: messages.length, total: messages.length, hasMore: false, nextCursor: null }
+        : pageFromQuery(messages, window);
       if (opts.json) {
         console.log(JSON.stringify(messages, null, 2));
       } else {
         if (messages.length === 0) {
           console.log(chalk.dim("No pinned messages."));
         } else {
-          console.log(chalk.dim(`${messages.length} pinned message(s):\n`));
-          for (const msg of messages) {
-            const time = chalk.dim(msg.created_at.slice(11, 19));
-            const from = chalk.cyan(msg.from_agent);
-            const where = msg.channel ? chalk.magenta(`#${msg.channel}`) : chalk.yellow(msg.to_agent);
-            console.log(`${chalk.yellow("📌")} [#${msg.id}] ${time} ${from} → ${where}: ${msg.content}`);
-          }
+          console.log(chalk.dim("Pinned messages:\n"));
+          for (const msg of page.items) printMessageEntry(msg, { verbose: opts.verbose });
+          printCompactFooter({
+            shown: page.count,
+            hasMore: page.hasMore,
+            nextCursor: page.nextCursor,
+            limitCapped: window.limitCapped,
+            detailHint: opts.verbose ? "Use conversations show <id> for one message." : "Use --verbose for full bodies or conversations show <id> for one message.",
+          });
         }
       }
       closeDb();
@@ -547,10 +578,17 @@ export function registerMessagingCommands(program: Command): void {
     .command("blockers")
     .description("Check for unread blocking messages")
     .option("--from <agent>", "Agent to check blockers for")
+    .option("--limit <n>", "Max blockers to show", parseInt)
+    .option("--cursor <n>", "Skip first N blockers for pagination", parseInt)
+    .option("--verbose", "Show full message bodies")
     .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const agent = resolveIdentity(opts.from);
-      const blockers = getUnreadBlockers(agent);
+      const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
+      const blockers = getUnreadBlockers(agent, opts.json ? undefined : { limit: queryLimitFor(window), offset: window.offset });
+      const page = opts.json
+        ? { items: blockers, count: blockers.length, total: blockers.length, hasMore: false, nextCursor: null }
+        : pageFromQuery(blockers, window);
 
       if (opts.json) {
         console.log(JSON.stringify(blockers, null, 2));
@@ -558,13 +596,16 @@ export function registerMessagingCommands(program: Command): void {
         if (blockers.length === 0) {
           console.log(chalk.dim("No blocking messages."));
         } else {
-          console.log(chalk.red.bold(`${blockers.length} blocking message(s):\n`));
-          for (const b of blockers) {
-            const where = b.channel ? chalk.magenta(`#${b.channel}`) : chalk.yellow("DM");
-            const time = chalk.dim(b.created_at.slice(11, 19));
-            console.log(`  ${chalk.red(`[#${b.id}]`)} ${time} ${chalk.cyan(b.from_agent)} ${where}: ${b.content}`);
-          }
-          console.log(chalk.dim(`\nAcknowledge with: conversations mark-read ${blockers.map(b => b.id).join(" ")}`));
+          console.log(chalk.red.bold("Blocking messages:\n"));
+          for (const b of page.items) printMessageEntry(b, { verbose: opts.verbose, destination: b.channel ? chalk.magenta(`#${b.channel}`) : chalk.yellow("DM") });
+          console.log(chalk.dim(`Acknowledge shown blockers with: conversations mark-read ${page.items.map(b => b.id).join(" ")}`));
+          printCompactFooter({
+            shown: page.count,
+            hasMore: page.hasMore,
+            nextCursor: page.nextCursor,
+            limitCapped: window.limitCapped,
+            detailHint: opts.verbose ? "Use conversations show <id> for one blocker." : "Use --verbose for full bodies or conversations show <id> for one blocker.",
+          });
         }
       }
       closeDb();
@@ -630,6 +671,7 @@ export function registerMessagingCommands(program: Command): void {
     .option("--channel <name>", "Watch a specific channel")
     .option("--all", "Watch DMs and all subscribed channels")
     .option("--interval <ms>", "Poll interval in milliseconds", parseInt)
+    .option("--verbose", "Show full message bodies")
     .action((opts) => {
       const agent = resolveIdentity(opts.from);
       heartbeat(agent);
@@ -684,9 +726,14 @@ export function registerMessagingCommands(program: Command): void {
         console.log(`  ${sender}  ${where}  ${time}${priority}${blocking}`);
 
         // Content with indent
-        const content = renderContentLocal(msg.content) as string;
+        const content = opts.verbose
+          ? renderContentLocal(msg.content) as string
+          : previewText(msg.content);
         const indented = content.split("\n").map((l: string) => "    " + l).join("\n");
         console.log(indented);
+        if (!opts.verbose) {
+          console.log(chalk.dim(`    Inspect with: conversations show ${msg.id}`));
+        }
 
         // Separator
         console.log(chalk.dim("    " + "·".repeat(Math.min(cols - 8, 60))));

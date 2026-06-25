@@ -99,6 +99,7 @@ describe("messaging MCP tools", () => {
         arguments: {},
       }) as any) as any;
       expect(Array.isArray(result.messages)).toBe(true);
+      expect(result.compact).toBe(true);
     });
 
     test("reads with limit", async () => {
@@ -107,6 +108,29 @@ describe("messaging MCP tools", () => {
         arguments: { limit: 5 },
       }) as any) as any;
       expect(result.count).toBeLessThanOrEqual(5);
+    });
+
+    test("returns compact previews by default and full content with verbose", async () => {
+      const long = `compact preview ${"x".repeat(220)} tail-visible-only-in-verbose`;
+      await client.callTool({
+        name: "send_message",
+        arguments: { to: "compact-reader", content: long },
+      });
+
+      const compact = parseResult(await client.callTool({
+        name: "read_messages",
+        arguments: { to: "compact-reader", mark_read: false },
+      }) as any) as any;
+      expect(compact.compact).toBe(true);
+      expect(compact.messages[0].preview).toContain("compact preview");
+      expect(compact.messages[0].content).toBeUndefined();
+
+      const verbose = parseResult(await client.callTool({
+        name: "read_messages",
+        arguments: { to: "compact-reader", verbose: true, mark_read: false },
+      }) as any) as any;
+      expect(verbose.compact).toBe(false);
+      expect(verbose.messages.some((m: any) => m.content.includes("tail-visible-only-in-verbose"))).toBe(true);
     });
 
     test("supports latest param", async () => {
@@ -134,7 +158,8 @@ describe("messaging MCP tools", () => {
         name: "list_sessions",
         arguments: {},
       }) as any) as any;
-      expect(Array.isArray(result)).toBe(true);
+      expect(Array.isArray(result.sessions)).toBe(true);
+      expect(result.compact).toBe(true);
     });
   });
 
@@ -194,6 +219,7 @@ describe("messaging MCP tools", () => {
         arguments: { query: "test" },
       }) as any) as any;
       expect(Array.isArray(result.results)).toBe(true);
+      expect(result.compact).toBe(true);
     });
   });
 
@@ -263,7 +289,8 @@ describe("messaging MCP tools", () => {
         name: "get_pinned_messages",
         arguments: {},
       }) as any) as any;
-      expect(Array.isArray(result)).toBe(true);
+      expect(Array.isArray(result.messages)).toBe(true);
+      expect(result.compact).toBe(true);
     });
   });
 

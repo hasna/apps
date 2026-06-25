@@ -114,8 +114,9 @@ describe("projects MCP tools", () => {
         name: "list_projects",
         arguments: {},
       }) as any) as any;
-      expect(Array.isArray(result)).toBe(true);
-      expect(result.length).toBeGreaterThan(0);
+      expect(Array.isArray(result.projects)).toBe(true);
+      expect(result.projects.length).toBeGreaterThan(0);
+      expect(result.compact).toBe(true);
     });
 
     test("filters by status", async () => {
@@ -123,7 +124,7 @@ describe("projects MCP tools", () => {
         name: "list_projects",
         arguments: { status: "active" },
       }) as any) as any;
-      expect(Array.isArray(result)).toBe(true);
+      expect(Array.isArray(result.projects)).toBe(true);
     });
   });
 
