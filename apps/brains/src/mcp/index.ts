@@ -9,7 +9,7 @@ import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
 import { homedir } from "os";
 import { eq, desc } from "drizzle-orm";
-import { getDb, getRawDb, fineTunedModels, trainingDatasets } from "../db/index.js";
+import { getDb, fineTunedModels, trainingDatasets, saveFeedback } from "../db/index.js";
 import { OpenAIProvider } from "../lib/providers/openai.js";
 import { ThinkerLabsProvider } from "../lib/providers/thinker-labs.js";
 import { gatherFromTodos } from "../lib/gatherers/todos.js";
@@ -19,7 +19,15 @@ import { gatherFromSessions } from "../lib/gatherers/sessions.js";
 import type { TrainingExample } from "../lib/gatherers/types.js";
 import { getPackageVersion } from "../lib/package-metadata.js";
 import { McpGatherSchema, McpFinetuneStartSchema, McpFinetuneStatusSchema } from "../lib/schemas.js";
-import { registerCloudTools, sendFeedback } from "@hasna/cloud";
+import {
+  STORAGE_TABLES,
+  getStorageDatabaseUrl,
+  getStorageMode,
+  getSyncMetaAll,
+  storagePull,
+  storagePush,
+  storageSync,
+} from "../db/storage-sync.js";
 
 // --- helpers ---
 
@@ -31,6 +39,13 @@ function getProvider(provider: string) {
 
 function defaultOutputDir() {
   return resolve(homedir(), ".hasna", "brains", "datasets");
+}
+
+function readStorageTables(args: unknown): string[] | undefined {
+  const value = (args as { tables?: string[] | string } | undefined)?.tables;
+  if (!value) return undefined;
+  if (Array.isArray(value)) return value;
+  return value.split(",").map((table) => table.trim()).filter(Boolean);
 }
 
 // --- in-memory agent registry ---
@@ -185,6 +200,60 @@ export function createMcpServer() {
             },
           },
           required: ["message"],
+        },
+      },
+      {
+        name: "storage_status",
+        description: "Show storage sync configuration and local sync history",
+        inputSchema: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+      {
+        name: "storage_push",
+        description: "Push local brains data to storage PostgreSQL",
+        inputSchema: {
+          type: "object",
+          properties: {
+            tables: {
+              type: "array",
+              items: { type: "string" },
+              description: "Optional table names to sync",
+            },
+          },
+          required: [],
+        },
+      },
+      {
+        name: "storage_pull",
+        description: "Pull brains data from storage PostgreSQL to local SQLite",
+        inputSchema: {
+          type: "object",
+          properties: {
+            tables: {
+              type: "array",
+              items: { type: "string" },
+              description: "Optional table names to sync",
+            },
+          },
+          required: [],
+        },
+      },
+      {
+        name: "storage_sync",
+        description: "Bidirectional sync for brains data: pull then push",
+        inputSchema: {
+          type: "object",
+          properties: {
+            tables: {
+              type: "array",
+              items: { type: "string" },
+              description: "Optional table names to sync",
+            },
+          },
+          required: [],
         },
       },
       {
@@ -502,14 +571,48 @@ export function createMcpServer() {
 
       case "send_feedback": {
         const { message, email } = args as { message: string; email?: string };
-        const rawDb = getRawDb();
-        const result = await sendFeedback(
-          { service: "brains", message, email, version: MCP_SERVER_INFO.version },
-          rawDb
-        );
-        rawDb.close();
+        const result = saveFeedback({ service: "brains", message, email, version: MCP_SERVER_INFO.version });
         return {
           content: [{ type: "text", text: result.sent ? "Feedback sent. Thank you!" : "Feedback saved locally. Thank you!" }],
+        };
+      }
+
+      case "storage_status": {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              configured: Boolean(getStorageDatabaseUrl()),
+              mode: getStorageMode(),
+              env: [
+                "HASNA_BRAINS_DATABASE_URL",
+                "BRAINS_DATABASE_URL",
+              ],
+              tables: STORAGE_TABLES,
+              sync: getSyncMetaAll(),
+            }, null, 2),
+          }],
+        };
+      }
+
+      case "storage_push": {
+        const tables = readStorageTables(args);
+        return {
+          content: [{ type: "text", text: JSON.stringify(await storagePush(tables ? { tables } : undefined), null, 2) }],
+        };
+      }
+
+      case "storage_pull": {
+        const tables = readStorageTables(args);
+        return {
+          content: [{ type: "text", text: JSON.stringify(await storagePull(tables ? { tables } : undefined), null, 2) }],
+        };
+      }
+
+      case "storage_sync": {
+        const tables = readStorageTables(args);
+        return {
+          content: [{ type: "text", text: JSON.stringify(await storageSync(tables ? { tables } : undefined), null, 2) }],
         };
       }
 
@@ -555,13 +658,6 @@ export function createMcpServer() {
 
 export async function startMcpServer(transport = new StdioServerTransport()) {
   const server = createMcpServer();
-  // registerCloudTools expects FastMCP's server.tool() API, but we use the low-level Server class.
-  // Skip cloud tools registration until @hasna/cloud supports the low-level Server API.
-  try {
-    registerCloudTools(server as any, "brains");
-  } catch {
-    // Cloud tools not compatible with low-level Server — silently skip
-  }
   await server.connect(transport);
   return server;
 }

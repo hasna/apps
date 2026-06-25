@@ -3,7 +3,7 @@
  *
  * Tracks applied migrations in a `_pg_migrations` table.
  */
-import { PgAdapterAsync } from "@hasna/cloud";
+import { PgAdapterAsync } from "./remote-storage.js";
 import { PG_MIGRATIONS } from "./pg-migrations.js";
 
 export interface PgMigrationResult {
@@ -32,6 +32,8 @@ export async function applyPgMigrations(
   };
 
   try {
+    await pg.run("CREATE EXTENSION IF NOT EXISTS pgcrypto");
+
     await pg.run(
       `CREATE TABLE IF NOT EXISTS _pg_migrations (
         id SERIAL PRIMARY KEY,
@@ -42,7 +44,7 @@ export async function applyPgMigrations(
 
     const applied = await pg.all(
       "SELECT version FROM _pg_migrations ORDER BY version"
-    );
+    ) as Array<{ version: number }>;
     const appliedSet = new Set(
       applied.map((r: { version: number }) => r.version)
     );

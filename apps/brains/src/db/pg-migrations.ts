@@ -1,5 +1,5 @@
 /**
- * PostgreSQL migrations for open-brains cloud sync.
+ * PostgreSQL migrations for open-brains storage sync.
  *
  * Equivalent to the SQLite schema in schema.ts + index.ts, translated for PostgreSQL.
  * Timestamps are stored as BIGINT (Unix epoch milliseconds) to match SQLite integer columns.
@@ -44,7 +44,7 @@ export const PG_MIGRATIONS: string[] = [
     used_in_job_id TEXT REFERENCES training_jobs(id)
   )`,
 
-  // Migration 3: feedback table (matches @hasna/cloud ensureFeedbackTable schema)
+  // Migration 3: feedback table (matches the repo-local feedback schema)
   `CREATE TABLE IF NOT EXISTS feedback (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     service TEXT NOT NULL DEFAULT 'brains',

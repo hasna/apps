@@ -2,16 +2,15 @@
 // brains CLI entry point
 
 import { Command } from "commander";
+import { registerEventsCommands } from "@hasna/events/commander";
 import { eq } from "drizzle-orm";
-import { readFileSync } from "fs";
-import { join } from "path";
-import { getDb, getRawDb, fineTunedModels, trainingJobs } from "../db/index.js";
+import { getDb, fineTunedModels, trainingJobs, saveFeedback, listFeedback } from "../db/index.js";
 import { printTable, printError, printSuccess, printInfo, printJson } from "./ui.js";
 import { registerModelsCommands } from "./commands/models.js";
 import { registerFinetuneCommands } from "./commands/finetune.js";
 import { registerDataCommands } from "./commands/data.js";
 import { registerCollectionsCommands } from "./commands/collections.js";
-import { registerCloudCommands } from "./commands/cloud.js";
+import { registerStorageCommands } from "./commands/storage.js";
 import { getPackageVersion } from "../lib/package-metadata.js";
 import { parseRemoveType } from "./remove.js";
 
@@ -169,28 +168,17 @@ feedbackCmd
   .command("send <message>")
   .description("Send feedback about brains")
   .option("--email <email>", "Contact email")
-  .action(async (message: string, opts: { email?: string }) => {
-    const { sendFeedback } = await import("@hasna/cloud");
-    const rawDb = getRawDb();
-    const pkg = JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf8"));
-    const result = await sendFeedback({ service: "brains", message, email: opts.email, version: pkg.version }, rawDb);
-    rawDb.close();
-    if (result.sent) {
-      printSuccess("Feedback sent. Thank you!");
-    } else {
-      printSuccess("Feedback saved locally. Thank you!");
-    }
+  .action((message: string, opts: { email?: string }) => {
+    saveFeedback({ service: "brains", message, email: opts.email, version: getPackageVersion() });
+    printSuccess("Feedback saved locally. Thank you!");
   });
 
 feedbackCmd
   .command("list")
   .description("List locally saved feedback")
   .option("--json", "Output as JSON")
-  .action(async (opts: { json?: boolean }) => {
-    const { listFeedback } = await import("@hasna/cloud");
-    const rawDb = getRawDb();
-    const entries = listFeedback(rawDb);
-    rawDb.close();
+  .action((opts: { json?: boolean }) => {
+    const entries = listFeedback();
     if (opts.json) { console.log(JSON.stringify(entries, null, 2)); return; }
     if (entries.length === 0) { printInfo("No feedback saved yet."); return; }
     printTable(
@@ -205,8 +193,10 @@ feedbackCmd
     );
   });
 
-// ── cloud ─────────────────────────────────────────────────────────────────────
+// ── storage ───────────────────────────────────────────────────────────────────
 
-registerCloudCommands(program);
+registerStorageCommands(program);
+registerEventsCommands(program, { source: "brains" });
+
 
 program.parse();
