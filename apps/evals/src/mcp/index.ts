@@ -8,6 +8,7 @@ import { judgeOnce } from "../core/judge.js";
 import { loadDataset } from "../datasets/loader.js";
 import { toJson, toMarkdown, compareRuns } from "../core/reporter.js";
 import { saveRun, getRun, listRuns } from "../db/store.js";
+import { getStorageStatus, storagePull, storagePush, storageSync } from "../db/storage-sync.js";
 import { writeFileSync, appendFileSync } from "fs";
 import type { EvalCase, AdapterConfig } from "../types/index.js";
 
@@ -144,6 +145,35 @@ const tools = [
         seeds: { type: "string", description: "Path to seed examples JSONL" },
       },
       required: ["description"],
+    },
+  },
+  {
+    name: "evals_storage_status",
+    description: "Show evals remote storage sync configuration and local sync history",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "evals_storage_push",
+    description: "Push local eval runs and baselines to remote PostgreSQL storage",
+    inputSchema: {
+      type: "object",
+      properties: { tables: { type: "array", items: { type: "string" } } },
+    },
+  },
+  {
+    name: "evals_storage_pull",
+    description: "Pull eval runs and baselines from remote PostgreSQL storage",
+    inputSchema: {
+      type: "object",
+      properties: { tables: { type: "array", items: { type: "string" } } },
+    },
+  },
+  {
+    name: "evals_storage_sync",
+    description: "Bidirectional evals storage sync: pull then push",
+    inputSchema: {
+      type: "object",
+      properties: { tables: { type: "array", items: { type: "string" } } },
     },
   },
 ];
@@ -290,6 +320,23 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         writeFileSync(output, lines.join("\n") + "\n");
         return { content: [{ type: "text", text: `Generated ${lines.length} cases → ${output}` }] };
       }
+
+      case "evals_storage_status":
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify(getStorageStatus(), null, 2),
+          }],
+        };
+
+      case "evals_storage_push":
+        return { content: [{ type: "text", text: JSON.stringify(await storagePush({ tables: a["tables"] as string[] | undefined }), null, 2) }] };
+
+      case "evals_storage_pull":
+        return { content: [{ type: "text", text: JSON.stringify(await storagePull({ tables: a["tables"] as string[] | undefined }), null, 2) }] };
+
+      case "evals_storage_sync":
+        return { content: [{ type: "text", text: JSON.stringify(await storageSync({ tables: a["tables"] as string[] | undefined }), null, 2) }] };
 
       default:
         return { content: [{ type: "text", text: `Unknown tool: ${name}` }] };

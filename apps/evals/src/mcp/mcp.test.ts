@@ -1,4 +1,6 @@
 import { describe, test, expect, mock, beforeEach, afterEach } from "bun:test";
+import { readFileSync } from "fs";
+import { join } from "path";
 import type { EvalRun } from "../types/index.js";
 
 // Only mock external API — not internal modules
@@ -158,5 +160,22 @@ describe("MCP Zod validation patterns", () => {
     expect(verdicts).not.toContain("PARTIAL" as never);
     expect(verdicts).not.toContain("SCORE_4" as never);
     expect(verdicts.length).toBe(3);
+  });
+});
+
+describe("MCP storage tool surface", () => {
+  test("uses storage tool names instead of legacy cloud names", () => {
+    const source = readFileSync(join(import.meta.dir, "index.ts"), "utf8");
+
+    expect(source).toContain("evals_storage_status");
+    expect(source).toContain("evals_storage_push");
+    expect(source).toContain("evals_storage_pull");
+    expect(source).toContain("evals_storage_sync");
+    expect(source).toContain("remote PostgreSQL storage");
+
+    expect(source).not.toContain("evals_cloud_status");
+    expect(source).not.toContain("evals_cloud_push");
+    expect(source).not.toContain("evals_cloud_pull");
+    expect(source).not.toContain("evals_cloud_sync");
   });
 });

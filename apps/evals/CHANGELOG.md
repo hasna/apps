@@ -37,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Auto-resolve `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` from `~/.secrets` when not in environment (fixes doctor + judge in non-shell contexts)
 - Multi-path example dataset resolution in `evals doctor` (works globally installed)
 - `--module`, `--export`, `--command`, `--mcp-command`, `--tool` options on `evals run` and `evals ci run`
-- `evals sync push/pull/status` commands via `@hasna/cloud` SDK
+- `evals sync push/pull/status` commands via the legacy shared sync SDK
 - Shell completion: `evals completion bash` / `evals completion zsh`
 - React SPA dashboard served by `evals-serve`
 - Pass^k metric (`repeat: N`, `passThreshold`) on eval cases
@@ -51,7 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OpenAI v6 `tool_calls` type change (`function` property access)
 
 ### Changed
-- Upgraded all dependencies to latest: `@anthropic-ai/sdk@0.82`, `openai@6`, `zod@4`, `commander@14`, `typescript@6`, `@modelcontextprotocol/sdk@1.29`, `@hasna/cloud@1.30`
+- Upgraded all dependencies to latest at the time, including the legacy shared sync package that has since been removed from active runtime use
 
 ## [0.1.0] - 2026-03-27
 

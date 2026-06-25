@@ -55,7 +55,7 @@ _evals() {
     'doctor:Health check'
     'mcp:MCP server management'
     'completion:Print shell completion script'
-    'sync:Sync eval runs and datasets with cloud'
+    'sync:Sync eval runs and datasets with remote storage'
   )
 
   _arguments -C \\

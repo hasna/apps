@@ -197,6 +197,19 @@ evals mcp register --gemini      # Gemini (~/.gemini/settings.json)
 evals mcp register --all         # all three at once
 ```
 
+## Storage Sync
+
+Runs and baselines are stored locally in SQLite. Set a remote PostgreSQL storage URL to sync them:
+
+```bash
+export HASNA_EVALS_DATABASE_URL="postgres://..."
+
+evals sync status
+evals sync push
+evals sync pull
+evals sync sync
+```
+
 ---
 
 ## CI / GitHub Actions

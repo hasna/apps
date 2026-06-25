@@ -1,39 +1,4 @@
 import { Command } from "commander";
-import { existsSync, readFileSync } from "fs";
-import { homedir } from "os";
-import { join } from "path";
-
-/**
- * Try to resolve an API key from process.env first, then from the
- * ~/.secrets/hasnaxyz/<service>/live.env file as a fallback.
- * This handles cases where the CLI is invoked outside a shell session
- * that sources the secrets (e.g. cron, agent spawns, MCP calls).
- */
-function resolveApiKey(envVar: string, secretsPath: string, secretsKey: string): string | undefined {
-  // 1. Direct env var
-  if (process.env[envVar]) return process.env[envVar];
-
-  // 2. ~/.secrets fallback
-  const fullPath = join(homedir(), ".secrets", secretsPath);
-  if (existsSync(fullPath)) {
-    try {
-      const content = readFileSync(fullPath, "utf8");
-      for (const line of content.split("\n")) {
-        const trimmed = line.trim();
-        if (trimmed.startsWith(secretsKey + "=")) {
-          const value = trimmed.slice(secretsKey.length + 1).replace(/^["']|["']$/g, "");
-          if (value) {
-            // Auto-inject for this process so downstream calls work too
-            process.env[envVar] = value;
-            return value;
-          }
-        }
-      }
-    } catch { /* ignore read errors */ }
-  }
-
-  return undefined;
-}
 
 export function doctorCommand(): Command {
   return new Command("doctor")
@@ -42,24 +7,16 @@ export function doctorCommand(): Command {
     .action(async (opts: { json?: boolean }) => {
       const checks: Array<{ name: string; ok: boolean; hint?: string }> = [];
 
-      // Check Anthropic API key — env var or ~/.secrets fallback
-      const anthropicKey = resolveApiKey(
-        "ANTHROPIC_API_KEY",
-        "hasnaxyz/anthropic/live.env",
-        "HASNAXYZ_ANTHROPIC_LIVE_API_KEY"
-      );
+      // Check Anthropic API key.
+      const anthropicKey = process.env["ANTHROPIC_API_KEY"];
       checks.push({
         name: "ANTHROPIC_API_KEY",
         ok: !!anthropicKey,
-        hint: "export ANTHROPIC_API_KEY=<your-key>  (or add to ~/.secrets/hasnaxyz/anthropic/live.env)",
+        hint: "export ANTHROPIC_API_KEY=<your-key>",
       });
 
-      // Check OpenAI API key (optional) — env var or ~/.secrets fallback
-      const openaiKey = resolveApiKey(
-        "OPENAI_API_KEY",
-        "hasnaxyz/openai/live.env",
-        "HASNAXYZ_OPENAI_LIVE_API_KEY"
-      );
+      // Check OpenAI API key (optional).
+      const openaiKey = process.env["OPENAI_API_KEY"];
       checks.push({
         name: "OPENAI_API_KEY (optional)",
         ok: !!openaiKey,

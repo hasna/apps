@@ -162,3 +162,33 @@ describe("evals completion", () => {
     expect(zsh.stdout).toContain("sync:");
   });
 });
+
+describe("evals sync", () => {
+  test("reports remote storage status with canonical env names", async () => {
+    const { stdout, exitCode } = await runCli(["sync", "status", "--json"]);
+    expect(exitCode).toBe(0);
+
+    const status = JSON.parse(stdout) as {
+      configured: boolean;
+      mode: string;
+      env: string[];
+      activeEnv: string | null;
+      service: string;
+      tables: string[];
+    };
+
+    expect(status.configured).toBe(false);
+    expect(status.mode).toBe("local");
+    expect(status.env).toEqual(["HASNA_EVALS_DATABASE_URL", "EVALS_DATABASE_URL"]);
+    expect(status.activeEnv).toBe(null);
+    expect(status.service).toBe("evals");
+    expect(status.tables).toEqual(["runs", "baselines"]);
+  });
+
+  test("describes sync using storage terminology", async () => {
+    const { stdout, exitCode } = await runCli(["sync", "--help"]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("remote PostgreSQL storage");
+    expect(stdout).not.toContain("cloud");
+  });
+});

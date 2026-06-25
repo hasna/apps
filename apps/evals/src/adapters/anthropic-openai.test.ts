@@ -146,13 +146,10 @@ describe("OpenAI adapter", () => {
   });
 });
 
-// ─── resolveKey in judge (via env injection) ─────────────────────────────────
+// ─── judge import smoke ──────────────────────────────────────────────────────
 
-describe("judge.ts resolveKey — secrets fallback", () => {
-  test("ANTHROPIC_API_KEY is injected from secrets on module load", async () => {
-    // The judge module runs resolveKey eagerly on load.
-    // In CI or clean envs it reads from ~/.secrets if available.
-    // We just verify the module imports without throwing.
+describe("judge.ts", () => {
+  test("imports without resolving secrets on module load", async () => {
     const { runJudge } = await import("../core/judge.js");
     expect(typeof runJudge).toBe("function");
   });
