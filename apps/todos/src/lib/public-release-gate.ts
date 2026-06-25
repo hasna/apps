@@ -23,6 +23,7 @@ export type PackageJson = {
   };
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
+  scripts?: Record<string, string>;
   gitHead?: string;
 };
 
@@ -54,6 +55,8 @@ const PACKAGE_NAME = "@hasna/todos";
 const REPOSITORY_URL = "https://github.com/hasna/todos.git";
 const HOMEPAGE_URL = "https://github.com/hasna/todos";
 const ISSUES_URL = "https://github.com/hasna/todos/issues";
+const MAX_PACKED_FILE_COUNT = 320;
+const MAX_PACKED_UNPACKED_BYTES = 14 * 1024 * 1024;
 
 const FORBIDDEN_DEPENDENCY_PARTS = [
   "aws",
@@ -89,13 +92,12 @@ const SECRET_PATTERNS: RegExp[] = [
 ];
 
 const INSTALL_SMOKE_COMMANDS: InstallSmokeCommand[] = [
-  { command: "bun", args: ["remove", "-g", PACKAGE_NAME], required: false },
-  { command: "bun", args: ["install", "-g", "<tarball>"] },
-  { command: "bash", args: ["-lc", "command -v todos && command -v todos-mcp && command -v todos-serve"] },
-  { command: "todos", args: ["--version"] },
-  { command: "todos", args: ["--help"] },
-  { command: "todos-mcp", args: ["--help"] },
-  { command: "todos-serve", args: ["--port=<port>", "--host", "127.0.0.1", "--no-open"] },
+  { command: "npm", args: ["install", "--omit=dev", "--ignore-scripts", "<tarball>"] },
+  { command: "bash", args: ["-lc", "test -x ./node_modules/.bin/todos && test -x ./node_modules/.bin/todos-mcp && test -x ./node_modules/.bin/todos-serve"] },
+  { command: "./node_modules/.bin/todos", args: ["--version"] },
+  { command: "./node_modules/.bin/todos", args: ["--help"] },
+  { command: "./node_modules/.bin/todos-mcp", args: ["--help"] },
+  { command: "./node_modules/.bin/todos-serve", args: ["--port=<port>", "--host", "127.0.0.1", "--no-open"] },
 ];
 
 export function validateRootPackageMetadata(packageJson: PackageJson): ReleaseGateFailure[] {
@@ -133,6 +135,14 @@ export function validateRootPackageMetadata(packageJson: PackageJson): ReleaseGa
   addIf(failures, Object.hasOwn(bin, "todos-remote"), "bin-remote", "package must not expose a hosted remote CLI bin");
   addIf(failures, Object.hasOwn(packageJson.exports ?? {}, "./remote"), "export-remote", "package must not export hosted remote code");
 
+  assertScriptRunsCommands(failures, packageJson, "verify:release", [
+    "bun run typecheck",
+    "bun test",
+    "bun run test:no-cloud",
+    "bun run scripts/verify-public-release.ts",
+  ]);
+  assertScriptRunsCommands(failures, packageJson, "prepublishOnly", ["bun run verify:release"]);
+
   const files = packageJson.files ?? [];
   for (const required of ["dist", "dashboard/dist", "LICENSE", "README.md"]) {
     addIf(failures, !files.includes(required), "package-files", `files must include ${required}`);
@@ -155,6 +165,14 @@ export function validateSdkPackageMetadata(packageJson: PackageJson): ReleaseGat
   addIf(failures, packageJson.repository?.url !== REPOSITORY_URL, "sdk-repository-url", `SDK repository.url must be ${REPOSITORY_URL}`);
   addIf(failures, packageJson.homepage !== HOMEPAGE_URL, "sdk-homepage", `SDK homepage must be ${HOMEPAGE_URL}`);
   addIf(failures, packageJson.bugs?.url !== ISSUES_URL, "sdk-bugs-url", `SDK bugs.url must be ${ISSUES_URL}`);
+  assertScriptRunsCommands(
+    failures,
+    packageJson,
+    "verify:release",
+    ["bun run typecheck", "bun run test", "bun run build", "npm pack --dry-run", "bun run scripts/verify-release.ts"],
+    "sdk",
+  );
+  assertScriptRunsCommands(failures, packageJson, "prepublishOnly", ["bun run verify:release"], "sdk");
   return failures;
 }
 
@@ -180,7 +198,7 @@ export function validatePublicTextSurfaces(files: TextFile[]): ReleaseGateFailur
   return failures;
 }
 
-export function validatePackedPackageFiles(paths: string[]): ReleaseGateFailure[] {
+export function validatePackedPackageFiles(paths: string[], options: { unpackedSize?: number } = {}): ReleaseGateFailure[] {
   const failures: ReleaseGateFailure[] = [];
   for (const required of [
     "package/package.json",
@@ -200,8 +218,38 @@ export function validatePackedPackageFiles(paths: string[]): ReleaseGateFailure[
   for (const path of paths) {
     addIf(failures, path.startsWith("package/src/"), "pack-source", `packed package must not include source file ${path}`);
     addIf(failures, path.startsWith("package/.github/"), "pack-github", `packed package must not include GitHub config ${path}`);
+    addIf(failures, /\.map$/i.test(path), "pack-map", `packed package must not include source or declaration map ${path}`);
+    addIf(failures, /\.(test|spec)\.(js|mjs|cjs|d\.ts)$/i.test(path), "pack-test", `packed package must not include test artifact ${path}`);
+    addIf(failures, /(?:^|\/)\.npmrc$/i.test(path), "pack-npmrc", `packed package must not include npm credentials config ${path}`);
+    addIf(failures, /\.(pem|key|p12|pfx|crt|cer)$/i.test(path), "pack-key-material", `packed package must not include key material ${path}`);
+    addIf(
+      failures,
+      isCredentialConfigPath(path),
+      "pack-credential-path",
+      `packed package must not include credential-named path ${path}`,
+    );
+    addIf(
+      failures,
+      /(?:^|\/)(?:fixtures?|mocks?|testing|test-utils)\//i.test(path),
+      "pack-fixture-dir",
+      `packed package must not include fixture or mock directory ${path}`,
+    );
     addIf(failures, path.includes(".env"), "pack-env", `packed package must not include env file ${path}`);
     addIf(failures, path.includes(".secrets"), "pack-secrets", `packed package must not include secrets path ${path}`);
+  }
+  addIf(
+    failures,
+    paths.length > MAX_PACKED_FILE_COUNT,
+    "pack-file-count",
+    `packed package has too many files: ${paths.length} > ${MAX_PACKED_FILE_COUNT}`,
+  );
+  if (typeof options.unpackedSize === "number") {
+    addIf(
+      failures,
+      options.unpackedSize > MAX_PACKED_UNPACKED_BYTES,
+      "pack-unpacked-size",
+      `packed package unpacked size is too large: ${options.unpackedSize} > ${MAX_PACKED_UNPACKED_BYTES}`,
+    );
   }
 
   return failures;
@@ -278,23 +326,38 @@ export function getInstallSmokeCommands(tarball = "<tarball>", port = "<port>"):
 export function validateInstallSmokeCommands(commands: InstallSmokeCommand[]): ReleaseGateFailure[] {
   const failures: ReleaseGateFailure[] = [];
   const rendered = commands.map((step) => [step.command, ...step.args].join(" "));
+  const installPrefix = "npm install --omit=dev --ignore-scripts ";
+  const installTargets = rendered
+    .filter((line) => line.startsWith(installPrefix))
+    .map((line) => line.slice(installPrefix.length).trim().split(/\s+/)[0] ?? "");
 
   addIf(
     failures,
-    !rendered.some((line) => line.startsWith(`bun install -g ${PACKAGE_NAME}`) || line.startsWith("bun install -g /")),
-    "install-smoke-bun-install",
-    `install smoke must install ${PACKAGE_NAME} with bun install -g`,
+    !installTargets.some((target) => target === "<tarball>" || target.startsWith("/") || target.startsWith("./") || target.startsWith("../") || target.endsWith(".tgz")),
+    "install-smoke-temp-install",
+    `install smoke must install ${PACKAGE_NAME} from a packed tarball in a temp app`,
   );
   addIf(
     failures,
-    rendered.some((line) => /^npm\s+(install|i|exec|x)\b/.test(line) || /^npx\b/.test(line)),
-    "install-smoke-npm",
-    "install smoke must not use npm or npx for installation/execution",
+    rendered.some((line) => /(?:^|\s)(?:-g|--global)(?:\s|$)/.test(line) || /^npx\b/.test(line)),
+    "install-smoke-global",
+    "install smoke must not mutate global installs or use npx",
   );
 
-  for (const expected of ["command -v todos", "command -v todos-mcp", "command -v todos-serve", "todos --version", "todos --help", "todos-mcp --help"]) {
-    addIf(failures, !rendered.some((line) => line.includes(expected)), "install-smoke-command", `install smoke must run ${expected}`);
+  for (const expected of [
+    "bash -lc test -x ./node_modules/.bin/todos && test -x ./node_modules/.bin/todos-mcp && test -x ./node_modules/.bin/todos-serve",
+    "./node_modules/.bin/todos --version",
+    "./node_modules/.bin/todos --help",
+    "./node_modules/.bin/todos-mcp --help",
+  ]) {
+    addIf(failures, !rendered.includes(expected), "install-smoke-command", `install smoke must run ${expected}`);
   }
+  addIf(
+    failures,
+    !rendered.some((line) => /^\.\/node_modules\/\.bin\/todos-serve --port=\S+ --host 127\.0\.0\.1 --no-open$/.test(line)),
+    "install-smoke-command",
+    "install smoke must run ./node_modules/.bin/todos-serve with a local port",
+  );
 
   const joined = rendered.join("\n");
   for (const pattern of FORBIDDEN_TEXT_PATTERNS) {
@@ -306,6 +369,34 @@ export function validateInstallSmokeCommands(commands: InstallSmokeCommand[]): R
 
 function addIf(failures: ReleaseGateFailure[], condition: boolean, check: string, message: string): void {
   if (condition) failures.push({ check, message });
+}
+
+function assertScriptRunsCommands(
+  failures: ReleaseGateFailure[],
+  packageJson: PackageJson,
+  scriptName: string,
+  requiredCommands: string[],
+  prefix = "release",
+): void {
+  const script = packageJson.scripts?.[scriptName];
+  addIf(failures, typeof script !== "string" || script.length === 0, `${prefix}-script`, `${scriptName} script is required`);
+  if (!script) return;
+  const commands = script.split("&&").map(normalizeShellCommand).filter(Boolean);
+  const expected = requiredCommands.map(normalizeShellCommand);
+  const matches = commands.length === expected.length && expected.every((command, index) => commands[index] === command);
+  addIf(failures, !matches, `${prefix}-script`, `${scriptName} must run exactly: ${expected.join(" && ")}`);
+}
+
+const CREDENTIAL_CONFIG_EXTENSIONS = /\.(env|json|ya?ml|ini|conf|config|txt)$/i;
+const CREDENTIAL_NAME = /(?:secret|secrets|token|tokens|credential|credentials|password|passwords)/i;
+
+function isCredentialConfigPath(path: string): boolean {
+  const fileName = path.split("/").pop() ?? path;
+  return CREDENTIAL_CONFIG_EXTENSIONS.test(fileName) && CREDENTIAL_NAME.test(fileName);
+}
+
+function normalizeShellCommand(command: string): string {
+  return command.trim().replace(/\s+/g, " ");
 }
 
 function isSemver(value: unknown): value is string {

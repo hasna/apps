@@ -17,9 +17,11 @@
   },
   "files": ["dist", "LICENSE", "README.md"],
   "scripts": {
-    "build": "bun build src/index.ts --outdir dist --target bun && bun build src/schemas.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist && bun build src/index.ts --outdir dist --target bun && bun build src/schemas.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify:release": "bun run typecheck && bun run test && bun run build && npm pack --dry-run && bun run scripts/verify-release.ts",
+    "prepublishOnly": "bun run verify:release"
   },
   "keywords": ["todos", "tasks", "ai", "agent", "sdk", "claude", "codex", "gemini", "mcp"],
   "publishConfig": { "access": "public" },

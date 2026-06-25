@@ -26,18 +26,25 @@ describe("todos MCP HTTP transport", () => {
   let port: number;
   let tmpDir: string;
   let dbPath: string;
+  let server: Awaited<ReturnType<typeof startServer>> | undefined;
+  let signalListenerCounts: { sigint: number; sigterm: number };
 
   beforeAll(async () => {
+    signalListenerCounts = {
+      sigint: process.listenerCount("SIGINT"),
+      sigterm: process.listenerCount("SIGTERM"),
+    };
     port = reserveFreePort(18881);
     tmpDir = await mkdtemp(join(tmpdir(), "todos-mcp-http-test-"));
     dbPath = join(tmpDir, "test.db");
     process.env["TODOS_DB_PATH"] = dbPath;
     process.env["TODOS_AUTO_PROJECT"] = "false";
     process.env["TODOS_NO_OPEN"] = "true";
-    await startServer(port, { open: false, host: "127.0.0.1" });
+    server = await startServer(port, { open: false, host: "127.0.0.1", installSignalHandlers: false });
   }, SERVER_HOOK_TIMEOUT_MS);
 
   afterAll(async () => {
+    server?.stop(true);
     closeDatabase();
     delete process.env["TODOS_DB_PATH"];
     delete process.env["TODOS_AUTO_PROJECT"];
@@ -89,6 +96,26 @@ describe("todos MCP HTTP transport", () => {
   it("buildServer registers tools without starting transport", () => {
     const server = buildServer();
     expect(server).toBeDefined();
+  });
+
+  it("does not install process signal handlers when disabled", () => {
+    expect(process.listenerCount("SIGINT")).toBe(signalListenerCounts.sigint);
+    expect(process.listenerCount("SIGTERM")).toBe(signalListenerCounts.sigterm);
+  });
+
+  it("removes default process signal handlers when stopped", async () => {
+    const before = {
+      sigint: process.listenerCount("SIGINT"),
+      sigterm: process.listenerCount("SIGTERM"),
+    };
+    const defaultServer = await startServer(reserveFreePort(18981), { open: false, host: "127.0.0.1" });
+    expect(process.listenerCount("SIGINT")).toBe(before.sigint + 1);
+    expect(process.listenerCount("SIGTERM")).toBe(before.sigterm + 1);
+
+    defaultServer.stop(true);
+
+    expect(process.listenerCount("SIGINT")).toBe(before.sigint);
+    expect(process.listenerCount("SIGTERM")).toBe(before.sigterm);
   });
 
   it("GET /health returns 200 from todos-serve", async () => {

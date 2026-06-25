@@ -54,7 +54,7 @@
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
-    "verify:release": "bun run scripts/verify-public-release.ts",
+    "verify:release": "bun run typecheck && bun test && bun run test:no-cloud && bun run scripts/verify-public-release.ts",
     "prepublishOnly": "bun run verify:release",
     "postinstall": "mkdir -p $HOME/.hasna/todos $HOME/.hasna/todos/training 2>/dev/null || true"
   },

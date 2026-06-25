@@ -156,7 +156,10 @@ export function taskToSummary(task: Task, fields?: string[]) {
   return Object.fromEntries(fields.map(f => [f, (full as Record<string, unknown>)[f] ?? null]));
 }
 
-export async function startServer(port: number, options?: { open?: boolean; host?: string; apiKey?: string }): Promise<void> {
+export async function startServer(
+  port: number,
+  options?: { open?: boolean; host?: string; apiKey?: string; installSignalHandlers?: boolean },
+): Promise<ReturnType<typeof Bun.serve>> {
   const shouldOpen = options?.open ?? true;
   const apiKey = options?.apiKey || process.env.TODOS_API_KEY || null;
 
@@ -576,8 +579,21 @@ export async function startServer(port: number, options?: { open?: boolean; host
     server.stop();
     process.exit(0);
   };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  let removeSignalHandlers = () => {};
+  if (options?.installSignalHandlers !== false) {
+    process.on("SIGINT", shutdown);
+    process.on("SIGTERM", shutdown);
+    removeSignalHandlers = () => {
+      process.off("SIGINT", shutdown);
+      process.off("SIGTERM", shutdown);
+      removeSignalHandlers = () => {};
+    };
+  }
+  const stopServer = server.stop.bind(server);
+  server.stop = ((closeActiveConnections?: boolean) => {
+    removeSignalHandlers();
+    return stopServer(closeActiveConnections);
+  }) as typeof server.stop;
 
   const serverUrl = `http://localhost:${port}`;
   console.log(`Todos Dashboard running at ${serverUrl}`);
@@ -595,4 +611,6 @@ export async function startServer(port: number, options?: { open?: boolean; host
       // Silently ignore if we can't open browser
     }
   }
+
+  return server;
 }

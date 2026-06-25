@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { mkdtempSync, readFileSync, rmSync, statSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -21,6 +21,7 @@ import {
 type PackResult = {
   filename: string;
   files: Array<{ path: string }>;
+  unpackedSize?: number;
 };
 
 const root = resolve(import.meta.dir, "..");
@@ -54,13 +55,16 @@ function main(): void {
   const tempDir = mkdtempSync(join(tmpdir(), "todos-release-"));
   try {
     const pack = npmPack(tempDir);
-    failures.push(...validatePackedPackageFiles(pack.files.map((file) => `package/${file.path}`)));
+    failures.push(...validatePackedPackageFiles(pack.files.map((file) => `package/${file.path}`), { unpackedSize: pack.unpackedSize }));
     failures.push(...validatePackedProvenanceMetadata(readPackedPackageJson(join(tempDir, pack.filename))));
     failures.push(...validateReleaseProvenanceMetadata(readPackedReleaseProvenance(join(tempDir, pack.filename)), packageJson));
     failures.push(...scanPackedText(join(tempDir, pack.filename)));
 
     if (!args.has("--skip-install-smoke")) {
-      installSmoke(join(tempDir, pack.filename));
+      const appDir = join(tempDir, "app");
+      mkdirSync(appDir, { recursive: true });
+      writeFileSync(join(appDir, "package.json"), `${JSON.stringify({ type: "module", private: true }, null, 2)}\n`);
+      installSmoke(join(tempDir, pack.filename), appDir);
     }
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
@@ -112,7 +116,7 @@ function npmPack(destination: string): PackResult {
   return pack;
 }
 
-function installSmoke(tarball: string): void {
+function installSmoke(tarball: string, appDir: string): void {
   const failures = validateInstallSmokeCommands(getInstallSmokeCommands(tarball, "19600"));
   if (failures.length > 0) {
     console.error("Install smoke plan is invalid:");
@@ -121,32 +125,58 @@ function installSmoke(tarball: string): void {
   }
 
   for (const step of getInstallSmokeCommands(tarball, "19600")) {
-    if (step.command === "todos-serve") {
-      expectServeStartup();
+    if (step.command.endsWith("todos-serve")) {
+      expectServeStartup(appDir);
       continue;
     }
-    const args = withInternalPackageInstallOverride(step.command, step.args);
-    if (step.required === false) run(step.command, args);
-    else runOrExit(step.command, args);
+    if (step.required === false) run(step.command, step.args, appDir);
+    else runOrExit(step.command, step.args, appDir);
   }
+  smokeInstalledExports(appDir);
 }
 
-function withInternalPackageInstallOverride(command: string, args: string[]): string[] {
-  if (command !== "bun") return args;
-  if (args[0] !== "install" || !args.includes("-g")) return args;
-  if (args.some((arg) => arg.startsWith("--minimum-release-age"))) return args;
-  return [...args, "--minimum-release-age=0"];
-}
-
-function expectServeStartup(): void {
+function expectServeStartup(appDir: string): void {
   const port = `${19600 + Math.floor(Math.random() * 1000)}`;
-  console.log(`$ timeout 3 todos-serve --port=${port} --host 127.0.0.1 --no-open`);
-  const result = runCapture("timeout", ["3", "todos-serve", `--port=${port}`, "--host", "127.0.0.1", "--no-open"]);
+  console.log(`$ timeout 3 ./node_modules/.bin/todos-serve --port=${port} --host 127.0.0.1 --no-open`);
+  const result = runCapture("timeout", ["3", "./node_modules/.bin/todos-serve", `--port=${port}`, "--host", "127.0.0.1", "--no-open"], appDir);
   const output = `${result.stdout}\n${result.stderr}`;
   if (!output.includes("Todos Dashboard running at")) {
     console.error(output);
     console.error("todos-serve did not print a startup URL during install smoke.");
     process.exit(result.status || 1);
+  }
+}
+
+function smokeInstalledExports(appDir: string): void {
+  const checks = [
+    [
+      "@hasna/todos",
+      "if (!m.TodosClient || !m.createClient || !m.TODOS_REGISTRY) throw new Error('missing root exports')",
+    ],
+    [
+      "@hasna/todos/sdk",
+      "if (!m.TodosClient || !m.createClient || !m.TodosAPIError) throw new Error('missing sdk exports')",
+    ],
+    [
+      "@hasna/todos/mcp",
+      "if (!m.createMcpManifest || !Array.isArray(m.getMcpToolNames())) throw new Error('missing mcp exports')",
+    ],
+    [
+      "@hasna/todos/registry",
+      "if (!m.createTodosRegistry || !Array.isArray(m.TODOS_PACKAGE_EXPORTS)) throw new Error('missing registry exports')",
+    ],
+    [
+      "@hasna/todos/contracts",
+      "if (!m.createContractsManifest || !m.TODOS_CONTRACTS) throw new Error('missing contracts exports')",
+    ],
+    [
+      "@hasna/todos/storage",
+      "if (!m.createLocalSqliteTodosStorageAdapter || !Array.isArray(m.TODOS_STORAGE_TABLES)) throw new Error('missing storage exports')",
+    ],
+  ];
+
+  for (const [specifier, assertion] of checks) {
+    runOrExit("bun", ["-e", `import(${JSON.stringify(specifier)}).then((m)=>{ ${assertion}; })`], appDir);
   }
 }
 
@@ -204,19 +234,19 @@ function readJson<T>(path: string): T {
   return JSON.parse(readFileSync(join(root, path), "utf8")) as T;
 }
 
-function runOrExit(command: string, commandArgs: string[]): void {
-  const result = run(command, commandArgs);
+function runOrExit(command: string, commandArgs: string[], cwd = root): void {
+  const result = run(command, commandArgs, cwd);
   if (result.status !== 0) process.exit(result.status || 1);
 }
 
-function run(command: string, commandArgs: string[]): ReturnType<typeof spawnSync> {
+function run(command: string, commandArgs: string[], cwd = root): ReturnType<typeof spawnSync> {
   console.log(`$ ${[command, ...commandArgs].join(" ")}`);
-  return spawnSync(command, commandArgs, { cwd: root, stdio: "inherit", env: process.env });
+  return spawnSync(command, commandArgs, { cwd, stdio: "inherit", env: process.env });
 }
 
-function runCapture(command: string, commandArgs: string[]): { status: number; stdout: string; stderr: string } {
+function runCapture(command: string, commandArgs: string[], cwd = root): { status: number; stdout: string; stderr: string } {
   const result = spawnSync(command, commandArgs, {
-    cwd: root,
+    cwd,
     encoding: "utf8",
     env: process.env,
   });

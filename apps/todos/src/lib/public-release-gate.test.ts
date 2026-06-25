@@ -28,6 +28,10 @@ const rootPackage: PackageJson = {
   },
   files: ["dist", "dashboard/dist", "LICENSE", "README.md"],
   workspaces: ["dashboard"],
+  scripts: {
+    "verify:release": "bun run typecheck && bun test && bun run test:no-cloud && bun run scripts/verify-public-release.ts",
+    prepublishOnly: "bun run verify:release",
+  },
   publishConfig: { registry: "https://registry.npmjs.org", access: "public" },
   repository: { type: "git", url: "https://github.com/hasna/todos.git" },
   homepage: "https://github.com/hasna/todos",
@@ -45,6 +49,10 @@ describe("public release gate", () => {
         repository: { type: "git", url: "https://github.com/hasna/todos.git", directory: "sdk" },
         homepage: "https://github.com/hasna/todos",
         bugs: { url: "https://github.com/hasna/todos/issues" },
+        scripts: {
+          "verify:release": "bun run typecheck && bun run test && bun run build && npm pack --dry-run && bun run scripts/verify-release.ts",
+          prepublishOnly: "bun run verify:release",
+        },
       }),
     ).toEqual([]);
   });
@@ -62,6 +70,52 @@ describe("public release gate", () => {
     expect(failures.map((failure) => failure.check)).toContain("publish-access");
     expect(failures.map((failure) => failure.check)).toContain("bin-remote");
     expect(failures.map((failure) => failure.check)).toContain("dependency-boundary");
+  });
+
+  test("rejects package metadata without publish release hooks", () => {
+    const rootFailures = validateRootPackageMetadata({
+      ...rootPackage,
+      scripts: { prepublishOnly: "bun run build", "verify:release": "bun run scripts/verify-public-release.ts" },
+    });
+    const echoRootFailures = validateRootPackageMetadata({
+      ...rootPackage,
+      scripts: {
+        prepublishOnly: "echo verify:release",
+        "verify:release": "echo typecheck && echo bun test && echo test:no-cloud && echo scripts/verify-public-release.ts",
+      },
+    });
+    const shortCircuitRootFailures = validateRootPackageMetadata({
+      ...rootPackage,
+      scripts: {
+        prepublishOnly: "bun run verify:release",
+        "verify:release": "exit 0 && bun run typecheck && bun test && bun run test:no-cloud && bun run scripts/verify-public-release.ts",
+      },
+    });
+    const sdkFailures = validateSdkPackageMetadata({
+      name: "@hasna/todos-sdk",
+      publishConfig: { access: "public" },
+      repository: { type: "git", url: "https://github.com/hasna/todos.git", directory: "sdk" },
+      homepage: "https://github.com/hasna/todos",
+      bugs: { url: "https://github.com/hasna/todos/issues" },
+      scripts: { build: "bun build src/index.ts --outdir dist --target bun" },
+    });
+    const echoSdkFailures = validateSdkPackageMetadata({
+      name: "@hasna/todos-sdk",
+      publishConfig: { access: "public" },
+      repository: { type: "git", url: "https://github.com/hasna/todos.git", directory: "sdk" },
+      homepage: "https://github.com/hasna/todos",
+      bugs: { url: "https://github.com/hasna/todos/issues" },
+      scripts: {
+        prepublishOnly: "echo verify:release",
+        "verify:release": "echo typecheck test build npm pack --dry-run scripts/verify-release.ts",
+      },
+    });
+
+    expect(rootFailures.map((failure) => failure.check)).toContain("release-script");
+    expect(echoRootFailures.map((failure) => failure.check)).toContain("release-script");
+    expect(shortCircuitRootFailures.map((failure) => failure.check)).toContain("release-script");
+    expect(sdkFailures.map((failure) => failure.check)).toContain("sdk-script");
+    expect(echoSdkFailures.map((failure) => failure.check)).toContain("sdk-script");
   });
 
   test("rejects public docs with npm install, open-todos, or secret-like values", () => {
@@ -88,13 +142,32 @@ describe("public release gate", () => {
         "package/dist/server/index.js",
         "package/dist/release-provenance.json",
         "package/dashboard/dist/index.html",
-      ]),
+        "package/dist/lib/secret-redaction.d.ts",
+        "package/dist/mcp/token-utils.d.ts",
+      ], { unpackedSize: 1024 }),
     ).toEqual([]);
 
-    const failures = validatePackedPackageFiles(["package/package.json", "package/src/index.ts", "package/.env"]);
+    const failures = validatePackedPackageFiles([
+      "package/package.json",
+      "package/src/index.ts",
+      "package/.env",
+      "package/.npmrc",
+      "package/dist/index.d.ts.map",
+      "package/dist/index.test.d.ts",
+      "package/dist/private.key",
+      "package/dist/token-cache.json",
+      "package/dist/testing/data.json",
+    ], { unpackedSize: 20 * 1024 * 1024 });
     expect(failures.map((failure) => failure.check)).toContain("pack-contents");
     expect(failures.map((failure) => failure.check)).toContain("pack-source");
     expect(failures.map((failure) => failure.check)).toContain("pack-env");
+    expect(failures.map((failure) => failure.check)).toContain("pack-npmrc");
+    expect(failures.map((failure) => failure.check)).toContain("pack-map");
+    expect(failures.map((failure) => failure.check)).toContain("pack-test");
+    expect(failures.map((failure) => failure.check)).toContain("pack-key-material");
+    expect(failures.map((failure) => failure.check)).toContain("pack-credential-path");
+    expect(failures.map((failure) => failure.check)).toContain("pack-fixture-dir");
+    expect(failures.map((failure) => failure.check)).toContain("pack-unpacked-size");
   });
 
   test("requires packed package provenance and public npm visibility", () => {
@@ -112,31 +185,49 @@ describe("public release gate", () => {
     expect(validateNpmView("@hasna/todos", JSON.stringify({ name: "@scope/other" }))).not.toEqual([]);
   });
 
-  test("keeps the Bun install smoke plan public, local, and stable", () => {
+  test("keeps the install smoke plan packed, local, and stable", () => {
     const plan = getInstallSmokeCommands("/tmp/hasna-todos.tgz", "19717");
     const rendered = plan.map((step) => [step.command, ...step.args].join(" "));
 
     expect(validateInstallSmokeCommands(plan)).toEqual([]);
-    expect(rendered).toContain("bun install -g /tmp/hasna-todos.tgz");
-    expect(rendered).toContain("bash -lc command -v todos && command -v todos-mcp && command -v todos-serve");
-    expect(rendered).toContain("todos --version");
-    expect(rendered).toContain("todos --help");
-    expect(rendered).toContain("todos-mcp --help");
-    expect(rendered).toContain("todos-serve --port=19717 --host 127.0.0.1 --no-open");
-    expect(rendered.some((line) => line.startsWith("npm "))).toBe(false);
+    expect(rendered).toContain("npm install --omit=dev --ignore-scripts /tmp/hasna-todos.tgz");
+    expect(rendered).toContain("bash -lc test -x ./node_modules/.bin/todos && test -x ./node_modules/.bin/todos-mcp && test -x ./node_modules/.bin/todos-serve");
+    expect(rendered).toContain("./node_modules/.bin/todos --version");
+    expect(rendered).toContain("./node_modules/.bin/todos --help");
+    expect(rendered).toContain("./node_modules/.bin/todos-mcp --help");
+    expect(rendered).toContain("./node_modules/.bin/todos-serve --port=19717 --host 127.0.0.1 --no-open");
+    expect(rendered.some((line) => line.includes(" -g"))).toBe(false);
     expect(rendered.some((line) => line.includes("platform-todos"))).toBe(false);
   });
 
   test("rejects install smoke plans that use non-Bun installers or private endpoints", () => {
     const failures = validateInstallSmokeCommands([
-      { command: "npm", args: ["install", "-g", "@hasna/todos"] },
-      { command: "todos", args: ["--help"] },
-      { command: "todos", args: ["--version"] },
-      { command: "todos-mcp", args: ["--help"] },
-      { command: "bash", args: ["-lc", "command -v todos && command -v todos-mcp && command -v todos-serve"] },
+      { command: "npm", args: ["install", "--omit=dev", "--ignore-scripts", "--global", "@hasna/todos"] },
+      { command: "./node_modules/.bin/todos", args: ["--help"] },
+      { command: "./node_modules/.bin/todos", args: ["--version"] },
+      { command: "./node_modules/.bin/todos-mcp", args: ["--help"] },
+      { command: "bash", args: ["-lc", "test -x ./node_modules/.bin/todos && test -x ./node_modules/.bin/todos-mcp && test -x ./node_modules/.bin/todos-serve"] },
     ]);
+    const echoFailures = validateInstallSmokeCommands([
+      { command: "npm", args: ["install", "--omit=dev", "--ignore-scripts", "/tmp/hasna-todos.tgz"] },
+      {
+        command: "bash",
+        args: ["-lc", [
+          "echo test -x ./node_modules/.bin/todos",
+          "echo test -x ./node_modules/.bin/todos-mcp",
+          "echo test -x ./node_modules/.bin/todos-serve",
+          "echo ./node_modules/.bin/todos --version",
+          "echo ./node_modules/.bin/todos --help",
+          "echo ./node_modules/.bin/todos-mcp --help",
+          "echo ./node_modules/.bin/todos-serve --port=19717",
+        ].join(" && ")],
+      },
+    ]);
+    const missingServeFailures = validateInstallSmokeCommands(getInstallSmokeCommands("/tmp/hasna-todos.tgz", "19717").filter((step) => !step.command.endsWith("todos-serve")));
 
-    expect(failures.map((failure) => failure.check)).toContain("install-smoke-bun-install");
-    expect(failures.map((failure) => failure.check)).toContain("install-smoke-npm");
+    expect(failures.map((failure) => failure.check)).toContain("install-smoke-temp-install");
+    expect(failures.map((failure) => failure.check)).toContain("install-smoke-global");
+    expect(echoFailures.map((failure) => failure.check)).toContain("install-smoke-command");
+    expect(missingServeFailures.map((failure) => failure.check)).toContain("install-smoke-command");
   });
 });
