@@ -1,22 +1,33 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { registerCloudTools } from "@hasna/cloud";
-import { PG_MIGRATIONS } from "./pg-migrations.js";
-import { join } from "path";
-import { homedir } from "os";
 import { z } from "zod";
+import {
+  STORAGE_TABLES,
+  getStorageStatus,
+  getStorageSyncMetaAll,
+  storagePull,
+  storagePush,
+  storageSync,
+} from "./storage-sync.js";
 import {
   setSecret,
   getSecret,
   deleteSecret,
-  listSecrets,
-  searchSecrets,
+  listSecretMetadata,
+  searchSecretMetadata,
+  setVaultItem,
+  getVaultItem,
+  deleteVaultItem,
+  listVaultItemMetadata,
+  searchVaultItemMetadata,
   getAuditLog,
   registerUser,
   listUsers,
 } from "./store.js";
 
 const SECRET_TYPES = ["api_key", "password", "token", "credential", "other"] as const;
+const VAULT_ITEM_KINDS = ["login", "address", "identity", "payment_card", "secure_note", "api_key", "custom"] as const;
+const STORAGE_TABLE_SCHEMA = z.enum(STORAGE_TABLES);
 
 export async function startMcpServer(): Promise<void> {
   const server = new McpServer({
@@ -75,7 +86,7 @@ export async function startMcpServer(): Promise<void> {
     "List secrets, optionally filtered by namespace",
     { namespace: z.string().optional().describe("Namespace prefix e.g. openai") },
     async ({ namespace }) => {
-      const entries = listSecrets(namespace);
+      const entries = listSecretMetadata(namespace);
       const lines = entries.map((e) => `${e.key} [${e.type}]${e.label ? ` — ${e.label}` : ""}`);
       return { content: [{ type: "text", text: lines.join("\n") || "No secrets found." }] };
     }
@@ -86,9 +97,85 @@ export async function startMcpServer(): Promise<void> {
     "Search secrets by key, label, or type",
     { query: z.string() },
     async ({ query }) => {
-      const entries = searchSecrets(query);
+      const entries = searchSecretMetadata(query);
       const lines = entries.map((e) => `${e.key} [${e.type}]${e.label ? ` — ${e.label}` : ""}`);
       return { content: [{ type: "text", text: lines.join("\n") || "No results." }] };
+    }
+  );
+
+  server.tool(
+    "list_vault_items",
+    "List structured vault item metadata, optionally filtered by kind",
+    { kind: z.enum(VAULT_ITEM_KINDS).optional().describe("Vault item kind") },
+    async ({ kind }) => {
+      const entries = listVaultItemMetadata(kind);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(entries, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
+    "search_vault_items",
+    "Search structured vault item metadata",
+    { query: z.string() },
+    async ({ query }) => {
+      const entries = searchVaultItemMetadata(query);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(entries, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
+    "get_vault_item",
+    "Retrieve a structured vault item, including decrypted payload",
+    { id: z.string().describe("Vault item id") },
+    async ({ id }) => {
+      const item = getVaultItem(id);
+      if (!item) return { content: [{ type: "text", text: `Not found: ${id}` }], isError: true };
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(item, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
+    "set_vault_item",
+    "Store a structured vault item for logins, addresses, identities, cards, notes, API keys, or custom data",
+    {
+      kind: z.enum(VAULT_ITEM_KINDS),
+      title: z.string(),
+      data: z.record(z.string(), z.unknown()).describe("Encrypted payload fields"),
+      id: z.string().optional(),
+      subtitle: z.string().optional(),
+      domains: z.array(z.string()).optional(),
+      tags: z.array(z.string()).optional(),
+      favorite: z.boolean().optional(),
+    },
+    async ({ kind, title, data, id, subtitle, domains, tags, favorite }) => {
+      const item = setVaultItem({ id, kind, title, subtitle, domains, tags, favorite, data });
+      return { content: [{ type: "text", text: `Stored vault item: ${item.id} [${item.kind}] ${item.title}` }] };
+    }
+  );
+
+  server.tool(
+    "delete_vault_item",
+    "Delete a structured vault item",
+    { id: z.string() },
+    async ({ id }) => {
+      const ok = deleteVaultItem(id);
+      if (!ok) return { content: [{ type: "text", text: `Not found: ${id}` }], isError: true };
+      return { content: [{ type: "text", text: `Deleted vault item: ${id}` }] };
     }
   );
 
@@ -152,9 +239,49 @@ export async function startMcpServer(): Promise<void> {
     }
   );
 
+  server.tool(
+    "storage_status",
+    "Show open-secrets remote storage configuration and local sync metadata",
+    {},
+    async () => ({
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          ...getStorageStatus(),
+          sync: getStorageSyncMetaAll(),
+        }, null, 2),
+      }],
+    })
+  );
+
+  server.tool(
+    "storage_push",
+    "Push local open-secrets tables to the configured remote Postgres storage",
+    { tables: z.array(STORAGE_TABLE_SCHEMA).optional().describe("Tables to push") },
+    async ({ tables }) => ({
+      content: [{ type: "text", text: JSON.stringify(await storagePush({ tables }), null, 2) }],
+    })
+  );
+
+  server.tool(
+    "storage_pull",
+    "Pull open-secrets tables from the configured remote Postgres storage",
+    { tables: z.array(STORAGE_TABLE_SCHEMA).optional().describe("Tables to pull") },
+    async ({ tables }) => ({
+      content: [{ type: "text", text: JSON.stringify(await storagePull({ tables }), null, 2) }],
+    })
+  );
+
+  server.tool(
+    "storage_sync",
+    "Push then pull open-secrets tables with the configured remote Postgres storage",
+    { tables: z.array(STORAGE_TABLE_SCHEMA).optional().describe("Tables to sync") },
+    async ({ tables }) => ({
+      content: [{ type: "text", text: JSON.stringify(await storageSync({ tables }), null, 2) }],
+    })
+  );
+
   const transport = new StdioServerTransport();
-  const vaultPath = process.env.HASNA_SECRETS_DB_PATH ?? process.env.OPEN_SECRETS_DB ?? join(homedir(), ".hasna", "secrets", "vault.db");
-  registerCloudTools(server, "secrets", { migrations: PG_MIGRATIONS, dbPath: vaultPath });
   await server.connect(transport);
 }
 

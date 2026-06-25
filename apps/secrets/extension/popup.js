@@ -1,9 +1,27 @@
 const $ = id => document.getElementById(id);
 
-let allSecrets = [];
+let allItems = [];
+let allLegacySecrets = [];
+let pageMatches = [];
 let currentTab = null;
+let activeTab = "page";
+let activeKind = "";
 
-// ── Utilities ─────────────────────────────────────────
+function send(type, payload = {}) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({ type, ...payload }, resp => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      if (!resp?.ok) {
+        reject(new Error(resp?.error || "Request failed"));
+        return;
+      }
+      resolve(resp);
+    });
+  });
+}
 
 function setStatus(msg, type = "ok") {
   const bar = $("status-bar");
@@ -12,152 +30,252 @@ function setStatus(msg, type = "ok") {
 }
 
 async function copyText(text) {
-  await navigator.clipboard.writeText(text);
+  await navigator.clipboard.writeText(String(text ?? ""));
 }
 
-// ── Rendering ─────────────────────────────────────────
+function currentQuery() {
+  return $("search").value.toLowerCase().trim();
+}
 
-function renderItem(s, { showFill = false } = {}) {
-  const item = document.createElement("div");
-  item.className = "secret-item";
+function kindLabel(kind) {
+  return String(kind || "item").replace(/_/g, " ");
+}
 
-  // Info
-  const info = document.createElement("div");
-  info.className = "secret-info";
+function titleFor(entry) {
+  return entry.title || entry.label || entry.key || entry.key_prefix || "Untitled";
+}
 
-  const key = document.createElement("div");
-  key.className = "secret-key";
-  key.textContent = s.key;
-  key.title = s.key;
+function metaFor(entry) {
+  if (entry.source === "legacy" || entry.key) return entry.label || entry.type || entry.key_prefix || "legacy secret";
+  const bits = [];
+  if (entry.subtitle) bits.push(entry.subtitle);
+  if (entry.domains?.length) bits.push(entry.domains.join(", "));
+  if (entry.tags?.length) bits.push(entry.tags.join(", "));
+  return bits.join(" - ") || kindLabel(entry.kind);
+}
 
-  const meta = document.createElement("div");
-  meta.className = "secret-meta";
-  const parts = [s.type];
-  if (s.label) parts.unshift(s.label);
-  meta.textContent = parts.join(" · ");
+function entryMatchesQuery(entry, q) {
+  if (!q) return true;
+  return [
+    entry.id,
+    entry.kind,
+    entry.title,
+    entry.subtitle,
+    entry.key,
+    entry.key_prefix,
+    entry.label,
+    entry.type,
+    ...(entry.domains || []),
+    ...(entry.tags || []),
+  ].filter(Boolean).join(" ").toLowerCase().includes(q);
+}
 
-  info.append(key, meta);
+function canFill(entry) {
+  if (!currentTab?.id) return false;
+  if (entry.source === "legacy") return Boolean(entry.username || entry.password);
+  return ["login", "address", "identity", "payment_card"].includes(entry.kind);
+}
 
-  // Actions
-  const actions = document.createElement("div");
-  actions.className = "secret-actions";
+async function loadItem(id) {
+  const resp = await send("ITEM_GET", { id });
+  return resp.item;
+}
 
-  if (showFill && (s.username || s.password)) {
-    const fillBtn = document.createElement("button");
-    fillBtn.className = "fill";
-    fillBtn.textContent = "⌨ Fill";
-    fillBtn.onclick = () => {
-      if (!currentTab?.id) return;
-      chrome.tabs.sendMessage(currentTab.id, {
-        type: "AUTOFILL",
-        username: s.username,
-        password: s.password,
-      });
-      window.close();
+function copyValueFromItem(item) {
+  const data = item.data || {};
+  return data.password
+    ?? data.apiKey
+    ?? data.token
+    ?? data.cardNumber
+    ?? data.body
+    ?? data.email
+    ?? data.username
+    ?? JSON.stringify(data, null, 2);
+}
+
+async function fillEntry(entry) {
+  if (!currentTab?.id) return;
+
+  let message;
+  if (entry.source === "legacy") {
+    message = { type: "AUTOFILL", match: entry };
+  } else {
+    const item = entry.data ? entry : await loadItem(entry.id);
+    message = {
+      type: "AUTOFILL",
+      match: { source: "vault_item", id: item.id, kind: item.kind, title: item.title },
+      item,
     };
-    actions.appendChild(fillBtn);
   }
 
-  const copyBtn = document.createElement("button");
-  copyBtn.textContent = "Copy";
-  copyBtn.onclick = async e => {
-    e.stopPropagation();
-    try {
-      if (s.value != null) {
-        await copyText(s.value);
-      } else {
-        // Fetch value from server
-        await new Promise((resolve, reject) => {
-          chrome.runtime.sendMessage({ type: "GET", key: s.key }, resp => {
-            if (resp?.ok) {
-              copyText(resp.secret.value).then(resolve).catch(reject);
-            } else {
-              reject(new Error(resp?.error ?? "Failed"));
-            }
-          });
-        });
+  await chrome.tabs.sendMessage(currentTab.id, message);
+  window.close();
+}
+
+function empty(container, message) {
+  container.innerHTML = "";
+  const el = document.createElement("div");
+  el.className = "empty";
+  el.textContent = message;
+  container.appendChild(el);
+}
+
+function renderEntry(entry, container) {
+  const row = document.createElement("div");
+  row.className = "item";
+
+  const main = document.createElement("div");
+  main.className = "item-main";
+
+  const titleRow = document.createElement("div");
+  titleRow.className = "item-title-row";
+
+  const badge = document.createElement("span");
+  badge.className = "badge";
+  badge.textContent = entry.source === "legacy" || entry.key ? (entry.type || "legacy") : kindLabel(entry.kind);
+
+  const title = document.createElement("div");
+  title.className = "item-title";
+  title.textContent = titleFor(entry);
+  title.title = title.textContent;
+
+  titleRow.append(badge, title);
+
+  const meta = document.createElement("div");
+  meta.className = "item-meta";
+  meta.textContent = metaFor(entry);
+  meta.title = meta.textContent;
+
+  main.append(titleRow, meta);
+
+  const actions = document.createElement("div");
+  actions.className = "actions";
+
+  if (canFill(entry)) {
+    const fill = document.createElement("button");
+    fill.className = "primary";
+    fill.type = "button";
+    fill.textContent = "Fill";
+    fill.onclick = async () => {
+      try {
+        await fillEntry(entry);
+      } catch (e) {
+        setStatus(e.message, "err");
       }
-      copyBtn.textContent = "✓";
-      copyBtn.classList.add("copied");
-      setTimeout(() => { copyBtn.textContent = "Copy"; copyBtn.classList.remove("copied"); }, 1200);
+    };
+    actions.appendChild(fill);
+  }
+
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.textContent = "Copy";
+  copy.onclick = async () => {
+    try {
+      if (entry.key) {
+        const resp = await send("GET", { key: entry.key });
+        await copyText(resp.secret.value);
+      } else if (entry.source === "legacy") {
+        await copyText(entry.password || entry.username || "");
+      } else {
+        const item = entry.data ? entry : await loadItem(entry.id);
+        await copyText(copyValueFromItem(item));
+      }
+      copy.textContent = "Done";
+      setTimeout(() => { copy.textContent = "Copy"; }, 1200);
     } catch (e) {
       setStatus(e.message, "err");
     }
   };
-  actions.appendChild(copyBtn);
+  actions.appendChild(copy);
 
-  item.append(info, actions);
-  return item;
+  row.append(main, actions);
+  container.appendChild(row);
 }
 
-function renderList(list, container, opts = {}) {
+function renderList(entries, container, emptyMessage) {
   container.innerHTML = "";
-  if (!list.length) {
-    const empty = document.createElement("div");
-    empty.className = "empty";
-    empty.textContent = "No secrets found";
-    container.appendChild(empty);
+  if (!entries.length) {
+    empty(container, emptyMessage);
     return;
   }
-  for (const s of list.slice(0, 80)) {
-    container.appendChild(renderItem(s, opts));
-  }
+  for (const entry of entries.slice(0, 100)) renderEntry(entry, container);
 }
 
-// ── Initialisation ─────────────────────────────────────
+function render() {
+  const q = currentQuery();
+  renderList(
+    pageMatches.filter(entry => entryMatchesQuery(entry, q)),
+    $("matches-list"),
+    "No matching vault items for this page."
+  );
+
+  const items = allItems
+    .filter(item => !activeKind || item.kind === activeKind)
+    .filter(item => entryMatchesQuery(item, q));
+  renderList(items, $("items-list"), "No structured vault items found.");
+
+  renderList(
+    allLegacySecrets.filter(entry => entryMatchesQuery(entry, q)),
+    $("legacy-list"),
+    "No legacy secrets found."
+  );
+}
+
+function setActiveTab(tab) {
+  activeTab = tab;
+  document.querySelectorAll(".tab").forEach(btn => btn.classList.toggle("active", btn.dataset.tab === tab));
+  document.querySelectorAll(".panel").forEach(panel => panel.classList.remove("active"));
+  $(`${tab}-panel`).classList.add("active");
+}
+
+function setActiveKind(kind) {
+  activeKind = kind;
+  document.querySelectorAll(".filter").forEach(btn => btn.classList.toggle("active", btn.dataset.kind === kind));
+  render();
+}
 
 async function init() {
-  // Get current tab
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   currentTab = tab;
-
-  // Health check
-  chrome.runtime.sendMessage({ type: "HEALTH" }, resp => {
-    if (resp?.ok) {
-      setStatus("Connected to vault", "ok");
-    } else {
-      setStatus("Server not running — run: secrets serve", "err");
-    }
-  });
-
-  // Page match check
   if (tab?.url) {
-    chrome.runtime.sendMessage({ type: "MATCH", url: tab.url }, resp => {
-      if (!resp?.ok || !resp.matches?.length) return;
-      $("matches-section").classList.remove("hidden");
-      renderList(resp.matches, $("matches-list"), { showFill: true });
-    });
+    try {
+      $("page-host").textContent = new URL(tab.url).hostname;
+    } catch {
+      $("page-host").textContent = "Current tab";
+    }
   }
 
-  // Load all secrets (metadata only — no values)
-  chrome.runtime.sendMessage({ type: "LIST" }, resp => {
-    if (resp?.ok) {
-      allSecrets = resp.secrets;
-      renderList(allSecrets, $("results-list"));
-    } else {
-      $("results-list").innerHTML = `<div class="empty">${resp?.error ?? "Failed to load secrets"}</div>`;
-    }
-  });
+  try {
+    await send("HEALTH");
+    setStatus("Connected to local vault", "ok");
+  } catch {
+    setStatus("Server not running. Run: secrets serve", "err");
+  }
+
+  const loads = [];
+  loads.push(send("ITEMS").then(resp => { allItems = resp.items || []; }));
+  loads.push(send("LIST").then(resp => { allLegacySecrets = resp.secrets || []; }));
+  if (tab?.url) {
+    loads.push(send("MATCH", { url: tab.url }).then(resp => { pageMatches = resp.matches || []; }));
+  }
+
+  await Promise.allSettled(loads);
+  if (pageMatches.length === 0 && allItems.length > 0) setActiveTab("items");
+  render();
 }
 
-// ── Search ─────────────────────────────────────────────
-
-$("search").addEventListener("input", e => {
-  const q = e.target.value.toLowerCase().trim();
-  if (!q) {
-    renderList(allSecrets, $("results-list"));
-    return;
-  }
-  const filtered = allSecrets.filter(s =>
-    s.key.toLowerCase().includes(q) ||
-    (s.label ?? "").toLowerCase().includes(q) ||
-    (s.type ?? "").toLowerCase().includes(q)
-  );
-  renderList(filtered, $("results-list"));
+document.querySelectorAll(".tab").forEach(btn => {
+  btn.addEventListener("click", () => setActiveTab(btn.dataset.tab));
 });
+
+document.querySelectorAll(".filter").forEach(btn => {
+  btn.addEventListener("click", () => setActiveKind(btn.dataset.kind));
+});
+
+$("search").addEventListener("input", render);
 
 $("options-btn").addEventListener("click", () => {
   chrome.runtime.openOptionsPage();
 });
 
-init();
+init().catch((e) => setStatus(e.message, "err"));

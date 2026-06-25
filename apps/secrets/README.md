@@ -25,29 +25,29 @@ secrets docs
 Store a secret:
 
 ```bash
-secrets set hasnaxyz/anthropic/live/api_key "$ANTHROPIC_API_KEY" \
+secrets set example/anthropic/test/api_key "$ANTHROPIC_API_KEY" \
   --type api_key \
-  --label "Anthropic API Key (live)"
+  --label "Anthropic API Key (test)"
 ```
 
 Read a secret value:
 
 ```bash
-secrets get hasnaxyz/anthropic/live/api_key
+secrets get example/anthropic/test/api_key
 ```
 
 List and search without printing secret values:
 
 ```bash
 secrets list
-secrets list hasnaxyz/anthropic
+secrets list example/anthropic
 secrets search anthropic
 ```
 
 Inspect audit history:
 
 ```bash
-secrets audit hasnaxyz/anthropic/live/api_key
+secrets audit example/anthropic/test/api_key
 ```
 
 Export redacted JSON for review:
@@ -59,7 +59,7 @@ secrets export --redact
 Delete a secret:
 
 ```bash
-secrets delete hasnaxyz/anthropic/live/api_key
+secrets delete example/anthropic/test/api_key
 ```
 
 ### Key Format
@@ -73,10 +73,63 @@ Use slash-delimited keys:
 Examples:
 
 ```text
-hasnaxyz/anthropic/live/api_key
-hasna/local/apple03/tool/exa/api-key
-alumia-production/oauth/youtube_client_secret
+example/anthropic/test/api_key
+local/apple03/tool/exa/api_key
+example-app/oauth/youtube_client_secret
 ```
+
+### Hasna XYZ Canonical Keys
+
+Generic keys still work as before. Keys under `hasna/xyz/` are validated so
+new Hasna XYZ app resources follow the canonical migration shape:
+
+```text
+hasna/{division}/{app_type}/{app}/{env}/{component}
+hasna/{division}/infra/{resource_group}/{env}/{component}[/role]
+```
+
+Allowed app types are:
+
+```text
+opensource, internalapp, companywebsite, project
+```
+
+`infra` is reserved for shared infrastructure ownership. Deprecated migration
+taxonomies such as `connector`, `website`, and `platform` are rejected under
+`hasna/xyz/`. App names should omit repo prefixes such as `open-`, `iapp-`,
+`cweb-`, and `project-`.
+
+Examples:
+
+```text
+hasna/xyz/opensource/files/prod/rds
+hasna/xyz/internalapp/news/prod/env
+hasna/xyz/infra/apps/prod/postgres/master
+```
+
+Operator runbook:
+`docs/hasna-xyz-canonical-secrets-runbook-2026-06-08.md`.
+
+## AWS Secrets Manager Sync
+
+`secrets aws` can use the legacy static-key config written by
+`secrets aws configure`, or AWS profile/default-chain credentials:
+
+```bash
+AWS_PROFILE=hasna-xyz-infra secrets aws sync --dry-run
+secrets aws push hasna/xyz/opensource/files/prod/s3 --profile hasna-xyz-infra --dry-run
+secrets aws sync --credential-mode role --role-arn arn:aws:iam::123456789012:role/example --source-profile hasna-xyz-infra --dry-run
+```
+
+Credential source precedence is command flags, `HASNA_SECRETS_AWS_*`
+environment variables, `~/.hasna/secrets/aws.json`, then the standard AWS
+provider chain. If `aws.json` contains static keys and no explicit override is
+provided, static-key behavior is preserved for compatibility.
+
+Use `--dry-run` or `--plan` before live sync. Plan output is metadata-only JSON:
+it reports names, regions, prefixes, credential source descriptors, and
+intended actions without printing secret values or writing AWS/local vault
+state.
 
 ### Secret Types
 
@@ -85,6 +138,71 @@ Supported types:
 ```text
 api_key, password, token, credential, other
 ```
+
+## Structured Vault Items
+
+The generic key/value store remains supported. For browser autofill and
+LastPass-like records, use structured vault items. Item payloads are encrypted;
+titles, domains, tags, and item kind are stored as searchable metadata.
+
+Create a login item:
+
+```bash
+secrets items add-login \
+  --title "GitHub" \
+  --url "https://github.com" \
+  --username "you@example.com" \
+  --password "$GITHUB_PASSWORD"
+```
+
+Create an address item:
+
+```bash
+secrets items add-address \
+  --title "Home" \
+  --name "Example User" \
+  --line1 "1 Main St" \
+  --city "New York" \
+  --state "NY" \
+  --postal-code "10001" \
+  --country "US" \
+  --email "you@example.com"
+```
+
+List, search, inspect, or delete items:
+
+```bash
+secrets items list
+secrets items list login
+secrets items search github
+secrets items get <id>        # redacted payload
+secrets items get <id> --show # decrypted payload
+secrets items delete <id>
+```
+
+Supported item kinds:
+
+```text
+login, address, identity, payment_card, secure_note, api_key, custom
+```
+
+## Chrome Extension
+
+The `extension/` directory contains a Manifest V3 Chrome extension that can fill
+logins, addresses, identities, and payment-card fields from structured vault
+items. Legacy username/password pairs still work when stored as slash-delimited
+secrets with a common prefix.
+
+Run the local bridge:
+
+```bash
+secrets serve
+```
+
+Then load `extension/` from `chrome://extensions` with Developer Mode enabled,
+open the extension settings, and paste the token from `secrets serve token`.
+The extension talks only to `http://127.0.0.1:27462` and asks for decrypted item
+payloads only when you click Fill or Copy.
 
 Optional TTL values can be attached when setting a secret:
 
@@ -117,14 +235,19 @@ search_secrets(query)
 get_secret(key)
 set_secret(key, value, type?, label?, ttl?)
 delete_secret(key)
+list_vault_items(kind?)
+search_vault_items(query)
+get_vault_item(id)
+set_vault_item(kind, title, data, id?, subtitle?, domains?, tags?, favorite?)
+delete_vault_item(id)
 audit_log(key?, limit?)
 register_user(id, name, type?)
 list_users(type?)
 ```
 
-`list_secrets` and `search_secrets` return metadata only. `get_secret` returns
-the raw value, so use it only when the agent needs to pass the secret into a
-tool or command.
+`list_secrets` and `search_secrets` return metadata only and do not decrypt
+stored values. `get_secret` returns the raw value, so use it only when the agent
+needs to pass the secret into a tool or command.
 
 ## Env-File Bridge
 
@@ -150,15 +273,33 @@ secrets export-env --dir ~/.secrets --dry-run
 secrets export-env --dir ~/.secrets --force
 ```
 
-## Cloud Sync
+## Storage Sync
 
-This package supports cloud sync via `@hasna/cloud`:
+This package supports optional remote storage sync directly against a Postgres/RDS
+database. Local SQLite remains the default.
 
 ```bash
-cloud setup
-cloud sync push --service secrets
-cloud sync pull --service secrets
+export HASNA_SECRETS_DATABASE_URL=postgres://...
+
+secrets storage status
+secrets storage push
+secrets storage pull
+secrets storage sync
 ```
+
+The remote storage URL can also be provided as the short non-deprecated fallback
+`SECRETS_DATABASE_URL`.
+
+Canonical production storage uses database `secrets` on RDS instance
+`hasna-xyz-infra-apps-prod-postgres`. Runtime credentials are stored in AWS
+Secrets Manager at `hasna/xyz/opensource/secrets/prod/rds`; load its
+`database_url` value into `HASNA_SECRETS_DATABASE_URL`. `SECRETS_DATABASE_URL`
+remains supported as a rollback/local fallback. Do not print rows or values from
+the canonical database; status commands expose only redacted URLs, table names,
+and non-secret metadata.
+
+MCP exposes the same flow through `storage_status`, `storage_push`,
+`storage_pull`, and `storage_sync`.
 
 ## Data Directory
 
@@ -175,7 +316,8 @@ The vault database lives at `~/.hasna/secrets/vault.db`. Key material lives in
 
 ## Safety Notes
 
-- `list`, `search`, and `export --redact` do not print secret values.
+- `list` and `search` do not decrypt or print secret values. `export --redact`
+  still decrypts before redaction because export validates each stored value.
 - `get` and MCP `get_secret` return raw secret values.
 - Never paste secret values into commits, logs, issues, PRs, or chat messages.
 - Keep `.env`, `.env.local`, `.secrets/`, and `.connect/` out of git.

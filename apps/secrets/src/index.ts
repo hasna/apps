@@ -5,7 +5,13 @@ import {
   getSecret,
   deleteSecret,
   listSecrets,
-  searchSecrets,
+  listSecretMetadata,
+  searchSecretMetadata,
+  setVaultItem,
+  getVaultItem,
+  deleteVaultItem,
+  listVaultItemMetadata,
+  searchVaultItemMetadata,
   importSecrets,
   exportSecrets,
   getAuditLog,
@@ -17,9 +23,19 @@ import {
 } from "./store.js";
 import { getDb } from "./db.js";
 import { encrypt, decrypt, isEncrypted, getMasterKey, initKms, getKeyStatus } from "./crypto.js";
-import type { SecretEntry } from "./types.js";
+import type { SecretEntry, SecretMetadata, VaultItemKind, VaultItemMetadata, VaultItemPayload } from "./types.js";
+import { runEventsCli } from "@hasna/events/cli";
 
 const SECRET_TYPES: SecretEntry["type"][] = ["api_key", "password", "token", "credential", "other"];
+const VAULT_ITEM_KINDS: VaultItemKind[] = [
+  "login",
+  "address",
+  "identity",
+  "payment_card",
+  "secure_note",
+  "api_key",
+  "custom",
+];
 
 function usage(): void {
   console.log(`
@@ -30,6 +46,12 @@ Commands:
   set <key> <value> [--type <type>] [--label <label>] [--ttl <ttl>]
   get <key>
   delete <key>               (aliases: remove, rm, uninstall)
+  items list [kind]           list structured vault items
+  items search <query>        search structured vault item metadata
+  items get <id> [--show]     show a structured vault item; redacted unless --show is passed
+  items delete <id>           delete a structured vault item
+  items add-login --title <title> --url <url> --username <user> --password <pass>
+  items add-address --title <title> [--name <name>] [--line1 <line>] [--city <city>]
   import-env                 import ~/.secrets/ .env files into vault [--dir <path>] [--push] [--dry-run] [--overwrite]
   export-env                 export vault secrets to ~/.secrets/ .env files [--dir <path>] [--force] [--dry-run]
   list [namespace]
@@ -39,6 +61,8 @@ Commands:
   gc                          prune expired secrets
   audit [key]                 show audit log
   path                        show vault db path
+  events                      emit, list, and replay Hasna events
+  webhooks                    manage Hasna event webhook subscriptions
 
   users list [--type human|agent]
   users register <id> <name> [--type human|agent]
@@ -50,9 +74,14 @@ Commands:
   key path                    show master key file path
 
   aws configure               interactive AWS setup
-  aws push [key]              push secret(s) to AWS Secrets Manager
-  aws pull <key>              pull secret from AWS Secrets Manager
-  aws sync                    bidirectional sync
+  aws push [key]              push secret(s) to AWS Secrets Manager [--dry-run|--plan]
+  aws pull <key>              pull secret from AWS Secrets Manager [--dry-run|--plan]
+  aws sync                    bidirectional sync [--dry-run|--plan]
+
+  storage status              show remote storage sync status
+  storage push                push local vault tables to remote Postgres storage
+  storage pull                pull vault tables from remote Postgres storage
+  storage sync                push then pull remote Postgres storage tables
 
   serve                       start local HTTP server for Chrome extension (port 27462)
   serve token                 print the current serve token
@@ -73,6 +102,7 @@ Examples:
   secrets users register my-agent "My Agent" --type agent
   secrets aws configure
   secrets aws sync
+  secrets storage status
 `);
 }
 
@@ -95,26 +125,39 @@ Key format
     <division>/<service>/<env>/<name>
 
   Examples:
-    hasnaxyz/anthropic/live/api_key
-    hasna/local/apple03/tool/exa/api-key
-    alumia-production/oauth/youtube_client_secret
+    example/anthropic/test/api_key
+    local/apple03/tool/exa/api_key
+    example-app/oauth/youtube_client_secret
 
 Common CLI workflows
   Store a secret:
-    secrets set hasnaxyz/anthropic/live/api_key "$ANTHROPIC_API_KEY" --type api_key --label "Anthropic API Key (live)"
+    secrets set example/anthropic/test/api_key "$ANTHROPIC_API_KEY" --type api_key --label "Anthropic API Key (test)"
 
   Read a secret value:
-    secrets get hasnaxyz/anthropic/live/api_key
+    secrets get example/anthropic/test/api_key
 
   List or search without revealing values:
-    secrets list hasnaxyz/anthropic
+    secrets list example/anthropic
     secrets search anthropic
 
   Review access history:
-    secrets audit hasnaxyz/anthropic/live/api_key
+    secrets audit example/anthropic/test/api_key
 
   Export a redacted backup for review:
     secrets export --redact
+
+Structured vault items
+  Store a browser login:
+    secrets items add-login --title "GitHub" --url https://github.com --username you@example.com --password "$GITHUB_PASSWORD"
+
+  Store an address for checkout/profile forms:
+    secrets items add-address --title "Home" --name "Example User" --line1 "1 Main St" --city "New York" --state "NY" --postal-code "10001" --country US
+
+  Review items:
+    secrets items list
+    secrets items search github
+    secrets items get <id>        # redacted
+    secrets items get <id> --show # decrypted payload
 
 Env-file bridge
   Import ~/.secrets .env files into the vault:
@@ -124,6 +167,15 @@ Env-file bridge
   Export vault entries back to ~/.secrets .env files:
     secrets export-env --dir ~/.secrets --dry-run
     secrets export-env --dir ~/.secrets --force
+
+AWS Secrets Manager sync
+  Preview metadata-only actions with profile/default-chain credentials:
+    AWS_PROFILE=hasna-xyz-infra secrets aws sync --dry-run
+    secrets aws push hasna/xyz/opensource/files/prod/s3 --profile hasna-xyz-infra --dry-run
+
+  Legacy static-key aws.json behavior remains supported:
+    secrets aws configure
+    secrets aws sync
 
 MCP usage
   Install the MCP server into local agents:
@@ -141,6 +193,19 @@ MCP usage
     set_secret(key, value, type?, label?, ttl?)
     delete_secret(key)
     audit_log(key?, limit?)
+    storage_status()
+    storage_push(tables?)
+    storage_pull(tables?)
+    storage_sync(tables?)
+
+Remote storage sync
+  Configure a Postgres/RDS database URL:
+    export HASNA_SECRETS_DATABASE_URL=postgres://...
+
+  Sync local vault tables:
+    secrets storage push
+    secrets storage pull
+    secrets storage sync
 
 Safety
   list, search, and export --redact do not print secret values.
@@ -149,7 +214,7 @@ Safety
 `);
 }
 
-const BOOLEAN_FLAGS = new Set(["redact", "push", "dry-run", "force", "overwrite"]);
+const BOOLEAN_FLAGS = new Set(["redact", "push", "dry-run", "plan", "force", "overwrite", "show", "favorite"]);
 
 function parseArgs(args: string[]): { flags: Record<string, string>; positional: string[] } {
   const flags: Record<string, string> = {};
@@ -178,8 +243,8 @@ function parseTtl(ttl: string): string {
   return new Date(Date.now() + parseInt(num) * ms).toISOString();
 }
 
-function formatEntry(entry: SecretEntry, showValue = false): string {
-  const val = showValue ? entry.value : "***";
+function formatEntry(entry: SecretEntry | SecretMetadata, showValue = false): string {
+  const val = showValue && "value" in entry ? entry.value : "***";
   const label = entry.label ? ` (${entry.label})` : "";
   const expiry = entry.expires_at
     ? ` [expires: ${new Date(entry.expires_at).toLocaleDateString()}]`
@@ -189,8 +254,87 @@ function formatEntry(entry: SecretEntry, showValue = false): string {
   return `${entry.key}${label} [${entry.type}]${expiry}${expired} = ${val}`;
 }
 
+function splitFlagList(value?: string): string[] {
+  if (!value) return [];
+  return value.split(",").map((entry) => entry.trim()).filter(Boolean);
+}
+
+function itemDomains(flags: Record<string, string>): string[] {
+  return [
+    ...splitFlagList(flags.domain),
+    ...splitFlagList(flags.domains),
+    ...(flags.url ? [flags.url] : []),
+  ];
+}
+
+function requireFlag(flags: Record<string, string>, name: string, usageText: string): string {
+  const value = flags[name]?.trim();
+  if (!value) {
+    console.error(usageText);
+    process.exit(1);
+  }
+  return value;
+}
+
+function compactPayload(payload: VaultItemPayload): VaultItemPayload {
+  return Object.fromEntries(
+    Object.entries(payload).filter(([, value]) => value !== undefined && value !== null && value !== "")
+  );
+}
+
+function redactVaultPayload(data: VaultItemPayload): VaultItemPayload {
+  const sensitive = new Set([
+    "password",
+    "totp",
+    "cardNumber",
+    "securityCode",
+    "cvv",
+    "secret",
+    "token",
+    "apiKey",
+  ]);
+  return Object.fromEntries(
+    Object.entries(data).map(([key, value]) => [
+      key,
+      sensitive.has(key) && value ? "***REDACTED***" : value,
+    ])
+  );
+}
+
+function formatVaultItem(item: VaultItemMetadata): string {
+  const domains = item.domains.length ? ` ${item.domains.join(",")}` : "";
+  const subtitle = item.subtitle ? ` - ${item.subtitle}` : "";
+  const favorite = item.favorite ? " *" : "";
+  return `${item.id} [${item.kind}]${favorite} ${item.title}${subtitle}${domains}`;
+}
+
+function parseTableFlags(flags: Record<string, string>): string[] | undefined {
+  const raw = flags.table ?? flags.tables;
+  if (!raw) return undefined;
+  return raw.split(",").map((table) => table.trim()).filter(Boolean);
+}
+
+function parseAwsOptions(flags: Record<string, string>) {
+  return {
+    dryRun: flags["dry-run"] === "true" || flags.plan === "true",
+    region: flags.region,
+    prefix: flags.prefix,
+    profile: flags.profile,
+    credentialMode: flags["credential-mode"] as any,
+    roleArn: flags["role-arn"],
+    sourceProfile: flags["source-profile"],
+    externalId: flags["external-id"],
+    sessionName: flags["session-name"],
+  };
+}
+
 const args = process.argv.slice(2);
 const [command, ...rest] = args;
+
+if (command === "events" || command === "webhooks") {
+  await runEventsCli(args, { source: "secrets", programName: "secrets" });
+  process.exit(0);
+}
 
 if (!command || command === "--help" || command === "-h") {
   usage();
@@ -220,8 +364,13 @@ switch (command) {
       console.warn(`⚠ Warning: AGENT_ID="${agentId}" is set but not registered. Run: secrets users register ${agentId} <name> --type agent`);
     }
     const expiresAt = flags.ttl ? parseTtl(flags.ttl) : undefined;
-    const entry = setSecret(key, value, type, flags.label, expiresAt);
-    console.log(`✓ Stored: ${entry.key} [${entry.type}]${expiresAt ? ` (expires ${new Date(expiresAt).toLocaleDateString()})` : ""}`);
+    try {
+      const entry = setSecret(key, value, type, flags.label, expiresAt);
+      console.log(`✓ Stored: ${entry.key} [${entry.type}]${expiresAt ? ` (expires ${new Date(expiresAt).toLocaleDateString()})` : ""}`);
+    } catch (e: any) {
+      console.error(e.message);
+      process.exit(1);
+    }
     break;
   }
 
@@ -251,7 +400,7 @@ switch (command) {
 
   case "list": {
     const [namespace] = positional;
-    const entries = listSecrets(namespace);
+    const entries = listSecretMetadata(namespace);
     if (entries.length === 0) {
       console.log(namespace ? `No secrets in namespace: ${namespace}` : "Vault is empty.");
     } else {
@@ -264,7 +413,7 @@ switch (command) {
   case "search": {
     const [query] = positional;
     if (!query) { console.error("Usage: secrets search <query>"); process.exit(1); }
-    const results = searchSecrets(query);
+    const results = searchSecretMetadata(query);
     if (results.length === 0) { console.log(`No results for: ${query}`); }
     else {
       for (const e of results) console.log(formatEntry(e));
@@ -356,9 +505,139 @@ switch (command) {
     break;
   }
 
+  case "items": {
+    const [sub, idOrKind] = positional;
+    switch (sub) {
+      case "list": {
+        const kind = idOrKind as VaultItemKind | undefined;
+        if (kind && !VAULT_ITEM_KINDS.includes(kind)) {
+          console.error(`Invalid kind "${kind}". Valid: ${VAULT_ITEM_KINDS.join(", ")}`);
+          process.exit(1);
+        }
+        const items = listVaultItemMetadata(kind);
+        if (items.length === 0) {
+          console.log(kind ? `No ${kind} vault items.` : "No structured vault items.");
+        } else {
+          for (const item of items) console.log(formatVaultItem(item));
+          console.log(`\n${items.length} item(s)`);
+        }
+        break;
+      }
+
+      case "search": {
+        const query = idOrKind;
+        if (!query) { console.error("Usage: secrets items search <query>"); process.exit(1); }
+        const items = searchVaultItemMetadata(query);
+        if (items.length === 0) {
+          console.log(`No vault items for: ${query}`);
+        } else {
+          for (const item of items) console.log(formatVaultItem(item));
+          console.log(`\n${items.length} item(s)`);
+        }
+        break;
+      }
+
+      case "get": {
+        const id = idOrKind;
+        if (!id) { console.error("Usage: secrets items get <id> [--show]"); process.exit(1); }
+        const item = getVaultItem(id);
+        if (!item) { console.error(`Not found: ${id}`); process.exit(1); }
+        console.log(JSON.stringify({
+          ...item,
+          data: flags.show === "true" ? item.data : redactVaultPayload(item.data),
+        }, null, 2));
+        break;
+      }
+
+      case "delete":
+      case "rm":
+      case "remove": {
+        const id = idOrKind;
+        if (!id) { console.error(`Usage: secrets items ${sub} <id>`); process.exit(1); }
+        if (!deleteVaultItem(id)) { console.error(`Not found: ${id}`); process.exit(1); }
+        console.log(`✓ Deleted vault item: ${id}`);
+        break;
+      }
+
+      case "add-login": {
+        const title = requireFlag(flags, "title", "Usage: secrets items add-login --title <title> --url <url> --username <user> --password <pass>");
+        const username = requireFlag(flags, "username", "Usage: secrets items add-login --title <title> --url <url> --username <user> --password <pass>");
+        const password = requireFlag(flags, "password", "Usage: secrets items add-login --title <title> --url <url> --username <user> --password <pass>");
+        const item = setVaultItem({
+          kind: "login",
+          title,
+          subtitle: username,
+          domains: itemDomains(flags),
+          tags: splitFlagList(flags.tags ?? flags.tag),
+          favorite: flags.favorite === "true",
+          data: compactPayload({
+            username,
+            password,
+            url: flags.url,
+            notes: flags.notes,
+            totp: flags.totp,
+          }),
+        });
+        console.log(`✓ Stored vault item: ${item.id} [${item.kind}] ${item.title}`);
+        break;
+      }
+
+      case "add-address": {
+        const title = requireFlag(flags, "title", "Usage: secrets items add-address --title <title> [--name <name>] [--line1 <line>] [--city <city>]");
+        const item = setVaultItem({
+          kind: "address",
+          title,
+          subtitle: flags.name ?? flags.email ?? flags.phone,
+          domains: itemDomains(flags),
+          tags: splitFlagList(flags.tags ?? flags.tag),
+          favorite: flags.favorite === "true",
+          data: compactPayload({
+            name: flags.name,
+            givenName: flags["given-name"],
+            familyName: flags["family-name"],
+            organization: flags.organization ?? flags.company,
+            addressLine1: flags.line1 ?? flags["address-line1"],
+            addressLine2: flags.line2 ?? flags["address-line2"],
+            city: flags.city,
+            state: flags.state,
+            postalCode: flags.postal ?? flags.zip ?? flags["postal-code"],
+            country: flags.country,
+            phone: flags.phone,
+            email: flags.email,
+          }),
+        });
+        console.log(`✓ Stored vault item: ${item.id} [${item.kind}] ${item.title}`);
+        break;
+      }
+
+      case "add-note": {
+        const title = requireFlag(flags, "title", "Usage: secrets items add-note --title <title> --body <text>");
+        const body = requireFlag(flags, "body", "Usage: secrets items add-note --title <title> --body <text>");
+        const item = setVaultItem({
+          kind: "secure_note",
+          title,
+          subtitle: flags.subtitle,
+          domains: itemDomains(flags),
+          tags: splitFlagList(flags.tags ?? flags.tag),
+          favorite: flags.favorite === "true",
+          data: { body },
+        });
+        console.log(`✓ Stored vault item: ${item.id} [${item.kind}] ${item.title}`);
+        break;
+      }
+
+      default:
+        console.error(`Unknown items subcommand: ${sub ?? ""}`);
+        console.error("Usage: secrets items list|get|search|delete|add-login|add-address|add-note");
+        process.exit(1);
+    }
+    break;
+  }
+
   case "aws": {
     const [sub, ...awsRest] = positional;
     const { loadAwsConfig, saveAwsConfig, pushSecret, pullSecret, syncAll } = await import("./aws.js");
+    const awsOptions = parseAwsOptions(flags);
 
     switch (sub) {
       case "configure": {
@@ -382,13 +661,24 @@ switch (command) {
       case "push": {
         const [key] = awsRest;
         if (key) {
-          await pushSecret(key);
-          console.log(`✓ Pushed: ${key}`);
+          const result = await pushSecret(key, awsOptions);
+          if (result) console.log(JSON.stringify(result, null, 2));
+          else console.log(`✓ Pushed: ${key}`);
         } else {
-          const entries = listSecrets();
+          const entries = listSecretMetadata();
+          const dryRunActions = [];
+          let dryRunResult: any;
           for (const e of entries) {
-            await pushSecret(e.key);
-            console.log(`✓ Pushed: ${e.key}`);
+            const result = await pushSecret(e.key, awsOptions);
+            if (result) {
+              dryRunResult = result;
+              dryRunActions.push(...result.actions);
+            } else {
+              console.log(`✓ Pushed: ${e.key}`);
+            }
+          }
+          if (dryRunResult) {
+            console.log(JSON.stringify({ ...dryRunResult, actions: dryRunActions }, null, 2));
           }
         }
         break;
@@ -397,14 +687,19 @@ switch (command) {
       case "pull": {
         const [key] = awsRest;
         if (!key) { console.error("Usage: secrets aws pull <key>"); process.exit(1); }
-        await pullSecret(key);
-        console.log(`✓ Pulled: ${key}`);
+        const result = await pullSecret(key, awsOptions);
+        if (result) console.log(JSON.stringify(result, null, 2));
+        else console.log(`✓ Pulled: ${key}`);
         break;
       }
 
       case "sync": {
-        console.log("Syncing with AWS Secrets Manager...");
-        const { pushed, pulled, errors } = await syncAll();
+        if (!awsOptions.dryRun) console.log("Syncing with AWS Secrets Manager...");
+        const { pushed, pulled, errors, plan } = await syncAll(awsOptions);
+        if (plan) {
+          console.log(JSON.stringify(plan, null, 2));
+          break;
+        }
         if (pushed.length) console.log(`Pushed (${pushed.length}): ${pushed.join(", ")}`);
         if (pulled.length) console.log(`Pulled (${pulled.length}): ${pulled.join(", ")}`);
         if (errors.length) { console.error(`Errors:\n${errors.map(e => `  ${e}`).join("\n")}`); }
@@ -419,18 +714,57 @@ switch (command) {
     break;
   }
 
+  case "storage": {
+    const [sub = "status"] = positional;
+    const {
+      getStorageStatus,
+      getStorageSyncMetaAll,
+      storagePull,
+      storagePush,
+      storageSync,
+    } = await import("./storage-sync.js");
+    const tables = parseTableFlags(flags);
+    try {
+      switch (sub) {
+        case "status": {
+          console.log(JSON.stringify({
+            ...getStorageStatus(),
+            sync: getStorageSyncMetaAll(),
+          }, null, 2));
+          break;
+        }
+
+        case "push": {
+          console.log(JSON.stringify(await storagePush({ tables }), null, 2));
+          break;
+        }
+
+        case "pull": {
+          console.log(JSON.stringify(await storagePull({ tables }), null, 2));
+          break;
+        }
+
+        case "sync": {
+          console.log(JSON.stringify(await storageSync({ tables }), null, 2));
+          break;
+        }
+
+        default:
+          console.error(`Unknown storage subcommand: ${sub}`);
+          process.exit(1);
+      }
+    } catch (e: any) {
+      console.error(`Storage ${sub} failed: ${e.message}`);
+      process.exit(1);
+    }
+    break;
+  }
+
   case "serve": {
     const [sub] = positional;
     if (sub === "token") {
-      const { existsSync, readFileSync } = await import("fs");
-      const { join } = await import("path");
-      const { homedir } = await import("os");
-      const tokenPath = join(homedir(), ".hasna", "secrets", ".serve-token");
-      if (!existsSync(tokenPath)) {
-        console.error("No serve token yet. Run: secrets serve  (to generate one)");
-        process.exit(1);
-      }
-      console.log(readFileSync(tokenPath, "utf-8").trim());
+      const { getOrCreateServeToken } = await import("./serve.js");
+      console.log(getOrCreateServeToken());
     } else {
       const { startHttpServer } = await import("./serve.js");
       await startHttpServer();
@@ -481,7 +815,7 @@ switch (command) {
       if (k.includes("PASSWORD") || k.includes("PASS") || k.includes("PWD")) return "password";
       if (k.includes("API_KEY") || k.includes("APIKEY") || k.includes("SECRET_KEY")) return "api_key";
       if (k.includes("TOKEN") || k.includes("_KEY")) return "token";
-      if (k.includes("CERT") || k.includes("CERTIFICATE")) return "certificate";
+      if (k.includes("CERT") || k.includes("CERTIFICATE")) return "credential";
       return "other";
     }
 
