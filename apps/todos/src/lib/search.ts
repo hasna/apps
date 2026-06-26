@@ -48,6 +48,10 @@ function escapeFtsQuery(q: string): string {
     .join(" ");
 }
 
+function shouldUseFts(q: string): boolean {
+  return /^[\p{L}\p{N}_\-\s]+$/u.test(q);
+}
+
 export function searchTasks(
   options: SearchOptions | string,
   projectId?: string,
@@ -69,7 +73,9 @@ export function searchTasks(
   // "*" means "match everything" — treat as no query (filter-only mode)
   const q = raw === "*" ? "" : raw;
 
-  if (hasFts(d) && q) {
+  const useFts = hasFts(d) && q && shouldUseFts(q);
+
+  if (useFts) {
     // FTS5 path — BM25-ranked full-text search
     const ftsQuery = escapeFtsQuery(q);
     sql = `SELECT t.* FROM tasks t
@@ -77,10 +83,19 @@ export function searchTasks(
       WHERE tasks_fts MATCH ?`;
     params.push(ftsQuery);
   } else if (q) {
-    // Fallback: LIKE pattern match
+    // Fallback: LIKE pattern match, including ids and structured fields that
+    // operators commonly paste as exact fingerprints.
     const pattern = `%${q}%`;
-    sql = `SELECT * FROM tasks t WHERE (t.title LIKE ? OR t.description LIKE ? OR EXISTS (SELECT 1 FROM task_tags WHERE task_tags.task_id = t.id AND tag LIKE ?))`;
-    params.push(pattern, pattern, pattern);
+    sql = `SELECT * FROM tasks t WHERE (
+      t.id LIKE ?
+      OR t.short_id LIKE ?
+      OR t.title LIKE ?
+      OR t.description LIKE ?
+      OR t.working_dir LIKE ?
+      OR t.metadata LIKE ?
+      OR EXISTS (SELECT 1 FROM task_tags WHERE task_tags.task_id = t.id AND tag LIKE ?)
+    )`;
+    params.push(pattern, pattern, pattern, pattern, pattern, pattern, pattern);
   } else {
     // No query — filter-only mode, return all tasks matching filters
     sql = `SELECT * FROM tasks t WHERE 1=1`;
@@ -148,7 +163,7 @@ export function searchTasks(
     sql += " AND t.id NOT IN (SELECT td.task_id FROM task_dependencies td JOIN tasks dep ON dep.id = td.depends_on WHERE dep.status != 'completed')";
   }
 
-  if (hasFts(d) && q) {
+  if (useFts) {
     // FTS5: sort by BM25 relevance first, then priority, then recency
     sql += ` ORDER BY bm25(tasks_fts),
       CASE t.priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END,

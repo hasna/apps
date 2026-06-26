@@ -12,6 +12,7 @@ import {
 } from "./config.js";
 
 export const LOCAL_EVENT_TYPES = [
+  "task.created",
   "task.assigned",
   "task.blocked",
   "task.started",

@@ -49,6 +49,24 @@ describe("searchTasks", () => {
     expect(results[0]!.title).toBe("Tagged task");
   });
 
+  it("should match operator fingerprints in metadata", () => {
+    const fingerprint = "github-pr:hasna/skills#25";
+    createTask({ title: "PR triage", metadata: { fingerprint } }, db);
+    createTask({ title: "Other task" }, db);
+
+    const results = searchTasks(fingerprint, undefined, undefined, db);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.title).toBe("PR triage");
+  });
+
+  it("should match working directory paths", () => {
+    createTask({ title: "Repo task", working_dir: "/home/hasna/workspace/hasna/opensource/open-todos" }, db);
+
+    const results = searchTasks("opensource/open-todos", undefined, undefined, db);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.title).toBe("Repo task");
+  });
+
   it("should return empty array for no matches", () => {
     createTask({ title: "Some task" }, db);
 

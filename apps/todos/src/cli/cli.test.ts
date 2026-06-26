@@ -131,6 +131,14 @@ describe("CLI integration", () => {
     try { unlinkSync("/tmp/test-cli-todos.db"); } catch {}
   });
 
+  it("should reject invalid add priority before SQLite validation", async () => {
+    const result = await runCli(["add", "Invalid priority task", "--priority", "urgent"], ":memory:");
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("--priority must be one of: low, medium, high, critical");
+    expect(result.stderr).not.toContain("CHECK constraint failed");
+  });
+
   it("should run list command", async () => {
     const proc = Bun.spawn(
       ["bun", "run", "src/cli/index.tsx", "list", "--json"],

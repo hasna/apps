@@ -12,6 +12,7 @@ import {
 import { LOCK_EXPIRY_MINUTES, clearExpiredLocks, getDatabase, isLockExpired, lockExpiryCutoff, now } from "./database.js";
 import { checkCompletionGuard } from "../lib/completion-guard.js";
 import { emitLocalEventHooksQuiet } from "../lib/event-hooks.js";
+import { emitSharedTaskEventQuiet, taskEventData } from "../lib/shared-events.js";
 import { logTaskChange } from "./audit.js";
 import { nextOccurrence } from "../lib/recurrence.js";
 import { dispatchWebhook } from "./webhooks.js";
@@ -89,11 +90,14 @@ export function startTask(
   }
 
   logTaskChange(id, "start", "status", "pending", "in_progress", agentId, d);
-  dispatchWebhook("task.started", { id, agent_id: agentId, title: task.title }, d).catch(() => {});
-  emitLocalEventHooksQuiet({ type: "task.started", payload: { id, agent_id: agentId, title: task.title } });
+  const startedTask = { ...task, status: "in_progress" as const, assigned_to: agentId, locked_by: agentId, locked_at: timestamp, started_at: task.started_at || timestamp, version: task.version + 1, updated_at: timestamp };
+  const payload = taskEventData(startedTask, { agent_id: agentId });
+  dispatchWebhook("task.started", payload, d).catch(() => {});
+  emitLocalEventHooksQuiet({ type: "task.started", payload });
+  emitSharedTaskEventQuiet({ type: "task.started", task: startedTask, data: { agent_id: agentId } });
 
   // Return constructed result — no re-fetch
-  return { ...task, status: "in_progress" as const, assigned_to: agentId, locked_by: agentId, locked_at: timestamp, started_at: task.started_at || timestamp, version: task.version + 1, updated_at: timestamp };
+  return startedTask;
 }
 
 export function completeTask(
@@ -158,8 +162,21 @@ export function completeTask(
   tx();
 
   logTaskChange(id, "complete", "status", task.status, "completed", agentId || null, d);
-  dispatchWebhook("task.completed", { id, agent_id: agentId, title: task.title, completed_at: timestamp }, d).catch(() => {});
-  emitLocalEventHooksQuiet({ type: "task.completed", payload: { id, agent_id: agentId, title: task.title, completed_at: timestamp } });
+  const completedTaskForEvent = {
+    ...task,
+    status: "completed" as const,
+    locked_by: null,
+    locked_at: null,
+    completed_at: timestamp,
+    confidence,
+    version: task.version + 1,
+    updated_at: timestamp,
+    metadata: hasMeta ? { ...task.metadata, ...completionMeta } : task.metadata,
+  };
+  const completionPayload = taskEventData(completedTaskForEvent, { agent_id: agentId, completed_at: timestamp });
+  dispatchWebhook("task.completed", completionPayload, d).catch(() => {});
+  emitLocalEventHooksQuiet({ type: "task.completed", payload: completionPayload });
+  emitSharedTaskEventQuiet({ type: "task.completed", task: completedTaskForEvent, data: { agent_id: agentId, completed_at: timestamp } });
 
   // Auto-spawn next recurring task
   let spawnedTask: Task | null = null;
@@ -215,8 +232,11 @@ export function completeTask(
   if (unblockedDeps.length > 0) {
     (meta as Record<string, unknown>)._unblocked = unblockedDeps.map(d => ({ id: d.id, short_id: d.short_id, title: d.title }));
     for (const dep of unblockedDeps) {
-      dispatchWebhook("task.unblocked", { id: dep.id, unblocked_by: id, title: dep.title }, d).catch(() => {});
-      emitLocalEventHooksQuiet({ type: "task.unblocked", payload: { id: dep.id, unblocked_by: id, title: dep.title } });
+      const depTask = getTask(dep.id, d);
+      const payload = depTask ? taskEventData(depTask, { unblocked_by: id }) : { id: dep.id, unblocked_by: id, title: dep.title };
+      dispatchWebhook("task.unblocked", payload, d).catch(() => {});
+      emitLocalEventHooksQuiet({ type: "task.unblocked", payload });
+      if (depTask) emitSharedTaskEventQuiet({ type: "task.unblocked", task: depTask, data: { unblocked_by: id } });
     }
   }
 
@@ -481,10 +501,6 @@ export function failTask(
     [JSON.stringify(meta), timestamp, id],
   );
 
-  logTaskChange(id, "fail", "status", task.status, "failed", agentId || null, d);
-  dispatchWebhook("task.failed", { id, reason, error_code: options?.error_code, agent_id: agentId, title: task.title }, d).catch(() => {});
-  emitLocalEventHooksQuiet({ type: "task.failed", payload: { id, reason, error_code: options?.error_code, agent_id: agentId, title: task.title } });
-
   const failedTask: Task = {
     ...task,
     status: "failed" as const,
@@ -494,6 +510,11 @@ export function failTask(
     version: task.version + 1,
     updated_at: timestamp,
   };
+  logTaskChange(id, "fail", "status", task.status, "failed", agentId || null, d);
+  const failurePayload = taskEventData(failedTask, { reason, error_code: options?.error_code, agent_id: agentId });
+  dispatchWebhook("task.failed", failurePayload, d).catch(() => {});
+  emitLocalEventHooksQuiet({ type: "task.failed", payload: failurePayload });
+  emitSharedTaskEventQuiet({ type: "task.failed", task: failedTask, data: { reason, error_code: options?.error_code, agent_id: agentId }, severity: "warning" });
 
   // Auto-retry: create a new pending copy with exponential backoff
   let retryTask: Task | undefined;
@@ -610,10 +631,13 @@ export function stealTask(
 
   logTaskChange(target.id, "steal", "assigned_to", target.assigned_to, agentId, agentId, d);
   logTaskChange(target.id, "steal", "locked_by", target.locked_by, agentId, agentId, d);
-  dispatchWebhook("task.assigned", { id: target.id, agent_id: agentId, title: target.title, stolen_from: target.assigned_to }, d).catch(() => {});
-  emitLocalEventHooksQuiet({ type: "task.assigned", payload: { id: target.id, agent_id: agentId, title: target.title, stolen_from: target.assigned_to } });
+  const stolenTask = { ...target, assigned_to: agentId, locked_by: agentId, locked_at: timestamp, updated_at: timestamp, version: target.version + 1 };
+  const payload = taskEventData(stolenTask, { agent_id: agentId, stolen_from: target.assigned_to });
+  dispatchWebhook("task.assigned", payload, d).catch(() => {});
+  emitLocalEventHooksQuiet({ type: "task.assigned", payload });
+  emitSharedTaskEventQuiet({ type: "task.assigned", task: stolenTask, data: { agent_id: agentId, stolen_from: target.assigned_to } });
 
-  return { ...target, assigned_to: agentId, locked_by: agentId, locked_at: timestamp, updated_at: timestamp, version: target.version + 1 };
+  return stolenTask;
 }
 
 /**

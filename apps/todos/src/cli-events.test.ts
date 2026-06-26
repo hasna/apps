@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -45,5 +45,46 @@ describe("shared events CLI integration", () => {
     expect(webhooks.exitCode).toBe(0);
     expect(webhooks.stderr).toBe("");
     expect(JSON.parse(webhooks.stdout)).toEqual([]);
+  });
+
+  test("task.created is delivered to command webhooks", async () => {
+    const outputPath = join(tempDir, "captured-events.jsonl");
+    const receiverPath = join(tempDir, "receiver.ts");
+    writeFileSync(
+      receiverPath,
+      `import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(outputPath)}, process.env.HASNA_EVENT_JSON + "\\n");\n`,
+    );
+
+    const addWebhook = await runTodos([
+      "webhooks",
+      "add",
+      "bun",
+      "--id",
+      "capture-task-created",
+      "--transport",
+      "command",
+      "--type",
+      "task.created",
+      "--arg",
+      receiverPath,
+      "--timeout-ms",
+      "5000",
+      "--json",
+    ]);
+    expect(addWebhook.exitCode).toBe(0);
+    expect(addWebhook.stderr).toBe("");
+
+    const addTask = await runTodos(["add", "Webhook-delivered task", "--json"]);
+    expect(addTask.exitCode).toBe(0);
+
+    for (let attempt = 0; attempt < 20 && !existsSync(outputPath); attempt += 1) {
+      await Bun.sleep(50);
+    }
+    expect(existsSync(outputPath)).toBe(true);
+    const event = JSON.parse(readFileSync(outputPath, "utf-8").trim().split("\n")[0]!);
+    expect(event.source).toBe("todos");
+    expect(event.type).toBe("task.created");
+    expect(event.data.title).toBe("Webhook-delivered task");
+    expect(event.data.working_dir).toBe(process.cwd());
   });
 });
