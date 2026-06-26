@@ -34,6 +34,39 @@ The `conversations-hook` binary is still installed for hook integrations:
 conversations-hook --help
 ```
 
+## Shared Event Webhooks
+
+`conversations` exposes the shared `@hasna/events` commands so local events can
+trigger deterministic or agentic automation without custom glue scripts. To
+route conversation events into an OpenLoops worker/verifier template, register a
+command webhook:
+
+```bash
+conversations webhooks add loops \
+  --id openloops-conversations-events \
+  --transport command \
+  --source conversations \
+  --type "*" \
+  --arg=events \
+  --arg=handle \
+  --arg=generic \
+  --arg=--provider \
+  --arg=codewith \
+  --arg=--auth-profile \
+  --arg=account005 \
+  --arg=--permission-mode \
+  --arg=bypass \
+  --arg=--sandbox \
+  --arg=danger-full-access \
+  --timeout-ms 900000 \
+  --json
+```
+
+`@hasna/events` sends the event envelope on stdin and in `HASNA_EVENT_JSON`.
+OpenLoops can then create a deduped one-shot workflow for the event. Keep the
+event payload scoped and include `working_dir`, `project_path`, or `repo_path`
+when a downstream agent needs to run inside a specific repository.
+
 ## MCP Server
 
 ```bash
