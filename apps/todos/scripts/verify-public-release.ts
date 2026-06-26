@@ -38,11 +38,13 @@ function main(): void {
   failures.push(...validatePublicTextSurfaces(collectPublicTextSurfaces(root)));
 
   if (!args.has("--skip-npm-view")) {
-    const npmView = runCapture("npm", ["view", "@hasna/todos", "name", "version", "--json"]);
-    if (npmView.status === 0) {
-      failures.push(...validateNpmView("@hasna/todos", npmView.stdout));
+    const registryView = runCapture("npm", ["view", "@hasna/todos", "name", "version", "--json"]);
+    if (registryView.status === 0) {
+      failures.push(...validateNpmView("@hasna/todos", registryView.stdout));
     } else {
-      failures.push({ check: "npm-view", message: npmView.stderr || "npm view @hasna/todos failed" });
+      const bunView = runCapture("bun", ["pm", "view", "@hasna/todos", "--json"]);
+      if (bunView.status === 0) failures.push(...validateNpmView("@hasna/todos", bunView.stdout));
+      else failures.push({ check: "npm-view", message: registryView.stderr || bunView.stderr || "registry view @hasna/todos failed" });
     }
   }
 
@@ -98,10 +100,7 @@ function writeReleaseProvenance(packageJson: PackageJson): void {
 
 function npmPack(destination: string): PackResult {
   const result = runCapture("npm", ["pack", "--json", "--pack-destination", destination]);
-  if (result.status !== 0) {
-    console.error(result.stderr || result.stdout);
-    process.exit(result.status || 1);
-  }
+  if (result.status !== 0) return bunPack(destination);
 
   const parsed = JSON.parse(result.stdout) as PackResult[];
   const pack = parsed[0];
@@ -110,6 +109,32 @@ function npmPack(destination: string): PackResult {
     process.exit(1);
   }
   return pack;
+}
+
+function bunPack(destination: string): PackResult {
+  const result = runCapture("bun", ["pm", "pack", "--destination", destination, "--quiet"]);
+  if (result.status !== 0) {
+    console.error(result.stderr || result.stdout || "bun pm pack failed");
+    process.exit(result.status || 1);
+  }
+  const filename = result.stdout.trim().split(/\r?\n/).filter(Boolean).pop();
+  if (!filename) {
+    console.error("bun pm pack did not return a tarball path.");
+    process.exit(1);
+  }
+  const tarball = filename.startsWith("/") ? filename : join(destination, filename);
+  const list = runCapture("tar", ["-tf", tarball]);
+  if (list.status !== 0) {
+    console.error(list.stderr || `Could not list packed tarball: ${tarball}`);
+    process.exit(list.status || 1);
+  }
+  return {
+    filename: relative(destination, tarball),
+    files: list.stdout
+      .split("\n")
+      .filter((path) => path.startsWith("package/") && path !== "package/")
+      .map((path) => ({ path: path.slice("package/".length) })),
+  };
 }
 
 function installSmoke(tarball: string): void {
