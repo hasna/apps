@@ -4,6 +4,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { registerMessagingTools } from "./messaging";
 import { createChannel } from "../../lib/channels";
+import { sendMessage } from "../../lib/messages";
 import { closeDb } from "../../lib/db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -234,12 +235,29 @@ describe("messaging MCP tools", () => {
   });
 
   describe("read_digest", () => {
-    test("returns digest", async () => {
-      const result = parseResult(await client.callTool({
+    test("requires a scoped target", async () => {
+      const result = await client.callTool({
         name: "read_digest",
         arguments: {},
+      });
+      expect((result as any).isError).toBe(true);
+    });
+
+    test("returns cursored byte-capped digest", async () => {
+      createChannel("digest-mcp-channel", "messaging-test-agent");
+      const first = sendMessage({ from: "alice", to: "digest-mcp-channel", channel: "digest-mcp-channel", content: "first digest evidence" });
+      const second = sendMessage({ from: "bob", to: "digest-mcp-channel", channel: "digest-mcp-channel", content: `second digest evidence ${"x".repeat(500)}` });
+      const result = parseResult(await client.callTool({
+        name: "read_digest",
+        arguments: { channel: "digest-mcp-channel", cursor: first.id, max_bytes: 900 },
       }) as any) as any;
       expect(Array.isArray(result.messages)).toBe(true);
+      expect(result.digest_id).toHaveLength(16);
+      expect(result.message_ids).toEqual([second.id]);
+      expect(result.next_cursor).toBe(second.id);
+      expect(result.byte_length).toBeLessThanOrEqual(900);
+      expect(result.messages[0].snippet).toContain("second digest evidence");
+      expect(result.messages[0].content).toBeUndefined();
     });
   });
 

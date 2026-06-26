@@ -177,26 +177,58 @@ export function registerMessagingCommands(program: Command): void {
   // ---- digest ----
   program
     .command("digest")
-    .description("Show unread message digest (preview only, auto-marks read)")
-    .argument("[channel]", "Channel name to digest (omit for DMs)")
+    .description("Show a cursored byte-capped channel digest")
+    .argument("[channel]", "Channel name to digest")
     .option("--since <timestamp>", "Messages after this ISO timestamp")
+    .option("--cursor <message-id>", "Only include messages after this message ID", parseInt)
+    .option("--max-bytes <n>", "Maximum JSON payload size", parseInt)
     .option("--limit <n>", "Max messages to show", parseInt)
+    .option("--session <id>", "Digest a DM/session instead of a channel")
     .option("--to <agent>", "Filter by recipient (for DMs)")
+    .option("--unread", "Only include unread messages")
+    .option("--mark-read", "Mark returned messages read after building the digest")
+    .option("--from <agent>", "Reader identity for --mark-read")
     .option("-j, --json", "Output as JSON")
     .action((channelArg, opts) => {
-      const result = readDigest({
-        channel: channelArg || undefined,
-        since: opts.since,
-        limit: opts.limit,
-        to: opts.to,
-      });
+      const channel = typeof channelArg === "string" && channelArg.trim() ? channelArg.trim() : undefined;
+      if (!channel && !opts.session && !opts.to) {
+        console.error(chalk.red("Provide a channel name, --session <id>, or --to <agent>."));
+        process.exit(1);
+      }
+
+      const reader = opts.markRead ? resolveIdentity(opts.from).trim() : undefined;
+      if (opts.markRead && !reader) {
+        console.error(chalk.red("Reader identity is required for --mark-read."));
+        process.exit(1);
+      }
+
+      let result;
+      try {
+        result = readDigest({
+          channel,
+          session_id: opts.session,
+          since: opts.since,
+          cursor: opts.cursor,
+          max_bytes: opts.maxBytes,
+          limit: opts.limit,
+          to: opts.to,
+          unread_only: opts.unread,
+          mark_read: opts.markRead,
+          reader,
+        });
+      } catch (error) {
+        console.error(chalk.red(error instanceof Error ? error.message : String(error)));
+        process.exit(1);
+      }
 
       if (opts.json) {
-        console.log(JSON.stringify(result, null, 2));
+        console.log(JSON.stringify(result));
       } else {
-        console.log(chalk.bold(`Unread: ${result.total_unread} total, showing ${result.shown}`));
+        const target = result.channel ? `#${result.channel}` : result.session_id ?? result.to ?? "messages";
+        console.log(chalk.bold(`Digest ${result.digest_id} ${chalk.dim(`(${target})`)}`));
+        console.log(chalk.dim(`shown ${result.shown}/${result.total_available}, bytes ${result.byte_length}/${result.max_bytes}, next_cursor ${result.next_cursor ?? "-"}`));
         if (result.messages.length === 0) {
-          console.log(chalk.dim("  No unread messages."));
+          console.log(chalk.dim("  No messages in this digest window."));
         } else {
           for (const msg of result.messages) {
             const time = chalk.dim(msg.created_at.slice(11, 19));
@@ -204,9 +236,12 @@ export function registerMessagingCommands(program: Command): void {
             const dest = msg.channel ? chalk.magenta(`#${msg.channel}`) : chalk.yellow(msg.to ?? "?");
             const priority = msg.priority !== "normal" ? chalk.red(` [${msg.priority}]`) : "";
             const att = msg.has_attachments ? chalk.dim(" 📎") : "";
-            console.log(`${time} ${from} → ${dest}${priority}${att}`);
-            console.log(`  ${chalk.dim(msg.preview)}`);
+            const unread = msg.unread ? chalk.green(" unread") : "";
+            console.log(`${time} ${from} → ${dest}${priority}${att}${unread} ${chalk.dim(`#${msg.id}`)}`);
+            console.log(`  ${chalk.dim(msg.snippet)}`);
           }
+          if (result.has_more) console.log(chalk.dim(`Continue with: conversations digest ${result.channel ?? ""} --cursor ${result.next_cursor} --max-bytes ${result.max_bytes}`.trim()));
+          console.log(chalk.dim("Use conversations show <id> for one full message."));
         }
       }
       closeDb();

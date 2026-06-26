@@ -500,7 +500,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       send_message: "Send DM to agent. Required: to, content. Optional: from?, priority?(low|normal|high|urgent), blocking?",
       read_messages: "Read messages with filters. Optional: session_id?, from?, to?, channel?, since?(ISO), limit?, unread_only?, mark_read?(default true \u2014 auto-marks returned messages as read, pass false to peek without consuming)",
       get_message: "Get the full content of a specific message by id. Required: id",
-      read_digest: "Lightweight unread digest \u2014 preview only (no full bodies), auto-marks read, never overflows tokens. Returns { messages, total_unread, shown }. Optional: channel?, session_id?, to?, since?(ISO), limit?, project_id?",
+      read_digest: "Cursored byte-capped digest — preview snippets only, no full bodies, non-destructive unless mark_read:true. Returns { digest_id, message_ids, next_cursor, messages, byte_length }. Optional: channel?, session_id?, to?, since?(ISO), cursor?(message id), max_bytes?, limit?, unread_only?, mark_read?, project_id?",
       list_sessions: "List all DM sessions. Optional: agent?(filter by participant)",
       reply: "Reply to a specific message, creating a thread (sets reply_to). Use read_thread to retrieve. Required: message_id, content. Optional: from?",
       mark_read: "Mark messages as read. Optional: from?, ids?(array), all?(bool \u2014 mark all unread)",

@@ -1,10 +1,11 @@
 import { getDb, getDataDir } from "./db.js";
 import type { Message, Attachment, SendMessageOptions, ReadMessagesOptions, SearchMessagesOptions, SearchResult } from "../types.js";
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { mkdirSync, copyFileSync, statSync, existsSync, realpathSync } from "fs";
 import { join, basename, resolve } from "path";
 import { fireWebhooks } from "./webhooks.js";
 import { normalizeChannelName } from "./channel-names.js";
+import { markChannelNotificationsRead } from "./channel-notifications.js";
 
 /** Strip null/undefined fields from a message for compact output. */
 export function compactMessage(msg: Message): Partial<Message> {
@@ -373,18 +374,41 @@ export interface DigestMessage {
   id: number;
   from: string;
   created_at: string;
-  preview: string;
+  snippet: string;
+  snippet_bytes: number;
+  truncated: boolean;
   priority: string;
   has_attachments: boolean;
+  attachment_count: number;
   channel?: string | null;
   to?: string | null;
+  reply_to?: number | null;
   unread: boolean;
 }
 
 export interface DigestResult {
+  digest_id: string;
   messages: DigestMessage[];
+  message_ids: number[];
+  channel: string | null;
+  session_id: string | null;
+  to: string | null;
+  since: string | null;
+  cursor: number | null;
+  next_cursor: number | null;
+  max_bytes: number;
+  byte_length: number;
+  limit: number;
+  count: number;
+  total_available: number;
   total_unread: number;
   shown: number;
+  skipped_count: number;
+  has_more: boolean;
+  truncated: boolean;
+  marked_read: number;
+  compact: true;
+  hint: string;
 }
 
 export interface ReadDigestOptions {
@@ -392,46 +416,383 @@ export interface ReadDigestOptions {
   session_id?: string;
   to?: string;
   since?: string;
+  cursor?: number;
   limit?: number;
+  max_bytes?: number;
   unread_only?: boolean;
+  mark_read?: boolean;
+  reader?: string;
   project_id?: string;
 }
 
-export function readDigest(opts: ReadDigestOptions = {}): DigestResult {
+export const DEFAULT_DIGEST_MAX_BYTES = 8192;
+export const MIN_DIGEST_MAX_BYTES = 512;
+export const MAX_DIGEST_MAX_BYTES = 65536;
+export const DEFAULT_DIGEST_LIMIT = 200;
+export const MAX_DIGEST_LIMIT = 1000;
+export const DEFAULT_DIGEST_SNIPPET_BYTES = 320;
+
+const DIGEST_ID_PLACEHOLDER = "0000000000000000";
+
+function resolveDigestMaxBytes(value: unknown): number {
+  if (value === undefined || value === null || value === "") return DEFAULT_DIGEST_MAX_BYTES;
+  const parsed = typeof value === "number" ? value : Number.parseInt(String(value), 10);
+  if (!Number.isFinite(parsed)) return DEFAULT_DIGEST_MAX_BYTES;
+  const bytes = Math.floor(parsed);
+  if (bytes < MIN_DIGEST_MAX_BYTES) {
+    throw new Error(`Digest max_bytes must be at least ${MIN_DIGEST_MAX_BYTES} bytes.`);
+  }
+  return Math.min(bytes, MAX_DIGEST_MAX_BYTES);
+}
+
+function resolveDigestLimit(value: unknown): number {
+  if (value === undefined || value === null || value === "") return DEFAULT_DIGEST_LIMIT;
+  const parsed = typeof value === "number" ? value : Number.parseInt(String(value), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_DIGEST_LIMIT;
+  return Math.min(Math.floor(parsed), MAX_DIGEST_LIMIT);
+}
+
+function resolveDigestCursor(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  const parsed = typeof value === "number" ? value : Number.parseInt(String(value), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : undefined;
+}
+
+function normalizeSnippetText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function truncateUtf8(value: string, maxBytes: number): { text: string; truncated: boolean } {
+  const safeMax = Math.max(0, Math.floor(maxBytes));
+  if (Buffer.byteLength(value, "utf8") <= safeMax) return { text: value, truncated: false };
+  if (safeMax <= 0) return { text: "", truncated: value.length > 0 };
+
+  const suffix = safeMax >= 3 ? "..." : "";
+  const suffixBytes = Buffer.byteLength(suffix, "utf8");
+  const budget = Math.max(0, safeMax - suffixBytes);
+  let used = 0;
+  let text = "";
+  for (const char of value) {
+    const bytes = Buffer.byteLength(char, "utf8");
+    if (used + bytes > budget) break;
+    text += char;
+    used += bytes;
+  }
+  return { text: `${text}${suffix}`, truncated: true };
+}
+
+function makeDigestMessage(message: Message, snippetBytes: number): DigestMessage {
+  const normalized = normalizeSnippetText(message.content);
+  const snippet = truncateUtf8(normalized, snippetBytes);
+  const attachmentCount = message.attachments?.length ?? 0;
+  return {
+    id: message.id,
+    from: message.from_agent,
+    created_at: message.created_at,
+    snippet: snippet.text,
+    snippet_bytes: Buffer.byteLength(snippet.text, "utf8"),
+    truncated: snippet.truncated,
+    priority: message.priority,
+    has_attachments: attachmentCount > 0,
+    attachment_count: attachmentCount,
+    channel: message.channel,
+    to: message.to_agent,
+    reply_to: message.reply_to,
+    unread: !message.read_at,
+  };
+}
+
+function digestHash(input: Omit<DigestResult, "digest_id" | "byte_length" | "hint">): string {
+  return createHash("sha256")
+    .update(JSON.stringify(input))
+    .digest("hex")
+    .slice(0, 16);
+}
+
+function finalizeDigestResult(result: DigestResult): DigestResult {
+  const hashInput = {
+    messages: result.messages,
+    message_ids: result.message_ids,
+    channel: result.channel,
+    session_id: result.session_id,
+    to: result.to,
+    since: result.since,
+    cursor: result.cursor,
+    next_cursor: result.next_cursor,
+    max_bytes: result.max_bytes,
+    limit: result.limit,
+    count: result.count,
+    total_available: result.total_available,
+    total_unread: result.total_unread,
+    shown: result.shown,
+    skipped_count: result.skipped_count,
+    has_more: result.has_more,
+    truncated: result.truncated,
+    marked_read: result.marked_read,
+    compact: result.compact,
+  };
+  const finalized = { ...result, digest_id: digestHash(hashInput) };
+  for (let i = 0; i < 3; i++) {
+    finalized.byte_length = Buffer.byteLength(JSON.stringify(finalized), "utf8");
+  }
+  return finalized;
+}
+
+function countDigestMessages(opts: {
+  channel?: string;
+  session_id?: string;
+  to?: string;
+  since?: string;
+  cursor?: number;
+  project_id?: string;
+  unread_only?: boolean;
+}): { total_available: number; total_unread: number } {
   const db = getDb();
+  const baseConditions: string[] = [];
+  const baseParams: (string | number)[] = [];
 
-  // Count total unread with same filters
-  const countConditions: string[] = ["read_at IS NULL"];
-  const countParams: (string | number)[] = [];
-  if (opts.channel) { countConditions.push("channel = ?"); countParams.push(normalizeChannelName(opts.channel)); }
-  if (opts.session_id) { countConditions.push("session_id = ?"); countParams.push(opts.session_id); }
-  if (opts.to) { countConditions.push("to_agent = ?"); countParams.push(opts.to); }
-  if (opts.since) { countConditions.push("created_at > ?"); countParams.push(opts.since); }
-  if (opts.project_id) { countConditions.push("project_id = ?"); countParams.push(opts.project_id); }
-  const countWhere = `WHERE ${countConditions.join(" AND ")}`;
-  const totalUnread = (db.prepare(`SELECT COUNT(*) as n FROM messages ${countWhere}`).get(...countParams) as { n: number }).n;
+  if (opts.channel) { baseConditions.push("channel = ?"); baseParams.push(normalizeChannelName(opts.channel)); }
+  if (opts.session_id) { baseConditions.push("session_id = ?"); baseParams.push(opts.session_id); }
+  if (opts.to) { baseConditions.push("to_agent = ?"); baseParams.push(opts.to); }
+  if (opts.since) { baseConditions.push("created_at > ?"); baseParams.push(opts.since); }
+  if (opts.cursor !== undefined) { baseConditions.push("id > ?"); baseParams.push(opts.cursor); }
+  if (opts.project_id) { baseConditions.push("project_id = ?"); baseParams.push(opts.project_id); }
 
-  // Fetch messages (unread by default)
-  const messages = readMessages({ ...opts, unread_only: opts.unread_only ?? true });
+  const availableConditions = opts.unread_only ? [...baseConditions, "read_at IS NULL"] : baseConditions;
+  const availableWhere = availableConditions.length > 0 ? `WHERE ${availableConditions.join(" AND ")}` : "";
+  const unreadWhere = `WHERE ${[...baseConditions, "read_at IS NULL"].join(" AND ")}`;
+  const totalAvailable = (db.prepare(`SELECT COUNT(*) as n FROM messages ${availableWhere}`).get(...baseParams) as { n: number }).n;
+  const totalUnread = (db.prepare(`SELECT COUNT(*) as n FROM messages ${unreadWhere}`).get(...baseParams) as { n: number }).n;
+  return { total_available: totalAvailable, total_unread: totalUnread };
+}
 
-  // Auto-mark as read
-  if (messages.length > 0) {
-    markReadByIds(messages.map((m) => m.id));
+function queryDigestMessages(opts: {
+  channel?: string;
+  session_id?: string;
+  to?: string;
+  since?: string;
+  cursor?: number;
+  project_id?: string;
+  unread_only?: boolean;
+  limit: number;
+}): Message[] {
+  const db = getDb();
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
+
+  if (opts.channel) { conditions.push("channel = ?"); params.push(normalizeChannelName(opts.channel)); }
+  if (opts.session_id) { conditions.push("session_id = ?"); params.push(opts.session_id); }
+  if (opts.to) { conditions.push("to_agent = ?"); params.push(opts.to); }
+  if (opts.since) { conditions.push("created_at > ?"); params.push(opts.since); }
+  if (opts.cursor !== undefined) { conditions.push("id > ?"); params.push(opts.cursor); }
+  if (opts.project_id) { conditions.push("project_id = ?"); params.push(opts.project_id); }
+  if (opts.unread_only) conditions.push("read_at IS NULL");
+
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+  const safeLimit = Math.max(1, Math.min(Math.floor(opts.limit), MAX_DIGEST_LIMIT));
+  const rows = db.prepare(
+    `SELECT * FROM messages ${where} ORDER BY id ASC LIMIT ${safeLimit}`
+  ).all(...params) as Record<string, unknown>[];
+  return rows.map(parseMessage);
+}
+
+function buildDigestResult(opts: {
+  channel: string | null;
+  session_id: string | null;
+  to: string | null;
+  since: string | null;
+  cursor: number | null;
+  max_bytes: number;
+  limit: number;
+  total_available: number;
+  total_unread: number;
+  entries: DigestMessage[];
+  skipped_count?: number;
+  advance_cursor?: number | null;
+  marked_read?: number;
+}): DigestResult {
+  const messageIds = opts.entries.map((message) => message.id);
+  const nextCursor = opts.advance_cursor ?? (messageIds.length > 0 ? messageIds[messageIds.length - 1] : opts.cursor);
+  const skippedCount = opts.skipped_count ?? 0;
+  const consumedCount = opts.entries.length + skippedCount;
+  const hasMore = opts.total_available > consumedCount;
+  return finalizeDigestResult({
+    digest_id: DIGEST_ID_PLACEHOLDER,
+    messages: opts.entries,
+    message_ids: messageIds,
+    channel: opts.channel,
+    session_id: opts.session_id,
+    to: opts.to,
+    since: opts.since,
+    cursor: opts.cursor,
+    next_cursor: nextCursor ?? null,
+    max_bytes: opts.max_bytes,
+    byte_length: 0,
+    limit: opts.limit,
+    count: opts.entries.length,
+    total_available: opts.total_available,
+    total_unread: opts.total_unread,
+    shown: opts.entries.length,
+    skipped_count: skippedCount,
+    has_more: hasMore,
+    truncated: hasMore || skippedCount > 0,
+    marked_read: opts.marked_read ?? 0,
+    compact: true,
+    hint: "Use show <id>; continue with next_cursor.",
+  });
+}
+
+function assertDigestFits(result: DigestResult): void {
+  if (result.byte_length > result.max_bytes) {
+    throw new Error(`Digest envelope exceeds max_bytes (${result.byte_length} > ${result.max_bytes}); increase --max-bytes or narrow the filters.`);
+  }
+}
+
+function markDigestEntriesRead(entries: DigestMessage[], reader?: string): number {
+  if (entries.length === 0) return 0;
+  const ids = entries.map((entry) => entry.id);
+  const markedRead = markReadByIds(ids, reader);
+  if (reader) markChannelNotificationsRead(reader, ids);
+  return markedRead;
+}
+
+export function readDigest(opts: ReadDigestOptions = {}): DigestResult {
+  const maxBytes = resolveDigestMaxBytes(opts.max_bytes);
+  const limit = resolveDigestLimit(opts.limit);
+  const cursor = resolveDigestCursor(opts.cursor);
+  const channel = opts.channel ? normalizeChannelName(opts.channel) : null;
+  const counts = countDigestMessages({
+    channel: channel ?? undefined,
+    session_id: opts.session_id,
+    to: opts.to,
+    since: opts.since,
+    cursor,
+    project_id: opts.project_id,
+    unread_only: opts.unread_only,
+  });
+
+  const messages = queryDigestMessages({
+    channel: channel ?? undefined,
+    session_id: opts.session_id,
+    to: opts.to,
+    since: opts.since,
+    cursor,
+    project_id: opts.project_id,
+    unread_only: opts.unread_only ?? false,
+    limit,
+  });
+
+  let entries: DigestMessage[] = [];
+  for (const message of messages) {
+    let low = 0;
+    let high = DEFAULT_DIGEST_SNIPPET_BYTES;
+    let best: DigestMessage | null = null;
+
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      const candidateMessage = makeDigestMessage(message, mid);
+      const candidate = buildDigestResult({
+        channel,
+        session_id: opts.session_id ?? null,
+        to: opts.to ?? null,
+        since: opts.since ?? null,
+        cursor: cursor ?? null,
+        max_bytes: maxBytes,
+        limit,
+        total_available: counts.total_available,
+        total_unread: counts.total_unread,
+        entries: [...entries, candidateMessage],
+        marked_read: opts.mark_read ? entries.length + 1 : 0,
+      });
+
+      if (candidate.byte_length <= maxBytes) {
+        best = candidateMessage;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+
+    if (!best) {
+      let skippedEntries = entries;
+      let skipped = buildDigestResult({
+        channel,
+        session_id: opts.session_id ?? null,
+        to: opts.to ?? null,
+        since: opts.since ?? null,
+        cursor: cursor ?? null,
+        max_bytes: maxBytes,
+        limit,
+        total_available: counts.total_available,
+        total_unread: counts.total_unread,
+        entries: skippedEntries,
+        skipped_count: 1,
+        advance_cursor: message.id,
+        marked_read: opts.mark_read ? skippedEntries.length : 0,
+      });
+      while (skipped.byte_length > maxBytes && skippedEntries.length > 0) {
+        skippedEntries = skippedEntries.slice(0, -1);
+        skipped = buildDigestResult({
+          channel,
+          session_id: opts.session_id ?? null,
+          to: opts.to ?? null,
+          since: opts.since ?? null,
+          cursor: cursor ?? null,
+          max_bytes: maxBytes,
+          limit,
+          total_available: counts.total_available,
+          total_unread: counts.total_unread,
+          entries: skippedEntries,
+          skipped_count: 1,
+          advance_cursor: message.id,
+          marked_read: opts.mark_read ? skippedEntries.length : 0,
+        });
+      }
+      assertDigestFits(skipped);
+      if (opts.mark_read && skippedEntries.length > 0) {
+        const markedRead = markDigestEntriesRead(skippedEntries, opts.reader);
+        skipped = buildDigestResult({
+          channel,
+          session_id: opts.session_id ?? null,
+          to: opts.to ?? null,
+          since: opts.since ?? null,
+          cursor: cursor ?? null,
+          max_bytes: maxBytes,
+          limit,
+          total_available: counts.total_available,
+          total_unread: counts.total_unread,
+          entries: skippedEntries,
+          skipped_count: 1,
+          advance_cursor: message.id,
+          marked_read: markedRead,
+        });
+        assertDigestFits(skipped);
+      }
+      return skipped;
+    }
+    entries = [...entries, best];
   }
 
-  const digest: DigestMessage[] = messages.map((m) => ({
-    id: m.id,
-    from: m.from_agent,
-    created_at: m.created_at,
-    preview: m.content.slice(0, 100) + (m.content.length > 100 ? "…" : ""),
-    priority: m.priority,
-    has_attachments: Array.isArray(m.attachments) && m.attachments.length > 0,
-    channel: m.channel,
-    to: m.to_agent,
-    unread: !m.read_at,
-  }));
+  let markedRead = 0;
+  if (opts.mark_read && entries.length > 0) {
+    markedRead = markDigestEntriesRead(entries, opts.reader);
+  }
 
-  return { messages: digest, total_unread: totalUnread, shown: digest.length };
+  const result = buildDigestResult({
+    channel,
+    session_id: opts.session_id ?? null,
+    to: opts.to ?? null,
+    since: opts.since ?? null,
+    cursor: cursor ?? null,
+    max_bytes: maxBytes,
+    limit,
+    total_available: counts.total_available,
+    total_unread: counts.total_unread,
+    entries,
+    marked_read: markedRead,
+  });
+  assertDigestFits(result);
+  return result;
 }
 
 export interface ExportMessagesOptions {

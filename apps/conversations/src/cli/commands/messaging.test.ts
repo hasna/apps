@@ -37,6 +37,9 @@ describe("registerMessagingCommands", () => {
 
     const digest = program.commands.find((c) => c.name() === "digest");
     expect(digest).toBeDefined();
+    expect(digest?.options.some((o) => o.long === "--cursor")).toBe(true);
+    expect(digest?.options.some((o) => o.long === "--max-bytes")).toBe(true);
+    expect(digest?.options.some((o) => o.long === "--mark-read")).toBe(true);
   });
 
   test("registers search command", () => {

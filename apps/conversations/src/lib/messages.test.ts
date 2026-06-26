@@ -1,7 +1,8 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markSessionRead, markChannelRead, getMessageById, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, searchMessages, getUnreadBlockers, getThreadReplies, compactMessage, listUnreadCounts, parseMentions, listUnreadCountsWithMentions, getMessagesForAgent, markMentionsRead, markUnread, markUnreadByIds, recordReadReceipt, recordReadReceiptsBatch, getReadReceipts, getMessageReadStatus, MAX_MESSAGE_BYTES } from "./messages";
 import { createChannel, joinChannel } from "./channels";
-import { closeDb } from "./db";
+import { readChannelNotifications, subscribeToChannelNotifications } from "./channel-notifications";
+import { closeDb, getDb } from "./db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -805,31 +806,127 @@ describe("attachments", () => {
 });
 
 describe("readDigest", () => {
-  test("returns preview, total_unread, shown", () => {
+  test("returns digest id, message ids, snippets, and byte-bounded output", () => {
     sendMessage({ from: "a", to: "b", content: "hello world" });
-    sendMessage({ from: "a", to: "b", content: "x".repeat(200) });
-    const result = readDigest({ to: "b" });
+    sendMessage({ from: "a", to: "b", content: "x".repeat(800) });
+    const result = readDigest({ to: "b", max_bytes: 1200 });
+    expect(result.digest_id).toHaveLength(16);
+    expect(result.byte_length).toBeLessThanOrEqual(1200);
+    expect(result.total_available).toBe(2);
     expect(result.total_unread).toBe(2);
     expect(result.shown).toBe(2);
+    expect(result.message_ids).toEqual([1, 2]);
+    expect(result.next_cursor).toBe(2);
     expect(result.messages).toHaveLength(2);
-    expect(result.messages[0].preview).toBe("hello world");
-    expect(result.messages[1].preview).toBe("x".repeat(100) + "…");
+    expect(result.messages[0].snippet).toBe("hello world");
+    expect(result.messages[1].snippet).toStartWith("x");
+    expect(result.messages[1].snippet.length).toBeLessThan(800);
   });
 
-  test("auto-marks messages as read", () => {
+  test("does not mark messages read by default", () => {
     const msg = sendMessage({ from: "a", to: "b", content: "hi" });
     readDigest({ to: "b" });
     const updated = getMessageById(msg.id);
+    expect(updated?.read_at).toBeNull();
+  });
+
+  test("marks messages read when requested", () => {
+    const msg = sendMessage({ from: "a", to: "b", content: "hi" });
+    const result = readDigest({ to: "b", mark_read: true, reader: "b" });
+    const updated = getMessageById(msg.id);
+    expect(result.marked_read).toBe(1);
     expect(updated?.read_at).toBeTruthy();
   });
 
-  test("only shows unread by default", () => {
-    sendMessage({ from: "a", to: "b", content: "first" });
-    readDigest({ to: "b" }); // marks as read
+  test("mark-read digest still respects max_bytes", () => {
+    sendMessage({ from: "a", to: "b", content: "x".repeat(800) });
+    const result = readDigest({ to: "b", max_bytes: 700, mark_read: true, reader: "b" });
+    expect(result.byte_length).toBeLessThanOrEqual(700);
+    expect(result.marked_read).toBe(result.shown);
+  });
+
+  test("mark-read digest clears channel notification unread state", () => {
+    createChannel("digest-notify", "owner");
+    subscribeToChannelNotifications("digest-notify", "reader");
+    const msg = sendMessage({ from: "alice", to: "digest-notify", channel: "digest-notify", content: "notify me" });
+
+    expect(readChannelNotifications({ agent: "reader", channel: "digest-notify", unread_only: true })).toHaveLength(1);
+    const result = readDigest({ channel: "digest-notify", mark_read: true, reader: "reader" });
+
+    expect(result.message_ids).toEqual([msg.id]);
+    expect(readChannelNotifications({ agent: "reader", channel: "digest-notify", unread_only: true })).toHaveLength(0);
+  });
+
+  test("supports unread-only mode explicitly", () => {
+    const first = sendMessage({ from: "a", to: "b", content: "first" });
     sendMessage({ from: "a", to: "b", content: "second" });
-    const result = readDigest({ to: "b" });
+    markReadByIds([first.id], "b");
+    const result = readDigest({ to: "b", unread_only: true });
     expect(result.shown).toBe(1);
-    expect(result.messages[0].preview).toBe("second");
+    expect(result.messages[0].snippet).toBe("second");
+    expect(result.message_ids).toEqual([2]);
+  });
+
+  test("uses message id cursor for deterministic continuation", () => {
+    const first = sendMessage({ from: "a", to: "mychannel", channel: "mychannel", content: "first" });
+    const second = sendMessage({ from: "a", to: "mychannel", channel: "mychannel", content: "second" });
+    sendMessage({ from: "a", to: "mychannel", channel: "mychannel", content: "third" });
+
+    const result = readDigest({ channel: "mychannel", cursor: first.id, limit: 1 });
+    expect(result.message_ids).toEqual([second.id]);
+    expect(result.next_cursor).toBe(second.id);
+    expect(result.has_more).toBe(true);
+  });
+
+  test("cursor continuation follows id order even when timestamps are out of order", () => {
+    const first = sendMessage({ from: "a", to: "imported", channel: "imported", content: "id-one" });
+    const second = sendMessage({ from: "a", to: "imported", channel: "imported", content: "id-two" });
+    getDb().prepare("UPDATE messages SET created_at = ? WHERE id = ?").run("2000-01-01T00:00:00.000", second.id);
+
+    const page1 = readDigest({ channel: "imported", limit: 1 });
+    const page2 = readDigest({ channel: "imported", cursor: page1.next_cursor ?? undefined, limit: 1 });
+
+    expect(page1.message_ids).toEqual([first.id]);
+    expect(page2.message_ids).toEqual([second.id]);
+  });
+
+  test("advances cursor when a matching message cannot fit even as an empty snippet", () => {
+    const msg = sendMessage({
+      from: "agent-" + "x".repeat(700),
+      to: "tiny",
+      channel: "tiny",
+      content: "small content",
+    });
+
+    const result = readDigest({ channel: "tiny", max_bytes: 512 });
+    expect(result.shown).toBe(0);
+    expect(result.skipped_count).toBe(1);
+    expect(result.next_cursor).toBe(msg.id);
+    expect(result.has_more).toBe(false);
+    expect(result.byte_length).toBeLessThanOrEqual(512);
+  });
+
+  test("marks included messages read when a later message is skipped for byte budget", () => {
+    const first = sendMessage({ from: "a", to: "skip-mark", channel: "skip-mark", content: "first" });
+    const second = sendMessage({
+      from: "agent-" + "x".repeat(700),
+      to: "skip-mark",
+      channel: "skip-mark",
+      content: "second",
+    });
+
+    const result = readDigest({ channel: "skip-mark", max_bytes: 900, mark_read: true, reader: "reader" });
+    expect(result.message_ids).toEqual([first.id]);
+    expect(result.skipped_count).toBe(1);
+    expect(result.next_cursor).toBe(second.id);
+    expect(result.marked_read).toBe(1);
+    expect(getMessageById(first.id)?.read_at).toBeTruthy();
+    expect(getMessageById(second.id)?.read_at).toBeNull();
+  });
+
+  test("rejects a digest envelope that cannot fit the requested byte cap", () => {
+    expect(() => readDigest({ to: "agent-" + "x".repeat(2000), max_bytes: 512 }))
+      .toThrow("Digest envelope exceeds max_bytes");
   });
 
   test("filters by channel", () => {
@@ -843,6 +940,7 @@ describe("readDigest", () => {
     sendMessage({ from: "a", to: "b", content: "plain" });
     const result = readDigest({ to: "b" });
     expect(result.messages[0].has_attachments).toBe(false);
+    expect(result.messages[0].attachment_count).toBe(0);
   });
 });
 
