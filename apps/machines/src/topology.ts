@@ -14,6 +14,7 @@ export const MACHINES_CONSUMER_ENTRYPOINT = "@hasna/machines/consumer";
 export const MACHINES_CONSUMER_SCHEMA_URI = "https://schemas.hasna.xyz/machines/consumer/v1/machines-consumer.schema.json";
 export const MACHINES_CONSUMER_SCHEMA_ARTIFACT = "schemas/machines-consumer.schema.json";
 export const DEFAULT_MACHINE_RESOLVER_TTL_MS = 24 * 60 * 60 * 1000;
+export const DEFAULT_HEARTBEAT_ONLINE_TTL_MS = 2 * 60 * 1000;
 
 export interface TopologyCommandResult {
   stdout: string;
@@ -28,6 +29,7 @@ export interface MachineTopologyOptions {
   runner?: TopologyCommandRunner;
   now?: Date;
   resolverTtlMs?: number | null;
+  heartbeatTtlMs?: number | null;
 }
 
 export interface MachineRouteHint {
@@ -560,12 +562,31 @@ function parseHeartbeatJson(value: string | null | undefined): Record<string, un
   }
 }
 
+function heartbeatStatus(
+  heartbeat: ReturnType<typeof listHeartbeats>[number] | undefined,
+  now: Date,
+  heartbeatTtlMs: number | null | undefined,
+): MachineTopologyEntry["heartbeat_status"] {
+  const status = heartbeat?.status === "online" || heartbeat?.status === "offline" ? heartbeat.status : undefined;
+  if (!status) return "unknown";
+  if (status !== "online") return status;
+  const ttlMs = heartbeatTtlMs === undefined ? DEFAULT_HEARTBEAT_ONLINE_TTL_MS : heartbeatTtlMs;
+  if (ttlMs === null) return "online";
+  const freshnessAt = heartbeat?.observed_at ?? heartbeat?.updated_at;
+  const updatedAt = freshnessAt ? Date.parse(freshnessAt) : NaN;
+  if (!Number.isFinite(updatedAt)) return "unknown";
+  const ageMs = now.getTime() - updatedAt;
+  return ageMs > ttlMs ? "offline" : "online";
+}
+
 function buildEntry(input: {
   machineId: string;
   localMachineId: string;
   manifest?: MachineManifest;
   peer?: TailscalePeer | null;
   heartbeat?: ReturnType<typeof listHeartbeats>[number];
+  now: Date;
+  heartbeatTtlMs?: number | null;
 }): MachineTopologyEntry {
   const manifest = input.manifest;
   const peer = input.peer;
@@ -587,7 +608,7 @@ function buildEntry(input: {
     user: typeof manifest?.metadata?.user === "string" ? manifest.metadata.user : null,
     workspace_path: manifest?.workspacePath ?? null,
     manifest_declared: Boolean(manifest),
-    heartbeat_status: (input.heartbeat?.status as "online" | "offline" | undefined) ?? "unknown",
+    heartbeat_status: heartbeatStatus(input.heartbeat, input.now, input.heartbeatTtlMs),
     last_heartbeat_at: input.heartbeat?.updated_at ?? null,
     agent: {
       pid: input.heartbeat?.pid ?? null,
@@ -647,6 +668,8 @@ export function discoverMachineTopology(options: MachineTopologyOptions = {}): M
       manifest: manifestMachine,
       peer: findTailscalePeer(manifestMachine ?? null, machineId, peers),
       heartbeat: heartbeatByMachine.get(machineId),
+      now,
+      heartbeatTtlMs: options.heartbeatTtlMs,
     });
   });
   return {

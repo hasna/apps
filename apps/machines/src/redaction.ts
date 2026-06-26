@@ -63,6 +63,7 @@ export function redactNetworkValue(value: string): string {
 
 export function redactErrorMessage(value: string): string {
   return redactPath(value)
+    .replace(/\b(password|passwd|token|secret|api[_-]?key|credential)=([^\s"'<>]+)/gi, (_match, key) => `${key}=${REDACTED_VALUE}`)
     .replace(DATABASE_URL_PATTERN, (match) => {
       const scheme = match.match(/^([a-z][a-z0-9+.-]*:\/\/)/i)?.[1] ?? "";
       return `${scheme}${REDACTED_VALUE}`;
@@ -87,11 +88,12 @@ export function redactIdentifier(value: string): string {
 
 export interface RedactSensitiveValueOptions {
   redactPaths?: boolean;
+  redactSecretReferences?: boolean;
 }
 
 export function redactSensitiveValue(value: unknown, key = "", options: RedactSensitiveValueOptions = {}): unknown {
   if (typeof value === "string") {
-    if (isSensitiveKey(key) && !(isSecretReferenceKey(key) && !looksSensitiveString(value))) {
+    if (isSensitiveKey(key) && !(!options.redactSecretReferences && isSecretReferenceKey(key) && !looksSensitiveString(value))) {
       return REDACTED_VALUE;
     }
     if (looksSensitiveString(value)) return REDACTED_VALUE;
@@ -124,7 +126,7 @@ export function redactMetadata(metadata: Record<string, unknown> | undefined): R
 }
 
 export function redactMetadataForTopology(metadata: Record<string, unknown> | undefined): Record<string, unknown> {
-  return redactSensitiveValue(metadata ?? {}, "", { redactPaths: false }) as Record<string, unknown>;
+  return redactSensitiveValue(metadata ?? {}, "", { redactPaths: false, redactSecretReferences: true }) as Record<string, unknown>;
 }
 
 export function redactManifestForDiagnostics(machine: MachineManifest): Record<string, unknown> {

@@ -52,6 +52,7 @@ import { buildSshCommand, resolveSshTarget } from "../commands/ssh.js";
 import { resolveScreenTarget, buildScreenCommand, buildScreenEnableCommand, resolveScreenCredentials } from "../commands/screen.js";
 import { buildSyncPlan, runSyncPlan } from "../commands/sync.js";
 import { getStatus } from "../commands/status.js";
+import { collectHeartbeats, type HeartbeatCollectResult } from "../commands/heartbeat.js";
 import { repairWorkspaceManifestMappings, type WorkspaceManifestRepairResult } from "../commands/workspace.js";
 import { discoverMachineTopology, redactRouteForOutput, redactTopologyForOutput, resolveMachineRoute, resolveMachineWorkspace } from "../topology.js";
 import {
@@ -355,6 +356,16 @@ function renderFleetStatus(status: FleetStatus): string {
   ].join("\n");
 }
 
+function renderHeartbeatCollect(results: HeartbeatCollectResult[]): string {
+  return results.map((result) => {
+    const marker = result.status === "imported" ? chalk.green("imported") : chalk.red("failed");
+    const detail = result.status === "imported"
+      ? `${result.updatedAt} ${result.daemonVersion ?? "version:unknown"} ${result.storageSyncStatus ?? "storage:unknown"}`
+      : result.error ?? "unknown error";
+    return `${result.machineId.padEnd(14)} ${marker} ${String(result.source ?? "unknown").padEnd(9)} ${detail}`;
+  }).join("\n");
+}
+
 function renderShellCommand(command: { program: string; args: string[]; sudo: boolean }): string {
   const parts = command.sudo ? ["sudo", command.program, ...command.args] : [command.program, ...command.args];
   return parts.map((part) => /^[A-Za-z0-9_@%+=:,./$-]+$/.test(part) ? part : JSON.stringify(part)).join(" ");
@@ -419,6 +430,7 @@ const runtimeCommand = program.command("runtime").description("Watch runtime con
 const clipboardCommand = program.command("clipboard").description("Real-time clipboard sync across fleet machines");
 const installClaudeCommand = program.command("install-claude").description("Install or inspect Claude, Codex, and Gemini CLIs");
 const daemonCommand = program.command("daemon").description("Install and inspect the machines-agent fleet daemon service");
+const heartbeatCommand = program.command("heartbeat").description("Collect and inspect machines-agent heartbeat rows");
 const trustedNotificationApproval = createTrustedNotificationApproval();
 
 function cliMachineId(machineId: string | null | undefined): string {
@@ -918,6 +930,22 @@ addDaemonLifecycleCommand("uninstall", "Plan or uninstall the machines-agent dae
 addDaemonLifecycleCommand("restart", "Plan or restart the machines-agent daemon service");
 addDaemonLifecycleCommand("status", "Plan a daemon service status command");
 addDaemonLifecycleCommand("logs", "Plan a daemon service log command");
+
+heartbeatCommand
+  .command("collect")
+  .description("Run one-shot machines-agent heartbeats over machine routes and import public rows locally")
+  .option("--machine <id...>", "Machine identifier to collect; repeat for multiple machines", collectOptionValues, [])
+  .option("--timeout-ms <ms>", "Per-machine command timeout in milliseconds")
+  .option("--no-doctor-summary", "Skip doctor summary collection even when the remote agent supports it")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { machine?: string[]; timeoutMs?: string; doctorSummary?: boolean; json?: boolean }, command: Command) => {
+    const results = collectHeartbeats({
+      machines: options.machine,
+      timeoutMs: options.timeoutMs ? parseIntegerOption(options.timeoutMs, "timeout-ms", { min: 1 }) : undefined,
+      doctorSummary: options.doctorSummary,
+    });
+    printCommandResult(results, renderHeartbeatCollect(results), wantsCommandJson(options, command));
+  });
 
 manifestCommand.command("init").description("Create an empty fleet manifest")
   .option("--approval-token <token>", "Scoped mutation approval token")

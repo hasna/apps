@@ -20,10 +20,11 @@ export const PG_MIGRATIONS: string[] = [
     tool_versions_json TEXT,
     tailscale_json TEXT,
     storage_sync_status TEXT,
-    storage_sync_last_error TEXT,
-    doctor_summary_json TEXT,
-    private_metadata INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (machine_id, pid)
+	    storage_sync_last_error TEXT,
+	    doctor_summary_json TEXT,
+	    private_metadata INTEGER NOT NULL DEFAULT 0,
+	    observed_at TIMESTAMPTZ,
+	    PRIMARY KEY (machine_id, pid)
   );
 
   ALTER TABLE agent_heartbeats ADD COLUMN IF NOT EXISTS daemon_version TEXT;
@@ -37,8 +38,9 @@ export const PG_MIGRATIONS: string[] = [
   ALTER TABLE agent_heartbeats ADD COLUMN IF NOT EXISTS tailscale_json TEXT;
   ALTER TABLE agent_heartbeats ADD COLUMN IF NOT EXISTS storage_sync_status TEXT;
   ALTER TABLE agent_heartbeats ADD COLUMN IF NOT EXISTS storage_sync_last_error TEXT;
-  ALTER TABLE agent_heartbeats ADD COLUMN IF NOT EXISTS doctor_summary_json TEXT;
-  ALTER TABLE agent_heartbeats ADD COLUMN IF NOT EXISTS private_metadata INTEGER NOT NULL DEFAULT 0;
+	  ALTER TABLE agent_heartbeats ADD COLUMN IF NOT EXISTS doctor_summary_json TEXT;
+	  ALTER TABLE agent_heartbeats ADD COLUMN IF NOT EXISTS private_metadata INTEGER NOT NULL DEFAULT 0;
+	  ALTER TABLE agent_heartbeats ADD COLUMN IF NOT EXISTS observed_at TIMESTAMPTZ;
 
   CREATE TABLE IF NOT EXISTS setup_runs (
     id TEXT PRIMARY KEY,

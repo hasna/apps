@@ -6,6 +6,7 @@ import {
   type MachineRouteKind,
   type MachineRouteConfidence,
 } from "../topology.js";
+import { getManifestMachine } from "../manifests.js";
 
 export const SCREEN_SECRET_NAMESPACE_ENV = "HASNA_MACHINES_SCREEN_SECRET_NAMESPACE";
 export const DEFAULT_SCREEN_SECRET_NAMESPACE = "machines/screen-sharing";
@@ -123,7 +124,8 @@ export function resolveScreenCredentials(machineId: string, options: ScreenCrede
   const topology = options.topology ?? discoverMachineTopology(options);
   const screen = resolveScreenTarget(machineId, { ...options, topology });
   const entry = topology.machines.find((machine) => machine.machine_id === screen.machineId);
-  const metadata = entry?.metadata;
+  const manifestEntry = getManifestMachine(screen.machineId) ?? getManifestMachine(machineId);
+  const metadata = manifestEntry?.metadata ?? entry?.metadata;
   const metadataUser = metadataString(metadata, ["screenUser", "screen_user", "user", "username"]);
   const metadataPasswordSecret = metadataString(metadata, [
     "screenPasswordSecret",

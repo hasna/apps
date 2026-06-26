@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeDb, upsertHeartbeat } from "../src/db.js";
+import { closeDb, getDb, upsertHeartbeat } from "../src/db.js";
 import { manifestAdd, manifestInit } from "../src/commands/manifest.js";
 import {
   discoverMachineTopology,
@@ -149,6 +149,7 @@ describe("machine topology SDK", () => {
           auth_status: "authenticated",
           api_token: "should-not-appear",
           githubAppPrivateKey: "synthetic-private-key-material",
+          screenPasswordSecret: "machines/screen-sharing/demo-node-01-vnc-password",
         },
       });
 
@@ -158,6 +159,7 @@ describe("machine topology SDK", () => {
       });
       expect(JSON.stringify(topology)).not.toContain("should-not-appear");
       expect(JSON.stringify(topology)).not.toContain("private-material");
+      expect(JSON.stringify(topology)).not.toContain("screen-sharing");
       const resolved = resolveMachineWorkspace({
         machineId: "demo-node-01",
         projectId: "open-knowledge",
@@ -192,6 +194,26 @@ describe("machine topology SDK", () => {
       const local = getLocalMachineTopology({ includeTailscale: false });
       expect(local.machine_id).toBe("demo-node-02");
       expect(local.route_hints.some((hint) => hint.kind === "local")).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("marks stale online heartbeats offline in topology", () => {
+    const dir = setupTemp("machines-topology-stale-heartbeat-");
+    try {
+      upsertHeartbeat("demo-node-02", 123, "online");
+      getDb().query("UPDATE agent_heartbeats SET updated_at = ?, observed_at = ? WHERE machine_id = ? AND pid = ?")
+        .run("2026-06-09T00:00:00.000Z", "2026-06-09T00:00:00.000Z", "demo-node-02", 123);
+
+      const topology = discoverMachineTopology({
+        now: new Date("2026-06-09T00:03:00.000Z"),
+        includeTailscale: false,
+      });
+
+      const local = topology.machines.find((machine) => machine.machine_id === "demo-node-02");
+      expect(local?.heartbeat_status).toBe("offline");
+      expect(local?.last_heartbeat_at).toBe("2026-06-09T00:00:00.000Z");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

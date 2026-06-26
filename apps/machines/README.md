@@ -310,6 +310,23 @@ HASNA_MACHINES_DATABASE_URL=postgres://... machines-agent --storage-push --inter
 machines-agent --doctor-summary --once --json
 ```
 
+For a simple phase-one fleet without PostgreSQL storage, the primary machine can
+actively collect public heartbeat rows over SSH and import them into its local
+OpenMachines SQLite database:
+
+```bash
+machines heartbeat collect --machine spark02 --machine machine001 --json
+```
+
+This runs `machines-agent --once` on each target using the normal route
+resolver. It does not install or start persistent services. `machines topology`
+treats stale `online` heartbeat rows as offline, so a one-time import is not
+allowed to look live forever. If a target reports a stable local hostname
+instead of its fleet id, declare that hostname in manifest
+`metadata.heartbeatAliases`; route fields such as `hostname`, `tailscaleName`,
+and `sshAddress` are not trusted as heartbeat identity. The collector still
+stores the canonical fleet id.
+
 Service lifecycle commands are dry-run plans by default and support macOS
 `launchd` plus Linux `systemd` user or system services:
 
