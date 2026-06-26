@@ -11,11 +11,13 @@ import type {
   Budget,
   BudgetStatus,
   CostSummary,
+  ZeroCostModelBreakdown,
   ModelBreakdown,
   ProjectBreakdown,
   AgentBreakdown,
   AccountBreakdown,
   Period,
+  Agent,
   SessionFilter,
 } from '../types/index.js'
 
@@ -76,17 +78,57 @@ export function getDbPath(): string {
   return join(getDataDir(), 'economy.db')
 }
 
+function isSqliteBusyError(error: unknown): boolean {
+  const candidate = error as { code?: unknown; message?: unknown }
+  const code = typeof candidate.code === 'string' ? candidate.code : ''
+  const message = typeof candidate.message === 'string' ? candidate.message : String(error)
+  return code === 'SQLITE_BUSY' ||
+    code === 'SQLITE_BUSY_RECOVERY' ||
+    /database is locked|SQLITE_BUSY/i.test(message)
+}
+
+function retryDelayMs(attempt: number): number {
+  return Math.min(1000, 50 * (2 ** attempt))
+}
+
+function withSqliteBusyRetry<T>(operation: () => T, context: string): T {
+  const maxAttempts = 8
+  let lastError: unknown
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return operation()
+    } catch (error) {
+      if (!isSqliteBusyError(error)) throw error
+      lastError = error
+      if (attempt === maxAttempts - 1) break
+      Bun.sleepSync(retryDelayMs(attempt))
+    }
+  }
+  throw new Error(
+    `SQLite database is locked after ${maxAttempts} attempts while ${context}. Another economy sync/merge may be recovering the database; retry shortly.`,
+    { cause: lastError },
+  )
+}
+
 export function openDatabase(dbPath?: string, skipSeed = false): Database {
   const path = dbPath ?? getDbPath()
   if (path !== ':memory:') {
     const dir = path.substring(0, path.lastIndexOf('/'))
     if (dir && !existsSync(dir)) mkdirSync(dir, { recursive: true })
   }
-  const db = new Database(path)
-  db.exec('PRAGMA journal_mode = WAL')
-  db.exec('PRAGMA busy_timeout = 5000')
-  db.exec('PRAGMA foreign_keys = ON')
-  initSchema(db)
+  const db = withSqliteBusyRetry(() => {
+    const opened = new Database(path)
+    try {
+      opened.exec('PRAGMA busy_timeout = 10000')
+      opened.exec('PRAGMA journal_mode = WAL')
+      opened.exec('PRAGMA foreign_keys = ON')
+      initSchema(opened)
+      return opened
+    } catch (error) {
+      try { opened.close() } catch { /* best effort */ }
+      throw error
+    }
+  }, `opening ${path}`)
   if (!skipSeed) {
     // Lazy import to avoid circular dep — pricing imports db, db seeds pricing
     import('../lib/pricing.js').then(({ ensurePricingSeeded }) => ensurePricingSeeded(db)).catch(() => {})
@@ -461,26 +503,32 @@ export function querySessions(db: Database, filter: SessionFilter = {}): Economy
   `).all(...params, limit, offset) as EconomySession[]
 }
 
-export function queryTopSessions(db: Database, n = 10, agent?: string): EconomySession[] {
-  if (agent) {
-    return db.prepare(`SELECT * FROM sessions WHERE agent = ? ORDER BY total_cost_usd DESC LIMIT ?`).all(agent, n) as EconomySession[]
-  }
-  return db.prepare(`SELECT * FROM sessions ORDER BY total_cost_usd DESC LIMIT ?`).all(n) as EconomySession[]
+export function queryTopSessions(db: Database, n = 10, agent?: string, since?: string): EconomySession[] {
+  const conditions: string[] = []
+  const params: (string | number)[] = []
+  if (agent) { conditions.push('agent = ?'); params.push(agent) }
+  if (since) { conditions.push('started_at >= ?'); params.push(since) }
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : ''
+  return db.prepare(`SELECT * FROM sessions ${where} ORDER BY total_cost_usd DESC LIMIT ?`).all(...params, n) as EconomySession[]
 }
 
 // ── Summary ───────────────────────────────────────────────────────────────────
 
-export function querySummary(db: Database, period: Period, machine?: string, allMachines = false): CostSummary {
+export function querySummary(db: Database, period: Period, machine?: string, allMachines = false, agent?: Agent): CostSummary {
   const rWhere = periodWhere(period)
   const sWhere = sessionPeriodWhere(period)
-  const machineClause = !allMachines && machine ? ` AND machine_id = '${machine.replace(/'/g, "''")}'` : ''
+  const machineClause = !allMachines && machine ? ' AND machine_id = ?' : ''
+  const agentClause = agent ? ' AND agent = ?' : ''
+  const params: (string | number)[] = []
+  if (!allMachines && machine) params.push(machine)
+  if (agent) params.push(agent)
 
   const r = db.prepare(`
     SELECT COALESCE(SUM(cost_usd), 0) as total_usd,
            COUNT(*) as requests,
            COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens), 0) as tokens
-    FROM requests WHERE ${rWhere}${machineClause}
-  `).get() as { total_usd: number; requests: number; tokens: number }
+    FROM requests WHERE ${rWhere}${machineClause}${agentClause}
+  `).get(...params) as { total_usd: number; requests: number; tokens: number }
 
   const codexTotals = db.prepare(`
     SELECT COALESCE(SUM(total_cost_usd), 0) as cost_usd,
@@ -488,15 +536,15 @@ export function querySummary(db: Database, period: Period, machine?: string, all
            COALESCE(SUM(request_count), 0) as requests,
            COUNT(*) as sessions
     FROM sessions
-    WHERE ${sWhere}${machineClause}
+    WHERE ${sWhere}${machineClause}${agentClause}
     AND id NOT IN (SELECT DISTINCT session_id FROM requests)
-  `).get() as { cost_usd: number; tokens: number; requests: number; sessions: number }
+  `).get(...params) as { cost_usd: number; tokens: number; requests: number; sessions: number }
 
   const requestSessionCount = db.prepare(`
     SELECT COUNT(DISTINCT session_id) as sessions
     FROM requests
-    WHERE ${rWhere}${machineClause}
-  `).get() as { sessions: number }
+    WHERE ${rWhere}${machineClause}${agentClause}
+  `).get(...params) as { sessions: number }
 
   return {
     total_usd: r.total_usd + codexTotals.cost_usd,
@@ -505,6 +553,22 @@ export function querySummary(db: Database, period: Period, machine?: string, all
     sessions: requestSessionCount.sessions + codexTotals.sessions,
     period,
   }
+}
+
+export function queryZeroCostTokenizedModels(db: Database, limit = 10): ZeroCostModelBreakdown[] {
+  return db.prepare(`
+    SELECT agent,
+           model,
+           COUNT(*) as requests,
+           COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens), 0) as total_tokens,
+           MAX(timestamp) as last_seen
+    FROM requests
+    WHERE cost_usd = 0
+      AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_create_tokens > 0)
+    GROUP BY agent, model
+    ORDER BY requests DESC, total_tokens DESC
+    LIMIT ?
+  `).all(limit) as ZeroCostModelBreakdown[]
 }
 
 export function queryModelBreakdown(db: Database): ModelBreakdown[] {

@@ -11,6 +11,7 @@ import {
   upsertModelPricing, getModelPricing, listModelPricing, deleteModelPricing,
   seedModelPricing, listMachines, getMachineId,
   upsertUsageSnapshot, queryUsageSnapshots,
+  queryZeroCostTokenizedModels,
   dedupeRequests,
 } from './database.js'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
@@ -364,6 +365,26 @@ describe('querySummary', () => {
     expect(querySummary(db, 'today', 'spark02').sessions).toBe(1)
     expect(querySummary(db, 'today', 'apple06').sessions).toBe(1)
   })
+
+  it('filters request and session-only totals by agent', () => {
+    const db = makeDb()
+    upsertSession(db, sampleSession({ id: 'claude-request-backed', agent: 'claude', total_cost_usd: 99, total_tokens: 99, request_count: 99 }))
+    upsertSession(db, sampleSession({ id: 'codex-session-only', agent: 'codex', total_cost_usd: 5, total_tokens: 500, request_count: 2 }))
+    upsertRequest(db, sampleRequest({ id: 'claude-req', session_id: 'claude-request-backed', agent: 'claude', cost_usd: 3, input_tokens: 100, output_tokens: 50, cache_read_tokens: 0, cache_create_tokens: 0 }))
+    upsertRequest(db, sampleRequest({ id: 'gemini-req', session_id: 'gemini-request-backed', agent: 'gemini', cost_usd: 7, input_tokens: 200, output_tokens: 25, cache_read_tokens: 0, cache_create_tokens: 0 }))
+
+    const claude = querySummary(db, 'today', undefined, true, 'claude')
+    const codex = querySummary(db, 'today', undefined, true, 'codex')
+
+    expect(claude.total_usd).toBeCloseTo(3)
+    expect(claude.requests).toBe(1)
+    expect(claude.sessions).toBe(1)
+    expect(claude.tokens).toBe(150)
+    expect(codex.total_usd).toBeCloseTo(5)
+    expect(codex.requests).toBe(2)
+    expect(codex.sessions).toBe(1)
+    expect(codex.tokens).toBe(500)
+  })
 })
 
 describe('querySessions', () => {
@@ -414,6 +435,37 @@ describe('queryTopSessions', () => {
 
     expect(top).toHaveLength(1)
     expect(top[0]!.id).toBe('codex-expensive')
+  })
+
+  it('filters top sessions by since before applying the limit', () => {
+    const db = makeDb()
+    upsertSession(db, sampleSession({ id: 'old-expensive', total_cost_usd: 100, started_at: '2026-01-01T00:00:00.000Z' }))
+    upsertSession(db, sampleSession({ id: 'new-cheaper', total_cost_usd: 1, started_at: '2026-06-25T00:00:00.000Z' }))
+
+    const top = queryTopSessions(db, 1, undefined, '2026-06-24')
+
+    expect(top).toHaveLength(1)
+    expect(top[0]!.id).toBe('new-cheaper')
+  })
+})
+
+describe('queryZeroCostTokenizedModels', () => {
+  it('groups zero-cost tokenized requests by agent and model', () => {
+    const db = makeDb()
+    upsertRequest(db, sampleRequest({ id: 'unknown-1', agent: 'codex', model: 'unknown-model', cost_usd: 0, input_tokens: 100, output_tokens: 50, cache_read_tokens: 0, cache_create_tokens: 0 }))
+    upsertRequest(db, sampleRequest({ id: 'unknown-2', agent: 'codex', model: 'unknown-model', cost_usd: 0, input_tokens: 10, output_tokens: 0, cache_read_tokens: 5, cache_create_tokens: 0 }))
+    upsertRequest(db, sampleRequest({ id: 'known-priced', agent: 'claude', model: 'claude-sonnet-4-6', cost_usd: 1, input_tokens: 1000 }))
+    upsertRequest(db, sampleRequest({ id: 'free-empty', agent: 'gemini', model: 'free-empty', cost_usd: 0, input_tokens: 0, output_tokens: 0, cache_read_tokens: 0, cache_create_tokens: 0 }))
+
+    const rows = queryZeroCostTokenizedModels(db)
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      agent: 'codex',
+      model: 'unknown-model',
+      requests: 2,
+      total_tokens: 165,
+    })
   })
 })
 

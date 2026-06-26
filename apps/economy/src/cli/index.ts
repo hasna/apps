@@ -11,7 +11,7 @@ import { syncAll } from '../lib/sync-all.js'
 import { maybePullFromCloud, cloudPush, cloudPull, cloudSyncFull, getCloudDatabaseUrl, getCloudPg } from '../lib/cloud-sync.js'
 import { mergePeerDatabase } from '../lib/peer-sync.js'
 import type { Agent } from '../lib/agents.js'
-import { openDatabase, querySummary, querySessions, queryTopSessions, queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryAccountBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId, listMachineRegistry } from '../db/database.js'
+import { openDatabase, querySummary, querySessions, queryTopSessions, queryZeroCostTokenizedModels, queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryAccountBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId, listMachineRegistry } from '../db/database.js'
 import { queryBillingSummary } from '../db/database.js'
 import { syncAnthropicBilling, syncOpenAIBilling, syncGeminiBilling } from '../ingest/billing.js'
 import { packageMetadata } from '../lib/package-metadata.js'
@@ -305,7 +305,7 @@ program
     }
     // Recalculate zero-cost requests
     if (opts.recalculate) {
-      const { computeCostFromDb } = await import('../lib/pricing.js')
+      const { computeCostFromDb, getPricingFromDb } = await import('../lib/pricing.js')
       const zeroRows = db.prepare(`SELECT id, model, input_tokens, output_tokens, cache_read_tokens, cache_create_tokens, cache_create_5m_tokens, cache_create_1h_tokens FROM requests WHERE cost_usd = 0 AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_create_tokens > 0)`).all() as Array<{ id: string; model: string; input_tokens: number; output_tokens: number; cache_read_tokens: number; cache_create_tokens: number; cache_create_5m_tokens?: number; cache_create_1h_tokens?: number }>
       let fixed = 0
       for (const r of zeroRows) {
@@ -325,6 +325,20 @@ program
         for (const sid of touchedSessions) { rollupSession(db, sid) }
       }
       console.log(chalk.cyan(`→ Recalculated: ${fixed}/${zeroRows.length} zero-cost requests now have pricing`))
+      const zeroCostBuckets = queryZeroCostTokenizedModels(db, 8)
+      if (zeroCostBuckets.length > 0) {
+        console.log(chalk.yellow('→ Zero-cost token buckets remain:'))
+        for (const row of zeroCostBuckets) {
+          const pricing = getPricingFromDb(db, row.model)
+          const status = pricing
+            ? (pricing.inputPer1M === 0 && pricing.outputPer1M === 0 && pricing.cacheReadPer1M === 0 && pricing.cacheWritePer1M === 0
+                ? 'explicit zero/free pricing'
+                : 'pricing configured; inspect/recalculate')
+            : 'missing pricing'
+          console.log(chalk.yellow(`  ${row.agent}/${row.model}: ${row.requests} requests, ${fmtTokens(row.total_tokens)} tokens (${status})`))
+        }
+        console.log(chalk.dim('  Add pricing with `economy pricing set <model> --input ... --output ...`, then rerun `economy sync --recalculate`.'))
+      }
     }
     // Fire webhooks after sync
     try {
@@ -409,8 +423,7 @@ program
     const agent = parseOptionalCliAgent(opts.agent)
     const db = openDatabase()
     const sinceDate = opts.since ? parseSinceDate(opts.since) : undefined
-    let sessions = queryTopSessions(db, count, agent)
-    if (sinceDate) sessions = sessions.filter(s => s.started_at >= sinceDate)
+    const sessions = queryTopSessions(db, count, agent, sinceDate)
     if (sessions.length === 0) {
       console.log(chalk.yellow('No sessions found. Run `economy sync` first.'))
       return

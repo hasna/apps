@@ -230,7 +230,8 @@ export function createHandler(db: Database) {
     if (path === '/api/top' && method === 'GET') {
       const n = Number(url.searchParams.get('n') ?? 10)
       const agent = url.searchParams.get('agent') ?? undefined
-      return ok(queryTopSessions(db, n, agent))
+      const since = url.searchParams.get('since') ?? undefined
+      return ok(queryTopSessions(db, n, agent, since))
     }
 
     // Model breakdown

@@ -12,12 +12,13 @@ import {
   listMachineRegistry,
   queryBillingSummary,
   dedupeRequests,
+  queryZeroCostTokenizedModels,
 } from '../../db/database.js'
 import { querySavingsSummary } from '../../lib/savings.js'
 import { queryBillingDiff } from '../../lib/billing-diff.js'
 import { usageSnapshotFilterForPeriod } from '../../lib/periods.js'
 import { buildStatusLine } from './tui.js'
-import { computeCostFromDb, ensurePricingSeeded } from '../../lib/pricing.js'
+import { computeCostFromDb, ensurePricingSeeded, getPricingFromDb } from '../../lib/pricing.js'
 import { AGENTS, parseAgent } from '../../lib/agents.js'
 import type { Period } from '../../types/index.js'
 import {
@@ -33,6 +34,13 @@ import { agentPaths } from '../../lib/paths.js'
 
 function fmt(usd: number): string {
   return '$' + usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return n.toLocaleString('en-US')
 }
 
 function parsePeriod(value: string | undefined, fallback: Period = 'month'): Period {
@@ -55,7 +63,7 @@ export function registerExtendedCommands(program: Command): void {
       const period = parsePeriod(periodArg, 'month')
       const agent = parseAgent(opts.agent, '--agent')
       const snaps = queryUsageSnapshots(db, { agent, ...usageSnapshotFilterForPeriod(period) })
-      const summary = querySummary(db, period, undefined, true)
+      const summary = querySummary(db, period, undefined, true, agent)
 
       if (opts.json) {
         console.log(JSON.stringify({ period, agent: agent ?? 'all', snapshots: snaps, summary }, null, 2))
@@ -72,7 +80,8 @@ export function registerExtendedCommands(program: Command): void {
           console.log(`  ${chalk.white(s.agent.padEnd(10))} ${s.metric.padEnd(28)} ${s.value}${s.unit ? ` ${s.unit}` : ''}  ${chalk.dim(s.date)}`)
         }
       }
-      console.log(`\n  ${chalk.dim('Fleet API-equivalent spend:')} ${fmt(summary.total_usd)}`)
+      const spendLabel = agent ? `${agent} API-equivalent spend:` : 'Fleet API-equivalent spend:'
+      console.log(`\n  ${chalk.dim(spendLabel)} ${fmt(summary.total_usd)}`)
       console.log()
     })
 
@@ -185,8 +194,21 @@ export function registerExtendedCommands(program: Command): void {
       checks.push({ ok: Boolean(process.env['CURSOR_SESSION_TOKEN']), msg: `cursor token: ${process.env['CURSOR_SESSION_TOKEN'] ? 'set' : 'missing CURSOR_SESSION_TOKEN'}` })
       checks.push({ ok: Boolean(getCloudDatabaseUrl()), msg: `cloud: ${getCloudDatabaseUrl() ? 'ECONOMY_CLOUD_DATABASE_URL set' : 'not configured'}` })
 
-      const zeroCost = db.prepare(`SELECT COUNT(*) as c FROM requests WHERE cost_usd = 0 AND (input_tokens > 0 OR output_tokens > 0)`).get() as { c: number }
-      checks.push({ ok: zeroCost.c === 0, msg: `zero-cost requests with tokens: ${zeroCost.c}` })
+      const zeroCostBuckets = queryZeroCostTokenizedModels(db, 5)
+      const zeroCost = db.prepare(`
+        SELECT COUNT(*) as c
+        FROM requests
+        WHERE cost_usd = 0
+          AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_create_tokens > 0)
+      `).get() as { c: number }
+      const zeroCostSuffix = zeroCostBuckets.length > 0
+        ? `; top buckets: ${zeroCostBuckets.map(row => {
+            const pricing = getPricingFromDb(db, row.model)
+            const status = pricing ? 'pricing configured' : 'missing pricing'
+            return `${row.agent}/${row.model} ${row.requests} req ${fmtTokens(row.total_tokens)} tok (${status})`
+          }).join('; ')}`
+        : ''
+      checks.push({ ok: zeroCost.c === 0, msg: `zero-cost requests with tokens: ${zeroCost.c}${zeroCostSuffix}` })
 
       const estimated = querySummary(db, 'month', undefined, true)
       const actual = queryBillingSummary(db, 'month')
