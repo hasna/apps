@@ -21,6 +21,12 @@ import { usageSnapshotFilterForPeriod } from '../lib/periods.js'
 import { queryBillingDiff } from '../lib/billing-diff.js'
 import { queryUsageSnapshots } from '../db/database.js'
 import { getServeBindHost, isAuthorizedRequest, requireServeApiToken } from '../lib/serve-auth.js'
+import {
+  buildFleetCostInsights,
+  buildFleetFreshness,
+  MAX_FLEET_FRESHNESS_ROWS,
+  MAX_FLEET_INSIGHT_ROWS,
+} from '../lib/fleet-sync.js'
 import { randomUUID } from 'crypto'
 import { existsSync } from 'fs'
 import { resolve, sep } from 'path'
@@ -115,6 +121,16 @@ function normalizeBudgetPeriod(value: unknown): 'daily' | 'weekly' | 'monthly' {
 function finiteNumber(value: unknown): number | null {
   const n = Number(value)
   return Number.isFinite(n) ? n : null
+}
+
+function parsePeriodParam(value: string | null, fallback: Period): Period | null {
+  const raw = value ?? fallback
+  return ['today', 'yesterday', 'week', 'month', 'year', 'all'].includes(raw) ? raw as Period : null
+}
+
+function positiveIntParam(value: string | null, fallback: number, max: number): number {
+  const n = Number(value ?? fallback)
+  return Number.isInteger(n) && n > 0 ? Math.min(n, max) : fallback
 }
 
 async function jsonBody(req: Request): Promise<Record<string, unknown> | null> {
@@ -216,7 +232,8 @@ async function handleApiRequest(db: Database, req: Request): Promise<Response> {
     }
 
     if (path === '/api/fleet' && method === 'GET') {
-      const period = (url.searchParams.get('period') ?? 'month') as Period
+      const period = parsePeriodParam(url.searchParams.get('period'), 'month')
+      if (!period) return err('period must be today|yesterday|week|month|year|all')
       const machine = url.searchParams.get('machine') ?? undefined
       return ok({
         summary: querySummary(db, period, machine),
@@ -224,6 +241,27 @@ async function handleApiRequest(db: Database, req: Request): Promise<Response> {
         registry: listMachineRegistry(db),
         current_machine: getMachineId(),
       })
+    }
+
+    if (path === '/api/fleet/freshness' && method === 'GET') {
+      const staleAfterMinutes = positiveIntParam(url.searchParams.get('stale_after_minutes') ?? url.searchParams.get('staleAfterMinutes'), 60, 60 * 24 * 30)
+      const limit = positiveIntParam(url.searchParams.get('limit'), 20, MAX_FLEET_FRESHNESS_ROWS)
+      return ok(buildFleetFreshness(db, {
+        staleAfterMinutes,
+        limit,
+      }))
+    }
+
+    if (path === '/api/fleet/insights' && method === 'GET') {
+      const period = parsePeriodParam(url.searchParams.get('period'), 'today')
+      if (!period) return err('period must be today|yesterday|week|month|year|all')
+      const staleAfterMinutes = positiveIntParam(url.searchParams.get('stale_after_minutes') ?? url.searchParams.get('staleAfterMinutes'), 60, 60 * 24 * 30)
+      const limit = positiveIntParam(url.searchParams.get('limit'), 5, MAX_FLEET_INSIGHT_ROWS)
+      return ok(buildFleetCostInsights(db, {
+        period,
+        staleAfterMinutes,
+        limit,
+      }))
     }
 
     // Daily breakdown for charts

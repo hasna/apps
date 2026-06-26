@@ -39,7 +39,7 @@ describe('economy-mcp stdio server', () => {
 
       const tools = await client.listTools(undefined, { timeout: 5_000 })
       const names = new Set(tools.tools.map((tool) => tool.name))
-      for (const expected of ['get_cost_summary', 'get_sessions', 'get_pricing', 'set_budget', 'set_pricing', 'get_billing_summary', 'get_usage', 'get_savings', 'list_subscriptions', 'set_subscription', 'remove_subscription', 'sync', 'storage_status', 'storage_push', 'storage_pull', 'storage_sync', 'describe_tools']) {
+      for (const expected of ['get_cost_summary', 'get_sessions', 'get_pricing', 'set_budget', 'set_pricing', 'get_billing_summary', 'get_usage', 'get_savings', 'list_subscriptions', 'set_subscription', 'remove_subscription', 'sync', 'storage_status', 'storage_push', 'storage_pull', 'storage_sync', 'get_fleet_freshness', 'get_fleet_insights', 'describe_tools']) {
         expect(names.has(expected)).toBe(true)
       }
       const retiredStatusTool = ['cloud', 'status'].join('_')
@@ -61,6 +61,15 @@ describe('economy-mcp stdio server', () => {
       const pricingText = pricing.content[0]?.type === 'text' ? pricing.content[0].text : ''
       expect(pricingText).toContain('gemini-3.1-pro-preview')
       expect(pricingText).toContain('storage-h')
+
+      const fleetInsights = await client.callTool(
+        { name: 'get_fleet_insights', arguments: { period: 'today', limit: 3 } },
+        undefined,
+        { timeout: 5_000 },
+      )
+      const fleetText = fleetInsights.content[0]?.type === 'text' ? fleetInsights.content[0].text : ''
+      expect(fleetText).toContain('"schema_version":1')
+      expect(fleetText).toContain('"quality"')
 
       const budgetSet = await client.callTool(
         { name: 'set_budget', arguments: { period: 'weekly', limit_usd: 25, project_path: '/workspace/open-economy', agent: 'codex', alert_at_percent: 70 } },

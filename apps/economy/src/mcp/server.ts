@@ -11,6 +11,7 @@ import { computeCostFromDb } from '../lib/pricing.js'
 import { packageMetadata } from '../lib/package-metadata.js'
 import { ensurePricingSeeded } from '../lib/pricing.js'
 import { storagePull, storagePush, storageSyncFull, getStorageDatabaseUrl, getStoragePg } from '../lib/native-storage.js'
+import { buildFleetCostInsights, buildFleetFreshness } from '../lib/fleet-sync.js'
 import type { Period } from '../types/index.js'
 import type { Agent } from '../lib/agents.js'
 
@@ -58,6 +59,8 @@ const TOOL_NAMES = [
   'storage_push',
   'storage_pull',
   'storage_sync',
+  'get_fleet_freshness',
+  'get_fleet_insights',
   'search_tools',
   'describe_tools',
   'get_goals',
@@ -99,6 +102,8 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
   storage_push: 'tables?[] -> push local economy SQLite rows to remote PostgreSQL storage',
   storage_pull: 'tables?[] -> pull remote PostgreSQL storage rows into local economy SQLite',
   storage_sync: 'no params -> push local rows, then pull remote rows',
+  get_fleet_freshness: 'stale_after_minutes?(60), limit?(20) -> bounded machine freshness rows and stale counts',
+  get_fleet_insights: 'period?(today|week|month|year|all), stale_after_minutes?(60), limit?(5) -> cost, freshness, data quality hints',
   search_tools: 'query substring -> tool name list',
   describe_tools: 'names[] -> one-line parameter hints',
   get_goals: 'no params -> goal progress summary',
@@ -536,6 +541,38 @@ server.tool(
   'Push local rows, then pull remote rows.',
   {},
   async () => text(JSON.stringify(await storageSyncFull(), null, 2)),
+)
+
+server.tool(
+  'get_fleet_freshness',
+  'Bounded fleet freshness summary. Params: stale_after_minutes(60), limit(20).',
+  {
+    stale_after_minutes: z.number().int().positive().max(60 * 24 * 30).optional(),
+    limit: z.number().int().positive().max(100).optional(),
+  },
+  async ({ stale_after_minutes, limit }: { stale_after_minutes?: number; limit?: number }) => {
+    return text(JSON.stringify(buildFleetFreshness(db, {
+      staleAfterMinutes: stale_after_minutes ?? 60,
+      limit: limit ?? 20,
+    })))
+  },
+)
+
+server.tool(
+  'get_fleet_insights',
+  'Compact fleet cost, freshness, and data quality insights. Params: period, stale_after_minutes, limit.',
+  {
+    period: z.enum(['today', 'week', 'month', 'year', 'all']).optional(),
+    stale_after_minutes: z.number().int().positive().max(60 * 24 * 30).optional(),
+    limit: z.number().int().positive().max(50).optional(),
+  },
+  async ({ period, stale_after_minutes, limit }: { period?: Exclude<Period, 'yesterday'>; stale_after_minutes?: number; limit?: number }) => {
+    return text(JSON.stringify(buildFleetCostInsights(db, {
+      period: (period ?? 'today') as Period,
+      staleAfterMinutes: stale_after_minutes ?? 60,
+      limit: limit ?? 5,
+    })))
+  },
 )
 
 server.tool(

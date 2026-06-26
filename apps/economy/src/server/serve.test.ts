@@ -931,6 +931,37 @@ describe('REST API server', () => {
     expect(machines.some(machine => machine['machine_id'] === 'apple06')).toBe(false)
   })
 
+  it('GET /api/fleet freshness and insights return bounded agent-ready JSON', async () => {
+    upsertSession(db, {
+      id: 'fleet-json-session', agent: 'claude', project_path: '/proj/fleet', project_name: 'fleet',
+      started_at: NOW, ended_at: null, total_cost_usd: 2, total_tokens: 150, request_count: 1, machine_id: 'spark02',
+    })
+    upsertRequest(db, {
+      id: 'fleet-json-request', agent: 'claude', session_id: 'fleet-json-session', model: 'claude-sonnet-4-6',
+      input_tokens: 100, output_tokens: 50, cache_read_tokens: 0, cache_create_tokens: 0,
+      cost_usd: 2, duration_ms: 100, timestamp: NOW, source_request_id: 'fleet-json-request', machine_id: 'spark02',
+    })
+
+    const freshness = await req(handler, '/api/fleet/freshness?limit=1&stale_after_minutes=60')
+    const insights = await req(handler, '/api/fleet/insights?period=all&limit=1')
+    const capped = await req(handler, '/api/fleet/insights?period=all&limit=100000')
+    const invalid = await req(handler, '/api/fleet/insights?period=bogus')
+    const freshnessData = (freshness.data as Record<string, unknown>)['data'] as Record<string, unknown>
+    const insightsData = (insights.data as Record<string, unknown>)['data'] as Record<string, unknown>
+    const cappedData = (capped.data as Record<string, unknown>)['data'] as Record<string, unknown>
+
+    expect(freshness.status).toBe(200)
+    expect(freshnessData['schema_version']).toBe(1)
+    expect(freshnessData['returned_machines']).toBeLessThanOrEqual(1)
+    expect(insights.status).toBe(200)
+    expect(insightsData['schema_version']).toBe(1)
+    expect((insightsData['top_machines'] as unknown[]).length).toBeLessThanOrEqual(1)
+    expect(insightsData).toHaveProperty('quality')
+    expect(capped.status).toBe(200)
+    expect((cappedData['top_machines'] as unknown[]).length).toBeLessThanOrEqual(50)
+    expect(invalid.status).toBe(400)
+  })
+
   it('GET /api/summary?machine= filters by machine', async () => {
     upsertRequest(db, {
       id: 'req-m1', agent: 'claude', session_id: 'sess-m1', model: 'claude-sonnet-4-6',

@@ -168,4 +168,47 @@ describe('mergePeerDatabase', () => {
     expect((target.prepare(`SELECT COUNT(*) as cnt FROM requests`).get() as { cnt: number }).cnt).toBe(2)
     closeDb(target)
   })
+
+  test('remaps machine-scoped usage snapshot id collisions instead of overwriting another machine', () => {
+    const targetPath = tempPath('target-snapshot-collision.db')
+    const sourcePath = tempPath('source-snapshot-collision.db')
+    const target = openDatabase(targetPath, true)
+    const source = openDatabase(sourcePath, true)
+
+    upsertUsageSnapshot(target, {
+      id: 'shared-quota-row',
+      agent: 'codex',
+      date: '2026-06-08',
+      metric: 'quota_utilization',
+      value: 20,
+      unit: 'percent',
+      machine_id: 'apple06',
+      updated_at: NOW,
+    })
+    upsertUsageSnapshot(source, {
+      id: 'shared-quota-row',
+      agent: 'codex',
+      date: '2026-06-08',
+      metric: 'quota_utilization',
+      value: 70,
+      unit: 'percent',
+      machine_id: 'spark02',
+      updated_at: NOW,
+    })
+    closeDb(source)
+
+    const result = mergePeerDatabase(target, sourcePath)
+    const rows = target.prepare(`
+      SELECT id, machine_id, value
+      FROM usage_snapshots
+      ORDER BY machine_id
+    `).all() as Array<{ id: string; machine_id: string; value: number }>
+
+    expect(result.collisions).toBe(1)
+    expect(rows).toEqual([
+      { id: 'shared-quota-row', machine_id: 'apple06', value: 20 },
+      { id: 'spark02:shared-quota-row', machine_id: 'spark02', value: 70 },
+    ])
+    closeDb(target)
+  })
 })
