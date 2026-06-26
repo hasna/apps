@@ -1,5 +1,9 @@
 import { EventsClient } from "@hasna/events";
 import type { EventSeverity } from "@hasna/events";
+import { getDatabase } from "../db/database.js";
+import { getProject } from "../db/projects.js";
+import { getTaskList, getTaskListBySlug } from "../db/task-lists.js";
+import type { Project } from "../types/index.js";
 import type { Task } from "../types/index.js";
 
 const SOURCE = "todos";
@@ -42,6 +46,84 @@ export function taskEventData(task: Task, extra: Record<string, unknown> = {}): 
   };
 }
 
+function taskEventMetadata(task: Task): Record<string, unknown> {
+  const metadata: Record<string, unknown> = {
+    package: "@hasna/todos",
+    todos_event_schema_version: 1,
+    task_id: task.id,
+    task_short_id: task.short_id,
+    project_id: task.project_id,
+    task_list_id: task.task_list_id,
+    working_dir: task.working_dir,
+  };
+
+  try {
+    const project = task.project_id ? getProject(task.project_id) : null;
+    const projectPath = project ? readMachineLocalPath(project) ?? project.path : task.working_dir;
+    if (project) {
+      metadata.project_id = project.id;
+      metadata.project_name = project.name;
+      metadata.project_path = projectPath;
+      metadata.project_canonical_path = project.path;
+      metadata.project_default_task_list_slug = project.task_list_id;
+      metadata.root_project_id = inferRootProjectId(project);
+    } else if (projectPath) {
+      metadata.project_path = projectPath;
+      metadata.project_canonical_path = projectPath;
+    }
+    if (projectPath) {
+      metadata.project_kind = classifyProjectKind(projectPath);
+      metadata.project_is_worktree = isWorktreePath(projectPath);
+      if (typeof task.metadata.route_enabled === "boolean") {
+        metadata.route_enabled = task.metadata.route_enabled;
+      }
+      metadata.working_dir = task.working_dir ?? projectPath;
+    }
+
+    const taskList = task.task_list_id
+      ? getTaskList(task.task_list_id) ?? (project ? getTaskListBySlug(task.task_list_id, project.id) : null)
+      : project?.task_list_id
+        ? getTaskListBySlug(project.task_list_id, project.id)
+        : null;
+    if (taskList) {
+      metadata.task_list_id = taskList.id;
+      metadata.task_list_slug = taskList.slug;
+      metadata.task_list_name = taskList.name;
+      metadata.task_list_project_id = taskList.project_id;
+      metadata.task_list_is_project_default = Boolean(project?.task_list_id && taskList.slug === project.task_list_id);
+    }
+  } catch {
+    // Event enrichment must never block task lifecycle operations.
+  }
+
+  return metadata;
+}
+
+function classifyProjectKind(path: string): string {
+  return path.includes("/hasna/opensource/") ? "open-source" : "unknown";
+}
+
+function isWorktreePath(path: string): boolean {
+  return path.includes("/.codewith/worktrees/") || path.includes("/.worktrees/");
+}
+
+function inferRootProjectId(project: Project): string | null {
+  return isWorktreePath(project.path) ? null : project.id;
+}
+
+function readMachineLocalPath(project: Project): string | null {
+  const machineId = process.env["TODOS_MACHINE_ID"];
+  if (!machineId) return null;
+  try {
+    const row = getDatabase()
+      .query("SELECT path FROM project_machine_paths WHERE project_id = ? AND machine_id = ?")
+      .get(project.id, machineId) as { path: string } | null;
+    return row?.path ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function emitSharedTaskEvent(input: {
   type: TodosSharedEventType;
   task: Task;
@@ -60,12 +142,7 @@ export async function emitSharedTaskEvent(input: {
       message: input.message ?? `${input.type}: ${input.task.title}`,
       data,
       dedupeKey: input.dedupeKey ?? `${input.type}:${input.task.id}:${input.task.version}`,
-      metadata: {
-        package: "@hasna/todos",
-        task_id: input.task.id,
-        project_id: input.task.project_id,
-        task_list_id: input.task.task_list_id,
-      },
+      metadata: taskEventMetadata(input.task),
     },
     { deliver: true, dedupe: true },
   );
