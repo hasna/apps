@@ -94,6 +94,21 @@ describe("CLI integration", () => {
     }
   });
 
+  it("should return JSON errors for tester issue reports in command-local JSON mode", async () => {
+    const result = await runCli([
+      "issues",
+      "report",
+      JSON.stringify({ schema_version: "wrong", title: "Invalid tester report" }),
+      "--json",
+    ], ":memory:");
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toEqual({
+      error: "Expected schema_version testers.issue_report.v1",
+    });
+  });
+
   it("should run add command", async () => {
     const proc = Bun.spawn(
       ["bun", "run", "src/cli/index.tsx", "add", "CLI test task", "--json"],

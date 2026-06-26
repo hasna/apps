@@ -1,7 +1,6 @@
 import chalk from "chalk";
 import { execSync } from "node:child_process";
 import { resolve } from "node:path";
-import { Command } from "commander";
 import { getDatabase, resolvePartialId } from "../db/database.js";
 import { ensureProject, getProject, getProjectByPath, slugify } from "../db/projects.js";
 import { getPackageVersion } from "../lib/package-version.js";
@@ -10,24 +9,9 @@ import type { Project, Task } from "../types/index.js";
 export { getPackageVersion };
 
 export function handleError(e: unknown): never {
-  // Try to read program options — may not be available during early init
-  let jsonMode = false;
-  try {
-    jsonMode = (programForOptions?.opts?.() as any)?.json ?? false;
-  } catch {
-    // ignore
-  }
-  if (jsonMode) {
-    console.log(JSON.stringify({ error: e instanceof Error ? e.message : String(e) }));
-  } else {
-    console.error(chalk.red(e instanceof Error ? e.message : String(e)));
-  }
+  console.error(chalk.red(e instanceof Error ? e.message : String(e)));
   process.exit(1);
 }
-
-// Late-binding reference to the program for handleError
-let programForOptions: Command | null = null;
-export function setProgramRef(p: Command) { programForOptions = p; }
 
 export function resolveTaskId(partialId: string): string {
   const db = getDatabase();
