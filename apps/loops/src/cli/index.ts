@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { Command } from "commander";
 import type {
@@ -212,12 +213,22 @@ function eventData(event: EventEnvelope): Record<string, unknown> {
   return {};
 }
 
+function eventMetadata(event: EventEnvelope): Record<string, unknown> {
+  const metadata = (event as { metadata?: unknown }).metadata;
+  if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) return metadata as Record<string, unknown>;
+  return {};
+}
+
 function stringField(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function slugSegment(value: string, fallback = "event"): string {
   return value.toLowerCase().replace(/[^a-z0-9._:-]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || fallback;
+}
+
+function stableSuffix(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 12);
 }
 
 function taskEventField(data: Record<string, unknown>, keys: string[]): string | undefined {
@@ -477,14 +488,26 @@ eventsHandle
   .action(async (opts) => {
     const event = await readEventEnvelopeFromStdin();
     const data = eventData(event);
+    const metadata = eventMetadata(event);
     const taskId = taskEventField(data, ["id", "task_id", "taskId"]);
     if (!taskId) throw new Error("todos task event is missing task id in data.id, data.task_id, data.task.id, or data.payload.id");
     const taskTitle = taskEventField(data, ["title", "task_title", "taskTitle"]);
     const taskDescription = taskEventField(data, ["description", "body"]);
+    const dataProjectPath = taskEventField(data, ["working_dir", "workingDir", "project_path", "projectPath", "cwd"]);
+    const metadataProjectPath = taskEventField(metadata, [
+      "working_dir",
+      "workingDir",
+      "project_path",
+      "projectPath",
+      "project_canonical_path",
+      "cwd",
+    ]);
     const projectPath =
       opts.projectPath ??
-      taskEventField(data, ["working_dir", "workingDir", "project_path", "projectPath", "cwd"]) ??
+      dataProjectPath ??
+      metadataProjectPath ??
       process.cwd();
+    const idempotencyKey = `todos-task:${taskId}:${event.type}`;
     const provider = opts.provider as AgentProvider;
     if (!["claude", "cursor", "codewith", "aicopilot", "opencode", "codex"].includes(provider)) throw new Error("unsupported provider");
     const permissionMode = permissionModeFromOpts({ permissionMode: opts.permissionMode }, provider);
@@ -506,13 +529,16 @@ eventsHandle
       eventId: event.id,
       eventType: event.type,
     });
-    const eventSuffix = event.id.slice(0, 8);
-    workflowBody.name = `${opts.namePrefix}:${taskId.slice(0, 8)}:${eventSuffix}:workflow`;
-    workflowBody.description = `Task-triggered worker/verifier workflow for ${taskTitle ?? taskId} from ${event.source}/${event.type}`;
-    const loopName = `${opts.namePrefix}:${taskId.slice(0, 8)}:${eventSuffix}:run`;
+    const idempotencySuffix = stableSuffix(idempotencyKey);
+    workflowBody.name = `${opts.namePrefix}:${taskId.slice(0, 8)}:${idempotencySuffix}:workflow`;
+    workflowBody.description =
+      `Task-triggered worker/verifier workflow for ${taskTitle ?? taskId} from ${event.source}/${event.type}; ` +
+      `idempotency=${idempotencyKey}; event=${event.id}`;
+    const loopName = `${opts.namePrefix}:${taskId.slice(0, 8)}:${idempotencySuffix}:run`;
+    const legacyLoopName = `${opts.namePrefix}:${taskId.slice(0, 8)}:${event.id.slice(0, 8)}:run`;
     const loopInput = {
       name: loopName,
-      description: `Run ${workflowBody.name} once for task ${taskId}`,
+      description: `Run ${workflowBody.name} once for task ${taskId}; idempotency=${idempotencyKey}; event=${event.id}`,
       schedule: { type: "once" as const, at: new Date(Date.now() + 1_000).toISOString() },
       target: { type: "workflow" as const, workflowId: "<created-workflow-id>" },
       overlap: "skip" as const,
@@ -521,17 +547,24 @@ eventsHandle
       leaseMs: 90 * 60_000,
     };
     if (opts.dryRun) {
-      print({ event, workflow: workflowBody, loop: loopInput }, `dry-run ${loopName}`);
+      print({ deduped: false, idempotencyKey, event, workflow: workflowBody, loop: loopInput }, `dry-run ${loopName}`);
       return;
     }
     const store = new Store();
     try {
-      const existingLoop = store.findLoopByName(loopName);
+      const existingLoop = store.findLoopByName(loopName) ?? store.findLoopByName(legacyLoopName);
       if (existingLoop) {
         const existingWorkflow = existingLoop.target.type === "workflow" ? store.getWorkflow(existingLoop.target.workflowId) : undefined;
         print(
-          { deduped: true, event, workflow: existingWorkflow ? publicWorkflow(existingWorkflow) : undefined, loop: publicLoop(existingLoop) },
-          `deduped existing loop ${existingLoop.id} (${existingLoop.name})`,
+          {
+            deduped: true,
+            idempotencyKey,
+            dedupedBy: existingLoop.name === loopName ? "idempotency" : "legacy-event-name",
+            event,
+            workflow: existingWorkflow ? publicWorkflow(existingWorkflow) : undefined,
+            loop: publicLoop(existingLoop),
+          },
+          `deduped existing loop ${existingLoop.id} (${existingLoop.name}) for event=${event.id} idempotency=${idempotencyKey}`,
         );
         return;
       }
@@ -542,8 +575,8 @@ eventsHandle
         target: { type: "workflow", workflowId: workflow.id },
       });
       print(
-        { deduped: false, event, workflow: publicWorkflow(workflow), loop: publicLoop(loop) },
-        `created ${loop.id} (${loop.name}) workflow=${workflow.name}`,
+        { deduped: false, idempotencyKey, event, workflow: publicWorkflow(workflow), loop: publicLoop(loop) },
+        `created ${loop.id} (${loop.name}) workflow=${workflow.name} event=${event.id} idempotency=${idempotencyKey}`,
       );
     } finally {
       store.close();

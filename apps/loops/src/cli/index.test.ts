@@ -328,6 +328,10 @@ describe("loops CLI", () => {
       },
       timestamp: new Date().toISOString(),
     };
+    const replayedEvent = {
+      ...event,
+      id: "evt-task-created-0002",
+    };
     const args = [
       "--json",
       "events",
@@ -347,15 +351,134 @@ describe("loops CLI", () => {
     expect(first.status).toBe(0);
     const firstValue = JSON.parse(first.stdout);
     expect(firstValue.deduped).toBe(false);
+    expect(firstValue.idempotencyKey).toBe("todos-task:task-created-0001:task.created");
     expect(firstValue.workflow.steps).toHaveLength(2);
-    expect(firstValue.loop.name).toContain("event:todos-task:task-cre:evt-task");
+    expect(firstValue.loop.name).toContain("event:todos-task:task-cre:");
+    expect(firstValue.loop.name).not.toContain("evt-task");
     expect(firstValue.loop.target.workflowId).toBe(firstValue.workflow.id);
+    for (const step of firstValue.workflow.steps) {
+      expect(step.target).toMatchObject({
+        type: "agent",
+        provider: "codewith",
+        authProfile: "account005",
+        cwd: "/tmp/open-todos",
+        permissionMode: "bypass",
+        sandbox: "danger-full-access",
+      });
+    }
 
-    const second = runCli(dataDir, args, JSON.stringify(event));
+    const second = runCli(dataDir, args, JSON.stringify(replayedEvent));
     expect(second.status).toBe(0);
     const secondValue = JSON.parse(second.stdout);
     expect(secondValue.deduped).toBe(true);
+    expect(secondValue.idempotencyKey).toBe(firstValue.idempotencyKey);
     expect(secondValue.loop.id).toBe(firstValue.loop.id);
+  });
+
+  test("todos task event handler dedupes legacy event-id loop names", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-legacy-dedupe-"));
+    const event = {
+      id: "evt-task-created-legacy",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-created-legacy",
+        title: "Legacy route replay",
+        working_dir: "/tmp/open-todos",
+      },
+      timestamp: new Date().toISOString(),
+    };
+    const store = new Store(join(dataDir, "loops.db"));
+    let legacyLoopId = "";
+    try {
+      const workflow = store.createWorkflow({
+        name: "event:todos-task:task-cre:evt-task:workflow",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const loop = store.createLoop({
+        name: "event:todos-task:task-cre:evt-task:run",
+        schedule: { type: "once", at: futureAt() },
+        target: { type: "workflow", workflowId: workflow.id },
+      });
+      legacyLoopId = loop.id;
+    } finally {
+      store.close();
+    }
+
+    const result = runCli(dataDir, ["--json", "events", "handle", "todos-task"], JSON.stringify(event));
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.deduped).toBe(true);
+    expect(value.dedupedBy).toBe("legacy-event-name");
+    expect(value.loop.id).toBe(legacyLoopId);
+  });
+
+  test("todos task event handler uses metadata project path when task data has no cwd", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-metadata-cwd-"));
+    const event = {
+      id: "evt-task-created-metadata",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-created-metadata",
+        title: "Route from metadata",
+      },
+      metadata: {
+        project_path: "/tmp/from-metadata",
+        project_kind: "open-source",
+        route_enabled: true,
+      },
+      timestamp: new Date().toISOString(),
+    };
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "handle",
+        "todos-task",
+        "--provider",
+        "codewith",
+        "--auth-profile",
+        "account005",
+        "--sandbox",
+        "danger-full-access",
+        "--permission-mode",
+        "bypass",
+      ],
+      JSON.stringify(event),
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.deduped).toBe(false);
+    expect(value.workflow.steps[0].target.cwd).toBe("/tmp/from-metadata");
+    expect(value.workflow.steps[1].target.cwd).toBe("/tmp/from-metadata");
+  });
+
+  test("todos task event handler does not let metadata override task cwd", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-data-cwd-"));
+    const event = {
+      id: "evt-task-created-data-cwd",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-created-data-cwd",
+        title: "Route from data cwd",
+        working_dir: "/tmp/from-data",
+      },
+      metadata: {
+        project_path: "/tmp/from-metadata",
+      },
+      timestamp: new Date().toISOString(),
+    };
+    const result = runCli(dataDir, ["--json", "events", "handle", "todos-task"], JSON.stringify(event));
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.workflow.steps[0].target.cwd).toBe("/tmp/from-data");
+    expect(value.workflow.steps[1].target.cwd).toBe("/tmp/from-data");
   });
 
   test("generic event handler creates a deduped one-shot workflow loop", () => {
