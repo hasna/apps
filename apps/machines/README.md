@@ -145,6 +145,35 @@ records the stable entrypoint, envelope names, schema artifact, field
 capabilities, default resolver TTL, and stable exports used by downstream apps
 such as `@hasna/knowledge`.
 
+### Agent loop preflight APIs
+
+Agents and scheduled loops should use the compact preflight APIs before writing
+custom shell probes. These commands print bounded JSON by default; pass
+`--text` for a human summary and `--all` or `--limit/--offset` for pagination.
+Private route targets and shell commands remain redacted unless
+`--private-metadata` is used on a trusted local surface.
+
+```bash
+machines loop-preflight --machine control,worker --cmd 'bun test' --no-tailscale
+machines machine-health --project open-machines --repo open-machines
+machines routing --machine worker
+machines command-matrix --machine worker --cmd 'bun run build'
+```
+
+The matching SDK exports are `getFleetLoopPreflight()`,
+`getFleetMachineHealth()`, `getFleetRouting()`, and `getCommandMatrix()`.
+The matching MCP tools are `machines_loop_preflight`,
+`machines_machine_health`, `machines_routing`, and
+`machines_command_matrix`. All four return dry-run planning/status envelopes
+with `schema_version`, `kind`, `pagination`, compact per-machine rows,
+`artifacts`/detail refs for raw inspection, and `warnings`; they do not execute
+the planned loop command.
+
+For `loop_preflight`, top-level `ok` means every machine in the current
+selection/page is ready. Candidate schedulers that only need one usable target
+should read `summary.any_ready`; strict fleet loops should read
+`summary.all_ready`.
+
 ### Hasna Notes machine list contract
 
 Hasna Notes and similar sidebar consumers should read machine lists from

@@ -46,6 +46,12 @@ import { listMachineTrashPolicies, resolveNoteMachineContext } from "../notes.js
 import { getMachineDetails } from "../details.js";
 import { getBrowserPlanFleet } from "../browserplan.js";
 import { checkMachineCompatibility } from "../compatibility.js";
+import {
+  getCommandMatrix,
+  getFleetLoopPreflight,
+  getFleetMachineHealth,
+  getFleetRouting,
+} from "../agent-abstractions.js";
 import { getStorageStatus, resolveTables, storagePull, storagePush, storageSync } from "../storage.js";
 import { assertMutationApproved, createTrustedSdkMutationApproval, mutationPlanDigest } from "../commands/mutation-approval.js";
 
@@ -78,6 +84,10 @@ export const MACHINE_MCP_TOOL_NAMES = [
   "machines_sync_preview",
   "machines_sync_apply",
   "machines_topology",
+  "machines_machine_health",
+  "machines_routing",
+  "machines_command_matrix",
+  "machines_loop_preflight",
   "machines_compatibility",
   "machines_diff",
   "machines_install_tailscale_preview",
@@ -582,6 +592,186 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
         offset,
       }), { privateMetadata });
       return { content: [{ type: "text", text: JSON.stringify(appendWarnings(topology, warnings), null, 2) }] };
+    }
+  );
+
+  const compatibilityCommandSchema = z.object({
+    command: z.string(),
+    expectedVersion: z.string().optional(),
+    versionArgs: z.string().optional(),
+    required: z.boolean().optional(),
+  });
+  const compatibilityPackageSchema = z.object({
+    name: z.string(),
+    command: z.string().optional(),
+    expectedVersion: z.string().optional(),
+    required: z.boolean().optional(),
+  });
+  const compatibilityWorkspaceSchema = z.object({
+    path: z.string(),
+    label: z.string().optional(),
+    expectedPackageName: z.string().optional(),
+    expectedVersion: z.string().optional(),
+    required: z.boolean().optional(),
+  });
+  const agentSelectorSchema = {
+    machine_ids: z.array(z.string()).optional().describe("Optional machine ids; output remains bounded by limit/offset"),
+    include_tailscale: z.boolean().optional().describe("Whether to probe tailscale status --json"),
+    limit: z.number().int().min(1).nullable().optional().describe("Maximum machines to return; default is 10, null returns all"),
+    offset: z.number().int().min(0).optional().describe("Machine list offset for pagination"),
+  };
+  const workspaceReadinessSchema = {
+    project_id: z.string().optional().describe("Project/workspace id for workspace readiness"),
+    repo_name: z.string().optional().describe("Repository name; defaults to project id"),
+    open_files_repo_name: z.string().optional().describe("Open-files repository name"),
+    primary_machine_id: z.string().optional().describe("Primary machine id for this project"),
+  };
+  const compatibilityReadinessSchema = {
+    check_compatibility: z.boolean().optional().describe("Run bounded compatibility checks"),
+    commands: z.array(compatibilityCommandSchema).optional().describe("Commands to check"),
+    packages: z.array(compatibilityPackageSchema).optional().describe("Package-backed CLI checks"),
+    workspaces: z.array(compatibilityWorkspaceSchema).optional().describe("Workspace paths and package metadata to check"),
+  };
+
+  server.tool(
+    "machines_machine_health",
+    "Return compact local/remote loop-readiness health for machines.",
+    {
+      ...agentSelectorSchema,
+      ...workspaceReadinessSchema,
+      ...compatibilityReadinessSchema,
+      private_metadata: z.boolean().optional().describe("Include private route artifact refs where allowed"),
+    },
+    async ({
+      machine_ids,
+      include_tailscale,
+      limit,
+      offset,
+      project_id,
+      repo_name,
+      open_files_repo_name,
+      primary_machine_id,
+      check_compatibility,
+      commands,
+      packages,
+      workspaces,
+      private_metadata,
+    }) => {
+      const privateMetadata = privateMetadataAllowed(private_metadata);
+      const warnings = privateOutputWarnings(private_metadata, privateMetadata);
+      const result = getFleetMachineHealth({
+        machineIds: machine_ids,
+        includeTailscale: include_tailscale !== false,
+        limit,
+        offset,
+        projectId: project_id,
+        repoName: repo_name,
+        openFilesRepoName: open_files_repo_name,
+        primaryMachineId: primary_machine_id,
+        checkCompatibility: check_compatibility === true || Boolean(commands?.length || packages?.length || workspaces?.length),
+        commands,
+        packages,
+        workspaces,
+        privateMetadata,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(appendWarnings(result, warnings)) }] };
+    }
+  );
+
+  server.tool(
+    "machines_routing",
+    "Return compact route readiness for local and remote machines.",
+    {
+      ...agentSelectorSchema,
+      private_metadata: z.boolean().optional().describe("Include private route targets where allowed"),
+    },
+    async ({ machine_ids, include_tailscale, limit, offset, private_metadata }) => {
+      const privateMetadata = privateMetadataAllowed(private_metadata);
+      const warnings = privateOutputWarnings(private_metadata, privateMetadata);
+      const result = getFleetRouting({
+        machineIds: machine_ids,
+        includeTailscale: include_tailscale !== false,
+        limit,
+        offset,
+        privateMetadata,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(appendWarnings(result, warnings)) }] };
+    }
+  );
+
+  server.tool(
+    "machines_command_matrix",
+    "Return dry-run local/remote command routing choices for loop commands.",
+    {
+      ...agentSelectorSchema,
+      command: z.string().optional().describe("Loop command to plan; omitted keeps <loop-command> placeholder"),
+      command_label: z.string().optional().describe("Short label for the planned command"),
+      private_metadata: z.boolean().optional().describe("Include private resolved shell commands where allowed"),
+    },
+    async ({ machine_ids, include_tailscale, limit, offset, command, command_label, private_metadata }) => {
+      const privateMetadata = privateMetadataAllowed(private_metadata);
+      const warnings = privateOutputWarnings(private_metadata, privateMetadata);
+      const result = getCommandMatrix({
+        machineIds: machine_ids,
+        includeTailscale: include_tailscale !== false,
+        limit,
+        offset,
+        command,
+        commandLabel: command_label,
+        privateMetadata,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(appendWarnings(result, warnings)) }] };
+    }
+  );
+
+  server.tool(
+    "machines_loop_preflight",
+    "Return compact fleet loop readiness, route choices, and next steps.",
+    {
+      ...agentSelectorSchema,
+      ...workspaceReadinessSchema,
+      ...compatibilityReadinessSchema,
+      command: z.string().optional().describe("Loop command to plan; omitted keeps <loop-command> placeholder"),
+      command_label: z.string().optional().describe("Short label for the planned command"),
+      private_metadata: z.boolean().optional().describe("Include private resolved shell commands where allowed"),
+    },
+    async ({
+      machine_ids,
+      include_tailscale,
+      limit,
+      offset,
+      project_id,
+      repo_name,
+      open_files_repo_name,
+      primary_machine_id,
+      check_compatibility,
+      commands,
+      packages,
+      workspaces,
+      command,
+      command_label,
+      private_metadata,
+    }) => {
+      const privateMetadata = privateMetadataAllowed(private_metadata);
+      const warnings = privateOutputWarnings(private_metadata, privateMetadata);
+      const result = getFleetLoopPreflight({
+        machineIds: machine_ids,
+        includeTailscale: include_tailscale !== false,
+        limit,
+        offset,
+        projectId: project_id,
+        repoName: repo_name,
+        openFilesRepoName: open_files_repo_name,
+        primaryMachineId: primary_machine_id,
+        checkCompatibility: check_compatibility === true || Boolean(commands?.length || packages?.length || workspaces?.length),
+        commands,
+        packages,
+        workspaces,
+        command,
+        commandLabel: command_label,
+        privateMetadata,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(appendWarnings(result, warnings)) }] };
     }
   );
 

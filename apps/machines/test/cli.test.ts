@@ -787,4 +787,101 @@ describe("cli command handling", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("agent abstraction CLIs print compact JSON by default", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-cli-agent-apis-"));
+    try {
+      const env = {
+        ...process.env,
+        HASNA_MACHINES_MANIFEST_PATH: join(dir, "machines.json"),
+        HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
+        HASNA_MACHINES_MACHINE_ID: "control",
+        HASNA_MACHINES_REACHABLE_HOSTS: "operator@worker",
+        [MUTATION_APPROVAL_FLAG_ENV]: "1",
+      };
+      expect(runCli(["manifest", "init"], env).status).toBe(0);
+      expect(runCli(["manifest", "add", "--from-stdin"], env, JSON.stringify({
+        id: "control",
+        friendlyName: "Control Node",
+        platform: "linux",
+        workspacePath: "/home/hasna/Workspace",
+        updatedAt: "2026-06-26T10:00:00.000Z",
+      })).status).toBe(0);
+      expect(runCli(["manifest", "add", "--from-stdin"], env, JSON.stringify({
+        id: "worker",
+        friendlyName: "Worker Node",
+        platform: "linux",
+        workspacePath: "/srv/workspace",
+        sshAddress: "operator@worker",
+        updatedAt: "2026-06-26T09:00:00.000Z",
+      })).status).toBe(0);
+
+      const preflight = runCli(["loop-preflight", "--machine", "control,worker", "--cmd", "echo loop", "--no-tailscale"], env);
+      expect(preflight.stderr).toBe("");
+      expect(preflight.status).toBe(0);
+      const preflightPayload = JSON.parse(preflight.stdout);
+      expect(preflightPayload).toMatchObject({
+        kind: "loop_preflight",
+        mode: "plan",
+        pagination: { count: 2, total: 2 },
+      });
+      expect(preflightPayload.machines).toHaveLength(2);
+      expect(JSON.stringify(preflightPayload)).not.toContain("operator@worker");
+
+      const matrix = runCli(["command-matrix", "--machine", "worker", "--cmd", "echo loop", "--no-tailscale"], env);
+      expect(matrix.stderr).toBe("");
+      expect(matrix.status).toBe(0);
+      expect(JSON.parse(matrix.stdout).commands[0]).toMatchObject({
+        machine_id: "worker",
+        command: {
+          command_ref: {
+            preview: "[redacted]",
+            redacted: true,
+          },
+          private_shell_command: "[redacted]",
+          cli: "machines ssh --machine worker --cmd '<loop-command>'",
+          mcp: { args: { remote_command: "<loop-command>", private_metadata: false } },
+        },
+      });
+      expect(matrix.stdout).not.toContain("echo loop");
+      expect(matrix.stdout).not.toContain("--private-metadata");
+
+      const routing = runCli(["routing", "--machine", "worker", "--no-tailscale"], env);
+      expect(routing.stderr).toBe("");
+      expect(routing.status).toBe(0);
+      expect(JSON.parse(routing.stdout).routes[0]).toMatchObject({
+        machine_id: "worker",
+        target: "[redacted]",
+        command_target: "[redacted]",
+      });
+
+      const pageDir = mkdtempSync(join(tmpdir(), "machines-cli-agent-pagination-"));
+      const pageEnv = {
+        ...process.env,
+        HASNA_MACHINES_MANIFEST_PATH: join(pageDir, "machines.json"),
+        HASNA_MACHINES_DB_PATH: join(pageDir, "machines.db"),
+        HASNA_MACHINES_MACHINE_ID: "demo-node-00",
+        [MUTATION_APPROVAL_FLAG_ENV]: "1",
+      };
+      try {
+        expect(runCli(["manifest", "init"], pageEnv).status).toBe(0);
+        for (let index = 0; index < 12; index += 1) {
+          expect(runCli(["manifest", "add", "--from-stdin"], pageEnv, JSON.stringify({
+            id: `demo-node-${String(index).padStart(2, "0")}`,
+            platform: "linux",
+            workspacePath: `/workspace/${index}`,
+            updatedAt: `2026-06-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+          })).status).toBe(0);
+        }
+        const firstPage = JSON.parse(runCli(["machine-health", "--no-tailscale"], pageEnv).stdout);
+        expect(firstPage.pagination).toMatchObject({ total: 12, count: 10, hasMore: true, nextOffset: 10 });
+        const secondPage = JSON.parse(runCli(["machine-health", "--no-tailscale", "--offset", "10"], pageEnv).stdout);
+        expect(secondPage.pagination).toMatchObject({ total: 12, count: 2, hasMore: false });
+      } finally {
+        rmSync(pageDir, { recursive: true, force: true });
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

@@ -87,6 +87,16 @@ import {
   type CompatibilityPackageSpec,
   type CompatibilityWorkspaceSpec,
 } from "../compatibility.js";
+import {
+  getCommandMatrix,
+  getFleetLoopPreflight,
+  getFleetMachineHealth,
+  getFleetRouting,
+  type CommandMatrixReport,
+  type FleetLoopPreflightReport,
+  type FleetRoutingReport,
+  type MachineHealthReport,
+} from "../agent-abstractions.js";
 import { runDoctor } from "../commands/doctor.js";
 import { assertMutationApproved, createTrustedSdkMutationApproval, mutationArgsSha256, mutationPlanDigest } from "../commands/mutation-approval.js";
 import {
@@ -314,6 +324,75 @@ function renderCompatibilityResult(result: ReturnType<typeof checkMachineCompati
     ]),
     "",
     ...result.checks.map(renderCompatibilityCheck),
+  ].join("\n");
+}
+
+function renderMachineHealthResult(result: MachineHealthReport): string {
+  const lines = result.machines.map((machine) =>
+    `${machine.display_name.padEnd(18)} ${machine.machine_id.padEnd(18)} ${machine.status.padEnd(8)} route:${machine.route}/${machine.confidence} heartbeat:${machine.heartbeat} issues:${machine.issues.join(",") || "none"}`
+  );
+  return [
+    renderKeyValueTable([
+      ["machines", `${result.pagination.count}/${result.pagination.total}`],
+      ["ready", String(result.summary.ready)],
+      ["degraded", String(result.summary.degraded)],
+      ["blocked", String(result.summary.blocked)],
+      ["unknown", String(result.summary.unknown)],
+      ["has more", String(result.pagination.hasMore)],
+      ["next", result.pagination.nextOffset === null ? "none" : `--offset ${result.pagination.nextOffset}`],
+    ]),
+    ...lines,
+  ].join("\n");
+}
+
+function renderFleetRoutingResult(result: FleetRoutingReport): string {
+  const lines = result.routes.map((route) =>
+    `${route.display_name.padEnd(18)} ${route.machine_id.padEnd(18)} ${route.ok ? "ok" : "blocked"} ${route.route}/${route.confidence} target:${route.target ?? "unresolved"}`
+  );
+  return [
+    renderKeyValueTable([
+      ["routes", `${result.pagination.count}/${result.pagination.total}`],
+      ["routable", String(result.summary.routable)],
+      ["local", String(result.summary.local)],
+      ["remote", String(result.summary.remote)],
+      ["unroutable", String(result.summary.unroutable)],
+      ["has more", String(result.pagination.hasMore)],
+    ]),
+    ...lines,
+  ].join("\n");
+}
+
+function renderCommandMatrixResult(result: CommandMatrixReport): string {
+  const lines = result.commands.map((row) =>
+    `${row.display_name.padEnd(18)} ${row.machine_id.padEnd(18)} ${row.can_run ? "run" : "blocked"} ${row.route}/${row.confidence} ${row.command.cli}`
+  );
+  return [
+    renderKeyValueTable([
+      ["mode", result.mode],
+      ["commands", `${result.pagination.count}/${result.pagination.total}`],
+      ["runnable", String(result.summary.runnable)],
+      ["blocked", String(result.summary.blocked)],
+      ["has more", String(result.pagination.hasMore)],
+    ]),
+    ...lines,
+  ].join("\n");
+}
+
+function renderLoopPreflightResult(result: FleetLoopPreflightReport): string {
+  const lines = result.machines.map((machine) =>
+    `${machine.display_name.padEnd(18)} ${machine.machine_id.padEnd(18)} ${machine.ready ? "ready" : machine.status} route:${machine.route}/${machine.confidence} next:${machine.next_steps.join(",") || "none"}`
+  );
+  return [
+    renderKeyValueTable([
+      ["ok", String(result.ok)],
+      ["mode", result.mode],
+      ["machines", `${result.pagination.count}/${result.pagination.total}`],
+      ["ready", String(result.summary.ready)],
+      ["runnable", String(result.summary.runnable)],
+      ["blocked", String(result.summary.blocked)],
+      ["has more", String(result.pagination.hasMore)],
+    ]),
+    ...lines,
   ].join("\n");
 }
 
@@ -1408,6 +1487,72 @@ function parseMachineIdList(values: string[] | undefined): string[] {
     .filter(Boolean);
 }
 
+interface AgentApiCliOptions {
+  machine?: string[];
+  tailscale?: boolean;
+  limit?: string;
+  offset?: string;
+  all?: boolean;
+  privateMetadata?: boolean;
+  project?: string;
+  repo?: string;
+  openFilesRepo?: string;
+  primaryMachine?: string;
+  checkCompatibility?: boolean;
+  requireCommand?: string[];
+  requirePackage?: string[];
+  workspace?: string[];
+  cmd?: string;
+  commandLabel?: string;
+  json?: boolean;
+  text?: boolean;
+}
+
+function agentLimit(options: AgentApiCliOptions): number | null | undefined {
+  if (options.all) return null;
+  return options.limit ? parseIntegerOption(options.limit, "limit", { min: 1 }) : undefined;
+}
+
+function agentOffset(options: AgentApiCliOptions): number | undefined {
+  return options.offset ? parseIntegerOption(options.offset, "offset", { min: 0 }) : undefined;
+}
+
+function agentCompatibilityEnabled(options: AgentApiCliOptions): boolean {
+  return Boolean(options.checkCompatibility || options.requireCommand?.length || options.requirePackage?.length || options.workspace?.length);
+}
+
+function printJsonDefault(data: unknown, text: string, options: { text?: boolean }): void {
+  if (options.text && !program.opts().quiet) {
+    console.log(text);
+    return;
+  }
+  console.log(JSON.stringify(data));
+}
+
+function baseAgentOptions(options: AgentApiCliOptions) {
+  return {
+    machineIds: parseMachineIdList(options.machine),
+    includeTailscale: options.tailscale !== false,
+    limit: agentLimit(options),
+    offset: agentOffset(options),
+    privateMetadata: options.privateMetadata,
+  };
+}
+
+function healthAgentOptions(options: AgentApiCliOptions) {
+  return {
+    ...baseAgentOptions(options),
+    projectId: options.project,
+    repoName: options.repo,
+    openFilesRepoName: options.openFilesRepo,
+    primaryMachineId: options.primaryMachine,
+    checkCompatibility: agentCompatibilityEnabled(options),
+    commands: options.requireCommand?.map(parseCommandSpec),
+    packages: options.requirePackage?.map(parsePackageSpec),
+    workspaces: options.workspace?.map(parseWorkspaceSpec),
+  };
+}
+
 notesCommand
   .command("context")
   .description("Resolve note origin/source/target machine display names and actor provenance")
@@ -1491,6 +1636,97 @@ program
     });
     printJsonOrText(result, renderCompatibilityResult(result), options.json);
     if (!result.ok && !options.json) process.exitCode = 1;
+  });
+
+program
+  .command("machine-health")
+  .description("Return compact local/remote loop-readiness health for machines")
+  .option("--machine <id...>", "Limit to machine ids; comma-separated values are accepted")
+  .option("--no-tailscale", "Skip tailscale status probing")
+  .option("--limit <n>", `Maximum machines to return (default ${DEFAULT_MACHINE_LIST_LIMIT})`)
+  .option("--offset <n>", "Machine list offset for pagination")
+  .option("--all", "Return every selected/discovered machine", false)
+  .option("--project <id>", "Project/workspace id for workspace readiness")
+  .option("--repo <name>", "Repository name; defaults to project id")
+  .option("--open-files-repo <name>", "Open-files repository name", "open-files")
+  .option("--primary-machine <id>", "Primary machine id for this project")
+  .option("--check-compatibility", "Run bounded compatibility checks", false)
+  .option("--require-command <command...>", "Required command or command:expectedVersion")
+  .option("--require-package <spec...>", "Required package as name[:command[:expectedVersion]]")
+  .option("--workspace <spec...>", "Required workspace as label=/path[:expectedPackageName[:expectedVersion]] or /path[:expectedPackageName[:expectedVersion]]")
+  .option("-j, --json", "Print JSON output (default)", false)
+  .option("--text", "Print compact text summary instead of JSON", false)
+  .action((options: AgentApiCliOptions) => {
+    const result = getFleetMachineHealth(healthAgentOptions(options));
+    printJsonDefault(result, renderMachineHealthResult(result), options);
+  });
+
+program
+  .command("routing")
+  .description("Return compact route readiness for local and remote machines")
+  .option("--machine <id...>", "Limit to machine ids; comma-separated values are accepted")
+  .option("--no-tailscale", "Skip tailscale status probing")
+  .option("--limit <n>", `Maximum machines to return (default ${DEFAULT_MACHINE_LIST_LIMIT})`)
+  .option("--offset <n>", "Machine list offset for pagination")
+  .option("--all", "Return every selected/discovered machine", false)
+  .option("--private-metadata", "Print private route targets", false)
+  .option("-j, --json", "Print JSON output (default)", false)
+  .option("--text", "Print compact text summary instead of JSON", false)
+  .action((options: AgentApiCliOptions) => {
+    const result = getFleetRouting(baseAgentOptions(options));
+    printJsonDefault(result, renderFleetRoutingResult(result), options);
+  });
+
+program
+  .command("command-matrix")
+  .description("Return dry-run local/remote command routing choices for loop commands")
+  .option("--machine <id...>", "Limit to machine ids; comma-separated values are accepted")
+  .option("--cmd <command>", "Loop command to plan; omitted keeps <loop-command> placeholder")
+  .option("--command-label <label>", "Short label for the planned command")
+  .option("--no-tailscale", "Skip tailscale status probing")
+  .option("--limit <n>", `Maximum machines to return (default ${DEFAULT_MACHINE_LIST_LIMIT})`)
+  .option("--offset <n>", "Machine list offset for pagination")
+  .option("--all", "Return every selected/discovered machine", false)
+  .option("--private-metadata", "Print private resolved shell commands", false)
+  .option("-j, --json", "Print JSON output (default)", false)
+  .option("--text", "Print compact text summary instead of JSON", false)
+  .action((options: AgentApiCliOptions) => {
+    const result = getCommandMatrix({
+      ...baseAgentOptions(options),
+      command: options.cmd,
+      commandLabel: options.commandLabel,
+    });
+    printJsonDefault(result, renderCommandMatrixResult(result), options);
+  });
+
+program
+  .command("loop-preflight")
+  .description("Return compact fleet loop readiness, route choices, and next steps")
+  .option("--machine <id...>", "Limit to machine ids; comma-separated values are accepted")
+  .option("--cmd <command>", "Loop command to plan; omitted keeps <loop-command> placeholder")
+  .option("--command-label <label>", "Short label for the planned command")
+  .option("--no-tailscale", "Skip tailscale status probing")
+  .option("--limit <n>", `Maximum machines to return (default ${DEFAULT_MACHINE_LIST_LIMIT})`)
+  .option("--offset <n>", "Machine list offset for pagination")
+  .option("--all", "Return every selected/discovered machine", false)
+  .option("--project <id>", "Project/workspace id for workspace readiness")
+  .option("--repo <name>", "Repository name; defaults to project id")
+  .option("--open-files-repo <name>", "Open-files repository name", "open-files")
+  .option("--primary-machine <id>", "Primary machine id for this project")
+  .option("--check-compatibility", "Run bounded compatibility checks", false)
+  .option("--require-command <command...>", "Required command or command:expectedVersion")
+  .option("--require-package <spec...>", "Required package as name[:command[:expectedVersion]]")
+  .option("--workspace <spec...>", "Required workspace as label=/path[:expectedPackageName[:expectedVersion]] or /path[:expectedPackageName[:expectedVersion]]")
+  .option("--private-metadata", "Print private resolved shell commands in nested command refs", false)
+  .option("-j, --json", "Print JSON output (default)", false)
+  .option("--text", "Print compact text summary instead of JSON", false)
+  .action((options: AgentApiCliOptions) => {
+    const result = getFleetLoopPreflight({
+      ...healthAgentOptions(options),
+      command: options.cmd,
+      commandLabel: options.commandLabel,
+    });
+    printJsonDefault(result, renderLoopPreflightResult(result), options);
   });
 
 const projectsAssignmentsCommand = projectsCommand
