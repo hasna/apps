@@ -499,4 +499,76 @@ export const PG_MIGRATIONS: string[] = [
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_run_attempts_run_spec_attempt ON run_attempts(run_id, spec_id, attempt_number) WHERE run_id IS NOT NULL AND spec_id IS NOT NULL`,
   `CREATE INDEX IF NOT EXISTS idx_run_events_attempt ON run_events(attempt_id)`,
   `CREATE INDEX IF NOT EXISTS idx_run_artifacts_attempt ON run_artifacts(attempt_id)`,
+
+  // SQLite parity backfill for late local migrations. Keep appended so existing
+  // PG migration version indexes remain stable.
+  `ALTER TABLE results ADD COLUMN IF NOT EXISTS har_path TEXT`,
+
+  `ALTER TABLE scenarios ADD COLUMN IF NOT EXISTS parameters TEXT`,
+
+  `ALTER TABLE personas ADD COLUMN IF NOT EXISTS auth_strategy TEXT DEFAULT 'form-login'`,
+  `ALTER TABLE personas ADD COLUMN IF NOT EXISTS auth_headers TEXT`,
+  `ALTER TABLE personas ADD COLUMN IF NOT EXISTS auth_script TEXT`,
+
+  `CREATE TABLE IF NOT EXISTS step_results (
+    id TEXT PRIMARY KEY,
+    result_id TEXT NOT NULL REFERENCES results(id) ON DELETE CASCADE,
+    step_number INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'running' CHECK(status IN ('passed','failed','error','running','skipped')),
+    tool_name TEXT,
+    tool_input TEXT,
+    tool_result TEXT,
+    thinking TEXT,
+    error TEXT,
+    duration_ms INTEGER,
+    screenshot_id TEXT REFERENCES screenshots(id),
+    created_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+
+  `ALTER TABLE runs ADD COLUMN IF NOT EXISTS pr_number INTEGER`,
+  `ALTER TABLE runs ADD COLUMN IF NOT EXISTS pr_title TEXT`,
+  `ALTER TABLE runs ADD COLUMN IF NOT EXISTS pr_branch TEXT`,
+  `ALTER TABLE runs ADD COLUMN IF NOT EXISTS pr_base_branch TEXT`,
+  `ALTER TABLE runs ADD COLUMN IF NOT EXISTS pr_commit_sha TEXT`,
+  `ALTER TABLE runs ADD COLUMN IF NOT EXISTS pr_url TEXT`,
+  `ALTER TABLE runs ADD COLUMN IF NOT EXISTS gh_app_installation_id TEXT`,
+
+  `CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    tab_id INTEGER NOT NULL,
+    url TEXT,
+    title TEXT,
+    entries TEXT NOT NULL DEFAULT '[]',
+    entry_count INTEGER NOT NULL DEFAULT 0,
+    error_count INTEGER NOT NULL DEFAULT 0,
+    console_count INTEGER NOT NULL DEFAULT 0,
+    nav_count INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'exported' CHECK(status IN ('live','saved','exported')),
+    start_time TEXT NOT NULL,
+    end_time TEXT,
+    created_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_sessions_tab ON sessions(tab_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status)`,
+  `CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at DESC)`,
+
+  `CREATE TABLE IF NOT EXISTS testing_workflows (
+    id TEXT PRIMARY KEY,
+    project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    description TEXT,
+    scenario_filter TEXT NOT NULL DEFAULT '{}',
+    persona_ids TEXT NOT NULL DEFAULT '[]',
+    goal TEXT,
+    execution TEXT NOT NULL DEFAULT '{"target":"local"}',
+    settings TEXT NOT NULL DEFAULT '{}',
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+
+  `CREATE INDEX IF NOT EXISTS idx_testing_workflows_project ON testing_workflows(project_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_testing_workflows_enabled ON testing_workflows(enabled)`,
 ];

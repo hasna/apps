@@ -5,17 +5,21 @@ import { getDatabase, now, uuid } from "./database.js";
 
 /**
  * Derive a stable fingerprint from an issue.
- * Normalises the page URL to its pathname (ignores query/fragment) so the same
- * error on foo.com/page?x=1 and foo.com/page?x=2 is treated as the same issue.
+ * Normalises the page URL to its pathname (ignores query/fragment), scoped by
+ * project when available or by origin otherwise. This keeps preview URLs for
+ * one project together without merging unrelated apps that share a route path.
  */
-export function fingerprintIssue(issue: ScanIssue): string {
+export function fingerprintIssue(issue: ScanIssue, projectId?: string): string {
   let pagePattern = issue.pageUrl;
+  let scope = projectId ? `project:${projectId}` : "origin:unknown";
   try {
-    pagePattern = new URL(issue.pageUrl).pathname;
+    const parsed = new URL(issue.pageUrl);
+    pagePattern = parsed.pathname;
+    if (!projectId) scope = `origin:${parsed.origin.toLowerCase()}`;
   } catch {
     // Not a valid URL — use as-is
   }
-  const raw = `${issue.type}::${issue.message.slice(0, 200)}::${pagePattern}`;
+  const raw = `${scope}::${issue.type}::${issue.message.slice(0, 200)}::${pagePattern}`;
   // Simple deterministic hash (djb2)
   let hash = 5381;
   for (let i = 0; i < raw.length; i++) {
@@ -45,7 +49,7 @@ export function upsertScanIssue(
   projectId?: string,
 ): UpsertResult {
   const db = getDatabase();
-  const fingerprint = fingerprintIssue(issue);
+  const fingerprint = fingerprintIssue(issue, projectId);
   const timestamp = now();
 
   const existing = db

@@ -9,10 +9,9 @@ import {
 // ─── Todos Integration ────────────────────────────────────────────────────────
 
 /**
- * Auto-create a todo task for each failed scenario in a run.
- * Uses the todos DB directly (like todos-connector.ts does).
- * No-op if TODOS_DB_PATH is not set and ~/.todos/todos.db does not exist.
- * Controlled by TESTERS_TODOS_PROJECT_ID env var (which project to create tasks in).
+ * Report each failed scenario to Todos through the testers.issue_report.v1 CLI
+ * contract. Controlled by TESTERS_TODOS_PROJECT_ID env var (the Todos project
+ * that receives created or updated tasks).
  */
 export async function createFailureTasks(
   run: Run,
