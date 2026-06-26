@@ -1,6 +1,7 @@
 import {
   type SearchProviderName,
   type ExportFormat,
+  LOCAL_PROVIDER_NAMES,
   PROVIDER_NAMES,
   validateSearchProviderNames,
 } from "../types/index.js";
@@ -25,7 +26,7 @@ import {
   updateProvider,
   isProviderConfigured,
 } from "../db/providers.js";
-import { listProfiles, createProfile, deleteProfile } from "../db/profiles.js";
+import { listProfiles, createProfile, deleteProfile, getProfileByName } from "../db/profiles.js";
 import { transcribeVideo } from "../lib/providers/transcriber.js";
 import { findLocal, type FindKind } from "../lib/local/find.js";
 import {
@@ -257,8 +258,38 @@ function isLocalFileApiRoute(path: string): boolean {
   return path === "/api/find" || path === "/api/index" || path.startsWith("/api/index/");
 }
 
-function isSensitiveHttpRoute(path: string): boolean {
-  return isLocalFileApiRoute(path) || path === "/mcp";
+function searchRequestMayUseLocalProviders(url: URL): boolean {
+  const path = url.pathname;
+  const providerMatch = path.match(/^\/api\/search\/(\w+)$/);
+  if (providerMatch) {
+    return LOCAL_PROVIDER_NAMES.has(providerMatch[1] as SearchProviderName);
+  }
+
+  if (path !== "/api/search") return false;
+
+  const rawProviders = url.searchParams.get("providers");
+  if (rawProviders) {
+    return rawProviders
+      .split(",")
+      .map((provider) => provider.trim())
+      .some((provider) => LOCAL_PROVIDER_NAMES.has(provider as SearchProviderName));
+  }
+
+  const profile = url.searchParams.get("profile");
+  if (profile && profile !== "smart") {
+    const resolved = getProfileByName(profile);
+    return Boolean(resolved?.providers.some((provider) => LOCAL_PROVIDER_NAMES.has(provider)));
+  }
+
+  // Without explicit providers/profile, unified search may fall back to all
+  // enabled configured providers, including local files/content when indexes
+  // are ready. Treat that public route as local-capable by default.
+  return true;
+}
+
+function isSensitiveHttpRoute(url: URL): boolean {
+  const path = url.pathname;
+  return isLocalFileApiRoute(path) || searchRequestMayUseLocalProviders(url) || path === "/mcp";
 }
 
 function routeLabel(path: string): string {
@@ -297,7 +328,7 @@ function denySensitiveHttpRequest(
   path: string,
   context: ServerRequestContext,
 ): Response | null {
-  if (!isSensitiveHttpRoute(path)) return null;
+  if (!isSensitiveHttpRoute(new URL(req.url))) return null;
   if (hasValidBearerToken(req)) return null;
 
   if (requireBearerForSensitiveRoutes(req, context)) {

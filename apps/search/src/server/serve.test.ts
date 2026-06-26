@@ -158,6 +158,49 @@ describe("REST API", () => {
     expect(data.error).toContain("Origin");
   });
 
+  it("should reject hostile browser reads of local providers through unified search", async () => {
+    for (const path of [
+      "/api/search?q=anything&providers=files",
+      "/api/search?q=anything&providers=content",
+      "/api/search/files?q=anything",
+      "/api/search/content?q=anything",
+    ]) {
+      const res = await fetch(`${baseUrl}${path}`, {
+        headers: { Origin: "https://evil.example" },
+      });
+      expect(res.status).toBe(403);
+      const data = await res.json();
+      expect(data.error).toContain("Origin");
+    }
+  });
+
+  it("should require a bearer token for local providers through unified search when publicly bound", async () => {
+    const { handleServerRequest } = require("./serve");
+    for (const path of [
+      "/api/search?q=anything&providers=files",
+      "/api/search?q=anything&providers=content",
+      "/api/search/files?q=anything",
+      "/api/search/content?q=anything",
+      "/api/search?q=anything",
+    ]) {
+      const res = await handleServerRequest(
+        new Request(`http://192.0.2.10${path}`),
+        { requireBearerTokenForSensitiveRoutes: true },
+      );
+      expect(res.status).toBe(403);
+      const data = await res.json();
+      expect(data.error).toContain("bearer token");
+    }
+  });
+
+  it("should keep invalid online-only provider errors on the normal search route", async () => {
+    const { handleServerRequest } = require("./serve");
+    const res = await handleServerRequest(new Request("http://127.0.0.1/api/search?q=x&providers=bogus"));
+    expect(res.status).toBe(400);
+    const data = await res.json();
+    expect(data.error).toContain("Unknown search provider");
+  });
+
   it("should reject null-origin browser reads of local-file search results", async () => {
     const res = await fetch(`${baseUrl}/api/find?q=anything&kind=content`, {
       headers: { Origin: "null" },

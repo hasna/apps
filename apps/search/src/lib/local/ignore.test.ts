@@ -99,6 +99,16 @@ describe("IgnoreStack", () => {
     expect(stack.ignores(".git", true)).toBe(true);
   });
 
+  test("hard matcher order prevents user excludes from re-including protected paths", () => {
+    const stack = new IgnoreStack([
+      new IgnoreMatcher(DEFAULT_EXCLUDES),
+      new IgnoreMatcher(["!.git/", "!.git/**", "!.codewith/**", "!*.sqlite-wal"]),
+    ]);
+    expect(stack.ignores(".git", true)).toBe(true);
+    expect(stack.ignores(".codewith/logs_2.sqlite-wal", false)).toBe(true);
+    expect(stack.ignores("data/index.sqlite-wal", false)).toBe(true);
+  });
+
   test("** only crosses directories as a whole segment (git semantics)", () => {
     const m = new IgnoreMatcher(["a**b"]);
     expect(m.ignores("axyb", false)).toBe(true);
