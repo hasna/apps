@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import type {
   CatchUpPolicy,
   CreateLoopInput,
+  CreateRunReceiptInput,
   CreateWorkflowInput,
   Goal,
   GoalAutoExecute,
@@ -14,6 +15,7 @@ import type {
   Loop,
   LoopRun,
   LoopStatus,
+  RunReceipt,
   RunStatus,
   WorkflowEvent,
   WorkflowRun,
@@ -77,6 +79,18 @@ interface RunRow {
   goal_run_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+interface RunReceiptRow {
+  id: string;
+  loop_id: string;
+  run_id: string;
+  task_id: string | null;
+  conversation_id: string | null;
+  knowledge_id: string | null;
+  artifact_refs_json: string;
+  summary_json: string;
+  created_at: string;
 }
 
 interface WorkflowRow {
@@ -265,6 +279,20 @@ function rowToRun(row: RunRow): LoopRun {
     goalRunId: row.goal_run_id ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function rowToRunReceipt(row: RunReceiptRow): RunReceipt {
+  return {
+    id: row.id,
+    loopId: row.loop_id,
+    runId: row.run_id,
+    taskId: row.task_id ?? undefined,
+    conversationId: row.conversation_id ?? undefined,
+    knowledgeId: row.knowledge_id ?? undefined,
+    artifactRefs: JSON.parse(row.artifact_refs_json) as RunReceipt["artifactRefs"],
+    summary: JSON.parse(row.summary_json) as RunReceipt["summary"],
+    createdAt: row.created_at,
   };
 }
 
@@ -539,6 +567,21 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_runs_status ON loop_runs(status);
       CREATE INDEX IF NOT EXISTS idx_runs_scheduled ON loop_runs(scheduled_for);
 
+      CREATE TABLE IF NOT EXISTS run_receipts (
+        id TEXT PRIMARY KEY,
+        loop_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        task_id TEXT,
+        conversation_id TEXT,
+        knowledge_id TEXT,
+        artifact_refs_json TEXT NOT NULL,
+        summary_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_run ON run_receipts(run_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_loop ON run_receipts(loop_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_task ON run_receipts(task_id, created_at);
+
       CREATE TABLE IF NOT EXISTS daemon_lease (
         id TEXT PRIMARY KEY,
         pid INTEGER NOT NULL,
@@ -744,6 +787,9 @@ export class Store {
     this.db
       .query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)")
       .run("0004_loop_labels", nowIso());
+    this.db
+      .query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)")
+      .run("0005_run_receipts", nowIso());
   }
 
   private assertDaemonLeaseFence(opts: DaemonLeaseFence = {}, now: string = nowIso()): void {
@@ -1914,6 +1960,12 @@ export class Store {
     return row ? rowToRun(row) : undefined;
   }
 
+  requireRun(id: string): LoopRun {
+    const run = this.getRun(id);
+    if (!run) throw new Error(`run not found: ${id}`);
+    return run;
+  }
+
   getRunBySlot(loopId: string, scheduledFor: string): LoopRun | undefined {
     const row = this.db
       .query<RunRow, [string, string]>("SELECT * FROM loop_runs WHERE loop_id = ? AND scheduled_for = ?")
@@ -2146,6 +2198,22 @@ export class Store {
     return rows.map(rowToRun);
   }
 
+  listRunsSince(opts: { since: string; status?: RunStatus; limit?: number } = { since: "1970-01-01T00:00:00.000Z" }): LoopRun[] {
+    const limit = opts.limit ?? 100;
+    const where = ["created_at >= $since"];
+    const params: Record<string, string | number> = { $since: opts.since, $limit: limit };
+    if (opts.status) {
+      where.push("status = $status");
+      params.$status = opts.status;
+    }
+    const rows = this.db
+      .query<RunRow, Record<string, string | number>>(
+        `SELECT * FROM loop_runs WHERE ${where.join(" AND ")} ORDER BY created_at DESC, updated_at DESC LIMIT $limit`,
+      )
+      .all(params);
+    return rows.map(rowToRun);
+  }
+
   listRunsForLoopIds(opts: { loopIds: string[]; status?: RunStatus; limit?: number }): LoopRun[] {
     if (opts.loopIds.length === 0) return [];
     const limit = opts.limit ?? 100;
@@ -2193,6 +2261,62 @@ export class Store {
       const run = rowToRun(row);
       return [run.loopId, run];
     }));
+  }
+
+  appendRunReceipt(input: CreateRunReceiptInput): RunReceipt {
+    const run = this.requireRun(input.runId);
+    const now = nowIso();
+    const receipt: RunReceipt = {
+      id: genId(),
+      loopId: run.loopId,
+      runId: run.id,
+      taskId: input.taskId,
+      conversationId: input.conversationId,
+      knowledgeId: input.knowledgeId,
+      artifactRefs: input.artifactRefs ?? [],
+      summary: input.summary ?? {},
+      createdAt: now,
+    };
+    this.db
+      .query(
+        `INSERT INTO run_receipts (id, loop_id, run_id, task_id, conversation_id, knowledge_id, artifact_refs_json, summary_json, created_at)
+         VALUES ($id, $loopId, $runId, $taskId, $conversationId, $knowledgeId, $artifactRefs, $summary, $createdAt)`,
+      )
+      .run({
+        $id: receipt.id,
+        $loopId: receipt.loopId,
+        $runId: receipt.runId,
+        $taskId: receipt.taskId ?? null,
+        $conversationId: receipt.conversationId ?? null,
+        $knowledgeId: receipt.knowledgeId ?? null,
+        $artifactRefs: JSON.stringify(receipt.artifactRefs),
+        $summary: JSON.stringify(receipt.summary),
+        $createdAt: receipt.createdAt,
+      });
+    return receipt;
+  }
+
+  listRunReceipts(opts: { runId?: string; loopId?: string; taskId?: string; limit?: number; offset?: number } = {}): RunReceipt[] {
+    const where: string[] = [];
+    const params: Record<string, string | number> = { $limit: opts.limit ?? 100, $offset: opts.offset ?? 0 };
+    if (opts.runId) {
+      where.push("run_id = $runId");
+      params.$runId = opts.runId;
+    }
+    if (opts.loopId) {
+      where.push("loop_id = $loopId");
+      params.$loopId = opts.loopId;
+    }
+    if (opts.taskId) {
+      where.push("task_id = $taskId");
+      params.$taskId = opts.taskId;
+    }
+    const rows = this.db
+      .query<RunReceiptRow, Record<string, string | number>>(
+        `SELECT * FROM run_receipts${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY created_at DESC, id DESC LIMIT $limit OFFSET $offset`,
+      )
+      .all(params);
+    return rows.map(rowToRunReceipt);
   }
 
   recoverExpiredRunLeases(now: Date = new Date(), opts: DaemonLeaseFence = {}): LoopRun[] {

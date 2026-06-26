@@ -24,8 +24,29 @@ import {
   publicWorkflowRun,
   publicWorkflowStepRun,
 } from "../lib/format.js";
+import {
+  auditRuns,
+  externalArtifact,
+  healthReport,
+  lintLoops,
+  receiptSummary,
+  runArtifactRefs,
+  runSummary,
+  type AuditGroupBy,
+  type LintSeverity,
+} from "../lib/insights.js";
 import { normalizeLoopLabels } from "../lib/labels.js";
 import { listOpenMachines, resolveLoopMachine } from "../lib/machines.js";
+import {
+  hasProjectFilters,
+  loopAccount,
+  loopProvider,
+  loopTargetCwd,
+  matchLoopToProject,
+  type ProjectFilter,
+  type ProjectLoopEntry,
+} from "../lib/project-discovery.js";
+import { parseDuration } from "../lib/schedule.js";
 import { packageVersion } from "../lib/version.js";
 import { executeWorkflow, preflightWorkflow } from "../lib/workflow-runner.js";
 import { normalizeGoalSpec, workflowBodyFromJson } from "../lib/workflow-spec.js";
@@ -264,6 +285,67 @@ function normalizeLoopTarget(store: Store, target: CreateLoopInput["target"]): C
   return { ...target, workflowId: workflow.id };
 }
 
+function sinceIso(value: string | undefined): string {
+  if (!value) return new Date(Date.now() - parseDuration("24h")).toISOString();
+  try {
+    return new Date(Date.now() - parseDuration(value)).toISOString();
+  } catch {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) throw new Error("since must be an ISO timestamp or duration such as 24h");
+    return date.toISOString();
+  }
+}
+
+function auditGroupBy(value: string | undefined): AuditGroupBy {
+  if (value === undefined) return "status";
+  if (!["status", "loop", "day", "failure-family"].includes(value)) {
+    throw new Error("groupBy must be status, loop, day, or failure-family");
+  }
+  return value as AuditGroupBy;
+}
+
+function lintSeverity(value: string | undefined): LintSeverity | undefined {
+  if (value === undefined) return undefined;
+  if (!["info", "warn", "error"].includes(value)) throw new Error("severity must be info, warn, or error");
+  return value as LintSeverity;
+}
+
+function workflowMap(store: Store): Map<string, WorkflowSpec> {
+  return new Map(store.listWorkflows({ limit: 10_000 }).map((workflow) => [workflow.id, workflow]));
+}
+
+function workflowForLoop(loop: CreateLoopInput["target"] | undefined, workflows: Map<string, WorkflowSpec>): WorkflowSpec | undefined {
+  return loop?.type === "workflow" ? workflows.get(loop.workflowId) : undefined;
+}
+
+function projectEntries(
+  store: Store,
+  opts: { filter: ProjectFilter; status?: LoopStatus; labels?: string[] },
+): ProjectLoopEntry[] {
+  const workflows = workflowMap(store);
+  const loops = store.listLoops({ status: opts.status, labels: normalizeLoopLabels(opts.labels), limit: 10_000 });
+  const latestRuns = store.latestRunsForLoopIds(loops.map((loop) => loop.id));
+  const hasFilters = hasProjectFilters(opts.filter);
+  const entries: ProjectLoopEntry[] = [];
+  for (const loop of loops) {
+    const workflow = workflowForLoop(loop.target, workflows);
+    const match = hasFilters ? matchLoopToProject(loop, opts.filter, workflow) : undefined;
+    if (hasFilters && !match) continue;
+    entries.push({
+      loop,
+      latestRun: latestRuns.get(loop.id),
+      match: match ?? {
+        matched: false,
+        reasons: [],
+        cwd: loopTargetCwd(loop, workflow),
+        provider: loopProvider(loop, workflow),
+        account: loopAccount(loop, workflow),
+      },
+    });
+  }
+  return entries;
+}
+
 export interface OpenLoopsMcpServerOptions {
   store?: Store;
   runnerId?: string;
@@ -344,6 +426,64 @@ interface ListRunsArgs {
   limit?: number;
   cursor?: number;
   verbose?: boolean;
+}
+
+interface RunSummaryArgs {
+  runId: string;
+  showOutput?: boolean;
+  maxOutputChars?: number;
+}
+
+interface HealthArgs {
+  repo?: string;
+  cwd?: string;
+  name?: string;
+  text?: string;
+  status?: LoopStatus;
+  labels?: string[];
+  showOutput?: boolean;
+  maxOutputChars?: number;
+  limit?: number;
+  cursor?: number;
+}
+
+interface AuditArgs {
+  since?: string;
+  groupBy?: AuditGroupBy;
+  status?: RunStatus;
+  limit?: number;
+  drillDownLimit?: number;
+}
+
+interface LintArgs {
+  repo?: string;
+  cwd?: string;
+  name?: string;
+  text?: string;
+  status?: LoopStatus;
+  labels?: string[];
+  severity?: LintSeverity;
+  longCommandChars?: number;
+  limit?: number;
+  cursor?: number;
+}
+
+interface AppendRunReceiptArgs {
+  runId: string;
+  taskId?: string;
+  conversationId?: string;
+  knowledgeId?: string;
+  artifacts?: string[];
+  showOutput?: boolean;
+  maxOutputChars?: number;
+}
+
+interface ListRunReceiptsArgs {
+  runId?: string;
+  loopId?: string;
+  taskId?: string;
+  limit?: number;
+  cursor?: number;
 }
 
 interface ValidateWorkflowArgs {
@@ -654,6 +794,197 @@ export function createOpenLoopsMcpServer(opts: OpenLoopsMcpServerOptions = {}): 
         nextCursor,
         hasMore,
       });
+    },
+  );
+
+  registerTool<RunSummaryArgs>(
+    server,
+    "openloops_get_run_summary",
+    {
+      title: "Get OpenLoops Run Summary",
+      description: "Read one loop run as a compact bounded summary with raw output artifact refs.",
+      inputSchema: {
+        runId: z.string().min(1),
+        showOutput: z.boolean().optional(),
+        maxOutputChars: positiveIntSchema.optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ runId, showOutput, maxOutputChars }) => {
+      const run = store.requireRun(runId);
+      const loop = store.getLoop(run.loopId);
+      const workflows = workflowMap(store);
+      return jsonResult({
+        summary: runSummary(run, {
+          loop,
+          workflow: workflowForLoop(loop?.target, workflows),
+          showOutput,
+          maxOutputChars,
+        }),
+      });
+    },
+  );
+
+  registerTool<HealthArgs>(
+    server,
+    "openloops_health",
+    {
+      title: "OpenLoops Health",
+      description: "Return compact latest-run health for loops filtered by repo, cwd, name, text, status, or labels.",
+      inputSchema: {
+        repo: z.string().min(1).optional(),
+        cwd: z.string().min(1).optional(),
+        name: z.string().min(1).optional(),
+        text: z.string().min(1).optional(),
+        status: z.enum(["active", "paused", "stopped", "expired"]).optional(),
+        labels: labelsSchema.optional(),
+        showOutput: z.boolean().optional(),
+        maxOutputChars: positiveIntSchema.optional(),
+        limit: positiveIntSchema.optional(),
+        cursor: nonNegativeIntSchema.optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ repo, cwd, name, text, status, labels, showOutput, maxOutputChars, limit, cursor }) => {
+      const resolvedLimit = boundedLimit(limit, 50);
+      const resolvedCursor = boundedCursor(cursor);
+      const entries = projectEntries(store, {
+        filter: { repo, cwd, name, text },
+        status: loopStatus(status),
+        labels,
+      });
+      const { page, nextCursor, hasMore } = pageItems(entries, resolvedCursor, resolvedLimit);
+      const full = healthReport(entries, { includeLoops: false });
+      const pageHealth = healthReport(page, { showOutput, maxOutputChars });
+      return jsonResult({ ...full, loops: pageHealth.loops, nextCursor, hasMore });
+    },
+  );
+
+  registerTool<AuditArgs>(
+    server,
+    "openloops_audit",
+    {
+      title: "OpenLoops Audit",
+      description: "Summarize recent loop runs with compact grouped counts and drill-down run ids.",
+      inputSchema: {
+        since: z.string().min(1).optional(),
+        groupBy: z.enum(["status", "loop", "day", "failure-family"]).optional(),
+        status: z.enum(["running", "succeeded", "failed", "timed_out", "abandoned", "skipped"]).optional(),
+        limit: positiveIntSchema.optional(),
+        drillDownLimit: positiveIntSchema.optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ since, groupBy, status, limit, drillDownLimit }) => {
+      const resolvedSince = sinceIso(since);
+      const resolvedLimit = boundedLimit(limit, 1_000);
+      const runs = store.listRunsSince({ since: resolvedSince, status: runStatus(status), limit: resolvedLimit + 1 });
+      return jsonResult({
+        audit: auditRuns(runs.slice(0, resolvedLimit), {
+          since: resolvedSince,
+          status,
+          groupBy: auditGroupBy(groupBy),
+          drillDownLimit,
+          scanLimit: resolvedLimit,
+          hasMore: runs.length > resolvedLimit,
+        }),
+      });
+    },
+  );
+
+  registerTool<LintArgs>(
+    server,
+    "openloops_lint",
+    {
+      title: "OpenLoops Lint",
+      description: "Detect duplicate-name, wrapper-script, inline-base64, long-command, and unbounded-output loop hazards.",
+      inputSchema: {
+        repo: z.string().min(1).optional(),
+        cwd: z.string().min(1).optional(),
+        name: z.string().min(1).optional(),
+        text: z.string().min(1).optional(),
+        status: z.enum(["active", "paused", "stopped", "expired"]).optional(),
+        labels: labelsSchema.optional(),
+        severity: z.enum(["info", "warn", "error"]).optional(),
+        longCommandChars: positiveIntSchema.optional(),
+        limit: positiveIntSchema.optional(),
+        cursor: nonNegativeIntSchema.optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ repo, cwd, name, text, status, labels, severity, longCommandChars, limit, cursor }) => {
+      const resolvedLimit = boundedLimit(limit, 50);
+      const resolvedCursor = boundedCursor(cursor);
+      const entries = projectEntries(store, {
+        filter: { repo, cwd, name, text },
+        status: loopStatus(status),
+        labels,
+      });
+      const raw = lintLoops(entries.map((entry) => entry.loop), workflowMap(store), { longCommandChars });
+      const issues = (raw.issues as Array<{ severity: LintSeverity }>).filter((issue) => !lintSeverity(severity) || issue.severity === severity);
+      const { page, nextCursor, hasMore } = pageItems(issues, resolvedCursor, resolvedLimit);
+      return jsonResult({ ...raw, issuesTotal: issues.length, issues: page, nextCursor, hasMore });
+    },
+  );
+
+  registerTool<AppendRunReceiptArgs>(
+    server,
+    "openloops_append_run_receipt",
+    {
+      title: "Append OpenLoops Run Receipt",
+      description: "Append a structured run receipt linking run, task, conversation, knowledge, and artifact refs.",
+      inputSchema: {
+        runId: z.string().min(1),
+        taskId: z.string().min(1).optional(),
+        conversationId: z.string().min(1).optional(),
+        knowledgeId: z.string().min(1).optional(),
+        artifacts: z.array(z.string().min(1)).optional(),
+        showOutput: z.boolean().optional(),
+        maxOutputChars: positiveIntSchema.optional(),
+      },
+      annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    },
+    async ({ runId, taskId, conversationId, knowledgeId, artifacts }) => {
+      const run = store.requireRun(runId);
+      const loop = store.getLoop(run.loopId);
+      const workflows = workflowMap(store);
+      const receipt = store.appendRunReceipt({
+        runId,
+        taskId,
+        conversationId,
+        knowledgeId,
+        artifactRefs: runArtifactRefs(run, (artifacts ?? []).map(externalArtifact)),
+        summary: runSummary(run, {
+          loop,
+          workflow: workflowForLoop(loop?.target, workflows),
+          showOutput: false,
+        }),
+      });
+      return jsonResult({ receipt: receiptSummary(receipt) });
+    },
+  );
+
+  registerTool<ListRunReceiptsArgs>(
+    server,
+    "openloops_list_run_receipts",
+    {
+      title: "List OpenLoops Run Receipts",
+      description: "List append-only run receipts by run, loop, task, or latest receipt order.",
+      inputSchema: {
+        runId: z.string().min(1).optional(),
+        loopId: z.string().min(1).optional(),
+        taskId: z.string().min(1).optional(),
+        limit: positiveIntSchema.optional(),
+        cursor: nonNegativeIntSchema.optional(),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ runId, loopId, taskId, limit, cursor }) => {
+      const resolvedLimit = boundedLimit(limit, 50);
+      const resolvedCursor = boundedCursor(cursor);
+      const receipts = store.listRunReceipts({ runId, loopId, taskId, limit: resolvedLimit + 1, offset: resolvedCursor });
+      const { page, nextCursor, hasMore } = pageItems(receipts, 0, resolvedLimit);
+      return jsonResult({ receipts: page.map(receiptSummary), nextCursor: nextCursor === undefined ? undefined : resolvedCursor + resolvedLimit, hasMore });
     },
   );
 

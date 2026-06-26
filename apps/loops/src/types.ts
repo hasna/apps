@@ -247,6 +247,35 @@ export interface LoopRun {
   updatedAt: string;
 }
 
+export interface RunArtifactRef {
+  kind: "output" | "external";
+  ref: string;
+  stream?: "stdout" | "stderr";
+  path?: string;
+  chars?: number;
+}
+
+export interface RunReceipt {
+  id: string;
+  loopId: string;
+  runId: string;
+  taskId?: string;
+  conversationId?: string;
+  knowledgeId?: string;
+  artifactRefs: RunArtifactRef[];
+  summary: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface CreateRunReceiptInput {
+  runId: string;
+  taskId?: string;
+  conversationId?: string;
+  knowledgeId?: string;
+  artifactRefs?: RunArtifactRef[];
+  summary?: Record<string, unknown>;
+}
+
 export interface CreateLoopInput {
   name: string;
   description?: string;

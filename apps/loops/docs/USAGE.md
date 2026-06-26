@@ -307,6 +307,11 @@ loops list --limit 50
 loops list --cursor 25     # next page when the previous command prints a cursor hint
 loops show <id-or-name>    # compact detail
 loops show <id-or-name> --verbose
+loops health /path/to/repo
+loops runs --summary --show-output --max-output-chars 1000
+loops audit --since 24h --group-by status --json
+loops lint --json
+loops receipts append <run-id> --task-id <task-id> --artifact file:///path/to/evidence
 loops runs --show-output --max-output-chars 8000
 loops workflows inspect <run-id> --steps-limit 100
 loops daemon status --verbose
@@ -315,6 +320,14 @@ loops-daemon status --json
 
 Use `show`/`inspect` commands for one record at a time. Use `--verbose` for full redacted detail output and `--json` for stable machine-readable records. Output streams are redacted unless explicitly requested and are bounded in human output. In CLI JSON mode, `--show-output` preserves full stdout/stderr unless `--max-output-chars` is supplied. Large workflow step lists are capped in compact human output and can be expanded with `--steps-limit`.
 The standalone `loops-daemon` helper follows the same compact default output; add `--verbose` or `--json` for full lifecycle and install records.
+
+Agent-oriented primitives are available without wrapper scripts:
+
+- `loops health` returns latest-run health for matching loops with compact summaries and artifact refs.
+- `loops runs --summary` returns bounded `openloops.run_summary.v1` records. Raw stdout/stderr stays referenced as `openloops://runs/<run-id>/stdout` and `openloops://runs/<run-id>/stderr`; previews appear only with `--show-output`.
+- `loops audit` groups recent runs by status, loop, day, or failure family and includes bounded drill-down run ids.
+- `loops lint` detects duplicate names, wrapper scripts, inline base64, long commands, and likely unbounded-output hazards.
+- `loops receipts append/list` stores append-only `openloops.run_receipt.v1` records linking run ids to task, conversation, knowledge, and artifact refs.
 
 `loops run-now` reports the manual run source:
 
@@ -359,6 +372,11 @@ The server exposes these tools:
 - `openloops_pause_loop`, `openloops_resume_loop`, `openloops_stop_loop`, `openloops_delete_loop`: manage loop lifecycle.
 - `openloops_update_labels`: set, add, remove, or clear loop labels.
 - `openloops_list_runs`: inspect recent runs by loop, status, labels, and bounded output.
+- `openloops_get_run_summary`: read one run as a compact bounded summary with raw artifact refs.
+- `openloops_health`: read latest-run health for loops filtered by repo, cwd, name, text, status, or labels.
+- `openloops_audit`: summarize recent runs with grouped counts and drill-down run ids.
+- `openloops_lint`: detect duplicate-name, wrapper-script, inline-base64, long-command, and unbounded-output loop hazards.
+- `openloops_append_run_receipt`, `openloops_list_run_receipts`: append and list structured run receipts.
 - `openloops_validate_workflow`: validate a workflow spec object and optionally preflight targets.
 - `openloops_create_workflow`, `openloops_list_workflows`, `openloops_get_workflow`, `openloops_archive_workflow`: manage stored workflow specs.
 - `openloops_run_workflow`, `openloops_list_workflow_runs`, `openloops_inspect_workflow_run`, `openloops_list_workflow_events`, `openloops_cancel_workflow_run`, `openloops_recover_workflow_run`: run, inspect, cancel, and recover workflow executions.

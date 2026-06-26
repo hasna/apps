@@ -26,7 +26,9 @@ describe("OpenLoops MCP server", () => {
       const tools = await client.listTools();
       const names = tools.tools.map((tool) => tool.name).sort();
       expect(names).toEqual([
+        "openloops_append_run_receipt",
         "openloops_archive_workflow",
+        "openloops_audit",
         "openloops_cancel_workflow_run",
         "openloops_create_loop",
         "openloops_create_workflow",
@@ -36,10 +38,14 @@ describe("OpenLoops MCP server", () => {
         "openloops_get_goal",
         "openloops_get_goal_status",
         "openloops_get_loop",
+        "openloops_get_run_summary",
         "openloops_get_workflow",
+        "openloops_health",
         "openloops_inspect_workflow_run",
+        "openloops_lint",
         "openloops_list_loops",
         "openloops_list_machines",
+        "openloops_list_run_receipts",
         "openloops_list_runs",
         "openloops_list_workflow_events",
         "openloops_list_workflow_runs",
@@ -118,12 +124,74 @@ describe("OpenLoops MCP server", () => {
       expect(secondPage.loops[0]?.id).not.toBe(firstPage.loops[0]?.id);
       expect(secondPage.hasMore).toBe(true);
 
-      const redactedRun = structured<{ run: { status: string; stdout?: string } }>(
+      const redactedRun = structured<{ run: { id: string; status: string; stdout?: string } }>(
         await client.callTool({ name: "openloops_run_now", arguments: { idOrName: "mcp-loop" } }),
       );
       expect(redactedRun.run.status).toBe("succeeded");
       expect(redactedRun.run.stdout).toContain("[redacted");
       expect(JSON.stringify(redactedRun)).not.toContain("SECRET_OUTPUT");
+      const runId = redactedRun.run.id;
+      const runSummary = structured<{ summary: { schema: string; output: { stdout: { ref: string } }; artifacts: { ref: string }[] } }>(
+        await client.callTool({ name: "openloops_get_run_summary", arguments: { runId } }),
+      );
+      expect(runSummary.summary.schema).toBe("openloops.run_summary.v1");
+      expect(runSummary.summary.output.stdout.ref).toBe(`openloops://runs/${runId}/stdout`);
+      expect(runSummary.summary.artifacts[0]?.ref).toBe(`openloops://runs/${runId}/stdout`);
+
+      const health = structured<{ schema: string; latestRunStatuses: { succeeded: number }; loops: { latestRun: { id: string } }[] }>(
+        await client.callTool({ name: "openloops_health", arguments: { name: "mcp-loop" } }),
+      );
+      expect(health.schema).toBe("openloops.health.v1");
+      expect(health.latestRunStatuses.succeeded).toBe(1);
+      expect(health.loops.find((loop) => loop.latestRun?.id === runId)?.latestRun.id).toBe(runId);
+
+      const receipt = structured<{ receipt: { schema: string; runId: string; taskId: string; artifacts: { ref: string }[] } }>(
+        await client.callTool({
+          name: "openloops_append_run_receipt",
+          arguments: { runId, taskId: "task-mcp", conversationId: "conv-mcp", knowledgeId: "know-mcp", artifacts: ["file:///tmp/mcp.txt"], showOutput: true },
+        }),
+      );
+      expect(JSON.stringify(receipt)).not.toContain("SECRET_OUTPUT");
+      expect(receipt.receipt.schema).toBe("openloops.run_receipt.v1");
+      expect(receipt.receipt.runId).toBe(runId);
+      expect(receipt.receipt.taskId).toBe("task-mcp");
+      expect(receipt.receipt.artifacts.map((entry) => entry.ref)).toContain("file:///tmp/mcp.txt");
+      await client.callTool({ name: "openloops_append_run_receipt", arguments: { runId, taskId: "task-mcp-2" } });
+      const receipts = structured<{ receipts: { id: string }[]; hasMore: boolean; nextCursor?: number }>(
+        await client.callTool({ name: "openloops_list_run_receipts", arguments: { runId, limit: 1 } }),
+      );
+      expect(receipts.receipts).toHaveLength(1);
+      expect(receipts.hasMore).toBe(true);
+      expect(receipts.nextCursor).toBe(1);
+      const receiptPage2 = structured<{ receipts: { id: string }[] }>(
+        await client.callTool({ name: "openloops_list_run_receipts", arguments: { runId, limit: 1, cursor: 1 } }),
+      );
+      expect(receiptPage2.receipts[0]?.id).not.toBe(receipts.receipts[0]?.id);
+      const receiptListCall = await client.callTool({ name: "openloops_list_run_receipts", arguments: { runId } });
+      expect(JSON.stringify(receiptListCall)).not.toContain("SECRET_OUTPUT");
+
+      const audit = structured<{ audit: { schema: string; statuses: { succeeded: number }; runIds: string[] } }>(
+        await client.callTool({ name: "openloops_audit", arguments: { since: "1d", groupBy: "status" } }),
+      );
+      expect(audit.audit.schema).toBe("openloops.audit.v1");
+      expect(audit.audit.statuses.succeeded).toBeGreaterThanOrEqual(1);
+      expect(audit.audit.runIds).toContain(runId);
+
+      await client.callTool({
+        name: "openloops_create_loop",
+        arguments: {
+          name: "mcp-wrapper-hazard",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "bash -c 'cat /tmp/openloops-mcp.log'" },
+        },
+      });
+      const lint = structured<{ ok: boolean; issues: { code: string }[] }>(
+        await client.callTool({ name: "openloops_lint", arguments: { name: "mcp-wrapper-hazard" } }),
+      );
+      expect(lint.ok).toBe(false);
+      expect(lint.issues.map((issue) => issue.code)).toContain("wrapper-script");
+      expect(lint.issues.map((issue) => issue.code)).toContain("unbounded-output");
+
       const redactedCall = await client.callTool({ name: "openloops_get_loop", arguments: { idOrName: "mcp-loop" } });
       expect(JSON.stringify(redactedCall.content)).not.toContain("SECRET_OUTPUT");
 

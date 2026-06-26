@@ -9,6 +9,7 @@ import type {
   Loop,
   LoopTarget,
   OverlapPolicy,
+  RunStatus,
   ScheduleSpec,
   WorkflowRun,
   WorkflowStepRun,
@@ -58,6 +59,23 @@ import {
   type ProjectFilter,
   type ProjectLoopEntry,
 } from "../lib/project-discovery.js";
+import {
+  auditLine,
+  auditRuns,
+  externalArtifact,
+  healthLine,
+  healthReport,
+  lintIssueLine,
+  lintLoops,
+  receiptLine,
+  receiptSummary,
+  runArtifactRefs,
+  runSummary,
+  runSummaryLine,
+  type AuditGroupBy,
+  type LoopLintIssue,
+  type LintSeverity,
+} from "../lib/insights.js";
 
 const program = new Command();
 
@@ -331,6 +349,60 @@ function collectAllProjectEntries(
     if (loops.length < DEFAULT_FILTER_SCAN_CHUNK) break;
   }
   return opts.includeLatestRun ? attachLatestRuns(store, entries) : entries;
+}
+
+function workflowMap(store: Store): Map<string, WorkflowSpec> {
+  return new Map(store.listWorkflows({ limit: 10_000 }).map((workflow) => [workflow.id, workflow]));
+}
+
+function loopMapForRuns(store: Store, runs: { loopId: string }[]): Map<string, Loop> {
+  const loops = new Map<string, Loop>();
+  for (const run of runs) {
+    if (loops.has(run.loopId)) continue;
+    const loop = store.getLoop(run.loopId);
+    if (loop) loops.set(loop.id, loop);
+  }
+  return loops;
+}
+
+function workflowForLoop(loop: Loop | undefined, workflows: Map<string, WorkflowSpec>): WorkflowSpec | undefined {
+  return loop?.target.type === "workflow" ? workflows.get(loop.target.workflowId) : undefined;
+}
+
+function parseSince(raw: string | undefined): string {
+  if (!raw) return new Date(Date.now() - parseDuration("24h")).toISOString();
+  try {
+    return new Date(Date.now() - parseDuration(raw)).toISOString();
+  } catch {
+    const date = new Date(raw);
+    if (Number.isNaN(date.getTime())) throw new Error("--since must be an ISO timestamp or duration such as 24h");
+    return date.toISOString();
+  }
+}
+
+function runStatusFromOpt(value: unknown): RunStatus | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") throw new Error("--status must be a run status");
+  if (!["running", "succeeded", "failed", "timed_out", "abandoned", "skipped"].includes(value)) {
+    throw new Error("--status must be running, succeeded, failed, timed_out, abandoned, or skipped");
+  }
+  return value as RunStatus;
+}
+
+function auditGroupByFromOpt(value: unknown): AuditGroupBy {
+  const groupBy = value === undefined ? "status" : value;
+  if (typeof groupBy !== "string" || !["status", "loop", "day", "failure-family"].includes(groupBy)) {
+    throw new Error("--group-by must be status, loop, day, or failure-family");
+  }
+  return groupBy as AuditGroupBy;
+}
+
+function severityFromOpt(value: unknown): LintSeverity | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !["info", "warn", "error"].includes(value)) {
+    throw new Error("--severity must be info, warn, or error");
+  }
+  return value as LintSeverity;
 }
 
 function projectJsonEntry(entry: ProjectLoopEntry, includeMatch: boolean): Record<string, unknown> {
@@ -1020,11 +1092,197 @@ addProjectFilterOptions(
 
 addProjectFilterOptions(
   program
+    .command("health [pathOrName]")
+    .description("show compact latest-run health for loops matching a project, cwd, name, or text")
+    .option("--status <status>", "filter by loop status")
+    .option("--label <label>", "filter by label; repeatable", collectRepeated, [])
+    .option("--limit <n>", "maximum loops to show")
+    .option("--cursor <offset>", "zero-based offset for the next page")
+    .option("--show-output", "include bounded latest-run output previews in JSON")
+    .option("--max-output-chars <n>", "maximum latest-run output preview characters"),
+).action((pathOrName, opts) => {
+  const store = new Store();
+  try {
+    const limit = defaultLimit(opts, DEFAULT_HUMAN_LIST_LIMIT, 200);
+    const cursor = parseNonNegativeInteger(typeof opts.cursor === "string" ? opts.cursor : undefined, "--cursor") ?? 0;
+    const filter = projectFilterFromOpts(opts, typeof pathOrName === "string" ? pathOrName : undefined);
+    const entries = collectAllProjectEntries(store, {
+      filter,
+      status: opts.status,
+      labels: labelsFromOpts(opts),
+      includeLatestRun: true,
+    });
+    const { page, nextCursor } = pageItems(entries, opts, limit);
+    const report = {
+      ...healthReport(entries, { includeLoops: false }),
+      cursor,
+      nextCursor,
+      loops: healthReport(page, { showOutput: Boolean(opts.showOutput), maxOutputChars: explicitOutputLimit(opts) }).loops,
+    };
+    if (isJson()) print(report);
+    else {
+      console.log(healthLine(report));
+      for (const entry of page) console.log(discoveryLoopLine(entry));
+      printPageHint("loops", page.length, nextCursor, undefined, "Use --json for compact summary schema and artifact refs.");
+    }
+  } finally {
+    store.close();
+  }
+});
+
+program
+  .command("audit")
+  .description("summarize recent loop runs with compact drill-down ids")
+  .option("--since <timeOrDuration>", "ISO timestamp or duration ago, e.g. 24h", "24h")
+  .option("--group-by <field>", "status, loop, day, or failure-family", "status")
+  .option("--status <status>", "filter by run status")
+  .option("--limit <n>", "maximum runs to scan")
+  .option("--drill-down-limit <n>", "maximum run ids to include per group")
+  .action((opts) => {
+    const store = new Store();
+    try {
+      const since = parseSince(typeof opts.since === "string" ? opts.since : undefined);
+      const status = runStatusFromOpt(opts.status);
+      const limit = defaultLimit(opts, DEFAULT_HUMAN_RUN_LIMIT, 1_000);
+      const drillDownLimit = positiveInteger(typeof opts.drillDownLimit === "string" ? opts.drillDownLimit : undefined, "--drill-down-limit") ?? 25;
+      const runs = store.listRunsSince({ since, status, limit: limit + 1 });
+      const value = auditRuns(runs.slice(0, limit), {
+        since,
+        status,
+        groupBy: auditGroupByFromOpt(opts.groupBy),
+        drillDownLimit,
+        scanLimit: limit,
+        hasMore: runs.length > limit,
+      });
+      if (isJson()) print(value);
+      else {
+        console.log(auditLine(value));
+        for (const group of value.groups as Array<{ key: string; count: number; runIds: string[]; truncated?: boolean }>) {
+          console.log(`${group.key} count=${group.count} runIds=${group.runIds.join(",")}${group.truncated ? " truncated=yes" : ""}`);
+        }
+      }
+    } finally {
+      store.close();
+    }
+  });
+
+addProjectFilterOptions(
+  program
+    .command("lint")
+    .description("detect wrapper-script, inline-base64, long-command, unbounded-output, and duplicate-name loop hazards")
+    .option("--status <status>", "filter by loop status")
+    .option("--label <label>", "filter by label; repeatable", collectRepeated, [])
+    .option("--severity <severity>", "filter by issue severity: info, warn, or error")
+    .option("--long-command-chars <n>", "long command threshold", "500")
+    .option("--limit <n>", "maximum issues to show")
+    .option("--cursor <offset>", "zero-based offset for the next issue page"),
+).action((opts) => {
+  const store = new Store();
+  try {
+    const limit = defaultLimit(opts, DEFAULT_HUMAN_LIST_LIMIT, 200);
+    const cursor = parseNonNegativeInteger(typeof opts.cursor === "string" ? opts.cursor : undefined, "--cursor") ?? 0;
+    const severity = severityFromOpt(opts.severity);
+    const entries = collectAllProjectEntries(store, {
+      filter: projectFilterFromOpts(opts),
+      status: opts.status,
+      labels: labelsFromOpts(opts),
+      includeLatestRun: false,
+    });
+    const raw = lintLoops(entries.map((entry) => entry.loop), workflowMap(store), {
+      longCommandChars: positiveInteger(typeof opts.longCommandChars === "string" ? opts.longCommandChars : undefined, "--long-command-chars") ?? 500,
+    });
+    const allIssues = raw.issues as LoopLintIssue[];
+    const filtered = severity ? allIssues.filter((issue) => issue.severity === severity) : allIssues;
+    const page = filtered.slice(cursor, cursor + limit);
+    const nextCursor = filtered.length > cursor + limit ? cursor + limit : undefined;
+    const value = { ...raw, cursor, nextCursor, issuesTotal: filtered.length, issues: page };
+    if (isJson()) print(value);
+    else {
+      console.log(`lint ok=${raw.ok} issues=${filtered.length}`);
+      for (const issue of page) console.log(lintIssueLine(issue));
+      printPageHint("issues", page.length, nextCursor, "loops lint", "Use --json for stable issue records and drill-down ids.");
+    }
+  } finally {
+    store.close();
+  }
+});
+
+const receipts = program.command("receipts").description("append and list structured run receipts");
+
+receipts
+  .command("append <runId>")
+  .description("append a structured receipt for a loop run")
+  .option("--task-id <id>", "linked task id")
+  .option("--conversation-id <id>", "linked conversation id")
+  .option("--knowledge-id <id>", "linked knowledge id")
+  .option("--artifact <ref>", "extra artifact ref; repeatable", collectRepeated, [])
+  .option("--show-output", "accepted for compatibility; receipts store output refs, not previews")
+  .option("--max-output-chars <n>", "accepted for compatibility; receipts store output refs, not previews")
+  .action((runId, opts) => {
+    const store = new Store();
+    try {
+      const run = store.requireRun(runId);
+      const loop = store.requireLoop(run.loopId);
+      const workflows = workflowMap(store);
+      const extraArtifacts = (Array.isArray(opts.artifact) ? opts.artifact : []).map(externalArtifact);
+      const summary = runSummary(run, {
+        loop,
+        workflow: workflowForLoop(loop, workflows),
+        showOutput: false,
+      });
+      const receipt = store.appendRunReceipt({
+        runId: run.id,
+        taskId: opts.taskId,
+        conversationId: opts.conversationId,
+        knowledgeId: opts.knowledgeId,
+        artifactRefs: runArtifactRefs(run, extraArtifacts),
+        summary,
+      });
+      print(receiptSummary(receipt), receiptLine(receipt));
+    } finally {
+      store.close();
+    }
+  });
+
+receipts
+  .command("list [runId]")
+  .description("list structured run receipts")
+  .option("--loop-id <id>", "filter by loop id")
+  .option("--task-id <id>", "filter by task id")
+  .option("--limit <n>", "maximum receipts to show")
+  .option("--cursor <offset>", "zero-based offset for the next page")
+  .action((runId, opts) => {
+    const store = new Store();
+    try {
+      const limit = defaultLimit(opts, DEFAULT_HUMAN_RUN_LIMIT, 200);
+      const cursor = parseNonNegativeInteger(typeof opts.cursor === "string" ? opts.cursor : undefined, "--cursor") ?? 0;
+      const values = store.listRunReceipts({
+        runId: typeof runId === "string" ? runId : undefined,
+        loopId: opts.loopId,
+        taskId: opts.taskId,
+        limit: limit + 1,
+        offset: cursor,
+      });
+      const page = values.slice(0, limit);
+      const nextCursor = values.length > limit ? cursor + limit : undefined;
+      if (isJson()) print({ receipts: page.map(receiptSummary), cursor, nextCursor, hasMore: nextCursor !== undefined });
+      else {
+        for (const receipt of page) console.log(receiptLine(receipt));
+        printPageHint("receipts", page.length, nextCursor, "loops receipts list", "Use --json for artifact refs and stored summary.");
+      }
+    } finally {
+      store.close();
+    }
+  });
+
+addProjectFilterOptions(
+  program
     .command("runs [idOrName]")
     .option("--limit <n>", "maximum runs to show")
     .option("--cursor <offset>", "zero-based offset for the next page")
     .option("--label <label>", "filter by loop label; repeatable", collectRepeated, [])
     .option("--status <status>", "filter by run status")
+    .option("--summary", "return compact bounded run summaries with output artifact refs")
     .option("--show-output", "show stdout/stderr")
     .option("--max-output-chars <n>", `maximum stdout/stderr characters to print; human default ${DEFAULT_HUMAN_OUTPUT_CHARS}`)
     .addHelpText(
@@ -1051,7 +1309,24 @@ addProjectFilterOptions(
       runs = store.listRuns({ loopId: loop?.id, labels: labelsFromOpts(opts), status: opts.status, limit: cursor + limit + 1 });
     }
     const { page, nextCursor } = pageItems(runs, opts, limit);
-    if (isJson()) print(page.map((run) => publicRun(run, opts.showOutput, jsonOutputLimit(opts))));
+    if (opts.summary) {
+      const loops = loopMapForRuns(store, page);
+      const workflows = workflowMap(store);
+      const summaries = page.map((run) => {
+        const summaryLoop = loops.get(run.loopId);
+        return runSummary(run, {
+          loop: summaryLoop,
+          workflow: workflowForLoop(summaryLoop, workflows),
+          showOutput: Boolean(opts.showOutput),
+          maxOutputChars: explicitOutputLimit(opts),
+        });
+      });
+      if (isJson()) print(summaries);
+      else {
+        for (const summary of summaries) console.log(runSummaryLine(summary));
+        printPageHint("run summaries", page.length, nextCursor, hasProjectFilters(filter) || idOrName ? undefined : "loops runs --summary", "Use --json for artifact refs and token details.");
+      }
+    } else if (isJson()) print(page.map((run) => publicRun(run, opts.showOutput, jsonOutputLimit(opts))));
     else {
       for (const run of page) {
         const hasOutput = run.stdout || run.stderr ? " output=yes" : "";

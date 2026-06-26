@@ -752,4 +752,120 @@ describe("loops CLI", () => {
     expect(create.status).not.toBe(0);
     expect(create.stderr).toContain("goal.objective");
   });
+
+  test("agent abstraction commands expose summaries, receipts, health, audit, and lint", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-agent-abstractions-"));
+    const create = runCli(dataDir, ["create", "command", "summary-run", "--at", futureAt(), "--cmd", "printf abcdefghij"]);
+    expect(create.status).toBe(0);
+    const run = runCli(dataDir, ["--json", "run-now", "summary-run"]);
+    expect(run.status).toBe(0);
+    const runValue = JSON.parse(run.stdout);
+
+    const summaries = runCli(dataDir, ["--json", "runs", "summary-run", "--summary", "--show-output", "--max-output-chars", "4"]);
+    expect(summaries.status).toBe(0);
+    const summaryValue = JSON.parse(summaries.stdout)[0];
+    expect(summaryValue.schema).toBe("openloops.run_summary.v1");
+    expect(summaryValue.output.stdout.ref).toBe(`openloops://runs/${runValue.id}/stdout`);
+    expect(summaryValue.output.stdout.preview).toBe("abcd");
+    expect(summaryValue.output.stdout.truncated).toBe(true);
+    expect(summaryValue.artifacts[0].stream).toBe("stdout");
+
+    const receipt = runCli(dataDir, [
+      "--json",
+      "receipts",
+      "append",
+      runValue.id,
+      "--task-id",
+      "task-123",
+      "--conversation-id",
+      "conv-456",
+      "--knowledge-id",
+      "know-789",
+      "--artifact",
+      "file:///tmp/evidence.txt",
+    ]);
+    expect(receipt.status).toBe(0);
+    const receiptValue = JSON.parse(receipt.stdout);
+    expect(receiptValue.schema).toBe("openloops.run_receipt.v1");
+    expect(receiptValue.runId).toBe(runValue.id);
+    expect(receiptValue.taskId).toBe("task-123");
+    expect(receiptValue.artifacts.map((entry: { ref: string }) => entry.ref)).toContain("file:///tmp/evidence.txt");
+
+    const secondReceipt = runCli(dataDir, ["--json", "receipts", "append", runValue.id, "--task-id", "task-456"]);
+    expect(secondReceipt.status).toBe(0);
+
+    const receiptList = runCli(dataDir, ["--json", "receipts", "list", runValue.id, "--limit", "1"]);
+    expect(receiptList.status).toBe(0);
+    const receiptListValue = JSON.parse(receiptList.stdout);
+    expect(receiptListValue.receipts).toHaveLength(1);
+    expect(receiptListValue.hasMore).toBe(true);
+    expect(receiptListValue.nextCursor).toBe(1);
+    const receiptListPage2 = runCli(dataDir, ["--json", "receipts", "list", runValue.id, "--limit", "1", "--cursor", "1"]);
+    expect(receiptListPage2.status).toBe(0);
+    expect(JSON.parse(receiptListPage2.stdout).receipts[0].id).not.toBe(receiptListValue.receipts[0].id);
+
+    const createSecret = runCli(dataDir, ["create", "command", "secret-receipt", "--at", futureAt(), "--cmd", "printf SECRET_RECEIPT_OUTPUT"]);
+    expect(createSecret.status).toBe(0);
+    const secretRun = runCli(dataDir, ["--json", "run-now", "secret-receipt"]);
+    expect(secretRun.status).toBe(0);
+    const secretRunId = JSON.parse(secretRun.stdout).id;
+    const secretReceipt = runCli(dataDir, ["--json", "receipts", "append", secretRunId, "--show-output"]);
+    expect(secretReceipt.status).toBe(0);
+    expect(secretReceipt.stdout).not.toContain("SECRET_RECEIPT_OUTPUT");
+    const secretReceiptList = runCli(dataDir, ["--json", "receipts", "list", secretRunId]);
+    expect(secretReceiptList.status).toBe(0);
+    expect(secretReceiptList.stdout).not.toContain("SECRET_RECEIPT_OUTPUT");
+
+    const audit = runCli(dataDir, ["--json", "audit", "--since", "1d", "--group-by", "status", "--limit", "1"]);
+    expect(audit.status).toBe(0);
+    const auditValue = JSON.parse(audit.stdout);
+    expect(auditValue.schema).toBe("openloops.audit.v1");
+    expect(auditValue.statuses.succeeded).toBe(1);
+    expect(auditValue.scanLimit).toBe(1);
+    expect(auditValue.hasMore).toBe(true);
+    expect(auditValue.truncatedByLimit).toBe(true);
+
+    const health = runCli(dataDir, ["--json", "health", "summary-run"]);
+    expect(health.status).toBe(0);
+    const healthValue = JSON.parse(health.stdout);
+    expect(healthValue.schema).toBe("openloops.health.v1");
+    expect(healthValue.latestRunStatuses.succeeded).toBe(1);
+    expect(healthValue.loops[0].latestRun.artifacts[0].ref).toBe(`openloops://runs/${runValue.id}/stdout`);
+
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      store.createLoop({
+        name: "dup-loop",
+        schedule: { type: "once", at: futureAt() },
+        target: { type: "command", command: "bash -c 'cat /tmp/openloops-big.log'" },
+      });
+      store.createLoop({
+        name: "dup-loop",
+        schedule: { type: "once", at: futureAt() },
+        target: { type: "command", command: `printf ${"a".repeat(140)} | base64 -d` },
+      });
+      store.createLoop({
+        name: "never-run",
+        schedule: { type: "once", at: futureAt() },
+        target: { type: "command", command: "true" },
+      });
+    } finally {
+      store.close();
+    }
+
+    const allHealth = runCli(dataDir, ["--json", "health"]);
+    expect(allHealth.status).toBe(0);
+    const allHealthValue = JSON.parse(allHealth.stdout);
+    expect(allHealthValue.latestRunStatuses.none).toBeGreaterThan(0);
+    expect(allHealthValue.failureFamilies.ok).toBeUndefined();
+
+    const lint = runCli(dataDir, ["--json", "lint"]);
+    expect(lint.status).toBe(0);
+    const lintValue = JSON.parse(lint.stdout);
+    const codes = lintValue.issues.map((issue: { code: string }) => issue.code);
+    expect(codes).toContain("duplicate-name");
+    expect(codes).toContain("wrapper-script");
+    expect(codes).toContain("inline-base64");
+    expect(codes).toContain("unbounded-output");
+  });
 });
