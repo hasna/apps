@@ -50,10 +50,23 @@ Inspect audit history:
 secrets audit example/anthropic/test/api_key
 ```
 
-Export redacted JSON for review:
+Export redacted compact JSON for review:
 
 ```bash
-secrets export --redact
+secrets export
+```
+
+Export plaintext only when a local restorable artifact is explicitly needed:
+
+```bash
+secrets export --show --pretty > secrets-backup.json
+```
+
+Scan the current workspace or bounded git history for exposed credentials:
+
+```bash
+secrets scan workspace --limit 50
+secrets scan history --max-commits 200 --limit 50
 ```
 
 Delete a secret:
@@ -243,11 +256,22 @@ delete_vault_item(id)
 audit_log(key?, limit?)
 register_user(id, name, type?)
 list_users(type?)
+storage_status()
+storage_push(tables?)
+storage_pull(tables?)
+storage_sync(tables?)
+scan_workspace_exposures(root?, limit?, maxFileBytes?, maxFiles?, maxBytesScanned?, timeoutMs?)
+scan_history_exposures(root?, limit?, maxCommits?, timeoutMs?)
 ```
 
 `list_secrets` and `search_secrets` return metadata only and do not decrypt
 stored values. `get_secret` returns the raw value, so use it only when the agent
 needs to pass the secret into a tool or command.
+
+The scan tools return compact JSON with a stable schema, bounded redacted
+findings, and path/line/commit references only. They do not return raw matching
+values. MCP scan roots are constrained to the server working directory, and
+workspace scans include hard file, byte, and timeout bounds.
 
 ## Env-File Bridge
 
@@ -316,8 +340,12 @@ The vault database lives at `~/.hasna/secrets/vault.db`. Key material lives in
 
 ## Safety Notes
 
-- `list` and `search` do not decrypt or print secret values. `export --redact`
-  still decrypts before redaction because export validates each stored value.
+- `list`, `search`, `export`, and `scan` do not decrypt or print secret values
+  by default.
+- `export --show` and `export --plaintext` are explicit plaintext escape
+  hatches for local restorable backups.
+- CLI import refuses redacted export bundles so placeholders do not overwrite
+  real secrets by accident.
 - `get` and MCP `get_secret` return raw secret values.
 - Never paste secret values into commits, logs, issues, PRs, or chat messages.
 - Keep `.env`, `.env.local`, `.secrets/`, and `.connect/` out of git.

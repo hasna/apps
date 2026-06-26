@@ -39,6 +39,9 @@ describe("secrets storage surface contract", () => {
     expect(source).toContain('"storage_push"');
     expect(source).toContain('"storage_pull"');
     expect(source).toContain('"storage_sync"');
+    expect(source).toContain('"scan_workspace_exposures"');
+    expect(source).toContain('"scan_history_exposures"');
+    expect(source).toContain("MCP scan root must be inside the server working directory");
     expect(source).not.toContain('"cloud_status"');
     expect(source).not.toContain('"cloud_push"');
     expect(source).not.toContain('"cloud_pull"');

@@ -421,15 +421,24 @@ export function importSecrets(
   return count;
 }
 
-export function exportSecrets(redact = false): { version: number; secrets: Record<string, SecretEntry> } {
+export function exportSecrets(redact = true): { version: number; redacted: boolean; secrets: Record<string, SecretEntry> } {
   const db = getDb();
-  const rows = db.prepare("SELECT * FROM secrets ORDER BY key").all() as SecretEntry[];
   const secrets: Record<string, SecretEntry> = {};
+
+  if (redact) {
+    const rows = db.prepare(`SELECT ${metadataColumns()} FROM secrets ORDER BY key`).all() as SecretMetadata[];
+    for (const row of rows) {
+      secrets[row.key] = { ...row, value: "***REDACTED***" };
+    }
+    return { version: 2, redacted: true, secrets };
+  }
+
+  const rows = db.prepare("SELECT * FROM secrets ORDER BY key").all() as SecretEntry[];
   for (const row of rows) {
     const decrypted = { ...row, value: decrypt(row.value) };
-    secrets[row.key] = redact ? { ...decrypted, value: "***REDACTED***" } : decrypted;
+    secrets[row.key] = decrypted;
   }
-  return { version: 2, secrets };
+  return { version: 2, redacted: false, secrets };
 }
 
 export function getAuditLog(key?: string, limit = 100): AuditEntry[] {
