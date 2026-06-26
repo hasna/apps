@@ -17,6 +17,20 @@ bun install -g @hasna/files
 files --help
 ```
 
+Build bounded agent context packs with citations instead of dumping full files:
+
+```bash
+files context-pack f_abc123 --max-total-chars 6000
+files context-pack --source-ref open-files://source/src_abc/path/Notes%2Fbrief.md
+files search-pack "supplier renewal" --max-files 5 --max-excerpts 12
+files search-pack "loop receipt" --out ./context-pack.json --dry-run
+```
+
+Context packs print compact deterministic JSON with `attachment_refs`, `citations`,
+bounded `excerpts`, and omitted counts. Secret-like values are redacted by
+default; repeat `--redact <regex>` for local policy patterns. Use `--out` to
+write the bounded pack as a local artifact and print a compact pointer.
+
 ## Google Drive Sync
 
 Google Drive sync uses profiles configured through the connectors CLI:
@@ -103,6 +117,10 @@ OPEN_FILES_MCP_ALLOW_DESTRUCTIVE=1 files-mcp
 
 `OPEN_FILES_ALLOW_<CAPABILITY>=1` or `OPEN_FILES_MCP_ALLOW_ALL=1` may be used
 for controlled local operator sessions.
+
+The MCP server also exposes read-only `build_context_pack` and
+`search_context_pack` tools for bounded excerpts, citations, attachment refs,
+and omitted counts in agent loops.
 
 ## HTTP mode
 

@@ -36,6 +36,7 @@ export { buildExtractionSnapshot, extractTextSnapshotFromBuffer, extractTextSnap
 export { resolveKnowledgeSourceRef } from "./lib/knowledge-resolver.js";
 export { doctorKnowledgeSources } from "./lib/knowledge-doctor.js";
 export { exportKnowledgeSourceManifest, formatKnowledgeSourceManifest, writeKnowledgeSourceManifestArtifact } from "./lib/knowledge-manifest.js";
+export { buildFilesContextPack, buildFilesSearchPack } from "./lib/context-pack.js";
 export { buildKnowledgeSyncFixtureManifest, buildKnowledgeSyncFixtureOutboxEvents, buildKnowledgeSyncFixturePack, formatKnowledgeSyncFixtureJsonl, KNOWLEDGE_SYNC_FIXTURE_CASES } from "./lib/knowledge-sync-fixtures.js";
 export { watchSource, unwatchSource, stopAllWatchers } from "./lib/watcher.js";
 export { hashFile, hashBuffer, sha256File, sha256Buffer } from "./lib/hasher.js";
@@ -62,6 +63,9 @@ export type {
   KnowledgeSourceManifestExtractionStatus, KnowledgeSourceManifestFileItem, KnowledgeSourceManifestFormat, KnowledgeSourceManifestItem,
   KnowledgeSourceManifestMachineEvidence, KnowledgeSourceManifestOpenFilesRootEvidence,
   KnowledgeSourceManifestOptions, KnowledgeSourceManifestOutput,
+  FilesContextPack, FilesContextPackAttachmentRef, FilesContextPackCitation,
+  FilesContextPackError, FilesContextPackExcerpt, FilesContextPackFile,
+  FilesContextPackOptions, FilesSearchPackOptions,
   AppendKnowledgeSourceOutboxEventInput, KnowledgeSourceOutboxCheckpoint,
   KnowledgeSourceOutboxEvent, KnowledgeSourceOutboxEventType, KnowledgeSourceOutboxPollResult,
   KnowledgeSourceOutboxWatermark, ListKnowledgeSourceOutboxEventsOptions,
