@@ -8,9 +8,10 @@ import { Store } from "../lib/store.js";
 
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
 
-function runCli(dataDir: string, args: string[]) {
+function runCli(dataDir: string, args: string[], input?: string) {
   return spawnSync(process.execPath, [cliPath, ...args], {
     env: { ...process.env, LOOPS_DATA_DIR: dataDir },
+    input,
     encoding: "utf8",
   });
 }
@@ -241,5 +242,166 @@ describe("loops CLI", () => {
     const create = runCli(dataDir, ["create", "command", "bad-goal", "--at", futureAt(), "--cmd", "true", "--goal", " "]);
     expect(create.status).not.toBe(0);
     expect(create.stderr).toContain("goal.objective");
+  });
+
+  test("templates render task worker/verifier workflow JSON", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-render-"));
+    const list = runCli(dataDir, ["--json", "templates", "list"]);
+    expect(list.status).toBe(0);
+    expect(JSON.parse(list.stdout).map((template: { id: string }) => template.id)).toEqual(expect.arrayContaining(["todos-task-worker-verifier", "event-worker-verifier"]));
+
+    const render = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "todos-task-worker-verifier",
+      "--var",
+      "taskId=task-12345678",
+      "--var",
+      "taskTitle=Fix parser",
+      "--var",
+      "projectPath=/tmp/repo",
+      "--var",
+      "provider=codewith",
+      "--var",
+      "authProfile=account005",
+      "--var",
+      "sandbox=danger-full-access",
+    ]);
+
+    expect(render.status).toBe(0);
+    const workflow = JSON.parse(render.stdout);
+    expect(workflow.name).toContain("task-123");
+    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["worker", "verifier"]);
+    expect(workflow.steps[0].target).toMatchObject({
+      type: "agent",
+      provider: "codewith",
+      cwd: "/tmp/repo",
+      authProfile: "account005",
+      permissionMode: "bypass",
+      sandbox: "danger-full-access",
+    });
+    expect(workflow.steps[1].dependsOn).toEqual(["worker"]);
+  });
+
+  test("templates render generic event worker/verifier workflow JSON", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-template-render-"));
+    const render = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "event-worker-verifier",
+      "--var",
+      "eventId=evt-12345678",
+      "--var",
+      "eventType=knowledge.record.created",
+      "--var",
+      "eventSource=knowledge",
+      "--var",
+      "eventJson={\"id\":\"evt-12345678\"}",
+      "--var",
+      "projectPath=/tmp/knowledge",
+      "--var",
+      "provider=codewith",
+      "--var",
+      "authProfile=account005",
+    ]);
+
+    expect(render.status).toBe(0);
+    const workflow = JSON.parse(render.stdout);
+    expect(workflow.name).toContain("knowledge");
+    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["worker", "verifier"]);
+    expect(workflow.steps[0].target.prompt).toContain("knowledge.record.created");
+    expect(workflow.steps[0].target.cwd).toBe("/tmp/knowledge");
+  });
+
+  test("todos task event handler creates a deduped one-shot workflow loop", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-"));
+    const event = {
+      id: "evt-task-created-0001",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-created-0001",
+        title: "Fix event bridge",
+        working_dir: "/tmp/open-todos",
+      },
+      timestamp: new Date().toISOString(),
+    };
+    const args = [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--provider",
+      "codewith",
+      "--auth-profile",
+      "account005",
+      "--sandbox",
+      "danger-full-access",
+      "--permission-mode",
+      "bypass",
+    ];
+
+    const first = runCli(dataDir, args, JSON.stringify(event));
+    expect(first.status).toBe(0);
+    const firstValue = JSON.parse(first.stdout);
+    expect(firstValue.deduped).toBe(false);
+    expect(firstValue.workflow.steps).toHaveLength(2);
+    expect(firstValue.loop.name).toContain("event:todos-task:task-cre:evt-task");
+    expect(firstValue.loop.target.workflowId).toBe(firstValue.workflow.id);
+
+    const second = runCli(dataDir, args, JSON.stringify(event));
+    expect(second.status).toBe(0);
+    const secondValue = JSON.parse(second.stdout);
+    expect(secondValue.deduped).toBe(true);
+    expect(secondValue.loop.id).toBe(firstValue.loop.id);
+  });
+
+  test("generic event handler creates a deduped one-shot workflow loop", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-generic-event-handler-"));
+    const event = {
+      id: "evt-knowledge-created-0001",
+      type: "knowledge.record.created",
+      source: "knowledge",
+      subject: "record-1",
+      message: "Knowledge record created",
+      severity: "info",
+      data: {
+        id: "record-1",
+        title: "Loop automation note",
+        project_path: "/tmp/open-knowledge",
+      },
+      time: new Date().toISOString(),
+      schemaVersion: "1.0",
+      metadata: {},
+    };
+    const args = [
+      "--json",
+      "events",
+      "handle",
+      "generic",
+      "--provider",
+      "codewith",
+      "--auth-profile",
+      "account005",
+      "--sandbox",
+      "danger-full-access",
+      "--permission-mode",
+      "bypass",
+    ];
+
+    const first = runCli(dataDir, args, JSON.stringify(event));
+    expect(first.status).toBe(0);
+    const firstValue = JSON.parse(first.stdout);
+    expect(firstValue.deduped).toBe(false);
+    expect(firstValue.workflow.name).toContain("event:generic:knowledge:knowledge.record.created");
+    expect(firstValue.workflow.steps[0].target.cwd).toBe("/tmp/open-knowledge");
+
+    const second = runCli(dataDir, args, JSON.stringify(event));
+    expect(second.status).toBe(0);
+    const secondValue = JSON.parse(second.stdout);
+    expect(secondValue.deduped).toBe(true);
+    expect(secondValue.loop.id).toBe(firstValue.loop.id);
   });
 });

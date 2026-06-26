@@ -152,4 +152,203 @@ describe("agent adapters", () => {
       store.close();
     }
   });
+
+  test("runs codewith with an explicit sandbox", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-sandbox-"));
+    const fake = join(binDir, "codewith");
+    await Bun.write(fake, "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\"\nprintf 'stdin:'\ncat\n");
+    chmodSync(fake, 0o755);
+
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "codewith-sandbox-agent",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "codewith",
+          prompt: "say ok",
+          sandbox: "danger-full-access",
+          configIsolation: "safe",
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+      });
+      expect(result.status).toBe("succeeded");
+      const args = result.stdout.trim().split(/\r?\n/);
+      expect(args[args.indexOf("--sandbox") + 1]).toBe("danger-full-access");
+      expect(args).toContain("stdin:say ok");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("maps claude permission mode and variant to native flags", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "loops-claude-mode-"));
+    const fake = join(binDir, "claude");
+    await Bun.write(fake, "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\"\nprintf 'stdin:'\ncat\n");
+    chmodSync(fake, 0o755);
+
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "claude-mode-agent",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "claude",
+          prompt: "say ok",
+          permissionMode: "plan",
+          variant: "high",
+          configIsolation: "safe",
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+      });
+      expect(result.status).toBe("succeeded");
+      const args = result.stdout.trim().split(/\r?\n/);
+      expect(args).toContain("--permission-mode");
+      expect(args[args.indexOf("--permission-mode") + 1]).toBe("plan");
+      expect(args).toContain("--effort");
+      expect(args[args.indexOf("--effort") + 1]).toBe("high");
+      expect(args).toContain("stdin:say ok");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("maps cursor bypass mode and sandbox to native flags", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "loops-cursor-mode-"));
+    const fake = join(binDir, "agent");
+    await Bun.write(fake, "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\"\nprintf 'stdin:'\ncat\n");
+    chmodSync(fake, 0o755);
+
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "cursor-mode-agent",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "cursor",
+          prompt: "say ok",
+          permissionMode: "bypass",
+          sandbox: "disabled",
+          configIsolation: "safe",
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { ...process.env, PATH: `${binDir}:/usr/bin:/bin` },
+      });
+      expect(result.status).toBe("succeeded");
+      const args = result.stdout.trim().split(/\r?\n/);
+      expect(args).toContain("-p");
+      expect(args).toContain("--force");
+      expect(args).toContain("--sandbox");
+      expect(args[args.indexOf("--sandbox") + 1]).toBe("disabled");
+      expect(args).toContain("stdin:say ok");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("enables cursor sandbox by default in safe isolation", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "loops-cursor-safe-"));
+    const fake = join(binDir, "agent");
+    await Bun.write(fake, "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\"\nprintf 'stdin:'\ncat\n");
+    chmodSync(fake, 0o755);
+
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "cursor-safe-agent",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "cursor",
+          prompt: "say ok",
+          configIsolation: "safe",
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { ...process.env, PATH: `${binDir}:/usr/bin:/bin` },
+      });
+      expect(result.status).toBe("succeeded");
+      const args = result.stdout.trim().split(/\r?\n/);
+      expect(args).toContain("--sandbox");
+      expect(args[args.indexOf("--sandbox") + 1]).toBe("enabled");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("rejects provider-invalid SDK-created agent target options", async () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "bad-agent-options",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "claude",
+          prompt: "say ok",
+          sandbox: "danger-full-access",
+          configIsolation: "safe",
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      await expect(executeLoop(loop, claim!.run)).rejects.toThrow("claude.sandbox is not supported");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("maps aicopilot bypass mode and variant to native flags", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "loops-aicopilot-mode-"));
+    const fake = join(binDir, "aicopilot");
+    await Bun.write(fake, "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\"\nprintf 'stdin:'\ncat\n");
+    chmodSync(fake, 0o755);
+
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "aicopilot-mode-agent",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "aicopilot",
+          prompt: "say ok",
+          cwd: ".",
+          permissionMode: "bypass",
+          variant: "max",
+          configIsolation: "safe",
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+      });
+      expect(result.status).toBe("succeeded");
+      const args = result.stdout.trim().split(/\r?\n/);
+      expect(args.slice(0, 3)).toEqual(["run", "--format", "json"]);
+      expect(args).toContain("--dangerously-skip-permissions");
+      expect(args).toContain("--variant");
+      expect(args[args.indexOf("--variant") + 1]).toBe("max");
+      expect(args).toContain("stdin:say ok");
+    } finally {
+      store.close();
+    }
+  });
 });

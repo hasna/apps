@@ -88,17 +88,24 @@ export type AgentProvider = "claude" | "cursor" | "codewith" | "aicopilot" | "op
 
 export type AgentConfigIsolation = "safe" | "none";
 
+export type AgentPermissionMode = "default" | "plan" | "auto" | "bypass";
+
+export type AgentSandbox = "read-only" | "workspace-write" | "danger-full-access" | "enabled" | "disabled";
+
 export interface AgentTarget {
   type: "agent";
   provider: AgentProvider;
   prompt: string;
   cwd?: string;
   model?: string;
+  variant?: string;
   agent?: string;
   authProfile?: string;
   extraArgs?: string[];
   timeoutMs?: number;
   configIsolation?: AgentConfigIsolation;
+  permissionMode?: AgentPermissionMode;
+  sandbox?: AgentSandbox;
   account?: AccountRef;
 }
 
@@ -149,6 +156,23 @@ export interface CreateWorkflowInput {
   goal?: GoalSpec;
   steps: WorkflowStep[];
   version?: number;
+}
+
+export type LoopTemplateKind = "workflow" | "loop";
+
+export interface LoopTemplateVariable {
+  name: string;
+  description?: string;
+  required?: boolean;
+  default?: string;
+}
+
+export interface LoopTemplateSummary {
+  id: string;
+  name: string;
+  description: string;
+  kind: LoopTemplateKind;
+  variables: LoopTemplateVariable[];
 }
 
 export interface WorkflowRun {

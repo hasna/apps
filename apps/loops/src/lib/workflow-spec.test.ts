@@ -38,6 +38,88 @@ describe("workflow goal spec validation", () => {
     ).toThrow("4000");
   });
 
+  test("accepts provider permission and sandbox fields for agent steps", () => {
+    const workflow = workflowBodyFromJson({
+      name: "agent-target-options",
+      steps: [
+        {
+          id: "worker",
+          target: {
+            type: "agent",
+            provider: "codewith",
+            prompt: "do the task",
+            permissionMode: "bypass",
+            sandbox: "danger-full-access",
+            variant: "low",
+          },
+        },
+        {
+          id: "reviewer",
+          target: {
+            type: "agent",
+            provider: "cursor",
+            prompt: "review the task",
+            permissionMode: "plan",
+            sandbox: "enabled",
+          },
+        },
+      ],
+    });
+
+    expect(workflow.steps[0]?.target.type).toBe("agent");
+    expect(workflow.steps[1]?.target.type).toBe("agent");
+  });
+
+  test("rejects provider-incompatible permission and sandbox fields", () => {
+    expect(() =>
+      workflowBodyFromJson({
+        name: "bad-permission-mode",
+        steps: [
+          {
+            id: "worker",
+            target: { type: "agent", provider: "opencode", prompt: "do it", permissionMode: "plan" },
+          },
+        ],
+      }),
+    ).toThrow("permissionMode plan");
+
+    expect(() =>
+      workflowBodyFromJson({
+        name: "bad-sandbox",
+        steps: [
+          {
+            id: "worker",
+            target: { type: "agent", provider: "claude", prompt: "do it", sandbox: "danger-full-access" },
+          },
+        ],
+      }),
+    ).toThrow("sandbox is currently supported");
+
+    expect(() =>
+      workflowBodyFromJson({
+        name: "bad-cursor-auto",
+        steps: [
+          {
+            id: "worker",
+            target: { type: "agent", provider: "cursor", prompt: "do it", permissionMode: "auto" },
+          },
+        ],
+      }),
+    ).toThrow("permissionMode auto");
+
+    expect(() =>
+      workflowBodyFromJson({
+        name: "bad-variant",
+        steps: [
+          {
+            id: "worker",
+            target: { type: "agent", provider: "codewith", prompt: "do it", variant: { effort: "low" } },
+          },
+        ],
+      }),
+    ).toThrow("variant");
+  });
+
   test("accepts the transcript feedback workflow fixture", () => {
     const fixture = JSON.parse(
       readFileSync(new URL("../../docs/workflows/transcript-feedback-to-loops.json", import.meta.url), "utf8"),

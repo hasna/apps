@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
@@ -104,6 +104,55 @@ describe("executeLoop", () => {
       store.close();
       if (oldHome === undefined) delete process.env.HOME;
       else process.env.HOME = oldHome;
+    }
+  });
+
+  test("cursor preflight requires cursor or agent binary, not only sh", () => {
+    const home = mkdtempSync(join(tmpdir(), "loops-cursor-preflight-"));
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "cursor-preflight",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "cursor",
+          prompt: "say ok",
+          configIsolation: "safe",
+        },
+      });
+      expect(() =>
+        preflightTarget(loop.target as any, {}, { env: { PATH: "/usr/bin:/bin", HOME: home } }),
+      ).toThrow("none of required executables found");
+    } finally {
+      store.close();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("cursor preflight accepts the standalone agent binary", () => {
+    const home = mkdtempSync(join(tmpdir(), "loops-cursor-preflight-ok-"));
+    const binDir = join(home, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "agent");
+    writeFileSync(fake, "#!/usr/bin/env bash\nexit 0\n");
+    chmodSync(fake, 0o755);
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "cursor-preflight-ok",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "cursor",
+          prompt: "say ok",
+          configIsolation: "safe",
+        },
+      });
+      expect(preflightTarget(loop.target as any, {}, { env: { PATH: `${binDir}:/usr/bin:/bin`, HOME: home } }).command).toBe("sh");
+    } finally {
+      store.close();
+      rmSync(home, { recursive: true, force: true });
     }
   });
 
@@ -264,7 +313,7 @@ describe("executeLoop", () => {
       ["codewith", "codewith"],
       ["codex", "codex"],
       ["opencode", "opencode"],
-      ["cursor", "cursor-agent"],
+      ["cursor", "agent"],
       ["aicopilot", "aicopilot"],
     ] as const;
     for (const [provider, binary] of providers) {
@@ -272,7 +321,7 @@ describe("executeLoop", () => {
       await Bun.write(
         fake,
         provider === "cursor"
-          ? "#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${1:-}\" != \"agent\" ]]; then echo 'missing cursor agent subcommand' >&2; exit 64; fi\nsleep 0.3\nprintf 'stdin:'\ncat\n"
+          ? "#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${1:-}\" != \"-p\" ]]; then echo 'missing cursor print flag' >&2; exit 64; fi\nsleep 0.3\nprintf 'stdin:'\ncat\n"
           : "#!/usr/bin/env bash\nsleep 0.3\nprintf 'stdin:'\ncat\n",
       );
       chmodSync(fake, 0o755);

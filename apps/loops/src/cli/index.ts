@@ -1,7 +1,17 @@
 #!/usr/bin/env bun
 import { existsSync, readFileSync } from "node:fs";
 import { Command } from "commander";
-import type { AccountRef, AgentProvider, CatchUpPolicy, CreateLoopInput, LoopTarget, OverlapPolicy, ScheduleSpec } from "../types.js";
+import type {
+  AccountRef,
+  AgentPermissionMode,
+  AgentProvider,
+  AgentSandbox,
+  CatchUpPolicy,
+  CreateLoopInput,
+  LoopTarget,
+  OverlapPolicy,
+  ScheduleSpec,
+} from "../types.js";
 import { daemonLogPath } from "../lib/paths.js";
 import {
   publicLoop,
@@ -27,6 +37,14 @@ import { normalizeGoalSpec } from "../lib/workflow-spec.js";
 import { runDoctor } from "../lib/doctor.js";
 import { listOpenMachines, resolveLoopMachine } from "../lib/machines.js";
 import { packageVersion } from "../lib/version.js";
+import {
+  getLoopTemplate,
+  listLoopTemplates,
+  renderEventWorkerVerifierWorkflow,
+  renderLoopTemplate,
+  renderTodosTaskWorkerVerifierWorkflow,
+} from "../lib/templates.js";
+import type { EventEnvelope } from "@hasna/events";
 
 const program = new Command();
 
@@ -173,10 +191,105 @@ function accountFromOpts(opts: { account?: string; accountTool?: string }): Acco
   return opts.account ? { profile: opts.account, tool: opts.accountTool } : undefined;
 }
 
+function parseVars(values: string[] | undefined): Record<string, string> {
+  const vars: Record<string, string> = {};
+  for (const value of values ?? []) {
+    const index = value.indexOf("=");
+    if (index <= 0) throw new Error(`invalid --var value, expected key=value: ${value}`);
+    vars[value.slice(0, index)] = value.slice(index + 1);
+  }
+  return vars;
+}
+
+function collectValues(value: string, previous: string[] = []): string[] {
+  previous.push(value);
+  return previous;
+}
+
+function eventData(event: EventEnvelope): Record<string, unknown> {
+  const data = event.data;
+  if (data && typeof data === "object" && !Array.isArray(data)) return data;
+  return {};
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function slugSegment(value: string, fallback = "event"): string {
+  return value.toLowerCase().replace(/[^a-z0-9._:-]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || fallback;
+}
+
+function taskEventField(data: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const direct = stringField(data[key]);
+    if (direct) return direct;
+  }
+  const task = data.task;
+  if (task && typeof task === "object" && !Array.isArray(task)) {
+    for (const key of keys) {
+      const direct = stringField((task as Record<string, unknown>)[key]);
+      if (direct) return direct;
+    }
+  }
+  const payload = data.payload;
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+    for (const key of keys) {
+      const direct = stringField((payload as Record<string, unknown>)[key]);
+      if (direct) return direct;
+    }
+  }
+  return undefined;
+}
+
+async function readEventEnvelopeFromStdin(): Promise<EventEnvelope> {
+  const raw = process.env.HASNA_EVENT_JSON || (await Bun.stdin.text());
+  const event = JSON.parse(raw);
+  if (!event || typeof event !== "object" || Array.isArray(event)) throw new Error("event JSON must be an object");
+  if (!stringField(event.id)) throw new Error("event.id is required");
+  if (!stringField(event.type)) throw new Error("event.type is required");
+  if (!stringField(event.source)) throw new Error("event.source is required");
+  return event as EventEnvelope;
+}
+
 function providerAuthProfileFromOpts(opts: { authProfile?: string }, provider: AgentProvider): string | undefined {
   if (!opts.authProfile) return undefined;
   if (provider !== "codewith") throw new Error("--auth-profile is currently supported only for --provider codewith");
   return opts.authProfile;
+}
+
+function sandboxFromOpts(opts: { sandbox?: string }, provider: AgentProvider): AgentSandbox | undefined {
+  if (!opts.sandbox) return undefined;
+  const codexLike = ["read-only", "workspace-write", "danger-full-access"];
+  const cursorLike = ["enabled", "disabled"];
+  if (["codewith", "codex"].includes(provider)) {
+    if (!codexLike.includes(opts.sandbox)) {
+      throw new Error("--sandbox must be read-only, workspace-write, or danger-full-access for codewith/codex");
+    }
+    return opts.sandbox as AgentSandbox;
+  }
+  if (provider === "cursor") {
+    if (!cursorLike.includes(opts.sandbox)) {
+      throw new Error("--sandbox must be enabled or disabled for cursor");
+    }
+    return opts.sandbox as AgentSandbox;
+  }
+  throw new Error("--sandbox is currently supported only for --provider codewith, codex, or cursor");
+}
+
+function permissionModeFromOpts(opts: { permissionMode?: string }, provider: AgentProvider): AgentPermissionMode | undefined {
+  if (!opts.permissionMode) return undefined;
+  const mode = opts.permissionMode;
+  if (!["default", "plan", "auto", "bypass"].includes(mode)) {
+    throw new Error("--permission-mode must be default, plan, auto, or bypass");
+  }
+  if (mode === "plan" && !["claude", "cursor"].includes(provider)) {
+    throw new Error("--permission-mode plan is currently supported only for claude or cursor");
+  }
+  if (mode === "auto" && provider !== "claude") {
+    throw new Error("--permission-mode auto is currently supported only for claude");
+  }
+  return mode as AgentPermissionMode;
 }
 
 const create = program.command("create").description("create loops");
@@ -224,9 +337,12 @@ addGoalOptions(
         .requiredOption("--prompt <prompt>", "agent prompt")
         .option("--cwd <dir>", "working directory")
         .option("--model <model>", "model")
+        .option("--variant <variant>", "provider-specific model variant or reasoning effort")
         .option("--agent <agent>", "provider-specific agent")
         .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
         .option("--timeout <duration>", "run timeout")
+        .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass")
+        .option("--sandbox <mode>", "provider sandbox: codewith/codex use read-only/workspace-write/danger-full-access; cursor uses enabled/disabled")
         .option("--config-isolation <mode>", "safe or none", "safe"),
       ),
     ),
@@ -247,10 +363,13 @@ addGoalOptions(
       prompt: opts.prompt,
       cwd: opts.cwd,
       model: opts.model,
+      variant: opts.variant,
       agent: opts.agent,
       authProfile: providerAuthProfileFromOpts(opts, provider),
       timeoutMs: opts.timeout ? parseDuration(opts.timeout) : undefined,
       configIsolation: opts.configIsolation,
+      permissionMode: permissionModeFromOpts(opts, provider),
+      sandbox: sandboxFromOpts(opts, provider),
       account: accountFromOpts(opts),
     };
     const loop = store.createLoop(baseCreateInput(name, opts, target));
@@ -286,9 +405,240 @@ addGoalOptions(
 
 const workflows = program.command("workflows").alias("workflow").description("manage workflow specs and runs");
 
+const templates = program.command("templates").alias("template").description("render and store reusable loop/workflow templates");
+
+const events = program.command("events").description("handle Hasna event envelopes from stdin or command transport");
+
 const machines = program.command("machines").description("inspect OpenMachines topology for loop assignment");
 
 const goal = program.command("goal").description("inspect goal runs");
+
+templates
+  .command("list")
+  .alias("ls")
+  .description("list built-in OpenLoops templates")
+  .action(() => {
+    const values = listLoopTemplates();
+    if (isJson()) print(values);
+    else {
+      for (const template of values) {
+        console.log(`${template.id}\t${template.kind}\t${template.description}`);
+      }
+    }
+  });
+
+templates.command("show <id>").description("show a built-in template").action((id) => {
+  const template = getLoopTemplate(id);
+  if (!template) throw new Error(`template not found: ${id}`);
+  print(template, `${template.id} ${template.kind}`);
+});
+
+templates
+  .command("render <id>")
+  .description("render a template as workflow JSON")
+  .option("--var <key=value>", "template variable; may be repeated", collectValues, [] as string[])
+  .action((id, opts) => {
+    const workflow = renderLoopTemplate(id, parseVars(opts.var));
+    print(workflow, JSON.stringify(workflow, null, 2));
+  });
+
+templates
+  .command("create-workflow <id>")
+  .description("render and store a template as a workflow")
+  .option("--var <key=value>", "template variable; may be repeated", collectValues, [] as string[])
+  .action((id, opts) => {
+    const store = new Store();
+    try {
+      const body = renderLoopTemplate(id, parseVars(opts.var));
+      const workflow = store.createWorkflow(body);
+      print(publicWorkflow(workflow), `created workflow ${workflow.id} (${workflow.name}) steps=${workflow.steps.length}`);
+    } finally {
+      store.close();
+    }
+  });
+
+const eventsHandle = events.command("handle").description("handle a Hasna event envelope");
+
+eventsHandle
+  .command("todos-task")
+  .description("create a one-shot worker/verifier workflow loop for a todos task event")
+  .option("--provider <provider>", "agent provider", "codewith")
+  .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
+  .option("--account <profile>", "OpenAccounts profile name")
+  .option("--account-tool <tool>", "OpenAccounts tool id")
+  .option("--model <model>", "provider model")
+  .option("--variant <variant>", "provider-specific model variant or reasoning effort")
+  .option("--agent <agent>", "provider-specific agent")
+  .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
+  .option("--sandbox <mode>", "provider sandbox")
+  .option("--project-path <path>", "fallback project/repo working directory")
+  .option("--name-prefix <prefix>", "workflow/loop name prefix", "event:todos-task")
+  .option("--dry-run", "print the workflow and loop input without storing anything")
+  .action(async (opts) => {
+    const event = await readEventEnvelopeFromStdin();
+    const data = eventData(event);
+    const taskId = taskEventField(data, ["id", "task_id", "taskId"]);
+    if (!taskId) throw new Error("todos task event is missing task id in data.id, data.task_id, data.task.id, or data.payload.id");
+    const taskTitle = taskEventField(data, ["title", "task_title", "taskTitle"]);
+    const taskDescription = taskEventField(data, ["description", "body"]);
+    const projectPath =
+      opts.projectPath ??
+      taskEventField(data, ["working_dir", "workingDir", "project_path", "projectPath", "cwd"]) ??
+      process.cwd();
+    const provider = opts.provider as AgentProvider;
+    if (!["claude", "cursor", "codewith", "aicopilot", "opencode", "codex"].includes(provider)) throw new Error("unsupported provider");
+    const permissionMode = permissionModeFromOpts({ permissionMode: opts.permissionMode }, provider);
+    const sandbox = sandboxFromOpts({ sandbox: opts.sandbox }, provider);
+    const authProfile = providerAuthProfileFromOpts({ authProfile: opts.authProfile }, provider);
+    const workflowBody = renderTodosTaskWorkerVerifierWorkflow({
+      taskId,
+      taskTitle,
+      taskDescription,
+      projectPath,
+      provider,
+      authProfile,
+      account: accountFromOpts(opts),
+      model: opts.model,
+      variant: opts.variant,
+      agent: opts.agent,
+      permissionMode,
+      sandbox,
+      eventId: event.id,
+      eventType: event.type,
+    });
+    const eventSuffix = event.id.slice(0, 8);
+    workflowBody.name = `${opts.namePrefix}:${taskId.slice(0, 8)}:${eventSuffix}:workflow`;
+    workflowBody.description = `Task-triggered worker/verifier workflow for ${taskTitle ?? taskId} from ${event.source}/${event.type}`;
+    const loopName = `${opts.namePrefix}:${taskId.slice(0, 8)}:${eventSuffix}:run`;
+    const loopInput = {
+      name: loopName,
+      description: `Run ${workflowBody.name} once for task ${taskId}`,
+      schedule: { type: "once" as const, at: new Date(Date.now() + 1_000).toISOString() },
+      target: { type: "workflow" as const, workflowId: "<created-workflow-id>" },
+      overlap: "skip" as const,
+      maxAttempts: 1,
+      retryDelayMs: 60_000,
+      leaseMs: 90 * 60_000,
+    };
+    if (opts.dryRun) {
+      print({ event, workflow: workflowBody, loop: loopInput }, `dry-run ${loopName}`);
+      return;
+    }
+    const store = new Store();
+    try {
+      const existingLoop = store.findLoopByName(loopName);
+      if (existingLoop) {
+        const existingWorkflow = existingLoop.target.type === "workflow" ? store.getWorkflow(existingLoop.target.workflowId) : undefined;
+        print(
+          { deduped: true, event, workflow: existingWorkflow ? publicWorkflow(existingWorkflow) : undefined, loop: publicLoop(existingLoop) },
+          `deduped existing loop ${existingLoop.id} (${existingLoop.name})`,
+        );
+        return;
+      }
+      const existingWorkflow = store.findWorkflowByName(workflowBody.name);
+      const workflow = existingWorkflow ?? store.createWorkflow(workflowBody);
+      const loop = store.createLoop({
+        ...loopInput,
+        target: { type: "workflow", workflowId: workflow.id },
+      });
+      print(
+        { deduped: false, event, workflow: publicWorkflow(workflow), loop: publicLoop(loop) },
+        `created ${loop.id} (${loop.name}) workflow=${workflow.name}`,
+      );
+    } finally {
+      store.close();
+    }
+  });
+
+eventsHandle
+  .command("generic")
+  .description("create a one-shot worker/verifier workflow loop for any Hasna event")
+  .option("--provider <provider>", "agent provider", "codewith")
+  .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
+  .option("--account <profile>", "OpenAccounts profile name")
+  .option("--account-tool <tool>", "OpenAccounts tool id")
+  .option("--model <model>", "provider model")
+  .option("--variant <variant>", "provider-specific model variant or reasoning effort")
+  .option("--agent <agent>", "provider-specific agent")
+  .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
+  .option("--sandbox <mode>", "provider sandbox")
+  .option("--project-path <path>", "fallback project/repo working directory")
+  .option("--name-prefix <prefix>", "workflow/loop name prefix", "event:generic")
+  .option("--dry-run", "print the workflow and loop input without storing anything")
+  .action(async (opts) => {
+    const event = await readEventEnvelopeFromStdin();
+    const data = eventData(event);
+    const projectPath =
+      opts.projectPath ??
+      taskEventField(data, ["working_dir", "workingDir", "project_path", "projectPath", "cwd", "repo_path", "repoPath"]) ??
+      process.cwd();
+    const provider = opts.provider as AgentProvider;
+    if (!["claude", "cursor", "codewith", "aicopilot", "opencode", "codex"].includes(provider)) throw new Error("unsupported provider");
+    const permissionMode = permissionModeFromOpts({ permissionMode: opts.permissionMode }, provider);
+    const sandbox = sandboxFromOpts({ sandbox: opts.sandbox }, provider);
+    const authProfile = providerAuthProfileFromOpts({ authProfile: opts.authProfile }, provider);
+    const workflowBody = renderEventWorkerVerifierWorkflow({
+      eventId: event.id,
+      eventType: event.type,
+      eventSource: event.source,
+      eventSubject: stringField(event.subject),
+      eventMessage: stringField(event.message),
+      eventJson: JSON.stringify(event),
+      projectPath,
+      provider,
+      authProfile,
+      account: accountFromOpts(opts),
+      model: opts.model,
+      variant: opts.variant,
+      agent: opts.agent,
+      permissionMode,
+      sandbox,
+    });
+    const eventSuffix = event.id.slice(0, 8);
+    const source = slugSegment(event.source, "source");
+    const type = slugSegment(event.type, "type");
+    workflowBody.name = `${opts.namePrefix}:${source}:${type}:${eventSuffix}:workflow`;
+    workflowBody.description = `Event-triggered worker/verifier workflow for ${event.source}/${event.type}`;
+    const loopName = `${opts.namePrefix}:${source}:${type}:${eventSuffix}:run`;
+    const loopInput = {
+      name: loopName,
+      description: `Run ${workflowBody.name} once for event ${event.id}`,
+      schedule: { type: "once" as const, at: new Date(Date.now() + 1_000).toISOString() },
+      target: { type: "workflow" as const, workflowId: "<created-workflow-id>" },
+      overlap: "skip" as const,
+      maxAttempts: 1,
+      retryDelayMs: 60_000,
+      leaseMs: 90 * 60_000,
+    };
+    if (opts.dryRun) {
+      print({ event, workflow: workflowBody, loop: loopInput }, `dry-run ${loopName}`);
+      return;
+    }
+    const store = new Store();
+    try {
+      const existingLoop = store.findLoopByName(loopName);
+      if (existingLoop) {
+        const existingWorkflow = existingLoop.target.type === "workflow" ? store.getWorkflow(existingLoop.target.workflowId) : undefined;
+        print(
+          { deduped: true, event, workflow: existingWorkflow ? publicWorkflow(existingWorkflow) : undefined, loop: publicLoop(existingLoop) },
+          `deduped existing loop ${existingLoop.id} (${existingLoop.name})`,
+        );
+        return;
+      }
+      const existingWorkflow = store.findWorkflowByName(workflowBody.name);
+      const workflow = existingWorkflow ?? store.createWorkflow(workflowBody);
+      const loop = store.createLoop({
+        ...loopInput,
+        target: { type: "workflow", workflowId: workflow.id },
+      });
+      print(
+        { deduped: false, event, workflow: publicWorkflow(workflow), loop: publicLoop(loop) },
+        `created ${loop.id} (${loop.name}) workflow=${workflow.name}`,
+      );
+    } finally {
+      store.close();
+    }
+  });
 
 goal.command("show <idOrName>").description("show a goal or configured loop/workflow goal").action((idOrName) => {
   const store = new Store();
