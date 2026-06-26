@@ -272,6 +272,8 @@ describe('knowledge cli', () => {
     expect(out).toContain('events emit|list|replay');
     expect(out).toContain('webhooks add|list|remove|test');
     expect(out).toContain('inventory');
+    expect(out).toContain('context pack <query>');
+    expect(out).toContain('proposals context');
 
     const sub = runCli(['help', 'list']);
     expect(sub.exitCode).toBe(0);
@@ -281,6 +283,10 @@ describe('knowledge cli', () => {
     const inventory = runCli(['help', 'inventory']);
     expect(inventory.exitCode).toBe(0);
     expect(new TextDecoder().decode(inventory.stdout)).toContain('knowledge inventory');
+
+    const context = runCli(['help', 'context']);
+    expect(context.exitCode).toBe(0);
+    expect(new TextDecoder().decode(context.stdout)).toContain('knowledge context pack');
   });
 
   test('events command uses shared help surface', () => {
@@ -402,7 +408,7 @@ describe('knowledge cli', () => {
     const add = runCli([
       'add',
       'Hasna OSS boundary',
-      'local-first hosted wrapper open actions guardrails open orgs',
+      'local-first hosted wrapper open actions guardrails open orgs token=sk-testsecretkeyvalue1234567890',
       '--scope',
       'global',
       '--json',
@@ -446,6 +452,21 @@ describe('knowledge cli', () => {
     const contextOut = JSON.parse(new TextDecoder().decode(context.stdout));
     expect(contextOut.results[0]).toMatchObject({ kind: 'legacy_item', id: addOut.item.id });
     expect(contextOut.excerpts[0].text).toContain('local-first hosted wrapper');
+
+    const pack = runCli([
+      'context',
+      'pack',
+      'local-first hosted wrapper open actions guardrails open orgs',
+      '--scope',
+      'global',
+      '--json',
+    ], undefined, env);
+    expect(pack.exitCode).toBe(0);
+    const packOut = JSON.parse(new TextDecoder().decode(pack.stdout));
+    expect(packOut.evidence[0]).toMatchObject({ kind: 'legacy_item' });
+    expect(packOut.citations[0]).toMatchObject({ source_uri: `knowledge://item/${addOut.item.id}` });
+    expect(packOut.citations[0].quote_preview).toContain('[REDACTED:secret_assignment]');
+    expect(packOut.citations[0].quote_preview).not.toContain('sk-testsecretkeyvalue');
 
     const reindex = runCli(['reindex', 'enqueue', '--scope', 'global', '--json'], undefined, env);
     expect(reindex.exitCode).toBe(0);
@@ -1557,6 +1578,64 @@ describe('knowledge cli', () => {
     expect(contextOut.excerpts.length).toBeGreaterThan(0);
     expect(contextOut.citations[0].provenance.source_owner).toBe('open-files');
   }, 15000);
+
+  test('context pack and proposal context commands return bounded agent JSON', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-context-pack-cli-'));
+    const source = join(dir, 'source.md');
+    writeFileSync(source, 'CLI context pack should cite bounded source evidence for alpha roadmap.');
+    const sourceRef = `file://${source}`;
+
+    const ingest = runCli(['ingest', 'source', sourceRef, '--purpose', 'knowledge_index', '--scope', 'project', '--json'], dir);
+    expect(ingest.exitCode).toBe(0);
+
+    const pack = runCli(['context', 'pack', 'alpha', 'roadmap', '--scope', 'project', '--max-tokens', '1200', '--max-items', '1', '--json'], dir);
+    expect(pack.exitCode).toBe(0);
+    const packOut = JSON.parse(new TextDecoder().decode(pack.stdout));
+    expect(packOut.format).toBe('knowledge-agent-context-pack');
+    expect(packOut.source).toBe('search');
+    expect(packOut.budgets.items_included).toBeLessThanOrEqual(1);
+    expect(packOut.budgets.estimated_tokens).toBeLessThanOrEqual(packOut.budgets.max_tokens);
+    expect(packOut.evidence[0].citation_ids.length).toBeGreaterThan(0);
+
+    const db = openKnowledgeDb(join(dir, '.hasna', 'apps', 'knowledge', 'knowledge.db'));
+    try {
+      db.run(
+        `INSERT INTO runs (id, type, prompt, status, provider, model, metadata_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          'run_cli_loop',
+          'loop-proposal',
+          'CLI loop context pack should assemble alpha roadmap proposal evidence.',
+          'completed',
+          'local',
+          'context-pack',
+          JSON.stringify({ loop_id: 'loop_cli', artifact_uri: 'file:///tmp/run_cli_loop.json' }),
+          '2026-06-25T00:00:00.000Z',
+          '2026-06-25T00:00:00.000Z',
+        ],
+      );
+    } finally {
+      db.close();
+    }
+
+    const proposal = runCli(['proposals', 'context', '--from', 'loops', '--topic', 'alpha roadmap proposal', '--since', '30d', '--max-tokens', '1200', '--json', '--scope', 'project'], dir);
+    expect(proposal.exitCode).toBe(0);
+    const proposalOut = JSON.parse(new TextDecoder().decode(proposal.stdout));
+    expect(proposalOut.source).toBe('loops');
+    expect(proposalOut.purpose).toBe('proposal');
+    expect(proposalOut.evidence.some((entry: any) => entry.id === 'run:run_cli_loop')).toBe(true);
+    expect(proposalOut.safety.raw_artifact_content_included).toBe(false);
+
+    const runsPack = runCli(['context', 'pack', '--from', 'runs', '--topic', 'alpha roadmap proposal', '--scope', 'project', '--max-tokens', '1200', '--json'], dir);
+    expect(runsPack.exitCode).toBe(0);
+    const runsPackOut = JSON.parse(new TextDecoder().decode(runsPack.stdout));
+    expect(runsPackOut.source).toBe('runs');
+    expect(runsPackOut.purpose).toBe('proposal');
+
+    const missingTopic = runCli(['proposals', 'context', '--from', 'loops', '--scope', 'project', '--json'], dir);
+    expect(missingTopic.exitCode).toBe(1);
+    expect(new TextDecoder().decode(missingTopic.stderr)).toContain('--topic <text>');
+  });
 
   test('ask command and direct knowledge prompt build citation drafts with run ledger', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-ask-cli-'));

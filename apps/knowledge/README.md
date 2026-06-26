@@ -218,6 +218,10 @@ knowledge search "company wiki policy" --scope project --json
 knowledge search "company wiki policy" --scope project --semantic --json
 knowledge search "company wiki policy" --scope project --context --json
 
+# Agent/loop-safe bounded context packs
+knowledge context pack "company wiki policy" --max-tokens 1200 --max-items 6 --scope project --json
+knowledge proposals context --from loops --topic "release proposal" --since 7d --dedupe --max-tokens 1200 --scope project --json
+
 # Build a citation answer/context draft for a prompt
 knowledge ask "How do we cite handbook policy?" --scope project --json
 knowledge "How do we cite handbook policy?" --scope project --json
@@ -633,6 +637,21 @@ assembled citations, freshness and permission notes, graph evidence from
 `citations`/`wiki_backlinks`, and final rerank scores. This is the shape future
 `knowledge <prompt>` flows should send to a model instead of raw search rows.
 
+### context pack / proposals context
+```bash
+knowledge context pack <query> [--from search|runs|loops] [--max-tokens <n>] [--max-items <n>] [--scope project] [--json]
+knowledge proposals context --from loops --topic <text> [--since <duration|ISO>] [--dedupe] [--max-tokens <n>] [--scope project] [--json]
+```
+Return compact deterministic JSON bundles for agents and loops. Packs are
+read-only dry runs: they include bounded evidence previews, citation ids,
+source/run/artifact refs, safety reminders, duplicate candidates when requested,
+and a small write-ready outline. Raw artifact bodies are not embedded; callers
+should inspect cited refs only when the bounded preview is insufficient.
+
+`context pack` defaults to indexed search evidence. `--from runs|loops` builds
+from the `runs`/`run_events` ledger, and `proposals context` defaults to loop
+evidence for recurring proposal workflows.
+
 ### ask / build
 ```bash
 knowledge ask <prompt> [--scope project] [--json]
@@ -733,6 +752,7 @@ knowledge-mcp
 The stable agent-facing MCP tools are:
 
 - `knowledge_search`: return a reranked citation context pack.
+- `knowledge_context_pack`: return compact cited JSON under token/item budgets.
 - `knowledge_ask`: answer with read-only local knowledge and optional AI SDK
   generation.
 - `knowledge_build`: run the prompt flow and optionally file a cited wiki answer

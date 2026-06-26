@@ -287,6 +287,7 @@ describe('knowledge MCP', () => {
       expect(tools.tools.some((tool) => tool.name === 'ok_reindex_embeddings')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'ok_search')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_search')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_context_pack')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_inventory')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_ask')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_get')).toBe(true);
@@ -342,6 +343,20 @@ describe('knowledge MCP', () => {
 
       const sourceResource = parseResourceJson(await client.readResource({ uri: 'knowledge://project/sources' }));
       expect(sourceResource.sources[0].uri).toBe('open-files://file/file_mcp');
+
+      const contextPack = parseToolJson(await client.callTool({
+        name: 'knowledge_context_pack',
+        arguments: {
+          scope: 'project',
+          query: 'MCP resolver source text',
+          max_tokens: 1200,
+          max_items: 1,
+        },
+      }));
+      expect(contextPack.format).toBe('knowledge-agent-context-pack');
+      expect(contextPack.source).toBe('search');
+      expect(contextPack.evidence.length).toBeLessThanOrEqual(1);
+      expect(contextPack.safety.raw_artifact_content_included).toBe(false);
 
       const add = parseToolJson(await client.callTool({
         name: 'ok_add',

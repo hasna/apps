@@ -1,5 +1,6 @@
 import { type KnowledgeAuthStatus } from './auth';
 import { type KnowledgePromptOptions } from './agent';
+import { type KnowledgeAgentContextPackOptions } from './context-pack';
 import { type KnowledgeSyncConflictAiProposalOptions } from './conflict-agent';
 import { type EmbeddingIndexOptions, type EmbeddingSearchOptions } from './embeddings';
 import { type KnowledgeMachinePreflightOptions, type KnowledgeMachineRouteResolution, type KnowledgeMachineWorkspaceResolution, type KnowledgeMachineTopologyOptions } from './machines';
@@ -380,6 +381,7 @@ export declare class KnowledgeService {
     semanticSearch(options: Omit<EmbeddingSearchOptions, 'dbPath' | 'config'>): Promise<import("./embeddings").SemanticSearchResult>;
     search(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>): Promise<import("./search").HybridSearchResult>;
     retrieveContext(options: Omit<RetrievalOptions, 'dbPath' | 'config'>): Promise<import("./retrieval").KnowledgeContextPack>;
+    contextPack(options: Omit<KnowledgeAgentContextPackOptions, 'dbPath' | 'config' | 'safetyPolicy'>): Promise<import("./context-pack").KnowledgeAgentContextPack>;
     runPrompt(options: Omit<KnowledgePromptOptions, 'dbPath' | 'config'>): Promise<import("./agent").KnowledgePromptResult>;
     webSearch(options: Omit<WebSearchOptions, 'dbPath' | 'config' | 'safetyPolicy'>): Promise<import("./web-search").WebSearchResult>;
     machineTopology(options?: Omit<KnowledgeMachineTopologyOptions, 'knowledge'>): Promise<import("./machines").KnowledgeMachineTopology>;

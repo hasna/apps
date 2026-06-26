@@ -40,5 +40,30 @@ describe('knowledge service facade', () => {
     expect(wikiStats.storage_objects).toBe(4);
     expect(wikiStats.wiki_pages).toBe(1);
     expect(wikiStats.indexes).toBe(1);
+
+  });
+
+  test('context packs use the default project legacy JSON store', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-service-context-pack-'));
+    const service = createKnowledgeService({ scope: 'project', cwd: dir });
+    service.paths();
+
+    writeFileSync(service.jsonStorePath(), JSON.stringify({
+      items: [{
+        id: 'k_service_legacy_context',
+        title: 'Service Legacy Context',
+        content: 'service context pack should include default legacy json note evidence',
+        url: null,
+        tags: ['service'],
+        created_at: '2026-06-23T00:00:00.000Z',
+        updated_at: '2026-06-23T00:01:00.000Z',
+      }],
+    }));
+    const pack = await service.contextPack({
+      query: 'service legacy json note',
+      maxTokens: 1200,
+    });
+    expect(pack.evidence[0]).toMatchObject({ kind: 'legacy_item' });
+    expect(pack.citations[0]).toMatchObject({ source_uri: 'knowledge://item/k_service_legacy_context' });
   });
 });

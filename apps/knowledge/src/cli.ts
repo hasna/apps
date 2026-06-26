@@ -63,6 +63,12 @@ interface Flags {
   dimensions?: number;
   semantic?: boolean;
   context?: boolean;
+  maxTokens?: number;
+  maxItems?: number;
+  from?: string;
+  since?: string;
+  topic?: string;
+  dedupe?: boolean;
   generate?: boolean;
   approveWrite?: boolean;
   provider?: string;
@@ -101,7 +107,7 @@ interface ParseResult {
 }
 
 const EVENTS_COMMANDS = ['events', 'webhooks'];
-const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'export', 'prune', 'dedupe', 'stats', 'inventory', 'paths', 'setup', 'auth', 'remote', 'storage', 'machines', 'sync', 'db', 'wiki', 'source', 'ingest', 'reindex', 'search', 'web', 'ask', 'build', 'embeddings', 'providers', 'safety', 'help', ...EVENTS_COMMANDS];
+const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'export', 'prune', 'dedupe', 'stats', 'inventory', 'paths', 'setup', 'auth', 'remote', 'storage', 'machines', 'sync', 'db', 'wiki', 'source', 'ingest', 'reindex', 'search', 'context', 'proposals', 'web', 'ask', 'build', 'embeddings', 'providers', 'safety', 'help', ...EVENTS_COMMANDS];
 const COMMAND_ALIASES: Record<string, string> = {
   ls: 'list',
   rm: 'delete',
@@ -142,6 +148,12 @@ function parseArgs(argv: string[]): ParseResult {
       case '--dimensions': flags.dimensions = Number(argv[i + 1]); i += 1; break;
       case '--semantic': flags.semantic = true; break;
       case '--context': flags.context = true; break;
+      case '--max-tokens': flags.maxTokens = Number(argv[i + 1]); i += 1; break;
+      case '--max-items': flags.maxItems = Number(argv[i + 1]); i += 1; break;
+      case '--from': flags.from = argv[i + 1]; i += 1; break;
+      case '--since': flags.since = argv[i + 1]; i += 1; break;
+      case '--topic': flags.topic = argv[i + 1]; i += 1; break;
+      case '--dedupe': flags.dedupe = true; break;
       case '--generate': flags.generate = true; break;
       case '--approve-write': flags.approveWrite = true; break;
       case '--provider': flags.provider = argv[i + 1]; i += 1; break;
@@ -264,6 +276,8 @@ Commands:
   ingest source <source-ref>   Ingest a read-only source ref into knowledge.db
   reindex status|enqueue|embeddings|outbox Inspect/refresh search indexes
   search <query>               Hybrid search sources, wiki pages, indexes, or context
+  context pack <query>         Return compact cited JSON under token/item budgets
+  proposals context            Return proposal-ready packs from loop/run evidence
   web search <query>           Provider-native web search with citations
   ask|build <prompt>           Build a read-only citation answer/context pack
   embeddings status|index|search Build/query local vector embeddings
@@ -281,6 +295,12 @@ Global Options:
   --dimensions <n>             Embedding dimensions for local/fake providers
   --semantic                   Include vector semantic results in search
   --context                    Return a reranked citation context pack for search
+  --max-tokens <n>             Token budget for agent context packs
+  --max-items <n>              Item budget for agent context packs
+  --from search|loops|runs      Context-pack source
+  --since <duration|ISO>       Filter run/loop evidence by age, e.g. 7d or 2026-06-23
+  --topic <text>               Topic for proposal/loop context packs
+  --dedupe                     Include duplicate candidates in proposal packs
   --generate                   Call AI SDK text generation for ask/build
   --approve-write              Approve durable generated writes or sync conflict resolution
   --approved-by <name>         Approver label for approval-gated sync conflict resolution
@@ -372,6 +392,8 @@ function printCommandHelp(command: string): void {
   if (command === 'ingest') { console.log('Usage: knowledge ingest manifest <file|s3://bucket/key> | source <source-ref> [--purpose knowledge_index] [--scope local|global|project] [--json]'); return; }
   if (command === 'reindex') { console.log('Usage: knowledge reindex status|enqueue|embeddings|outbox [file|s3://bucket/key] [--full] [--fake] [--scope local|global|project] [--json]'); return; }
   if (command === 'search') { console.log('Usage: knowledge search <query> [--context] [--semantic] [--model openai:text-embedding-3-small] [--limit <n>] [--dimensions <n>] [--fake] [--scope local|global|project] [--json]'); return; }
+  if (command === 'context') { console.log('Usage: knowledge context pack <query> [--from search|runs|loops] [--max-tokens <n>] [--max-items <n>] [--limit <n>] [--semantic] [--model openai:text-embedding-3-small] [--dimensions <n>] [--fake] [--scope local|global|project] [--json]'); return; }
+  if (command === 'proposals') { console.log('Usage: knowledge proposals context --from loops --topic <text> [--since <duration|ISO>] [--dedupe] [--max-tokens <n>] [--max-items <n>] [--scope local|global|project] [--json]'); return; }
   if (command === 'web') { console.log('Usage: knowledge web search <query> [--provider openai|anthropic] [--model provider:model] [--domain <domain>] [--file-results] [--fake] [--scope local|global|project] [--json]'); return; }
   if (command === 'ask' || command === 'build') { console.log('Usage: knowledge ask|build <prompt> [--generate] [--semantic] [--model default|provider:model] [--approve-write] [--scope local|global|project] [--json]'); return; }
   if (command === 'embeddings') { console.log('Usage: knowledge embeddings status|index|search [query] [--model openai:text-embedding-3-small] [--limit <n>] [--dimensions <n>] [--fake] [--scope local|global|project] [--json]'); return; }
@@ -392,6 +414,10 @@ function output(data: unknown, asJson?: boolean, _flags?: Flags): void {
   if (asJson) { console.log(JSON.stringify(data, null, 2)); return; }
   if (typeof data === 'string') { console.log(data); return; }
   console.log((data as { message?: string }).message ?? JSON.stringify(data, null, 2));
+}
+
+function outputCompactJson(data: unknown): void {
+  console.log(JSON.stringify(data));
 }
 
 function formatInventory(inventory: ReturnType<ReturnType<typeof createKnowledgeService>['inventory']>): string {
@@ -475,11 +501,11 @@ async function run(argv: string[]): Promise<void> {
   if (flags.completions) {
     const shell = flags.completions;
     if (shell === 'bash') {
-      console.log(`_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats inventory paths setup auth remote storage machines sync db wiki source ingest reindex search web ask build embeddings providers safety events webhooks help ls rm edit unarchive --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --purpose --model --dimensions --semantic --context --generate --approve-write --provider --mode --machine --workspace --peer-workspace --api-url --canonical-example --api-key --email --org --org-id --user-id --domain --file-results --full --dry-run --fake --no-tailscale --no-artifact-content --no-color --scope --tables --archived --include-archived" -- "$cur")); }; complete -F _knowledge knowledge`);
+      console.log(`_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats inventory paths setup auth remote storage machines sync db wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --purpose --model --dimensions --semantic --context --max-tokens --max-items --from --since --topic --dedupe --generate --approve-write --provider --mode --machine --workspace --peer-workspace --api-url --canonical-example --api-key --email --org --org-id --user-id --domain --file-results --full --dry-run --fake --no-tailscale --no-artifact-content --no-color --scope --tables --archived --include-archived" -- "$cur")); }; complete -F _knowledge knowledge`);
     } else if (shell === 'zsh') {
-      console.log(`#compdef knowledge\n_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats inventory paths setup auth remote storage machines sync db wiki source ingest reindex search web ask build embeddings providers safety events webhooks help ls rm edit unarchive)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--generate)--generate" "(--approve-write)--approve-write" "(--canonical-example)--canonical-example" "(--file-results)--file-results" "(--full)--full" "(--dry-run)--dry-run" "(--fake)--fake" "(--no-tailscale)--no-tailscale" "(--no-artifact-content)--no-artifact-content" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--provider)--provider[provider]:" "(--mode)--mode"\{local,hosted\}:" "(--machine)--machine[machine id or SSH alias]:" "(--workspace)--workspace[repo workspace path]:path:" "(--peer-workspace)--peer-workspace[peer repo or knowledge home path]:path:" "(--api-url)--api-url[hosted API URL]:" "(--api-key)--api-key[hosted API key]:" "(--email)--email[email]:" "(--org)--org[org slug]:" "(--org-id)--org-id[org id]:" "(--user-id)--user-id[user id]:" "(--domain)--domain[domain]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" "(--tables)--tables[comma-separated DB sync tables]:" }; _knowledge`);
+      console.log(`#compdef knowledge\n_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats inventory paths setup auth remote storage machines sync db wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--dedupe)--dedupe" "(--generate)--generate" "(--approve-write)--approve-write" "(--canonical-example)--canonical-example" "(--file-results)--file-results" "(--full)--full" "(--dry-run)--dry-run" "(--fake)--fake" "(--no-tailscale)--no-tailscale" "(--no-artifact-content)--no-artifact-content" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--max-tokens)--max-tokens[token budget]:number:" "(--max-items)--max-items[item budget]:number:" "(--from)--from"\{search,loops,runs\}:" "(--since)--since[duration or ISO time]:" "(--topic)--topic[topic text]:" "(--provider)--provider[provider]:" "(--mode)--mode"\{local,hosted\}:" "(--machine)--machine[machine id or SSH alias]:" "(--workspace)--workspace[repo workspace path]:path:" "(--peer-workspace)--peer-workspace[peer repo or knowledge home path]:path:" "(--api-url)--api-url[hosted API URL]:" "(--api-key)--api-key[hosted API key]:" "(--email)--email[email]:" "(--org)--org[org slug]:" "(--org-id)--org-id[org id]:" "(--user-id)--user-id[user id]:" "(--domain)--domain[domain]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" "(--tables)--tables[comma-separated DB sync tables]:" }; _knowledge`);
     } else if (shell === 'fish') {
-      console.log(`complete -c knowledge -f; complete -c knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats inventory paths setup auth remote storage machines sync db wiki source ingest reindex search web ask build embeddings providers safety events webhooks help ls rm edit unarchive"; complete -c knowledge -l json; complete -c knowledge -l yes -s y; complete -c knowledge -l help -s h; complete -c knowledge -l version -s v; complete -c knowledge -l desc; complete -c knowledge -l archived; complete -c knowledge -l include-archived; complete -c knowledge -l semantic; complete -c knowledge -l context; complete -c knowledge -l generate; complete -c knowledge -l approve-write; complete -c knowledge -l canonical-example; complete -c knowledge -l provider; complete -c knowledge -l mode; complete -c knowledge -l machine; complete -c knowledge -l workspace; complete -c knowledge -l peer-workspace; complete -c knowledge -l api-url; complete -c knowledge -l api-key; complete -c knowledge -l email; complete -c knowledge -l org; complete -c knowledge -l org-id; complete -c knowledge -l user-id; complete -c knowledge -l domain; complete -c knowledge -l file-results; complete -c knowledge -l full; complete -c knowledge -l dry-run; complete -c knowledge -l fake; complete -c knowledge -l no-tailscale; complete -c knowledge -l no-artifact-content; complete -c knowledge -s p -l page; complete -c knowledge -s l -l limit; complete -c knowledge -s s -l search; complete -c knowledge -l sort; complete -c knowledge -l id; complete -c knowledge -l store; complete -c knowledge -l title; complete -c knowledge -l content; complete -c knowledge -l url; complete -c knowledge -s t -l tag; complete -c knowledge -l format; complete -c knowledge -l completions; complete -c knowledge -l purpose; complete -c knowledge -l model; complete -c knowledge -l dimensions; complete -c knowledge -l no-color; complete -c knowledge -l scope -a "local global project"; complete -c knowledge -l tables`);
+      console.log(`complete -c knowledge -f; complete -c knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats inventory paths setup auth remote storage machines sync db wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive"; complete -c knowledge -l json; complete -c knowledge -l yes -s y; complete -c knowledge -l help -s h; complete -c knowledge -l version -s v; complete -c knowledge -l desc; complete -c knowledge -l archived; complete -c knowledge -l include-archived; complete -c knowledge -l semantic; complete -c knowledge -l context; complete -c knowledge -l max-tokens; complete -c knowledge -l max-items; complete -c knowledge -l from -a "search loops runs"; complete -c knowledge -l since; complete -c knowledge -l topic; complete -c knowledge -l dedupe; complete -c knowledge -l generate; complete -c knowledge -l approve-write; complete -c knowledge -l canonical-example; complete -c knowledge -l provider; complete -c knowledge -l mode; complete -c knowledge -l machine; complete -c knowledge -l workspace; complete -c knowledge -l peer-workspace; complete -c knowledge -l api-url; complete -c knowledge -l api-key; complete -c knowledge -l email; complete -c knowledge -l org; complete -c knowledge -l org-id; complete -c knowledge -l user-id; complete -c knowledge -l domain; complete -c knowledge -l file-results; complete -c knowledge -l full; complete -c knowledge -l dry-run; complete -c knowledge -l fake; complete -c knowledge -l no-tailscale; complete -c knowledge -l no-artifact-content; complete -c knowledge -s p -l page; complete -c knowledge -s l -l limit; complete -c knowledge -s s -l search; complete -c knowledge -l sort; complete -c knowledge -l id; complete -c knowledge -l store; complete -c knowledge -l title; complete -c knowledge -l content; complete -c knowledge -l url; complete -c knowledge -s t -l tag; complete -c knowledge -l format; complete -c knowledge -l completions; complete -c knowledge -l purpose; complete -c knowledge -l model; complete -c knowledge -l dimensions; complete -c knowledge -l no-color; complete -c knowledge -l scope -a "local global project"; complete -c knowledge -l tables`);
     } else {
       throw new Error("Invalid --completions value. Use 'bash', 'zsh', or 'fish'.");
     }
@@ -505,7 +531,7 @@ async function run(argv: string[]): Promise<void> {
       storePath = defaultStorePath();
     }
   }
-  if (!storePathOverridden && (command === 'search' || command === 'ask' || command === 'build')) {
+  if (!storePathOverridden && (command === 'search' || command === 'context' || command === 'ask' || command === 'build')) {
     ensureStore(storePath);
   }
 
@@ -1142,6 +1168,54 @@ async function run(argv: string[]): Promise<void> {
       return;
     }
     throw new Error("Invalid embeddings action. Use 'status', 'index', or 'search'.");
+  }
+
+  if (command === 'context') {
+    const action = positional[1] ?? 'pack';
+    if (action !== 'pack') throw new Error("Invalid context action. Use 'pack'.");
+    const source = flags.from ?? 'search';
+    if (!['search', 'loops', 'runs'].includes(source)) throw new Error("Invalid --from value. Use 'search', 'loops', or 'runs'.");
+    const query = positional.slice(2).join(' ') || flags.topic || '';
+    const result = await service.contextPack({
+      source: source as 'search' | 'loops' | 'runs',
+      purpose: source === 'loops' || source === 'runs' ? 'proposal' : 'agent_context',
+      query,
+      topic: flags.topic,
+      since: flags.since,
+      dedupe: flags.dedupe,
+      maxTokens: flags.maxTokens,
+      maxItems: flags.maxItems,
+      limit: flags.limit,
+      semantic: flags.semantic,
+      modelRef: flags.model,
+      dimensions: flags.dimensions,
+      fake: flags.fake,
+      legacyStorePath: storePath,
+    });
+    outputCompactJson({ ok: true, ...result, message: result.message });
+    return;
+  }
+
+  if (command === 'proposals') {
+    const action = positional[1] ?? 'context';
+    if (action !== 'context') throw new Error("Invalid proposals action. Use 'context'.");
+    const source = flags.from ?? 'loops';
+    if (!['loops', 'runs'].includes(source)) throw new Error("Invalid --from value for proposals. Use 'loops' or 'runs'.");
+    const topic = flags.topic ?? positional.slice(2).join(' ');
+    if (!topic.trim()) throw new Error('Usage: knowledge proposals context --from loops --topic <text>');
+    const result = await service.contextPack({
+      source: source as 'loops' | 'runs',
+      purpose: 'proposal',
+      query: topic,
+      topic,
+      since: flags.since,
+      dedupe: flags.dedupe ?? true,
+      maxTokens: flags.maxTokens,
+      maxItems: flags.maxItems,
+      limit: flags.limit,
+    });
+    outputCompactJson({ ok: true, ...result, message: result.message });
+    return;
   }
 
   if (command === 'search') {
