@@ -1,6 +1,6 @@
 import { SqliteAdapter as Database } from "@hasna/cloud"
 import { join } from "path"
-import { existsSync, mkdirSync, cpSync } from "fs"
+import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs"
 
 let _db: Database | null = null
 
@@ -28,17 +28,30 @@ export function getDbPath(): string {
   const newDir = join(home, ".hasna", "prompts")
   const oldDir = join(home, ".prompts")
 
-  // Auto-migrate from old location if new dir doesn't exist yet
-  if (!existsSync(newDir) && existsSync(oldDir)) {
+  // Auto-migrate from old location without overwriting newer target files.
+  if (existsSync(oldDir)) {
     try {
-      mkdirSync(join(home, ".hasna"), { recursive: true })
-      cpSync(oldDir, newDir, { recursive: true })
+      mergeDirectoryContents(oldDir, newDir)
     } catch {
       // Fall through to create new dir
     }
   }
 
   return join(newDir, "prompts.db")
+}
+
+function mergeDirectoryContents(sourceDir: string, targetDir: string): void {
+  mkdirSync(targetDir, { recursive: true })
+  for (const entry of readdirSync(sourceDir)) {
+    const sourcePath = join(sourceDir, entry)
+    const targetPath = join(targetDir, entry)
+    const sourceStat = statSync(sourcePath)
+    if (sourceStat.isDirectory()) {
+      mergeDirectoryContents(sourcePath, targetPath)
+    } else if (!existsSync(targetPath)) {
+      copyFileSync(sourcePath, targetPath)
+    }
+  }
 }
 
 export function getDatabase(): Database {
