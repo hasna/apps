@@ -34,6 +34,7 @@ import { resolveKnowledgeSourceRef } from "../lib/knowledge-resolver.js";
 import { buildFilesContextPack, buildFilesSearchPack } from "../lib/context-pack.js";
 import { buildOpenFilesFileRef, buildOpenFilesFileRevisionRef } from "../lib/source-ref.js";
 import { acknowledgeKnowledgeSourceOutbox, pollKnowledgeSourceOutbox } from "../db/knowledge-outbox.js";
+import { runDbIntegrityCheck, runOpsStateSnapshot } from "../lib/ops-loop.js";
 import { getDb, getDbPath } from "../db/database.js";
 import { requireId } from "../db/resolve.js";
 import { dirname, resolve, join } from "path";
@@ -70,6 +71,84 @@ registerEvidenceCommands(program);
 registerEventsCommands(program, { source: "files" });
 registerOrganizationCommands(program);
 registerStorageCommands(program);
+
+const ops = program.command("ops").description("Loop-safe operational checks");
+
+ops
+  .command("db-integrity")
+  .description("Check SQLite DB integrity for local operational state")
+  .option("--root <paths...>", "Root directories to scan (default: ~/.hasna and ~/.codewith)")
+  .option("--max-dbs <n>", "Maximum DB files to inspect", "200")
+  .option("--max-size <size>", "Skip DB files larger than this size", "512mb")
+  .option("--report <path>", "Write JSON evidence to this path")
+  .option("--json", "Output JSON")
+  .action((opts: { root?: string[]; maxDbs: string; maxSize: string; report?: string; json?: boolean }) => {
+    const result = runDbIntegrityCheck({
+      roots: opts.root,
+      maxDbs: parseIntFlag(opts.maxDbs, "max-dbs", { min: 1 }),
+      maxSizeBytes: parseSize(opts.maxSize),
+      reportPath: opts.report,
+    });
+    if (opts.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      const status = result.summary.failed === 0 ? chalk.green("ok") : chalk.red("failed");
+      console.log(`${status} checked=${result.summary.checked} failed=${result.summary.failed} skipped=${result.summary.skipped} truncated=${result.summary.truncated}`);
+      if (result.report_path) console.log(chalk.dim(`report=${result.report_path}`));
+      for (const row of result.databases.filter((entry) => entry.status !== "ok").slice(0, 20)) {
+        console.log(`${row.status === "failed" ? chalk.red("failed") : chalk.yellow("skipped")} ${row.path} ${chalk.dim(row.detail)}`);
+      }
+    }
+    if (result.summary.failed > 0) process.exitCode = 1;
+  });
+
+ops
+  .command("snapshot")
+  .description("Create bounded snapshots of local operational SQLite DBs")
+  .option("--root <paths...>", "Root directories to scan (default: ~/.hasna and ~/.codewith)")
+  .option("--snapshot-dir <path>", "Destination directory for snapshot batches")
+  .option("--max-dbs <n>", "Maximum DB files to snapshot", "200")
+  .option("--max-size <size>", "Skip DB files larger than this size", "512mb")
+  .option("--keep-days <n>", "Prune batches older than this many days", "7")
+  .option("--keep-batches <n>", "Keep at least this many most recent batches", "20")
+  .option("--dry-run", "Plan snapshots without writing files")
+  .option("--report <path>", "Write JSON evidence to this path")
+  .option("--json", "Output JSON")
+  .action((opts: {
+    root?: string[];
+    snapshotDir?: string;
+    maxDbs: string;
+    maxSize: string;
+    keepDays: string;
+    keepBatches: string;
+    dryRun?: boolean;
+    report?: string;
+    json?: boolean;
+  }) => {
+    const result = runOpsStateSnapshot({
+      roots: opts.root,
+      snapshotDir: opts.snapshotDir,
+      maxDbs: parseIntFlag(opts.maxDbs, "max-dbs", { min: 1 }),
+      maxSizeBytes: parseSize(opts.maxSize),
+      keepDays: parseIntFlag(opts.keepDays, "keep-days", { min: 1 }),
+      keepBatches: parseIntFlag(opts.keepBatches, "keep-batches", { min: 1 }),
+      dryRun: opts.dryRun,
+      reportPath: opts.report,
+    });
+    if (opts.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      const status = result.summary.failed === 0 ? chalk.green("ok") : chalk.red("failed");
+      console.log(`${status} copied=${result.summary.copied} failed=${result.summary.failed} skipped=${result.summary.skipped} pruned=${result.summary.pruned_batches} truncated=${result.summary.truncated}`);
+      console.log(chalk.dim(`batch=${result.batch_dir}`));
+      if (result.report_path) console.log(chalk.dim(`report=${result.report_path}`));
+      for (const row of result.snapshots.filter((entry) => entry.status !== "copied").slice(0, 20)) {
+        const label = row.status === "failed" ? chalk.red("failed") : chalk.yellow("skipped");
+        console.log(`${label} ${row.source} ${chalk.dim(row.detail)}`);
+      }
+    }
+    if (result.summary.failed > 0) process.exitCode = 1;
+  });
 
 // ─── sources ────────────────────────────────────────────────────────────────
 
