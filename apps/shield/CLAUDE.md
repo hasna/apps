@@ -45,7 +45,7 @@ bun run build                # Build all
 
 ## Database Location
 
-env `SECURITY_DB` → `.security/security.db` → `~/.security/security.db`
+env `SECURITY_DB` → project-local `.shield/shield.db` → `~/.hasna/security/shield.db`
 
 ## Cerebras API
 

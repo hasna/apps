@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { copyFileSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join, dirname, basename } from "path";
 import { homedir } from "os";
 import { type ConfigFile, DEFAULT_CONFIG } from "../types/index.js";
@@ -6,8 +6,20 @@ import { type ConfigFile, DEFAULT_CONFIG } from "../types/index.js";
 const CONFIG_DIR_NAME = ".security";
 const CONFIG_FILE_NAME = "config.json";
 
+function homeDir(): string {
+  return process.env.HOME || process.env.USERPROFILE || homedir();
+}
+
 export function getGlobalConfigDir(): string {
-  return join(homedir(), CONFIG_DIR_NAME);
+  const home = homeDir();
+  const dir = join(home, ".hasna", "security");
+  const path = join(dir, CONFIG_FILE_NAME);
+  const legacyPath = join(home, CONFIG_DIR_NAME, CONFIG_FILE_NAME);
+  if (!existsSync(path) && existsSync(legacyPath)) {
+    mkdirSync(dir, { recursive: true });
+    copyFileSync(legacyPath, path);
+  }
+  return dir;
 }
 
 export function getGlobalConfigPath(): string {

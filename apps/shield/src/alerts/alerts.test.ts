@@ -1,5 +1,5 @@
 import { describe, test, expect, mock, beforeAll, afterAll } from "bun:test";
-import { existsSync, readFileSync, mkdtempSync, rmSync } from "fs";
+import { existsSync, readFileSync, mkdtempSync, rmSync, mkdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import { AlertManager, loadAlertConfig, saveAlertConfig } from "./manager.js";
 import { SlackChannel } from "./channels/slack.js";
@@ -140,6 +140,32 @@ describe("loadAlertConfig / saveAlertConfig", () => {
     expect(saved.enabled).toBe(true);
     expect(saved.min_severity).toBe("high");
     expect(saved.channels.slack?.webhook_url).toBe("https://hooks.slack.com/test");
+  });
+
+  test("global alert config migrates from ~/.hasna/shield to ~/.hasna/security", () => {
+    const orig = process.env.HOME;
+    const originalUserProfile = process.env.USERPROFILE;
+    process.env.HOME = tempDir;
+    delete process.env.USERPROFILE;
+    const legacyDir = join(tempDir, ".hasna", "shield");
+    const canonicalPath = join(tempDir, ".hasna", "security", "alerts.json");
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(
+      join(legacyDir, "alerts.json"),
+      JSON.stringify({ enabled: true, channels: {}, min_severity: "high" }),
+    );
+
+    try {
+      const config = loadAlertConfig();
+      expect(config.enabled).toBe(true);
+      expect(config.min_severity).toBe("high");
+      expect(existsSync(canonicalPath)).toBe(true);
+    } finally {
+      if (orig === undefined) delete process.env.HOME;
+      else process.env.HOME = orig;
+      if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = originalUserProfile;
+    }
   });
 });
 

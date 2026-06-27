@@ -1,17 +1,35 @@
 import { Database } from "bun:sqlite";
 import { SqliteAdapter } from "@hasna/cloud";
-import { existsSync, mkdirSync } from "fs";
+import { copyFileSync, existsSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
 
 let _db: Database | null = null;
+
+function homeDir(): string {
+  return process.env.HOME || process.env.USERPROFILE || homedir();
+}
 
 function getDbPath(): string {
   if (process.env.SECURITY_DB) return process.env.SECURITY_DB;
   const local = join(process.cwd(), ".shield", "shield.db");
   if (existsSync(dirname(local))) return local;
 
-  const dbPath = join(homedir(), ".hasna", "shield", "shield.db");
+  const home = homeDir();
+  const dbPath = join(home, ".hasna", "security", "shield.db");
+  const legacyShieldPath = join(home, ".hasna", "shield", "shield.db");
+  const legacySecurityPath = join(home, ".security", "security.db");
+  if (!existsSync(dbPath)) {
+    const legacyPath = existsSync(legacyShieldPath)
+      ? legacyShieldPath
+      : existsSync(legacySecurityPath)
+        ? legacySecurityPath
+        : null;
+    if (legacyPath) {
+      mkdirSync(dirname(dbPath), { recursive: true });
+      copyFileSync(legacyPath, dbPath);
+    }
+  }
   mkdirSync(dirname(dbPath), { recursive: true });
   return dbPath;
 }

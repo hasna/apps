@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { copyFileSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
 import type { AlertChannel, AlertConfig, AlertPayload, AlertResult } from "./types.js";
@@ -12,10 +12,33 @@ import { EmailChannel } from "./channels/email.js";
 
 // --- Config loading ---
 
+function homeDir(): string {
+  return process.env.HOME || process.env.USERPROFILE || homedir();
+}
+
+function getGlobalAlertConfigPath(): string {
+  const home = homeDir();
+  const path = join(home, ".hasna", "security", "alerts.json");
+  const legacyShieldPath = join(home, ".hasna", "shield", "alerts.json");
+  const legacySecurityPath = join(home, ".security", "alerts.json");
+  if (!existsSync(path)) {
+    const legacyPath = existsSync(legacyShieldPath)
+      ? legacyShieldPath
+      : existsSync(legacySecurityPath)
+        ? legacySecurityPath
+        : null;
+    if (legacyPath) {
+      mkdirSync(dirname(path), { recursive: true });
+      copyFileSync(legacyPath, path);
+    }
+  }
+  return path;
+}
+
 function getAlertConfigPath(): string {
   const local = join(process.cwd(), ".security", "alerts.json");
   if (existsSync(local)) return local;
-  return join(homedir(), ".hasna", "shield", "alerts.json");
+  return getGlobalAlertConfigPath();
 }
 
 export function loadAlertConfig(): AlertConfig {
@@ -37,7 +60,7 @@ export function loadAlertConfig(): AlertConfig {
 export function saveAlertConfig(config: AlertConfig, projectPath?: string): void {
   const targetPath = projectPath
     ? join(projectPath, ".security", "alerts.json")
-    : join(homedir(), ".hasna", "shield", "alerts.json");
+    : getGlobalAlertConfigPath();
 
   mkdirSync(dirname(targetPath), { recursive: true });
   writeFileSync(targetPath, JSON.stringify(config, null, 2) + "\n", "utf-8");

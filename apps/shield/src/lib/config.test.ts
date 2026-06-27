@@ -8,6 +8,7 @@ import {
   initProject,
   getProjectConfigPath,
   getProjectConfigDir,
+  getGlobalConfigPath,
   getConfigPath,
 } from "./config.js";
 import { DEFAULT_CONFIG, Severity } from "../types/index.js";
@@ -57,6 +58,33 @@ describe("config", () => {
       // Should not throw, should return defaults
       const config = loadConfig(tempDir);
       expect(config.enabled_scanners).toEqual(DEFAULT_CONFIG.enabled_scanners);
+    });
+
+    test("migrates legacy global config into ~/.hasna/security", () => {
+      const originalHome = process.env.HOME;
+      const originalUserProfile = process.env.USERPROFILE;
+      process.env.HOME = tempDir;
+      delete process.env.USERPROFILE;
+      const legacyDir = join(tempDir, ".security");
+      mkdirSync(legacyDir, { recursive: true });
+      writeFileSync(
+        join(legacyDir, "config.json"),
+        JSON.stringify({ severity_threshold: "high", auto_fix: true }),
+      );
+
+      try {
+        const configPath = getGlobalConfigPath();
+        expect(configPath).toBe(join(tempDir, ".hasna", "security", "config.json"));
+        expect(existsSync(configPath)).toBe(true);
+        const config = loadConfig();
+        expect(config.severity_threshold).toBe(Severity.High);
+        expect(config.auto_fix).toBe(true);
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+        if (originalUserProfile === undefined) delete process.env.USERPROFILE;
+        else process.env.USERPROFILE = originalUserProfile;
+      }
     });
   });
 
