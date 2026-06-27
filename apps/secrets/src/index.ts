@@ -59,6 +59,9 @@ Commands:
   export [--show|--plaintext] [--pretty]  export redacted compact JSON by default
   scan workspace [path] [--limit <n>] [--max-bytes <n>] [--max-files <n>] [--max-scan-bytes <n>] [--timeout-ms <n>] [--pretty]
   scan history [path] [--limit <n>] [--max-commits <n>] [--timeout-ms <n>] [--pretty]
+  security permissions [--roots <paths>] [--fix-permissions] [--json|--pretty]
+  security exposure [--mode workspace|history] [--roots <paths>] [--limit <n>] [--json|--pretty]
+  security supply-chain [--roots <paths>] [--max-files <n>] [--max-findings <n>] [--json|--pretty]
   import <json-file>
   gc                          prune expired secrets
   audit [key]                 show audit log
@@ -237,6 +240,8 @@ const BOOLEAN_FLAGS = new Set([
   "plaintext",
   "pretty",
   "favorite",
+  "json",
+  "fix-permissions",
 ]);
 
 function parseArgs(args: string[]): { flags: Record<string, string>; positional: string[] } {
@@ -364,6 +369,13 @@ function positiveIntegerFlag(flags: Record<string, string>, name: string): numbe
     process.exit(1);
   }
   return parsed;
+}
+
+function commaListFlag(flags: Record<string, string>, name: string): string[] | undefined {
+  const value = flags[name];
+  if (!value) return undefined;
+  const parts = value.split(",").map((entry) => entry.trim()).filter(Boolean);
+  return parts.length > 0 ? parts : undefined;
 }
 
 const args = process.argv.slice(2);
@@ -500,6 +512,58 @@ switch (command) {
       }
       default:
         console.error("Usage: secrets scan workspace|history [path] [--limit <n>] [--max-bytes <n>] [--max-files <n>] [--max-scan-bytes <n>] [--max-commits <n>] [--timeout-ms <n>] [--pretty]");
+        process.exit(1);
+    }
+    break;
+  }
+
+  case "security": {
+    const [sub = "permissions"] = positional;
+    const {
+      auditSecretFilePermissions,
+      runSecurityExposureSweep,
+      runSupplyChainWatch,
+    } = await import("./security.js");
+    const pretty = flags.pretty === "true" || flags.json === "true";
+
+    switch (sub) {
+      case "permissions": {
+        const result = auditSecretFilePermissions({
+          roots: commaListFlag(flags, "roots") ?? commaListFlag(flags, "root"),
+          maxFiles: positiveIntegerFlag(flags, "max-files"),
+          fixPermissions: flags["fix-permissions"] === "true",
+        });
+        console.log(formatJson(result, pretty));
+        if (result.summary.findings > 0 && !result.fixed) process.exitCode = 1;
+        break;
+      }
+      case "exposure": {
+        const mode = flags.mode === "history" ? "history" : "workspace";
+        const result = runSecurityExposureSweep({
+          roots: commaListFlag(flags, "roots") ?? commaListFlag(flags, "root"),
+          mode,
+          limit: positiveIntegerFlag(flags, "limit"),
+          maxFiles: positiveIntegerFlag(flags, "max-files"),
+          maxBytesScanned: positiveIntegerFlag(flags, "max-scan-bytes"),
+          maxCommits: positiveIntegerFlag(flags, "max-commits"),
+          timeoutMs: positiveIntegerFlag(flags, "timeout-ms"),
+        });
+        console.log(formatJson(result, pretty));
+        if (result.summary.findings > 0 || result.summary.errors > 0) process.exitCode = 1;
+        break;
+      }
+      case "supply-chain": {
+        const result = runSupplyChainWatch({
+          roots: commaListFlag(flags, "roots") ?? commaListFlag(flags, "root"),
+          maxFiles: positiveIntegerFlag(flags, "max-files"),
+          maxFindings: positiveIntegerFlag(flags, "max-findings"),
+        });
+        console.log(formatJson(result, pretty));
+        if (result.summary.findings > 0) process.exitCode = 1;
+        break;
+      }
+      default:
+        console.error("Usage: secrets security permissions|exposure|supply-chain [--roots <paths>] [--json|--pretty]");
         process.exit(1);
     }
     break;
