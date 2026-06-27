@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildKnowledgeAgentContextPack } from '../src/context-pack';
 import { migrateKnowledgeDb, openKnowledgeDb } from '../src/knowledge-db';
+import { ingestOpenFilesManifestItems } from '../src/manifest-ingest';
 import { ingestSourceRef } from '../src/source-ingest';
 import { defaultKnowledgeConfig, workspaceForHome } from '../src/workspace';
 import { resolveSafetyPolicy } from '../src/safety';
@@ -105,6 +106,44 @@ describe('bounded knowledge agent context packs', () => {
     expect(pack.safety.raw_artifact_content_included).toBe(false);
     expect(pack.duplicate_candidates.length).toBeGreaterThan(0);
     expect(pack.budgets.estimated_tokens).toBeLessThanOrEqual(pack.budgets.max_tokens);
+  });
+
+  test('redacts search citation refs with secret-bearing URLs', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-search-ref-redaction-pack-'));
+    const dbPath = join(dir, 'knowledge.db');
+    const safetyPolicy = safetyFor(dir);
+    const secretUrl = 'https://evidence.example/doc?token=sk-testsecretkeyvalue1234567890&ok=1';
+
+    await ingestOpenFilesManifestItems({
+      dbPath,
+      items: [{
+        source_ref: secretUrl,
+        name: 'Secret ref doc',
+        mime: 'text/plain',
+        status: 'active',
+        extracted_text: 'search context packs should cite alpha launch evidence without leaking ref secrets.',
+      }],
+      sourceLabel: 'search-ref-redaction',
+      safetyPolicy,
+      now: new Date('2026-06-26T00:00:00.000Z'),
+    });
+
+    const pack = await buildKnowledgeAgentContextPack({
+      dbPath,
+      safetyPolicy,
+      source: 'search',
+      query: 'alpha launch evidence',
+      maxTokens: 1200,
+      maxItems: 1,
+      now: new Date('2026-06-26T00:00:00.000Z'),
+    });
+
+    expect(JSON.stringify(pack)).not.toContain('sk-testsecretkeyvalue');
+    expect(pack.citations[0]).toMatchObject({
+      ref: 'https://evidence.example/doc',
+      source_ref: 'https://evidence.example/doc',
+      source_uri: 'https://evidence.example/doc',
+    });
   });
 
   test('redacts run citation prompts and secret-bearing refs', async () => {

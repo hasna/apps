@@ -294,17 +294,21 @@ function citationFromRetrieval(
   citation: RetrievalCitation,
   policy: SafetyPolicy | undefined,
 ): { citation: KnowledgeAgentContextCitation; redactions: number } {
-  const ref = citation.source_ref ?? citation.source_uri ?? citation.artifact_path ?? citation.artifact_uri ?? citation.id;
+  const sourceRef = safeRef(citation.source_ref, policy);
+  const sourceUri = safeRef(citation.source_uri, policy);
+  const artifactUri = safeRef(citation.artifact_uri, policy);
+  const artifactPath = safeRef(citation.artifact_path, policy);
+  const ref = sourceRef ?? sourceUri ?? artifactPath ?? artifactUri ?? citation.id;
   const quote = citation.quote ? redactPreview(citation.quote, policy, index < 3 ? 220 : 140) : null;
   return {
     citation: {
       id: stableId('cite', `${citation.id}\u0000${ref}`, 12),
       kind: citation.artifact_uri || citation.artifact_path ? 'artifact' : 'source',
       ref,
-      source_ref: citation.source_ref ?? null,
-      source_uri: citation.source_uri ?? null,
-      artifact_uri: citation.artifact_uri ?? null,
-      artifact_path: citation.artifact_path ?? null,
+      source_ref: sourceRef,
+      source_uri: sourceUri,
+      artifact_uri: artifactUri,
+      artifact_path: artifactPath,
       run_id: null,
       run_event_id: null,
       revision: citation.revision ?? null,
