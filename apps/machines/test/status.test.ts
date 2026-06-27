@@ -56,10 +56,34 @@ describe("fleet status", () => {
     getDb().query("UPDATE agent_heartbeats SET updated_at = ? WHERE machine_id = ? AND pid = ?").run("2026-06-18T11:37:29.713Z", "demo-node-01", 100);
     getDb().query("UPDATE agent_heartbeats SET updated_at = ? WHERE machine_id = ? AND pid = ?").run("2026-06-18T11:01:38.986Z", "demo-node-01", 101);
 
-    const machine = getStatus({ privateMetadata: true }).machines.find((entry) => entry.machineId === "demo-node-01");
+    const machine = getStatus({ privateMetadata: true, heartbeatTtlMs: null }).machines.find((entry) => entry.machineId === "demo-node-01");
     expect(machine?.heartbeatStatus).toBe("online");
     expect(machine?.daemonVersion).toBe("0.0.39");
     expect(machine?.storageSyncStatus).toBe("disabled");
+  });
+
+  test("marks stale online heartbeats offline in status summaries", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-status-stale-"));
+    process.env["HASNA_MACHINES_DB_PATH"] = join(dir, "machines.db");
+    process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
+    process.env["HASNA_MACHINES_MACHINE_ID"] = "demo-node-01";
+    manifestInit();
+    manifestAdd({
+      id: "demo-node-01",
+      platform: "linux",
+      workspacePath: "/home/operator/workspace",
+    });
+
+    upsertHeartbeat("demo-node-01", 100, "online");
+    getDb().query("UPDATE agent_heartbeats SET updated_at = ?, observed_at = ? WHERE machine_id = ? AND pid = ?")
+      .run("2026-06-18T11:37:29.713Z", "2026-06-18T11:37:29.713Z", "demo-node-01", 100);
+
+    const machine = getStatus({
+      privateMetadata: true,
+      now: new Date("2026-06-18T11:40:30.000Z"),
+    }).machines.find((entry) => entry.machineId === "demo-node-01");
+
+    expect(machine?.heartbeatStatus).toBe("offline");
   });
 
   test("redacts local paths and machine identifiers by default", () => {

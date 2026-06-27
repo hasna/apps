@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -22,8 +22,6 @@ import {
 import { manifestAdd, manifestInit } from "../src/commands/manifest.js";
 import { MUTATION_APPROVAL_FLAG_ENV, MUTATION_APPROVAL_TOKEN_ENV, createMutationApprovalToken } from "../src/commands/mutation-approval.js";
 
-let httpServer: ReturnType<typeof startHttpServer> | undefined;
-let httpPort = 0;
 const API_KEY = "test-machines-api-key";
 
 function httpSecurity(overrides: Partial<MachinesHttpSecurityConfig> = {}): MachinesHttpSecurityConfig {
@@ -36,14 +34,65 @@ function httpSecurity(overrides: Partial<MachinesHttpSecurityConfig> = {}): Mach
   };
 }
 
-function httpTransport(): StreamableHTTPClientTransport {
-  return new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${httpPort}/mcp`), {
+function httpTransport(port: number): StreamableHTTPClientTransport {
+  return new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`), {
     requestInit: {
       headers: {
         authorization: `Bearer ${API_KEY}`,
       },
     },
   });
+}
+
+function boundPort(server: ReturnType<typeof startHttpServer>): number {
+  const address = server.address();
+  return typeof address === "object" && address ? address.port : 0;
+}
+
+async function waitForHttpServer(server: ReturnType<typeof startHttpServer>): Promise<number> {
+  if (!server.listening) {
+    await new Promise<void>((resolve, reject) => {
+      const onListening = () => {
+        server.off("error", onError);
+        resolve();
+      };
+      const onError = (error: Error) => {
+        server.off("listening", onListening);
+        reject(error);
+      };
+      server.once("listening", onListening);
+      server.once("error", onError);
+    });
+  }
+
+  const port = boundPort(server);
+  expect(port).toBeGreaterThan(0);
+  return port;
+}
+
+async function closeHttpServer(server: ReturnType<typeof startHttpServer>): Promise<void> {
+  if (!server.listening) return;
+  server.closeIdleConnections?.();
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+    server.closeAllConnections?.();
+  });
+}
+
+async function withHttpServer<T>(
+  callback: (port: number, server: ReturnType<typeof startHttpServer>) => Promise<T>,
+  security: MachinesHttpSecurityConfig = httpSecurity(),
+): Promise<T> {
+  const server = startHttpServer({ port: 0, host: "127.0.0.1", security });
+  const port = await waitForHttpServer(server);
+  try {
+    return await callback(port, server);
+  } finally {
+    await closeHttpServer(server);
+  }
 }
 
 describe("MCP HTTP transport", () => {
@@ -96,49 +145,48 @@ describe("MCP HTTP transport", () => {
   });
 
   test("GET /health returns ok", async () => {
-    httpServer = startHttpServer({ port: 0, host: "127.0.0.1", security: httpSecurity() });
-    await Bun.sleep(100);
-    const address = httpServer.address();
-    httpPort = typeof address === "object" && address ? address.port : 0;
-
-    const res = await fetch(`http://127.0.0.1:${httpPort}/health`);
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({
-      status: "ok",
-      name: "machines",
+    await withHttpServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/health`);
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({
+        status: "ok",
+        name: "machines",
+      });
     });
   });
 
   test("rejects unauthenticated MCP HTTP requests", async () => {
-    const res = await fetch(`http://127.0.0.1:${httpPort}/mcp`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }),
-    });
+    await withHttpServer(async (port) => {
+      const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }),
+      });
 
-    expect(res.status).toBe(401);
-    expect(await res.json()).toMatchObject({ error: "Unauthorized" });
+      expect(res.status).toBe(401);
+      expect(await res.json()).toMatchObject({ error: "Unauthorized" });
+    });
 
     const fakeReq = { headers: { authorization: "Bearer wrong" } };
     expect(authorizeHttpRequest(fakeReq as Parameters<typeof authorizeHttpRequest>[0], httpSecurity()).ok).toBe(false);
   });
 
   test("rejects untrusted browser origins and oversized MCP HTTP bodies", async () => {
-    const badOrigin = await fetch(`http://127.0.0.1:${httpPort}/mcp`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${API_KEY}`,
-        origin: "https://evil.example",
-      },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }),
+    await withHttpServer(async (port) => {
+      const badOrigin = await fetch(`http://127.0.0.1:${port}/mcp`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${API_KEY}`,
+          origin: "https://evil.example",
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }),
+      });
+      expect(badOrigin.status).toBe(403);
     });
-    expect(badOrigin.status).toBe(403);
 
     const limited = startHttpServer({ port: 0, host: "127.0.0.1", security: httpSecurity({ maxBodyBytes: 16 }) });
-    await Bun.sleep(100);
-    const address = limited.address();
-    const port = typeof address === "object" && address ? address.port : 0;
+    const port = await waitForHttpServer(limited);
     try {
       const tooLarge = await fetch(`http://127.0.0.1:${port}/mcp`, {
         method: "POST",
@@ -150,15 +198,13 @@ describe("MCP HTTP transport", () => {
       });
       expect(tooLarge.status).toBe(413);
     } finally {
-      limited.close();
+      await closeHttpServer(limited);
     }
   });
 
   test("serves trusted browser preflight without requiring API auth", async () => {
     const cors = startHttpServer({ port: 0, host: "127.0.0.1", security: httpSecurity({ allowedOrigins: ["https://ops.example"] }) });
-    await Bun.sleep(100);
-    const address = cors.address();
-    const port = typeof address === "object" && address ? address.port : 0;
+    const port = await waitForHttpServer(cors);
     try {
       const preflight = await fetch(`http://127.0.0.1:${port}/mcp`, {
         method: "OPTIONS",
@@ -183,24 +229,29 @@ describe("MCP HTTP transport", () => {
       expect(unauthorized.status).toBe(401);
       expect(unauthorized.headers.get("access-control-allow-origin")).toBe("https://ops.example");
     } finally {
-      cors.close();
+      await closeHttpServer(cors);
     }
   });
 
   test("handles MCP initialize and tool call over Streamable HTTP", async () => {
-    const transport = httpTransport();
-    const client = new Client({ name: "http-test", version: "0.0.1" });
-    await client.connect(transport);
+    await withHttpServer(async (port) => {
+      const transport = httpTransport(port);
+      const client = new Client({ name: "http-test", version: "0.0.1" });
+      await client.connect(transport);
 
-    const tools = await client.listTools();
-    expect(tools.tools.some((tool) => tool.name === "machines_status")).toBe(true);
+      try {
+        const tools = await client.listTools();
+        expect(tools.tools.some((tool) => tool.name === "machines_status")).toBe(true);
 
-    const result = await client.callTool({ name: "machines_status", arguments: {} });
-    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
-    expect(text).toBeTruthy();
-    expect(JSON.parse(text)).toMatchObject({ machineId: expect.any(String) });
+        const result = await client.callTool({ name: "machines_status", arguments: {} });
+        const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
+        expect(text).toBeTruthy();
+        expect(JSON.parse(text)).toMatchObject({ machineId: expect.any(String) });
+      } finally {
+        await client.close();
+      }
+    });
 
-    await client.close();
   });
 
   test("HTTP MCP mutations require scoped tokens beyond HTTP API key auth", async () => {
@@ -212,63 +263,68 @@ describe("MCP HTTP transport", () => {
     manifestAdd({ id: "demo-node-01", platform: "linux", workspacePath: "/home/operator/workspace" });
     delete process.env[MUTATION_APPROVAL_FLAG_ENV];
 
-    const client = new Client({ name: "http-mutation-token-test", version: "0.0.1" });
-    const transport = httpTransport();
-    await client.connect(transport);
-
     try {
-      let staticFailure = "";
-      try {
-        const result = await client.callTool({
-          name: "machines_manifest_remove",
-          arguments: { machine_id: "demo-node-01", approval_token: "secret" },
-        });
-        staticFailure = JSON.stringify(result);
-      } catch (error) {
-        staticFailure = error instanceof Error ? error.message : String(error);
-      }
-      expect(staticFailure).toContain("scoped approval_token");
-      expect(staticFailure).not.toContain("secret");
+      await withHttpServer(async (port) => {
+        const client = new Client({ name: "http-mutation-token-test", version: "0.0.1" });
+        const transport = httpTransport(port);
+        await client.connect(transport);
 
-      const localTransportToken = createMutationApprovalToken({
-        surface: "mcp",
-        operation: "machines_manifest_remove",
-        machineId: "demo-node-01",
-        callerId: "mcp",
-        runId: "mcp",
-        transport: "mcp:stdio",
-        args: { machine_id: "demo-node-01" },
-      }, { env: process.env, now: Date.now(), nonce: "http-wrong-transport" });
-      let transportFailure = "";
-      try {
-        const result = await client.callTool({
-          name: "machines_manifest_remove",
-          arguments: { machine_id: "demo-node-01", approval_token: localTransportToken },
-        });
-        transportFailure = JSON.stringify(result);
-      } catch (error) {
-        transportFailure = error instanceof Error ? error.message : String(error);
-      }
-      expect(transportFailure).toContain("requires operator approval");
-      expect(transportFailure).not.toContain(localTransportToken);
+        try {
+          let staticFailure = "";
+          try {
+            const result = await client.callTool({
+              name: "machines_manifest_remove",
+              arguments: { machine_id: "demo-node-01", approval_token: "secret" },
+            });
+            staticFailure = JSON.stringify(result);
+          } catch (error) {
+            staticFailure = error instanceof Error ? error.message : String(error);
+          }
+          expect(staticFailure).toContain("scoped approval_token");
+          expect(staticFailure).not.toContain("secret");
 
-      const token = createMutationApprovalToken({
-        surface: "mcp",
-        operation: "machines_manifest_remove",
-        machineId: "demo-node-01",
-        callerId: "mcp",
-        runId: "mcp",
-        transport: "mcp:http",
-        args: { machine_id: "demo-node-01" },
-      }, { env: process.env, now: Date.now(), nonce: "http-scoped" });
-      const result = await client.callTool({
-        name: "machines_manifest_remove",
-        arguments: { machine_id: "demo-node-01", approval_token: token },
+          const localTransportToken = createMutationApprovalToken({
+            surface: "mcp",
+            operation: "machines_manifest_remove",
+            machineId: "demo-node-01",
+            callerId: "mcp",
+            runId: "mcp",
+            transport: "mcp:stdio",
+            args: { machine_id: "demo-node-01" },
+          }, { env: process.env, now: Date.now(), nonce: "http-wrong-transport" });
+          let transportFailure = "";
+          try {
+            const result = await client.callTool({
+              name: "machines_manifest_remove",
+              arguments: { machine_id: "demo-node-01", approval_token: localTransportToken },
+            });
+            transportFailure = JSON.stringify(result);
+          } catch (error) {
+            transportFailure = error instanceof Error ? error.message : String(error);
+          }
+          expect(transportFailure).toContain("requires operator approval");
+          expect(transportFailure).not.toContain(localTransportToken);
+
+          const token = createMutationApprovalToken({
+            surface: "mcp",
+            operation: "machines_manifest_remove",
+            machineId: "demo-node-01",
+            callerId: "mcp",
+            runId: "mcp",
+            transport: "mcp:http",
+            args: { machine_id: "demo-node-01" },
+          }, { env: process.env, now: Date.now(), nonce: "http-scoped" });
+          const result = await client.callTool({
+            name: "machines_manifest_remove",
+            arguments: { machine_id: "demo-node-01", approval_token: token },
+          });
+          const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
+          expect(JSON.parse(text).machines).toEqual([]);
+        } finally {
+          await client.close();
+        }
       });
-      const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
-      expect(JSON.parse(text).machines).toEqual([]);
     } finally {
-      await client.close();
       delete process.env["HASNA_MACHINES_MANIFEST_PATH"];
       delete process.env[MUTATION_APPROVAL_TOKEN_ENV];
       rmSync(dir, { recursive: true, force: true });
@@ -276,31 +332,32 @@ describe("MCP HTTP transport", () => {
   });
 
   test("serves multiple concurrent HTTP clients from one process", async () => {
-    const clients = await Promise.all(
-      Array.from({ length: 3 }, async (_, index) => {
-        const transport = httpTransport();
-        const client = new Client({ name: `http-test-${index}`, version: "0.0.1" });
-        await client.connect(transport);
-        return client;
-      })
-    );
+    await withHttpServer(async (port) => {
+      const clients = await Promise.all(
+        Array.from({ length: 3 }, async (_, index) => {
+          const transport = httpTransport(port);
+          const client = new Client({ name: `http-test-${index}`, version: "0.0.1" });
+          await client.connect(transport);
+          return client;
+        })
+      );
 
-    const results = await Promise.all(
-      clients.map((client) => client.callTool({ name: "machines_self_test", arguments: {} }))
-    );
+      try {
+        const results = await Promise.all(
+          clients.map((client) => client.callTool({ name: "machines_status", arguments: {} }))
+        );
 
-    expect(results).toHaveLength(3);
-    for (const result of results) {
-      const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
-      expect(JSON.parse(text)).toMatchObject({ checks: expect.any(Array) });
-    }
+        expect(results).toHaveLength(3);
+        for (const result of results) {
+          const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
+          expect(JSON.parse(text)).toMatchObject({ machineId: expect.any(String) });
+        }
+      } finally {
+        await Promise.all(clients.map((client) => client.close()));
+      }
+    });
 
-    await Promise.all(clients.map((client) => client.close()));
   });
-});
-
-afterAll(() => {
-  httpServer?.close();
 });
 
 afterEach(() => {

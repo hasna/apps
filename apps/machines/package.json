@@ -30,7 +30,11 @@
     "schemas",
     "scripts/consumer-conformance.mjs",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "CODE_OF_CONDUCT.md"
   ],
   "scripts": {
     "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external @hasna/events --external @hasna/events/* --external pg && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @hasna/events --external @hasna/events/* --external @modelcontextprotocol/sdk --external pg && bun build src/agent/index.ts --outdir dist/agent --target bun && bun build src/index.ts src/storage.ts src/consumer.ts --outdir dist --target bun --external @hasna/events --external @hasna/events/* --external pg && tsc --emitDeclarationOnly --outDir dist",

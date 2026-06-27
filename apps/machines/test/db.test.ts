@@ -19,6 +19,7 @@ const HEARTBEAT_COLUMNS = [
   "storage_sync_last_error",
   "doctor_summary_json",
   "private_metadata",
+  "observed_at",
 ];
 
 describe("database", () => {

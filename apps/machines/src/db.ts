@@ -31,6 +31,7 @@ const AGENT_HEARTBEAT_COLUMNS: Array<{ name: string; definition: string }> = [
   { name: "storage_sync_last_error", definition: "TEXT" },
   { name: "doctor_summary_json", definition: "TEXT" },
   { name: "private_metadata", definition: "INTEGER NOT NULL DEFAULT 0" },
+  { name: "observed_at", definition: "TEXT" },
 ];
 
 function createTables(db: Database): void {
@@ -53,6 +54,7 @@ function createTables(db: Database): void {
       storage_sync_last_error TEXT,
       doctor_summary_json TEXT,
       private_metadata INTEGER NOT NULL DEFAULT 0,
+      observed_at TEXT,
       PRIMARY KEY (machine_id, pid)
     )
   `);
@@ -181,12 +183,13 @@ export function upsertHeartbeat(
        uptime_seconds,
        tool_versions_json,
        tailscale_json,
-       storage_sync_status,
-       storage_sync_last_error,
-       doctor_summary_json,
-       private_metadata
-     )
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	       storage_sync_status,
+	       storage_sync_last_error,
+	       doctor_summary_json,
+	       private_metadata,
+	       observed_at
+	     )
+	     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(machine_id, pid) DO UPDATE SET
        status = excluded.status,
        updated_at = excluded.updated_at,
@@ -199,10 +202,11 @@ export function upsertHeartbeat(
        uptime_seconds = excluded.uptime_seconds,
        tool_versions_json = excluded.tool_versions_json,
        tailscale_json = excluded.tailscale_json,
-       storage_sync_status = excluded.storage_sync_status,
-       storage_sync_last_error = excluded.storage_sync_last_error,
-       doctor_summary_json = excluded.doctor_summary_json,
-       private_metadata = excluded.private_metadata`
+	       storage_sync_status = excluded.storage_sync_status,
+	       storage_sync_last_error = excluded.storage_sync_last_error,
+	       doctor_summary_json = excluded.doctor_summary_json,
+	       private_metadata = excluded.private_metadata,
+	       observed_at = excluded.observed_at`
   ).run(
     machineId,
     pid,
@@ -218,10 +222,11 @@ export function upsertHeartbeat(
     metadata.toolVersions ? JSON.stringify(metadata.toolVersions) : null,
     metadata.tailscale ? JSON.stringify(metadata.tailscale) : null,
     metadata.storageSyncStatus ?? null,
-    metadata.storageSyncLastError ?? null,
-    metadata.doctorSummary ? JSON.stringify(metadata.doctorSummary) : null,
-    metadata.privateMetadata ? 1 : 0,
-  );
+	    metadata.storageSyncLastError ?? null,
+	    metadata.doctorSummary ? JSON.stringify(metadata.doctorSummary) : null,
+	    metadata.privateMetadata ? 1 : 0,
+	    new Date().toISOString(),
+	  );
 }
 
 export function getLocalMachineId(): string {
@@ -246,6 +251,92 @@ export interface StoredHeartbeat {
   storage_sync_last_error: string | null;
   doctor_summary_json: string | null;
   private_metadata: number;
+  observed_at: string | null;
+}
+
+export interface HeartbeatSnapshot {
+  machineId: string;
+  pid: number;
+  status: "online" | "offline";
+  updatedAt: string;
+  daemonVersion?: string | null;
+  agentMode?: string | null;
+  platform?: string | null;
+  osVersion?: string | null;
+  osBuild?: string | null;
+  arch?: string | null;
+  uptimeSeconds?: number | null;
+  toolVersions?: Record<string, unknown> | null;
+  tailscale?: Record<string, unknown> | null;
+  storageSyncStatus?: string | null;
+  storageSyncLastError?: string | null;
+  doctorSummary?: Record<string, unknown> | null;
+  privateMetadata?: boolean;
+  observedAt?: string | null;
+}
+
+export function upsertHeartbeatSnapshot(snapshot: HeartbeatSnapshot): void {
+  const observedAt = snapshot.observedAt ?? new Date().toISOString();
+  const db = getDb();
+  db.query(
+    `INSERT INTO agent_heartbeats (
+       machine_id,
+       pid,
+       status,
+       updated_at,
+       daemon_version,
+       agent_mode,
+       platform,
+       os_version,
+       os_build,
+       arch,
+       uptime_seconds,
+       tool_versions_json,
+       tailscale_json,
+       storage_sync_status,
+       storage_sync_last_error,
+       doctor_summary_json,
+       private_metadata,
+       observed_at
+     )
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(machine_id, pid) DO UPDATE SET
+       status = excluded.status,
+       updated_at = excluded.updated_at,
+       daemon_version = excluded.daemon_version,
+       agent_mode = excluded.agent_mode,
+       platform = excluded.platform,
+       os_version = excluded.os_version,
+       os_build = excluded.os_build,
+       arch = excluded.arch,
+       uptime_seconds = excluded.uptime_seconds,
+       tool_versions_json = excluded.tool_versions_json,
+       tailscale_json = excluded.tailscale_json,
+       storage_sync_status = excluded.storage_sync_status,
+       storage_sync_last_error = excluded.storage_sync_last_error,
+       doctor_summary_json = excluded.doctor_summary_json,
+       private_metadata = excluded.private_metadata,
+       observed_at = excluded.observed_at`
+  ).run(
+    snapshot.machineId,
+    snapshot.pid,
+    snapshot.status,
+    snapshot.updatedAt,
+    snapshot.daemonVersion ?? null,
+    snapshot.agentMode ?? null,
+    snapshot.platform ?? null,
+    snapshot.osVersion ?? null,
+    snapshot.osBuild ?? null,
+    snapshot.arch ?? null,
+    snapshot.uptimeSeconds == null ? null : Math.max(0, Math.floor(snapshot.uptimeSeconds)),
+    snapshot.toolVersions ? JSON.stringify(snapshot.toolVersions) : null,
+    snapshot.tailscale ? JSON.stringify(snapshot.tailscale) : null,
+    snapshot.storageSyncStatus ?? null,
+    snapshot.storageSyncLastError ?? null,
+    snapshot.doctorSummary ? JSON.stringify(snapshot.doctorSummary) : null,
+    snapshot.privateMetadata ? 1 : 0,
+    observedAt,
+  );
 }
 
 export function listHeartbeats(machineId?: string): StoredHeartbeat[] {

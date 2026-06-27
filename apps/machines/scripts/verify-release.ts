@@ -23,6 +23,10 @@ const REQUIRED_FILES = [
   "package/scripts/consumer-conformance.mjs",
   "package/LICENSE",
   "package/README.md",
+  "package/CHANGELOG.md",
+  "package/SECURITY.md",
+  "package/CONTRIBUTING.md",
+  "package/CODE_OF_CONDUCT.md",
 ];
 const FORBIDDEN_PATTERNS = [
   /^package\/\.hasna\//,
@@ -50,7 +54,7 @@ async function main(): Promise<void> {
     const appDir = join(tmp, "app");
     mkdirSync(appDir, { recursive: true });
     await Bun.write(join(appDir, "package.json"), JSON.stringify({ type: "module", private: true }, null, 2));
-    await run(["npm", "install", "--omit=dev", "--ignore-scripts", packed], { cwd: appDir, quiet: true });
+    await run(["bun", "add", "--production", "--ignore-scripts", "--no-save", packed], { cwd: appDir, quiet: true });
     await smokeInstalledPackage(appDir);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
@@ -68,11 +72,12 @@ async function assertVersionIsPublishable(): Promise<void> {
 }
 
 async function pack(destination: string): Promise<string> {
-  const result = await run(["npm", "pack", "--json", "--pack-destination", destination], { quiet: true });
-  const parsed = JSON.parse(result.stdout) as Array<{ filename: string }>;
-  const filename = parsed[0]?.filename;
-  assert(filename, "npm pack did not return a filename");
-  return join(destination, filename);
+  const result = await run(["bun", "pm", "pack", "--destination", destination, "--ignore-scripts", "--quiet"], { quiet: true });
+  const filename = result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).at(-1);
+  assert(filename, "bun pm pack did not return a filename");
+  const packed = filename.startsWith("/") ? filename : join(destination, filename);
+  assert(existsSync(packed), `bun pm pack did not create ${packed}`);
+  return packed;
 }
 
 async function listTarball(path: string): Promise<string[]> {
@@ -110,7 +115,7 @@ function assertReleaseScripts(): void {
   assert(scripts.prepublishOnly === "bun run verify:release", "prepublishOnly must run verify:release");
 
   const files = new Set(packageJson.files ?? []);
-  for (const file of ["dist", "schemas", "scripts/consumer-conformance.mjs", "LICENSE", "README.md"]) {
+  for (const file of ["dist", "schemas", "scripts/consumer-conformance.mjs", "LICENSE", "README.md", "CHANGELOG.md", "SECURITY.md", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md"]) {
     assert(files.has(file), `package files missing ${file}`);
   }
   assert(!files.has("scripts"), "package files must not include the whole scripts directory");
@@ -165,7 +170,7 @@ function assertInstalledDependencyBinBoundary(appDir: string): void {
 }
 
 async function maybeNpmVersions(pkg: string): Promise<string[]> {
-  const result = await run(["npm", "view", pkg, "versions", "--json"], { quiet: true, allowFailure: true });
+  const result = await run(["bun", "pm", "view", pkg, "versions", "--json"], { quiet: true, allowFailure: true });
   if (result.exitCode !== 0) return [];
   const parsed = JSON.parse(result.stdout) as string[] | string;
   return Array.isArray(parsed) ? parsed : [parsed];
