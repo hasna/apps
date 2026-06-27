@@ -310,7 +310,7 @@ function selectMachines(options: AgentMachineSelectorOptions): Selection {
     offset: hasExplicitIds ? 0 : options.offset,
   });
   const topologyById = new Map(topology.machines.map((machine) => [machine.machine_id, machine]));
-  if (!hasExplicitIds && !options.topology) {
+  if (!hasExplicitIds) {
     return {
       topology,
       machines: topology.machines.map((entry) => ({ machineId: entry.machine_id, entry })),
@@ -352,7 +352,7 @@ function selectMachines(options: AgentMachineSelectorOptions): Selection {
 
 function detailRefs(machineId: string): AgentApiDetailRefs {
   return {
-    cli: `machines details --machine ${machineId} --json`,
+    cli: `machines details --machine ${shellQuote(machineId)} --json`,
     mcp: "machines_details",
     sdk: `getMachineDetails(${JSON.stringify(machineId)})`,
   };
@@ -360,7 +360,7 @@ function detailRefs(machineId: string): AgentApiDetailRefs {
 
 function routingDetailRefs(machineId: string): AgentApiDetailRefs {
   return {
-    cli: `machines route --machine ${machineId} --json`,
+    cli: `machines route --machine ${shellQuote(machineId)} --json`,
     mcp: "machines_route_resolve",
     sdk: `resolveMachineRoute(${JSON.stringify(machineId)})`,
   };
@@ -611,7 +611,7 @@ function buildCommandPlan(input: {
   const publicCommand = input.options.privateMetadata ? command : "<loop-command>";
   const cliCommand = input.route.local
     ? `bash -lc ${shellQuote(publicCommand)}`
-    : `machines ssh --machine ${input.machineId} --cmd ${shellQuote(publicCommand)}${input.options.privateMetadata ? " --private-metadata" : ""}`;
+    : `machines ssh --machine ${shellQuote(input.machineId)} --cmd ${shellQuote(publicCommand)}${input.options.privateMetadata ? " --private-metadata" : ""}`;
   let privateShellCommand: string | null = null;
   if (input.options.privateMetadata && input.route.ok) {
     try {

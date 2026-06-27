@@ -126,6 +126,14 @@ describe("agent abstraction APIs", () => {
       expect(JSON.stringify(matrix)).not.toContain("echo loop");
       expect(validateMachinesConsumerEnvelope("command_matrix", matrix)).toMatchObject({ ok: true, errors: [] });
 
+      const unsafeMachineId = "bad;touch /tmp/pwned";
+      const unsafeHealth = getFleetMachineHealth({ topology, machineIds: [unsafeMachineId], now });
+      expect(unsafeHealth.machines[0]?.detail_refs.cli).toBe("machines details --machine 'bad;touch /tmp/pwned' --json");
+      const unsafeRouting = getFleetRouting({ topology, machineIds: [unsafeMachineId], now });
+      expect(unsafeRouting.routes[0]?.detail_refs.cli).toBe("machines route --machine 'bad;touch /tmp/pwned' --json");
+      const unsafeMatrix = getCommandMatrix({ topology, machineIds: [unsafeMachineId], now });
+      expect(unsafeMatrix.commands[0]?.command.cli).toBe("machines ssh --machine 'bad;touch /tmp/pwned' --cmd '<loop-command>'");
+
       const privateMatrix = getCommandMatrix({ topology, machineIds: ["worker"], command: "echo loop", now, privateMetadata: true });
       expect(privateMatrix.commands[0]?.command).toMatchObject({
         command_ref: { preview: "echo loop", redacted: false },
@@ -183,6 +191,17 @@ describe("agent abstraction APIs", () => {
         hasMore: false,
       });
       expect(second.machines.map((machine) => machine.machine_id)).toEqual(["demo-node-01", "demo-node-00"]);
+
+      const pagedTopology = discoverMachineTopology({ includeTailscale: false, offset: 10 });
+      const fromPagedTopology = getFleetMachineHealth({ topology: pagedTopology, includeTailscale: false });
+      expect(fromPagedTopology.pagination).toMatchObject({
+        limit: 10,
+        offset: 10,
+        total: 12,
+        count: 2,
+        hasMore: false,
+      });
+      expect(fromPagedTopology.machines.map((machine) => machine.machine_id)).toEqual(["demo-node-01", "demo-node-00"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -839,7 +839,7 @@ describe("cli command handling", () => {
             redacted: true,
           },
           private_shell_command: "[redacted]",
-          cli: "machines ssh --machine worker --cmd '<loop-command>'",
+          cli: "machines ssh --machine 'worker' --cmd '<loop-command>'",
           mcp: { args: { remote_command: "<loop-command>", private_metadata: false } },
         },
       });
