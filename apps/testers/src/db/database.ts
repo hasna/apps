@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { SqliteAdapter } from "@hasna/cloud";
 import { mkdirSync, existsSync } from "fs";
 import { dirname, join } from "path";
-import { homedir } from "os";
+import { getHomeDir, migrateLegacyDirectory } from "../lib/paths.js";
 
 let db: Database | null = null;
 
@@ -18,19 +18,17 @@ function shortUuid(): string {
   return uuid().slice(0, 8);
 }
 
-function resolveDbPath(): string {
+export function resolveDbPath(): string {
   if (process.env["HASNA_TESTERS_DB_PATH"]) return process.env["HASNA_TESTERS_DB_PATH"];
   if (process.env["TESTERS_DB_PATH"]) return process.env["TESTERS_DB_PATH"];
 
-  const home = homedir();
+  const home = getHomeDir();
   const newDir = join(home, ".hasna", "testers");
   const legacyDir = join(home, ".testers");
   const newPath = join(newDir, "testers.db");
-  const legacyPath = join(legacyDir, "testers.db");
 
-  // Use legacy DB if it exists and new one doesn't yet (backward compat)
-  if (!existsSync(newPath) && existsSync(legacyPath)) {
-    return legacyPath;
+  if (!existsSync(newPath) && existsSync(legacyDir)) {
+    migrateLegacyDirectory(legacyDir, newDir);
   }
 
   if (!existsSync(newDir)) mkdirSync(newDir, { recursive: true });
