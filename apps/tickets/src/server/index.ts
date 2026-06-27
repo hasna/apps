@@ -23,8 +23,10 @@ import type { ParsedEmail } from "../email/inbound.ts";
 import { deliverWebhook } from "../lib/webhook-delivery.ts";
 import { createApiKey, listApiKeys, revokeApiKey } from "../lib/auth.ts";
 import type { TicketType, TicketStatus, Resolution, Priority, Severity, TicketSource, RelationType, WebhookEvent, AgentType } from "../types/index.ts";
+import { getPackageVersion } from "../lib/package-info";
 
 const PORT = parseInt(process.env["PORT"] ?? "19428", 10);
+const pkgVersion = getPackageVersion();
 
 function parsePaginationQuery(value: string | undefined): number | undefined {
   return value === undefined ? undefined : Number(value);
@@ -56,7 +58,7 @@ export function createApp() {
   });
 
   // ── Health ───────────────────────────────────────────────────────────────
-  app.get("/api/health", (c) => c.json({ ok: true, version: "0.1.0" }));
+  app.get("/api/health", (c) => c.json({ ok: true, version: pkgVersion }));
 
   // ── Tickets ──────────────────────────────────────────────────────────────
   app.get("/api/tickets", (c) => {

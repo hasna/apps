@@ -18,10 +18,11 @@ import { registerAgent, getAgentByName, listAgents, heartbeatAgent } from "../db
 import { createRelation, listRelations, deleteRelation } from "../db/relations.ts";
 import { listActivity } from "../db/activity.ts";
 import type { TicketType, TicketStatus, Resolution, Priority, Severity, TicketSource, RelationType } from "../types/index.ts";
+import { getPackageVersion } from "../lib/package-info";
 
 export function buildServer() {
 const server = new Server(
-  { name: "open-tickets", version: "0.1.0" },
+  { name: "open-tickets", version: getPackageVersion() },
   { capabilities: { tools: {}, resources: {} } }
 );
 

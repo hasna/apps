@@ -13,8 +13,9 @@ import { createMilestone, listMilestones, closeMilestone } from "../db/milestone
 import { createWebhook, listWebhooks, deleteWebhook } from "../db/webhooks.ts";
 import { searchTickets } from "../db/search.ts";
 import type { TicketType, Resolution, Priority, TicketStatus, RelationType, WebhookEvent } from "../types/index.ts";
+import { getPackageVersion } from "../lib/package-info";
 
-const pkg = { version: "0.1.0" };
+const pkg = { version: getPackageVersion() };
 
 // ── Output helpers ────────────────────────────────────────────────────────────
 
