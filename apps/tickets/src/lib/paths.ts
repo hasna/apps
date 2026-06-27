@@ -33,7 +33,7 @@ export function getTicketsDir(): string {
   const newDir = join(home, ".hasna", "tickets");
   const legacyDir = join(home, ".tickets");
 
-  if (existsSync(legacyDir) && !existsSync(newDir)) {
+  if (existsSync(legacyDir)) {
     copyDirectory(legacyDir, newDir);
   }
 

@@ -40,4 +40,32 @@ describe("tickets data paths", () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it("migrates legacy files when ~/.hasna/tickets already exists", () => {
+    const originalHome = process.env["HOME"];
+    const originalUserProfile = process.env["USERPROFILE"];
+    const home = mkdtempSync(join(tmpdir(), "tickets-home-existing-"));
+    const legacyDir = join(home, ".tickets");
+    const newDir = join(home, ".hasna", "tickets");
+
+    process.env["HOME"] = home;
+    delete process.env["USERPROFILE"];
+
+    try {
+      mkdirSync(legacyDir, { recursive: true });
+      mkdirSync(newDir, { recursive: true });
+      writeFileSync(join(legacyDir, "tickets.db"), "legacy-db");
+      writeFileSync(join(newDir, "config.json"), JSON.stringify({ activeModel: "new-model" }));
+
+      expect(getTicketsDir()).toBe(newDir);
+      expect(readFileSync(join(newDir, "tickets.db"), "utf8")).toBe("legacy-db");
+      expect(readFileSync(join(newDir, "config.json"), "utf8")).toContain("new-model");
+    } finally {
+      if (originalHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = originalHome;
+      if (originalUserProfile === undefined) delete process.env["USERPROFILE"];
+      else process.env["USERPROFILE"] = originalUserProfile;
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });
