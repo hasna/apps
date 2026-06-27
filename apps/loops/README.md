@@ -5,7 +5,7 @@ OpenLoops is a local CLI and daemon for persistent loops and workflows: schedule
 It supports deterministic command loops, JSON-defined workflows, and guarded CLI adapters for headless coding agents:
 
 - `claude`
-- `cursor-agent`
+- `cursor agent` or `agent`
 - `codewith exec`
 - `aicopilot run`
 - `opencode run`
@@ -78,6 +78,7 @@ loops create agent supply-chain-watch \
   --provider codewith \
   --every 15m \
   --cwd /path/to/repo \
+  --sandbox danger-full-access \
   --prompt "Check for suspicious dependency or supply-chain changes. Report only concrete findings."
 ```
 
@@ -89,6 +90,7 @@ loops create agent supply-chain-watch \
   --auth-profile account001 \
   --every 15m \
   --cwd /path/to/repo \
+  --sandbox danger-full-access \
   --prompt "Check for suspicious dependency or supply-chain changes. Report only concrete findings."
 ```
 
@@ -203,6 +205,72 @@ Use `shell: true` only when you intentionally want shell parsing:
 { "type": "command", "command": "git status --short", "shell": true }
 ```
 
+## Templates And Task Events
+
+Built-in templates turn common orchestration flows into reusable workflow JSON.
+`todos-task-worker-verifier` performs one todos task and then verifies it.
+`event-worker-verifier` handles any Hasna event envelope and then verifies the
+handling. `bounded-agent-worker-verifier` is for recurring bounded agent work:
+one worker runs a narrow objective, then a fresh verifier audits the result.
+
+```bash
+loops templates list
+loops templates render todos-task-worker-verifier \
+  --var taskId=<task-id> \
+  --var taskTitle="Fix parser" \
+  --var projectPath=/path/to/repo \
+  --var provider=codewith \
+  --var authProfilePool=account004,account005,account006 \
+  --var sandbox=danger-full-access
+loops templates create-workflow todos-task-worker-verifier \
+  --var taskId=<task-id> \
+  --var projectPath=/path/to/repo
+loops templates render event-worker-verifier \
+  --var eventId=<event-id> \
+  --var eventType=knowledge.record.created \
+  --var eventSource=knowledge \
+  --var eventJson='{"id":"<event-id>"}' \
+  --var projectPath=/path/to/repo
+loops templates render bounded-agent-worker-verifier \
+  --var objective="Check docs drift and queue tasks for gaps" \
+  --var projectPath=/path/to/repo \
+  --var provider=codewith \
+  --var authProfilePool=account004,account005 \
+  --var sandbox=danger-full-access
+```
+
+For event-driven task automation, `loops events handle todos-task` reads a
+Hasna event envelope from stdin or `HASNA_EVENT_JSON`, renders the template, and
+schedules a deduped one-shot workflow loop:
+
+```bash
+cat task-created-event.json | loops events handle todos-task \
+  --provider codewith \
+  --auth-profile-pool account004,account005,account006 \
+  --permission-mode bypass \
+  --sandbox danger-full-access
+```
+
+For other Hasna apps that expose `@hasna/events` webhooks, use the generic
+handler:
+
+```bash
+cat event.json | loops events handle generic \
+  --provider codewith \
+  --auth-profile-pool account004,account005,account006 \
+  --permission-mode bypass \
+  --sandbox danger-full-access \
+  --project-path /path/to/repo
+```
+
+This is the intended deterministic-to-agentic path: a producer creates a todos
+task, `@hasna/events` delivers `task.created`, OpenLoops creates a worker and a
+verifier workflow, and the workflow updates todos with evidence. Use account
+pools so worker and verifier steps do not burn the same profile; OpenLoops picks
+deterministically and uses a different verifier profile when the pool has at
+least two entries. Use `--dry-run` to inspect the rendered workflow and loop
+input without storing anything.
+
 ## Transcript-Driven Loops
 
 OpenLoops can turn long-form media or meeting transcripts into recurring workflow work when paired with `iapp-transcriber`. The template at `docs/workflows/transcript-feedback-to-loops.json` transcribes an authorized media URL, asks an agent to extract recurring loop candidates, authors workflow specs, and validates generated workflows before scheduling. Copy it into the target repo, replace `/path/to/repo` with that repo's absolute path, and provide `TRANSCRIBER_SOURCE_URL` through the runner environment or a private, uncommitted workflow copy before storing or scheduling it. Do not commit private or signed media URLs.
@@ -224,11 +292,52 @@ loops runs <id-or-name>
 loops pause <id-or-name>
 loops resume <id-or-name>
 loops stop <id-or-name>
+loops archive <id-or-name>
+loops unarchive <id-or-name>
 loops remove <id-or-name>
 loops run-now <id-or-name>
 ```
 
 Use `--json` for machine-readable output. Prompt bodies and run stdout/stderr are redacted by default in status output. `loops run-now` exits non-zero when the recorded run fails or times out.
+
+## Health And Hygiene
+
+```bash
+loops health --json
+loops expectations <loop-id-or-name> --json
+loops health route-tasks --project ~/.hasna/loops --task-list loop-error-self-heal --max-actions 5
+loops hygiene names --json
+loops hygiene duplicates --json
+loops hygiene scripts --json
+loops hygiene route-tasks --checks duplicates,scripts --project ~/.hasna/loops --task-list openloops-hygiene
+```
+
+`health` and `expectations` classify latest-run failures with stable
+fingerprints and bounded evidence. `health route-tasks` is the explicit
+mutating path: it upserts deduped Todos tasks for failed expectations and marks
+them with `no_tmux_dispatch=true` metadata. Use `--dry-run --json` before
+turning it into a production loop.
+
+`hygiene names` reports canonical `machine-*` or `repo-<name>-*` loop names and
+renames only with `--apply`. Apply mode writes a SQLite backup under
+`<LOOPS_DATA_DIR>/backups` before changing loop names. `hygiene duplicates`
+groups loops with the same normalized name, cwd, and schedule. `hygiene scripts`
+inventories loops whose command still references `~/.hasna/loops/scripts`.
+`hygiene route-tasks` upserts deduped Todos tasks for hygiene findings with
+stable fingerprints and `no_tmux_dispatch=true` metadata. Route commands use a
+package-managed cursor under `<LOOPS_DATA_DIR>/route-cursors.json` so bounded
+`--max-actions` runs advance through all findings over repeated scheduled runs
+instead of reprocessing only the first batch.
+
+Archive loops when retiring old automation but preserving history:
+
+```bash
+loops archive <id-or-name>
+loops list --archived
+loops list --all
+```
+
+Archived loops are hidden from the default `loops list`, excluded from daemon scheduling and doctor preflight, and cannot be run manually until restored with `loops unarchive`. `loops remove` deletes the loop record; prefer `archive` for superseded loops that may need audit history.
 
 `loops run-now` reports the manual run source:
 
@@ -283,11 +392,14 @@ The adapters intentionally use provider command surfaces instead of pretending e
 - Claude uses `claude -p --output-format json` and safe-mode/local setting sources by default.
 - Codewith uses `codewith --ask-for-approval never exec --json --ephemeral --skip-git-repo-check`.
 - AI Copilot and OpenCode use `run --format json --pure`.
-- Cursor is CLI-first for now via `cursor-agent -p`; treat output as less stable until a stronger public SDK contract is selected.
+- Cursor is CLI-first for now via `cursor agent -p`, with `agent -p` as the fallback launcher on machines that expose the standalone Cursor Agent binary; treat output as less stable until a stronger public SDK contract is selected.
 - Codex uses `codex exec --json --ephemeral --ask-for-approval never`.
 - Agent prompts are sent through child stdin instead of argv so prompt bodies do not appear in process listings.
 - When `--account` or a step `account` is set, OpenLoops resolves `accounts env <profile> --tool <tool>` before spawning the target, strips inherited tool home/API-key variables, and applies the selected profile only to that process. Missing account profiles fail before the provider binary receives the prompt.
 - `--auth-profile` and step `authProfile` are provider-native auth selectors. They currently apply to Codewith and are passed to Codewith as `--auth-profile <name>` before `exec`; they do not call OpenAccounts.
+- `--sandbox` maps to provider-native sandbox flags. Codewith/Codex accept `read-only`, `workspace-write`, or `danger-full-access`; Cursor accepts `enabled` or `disabled`.
+- `--permission-mode` maps `plan`, `auto`, and `bypass` where the provider supports it. Claude uses native permission modes, Cursor maps bypass to `--force`, and OpenCode/AICopilot map bypass to `--dangerously-skip-permissions`.
+- `--variant` is provider-specific reasoning/model effort. Claude maps it to `--effort`, Codewith/Codex map it to `model_reasoning_effort`, and OpenCode/AICopilot pass `--variant`.
 - Daemon and scheduled runs prepend common user executable directories such as `~/.local/bin` and `~/.bun/bin` before resolving provider CLIs.
 
 For production loops that can mutate repos, prefer disposable worktrees and explicit prompts that name allowed write scope.

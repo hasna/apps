@@ -56,6 +56,7 @@ export interface DaemonStatus extends DaemonProcessState {
     paused: number;
     stopped: number;
     expired: number;
+    archived: number;
   };
   runs: {
     total: number;
@@ -78,6 +79,7 @@ export function daemonStatus(store: Store, path: string = pidFilePath()): Daemon
       paused: store.countLoops("paused"),
       stopped: store.countLoops("stopped"),
       expired: store.countLoops("expired"),
+      archived: store.countLoops(undefined, { archived: true }),
     },
     runs: {
       total: store.countRuns(),

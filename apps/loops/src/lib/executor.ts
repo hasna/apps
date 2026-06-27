@@ -62,7 +62,16 @@ interface CommandSpec {
   timeoutMs: number;
   account?: AccountRef;
   accountTool?: string;
+  nativeAuthProfile?: {
+    provider: AgentProvider;
+    profile: string;
+  };
+  preflightAnyOf?: string[];
   stdin?: string;
+  allowlist?: {
+    tools?: string[];
+    commands?: string[];
+  };
 }
 
 interface MachineCommandPlan {
@@ -157,12 +166,20 @@ function metadataEnv(metadata: ExecutionMetadata): Record<string, string> {
   return env;
 }
 
+function allowlistEnv(allowlist: CommandSpec["allowlist"]): Record<string, string> {
+  const env: Record<string, string> = {};
+  if (allowlist?.tools?.length) env.LOOPS_AGENT_ALLOWED_TOOLS = allowlist.tools.join(",");
+  if (allowlist?.commands?.length) env.LOOPS_AGENT_ALLOWED_COMMANDS = allowlist.commands.join(",");
+  if (allowlist?.tools?.length || allowlist?.commands?.length) env.LOOPS_AGENT_ALLOWLIST_ENFORCEMENT = "metadata_only";
+  return env;
+}
+
 function providerCommand(provider: AgentProvider): string {
   switch (provider) {
     case "claude":
       return "claude";
     case "cursor":
-      return "cursor-agent";
+      return "sh";
     case "codewith":
       return "codewith";
     case "aicopilot":
@@ -174,33 +191,122 @@ function providerCommand(provider: AgentProvider): string {
   }
 }
 
+function codewithLikeSandbox(target: AgentTarget): "read-only" | "workspace-write" | "danger-full-access" {
+  const sandbox = target.sandbox ?? (target.permissionMode === "bypass" ? "danger-full-access" : "workspace-write");
+  if (sandbox !== "read-only" && sandbox !== "workspace-write" && sandbox !== "danger-full-access") {
+    throw new Error(`${target.provider} sandbox must be read-only, workspace-write, or danger-full-access`);
+  }
+  return sandbox;
+}
+
+function configStringValue(value: string): string {
+  return JSON.stringify(value);
+}
+
+function assertStringOption(value: unknown, label: string): void {
+  if (value !== undefined && typeof value !== "string") throw new Error(`${label} must be a string`);
+}
+
+function assertSupportedAgentOptions(target: AgentTarget): void {
+  assertStringOption(target.variant, `${target.provider}.variant`);
+  assertStringOption(target.model, `${target.provider}.model`);
+  assertStringOption(target.agent, `${target.provider}.agent`);
+  assertStringOption(target.authProfile, `${target.provider}.authProfile`);
+  if (target.authProfile !== undefined && target.provider !== "codewith") {
+    throw new Error(`${target.provider}.authProfile is supported only for codewith`);
+  }
+  if (target.permissionMode && !["default", "plan", "auto", "bypass"].includes(target.permissionMode)) {
+    throw new Error(`${target.provider}.permissionMode must be default, plan, auto, or bypass`);
+  }
+  if (target.sandbox && !["read-only", "workspace-write", "danger-full-access", "enabled", "disabled"].includes(target.sandbox)) {
+    throw new Error(`${target.provider}.sandbox is not supported: ${target.sandbox}`);
+  }
+  if (["codewith", "codex"].includes(target.provider)) {
+    if (target.permissionMode && !["default", "bypass"].includes(target.permissionMode)) {
+      throw new Error(`${target.provider}.permissionMode supports only default or bypass`);
+    }
+    if (target.sandbox) codewithLikeSandbox(target);
+    return;
+  }
+  if (target.provider === "claude") {
+    if (target.sandbox !== undefined) throw new Error("claude.sandbox is not supported");
+    return;
+  }
+  if (target.provider === "cursor") {
+    if (target.permissionMode === "auto") throw new Error("cursor.permissionMode auto is not supported; use provider-specific extraArgs for Cursor auto-review");
+    if (target.sandbox !== undefined && target.sandbox !== "enabled" && target.sandbox !== "disabled") {
+      throw new Error("cursor.sandbox must be enabled or disabled");
+    }
+    return;
+  }
+  if (target.permissionMode && !["default", "bypass"].includes(target.permissionMode)) {
+    throw new Error(`${target.provider}.permissionMode supports only default or bypass`);
+  }
+  if (target.sandbox !== undefined) throw new Error(`${target.provider}.sandbox is not supported`);
+}
+
 function agentArgs(target: AgentTarget): string[] {
+  assertSupportedAgentOptions(target);
   const isolation = target.configIsolation ?? "safe";
+  const permissionMode = target.permissionMode ?? "default";
   const args: string[] = [];
   switch (target.provider) {
     case "claude":
       if (isolation === "safe") args.push("--safe-mode", "--setting-sources", "local", "--no-session-persistence");
+      if (permissionMode !== "default") {
+        const mode =
+          permissionMode === "bypass"
+            ? "bypassPermissions"
+            : permissionMode === "plan" || permissionMode === "auto"
+              ? permissionMode
+              : undefined;
+        if (mode) args.push("--permission-mode", mode);
+      }
       args.push("-p", "--output-format", "json");
       if (target.model) args.push("--model", target.model);
+      if (target.variant) args.push("--effort", target.variant);
       if (target.agent) args.push("--agent", target.agent);
       args.push(...(target.extraArgs ?? []));
       return args;
     case "cursor":
-      args.push("-p");
+      args.push(
+        "-c",
+        [
+          "set -eu",
+          "if command -v cursor >/dev/null 2>&1; then",
+          "  exec cursor agent \"$@\"",
+          "elif command -v agent >/dev/null 2>&1; then",
+          "  exec agent \"$@\"",
+          "else",
+          "  echo 'Executable not found in PATH: cursor agent or agent' >&2",
+          "  exit 127",
+          "fi",
+        ].join("\n"),
+        "openloops-cursor",
+        "-p",
+      );
+      if (permissionMode === "plan") args.push("--mode", "plan");
+      if (permissionMode === "bypass") args.push("--force");
+      const cursorSandbox = target.sandbox ?? (isolation === "safe" ? "enabled" : undefined);
+      if (cursorSandbox) {
+        if (cursorSandbox !== "enabled" && cursorSandbox !== "disabled") throw new Error("cursor sandbox must be enabled or disabled");
+        args.push("--sandbox", cursorSandbox);
+      }
       if (target.model) args.push("--model", target.model);
       if (target.agent) args.push("--agent", target.agent);
       args.push(...(target.extraArgs ?? []));
       return args;
     case "codewith":
+      args.push(...(target.authProfile ? ["--auth-profile", target.authProfile] : []));
+      if (target.variant) args.push("-c", `model_reasoning_effort=${configStringValue(target.variant)}`);
       args.push(
-        ...(target.authProfile ? ["--auth-profile", target.authProfile] : []),
         "--ask-for-approval",
         "never",
         "exec",
         "--json",
         "--ephemeral",
         "--sandbox",
-        "workspace-write",
+        codewithLikeSandbox(target),
         "--skip-git-repo-check",
       );
       if (isolation === "safe") args.push("--ignore-rules");
@@ -210,7 +316,8 @@ function agentArgs(target: AgentTarget): string[] {
       args.push(...(target.extraArgs ?? []));
       return args;
     case "codex":
-      args.push("exec", "--json", "--ephemeral", "--ask-for-approval", "never", "--sandbox", "workspace-write");
+      if (target.variant) args.push("-c", `model_reasoning_effort=${configStringValue(target.variant)}`);
+      args.push("exec", "--json", "--ephemeral", "--ask-for-approval", "never", "--sandbox", codewithLikeSandbox(target));
       if (isolation === "safe") args.push("--ignore-rules");
       if (target.cwd) args.push("--cd", target.cwd);
       if (target.model) args.push("--model", target.model);
@@ -219,16 +326,20 @@ function agentArgs(target: AgentTarget): string[] {
     case "aicopilot":
       args.push("run", "--format", "json");
       if (isolation === "safe") args.push("--pure");
+      if (permissionMode === "bypass") args.push("--dangerously-skip-permissions");
       if (target.cwd) args.push("--dir", target.cwd);
       if (target.model) args.push("--model", target.model);
+      if (target.variant) args.push("--variant", target.variant);
       if (target.agent) args.push("--agent", target.agent);
       args.push(...(target.extraArgs ?? []));
       return args;
     case "opencode":
       args.push("run", "--format", "json");
       if (isolation === "safe") args.push("--pure");
+      if (permissionMode === "bypass") args.push("--dangerously-skip-permissions");
       if (target.cwd) args.push("--dir", target.cwd);
       if (target.model) args.push("--model", target.model);
+      if (target.variant) args.push("--variant", target.variant);
       if (target.agent) args.push("--agent", target.agent);
       args.push(...(target.extraArgs ?? []));
       return args;
@@ -257,7 +368,12 @@ function commandSpec(target: ExecutableTarget): CommandSpec {
     timeoutMs: agentTarget.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     account: agentTarget.account,
     accountTool: agentTarget.account?.tool ?? accountToolForProvider(agentTarget.provider),
+    nativeAuthProfile: agentTarget.authProfile
+      ? { provider: agentTarget.provider, profile: agentTarget.authProfile }
+      : undefined,
+    preflightAnyOf: agentTarget.provider === "cursor" ? ["cursor", "agent"] : undefined,
     stdin: agentTarget.prompt,
+    allowlist: agentTarget.allowlist,
   };
 }
 
@@ -273,6 +389,7 @@ function executionEnv(
     Object.assign(env, accountEnv);
   }
   Object.assign(env, spec.env ?? {});
+  Object.assign(env, allowlistEnv(spec.allowlist));
   env.PATH = normalizeExecutionPath(env);
   Object.assign(env, metadataEnv(metadata));
   return env;
@@ -316,6 +433,9 @@ function remoteBootstrapLines(spec: CommandSpec, metadata: ExecutionMetadata): s
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
     lines.push(`export ${key}=${shellQuote(value)}`);
   }
+  for (const [key, value] of Object.entries(allowlistEnv(spec.allowlist))) {
+    lines.push(`export ${key}=${shellQuote(value)}`);
+  }
   return lines;
 }
 
@@ -337,11 +457,32 @@ function remoteScript(spec: CommandSpec, metadata: ExecutionMetadata): string {
 }
 
 function remotePreflightScript(spec: CommandSpec, metadata: ExecutionMetadata): string {
-  return [
+  const lines = [
     ...remoteBootstrapLines(spec, metadata),
     "command -v bash >/dev/null 2>&1",
     `command -v ${shellQuote(spec.shell ? "sh" : spec.command)} >/dev/null 2>&1`,
-  ].join("\n");
+  ];
+  if (spec.preflightAnyOf?.length) {
+    lines.push(
+      `if ! ${spec.preflightAnyOf.map((command) => `command -v ${shellQuote(command)} >/dev/null 2>&1`).join(" && ! ")}; then`,
+      `  echo 'none of required executables found: ${spec.preflightAnyOf.join(", ")}' >&2`,
+      "  exit 127",
+      "fi",
+    );
+  }
+  if (spec.nativeAuthProfile?.provider === "codewith") {
+    lines.push(
+      `__OPENLOOPS_CODEWITH_PROFILES="$(${shellQuote(spec.command)} profile list)" || {`,
+      `  printf '%s\\n' ${shellQuote("codewith auth profile preflight failed")} >&2`,
+      "  exit 1",
+      "}",
+      `if ! printf '%s\\n' "$__OPENLOOPS_CODEWITH_PROFILES" | awk 'NR > 1 { print $1 }' | grep -Fx ${shellQuote(spec.nativeAuthProfile.profile)} >/dev/null; then`,
+      `  printf '%s\\n' ${shellQuote(`codewith auth profile not found: ${spec.nativeAuthProfile.profile}`)} >&2`,
+      "  exit 1",
+      "fi",
+    );
+  }
+  return lines.join("\n");
 }
 
 function transportEnv(opts: ExecuteOptions): NodeJS.ProcessEnv {
@@ -353,6 +494,34 @@ function transportEnv(opts: ExecuteOptions): NodeJS.ProcessEnv {
   }
   env.PATH = normalizeExecutionPath(env);
   return env;
+}
+
+function preflightNativeAuthProfile(spec: CommandSpec, env: NodeJS.ProcessEnv): void {
+  if (!spec.nativeAuthProfile) return;
+  if (spec.nativeAuthProfile.provider !== "codewith") return;
+  const result = spawnSync(spec.command, ["profile", "list"], {
+    encoding: "utf8",
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 15_000,
+  });
+  if (result.error) {
+    throw new Error(`codewith auth profile preflight failed: ${result.error.message}`);
+  }
+  if ((result.status ?? 1) !== 0) {
+    const detail = (result.stderr || result.stdout || `exit ${result.status ?? "unknown"}`).trim();
+    throw new Error(`codewith auth profile preflight failed${detail ? `: ${detail}` : ""}`);
+  }
+  const profiles = new Set(
+    (result.stdout || "")
+      .split(/\r?\n/)
+      .slice(1)
+      .map((line) => line.trim().split(/\s+/)[0])
+      .filter(Boolean),
+  );
+  if (!profiles.has(spec.nativeAuthProfile.profile)) {
+    throw new Error(`codewith auth profile not found: ${spec.nativeAuthProfile.profile}`);
+  }
 }
 
 function preflightRemoteSpec(
@@ -509,6 +678,10 @@ export function preflightTarget(
   if (!spec.shell && !executableExists(spec.command, env)) {
     throw new Error(commandNotFoundMessage(spec.command, env));
   }
+  if (spec.preflightAnyOf?.length && !spec.preflightAnyOf.some((command) => executableExists(command, env))) {
+    throw new Error(`none of required executables found: ${spec.preflightAnyOf.join(", ")}`);
+  }
+  preflightNativeAuthProfile(spec, env);
   return {
     command: spec.command,
     accountProfile: spec.account?.profile,
@@ -539,6 +712,30 @@ export async function executeTarget(
       stdout: "",
       stderr: "",
       error: commandNotFoundMessage(spec.command, env),
+      startedAt,
+      finishedAt: nowIso(),
+      durationMs: 0,
+    };
+  }
+  if (spec.preflightAnyOf?.length && !spec.preflightAnyOf.some((command) => executableExists(command, env))) {
+    return {
+      status: "failed",
+      stdout,
+      stderr,
+      error: `none of required executables found: ${spec.preflightAnyOf.join(", ")}`,
+      startedAt,
+      finishedAt: nowIso(),
+      durationMs: 0,
+    };
+  }
+  try {
+    preflightNativeAuthProfile(spec, env);
+  } catch (err) {
+    return {
+      status: "failed",
+      stdout: "",
+      stderr: "",
+      error: err instanceof Error ? err.message : String(err),
       startedAt,
       finishedAt: nowIso(),
       durationMs: 0,
@@ -635,6 +832,32 @@ export async function executeTarget(
 export async function executeLoop(loop: Loop, run: LoopRun, opts: ExecuteOptions = {}): Promise<ExecutorResult> {
   if (loop.target.type === "workflow") {
     throw new Error("workflow loop targets must be executed with executeLoopTarget");
+  }
+  if (loop.target.preflight?.beforeRun) {
+    const startedAt = nowIso();
+    try {
+      preflightTarget(
+        loop.target,
+        {
+          loopId: loop.id,
+          loopName: loop.name,
+          runId: run.id,
+          scheduledFor: run.scheduledFor,
+        },
+        { ...opts, machine: opts.machine ?? loop.machine },
+      );
+    } catch (error) {
+      const finishedAt = nowIso();
+      return {
+        status: "failed",
+        stdout: "",
+        stderr: "",
+        error: `runtime preflight failed: ${error instanceof Error ? error.message : String(error)}`,
+        startedAt,
+        finishedAt,
+        durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
+      };
+    }
   }
   return executeTarget(
     loop.target,

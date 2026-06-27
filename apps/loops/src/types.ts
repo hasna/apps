@@ -73,6 +73,10 @@ export interface DynamicSchedule {
 
 export type ScheduleSpec = OnceSchedule | IntervalSchedule | CronSchedule | DynamicSchedule;
 
+export interface RuntimePreflightPolicy {
+  beforeRun?: boolean;
+}
+
 export interface CommandTarget {
   type: "command";
   command: string;
@@ -82,11 +86,22 @@ export interface CommandTarget {
   env?: Record<string, string>;
   timeoutMs?: number;
   account?: AccountRef;
+  preflight?: RuntimePreflightPolicy;
 }
 
 export type AgentProvider = "claude" | "cursor" | "codewith" | "aicopilot" | "opencode" | "codex";
 
 export type AgentConfigIsolation = "safe" | "none";
+
+export type AgentPermissionMode = "default" | "plan" | "auto" | "bypass";
+
+export type AgentSandbox = "read-only" | "workspace-write" | "danger-full-access" | "enabled" | "disabled";
+
+export interface AgentAllowlistSpec {
+  tools?: string[];
+  commands?: string[];
+  enforcement?: "metadata_only";
+}
 
 export interface AgentTarget {
   type: "agent";
@@ -94,12 +109,17 @@ export interface AgentTarget {
   prompt: string;
   cwd?: string;
   model?: string;
+  variant?: string;
   agent?: string;
   authProfile?: string;
   extraArgs?: string[];
   timeoutMs?: number;
   configIsolation?: AgentConfigIsolation;
+  permissionMode?: AgentPermissionMode;
+  sandbox?: AgentSandbox;
+  allowlist?: AgentAllowlistSpec;
   account?: AccountRef;
+  preflight?: RuntimePreflightPolicy;
 }
 
 export interface WorkflowTarget {
@@ -107,6 +127,7 @@ export interface WorkflowTarget {
   workflowId: string;
   input?: Record<string, string>;
   timeoutMs?: number;
+  preflight?: RuntimePreflightPolicy;
 }
 
 export type ExecutableTarget = CommandTarget | AgentTarget;
@@ -149,6 +170,23 @@ export interface CreateWorkflowInput {
   goal?: GoalSpec;
   steps: WorkflowStep[];
   version?: number;
+}
+
+export type LoopTemplateKind = "workflow" | "loop";
+
+export interface LoopTemplateVariable {
+  name: string;
+  description?: string;
+  required?: boolean;
+  default?: string;
+}
+
+export interface LoopTemplateSummary {
+  id: string;
+  name: string;
+  description: string;
+  kind: LoopTemplateKind;
+  variables: LoopTemplateVariable[];
 }
 
 export interface WorkflowRun {
@@ -205,6 +243,8 @@ export interface Loop {
   name: string;
   description?: string;
   status: LoopStatus;
+  archivedAt?: string;
+  archivedFromStatus?: LoopStatus;
   schedule: ScheduleSpec;
   target: LoopTarget;
   goal?: GoalSpec;

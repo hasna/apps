@@ -38,6 +38,8 @@ interface LoopRow {
   name: string;
   description: string | null;
   status: string;
+  archived_at: string | null;
+  archived_from_status: string | null;
   schedule_json: string;
   target_json: string;
   goal_json: string | null;
@@ -223,6 +225,8 @@ function rowToLoop(row: LoopRow): Loop {
     name: row.name,
     description: row.description ?? undefined,
     status: row.status as LoopStatus,
+    archivedAt: row.archived_at ?? undefined,
+    archivedFromStatus: row.archived_from_status ? (row.archived_from_status as LoopStatus) : undefined,
     schedule: JSON.parse(row.schedule_json) as Loop["schedule"],
     target: JSON.parse(row.target_json) as Loop["target"],
     goal: row.goal_json ? (JSON.parse(row.goal_json) as Loop["goal"]) : undefined,
@@ -490,6 +494,8 @@ export class Store {
         name TEXT NOT NULL,
         description TEXT,
         status TEXT NOT NULL,
+        archived_at TEXT,
+        archived_from_status TEXT,
         schedule_json TEXT NOT NULL,
         target_json TEXT NOT NULL,
         goal_json TEXT,
@@ -695,6 +701,8 @@ export class Store {
     // start. Check for the column first so the failing statement never runs.
     this.addColumnIfMissing("loops", "machine_json", "TEXT");
     this.addColumnIfMissing("loops", "goal_json", "TEXT");
+    this.addColumnIfMissing("loops", "archived_at", "TEXT");
+    this.addColumnIfMissing("loops", "archived_from_status", "TEXT");
     this.addColumnIfMissing("loop_runs", "goal_run_id", "TEXT");
     this.addColumnIfMissing("workflow_specs", "goal_json", "TEXT");
     this.addColumnIfMissing("workflow_runs", "goal_run_id", "TEXT");
@@ -709,6 +717,9 @@ export class Store {
     this.db
       .query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)")
       .run("0003_goals", nowIso());
+    this.db
+      .query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)")
+      .run("0004_loop_archive_metadata", nowIso());
   }
 
   /**
@@ -800,13 +811,32 @@ export class Store {
     })();
   }
 
-  listLoops(opts: { status?: LoopStatus; limit?: number } = {}): Loop[] {
+  listLoops(opts: { status?: LoopStatus; limit?: number; archived?: boolean; includeArchived?: boolean } = {}): Loop[] {
     const limit = opts.limit ?? 200;
-    const rows = opts.status
-      ? this.db
-          .query<LoopRow, [string, number]>("SELECT * FROM loops WHERE status = ? ORDER BY next_run_at ASC LIMIT ?")
-          .all(opts.status, limit)
-      : this.db.query<LoopRow, [number]>("SELECT * FROM loops ORDER BY status ASC, next_run_at ASC LIMIT ?").all(limit);
+    let rows: LoopRow[];
+    if (opts.status && opts.archived) {
+      rows = this.db
+        .query<LoopRow, [string, number]>("SELECT * FROM loops WHERE status = ? AND archived_at IS NOT NULL ORDER BY next_run_at ASC LIMIT ?")
+        .all(opts.status, limit);
+    } else if (opts.status && opts.includeArchived) {
+      rows = this.db
+        .query<LoopRow, [string, number]>("SELECT * FROM loops WHERE status = ? ORDER BY next_run_at ASC LIMIT ?")
+        .all(opts.status, limit);
+    } else if (opts.status) {
+      rows = this.db
+        .query<LoopRow, [string, number]>("SELECT * FROM loops WHERE status = ? AND archived_at IS NULL ORDER BY next_run_at ASC LIMIT ?")
+        .all(opts.status, limit);
+    } else if (opts.archived) {
+      rows = this.db
+        .query<LoopRow, [number]>("SELECT * FROM loops WHERE archived_at IS NOT NULL ORDER BY archived_at DESC LIMIT ?")
+        .all(limit);
+    } else if (opts.includeArchived) {
+      rows = this.db.query<LoopRow, [number]>("SELECT * FROM loops ORDER BY status ASC, next_run_at ASC LIMIT ?").all(limit);
+    } else {
+      rows = this.db
+        .query<LoopRow, [number]>("SELECT * FROM loops WHERE archived_at IS NULL ORDER BY status ASC, next_run_at ASC LIMIT ?")
+        .all(limit);
+    }
     return rows.map(rowToLoop);
   }
 
@@ -815,6 +845,7 @@ export class Store {
       .query<LoopRow, [string]>(
         `SELECT * FROM loops
          WHERE status = 'active'
+           AND archived_at IS NULL
            AND next_run_at IS NOT NULL
            AND next_run_at <= ?
          ORDER BY next_run_at ASC`,
@@ -854,6 +885,76 @@ export class Store {
     const after = this.getLoop(id);
     if (!after) throw new Error(`loop not found after update: ${id}`);
     return after;
+  }
+
+  renameLoop(id: string, name: string, opts: DaemonLeaseFence = {}): Loop {
+    const current = this.getLoop(id);
+    if (!current) throw new Error(`loop not found: ${id}`);
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error("loop name must not be empty");
+    const updated = (opts.now ?? new Date()).toISOString();
+    this.db
+      .query(
+        `UPDATE loops SET name=$name, updated_at=$updated
+         WHERE id=$id
+           AND ($daemonLeaseId IS NULL OR EXISTS (
+             SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+           ))`,
+      )
+      .run({
+        $id: id,
+        $name: trimmed,
+        $updated: updated,
+        $daemonLeaseId: opts.daemonLeaseId ?? null,
+        $now: updated,
+      });
+    const after = this.getLoop(id);
+    if (!after) throw new Error(`loop not found after rename: ${id}`);
+    return after;
+  }
+
+  archiveLoop(idOrName: string): Loop {
+    const loop = this.requireLoop(idOrName);
+    if (loop.archivedAt) return loop;
+    const updated = nowIso();
+    const archivedStatus: LoopStatus = loop.status === "active" ? "paused" : loop.status;
+    this.db
+      .query(
+        `UPDATE loops
+         SET status=$status, archived_at=$archivedAt, archived_from_status=$archivedFromStatus, updated_at=$updated
+         WHERE id=$id`,
+      )
+      .run({
+        $id: loop.id,
+        $status: archivedStatus,
+        $archivedAt: updated,
+        $archivedFromStatus: loop.status,
+        $updated: updated,
+      });
+    const archived = this.getLoop(loop.id);
+    if (!archived) throw new Error(`loop not found after archive: ${loop.id}`);
+    return archived;
+  }
+
+  unarchiveLoop(idOrName: string): Loop {
+    const loop = this.requireLoop(idOrName);
+    if (!loop.archivedAt) return loop;
+    const updated = nowIso();
+    const restoredStatus = loop.archivedFromStatus ?? loop.status;
+    this.db
+      .query(
+        `UPDATE loops
+         SET status=$status, archived_at=NULL, archived_from_status=NULL, updated_at=$updated
+         WHERE id=$id`,
+      )
+      .run({
+        $id: loop.id,
+        $status: restoredStatus,
+        $updated: updated,
+      });
+    const unarchived = this.getLoop(loop.id);
+    if (!unarchived) throw new Error(`loop not found after unarchive: ${loop.id}`);
+    return unarchived;
   }
 
   deleteLoop(idOrName: string): boolean {
@@ -1908,11 +2009,17 @@ export class Store {
     opts: DaemonLeaseFence = {},
   ): ClaimRunResult | undefined {
     const startedAt = now.toISOString();
-    const leaseExpiresAt = new Date(now.getTime() + loop.leaseMs).toISOString();
 
     this.db.exec("BEGIN IMMEDIATE");
     try {
       this.assertDaemonLeaseFence(opts, startedAt);
+      const currentLoop = this.getLoop(loop.id);
+      if (!currentLoop || currentLoop.archivedAt) {
+        this.db.exec("COMMIT");
+        return undefined;
+      }
+      loop = currentLoop;
+      const leaseExpiresAt = new Date(now.getTime() + loop.leaseMs).toISOString();
       const existing = this.getRunBySlot(loop.id, scheduledFor);
 
       if (existing) {
@@ -2198,7 +2305,7 @@ export class Store {
   expireLoops(now: Date = new Date(), opts: DaemonLeaseFence = {}): Loop[] {
     const rows = this.db
       .query<LoopRow, [string]>(
-        "SELECT * FROM loops WHERE status = 'active' AND expires_at IS NOT NULL AND expires_at <= ?",
+        "SELECT * FROM loops WHERE status = 'active' AND archived_at IS NULL AND expires_at IS NOT NULL AND expires_at <= ?",
       )
       .all(now.toISOString());
     const expired: Loop[] = [];
@@ -2209,10 +2316,25 @@ export class Store {
     return expired;
   }
 
-  countLoops(status?: LoopStatus): number {
-    const row = status
-      ? this.db.query<{ count: number }, [string]>("SELECT COUNT(*) AS count FROM loops WHERE status = ?").get(status)
-      : this.db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM loops").get();
+  countLoops(status?: LoopStatus, opts: { archived?: boolean; includeArchived?: boolean } = {}): number {
+    let row: { count: number } | null | undefined;
+    if (status && opts.archived) {
+      row = this.db
+        .query<{ count: number }, [string]>("SELECT COUNT(*) AS count FROM loops WHERE status = ? AND archived_at IS NOT NULL")
+        .get(status);
+    } else if (status && opts.includeArchived) {
+      row = this.db.query<{ count: number }, [string]>("SELECT COUNT(*) AS count FROM loops WHERE status = ?").get(status);
+    } else if (status) {
+      row = this.db
+        .query<{ count: number }, [string]>("SELECT COUNT(*) AS count FROM loops WHERE status = ? AND archived_at IS NULL")
+        .get(status);
+    } else if (opts.archived) {
+      row = this.db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM loops WHERE archived_at IS NOT NULL").get();
+    } else if (opts.includeArchived) {
+      row = this.db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM loops").get();
+    } else {
+      row = this.db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM loops WHERE archived_at IS NULL").get();
+    }
     return row?.count ?? 0;
   }
 

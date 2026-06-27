@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
@@ -104,6 +104,55 @@ describe("executeLoop", () => {
       store.close();
       if (oldHome === undefined) delete process.env.HOME;
       else process.env.HOME = oldHome;
+    }
+  });
+
+  test("cursor preflight requires cursor or agent binary, not only sh", () => {
+    const home = mkdtempSync(join(tmpdir(), "loops-cursor-preflight-"));
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "cursor-preflight",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "cursor",
+          prompt: "say ok",
+          configIsolation: "safe",
+        },
+      });
+      expect(() =>
+        preflightTarget(loop.target as any, {}, { env: { PATH: "/usr/bin:/bin", HOME: home } }),
+      ).toThrow("none of required executables found");
+    } finally {
+      store.close();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("cursor preflight accepts the standalone agent binary", () => {
+    const home = mkdtempSync(join(tmpdir(), "loops-cursor-preflight-ok-"));
+    const binDir = join(home, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "agent");
+    writeFileSync(fake, "#!/usr/bin/env bash\nexit 0\n");
+    chmodSync(fake, 0o755);
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "cursor-preflight-ok",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "cursor",
+          prompt: "say ok",
+          configIsolation: "safe",
+        },
+      });
+      expect(preflightTarget(loop.target as any, {}, { env: { PATH: `${binDir}:/usr/bin:/bin`, HOME: home } }).command).toBe("sh");
+    } finally {
+      store.close();
+      rmSync(home, { recursive: true, force: true });
     }
   });
 
@@ -253,6 +302,91 @@ describe("executeLoop", () => {
     }
   });
 
+  test("remote codewith auth profile preflight quotes missing profile errors safely", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    const marker = join(root, "marker");
+    const scriptFile = join(root, "preflight-script");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFileSync(
+      fake,
+      "#!/usr/bin/env bash\nif [[ \"${1:-}\" == \"profile\" && \"${2:-}\" == \"list\" ]]; then printf 'NAME ACCOUNT PROVIDER MODE PLAN\\naccount001 - ChatGPT chatgpt Pro\\n'; exit 0; fi\nexit 0\n",
+    );
+    chmodSync(fake, 0o755);
+    const maliciousProfile = `missing'; touch ${marker}; echo '`;
+
+    try {
+      expect(() =>
+        preflightTarget(
+          {
+            type: "agent",
+            provider: "codewith",
+            authProfile: maliciousProfile,
+            prompt: "run",
+            configIsolation: "safe",
+          },
+          {},
+          {
+            machine: { id: "remote-test", local: false, route: "ssh" },
+            machineResolver: (machine) => ({ ...machine, local: false, route: "ssh" }),
+            env: { HOME: home, PATH: "/usr/bin:/bin" },
+            machineCommandResolver: () => ({
+              command: "bash",
+              args: ["-c", `cat > ${JSON.stringify(scriptFile)}; HOME=${JSON.stringify(home)} PATH=/usr/bin:/bin bash ${JSON.stringify(scriptFile)}`],
+              source: "ssh",
+            }),
+          },
+        ),
+      ).toThrow("codewith auth profile not found");
+      expect(existsSync(marker)).toBe(false);
+      expect(readFileSync(scriptFile, "utf8")).toContain("codewith auth profile not found");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("remote codewith auth profile preflight fails when profile list exits nonzero even if stdout matches", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-nonzero-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFileSync(
+      fake,
+      "#!/usr/bin/env bash\nif [[ \"${1:-}\" == \"profile\" && \"${2:-}\" == \"list\" ]]; then printf 'NAME ACCOUNT PROVIDER MODE PLAN\\naccount001 - ChatGPT chatgpt Pro\\n'; exit 17; fi\nexit 0\n",
+    );
+    chmodSync(fake, 0o755);
+
+    try {
+      expect(() =>
+        preflightTarget(
+          {
+            type: "agent",
+            provider: "codewith",
+            authProfile: "account001",
+            prompt: "run",
+            configIsolation: "safe",
+          },
+          {},
+          {
+            machine: { id: "remote-test", local: false, route: "ssh" },
+            machineResolver: (machine) => ({ ...machine, local: false, route: "ssh" }),
+            env: { HOME: home, PATH: "/usr/bin:/bin" },
+            machineCommandResolver: () => ({
+              command: "bash",
+              args: ["-c", `HOME=${JSON.stringify(home)} PATH=/usr/bin:/bin bash -s`],
+              source: "ssh",
+            }),
+          },
+        ),
+      ).toThrow("codewith auth profile preflight failed");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("sends agent prompts on stdin instead of process argv for every provider adapter", async () => {
     if (!existsSync("/proc/self/cmdline")) return;
     const secret = "SECRET_ARGV_PROMPT_VALUE";
@@ -264,12 +398,17 @@ describe("executeLoop", () => {
       ["codewith", "codewith"],
       ["codex", "codex"],
       ["opencode", "opencode"],
-      ["cursor", "cursor-agent"],
+      ["cursor", "agent"],
       ["aicopilot", "aicopilot"],
     ] as const;
-    for (const [, binary] of providers) {
+    for (const [provider, binary] of providers) {
       const fake = join(binDir, binary);
-      await Bun.write(fake, "#!/usr/bin/env bash\nsleep 0.3\nprintf 'stdin:'\ncat\n");
+      await Bun.write(
+        fake,
+        provider === "cursor"
+          ? "#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${1:-}\" != \"-p\" ]]; then echo 'missing cursor print flag' >&2; exit 64; fi\nsleep 0.3\nprintf 'stdin:'\ncat\n"
+          : "#!/usr/bin/env bash\nsleep 0.3\nprintf 'stdin:'\ncat\n",
+      );
       chmodSync(fake, 0o755);
     }
 

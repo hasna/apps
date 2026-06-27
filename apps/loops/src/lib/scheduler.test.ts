@@ -42,6 +42,35 @@ describe("scheduler", () => {
     }
   });
 
+  test("does not schedule archived loops", async () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "archived-due",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const archived = store.archiveLoop(loop.id);
+      const out = await tick({
+        store,
+        runnerId: "test",
+        now: () => new Date("2026-01-01T00:00:00Z"),
+        execute: async () => result("succeeded", "2026-01-01T00:00:00.000Z"),
+      });
+      expect(out.completed).toHaveLength(0);
+      expect(out.claimed).toHaveLength(0);
+      expect(store.listRuns({ loopId: loop.id })).toHaveLength(0);
+      expect(store.getLoop(loop.id)?.archivedAt).toBe(archived.archivedAt);
+      expect(manualRunSource(archived, manualRunScheduledFor(archived, new Date("2026-01-01T00:00:00Z")), new Date("2026-01-01T00:00:00Z"))).toBe("ad_hoc");
+      expect(shouldAdvanceManualRun(archived, archived.nextRunAt!, new Date("2026-01-01T00:00:00Z"))).toBe(false);
+    } finally {
+      store.close();
+    }
+  });
+
   test("retries failed slots without advancing recurrence", async () => {
     const store = new Store(":memory:");
     try {

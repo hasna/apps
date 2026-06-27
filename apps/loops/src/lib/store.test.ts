@@ -48,6 +48,55 @@ describe("Store", () => {
     }
   });
 
+  test("archives loops without deleting run history and hides them from default lists", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "archive-me",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+      const dueSlot = loop.nextRunAt!;
+      const claim = store.claimRun(loop, dueSlot, "seed", new Date(dueSlot));
+      expect(claim).toBeDefined();
+      store.finalizeRun(
+        claim!.run.id,
+        {
+          status: "succeeded",
+          finishedAt: "2026-01-01T00:00:01.000Z",
+          durationMs: 1_000,
+          stdout: "seed",
+          stderr: "",
+        },
+        { claimedBy: "seed", now: new Date("2026-01-01T00:00:01Z") },
+      );
+
+      const archived = store.archiveLoop(loop.id);
+      expect(archived.status).toBe("paused");
+      expect(archived.archivedAt).toBeDefined();
+      expect(archived.archivedFromStatus).toBe("active");
+      expect(archived.nextRunAt).toBe(dueSlot);
+      expect(store.listLoops()).toHaveLength(0);
+      expect(store.listLoops({ archived: true }).map((entry) => entry.id)).toEqual([loop.id]);
+      expect(store.listLoops({ includeArchived: true }).map((entry) => entry.id)).toEqual([loop.id]);
+      expect(store.countLoops()).toBe(0);
+      expect(store.countLoops(undefined, { archived: true })).toBe(1);
+      expect(store.listRuns({ loopId: loop.id })).toHaveLength(1);
+      expect(store.claimRun(archived, "2026-01-01T00:02:00.000Z", "manual", new Date("2026-01-01T00:02:00Z"))).toBeUndefined();
+
+      const unarchived = store.unarchiveLoop(loop.id);
+      expect(unarchived.status).toBe("active");
+      expect(unarchived.archivedAt).toBeUndefined();
+      expect(unarchived.archivedFromStatus).toBeUndefined();
+      expect(store.listLoops().map((entry) => entry.id)).toEqual([loop.id]);
+    } finally {
+      store.close();
+    }
+  });
+
   test("recovers expired run leases as abandoned", () => {
     const store = new Store(":memory:");
     try {

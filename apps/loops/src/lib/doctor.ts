@@ -23,7 +23,7 @@ export interface DoctorReport {
 
 const PROVIDER_COMMANDS = [
   "claude",
-  "cursor-agent",
+  "cursor agent",
   "codewith",
   "aicopilot",
   "opencode",
@@ -31,11 +31,27 @@ const PROVIDER_COMMANDS = [
 ];
 
 function hasCommand(command: string): boolean {
+  if (command === "cursor agent") {
+    return hasCommand("cursor") || hasCommand("agent");
+  }
   const result = spawnSync("sh", ["-c", "command -v \"$1\" >/dev/null", "sh", command], { stdio: "ignore" });
   return (result.status ?? 1) === 0;
 }
 
 function commandVersion(command: string): string | undefined {
+  if (command === "cursor agent") {
+    const cursorResult = spawnSync("cursor", ["agent", "--version"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    if ((cursorResult.status ?? 1) === 0) return (cursorResult.stdout || cursorResult.stderr).trim().split(/\r?\n/)[0];
+    const agentResult = spawnSync("agent", ["--version"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    if ((agentResult.status ?? 1) === 0) return (agentResult.stdout || agentResult.stderr).trim().split(/\r?\n/)[0];
+    return undefined;
+  }
   const result = spawnSync(command, ["--version"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],

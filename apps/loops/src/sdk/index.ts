@@ -33,17 +33,28 @@ export class LoopsClient {
 
   pause(idOrName: string): Loop {
     const loop = this.get(idOrName);
+    if (loop.archivedAt) throw new Error(`loop is archived; unarchive it before pausing: ${idOrName}`);
     return this.store.updateLoop(loop.id, { status: "paused" });
   }
 
   resume(idOrName: string): Loop {
     const loop = this.get(idOrName);
+    if (loop.archivedAt) throw new Error(`loop is archived; unarchive it before resuming: ${idOrName}`);
     return this.store.updateLoop(loop.id, { status: "active" });
   }
 
   stop(idOrName: string): Loop {
     const loop = this.get(idOrName);
+    if (loop.archivedAt) throw new Error(`loop is archived; unarchive it before stopping: ${idOrName}`);
     return this.store.updateLoop(loop.id, { status: "stopped", nextRunAt: undefined });
+  }
+
+  archive(idOrName: string): Loop {
+    return this.store.archiveLoop(idOrName);
+  }
+
+  unarchive(idOrName: string): Loop {
+    return this.store.unarchiveLoop(idOrName);
   }
 
   delete(idOrName: string): boolean {
@@ -68,6 +79,7 @@ export class LoopsClient {
 
   async runNow(idOrName: string): Promise<LoopRun> {
     const loop = this.get(idOrName);
+    if (loop.archivedAt) throw new Error(`loop is archived; unarchive it before running: ${idOrName}`);
     const now = new Date();
     let scheduledFor = manualRunScheduledFor(loop, now);
     let shouldAdvance = shouldAdvanceManualRun(loop, scheduledFor, now);
