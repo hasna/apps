@@ -360,7 +360,10 @@ function supplyChainTaskSuggestion(finding: SupplyChainFinding): SecurityTaskSug
 }
 
 function redactLine(line: string): string {
-  return line.replace(/(sk-[A-Za-z0-9_-]{8,}|gh[opusr]_[A-Za-z0-9_]{8,}|npm_[A-Za-z0-9_]{8,}|AKIA[0-9A-Z]{8,})/g, "***REDACTED***");
+  return line.replace(
+    /(sk-(?:proj-)?[A-Za-z0-9_-]{8,}|sk-ant-[A-Za-z0-9_-]{8,}|gh[opusr]_[A-Za-z0-9_]{8,}|npm_[A-Za-z0-9_]{8,}|AIza[A-Za-z0-9_-]{16,}|AKIA[0-9A-Z]{8,}|xai-[A-Za-z0-9_-]{8,}|ctx7sk-[A-Za-z0-9_-]{8,}|secret-token:[^\s'"]{8,})/gi,
+    "***REDACTED***",
+  );
 }
 
 function basenameForTask(path: string): string {

