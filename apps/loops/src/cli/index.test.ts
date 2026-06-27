@@ -275,6 +275,7 @@ describe("loops CLI", () => {
   test("hygiene route-tasks dry-run produces deduped task upserts without mutating todos", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-hygiene-route-tasks-"));
     const scriptsDir = join(dataDir, "scripts");
+    const evidenceDir = join(dataDir, "evidence");
     expect(runCli(dataDir, ["create", "command", "machine-foo", "--every", "1h", "--cmd", "true", "--cwd", "/tmp/repo"]).status).toBe(0);
     expect(runCli(dataDir, ["create", "command", "machine-foo-compact", "--every", "1h", "--cmd", "true", "--cwd", "/tmp/repo"]).status).toBe(0);
     expect(runCli(dataDir, ["create", "command", "machine-script-backed", "--at", futureAt(), "--cmd", `${scriptsDir}/check.sh`]).status).toBe(0);
@@ -290,6 +291,11 @@ describe("loops CLI", () => {
       "--dry-run",
       "--max-actions",
       "10",
+      "--auto-route",
+      "--route-project-path",
+      "/tmp/openloops-fallback",
+      "--evidence-dir",
+      evidenceDir,
     ]);
 
     expect(route.status).toBe(0);
@@ -299,6 +305,12 @@ describe("loops CLI", () => {
     expect(value.actions.map((action: { check: string }) => action.check).sort()).toEqual(["duplicates", "scripts"]);
     expect(value.actions.every((action: { action: string }) => action.action === "would-upsert")).toBe(true);
     expect(value.actions.every((action: { metadata: { no_tmux_dispatch?: boolean } }) => action.metadata.no_tmux_dispatch === true)).toBe(true);
+    expect(value.actions.every((action: { tags: string[] }) => action.tags.includes("auto:route"))).toBe(true);
+    expect(value.actions.every((action: { metadata: { route_enabled?: boolean; automation?: { allowed?: boolean } } }) => action.metadata.route_enabled === true && action.metadata.automation?.allowed === true)).toBe(true);
+    expect(value.actions.find((action: { check: string }) => action.check === "scripts").metadata.project_path).toBe("/tmp/openloops-fallback");
+    expect(value.evidencePath).toContain(evidenceDir);
+    expect(existsSync(value.evidencePath)).toBe(true);
+    expect(JSON.parse(readFileSync(value.evidencePath, "utf8")).findings).toBe(2);
 
     const firstBatch = runCli(dataDir, [
       "--json",
@@ -335,6 +347,50 @@ describe("loops CLI", () => {
     const next = JSON.parse(nextBatch.stdout);
     expect(next.actions[0].fingerprint).not.toBe(first.actions[0].fingerprint);
     expect(next.routing.previousFingerprint).toBe(first.actions[0].fingerprint);
+  });
+
+  test("hygiene route-tasks skips auto-route metadata for findings without cwd or explicit route project", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-hygiene-route-no-cwd-"));
+    expect(runCli(dataDir, [
+      "create",
+      "command",
+      "ops:codewith:account001:loop-health-slo",
+      "--at",
+      futureAt(),
+      "--cmd",
+      "true",
+    ]).status).toBe(0);
+
+    const result = runCli(dataDir, [
+      "--json",
+      "hygiene",
+      "route-tasks",
+      "--checks",
+      "names",
+      "--dry-run",
+      "--max-actions",
+      "1",
+      "--auto-route",
+    ]);
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.actions[0].tags).not.toContain("auto:route");
+    expect(value.actions[0].autoRoute).toMatchObject({
+      requested: true,
+      enabled: false,
+      skippedReason: "missing cwd or --route-project-path",
+    });
+    expect(value.actions[0].metadata).toMatchObject({
+      auto_route_requested: true,
+      auto_route_enabled: false,
+      auto_route_skipped_reason: "missing cwd or --route-project-path",
+      route_enabled: false,
+      project_path: null,
+      working_dir: null,
+      automation: { allowed: false, source: "openloops.hygiene.route-tasks" },
+      no_tmux_dispatch: true,
+    });
   });
 
   test("create command stores an OpenMachines assignment", () => {
@@ -829,6 +885,7 @@ describe("loops CLI", () => {
 
   test("health route-tasks dry-run reports deduped task upserts without mutating todos", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-health-route-dry-run-"));
+    const evidenceDir = join(dataDir, "evidence");
     const store = new Store(join(dataDir, "loops.db"));
     try {
       const loop = store.createLoop({
@@ -855,19 +912,129 @@ describe("loops CLI", () => {
       store.close();
     }
 
-    const result = runCli(dataDir, ["--json", "health", "route-tasks", "--dry-run", "--max-actions", "2"]);
+    const defaultResult = runCli(dataDir, ["--json", "health", "route-tasks", "--dry-run", "--max-actions", "2"]);
+    expect(defaultResult.status).toBe(0);
+    const defaultValue = JSON.parse(defaultResult.stdout);
+    expect(defaultValue.actions[0].tags).not.toContain("auto:route");
+    expect(defaultValue.actions[0].metadata.route_enabled).toBe(false);
+    expect(defaultValue.actions[0].metadata.project_path).toBeNull();
+    expect(defaultValue.actions[0].metadata.working_dir).toBeNull();
+    expect(defaultValue.actions[0].autoRoute).toMatchObject({ requested: false, enabled: false });
+
+    const result = runCli(dataDir, [
+      "--json",
+      "health",
+      "route-tasks",
+      "--dry-run",
+      "--max-actions",
+      "2",
+      "--auto-route",
+      "--evidence-dir",
+      evidenceDir,
+    ]);
 
     expect(result.status).toBe(0);
     const value = JSON.parse(result.stdout);
+    expect(value.routing.key).not.toBe(defaultValue.routing.key);
     expect(value.failures).toBe(1);
     expect(value.actions[0]).toMatchObject({
       action: "would-upsert",
       priority: "medium",
     });
+    expect(value.actions[0].tags).toContain("auto:route");
     expect(value.actions[0].metadata).toMatchObject({
       classification: "schema_response_format",
+      route_enabled: true,
+      project_path: "/tmp/repo",
+      automation: { allowed: true, source: "openloops.health.route-tasks" },
       no_tmux_dispatch: true,
     });
+    expect(value.evidencePath).toContain(evidenceDir);
+    expect(existsSync(value.evidencePath)).toBe(true);
+    expect(JSON.parse(readFileSync(value.evidencePath, "utf8")).failures).toBe(1);
+
+    const repeated = runCli(dataDir, [
+      "--json",
+      "health",
+      "route-tasks",
+      "--dry-run",
+      "--max-actions",
+      "2",
+      "--auto-route",
+      "--evidence-dir",
+      evidenceDir,
+    ]);
+    expect(repeated.status).toBe(0);
+    const repeatedValue = JSON.parse(repeated.stdout);
+    expect(repeatedValue.evidencePath).not.toBe(value.evidencePath);
+    expect(existsSync(repeatedValue.evidencePath)).toBe(true);
+  });
+
+  test("health route-tasks passes working-dir to todos upsert for auto-routed tasks", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-health-route-working-dir-"));
+    const binDir = join(dataDir, "bin");
+    const argLog = join(dataDir, "todos-args.log");
+    mkdirSync(binDir, { recursive: true });
+    const todos = join(binDir, "todos");
+    writeFileSync(
+      todos,
+      [
+        "#!/usr/bin/env bash",
+        "printf '%s\\n' \"$*\" >> \"$TODOS_ARG_LOG\"",
+        "if [[ \"$*\" == *\"task-lists\"* && \"$*\" == *\"--json\"* ]]; then",
+        "  printf '[{\"id\":\"list-1\",\"slug\":\"loop-error-self-heal\"}]\\n'",
+        "  exit 0",
+        "fi",
+        "if [[ \"$*\" == *\"task upsert\"* ]]; then",
+        "  prev=''",
+        "  for arg in \"$@\"; do",
+        "    if [[ \"$prev\" == \"--working-dir\" ]]; then printf 'WORKING_DIR=%s\\n' \"$arg\" >> \"$TODOS_ARG_LOG\"; fi",
+        "    if [[ \"$prev\" == \"--tags\" ]]; then printf 'TAGS=%s\\n' \"$arg\" >> \"$TODOS_ARG_LOG\"; fi",
+        "    prev=\"$arg\"",
+        "  done",
+        "  printf '{\"task\":{\"id\":\"task-1\"}}\\n'",
+        "  exit 0",
+        "fi",
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todos, 0o755);
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      const loop = store.createLoop({
+        name: "agent-health-working-dir",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "agent", provider: "codewith", prompt: "run", cwd: "/tmp/repo" },
+      });
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "seed", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      store.finalizeRun(
+        claim!.run.id,
+        {
+          status: "failed",
+          finishedAt: "2026-01-01T00:00:01.000Z",
+          durationMs: 1_000,
+          error: "429 too many requests",
+          exitCode: 1,
+        },
+        { claimedBy: "seed", now: new Date("2026-01-01T00:00:00.500Z") },
+      );
+    } finally {
+      store.close();
+    }
+
+    const result = runCli(
+      dataDir,
+      ["--json", "health", "route-tasks", "--max-actions", "1", "--auto-route", "--project", join(dataDir, "todos-project")],
+      undefined,
+      { PATH: `${binDir}:/usr/bin:/bin`, TODOS_ARG_LOG: argLog },
+    );
+
+    expect(result.status).toBe(0);
+    const log = readFileSync(argLog, "utf8");
+    expect(log).toContain("WORKING_DIR=/tmp/repo");
+    expect(log).toContain("TAGS=bug,openloops,loop-health,rate_limit,auto:route");
   });
 
   test("runtime preflight failures are finalized and routed as preflight health tasks", () => {

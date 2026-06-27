@@ -318,6 +318,16 @@ mutating path: it upserts deduped Todos tasks for failed expectations and marks
 them with `no_tmux_dispatch=true` metadata. Use `--dry-run --json` before
 turning it into a production loop.
 
+Add `--evidence-dir <dir>` to `health route-tasks` or `hygiene route-tasks`
+when the deterministic loop should write a durable JSON heartbeat/report in
+addition to loop stdout. Add `--auto-route` only for task lists that are
+intentionally connected to task-created worker/verifier automation; it appends
+`auto:route`, sets route metadata, and lets OpenTodos/OpenEvents trigger the
+existing headless workflow path when the finding has a cwd or
+`--route-project-path` is provided. Findings with no routeable working
+directory stay as tasks and record an `auto_route_skipped_reason`. Without
+`--auto-route`, the command only creates or updates deduped tasks.
+
 `hygiene names` reports canonical `machine-*` or `repo-<name>-*` loop names and
 renames only with `--apply`. Apply mode writes a SQLite backup under
 `<LOOPS_DATA_DIR>/backups` before changing loop names. `hygiene duplicates`

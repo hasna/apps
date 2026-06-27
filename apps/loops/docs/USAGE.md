@@ -338,6 +338,14 @@ Use `--dry-run --json` first when testing a new automation path. Routed tasks
 include the stable failure fingerprint, classification, loop id/name, and
 `no_tmux_dispatch=true` metadata.
 
+Use `--evidence-dir <dir>` when a deterministic loop needs a compact JSON
+heartbeat/report on disk. Use `--auto-route` only on task lists that should feed
+the task-created headless worker/verifier workflow; it adds the `auto:route`
+tag and route metadata when the finding has a cwd or `--route-project-path` is
+provided. Findings with no routeable working directory remain plain tasks and
+record an `auto_route_skipped_reason`. Without `--auto-route`, route commands
+only upsert deduped tasks and do not launch agents.
+
 Failure classifications are: `rate_limit`, `auth`, `model_not_found`,
 `context_length`, `schema_response_format`, `node_init`, `timeout`, `sigsegv`,
 `skipped_previous_active`, and `unknown`.

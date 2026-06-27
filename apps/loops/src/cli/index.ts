@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -408,6 +408,15 @@ function writeRouteCursor(key: string, lastFingerprint: string | undefined): voi
   writeFileSync(routeCursorsPath(), JSON.stringify(cursors, null, 2), { mode: 0o600 });
 }
 
+function writeRouteEvidence(kind: string, value: unknown, evidenceDir: string | undefined): string | undefined {
+  if (!evidenceDir) return undefined;
+  mkdirSync(evidenceDir, { recursive: true, mode: 0o700 });
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\./g, "");
+  const evidencePath = join(evidenceDir, `${kind}-${stamp}-${randomUUID().slice(0, 8)}.json`);
+  writeFileSync(evidencePath, JSON.stringify(value, null, 2), { mode: 0o600, flag: "wx" });
+  return evidencePath;
+}
+
 function selectRouteItems<T>(items: T[], maxActions: number, cursorKey: string, fingerprintOf: (item: T) => string): RouteSelection<T> {
   const total = items.length;
   const boundedMax = Math.max(0, Math.floor(Number.isFinite(maxActions) ? maxActions : 0));
@@ -432,6 +441,95 @@ function selectRouteItems<T>(items: T[], maxActions: number, cursorKey: string, 
       lastFingerprint: selected.length ? fingerprintOf(selected[selected.length - 1]) : undefined,
     },
   };
+}
+
+interface TaskRouteOptions {
+  autoRoute?: boolean;
+  routeProjectPath?: string;
+  source: string;
+}
+
+function taskAutoRoute(
+  tags: string[],
+  base: Record<string, unknown>,
+  opts: TaskRouteOptions,
+): { tags: string[]; metadata: Record<string, unknown>; autoRoute: { requested: boolean; enabled: boolean; skippedReason?: string } } {
+  if (!opts.autoRoute) {
+    return {
+      tags,
+      metadata: {
+        ...base,
+        route_enabled: false,
+        project_path: null,
+        working_dir: null,
+        auto_route_requested: false,
+        auto_route_enabled: false,
+        automation: {
+          allowed: false,
+          source: opts.source,
+          kind: "task-created-worker-verifier",
+        },
+      },
+      autoRoute: { requested: false, enabled: false },
+    };
+  }
+  const projectPath =
+    (typeof base.cwd === "string" && base.cwd.trim()) ||
+    (typeof opts.routeProjectPath === "string" && opts.routeProjectPath.trim()) ||
+    undefined;
+  if (!projectPath) {
+    return {
+      tags,
+      metadata: {
+        ...base,
+        route_enabled: false,
+        project_path: null,
+        working_dir: null,
+        auto_route_requested: true,
+        auto_route_enabled: false,
+        auto_route_skipped_reason: "missing cwd or --route-project-path",
+        automation: {
+          allowed: false,
+          source: opts.source,
+          kind: "task-created-worker-verifier",
+        },
+      },
+      autoRoute: {
+        requested: true,
+        enabled: false,
+        skippedReason: "missing cwd or --route-project-path",
+      },
+    };
+  }
+  return {
+    tags: [...new Set([...tags, "auto:route"])],
+    metadata: {
+      ...base,
+      route_enabled: true,
+      project_path: projectPath,
+      working_dir: projectPath,
+      auto_route_requested: true,
+      auto_route_enabled: true,
+      automation: {
+        allowed: true,
+        source: opts.source,
+        kind: "task-created-worker-verifier",
+      },
+    },
+    autoRoute: { requested: true, enabled: true },
+  };
+}
+
+function routeTaskWorkingDirArgs(routeTask: ReturnType<typeof taskAutoRoute>): string[] {
+  const workingDir = routeTask.autoRoute.enabled && typeof routeTask.metadata.working_dir === "string"
+    ? routeTask.metadata.working_dir
+    : undefined;
+  return workingDir ? ["--working-dir", workingDir] : [];
+}
+
+function routeCursorKey(kind: "health" | "hygiene", parts: unknown[], opts: { autoRoute?: boolean; routeProjectPath?: string }): string {
+  const routeMode = opts.autoRoute ? ["auto-route", opts.routeProjectPath ?? "cwd"] : [];
+  return `${kind}:${stableHash([...parts, ...routeMode])}`;
 }
 
 function eventData(event: EventEnvelope): Record<string, unknown> {
@@ -1467,6 +1565,9 @@ health
   .option("--limit <n>", "maximum loops to inspect", "200")
   .option("--max-actions <n>", "maximum todos tasks to upsert", "5")
   .option("--include-inactive", "also route stopped or expired loops")
+  .option("--auto-route", "opt routed tasks into task-created headless worker/verifier automation")
+  .option("--route-project-path <path>", "fallback project path for --auto-route when the failed loop has no cwd")
+  .option("--evidence-dir <path>", "write the route result JSON to this directory")
   .option("--dry-run", "print intended task upserts without mutating todos")
   .option("--json", "print JSON")
   .action((opts) => {
@@ -1477,7 +1578,10 @@ health
       const selection = selectRouteItems(
         failures,
         Number(opts.maxActions),
-        `health:${stableHash([opts.project, opts.taskList, opts.limit, Boolean(opts.includeInactive)])}`,
+        routeCursorKey("health", [opts.project, opts.taskList, opts.limit, Boolean(opts.includeInactive)], {
+          autoRoute: Boolean(opts.autoRoute),
+          routeProjectPath: opts.routeProjectPath,
+        }),
         (expectation) => expectation.recommendedTask!.dedupeKey,
       );
       const listId = opts.dryRun
@@ -1490,17 +1594,35 @@ health
           );
       const actions = selection.selected.map((expectation) => {
         const task = expectation.recommendedTask!;
-        const metadata = {
-          source: "openloops.health.route-tasks",
-          loop_id: expectation.loop.id,
-          loop_name: expectation.loop.name,
-          run_id: expectation.latestRun?.id,
-          classification: expectation.failure?.classification,
-          fingerprint: task.dedupeKey,
-          no_tmux_dispatch: true,
-        };
+        const routeTask = taskAutoRoute(
+          task.tags,
+          {
+            source: "openloops.health.route-tasks",
+            loop_id: expectation.loop.id,
+            loop_name: expectation.loop.name,
+            run_id: expectation.latestRun?.id,
+            classification: expectation.failure?.classification,
+            fingerprint: task.dedupeKey,
+            cwd: expectation.route.cwd,
+            provider: expectation.route.provider,
+            no_tmux_dispatch: true,
+          },
+          {
+            autoRoute: Boolean(opts.autoRoute),
+            routeProjectPath: opts.routeProjectPath,
+            source: "openloops.health.route-tasks",
+          },
+        );
         if (opts.dryRun) {
-          return { action: "would-upsert", title: task.title, fingerprint: task.dedupeKey, priority: task.priority, metadata };
+          return {
+            action: "would-upsert",
+            title: task.title,
+            fingerprint: task.dedupeKey,
+            priority: task.priority,
+            tags: routeTask.tags,
+            metadata: routeTask.metadata,
+            autoRoute: routeTask.autoRoute,
+          };
         }
         const result = runLocalCommand("todos", [
           "--project",
@@ -1521,9 +1643,10 @@ health
           "--list",
           listId!,
           "--tags",
-          task.tags.join(","),
+          routeTask.tags.join(","),
+          ...routeTaskWorkingDirArgs(routeTask),
           "--metadata-json",
-          JSON.stringify(metadata),
+          JSON.stringify(routeTask.metadata),
         ]);
         if (!result.ok) {
           return { action: "upsert-failed", fingerprint: task.dedupeKey, error: result.stderr || result.error || result.stdout };
@@ -1537,10 +1660,13 @@ health
         routing: selection.cursor,
         actions,
       };
+      const evidencePath = writeRouteEvidence("health-route-tasks", routed, opts.evidenceDir);
+      const output = evidencePath ? { ...routed, evidencePath } : routed;
       if (!opts.dryRun && routed.ok) writeRouteCursor(selection.cursor.key, selection.cursor.lastFingerprint);
-      if (isJson() || opts.json) console.log(JSON.stringify(routed, null, 2));
+      if (isJson() || opts.json) console.log(JSON.stringify(output, null, 2));
       else {
-        console.log(`health_route_tasks inspected=${routed.inspected} failures=${routed.failures} actions=${actions.length}`);
+        console.log(`health_route_tasks inspected=${output.inspected} failures=${output.failures} actions=${actions.length}`);
+        if (evidencePath) console.log(`evidence=${evidencePath}`);
         for (const action of actions) console.log(`${action.action} ${action.fingerprint}`);
       }
       if (!routed.ok) process.exitCode = 1;
@@ -1809,6 +1935,9 @@ hygiene
   .option("--max-actions <n>", "maximum todos tasks to upsert", "10")
   .option("--scripts-dir <path>", "script directory to detect for script inventory")
   .option("--include-inactive", "also route stopped, expired, or archived loops")
+  .option("--auto-route", "opt routed tasks into task-created headless worker/verifier automation")
+  .option("--route-project-path <path>", "fallback project path for --auto-route when the hygiene finding has no cwd")
+  .option("--evidence-dir <path>", "write the route result JSON to this directory")
   .option("--dry-run", "print intended task upserts without mutating todos")
   .option("--json", "print JSON")
   .action((opts) => {
@@ -1824,7 +1953,10 @@ hygiene
       const selection = selectRouteItems(
         route.tasks,
         Number(opts.maxActions),
-        `hygiene:${stableHash([opts.project, opts.taskList, checks, opts.limit, Boolean(opts.includeInactive), opts.scriptsDir ?? ""])}`,
+        routeCursorKey("hygiene", [opts.project, opts.taskList, checks, opts.limit, Boolean(opts.includeInactive), opts.scriptsDir ?? ""], {
+          autoRoute: Boolean(opts.autoRoute),
+          routeProjectPath: opts.routeProjectPath,
+        }),
         (task) => task.fingerprint,
       );
       const listId = opts.dryRun
@@ -1836,8 +1968,22 @@ hygiene
             "Deduped OpenLoops hygiene findings routed by loops hygiene route-tasks.",
           );
       const actions = selection.selected.map((task) => {
+        const routeTask = taskAutoRoute(task.tags, task.metadata, {
+          autoRoute: Boolean(opts.autoRoute),
+          routeProjectPath: opts.routeProjectPath,
+          source: "openloops.hygiene.route-tasks",
+        });
         if (opts.dryRun) {
-          return { action: "would-upsert", check: task.check, title: task.title, fingerprint: task.fingerprint, priority: task.priority, metadata: task.metadata };
+          return {
+            action: "would-upsert",
+            check: task.check,
+            title: task.title,
+            fingerprint: task.fingerprint,
+            priority: task.priority,
+            tags: routeTask.tags,
+            metadata: routeTask.metadata,
+            autoRoute: routeTask.autoRoute,
+          };
         }
         const result = runLocalCommand("todos", [
           "--project",
@@ -1858,9 +2004,10 @@ hygiene
           "--list",
           listId!,
           "--tags",
-          task.tags.join(","),
+          routeTask.tags.join(","),
+          ...routeTaskWorkingDirArgs(routeTask),
           "--metadata-json",
-          JSON.stringify(task.metadata),
+          JSON.stringify(routeTask.metadata),
         ]);
         if (!result.ok) {
           return { action: "upsert-failed", check: task.check, fingerprint: task.fingerprint, error: result.stderr || result.error || result.stdout };
@@ -1875,10 +2022,13 @@ hygiene
         routing: selection.cursor,
         actions,
       };
+      const evidencePath = writeRouteEvidence("hygiene-route-tasks", routed, opts.evidenceDir);
+      const output = evidencePath ? { ...routed, evidencePath } : routed;
       if (!opts.dryRun && routed.ok) writeRouteCursor(selection.cursor.key, selection.cursor.lastFingerprint);
-      if (isJson() || opts.json) console.log(JSON.stringify(routed, null, 2));
+      if (isJson() || opts.json) console.log(JSON.stringify(output, null, 2));
       else {
-        console.log(`hygiene_route_tasks checks=${checks.join(",")} findings=${routed.findings} actions=${actions.length}`);
+        console.log(`hygiene_route_tasks checks=${checks.join(",")} findings=${output.findings} actions=${actions.length}`);
+        if (evidencePath) console.log(`evidence=${evidencePath}`);
         for (const action of actions) console.log(`${action.action} ${action.fingerprint}`);
       }
       if (!routed.ok) process.exitCode = 1;
