@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { delimiter, join } from 'node:path';
 import {
   HASNA_KNOWLEDGE_APP_PATH,
   EXAMPLE_KNOWLEDGE_CANONICAL,
@@ -11,6 +11,43 @@ import {
   recordKnowledgeSyncConflict,
   type KnowledgeClient,
 } from '../src/index';
+
+function writeWindowsCmdShim(bin: string, name: string): void {
+  writeFileSync(join(bin, `${name}.cmd`), [
+    '@echo off',
+    `bun "%~dp0${name}.js" %*`,
+    'exit /b %ERRORLEVEL%',
+    '',
+  ].join('\r\n'));
+}
+
+function writeFakeSshJs(bin: string): void {
+  writeFileSync(join(bin, 'ssh.js'), [
+    '#!/usr/bin/env bun',
+    "const [target = '', ...commandParts] = process.argv.slice(2);",
+    "const command = commandParts.join(' ');",
+    'if (process.env.KNOWLEDGE_FAKE_SSH_TARGET_PATH) {',
+    '  await Bun.write(process.env.KNOWLEDGE_FAKE_SSH_TARGET_PATH, target);',
+    '}',
+    "if (/sync.*export/.test(command)) {",
+    "  process.stdout.write(process.env.KNOWLEDGE_FAKE_SSH_EXPORT_JSON ?? '');",
+    '  process.exit(0);',
+    '}',
+    "if (/sync.*import/.test(command)) {",
+    '  const input = await Bun.stdin.text();',
+    '  if (process.env.KNOWLEDGE_FAKE_SSH_STDIN_PATH) {',
+    '    await Bun.write(process.env.KNOWLEDGE_FAKE_SSH_STDIN_PATH, input);',
+    '  }',
+    "  process.stdout.write(process.env.KNOWLEDGE_FAKE_SSH_IMPORT_JSON ?? '');",
+    '  process.exit(0);',
+    '}',
+    "console.error(`unexpected fake ssh command: ${process.argv.slice(2).join(' ')}`);",
+    'process.exit(9);',
+    '',
+  ].join('\n'));
+  chmodSync(join(bin, 'ssh.js'), 0o755);
+  writeWindowsCmdShim(bin, 'ssh');
+}
 
 function writeFakeSshBin(dir: string): string {
   const bin = join(dir, 'bin');
@@ -32,7 +69,18 @@ function writeFakeSshBin(dir: string): string {
     '',
   ].join('\n'));
   chmodSync(ssh, 0o755);
+  writeFakeSshJs(bin);
   return bin;
+}
+
+function applyFakeSshCommandEnv(bin: string): void {
+  process.env.KNOWLEDGE_SSH_COMMAND = process.execPath;
+  process.env.KNOWLEDGE_SSH_COMMAND_ARGS_JSON = JSON.stringify([join(bin, 'ssh.js')]);
+}
+
+function restoreEnvValue(key: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
 }
 
 function writeFakeMachinesRouteBin(
@@ -43,81 +91,102 @@ function writeFakeMachinesRouteBin(
   expiresAt = '2099-06-10T00:05:00.000Z',
 ): void {
   const machines = join(bin, 'machines');
+  const routePayload = {
+    ok: true,
+    target,
+    route: 'tailscale',
+    source: 'tailscale',
+    confidence: 'high',
+    evidence: {
+      topology: true,
+      matched_by: 'machine_id',
+      selected_hint: {
+        kind: 'tailscale',
+        target,
+        reachable: true,
+      },
+    },
+    cacheability: {
+      observed_at: observedAt,
+      verified_at: observedAt,
+      expires_at: expiresAt,
+      ttl_ms: 300000,
+      source_authority: 'open-machines',
+      confidence: 'high',
+      cacheable: true,
+      stale: false,
+      reasons: ['route_verified'],
+    },
+    warnings: [],
+  };
+  const workspacePayload = {
+    ok: true,
+    requested_machine_id: 'linux-node-a',
+    machine_id: 'linux-node-a',
+    project: { project_id: 'open-knowledge', repo_name: 'open-knowledge' },
+    machine: { current: false, primary: false, trust_status: 'trusted', auth_status: 'authenticated' },
+    paths: {
+      workspace_root: { path: '/remote', source: 'manifest' },
+      project_root: { path: projectRoot, source: 'manifest_metadata' },
+      open_files_root: { path: '/remote/open-files', source: 'manifest_metadata' },
+    },
+    diagnostics: [{
+      id: 'project_root',
+      status: 'ok',
+      severity: 'ok',
+      message: 'project root mapped',
+      path: projectRoot,
+      source: 'manifest_metadata',
+      path_exists: null,
+    }],
+    repair_hints: [],
+    evidence: { topology: true, matched_by: 'machine_id', metadata_keys: [] },
+    cacheability: {
+      observed_at: observedAt,
+      verified_at: null,
+      expires_at: expiresAt,
+      ttl_ms: 300000,
+      source_authority: 'open-machines',
+      confidence: 'high',
+      cacheable: true,
+      stale: false,
+      reasons: ['workspace_manifest'],
+    },
+    warnings: [],
+  };
   writeFileSync(machines, [
     '#!/bin/sh',
     'if [ "$1" = "route" ]; then',
-    `  printf '%s\\n' '${JSON.stringify({
-      ok: true,
-      target,
-      route: 'tailscale',
-      source: 'tailscale',
-      confidence: 'high',
-      evidence: {
-        topology: true,
-        matched_by: 'machine_id',
-        selected_hint: {
-          kind: 'tailscale',
-          target,
-          reachable: true,
-        },
-      },
-      cacheability: {
-        observed_at: observedAt,
-        verified_at: observedAt,
-        expires_at: expiresAt,
-        ttl_ms: 300000,
-        source_authority: 'open-machines',
-        confidence: 'high',
-        cacheable: true,
-        stale: false,
-        reasons: ['route_verified'],
-      },
-      warnings: [],
-    })}'`,
+    `  printf '%s\\n' '${JSON.stringify(routePayload)}'`,
     '  exit 0',
     'fi',
     'if [ "$1" = "workspace" ] && [ "$2" = "resolve" ]; then',
-    `  printf '%s\\n' '${JSON.stringify({
-      ok: true,
-      requested_machine_id: 'linux-node-a',
-      machine_id: 'linux-node-a',
-      project: { project_id: 'open-knowledge', repo_name: 'open-knowledge' },
-      machine: { current: false, primary: false, trust_status: 'trusted', auth_status: 'authenticated' },
-      paths: {
-        workspace_root: { path: '/remote', source: 'manifest' },
-        project_root: { path: projectRoot, source: 'manifest_metadata' },
-        open_files_root: { path: '/remote/open-files', source: 'manifest_metadata' },
-      },
-      diagnostics: [{
-        id: 'project_root',
-        status: 'ok',
-        severity: 'ok',
-        message: 'project root mapped',
-        path: projectRoot,
-        source: 'manifest_metadata',
-        path_exists: null,
-      }],
-      repair_hints: [],
-      evidence: { topology: true, matched_by: 'machine_id', metadata_keys: [] },
-      cacheability: {
-        observed_at: observedAt,
-        verified_at: null,
-        expires_at: expiresAt,
-        ttl_ms: 300000,
-        source_authority: 'open-machines',
-        confidence: 'high',
-        cacheable: true,
-        stale: false,
-        reasons: ['workspace_manifest'],
-      },
-      warnings: [],
-    })}'`,
+    `  printf '%s\\n' '${JSON.stringify(workspacePayload)}'`,
     '  exit 0',
     'fi',
     'exit 9',
     '',
   ].join('\n'));
   chmodSync(machines, 0o755);
+  writeFileSync(join(bin, 'machines.js'), [
+    '#!/usr/bin/env bun',
+    `const routePayload = ${JSON.stringify(routePayload)};`,
+    `const workspacePayload = ${JSON.stringify(workspacePayload)};`,
+    'const args = process.argv.slice(2);',
+    "if (args[0] === 'route') {",
+    '  console.log(JSON.stringify(routePayload));',
+    '  process.exit(0);',
+    '}',
+    "if (args[0] === 'workspace' && args[1] === 'resolve') {",
+    '  console.log(JSON.stringify(workspacePayload));',
+    '  process.exit(0);',
+    '}',
+    "console.error(`unexpected fake machines command: ${args.join(' ')}`);",
+    'process.exit(9);',
+    '',
+  ].join('\n'));
+  chmodSync(join(bin, 'machines.js'), 0o755);
+  writeWindowsCmdShim(bin, 'machines');
 }
 
 function writeBrokenMachinesBin(bin: string): void {
@@ -129,6 +198,14 @@ function writeBrokenMachinesBin(bin: string): void {
     '',
   ].join('\n'));
   chmodSync(machines, 0o755);
+  writeFileSync(join(bin, 'machines.js'), [
+    '#!/usr/bin/env bun',
+    'console.error("machines unavailable");',
+    'process.exit(9);',
+    '',
+  ].join('\n'));
+  chmodSync(join(bin, 'machines.js'), 0o755);
+  writeWindowsCmdShim(bin, 'machines');
 }
 
 function emptySyncBundle() {
@@ -281,9 +358,12 @@ describe('public knowledge sdk', () => {
       KNOWLEDGE_FAKE_SSH_EXPORT_JSON: process.env.KNOWLEDGE_FAKE_SSH_EXPORT_JSON,
       KNOWLEDGE_FAKE_SSH_IMPORT_JSON: process.env.KNOWLEDGE_FAKE_SSH_IMPORT_JSON,
       KNOWLEDGE_FAKE_SSH_TARGET_PATH: process.env.KNOWLEDGE_FAKE_SSH_TARGET_PATH,
+      KNOWLEDGE_SSH_COMMAND: process.env.KNOWLEDGE_SSH_COMMAND,
+      KNOWLEDGE_SSH_COMMAND_ARGS_JSON: process.env.KNOWLEDGE_SSH_COMMAND_ARGS_JSON,
     };
     try {
-      process.env.PATH = `${bin}:${process.env.PATH ?? ''}`;
+      process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ''}`;
+      applyFakeSshCommandEnv(bin);
       process.env.KNOWLEDGE_FAKE_SSH_EXPORT_JSON = JSON.stringify(emptySyncBundle());
       process.env.KNOWLEDGE_FAKE_SSH_IMPORT_JSON = JSON.stringify(emptyImportResult());
       process.env.KNOWLEDGE_FAKE_SSH_TARGET_PATH = targetPath;
@@ -341,6 +421,8 @@ describe('public knowledge sdk', () => {
       else process.env.KNOWLEDGE_FAKE_SSH_IMPORT_JSON = oldEnv.KNOWLEDGE_FAKE_SSH_IMPORT_JSON;
       if (oldEnv.KNOWLEDGE_FAKE_SSH_TARGET_PATH === undefined) delete process.env.KNOWLEDGE_FAKE_SSH_TARGET_PATH;
       else process.env.KNOWLEDGE_FAKE_SSH_TARGET_PATH = oldEnv.KNOWLEDGE_FAKE_SSH_TARGET_PATH;
+      restoreEnvValue('KNOWLEDGE_SSH_COMMAND', oldEnv.KNOWLEDGE_SSH_COMMAND);
+      restoreEnvValue('KNOWLEDGE_SSH_COMMAND_ARGS_JSON', oldEnv.KNOWLEDGE_SSH_COMMAND_ARGS_JSON);
     }
   });
 
@@ -356,9 +438,12 @@ describe('public knowledge sdk', () => {
       KNOWLEDGE_FAKE_SSH_IMPORT_JSON: process.env.KNOWLEDGE_FAKE_SSH_IMPORT_JSON,
       KNOWLEDGE_FAKE_SSH_TARGET_PATH: process.env.KNOWLEDGE_FAKE_SSH_TARGET_PATH,
       KNOWLEDGE_FAKE_SSH_STDIN_PATH: process.env.KNOWLEDGE_FAKE_SSH_STDIN_PATH,
+      KNOWLEDGE_SSH_COMMAND: process.env.KNOWLEDGE_SSH_COMMAND,
+      KNOWLEDGE_SSH_COMMAND_ARGS_JSON: process.env.KNOWLEDGE_SSH_COMMAND_ARGS_JSON,
     };
     try {
-      process.env.PATH = `${bin}:${process.env.PATH ?? ''}`;
+      process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ''}`;
+      applyFakeSshCommandEnv(bin);
       process.env.KNOWLEDGE_FAKE_SSH_EXPORT_JSON = JSON.stringify(emptySyncBundle());
       process.env.KNOWLEDGE_FAKE_SSH_IMPORT_JSON = JSON.stringify(emptyImportResult(false));
       process.env.KNOWLEDGE_FAKE_SSH_TARGET_PATH = targetPath;
@@ -463,6 +548,8 @@ describe('public knowledge sdk', () => {
       else process.env.KNOWLEDGE_FAKE_SSH_TARGET_PATH = oldEnv.KNOWLEDGE_FAKE_SSH_TARGET_PATH;
       if (oldEnv.KNOWLEDGE_FAKE_SSH_STDIN_PATH === undefined) delete process.env.KNOWLEDGE_FAKE_SSH_STDIN_PATH;
       else process.env.KNOWLEDGE_FAKE_SSH_STDIN_PATH = oldEnv.KNOWLEDGE_FAKE_SSH_STDIN_PATH;
+      restoreEnvValue('KNOWLEDGE_SSH_COMMAND', oldEnv.KNOWLEDGE_SSH_COMMAND);
+      restoreEnvValue('KNOWLEDGE_SSH_COMMAND_ARGS_JSON', oldEnv.KNOWLEDGE_SSH_COMMAND_ARGS_JSON);
     }
   });
 });

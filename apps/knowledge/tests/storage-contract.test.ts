@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { migrateKnowledgeDb, openKnowledgeDb } from '../src/knowledge-db';
 import {
   artifactKindForKey,
@@ -26,7 +27,7 @@ describe('knowledge storage contract', () => {
     expect(contract.local_layout.app_path).toBe(join('.hasna', 'apps', 'knowledge'));
     expect(contract.local_layout.knowledge_db_path).toBe(join(workspace.home, 'knowledge.db'));
     expect(contract.artifact_store.type).toBe('local');
-    expect(contract.artifact_store.uri_prefix).toBe(`file://${workspace.artifactsDir}/`);
+    expect(contract.artifact_store.uri_prefix).toBe(pathToFileURL(`${workspace.artifactsDir}/`).href);
     expect(contract.source_ownership.owner).toBe('open-files');
     expect(contract.source_ownership.raw_source_bytes_stored_in_open_knowledge).toBe(false);
     expect(contract.private_fleet_boundary).toMatchObject({

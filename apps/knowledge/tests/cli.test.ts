@@ -7,7 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join, dirname, resolve } from 'node:path';
+import { delimiter, join, dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { openKnowledgeDb } from '../src/knowledge-db';
 import { createKnowledgeService } from '../src/service';
@@ -71,6 +71,51 @@ function expectSameExistingPath(actual: string, expected: string): void {
   expect(realpathSync(actual)).toBe(realpathSync(expected));
 }
 
+function pathWithBin(bin: string): string {
+  return `${bin}${delimiter}${process.env.PATH ?? ''}`;
+}
+
+function isolatedHomeEnv(home: string): Record<string, string> {
+  return { HOME: home, USERPROFILE: home };
+}
+
+function writeWindowsCmdShim(bin: string, name: string): void {
+  writeFileSync(join(bin, `${name}.cmd`), [
+    '@echo off',
+    `bun "%~dp0${name}.js" %*`,
+    'exit /b %ERRORLEVEL%',
+    '',
+  ].join('\r\n'));
+}
+
+function writeFakeSshJs(bin: string): void {
+  writeFileSync(join(bin, 'ssh.js'), [
+    '#!/usr/bin/env bun',
+    "const [target = '', ...commandParts] = process.argv.slice(2);",
+    "const command = commandParts.join(' ');",
+    'if (process.env.KNOWLEDGE_FAKE_SSH_TARGET_PATH) {',
+    '  await Bun.write(process.env.KNOWLEDGE_FAKE_SSH_TARGET_PATH, target);',
+    '}',
+    "if (/sync.*export/.test(command)) {",
+    "  process.stdout.write(process.env.KNOWLEDGE_FAKE_SSH_EXPORT_JSON ?? '');",
+    '  process.exit(0);',
+    '}',
+    "if (/sync.*import/.test(command)) {",
+    '  const input = await Bun.stdin.text();',
+    '  if (process.env.KNOWLEDGE_FAKE_SSH_STDIN_PATH) {',
+    '    await Bun.write(process.env.KNOWLEDGE_FAKE_SSH_STDIN_PATH, input);',
+    '  }',
+    "  process.stdout.write(process.env.KNOWLEDGE_FAKE_SSH_IMPORT_JSON ?? '');",
+    '  process.exit(0);',
+    '}',
+    "console.error(`unexpected fake ssh command: ${process.argv.slice(2).join(' ')}`);",
+    'process.exit(9);',
+    '',
+  ].join('\n'));
+  chmodSync(join(bin, 'ssh.js'), 0o755);
+  writeWindowsCmdShim(bin, 'ssh');
+}
+
 function writeFakeSshBin(dir: string): string {
   const bin = join(dir, 'bin');
   mkdirSync(bin, { recursive: true });
@@ -91,7 +136,15 @@ function writeFakeSshBin(dir: string): string {
     '',
   ].join('\n'));
   chmodSync(ssh, 0o755);
+  writeFakeSshJs(bin);
   return bin;
+}
+
+function fakeSshCommandEnv(bin: string): Record<string, string> {
+  return {
+    KNOWLEDGE_SSH_COMMAND: process.execPath,
+    KNOWLEDGE_SSH_COMMAND_ARGS_JSON: JSON.stringify([join(bin, 'ssh.js')]),
+  };
 }
 
 function writeFakeMachinesRouteBin(bin: string, target: string, projectRoot = '/remote/open-knowledge', includeRepairHint = false): void {
@@ -113,49 +166,51 @@ function writeFakeMachinesRouteBin(bin: string, target: string, projectRoot = '/
     apply_command: ['machines', 'workspace', 'repair', '--machine', 'linux-node-a', '--project', 'open-knowledge', '--repo', 'open-knowledge', '--open-files-repo', 'open-files', '--json', '--apply'],
     apply_shell_command: "machines workspace repair --machine linux-node-a --project open-knowledge --repo open-knowledge --open-files-repo open-files --json --apply",
   }] : [];
+  const routePayload = {
+    schema_version: 1,
+    ok: true,
+    machine_id: 'linux-node-a',
+    requested_machine_id: 'linux-node-a',
+    route: 'tailscale',
+    source: 'tailscale',
+    target,
+    command_target: target,
+    confidence: 'high',
+    evidence: {
+      topology: true,
+      matched_by: 'machine_id',
+      selected_hint: {
+        kind: 'tailscale',
+        target,
+        reachable: true,
+      },
+    },
+    warnings: [],
+  };
+  const workspacePayload = {
+    ok: true,
+    requested_machine_id: 'linux-node-a',
+    machine_id: 'linux-node-a',
+    project: { project_id: 'open-knowledge', repo_name: 'open-knowledge' },
+    machine: { current: false, primary: false, trust_status: 'trusted', auth_status: 'authenticated' },
+    paths: {
+      workspace_root: { path: '/remote', source: 'manifest' },
+      project_root: { path: projectRoot, source: 'manifest_metadata' },
+      open_files_root: { path: '/remote/open-files', source: 'manifest_metadata' },
+    },
+    diagnostics: workspaceDiagnostics,
+    repair_hints: workspaceRepairHints,
+    evidence: { topology: true, matched_by: 'machine_id', metadata_keys: [] },
+    warnings: includeRepairHint ? ['project_root_inferred:open-knowledge'] : [],
+  };
   writeFileSync(machines, [
     '#!/bin/sh',
     'if [ "$1" = "route" ]; then',
-    `  printf '%s\\n' '${JSON.stringify({
-      schema_version: 1,
-      ok: true,
-      machine_id: 'linux-node-a',
-      requested_machine_id: 'linux-node-a',
-      route: 'tailscale',
-      source: 'tailscale',
-      target,
-      command_target: target,
-      confidence: 'high',
-      evidence: {
-        topology: true,
-        matched_by: 'machine_id',
-        selected_hint: {
-          kind: 'tailscale',
-          target,
-          reachable: true,
-        },
-      },
-      warnings: [],
-    })}'`,
+    `  printf '%s\\n' '${JSON.stringify(routePayload)}'`,
     '  exit 0',
     'fi',
     'if [ "$1" = "workspace" ] && [ "$2" = "resolve" ]; then',
-    `  printf '%s\\n' '${JSON.stringify({
-      ok: true,
-      requested_machine_id: 'linux-node-a',
-      machine_id: 'linux-node-a',
-      project: { project_id: 'open-knowledge', repo_name: 'open-knowledge' },
-      machine: { current: false, primary: false, trust_status: 'trusted', auth_status: 'authenticated' },
-      paths: {
-        workspace_root: { path: '/remote', source: 'manifest' },
-        project_root: { path: projectRoot, source: 'manifest_metadata' },
-        open_files_root: { path: '/remote/open-files', source: 'manifest_metadata' },
-      },
-      diagnostics: workspaceDiagnostics,
-      repair_hints: workspaceRepairHints,
-      evidence: { topology: true, matched_by: 'machine_id', metadata_keys: [] },
-      warnings: includeRepairHint ? ['project_root_inferred:open-knowledge'] : [],
-    })}'`,
+    `  printf '%s\\n' '${JSON.stringify(workspacePayload)}'`,
     '  exit 0',
     'fi',
     'echo "unexpected fake machines command: $*" >&2',
@@ -163,6 +218,25 @@ function writeFakeMachinesRouteBin(bin: string, target: string, projectRoot = '/
     '',
   ].join('\n'));
   chmodSync(machines, 0o755);
+  writeFileSync(join(bin, 'machines.js'), [
+    '#!/usr/bin/env bun',
+    `const routePayload = ${JSON.stringify(routePayload)};`,
+    `const workspacePayload = ${JSON.stringify(workspacePayload)};`,
+    'const args = process.argv.slice(2);',
+    "if (args[0] === 'route') {",
+    '  console.log(JSON.stringify(routePayload));',
+    '  process.exit(0);',
+    '}',
+    "if (args[0] === 'workspace' && args[1] === 'resolve') {",
+    '  console.log(JSON.stringify(workspacePayload));',
+    '  process.exit(0);',
+    '}',
+    "console.error(`unexpected fake machines command: ${args.join(' ')}`);",
+    'process.exit(9);',
+    '',
+  ].join('\n'));
+  chmodSync(join(bin, 'machines.js'), 0o755);
+  writeWindowsCmdShim(bin, 'machines');
 }
 
 function writeFailingMachinesBin(bin: string, marker: string): void {
@@ -176,6 +250,16 @@ function writeFailingMachinesBin(bin: string, marker: string): void {
     '',
   ].join('\n'));
   chmodSync(machines, 0o755);
+  writeFileSync(join(bin, 'machines.js'), [
+    '#!/usr/bin/env bun',
+    "import { appendFileSync } from 'node:fs';",
+    `appendFileSync(${JSON.stringify(marker)}, \`\${process.argv.slice(2).join(' ')}\\n\`);`,
+    "console.error(`unexpected fake machines command: ${process.argv.slice(2).join(' ')}`);",
+    'process.exit(9);',
+    '',
+  ].join('\n'));
+  chmodSync(join(bin, 'machines.js'), 0o755);
+  writeWindowsCmdShim(bin, 'machines');
 }
 
 describe('knowledge cli', () => {
@@ -311,7 +395,7 @@ describe('knowledge cli', () => {
   test('global notes added through CLI are searchable and available as context', () => {
     const home = mkdtempSync(join(tmpdir(), 'ok-global-note-search-home-'));
     const env = {
-      HOME: home,
+      ...isolatedHomeEnv(home),
       HASNA_KNOWLEDGE_AUTH_DIR: join(home, 'auth'),
     };
 
@@ -384,7 +468,7 @@ describe('knowledge cli', () => {
       }],
     }));
     const env = {
-      HOME: home,
+      ...isolatedHomeEnv(home),
       HASNA_KNOWLEDGE_AUTH_DIR: join(home, 'auth'),
     };
 
@@ -461,7 +545,7 @@ describe('knowledge cli', () => {
     const result = runCli(
       ['machines', 'preflight', '--scope', 'project', '--workspace', join(__dirname, '..'), '--json'],
       dir,
-      { PATH: `${bin}:${process.env.PATH ?? ''}` },
+      { PATH: pathWithBin(bin) },
     );
     expect(result.exitCode).toBe(0);
     const out = JSON.parse(new TextDecoder().decode(result.stdout));
@@ -480,7 +564,7 @@ describe('knowledge cli', () => {
     writeFakeMachinesRouteBin(bin, 'doctor-linux-node-a.tailnet.test', '/remote/open-knowledge', true);
 
     const result = runCli(['sync', 'doctor', '--machine', 'linux-node-a', '--scope', 'project', '--json'], dir, {
-      PATH: `${bin}:${process.env.PATH ?? ''}`,
+      PATH: pathWithBin(bin),
     });
 
     expect(result.exitCode).toBe(0);
@@ -793,7 +877,7 @@ describe('knowledge cli', () => {
       }],
     }, null, 2)}\n`);
 
-    const list = runCli(['list', '--json'], undefined, { HOME: home });
+    const list = runCli(['list', '--json'], undefined, isolatedHomeEnv(home));
     expect(list.exitCode).toBe(0);
     const listOut = JSON.parse(new TextDecoder().decode(list.stdout));
     expect(listOut.total).toBe(1);
@@ -1033,7 +1117,7 @@ describe('knowledge cli', () => {
     writeFailingMachinesBin(bin, machinesMarker);
     writeFileSync(source, 'Explicit peer workspace sync must not require open-machines.');
 
-    const env = { PATH: `${bin}:${process.env.PATH ?? ''}` };
+    const env = { PATH: pathWithBin(bin) };
     expect(runCli(['ingest', 'source', `file://${source}`, '--scope', 'project', '--json'], sourceDir, env).exitCode).toBe(0);
     expect(runCli(['wiki', 'init', '--scope', 'project', '--json'], sourceDir, env).exitCode).toBe(0);
 
@@ -1111,7 +1195,8 @@ describe('knowledge cli', () => {
     };
 
     const result = runCli(['sync', 'pull', '--machine', 'linux-node-a', '--peer-workspace', '/remote/open-knowledge', '--scope', 'project', '--json'], dir, {
-      PATH: `${bin}:${process.env.PATH ?? ''}`,
+      PATH: pathWithBin(bin),
+      ...fakeSshCommandEnv(bin),
       KNOWLEDGE_FAKE_SSH_EXPORT_JSON: JSON.stringify(oldBundle),
     });
 
@@ -1145,7 +1230,8 @@ describe('knowledge cli', () => {
     };
 
     const result = runCli(['sync', 'pull', '--machine', 'linux-node-a', '--peer-workspace', '/remote/open-knowledge', '--scope', 'project', '--json'], dir, {
-      PATH: `${bin}:${process.env.PATH ?? ''}`,
+      PATH: pathWithBin(bin),
+      ...fakeSshCommandEnv(bin),
       KNOWLEDGE_FAKE_SSH_EXPORT_JSON: JSON.stringify(bundle),
       KNOWLEDGE_FAKE_SSH_TARGET_PATH: targetPath,
     });
@@ -1202,7 +1288,8 @@ describe('knowledge cli', () => {
     };
 
     const result = runCli(['sync', 'pull', '--machine', 'linux-node-a', '--scope', 'project', '--json'], dir, {
-      PATH: `${bin}:${process.env.PATH ?? ''}`,
+      PATH: pathWithBin(bin),
+      ...fakeSshCommandEnv(bin),
       KNOWLEDGE_FAKE_SSH_EXPORT_JSON: JSON.stringify(bundle),
       KNOWLEDGE_FAKE_SSH_TARGET_PATH: targetPath,
     });
@@ -1253,7 +1340,8 @@ describe('knowledge cli', () => {
     };
 
     const result = runCli(['sync', 'push', '--machine', 'linux-node-a', '--peer-workspace', '/remote/open-knowledge', '--scope', 'project', '--json', '--dry-run'], dir, {
-      PATH: `${bin}:${process.env.PATH ?? ''}`,
+      PATH: pathWithBin(bin),
+      ...fakeSshCommandEnv(bin),
       KNOWLEDGE_FAKE_SSH_IMPORT_JSON: JSON.stringify(oldImportResult),
       KNOWLEDGE_FAKE_SSH_STDIN_PATH: stdinPath,
     });
@@ -1718,7 +1806,7 @@ describe('knowledge cli', () => {
     expect(out.sources[0].uri).toBe(sourceRef);
     expect(out.chunks.some((chunk: any) => String(chunk.text_preview).includes('inventory command'))).toBe(true);
     expect(out.wiki_pages.some((page: any) => page.path === 'wiki/README.md')).toBe(true);
-    expect(out.storage_objects.some((object: any) => object.artifact_uri.includes('wiki/README.md'))).toBe(true);
+    expect(out.storage_objects.some((object: any) => String(object.artifact_uri).replace(/\\/g, '/').includes('wiki/README.md'))).toBe(true);
     expect(out.runs.some((run: any) => run.type === 'knowledge-prompt')).toBe(true);
 
     const text = runCli(['inventory', '--scope', 'project', '--limit', '3'], dir);
@@ -1751,7 +1839,7 @@ describe('knowledge cli', () => {
       bucket: 'company-bucket',
       key: 'docs/handbook.pdf',
     });
-    const fileRef = 'file:///tmp/readme.md';
+    const fileRef = pathToFileURL(join(tmpdir(), 'readme.md')).href;
     expect(parseSourceRef(fileRef)).toMatchObject({ kind: 'file', path: fileURLToPath(fileRef) });
     expect(parseSourceRef('https://example.com/docs')).toMatchObject({ kind: 'web', url: 'https://example.com/docs' });
   });

@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
 
 interface S3ClientLike {
@@ -72,7 +73,7 @@ export class LocalArtifactStore implements ArtifactStore {
     assertInside(this.root, path);
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, entry.body);
-    return { key, uri: `file://${path}`, modified_at: statSync(path).mtime.toISOString() };
+    return { key, uri: pathToFileURL(path).href, modified_at: statSync(path).mtime.toISOString() };
   }
 
   async getText(key: string): Promise<string> {

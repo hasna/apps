@@ -1060,8 +1060,25 @@ function doctorRecommendations(input: {
   return commands;
 }
 
+function resolveSshSpawnSpec(): { command: string; argsPrefix: string[] } {
+  const command = process.env.KNOWLEDGE_SSH_COMMAND?.trim() || 'ssh';
+  const rawArgs = process.env.KNOWLEDGE_SSH_COMMAND_ARGS_JSON;
+  if (!rawArgs) return { command, argsPrefix: [] };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawArgs);
+  } catch (error) {
+    throw new Error(`KNOWLEDGE_SSH_COMMAND_ARGS_JSON must be a JSON string array: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!Array.isArray(parsed) || !parsed.every((arg): arg is string => typeof arg === 'string')) {
+    throw new Error('KNOWLEDGE_SSH_COMMAND_ARGS_JSON must be a JSON string array.');
+  }
+  return { command, argsPrefix: parsed };
+}
+
 function runSshCommand(machine: string, command: string, input: string | undefined, resolved: KnowledgeMachineRouteResolution): string {
-  const result = spawnSync('ssh', [resolved.target, command], {
+  const ssh = resolveSshSpawnSpec();
+  const result = spawnSync(ssh.command, [...ssh.argsPrefix, resolved.target, command], {
     encoding: 'utf8',
     env: process.env,
     input,
