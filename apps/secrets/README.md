@@ -50,6 +50,23 @@ Inspect audit history:
 secrets audit example/anthropic/test/api_key
 ```
 
+Inspect metadata-only secret reference health:
+
+```bash
+secrets status --json
+```
+
+The status contract reports package version, redacted local data paths, env
+override names, and aggregate counts only. It does not include secret values,
+secret key names, raw env values, provider inventory, or private key material.
+
+```ts
+import { getSecretReferenceStatus } from "@hasna/secrets/status";
+
+const status = getSecretReferenceStatus();
+console.log(status.counts.byType.api_key);
+```
+
 Export redacted compact JSON for review:
 
 ```bash
@@ -69,6 +86,23 @@ secrets scan workspace --limit 50
 secrets scan history --max-commits 200 --limit 50
 ```
 
+Create secure loop evidence and deduped Todos tasks for unsafe sensitive-file
+permissions:
+
+```bash
+secrets security permissions \
+  --report-dir ~/.hasna/loops/evidence/secret-file-permissions \
+  --upsert-tasks \
+  --todos-project ~/.hasna/loops \
+  --task-list secret-file-permissions \
+  --max-task-actions 20 \
+  --json
+```
+
+The permissions report is written with private file permissions and contains
+paths, modes, fingerprints, and task routing metadata only. It does not include
+secret values.
+
 Delete a secret:
 
 ```bash
@@ -87,7 +121,7 @@ Examples:
 
 ```text
 example/anthropic/test/api_key
-local/apple03/tool/exa/api_key
+example/local/dev-workstation/tool/exa-api-key
 example-app/oauth/youtube_client_secret
 ```
 
@@ -238,6 +272,12 @@ Agents connect over stdio by running:
 
 ```bash
 secrets mcp
+```
+
+Start the shared Streamable HTTP MCP server explicitly:
+
+```bash
+secrets mcp http --port 8848
 ```
 
 The MCP exposes these tools:

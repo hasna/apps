@@ -19,6 +19,9 @@ describe("CLI docs", () => {
     expect(stdout).toContain("secrets docs");
     expect(stdout).toContain("Common CLI workflows");
     expect(stdout).toContain("MCP tools");
+    expect(stdout).toContain("Agents connect over stdio by running:");
+    expect(stdout).toContain("secrets mcp");
+    expect(stdout).toContain("secrets mcp http --port 8848");
     expect(stdout).toContain("secrets import-env --dir ~/.secrets --dry-run");
     expect(stdout).toContain("secrets export");
     expect(stdout).toContain("secrets scan workspace --limit 50");

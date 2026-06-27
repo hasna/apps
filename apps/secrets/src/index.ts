@@ -24,6 +24,7 @@ import {
 import { getDb } from "./db.js";
 import { encrypt, decrypt, isEncrypted, getMasterKey, initKms, getKeyStatus } from "./crypto.js";
 import type { SecretEntry, SecretMetadata, VaultItemKind, VaultItemMetadata, VaultItemPayload } from "./types.js";
+import { getSecretReferenceStatus } from "./status.js";
 import { runEventsCli } from "@hasna/events/cli";
 
 const SECRET_TYPES: SecretEntry["type"][] = ["api_key", "password", "token", "credential", "other"];
@@ -59,10 +60,11 @@ Commands:
   export [--show|--plaintext] [--pretty]  export redacted compact JSON by default
   scan workspace [path] [--limit <n>] [--max-bytes <n>] [--max-files <n>] [--max-scan-bytes <n>] [--timeout-ms <n>] [--pretty]
   scan history [path] [--limit <n>] [--max-commits <n>] [--timeout-ms <n>] [--pretty]
-  security permissions [--roots <paths>] [--fix-permissions] [--json|--pretty]
+  security permissions [--roots <paths>] [--fix-permissions] [--report-dir <dir>] [--upsert-tasks] [--todos-project <path>] [--task-list <slug>] [--max-task-actions <n>] [--json|--pretty]
   security exposure [--mode workspace|history] [--roots <paths>] [--limit <n>] [--json|--pretty]
   security supply-chain [--roots <paths>] [--max-files <n>] [--max-findings <n>] [--json|--pretty]
   import <json-file>
+  status                      show metadata-only secret reference health
   gc                          prune expired secrets
   audit [key]                 show audit log
   path                        show vault db path
@@ -93,6 +95,7 @@ Commands:
 
   feedback <message>          send feedback [--email <email>] [--category <cat>]
   mcp                         start MCP server (stdio)
+  mcp http [--port <n>]        start Streamable HTTP MCP server
   mcp install [--target claude|codex|gemini]  install MCP into AI agents
 
 Types: ${SECRET_TYPES.join(", ")}
@@ -131,7 +134,7 @@ Key format
 
   Examples:
     example/anthropic/test/api_key
-    local/apple03/tool/exa/api_key
+    example/local/dev-workstation/tool/exa-api-key
     example-app/oauth/youtube_client_secret
 
 Common CLI workflows
@@ -197,6 +200,9 @@ MCP usage
 
   Agents connect over stdio by running:
     secrets mcp
+
+  Start the Streamable HTTP MCP server explicitly:
+    secrets mcp http --port 8848
 
   MCP tools:
     list_secrets(namespace?)
@@ -379,6 +385,20 @@ function commaListFlag(flags: Record<string, string>, name: string): string[] | 
 }
 
 const args = process.argv.slice(2);
+
+async function runSharedEventCli(args: string[]): Promise<boolean> {
+  if (args[0] !== "events" && args[0] !== "webhooks") return false;
+  const [{ Command }, { registerEventsCommands }] = await Promise.all([
+    import("commander"),
+    import("@hasna/events/commander"),
+  ]);
+  const program = new Command().name("secrets");
+  registerEventsCommands(program, { source: "secrets" });
+  await program.parseAsync(["node", "secrets", ...args]);
+  return true;
+}
+
+if (await runSharedEventCli(args)) process.exit(0);
 const [command, ...rest] = args;
 
 if (command === "events" || command === "webhooks") {
@@ -533,7 +553,34 @@ switch (command) {
           maxFiles: positiveIntegerFlag(flags, "max-files"),
           fixPermissions: flags["fix-permissions"] === "true",
         });
-        console.log(formatJson(result, pretty));
+        let output: Record<string, unknown> = result as unknown as Record<string, unknown>;
+        if (flags["upsert-tasks"] === "true") {
+          const { defaultLoopsTodosProject, upsertSecurityTaskSuggestions } = await import("./loop-tasks.js");
+          const upsert = upsertSecurityTaskSuggestions(result.task_suggestions, {
+            project: flags["todos-project"] ?? defaultLoopsTodosProject(),
+            taskList: flags["task-list"] ?? "secret-file-permissions",
+            taskListName: flags["task-list-name"] ?? "Secret File Permissions",
+            taskListDescription: "Deduped deterministic OpenSecrets findings for unsafe sensitive-file permissions.",
+            maxActions: positiveIntegerFlag(flags, "max-task-actions"),
+          });
+          output = { ...output, todos: upsert };
+          if (upsert.summary.errors > 0) process.exitCode = 1;
+        }
+        if (flags["report-dir"]) {
+          const { writeSecureLoopReport } = await import("./loop-tasks.js");
+          const reportPath = writeSecureLoopReport(output, {
+            reportDir: flags["report-dir"],
+            prefix: "secret-file-permissions",
+            annotatePath: true,
+          });
+          if (reportPath) {
+            const loop = output.loop && typeof output.loop === "object" && !Array.isArray(output.loop)
+              ? output.loop as Record<string, unknown>
+              : {};
+            output = { ...output, loop: { ...loop, report_path: reportPath } };
+          }
+        }
+        console.log(formatJson(output, pretty));
         if (result.summary.findings > 0 && !result.fixed) process.exitCode = 1;
         break;
       }
@@ -587,6 +634,20 @@ switch (command) {
     } catch (e: any) {
       console.error(`Import failed: ${e.message}`);
       process.exit(1);
+    }
+    break;
+  }
+
+  case "status": {
+    const status = getSecretReferenceStatus();
+    if ("json" in flags) {
+      console.log(JSON.stringify(status, null, 2));
+    } else {
+      console.log(`secrets ${status.package.version}`);
+      console.log(`dataDir: ${status.dataDir}`);
+      console.log(`secrets: ${status.counts.secrets}`);
+      console.log(`users: ${status.counts.users}`);
+      console.log("values: not included");
     }
     break;
   }
@@ -925,9 +986,22 @@ switch (command) {
       const targets = flags.target ? [flags.target] : ["claude", "codex", "gemini"];
       const { installMcp } = await import("./install.js");
       installMcp(targets);
-    } else {
+    } else if (flags.stdio === "true") {
       const { startMcpServer } = await import("./mcp.js");
       await startMcpServer();
+    } else {
+      const { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } = await import("./mcp-http.js");
+      const mcpArgs = [
+        ...(sub === "http" || flags.http === "true" ? ["--http"] : []),
+        ...(flags.port ? ["--port", String(flags.port)] : []),
+      ];
+      if (isHttpMode(mcpArgs)) {
+        const { buildServer } = await import("./mcp.js");
+        startMcpHttpServer({ name: "secrets", port: resolveMcpHttpPort(mcpArgs), buildServer });
+      } else {
+        const { startMcpServer } = await import("./mcp.js");
+        await startMcpServer();
+      }
     }
     break;
   }
@@ -1084,7 +1158,7 @@ switch (command) {
           console.log(`Data key:   ${status.keyPath} (encrypted with KMS)`);
         } else {
           console.log(`KMS not configured.`);
-          console.log(`\nSetup: secrets key kms setup --key-id <KMS key ID or alias> [--region us-east-1] [--profile hasna-xyz-hq]`);
+          console.log(`\nSetup: secrets key kms setup --key-id <KMS key ID or alias> [--region us-east-1] [--profile example-aws-profile]`);
         }
       }
     } else if (sub === "path") {

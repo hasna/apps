@@ -1,7 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { registerCloudTools } from "@hasna/cloud";
 import { realpathSync } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { homedir } from "node:os";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import {
   STORAGE_TABLES,
@@ -30,12 +32,13 @@ import {
   registerUser,
   listUsers,
 } from "./store.js";
+import { PG_MIGRATIONS } from "./pg-migrations.js";
 
 const SECRET_TYPES = ["api_key", "password", "token", "credential", "other"] as const;
 const VAULT_ITEM_KINDS = ["login", "address", "identity", "payment_card", "secure_note", "api_key", "custom"] as const;
 const STORAGE_TABLE_SCHEMA = z.enum(STORAGE_TABLES);
 
-export async function startMcpServer(): Promise<void> {
+export function buildServer(): McpServer {
   const server = new McpServer({
     name: "open-secrets",
     version: "0.1.0",
@@ -338,8 +341,14 @@ export async function startMcpServer(): Promise<void> {
     }
   );
 
+  const vaultPath = process.env.HASNA_SECRETS_DB_PATH ?? process.env.OPEN_SECRETS_DB ?? join(homedir(), ".hasna", "secrets", "vault.db");
+  registerCloudTools(server, "secrets", { migrations: PG_MIGRATIONS, dbPath: vaultPath });
+  return server;
+}
+
+export async function startMcpServer(): Promise<void> {
   const transport = new StdioServerTransport();
-  await server.connect(transport);
+  await buildServer().connect(transport);
 }
 
 function parseTtl(ttl: string): string {
