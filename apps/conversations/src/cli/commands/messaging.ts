@@ -9,6 +9,24 @@ import { buildMessagePreview, listChannelNotificationSubscriptions, markAllChann
 import { previewText } from "../../lib/compact-output.js";
 import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor } from "../compact.js";
 import { printMessageEntry } from "../message-output.js";
+import type { DigestResult } from "../../lib/messages.js";
+
+function quoteDigestCommandArg(value: string): string {
+  return /^[A-Za-z0-9._:/@=-]+$/.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+export function formatDigestContinuationCommand(result: Pick<DigestResult, "channel" | "session_id" | "to" | "next_cursor" | "max_bytes">): string {
+  const parts = ["conversations", "digest"];
+  if (result.channel) {
+    parts.push(quoteDigestCommandArg(result.channel));
+  } else if (result.session_id) {
+    parts.push("--session", quoteDigestCommandArg(result.session_id));
+  } else if (result.to) {
+    parts.push("--to", quoteDigestCommandArg(result.to));
+  }
+  parts.push("--cursor", String(result.next_cursor), "--max-bytes", String(result.max_bytes));
+  return parts.join(" ");
+}
 
 export function registerMessagingCommands(program: Command): void {
   // ---- send ----
@@ -240,7 +258,7 @@ export function registerMessagingCommands(program: Command): void {
             console.log(`${time} ${from} → ${dest}${priority}${att}${unread} ${chalk.dim(`#${msg.id}`)}`);
             console.log(`  ${chalk.dim(msg.snippet)}`);
           }
-          if (result.has_more) console.log(chalk.dim(`Continue with: conversations digest ${result.channel ?? ""} --cursor ${result.next_cursor} --max-bytes ${result.max_bytes}`.trim()));
+          if (result.has_more) console.log(chalk.dim(`Continue with: ${formatDigestContinuationCommand(result)}`));
           console.log(chalk.dim("Use conversations show <id> for one full message."));
         }
       }

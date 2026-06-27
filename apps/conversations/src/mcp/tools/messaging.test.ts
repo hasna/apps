@@ -243,6 +243,27 @@ describe("messaging MCP tools", () => {
       expect((result as any).isError).toBe(true);
     });
 
+    test("applies default project resolver when project_id is omitted", async () => {
+      const server = new McpServer({ name: "test-focused-digest-mcp", version: "0.0.1" });
+      registerMessagingTools(server, (explicit, _agent) => explicit ?? "focused-project");
+      const [focusedClientTransport, focusedServerTransport] = InMemoryTransport.createLinkedPair();
+      const focusedClient = new Client({ name: "test-focused-client", version: "1.0.0" });
+      await server.connect(focusedServerTransport);
+      await focusedClient.connect(focusedClientTransport);
+
+      const included = sendMessage({ from: "alice", to: "focused-reader", content: "included", project_id: "focused-project" });
+      sendMessage({ from: "alice", to: "focused-reader", content: "excluded", project_id: "other-project" });
+
+      const result = parseResult(await focusedClient.callTool({
+        name: "read_digest",
+        arguments: { to: "focused-reader", from: "project-reader" },
+      }) as any) as any;
+      expect(result.message_ids).toEqual([included.id]);
+      expect(result.total_available).toBe(1);
+
+      await focusedClient.close();
+    });
+
     test("returns cursored byte-capped digest", async () => {
       createChannel("digest-mcp-channel", "messaging-test-agent");
       const first = sendMessage({ from: "alice", to: "digest-mcp-channel", channel: "digest-mcp-channel", content: "first digest evidence" });

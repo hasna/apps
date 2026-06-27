@@ -714,7 +714,6 @@ export function readDigest(opts: ReadDigestOptions = {}): DigestResult {
     }
 
     if (!best) {
-      let skippedEntries = entries;
       let skipped = buildDigestResult({
         channel,
         session_id: opts.session_id ?? null,
@@ -725,14 +724,14 @@ export function readDigest(opts: ReadDigestOptions = {}): DigestResult {
         limit,
         total_available: counts.total_available,
         total_unread: counts.total_unread,
-        entries: skippedEntries,
+        entries,
         skipped_count: 1,
         advance_cursor: message.id,
-        marked_read: opts.mark_read ? skippedEntries.length : 0,
+        marked_read: opts.mark_read ? entries.length : 0,
       });
-      while (skipped.byte_length > maxBytes && skippedEntries.length > 0) {
-        skippedEntries = skippedEntries.slice(0, -1);
-        skipped = buildDigestResult({
+
+      if (skipped.byte_length > maxBytes && entries.length > 0) {
+        let page = buildDigestResult({
           channel,
           session_id: opts.session_id ?? null,
           to: opts.to ?? null,
@@ -742,15 +741,34 @@ export function readDigest(opts: ReadDigestOptions = {}): DigestResult {
           limit,
           total_available: counts.total_available,
           total_unread: counts.total_unread,
-          entries: skippedEntries,
-          skipped_count: 1,
-          advance_cursor: message.id,
-          marked_read: opts.mark_read ? skippedEntries.length : 0,
+          entries,
+          marked_read: opts.mark_read ? entries.length : 0,
         });
+
+        assertDigestFits(page);
+        if (opts.mark_read) {
+          const markedRead = markDigestEntriesRead(entries, opts.reader);
+          page = buildDigestResult({
+            channel,
+            session_id: opts.session_id ?? null,
+            to: opts.to ?? null,
+            since: opts.since ?? null,
+            cursor: cursor ?? null,
+            max_bytes: maxBytes,
+            limit,
+            total_available: counts.total_available,
+            total_unread: counts.total_unread,
+            entries,
+            marked_read: markedRead,
+          });
+          assertDigestFits(page);
+        }
+        return page;
       }
+
       assertDigestFits(skipped);
-      if (opts.mark_read && skippedEntries.length > 0) {
-        const markedRead = markDigestEntriesRead(skippedEntries, opts.reader);
+      if (opts.mark_read && entries.length > 0) {
+        const markedRead = markDigestEntriesRead(entries, opts.reader);
         skipped = buildDigestResult({
           channel,
           session_id: opts.session_id ?? null,
@@ -761,7 +779,7 @@ export function readDigest(opts: ReadDigestOptions = {}): DigestResult {
           limit,
           total_available: counts.total_available,
           total_unread: counts.total_unread,
-          entries: skippedEntries,
+          entries,
           skipped_count: 1,
           advance_cursor: message.id,
           marked_read: markedRead,

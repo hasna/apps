@@ -345,6 +345,7 @@ export function registerMessagingTools(
     },
   }, async (args: Record<string, any>) => {
     const { channel, session_id, to, since, cursor, max_bytes, limit, unread_only, mark_read, from: fromParam, project_id } = args;
+    const agent = resolveIdentity(fromParam);
     if (!channel && !session_id && !to) {
       return {
         content: [{ type: "text", text: "Provide channel, session_id, or to for read_digest." }],
@@ -363,8 +364,8 @@ export function registerMessagingTools(
         limit,
         unread_only,
         mark_read,
-        reader: mark_read ? resolveIdentity(fromParam) : undefined,
-        project_id,
+        reader: mark_read ? agent : undefined,
+        project_id: project_id ?? resolveProjectId(undefined, agent),
       });
     } catch (error) {
       return {
