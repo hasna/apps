@@ -4,7 +4,7 @@
  * Licensed under the Apache License, Version 2.0
  */
 import { describe, expect, test } from 'bun:test';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
@@ -65,6 +65,10 @@ function runKnowledgeBin(args: string[], cwd?: string, env?: Record<string, stri
     stdout: 'pipe',
     stderr: 'pipe',
   });
+}
+
+function expectSameExistingPath(actual: string, expected: string): void {
+  expect(realpathSync(actual)).toBe(realpathSync(expected));
 }
 
 function writeFakeSshBin(dir: string): string {
@@ -400,7 +404,7 @@ describe('knowledge cli', () => {
     const paths = runCli(['paths', '--scope', 'project', '--json'], dir);
     expect(paths.exitCode).toBe(0);
     const pathsOut = JSON.parse(new TextDecoder().decode(paths.stdout));
-    expect(pathsOut.home).toBe(join(dir, '.hasna', 'apps', 'knowledge'));
+    expectSameExistingPath(pathsOut.home, join(dir, '.hasna', 'apps', 'knowledge'));
     expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'config.json'))).toBe(true);
     expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'runs'))).toBe(true);
     expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'wiki'))).toBe(true);
@@ -441,7 +445,7 @@ describe('knowledge cli', () => {
     expect(out.adapter.package).toBe('@hasna/machines');
     expect(typeof out.adapter.available).toBe('boolean');
     expect(out.knowledge.app_path).toBe(join('.hasna', 'apps', 'knowledge'));
-    expect(out.knowledge.workspace_home).toBe(join(dir, '.hasna', 'apps', 'knowledge'));
+    expectSameExistingPath(out.knowledge.workspace_home, join(dir, '.hasna', 'apps', 'knowledge'));
     expect(out.machines.length).toBeGreaterThanOrEqual(1);
     expect(out.machines.some((machine: any) => machine.local)).toBe(true);
   });
