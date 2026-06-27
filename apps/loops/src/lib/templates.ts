@@ -18,7 +18,13 @@ export interface TodosTaskWorkflowTemplateInput {
   projectPath: string;
   provider?: AgentProvider;
   authProfile?: string;
+  authProfilePool?: string[];
+  workerAuthProfile?: string;
+  verifierAuthProfile?: string;
   account?: AccountRef;
+  accountPool?: AccountRef[];
+  workerAccount?: AccountRef;
+  verifierAccount?: AccountRef;
   model?: string;
   variant?: string;
   agent?: string;
@@ -38,7 +44,13 @@ export interface EventWorkflowTemplateInput {
   projectPath: string;
   provider?: AgentProvider;
   authProfile?: string;
+  authProfilePool?: string[];
+  workerAuthProfile?: string;
+  verifierAuthProfile?: string;
   account?: AccountRef;
+  accountPool?: AccountRef[];
+  workerAccount?: AccountRef;
+  verifierAccount?: AccountRef;
   model?: string;
   variant?: string;
   agent?: string;
@@ -59,6 +71,10 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "projectPath", required: true, description: "Repository or project working directory." },
       { name: "provider", default: "codewith", description: "Agent provider: codewith, claude, cursor, opencode, aicopilot, or codex." },
       { name: "authProfile", description: "Provider-native auth profile, currently Codewith." },
+      { name: "authProfilePool", description: "Comma-separated provider-native auth profiles; worker/verifier are selected deterministically." },
+      { name: "workerAuthProfile", description: "Provider-native auth profile for the worker step." },
+      { name: "verifierAuthProfile", description: "Provider-native auth profile for the verifier step." },
+      { name: "accountPool", description: "Comma-separated OpenAccounts profiles; worker/verifier are selected deterministically." },
       { name: "model", description: "Provider model." },
       { name: "variant", description: "Provider reasoning/model effort variant." },
       { name: "permissionMode", default: "bypass", description: "Provider permission mode: default, plan, auto, or bypass." },
@@ -79,6 +95,10 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "projectPath", required: true, description: "Repository or project working directory." },
       { name: "provider", default: "codewith", description: "Agent provider: codewith, claude, cursor, opencode, aicopilot, or codex." },
       { name: "authProfile", description: "Provider-native auth profile, currently Codewith." },
+      { name: "authProfilePool", description: "Comma-separated provider-native auth profiles; worker/verifier are selected deterministically." },
+      { name: "workerAuthProfile", description: "Provider-native auth profile for the worker step." },
+      { name: "verifierAuthProfile", description: "Provider-native auth profile for the verifier step." },
+      { name: "accountPool", description: "Comma-separated OpenAccounts profiles; worker/verifier are selected deterministically." },
       { name: "model", description: "Provider model." },
       { name: "variant", description: "Provider reasoning/model effort variant." },
       { name: "permissionMode", default: "bypass", description: "Provider permission mode: default, plan, auto, or bypass." },
@@ -96,12 +116,60 @@ function taskLabel(input: TodosTaskWorkflowTemplateInput): string {
   return head.length > 160 ? `${head.slice(0, 157)}...` : head;
 }
 
+type AgentWorkflowTemplateInput = Pick<
+  TodosTaskWorkflowTemplateInput,
+  | "projectPath"
+  | "provider"
+  | "authProfile"
+  | "authProfilePool"
+  | "workerAuthProfile"
+  | "verifierAuthProfile"
+  | "account"
+  | "accountPool"
+  | "workerAccount"
+  | "verifierAccount"
+  | "model"
+  | "variant"
+  | "agent"
+  | "permissionMode"
+  | "sandbox"
+>;
+
+type AgentWorkflowRole = "worker" | "verifier";
+
+function stableIndex(seed: string, size: number): number {
+  let hash = 2166136261;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash ^= seed.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return Math.abs(hash >>> 0) % size;
+}
+
+function rolePoolValue<T>(pool: T[] | undefined, seed: string, role: AgentWorkflowRole): T | undefined {
+  if (!pool?.length) return undefined;
+  const workerIndex = stableIndex(seed, pool.length);
+  if (role === "worker" || pool.length === 1) return pool[workerIndex];
+  return pool[(workerIndex + 1) % pool.length];
+}
+
+function authProfileForRole(input: AgentWorkflowTemplateInput, role: AgentWorkflowRole, seed: string): string | undefined {
+  if (role === "worker" && input.workerAuthProfile) return input.workerAuthProfile;
+  if (role === "verifier" && input.verifierAuthProfile) return input.verifierAuthProfile;
+  return rolePoolValue(input.authProfilePool, seed, role) ?? input.authProfile;
+}
+
+function accountForRole(input: AgentWorkflowTemplateInput, role: AgentWorkflowRole, seed: string): AccountRef | undefined {
+  if (role === "worker" && input.workerAccount) return input.workerAccount;
+  if (role === "verifier" && input.verifierAccount) return input.verifierAccount;
+  return rolePoolValue(input.accountPool, seed, role) ?? input.account;
+}
+
 function agentTarget(
-  input: Pick<
-    TodosTaskWorkflowTemplateInput,
-    "projectPath" | "provider" | "authProfile" | "model" | "variant" | "agent" | "permissionMode" | "sandbox" | "account"
-  >,
+  input: AgentWorkflowTemplateInput,
   prompt: string,
+  role: AgentWorkflowRole,
+  seed: string,
 ): WorkflowStep["target"] {
   const provider = input.provider ?? "codewith";
   const sandbox =
@@ -119,11 +187,11 @@ function agentTarget(
     model: input.model,
     variant: input.variant,
     agent: input.agent,
-    authProfile: provider === "codewith" ? input.authProfile : undefined,
+    authProfile: provider === "codewith" ? authProfileForRole(input, role, seed) : undefined,
     configIsolation: "safe",
     permissionMode: input.permissionMode ?? "bypass",
     sandbox,
-    account: input.account,
+    account: accountForRole(input, role, seed),
     timeoutMs: 45 * 60_000,
   };
 }
@@ -177,7 +245,7 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
         id: "worker",
         name: "Worker",
         description: "Implement the todos task and record evidence.",
-        target: agentTarget(input, workerPrompt),
+        target: agentTarget(input, workerPrompt, "worker", input.taskId),
         timeoutMs: 45 * 60_000,
       },
       {
@@ -185,7 +253,7 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
         name: "Verifier",
         description: "Adversarially verify worker output and update todos.",
         dependsOn: ["worker"],
-        target: agentTarget(input, verifierPrompt),
+        target: agentTarget(input, verifierPrompt, "verifier", input.taskId),
         timeoutMs: 30 * 60_000,
       },
     ],
@@ -236,7 +304,7 @@ export function renderEventWorkerVerifierWorkflow(input: EventWorkflowTemplateIn
         id: "worker",
         name: "Worker",
         description: "Handle the Hasna event and record evidence.",
-        target: agentTarget(input, workerPrompt),
+        target: agentTarget(input, workerPrompt, "worker", `${input.eventSource}:${input.eventType}:${input.eventId}`),
         timeoutMs: 45 * 60_000,
       },
       {
@@ -244,7 +312,7 @@ export function renderEventWorkerVerifierWorkflow(input: EventWorkflowTemplateIn
         name: "Verifier",
         description: "Adversarially verify event handling.",
         dependsOn: ["worker"],
-        target: agentTarget(input, verifierPrompt),
+        target: agentTarget(input, verifierPrompt, "verifier", `${input.eventSource}:${input.eventType}:${input.eventId}`),
         timeoutMs: 30 * 60_000,
       },
     ],
@@ -260,7 +328,11 @@ export function renderLoopTemplate(id: string, values: Record<string, string | u
       projectPath: values.projectPath ?? values.cwd ?? process.cwd(),
       provider: values.provider as AgentProvider | undefined,
       authProfile: values.authProfile,
+      authProfilePool: listVar(values.authProfilePool),
+      workerAuthProfile: values.workerAuthProfile,
+      verifierAuthProfile: values.verifierAuthProfile,
       account: values.account ? { profile: values.account, tool: values.accountTool } : undefined,
+      accountPool: accountPoolVar(values.accountPool, values.accountTool),
       model: values.model,
       variant: values.variant,
       agent: values.agent,
@@ -281,7 +353,11 @@ export function renderLoopTemplate(id: string, values: Record<string, string | u
       projectPath: values.projectPath ?? values.cwd ?? process.cwd(),
       provider: values.provider as AgentProvider | undefined,
       authProfile: values.authProfile,
+      authProfilePool: listVar(values.authProfilePool),
+      workerAuthProfile: values.workerAuthProfile,
+      verifierAuthProfile: values.verifierAuthProfile,
       account: values.account ? { profile: values.account, tool: values.accountTool } : undefined,
+      accountPool: accountPoolVar(values.accountPool, values.accountTool),
       model: values.model,
       variant: values.variant,
       agent: values.agent,
@@ -290,4 +366,16 @@ export function renderLoopTemplate(id: string, values: Record<string, string | u
     });
   }
   throw new Error(`unknown template: ${id}`);
+}
+
+function listVar(value: string | undefined): string[] | undefined {
+  const values = value
+    ?.split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return values?.length ? values : undefined;
+}
+
+function accountPoolVar(value: string | undefined, tool?: string): AccountRef[] | undefined {
+  return listVar(value)?.map((profile) => ({ profile, tool }));
 }

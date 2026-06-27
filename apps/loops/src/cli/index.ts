@@ -187,9 +187,33 @@ function goalFromOpts(opts: Record<string, string | boolean | undefined>) {
   );
 }
 
-function accountFromOpts(opts: { account?: string; accountTool?: string }): AccountRef | undefined {
-  if (!opts.account && opts.accountTool) throw new Error("--account-tool requires --account");
+function accountFromOpts(opts: {
+  account?: string;
+  accountTool?: string;
+  accountPool?: string;
+  workerAccount?: string;
+  verifierAccount?: string;
+}): AccountRef | undefined {
+  if (!opts.account && opts.accountTool && !opts.accountPool && !opts.workerAccount && !opts.verifierAccount) {
+    throw new Error("--account-tool requires --account, --account-pool, --worker-account, or --verifier-account");
+  }
   return opts.account ? { profile: opts.account, tool: opts.accountTool } : undefined;
+}
+
+function splitList(value: string | undefined): string[] | undefined {
+  const values = value
+    ?.split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return values?.length ? values : undefined;
+}
+
+function accountPoolFromOpts(opts: { accountPool?: string; accountTool?: string }): AccountRef[] | undefined {
+  return splitList(opts.accountPool)?.map((profile) => ({ profile, tool: opts.accountTool }));
+}
+
+function roleAccountFromOpts(opts: { accountTool?: string }, profile: string | undefined): AccountRef | undefined {
+  return profile ? { profile, tool: opts.accountTool } : undefined;
 }
 
 function parseVars(values: string[] | undefined): Record<string, string> {
@@ -475,7 +499,13 @@ eventsHandle
   .description("create a one-shot worker/verifier workflow loop for a todos task event")
   .option("--provider <provider>", "agent provider", "codewith")
   .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
+  .option("--auth-profile-pool <profiles>", "comma-separated provider-native auth profile pool")
+  .option("--worker-auth-profile <profile>", "provider-native auth profile for worker step")
+  .option("--verifier-auth-profile <profile>", "provider-native auth profile for verifier step")
   .option("--account <profile>", "OpenAccounts profile name")
+  .option("--account-pool <profiles>", "comma-separated OpenAccounts profile pool")
+  .option("--worker-account <profile>", "OpenAccounts profile for worker step")
+  .option("--verifier-account <profile>", "OpenAccounts profile for verifier step")
   .option("--account-tool <tool>", "OpenAccounts tool id")
   .option("--model <model>", "provider model")
   .option("--variant <variant>", "provider-specific model variant or reasoning effort")
@@ -520,7 +550,13 @@ eventsHandle
       projectPath,
       provider,
       authProfile,
+      authProfilePool: splitList(opts.authProfilePool),
+      workerAuthProfile: opts.workerAuthProfile,
+      verifierAuthProfile: opts.verifierAuthProfile,
       account: accountFromOpts(opts),
+      accountPool: accountPoolFromOpts(opts),
+      workerAccount: roleAccountFromOpts(opts, opts.workerAccount),
+      verifierAccount: roleAccountFromOpts(opts, opts.verifierAccount),
       model: opts.model,
       variant: opts.variant,
       agent: opts.agent,
@@ -588,7 +624,13 @@ eventsHandle
   .description("create a one-shot worker/verifier workflow loop for any Hasna event")
   .option("--provider <provider>", "agent provider", "codewith")
   .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
+  .option("--auth-profile-pool <profiles>", "comma-separated provider-native auth profile pool")
+  .option("--worker-auth-profile <profile>", "provider-native auth profile for worker step")
+  .option("--verifier-auth-profile <profile>", "provider-native auth profile for verifier step")
   .option("--account <profile>", "OpenAccounts profile name")
+  .option("--account-pool <profiles>", "comma-separated OpenAccounts profile pool")
+  .option("--worker-account <profile>", "OpenAccounts profile for worker step")
+  .option("--verifier-account <profile>", "OpenAccounts profile for verifier step")
   .option("--account-tool <tool>", "OpenAccounts tool id")
   .option("--model <model>", "provider model")
   .option("--variant <variant>", "provider-specific model variant or reasoning effort")
@@ -620,7 +662,13 @@ eventsHandle
       projectPath,
       provider,
       authProfile,
+      authProfilePool: splitList(opts.authProfilePool),
+      workerAuthProfile: opts.workerAuthProfile,
+      verifierAuthProfile: opts.verifierAuthProfile,
       account: accountFromOpts(opts),
+      accountPool: accountPoolFromOpts(opts),
+      workerAccount: roleAccountFromOpts(opts, opts.workerAccount),
+      verifierAccount: roleAccountFromOpts(opts, opts.verifierAccount),
       model: opts.model,
       variant: opts.variant,
       agent: opts.agent,
@@ -942,15 +990,19 @@ program
   .command("list")
   .alias("ls")
   .option("--status <status>", "filter by status")
+  .option("--archived", "show only archived loops")
+  .option("--all", "include archived loops")
   .action((opts) => {
+    if (opts.archived && opts.all) throw new Error("use either --archived or --all, not both");
     const store = new Store();
     try {
-      const loops = store.listLoops({ status: opts.status });
+      const loops = store.listLoops({ status: opts.status, archived: opts.archived, includeArchived: opts.all });
       if (isJson()) print(loops.map(publicLoop));
       else {
         for (const loop of loops) {
           const machine = loop.machine ? `  machine=${loop.machine.id}` : "";
-          console.log(`${loop.id}  ${loop.status.padEnd(7)}  next=${loop.nextRunAt ?? "-"}  ${loop.name}${machine}`);
+          const archive = loop.archivedAt ? `  archived=${loop.archivedAt} from=${loop.archivedFromStatus ?? "-"}` : "";
+          console.log(`${loop.id}  ${loop.status.padEnd(7)}  next=${loop.nextRunAt ?? "-"}  ${loop.name}${machine}${archive}`);
         }
       }
     } finally {
@@ -998,6 +1050,7 @@ function updateStatus(idOrName: string, status: "paused" | "active" | "stopped")
   const store = new Store();
   try {
     const loop = store.requireLoop(idOrName);
+    if (loop.archivedAt) throw new Error(`loop is archived; run 'loops unarchive ${idOrName}' first`);
     const updated = store.updateLoop(loop.id, { status, nextRunAt: status === "stopped" ? undefined : loop.nextRunAt });
     print(publicLoop(updated), `${updated.id} ${updated.status}`);
   } finally {
@@ -1018,6 +1071,26 @@ program
     }
   });
 
+program.command("archive <idOrName>").description("archive a loop without deleting history").action((idOrName) => {
+  const store = new Store();
+  try {
+    const loop = store.archiveLoop(idOrName);
+    print(publicLoop(loop), `${loop.id} archived`);
+  } finally {
+    store.close();
+  }
+});
+
+program.command("unarchive <idOrName>").alias("restore").description("restore an archived loop").action((idOrName) => {
+  const store = new Store();
+  try {
+    const loop = store.unarchiveLoop(idOrName);
+    print(publicLoop(loop), `${loop.id} ${loop.status}`);
+  } finally {
+    store.close();
+  }
+});
+
 program
   .command("run-now <idOrName>")
   .option("--show-output", "show stdout/stderr")
@@ -1025,6 +1098,7 @@ program
     const store = new Store();
     try {
       const loop = store.requireLoop(idOrName);
+      if (loop.archivedAt) throw new Error(`loop is archived; run 'loops unarchive ${idOrName}' before running it`);
       const runnerId = `manual:${process.pid}`;
       const now = new Date();
       let scheduledFor = manualRunScheduledFor(loop, now);

@@ -7,6 +7,31 @@ import { Store } from "../lib/store.js";
 import { LoopsClient } from "./index.js";
 
 describe("loops sdk", () => {
+  test("archives and unarchives loops through the client", async () => {
+    const store = new Store(":memory:");
+    const client = new LoopsClient({ store, runnerId: "manual" });
+    try {
+      const loop = client.create({
+        name: "sdk-archive",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "true" },
+      });
+      const archived = client.archive(loop.id);
+      expect(archived.status).toBe("paused");
+      expect(archived.archivedFromStatus).toBe("active");
+      expect(client.list()).toHaveLength(0);
+      expect(() => client.resume(loop.id)).toThrow("loop is archived");
+      await expect(client.runNow(loop.id)).rejects.toThrow("loop is archived");
+
+      const restored = client.unarchive(loop.id);
+      expect(restored.status).toBe("active");
+      expect(restored.archivedAt).toBeUndefined();
+      expect(client.list().map((entry) => entry.id)).toEqual([loop.id]);
+    } finally {
+      client.close();
+    }
+  });
+
   test("runNow falls back to ad hoc when the due slot is already terminal", async () => {
     const store = new Store(":memory:");
     const client = new LoopsClient({ store, runnerId: "manual" });

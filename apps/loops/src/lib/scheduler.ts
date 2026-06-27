@@ -33,6 +33,7 @@ export interface ClaimDueRunsResult extends TickResult {
 }
 
 export function manualRunScheduledFor(loop: Loop, now: Date = new Date()): string {
+  if (loop.archivedAt) return now.toISOString();
   if (loop.status === "active" && loop.nextRunAt && new Date(loop.nextRunAt).getTime() <= now.getTime()) {
     return loop.retryScheduledFor ?? loop.nextRunAt;
   }
@@ -40,6 +41,7 @@ export function manualRunScheduledFor(loop: Loop, now: Date = new Date()): strin
 }
 
 export function shouldAdvanceManualRun(loop: Loop, scheduledFor: string, now: Date = new Date()): boolean {
+  if (loop.archivedAt) return false;
   if (loop.status !== "active") return false;
   if (!loop.nextRunAt || new Date(loop.nextRunAt).getTime() > now.getTime()) return false;
   return scheduledFor === (loop.retryScheduledFor ?? loop.nextRunAt);
@@ -48,6 +50,7 @@ export function shouldAdvanceManualRun(loop: Loop, scheduledFor: string, now: Da
 export type ManualRunSource = "ad_hoc" | "due_slot" | "retry_slot";
 
 export function manualRunSource(loop: Loop, scheduledFor: string, now: Date = new Date()): ManualRunSource {
+  if (loop.archivedAt) return "ad_hoc";
   if (loop.status !== "active") return "ad_hoc";
   if (!loop.nextRunAt || new Date(loop.nextRunAt).getTime() > now.getTime()) return "ad_hoc";
   if (loop.retryScheduledFor && scheduledFor === loop.retryScheduledFor) return "retry_slot";
@@ -72,7 +75,7 @@ export function advanceLoop(
 ): void {
   if (run.status === "running") return;
   const current = store.getLoop(loop.id);
-  if (!current || current.status !== "active") return;
+  if (!current || current.status !== "active" || current.archivedAt) return;
   if (current.retryScheduledFor && current.retryScheduledFor !== run.scheduledFor) return;
   const shouldRetry = !succeeded && run.attempt < current.maxAttempts;
   if (shouldRetry) {

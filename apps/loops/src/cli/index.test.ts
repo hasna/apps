@@ -122,6 +122,41 @@ describe("loops CLI", () => {
     expect(value.runNow.advancesLoop).toBe(false);
   });
 
+  test("archives loops without deleting them and blocks run-now until unarchived", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-archive-"));
+    const create = runCli(dataDir, ["create", "command", "archivable", "--at", futureAt(), "--cmd", "true"]);
+    expect(create.status).toBe(0);
+
+    const archive = runCli(dataDir, ["--json", "archive", "archivable"]);
+    expect(archive.status).toBe(0);
+    const archived = JSON.parse(archive.stdout);
+    expect(archived.status).toBe("paused");
+    expect(archived.archivedAt).toBeDefined();
+    expect(archived.archivedFromStatus).toBe("active");
+
+    const list = runCli(dataDir, ["--json", "list"]);
+    expect(list.status).toBe(0);
+    expect(JSON.parse(list.stdout)).toHaveLength(0);
+
+    const archivedList = runCli(dataDir, ["--json", "list", "--archived"]);
+    expect(archivedList.status).toBe(0);
+    expect(JSON.parse(archivedList.stdout).map((loop: { name: string }) => loop.name)).toEqual(["archivable"]);
+
+    const show = runCli(dataDir, ["--json", "show", "archivable"]);
+    expect(show.status).toBe(0);
+    expect(JSON.parse(show.stdout).archivedAt).toBeDefined();
+
+    const blockedRun = runCli(dataDir, ["run-now", "archivable"]);
+    expect(blockedRun.status).not.toBe(0);
+    expect(blockedRun.stderr).toContain("loop is archived");
+
+    const unarchive = runCli(dataDir, ["--json", "unarchive", "archivable"]);
+    expect(unarchive.status).toBe(0);
+    const restored = JSON.parse(unarchive.stdout);
+    expect(restored.status).toBe("active");
+    expect(restored.archivedAt).toBeUndefined();
+  });
+
   test("create command stores an OpenMachines assignment", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-machine-"));
     const create = runCli(dataDir, ["--json", "create", "command", "machine-local", "--at", futureAt(), "--cmd", "true", "--machine", "local"]);
@@ -284,6 +319,31 @@ describe("loops CLI", () => {
     expect(workflow.steps[1].dependsOn).toEqual(["worker"]);
   });
 
+  test("templates select different worker and verifier auth profiles from a pool", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-pool-"));
+    const render = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "todos-task-worker-verifier",
+      "--var",
+      "taskId=task-pool-12345678",
+      "--var",
+      "projectPath=/tmp/repo",
+      "--var",
+      "provider=codewith",
+      "--var",
+      "authProfilePool=account004,account005,account006",
+    ]);
+
+    expect(render.status).toBe(0);
+    const workflow = JSON.parse(render.stdout);
+    const profiles = workflow.steps.map((step: { target: { authProfile?: string } }) => step.target.authProfile);
+    expect(profiles).toHaveLength(2);
+    expect(new Set(profiles).size).toBe(2);
+    expect(profiles.every((profile: string) => ["account004", "account005", "account006"].includes(profile))).toBe(true);
+  });
+
   test("templates render generic event worker/verifier workflow JSON", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-template-render-"));
     const render = runCli(dataDir, [
@@ -315,6 +375,38 @@ describe("loops CLI", () => {
     expect(workflow.steps[0].target.cwd).toBe("/tmp/knowledge");
   });
 
+  test("templates select different OpenAccounts profiles from a pool", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-template-pool-"));
+    const render = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "event-worker-verifier",
+      "--var",
+      "eventId=evt-pool-12345678",
+      "--var",
+      "eventType=task.ready",
+      "--var",
+      "eventSource=todos",
+      "--var",
+      "eventJson={\"id\":\"evt-pool-12345678\"}",
+      "--var",
+      "projectPath=/tmp/repo",
+      "--var",
+      "provider=claude",
+      "--var",
+      "accountPool=account002,account003",
+      "--var",
+      "accountTool=claude",
+    ]);
+
+    expect(render.status).toBe(0);
+    const workflow = JSON.parse(render.stdout);
+    const accounts = workflow.steps.map((step: { target: { account?: { profile: string; tool?: string } } }) => step.target.account);
+    expect(accounts.map((account: { profile: string }) => account.profile).sort()).toEqual(["account002", "account003"]);
+    expect(accounts.every((account: { tool?: string }) => account.tool === "claude")).toBe(true);
+  });
+
   test("todos task event handler creates a deduped one-shot workflow loop", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-"));
     const event = {
@@ -341,6 +433,8 @@ describe("loops CLI", () => {
       "codewith",
       "--auth-profile",
       "account005",
+      "--auth-profile-pool",
+      "account004,account005,account006",
       "--sandbox",
       "danger-full-access",
       "--permission-mode",
@@ -356,15 +450,17 @@ describe("loops CLI", () => {
     expect(firstValue.loop.name).toContain("event:todos-task:task-cre:");
     expect(firstValue.loop.name).not.toContain("evt-task");
     expect(firstValue.loop.target.workflowId).toBe(firstValue.workflow.id);
+    const routedProfiles = firstValue.workflow.steps.map((step: { target: { authProfile?: string } }) => step.target.authProfile);
+    expect(new Set(routedProfiles).size).toBe(2);
     for (const step of firstValue.workflow.steps) {
       expect(step.target).toMatchObject({
         type: "agent",
         provider: "codewith",
-        authProfile: "account005",
         cwd: "/tmp/open-todos",
         permissionMode: "bypass",
         sandbox: "danger-full-access",
       });
+      expect(["account004", "account005", "account006"]).toContain(step.target.authProfile);
     }
 
     const second = runCli(dataDir, args, JSON.stringify(replayedEvent));
@@ -442,6 +538,10 @@ describe("loops CLI", () => {
         "codewith",
         "--auth-profile",
         "account005",
+        "--worker-auth-profile",
+        "account004",
+        "--verifier-auth-profile",
+        "account006",
         "--sandbox",
         "danger-full-access",
         "--permission-mode",
@@ -455,6 +555,8 @@ describe("loops CLI", () => {
     expect(value.deduped).toBe(false);
     expect(value.workflow.steps[0].target.cwd).toBe("/tmp/from-metadata");
     expect(value.workflow.steps[1].target.cwd).toBe("/tmp/from-metadata");
+    expect(value.workflow.steps[0].target.authProfile).toBe("account004");
+    expect(value.workflow.steps[1].target.authProfile).toBe("account006");
   });
 
   test("todos task event handler does not let metadata override task cwd", () => {
@@ -508,6 +610,8 @@ describe("loops CLI", () => {
       "codewith",
       "--auth-profile",
       "account005",
+      "--auth-profile-pool",
+      "account004,account005,account006",
       "--sandbox",
       "danger-full-access",
       "--permission-mode",
@@ -520,6 +624,8 @@ describe("loops CLI", () => {
     expect(firstValue.deduped).toBe(false);
     expect(firstValue.workflow.name).toContain("event:generic:knowledge:knowledge.record.created");
     expect(firstValue.workflow.steps[0].target.cwd).toBe("/tmp/open-knowledge");
+    const profiles = firstValue.workflow.steps.map((step: { target: { authProfile?: string } }) => step.target.authProfile);
+    expect(new Set(profiles).size).toBe(2);
 
     const second = runCli(dataDir, args, JSON.stringify(event));
     expect(second.status).toBe(0);

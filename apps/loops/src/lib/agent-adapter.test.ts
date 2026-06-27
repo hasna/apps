@@ -228,6 +228,9 @@ describe("agent adapters", () => {
     const fake = join(binDir, "agent");
     await Bun.write(fake, "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\"\nprintf 'stdin:'\ncat\n");
     chmodSync(fake, 0o755);
+    const fakeCursor = join(binDir, "cursor");
+    await Bun.write(fakeCursor, "#!/usr/bin/env bash\nif [[ \"${1:-}\" != \"agent\" ]]; then exit 64; fi\nshift\nexec agent \"$@\"\n");
+    chmodSync(fakeCursor, 0o755);
 
     const store = new Store(":memory:");
     try {
@@ -265,6 +268,9 @@ describe("agent adapters", () => {
     const fake = join(binDir, "agent");
     await Bun.write(fake, "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\"\nprintf 'stdin:'\ncat\n");
     chmodSync(fake, 0o755);
+    const fakeCursor = join(binDir, "cursor");
+    await Bun.write(fakeCursor, "#!/usr/bin/env bash\nif [[ \"${1:-}\" != \"agent\" ]]; then exit 64; fi\nshift\nexec agent \"$@\"\n");
+    chmodSync(fakeCursor, 0o755);
 
     const store = new Store(":memory:");
     try {

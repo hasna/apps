@@ -229,6 +229,8 @@ export interface Loop {
   name: string;
   description?: string;
   status: LoopStatus;
+  archivedAt?: string;
+  archivedFromStatus?: LoopStatus;
   schedule: ScheduleSpec;
   target: LoopTarget;
   goal?: GoalSpec;

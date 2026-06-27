@@ -219,7 +219,7 @@ loops templates render todos-task-worker-verifier \
   --var taskTitle="Fix parser" \
   --var projectPath=/path/to/repo \
   --var provider=codewith \
-  --var authProfile=account005 \
+  --var authProfilePool=account004,account005,account006 \
   --var sandbox=danger-full-access
 loops templates create-workflow todos-task-worker-verifier \
   --var taskId=<task-id> \
@@ -239,7 +239,7 @@ schedules a deduped one-shot workflow loop:
 ```bash
 cat task-created-event.json | loops events handle todos-task \
   --provider codewith \
-  --auth-profile account005 \
+  --auth-profile-pool account004,account005,account006 \
   --permission-mode bypass \
   --sandbox danger-full-access
 ```
@@ -250,7 +250,7 @@ handler:
 ```bash
 cat event.json | loops events handle generic \
   --provider codewith \
-  --auth-profile account005 \
+  --auth-profile-pool account004,account005,account006 \
   --permission-mode bypass \
   --sandbox danger-full-access \
   --project-path /path/to/repo
@@ -258,9 +258,11 @@ cat event.json | loops events handle generic \
 
 This is the intended deterministic-to-agentic path: a producer creates a todos
 task, `@hasna/events` delivers `task.created`, OpenLoops creates a worker and a
-verifier workflow, and the workflow updates todos with evidence. Use
-`--dry-run` to inspect the rendered workflow and loop input without storing
-anything.
+verifier workflow, and the workflow updates todos with evidence. Use account
+pools so worker and verifier steps do not burn the same profile; OpenLoops picks
+deterministically and uses a different verifier profile when the pool has at
+least two entries. Use `--dry-run` to inspect the rendered workflow and loop
+input without storing anything.
 
 ## Transcript-Driven Loops
 
@@ -283,11 +285,23 @@ loops runs <id-or-name>
 loops pause <id-or-name>
 loops resume <id-or-name>
 loops stop <id-or-name>
+loops archive <id-or-name>
+loops unarchive <id-or-name>
 loops remove <id-or-name>
 loops run-now <id-or-name>
 ```
 
 Use `--json` for machine-readable output. Prompt bodies and run stdout/stderr are redacted by default in status output. `loops run-now` exits non-zero when the recorded run fails or times out.
+
+Archive loops when retiring old automation but preserving history:
+
+```bash
+loops archive <id-or-name>
+loops list --archived
+loops list --all
+```
+
+Archived loops are hidden from the default `loops list`, excluded from daemon scheduling and doctor preflight, and cannot be run manually until restored with `loops unarchive`. `loops remove` deletes the loop record; prefer `archive` for superseded loops that may need audit history.
 
 `loops run-now` reports the manual run source:
 
