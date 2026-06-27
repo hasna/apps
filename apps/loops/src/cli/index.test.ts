@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -413,6 +413,285 @@ describe("loops CLI", () => {
     const value = JSON.parse(doctor.stdout);
     expect(value.ok).toBe(false);
     expect(value.checks.find((check: { id: string }) => check.id.includes(":preflight"))?.status).toBe("fail");
+  });
+
+  test("create command --preflight fails before storing a broken loop", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-create-preflight-fail-"));
+    const create = runCli(dataDir, [
+      "create",
+      "command",
+      "bad-create-preflight",
+      "--at",
+      futureAt(),
+      "--cmd",
+      "openloops-definitely-missing-binary",
+      "--no-shell",
+      "--preflight",
+    ]);
+
+    expect(create.status).not.toBe(0);
+    expect(create.stderr).toContain("Executable not found");
+
+    const list = runCli(dataDir, ["--json", "list"]);
+    expect(list.status).toBe(0);
+    expect(JSON.parse(list.stdout)).toEqual([]);
+  });
+
+  test("create command --preflight includes stable JSON evidence on success", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-create-preflight-ok-"));
+    const create = runCli(dataDir, [
+      "--json",
+      "create",
+      "command",
+      "ok-create-preflight",
+      "--at",
+      futureAt(),
+      "--cmd",
+      "true",
+      "--no-shell",
+      "--preflight",
+    ]);
+
+    expect(create.status).toBe(0);
+    const value = JSON.parse(create.stdout);
+    expect(value.loop.name).toBe("ok-create-preflight");
+    expect(value.preflight).toMatchObject({ command: "true" });
+  });
+
+  test("create command --preflight reports bounded JSON without storing on failure", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-create-preflight-json-fail-"));
+    const create = runCli(dataDir, [
+      "--json",
+      "create",
+      "command",
+      "bad-create-preflight-json",
+      "--at",
+      futureAt(),
+      "--cmd",
+      "openloops-definitely-missing-binary",
+      "--no-shell",
+      "--preflight",
+    ]);
+
+    expect(create.status).toBe(1);
+    expect(create.stderr).toBe("");
+    const value = JSON.parse(create.stdout);
+    expect(value).toMatchObject({
+      ok: false,
+      created: false,
+      type: "command",
+      name: "bad-create-preflight-json",
+      preflight: { ok: false },
+    });
+    expect(value.preflight.error).toContain("Executable not found");
+    expect(value.preflight.error.length).toBeLessThan(380);
+
+    const list = runCli(dataDir, ["--json", "list"]);
+    expect(JSON.parse(list.stdout)).toEqual([]);
+  });
+
+  test("create command --preflight fails before storing when OpenAccounts env fails", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-create-account-preflight-fail-"));
+    const home = mkdtempSync(join(tmpdir(), "loops-cli-create-account-home-"));
+    const binDir = join(dataDir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const accounts = join(binDir, "accounts");
+    writeFileSync(
+      accounts,
+      "#!/usr/bin/env bash\nprintf 'missing account profile' >&2\nexit 42\n",
+    );
+    chmodSync(accounts, 0o755);
+
+    const create = runCli(
+      dataDir,
+      [
+        "--json",
+        "create",
+        "command",
+        "bad-account-preflight",
+        "--at",
+        futureAt(),
+        "--cmd",
+        "true",
+        "--no-shell",
+        "--account",
+        "missing",
+        "--account-tool",
+        "codewith",
+        "--preflight",
+      ],
+      undefined,
+      { HOME: home, PATH: `${binDir}:/usr/bin:/bin` },
+    );
+
+    expect(create.status).toBe(1);
+    expect(create.stderr).toBe("");
+    const value = JSON.parse(create.stdout);
+    expect(value.preflight.error).toContain("accounts env failed for missing/codewith");
+
+    const list = runCli(dataDir, ["--json", "list"]);
+    expect(JSON.parse(list.stdout)).toEqual([]);
+  });
+
+  test("create agent --preflight fails before storing when provider binary is missing", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-create-agent-preflight-fail-"));
+    const home = mkdtempSync(join(tmpdir(), "loops-cli-create-agent-home-"));
+    const create = runCli(
+      dataDir,
+      [
+        "--json",
+        "create",
+        "agent",
+        "bad-agent-preflight",
+        "--provider",
+        "codewith",
+        "--prompt",
+        "run",
+        "--at",
+        futureAt(),
+        "--preflight",
+      ],
+      undefined,
+      { BUN_INSTALL: join(home, ".bun"), HOME: home, PATH: "/usr/bin:/bin" },
+    );
+
+    expect(create.status).toBe(1);
+    expect(create.stderr).toBe("");
+    const value = JSON.parse(create.stdout);
+    expect(value).toMatchObject({
+      ok: false,
+      created: false,
+      type: "agent",
+      provider: "codewith",
+      name: "bad-agent-preflight",
+      preflight: { ok: false },
+    });
+    expect(value.preflight.error).toContain("Executable not found");
+
+    const list = runCli(dataDir, ["--json", "list"]);
+    expect(JSON.parse(list.stdout)).toEqual([]);
+  });
+
+  test("create agent --preflight validates provider-native Codewith auth profiles", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-create-agent-auth-preflight-"));
+    const home = mkdtempSync(join(tmpdir(), "loops-cli-create-agent-auth-home-"));
+    const binDir = join(dataDir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const codewith = join(binDir, "codewith");
+    writeFileSync(
+      codewith,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"${1:-}\" == \"profile\" && \"${2:-}\" == \"list\" ]]; then",
+        "  printf 'NAME ACCOUNT PROVIDER MODE PLAN\\naccount001 - ChatGPT chatgpt Pro\\n'",
+        "  exit 0",
+        "fi",
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(codewith, 0o755);
+
+    const create = runCli(
+      dataDir,
+      [
+        "--json",
+        "create",
+        "agent",
+        "bad-codewith-auth-profile",
+        "--provider",
+        "codewith",
+        "--auth-profile",
+        "missing",
+        "--prompt",
+        "run",
+        "--at",
+        futureAt(),
+        "--preflight",
+      ],
+      undefined,
+      { HOME: home, PATH: `${binDir}:/usr/bin:/bin` },
+    );
+
+    expect(create.status).toBe(1);
+    expect(create.stderr).toBe("");
+    const value = JSON.parse(create.stdout);
+    expect(value.preflight.error).toContain("codewith auth profile not found: missing");
+
+    const list = runCli(dataDir, ["--json", "list"]);
+    expect(JSON.parse(list.stdout)).toEqual([]);
+  });
+
+  test("create workflow --preflight fails before storing the scheduling loop", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-create-workflow-preflight-fail-"));
+    const file = workflowFile(dataDir, {
+      name: "workflow-preflight-fails",
+      steps: [
+        {
+          id: "missing-command",
+          target: { type: "command", command: "openloops-definitely-missing-binary" },
+        },
+      ],
+    });
+    const workflow = runCli(dataDir, ["workflows", "create", file]);
+    expect(workflow.status).toBe(0);
+
+    const create = runCli(dataDir, [
+      "create",
+      "workflow",
+      "bad-workflow-loop",
+      "--workflow",
+      "workflow-preflight-fails",
+      "--at",
+      futureAt(),
+      "--preflight",
+    ]);
+
+    expect(create.status).not.toBe(0);
+    expect(create.stderr).toContain("workflow step missing-command preflight failed");
+    expect(create.stderr).toContain("Executable not found");
+
+    const list = runCli(dataDir, ["--json", "list"]);
+    expect(list.status).toBe(0);
+    expect(JSON.parse(list.stdout)).toEqual([]);
+  });
+
+  test("create workflow --preflight includes step-mapped JSON evidence on success", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-create-workflow-preflight-ok-"));
+    const file = workflowFile(dataDir, {
+      name: "workflow-preflight-ok",
+      steps: [
+        {
+          id: "first",
+          target: { type: "command", command: "true" },
+        },
+        {
+          id: "second",
+          dependsOn: ["first"],
+          target: { type: "command", command: "true" },
+        },
+      ],
+    });
+    const workflow = runCli(dataDir, ["workflows", "create", file]);
+    expect(workflow.status).toBe(0);
+
+    const create = runCli(dataDir, [
+      "--json",
+      "create",
+      "workflow",
+      "ok-workflow-loop",
+      "--workflow",
+      "workflow-preflight-ok",
+      "--at",
+      futureAt(),
+      "--preflight",
+    ]);
+
+    expect(create.status).toBe(0);
+    const value = JSON.parse(create.stdout);
+    expect(value.loop.name).toBe("ok-workflow-loop");
+    expect(value.preflight.map((item: { workflowStepId: string }) => item.workflowStepId)).toEqual(["first", "second"]);
+    expect(value.preflight.every((item: { command: string }) => item.command === "true")).toBe(true);
   });
 
   test("health JSON reports failed expectations with classification and task upsert fields", () => {

@@ -119,7 +119,20 @@ describe("agent adapters", () => {
   test("runs codewith with provider-native auth profile before exec", async () => {
     const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-auth-"));
     const fake = join(binDir, "codewith");
-    await Bun.write(fake, "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\"\nprintf 'stdin:'\ncat\n");
+    await Bun.write(
+      fake,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"${1:-}\" == \"profile\" && \"${2:-}\" == \"list\" ]]; then",
+        "  printf 'NAME ACCOUNT PROVIDER MODE PLAN\\naccount001 - ChatGPT chatgpt Pro\\n'",
+        "  exit 0",
+        "fi",
+        "printf '%s\\n' \"$@\"",
+        "printf 'stdin:'",
+        "cat",
+        "",
+      ].join("\n"),
+    );
     chmodSync(fake, 0o755);
 
     const store = new Store(":memory:");

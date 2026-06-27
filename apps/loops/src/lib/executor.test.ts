@@ -302,6 +302,91 @@ describe("executeLoop", () => {
     }
   });
 
+  test("remote codewith auth profile preflight quotes missing profile errors safely", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    const marker = join(root, "marker");
+    const scriptFile = join(root, "preflight-script");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFileSync(
+      fake,
+      "#!/usr/bin/env bash\nif [[ \"${1:-}\" == \"profile\" && \"${2:-}\" == \"list\" ]]; then printf 'NAME ACCOUNT PROVIDER MODE PLAN\\naccount001 - ChatGPT chatgpt Pro\\n'; exit 0; fi\nexit 0\n",
+    );
+    chmodSync(fake, 0o755);
+    const maliciousProfile = `missing'; touch ${marker}; echo '`;
+
+    try {
+      expect(() =>
+        preflightTarget(
+          {
+            type: "agent",
+            provider: "codewith",
+            authProfile: maliciousProfile,
+            prompt: "run",
+            configIsolation: "safe",
+          },
+          {},
+          {
+            machine: { id: "remote-test", local: false, route: "ssh" },
+            machineResolver: (machine) => ({ ...machine, local: false, route: "ssh" }),
+            env: { HOME: home, PATH: "/usr/bin:/bin" },
+            machineCommandResolver: () => ({
+              command: "bash",
+              args: ["-c", `cat > ${JSON.stringify(scriptFile)}; HOME=${JSON.stringify(home)} PATH=/usr/bin:/bin bash ${JSON.stringify(scriptFile)}`],
+              source: "ssh",
+            }),
+          },
+        ),
+      ).toThrow("codewith auth profile not found");
+      expect(existsSync(marker)).toBe(false);
+      expect(readFileSync(scriptFile, "utf8")).toContain("codewith auth profile not found");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("remote codewith auth profile preflight fails when profile list exits nonzero even if stdout matches", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-nonzero-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFileSync(
+      fake,
+      "#!/usr/bin/env bash\nif [[ \"${1:-}\" == \"profile\" && \"${2:-}\" == \"list\" ]]; then printf 'NAME ACCOUNT PROVIDER MODE PLAN\\naccount001 - ChatGPT chatgpt Pro\\n'; exit 17; fi\nexit 0\n",
+    );
+    chmodSync(fake, 0o755);
+
+    try {
+      expect(() =>
+        preflightTarget(
+          {
+            type: "agent",
+            provider: "codewith",
+            authProfile: "account001",
+            prompt: "run",
+            configIsolation: "safe",
+          },
+          {},
+          {
+            machine: { id: "remote-test", local: false, route: "ssh" },
+            machineResolver: (machine) => ({ ...machine, local: false, route: "ssh" }),
+            env: { HOME: home, PATH: "/usr/bin:/bin" },
+            machineCommandResolver: () => ({
+              command: "bash",
+              args: ["-c", `HOME=${JSON.stringify(home)} PATH=/usr/bin:/bin bash -s`],
+              source: "ssh",
+            }),
+          },
+        ),
+      ).toThrow("codewith auth profile preflight failed");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("sends agent prompts on stdin instead of process argv for every provider adapter", async () => {
     if (!existsSync("/proc/self/cmdline")) return;
     const secret = "SECRET_ARGV_PROMPT_VALUE";

@@ -49,6 +49,28 @@ Run a deterministic command every minute:
 loops create command repo-status --every 1m --cmd "git status --short" --cwd /path/to/repo
 ```
 
+Validate the target before storing the loop:
+
+```bash
+loops create command repo-status \
+  --every 1m \
+  --cmd git \
+  --no-shell \
+  --preflight
+```
+
+`--preflight` is available on `loops create command`, `loops create agent`, and
+`loops create workflow`. It checks target executables and configured account
+profiles before the loop row is stored, so a missing command, provider binary,
+OpenAccounts profile, or workflow step dependency fails without creating a
+scheduled loop. Use `--json` with `--preflight` to capture stable machine-readable
+preflight evidence.
+
+For shell command loops, preflight can only verify the shell plus configured
+accounts because the command string is interpreted later by the shell. Use
+`--no-shell` or workflow command `args` when you need executable-level
+validation before storing the loop.
+
 Run a Claude loop every morning:
 
 ```bash

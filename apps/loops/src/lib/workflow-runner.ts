@@ -263,17 +263,25 @@ export async function executeWorkflow(
 }
 
 export function preflightWorkflow(workflow: WorkflowSpec, opts: ExecuteOptions = {}): ReturnType<typeof preflightTarget>[] {
-  return workflowExecutionOrder(workflow).map((step) =>
-    preflightTarget(
-      targetWithStepAccount(step),
-      {
-        workflowId: workflow.id,
-        workflowName: workflow.name,
+  return workflowExecutionOrder(workflow).map((step) => {
+    try {
+      return {
         workflowStepId: step.id,
-      },
-      opts,
-    ),
-  );
+        ...preflightTarget(
+          targetWithStepAccount(step),
+          {
+            workflowId: workflow.id,
+            workflowName: workflow.name,
+            workflowStepId: step.id,
+          },
+          opts,
+        ),
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`workflow step ${step.id} preflight failed: ${message}`);
+    }
+  });
 }
 
 export async function executeLoopTarget(

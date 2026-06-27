@@ -62,6 +62,10 @@ interface CommandSpec {
   timeoutMs: number;
   account?: AccountRef;
   accountTool?: string;
+  nativeAuthProfile?: {
+    provider: AgentProvider;
+    profile: string;
+  };
   preflightAnyOf?: string[];
   stdin?: string;
   allowlist?: {
@@ -364,6 +368,9 @@ function commandSpec(target: ExecutableTarget): CommandSpec {
     timeoutMs: agentTarget.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     account: agentTarget.account,
     accountTool: agentTarget.account?.tool ?? accountToolForProvider(agentTarget.provider),
+    nativeAuthProfile: agentTarget.authProfile
+      ? { provider: agentTarget.provider, profile: agentTarget.authProfile }
+      : undefined,
     preflightAnyOf: agentTarget.provider === "cursor" ? ["cursor", "agent"] : undefined,
     stdin: agentTarget.prompt,
     allowlist: agentTarget.allowlist,
@@ -463,6 +470,18 @@ function remotePreflightScript(spec: CommandSpec, metadata: ExecutionMetadata): 
       "fi",
     );
   }
+  if (spec.nativeAuthProfile?.provider === "codewith") {
+    lines.push(
+      `__OPENLOOPS_CODEWITH_PROFILES="$(${shellQuote(spec.command)} profile list)" || {`,
+      `  printf '%s\\n' ${shellQuote("codewith auth profile preflight failed")} >&2`,
+      "  exit 1",
+      "}",
+      `if ! printf '%s\\n' "$__OPENLOOPS_CODEWITH_PROFILES" | awk 'NR > 1 { print $1 }' | grep -Fx ${shellQuote(spec.nativeAuthProfile.profile)} >/dev/null; then`,
+      `  printf '%s\\n' ${shellQuote(`codewith auth profile not found: ${spec.nativeAuthProfile.profile}`)} >&2`,
+      "  exit 1",
+      "fi",
+    );
+  }
   return lines.join("\n");
 }
 
@@ -475,6 +494,34 @@ function transportEnv(opts: ExecuteOptions): NodeJS.ProcessEnv {
   }
   env.PATH = normalizeExecutionPath(env);
   return env;
+}
+
+function preflightNativeAuthProfile(spec: CommandSpec, env: NodeJS.ProcessEnv): void {
+  if (!spec.nativeAuthProfile) return;
+  if (spec.nativeAuthProfile.provider !== "codewith") return;
+  const result = spawnSync(spec.command, ["profile", "list"], {
+    encoding: "utf8",
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 15_000,
+  });
+  if (result.error) {
+    throw new Error(`codewith auth profile preflight failed: ${result.error.message}`);
+  }
+  if ((result.status ?? 1) !== 0) {
+    const detail = (result.stderr || result.stdout || `exit ${result.status ?? "unknown"}`).trim();
+    throw new Error(`codewith auth profile preflight failed${detail ? `: ${detail}` : ""}`);
+  }
+  const profiles = new Set(
+    (result.stdout || "")
+      .split(/\r?\n/)
+      .slice(1)
+      .map((line) => line.trim().split(/\s+/)[0])
+      .filter(Boolean),
+  );
+  if (!profiles.has(spec.nativeAuthProfile.profile)) {
+    throw new Error(`codewith auth profile not found: ${spec.nativeAuthProfile.profile}`);
+  }
 }
 
 function preflightRemoteSpec(
@@ -634,6 +681,7 @@ export function preflightTarget(
   if (spec.preflightAnyOf?.length && !spec.preflightAnyOf.some((command) => executableExists(command, env))) {
     throw new Error(`none of required executables found: ${spec.preflightAnyOf.join(", ")}`);
   }
+  preflightNativeAuthProfile(spec, env);
   return {
     command: spec.command,
     accountProfile: spec.account?.profile,
@@ -675,6 +723,19 @@ export async function executeTarget(
       stdout,
       stderr,
       error: `none of required executables found: ${spec.preflightAnyOf.join(", ")}`,
+      startedAt,
+      finishedAt: nowIso(),
+      durationMs: 0,
+    };
+  }
+  try {
+    preflightNativeAuthProfile(spec, env);
+  } catch (err) {
+    return {
+      status: "failed",
+      stdout: "",
+      stderr: "",
+      error: err instanceof Error ? err.message : String(err),
       startedAt,
       finishedAt: nowIso(),
       durationMs: 0,

@@ -28,11 +28,13 @@ import {
   publicWorkflowEvent,
   publicWorkflowRun,
   publicWorkflowStepRun,
+  redact,
   textOutputBlocks,
 } from "../lib/format.js";
 import { parseDuration } from "../lib/schedule.js";
 import { Store } from "../lib/store.js";
 import { executeWorkflow, preflightWorkflow } from "../lib/workflow-runner.js";
+import { preflightTarget } from "../lib/executor.js";
 import { advanceLoop, executeClaimedRun, manualRunScheduledFor, manualRunSource, shouldAdvanceManualRun, tick } from "../lib/scheduler.js";
 import { daemonStatus, stopDaemon } from "../daemon/control.js";
 import { runDaemon, startDaemon } from "../daemon/daemon.js";
@@ -69,6 +71,51 @@ function isJson(): boolean {
 function print(value: unknown, human?: string): void {
   if (isJson() || !human) console.log(JSON.stringify(value, null, 2));
   else console.log(human);
+}
+
+function printCreatedLoop(loop: ReturnType<Store["createLoop"]>, human: string, preflight?: unknown): void {
+  if (preflight !== undefined) print({ loop: publicLoop(loop), preflight }, human);
+  else print(publicLoop(loop), human);
+}
+
+function preflightFailed(error: unknown, context: Record<string, unknown>): never {
+  if (!isJson()) throw error;
+  const message = error instanceof Error ? error.message : String(error);
+  print({
+    ok: false,
+    created: false,
+    preflight: {
+      ok: false,
+      error: redact(message, 320),
+    },
+    ...context,
+  });
+  process.exit(1);
+}
+
+function preflightLoopTarget(
+  target: Exclude<LoopTarget, { type: "workflow" }>,
+  context: Record<string, unknown>,
+  metadata: Parameters<typeof preflightTarget>[1],
+  opts: Parameters<typeof preflightTarget>[2],
+): ReturnType<typeof preflightTarget> {
+  try {
+    return preflightTarget(target, metadata, opts);
+  } catch (error) {
+    preflightFailed(error, context);
+  }
+}
+
+function preflightStoredWorkflow(
+  workflow: Parameters<typeof preflightWorkflow>[0],
+  context: Record<string, unknown>,
+  opts: Parameters<typeof preflightWorkflow>[1],
+): ReturnType<typeof preflightWorkflow> {
+  try {
+    return preflightWorkflow(workflow, opts);
+  } catch (error) {
+    preflightFailed(error, context);
+  }
 }
 
 function printTextOutput(value: { stdout?: string; stderr?: string }): void {
@@ -582,7 +629,8 @@ addGoalOptions(
         .requiredOption("--cmd <command>", "command string to execute")
         .option("--cwd <dir>", "working directory")
         .option("--timeout <duration>", "run timeout")
-        .option("--no-shell", "execute without a shell"),
+        .option("--no-shell", "execute without a shell")
+        .option("--preflight", "check target executables/accounts before storing the loop"),
       ),
     ),
   ),
@@ -597,8 +645,12 @@ addGoalOptions(
       timeoutMs: opts.timeout ? parseDuration(opts.timeout) : undefined,
       account: accountFromOpts(opts),
     };
-    const loop = store.createLoop(baseCreateInput(name, opts, target));
-    print(publicLoop(loop), `created loop ${loop.id} (${loop.name}) next=${loop.nextRunAt}`);
+    const input = baseCreateInput(name, opts, target);
+    const preflight = opts.preflight
+      ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "command" }, { loopName: name }, { machine: input.machine })
+      : undefined;
+    const loop = store.createLoop(input);
+    printCreatedLoop(loop, `created loop ${loop.id} (${loop.name}) next=${loop.nextRunAt}`, preflight);
   } finally {
     store.close();
   }
@@ -623,7 +675,8 @@ addGoalOptions(
         .option("--sandbox <mode>", "provider sandbox: codewith/codex use read-only/workspace-write/danger-full-access; cursor uses enabled/disabled")
         .option("--allow-tool <name>", "advisory per-session tool allowlist metadata; may be repeated or comma-separated", collectValues, [] as string[])
         .option("--allow-command <name>", "advisory per-session command allowlist metadata; may be repeated or comma-separated", collectValues, [] as string[])
-        .option("--config-isolation <mode>", "safe or none", "safe"),
+        .option("--config-isolation <mode>", "safe or none", "safe")
+        .option("--preflight", "check target executables/accounts before storing the loop"),
       ),
     ),
   ),
@@ -653,8 +706,12 @@ addGoalOptions(
       allowlist: allowlistFromOpts(opts),
       account: accountFromOpts(opts),
     };
-    const loop = store.createLoop(baseCreateInput(name, opts, target));
-    print(publicLoop(loop), `created loop ${loop.id} (${loop.name}) next=${loop.nextRunAt}`);
+    const input = baseCreateInput(name, opts, target);
+    const preflight = opts.preflight
+      ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "agent", provider }, { loopName: name }, { machine: input.machine })
+      : undefined;
+    const loop = store.createLoop(input);
+    printCreatedLoop(loop, `created loop ${loop.id} (${loop.name}) next=${loop.nextRunAt}`, preflight);
   } finally {
     store.close();
   }
@@ -666,7 +723,8 @@ addGoalOptions(
     create
       .command("workflow <name>")
       .description("schedule a stored workflow")
-      .requiredOption("--workflow <idOrName>", "workflow id or name"),
+      .requiredOption("--workflow <idOrName>", "workflow id or name")
+      .option("--preflight", "check workflow step executables/accounts before storing the loop"),
     ),
   ),
 ).action((name, opts) => {
@@ -677,8 +735,12 @@ addGoalOptions(
       type: "workflow",
       workflowId: workflow.id,
     };
-    const loop = store.createLoop(baseCreateInput(name, opts, target));
-    print(publicLoop(loop), `created workflow loop ${loop.id} (${loop.name}) workflow=${workflow.name} next=${loop.nextRunAt}`);
+    const input = baseCreateInput(name, opts, target);
+    const preflight = opts.preflight
+      ? preflightStoredWorkflow(workflow, { name, type: "workflow", workflow: workflow.name }, { machine: input.machine })
+      : undefined;
+    const loop = store.createLoop(input);
+    printCreatedLoop(loop, `created workflow loop ${loop.id} (${loop.name}) workflow=${workflow.name} next=${loop.nextRunAt}`, preflight);
   } finally {
     store.close();
   }
