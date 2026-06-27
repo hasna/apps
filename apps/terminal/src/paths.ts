@@ -34,7 +34,7 @@ function copyDirectory(sourceDir: string, targetDir: string): void {
 /**
  * Get the global terminal data directory.
  * New default: ~/.hasna/terminal/
- * Legacy migration: copy ~/.terminal/ forward if it exists and new dir doesn't
+ * Legacy migration: copy missing files from ~/.terminal/ forward if it exists
  * Env override: HASNA_TERMINAL_DIR or TERMINAL_DIR
  */
 export function getTerminalDir(): string {
@@ -45,7 +45,7 @@ export function getTerminalDir(): string {
   const newDir = join(home, ".hasna", "terminal");
   const legacyDir = join(home, ".terminal");
 
-  if (existsSync(legacyDir) && !existsSync(newDir)) {
+  if (existsSync(legacyDir)) {
     copyDirectory(legacyDir, newDir);
   }
 

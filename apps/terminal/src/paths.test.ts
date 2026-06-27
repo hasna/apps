@@ -60,6 +60,31 @@ describe("getTerminalDir", () => {
       else delete process.env.HOME;
     }
   });
+
+  it("copies legacy files when ~/.hasna/terminal already exists", () => {
+    const tempHome = join(tmpdir(), `terminal-home-existing-${Date.now()}`);
+    const previousHome = process.env.HOME;
+    process.env.HOME = tempHome;
+    process.env.HASNA_TERMINAL_DIR = "";
+    process.env.TERMINAL_DIR = "";
+
+    try {
+      const legacyDir = join(tempHome, ".terminal");
+      const newDir = join(tempHome, ".hasna", "terminal");
+      mkdirSync(legacyDir, { recursive: true });
+      mkdirSync(newDir, { recursive: true });
+      writeFileSync(join(legacyDir, "history.json"), JSON.stringify([{ command: "echo legacy" }]));
+      writeFileSync(join(newDir, "config.json"), JSON.stringify({ active: "new" }));
+
+      expect(getTerminalDir()).toBe(newDir);
+      expect(readFileSync(join(newDir, "history.json"), "utf8")).toContain("legacy");
+      expect(readFileSync(join(newDir, "config.json"), "utf8")).toContain("new");
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true });
+      if (previousHome) process.env.HOME = previousHome;
+      else delete process.env.HOME;
+    }
+  });
 });
 
 describe("getTerminalDir default", () => {
