@@ -1,5 +1,5 @@
 import { describe, test, expect, afterEach } from "bun:test";
-import { mkdirSync, writeFileSync, existsSync, rmSync } from "fs";
+import { mkdirSync, writeFileSync, existsSync, rmSync, readFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -109,12 +109,38 @@ describe("database module", () => {
 });
 
 describe("getConnectorsHome auto-migration", () => {
-  test("copies files from old ~/.connectors to new ~/.hasna/connectors when old exists and new doesn't", () => {
-    // We can't easily test the HOME env var override due to Bun caching homedir(),
-    // but we can verify the function handles the case where both directories exist
-    const { getConnectorsHome } = require("./database.js");
-    const result = getConnectorsHome();
-    expect(typeof result).toBe("string");
-    expect(existsSync(result)).toBe(true);
+  test("copies missing legacy files into an existing ~/.hasna/connectors without overwriting", async () => {
+    const originalHome = process.env.HOME;
+    const testHome = join(tmpdir(), `connectors-home-migration-${crypto.randomUUID()}`);
+
+    try {
+      const targetDir = join(testHome, ".hasna", "connectors");
+      mkdirSync(targetDir, { recursive: true });
+      writeFileSync(join(targetDir, "preserve.json"), "target");
+
+      const legacyConnectorsDir = join(testHome, ".connectors", "connect-github");
+      mkdirSync(legacyConnectorsDir, { recursive: true });
+      writeFileSync(join(legacyConnectorsDir, "credentials.json"), "legacy-connectors");
+
+      const legacyConnectDir = join(testHome, ".connect", "connect-slack");
+      mkdirSync(legacyConnectDir, { recursive: true });
+      writeFileSync(join(legacyConnectDir, "credentials.json"), "legacy-connect");
+      writeFileSync(join(testHome, ".connect", "preserve.json"), "legacy");
+
+      process.env.HOME = testHome;
+      const mod = await import(`./database.js?migration=${crypto.randomUUID()}`);
+      const result = mod.getConnectorsHome();
+
+      expect(result).toBe(targetDir);
+      expect(readFileSync(join(targetDir, "preserve.json"), "utf8")).toBe("target");
+      expect(readFileSync(join(targetDir, "connect-github", "credentials.json"), "utf8")).toBe("legacy-connectors");
+      expect(readFileSync(join(targetDir, "connect-slack", "credentials.json"), "utf8")).toBe("legacy-connect");
+      expect(existsSync(join(testHome, ".connectors", "connect-github", "credentials.json"))).toBe(true);
+      expect(existsSync(join(testHome, ".connect", "connect-slack", "credentials.json"))).toBe(true);
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      rmSync(testHome, { recursive: true, force: true });
+    }
   });
 });
