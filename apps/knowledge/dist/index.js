@@ -16230,6 +16230,7 @@ function coerceForSqlite(value) {
 // src/artifact-store.ts
 import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync2, statSync, writeFileSync as writeFileSync2 } from "fs";
 import { dirname as dirname2, join as join2, relative, sep } from "path";
+import { pathToFileURL } from "url";
 function normalizeArtifactKey(key) {
   const raw = key.replace(/\\/g, "/").trim();
   if (!raw || raw.startsWith("/")) {
@@ -16275,7 +16276,7 @@ class LocalArtifactStore {
     assertInside(this.root, path);
     mkdirSync2(dirname2(path), { recursive: true });
     writeFileSync2(path, entry.body);
-    return { key, uri: `file://${path}`, modified_at: statSync(path).mtime.toISOString() };
+    return { key, uri: pathToFileURL(path).href, modified_at: statSync(path).mtime.toISOString() };
   }
   async getText(key) {
     const normalizedKey = normalizeArtifactKey(key);
@@ -18020,6 +18021,7 @@ import { relative as relative2, resolve as resolve2, sep as sep2 } from "path";
 
 // src/storage-contract.ts
 import { createHash as createHash3, randomUUID as randomUUID3 } from "crypto";
+import { pathToFileURL as pathToFileURL2 } from "url";
 
 // src/remote-client.ts
 var REMOTE_KNOWLEDGE_CONTRACT_VERSION = 1;
@@ -18255,7 +18257,7 @@ function resolveStorageContract(config, workspace, scope = "global") {
     artifact_store: {
       type: config.storage.type,
       artifacts_root: config.storage.artifacts_root,
-      uri_prefix: config.storage.type === "s3" ? s3UriPrefix : `file://${workspace.artifactsDir}/`,
+      uri_prefix: config.storage.type === "s3" ? s3UriPrefix : pathToFileURL2(`${workspace.artifactsDir}/`).href,
       s3: s3 ? {
         bucket: s3.bucket,
         prefix,
@@ -20537,6 +20539,7 @@ import { existsSync as existsSync6, readFileSync as readFileSync6 } from "fs";
 import { basename } from "path";
 
 // src/source-ref.ts
+import { fileURLToPath as fileURLToPath2 } from "url";
 function assertNonEmpty(value, message) {
   if (!value)
     throw new Error(message);
@@ -20571,8 +20574,7 @@ function parseS3Ref(uri) {
   return { kind: "s3", uri, bucket, key };
 }
 function parseFileRef(uri) {
-  const parsed = new URL(uri);
-  return { kind: "file", uri, path: decodeURIComponent(parsed.pathname) };
+  return { kind: "file", uri, path: fileURLToPath2(uri) };
 }
 function parseWebRef(uri) {
   const parsed = new URL(uri);
@@ -25102,8 +25104,25 @@ function doctorRecommendations(input) {
   }
   return commands;
 }
+function resolveSshSpawnSpec() {
+  const command = process.env.KNOWLEDGE_SSH_COMMAND?.trim() || "ssh";
+  const rawArgs = process.env.KNOWLEDGE_SSH_COMMAND_ARGS_JSON;
+  if (!rawArgs)
+    return { command, argsPrefix: [] };
+  let parsed;
+  try {
+    parsed = JSON.parse(rawArgs);
+  } catch (error51) {
+    throw new Error(`KNOWLEDGE_SSH_COMMAND_ARGS_JSON must be a JSON string array: ${error51 instanceof Error ? error51.message : String(error51)}`);
+  }
+  if (!Array.isArray(parsed) || !parsed.every((arg) => typeof arg === "string")) {
+    throw new Error("KNOWLEDGE_SSH_COMMAND_ARGS_JSON must be a JSON string array.");
+  }
+  return { command, argsPrefix: parsed };
+}
 function runSshCommand(machine, command, input, resolved) {
-  const result = spawnSync2("ssh", [resolved.target, command], {
+  const ssh = resolveSshSpawnSpec();
+  const result = spawnSync2(ssh.command, [...ssh.argsPrefix, resolved.target, command], {
     encoding: "utf8",
     env: process.env,
     input,
