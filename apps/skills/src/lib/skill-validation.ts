@@ -2,6 +2,7 @@ import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "fs";
 import { isAbsolute, join, normalize } from "path";
 import { isPremiumSkill } from "./pricing.js";
 import type { SkillMeta } from "./registry.js";
+import type { PortableSkillManifest } from "./portable-skills.js";
 
 export interface SkillValidationMessage {
   code: string;
@@ -20,6 +21,7 @@ export interface SkillValidationResult {
     binCommands: string[];
     docFiles: string[];
     skillMdFrontmatter?: SkillFrontmatter;
+    portableManifest?: PortableSkillManifest;
     provenance?: SkillValidationProvenance;
     runtime?: "local" | "hosted";
   };
@@ -74,6 +76,7 @@ const KNOWN_TOP_LEVEL_ENTRIES = new Set([
   ".gitignore",
   ".skills",
   "CLAUDE.md",
+  "AGENTS.md",
   "LICENSE",
   "PROJECT_OVERVIEW.md",
   "QUICKSTART.md",
@@ -96,8 +99,11 @@ const KNOWN_TOP_LEVEL_ENTRIES = new Set([
   "package.json",
   "scripts",
   "skill-install.ts",
+  "skill.json",
   "src",
   "tests",
+  "references",
+  "assets",
   "tsconfig.json",
   "vision.ts",
 ]);

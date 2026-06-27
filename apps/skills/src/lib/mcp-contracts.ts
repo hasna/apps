@@ -25,7 +25,9 @@ export type McpToolCategory =
   | "feedback"
   | "metadata"
   | "pinning"
+  | "scaffolding"
   | "scheduling"
+  | "storage"
   | "validation";
 
 export type McpToolSideEffect =
@@ -199,25 +201,78 @@ const runOutputSchema = objectSchema({
   exitCode: { type: "number", description: "Process exit code for local runs." },
   skill: stringSchema("Canonical skill slug."),
   remote: { type: "boolean", description: "Whether the skill was submitted to the hosted runtime." },
-  stdout: stringSchema("Captured stdout for local runs."),
-  stderr: stringSchema("Captured stderr for local runs."),
+  stdoutPreview: objectSchema({
+    text: stringSchema("Truncated stdout preview."),
+    length: { type: "number" },
+    truncated: { type: "boolean" },
+  }, [], "Default compact stdout preview."),
+  stderrPreview: objectSchema({
+    text: stringSchema("Truncated stderr preview."),
+    length: { type: "number" },
+    truncated: { type: "boolean" },
+  }, [], "Default compact stderr preview."),
+  stdout: stringSchema("Captured stdout for local runs when detail:true is requested."),
+  stderr: stringSchema("Captured stderr for local runs when detail:true is requested."),
   id: stringSchema("Remote run id when submitted remotely."),
   localRunId: stringSchema("Local run metadata id."),
   status: stringSchema("Run lifecycle status."),
   pricing: pricingSchema,
-  remoteRun: objectSchema({}, [], "Normalized hosted remote run contract.", true),
-  run: objectSchema({}, [], "Local run metadata.", true),
+  remoteRun: objectSchema({}, [], "Compact hosted remote run summary by default; full contract when detail:true is requested.", true),
+  run: objectSchema({}, [], "Compact local run metadata by default; full metadata when detail:true is requested.", true),
   nextActions: objectSchema({
     poll: stringSchema("Command to poll run status."),
     download: stringSchema("Command to download artifacts."),
   }),
+  detailHint: stringSchema("How to request the complete payload."),
 }, [], "Skill run result.");
 
 const toolContracts: McpToolContract[] = [
   {
+    name: "scaffold_skill",
+    title: "Scaffold Skill",
+    description: "Create a portable skill folder under ~/.hasna/skills/<name> from the standard template.",
+    params: ["name", "description?", "overwrite?"],
+    category: "scaffolding",
+    sideEffects: "filesystem",
+    stable: true,
+    inputSchema: objectSchema({
+      name: skillNameInput,
+      description: stringSchema("Short description for the new skill."),
+      overwrite: { type: "boolean", default: false },
+    }, ["name"]),
+    outputSchema: objectSchema({
+      name: stringSchema("Normalized skill name."),
+      path: stringSchema("Created skill directory."),
+      created: { type: "boolean" },
+      manifest: objectSchema({}, [], "Portable skill manifest.", true),
+    }, ["name", "path", "created", "manifest"]),
+  },
+  {
+    name: "port_skill",
+    title: "Port Skill",
+    description: "Import an existing skill folder into the portable ~/.hasna/skills/<name> standard.",
+    params: ["path", "name?", "overwrite?"],
+    category: "scaffolding",
+    sideEffects: "filesystem",
+    stable: true,
+    inputSchema: objectSchema({
+      path: stringSchema("Existing skill folder to import."),
+      name: skillNameInput,
+      overwrite: { type: "boolean", default: false },
+    }, ["path"]),
+    outputSchema: objectSchema({
+      name: stringSchema("Normalized skill name."),
+      path: stringSchema("Imported skill directory."),
+      created: { type: "boolean" },
+      valid: { type: "boolean" },
+      issues: arraySchema(validationMessageSchema),
+      warnings: arraySchema(validationMessageSchema),
+    }, ["name", "path", "created", "valid"]),
+  },
+  {
     name: "list_skills",
     title: "List Skills",
-    description: "List skills from the basic or full registry profile.",
+    description: "List skills from the basic or full registry profile. Returns a compact paged envelope by default.",
     params: ["category?", "profile?", "detail?", "limit?", "offset?"],
     category: "discovery",
     sideEffects: "none",
@@ -234,6 +289,10 @@ const toolContracts: McpToolContract[] = [
       total: { type: "number" },
       offset: { type: "number" },
       limit: { type: "number" },
+      nextOffset: { type: "number" },
+      hasMore: { type: "boolean" },
+      nextArguments: objectSchema({}, [], "Arguments for the next page.", true),
+      detailHint: stringSchema("How to request fuller skill objects."),
     }),
   },
   {
@@ -254,7 +313,7 @@ const toolContracts: McpToolContract[] = [
   {
     name: "search_skills",
     title: "Search Skills",
-    description: "Search skills by name, description, or tags.",
+    description: "Search skills by name, description, or tags. Returns a compact paged envelope by default.",
     params: ["query", "profile?", "detail?", "limit?", "offset?"],
     category: "discovery",
     sideEffects: "none",
@@ -266,7 +325,16 @@ const toolContracts: McpToolContract[] = [
       limit: { type: "number", minimum: 0 },
       offset: { type: "number", minimum: 0 },
     }, ["query"]),
-    outputSchema: objectSchema({ skills: arraySchema(skillSummarySchema) }),
+    outputSchema: objectSchema({
+      skills: arraySchema(skillSummarySchema),
+      total: { type: "number" },
+      offset: { type: "number" },
+      limit: { type: "number" },
+      nextOffset: { type: "number" },
+      hasMore: { type: "boolean" },
+      nextArguments: objectSchema({}, [], "Arguments for the next page.", true),
+      detailHint: stringSchema("How to request fuller skill objects."),
+    }),
   },
   {
     name: "get_skill_info",
@@ -383,8 +451,8 @@ const toolContracts: McpToolContract[] = [
   {
     name: "run_skill",
     title: "Run Skill",
-    description: "Run a skill locally or through a configured remote runner.",
-    params: ["name", "input?", "args?", "approved?"],
+    description: "Run a skill locally or through a configured remote runner. Returns compact stdout/stderr previews and run summaries by default; pass detail:true for full records.",
+    params: ["name", "input?", "args?", "approved?", "detail?"],
     category: "execution",
     sideEffects: "local-process-or-remote-run",
     stable: true,
@@ -393,27 +461,32 @@ const toolContracts: McpToolContract[] = [
       input: runInputSchema,
       args: runArgsSchema,
       approved: paidRunApprovalSchema,
+      detail: { type: "boolean", default: false, description: "Return full stdout/stderr, remote run, and local run metadata." },
     }, ["name"]),
     outputSchema: runOutputSchema,
   },
   {
     name: "get_run_status",
     title: "Get Run Status",
-    description: "Fetch remote run status and next actions.",
-    params: ["run_id"],
+    description: "Fetch remote run status and next actions. Returns a compact status summary by default; pass detail:true for the complete remote run payload.",
+    params: ["run_id", "detail?"],
     category: "execution",
     sideEffects: "none",
     stable: true,
-    inputSchema: objectSchema({ run_id: stringSchema("Remote or local run id.") }, ["run_id"]),
+    inputSchema: objectSchema({
+      run_id: stringSchema("Remote or local run id."),
+      detail: { type: "boolean", default: false, description: "Return the complete remote run payload." },
+    }, ["run_id"]),
     outputSchema: objectSchema({
       contractVersion: { type: "number", description: "Remote run payload contract version." },
       runId: stringSchema("Remote run id."),
       localRunId: stringSchema("Local run id."),
-      run: objectSchema({}, [], "Normalized remote run status.", true),
+      run: objectSchema({}, [], "Compact remote run status by default; full status when detail:true is requested.", true),
       nextActions: objectSchema({
         poll: stringSchema("Command to poll run status."),
         download: stringSchema("Command to download artifacts."),
       }),
+      detailHint: stringSchema("How to request the complete payload."),
     }),
   },
   {
@@ -450,6 +523,46 @@ const toolContracts: McpToolContract[] = [
     outputSchema: objectSchema({}, [], "Setup summary.", true),
   },
   {
+    name: "storage_status",
+    title: "Storage Status",
+    description: "Show local-first storage paths and optional repo-owned Postgres/S3 readiness.",
+    params: ["directory?"],
+    category: "storage",
+    sideEffects: "none",
+    stable: true,
+    inputSchema: objectSchema({ directory: stringSchema("Project directory.") }),
+    outputSchema: objectSchema({
+      package: stringSchema("Package name."),
+      mode: { type: "string", enum: ["local", "remote", "hybrid"] },
+      local: objectSchema({}, [], "Local storage paths.", true),
+      remote: objectSchema({}, [], "Remote storage readiness.", true),
+    }, ["package", "mode", "local", "remote"]),
+  },
+  {
+    name: "storage_sync_plan",
+    title: "Storage Sync Plan",
+    description: "Plan .skills snapshot sync for optional Postgres/S3 storage without network access.",
+    params: ["directory?", "includeSchemaSql?"],
+    category: "storage",
+    sideEffects: "none",
+    stable: true,
+    inputSchema: objectSchema({
+      directory: stringSchema("Project directory."),
+      includeSchemaSql: { type: "boolean", default: false },
+    }),
+    outputSchema: objectSchema({
+      package: stringSchema("Package name."),
+      noNetwork: { type: "boolean", const: true },
+      mode: { type: "string", enum: ["local", "remote", "hybrid"] },
+      databaseConfigured: { type: "boolean" },
+      s3Configured: { type: "boolean" },
+      snapshotFileCount: { type: "number" },
+      s3ObjectCount: { type: "number" },
+      env: objectSchema({}, [], "Storage env var names.", true),
+      schemaSql: stringSchema("Optional Postgres schema SQL."),
+    }, ["package", "noNetwork", "mode", "databaseConfigured", "s3Configured"]),
+  },
+  {
     name: "schedule_skill",
     title: "Schedule Skill",
     description: "Create a cron schedule for a skill.",
@@ -468,13 +581,25 @@ const toolContracts: McpToolContract[] = [
   {
     name: "list_schedules",
     title: "List Schedules",
-    description: "List scheduled skill runs.",
-    params: [],
+    description: "List scheduled skill runs as a compact paged envelope.",
+    params: ["limit?", "offset?"],
     category: "scheduling",
     sideEffects: "none",
     stable: true,
-    inputSchema: objectSchema(),
-    outputSchema: arraySchema(objectSchema({}, [], "Schedule record.", true)),
+    inputSchema: objectSchema({
+      limit: { type: "number", minimum: 0 },
+      offset: { type: "number", minimum: 0 },
+    }),
+    outputSchema: objectSchema({
+      schedules: arraySchema(objectSchema({}, [], "Compact schedule record.", true)),
+      total: { type: "number" },
+      offset: { type: "number" },
+      limit: { type: "number" },
+      nextOffset: { type: "number" },
+      hasMore: { type: "boolean" },
+      nextArguments: objectSchema({}, [], "Arguments for the next page.", true),
+      detailHint: stringSchema("How to request complete schedule details."),
+    }),
   },
   {
     name: "remove_schedule",

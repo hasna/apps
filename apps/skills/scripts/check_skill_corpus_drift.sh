@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export LC_ALL=C
 
 usage() {
   cat <<'USAGE'
@@ -57,7 +58,8 @@ git ls-tree -d --name-only "${base_ref}:skills" \
   | grep -v '^_' \
   | sort > "$base_dirs"
 
-bun -e 'import { SKILLS } from "./src/lib/registry.ts"; for (const skill of [...SKILLS].sort((a, b) => a.name.localeCompare(b.name))) console.log(skill.name);' \
+bun -e 'import { SKILLS } from "./src/lib/registry.ts"; for (const skill of SKILLS) console.log(skill.name);' \
+  | sort \
   > "$registry_names"
 cp "$local_dirs" "$registry_dirs"
 

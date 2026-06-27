@@ -12,6 +12,8 @@ import { dirname, join } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { normalizeSkillName } from "./utils.js";
+import { getDataDir } from "./config.js";
+import { findPortableSkill } from "./portable-skills.js";
 import { getSkill, type SkillMeta } from "./registry.js";
 import { normalizeSkillSlug, resolveSkillAlias } from "./skill-aliases.js";
 import {
@@ -89,6 +91,10 @@ interface MetaFile {
  */
 export function getSkillPath(name: string): string {
   const skillName = normalizeSkillName(getCanonicalSkillName(name));
+  const portable = findPortableSkill(skillName);
+  if (portable) return portable.path;
+  const legacyCustomPath = join(getDataDir(), "custom", skillName);
+  if (existsSync(legacyCustomPath)) return legacyCustomPath;
   return join(SKILLS_DIR, skillName);
 }
 

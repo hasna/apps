@@ -6,6 +6,7 @@ import pkg from "../../package.json" with { type: "json" };
 
 import {
   CATEGORIES,
+  clearRegistryCache,
   getSkill,
   getSkillsByCategory,
   findSimilarSkills,
@@ -31,10 +32,62 @@ import {
   updateSkillRun,
   writeRunLogs,
 } from "../lib/run-state.js";
+import {
+  portPortableSkill,
+  scaffoldPortableSkill,
+  validatePortableSkillDirectory,
+} from "../lib/portable-skills.js";
+import {
+  compactRemoteRun,
+  compactRunRecord,
+  previewText,
+} from "../lib/compact-output.js";
 import { cacheClear, mcpError, mcpJson, remoteRunNextActions } from "./helpers.js";
 import { REMOTE_SKILL_RUN_CONTRACT_VERSION } from "../lib/remote-run-contract.js";
 
 export function registerOperationTools(server: McpServer): void {
+  server.registerTool("scaffold_skill", {
+    title: "Scaffold Skill",
+    description: "Create a portable skill folder under ~/.hasna/skills/<name> with SKILL.md, skill.json, AGENTS.md, package.json, and src/index.ts.",
+    inputSchema: {
+      name: z.string(),
+      description: z.string().optional(),
+      overwrite: z.boolean().optional(),
+    },
+  }, async ({ name, description, overwrite }) => {
+    try {
+      const result = scaffoldPortableSkill(name, { description, overwrite });
+      clearRegistryCache();
+      cacheClear();
+      return mcpJson(result);
+    } catch (err) {
+      return mcpError("SCAFFOLD_FAILED", (err as Error).message);
+    }
+  });
+
+  server.registerTool("port_skill", {
+    title: "Port Skill",
+    description: "Import an existing skill folder into the portable ~/.hasna/skills/<name> standard and add missing standard files.",
+    inputSchema: {
+      path: z.string(),
+      name: z.string().optional(),
+      overwrite: z.boolean().optional(),
+    },
+  }, async ({ path, name, overwrite }) => {
+    try {
+      const result = portPortableSkill(path, { name, overwrite });
+      const validation = validatePortableSkillDirectory(result.name, result.path);
+      clearRegistryCache();
+      cacheClear();
+      return {
+        content: [{ type: "text", text: JSON.stringify({ ...result, valid: validation.valid, issues: validation.issues, warnings: validation.warnings }, null, 2) }],
+        isError: !validation.valid,
+      };
+    } catch (err) {
+      return mcpError("PORT_FAILED", (err as Error).message);
+    }
+  });
+
   server.registerTool("pin_skill", {
     title: "Pin Skill",
     description: "Pin a skill to .skills/project.json. Agent skill-folder installs are disabled; use skills mcp --register.",
@@ -244,8 +297,9 @@ export function registerOperationTools(server: McpServer): void {
       input: z.record(z.string(), z.unknown()).optional(),
       args: z.array(z.string()).optional(),
       approved: z.boolean().optional(),
+      detail: z.boolean().optional(),
     },
-  }, async ({ name, input, args, approved }) => {
+  }, async ({ name, input, args, approved, detail }) => {
     const skill = getSkill(name);
     if (!skill) {
       return mcpError("SKILL_NOT_FOUND", `Skill '${name}' not found`, findSimilarSkills(name));
@@ -313,7 +367,7 @@ export function registerOperationTools(server: McpServer): void {
         });
         writeRunLogs(runContext, "", "");
         const remoteRunId = typeof run.id === "string" ? run.id : undefined;
-        return mcpJson({
+        const payload = {
           contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION,
           id: run.id,
           localRunId: localRun.id,
@@ -324,7 +378,8 @@ export function registerOperationTools(server: McpServer): void {
           remoteRun: run,
           run: localRun,
           nextActions: remoteRunNextActions(remoteRunId),
-        });
+        };
+        return mcpJson(detail ? payload : compactRunToolPayload(payload, "Call run_skill again with detail:true for full remote/local run records."));
       } catch (err) {
         const error = `Hosted skill ${skillName} requires hosted access: ${(err as Error).message}`;
         writeRunLogs(runContext, "", error + "\n");
@@ -346,15 +401,14 @@ export function registerOperationTools(server: McpServer): void {
       status: result.exitCode === 0 ? "completed" : "failed",
       error: result.error,
     });
+    const payload = { exitCode: result.exitCode, skill: skillName, stdout: result.stdout, stderr: result.stderr, run: localRun };
     if (result.error) {
       return {
-        content: [{ type: "text", text: JSON.stringify({ exitCode: result.exitCode, error: result.error, run: localRun }, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify(detail ? { ...payload, error: result.error } : compactRunToolPayload({ ...payload, error: result.error }, "Call run_skill again with detail:true for full stdout/stderr and run metadata.")) }],
         isError: true,
       };
     }
-    return {
-      content: [{ type: "text", text: JSON.stringify({ exitCode: result.exitCode, skill: skillName, stdout: result.stdout, stderr: result.stderr, run: localRun }, null, 2) }],
-    };
+    return mcpJson(detail ? payload : compactRunToolPayload(payload, "Call run_skill again with detail:true for full stdout/stderr and run metadata."));
   });
 
   server.registerTool("get_run_status", {
@@ -362,8 +416,9 @@ export function registerOperationTools(server: McpServer): void {
     description: "Fetch remote run status. Accepts a remote run id or a local run id linked to a remote run.",
     inputSchema: {
       run_id: z.string(),
+      detail: z.boolean().optional(),
     },
-  }, async ({ run_id }) => {
+  }, async ({ run_id, detail }) => {
     const { getApiKey } = await import("../lib/auth-store.js");
     const apiKey = getApiKey();
     if (!apiKey) {
@@ -381,12 +436,20 @@ export function registerOperationTools(server: McpServer): void {
       const client = new RemoteSkillsClient(apiKey);
       const run = await client.getRun(remoteRunId);
       if (!run) return mcpError("RUN_NOT_FOUND", `Remote run '${remoteRunId}' not found`);
-      return mcpJson({
+      const payload = {
         contractVersion: REMOTE_SKILL_RUN_CONTRACT_VERSION,
         runId: remoteRunId,
         ...(localRun ? { localRunId: localRun.id } : {}),
         run,
         nextActions: remoteRunNextActions(remoteRunId),
+      };
+      return mcpJson(detail ? payload : {
+        contractVersion: payload.contractVersion,
+        runId: payload.runId,
+        ...(localRun ? { localRunId: localRun.id } : {}),
+        run: compactRemoteRun(run),
+        nextActions: payload.nextActions,
+        detailHint: "Call get_run_status with detail:true for the complete remote run payload.",
       });
     } catch (err) {
       return mcpError("SKILLS_MD_ERROR", (err as Error).message);
@@ -491,4 +554,31 @@ export function registerOperationTools(server: McpServer): void {
     return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   });
 
+}
+
+function compactRunToolPayload(payload: Record<string, any>, detailHint: string): Record<string, unknown> {
+  const stdout = previewText(payload.stdout ?? "");
+  const stderr = previewText(payload.stderr ?? "");
+  return {
+    ...(payload.contractVersion !== undefined ? { contractVersion: payload.contractVersion } : {}),
+    ...(payload.id !== undefined ? { id: payload.id } : {}),
+    ...(payload.localRunId !== undefined ? { localRunId: payload.localRunId } : {}),
+    ...(payload.exitCode !== undefined ? { exitCode: payload.exitCode } : {}),
+    skill: payload.skill,
+    ...(payload.status !== undefined ? { status: payload.status } : {}),
+    ...(payload.remote !== undefined ? { remote: payload.remote } : {}),
+    ...(payload.correlationId !== undefined ? { correlationId: payload.correlationId } : {}),
+    ...(payload.pricing !== undefined ? { pricing: payload.pricing } : {}),
+    ...(payload.error !== undefined ? { error: payload.error } : {}),
+    ...(payload.remoteRun !== undefined ? { remoteRun: compactRemoteRun(payload.remoteRun) } : {}),
+    run: compactRunRecord(payload.run),
+    stdoutPreview: stdout,
+    stderrPreview: stderr,
+    stdoutChars: stdout.length,
+    stderrChars: stderr.length,
+    stdoutTruncated: stdout.truncated,
+    stderrTruncated: stderr.truncated,
+    ...(payload.nextActions !== undefined ? { nextActions: payload.nextActions } : {}),
+    detailHint,
+  };
 }

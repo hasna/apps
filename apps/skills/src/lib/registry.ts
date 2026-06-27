@@ -3,8 +3,9 @@
  */
 
 import { existsSync, readFileSync, readdirSync } from "fs";
-import { homedir } from "os";
 import { join } from "path";
+import { getDataDir } from "./config.js";
+import { listPortableSkillMetas } from "./portable-skills.js";
 import { normalizeSkillSlug, resolveSkillAlias } from "./skill-aliases.js";
 import { SKILLS } from "./registry-data/index.js";
 import {
@@ -84,7 +85,7 @@ const REGISTRY_CACHE_TTL = 5000;
 
 /**
  * Load the full registry: official skills merged with global custom skills
- * from ~/.hasna/skills/custom/.
+ * from ~/.hasna/skills/<name>/ and the legacy ~/.hasna/skills/custom/<name>/ path.
  *
  * Custom skills with the same name as official skills take precedence.
  * Results are cached for 5 seconds.
@@ -96,7 +97,10 @@ export function loadRegistry(cwd?: string): SkillMeta[] {
   }
 
   const official = SKILLS.map((s) => ({ ...s, source: "official" as const }));
-  const globalCustom = discoverSkillsInDir(join(homedir(), ".hasna", "skills", "custom"));
+  const dataDir = getDataDir();
+  const portableCustom = listPortableSkillMetas({ rootDir: dataDir });
+  const legacyCustom = discoverSkillsInDir(join(dataDir, "custom"));
+  const globalCustom = mergeCustomSkills([...legacyCustom, ...portableCustom]);
 
   const customNames = new Set(globalCustom.map((s) => s.name));
   const filtered = official.filter((s) => !customNames.has(s.name));
@@ -109,7 +113,9 @@ export function loadRegistry(cwd?: string): SkillMeta[] {
 export function loadBasicRegistry(cwd?: string): SkillMeta[] {
   const registry = loadRegistry(cwd);
   const byName = new Map(registry.map((skill) => [skill.name, skill]));
-  return BASIC_SKILL_NAMES.map((name) => byName.get(name)).filter((skill): skill is SkillMeta => skill !== undefined);
+  const basic = BASIC_SKILL_NAMES.map((name) => byName.get(name)).filter((skill): skill is SkillMeta => skill !== undefined);
+  const custom = registry.filter((skill) => skill.source === "custom" && !BASIC_SKILL_NAMES.includes(skill.name as (typeof BASIC_SKILL_NAMES)[number]));
+  return [...basic, ...custom];
 }
 
 export function loadRegistryProfile(profile: SkillRegistryProfile = "basic", cwd?: string): SkillMeta[] {
@@ -134,6 +140,12 @@ export function getSkill(name: string): SkillMeta | undefined {
   const slug = normalizeSkillSlug(name);
   return registry.find((s) => s.name === slug)
     ?? registry.find((s) => s.name === resolveSkillAlias(slug));
+}
+
+function mergeCustomSkills(skills: SkillMeta[]): SkillMeta[] {
+  const byName = new Map<string, SkillMeta>();
+  for (const skill of skills) byName.set(skill.name, skill);
+  return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export function getSkillsByTag(tag: string): SkillMeta[] {

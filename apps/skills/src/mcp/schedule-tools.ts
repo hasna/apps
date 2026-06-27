@@ -4,12 +4,20 @@ import { z } from "zod";
 import { getSkill } from "../lib/registry.js";
 import { getSkillPath } from "../lib/installer.js";
 import { detectProjectSkills } from "../lib/skillinfo.js";
+import { findPortableSkill, validatePortableSkillDirectory } from "../lib/portable-skills.js";
 import {
   addSchedule,
   listSchedules,
   removeSchedule,
 } from "../lib/scheduler.js";
 import { validateSkillDirectory } from "../lib/skill-validation.js";
+import {
+  DEFAULT_MCP_LIMIT,
+  paginate,
+  parsePageLimit,
+  parsePageOffset,
+} from "../lib/compact-output.js";
+import { mcpJson } from "./helpers.js";
 
 export function registerScheduleTools(server: McpServer): void {
   server.registerTool("schedule_skill", {
@@ -31,11 +39,37 @@ export function registerScheduleTools(server: McpServer): void {
 
   server.registerTool("list_schedules", {
     title: "List Schedules",
-    description: "List all scheduled skill runs.",
-    inputSchema: {},
-  }, async () => {
+    description: "List scheduled skill runs as a compact paged response. Use limit/offset for pagination.",
+    inputSchema: {
+      limit: z.number().optional(),
+      offset: z.number().optional(),
+    },
+  }, async ({ limit, offset }) => {
     const schedules = listSchedules();
-    return { content: [{ type: "text", text: JSON.stringify(schedules, null, 2) }] };
+    const page = paginate(schedules, {
+      limit: parsePageLimit(limit, DEFAULT_MCP_LIMIT, { max: 100 }),
+      offset: parsePageOffset(offset),
+    });
+    return mcpJson({
+      schedules: page.items.map((schedule) => ({
+        id: schedule.id,
+        name: schedule.name,
+        skill: schedule.skill,
+        cron: schedule.cron,
+        enabled: schedule.enabled,
+        lastRun: schedule.lastRun,
+        lastRunStatus: schedule.lastRunStatus,
+        nextRun: schedule.nextRun,
+        argCount: schedule.args?.length ?? 0,
+      })),
+      total: page.total,
+      offset: page.offset,
+      limit: page.limit,
+      nextOffset: page.nextOffset,
+      hasMore: page.hasMore,
+      nextArguments: page.hasMore ? { limit: page.limit, offset: page.nextOffset } : null,
+      detailHint: "Use schedule state files or future schedule detail commands for complete schedule records.",
+    });
   });
 
   server.registerTool("remove_schedule", {
@@ -77,8 +111,11 @@ export function registerScheduleTools(server: McpServer): void {
       name: z.string(),
     },
   }, async ({ name }) => {
-    const skillPath = getSkillPath(name);
-    const result = validateSkillDirectory(name, skillPath, getSkill(name));
+    const portable = findPortableSkill(name);
+    const skillPath = portable?.path ?? getSkillPath(name);
+    const result = portable
+      ? validatePortableSkillDirectory(portable.name, portable.path)
+      : validateSkillDirectory(name, skillPath, getSkill(name));
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
       isError: !result.valid,

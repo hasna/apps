@@ -1,6 +1,6 @@
 {
   "name": "@hasna/skills",
-  "version": "0.1.43",
+  "version": "0.1.46",
   "description": "Skills library for AI coding agents",
   "type": "module",
   "bin": {
@@ -11,6 +11,10 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./storage": {
+      "import": "./dist/storage.js",
+      "types": "./dist/storage.d.ts"
     }
   },
   "files": [
@@ -19,6 +23,7 @@
     "!dist/platform",
     "!dist/server",
     "bin/",
+    "docs/skill-standard.md",
     "skills/",
     "!skills/**/node_modules",
     "!skills/scaffold-project/my-app",
@@ -30,7 +35,7 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "clean": "rm -rf bin/ dist/",
-    "build": "bun run clean && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/index.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --declaration --outDir dist",
+    "build": "bun run clean && bun build ./src/cli/index.tsx --outdir ./bin --target bun && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun && bun build ./src/index.ts ./src/storage.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly --declaration --outDir dist",
     "test": "bun test",
     "dev": "bun run ./src/cli/index.tsx",
     "dev:watch": "bun --watch run ./src/cli/index.tsx",
@@ -60,6 +65,7 @@
   "devDependencies": {
     "@types/bun": "latest",
     "@types/react": "^18.2.0",
+    "react-devtools-core": "^7.0.1",
     "typescript": "^5"
   },
   "dependencies": {
