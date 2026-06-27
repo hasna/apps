@@ -412,7 +412,14 @@ polling:
 todos webhooks add loops \
   --id openloops-task-created \
   --transport command \
+  --source todos \
   --type task.created \
+  --metadata 'project_path=/home/hasna/workspace/hasna/opensource/*' \
+  --metadata-json 'route_enabled=true' \
+  --metadata-json 'automation.no_auto!=true' \
+  --metadata-json 'automation.manual_required!=true' \
+  --metadata-json 'automation.requires_approval!=true' \
+  --metadata-json 'automation.approval_required!=true' \
   --arg=events \
   --arg=handle \
   --arg=todos-task \
@@ -432,8 +439,27 @@ When a task is created, `@hasna/events` sends the event JSON on stdin and in
 `HASNA_EVENT_JSON`. OpenLoops uses that event to create a deduped one-shot
 worker/verifier workflow for the task. The event data includes task identity,
 title, description, project/list ids, working directory, tags, metadata, status,
-priority, and timestamps. Local event hooks remain available for local-only
-JSONL/socket/script integrations.
+priority, approval state, and timestamps. Event metadata includes routing-safe
+project/list/path fields, `route_enabled` when the task metadata opts in, and an
+`automation` object containing only boolean routing gates such as `no_auto`,
+`manual_required`, `requires_approval`, and `approval_required`.
+
+Production task-created routes should fail closed:
+
+- Require one explicit opt-in, either task metadata `route_enabled=true` or an
+  approved routing tag such as `auto:route`.
+- Add negative automation predicates so `no_auto`, manual, and approval-gated
+  tasks do not invoke the route.
+- Scope by project path, task list, tags, or repo metadata before invoking
+  OpenLoops.
+- Avoid overlapping opt-in channels for the same task family unless the target
+  handler is idempotent. `loops events handle todos-task` dedupes by task id and
+  event type, but a narrower subscription still avoids wasted invocations.
+
+For tag opt-in, use a second route with the same deny predicates and
+`--data 'tags=auto:route'` instead of `--metadata-json 'route_enabled=true'`.
+Tasks without one of those opt-ins are intentionally no-route. Local event hooks
+remain available for local-only JSONL/socket/script integrations.
 
 ## Local Terminal Notifications
 

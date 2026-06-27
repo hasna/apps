@@ -88,6 +88,76 @@ describe("shared events CLI integration", () => {
     expect(event.data.working_dir).toBe(process.cwd());
   });
 
+  test("task.created webhook filters honor route opt-in and automation deny metadata", async () => {
+    const outputPath = join(tempDir, "captured-route-events.jsonl");
+    const receiverPath = join(tempDir, "receiver-route.ts");
+    writeFileSync(
+      receiverPath,
+      `import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(outputPath)}, process.env.HASNA_EVENT_JSON + "\\n");\n`,
+    );
+
+    const addWebhook = await runTodos([
+      "webhooks",
+      "add",
+      "bun",
+      "--id",
+      "capture-routable-task-created",
+      "--transport",
+      "command",
+      "--source",
+      "todos",
+      "--type",
+      "task.created",
+      "--metadata-json",
+      "route_enabled=true",
+      "--metadata-json",
+      "automation.no_auto!=true",
+      "--arg",
+      receiverPath,
+      "--timeout-ms",
+      "5000",
+      "--json",
+    ]);
+    expect(addWebhook.exitCode).toBe(0);
+    expect(addWebhook.stderr).toBe("");
+
+    const routable = await runTodos([
+      "--json",
+      "task",
+      "upsert",
+      "--fingerprint",
+      "route-contract:allowed",
+      "--title",
+      "Route allowed task",
+      "--metadata-json",
+      "{\"route_enabled\":true,\"automation\":{\"no_auto\":false}}",
+    ]);
+    expect(routable.exitCode).toBe(0);
+
+    const noAuto = await runTodos([
+      "--json",
+      "task",
+      "upsert",
+      "--fingerprint",
+      "route-contract:no-auto",
+      "--title",
+      "Route denied no-auto task",
+      "--metadata-json",
+      "{\"route_enabled\":true,\"automation\":{\"no_auto\":true}}",
+    ]);
+    expect(noAuto.exitCode).toBe(0);
+
+    for (let attempt = 0; attempt < 20 && !existsSync(outputPath); attempt += 1) {
+      await Bun.sleep(50);
+    }
+    expect(existsSync(outputPath)).toBe(true);
+    const events = readFileSync(outputPath, "utf-8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(events).toHaveLength(1);
+    expect(events[0].data.title).toBe("Route allowed task");
+    expect(events[0].metadata.route_enabled).toBe(true);
+    expect(events[0].metadata.automation.no_auto).toBe(false);
+  });
+
   test("task upsert emits task.created once and task.updated on later merges", async () => {
     const outputPath = join(tempDir, "captured-upsert-events.jsonl");
     const receiverPath = join(tempDir, "receiver-upsert.ts");

@@ -43,8 +43,63 @@ export function taskEventData(task: Task, extra: Record<string, unknown> = {}): 
     started_at: task.started_at,
     completed_at: task.completed_at,
     due_at: task.due_at,
+    requires_approval: task.requires_approval,
+    approved_by: task.approved_by,
+    approved_at: task.approved_at,
     ...extra,
   };
+}
+
+function booleanField(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (value === 1) return true;
+    if (value === 0) return false;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(normalized)) return true;
+    if (["false", "0", "no", "off"].includes(normalized)) return false;
+  }
+  return undefined;
+}
+
+function objectField(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function firstBoolean(records: Record<string, unknown>[], keys: string[]): boolean | undefined {
+  for (const record of records) {
+    for (const key of keys) {
+      const value = booleanField(record[key]);
+      if (value !== undefined) return value;
+    }
+  }
+  return undefined;
+}
+
+function routingAutomationMetadata(task: Task): Record<string, boolean> | undefined {
+  const automation = objectField(task.metadata.automation);
+  const records = [task.metadata];
+  if (automation) records.push(automation);
+
+  const result: Record<string, boolean> = {};
+  const aliases: Array<[string, string[]]> = [
+    ["allowed", ["allowed", "automation_allowed", "automationAllowed"]],
+    ["no_auto", ["no_auto", "noAuto"]],
+    ["manual", ["manual"]],
+    ["manual_required", ["manual_required", "manualRequired"]],
+    ["requires_approval", ["requires_approval", "requiresApproval"]],
+    ["approval_required", ["approval_required", "approvalRequired"]],
+  ];
+
+  for (const [canonical, keys] of aliases) {
+    const value = firstBoolean(records, keys);
+    if (value !== undefined) result[canonical] = value;
+  }
+  if (task.requires_approval) result.requires_approval = true;
+
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 function taskEventMetadata(task: Task): Record<string, unknown> {
@@ -57,6 +112,15 @@ function taskEventMetadata(task: Task): Record<string, unknown> {
     task_list_id: task.task_list_id,
     working_dir: task.working_dir,
   };
+
+  const routeEnabled = booleanField(task.metadata.route_enabled);
+  if (routeEnabled !== undefined) {
+    metadata.route_enabled = routeEnabled;
+  }
+  const automation = routingAutomationMetadata(task);
+  if (automation) {
+    metadata.automation = automation;
+  }
 
   try {
     const project = task.project_id ? getProject(task.project_id) : null;
@@ -75,9 +139,6 @@ function taskEventMetadata(task: Task): Record<string, unknown> {
     if (projectPath) {
       metadata.project_kind = classifyProjectKind(projectPath);
       metadata.project_is_worktree = isWorktreePath(projectPath);
-      if (typeof task.metadata.route_enabled === "boolean") {
-        metadata.route_enabled = task.metadata.route_enabled;
-      }
       metadata.working_dir = task.working_dir ?? projectPath;
     }
 

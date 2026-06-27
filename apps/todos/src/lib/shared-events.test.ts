@@ -44,7 +44,7 @@ describe("shared task events", () => {
       task_list_id: taskList.id,
       working_dir: null,
       short_id: "OEV-1",
-      metadata: { route_enabled: true },
+      metadata: { route_enabled: true, automation: { no_auto: false } },
     });
 
     await emitSharedTaskEvent({ type: "task.created", task });
@@ -63,6 +63,7 @@ describe("shared task events", () => {
       project_default_task_list_slug: "todos-open-events",
       project_kind: "open-source",
       route_enabled: true,
+      automation: { no_auto: false },
       working_dir: "/home/hasna/workspace/hasna/opensource/open-events",
       root_project_id: project.id,
       task_list_id: taskList.id,
@@ -70,6 +71,30 @@ describe("shared task events", () => {
       task_list_name: "open-events",
       task_list_project_id: project.id,
       task_list_is_project_default: true,
+    });
+  });
+
+  test("promotes approval and routing-safe automation fields into task.created events", async () => {
+    const task = makeTask({
+      requires_approval: true,
+      metadata: {
+        route_enabled: "true",
+        automation: {
+          noAuto: "true",
+          manualRequired: "false",
+        },
+      },
+    });
+
+    await emitSharedTaskEvent({ type: "task.created", task });
+
+    const [event] = await new EventsClient().listEvents();
+    expect(event.data.requires_approval).toBe(true);
+    expect(event.metadata.route_enabled).toBe(true);
+    expect(event.metadata.automation).toEqual({
+      no_auto: true,
+      manual_required: false,
+      requires_approval: true,
     });
   });
 
@@ -84,7 +109,18 @@ describe("shared task events", () => {
       enabled: true,
       transport: "command",
       command: { command: "bun", args: [receiverPath], timeoutMs: 5000 },
-      filters: [{ source: "todos", type: "task.created", metadata: { project_kind: "open-source", route_enabled: true } }],
+      filters: [{
+        source: "todos",
+        type: "task.created",
+        metadata: {
+          project_kind: "open-source",
+          route_enabled: true,
+          "automation.no_auto": { not: true },
+          "automation.requires_approval": { not: true },
+          "automation.approval_required": { not: true },
+          "automation.manual_required": { not: true },
+        },
+      }],
     });
 
     const openProject = createProject({ name: "open-loops", path: "/home/hasna/workspace/hasna/opensource/open-loops" }, db);
@@ -100,6 +136,25 @@ describe("shared task events", () => {
         project_id: openProject.id,
         working_dir: openProject.path,
         title: "Open-source task without route opt-in",
+      }),
+    });
+    await emitSharedTaskEvent({
+      type: "task.created",
+      task: makeTask({
+        project_id: openProject.id,
+        working_dir: openProject.path,
+        title: "Open-source task with no-auto metadata",
+        metadata: { route_enabled: true, automation: { no_auto: true } },
+      }),
+    });
+    await emitSharedTaskEvent({
+      type: "task.created",
+      task: makeTask({
+        project_id: openProject.id,
+        working_dir: openProject.path,
+        title: "Open-source task requiring approval",
+        metadata: { route_enabled: true },
+        requires_approval: true,
       }),
     });
     await emitSharedTaskEvent({
