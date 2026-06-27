@@ -1751,7 +1751,8 @@ describe('knowledge cli', () => {
       bucket: 'company-bucket',
       key: 'docs/handbook.pdf',
     });
-    expect(parseSourceRef('file:///tmp/readme.md')).toMatchObject({ kind: 'file', path: '/tmp/readme.md' });
+    const fileRef = 'file:///tmp/readme.md';
+    expect(parseSourceRef(fileRef)).toMatchObject({ kind: 'file', path: fileURLToPath(fileRef) });
     expect(parseSourceRef('https://example.com/docs')).toMatchObject({ kind: 'web', url: 'https://example.com/docs' });
   });
 });
