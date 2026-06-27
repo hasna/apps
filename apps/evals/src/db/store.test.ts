@@ -179,4 +179,42 @@ describe("database path migration", () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  test("copies legacy files when ~/.hasna/evals already exists", async () => {
+    const { closeDatabase, getDatabase } = await import("./store.js");
+    const originalHome = process.env["HOME"];
+    const originalUserProfile = process.env["USERPROFILE"];
+    const home = mkdtempSync(join(tmpdir(), "evals-home-existing-"));
+    const legacyDir = join(home, ".evals");
+    const legacyDbPath = join(legacyDir, "evals.db");
+    const newDir = join(home, ".hasna", "evals");
+    const migratedDbPath = join(newDir, "evals.db");
+
+    closeDatabase();
+    delete process.env["EVALS_DB_PATH"];
+    process.env["HOME"] = home;
+    delete process.env["USERPROFILE"];
+
+    try {
+      mkdirSync(legacyDir, { recursive: true });
+      mkdirSync(newDir, { recursive: true });
+      const legacyDb = new Database(legacyDbPath);
+      legacyDb.exec("CREATE TABLE legacy_marker (id TEXT PRIMARY KEY); INSERT INTO legacy_marker (id) VALUES ('postinstall');");
+      legacyDb.close();
+
+      const db = getDatabase();
+      const row = db.query<{ id: string }, []>("SELECT id FROM legacy_marker").get();
+
+      expect(existsSync(migratedDbPath)).toBe(true);
+      expect(row).toEqual({ id: "postinstall" });
+    } finally {
+      closeDatabase();
+      if (originalHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = originalHome;
+      if (originalUserProfile === undefined) delete process.env["USERPROFILE"];
+      else process.env["USERPROFILE"] = originalUserProfile;
+      process.env["EVALS_DB_PATH"] = ":memory:";
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });

@@ -16,14 +16,14 @@ function defaultDbPath(): string {
   const newDir = join(home, ".hasna", "evals");
   const oldDir = join(home, ".evals");
 
-  if (existsSync(oldDir) && !existsSync(newDir)) {
+  if (existsSync(oldDir)) {
     mkdirSync(newDir, { recursive: true });
     try {
       for (const file of readdirSync(oldDir)) {
         const oldPath = join(oldDir, file);
         const newPath = join(newDir, file);
         try {
-          if (statSync(oldPath).isFile()) copyFileSync(oldPath, newPath);
+          if (statSync(oldPath).isFile() && !existsSync(newPath)) copyFileSync(oldPath, newPath);
         } catch {
           // Best-effort migration; unreadable files do not block new installs.
         }
