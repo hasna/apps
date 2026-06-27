@@ -8,6 +8,7 @@ import { getConfig, setConfig } from "../lib/config.js";
 import { fetchSitemap, type SitemapEntry } from "../lib/sitemap.js";
 import type { ExportFormat } from "../types/index.js";
 import { createWebhook, getWebhook, listWebhooks, deleteWebhook, listDeliveries } from "../db/webhooks.js";
+import { VERSION } from "../version.js";
 
 // These modules exist at runtime but are not yet implemented.
 // Using dynamic imports with .catch fallbacks so TypeScript infers `any` at call sites.
@@ -33,7 +34,7 @@ const _crawlAgents = new Map<string, _CrawlAgent>();
 export function buildServer(): McpServer {
 const server = new McpServer({
   name: "open-crawl",
-  version: "0.1.0",
+  version: VERSION,
 });
 
 // ─── Tool: crawl_url ─────────────────────────────────────────────────────────

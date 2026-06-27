@@ -14,6 +14,7 @@ import { createWebhook, getWebhook, listWebhooks, deleteWebhook, listDeliveries,
 import { deliverWebhook } from "../lib/webhooks.js";
 import { createApiKey, listApiKeys, revokeApiKey } from "../db/api-keys.js";
 import { getUsageSummary } from "../db/usage.js";
+import { VERSION } from "../version.js";
 
 // These modules exist at runtime but are not yet written; typed as any to avoid type errors.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -43,7 +44,7 @@ const program = new Command();
 program
   .name("crawl")
   .description("AI-powered web crawler — crawl, extract, search")
-  .version("0.1.0");
+  .version(VERSION);
 
 // ─── crawl <url> ─────────────────────────────────────────────────────────────
 
