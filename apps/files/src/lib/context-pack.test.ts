@@ -29,7 +29,7 @@ afterEach(async () => {
 
 describe("files context packs", () => {
   test("builds bounded excerpts with citations, attachment refs, redaction, and deterministic ids", async () => {
-    const { fileId } = await seedFiles();
+    const { fileId, standaloneSecrets } = await seedFiles();
     const { buildFilesContextPack } = await import("./context-pack.js");
 
     const first = await buildFilesContextPack({
@@ -66,6 +66,9 @@ describe("files context packs", () => {
     expect(serialized).toContain("[REDACTED]");
     expect(serialized).not.toContain("supersecret");
     expect(serialized).not.toContain("sk-openai");
+    for (const secret of standaloneSecrets) {
+      expect(serialized).not.toContain(secret);
+    }
     expect(first.counts.included_excerpts).toBe(1);
     expect(first.counts.omitted_chars).toBeGreaterThan(0);
   });
@@ -88,6 +91,25 @@ describe("files context packs", () => {
     expect(pack.files).toHaveLength(1);
     expect(pack.files[0]?.excerpts.length).toBeGreaterThan(0);
     expect(pack.counts.omitted_files).toBe(1);
+  });
+
+  test("redacts standalone credential-like tokens from emitted excerpts", async () => {
+    const { fileId, standaloneSecrets } = await seedFiles();
+    const { buildFilesContextPack } = await import("./context-pack.js");
+
+    const pack = await buildFilesContextPack({
+      file_ids: [fileId],
+      max_files: 1,
+      max_excerpts: 2,
+      max_excerpt_chars: 2000,
+      max_total_chars: 2000,
+    });
+
+    const serialized = JSON.stringify(pack);
+    expect(serialized).toContain("Standalone credential samples");
+    for (const secret of standaloneSecrets) {
+      expect(serialized).not.toContain(secret);
+    }
   });
 
   test("preserves explicit revision refs in citations", async () => {
@@ -120,13 +142,14 @@ describe("files context packs", () => {
   });
 });
 
-async function seedFiles(): Promise<{ fileId: string }> {
+async function seedFiles(): Promise<{ fileId: string; standaloneSecrets: string[] }> {
   const { getCurrentMachine } = await import("../db/machines.js");
   const { createSource } = await import("../db/sources.js");
   const { upsertFile } = await import("../db/files.js");
 
   const root = join(testDir!, "source");
   mkdirSync(root, { recursive: true });
+  const standaloneSecrets = buildStandaloneSecretExamples();
   writeFileSync(
     join(root, "supplier-renewal.md"),
     [
@@ -134,6 +157,7 @@ async function seedFiles(): Promise<{ fileId: string }> {
       "The contract renewal should be reviewed by finance.",
       "password=supersecret should never appear in an agent pack.",
       "OPENAI_API_KEY=sk-openai-example-secret-value",
+      "Standalone credential samples: " + standaloneSecrets.join(" "),
       "Include pricing exception notes and renewal dates.",
       "",
     ].join("\n"),
@@ -170,5 +194,17 @@ async function seedFiles(): Promise<{ fileId: string }> {
     hash: "b".repeat(64),
     status: "active",
   });
-  return { fileId: file.id };
+  return { fileId: file.id, standaloneSecrets };
+}
+
+function buildStandaloneSecretExamples(): string[] {
+  return [
+    "s" + "k-proj-" + "standalonecontextpacktoken1234567890",
+    "s" + "k-ant-" + "standalonecontextpacktoken1234567890",
+    "x" + "ai-" + "standalonecontextpacktoken1234567890",
+    "np" + "m_" + "standalonecontextpacktoken1234567890",
+    "ctx7s" + "k-" + "standalonecontextpacktoken1234567890",
+    "AI" + "za" + "StandaloneContextPackToken1234567890",
+    "secret-" + "token:" + "standalonecontextpacktoken1234567890",
+  ];
 }
