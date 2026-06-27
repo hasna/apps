@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { SqliteAdapter } from "@hasna/cloud";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { getTicketsDbPath } from "../lib/paths";
 
 export const LOCK_EXPIRY_MINUTES = 30;
 
@@ -32,16 +33,7 @@ function getDbPath(): string {
   const nearest = findNearestTicketsDb(cwd);
   if (nearest) return nearest;
 
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
-  const newPath = join(home, ".hasna", "tickets", "tickets.db");
-  const legacyPath = join(home, ".tickets", "tickets.db");
-
-  // Use legacy DB if it exists and new one doesn't yet (backward compat)
-  if (!existsSync(newPath) && existsSync(legacyPath)) {
-    return legacyPath;
-  }
-
-  return newPath;
+  return getTicketsDbPath();
 }
 
 function ensureDir(filePath: string): void {

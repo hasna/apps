@@ -2,19 +2,10 @@
 
 import { Command } from "commander";
 import { writeFile, mkdir } from "fs/promises";
-import { existsSync } from "fs";
 import { join } from "path";
-import { homedir } from "os";
 import { gatherTrainingData } from "../lib/gatherer.ts";
 import { getActiveModel, setActiveModel, clearActiveModel, DEFAULT_MODEL } from "../lib/model-config.ts";
-
-function getTicketsDir(): string {
-  const home = homedir();
-  const newDir = join(home, ".hasna", "tickets");
-  const legacyDir = join(home, ".tickets");
-  if (!existsSync(newDir) && existsSync(legacyDir)) return legacyDir;
-  return newDir;
-}
+import { getTicketsDir } from "../lib/paths";
 
 export function registerBrainsCommand(program: Command): void {
   const brainsCmd = program
