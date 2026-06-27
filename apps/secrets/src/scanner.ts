@@ -216,7 +216,7 @@ export function scanHistoryExposures(options: HistoryExposureScanOptions = {}): 
   const timeoutMs = normalizePositiveInteger(options.timeoutMs, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
   const deadline = Date.now() + timeoutMs;
   const gitRoot = resolveGitRoot(requestedRoot);
-  const result = createResult("history", gitRoot ?? requestedRoot, limit, { maxCommits, timeoutMs });
+  const result = createResult("history", requestedRoot, limit, { maxCommits, timeoutMs });
   result.stats.commitsScanned = 0;
 
   if (!gitRoot) {
@@ -224,7 +224,15 @@ export function scanHistoryExposures(options: HistoryExposureScanOptions = {}): 
     return finalizeResult(result);
   }
 
-  const commits = runGit(gitRoot, ["log", "--all", "--format=%H", `--max-count=${maxCommits}`]);
+  const pathspec = gitPathspecForRoot(gitRoot, requestedRoot);
+  const commits = runGit(gitRoot, [
+    "log",
+    "--all",
+    "--format=%H",
+    `--max-count=${maxCommits}`,
+    "--",
+    pathspec,
+  ]);
   if (commits.status !== 0) {
     result.stats.errors.push(trimError(commits.stderr) || "Unable to list git commits.");
     return finalizeResult(result);
@@ -248,7 +256,7 @@ export function scanHistoryExposures(options: HistoryExposureScanOptions = {}): 
       GIT_GREP_PATTERN,
       commit,
       "--",
-      ".",
+      pathspec,
       ":(exclude).hasna/**",
       ":(exclude).git/**",
       ":(exclude)node_modules/**",
@@ -279,9 +287,11 @@ export function scanHistoryExposures(options: HistoryExposureScanOptions = {}): 
       const parsed = parseGitGrepLine(line);
       if (!parsed) continue;
       if (isExcludedPath(parsed.path)) continue;
+      const findingPath = relativePath(requestedRoot, resolve(gitRoot, parsed.path));
+      if (isOutsideRoot(findingPath)) continue;
       scanTextLine(parsed.content, parsed.line, {
         source: "history",
-        path: parsed.path,
+        path: findingPath,
         commit,
       }, result);
     }
@@ -488,6 +498,11 @@ function resolveGitRoot(root: string): string | undefined {
   return result.stdout.trim() || undefined;
 }
 
+function gitPathspecForRoot(gitRoot: string, requestedRoot: string): string {
+  const rel = relativePath(gitRoot, requestedRoot);
+  return rel === "." ? "." : rel;
+}
+
 function runGit(
   cwd: string,
   args: string[],
@@ -537,6 +552,14 @@ function isExcludedPath(path: string): boolean {
 
 function relativePath(root: string, path: string): string {
   return relative(root, path).split(sep).join("/") || ".";
+}
+
+function isOutsideRoot(path: string): boolean {
+  return path === ".." || path.startsWith("../") || path.startsWith("..\\") || isAbsolutePath(path);
+}
+
+function isAbsolutePath(path: string): boolean {
+  return path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path);
 }
 
 function isLikelyBinary(buffer: Buffer): boolean {

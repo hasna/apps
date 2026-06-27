@@ -79,6 +79,32 @@ describe("exposure scanner", () => {
     expect(serialized).not.toContain(value);
   });
 
+  it("keeps history scans bounded to the requested root", () => {
+    if (!gitAvailable()) return;
+
+    const outside = fakeOpenAiToken();
+    const inside = fakePackageRegistryToken();
+    const allowedDir = join(testDir, "allowed");
+    mkdirSync(allowedDir, { recursive: true });
+
+    git(["init"]);
+    git(["config", "user.name", "Open Secrets Test"]);
+    git(["config", "user.email", "open-secrets-test@example.invalid"]);
+    writeFileSync(join(testDir, "root.env"), `OPENAI_API_KEY=${outside}\n`);
+    writeFileSync(join(allowedDir, "config.env"), `PACKAGE_TOKEN=${inside}\n`);
+    git(["add", "."]);
+    git(["commit", "-m", "add config"]);
+
+    const result = scanHistoryExposures({ root: allowedDir, limit: 5, maxCommits: 5 });
+    const serialized = JSON.stringify(result);
+
+    expect(result.redacted).toBe(true);
+    expect(result.findingCount).toBe(1);
+    expect(result.findings[0].path).toBe("config.env");
+    expect(serialized).not.toContain(outside);
+    expect(serialized).not.toContain(inside);
+  });
+
   it("enforces total workspace file and byte limits", () => {
     writeFileSync(join(testDir, "a.txt"), "metadata only\n");
     writeFileSync(join(testDir, "b.txt"), `OPENAI_API_KEY=${fakeOpenAiToken()}\n`);

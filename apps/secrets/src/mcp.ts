@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { isAbsolute, relative, resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import {
   STORAGE_TABLES,
@@ -349,17 +350,31 @@ function parseTtl(ttl: string): string {
   return new Date(Date.now() + parseInt(num) * ms).toISOString();
 }
 
-function resolveMcpRoot(root?: string): { ok: true; root?: string } | { ok: false; root: string; error: string } {
+export function resolveMcpRoot(root?: string): { ok: true; root?: string } | { ok: false; root: string; error: string } {
   if (!root) return { ok: true };
-  const base = process.cwd();
   const resolved = resolve(root);
-  const rel = relative(base, resolved);
-  if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) {
-    return { ok: true, root: resolved };
+
+  let base: string;
+  let realRoot: string;
+  try {
+    base = realpathSync(process.cwd());
+    realRoot = realpathSync(resolved);
+  } catch (error) {
+    return {
+      ok: false,
+      root: resolved,
+      error: `Unable to resolve MCP scan root: ${(error as Error).message}`,
+    };
+  }
+
+  const rel = relative(base, realRoot);
+  const outsideBase = rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+  if (rel === "" || !outsideBase) {
+    return { ok: true, root: realRoot };
   }
   return {
     ok: false,
-    root: resolved,
+    root: realRoot,
     error: `MCP scan root must be inside the server working directory: ${base}`,
   };
 }

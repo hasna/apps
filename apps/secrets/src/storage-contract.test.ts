@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { resolveMcpRoot } from "./mcp.js";
 
 const rootDir = join(import.meta.dir, "..");
 
@@ -46,6 +48,36 @@ describe("secrets storage surface contract", () => {
     expect(source).not.toContain('"cloud_push"');
     expect(source).not.toContain('"cloud_pull"');
     expect(source).not.toContain('"cloud_sync"');
+  });
+
+  it("keeps MCP scan roots inside the real server working directory", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "open-secrets-mcp-root-"));
+    const cwd = join(tempRoot, "cwd");
+    const child = join(cwd, "child");
+    const outside = join(tempRoot, "outside");
+    const link = join(cwd, "linked-outside");
+    const originalCwd = process.cwd();
+
+    mkdirSync(child, { recursive: true });
+    mkdirSync(outside, { recursive: true });
+    symlinkSync(outside, link, "dir");
+
+    try {
+      process.chdir(cwd);
+      const allowed = resolveMcpRoot("child");
+      const escaped = resolveMcpRoot("linked-outside");
+
+      expect(allowed.ok).toBe(true);
+      if (allowed.ok) expect(allowed.root).toBe(child);
+      expect(escaped.ok).toBe(false);
+      if (!escaped.ok) {
+        expect(escaped.root).toBe(outside);
+        expect(escaped.error).toContain("MCP scan root must be inside");
+      }
+    } finally {
+      process.chdir(originalCwd);
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("storage status includes canonical RDS metadata without values", () => {
