@@ -98,6 +98,11 @@ import {
   type FleetRoutingReport,
   type MachineHealthReport,
 } from "../agent-abstractions.js";
+import {
+  getFleetOpsCheck,
+  parseFleetOpsTmuxExpectation,
+  type FleetOpsCheck,
+} from "../ops-check.js";
 import { runDoctor } from "../commands/doctor.js";
 import { assertMutationApproved, createTrustedSdkMutationApproval, mutationArgsSha256, mutationPlanDigest } from "../commands/mutation-approval.js";
 import {
@@ -395,6 +400,31 @@ function renderLoopPreflightResult(result: FleetLoopPreflightReport): string {
     ]),
     ...lines,
   ].join("\n");
+}
+
+function renderFleetOpsCheck(result: FleetOpsCheck): string {
+  const lines = result.machines.map((machine) =>
+    `${machine.display_name.padEnd(18)} ${machine.machine_id.padEnd(18)} ${machine.status.padEnd(9)} route:${machine.route}/${machine.route_confidence} heartbeat:${machine.heartbeat} sync:${machine.storage_sync_status ?? "unknown"}`
+  );
+  const issueLines = result.issues.slice(0, 8).map((issue) =>
+    `${issue.severity.padEnd(8)} ${issue.classification} ${issue.machine_id ?? "fleet"} ${issue.summary}`
+  );
+  return [
+    renderKeyValueTable([
+      ["status", result.status],
+      ["ok", String(result.ok)],
+      ["machines", String(result.summary.machines)],
+      ["ready", String(result.summary.ready)],
+      ["blocked", String(result.summary.blocked)],
+      ["issues", String(result.summary.issues)],
+      ["task suggestions", String(result.summary.task_suggestions)],
+      ["tmux dead panes", String(result.summary.tmux_dead_panes)],
+      ["tmux missing expected", String(result.summary.tmux_missing_expected)],
+    ]),
+    ...lines,
+    ...issueLines,
+    result.issues.length > issueLines.length ? `${result.issues.length - issueLines.length} more issue(s) in JSON output` : "",
+  ].filter(Boolean).join("\n");
 }
 
 function renderWorkspaceResolution(result: ReturnType<typeof resolveMachineWorkspace>): string {
@@ -1532,6 +1562,10 @@ interface AgentApiCliOptions {
   workspace?: string[];
   cmd?: string;
   commandLabel?: string;
+  expectMachine?: string[];
+  expectTmux?: string[];
+  maxEvidenceItems?: string;
+  maxTaskSuggestions?: string;
   json?: boolean;
   text?: boolean;
 }
@@ -1755,6 +1789,41 @@ program
       commandLabel: options.commandLabel,
     });
     printJsonDefault(result, renderLoopPreflightResult(result), options);
+  });
+
+const opsCommand = program.command("ops").description("Fleet operations diagnostics");
+
+opsCommand
+  .command("check")
+  .description("Run a read-only fleet ops check with task and event suggestions")
+  .option("--machine <id...>", "Limit to machine ids; comma-separated values are accepted")
+  .option("--expect-machine <id...>", "Expected machine id; comma-separated values are accepted")
+  .option("--expect-tmux <machine=target...>", "Expected local tmux pane target, optionally machine=target")
+  .option("--cmd <command>", "Loop command to plan; omitted keeps <loop-command> placeholder")
+  .option("--command-label <label>", "Short label for the planned command")
+  .option("--no-tailscale", "Skip tailscale status probing")
+  .option("--limit <n>", `Maximum machines to return (default ${DEFAULT_MACHINE_LIST_LIMIT})`)
+  .option("--offset <n>", "Machine list offset for pagination")
+  .option("--all", "Return every selected/discovered machine", false)
+  .option("--max-evidence-items <n>", "Maximum evidence entries per issue")
+  .option("--max-task-suggestions <n>", "Maximum task suggestions emitted")
+  .option("-j, --json", "Print JSON output", false)
+  .option("--text", "Print compact text summary instead of JSON", false)
+  .action((options: AgentApiCliOptions) => {
+    const result = getFleetOpsCheck({
+      ...baseAgentOptions(options),
+      command: options.cmd,
+      commandLabel: options.commandLabel,
+      expectedMachines: parseMachineIdList(options.expectMachine),
+      expectedTmux: (options.expectTmux ?? []).map(parseFleetOpsTmuxExpectation),
+      maxEvidenceItems: options.maxEvidenceItems ? parseIntegerOption(options.maxEvidenceItems, "max-evidence-items", { min: 1 }) : undefined,
+      maxTaskSuggestions: options.maxTaskSuggestions ? parseIntegerOption(options.maxTaskSuggestions, "max-task-suggestions", { min: 1 }) : undefined,
+    });
+    if (options.json || !options.text) {
+      console.log(JSON.stringify(result));
+      return;
+    }
+    console.log(renderFleetOpsCheck(result));
   });
 
 const projectsAssignmentsCommand = projectsCommand
