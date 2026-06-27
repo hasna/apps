@@ -639,6 +639,129 @@ export interface KnowledgeSourceManifest {
   artifact?: KnowledgeSourceManifestArtifact;
 }
 
+export interface FilesContextPackCitation {
+  id: string;
+  file_id: string;
+  source_ref: string;
+  attachment_ref: string;
+  path: string;
+  name: string;
+  line_start: number;
+  line_end: number;
+  char_start: number;
+  char_end: number;
+  section_hint?: string;
+}
+
+export interface FilesContextPackExcerpt {
+  citation_id: string;
+  text: string;
+  line_start: number;
+  line_end: number;
+  char_start: number;
+  char_end: number;
+  omitted_chars: number;
+  section_hint?: string;
+}
+
+export interface FilesContextPackFile {
+  file_id: string;
+  source_ref: string;
+  attachment_ref: string;
+  revision_id?: string;
+  revision_ref?: string;
+  name: string;
+  path: string;
+  mime: string;
+  size: number;
+  status: FileStatus;
+  hash?: string;
+  modified_at?: string;
+  indexed_at: string;
+  search_match_sources?: SearchMatchSource[];
+  search_document_kinds?: FileSearchDocumentKind[];
+  extraction: {
+    status: ExtractedTextStatus;
+    status_reason?: string;
+    bytes_read: number;
+    total_size?: number;
+    truncated: boolean;
+    redacted: boolean;
+  };
+  excerpts: FilesContextPackExcerpt[];
+  omitted_excerpt_count: number;
+  omitted_char_count: number;
+}
+
+export interface FilesContextPackAttachmentRef {
+  ref: string;
+  file_id: string;
+  revision_ref?: string;
+  name: string;
+  mime: string;
+  size: number;
+}
+
+export interface FilesContextPackError {
+  input: string;
+  code: "not_found" | "unsupported_ref" | "extract_failed" | "invalid_ref";
+  message: string;
+}
+
+export interface FilesContextPack {
+  schema_version: "files.context_pack.v1";
+  pack_id: string;
+  mode: "context" | "search";
+  query?: string;
+  limits: {
+    max_files: number;
+    max_excerpts: number;
+    max_excerpt_chars: number;
+    max_total_chars: number;
+    max_bytes_per_file: number;
+  };
+  counts: {
+    requested_files: number;
+    matched_files: number;
+    included_files: number;
+    included_excerpts: number;
+    omitted_files: number;
+    omitted_excerpts: number;
+    omitted_chars: number;
+    errors: number;
+  };
+  files: FilesContextPackFile[];
+  citations: FilesContextPackCitation[];
+  attachment_refs: FilesContextPackAttachmentRef[];
+  errors: FilesContextPackError[];
+  safety: {
+    redacted: boolean;
+    default_redactions: boolean;
+    custom_redaction_patterns: number;
+  };
+}
+
+export interface FilesContextPackOptions {
+  file_ids?: string[];
+  source_refs?: string[];
+  max_files?: number;
+  max_excerpts?: number;
+  max_excerpt_chars?: number;
+  max_total_chars?: number;
+  max_bytes_per_file?: number;
+  redact_patterns?: RegExp[];
+}
+
+export interface FilesSearchPackOptions extends FilesContextPackOptions {
+  query: string;
+  source_id?: string;
+  machine_id?: string;
+  tag?: string;
+  ext?: string;
+  search_scope?: SearchScope;
+  offset?: number;
+}
+
 export type KnowledgeSourceOutboxEventType =
   | "source_created"
   | "indexed"

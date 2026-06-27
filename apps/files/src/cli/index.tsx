@@ -31,13 +31,15 @@ import { extractTextSnapshotFromFile } from "../lib/extraction-snapshot.js";
 import { doctorKnowledgeSources } from "../lib/knowledge-doctor.js";
 import { exportKnowledgeSourceManifest, formatKnowledgeSourceManifest } from "../lib/knowledge-manifest.js";
 import { resolveKnowledgeSourceRef } from "../lib/knowledge-resolver.js";
+import { buildFilesContextPack, buildFilesSearchPack } from "../lib/context-pack.js";
 import { buildOpenFilesFileRef, buildOpenFilesFileRevisionRef } from "../lib/source-ref.js";
 import { acknowledgeKnowledgeSourceOutbox, pollKnowledgeSourceOutbox } from "../db/knowledge-outbox.js";
 import { getDb, getDbPath } from "../db/database.js";
 import { requireId } from "../db/resolve.js";
-import { resolve, join } from "path";
-import { existsSync, readFileSync } from "fs";
+import { dirname, resolve, join } from "path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import type {
+  FilesContextPack,
   FileSearchDocument,
   FileSearchDocumentKind,
   FileSearchDocumentStatus,
@@ -667,6 +669,72 @@ program
       console.log(`${chalk.bold(f.id)}  ${chalk.cyan(f.name)}  ${chalk.dim(f.path)}${target}${tags}${src}${match}`);
     }
     console.log(chalk.dim(`\n${results.length} result(s)`));
+  });
+
+program
+  .command("context-pack [file-ids...]")
+  .description("Build a bounded, cited context pack for explicit files or open-files refs")
+  .option("--source-ref <ref>", "open-files://file or open-files://source/.../path ref; repeatable", collectValues, [] as string[])
+  .option("--max-files <n>", "Maximum files to include", "5")
+  .option("--max-excerpts <n>", "Maximum excerpts across the pack", "12")
+  .option("--max-excerpt-chars <n>", "Maximum characters per excerpt", "900")
+  .option("--max-total-chars <n>", "Maximum excerpt characters across the pack", "6000")
+  .option("--max-bytes-per-file <n>", "Maximum bytes to read per file", "262144")
+  .option("--redact <regex>", "Additional regex redaction pattern; repeatable", collectValues, [] as string[])
+  .option("--out <path>", "Write the full bounded pack JSON to a file and print an artifact pointer")
+  .option("--dry-run", "With --out, preview the artifact pointer without writing the file")
+  .action(async (fileIds: string[], opts: ContextPackCliOptions) => {
+    try {
+      const positionalRefs = fileIds.filter((value) => value.startsWith("open-files://"));
+      const positionalFileIds = fileIds.filter((value) => !value.startsWith("open-files://"));
+      const pack = await buildFilesContextPack({
+        file_ids: positionalFileIds.map(resolveFileIdForPack),
+        source_refs: [...opts.sourceRef, ...positionalRefs],
+        ...packLimitsFromCli(opts),
+        redact_patterns: compileRedactions(opts.redact),
+      });
+      printContextPack(pack, opts);
+    } catch (e) {
+      console.error(chalk.red((e as Error).message));
+      process.exit(1);
+    }
+  });
+
+program
+  .command("search-pack <query>")
+  .description("Search files and return a bounded, cited context pack")
+  .option("-s, --source <id>", "Filter by source ID")
+  .option("-m, --machine <id>", "Filter by machine ID")
+  .option("-t, --tag <tag>", "Filter by tag")
+  .option("-e, --ext <ext>", "Filter by extension")
+  .option("--scope <scope>", "Search scope: all, metadata, content", "all")
+  .option("--offset <n>", "Search result offset", "0")
+  .option("--max-files <n>", "Maximum files to include", "5")
+  .option("--max-excerpts <n>", "Maximum excerpts across the pack", "12")
+  .option("--max-excerpt-chars <n>", "Maximum characters per excerpt", "900")
+  .option("--max-total-chars <n>", "Maximum excerpt characters across the pack", "6000")
+  .option("--max-bytes-per-file <n>", "Maximum bytes to read per file", "262144")
+  .option("--redact <regex>", "Additional regex redaction pattern; repeatable", collectValues, [] as string[])
+  .option("--out <path>", "Write the full bounded pack JSON to a file and print an artifact pointer")
+  .option("--dry-run", "With --out, preview the artifact pointer without writing the file")
+  .action(async (query: string, opts: SearchPackCliOptions) => {
+    try {
+      const pack = await buildFilesSearchPack({
+        query,
+        source_id: opts.source,
+        machine_id: opts.machine,
+        tag: opts.tag,
+        ext: opts.ext,
+        search_scope: parseSearchScope(opts.scope),
+        offset: parseIntFlag(opts.offset, "offset", { min: 0 }),
+        ...packLimitsFromCli(opts),
+        redact_patterns: compileRedactions(opts.redact),
+      });
+      printContextPack(pack, opts);
+    } catch (e) {
+      console.error(chalk.red((e as Error).message));
+      process.exit(1);
+    }
   });
 
 // ─── search index ──────────────────────────────────────────────────────────
@@ -1725,6 +1793,89 @@ function getOpenCommand(fullPath: string): string[] {
 function collectValues(value: string, values: string[]): string[] {
   values.push(value);
   return values;
+}
+
+interface ContextPackCliOptions {
+  sourceRef: string[];
+  maxFiles: string;
+  maxExcerpts: string;
+  maxExcerptChars: string;
+  maxTotalChars: string;
+  maxBytesPerFile: string;
+  redact: string[];
+  out?: string;
+  dryRun?: boolean;
+}
+
+interface SearchPackCliOptions extends ContextPackCliOptions {
+  source?: string;
+  machine?: string;
+  tag?: string;
+  ext?: string;
+  scope: string;
+  offset: string;
+}
+
+function packLimitsFromCli(opts: ContextPackCliOptions): {
+  max_files: number;
+  max_excerpts: number;
+  max_excerpt_chars: number;
+  max_total_chars: number;
+  max_bytes_per_file: number;
+} {
+  return {
+    max_files: parseIntFlag(opts.maxFiles, "max-files", { min: 1 }),
+    max_excerpts: parseIntFlag(opts.maxExcerpts, "max-excerpts", { min: 1 }),
+    max_excerpt_chars: parseIntFlag(opts.maxExcerptChars, "max-excerpt-chars", { min: 1 }),
+    max_total_chars: parseIntFlag(opts.maxTotalChars, "max-total-chars", { min: 1 }),
+    max_bytes_per_file: parseIntFlag(opts.maxBytesPerFile, "max-bytes-per-file", { min: 1 }),
+  };
+}
+
+function compileRedactions(patterns: string[]): RegExp[] {
+  return patterns.map((pattern) => {
+    try {
+      return new RegExp(pattern, "g");
+    } catch (error) {
+      throw new Error(`Invalid --redact regex "${pattern}": ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
+}
+
+function resolveFileIdForPack(value: string): string {
+  try {
+    return requireId(value, "files");
+  } catch {
+    return value;
+  }
+}
+
+function printContextPack(pack: FilesContextPack, opts: { out?: string; dryRun?: boolean }): void {
+  if (!opts.out) {
+    process.stdout.write(`${JSON.stringify(pack)}\n`);
+    return;
+  }
+
+  const body = `${JSON.stringify(pack, null, 2)}\n`;
+  const outPath = resolve(opts.out);
+  const pointer = {
+    pack_id: pack.pack_id,
+    dry_run: Boolean(opts.dryRun),
+    artifact: {
+      provider: "local",
+      path: outPath,
+      bytes: Buffer.byteLength(body),
+      format: "json",
+    },
+    counts: pack.counts,
+    citation_count: pack.citations.length,
+    attachment_ref_count: pack.attachment_refs.length,
+  };
+  if (!opts.dryRun) {
+    mkdirSync(dirname(outPath), { recursive: true });
+    writeFileSync(outPath, body);
+  }
+  process.stdout.write(`${JSON.stringify(pointer)}\n`);
 }
 
 function parseSearchScope(value: string): SearchScope {

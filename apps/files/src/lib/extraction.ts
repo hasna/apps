@@ -137,10 +137,8 @@ export function extractTextFromBuffer(input: ExtractTextFromBufferInput): Extrac
   }
 
   const redactor = composeRedactor(input);
-  const segments = segmentText(text, maxSegmentChars).map((segment) => ({
-    ...segment,
-    text: redactor(segment.text),
-  }));
+  const outputText = redactor(text);
+  const segments = segmentText(outputText, maxSegmentChars);
 
   return {
     source_ref: input.source_ref,

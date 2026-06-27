@@ -18,6 +18,7 @@ import { extractTextSnapshotFromFile } from "../lib/extraction-snapshot.js";
 import { doctorKnowledgeSources } from "../lib/knowledge-doctor.js";
 import { exportKnowledgeSourceManifest } from "../lib/knowledge-manifest.js";
 import { resolveKnowledgeSourceRef } from "../lib/knowledge-resolver.js";
+import { buildFilesContextPack, buildFilesSearchPack } from "../lib/context-pack.js";
 import { acknowledgeKnowledgeSourceOutbox, pollKnowledgeSourceOutbox } from "../db/knowledge-outbox.js";
 import { parseOpenFilesSourceRef } from "../lib/source-ref.js";
 import { registerEvidenceTools } from "./evidence-tools.js";
@@ -25,12 +26,12 @@ import { registerOrganizationTools } from "./organization-tools.js";
 import { registerStorageTools } from "./storage-tools.js";
 import { registerAgent, getAgent, listAgents as listDbAgents, updateAgentHeartbeat, setAgentFocus } from "../db/agents.js";
 import { logActivity, getFileHistory, getAgentActivity, getSessionActivity } from "../db/activity.js";
-import { basename, join } from "path";
-import { existsSync } from "fs";
+import { basename, dirname, join, resolve } from "path";
+import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { createRequire } from "module";
 import { buildOpenFilesFileRef } from "../lib/source-ref.js";
-import type { GoogleDriveConfig, KnowledgeSourceManifestFormat, KnowledgeSourceResolveMode, S3Config } from "../types/index.js";
+import type { FilesContextPack, GoogleDriveConfig, KnowledgeSourceManifestFormat, KnowledgeSourceResolveMode, S3Config } from "../types/index.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../../package.json") as { version: string };
@@ -147,6 +148,17 @@ function normalizeMcpImportLimit(): number {
   return Math.min(Math.floor(parsed), MAX_MCP_IMPORT_BYTES);
 }
 
+function compileMcpRedactions(patterns: string[] | undefined): RegExp[] | undefined {
+  if (!patterns?.length) return undefined;
+  return patterns.map((pattern) => {
+    try {
+      return new RegExp(pattern, "g");
+    } catch (error) {
+      throw new Error(`Invalid redact pattern "${pattern}": ${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
+}
+
 function normalizeManagedRelativePath(value: string | undefined, fallback: string): string {
   const raw = (value && value.trim().length ? value : fallback).trim().replace(/\\/g, "/");
   if (!raw || raw.includes("\0") || raw.startsWith("/") || /^[A-Za-z]:\//.test(raw)) {
@@ -192,6 +204,45 @@ async function readResponseBodyWithLimit(resp: Response, maxBytes: number): Prom
 
 function mcpError(message: string) {
   return { content: [{ type: "text" as const, text: message }], isError: true };
+}
+
+function mcpContextPackResult(
+  toolName: string,
+  pack: FilesContextPack,
+  outputLocalPath?: string,
+  dryRun?: boolean,
+) {
+  if (!outputLocalPath) return { content: [{ type: "text" as const, text: JSON.stringify(pack) }] };
+
+  if (!dryRun) {
+    const denied = requireMcpCapability(toolName, "mutations");
+    if (denied) return denied;
+  }
+
+  const body = `${JSON.stringify(pack, null, 2)}\n`;
+  const outPath = resolve(outputLocalPath);
+  if (!dryRun) {
+    mkdirSync(dirname(outPath), { recursive: true });
+    writeFileSync(outPath, body);
+  }
+  return {
+    content: [{
+      type: "text" as const,
+      text: JSON.stringify({
+        pack_id: pack.pack_id,
+        dry_run: Boolean(dryRun),
+        artifact: {
+          provider: "local",
+          path: outPath,
+          bytes: Buffer.byteLength(body),
+          format: "json",
+        },
+        counts: pack.counts,
+        citation_count: pack.citations.length,
+        attachment_ref_count: pack.attachment_refs.length,
+      }),
+    }],
+  };
 }
 
 export function buildServer(): McpServer {
@@ -418,6 +469,74 @@ registerTool("search_files", "Full-text search across file names, paths, and tag
     logActivity({ agent_id, action: "search", metadata: { query, results_count: results.length } });
   }
   return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+});
+
+registerTool("build_context_pack", "Build a bounded, cited context pack for explicit file IDs or open-files refs", {
+  file_ids: z.array(z.string()).optional().describe("File IDs to include"),
+  source_refs: z.array(z.string()).optional().describe("open-files://file or open-files://source/.../path refs to include"),
+  max_files: z.number().int().positive().optional(),
+  max_excerpts: z.number().int().positive().optional(),
+  max_excerpt_chars: z.number().int().positive().optional(),
+  max_total_chars: z.number().int().positive().optional(),
+  max_bytes_per_file: z.number().int().positive().optional(),
+  redact_patterns: z.array(z.string()).optional().describe("Additional regex redaction patterns"),
+  output_local_path: z.string().optional().describe("Write full bounded pack JSON to this local path and return a compact pointer"),
+  dry_run: z.boolean().optional().default(false).describe("With output_local_path, preview the pointer without writing"),
+}, async (params) => {
+  try {
+    const pack = await buildFilesContextPack({
+      file_ids: params.file_ids,
+      source_refs: params.source_refs,
+      max_files: params.max_files,
+      max_excerpts: params.max_excerpts,
+      max_excerpt_chars: params.max_excerpt_chars,
+      max_total_chars: params.max_total_chars,
+      max_bytes_per_file: params.max_bytes_per_file,
+      redact_patterns: compileMcpRedactions(params.redact_patterns),
+    });
+    return mcpContextPackResult("build_context_pack", pack, params.output_local_path, params.dry_run);
+  } catch (error) {
+    return { content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }], isError: true };
+  }
+});
+
+registerTool("search_context_pack", "Search files and return a bounded, cited context pack", {
+  query: z.string(),
+  source_id: z.string().optional(),
+  machine_id: z.string().optional(),
+  tag: z.string().optional(),
+  ext: z.string().optional(),
+  search_scope: z.enum(["all", "metadata", "content"]).optional().default("all"),
+  offset: z.number().int().nonnegative().optional(),
+  max_files: z.number().int().positive().optional(),
+  max_excerpts: z.number().int().positive().optional(),
+  max_excerpt_chars: z.number().int().positive().optional(),
+  max_total_chars: z.number().int().positive().optional(),
+  max_bytes_per_file: z.number().int().positive().optional(),
+  redact_patterns: z.array(z.string()).optional().describe("Additional regex redaction patterns"),
+  output_local_path: z.string().optional().describe("Write full bounded pack JSON to this local path and return a compact pointer"),
+  dry_run: z.boolean().optional().default(false).describe("With output_local_path, preview the pointer without writing"),
+}, async (params) => {
+  try {
+    const pack = await buildFilesSearchPack({
+      query: params.query,
+      source_id: params.source_id,
+      machine_id: params.machine_id,
+      tag: params.tag,
+      ext: params.ext,
+      search_scope: params.search_scope,
+      offset: params.offset,
+      max_files: params.max_files,
+      max_excerpts: params.max_excerpts,
+      max_excerpt_chars: params.max_excerpt_chars,
+      max_total_chars: params.max_total_chars,
+      max_bytes_per_file: params.max_bytes_per_file,
+      redact_patterns: compileMcpRedactions(params.redact_patterns),
+    });
+    return mcpContextPackResult("search_context_pack", pack, params.output_local_path, params.dry_run);
+  } catch (error) {
+    return { content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }], isError: true };
+  }
 });
 
 registerTool("get_file", "Get full details for a file by ID", {
