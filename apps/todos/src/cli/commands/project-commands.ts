@@ -44,6 +44,50 @@ function parseJsonObjectOption(value: string | undefined, label: string): Record
   throw new Error(`${label} must be a JSON object`);
 }
 
+function resolveTaskListFilter(input: string | undefined, projectId?: string): string | undefined {
+  if (!input) return undefined;
+  const db = getDatabase();
+  const id = input.length >= 36
+    ? db.query("SELECT id FROM task_lists WHERE id = ?").get(input) as { id: string } | null
+    : null;
+  if (id) return id.id;
+
+  if (input.length < 36) {
+    const partialIds = db.query("SELECT id FROM task_lists WHERE id LIKE ?").all(`${input}%`) as { id: string }[];
+    if (partialIds.length === 1) return partialIds[0]!.id;
+    if (partialIds.length > 1) {
+      throw new Error(`Ambiguous task list ID: ${input}`);
+    }
+  }
+
+  if (projectId) {
+    const projectSlug = db.query(
+      "SELECT id FROM task_lists WHERE project_id = ? AND slug = ?",
+    ).get(projectId, input) as { id: string } | null;
+    if (projectSlug) return projectSlug.id;
+
+    const standaloneSlug = db.query(
+      "SELECT id FROM task_lists WHERE project_id IS NULL AND slug = ?",
+    ).get(input) as { id: string } | null;
+    if (standaloneSlug) return standaloneSlug.id;
+
+    const otherProjectSlugs = db.query(
+      "SELECT id FROM task_lists WHERE slug = ? LIMIT 2",
+    ).all(input) as { id: string }[];
+    if (otherProjectSlugs.length > 0) {
+      throw new Error(`Task list slug "${input}" does not belong to the selected project`);
+    }
+  } else {
+    const slugMatches = db.query("SELECT id FROM task_lists WHERE slug = ?").all(input) as { id: string }[];
+    if (slugMatches.length === 1) return slugMatches[0]!.id;
+    if (slugMatches.length > 1) {
+      throw new Error(`Ambiguous task list slug: ${input}. Use --project or the task list ID.`);
+    }
+  }
+
+  throw new Error(`Could not resolve task list ID: ${input}`);
+}
+
 function buildSearchFilters(query: string | undefined, opts: any, projectId?: string): SavedSearchFilters {
   const filterPatch = parseJsonObjectOption(opts.filter, "--filter");
   const customFields = parseJsonObjectOption(opts.fieldCustom, "--field-custom");
@@ -57,7 +101,9 @@ function buildSearchFilters(query: string | undefined, opts: any, projectId?: st
     priority: splitList(opts.priority) as SavedSearchFilters["priority"],
     assigned_to: opts.assigned,
     agent_id: opts.agentId,
-    task_list_id: opts.taskList,
+    task_list_id: filterPatch?.task_list_id === undefined
+      ? resolveTaskListFilter(opts.taskList, projectId)
+      : undefined,
     plan_id: opts.plan,
     task_id: opts.task,
     tags,

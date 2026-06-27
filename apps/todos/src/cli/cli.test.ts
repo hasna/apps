@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { getDatabase, closeDatabase, resetDatabase } from "../db/database.js";
 import { createTask } from "../db/tasks.js";
+import { createTaskList } from "../db/task-lists.js";
+import { createProject } from "../db/projects.js";
 
 async function runCli(args: string[], dbPath: string, extraEnv: Record<string, string> = {}) {
   const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
@@ -783,6 +785,133 @@ describe("CLI integration", () => {
     } finally {
       try { unlinkSync(dbPath); } catch {}
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("should search description fingerprints inside task-list slugs", async () => {
+    const { mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dbPath = "/tmp/test-cli-search-task-list-slug.db";
+    const tempRoot = mkdtempSync(join(tmpdir(), "todos-cli-search-slug-"));
+    const previousDbPath = process.env["TODOS_DB_PATH"];
+    const previousHome = process.env["HOME"];
+    const previousEventsDir = process.env["HASNA_EVENTS_DIR"];
+    try { unlinkSync(dbPath); } catch {}
+
+    try {
+      process.env["TODOS_DB_PATH"] = dbPath;
+      process.env["HOME"] = join(tempRoot, "home");
+      process.env["HASNA_EVENTS_DIR"] = join(tempRoot, "events");
+      resetDatabase();
+      const db = getDatabase();
+      const list = createTaskList({ name: "Repo PR Merge Queue", slug: "repo-pr-merge-queue" }, db);
+      const fingerprint = "github-pr:hasna/skills#25";
+      const matching = createTask({
+        title: "[github-pr] hasna/skills#25",
+        description: `Fingerprint: ${fingerprint}`,
+        task_list_id: list.id,
+      }, db);
+      createTask({
+        title: "Same fingerprint elsewhere",
+        description: `Fingerprint: ${fingerprint}`,
+      }, db);
+      closeDatabase();
+
+      const result = await runCli([
+        "--json",
+        "search",
+        fingerprint,
+        "--task-list",
+        "repo-pr-merge-queue",
+        "--limit",
+        "20",
+      ], dbPath, { HOME: process.env["HOME"]!, HASNA_EVENTS_DIR: process.env["HASNA_EVENTS_DIR"]! });
+
+      expect(result.stderr).toBe("");
+      expect(result.exitCode).toBe(0);
+      const tasks = JSON.parse(result.stdout);
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].id).toBe(matching.id);
+    } finally {
+      closeDatabase();
+      if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
+      else process.env["TODOS_DB_PATH"] = previousDbPath;
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      if (previousEventsDir === undefined) delete process.env["HASNA_EVENTS_DIR"];
+      else process.env["HASNA_EVENTS_DIR"] = previousEventsDir;
+      try { unlinkSync(dbPath); } catch {}
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("should resolve task-list slugs inside the selected project", async () => {
+    const { mkdirSync, mkdtempSync, rmSync, unlinkSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const tempRoot = mkdtempSync(join(tmpdir(), "todos-cli-project-slug-"));
+    const dbPath = join(tempRoot, "todos.db");
+    const projectAPath = join(tempRoot, "project-a");
+    const projectBPath = join(tempRoot, "project-b");
+    const previousDbPath = process.env["TODOS_DB_PATH"];
+    const previousHome = process.env["HOME"];
+    const previousEventsDir = process.env["HASNA_EVENTS_DIR"];
+    mkdirSync(projectAPath, { recursive: true });
+    mkdirSync(projectBPath, { recursive: true });
+
+    try {
+      process.env["TODOS_DB_PATH"] = dbPath;
+      process.env["HOME"] = join(tempRoot, "home");
+      process.env["HASNA_EVENTS_DIR"] = join(tempRoot, "events");
+      resetDatabase();
+      const db = getDatabase();
+      const projectA = createProject({ name: "Project A", path: projectAPath }, db);
+      const projectB = createProject({ name: "Project B", path: projectBPath }, db);
+      const listA = createTaskList({ name: "Queue", slug: "repo-pr-merge-queue", project_id: projectA.id }, db);
+      const listB = createTaskList({ name: "Queue", slug: "repo-pr-merge-queue", project_id: projectB.id }, db);
+      const fingerprint = "github-pr:hasna/skills#25";
+      const matching = createTask({
+        title: "Project A PR task",
+        description: `Fingerprint: ${fingerprint}`,
+        project_id: projectA.id,
+        task_list_id: listA.id,
+      }, db);
+      createTask({
+        title: "Project B PR task",
+        description: `Fingerprint: ${fingerprint}`,
+        project_id: projectB.id,
+        task_list_id: listB.id,
+      }, db);
+      closeDatabase();
+
+      const result = await runCli([
+        "--project",
+        projectAPath,
+        "--json",
+        "search",
+        fingerprint,
+        "--task-list",
+        "repo-pr-merge-queue",
+        "--limit",
+        "20",
+      ], dbPath, { HOME: process.env["HOME"]!, HASNA_EVENTS_DIR: process.env["HASNA_EVENTS_DIR"]! });
+
+      expect(result.stderr).toBe("");
+      expect(result.exitCode).toBe(0);
+      const tasks = JSON.parse(result.stdout);
+      expect(tasks).toHaveLength(1);
+      expect(tasks[0].id).toBe(matching.id);
+    } finally {
+      closeDatabase();
+      if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
+      else process.env["TODOS_DB_PATH"] = previousDbPath;
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      if (previousEventsDir === undefined) delete process.env["HASNA_EVENTS_DIR"];
+      else process.env["HASNA_EVENTS_DIR"] = previousEventsDir;
+      try { unlinkSync(dbPath); } catch {}
+      rmSync(tempRoot, { recursive: true, force: true });
     }
   });
 
