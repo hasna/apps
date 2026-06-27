@@ -946,6 +946,8 @@ describe('REST API server', () => {
     const insights = await req(handler, '/api/fleet/insights?period=all&limit=1')
     const capped = await req(handler, '/api/fleet/insights?period=all&limit=100000')
     const invalid = await req(handler, '/api/fleet/insights?period=bogus')
+    const invalidLimit = await req(handler, '/api/fleet/freshness?limit=0')
+    const invalidStaleAfter = await req(handler, '/api/fleet/insights?stale_after_minutes=nope')
     const freshnessData = (freshness.data as Record<string, unknown>)['data'] as Record<string, unknown>
     const insightsData = (insights.data as Record<string, unknown>)['data'] as Record<string, unknown>
     const cappedData = (capped.data as Record<string, unknown>)['data'] as Record<string, unknown>
@@ -960,6 +962,8 @@ describe('REST API server', () => {
     expect(capped.status).toBe(200)
     expect((cappedData['top_machines'] as unknown[]).length).toBeLessThanOrEqual(50)
     expect(invalid.status).toBe(400)
+    expect(invalidLimit.status).toBe(400)
+    expect(invalidStaleAfter.status).toBe(400)
   })
 
   it('GET /api/summary?machine= filters by machine', async () => {

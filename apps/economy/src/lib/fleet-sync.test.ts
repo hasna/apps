@@ -215,16 +215,17 @@ describe('fleet freshness and insights', () => {
   test('scopes top model insights to the selected period', () => {
     const root = tempRoot()
     const db = openDatabase(join(root, 'model-period.db'), true)
+    const today = new Date().toISOString()
     upsertSession(db, sampleSession({
       id: 'today-session',
-      started_at: NOW,
+      started_at: today,
       machine_id: 'spark02',
       total_cost_usd: 1,
     }))
     upsertRequest(db, sampleRequest({
       id: 'today-request',
       session_id: 'today-session',
-      timestamp: NOW,
+      timestamp: today,
       model: 'current-model',
       cost_usd: 1,
       machine_id: 'spark02',
@@ -240,17 +241,23 @@ describe('fleet freshness and insights', () => {
       session_id: 'old-session',
       timestamp: '2000-01-01T00:00:00.000Z',
       model: 'old-expensive-model',
-      cost_usd: 99,
-      machine_id: 'apple03',
+      cost_usd: 0,
+      input_tokens: 100,
+      output_tokens: 20,
+      machine_id: '',
     }))
 
     const insights = buildFleetCostInsights(db, {
       period: 'today',
-      now: NOW,
+      now: today,
       limit: 5,
     })
 
     expect(insights.top_models.map(row => row.model)).toEqual(['current-model'])
+    expect(insights.quality.zero_cost_token_requests).toBe(0)
+    expect(insights.quality.unattributed_machine_requests).toBe(0)
+    expect(insights.hints.some(hint => hint.includes('sync --recalculate'))).toBe(false)
+    expect(insights.hints.some(hint => hint.includes('backfill-machine'))).toBe(false)
     db.close()
   })
 })

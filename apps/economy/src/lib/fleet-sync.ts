@@ -430,15 +430,19 @@ export function buildFleetCostInsights(db: Database, opts: FleetCostInsightsOpti
       requests: row.requests,
       tokens: row.total_tokens,
     }))
+  const requestWhere = requestPeriodWhere(period)
   const zeroCost = db.prepare(`
     SELECT COUNT(*) as count
     FROM requests
-    WHERE cost_usd = 0 AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_create_tokens > 0)
+    WHERE ${requestWhere}
+      AND cost_usd = 0
+      AND (input_tokens > 0 OR output_tokens > 0 OR cache_read_tokens > 0 OR cache_create_tokens > 0)
   `).get() as { count: number }
   const unattributed = db.prepare(`
     SELECT COUNT(*) as count
     FROM requests
-    WHERE machine_id IS NULL OR machine_id = ''
+    WHERE ${requestWhere}
+      AND (machine_id IS NULL OR machine_id = '')
   `).get() as { count: number }
 
   const hints: string[] = []

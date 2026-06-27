@@ -128,9 +128,10 @@ function parsePeriodParam(value: string | null, fallback: Period): Period | null
   return ['today', 'yesterday', 'week', 'month', 'year', 'all'].includes(raw) ? raw as Period : null
 }
 
-function positiveIntParam(value: string | null, fallback: number, max: number): number {
-  const n = Number(value ?? fallback)
-  return Number.isInteger(n) && n > 0 ? Math.min(n, max) : fallback
+function positiveIntParam(value: string | null, fallback: number, max: number): number | null {
+  if (value == null) return fallback
+  const n = Number(value)
+  return Number.isInteger(n) && n > 0 ? Math.min(n, max) : null
 }
 
 async function jsonBody(req: Request): Promise<Record<string, unknown> | null> {
@@ -246,6 +247,8 @@ async function handleApiRequest(db: Database, req: Request): Promise<Response> {
     if (path === '/api/fleet/freshness' && method === 'GET') {
       const staleAfterMinutes = positiveIntParam(url.searchParams.get('stale_after_minutes') ?? url.searchParams.get('staleAfterMinutes'), 60, 60 * 24 * 30)
       const limit = positiveIntParam(url.searchParams.get('limit'), 20, MAX_FLEET_FRESHNESS_ROWS)
+      if (staleAfterMinutes == null) return err('stale_after_minutes must be a positive integer')
+      if (limit == null) return err('limit must be a positive integer')
       return ok(buildFleetFreshness(db, {
         staleAfterMinutes,
         limit,
@@ -257,6 +260,8 @@ async function handleApiRequest(db: Database, req: Request): Promise<Response> {
       if (!period) return err('period must be today|yesterday|week|month|year|all')
       const staleAfterMinutes = positiveIntParam(url.searchParams.get('stale_after_minutes') ?? url.searchParams.get('staleAfterMinutes'), 60, 60 * 24 * 30)
       const limit = positiveIntParam(url.searchParams.get('limit'), 5, MAX_FLEET_INSIGHT_ROWS)
+      if (staleAfterMinutes == null) return err('stale_after_minutes must be a positive integer')
+      if (limit == null) return err('limit must be a positive integer')
       return ok(buildFleetCostInsights(db, {
         period,
         staleAfterMinutes,
