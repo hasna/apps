@@ -747,6 +747,30 @@ metadata, redaction status, retention metadata, and metadata-only fallback when
 the original path is unavailable. Use `--no-store` to record only artifact
 metadata.
 
+Loops that need bounded, idempotent JSON can use the transaction commands
+instead of scripting around comments and run lookup:
+
+```bash
+todos runs begin <task-id> --key nightly:parser:42 --agent codex --title "Nightly parser loop"
+RUN_ID=$(todos runs begin <task-id> --key nightly:parser:42 --agent codex --title "Nightly parser loop" --apply | jq -r .run.id)
+todos findings upsert --task <task-id> --run "$RUN_ID" --fingerprint parser-timeout --title "Parser timeout" --severity high --source nightly-parser --artifact logs/parser-loop.txt --apply
+todos findings resolve-missing --task <task-id> --source nightly-parser --fingerprints parser-timeout --run "$RUN_ID"
+todos findings resolve-missing --task <task-id> --source nightly-parser --fingerprints parser-timeout --run "$RUN_ID" --apply
+todos runs finish "$RUN_ID" --status completed --summary "nightly loop complete"
+```
+
+`runs begin` is dry-run by default and only creates a run when `--apply` is
+provided. Reusing the same `--key`, `--loop-run-id`, or `--loop-id` returns the
+existing compact run summary instead of creating duplicates. `runs finish` is
+idempotent for already-finished runs and can resolve a run by `--key --task`.
+Finding upserts are deduped by task and fingerprint, redacted before storage,
+and expose only artifact paths/references by default. `findings upsert` and
+`findings resolve-missing` are dry-run by default; add `--apply` to mutate local
+state. MCP clients use `begin_task_run_transaction`, `finish_task_run`,
+`upsert_task_finding`, `list_task_findings`, and
+`resolve_missing_task_findings`; these compact loop tools are included in the
+default `TODOS_PROFILE=minimal` surface.
+
 ## Local Time Tracking
 
 Manual time logs and focus sessions stay in the local SQLite database and roll

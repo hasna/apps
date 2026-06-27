@@ -474,6 +474,49 @@ export function ensureSchema(db: Database): void {
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_run_artifacts_task ON task_run_artifacts(task_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_run_artifacts_path ON task_run_artifacts(path)");
 
+  ensureTable("task_run_transactions", `
+    CREATE TABLE task_run_transactions (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      run_id TEXT REFERENCES task_runs(id) ON DELETE SET NULL,
+      key TEXT NOT NULL,
+      loop_id TEXT,
+      loop_run_id TEXT,
+      metadata TEXT DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(task_id, key)
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_run_transactions_task_key ON task_run_transactions(task_id, key)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_run_transactions_key ON task_run_transactions(key)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_run_transactions_run ON task_run_transactions(run_id)");
+
+  ensureTable("task_findings", `
+    CREATE TABLE task_findings (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      run_id TEXT REFERENCES task_runs(id) ON DELETE SET NULL,
+      fingerprint TEXT NOT NULL,
+      title TEXT NOT NULL,
+      severity TEXT NOT NULL DEFAULT 'medium' CHECK(severity IN ('low', 'medium', 'high', 'critical')),
+      status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'resolved', 'ignored')),
+      source TEXT,
+      summary TEXT,
+      artifact_path TEXT,
+      metadata TEXT DEFAULT '{}',
+      first_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+      last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+      resolved_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(task_id, fingerprint)
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_findings_task ON task_findings(task_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_findings_run ON task_findings(run_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_findings_status ON task_findings(status)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_findings_source ON task_findings(source)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_task_findings_fingerprint ON task_findings(fingerprint)");
+
   ensureTable("inbox_items", `
     CREATE TABLE inbox_items (
       id TEXT PRIMARY KEY,

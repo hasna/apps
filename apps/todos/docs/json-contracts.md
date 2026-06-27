@@ -58,6 +58,10 @@ The stable contracts cover these object IDs:
 - `tester_issue_report`
 - `tester_issue_report_result`
 - `tester_issue_report_batch_result`
+- `loop_run_transaction`
+- `task_finding`
+- `task_finding_upsert`
+- `task_finding_resolve_missing`
 - `verification_provider`
 - `verification_provider_result`
 - `local_extension_compatibility`
@@ -388,6 +392,26 @@ or `regressed`), warnings, and follow-up local commands.
 `tester_issue_report_batch_result` is returned by `todos issues report --json`
 and `upsertTesterIssueReports`. It wraps single report results and summary
 counts for `preview`, `matched`, `created`, `updated`, and `regressed` actions.
+
+`loop_run_transaction` is returned by `todos runs begin`, idempotent
+`todos runs finish`, `begin_task_run_transaction`, and `finish_task_run`. It is
+compact JSON with the dry-run flag, idempotency key, action, warnings, follow-up
+commands, and a bounded run summary.
+
+`task_finding` is the compact finding summary used by loop-facing APIs. It
+includes task/run ids, fingerprint, title, severity, status, source, bounded
+summary, artifact path/reference, timestamps, and metadata keys without raw
+metadata values.
+
+`task_finding_upsert` is returned by `todos findings upsert` and
+`upsert_task_finding`. It records dry-run/apply mode, normalized fingerprint,
+action (`preview`, `created`, `matched`, `updated`, or `reopened`), the compact
+finding, and warnings.
+
+`task_finding_resolve_missing` is returned by
+`todos findings resolve-missing` and `resolve_missing_task_findings`. It records
+the present fingerprint count, missing candidate count, changed count, bounded
+finding summaries, omitted count, dry-run/apply mode, and warnings.
 
 ## Verification Providers
 

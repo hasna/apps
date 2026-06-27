@@ -72,6 +72,7 @@ export const READ_ONLY_TOOLS = new Set([
   "list_workspace_trust_profiles", "list_verification_providers", "list_verification_records",
   "get_tasks_changed_since", "get_stale_tasks", "get_active_work", "get_next_task",
   "find_duplicate_tasks", "describe_tools", "search_tools", "inspect_git_commit",
+  "list_task_findings",
   "scan_text_for_secrets", "check_workspace_permission", "check_sandbox_command",
   "parse_mentions", "resolve_mention", "resolve_mentions_in_text",
   "generate_release_notes", "format_release_notes_markdown",
@@ -82,6 +83,8 @@ export const MINIMAL_TOOLS = new Set([
   "claim_next_task", "complete_task", "fail_task", "get_status", "get_context",
   "get_task", "start_task", "add_comment", "get_next_task", "bootstrap",
   "get_tasks_changed_since", "heartbeat", "release_agent",
+  "begin_task_run_transaction", "finish_task_run", "upsert_task_finding",
+  "list_task_findings", "resolve_missing_task_findings",
 ]);
 
 export const AGENT_SAFE_TOOLS = new Set([

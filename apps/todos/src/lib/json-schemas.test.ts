@@ -19,9 +19,10 @@ import {
 
 describe("json schemas", () => {
   it("defines all required entities", () => {
-    expect(SCHEMA_ENTITIES).toHaveLength(10);
+    expect(SCHEMA_ENTITIES).toHaveLength(Object.keys(JSON_SCHEMAS).length);
     for (const entity of SCHEMA_ENTITIES) {
       expect(JSON_SCHEMAS[entity].schema_version).toMatch(/^(todos|testers)\./);
+      expect(SCHEMA_CONTRACT_FIXTURES[entity]).toBeTruthy();
     }
   });
 
@@ -58,14 +59,14 @@ describe("json schemas", () => {
 
   it("lists schema catalog", () => {
     const list = listJsonSchemas();
-    expect(list.length).toBe(10);
+    expect(list.length).toBe(SCHEMA_ENTITIES.length);
     expect(list[0]?.entity).toBeTruthy();
   });
 
   it("exports schemas to directory", () => {
     const dir = mkdtempSync(join(tmpdir(), "todos-schemas-"));
     const files = exportSchemasToDirectory(dir);
-    expect(files.length).toBe(11);
+    expect(files.length).toBe(SCHEMA_ENTITIES.length + 1);
     expect(existsSync(join(dir, "catalog.json"))).toBe(true);
     const catalog = JSON.parse(readFileSync(join(dir, "catalog.json"), "utf8"));
     expect(catalog.catalog_version).toBe(JSON_SCHEMA_CATALOG_VERSION);

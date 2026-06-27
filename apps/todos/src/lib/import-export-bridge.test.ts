@@ -60,8 +60,8 @@ describe("import-export bridge", () => {
   });
 
   it("imports tasks into an empty database", () => {
-    const sourceDb = join(tempDir, "source.db");
-    process.env["TODOS_DB_PATH"] = sourceDb;
+    closeDatabase();
+    process.env["TODOS_DB_PATH"] = ":memory:";
     resetDatabase();
     getDatabase();
     const task = createTask({ title: "Remote task", description: "from bundle" });
@@ -69,7 +69,6 @@ describe("import-export bridge", () => {
     const bundle = exportLocalBundle();
     closeDatabase();
 
-    process.env["TODOS_DB_PATH"] = join(tempDir, "target.db");
     resetDatabase();
     getDatabase();
     const result = importBundle(bundle, { strategy: "remote_wins" });

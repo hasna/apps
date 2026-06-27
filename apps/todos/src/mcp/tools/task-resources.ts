@@ -24,12 +24,18 @@ import {
   addTaskRunCommand,
   addTaskRunEvent,
   addTaskRunFile,
-  finishTaskRun,
+  beginTaskRunTransaction,
+  finishTaskRunTransaction,
   getTaskRunLedger,
   listTaskRuns,
   startTaskRun,
   verifyTaskRunArtifacts,
 } from "../../db/task-runs.js";
+import {
+  listCompactTaskFindings,
+  resolveMissingTaskFindings,
+  upsertTaskFinding,
+} from "../../db/findings.js";
 import {
   cancelAgentRunDispatch,
   listAgentRunAdapters,
@@ -1385,6 +1391,42 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
     );
   }
 
+  if (shouldRegisterTool("begin_task_run_transaction")) {
+    server.tool(
+      "begin_task_run_transaction",
+      "Preview or apply an idempotent local loop run transaction keyed by a stable loop/run id.",
+      {
+        task_id: z.string().describe("Task ID"),
+        key: z.string().optional().describe("Stable idempotency key"),
+        loop_id: z.string().optional().describe("Loop identifier; used as key fallback"),
+        loop_run_id: z.string().optional().describe("Loop run identifier; used as key fallback"),
+        agent_id: z.string().optional().describe("Agent starting the run"),
+        title: z.string().optional().describe("Run title"),
+        summary: z.string().optional().describe("Run summary"),
+        metadata: z.record(z.unknown()).optional().describe("Additional local metadata"),
+        claim: z.boolean().optional().describe("Claim/start the task before recording the run"),
+        apply: z.boolean().optional().describe("Apply the transaction; false or omitted is dry-run"),
+      },
+      async ({ task_id, key, loop_id, loop_run_id, agent_id, title, summary, metadata, claim, apply }) => {
+        try {
+          const result = beginTaskRunTransaction({
+            task_id: resolveId(task_id),
+            key,
+            loop_id,
+            loop_run_id,
+            agent_id,
+            title,
+            summary,
+            metadata,
+            claim,
+            apply,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
   if (shouldRegisterTool("list_task_runs")) {
     server.tool(
       "list_task_runs",
@@ -1508,17 +1550,131 @@ export function registerTaskResources(server: McpServer, ctx: TaskResourcesConte
   if (shouldRegisterTool("finish_task_run")) {
     server.tool(
       "finish_task_run",
-      "Finish a local run ledger entry as completed, failed, or cancelled.",
+      "Finish a local run ledger entry as completed, failed, or cancelled. Supports idempotent lookup by key.",
       {
-        run_id: z.string().describe("Run ID or prefix"),
-        status: z.enum(["completed", "failed", "cancelled"]).describe("Final run status"),
+        run_id: z.string().optional().describe("Run ID or prefix"),
+        key: z.string().optional().describe("Idempotency key when run_id is omitted"),
+        task_id: z.string().optional().describe("Task scope for key lookup"),
+        status: z.enum(["completed", "failed", "cancelled"]).optional().describe("Final run status"),
         summary: z.string().optional().describe("Final summary"),
         agent_id: z.string().optional().describe("Agent finishing the run"),
+        apply: z.boolean().optional().describe("Apply the transaction; false previews without mutating"),
       },
-      async ({ run_id, status, summary, agent_id }) => {
+      async ({ run_id, key, task_id, status, summary, agent_id, apply }) => {
         try {
-          const run = finishTaskRun({ run_id, status, summary, agent_id });
-          return { content: [{ type: "text" as const, text: JSON.stringify(run, null, 2) }] };
+          if (run_id && !key && apply === undefined) {
+            const result = finishTaskRunTransaction({ run_id, status: status || "completed", summary, agent_id, apply: true });
+            const run = result.run ? getTaskRunLedger(result.run.id).run : null;
+            return { content: [{ type: "text" as const, text: JSON.stringify(run, null, 2) }] };
+          }
+          const result = finishTaskRunTransaction({
+            run_id,
+            key,
+            task_id: task_id ? resolveId(task_id) : undefined,
+            status: status || "completed",
+            summary,
+            agent_id,
+            apply: apply !== false,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("upsert_task_finding")) {
+    server.tool(
+      "upsert_task_finding",
+      "Preview or apply an idempotent local finding upsert scoped by task and fingerprint.",
+      {
+        task_id: z.string().describe("Task ID"),
+        fingerprint: z.string().describe("Stable finding fingerprint"),
+        title: z.string().describe("Finding title"),
+        severity: z.enum(["low", "medium", "high", "critical"]).optional().describe("Finding severity"),
+        status: z.enum(["open", "resolved", "ignored"]).optional().describe("Finding status"),
+        source: z.string().optional().describe("Loop/tool source name"),
+        summary: z.string().optional().describe("Bounded finding summary"),
+        artifact_path: z.string().optional().describe("Local artifact path/reference; content is not read"),
+        run_id: z.string().optional().describe("Run ledger ID or prefix"),
+        metadata: z.record(z.unknown()).optional().describe("Additional local metadata"),
+        apply: z.boolean().optional().describe("Apply the upsert; false or omitted is dry-run"),
+      },
+      async ({ task_id, fingerprint, title, severity, status, source, summary, artifact_path, run_id, metadata, apply }) => {
+        try {
+          const result = upsertTaskFinding({
+            task_id: resolveId(task_id),
+            fingerprint,
+            title,
+            severity,
+            status,
+            source,
+            summary,
+            artifact_path,
+            run_id,
+            metadata,
+            apply,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("list_task_findings")) {
+    server.tool(
+      "list_task_findings",
+      "List compact local findings with bounded output.",
+      {
+        task_id: z.string().optional().describe("Filter by task"),
+        run_id: z.string().optional().describe("Filter by run"),
+        status: z.enum(["open", "resolved", "ignored"]).optional().describe("Filter by status"),
+        source: z.string().optional().describe("Filter by source"),
+        limit: z.number().optional().describe("Maximum findings to return"),
+      },
+      async ({ task_id, run_id, status, source, limit }) => {
+        try {
+          const findings = listCompactTaskFindings({
+            task_id: task_id ? resolveId(task_id) : undefined,
+            run_id,
+            status,
+            source,
+            limit,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(findings) }] };
+        } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
+      },
+    );
+  }
+
+  if (shouldRegisterTool("resolve_missing_task_findings")) {
+    server.tool(
+      "resolve_missing_task_findings",
+      "Resolve open findings absent from the latest loop finding set.",
+      {
+        task_id: z.string().describe("Task ID"),
+        fingerprints: z.array(z.string()).optional().describe("Fingerprints still present in the latest run"),
+        source: z.string().optional().describe("Only resolve findings from this source"),
+        run_id: z.string().optional().describe("Run ledger ID or prefix for audit metadata"),
+        status: z.enum(["resolved", "ignored"]).optional().describe("Resolution status"),
+        agent_id: z.string().optional().describe("Agent resolving findings"),
+        reason: z.string().optional().describe("Resolution reason"),
+        limit: z.number().optional().describe("Maximum findings returned"),
+        apply: z.boolean().optional().describe("Apply resolution; false or omitted is dry-run"),
+      },
+      async ({ task_id, fingerprints, source, run_id, status, agent_id, reason, limit, apply }) => {
+        try {
+          const result = resolveMissingTaskFindings({
+            task_id: resolveId(task_id),
+            fingerprints: fingerprints || [],
+            source,
+            run_id,
+            status,
+            agent_id,
+            reason,
+            limit,
+            apply,
+          });
+          return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },
     );

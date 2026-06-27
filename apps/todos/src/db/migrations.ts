@@ -1160,4 +1160,48 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_local_retrospectives_agent ON local_retrospectives(agent_id);
   INSERT OR IGNORE INTO _migrations (id) VALUES (61);
   `,
+  // Migration 62: Local loop run transactions and task findings for dedupe/resolution
+  `
+  CREATE TABLE IF NOT EXISTS task_run_transactions (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    run_id TEXT REFERENCES task_runs(id) ON DELETE SET NULL,
+    key TEXT NOT NULL,
+    loop_id TEXT,
+    loop_run_id TEXT,
+    metadata TEXT DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(task_id, key)
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_run_transactions_task_key ON task_run_transactions(task_id, key);
+  CREATE INDEX IF NOT EXISTS idx_task_run_transactions_key ON task_run_transactions(key);
+  CREATE INDEX IF NOT EXISTS idx_task_run_transactions_run ON task_run_transactions(run_id);
+
+  CREATE TABLE IF NOT EXISTS task_findings (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    run_id TEXT REFERENCES task_runs(id) ON DELETE SET NULL,
+    fingerprint TEXT NOT NULL,
+    title TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'medium' CHECK(severity IN ('low', 'medium', 'high', 'critical')),
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'resolved', 'ignored')),
+    source TEXT,
+    summary TEXT,
+    artifact_path TEXT,
+    metadata TEXT DEFAULT '{}',
+    first_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+    last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+    resolved_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(task_id, fingerprint)
+  );
+  CREATE INDEX IF NOT EXISTS idx_task_findings_task ON task_findings(task_id);
+  CREATE INDEX IF NOT EXISTS idx_task_findings_run ON task_findings(run_id);
+  CREATE INDEX IF NOT EXISTS idx_task_findings_status ON task_findings(status);
+  CREATE INDEX IF NOT EXISTS idx_task_findings_source ON task_findings(source);
+  CREATE INDEX IF NOT EXISTS idx_task_findings_fingerprint ON task_findings(fingerprint);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (62);
+  `,
 ];

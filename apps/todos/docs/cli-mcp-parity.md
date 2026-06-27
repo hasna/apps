@@ -107,8 +107,10 @@ structured error contracts.
 - `handoffs`: local session continuation records with referenced tasks, files,
   runs, next steps, blockers, stale-session recovery, and per-agent
   acknowledgement state.
-- `runs`: local task-run ledgers, events, commands, files, artifacts, and
-  finish records.
+- `runs`: local task-run ledgers, idempotent loop run begin/finish
+  transactions, events, commands, files, artifacts, and finish records.
+- `findings`: local task finding upserts, bounded finding lists, and
+  resolve-missing transactions for loop dedupe.
 - `comments`: task comments, progress notes, and unified local activity
   timelines across task history and run evidence.
 - `search`: task search, saved views, cross-entity search, status, standup,
@@ -697,6 +699,25 @@ The full local bridge export is intentionally CLI-only because it writes a local
 file. MCP callers should use scoped traceability tools such as
 `get_task_traceability`, `get_task_commits`, and `get_task_run_ledger` when they
 do not need a whole-store bundle.
+
+Loop run and finding transaction parity:
+
+These compact MCP tools are in the `loops` group and are included in the
+default `minimal` profile.
+
+```bash
+todos runs begin task-id --key loop-run-42 --apply
+todos runs finish --key loop-run-42 --task task-id --status completed
+todos findings upsert --task task-id --fingerprint parser-timeout --title "Parser timeout" --source nightly --apply
+todos findings resolve-missing --task task-id --source nightly --fingerprints parser-timeout --apply
+```
+
+```json
+{ "tool": "begin_task_run_transaction", "arguments": { "task_id": "task-id", "key": "loop-run-42", "apply": true } }
+{ "tool": "finish_task_run", "arguments": { "task_id": "task-id", "key": "loop-run-42", "status": "completed", "apply": true } }
+{ "tool": "upsert_task_finding", "arguments": { "task_id": "task-id", "fingerprint": "parser-timeout", "title": "Parser timeout", "source": "nightly", "apply": true } }
+{ "tool": "resolve_missing_task_findings", "arguments": { "task_id": "task-id", "source": "nightly", "fingerprints": ["parser-timeout"], "apply": true } }
+```
 
 CLI bridge import:
 

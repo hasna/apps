@@ -779,6 +779,36 @@ exit 0
     .description("Manage the local run ledger and evidence capture");
 
   runs
+    .command("begin <task-id>")
+    .description("Preview or apply an idempotent loop run transaction")
+    .option("--key <key>", "Stable idempotency key for this loop transaction")
+    .option("--loop-id <id>", "Loop identifier; used as the key when --key/--loop-run-id are omitted")
+    .option("--loop-run-id <id>", "Loop run identifier; used as the key when --key is omitted")
+    .option("--agent <name>", "Agent starting the run")
+    .option("--title <text>", "Run title")
+    .option("--summary <text>", "Run summary")
+    .option("--metadata <json>", "Additional JSON metadata")
+    .option("--claim", "Claim/start the task for the agent before recording the run")
+    .option("--apply", "Apply the transaction; omitted means dry-run")
+    .action(async (taskId: string, opts: { key?: string; loopId?: string; loopRunId?: string; agent?: string; title?: string; summary?: string; metadata?: string; claim?: boolean; apply?: boolean }) => {
+      const globalOpts = program.opts();
+      const { beginTaskRunTransaction } = await import("../../db/task-runs.js");
+      const result = beginTaskRunTransaction({
+        task_id: resolveTaskId(taskId),
+        key: opts.key,
+        loop_id: opts.loopId,
+        loop_run_id: opts.loopRunId,
+        agent_id: opts.agent || globalOpts.agent,
+        title: opts.title,
+        summary: opts.summary,
+        metadata: parseJsonOption(opts.metadata, "--metadata"),
+        claim: opts.claim,
+        apply: opts.apply,
+      });
+      output(result, true);
+    });
+
+  runs
     .command("start <task-id>")
     .description("Start a local run ledger entry for a task")
     .option("--agent <name>", "Agent starting the run")
@@ -1021,21 +1051,116 @@ exit 0
     });
 
   runs
-    .command("finish <run-id>")
-    .description("Finish a run ledger entry")
+    .command("finish [run-id]")
+    .description("Finish a run ledger entry idempotently")
+    .option("--key <key>", "Resolve run by idempotency key when run-id is omitted")
+    .option("--task <task-id>", "Task scope for --key lookup")
     .option("--status <status>", "completed, failed, or cancelled", "completed")
     .option("--summary <text>", "Final summary")
     .option("--agent <name>", "Agent finishing the run")
-    .action(async (runId: string, opts: { status?: string; summary?: string; agent?: string }) => {
+    .option("--dry-run", "Preview without mutating")
+    .action(async (runId: string | undefined, opts: { key?: string; task?: string; status?: string; summary?: string; agent?: string; dryRun?: boolean }) => {
       const globalOpts = program.opts();
       if (opts.status !== "completed" && opts.status !== "failed" && opts.status !== "cancelled") {
         console.error(chalk.red("--status must be completed, failed, or cancelled"));
         process.exit(1);
       }
-      const { finishTaskRun } = await import("../../db/task-runs.js");
-      const run = finishTaskRun({ run_id: runId, status: opts.status, summary: opts.summary, agent_id: opts.agent || globalOpts.agent });
-      if (globalOpts.json) { output(run, true); return; }
-      console.log(chalk.green(`Finished run ${run.id.slice(0, 8)} as ${run.status}`));
+      const { finishTaskRunTransaction } = await import("../../db/task-runs.js");
+      const result = finishTaskRunTransaction({
+        run_id: runId,
+        key: opts.key,
+        task_id: opts.task ? resolveTaskId(opts.task) : undefined,
+        status: opts.status,
+        summary: opts.summary,
+        agent_id: opts.agent || globalOpts.agent,
+        apply: !opts.dryRun,
+      });
+      output(result, true);
+    });
+
+  const findings = program
+    .command("findings")
+    .description("Manage local task findings for loop dedupe and resolution");
+
+  findings
+    .command("upsert")
+    .description("Preview or apply an idempotent finding upsert")
+    .requiredOption("--task <task-id>", "Task ID")
+    .requiredOption("--fingerprint <value>", "Stable finding fingerprint")
+    .requiredOption("--title <text>", "Finding title")
+    .option("--severity <severity>", "low, medium, high, or critical", "medium")
+    .option("--status <status>", "open, resolved, or ignored", "open")
+    .option("--source <source>", "Loop/tool source name")
+    .option("--summary <text>", "Bounded finding summary")
+    .option("--artifact <path>", "Local artifact path/reference; content is not read")
+    .option("--run <run-id>", "Run ledger ID or prefix")
+    .option("--metadata <json>", "Additional JSON metadata")
+    .option("--apply", "Apply the upsert; omitted means dry-run")
+    .action(async (opts: { task: string; fingerprint: string; title: string; severity?: string; status?: string; source?: string; summary?: string; artifact?: string; run?: string; metadata?: string; apply?: boolean }) => {
+      const { upsertTaskFinding } = await import("../../db/findings.js");
+      const result = upsertTaskFinding({
+        task_id: resolveTaskId(opts.task),
+        fingerprint: opts.fingerprint,
+        title: opts.title,
+        severity: opts.severity,
+        status: opts.status,
+        source: opts.source,
+        summary: opts.summary,
+        artifact_path: opts.artifact,
+        run_id: opts.run,
+        metadata: parseJsonOption(opts.metadata, "--metadata"),
+        apply: opts.apply,
+      });
+      output(result, true);
+    });
+
+  findings
+    .command("resolve-missing")
+    .description("Resolve open findings absent from the latest loop finding set")
+    .requiredOption("--task <task-id>", "Task ID")
+    .option("--fingerprints <list>", "Comma-separated fingerprints still present")
+    .option("--source <source>", "Only resolve findings from this source")
+    .option("--run <run-id>", "Run ledger ID or prefix for audit metadata")
+    .option("--status <status>", "resolved or ignored", "resolved")
+    .option("--agent <name>", "Agent resolving findings")
+    .option("--reason <text>", "Resolution reason")
+    .option("--limit <n>", "Maximum findings returned", "50")
+    .option("--apply", "Apply resolution; omitted means dry-run")
+    .action(async (opts: { task: string; fingerprints?: string; source?: string; run?: string; status?: string; agent?: string; reason?: string; limit?: string; apply?: boolean }) => {
+      const globalOpts = program.opts();
+      const { resolveMissingTaskFindings } = await import("../../db/findings.js");
+      const result = resolveMissingTaskFindings({
+        task_id: resolveTaskId(opts.task),
+        fingerprints: listOption(opts.fingerprints) || [],
+        source: opts.source,
+        run_id: opts.run,
+        status: opts.status,
+        agent_id: opts.agent || globalOpts.agent,
+        reason: opts.reason,
+        limit: opts.limit ? Number.parseInt(opts.limit, 10) : undefined,
+        apply: opts.apply,
+      });
+      output(result, true);
+    });
+
+  findings
+    .command("list")
+    .description("List compact local findings")
+    .option("--task <task-id>", "Filter by task")
+    .option("--run <run-id>", "Filter by run")
+    .option("--status <status>", "Filter by open, resolved, or ignored")
+    .option("--source <source>", "Filter by source")
+    .option("--limit <n>", "Maximum findings returned", "50")
+    .action(async (opts: { task?: string; run?: string; status?: string; source?: string; limit?: string }) => {
+      const { listCompactTaskFindings } = await import("../../db/findings.js");
+      const findings = listCompactTaskFindings({
+        task_id: opts.task ? resolveTaskId(opts.task) : undefined,
+        run_id: opts.run,
+        status: opts.status,
+        source: opts.source,
+        limit: opts.limit ? Number.parseInt(opts.limit, 10) : undefined,
+      });
+      output(findings, true);
     });
 
   const agentRuns = program

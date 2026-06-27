@@ -1890,19 +1890,33 @@ export {
 // Dispatch engine
 export { executeDispatch, runDueDispatches, dispatchToMultiple } from "./lib/dispatch.js";
 export {
+  LOOP_RUN_TRANSACTION_SCHEMA_VERSION,
   addTaskRunArtifact,
   addTaskRunCommand,
   addTaskRunEvent,
   addTaskRunFile,
+  beginTaskRunTransaction,
   finishTaskRun,
+  finishTaskRunTransaction,
+  findTaskRunByTransactionKey,
   getTaskRun,
   getTaskRunLedger,
   listTaskRuns,
   redactEvidenceText,
   resolveTaskRunId,
+  summarizeTaskRun,
   startTaskRun,
   verifyTaskRunArtifacts,
 } from "./db/task-runs.js";
+export {
+  TASK_FINDING_RESOLVE_MISSING_SCHEMA_VERSION,
+  TASK_FINDING_SCHEMA_VERSION,
+  TASK_FINDING_UPSERT_SCHEMA_VERSION,
+  listCompactTaskFindings,
+  listTaskFindings,
+  resolveMissingTaskFindings,
+  upsertTaskFinding,
+} from "./db/findings.js";
 export {
   getSecretSafetyConfig,
   hasSecretFindings,
@@ -1959,6 +1973,11 @@ export type {
   StoredArtifactMetadata,
 } from "./lib/artifact-store.js";
 export type {
+  BeginTaskRunTransactionInput,
+  CompactTaskRun,
+  FinishTaskRunTransactionInput,
+  LoopRunTransactionAction,
+  LoopRunTransactionResult,
   TaskRun,
   TaskRunArtifact,
   TaskRunCommand,
@@ -1968,6 +1987,19 @@ export type {
   TaskRunLedger,
   TaskRunStatus,
 } from "./db/task-runs.js";
+export type {
+  CompactTaskFinding,
+  ListTaskFindingsFilter,
+  ResolveMissingFindingsInput,
+  ResolveMissingFindingsResult,
+  TaskFinding,
+  TaskFindingResolveAction,
+  TaskFindingSeverity,
+  TaskFindingStatus,
+  TaskFindingUpsertAction,
+  UpsertTaskFindingInput,
+  UpsertTaskFindingResult,
+} from "./db/findings.js";
 export {
   createInboxItem,
   deriveInboxTitle,

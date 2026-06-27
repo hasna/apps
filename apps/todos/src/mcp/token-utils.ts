@@ -197,6 +197,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "add_task_run_event",
     "add_task_run_file",
     "acknowledge_handoff",
+    "begin_task_run_transaction",
     "build_local_report",
     "cancel_agent_run_dispatch",
     "finish_task_run",
@@ -244,6 +245,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "list_local_snapshots",
     "list_retrospectives",
     "list_risks",
+    "list_task_findings",
     "list_task_runs",
     "list_verification_providers",
     "merge_duplicate_task",
@@ -252,6 +254,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "remove_review_routing_rule",
     "restore_local_backup",
     "retry_agent_run_dispatch",
+    "resolve_missing_task_findings",
     "resolve_mentions",
     "run_next_agent_dispatch",
     "search_knowledge_records",
@@ -294,8 +297,16 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
     "unlock_file",
     "unwatch_task",
     "update_comment",
+    "upsert_task_finding",
     "update_risk",
     "watch_task",
+  ],
+  loops: [
+    "begin_task_run_transaction",
+    "finish_task_run",
+    "list_task_findings",
+    "resolve_missing_task_findings",
+    "upsert_task_finding",
   ],
   agents: [
     "auto_assign_task",
@@ -379,7 +390,7 @@ export const MCP_TOOL_GROUPS: Record<string, readonly string[]> = {
 };
 
 export const MCP_PROFILE_GROUPS: Record<string, readonly string[]> = {
-  minimal: ["core"],
+  minimal: ["core", "loops"],
   core: ["core"],
   standard: ["core", "tasks", "projects", "resources", "agents", "metadata"],
   agent: ["core", "tasks", "projects", "resources"],

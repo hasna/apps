@@ -7,8 +7,10 @@ import { addComment } from "./db/comments.js";
 import { upsertCheckpoint } from "./db/checkpoints.js";
 import { closeDatabase, getDatabase, resetDatabase } from "./db/database.js";
 import { createDispatch } from "./db/dispatches.js";
+import { resolveMissingTaskFindings, upsertTaskFinding } from "./db/findings.js";
 import { registerAgent } from "./db/agents.js";
 import { createProject } from "./db/projects.js";
+import { beginTaskRunTransaction } from "./db/task-runs.js";
 import { buildTaskBoardSnapshot, createCalendarItem, createTaskBoard, exportCalendarIcs, getStatus, getTimeReport, listCalendarEvents, startFocusSession, stopFocusSession } from "./db/tasks.js";
 import { createTaskList } from "./db/task-lists.js";
 import { createTask } from "./db/task-crud.js";
@@ -147,6 +149,10 @@ describe("stable JSON contracts", () => {
       "tester_issue_report",
       "tester_issue_report_result",
       "tester_issue_report_batch_result",
+      "loop_run_transaction",
+      "task_finding",
+      "task_finding_upsert",
+      "task_finding_resolve_missing",
       "verification_provider",
       "verification_provider_result",
       "local_extension_compatibility",
@@ -323,6 +329,33 @@ describe("stable JSON contracts", () => {
         fingerprint: "tester-contract-issue-batch",
       }],
       project_id: project.id,
+      apply: true,
+    }, db);
+    const loopRunTransaction = beginTaskRunTransaction({
+      task_id: task.id,
+      key: "contract-loop-run",
+      loop_id: "contract-loop",
+      agent_id: "jsoncontractagent",
+      title: "Contract loop run",
+      apply: true,
+    }, db);
+    const findingUpsert = upsertTaskFinding({
+      task_id: task.id,
+      run_id: loopRunTransaction.run!.id,
+      fingerprint: "contract-finding",
+      title: "Contract finding",
+      severity: "high",
+      source: "contract-loop",
+      summary: "Finding fixture for loop contracts.",
+      artifact_path: "artifacts/contracts.log",
+      apply: true,
+    }, db);
+    const findingResolveMissing = resolveMissingTaskFindings({
+      task_id: task.id,
+      fingerprints: [],
+      source: "contract-loop",
+      run_id: loopRunTransaction.run!.id,
+      agent_id: "jsoncontractagent",
       apply: true,
     }, db);
     const verificationProvider = upsertVerificationProvider({
@@ -547,6 +580,10 @@ describe("stable JSON contracts", () => {
     expectValid("tester_issue_report", testerIssueReport);
     expectValid("tester_issue_report_result", testerIssueResult);
     expectValid("tester_issue_report_batch_result", testerIssueBatchResult);
+    expectValid("loop_run_transaction", loopRunTransaction);
+    expectValid("task_finding", findingUpsert.finding);
+    expectValid("task_finding_upsert", findingUpsert);
+    expectValid("task_finding_resolve_missing", findingResolveMissing);
     expectValid("verification_provider", verificationProvider);
     expectValid("verification_provider_result", verificationProviderResult);
     expectValid("local_extension_compatibility", extensionCompatibility);
