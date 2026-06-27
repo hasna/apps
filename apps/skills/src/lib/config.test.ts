@@ -108,6 +108,33 @@ describe("config", () => {
       const dir = getDataDir();
       expect(existsSync(dir)).toBe(true);
     });
+
+    test("copies missing legacy ~/.skills files into an existing ~/.hasna/skills without overwriting", () => {
+      const originalHome = process.env.HOME;
+      const home = join(tmpdir(), `skills-home-migration-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+
+      try {
+        mkdirSync(join(home, ".skills", "custom", "legacy-skill"), { recursive: true });
+        writeFileSync(join(home, ".skills", "custom", "legacy-skill", "SKILL.md"), "legacy");
+        writeFileSync(join(home, ".skills", "config.json"), JSON.stringify({ defaultAgent: "claude" }));
+        writeFileSync(join(home, ".skillsrc"), JSON.stringify({ defaultAgent: "gemini" }));
+
+        mkdirSync(join(home, ".hasna", "skills", "custom"), { recursive: true });
+        writeFileSync(join(home, ".hasna", "skills", "config.json"), JSON.stringify({ defaultAgent: "codex" }));
+
+        process.env.HOME = home;
+        const dir = getDataDir();
+
+        expect(dir).toBe(join(home, ".hasna", "skills"));
+        expect(readFileSync(join(dir, "config.json"), "utf-8")).toContain("codex");
+        expect(readFileSync(join(dir, "custom", "legacy-skill", "SKILL.md"), "utf-8")).toBe("legacy");
+        expect(existsSync(join(home, ".skills", "custom", "legacy-skill", "SKILL.md"))).toBe(true);
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("saveConfig", () => {

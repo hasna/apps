@@ -9,7 +9,7 @@
  * Values from the project config override global config.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, readdirSync, statSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
 
@@ -47,6 +47,27 @@ function allowedValues(key: keyof SkillsConfig): readonly string[] | undefined {
   return ENUM_KEYS[key];
 }
 
+function mergeDirectoryContents(sourceDir: string, targetDir: string): void {
+  if (!existsSync(sourceDir)) return;
+
+  mkdirSync(targetDir, { recursive: true });
+  for (const entry of readdirSync(sourceDir)) {
+    const sourcePath = join(sourceDir, entry);
+    const targetPath = join(targetDir, entry);
+
+    try {
+      const sourceStat = statSync(sourcePath);
+      if (sourceStat.isDirectory()) {
+        mergeDirectoryContents(sourcePath, targetPath);
+        continue;
+      }
+      if (!existsSync(targetPath)) copyFileSync(sourcePath, targetPath);
+    } catch {
+      // Skip entries that can't be inspected or copied.
+    }
+  }
+}
+
 function normalizeConfigValue(key: keyof SkillsConfig, value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
 
@@ -73,16 +94,24 @@ export type ConfigScope = "global" | "project";
 /**
  * Get the data directory for skills global config/data.
  * New default: ~/.hasna/skills/
- * Auto-migrates from ~/.skillsrc if the new config doesn't exist yet.
+ * Auto-migrates from ~/.skills/ and ~/.skillsrc without deleting legacy data.
  */
 export function getDataDir(): string {
   const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
   const newDir = join(home, ".hasna", "skills");
+  const oldDir = join(home, ".skills");
   const oldConfigFile = join(home, ".skillsrc");
+
+  mkdirSync(newDir, { recursive: true });
+
+  try {
+    mergeDirectoryContents(oldDir, newDir);
+  } catch {
+    // If we can't copy legacy files, keep using the new path.
+  }
 
   // Auto-migrate: if old config exists and new dir doesn't have config.json, copy it
   if (existsSync(oldConfigFile) && !existsSync(join(newDir, "config.json"))) {
-    mkdirSync(newDir, { recursive: true });
     try {
       copyFileSync(oldConfigFile, join(newDir, "config.json"));
     } catch {
@@ -90,7 +119,6 @@ export function getDataDir(): string {
     }
   }
 
-  mkdirSync(newDir, { recursive: true });
   return newDir;
 }
 
