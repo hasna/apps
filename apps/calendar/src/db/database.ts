@@ -6,11 +6,12 @@ function isInMemoryDb(path: string): boolean {
   return path === ":memory:" || path.startsWith("file::memory:");
 }
 
-function findNearestCalendarDb(startDir: string): string | null {
+function findNearestCalendarDb(startDir: string, homeDir?: string): string | null {
   let dir = resolve(startDir);
+  const resolvedHome = homeDir ? resolve(homeDir) : null;
   while (true) {
     const candidate = join(dir, ".calendar", "calendar.db");
-    if (existsSync(candidate)) return candidate;
+    if (existsSync(candidate) && dir !== resolvedHome) return candidate;
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
@@ -39,8 +40,9 @@ function getDbPath(): string {
     return process.env["CALENDAR_DB_PATH"];
   }
 
+  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
   const cwd = process.cwd();
-  const nearest = findNearestCalendarDb(cwd);
+  const nearest = findNearestCalendarDb(cwd, home);
   if (nearest) return nearest;
 
   if (process.env["CALENDAR_DB_SCOPE"] === "project") {
@@ -50,15 +52,28 @@ function getDbPath(): string {
     }
   }
 
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
   const newPath = join(home, ".hasna", "calendar", "calendar.db");
   const legacyPath = join(home, ".calendar", "calendar.db");
 
   if (!existsSync(newPath) && existsSync(legacyPath)) {
-    return legacyPath;
+    migrateLegacyHomeDb(legacyPath, newPath);
   }
 
   return newPath;
+}
+
+function quoteSqlString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+function migrateLegacyHomeDb(legacyPath: string, newPath: string): void {
+  mkdirSync(dirname(newPath), { recursive: true });
+  const legacyDb = new Database(legacyPath, { readonly: true });
+  try {
+    legacyDb.run(`VACUUM INTO ${quoteSqlString(newPath)}`);
+  } finally {
+    legacyDb.close();
+  }
 }
 
 function ensureDir(filePath: string): void {
