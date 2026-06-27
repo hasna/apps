@@ -92,6 +92,14 @@ export interface CostSummary {
   period: Period
 }
 
+export interface ZeroCostModelBreakdown {
+  agent: import('../lib/agents.js').Agent
+  model: string
+  requests: number
+  total_tokens: number
+  last_seen: string
+}
+
 export interface ModelBreakdown {
   model: string
   agent: import('../lib/agents.js').Agent
