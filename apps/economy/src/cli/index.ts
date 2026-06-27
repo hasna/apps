@@ -10,6 +10,7 @@ import { AGENTS, parseAgent } from '../lib/agents.js'
 import { syncAll } from '../lib/sync-all.js'
 import { maybePullFromCloud, cloudPush, cloudPull, cloudSyncFull, getCloudDatabaseUrl, getCloudPg } from '../lib/cloud-sync.js'
 import { mergePeerDatabase } from '../lib/peer-sync.js'
+import { runEconomyFleetSync, writeFleetSyncReport } from '../lib/fleet-sync.js'
 import type { Agent } from '../lib/agents.js'
 import { openDatabase, querySummary, querySessions, queryTopSessions, queryZeroCostTokenizedModels, queryModelBreakdown, queryProjectBreakdown, queryAgentBreakdown, queryAccountBreakdown, queryDailyBreakdown, getBudgetStatuses, upsertBudget, deleteBudget, upsertProject, deleteProject, getProject, listModelPricing, upsertModelPricing, deleteModelPricing, upsertGoal, deleteGoal, getGoalStatuses, listMachines, getMachineId, listMachineRegistry } from '../db/database.js'
 import { queryBillingSummary } from '../db/database.js'
@@ -1175,6 +1176,52 @@ program
     )
     console.log(`\n  ${chalk.dim('Current machine:')} ${chalk.bold(current)}`)
     console.log()
+  })
+
+program
+  .command('fleet-sync')
+  .description('Loop-safe cross-machine sync using remote SQLite snapshots')
+  .option('--machine <ids>', 'Comma-separated remote machines', 'spark02,apple03')
+  .option('--no-local-sync', 'Skip local economy sync before remote merge')
+  .option('--no-remote-sync', 'Skip remote economy sync before snapshot')
+  .option('--cache-dir <path>', 'Directory for verified pulled DB snapshots')
+  .option('--report-dir <path>', 'Directory for JSON evidence reports')
+  .option('--remote-snapshot-dir <path>', 'Remote snapshot directory', '$HOME/.hasna/economy/fleet-sync-snapshots')
+  .option('--timeout-ms <n>', 'Per remote command timeout', '120000')
+  .option('--dry-run', 'Plan without syncing, pulling, or merging')
+  .option('--json', 'Output JSON')
+  .action((opts: {
+    machine?: string
+    localSync?: boolean
+    remoteSync?: boolean
+    cacheDir?: string
+    reportDir?: string
+    remoteSnapshotDir?: string
+    timeoutMs?: string
+    dryRun?: boolean
+    json?: boolean
+  }) => {
+    const result = runEconomyFleetSync({
+      machines: opts.machine?.split(',').map((entry) => entry.trim()).filter(Boolean),
+      localSync: opts.localSync !== false,
+      remoteSync: opts.remoteSync !== false,
+      cacheDir: opts.cacheDir,
+      remoteSnapshotDir: opts.remoteSnapshotDir,
+      timeoutMs: parsePositiveCliInteger(opts.timeoutMs, '--timeout-ms'),
+      dryRun: opts.dryRun,
+    })
+    const reportPath = opts.reportDir ? writeFleetSyncReport(opts.reportDir, result) : undefined
+    if (opts.json) {
+      console.log(JSON.stringify({ ...result, ...(reportPath ? { report_path: reportPath } : {}) }, null, 2))
+      return
+    }
+    const status = result.summary.failed === 0 ? chalk.green('ok') : chalk.red('failed')
+    console.log(`${status} machines=${result.summary.machines} merged=${result.summary.merged} failed=${result.summary.failed} dry_run=${result.summary.dry_run}`)
+    if (reportPath) console.log(chalk.dim(`report=${reportPath}`))
+    for (const row of result.remote.filter((entry) => entry.status !== 'merged').slice(0, 20)) {
+      console.log(`${row.status === 'failed' ? chalk.red('failed') : chalk.yellow(row.status)} ${row.machine} ${chalk.dim(row.error ?? '')}`)
+    }
+    if (result.local.status === 'failed' || result.summary.failed > 0) process.exitCode = 1
   })
 
 program
