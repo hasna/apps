@@ -119,9 +119,69 @@ describe("machine data ops producers", () => {
 
     expect(applied.ok).toBe(false);
     expect(applied.summary.failed).toBe(1);
+    expect(applied.items).toHaveLength(1);
     expect(applied.items[0]?.status).toBe("backup_failed");
     expect(applied.items[0]?.snapshot_path).toBeNull();
-    expect(applied.items[0]?.message).toContain("refusing unsafe file copy snapshot");
+    expect(applied.items[0]?.message).toContain("definitely-missing-sqlite3 unavailable");
+    expect(applied.task_suggestions).toHaveLength(1);
+  });
+
+  test("collapses missing sqlite3 integrity checks into one dependency task", () => {
+    const dir = tempRoot("machines-db-no-sqlite");
+    for (let index = 0; index < 5; index += 1) {
+      writeFileSync(join(dir, `state-${index}.db`), "not checked because sqlite is missing");
+    }
+
+    const result = getCriticalDbIntegrityReport({
+      roots: [dir],
+      sqliteBin: "definitely-missing-sqlite3",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.summary.discovered).toBe(5);
+    expect(result.summary.failed).toBe(1);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]?.check_tool).toBe("none");
+    expect(result.findings[0]?.message).toContain("skipped 5 discovered database files");
+    expect(result.task_suggestions).toHaveLength(1);
+
+    const added: string[] = [];
+    const actions = upsertMachineDataTasks(result, {
+      project: "/tmp/machines",
+      runner: (args) => {
+        if (args.includes("search")) return { status: 0, stdout: "[]", stderr: "" };
+        if (args.includes("add")) {
+          added.push(args[args.indexOf("add") + 1]!);
+          return { status: 0, stdout: JSON.stringify({ id: "created-task" }), stderr: "" };
+        }
+        return { status: 1, stdout: "", stderr: "unexpected" };
+      },
+    });
+
+    expect(actions.map((action) => action.action)).toEqual(["created"]);
+    expect(added).toEqual(["[machines:data] Restore sqlite3 for DB integrity checks"]);
+  });
+
+  test("uses sqlite backup for paths containing apostrophes", () => {
+    const dir = tempRoot("machines-state-quote");
+    const nested = join(dir, "operator's-state");
+    mkdirSync(nested, { recursive: true });
+    const snapshotRoot = join(dir, "snapshots");
+    const dbPath = join(nested, "state.db");
+    sqliteDb(dbPath);
+
+    const applied = getOpsStateSnapshotReport({
+      roots: [dir],
+      snapshotRoot,
+      apply: true,
+    });
+
+    expect(applied.ok).toBe(true);
+    expect(applied.summary.copied).toBe(1);
+    expect(applied.items[0]?.status).toBe("sqlite_backup");
+    const copied = applied.items[0]?.snapshot_path;
+    expect(copied).toContain("operator's-state");
+    expect(existsSync(copied!)).toBe(true);
   });
 
   test("keeps max-db truncation output bounded while counting discovered databases", () => {
@@ -206,6 +266,33 @@ describe("machine data ops producers", () => {
     expect(actions[0]).toMatchObject({ task_id: "active-task" });
     expect(added).toHaveLength(1);
     expect(calls[0]?.slice(0, 3)).toEqual(["--project", "/home/hasna/.hasna/loops", "-j"]);
+  });
+
+  test("bounds default task creations when many machine-data suggestions exist", () => {
+    const added: string[] = [];
+    const runner: MachineDataTodosCommandRunner = (args) => {
+      if (args.includes("search")) return { status: 0, stdout: "[]", stderr: "" };
+      if (args.includes("add")) {
+        added.push(args[args.indexOf("add") + 1]!);
+        return { status: 0, stdout: JSON.stringify({ id: `created-${added.length}` }), stderr: "" };
+      }
+      return { status: 1, stdout: "", stderr: "unexpected" };
+    };
+    const result = {
+      generated_at: "2026-06-27T00:00:00.000Z",
+      kind: "machine_data_db_integrity",
+      ok: false,
+      task_suggestions: Array.from({ length: 12 }, (_, index) => suggestion(`many-${index}`)),
+    };
+
+    const actions = upsertMachineDataTasks(result, {
+      project: "/home/hasna/.hasna/loops",
+      runner,
+    });
+
+    expect(actions.filter((action) => action.action === "created")).toHaveLength(10);
+    expect(actions.filter((action) => action.action === "skipped")).toHaveLength(2);
+    expect(added).toHaveLength(10);
   });
 });
 

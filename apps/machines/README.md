@@ -212,6 +212,7 @@ machines ops db-integrity \
   --upsert-tasks \
   --todos-project /home/hasna/.hasna/loops \
   --task-list machine-data-db-integrity \
+  --max-task-actions 10 \
   --text
 
 machines ops state-snapshot \
@@ -225,14 +226,17 @@ machines ops state-snapshot \
   --upsert-tasks \
   --todos-project /home/hasna/.hasna/loops \
   --task-list machine-data-state-snapshot \
+  --max-task-actions 10 \
   --text
 ```
 
 Both commands write private JSON reports, avoid printing secret values, keep
-task creation bounded with `--max-task-actions`, and are safe to run from
+task creation bounded by default and with `--max-task-actions`, collapse a
+missing `sqlite3` dependency into one environment task, and are safe to run from
 OpenLoops without tmux dispatch. The default scans are intentionally bounded;
-increase `--max-depth`, `--max-dbs`, or `--max-size-bytes` only when the loop
-timeout and report size can absorb the larger scan.
+increase `--max-depth`, `--max-dbs`, `--max-size-bytes`, or
+`--max-task-actions` only when the loop timeout and report size can absorb the
+larger scan.
 
 ### Hasna Notes machine list contract
 

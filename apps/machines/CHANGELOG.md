@@ -28,6 +28,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   fail-closed behavior, bounded truncation output, private report/snapshot
   permissions, retention safety, and task-upsert idempotency.
 
+### Fixed
+
+- Collapsed missing sqlite3 into one dependency-level task suggestion, capped
+  default machine-data task creation, and fixed snapshot paths containing
+  apostrophes.
+
 ## [0.0.55] - 2026-06-27
 
 ### Added

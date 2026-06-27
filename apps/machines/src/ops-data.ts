@@ -162,6 +162,7 @@ const DEFAULT_DB_MAX_DEPTH = 12;
 const DEFAULT_SNAPSHOT_MAX_DEPTH = 4;
 const DEFAULT_QUICK_CHECK_TIMEOUT_MS = 45_000;
 const DEFAULT_KEEP_DAYS = 14;
+const DEFAULT_TASK_MAX_ACTIONS = 10;
 const MAX_TRUNCATED_ENTRIES = 20;
 const SNAPSHOT_DIR_NAME_RE = /^\d{8}T\d{6}Z$/;
 const BASE_SKIP_DIRS = new Set([".git", "node_modules", "target", "dist", "cache", "reports", "quarantine", "snapshots"]);
@@ -177,6 +178,8 @@ export function getCriticalDbIntegrityReport(options: DbIntegrityOptions = {}): 
   const quickCheckTimeoutMs = normalizePositiveInteger(options.quickCheckTimeoutMs, DEFAULT_QUICK_CHECK_TIMEOUT_MS);
   const files = discoverDbFiles(roots, { maxDbs, maxDepth, skipDirs: DB_INTEGRITY_SKIP_DIRS });
   const findings: CriticalDbIntegrityFinding[] = [];
+  const sqlite = checkSqliteTool(options.sqliteBin);
+  let sqliteUnavailableCount = 0;
 
   for (const entry of files.entries) {
     if (entry.truncated) {
@@ -188,8 +191,12 @@ export function getCriticalDbIntegrityReport(options: DbIntegrityOptions = {}): 
       findings.push(dbFinding(entry.path, size, "skipped_large", "none", `size ${size} exceeds max ${maxSizeBytes}`));
       continue;
     }
+    if (!sqlite.ok) {
+      sqliteUnavailableCount += 1;
+      continue;
+    }
     const check = quickCheckSqlite(entry.path, {
-      sqliteBin: options.sqliteBin,
+      sqliteBin: sqlite.bin,
       timeoutMs: quickCheckTimeoutMs,
     });
     findings.push(dbFinding(
@@ -199,6 +206,9 @@ export function getCriticalDbIntegrityReport(options: DbIntegrityOptions = {}): 
       check.tool,
       check.ok ? null : check.message,
     ));
+  }
+  if (sqliteUnavailableCount > 0 && !sqlite.ok) {
+    findings.push(sqliteUnavailableDbFinding(sqlite, sqliteUnavailableCount));
   }
 
   const failed = findings.filter((finding) => finding.status === "failed");
@@ -244,6 +254,8 @@ export function getOpsStateSnapshotReport(options: OpsStateSnapshotOptions = {})
   const snapshotDir = apply ? join(snapshotRoot, timestamp()) : null;
   const files = discoverDbFiles(roots, { maxDbs, maxDepth, skipDirs: SNAPSHOT_SKIP_DIRS });
   const items: OpsStateSnapshotItem[] = [];
+  const sqlite = apply ? checkSqliteTool(options.sqliteBin) : null;
+  let sqliteUnavailableCount = 0;
 
   if (apply && snapshotDir) {
     mkdirPrivate(snapshotRoot);
@@ -266,8 +278,12 @@ export function getOpsStateSnapshotReport(options: OpsStateSnapshotOptions = {})
       items.push(snapshotItem(entry.path, size, "planned", "none", out, null));
       continue;
     }
+    if (sqlite && !sqlite.ok) {
+      sqliteUnavailableCount += 1;
+      continue;
+    }
 
-    const copied = snapshotDb(entry.path, out, { sqliteBin: options.sqliteBin });
+    const copied = snapshotDb(entry.path, out, { sqliteBin: sqlite?.bin ?? options.sqliteBin });
     items.push(snapshotItem(
       entry.path,
       size,
@@ -276,6 +292,9 @@ export function getOpsStateSnapshotReport(options: OpsStateSnapshotOptions = {})
       copied.ok ? out : null,
       copied.ok ? null : copied.message,
     ));
+  }
+  if (sqlite && sqliteUnavailableCount > 0 && !sqlite.ok) {
+    items.push(sqliteUnavailableSnapshotItem(sqlite, sqliteUnavailableCount));
   }
 
   const removed = apply ? removeOldSnapshots(snapshotRoot, keepDays) : 0;
@@ -335,7 +354,7 @@ export function upsertMachineDataTasks(
     return actions;
   }
 
-  const maxCreations = normalizePositiveInteger(options.maxActions, suggestions.length);
+  const maxCreations = normalizePositiveInteger(options.maxActions, Math.min(suggestions.length, DEFAULT_TASK_MAX_ACTIONS));
   const run = options.runner ?? defaultTodosRunner(options.todosBin ?? "todos", options.commandTimeoutMs);
   const actions: MachineDataTaskAction[] = [];
   let created = 0;
@@ -489,6 +508,24 @@ function quickCheckSqlite(path: string, options: { sqliteBin?: string; timeoutMs
   return { ok: result.status === 0 && output === "ok", tool: "sqlite3", message: compactMessage(output || result.error?.message || `sqlite3 exited ${result.status}`) };
 }
 
+function checkSqliteTool(sqliteBin?: string): { ok: true; bin: string } | { ok: false; bin: string; message: string } {
+  const bin = sqliteBin ?? "sqlite3";
+  const result = spawnSync(bin, ["-version"], {
+    encoding: "utf8",
+    timeout: 5_000,
+    maxBuffer: 64 * 1024,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.error && (result.error as NodeJS.ErrnoException).code === "ENOENT") {
+    return { ok: false, bin, message: `${bin} unavailable` };
+  }
+  if (result.error || result.status !== 0) {
+    const output = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
+    return { ok: false, bin, message: compactMessage(output || result.error?.message || `${bin} -version exited ${result.status}`) };
+  }
+  return { ok: true, bin };
+}
+
 function snapshotDb(path: string, out: string, options: { sqliteBin?: string }): { ok: boolean; method: "sqlite_backup" | "copy"; message: string } {
   mkdirPrivate(dirname(out));
   const check = quickCheckSqlite(path, { sqliteBin: options.sqliteBin, timeoutMs: DEFAULT_QUICK_CHECK_TIMEOUT_MS });
@@ -518,6 +555,23 @@ function snapshotDb(path: string, out: string, options: { sqliteBin?: string }):
 }
 
 function dbIntegrityTaskSuggestion(finding: CriticalDbIntegrityFinding): MachineDataTaskSuggestion {
+  if (finding.check_tool === "none" && finding.message?.includes("unavailable")) {
+    return {
+      fingerprint: finding.fingerprint,
+      dedupe_key: `machines:data:db-integrity:${finding.fingerprint}`,
+      title: `[machines:data] Restore sqlite3 for DB integrity checks`,
+      description: [
+        "source: @hasna/machines ops db-integrity",
+        `fingerprint: ${finding.fingerprint}`,
+        `tool: ${finding.path}`,
+        `message: ${finding.message}`,
+        "",
+        "Fix the local sqlite3 dependency before rerunning database integrity scans. Do not create per-database remediation tasks from a missing tool.",
+      ].join("\n"),
+      priority: "high",
+      tags: ["machines", "ops-data", "db-integrity", "sqlite3"],
+    };
+  }
   return {
     fingerprint: finding.fingerprint,
     dedupe_key: `machines:data:db-integrity:${finding.fingerprint}`,
@@ -538,6 +592,23 @@ function dbIntegrityTaskSuggestion(finding: CriticalDbIntegrityFinding): Machine
 }
 
 function snapshotFailureTaskSuggestion(item: OpsStateSnapshotItem): MachineDataTaskSuggestion {
+  if (item.method === "sqlite_backup" && item.message?.includes("unavailable")) {
+    return {
+      fingerprint: item.fingerprint,
+      dedupe_key: `machines:data:state-snapshot:${item.fingerprint}`,
+      title: `[machines:data] Restore sqlite3 for state snapshots`,
+      description: [
+        "source: @hasna/machines ops state-snapshot",
+        `fingerprint: ${item.fingerprint}`,
+        `tool: ${item.path}`,
+        `message: ${item.message}`,
+        "",
+        "Fix the local sqlite3 dependency before rerunning state snapshots. Preserve existing live state and evidence.",
+      ].join("\n"),
+      priority: "high",
+      tags: ["machines", "ops-data", "state-snapshot", "sqlite3"],
+    };
+  }
   return {
     fingerprint: item.fingerprint,
     dedupe_key: `machines:data:state-snapshot:${item.fingerprint}`,
@@ -590,6 +661,35 @@ function snapshotItem(
     snapshot_path: snapshotPath,
     message: message ? compactMessage(message) : null,
     fingerprint: fingerprint(["state-snapshot", path, status]),
+  };
+}
+
+function sqliteUnavailableDbFinding(
+  sqlite: { ok: false; bin: string; message: string },
+  affected: number,
+): CriticalDbIntegrityFinding {
+  return {
+    path: sqlite.bin,
+    size_bytes: 0,
+    status: "failed",
+    check_tool: "none",
+    message: compactMessage(`${sqlite.message}; skipped ${affected} discovered database file${affected === 1 ? "" : "s"}`),
+    fingerprint: fingerprint(["db-integrity", "sqlite-unavailable", sqlite.bin]),
+  };
+}
+
+function sqliteUnavailableSnapshotItem(
+  sqlite: { ok: false; bin: string; message: string },
+  affected: number,
+): OpsStateSnapshotItem {
+  return {
+    path: sqlite.bin,
+    size_bytes: 0,
+    status: "backup_failed",
+    method: "sqlite_backup",
+    snapshot_path: null,
+    message: compactMessage(`${sqlite.message}; skipped ${affected} discovered database file${affected === 1 ? "" : "s"}`),
+    fingerprint: fingerprint(["state-snapshot", "sqlite-unavailable", sqlite.bin]),
   };
 }
 
@@ -753,7 +853,7 @@ function snapshotFileName(path: string): string {
 }
 
 function quoteSqliteShellPath(path: string): string {
-  return `'${path.replace(/'/g, "''")}'`;
+  return `"${path.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 function timestamp(): string {
