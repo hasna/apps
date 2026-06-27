@@ -87,7 +87,7 @@ function createAgentAttestationSignature(opts: Record<string, unknown>): string 
 program
   .name("open-signatures")
   .description("Open-source agreement and e-signature workflows")
-  .version("0.1.11");
+  .version("0.1.12");
 
 // ── document ─────────────────────────────────────────────────────────────────
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.12
+
+- Migrated global package-owned files, render cache, and database fallback from legacy `~/.signatures` to `~/.hasna/signatures` while preserving repo-local `.signatures` databases.
+
 ## 0.1.11
 
 - Hardened routed signing so token/session completion signs the assigned field or next matching pending field instead of the first document field.

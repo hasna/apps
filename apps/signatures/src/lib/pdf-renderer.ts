@@ -1,17 +1,20 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 
+function homeDir(): string {
+  return process.env["HOME"] || process.env["USERPROFILE"] || homedir();
+}
+
 function getCacheDir(): string {
-  const home = homedir();
+  const home = homeDir();
   const newDir = join(home, ".hasna", "signatures", "cache");
   const legacyDir = join(home, ".signatures", "cache");
 
-  // Use legacy dir if it exists and new one doesn't yet (backward compat)
   if (!existsSync(newDir) && existsSync(legacyDir)) {
-    mkdirSync(legacyDir, { recursive: true });
-    return legacyDir;
+    mkdirSync(join(home, ".hasna", "signatures"), { recursive: true });
+    cpSync(legacyDir, newDir, { recursive: true });
   }
 
   mkdirSync(newDir, { recursive: true });

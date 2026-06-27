@@ -1,5 +1,5 @@
 import { SqliteAdapter } from "@hasna/cloud";
-import { existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 
@@ -18,6 +18,10 @@ type SignaturesDatabase = Omit<SqliteAdapter, "query"> & {
 };
 
 let db: SignaturesDatabase | null = null;
+
+function homeDir(): string {
+  return process.env["HOME"] || process.env["USERPROFILE"] || homedir();
+}
 
 function getDbPath(): string {
   if (process.env["HASNA_SIGNATURES_DB_PATH"]) {
@@ -40,16 +44,15 @@ function getDbPath(): string {
     dir = parent;
   }
 
-  const home = homedir();
+  const home = homeDir();
   const newPath = join(home, ".hasna", "signatures", "signatures.db");
   const legacyPath = join(home, ".signatures", "signatures.db");
 
-  // Use legacy DB if it exists and new one doesn't yet (backward compat)
   if (!existsSync(newPath) && existsSync(legacyPath)) {
-    return legacyPath;
+    mkdirSync(dirname(newPath), { recursive: true });
+    copyFileSync(legacyPath, newPath);
   }
 
-  // Default global — new location
   mkdirSync(dirname(newPath), { recursive: true });
   return newPath;
 }

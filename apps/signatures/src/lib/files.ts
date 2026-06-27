@@ -1,15 +1,19 @@
-import { mkdirSync, existsSync, copyFileSync, statSync } from "node:fs";
+import { mkdirSync, existsSync, copyFileSync, cpSync, statSync } from "node:fs";
 import { join, basename, extname } from "node:path";
 import { homedir } from "node:os";
 
+function homeDir(): string {
+  return process.env["HOME"] || process.env["USERPROFILE"] || homedir();
+}
+
 export function getSignaturesDir(): string {
-  const home = homedir();
+  const home = homeDir();
   const newDir = join(home, ".hasna", "signatures");
   const legacyDir = join(home, ".signatures");
 
-  // Use legacy dir if it exists and new one doesn't yet (backward compat)
   if (!existsSync(newDir) && existsSync(legacyDir)) {
-    return legacyDir;
+    mkdirSync(join(home, ".hasna"), { recursive: true });
+    cpSync(legacyDir, newDir, { recursive: true });
   }
 
   mkdirSync(newDir, { recursive: true });

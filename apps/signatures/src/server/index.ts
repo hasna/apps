@@ -207,7 +207,7 @@ Bun.serve({
     try {
       // Health
       if (path === "/health" && method === "GET") {
-        return json({ status: "ok", version: "0.1.11", port: PORT });
+        return json({ status: "ok", version: "0.1.12", port: PORT });
       }
 
       // Stats
