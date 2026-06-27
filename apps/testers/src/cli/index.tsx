@@ -2590,12 +2590,31 @@ program
 program
   .command("status")
   .description("Show database and auth status")
-  .action(() => {
+  .option("--json", "Output as JSON", false)
+  .action((opts) => {
     try {
       const config = loadConfig();
       const hasApiKey =
         !!config.anthropicApiKey || !!process.env["ANTHROPIC_API_KEY"];
       const dbPath = join(getTestersDir(), "testers.db");
+
+      if (opts.json) {
+        log(
+          JSON.stringify(
+            {
+              status: hasApiKey ? "ok" : "warn",
+              anthropicApiKey: { set: hasApiKey },
+              database: { path: dbPath },
+              defaultModel: config.defaultModel,
+              defaultImageModel: config.defaultImageModel,
+              screenshots: { dir: config.screenshots.dir },
+            },
+            null,
+            2,
+          ),
+        );
+        return;
+      }
 
       log("");
       log(chalk.bold("  Open Testers Status"));
