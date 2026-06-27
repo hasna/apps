@@ -16,7 +16,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Release verification now uses Bun package-manager commands instead of
   requiring `npm` on PATH.
 
-## [0.0.57] - 2026-06-27
+## [0.0.58] - 2026-06-27
 
 ### Added
 
