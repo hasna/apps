@@ -97,7 +97,7 @@ export_contacts({ format: "vcf", tag: "client" })
 
 ## Database Location
 
-By default: `~/.contacts/contacts.db`
+By default: `~/.hasna/contacts/contacts.db`
 
 Override with env var: `CONTACTS_DB_PATH=/path/to/contacts.db contacts-mcp`
 
