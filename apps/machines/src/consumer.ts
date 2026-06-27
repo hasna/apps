@@ -8,6 +8,7 @@ export {
   MACHINES_CONSUMER_SCHEMA_URI,
   MACHINES_PACKAGE_NAME,
   DEFAULT_MACHINE_RESOLVER_TTL_MS,
+  DEFAULT_MACHINE_LIST_LIMIT,
   createMachineResolverSnapshot,
   discoverMachineTopology,
   getMachinesConsumerCapabilities,
@@ -26,6 +27,7 @@ export type {
   MachineResolverSnapshot,
   MachineResolverSnapshotRoute,
   MachineResolverSnapshotWorkspace,
+  MachineListPagination,
   MachineTopology,
   MachineTopologyEntry,
   MachineTopologyOptions,
@@ -58,6 +60,111 @@ export type {
   MachinesConsumerSchemaEnvelope,
   MachinesConsumerValidationResult,
 } from "./consumer-schema.js";
+export {
+  AGENT_ABSTRACTIONS_KIND,
+  getCommandMatrix,
+  getFleetLoopPreflight,
+  getFleetMachineHealth,
+  getFleetRouting,
+} from "./agent-abstractions.js";
+export type {
+  AgentApiArtifactRef,
+  AgentApiDetailRefs,
+  AgentCheckStatus,
+  AgentCompatibilityOptions,
+  AgentMachineSelectorOptions,
+  AgentReadinessStatus,
+  AgentSummary,
+  AgentWorkspaceOptions,
+  CommandMatrixCommandPlan,
+  CommandMatrixOptions,
+  CommandMatrixReport,
+  CommandMatrixRow,
+  FleetLoopPreflightOptions,
+  FleetLoopPreflightReport,
+  FleetRoutingOptions,
+  FleetRoutingReport,
+  LoopPreflightMachine,
+  MachineHealthCheckSummary,
+  MachineHealthOptions,
+  MachineHealthReport,
+  MachineHealthRow,
+  RoutingRow,
+} from "./agent-abstractions.js";
+export {
+  listMachineProjectAssignments,
+  projectAssignmentMutationArgs,
+  projectAssignmentResourceId,
+  removeProjectAssignmentMutationArgs,
+} from "./projects.js";
+export type {
+  AssignMachineProjectInput,
+  MachineProjectAssignment,
+  MachineProjectAssignmentMachineSummary,
+  MachineProjectAssignmentProjectSummary,
+  MachineProjectAssignmentSource,
+  MachineProjectAssignments,
+  MachineProjectAssignmentsOptions,
+  RemoveMachineProjectAssignmentInput,
+} from "./projects.js";
+export {
+  MACHINE_TRASH_POLICIES_KIND,
+  NOTE_MACHINE_CONTEXT_KIND,
+  listMachineTrashPolicies,
+  machineReferenceForNote,
+  resolveNoteMachineContext,
+} from "./notes.js";
+export type {
+  MachineTrashPolicies,
+  MachineTrashPoliciesOptions,
+  MachineTrashPolicy,
+  MachineTrashPolicySource,
+  NoteActorContext,
+  NoteActorType,
+  NoteMachineContext,
+  NoteMachineContextOptions,
+  NoteMachineContextSource,
+  NoteMachineReference,
+  NoteMachineRole,
+  NoteSyncTarget,
+} from "./notes.js";
+export {
+  MACHINE_DETAILS_KIND,
+  getMachineDetails,
+} from "./details.js";
+export type {
+  MachineDetails,
+  MachineDetailsMetadataValue,
+  MachineDetailsOptions,
+  MachineDetailsSource,
+  MachineDetailsStatus,
+  MachineDetailsStatusState,
+  MachineDetailsTimestamps,
+} from "./details.js";
+export {
+  BROWSERPLAN_EXCLUDED_MACHINE_IDS,
+  BROWSERPLAN_FLEET_KIND,
+  BROWSERPLAN_MACHINE_IDS,
+  BROWSERPLAN_TARGET_NAME,
+  getBrowserPlanFleet,
+  normalizeBrowserPlanMachineId,
+} from "./browserplan.js";
+export type {
+  BrowserPlanCapability,
+  BrowserPlanCapabilityState,
+  BrowserPlanExcludedMachineId,
+  BrowserPlanFleet,
+  BrowserPlanFleetOptions,
+  BrowserPlanInstallState,
+  BrowserPlanMachine,
+  BrowserPlanMachineId,
+  BrowserPlanMachineReachability,
+  BrowserPlanMachineStatus,
+  BrowserPlanOperationHook,
+  BrowserPlanOperationId,
+  BrowserPlanSafeRunnerContract,
+  BrowserPlanWorkspaceSummary,
+} from "./browserplan.js";
 export {
   checkMachineCompatibility,
 } from "./compatibility.js";

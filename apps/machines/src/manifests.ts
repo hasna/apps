@@ -42,6 +42,8 @@ const fileSchema = z.object({
 
 export const machineSchema = z.object({
   id: z.string(),
+  friendlyName: z.string().optional(),
+  updatedAt: z.string().optional(),
   hostname: z.string().optional(),
   sshAddress: z.string().optional(),
   tailscaleName: z.string().optional(),
@@ -78,6 +80,16 @@ function normalizePlatform(): MachineManifest["platform"] {
 
 function normalizeMachines(machines: MachineManifest[]): MachineManifest[] {
   return [...machines].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+export function normalizeFriendlyName(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+export function machineDisplayName(machine: Pick<MachineManifest, "id" | "friendlyName">): string {
+  return normalizeFriendlyName(machine.friendlyName) ?? machine.id;
 }
 
 function inferPrivateBackend(rawRef: string, explicitBackend?: string): string | null {
@@ -217,6 +229,7 @@ export function detectCurrentMachineManifest(): MachineManifest {
   const bunDir = dirname(process.execPath);
   return {
     id: machineId,
+    updatedAt: new Date().toISOString(),
     hostname: hostname(),
     sshAddress: `${user}@${machineId}`,
     tailscaleName: machineId,

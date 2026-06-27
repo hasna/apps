@@ -4,6 +4,16 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { MUTATION_APPROVAL_FLAG_ENV, MUTATION_APPROVAL_TOKEN_ENV, createMutationApprovalToken } from "../src/commands/mutation-approval.js";
+import {
+  clearMachineFriendlyNameMutationArgs,
+  machineFriendlyNameResourceId,
+  setMachineFriendlyNameMutationArgs,
+} from "../src/commands/manifest.js";
+import {
+  projectAssignmentMutationArgs,
+  projectAssignmentResourceId,
+  removeProjectAssignmentMutationArgs,
+} from "../src/projects.js";
 
 const repoRoot = resolve(import.meta.dir, "..");
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
@@ -45,6 +55,323 @@ describe("cli command handling", () => {
       const listed = runCli(["manifest", "list"], env);
       expect(listed.status).toBe(0);
       expect(JSON.parse(listed.stdout).machines[0]).toMatchObject({ id: "demo-mac-001", metadata: { user: "operator" } });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("manifest friendly-name CLI uses scoped approvals and topology display fallback", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-cli-friendly-name-"));
+    try {
+      const baseEnv = {
+        ...process.env,
+        HASNA_MACHINES_MANIFEST_PATH: join(dir, "machines.json"),
+        HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
+        HASNA_MACHINES_MACHINE_ID: "control",
+        [MUTATION_APPROVAL_TOKEN_ENV]: "secret",
+      };
+      const setupEnv = { ...baseEnv, [MUTATION_APPROVAL_FLAG_ENV]: "1" };
+      expect(runCli(["manifest", "init"], setupEnv).status).toBe(0);
+      expect(runCli(["manifest", "add", "--id", "demo-node-01", "--platform", "linux", "--workspace-path", "/workspace"], setupEnv).status).toBe(0);
+
+      const input = { machineId: "demo-node-01", friendlyName: "Studio Linux" };
+      const denied = runCli(["manifest", "friendly-name", "set", input.machineId, input.friendlyName, "--json"], baseEnv);
+      expect(denied.status).not.toBe(0);
+      expect(denied.stderr).toContain("requires operator approval");
+
+      const setToken = createMutationApprovalToken({
+        surface: "cli",
+        operation: "machines_friendly_name_set",
+        transport: "cli",
+        machineId: input.machineId,
+        callerId: "cli",
+        runId: "cli",
+        resourceId: machineFriendlyNameResourceId(input.machineId),
+        args: setMachineFriendlyNameMutationArgs(input),
+      }, { env: baseEnv, now: Date.now(), nonce: "cli-friendly-name-set" });
+      const set = runCli([
+        "manifest",
+        "friendly-name",
+        "set",
+        input.machineId,
+        input.friendlyName,
+        "--approval-token",
+        setToken,
+        "--json",
+      ], baseEnv);
+      expect(set.stderr).toBe("");
+      expect(set.status).toBe(0);
+      expect(JSON.parse(set.stdout)).toMatchObject({
+        machine_id: "demo-node-01",
+        friendly_name: "Studio Linux",
+        display_name: "Studio Linux",
+      });
+
+      const topology = runCli(["topology", "--no-tailscale", "--json"], baseEnv);
+      expect(topology.status).toBe(0);
+      expect(JSON.parse(topology.stdout).machines[0]).toMatchObject({
+        machine_id: "demo-node-01",
+        friendly_name: "Studio Linux",
+        display_name: "Studio Linux",
+      });
+
+      const clearInput = { machineId: input.machineId };
+      const clearToken = createMutationApprovalToken({
+        surface: "cli",
+        operation: "machines_friendly_name_clear",
+        transport: "cli",
+        machineId: clearInput.machineId,
+        callerId: "cli",
+        runId: "cli",
+        resourceId: machineFriendlyNameResourceId(clearInput.machineId),
+        args: clearMachineFriendlyNameMutationArgs(clearInput),
+      }, { env: baseEnv, now: Date.now(), nonce: "cli-friendly-name-clear" });
+      const cleared = runCli([
+        "manifest",
+        "friendly-name",
+        "clear",
+        clearInput.machineId,
+        "--approval-token",
+        clearToken,
+        "--json",
+      ], baseEnv);
+      expect(cleared.stderr).toBe("");
+      expect(cleared.status).toBe(0);
+      expect(JSON.parse(cleared.stdout)).toMatchObject({
+        machine_id: "demo-node-01",
+        friendly_name: null,
+        display_name: "demo-node-01",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("topology CLI defaults to latest 10 and exposes view-more offsets", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-cli-pagination-"));
+    try {
+      const env = {
+        ...process.env,
+        HASNA_MACHINES_MANIFEST_PATH: join(dir, "machines.json"),
+        HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
+        HASNA_MACHINES_MACHINE_ID: "demo-node-02",
+        [MUTATION_APPROVAL_FLAG_ENV]: "1",
+      };
+      expect(runCli(["manifest", "init"], env).status).toBe(0);
+      for (let index = 0; index < 12; index += 1) {
+        const machine = {
+          id: `demo-node-${String(index).padStart(2, "0")}`,
+          platform: "linux",
+          workspacePath: `/workspace/${index}`,
+          updatedAt: `2026-06-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+        };
+        expect(runCli(["manifest", "add", "--from-stdin"], env, JSON.stringify(machine)).status).toBe(0);
+      }
+
+      const first = runCli(["topology", "--no-tailscale", "--json"], env);
+      expect(first.status).toBe(0);
+      const payload = JSON.parse(first.stdout);
+      expect(payload.pagination).toMatchObject({
+        limit: 10,
+        offset: 0,
+        total: 12,
+        count: 10,
+        hasMore: true,
+        nextOffset: 10,
+      });
+      expect(payload.machines[0].machine_id).toBe("demo-node-11");
+
+      const second = runCli(["topology", "--no-tailscale", "--offset", "10", "--json"], env);
+      expect(second.status).toBe(0);
+      expect(JSON.parse(second.stdout).machines.map((machine: { machine_id: string }) => machine.machine_id)).toEqual(["demo-node-01", "demo-node-00"]);
+
+      const zeroLimit = runCli(["topology", "--no-tailscale", "--limit", "0", "--json"], env);
+      expect(zeroLimit.status).not.toBe(0);
+      expect(zeroLimit.stderr).toContain("Expected >= 1");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("notes CLI exposes machine provenance context and trash policy metadata", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-cli-notes-"));
+    try {
+      const env = {
+        ...process.env,
+        HASNA_MACHINES_MANIFEST_PATH: join(dir, "machines.json"),
+        HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
+        HASNA_MACHINES_MACHINE_ID: "origin-node",
+        [MUTATION_APPROVAL_FLAG_ENV]: "1",
+      };
+      expect(runCli(["manifest", "init"], env).status).toBe(0);
+      expect(runCli(["manifest", "add", "--from-stdin"], env, JSON.stringify({
+        id: "origin-node",
+        friendlyName: "Desk Mac",
+        platform: "macos",
+        workspacePath: "/Users/hasna/Workspace",
+        updatedAt: "2026-06-20T00:00:00.000Z",
+      })).status).toBe(0);
+      expect(runCli(["manifest", "add", "--from-stdin"], env, JSON.stringify({
+        id: "agent-node",
+        friendlyName: "Agent Box",
+        platform: "linux",
+        workspacePath: "/srv/workspace",
+        updatedAt: "2026-06-21T00:00:00.000Z",
+        metadata: {
+          notes_trash: {
+            enabled: true,
+            retention_days: 30,
+            delete_after_days: 60,
+            trash_path: "/srv/notes/.trash",
+          },
+        },
+      })).status).toBe(0);
+
+      const context = runCli([
+        "notes",
+        "context",
+        "--origin-machine",
+        "origin-node",
+        "--source-machine",
+        "agent-node",
+        "--target-machine",
+        "missing-target",
+        "--sync-target",
+        "missing-target",
+        "--actor-type",
+        "agent",
+        "--agent-id",
+        "notes-agent",
+        "--agent-name",
+        "Notes Agent",
+        "--source",
+        "agent",
+        "--json",
+      ], env);
+      expect(context.stderr).toBe("");
+      expect(context.status).toBe(0);
+      const contextPayload = JSON.parse(context.stdout);
+      expect(contextPayload.origin_machine).toMatchObject({ display_name: "Desk Mac" });
+      expect(contextPayload.source_machine).toMatchObject({ display_name: "Agent Box" });
+      expect(contextPayload.target_machine).toMatchObject({ machine_id: "missing-target", known: false });
+      expect(contextPayload.actor).toMatchObject({ actor_type: "agent", display_name: "Notes Agent" });
+
+      const trash = runCli(["notes", "trash-policies", "--machine", "agent-node", "--json"], env);
+      expect(trash.stderr).toBe("");
+      expect(trash.status).toBe(0);
+      expect(JSON.parse(trash.stdout).policies[0]).toMatchObject({
+        machine_id: "agent-node",
+        display_name: "Agent Box",
+        enabled: true,
+        retention_days: 30,
+        delete_after_days: 60,
+        trash_path: "/srv/notes/.trash",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("details CLI exposes consumer-safe machine details", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-cli-details-"));
+    try {
+      const env = {
+        ...process.env,
+        HASNA_MACHINES_MANIFEST_PATH: join(dir, "machines.json"),
+        HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
+        HASNA_MACHINES_MACHINE_ID: "details-node",
+        [MUTATION_APPROVAL_FLAG_ENV]: "1",
+      };
+      expect(runCli(["manifest", "init"], env).status).toBe(0);
+      expect(runCli(["manifest", "add", "--from-stdin"], env, JSON.stringify({
+        id: "details-node",
+        friendlyName: "Studio Laptop",
+        platform: "macos",
+        workspacePath: "/Users/hasna/Workspace",
+        updatedAt: "2026-06-20T00:00:00.000Z",
+        metadata: {
+          machine_type: "laptop",
+          role: "primary",
+          capabilities: ["notes", "sync"],
+          owner: "Hasna",
+          api_key: "should-not-appear",
+        },
+      })).status).toBe(0);
+
+      const details = runCli(["details", "--machine", "details-node", "--json"], env);
+      expect(details.stderr).toBe("");
+      expect(details.status).toBe(0);
+      const payload = JSON.parse(details.stdout);
+      expect(payload).toMatchObject({
+        machine_id: "details-node",
+        friendly_name: "Studio Laptop",
+        display_name: "Studio Laptop",
+        machine_type: "laptop",
+        role: "primary",
+        machine_capabilities: ["notes", "sync"],
+        status: {
+          state: "unknown",
+          label: "Unknown",
+          online: null,
+        },
+      });
+      expect(JSON.stringify(payload)).not.toContain("should-not-appear");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("browserplan CLI exposes target fleet and excludes spark machines", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-cli-browserplan-"));
+    try {
+      const env = {
+        ...process.env,
+        HASNA_MACHINES_MANIFEST_PATH: join(dir, "machines.json"),
+        HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
+        HASNA_MACHINES_MACHINE_ID: "control",
+        [MUTATION_APPROVAL_FLAG_ENV]: "1",
+      };
+      expect(runCli(["manifest", "init"], env).status).toBe(0);
+      expect(runCli(["manifest", "add", "--from-stdin"], env, JSON.stringify({
+        id: "machine001",
+        friendlyName: "Browser Rig 01",
+        platform: "linux",
+        workspacePath: "/home/hasna/Workspace",
+        metadata: { user: "hasna" },
+      })).status).toBe(0);
+      expect(runCli(["manifest", "add", "--from-stdin"], env, JSON.stringify({
+        id: "spark01",
+        friendlyName: "Spark Local",
+        platform: "linux",
+        workspacePath: "/home/hasna/Workspace",
+      })).status).toBe(0);
+
+      const result = runCli(["browserplan", "fleet", "--machine", "machine001,spark01", "--json"], env);
+      expect(result.stderr).toBe("");
+      expect(result.status).toBe(0);
+      const payload = JSON.parse(result.stdout);
+      expect(payload).toMatchObject({
+        kind: "browserplan_fleet",
+        target: {
+          name: "browserplan-machine001-machine011",
+          owner: "open-chrome",
+          install_target_excludes: ["spark01", "spark02"],
+        },
+        coverage: {
+          expected: 1,
+          returned: 1,
+          known: 1,
+          excluded_requested: ["spark01"],
+        },
+      });
+      expect(payload.machines[0]).toMatchObject({
+        machine_id: "machine001",
+        display_name: "Browser Rig 01",
+        friendly_name: "Browser Rig 01",
+        install_state: { checked: false },
+      });
+      expect(payload.machines[0].operation_hooks.map((hook: { id: string }) => hook.id)).toContain("headed_launch");
+      expect(JSON.stringify(payload)).not.toContain("Spark Local");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -323,6 +650,236 @@ describe("cli command handling", () => {
       expect(denied.stderr).toContain("requires operator approval");
       expect(denied.stderr).not.toContain(token);
       expect(denied.stdout).not.toContain("cli-plan-drift-executed");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("projects assignments CLI writes manifest-backed locations with scoped approval", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-cli-project-assignments-"));
+    try {
+      const baseEnv = {
+        ...process.env,
+        HASNA_MACHINES_MANIFEST_PATH: join(dir, "machines.json"),
+        HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
+        HASNA_MACHINES_MACHINE_ID: "control",
+        [MUTATION_APPROVAL_TOKEN_ENV]: "secret",
+      };
+      const setupEnv = { ...baseEnv, [MUTATION_APPROVAL_FLAG_ENV]: "1" };
+      const machine = {
+        id: "demo-node-01",
+        hostname: "demo-node-01",
+        platform: "linux",
+        workspacePath: "/home/operator/workspace",
+      };
+      expect(runCli(["manifest", "init"], setupEnv).status).toBe(0);
+      expect(runCli(["manifest", "add", "--from-stdin"], setupEnv, JSON.stringify(machine)).status).toBe(0);
+
+      const input = {
+        machineId: "demo-node-01",
+        projectId: "open-machines",
+        path: "/home/operator/workspace/hasna/opensource/open-machines",
+        workspaceId: null,
+        repoName: "open-machines",
+        workspaceRoot: null,
+        openFilesRoot: null,
+        label: "demo-node-01",
+        kind: "machine-local",
+        primary: true,
+      };
+      const denied = runCli([
+        "projects",
+        "assignments",
+        "assign",
+        "--machine",
+        input.machineId,
+        "--project",
+        input.projectId,
+        "--path",
+        input.path,
+        "--repo",
+        input.repoName,
+        "--label",
+        input.label,
+        "--kind",
+        input.kind,
+        "--primary",
+        "--json",
+      ], baseEnv);
+      expect(denied.status).not.toBe(0);
+      expect(denied.stderr).toContain("requires operator approval");
+
+      const token = createMutationApprovalToken({
+        surface: "cli",
+        operation: "machines_projects_assign",
+        transport: "cli",
+        machineId: input.machineId,
+        callerId: "cli",
+        runId: "cli",
+        resourceId: projectAssignmentResourceId(input.machineId, input.projectId),
+        args: projectAssignmentMutationArgs(input),
+      }, { env: baseEnv, now: Date.now(), nonce: "project-assign-cli" });
+      const assigned = runCli([
+        "projects",
+        "assignments",
+        "assign",
+        "--machine",
+        input.machineId,
+        "--project",
+        input.projectId,
+        "--path",
+        input.path,
+        "--repo",
+        input.repoName,
+        "--label",
+        input.label,
+        "--kind",
+        input.kind,
+        "--primary",
+        "--approval-token",
+        token,
+        "--json",
+      ], baseEnv);
+      expect(assigned.stderr).toBe("");
+      expect(assigned.status).toBe(0);
+      expect(JSON.parse(assigned.stdout).assignments[0]).toMatchObject({
+        machine_id: "demo-node-01",
+        project_id: "open-machines",
+        projects_location_input: {
+          project: "open-machines",
+          machine_id: "demo-node-01",
+          path: "/home/operator/workspace/hasna/opensource/open-machines",
+          metadata: { machine_id: "demo-node-01" },
+        },
+      });
+
+      const listed = runCli(["projects", "assignments", "list", "--project", "open-machines", "--json"], baseEnv);
+      expect(listed.status).toBe(0);
+      expect(JSON.parse(listed.stdout).assignments).toHaveLength(1);
+
+      const removeInput = { machineId: input.machineId, projectId: input.projectId };
+      const removeToken = createMutationApprovalToken({
+        surface: "cli",
+        operation: "machines_projects_unassign",
+        transport: "cli",
+        machineId: input.machineId,
+        callerId: "cli",
+        runId: "cli",
+        resourceId: projectAssignmentResourceId(input.machineId, input.projectId),
+        args: removeProjectAssignmentMutationArgs(removeInput),
+      }, { env: baseEnv, now: Date.now(), nonce: "project-unassign-cli" });
+      const removed = runCli([
+        "projects",
+        "assignments",
+        "remove",
+        "--machine",
+        input.machineId,
+        "--project",
+        input.projectId,
+        "--approval-token",
+        removeToken,
+        "--json",
+      ], baseEnv);
+      expect(removed.stderr).toBe("");
+      expect(removed.status).toBe(0);
+      expect(JSON.parse(removed.stdout).assignments).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("agent abstraction CLIs print compact JSON by default", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-cli-agent-apis-"));
+    try {
+      const env = {
+        ...process.env,
+        HASNA_MACHINES_MANIFEST_PATH: join(dir, "machines.json"),
+        HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
+        HASNA_MACHINES_MACHINE_ID: "control",
+        HASNA_MACHINES_REACHABLE_HOSTS: "operator@worker",
+        [MUTATION_APPROVAL_FLAG_ENV]: "1",
+      };
+      expect(runCli(["manifest", "init"], env).status).toBe(0);
+      expect(runCli(["manifest", "add", "--from-stdin"], env, JSON.stringify({
+        id: "control",
+        friendlyName: "Control Node",
+        platform: "linux",
+        workspacePath: "/home/hasna/Workspace",
+        updatedAt: "2026-06-26T10:00:00.000Z",
+      })).status).toBe(0);
+      expect(runCli(["manifest", "add", "--from-stdin"], env, JSON.stringify({
+        id: "worker",
+        friendlyName: "Worker Node",
+        platform: "linux",
+        workspacePath: "/srv/workspace",
+        sshAddress: "operator@worker",
+        updatedAt: "2026-06-26T09:00:00.000Z",
+      })).status).toBe(0);
+
+      const preflight = runCli(["loop-preflight", "--machine", "control,worker", "--cmd", "echo loop", "--no-tailscale"], env);
+      expect(preflight.stderr).toBe("");
+      expect(preflight.status).toBe(0);
+      const preflightPayload = JSON.parse(preflight.stdout);
+      expect(preflightPayload).toMatchObject({
+        kind: "loop_preflight",
+        mode: "plan",
+        pagination: { count: 2, total: 2 },
+      });
+      expect(preflightPayload.machines).toHaveLength(2);
+      expect(JSON.stringify(preflightPayload)).not.toContain("operator@worker");
+
+      const matrix = runCli(["command-matrix", "--machine", "worker", "--cmd", "echo loop", "--no-tailscale"], env);
+      expect(matrix.stderr).toBe("");
+      expect(matrix.status).toBe(0);
+      expect(JSON.parse(matrix.stdout).commands[0]).toMatchObject({
+        machine_id: "worker",
+        command: {
+          command_ref: {
+            preview: "[redacted]",
+            redacted: true,
+          },
+          private_shell_command: "[redacted]",
+          cli: "machines ssh --machine 'worker' --cmd '<loop-command>'",
+          mcp: { args: { remote_command: "<loop-command>", private_metadata: false } },
+        },
+      });
+      expect(matrix.stdout).not.toContain("echo loop");
+      expect(matrix.stdout).not.toContain("--private-metadata");
+
+      const routing = runCli(["routing", "--machine", "worker", "--no-tailscale"], env);
+      expect(routing.stderr).toBe("");
+      expect(routing.status).toBe(0);
+      expect(JSON.parse(routing.stdout).routes[0]).toMatchObject({
+        machine_id: "worker",
+        target: "[redacted]",
+        command_target: "[redacted]",
+      });
+
+      const pageDir = mkdtempSync(join(tmpdir(), "machines-cli-agent-pagination-"));
+      const pageEnv = {
+        ...process.env,
+        HASNA_MACHINES_MANIFEST_PATH: join(pageDir, "machines.json"),
+        HASNA_MACHINES_DB_PATH: join(pageDir, "machines.db"),
+        HASNA_MACHINES_MACHINE_ID: "demo-node-00",
+        [MUTATION_APPROVAL_FLAG_ENV]: "1",
+      };
+      try {
+        expect(runCli(["manifest", "init"], pageEnv).status).toBe(0);
+        for (let index = 0; index < 12; index += 1) {
+          expect(runCli(["manifest", "add", "--from-stdin"], pageEnv, JSON.stringify({
+            id: `demo-node-${String(index).padStart(2, "0")}`,
+            platform: "linux",
+            workspacePath: `/workspace/${index}`,
+            updatedAt: `2026-06-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+          })).status).toBe(0);
+        }
+        const firstPage = JSON.parse(runCli(["machine-health", "--no-tailscale"], pageEnv).stdout);
+        expect(firstPage.pagination).toMatchObject({ total: 12, count: 10, hasMore: true, nextOffset: 10 });
+        const secondPage = JSON.parse(runCli(["machine-health", "--no-tailscale", "--offset", "10"], pageEnv).stdout);
+        expect(secondPage.pagination).toMatchObject({ total: 12, count: 2, hasMore: false });
+      } finally {
+        rmSync(pageDir, { recursive: true, force: true });
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

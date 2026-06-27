@@ -1,5 +1,5 @@
 import { countRuns, getLocalMachineId, latestHeartbeatByMachine, listHeartbeats } from "../db.js";
-import { readManifest } from "../manifests.js";
+import { machineDisplayName, normalizeFriendlyName, readManifest } from "../manifests.js";
 import { getManifestPath, getDbPath, getNotificationsPath } from "../paths.js";
 import { REDACTED_VALUE } from "../redaction.js";
 import { DEFAULT_HEARTBEAT_ONLINE_TTL_MS } from "../topology.js";
@@ -36,6 +36,21 @@ function heartbeatStatus(
   return now.getTime() - observedAt > ttlMs ? "offline" : "online";
 }
 
+function timestampMs(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function latestTimestamp(left: string | null | undefined, right: string | null | undefined): string | null {
+  const leftMs = timestampMs(left);
+  const rightMs = timestampMs(right);
+  if (leftMs === null && rightMs === null) return null;
+  if (leftMs === null) return right ?? null;
+  if (rightMs === null) return left ?? null;
+  return leftMs >= rightMs ? left ?? null : right ?? null;
+}
+
 export function getStatus(options: FleetStatusOptions = {}): FleetStatus {
   const privateMetadata = options.privateMetadata === true;
   const now = options.now ?? new Date();
@@ -43,10 +58,35 @@ export function getStatus(options: FleetStatusOptions = {}): FleetStatus {
   const manifest = readManifest();
   const heartbeats = listHeartbeats();
   const heartbeatByMachine = latestHeartbeatByMachine(heartbeats);
+  const manifestByMachine = new Map(manifest.machines.map((machine) => [machine.id, machine]));
   const machineIds = new Set([
     ...manifest.machines.map((machine) => machine.id),
     ...heartbeats.map((heartbeat) => heartbeat.machine_id),
   ]);
+  const rows = [...machineIds].map((machineId) => {
+    const declared = manifestByMachine.get(machineId);
+    const heartbeat = heartbeatByMachine.get(machineId);
+    const friendlyName = normalizeFriendlyName(declared?.friendlyName);
+    const displayName = declared ? machineDisplayName(declared) : machineId;
+    const updatedAt = latestTimestamp(declared?.updatedAt, heartbeat?.updated_at);
+    return {
+      machineId,
+      friendlyName,
+      displayName,
+      updatedAt,
+      declared,
+      heartbeat,
+    };
+  }).sort((left, right) => {
+    const leftMs = timestampMs(left.updatedAt);
+    const rightMs = timestampMs(right.updatedAt);
+    if (leftMs !== null || rightMs !== null) {
+      if (leftMs === null) return 1;
+      if (rightMs === null) return -1;
+      if (leftMs !== rightMs) return rightMs - leftMs;
+    }
+    return left.machineId.localeCompare(right.machineId);
+  });
 
   return {
     machineId: privateMetadata ? getLocalMachineId() : REDACTED_VALUE,
@@ -55,15 +95,17 @@ export function getStatus(options: FleetStatusOptions = {}): FleetStatus {
     notificationsPath: privateMetadata ? getNotificationsPath() : REDACTED_VALUE,
     manifestMachineCount: manifest.machines.length,
     heartbeatCount: heartbeats.length,
-    machines: [...machineIds].sort().map((machineId) => {
-      const declared = manifest.machines.find((machine) => machine.id === machineId);
-      const heartbeat = heartbeatByMachine.get(machineId);
+    machines: rows.map((row) => {
+      const { machineId, friendlyName, displayName, updatedAt, declared, heartbeat } = row;
       return {
         machineId: privateMetadata ? machineId : REDACTED_VALUE,
+        friendlyName,
+        displayName: privateMetadata ? displayName : friendlyName ?? REDACTED_VALUE,
         platform: declared?.platform,
         manifestDeclared: Boolean(declared),
         heartbeatStatus: heartbeatStatus(heartbeat, now, heartbeatTtlMs),
         lastHeartbeatAt: heartbeat?.updated_at,
+        updatedAt,
         daemonVersion: heartbeat?.daemon_version ?? null,
         agentMode: heartbeat?.agent_mode ?? null,
         storageSyncStatus: heartbeat?.storage_sync_status ?? null,
