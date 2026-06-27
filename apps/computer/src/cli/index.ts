@@ -13,13 +13,14 @@ import { getAppDriver, listAppDrivers } from "../apps/registry.js";
 import { parseGrid, parseTabsSpec } from "../apps/ghostty/applescript.js";
 import type { Provider } from "../types/index.js";
 import type { AppOpenSpec } from "../apps/types.js";
+import { VERSION } from "../version.js";
 
 const program = new Command();
 
 program
   .name("computer")
   .description("Open-source computer use for AI agents — control your Mac with AI")
-  .version("0.1.10");
+  .version(VERSION);
 
 // ── run ──────────────────────────────────────────────────────────────
 program

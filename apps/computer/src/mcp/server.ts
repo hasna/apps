@@ -15,6 +15,7 @@ import {
   storagePush,
   storageSync,
 } from "../db/storage-sync.js";
+import { VERSION } from "../version.js";
 
 function storageResult(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
@@ -24,7 +25,7 @@ import type { Provider, DriverAction, MouseButton } from "../types/index.js";
 export function buildServer(): McpServer {
   const server = new McpServer({
     name: "computer",
-    version: "0.1.10",
+    version: VERSION,
   });
 
 // ── computer_run_task ────────────────────────────────────────────────

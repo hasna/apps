@@ -8,6 +8,7 @@ import { executeAction } from "../drivers/mac/input.js";
 import { checkAction } from "../agent/safety.js";
 import { loadConfig } from "../lib/config.js";
 import { listSessions, getSession, getActionLogs, deleteSession, getStats } from "../db/index.js";
+import { VERSION } from "../version.js";
 import type { Provider, DriverAction } from "../types/index.js";
 import { handleMcpHttpRequest } from "../mcp/http.js";
 
@@ -111,7 +112,7 @@ const server = Bun.serve({
       // GET /health
       if (method === "GET" && (path === "/health" || path === "/")) {
         return Response.json(
-          { status: "ok", name: "computer", version: "0.1.10", port: PORT },
+          { status: "ok", name: "computer", version: VERSION, port: PORT },
           { headers: corsHeaders }
         );
       }
