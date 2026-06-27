@@ -19,7 +19,7 @@ import { gatherFromSessions } from "../lib/gatherers/sessions.js";
 import type { TrainingExample } from "../lib/gatherers/types.js";
 import { getPackageVersion } from "../lib/package-metadata.js";
 import { McpGatherSchema, McpFinetuneStartSchema, McpFinetuneStatusSchema } from "../lib/schemas.js";
-import { registerCloudTools, sendFeedback } from "@hasna/cloud";
+import { BRAINS_STORAGE_TOOLS, handleBrainsStorageTool } from "./cloud-tools.js";
 import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 
 // --- helpers ---
@@ -184,6 +184,11 @@ export function buildServer() {
               type: "string",
               description: "Contact email (optional)",
             },
+            category: {
+              type: "string",
+              enum: ["bug", "feature", "general"],
+              description: "Feedback category",
+            },
           },
           required: ["message"],
         },
@@ -231,6 +236,7 @@ export function buildServer() {
           properties: {},
         },
       },
+      ...BRAINS_STORAGE_TOOLS,
     ],
   }));
 
@@ -238,6 +244,9 @@ export function buildServer() {
     const { name, arguments: args } = request.params;
 
     try {
+      const storageResult = await handleBrainsStorageTool(name, args);
+      if (storageResult) return storageResult;
+
       switch (name) {
       case "list_models": {
         const db = getDb();
@@ -502,15 +511,22 @@ export function buildServer() {
       }
 
       case "send_feedback": {
-        const { message, email } = args as { message: string; email?: string };
+        const { message, email, category } = args as {
+          message: string;
+          email?: string;
+          category?: string;
+        };
         const rawDb = getRawDb();
-        const result = await sendFeedback(
-          { service: "brains", message, email, version: MCP_SERVER_INFO.version },
-          rawDb
+        rawDb.run(
+          "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
+          message,
+          email ?? null,
+          category ?? "general",
+          MCP_SERVER_INFO.version
         );
         rawDb.close();
         return {
-          content: [{ type: "text", text: result.sent ? "Feedback sent. Thank you!" : "Feedback saved locally. Thank you!" }],
+          content: [{ type: "text", text: "Feedback saved. Thank you!" }],
         };
       }
 
@@ -550,12 +566,6 @@ export function buildServer() {
       };
     }
   });
-
-  try {
-    registerCloudTools(server as any, "brains");
-  } catch {
-    // Cloud tools not compatible with low-level Server — silently skip
-  }
 
   return server;
 }

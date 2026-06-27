@@ -4,15 +4,13 @@ import { registerEventsCommands } from "@hasna/events/commander";
 
 import { Command } from "commander";
 import { eq } from "drizzle-orm";
-import { readFileSync } from "fs";
-import { join } from "path";
 import { getDb, getRawDb, fineTunedModels, trainingJobs } from "../db/index.js";
 import { printTable, printError, printSuccess, printInfo, printJson } from "./ui.js";
 import { registerModelsCommands } from "./commands/models.js";
 import { registerFinetuneCommands } from "./commands/finetune.js";
 import { registerDataCommands } from "./commands/data.js";
 import { registerCollectionsCommands } from "./commands/collections.js";
-import { registerCloudCommands } from "./commands/cloud.js";
+import { registerStorageCommands } from "./commands/cloud.js";
 import { getPackageVersion } from "../lib/package-metadata.js";
 import { parseRemoveType } from "./remove.js";
 
@@ -171,16 +169,16 @@ feedbackCmd
   .description("Send feedback about brains")
   .option("--email <email>", "Contact email")
   .action(async (message: string, opts: { email?: string }) => {
-    const { sendFeedback } = await import("@hasna/cloud");
     const rawDb = getRawDb();
-    const pkg = JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf8"));
-    const result = await sendFeedback({ service: "brains", message, email: opts.email, version: pkg.version }, rawDb);
+    rawDb.run(
+      "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
+      message,
+      opts.email ?? null,
+      "general",
+      getPackageVersion()
+    );
     rawDb.close();
-    if (result.sent) {
-      printSuccess("Feedback sent. Thank you!");
-    } else {
-      printSuccess("Feedback saved locally. Thank you!");
-    }
+    printSuccess("Feedback saved locally. Thank you!");
   });
 
 feedbackCmd
@@ -188,9 +186,17 @@ feedbackCmd
   .description("List locally saved feedback")
   .option("--json", "Output as JSON")
   .action(async (opts: { json?: boolean }) => {
-    const { listFeedback } = await import("@hasna/cloud");
     const rawDb = getRawDb();
-    const entries = listFeedback(rawDb);
+    const entries = rawDb.all(
+      "SELECT id, message, email, category, version, created_at FROM feedback ORDER BY created_at DESC"
+    ) as Array<{
+      id?: string;
+      message?: string;
+      email?: string;
+      category?: string;
+      version?: string;
+      created_at?: string;
+    }>;
     rawDb.close();
     if (opts.json) { console.log(JSON.stringify(entries, null, 2)); return; }
     if (entries.length === 0) { printInfo("No feedback saved yet."); return; }
@@ -206,9 +212,9 @@ feedbackCmd
     );
   });
 
-// ── cloud ─────────────────────────────────────────────────────────────────────
+// ── storage ───────────────────────────────────────────────────────────────────
 
-registerCloudCommands(program);
+registerStorageCommands(program);
 registerEventsCommands(program, { source: "brains" });
 
 program.parse();

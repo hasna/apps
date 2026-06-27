@@ -1,9 +1,8 @@
 /**
- * PostgreSQL migration runner — applies PG_MIGRATIONS to an RDS instance.
- *
- * Tracks applied migrations in a `_pg_migrations` table.
+ * PostgreSQL migration runner. Applies PG_MIGRATIONS to remote storage and
+ * tracks applied migrations in a `_pg_migrations` table.
  */
-import { PgAdapterAsync } from "@hasna/cloud";
+import { PgAdapterAsync } from "./remote-storage.js";
 import { PG_MIGRATIONS } from "./pg-migrations.js";
 
 export interface PgMigrationResult {
@@ -13,12 +12,6 @@ export interface PgMigrationResult {
   totalMigrations: number;
 }
 
-/**
- * Apply all pending PostgreSQL migrations to the given database.
- *
- * @param connectionString - PostgreSQL connection string
- * @returns Summary of which migrations were applied / skipped / errored.
- */
 export async function applyPgMigrations(
   connectionString: string
 ): Promise<PgMigrationResult> {
@@ -42,27 +35,25 @@ export async function applyPgMigrations(
 
     const applied = await pg.all(
       "SELECT version FROM _pg_migrations ORDER BY version"
-    );
-    const appliedSet = new Set(
-      applied.map((r: { version: number }) => r.version)
-    );
+    ) as Array<{ version: number }>;
+    const appliedSet = new Set(applied.map((row) => row.version));
 
-    for (let i = 0; i < PG_MIGRATIONS.length; i++) {
-      if (appliedSet.has(i)) {
-        result.alreadyApplied.push(i);
+    for (let index = 0; index < PG_MIGRATIONS.length; index++) {
+      if (appliedSet.has(index)) {
+        result.alreadyApplied.push(index);
         continue;
       }
 
       try {
-        await pg.exec(PG_MIGRATIONS[i]!);
+        await pg.exec(PG_MIGRATIONS[index]!);
         await pg.run(
-          "INSERT INTO _pg_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING",
-          i
+          "INSERT INTO _pg_migrations (version) VALUES (?) ON CONFLICT DO NOTHING",
+          index
         );
-        result.applied.push(i);
-      } catch (err: unknown) {
+        result.applied.push(index);
+      } catch (error) {
         result.errors.push(
-          `Migration ${i}: ${err instanceof Error ? err.message : String(err)}`
+          `Migration ${index}: ${error instanceof Error ? error.message : String(error)}`
         );
         break;
       }
