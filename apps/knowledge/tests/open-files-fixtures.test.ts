@@ -1,14 +1,30 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { buildKnowledgeSyncFixturePack } from '../../open-files/src/lib/knowledge-sync-fixtures';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { getKnowledgeDbStats, openKnowledgeDb } from '../src/knowledge-db';
 import { ingestOpenFilesManifest } from '../src/manifest-ingest';
 import { consumeOpenFilesOutbox } from '../src/outbox-consume';
 import { resolveOpenFilesSource } from '../src/source-resolver';
 import { retrieveKnowledgeContext } from '../src/retrieval';
 import { createKnowledgeService } from '../src/service';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const openFilesFixtureModulePath = resolve(__dirname, '../../open-files/src/lib/knowledge-sync-fixtures.ts');
+let buildKnowledgeSyncFixturePack: (() => any) | null = null;
+
+if (existsSync(openFilesFixtureModulePath)) {
+  const fixtureModule = await import(pathToFileURL(openFilesFixtureModulePath).href) as {
+    buildKnowledgeSyncFixturePack?: unknown;
+  };
+  if (typeof fixtureModule.buildKnowledgeSyncFixturePack !== 'function') {
+    throw new Error('open-files fixture module does not export buildKnowledgeSyncFixturePack');
+  }
+  buildKnowledgeSyncFixturePack = fixtureModule.buildKnowledgeSyncFixturePack as () => any;
+}
+
+const fixtureTest = buildKnowledgeSyncFixturePack ? test : test.skip;
 
 const KNOWLEDGE_TEXT_TABLES = [
   'sources',
@@ -75,13 +91,13 @@ function countRows(dbPath: string, table: string): number {
 }
 
 describe('open-files knowledge sync fixtures', () => {
-  test('consume ACL, deletion, stale revision, extraction failure, duplicate hash, and rename fixtures safely', async () => {
+  fixtureTest('consume ACL, deletion, stale revision, extraction failure, duplicate hash, and rename fixtures safely', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-open-files-fixtures-'));
     const dbPath = join(dir, 'knowledge.db');
     const baselinePath = join(dir, 'baseline-manifest.jsonl');
     const currentPath = join(dir, 'current-manifest.jsonl');
     const outboxPath = join(dir, 'outbox.jsonl');
-    const pack = buildKnowledgeSyncFixturePack();
+    const pack = buildKnowledgeSyncFixturePack!();
 
     writeFileSync(baselinePath, pack.baseline_manifest_jsonl);
     writeFileSync(currentPath, pack.current_manifest_jsonl);
@@ -177,7 +193,7 @@ describe('open-files knowledge sync fixtures', () => {
     expect(JSON.stringify(freshContext)).not.toContain('Deleted source fixture text');
   });
 
-  test('syncs open-files source refs and invalidations without copying raw source bytes', async () => {
+  fixtureTest('syncs open-files source refs and invalidations without copying raw source bytes', async () => {
     const sourceDir = mkdtempSync(join(tmpdir(), 'ok-open-files-sync-source-'));
     const peerDir = mkdtempSync(join(tmpdir(), 'ok-open-files-sync-peer-'));
     const sourceService = createKnowledgeService({ scope: 'project', cwd: sourceDir });
@@ -187,7 +203,7 @@ describe('open-files knowledge sync fixtures', () => {
 
     const sourcePaths = sourceService.paths();
     const peerPaths = peerService.paths();
-    const pack = buildKnowledgeSyncFixturePack();
+    const pack = buildKnowledgeSyncFixturePack!();
     const baselinePath = join(sourceDir, 'baseline-manifest.jsonl');
     const currentPath = join(sourceDir, 'current-manifest.jsonl');
     const outboxPath = join(sourceDir, 'outbox.jsonl');
