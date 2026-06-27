@@ -245,11 +245,13 @@ function buildSandboxPlan(
   execution: WorkflowExecutionConfig,
   runOptions: RunOptions & { tags?: string[]; priority?: string; scenarioIds?: string[] },
 ): WorkflowSandboxPlan {
-  const remoteDir = execution.sandboxRemoteDir ?? defaultWorkflowSandboxRemoteDir(workflow);
+  const remoteDir = normalizeWorkflowRemoteDir(
+    execution.sandboxRemoteDir ?? defaultWorkflowSandboxRemoteDir(workflow),
+  );
   const stateRemoteDir = `${remoteDir.replace(/\/+$/, "")}/.testers-state`;
-  const appRemoteDir = execution.appSourceDir
-    ? execution.appRemoteDir ?? `${remoteDir.replace(/\/+$/, "")}/app`
-    : execution.appRemoteDir;
+  const appRemoteDir = execution.appSourceDir || execution.appRemoteDir
+    ? resolveWorkflowAppRemoteDir(remoteDir, execution.appRemoteDir)
+    : undefined;
   return {
     provider: execution.provider,
     image: execution.sandboxImage,
@@ -284,6 +286,28 @@ function buildSandboxPlan(
 
 function defaultWorkflowSandboxRemoteDir(workflow: TestingWorkflow): string {
   return `/tmp/testers-workflow-${workflow.id.slice(0, 8)}-${randomBytes(4).toString("hex")}`;
+}
+
+function normalizeWorkflowRemoteDir(value: string): string {
+  const trimmed = value.trim().replace(/\\/g, "/");
+  if (!trimmed.startsWith("/")) {
+    throw new Error("Sandbox workflow remote directory must be an absolute POSIX path");
+  }
+  const normalized = pathPosix.normalize(trimmed);
+  return normalized.replace(/\/+$/, "") || "/";
+}
+
+function resolveWorkflowAppRemoteDir(remoteDir: string, value: string | undefined): string {
+  if (!value?.trim()) return pathPosix.join(remoteDir, "app");
+
+  const trimmed = value.trim().replace(/\\/g, "/");
+  if (pathPosix.isAbsolute(trimmed)) return pathPosix.normalize(trimmed);
+
+  const relative = pathPosix.normalize(trimmed.replace(/^\/+/, ""));
+  if (!relative || relative === "." || relative.startsWith("..")) {
+    throw new Error("Sandbox app remote directory must be a child directory, not the workflow root or parent");
+  }
+  return pathPosix.join(remoteDir, relative);
 }
 
 function buildSandboxCommand(input: {

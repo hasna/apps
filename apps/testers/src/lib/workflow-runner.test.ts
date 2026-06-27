@@ -153,9 +153,8 @@ describe("workflow runner", () => {
         appRemoteDir: "../../outside",
       },
     });
-    const plan = buildWorkflowRunPlan(workflow, { url: "https://preview.example" });
-
-    expect(() => createWorkflowDatabaseBundle(workflow, plan)).toThrow("must be a child directory");
+    expect(() => buildWorkflowRunPlan(workflow, { url: "https://preview.example" }))
+      .toThrow("must be a child directory");
 
     const absoluteEscape = createTestingWorkflow({
       name: "absolute escaping app dir",
@@ -171,6 +170,50 @@ describe("workflow runner", () => {
     const absolutePlan = buildWorkflowRunPlan(absoluteEscape, { url: "https://preview.example" });
 
     expect(() => createWorkflowDatabaseBundle(absoluteEscape, absolutePlan)).toThrow("inside the workflow remote directory");
+  });
+
+  test("rejects relative workflow sandbox remote directories", () => {
+    const workflow = createTestingWorkflow({
+      name: "relative workflow remote",
+      scenarioFilter: { scenarioIds: ["S1"] },
+      execution: {
+        target: "sandbox",
+        provider: "e2b",
+        sandboxRemoteDir: "workspace/testers",
+      },
+    });
+
+    expect(() => buildWorkflowRunPlan(workflow, { url: "https://preview.example" }))
+      .toThrow("absolute POSIX path");
+  });
+
+  test("resolves relative app remote directories under the workflow remote directory", () => {
+    const sourceDir = mkdtempSync(join(tmpdir(), "testers-app-source-"));
+    cleanupPaths.push(sourceDir);
+    writeFileSync(join(sourceDir, "package.json"), "{}");
+    mkdirSync(join(sourceDir, "src"), { recursive: true });
+    writeFileSync(join(sourceDir, "src", "index.ts"), "export const ok = true;\n");
+
+    const workflow = createTestingWorkflow({
+      name: "relative app remote",
+      scenarioFilter: { scenarioIds: ["S1"] },
+      execution: {
+        target: "sandbox",
+        provider: "e2b",
+        sandboxRemoteDir: "/workspace/testers",
+        appSourceDir: sourceDir,
+        appRemoteDir: "nested/app",
+        appStartCommand: "bun run dev",
+      },
+    });
+    const plan = buildWorkflowRunPlan(workflow, { url: "https://preview.example" });
+
+    expect(plan.sandbox?.appRemoteDir).toBe("/workspace/testers/nested/app");
+    expect(plan.sandbox?.command).toContain("cd '/workspace/testers/nested/app'");
+
+    const bundle = createWorkflowDatabaseBundle(workflow, plan);
+    cleanupPaths.push(bundle.localDir);
+    expect(existsSync(join(bundle.localDir, "nested", "app", "src", "index.ts"))).toBe(true);
   });
 
   test("runs sandbox workflows through the sandboxes SDK with a portable DB bundle", async () => {
