@@ -333,7 +333,10 @@ inventories loops whose command still references `~/.hasna/loops/scripts`; use
 it as a migration gate before deleting local scripts. `hygiene route-tasks`
 upserts deduped Todos tasks for hygiene findings with stable fingerprints and
 `no_tmux_dispatch=true` metadata; use `--dry-run --json` before enabling it as a
-production loop.
+production loop. Route commands store a small cursor in
+`<LOOPS_DATA_DIR>/route-cursors.json` so bounded `--max-actions` runs advance
+through all findings over repeated scheduled runs instead of reprocessing only
+the first batch.
 
 Archive loops when retiring old automation but preserving history:
 

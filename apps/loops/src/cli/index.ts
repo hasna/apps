@@ -301,6 +301,71 @@ function stableHash(parts: unknown[]): string {
   return createHash("sha256").update(parts.map((part) => JSON.stringify(part)).join("\n")).digest("hex").slice(0, 16);
 }
 
+interface RouteCursor {
+  lastFingerprint?: string;
+  updatedAt?: string;
+}
+
+interface RouteSelection<T> {
+  selected: T[];
+  cursor: {
+    key: string;
+    total: number;
+    maxActions: number;
+    previousFingerprint?: string;
+    startIndex: number;
+    lastFingerprint?: string;
+  };
+}
+
+function routeCursorsPath(): string {
+  return join(dataDir(), "route-cursors.json");
+}
+
+function readRouteCursors(): Record<string, RouteCursor> {
+  const path = routeCursorsPath();
+  if (!existsSync(path)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeRouteCursor(key: string, lastFingerprint: string | undefined): void {
+  if (!lastFingerprint) return;
+  const cursors = readRouteCursors();
+  cursors[key] = { lastFingerprint, updatedAt: new Date().toISOString() };
+  writeFileSync(routeCursorsPath(), JSON.stringify(cursors, null, 2), { mode: 0o600 });
+}
+
+function selectRouteItems<T>(items: T[], maxActions: number, cursorKey: string, fingerprintOf: (item: T) => string): RouteSelection<T> {
+  const total = items.length;
+  const boundedMax = Math.max(0, Math.floor(Number.isFinite(maxActions) ? maxActions : 0));
+  if (total === 0 || boundedMax === 0) {
+    return { selected: [], cursor: { key: cursorKey, total, maxActions: boundedMax, startIndex: 0 } };
+  }
+  const cursors = readRouteCursors();
+  const previousFingerprint = cursors[cursorKey]?.lastFingerprint;
+  const previousIndex = previousFingerprint ? items.findIndex((item) => fingerprintOf(item) === previousFingerprint) : -1;
+  const startIndex = previousIndex >= 0 ? (previousIndex + 1) % total : 0;
+  const selected: T[] = [];
+  const count = Math.min(boundedMax, total);
+  for (let index = 0; index < count; index += 1) selected.push(items[(startIndex + index) % total]);
+  return {
+    selected,
+    cursor: {
+      key: cursorKey,
+      total,
+      maxActions: boundedMax,
+      previousFingerprint,
+      startIndex,
+      lastFingerprint: selected.length ? fingerprintOf(selected[selected.length - 1]) : undefined,
+    },
+  };
+}
+
 function eventData(event: EventEnvelope): Record<string, unknown> {
   const data = event.data;
   if (data && typeof data === "object" && !Array.isArray(data)) return data;
@@ -383,6 +448,30 @@ function hasTruthyField(records: Record<string, unknown>[], keys: string[]): boo
   return records.some((record) => keys.some((key) => booleanLike(record[key])));
 }
 
+function automationRecords(data: Record<string, unknown>, metadata: Record<string, unknown>): Record<string, unknown>[] {
+  const records: Record<string, unknown>[] = [];
+  const dataAutomation = nestedObject(data, "automation");
+  if (dataAutomation) records.push(dataAutomation);
+  const dataTask = nestedObject(data, "task");
+  const dataTaskAutomation = dataTask ? nestedObject(dataTask, "automation") : undefined;
+  if (dataTaskAutomation) records.push(dataTaskAutomation);
+  const dataPayload = nestedObject(data, "payload");
+  const payloadAutomation = dataPayload ? nestedObject(dataPayload, "automation") : undefined;
+  if (payloadAutomation) records.push(payloadAutomation);
+  const payloadTask = dataPayload ? nestedObject(dataPayload, "task") : undefined;
+  const payloadTaskAutomation = payloadTask ? nestedObject(payloadTask, "automation") : undefined;
+  if (payloadTaskAutomation) records.push(payloadTaskAutomation);
+  const dataMetadata = nestedObject(data, "metadata");
+  const dataMetadataAutomation = dataMetadata ? nestedObject(dataMetadata, "automation") : undefined;
+  if (dataMetadataAutomation) records.push(dataMetadataAutomation);
+  const metadataAutomation = nestedObject(metadata, "automation");
+  if (metadataAutomation) records.push(metadataAutomation);
+  const metadataTask = nestedObject(metadata, "task");
+  const metadataTaskAutomation = metadataTask ? nestedObject(metadataTask, "automation") : undefined;
+  if (metadataTaskAutomation) records.push(metadataTaskAutomation);
+  return records;
+}
+
 function tagsFromValue(value: unknown): string[] {
   if (Array.isArray(value)) return value.map((entry) => String(entry).trim()).filter(Boolean);
   if (typeof value === "string") return value.split(",").map((entry) => entry.trim()).filter(Boolean);
@@ -402,7 +491,8 @@ function taskRouteEligibility(data: Record<string, unknown>, metadata: Record<st
   const tags = taskEventTags(records);
   const hasRouteOptIn =
     tags.includes("auto:route") ||
-    hasTruthyField(records, ["route_enabled", "routeEnabled", "automation_allowed", "automationAllowed", "allowed"]);
+    hasTruthyField(records, ["route_enabled", "routeEnabled", "automation_allowed", "automationAllowed"]) ||
+    hasTruthyField(automationRecords(data, metadata), ["allowed"]);
   if (!hasRouteOptIn) return { eligible: false, reason: "missing explicit route opt-in", tags };
 
   const status = taskEventField(data, ["status", "task_status", "taskStatus"])?.toLowerCase();
@@ -1268,7 +1358,13 @@ health
     const store = new Store();
     try {
       const report = buildHealthReport(store, { limit: Number(opts.limit), includeInactive: Boolean(opts.includeInactive) });
-      const failures = report.expectations.filter((entry) => !entry.ok && entry.recommendedTask).slice(0, Number(opts.maxActions));
+      const failures = report.expectations.filter((entry) => !entry.ok && entry.recommendedTask);
+      const selection = selectRouteItems(
+        failures,
+        Number(opts.maxActions),
+        `health:${stableHash([opts.project, opts.taskList, opts.limit, Boolean(opts.includeInactive)])}`,
+        (expectation) => expectation.recommendedTask!.dedupeKey,
+      );
       const listId = opts.dryRun
         ? undefined
         : ensureTodosTaskList(
@@ -1277,7 +1373,7 @@ health
             "Loop Error Self Heal",
             "Deduped OpenLoops health expectation failures routed by loops health route-tasks.",
           );
-      const actions = failures.map((expectation) => {
+      const actions = selection.selected.map((expectation) => {
         const task = expectation.recommendedTask!;
         const metadata = {
           source: "openloops.health.route-tasks",
@@ -1319,7 +1415,14 @@ health
         }
         return { action: "upserted", fingerprint: task.dedupeKey, task: JSON.parse(result.stdout || "{}") };
       });
-      const routed = { ok: actions.every((action) => action.action !== "upsert-failed"), inspected: report.summary.loops, failures: failures.length, actions };
+      const routed = {
+        ok: actions.every((action) => action.action !== "upsert-failed"),
+        inspected: report.summary.loops,
+        failures: failures.length,
+        routing: selection.cursor,
+        actions,
+      };
+      if (!opts.dryRun && routed.ok) writeRouteCursor(selection.cursor.key, selection.cursor.lastFingerprint);
       if (isJson() || opts.json) console.log(JSON.stringify(routed, null, 2));
       else {
         console.log(`health_route_tasks inspected=${routed.inspected} failures=${routed.failures} actions=${actions.length}`);
@@ -1496,23 +1599,34 @@ hygiene
   .action((opts) => {
     const store = new Store();
     try {
-      const backupPath = opts.apply ? backupLoopsDatabase("name-hygiene") : undefined;
       const report = buildNameHygieneReport(store, {
-        apply: Boolean(opts.apply),
+        apply: false,
         includeStopped: Boolean(opts.includeStopped),
         includeInactive: Boolean(opts.includeInactive),
         limit: Number(opts.limit),
       });
-      const output = backupPath ? { ...report, backupPath } : report;
+      let outputReport = report;
+      const backupPath = opts.apply && report.changed > 0 ? backupLoopsDatabase("name-hygiene") : undefined;
+      if (opts.apply && report.changed > 0) {
+        outputReport = buildNameHygieneReport(store, {
+          apply: true,
+          includeStopped: Boolean(opts.includeStopped),
+          includeInactive: Boolean(opts.includeInactive),
+          limit: Number(opts.limit),
+        });
+      } else if (opts.apply) {
+        outputReport = { ...report, applied: true };
+      }
+      const output = backupPath ? { ...outputReport, backupPath } : outputReport;
       if (isJson() || opts.json) console.log(JSON.stringify(output, null, 2));
       else {
-        console.log(`hygiene_names checked=${report.checked} changed=${report.changed} applied=${report.applied}`);
+        console.log(`hygiene_names checked=${outputReport.checked} changed=${outputReport.changed} applied=${outputReport.applied}`);
         if (backupPath) console.log(`backup=${backupPath}`);
-        for (const change of report.changes.filter((entry) => entry.changed)) {
-          console.log(`${report.applied ? "renamed" : "would-rename"} ${change.id} ${change.oldName} -> ${change.newName}`);
+        for (const change of outputReport.changes.filter((entry) => entry.changed)) {
+          console.log(`${outputReport.applied ? "renamed" : "would-rename"} ${change.id} ${change.oldName} -> ${change.newName}`);
         }
       }
-      if (!report.ok && !report.applied) process.exitCode = 1;
+      if (!outputReport.ok && !outputReport.applied) process.exitCode = 1;
     } finally {
       store.close();
     }
@@ -1592,7 +1706,12 @@ hygiene
         limit: Number(opts.limit),
         scriptsDir: opts.scriptsDir,
       });
-      const tasks = route.tasks.slice(0, Number(opts.maxActions));
+      const selection = selectRouteItems(
+        route.tasks,
+        Number(opts.maxActions),
+        `hygiene:${stableHash([opts.project, opts.taskList, checks, opts.limit, Boolean(opts.includeInactive), opts.scriptsDir ?? ""])}`,
+        (task) => task.fingerprint,
+      );
       const listId = opts.dryRun
         ? undefined
         : ensureTodosTaskList(
@@ -1601,7 +1720,7 @@ hygiene
             "OpenLoops Hygiene",
             "Deduped OpenLoops hygiene findings routed by loops hygiene route-tasks.",
           );
-      const actions = tasks.map((task) => {
+      const actions = selection.selected.map((task) => {
         if (opts.dryRun) {
           return { action: "would-upsert", check: task.check, title: task.title, fingerprint: task.fingerprint, priority: task.priority, metadata: task.metadata };
         }
@@ -1638,8 +1757,10 @@ hygiene
         checks,
         checked: route.checked,
         findings: route.findings,
+        routing: selection.cursor,
         actions,
       };
+      if (!opts.dryRun && routed.ok) writeRouteCursor(selection.cursor.key, selection.cursor.lastFingerprint);
       if (isJson() || opts.json) console.log(JSON.stringify(routed, null, 2));
       else {
         console.log(`hygiene_route_tasks checks=${checks.join(",")} findings=${routed.findings} actions=${actions.length}`);

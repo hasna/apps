@@ -187,6 +187,7 @@ function recommendedTask(loop: Loop, run: LoopRun, failure: RunFailureSignal, ro
     `Status: ${run.status}`,
     `Classification: ${failure.classification}`,
     `Fingerprint: ${failure.fingerprint}`,
+    `No-tmux routing: Do not dispatch or paste prompts into tmux panes; use task-triggered headless worker/verifier workflows only.`,
     route.cwd ? `Route cwd: ${route.cwd}` : undefined,
     route.provider ? `Provider: ${route.provider}` : undefined,
     failure.evidence.error ? `Error:\n${failure.evidence.error}` : undefined,

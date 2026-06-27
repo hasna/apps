@@ -216,6 +216,28 @@ describe("loops CLI", () => {
     expect(JSON.parse(newName.stdout).name).toBe("machine-ops-loop-health-slo");
   });
 
+  test("hygiene names apply skips database backup when there are no renames", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-hygiene-names-apply-noop-"));
+    const create = runCli(dataDir, [
+      "create",
+      "command",
+      "machine-ops-loop-health-slo",
+      "--at",
+      futureAt(),
+      "--cmd",
+      "true",
+    ]);
+    expect(create.status).toBe(0);
+
+    const apply = runCli(dataDir, ["--json", "hygiene", "names", "--apply"]);
+
+    expect(apply.status).toBe(0);
+    const value = JSON.parse(apply.stdout);
+    expect(value.applied).toBe(true);
+    expect(value.changed).toBe(0);
+    expect(value.backupPath).toBeUndefined();
+  });
+
   test("hygiene duplicates groups overlapping loops by normalized name, cwd, and schedule", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-hygiene-duplicates-"));
     expect(runCli(dataDir, ["create", "command", "machine-foo", "--every", "1h", "--cmd", "true", "--cwd", "/tmp/repo"]).status).toBe(0);
@@ -277,6 +299,42 @@ describe("loops CLI", () => {
     expect(value.actions.map((action: { check: string }) => action.check).sort()).toEqual(["duplicates", "scripts"]);
     expect(value.actions.every((action: { action: string }) => action.action === "would-upsert")).toBe(true);
     expect(value.actions.every((action: { metadata: { no_tmux_dispatch?: boolean } }) => action.metadata.no_tmux_dispatch === true)).toBe(true);
+
+    const firstBatch = runCli(dataDir, [
+      "--json",
+      "hygiene",
+      "route-tasks",
+      "--checks",
+      "duplicates,scripts",
+      "--scripts-dir",
+      scriptsDir,
+      "--dry-run",
+      "--max-actions",
+      "1",
+    ]);
+    expect(firstBatch.status).toBe(0);
+    const first = JSON.parse(firstBatch.stdout);
+    writeFileSync(
+      join(dataDir, "route-cursors.json"),
+      JSON.stringify({ [first.routing.key]: { lastFingerprint: first.actions[0].fingerprint } }),
+    );
+
+    const nextBatch = runCli(dataDir, [
+      "--json",
+      "hygiene",
+      "route-tasks",
+      "--checks",
+      "duplicates,scripts",
+      "--scripts-dir",
+      scriptsDir,
+      "--dry-run",
+      "--max-actions",
+      "1",
+    ]);
+    expect(nextBatch.status).toBe(0);
+    const next = JSON.parse(nextBatch.stdout);
+    expect(next.actions[0].fingerprint).not.toBe(first.actions[0].fingerprint);
+    expect(next.routing.previousFingerprint).toBe(first.actions[0].fingerprint);
   });
 
   test("create command stores an OpenMachines assignment", () => {
@@ -397,6 +455,7 @@ describe("loops CLI", () => {
       priority: "high",
       futureNativeUpsert: { command: "todos upsert" },
     });
+    expect(value.expectations[0].recommendedTask.description).toContain("Do not dispatch or paste prompts into tmux panes");
     expect(value.expectations[0].recommendedTask.compatibilityFallback.search).toEqual(
       expect.arrayContaining(["todos", "search"]),
     );
@@ -626,6 +685,8 @@ describe("loops CLI", () => {
       permissionMode: "bypass",
       sandbox: "danger-full-access",
     });
+    expect(workflow.steps[0].target.prompt).toContain("Do not dispatch or paste prompts into tmux panes");
+    expect(workflow.steps[1].target.prompt).toContain("Do not dispatch or paste prompts into tmux panes");
     expect(workflow.steps[1].dependsOn).toEqual(["worker"]);
   });
 
@@ -954,6 +1015,29 @@ describe("loops CLI", () => {
     } finally {
       store.close();
     }
+  });
+
+  test("todos task event handler ignores bare allowed=true without documented route opt-in", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-bare-allowed-"));
+    const event = {
+      id: "evt-task-created-bare-allowed",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-created-bare-allowed",
+        title: "Bare allowed should not route",
+        working_dir: "/tmp/open-todos",
+        allowed: true,
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const result = runCli(dataDir, ["--json", "events", "handle", "todos-task"], JSON.stringify(event));
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.skipped).toBe(true);
+    expect(value.reason).toContain("missing explicit route opt-in");
   });
 
   test.each([

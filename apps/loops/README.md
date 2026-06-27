@@ -324,7 +324,10 @@ renames only with `--apply`. Apply mode writes a SQLite backup under
 groups loops with the same normalized name, cwd, and schedule. `hygiene scripts`
 inventories loops whose command still references `~/.hasna/loops/scripts`.
 `hygiene route-tasks` upserts deduped Todos tasks for hygiene findings with
-stable fingerprints and `no_tmux_dispatch=true` metadata.
+stable fingerprints and `no_tmux_dispatch=true` metadata. Route commands use a
+package-managed cursor under `<LOOPS_DATA_DIR>/route-cursors.json` so bounded
+`--max-actions` runs advance through all findings over repeated scheduled runs
+instead of reprocessing only the first batch.
 
 Archive loops when retiring old automation but preserving history:
 
