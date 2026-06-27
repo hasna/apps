@@ -44,4 +44,23 @@ describe("getTestersDir", () => {
     expect(readFileSync(join(newDir, "config.json"), "utf8")).toContain("screenshots");
     expect(existsSync(join(legacyDir, "config.json"))).toBe(true);
   });
+
+  it("copies legacy files when ~/.hasna/testers already exists", () => {
+    tempHome = mkdtempSync(join(tmpdir(), "testers-home-existing-"));
+    const legacyDir = join(tempHome, ".testers");
+    const newDir = join(tempHome, ".hasna", "testers");
+    mkdirSync(legacyDir, { recursive: true });
+    mkdirSync(newDir, { recursive: true });
+    writeFileSync(join(legacyDir, "config.json"), "{\"screenshots\":true}");
+    writeFileSync(join(newDir, "active.json"), "{\"active\":true}");
+
+    process.env.HOME = tempHome;
+    delete process.env.USERPROFILE;
+    delete process.env.HASNA_TESTERS_DIR;
+    delete process.env.TESTERS_DIR;
+
+    expect(getTestersDir()).toBe(newDir);
+    expect(readFileSync(join(newDir, "config.json"), "utf8")).toContain("screenshots");
+    expect(readFileSync(join(newDir, "active.json"), "utf8")).toContain("active");
+  });
 });

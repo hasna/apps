@@ -34,7 +34,7 @@ export function migrateLegacyDirectory(sourceDir: string, targetDir: string): vo
 /**
  * Get the global testers data directory.
  * New default: ~/.hasna/testers/
- * Legacy migration: copy ~/.testers/ forward if it exists and new dir doesn't
+ * Legacy migration: copy missing files from ~/.testers/ forward if it exists
  * Env override: HASNA_TESTERS_DIR or TESTERS_DIR
  */
 export function getTestersDir(): string {
@@ -45,7 +45,7 @@ export function getTestersDir(): string {
   const newDir = join(home, ".hasna", "testers");
   const legacyDir = join(home, ".testers");
 
-  if (existsSync(legacyDir) && !existsSync(newDir)) {
+  if (existsSync(legacyDir)) {
     migrateLegacyDirectory(legacyDir, newDir);
   }
 

@@ -44,4 +44,22 @@ describe("resolveDbPath", () => {
     expect(readFileSync(join(newDir, "testers.db"), "utf8")).toBe("legacy-db");
     expect(existsSync(join(legacyDir, "testers.db"))).toBe(true);
   });
+
+  it("copies legacy database when ~/.hasna/testers already exists", () => {
+    tempHome = mkdtempSync(join(tmpdir(), "testers-db-existing-home-"));
+    const legacyDir = join(tempHome, ".testers");
+    const newDir = join(tempHome, ".hasna", "testers");
+    mkdirSync(legacyDir, { recursive: true });
+    mkdirSync(newDir, { recursive: true });
+    writeFileSync(join(legacyDir, "testers.db"), "legacy-db");
+
+    process.env.HOME = tempHome;
+    delete process.env.USERPROFILE;
+    delete process.env.HASNA_TESTERS_DB_PATH;
+    delete process.env.TESTERS_DB_PATH;
+
+    expect(resolveDbPath()).toBe(join(newDir, "testers.db"));
+    expect(readFileSync(join(newDir, "testers.db"), "utf8")).toBe("legacy-db");
+    expect(existsSync(join(legacyDir, "testers.db"))).toBe(true);
+  });
 });
