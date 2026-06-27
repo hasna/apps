@@ -9,6 +9,7 @@ import {
   getTaskWithRelations,
   listTasks,
   updateTask,
+  upsertTaskByFingerprint,
   deleteTask,
   startTask,
   completeTask,
@@ -67,6 +68,56 @@ function parsePriority(value: string | undefined): TaskPriority | undefined {
     process.exit(1);
   }
   return value as TaskPriority;
+}
+
+function parseJsonObject(value: string | undefined, flag: string): Record<string, unknown> | undefined {
+  if (!value) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch (error) {
+    console.error(chalk.red(`${flag} must be valid JSON: ${error instanceof Error ? error.message : String(error)}`));
+    process.exit(1);
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    console.error(chalk.red(`${flag} must be a JSON object`));
+    process.exit(1);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function parseJsonValue(value: string | undefined): unknown {
+  if (value === undefined) return undefined;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function parseTags(value: string | undefined): string[] | undefined {
+  return value ? value.split(",").map((tag) => tag.trim()).filter(Boolean) : undefined;
+}
+
+function buildExpectationMetadata(opts: Record<string, unknown>): Record<string, unknown> {
+  const metadata = parseJsonObject(opts["metadataJson"] as string | undefined, "--metadata-json") ?? {};
+  const expectationId = opts["expectationId"];
+  const expectationFingerprint = opts["expectationFingerprint"];
+  const evidencePaths = opts["evidencePaths"];
+  const originLoopId = opts["originLoopId"];
+  const originRunId = opts["originRunId"];
+  const expected = opts["expected"];
+  const observed = opts["observed"];
+  const acceptance = opts["acceptance"];
+  if (expectationId !== undefined) metadata["expectation_id"] = expectationId;
+  if (expectationFingerprint !== undefined) metadata["expectation_fingerprint"] = expectationFingerprint;
+  if (evidencePaths !== undefined) metadata["evidence_paths"] = String(evidencePaths).split(",").map((path) => path.trim()).filter(Boolean);
+  if (originLoopId !== undefined) metadata["origin_loop_id"] = originLoopId;
+  if (originRunId !== undefined) metadata["origin_run_id"] = originRunId;
+  if (expected !== undefined) metadata["expected"] = parseJsonValue(String(expected));
+  if (observed !== undefined) metadata["observed"] = parseJsonValue(String(observed));
+  if (acceptance !== undefined) metadata["acceptance"] = parseJsonValue(String(acceptance));
+  return metadata;
 }
 
 export function registerTaskCommands(program: Command) {
@@ -140,6 +191,80 @@ export function registerTaskCommands(program: Command) {
       } else {
         console.log(chalk.green("Task created:"));
         console.log(formatTaskLine(task));
+      }
+    });
+
+  const task = program
+    .command("task")
+    .description("Task subcommands for deterministic automation");
+
+  task
+    .command("upsert")
+    .description("Create or update a task by stable metadata fingerprint")
+    .requiredOption("--fingerprint <key>", "Stable dedupe fingerprint")
+    .requiredOption("--title <text>", "Task title")
+    .option("-d, --description <text>", "Task description")
+    .option("-p, --priority <level>", "Priority: low, medium, high, critical")
+    .option("-s, --status <status>", "Task status")
+    .option("--list <id>", "Task list ID")
+    .option("--task-list <id>", "Task list ID (alias for --list)")
+    .option("-t, --tags <tags>", "Comma-separated tags")
+    .option("--tag <tags>", "Comma-separated tags (alias for --tags)")
+    .option("--metadata-json <json>", "JSON object merged into task metadata")
+    .option("--working-dir <path>", "Working directory to store on create/update")
+    .option("--project <id>", "Assign to project by ID, slug, or path")
+    .option("--assign <agent>", "Assign to agent")
+    .option("--expectation-id <id>", "Expectation metadata ID")
+    .option("--expectation-fingerprint <key>", "Expectation metadata fingerprint")
+    .option("--evidence-paths <paths>", "Comma-separated evidence paths")
+    .option("--origin-loop-id <id>", "Origin loop ID")
+    .option("--origin-run-id <id>", "Origin run ID")
+    .option("--expected <json-or-text>", "Expected value metadata")
+    .option("--observed <json-or-text>", "Observed value metadata")
+    .option("--acceptance <json-or-text>", "Acceptance metadata")
+    .action((opts) => {
+      const globalOpts = program.opts();
+      opts.tags = opts.tags || opts.tag;
+      opts.list = opts.list || opts.taskList;
+      const explicitProject = opts.project || globalOpts.project;
+      const projectId = explicitProject
+        ? resolveProjectIdOrSlug(explicitProject)
+        : autoProject(globalOpts);
+      const taskListId = opts.list ? (() => {
+        const db = getDatabase();
+        const id = resolvePartialId(db, "task_lists", opts.list);
+        if (!id) {
+          console.error(chalk.red(`Could not resolve task list ID: ${opts.list}`));
+          process.exit(1);
+        }
+        return id;
+      })() : undefined;
+      let result;
+      try {
+        result = upsertTaskByFingerprint({
+          fingerprint: opts.fingerprint,
+          title: opts.title,
+          description: opts.description,
+          priority: parsePriority(opts.priority),
+          status: opts.status ? normalizeStatus(opts.status) as TaskStatus : undefined,
+          task_list_id: taskListId,
+          tags: parseTags(opts.tags),
+          metadata: buildExpectationMetadata(opts),
+          working_dir: opts.workingDir ? resolve(opts.workingDir) : process.cwd(),
+          project_id: projectId,
+          assigned_to: opts.assign,
+          agent_id: globalOpts.agent,
+          session_id: globalOpts.session,
+        });
+      } catch (e) {
+        handleError(e);
+      }
+
+      if (globalOpts.json) {
+        output(result, true);
+      } else {
+        console.log(chalk.green(result.created ? "Task created:" : "Task updated:"));
+        console.log(formatTaskLine(result.task));
       }
     });
 

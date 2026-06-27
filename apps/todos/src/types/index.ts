@@ -442,6 +442,16 @@ export interface CreateTaskInput {
   task_type?: string;
 }
 
+export interface UpsertTaskByFingerprintInput extends CreateTaskInput {
+  /** Stable top-level metadata fingerprint used for deterministic dedupe. */
+  fingerprint: string;
+}
+
+export interface UpsertTaskByFingerprintResult {
+  task: Task;
+  created: boolean;
+}
+
 export interface UpdateTaskInput {
   title?: string;
   description?: string;
@@ -449,6 +459,7 @@ export interface UpdateTaskInput {
   priority?: TaskPriority;
   project_id?: string | null;
   assigned_to?: string;
+  working_dir?: string | null;
   plan_id?: string | null;
   task_list_id?: string;
   cycle_id?: string | null;
@@ -492,6 +503,8 @@ export interface TaskFilter {
   cursor?: string;
   /** When true, include archived tasks. Default: false (archived tasks excluded) */
   include_archived?: boolean;
+  /** Exact top-level metadata filters, e.g. { fingerprint: "loop:key" }. */
+  metadata?: Record<string, unknown>;
 }
 
 // Task dependency

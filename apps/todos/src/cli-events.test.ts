@@ -87,4 +87,49 @@ describe("shared events CLI integration", () => {
     expect(event.data.title).toBe("Webhook-delivered task");
     expect(event.data.working_dir).toBe(process.cwd());
   });
+
+  test("task upsert emits task.created once and task.updated on later merges", async () => {
+    const outputPath = join(tempDir, "captured-upsert-events.jsonl");
+    const receiverPath = join(tempDir, "receiver-upsert.ts");
+    writeFileSync(
+      receiverPath,
+      `import { appendFileSync } from "node:fs"; appendFileSync(${JSON.stringify(outputPath)}, process.env.HASNA_EVENT_JSON + "\\n");\n`,
+    );
+
+    for (const type of ["task.created", "task.updated"]) {
+      const addWebhook = await runTodos([
+        "webhooks",
+        "add",
+        "bun",
+        "--id",
+        `capture-${type}`,
+        "--transport",
+        "command",
+        "--type",
+        type,
+        "--arg",
+        receiverPath,
+        "--timeout-ms",
+        "5000",
+        "--json",
+      ]);
+      expect(addWebhook.exitCode).toBe(0);
+      expect(addWebhook.stderr).toBe("");
+    }
+
+    const first = await runTodos(["--json", "task", "upsert", "--fingerprint", "loop:event:1", "--title", "Event upsert"]);
+    expect(first.exitCode).toBe(0);
+    const second = await runTodos(["--json", "task", "upsert", "--fingerprint", "loop:event:1", "--title", "Event upsert updated", "--observed", "changed"]);
+    expect(second.exitCode).toBe(0);
+
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (existsSync(outputPath) && readFileSync(outputPath, "utf-8").trim().split("\n").filter(Boolean).length >= 2) break;
+      await Bun.sleep(50);
+    }
+    expect(existsSync(outputPath)).toBe(true);
+    const events = readFileSync(outputPath, "utf-8").trim().split("\n").map((line) => JSON.parse(line));
+    const types = events.map((event) => event.type);
+    expect(types.filter((type) => type === "task.created")).toHaveLength(1);
+    expect(types.filter((type) => type === "task.updated")).toHaveLength(1);
+  });
 });

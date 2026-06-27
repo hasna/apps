@@ -7,7 +7,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Task } from "../../types/index.js";
-import { createTask, listTasks, getTask, updateTask, deleteTask } from "../../db/tasks.js";
+import { createTask, listTasks, getTask, updateTask, upsertTaskByFingerprint, deleteTask } from "../../db/tasks.js";
 import { TaskNotFoundError, VersionConflictError } from "../../types/index.js";
 import { compactJson, compactTask, truncateText } from "../token-utils.js";
 
@@ -96,6 +96,58 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
 
   // === LIST TASKS ===
 
+  if (shouldRegisterTool("upsert_task")) {
+    server.tool(
+      "upsert_task",
+      "Create or update a task by stable metadata fingerprint. Metadata is shallow-merged on updates.",
+      {
+        fingerprint: z.string().describe("Stable dedupe fingerprint stored as metadata.fingerprint"),
+        title: z.string().describe("Task title"),
+        description: z.string().optional().describe("Task description"),
+        status: z.enum(["pending", "in_progress", "completed", "failed", "cancelled"]).optional(),
+        priority: z.enum(["low", "medium", "high", "critical"]).optional(),
+        project_id: z.string().optional().describe("Project ID"),
+        task_list_id: z.string().optional().describe("Task list ID"),
+        assigned_to: z.string().optional().describe("Agent ID or name to assign to"),
+        tags: z.array(z.string()).optional().describe("Tags for the task"),
+        working_dir: z.string().optional().describe("Working directory associated with the task"),
+        metadata: z.record(z.unknown()).optional().describe("Metadata object to shallow-merge"),
+        expectation_id: z.string().optional(),
+        expectation_fingerprint: z.string().optional(),
+        evidence_paths: z.array(z.string()).optional(),
+        origin_loop_id: z.string().optional(),
+        origin_run_id: z.string().optional(),
+        expected: z.unknown().optional(),
+        observed: z.unknown().optional(),
+        acceptance: z.unknown().optional(),
+      },
+      async (params) => {
+        try {
+          const { assigned_to, project_id, task_list_id, metadata, expectation_id, expectation_fingerprint, evidence_paths, origin_loop_id, origin_run_id, expected, observed, acceptance, ...rest } = params;
+          const mergedMetadata: Record<string, unknown> = { ...(metadata ?? {}) };
+          if (expectation_id !== undefined) mergedMetadata["expectation_id"] = expectation_id;
+          if (expectation_fingerprint !== undefined) mergedMetadata["expectation_fingerprint"] = expectation_fingerprint;
+          if (evidence_paths !== undefined) mergedMetadata["evidence_paths"] = evidence_paths;
+          if (origin_loop_id !== undefined) mergedMetadata["origin_loop_id"] = origin_loop_id;
+          if (origin_run_id !== undefined) mergedMetadata["origin_run_id"] = origin_run_id;
+          if (expected !== undefined) mergedMetadata["expected"] = expected;
+          if (observed !== undefined) mergedMetadata["observed"] = observed;
+          if (acceptance !== undefined) mergedMetadata["acceptance"] = acceptance;
+
+          const resolved: Record<string, unknown> = { ...rest, metadata: mergedMetadata };
+          if (assigned_to) resolved.assigned_to = resolveAssignee(assigned_to);
+          if (project_id) resolved.project_id = resolveId(project_id, "projects");
+          if (task_list_id) resolved.task_list_id = resolveId(task_list_id, "task_lists");
+
+          const result = upsertTaskByFingerprint(resolved as Parameters<typeof upsertTaskByFingerprint>[0]);
+          return { content: [{ type: "text" as const, text: compactJson({ created: result.created, task: JSON.parse(mutationTaskResponse(result.task)) }) }] };
+        } catch (e) {
+          return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+        }
+      },
+    );
+  }
+
   if (shouldRegisterTool("list_tasks")) {
     server.tool(
       "list_tasks",
@@ -111,6 +163,7 @@ export function registerTaskCrudTools(server: McpServer, ctx: TaskCrudContext) {
         created_before: z.string().optional().describe("ISO date — tasks created before this date"),
         limit: z.number().optional().describe("Max results (default: 50, max 500)"),
         offset: z.number().optional().describe("Pagination offset"),
+        metadata: z.record(z.unknown()).optional().describe("Exact top-level metadata filters"),
       },
       async (params) => {
         try {

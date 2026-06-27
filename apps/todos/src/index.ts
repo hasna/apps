@@ -186,6 +186,8 @@ export {
   listTasks,
   countTasks,
   updateTask,
+  upsertTaskByFingerprint,
+  getTaskByFingerprint,
   deleteTask,
   startTask,
   completeTask,

@@ -8,6 +8,7 @@ import {
   getTask,
   listTasks,
   updateTask,
+  upsertTaskByFingerprint,
   deleteTask,
   startTask,
   completeTask,
@@ -209,6 +210,41 @@ export async function handleCreateTask(req: Request, ctx: RouteContext, json: (d
     return json(taskToSummary(task), 201);
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : "Failed to create task" }, 500);
+  }
+}
+
+export async function handleUpsertTask(req: Request, ctx: RouteContext, json: (data: unknown, status?: number) => Response, taskToSummary: (task: Task, fields?: string[]) => unknown): Promise<Response> {
+  try {
+    const body = await req.json() as Record<string, unknown>;
+    if (typeof body["fingerprint"] !== "string" || body["fingerprint"].trim() === "") {
+      return json({ error: "Missing 'fingerprint'" }, 400);
+    }
+    if (typeof body["title"] !== "string" || body["title"].trim() === "") {
+      return json({ error: "Missing 'title'" }, 400);
+    }
+    const metadata = body["metadata"] && typeof body["metadata"] === "object" && !Array.isArray(body["metadata"])
+      ? { ...(body["metadata"] as Record<string, unknown>) }
+      : {};
+    for (const key of ["expectation_id", "expectation_fingerprint", "evidence_paths", "origin_loop_id", "origin_run_id", "expected", "observed", "acceptance"]) {
+      if (body[key] !== undefined) metadata[key] = body[key];
+    }
+    const result = upsertTaskByFingerprint({
+      fingerprint: body["fingerprint"],
+      title: body["title"],
+      description: typeof body["description"] === "string" ? body["description"] : undefined,
+      status: body["status"] as Task["status"] | undefined,
+      priority: body["priority"] as Task["priority"] | undefined,
+      project_id: typeof body["project_id"] === "string" ? body["project_id"] : undefined,
+      task_list_id: typeof body["task_list_id"] === "string" ? body["task_list_id"] : undefined,
+      assigned_to: typeof body["assigned_to"] === "string" ? body["assigned_to"] : undefined,
+      working_dir: typeof body["working_dir"] === "string" ? body["working_dir"] : undefined,
+      tags: Array.isArray(body["tags"]) ? body["tags"].filter((tag): tag is string => typeof tag === "string") : undefined,
+      metadata,
+    });
+    ctx.broadcastEvent({ type: "task", task_id: result.task.id, action: result.created ? "created" : "updated", agent_id: result.task.agent_id, project_id: result.task.project_id });
+    return json({ created: result.created, task: taskToSummary(result.task) }, result.created ? 201 : 200);
+  } catch (e) {
+    return json({ error: e instanceof Error ? e.message : "Failed to upsert task" }, 500);
   }
 }
 

@@ -38,3 +38,28 @@ The manual includes install and update instructions, examples, JSON output
 contracts, error behavior, and the generated command catalog. JSON mode is
 intended for docs automation and smoke tests that keep help text and completion
 output aligned with the CLI.
+
+## Deterministic Task Upsert
+
+Deterministic loops can create or refresh the same task by stable fingerprint:
+
+```bash
+todos --json task upsert \
+  --fingerprint "loop:expectation:project:key" \
+  --title "Expectation failed" \
+  --description "Loop observed a mismatch" \
+  --priority high \
+  --tags loop,expectation \
+  --metadata-json '{"expectation_id":"exp-1"}' \
+  --evidence-paths "logs/loop.txt" \
+  --origin-loop-id "loop-1" \
+  --origin-run-id "run-1" \
+  --expected '{"status":"ok"}' \
+  --observed '{"status":"failed"}'
+```
+
+The fingerprint is stored as `metadata.fingerprint`. Existing tasks are updated
+in place and metadata is shallow-merged, so expectation fields such as
+`expectation_id`, `expectation_fingerprint`, `evidence_paths`,
+`origin_loop_id`, `origin_run_id`, `expected`, `observed`, and `acceptance` can
+be refreshed without dropping unrelated task metadata.

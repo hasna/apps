@@ -17,6 +17,7 @@ export const LOCAL_EVENT_TYPES = [
   "task.blocked",
   "task.started",
   "task.completed",
+  "task.updated",
   "task.due",
   "task.due_soon",
   "task.failed",

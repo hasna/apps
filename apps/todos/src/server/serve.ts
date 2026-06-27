@@ -89,7 +89,7 @@ function checkAuth(req: Request, apiKey: string | null): Response | null {
 /** Simple in-memory rate limiter — tracks requests per IP per window */
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
-const RATE_LIMIT_MAX = 120; // requests per window
+const RATE_LIMIT_MAX = Number.parseInt(process.env["TODOS_RATE_LIMIT_MAX"] || "120", 10); // requests per window
 
 function checkRateLimit(ip: string): { allowed: boolean; retryAfter?: number } {
   const now = Date.now();
@@ -143,8 +143,10 @@ export function taskToSummary(task: Task, fields?: string[]) {
     task_list_id: task.task_list_id,
     agent_id: task.agent_id,
     assigned_to: task.assigned_to,
+    working_dir: task.working_dir,
     locked_by: task.locked_by,
     tags: task.tags,
+    metadata: task.metadata,
     version: task.version,
     created_at: task.created_at,
     updated_at: task.updated_at,
@@ -305,6 +307,11 @@ export async function startServer(port: number, options?: { open?: boolean; host
       // ── API: Create task ──
       if (path === "/api/tasks" && method === "POST") {
         return handlers.handleCreateTask(req, ctx, jsonWithCors, taskToSummary);
+      }
+
+      // ── API: Upsert task by fingerprint ──
+      if (path === "/api/tasks/upsert" && method === "POST") {
+        return handlers.handleUpsertTask(req, ctx, jsonWithCors, taskToSummary);
       }
 
       // ── API: Export tasks ──

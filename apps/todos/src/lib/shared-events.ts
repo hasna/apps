@@ -13,6 +13,7 @@ export type TodosSharedEventType =
   | "task.started"
   | "task.completed"
   | "task.failed"
+  | "task.updated"
   | "task.assigned"
   | "task.status_changed"
   | "task.unblocked";

@@ -60,7 +60,7 @@ beforeAll(async () => {
   proc = Bun.spawn({
     cmd: ["bun", "run", "src/server/index.ts", `--port=${port}`, "--no-open"],
     cwd: join(import.meta.dir, "..", ".."),
-    env: { ...process.env, TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true" },
+    env: { ...process.env, TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false", TODOS_NO_OPEN: "true", TODOS_RATE_LIMIT_MAX: "1000" },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -215,6 +215,35 @@ describe("POST /api/tasks", () => {
 
     const data = (await res.json()) as Record<string, unknown>;
     expect(data.error).toBe("Missing 'title'");
+  });
+});
+
+describe("POST /api/tasks/upsert", () => {
+  it("creates once and updates by fingerprint with merged metadata", async () => {
+    const first = await api("POST", "/api/tasks/upsert", {
+      fingerprint: "loop:http:1",
+      title: "HTTP loop expectation",
+      metadata: { expectation_id: "http-exp" },
+      expected: { state: "ok" },
+      tags: ["loop"],
+    });
+    expect(first.status).toBe(201);
+    const firstPayload = (await first.json()) as Record<string, any>;
+    expect(firstPayload.created).toBe(true);
+    expect(firstPayload.task.metadata.fingerprint).toBe("loop:http:1");
+    expect(firstPayload.task.metadata.expected).toEqual({ state: "ok" });
+
+    const second = await api("POST", "/api/tasks/upsert", {
+      fingerprint: "loop:http:1",
+      title: "HTTP loop expectation updated",
+      metadata: { observed: "failed" },
+    });
+    expect(second.status).toBe(200);
+    const secondPayload = (await second.json()) as Record<string, any>;
+    expect(secondPayload.created).toBe(false);
+    expect(secondPayload.task.id).toBe(firstPayload.task.id);
+    expect(secondPayload.task.metadata.expectation_id).toBe("http-exp");
+    expect(secondPayload.task.metadata.observed).toBe("failed");
   });
 });
 

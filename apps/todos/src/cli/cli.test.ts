@@ -131,6 +131,62 @@ describe("CLI integration", () => {
     try { unlinkSync("/tmp/test-cli-todos.db"); } catch {}
   });
 
+  it("upserts tasks by fingerprint and merges expectation metadata", async () => {
+    const dbPath = "/tmp/test-cli-task-upsert.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    try {
+      const first = await runCli([
+        "--json",
+        "task",
+        "upsert",
+        "--fingerprint",
+        "loop:cli:1",
+        "--title",
+        "Loop expectation",
+        "--description",
+        "first",
+        "--tags",
+        "loop,expectation",
+        "--metadata-json",
+        "{\"expectation_id\":\"exp-cli\"}",
+        "--expected",
+        "{\"status\":\"ok\"}",
+        "--working-dir",
+        ".",
+      ], dbPath);
+      expect(first.exitCode).toBe(0);
+      const firstPayload = JSON.parse(first.stdout);
+      expect(firstPayload.created).toBe(true);
+      expect(firstPayload.task.metadata.fingerprint).toBe("loop:cli:1");
+      expect(firstPayload.task.metadata.expected).toEqual({ status: "ok" });
+
+      const second = await runCli([
+        "--json",
+        "task",
+        "upsert",
+        "--fingerprint",
+        "loop:cli:1",
+        "--title",
+        "Loop expectation updated",
+        "--metadata-json",
+        "{\"observed\":\"failed\"}",
+        "--evidence-paths",
+        "logs/a.txt,logs/b.txt",
+      ], dbPath);
+      expect(second.exitCode).toBe(0);
+      const secondPayload = JSON.parse(second.stdout);
+      expect(secondPayload.created).toBe(false);
+      expect(secondPayload.task.id).toBe(firstPayload.task.id);
+      expect(secondPayload.task.metadata.expectation_id).toBe("exp-cli");
+      expect(secondPayload.task.metadata.observed).toBe("failed");
+      expect(secondPayload.task.metadata.evidence_paths).toEqual(["logs/a.txt", "logs/b.txt"]);
+    } finally {
+      try { unlinkSync(dbPath); } catch {}
+    }
+  });
+
   it("should reject invalid add priority before SQLite validation", async () => {
     const result = await runCli(["add", "Invalid priority task", "--priority", "urgent"], ":memory:");
 

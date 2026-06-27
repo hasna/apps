@@ -6,6 +6,8 @@ import type {
   TaskRow,
   TaskWithRelations,
   UpdateTaskInput,
+  UpsertTaskByFingerprintInput,
+  UpsertTaskByFingerprintResult,
 } from "../types/index.js";
 import {
   TaskNotFoundError,
@@ -42,6 +44,21 @@ export function insertTaskTags(taskId: string, tags: string[], db: Database): vo
 export function replaceTaskTags(taskId: string, tags: string[], db: Database): void {
   db.run("DELETE FROM task_tags WHERE task_id = ?", [taskId]);
   insertTaskTags(taskId, tags, db);
+}
+
+function addMetadataConditions(
+  metadata: Record<string, unknown> | undefined,
+  conditions: string[],
+  params: SQLQueryBindings[],
+): void {
+  if (!metadata) return;
+  for (const [key, value] of Object.entries(metadata)) {
+    if (!/^[A-Za-z0-9_.-]+$/.test(key)) {
+      throw new Error(`Invalid metadata filter key: ${key}`);
+    }
+    conditions.push(`json_extract(metadata, '$."${key}"') = ?`);
+    params.push(value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean" ? value : JSON.stringify(value));
+  }
 }
 
 export function createTask(input: CreateTaskInput, db?: Database): Task {
@@ -284,6 +301,8 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
     }
   }
 
+  addMetadataConditions(filter.metadata, conditions, params);
+
   const PRIORITY_RANK = `CASE priority WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 END`;
 
   // Cursor-based pagination: decode cursor and add compound WHERE condition
@@ -323,6 +342,73 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
     .all(...params) as TaskRow[];
 
   return rows.map(rowToTask);
+}
+
+export function getTaskByFingerprint(
+  fingerprint: string,
+  db?: Database,
+): Task | null {
+  const tasks = listTasks({ metadata: { fingerprint }, limit: 1 }, db);
+  return tasks[0] ?? null;
+}
+
+function mergeTaskMetadata(
+  current: Record<string, unknown>,
+  next: Record<string, unknown> | undefined,
+  fingerprint: string,
+): Record<string, unknown> {
+  return {
+    ...current,
+    ...(next ?? {}),
+    fingerprint,
+  };
+}
+
+export function upsertTaskByFingerprint(
+  input: UpsertTaskByFingerprintInput,
+  db?: Database,
+): UpsertTaskByFingerprintResult {
+  const d = db || getDatabase();
+  const fingerprint = input.fingerprint.trim();
+  if (!fingerprint) throw new Error("fingerprint is required");
+
+  const existing = getTaskByFingerprint(fingerprint, d);
+  const metadata = mergeTaskMetadata(existing?.metadata ?? {}, input.metadata, fingerprint);
+
+  if (!existing) {
+    const task = createTask({ ...input, metadata }, d);
+    return { task, created: true };
+  }
+
+  const task = updateTask(
+    existing.id,
+    {
+      version: existing.version,
+      title: input.title,
+      description: input.description,
+      status: input.status,
+      priority: input.priority,
+      project_id: input.project_id,
+      assigned_to: input.assigned_to,
+      working_dir: input.working_dir,
+      plan_id: input.plan_id,
+      task_list_id: input.task_list_id,
+      tags: input.tags,
+      metadata,
+      due_at: input.due_at,
+      estimated_minutes: input.estimated_minutes,
+      sla_minutes: input.sla_minutes,
+      confidence: input.confidence,
+      retry_count: input.retry_count,
+      max_retries: input.max_retries,
+      retry_after: input.retry_after,
+      requires_approval: input.requires_approval,
+      recurrence_rule: input.recurrence_rule,
+      task_type: input.task_type,
+    },
+    d,
+  );
+  return { task, created: false };
 }
 
 export function countTasks(filter: Omit<TaskFilter, 'limit' | 'offset'> = {}, db?: Database): number {
@@ -402,6 +488,8 @@ export function countTasks(filter: Omit<TaskFilter, 'limit' | 'offset'> = {}, db
     params.push(filter.task_list_id);
   }
 
+  addMetadataConditions(filter.metadata, conditions, params);
+
   // Exclude archived tasks by default (consistent with listTasks)
   if (!filter.include_archived) {
     conditions.push("archived_at IS NULL");
@@ -462,6 +550,10 @@ export function updateTask(
   if (input.assigned_to !== undefined) {
     sets.push("assigned_to = ?");
     params.push(input.assigned_to);
+  }
+  if (input.working_dir !== undefined) {
+    sets.push("working_dir = ?");
+    params.push(input.working_dir);
   }
   if (input.tags !== undefined) {
     sets.push("tags = ?");
@@ -560,6 +652,7 @@ export function updateTask(
   if (input.priority !== undefined && input.priority !== task.priority) logTaskChange(id, "update", "priority", task.priority, input.priority, agentId, d);
   if (input.title !== undefined && input.title !== task.title) logTaskChange(id, "update", "title", task.title, input.title, agentId, d);
   if (input.assigned_to !== undefined && input.assigned_to !== task.assigned_to) logTaskChange(id, "update", "assigned_to", task.assigned_to, input.assigned_to, agentId, d);
+  if (input.working_dir !== undefined && input.working_dir !== task.working_dir) logTaskChange(id, "update", "working_dir", task.working_dir, input.working_dir, agentId, d);
   if (input.approved_by !== undefined) logTaskChange(id, "approve", "approved_by", null, input.approved_by, agentId, d);
 
   const updatedTask: Task = {
@@ -597,6 +690,11 @@ export function updateTask(
   if (input.approved_by !== undefined) {
     emitLocalEventHooksQuiet({ type: "approval.decided", payload: { id, approved_by: input.approved_by, title: task.title } });
   }
+
+  const updatePayload = taskEventData(updatedTask);
+  dispatchWebhook("task.updated", updatePayload, d).catch(() => {});
+  emitLocalEventHooksQuiet({ type: "task.updated", payload: updatePayload });
+  emitSharedTaskEventQuiet({ type: "task.updated", task: updatedTask });
 
   // Return updated task without re-fetching from DB
   return updatedTask;

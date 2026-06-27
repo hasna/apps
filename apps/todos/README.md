@@ -33,6 +33,20 @@ todos manual
 todos manual --json
 ```
 
+Deterministic loops can upsert a task by stable fingerprint without creating
+duplicates. The fingerprint is stored as `metadata.fingerprint`, and later
+upserts shallow-merge metadata so expectation fields can be refreshed safely:
+
+```bash
+todos --json task upsert \
+  --fingerprint "loop:expectation:key" \
+  --title "Expectation failed" \
+  --metadata-json '{"expectation_id":"exp-1"}' \
+  --evidence-paths "logs/loop.txt" \
+  --expected '{"status":"ok"}' \
+  --observed '{"status":"failed"}'
+```
+
 ## Terminal Dashboard
 
 `todos dashboard` launches a local Ink TUI with keyboard tabs for overview,

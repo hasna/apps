@@ -8,6 +8,8 @@ import {
   listTasks,
   countTasks,
   updateTask,
+  upsertTaskByFingerprint,
+  getTaskByFingerprint,
   deleteTask,
   startTask,
   completeTask,
@@ -184,6 +186,15 @@ describe("listTasks", () => {
     expect(tasks[0]!.title).toBe("Tagged");
   });
 
+  it("should filter by exact top-level metadata", () => {
+    createTask({ title: "Matched", metadata: { fingerprint: "loop:matched", kind: "expectation" } }, db);
+    createTask({ title: "Other", metadata: { fingerprint: "loop:other", kind: "expectation" } }, db);
+
+    const tasks = listTasks({ metadata: { fingerprint: "loop:matched" } }, db);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]!.title).toBe("Matched");
+  });
+
   it("should order by priority then created_at", () => {
     createTask({ title: "Low", priority: "low" }, db);
     createTask({ title: "Critical", priority: "critical" }, db);
@@ -230,6 +241,56 @@ describe("listTasks", () => {
   });
 });
 
+describe("upsertTaskByFingerprint", () => {
+  it("creates once and updates by stable metadata fingerprint", () => {
+    const first = upsertTaskByFingerprint({
+      fingerprint: "loop:expectation:1",
+      title: "Original expectation",
+      description: "first",
+      priority: "medium",
+      working_dir: "/tmp/loop-before",
+      tags: ["loop"],
+      metadata: {
+        expectation_id: "exp-1",
+        expected: "ok",
+      },
+    }, db);
+
+    expect(first.created).toBe(true);
+    expect(first.task.metadata["fingerprint"]).toBe("loop:expectation:1");
+    expect(first.task.metadata["expectation_id"]).toBe("exp-1");
+
+    const second = upsertTaskByFingerprint({
+      fingerprint: "loop:expectation:1",
+      title: "Updated expectation",
+      description: "second",
+      priority: "high",
+      working_dir: "/tmp/loop-after",
+      tags: ["loop", "regression"],
+      metadata: {
+        observed: "failed",
+        evidence_paths: ["logs/run.txt"],
+      },
+    }, db);
+
+    expect(second.created).toBe(false);
+    expect(second.task.id).toBe(first.task.id);
+    expect(second.task.title).toBe("Updated expectation");
+    expect(second.task.priority).toBe("high");
+    expect(second.task.working_dir).toBe("/tmp/loop-after");
+    expect(second.task.tags).toEqual(["loop", "regression"]);
+    expect(second.task.metadata).toMatchObject({
+      fingerprint: "loop:expectation:1",
+      expectation_id: "exp-1",
+      expected: "ok",
+      observed: "failed",
+      evidence_paths: ["logs/run.txt"],
+    });
+    expect(listTasks({ metadata: { fingerprint: "loop:expectation:1" } }, db)).toHaveLength(1);
+    expect(getTaskByFingerprint("loop:expectation:1", db)?.id).toBe(first.task.id);
+  });
+});
+
 describe("countTasks", () => {
   it("should count all tasks", () => {
     createTask({ title: "Task 1" }, db);
@@ -254,6 +315,13 @@ describe("countTasks", () => {
     createTask({ title: "No project" }, db);
 
     expect(countTasks({ project_id: project.id }, db)).toBe(1);
+  });
+
+  it("should count with metadata filter", () => {
+    createTask({ title: "Matched", metadata: { fingerprint: "loop:count" } }, db);
+    createTask({ title: "Other", metadata: { fingerprint: "loop:other" } }, db);
+
+    expect(countTasks({ metadata: { fingerprint: "loop:count" } }, db)).toBe(1);
   });
 
   it("should return 0 for no matches", () => {

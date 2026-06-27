@@ -15,7 +15,7 @@ structured error contracts.
 ## Covered Domains
 
 - `tasks`: create, list, read, update, lifecycle, assignment, queue, lock
-  leases, stale recovery, and bulk workflows.
+  leases, stale recovery, deterministic fingerprint upsert, and bulk workflows.
 - `references`: local file, line, symbol, commit, branch, pull request ref,
   plan, run, task, and agent mention resolution with validated backlinks and no
   hosted code search.
