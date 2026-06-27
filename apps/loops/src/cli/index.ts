@@ -13,9 +13,11 @@ import type {
   AgentSandbox,
   CatchUpPolicy,
   CreateLoopInput,
+  CreateWorkflowInput,
   LoopTarget,
   OverlapPolicy,
   ScheduleSpec,
+  WorkflowSpec,
 } from "../types.js";
 import { dataDir, daemonLogPath, dbPath } from "../lib/paths.js";
 import {
@@ -116,6 +118,21 @@ function preflightStoredWorkflow(
   } catch (error) {
     preflightFailed(error, context);
   }
+}
+
+function workflowSpecForPreflight(body: CreateWorkflowInput, id = "validation"): WorkflowSpec {
+  const now = new Date().toISOString();
+  return {
+    id,
+    name: body.name,
+    description: body.description,
+    version: body.version ?? 1,
+    status: "active",
+    goal: body.goal,
+    steps: body.steps,
+    createdAt: now,
+    updatedAt: now,
+  };
 }
 
 function printTextOutput(value: { stdout?: string; stderr?: string }): void {
@@ -822,6 +839,7 @@ eventsHandle
   .option("--sandbox <mode>", "provider sandbox")
   .option("--project-path <path>", "fallback project/repo working directory")
   .option("--name-prefix <prefix>", "workflow/loop name prefix", "event:todos-task")
+  .option("--preflight", "check generated workflow steps before storing the workflow loop")
   .option("--dry-run", "print the workflow and loop input without storing anything")
   .action(async (opts) => {
     const event = await readEventEnvelopeFromStdin();
@@ -899,7 +917,14 @@ eventsHandle
       leaseMs: 90 * 60_000,
     };
     if (opts.dryRun) {
-      print({ deduped: false, idempotencyKey, event, workflow: workflowBody, loop: loopInput }, `dry-run ${loopName}`);
+      const preflight = opts.preflight
+        ? preflightStoredWorkflow(workflowSpecForPreflight(workflowBody, "event-preflight"), {
+            name: workflowBody.name,
+            type: "todos-task-event-workflow",
+            event: event.id,
+          }, {})
+        : undefined;
+      print({ deduped: false, idempotencyKey, event, workflow: workflowBody, loop: loopInput, preflight }, `dry-run ${loopName}`);
       return;
     }
     const store = new Store();
@@ -921,13 +946,21 @@ eventsHandle
         return;
       }
       const existingWorkflow = store.findWorkflowByName(workflowBody.name);
+      const workflowPreflightSpec = existingWorkflow ?? workflowSpecForPreflight(workflowBody, "event-preflight");
+      const preflight = opts.preflight
+        ? preflightStoredWorkflow(workflowPreflightSpec, {
+            name: workflowBody.name,
+            type: "todos-task-event-workflow",
+            event: event.id,
+          }, {})
+        : undefined;
       const workflow = existingWorkflow ?? store.createWorkflow(workflowBody);
       const loop = store.createLoop({
         ...loopInput,
         target: { type: "workflow", workflowId: workflow.id },
       });
       print(
-        { deduped: false, idempotencyKey, event, workflow: publicWorkflow(workflow), loop: publicLoop(loop) },
+        { deduped: false, idempotencyKey, event, workflow: publicWorkflow(workflow), loop: publicLoop(loop), preflight },
         `created ${loop.id} (${loop.name}) workflow=${workflow.name} event=${event.id} idempotency=${idempotencyKey}`,
       );
     } finally {
@@ -955,6 +988,7 @@ eventsHandle
   .option("--sandbox <mode>", "provider sandbox")
   .option("--project-path <path>", "fallback project/repo working directory")
   .option("--name-prefix <prefix>", "workflow/loop name prefix", "event:generic")
+  .option("--preflight", "check generated workflow steps before storing the workflow loop")
   .option("--dry-run", "print the workflow and loop input without storing anything")
   .action(async (opts) => {
     const event = await readEventEnvelopeFromStdin();
@@ -1008,7 +1042,14 @@ eventsHandle
       leaseMs: 90 * 60_000,
     };
     if (opts.dryRun) {
-      print({ event, workflow: workflowBody, loop: loopInput }, `dry-run ${loopName}`);
+      const preflight = opts.preflight
+        ? preflightStoredWorkflow(workflowSpecForPreflight(workflowBody, "event-preflight"), {
+            name: workflowBody.name,
+            type: "generic-event-workflow",
+            event: event.id,
+          }, {})
+        : undefined;
+      print({ event, workflow: workflowBody, loop: loopInput, preflight }, `dry-run ${loopName}`);
       return;
     }
     const store = new Store();
@@ -1023,13 +1064,21 @@ eventsHandle
         return;
       }
       const existingWorkflow = store.findWorkflowByName(workflowBody.name);
+      const workflowPreflightSpec = existingWorkflow ?? workflowSpecForPreflight(workflowBody, "event-preflight");
+      const preflight = opts.preflight
+        ? preflightStoredWorkflow(workflowPreflightSpec, {
+            name: workflowBody.name,
+            type: "generic-event-workflow",
+            event: event.id,
+          }, {})
+        : undefined;
       const workflow = existingWorkflow ?? store.createWorkflow(workflowBody);
       const loop = store.createLoop({
         ...loopInput,
         target: { type: "workflow", workflowId: workflow.id },
       });
       print(
-        { deduped: false, event, workflow: publicWorkflow(workflow), loop: publicLoop(loop) },
+        { deduped: false, event, workflow: publicWorkflow(workflow), loop: publicLoop(loop), preflight },
         `created ${loop.id} (${loop.name}) workflow=${workflow.name}`,
       );
     } finally {
@@ -1108,18 +1157,7 @@ workflows
   .option("--preflight", "also check account env and target executables")
   .action((file, opts) => {
     const body = workflowBodyFromJson(JSON.parse(readFileSync(file, "utf8")), opts.name);
-    const now = new Date().toISOString();
-    const workflow = {
-      id: "validation",
-      name: body.name,
-      description: body.description,
-      version: body.version ?? 1,
-      status: "active" as const,
-      goal: body.goal,
-      steps: body.steps,
-      createdAt: now,
-      updatedAt: now,
-    };
+    const workflow = workflowSpecForPreflight(body);
     const preflight = opts.preflight ? preflightWorkflow(workflow) : undefined;
     print({ valid: true, workflow: publicWorkflow(workflow), preflight }, `valid workflow ${workflow.name} steps=${workflow.steps.length}`);
   });
@@ -1128,12 +1166,17 @@ workflows
   .command("create <file>")
   .description("validate and store a workflow JSON file")
   .option("--name <name>", "override workflow name from the file")
+  .option("--preflight", "also check account env and target executables before storing")
   .action((file, opts) => {
     const store = new Store();
     try {
       const body = workflowBodyFromJson(JSON.parse(readFileSync(file, "utf8")), opts.name);
+      const preflight = opts.preflight
+        ? preflightStoredWorkflow(workflowSpecForPreflight(body, "creation-preflight"), { name: body.name, type: "workflow" }, {})
+        : undefined;
       const workflow = store.createWorkflow(body);
-      print(publicWorkflow(workflow), `created workflow ${workflow.id} (${workflow.name}) steps=${workflow.steps.length}`);
+      if (preflight !== undefined) print({ workflow: publicWorkflow(workflow), preflight }, `created workflow ${workflow.id} (${workflow.name}) steps=${workflow.steps.length}`);
+      else print(publicWorkflow(workflow), `created workflow ${workflow.id} (${workflow.name}) steps=${workflow.steps.length}`);
     } finally {
       store.close();
     }

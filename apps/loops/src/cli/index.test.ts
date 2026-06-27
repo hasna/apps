@@ -694,6 +694,37 @@ describe("loops CLI", () => {
     expect(value.preflight.every((item: { command: string }) => item.command === "true")).toBe(true);
   });
 
+  test("workflows create --preflight fails before storing a broken workflow", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-workflows-create-preflight-fail-"));
+    const file = workflowFile(dataDir, {
+      name: "stored-workflow-preflight-fails",
+      steps: [
+        {
+          id: "missing-command",
+          target: { type: "command", command: "openloops-definitely-missing-binary" },
+        },
+      ],
+    });
+
+    const create = runCli(dataDir, ["--json", "workflows", "create", file, "--preflight"]);
+
+    expect(create.status).toBe(1);
+    expect(create.stderr).toBe("");
+    const value = JSON.parse(create.stdout);
+    expect(value).toMatchObject({
+      ok: false,
+      created: false,
+      type: "workflow",
+      name: "stored-workflow-preflight-fails",
+      preflight: { ok: false },
+    });
+    expect(value.preflight.error).toContain("workflow step missing-command preflight failed");
+
+    const list = runCli(dataDir, ["--json", "workflows", "list"]);
+    expect(list.status).toBe(0);
+    expect(JSON.parse(list.stdout)).toEqual([]);
+  });
+
   test("health JSON reports failed expectations with classification and task upsert fields", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-health-json-"));
     const store = new Store(join(dataDir, "loops.db"));
@@ -1152,6 +1183,163 @@ describe("loops CLI", () => {
     expect(secondValue.deduped).toBe(true);
     expect(secondValue.idempotencyKey).toBe(firstValue.idempotencyKey);
     expect(secondValue.loop.id).toBe(firstValue.loop.id);
+  });
+
+  test("todos task event handler --preflight fails before storing generated workflow loops", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-preflight-fail-"));
+    const home = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-preflight-home-"));
+    const binDir = join(dataDir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const codewith = join(binDir, "codewith");
+    writeFileSync(
+      codewith,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"${1:-}\" == \"profile\" && \"${2:-}\" == \"list\" ]]; then",
+        "  printf 'NAME ACCOUNT PROVIDER MODE PLAN\\naccount001 - ChatGPT chatgpt Pro\\n'",
+        "  exit 0",
+        "fi",
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(codewith, 0o755);
+    const event = {
+      id: "evt-task-created-preflight-fail",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-created-preflight-fail",
+        title: "Route with bad profile",
+        working_dir: "/tmp/open-todos",
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "handle",
+        "todos-task",
+        "--provider",
+        "codewith",
+        "--auth-profile",
+        "missing",
+        "--preflight",
+      ],
+      JSON.stringify(event),
+      { HOME: home, PATH: `${binDir}:/usr/bin:/bin` },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("");
+    const value = JSON.parse(result.stdout);
+    expect(value.created).toBe(false);
+    expect(value.preflight.error).toContain("workflow step worker preflight failed");
+    expect(value.preflight.error).toContain("codewith auth profile not found: missing");
+
+    const loops = runCli(dataDir, ["--json", "list"]);
+    expect(JSON.parse(loops.stdout)).toEqual([]);
+    const workflows = runCli(dataDir, ["--json", "workflows", "list"]);
+    expect(JSON.parse(workflows.stdout)).toEqual([]);
+  });
+
+  test("todos task event handler --preflight dedupes existing loops before provider checks", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-preflight-dedupe-"));
+    const home = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-preflight-dedupe-home-"));
+    const binDir = join(dataDir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const codewith = join(binDir, "codewith");
+    writeFileSync(
+      codewith,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"${1:-}\" == \"profile\" && \"${2:-}\" == \"list\" ]]; then",
+        "  printf 'NAME ACCOUNT PROVIDER MODE PLAN\\naccount001 - ChatGPT chatgpt Pro\\n'",
+        "  exit 0",
+        "fi",
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(codewith, 0o755);
+    const event = {
+      id: "evt-task-created-dedupe-preflight-1",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-created-dedupe-preflight",
+        title: "Dedupe before bad profile",
+        working_dir: "/tmp/open-todos",
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+    const create = runCli(dataDir, ["--json", "events", "handle", "todos-task"], JSON.stringify(event));
+    expect(create.status).toBe(0);
+    const created = JSON.parse(create.stdout);
+
+    const replay = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "handle",
+        "todos-task",
+        "--provider",
+        "codewith",
+        "--auth-profile",
+        "missing",
+        "--preflight",
+      ],
+      JSON.stringify({ ...event, id: "evt-task-created-dedupe-preflight-2" }),
+      { HOME: home, PATH: `${binDir}:/usr/bin:/bin` },
+    );
+
+    expect(replay.status).toBe(0);
+    const value = JSON.parse(replay.stdout);
+    expect(value.deduped).toBe(true);
+    expect(value.loop.id).toBe(created.loop.id);
+  });
+
+  test("todos task event handler --preflight validates reused workflows before storing loop", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-preflight-existing-workflow-"));
+    const event = {
+      id: "evt-existing-workflow-preflight",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-existing-workflow-preflight",
+        title: "Reuse existing workflow",
+        working_dir: "/tmp/open-todos",
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+    const preview = runCli(dataDir, ["--json", "events", "handle", "todos-task", "--dry-run"], JSON.stringify(event));
+    expect(preview.status).toBe(0);
+    const previewValue = JSON.parse(preview.stdout);
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      store.createWorkflow({
+        name: previewValue.workflow.name,
+        steps: [{ id: "stale", target: { type: "command", command: "openloops-definitely-missing-binary" } }],
+      });
+    } finally {
+      store.close();
+    }
+
+    const result = runCli(dataDir, ["--json", "events", "handle", "todos-task", "--preflight"], JSON.stringify(event));
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("");
+    const value = JSON.parse(result.stdout);
+    expect(value.preflight.error).toContain("workflow step stale preflight failed");
+    const loops = runCli(dataDir, ["--json", "list"]);
+    expect(JSON.parse(loops.stdout)).toEqual([]);
   });
 
   test("todos task event handler dedupes legacy event-id loop names", () => {

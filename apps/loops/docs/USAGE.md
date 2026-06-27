@@ -59,10 +59,12 @@ loops create command repo-status \
   --preflight
 ```
 
-`--preflight` is available on `loops create command`, `loops create agent`, and
-`loops create workflow`. It checks target executables and configured account
-profiles before the loop row is stored, so a missing command, provider binary,
-OpenAccounts profile, or workflow step dependency fails without creating a
+`--preflight` is available on `loops create command`, `loops create agent`,
+`loops create workflow`, `loops workflows create`, and event-router commands such
+as `loops events handle todos-task` and `loops events handle generic`. It checks
+target executables and configured account profiles before loop or workflow rows
+are stored, so a missing command, provider binary, OpenAccounts profile, native
+Codewith auth profile, or workflow step dependency fails without creating a
 scheduled loop. Use `--json` with `--preflight` to capture stable machine-readable
 preflight evidence.
 
