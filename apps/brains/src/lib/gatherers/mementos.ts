@@ -2,6 +2,7 @@ import { Database } from 'bun:sqlite'
 import { homedir } from 'os'
 import { join } from 'path'
 import type { GatherResult, GathererOptions, TrainingExample } from './types.js'
+import { parseTagList } from './tags.js'
 
 interface Memory {
   id: string
@@ -36,7 +37,7 @@ function memoryToRecallExample(memory: Memory): TrainingExample {
 }
 
 function memoryToSaveExample(memory: Memory): TrainingExample {
-  const tags = JSON.parse(memory.tags ?? '[]') as string[]
+  const tags = parseTagList(memory.tags)
   return {
     messages: [
       { role: 'system', content: SYSTEM_PROMPT },
@@ -71,7 +72,7 @@ function memoryToSearchExample(memories: Memory[], category: string): TrainingEx
 }
 
 export async function gatherFromMementos(options: GathererOptions = {}): Promise<GatherResult> {
-  const dbPath = join(homedir(), '.mementos', 'mementos.db')
+  const dbPath = join(options.homeDir ?? homedir(), '.mementos', 'mementos.db')
   const db = new Database(dbPath, { readonly: true, create: false })
 
   try {

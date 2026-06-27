@@ -33,7 +33,7 @@ describe("storage CLI contract", () => {
   });
 
   test("keeps cloud as a hidden migration alias", () => {
-    const source = readFileSync(join(process.cwd(), "src/cli/cloud.ts"), "utf8");
+    const source = readFileSync(join(process.cwd(), "src/cli/commands/cloud.ts"), "utf8");
 
     expect(source).toContain("export function registerStorageCommands");
     expect(source).toContain('program.command("storage")');

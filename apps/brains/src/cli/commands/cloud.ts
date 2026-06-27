@@ -1,12 +1,12 @@
 import type { Command } from "commander";
-import { getStorageConnectionString } from "../db/cloud-config.js";
+import { getStorageConnectionString } from "../../db/cloud-config.js";
 import {
   getStorageStatus,
   parseStorageTables,
   pullStorageChanges,
   pushStorageChanges,
   syncStorageChanges,
-} from "../db/cloud-sync.js";
+} from "../../db/cloud-sync.js";
 
 function printJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
@@ -24,7 +24,7 @@ function installStorageSubcommands(storage: Command): void {
     .command("status")
     .description("Show local database and remote storage sync status")
     .option("--json", "Output as JSON")
-    .action((opts) => {
+    .action((opts: { json?: boolean }) => {
       const status = getStorageStatus();
       if (opts.json) {
         printJson(status);
@@ -41,7 +41,7 @@ function installStorageSubcommands(storage: Command): void {
     .description("Push local brains data to remote PostgreSQL storage")
     .option("--tables <tables>", "Comma-separated table names")
     .option("--json", "Output as JSON")
-    .action(async (opts) => {
+    .action(async (opts: { tables?: string; json?: boolean }) => {
       try {
         const results = await pushStorageChanges(parseStorageTables(opts.tables));
         if (opts.json) printJson(results);
@@ -58,7 +58,7 @@ function installStorageSubcommands(storage: Command): void {
     .description("Pull remote PostgreSQL storage data into the local database")
     .option("--tables <tables>", "Comma-separated table names")
     .option("--json", "Output as JSON")
-    .action(async (opts) => {
+    .action(async (opts: { tables?: string; json?: boolean }) => {
       try {
         const results = await pullStorageChanges(parseStorageTables(opts.tables));
         if (opts.json) printJson(results);
@@ -75,7 +75,7 @@ function installStorageSubcommands(storage: Command): void {
     .description("Push local changes, then pull remote changes")
     .option("--tables <tables>", "Comma-separated table names")
     .option("--json", "Output as JSON")
-    .action(async (opts) => {
+    .action(async (opts: { tables?: string; json?: boolean }) => {
       try {
         const result = await syncStorageChanges(parseStorageTables(opts.tables));
         if (opts.json) {
@@ -98,15 +98,17 @@ function installStorageSubcommands(storage: Command): void {
     .description("Apply PostgreSQL migrations to remote storage")
     .option("--connection-string <url>", "PostgreSQL connection string")
     .option("--json", "Output as JSON")
-    .action(async (opts) => {
+    .action(async (opts: { connectionString?: string; json?: boolean }) => {
       try {
-        const { applyPgMigrations } = await import("../db/pg-migrate.js");
+        const { applyPgMigrations } = await import("../../db/pg-migrate.js");
         const result = await applyPgMigrations(opts.connectionString || getStorageConnectionString("brains"));
         if (opts.json) {
           printJson(result);
           return;
         }
-        if (result.applied.length > 0) console.log(`Applied ${result.applied.length} migration(s): ${result.applied.join(", ")}`);
+        if (result.applied.length > 0) {
+          console.log(`Applied ${result.applied.length} migration(s): ${result.applied.join(", ")}`);
+        }
         if (result.alreadyApplied.length > 0) console.log(`Already applied: ${result.alreadyApplied.length}`);
         if (result.errors.length > 0) {
           for (const error of result.errors) console.error(error);

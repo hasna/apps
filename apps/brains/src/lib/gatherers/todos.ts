@@ -2,6 +2,7 @@ import { Database } from 'bun:sqlite'
 import { homedir } from 'os'
 import { join } from 'path'
 import type { GatherResult, GathererOptions, TrainingExample } from './types.js'
+import { parseTagList } from './tags.js'
 
 interface Task {
   id: string
@@ -28,7 +29,7 @@ function taskToCreateExample(task: Task): TrainingExample {
     description: task.description ?? '',
     status: task.status,
     priority: task.priority,
-    tags: JSON.parse(task.tags ?? '[]'),
+    tags: parseTagList(task.tags),
     created_at: task.created_at,
   }
   return {
@@ -71,7 +72,7 @@ function taskToSearchExample(tasks: Task[], query: string): TrainingExample {
 }
 
 export async function gatherFromTodos(options: GathererOptions = {}): Promise<GatherResult> {
-  const dbPath = join(homedir(), '.todos', 'todos.db')
+  const dbPath = join(options.homeDir ?? homedir(), '.todos', 'todos.db')
   const db = new Database(dbPath, { readonly: true, create: false })
 
   try {

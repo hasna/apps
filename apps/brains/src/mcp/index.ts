@@ -20,6 +20,7 @@ import type { TrainingExample } from "../lib/gatherers/types.js";
 import { getPackageVersion } from "../lib/package-metadata.js";
 import { McpGatherSchema, McpFinetuneStartSchema, McpFinetuneStatusSchema } from "../lib/schemas.js";
 import { BRAINS_STORAGE_TOOLS, handleBrainsStorageTool } from "./cloud-tools.js";
+import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 
 // --- helpers ---
 
@@ -58,7 +59,7 @@ export const MCP_SERVER_INFO = {
   version: getPackageVersion(),
 } as const;
 
-export function createMcpServer() {
+export function buildServer() {
   // Fellow agents: keep MCP/server versioning sourced from package.json to avoid publish drift.
   const server = new Server(MCP_SERVER_INFO, { capabilities: { tools: {} } });
 
@@ -518,7 +519,10 @@ export function createMcpServer() {
         const rawDb = getRawDb();
         rawDb.run(
           "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
-          message, email || null, category || "general", MCP_SERVER_INFO.version
+          message,
+          email ?? null,
+          category ?? "general",
+          MCP_SERVER_INFO.version
         );
         rawDb.close();
         return {
@@ -566,12 +570,70 @@ export function createMcpServer() {
   return server;
 }
 
+/** @deprecated Use buildServer() */
+export const createMcpServer = buildServer;
+
+function hasFlag(...flags: string[]): boolean {
+  return process.argv.some((arg) => flags.includes(arg));
+}
+
+function printHelp(): void {
+  process.stdout.write(
+    `Usage: brains-mcp [options]
+
+Brains MCP server (stdio transport by default)
+
+Options:
+  --http           Serve MCP over Streamable HTTP (127.0.0.1)
+  --port <number>  HTTP port (default: 8801, env: MCP_HTTP_PORT)
+  -h, --help       Show help
+  -V, --version    Show version
+`,
+  );
+}
+
 export async function startMcpServer(transport = new StdioServerTransport()) {
-  const server = createMcpServer();
+  const server = buildServer();
   await server.connect(transport);
   return server;
 }
 
+async function main(): Promise<void> {
+  if (hasFlag("--help", "-h")) {
+    printHelp();
+    return;
+  }
+
+  if (hasFlag("--version", "-V")) {
+    process.stdout.write(`${MCP_SERVER_INFO.version}\n`);
+    return;
+  }
+
+  const args = process.argv.slice(2);
+  if (isStdioMode(args)) {
+    await startMcpServer();
+    return;
+  }
+
+  // Default: shared Streamable HTTP server (one process per MCP, many agents).
+  const handle = startMcpHttpServer({
+    name: "brains",
+    port: resolveMcpHttpPort(args),
+    buildServer,
+  });
+  process.on("SIGINT", () => {
+    handle.stop();
+    process.exit(0);
+  });
+  process.on("SIGTERM", () => {
+    handle.stop();
+    process.exit(0);
+  });
+}
+
 if (import.meta.main) {
-  await startMcpServer();
+  main().catch((error) => {
+    console.error("MCP server error:", error);
+    process.exit(1);
+  });
 }

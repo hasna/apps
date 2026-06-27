@@ -188,9 +188,47 @@ async function handleGather(req: Request): Promise<Response> {
   return json({ datasets: saved, total_examples: saved.reduce((s, d) => s + d.count, 0) });
 }
 
-const port = Number(process.env["PORT"] ?? 7020);
+const USAGE = `Usage: brains-serve [options]\n\nOptions:\n  -p, --port <number>   Port to bind (default: PORT env or 7020)\n  -h, --help            Show this help message`;
+
+export function resolveServerPort(argv: string[], envPort: string | undefined): { port?: number; showHelp: boolean; error?: string } {
+  let port = Number(envPort ?? 7020);
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (!arg) continue;
+    if (arg === "-h" || arg === "--help") {
+      return { showHelp: true };
+    }
+    if (arg === "-p" || arg === "--port") {
+      const value = argv[i + 1];
+      if (!value) {
+        return { showHelp: false, error: "Missing value for --port" };
+      }
+      port = Number(value);
+      i += 1;
+      continue;
+    }
+  }
+
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    return { showHelp: false, error: `Invalid port: ${String(port)}` };
+  }
+
+  return { showHelp: false, port };
+}
 
 if (import.meta.main) {
-  console.log(`brains server starting on port ${port}`);
-  Bun.serve({ port, fetch: createServerFetchHandler() });
+  const resolved = resolveServerPort(process.argv.slice(2), process.env["PORT"]);
+  if (resolved.showHelp) {
+    console.log(USAGE);
+    process.exit(0);
+  }
+  if (resolved.error || !resolved.port) {
+    console.error(resolved.error ?? "Failed to resolve server port");
+    console.error(USAGE);
+    process.exit(1);
+  }
+
+  console.log(`brains server starting on port ${resolved.port}`);
+  Bun.serve({ port: resolved.port, fetch: createServerFetchHandler() });
 }

@@ -47,7 +47,7 @@ function windowToExample(window: Message[]): TrainingExample | null {
 }
 
 export async function gatherFromConversations(options: GathererOptions = {}): Promise<GatherResult> {
-  const dbPath = join(homedir(), '.conversations', 'messages.db')
+  const dbPath = join(options.homeDir ?? homedir(), '.conversations', 'messages.db')
   const db = new Database(dbPath, { readonly: true, create: false })
 
   try {

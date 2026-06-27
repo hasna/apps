@@ -20,7 +20,7 @@ export async function gatherFromSessions(options: GathererOptions = {}): Promise
   const { limit = 1000 } = options;
   const examples: TrainingExample[] = [];
 
-  const claudeDir = join(homedir(), ".claude", "projects");
+  const claudeDir = join(options.homeDir ?? homedir(), ".claude", "projects");
   if (!existsSync(claudeDir)) {
     return { source: "sessions", examples: [], count: 0 };
   }
