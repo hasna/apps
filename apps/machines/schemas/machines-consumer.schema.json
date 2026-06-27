@@ -131,11 +131,869 @@
               "note_machine_context",
               "machine_trash_policies",
               "machine_details",
-              "browserplan_fleet"
+              "browserplan_fleet",
+              "machine_health",
+              "routing",
+              "command_matrix",
+              "loop_preflight"
             ]
           }
         },
         "stable_exports": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "agent_artifact_ref": {
+      "type": "object",
+      "required": [
+        "kind",
+        "ref",
+        "format",
+        "private"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "topology",
+            "route",
+            "workspace",
+            "compatibility",
+            "doctor",
+            "command_matrix",
+            "machine_health"
+          ]
+        },
+        "ref": {
+          "type": "string"
+        },
+        "format": {
+          "enum": [
+            "json",
+            "text"
+          ]
+        },
+        "private": {
+          "type": "boolean"
+        }
+      }
+    },
+    "agent_detail_refs": {
+      "type": "object",
+      "required": [
+        "cli",
+        "mcp",
+        "sdk"
+      ],
+      "properties": {
+        "cli": {
+          "type": "string"
+        },
+        "mcp": {
+          "type": "string"
+        },
+        "sdk": {
+          "type": "string"
+        }
+      }
+    },
+    "agent_summary": {
+      "type": "object",
+      "required": [
+        "total",
+        "ready",
+        "degraded",
+        "blocked",
+        "unknown"
+      ],
+      "properties": {
+        "total": {
+          "type": "number"
+        },
+        "ready": {
+          "type": "number"
+        },
+        "degraded": {
+          "type": "number"
+        },
+        "blocked": {
+          "type": "number"
+        },
+        "unknown": {
+          "type": "number"
+        }
+      }
+    },
+    "agent_command_ref": {
+      "type": "object",
+      "required": [
+        "provided",
+        "preview",
+        "sha256",
+        "length",
+        "redacted"
+      ],
+      "properties": {
+        "provided": {
+          "type": "boolean"
+        },
+        "preview": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "length": {
+          "type": "number"
+        },
+        "redacted": {
+          "type": "boolean"
+        }
+      }
+    },
+    "command_matrix_plan": {
+      "type": "object",
+      "required": [
+        "intent",
+        "label",
+        "placeholder",
+        "command_ref",
+        "local_shell",
+        "cli",
+        "mcp",
+        "sdk",
+        "private_shell_command"
+      ],
+      "properties": {
+        "intent": {
+          "enum": [
+            "placeholder",
+            "provided"
+          ]
+        },
+        "label": {
+          "type": "string"
+        },
+        "placeholder": {
+          "const": "<loop-command>"
+        },
+        "command_ref": {
+          "$ref": "#/$defs/agent_command_ref"
+        },
+        "local_shell": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cli": {
+          "type": "string"
+        },
+        "mcp": {
+          "type": "object",
+          "required": [
+            "tool",
+            "args"
+          ],
+          "properties": {
+            "tool": {
+              "const": "machines_ssh_resolve"
+            },
+            "args": {
+              "type": "object",
+              "required": [
+                "machine_id",
+                "remote_command",
+                "private_metadata"
+              ],
+              "properties": {
+                "machine_id": {
+                  "type": "string"
+                },
+                "remote_command": {
+                  "type": "string"
+                },
+                "private_metadata": {
+                  "const": false
+                }
+              }
+            }
+          }
+        },
+        "sdk": {
+          "type": "string"
+        },
+        "private_shell_command": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "machine_health_row": {
+      "type": "object",
+      "required": [
+        "machine_id",
+        "display_name",
+        "status",
+        "ok",
+        "route",
+        "confidence",
+        "local",
+        "heartbeat",
+        "checks",
+        "issues",
+        "warnings",
+        "detail_refs"
+      ],
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "ready",
+            "degraded",
+            "blocked",
+            "unknown"
+          ]
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "route": {
+          "enum": [
+            "local",
+            "lan",
+            "tailscale",
+            "ssh",
+            "unknown"
+          ]
+        },
+        "confidence": {
+          "enum": [
+            "exact",
+            "high",
+            "medium",
+            "low",
+            "none"
+          ]
+        },
+        "local": {
+          "type": "boolean"
+        },
+        "heartbeat": {
+          "type": "string"
+        },
+        "checks": {
+          "type": "object"
+        },
+        "issues": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "detail_refs": {
+          "$ref": "#/$defs/agent_detail_refs"
+        }
+      }
+    },
+    "routing_row": {
+      "type": "object",
+      "required": [
+        "machine_id",
+        "display_name",
+        "ok",
+        "route",
+        "source",
+        "confidence",
+        "local",
+        "heartbeat",
+        "cacheable",
+        "target",
+        "command_target",
+        "warnings",
+        "detail_refs"
+      ],
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "route": {
+          "enum": [
+            "local",
+            "lan",
+            "tailscale",
+            "ssh",
+            "unknown"
+          ]
+        },
+        "source": {
+          "enum": [
+            "local",
+            "lan",
+            "tailscale",
+            "ssh",
+            "unknown"
+          ]
+        },
+        "confidence": {
+          "enum": [
+            "exact",
+            "high",
+            "medium",
+            "low",
+            "none"
+          ]
+        },
+        "local": {
+          "type": "boolean"
+        },
+        "heartbeat": {
+          "type": "string"
+        },
+        "cacheable": {
+          "type": "boolean"
+        },
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "command_target": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "detail_refs": {
+          "$ref": "#/$defs/agent_detail_refs"
+        }
+      }
+    },
+    "command_matrix_row": {
+      "type": "object",
+      "required": [
+        "machine_id",
+        "display_name",
+        "can_run",
+        "readiness",
+        "route",
+        "source",
+        "confidence",
+        "local",
+        "command",
+        "blocked_by",
+        "warnings",
+        "detail_refs"
+      ],
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "can_run": {
+          "type": "boolean"
+        },
+        "readiness": {
+          "enum": [
+            "ready",
+            "degraded",
+            "blocked",
+            "unknown"
+          ]
+        },
+        "route": {
+          "enum": [
+            "local",
+            "lan",
+            "tailscale",
+            "ssh",
+            "unknown"
+          ]
+        },
+        "source": {
+          "enum": [
+            "local",
+            "lan",
+            "tailscale",
+            "ssh",
+            "unknown"
+          ]
+        },
+        "confidence": {
+          "enum": [
+            "exact",
+            "high",
+            "medium",
+            "low",
+            "none"
+          ]
+        },
+        "local": {
+          "type": "boolean"
+        },
+        "command": {
+          "$ref": "#/$defs/command_matrix_plan"
+        },
+        "blocked_by": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "detail_refs": {
+          "$ref": "#/$defs/agent_detail_refs"
+        }
+      }
+    },
+    "loop_preflight_machine": {
+      "type": "object",
+      "required": [
+        "machine_id",
+        "display_name",
+        "ready",
+        "status",
+        "can_run",
+        "route",
+        "confidence",
+        "local",
+        "heartbeat",
+        "blocked_by",
+        "warnings",
+        "next_steps",
+        "detail_refs"
+      ],
+      "properties": {
+        "machine_id": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "ready": {
+          "type": "boolean"
+        },
+        "status": {
+          "enum": [
+            "ready",
+            "degraded",
+            "blocked",
+            "unknown"
+          ]
+        },
+        "can_run": {
+          "type": "boolean"
+        },
+        "route": {
+          "enum": [
+            "local",
+            "lan",
+            "tailscale",
+            "ssh",
+            "unknown"
+          ]
+        },
+        "confidence": {
+          "enum": [
+            "exact",
+            "high",
+            "medium",
+            "low",
+            "none"
+          ]
+        },
+        "local": {
+          "type": "boolean"
+        },
+        "heartbeat": {
+          "type": "string"
+        },
+        "blocked_by": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "next_steps": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "detail_refs": {
+          "$ref": "#/$defs/agent_detail_refs"
+        }
+      }
+    },
+    "machine_health": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "package",
+        "capabilities",
+        "generated_at",
+        "kind",
+        "pagination",
+        "summary",
+        "machines",
+        "artifacts",
+        "warnings"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "package": {
+          "type": "object"
+        },
+        "capabilities": {
+          "type": "object"
+        },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "kind": {
+          "const": "machine_health"
+        },
+        "pagination": {
+          "type": "object"
+        },
+        "summary": {
+          "$ref": "#/$defs/agent_summary"
+        },
+        "machines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/machine_health_row"
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agent_artifact_ref"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "routing": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "package",
+        "capabilities",
+        "generated_at",
+        "kind",
+        "pagination",
+        "summary",
+        "routes",
+        "artifacts",
+        "warnings"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "package": {
+          "type": "object"
+        },
+        "capabilities": {
+          "type": "object"
+        },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "kind": {
+          "const": "routing"
+        },
+        "pagination": {
+          "type": "object"
+        },
+        "summary": {
+          "type": "object",
+          "required": [
+            "total",
+            "routable",
+            "local",
+            "remote",
+            "unroutable"
+          ],
+          "properties": {
+            "total": {
+              "type": "number"
+            },
+            "routable": {
+              "type": "number"
+            },
+            "local": {
+              "type": "number"
+            },
+            "remote": {
+              "type": "number"
+            },
+            "unroutable": {
+              "type": "number"
+            }
+          }
+        },
+        "routes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/routing_row"
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agent_artifact_ref"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "command_matrix": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "package",
+        "capabilities",
+        "generated_at",
+        "kind",
+        "mode",
+        "pagination",
+        "summary",
+        "commands",
+        "artifacts",
+        "warnings"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "package": {
+          "type": "object"
+        },
+        "capabilities": {
+          "type": "object"
+        },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "kind": {
+          "const": "command_matrix"
+        },
+        "mode": {
+          "const": "plan"
+        },
+        "pagination": {
+          "type": "object"
+        },
+        "summary": {
+          "type": "object",
+          "required": [
+            "total",
+            "runnable",
+            "blocked",
+            "local",
+            "remote"
+          ],
+          "properties": {
+            "total": {
+              "type": "number"
+            },
+            "runnable": {
+              "type": "number"
+            },
+            "blocked": {
+              "type": "number"
+            },
+            "local": {
+              "type": "number"
+            },
+            "remote": {
+              "type": "number"
+            }
+          }
+        },
+        "commands": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/command_matrix_row"
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agent_artifact_ref"
+          }
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "loop_preflight": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "package",
+        "capabilities",
+        "generated_at",
+        "kind",
+        "mode",
+        "selection_mode",
+        "ok",
+        "pagination",
+        "summary",
+        "machines",
+        "artifacts",
+        "warnings"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "package": {
+          "type": "object"
+        },
+        "capabilities": {
+          "type": "object"
+        },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "kind": {
+          "const": "loop_preflight"
+        },
+        "mode": {
+          "const": "plan"
+        },
+        "selection_mode": {
+          "enum": [
+            "explicit",
+            "discovered"
+          ]
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "pagination": {
+          "type": "object"
+        },
+        "summary": {
+          "type": "object",
+          "required": [
+            "total",
+            "ready",
+            "degraded",
+            "blocked",
+            "unknown",
+            "runnable",
+            "any_ready",
+            "all_ready"
+          ],
+          "properties": {
+            "total": {
+              "type": "number"
+            },
+            "ready": {
+              "type": "number"
+            },
+            "degraded": {
+              "type": "number"
+            },
+            "blocked": {
+              "type": "number"
+            },
+            "unknown": {
+              "type": "number"
+            },
+            "runnable": {
+              "type": "number"
+            },
+            "any_ready": {
+              "type": "boolean"
+            },
+            "all_ready": {
+              "type": "boolean"
+            }
+          }
+        },
+        "machines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/loop_preflight_machine"
+          }
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/agent_artifact_ref"
+          }
+        },
+        "warnings": {
           "type": "array",
           "items": {
             "type": "string"

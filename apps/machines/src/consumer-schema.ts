@@ -10,6 +10,12 @@ import type { MachineCompatibilityReport } from "./compatibility.js";
 import type { MachineProjectAssignments } from "./projects.js";
 import type { MachineTrashPolicies, NoteMachineContext } from "./notes.js";
 import type { MachineDetails } from "./details.js";
+import type {
+  CommandMatrixReport,
+  FleetLoopPreflightReport,
+  FleetRoutingReport,
+  MachineHealthReport,
+} from "./agent-abstractions.js";
 import {
   BROWSERPLAN_EXCLUDED_MACHINE_IDS,
   BROWSERPLAN_MACHINE_IDS,
@@ -28,7 +34,11 @@ export type MachinesConsumerSchemaEnvelope =
   | "note_machine_context"
   | "machine_trash_policies"
   | "machine_details"
-  | "browserplan_fleet";
+  | "browserplan_fleet"
+  | "machine_health"
+  | "routing"
+  | "command_matrix"
+  | "loop_preflight";
 
 export interface MachinesConsumerValidationResult {
   ok: boolean;
@@ -96,8 +106,254 @@ export const MACHINES_CONSUMER_SCHEMA_BUNDLE: MachinesConsumerSchemaBundle = {
         capabilities: { type: "object" },
         field_capabilities: { type: "object" },
         cacheability: { type: "object" },
-        envelopes: { type: "array", items: { enum: ["topology", "route", "workspace", "compatibility", "resolver_snapshot", "project_assignments", "note_machine_context", "machine_trash_policies", "machine_details", "browserplan_fleet"] } },
+        envelopes: { type: "array", items: { enum: ["topology", "route", "workspace", "compatibility", "resolver_snapshot", "project_assignments", "note_machine_context", "machine_trash_policies", "machine_details", "browserplan_fleet", "machine_health", "routing", "command_matrix", "loop_preflight"] } },
         stable_exports: { type: "array", items: { type: "string" } },
+      },
+    },
+    agent_artifact_ref: {
+      type: "object",
+      required: ["kind", "ref", "format", "private"],
+      properties: {
+        kind: { enum: ["topology", "route", "workspace", "compatibility", "doctor", "command_matrix", "machine_health"] },
+        ref: { type: "string" },
+        format: { enum: ["json", "text"] },
+        private: { type: "boolean" },
+      },
+    },
+    agent_detail_refs: {
+      type: "object",
+      required: ["cli", "mcp", "sdk"],
+      properties: {
+        cli: { type: "string" },
+        mcp: { type: "string" },
+        sdk: { type: "string" },
+      },
+    },
+    agent_summary: {
+      type: "object",
+      required: ["total", "ready", "degraded", "blocked", "unknown"],
+      properties: {
+        total: { type: "number" },
+        ready: { type: "number" },
+        degraded: { type: "number" },
+        blocked: { type: "number" },
+        unknown: { type: "number" },
+      },
+    },
+    agent_command_ref: {
+      type: "object",
+      required: ["provided", "preview", "sha256", "length", "redacted"],
+      properties: {
+        provided: { type: "boolean" },
+        preview: { type: "string" },
+        sha256: { type: ["string", "null"] },
+        length: { type: "number" },
+        redacted: { type: "boolean" },
+      },
+    },
+    command_matrix_plan: {
+      type: "object",
+      required: ["intent", "label", "placeholder", "command_ref", "local_shell", "cli", "mcp", "sdk", "private_shell_command"],
+      properties: {
+        intent: { enum: ["placeholder", "provided"] },
+        label: { type: "string" },
+        placeholder: { const: "<loop-command>" },
+        command_ref: { "$ref": "#/$defs/agent_command_ref" },
+        local_shell: { type: ["string", "null"] },
+        cli: { type: "string" },
+        mcp: {
+          type: "object",
+          required: ["tool", "args"],
+          properties: {
+            tool: { const: "machines_ssh_resolve" },
+            args: {
+              type: "object",
+              required: ["machine_id", "remote_command", "private_metadata"],
+              properties: {
+                machine_id: { type: "string" },
+                remote_command: { type: "string" },
+                private_metadata: { const: false },
+              },
+            },
+          },
+        },
+        sdk: { type: "string" },
+        private_shell_command: { type: ["string", "null"] },
+      },
+    },
+    machine_health_row: {
+      type: "object",
+      required: ["machine_id", "display_name", "status", "ok", "route", "confidence", "local", "heartbeat", "checks", "issues", "warnings", "detail_refs"],
+      properties: {
+        machine_id: { type: "string" },
+        display_name: { type: "string" },
+        status: { enum: ["ready", "degraded", "blocked", "unknown"] },
+        ok: { type: "boolean" },
+        route: { enum: ["local", "lan", "tailscale", "ssh", "unknown"] },
+        confidence: { enum: ["exact", "high", "medium", "low", "none"] },
+        local: { type: "boolean" },
+        heartbeat: { type: "string" },
+        checks: { type: "object" },
+        issues: { type: "array", items: { type: "string" } },
+        warnings: { type: "array", items: { type: "string" } },
+        detail_refs: { "$ref": "#/$defs/agent_detail_refs" },
+      },
+    },
+    routing_row: {
+      type: "object",
+      required: ["machine_id", "display_name", "ok", "route", "source", "confidence", "local", "heartbeat", "cacheable", "target", "command_target", "warnings", "detail_refs"],
+      properties: {
+        machine_id: { type: "string" },
+        display_name: { type: "string" },
+        ok: { type: "boolean" },
+        route: { enum: ["local", "lan", "tailscale", "ssh", "unknown"] },
+        source: { enum: ["local", "lan", "tailscale", "ssh", "unknown"] },
+        confidence: { enum: ["exact", "high", "medium", "low", "none"] },
+        local: { type: "boolean" },
+        heartbeat: { type: "string" },
+        cacheable: { type: "boolean" },
+        target: { type: ["string", "null"] },
+        command_target: { type: ["string", "null"] },
+        warnings: { type: "array", items: { type: "string" } },
+        detail_refs: { "$ref": "#/$defs/agent_detail_refs" },
+      },
+    },
+    command_matrix_row: {
+      type: "object",
+      required: ["machine_id", "display_name", "can_run", "readiness", "route", "source", "confidence", "local", "command", "blocked_by", "warnings", "detail_refs"],
+      properties: {
+        machine_id: { type: "string" },
+        display_name: { type: "string" },
+        can_run: { type: "boolean" },
+        readiness: { enum: ["ready", "degraded", "blocked", "unknown"] },
+        route: { enum: ["local", "lan", "tailscale", "ssh", "unknown"] },
+        source: { enum: ["local", "lan", "tailscale", "ssh", "unknown"] },
+        confidence: { enum: ["exact", "high", "medium", "low", "none"] },
+        local: { type: "boolean" },
+        command: { "$ref": "#/$defs/command_matrix_plan" },
+        blocked_by: { type: "array", items: { type: "string" } },
+        warnings: { type: "array", items: { type: "string" } },
+        detail_refs: { "$ref": "#/$defs/agent_detail_refs" },
+      },
+    },
+    loop_preflight_machine: {
+      type: "object",
+      required: ["machine_id", "display_name", "ready", "status", "can_run", "route", "confidence", "local", "heartbeat", "blocked_by", "warnings", "next_steps", "detail_refs"],
+      properties: {
+        machine_id: { type: "string" },
+        display_name: { type: "string" },
+        ready: { type: "boolean" },
+        status: { enum: ["ready", "degraded", "blocked", "unknown"] },
+        can_run: { type: "boolean" },
+        route: { enum: ["local", "lan", "tailscale", "ssh", "unknown"] },
+        confidence: { enum: ["exact", "high", "medium", "low", "none"] },
+        local: { type: "boolean" },
+        heartbeat: { type: "string" },
+        blocked_by: { type: "array", items: { type: "string" } },
+        warnings: { type: "array", items: { type: "string" } },
+        next_steps: { type: "array", items: { type: "string" } },
+        detail_refs: { "$ref": "#/$defs/agent_detail_refs" },
+      },
+    },
+    machine_health: {
+      type: "object",
+      required: ["schema_version", "package", "capabilities", "generated_at", "kind", "pagination", "summary", "machines", "artifacts", "warnings"],
+      properties: {
+        schema_version: { const: MACHINES_CONSUMER_CONTRACT_VERSION },
+        package: { type: "object" },
+        capabilities: { type: "object" },
+        generated_at: { type: "string", format: "date-time" },
+        kind: { const: "machine_health" },
+        pagination: { type: "object" },
+        summary: { "$ref": "#/$defs/agent_summary" },
+        machines: { type: "array", items: { "$ref": "#/$defs/machine_health_row" } },
+        artifacts: { type: "array", items: { "$ref": "#/$defs/agent_artifact_ref" } },
+        warnings: { type: "array", items: { type: "string" } },
+      },
+    },
+    routing: {
+      type: "object",
+      required: ["schema_version", "package", "capabilities", "generated_at", "kind", "pagination", "summary", "routes", "artifacts", "warnings"],
+      properties: {
+        schema_version: { const: MACHINES_CONSUMER_CONTRACT_VERSION },
+        package: { type: "object" },
+        capabilities: { type: "object" },
+        generated_at: { type: "string", format: "date-time" },
+        kind: { const: "routing" },
+        pagination: { type: "object" },
+        summary: {
+          type: "object",
+          required: ["total", "routable", "local", "remote", "unroutable"],
+          properties: {
+            total: { type: "number" },
+            routable: { type: "number" },
+            local: { type: "number" },
+            remote: { type: "number" },
+            unroutable: { type: "number" },
+          },
+        },
+        routes: { type: "array", items: { "$ref": "#/$defs/routing_row" } },
+        artifacts: { type: "array", items: { "$ref": "#/$defs/agent_artifact_ref" } },
+        warnings: { type: "array", items: { type: "string" } },
+      },
+    },
+    command_matrix: {
+      type: "object",
+      required: ["schema_version", "package", "capabilities", "generated_at", "kind", "mode", "pagination", "summary", "commands", "artifacts", "warnings"],
+      properties: {
+        schema_version: { const: MACHINES_CONSUMER_CONTRACT_VERSION },
+        package: { type: "object" },
+        capabilities: { type: "object" },
+        generated_at: { type: "string", format: "date-time" },
+        kind: { const: "command_matrix" },
+        mode: { const: "plan" },
+        pagination: { type: "object" },
+        summary: {
+          type: "object",
+          required: ["total", "runnable", "blocked", "local", "remote"],
+          properties: {
+            total: { type: "number" },
+            runnable: { type: "number" },
+            blocked: { type: "number" },
+            local: { type: "number" },
+            remote: { type: "number" },
+          },
+        },
+        commands: { type: "array", items: { "$ref": "#/$defs/command_matrix_row" } },
+        artifacts: { type: "array", items: { "$ref": "#/$defs/agent_artifact_ref" } },
+        warnings: { type: "array", items: { type: "string" } },
+      },
+    },
+    loop_preflight: {
+      type: "object",
+      required: ["schema_version", "package", "capabilities", "generated_at", "kind", "mode", "selection_mode", "ok", "pagination", "summary", "machines", "artifacts", "warnings"],
+      properties: {
+        schema_version: { const: MACHINES_CONSUMER_CONTRACT_VERSION },
+        package: { type: "object" },
+        capabilities: { type: "object" },
+        generated_at: { type: "string", format: "date-time" },
+        kind: { const: "loop_preflight" },
+        mode: { const: "plan" },
+        selection_mode: { enum: ["explicit", "discovered"] },
+        ok: { type: "boolean" },
+        pagination: { type: "object" },
+        summary: {
+          type: "object",
+          required: ["total", "ready", "degraded", "blocked", "unknown", "runnable", "any_ready", "all_ready"],
+          properties: {
+            total: { type: "number" },
+            ready: { type: "number" },
+            degraded: { type: "number" },
+            blocked: { type: "number" },
+            unknown: { type: "number" },
+            runnable: { type: "number" },
+            any_ready: { type: "boolean" },
+            all_ready: { type: "boolean" },
+          },
+        },
+        machines: { type: "array", items: { "$ref": "#/$defs/loop_preflight_machine" } },
+        artifacts: { type: "array", items: { "$ref": "#/$defs/agent_artifact_ref" } },
+        warnings: { type: "array", items: { type: "string" } },
       },
     },
     browserplan_fleet: {
@@ -723,6 +979,180 @@ function validateNoteMachineReference(value: unknown, path: string, errors: stri
   if (typeof value.manifest_declared !== "boolean") errors.push(`${path}.manifest_declared`);
 }
 
+function validateAgentSummary(value: unknown, path: string, errors: string[], includeRunnable = false): void {
+  if (!isRecord(value)) {
+    errors.push(path);
+    return;
+  }
+  for (const key of ["total", "ready", "degraded", "blocked", "unknown"]) {
+    if (typeof value[key] !== "number") errors.push(`${path}.${key}`);
+  }
+  if (includeRunnable && typeof value.runnable !== "number") errors.push(`${path}.runnable`);
+}
+
+function validateAgentArtifacts(value: unknown, path: string, errors: string[]): void {
+  if (!Array.isArray(value)) {
+    errors.push(path);
+    return;
+  }
+  for (const [index, artifact] of value.entries()) {
+    const artifactPath = `${path}.${index}`;
+    if (!isRecord(artifact)) {
+      errors.push(artifactPath);
+      continue;
+    }
+    requireFields(artifact, ["kind", "ref", "format", "private"], errors);
+    if (!hasString(artifact, "kind")) errors.push(`${artifactPath}.kind`);
+    if (!hasString(artifact, "ref")) errors.push(`${artifactPath}.ref`);
+    if (!["json", "text"].includes(String(artifact.format))) errors.push(`${artifactPath}.format`);
+    if (typeof artifact.private !== "boolean") errors.push(`${artifactPath}.private`);
+  }
+}
+
+function validateAgentDetailRefs(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) {
+    errors.push(path);
+    return;
+  }
+  for (const key of ["cli", "mcp", "sdk"]) {
+    if (!hasString(value, key)) errors.push(`${path}.${key}`);
+  }
+}
+
+function validateReadiness(value: unknown, path: string, errors: string[]): void {
+  if (!["ready", "degraded", "blocked", "unknown"].includes(String(value))) errors.push(path);
+}
+
+function validateCommandMatrixPlan(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) {
+    errors.push(path);
+    return;
+  }
+  requireFields(value, ["intent", "label", "placeholder", "command_ref", "local_shell", "cli", "mcp", "sdk", "private_shell_command"], errors);
+  if (!["placeholder", "provided"].includes(String(value.intent))) errors.push(`${path}.intent`);
+  if (!hasString(value, "label")) errors.push(`${path}.label`);
+  if (value.placeholder !== "<loop-command>") errors.push(`${path}.placeholder`);
+  if (!isRecord(value.command_ref)) {
+    errors.push(`${path}.command_ref`);
+  } else {
+    const ref = value.command_ref as Record<string, unknown>;
+    requireFields(ref, ["provided", "preview", "sha256", "length", "redacted"], errors);
+    if (typeof ref.provided !== "boolean") errors.push(`${path}.command_ref.provided`);
+    if (!hasString(ref, "preview")) errors.push(`${path}.command_ref.preview`);
+    if (!hasNullableString(ref, "sha256")) errors.push(`${path}.command_ref.sha256`);
+    if (typeof ref.length !== "number") errors.push(`${path}.command_ref.length`);
+    if (typeof ref.redacted !== "boolean") errors.push(`${path}.command_ref.redacted`);
+    if (ref.redacted === true && ref.preview !== "[redacted]") errors.push(`${path}.command_ref.preview`);
+  }
+  if (!hasNullableString(value, "local_shell")) errors.push(`${path}.local_shell`);
+  if (!hasString(value, "cli")) errors.push(`${path}.cli`);
+  if (!isRecord(value.mcp)) {
+    errors.push(`${path}.mcp`);
+  } else {
+    const mcp = value.mcp as Record<string, unknown>;
+    if (mcp.tool !== "machines_ssh_resolve") errors.push(`${path}.mcp.tool`);
+    if (!isRecord(mcp.args)) {
+      errors.push(`${path}.mcp.args`);
+    } else {
+      const args = mcp.args as Record<string, unknown>;
+      if (!hasString(args, "machine_id")) errors.push(`${path}.mcp.args.machine_id`);
+      if (!hasString(args, "remote_command")) errors.push(`${path}.mcp.args.remote_command`);
+      if (args.private_metadata !== false) errors.push(`${path}.mcp.args.private_metadata`);
+    }
+  }
+  if (!hasString(value, "sdk")) errors.push(`${path}.sdk`);
+  if (!hasNullableString(value, "private_shell_command")) errors.push(`${path}.private_shell_command`);
+}
+
+function validateAgentMachineRows(value: unknown, path: string, errors: string[], commandRows = false): void {
+  if (!Array.isArray(value)) {
+    errors.push(path);
+    return;
+  }
+  for (const [index, row] of value.entries()) {
+    const rowPath = `${path}.${index}`;
+    if (!isRecord(row)) {
+      errors.push(rowPath);
+      continue;
+    }
+    requireFields(row, commandRows
+      ? ["machine_id", "display_name", "can_run", "readiness", "route", "source", "confidence", "local", "command", "blocked_by", "warnings", "detail_refs"]
+      : ["machine_id", "display_name", "status", "ok", "route", "confidence", "local", "heartbeat", "checks", "issues", "warnings", "detail_refs"], errors);
+    if (!hasString(row, "machine_id")) errors.push(`${rowPath}.machine_id`);
+    if (!hasString(row, "display_name")) errors.push(`${rowPath}.display_name`);
+    if (commandRows) {
+      if (typeof row.can_run !== "boolean") errors.push(`${rowPath}.can_run`);
+      validateReadiness(row.readiness, `${rowPath}.readiness`, errors);
+      validateCommandMatrixPlan(row.command, `${rowPath}.command`, errors);
+      if (!hasArray(row, "blocked_by")) errors.push(`${rowPath}.blocked_by`);
+    } else {
+      validateReadiness(row.status, `${rowPath}.status`, errors);
+      if (typeof row.ok !== "boolean") errors.push(`${rowPath}.ok`);
+      if (!hasObject(row, "checks")) errors.push(`${rowPath}.checks`);
+      if (!hasArray(row, "issues")) errors.push(`${rowPath}.issues`);
+    }
+    if (!hasString(row, "route")) errors.push(`${rowPath}.route`);
+    if (!hasString(row, "confidence")) errors.push(`${rowPath}.confidence`);
+    if (typeof row.local !== "boolean") errors.push(`${rowPath}.local`);
+    if (!hasArray(row, "warnings")) errors.push(`${rowPath}.warnings`);
+    validateAgentDetailRefs(row.detail_refs, `${rowPath}.detail_refs`, errors);
+  }
+}
+
+function validateRoutingRows(value: unknown, path: string, errors: string[]): void {
+  if (!Array.isArray(value)) {
+    errors.push(path);
+    return;
+  }
+  for (const [index, row] of value.entries()) {
+    const rowPath = `${path}.${index}`;
+    if (!isRecord(row)) {
+      errors.push(rowPath);
+      continue;
+    }
+    requireFields(row, ["machine_id", "display_name", "ok", "route", "source", "confidence", "local", "heartbeat", "cacheable", "target", "command_target", "warnings", "detail_refs"], errors);
+    if (!hasString(row, "machine_id")) errors.push(`${rowPath}.machine_id`);
+    if (!hasString(row, "display_name")) errors.push(`${rowPath}.display_name`);
+    if (typeof row.ok !== "boolean") errors.push(`${rowPath}.ok`);
+    if (!hasString(row, "route")) errors.push(`${rowPath}.route`);
+    if (!hasString(row, "source")) errors.push(`${rowPath}.source`);
+    if (!hasString(row, "confidence")) errors.push(`${rowPath}.confidence`);
+    if (typeof row.local !== "boolean") errors.push(`${rowPath}.local`);
+    if (typeof row.cacheable !== "boolean") errors.push(`${rowPath}.cacheable`);
+    if (!hasNullableString(row, "target")) errors.push(`${rowPath}.target`);
+    if (!hasNullableString(row, "command_target")) errors.push(`${rowPath}.command_target`);
+    if (!hasArray(row, "warnings")) errors.push(`${rowPath}.warnings`);
+    validateAgentDetailRefs(row.detail_refs, `${rowPath}.detail_refs`, errors);
+  }
+}
+
+function validateLoopPreflightRows(value: unknown, path: string, errors: string[]): void {
+  if (!Array.isArray(value)) {
+    errors.push(path);
+    return;
+  }
+  for (const [index, row] of value.entries()) {
+    const rowPath = `${path}.${index}`;
+    if (!isRecord(row)) {
+      errors.push(rowPath);
+      continue;
+    }
+    requireFields(row, ["machine_id", "display_name", "ready", "status", "can_run", "route", "confidence", "local", "heartbeat", "blocked_by", "warnings", "next_steps", "detail_refs"], errors);
+    if (!hasString(row, "machine_id")) errors.push(`${rowPath}.machine_id`);
+    if (!hasString(row, "display_name")) errors.push(`${rowPath}.display_name`);
+    if (typeof row.ready !== "boolean") errors.push(`${rowPath}.ready`);
+    if (typeof row.can_run !== "boolean") errors.push(`${rowPath}.can_run`);
+    validateReadiness(row.status, `${rowPath}.status`, errors);
+    if (!hasString(row, "route")) errors.push(`${rowPath}.route`);
+    if (!hasString(row, "confidence")) errors.push(`${rowPath}.confidence`);
+    if (typeof row.local !== "boolean") errors.push(`${rowPath}.local`);
+    if (!hasArray(row, "blocked_by")) errors.push(`${rowPath}.blocked_by`);
+    if (!hasArray(row, "warnings")) errors.push(`${rowPath}.warnings`);
+    if (!hasArray(row, "next_steps")) errors.push(`${rowPath}.next_steps`);
+    validateAgentDetailRefs(row.detail_refs, `${rowPath}.detail_refs`, errors);
+  }
+}
+
 export function getMachinesConsumerSchemaBundle(): MachinesConsumerSchemaBundle {
   return JSON.parse(JSON.stringify(MACHINES_CONSUMER_SCHEMA_BUNDLE)) as MachinesConsumerSchemaBundle;
 }
@@ -852,6 +1282,60 @@ export function validateMachinesConsumerEnvelope(
         if (!hasArray(policy, "metadata_keys")) errors.push(`policies.${index}.metadata_keys`);
       }
     }
+    if (!hasArray(value, "warnings")) errors.push("warnings");
+  } else if (envelope === "machine_health") {
+    requireFields(value, ["package", "capabilities", "generated_at", "kind", "pagination", "summary", "machines", "artifacts", "warnings"], errors);
+    if (value.kind !== "machine_health") errors.push("kind");
+    validatePagination(value.pagination, "pagination", errors);
+    validateAgentSummary(value.summary, "summary", errors);
+    validateAgentMachineRows(value.machines, "machines", errors);
+    validateAgentArtifacts(value.artifacts, "artifacts", errors);
+    if (!hasArray(value, "warnings")) errors.push("warnings");
+  } else if (envelope === "routing") {
+    requireFields(value, ["package", "capabilities", "generated_at", "kind", "pagination", "summary", "routes", "artifacts", "warnings"], errors);
+    if (value.kind !== "routing") errors.push("kind");
+    validatePagination(value.pagination, "pagination", errors);
+    if (!hasObject(value, "summary")) {
+      errors.push("summary");
+    } else {
+      const routingSummary = value.summary as Record<string, unknown>;
+      for (const key of ["total", "routable", "local", "remote", "unroutable"]) {
+        if (typeof routingSummary[key] !== "number") errors.push(`summary.${key}`);
+      }
+    }
+    validateRoutingRows(value.routes, "routes", errors);
+    validateAgentArtifacts(value.artifacts, "artifacts", errors);
+    if (!hasArray(value, "warnings")) errors.push("warnings");
+  } else if (envelope === "command_matrix") {
+    requireFields(value, ["package", "capabilities", "generated_at", "kind", "mode", "pagination", "summary", "commands", "artifacts", "warnings"], errors);
+    if (value.kind !== "command_matrix") errors.push("kind");
+    if (value.mode !== "plan") errors.push("mode");
+    validatePagination(value.pagination, "pagination", errors);
+    if (!hasObject(value, "summary")) {
+      errors.push("summary");
+    } else {
+      const matrixSummary = value.summary as Record<string, unknown>;
+      for (const key of ["total", "runnable", "blocked", "local", "remote"]) {
+        if (typeof matrixSummary[key] !== "number") errors.push(`summary.${key}`);
+      }
+    }
+    validateAgentMachineRows(value.commands, "commands", errors, true);
+    validateAgentArtifacts(value.artifacts, "artifacts", errors);
+    if (!hasArray(value, "warnings")) errors.push("warnings");
+  } else if (envelope === "loop_preflight") {
+    requireFields(value, ["package", "capabilities", "generated_at", "kind", "mode", "selection_mode", "ok", "pagination", "summary", "machines", "artifacts", "warnings"], errors);
+    if (value.kind !== "loop_preflight") errors.push("kind");
+    if (value.mode !== "plan") errors.push("mode");
+    if (!["explicit", "discovered"].includes(String(value.selection_mode))) errors.push("selection_mode");
+    if (typeof value.ok !== "boolean") errors.push("ok");
+    validatePagination(value.pagination, "pagination", errors);
+    validateAgentSummary(value.summary, "summary", errors, true);
+    if (isRecord(value.summary)) {
+      if (typeof value.summary.any_ready !== "boolean") errors.push("summary.any_ready");
+      if (typeof value.summary.all_ready !== "boolean") errors.push("summary.all_ready");
+    }
+    validateLoopPreflightRows(value.machines, "machines", errors);
+    validateAgentArtifacts(value.artifacts, "artifacts", errors);
     if (!hasArray(value, "warnings")) errors.push("warnings");
   } else if (envelope === "browserplan_fleet") {
     requireFields(value, ["package", "capabilities", "generated_at", "kind", "target", "coverage", "operation_contract", "machines", "warnings"], errors);
@@ -1054,4 +1538,8 @@ export type MachinesConsumerEnvelopeValue =
   | NoteMachineContext
   | MachineTrashPolicies
   | MachineDetails
-  | BrowserPlanFleet;
+  | BrowserPlanFleet
+  | MachineHealthReport
+  | FleetRoutingReport
+  | CommandMatrixReport
+  | FleetLoopPreflightReport;

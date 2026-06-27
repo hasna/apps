@@ -26,6 +26,7 @@ afterEach(() => {
   delete process.env["HASNA_MACHINES_MANIFEST_PATH"];
   delete process.env["HASNA_MACHINES_DB_PATH"];
   delete process.env["HASNA_MACHINES_MACHINE_ID"];
+  delete process.env["HASNA_MACHINES_REACHABLE_HOSTS"];
   delete process.env["HASNA_MACHINES_DATABASE_URL"];
   delete process.env["MACHINES_DATABASE_URL"];
   delete process.env["HASNA_MACHINES_MUTATION_REPLAY_PATH"];
@@ -43,6 +44,10 @@ test("exports expected MCP tool surface", () => {
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_serve_info");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_sync_apply");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_compatibility");
+  expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_machine_health");
+  expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_routing");
+  expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_command_matrix");
+  expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_loop_preflight");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_route_resolve");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_workspace_resolve");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_friendly_name_get");
@@ -121,6 +126,63 @@ test("MCP BrowserPlan fleet tool exposes target machines and operation hooks", a
     });
     expect(payload.machines[0].operation_hooks.map((hook: { id: string }) => hook.id)).toContain("headless_launch");
     expect(JSON.stringify(payload)).not.toContain("Spark Local");
+  } finally {
+    await client.close();
+    await server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("MCP loop preflight returns compact redacted JSON", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "machines-mcp-agent-apis-"));
+  process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
+  process.env["HASNA_MACHINES_DB_PATH"] = join(dir, "machines.db");
+  process.env["HASNA_MACHINES_MACHINE_ID"] = "control";
+  process.env["HASNA_MACHINES_REACHABLE_HOSTS"] = "operator@worker";
+  manifestInit();
+  manifestAdd({
+    id: "control",
+    friendlyName: "Control Node",
+    platform: "linux" as const,
+    workspacePath: "/home/hasna/Workspace",
+    updatedAt: "2026-06-26T10:00:00.000Z",
+  });
+  manifestAdd({
+    id: "worker",
+    friendlyName: "Worker Node",
+    platform: "linux" as const,
+    workspacePath: "/srv/workspace",
+    sshAddress: "operator@worker",
+    updatedAt: "2026-06-26T09:00:00.000Z",
+  });
+
+  const server = createMcpServer("0.0.1");
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "agent-api-contract-test", version: "0.0.1" });
+
+  await server.connect(serverTransport);
+  await client.connect(clientTransport);
+
+  try {
+    const result = await client.callTool({
+      name: "machines_loop_preflight",
+      arguments: {
+        machine_ids: ["control", "worker"],
+        include_tailscale: false,
+        command: "echo loop",
+        private_metadata: true,
+      },
+    });
+    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
+    const payload = JSON.parse(text);
+    expect(payload).toMatchObject({
+      kind: "loop_preflight",
+      mode: "plan",
+      pagination: { count: 2, total: 2 },
+    });
+    expect(JSON.stringify(payload)).not.toContain("operator@worker");
+    expect(JSON.stringify(payload)).not.toContain("echo loop");
+    expect(payload.warnings).toContain("private_output_denied:set HASNA_MACHINES_ALLOW_PRIVATE_OUTPUT=1 to allow private metadata output");
   } finally {
     await client.close();
     await server.close();

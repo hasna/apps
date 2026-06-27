@@ -61,6 +61,37 @@ export type {
   MachinesConsumerValidationResult,
 } from "./consumer-schema.js";
 export {
+  AGENT_ABSTRACTIONS_KIND,
+  getCommandMatrix,
+  getFleetLoopPreflight,
+  getFleetMachineHealth,
+  getFleetRouting,
+} from "./agent-abstractions.js";
+export type {
+  AgentApiArtifactRef,
+  AgentApiDetailRefs,
+  AgentCheckStatus,
+  AgentCompatibilityOptions,
+  AgentMachineSelectorOptions,
+  AgentReadinessStatus,
+  AgentSummary,
+  AgentWorkspaceOptions,
+  CommandMatrixCommandPlan,
+  CommandMatrixOptions,
+  CommandMatrixReport,
+  CommandMatrixRow,
+  FleetLoopPreflightOptions,
+  FleetLoopPreflightReport,
+  FleetRoutingOptions,
+  FleetRoutingReport,
+  LoopPreflightMachine,
+  MachineHealthCheckSummary,
+  MachineHealthOptions,
+  MachineHealthReport,
+  MachineHealthRow,
+  RoutingRow,
+} from "./agent-abstractions.js";
+export {
   listMachineProjectAssignments,
   projectAssignmentMutationArgs,
   projectAssignmentResourceId,

@@ -10,7 +10,11 @@ import {
   createMachineResolverSnapshot,
   checkMachineCompatibility,
   discoverMachineTopology,
+  getCommandMatrix,
   getBrowserPlanFleet,
+  getFleetLoopPreflight,
+  getFleetMachineHealth,
+  getFleetRouting,
   getMachinesConsumerCapabilities,
   getMachinesConsumerSchemaBundle,
   getMachineDetails,
@@ -36,13 +40,17 @@ describe("machines consumer SDK", () => {
     expect(MACHINES_CONSUMER_CAPABILITIES.machine_trash_policies).toBe(true);
     expect(MACHINES_CONSUMER_CAPABILITIES.machine_details).toBe(true);
     expect(MACHINES_CONSUMER_CAPABILITIES.browserplan_fleet).toBe(true);
+    expect(MACHINES_CONSUMER_CAPABILITIES.machine_health).toBe(true);
+    expect(MACHINES_CONSUMER_CAPABILITIES.fleet_routing).toBe(true);
+    expect(MACHINES_CONSUMER_CAPABILITIES.command_matrix).toBe(true);
+    expect(MACHINES_CONSUMER_CAPABILITIES.loop_preflight).toBe(true);
     expect(getMachinesConsumerCapabilities()).toEqual(MACHINES_CONSUMER_CAPABILITIES);
     expect(MACHINES_CONSUMER_CONTRACT).toMatchObject({
       schema_version: 1,
       package_name: "@hasna/machines",
       entrypoint: "@hasna/machines/consumer",
       schema_artifact: "schemas/machines-consumer.schema.json",
-      envelopes: ["topology", "route", "workspace", "compatibility", "resolver_snapshot", "project_assignments", "note_machine_context", "machine_trash_policies", "machine_details", "browserplan_fleet"],
+      envelopes: ["topology", "route", "workspace", "compatibility", "resolver_snapshot", "project_assignments", "note_machine_context", "machine_trash_policies", "machine_details", "browserplan_fleet", "machine_health", "routing", "command_matrix", "loop_preflight"],
     });
     expect(MACHINES_CONSUMER_CONTRACT.stable_exports).toContain("resolveMachineWorkspace");
     expect(MACHINES_CONSUMER_CONTRACT.stable_exports).toContain("createMachineResolverSnapshot");
@@ -51,6 +59,10 @@ describe("machines consumer SDK", () => {
     expect(MACHINES_CONSUMER_CONTRACT.stable_exports).toContain("listMachineTrashPolicies");
     expect(MACHINES_CONSUMER_CONTRACT.stable_exports).toContain("getMachineDetails");
     expect(MACHINES_CONSUMER_CONTRACT.stable_exports).toContain("getBrowserPlanFleet");
+    expect(MACHINES_CONSUMER_CONTRACT.stable_exports).toContain("getFleetMachineHealth");
+    expect(MACHINES_CONSUMER_CONTRACT.stable_exports).toContain("getFleetRouting");
+    expect(MACHINES_CONSUMER_CONTRACT.stable_exports).toContain("getCommandMatrix");
+    expect(MACHINES_CONSUMER_CONTRACT.stable_exports).toContain("getFleetLoopPreflight");
     expect(MACHINES_CONSUMER_CONTRACT.stable_exports).toContain("normalizeBrowserPlanMachineId");
     expect(MACHINES_CONSUMER_CONTRACT.stable_exports).toContain("validateMachinesConsumerEnvelope");
     expect(MACHINES_CONSUMER_CONTRACT.field_capabilities.workspace.trust_auth).toBe(true);
@@ -61,6 +73,7 @@ describe("machines consumer SDK", () => {
     expect(MACHINES_CONSUMER_CONTRACT.field_capabilities.machine_trash_policies.retention_metadata).toBe(true);
     expect(MACHINES_CONSUMER_CONTRACT.field_capabilities.machine_details.safe_display_metadata).toBe(true);
     expect(MACHINES_CONSUMER_CONTRACT.field_capabilities.browserplan_fleet.machine001_machine011_target).toBe(true);
+    expect(MACHINES_CONSUMER_CONTRACT.field_capabilities.agent_abstractions.compact_json_defaults).toBe(true);
     expect(typeof discoverMachineTopology).toBe("function");
     expect(typeof checkMachineCompatibility).toBe("function");
     expect(typeof resolveMachineRoute).toBe("function");
@@ -71,6 +84,10 @@ describe("machines consumer SDK", () => {
     expect(typeof listMachineTrashPolicies).toBe("function");
     expect(typeof getMachineDetails).toBe("function");
     expect(typeof getBrowserPlanFleet).toBe("function");
+    expect(typeof getFleetMachineHealth).toBe("function");
+    expect(typeof getFleetRouting).toBe("function");
+    expect(typeof getCommandMatrix).toBe("function");
+    expect(typeof getFleetLoopPreflight).toBe("function");
     expect(normalizeBrowserPlanMachineId("Machine2")).toBe("machine002");
   });
 
@@ -94,6 +111,10 @@ describe("machines consumer SDK", () => {
       "machine_trash_policy",
       "machine_details",
       "browserplan_fleet",
+      "machine_health",
+      "routing",
+      "command_matrix",
+      "loop_preflight",
     ]));
 
     const artifact = JSON.parse(readFileSync(resolve(import.meta.dir, "..", MACHINES_CONSUMER_CONTRACT.schema_artifact), "utf8"));

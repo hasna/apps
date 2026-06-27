@@ -109,6 +109,10 @@ export interface MachinesConsumerCapabilities {
   machine_trash_policies?: true;
   machine_details?: true;
   browserplan_fleet?: true;
+  machine_health?: true;
+  fleet_routing?: true;
+  command_matrix?: true;
+  loop_preflight?: true;
 }
 
 export type MachinesConsumerEnvelope =
@@ -121,7 +125,11 @@ export type MachinesConsumerEnvelope =
   | "note_machine_context"
   | "machine_trash_policies"
   | "machine_details"
-  | "browserplan_fleet";
+  | "browserplan_fleet"
+  | "machine_health"
+  | "routing"
+  | "command_matrix"
+  | "loop_preflight";
 
 export interface MachinesConsumerFieldCapabilities {
   topology: {
@@ -190,6 +198,17 @@ export interface MachinesConsumerFieldCapabilities {
     route_reachability: true;
     workspace_summary: true;
   };
+  agent_abstractions: {
+    compact_json_defaults: true;
+    bounded_machine_lists: true;
+    raw_artifact_refs: true;
+    private_route_redaction: true;
+    dry_run_plans: true;
+    loop_readiness: true;
+    command_matrix: true;
+    machine_health: true;
+    fleet_routing: true;
+  };
 }
 
 export interface MachinesConsumerContract {
@@ -226,6 +245,10 @@ export const MACHINES_CONSUMER_CAPABILITIES: MachinesConsumerCapabilities = {
   machine_trash_policies: true,
   machine_details: true,
   browserplan_fleet: true,
+  machine_health: true,
+  fleet_routing: true,
+  command_matrix: true,
+  loop_preflight: true,
 };
 
 export const MACHINES_CONSUMER_FIELD_CAPABILITIES: MachinesConsumerFieldCapabilities = {
@@ -295,6 +318,17 @@ export const MACHINES_CONSUMER_FIELD_CAPABILITIES: MachinesConsumerFieldCapabili
     route_reachability: true,
     workspace_summary: true,
   },
+  agent_abstractions: {
+    compact_json_defaults: true,
+    bounded_machine_lists: true,
+    raw_artifact_refs: true,
+    private_route_redaction: true,
+    dry_run_plans: true,
+    loop_readiness: true,
+    command_matrix: true,
+    machine_health: true,
+    fleet_routing: true,
+  },
 };
 
 export const MACHINES_CONSUMER_CONTRACT: MachinesConsumerContract = {
@@ -309,7 +343,7 @@ export const MACHINES_CONSUMER_CONTRACT: MachinesConsumerContract = {
     default_ttl_ms: DEFAULT_MACHINE_RESOLVER_TTL_MS,
     stale_requires_refresh: true,
   },
-  envelopes: ["topology", "route", "workspace", "compatibility", "resolver_snapshot", "project_assignments", "note_machine_context", "machine_trash_policies", "machine_details", "browserplan_fleet"],
+  envelopes: ["topology", "route", "workspace", "compatibility", "resolver_snapshot", "project_assignments", "note_machine_context", "machine_trash_policies", "machine_details", "browserplan_fleet", "machine_health", "routing", "command_matrix", "loop_preflight"],
   stable_exports: [
     "MACHINES_CONSUMER_CONTRACT",
     "MACHINES_CONSUMER_CONTRACT_VERSION",
@@ -330,6 +364,10 @@ export const MACHINES_CONSUMER_CONTRACT: MachinesConsumerContract = {
     "machineReferenceForNote",
     "getMachineDetails",
     "getBrowserPlanFleet",
+    "getFleetMachineHealth",
+    "getFleetRouting",
+    "getCommandMatrix",
+    "getFleetLoopPreflight",
     "normalizeBrowserPlanMachineId",
     "getMachinesConsumerSchemaBundle",
     "validateMachinesConsumerEnvelope",
