@@ -1,3 +1,5 @@
+export { PACKAGE_VERSION } from "./version.js";
+
 // ── Database ──────────────────────────────────────────────────────────────────
 export { getDb, initDb, DB_PATH } from "./lib/db.js";
 

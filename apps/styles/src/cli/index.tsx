@@ -11,13 +11,14 @@ import { registerHealthCommand } from "./commands/health.js";
 import { registerContextCommands } from "./commands/context.js";
 import { registerMiscCommands } from "./commands/misc.js";
 import { registerExtractCommand } from "./commands/extract.js";
+import { PACKAGE_VERSION } from "../version.js";
 
 const program = new Command();
 
 program
   .name("styles")
   .description("Open Styles — design style management for AI coding agents")
-  .version("0.0.1");
+  .version(PACKAGE_VERSION);
 
 // Register all command groups from separate modules
 registerMiscCommands(program);
