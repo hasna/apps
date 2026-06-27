@@ -1,5 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { realpathSync } from "node:fs";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import {
   STORAGE_TABLES,
@@ -9,6 +11,10 @@ import {
   storagePush,
   storageSync,
 } from "./storage-sync.js";
+import {
+  scanHistoryExposures,
+  scanWorkspaceExposures,
+} from "./scanner.js";
 import {
   setSecret,
   getSecret,
@@ -281,6 +287,57 @@ export async function startMcpServer(): Promise<void> {
     })
   );
 
+  server.tool(
+    "scan_workspace_exposures",
+    "Scan a workspace for likely exposed credentials. Returns bounded redacted metadata only.",
+    {
+      root: z.string().optional().describe("Workspace root. Defaults to the MCP process working directory."),
+      limit: z.number().int().positive().optional().describe("Maximum findings to return. Capped by the server."),
+      maxFileBytes: z.number().int().positive().optional().describe("Maximum bytes per file to inspect."),
+      maxFiles: z.number().int().positive().optional().describe("Maximum files to scan. Capped by the server."),
+      maxBytesScanned: z.number().int().positive().optional().describe("Maximum total bytes to scan. Capped by the server."),
+      timeoutMs: z.number().int().positive().optional().describe("Maximum scan runtime in milliseconds. Capped by the server."),
+    },
+    async ({ root, limit, maxFileBytes, maxFiles, maxBytesScanned, timeoutMs }) => {
+      const resolved = resolveMcpRoot(root);
+      if (!resolved.ok) return mcpScanRootError("workspace", resolved.root, resolved.error);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(scanWorkspaceExposures({
+            root: resolved.root,
+            limit,
+            maxFileBytes,
+            maxFiles,
+            maxBytesScanned,
+            timeoutMs,
+          })),
+        }],
+      };
+    }
+  );
+
+  server.tool(
+    "scan_history_exposures",
+    "Scan bounded git history for likely exposed credentials. Returns bounded redacted metadata only.",
+    {
+      root: z.string().optional().describe("Git workspace root. Defaults to the MCP process working directory."),
+      limit: z.number().int().positive().optional().describe("Maximum findings to return. Capped by the server."),
+      maxCommits: z.number().int().positive().optional().describe("Maximum commits to inspect. Capped by the server."),
+      timeoutMs: z.number().int().positive().optional().describe("Maximum scan runtime in milliseconds. Capped by the server."),
+    },
+    async ({ root, limit, maxCommits, timeoutMs }) => {
+      const resolved = resolveMcpRoot(root);
+      if (!resolved.ok) return mcpScanRootError("history", resolved.root, resolved.error);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(scanHistoryExposures({ root: resolved.root, limit, maxCommits, timeoutMs })),
+        }],
+      };
+    }
+  );
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
@@ -291,4 +348,59 @@ function parseTtl(ttl: string): string {
   const [, num, unit] = match;
   const ms = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[unit as string]!;
   return new Date(Date.now() + parseInt(num) * ms).toISOString();
+}
+
+export function resolveMcpRoot(root?: string): { ok: true; root?: string } | { ok: false; root: string; error: string } {
+  if (!root) return { ok: true };
+  const resolved = resolve(root);
+
+  let base: string;
+  let realRoot: string;
+  try {
+    base = realpathSync(process.cwd());
+    realRoot = realpathSync(resolved);
+  } catch (error) {
+    return {
+      ok: false,
+      root: resolved,
+      error: `Unable to resolve MCP scan root: ${(error as Error).message}`,
+    };
+  }
+
+  const rel = relative(base, realRoot);
+  const outsideBase = rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+  if (rel === "" || !outsideBase) {
+    return { ok: true, root: realRoot };
+  }
+  return {
+    ok: false,
+    root: realRoot,
+    error: `MCP scan root must be inside the server working directory: ${base}`,
+  };
+}
+
+function mcpScanRootError(source: "workspace" | "history", root: string, error: string) {
+  return {
+    content: [{
+      type: "text" as const,
+      text: JSON.stringify({
+        version: 1,
+        source,
+        root,
+        redacted: true,
+        limits: { findings: 0 },
+        stats: {
+          filesScanned: 0,
+          filesSkipped: 0,
+          bytesScanned: 0,
+          ...(source === "history" ? { commitsScanned: 0 } : {}),
+          errors: [error],
+        },
+        findings: [],
+        findingCount: 0,
+        truncated: false,
+      }),
+    }],
+    isError: true,
+  };
 }

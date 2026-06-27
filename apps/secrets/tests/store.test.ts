@@ -268,9 +268,28 @@ describe("importSecrets / exportSecrets", () => {
     expect(exportSecrets(false).secrets["key/one"].value).toBe("secret!");
   });
 
+  it("exports redacted by default", () => {
+    setSecret("key/one", "secret!", "token");
+    const exported = exportSecrets();
+    expect(exported.redacted).toBe(true);
+    expect(exported.secrets["key/one"].value).toBe("***REDACTED***");
+  });
+
   it("exports redacted", () => {
     setSecret("key/one", "secret!", "token");
     expect(exportSecrets(true).secrets["key/one"].value).toBe("***REDACTED***");
+  });
+
+  it("exports redacted metadata without decrypting values", () => {
+    setSecret("key/one", "secret!", "token");
+    getDb()
+      .prepare("UPDATE secrets SET value = ? WHERE key = ?")
+      .run("enc:v1:malformed", "key/one");
+
+    const exported = exportSecrets();
+    expect(exported.redacted).toBe(true);
+    expect(exported.secrets["key/one"].value).toBe("***REDACTED***");
+    expect(() => exportSecrets(false)).toThrow("Malformed encrypted value");
   });
 });
 

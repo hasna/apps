@@ -56,7 +56,9 @@ Commands:
   export-env                 export vault secrets to ~/.secrets/ .env files [--dir <path>] [--force] [--dry-run]
   list [namespace]
   search <query>
-  export [--redact]
+  export [--show|--plaintext] [--pretty]  export redacted compact JSON by default
+  scan workspace [path] [--limit <n>] [--max-bytes <n>] [--max-files <n>] [--max-scan-bytes <n>] [--timeout-ms <n>] [--pretty]
+  scan history [path] [--limit <n>] [--max-commits <n>] [--timeout-ms <n>] [--pretty]
   import <json-file>
   gc                          prune expired secrets
   audit [key]                 show audit log
@@ -94,8 +96,8 @@ Types: ${SECRET_TYPES.join(", ")}
 TTL examples: 30d, 24h, 60m
 
 Examples:
-  secrets set openai/api_key sk-abc123 --type api_key
-  secrets set gmail/password "hunter2" --type password --label "Gmail"
+  secrets set openai/api_key "$OPENAI_API_KEY" --type api_key
+  secrets set gmail/password "$GMAIL_PASSWORD" --type password --label "Gmail"
   secrets get openai/api_key
   secrets list openai
   secrets search gmail
@@ -143,8 +145,15 @@ Common CLI workflows
   Review access history:
     secrets audit example/anthropic/test/api_key
 
-  Export a redacted backup for review:
-    secrets export --redact
+  Export redacted JSON for review:
+    secrets export
+
+  Export plaintext only when a restorable local artifact is explicitly needed:
+    secrets export --show --pretty > secrets-backup.json
+
+  Scan the current workspace or bounded git history for exposed credentials:
+    secrets scan workspace --limit 50
+    secrets scan history --max-commits 200 --limit 50
 
 Structured vault items
   Store a browser login:
@@ -197,6 +206,8 @@ MCP usage
     storage_push(tables?)
     storage_pull(tables?)
     storage_sync(tables?)
+    scan_workspace_exposures(root?, limit?, maxFileBytes?, maxFiles?, maxBytesScanned?, timeoutMs?)
+    scan_history_exposures(root?, limit?, maxCommits?, timeoutMs?)
 
 Remote storage sync
   Configure a Postgres/RDS database URL:
@@ -208,13 +219,25 @@ Remote storage sync
     secrets storage sync
 
 Safety
-  list, search, and export --redact do not print secret values.
+  list, search, export, and scan commands do not print secret values by default.
+  export --show and export --plaintext are explicit plaintext escape hatches.
   get and get_secret return raw secret values. Use them only when needed.
   Never paste secrets into commits, logs, issues, PRs, or chat messages.
 `);
 }
 
-const BOOLEAN_FLAGS = new Set(["redact", "push", "dry-run", "plan", "force", "overwrite", "show", "favorite"]);
+const BOOLEAN_FLAGS = new Set([
+  "redact",
+  "push",
+  "dry-run",
+  "plan",
+  "force",
+  "overwrite",
+  "show",
+  "plaintext",
+  "pretty",
+  "favorite",
+]);
 
 function parseArgs(args: string[]): { flags: Record<string, string>; positional: string[] } {
   const flags: Record<string, string> = {};
@@ -328,6 +351,21 @@ function parseAwsOptions(flags: Record<string, string>) {
   };
 }
 
+function formatJson(value: unknown, pretty = false): string {
+  return JSON.stringify(value, null, pretty ? 2 : 0);
+}
+
+function positiveIntegerFlag(flags: Record<string, string>, name: string): number | undefined {
+  const value = flags[name];
+  if (!value) return undefined;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    console.error(`Invalid --${name}: ${value}. Use a positive integer.`);
+    process.exit(1);
+  }
+  return parsed;
+}
+
 const args = process.argv.slice(2);
 const [command, ...rest] = args;
 
@@ -423,8 +461,47 @@ switch (command) {
   }
 
   case "export": {
-    const redact = "redact" in flags;
-    console.log(JSON.stringify(exportSecrets(redact), null, 2));
+    const showPlaintext = flags.show === "true" || flags.plaintext === "true";
+    if (showPlaintext && flags.redact === "true") {
+      console.error("Usage: secrets export [--show|--plaintext] [--pretty]. Do not combine --redact with plaintext flags.");
+      process.exit(1);
+    }
+    console.log(formatJson(exportSecrets(!showPlaintext), flags.pretty === "true"));
+    break;
+  }
+
+  case "scan": {
+    const [target = "workspace", root] = positional;
+    const { scanWorkspaceExposures, scanHistoryExposures } = await import("./scanner.js");
+    const common = {
+      root,
+      limit: positiveIntegerFlag(flags, "limit"),
+    };
+    switch (target) {
+      case "workspace": {
+        const result = scanWorkspaceExposures({
+          ...common,
+          maxFileBytes: positiveIntegerFlag(flags, "max-bytes"),
+          maxFiles: positiveIntegerFlag(flags, "max-files"),
+          maxBytesScanned: positiveIntegerFlag(flags, "max-scan-bytes"),
+          timeoutMs: positiveIntegerFlag(flags, "timeout-ms"),
+        });
+        console.log(formatJson(result, flags.pretty === "true"));
+        break;
+      }
+      case "history": {
+        const result = scanHistoryExposures({
+          ...common,
+          maxCommits: positiveIntegerFlag(flags, "max-commits"),
+          timeoutMs: positiveIntegerFlag(flags, "timeout-ms"),
+        });
+        console.log(formatJson(result, flags.pretty === "true"));
+        break;
+      }
+      default:
+        console.error("Usage: secrets scan workspace|history [path] [--limit <n>] [--max-bytes <n>] [--max-files <n>] [--max-scan-bytes <n>] [--max-commits <n>] [--timeout-ms <n>] [--pretty]");
+        process.exit(1);
+    }
     break;
   }
 
@@ -435,6 +512,12 @@ switch (command) {
       const { readFileSync } = await import("fs");
       const data = JSON.parse(readFileSync(file, "utf-8"));
       const entries = Array.isArray(data) ? data : data.secrets ? Object.values(data.secrets) : [];
+      const hasRedactedValues = data?.redacted === true ||
+        entries.some((entry: any) => entry?.value === "***REDACTED***");
+      if (hasRedactedValues) {
+        console.error("Import refused: this looks like a redacted export. Use `secrets export --show` to create a restorable local backup.");
+        process.exit(1);
+      }
       const count = importSecrets(entries as any);
       console.log(`✓ Imported ${count} secret(s)`);
     } catch (e: any) {

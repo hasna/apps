@@ -20,5 +20,7 @@ describe("CLI docs", () => {
     expect(stdout).toContain("Common CLI workflows");
     expect(stdout).toContain("MCP tools");
     expect(stdout).toContain("secrets import-env --dir ~/.secrets --dry-run");
+    expect(stdout).toContain("secrets export");
+    expect(stdout).toContain("secrets scan workspace --limit 50");
   });
 });
