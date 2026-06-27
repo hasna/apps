@@ -127,11 +127,11 @@ describe("local event hooks", () => {
     expect(results[0]!.error).not.toContain("abcdefghijklmnopqrstuvwxyz123");
   });
 
-  test("emits lifecycle task events without hosted webhooks", () => {
+  test("emits lifecycle task events without hosted webhooks", async () => {
     const filePath = join(home, "lifecycle.jsonl");
     upsertLocalEventHook({
       name: "lifecycle",
-      events: ["task.started", "task.completed"],
+      events: ["task.created", "task.started", "task.completed"],
       target: "file",
       file_path: filePath,
     });
@@ -143,7 +143,8 @@ describe("local event hooks", () => {
 
     expect(existsSync(filePath)).toBe(true);
     const events = readFileSync(filePath, "utf-8").trim().split("\n").map((line) => JSON.parse(line));
-    expect(events.map((event) => event.type)).toEqual(["task.started", "task.completed"]);
+    expect(events.map((event) => event.type)).toEqual(["task.created", "task.started", "task.completed"]);
+    expect(events[0]!.payload.title).toBe("Lifecycle");
   });
 
   test("removes configured hooks", () => {

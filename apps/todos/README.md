@@ -387,6 +387,40 @@ MCP clients can use `set_local_event_hook`, `list_local_event_hooks`,
 `test_local_event_hook`, and `remove_local_event_hook`. Hook delivery is
 local-only; it does not call hosted webhooks or cloud automation services.
 
+## Shared Event Webhooks
+
+Task lifecycle changes also emit shared `@hasna/events` events with source
+`todos`. Use `todos webhooks` for durable command or webhook subscriptions. This
+is the preferred bridge for automation that should react to new tasks without
+polling:
+
+```bash
+todos webhooks add loops \
+  --id openloops-task-created \
+  --transport command \
+  --type task.created \
+  --arg=events \
+  --arg=handle \
+  --arg=todos-task \
+  --arg=--provider \
+  --arg=codewith \
+  --arg=--auth-profile \
+  --arg=account005 \
+  --arg=--permission-mode \
+  --arg=bypass \
+  --arg=--sandbox \
+  --arg=danger-full-access \
+  --timeout-ms 900000 \
+  --json
+```
+
+When a task is created, `@hasna/events` sends the event JSON on stdin and in
+`HASNA_EVENT_JSON`. OpenLoops uses that event to create a deduped one-shot
+worker/verifier workflow for the task. The event data includes task identity,
+title, description, project/list ids, working directory, tags, metadata, status,
+priority, and timestamps. Local event hooks remain available for local-only
+JSONL/socket/script integrations.
+
 ## Local Terminal Notifications
 
 Terminal notification rules are local watch rules for agents that want concise

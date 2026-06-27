@@ -2673,6 +2673,15 @@ export function registerQueryCommands(program: Command) {
     .option("-j, --json", "Output as JSON")
     .action(async (jsonText: string | undefined, opts) => {
       const globalOpts = program.opts();
+      const wantsJson = Boolean(opts.json || globalOpts.json);
+      const failIssueReport = (message: string): never => {
+        if (wantsJson) {
+          output({ error: message }, true);
+        } else {
+          console.error(chalk.red(message));
+        }
+        process.exit(1);
+      };
       try {
         const {
           readTesterIssueReportsPayload,
@@ -2682,16 +2691,14 @@ export function registerQueryCommands(program: Command) {
         if (opts.file) body = readFileSync(opts.file, "utf-8");
         if (!body && !process.stdin.isTTY) body = await Bun.stdin.text();
         if (!body.trim()) {
-          console.error(chalk.red("Provide a tester issue report JSON payload, --file, or stdin input."));
-          process.exit(1);
+          failIssueReport("Provide a tester issue report JSON payload, --file, or stdin input.");
         }
 
         let parsed: unknown;
         try {
           parsed = JSON.parse(body);
         } catch {
-          console.error(chalk.red("Tester issue report payload must be valid JSON."));
-          process.exit(1);
+          failIssueReport("Tester issue report payload must be valid JSON.");
         }
 
         const result = upsertTesterIssueReports({
@@ -2704,7 +2711,7 @@ export function registerQueryCommands(program: Command) {
           apply: Boolean(opts.apply),
           update_existing: opts.updateExisting,
         });
-        if (opts.json || globalOpts.json) { output(result, true); return; }
+        if (wantsJson) { output(result, true); return; }
 
         const mode = result.dry_run ? "Previewed" : "Applied";
         console.log(chalk.green(`${mode} ${result.summary.total} tester issue report${result.summary.total === 1 ? "" : "s"}.`));
@@ -2713,6 +2720,10 @@ export function registerQueryCommands(program: Command) {
           console.log(`  ${chalk.cyan(item.action.padEnd(9))} ${taskRef} ${chalk.dim(item.fingerprint)} ${item.report.title}`);
         }
       } catch (e) {
+        if (wantsJson) {
+          output({ error: e instanceof Error ? e.message : String(e) }, true);
+          process.exit(1);
+        }
         handleError(e);
       }
     });

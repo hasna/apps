@@ -26,6 +26,7 @@ import {
   statusColors,
   priorityColors,
 } from "../helpers.js";
+import { TASK_PRIORITIES } from "../../types/index.js";
 
 /** Resolve a project by ID or name substring. */
 function resolveProjectIdOrSlug(input: string): string {
@@ -57,6 +58,15 @@ function resolvePlanId(input: string): string {
     process.exit(1);
   }
   return id;
+}
+
+function parsePriority(value: string | undefined): TaskPriority | undefined {
+  if (!value) return undefined;
+  if (!(TASK_PRIORITIES as readonly string[]).includes(value)) {
+    console.error(chalk.red("--priority must be one of: low, medium, high, critical"));
+    process.exit(1);
+  }
+  return value as TaskPriority;
 }
 
 export function registerTaskCommands(program: Command) {
@@ -106,7 +116,7 @@ export function registerTaskCommands(program: Command) {
       const task = createTask({
         title,
         description: opts.description,
-        priority: opts.priority as TaskPriority | undefined,
+        priority: parsePriority(opts.priority),
         parent_id: opts.parent ? resolveTaskId(opts.parent) : undefined,
         tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
         plan_id: opts.plan ? resolvePlanId(opts.plan) : undefined,

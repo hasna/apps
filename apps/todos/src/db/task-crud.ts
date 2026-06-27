@@ -14,6 +14,7 @@ import {
 import { getDatabase, now, uuid } from "./database.js";
 import { checkCompletionGuard } from "../lib/completion-guard.js";
 import { emitLocalEventHooksQuiet } from "../lib/event-hooks.js";
+import { emitSharedTaskEventQuiet, taskEventData } from "../lib/shared-events.js";
 import { logTaskChange } from "./audit.js";
 import { dispatchWebhook } from "./webhooks.js";
 import { getChecklist } from "./checklists.js";
@@ -116,7 +117,10 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
   }
 
   const task = getTask(id, d)!;
-  dispatchWebhook("task.created", { id: task.id, short_id: task.short_id, title: task.title, status: task.status, priority: task.priority, project_id: task.project_id, assigned_to: task.assigned_to }, d).catch(() => {});
+  const payload = taskEventData(task);
+  dispatchWebhook("task.created", payload, d).catch(() => {});
+  emitLocalEventHooksQuiet({ type: "task.created", payload });
+  emitSharedTaskEventQuiet({ type: "task.created", task });
   return task;
 }
 
@@ -558,21 +562,7 @@ export function updateTask(
   if (input.assigned_to !== undefined && input.assigned_to !== task.assigned_to) logTaskChange(id, "update", "assigned_to", task.assigned_to, input.assigned_to, agentId, d);
   if (input.approved_by !== undefined) logTaskChange(id, "approve", "approved_by", null, input.approved_by, agentId, d);
 
-  // Webhook dispatch for assignment and status changes
-  if (input.assigned_to !== undefined && input.assigned_to !== task.assigned_to) {
-    dispatchWebhook("task.assigned", { id, assigned_to: input.assigned_to, title: task.title }, d).catch(() => {});
-    emitLocalEventHooksQuiet({ type: "task.assigned", payload: { id, assigned_to: input.assigned_to, title: task.title } });
-  }
-  if (input.status !== undefined && input.status !== task.status) {
-    dispatchWebhook("task.status_changed", { id, old_status: task.status, new_status: input.status, title: task.title }, d).catch(() => {});
-    emitLocalEventHooksQuiet({ type: "task.status_changed", payload: { id, old_status: task.status, new_status: input.status, title: task.title } });
-  }
-  if (input.approved_by !== undefined) {
-    emitLocalEventHooksQuiet({ type: "approval.decided", payload: { id, approved_by: input.approved_by, title: task.title } });
-  }
-
-  // Return updated task without re-fetching from DB
-  return {
+  const updatedTask: Task = {
     ...task,
     ...Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)),
     tags: input.tags ?? task.tags,
@@ -590,6 +580,26 @@ export function updateTask(
     approved_by: input.approved_by ?? task.approved_by,
     approved_at: input.approved_by ? timestamp : task.approved_at,
   };
+
+  // Webhook dispatch for assignment and status changes
+  if (input.assigned_to !== undefined && input.assigned_to !== task.assigned_to) {
+    const payload = taskEventData(updatedTask, { assigned_to: input.assigned_to, old_assigned_to: task.assigned_to });
+    dispatchWebhook("task.assigned", payload, d).catch(() => {});
+    emitLocalEventHooksQuiet({ type: "task.assigned", payload });
+    emitSharedTaskEventQuiet({ type: "task.assigned", task: updatedTask, data: { old_assigned_to: task.assigned_to } });
+  }
+  if (input.status !== undefined && input.status !== task.status) {
+    const payload = taskEventData(updatedTask, { old_status: task.status, new_status: input.status });
+    dispatchWebhook("task.status_changed", payload, d).catch(() => {});
+    emitLocalEventHooksQuiet({ type: "task.status_changed", payload });
+    emitSharedTaskEventQuiet({ type: "task.status_changed", task: updatedTask, data: { old_status: task.status, new_status: input.status } });
+  }
+  if (input.approved_by !== undefined) {
+    emitLocalEventHooksQuiet({ type: "approval.decided", payload: { id, approved_by: input.approved_by, title: task.title } });
+  }
+
+  // Return updated task without re-fetching from DB
+  return updatedTask;
 }
 
 export function deleteTask(id: string, db?: Database): boolean {
