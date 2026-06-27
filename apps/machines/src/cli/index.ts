@@ -110,6 +110,13 @@ import {
   upsertFleetOpsCheckTasks,
   type FleetOpsCheck,
 } from "../ops-check.js";
+import {
+  getCriticalDbIntegrityReport,
+  getOpsStateSnapshotReport,
+  upsertMachineDataTasks,
+  type CriticalDbIntegrityReport,
+  type OpsStateSnapshotReport,
+} from "../ops-data.js";
 import { runDoctor } from "../commands/doctor.js";
 import { assertMutationApproved, createTrustedSdkMutationApproval, mutationArgsSha256, mutationPlanDigest } from "../commands/mutation-approval.js";
 import {
@@ -438,6 +445,34 @@ function renderFleetOpsCheck(result: FleetOpsCheck): string {
     ...issueLines,
     result.issues.length > issueLines.length ? `${result.issues.length - issueLines.length} more issue(s) in JSON output` : "",
   ].filter(Boolean).join("\n");
+}
+
+function renderDbIntegrityReport(result: CriticalDbIntegrityReport): string {
+  const taskActions = result.task_actions?.length
+    ? ` task_upserts created=${result.task_actions.filter((action) => action.action === "created").length} existing=${result.task_actions.filter((action) => action.action === "existing").length} failed=${result.task_actions.filter((action) => action.action === "failed").length} skipped=${result.task_actions.filter((action) => action.action === "skipped").length}`
+    : "";
+  const report = result.artifacts.find((artifact) => artifact.kind === "report")?.ref;
+  return [
+    `machine_data_db_integrity ok=${result.ok} discovered=${result.summary.discovered} checked=${result.summary.checked} failed=${result.summary.failed} skipped=${result.summary.skipped} truncated=${result.summary.truncated}${report ? ` report=${report}` : ""}${taskActions}`,
+    ...result.findings
+      .filter((finding) => finding.status === "failed")
+      .slice(0, 5)
+      .map((finding) => `failed path=${finding.path} message=${finding.message ?? ""}`),
+  ].join("\n");
+}
+
+function renderOpsStateSnapshotReport(result: OpsStateSnapshotReport): string {
+  const taskActions = result.task_actions?.length
+    ? ` task_upserts created=${result.task_actions.filter((action) => action.action === "created").length} existing=${result.task_actions.filter((action) => action.action === "existing").length} failed=${result.task_actions.filter((action) => action.action === "failed").length} skipped=${result.task_actions.filter((action) => action.action === "skipped").length}`
+    : "";
+  const report = result.artifacts.find((artifact) => artifact.kind === "report")?.ref;
+  return [
+    `machine_data_ops_state_snapshot ok=${result.ok} apply=${result.apply} discovered=${result.summary.discovered} planned=${result.summary.planned} copied=${result.summary.copied} failed=${result.summary.failed} skipped=${result.summary.skipped} removed_old_snapshots=${result.summary.removed_old_snapshots} truncated=${result.summary.truncated}${result.snapshot_dir ? ` snapshot=${result.snapshot_dir}` : ""}${report ? ` report=${report}` : ""}${taskActions}`,
+    ...result.items
+      .filter((item) => item.status === "backup_failed" || item.status === "copy_failed")
+      .slice(0, 5)
+      .map((item) => `failed path=${item.path} method=${item.method} message=${item.message ?? ""}`),
+  ].join("\n");
 }
 
 function renderWorkspaceResolution(result: ReturnType<typeof resolveMachineWorkspace>): string {
@@ -1567,6 +1602,14 @@ function parseMachineIdList(values: string[] | undefined): string[] {
     .filter(Boolean);
 }
 
+function parsePathList(values: string[] | undefined): string[] | undefined {
+  const paths = (values ?? [])
+    .flatMap((value) => String(value).split(","))
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return paths.length > 0 ? paths : undefined;
+}
+
 interface AgentApiCliOptions {
   machine?: string[];
   tailscale?: boolean;
@@ -1865,6 +1908,120 @@ opsCommand
       return;
     }
     console.log(renderFleetOpsCheck(result));
+  });
+
+opsCommand
+  .command("db-integrity")
+  .description("Check critical local SQLite databases with bounded read-only quick_check probes")
+  .option("--root <path...>", "Root directory to scan; comma-separated values are accepted")
+  .option("--max-dbs <n>", "Maximum database files to check")
+  .option("--max-size-bytes <n>", "Skip database files larger than this many bytes")
+  .option("--max-depth <n>", "Maximum directory depth to scan")
+  .option("--quick-check-timeout-ms <n>", "Timeout per sqlite quick_check")
+  .option("--sqlite-bin <path>", "sqlite3 executable to use for bounded quick_check probes", "sqlite3")
+  .option("--report-dir <path>", "Write private JSON evidence to this directory")
+  .option("--upsert-tasks", "Create deduped todos tasks for failed integrity checks", false)
+  .option("--todos-project <path>", "Todos project path used with --upsert-tasks")
+  .option("--task-list <id>", "Todos task list id used with --upsert-tasks")
+  .option("--todos-bin <path>", "Todos executable used with --upsert-tasks", "todos")
+  .option("--max-task-actions <n>", "Maximum new todos tasks to create")
+  .option("-j, --json", "Print JSON output", false)
+  .option("--text", "Print compact text summary instead of JSON", false)
+  .action((options: {
+    root?: string[];
+    maxDbs?: string;
+    maxSizeBytes?: string;
+    maxDepth?: string;
+    quickCheckTimeoutMs?: string;
+    sqliteBin?: string;
+    reportDir?: string;
+    upsertTasks?: boolean;
+    todosProject?: string;
+    taskList?: string;
+    todosBin?: string;
+    maxTaskActions?: string;
+    json?: boolean;
+    text?: boolean;
+  }) => {
+    const result = getCriticalDbIntegrityReport({
+      roots: parsePathList(options.root),
+      maxDbs: options.maxDbs ? parseIntegerOption(options.maxDbs, "max-dbs", { min: 1 }) : undefined,
+      maxSizeBytes: options.maxSizeBytes ? parseIntegerOption(options.maxSizeBytes, "max-size-bytes", { min: 1 }) : undefined,
+      maxDepth: options.maxDepth ? parseIntegerOption(options.maxDepth, "max-depth", { min: 1 }) : undefined,
+      quickCheckTimeoutMs: options.quickCheckTimeoutMs ? parseIntegerOption(options.quickCheckTimeoutMs, "quick-check-timeout-ms", { min: 1 }) : undefined,
+      sqliteBin: options.sqliteBin,
+      reportDir: options.reportDir,
+    });
+    if (options.upsertTasks) {
+      upsertMachineDataTasks(result, {
+        project: options.todosProject,
+        taskList: options.taskList,
+        todosBin: options.todosBin,
+        maxActions: options.maxTaskActions ? parseIntegerOption(options.maxTaskActions, "max-task-actions", { min: 1 }) : undefined,
+      });
+    }
+    printJsonDefault(result, renderDbIntegrityReport(result), options);
+    if (!result.ok) process.exitCode = 1;
+  });
+
+opsCommand
+  .command("state-snapshot")
+  .description("Plan or create bounded private snapshots of local ops-state SQLite databases")
+  .option("--root <path...>", "Root directory to scan; comma-separated values are accepted")
+  .option("--snapshot-root <path>", "Private directory where snapshots are stored")
+  .option("--report-dir <path>", "Write private JSON evidence to this directory")
+  .option("--max-dbs <n>", "Maximum database files to snapshot")
+  .option("--max-size-bytes <n>", "Skip database files larger than this many bytes")
+  .option("--max-depth <n>", "Maximum directory depth to scan")
+  .option("--keep-days <n>", "Delete snapshot directories older than this many days when --apply is used")
+  .option("--sqlite-bin <path>", "sqlite3 executable to use for verified .backup snapshots", "sqlite3")
+  .option("--apply", "Actually create snapshots and apply retention; default is dry-run", false)
+  .option("--upsert-tasks", "Create deduped todos tasks for snapshot failures", false)
+  .option("--todos-project <path>", "Todos project path used with --upsert-tasks")
+  .option("--task-list <id>", "Todos task list id used with --upsert-tasks")
+  .option("--todos-bin <path>", "Todos executable used with --upsert-tasks", "todos")
+  .option("--max-task-actions <n>", "Maximum new todos tasks to create")
+  .option("-j, --json", "Print JSON output", false)
+  .option("--text", "Print compact text summary instead of JSON", false)
+  .action((options: {
+    root?: string[];
+    snapshotRoot?: string;
+    reportDir?: string;
+    maxDbs?: string;
+    maxSizeBytes?: string;
+    maxDepth?: string;
+    keepDays?: string;
+    sqliteBin?: string;
+    apply?: boolean;
+    upsertTasks?: boolean;
+    todosProject?: string;
+    taskList?: string;
+    todosBin?: string;
+    maxTaskActions?: string;
+    json?: boolean;
+    text?: boolean;
+  }) => {
+    const result = getOpsStateSnapshotReport({
+      roots: parsePathList(options.root),
+      snapshotRoot: options.snapshotRoot,
+      reportDir: options.reportDir,
+      maxDbs: options.maxDbs ? parseIntegerOption(options.maxDbs, "max-dbs", { min: 1 }) : undefined,
+      maxSizeBytes: options.maxSizeBytes ? parseIntegerOption(options.maxSizeBytes, "max-size-bytes", { min: 1 }) : undefined,
+      maxDepth: options.maxDepth ? parseIntegerOption(options.maxDepth, "max-depth", { min: 1 }) : undefined,
+      keepDays: options.keepDays ? parseIntegerOption(options.keepDays, "keep-days", { min: 1 }) : undefined,
+      sqliteBin: options.sqliteBin,
+      apply: options.apply,
+    });
+    if (options.upsertTasks) {
+      upsertMachineDataTasks(result, {
+        project: options.todosProject,
+        taskList: options.taskList,
+        todosBin: options.todosBin,
+        maxActions: options.maxTaskActions ? parseIntegerOption(options.maxTaskActions, "max-task-actions", { min: 1 }) : undefined,
+      });
+    }
+    printJsonDefault(result, renderOpsStateSnapshotReport(result), options);
+    if (!result.ok) process.exitCode = 1;
   });
 
 const projectsAssignmentsCommand = projectsCommand

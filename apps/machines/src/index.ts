@@ -4,6 +4,7 @@ export * from "./redaction.js";
 export * from "./topology.js";
 export * from "./agent-abstractions.js";
 export * from "./ops-check.js";
+export * from "./ops-data.js";
 export * from "./notes.js";
 export * from "./details.js";
 export * from "./browserplan.js";
