@@ -24,7 +24,7 @@ src/
 │   ├── crawls.ts      # crawl job CRUD
 │   └── pages.ts       # page CRUD + FTS5 search
 ├── lib/
-│   ├── config.ts      # ~/.open-crawl/config.json
+│   ├── config.ts      # ~/.hasna/crawl/config.json
 │   ├── fetcher.ts     # HTTP fetcher (retry, rate-limit, redirects)
 │   ├── extractor.ts   # HTML → text + markdown (no deps)
 │   ├── crawler.ts     # main crawl engine (startCrawl, crawlUrl, batchCrawl, recrawl)
@@ -40,9 +40,10 @@ src/
 ```
 
 ## Data Location
-- DB: `~/.open-crawl/data.db` (override: `CRAWL_DB_PATH`)
-- Config: `~/.open-crawl/config.json`
-- Screenshots: `~/.open-crawl/screenshots/`
+- DB: `~/.hasna/crawl/data.db` (override: `HASNA_CRAWL_DB_PATH` or `CRAWL_DB_PATH`)
+- Config: `~/.hasna/crawl/config.json`
+- Screenshots: `~/.hasna/crawl/screenshots/`
+- Legacy `~/.open-crawl` and `~/.crawl` directories are copied forward on first use when the canonical directory does not exist.
 
 ## Key Patterns
 - All three entry points (CLI, MCP, server) share the same db/ and lib/ layer

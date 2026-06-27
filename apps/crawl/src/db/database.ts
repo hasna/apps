@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
-import { SqliteAdapter, ensureFeedbackTable, migrateDotfile } from "@hasna/cloud";
-import { mkdirSync } from "fs";
+import { SqliteAdapter, ensureFeedbackTable } from "@hasna/cloud";
+import { cpSync, existsSync, mkdirSync, statSync } from "fs";
 import { join } from "path";
 import { runMigrations } from "./migrations";
 
@@ -9,10 +9,22 @@ let _adapter: SqliteAdapter | null = null;
 
 export function getDataDir(): string {
   const home = process.env["HOME"] || process.env["USERPROFILE"] || "/tmp";
-  migrateDotfile("crawl");
   const newDir = join(home, ".hasna", "crawl");
+  migrateLegacyDataDir(home, newDir);
   mkdirSync(newDir, { recursive: true });
   return newDir;
+}
+
+function migrateLegacyDataDir(home: string, newDir: string): void {
+  if (existsSync(newDir)) return;
+
+  for (const legacyName of [".open-crawl", ".crawl"]) {
+    const legacyDir = join(home, legacyName);
+    if (!existsSync(legacyDir)) continue;
+    if (!statSync(legacyDir).isDirectory()) continue;
+    cpSync(legacyDir, newDir, { recursive: true });
+    return;
+  }
 }
 
 function resolveDbPath(): string {
