@@ -94,6 +94,23 @@ loops create agent supply-chain-watch \
   --prompt "Check for suspicious dependency or supply-chain changes. Report only concrete findings."
 ```
 
+Agent loops can also carry advisory per-session allowlist metadata:
+
+```bash
+loops create agent repo-check \
+  --provider codewith \
+  --every 15m \
+  --cwd /path/to/repo \
+  --prompt "Check the repo and report concrete failures." \
+  --allow-tool functions.exec_command \
+  --allow-command git,bun
+```
+
+These fields are stored on the loop target and exposed to the run environment
+as `LOOPS_AGENT_ALLOWED_TOOLS`, `LOOPS_AGENT_ALLOWED_COMMANDS`, and
+`LOOPS_AGENT_ALLOWLIST_ENFORCEMENT=metadata_only`. They are not enforced by
+OpenLoops yet; provider-native enforcement will be added separately.
+
 For `codewith` and `aicopilot` account isolation, register matching OpenAccounts tools first if they are not built in on the machine:
 
 ```bash
@@ -249,6 +266,27 @@ loops run-now <id-or-name>
 ```
 
 Use `--json` for machine-readable output. Prompt bodies and run stdout/stderr are redacted by default in status output. `loops run-now` exits non-zero when the recorded run fails or times out.
+
+## Health And Expectations
+
+`loops health --json` summarizes the latest run for each loop and classifies
+agent-run failures for default-loop SLOs:
+
+```bash
+loops health --json
+loops expectations <loop-id-or-name> --json
+```
+
+The JSON contains the expectation result, bounded error/stdout/stderr evidence,
+a stable failure fingerprint, route metadata, and recommended task fields.
+OpenLoops does not mutate Todos from these commands. Until Todos has a native
+upsert command, consumers can use the included compatibility fallback:
+`todos search <dedupe-key>`, then `todos add ...` or `todos comment ...`.
+The planned native integration is represented in `futureNativeUpsert`.
+
+Failure classifications are: `rate_limit`, `auth`, `model_not_found`,
+`context_length`, `schema_response_format`, `node_init`, `timeout`, `sigsegv`,
+`skipped_previous_active`, and `unknown`.
 
 Archive loops when retiring old automation but preserving history:
 

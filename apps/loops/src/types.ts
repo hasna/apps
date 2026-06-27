@@ -92,6 +92,12 @@ export type AgentPermissionMode = "default" | "plan" | "auto" | "bypass";
 
 export type AgentSandbox = "read-only" | "workspace-write" | "danger-full-access" | "enabled" | "disabled";
 
+export interface AgentAllowlistSpec {
+  tools?: string[];
+  commands?: string[];
+  enforcement?: "metadata_only";
+}
+
 export interface AgentTarget {
   type: "agent";
   provider: AgentProvider;
@@ -106,6 +112,7 @@ export interface AgentTarget {
   configIsolation?: AgentConfigIsolation;
   permissionMode?: AgentPermissionMode;
   sandbox?: AgentSandbox;
+  allowlist?: AgentAllowlistSpec;
   account?: AccountRef;
 }
 

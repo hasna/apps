@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -8,9 +8,9 @@ import { Store } from "../lib/store.js";
 
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
 
-function runCli(dataDir: string, args: string[], input?: string) {
+function runCli(dataDir: string, args: string[], input?: string, env: Record<string, string> = {}) {
   return spawnSync(process.execPath, [cliPath, ...args], {
-    env: { ...process.env, LOOPS_DATA_DIR: dataDir },
+    env: { ...process.env, ...env, LOOPS_DATA_DIR: dataDir },
     input,
     encoding: "utf8",
   });
@@ -171,6 +171,34 @@ describe("loops CLI", () => {
     expect(shown.machine.id).toBe(value.machine.id);
   });
 
+  test("create agent stores advisory allowlist metadata", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-agent-allowlist-"));
+    const create = runCli(dataDir, [
+      "--json",
+      "create",
+      "agent",
+      "allowlisted-agent",
+      "--provider",
+      "codewith",
+      "--at",
+      futureAt(),
+      "--prompt",
+      "inspect status",
+      "--allow-tool",
+      "functions.exec_command",
+      "--allow-command",
+      "git,bun",
+    ]);
+
+    expect(create.status).toBe(0);
+    const value = JSON.parse(create.stdout);
+    expect(value.target.allowlist).toEqual({
+      tools: ["functions.exec_command"],
+      commands: ["git", "bun"],
+      enforcement: "metadata_only",
+    });
+  });
+
   test("machines commands expose OpenMachines topology", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-machines-"));
     const list = runCli(dataDir, ["--json", "machines", "list"]);
@@ -205,6 +233,66 @@ describe("loops CLI", () => {
     const value = JSON.parse(doctor.stdout);
     expect(value.ok).toBe(false);
     expect(value.checks.find((check: { id: string }) => check.id.includes(":preflight"))?.status).toBe("fail");
+  });
+
+  test("health JSON reports failed expectations with classification and task upsert fields", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-health-json-"));
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      const loop = store.createLoop({
+        name: "agent-health",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "agent", provider: "codewith", prompt: "run", cwd: "/tmp/repo" },
+      });
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "seed", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      store.finalizeRun(
+        claim!.run.id,
+        {
+          status: "failed",
+          finishedAt: "2026-01-01T00:00:01.000Z",
+          durationMs: 1_000,
+          stdout: "",
+          stderr: "Rate limit exceeded by provider",
+          error: "429 too many requests",
+          exitCode: 1,
+        },
+        { claimedBy: "seed", now: new Date("2026-01-01T00:00:00.500Z") },
+      );
+    } finally {
+      store.close();
+    }
+
+    const health = runCli(dataDir, ["health", "--json"]);
+    expect(health.status).toBe(1);
+    const value = JSON.parse(health.stdout);
+    expect(value.ok).toBe(false);
+    expect(value.summary.unhealthy).toBe(1);
+    expect(value.classifications.rate_limit).toBe(1);
+    expect(value.expectations[0].failure.classification).toBe("rate_limit");
+    expect(value.expectations[0].failure.fingerprint).toMatch(/^[a-f0-9]{16}$/);
+    expect(value.expectations[0].recommendedTask).toMatchObject({
+      priority: "high",
+      futureNativeUpsert: { command: "todos upsert" },
+    });
+    expect(value.expectations[0].recommendedTask.compatibilityFallback.search).toEqual(
+      expect.arrayContaining(["todos", "search"]),
+    );
+  });
+
+  test("expectations JSON is read-only and honors temp LOOPS_DATA_DIR", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-expectations-temp-data-"));
+    const home = mkdtempSync(join(tmpdir(), "loops-cli-expectations-home-"));
+    const create = runCli(dataDir, ["create", "command", "isolated", "--at", futureAt(), "--cmd", "true"], undefined, { HOME: home });
+    expect(create.status).toBe(0);
+
+    const result = runCli(dataDir, ["expectations", "isolated", "--json"], undefined, { HOME: home });
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.loop.name).toBe("isolated");
+    expect(value.check.status).toBe("warn");
+    expect(existsSync(join(dataDir, "loops.db"))).toBe(true);
+    expect(existsSync(join(home, ".hasna"))).toBe(false);
   });
 
   test("workflow JSON run and inspect redact step output without show-output", () => {

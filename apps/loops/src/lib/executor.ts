@@ -64,6 +64,10 @@ interface CommandSpec {
   accountTool?: string;
   preflightAnyOf?: string[];
   stdin?: string;
+  allowlist?: {
+    tools?: string[];
+    commands?: string[];
+  };
 }
 
 interface MachineCommandPlan {
@@ -155,6 +159,14 @@ function metadataEnv(metadata: ExecutionMetadata): Record<string, string> {
   if (metadata.goalId) env.LOOPS_GOAL_ID = metadata.goalId;
   if (metadata.goalObjective) env.LOOPS_GOAL_OBJECTIVE = metadata.goalObjective;
   if (metadata.goalNodeKey) env.LOOPS_GOAL_NODE_KEY = metadata.goalNodeKey;
+  return env;
+}
+
+function allowlistEnv(allowlist: CommandSpec["allowlist"]): Record<string, string> {
+  const env: Record<string, string> = {};
+  if (allowlist?.tools?.length) env.LOOPS_AGENT_ALLOWED_TOOLS = allowlist.tools.join(",");
+  if (allowlist?.commands?.length) env.LOOPS_AGENT_ALLOWED_COMMANDS = allowlist.commands.join(",");
+  if (allowlist?.tools?.length || allowlist?.commands?.length) env.LOOPS_AGENT_ALLOWLIST_ENFORCEMENT = "metadata_only";
   return env;
 }
 
@@ -354,6 +366,7 @@ function commandSpec(target: ExecutableTarget): CommandSpec {
     accountTool: agentTarget.account?.tool ?? accountToolForProvider(agentTarget.provider),
     preflightAnyOf: agentTarget.provider === "cursor" ? ["cursor", "agent"] : undefined,
     stdin: agentTarget.prompt,
+    allowlist: agentTarget.allowlist,
   };
 }
 
@@ -369,6 +382,7 @@ function executionEnv(
     Object.assign(env, accountEnv);
   }
   Object.assign(env, spec.env ?? {});
+  Object.assign(env, allowlistEnv(spec.allowlist));
   env.PATH = normalizeExecutionPath(env);
   Object.assign(env, metadataEnv(metadata));
   return env;
@@ -410,6 +424,9 @@ function remoteBootstrapLines(spec: CommandSpec, metadata: ExecutionMetadata): s
   }
   for (const [key, value] of Object.entries({ ...metadataEnv(metadata), ...(spec.env ?? {}) })) {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    lines.push(`export ${key}=${shellQuote(value)}`);
+  }
+  for (const [key, value] of Object.entries(allowlistEnv(spec.allowlist))) {
     lines.push(`export ${key}=${shellQuote(value)}`);
   }
   return lines;

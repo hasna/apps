@@ -17,6 +17,18 @@ function optionalPositiveInteger(value: unknown, label: string): number | undefi
   return value as number;
 }
 
+function optionalStringArray(value: unknown, label: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
+  const values = value
+    .map((entry, index) => {
+      assertString(entry, `${label}[${index}]`);
+      return entry.trim();
+    })
+    .filter(Boolean);
+  return values.length ? values : undefined;
+}
+
 export function normalizeGoalSpec(value: unknown, label = "goal"): GoalSpec | undefined {
   if (value === undefined) return undefined;
   assertObject(value, label);
@@ -81,6 +93,14 @@ function validateTarget(value: unknown, label: string): ExecutableTarget {
         if (!cursorLike.includes(value.sandbox)) throw new Error(`${label}.sandbox must be one of ${cursorLike.join(", ")}`);
       } else {
         throw new Error(`${label}.sandbox is currently supported only for provider codewith, codex, or cursor`);
+      }
+    }
+    if (value.allowlist !== undefined) {
+      assertObject(value.allowlist, `${label}.allowlist`);
+      optionalStringArray(value.allowlist.tools, `${label}.allowlist.tools`);
+      optionalStringArray(value.allowlist.commands, `${label}.allowlist.commands`);
+      if (value.allowlist.enforcement !== undefined && value.allowlist.enforcement !== "metadata_only") {
+        throw new Error(`${label}.allowlist.enforcement must be metadata_only`);
       }
     }
     return value as unknown as ExecutableTarget;

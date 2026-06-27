@@ -18,6 +18,7 @@ export {
   renderTodosTaskWorkerVerifierWorkflow,
 } from "./lib/templates.js";
 export { runDoctor } from "./lib/doctor.js";
+export { buildHealthReport, classifyRunFailure, expectationForLoop } from "./lib/health.js";
 export { runGoal } from "./lib/goal/runner.js";
 export { resolveGoalModel } from "./lib/goal/model-factory.js";
 export { isTerminal as isGoalTerminal, readyNodeKeys, rollupSummary } from "./lib/goal/status.js";

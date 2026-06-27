@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { Command } from "commander";
 import type {
   AccountRef,
+  AgentAllowlistSpec,
   AgentPermissionMode,
   AgentProvider,
   AgentSandbox,
@@ -36,6 +37,7 @@ import { enableStartup, installStartup } from "../daemon/install.js";
 import { workflowBodyFromJson } from "../lib/workflow-spec.js";
 import { normalizeGoalSpec } from "../lib/workflow-spec.js";
 import { runDoctor } from "../lib/doctor.js";
+import { buildHealthReport, expectationForLoop } from "../lib/health.js";
 import { listOpenMachines, resolveLoopMachine } from "../lib/machines.js";
 import { packageVersion } from "../lib/version.js";
 import {
@@ -208,6 +210,17 @@ function splitList(value: string | undefined): string[] | undefined {
   return values?.length ? values : undefined;
 }
 
+function allowlistFromOpts(opts: { allowTool?: string[]; allowCommand?: string[] }): AgentAllowlistSpec | undefined {
+  const tools = (opts.allowTool ?? []).flatMap((entry) => splitList(entry) ?? []);
+  const commands = (opts.allowCommand ?? []).flatMap((entry) => splitList(entry) ?? []);
+  if (!tools.length && !commands.length) return undefined;
+  return {
+    tools: tools.length ? tools : undefined,
+    commands: commands.length ? commands : undefined,
+    enforcement: "metadata_only",
+  };
+}
+
 function accountPoolFromOpts(opts: { accountPool?: string; accountTool?: string }): AccountRef[] | undefined {
   return splitList(opts.accountPool)?.map((profile) => ({ profile, tool: opts.accountTool }));
 }
@@ -378,6 +391,8 @@ addGoalOptions(
         .option("--timeout <duration>", "run timeout")
         .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass")
         .option("--sandbox <mode>", "provider sandbox: codewith/codex use read-only/workspace-write/danger-full-access; cursor uses enabled/disabled")
+        .option("--allow-tool <name>", "advisory per-session tool allowlist metadata; may be repeated or comma-separated", collectValues, [] as string[])
+        .option("--allow-command <name>", "advisory per-session command allowlist metadata; may be repeated or comma-separated", collectValues, [] as string[])
         .option("--config-isolation <mode>", "safe or none", "safe"),
       ),
     ),
@@ -405,6 +420,7 @@ addGoalOptions(
       configIsolation: opts.configIsolation,
       permissionMode: permissionModeFromOpts(opts, provider),
       sandbox: sandboxFromOpts(opts, provider),
+      allowlist: allowlistFromOpts(opts),
       account: accountFromOpts(opts),
     };
     const loop = store.createLoop(baseCreateInput(name, opts, target));
@@ -1037,6 +1053,54 @@ program
           if (opts.showOutput) printTextOutput(run);
         }
       }
+    } finally {
+      store.close();
+    }
+  });
+
+program
+  .command("expectations [idOrName]")
+  .description("evaluate deterministic loop expectations without mutating external task systems")
+  .option("--limit <n>", "maximum loops to inspect when no loop is specified", "200")
+  .option("--json", "print JSON")
+  .action((idOrName, opts) => {
+    const store = new Store();
+    try {
+      const loops = idOrName ? [store.requireLoop(idOrName)] : store.listLoops({ limit: Number(opts.limit) });
+      const values = loops.map((loop) => expectationForLoop(store, loop));
+      if (isJson() || opts.json) console.log(JSON.stringify(idOrName ? values[0] : values, null, 2));
+      else {
+        for (const value of values) {
+          console.log(`${value.ok ? "ok" : "fail"}  ${value.loop.name}  ${value.check.message}`);
+          if (value.failure) console.log(`  classification=${value.failure.classification} fingerprint=${value.failure.fingerprint}`);
+        }
+      }
+      if (values.some((value) => !value.ok)) process.exitCode = 1;
+    } finally {
+      store.close();
+    }
+  });
+
+program
+  .command("health")
+  .description("summarize loop health and latest-run expectation status")
+  .option("--json", "print JSON")
+  .action((opts) => {
+    const store = new Store();
+    try {
+      const report = buildHealthReport(store);
+      if (isJson() || opts.json) console.log(JSON.stringify(report, null, 2));
+      else {
+        console.log(
+          `loops=${report.summary.loops} healthy=${report.summary.healthy} unhealthy=${report.summary.unhealthy} warnings=${report.summary.warnings}`,
+        );
+        for (const expectation of report.expectations.filter((entry) => !entry.ok)) {
+          console.log(
+            `fail  ${expectation.loop.name}  ${expectation.failure?.classification ?? "unknown"}  ${expectation.failure?.fingerprint ?? "-"}`,
+          );
+        }
+      }
+      if (!report.ok) process.exitCode = 1;
     } finally {
       store.close();
     }
