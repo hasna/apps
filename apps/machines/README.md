@@ -158,6 +158,7 @@ machines loop-preflight --machine control,worker --cmd 'bun test' --no-tailscale
 machines machine-health --project open-machines --repo open-machines
 machines routing --machine worker
 machines command-matrix --machine worker --cmd 'bun run build'
+machines ops check --all --expect-machine spark01,spark02,apple03 --text
 ```
 
 The matching SDK exports are `getFleetLoopPreflight()`,
@@ -173,6 +174,26 @@ For `loop_preflight`, top-level `ok` means every machine in the current
 selection/page is ready. Candidate schedulers that only need one usable target
 should read `summary.any_ready`; strict fleet loops should read
 `summary.all_ready`.
+
+`machines ops check` composes health, routing, loop-preflight, and read-only
+tmux diagnostics into a loop-safe fleet report. By default it only prints
+bounded task suggestions and never mutates tmux or todos. Scheduled loops that
+should create remediation tasks must opt in explicitly:
+
+```bash
+machines ops check \
+  --all \
+  --expect-machine spark01,spark02,apple03 \
+  --expect-tmux spark01=hasna:1.1 \
+  --text \
+  --upsert-tasks \
+  --todos-project /home/hasna/.hasna/loops \
+  --max-task-actions 20
+```
+
+Task upserts are deduped with stable `dedupe-*` tags, use argv-safe `todos`
+subprocess calls, require `--todos-project`, and remain diagnostic-only: they do
+not send keys, kill panes, resurrect panes, or route work through tmux.
 
 ### Hasna Notes machine list contract
 

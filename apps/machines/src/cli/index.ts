@@ -101,6 +101,7 @@ import {
 import {
   getFleetOpsCheck,
   parseFleetOpsTmuxExpectation,
+  upsertFleetOpsCheckTasks,
   type FleetOpsCheck,
 } from "../ops-check.js";
 import { runDoctor } from "../commands/doctor.js";
@@ -409,6 +410,11 @@ function renderFleetOpsCheck(result: FleetOpsCheck): string {
   const issueLines = result.issues.slice(0, 8).map((issue) =>
     `${issue.severity.padEnd(8)} ${issue.classification} ${issue.machine_id ?? "fleet"} ${issue.summary}`
   );
+  const taskActionLines = result.task_actions?.length
+    ? [
+        `task_upserts created=${result.task_actions.filter((action) => action.action === "created").length} existing=${result.task_actions.filter((action) => action.action === "existing").length} failed=${result.task_actions.filter((action) => action.action === "failed").length}`,
+      ]
+    : [];
   return [
     renderKeyValueTable([
       ["status", result.status],
@@ -421,6 +427,7 @@ function renderFleetOpsCheck(result: FleetOpsCheck): string {
       ["tmux dead panes", String(result.summary.tmux_dead_panes)],
       ["tmux missing expected", String(result.summary.tmux_missing_expected)],
     ]),
+    ...taskActionLines,
     ...lines,
     ...issueLines,
     result.issues.length > issueLines.length ? `${result.issues.length - issueLines.length} more issue(s) in JSON output` : "",
@@ -1807,9 +1814,20 @@ opsCommand
   .option("--all", "Return every selected/discovered machine", false)
   .option("--max-evidence-items <n>", "Maximum evidence entries per issue")
   .option("--max-task-suggestions <n>", "Maximum task suggestions emitted")
+  .option("--upsert-tasks", "Create deduped todos tasks for emitted task suggestions", false)
+  .option("--todos-project <path>", "Todos project path used with --upsert-tasks")
+  .option("--task-list <id>", "Todos task list id used with --upsert-tasks")
+  .option("--todos-bin <path>", "Todos executable used with --upsert-tasks", "todos")
+  .option("--max-task-actions <n>", "Maximum task upsert actions")
   .option("-j, --json", "Print JSON output", false)
   .option("--text", "Print compact text summary instead of JSON", false)
-  .action((options: AgentApiCliOptions) => {
+  .action((options: AgentApiCliOptions & {
+    upsertTasks?: boolean;
+    todosProject?: string;
+    taskList?: string;
+    todosBin?: string;
+    maxTaskActions?: string;
+  }) => {
     const result = getFleetOpsCheck({
       ...baseAgentOptions(options),
       command: options.cmd,
@@ -1819,6 +1837,14 @@ opsCommand
       maxEvidenceItems: options.maxEvidenceItems ? parseIntegerOption(options.maxEvidenceItems, "max-evidence-items", { min: 1 }) : undefined,
       maxTaskSuggestions: options.maxTaskSuggestions ? parseIntegerOption(options.maxTaskSuggestions, "max-task-suggestions", { min: 1 }) : undefined,
     });
+    if (options.upsertTasks) {
+      upsertFleetOpsCheckTasks(result, {
+        project: options.todosProject,
+        taskList: options.taskList,
+        todosBin: options.todosBin,
+        maxActions: options.maxTaskActions ? parseIntegerOption(options.maxTaskActions, "max-task-actions", { min: 1 }) : undefined,
+      });
+    }
     if (options.json || !options.text) {
       console.log(JSON.stringify(result));
       return;

@@ -7,7 +7,9 @@ import { closeDb } from "../src/db.js";
 import {
   getFleetOpsCheck,
   parseFleetOpsTmuxExpectation,
+  upsertFleetOpsCheckTasks,
   type FleetOpsTmuxPane,
+  type TodosCommandRunner,
 } from "../src/ops-check.js";
 import { discoverMachineTopology } from "../src/topology.js";
 
@@ -107,5 +109,82 @@ describe("fleet ops check", () => {
   test("parses configurable tmux expectations", () => {
     expect(parseFleetOpsTmuxExpectation("control=%1")).toEqual({ machineId: "control", target: "%1" });
     expect(parseFleetOpsTmuxExpectation("%2")).toEqual({ target: "%2" });
+  });
+
+  test("upserts task suggestions through argv-safe todos runner", () => {
+    const dir = setupFleet();
+    const calls: string[][] = [];
+    const runner: TodosCommandRunner = (args) => {
+      calls.push(args);
+      if (args.includes("search")) return { status: 0, stdout: "[]", stderr: "" };
+      return { status: 0, stdout: JSON.stringify({ id: "task-1", status: "pending" }), stderr: "" };
+    };
+    try {
+      const result = getFleetOpsCheck({
+        topology: discoverMachineTopology({ includeTailscale: false, limit: null, now: new Date("2026-06-27T12:00:00.000Z") }),
+        expectedMachines: ["apple03"],
+        maxTaskSuggestions: 1,
+      });
+      const actions = upsertFleetOpsCheckTasks(result, {
+        project: dir,
+        runner,
+      });
+
+      expect(actions).toEqual([{
+        action: "created",
+        dedupe_key: result.task_suggestions[0]?.dedupe_key,
+        title: result.task_suggestions[0]?.title,
+        task_id: "task-1",
+      }]);
+      expect(calls[0]?.slice(0, 3)).toEqual(["--project", dir, "-j"]);
+      expect(calls[0]).toContain("search");
+      expect(calls[1]).toContain("add");
+      expect(calls[1]).toContain("--tags");
+      expect(calls[1]?.some((part) => part.includes("dedupe-"))).toBe(true);
+      expect(result.task_actions).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("does not create duplicate task for an existing dedupe tag", () => {
+    const dir = setupFleet();
+    const calls: string[][] = [];
+    const runner: TodosCommandRunner = (args) => {
+      calls.push(args);
+      return { status: 0, stdout: JSON.stringify([{ id: "existing-task", status: "pending" }]), stderr: "" };
+    };
+    try {
+      const result = getFleetOpsCheck({
+        topology: discoverMachineTopology({ includeTailscale: false, limit: null, now: new Date("2026-06-27T12:00:00.000Z") }),
+        expectedMachines: ["apple03"],
+        maxTaskSuggestions: 1,
+      });
+      const actions = upsertFleetOpsCheckTasks(result, {
+        project: dir,
+        runner,
+      });
+
+      expect(actions[0]).toMatchObject({ action: "existing", task_id: "existing-task" });
+      expect(calls).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("fails closed when upsert is requested without a todos project", () => {
+    const dir = setupFleet();
+    try {
+      const result = getFleetOpsCheck({
+        topology: discoverMachineTopology({ includeTailscale: false, limit: null, now: new Date("2026-06-27T12:00:00.000Z") }),
+        expectedMachines: ["apple03"],
+        maxTaskSuggestions: 1,
+      });
+      const actions = upsertFleetOpsCheckTasks(result, {});
+      expect(actions[0]?.action).toBe("failed");
+      expect(actions[0]?.error).toContain("--todos-project");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

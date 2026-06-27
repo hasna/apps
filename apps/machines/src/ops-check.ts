@@ -42,6 +42,32 @@ export interface FleetOpsEventSuggestion {
   data: Record<string, unknown>;
 }
 
+export interface FleetOpsTaskAction {
+  action: "created" | "existing" | "failed";
+  dedupe_key: string;
+  title: string;
+  task_id?: string;
+  error?: string;
+}
+
+export interface TodosCommandResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  error?: unknown;
+}
+
+export type TodosCommandRunner = (args: string[]) => TodosCommandResult;
+
+export interface FleetOpsTaskUpsertOptions {
+  project?: string;
+  taskList?: string;
+  todosBin?: string;
+  maxActions?: number;
+  commandTimeoutMs?: number;
+  runner?: TodosCommandRunner;
+}
+
 export interface FleetOpsIssue {
   fingerprint: string;
   machine_id: string | null;
@@ -149,6 +175,7 @@ export interface FleetOpsCheck {
   tmux: FleetOpsTmuxSummary;
   issues: FleetOpsIssue[];
   task_suggestions: FleetOpsTaskSuggestion[];
+  task_actions?: FleetOpsTaskAction[];
   event_suggestions: FleetOpsEventSuggestion[];
   artifacts: Array<{ kind: string; ref: string; format: "json" | "text"; private: boolean }>;
   warnings: string[];
@@ -171,6 +198,23 @@ const DEFAULT_MAX_TASK_SUGGESTIONS = 20;
 
 function fingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
+}
+
+function boundedText(value: string, maxLength = 1_000): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}...[truncated ${value.length - maxLength} chars]` : value;
+}
+
+function safeTag(value: string): string {
+  const tag = value
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return tag || "unknown";
+}
+
+function dedupeTag(suggestion: FleetOpsTaskSuggestion): string {
+  return `dedupe-${fingerprint(suggestion.dedupe_key)}`;
 }
 
 function severityRank(severity: FleetOpsSeverity): number {
@@ -212,6 +256,162 @@ function taskDescription(issue: FleetOpsIssue): string {
     "",
     "This is a task suggestion emitted by @hasna/machines. It does not route work through tmux, change panes, or mutate todos directly.",
   ].join("\n");
+}
+
+function taskUpsertDescription(result: FleetOpsCheck, suggestion: FleetOpsTaskSuggestion): string {
+  return [
+    `dedupe_key: ${suggestion.dedupe_key}`,
+    "source: @hasna/machines ops check",
+    `checked_at: ${result.generated_at}`,
+    `status: ${result.status}`,
+    "",
+    suggestion.description,
+  ].join("\n");
+}
+
+function defaultTodosRunner(todosBin: string, timeoutMs = 30_000): TodosCommandRunner {
+  return (args) => {
+    const child = spawnSync(todosBin, args, {
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      timeout: timeoutMs,
+    });
+    return {
+      status: child.status,
+      stdout: child.stdout ?? "",
+      stderr: child.stderr ?? "",
+      error: child.error,
+    };
+  };
+}
+
+function parseTaskList(stdout: string): Array<{ id?: string; status?: string }> {
+  const raw = stdout.trim();
+  if (!raw) return [];
+  const value = JSON.parse(raw) as unknown;
+  if (Array.isArray(value)) return value as Array<{ id?: string; status?: string }>;
+  if (value && typeof value === "object" && "tasks" in value && Array.isArray((value as { tasks?: unknown }).tasks)) {
+    return (value as { tasks: Array<{ id?: string; status?: string }> }).tasks;
+  }
+  return [];
+}
+
+function parseTask(stdout: string): { id?: string; status?: string } | null {
+  const raw = stdout.trim();
+  if (!raw) return null;
+  const value = JSON.parse(raw) as unknown;
+  return value && typeof value === "object" ? value as { id?: string; status?: string } : null;
+}
+
+function todosBaseArgs(project: string): string[] {
+  return ["--project", project, "-j"];
+}
+
+export function upsertFleetOpsCheckTasks(
+  result: FleetOpsCheck,
+  options: FleetOpsTaskUpsertOptions,
+): FleetOpsTaskAction[] {
+  const maxActions = options.maxActions ?? result.task_suggestions.length;
+  const suggestions = result.task_suggestions.slice(0, Math.max(0, maxActions));
+  if (suggestions.length === 0) {
+    result.task_actions = [];
+    return [];
+  }
+
+  if (!options.project) {
+    const actions = suggestions.map((suggestion) => ({
+      action: "failed" as const,
+      dedupe_key: suggestion.dedupe_key,
+      title: suggestion.title,
+      error: "--todos-project is required when --upsert-tasks is used",
+    }));
+    result.task_actions = actions;
+    return actions;
+  }
+
+  const run = options.runner ?? defaultTodosRunner(options.todosBin ?? "todos", options.commandTimeoutMs);
+  const actions: FleetOpsTaskAction[] = [];
+  for (const suggestion of suggestions) {
+    const tag = dedupeTag(suggestion);
+    const tags = [...new Set([...suggestion.tags.map(safeTag), tag])];
+    const search = run([...todosBaseArgs(options.project), "search", tag, "--tag", tag, "--limit", "10"]);
+    if (search.error || search.status !== 0) {
+      actions.push({
+        action: "failed",
+        dedupe_key: suggestion.dedupe_key,
+        title: suggestion.title,
+        error: boundedText(String(search.error ?? (search.stderr.trim() || `todos search exited ${search.status}`))),
+      });
+      continue;
+    }
+
+    let existing: { id?: string; status?: string } | undefined;
+    try {
+      existing = parseTaskList(search.stdout).find((task) => task.id && !["done", "completed", "cancelled", "deleted"].includes(task.status ?? ""));
+    } catch (error) {
+      actions.push({
+        action: "failed",
+        dedupe_key: suggestion.dedupe_key,
+        title: suggestion.title,
+        error: `unable to parse todos search JSON: ${error instanceof Error ? error.message : String(error)}`,
+      });
+      continue;
+    }
+
+    if (existing?.id) {
+      actions.push({
+        action: "existing",
+        dedupe_key: suggestion.dedupe_key,
+        title: suggestion.title,
+        task_id: existing.id,
+      });
+      continue;
+    }
+
+    const addArgs = [
+      ...todosBaseArgs(options.project),
+      "add",
+      suggestion.title,
+      "-d",
+      taskUpsertDescription(result, suggestion),
+      "-p",
+      suggestion.priority,
+      "--tags",
+      tags.join(","),
+    ];
+    if (options.taskList) addArgs.push("--task-list", options.taskList);
+
+    const created = run(addArgs);
+    if (created.error || created.status !== 0) {
+      actions.push({
+        action: "failed",
+        dedupe_key: suggestion.dedupe_key,
+        title: suggestion.title,
+        error: boundedText(String(created.error ?? (created.stderr.trim() || `todos add exited ${created.status}`))),
+      });
+      continue;
+    }
+
+    try {
+      const task = parseTask(created.stdout);
+      actions.push({
+        action: "created",
+        dedupe_key: suggestion.dedupe_key,
+        title: suggestion.title,
+        task_id: task?.id,
+      });
+    } catch (error) {
+      actions.push({
+        action: "failed",
+        dedupe_key: suggestion.dedupe_key,
+        title: suggestion.title,
+        error: `unable to parse todos add JSON: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
+
+  result.task_actions = actions;
+  return actions;
 }
 
 function buildIssue(input: {
