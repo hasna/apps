@@ -1,22 +1,42 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { registerCloudTools } from "@hasna/cloud";
-import { PG_MIGRATIONS } from "./pg-migrations.js";
-import { join } from "path";
-import { homedir } from "os";
+import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { z } from "zod";
+import {
+  STORAGE_TABLES,
+  getStorageStatus,
+  getStorageSyncMetaAll,
+  storagePull,
+  storagePush,
+  storageSync,
+} from "./storage-sync.js";
+import {
+  scanHistoryExposures,
+  scanWorkspaceExposures,
+} from "./scanner.js";
 import {
   setSecret,
   getSecret,
   deleteSecret,
-  listSecrets,
-  searchSecrets,
+  listSecretMetadata,
+  searchSecretMetadata,
+  setVaultItem,
+  getVaultItem,
+  deleteVaultItem,
+  listVaultItemMetadata,
+  searchVaultItemMetadata,
   getAuditLog,
   registerUser,
   listUsers,
 } from "./store.js";
+import { PG_MIGRATIONS } from "./pg-migrations.js";
 
 const SECRET_TYPES = ["api_key", "password", "token", "credential", "other"] as const;
+const VAULT_ITEM_KINDS = ["login", "address", "identity", "payment_card", "secure_note", "api_key", "custom"] as const;
+const STORAGE_TABLE_SCHEMA = z.enum(STORAGE_TABLES);
 
 export function buildServer(): McpServer {
   const server = new McpServer({
@@ -75,7 +95,7 @@ export function buildServer(): McpServer {
     "List secrets, optionally filtered by namespace",
     { namespace: z.string().optional().describe("Namespace prefix e.g. openai") },
     async ({ namespace }) => {
-      const entries = listSecrets(namespace);
+      const entries = listSecretMetadata(namespace);
       const lines = entries.map((e) => `${e.key} [${e.type}]${e.label ? ` — ${e.label}` : ""}`);
       return { content: [{ type: "text", text: lines.join("\n") || "No secrets found." }] };
     }
@@ -86,9 +106,85 @@ export function buildServer(): McpServer {
     "Search secrets by key, label, or type",
     { query: z.string() },
     async ({ query }) => {
-      const entries = searchSecrets(query);
+      const entries = searchSecretMetadata(query);
       const lines = entries.map((e) => `${e.key} [${e.type}]${e.label ? ` — ${e.label}` : ""}`);
       return { content: [{ type: "text", text: lines.join("\n") || "No results." }] };
+    }
+  );
+
+  server.tool(
+    "list_vault_items",
+    "List structured vault item metadata, optionally filtered by kind",
+    { kind: z.enum(VAULT_ITEM_KINDS).optional().describe("Vault item kind") },
+    async ({ kind }) => {
+      const entries = listVaultItemMetadata(kind);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(entries, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
+    "search_vault_items",
+    "Search structured vault item metadata",
+    { query: z.string() },
+    async ({ query }) => {
+      const entries = searchVaultItemMetadata(query);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(entries, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
+    "get_vault_item",
+    "Retrieve a structured vault item, including decrypted payload",
+    { id: z.string().describe("Vault item id") },
+    async ({ id }) => {
+      const item = getVaultItem(id);
+      if (!item) return { content: [{ type: "text", text: `Not found: ${id}` }], isError: true };
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(item, null, 2),
+        }],
+      };
+    }
+  );
+
+  server.tool(
+    "set_vault_item",
+    "Store a structured vault item for logins, addresses, identities, cards, notes, API keys, or custom data",
+    {
+      kind: z.enum(VAULT_ITEM_KINDS),
+      title: z.string(),
+      data: z.record(z.string(), z.unknown()).describe("Encrypted payload fields"),
+      id: z.string().optional(),
+      subtitle: z.string().optional(),
+      domains: z.array(z.string()).optional(),
+      tags: z.array(z.string()).optional(),
+      favorite: z.boolean().optional(),
+    },
+    async ({ kind, title, data, id, subtitle, domains, tags, favorite }) => {
+      const item = setVaultItem({ id, kind, title, subtitle, domains, tags, favorite, data });
+      return { content: [{ type: "text", text: `Stored vault item: ${item.id} [${item.kind}] ${item.title}` }] };
+    }
+  );
+
+  server.tool(
+    "delete_vault_item",
+    "Delete a structured vault item",
+    { id: z.string() },
+    async ({ id }) => {
+      const ok = deleteVaultItem(id);
+      if (!ok) return { content: [{ type: "text", text: `Not found: ${id}` }], isError: true };
+      return { content: [{ type: "text", text: `Deleted vault item: ${id}` }] };
     }
   );
 
@@ -152,6 +248,99 @@ export function buildServer(): McpServer {
     }
   );
 
+  server.tool(
+    "storage_status",
+    "Show open-secrets remote storage configuration and local sync metadata",
+    {},
+    async () => ({
+      content: [{
+        type: "text",
+        text: JSON.stringify({
+          ...getStorageStatus(),
+          sync: getStorageSyncMetaAll(),
+        }, null, 2),
+      }],
+    })
+  );
+
+  server.tool(
+    "storage_push",
+    "Push local open-secrets tables to the configured remote Postgres storage",
+    { tables: z.array(STORAGE_TABLE_SCHEMA).optional().describe("Tables to push") },
+    async ({ tables }) => ({
+      content: [{ type: "text", text: JSON.stringify(await storagePush({ tables }), null, 2) }],
+    })
+  );
+
+  server.tool(
+    "storage_pull",
+    "Pull open-secrets tables from the configured remote Postgres storage",
+    { tables: z.array(STORAGE_TABLE_SCHEMA).optional().describe("Tables to pull") },
+    async ({ tables }) => ({
+      content: [{ type: "text", text: JSON.stringify(await storagePull({ tables }), null, 2) }],
+    })
+  );
+
+  server.tool(
+    "storage_sync",
+    "Push then pull open-secrets tables with the configured remote Postgres storage",
+    { tables: z.array(STORAGE_TABLE_SCHEMA).optional().describe("Tables to sync") },
+    async ({ tables }) => ({
+      content: [{ type: "text", text: JSON.stringify(await storageSync({ tables }), null, 2) }],
+    })
+  );
+
+  server.tool(
+    "scan_workspace_exposures",
+    "Scan a workspace for likely exposed credentials. Returns bounded redacted metadata only.",
+    {
+      root: z.string().optional().describe("Workspace root. Defaults to the MCP process working directory."),
+      limit: z.number().int().positive().optional().describe("Maximum findings to return. Capped by the server."),
+      maxFileBytes: z.number().int().positive().optional().describe("Maximum bytes per file to inspect."),
+      maxFiles: z.number().int().positive().optional().describe("Maximum files to scan. Capped by the server."),
+      maxBytesScanned: z.number().int().positive().optional().describe("Maximum total bytes to scan. Capped by the server."),
+      timeoutMs: z.number().int().positive().optional().describe("Maximum scan runtime in milliseconds. Capped by the server."),
+    },
+    async ({ root, limit, maxFileBytes, maxFiles, maxBytesScanned, timeoutMs }) => {
+      const resolved = resolveMcpRoot(root);
+      if (!resolved.ok) return mcpScanRootError("workspace", resolved.root, resolved.error);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(scanWorkspaceExposures({
+            root: resolved.root,
+            limit,
+            maxFileBytes,
+            maxFiles,
+            maxBytesScanned,
+            timeoutMs,
+          })),
+        }],
+      };
+    }
+  );
+
+  server.tool(
+    "scan_history_exposures",
+    "Scan bounded git history for likely exposed credentials. Returns bounded redacted metadata only.",
+    {
+      root: z.string().optional().describe("Git workspace root. Defaults to the MCP process working directory."),
+      limit: z.number().int().positive().optional().describe("Maximum findings to return. Capped by the server."),
+      maxCommits: z.number().int().positive().optional().describe("Maximum commits to inspect. Capped by the server."),
+      timeoutMs: z.number().int().positive().optional().describe("Maximum scan runtime in milliseconds. Capped by the server."),
+    },
+    async ({ root, limit, maxCommits, timeoutMs }) => {
+      const resolved = resolveMcpRoot(root);
+      if (!resolved.ok) return mcpScanRootError("history", resolved.root, resolved.error);
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(scanHistoryExposures({ root: resolved.root, limit, maxCommits, timeoutMs })),
+        }],
+      };
+    }
+  );
+
   const vaultPath = process.env.HASNA_SECRETS_DB_PATH ?? process.env.OPEN_SECRETS_DB ?? join(homedir(), ".hasna", "secrets", "vault.db");
   registerCloudTools(server, "secrets", { migrations: PG_MIGRATIONS, dbPath: vaultPath });
   return server;
@@ -168,4 +357,59 @@ function parseTtl(ttl: string): string {
   const [, num, unit] = match;
   const ms = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[unit as string]!;
   return new Date(Date.now() + parseInt(num) * ms).toISOString();
+}
+
+export function resolveMcpRoot(root?: string): { ok: true; root?: string } | { ok: false; root: string; error: string } {
+  if (!root) return { ok: true };
+  const resolved = resolve(root);
+
+  let base: string;
+  let realRoot: string;
+  try {
+    base = realpathSync(process.cwd());
+    realRoot = realpathSync(resolved);
+  } catch (error) {
+    return {
+      ok: false,
+      root: resolved,
+      error: `Unable to resolve MCP scan root: ${(error as Error).message}`,
+    };
+  }
+
+  const rel = relative(base, realRoot);
+  const outsideBase = rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+  if (rel === "" || !outsideBase) {
+    return { ok: true, root: realRoot };
+  }
+  return {
+    ok: false,
+    root: realRoot,
+    error: `MCP scan root must be inside the server working directory: ${base}`,
+  };
+}
+
+function mcpScanRootError(source: "workspace" | "history", root: string, error: string) {
+  return {
+    content: [{
+      type: "text" as const,
+      text: JSON.stringify({
+        version: 1,
+        source,
+        root,
+        redacted: true,
+        limits: { findings: 0 },
+        stats: {
+          filesScanned: 0,
+          filesSkipped: 0,
+          bytesScanned: 0,
+          ...(source === "history" ? { commitsScanned: 0 } : {}),
+          errors: [error],
+        },
+        findings: [],
+        findingCount: 0,
+        truncated: false,
+      }),
+    }],
+    isError: true,
+  };
 }

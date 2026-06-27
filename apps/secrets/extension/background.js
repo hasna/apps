@@ -37,6 +37,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         .catch(e => sendResponse({ ok: false, error: e.message }));
       return true;
 
+    case "ITEMS":
+      apiFetch("/v1/items", msg.kind ? { kind: msg.kind } : {})
+        .then(d => sendResponse({ ok: true, items: d.items }))
+        .catch(e => sendResponse({ ok: false, error: e.message }));
+      return true;
+
+    case "ITEM_SEARCH":
+      apiFetch("/v1/items/search", { q: msg.q })
+        .then(d => sendResponse({ ok: true, results: d.results }))
+        .catch(e => sendResponse({ ok: false, error: e.message }));
+      return true;
+
+    case "ITEM_GET":
+      apiFetch("/v1/items/get", { id: msg.id })
+        .then(d => sendResponse({ ok: true, item: d }))
+        .catch(e => sendResponse({ ok: false, error: e.message }));
+      return true;
+
     case "SEARCH":
       apiFetch("/v1/search", { q: msg.q })
         .then(d => sendResponse({ ok: true, results: d.results }))

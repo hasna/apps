@@ -7,7 +7,7 @@ import { getDb } from "./db.js";
 import type { SecretType } from "./types.js";
 
 const PACKAGE_NAME = "@hasna/secrets";
-const FALLBACK_PACKAGE_VERSION = "0.1.28";
+const FALLBACK_PACKAGE_VERSION = "0.1.31";
 const SECRET_TYPES: SecretType[] = ["api_key", "password", "token", "credential", "other"];
 const USER_TYPES = ["human", "agent"] as const;
 

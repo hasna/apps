@@ -1,7 +1,42 @@
+import { randomUUID } from "crypto";
 import { hostname } from "os";
 import { getDb } from "./db.js";
 import { encrypt, decrypt, isEncrypted } from "./crypto.js";
-import type { SecretEntry, SecretType, AuditEntry } from "./types.js";
+import { assertValidSecretPath } from "./hasna-xyz-paths.js";
+import type {
+  SecretEntry,
+  SecretMetadata,
+  SecretType,
+  AuditEntry,
+  VaultItem,
+  VaultItemInput,
+  VaultItemKind,
+  VaultItemMetadata,
+  VaultItemPayload,
+} from "./types.js";
+
+const VAULT_ITEM_KINDS: VaultItemKind[] = [
+  "login",
+  "address",
+  "identity",
+  "payment_card",
+  "secure_note",
+  "api_key",
+  "custom",
+];
+
+interface VaultItemRow {
+  id: string;
+  kind: VaultItemKind;
+  title: string;
+  subtitle?: string | null;
+  domains: string;
+  tags: string;
+  favorite: number | boolean;
+  data?: string;
+  created_at: string;
+  updated_at: string;
+}
 
 function currentAgent(): string {
   return process.env.AGENT_ID ?? process.env.USER ?? hostname();
@@ -21,6 +56,8 @@ export function setSecret(
   label?: string,
   expiresAt?: string
 ): SecretEntry {
+  assertValidSecretPath(key);
+
   const db = getDb();
   const now = new Date().toISOString();
   const existing = db.prepare("SELECT created_at FROM secrets WHERE key = ?").get(key) as
@@ -64,6 +101,266 @@ function decryptRows(rows: SecretEntry[]): SecretEntry[] {
   return rows.map((r) => ({ ...r, value: decrypt(r.value) }));
 }
 
+function metadataColumns(): string {
+  return "key, type, label, expires_at, created_at, updated_at";
+}
+
+function vaultItemMetadataColumns(): string {
+  return "id, kind, title, subtitle, domains, tags, favorite, created_at, updated_at";
+}
+
+function parseJsonArray(value: string | null | undefined): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is string => typeof entry === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeDomain(value: string): string {
+  const raw = value.trim().toLowerCase();
+  if (!raw) return "";
+  try {
+    const withScheme = raw.includes("://") ? raw : `https://${raw}`;
+    return new URL(withScheme).hostname.replace(/^www\./, "");
+  } catch {
+    return raw.replace(/^https?:\/\//, "").split("/")[0].replace(/^www\./, "");
+  }
+}
+
+function normalizeStringArray(values?: string[]): string[] {
+  if (!values) return [];
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function compactObject<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined && entry !== null && entry !== "")
+  ) as T;
+}
+
+function normalizeVaultPayload(kind: VaultItemKind, payload: VaultItemPayload): VaultItemPayload {
+  const data = compactObject(payload);
+
+  switch (kind) {
+    case "login":
+      return compactObject({
+        username: data.username ?? data.email ?? data.login,
+        email: data.email,
+        login: data.login,
+        password: data.password,
+        url: data.url,
+        totp: data.totp,
+        notes: data.notes,
+      });
+    case "address":
+    case "identity":
+      return compactObject({
+        name: data.name,
+        givenName: data.givenName,
+        familyName: data.familyName,
+        organization: data.organization,
+        company: data.company,
+        addressLine1: data.addressLine1,
+        addressLine2: data.addressLine2,
+        city: data.city,
+        state: data.state,
+        postalCode: data.postalCode,
+        country: data.country,
+        phone: data.phone,
+        email: data.email,
+      });
+    case "payment_card":
+      return compactObject({
+        cardName: data.cardName ?? data.name,
+        cardNumber: data.cardNumber,
+        expiration: data.expiration,
+        expirationMonth: data.expirationMonth,
+        expirationYear: data.expirationYear,
+        securityCode: data.securityCode ?? data.cvv ?? data.cvc,
+        billingAddress: data.billingAddress,
+        name: data.name,
+      });
+    default:
+      return data;
+  }
+}
+
+function normalizeDomains(values?: string[]): string[] {
+  return [...new Set(normalizeStringArray(values).map(normalizeDomain).filter(Boolean))];
+}
+
+function rowToVaultItemMetadata(row: VaultItemRow): VaultItemMetadata {
+  return {
+    id: row.id,
+    kind: row.kind,
+    title: row.title,
+    ...(row.subtitle ? { subtitle: row.subtitle } : {}),
+    domains: parseJsonArray(row.domains),
+    tags: parseJsonArray(row.tags),
+    favorite: Boolean(row.favorite),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function parseVaultPayload(stored: string): VaultItemPayload {
+  const decrypted = decrypt(stored);
+  const parsed = JSON.parse(decrypted);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Malformed vault item payload");
+  }
+  return parsed as VaultItemPayload;
+}
+
+function rowToVaultItem(row: VaultItemRow): VaultItem {
+  if (!row.data) throw new Error("Vault item row is missing encrypted data");
+  return {
+    ...rowToVaultItemMetadata(row),
+    data: parseVaultPayload(row.data),
+  };
+}
+
+function assertVaultItemKind(kind: string): asserts kind is VaultItemKind {
+  if (!VAULT_ITEM_KINDS.includes(kind as VaultItemKind)) {
+    throw new Error(`Invalid vault item kind "${kind}". Valid: ${VAULT_ITEM_KINDS.join(", ")}`);
+  }
+}
+
+function baseDomain(hostname: string): string {
+  const parts = hostname.split(".").filter(Boolean);
+  if (parts.length <= 2) return hostname;
+  return parts.slice(-2).join(".");
+}
+
+function domainMatches(hostname: string, domain: string): boolean {
+  const normalized = normalizeDomain(domain);
+  if (!normalized) return false;
+  return hostname === normalized || hostname.endsWith(`.${normalized}`);
+}
+
+function hostSearchTerms(hostname: string): string[] {
+  const parts = hostname.split(".").filter(Boolean);
+  if (parts.length <= 1) return [hostname];
+  const terms = new Set<string>([hostname]);
+  terms.add(parts.slice(-2).join("."));
+  terms.add(parts[0]);
+  return [...terms].filter(Boolean);
+}
+
+export function setVaultItem(input: VaultItemInput): VaultItem {
+  assertVaultItemKind(input.kind);
+  const title = input.title.trim();
+  if (!title) throw new Error("Vault item title is required");
+
+  const db = getDb();
+  const id = input.id?.trim() || randomUUID();
+  const now = new Date().toISOString();
+  const existing = db.prepare("SELECT created_at FROM vault_items WHERE id = ?").get(id) as
+    | { created_at: string }
+    | undefined;
+  const data = encrypt(JSON.stringify(normalizeVaultPayload(input.kind, input.data ?? {})));
+  const domains = JSON.stringify(normalizeDomains(input.domains));
+  const tags = JSON.stringify(normalizeStringArray(input.tags));
+
+  db.prepare(`
+    INSERT INTO vault_items (id, kind, title, subtitle, domains, tags, favorite, data, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      kind = excluded.kind,
+      title = excluded.title,
+      subtitle = excluded.subtitle,
+      domains = excluded.domains,
+      tags = excluded.tags,
+      favorite = excluded.favorite,
+      data = excluded.data,
+      updated_at = excluded.updated_at
+  `).run(
+    id,
+    input.kind,
+    title,
+    input.subtitle?.trim() || null,
+    domains,
+    tags,
+    input.favorite ? 1 : 0,
+    data,
+    existing?.created_at ?? now,
+    now,
+  );
+
+  audit("set", `vault-item/${id}`);
+  return getVaultItem(id)!;
+}
+
+export function getVaultItem(id: string): VaultItem | undefined {
+  const db = getDb();
+  const row = db.prepare("SELECT * FROM vault_items WHERE id = ?").get(id) as VaultItemRow | undefined;
+  if (!row) return undefined;
+  audit("get", `vault-item/${id}`);
+  return rowToVaultItem(row);
+}
+
+export function deleteVaultItem(id: string): boolean {
+  const db = getDb();
+  const result = db.prepare("DELETE FROM vault_items WHERE id = ?").run(id);
+  if (result.changes === 0) return false;
+  audit("delete", `vault-item/${id}`);
+  return true;
+}
+
+export function listVaultItemMetadata(kind?: VaultItemKind): VaultItemMetadata[] {
+  const db = getDb();
+  const rows = kind
+    ? db
+      .prepare(`SELECT ${vaultItemMetadataColumns()} FROM vault_items WHERE kind = ? ORDER BY favorite DESC, title`)
+      .all(kind) as VaultItemRow[]
+    : db
+      .prepare(`SELECT ${vaultItemMetadataColumns()} FROM vault_items ORDER BY favorite DESC, title`)
+      .all() as VaultItemRow[];
+  return rows.map(rowToVaultItemMetadata);
+}
+
+export function searchVaultItemMetadata(query: string): VaultItemMetadata[] {
+  const db = getDb();
+  const q = `%${query}%`;
+  const rows = db
+    .prepare(`
+      SELECT ${vaultItemMetadataColumns()}
+      FROM vault_items
+      WHERE title LIKE ? OR subtitle LIKE ? OR kind LIKE ? OR domains LIKE ? OR tags LIKE ?
+      ORDER BY favorite DESC, title
+    `)
+    .all(q, q, q, q, q) as VaultItemRow[];
+  return rows.map(rowToVaultItemMetadata);
+}
+
+export function matchVaultItemsForUrl(rawUrl: string): VaultItemMetadata[] {
+  let hostname: string;
+  try {
+    hostname = normalizeDomain(rawUrl);
+  } catch {
+    return [];
+  }
+  if (!hostname) return [];
+
+  const base = baseDomain(hostname);
+  const terms = hostSearchTerms(hostname);
+  return listVaultItemMetadata().filter((item) => {
+    if (item.domains.length > 0) {
+      return item.domains.some((domain) => domainMatches(hostname, domain));
+    }
+    const haystack = [item.title, item.subtitle, ...item.tags]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return terms.some((term) => haystack.includes(term)) || haystack.includes(base);
+  });
+}
+
 export function listSecrets(namespace?: string): SecretEntry[] {
   const db = getDb();
   let rows: SecretEntry[];
@@ -78,6 +375,20 @@ export function listSecrets(namespace?: string): SecretEntry[] {
   return decryptRows(rows);
 }
 
+export function listSecretMetadata(namespace?: string): SecretMetadata[] {
+  const db = getDb();
+  if (!namespace) {
+    return db
+      .prepare(`SELECT ${metadataColumns()} FROM secrets ORDER BY key`)
+      .all() as SecretMetadata[];
+  }
+
+  const prefix = namespace.endsWith("/") ? namespace : `${namespace}/`;
+  return db
+    .prepare(`SELECT ${metadataColumns()} FROM secrets WHERE key LIKE ? OR key = ? ORDER BY key`)
+    .all(`${prefix}%`, namespace) as SecretMetadata[];
+}
+
 export function searchSecrets(query: string): SecretEntry[] {
   const db = getDb();
   const q = `%${query}%`;
@@ -87,6 +398,16 @@ export function searchSecrets(query: string): SecretEntry[] {
     )
     .all(q, q, q) as SecretEntry[];
   return decryptRows(rows);
+}
+
+export function searchSecretMetadata(query: string): SecretMetadata[] {
+  const db = getDb();
+  const q = `%${query}%`;
+  return db
+    .prepare(
+      `SELECT ${metadataColumns()} FROM secrets WHERE key LIKE ? OR label LIKE ? OR type LIKE ? ORDER BY key`
+    )
+    .all(q, q, q) as SecretMetadata[];
 }
 
 export function importSecrets(
@@ -100,15 +421,24 @@ export function importSecrets(
   return count;
 }
 
-export function exportSecrets(redact = false): { version: number; secrets: Record<string, SecretEntry> } {
+export function exportSecrets(redact = true): { version: number; redacted: boolean; secrets: Record<string, SecretEntry> } {
   const db = getDb();
-  const rows = db.prepare("SELECT * FROM secrets ORDER BY key").all() as SecretEntry[];
   const secrets: Record<string, SecretEntry> = {};
+
+  if (redact) {
+    const rows = db.prepare(`SELECT ${metadataColumns()} FROM secrets ORDER BY key`).all() as SecretMetadata[];
+    for (const row of rows) {
+      secrets[row.key] = { ...row, value: "***REDACTED***" };
+    }
+    return { version: 2, redacted: true, secrets };
+  }
+
+  const rows = db.prepare("SELECT * FROM secrets ORDER BY key").all() as SecretEntry[];
   for (const row of rows) {
     const decrypted = { ...row, value: decrypt(row.value) };
-    secrets[row.key] = redact ? { ...decrypted, value: "***REDACTED***" } : decrypted;
+    secrets[row.key] = decrypted;
   }
-  return { version: 2, secrets };
+  return { version: 2, redacted: false, secrets };
 }
 
 export function getAuditLog(key?: string, limit = 100): AuditEntry[] {

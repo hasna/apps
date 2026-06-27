@@ -1,10 +1,20 @@
 import { join } from "path";
 import { homedir } from "os";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
-import { listSecrets, getSecret, searchSecrets } from "./store.js";
+import {
+  listSecrets,
+  getSecret,
+  listSecretMetadata,
+  searchSecretMetadata,
+  listVaultItemMetadata,
+  searchVaultItemMetadata,
+  getVaultItem,
+  matchVaultItemsForUrl,
+} from "./store.js";
 
 export const SERVE_PORT = 27462;
 const TOKEN_PATH = join(homedir(), ".hasna", "secrets", ".serve-token");
+const ALLOWED_EXTENSION_ORIGIN = process.env.HASNA_SECRETS_EXTENSION_ORIGIN?.trim() || "";
 
 export function getOrCreateServeToken(): string {
   if (existsSync(TOKEN_PATH)) {
@@ -21,12 +31,20 @@ export function getOrCreateServeToken(): string {
 
 function corsHeaders(req: Request): Headers {
   const origin = req.headers.get("origin") ?? "";
-  return new Headers({
-    "Access-Control-Allow-Origin": origin || "*",
+  const headers = new Headers({
     "Access-Control-Allow-Methods": "GET, OPTIONS",
     "Access-Control-Allow-Headers": "Authorization, Content-Type",
     "Access-Control-Max-Age": "86400",
   });
+  if (origin.startsWith("chrome-extension://")) {
+    if (!ALLOWED_EXTENSION_ORIGIN || origin === ALLOWED_EXTENSION_ORIGIN) {
+      headers.set("Access-Control-Allow-Origin", origin);
+    }
+  }
+  if (origin === "null" && !ALLOWED_EXTENSION_ORIGIN) {
+    headers.set("Access-Control-Allow-Origin", origin);
+  }
+  return headers;
 }
 
 function json(data: unknown, status = 200, extra?: Headers): Response {
@@ -48,7 +66,8 @@ function authorized(req: Request, token: string): boolean {
  * Given a URL, find secrets that look like they belong to that site.
  * Groups username/password pairs by common key prefix.
  */
-function matchUrl(rawUrl: string): Array<{
+function matchLegacyUrl(rawUrl: string): Array<{
+  source: "legacy";
   key_prefix: string;
   label: string;
   username?: string;
@@ -94,6 +113,7 @@ function matchUrl(rawUrl: string): Array<{
 
   return Object.entries(groups)
     .map(([prefix, data]) => ({
+      source: "legacy" as const,
       key_prefix: prefix,
       label: data.label ?? prefix.split("/").pop() ?? prefix,
       username: data.username,
@@ -102,22 +122,36 @@ function matchUrl(rawUrl: string): Array<{
     .filter(m => m.username || m.password);
 }
 
+function matchUrl(rawUrl: string): Array<Record<string, unknown>> {
+  const vaultMatches = matchVaultItemsForUrl(rawUrl)
+    .filter((item) => ["login", "address", "identity", "payment_card"].includes(item.kind))
+    .map((item) => ({
+      source: "vault_item",
+      id: item.id,
+      kind: item.kind,
+      title: item.title,
+      subtitle: item.subtitle ?? null,
+      domains: item.domains,
+      favorite: item.favorite,
+    }));
+  return [...vaultMatches, ...matchLegacyUrl(rawUrl)];
+}
+
 export async function startHttpServer(options: { port?: number } = {}): Promise<void> {
   const port = options.port ?? SERVE_PORT;
   const token = getOrCreateServeToken();
 
   console.log(`\n🔐  Secrets HTTP Server`);
   console.log(`    Host:  http://127.0.0.1:${port}  (localhost only)`);
-  console.log(`    Token: ${token}`);
-  console.log(`\n    → Copy this token into the extension Options page.`);
-  console.log(`      (Or run: secrets serve token)\n`);
+  console.log(`    Token: use \`secrets serve token\` to reveal it`);
+  console.log(`\n    → Copy that token into the extension Options page.\n`);
   console.log(`    Press Ctrl+C to stop.\n`);
 
   Bun.serve({
     port,
     hostname: "127.0.0.1", // never exposed to network
 
-    fetch(req) {
+    fetch(req: Request) {
       const url = new URL(req.url);
       const cors = corsHeaders(req);
 
@@ -139,7 +173,7 @@ export async function startHttpServer(options: { port?: number } = {}): Promise<
       // GET /v1/list[?namespace=xxx]
       if (url.pathname === "/v1/list") {
         const ns = url.searchParams.get("namespace") ?? undefined;
-        const secrets = listSecrets(ns).map(s => ({
+        const secrets = listSecretMetadata(ns).map(s => ({
           key: s.key,
           type: s.type,
           label: s.label ?? null,
@@ -161,13 +195,68 @@ export async function startHttpServer(options: { port?: number } = {}): Promise<
       if (url.pathname === "/v1/search") {
         const q = url.searchParams.get("q");
         if (!q) return err("Missing q", 400, cors);
-        const results = searchSecrets(q).map(s => ({
+        const results = searchSecretMetadata(q).map(s => ({
           key: s.key,
-          value: s.value,
           type: s.type,
           label: s.label ?? null,
+          expires_at: s.expires_at ?? null,
         }));
         return json({ results }, 200, cors);
+      }
+
+      // GET /v1/items[?kind=login]
+      if (url.pathname === "/v1/items") {
+        const kind = url.searchParams.get("kind") as any;
+        const items = listVaultItemMetadata(kind || undefined).map(item => ({
+          id: item.id,
+          kind: item.kind,
+          title: item.title,
+          subtitle: item.subtitle ?? null,
+          domains: item.domains,
+          tags: item.tags,
+          favorite: item.favorite,
+          created_at: item.created_at,
+          updated_at: item.updated_at,
+        }));
+        return json({ items }, 200, cors);
+      }
+
+      // GET /v1/items/search?q=xxx
+      if (url.pathname === "/v1/items/search") {
+        const q = url.searchParams.get("q");
+        if (!q) return err("Missing q", 400, cors);
+        const results = searchVaultItemMetadata(q).map(item => ({
+          id: item.id,
+          kind: item.kind,
+          title: item.title,
+          subtitle: item.subtitle ?? null,
+          domains: item.domains,
+          tags: item.tags,
+          favorite: item.favorite,
+          created_at: item.created_at,
+          updated_at: item.updated_at,
+        }));
+        return json({ results }, 200, cors);
+      }
+
+      // GET /v1/items/get?id=xxx
+      if (url.pathname === "/v1/items/get") {
+        const id = url.searchParams.get("id");
+        if (!id) return err("Missing id", 400, cors);
+        const item = getVaultItem(id);
+        if (!item) return err("Not found", 404, cors);
+        return json({
+          id: item.id,
+          kind: item.kind,
+          title: item.title,
+          subtitle: item.subtitle ?? null,
+          domains: item.domains,
+          tags: item.tags,
+          favorite: item.favorite,
+          data: item.data,
+          created_at: item.created_at,
+          updated_at: item.updated_at,
+        }, 200, cors);
       }
 
       // GET /v1/match?url=https://github.com
@@ -180,7 +269,7 @@ export async function startHttpServer(options: { port?: number } = {}): Promise<
       return err("Not found", 404, cors);
     },
 
-    error(e) {
+    error(e: unknown) {
       console.error("Server error:", e);
       return new Response("Internal error", { status: 500 });
     },

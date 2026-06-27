@@ -78,25 +78,25 @@ function findEnvFiles(dir: string, rootDir: string): string[] {
 /**
  * Convert a file path + variable name into a vault key.
  *
- * File path: ~/.secrets/hasnaxyz/anthropic/live.env
- * Variable: HASNAXYZ_ANTHROPIC_LIVE_API_KEY
- * Vault key: hasnaxyz/anthropic/live/api_key
+ * File path: ~/.secrets/example/anthropic/test.env
+ * Variable: EXAMPLE_ANTHROPIC_TEST_API_KEY
+ * Vault key: example/anthropic/test/api_key
  *
  * Strategy:
- * - Get the relative dir path from secrets root (e.g. "hasnaxyz/anthropic")
- * - Get the env file basename without .env (e.g. "live")
- * - Combine: "hasnaxyz/anthropic/live"
+ * - Get the relative dir path from secrets root (e.g. "example/anthropic")
+ * - Get the env file basename without .env (e.g. "test")
+ * - Combine: "example/anthropic/test"
  * - Strip the prefix from the variable name to get the suffix
  * - The prefix is the dir path + env name, uppercased with _ separators
  * - Vault key = dir_path/env_name/suffix_lowercase
  */
 function toVaultKey(filePath: string, varName: string, secretsRoot: string): string {
   const relDir = relative(secretsRoot, dirname(filePath));
-  const envName = basename(filePath, ".env"); // "live", "sandbox"
+  const envName = basename(filePath, ".env"); // "test", "sandbox"
   const dirPath = relDir ? `${relDir}/${envName}` : envName;
 
   // Build the expected prefix from the directory path + env name
-  // e.g. "hasnaxyz/anthropic/live" -> "HASNAXYZ_ANTHROPIC_LIVE"
+  // e.g. "example/anthropic/test" -> "EXAMPLE_ANTHROPIC_TEST"
   // Hyphens in dir names map to underscores in variable names
   const prefixParts = dirPath.split("/").map((s) => s.replace(/-/g, "_").toUpperCase());
   const expectedPrefix = prefixParts.join("_");
@@ -119,17 +119,36 @@ function toVaultKey(filePath: string, varName: string, secretsRoot: string): str
 /**
  * Convert a vault key back to a file path and variable name.
  *
- * Vault key: hasnaxyz/anthropic/live/api_key
- * -> dir segments: hasnaxyz/anthropic
- * -> env level: live
+ * Vault key: example/anthropic/test/api_key
+ * -> dir segments: example/anthropic
+ * -> env level: test
  * -> key suffix: api_key
- * -> File: ~/.secrets/hasnaxyz/anthropic/live.env
- * -> Variable: HASNAXYZ_ANTHROPIC_LIVE_API_KEY
+ * -> File: ~/.secrets/example/anthropic/test.env
+ * -> Variable: EXAMPLE_ANTHROPIC_TEST_API_KEY
  *
- * We need to figure out which segment is the "env level" (live, sandbox, test, staging).
+ * We need to figure out which segment is the "env level" (prod, staging,
+ * dev, preview, local, pr-123, live, sandbox, test).
  * The env level is the segment that matches known env names, scanning from the end.
  */
-const KNOWN_ENVS = new Set(["live", "sandbox", "test", "staging"]);
+const KNOWN_ENVS = new Set([
+  "prod",
+  "staging",
+  "dev",
+  "preview",
+  "local",
+  "lab",
+  "live",
+  "sandbox",
+  "test",
+]);
+
+function isEnvSegment(segment: string): boolean {
+  return KNOWN_ENVS.has(segment) || /^pr-\d+$/.test(segment);
+}
+
+function toEnvVarSegment(segment: string): string {
+  return segment.replace(/-/g, "_").toUpperCase();
+}
 
 function fromVaultKey(vaultKey: string, secretsRoot: string): { filePath: string; varName: string } {
   const parts = vaultKey.split("/");
@@ -137,7 +156,7 @@ function fromVaultKey(vaultKey: string, secretsRoot: string): { filePath: string
   // Find the env-level segment (scan from end, looking for known env names)
   let envIdx = -1;
   for (let i = parts.length - 2; i >= 1; i--) {
-    if (KNOWN_ENVS.has(parts[i])) {
+    if (isEnvSegment(parts[i])) {
       envIdx = i;
       break;
     }
@@ -162,7 +181,7 @@ function fromVaultKey(vaultKey: string, secretsRoot: string): { filePath: string
 
   const dirPath = dirParts.join("/");
   const filePath = join(secretsRoot, dirPath, `${envName}.env`);
-  const varName = [...dirParts, envName, keySuffix].join("_").toUpperCase();
+  const varName = [...dirParts, envName, keySuffix].map(toEnvVarSegment).join("_");
 
   return { filePath, varName };
 }

@@ -19,6 +19,13 @@ $("save-btn").addEventListener("click", async () => {
   setTimeout(() => setStatus(""), 3000);
 });
 
+$("forget-btn").addEventListener("click", async () => {
+  await chrome.storage.local.remove("token");
+  $("token").value = "";
+  setStatus("Token cleared", "ok");
+  setTimeout(() => setStatus(""), 3000);
+});
+
 $("test-btn").addEventListener("click", async () => {
   const token = $("token").value.trim();
   setStatus("Testing…");
