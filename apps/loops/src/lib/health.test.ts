@@ -40,10 +40,10 @@ describe("loop health classification", () => {
     }
   });
 
-  test("bounds evidence included in health JSON", () => {
-    const signal = classifyRunFailure(run({ error: "x".repeat(2_050) }));
+  test("redacts evidence included in health JSON", () => {
+    const signal = classifyRunFailure(run({ error: `prefix fake-project-secret ${"x".repeat(2_050)}` }));
 
-    expect(signal?.evidence.error?.length).toBeLessThan(2_050);
-    expect(signal?.evidence.error).toContain("[truncated 50 chars]");
+    expect(signal?.evidence.error).toMatch(/^\[redacted \d+ chars\]$/);
+    expect(signal?.evidence.error).not.toContain("fake-project-secret");
   });
 });

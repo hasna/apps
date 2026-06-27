@@ -795,9 +795,9 @@ describe("loops CLI", () => {
           status: "failed",
           finishedAt: "2026-01-01T00:00:01.000Z",
           durationMs: 1_000,
-          stdout: "",
-          stderr: "Rate limit exceeded by provider",
-          error: "429 too many requests",
+          stdout: "fake-project-stdout-secret",
+          stderr: "Rate limit exceeded by provider fake-project-stderr-secret",
+          error: "429 too many requests fake-project-error-secret",
           exitCode: 1,
         },
         { claimedBy: "seed", now: new Date("2026-01-01T00:00:00.500Z") },
@@ -814,6 +814,9 @@ describe("loops CLI", () => {
     expect(value.classifications.rate_limit).toBe(1);
     expect(value.expectations[0].failure.classification).toBe("rate_limit");
     expect(value.expectations[0].failure.fingerprint).toMatch(/^[a-f0-9]{16}$/);
+    expect(JSON.stringify(value)).not.toContain("fake-project-");
+    expect(value.expectations[0].latestRun.error).toMatch(/^\[redacted \d+ chars\]$/);
+    expect(value.expectations[0].failure.evidence.stderr).toMatch(/^\[redacted \d+ chars\]$/);
     expect(value.expectations[0].recommendedTask).toMatchObject({
       priority: "high",
       futureNativeUpsert: { command: "todos upsert" },
@@ -1207,6 +1210,28 @@ describe("loops CLI", () => {
     const accounts = workflow.steps.map((step: { target: { account?: { profile: string; tool?: string } } }) => step.target.account);
     expect(accounts.map((account: { profile: string }) => account.profile).sort()).toEqual(["account002", "account003"]);
     expect(accounts.every((account: { tool?: string }) => account.tool === "claude")).toBe(true);
+  });
+
+  test("templates reject provider-native auth profile pools for non-Codewith providers", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-native-auth-provider-"));
+    const render = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "todos-task-worker-verifier",
+      "--var",
+      "taskId=task-native-auth",
+      "--var",
+      "projectPath=/tmp/repo",
+      "--var",
+      "provider=claude",
+      "--var",
+      "authProfilePool=account004,account005",
+    ]);
+
+    expect(render.status).not.toBe(0);
+    expect(render.stderr).toContain("authProfile");
+    expect(render.stderr).toContain("provider codewith");
   });
 
   test("todos task event handler creates a deduped one-shot workflow loop", () => {

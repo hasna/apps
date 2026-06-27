@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Loop, LoopRun } from "../types.js";
+import { redact } from "./format.js";
 import type { Store } from "./store.js";
 
 export type RunFailureClassification =
@@ -100,6 +101,10 @@ function bounded(value: string | undefined, limit = EVIDENCE_CHARS): string | un
   return `${value.slice(0, limit)}\n[truncated ${value.length - limit} chars]`;
 }
 
+function redactedEvidence(value: string | undefined): string | undefined {
+  return redact(bounded(value));
+}
+
 function searchableText(run: LoopRun): string {
   return [run.error, run.stderr, run.stdout].filter(Boolean).join("\n").toLowerCase();
 }
@@ -121,9 +126,9 @@ function stableFailureFingerprint(run: LoopRun, classification: RunFailureClassi
 function healthRun(run: LoopRun): LoopRun {
   return {
     ...run,
-    error: bounded(run.error),
-    stdout: bounded(run.stdout),
-    stderr: bounded(run.stderr),
+    error: redactedEvidence(run.error),
+    stdout: redactedEvidence(run.stdout),
+    stderr: redactedEvidence(run.stderr),
   };
 }
 
@@ -146,9 +151,9 @@ export function classifyRunFailure(run: LoopRun): RunFailureSignal | undefined {
     classification,
     fingerprint: stableFailureFingerprint(run, classification),
     evidence: {
-      error: bounded(run.error),
-      stdout: bounded(run.stdout),
-      stderr: bounded(run.stderr),
+      error: redactedEvidence(run.error),
+      stdout: redactedEvidence(run.stdout),
+      stderr: redactedEvidence(run.stderr),
       exitCode: run.exitCode,
     },
   };

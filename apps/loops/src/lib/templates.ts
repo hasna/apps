@@ -211,6 +211,20 @@ function accountForRole(input: AgentWorkflowTemplateInput, role: AgentWorkflowRo
   return rolePoolValue(input.accountPool, seed, role) ?? input.account;
 }
 
+function assertNativeAuthProfileSupport(input: AgentWorkflowTemplateInput, provider: AgentProvider): void {
+  if (provider === "codewith") return;
+  const hasNativeAuthProfiles = Boolean(
+    input.authProfile ||
+      input.authProfilePool?.length ||
+      input.workerAuthProfile ||
+      input.verifierAuthProfile,
+  );
+  if (!hasNativeAuthProfiles) return;
+  throw new Error(
+    `authProfile, authProfilePool, workerAuthProfile, and verifierAuthProfile are supported only for provider codewith; use account/accountPool for ${provider} profile isolation`,
+  );
+}
+
 function agentTarget(
   input: AgentWorkflowTemplateInput,
   prompt: string,
@@ -218,6 +232,7 @@ function agentTarget(
   seed: string,
 ): WorkflowStep["target"] {
   const provider = input.provider ?? "codewith";
+  assertNativeAuthProfileSupport(input, provider);
   const sandbox =
     input.sandbox ??
     (provider === "codewith" || provider === "codex"
