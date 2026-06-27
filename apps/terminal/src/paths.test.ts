@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { getTerminalDir } from "./paths.js";
-import { existsSync, rmSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -36,6 +36,29 @@ describe("getTerminalDir", () => {
   it("returns ~/.hasna/terminal when HASNA_TERMINAL_DIR is set", () => {
     process.env.HASNA_TERMINAL_DIR = "/custom/path";
     expect(getTerminalDir()).toBe("/custom/path");
+  });
+
+  it("copies legacy ~/.terminal data into ~/.hasna/terminal and returns the new dir", () => {
+    const tempHome = join(tmpdir(), `terminal-home-${Date.now()}`);
+    const previousHome = process.env.HOME;
+    process.env.HOME = tempHome;
+    process.env.HASNA_TERMINAL_DIR = "";
+    process.env.TERMINAL_DIR = "";
+
+    try {
+      const legacyDir = join(tempHome, ".terminal");
+      const newDir = join(tempHome, ".hasna", "terminal");
+      mkdirSync(legacyDir, { recursive: true });
+      writeFileSync(join(legacyDir, "history.json"), JSON.stringify([{ command: "echo ok" }]));
+
+      expect(getTerminalDir()).toBe(newDir);
+      expect(readFileSync(join(newDir, "history.json"), "utf8")).toContain("echo ok");
+      expect(existsSync(join(legacyDir, "history.json"))).toBe(true);
+    } finally {
+      rmSync(tempHome, { recursive: true, force: true });
+      if (previousHome) process.env.HOME = previousHome;
+      else delete process.env.HOME;
+    }
   });
 });
 
