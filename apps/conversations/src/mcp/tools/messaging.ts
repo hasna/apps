@@ -329,20 +329,52 @@ export function registerMessagingTools(
   });
 
   server.registerTool("read_digest", {
-    description: "Lightweight unread message digest — returns preview-only summaries, auto-marks as read. Use instead of read_messages on busy channels to avoid token overflow.",
+    description: "Cursored byte-capped channel digest. Returns preview-only snippets plus digest_id, message_ids, and next_cursor; use on busy channels instead of replaying read_messages.",
     inputSchema: {
       channel: z.string().optional(),
       session_id: z.string().optional(),
       to: z.string().optional(),
       since: z.string().optional(),
+      cursor: z.coerce.number().optional().describe("Only include messages after this message ID"),
+      max_bytes: z.coerce.number().optional().describe("Maximum JSON payload size in bytes"),
       limit: z.coerce.number().optional(),
+      unread_only: z.coerce.boolean().optional().describe("Only include unread messages"),
+      mark_read: z.coerce.boolean().optional().describe("Mark returned messages read after building the digest"),
+      from: z.string().optional().describe("Reader identity for mark_read"),
       project_id: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const { channel, session_id, to, since, limit, project_id } = args;
-    const result = readDigest({ channel, session_id, to, since, limit, project_id });
+    const { channel, session_id, to, since, cursor, max_bytes, limit, unread_only, mark_read, from: fromParam, project_id } = args;
+    const agent = resolveIdentity(fromParam);
+    if (!channel && !session_id && !to) {
+      return {
+        content: [{ type: "text", text: "Provide channel, session_id, or to for read_digest." }],
+        isError: true,
+      };
+    }
+    let result;
+    try {
+      result = readDigest({
+        channel,
+        session_id,
+        to,
+        since,
+        cursor,
+        max_bytes,
+        limit,
+        unread_only,
+        mark_read,
+        reader: mark_read ? agent : undefined,
+        project_id: project_id ?? resolveProjectId(undefined, agent),
+      });
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
+        isError: true,
+      };
+    }
     return {
-      content: [{ type: "text", text: JSON.stringify(result) }],
+      content: [{ type: "text", text: jsonText(result) }],
     };
   });
 

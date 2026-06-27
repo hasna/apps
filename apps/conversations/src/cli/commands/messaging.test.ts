@@ -1,6 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { Command } from "commander";
-import { registerMessagingCommands } from "./messaging";
+import { formatDigestContinuationCommand, registerMessagingCommands } from "./messaging";
 
 describe("registerMessagingCommands", () => {
   test("registers send command", () => {
@@ -37,6 +37,67 @@ describe("registerMessagingCommands", () => {
 
     const digest = program.commands.find((c) => c.name() === "digest");
     expect(digest).toBeDefined();
+    expect(digest?.options.some((o) => o.long === "--cursor")).toBe(true);
+    expect(digest?.options.some((o) => o.long === "--max-bytes")).toBe(true);
+    expect(digest?.options.some((o) => o.long === "--mark-read")).toBe(true);
+  });
+
+  test("formats digest continuation commands for channel, session, and recipient scopes", () => {
+    expect(formatDigestContinuationCommand({
+      channel: "engineering",
+      session_id: null,
+      to: null,
+      next_cursor: 42,
+      max_bytes: 8192,
+    })).toBe("conversations digest engineering --cursor 42 --max-bytes 8192");
+
+    expect(formatDigestContinuationCommand({
+      channel: null,
+      session_id: "session-123",
+      to: null,
+      next_cursor: 43,
+      max_bytes: 4096,
+    })).toBe("conversations digest --session session-123 --cursor 43 --max-bytes 4096");
+
+    expect(formatDigestContinuationCommand({
+      channel: null,
+      session_id: null,
+      to: "agent-two",
+      next_cursor: 44,
+      max_bytes: 2048,
+    })).toBe("conversations digest --to agent-two --cursor 44 --max-bytes 2048");
+
+    expect(formatDigestContinuationCommand({
+      channel: null,
+      session_id: "session with spaces",
+      to: null,
+      next_cursor: 45,
+      max_bytes: 1024,
+    })).toBe("conversations digest --session 'session with spaces' --cursor 45 --max-bytes 1024");
+
+    expect(formatDigestContinuationCommand({
+      channel: null,
+      session_id: null,
+      to: "agent$(echo injected)",
+      next_cursor: 46,
+      max_bytes: 1024,
+    })).toBe("conversations digest --to 'agent$(echo injected)' --cursor 46 --max-bytes 1024");
+
+    expect(formatDigestContinuationCommand({
+      channel: null,
+      session_id: null,
+      to: "agent`echo injected`",
+      next_cursor: 47,
+      max_bytes: 1024,
+    })).toBe("conversations digest --to 'agent`echo injected`' --cursor 47 --max-bytes 1024");
+
+    expect(formatDigestContinuationCommand({
+      channel: null,
+      session_id: null,
+      to: "agent's-space",
+      next_cursor: 48,
+      max_bytes: 1024,
+    })).toBe("conversations digest --to 'agent'\\''s-space' --cursor 48 --max-bytes 1024");
   });
 
   test("registers search command", () => {
