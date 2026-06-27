@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collectHeartbeats } from "../src/commands/heartbeat.js";
 import { manifestAdd, manifestInit } from "../src/commands/manifest.js";
+import { createTrustedSdkMutationApproval } from "../src/commands/mutation-approval.js";
 import { closeDb, listHeartbeats } from "../src/db.js";
 import type { MachineCommandRunner } from "../src/remote.js";
 
@@ -32,7 +33,28 @@ function setupTemp(name: string): string {
   return dir;
 }
 
+function approved<T extends Record<string, unknown>>(options: T): T & { trustedLocalMutation: ReturnType<typeof createTrustedSdkMutationApproval> } {
+  return { ...options, trustedLocalMutation: createTrustedSdkMutationApproval() };
+}
+
 describe("heartbeat collection", () => {
+  test("requires scoped SDK mutation approval before route execution", () => {
+    const dir = setupTemp("machines-heartbeat-approval-");
+    const calls: string[] = [];
+    try {
+      const runner: MachineCommandRunner = (machineId) => {
+        calls.push(machineId);
+        throw new Error("runner should not be called without approval");
+      };
+
+      expect(() => collectHeartbeats({ machines: ["demo-node-01"] }, runner)).toThrow("sdk.machines_heartbeat_collect requires");
+      expect(calls).toEqual([]);
+      expect(listHeartbeats("demo-node-01")).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("imports a public one-shot heartbeat from a routed machine command", () => {
     const dir = setupTemp("machines-heartbeat-collect-");
     try {
@@ -61,7 +83,7 @@ describe("heartbeat collection", () => {
       };
 
       const before = Date.now();
-      const results = collectHeartbeats({ machines: ["demo-node-01"] }, runner);
+      const results = collectHeartbeats(approved({ machines: ["demo-node-01"] }), runner);
       const after = Date.now();
 
       expect(results).toEqual([{
@@ -100,7 +122,7 @@ describe("heartbeat collection", () => {
         exitCode: 127,
       });
 
-      const results = collectHeartbeats({ machines: ["demo-node-01"] }, runner);
+      const results = collectHeartbeats(approved({ machines: ["demo-node-01"] }), runner);
 
       expect(results[0]).toMatchObject({
         machineId: "demo-node-01",
@@ -131,7 +153,7 @@ describe("heartbeat collection", () => {
         exitCode: 0,
       });
 
-      const results = collectHeartbeats({ machines: ["demo-node-01"] }, runner);
+      const results = collectHeartbeats(approved({ machines: ["demo-node-01"] }), runner);
 
       expect(results[0]).toMatchObject({
         machineId: "demo-node-01",
@@ -170,7 +192,7 @@ describe("heartbeat collection", () => {
         exitCode: 0,
       });
 
-      const results = collectHeartbeats({ machines: ["demo-node-03"] }, runner);
+      const results = collectHeartbeats(approved({ machines: ["demo-node-03"] }), runner);
 
       expect(results[0]).toMatchObject({
         machineId: "demo-node-03",
@@ -209,7 +231,7 @@ describe("heartbeat collection", () => {
         exitCode: 0,
       });
 
-      const results = collectHeartbeats({ machines: ["demo-node-04"] }, runner);
+      const results = collectHeartbeats(approved({ machines: ["demo-node-04"] }), runner);
 
       expect(results[0]).toMatchObject({
         machineId: "demo-node-04",
@@ -241,7 +263,7 @@ describe("heartbeat collection", () => {
         throw new Error("runner should not be called for non-canonical ids");
       };
 
-      const results = collectHeartbeats({ machines: ["MacBook-Pro"] }, runner);
+      const results = collectHeartbeats(approved({ machines: ["MacBook-Pro"] }), runner);
 
       expect(results[0]).toMatchObject({
         machineId: "MacBook-Pro",
@@ -273,7 +295,7 @@ describe("heartbeat collection", () => {
         exitCode: 0,
       });
 
-      const results = collectHeartbeats({ machines: ["localhost"] }, runner);
+      const results = collectHeartbeats(approved({ machines: ["localhost"] }), runner);
 
       expect(results[0]).toMatchObject({
         machineId: "demo-node-02",
@@ -308,7 +330,7 @@ describe("heartbeat collection", () => {
         exitCode: 0,
       });
 
-      const results = collectHeartbeats({ machines: ["demo-node-01"] }, runner);
+      const results = collectHeartbeats(approved({ machines: ["demo-node-01"] }), runner);
 
       expect(results[0]).toMatchObject({
         machineId: "demo-node-01",
@@ -341,7 +363,7 @@ describe("heartbeat collection", () => {
         };
       };
 
-      const results = collectHeartbeats({ machines: ["demo-node-01", "demo-node-02"] }, runner);
+      const results = collectHeartbeats(approved({ machines: ["demo-node-01", "demo-node-02"] }), runner);
 
       expect(results[0]).toMatchObject({ machineId: "demo-node-01", status: "failed" });
       expect(results[0]?.error).toContain("[redacted]");

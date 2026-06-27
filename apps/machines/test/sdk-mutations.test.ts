@@ -79,6 +79,43 @@ describe("published SDK mutation boundary", () => {
     }
   });
 
+  test("heartbeat collection exposes public SDK approval helpers", () => {
+    const { dir } = withTempEnv("machines-sdk-heartbeat-collect-");
+    try {
+      process.env.HASNA_MACHINES_MUTATION_TOKEN = "sdk-secret";
+      const options = { machines: ["unknown"] };
+
+      expect("HEARTBEAT_COLLECT_MUTATION_OPERATION" in machines).toBe(true);
+      expect("heartbeatCollectMutationArgs" in machines).toBe(true);
+      expect("heartbeatCollectResourceId" in machines).toBe(true);
+      expect(() => machines.collectHeartbeats(options)).toThrow("sdk.machines_heartbeat_collect requires");
+
+      const token = machines.createMutationApprovalToken({
+        surface: "sdk",
+        operation: machines.HEARTBEAT_COLLECT_MUTATION_OPERATION,
+        transport: "sdk",
+        callerId: "sdk-test",
+        runId: "sdk-test",
+        resourceId: machines.heartbeatCollectResourceId(options),
+        args: machines.heartbeatCollectMutationArgs(options),
+      }, { env: process.env, now: Date.now(), nonce: "sdk-heartbeat-collect" });
+      const result = machines.collectHeartbeats({
+        ...options,
+        approvalToken: token,
+        callerId: "sdk-test",
+        runId: "sdk-test",
+      });
+
+      expect(result[0]).toMatchObject({
+        machineId: "unknown",
+        status: "failed",
+        error: "heartbeat collection requires a canonical manifest machine id",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("friendly-name SDK mutators require scoped approval and preserve machine slug", () => {
     const { dir, manifestPath } = withTempEnv("machines-sdk-friendly-name-");
     try {

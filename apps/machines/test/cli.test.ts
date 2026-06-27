@@ -3,6 +3,11 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import {
+  HEARTBEAT_COLLECT_MUTATION_OPERATION,
+  heartbeatCollectMutationArgs,
+  heartbeatCollectResourceId,
+} from "../src/commands/heartbeat.js";
 import { MUTATION_APPROVAL_FLAG_ENV, MUTATION_APPROVAL_TOKEN_ENV, createMutationApprovalToken } from "../src/commands/mutation-approval.js";
 import {
   clearMachineFriendlyNameMutationArgs,
@@ -28,6 +33,46 @@ function runCli(args: string[], env: NodeJS.ProcessEnv, input?: string) {
 }
 
 describe("cli command handling", () => {
+  test("heartbeat collect requires scoped approval before route execution", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-cli-heartbeat-collect-"));
+    try {
+      const baseEnv = {
+        ...process.env,
+        HASNA_MACHINES_MANIFEST_PATH: join(dir, "machines.json"),
+        HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
+        HASNA_MACHINES_MACHINE_ID: "control",
+        [MUTATION_APPROVAL_TOKEN_ENV]: "secret",
+      };
+      const setupEnv = { ...baseEnv, [MUTATION_APPROVAL_FLAG_ENV]: "1" };
+      expect(runCli(["manifest", "init"], setupEnv).status).toBe(0);
+
+      const denied = runCli(["heartbeat", "collect", "--machine", "unknown", "--json"], baseEnv);
+      expect(denied.status).not.toBe(0);
+      expect(denied.stderr).toContain("requires operator approval");
+
+      const collectOptions = { machines: ["unknown"] };
+      const token = createMutationApprovalToken({
+        surface: "cli",
+        operation: HEARTBEAT_COLLECT_MUTATION_OPERATION,
+        transport: "cli",
+        callerId: "cli",
+        runId: "cli",
+        resourceId: heartbeatCollectResourceId(collectOptions),
+        args: heartbeatCollectMutationArgs(collectOptions),
+      }, { env: baseEnv, now: Date.now(), nonce: "cli-heartbeat-collect" });
+      const approved = runCli(["heartbeat", "collect", "--machine", "unknown", "--json", "--approval-token", token], baseEnv);
+      expect(approved.stderr).toBe("");
+      expect(approved.status).toBe(0);
+      expect(JSON.parse(approved.stdout)[0]).toMatchObject({
+        machineId: "unknown",
+        status: "failed",
+        error: "heartbeat collection requires a canonical manifest machine id",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("manifest add --from-stdin bypasses option validation and writes the piped machine", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-cli-stdin-"));
     try {

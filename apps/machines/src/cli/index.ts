@@ -58,7 +58,13 @@ import { buildSshCommand, resolveSshTarget } from "../commands/ssh.js";
 import { resolveScreenTarget, buildScreenCommand, buildScreenEnableCommand, resolveScreenCredentials } from "../commands/screen.js";
 import { buildSyncPlan, runSyncPlan } from "../commands/sync.js";
 import { getStatus } from "../commands/status.js";
-import { collectHeartbeats, type HeartbeatCollectResult } from "../commands/heartbeat.js";
+import {
+  collectHeartbeats,
+  HEARTBEAT_COLLECT_MUTATION_OPERATION,
+  heartbeatCollectMutationArgs,
+  heartbeatCollectResourceId,
+  type HeartbeatCollectResult,
+} from "../commands/heartbeat.js";
 import { repairWorkspaceManifestMappings, type WorkspaceManifestRepairResult } from "../commands/workspace.js";
 import {
   assignMachineProject,
@@ -1172,12 +1178,21 @@ heartbeatCommand
   .option("--machine <id...>", "Machine identifier to collect; repeat for multiple machines", collectOptionValues, [])
   .option("--timeout-ms <ms>", "Per-machine command timeout in milliseconds")
   .option("--no-doctor-summary", "Skip doctor summary collection even when the remote agent supports it")
+  .option("--approval-token <token>", "Scoped mutation approval token")
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string[]; timeoutMs?: string; doctorSummary?: boolean; json?: boolean }, command: Command) => {
-    const results = collectHeartbeats({
+  .action((options: { machine?: string[]; timeoutMs?: string; doctorSummary?: boolean; approvalToken?: string; json?: boolean }, command: Command) => {
+    const collectOptions = {
       machines: options.machine,
       timeoutMs: options.timeoutMs ? parseIntegerOption(options.timeoutMs, "timeout-ms", { min: 1 }) : undefined,
       doctorSummary: options.doctorSummary,
+    };
+    requireCliMutation(HEARTBEAT_COLLECT_MUTATION_OPERATION, options.approvalToken, {
+      resourceId: heartbeatCollectResourceId(collectOptions),
+      args: heartbeatCollectMutationArgs(collectOptions),
+    });
+    const results = collectHeartbeats({
+      ...collectOptions,
+      trustedLocalMutation: createTrustedSdkMutationApproval(),
     });
     printCommandResult(results, renderHeartbeatCollect(results), wantsCommandJson(options, command));
   });

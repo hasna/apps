@@ -3,8 +3,9 @@ import { readManifest } from "../manifests.js";
 import { redactErrorMessage } from "../redaction.js";
 import { runMachineCommand, type MachineCommandRunner } from "../remote.js";
 import type { MachineManifest } from "../types.js";
+import { assertSdkMutationApproved, type SdkMutationApprovalOptions } from "./mutation-approval.js";
 
-export interface HeartbeatCollectOptions {
+export interface HeartbeatCollectOptions extends SdkMutationApprovalOptions {
   machines?: string[];
   timeoutMs?: number;
   doctorSummary?: boolean;
@@ -18,6 +19,21 @@ export interface HeartbeatCollectResult {
   daemonVersion: string | null;
   storageSyncStatus: string | null;
   error: string | null;
+}
+
+export const HEARTBEAT_COLLECT_MUTATION_OPERATION = "machines_heartbeat_collect";
+
+export function heartbeatCollectMutationArgs(options: Pick<HeartbeatCollectOptions, "machines" | "timeoutMs" | "doctorSummary"> = {}): Record<string, unknown> {
+  return {
+    machines: options.machines?.map((machine) => machine.trim()).filter(Boolean) ?? [],
+    timeout_ms: options.timeoutMs ?? null,
+    doctor_summary: options.doctorSummary !== false,
+  };
+}
+
+export function heartbeatCollectResourceId(options: Pick<HeartbeatCollectOptions, "machines"> = {}): string {
+  const machines = options.machines?.map((machine) => machine.trim()).filter(Boolean) ?? [];
+  return `heartbeat:collect:${machines.length > 0 ? machines.join(",") : "all"}`;
 }
 
 function defaultMachineIds(): string[] {
@@ -145,6 +161,12 @@ export function collectHeartbeats(
   options: HeartbeatCollectOptions = {},
   runner: MachineCommandRunner = runMachineCommand,
 ): HeartbeatCollectResult[] {
+  assertSdkMutationApproved({
+    operation: HEARTBEAT_COLLECT_MUTATION_OPERATION,
+    resourceId: heartbeatCollectResourceId(options),
+    args: heartbeatCollectMutationArgs(options),
+  }, options);
+
   const manifest = readManifest();
   const manifestById = new Map(manifest.machines.map((machine) => [machine.id, machine]));
   const localMachineId = getLocalMachineId();
