@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "id": "wks_2tyysw05cwap",
+  "slug": "open-uptime",
+  "name": "Open Uptime",
+  "kind": "open-source",
+  "root_id": null,
+  "recipe_id": null,
+  "primary_path": "/home/hasna/workspace/hasna/opensource/open-uptime",
+  "git_remote": null,
+  "tags": [
+    "uptime",
+    "monitoring",
+    "oss"
+  ],
+  "integrations": {},
+  "generated_at": "2026-06-27T15:19:04.264Z"
+}

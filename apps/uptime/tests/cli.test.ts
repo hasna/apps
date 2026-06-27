@@ -1,0 +1,75 @@
+import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+function runCli(args: string[], dbPath: string) {
+  return Bun.spawnSync({
+    cmd: ["bun", "run", "src/cli/index.ts", ...args],
+    cwd: process.cwd(),
+    env: { ...process.env, HASNA_UPTIME_DB: dbPath, NO_COLOR: "1" },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+}
+
+test("CLI init, add, and list work with JSON output", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const init = runCli(["init", "--json"], dbPath);
+    const add = runCli(["add", "api", "--url", "https://example.com", "--json"], dbPath);
+    const list = runCli(["list", "--all", "--json"], dbPath);
+
+    expect(init.exitCode).toBe(0);
+    expect(add.exitCode).toBe(0);
+    expect(list.exitCode).toBe(0);
+    const monitors = JSON.parse(new TextDecoder().decode(list.stdout));
+    expect(monitors).toHaveLength(1);
+    expect(monitors[0].name).toBe("api");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI update changes monitor configuration", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    runCli(["init", "--json"], dbPath);
+    runCli(["add", "api", "--url", "https://example.com", "--json"], dbPath);
+    const update = runCli([
+      "update",
+      "api",
+      "--method",
+      "head",
+      "--expected-status",
+      "204",
+      "--interval",
+      "30",
+      "--json",
+    ], dbPath);
+
+    expect(update.exitCode).toBe(0);
+    const monitor = JSON.parse(new TextDecoder().decode(update.stdout));
+    expect(monitor.method).toBe("HEAD");
+    expect(monitor.expectedStatus).toBe(204);
+    expect(monitor.intervalSeconds).toBe(30);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI add rejects conflicting HTTP and TCP targets", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const result = runCli(["add", "bad", "--url", "https://example.com", "--tcp", "127.0.0.1", "--port", "80", "--json"], dbPath);
+    const body = JSON.parse(new TextDecoder().decode(result.stdout));
+
+    expect(result.exitCode).toBe(1);
+    expect(body.error).toContain("Choose either --url or --tcp");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
