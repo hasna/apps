@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import {
   copyFileSync,
   existsSync,
+  chmodSync,
   mkdirSync,
   readdirSync,
   rmSync,
@@ -108,6 +109,17 @@ const SKIP_DIR_NAMES = new Set([
 ]);
 
 const DB_EXTENSIONS = new Set([".db", ".sqlite", ".sqlite3"]);
+const SENSITIVE_DB_PATH_MARKERS = [
+  `${sep}.hasna${sep}secrets${sep}`,
+  `${sep}.secrets${sep}`,
+  `${sep}.config${sep}`,
+  `${sep}.ssh${sep}`,
+  `${sep}.codewith${sep}`,
+  `${sep}connectors${sep}`,
+  `${sep}.hasna${sep}connectors${sep}`,
+  `${sep}.hasna${sep}accounts${sep}`,
+  `${sep}.hasna${sep}auth${sep}`,
+];
 
 export function runDbIntegrityCheck(options: DbIntegrityCheckOptions = {}): DbIntegrityCheckResult {
   const roots = normalizeRoots(options.roots);
@@ -147,20 +159,23 @@ export function runDbIntegrityCheck(options: DbIntegrityCheckOptions = {}): DbIn
 }
 
 export function runOpsStateSnapshot(options: OpsSnapshotOptions = {}): OpsSnapshotResult {
-  const roots = normalizeRoots(options.roots);
+  const roots = normalizeSnapshotRoots(options.roots);
   const maxDbs = normalizePositiveInteger(options.maxDbs, DEFAULT_MAX_DBS);
   const maxSizeBytes = normalizePositiveInteger(options.maxSizeBytes, DEFAULT_MAX_SIZE_BYTES);
   const keepDays = normalizePositiveInteger(options.keepDays, DEFAULT_KEEP_DAYS);
   const keepBatches = normalizePositiveInteger(options.keepBatches, DEFAULT_KEEP_BATCHES);
-  const snapshotDir = resolve(options.snapshotDir ?? join(homedir(), ".hasna", "files", "snapshots", "ops-state"));
+  const snapshotDir = normalizeSnapshotDir(options.snapshotDir);
   const snapshotAt = new Date().toISOString();
   const batchName = snapshotAt.replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
   const batchDir = join(snapshotDir, batchName);
   const dryRun = Boolean(options.dryRun);
-  const discovered = discoverSqliteDatabases(roots, { maxDbs, maxSizeBytes });
+  const discovered = discoverSqliteDatabases(roots, { maxDbs, maxSizeBytes, excludeSensitive: true });
   const snapshots: OpsSnapshotResult["snapshots"] = [];
 
-  if (!dryRun) mkdirSync(batchDir, { recursive: true });
+  if (!dryRun) {
+    mkdirPrivateDir(snapshotDir);
+    mkdirPrivateDir(batchDir);
+  }
 
   for (const db of discovered.databases) {
     if (db.size > maxSizeBytes) {
@@ -214,6 +229,33 @@ function normalizeRoots(roots?: string[]): string[] {
   return [...new Set(selected.map((root) => resolve(root)))];
 }
 
+function normalizeSnapshotRoots(roots?: string[]): string[] {
+  if (roots && roots.length > 0) return [...new Set(roots.map((root) => resolve(root)))];
+  return [
+    join(homedir(), ".hasna", "files"),
+    join(homedir(), ".hasna", "todos"),
+    join(homedir(), ".hasna", "loops"),
+    join(homedir(), ".hasna", "repos"),
+    join(homedir(), ".hasna", "economy"),
+    join(homedir(), ".hasna", "knowledge"),
+    join(homedir(), ".hasna", "notes"),
+  ].map((root) => resolve(root));
+}
+
+function normalizeSnapshotDir(path?: string): string {
+  const root = resolve(defaultSnapshotRoot());
+  const selected = resolve(path ?? root);
+  if (selected !== root && !selected.startsWith(`${root}${sep}`)) {
+    throw new Error(`Refusing snapshot-dir outside managed root: ${selected}. Use ${root} or a child directory.`);
+  }
+  return selected;
+}
+
+function defaultSnapshotRoot(): string {
+  if (process.env["HASNA_FILES_OPS_SNAPSHOT_ROOT"]) return process.env["HASNA_FILES_OPS_SNAPSHOT_ROOT"];
+  return join(homedir(), ".hasna", "files", "snapshots", "ops-state");
+}
+
 function normalizePositiveInteger(value: number | undefined, fallback: number): number {
   if (value == null || !Number.isFinite(value) || value < 1) return fallback;
   return Math.floor(value);
@@ -221,7 +263,7 @@ function normalizePositiveInteger(value: number | undefined, fallback: number): 
 
 function discoverSqliteDatabases(
   roots: string[],
-  limits: { maxDbs: number; maxSizeBytes: number },
+  limits: { maxDbs: number; maxSizeBytes: number; excludeSensitive?: boolean },
 ): { databases: DiscoveredDatabase[]; total: number; truncated: boolean } {
   const databases: DiscoveredDatabase[] = [];
   let total = 0;
@@ -230,6 +272,7 @@ function discoverSqliteDatabases(
   for (const root of roots) {
     if (!existsSync(root)) continue;
     walk(root, (path, size) => {
+      if (limits.excludeSensitive && isSensitiveDatabasePath(path)) return true;
       total += 1;
       if (databases.length >= limits.maxDbs) {
         truncated = true;
@@ -281,6 +324,17 @@ function shouldSkipDirectory(name: string, path: string): boolean {
     || normalized.includes(`${sep}.hasna${sep}loops${sep}quarantine${sep}`);
 }
 
+function isSensitiveDatabasePath(path: string): boolean {
+  const normalized = `${sep}${resolve(path)}${sep}`;
+  if (SENSITIVE_DB_PATH_MARKERS.some((marker) => normalized.includes(marker))) return true;
+  const lower = path.toLowerCase();
+  return lower.endsWith(`${sep}vault.db`)
+    || lower.includes(`${sep}secrets`)
+    || lower.includes(`${sep}token`)
+    || lower.includes(`${sep}credential`)
+    || lower.includes(`${sep}auth`);
+}
+
 function looksLikeSqlitePath(name: string): boolean {
   const lower = name.toLowerCase();
   for (const extension of DB_EXTENSIONS) {
@@ -321,7 +375,7 @@ function safeRelativeSnapshotPath(path: string): string {
 }
 
 function copyDatabaseSnapshot(db: DiscoveredDatabase, destination: string): OpsSnapshotResult["snapshots"][number] {
-  mkdirSync(dirname(destination), { recursive: true });
+  mkdirPrivateDir(dirname(destination));
   const sqlite3 = spawnSync("sqlite3", ["--version"], { encoding: "utf8" });
   if (sqlite3.status === 0) {
     const result = spawnSync(
@@ -330,6 +384,7 @@ function copyDatabaseSnapshot(db: DiscoveredDatabase, destination: string): OpsS
       { encoding: "utf8" },
     );
     if (result.status === 0) {
+      chmodPrivateFile(destination);
       return { source: db.path, destination, size: db.size, status: "copied", detail: "sqlite backup" };
     }
     return {
@@ -343,6 +398,7 @@ function copyDatabaseSnapshot(db: DiscoveredDatabase, destination: string): OpsS
 
   try {
     copyFileSync(db.path, destination);
+    chmodPrivateFile(destination);
     return { source: db.path, destination, size: db.size, status: "copied", detail: "file copy" };
   } catch (error) {
     return {
@@ -359,6 +415,8 @@ function pruneSnapshotBatches(
   snapshotDir: string,
   opts: { keepDays: number; keepBatches: number; preserve: string },
 ): number {
+  const normalizedSnapshotDir = normalizeSnapshotDir(snapshotDir);
+  if (normalizedSnapshotDir !== snapshotDir) return pruneSnapshotBatches(normalizedSnapshotDir, opts);
   if (!existsSync(snapshotDir)) return 0;
   const cutoff = Date.now() - opts.keepDays * 24 * 60 * 60 * 1000;
   const batches = readdirSync(snapshotDir, { withFileTypes: true })
@@ -379,6 +437,7 @@ function pruneSnapshotBatches(
   for (const [index, batch] of batches.entries()) {
     if (batch.name === opts.preserve) continue;
     if (index < opts.keepBatches && batch.mtimeMs >= cutoff) continue;
+    if (!batch.path.startsWith(`${snapshotDir}${sep}`)) continue;
     rmSync(batch.path, { recursive: true, force: true });
     pruned += 1;
   }
@@ -390,4 +449,21 @@ function writeJsonReport(path: string, value: unknown): string {
   mkdirSync(dirname(resolved), { recursive: true });
   writeFileSync(resolved, `${JSON.stringify(value, null, 2)}\n`);
   return resolved;
+}
+
+function mkdirPrivateDir(path: string): void {
+  mkdirSync(path, { recursive: true, mode: 0o700 });
+  try {
+    chmodSync(path, 0o700);
+  } catch {
+    // Best effort on filesystems that do not support POSIX modes.
+  }
+}
+
+function chmodPrivateFile(path: string): void {
+  try {
+    chmodSync(path, 0o600);
+  } catch {
+    // Best effort on filesystems that do not support POSIX modes.
+  }
 }

@@ -1,15 +1,21 @@
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { runDbIntegrityCheck, runOpsStateSnapshot } from "./ops-loop.js";
 
 let testDir: string | undefined;
+const originalHome = process.env["HOME"];
+const originalSnapshotRoot = process.env["HASNA_FILES_OPS_SNAPSHOT_ROOT"];
 
 afterEach(() => {
   if (testDir) rmSync(testDir, { recursive: true, force: true });
   testDir = undefined;
+  if (originalHome) process.env["HOME"] = originalHome;
+  else delete process.env["HOME"];
+  if (originalSnapshotRoot) process.env["HASNA_FILES_OPS_SNAPSHOT_ROOT"] = originalSnapshotRoot;
+  else delete process.env["HASNA_FILES_OPS_SNAPSHOT_ROOT"];
 });
 
 function makeTempDir(): string {
@@ -44,8 +50,9 @@ describe("ops loop checks", () => {
 
   test("creates bounded operational DB snapshots and supports dry runs", () => {
     const dir = makeTempDir();
+    process.env["HASNA_FILES_OPS_SNAPSHOT_ROOT"] = join(dir, ".hasna", "files", "snapshots", "ops-state");
     const dbPath = join(dir, "state.db");
-    const snapshotDir = join(dir, "snapshots");
+    const snapshotDir = join(dir, ".hasna", "files", "snapshots", "ops-state", "test");
     createDb(dbPath);
 
     const dryRun = runOpsStateSnapshot({ roots: [dir], snapshotDir, dryRun: true });
@@ -58,5 +65,34 @@ describe("ops loop checks", () => {
     expect(result.summary.failed).toBe(0);
     expect(result.snapshots[0]?.destination).toBeTruthy();
     expect(existsSync(result.snapshots[0]!.destination!)).toBe(true);
+    expect((statSync(result.snapshots[0]!.destination!).mode & 0o777).toString(8)).toBe("600");
+  });
+
+  test("refuses to prune snapshot directories outside the managed root", () => {
+    const dir = makeTempDir();
+    const dbPath = join(dir, "state.db");
+    createDb(dbPath);
+
+    expect(() => runOpsStateSnapshot({ roots: [dir], snapshotDir: dir })).toThrow("Refusing snapshot-dir outside managed root");
+  });
+
+  test("skips secret-bearing databases during snapshots", () => {
+    const dir = makeTempDir();
+    process.env["HASNA_FILES_OPS_SNAPSHOT_ROOT"] = join(dir, ".hasna", "files", "snapshots", "ops-state");
+    const secretsDir = join(dir, ".hasna", "secrets");
+    const filesDir = join(dir, ".hasna", "files");
+    mkdirSync(secretsDir, { recursive: true });
+    mkdirSync(filesDir, { recursive: true });
+    createDb(join(secretsDir, "vault.db"));
+    createDb(join(filesDir, "files.db"));
+
+    const result = runOpsStateSnapshot({ roots: [join(dir, ".hasna")], snapshotDir: undefined, dryRun: true });
+
+    expect(result.summary.discovered).toBe(1);
+    expect(result.snapshots[0]!.source).toContain(`${sepForPlatform()}files${sepForPlatform()}files.db`);
   });
 });
+
+function sepForPlatform(): string {
+  return process.platform === "win32" ? "\\" : "/";
+}
