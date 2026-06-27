@@ -210,7 +210,8 @@ Use `shell: true` only when you intentionally want shell parsing:
 Built-in templates turn common orchestration flows into reusable workflow JSON.
 `todos-task-worker-verifier` performs one todos task and then verifies it.
 `event-worker-verifier` handles any Hasna event envelope and then verifies the
-handling.
+handling. `bounded-agent-worker-verifier` is for recurring bounded agent work:
+one worker runs a narrow objective, then a fresh verifier audits the result.
 
 ```bash
 loops templates list
@@ -230,6 +231,12 @@ loops templates render event-worker-verifier \
   --var eventSource=knowledge \
   --var eventJson='{"id":"<event-id>"}' \
   --var projectPath=/path/to/repo
+loops templates render bounded-agent-worker-verifier \
+  --var objective="Check docs drift and queue tasks for gaps" \
+  --var projectPath=/path/to/repo \
+  --var provider=codewith \
+  --var authProfilePool=account004,account005 \
+  --var sandbox=danger-full-access
 ```
 
 For event-driven task automation, `loops events handle todos-task` reads a
@@ -292,6 +299,28 @@ loops run-now <id-or-name>
 ```
 
 Use `--json` for machine-readable output. Prompt bodies and run stdout/stderr are redacted by default in status output. `loops run-now` exits non-zero when the recorded run fails or times out.
+
+## Health And Hygiene
+
+```bash
+loops health --json
+loops expectations <loop-id-or-name> --json
+loops health route-tasks --project ~/.hasna/loops --task-list loop-error-self-heal --max-actions 5
+loops hygiene names --json
+loops hygiene duplicates --json
+loops hygiene scripts --json
+```
+
+`health` and `expectations` classify latest-run failures with stable
+fingerprints and bounded evidence. `health route-tasks` is the explicit
+mutating path: it upserts deduped Todos tasks for failed expectations and marks
+them with `no_tmux_dispatch=true` metadata. Use `--dry-run --json` before
+turning it into a production loop.
+
+`hygiene names` reports canonical `machine-*` or `repo-<name>-*` loop names and
+renames only with `--apply`. `hygiene duplicates` groups loops with the same
+normalized name, cwd, and schedule. `hygiene scripts` inventories loops whose
+command still references `~/.hasna/loops/scripts`.
 
 Archive loops when retiring old automation but preserving history:
 

@@ -10,6 +10,7 @@ import type {
 
 export const TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID = "todos-task-worker-verifier";
 export const EVENT_WORKER_VERIFIER_TEMPLATE_ID = "event-worker-verifier";
+export const BOUNDED_AGENT_WORKER_VERIFIER_TEMPLATE_ID = "bounded-agent-worker-verifier";
 
 export interface TodosTaskWorkflowTemplateInput {
   taskId: string;
@@ -58,6 +59,28 @@ export interface EventWorkflowTemplateInput {
   sandbox?: AgentSandbox;
 }
 
+export interface BoundedAgentWorkflowTemplateInput {
+  name?: string;
+  objective: string;
+  prompt?: string;
+  projectPath: string;
+  provider?: AgentProvider;
+  authProfile?: string;
+  authProfilePool?: string[];
+  workerAuthProfile?: string;
+  verifierAuthProfile?: string;
+  account?: AccountRef;
+  accountPool?: AccountRef[];
+  workerAccount?: AccountRef;
+  verifierAccount?: AccountRef;
+  model?: string;
+  variant?: string;
+  agent?: string;
+  permissionMode?: AgentPermissionMode;
+  sandbox?: AgentSandbox;
+  timeoutMs?: number;
+}
+
 const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
   {
     id: TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID,
@@ -103,6 +126,29 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "variant", description: "Provider reasoning/model effort variant." },
       { name: "permissionMode", default: "bypass", description: "Provider permission mode: default, plan, auto, or bypass." },
       { name: "sandbox", default: "danger-full-access", description: "Provider sandbox mode." },
+    ],
+  },
+  {
+    id: BOUNDED_AGENT_WORKER_VERIFIER_TEMPLATE_ID,
+    name: "Bounded Agent Worker + Verifier",
+    description:
+      "Create a bounded recurring-agent workflow: one agent performs a narrow objective, then a fresh verifier audits the result with separate account/profile selection.",
+    kind: "workflow",
+    variables: [
+      { name: "objective", required: true, description: "Narrow goal-mode objective for the worker." },
+      { name: "prompt", description: "Optional extra worker prompt details." },
+      { name: "projectPath", required: true, description: "Repository or project working directory." },
+      { name: "provider", default: "codewith", description: "Agent provider: codewith, claude, cursor, opencode, aicopilot, or codex." },
+      { name: "authProfile", description: "Provider-native auth profile, currently Codewith." },
+      { name: "authProfilePool", description: "Comma-separated provider-native auth profiles; worker/verifier are selected deterministically." },
+      { name: "workerAuthProfile", description: "Provider-native auth profile for the worker step." },
+      { name: "verifierAuthProfile", description: "Provider-native auth profile for the verifier step." },
+      { name: "accountPool", description: "Comma-separated OpenAccounts profiles; worker/verifier are selected deterministically." },
+      { name: "model", description: "Provider model." },
+      { name: "variant", description: "Provider reasoning/model effort variant." },
+      { name: "permissionMode", default: "bypass", description: "Provider permission mode: default, plan, auto, or bypass." },
+      { name: "sandbox", default: "danger-full-access", description: "Provider sandbox mode." },
+      { name: "timeoutMs", default: "2700000", description: "Step timeout in milliseconds." },
     ],
   },
 ];
@@ -319,6 +365,52 @@ export function renderEventWorkerVerifierWorkflow(input: EventWorkflowTemplateIn
   };
 }
 
+export function renderBoundedAgentWorkerVerifierWorkflow(input: BoundedAgentWorkflowTemplateInput): CreateWorkflowInput {
+  if (!input.objective?.trim()) throw new Error("objective is required");
+  if (!input.projectPath?.trim()) throw new Error("projectPath is required");
+  const seed = `${input.projectPath}:${input.objective}`;
+  const timeoutMs = input.timeoutMs && Number.isFinite(input.timeoutMs) ? input.timeoutMs : 45 * 60_000;
+  const workerPrompt = [
+    `/goal ${input.objective}`,
+    "",
+    "You are the worker step for a bounded OpenLoops agent workflow.",
+    "Investigate first. Keep scope narrow, use local project/task systems as the source of truth when relevant, preserve unrelated changes, run focused validation, and record concise evidence.",
+    "Do not dispatch or paste prompts into tmux panes. If additional work is required, create or update deduped todos tasks so task-created routing can start a fresh headless workflow.",
+    input.prompt ? "" : undefined,
+    input.prompt,
+  ].filter(Boolean).join("\n");
+  const verifierPrompt = [
+    `/goal Adversarially verify: ${input.objective}`,
+    "",
+    "You are the verifier step for a bounded OpenLoops agent workflow.",
+    "Use fresh context. Review the worker result for correctness, regressions, missing tests, safety, runaway-agent risk, output bounds, and incomplete evidence.",
+    "If valid, record verification evidence. If invalid, create precise follow-up tasks or comments and leave the original work open. Do not make broad unrelated changes.",
+  ].join("\n");
+
+  return {
+    name: input.name ?? `bounded-agent-${stableIndex(seed, 0xffff).toString(16)}-worker-verifier`,
+    description: `Bounded worker/verifier workflow for ${input.objective.slice(0, 180)}`,
+    version: 1,
+    steps: [
+      {
+        id: "worker",
+        name: "Worker",
+        description: "Execute the bounded objective and record evidence.",
+        target: agentTarget(input, workerPrompt, "worker", seed),
+        timeoutMs,
+      },
+      {
+        id: "verifier",
+        name: "Verifier",
+        description: "Adversarially verify the bounded objective result.",
+        dependsOn: ["worker"],
+        target: agentTarget(input, verifierPrompt, "verifier", seed),
+        timeoutMs: Math.min(timeoutMs, 30 * 60_000),
+      },
+    ],
+  };
+}
+
 export function renderLoopTemplate(id: string, values: Record<string, string | undefined>): CreateWorkflowInput {
   if (id === TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID) {
     return renderTodosTaskWorkerVerifierWorkflow({
@@ -363,6 +455,27 @@ export function renderLoopTemplate(id: string, values: Record<string, string | u
       agent: values.agent,
       permissionMode: values.permissionMode as AgentPermissionMode | undefined,
       sandbox: values.sandbox as AgentSandbox | undefined,
+    });
+  }
+  if (id === BOUNDED_AGENT_WORKER_VERIFIER_TEMPLATE_ID) {
+    return renderBoundedAgentWorkerVerifierWorkflow({
+      name: values.name,
+      objective: values.objective ?? "",
+      prompt: values.prompt,
+      projectPath: values.projectPath ?? values.cwd ?? process.cwd(),
+      provider: values.provider as AgentProvider | undefined,
+      authProfile: values.authProfile,
+      authProfilePool: listVar(values.authProfilePool),
+      workerAuthProfile: values.workerAuthProfile,
+      verifierAuthProfile: values.verifierAuthProfile,
+      account: values.account ? { profile: values.account, tool: values.accountTool } : undefined,
+      accountPool: accountPoolVar(values.accountPool, values.accountTool),
+      model: values.model,
+      variant: values.variant,
+      agent: values.agent,
+      permissionMode: values.permissionMode as AgentPermissionMode | undefined,
+      sandbox: values.sandbox as AgentSandbox | undefined,
+      timeoutMs: values.timeoutMs ? Number(values.timeoutMs) : undefined,
     });
   }
   throw new Error(`unknown template: ${id}`);

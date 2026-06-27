@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { Command } from "commander";
 import type {
   AccountRef,
@@ -38,6 +39,11 @@ import { workflowBodyFromJson } from "../lib/workflow-spec.js";
 import { normalizeGoalSpec } from "../lib/workflow-spec.js";
 import { runDoctor } from "../lib/doctor.js";
 import { buildHealthReport, expectationForLoop } from "../lib/health.js";
+import {
+  buildDuplicateOverlapReport,
+  buildNameHygieneReport,
+  buildScriptInventoryReport,
+} from "../lib/hygiene.js";
 import { listOpenMachines, resolveLoopMachine } from "../lib/machines.js";
 import { packageVersion } from "../lib/version.js";
 import {
@@ -242,6 +248,37 @@ function parseVars(values: string[] | undefined): Record<string, string> {
 function collectValues(value: string, previous: string[] = []): string[] {
   previous.push(value);
   return previous;
+}
+
+function defaultLoopsProject(): string {
+  return process.env.LOOPS_TASK_PROJECT || process.env.LOOPS_DATA_DIR || `${process.env.HOME ?? "/home/hasna"}/.hasna/loops`;
+}
+
+function runLocalCommand(command: string, args: string[], opts: { input?: string; timeoutMs?: number } = {}) {
+  const result = spawnSync(command, args, {
+    input: opts.input,
+    encoding: "utf8",
+    timeout: opts.timeoutMs ?? 30_000,
+    maxBuffer: 8 * 1024 * 1024,
+    env: process.env,
+  });
+  return {
+    ok: result.status === 0,
+    status: result.status,
+    stdout: result.stdout || "",
+    stderr: result.stderr || "",
+    error: result.error ? String(result.error.message || result.error) : "",
+  };
+}
+
+function ensureTodosTaskList(project: string, slug: string, name: string, description: string): string {
+  runLocalCommand("todos", ["--project", project, "task-lists", "--add", name, "--slug", slug, "-d", description]);
+  const list = runLocalCommand("todos", ["--project", project, "--json", "task-lists"]);
+  if (!list.ok) throw new Error(list.stderr || list.error || "failed to list todos task lists");
+  const values = JSON.parse(list.stdout || "[]") as Array<{ id: string; slug: string }>;
+  const found = values.find((entry) => entry.slug === slug);
+  if (!found) throw new Error(`todos task list not found after ensure: ${slug}`);
+  return found.id;
 }
 
 function eventData(event: EventEnvelope): Record<string, unknown> {
@@ -1172,7 +1209,7 @@ program
     }
   });
 
-program
+const health = program
   .command("health")
   .description("summarize loop health and latest-run expectation status")
   .option("--json", "print JSON")
@@ -1190,6 +1227,166 @@ program
             `fail  ${expectation.loop.name}  ${expectation.failure?.classification ?? "unknown"}  ${expectation.failure?.fingerprint ?? "-"}`,
           );
         }
+      }
+      if (!report.ok) process.exitCode = 1;
+    } finally {
+      store.close();
+    }
+  });
+
+health
+  .command("route-tasks")
+  .description("upsert deduped todos tasks for failed loop health expectations")
+  .option("--project <path>", "todos project path", defaultLoopsProject())
+  .option("--task-list <slug>", "todos task-list slug", "loop-error-self-heal")
+  .option("--limit <n>", "maximum loops to inspect", "200")
+  .option("--max-actions <n>", "maximum todos tasks to upsert", "5")
+  .option("--dry-run", "print intended task upserts without mutating todos")
+  .option("--json", "print JSON")
+  .action((opts) => {
+    const store = new Store();
+    try {
+      const report = buildHealthReport(store, { limit: Number(opts.limit) });
+      const failures = report.expectations.filter((entry) => !entry.ok && entry.recommendedTask).slice(0, Number(opts.maxActions));
+      const listId = opts.dryRun
+        ? undefined
+        : ensureTodosTaskList(
+            opts.project,
+            opts.taskList,
+            "Loop Error Self Heal",
+            "Deduped OpenLoops health expectation failures routed by loops health route-tasks.",
+          );
+      const actions = failures.map((expectation) => {
+        const task = expectation.recommendedTask!;
+        const metadata = {
+          source: "openloops.health.route-tasks",
+          loop_id: expectation.loop.id,
+          loop_name: expectation.loop.name,
+          run_id: expectation.latestRun?.id,
+          classification: expectation.failure?.classification,
+          fingerprint: task.dedupeKey,
+          no_tmux_dispatch: true,
+        };
+        if (opts.dryRun) {
+          return { action: "would-upsert", title: task.title, fingerprint: task.dedupeKey, priority: task.priority, metadata };
+        }
+        const result = runLocalCommand("todos", [
+          "--project",
+          opts.project,
+          "--json",
+          "task",
+          "upsert",
+          "--fingerprint",
+          task.dedupeKey,
+          "--title",
+          task.title,
+          "-d",
+          task.description,
+          "--priority",
+          task.priority,
+          "--status",
+          "pending",
+          "--list",
+          listId!,
+          "--tags",
+          task.tags.join(","),
+          "--metadata-json",
+          JSON.stringify(metadata),
+        ]);
+        if (!result.ok) {
+          return { action: "upsert-failed", fingerprint: task.dedupeKey, error: result.stderr || result.error || result.stdout };
+        }
+        return { action: "upserted", fingerprint: task.dedupeKey, task: JSON.parse(result.stdout || "{}") };
+      });
+      const routed = { ok: actions.every((action) => action.action !== "upsert-failed"), inspected: report.summary.loops, failures: failures.length, actions };
+      if (isJson() || opts.json) console.log(JSON.stringify(routed, null, 2));
+      else {
+        console.log(`health_route_tasks inspected=${routed.inspected} failures=${routed.failures} actions=${actions.length}`);
+        for (const action of actions) console.log(`${action.action} ${action.fingerprint}`);
+      }
+      if (!routed.ok) process.exitCode = 1;
+    } finally {
+      store.close();
+    }
+  });
+
+const hygiene = program.command("hygiene").description("deterministic OpenLoops hygiene checks and safe repairs");
+
+hygiene
+  .command("names")
+  .description("check or apply canonical machine-/repo-prefixed loop names")
+  .option("--apply", "rename loops in-place")
+  .option("--include-stopped", "include stopped loops")
+  .option("--include-inactive", "include stopped, expired, and archived loops")
+  .option("--limit <n>", "maximum loops to inspect", "1000")
+  .option("--json", "print JSON")
+  .action((opts) => {
+    const store = new Store();
+    try {
+      const report = buildNameHygieneReport(store, {
+        apply: Boolean(opts.apply),
+        includeStopped: Boolean(opts.includeStopped),
+        includeInactive: Boolean(opts.includeInactive),
+        limit: Number(opts.limit),
+      });
+      if (isJson() || opts.json) console.log(JSON.stringify(report, null, 2));
+      else {
+        console.log(`hygiene_names checked=${report.checked} changed=${report.changed} applied=${report.applied}`);
+        for (const change of report.changes.filter((entry) => entry.changed)) {
+          console.log(`${report.applied ? "renamed" : "would-rename"} ${change.id} ${change.oldName} -> ${change.newName}`);
+        }
+      }
+      if (!report.ok && !report.applied) process.exitCode = 1;
+    } finally {
+      store.close();
+    }
+  });
+
+hygiene
+  .command("duplicates")
+  .description("detect duplicate/overlapping loops with the same canonical name, cwd, and schedule")
+  .option("--include-inactive", "include stopped, expired, and archived loops")
+  .option("--limit <n>", "maximum loops to inspect", "1000")
+  .option("--json", "print JSON")
+  .action((opts) => {
+    const store = new Store();
+    try {
+      const report = buildDuplicateOverlapReport(store, {
+        includeInactive: Boolean(opts.includeInactive),
+        limit: Number(opts.limit),
+      });
+      if (isJson() || opts.json) console.log(JSON.stringify(report, null, 2));
+      else {
+        console.log(`hygiene_duplicates checked=${report.checked} groups=${report.groups.length}`);
+        for (const group of report.groups) {
+          console.log(`${group.key}\t${group.loops.map((loop) => `${loop.id}:${loop.status}:${loop.name}`).join(",")}`);
+        }
+      }
+      if (!report.ok) process.exitCode = 1;
+    } finally {
+      store.close();
+    }
+  });
+
+hygiene
+  .command("scripts")
+  .description("inventory loops still backed by local ~/.hasna/loops/scripts commands")
+  .option("--scripts-dir <path>", "script directory to detect")
+  .option("--include-inactive", "include stopped, expired, and archived loops")
+  .option("--limit <n>", "maximum loops to inspect", "1000")
+  .option("--json", "print JSON")
+  .action((opts) => {
+    const store = new Store();
+    try {
+      const report = buildScriptInventoryReport(store, {
+        scriptsDir: opts.scriptsDir,
+        includeInactive: Boolean(opts.includeInactive),
+        limit: Number(opts.limit),
+      });
+      if (isJson() || opts.json) console.log(JSON.stringify(report, null, 2));
+      else {
+        console.log(`hygiene_scripts checked=${report.checked} script_backed=${report.scriptBacked}`);
+        for (const loop of report.loops) console.log(`${loop.id}\t${loop.status}\t${loop.name}\t${loop.command}`);
       }
       if (!report.ok) process.exitCode = 1;
     } finally {

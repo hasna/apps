@@ -887,6 +887,32 @@ export class Store {
     return after;
   }
 
+  renameLoop(id: string, name: string, opts: DaemonLeaseFence = {}): Loop {
+    const current = this.getLoop(id);
+    if (!current) throw new Error(`loop not found: ${id}`);
+    const trimmed = name.trim();
+    if (!trimmed) throw new Error("loop name must not be empty");
+    const updated = (opts.now ?? new Date()).toISOString();
+    this.db
+      .query(
+        `UPDATE loops SET name=$name, updated_at=$updated
+         WHERE id=$id
+           AND ($daemonLeaseId IS NULL OR EXISTS (
+             SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+           ))`,
+      )
+      .run({
+        $id: id,
+        $name: trimmed,
+        $updated: updated,
+        $daemonLeaseId: opts.daemonLeaseId ?? null,
+        $now: updated,
+      });
+    const after = this.getLoop(id);
+    if (!after) throw new Error(`loop not found after rename: ${id}`);
+    return after;
+  }
+
   archiveLoop(idOrName: string): Loop {
     const loop = this.requireLoop(idOrName);
     if (loop.archivedAt) return loop;

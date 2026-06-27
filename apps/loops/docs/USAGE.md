@@ -184,7 +184,8 @@ Use `shell: true` only when you intentionally want shell parsing:
 Built-in templates turn common orchestration flows into reusable workflow JSON.
 `todos-task-worker-verifier` performs one todos task and then verifies it.
 `event-worker-verifier` handles any Hasna event envelope and then verifies the
-handling.
+handling. `bounded-agent-worker-verifier` is for recurring bounded agent work:
+one worker runs a narrow objective, then a fresh verifier audits the result.
 
 ```bash
 loops templates list
@@ -204,6 +205,12 @@ loops templates render event-worker-verifier \
   --var eventSource=knowledge \
   --var eventJson='{"id":"<event-id>"}' \
   --var projectPath=/path/to/repo
+loops templates render bounded-agent-worker-verifier \
+  --var objective="Check docs drift and queue tasks for gaps" \
+  --var projectPath=/path/to/repo \
+  --var provider=codewith \
+  --var authProfilePool=account004,account005 \
+  --var sandbox=danger-full-access
 ```
 
 For event-driven task automation, `loops events handle todos-task` reads a
@@ -287,14 +294,41 @@ loops expectations <loop-id-or-name> --json
 
 The JSON contains the expectation result, bounded error/stdout/stderr evidence,
 a stable failure fingerprint, route metadata, and recommended task fields.
-OpenLoops does not mutate Todos from these commands. Until Todos has a native
-upsert command, consumers can use the included compatibility fallback:
-`todos search <dedupe-key>`, then `todos add ...` or `todos comment ...`.
-The planned native integration is represented in `futureNativeUpsert`.
+OpenLoops does not mutate Todos from `health` or `expectations`. To turn failed
+expectations into deduped tasks, use the explicit routing command:
+
+```bash
+loops health route-tasks \
+  --project ~/.hasna/loops \
+  --task-list loop-error-self-heal \
+  --max-actions 5
+```
+
+Use `--dry-run --json` first when testing a new automation path. Routed tasks
+include the stable failure fingerprint, classification, loop id/name, and
+`no_tmux_dispatch=true` metadata.
 
 Failure classifications are: `rate_limit`, `auth`, `model_not_found`,
 `context_length`, `schema_response_format`, `node_init`, `timeout`, `sigsegv`,
 `skipped_previous_active`, and `unknown`.
+
+## Hygiene
+
+OpenLoops includes deterministic hygiene checks for replacing local maintenance
+scripts with package commands:
+
+```bash
+loops hygiene names --json
+loops hygiene names --apply
+loops hygiene duplicates --json
+loops hygiene scripts --json
+```
+
+`hygiene names` reports canonical `machine-*` or `repo-<name>-*` loop names and
+only renames when `--apply` is present. `hygiene duplicates` groups loops with
+the same normalized name, cwd, and schedule. `hygiene scripts` inventories loops
+whose command still references `~/.hasna/loops/scripts`; use it as a migration
+gate before deleting local scripts.
 
 Archive loops when retiring old automation but preserving history:
 

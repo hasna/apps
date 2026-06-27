@@ -157,6 +157,66 @@ describe("loops CLI", () => {
     expect(restored.archivedAt).toBeUndefined();
   });
 
+  test("hygiene names reports canonical machine/repo loop names without applying by default", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-hygiene-names-"));
+    const create = runCli(dataDir, [
+      "create",
+      "command",
+      "ops:codewith:account001:loop-health-slo",
+      "--at",
+      futureAt(),
+      "--cmd",
+      "true",
+    ]);
+    expect(create.status).toBe(0);
+
+    const report = runCli(dataDir, ["--json", "hygiene", "names"]);
+
+    expect(report.status).toBe(1);
+    const value = JSON.parse(report.stdout);
+    expect(value.ok).toBe(false);
+    expect(value.changed).toBe(1);
+    expect(value.changes[0]).toMatchObject({
+      oldName: "ops:codewith:account001:loop-health-slo",
+      newName: "machine-ops-loop-health-slo",
+      changed: true,
+    });
+
+    const show = runCli(dataDir, ["--json", "show", "ops:codewith:account001:loop-health-slo"]);
+    expect(show.status).toBe(0);
+  });
+
+  test("hygiene duplicates groups overlapping loops by normalized name, cwd, and schedule", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-hygiene-duplicates-"));
+    expect(runCli(dataDir, ["create", "command", "machine-foo", "--every", "1h", "--cmd", "true", "--cwd", "/tmp/repo"]).status).toBe(0);
+    expect(runCli(dataDir, ["create", "command", "machine-foo-compact", "--every", "1h", "--cmd", "true", "--cwd", "/tmp/repo"]).status).toBe(0);
+
+    const report = runCli(dataDir, ["--json", "hygiene", "duplicates"]);
+
+    expect(report.status).toBe(1);
+    const value = JSON.parse(report.stdout);
+    expect(value.ok).toBe(false);
+    expect(value.groups).toHaveLength(1);
+    expect(value.groups[0].loops.map((loop: { name: string }) => loop.name).sort()).toEqual(["machine-foo", "machine-foo-compact"]);
+  });
+
+  test("hygiene scripts inventories local script-backed command loops", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-hygiene-scripts-"));
+    const scriptsDir = join(dataDir, "scripts");
+    expect(runCli(dataDir, ["create", "command", "script-backed", "--at", futureAt(), "--cmd", `${scriptsDir}/check.sh`]).status).toBe(0);
+
+    const report = runCli(dataDir, ["--json", "hygiene", "scripts", "--scripts-dir", scriptsDir]);
+
+    expect(report.status).toBe(1);
+    const value = JSON.parse(report.stdout);
+    expect(value.ok).toBe(false);
+    expect(value.scriptBacked).toBe(1);
+    expect(value.loops[0]).toMatchObject({
+      name: "script-backed",
+      scriptMatches: [scriptsDir],
+    });
+  });
+
   test("create command stores an OpenMachines assignment", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-machine-"));
     const create = runCli(dataDir, ["--json", "create", "command", "machine-local", "--at", futureAt(), "--cmd", "true", "--machine", "local"]);
@@ -278,6 +338,49 @@ describe("loops CLI", () => {
     expect(value.expectations[0].recommendedTask.compatibilityFallback.search).toEqual(
       expect.arrayContaining(["todos", "search"]),
     );
+  });
+
+  test("health route-tasks dry-run reports deduped task upserts without mutating todos", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-health-route-dry-run-"));
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      const loop = store.createLoop({
+        name: "agent-health-route",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "agent", provider: "codewith", prompt: "run", cwd: "/tmp/repo" },
+      });
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "seed", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      store.finalizeRun(
+        claim!.run.id,
+        {
+          status: "failed",
+          finishedAt: "2026-01-01T00:00:01.000Z",
+          durationMs: 1_000,
+          stdout: "",
+          stderr: "Invalid schema for response_format",
+          error: "response_format json schema error",
+          exitCode: 1,
+        },
+        { claimedBy: "seed", now: new Date("2026-01-01T00:00:00.500Z") },
+      );
+    } finally {
+      store.close();
+    }
+
+    const result = runCli(dataDir, ["--json", "health", "route-tasks", "--dry-run", "--max-actions", "2"]);
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.failures).toBe(1);
+    expect(value.actions[0]).toMatchObject({
+      action: "would-upsert",
+      priority: "medium",
+    });
+    expect(value.actions[0].metadata).toMatchObject({
+      classification: "schema_response_format",
+      no_tmux_dispatch: true,
+    });
   });
 
   test("expectations JSON is read-only and honors temp LOOPS_DATA_DIR", () => {
@@ -461,6 +564,37 @@ describe("loops CLI", () => {
     expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["worker", "verifier"]);
     expect(workflow.steps[0].target.prompt).toContain("knowledge.record.created");
     expect(workflow.steps[0].target.cwd).toBe("/tmp/knowledge");
+  });
+
+  test("templates render bounded agent worker/verifier workflow JSON", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-bounded-template-render-"));
+    const render = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "bounded-agent-worker-verifier",
+      "--var",
+      "objective=Check repo docs drift",
+      "--var",
+      "prompt=Inspect only recent commits and queue tasks for gaps.",
+      "--var",
+      "projectPath=/tmp/open-loops",
+      "--var",
+      "provider=codewith",
+      "--var",
+      "authProfilePool=account004,account005",
+      "--var",
+      "sandbox=danger-full-access",
+    ]);
+
+    expect(render.status).toBe(0);
+    const workflow = JSON.parse(render.stdout);
+    expect(workflow.name).toContain("bounded-agent");
+    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["worker", "verifier"]);
+    expect(workflow.steps[0].target.prompt).toContain("/goal Check repo docs drift");
+    expect(workflow.steps[0].target.prompt).toContain("Do not dispatch or paste prompts into tmux panes");
+    expect(workflow.steps[1].target.prompt).toContain("Adversarially verify");
+    expect(new Set(workflow.steps.map((step: { target: { authProfile?: string } }) => step.target.authProfile)).size).toBe(2);
   });
 
   test("templates select different OpenAccounts profiles from a pool", () => {
