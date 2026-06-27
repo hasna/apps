@@ -318,9 +318,10 @@ them with `no_tmux_dispatch=true` metadata. Use `--dry-run --json` before
 turning it into a production loop.
 
 `hygiene names` reports canonical `machine-*` or `repo-<name>-*` loop names and
-renames only with `--apply`. `hygiene duplicates` groups loops with the same
-normalized name, cwd, and schedule. `hygiene scripts` inventories loops whose
-command still references `~/.hasna/loops/scripts`.
+renames only with `--apply`. Apply mode writes a SQLite backup under
+`<LOOPS_DATA_DIR>/backups` before changing loop names. `hygiene duplicates`
+groups loops with the same normalized name, cwd, and schedule. `hygiene scripts`
+inventories loops whose command still references `~/.hasna/loops/scripts`.
 
 Archive loops when retiring old automation but preserving history:
 

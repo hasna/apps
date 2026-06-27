@@ -325,10 +325,11 @@ loops hygiene scripts --json
 ```
 
 `hygiene names` reports canonical `machine-*` or `repo-<name>-*` loop names and
-only renames when `--apply` is present. `hygiene duplicates` groups loops with
-the same normalized name, cwd, and schedule. `hygiene scripts` inventories loops
-whose command still references `~/.hasna/loops/scripts`; use it as a migration
-gate before deleting local scripts.
+only renames when `--apply` is present. Apply mode writes a SQLite backup under
+`<LOOPS_DATA_DIR>/backups` before changing loop names. `hygiene duplicates`
+groups loops with the same normalized name, cwd, and schedule. `hygiene scripts`
+inventories loops whose command still references `~/.hasna/loops/scripts`; use
+it as a migration gate before deleting local scripts.
 
 Archive loops when retiring old automation but preserving history:
 

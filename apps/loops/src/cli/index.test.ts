@@ -186,6 +186,36 @@ describe("loops CLI", () => {
     expect(show.status).toBe(0);
   });
 
+  test("hygiene names apply backs up the database before renaming loops", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-hygiene-names-apply-"));
+    const create = runCli(dataDir, [
+      "create",
+      "command",
+      "ops:codewith:account001:loop-health-slo",
+      "--at",
+      futureAt(),
+      "--cmd",
+      "true",
+    ]);
+    expect(create.status).toBe(0);
+
+    const apply = runCli(dataDir, ["--json", "hygiene", "names", "--apply"]);
+
+    expect(apply.status).toBe(0);
+    const value = JSON.parse(apply.stdout);
+    expect(value.applied).toBe(true);
+    expect(value.changed).toBe(1);
+    expect(value.backupPath).toContain(join(dataDir, "backups"));
+    expect(existsSync(value.backupPath)).toBe(true);
+
+    const oldName = runCli(dataDir, ["--json", "show", "ops:codewith:account001:loop-health-slo"]);
+    expect(oldName.status).not.toBe(0);
+
+    const newName = runCli(dataDir, ["--json", "show", "machine-ops-loop-health-slo"]);
+    expect(newName.status).toBe(0);
+    expect(JSON.parse(newName.stdout).name).toBe("machine-ops-loop-health-slo");
+  });
+
   test("hygiene duplicates groups overlapping loops by normalized name, cwd, and schedule", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-hygiene-duplicates-"));
     expect(runCli(dataDir, ["create", "command", "machine-foo", "--every", "1h", "--cmd", "true", "--cwd", "/tmp/repo"]).status).toBe(0);

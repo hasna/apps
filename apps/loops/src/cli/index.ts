@@ -1,7 +1,9 @@
 #!/usr/bin/env bun
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { join } from "node:path";
+import { Database } from "bun:sqlite";
 import { Command } from "commander";
 import type {
   AccountRef,
@@ -15,7 +17,7 @@ import type {
   OverlapPolicy,
   ScheduleSpec,
 } from "../types.js";
-import { daemonLogPath } from "../lib/paths.js";
+import { dataDir, daemonLogPath, dbPath } from "../lib/paths.js";
 import {
   publicLoop,
   publicExecutorResult,
@@ -279,6 +281,20 @@ function ensureTodosTaskList(project: string, slug: string, name: string, descri
   const found = values.find((entry) => entry.slug === slug);
   if (!found) throw new Error(`todos task list not found after ensure: ${slug}`);
   return found.id;
+}
+
+function backupLoopsDatabase(reason: string): string {
+  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "Z");
+  const backupDir = join(dataDir(), "backups");
+  mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+  const backupPath = join(backupDir, `loops.db.bak-${reason}-${stamp}`);
+  const db = new Database(dbPath(), { readonly: true });
+  try {
+    writeFileSync(backupPath, db.serialize(), { mode: 0o600 });
+  } finally {
+    db.close();
+  }
+  return backupPath;
 }
 
 function eventData(event: EventEnvelope): Record<string, unknown> {
@@ -1324,15 +1340,18 @@ hygiene
   .action((opts) => {
     const store = new Store();
     try {
+      const backupPath = opts.apply ? backupLoopsDatabase("name-hygiene") : undefined;
       const report = buildNameHygieneReport(store, {
         apply: Boolean(opts.apply),
         includeStopped: Boolean(opts.includeStopped),
         includeInactive: Boolean(opts.includeInactive),
         limit: Number(opts.limit),
       });
-      if (isJson() || opts.json) console.log(JSON.stringify(report, null, 2));
+      const output = backupPath ? { ...report, backupPath } : report;
+      if (isJson() || opts.json) console.log(JSON.stringify(output, null, 2));
       else {
         console.log(`hygiene_names checked=${report.checked} changed=${report.changed} applied=${report.applied}`);
+        if (backupPath) console.log(`backup=${backupPath}`);
         for (const change of report.changes.filter((entry) => entry.changed)) {
           console.log(`${report.applied ? "renamed" : "would-rename"} ${change.id} ${change.oldName} -> ${change.newName}`);
         }
