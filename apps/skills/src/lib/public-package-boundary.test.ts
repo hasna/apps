@@ -11,20 +11,55 @@ interface PackManifest {
   files: PackedFile[];
 }
 
+interface PackCommandResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  missingExecutable: boolean;
+}
+
 const cloudPackage = "@hasna" + "/cloud";
 const cloudNodeModulesPath = "node_modules/@hasna/" + "cloud";
 
-function readPackedFiles(): string[] {
-  const result = Bun.spawnSync(["npm", "pack", "--dry-run", "--json", "--ignore-scripts"], {
-    cwd: process.cwd(),
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+function runPackCommand(command: string[]): PackCommandResult {
+  try {
+    const result = Bun.spawnSync(command, {
+      cwd: process.cwd(),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return {
+      exitCode: result.exitCode,
+      stdout: new TextDecoder().decode(result.stdout),
+      stderr: new TextDecoder().decode(result.stderr),
+      missingExecutable: false,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      exitCode: 127,
+      stdout: "",
+      stderr: message,
+      missingExecutable: message.includes("Executable not found"),
+    };
+  }
+}
 
-  expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
-  const output = new TextDecoder().decode(result.stdout);
-  const manifests = JSON.parse(output) as PackManifest[];
-  return manifests[0].files.map((file) => file.path).sort();
+function readPackedFiles(): string[] {
+  const npmResult = runPackCommand(["npm", "pack", "--dry-run", "--json", "--ignore-scripts"]);
+  if (!npmResult.missingExecutable) {
+    expect(npmResult.exitCode, npmResult.stderr).toBe(0);
+    const manifests = JSON.parse(npmResult.stdout) as PackManifest[];
+    return manifests[0].files.map((file) => file.path).sort();
+  }
+
+  const bunResult = runPackCommand(["bun", "pm", "pack", "--dry-run", "--ignore-scripts"]);
+  expect(bunResult.exitCode, bunResult.stderr).toBe(0);
+  const files = bunResult.stdout
+    .split(/\r?\n/)
+    .map((line) => /^packed\s+\S+\s+(.+)$/.exec(line)?.[1])
+    .filter((path): path is string => Boolean(path));
+  return files.sort();
 }
 
 function hostedMetadataSlugs(): string[] {
