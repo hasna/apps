@@ -11,6 +11,7 @@ export const SKILL_ALIASES = {
   "generate-image": "image",
   "image-generator": "image",
   "create-blog-article": "blog-article",
+  "skill-diff": "diff-viewer",
 } as const;
 
 export type SkillAlias = keyof typeof SKILL_ALIASES;

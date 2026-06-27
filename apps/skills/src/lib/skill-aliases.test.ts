@@ -12,6 +12,7 @@ describe("skill aliases", () => {
     expect(resolveSkillAlias("transcribe")).toBe("transcript");
     expect(resolveSkillAlias("generate-pdf")).toBe("pdf-generate");
     expect(resolveSkillAlias("create-blog-article")).toBe("blog-article");
+    expect(resolveSkillAlias("skill-diff")).toBe("diff-viewer");
   });
 
   test("aliases target existing skills and do not shadow exact skills", () => {
@@ -26,6 +27,7 @@ describe("skill aliases", () => {
     expect(getSkill("transcribe")?.name).toBe("transcript");
     expect(getSkill("generate-pdf")?.name).toBe("pdf-generate");
     expect(getSkill("create-blog-article")?.name).toBe("blog-article");
+    expect(getSkill("skill-diff")?.name).toBe("diff-viewer");
     expect(getSkill("pdf-read")?.name).toBe("pdf-read");
   });
 

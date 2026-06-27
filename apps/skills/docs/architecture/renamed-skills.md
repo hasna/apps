@@ -21,6 +21,7 @@ to a canonical slug only when the requested slug is not already a real skill.
 | `generate-image` | `image` | Common AI image generation wording. |
 | `image-generator` | `image` | Tool noun compatibility. |
 | `create-blog-article` | `blog-article` | Product command wording for hosted blog article generation. |
+| `skill-diff` | `diff-viewer` | Intuitive command wording for document, content, and code diff review. |
 | `generate-video` | `video` | Common AI video generation wording. |
 
 ## Resolution Rules
