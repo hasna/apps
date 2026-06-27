@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 import { redactRunSecrets } from "../core/redaction.js";
@@ -7,8 +7,37 @@ import type { EvalRun } from "../types/index.js";
 
 let _db: Database | null = null;
 
+function homeDir(): string {
+  return process.env["HOME"] || process.env["USERPROFILE"] || homedir();
+}
+
+function defaultDbPath(): string {
+  const home = homeDir();
+  const newDir = join(home, ".hasna", "evals");
+  const oldDir = join(home, ".evals");
+
+  if (existsSync(oldDir) && !existsSync(newDir)) {
+    mkdirSync(newDir, { recursive: true });
+    try {
+      for (const file of readdirSync(oldDir)) {
+        const oldPath = join(oldDir, file);
+        const newPath = join(newDir, file);
+        try {
+          if (statSync(oldPath).isFile()) copyFileSync(oldPath, newPath);
+        } catch {
+          // Best-effort migration; unreadable files do not block new installs.
+        }
+      }
+    } catch {
+      // Best-effort migration; unreadable directories do not block new installs.
+    }
+  }
+
+  return join(newDir, "evals.db");
+}
+
 function getDbPath(): string {
-  return process.env["EVALS_DB_PATH"] ?? join(homedir(), ".hasna", "evals", "evals.db");
+  return process.env["EVALS_DB_PATH"] ?? defaultDbPath();
 }
 
 export function getDatabase(): Database {

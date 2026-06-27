@@ -1,4 +1,8 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { Database } from "bun:sqlite";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { EvalRun } from "../types/index.js";
 
 function makeRun(id: string, dataset = "test.jsonl"): EvalRun {
@@ -136,5 +140,43 @@ describe("baselines", () => {
     setBaseline("staging", "run-q");
     const baselines = listBaselines();
     expect(baselines.length).toBe(2);
+  });
+});
+
+describe("database path migration", () => {
+  test("copies legacy ~/.evals database files into ~/.hasna/evals", async () => {
+    const { closeDatabase, getDatabase } = await import("./store.js");
+    const originalHome = process.env["HOME"];
+    const originalUserProfile = process.env["USERPROFILE"];
+    const home = mkdtempSync(join(tmpdir(), "evals-home-"));
+    const legacyDir = join(home, ".evals");
+    const legacyDbPath = join(legacyDir, "evals.db");
+    const migratedDbPath = join(home, ".hasna", "evals", "evals.db");
+
+    closeDatabase();
+    delete process.env["EVALS_DB_PATH"];
+    process.env["HOME"] = home;
+    delete process.env["USERPROFILE"];
+
+    try {
+      mkdirSync(legacyDir, { recursive: true });
+      const legacyDb = new Database(legacyDbPath);
+      legacyDb.exec("CREATE TABLE legacy_marker (id TEXT PRIMARY KEY); INSERT INTO legacy_marker (id) VALUES ('copied');");
+      legacyDb.close();
+
+      const db = getDatabase();
+      const row = db.query<{ id: string }, []>("SELECT id FROM legacy_marker").get();
+
+      expect(existsSync(migratedDbPath)).toBe(true);
+      expect(row).toEqual({ id: "copied" });
+    } finally {
+      closeDatabase();
+      if (originalHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = originalHome;
+      if (originalUserProfile === undefined) delete process.env["USERPROFILE"];
+      else process.env["USERPROFILE"] = originalUserProfile;
+      process.env["EVALS_DB_PATH"] = ":memory:";
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 });
