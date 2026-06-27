@@ -195,6 +195,45 @@ Task upserts are deduped with stable `dedupe-*` tags, use argv-safe `todos`
 subprocess calls, require `--todos-project`, and remain diagnostic-only: they do
 not send keys, kill panes, resurrect panes, or route work through tmux.
 
+Machine data loops should use package commands instead of local shell scripts.
+`machines ops db-integrity` scans bounded local roots for SQLite databases and
+runs read-only `sqlite3` quick checks. `machines ops state-snapshot` plans
+snapshots by default and only writes private snapshot files when `--apply` is
+passed. Snapshot writes fail closed unless `sqlite3 .backup` succeeds and the
+created snapshot passes verification; the command does not copy live database
+files as a fallback because that can lose WAL data.
+
+```bash
+machines ops db-integrity \
+  --root /home/hasna/.hasna,/home/hasna/.codewith \
+  --max-dbs 500 \
+  --max-size-bytes 2147483648 \
+  --report-dir /home/hasna/.hasna/loops/reports/critical-db-integrity-compact \
+  --upsert-tasks \
+  --todos-project /home/hasna/.hasna/loops \
+  --task-list machine-data-db-integrity \
+  --text
+
+machines ops state-snapshot \
+  --root /home/hasna/.hasna,/home/hasna/.codewith \
+  --snapshot-root /home/hasna/.hasna/loops/snapshots/ops-state \
+  --report-dir /home/hasna/.hasna/loops/reports/ops-state-snapshot \
+  --max-dbs 200 \
+  --max-size-bytes 805306368 \
+  --keep-days 14 \
+  --apply \
+  --upsert-tasks \
+  --todos-project /home/hasna/.hasna/loops \
+  --task-list machine-data-state-snapshot \
+  --text
+```
+
+Both commands write private JSON reports, avoid printing secret values, keep
+task creation bounded with `--max-task-actions`, and are safe to run from
+OpenLoops without tmux dispatch. The default scans are intentionally bounded;
+increase `--max-depth`, `--max-dbs`, or `--max-size-bytes` only when the loop
+timeout and report size can absorb the larger scan.
+
 ### Hasna Notes machine list contract
 
 Hasna Notes and similar sidebar consumers should read machine lists from

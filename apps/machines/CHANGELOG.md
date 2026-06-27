@@ -16,6 +16,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Release verification now uses Bun package-manager commands instead of
   requiring `npm` on PATH.
 
+## [0.0.57] - 2026-06-27
+
+### Added
+
+- Added loop-ready `machines ops db-integrity` and
+  `machines ops state-snapshot` commands for bounded SQLite integrity checks,
+  verified ops-state snapshots, private JSON evidence, and deduped todos task
+  upserts.
+- Added regression coverage for WAL-mode snapshot safety, sqlite3 missing
+  fail-closed behavior, bounded truncation output, private report/snapshot
+  permissions, retention safety, and task-upsert idempotency.
+
 ## [0.0.55] - 2026-06-27
 
 ### Added
