@@ -26,6 +26,7 @@ describe("loop health classification", () => {
       ["context_length", { stderr: "maximum context length exceeded" }],
       ["schema_response_format", { error: "response_format json schema validation failed" }],
       ["node_init", { stderr: "Error [ERR_MODULE_NOT_FOUND]: Cannot find module" }],
+      ["preflight", { error: "runtime preflight failed: Executable not found in PATH: codewith" }],
       ["timeout", { status: "timed_out", error: "timed out after 1000ms" }],
       ["sigsegv", { error: "terminated by SIGSEGV" }],
       ["skipped_previous_active", { status: "skipped", error: "previous run still active" }],

@@ -73,6 +73,10 @@ export interface DynamicSchedule {
 
 export type ScheduleSpec = OnceSchedule | IntervalSchedule | CronSchedule | DynamicSchedule;
 
+export interface RuntimePreflightPolicy {
+  beforeRun?: boolean;
+}
+
 export interface CommandTarget {
   type: "command";
   command: string;
@@ -82,6 +86,7 @@ export interface CommandTarget {
   env?: Record<string, string>;
   timeoutMs?: number;
   account?: AccountRef;
+  preflight?: RuntimePreflightPolicy;
 }
 
 export type AgentProvider = "claude" | "cursor" | "codewith" | "aicopilot" | "opencode" | "codex";
@@ -114,6 +119,7 @@ export interface AgentTarget {
   sandbox?: AgentSandbox;
   allowlist?: AgentAllowlistSpec;
   account?: AccountRef;
+  preflight?: RuntimePreflightPolicy;
 }
 
 export interface WorkflowTarget {
@@ -121,6 +127,7 @@ export interface WorkflowTarget {
   workflowId: string;
   input?: Record<string, string>;
   timeoutMs?: number;
+  preflight?: RuntimePreflightPolicy;
 }
 
 export type ExecutableTarget = CommandTarget | AgentTarget;

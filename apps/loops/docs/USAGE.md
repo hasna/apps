@@ -73,6 +73,12 @@ accounts because the command string is interpreted later by the shell. Use
 `--no-shell` or workflow command `args` when you need executable-level
 validation before storing the loop.
 
+Use `--preflight-each-run` when a loop should repeat the same readiness check at
+run time before launching expensive agent or workflow work. Runtime preflight
+failures are recorded as failed loop runs with a `runtime preflight failed`
+error, so health/routing checks can create follow-up tasks without spawning the
+worker.
+
 Run a Claude loop every morning:
 
 ```bash

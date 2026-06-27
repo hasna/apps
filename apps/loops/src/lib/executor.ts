@@ -833,6 +833,32 @@ export async function executeLoop(loop: Loop, run: LoopRun, opts: ExecuteOptions
   if (loop.target.type === "workflow") {
     throw new Error("workflow loop targets must be executed with executeLoopTarget");
   }
+  if (loop.target.preflight?.beforeRun) {
+    const startedAt = nowIso();
+    try {
+      preflightTarget(
+        loop.target,
+        {
+          loopId: loop.id,
+          loopName: loop.name,
+          runId: run.id,
+          scheduledFor: run.scheduledFor,
+        },
+        { ...opts, machine: opts.machine ?? loop.machine },
+      );
+    } catch (error) {
+      const finishedAt = nowIso();
+      return {
+        status: "failed",
+        stdout: "",
+        stderr: "",
+        error: `runtime preflight failed: ${error instanceof Error ? error.message : String(error)}`,
+        startedAt,
+        finishedAt,
+        durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
+      };
+    }
+  }
   return executeTarget(
     loop.target,
     {

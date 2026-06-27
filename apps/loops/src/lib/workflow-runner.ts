@@ -284,6 +284,19 @@ export function preflightWorkflow(workflow: WorkflowSpec, opts: ExecuteOptions =
   });
 }
 
+function preflightFailureResult(error: unknown, startedAt = nowIso()): ExecutorResult {
+  const finishedAt = nowIso();
+  return {
+    status: "failed",
+    stdout: "",
+    stderr: "",
+    error: `runtime preflight failed: ${error instanceof Error ? error.message : String(error)}`,
+    startedAt,
+    finishedAt,
+    durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
+  };
+}
+
 export async function executeLoopTarget(
   store: Store,
   loop: Loop,
@@ -291,6 +304,23 @@ export async function executeLoopTarget(
   opts: ExecuteOptions = {},
 ): Promise<ExecutorResult> {
   if (loop.target.type !== "workflow") {
+    if (loop.goal && loop.target.preflight?.beforeRun) {
+      const startedAt = nowIso();
+      try {
+        preflightTarget(
+          loop.target,
+          {
+            loopId: loop.id,
+            loopName: loop.name,
+            runId: run.id,
+            scheduledFor: run.scheduledFor,
+          },
+          { ...opts, machine: opts.machine ?? loop.machine },
+        );
+      } catch (error) {
+        return preflightFailureResult(error, startedAt);
+      }
+    }
     if (loop.goal) {
       return runGoal(store, loop.goal, {
         ...opts,
@@ -306,6 +336,14 @@ export async function executeLoopTarget(
     return executeLoop(loop, run, opts);
   }
   const workflow = store.requireWorkflow(loop.target.workflowId);
+  if (loop.target.preflight?.beforeRun) {
+    const startedAt = nowIso();
+    try {
+      preflightWorkflow(workflow, { ...opts, machine: opts.machine ?? loop.machine });
+    } catch (error) {
+      return preflightFailureResult(error, startedAt);
+    }
+  }
   if (loop.goal) {
     return runGoal(store, loop.goal, {
       ...opts,

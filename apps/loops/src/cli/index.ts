@@ -301,6 +301,10 @@ function roleAccountFromOpts(opts: { accountTool?: string }, profile: string | u
   return profile ? { profile, tool: opts.accountTool } : undefined;
 }
 
+function runtimePreflightFromOpts(opts: { preflightEachRun?: boolean }): { beforeRun: true } | undefined {
+  return opts.preflightEachRun ? { beforeRun: true } : undefined;
+}
+
 function parseVars(values: string[] | undefined): Record<string, string> {
   const vars: Record<string, string> = {};
   for (const value of values ?? []) {
@@ -647,6 +651,7 @@ addGoalOptions(
         .option("--cwd <dir>", "working directory")
         .option("--timeout <duration>", "run timeout")
         .option("--no-shell", "execute without a shell")
+        .option("--preflight-each-run", "check target executables/accounts before every scheduled run")
         .option("--preflight", "check target executables/accounts before storing the loop"),
       ),
     ),
@@ -661,6 +666,7 @@ addGoalOptions(
       shell: opts.shell,
       timeoutMs: opts.timeout ? parseDuration(opts.timeout) : undefined,
       account: accountFromOpts(opts),
+      preflight: runtimePreflightFromOpts(opts),
     };
     const input = baseCreateInput(name, opts, target);
     const preflight = opts.preflight
@@ -693,6 +699,7 @@ addGoalOptions(
         .option("--allow-tool <name>", "advisory per-session tool allowlist metadata; may be repeated or comma-separated", collectValues, [] as string[])
         .option("--allow-command <name>", "advisory per-session command allowlist metadata; may be repeated or comma-separated", collectValues, [] as string[])
         .option("--config-isolation <mode>", "safe or none", "safe")
+        .option("--preflight-each-run", "check provider/account readiness before every scheduled run")
         .option("--preflight", "check target executables/accounts before storing the loop"),
       ),
     ),
@@ -722,6 +729,7 @@ addGoalOptions(
       sandbox: sandboxFromOpts(opts, provider),
       allowlist: allowlistFromOpts(opts),
       account: accountFromOpts(opts),
+      preflight: runtimePreflightFromOpts(opts),
     };
     const input = baseCreateInput(name, opts, target);
     const preflight = opts.preflight
@@ -741,6 +749,7 @@ addGoalOptions(
       .command("workflow <name>")
       .description("schedule a stored workflow")
       .requiredOption("--workflow <idOrName>", "workflow id or name")
+      .option("--preflight-each-run", "check workflow steps before every scheduled run")
       .option("--preflight", "check workflow step executables/accounts before storing the loop"),
     ),
   ),
@@ -751,6 +760,7 @@ addGoalOptions(
     const target: LoopTarget = {
       type: "workflow",
       workflowId: workflow.id,
+      preflight: runtimePreflightFromOpts(opts),
     };
     const input = baseCreateInput(name, opts, target);
     const preflight = opts.preflight

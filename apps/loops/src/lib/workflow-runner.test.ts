@@ -76,6 +76,32 @@ describe("workflow runner", () => {
     }
   });
 
+  test("workflow runtime preflight fails before creating workflow runs", async () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "runtime-preflight-workflow",
+        steps: [{ id: "missing", target: { type: "command", command: "openloops-definitely-missing-binary" } }],
+      });
+      const loop = store.createLoop({
+        name: "runtime-preflight-loop",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: { type: "workflow", workflowId: workflow.id, preflight: { beforeRun: true } },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+
+      const result = await executeLoopTarget(store, loop, claim!.run);
+
+      expect(result.status).toBe("failed");
+      expect(result.error).toContain("runtime preflight failed");
+      expect(result.error).toContain("workflow step missing preflight failed");
+      expect(store.listWorkflowRuns({ workflowId: workflow.id })).toEqual([]);
+    } finally {
+      store.close();
+    }
+  });
+
   test("workflow loop steps inherit the loop machine assignment", async () => {
     const store = new Store(":memory:");
     const root = mkdtempSync(join(tmpdir(), "loops-workflow-machine-"));

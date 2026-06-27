@@ -379,6 +379,59 @@ describe("loops CLI", () => {
     });
   });
 
+  test("create stores runtime preflight policy on command, agent, and workflow loops", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-runtime-preflight-"));
+    const command = runCli(dataDir, [
+      "--json",
+      "create",
+      "command",
+      "runtime-command-preflight",
+      "--at",
+      futureAt(),
+      "--cmd",
+      "true",
+      "--no-shell",
+      "--preflight-each-run",
+    ]);
+    expect(command.status).toBe(0);
+    expect(JSON.parse(command.stdout).target.preflight).toEqual({ beforeRun: true });
+
+    const agent = runCli(dataDir, [
+      "--json",
+      "create",
+      "agent",
+      "runtime-agent-preflight",
+      "--provider",
+      "codewith",
+      "--at",
+      futureAt(),
+      "--prompt",
+      "inspect status",
+      "--preflight-each-run",
+    ]);
+    expect(agent.status).toBe(0);
+    expect(JSON.parse(agent.stdout).target.preflight).toEqual({ beforeRun: true });
+
+    const file = workflowFile(dataDir, {
+      name: "runtime-preflight-workflow",
+      steps: [{ id: "step", target: { type: "command", command: "true" } }],
+    });
+    expect(runCli(dataDir, ["workflows", "create", file]).status).toBe(0);
+    const workflow = runCli(dataDir, [
+      "--json",
+      "create",
+      "workflow",
+      "runtime-workflow-preflight",
+      "--workflow",
+      "runtime-preflight-workflow",
+      "--at",
+      futureAt(),
+      "--preflight-each-run",
+    ]);
+    expect(workflow.status).toBe(0);
+    expect(JSON.parse(workflow.stdout).target.preflight).toEqual({ beforeRun: true });
+  });
+
   test("machines commands expose OpenMachines topology", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-machines-"));
     const list = runCli(dataDir, ["--json", "machines", "list"]);
@@ -810,6 +863,42 @@ describe("loops CLI", () => {
     });
     expect(value.actions[0].metadata).toMatchObject({
       classification: "schema_response_format",
+      no_tmux_dispatch: true,
+    });
+  });
+
+  test("runtime preflight failures are finalized and routed as preflight health tasks", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-runtime-preflight-health-"));
+    const create = runCli(dataDir, [
+      "--json",
+      "create",
+      "command",
+      "runtime-preflight-health",
+      "--at",
+      futureAt(),
+      "--cmd",
+      "definitely-missing-openloops-runtime-preflight-binary",
+      "--no-shell",
+      "--preflight-each-run",
+    ]);
+    expect(create.status).toBe(0);
+
+    const run = runCli(dataDir, ["--json", "run-now", "runtime-preflight-health"]);
+    expect(run.status).toBe(1);
+    const runValue = JSON.parse(run.stdout);
+    expect(runValue.status).toBe("failed");
+    expect(runValue.error).toContain("runtime preflight failed");
+
+    const result = runCli(dataDir, ["--json", "health", "route-tasks", "--dry-run", "--max-actions", "2"]);
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.failures).toBe(1);
+    expect(value.actions[0]).toMatchObject({
+      action: "would-upsert",
+      priority: "medium",
+    });
+    expect(value.actions[0].metadata).toMatchObject({
+      classification: "preflight",
       no_tmux_dispatch: true,
     });
   });
