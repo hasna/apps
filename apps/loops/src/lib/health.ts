@@ -78,6 +78,7 @@ export interface LoopsHealthReport {
 }
 
 const EVIDENCE_CHARS = 2_000;
+const FINGERPRINT_EVIDENCE_CHARS = 120;
 const CLASSIFICATIONS: RunFailureClassification[] = [
   "rate_limit",
   "auth",
@@ -105,6 +106,16 @@ function stableFingerprint(parts: string[]): string {
   return createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 16);
 }
 
+function stableFailureFingerprint(run: LoopRun, classification: RunFailureClassification): string {
+  return stableFingerprint([
+    run.loopId,
+    classification,
+    String(run.status),
+    String(run.exitCode ?? ""),
+    (run.error ?? run.stderr ?? run.stdout ?? "").replace(/\d{4}-\d{2}-\d{2}T\S+/g, "<timestamp>").slice(0, FINGERPRINT_EVIDENCE_CHARS),
+  ]);
+}
+
 function healthRun(run: LoopRun): LoopRun {
   return {
     ...run,
@@ -130,14 +141,7 @@ export function classifyRunFailure(run: LoopRun): RunFailureSignal | undefined {
 
   return {
     classification,
-    fingerprint: stableFingerprint([
-      run.loopId,
-      run.loopName,
-      run.status,
-      classification,
-      String(run.exitCode ?? ""),
-      (run.error ?? run.stderr ?? run.stdout ?? "").slice(0, 500),
-    ]),
+    fingerprint: stableFailureFingerprint(run, classification),
     evidence: {
       error: bounded(run.error),
       stdout: bounded(run.stdout),
@@ -252,8 +256,10 @@ export function expectationForLoop(store: Store, loop: Loop): LoopExpectationRes
   };
 }
 
-export function buildHealthReport(store: Store, opts: { includeArchived?: boolean; limit?: number } = {}): LoopsHealthReport {
-  const loops = store.listLoops({ includeArchived: opts.includeArchived, limit: opts.limit ?? 200 });
+export function buildHealthReport(store: Store, opts: { includeArchived?: boolean; includeInactive?: boolean; limit?: number } = {}): LoopsHealthReport {
+  const loops = store
+    .listLoops({ includeArchived: opts.includeArchived, limit: opts.limit ?? 200 })
+    .filter((loop) => opts.includeInactive || loop.status === "active" || loop.status === "paused");
   const expectations = loops.map((loop) => expectationForLoop(store, loop));
   const classifications = Object.fromEntries(CLASSIFICATIONS.map((key) => [key, 0])) as Record<RunFailureClassification, number>;
   for (const expectation of expectations) {

@@ -1241,12 +1241,13 @@ health
   .option("--task-list <slug>", "todos task-list slug", "loop-error-self-heal")
   .option("--limit <n>", "maximum loops to inspect", "200")
   .option("--max-actions <n>", "maximum todos tasks to upsert", "5")
+  .option("--include-inactive", "also route stopped or expired loops")
   .option("--dry-run", "print intended task upserts without mutating todos")
   .option("--json", "print JSON")
   .action((opts) => {
     const store = new Store();
     try {
-      const report = buildHealthReport(store, { limit: Number(opts.limit) });
+      const report = buildHealthReport(store, { limit: Number(opts.limit), includeInactive: Boolean(opts.includeInactive) });
       const failures = report.expectations.filter((entry) => !entry.ok && entry.recommendedTask).slice(0, Number(opts.maxActions));
       const listId = opts.dryRun
         ? undefined

@@ -204,17 +204,20 @@ describe("loops CLI", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-hygiene-scripts-"));
     const scriptsDir = join(dataDir, "scripts");
     expect(runCli(dataDir, ["create", "command", "script-backed", "--at", futureAt(), "--cmd", `${scriptsDir}/check.sh`]).status).toBe(0);
+    expect(runCli(dataDir, ["create", "command", "script-backed-tilde", "--at", futureAt(), "--cmd", "~/.hasna/loops/scripts/check.sh"]).status).toBe(0);
+    expect(runCli(dataDir, ["create", "command", "script-backed-env", "--at", futureAt(), "--cmd", "$HOME/.hasna/loops/scripts/check.sh"]).status).toBe(0);
 
     const report = runCli(dataDir, ["--json", "hygiene", "scripts", "--scripts-dir", scriptsDir]);
 
     expect(report.status).toBe(1);
     const value = JSON.parse(report.stdout);
     expect(value.ok).toBe(false);
-    expect(value.scriptBacked).toBe(1);
-    expect(value.loops[0]).toMatchObject({
-      name: "script-backed",
-      scriptMatches: [scriptsDir],
-    });
+    expect(value.scriptBacked).toBe(3);
+    expect(value.loops.map((loop: { name: string }) => loop.name).sort()).toEqual([
+      "script-backed",
+      "script-backed-env",
+      "script-backed-tilde",
+    ]);
   });
 
   test("create command stores an OpenMachines assignment", () => {
@@ -381,6 +384,63 @@ describe("loops CLI", () => {
       classification: "schema_response_format",
       no_tmux_dispatch: true,
     });
+  });
+
+  test("health route-tasks ignores stopped loops unless include-inactive is set and dedupe survives renames", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-health-route-active-only-"));
+    const store = new Store(join(dataDir, "loops.db"));
+    let firstFingerprint = "";
+    try {
+      const active = store.createLoop({
+        name: "agent-health-rename-old",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "agent", provider: "codewith", prompt: "run", cwd: "/tmp/repo" },
+      });
+      const stopped = store.createLoop({
+        name: "agent-health-stopped",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "agent", provider: "codewith", prompt: "run", cwd: "/tmp/repo" },
+      });
+      store.updateLoop(stopped.id, { status: "stopped", nextRunAt: undefined });
+      for (const loop of [active, stopped]) {
+        const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "seed", new Date("2026-01-01T00:00:00Z"));
+        expect(claim).toBeDefined();
+        store.finalizeRun(
+          claim!.run.id,
+          {
+            status: "failed",
+            finishedAt: "2026-01-01T00:00:01.000Z",
+            durationMs: 1_000,
+            stderr: `Rate limit at 2026-01-01T00:00:01.000Z for ${loop.name}`,
+            error: "429 too many requests",
+            exitCode: 1,
+          },
+          { claimedBy: "seed", now: new Date("2026-01-01T00:00:00.500Z") },
+        );
+      }
+    } finally {
+      store.close();
+    }
+
+    const activeOnly = runCli(dataDir, ["--json", "health", "route-tasks", "--dry-run", "--max-actions", "10"]);
+    expect(activeOnly.status).toBe(0);
+    const activeValue = JSON.parse(activeOnly.stdout);
+    expect(activeValue.failures).toBe(1);
+    firstFingerprint = activeValue.actions[0].fingerprint;
+
+    const includeInactive = runCli(dataDir, ["--json", "health", "route-tasks", "--dry-run", "--include-inactive", "--max-actions", "10"]);
+    expect(includeInactive.status).toBe(0);
+    expect(JSON.parse(includeInactive.stdout).failures).toBe(2);
+
+    const renameStore = new Store(join(dataDir, "loops.db"));
+    try {
+      const loop = renameStore.findLoopByName("agent-health-rename-old")!;
+      renameStore.renameLoop(loop.id, "agent-health-rename-new");
+    } finally {
+      renameStore.close();
+    }
+    const afterRename = runCli(dataDir, ["--json", "health", "route-tasks", "--dry-run", "--max-actions", "10"]);
+    expect(JSON.parse(afterRename.stdout).actions[0].fingerprint).toBe(firstFingerprint);
   });
 
   test("expectations JSON is read-only and honors temp LOOPS_DATA_DIR", () => {
@@ -590,6 +650,7 @@ describe("loops CLI", () => {
     expect(render.status).toBe(0);
     const workflow = JSON.parse(render.stdout);
     expect(workflow.name).toContain("bounded-agent");
+    expect(workflow.name).toMatch(/^bounded-agent-[a-f0-9]{8}-worker-verifier$/);
     expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["worker", "verifier"]);
     expect(workflow.steps[0].target.prompt).toContain("/goal Check repo docs drift");
     expect(workflow.steps[0].target.prompt).toContain("Do not dispatch or paste prompts into tmux panes");

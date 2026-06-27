@@ -19,6 +19,7 @@ export interface NameHygieneReport {
   checked: number;
   changed: number;
   changes: NameHygieneChange[];
+  conflicts: NameHygieneChange[];
 }
 
 export interface DuplicateOverlapGroup {
@@ -136,8 +137,9 @@ function canonicalName(loop: Loop): Omit<NameHygieneChange, "oldName" | "changed
   };
 }
 
-function ensureUnique(changes: NameHygieneChange[]): void {
-  const used = new Set<string>();
+function ensureUnique(changes: NameHygieneChange[], existingNames: Iterable<string> = []): void {
+  const oldNames = new Set(changes.map((change) => change.oldName));
+  const used = new Set([...existingNames].filter((name) => !oldNames.has(name)));
   for (const change of changes) {
     let candidate = change.newName;
     if (!used.has(candidate)) {
@@ -170,6 +172,7 @@ export function buildNameHygieneReport(
   store: Store,
   opts: { apply?: boolean; includeStopped?: boolean; includeInactive?: boolean; limit?: number } = {},
 ): NameHygieneReport {
+  const allLoops = store.listLoops({ includeArchived: true, limit: 10_000 });
   const changes = managedLoops(store, opts).map((loop) => {
     const canonical = canonicalName(loop);
     return {
@@ -178,8 +181,9 @@ export function buildNameHygieneReport(
       changed: loop.name !== canonical.newName,
     };
   });
-  ensureUnique(changes);
+  ensureUnique(changes, allLoops.map((loop) => loop.name));
   const changed = changes.filter((change) => change.changed);
+  const conflicts = changes.filter((change) => allLoops.some((loop) => loop.name === change.newName && loop.id !== change.id));
   if (opts.apply) {
     for (const change of changed) store.renameLoop(change.id, change.newName);
   }
@@ -190,6 +194,7 @@ export function buildNameHygieneReport(
     checked: changes.length,
     changed: changed.length,
     changes,
+    conflicts,
   };
 }
 
@@ -253,17 +258,37 @@ function commandText(loop: Loop): string {
   return [loop.target.command, ...(loop.target.args ?? [])].join(" ");
 }
 
+function scriptNeedles(scriptsDir: string): string[] {
+  const home = process.env.HOME ?? "/home/hasna";
+  const normalized = scriptsDir.replace(/\/+$/g, "");
+  const values = [
+    normalized,
+    `${normalized}/`,
+    "~/.hasna/loops/scripts",
+    "~/.hasna/loops/scripts/",
+    "$HOME/.hasna/loops/scripts",
+    "$HOME/.hasna/loops/scripts/",
+    "${HOME}/.hasna/loops/scripts",
+    "${HOME}/.hasna/loops/scripts/",
+    `${home}/.hasna/loops/scripts`,
+    `${home}/.hasna/loops/scripts/`,
+    "/.hasna/loops/scripts/",
+  ];
+  return [...new Set(values)];
+}
+
 export function buildScriptInventoryReport(
   store: Store,
   opts: { scriptsDir?: string; includeInactive?: boolean; limit?: number } = {},
 ): ScriptInventoryReport {
   const scriptsDir = opts.scriptsDir ?? `${process.env.HOME ?? "/home/hasna"}/.hasna/loops/scripts`;
+  const needles = scriptNeedles(scriptsDir);
   const loops = managedLoops(store, { includeInactive: opts.includeInactive, includeStopped: true, limit: opts.limit });
   const scriptBacked = loops
     .map((loop): ScriptBackedLoop | undefined => {
       const text = commandText(loop);
       if (!text) return undefined;
-      const matches = [scriptsDir, "/.hasna/loops/scripts/"].filter((needle) => text.includes(needle));
+      const matches = needles.filter((needle) => text.includes(needle));
       if (!matches.length) return undefined;
       return {
         id: loop.id,

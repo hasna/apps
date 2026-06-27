@@ -388,7 +388,7 @@ export function renderBoundedAgentWorkerVerifierWorkflow(input: BoundedAgentWork
   ].join("\n");
 
   return {
-    name: input.name ?? `bounded-agent-${stableIndex(seed, 0xffff).toString(16)}-worker-verifier`,
+    name: input.name ?? `bounded-agent-${stableIndex(seed, 0xffffffff).toString(16).padStart(8, "0")}-worker-verifier`,
     description: `Bounded worker/verifier workflow for ${input.objective.slice(0, 180)}`,
     version: 1,
     steps: [
