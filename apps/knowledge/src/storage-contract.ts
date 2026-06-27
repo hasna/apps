@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
 import type { Database } from 'bun:sqlite';
 import { DEFAULT_KNOWLEDGE_API_URL, normalizeKnowledgeApiOrigin } from './auth';
 import { REMOTE_KNOWLEDGE_CONTRACT_VERSION } from './remote-client';
@@ -199,7 +200,7 @@ export function resolveStorageContract(
     artifact_store: {
       type: config.storage.type,
       artifacts_root: config.storage.artifacts_root,
-      uri_prefix: config.storage.type === 's3' ? s3UriPrefix : `file://${workspace.artifactsDir}/`,
+      uri_prefix: config.storage.type === 's3' ? s3UriPrefix : pathToFileURL(`${workspace.artifactsDir}/`).href,
       s3: s3
         ? {
             bucket: s3.bucket,

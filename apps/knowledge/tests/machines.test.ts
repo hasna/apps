@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { join } from 'node:path';
 import {
   KNOWLEDGE_MACHINES_ADAPTER_CONTRACT_VERSION,
   createKnowledgeMachinesAdapter,
@@ -83,7 +84,7 @@ describe('knowledge machine topology', () => {
     expect(result.adapter.available).toBe(true);
     expect(result.adapter.implementation).toBe('sdk');
     expect(result.adapter.mode).toBe('auto');
-    expect(result.knowledge.app_path).toBe('.hasna/apps/knowledge');
+    expect(result.knowledge.app_path).toBe(join('.hasna', 'apps', 'knowledge'));
     expect(result.knowledge.workspace_home).toBe('/repo/.hasna/apps/knowledge');
     expect(result.machines).toHaveLength(1);
     expect(result.machines[0].local).toBe(true);
