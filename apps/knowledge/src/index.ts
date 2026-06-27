@@ -1,6 +1,7 @@
 export {
   createKnowledgeClient,
   createKnowledgeSdk,
+  type KnowledgeAgentContextPackOptions,
   type KnowledgeAskOptions,
   type KnowledgeAuthInput,
   type KnowledgeClient,
@@ -12,6 +13,15 @@ export {
   type KnowledgeSyncDoctorOptions,
   type KnowledgeWebSearchOptions,
 } from './sdk.js';
+export {
+  buildKnowledgeAgentContextPack,
+  type KnowledgeAgentContextCitation,
+  type KnowledgeAgentContextEvidence,
+  type KnowledgeAgentContextPack,
+  type KnowledgeAgentDuplicateCandidate,
+  type KnowledgeContextPackPurpose,
+  type KnowledgeContextPackSource,
+} from './context-pack.js';
 export {
   createKnowledgeService,
   KnowledgeService,

@@ -302,6 +302,19 @@ describe('public knowledge sdk', () => {
     const search = await client.search({ query: 'SDK facade source context', limit: 3 });
     expect(search.results[0].text).toContain('SDK facade');
 
+    const contextPack = await client.context.pack({
+      query: 'SDK facade source context',
+      maxTokens: 1200,
+      maxItems: 1,
+    });
+    expect(contextPack.format).toBe('knowledge-agent-context-pack');
+    expect(contextPack.budgets.items_included).toBeLessThanOrEqual(1);
+    expect(contextPack.evidence[0].citation_ids.length).toBeGreaterThan(0);
+    expect(await client.contextPack({ query: 'SDK facade source context', maxItems: 1 })).toMatchObject({
+      format: 'knowledge-agent-context-pack',
+      source: 'search',
+    });
+
     const answer = await client.ask('What does the SDK facade let apps do?', { limit: 3 });
     expect(answer.generated).toBe(false);
     expect(answer.answer).toContain('SDK facade');

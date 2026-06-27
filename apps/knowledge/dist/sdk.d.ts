@@ -5,6 +5,7 @@ export type KnowledgeAuthInput = Parameters<KnowledgeService['saveAuth']>[0];
 export type KnowledgeAskOptions = Omit<Parameters<KnowledgeService['runPrompt']>[0], 'prompt'>;
 export type KnowledgeSearchOptions = Parameters<KnowledgeService['search']>[0];
 export type KnowledgeContextOptions = Parameters<KnowledgeService['retrieveContext']>[0];
+export type KnowledgeAgentContextPackOptions = Parameters<KnowledgeService['contextPack']>[0];
 export type KnowledgeWebSearchOptions = Parameters<KnowledgeService['webSearch']>[0];
 export type KnowledgeInventoryOptions = Parameters<KnowledgeService['inventory']>[0];
 export type KnowledgeSyncSnapshotOptions = Parameters<KnowledgeService['createSyncSnapshot']>[0];
@@ -85,6 +86,10 @@ export interface KnowledgeClient {
     };
     readonly search: (options: KnowledgeSearchOptions) => ReturnType<KnowledgeService['search']>;
     readonly retrieveContext: (options: KnowledgeContextOptions) => ReturnType<KnowledgeService['retrieveContext']>;
+    readonly contextPack: (options: KnowledgeAgentContextPackOptions) => ReturnType<KnowledgeService['contextPack']>;
+    readonly context: {
+        readonly pack: (options: KnowledgeAgentContextPackOptions) => ReturnType<KnowledgeService['contextPack']>;
+    };
     readonly ask: (prompt: string, options?: KnowledgeAskOptions) => ReturnType<KnowledgeService['runPrompt']>;
     readonly build: (prompt: string, options?: KnowledgeAskOptions) => ReturnType<KnowledgeService['runPrompt']>;
     readonly web: {

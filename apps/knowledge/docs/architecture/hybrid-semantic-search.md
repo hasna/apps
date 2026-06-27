@@ -153,6 +153,14 @@ source refs, artifact URIs, revision/hash metadata, offsets, and provenance.
 and MCP `knowledge_ask|knowledge_build` wrap this context pack in a run ledger
 and return a citation draft or explicit AI SDK generated answer.
 
+For loops and token-sensitive agents, `knowledge context pack <query>` and MCP
+`knowledge_context_pack` return a smaller `knowledge-agent-context-pack` JSON
+schema. It adds explicit token/item budgets, redacted evidence previews, compact
+citation refs, safety reminders, dry-run/write-boundary metadata, and a bounded
+outline. `knowledge proposals context --from loops --topic <text>` uses the same
+schema over `runs`/`run_events` so proposal loops can cite prior evidence and
+duplicate candidates without embedding raw artifact bodies.
+
 Provider-native web search lives beside local retrieval. `knowledge web
 search` and MCP `knowledge_web_search` are safety-gated, capture provider
 sources, and can file snippets as read-only `web` source refs so later local

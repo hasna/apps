@@ -12,6 +12,7 @@ import {
   type KnowledgeAuthStatus,
 } from './auth';
 import { runKnowledgePrompt, type KnowledgePromptOptions } from './agent';
+import { buildKnowledgeAgentContextPack, type KnowledgeAgentContextPackOptions } from './context-pack';
 import {
   proposeKnowledgeSyncConflictResolutionWithAi,
   type KnowledgeSyncConflictAiProposalOptions,
@@ -1736,6 +1737,19 @@ export class KnowledgeService {
       dbPath: workspace.knowledgeDbPath,
       legacyStorePath,
       config: this.config(),
+    });
+  }
+
+  async contextPack(options: Omit<KnowledgeAgentContextPackOptions, 'dbPath' | 'config' | 'safetyPolicy'>) {
+    const workspace = this.ensureWorkspace();
+    const legacyStorePath = options.legacyStorePath ?? workspace.jsonStorePath;
+    if (!options.legacyStorePath) ensureStore(legacyStorePath);
+    return buildKnowledgeAgentContextPack({
+      ...options,
+      dbPath: workspace.knowledgeDbPath,
+      legacyStorePath,
+      config: this.config(),
+      safetyPolicy: this.safetyPolicy(),
     });
   }
 

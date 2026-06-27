@@ -22,6 +22,10 @@ function jsonText(data) {
   return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
 }
 
+function compactJsonText(data) {
+  return { content: [{ type: 'text', text: JSON.stringify(data) }] };
+}
+
 function errorText(message) {
   return { content: [{ type: 'text', text: `Error: ${message}` }], isError: true };
 }
@@ -1165,6 +1169,46 @@ export function buildServer() {
     const service = createKnowledgeService({ scope });
     try {
       return jsonText({ ok: true, ...await service.retrieveContext({ query, limit, semantic, modelRef: model, dimensions, fake }) });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'knowledge_context_pack', 'Bounded knowledge context pack', 'Return compact cited JSON for agents under token and item budgets', {
+    scope: scopeField,
+    query: z.string().optional().describe('Search query or prompt for search packs'),
+    topic: z.string().optional().describe('Topic for loop/run proposal packs'),
+    from: z.enum(['search', 'loops', 'runs']).optional().describe('Pack source, default search'),
+    since: z.string().optional().describe('Run/loop evidence age filter such as 7d or an ISO timestamp'),
+    max_tokens: z.number().optional().describe('Approximate maximum JSON token budget'),
+    max_items: z.number().optional().describe('Maximum evidence items'),
+    limit: z.number().optional().describe('Maximum retrieval rows before packing'),
+    semantic: z.boolean().optional().describe('Include vector semantic results for search packs'),
+    dedupe: z.boolean().optional().describe('Include duplicate candidates for run/loop evidence'),
+    model: z.string().optional().describe('Embedding model ref, default openai:text-embedding-3-small'),
+    dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
+    fake: z.boolean().optional().describe('Use deterministic fake embeddings for local tests'),
+  }, async ({ scope, query, topic, from, since, max_tokens, max_items, limit, semantic, dedupe, model, dimensions, fake }) => {
+    const service = createKnowledgeService({ scope });
+    try {
+      return compactJsonText({
+        ok: true,
+        ...await service.contextPack({
+          source: from ?? 'search',
+          purpose: from === 'loops' || from === 'runs' ? 'proposal' : 'agent_context',
+          query: query ?? topic ?? '',
+          topic,
+          since,
+          maxTokens: max_tokens,
+          maxItems: max_items,
+          limit,
+          semantic,
+          dedupe,
+          modelRef: model,
+          dimensions,
+          fake,
+        }),
+      });
     } catch (error) {
       return errorText(error instanceof Error ? error.message : String(error));
     }
