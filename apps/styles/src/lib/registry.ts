@@ -1,8 +1,8 @@
 export interface StyleMeta {
-  name: string;
+  name: StyleName;
   displayName: string;
   description: string;
-  category: string;
+  category: Category;
   tags: string[];
   principles: string[];
 }

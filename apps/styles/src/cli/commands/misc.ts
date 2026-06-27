@@ -52,6 +52,7 @@ export function registerMiscCommands(program: Command) {
       if (!style) {
         const similar = findSimilarStyles(name);
         error(`Style not found: "${name}"`, similar.length ? [`Did you mean: ${similar.join(", ")}`] : undefined);
+        return;
       }
 
       if (!isTTY) { jsonOut(style); return; }
@@ -102,6 +103,7 @@ export function registerMiscCommands(program: Command) {
           `No example found for pattern "${pattern}" in style "${styleName}"`,
           [`Available patterns for ${styleName}: ${available.length > 0 ? available.join(", ") : "none"}`]
         );
+        return;
       }
 
       process.stdout.write(code);

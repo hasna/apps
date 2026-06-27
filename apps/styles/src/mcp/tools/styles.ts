@@ -241,8 +241,9 @@ export function registerStyleTools(server: McpServer) {
       "style-by-name",
       new ResourceTemplate("styles://{name}", { list: undefined }),
       { description: "Individual style metadata and STYLE.md content", mimeType: "application/json" },
-      async (uri: URL, variables: { name: string }) => {
-        const name = variables.name as string;
+      async (uri, variables) => {
+        const rawName = variables["name"];
+        const name = Array.isArray(rawName) ? rawName[0] : rawName;
         const style = getStyle(name);
         if (!style) {
           return { contents: [{ uri: uri.toString(), mimeType: "application/json", text: mcpError("STYLE_NOT_FOUND", `Style not found: "${name}"`) }] };

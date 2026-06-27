@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { mkdirSync, existsSync, rmdirSync, readFileSync } from "fs";
+import { mkdirSync, existsSync, readFileSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -26,9 +26,9 @@ describe("hookmanager", () => {
       // Clean up agent dirs
       for (const agentDir of [".claude", ".gemini", ".codex", ".opencode", ".pi"]) {
         const p = join(testProjectPath, agentDir);
-        if (existsSync(p)) rmdirSync(p, { recursive: true });
+        if (existsSync(p)) rmSync(p, { recursive: true, force: true });
       }
-      rmdirSync(testProjectPath);
+      rmSync(testProjectPath, { recursive: true, force: true });
     }
   });
 

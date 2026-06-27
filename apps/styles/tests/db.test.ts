@@ -4,7 +4,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { unlinkSync, existsSync } from "fs";
 
-// We create a test DB at a temp path instead of using the default ~/.styles/styles.db
+// We create a test DB at a temp path instead of using the default ~/.hasna/styles/styles.db.
 let tmpDbPath: string;
 let db: Database;
 

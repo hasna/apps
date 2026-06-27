@@ -1,12 +1,21 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { unlinkSync, existsSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { getDb, resetDb, setDbPath, initDb, getDataDir } from "../lib/db.js";
 
 let testDbPath = "";
+let originalHome: string | undefined;
+let originalUserProfile: string | undefined;
+let testHome = "";
 
 beforeEach(() => {
+  originalHome = process.env["HOME"];
+  originalUserProfile = process.env["USERPROFILE"];
+  testHome = join(tmpdir(), `styles-db-home-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  mkdirSync(testHome, { recursive: true });
+  process.env["HOME"] = testHome;
+  delete process.env["USERPROFILE"];
   testDbPath = join(tmpdir(), `styles-db-test-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
   setDbPath(testDbPath);
 });
@@ -18,6 +27,11 @@ afterEach(() => {
     const p = testDbPath + suffix;
     if (existsSync(p)) unlinkSync(p);
   }
+  if (originalHome === undefined) delete process.env["HOME"];
+  else process.env["HOME"] = originalHome;
+  if (originalUserProfile === undefined) delete process.env["USERPROFILE"];
+  else process.env["USERPROFILE"] = originalUserProfile;
+  rmSync(testHome, { recursive: true, force: true });
 });
 
 describe("db", () => {
@@ -27,6 +41,19 @@ describe("db", () => {
       expect(typeof dir).toBe("string");
       expect(dir).toContain(".hasna");
       expect(existsSync(dir)).toBe(true);
+    });
+
+    test("copy-forwards legacy styles dirs into canonical data dir", () => {
+      mkdirSync(join(testHome, ".open-styles"), { recursive: true });
+      mkdirSync(join(testHome, ".styles"), { recursive: true });
+      writeFileSync(join(testHome, ".open-styles", "config.json"), "{\"source\":\"open\"}");
+      writeFileSync(join(testHome, ".styles", "legacy-only.txt"), "legacy");
+
+      const dir = getDataDir();
+
+      expect(dir).toBe(join(testHome, ".hasna", "styles"));
+      expect(readFileSync(join(dir, "config.json"), "utf-8")).toBe("{\"source\":\"open\"}");
+      expect(readFileSync(join(dir, "legacy-only.txt"), "utf-8")).toBe("legacy");
     });
   });
 

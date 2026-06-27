@@ -1,26 +1,10 @@
 import { SqliteAdapter as Database } from "@hasna/cloud";
-import { homedir } from "os";
 import { join, dirname } from "path";
-import { mkdirSync, existsSync, copyFileSync, readdirSync, statSync } from "fs";
+import { mkdirSync, existsSync, copyFileSync } from "fs";
+import { getStylesDir } from "./paths.js";
 
 export function getDataDir(): string {
-  const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
-  const newDir = join(home, ".hasna", "styles");
-  const oldDir = join(home, ".styles");
-
-  // Auto-migrate old dir to new location
-  if (existsSync(oldDir) && !existsSync(newDir)) {
-    mkdirSync(newDir, { recursive: true });
-    for (const file of readdirSync(oldDir)) {
-      const oldPath = join(oldDir, file);
-      if (statSync(oldPath).isFile()) {
-        copyFileSync(oldPath, join(newDir, file));
-      }
-    }
-  }
-
-  mkdirSync(newDir, { recursive: true });
-  return newDir;
+  return getStylesDir();
 }
 
 export const DB_PATH = join(getDataDir(), "styles.db");

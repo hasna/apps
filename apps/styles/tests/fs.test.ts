@@ -3,9 +3,7 @@ import { mkdirSync, rmSync, existsSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
-// We need to test fs.ts in isolation without touching ~/.styles
-// All functions in fs.ts use getStylesDir() which returns join(homedir(), ".styles")
-// For testing, we test the pure utility functions and those that accept a projectPath
+// Test fs.ts in isolation without touching the user's real ~/.hasna/styles.
 
 import {
   getStylesDir,
@@ -17,15 +15,31 @@ import {
   getProjectDir,
 } from "../src/lib/fs.js";
 
-// We can't easily override homedir(), so we test what we can:
-// - getStylesDir() returns a path containing ".styles"
-// - hashProjectPath() is deterministic and returns a string
-// - setProjectConfig + getProjectConfig round-trips (these write to ~/.styles, so we test via actual calls)
+let originalHome: string | undefined;
+let originalUserProfile: string | undefined;
+let testHome = "";
+
+beforeEach(() => {
+  originalHome = process.env["HOME"];
+  originalUserProfile = process.env["USERPROFILE"];
+  testHome = join(tmpdir(), `styles-root-fs-home-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  mkdirSync(testHome, { recursive: true });
+  process.env["HOME"] = testHome;
+  delete process.env["USERPROFILE"];
+});
+
+afterEach(() => {
+  if (originalHome === undefined) delete process.env["HOME"];
+  else process.env["HOME"] = originalHome;
+  if (originalUserProfile === undefined) delete process.env["USERPROFILE"];
+  else process.env["USERPROFILE"] = originalUserProfile;
+  rmSync(testHome, { recursive: true, force: true });
+});
 
 describe("getStylesDir", () => {
-  test("returns a path containing '.styles'", () => {
+  test("returns the canonical ~/.hasna/styles path", () => {
     const dir = getStylesDir();
-    expect(dir).toContain(".styles");
+    expect(dir).toBe(join(testHome, ".hasna", "styles"));
   });
 });
 
@@ -57,7 +71,7 @@ describe("hashProjectPath", () => {
 describe("initProjectDir + getProjectDir", () => {
   test("initProjectDir creates the directory", () => {
     const testProjectPath = join(tmpdir(), `test-project-${Date.now()}`);
-    // initProjectDir uses getStylesDir() internally so will create under ~/.styles/projects/
+    // initProjectDir uses getStylesDir() internally so will create under ~/.hasna/styles/projects/.
     // We just verify it doesn't throw
     expect(() => initProjectDir(testProjectPath)).not.toThrow();
 

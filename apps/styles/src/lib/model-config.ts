@@ -1,14 +1,11 @@
 // Model config for open-styles.
-// Stores the active fine-tuned model ID in ~/.styles/config.json.
+// Stores the active fine-tuned model ID in ~/.hasna/styles/config.json.
 
-import { homedir } from "os";
-import { join } from "path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { dirname } from "path";
+import { getModelConfigPath } from "./paths.js";
 
 export const DEFAULT_MODEL = "gpt-4o-mini";
-
-const CONFIG_DIR = join(homedir(), ".styles");
-const CONFIG_FILE = join(CONFIG_DIR, "config.json");
 
 interface StylesConfig {
   activeModel?: string;
@@ -16,19 +13,22 @@ interface StylesConfig {
 }
 
 function readConfig(): StylesConfig {
-  if (!existsSync(CONFIG_FILE)) return {};
+  const configFile = getModelConfigPath();
+  if (!existsSync(configFile)) return {};
   try {
-    return JSON.parse(readFileSync(CONFIG_FILE, "utf-8")) as StylesConfig;
+    return JSON.parse(readFileSync(configFile, "utf-8")) as StylesConfig;
   } catch {
     return {};
   }
 }
 
 function writeConfig(config: StylesConfig): void {
-  if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
+  const configFile = getModelConfigPath();
+  const configDir = dirname(configFile);
+  if (!existsSync(configDir)) {
+    mkdirSync(configDir, { recursive: true });
   }
-  writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  writeFileSync(configFile, JSON.stringify(config, null, 2) + "\n", "utf-8");
 }
 
 /**
@@ -41,7 +41,7 @@ export function getActiveModel(): string {
 }
 
 /**
- * Set the active fine-tuned model ID in ~/.styles/config.json.
+ * Set the active fine-tuned model ID in ~/.hasna/styles/config.json.
  */
 export function setActiveModel(id: string): void {
   const config = readConfig();

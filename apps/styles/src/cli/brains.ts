@@ -4,7 +4,6 @@
 import { Command } from "commander";
 import { mkdir, writeFile } from "fs/promises";
 import { join } from "path";
-import { homedir } from "os";
 import chalk from "chalk";
 import { gatherTrainingData } from "../lib/gatherer.js";
 import {
@@ -13,6 +12,7 @@ import {
   clearActiveModel,
   DEFAULT_MODEL,
 } from "../lib/model-config.js";
+import { getTrainingDir } from "../lib/paths.js";
 
 const isTTY = (process.stdout.isTTY ?? false) && (process.stdin.isTTY ?? false);
 
@@ -31,10 +31,10 @@ export function registerBrainsCommand(program: Command): void {
     .command("gather")
     .description("Gather training data from styles profiles, preferences, and templates")
     .option("-l, --limit <n>", "Max number of training examples", "500")
-    .option("-o, --output <dir>", "Output directory (default: ~/.styles/training/)")
+    .option("-o, --output <dir>", "Output directory (default: ~/.hasna/styles/training/)")
     .action(async (opts: { limit?: string; output?: string }) => {
       const limit = parseInt(opts.limit ?? "500", 10);
-      const outputDir = opts.output ?? join(homedir(), ".styles", "training");
+      const outputDir = opts.output ?? getTrainingDir();
 
       if (isTTY) {
         process.stdout.write(chalk.dim("Gathering training data from styles...\n"));
@@ -80,7 +80,7 @@ export function registerBrainsCommand(program: Command): void {
     .description("Start a fine-tuning job using @hasna/brains")
     .option("--base-model <model>", "Base model to fine-tune", DEFAULT_MODEL)
     .option("--name <name>", "Name for the fine-tuned model", "styles-v1")
-    .option("--dataset <path>", "Path to JSONL dataset (default: latest in ~/.styles/training/)")
+    .option("--dataset <path>", "Path to JSONL dataset (default: latest in ~/.hasna/styles/training/)")
     .option("--provider <provider>", "Provider: openai or thinker-labs", "openai")
     .action(async (opts: { baseModel: string; name: string; dataset?: string; provider: string }) => {
       if (isTTY) {
@@ -109,8 +109,8 @@ export function registerBrainsCommand(program: Command): void {
       // Find dataset path
       let datasetPath = opts.dataset;
       if (!datasetPath) {
-        // Use latest file in ~/.styles/training/
-        const trainingDir = join(homedir(), ".styles", "training");
+        // Use latest file in ~/.hasna/styles/training/
+        const trainingDir = getTrainingDir();
         try {
           const { readdirSync, statSync } = await import("fs");
           const files = readdirSync(trainingDir)
@@ -122,7 +122,7 @@ export function registerBrainsCommand(program: Command): void {
             .sort((a: { mtime: number }, b: { mtime: number }) => b.mtime - a.mtime);
 
           if (files.length === 0) {
-            const msg = "No JSONL datasets found in ~/.styles/training/. Run: styles brains gather";
+            const msg = "No JSONL datasets found in ~/.hasna/styles/training/. Run: styles brains gather";
             if (isTTY) console.error(chalk.red("✖ " + msg));
             else jsonOut({ error: msg });
             process.exit(1);

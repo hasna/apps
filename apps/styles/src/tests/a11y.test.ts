@@ -128,7 +128,7 @@ describe("auditColorContrast", () => {
       backgroundColor: "#ffffff",
       color: "#000000",
     }]);
-    (raw.computedElements[0] as Record<string, string>).tagName = "button";
+    (raw.computedElements[0] as unknown as Record<string, string>).tagName = "button";
     const result = auditColorContrast(SINGLE_COLOR_TOKENS, raw);
     const elemPair = result.pairs.find((p) => p.element === "button");
     expect(elemPair).toBeDefined();

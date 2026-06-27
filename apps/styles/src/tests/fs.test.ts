@@ -1,8 +1,7 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { mkdirSync, existsSync, rmdirSync, readFileSync, unlinkSync } from "fs";
+import { mkdirSync, existsSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { homedir } from "os";
 
 import {
   getStylesDir,
@@ -17,12 +16,45 @@ import {
   writeStyleContextFile,
 } from "../lib/fs.js";
 
+let originalHome: string | undefined;
+let originalUserProfile: string | undefined;
+let testHome = "";
+
+beforeEach(() => {
+  originalHome = process.env["HOME"];
+  originalUserProfile = process.env["USERPROFILE"];
+  testHome = join(tmpdir(), `styles-home-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  mkdirSync(testHome, { recursive: true });
+  process.env["HOME"] = testHome;
+  delete process.env["USERPROFILE"];
+});
+
+afterEach(() => {
+  if (originalHome === undefined) delete process.env["HOME"];
+  else process.env["HOME"] = originalHome;
+  if (originalUserProfile === undefined) delete process.env["USERPROFILE"];
+  else process.env["USERPROFILE"] = originalUserProfile;
+  rmSync(testHome, { recursive: true, force: true });
+});
+
 describe("fs utilities", () => {
   describe("getStylesDir", () => {
-    test("returns path in home directory", () => {
+    test("returns canonical path in ~/.hasna/styles", () => {
       const dir = getStylesDir();
-      expect(dir).toContain(homedir());
-      expect(dir).toContain(".styles");
+      expect(dir).toBe(join(testHome, ".hasna", "styles"));
+    });
+
+    test("copies legacy ~/.open-styles before ~/.styles without touching project-local .styles", () => {
+      mkdirSync(join(testHome, ".open-styles", "nested"), { recursive: true });
+      mkdirSync(join(testHome, ".styles"), { recursive: true });
+      writeFileSync(join(testHome, ".open-styles", "config.json"), "{\"source\":\"open\"}");
+      writeFileSync(join(testHome, ".open-styles", "nested", "note.txt"), "open");
+      writeFileSync(join(testHome, ".styles", "config.json"), "{\"source\":\"old\"}");
+
+      const dir = getStylesDir();
+
+      expect(readFileSync(join(dir, "config.json"), "utf-8")).toBe("{\"source\":\"open\"}");
+      expect(readFileSync(join(dir, "nested", "note.txt"), "utf-8")).toBe("open");
     });
   });
 
@@ -78,9 +110,7 @@ describe("project config", () => {
   });
 
   afterEach(() => {
-    if (existsSync(testProjectPath)) {
-      rmdirSync(testProjectPath);
-    }
+    rmSync(testProjectPath, { recursive: true, force: true });
   });
 
   describe("initProjectDir", () => {
@@ -132,15 +162,7 @@ describe("writeStyleContextFile", () => {
   });
 
   afterEach(() => {
-    if (existsSync(testProjectPath)) {
-      const stylesDir = join(testProjectPath, ".styles");
-      if (existsSync(stylesDir)) {
-        const md = join(stylesDir, "style.md");
-        if (existsSync(md)) unlinkSync(md);
-        rmdirSync(stylesDir);
-      }
-      rmdirSync(testProjectPath);
-    }
+    rmSync(testProjectPath, { recursive: true, force: true });
   });
 
   test("writes style.md in .styles directory", () => {

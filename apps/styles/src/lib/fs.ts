@@ -1,4 +1,3 @@
-import { homedir } from "os";
 import { join, basename } from "path";
 import {
   mkdirSync,
@@ -7,6 +6,7 @@ import {
   writeFileSync,
   readdirSync,
 } from "fs";
+import { getStylesDir as getGlobalStylesDir } from "./paths.js";
 
 export interface ProjectConfig {
   projectPath: string;
@@ -18,7 +18,7 @@ export interface ProjectConfig {
 }
 
 export function getStylesDir(): string {
-  return join(homedir(), ".styles");
+  return getGlobalStylesDir();
 }
 
 export function getProjectsDir(): string {

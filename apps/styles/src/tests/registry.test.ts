@@ -143,7 +143,7 @@ describe("STYLES catalog", () => {
 
   test("all names are kebab-case lowercase", () => {
     for (const name of ALL_STYLE_NAMES) {
-      expect(name).toBe(name.toLowerCase());
+      expect(name.toLowerCase()).toBe(name);
       expect(name).not.toContain(" ");
     }
   });

@@ -57,7 +57,10 @@ cloud sync pull --service styles
 
 ## Data Directory
 
-Data is stored in `~/.hasna/styles/`.
+Data is stored in `~/.hasna/styles/`. Existing `~/.open-styles/` or
+`~/.styles/` package-owned global state is copied forward on first use without
+overwriting files already present in `~/.hasna/styles/`. Project-local
+`.styles/style.md` files are intentionally preserved as project context files.
 
 ## License
 

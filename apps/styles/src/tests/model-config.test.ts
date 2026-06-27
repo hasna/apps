@@ -1,36 +1,34 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { getActiveModel, setActiveModel, clearActiveModel, DEFAULT_MODEL } from "../lib/model-config.js";
-import { homedir } from "os";
+import { getModelConfigPath } from "../lib/paths.js";
 import { join } from "path";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 
-const CONFIG_FILE = join(homedir(), ".styles", "config.json");
+function configFile(): string {
+  return getModelConfigPath();
+}
 
 describe("model-config", () => {
-  let originalContent: string | null = null;
+  let originalHome: string | undefined;
+  let originalUserProfile: string | undefined;
+  let testHome = "";
 
   beforeEach(() => {
-    // Backup original config if it exists
-    if (existsSync(CONFIG_FILE)) {
-      originalContent = readFileSync(CONFIG_FILE, "utf-8");
-    }
-    // Clean state
-    if (existsSync(CONFIG_FILE)) {
-      unlinkSync(CONFIG_FILE);
-    }
+    originalHome = process.env["HOME"];
+    originalUserProfile = process.env["USERPROFILE"];
+    testHome = join(tmpdir(), `styles-model-home-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(testHome, { recursive: true });
+    process.env["HOME"] = testHome;
+    delete process.env["USERPROFILE"];
   });
 
   afterEach(() => {
-    // Restore original
-    if (existsSync(CONFIG_FILE)) {
-      unlinkSync(CONFIG_FILE);
-    }
-    if (originalContent !== null) {
-      if (!existsSync(join(homedir(), ".styles"))) {
-        mkdirSync(join(homedir(), ".styles"), { recursive: true });
-      }
-      writeFileSync(CONFIG_FILE, originalContent, "utf-8");
-    }
+    if (originalHome === undefined) delete process.env["HOME"];
+    else process.env["HOME"] = originalHome;
+    if (originalUserProfile === undefined) delete process.env["USERPROFILE"];
+    else process.env["USERPROFILE"] = originalUserProfile;
+    rmSync(testHome, { recursive: true, force: true });
   });
 
   describe("getActiveModel", () => {
@@ -39,10 +37,10 @@ describe("model-config", () => {
     });
 
     test("returns DEFAULT_MODEL when config has no activeModel", () => {
-      if (!existsSync(join(homedir(), ".styles"))) {
-        mkdirSync(join(homedir(), ".styles"), { recursive: true });
+      if (!existsSync(join(testHome, ".hasna", "styles"))) {
+        mkdirSync(join(testHome, ".hasna", "styles"), { recursive: true });
       }
-      writeFileSync(CONFIG_FILE, JSON.stringify({ other: "value" }), "utf-8");
+      writeFileSync(configFile(), JSON.stringify({ other: "value" }), "utf-8");
       expect(getActiveModel()).toBe(DEFAULT_MODEL);
     });
 
@@ -55,7 +53,7 @@ describe("model-config", () => {
   describe("setActiveModel", () => {
     test("stores the model id in config file", () => {
       setActiveModel("gpt-4o-mini");
-      const raw = JSON.parse(readFileSync(CONFIG_FILE, "utf-8"));
+      const raw = JSON.parse(readFileSync(configFile(), "utf-8"));
       expect(raw.activeModel).toBe("gpt-4o-mini");
     });
 
@@ -66,12 +64,12 @@ describe("model-config", () => {
     });
 
     test("preserves other config keys", () => {
-      if (!existsSync(join(homedir(), ".styles"))) {
-        mkdirSync(join(homedir(), ".styles"), { recursive: true });
+      if (!existsSync(join(testHome, ".hasna", "styles"))) {
+        mkdirSync(join(testHome, ".hasna", "styles"), { recursive: true });
       }
-      writeFileSync(CONFIG_FILE, JSON.stringify({ other: "keep-me" }), "utf-8");
+      writeFileSync(configFile(), JSON.stringify({ other: "keep-me" }), "utf-8");
       setActiveModel("gpt-4o");
-      const raw = JSON.parse(readFileSync(CONFIG_FILE, "utf-8"));
+      const raw = JSON.parse(readFileSync(configFile(), "utf-8"));
       expect(raw.other).toBe("keep-me");
     });
   });
