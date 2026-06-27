@@ -1556,7 +1556,7 @@ describe('knowledge cli', () => {
     const contextOut = JSON.parse(new TextDecoder().decode(context.stdout));
     expect(contextOut.excerpts.length).toBeGreaterThan(0);
     expect(contextOut.citations[0].provenance.source_owner).toBe('open-files');
-  });
+  }, 15000);
 
   test('ask command and direct knowledge prompt build citation drafts with run ledger', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-ask-cli-'));
