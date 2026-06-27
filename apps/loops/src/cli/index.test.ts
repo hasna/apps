@@ -250,6 +250,35 @@ describe("loops CLI", () => {
     ]);
   });
 
+  test("hygiene route-tasks dry-run produces deduped task upserts without mutating todos", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-hygiene-route-tasks-"));
+    const scriptsDir = join(dataDir, "scripts");
+    expect(runCli(dataDir, ["create", "command", "machine-foo", "--every", "1h", "--cmd", "true", "--cwd", "/tmp/repo"]).status).toBe(0);
+    expect(runCli(dataDir, ["create", "command", "machine-foo-compact", "--every", "1h", "--cmd", "true", "--cwd", "/tmp/repo"]).status).toBe(0);
+    expect(runCli(dataDir, ["create", "command", "machine-script-backed", "--at", futureAt(), "--cmd", `${scriptsDir}/check.sh`]).status).toBe(0);
+
+    const route = runCli(dataDir, [
+      "--json",
+      "hygiene",
+      "route-tasks",
+      "--checks",
+      "duplicates,scripts",
+      "--scripts-dir",
+      scriptsDir,
+      "--dry-run",
+      "--max-actions",
+      "10",
+    ]);
+
+    expect(route.status).toBe(0);
+    const value = JSON.parse(route.stdout);
+    expect(value.ok).toBe(true);
+    expect(value.findings).toBe(2);
+    expect(value.actions.map((action: { check: string }) => action.check).sort()).toEqual(["duplicates", "scripts"]);
+    expect(value.actions.every((action: { action: string }) => action.action === "would-upsert")).toBe(true);
+    expect(value.actions.every((action: { metadata: { no_tmux_dispatch?: boolean } }) => action.metadata.no_tmux_dispatch === true)).toBe(true);
+  });
+
   test("create command stores an OpenMachines assignment", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-machine-"));
     const create = runCli(dataDir, ["--json", "create", "command", "machine-local", "--at", futureAt(), "--cmd", "true", "--machine", "local"]);

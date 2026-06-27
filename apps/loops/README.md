@@ -309,6 +309,7 @@ loops health route-tasks --project ~/.hasna/loops --task-list loop-error-self-he
 loops hygiene names --json
 loops hygiene duplicates --json
 loops hygiene scripts --json
+loops hygiene route-tasks --checks duplicates,scripts --project ~/.hasna/loops --task-list openloops-hygiene
 ```
 
 `health` and `expectations` classify latest-run failures with stable
@@ -322,6 +323,8 @@ renames only with `--apply`. Apply mode writes a SQLite backup under
 `<LOOPS_DATA_DIR>/backups` before changing loop names. `hygiene duplicates`
 groups loops with the same normalized name, cwd, and schedule. `hygiene scripts`
 inventories loops whose command still references `~/.hasna/loops/scripts`.
+`hygiene route-tasks` upserts deduped Todos tasks for hygiene findings with
+stable fingerprints and `no_tmux_dispatch=true` metadata.
 
 Archive loops when retiring old automation but preserving history:
 

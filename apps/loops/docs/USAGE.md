@@ -322,6 +322,7 @@ loops hygiene names --json
 loops hygiene names --apply
 loops hygiene duplicates --json
 loops hygiene scripts --json
+loops hygiene route-tasks --checks names,duplicates,scripts --dry-run --json
 ```
 
 `hygiene names` reports canonical `machine-*` or `repo-<name>-*` loop names and
@@ -329,7 +330,10 @@ only renames when `--apply` is present. Apply mode writes a SQLite backup under
 `<LOOPS_DATA_DIR>/backups` before changing loop names. `hygiene duplicates`
 groups loops with the same normalized name, cwd, and schedule. `hygiene scripts`
 inventories loops whose command still references `~/.hasna/loops/scripts`; use
-it as a migration gate before deleting local scripts.
+it as a migration gate before deleting local scripts. `hygiene route-tasks`
+upserts deduped Todos tasks for hygiene findings with stable fingerprints and
+`no_tmux_dispatch=true` metadata; use `--dry-run --json` before enabling it as a
+production loop.
 
 Archive loops when retiring old automation but preserving history:
 

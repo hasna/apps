@@ -297,6 +297,10 @@ function backupLoopsDatabase(reason: string): string {
   return backupPath;
 }
 
+function stableHash(parts: unknown[]): string {
+  return createHash("sha256").update(parts.map((part) => JSON.stringify(part)).join("\n")).digest("hex").slice(0, 16);
+}
+
 function eventData(event: EventEnvelope): Record<string, unknown> {
   const data = event.data;
   if (data && typeof data === "object" && !Array.isArray(data)) return data;
@@ -1329,6 +1333,158 @@ health
 
 const hygiene = program.command("hygiene").description("deterministic OpenLoops hygiene checks and safe repairs");
 
+type HygieneCheckKind = "names" | "duplicates" | "scripts";
+
+interface HygieneRouteTask {
+  check: HygieneCheckKind;
+  title: string;
+  description: string;
+  priority: "critical" | "high" | "medium" | "low";
+  tags: string[];
+  fingerprint: string;
+  metadata: Record<string, unknown>;
+}
+
+const HYGIENE_CHECKS: HygieneCheckKind[] = ["names", "duplicates", "scripts"];
+
+function parseHygieneChecks(value: string | undefined): HygieneCheckKind[] {
+  if (!value || value === "all") return HYGIENE_CHECKS;
+  const checks = value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const invalid = checks.filter((entry) => !HYGIENE_CHECKS.includes(entry as HygieneCheckKind));
+  if (invalid.length > 0) throw new Error(`invalid hygiene check(s): ${invalid.join(", ")}`);
+  return [...new Set(checks)] as HygieneCheckKind[];
+}
+
+function buildHygieneRouteTasks(
+  store: Store,
+  opts: { checks: HygieneCheckKind[]; includeInactive?: boolean; limit?: number; scriptsDir?: string },
+): { checked: Record<HygieneCheckKind, number>; findings: number; tasks: HygieneRouteTask[] } {
+  const checked: Record<HygieneCheckKind, number> = { names: 0, duplicates: 0, scripts: 0 };
+  const tasks: HygieneRouteTask[] = [];
+  const limit = opts.limit ?? 1_000;
+
+  if (opts.checks.includes("names")) {
+    const report = buildNameHygieneReport(store, { includeInactive: opts.includeInactive, limit });
+    checked.names = report.checked;
+    for (const change of report.changes.filter((entry) => entry.changed)) {
+      const fingerprint = `openloops:hygiene:names:${change.id}:${stableHash([change.oldName, change.newName])}`;
+      tasks.push({
+        check: "names",
+        title: `OpenLoops hygiene: rename loop ${change.oldName}`,
+        description: [
+          `OpenLoops name hygiene found a non-canonical loop name.`,
+          `Loop: ${change.oldName} (${change.id})`,
+          `Expected name: ${change.newName}`,
+          `Scope: ${change.scope} / ${change.scopeSlug}`,
+          `Fingerprint: ${fingerprint}`,
+          "",
+          "Acceptance:",
+          "- Confirm the canonical name is correct for the loop scope.",
+          "- Rename through OpenLoops CLI/API so ids, schedules, run history, and metadata are preserved.",
+          "- Do not dispatch work by tmux.",
+        ].join("\n"),
+        priority: "low",
+        tags: ["openloops", "hygiene", "name-hygiene"],
+        fingerprint,
+        metadata: {
+          source: "openloops.hygiene.route-tasks",
+          check: "names",
+          loop_id: change.id,
+          old_name: change.oldName,
+          new_name: change.newName,
+          scope: change.scope,
+          scope_slug: change.scopeSlug,
+          no_tmux_dispatch: true,
+        },
+      });
+    }
+  }
+
+  if (opts.checks.includes("duplicates")) {
+    const report = buildDuplicateOverlapReport(store, { includeInactive: opts.includeInactive, limit });
+    checked.duplicates = report.checked;
+    for (const group of report.groups) {
+      const loopIds = group.loops.map((loop) => loop.id).sort();
+      const fingerprint = `openloops:hygiene:duplicates:${stableHash([group.key, loopIds])}`;
+      tasks.push({
+        check: "duplicates",
+        title: `OpenLoops hygiene: duplicate/overlapping loops - ${group.baseName}`,
+        description: [
+          `OpenLoops duplicate/overlap hygiene found multiple loops with the same normalized name, cwd, and schedule.`,
+          `Base name: ${group.baseName}`,
+          group.cwd ? `Cwd: ${group.cwd}` : undefined,
+          `Schedule: ${group.schedule}`,
+          `Fingerprint: ${fingerprint}`,
+          "",
+          "Loops:",
+          ...group.loops.map((loop) => `- ${loop.id} ${loop.status} ${loop.name}`),
+          "",
+          "Acceptance:",
+          "- Decide the authoritative active loop.",
+          "- Archive or retarget superseded loops through OpenLoops CLI/API while preserving history.",
+          "- Do not dispatch work by tmux.",
+        ].filter(Boolean).join("\n"),
+        priority: group.loops.some((loop) => loop.status === "active") ? "medium" : "low",
+        tags: ["openloops", "hygiene", "duplicate-overlap"],
+        fingerprint,
+        metadata: {
+          source: "openloops.hygiene.route-tasks",
+          check: "duplicates",
+          base_name: group.baseName,
+          cwd: group.cwd,
+          schedule: group.schedule,
+          loop_ids: loopIds,
+          no_tmux_dispatch: true,
+        },
+      });
+    }
+  }
+
+  if (opts.checks.includes("scripts")) {
+    const report = buildScriptInventoryReport(store, { includeInactive: opts.includeInactive, limit, scriptsDir: opts.scriptsDir });
+    checked.scripts = report.checked;
+    for (const loop of report.loops) {
+      const fingerprint = `openloops:hygiene:scripts:${loop.id}:${stableHash([loop.command])}`;
+      tasks.push({
+        check: "scripts",
+        title: `OpenLoops hygiene: replace script-backed loop ${loop.name}`,
+        description: [
+          `OpenLoops script inventory found a loop still backed by a local script command.`,
+          `Loop: ${loop.name} (${loop.id})`,
+          `Status: ${loop.status}`,
+          loop.cwd ? `Cwd: ${loop.cwd}` : undefined,
+          `Command: ${loop.command}`,
+          `Fingerprint: ${fingerprint}`,
+          "",
+          "Acceptance:",
+          "- Replace this loop with a package-level CLI/API/template abstraction when one exists.",
+          "- If no abstraction exists, create/update the owning repo task instead of adding another local script.",
+          "- Archive superseded loops through OpenLoops CLI/API and preserve history.",
+          "- Do not dispatch work by tmux.",
+        ].filter(Boolean).join("\n"),
+        priority: loop.status === "active" ? "medium" : "low",
+        tags: ["openloops", "hygiene", "script-backed-loop"],
+        fingerprint,
+        metadata: {
+          source: "openloops.hygiene.route-tasks",
+          check: "scripts",
+          loop_id: loop.id,
+          loop_name: loop.name,
+          loop_status: loop.status,
+          cwd: loop.cwd,
+          script_matches: loop.scriptMatches,
+          no_tmux_dispatch: true,
+        },
+      });
+    }
+  }
+
+  return { checked, findings: tasks.length, tasks };
+}
+
 hygiene
   .command("names")
   .description("check or apply canonical machine-/repo-prefixed loop names")
@@ -1409,6 +1565,87 @@ hygiene
         for (const loop of report.loops) console.log(`${loop.id}\t${loop.status}\t${loop.name}\t${loop.command}`);
       }
       if (!report.ok) process.exitCode = 1;
+    } finally {
+      store.close();
+    }
+  });
+
+hygiene
+  .command("route-tasks")
+  .description("upsert deduped todos tasks for hygiene findings")
+  .option("--checks <list>", "comma-separated hygiene checks: names,duplicates,scripts,all", "all")
+  .option("--project <path>", "todos project path", defaultLoopsProject())
+  .option("--task-list <slug>", "todos task-list slug", "openloops-hygiene")
+  .option("--limit <n>", "maximum loops to inspect", "1000")
+  .option("--max-actions <n>", "maximum todos tasks to upsert", "10")
+  .option("--scripts-dir <path>", "script directory to detect for script inventory")
+  .option("--include-inactive", "also route stopped, expired, or archived loops")
+  .option("--dry-run", "print intended task upserts without mutating todos")
+  .option("--json", "print JSON")
+  .action((opts) => {
+    const store = new Store();
+    try {
+      const checks = parseHygieneChecks(opts.checks);
+      const route = buildHygieneRouteTasks(store, {
+        checks,
+        includeInactive: Boolean(opts.includeInactive),
+        limit: Number(opts.limit),
+        scriptsDir: opts.scriptsDir,
+      });
+      const tasks = route.tasks.slice(0, Number(opts.maxActions));
+      const listId = opts.dryRun
+        ? undefined
+        : ensureTodosTaskList(
+            opts.project,
+            opts.taskList,
+            "OpenLoops Hygiene",
+            "Deduped OpenLoops hygiene findings routed by loops hygiene route-tasks.",
+          );
+      const actions = tasks.map((task) => {
+        if (opts.dryRun) {
+          return { action: "would-upsert", check: task.check, title: task.title, fingerprint: task.fingerprint, priority: task.priority, metadata: task.metadata };
+        }
+        const result = runLocalCommand("todos", [
+          "--project",
+          opts.project,
+          "--json",
+          "task",
+          "upsert",
+          "--fingerprint",
+          task.fingerprint,
+          "--title",
+          task.title,
+          "-d",
+          task.description,
+          "--priority",
+          task.priority,
+          "--status",
+          "pending",
+          "--list",
+          listId!,
+          "--tags",
+          task.tags.join(","),
+          "--metadata-json",
+          JSON.stringify(task.metadata),
+        ]);
+        if (!result.ok) {
+          return { action: "upsert-failed", check: task.check, fingerprint: task.fingerprint, error: result.stderr || result.error || result.stdout };
+        }
+        return { action: "upserted", check: task.check, fingerprint: task.fingerprint, task: JSON.parse(result.stdout || "{}") };
+      });
+      const routed = {
+        ok: actions.every((action) => action.action !== "upsert-failed"),
+        checks,
+        checked: route.checked,
+        findings: route.findings,
+        actions,
+      };
+      if (isJson() || opts.json) console.log(JSON.stringify(routed, null, 2));
+      else {
+        console.log(`hygiene_route_tasks checks=${checks.join(",")} findings=${routed.findings} actions=${actions.length}`);
+        for (const action of actions) console.log(`${action.action} ${action.fingerprint}`);
+      }
+      if (!routed.ok) process.exitCode = 1;
     } finally {
       store.close();
     }
