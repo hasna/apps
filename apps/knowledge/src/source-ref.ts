@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url';
+
 export type SourceRefKind = 'open-files' | 's3' | 'file' | 'web';
 
 export interface BaseSourceRef {
@@ -65,8 +67,7 @@ function parseS3Ref(uri: string): S3SourceRef {
 }
 
 function parseFileRef(uri: string): FileSourceRef {
-  const parsed = new URL(uri);
-  return { kind: 'file', uri, path: decodeURIComponent(parsed.pathname) };
+  return { kind: 'file', uri, path: fileURLToPath(uri) };
 }
 
 function parseWebRef(uri: string): WebSourceRef {
