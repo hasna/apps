@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
-import { mkdirSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import type { Session, ActionLog, DriverAction, SessionStatus } from "../types/index.js";
 
@@ -23,8 +23,25 @@ export function getDataDir(service = SERVICE_NAME): string {
   }
   const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
   const dir = join(home, ".hasna", service);
+  migrateLegacyDataDir(home, service, dir);
   mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+function migrateLegacyDataDir(home: string, service: string, targetDir: string): void {
+  if (service !== SERVICE_NAME || existsSync(targetDir)) return;
+
+  for (const legacyDir of [join(home, ".open-computer"), join(home, ".computer")]) {
+    if (!existsSync(legacyDir)) continue;
+    try {
+      if (!statSync(legacyDir).isDirectory()) continue;
+      mkdirSync(join(home, ".hasna"), { recursive: true });
+      cpSync(legacyDir, targetDir, { recursive: true, force: false });
+      return;
+    } catch {
+      // Ignore legacy directories that cannot be copied.
+    }
+  }
 }
 
 export function getDbPath(service = SERVICE_NAME): string {
