@@ -290,6 +290,89 @@ function taskEventField(data: Record<string, unknown>, keys: string[]): string |
   return undefined;
 }
 
+function objectField(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function nestedObject(input: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
+  return objectField(input[key]);
+}
+
+function taskEventRecords(data: Record<string, unknown>, metadata: Record<string, unknown>): Record<string, unknown>[] {
+  const records: Record<string, unknown>[] = [data];
+  const dataTask = nestedObject(data, "task");
+  if (dataTask) records.push(dataTask);
+  const dataPayload = nestedObject(data, "payload");
+  if (dataPayload) {
+    records.push(dataPayload);
+    const payloadTask = nestedObject(dataPayload, "task");
+    if (payloadTask) records.push(payloadTask);
+  }
+  const dataMetadata = nestedObject(data, "metadata");
+  if (dataMetadata) records.push(dataMetadata);
+  records.push(metadata);
+  const metadataTask = nestedObject(metadata, "task");
+  if (metadataTask) records.push(metadataTask);
+  const metadataAutomation = nestedObject(metadata, "automation");
+  if (metadataAutomation) records.push(metadataAutomation);
+  return records;
+}
+
+function booleanLike(value: unknown): boolean {
+  return value === true || value === "true" || value === "1" || value === 1;
+}
+
+function hasTruthyField(records: Record<string, unknown>[], keys: string[]): boolean {
+  return records.some((record) => keys.some((key) => booleanLike(record[key])));
+}
+
+function tagsFromValue(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((entry) => String(entry).trim()).filter(Boolean);
+  if (typeof value === "string") return value.split(",").map((entry) => entry.trim()).filter(Boolean);
+  return [];
+}
+
+function taskEventTags(records: Record<string, unknown>[]): string[] {
+  const tags = new Set<string>();
+  for (const record of records) {
+    for (const tag of tagsFromValue(record.tags ?? record.task_tags ?? record.taskTags)) tags.add(tag);
+  }
+  return [...tags];
+}
+
+function taskRouteEligibility(data: Record<string, unknown>, metadata: Record<string, unknown>): { eligible: boolean; reason?: string; tags: string[] } {
+  const records = taskEventRecords(data, metadata);
+  const tags = taskEventTags(records);
+  const hasRouteOptIn =
+    tags.includes("auto:route") ||
+    hasTruthyField(records, ["route_enabled", "routeEnabled", "automation_allowed", "automationAllowed", "allowed"]);
+  if (!hasRouteOptIn) return { eligible: false, reason: "missing explicit route opt-in", tags };
+
+  const status = taskEventField(data, ["status", "task_status", "taskStatus"])?.toLowerCase();
+  if (status && ["blocked", "completed", "done", "cancelled", "canceled", "failed", "archived"].includes(status)) {
+    return { eligible: false, reason: `task status is not routable: ${status}`, tags };
+  }
+
+  const disallowedTags = tags.filter((tag) => ["no-auto", "manual", "manual-required", "approval-required"].includes(tag));
+  if (disallowedTags.length) return { eligible: false, reason: `task has disallowed tag: ${disallowedTags[0]}`, tags };
+
+  if (hasTruthyField(records, [
+    "no_auto",
+    "noAuto",
+    "manual",
+    "manual_required",
+    "manualRequired",
+    "requires_approval",
+    "requiresApproval",
+    "approval_required",
+    "approvalRequired",
+  ])) {
+    return { eligible: false, reason: "task metadata requires manual or approval-gated handling", tags };
+  }
+
+  return { eligible: true, tags };
+}
+
 async function readEventEnvelopeFromStdin(): Promise<EventEnvelope> {
   const raw = process.env.HASNA_EVENT_JSON || (await Bun.stdin.text());
   const event = JSON.parse(raw);
@@ -537,6 +620,14 @@ eventsHandle
     const metadata = eventMetadata(event);
     const taskId = taskEventField(data, ["id", "task_id", "taskId"]);
     if (!taskId) throw new Error("todos task event is missing task id in data.id, data.task_id, data.task.id, or data.payload.id");
+    const eligibility = taskRouteEligibility(data, metadata);
+    if (!eligibility.eligible) {
+      print(
+        { skipped: true, reason: eligibility.reason, event, taskId, eligibility },
+        `skipped task ${taskId}: ${eligibility.reason}`,
+      );
+      return;
+    }
     const taskTitle = taskEventField(data, ["title", "task_title", "taskTitle"]);
     const taskDescription = taskEventField(data, ["description", "body"]);
     const dataProjectPath = taskEventField(data, ["working_dir", "workingDir", "project_path", "projectPath", "cwd"]);

@@ -505,6 +505,7 @@ describe("loops CLI", () => {
         id: "task-created-0001",
         title: "Fix event bridge",
         working_dir: "/tmp/open-todos",
+        tags: ["auto:route"],
       },
       timestamp: new Date().toISOString(),
     };
@@ -569,6 +570,7 @@ describe("loops CLI", () => {
         id: "task-created-legacy",
         title: "Legacy route replay",
         working_dir: "/tmp/open-todos",
+        tags: ["auto:route"],
       },
       timestamp: new Date().toISOString(),
     };
@@ -657,6 +659,7 @@ describe("loops CLI", () => {
         id: "task-created-data-cwd",
         title: "Route from data cwd",
         working_dir: "/tmp/from-data",
+        tags: ["auto:route"],
       },
       metadata: {
         project_path: "/tmp/from-metadata",
@@ -669,6 +672,71 @@ describe("loops CLI", () => {
     const value = JSON.parse(result.stdout);
     expect(value.workflow.steps[0].target.cwd).toBe("/tmp/from-data");
     expect(value.workflow.steps[1].target.cwd).toBe("/tmp/from-data");
+  });
+
+  test("todos task event handler skips tasks without explicit route opt-in", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-no-route-"));
+    const event = {
+      id: "evt-task-created-no-route",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-created-no-route",
+        title: "Do not route implicitly",
+        working_dir: "/tmp/open-todos",
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const result = runCli(dataDir, ["--json", "events", "handle", "todos-task"], JSON.stringify(event));
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.skipped).toBe(true);
+    expect(value.reason).toContain("missing explicit route opt-in");
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      expect(store.listLoops({ includeArchived: true })).toHaveLength(0);
+    } finally {
+      store.close();
+    }
+  });
+
+  test.each([
+    ["approval-required", { data: { requires_approval: true, tags: ["auto:route"] } }],
+    ["manual-required", { metadata: { automation: { allowed: true, manual_required: true } } }],
+    ["no-auto", { data: { tags: ["auto:route", "no-auto"] } }],
+    ["completed", { data: { status: "completed", tags: ["auto:route"] } }],
+    ["blocked", { data: { status: "blocked", tags: ["auto:route"] } }],
+  ])("todos task event handler skips %s tasks", (_, overrides) => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-ineligible-"));
+    const event = {
+      id: "evt-task-created-ineligible",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-created-ineligible",
+        title: "Do not route ineligible task",
+        working_dir: "/tmp/open-todos",
+        ...(overrides as { data?: Record<string, unknown> }).data,
+      },
+      metadata: {
+        ...(overrides as { metadata?: Record<string, unknown> }).metadata,
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const result = runCli(dataDir, ["--json", "events", "handle", "todos-task"], JSON.stringify(event));
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.skipped).toBe(true);
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      expect(store.listLoops({ includeArchived: true })).toHaveLength(0);
+    } finally {
+      store.close();
+    }
   });
 
   test("generic event handler creates a deduped one-shot workflow loop", () => {

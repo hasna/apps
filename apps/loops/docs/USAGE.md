@@ -218,6 +218,14 @@ cat task-created-event.json | loops events handle todos-task \
   --sandbox danger-full-access
 ```
 
+Task routing is explicit opt-in. The handler skips the event without creating a
+workflow unless the event data or metadata has `route_enabled=true`,
+`automation.allowed=true`, or a task tag containing `auto:route`. It also skips
+blocked, completed/done, cancelled/canceled, failed, archived, manual,
+approval-required, or `no-auto` tasks. This guard exists even when the upstream
+`@hasna/events` webhook filter is misconfigured, so task existence alone is not
+permission to execute agent work.
+
 For other Hasna apps that expose `@hasna/events` webhooks, use the generic
 handler:
 
