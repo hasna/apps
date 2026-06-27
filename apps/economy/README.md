@@ -258,6 +258,27 @@ economy storage pull
 economy storage sync
 ```
 
+Fleet peer sync for agents is local-first and starts with a dry run. Point it at
+a mounted or already-copied peer SQLite database; Economy creates a verified
+snapshot with `VACUUM INTO`, integrity-checks the snapshot, and only merges when
+`--apply` is set.
+
+```bash
+economy fleet sync --source /Volumes/spark02/economy.db
+economy fleet sync --source /Volumes/spark02/economy.db --apply
+economy fleet freshness
+economy fleet insights --period today
+```
+
+`fleet sync`, `fleet freshness`, and `fleet insights` print compact bounded JSON
+by default for agents and loops. Default JSON uses path references instead of
+absolute local paths; add `--verbose` to `fleet sync` when an operator needs the
+full snapshot artifact path. Add `--human` for terminal summaries, `--limit` to
+adjust row caps, and `--snapshot-dir` to choose where verified snapshot
+artifacts are stored. The REST API also exposes `GET /api/fleet/freshness` and
+`GET /api/fleet/insights`; MCP exposes `get_fleet_freshness` and
+`get_fleet_insights`.
+
 ## Data Directory
 
 Data is stored in `~/.hasna/economy/`.

@@ -26,6 +26,15 @@ import {
   registerStorageSchedule,
   removeStorageSchedule,
 } from '../../lib/native-storage.js'
+import {
+  buildFleetCostInsights,
+  buildFleetFreshness,
+  MAX_FLEET_FRESHNESS_ROWS,
+  MAX_FLEET_INSIGHT_ROWS,
+  MAX_FLEET_PREVIEW_TABLES,
+  publicFleetPeerSyncResult,
+  syncFleetPeerSqlite,
+} from '../../lib/fleet-sync.js'
 import { existsSync } from 'fs'
 import { join } from 'path'
 import { printCompletion } from './completion.js'
@@ -42,6 +51,35 @@ function parsePeriod(value: string | undefined, fallback: Period = 'month'): Per
     process.exit(1)
   }
   return p
+}
+
+function parsePositiveInt(value: string | undefined, fallback: number, option: string): number {
+  const raw = value ?? String(fallback)
+  const parsed = Number(raw)
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    console.error(chalk.red(`${option} must be a positive integer`))
+    process.exit(1)
+  }
+  return parsed
+}
+
+function parseBoundedPositiveInt(value: string | undefined, fallback: number, option: string, max: number): number {
+  return Math.min(parsePositiveInt(value, fallback, option), max)
+}
+
+function printCompactJson(value: unknown): void {
+  console.log(JSON.stringify(value))
+}
+
+function inheritedOption(
+  value: string | undefined,
+  valueDefault: string,
+  parentValue: string | undefined,
+  parentDefault: string,
+): string | undefined {
+  if (value != null && value !== valueDefault) return value
+  if (parentValue != null && parentValue !== parentDefault) return parentValue
+  return value ?? parentValue
 }
 
 export function registerExtendedCommands(program: Command): void {
@@ -325,20 +363,34 @@ export function registerExtendedCommands(program: Command): void {
 }
 
 export function registerFleetCommands(program: Command): void {
-  program
+  const fleetCmd = program
     .command('fleet')
     .description('Fleet-wide summaries across all machines')
     .option('--period <p>', 'Period', 'today')
+    .option('--limit <n>', 'Maximum machines to print', '20')
     .option('--json', 'Output JSON')
-    .action((opts: { period?: string; json?: boolean }) => {
+    .action((opts: { period?: string; limit?: string; json?: boolean }) => {
       const db = openDatabase()
       const period = parsePeriod(opts.period, 'today')
+      const limit = parseBoundedPositiveInt(opts.limit, 20, '--limit', MAX_FLEET_FRESHNESS_ROWS)
       const summary = querySummary(db, period, undefined, true)
-      const machines = listMachines(db, period)
-      const registry = listMachineRegistry(db)
+      const allMachines = listMachines(db, period)
+      const machines = allMachines.slice(0, limit)
+      const allRegistry = listMachineRegistry(db)
+      const registry = allRegistry.slice(0, limit)
 
       if (opts.json) {
-        console.log(JSON.stringify({ period, summary, machines, registry }, null, 2))
+        printCompactJson({
+          schema_version: 1,
+          period,
+          summary,
+          machines,
+          registry,
+          total_machines: allMachines.length,
+          returned_machines: machines.length,
+          truncated: allMachines.length > limit || allRegistry.length > limit,
+          hints: ['use economy fleet freshness or economy fleet insights for agent-ready diagnostics'],
+        })
         return
       }
 
@@ -349,6 +401,104 @@ export function registerFleetCommands(program: Command): void {
       for (const m of machines) {
         console.log(`  ${chalk.white(m.machine_id.padEnd(12))} ${fmt(m.total_cost_usd).padEnd(10)} ${m.sessions} sessions`)
       }
+      if (allMachines.length > machines.length) console.log(chalk.dim(`\n  ... ${allMachines.length - machines.length} more machines; use --limit ${allMachines.length}`))
+      console.log()
+    })
+
+  fleetCmd
+    .command('sync')
+    .description('Snapshot and optionally merge a peer Economy SQLite database')
+    .requiredOption('--source <path>', 'Peer economy SQLite database path (mounted or copied locally)')
+    .option('--source-machine <id>', 'Machine id to use when the source database has no machine_id rows')
+    .option('--snapshot-dir <path>', 'Directory for verified SQLite snapshot artifacts')
+    .option('--apply', 'Merge the verified snapshot into the local database')
+    .option('--limit <n>', 'Maximum preview tables to include', '10')
+    .option('--json', 'Output compact JSON (default)')
+    .option('--human', 'Output a concise human summary')
+    .option('--verbose', 'Include absolute local artifact paths in JSON')
+    .action((opts: { source: string; sourceMachine?: string; snapshotDir?: string; apply?: boolean; limit?: string; json?: boolean; human?: boolean; verbose?: boolean }, command: Command) => {
+      const parentOpts = command.parent?.opts<{ limit?: string }>() ?? {}
+      const db = openDatabase()
+      const result = syncFleetPeerSqlite(db, opts.source, {
+        apply: Boolean(opts.apply),
+        sourceMachine: opts.sourceMachine,
+        snapshotDir: opts.snapshotDir,
+        limit: parseBoundedPositiveInt(inheritedOption(opts.limit, '10', parentOpts.limit, '20'), 10, '--limit', MAX_FLEET_PREVIEW_TABLES),
+      })
+      if (!opts.human) {
+        printCompactJson(opts.verbose ? result : publicFleetPeerSyncResult(result))
+        return
+      }
+
+      console.log()
+      console.log(chalk.bold.cyan(`  Fleet Sync ${result.dry_run ? 'Dry Run' : 'Applied'} — ${result.source.machine_id}`))
+      console.log(`  Snapshot: ${chalk.white(result.snapshot.path_ref)} (${result.snapshot.bytes} bytes, integrity ${result.snapshot.integrity.result})`)
+      console.log(`  Preview: ${result.preview.total_rows.toLocaleString()} rows across ${result.preview.tables.length} shown tables`)
+      if (result.merge) console.log(`  Merge: ${result.merge.rows_written.toLocaleString()} rows written · ${result.merge.collisions.toLocaleString()} collisions · ${result.merge.deduped.toLocaleString()} deduped`)
+      for (const hint of result.hints) console.log(chalk.dim(`  hint: ${hint}`))
+      console.log()
+    })
+
+  fleetCmd
+    .command('freshness')
+    .description('Report fleet sync freshness with bounded JSON')
+    .option('--stale-after <minutes>', 'Mark machines stale after this many minutes', '60')
+    .option('--limit <n>', 'Maximum machines to include', '20')
+    .option('--json', 'Output compact JSON (default)')
+    .option('--human', 'Output a concise human summary')
+    .action((opts: { staleAfter?: string; limit?: string; json?: boolean; human?: boolean }, command: Command) => {
+      const parentOpts = command.parent?.opts<{ limit?: string }>() ?? {}
+      const db = openDatabase()
+      const result = buildFleetFreshness(db, {
+        staleAfterMinutes: parsePositiveInt(opts.staleAfter, 60, '--stale-after'),
+        limit: parseBoundedPositiveInt(inheritedOption(opts.limit, '20', parentOpts.limit, '20'), 20, '--limit', MAX_FLEET_FRESHNESS_ROWS),
+      })
+      if (!opts.human) {
+        printCompactJson(result)
+        return
+      }
+
+      console.log()
+      console.log(chalk.bold.cyan('  Fleet Freshness'))
+      console.log(`  Machines: ${result.total_machines} · stale ${result.stale_machines} · unknown ${result.unknown_machines}`)
+      for (const row of result.rows) {
+        const age = row.age_minutes == null ? 'unknown' : `${row.age_minutes}m`
+        const marker = row.status === 'fresh' ? chalk.green('fresh') : row.status === 'stale' ? chalk.yellow('stale') : chalk.gray('unknown')
+        console.log(`  ${chalk.white(row.machine_id.padEnd(12))} ${marker.padEnd(14)} age ${age.padEnd(8)} cost ${fmt(row.cost_usd)}`)
+      }
+      for (const hint of result.hints) console.log(chalk.dim(`  hint: ${hint}`))
+      console.log()
+    })
+
+  fleetCmd
+    .command('insights')
+    .description('Compact fleet cost, freshness, and data quality insights')
+    .option('--period <p>', 'Period', 'today')
+    .option('--stale-after <minutes>', 'Mark machines stale after this many minutes', '60')
+    .option('--limit <n>', 'Maximum rows per insight section', '5')
+    .option('--json', 'Output compact JSON (default)')
+    .option('--human', 'Output a concise human summary')
+    .action((opts: { period?: string; staleAfter?: string; limit?: string; json?: boolean; human?: boolean }, command: Command) => {
+      const parentOpts = command.parent?.opts<{ period?: string; limit?: string }>() ?? {}
+      const db = openDatabase()
+      const result = buildFleetCostInsights(db, {
+        period: parsePeriod(inheritedOption(opts.period, 'today', parentOpts.period, 'today'), 'today'),
+        staleAfterMinutes: parsePositiveInt(opts.staleAfter, 60, '--stale-after'),
+        limit: parseBoundedPositiveInt(inheritedOption(opts.limit, '5', parentOpts.limit, '20'), 5, '--limit', MAX_FLEET_INSIGHT_ROWS),
+      })
+      if (!opts.human) {
+        printCompactJson(result)
+        return
+      }
+
+      console.log()
+      console.log(chalk.bold.cyan(`  Fleet Insights — ${result.period}`))
+      console.log(`  Total: ${fmt(result.summary.total_usd)} · ${result.summary.sessions} sessions · ${result.summary.requests} requests`)
+      console.log(`  Freshness: ${result.freshness.stale_machines}/${result.freshness.total_machines} stale · zero-cost token rows ${result.quality.zero_cost_token_requests}`)
+      for (const row of result.top_machines) {
+        console.log(`  ${chalk.white(row.machine_id.padEnd(12))} ${fmt(row.cost_usd).padEnd(10)} ${row.sessions} sessions · ${row.requests} requests`)
+      }
+      for (const hint of result.hints) console.log(chalk.dim(`  hint: ${hint}`))
       console.log()
     })
 

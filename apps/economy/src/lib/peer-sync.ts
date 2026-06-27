@@ -222,9 +222,20 @@ function mergeGenericTable(target: Database, source: QueryableDatabase, table: s
   const columns = commonColumns(source, target, table)
   const keyColumns = primaryKeyColumns(target, table).filter(c => columns.includes(c))
   const rows = selectRows(source, table, columns)
+  const machineScopedId = table !== 'machines' && columns.includes('id') && columns.includes('machine_id') && keyColumns.length === 1 && keyColumns[0] === 'id'
 
   for (const raw of rows) {
     const row = normalizeRow(raw, columns, sourceMachine, now)
+    if (machineScopedId) {
+      const id = String(row['id'] ?? '')
+      const machine = String(row['machine_id'] ?? '')
+      const directExisting = id ? hasId(target, table, id) : null
+      if (directExisting && String(directExisting['machine_id'] ?? '') !== machine) {
+        row['id'] = collisionId(target, table, machine, id)
+        stats.collisions++
+      }
+    }
+
     const existing = rowByKey(target, table, keyColumns, row)
     if (existing && !shouldReplace(row, existing)) {
       stats.skipped++

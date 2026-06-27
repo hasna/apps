@@ -36,6 +36,9 @@ _economy_completions() {
     storage)
       COMPREPLY=( $(compgen -W "push pull sync schedule" -- "\${cur}") )
       ;;
+    fleet)
+      COMPREPLY=( $(compgen -W "sync freshness insights" -- "\${cur}") )
+      ;;
     *)
       COMPREPLY=()
       ;;
@@ -71,6 +74,9 @@ case $state in
       storage)
         _arguments '1: :(push pull sync schedule)'
         ;;
+      fleet)
+        _arguments '1: :(sync freshness insights)'
+        ;;
     esac
     ;;
 esac
@@ -84,6 +90,7 @@ function fishCompletion(): string {
     ...AGENTS.map((a) => `complete -c economy -n '__fish_seen_subcommand_from sync watch usage savings sessions top' -l agent -a '${a}'`),
     "complete -c economy -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'",
     "complete -c economy -n '__fish_seen_subcommand_from storage' -a 'push pull sync schedule'",
+    "complete -c economy -n '__fish_seen_subcommand_from fleet' -a 'sync freshness insights'",
   ]
   return lines.join('\n') + '\n'
 }
