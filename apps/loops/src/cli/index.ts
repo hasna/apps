@@ -805,6 +805,7 @@ interface TodosDrainOptions extends TodosTaskRouteOptions {
   scanLimit?: string;
   maxDispatch?: string;
   evidenceDir?: string;
+  compact?: boolean;
 }
 
 interface TodosTaskRoutePrint {
@@ -1210,6 +1211,26 @@ function taskDrainEvent(task: TodosReadyTask): EventEnvelope {
   };
 }
 
+function compactDrainResult(result: TodosTaskRoutePrint): Record<string, unknown> {
+  const value = result.value;
+  const event = objectField(value.event) as Partial<EventEnvelope> | undefined;
+  const loop = objectField(value.loop) as Partial<Loop> | undefined;
+  const workflow = objectField(value.workflow) as Partial<WorkflowSpec> | undefined;
+  const throttle = objectField(value.throttle) as { reason?: string; allowed?: boolean } | undefined;
+  return {
+    kind: result.kind,
+    taskId: event?.subject,
+    eventId: event?.id,
+    idempotencyKey: stringField(value.idempotencyKey),
+    reason: stringField(value.reason) ?? throttle?.reason,
+    loopId: stringField(loop?.id),
+    loopName: stringField(loop?.name),
+    workflowId: stringField(workflow?.id),
+    workflowName: stringField(workflow?.name),
+    queuedAtSource: value.queuedAtSource,
+  };
+}
+
 function loadReadyTodosTasks(opts: TodosDrainOptions, scanLimit: number): TodosReadyTask[] {
   const todosProject = opts.todosProject ?? defaultLoopsProject();
   const args = ["--project", todosProject, "--json", "ready", "--limit", String(scanLimit)];
@@ -1536,6 +1557,7 @@ eventsDrain
   .option("--scan-limit <n>", "maximum raw todos ready rows to fetch before filters; defaults to 500 when filters are used")
   .option("--max-dispatch <n>", "maximum new workflow loops to create in this drain run", "1")
   .option("--evidence-dir <path>", "write a JSON drain report to this directory")
+  .option("--compact", "print compact JSON to stdout while preserving the full evidence file")
   .option("--provider <provider>", "agent provider", "codewith")
   .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
   .option("--auth-profile-pool <profiles>", "comma-separated provider-native auth profile pool")
@@ -1615,8 +1637,36 @@ eventsDrain
       results: results.map((result) => ({ kind: result.kind, ...result.value })),
     };
     const evidencePath = writeRouteEvidence("todos-task-drain", report, opts.evidenceDir);
+    const output = opts.compact
+      ? {
+          drainedAt: report.drainedAt,
+          todosProject: report.todosProject,
+          todosProjectId: report.todosProjectId,
+          taskList: report.taskList,
+          taskListId: report.taskListId,
+          projectPathPrefix: report.projectPathPrefix,
+          tags: report.tags,
+          limit: report.limit,
+          scanLimit: report.scanLimit,
+          filtersApplied: report.filtersApplied,
+          scanned: report.scanned,
+          candidates: report.candidates,
+          filteredCandidates: report.filteredCandidates,
+          scanExhausted: report.scanExhausted,
+          considered: report.considered,
+          created: report.created,
+          deduped: report.deduped,
+          throttled: report.throttled,
+          skipped: report.skipped,
+          maxDispatch: report.maxDispatch,
+          source: report.source,
+          dryRun: report.dryRun,
+          evidencePath,
+          results: results.map(compactDrainResult),
+        }
+      : { ...report, evidencePath };
     print(
-      { ...report, evidencePath },
+      output,
       `drained todos ready queue: considered=${report.considered} created=${report.created} deduped=${report.deduped} throttled=${report.throttled} skipped=${report.skipped}`,
     );
   });

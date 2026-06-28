@@ -2039,6 +2039,79 @@ describe("loops CLI", () => {
     expect(loops[0].name).toContain("task-dra");
   });
 
+  test("todos task drain compact output omits bulky task and workflow details", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-compact-"));
+    const binDir = join(dataDir, "bin");
+    const evidenceDir = join(dataDir, "evidence");
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"$*\" == *\"ready\"* ]]; then printf '%s' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "if [[ \"$*\" == *\"task-lists\"* ]]; then printf '%s' \"$TODOS_TASK_LISTS_JSON\"; exit 0; fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const bulkyDetail = "very long private task details ".repeat(200);
+    const ready = [
+      {
+        id: "task-drain-compact",
+        project_id: "project-route",
+        title: "Compact route task",
+        description: bulkyDetail,
+        status: "pending",
+        task_list_id: "list-route",
+        working_dir: dataDir,
+        tags: ["auto:route"],
+      },
+    ];
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        join(dataDir, "todos-store"),
+        "--task-list",
+        "route",
+        "--compact",
+        "--evidence-dir",
+        evidenceDir,
+        "--max-dispatch",
+        "1",
+        "--worktree-mode",
+        "off",
+      ],
+      undefined,
+      {
+        PATH: `${binDir}:/usr/bin:/bin`,
+        TODOS_TASK_LISTS_JSON: JSON.stringify([{ id: "list-route", slug: "route", name: "Route" }]),
+        TODOS_READY_JSON: JSON.stringify(ready),
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain("very long private task details");
+    const value = JSON.parse(result.stdout);
+    expect(value.created).toBe(1);
+    expect(value.results[0]).toMatchObject({
+      kind: "created",
+      taskId: "task-drain-compact",
+    });
+    expect(value.results[0].event).toBeUndefined();
+    expect(value.results[0].workflow).toBeUndefined();
+    expect(existsSync(value.evidencePath)).toBe(true);
+    const evidence = readFileSync(value.evidencePath, "utf8");
+    expect(evidence).toContain("very long private task details");
+  });
+
   test("todos task drain parses large ready payloads without truncating JSON", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-large-ready-"));
     const binDir = join(dataDir, "bin");
