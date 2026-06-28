@@ -236,7 +236,8 @@ loops templates render bounded-agent-worker-verifier \
   --var projectPath=/path/to/repo \
   --var provider=codewith \
   --var authProfilePool=account004,account005 \
-  --var sandbox=danger-full-access
+  --var sandbox=danger-full-access \
+  --var worktreeMode=required
 ```
 
 For event-driven task automation, `loops events handle todos-task` reads a
@@ -248,7 +249,8 @@ cat task-created-event.json | loops events handle todos-task \
   --provider codewith \
   --auth-profile-pool account004,account005,account006 \
   --permission-mode bypass \
-  --sandbox danger-full-access
+  --sandbox danger-full-access \
+  --worktree-mode required
 ```
 
 For other Hasna apps that expose `@hasna/events` webhooks, use the generic
@@ -260,7 +262,8 @@ cat event.json | loops events handle generic \
   --auth-profile-pool account004,account005,account006 \
   --permission-mode bypass \
   --sandbox danger-full-access \
-  --project-path /path/to/repo
+  --project-path /path/to/repo \
+  --worktree-mode required
 ```
 
 This is the intended deterministic-to-agentic path: a producer creates a todos
