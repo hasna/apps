@@ -6,6 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.26] - 2026-06-29
+
+### Added
+
+- Added explicit hosted worker preflight and fail-closed run entrypoints for
+  scheduler, public-probe, reporter, and migration roles.
+- Added a bounded `uptime cloud public-checks worker` loop around the existing
+  hosted public-check smoke primitive for EFS SQLite bridge testing.
+
+### Changed
+
+- Updated AWS non-web task definitions to use explicit fail-closed worker
+  commands and environment-aware preflight health checks instead of the
+  placeholder `cloud plan` command.
+- Hardened Terraform scale-up validation so `web > 0` in CloudFront mode
+  requires origin verification and either HTTPS-origin mode or explicit
+  `allow_cloudfront_http_origin_live_traffic` risk acceptance.
+
 ## [0.1.25] - 2026-06-29
 
 ### Added

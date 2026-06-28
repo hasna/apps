@@ -32,6 +32,8 @@ uptime report-schedules run-due
 uptime report-schedules runs
 uptime audit
 uptime cloud plan --json
+uptime cloud workers preflight --role public-probe --json
+uptime cloud public-checks worker --workspace-id ws_internal --max-iterations 1 --hosted-sqlite-db /data/uptime/uptime.db
 uptime cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --json
 uptime cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --env --allow-blocked-env
 uptime incidents
@@ -63,6 +65,12 @@ acceptance. Hosted AWS runtime state currently uses explicit EFS-backed SQLite v
 `HASNA_UPTIME_HOSTED_SQLITE_DB=/data/uptime/uptime.db` for one protected web
 task maximum; do not set `HASNA_UPTIME_DATABASE_URL` until the async Postgres
 adapter is implemented.
+`uptime cloud workers preflight --role <role>` reports why hosted scheduler,
+public-probe, reporter, and migration roles remain blocked. Their `run`
+entrypoints fail closed until Postgres, check jobs, channel refs, and migration
+plans exist. `uptime cloud public-checks worker` is only a bounded EFS SQLite
+bridge loop around hosted HTTP/TCP smoke checks; it is not the final cloud
+`check_jobs`/lease/fencing protocol.
 `Dockerfile.package` is used by the Terraform CodeBuild image builder to build
 the published npm package into ECR from inside AWS.
 
@@ -224,7 +232,7 @@ check jobs, workspace stores, and audit logging are implemented. Local job reads
 redact fencing tokens; the claim response is the only API response that returns
 the active fencing token.
 
-Hosted `/api/v1/report-schedules*`, `/api/v1/report-runs`, and
+Hosted `POST /api/v1/report`, `/api/v1/report-schedules*`, `/api/v1/report-runs`, and
 `/api/v1/audit-events` also fail closed until cloud channel refs, workspace
 stores, and cloud audit logging are implemented.
 

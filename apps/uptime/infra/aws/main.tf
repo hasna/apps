@@ -40,22 +40,22 @@ locals {
     }
     scheduler = {
       desired_count = lookup(var.desired_counts, "scheduler", 0)
-      command       = ["bun", "dist/cli/index.js", "cloud", "plan"]
+      command       = ["bun", "dist/cli/index.js", "cloud", "workers", "run", "--role", "scheduler"]
       secrets       = { APP_ENV = var.app_env_secret_arn }
     }
     "public-probe" = {
       desired_count = lookup(var.desired_counts, "public-probe", 0)
-      command       = ["bun", "dist/cli/index.js", "cloud", "plan"]
+      command       = ["bun", "dist/cli/index.js", "cloud", "workers", "run", "--role", "public-probe"]
       secrets       = { PROBE_CONFIG = var.public_probe_secret_arn }
     }
     reporter = {
       desired_count = lookup(var.desired_counts, "reporter", 0)
-      command       = ["bun", "dist/cli/index.js", "cloud", "plan"]
+      command       = ["bun", "dist/cli/index.js", "cloud", "workers", "run", "--role", "reporter"]
       secrets       = { REPORTING_CONFIG = var.reporting_secret_arn }
     }
     migration = {
       desired_count = lookup(var.desired_counts, "migration", 0)
-      command       = ["bun", "dist/cli/index.js", "cloud", "plan"]
+      command       = ["bun", "dist/cli/index.js", "cloud", "workers", "run", "--role", "migration"]
       secrets       = { APP_ENV = var.app_env_secret_arn }
     }
   }
@@ -94,28 +94,28 @@ locals {
       startPeriod = 30
     }
     scheduler = {
-      command     = ["CMD-SHELL", "bun -e \"process.exit(process.env.HASNA_UPTIME_MODE === 'hosted' && process.env.HASNA_UPTIME_COMPONENT === 'scheduler' ? 0 : 1)\""]
+      command     = ["CMD-SHELL", "bun dist/cli/index.js cloud workers preflight --role scheduler --healthcheck --json >/tmp/open-uptime-worker-preflight.json"]
       interval    = 30
       timeout     = 5
       retries     = 3
       startPeriod = 30
     }
     "public-probe" = {
-      command     = ["CMD-SHELL", "bun -e \"process.exit(process.env.HASNA_UPTIME_MODE === 'hosted' && process.env.HASNA_UPTIME_COMPONENT === 'public-probe' ? 0 : 1)\""]
+      command     = ["CMD-SHELL", "bun dist/cli/index.js cloud workers preflight --role public-probe --healthcheck --json >/tmp/open-uptime-worker-preflight.json"]
       interval    = 30
       timeout     = 5
       retries     = 3
       startPeriod = 30
     }
     reporter = {
-      command     = ["CMD-SHELL", "bun -e \"process.exit(process.env.HASNA_UPTIME_MODE === 'hosted' && process.env.HASNA_UPTIME_COMPONENT === 'reporter' ? 0 : 1)\""]
+      command     = ["CMD-SHELL", "bun dist/cli/index.js cloud workers preflight --role reporter --healthcheck --json >/tmp/open-uptime-worker-preflight.json"]
       interval    = 30
       timeout     = 5
       retries     = 3
       startPeriod = 30
     }
     migration = {
-      command     = ["CMD-SHELL", "bun -e \"process.exit(process.env.HASNA_UPTIME_MODE === 'hosted' && process.env.HASNA_UPTIME_COMPONENT === 'migration' ? 0 : 1)\""]
+      command     = ["CMD-SHELL", "bun dist/cli/index.js cloud workers preflight --role migration --healthcheck --json >/tmp/open-uptime-worker-preflight.json"]
       interval    = 30
       timeout     = 5
       retries     = 3

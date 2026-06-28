@@ -453,8 +453,11 @@ required before browser evidence or public probe scale-out.
   It is not live: services remain at desired count `0`, secrets have
   `AWSCURRENT` values, scoped hosted-token descriptors can be used for operator
   smokes, and the HTTPS-origin/custom-hostname path still needs an approved ACM
-  cert, DNS record, plan/apply, and edge smoke. Full production identity/RBAC is
-  still not implemented.
+  cert, DNS record, plan/apply, and edge smoke. Terraform blocks
+  `desired_counts.web > 0` in CloudFront mode unless origin verification is
+  enabled and either HTTPS-origin mode is configured or
+  `allow_cloudfront_http_origin_live_traffic = true` records explicit bounded
+  smoke risk acceptance. Full production identity/RBAC is still not implemented.
 - Open Uptime is still SQLite-only for this bridge; only one protected web task
   may write EFS until Postgres and cloud leases exist.
 - Hosted API/dashboard auth, workspace RBAC, target policy, and Postgres leases
@@ -478,8 +481,12 @@ required before browser evidence or public probe scale-out.
   EFS SQLite bridge is explicitly temporary and not the target source of truth.
 - ECS task definitions use secret refs, not plaintext secret values.
 - ECS task definitions include explicit container health checks: web checks
-  `/health`, while disabled non-web roles use a hosted-environment sanity check
-  until their long-running worker commands are implemented.
+  `/health`, while disabled non-web roles run
+  `uptime cloud workers preflight --role <role> --healthcheck` and fail their
+  environment health check if hosted mode, component identity, or workspace env
+  is invalid. Their main commands call fail-closed
+  `uptime cloud workers run --role <role>` entrypoints until the real cloud data
+  paths are implemented.
 - Public probes cannot reach denied target classes; private monitors require
   private probes and approved inventory refs.
 - Backups, restore drill, rollback sequence, alarms, and cost estimate are

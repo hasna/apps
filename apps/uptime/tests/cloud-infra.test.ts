@@ -98,6 +98,9 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(main).toContain("efs_volume_configuration");
   expect(main).toContain("transit_encryption = \"ENABLED\"");
   expect(variables).toContain("EFS SQLite bridge requires web desired count 0 or 1");
+  expect(variables).toContain("allow_cloudfront_http_origin_live_traffic");
+  expect(variables).toContain("web desired count above 0 in cloudfront_default_domain mode requires enable_cloudfront_origin_verify_header=true");
+  expect(variables).toContain("web desired count above 0 requires CloudFront HTTPS-origin mode");
   expect(variables).toContain("hosted_token_secret_arn");
   expect(variables).toContain("runtime_package_integrity must be null or an npm sha512 integrity string");
   expect(variables).toContain('"public-probe" = 0');
@@ -128,7 +131,8 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(main).toContain("healthCheck = local.service_health_checks[each.key]");
   expect(main).toContain("fetch('http://127.0.0.1:${local.container_port}/health')");
   for (const component of ["scheduler", "public-probe", "reporter", "migration"]) {
-    expect(main).toContain(`HASNA_UPTIME_COMPONENT === '${component}'`);
+    expect(main).toContain(`"cloud", "workers", "run", "--role", "${component}"`);
+    expect(main).toContain(`cloud workers preflight --role ${component} --healthcheck --json`);
   }
   expect(main).toContain('resource "aws_cloudwatch_metric_alarm" "web_5xx"');
   expect(main).toContain('resource "aws_cloudwatch_metric_alarm" "web_unhealthy"');
@@ -182,11 +186,12 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(tfvars).toContain("container_image");
   expect(tfvars).toContain('protected_access_mode    = "cloudfront_default_domain"');
   expect(tfvars).toContain('cloudfront_origin_protocol_policy = "http-only"');
+  expect(tfvars).toContain("allow_cloudfront_http_origin_live_traffic = false");
   expect(tfvars).toContain("cloudfront_origin_domain_name     = null");
   expect(tfvars).toContain("enable_cloudfront_origin_verify_header");
   expect(tfvars).toContain("cloudfront_origin_verify_header_name");
   expect(tfvars).toContain("cloudfront_origin_verify_header_value  = null");
-  expect(tfvars).toContain('runtime_package_version   = "0.1.25"');
+  expect(tfvars).toContain('runtime_package_version   = "0.1.26"');
   expect(tfvars).toContain("runtime_package_integrity = null");
   expect(tfvars).toContain('project_name             = "open-uptime"');
   expect(tfvars).toContain("monthly_budget_limit_usd");

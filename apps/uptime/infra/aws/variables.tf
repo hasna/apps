@@ -98,6 +98,12 @@ variable "cloudfront_origin_protocol_policy" {
   }
 }
 
+variable "allow_cloudfront_http_origin_live_traffic" {
+  description = "Explicit risk acceptance for setting web desired count above 0 while CloudFront-to-ALB origin transport is http-only. Keep false unless a named operator accepts the temporary HTTP-origin bridge risk for a bounded smoke."
+  type        = bool
+  default     = false
+}
+
 variable "cloudfront_origin_domain_name" {
   description = "DNS hostname CloudFront uses for the ALB custom origin when cloudfront_origin_protocol_policy is https-only. The hostname must resolve to the ALB and match certificate_arn. Leave null for the default HTTP-origin bridge."
   type        = string
@@ -235,7 +241,7 @@ variable "container_image" {
 variable "runtime_package_version" {
   description = "Published @hasna/uptime package version that CodeBuild should build into the ECR image."
   type        = string
-  default     = "0.1.25"
+  default     = "0.1.26"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$", var.runtime_package_version))
@@ -346,6 +352,25 @@ variable "desired_counts" {
       for key in ["scheduler", "public-probe", "reporter", "migration"] : lookup(var.desired_counts, key, 0) == 0
     ])
     error_message = "EFS SQLite bridge requires web desired count 0 or 1 and scheduler/public-probe/reporter/migration desired counts 0."
+  }
+
+  validation {
+    condition = (
+      lookup(var.desired_counts, "web", 0) == 0
+      || var.protected_access_mode != "cloudfront_default_domain"
+      || var.enable_cloudfront_origin_verify_header
+    )
+    error_message = "web desired count above 0 in cloudfront_default_domain mode requires enable_cloudfront_origin_verify_header=true."
+  }
+
+  validation {
+    condition = (
+      lookup(var.desired_counts, "web", 0) == 0
+      || var.protected_access_mode != "cloudfront_default_domain"
+      || var.cloudfront_origin_protocol_policy == "https-only"
+      || var.allow_cloudfront_http_origin_live_traffic
+    )
+    error_message = "web desired count above 0 requires CloudFront HTTPS-origin mode, or explicit allow_cloudfront_http_origin_live_traffic=true risk acceptance for a bounded smoke."
   }
 }
 

@@ -90,9 +90,12 @@ delivery, S3 access, and EFS mount behavior.
 
 Every ECS task definition includes an explicit container health check. The web
 task checks `GET /health` through Bun's built-in `fetch`; disabled non-web roles
-currently run a hosted-environment sanity check so scheduler, public-probe,
-reporter, and migration tasks do not start from empty ECS health semantics when
-their long-running workers are later enabled.
+run `uptime cloud workers preflight --role <role> --healthcheck`, which verifies
+hosted mode, component identity, and workspace env before reporting blocked
+cloud prerequisites. Their main container commands call fail-closed
+`uptime cloud workers run --role <role>` entrypoints so scheduler,
+public-probe, reporter, and migration tasks no longer use `cloud plan` as a
+placeholder.
 
 Interface endpoint private DNS is VPC-wide. In shared VPCs, either keep endpoint
 creation in the approved networking root, or pass
@@ -106,10 +109,16 @@ Store instead of Secrets Manager, add `ssm` to
 - Hosted production auth/RBAC still needs scoped, revocable credentials.
 - The default `http-only` CloudFront origin bridge must be replaced with the
   explicit HTTPS-origin mode or consciously accepted with documented risk before
-  token-bearing live traffic.
+  token-bearing live traffic. The module blocks `desired_counts.web > 0` in
+  CloudFront mode unless origin verification is enabled, and it also requires
+  either `cloudfront_origin_protocol_policy = "https-only"` or explicit
+  `allow_cloudfront_http_origin_live_traffic = true` risk acceptance for bounded
+  smokes.
 - Public probe runtime has SDK-level hosted HTTP target-policy enforcement, but
-  the public-probe worker and cloud check-job lease path are still disabled until
-  they are wired to that runner and validated in AWS.
+  the public-probe cloud check-job lease path is still disabled until it is
+  wired to that runner and validated in AWS. The
+  `uptime cloud public-checks worker` command is an EFS SQLite bridge smoke loop,
+  not the final cloud worker protocol.
 - Hosted private-probe enrollment/heartbeat/revocation is still
   fail-closed.
 

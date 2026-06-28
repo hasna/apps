@@ -430,9 +430,10 @@ ECS/API/RDS/S3/probe lag/job backlog/delivery failures, and rollback commands.
   dashboard shell still fails closed; production-grade identity/RBAC is not
   implemented yet.
 - Outbound target policy for hosted HTTP/TCP checks exists in the SDK and the
-  `uptime cloud public-checks run-due` operator path. The cloud public-probe
-  worker loop, durable check-job lease path, and sustained ECS liveness are not
-  wired yet.
+  `uptime cloud public-checks run-due` operator path. A bounded
+  `uptime cloud public-checks worker` EFS SQLite bridge loop exists for
+  controlled smokes, but the cloud public-probe `check_jobs` lease/fencing path
+  and sustained ECS worker readiness are not wired yet.
 - `@hasna/cloud` hybrid mode still returns SQLite, so it is not cloud-primary.
 - The local cloud config currently points at a stale/non-resolving database host.
 - Todos has unresolved conflicts that must be reconciled before cloud cutover.
@@ -454,7 +455,10 @@ ECS/API/RDS/S3/probe lag/job backlog/delivery failures, and rollback commands.
   representative SQLite EFS backup/restore drill with integrity/count checks.
   It is not live: live scale-up is still blocked by edge/auth smokes, approved
   human/on-call SNS subscriptions and delivery smoke, and production auth
-  hardening beyond scoped static operator tokens.
+  hardening beyond scoped static operator tokens. Terraform now prevents
+  accidental `web > 0` promotion in CloudFront mode unless origin verification
+  is enabled and either HTTPS-origin mode or explicit HTTP-origin risk
+  acceptance is configured.
 - Projects per-project cloud stores do not exist yet; current local
   `project.db` stores are not enough for cloud-backed canvases or JSON Render.
 - Browser/page monitoring lacks the artifact, redaction, retention, and storage

@@ -16,6 +16,7 @@ export { applyImport, previewImport, rollbackImport } from "./imports.js";
 export { buildUptimeReport, sendUptimeReport } from "./report.js";
 export { generateProbeKeyPair, probePublicKeyFingerprint, probeResultSigningPayload, signProbeResult, verifyProbeResultSignature } from "./probes.js";
 export { buildAwsDeploymentPlan, buildPrivateProbeCloudConfig, renderPrivateProbeEnv } from "./cloud-plan.js";
+export { runHostedPublicChecksWorker } from "./workers.js";
 export { uptimeHome, uptimeDbPath, uptimeHostedFallbackDbPath, ensureUptimeHome } from "./paths.js";
 export type {
   UptimeBackup,
@@ -105,6 +106,12 @@ export type {
   PrivateProbeCloudConfig,
   PrivateProbeCloudConfigOptions,
 } from "./cloud-plan.js";
+export type {
+  HostedPublicCheckRunner,
+  HostedPublicChecksWorkerIteration,
+  HostedPublicChecksWorkerOptions,
+  HostedPublicChecksWorkerSummary,
+} from "./workers.js";
 export type {
   BuildUptimeReportOptions,
   SendUptimeReportOptions,

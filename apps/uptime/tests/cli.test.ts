@@ -191,6 +191,47 @@ test("CLI hosted public-check command is workspace scoped and bounded", () => {
   }
 });
 
+test("CLI hosted worker entrypoints preflight and fail closed", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const env = {
+      HASNA_UPTIME_MODE: "hosted",
+      HASNA_UPTIME_COMPONENT: "public-probe",
+      HASNA_UPTIME_WORKSPACE_ID: "ws_cli",
+    };
+    const preflight = runCli(["cloud", "workers", "preflight", "--role", "public-probe", "--json"], dbPath, env);
+    const healthcheck = runCli(["cloud", "workers", "preflight", "--role", "public-probe", "--healthcheck", "--json"], dbPath, env);
+    const badHealthcheck = runCli(["cloud", "workers", "preflight", "--role", "public-probe", "--healthcheck", "--json"], dbPath, {
+      ...env,
+      HASNA_UPTIME_COMPONENT: "reporter",
+    });
+    const run = runCli(["cloud", "workers", "run", "--role", "public-probe", "--json"], dbPath, env);
+
+    expect(preflight.exitCode).toBe(0);
+    expect(healthcheck.exitCode).toBe(0);
+    expect(badHealthcheck.exitCode).toBe(1);
+    const preflightJson = JSON.parse(new TextDecoder().decode(preflight.stdout));
+    expect(preflightJson).toMatchObject({
+      kind: "open-uptime.hosted-worker-preflight",
+      role: "public-probe",
+      status: "blocked",
+      canStart: false,
+      workspaceId: "ws_cli",
+    });
+    expect(preflightJson.blockers.join("\n")).toContain("public-probe-job-claims");
+    expect(preflightJson.blockers.join("\n")).toContain("cloud-worker-leases");
+
+    expect(run.exitCode).toBe(1);
+    const runJson = JSON.parse(new TextDecoder().decode(run.stdout));
+    expect(runJson.ok).toBe(false);
+    expect(runJson.preflight.role).toBe("public-probe");
+    expect(runJson.error).toContain("blocked");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("CLI update changes monitor configuration", () => {
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {

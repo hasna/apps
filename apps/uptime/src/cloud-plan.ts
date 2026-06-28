@@ -170,7 +170,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
   const image = clean(options.image, `${imageRepositoryUri}@sha256:<image-digest>`);
   const evidenceBucket = clean(options.evidenceBucket, `hasna-${stage}-${prefix}-evidence`);
   const hostedSqliteDbPath = clean(options.hostedSqliteDbPath, DEFAULT_HOSTED_SQLITE_DB);
-  const runtimePackageVersion = clean(options.runtimePackageVersion, "0.1.25");
+  const runtimePackageVersion = clean(options.runtimePackageVersion, "0.1.26");
   const runtimePackageIntegrity = options.runtimePackageIntegrity?.trim() || undefined;
   const protectedAccessMode = options.protectedAccessMode ?? DEFAULT_PROTECTED_ACCESS_MODE;
   const cloudfrontOriginProtocolPolicy = options.cloudfrontOriginProtocolPolicy ?? DEFAULT_CLOUDFRONT_ORIGIN_PROTOCOL_POLICY;
@@ -249,7 +249,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
           requiresMatchingCertificate: cloudfrontOriginProtocolPolicy === "https-only",
           liveTrafficApproved: false,
           risk: cloudfrontOriginProtocolPolicy === "http-only"
-            ? "Temporary HTTP-origin bridge: do not use for token-bearing live traffic without explicit risk acceptance, or switch to https-only with cloudfront_origin_domain_name plus certificate_arn."
+            ? "Temporary HTTP-origin bridge: web scale-up requires allow_cloudfront_http_origin_live_traffic=true for bounded smokes, or switch to https-only with cloudfront_origin_domain_name plus certificate_arn."
             : "CloudFront HTTPS-origin mode requires the origin hostname to resolve to the ALB and match certificate_arn.",
         }
         : undefined,
@@ -315,7 +315,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
         `Infra PR must declare hardened S3 evidence bucket ${evidenceBucket} with KMS, versioning, lifecycle, and public access block.`,
         `Infra PR must declare encrypted EFS ${prefix}-${stage}-data with access point, mount targets, and AWS Backup plan.`,
         protectedAccessMode === "cloudfront_default_domain"
-          ? "Infra PR must declare CloudFront default-domain HTTPS edge, ALB origin listener restricted to CloudFront origin-facing ranges, CloudFront-only origin verification header binding, ECS/Fargate cluster, target groups, security groups, IAM roles, CloudWatch log groups, and Secrets Manager refs. Token-bearing live traffic must use cloudfront_origin_protocol_policy=https-only with a matching origin hostname/certificate, or carry explicit HTTP-origin risk acceptance."
+          ? "Infra PR must declare CloudFront default-domain HTTPS edge, ALB origin listener restricted to CloudFront origin-facing ranges, CloudFront-only origin verification header binding, ECS/Fargate cluster, target groups, security groups, IAM roles, CloudWatch log groups, and Secrets Manager refs. Token-bearing live traffic must use cloudfront_origin_protocol_policy=https-only with a matching origin hostname/certificate, or carry explicit allow_cloudfront_http_origin_live_traffic=true bounded-smoke risk acceptance."
           : `Infra PR must declare ECS/Fargate cluster ${cluster}, ALB HTTPS listener, target groups, security groups, IAM roles, CloudWatch log groups, and Secrets Manager refs.`,
         "Only apply the infra plan from the approved infrastructure repository after review evidence is attached.",
       ],
@@ -328,7 +328,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
         `Register task definitions for ${services.map((service) => service.name).join(", ")} using valueFrom secrets.`,
         `Update ECS services in cluster ${cluster} one component at a time through the approved deploy pipeline.`,
         protectedAccessMode === "cloudfront_default_domain"
-          ? "Use the CloudFront default HTTPS domain with origin verification header binding for first protected access; before token-bearing live traffic, switch the origin to https-only with a matching origin hostname/certificate or record explicit HTTP-origin risk acceptance."
+          ? "Use the CloudFront default HTTPS domain with origin verification header binding for first protected access; before token-bearing live traffic, switch the origin to https-only with a matching origin hostname/certificate or set allow_cloudfront_http_origin_live_traffic=true only for a bounded approved smoke."
           : `Create Route53/edge record for ${hostname} only after ALB health checks pass and auth denial smokes succeed.`,
       ],
       rollback: [
@@ -349,7 +349,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
         ? "CloudFront origin verification header binding must be enabled and direct-origin denial must be proven before web desired count is raised above 0."
         : "ALB HTTPS ingress policy and auth-denial smokes must be proven before web desired count is raised above 0.",
       ...(protectedAccessMode === "cloudfront_default_domain" && cloudfrontOriginProtocolPolicy === "http-only"
-        ? ["CloudFront-to-ALB origin transport is still http-only; token-bearing live traffic needs https-only origin mode or explicit risk acceptance."]
+        ? ["CloudFront-to-ALB origin transport is still http-only; web scale-up now requires explicit allow_cloudfront_http_origin_live_traffic=true risk acceptance, and token-bearing live traffic should use https-only origin mode."]
         : []),
       ...(protectedAccessMode === "cloudfront_default_domain" && cloudfrontOriginProtocolPolicy === "https-only" && cloudfrontOriginDomainName === "<alb-dns-name>"
         ? ["CloudFront https-only origin mode needs cloudfront_origin_domain_name that resolves to the ALB and matches certificate_arn."]

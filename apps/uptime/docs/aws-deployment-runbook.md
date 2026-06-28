@@ -195,9 +195,11 @@ Before setting `desired_counts.web = 1`, verify:
 - `HASNA_UPTIME_ALLOWED_ORIGINS` matches the public HTTPS edge origin;
 - CloudFront-to-origin transport is either `https-only` with an origin hostname
   whose certificate matches that hostname, or the HTTP-origin bridge has a
-  named risk owner and approval recorded in private evidence;
+  named risk owner and approval recorded in private evidence by setting
+  `allow_cloudfront_http_origin_live_traffic = true`;
 - CloudFront origin access is distribution-bound with the CloudFront-only origin
-  verification header, not just narrowed to CloudFront origin-facing ranges;
+  verification header by setting `enable_cloudfront_origin_verify_header = true`,
+  not just narrowed to CloudFront origin-facing ranges;
 - web egress to ECR, Secrets Manager or SSM, CloudWatch Logs, S3, EFS, and any
   required endpoints has been proven from a real ECS task. Terraform endpoint
   ids, route tables, and security-group rules are creation evidence only; the
@@ -422,9 +424,10 @@ routes are backed by cloud check jobs and cloud audit rows.
   hosted public-check runner, records target-policy decision evidence, and
   passes AWS smokes for denied DNS answers, redirect-to-denied targets, and
   address pinning. The SDK and `uptime cloud public-checks run-due` path now
-  handle execution-time DNS and redirect enforcement for bounded smokes, but a
-  sustained public-probe worker loop is not active until it is wired to cloud
-  leases.
+  handle execution-time DNS and redirect enforcement for bounded smokes. The
+  `uptime cloud public-checks worker` command is an EFS SQLite bridge loop for
+  controlled smoke testing only; it is not the final cloud
+  `check_jobs`/lease/fencing protocol.
 - Do not enable scheduler, public-probe, reporter, or migration workers against
   the EFS SQLite bridge; those services need Postgres/cloud leases first.
 - Do not expose dashboard/API routes without hosted auth and workspace checks.

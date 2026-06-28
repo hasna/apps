@@ -10,6 +10,7 @@ import { packageVersion } from "../version.js";
 import { serveUptime } from "../api.js";
 import { generateProbeKeyPair, signProbeResult } from "../probes.js";
 import { buildAwsDeploymentPlan, buildPrivateProbeCloudConfig, renderPrivateProbeEnv } from "../cloud-plan.js";
+import { runHostedPublicChecksWorker } from "../workers.js";
 import type { AwsDeploymentPlan, PrivateProbeCloudConfig } from "../cloud-plan.js";
 import type { ImportSource } from "../imports.js";
 import type { SendUptimeReportOptions, UptimeReportDelivery } from "../report.js";
@@ -557,6 +558,47 @@ cloud
     }
   });
 
+const cloudWorkers = cloud
+  .command("workers")
+  .description("Inspect and run hosted worker entrypoints");
+
+cloudWorkers
+  .command("preflight")
+  .description("Check one hosted worker entrypoint without starting work")
+  .requiredOption("--role <role>", "scheduler, public-probe, reporter, or migration")
+  .option("--healthcheck", "exit non-zero when hosted mode, component, or workspace env is invalid")
+  .option("-j, --json", "print JSON")
+  .action((opts) => {
+    try {
+      const preflight = buildHostedWorkerPreflight(parseWorkerRole(opts.role));
+      print(preflight, renderHostedWorkerPreflight(preflight), opts);
+      if (opts.healthcheck && !hostedWorkerEnvironmentOk(preflight)) process.exit(1);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+cloudWorkers
+  .command("run")
+  .description("Run one hosted worker entrypoint; fails closed until cloud prerequisites exist")
+  .requiredOption("--role <role>", "scheduler, public-probe, reporter, or migration")
+  .option("-j, --json", "print JSON")
+  .action((opts) => {
+    try {
+      const preflight = buildHostedWorkerPreflight(parseWorkerRole(opts.role));
+      const error = `hosted ${preflight.role} worker runtime is blocked until cloud prerequisites exist`;
+      if (wantsJson(opts)) {
+        console.log(JSON.stringify({ ok: false, error, preflight }, null, 2));
+      } else {
+        console.error(chalk.red(sanitizeTerminal(error)));
+        console.error(renderHostedWorkerPreflight(preflight));
+      }
+      process.exit(1);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
 const cloudPublicChecks = cloud
   .command("public-checks")
   .description("Run hosted public HTTP/TCP checks against the configured hosted store");
@@ -582,6 +624,50 @@ cloudPublicChecks
       print(data, results.length ? renderCheckResults(results) : "No due hosted public checks", opts);
     } catch (error) {
       fail(error);
+    }
+  });
+
+cloudPublicChecks
+  .command("worker")
+  .description("Run a bounded EFS SQLite bridge loop around hosted public checks")
+  .option("--workspace-id <id>", "workspace id; defaults to HASNA_UPTIME_WORKSPACE_ID")
+  .option("--interval-ms <ms>", "sleep interval between iterations", parseInteger, 30_000)
+  .option("--max-runtime-ms <ms>", "stop after this many milliseconds", parseInteger)
+  .option("--max-iterations <n>", "stop after this many iterations", parseInteger)
+  .option("--hosted-sqlite-db <path>", "hosted SQLite path on cloud-mounted storage")
+  .option("--allow-hosted-local-store", "allow hosted mode to use local SQLite as an explicit fallback")
+  .option("-j, --json", "print JSON")
+  .action(async (opts) => {
+    const abortController = new AbortController();
+    const onSignal = () => abortController.abort();
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
+    try {
+      const svc = hostedService({
+        hostedSqliteDb: opts.hostedSqliteDb,
+        allowHostedLocalStore: opts.allowHostedLocalStore,
+      });
+      const workspaceId = opts.workspaceId || process.env.HASNA_UPTIME_WORKSPACE_ID;
+      const summary = await runHostedPublicChecksWorker({
+        runner: svc,
+        workspaceId,
+        intervalMs: opts.intervalMs,
+        maxRuntimeMs: opts.maxRuntimeMs,
+        maxIterations: opts.maxIterations,
+        signal: abortController.signal,
+        onIteration: wantsJson(opts)
+          ? undefined
+          : (iteration) => {
+            console.log(`iteration ${iteration.iteration}: checked ${iteration.checked}`);
+          },
+      });
+      svc.close();
+      print(summary, renderHostedPublicChecksWorkerSummary(summary), opts);
+    } catch (error) {
+      fail(error);
+    } finally {
+      process.removeListener("SIGINT", onSignal);
+      process.removeListener("SIGTERM", onSignal);
     }
   });
 
@@ -1119,6 +1205,133 @@ function renderPrivateProbeConfig(config: PrivateProbeCloudConfig): string {
     "private key inline: false",
     "token inline: false",
   ].join("\n");
+}
+
+interface HostedPublicChecksWorkerSummary {
+  kind: "open-uptime.hosted-public-checks-worker";
+  status: "completed" | "stopped";
+  workspaceId: string | null;
+  iterations: number;
+  checked: number;
+  startedAt: string;
+  finishedAt: string;
+}
+
+function renderHostedPublicChecksWorkerSummary(summary: HostedPublicChecksWorkerSummary): string {
+  return [
+    "hosted public checks worker",
+    `status: ${summary.status}`,
+    `workspace: ${summary.workspaceId ?? "<unset>"}`,
+    `iterations: ${summary.iterations}`,
+    `checked: ${summary.checked}`,
+    `started: ${summary.startedAt}`,
+    `finished: ${summary.finishedAt}`,
+  ].join("\n");
+}
+
+type HostedWorkerRole = "scheduler" | "public-probe" | "reporter" | "migration";
+
+interface HostedWorkerPreflight {
+  kind: "open-uptime.hosted-worker-preflight";
+  role: HostedWorkerRole;
+  status: "blocked";
+  canStart: false;
+  mode: string;
+  component: string;
+  workspaceId: string | null;
+  blockers: string[];
+  checks: Array<{ name: string; ok: boolean; detail: string }>;
+  nextActions: string[];
+}
+
+function parseWorkerRole(value: string): HostedWorkerRole {
+  if (value === "scheduler" || value === "public-probe" || value === "reporter" || value === "migration") return value;
+  throw new Error(`Unknown hosted worker role: ${value}`);
+}
+
+function buildHostedWorkerPreflight(role: HostedWorkerRole): HostedWorkerPreflight {
+  const mode = process.env.HASNA_UPTIME_MODE?.trim() || "";
+  const component = process.env.HASNA_UPTIME_COMPONENT?.trim() || "";
+  const workspaceId = process.env.HASNA_UPTIME_WORKSPACE_ID?.trim() || "";
+  const checks = [
+    { name: "hosted-mode", ok: mode === "hosted", detail: mode || "<unset>" },
+    { name: "component", ok: !component || component === role, detail: component || "<unset>" },
+    { name: "workspace", ok: Boolean(workspaceId), detail: workspaceId || "<unset>" },
+    { name: "postgres-adapter", ok: false, detail: "not implemented" },
+    { name: "cloud-worker-leases", ok: false, detail: "not implemented" },
+  ];
+  if (role === "reporter") {
+    checks.push({ name: "cloud-channel-refs", ok: false, detail: "not implemented" });
+  }
+  if (role === "public-probe") {
+    checks.push({ name: "public-probe-job-claims", ok: false, detail: "not implemented" });
+  }
+  if (role === "migration") {
+    checks.push({ name: "cloud-migration-plan", ok: false, detail: "not implemented" });
+  }
+  const blockers = checks
+    .filter((check) => !check.ok)
+    .map((check) => `${check.name}: ${check.detail}`);
+  return {
+    kind: "open-uptime.hosted-worker-preflight",
+    role,
+    status: "blocked",
+    canStart: false,
+    mode: mode || "<unset>",
+    component: component || "<unset>",
+    workspaceId: workspaceId || null,
+    blockers,
+    checks,
+    nextActions: hostedWorkerNextActions(role),
+  };
+}
+
+function hostedWorkerNextActions(role: HostedWorkerRole): string[] {
+  const shared = [
+    "Keep the ECS service desired count at 0 until this preflight reports canStart=true.",
+    "Move authoritative hosted state from the EFS SQLite bridge to the cloud store with transactional leases.",
+  ];
+  if (role === "scheduler") {
+    return [
+      ...shared,
+      "Implement deterministic check_jobs creation with a scheduler lease and duplicate-slot protection.",
+    ];
+  }
+  if (role === "public-probe") {
+    return [
+      ...shared,
+      "Implement cloud job claiming, fencing tokens, target-policy decision logs, and result ingestion for public HTTP/TCP checks.",
+    ];
+  }
+  if (role === "reporter") {
+    return [
+      ...shared,
+      "Implement workspace-authorized report channel refs, idempotent delivery keys, retry/backoff, and delivery alarms.",
+    ];
+  }
+  return [
+    ...shared,
+    "Implement reviewed cloud schema migrations with dry-run counts, backup evidence, and rollback instructions.",
+  ];
+}
+
+function renderHostedWorkerPreflight(preflight: HostedWorkerPreflight): string {
+  return [
+    `${preflight.role} hosted worker preflight`,
+    `status: ${preflight.status}`,
+    `can start: ${preflight.canStart}`,
+    `mode: ${sanitizeField(preflight.mode)}`,
+    `component: ${sanitizeField(preflight.component)}`,
+    `workspace: ${sanitizeField(preflight.workspaceId ?? "<unset>")}`,
+    `blockers: ${preflight.blockers.length}`,
+    ...preflight.blockers.map((blocker) => `- ${sanitizeField(blocker)}`),
+  ].join("\n");
+}
+
+function hostedWorkerEnvironmentOk(preflight: HostedWorkerPreflight): boolean {
+  return preflight.checks
+    .filter((check) => check.name === "hosted-mode" || check.name === "component" || check.name === "workspace")
+    .every((check) => check.ok);
 }
 
 function renderDeliveries(deliveries: UptimeReportDelivery[]): string {
