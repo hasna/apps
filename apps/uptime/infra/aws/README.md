@@ -64,6 +64,13 @@ Endpoint policies are scoped to the Open Uptime repository, log groups,
 configured secret refs, KMS key, evidence bucket, and the regional ECR layer
 bucket.
 
+If private endpoints are not approved yet, infra owners can instead set
+`enable_nat_task_egress = true` to allow web and non-public worker task security
+groups to reach AWS public APIs through the private subnet NAT route on TCP/443.
+Keep this disabled when private endpoints are the approved egress path. Runtime
+scale-up still requires ECS task evidence for image pull, secret injection, log
+delivery, S3 access, and EFS mount behavior.
+
 Interface endpoint private DNS is VPC-wide. In shared VPCs, either keep endpoint
 creation in the approved networking root, or pass
 `additional_vpc_endpoint_source_security_group_ids` for every workload that must

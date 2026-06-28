@@ -399,6 +399,32 @@ resource "aws_security_group_rule" "worker_egress" {
   cidr_blocks       = each.key == "public-probe" ? ["0.0.0.0/0"] : [data.aws_vpc.target.cidr_block]
 }
 
+resource "aws_security_group_rule" "web_nat_https_egress" {
+  count = var.enable_nat_task_egress ? 1 : 0
+
+  type              = "egress"
+  description       = "HTTPS egress through approved NAT path"
+  security_group_id = aws_security_group.web.id
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  cidr_blocks       = var.nat_task_egress_cidr_blocks
+}
+
+resource "aws_security_group_rule" "worker_nat_https_egress" {
+  for_each = var.enable_nat_task_egress ? {
+    for key, value in aws_security_group.worker : key => value if key != "public-probe"
+  } : {}
+
+  type              = "egress"
+  description       = "HTTPS egress through approved NAT path"
+  security_group_id = each.value.id
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  cidr_blocks       = var.nat_task_egress_cidr_blocks
+}
+
 resource "aws_security_group_rule" "web_s3_gateway_egress" {
   count = local.s3_gateway_endpoint_enabled ? 1 : 0
 

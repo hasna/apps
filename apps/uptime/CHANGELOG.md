@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-06-28
+
+### Added
+
+- Added explicit Terraform NAT task egress support. Infra owners can set
+  `enable_nat_task_egress = true` to allow web and non-public worker task
+  security groups to reach AWS public APIs through a private subnet NAT route on
+  TCP/443 when private VPC endpoints are not the approved egress model.
+
 ## [0.1.13] - 2026-06-28
 
 ### Added

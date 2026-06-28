@@ -116,7 +116,7 @@ variable "container_image" {
 variable "runtime_package_version" {
   description = "Published @hasna/uptime package version that CodeBuild should build into the ECR image."
   type        = string
-  default     = "0.1.13"
+  default     = "0.1.14"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$", var.runtime_package_version))
@@ -236,6 +236,23 @@ variable "budget_alert_email_addresses" {
   description = "Email recipients for AWS Budgets forecasted and actual alerts. Leave empty to skip budget creation."
   type        = list(string)
   default     = []
+}
+
+variable "enable_nat_task_egress" {
+  description = "Allow web and non-public worker tasks to reach AWS public APIs through NAT on TCP/443. Keep false when private VPC endpoints are the approved egress path."
+  type        = bool
+  default     = false
+}
+
+variable "nat_task_egress_cidr_blocks" {
+  description = "CIDR blocks allowed for NAT-backed HTTPS egress when enable_nat_task_egress is true."
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+
+  validation {
+    condition     = length(var.nat_task_egress_cidr_blocks) > 0
+    error_message = "nat_task_egress_cidr_blocks must not be empty when NAT task egress is enabled."
+  }
 }
 
 variable "enable_private_vpc_endpoints" {

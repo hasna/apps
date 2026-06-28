@@ -90,6 +90,10 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(main).toContain("budget_alert_email_addresses");
   expect(main).toContain('resource "aws_vpc_endpoint" "interface"');
   expect(main).toContain('resource "aws_vpc_endpoint" "gateway"');
+  expect(main).toContain('aws_security_group_rule" "web_nat_https_egress"');
+  expect(main).toContain('aws_security_group_rule" "worker_nat_https_egress"');
+  expect(main).toContain("var.enable_nat_task_egress");
+  expect(main).toContain("var.nat_task_egress_cidr_blocks");
   expect(main).toContain('data "aws_iam_policy_document" "vpc_endpoint_s3"');
   expect(main).toContain('data "aws_iam_policy_document" "vpc_endpoint_secretsmanager"');
   expect(main).toContain('data "aws_iam_policy_document" "vpc_endpoint_logs"');
@@ -103,6 +107,8 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(main).toContain("var.enable_private_vpc_endpoints");
   expect(main).toContain("com.amazonaws.${var.region}.${each.key}");
   expect(variables).toContain("additional_vpc_endpoint_source_security_group_ids");
+  expect(variables).toContain("enable_nat_task_egress");
+  expect(variables).toContain("nat_task_egress_cidr_blocks");
   expect(main).toContain("TagKeyValue");
   expect(main).toContain("Project");
   expect(main).toContain("Environment");
@@ -114,10 +120,11 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(variables).toContain("web            = 0");
   expect(tfvars).toContain("container_image");
   expect(tfvars).toContain('protected_access_mode    = "cloudfront_default_domain"');
-  expect(tfvars).toContain('runtime_package_version  = "0.1.13"');
+  expect(tfvars).toContain('runtime_package_version  = "0.1.14"');
   expect(tfvars).toContain('project_name             = "open-uptime"');
   expect(tfvars).toContain("monthly_budget_limit_usd");
   expect(tfvars).toContain("private_route_table_ids");
+  expect(tfvars).toContain("enable_nat_task_egress");
   expect(tfvars).toContain("enable_private_vpc_endpoints = false");
   expect(tfvars).toContain("additional_vpc_endpoint_source_security_group_ids");
   expect(tfvars).toContain("budget_alert_email_addresses");
