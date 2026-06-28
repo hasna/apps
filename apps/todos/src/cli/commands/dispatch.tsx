@@ -13,14 +13,14 @@ export function registerDispatchCommands(program: Command): void {
   // ── dispatch subcommand ──────────────────────────────────────────────────────
   const dispatchCmd = program
     .command("dispatch")
-    .description("Send tasks or task lists to a tmux window")
-    .argument("<target>", "tmux target: window, session:window, or session:window.pane")
+    .description("Legacy/emergency only: send tasks or task lists to a tmux window after explicit human choice")
+    .argument("<target>", "legacy/emergency tmux target: window, session:window, or session:window.pane")
     .option("--tasks <ids>", "Comma-separated task IDs to dispatch")
     .option("--list <id>", "Task list ID or slug to dispatch")
     .option("--filter-status <statuses>", "Comma-separated task statuses to include (default: pending)", "pending")
     .option("--delay <ms>", "Delay in ms between message and Enter (auto-calculated if omitted)", parseInt)
     .option("--at <datetime>", "ISO datetime to schedule the dispatch")
-    .option("--multiple <targets>", "Comma-separated list of additional tmux targets (fan-out)")
+    .option("--multiple <targets>", "Comma-separated list of additional legacy/emergency tmux targets (fan-out)")
     .option("--stagger <ms>", "Delay between targets when using --multiple (default: 500ms)", parseInt)
     .option("--confirm-busy", "Send even if the target tmux pane appears busy")
     .option("--dry-run", "Preview the formatted message without sending")
