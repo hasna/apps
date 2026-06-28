@@ -140,7 +140,7 @@ export async function runBrowserPageCheck(
   }
 }
 
-function normalizeBrowserEvidence(sourceUrl: string, raw: BrowserPageRunnerResult): BrowserPageEvidence {
+export function normalizeBrowserEvidence(sourceUrl: string, raw: BrowserPageRunnerResult): BrowserPageEvidence {
   return {
     kind: "browser_page",
     finalUrl: raw.finalUrl ? redactUrl(raw.finalUrl) : redactUrl(sourceUrl),

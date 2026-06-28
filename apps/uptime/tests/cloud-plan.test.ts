@@ -26,7 +26,7 @@ test("buildAwsDeploymentPlan generates a dry-run AWS plan with generic package d
   expect(buildAwsDeploymentPlan().image.uri).toContain("@sha256:<image-digest>");
   expect(plan.resources.imageBuilder).toBe("open-uptime-prod-image-builder");
   expect(plan.image.pushCommands.join("\n")).toContain("BLOCKED:");
-  expect(plan.image.pushCommands.join("\n")).toContain("@hasna/uptime@0.1.9");
+  expect(plan.image.pushCommands.join("\n")).toContain("@hasna/uptime@0.1.10");
   expect(plan.image.pushCommands.join("\n")).not.toContain("aws codebuild start-build");
   expect(plan.runbook.deploy.join("\n")).toContain("do not run migration");
   expect(plan.runbook.deploy.join("\n")).toContain("CloudFront default HTTPS domain");
@@ -75,11 +75,11 @@ test("buildAwsDeploymentPlan generates a dry-run AWS plan with generic package d
   expect(serialized).not.toContain("aws codebuild start-build");
   expect(serialized).not.toContain("docker push ");
   expect(serialized).not.toContain("\"DATABASE_URL\"");
-  expect(serialized).not.toContain("hasna-xyz-infra");
-  expect(serialized).not.toContain("wks_2tyysw05cwap");
-  expect(serialized).not.toContain("vpc-04c7f7abc1d3c3f56");
-  expect(serialized).not.toContain("uptime.hasna.xyz");
-  expect(serialized).not.toContain("hasna/xyz/opensource");
+  expect(serialized).not.toContain("private-account-label");
+  expect(serialized).not.toContain("private-workspace-id");
+  expect(serialized).not.toContain("vpc-deadbeefdeadbeef0");
+  expect(serialized).not.toContain("uptime.private.example");
+  expect(serialized).not.toContain("private/org/path");
 });
 
 test("buildAwsDeploymentPlan can describe custom ALB TLS mode without default CloudFront edge", () => {

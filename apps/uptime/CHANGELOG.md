@@ -6,6 +6,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-06-28
+
+### Changed
+
+- Added hosted workspace scoping for monitor, result, incident, summary, and
+  report API reads/writes so hosted tokens cannot see other workspace data.
+- Normalized and redacted probe-submitted browser evidence before persistence.
+- Expanded the AWS deployment runbook with zero-count apply, image digest,
+  secret metadata, smoke test, logs, alarms, backup, restore drill, report gate,
+  rollback, and evidence-capture procedures.
+- Sanitized the tracked project descriptor so deployment-specific local ids and
+  machine labels stay in private metadata rather than the public repo.
+
 ## [0.1.9] - 2026-06-28
 
 ### Changed

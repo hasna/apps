@@ -151,11 +151,11 @@ async function handleHostedRequest(service: UptimeService, request: Request, url
   }
   const apiPath = `/api${url.pathname.slice("/api/v1".length)}`;
   const scope = hostedScopeFor(request.method, apiPath);
-  requireHostedActor(request, url, options, scope);
+  const actor = requireHostedActor(request, url, options, scope);
   if (["POST", "PATCH", "DELETE"].includes(request.method)) {
     validateHostedMutationOrigin(request, url, options);
   }
-  return handleApiRoute(service, request, url, apiPath, options, true);
+  return handleApiRoute(service, request, url, apiPath, options, true, actor);
 }
 
 function validateHostedMutationOrigin(request: Request, url: URL, options: CreateApiHandlerOptions): void {
@@ -178,12 +178,13 @@ async function handleApiRoute(
   apiPath: string,
   options: CreateApiHandlerOptions,
   hosted: boolean,
+  actor?: HostedActor,
 ): Promise<Response> {
   if (request.method === "GET" && apiPath === "/api/summary") {
-    return json(service.summary());
+    return json(service.summary({ workspaceId: actor?.workspaceId }));
   }
   if (request.method === "GET" && apiPath === "/api/report") {
-    return json(service.buildReport());
+    return json(service.buildReport({ workspaceId: actor?.workspaceId }));
   }
   if (request.method === "POST" && apiPath === "/api/report") {
     if (hosted) throw new ApiError("hosted report delivery requires configured channel refs", 501);
@@ -239,22 +240,24 @@ async function handleApiRoute(
     }));
   }
   if (request.method === "GET" && apiPath === "/api/monitors") {
-    return json(service.listMonitors({ includeDisabled: url.searchParams.get("includeDisabled") === "true" }));
+    return json(service.listMonitors({ includeDisabled: url.searchParams.get("includeDisabled") === "true", workspaceId: actor?.workspaceId }));
   }
   if (request.method === "POST" && apiPath === "/api/monitors") {
-    return json(service.createMonitor(await jsonBody(request)), 201);
+    return json(service.createMonitor(await jsonBody(request), { workspaceId: actor?.workspaceId }), 201);
   }
   if (request.method === "GET" && apiPath === "/api/incidents") {
     const status = url.searchParams.get("status");
     return json(service.listIncidents({
       status: status === "open" || status === "closed" ? status : undefined,
       monitorId: url.searchParams.get("monitorId") ?? undefined,
+      workspaceId: actor?.workspaceId,
       limit: numericParam(url, "limit", 50),
     }));
   }
   if (request.method === "GET" && apiPath === "/api/results") {
     return json(service.listResults({
       monitorId: url.searchParams.get("monitorId") ?? undefined,
+      workspaceId: actor?.workspaceId,
       limit: numericParam(url, "limit", 50),
     }));
   }
@@ -309,14 +312,14 @@ async function handleApiRoute(
   if (monitorMatch) {
     const id = decodeURIComponent(monitorMatch[1]);
     if (request.method === "GET" && !monitorMatch[2]) {
-      const monitor = service.getMonitor(id);
+      const monitor = service.getMonitor(id, { workspaceId: actor?.workspaceId });
       return monitor ? json(monitor) : json({ error: "not found" }, 404);
     }
     if (request.method === "PATCH" && !monitorMatch[2]) {
-      return json(service.updateMonitor(id, await jsonBody(request)));
+      return json(service.updateMonitor(id, await jsonBody(request), { workspaceId: actor?.workspaceId }));
     }
     if (request.method === "DELETE" && !monitorMatch[2]) {
-      return json({ deleted: service.deleteMonitor(id) });
+      return json({ deleted: service.deleteMonitor(id, { workspaceId: actor?.workspaceId }) });
     }
     if (request.method === "POST" && monitorMatch[2] === "check") {
       if (hosted) throw new ApiError("hosted checks require check_jobs and probes", 501);

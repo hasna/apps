@@ -162,6 +162,8 @@ test("hosted API uses scoped /api/v1 auth and leaves legacy routes local-only", 
     hostedTokens: [
       { token: "read", scopes: ["uptime:read"], workspaceId: "ws_a" },
       { token: "write", scopes: ["uptime:write"], workspaceId: "ws_a" },
+      { token: "read-b", scopes: ["uptime:read"], workspaceId: "ws_b" },
+      { token: "write-b", scopes: ["uptime:write"], workspaceId: "ws_b" },
     ],
   });
 
@@ -189,6 +191,21 @@ test("hosted API uses scoped /api/v1 auth and leaves legacy routes local-only", 
     { name: "hosted", kind: "http", url: "https://example.com" },
     { origin: "https://uptime.test", authorization: "Bearer write" },
   ));
+  const createOtherWorkspace = await handler(jsonRequest(
+    "https://uptime.test/api/v1/monitors",
+    "POST",
+    { name: "hosted", kind: "http", url: "https://example.org" },
+    { origin: "https://uptime.test", authorization: "Bearer write-b" },
+  ));
+  const otherWorkspaceSummary = await handler(new Request("https://uptime.test/api/v1/summary", {
+    headers: { authorization: "Bearer read-b" },
+  }));
+  const otherWorkspaceMonitors = await handler(new Request("https://uptime.test/api/v1/monitors", {
+    headers: { authorization: "Bearer read-b" },
+  }));
+  const crossWorkspaceGet = await handler(new Request(`https://uptime.test/api/v1/monitors/${(await create.clone().json()).id}`, {
+    headers: { authorization: "Bearer read-b" },
+  }));
   const workspaceMismatch = await handler(new Request("https://uptime.test/api/v1/summary", {
     headers: { authorization: "Bearer read", "x-uptime-workspace": "ws_b" },
   }));
@@ -202,8 +219,12 @@ test("hosted API uses scoped /api/v1 auth and leaves legacy routes local-only", 
   expect(authedSummary.status).toBe(200);
   expect(readCreate.status).toBe(403);
   expect(create.status).toBe(201);
+  expect(createOtherWorkspace.status).toBe(201);
+  expect((await otherWorkspaceSummary.json()).totals.monitors).toBe(1);
+  expect(await otherWorkspaceMonitors.json()).toHaveLength(1);
+  expect(crossWorkspaceGet.status).toBe(404);
   expect(workspaceMismatch.status).toBe(403);
-  expect(service.summary().totals.monitors).toBe(1);
+  expect(service.summary().totals.monitors).toBe(2);
   service.close();
 });
 

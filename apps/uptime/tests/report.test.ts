@@ -17,6 +17,7 @@ function summary(): UptimeSummary {
     monitors: [{
       monitor: {
         id: "mon_1",
+        workspaceId: "local",
         name: "api",
         kind: "http",
         url: "https://example.com/health",

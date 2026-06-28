@@ -6,6 +6,7 @@ import type { Monitor } from "../src/types.js";
 function monitor(overrides: Partial<Monitor> = {}): Monitor {
   return {
     id: "mon_test",
+    workspaceId: "local",
     name: "test",
     kind: "http",
     url: "https://example.com",
@@ -109,7 +110,7 @@ test("browser_page checks capture only redacted evidence metadata", async () => 
       finalUrl: "https://example.com/app?token=secret",
       navigationStatus: 200,
       consoleErrors: ["Bearer abc.def"],
-      pageErrors: ["password=hunter2 at /home/hasna/private/file"],
+      pageErrors: ["password=hunter2 at /Users/example/private/file"],
       failedRequests: [{ url: "https://example.com/api?access_token=secret", statusCode: 500, error: "secret=leaked" }],
       screenshot: {
         ref: "artifact://screenshots/one",
@@ -142,7 +143,7 @@ test("browser_page evidence redacts artifact content types", async () => {
         ref: "artifact://screenshots/one",
         sha256: "a".repeat(64),
         bytes: 42,
-        contentType: "image/png; token=secret /home/hasna/private",
+        contentType: "image/png; token=secret /Users/example/private",
       },
       artifacts: [{
         ref: "artifact://trace/one",
@@ -218,7 +219,7 @@ test("browser_page evidence strips URL fragments", async () => {
 test("browser_page runner exceptions redact top-level errors", async () => {
   const result = await runBrowserPageCheck(monitor({ kind: "browser_page" }), {
     runner: async () => {
-      throw new Error("Bearer abc apiToken=secret at /home/hasna/private/file");
+      throw new Error("Bearer abc apiToken=secret at /Users/example/private/file");
     },
   });
 

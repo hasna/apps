@@ -53,6 +53,9 @@ write a sourceable env file with a placeholder probe identity.
    require Route53/edge ownership and an ACM certificate.
 5. Confirm the deployment role uses short-lived credentials or OIDC, not copied
    access keys.
+6. Create a private evidence directory outside the public repository. Store
+   command output, plan summaries, screenshots, and incident notes there. Do
+   not store tokens, database URLs, probe private keys, or secret values.
 
 ## Required Resources
 
@@ -88,6 +91,164 @@ terraform -chdir=infra/aws plan -out open-uptime.tfplan
 ```
 
 Use Terraform/OpenTofu 1.9 or newer for this starter.
+
+## Zero-Count Apply
+
+The first reviewed apply must create infrastructure with every ECS service at
+desired count `0`.
+
+1. Confirm the plan has no deletes or replacements and that all ECS services are
+   dormant:
+
+   ```bash
+   terraform show -json open-uptime.tfplan \
+     | jq -r '.resource_changes[] | select(.type=="aws_ecs_service") | [.address, .change.after.desired_count] | @tsv'
+   ```
+
+2. Confirm Terraform is not managing secret values:
+
+   ```bash
+   terraform show -json open-uptime.tfplan \
+     | jq -r '.resource_changes[] | select(.type | test("secret_version|random_password|random_string")) | .address'
+   ```
+
+   This command must print nothing.
+
+3. Apply only the reviewed zero-count plan:
+
+   ```bash
+   terraform apply open-uptime.tfplan
+   ```
+
+4. Capture outputs, the source commit, the package version, the plan summary,
+   and the caller identity in private deployment evidence.
+
+## Image And Secrets
+
+After the zero-count apply, build the image through the approved deploy pipeline
+or the declared image builder. Record only the immutable digest, not build logs
+that contain environment values:
+
+```bash
+aws codebuild start-build \
+  --profile <aws-profile> \
+  --region <region> \
+  --project-name <image-builder-project>
+```
+
+Update the approved infra root so `container_image` is the immutable ECR digest,
+then re-plan with all services still at `0`.
+
+Populate Secrets Manager values out of band. Verify metadata only:
+
+```bash
+aws secretsmanager describe-secret --profile <aws-profile> --region <region> --secret-id <secret-name>
+aws secretsmanager list-secret-version-ids --profile <aws-profile> --region <region> --secret-id <secret-name>
+```
+
+Each required secret must have an `AWSCURRENT` version before any task is
+started. Never run `get-secret-value` in shared logs or public evidence.
+
+## Protected Web Scale-Up
+
+Before setting `desired_counts.web = 1`, verify:
+
+- the image is an immutable digest, not a mutable tag or placeholder;
+- required secrets have `AWSCURRENT` versions;
+- `HASNA_UPTIME_ALLOWED_ORIGINS` matches the public HTTPS edge origin;
+- CloudFront origin access is distribution-bound, not just narrowed to
+  CloudFront origin-facing ranges;
+- web egress to ECR, Secrets Manager, CloudWatch Logs, S3, EFS, and any required
+  endpoints has been proven through NAT or VPC endpoints;
+- scheduler, public-probe, reporter, and migration remain at `0`.
+
+Scale only the web task, then capture the ECS deployment id and task definition
+ARN:
+
+```bash
+aws ecs describe-services \
+  --profile <aws-profile> \
+  --region <region> \
+  --cluster <ecs-cluster> \
+  --services <web-service> \
+  --query 'services[0].{taskDefinition:taskDefinition,deployments:deployments[*].{id:id,status:status,desired:desiredCount,running:runningCount}}'
+```
+
+## Smoke Checks
+
+Run these checks through the public edge URL and record status codes and request
+ids. Use a scoped hosted token only from the operator secret store.
+
+```bash
+curl -fsS https://<edge-host>/health
+curl -i https://<edge-host>/
+curl -i https://<edge-host>/api/v1/summary
+curl -i -H "Authorization: Bearer <token-from-secret-store>" https://<edge-host>/api/v1/summary
+```
+
+Expected results:
+
+- `/health` returns `200` and no monitor data.
+- Dashboard and API reads without auth return `401` or the approved identity
+  layer denial.
+- Authenticated API reads return only the authorized workspace.
+- Direct ALB origin access is denied unless it is the approved CloudFront origin
+  path.
+
+## Logs And Alarms
+
+Inspect recent web logs without printing secrets:
+
+```bash
+aws logs tail /ecs/<web-service> \
+  --profile <aws-profile> \
+  --region <region> \
+  --since 15m
+```
+
+Verify the initial web alarms exist and are not already alarming:
+
+```bash
+aws cloudwatch describe-alarms \
+  --profile <aws-profile> \
+  --region <region> \
+  --alarm-names <web-5xx-alarm> <web-unhealthy-alarm> \
+  --query 'MetricAlarms[*].{name:AlarmName,state:StateValue,reason:StateReason}'
+```
+
+Scheduler-stall, stale-probe, and report-delivery alarms stay blocked until
+those workers are implemented, emit metrics, and are enabled.
+
+## Backups And Restore Evidence
+
+Verify EFS backup coverage after the first apply:
+
+```bash
+aws backup list-protected-resources \
+  --profile <aws-profile> \
+  --region <region> \
+  --query 'Results[?ResourceType==`EFS`].[ResourceArn,LastBackupTime]'
+aws backup list-recovery-points-by-backup-vault \
+  --profile <aws-profile> \
+  --region <region> \
+  --backup-vault-name <backup-vault>
+```
+
+A restore drill must restore to a separate file system or staging target first.
+Do not overwrite the production EFS file system during a drill. Record the
+recovery point ARN, restore job id, target resource, validation result, and
+cleanup action.
+
+## Reports And Reporter Gate
+
+Report preview can be tested locally or through authenticated read APIs. Hosted
+delivery attempts through Mailery, Telephony, or Open Logs must stay disabled
+until the reporter has cloud channel refs, idempotency storage, retry/backoff
+state, audit rows, and delivery alarms.
+
+Do not set `desired_counts.reporter = 1` until a reviewed runbook section exists
+for report retry, duplicate suppression, provider failure handling, and delivery
+audit export.
 
 ## Private Probe Operator
 
@@ -128,8 +289,56 @@ routes are backed by cloud check jobs and cloud audit rows.
 
 ## Rollback
 
-Before each service update, record the previous task definition ARN. Roll back
-by disabling scheduler/reporter work first, then restoring the previous web or
-worker task definition. EFS backup restore requires separate operator approval,
-a selected recovery point, a replacement mount target/access point cutover, and
-an audit event.
+Before each service update, record the previous task definition ARN and current
+desired counts:
+
+```bash
+aws ecs describe-services \
+  --profile <aws-profile> \
+  --region <region> \
+  --cluster <ecs-cluster> \
+  --services <service-name> \
+  --query 'services[0].{taskDefinition:taskDefinition,desired:desiredCount,running:runningCount}'
+```
+
+If web health fails after scale-up, first scale web back to `0`:
+
+```bash
+aws ecs update-service \
+  --profile <aws-profile> \
+  --region <region> \
+  --cluster <ecs-cluster> \
+  --service <web-service> \
+  --desired-count 0
+```
+
+If a later task definition is bad, restore the previous task definition and keep
+workers disabled:
+
+```bash
+aws ecs update-service \
+  --profile <aws-profile> \
+  --region <region> \
+  --cluster <ecs-cluster> \
+  --service <web-service> \
+  --task-definition <previous-task-definition-arn> \
+  --desired-count 1
+```
+
+Disable scheduler/reporter/probe work before data rollback. EFS backup restore
+requires separate operator approval, a selected recovery point, a replacement
+mount target/access point cutover, validation in staging, and an audit event.
+
+## Evidence Checklist
+
+A deployment record is not complete until it contains:
+
+- source commit, package version, published package integrity, and image digest;
+- Terraform plan summary and zero-count desired-count proof;
+- secret metadata proof showing `AWSCURRENT` without secret values;
+- protected edge smoke results and direct-origin denial evidence;
+- ECS service/task definition evidence;
+- CloudWatch log tail and alarm-state readback;
+- backup vault, protected-resource, recovery-point, and restore-drill evidence;
+- rollback command transcript or dry-run notes;
+- explicit list of remaining disabled workers and why they remain disabled.

@@ -6,6 +6,7 @@ export type IncidentStatus = "open" | "closed";
 
 export interface Monitor {
   id: string;
+  workspaceId: string;
   name: string;
   kind: MonitorKind;
   url: string | null;
@@ -25,6 +26,7 @@ export interface Monitor {
 }
 
 export interface CreateMonitorInput {
+  workspaceId?: string;
   name: string;
   kind: CreateMonitorKind;
   url?: string;
@@ -311,6 +313,7 @@ export interface UptimeSummary {
 
 export interface ListResultsOptions {
   monitorId?: string;
+  workspaceId?: string;
   limit?: number;
 }
 

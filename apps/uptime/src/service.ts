@@ -1,4 +1,4 @@
-import { runMonitorCheck } from "./checks.js";
+import { normalizeBrowserEvidence, runMonitorCheck } from "./checks.js";
 import { createPublicKey, randomUUID } from "node:crypto";
 import { applyImport, previewImport, rollbackImport, type ImportApplyResult, type ImportPreview, type ImportRequest, type ImportRollbackResult } from "./imports.js";
 import { generateProbeKeyPair, probePublicKeyFingerprint, verifyProbeResultSignature } from "./probes.js";
@@ -46,15 +46,15 @@ export interface UptimeStoreLike {
   readonly mode: "local" | "hosted";
   readonly dataMode: "local-sqlite" | "hosted-local-sqlite" | "hosted-efs-sqlite";
   close(): void;
-  createMonitor(input: ImportedMonitorInput, options?: { allowBrowserPage?: boolean }): Monitor;
-  updateMonitor(idOrName: string, input: ImportedUpdateMonitorInput, options?: { allowBrowserPage?: boolean }): Monitor;
-  deleteMonitor(idOrName: string): boolean;
-  listMonitors(options?: { includeDisabled?: boolean }): Monitor[];
-  getMonitor(idOrName: string): Monitor | null;
+  createMonitor(input: ImportedMonitorInput, options?: { allowBrowserPage?: boolean; workspaceId?: string }): Monitor;
+  updateMonitor(idOrName: string, input: ImportedUpdateMonitorInput, options?: { allowBrowserPage?: boolean; workspaceId?: string }): Monitor;
+  deleteMonitor(idOrName: string, options?: { workspaceId?: string }): boolean;
+  listMonitors(options?: { includeDisabled?: boolean; workspaceId?: string }): Monitor[];
+  getMonitor(idOrName: string, options?: { workspaceId?: string }): Monitor | null;
   getCheckResult?(id: string): CheckResult | null;
   listResults(options?: ListResultsOptions): CheckResult[];
-  listIncidents(options?: { status?: "open" | "closed"; monitorId?: string; limit?: number }): Incident[];
-  summary(): UptimeSummary;
+  listIncidents(options?: { status?: "open" | "closed"; monitorId?: string; workspaceId?: string; limit?: number }): Incident[];
+  summary(options?: { workspaceId?: string }): UptimeSummary;
   backup(destinationPath?: string): UptimeBackup;
   verifyBackup(backupPath: string): UptimeBackupCheck;
   acquireCheckLease(monitorId: string, owner: string, ttlMs: number): boolean;
@@ -148,36 +148,36 @@ export class UptimeService {
     this.store.close();
   }
 
-  createMonitor(input: CreateMonitorInput): Monitor {
-    return this.store.createMonitor(input);
+  createMonitor(input: CreateMonitorInput, options: { workspaceId?: string } = {}): Monitor {
+    return this.store.createMonitor(input, options);
   }
 
-  updateMonitor(idOrName: string, input: UpdateMonitorInput): Monitor {
-    return this.store.updateMonitor(idOrName, input);
+  updateMonitor(idOrName: string, input: UpdateMonitorInput, options: { workspaceId?: string } = {}): Monitor {
+    return this.store.updateMonitor(idOrName, input, options);
   }
 
-  deleteMonitor(idOrName: string): boolean {
-    return this.store.deleteMonitor(idOrName);
+  deleteMonitor(idOrName: string, options: { workspaceId?: string } = {}): boolean {
+    return this.store.deleteMonitor(idOrName, options);
   }
 
-  listMonitors(options: { includeDisabled?: boolean } = {}): Monitor[] {
+  listMonitors(options: { includeDisabled?: boolean; workspaceId?: string } = {}): Monitor[] {
     return this.store.listMonitors(options);
   }
 
-  getMonitor(idOrName: string): Monitor | null {
-    return this.store.getMonitor(idOrName);
+  getMonitor(idOrName: string, options: { workspaceId?: string } = {}): Monitor | null {
+    return this.store.getMonitor(idOrName, options);
   }
 
   listResults(options: ListResultsOptions = {}): CheckResult[] {
     return this.store.listResults(options);
   }
 
-  listIncidents(options: { status?: "open" | "closed"; monitorId?: string; limit?: number } = {}): Incident[] {
+  listIncidents(options: { status?: "open" | "closed"; monitorId?: string; workspaceId?: string; limit?: number } = {}): Incident[] {
     return this.store.listIncidents(options);
   }
 
-  summary(): UptimeSummary {
-    return this.store.summary();
+  summary(options: { workspaceId?: string } = {}): UptimeSummary {
+    return this.store.summary(options);
   }
 
   createProbe(input: CreateProbeInput): CreateProbeResult {
@@ -248,8 +248,9 @@ export class UptimeService {
     return this.store.verifyBackup(backupPath);
   }
 
-  buildReport(options: BuildUptimeReportOptions = {}): UptimeReport {
-    return buildUptimeReport(this.summary(), options);
+  buildReport(options: BuildUptimeReportOptions & { workspaceId?: string } = {}): UptimeReport {
+    const { workspaceId, ...reportOptions } = options;
+    return buildUptimeReport(this.summary({ workspaceId }), reportOptions);
   }
 
   async sendReport(options: SendUptimeReportOptions = {}): Promise<UptimeReportDelivery[]> {
@@ -559,6 +560,7 @@ export class UptimeService {
     if (job.claimedByProbeId !== probe.id) throw new Error("Probe job was claimed by another probe");
     if (job.fencingToken !== input.fencingToken) throw new Error("Probe job fencing token is invalid");
     if (!job.leaseExpiresAt || job.leaseExpiresAt <= new Date().toISOString()) throw new Error("Probe job lease expired");
+    const evidence = input.evidence ? normalizeBrowserEvidence(monitor.url ?? monitor.host ?? "https://example.invalid", input.evidence) : null;
     const result = this.store.recordCheckResult({
       monitorId: monitor.id,
       checkedAt: input.checkedAt,
@@ -566,7 +568,7 @@ export class UptimeService {
       latencyMs: input.latencyMs,
       statusCode: input.statusCode ?? null,
       error: input.error ?? null,
-      evidence: input.evidence ?? null,
+      evidence,
       attemptCount: input.attemptCount ?? 1,
       expectedMonitorRevision: input.monitorRevision,
     });

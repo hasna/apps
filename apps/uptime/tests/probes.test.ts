@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { signProbeResult, type ProbeSigningInput } from "../src/probes.js";
 import { UptimeService } from "../src/service.js";
-import type { CreateProbeResult, Monitor, ProbeCheckJob, ProbeResultSubmission } from "../src/types.js";
+import type { CheckEvidence, CreateProbeResult, Monitor, ProbeCheckJob, ProbeResultSubmission } from "../src/types.js";
 
 const cleanup: string[] = [];
 
@@ -31,6 +31,7 @@ function signedSubmission(input: {
   error?: string | null;
   attemptCount?: number;
   monitorRevision?: number;
+  evidence?: CheckEvidence | null;
 }): ProbeResultSubmission {
   const unsigned: ProbeSigningInput = {
     probeId: input.probe.id,
@@ -46,7 +47,7 @@ function signedSubmission(input: {
     error: input.error ?? null,
     attemptCount: input.attemptCount ?? 1,
     monitorRevision: input.monitorRevision ?? input.monitor.revision,
-    evidence: null,
+    evidence: input.evidence ?? null,
   };
   return {
     ...unsigned,
@@ -79,6 +80,89 @@ test("signed probe submission records a check result and completes the claimed j
   expect(service.getProbeCheckJob(job.id)?.status).toBe("submitted");
   expect(service.getProbe(probe.id)?.lastSeenAt).toBe(receipt.submittedAt);
   expect(service.listIncidents({ status: "open" })).toHaveLength(1);
+  service.close();
+});
+
+test("probe submissions normalize browser evidence before storing it", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  const monitor = service.createMonitor({ name: "api", kind: "http", url: "https://example.com" });
+  const probe = service.createProbe({ name: "private-probe-01" });
+  const job = service.claimProbeCheckJob({
+    jobId: service.createProbeCheckJob({ monitorId: monitor.id, scheduleSlot: "slot-evidence-redaction" }).id,
+    probeId: probe.id,
+  });
+  const submission = signedSubmission({
+    probe,
+    monitor,
+    job,
+    privateKeyPem: probe.privateKeyPem!,
+    evidence: {
+      kind: "browser_page",
+      finalUrl: "https://example.com/?api_key=secret#section",
+      navigationStatus: 200,
+      consoleErrors: ["Bearer abc123 at /Users/example/private/file"],
+      pageErrors: ["password=hunter2"],
+      failedRequests: [{ url: "https://example.com/fail?token=secret", statusCode: 500, error: "token=secret" }],
+      screenshot: {
+        ref: "screenshots/token=secret.png",
+        sha256: "a".repeat(64),
+        bytes: 10,
+        contentType: "image/png; token=secret",
+        retentionClass: "short",
+      },
+      artifacts: [],
+      redacted: false,
+      redactionStatus: "redacted",
+      retentionClass: "short",
+    },
+  });
+
+  const { result } = service.submitProbeResult(submission);
+  const evidence = result.evidence;
+
+  expect(evidence?.redacted).toBe(true);
+  expect(JSON.stringify(evidence)).not.toContain("secret");
+  expect(JSON.stringify(evidence)).not.toContain("/Users/example/private");
+  expect(evidence?.finalUrl).toBe("https://example.com/?api_key=%5Bredacted%5D");
+  service.close();
+});
+
+test("probe submissions reject local artifact refs in evidence", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  const monitor = service.createMonitor({ name: "api", kind: "http", url: "https://example.com" });
+  const probe = service.createProbe({ name: "private-probe-01" });
+  const job = service.claimProbeCheckJob({
+    jobId: service.createProbeCheckJob({ monitorId: monitor.id, scheduleSlot: "slot-evidence-local-path" }).id,
+    probeId: probe.id,
+  });
+  const submission = signedSubmission({
+    probe,
+    monitor,
+    job,
+    privateKeyPem: probe.privateKeyPem!,
+    evidence: {
+      kind: "browser_page",
+      finalUrl: "https://example.com",
+      navigationStatus: 200,
+      consoleErrors: [],
+      pageErrors: [],
+      failedRequests: [],
+      screenshot: {
+        ref: "/Users/example/private/screenshot.png",
+        sha256: "a".repeat(64),
+        bytes: 10,
+        contentType: "image/png",
+        retentionClass: "short",
+      },
+      artifacts: [],
+      redacted: false,
+      redactionStatus: "redacted",
+      retentionClass: "short",
+    },
+  });
+
+  expect(() => service.submitProbeResult(submission)).toThrow("browser evidence artifacts");
+  expect(service.listResults()).toHaveLength(0);
   service.close();
 });
 

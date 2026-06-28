@@ -703,7 +703,7 @@ test("import preview/apply is dry-run, idempotent, and stores browser evidence m
     records: [{
       sourceId: "home-page",
       monitor: { name: "home page", kind: "browser_page", url: "https://example.com/app?api_key=secret" },
-      localPath: "/home/hasna/private/project",
+      localPath: "/Users/example/private/project",
       secretToken: "secret",
     }],
   };
@@ -776,7 +776,7 @@ test("import mappings cover projects, servers, domains, and deployment sources",
     {
       source: "projects" as const,
       sourceId: "proj_api",
-      record: { id: "proj_api", name: "Project API", url: "https://project.example/health", path: "/home/hasna/private/project", apiToken: "secret" },
+      record: { id: "proj_api", name: "Project API", url: "https://project.example/health", path: "/Users/example/private/project", apiToken: "secret" },
       expected: { kind: "http", url: "https://project.example/health" },
     },
     {
@@ -809,7 +809,7 @@ test("import mappings cover projects, servers, domains, and deployment sources",
     expect(service.applyImport({ source: item.source, records: [item.record] }).totals.unchanged).toBe(1);
     const provenance = service.store.getProvenance(item.source, item.sourceId);
     expect(provenance?.monitorId).toBe(monitor.id);
-    expect(JSON.stringify(provenance?.snapshot)).not.toContain("/home/hasna/private");
+    expect(JSON.stringify(provenance?.snapshot)).not.toContain("/Users/example/private");
     expect(JSON.stringify(provenance?.snapshot)).not.toContain("secret");
   }
   service.close();
@@ -1040,14 +1040,14 @@ test("import preview snapshots redact embedded local paths and secret-like value
     records: [{
       sourceId: "api",
       monitor: { name: "api", kind: "http", url: "https://example.com" },
-      message: "error at /home/hasna/private/file token=abc",
+      message: "error at /Users/example/private/file token=abc",
     }],
   });
   const snapshot = JSON.stringify(preview.items[0].candidate.snapshot);
 
   expect(snapshot).toContain("[local-path]");
   expect(snapshot).toContain("token=[redacted]");
-  expect(snapshot).not.toContain("/home/hasna/private");
+  expect(snapshot).not.toContain("/Users/example/private");
   expect(snapshot).not.toContain("token=abc");
   service.close();
 });
@@ -1093,14 +1093,14 @@ test("browser imports do not echo raw host metadata", () => {
         name: "page",
         kind: "browser_page",
         url: "https://example.com",
-        host: "/home/hasna/private token=secret",
+        host: "/Users/example/private token=secret",
       },
     }],
   });
 
   expect(preview.totals.create).toBe(1);
   expect(preview.items[0].candidate.host).toBeUndefined();
-  expect(JSON.stringify(preview)).not.toContain("/home/hasna/private");
+  expect(JSON.stringify(preview)).not.toContain("/Users/example/private");
   expect(JSON.stringify(preview)).not.toContain("token=secret");
   service.close();
 });
@@ -1298,7 +1298,7 @@ test("local backup verify and restore round trip preserves data", async () => {
   first.close();
 
   expect(backup.bytes).toBeGreaterThan(0);
-  expect(check).toMatchObject({ ok: true, integrity: "ok", schemaVersion: "3", monitors: 1, results: 1, incidents: 1 });
+  expect(check).toMatchObject({ ok: true, integrity: "ok", schemaVersion: "4", monitors: 1, results: 1, incidents: 1 });
 
   UptimeStore.restoreBackup(backup.backupPath, restorePath);
   const restored = new UptimeService({ dbPath: restorePath });
@@ -1333,7 +1333,7 @@ test("schema v1 backups missing only probe tables remain restorable", () => {
   const restored = new UptimeService({ dbPath: restorePath });
   expect(restored.listMonitors({ includeDisabled: true })).toHaveLength(1);
   expect(restored.createProbe({ name: "post-restore" }).publicKeyFingerprint).toHaveLength(64);
-  expect(restored.verifyBackup(restorePath).schemaVersion).toBe("3");
+  expect(restored.verifyBackup(restorePath).schemaVersion).toBe("4");
   restored.close();
 });
 
@@ -1361,7 +1361,7 @@ test("schema v2 backups missing only report and audit tables remain restorable",
   UptimeStore.restoreBackup(legacyPath, restorePath);
   const restored = new UptimeService({ dbPath: restorePath });
   expect(restored.listReportSchedules()).toHaveLength(0);
-  expect(restored.verifyBackup(restorePath).schemaVersion).toBe("3");
+  expect(restored.verifyBackup(restorePath).schemaVersion).toBe("4");
   restored.close();
 });
 
