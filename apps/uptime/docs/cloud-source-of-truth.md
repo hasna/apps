@@ -446,9 +446,10 @@ ECS/API/RDS/S3/probe lag/job backlog/delivery failures, and rollback commands.
   NAT HTTPS egress while services stayed at desired count `0`. The Terraform
   module supports CloudFront-only origin verification headers so the ALB can
   reject direct origin requests that only share CloudFront's managed prefix
-  list. It is not live: live scale-up is still blocked by applying/proving the
-  origin header in the private root, edge/auth smokes, alarm actions, budget
-  recipients, and an EFS restore drill.
+  list; that header value is secret-bearing Terraform/AWS configuration, not
+  public evidence. It is not live: live scale-up is still blocked by
+  applying/proving the origin header in the private root, edge/auth smokes,
+  alarm actions, budget recipients, and an EFS restore drill.
 - Projects per-project cloud stores do not exist yet; current local
   `project.db` stores are not enough for cloud-backed canvases or JSON Render.
 - Browser/page monitoring lacks the artifact, redaction, retention, and storage

@@ -18,9 +18,11 @@
     "mode": "cloudfront_default_domain",
     "url": "https://<cloudfront-domain>",
     "allowedOriginsEnv": "HASNA_UPTIME_ALLOWED_ORIGINS=https://<cloudfront-domain>",
-    "originPolicy": "ALB HTTP ingress restricted to CloudFront origin-facing ranges plus CloudFront-only origin verification header",
-    "originVerifyHeaderEnabled": true,
-    "originVerifyHeaderName": "X-Open-Uptime-Origin-Verify"
+    "originPolicy": "ALB HTTP ingress restricted to CloudFront origin-facing ranges plus CloudFront-only origin verification header before scale-up",
+    "originVerifyHeaderRequiredBeforeScaleUp": true,
+    "originVerifyHeaderEnabled": "<true-after-private-root-apply>",
+    "originVerifyHeaderName": "<private-header-name>",
+    "originVerifyHeaderValueLocation": "private Terraform variable / encrypted state; never public docs or logs"
   },
   "awsInventory": {
     "vpcId": "<target-vpc-id>",

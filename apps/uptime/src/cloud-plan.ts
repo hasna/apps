@@ -25,7 +25,7 @@ export interface AwsDeploymentPlanOptions {
 
 export interface AwsDeploymentPlan {
   kind: "open-uptime.aws-deployment-plan";
-  version: 3;
+  version: 4;
   generatedAt: string;
   status: "blocked";
   canApply: false;
@@ -50,6 +50,13 @@ export interface AwsDeploymentPlan {
     protectedAccessMode: "cloudfront_default_domain" | "alb_https_cert";
     edgeDistribution?: string;
     protectedAccessUrl: string;
+    originVerification: {
+      mode: "cloudfront_origin_header" | "alb_tls";
+      requiredBeforeScaleUp: boolean;
+      headerName?: string;
+      valueStoredInTerraformState: boolean;
+      stateAccessWarning?: string;
+    };
     targetGroups: string[];
     securityGroups: string[];
     secrets: Record<string, string>;
@@ -195,7 +202,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
 
   return {
     kind: "open-uptime.aws-deployment-plan",
-    version: 3,
+    version: 4,
     generatedAt: new Date().toISOString(),
     status: "blocked",
     canApply: false,
@@ -220,6 +227,19 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
       protectedAccessMode,
       edgeDistribution: protectedAccessMode === "cloudfront_default_domain" ? `${prefix}-${stage}-edge` : undefined,
       protectedAccessUrl,
+      originVerification: protectedAccessMode === "cloudfront_default_domain"
+        ? {
+          mode: "cloudfront_origin_header",
+          requiredBeforeScaleUp: true,
+          headerName: "X-Open-Uptime-Origin-Verify",
+          valueStoredInTerraformState: true,
+          stateAccessWarning: "The origin verification header value is sensitive but is stored in encrypted Terraform state and CloudFront/ALB configuration; restrict state, plan, CloudFront distribution-read, and ELB rule-read access.",
+        }
+        : {
+          mode: "alb_tls",
+          requiredBeforeScaleUp: false,
+          valueStoredInTerraformState: false,
+        },
       targetGroups: [`${prefix}-${stage}-web-tg`],
       securityGroups: [
         `${prefix}-${stage}-alb-sg`,
@@ -268,7 +288,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
         `Infra PR must declare hardened S3 evidence bucket ${evidenceBucket} with KMS, versioning, lifecycle, and public access block.`,
         `Infra PR must declare encrypted EFS ${prefix}-${stage}-data with access point, mount targets, and AWS Backup plan.`,
         protectedAccessMode === "cloudfront_default_domain"
-          ? "Infra PR must declare CloudFront default-domain HTTPS edge, ALB HTTP listener restricted to CloudFront origin-facing ranges, ECS/Fargate cluster, target groups, security groups, IAM roles, CloudWatch log groups, and Secrets Manager refs."
+          ? "Infra PR must declare CloudFront default-domain HTTPS edge, ALB HTTP listener restricted to CloudFront origin-facing ranges, CloudFront-only origin verification header binding, ECS/Fargate cluster, target groups, security groups, IAM roles, CloudWatch log groups, and Secrets Manager refs."
           : `Infra PR must declare ECS/Fargate cluster ${cluster}, ALB HTTPS listener, target groups, security groups, IAM roles, CloudWatch log groups, and Secrets Manager refs.`,
         "Only apply the infra plan from the approved infrastructure repository after review evidence is attached.",
       ],
@@ -279,7 +299,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
         `Register task definitions for ${services.map((service) => service.name).join(", ")} using valueFrom secrets.`,
         `Update ECS services in cluster ${cluster} one component at a time through the approved deploy pipeline.`,
         protectedAccessMode === "cloudfront_default_domain"
-          ? "Use the CloudFront default HTTPS domain for first protected access; add custom DNS/certificate only after edge ownership is approved."
+          ? "Use the CloudFront default HTTPS domain with origin verification header binding for first protected access; add custom DNS/certificate only after edge ownership is approved."
           : `Create Route53/edge record for ${hostname} only after ALB health checks pass and auth denial smokes succeed.`,
       ],
       rollback: [
@@ -296,6 +316,9 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
     },
     blockers: [
       "The infrastructure owner repository was not found in this workspace.",
+      protectedAccessMode === "cloudfront_default_domain"
+        ? "CloudFront origin verification header binding must be enabled and direct-origin denial must be proven before web desired count is raised above 0."
+        : "ALB HTTPS ingress policy and auth-denial smokes must be proven before web desired count is raised above 0.",
       "The EFS SQLite bridge is single-writer only: web target desired count is 1 and scheduler/public-probe/reporter targets remain 0 until Postgres and cloud leases exist.",
       "Hosted production auth/RBAC must replace broad static hosted-token operation before exposure.",
       "Public probe execution still needs cloud check-job leases wired to runHostedHttpCheck and live policy-decision log evidence.",
@@ -305,7 +328,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
       "Infrastructure PR/synth/plan from the approved infra repository.",
       "CodeBuild image-builder run, container smoke, and immutable image digest.",
       "ECS task definitions using secrets.valueFrom only.",
-      "CloudFront-default-domain or ALB TLS auth-denial smokes, direct-origin denial evidence, and web alarm checks.",
+      "CloudFront-default-domain origin-header config or ALB TLS auth-denial smokes, direct-origin denial evidence, and web alarm checks.",
       "Single-writer ECS evidence: one web task maximum and no scheduler/public-probe/reporter EFS mounts.",
       "EFS encryption, access point, mount-target, AWS Backup, and restore-drill evidence.",
       "S3 bucket KMS, versioning, lifecycle, and public-access-block evidence.",
@@ -319,6 +342,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
         "This plan generator does not call AWS.",
         "Blocked plan output intentionally avoids copy-pastable AWS mutation commands.",
         "Default protected access uses CloudFront's HTTPS default domain so first deploy is not blocked on custom DNS or ACM.",
+        "CloudFront default-domain mode still requires origin verification header binding before live scale-up; the header value is sensitive state/config material, not public documentation.",
         "Hosted runtime uses explicit EFS-backed SQLite at HASNA_UPTIME_HOSTED_SQLITE_DB until the async Postgres adapter exists.",
         "Do not set HASNA_UPTIME_DATABASE_URL for hosted tasks until the Postgres adapter is implemented.",
         "Secrets are represented as secret names/refs and must be injected with valueFrom.",

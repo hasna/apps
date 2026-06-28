@@ -44,9 +44,12 @@ origin hop.
 CloudFront prefix-list ingress is only a network narrowing control; it is not
 bound to one distribution. Before enabling the web task, set
 `enable_cloudfront_origin_verify_header = true` and provide a high-entropy
-`cloudfront_origin_verify_header_value` from a private secret workflow. The
+`cloudfront_origin_verify_header_value` from a private operator workflow. The
 module then configures CloudFront to send that header, makes the ALB default
 action return `403`, and forwards only requests with the matching header.
+Terraform marks the value sensitive, but it still lives in encrypted Terraform
+state and in CloudFront/ALB configuration; restrict state, saved plan,
+CloudFront distribution-read, and ELB listener-rule-read access accordingly.
 
 All module resources carry owner, project, environment, service, account, app
 type, and cost-center tags. Set `monthly_budget_limit_usd` plus

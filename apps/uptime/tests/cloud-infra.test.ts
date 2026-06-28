@@ -58,6 +58,8 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(main).toContain("var.enable_cloudfront_origin_verify_header");
   expect(main).toContain("var.cloudfront_origin_verify_header_name");
   expect(main).toContain("var.cloudfront_origin_verify_header_value");
+  expect(main).toContain("for_each = local.use_origin_verify ? [] : [1]");
+  expect(main).toContain("for_each = local.use_origin_verify ? [1] : []");
   expect(main).toContain('type = "fixed-response"');
   expect(main).toContain('status_code  = "403"');
   expect(main).toContain("custom_header");
@@ -83,6 +85,21 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(variables).toContain("EFS SQLite bridge requires web desired count 0 or 1");
   expect(variables).toContain("hosted_token_secret_arn");
   expect(variables).toContain('"public-probe" = 0');
+  expect(variables).toContain("enable_cloudfront_origin_verify_header can only be true when protected_access_mode is cloudfront_default_domain");
+  expect(variables).toContain('default     = "X-Open-Uptime-Origin-Verify"');
+  expect(variables).toContain('default     = false');
+  expect(variables).toContain('default     = null');
+  for (const disallowedHeader of [
+    "cache-control",
+    "content-length",
+    "content-type",
+    "host",
+    "origin",
+    "x-real-ip",
+    "x-uptime-hosted-token",
+  ]) {
+    expect(variables).toContain(`"${disallowedHeader}"`);
+  }
   expect(main).toContain("aws_s3_bucket_public_access_block");
   expect(main).toContain("aws_s3_bucket_lifecycle_configuration");
   expect(main).toContain("DenyInsecureTransport");
@@ -180,4 +197,6 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(combined).not.toContain("BEGIN PRIVATE KEY");
   expect(combined).not.toContain("postgres://");
   expect(combined).not.toContain("HASNA_UPTIME_HOSTED_TOKEN=");
+  expect(combined).not.toContain('resource "random_');
+  expect(combined).not.toContain("hashicorp/random");
 });

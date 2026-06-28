@@ -8,7 +8,7 @@ test("buildAwsDeploymentPlan generates a dry-run AWS plan with generic package d
   const serialized = JSON.stringify(plan);
 
   expect(plan.kind).toBe("open-uptime.aws-deployment-plan");
-  expect(plan.version).toBe(3);
+  expect(plan.version).toBe(4);
   expect(plan.accountName).toBe("aws-profile");
   expect(plan.region).toBe("us-east-1");
   expect(plan.resources.vpcId).toBe("vpc-xxxxxxxx");
@@ -18,6 +18,13 @@ test("buildAwsDeploymentPlan generates a dry-run AWS plan with generic package d
   expect(plan.resources.protectedAccessMode).toBe("cloudfront_default_domain");
   expect(plan.resources.edgeDistribution).toBe("open-uptime-prod-edge");
   expect(plan.resources.protectedAccessUrl).toBe("https://<cloudfront-domain>");
+  expect(plan.resources.originVerification).toMatchObject({
+    mode: "cloudfront_origin_header",
+    requiredBeforeScaleUp: true,
+    headerName: "X-Open-Uptime-Origin-Verify",
+    valueStoredInTerraformState: true,
+  });
+  expect(plan.resources.originVerification.stateAccessWarning).toContain("Terraform state");
   expect(plan.status).toBe("blocked");
   expect(plan.canApply).toBe(false);
   expect(plan.image.dockerfile).toBe("Dockerfile.package");
@@ -30,6 +37,7 @@ test("buildAwsDeploymentPlan generates a dry-run AWS plan with generic package d
   expect(plan.image.pushCommands.join("\n")).not.toContain("aws codebuild start-build");
   expect(plan.runbook.deploy.join("\n")).toContain("do not run migration");
   expect(plan.runbook.deploy.join("\n")).toContain("CloudFront default HTTPS domain");
+  expect(plan.runbook.deploy.join("\n")).toContain("origin verification header binding");
   expect(plan.runbook.deploy.join("\n")).not.toContain("Run the migration task");
   expect(plan.infra).toMatchObject({
     path: "infra/aws",
@@ -63,7 +71,8 @@ test("buildAwsDeploymentPlan generates a dry-run AWS plan with generic package d
     hostedLocalSqliteAllowed: false,
   });
   expect(plan.requiredEvidence).toContain("EFS encryption, access point, mount-target, AWS Backup, and restore-drill evidence.");
-  expect(plan.requiredEvidence).toContain("CloudFront-default-domain or ALB TLS auth-denial smokes, direct-origin denial evidence, and web alarm checks.");
+  expect(plan.requiredEvidence).toContain("CloudFront-default-domain origin-header config or ALB TLS auth-denial smokes, direct-origin denial evidence, and web alarm checks.");
+  expect(plan.blockers.join("\n")).toContain("origin verification header binding");
   expect(plan.blockers.join("\n")).not.toContain("no reviewed Dockerfile");
   expect(plan.requiredEvidence.length).toBeGreaterThan(3);
   expect(serialized).not.toContain("AWS_SECRET_ACCESS_KEY");
@@ -89,10 +98,15 @@ test("buildAwsDeploymentPlan can describe custom ALB TLS mode without default Cl
     runtimePackageVersion: "0.1.8",
   });
 
-  expect(plan.version).toBe(3);
+  expect(plan.version).toBe(4);
   expect(plan.resources.protectedAccessMode).toBe("alb_https_cert");
   expect(plan.resources.edgeDistribution).toBeUndefined();
   expect(plan.resources.protectedAccessUrl).toBe("https://uptime.example.net");
+  expect(plan.resources.originVerification).toMatchObject({
+    mode: "alb_tls",
+    requiredBeforeScaleUp: false,
+    valueStoredInTerraformState: false,
+  });
   expect(plan.resources.services.find((service) => service.role === "web")?.environment.HASNA_UPTIME_ALLOWED_ORIGINS)
     .toBe("https://uptime.example.net");
   expect(plan.runbook.deploy.join("\n")).toContain("Create Route53/edge record");

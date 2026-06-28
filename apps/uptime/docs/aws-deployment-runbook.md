@@ -388,7 +388,9 @@ routes are backed by cloud check jobs and cloud audit rows.
 - Do not treat CloudFront prefix-list ingress as distribution-bound origin
   protection. In `cloudfront_default_domain` mode, enable the module's
   CloudFront-only origin verification header and keep its generated value out of
-  the public repo and shared logs.
+  the public repo and shared logs. Terraform redacts the sensitive input in CLI
+  output, but the value is still stored in encrypted Terraform state, saved plan
+  files, and AWS CloudFront/ALB configuration; restrict access accordingly.
 - Do not treat local SQLite, local project DBs, or private-probe local state as cloud
   authority after cutover.
 - Do configure owner/project/environment/service/cost-center tags and AWS

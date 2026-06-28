@@ -143,8 +143,11 @@ Public web exposure requires defense in depth:
 - CloudFront prefix-list ingress is not distribution-bound by itself. In
   `cloudfront_default_domain` mode, set
   `enable_cloudfront_origin_verify_header = true` and provide a high-entropy
-  `cloudfront_origin_verify_header_value` from an approved private secret
-  workflow before setting web desired count above `0`;
+  `cloudfront_origin_verify_header_value` from an approved private operator
+  workflow before setting web desired count above `0`. Terraform treats the
+  value as sensitive, but the value is still persisted in encrypted Terraform
+  state and in AWS CloudFront/ALB configuration readable by principals with
+  distribution or listener-rule read access;
 - custom hostname deployment terminates TLS with ACM on ALB or CloudFront after
   Route53/edge ownership is approved;
 - edge access can be Cloudflare Access, OIDC, Cognito, or another Hasna-approved

@@ -91,6 +91,11 @@ variable "enable_cloudfront_origin_verify_header" {
   description = "When true in cloudfront_default_domain mode, CloudFront sends a private origin header and the ALB listener rejects requests missing the matching value."
   type        = bool
   default     = false
+
+  validation {
+    condition     = !var.enable_cloudfront_origin_verify_header || var.protected_access_mode == "cloudfront_default_domain"
+    error_message = "enable_cloudfront_origin_verify_header can only be true when protected_access_mode is cloudfront_default_domain."
+  }
 }
 
 variable "cloudfront_origin_verify_header_name" {
@@ -103,9 +108,37 @@ variable "cloudfront_origin_verify_header_name" {
       can(regex("^[A-Za-z0-9-]+$", var.cloudfront_origin_verify_header_name))
       && !startswith(lower(var.cloudfront_origin_verify_header_name), "x-amz-")
       && !startswith(lower(var.cloudfront_origin_verify_header_name), "x-edge-")
-      && !contains(["host", "authorization", "cookie"], lower(var.cloudfront_origin_verify_header_name))
+      && !contains([
+        "authorization",
+        "cache-control",
+        "connection",
+        "content-length",
+        "content-type",
+        "cookie",
+        "host",
+        "if-match",
+        "if-modified-since",
+        "if-none-match",
+        "if-range",
+        "if-unmodified-since",
+        "max-forwards",
+        "origin",
+        "pragma",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "proxy-connection",
+        "range",
+        "request-range",
+        "te",
+        "trailer",
+        "transfer-encoding",
+        "upgrade",
+        "via",
+        "x-real-ip",
+        "x-uptime-hosted-token",
+      ], lower(var.cloudfront_origin_verify_header_name))
     )
-    error_message = "cloudfront_origin_verify_header_name must be a safe custom HTTP header name and must not use reserved CloudFront/AWS headers."
+    error_message = "cloudfront_origin_verify_header_name must be a safe CloudFront custom origin header name and must not use reserved, app-forwarded, or viewer-controlled header names."
   }
 }
 
@@ -118,7 +151,7 @@ variable "cloudfront_origin_verify_header_value" {
 
   validation {
     condition = (
-      !var.enable_cloudfront_origin_verify_header
+      !(var.enable_cloudfront_origin_verify_header && var.protected_access_mode == "cloudfront_default_domain")
       || (
         var.cloudfront_origin_verify_header_value != null
         && can(regex("^[A-Za-z0-9_-]{32,256}$", var.cloudfront_origin_verify_header_value))
