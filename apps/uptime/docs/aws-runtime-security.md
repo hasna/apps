@@ -137,12 +137,14 @@ infra PR.
 Public web exposure requires defense in depth:
 
 - first deployment may terminate viewer TLS at CloudFront's default HTTPS
-  domain and restrict ALB HTTP origin ingress to CloudFront origin-facing
-  ranges;
-- CloudFront prefix-list ingress is not distribution-bound by itself. Before
-  setting web desired count above `0`, add either CloudFront VPC origin/private
-  ALB routing or an ALB rule that requires a CloudFront-only origin header whose
-  value is managed outside Terraform state;
+  domain, restrict ALB HTTP origin ingress to CloudFront origin-facing ranges,
+  and require the module's CloudFront-only origin verification header at the ALB
+  listener;
+- CloudFront prefix-list ingress is not distribution-bound by itself. In
+  `cloudfront_default_domain` mode, set
+  `enable_cloudfront_origin_verify_header = true` and provide a high-entropy
+  `cloudfront_origin_verify_header_value` from an approved private secret
+  workflow before setting web desired count above `0`;
 - custom hostname deployment terminates TLS with ACM on ALB or CloudFront after
   Route53/edge ownership is approved;
 - edge access can be Cloudflare Access, OIDC, Cognito, or another Hasna-approved

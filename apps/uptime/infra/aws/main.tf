@@ -26,6 +26,7 @@ locals {
   efs_enabled_services  = toset(["web"])
   use_alb_https         = var.protected_access_mode == "alb_https_cert"
   use_cloudfront        = var.protected_access_mode == "cloudfront_default_domain"
+  use_origin_verify     = local.use_cloudfront && var.enable_cloudfront_origin_verify_header
   services = {
     web = {
       desired_count = lookup(var.desired_counts, "web", 0)
@@ -900,9 +901,44 @@ resource "aws_lb_listener" "http_cloudfront" {
   protocol          = "HTTP"
   tags              = local.tags
 
-  default_action {
+  dynamic "default_action" {
+    for_each = local.use_origin_verify ? [] : [1]
+    content {
+      type             = "forward"
+      target_group_arn = aws_lb_target_group.web.arn
+    }
+  }
+
+  dynamic "default_action" {
+    for_each = local.use_origin_verify ? [1] : []
+    content {
+      type = "fixed-response"
+
+      fixed_response {
+        content_type = "text/plain"
+        message_body = "forbidden"
+        status_code  = "403"
+      }
+    }
+  }
+}
+
+resource "aws_lb_listener_rule" "http_cloudfront_origin_verify" {
+  count        = local.use_origin_verify ? 1 : 0
+  listener_arn = aws_lb_listener.http_cloudfront[0].arn
+  priority     = var.cloudfront_origin_verify_listener_rule_priority
+  tags         = local.tags
+
+  action {
     type             = "forward"
     target_group_arn = aws_lb_target_group.web.arn
+  }
+
+  condition {
+    http_header {
+      http_header_name = var.cloudfront_origin_verify_header_name
+      values           = [var.cloudfront_origin_verify_header_value]
+    }
   }
 }
 
@@ -917,6 +953,14 @@ resource "aws_cloudfront_distribution" "open_uptime" {
   origin {
     domain_name = aws_lb.open_uptime.dns_name
     origin_id   = "${local.prefix}-alb"
+
+    dynamic "custom_header" {
+      for_each = local.use_origin_verify ? [1] : []
+      content {
+        name  = var.cloudfront_origin_verify_header_name
+        value = var.cloudfront_origin_verify_header_value
+      }
+    }
 
     custom_origin_config {
       http_port              = 80
@@ -956,7 +1000,7 @@ resource "aws_cloudfront_distribution" "open_uptime" {
     cloudfront_default_certificate = true
   }
 
-  depends_on = [aws_lb_listener.http_cloudfront]
+  depends_on = [aws_lb_listener.http_cloudfront, aws_lb_listener_rule.http_cloudfront_origin_verify]
 }
 
 resource "aws_route53_record" "open_uptime" {
@@ -1173,7 +1217,7 @@ resource "aws_ecs_service" "web" {
     container_port   = local.container_port
   }
 
-  depends_on = [aws_lb_listener.https, aws_lb_listener.http_cloudfront, aws_efs_mount_target.data]
+  depends_on = [aws_lb_listener.https, aws_lb_listener.http_cloudfront, aws_lb_listener_rule.http_cloudfront_origin_verify, aws_efs_mount_target.data]
 }
 
 resource "aws_ecs_service" "worker" {

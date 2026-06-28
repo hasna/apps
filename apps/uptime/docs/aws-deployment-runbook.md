@@ -176,8 +176,8 @@ Before setting `desired_counts.web = 1`, verify:
 - the image is an immutable digest, not a mutable tag or placeholder;
 - required secrets have `AWSCURRENT` versions;
 - `HASNA_UPTIME_ALLOWED_ORIGINS` matches the public HTTPS edge origin;
-- CloudFront origin access is distribution-bound, not just narrowed to
-  CloudFront origin-facing ranges;
+- CloudFront origin access is distribution-bound with the CloudFront-only origin
+  verification header, not just narrowed to CloudFront origin-facing ranges;
 - web egress to ECR, Secrets Manager or SSM, CloudWatch Logs, S3, EFS, and any
   required endpoints has been proven from a real ECS task. Terraform endpoint
   ids, route tables, and security-group rules are creation evidence only; the
@@ -386,9 +386,9 @@ routes are backed by cloud check jobs and cloud audit rows.
 - Do not expose the ALB directly in CloudFront mode; ALB ingress must be limited
   to CloudFront origin-facing ranges.
 - Do not treat CloudFront prefix-list ingress as distribution-bound origin
-  protection. Before enabling the web task, add CloudFront VPC origin/private
-  ALB routing or require a CloudFront-only origin header whose secret value is
-  not stored in Terraform state.
+  protection. In `cloudfront_default_domain` mode, enable the module's
+  CloudFront-only origin verification header and keep its generated value out of
+  the public repo and shared logs.
 - Do not treat local SQLite, local project DBs, or private-probe local state as cloud
   authority after cutover.
 - Do configure owner/project/environment/service/cost-center tags and AWS

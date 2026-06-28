@@ -22,6 +22,14 @@ output "protected_access_url" {
   value = var.protected_access_mode == "cloudfront_default_domain" ? "https://${aws_cloudfront_distribution.open_uptime[0].domain_name}" : "https://${var.hostname}"
 }
 
+output "cloudfront_origin_verify_header_enabled" {
+  value = local.use_origin_verify
+}
+
+output "cloudfront_origin_verify_header_name" {
+  value = local.use_origin_verify ? var.cloudfront_origin_verify_header_name : null
+}
+
 output "evidence_bucket" {
   value = aws_s3_bucket.evidence.bucket
 }

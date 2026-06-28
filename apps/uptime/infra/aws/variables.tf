@@ -87,6 +87,58 @@ variable "protected_access_mode" {
   }
 }
 
+variable "enable_cloudfront_origin_verify_header" {
+  description = "When true in cloudfront_default_domain mode, CloudFront sends a private origin header and the ALB listener rejects requests missing the matching value."
+  type        = bool
+  default     = false
+}
+
+variable "cloudfront_origin_verify_header_name" {
+  description = "CloudFront-only origin verification header name used when enable_cloudfront_origin_verify_header is true."
+  type        = string
+  default     = "X-Open-Uptime-Origin-Verify"
+
+  validation {
+    condition = (
+      can(regex("^[A-Za-z0-9-]+$", var.cloudfront_origin_verify_header_name))
+      && !startswith(lower(var.cloudfront_origin_verify_header_name), "x-amz-")
+      && !startswith(lower(var.cloudfront_origin_verify_header_name), "x-edge-")
+      && !contains(["host", "authorization", "cookie"], lower(var.cloudfront_origin_verify_header_name))
+    )
+    error_message = "cloudfront_origin_verify_header_name must be a safe custom HTTP header name and must not use reserved CloudFront/AWS headers."
+  }
+}
+
+variable "cloudfront_origin_verify_header_value" {
+  description = "Sensitive CloudFront-only origin verification header value. Required when enable_cloudfront_origin_verify_header is true."
+  type        = string
+  default     = null
+  nullable    = true
+  sensitive   = true
+
+  validation {
+    condition = (
+      !var.enable_cloudfront_origin_verify_header
+      || (
+        var.cloudfront_origin_verify_header_value != null
+        && can(regex("^[A-Za-z0-9_-]{32,256}$", var.cloudfront_origin_verify_header_value))
+      )
+    )
+    error_message = "cloudfront_origin_verify_header_value is required when origin verification is enabled and must be 32-256 URL-safe characters."
+  }
+}
+
+variable "cloudfront_origin_verify_listener_rule_priority" {
+  description = "ALB listener rule priority for the CloudFront origin verification header rule."
+  type        = number
+  default     = 100
+
+  validation {
+    condition     = var.cloudfront_origin_verify_listener_rule_priority >= 1 && var.cloudfront_origin_verify_listener_rule_priority <= 50000
+    error_message = "cloudfront_origin_verify_listener_rule_priority must be between 1 and 50000."
+  }
+}
+
 variable "public_subnet_ids" {
   description = "Public subnets for the ALB."
   type        = list(string)
@@ -116,7 +168,7 @@ variable "container_image" {
 variable "runtime_package_version" {
   description = "Published @hasna/uptime package version that CodeBuild should build into the ECR image."
   type        = string
-  default     = "0.1.18"
+  default     = "0.1.19"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$", var.runtime_package_version))

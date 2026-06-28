@@ -42,9 +42,11 @@ HTTPS origin so hosted mutation CSRF checks still work through the private HTTP
 origin hop.
 
 CloudFront prefix-list ingress is only a network narrowing control; it is not
-bound to one distribution. Add CloudFront VPC origin/private ALB routing or an
-ALB origin-header rule with the secret value managed outside Terraform state
-before enabling the web task.
+bound to one distribution. Before enabling the web task, set
+`enable_cloudfront_origin_verify_header = true` and provide a high-entropy
+`cloudfront_origin_verify_header_value` from a private secret workflow. The
+module then configures CloudFront to send that header, makes the ALB default
+action return `403`, and forwards only requests with the matching header.
 
 All module resources carry owner, project, environment, service, account, app
 type, and cost-center tags. Set `monthly_budget_limit_usd` plus

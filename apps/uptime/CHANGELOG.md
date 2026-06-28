@@ -6,6 +6,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.19] - 2026-06-28
+
+### Added
+
+- Added optional CloudFront origin verification header binding to the AWS
+  Terraform module. When enabled, CloudFront sends a private origin header and
+  the ALB listener returns `403` for direct origin requests that do not present
+  the matching value.
+
+### Changed
+
+- Updated AWS runbooks, deployment metadata, and cloud source-of-truth docs to
+  distinguish CloudFront prefix-list narrowing from distribution-bound origin
+  access.
+
 ## [0.1.18] - 2026-06-28
 
 ### Changed

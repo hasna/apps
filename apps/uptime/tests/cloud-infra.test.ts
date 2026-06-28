@@ -54,6 +54,13 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(main).toContain('data "aws_ec2_managed_prefix_list" "cloudfront_origin_facing"');
   expect(main).toContain('resource "aws_security_group_rule" "alb_http_from_cloudfront"');
   expect(main).toContain('resource "aws_lb_listener" "http_cloudfront"');
+  expect(main).toContain('resource "aws_lb_listener_rule" "http_cloudfront_origin_verify"');
+  expect(main).toContain("var.enable_cloudfront_origin_verify_header");
+  expect(main).toContain("var.cloudfront_origin_verify_header_name");
+  expect(main).toContain("var.cloudfront_origin_verify_header_value");
+  expect(main).toContain('type = "fixed-response"');
+  expect(main).toContain('status_code  = "403"');
+  expect(main).toContain("custom_header");
   expect(main).toContain('resource "aws_lb_listener" "https"');
   expect(main).toContain("tags              = local.tags");
   expect(main).toContain('cloudfront_default_certificate = true');
@@ -94,6 +101,9 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(outputs).toContain('output "backup_plan_id"');
   expect(outputs).toContain('output "kms_key_arn"');
   expect(outputs).toContain('output "secret_refs"');
+  expect(outputs).toContain('output "cloudfront_origin_verify_header_enabled"');
+  expect(outputs).toContain('output "cloudfront_origin_verify_header_name"');
+  expect(outputs).not.toContain('output "cloudfront_origin_verify_header_value"');
   expect(outputs).toContain("var.hosted_token_secret_arn");
   expect(outputs).toContain("aws_cloudwatch_log_group.service");
   expect(outputs).toContain("aws_cloudwatch_metric_alarm.web_5xx.alarm_name");
@@ -132,7 +142,10 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(variables).toContain("web            = 0");
   expect(tfvars).toContain("container_image");
   expect(tfvars).toContain('protected_access_mode    = "cloudfront_default_domain"');
-  expect(tfvars).toContain('runtime_package_version  = "0.1.18"');
+  expect(tfvars).toContain("enable_cloudfront_origin_verify_header");
+  expect(tfvars).toContain("cloudfront_origin_verify_header_name");
+  expect(tfvars).toContain("cloudfront_origin_verify_header_value  = null");
+  expect(tfvars).toContain('runtime_package_version  = "0.1.19"');
   expect(tfvars).toContain('project_name             = "open-uptime"');
   expect(tfvars).toContain("monthly_budget_limit_usd");
   expect(tfvars).toContain("private_route_table_ids");
