@@ -425,7 +425,9 @@ ECS/API/RDS/S3/probe lag/job backlog/delivery failures, and rollback commands.
 ## Current Blockers
 
 - Open Uptime has no Postgres/cloud store and no distributed leases.
-- Hosted API/dashboard reads are not protected yet.
+- Hosted API reads are protected only by a broad bootstrap token, and the hosted
+  dashboard shell still fails closed; production-grade identity/RBAC is not
+  implemented yet.
 - Outbound target policy for hosted HTTP probes exists in the SDK, but the
   cloud public-probe worker and lease path are not wired to it yet.
 - `@hasna/cloud` hybrid mode still returns SQLite, so it is not cloud-primary.
@@ -437,10 +439,13 @@ ECS/API/RDS/S3/probe lag/job backlog/delivery failures, and rollback commands.
 - A private Hasna AWS bridge now has zero-count runtime resources, including
   ECR, dormant ECS services, ALB, CloudFront default-domain edge, logs, alarms,
   EFS, Backup, and Secrets Manager containers. The public Terraform module now
-  defines explicit ECS container health checks for every task definition. It is
-  not live: services remain at desired count `0`, secret values are not
-  populated, and live scale-up is still blocked by origin binding, smoke tests,
-  alarm actions, budget recipients, and restore evidence.
+  defines explicit ECS container health checks for every task definition. The
+  active private secret refs under `hasna/xyz/opensource/uptime/prod/*` have
+  `AWSCURRENT` versions, and one-off web task smokes proved image pull/startup,
+  secret injection, CloudWatch log delivery, EFS read/write, S3 PutObject, and
+  NAT HTTPS egress while services stayed at desired count `0`. It is not live:
+  live scale-up is still blocked by CloudFront origin binding, edge/auth smokes,
+  alarm actions, budget recipients, and an EFS restore drill.
 - Projects per-project cloud stores do not exist yet; current local
   `project.db` stores are not enough for cloud-backed canvases or JSON Render.
 - Browser/page monitoring lacks the artifact, redaction, retention, and storage

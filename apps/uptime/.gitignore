@@ -6,6 +6,7 @@ bun.lockb
 .env
 .env.*
 !.env.example
+.project.json
 .hasna/
 .codewith/
 .takumi/
