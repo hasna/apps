@@ -184,7 +184,10 @@ Tasks can have a `recurrence_rule` (e.g. "every day", "every weekday", "every mo
 
 ## Dispatch
 
-Send tasks or task lists to tmux windows — useful for multi-agent workflows where one agent queues work for another.
+Legacy/emergency only: send tasks or task lists to tmux windows after a human
+explicitly chooses that route. Normal multi-agent work should use task-created
+events plus OpenLoops headless worker/verifier workflows, not prompt pasting
+into existing panes.
 
 **Architecture:**
 - `src/db/dispatches.ts` — CRUD for dispatch jobs and delivery logs (`dispatches`, `dispatch_logs` tables)
@@ -204,7 +207,7 @@ todos dispatches [--status pending|sent|failed|cancelled] [--limit 20]
 todos dispatches --cancel <dispatch-id>
 ```
 
-**MCP tools:** `dispatch_tasks`, `dispatch_task_list`, `dispatch_to_multiple`, `list_dispatches`, `cancel_dispatch`, `run_due_dispatches`
+**MCP tools:** `dispatch_tasks`, `dispatch_task_list`, `dispatch_to_multiple`, `list_dispatches`, `cancel_dispatch`, `run_due_dispatches`. These preserve legacy/manual tmux delivery; they are not the default pending-task routing path.
 
 **Target formats:** `window`, `session:window`, `session:window.pane`
 

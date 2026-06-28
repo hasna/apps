@@ -227,7 +227,7 @@ export const AGENT_ADAPTER_DOCS: Record<AgentAdapterHost, AgentAdapterDoc> = {
     ],
     examples: [
       { title: "Manual Takumi MCP add", command: "takumi mcp add --scope project todos -- todos-mcp" },
-      { title: "Dispatch to tmux pane", command: "todos dispatch agents:0 --tasks <id>" },
+      { title: "Legacy tmux handoff", command: "todos dispatch agents:0 --tasks <id>" },
       { title: "Handoff on session end", command: "todos goal handoff release-v2 --format md --agent takumi-agent" },
     ],
   },

@@ -15,7 +15,8 @@ import type { CreateDispatchInput, Dispatch } from "../types/index.js";
 export type { FormatOpts } from "./dispatch-formatter.js";
 
 /**
- * Execute a single dispatch: resolve tasks, format, send to tmux, update status.
+ * Legacy/emergency path: resolve tasks, format, send to tmux, update status.
+ * Default pending-task routing should use task-created headless workflows.
  */
 export async function executeDispatch(
   dispatch: Dispatch,
@@ -106,7 +107,7 @@ export async function runDueDispatches(
 }
 
 /**
- * Fan-out: dispatch the same task set to multiple tmux windows.
+ * Legacy/emergency fan-out: dispatch the same task set to multiple tmux windows.
  * Returns the list of created Dispatch objects.
  */
 export async function dispatchToMultiple(

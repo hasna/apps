@@ -18,7 +18,7 @@ export function registerDispatchTools(server: McpServer, { shouldRegisterTool, r
   if (shouldRegisterTool("dispatch_tasks")) {
     server.tool(
       "dispatch_tasks",
-      "Send specific tasks to a tmux window. Formats a message from the given task IDs and dispatches it with a configurable delay before hitting Enter. Supports dry-run preview and scheduled sending.",
+      "Legacy/emergency only: send specific tasks to a tmux window after a human explicitly chooses tmux delivery. Normal pending-task routing should use task-created headless workflows. Supports dry-run preview and scheduled sending.",
       {
         task_ids: z.array(z.string()).min(1).describe("IDs of the tasks to dispatch"),
         target: z.string().describe("tmux target — window name, session:window, or session:window.pane"),
@@ -61,7 +61,7 @@ export function registerDispatchTools(server: McpServer, { shouldRegisterTool, r
   if (shouldRegisterTool("dispatch_task_list")) {
     server.tool(
       "dispatch_task_list",
-      "Send all tasks from a task list to a tmux window. Fetches matching tasks, formats them as a grouped message with a list header, and dispatches. Supports status filtering, dry-run, and scheduled sending.",
+      "Legacy/emergency only: send all tasks from a task list to a tmux window after a human explicitly chooses tmux delivery. Normal pending-task routing should use task-created headless workflows. Supports filtering, dry-run, and scheduled sending.",
       {
         task_list_id: z.string().describe("ID or slug of the task list to dispatch"),
         target: z.string().describe("tmux target — window name, session:window, or session:window.pane"),
@@ -108,7 +108,7 @@ export function registerDispatchTools(server: McpServer, { shouldRegisterTool, r
   if (shouldRegisterTool("dispatch_to_multiple")) {
     server.tool(
       "dispatch_to_multiple",
-      "Fan-out: send the same tasks or task list to multiple tmux windows in sequence. A stagger delay is applied between each window.",
+      "Legacy/emergency fan-out: send the same tasks or task list to multiple tmux windows in sequence after a human explicitly chooses tmux delivery. A stagger delay is applied between each window.",
       {
         targets: z.array(z.string()).min(2).describe("Array of tmux targets to dispatch to"),
         task_ids: z.array(z.string()).optional().describe("Task IDs to dispatch (use this or task_list_id)"),
@@ -185,7 +185,7 @@ export function registerDispatchTools(server: McpServer, { shouldRegisterTool, r
   if (shouldRegisterTool("run_due_dispatches")) {
     server.tool(
       "run_due_dispatches",
-      "Manually trigger all pending dispatches that are due (scheduled_at <= now). Returns the count fired.",
+      "Legacy/emergency only: manually trigger all pending tmux dispatches that are due (scheduled_at <= now). Returns the count fired.",
       {
         dry_run: z.boolean().optional().describe("Preview without sending. Default: false."),
         confirm_busy: z.boolean().optional().describe("Send even if target tmux panes appear busy. Default: false."),

@@ -425,19 +425,23 @@ todos webhooks add loops \
   --arg=todos-task \
   --arg=--provider \
   --arg=codewith \
-  --arg=--auth-profile \
-  --arg=account005 \
+  --arg=--auth-profile-pool \
+  --arg=account004,account005,account006 \
   --arg=--permission-mode \
   --arg=bypass \
   --arg=--sandbox \
   --arg=danger-full-access \
+  --arg=--worktree-mode \
+  --arg=required \
   --timeout-ms 900000 \
   --json
 ```
 
 When a task is created, `@hasna/events` sends the event JSON on stdin and in
 `HASNA_EVENT_JSON`. OpenLoops uses that event to create a deduped one-shot
-worker/verifier workflow for the task. The event data includes task identity,
+worker/verifier workflow for the task. Use account-profile pools instead of a
+single pinned profile, and require isolated worktrees for repo-mutating routes.
+The event data includes task identity,
 title, description, project/list ids, working directory, tags, metadata, status,
 priority, approval state, and timestamps. Event metadata includes routing-safe
 project/list/path fields, `route_enabled` when the task metadata opts in, and an
