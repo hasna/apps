@@ -8,9 +8,10 @@ import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
 import { createProject } from "../db/projects.js";
 import { createTaskList } from "../db/task-lists.js";
 import type { Task } from "../types/index.js";
-import { emitSharedTaskEvent } from "./shared-events.js";
+import { emitSharedTaskEvent, shouldEmitSharedTaskEvents } from "./shared-events.js";
 
 let tempDir = "";
+const originalHome = process.env["HOME"];
 
 beforeEach(() => {
   tempDir = mkdtempSync(join(tmpdir(), "todos-shared-events-"));
@@ -23,6 +24,8 @@ afterEach(() => {
   closeDatabase();
   delete process.env["TODOS_DB_PATH"];
   delete process.env["HASNA_EVENTS_DIR"];
+  if (originalHome === undefined) delete process.env["HOME"];
+  else process.env["HOME"] = originalHome;
   rmSync(tempDir, { recursive: true, force: true });
 });
 
@@ -95,6 +98,25 @@ describe("shared task events", () => {
       no_auto: true,
       manual_required: false,
       requires_approval: true,
+    });
+  });
+
+  test("does not leak routeable temp-db tasks into the default shared event store", async () => {
+    closeDatabase();
+    resetDatabase();
+    delete process.env["HASNA_EVENTS_DIR"];
+    process.env["HOME"] = join(tempDir, "home");
+    process.env["TODOS_DB_PATH"] = join(tempDir, "scratch", "todos.db");
+
+    expect(shouldEmitSharedTaskEvents()).toBe(false);
+
+    await emitSharedTaskEvent({
+      type: "task.created",
+      task: makeTask({
+        title: "Routeable task",
+        working_dir: "/home/hasna/workspace/hasna/opensource/open-todos",
+        metadata: { route_enabled: true, fingerprint: "route:cli:1" },
+      }),
     });
   });
 

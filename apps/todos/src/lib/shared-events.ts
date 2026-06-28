@@ -1,5 +1,7 @@
 import { EventsClient } from "@hasna/events";
 import type { EventSeverity } from "@hasna/events";
+import { tmpdir } from "node:os";
+import { resolve, sep } from "node:path";
 import { getDatabase } from "../db/database.js";
 import { getProject } from "../db/projects.js";
 import { getTaskList, getTaskListBySlug } from "../db/task-lists.js";
@@ -7,6 +9,7 @@ import type { Project } from "../types/index.js";
 import type { Task } from "../types/index.js";
 
 const SOURCE = "todos";
+const ALLOW_GLOBAL_EVENTS_FROM_TEMP_DB = "HASNA_TODOS_ALLOW_GLOBAL_EVENTS_FROM_TEMP_DB";
 
 export type TodosSharedEventType =
   | "task.created"
@@ -66,6 +69,32 @@ function booleanField(value: unknown): boolean | undefined {
 
 function objectField(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function explicitTaskDbPath(): string | undefined {
+  return process.env["HASNA_TODOS_DB_PATH"] || process.env["TODOS_DB_PATH"];
+}
+
+function isTruthyEnv(value: string | undefined): boolean {
+  return value ? ["1", "true", "yes", "on"].includes(value.trim().toLowerCase()) : false;
+}
+
+function isInMemoryDbPath(path: string): boolean {
+  return path === ":memory:" || path.startsWith("file::memory:");
+}
+
+function isUnderTmpDir(path: string): boolean {
+  const normalized = resolve(path);
+  const tmp = resolve(tmpdir());
+  return normalized === tmp || normalized.startsWith(`${tmp}${sep}`);
+}
+
+export function shouldEmitSharedTaskEvents(): boolean {
+  const explicitDb = explicitTaskDbPath();
+  if (!explicitDb) return true;
+  if (process.env["HASNA_EVENTS_DIR"]) return true;
+  if (isTruthyEnv(process.env[ALLOW_GLOBAL_EVENTS_FROM_TEMP_DB])) return true;
+  return !(isInMemoryDbPath(explicitDb) || isUnderTmpDir(explicitDb));
 }
 
 function firstBoolean(records: Record<string, unknown>[], keys: string[]): boolean | undefined {
@@ -194,6 +223,8 @@ export async function emitSharedTaskEvent(input: {
   severity?: EventSeverity;
   dedupeKey?: string;
 }): Promise<void> {
+  if (!shouldEmitSharedTaskEvents()) return;
+
   const data = taskEventData(input.task, input.data);
   await new EventsClient().emit(
     {
