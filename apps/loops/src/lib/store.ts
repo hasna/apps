@@ -2408,6 +2408,22 @@ export class Store {
     return row ? rowToLease(row) : undefined;
   }
 
+  writeTransaction<T>(fn: () => T): T {
+    this.db.exec("BEGIN IMMEDIATE;");
+    try {
+      const result = fn();
+      this.db.exec("COMMIT;");
+      return result;
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK;");
+      } catch {
+        // If SQLite already unwound the transaction, preserve the original error.
+      }
+      throw error;
+    }
+  }
+
   close(): void {
     this.db.close();
   }

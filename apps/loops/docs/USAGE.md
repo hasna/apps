@@ -243,6 +243,26 @@ loops templates render bounded-agent-worker-verifier \
   --var sandbox=danger-full-access
 ```
 
+Task/event agent templates default to `worktreeMode=auto`. When `projectPath`
+is an existing git repository, OpenLoops inserts a `prepare-worktree` command
+step before the worker and runs the worker/verifier from a deterministic
+worktree under `~/.hasna/loops/worktrees/<repo>/<run>`. The generated agent
+target includes worktree metadata (`mode`, `cwd`, `path`, `branch`,
+`originalCwd`) so dry-runs and workflow inspection expose the exact checkout.
+
+Use explicit main/default checkout mode only when the task truly requires it:
+
+```bash
+loops templates render todos-task-worker-verifier \
+  --var taskId=<task-id> \
+  --var projectPath=/path/to/repo \
+  --var worktreeMode=main
+```
+
+Use `worktreeMode=required` when non-worktree execution should fail fast, or
+`worktreeMode=off` for non-git projects. `worktreeRoot` and
+`worktreeBranchPrefix` can override the storage root and branch prefix.
+
 For event-driven task automation, `loops events handle todos-task` reads a
 Hasna event envelope from stdin or `HASNA_EVENT_JSON`, renders the template, and
 schedules a deduped one-shot workflow loop:
@@ -252,7 +272,8 @@ cat task-created-event.json | loops events handle todos-task \
   --provider codewith \
   --auth-profile-pool account004,account005,account006 \
   --permission-mode bypass \
-  --sandbox danger-full-access
+  --sandbox danger-full-access \
+  --worktree-mode auto
 ```
 
 Task routing is explicit opt-in. The handler skips the event without creating a
@@ -262,6 +283,32 @@ blocked, completed/done, cancelled/canceled, failed, archived, manual,
 approval-required, or `no-auto` tasks. This guard exists even when the upstream
 `@hasna/events` webhook filter is misconfigured, so task existence alone is not
 permission to execute agent work.
+
+Use route throttles to avoid stampeding agents when a producer creates many
+tasks at once:
+
+```bash
+cat task-created-event.json | loops events handle todos-task \
+  --provider codewith \
+  --auth-profile-pool account004,account005,account006 \
+  --project-group oss \
+  --max-active-per-project 1 \
+  --max-active-per-project-group 4 \
+  --max-active 12
+```
+
+The limits count active routed worker/verifier workflow loops once per workflow.
+`--max-active-per-project` gates new work for the same project path,
+`--max-active-per-project-group` shares a pool across related projects such as
+`oss`, and `--max-active` is the global routed-workflow cap. Project matching
+uses the canonical git top-level path when available, so repo subdirectories
+share the same project cap. A throttled event is skipped with JSON evidence and
+`queuedAtSource=true` instead of creating another worker loop; the source task
+remains the durable queue item and should be replayed/drained later by the task
+scheduler. Re-delivering the event later is safe because event handlers dedupe
+by task/event id before rendering worktree plans or checking route limits. In
+dry-run mode, throttle counts are not evaluated because opening the live loop
+store can create or migrate the local database.
 
 For other Hasna apps that expose `@hasna/events` webhooks, use the generic
 handler:
@@ -281,7 +328,8 @@ verifier workflow, and the workflow updates todos with evidence. Use account
 pools so worker and verifier steps do not burn the same profile; OpenLoops picks
 deterministically and uses a different verifier profile when the pool has at
 least two entries. Use `--dry-run` to inspect the rendered workflow and loop
-input without storing anything.
+input without storing anything, including the worktree path and branch for
+git-backed tasks.
 
 ## Transcript-Driven Loops
 
@@ -449,4 +497,7 @@ The adapters intentionally use provider command surfaces instead of pretending e
 - `--variant` is provider-specific reasoning/model effort. Claude maps it to `--effort`, Codewith/Codex map it to `model_reasoning_effort`, and OpenCode/AICopilot pass `--variant`.
 - Daemon and scheduled runs prepend common user executable directories such as `~/.local/bin` and `~/.bun/bin` before resolving provider CLIs.
 
-For production loops that can mutate repos, prefer disposable worktrees and explicit prompts that name allowed write scope.
+For production loops that can mutate repos, prefer the built-in
+`worktreeMode=auto`/`required` path and explicit prompts that name allowed write
+scope. Use `main` or `off` only for operations that intentionally need the
+original checkout.

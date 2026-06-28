@@ -103,6 +103,29 @@ export interface AgentAllowlistSpec {
   enforcement?: "metadata_only";
 }
 
+export type AgentWorktreeMode = "auto" | "required" | "off" | "main";
+
+export interface AgentWorktreeSpec {
+  mode: AgentWorktreeMode;
+  enabled: boolean;
+  originalCwd: string;
+  cwd: string;
+  repoRoot?: string;
+  root?: string;
+  path?: string;
+  branch?: string;
+  reason?: string;
+}
+
+export interface AgentRoutingSpec {
+  projectPath?: string;
+  projectGroup?: string;
+  taskId?: string;
+  eventId?: string;
+  eventType?: string;
+  eventSource?: string;
+}
+
 export interface AgentTarget {
   type: "agent";
   provider: AgentProvider;
@@ -118,6 +141,8 @@ export interface AgentTarget {
   permissionMode?: AgentPermissionMode;
   sandbox?: AgentSandbox;
   allowlist?: AgentAllowlistSpec;
+  worktree?: AgentWorktreeSpec;
+  routing?: AgentRoutingSpec;
   account?: AccountRef;
   preflight?: RuntimePreflightPolicy;
 }

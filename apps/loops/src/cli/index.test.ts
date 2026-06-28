@@ -26,6 +26,22 @@ function futureAt(): string {
   return new Date(Date.now() + 60_000).toISOString();
 }
 
+function git(repo: string, args: string[]): void {
+  const result = spawnSync("git", args, { cwd: repo, encoding: "utf8" });
+  expect(result.status).toBe(0);
+}
+
+function createGitRepo(prefix: string): string {
+  const repo = mkdtempSync(join(tmpdir(), prefix));
+  git(repo, ["init"]);
+  git(repo, ["config", "user.email", "loops-test@example.com"]);
+  git(repo, ["config", "user.name", "Loops Test"]);
+  writeFileSync(join(repo, "README.md"), "# test\n");
+  git(repo, ["add", "README.md"]);
+  git(repo, ["commit", "-m", "init"]);
+  return repo;
+}
+
 describe("loops CLI", () => {
   test("reports the package version", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-version-"));
@@ -1284,6 +1300,130 @@ describe("loops CLI", () => {
     expect(profiles.every((profile: string) => ["account004", "account005", "account006"].includes(profile))).toBe(true);
   });
 
+  test("templates default git projects to isolated worktrees", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-worktree-"));
+    const repo = createGitRepo("loops-cli-template-worktree-repo-");
+    const worktreeRoot = join(dataDir, "worktrees");
+    const render = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "todos-task-worker-verifier",
+      "--var",
+      "taskId=task-worktree-12345678",
+      "--var",
+      `projectPath=${repo}`,
+      "--var",
+      "provider=codewith",
+      "--var",
+      "authProfile=account005",
+      "--var",
+      `worktreeRoot=${worktreeRoot}`,
+    ]);
+
+    expect(render.status).toBe(0);
+    const workflow = JSON.parse(render.stdout);
+    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["prepare-worktree", "worker", "verifier"]);
+    expect(workflow.steps[0].target).toMatchObject({ type: "command", command: "bash", cwd: repo });
+    expect(workflow.steps[1].dependsOn).toEqual(["prepare-worktree"]);
+    expect(workflow.steps[1].target.cwd).toContain(worktreeRoot);
+    expect(workflow.steps[1].target.worktree).toMatchObject({
+      mode: "auto",
+      enabled: true,
+      originalCwd: repo,
+      repoRoot: repo,
+      root: worktreeRoot,
+    });
+    expect(workflow.steps[1].target.worktree.branch).toContain("openloops/");
+    expect(workflow.steps[2].target.cwd).toBe(workflow.steps[1].target.cwd);
+    expect(workflow.steps[1].target.prompt).toContain("Use the isolated git worktree");
+    expect(workflow.steps[1].target.prompt).toContain("Do not mutate the original checkout/main branch");
+  });
+
+  test("prepare-worktree refuses a stale checkout from a different git repo", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-stale-worktree-"));
+    const repo = createGitRepo("loops-cli-template-stale-worktree-repo-");
+    const worktreeRoot = join(dataDir, "worktrees");
+    const render = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "todos-task-worker-verifier",
+      "--var",
+      "taskId=task-stale-worktree",
+      "--var",
+      `projectPath=${repo}`,
+      "--var",
+      `worktreeRoot=${worktreeRoot}`,
+    ]);
+
+    expect(render.status).toBe(0);
+    const workflow = JSON.parse(render.stdout);
+    const stalePath = workflow.steps[1].target.worktree.path;
+    mkdirSync(stalePath, { recursive: true });
+    git(stalePath, ["init"]);
+    git(stalePath, ["config", "user.email", "loops-test@example.com"]);
+    git(stalePath, ["config", "user.name", "Loops Test"]);
+    writeFileSync(join(stalePath, "README.md"), "# stale\n");
+    git(stalePath, ["add", "README.md"]);
+    git(stalePath, ["commit", "-m", "stale"]);
+
+    const prepare = spawnSync("bash", ["-lc", workflow.steps[0].target.args[1]], {
+      cwd: workflow.steps[0].target.cwd,
+      encoding: "utf8",
+    });
+
+    expect(prepare.status).not.toBe(0);
+    expect(prepare.stderr).toContain("different git common dir");
+  });
+
+  test("templates allow explicit main checkout mode instead of worktrees", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-worktree-main-"));
+    const repo = createGitRepo("loops-cli-template-worktree-main-repo-");
+    const render = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "todos-task-worker-verifier",
+      "--var",
+      "taskId=task-main-12345678",
+      "--var",
+      `projectPath=${repo}`,
+      "--var",
+      "worktreeMode=main",
+    ]);
+
+    expect(render.status).toBe(0);
+    const workflow = JSON.parse(render.stdout);
+    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["worker", "verifier"]);
+    expect(workflow.steps[0].target.cwd).toBe(repo);
+    expect(workflow.steps[0].target.worktree).toMatchObject({
+      mode: "main",
+      enabled: false,
+      cwd: repo,
+      reason: "explicit main/default checkout mode",
+    });
+  });
+
+  test("templates fail required worktree mode for non-git project paths", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-worktree-required-"));
+    const render = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "todos-task-worker-verifier",
+      "--var",
+      "taskId=task-required-worktree",
+      "--var",
+      "projectPath=/tmp/not-a-real-openloops-repo",
+      "--var",
+      "worktreeMode=required",
+    ]);
+
+    expect(render.status).not.toBe(0);
+    expect(render.stderr).toContain("worktreeMode=required");
+  });
+
   test("templates render generic event worker/verifier workflow JSON", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-template-render-"));
     const render = runCli(dataDir, [
@@ -1464,6 +1604,257 @@ describe("loops CLI", () => {
     expect(secondValue.deduped).toBe(true);
     expect(secondValue.idempotencyKey).toBe(firstValue.idempotencyKey);
     expect(secondValue.loop.id).toBe(firstValue.loop.id);
+  });
+
+  test("todos task event handler dry-run exposes default worktree routing for git repos", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-worktree-"));
+    const repo = createGitRepo("loops-cli-event-handler-worktree-repo-");
+    const worktreeRoot = join(dataDir, "worktrees");
+    const event = {
+      id: "evt-task-worktree-0001",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-event-worktree-0001",
+        title: "Fix event bridge in worktree",
+        working_dir: repo,
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const result = runCli(dataDir, [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--dry-run",
+      "--worktree-root",
+      worktreeRoot,
+    ], JSON.stringify(event));
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.workflow.steps.map((step: { id: string }) => step.id)).toEqual(["prepare-worktree", "worker", "verifier"]);
+    expect(value.workflow.steps[1].target.cwd).toContain(worktreeRoot);
+    expect(value.workflow.steps[1].target.worktree.enabled).toBe(true);
+    expect(value.workflow.steps[1].target.worktree.originalCwd).toBe(repo);
+  });
+
+  test("todos task event handler throttles active workflows per project", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-project-throttle-"));
+    const repo = createGitRepo("loops-cli-event-handler-project-throttle-repo-");
+    const baseEvent = {
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        title: "Queue project task",
+        working_dir: repo,
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+    const args = [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--max-active-per-project",
+      "1",
+    ];
+
+    const first = runCli(dataDir, args, JSON.stringify({
+      ...baseEvent,
+      id: "evt-project-throttle-0001",
+      data: { ...baseEvent.data, id: "task-project-throttle-0001" },
+    }));
+    expect(first.status).toBe(0);
+    expect(JSON.parse(first.stdout).deduped).toBe(false);
+
+    const second = runCli(dataDir, args, JSON.stringify({
+      ...baseEvent,
+      id: "evt-project-throttle-0002",
+      data: { ...baseEvent.data, id: "task-project-throttle-0002" },
+    }));
+    expect(second.status).toBe(0);
+    const value = JSON.parse(second.stdout);
+    expect(value.skipped).toBe(true);
+    expect(value.reason).toContain("project active workflow limit reached");
+    expect(value.throttle.counts.project).toBe(1);
+    expect(value.throttle.limits.maxActivePerProject).toBe(1);
+
+    const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loops).toHaveLength(1);
+  });
+
+  test("todos task event handler canonicalizes repo subdirectories for per-project throttles", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-canonical-throttle-"));
+    const repo = createGitRepo("loops-cli-event-handler-canonical-throttle-repo-");
+    const subdir = join(repo, "packages", "sdk");
+    mkdirSync(subdir, { recursive: true });
+    const args = [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--max-active-per-project",
+      "1",
+    ];
+
+    const first = runCli(dataDir, args, JSON.stringify({
+      id: "evt-canonical-throttle-0001",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-canonical-throttle-0001",
+        title: "Queue repo-root task",
+        working_dir: repo,
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    }));
+    expect(first.status).toBe(0);
+    expect(JSON.parse(first.stdout).deduped).toBe(false);
+
+    const second = runCli(dataDir, args, JSON.stringify({
+      id: "evt-canonical-throttle-0002",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-canonical-throttle-0002",
+        title: "Queue subdir task",
+        working_dir: subdir,
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    }));
+    expect(second.status).toBe(0);
+    const value = JSON.parse(second.stdout);
+    expect(value.skipped).toBe(true);
+    expect(value.throttle.counts.project).toBe(1);
+    expect(value.throttle.projectPath).toBe(repo);
+  });
+
+  test("todos task event handler throttles active workflows per project group", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-group-throttle-"));
+    const repoA = createGitRepo("loops-cli-event-handler-group-throttle-a-");
+    const repoB = createGitRepo("loops-cli-event-handler-group-throttle-b-");
+    const args = [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--project-group",
+      "oss",
+      "--max-active-per-project-group",
+      "1",
+    ];
+
+    const first = runCli(dataDir, args, JSON.stringify({
+      id: "evt-group-throttle-0001",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-group-throttle-0001",
+        title: "Queue group task A",
+        working_dir: repoA,
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    }));
+    expect(first.status).toBe(0);
+    expect(JSON.parse(first.stdout).deduped).toBe(false);
+
+    const second = runCli(dataDir, args, JSON.stringify({
+      id: "evt-group-throttle-0002",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-group-throttle-0002",
+        title: "Queue group task B",
+        working_dir: repoB,
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    }));
+    expect(second.status).toBe(0);
+    const value = JSON.parse(second.stdout);
+    expect(value.skipped).toBe(true);
+    expect(value.reason).toContain("project-group active workflow limit reached");
+    expect(value.throttle.counts.projectGroup).toBe(1);
+    expect(value.throttle.limits.maxActivePerProjectGroup).toBe(1);
+
+    const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loops).toHaveLength(1);
+  });
+
+  test("todos task event handler dry-run with throttle options does not create a loop database", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-dry-throttle-"));
+    const repo = createGitRepo("loops-cli-event-handler-dry-throttle-repo-");
+    const event = {
+      id: "evt-dry-throttle-0001",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-dry-throttle-0001",
+        title: "Preview throttled route",
+        working_dir: repo,
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const result = runCli(dataDir, [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--dry-run",
+      "--max-active",
+      "1",
+    ], JSON.stringify(event));
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.throttle.evaluated).toBe(false);
+    expect(existsSync(join(dataDir, "loops.db"))).toBe(false);
+  });
+
+  test("todos task event handler dedupes before required worktree validation", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-dedupe-before-render-"));
+    const repo = createGitRepo("loops-cli-event-handler-dedupe-before-render-repo-");
+    const event = {
+      id: "evt-dedupe-before-render-0001",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-dedupe-before-render",
+        title: "Create first routable task",
+        working_dir: repo,
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const first = runCli(dataDir, ["--json", "events", "handle", "todos-task"], JSON.stringify(event));
+    expect(first.status).toBe(0);
+    const created = JSON.parse(first.stdout);
+
+    const replay = runCli(dataDir, [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--worktree-mode",
+      "required",
+      "--project-path",
+      "/tmp/not-a-real-openloops-required-repo",
+    ], JSON.stringify({ ...event, id: "evt-dedupe-before-render-0002" }));
+
+    expect(replay.status).toBe(0);
+    const value = JSON.parse(replay.stdout);
+    expect(value.deduped).toBe(true);
+    expect(value.loop.id).toBe(created.loop.id);
   });
 
   test("todos task event handler --preflight fails before storing generated workflow loops", () => {

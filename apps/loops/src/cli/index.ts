@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import { Command } from "commander";
 import type {
@@ -10,10 +10,13 @@ import type {
   AgentAllowlistSpec,
   AgentPermissionMode,
   AgentProvider,
+  AgentRoutingSpec,
   AgentSandbox,
+  AgentWorktreeMode,
   CatchUpPolicy,
   CreateLoopInput,
   CreateWorkflowInput,
+  Loop,
   LoopTarget,
   OverlapPolicy,
   ScheduleSpec,
@@ -686,6 +689,146 @@ function taskRouteEligibility(data: Record<string, unknown>, metadata: Record<st
   return { eligible: true, tags };
 }
 
+interface RouteThrottleLimits {
+  maxActive?: number;
+  maxActivePerProject?: number;
+  maxActivePerProjectGroup?: number;
+}
+
+interface RouteThrottleDecision {
+  allowed: boolean;
+  reason?: string;
+  projectPath: string;
+  projectGroup?: string;
+  limits: RouteThrottleLimits;
+  counts: {
+    global: number;
+    project: number;
+    projectGroup?: number;
+  };
+}
+
+function routeThrottleLimitsFromOpts(opts: {
+  maxActive?: string;
+  maxActivePerProject?: string;
+  maxActivePerProjectGroup?: string;
+}): RouteThrottleLimits {
+  return {
+    maxActive: positiveInteger(opts.maxActive, "--max-active"),
+    maxActivePerProject: positiveInteger(opts.maxActivePerProject, "--max-active-per-project"),
+    maxActivePerProjectGroup: positiveInteger(opts.maxActivePerProjectGroup, "--max-active-per-project-group"),
+  };
+}
+
+function hasThrottleLimits(limits: RouteThrottleLimits): boolean {
+  return limits.maxActive !== undefined || limits.maxActivePerProject !== undefined || limits.maxActivePerProjectGroup !== undefined;
+}
+
+function normalizeRoutePath(value: string | undefined): string | undefined {
+  if (!value?.trim()) return undefined;
+  const resolved = resolve(value.trim());
+  let canonical = resolved;
+  try {
+    canonical = realpathSync(resolved);
+  } catch {
+    return canonical;
+  }
+  const gitRoot = spawnSync("git", ["-C", canonical, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
+  if (gitRoot.status === 0 && gitRoot.stdout.trim()) {
+    try {
+      return realpathSync(gitRoot.stdout.trim());
+    } catch {
+      return resolve(gitRoot.stdout.trim());
+    }
+  }
+  return canonical;
+}
+
+function routeProjectGroup(optsGroup: string | undefined, data: Record<string, unknown>, metadata: Record<string, unknown>): string | undefined {
+  return optsGroup?.trim() ||
+    taskEventField(data, ["project_group", "projectGroup", "repo_group", "repoGroup", "workspace_group", "workspaceGroup"]) ||
+    taskEventField(metadata, ["project_group", "projectGroup", "repo_group", "repoGroup", "workspace_group", "workspaceGroup"]);
+}
+
+function firstWorkflowRouting(workflow: Pick<WorkflowSpec, "steps">): AgentRoutingSpec | undefined {
+  for (const step of workflow.steps) {
+    if (step.target.type !== "agent") continue;
+    const target = step.target;
+    const projectPath = normalizeRoutePath(target.routing?.projectPath ?? target.worktree?.originalCwd ?? target.cwd);
+    const projectGroup = target.routing?.projectGroup?.trim();
+    if (projectPath || projectGroup) {
+      return {
+        ...(projectPath ? { projectPath } : {}),
+        ...(projectGroup ? { projectGroup } : {}),
+      };
+    }
+  }
+  return undefined;
+}
+
+function activeWorkflowLoopRoutes(store: Store): Array<{ loop: Loop; routing: AgentRoutingSpec }> {
+  const values: Array<{ loop: Loop; routing: AgentRoutingSpec }> = [];
+  for (const loop of store.listLoops({ status: "active", limit: 10_000 })) {
+    if (loop.target.type !== "workflow") continue;
+    const workflow = store.getWorkflow(loop.target.workflowId);
+    if (!workflow || workflow.status !== "active") continue;
+    const routing = firstWorkflowRouting(workflow);
+    if (routing) values.push({ loop, routing });
+  }
+  return values;
+}
+
+function routeThrottleDecision(
+  store: Store,
+  args: { projectPath: string; projectGroup?: string; limits: RouteThrottleLimits },
+): RouteThrottleDecision {
+  const projectPath = normalizeRoutePath(args.projectPath) ?? resolve(args.projectPath);
+  const projectGroup = args.projectGroup?.trim() || undefined;
+  const active = activeWorkflowLoopRoutes(store);
+  const counts: RouteThrottleDecision["counts"] = {
+    global: active.length,
+    project: active.filter((entry) => normalizeRoutePath(entry.routing.projectPath) === projectPath).length,
+  };
+  if (projectGroup) counts.projectGroup = active.filter((entry) => entry.routing.projectGroup?.trim() === projectGroup).length;
+  const base = {
+    projectPath,
+    ...(projectGroup ? { projectGroup } : {}),
+    limits: args.limits,
+    counts,
+  };
+  if (args.limits.maxActive !== undefined && counts.global >= args.limits.maxActive) {
+    return { ...base, allowed: false, reason: `global active workflow limit reached (${counts.global}/${args.limits.maxActive})` };
+  }
+  if (args.limits.maxActivePerProject !== undefined && counts.project >= args.limits.maxActivePerProject) {
+    return { ...base, allowed: false, reason: `project active workflow limit reached (${counts.project}/${args.limits.maxActivePerProject})` };
+  }
+  if (
+    projectGroup &&
+    args.limits.maxActivePerProjectGroup !== undefined &&
+    counts.projectGroup !== undefined &&
+    counts.projectGroup >= args.limits.maxActivePerProjectGroup
+  ) {
+    return {
+      ...base,
+      allowed: false,
+      reason: `project-group active workflow limit reached (${counts.projectGroup}/${args.limits.maxActivePerProjectGroup})`,
+    };
+  }
+  return { ...base, allowed: true };
+}
+
+function routeThrottleDryRunPreview(args: { projectPath: string; projectGroup?: string; limits: RouteThrottleLimits }) {
+  const projectPath = normalizeRoutePath(args.projectPath) ?? resolve(args.projectPath);
+  const projectGroup = args.projectGroup?.trim() || undefined;
+  return {
+    evaluated: false,
+    reason: "not evaluated in dry-run because opening the live loop store may create or migrate the database",
+    projectPath,
+    ...(projectGroup ? { projectGroup } : {}),
+    limits: args.limits,
+  };
+}
+
 async function readEventEnvelopeFromStdin(): Promise<EventEnvelope> {
   const raw = process.env.HASNA_EVENT_JSON || (await Bun.stdin.text());
   const event = JSON.parse(raw);
@@ -946,6 +1089,13 @@ eventsHandle
   .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
   .option("--sandbox <mode>", "provider sandbox")
   .option("--project-path <path>", "fallback project/repo working directory")
+  .option("--project-group <name>", "optional project group for concurrency limits")
+  .option("--max-active <n>", "skip creating a workflow when this many active routed workflows already exist globally")
+  .option("--max-active-per-project <n>", "skip creating a workflow when this many active routed workflows already exist for the project")
+  .option("--max-active-per-project-group <n>", "skip creating a workflow when this many active routed workflows already exist for the project group")
+  .option("--worktree-mode <mode>", "worktree isolation mode: auto, required, off, or main", "auto")
+  .option("--worktree-root <path>", "base directory for OpenLoops-managed git worktrees")
+  .option("--worktree-branch-prefix <prefix>", "branch prefix for generated task worktrees", "openloops")
   .option("--name-prefix <prefix>", "workflow/loop name prefix", "event:todos-task")
   .option("--preflight", "check generated workflow steps before storing the workflow loop")
   .option("--dry-run", "print the workflow and loop input without storing anything")
@@ -979,7 +1129,37 @@ eventsHandle
       dataProjectPath ??
       metadataProjectPath ??
       process.cwd();
+    const routeProjectPath = normalizeRoutePath(projectPath) ?? resolve(projectPath);
+    const projectGroup = routeProjectGroup(opts.projectGroup, data, metadata);
+    const throttleLimits = routeThrottleLimitsFromOpts(opts);
     const idempotencyKey = `todos-task:${taskId}:${event.type}`;
+    const idempotencySuffix = stableSuffix(idempotencyKey);
+    const workflowName = `${opts.namePrefix}:${taskId.slice(0, 8)}:${idempotencySuffix}:workflow`;
+    const loopName = `${opts.namePrefix}:${taskId.slice(0, 8)}:${idempotencySuffix}:run`;
+    const legacyLoopName = `${opts.namePrefix}:${taskId.slice(0, 8)}:${event.id.slice(0, 8)}:run`;
+    if (!opts.dryRun) {
+      const store = new Store();
+      try {
+        const existingLoop = store.findLoopByName(loopName) ?? store.findLoopByName(legacyLoopName);
+        if (existingLoop) {
+          const existingWorkflow = existingLoop.target.type === "workflow" ? store.getWorkflow(existingLoop.target.workflowId) : undefined;
+          print(
+            {
+              deduped: true,
+              idempotencyKey,
+              dedupedBy: existingLoop.name === loopName ? "idempotency" : "legacy-event-name",
+              event,
+              workflow: existingWorkflow ? publicWorkflow(existingWorkflow) : undefined,
+              loop: publicLoop(existingLoop),
+            },
+            `deduped existing loop ${existingLoop.id} (${existingLoop.name}) for event=${event.id} idempotency=${idempotencyKey}`,
+          );
+          return;
+        }
+      } finally {
+        store.close();
+      }
+    }
     const provider = opts.provider as AgentProvider;
     if (!["claude", "cursor", "codewith", "aicopilot", "opencode", "codex"].includes(provider)) throw new Error("unsupported provider");
     const permissionMode = permissionModeFromOpts({ permissionMode: opts.permissionMode }, provider);
@@ -990,6 +1170,8 @@ eventsHandle
       taskTitle,
       taskDescription,
       projectPath,
+      routeProjectPath,
+      projectGroup,
       provider,
       authProfile,
       authProfilePool: splitList(opts.authProfilePool),
@@ -1004,16 +1186,16 @@ eventsHandle
       agent: opts.agent,
       permissionMode,
       sandbox,
+      worktreeMode: opts.worktreeMode as AgentWorktreeMode,
+      worktreeRoot: opts.worktreeRoot,
+      worktreeBranchPrefix: opts.worktreeBranchPrefix,
       eventId: event.id,
       eventType: event.type,
     });
-    const idempotencySuffix = stableSuffix(idempotencyKey);
-    workflowBody.name = `${opts.namePrefix}:${taskId.slice(0, 8)}:${idempotencySuffix}:workflow`;
+    workflowBody.name = workflowName;
     workflowBody.description =
       `Task-triggered worker/verifier workflow for ${taskTitle ?? taskId} from ${event.source}/${event.type}; ` +
-      `idempotency=${idempotencyKey}; event=${event.id}`;
-    const loopName = `${opts.namePrefix}:${taskId.slice(0, 8)}:${idempotencySuffix}:run`;
-    const legacyLoopName = `${opts.namePrefix}:${taskId.slice(0, 8)}:${event.id.slice(0, 8)}:run`;
+      `idempotency=${idempotencyKey}; event=${event.id}; project=${projectPath}; projectGroup=${projectGroup ?? "-"}`;
     const loopInput = {
       name: loopName,
       description: `Run ${workflowBody.name} once for task ${taskId}; idempotency=${idempotencyKey}; event=${event.id}`,
@@ -1025,6 +1207,9 @@ eventsHandle
       leaseMs: 90 * 60_000,
     };
     if (opts.dryRun) {
+      const throttle = hasThrottleLimits(throttleLimits)
+        ? routeThrottleDryRunPreview({ projectPath: routeProjectPath, projectGroup, limits: throttleLimits })
+        : undefined;
       const preflight = opts.preflight
         ? preflightStoredWorkflow(workflowSpecForPreflight(workflowBody, "event-preflight"), {
             name: workflowBody.name,
@@ -1032,29 +1217,13 @@ eventsHandle
             event: event.id,
           }, {})
         : undefined;
-      print({ deduped: false, idempotencyKey, event, workflow: workflowBody, loop: loopInput, preflight }, `dry-run ${loopName}`);
+      print({ deduped: false, idempotencyKey, event, workflow: workflowBody, loop: loopInput, throttle, preflight }, `dry-run ${loopName}`);
       return;
     }
     const store = new Store();
     try {
-      const existingLoop = store.findLoopByName(loopName) ?? store.findLoopByName(legacyLoopName);
-      if (existingLoop) {
-        const existingWorkflow = existingLoop.target.type === "workflow" ? store.getWorkflow(existingLoop.target.workflowId) : undefined;
-        print(
-          {
-            deduped: true,
-            idempotencyKey,
-            dedupedBy: existingLoop.name === loopName ? "idempotency" : "legacy-event-name",
-            event,
-            workflow: existingWorkflow ? publicWorkflow(existingWorkflow) : undefined,
-            loop: publicLoop(existingLoop),
-          },
-          `deduped existing loop ${existingLoop.id} (${existingLoop.name}) for event=${event.id} idempotency=${idempotencyKey}`,
-        );
-        return;
-      }
-      const existingWorkflow = store.findWorkflowByName(workflowBody.name);
-      const workflowPreflightSpec = existingWorkflow ?? workflowSpecForPreflight(workflowBody, "event-preflight");
+      const existingWorkflowForPreflight = store.findWorkflowByName(workflowBody.name);
+      const workflowPreflightSpec = existingWorkflowForPreflight ?? workflowSpecForPreflight(workflowBody, "event-preflight");
       const preflight = opts.preflight
         ? preflightStoredWorkflow(workflowPreflightSpec, {
             name: workflowBody.name,
@@ -1062,14 +1231,57 @@ eventsHandle
             event: event.id,
           }, {})
         : undefined;
-      const workflow = existingWorkflow ?? store.createWorkflow(workflowBody);
-      const loop = store.createLoop({
-        ...loopInput,
-        target: { type: "workflow", workflowId: workflow.id },
+      const outcome = store.writeTransaction(() => {
+        const existingLoop = store.findLoopByName(loopName) ?? store.findLoopByName(legacyLoopName);
+        if (existingLoop) {
+          const existingWorkflow = existingLoop.target.type === "workflow" ? store.getWorkflow(existingLoop.target.workflowId) : undefined;
+          return { kind: "deduped" as const, existingLoop, existingWorkflow };
+        }
+        const throttle = hasThrottleLimits(throttleLimits)
+          ? routeThrottleDecision(store, { projectPath: routeProjectPath, projectGroup, limits: throttleLimits })
+          : undefined;
+        if (throttle && !throttle.allowed) return { kind: "throttled" as const, throttle };
+        const existingWorkflow = store.findWorkflowByName(workflowBody.name);
+        const workflow = existingWorkflow ?? store.createWorkflow(workflowBody);
+        const loop = store.createLoop({
+          ...loopInput,
+          target: { type: "workflow", workflowId: workflow.id },
+        });
+        return { kind: "created" as const, workflow, loop, throttle };
       });
+      if (outcome.kind === "deduped") {
+        print(
+          {
+            deduped: true,
+            idempotencyKey,
+            dedupedBy: outcome.existingLoop.name === loopName ? "idempotency" : "legacy-event-name",
+            event,
+            workflow: outcome.existingWorkflow ? publicWorkflow(outcome.existingWorkflow) : undefined,
+            loop: publicLoop(outcome.existingLoop),
+          },
+          `deduped existing loop ${outcome.existingLoop.id} (${outcome.existingLoop.name}) for event=${event.id} idempotency=${idempotencyKey}`,
+        );
+        return;
+      }
+      if (outcome.kind === "throttled") {
+        print(
+          {
+            skipped: true,
+            queuedAtSource: true,
+            reason: outcome.throttle.reason,
+            idempotencyKey,
+            event,
+            throttle: outcome.throttle,
+            workflow: workflowBody,
+            loop: loopInput,
+          },
+          `skipped task ${taskId}: ${outcome.throttle.reason}`,
+        );
+        return;
+      }
       print(
-        { deduped: false, idempotencyKey, event, workflow: publicWorkflow(workflow), loop: publicLoop(loop), preflight },
-        `created ${loop.id} (${loop.name}) workflow=${workflow.name} event=${event.id} idempotency=${idempotencyKey}`,
+        { deduped: false, idempotencyKey, event, workflow: publicWorkflow(outcome.workflow), loop: publicLoop(outcome.loop), throttle: outcome.throttle, preflight },
+        `created ${outcome.loop.id} (${outcome.loop.name}) workflow=${outcome.workflow.name} event=${event.id} idempotency=${idempotencyKey}`,
       );
     } finally {
       store.close();
@@ -1095,16 +1307,49 @@ eventsHandle
   .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
   .option("--sandbox <mode>", "provider sandbox")
   .option("--project-path <path>", "fallback project/repo working directory")
+  .option("--project-group <name>", "optional project group for concurrency limits")
+  .option("--max-active <n>", "skip creating a workflow when this many active routed workflows already exist globally")
+  .option("--max-active-per-project <n>", "skip creating a workflow when this many active routed workflows already exist for the project")
+  .option("--max-active-per-project-group <n>", "skip creating a workflow when this many active routed workflows already exist for the project group")
+  .option("--worktree-mode <mode>", "worktree isolation mode: auto, required, off, or main", "auto")
+  .option("--worktree-root <path>", "base directory for OpenLoops-managed git worktrees")
+  .option("--worktree-branch-prefix <prefix>", "branch prefix for generated event worktrees", "openloops")
   .option("--name-prefix <prefix>", "workflow/loop name prefix", "event:generic")
   .option("--preflight", "check generated workflow steps before storing the workflow loop")
   .option("--dry-run", "print the workflow and loop input without storing anything")
   .action(async (opts) => {
     const event = await readEventEnvelopeFromStdin();
     const data = eventData(event);
+    const metadata = eventMetadata(event);
     const projectPath =
       opts.projectPath ??
       taskEventField(data, ["working_dir", "workingDir", "project_path", "projectPath", "cwd", "repo_path", "repoPath"]) ??
+      taskEventField(metadata, ["working_dir", "workingDir", "project_path", "projectPath", "project_canonical_path", "cwd", "repo_path", "repoPath"]) ??
       process.cwd();
+    const routeProjectPath = normalizeRoutePath(projectPath) ?? resolve(projectPath);
+    const projectGroup = routeProjectGroup(opts.projectGroup, data, metadata);
+    const throttleLimits = routeThrottleLimitsFromOpts(opts);
+    const eventSuffix = event.id.slice(0, 8);
+    const source = slugSegment(event.source, "source");
+    const type = slugSegment(event.type, "type");
+    const workflowName = `${opts.namePrefix}:${source}:${type}:${eventSuffix}:workflow`;
+    const loopName = `${opts.namePrefix}:${source}:${type}:${eventSuffix}:run`;
+    if (!opts.dryRun) {
+      const store = new Store();
+      try {
+        const existingLoop = store.findLoopByName(loopName);
+        if (existingLoop) {
+          const existingWorkflow = existingLoop.target.type === "workflow" ? store.getWorkflow(existingLoop.target.workflowId) : undefined;
+          print(
+            { deduped: true, event, workflow: existingWorkflow ? publicWorkflow(existingWorkflow) : undefined, loop: publicLoop(existingLoop) },
+            `deduped existing loop ${existingLoop.id} (${existingLoop.name})`,
+          );
+          return;
+        }
+      } finally {
+        store.close();
+      }
+    }
     const provider = opts.provider as AgentProvider;
     if (!["claude", "cursor", "codewith", "aicopilot", "opencode", "codex"].includes(provider)) throw new Error("unsupported provider");
     const permissionMode = permissionModeFromOpts({ permissionMode: opts.permissionMode }, provider);
@@ -1118,6 +1363,8 @@ eventsHandle
       eventMessage: stringField(event.message),
       eventJson: JSON.stringify(event),
       projectPath,
+      routeProjectPath,
+      projectGroup,
       provider,
       authProfile,
       authProfilePool: splitList(opts.authProfilePool),
@@ -1132,13 +1379,12 @@ eventsHandle
       agent: opts.agent,
       permissionMode,
       sandbox,
+      worktreeMode: opts.worktreeMode as AgentWorktreeMode,
+      worktreeRoot: opts.worktreeRoot,
+      worktreeBranchPrefix: opts.worktreeBranchPrefix,
     });
-    const eventSuffix = event.id.slice(0, 8);
-    const source = slugSegment(event.source, "source");
-    const type = slugSegment(event.type, "type");
-    workflowBody.name = `${opts.namePrefix}:${source}:${type}:${eventSuffix}:workflow`;
-    workflowBody.description = `Event-triggered worker/verifier workflow for ${event.source}/${event.type}`;
-    const loopName = `${opts.namePrefix}:${source}:${type}:${eventSuffix}:run`;
+    workflowBody.name = workflowName;
+    workflowBody.description = `Event-triggered worker/verifier workflow for ${event.source}/${event.type}; project=${projectPath}; projectGroup=${projectGroup ?? "-"}`;
     const loopInput = {
       name: loopName,
       description: `Run ${workflowBody.name} once for event ${event.id}`,
@@ -1150,6 +1396,9 @@ eventsHandle
       leaseMs: 90 * 60_000,
     };
     if (opts.dryRun) {
+      const throttle = hasThrottleLimits(throttleLimits)
+        ? routeThrottleDryRunPreview({ projectPath: routeProjectPath, projectGroup, limits: throttleLimits })
+        : undefined;
       const preflight = opts.preflight
         ? preflightStoredWorkflow(workflowSpecForPreflight(workflowBody, "event-preflight"), {
             name: workflowBody.name,
@@ -1157,22 +1406,13 @@ eventsHandle
             event: event.id,
           }, {})
         : undefined;
-      print({ event, workflow: workflowBody, loop: loopInput, preflight }, `dry-run ${loopName}`);
+      print({ event, workflow: workflowBody, loop: loopInput, throttle, preflight }, `dry-run ${loopName}`);
       return;
     }
     const store = new Store();
     try {
-      const existingLoop = store.findLoopByName(loopName);
-      if (existingLoop) {
-        const existingWorkflow = existingLoop.target.type === "workflow" ? store.getWorkflow(existingLoop.target.workflowId) : undefined;
-        print(
-          { deduped: true, event, workflow: existingWorkflow ? publicWorkflow(existingWorkflow) : undefined, loop: publicLoop(existingLoop) },
-          `deduped existing loop ${existingLoop.id} (${existingLoop.name})`,
-        );
-        return;
-      }
-      const existingWorkflow = store.findWorkflowByName(workflowBody.name);
-      const workflowPreflightSpec = existingWorkflow ?? workflowSpecForPreflight(workflowBody, "event-preflight");
+      const existingWorkflowForPreflight = store.findWorkflowByName(workflowBody.name);
+      const workflowPreflightSpec = existingWorkflowForPreflight ?? workflowSpecForPreflight(workflowBody, "event-preflight");
       const preflight = opts.preflight
         ? preflightStoredWorkflow(workflowPreflightSpec, {
             name: workflowBody.name,
@@ -1180,14 +1420,41 @@ eventsHandle
             event: event.id,
           }, {})
         : undefined;
-      const workflow = existingWorkflow ?? store.createWorkflow(workflowBody);
-      const loop = store.createLoop({
-        ...loopInput,
-        target: { type: "workflow", workflowId: workflow.id },
+      const outcome = store.writeTransaction(() => {
+        const existingLoop = store.findLoopByName(loopName);
+        if (existingLoop) {
+          const existingWorkflow = existingLoop.target.type === "workflow" ? store.getWorkflow(existingLoop.target.workflowId) : undefined;
+          return { kind: "deduped" as const, existingLoop, existingWorkflow };
+        }
+        const throttle = hasThrottleLimits(throttleLimits)
+          ? routeThrottleDecision(store, { projectPath: routeProjectPath, projectGroup, limits: throttleLimits })
+          : undefined;
+        if (throttle && !throttle.allowed) return { kind: "throttled" as const, throttle };
+        const existingWorkflow = store.findWorkflowByName(workflowBody.name);
+        const workflow = existingWorkflow ?? store.createWorkflow(workflowBody);
+        const loop = store.createLoop({
+          ...loopInput,
+          target: { type: "workflow", workflowId: workflow.id },
+        });
+        return { kind: "created" as const, workflow, loop, throttle };
       });
+      if (outcome.kind === "deduped") {
+        print(
+          { deduped: true, event, workflow: outcome.existingWorkflow ? publicWorkflow(outcome.existingWorkflow) : undefined, loop: publicLoop(outcome.existingLoop) },
+          `deduped existing loop ${outcome.existingLoop.id} (${outcome.existingLoop.name})`,
+        );
+        return;
+      }
+      if (outcome.kind === "throttled") {
+        print(
+          { skipped: true, queuedAtSource: true, reason: outcome.throttle.reason, event, throttle: outcome.throttle, workflow: workflowBody, loop: loopInput },
+          `skipped event ${event.id}: ${outcome.throttle.reason}`,
+        );
+        return;
+      }
       print(
-        { deduped: false, event, workflow: publicWorkflow(workflow), loop: publicLoop(loop), preflight },
-        `created ${loop.id} (${loop.name}) workflow=${workflow.name}`,
+        { deduped: false, event, workflow: publicWorkflow(outcome.workflow), loop: publicLoop(outcome.loop), throttle: outcome.throttle, preflight },
+        `created ${outcome.loop.id} (${outcome.loop.name}) workflow=${outcome.workflow.name}`,
       );
     } finally {
       store.close();

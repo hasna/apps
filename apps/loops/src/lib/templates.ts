@@ -1,8 +1,14 @@
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import type {
   AccountRef,
   AgentPermissionMode,
   AgentProvider,
   AgentSandbox,
+  AgentWorktreeMode,
+  AgentWorktreeSpec,
   CreateWorkflowInput,
   LoopTemplateSummary,
   WorkflowStep,
@@ -17,6 +23,8 @@ export interface TodosTaskWorkflowTemplateInput {
   taskTitle?: string;
   taskDescription?: string;
   projectPath: string;
+  routeProjectPath?: string;
+  projectGroup?: string;
   provider?: AgentProvider;
   authProfile?: string;
   authProfilePool?: string[];
@@ -31,6 +39,9 @@ export interface TodosTaskWorkflowTemplateInput {
   agent?: string;
   permissionMode?: AgentPermissionMode;
   sandbox?: AgentSandbox;
+  worktreeMode?: AgentWorktreeMode;
+  worktreeRoot?: string;
+  worktreeBranchPrefix?: string;
   eventId?: string;
   eventType?: string;
 }
@@ -43,6 +54,8 @@ export interface EventWorkflowTemplateInput {
   eventMessage?: string;
   eventJson: string;
   projectPath: string;
+  routeProjectPath?: string;
+  projectGroup?: string;
   provider?: AgentProvider;
   authProfile?: string;
   authProfilePool?: string[];
@@ -57,6 +70,9 @@ export interface EventWorkflowTemplateInput {
   agent?: string;
   permissionMode?: AgentPermissionMode;
   sandbox?: AgentSandbox;
+  worktreeMode?: AgentWorktreeMode;
+  worktreeRoot?: string;
+  worktreeBranchPrefix?: string;
 }
 
 export interface BoundedAgentWorkflowTemplateInput {
@@ -64,6 +80,8 @@ export interface BoundedAgentWorkflowTemplateInput {
   objective: string;
   prompt?: string;
   projectPath: string;
+  routeProjectPath?: string;
+  projectGroup?: string;
   provider?: AgentProvider;
   authProfile?: string;
   authProfilePool?: string[];
@@ -78,6 +96,9 @@ export interface BoundedAgentWorkflowTemplateInput {
   agent?: string;
   permissionMode?: AgentPermissionMode;
   sandbox?: AgentSandbox;
+  worktreeMode?: AgentWorktreeMode;
+  worktreeRoot?: string;
+  worktreeBranchPrefix?: string;
   timeoutMs?: number;
 }
 
@@ -92,6 +113,8 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "taskId", required: true, description: "Todos task id to execute." },
       { name: "taskTitle", description: "Human-readable task title." },
       { name: "projectPath", required: true, description: "Repository or project working directory." },
+      { name: "routeProjectPath", description: "Canonical project path used for scheduler concurrency limits." },
+      { name: "projectGroup", description: "Optional project group used for scheduler concurrency limits." },
       { name: "provider", default: "codewith", description: "Agent provider: codewith, claude, cursor, opencode, aicopilot, or codex." },
       { name: "authProfile", description: "Provider-native auth profile, currently Codewith." },
       { name: "authProfilePool", description: "Comma-separated provider-native auth profiles; worker/verifier are selected deterministically." },
@@ -102,6 +125,9 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "variant", description: "Provider reasoning/model effort variant." },
       { name: "permissionMode", default: "bypass", description: "Provider permission mode: default, plan, auto, or bypass." },
       { name: "sandbox", default: "danger-full-access", description: "Provider sandbox mode." },
+      { name: "worktreeMode", default: "auto", description: "Worktree isolation mode: auto, required, off, or main." },
+      { name: "worktreeRoot", default: "~/.hasna/loops/worktrees", description: "Base directory for OpenLoops-managed git worktrees." },
+      { name: "worktreeBranchPrefix", default: "openloops", description: "Branch prefix for generated task/event worktree branches." },
     ],
   },
   {
@@ -116,6 +142,8 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "eventSource", required: true, description: "Hasna event source." },
       { name: "eventJson", required: true, description: "Full event envelope JSON." },
       { name: "projectPath", required: true, description: "Repository or project working directory." },
+      { name: "routeProjectPath", description: "Canonical project path used for scheduler concurrency limits." },
+      { name: "projectGroup", description: "Optional project group used for scheduler concurrency limits." },
       { name: "provider", default: "codewith", description: "Agent provider: codewith, claude, cursor, opencode, aicopilot, or codex." },
       { name: "authProfile", description: "Provider-native auth profile, currently Codewith." },
       { name: "authProfilePool", description: "Comma-separated provider-native auth profiles; worker/verifier are selected deterministically." },
@@ -126,6 +154,9 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "variant", description: "Provider reasoning/model effort variant." },
       { name: "permissionMode", default: "bypass", description: "Provider permission mode: default, plan, auto, or bypass." },
       { name: "sandbox", default: "danger-full-access", description: "Provider sandbox mode." },
+      { name: "worktreeMode", default: "auto", description: "Worktree isolation mode: auto, required, off, or main." },
+      { name: "worktreeRoot", default: "~/.hasna/loops/worktrees", description: "Base directory for OpenLoops-managed git worktrees." },
+      { name: "worktreeBranchPrefix", default: "openloops", description: "Branch prefix for generated event worktree branches." },
     ],
   },
   {
@@ -138,6 +169,8 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "objective", required: true, description: "Narrow goal-mode objective for the worker." },
       { name: "prompt", description: "Optional extra worker prompt details." },
       { name: "projectPath", required: true, description: "Repository or project working directory." },
+      { name: "routeProjectPath", description: "Canonical project path used for scheduler concurrency limits." },
+      { name: "projectGroup", description: "Optional project group used for scheduler concurrency limits." },
       { name: "provider", default: "codewith", description: "Agent provider: codewith, claude, cursor, opencode, aicopilot, or codex." },
       { name: "authProfile", description: "Provider-native auth profile, currently Codewith." },
       { name: "authProfilePool", description: "Comma-separated provider-native auth profiles; worker/verifier are selected deterministically." },
@@ -148,6 +181,9 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "variant", description: "Provider reasoning/model effort variant." },
       { name: "permissionMode", default: "bypass", description: "Provider permission mode: default, plan, auto, or bypass." },
       { name: "sandbox", default: "danger-full-access", description: "Provider sandbox mode." },
+      { name: "worktreeMode", default: "auto", description: "Worktree isolation mode: auto, required, off, or main." },
+      { name: "worktreeRoot", default: "~/.hasna/loops/worktrees", description: "Base directory for OpenLoops-managed git worktrees." },
+      { name: "worktreeBranchPrefix", default: "openloops", description: "Branch prefix for generated bounded-agent worktree branches." },
       { name: "timeoutMs", default: "2700000", description: "Step timeout in milliseconds." },
     ],
   },
@@ -165,6 +201,8 @@ function taskLabel(input: TodosTaskWorkflowTemplateInput): string {
 type AgentWorkflowTemplateInput = Pick<
   TodosTaskWorkflowTemplateInput,
   | "projectPath"
+  | "routeProjectPath"
+  | "projectGroup"
   | "provider"
   | "authProfile"
   | "authProfilePool"
@@ -179,9 +217,16 @@ type AgentWorkflowTemplateInput = Pick<
   | "agent"
   | "permissionMode"
   | "sandbox"
+  | "worktreeMode"
+  | "worktreeRoot"
+  | "worktreeBranchPrefix"
 >;
 
 type AgentWorkflowRole = "worker" | "verifier";
+
+interface WorktreePlan extends AgentWorktreeSpec {
+  prepareStep?: WorkflowStep;
+}
 
 function stableIndex(seed: string, size: number): number {
   let hash = 2166136261;
@@ -211,6 +256,196 @@ function accountForRole(input: AgentWorkflowTemplateInput, role: AgentWorkflowRo
   return rolePoolValue(input.accountPool, seed, role) ?? input.account;
 }
 
+function slugSegment(value: string | undefined, fallback = "item"): string {
+  const slug = (value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72);
+  return slug || fallback;
+}
+
+function stableHex(seed: string): string {
+  return stableIndex(seed, 0xffffffff).toString(16).padStart(8, "0");
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function normalizeWorktreeMode(mode: AgentWorktreeMode | undefined): AgentWorktreeMode {
+  const value = mode ?? "auto";
+  if (!["auto", "required", "off", "main"].includes(value)) {
+    throw new Error(`worktreeMode must be one of auto, required, off, or main`);
+  }
+  return value;
+}
+
+function defaultWorktreeRoot(root: string | undefined): string {
+  if (root?.trim()) {
+    const expanded = root.trim().replace(/^~(?=$|\/)/, homedir());
+    return isAbsolute(expanded) ? expanded : resolve(expanded);
+  }
+  return join(homedir(), ".hasna", "loops", "worktrees");
+}
+
+function gitRootFor(path: string): string | undefined {
+  if (!existsSync(path)) return undefined;
+  try {
+    return execFileSync("git", ["-C", path, "rev-parse", "--show-toplevel"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+function prepareWorktreeCommand(plan: Required<Pick<WorktreePlan, "repoRoot" | "path" | "branch">>): string {
+  const repo = shellQuote(plan.repoRoot);
+  const path = shellQuote(plan.path);
+  const branch = shellQuote(plan.branch);
+  return [
+    "set -euo pipefail",
+    `repo=${repo}`,
+    `path=${path}`,
+    `branch=${branch}`,
+    'resolve_path() { cd "$1" && pwd -P; }',
+    'git_common_dir() {',
+    '  local base="$1"',
+    '  local common',
+    '  common="$(git -C "$base" rev-parse --git-common-dir)"',
+    '  case "$common" in',
+    '    /*) printf "%s\\n" "$common" ;;',
+    '    *) (cd "$base" && cd "$common" && pwd -P) ;;',
+    '  esac',
+    '}',
+    'mkdir -p "$(dirname "$path")"',
+    'if [ -e "$path" ]; then',
+    '  if [ -L "$path" ]; then',
+    '    printf "refusing symlinked worktree path %s\\n" "$path" >&2',
+    '    exit 1',
+    '  fi',
+    '  if git -C "$path" rev-parse --is-inside-work-tree >/dev/null 2>&1; then',
+    '    expected_common="$(git_common_dir "$repo")"',
+    '    actual_common="$(git_common_dir "$path")"',
+    '    if [ "$actual_common" != "$expected_common" ]; then',
+    '      printf "existing worktree %s belongs to different git common dir\\n" "$path" >&2',
+    '      printf "expected %s got %s\\n" "$expected_common" "$actual_common" >&2',
+    '      exit 1',
+    '    fi',
+    '    actual_top="$(git -C "$path" rev-parse --show-toplevel)"',
+    '    actual_top="$(resolve_path "$actual_top")"',
+    '    expected_top="$(resolve_path "$path")"',
+    '    if [ "$actual_top" != "$expected_top" ]; then',
+    '      printf "existing worktree top-level mismatch for %s: %s\\n" "$path" "$actual_top" >&2',
+    '      exit 1',
+    '    fi',
+    '    actual_branch="$(git -C "$path" branch --show-current)"',
+    '    if [ "$actual_branch" != "$branch" ]; then',
+    '      printf "existing worktree %s is on branch %s, expected %s\\n" "$path" "$actual_branch" "$branch" >&2',
+    '      exit 1',
+    '    fi',
+    '    printf "existing worktree %s branch %s\\n" "$path" "$branch"',
+    "    exit 0",
+    "  fi",
+    '  printf "refusing to overwrite non-git path: %s\\n" "$path" >&2',
+    "  exit 1",
+    "fi",
+    'git -C "$repo" rev-parse --is-inside-work-tree >/dev/null',
+    'if git -C "$repo" show-ref --verify --quiet "refs/heads/$branch"; then',
+    '  git -C "$repo" worktree add "$path" "$branch"',
+    "else",
+    '  git -C "$repo" worktree add -b "$branch" "$path" HEAD',
+    "fi",
+    'printf "prepared worktree %s branch %s\\n" "$path" "$branch"',
+  ].join("\n");
+}
+
+function worktreePlan(input: AgentWorkflowTemplateInput, seed: string): WorktreePlan {
+  const mode = normalizeWorktreeMode(input.worktreeMode);
+  const originalCwd = input.projectPath;
+  if (mode === "off" || mode === "main") {
+    return {
+      mode,
+      enabled: false,
+      originalCwd,
+      cwd: originalCwd,
+      reason: mode === "main" ? "explicit main/default checkout mode" : "worktree mode disabled",
+    };
+  }
+
+  const repoRoot = gitRootFor(originalCwd);
+  if (!repoRoot) {
+    if (mode === "required") {
+      throw new Error(`worktreeMode=required but projectPath is not an existing git repository: ${originalCwd}`);
+    }
+    return {
+      mode,
+      enabled: false,
+      originalCwd,
+      cwd: originalCwd,
+      reason: "projectPath is not an existing git repository",
+    };
+  }
+
+  const root = defaultWorktreeRoot(input.worktreeRoot);
+  const repoSlug = slugSegment(basename(repoRoot), "repo");
+  const seedSlug = `${slugSegment(seed, "run").slice(0, 48)}-${stableHex(`${repoRoot}:${seed}`)}`;
+  const worktreePath = join(root, repoSlug, seedSlug);
+  const relativeCwd = relative(repoRoot, originalCwd);
+  const cwd = relativeCwd && !relativeCwd.startsWith("..") && !isAbsolute(relativeCwd)
+    ? join(worktreePath, relativeCwd)
+    : worktreePath;
+  const branchPrefix = (input.worktreeBranchPrefix?.trim() || "openloops").replace(/^\/+|\/+$/g, "") || "openloops";
+  const branch = `${branchPrefix}/${repoSlug}/${seedSlug}`;
+  const prepareStep: WorkflowStep = {
+    id: "prepare-worktree",
+    name: "Prepare Worktree",
+    description: "Create or reuse the isolated OpenLoops git worktree for this workflow run.",
+    target: {
+      type: "command",
+      command: "bash",
+      args: ["-lc", prepareWorktreeCommand({ repoRoot, path: worktreePath, branch })],
+      cwd: repoRoot,
+      timeoutMs: 5 * 60_000,
+    },
+    timeoutMs: 5 * 60_000,
+  };
+  return {
+    mode,
+    enabled: true,
+    originalCwd,
+    cwd,
+    repoRoot,
+    root,
+    path: worktreePath,
+    branch,
+    prepareStep,
+  };
+}
+
+function worktreePrompt(plan: WorktreePlan): string {
+  if (plan.enabled) {
+    return [
+      "OpenLoops worktree policy:",
+      "- Use the isolated git worktree as the only writeable repository checkout for this task/event.",
+      `- Worktree cwd: ${plan.cwd}`,
+      `- Worktree root: ${plan.path}`,
+      `- Branch: ${plan.branch}`,
+      `- Original checkout: ${plan.originalCwd}`,
+      "- Do not mutate the original checkout/main branch except for read-only inspection.",
+      "- Preserve unrelated changes in both the original checkout and this worktree.",
+    ].join("\n");
+  }
+  return [
+    "OpenLoops worktree policy:",
+    `- Worktree mode ${plan.mode} did not select an isolated worktree: ${plan.reason ?? "not enabled"}.`,
+    `- Cwd: ${plan.cwd}`,
+    "- Do not create ad hoc worktrees unless the task itself explicitly requires one.",
+  ].join("\n");
+}
+
 function assertNativeAuthProfileSupport(input: AgentWorkflowTemplateInput, provider: AgentProvider): void {
   if (provider === "codewith") return;
   const hasNativeAuthProfiles = Boolean(
@@ -230,6 +465,7 @@ function agentTarget(
   prompt: string,
   role: AgentWorkflowRole,
   seed: string,
+  plan: WorktreePlan,
 ): WorkflowStep["target"] {
   const provider = input.provider ?? "codewith";
   assertNativeAuthProfileSupport(input, provider);
@@ -244,7 +480,7 @@ function agentTarget(
     type: "agent",
     provider,
     prompt,
-    cwd: input.projectPath,
+    cwd: plan.cwd,
     model: input.model,
     variant: input.variant,
     agent: input.agent,
@@ -252,9 +488,34 @@ function agentTarget(
     configIsolation: "safe",
     permissionMode: input.permissionMode ?? "bypass",
     sandbox,
+    worktree: {
+      mode: plan.mode,
+      enabled: plan.enabled,
+      originalCwd: plan.originalCwd,
+      cwd: plan.cwd,
+      repoRoot: plan.repoRoot,
+      root: plan.root,
+      path: plan.path,
+      branch: plan.branch,
+      reason: plan.reason,
+    },
+    routing: {
+      projectPath: input.routeProjectPath ?? input.projectPath,
+      ...(input.projectGroup ? { projectGroup: input.projectGroup } : {}),
+    },
     account: accountForRole(input, role, seed),
     timeoutMs: 45 * 60_000,
   };
+}
+
+function workflowStepsWithWorktree(plan: WorktreePlan, steps: WorkflowStep[]): WorkflowStep[] {
+  if (!plan.prepareStep) return steps;
+  return [
+    plan.prepareStep,
+    ...steps.map((step) => step.id === "worker"
+      ? { ...step, dependsOn: [...new Set([...(step.dependsOn ?? []), plan.prepareStep!.id])] }
+      : step),
+  ];
 }
 
 export function listLoopTemplates(): LoopTemplateSummary[] {
@@ -268,6 +529,7 @@ export function getLoopTemplate(id: string): LoopTemplateSummary | undefined {
 export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTemplateInput): CreateWorkflowInput {
   if (!input.taskId?.trim()) throw new Error("taskId is required");
   if (!input.projectPath?.trim()) throw new Error("projectPath is required");
+  const plan = worktreePlan(input, input.taskId);
   const taskContext = {
     taskId: input.taskId,
     taskTitle: input.taskTitle,
@@ -275,11 +537,22 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
     eventId: input.eventId,
     eventType: input.eventType,
     projectPath: input.projectPath,
+    routeProjectPath: input.routeProjectPath,
+    projectGroup: input.projectGroup,
+    worktree: {
+      mode: plan.mode,
+      enabled: plan.enabled,
+      cwd: plan.cwd,
+      path: plan.path,
+      branch: plan.branch,
+      reason: plan.reason,
+    },
   };
   const workerPrompt = [
     `/goal Complete todos task ${input.taskId} in ${input.projectPath}.`,
     "",
     "You are the worker agent for a task-triggered OpenLoops workflow.",
+    worktreePrompt(plan),
     "Investigate first before changing files. Use the todos CLI as the source of truth for the task.",
     "Claim/start the task if appropriate, inspect the repository/project state, implement only the task scope, run focused validation, preserve unrelated user changes, and update the task with comments, evidence, changed files, commits, and blockers.",
     "Do not dispatch or paste prompts into tmux panes. If additional work is required, create or update deduped todos tasks so task-created routing can start a fresh headless workflow.",
@@ -291,6 +564,7 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
     `/goal Verify todos task ${input.taskId} after the worker step.`,
     "",
     "You are the verifier agent for a task-triggered OpenLoops workflow.",
+    worktreePrompt(plan),
     "Use fresh context. Inspect the task, repository state, commits, tests, and worker evidence. Act as an adversarial reviewer focused on correctness, regressions, missing tests, security, and incomplete requirements.",
     "If the work is valid, record verification evidence in todos and mark/leave the task in the correct completed state according to the todos CLI. If it is not valid, add precise follow-up tasks or comments and leave the original task open or blocked with clear evidence.",
     "Do not dispatch or paste prompts into tmux panes. If additional work is required, create or update deduped todos tasks so task-created routing can start a fresh headless workflow.",
@@ -303,12 +577,12 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
     name: `todos-task-${input.taskId.slice(0, 8)}-worker-verifier`,
     description: `Task-triggered worker/verifier workflow for ${taskLabel(input)}`,
     version: 1,
-    steps: [
+    steps: workflowStepsWithWorktree(plan, [
       {
         id: "worker",
         name: "Worker",
         description: "Implement the todos task and record evidence.",
-        target: agentTarget(input, workerPrompt, "worker", input.taskId),
+        target: agentTarget(input, workerPrompt, "worker", input.taskId, plan),
         timeoutMs: 45 * 60_000,
       },
       {
@@ -316,10 +590,10 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
         name: "Verifier",
         description: "Adversarially verify worker output and update todos.",
         dependsOn: ["worker"],
-        target: agentTarget(input, verifierPrompt, "verifier", input.taskId),
+        target: agentTarget(input, verifierPrompt, "verifier", input.taskId, plan),
         timeoutMs: 30 * 60_000,
       },
-    ],
+    ]),
   };
 }
 
@@ -329,6 +603,8 @@ export function renderEventWorkerVerifierWorkflow(input: EventWorkflowTemplateIn
   if (!input.eventSource?.trim()) throw new Error("eventSource is required");
   if (!input.eventJson?.trim()) throw new Error("eventJson is required");
   if (!input.projectPath?.trim()) throw new Error("projectPath is required");
+  const seed = `${input.eventSource}:${input.eventType}:${input.eventId}`;
+  const plan = worktreePlan(input, seed);
   const eventContext = {
     eventId: input.eventId,
     eventType: input.eventType,
@@ -336,11 +612,22 @@ export function renderEventWorkerVerifierWorkflow(input: EventWorkflowTemplateIn
     eventSubject: input.eventSubject,
     eventMessage: input.eventMessage,
     projectPath: input.projectPath,
+    routeProjectPath: input.routeProjectPath,
+    projectGroup: input.projectGroup,
+    worktree: {
+      mode: plan.mode,
+      enabled: plan.enabled,
+      cwd: plan.cwd,
+      path: plan.path,
+      branch: plan.branch,
+      reason: plan.reason,
+    },
   };
   const workerPrompt = [
     `/goal Handle Hasna event ${input.eventSource}/${input.eventType} (${input.eventId}) in ${input.projectPath}.`,
     "",
     "You are the worker agent for an event-triggered OpenLoops workflow.",
+    worktreePrompt(plan),
     "Investigate first before changing files. Read the full event envelope and decide the narrow action required by that event. Preserve unrelated user changes and update the relevant local CLI/task/knowledge system with evidence, changed files, commits, and blockers.",
     "If the event is informational or does not require action, record that finding and stop without making changes.",
     "",
@@ -351,6 +638,7 @@ export function renderEventWorkerVerifierWorkflow(input: EventWorkflowTemplateIn
     `/goal Verify handling of Hasna event ${input.eventSource}/${input.eventType} (${input.eventId}).`,
     "",
     "You are the verifier agent for an event-triggered OpenLoops workflow.",
+    worktreePrompt(plan),
     "Use fresh context. Inspect the event, repository/project state, worker evidence, tests, and any created tasks or notes. Act as an adversarial reviewer focused on correctness, regressions, security, missing evidence, and incomplete requirements.",
     "If the work is valid, record verification evidence in the relevant local system. If it is not valid, add precise follow-up tasks/comments and leave the event handling state open or blocked with clear evidence.",
     "",
@@ -362,12 +650,12 @@ export function renderEventWorkerVerifierWorkflow(input: EventWorkflowTemplateIn
     name: `event-${input.eventSource}-${input.eventType}-${input.eventId.slice(0, 8)}-worker-verifier`.replace(/[^a-zA-Z0-9._:-]+/g, "-"),
     description: `Event-triggered worker/verifier workflow for ${input.eventSource}/${input.eventType}`,
     version: 1,
-    steps: [
+    steps: workflowStepsWithWorktree(plan, [
       {
         id: "worker",
         name: "Worker",
         description: "Handle the Hasna event and record evidence.",
-        target: agentTarget(input, workerPrompt, "worker", `${input.eventSource}:${input.eventType}:${input.eventId}`),
+        target: agentTarget(input, workerPrompt, "worker", seed, plan),
         timeoutMs: 45 * 60_000,
       },
       {
@@ -375,10 +663,10 @@ export function renderEventWorkerVerifierWorkflow(input: EventWorkflowTemplateIn
         name: "Verifier",
         description: "Adversarially verify event handling.",
         dependsOn: ["worker"],
-        target: agentTarget(input, verifierPrompt, "verifier", `${input.eventSource}:${input.eventType}:${input.eventId}`),
+        target: agentTarget(input, verifierPrompt, "verifier", seed, plan),
         timeoutMs: 30 * 60_000,
       },
-    ],
+    ]),
   };
 }
 
@@ -386,11 +674,13 @@ export function renderBoundedAgentWorkerVerifierWorkflow(input: BoundedAgentWork
   if (!input.objective?.trim()) throw new Error("objective is required");
   if (!input.projectPath?.trim()) throw new Error("projectPath is required");
   const seed = `${input.projectPath}:${input.objective}`;
+  const plan = worktreePlan(input, seed);
   const timeoutMs = input.timeoutMs && Number.isFinite(input.timeoutMs) ? input.timeoutMs : 45 * 60_000;
   const workerPrompt = [
     `/goal ${input.objective}`,
     "",
     "You are the worker step for a bounded OpenLoops agent workflow.",
+    worktreePrompt(plan),
     "Investigate first. Keep scope narrow, use local project/task systems as the source of truth when relevant, preserve unrelated changes, run focused validation, and record concise evidence.",
     "Do not dispatch or paste prompts into tmux panes. If additional work is required, create or update deduped todos tasks so task-created routing can start a fresh headless workflow.",
     input.prompt ? "" : undefined,
@@ -400,6 +690,7 @@ export function renderBoundedAgentWorkerVerifierWorkflow(input: BoundedAgentWork
     `/goal Adversarially verify: ${input.objective}`,
     "",
     "You are the verifier step for a bounded OpenLoops agent workflow.",
+    worktreePrompt(plan),
     "Use fresh context. Review the worker result for correctness, regressions, missing tests, safety, runaway-agent risk, output bounds, and incomplete evidence.",
     "If valid, record verification evidence. If invalid, create precise follow-up tasks or comments and leave the original work open. Do not make broad unrelated changes.",
   ].join("\n");
@@ -408,12 +699,12 @@ export function renderBoundedAgentWorkerVerifierWorkflow(input: BoundedAgentWork
     name: input.name ?? `bounded-agent-${stableIndex(seed, 0xffffffff).toString(16).padStart(8, "0")}-worker-verifier`,
     description: `Bounded worker/verifier workflow for ${input.objective.slice(0, 180)}`,
     version: 1,
-    steps: [
+    steps: workflowStepsWithWorktree(plan, [
       {
         id: "worker",
         name: "Worker",
         description: "Execute the bounded objective and record evidence.",
-        target: agentTarget(input, workerPrompt, "worker", seed),
+        target: agentTarget(input, workerPrompt, "worker", seed, plan),
         timeoutMs,
       },
       {
@@ -421,10 +712,10 @@ export function renderBoundedAgentWorkerVerifierWorkflow(input: BoundedAgentWork
         name: "Verifier",
         description: "Adversarially verify the bounded objective result.",
         dependsOn: ["worker"],
-        target: agentTarget(input, verifierPrompt, "verifier", seed),
+        target: agentTarget(input, verifierPrompt, "verifier", seed, plan),
         timeoutMs: Math.min(timeoutMs, 30 * 60_000),
       },
-    ],
+    ]),
   };
 }
 
@@ -435,6 +726,8 @@ export function renderLoopTemplate(id: string, values: Record<string, string | u
       taskTitle: values.taskTitle,
       taskDescription: values.taskDescription,
       projectPath: values.projectPath ?? values.cwd ?? process.cwd(),
+      routeProjectPath: values.routeProjectPath,
+      projectGroup: values.projectGroup,
       provider: values.provider as AgentProvider | undefined,
       authProfile: values.authProfile,
       authProfilePool: listVar(values.authProfilePool),
@@ -447,6 +740,9 @@ export function renderLoopTemplate(id: string, values: Record<string, string | u
       agent: values.agent,
       permissionMode: values.permissionMode as AgentPermissionMode | undefined,
       sandbox: values.sandbox as AgentSandbox | undefined,
+      worktreeMode: values.worktreeMode as AgentWorktreeMode | undefined,
+      worktreeRoot: values.worktreeRoot,
+      worktreeBranchPrefix: values.worktreeBranchPrefix,
       eventId: values.eventId,
       eventType: values.eventType,
     });
@@ -460,6 +756,8 @@ export function renderLoopTemplate(id: string, values: Record<string, string | u
       eventMessage: values.eventMessage,
       eventJson: values.eventJson ?? "",
       projectPath: values.projectPath ?? values.cwd ?? process.cwd(),
+      routeProjectPath: values.routeProjectPath,
+      projectGroup: values.projectGroup,
       provider: values.provider as AgentProvider | undefined,
       authProfile: values.authProfile,
       authProfilePool: listVar(values.authProfilePool),
@@ -472,6 +770,9 @@ export function renderLoopTemplate(id: string, values: Record<string, string | u
       agent: values.agent,
       permissionMode: values.permissionMode as AgentPermissionMode | undefined,
       sandbox: values.sandbox as AgentSandbox | undefined,
+      worktreeMode: values.worktreeMode as AgentWorktreeMode | undefined,
+      worktreeRoot: values.worktreeRoot,
+      worktreeBranchPrefix: values.worktreeBranchPrefix,
     });
   }
   if (id === BOUNDED_AGENT_WORKER_VERIFIER_TEMPLATE_ID) {
@@ -480,6 +781,8 @@ export function renderLoopTemplate(id: string, values: Record<string, string | u
       objective: values.objective ?? "",
       prompt: values.prompt,
       projectPath: values.projectPath ?? values.cwd ?? process.cwd(),
+      routeProjectPath: values.routeProjectPath,
+      projectGroup: values.projectGroup,
       provider: values.provider as AgentProvider | undefined,
       authProfile: values.authProfile,
       authProfilePool: listVar(values.authProfilePool),
@@ -492,6 +795,9 @@ export function renderLoopTemplate(id: string, values: Record<string, string | u
       agent: values.agent,
       permissionMode: values.permissionMode as AgentPermissionMode | undefined,
       sandbox: values.sandbox as AgentSandbox | undefined,
+      worktreeMode: values.worktreeMode as AgentWorktreeMode | undefined,
+      worktreeRoot: values.worktreeRoot,
+      worktreeBranchPrefix: values.worktreeBranchPrefix,
       timeoutMs: values.timeoutMs ? Number(values.timeoutMs) : undefined,
     });
   }

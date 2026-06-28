@@ -103,6 +103,29 @@ function validateTarget(value: unknown, label: string): ExecutableTarget {
         throw new Error(`${label}.allowlist.enforcement must be metadata_only`);
       }
     }
+    if (value.worktree !== undefined) {
+      assertObject(value.worktree, `${label}.worktree`);
+      assertString(value.worktree.mode, `${label}.worktree.mode`);
+      const modes = ["auto", "required", "off", "main"];
+      if (!modes.includes(value.worktree.mode)) throw new Error(`${label}.worktree.mode must be one of ${modes.join(", ")}`);
+      if (typeof value.worktree.enabled !== "boolean") throw new Error(`${label}.worktree.enabled must be a boolean`);
+      assertString(value.worktree.originalCwd, `${label}.worktree.originalCwd`);
+      assertString(value.worktree.cwd, `${label}.worktree.cwd`);
+      if (value.worktree.repoRoot !== undefined) assertString(value.worktree.repoRoot, `${label}.worktree.repoRoot`);
+      if (value.worktree.root !== undefined) assertString(value.worktree.root, `${label}.worktree.root`);
+      if (value.worktree.path !== undefined) assertString(value.worktree.path, `${label}.worktree.path`);
+      if (value.worktree.branch !== undefined) assertString(value.worktree.branch, `${label}.worktree.branch`);
+      if (value.worktree.reason !== undefined) assertString(value.worktree.reason, `${label}.worktree.reason`);
+    }
+    if (value.routing !== undefined) {
+      assertObject(value.routing, `${label}.routing`);
+      if (value.routing.projectPath !== undefined) assertString(value.routing.projectPath, `${label}.routing.projectPath`);
+      if (value.routing.projectGroup !== undefined) assertString(value.routing.projectGroup, `${label}.routing.projectGroup`);
+      if (value.routing.taskId !== undefined) assertString(value.routing.taskId, `${label}.routing.taskId`);
+      if (value.routing.eventId !== undefined) assertString(value.routing.eventId, `${label}.routing.eventId`);
+      if (value.routing.eventType !== undefined) assertString(value.routing.eventType, `${label}.routing.eventType`);
+      if (value.routing.eventSource !== undefined) assertString(value.routing.eventSource, `${label}.routing.eventSource`);
+    }
     return value as unknown as ExecutableTarget;
   }
   throw new Error(`${label}.type must be command or agent`);
