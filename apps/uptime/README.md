@@ -32,7 +32,8 @@ uptime report-schedules run-due
 uptime report-schedules runs
 uptime audit
 uptime cloud plan --json
-uptime cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --env
+uptime cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --json
+uptime cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --env --allow-blocked-env
 uptime incidents
 uptime serve --port 3899 --check
 ```
@@ -40,6 +41,8 @@ uptime serve --port 3899 --check
 Scheduled reports persist endpoint and recipient configuration, but not send
 keys or API tokens. Configure `MAILERY_SEND_KEY`, `HASNA_MAILERY_SEND_KEY`,
 `HASNA_LOGS_API_TOKEN`, or the matching service env vars before scheduled runs.
+Private probe env output is blocked by default while hosted probe routes remain
+fail-closed; `--allow-blocked-env` is for review artifacts only, not startup.
 
 The `uptime cloud ...` commands generate dry-run AWS/private-probe planning artifacts
 only. They do not call AWS, write secrets, or produce an approved deploy script;

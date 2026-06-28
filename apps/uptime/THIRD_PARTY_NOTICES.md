@@ -1,6 +1,9 @@
 # Third-Party Notices
 
-Open Uptime bundles or depends on the following third-party packages.
+Open Uptime bundles or depends on the following third-party packages. The
+versions listed here reflect the checked-in lockfile and release build used for
+the published package; package managers may resolve newer compatible versions
+when installing from semver ranges.
 
 ## @modelcontextprotocol/sdk
 

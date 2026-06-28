@@ -158,7 +158,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
   const image = clean(options.image, `${imageRepositoryUri}@sha256:<image-digest>`);
   const evidenceBucket = clean(options.evidenceBucket, `hasna-${stage}-${prefix}-evidence`);
   const hostedSqliteDbPath = clean(options.hostedSqliteDbPath, DEFAULT_HOSTED_SQLITE_DB);
-  const runtimePackageVersion = clean(options.runtimePackageVersion, "0.1.23");
+  const runtimePackageVersion = clean(options.runtimePackageVersion, "0.1.24");
   const protectedAccessMode = options.protectedAccessMode ?? DEFAULT_PROTECTED_ACCESS_MODE;
   const protectedAccessUrl = protectedAccessMode === "cloudfront_default_domain" ? "https://<cloudfront-domain>" : `https://${hostname}`;
   const cluster = `${prefix}-${stage}`;
@@ -413,7 +413,10 @@ export function buildPrivateProbeCloudConfig(options: PrivateProbeCloudConfigOpt
   };
 }
 
-export function renderPrivateProbeEnv(config: PrivateProbeCloudConfig): string {
+export function renderPrivateProbeEnv(config: PrivateProbeCloudConfig, options: { allowBlocked?: boolean } = {}): string {
+  if (!options.allowBlocked && (!config.canStart || config.blockers.length > 0)) {
+    throw new Error("private probe env output is blocked until hosted probe routes and cloud jobs are implemented");
+  }
   const required = ["HASNA_UPTIME_PRIVATE_PROBE_ID"];
   const missing = required.filter((key) => !config.env[key]);
   if (missing.length > 0) {

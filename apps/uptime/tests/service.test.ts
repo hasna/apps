@@ -606,6 +606,75 @@ test("hosted store allows non-standard SQLite paths only with explicit local fal
   }
 });
 
+test("hosted public due checks run only scoped HTTP/TCP monitors with hosted target policy", async () => {
+  const service = new UptimeService({
+    dbPath: tempDb(),
+    mode: "hosted",
+    allowHostedLocalStore: true,
+    hostedResolveHost: async (hostname) => {
+      if (hostname !== "example.com") throw new Error(`unexpected host ${hostname}`);
+      return [{ address: "93.184.216.34", family: 4 }];
+    },
+    hostedHttpRequest: async () => ({ status: 200 }),
+  });
+
+  const scoped = service.createMonitor({
+    workspaceId: "ws_a",
+    name: "api",
+    kind: "http",
+    url: "https://example.com/health",
+    intervalSeconds: 60,
+  });
+  service.createMonitor({
+    workspaceId: "ws_b",
+    name: "other",
+    kind: "http",
+    url: "https://example.com/other",
+    intervalSeconds: 60,
+  });
+
+  const results = await service.runDueHostedPublicChecks(new Date("2026-01-01T00:00:00.000Z"), { workspaceId: "ws_a" });
+
+  expect(results).toHaveLength(1);
+  expect(results[0]).toMatchObject({ monitorId: scoped.id, status: "up", statusCode: 200 });
+  expect(service.listResults({ workspaceId: "ws_a" })).toHaveLength(1);
+  expect(service.listResults({ workspaceId: "ws_b" })).toHaveLength(0);
+  const audits = service.listAuditEvents({ workspaceId: "ws_a", resourceType: "monitor" });
+  expect(audits[0]).toMatchObject({
+    action: "hosted_public_check.run",
+    resourceId: scoped.id,
+    actor: "hosted-public-check-worker",
+  });
+  service.close();
+});
+
+test("hosted public checks require workspace scope and block private DNS results", async () => {
+  const service = new UptimeService({
+    dbPath: tempDb(),
+    mode: "hosted",
+    allowHostedLocalStore: true,
+    hostedResolveHost: async () => [{ address: "10.0.0.12", family: 4 }],
+    hostedHttpRequest: async () => {
+      throw new Error("request should not run for denied addresses");
+    },
+  });
+  service.createMonitor({
+    workspaceId: "ws_a",
+    name: "private-dns",
+    kind: "http",
+    url: "https://example.com/health",
+  });
+
+  await expect(service.runDueHostedPublicChecks(new Date("2026-01-01T00:00:00.000Z")))
+    .rejects.toThrow("workspace id");
+  const [result] = await service.runDueHostedPublicChecks(new Date("2026-01-01T00:00:00.000Z"), { workspaceId: "ws_a" });
+
+  expect(result.status).toBe("down");
+  expect(result.error).toContain("private");
+  expect(service.listIncidents({ workspaceId: "ws_a", status: "open" })).toHaveLength(1);
+  service.close();
+});
+
 test("hosted cloud-mounted SQLite path must be absolute", () => {
   expect(() => new UptimeService({ mode: "hosted", hostedSqliteDbPath: "relative/uptime.db" }))
     .toThrow("HASNA_UPTIME_HOSTED_SQLITE_DB must be an absolute path");

@@ -138,15 +138,53 @@ test("CLI private probe env requires a real cloud probe id", () => {
   try {
     const dbPath = join(dir, "uptime.db");
     const missing = runCli(["cloud", "private-probe-config", "--env"], dbPath);
-    const ok = runCli(["cloud", "private-probe-config", "--probe-id", "prb_private_01", "--env"], dbPath);
+    const blocked = runCli(["cloud", "private-probe-config", "--probe-id", "prb_private_01", "--env"], dbPath);
+    const ok = runCli(["cloud", "private-probe-config", "--probe-id", "prb_private_01", "--env", "--allow-blocked-env"], dbPath);
     const stderr = new TextDecoder().decode(missing.stderr);
+    const blockedStderr = new TextDecoder().decode(blocked.stderr);
     const stdout = new TextDecoder().decode(ok.stdout);
 
     expect(missing.exitCode).toBe(1);
-    expect(stderr).toContain("HASNA_UPTIME_PRIVATE_PROBE_ID");
+    expect(stderr).toContain("private probe env output is blocked");
+    expect(blocked.exitCode).toBe(1);
+    expect(blockedStderr).toContain("private probe env output is blocked");
     expect(ok.exitCode).toBe(0);
     expect(stdout).toContain("HASNA_UPTIME_PRIVATE_PROBE_ID=prb_private_01");
     expect(stdout).toContain("HASNA_UPTIME_MODE=hosted");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI hosted public-check command is workspace scoped and bounded", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const missingWorkspace = runCli([
+      "cloud",
+      "public-checks",
+      "run-due",
+      "--hosted-sqlite-db",
+      dbPath,
+      "--allow-hosted-local-store",
+      "--json",
+    ], dbPath, { HASNA_UPTIME_WORKSPACE_ID: "" });
+    const ok = runCli([
+      "cloud",
+      "public-checks",
+      "run-due",
+      "--workspace-id",
+      "ws_cli",
+      "--hosted-sqlite-db",
+      dbPath,
+      "--allow-hosted-local-store",
+      "--json",
+    ], dbPath, { HASNA_UPTIME_WORKSPACE_ID: "" });
+
+    expect(missingWorkspace.exitCode).toBe(1);
+    expect(JSON.parse(new TextDecoder().decode(missingWorkspace.stdout)).error).toContain("workspace id");
+    expect(ok.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(ok.stdout))).toMatchObject({ ok: true, workspaceId: "ws_cli", checked: 0 });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

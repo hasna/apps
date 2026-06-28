@@ -8,7 +8,8 @@ call AWS or mutate infrastructure.
 
 ```bash
 uptime cloud plan --json > open-uptime-aws-plan.json
-uptime cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --env > private-probe-01-uptime.env
+uptime cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --json > private-probe-01-preflight.json
+uptime cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --env --allow-blocked-env > private-probe-01-review-only.env
 ```
 
 Public package defaults are placeholders:
@@ -33,8 +34,10 @@ The app repo includes a hosted runtime `Dockerfile` and Terraform/OpenTofu
 starter files in `infra/aws`. The plan output points to these files and keeps
 `applyAllowed: false`.
 
-`uptime cloud private-probe-config --env` requires a real `--probe-id`; it will not
-write a sourceable env file with a placeholder probe identity.
+`uptime cloud private-probe-config --env` is blocked by default while hosted
+probe routes remain fail-closed. It requires both a real `--probe-id` and the
+explicit `--allow-blocked-env` review override; do not use that env output to
+start a private probe until the JSON output says `canStart: true`.
 
 ## Preflight
 
@@ -398,11 +401,13 @@ routes are backed by cloud check jobs and cloud audit rows.
   URLs, or probe private keys in task definitions. Use ECS `secrets.valueFrom`
   refs such as `HASNA_UPTIME_HOSTED_TOKEN`.
 - Do not run public probe workers against private targets.
-- Do not enable public probe workers until their cloud check-job path calls
-  `runHostedHttpCheck`, records target-policy decision evidence, and passes AWS
-  smokes for denied DNS answers, redirect-to-denied targets, and address
-  pinning. The SDK runner now handles execution-time DNS and redirect
-  enforcement, but it is not active until the worker is wired to it.
+- Do not enable public probe workers until their cloud check-job path calls the
+  hosted public-check runner, records target-policy decision evidence, and
+  passes AWS smokes for denied DNS answers, redirect-to-denied targets, and
+  address pinning. The SDK and `uptime cloud public-checks run-due` path now
+  handle execution-time DNS and redirect enforcement for bounded smokes, but a
+  sustained public-probe worker loop is not active until it is wired to cloud
+  leases.
 - Do not enable scheduler, public-probe, reporter, or migration workers against
   the EFS SQLite bridge; those services need Postgres/cloud leases first.
 - Do not expose dashboard/API routes without hosted auth and workspace checks.

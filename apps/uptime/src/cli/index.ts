@@ -27,6 +27,14 @@ function service(): UptimeService {
   return new UptimeService({ mode: "local" });
 }
 
+function hostedService(opts: { hostedSqliteDb?: string; allowHostedLocalStore?: boolean }): UptimeService {
+  return new UptimeService({
+    mode: "hosted",
+    hostedSqliteDbPath: opts.hostedSqliteDb,
+    allowHostedLocalStore: opts.allowHostedLocalStore,
+  });
+}
+
 function wantsJson(opts?: { json?: boolean }): boolean {
   return Boolean(opts?.json || program.opts().json);
 }
@@ -521,6 +529,7 @@ cloud
   .option("--machine-id <id>", "machine id", "private-probe-01")
   .option("--log-level <level>", "probe log level", "info")
   .option("--env", "print shell env file instead of summary text")
+  .option("--allow-blocked-env", "print the blocked preflight env anyway for review artifacts; do not start the probe")
   .option("-j, --json", "print JSON")
   .action((opts) => {
     try {
@@ -533,10 +542,38 @@ cloud
         logLevel: opts.logLevel,
       });
       if (opts.env && !wantsJson(opts)) {
-        console.log(renderPrivateProbeEnv(config));
+        console.log(renderPrivateProbeEnv(config, { allowBlocked: opts.allowBlockedEnv }));
         return;
       }
       print(config, renderPrivateProbeConfig(config), opts);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+const cloudPublicChecks = cloud
+  .command("public-checks")
+  .description("Run hosted public HTTP/TCP checks against the configured hosted store");
+
+cloudPublicChecks
+  .command("run-due")
+  .description("Run due hosted public HTTP/TCP checks for one workspace")
+  .option("--workspace-id <id>", "workspace id; defaults to HASNA_UPTIME_WORKSPACE_ID")
+  .option("--now <iso>", "due timestamp", new Date().toISOString())
+  .option("--hosted-sqlite-db <path>", "hosted SQLite path on cloud-mounted storage")
+  .option("--allow-hosted-local-store", "allow hosted mode to use local SQLite as an explicit fallback")
+  .option("-j, --json", "print JSON")
+  .action(async (opts) => {
+    try {
+      const svc = hostedService({
+        hostedSqliteDb: opts.hostedSqliteDb,
+        allowHostedLocalStore: opts.allowHostedLocalStore,
+      });
+      const workspaceId = opts.workspaceId || process.env.HASNA_UPTIME_WORKSPACE_ID;
+      const results = await svc.runDueHostedPublicChecks(new Date(opts.now), { workspaceId });
+      svc.close();
+      const data = { ok: true, workspaceId, checked: results.length, results };
+      print(data, results.length ? renderCheckResults(results) : "No due hosted public checks", opts);
     } catch (error) {
       fail(error);
     }

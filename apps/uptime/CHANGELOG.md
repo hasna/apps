@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.24] - 2026-06-29
+
+### Added
+
+- Added a workspace-scoped `cloud public-checks run-due` CLI path and SDK
+  service methods for bounded hosted HTTP/TCP check execution with hosted target
+  policy enforcement. This is a one-off smoke/runtime primitive; the EFS SQLite
+  bridge still keeps scheduler, public-probe, reporter, and migration services
+  scaled to zero until cloud leases and worker loops are implemented.
+
 ## [0.1.23] - 2026-06-28
 
 ### Fixed

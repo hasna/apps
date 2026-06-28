@@ -1,4 +1,4 @@
-import { normalizeBrowserEvidence, normalizeHttpTargetPolicyEvidence, runMonitorCheck } from "./checks.js";
+import { normalizeBrowserEvidence, normalizeHttpTargetPolicyEvidence, runMonitorCheck, type HostedDnsResolver, type HostedHttpRequestLike } from "./checks.js";
 import { createPublicKey, randomUUID } from "node:crypto";
 import { applyImport, previewImport, rollbackImport, type ImportApplyResult, type ImportPreview, type ImportRequest, type ImportRollbackResult } from "./imports.js";
 import { generateProbeKeyPair, probePublicKeyFingerprint, verifyProbeResultSignature } from "./probes.js";
@@ -40,6 +40,9 @@ const MAX_PROBE_RESULT_FUTURE_MS = 5 * 60_000;
 export interface UptimeServiceOptions extends UptimeStoreOptions {
   store?: UptimeStoreLike;
   checkRunner?: (monitor: Monitor) => Promise<CheckAttemptResult>;
+  hostedResolveHost?: HostedDnsResolver;
+  hostedHttpRequest?: HostedHttpRequestLike;
+  hostedMaxRedirects?: number;
 }
 
 export interface UptimeStoreLike {
@@ -136,6 +139,9 @@ type ReportStoreLike = UptimeStoreLike & {
 export class UptimeService {
   readonly store: UptimeStoreLike;
   private readonly checkRunner: (monitor: Monitor) => Promise<CheckAttemptResult>;
+  private readonly hostedResolveHost?: HostedDnsResolver;
+  private readonly hostedHttpRequest?: HostedHttpRequestLike;
+  private readonly hostedMaxRedirects?: number;
   private readonly leaseOwner = `svc_${randomUUID().replace(/-/g, "").slice(0, 18)}`;
   private readonly inFlightChecks = new Set<string>();
   private readonly inFlightReportSchedules = new Set<string>();
@@ -143,6 +149,9 @@ export class UptimeService {
   constructor(options: UptimeServiceOptions = {}) {
     this.store = options.store ?? new UptimeStore({ mode: "local", ...options });
     this.checkRunner = options.checkRunner ?? runMonitorCheck;
+    this.hostedResolveHost = options.hostedResolveHost;
+    this.hostedHttpRequest = options.hostedHttpRequest;
+    this.hostedMaxRedirects = options.hostedMaxRedirects;
   }
 
   close(): void {
@@ -381,36 +390,7 @@ export class UptimeService {
     if (this.store.mode === "hosted") throw new Error("hosted checks require check_jobs and probes");
     const monitor = this.store.getMonitor(idOrName);
     if (!monitor) throw new Error(`Monitor not found: ${idOrName}`);
-    if (!monitor.enabled) throw new Error(`Monitor is disabled: ${monitor.name}`);
-    if (this.inFlightChecks.has(monitor.id)) throw new Error(`Monitor check already in progress: ${monitor.name}`);
-    const leaseTtlMs = Math.max(60_000, (monitor.retryCount + 1) * monitor.timeoutMs + 10_000);
-    if (!this.store.acquireCheckLease(monitor.id, this.leaseOwner, leaseTtlMs)) {
-      throw new MonitorCheckBusyError(`Monitor check already in progress: ${monitor.name}`);
-    }
-    this.inFlightChecks.add(monitor.id);
-    try {
-      let attemptCount = 0;
-      let last: CheckAttemptResult | null = null;
-      const maxAttempts = Math.max(1, monitor.retryCount + 1);
-      while (attemptCount < maxAttempts) {
-        attemptCount += 1;
-        last = await this.checkRunner(monitor);
-        if (last.status === "up") break;
-      }
-      return this.store.recordCheckResult({
-        monitorId: monitor.id,
-        status: last!.status,
-        latencyMs: last!.latencyMs,
-        statusCode: last!.statusCode ?? null,
-        error: last!.error ?? null,
-        evidence: last!.evidence ?? null,
-        attemptCount,
-        expectedMonitorRevision: monitor.revision,
-      });
-    } finally {
-      this.inFlightChecks.delete(monitor.id);
-      this.store.releaseCheckLease(monitor.id, this.leaseOwner);
-    }
+    return this.recordMonitorCheck(monitor, { hostedTargetPolicy: false });
   }
 
   async checkAll(): Promise<CheckResult[]> {
@@ -419,6 +399,50 @@ export class UptimeService {
     const results: CheckResult[] = [];
     for (const monitor of monitors) {
       results.push(await this.checkMonitor(monitor.id));
+    }
+    return results;
+  }
+
+  async checkHostedPublicMonitor(idOrName: string, options: { workspaceId?: string } = {}): Promise<CheckResult> {
+    this.assertHostedPublicChecksEnabled();
+    const workspaceId = this.requireHostedWorkerWorkspaceId(options.workspaceId);
+    const monitor = this.store.getMonitor(idOrName, { workspaceId });
+    if (!monitor) throw new Error(`Monitor not found: ${idOrName}`);
+    this.assertHostedPublicMonitor(monitor);
+    const result = await this.recordMonitorCheck(monitor, { hostedTargetPolicy: true });
+    this.auditStore().recordAuditEvent({
+      workspaceId,
+      action: "hosted_public_check.run",
+      resourceType: "monitor",
+      resourceId: monitor.id,
+      message: `Ran hosted public check for ${monitor.name}`,
+      metadata: {
+        checkResultId: result.id,
+        status: result.status,
+        monitorKind: monitor.kind,
+        operatorPath: "hosted_public_check",
+      },
+      actor: "hosted-public-check-worker",
+    });
+    return result;
+  }
+
+  async runDueHostedPublicChecks(now: Date = new Date(), options: { workspaceId?: string } = {}): Promise<CheckResult[]> {
+    this.assertHostedPublicChecksEnabled();
+    const workspaceId = this.requireHostedWorkerWorkspaceId(options.workspaceId);
+    const due = this.store
+      .listMonitors({ workspaceId })
+      .filter((monitor) => this.isHostedPublicMonitor(monitor) && this.isDue(monitor, now));
+    const results: CheckResult[] = [];
+    for (const monitor of due) {
+      const current = this.store.getMonitor(monitor.id, { workspaceId });
+      if (!current || !this.isHostedPublicMonitor(current) || !this.isDue(current, now)) continue;
+      try {
+        results.push(await this.checkHostedPublicMonitor(current.id, { workspaceId }));
+      } catch (error) {
+        if (error instanceof MonitorCheckBusyError || error instanceof StaleCheckResultError) continue;
+        throw error;
+      }
     }
     return results;
   }
@@ -462,6 +486,68 @@ export class UptimeService {
     if (!monitor.lastCheckedAt) return true;
     const last = new Date(monitor.lastCheckedAt).getTime();
     return now.getTime() - last >= monitor.intervalSeconds * 1000;
+  }
+
+  private async recordMonitorCheck(monitor: Monitor, options: { hostedTargetPolicy: boolean }): Promise<CheckResult> {
+    if (!monitor.enabled) throw new Error(`Monitor is disabled: ${monitor.name}`);
+    if (this.inFlightChecks.has(monitor.id)) throw new Error(`Monitor check already in progress: ${monitor.name}`);
+    const leaseTtlMs = Math.max(60_000, (monitor.retryCount + 1) * monitor.timeoutMs + 10_000);
+    if (!this.store.acquireCheckLease(monitor.id, this.leaseOwner, leaseTtlMs)) {
+      throw new MonitorCheckBusyError(`Monitor check already in progress: ${monitor.name}`);
+    }
+    this.inFlightChecks.add(monitor.id);
+    try {
+      let attemptCount = 0;
+      let last: CheckAttemptResult | null = null;
+      const maxAttempts = Math.max(1, monitor.retryCount + 1);
+      while (attemptCount < maxAttempts) {
+        attemptCount += 1;
+        last = options.hostedTargetPolicy ? await this.runHostedPublicCheckAttempt(monitor) : await this.checkRunner(monitor);
+        if (last.status === "up") break;
+      }
+      return this.store.recordCheckResult({
+        monitorId: monitor.id,
+        status: last!.status,
+        latencyMs: last!.latencyMs,
+        statusCode: last!.statusCode ?? null,
+        error: last!.error ?? null,
+        evidence: last!.evidence ?? null,
+        attemptCount,
+        expectedMonitorRevision: monitor.revision,
+      });
+    } finally {
+      this.inFlightChecks.delete(monitor.id);
+      this.store.releaseCheckLease(monitor.id, this.leaseOwner);
+    }
+  }
+
+  private runHostedPublicCheckAttempt(monitor: Monitor): Promise<CheckAttemptResult> {
+    return runMonitorCheck(monitor, {
+      hostedTargetPolicy: true,
+      resolveHost: this.hostedResolveHost,
+      hostedHttpRequest: this.hostedHttpRequest,
+      maxRedirects: this.hostedMaxRedirects,
+    });
+  }
+
+  private assertHostedPublicChecksEnabled(): void {
+    if (this.store.mode !== "hosted") throw new Error("hosted public checks require hosted mode");
+  }
+
+  private requireHostedWorkerWorkspaceId(workspaceId: string | undefined): string {
+    const value = workspaceId?.trim() || process.env.HASNA_UPTIME_WORKSPACE_ID?.trim();
+    if (!value) throw new Error("hosted public checks require a workspace id");
+    return value;
+  }
+
+  private assertHostedPublicMonitor(monitor: Monitor): void {
+    if (!this.isHostedPublicMonitor(monitor)) {
+      throw new Error("hosted public checks support only HTTP and TCP monitors");
+    }
+  }
+
+  private isHostedPublicMonitor(monitor: Monitor): boolean {
+    return monitor.kind === "http" || monitor.kind === "tcp";
   }
 
   private probeStore(): ProbeStoreLike {

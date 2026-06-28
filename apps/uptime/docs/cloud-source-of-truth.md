@@ -122,11 +122,12 @@ or delete workspace B data.
 The target-state architecture uses one shared target policy at both
 configuration time and execution time. The current hosted API implements
 configuration-time checks for direct targets, and the SDK exposes
-`runHostedHttpCheck` for hosted public HTTP probes. That runner performs runtime
-DNS resolution, address pinning, redirect validation, DNS-rebinding protection,
-and decision-record evidence. Public probe execution stays disabled until cloud
-check-job leases and the public-probe worker are wired to that runner and
-validated in AWS.
+`runHostedHttpCheck` plus a bounded hosted public-check service/CLI path for
+workspace-scoped HTTP/TCP checks. Those paths perform runtime DNS resolution,
+address pinning, redirect validation, DNS-rebinding protection, and
+decision-record evidence. Long-running public probe execution stays disabled
+until cloud check-job leases and the public-probe worker loop are wired to that
+runner and validated in AWS.
 
 Public probes must deny:
 
@@ -428,8 +429,10 @@ ECS/API/RDS/S3/probe lag/job backlog/delivery failures, and rollback commands.
 - Hosted API reads are protected only by a broad bootstrap token, and the hosted
   dashboard shell still fails closed; production-grade identity/RBAC is not
   implemented yet.
-- Outbound target policy for hosted HTTP probes exists in the SDK, but the
-  cloud public-probe worker and lease path are not wired to it yet.
+- Outbound target policy for hosted HTTP/TCP checks exists in the SDK and the
+  `uptime cloud public-checks run-due` operator path. The cloud public-probe
+  worker loop, durable check-job lease path, and sustained ECS liveness are not
+  wired yet.
 - `@hasna/cloud` hybrid mode still returns SQLite, so it is not cloud-primary.
 - The local cloud config currently points at a stale/non-resolving database host.
 - Todos has unresolved conflicts that must be reconciled before cloud cutover.
