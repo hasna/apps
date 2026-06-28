@@ -16,10 +16,10 @@ RUN apk add --no-cache ca-certificates libgcc libstdc++ \
 COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 COPY --from=bun /usr/local/lib/node_modules/bun /usr/local/lib/node_modules/bun
 
-COPY package.json ./package.json
+COPY package.json bun.lock ./
 COPY dist ./dist
 
-RUN bun install --production \
+RUN bun install --production --frozen-lockfile \
   && chown -R uptime:uptime /app
 
 USER uptime

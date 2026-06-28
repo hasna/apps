@@ -18,6 +18,14 @@ output "cloudfront_domain_name" {
   value = try(aws_cloudfront_distribution.open_uptime[0].domain_name, null)
 }
 
+output "cloudfront_origin_protocol_policy" {
+  value = local.use_cloudfront ? var.cloudfront_origin_protocol_policy : null
+}
+
+output "cloudfront_origin_domain_name" {
+  value = local.use_cloudfront ? (local.cloudfront_https_origin ? var.cloudfront_origin_domain_name : aws_lb.open_uptime.dns_name) : null
+}
+
 output "protected_access_url" {
   value = var.protected_access_mode == "cloudfront_default_domain" ? "https://${aws_cloudfront_distribution.open_uptime[0].domain_name}" : "https://${var.hostname}"
 }

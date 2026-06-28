@@ -492,7 +492,10 @@ cloud
   .option("--ecr-repository <name>", "ECR repository name")
   .option("--image <uri>", "container image URI")
   .option("--runtime-package-version <version>", "published @hasna/uptime version for the AWS image builder")
+  .option("--runtime-package-integrity <integrity>", "expected npm dist.integrity for the runtime package")
   .addOption(new Option("--protected-access-mode <mode>", "protected web access mode").choices(["cloudfront_default_domain", "alb_https_cert"]).default("cloudfront_default_domain"))
+  .addOption(new Option("--cloudfront-origin-protocol-policy <policy>", "CloudFront-to-ALB origin protocol policy").choices(["http-only", "https-only"]).default("http-only"))
+  .option("--cloudfront-origin-domain-name <hostname>", "origin hostname for CloudFront https-only mode; must resolve to the ALB and match certificate_arn")
   .option("--evidence-bucket <name>", "S3 evidence bucket name")
   .option("-j, --json", "print JSON")
   .action((opts) => {
@@ -510,7 +513,10 @@ cloud
         ecrRepository: opts.ecrRepository,
         image: opts.image,
         runtimePackageVersion: opts.runtimePackageVersion,
+        runtimePackageIntegrity: opts.runtimePackageIntegrity,
         protectedAccessMode: opts.protectedAccessMode,
+        cloudfrontOriginProtocolPolicy: opts.cloudfrontOriginProtocolPolicy,
+        cloudfrontOriginDomainName: opts.cloudfrontOriginDomainName,
         evidenceBucket: opts.evidenceBucket,
       });
       print(plan, renderCloudPlan(plan), opts);
@@ -1084,6 +1090,7 @@ function renderCloudPlan(plan: AwsDeploymentPlan): string {
     `host: ${plan.hostname}`,
     `cluster: ${plan.resources.ecsCluster}`,
     `image: ${plan.image.uri}`,
+    ...(plan.image.expectedIntegrity ? [`package integrity: ${plan.image.expectedIntegrity}`] : []),
     `image builder: ${plan.resources.imageBuilder}`,
     `dockerfile: ${plan.image.dockerfile}`,
     `infra: ${plan.infra.path}`,
@@ -1091,6 +1098,7 @@ function renderCloudPlan(plan: AwsDeploymentPlan): string {
     `efs: ${plan.resources.efsFileSystem}`,
     `hosted sqlite: ${plan.resources.hostedSqliteDbPath}`,
     `protected access: ${plan.resources.protectedAccessMode} ${plan.resources.protectedAccessUrl}`,
+    ...(plan.resources.cloudfrontOrigin ? [`cloudfront origin: ${plan.resources.cloudfrontOrigin.protocolPolicy} ${plan.resources.cloudfrontOrigin.domainName}`] : []),
     `services: ${plan.resources.services.map((service) => `${service.name}:${service.desiredCount}/${service.targetDesiredCount}`).join(", ")}`,
     `evidence bucket: ${plan.resources.evidenceBucket}`,
     `blockers: ${plan.blockers.length}`,

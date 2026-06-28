@@ -11,7 +11,10 @@ export interface AwsDeploymentPlanOptions {
   evidenceBucket?: string;
   hostedSqliteDbPath?: string;
   runtimePackageVersion?: string;
+  runtimePackageIntegrity?: string;
   protectedAccessMode?: "cloudfront_default_domain" | "alb_https_cert";
+  cloudfrontOriginProtocolPolicy?: "http-only" | "https-only";
+  cloudfrontOriginDomainName?: string;
   /** @deprecated Postgres is target-state only until the async adapter is implemented. */
   rdsInstanceId?: string;
   /** @deprecated Postgres is target-state only until the async adapter is implemented. */
@@ -50,6 +53,13 @@ export interface AwsDeploymentPlan {
     protectedAccessMode: "cloudfront_default_domain" | "alb_https_cert";
     edgeDistribution?: string;
     protectedAccessUrl: string;
+    cloudfrontOrigin?: {
+      protocolPolicy: "http-only" | "https-only";
+      domainName: string;
+      requiresMatchingCertificate: boolean;
+      liveTrafficApproved: boolean;
+      risk?: string;
+    };
     originVerification: {
       mode: "cloudfront_origin_header" | "alb_tls";
       requiredBeforeScaleUp: boolean;
@@ -67,6 +77,7 @@ export interface AwsDeploymentPlan {
     repository: string;
     uri: string;
     dockerfile: string;
+    expectedIntegrity?: string;
     buildCommand: string;
     pushCommands: string[];
   };
@@ -145,6 +156,7 @@ const DEFAULT_WORKSPACE_ID = "workspace-id";
 const DEFAULT_VPC_ID = "vpc-xxxxxxxx";
 const DEFAULT_HOSTED_SQLITE_DB = "/data/uptime/uptime.db";
 const DEFAULT_PROTECTED_ACCESS_MODE = "cloudfront_default_domain" as const;
+const DEFAULT_CLOUDFRONT_ORIGIN_PROTOCOL_POLICY = "http-only" as const;
 
 export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): AwsDeploymentPlan {
   const region = clean(options.region, DEFAULT_REGION);
@@ -158,8 +170,11 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
   const image = clean(options.image, `${imageRepositoryUri}@sha256:<image-digest>`);
   const evidenceBucket = clean(options.evidenceBucket, `hasna-${stage}-${prefix}-evidence`);
   const hostedSqliteDbPath = clean(options.hostedSqliteDbPath, DEFAULT_HOSTED_SQLITE_DB);
-  const runtimePackageVersion = clean(options.runtimePackageVersion, "0.1.24");
+  const runtimePackageVersion = clean(options.runtimePackageVersion, "0.1.25");
+  const runtimePackageIntegrity = options.runtimePackageIntegrity?.trim() || undefined;
   const protectedAccessMode = options.protectedAccessMode ?? DEFAULT_PROTECTED_ACCESS_MODE;
+  const cloudfrontOriginProtocolPolicy = options.cloudfrontOriginProtocolPolicy ?? DEFAULT_CLOUDFRONT_ORIGIN_PROTOCOL_POLICY;
+  const cloudfrontOriginDomainName = clean(options.cloudfrontOriginDomainName, "<alb-dns-name>");
   const protectedAccessUrl = protectedAccessMode === "cloudfront_default_domain" ? "https://<cloudfront-domain>" : `https://${hostname}`;
   const cluster = `${prefix}-${stage}`;
   const secrets = {
@@ -227,6 +242,17 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
       protectedAccessMode,
       edgeDistribution: protectedAccessMode === "cloudfront_default_domain" ? `${prefix}-${stage}-edge` : undefined,
       protectedAccessUrl,
+      cloudfrontOrigin: protectedAccessMode === "cloudfront_default_domain"
+        ? {
+          protocolPolicy: cloudfrontOriginProtocolPolicy,
+          domainName: cloudfrontOriginProtocolPolicy === "https-only" ? cloudfrontOriginDomainName : "<alb-dns-name>",
+          requiresMatchingCertificate: cloudfrontOriginProtocolPolicy === "https-only",
+          liveTrafficApproved: false,
+          risk: cloudfrontOriginProtocolPolicy === "http-only"
+            ? "Temporary HTTP-origin bridge: do not use for token-bearing live traffic without explicit risk acceptance, or switch to https-only with cloudfront_origin_domain_name plus certificate_arn."
+            : "CloudFront HTTPS-origin mode requires the origin hostname to resolve to the ALB and match certificate_arn.",
+        }
+        : undefined,
       originVerification: protectedAccessMode === "cloudfront_default_domain"
         ? {
           mode: "cloudfront_origin_header",
@@ -261,6 +287,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
       repository: ecrRepository,
       uri: image,
       dockerfile: "Dockerfile.package",
+      expectedIntegrity: runtimePackageIntegrity,
       buildCommand: `BLOCKED: after infra approval, AWS CodeBuild builds Dockerfile.package from @hasna/uptime@${runtimePackageVersion} into ${imageRepositoryUri}`,
       pushCommands: [
         `BLOCKED: start ${prefix}-${stage}-image-builder only through the approved deploy pipeline after @hasna/uptime@${runtimePackageVersion} is published`,
@@ -288,18 +315,20 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
         `Infra PR must declare hardened S3 evidence bucket ${evidenceBucket} with KMS, versioning, lifecycle, and public access block.`,
         `Infra PR must declare encrypted EFS ${prefix}-${stage}-data with access point, mount targets, and AWS Backup plan.`,
         protectedAccessMode === "cloudfront_default_domain"
-          ? "Infra PR must declare CloudFront default-domain HTTPS edge, ALB HTTP listener restricted to CloudFront origin-facing ranges, CloudFront-only origin verification header binding, ECS/Fargate cluster, target groups, security groups, IAM roles, CloudWatch log groups, and Secrets Manager refs."
+          ? "Infra PR must declare CloudFront default-domain HTTPS edge, ALB origin listener restricted to CloudFront origin-facing ranges, CloudFront-only origin verification header binding, ECS/Fargate cluster, target groups, security groups, IAM roles, CloudWatch log groups, and Secrets Manager refs. Token-bearing live traffic must use cloudfront_origin_protocol_policy=https-only with a matching origin hostname/certificate, or carry explicit HTTP-origin risk acceptance."
           : `Infra PR must declare ECS/Fargate cluster ${cluster}, ALB HTTPS listener, target groups, security groups, IAM roles, CloudWatch log groups, and Secrets Manager refs.`,
         "Only apply the infra plan from the approved infrastructure repository after review evidence is attached.",
       ],
       deploy: [
         "Build and publish the image only after the Dockerfile/container target is reviewed.",
-        `Start the AWS image builder for @hasna/uptime@${runtimePackageVersion} and record the pushed image digest.`,
+        runtimePackageIntegrity
+          ? `Start the AWS image builder for @hasna/uptime@${runtimePackageVersion}; it must verify npm dist.integrity ${runtimePackageIntegrity} before extracting the package, then record the pushed image digest.`
+          : `Start the AWS image builder for @hasna/uptime@${runtimePackageVersion}; set runtime_package_integrity from npm dist.integrity before live use, then record the pushed image digest.`,
         "For the EFS SQLite bridge, do not run migration, scheduler, public-probe, or reporter tasks; keep them at desired count 0 until Postgres and cloud leases exist.",
         `Register task definitions for ${services.map((service) => service.name).join(", ")} using valueFrom secrets.`,
         `Update ECS services in cluster ${cluster} one component at a time through the approved deploy pipeline.`,
         protectedAccessMode === "cloudfront_default_domain"
-          ? "Use the CloudFront default HTTPS domain with origin verification header binding for first protected access; add custom DNS/certificate only after edge ownership is approved."
+          ? "Use the CloudFront default HTTPS domain with origin verification header binding for first protected access; before token-bearing live traffic, switch the origin to https-only with a matching origin hostname/certificate or record explicit HTTP-origin risk acceptance."
           : `Create Route53/edge record for ${hostname} only after ALB health checks pass and auth denial smokes succeed.`,
       ],
       rollback: [
@@ -319,6 +348,12 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
       protectedAccessMode === "cloudfront_default_domain"
         ? "CloudFront origin verification header binding must be enabled and direct-origin denial must be proven before web desired count is raised above 0."
         : "ALB HTTPS ingress policy and auth-denial smokes must be proven before web desired count is raised above 0.",
+      ...(protectedAccessMode === "cloudfront_default_domain" && cloudfrontOriginProtocolPolicy === "http-only"
+        ? ["CloudFront-to-ALB origin transport is still http-only; token-bearing live traffic needs https-only origin mode or explicit risk acceptance."]
+        : []),
+      ...(protectedAccessMode === "cloudfront_default_domain" && cloudfrontOriginProtocolPolicy === "https-only" && cloudfrontOriginDomainName === "<alb-dns-name>"
+        ? ["CloudFront https-only origin mode needs cloudfront_origin_domain_name that resolves to the ALB and matches certificate_arn."]
+        : []),
       "The EFS SQLite bridge is single-writer only: web target desired count is 1 and scheduler/public-probe/reporter targets remain 0 until Postgres and cloud leases exist.",
       "Hosted production auth/RBAC must replace broad static hosted-token operation before exposure.",
       "Public probe execution still needs cloud check-job leases wired to runHostedHttpCheck and live policy-decision log evidence.",
@@ -327,8 +362,9 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
     requiredEvidence: [
       "Infrastructure PR/synth/plan from the approved infra repository.",
       "CodeBuild image-builder run, container smoke, and immutable image digest.",
+      "Published package dist.integrity pinned in the private infra root or an explicit not-live exception.",
       "ECS task definitions using secrets.valueFrom only.",
-      "CloudFront-default-domain origin-header config or ALB TLS auth-denial smokes, direct-origin denial evidence, and web alarm checks.",
+      "CloudFront-default-domain origin-header config, origin transport decision, direct-origin denial evidence, auth-denial smokes, and web alarm checks.",
       "Single-writer ECS evidence: one web task maximum and no scheduler/public-probe/reporter EFS mounts.",
       "EFS encryption, access point, mount-target, AWS Backup, and restore-drill evidence.",
       "S3 bucket KMS, versioning, lifecycle, and public-access-block evidence.",
@@ -341,11 +377,13 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
       notes: [
         "This plan generator does not call AWS.",
         "Blocked plan output intentionally avoids copy-pastable AWS mutation commands.",
-        "Default protected access uses CloudFront's HTTPS default domain so first deploy is not blocked on custom DNS or ACM.",
+        "Default protected access uses CloudFront's HTTPS default domain so first zero-count deploy is not blocked on custom DNS or ACM.",
         "CloudFront default-domain mode still requires origin verification header binding before live scale-up; the header value is sensitive state/config material, not public documentation.",
+        "CloudFront HTTPS-origin mode requires a dedicated origin DNS hostname and matching ACM certificate; do not assume the ALB DNS name can satisfy TLS verification.",
         "Hosted runtime uses explicit EFS-backed SQLite at HASNA_UPTIME_HOSTED_SQLITE_DB until the async Postgres adapter exists.",
         "Do not set HASNA_UPTIME_DATABASE_URL for hosted tasks until the Postgres adapter is implemented.",
         "Secrets are represented as secret names/refs and must be injected with valueFrom.",
+        "Set runtime_package_integrity in the approved infra root after publish so the AWS image builder verifies the npm tarball before ECR build.",
         "Actual deploy belongs in the deploy_release_operate_final goal node after infra review.",
       ],
     },

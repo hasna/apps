@@ -55,8 +55,11 @@ format/init/validate/plan commands with `applyAllowed: false`. The first
 protected access path uses the CloudFront default HTTPS domain with ALB origin
 ingress restricted to CloudFront. The hosted web task must set
 `HASNA_UPTIME_ALLOWED_ORIGINS` to the public HTTPS edge origin so same-origin
-browser mutations still pass when the private origin hop is HTTP. Hosted AWS
-runtime state currently uses explicit EFS-backed SQLite via
+browser mutations still pass through the selected ALB origin path. The default
+zero-count bridge keeps `cloudfront_origin_protocol_policy = "http-only"`;
+token-bearing live traffic needs `https-only` with an origin hostname that
+resolves to the ALB and matches `certificate_arn`, or an explicit risk
+acceptance. Hosted AWS runtime state currently uses explicit EFS-backed SQLite via
 `HASNA_UPTIME_HOSTED_SQLITE_DB=/data/uptime/uptime.db` for one protected web
 task maximum; do not set `HASNA_UPTIME_DATABASE_URL` until the async Postgres
 adapter is implemented.

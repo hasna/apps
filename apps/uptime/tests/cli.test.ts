@@ -116,13 +116,14 @@ test("CLI cloud plan emits blocked dry-run JSON without live mutation commands",
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {
     const dbPath = join(dir, "uptime.db");
-    const result = runCli(["cloud", "plan", "--json"], dbPath);
+    const result = runCli(["cloud", "plan", "--runtime-package-integrity", "sha512-exampleIntegrity==", "--json"], dbPath);
     const stdout = new TextDecoder().decode(result.stdout);
     const plan = JSON.parse(stdout);
 
     expect(result.exitCode).toBe(0);
     expect(plan.status).toBe("blocked");
     expect(plan.canApply).toBe(false);
+    expect(plan.image.expectedIntegrity).toBe("sha512-exampleIntegrity==");
     expect(plan.safety.liveAwsMutation).toBe(false);
     expect(stdout).not.toContain("aws ecr create-repository");
     expect(stdout).not.toContain("aws s3api create-bucket");

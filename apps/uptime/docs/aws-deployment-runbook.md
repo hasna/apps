@@ -60,9 +60,14 @@ start a private probe until the JSON output says `canStart: true`.
 
 4. Confirm the target VPC, private subnets, KMS key, and EFS/Backup plan inputs
    still match the plan.
-5. Confirm the protected access mode. The first deploy can use the CloudFront
-   default HTTPS domain without custom DNS or ACM. Custom hostname deploys still
-   require Route53/edge ownership and an ACM certificate.
+5. Confirm the protected access mode. The first zero-count deploy can use the
+   CloudFront default HTTPS domain without custom DNS or ACM. Before
+   token-bearing live traffic, either set
+   `cloudfront_origin_protocol_policy = "https-only"` with a dedicated
+   `cloudfront_origin_domain_name` that resolves to the ALB and a matching ACM
+   `certificate_arn`, or record an explicit risk acceptance for the temporary
+   HTTP-origin bridge. Custom hostname deploys still require Route53/edge
+   ownership and an ACM certificate.
 6. Confirm the deployment role uses short-lived credentials or OIDC, not copied
    access keys.
 7. Create a private evidence directory outside the public repository. Store
@@ -77,9 +82,12 @@ The plan expects:
 - ECS/Fargate cluster with separate services for web, scheduler, public probe,
   reporter, and one-off migrations. In the current EFS SQLite bridge, only web
   may be enabled and it must run at desired count `0` or `1`.
-- CloudFront default-domain HTTPS edge plus ALB HTTP origin restricted to
-  CloudFront origin-facing ranges, or an ALB HTTPS listener with ACM certificate
-  when custom DNS is approved.
+- CloudFront default-domain HTTPS edge plus an ALB origin restricted to
+  CloudFront origin-facing ranges. The default zero-count bridge uses HTTP to
+  the origin; token-bearing live traffic should use the module's HTTPS-origin
+  mode with `cloudfront_origin_domain_name` plus `certificate_arn`, or a
+  documented risk acceptance. Direct ALB HTTPS mode also requires custom DNS and
+  an ACM certificate.
 - Encrypted EFS file system, access point, mount targets, and AWS Backup plan
   for `HASNA_UPTIME_HOSTED_SQLITE_DB=/data/uptime/uptime.db`.
 - S3 bucket for redacted browser evidence and generated report artifacts.
@@ -151,6 +159,12 @@ aws codebuild start-build \
   --project-name "$IMAGE_BUILDER_PROJECT"
 ```
 
+The private infra root should set `runtime_package_integrity` to the published
+npm `dist.integrity` value for the exact `runtime_package_version`. The image
+builder verifies that value before extracting the package. If the value is not
+set, record why the tarball is not integrity-pinned and keep the service
+not-live.
+
 Update the approved infra root so `container_image` is the immutable ECR digest,
 then re-plan with all services still at `0`.
 
@@ -179,6 +193,9 @@ Before setting `desired_counts.web = 1`, verify:
 - the image is an immutable digest, not a mutable tag or placeholder;
 - required secrets have `AWSCURRENT` versions;
 - `HASNA_UPTIME_ALLOWED_ORIGINS` matches the public HTTPS edge origin;
+- CloudFront-to-origin transport is either `https-only` with an origin hostname
+  whose certificate matches that hostname, or the HTTP-origin bridge has a
+  named risk owner and approval recorded in private evidence;
 - CloudFront origin access is distribution-bound with the CloudFront-only origin
   verification header, not just narrowed to CloudFront origin-facing ranges;
 - web egress to ECR, Secrets Manager or SSM, CloudWatch Logs, S3, EFS, and any
@@ -419,6 +436,10 @@ routes are backed by cloud check jobs and cloud audit rows.
   the public repo and shared logs. Terraform redacts the sensitive input in CLI
   output, but the value is still stored in encrypted Terraform state, saved plan
   files, and AWS CloudFront/ALB configuration; restrict access accordingly.
+- Do not treat `cloudfront_origin_protocol_policy = "http-only"` as final for
+  token-bearing traffic. The module supports `https-only`, but that mode needs a
+  real origin DNS name and matching ACM certificate because CloudFront verifies
+  the custom-origin TLS certificate against the origin host.
 - Do not treat local SQLite, local project DBs, or private-probe local state as cloud
   authority after cutover.
 - Do configure owner/project/environment/service/cost-center tags, AWS Budgets

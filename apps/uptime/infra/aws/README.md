@@ -31,31 +31,43 @@ adapter and cloud leases are implemented. Do not set
 
 The included CodeBuild project builds `@hasna/uptime` from npm with
 `Dockerfile.package` and pushes the resulting image to ECR. This avoids
-depending on a local Docker daemon for image publication.
+depending on a local Docker daemon for image publication. Set
+`runtime_package_integrity` in the private root after publish to make CodeBuild
+verify the npm tarball `dist.integrity` before extracting it. The package image
+also installs production dependencies from the published `bun.lock` with
+`--frozen-lockfile`.
 
 The default protected access mode is `cloudfront_default_domain`: CloudFront
-serves HTTPS on its default domain while the ALB origin accepts HTTP only from
-AWS's CloudFront origin-facing managed prefix list. Use `alb_https_cert` only
-after custom DNS and an ACM certificate are approved.
+serves HTTPS on its default domain while the ALB origin is limited to AWS's
+CloudFront origin-facing managed prefix list. The default origin protocol is the
+temporary `http-only` bridge. Before token-bearing live traffic, prefer setting
+`cloudfront_origin_protocol_policy = "https-only"` with a dedicated
+`cloudfront_origin_domain_name` that resolves to the ALB and a matching ACM
+`certificate_arn`. Use `alb_https_cert` only when bypassing CloudFront after
+custom DNS and an ACM certificate are approved.
 The web task receives `HASNA_UPTIME_ALLOWED_ORIGINS` for the selected public
-HTTPS origin so hosted mutation CSRF checks still work through the private HTTP
-origin hop.
+HTTPS origin so hosted mutation CSRF checks still work through the selected
+edge/origin path.
 
 CloudFront prefix-list ingress is only a network narrowing control; it is not
 bound to one distribution. Before enabling the web task, set
 `enable_cloudfront_origin_verify_header = true` and provide a high-entropy
 `cloudfront_origin_verify_header_value` from a private operator workflow. The
 module then configures CloudFront to send that header, makes the ALB default
-action return `403`, and forwards only requests with the matching header.
+action return `403`, and forwards only requests with the matching header on the
+selected HTTP or HTTPS origin listener.
 Terraform marks the value sensitive, but it still lives in encrypted Terraform
 state and in CloudFront/ALB configuration; restrict state, saved plan,
 CloudFront distribution-read, and ELB listener-rule-read access accordingly.
 
 All module resources carry owner, project, environment, service, account, app
-type, and cost-center tags. Set `monthly_budget_limit_usd` plus
-`budget_alert_email_addresses` in the approved infra root to create AWS Budgets
-forecasted and actual spend alerts. Leaving the email list empty skips budget
-creation and is not sufficient for live scale-out approval.
+type, and cost-center tags. ECS services enable AWS-managed tags and propagate
+service tags to launched tasks. Any one-off `run-task` smoke must pass the same
+tag set explicitly because it is outside service propagation. Set
+`monthly_budget_limit_usd` plus `budget_alert_email_addresses` in the approved
+infra root to create AWS Budgets forecasted and actual spend alerts. Leaving the
+email list empty skips budget creation and is not sufficient for live scale-out
+approval.
 
 Private AWS API egress can be pinned through opt-in VPC endpoints by setting
 `enable_private_vpc_endpoints = true` and passing `private_route_table_ids`.
@@ -92,6 +104,9 @@ Store instead of Secrets Manager, add `ssm` to
 ## Current Blockers
 
 - Hosted production auth/RBAC still needs scoped, revocable credentials.
+- The default `http-only` CloudFront origin bridge must be replaced with the
+  explicit HTTPS-origin mode or consciously accepted with documented risk before
+  token-bearing live traffic.
 - Public probe runtime has SDK-level hosted HTTP target-policy enforcement, but
   the public-probe worker and cloud check-job lease path are still disabled until
   they are wired to that runner and validated in AWS.

@@ -110,10 +110,12 @@ Target shape inside the approved VPC:
 
 Security groups:
 
-- `open-uptime-alb-sg`: in `cloudfront_default_domain` mode, inbound `80` only
-  from AWS's CloudFront origin-facing managed prefix list; in `alb_https_cert`
-  mode, inbound `443` only from the approved edge/source CIDR policy. Outbound
-  is only to the web target group.
+- `open-uptime-alb-sg`: in `cloudfront_default_domain` mode, inbound origin
+  traffic is limited to AWS's CloudFront origin-facing managed prefix list on
+  `80` for the temporary HTTP bridge or `443` when
+  `cloudfront_origin_protocol_policy = "https-only"`; in `alb_https_cert` mode,
+  inbound `443` is limited to the approved edge/source CIDR policy. Outbound is
+  only to the web target group.
 - `open-uptime-web-sg`: inbound only from ALB, outbound to RDS, S3 endpoint,
   Secrets Manager, Logs, and internal service endpoints.
 - `open-uptime-scheduler-sg`: no inbound, outbound to RDS, Logs, Secrets
@@ -136,10 +138,15 @@ infra PR.
 
 Public web exposure requires defense in depth:
 
-- first deployment may terminate viewer TLS at CloudFront's default HTTPS
-  domain, restrict ALB HTTP origin ingress to CloudFront origin-facing ranges,
+- first zero-count deployment may terminate viewer TLS at CloudFront's default
+  HTTPS domain, restrict ALB origin ingress to CloudFront origin-facing ranges,
   and require the module's CloudFront-only origin verification header at the ALB
   listener;
+- token-bearing live traffic should use CloudFront HTTPS-origin mode by setting
+  `cloudfront_origin_protocol_policy = "https-only"`, a dedicated
+  `cloudfront_origin_domain_name` that resolves to the ALB, and a matching ACM
+  `certificate_arn`. CloudFront validates the custom-origin certificate against
+  the origin hostname, so the ALB DNS name is not enough for this mode;
 - CloudFront prefix-list ingress is not distribution-bound by itself. In
   `cloudfront_default_domain` mode, set
   `enable_cloudfront_origin_verify_header = true` and provide a high-entropy
@@ -154,7 +161,7 @@ Public web exposure requires defense in depth:
   identity layer;
 - hosted web tasks must set `HASNA_UPTIME_ALLOWED_ORIGINS` to the public HTTPS
   edge origin so browser mutation checks do not compare CloudFront HTTPS origins
-  against the private HTTP ALB origin hop;
+  against the ALB origin hostname;
 - Open Uptime still enforces app-level auth and workspace RBAC on every route
   except `/health`;
 - `/health` returns only service liveness/readiness and no monitor data;
@@ -379,7 +386,9 @@ Minimum implementation path:
 
 1. review the repo-owned `Dockerfile` and package-image `Dockerfile.package`;
 2. add the ECR repository and CodeBuild package image builder;
-3. build the published npm package into ECR and record the immutable digest;
+3. build the published npm package into ECR, verify the expected npm
+   `dist.integrity` when `runtime_package_integrity` is set, install production
+   dependencies with the published `bun.lock`, and record the immutable digest;
 4. run typecheck, tests, package checks, and container smoke locally/CI;
 5. for the EFS bridge, keep the desired count at one web task maximum and zero
    scheduler/public-probe/reporter/migration tasks;
@@ -425,6 +434,11 @@ PR must include a rough monthly estimate for:
 Evidence retention and browser trace capture are the primary variable costs.
 Default retention must be short until usage is measured.
 
+ECS services must enable AWS-managed tags and `propagate_tags = "SERVICE"` so
+service-launched tasks retain cost allocation tags. One-off smoke tasks run
+outside ECS service propagation and must pass equivalent tags explicitly in the
+operator command/evidence.
+
 The AWS Terraform starter exposes optional AWS Budgets alerts through
 `monthly_budget_limit_usd` and `budget_alert_email_addresses`; the approved
 infra root must set real human/on-call notification targets and prove
@@ -438,8 +452,9 @@ required before browser evidence or public probe scale-out.
   evidence bucket, encrypted logs, Backup, EFS, and service secret containers.
   It is not live: services remain at desired count `0`, secrets have
   `AWSCURRENT` values, scoped hosted-token descriptors can be used for operator
-  smokes, and no ACM cert or Route53 record exists for a later custom-hostname
-  path. Full production identity/RBAC is still not implemented.
+  smokes, and the HTTPS-origin/custom-hostname path still needs an approved ACM
+  cert, DNS record, plan/apply, and edge smoke. Full production identity/RBAC is
+  still not implemented.
 - Open Uptime is still SQLite-only for this bridge; only one protected web task
   may write EFS until Postgres and cloud leases exist.
 - Hosted API/dashboard auth, workspace RBAC, target policy, and Postgres leases

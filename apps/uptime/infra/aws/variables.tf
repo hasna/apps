@@ -77,13 +77,47 @@ variable "ecr_repository_name" {
 }
 
 variable "protected_access_mode" {
-  description = "Protected web access mode. cloudfront_default_domain uses the CloudFront HTTPS default domain and restricts ALB HTTP to CloudFront origin-facing ranges. alb_https_cert uses an ALB HTTPS listener with certificate_arn."
+  description = "Protected web access mode. cloudfront_default_domain uses the CloudFront HTTPS default domain and restricts the ALB origin to CloudFront origin-facing ranges. alb_https_cert uses an ALB HTTPS listener with certificate_arn."
   type        = string
   default     = "cloudfront_default_domain"
 
   validation {
     condition     = contains(["cloudfront_default_domain", "alb_https_cert"], var.protected_access_mode)
     error_message = "protected_access_mode must be cloudfront_default_domain or alb_https_cert."
+  }
+}
+
+variable "cloudfront_origin_protocol_policy" {
+  description = "CloudFront-to-ALB origin protocol policy. Keep http-only until an origin hostname and matching ACM certificate are approved; set https-only with cloudfront_origin_domain_name and certificate_arn before token-bearing live traffic."
+  type        = string
+  default     = "http-only"
+
+  validation {
+    condition     = contains(["http-only", "https-only"], var.cloudfront_origin_protocol_policy)
+    error_message = "cloudfront_origin_protocol_policy must be http-only or https-only."
+  }
+}
+
+variable "cloudfront_origin_domain_name" {
+  description = "DNS hostname CloudFront uses for the ALB custom origin when cloudfront_origin_protocol_policy is https-only. The hostname must resolve to the ALB and match certificate_arn. Leave null for the default HTTP-origin bridge."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition = (
+      var.cloudfront_origin_domain_name == null
+      || can(regex("^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$", var.cloudfront_origin_domain_name))
+    )
+    error_message = "cloudfront_origin_domain_name must be null or a valid DNS hostname."
+  }
+
+  validation {
+    condition = (
+      !(var.protected_access_mode == "cloudfront_default_domain" && var.cloudfront_origin_protocol_policy == "https-only")
+      || var.cloudfront_origin_domain_name != null
+    )
+    error_message = "cloudfront_origin_domain_name is required when CloudFront HTTPS origin is enabled."
   }
 }
 
@@ -201,7 +235,7 @@ variable "container_image" {
 variable "runtime_package_version" {
   description = "Published @hasna/uptime package version that CodeBuild should build into the ECR image."
   type        = string
-  default     = "0.1.24"
+  default     = "0.1.25"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$", var.runtime_package_version))
@@ -209,8 +243,20 @@ variable "runtime_package_version" {
   }
 }
 
+variable "runtime_package_integrity" {
+  description = "Optional expected npm dist.integrity value for @hasna/uptime@runtime_package_version. When set, CodeBuild verifies the registry tarball integrity before building the image."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.runtime_package_integrity == null || can(regex("^sha512-[A-Za-z0-9+/=]+$", var.runtime_package_integrity))
+    error_message = "runtime_package_integrity must be null or an npm sha512 integrity string."
+  }
+}
+
 variable "certificate_arn" {
-  description = "ACM certificate ARN for ALB HTTPS mode. Leave null when protected_access_mode is cloudfront_default_domain."
+  description = "ACM certificate ARN for ALB HTTPS mode or CloudFront HTTPS-origin mode. Leave null only when the ALB is not serving HTTPS."
   type        = string
   default     = null
 
@@ -220,8 +266,11 @@ variable "certificate_arn" {
   }
 
   validation {
-    condition     = var.protected_access_mode != "alb_https_cert" || var.certificate_arn != null
-    error_message = "certificate_arn is required when protected_access_mode is alb_https_cert."
+    condition = (
+      !(var.protected_access_mode == "alb_https_cert" || (var.protected_access_mode == "cloudfront_default_domain" && var.cloudfront_origin_protocol_policy == "https-only"))
+      || var.certificate_arn != null
+    )
+    error_message = "certificate_arn is required when protected_access_mode is alb_https_cert or CloudFront HTTPS origin is enabled."
   }
 }
 

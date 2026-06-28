@@ -6,6 +6,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.25] - 2026-06-29
+
+### Added
+
+- Added an opt-in CloudFront HTTPS-origin path for the AWS module. Operators can
+  set `cloudfront_origin_protocol_policy = "https-only"` with a dedicated
+  origin hostname and matching ACM certificate before token-bearing live
+  traffic, while the default zero-count bridge remains unchanged.
+- Added AWS ECS service tag propagation and managed tags so service-launched
+  tasks keep cost allocation tags.
+- Added optional `runtime_package_integrity` verification for the CodeBuild
+  image builder and included the published `bun.lock` in package images so
+  production dependency installs can use `--frozen-lockfile`.
+
 ## [0.1.24] - 2026-06-29
 
 ### Added

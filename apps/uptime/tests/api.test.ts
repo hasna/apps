@@ -538,7 +538,7 @@ test("hosted API still rejects cross-origin mutations with a valid token", async
   service.close();
 });
 
-test("hosted API accepts configured public origin behind a CloudFront HTTP origin hop", async () => {
+test("hosted API accepts configured public origin behind a CloudFront edge origin path", async () => {
   const previousAllowedOrigins = process.env.HASNA_UPTIME_ALLOWED_ORIGINS;
   process.env.HASNA_UPTIME_ALLOWED_ORIGINS = "https://d111111abcdef8.cloudfront.net";
   const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });

@@ -17,16 +17,21 @@ data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
 
 locals {
-  prefix                = "${var.service_name}-${var.stage}"
-  container_port        = 3899
-  evidence_bucket       = "hasna-${var.stage}-${var.service_name}-evidence"
-  efs_uid               = 10001
-  efs_gid               = 10001
-  hosted_sqlite_db_path = "/data/uptime/uptime.db"
-  efs_enabled_services  = toset(["web"])
-  use_alb_https         = var.protected_access_mode == "alb_https_cert"
-  use_cloudfront        = var.protected_access_mode == "cloudfront_default_domain"
-  use_origin_verify     = local.use_cloudfront && var.enable_cloudfront_origin_verify_header
+  prefix                             = "${var.service_name}-${var.stage}"
+  container_port                     = 3899
+  evidence_bucket                    = "hasna-${var.stage}-${var.service_name}-evidence"
+  efs_uid                            = 10001
+  efs_gid                            = 10001
+  hosted_sqlite_db_path              = "/data/uptime/uptime.db"
+  efs_enabled_services               = toset(["web"])
+  expected_runtime_package_integrity = coalesce(var.runtime_package_integrity, "")
+  use_alb_https                      = var.protected_access_mode == "alb_https_cert"
+  use_cloudfront                     = var.protected_access_mode == "cloudfront_default_domain"
+  cloudfront_https_origin = (
+    local.use_cloudfront && var.cloudfront_origin_protocol_policy == "https-only"
+  )
+  alb_https_listener_enabled = local.use_alb_https || local.cloudfront_https_origin
+  use_origin_verify          = local.use_cloudfront && var.enable_cloudfront_origin_verify_header
   services = {
     web = {
       desired_count = lookup(var.desired_counts, "web", 0)
@@ -236,9 +241,18 @@ resource "aws_codebuild_project" "image_builder" {
             - aws ecr get-login-password --region ${var.region} | docker login --username AWS --password-stdin ${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com
         build:
           commands:
-            - npm pack @hasna/uptime@${var.runtime_package_version}
+            - EXPECTED_RUNTIME_PACKAGE_INTEGRITY='${local.expected_runtime_package_integrity}'
+            - PACKAGE_TARBALL=$(npm pack @hasna/uptime@${var.runtime_package_version} --silent)
+            - PACKAGE_INTEGRITY=$(npm view @hasna/uptime@${var.runtime_package_version} dist.integrity --json | tr -d '"')
+            - test -n "$PACKAGE_INTEGRITY"
+            - |
+              if [ -n "$EXPECTED_RUNTIME_PACKAGE_INTEGRITY" ] && [ "$PACKAGE_INTEGRITY" != "$EXPECTED_RUNTIME_PACKAGE_INTEGRITY" ]; then
+                echo "runtime package integrity mismatch" >&2
+                exit 1
+              fi
+            - printf 'runtime package integrity %s\n' "$PACKAGE_INTEGRITY"
             - mkdir package
-            - tar -xzf hasna-uptime-*.tgz -C package --strip-components=1
+            - tar -xzf "$PACKAGE_TARBALL" -C package --strip-components=1
             - cd package
             - docker build -f Dockerfile.package -t ${aws_ecr_repository.open_uptime.repository_url}:${var.runtime_package_version} .
             - docker push ${aws_ecr_repository.open_uptime.repository_url}:${var.runtime_package_version}
@@ -366,8 +380,19 @@ resource "aws_security_group_rule" "alb_https_ingress" {
   cidr_blocks       = var.alb_ingress_cidr_blocks
 }
 
+resource "aws_security_group_rule" "alb_https_from_cloudfront" {
+  count             = local.cloudfront_https_origin ? 1 : 0
+  type              = "ingress"
+  description       = "HTTPS from CloudFront origin-facing ranges"
+  security_group_id = aws_security_group.alb.id
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  prefix_list_ids   = [data.aws_ec2_managed_prefix_list.cloudfront_origin_facing[0].id]
+}
+
 resource "aws_security_group_rule" "alb_http_from_cloudfront" {
-  count             = local.use_cloudfront ? 1 : 0
+  count             = local.use_cloudfront && !local.cloudfront_https_origin ? 1 : 0
   type              = "ingress"
   description       = "HTTP from CloudFront origin-facing ranges"
   security_group_id = aws_security_group.alb.id
@@ -881,21 +906,37 @@ resource "aws_lb_target_group" "web" {
 }
 
 resource "aws_lb_listener" "https" {
-  count             = local.use_alb_https ? 1 : 0
+  count             = local.alb_https_listener_enabled ? 1 : 0
   load_balancer_arn = aws_lb.open_uptime.arn
   port              = 443
   protocol          = "HTTPS"
   certificate_arn   = var.certificate_arn
   tags              = local.tags
 
-  default_action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.web.arn
+  dynamic "default_action" {
+    for_each = local.cloudfront_https_origin && local.use_origin_verify ? [] : [1]
+    content {
+      type             = "forward"
+      target_group_arn = aws_lb_target_group.web.arn
+    }
+  }
+
+  dynamic "default_action" {
+    for_each = local.cloudfront_https_origin && local.use_origin_verify ? [1] : []
+    content {
+      type = "fixed-response"
+
+      fixed_response {
+        content_type = "text/plain"
+        message_body = "forbidden"
+        status_code  = "403"
+      }
+    }
   }
 }
 
 resource "aws_lb_listener" "http_cloudfront" {
-  count             = local.use_cloudfront ? 1 : 0
+  count             = local.use_cloudfront && !local.cloudfront_https_origin ? 1 : 0
   load_balancer_arn = aws_lb.open_uptime.arn
   port              = 80
   protocol          = "HTTP"
@@ -924,8 +965,27 @@ resource "aws_lb_listener" "http_cloudfront" {
 }
 
 resource "aws_lb_listener_rule" "http_cloudfront_origin_verify" {
-  count        = local.use_origin_verify ? 1 : 0
+  count        = local.use_origin_verify && !local.cloudfront_https_origin ? 1 : 0
   listener_arn = aws_lb_listener.http_cloudfront[0].arn
+  priority     = var.cloudfront_origin_verify_listener_rule_priority
+  tags         = local.tags
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.web.arn
+  }
+
+  condition {
+    http_header {
+      http_header_name = var.cloudfront_origin_verify_header_name
+      values           = [var.cloudfront_origin_verify_header_value]
+    }
+  }
+}
+
+resource "aws_lb_listener_rule" "https_cloudfront_origin_verify" {
+  count        = local.use_origin_verify && local.cloudfront_https_origin ? 1 : 0
+  listener_arn = aws_lb_listener.https[0].arn
   priority     = var.cloudfront_origin_verify_listener_rule_priority
   tags         = local.tags
 
@@ -951,7 +1011,7 @@ resource "aws_cloudfront_distribution" "open_uptime" {
   tags            = local.tags
 
   origin {
-    domain_name = aws_lb.open_uptime.dns_name
+    domain_name = local.cloudfront_https_origin ? var.cloudfront_origin_domain_name : aws_lb.open_uptime.dns_name
     origin_id   = "${local.prefix}-alb"
 
     dynamic "custom_header" {
@@ -965,7 +1025,7 @@ resource "aws_cloudfront_distribution" "open_uptime" {
     custom_origin_config {
       http_port              = 80
       https_port             = 443
-      origin_protocol_policy = "http-only"
+      origin_protocol_policy = var.cloudfront_origin_protocol_policy
       origin_ssl_protocols   = ["TLSv1.2"]
     }
   }
@@ -1000,13 +1060,31 @@ resource "aws_cloudfront_distribution" "open_uptime" {
     cloudfront_default_certificate = true
   }
 
-  depends_on = [aws_lb_listener.http_cloudfront, aws_lb_listener_rule.http_cloudfront_origin_verify]
+  depends_on = [
+    aws_lb_listener.http_cloudfront,
+    aws_lb_listener.https,
+    aws_lb_listener_rule.http_cloudfront_origin_verify,
+    aws_lb_listener_rule.https_cloudfront_origin_verify,
+  ]
 }
 
 resource "aws_route53_record" "open_uptime" {
   count   = var.hosted_zone_id == null || !local.use_alb_https ? 0 : 1
   zone_id = var.hosted_zone_id
   name    = var.hostname
+  type    = "A"
+
+  alias {
+    name                   = aws_lb.open_uptime.dns_name
+    zone_id                = aws_lb.open_uptime.zone_id
+    evaluate_target_health = true
+  }
+}
+
+resource "aws_route53_record" "cloudfront_origin" {
+  count   = local.cloudfront_https_origin && var.hosted_zone_id != null ? 1 : 0
+  zone_id = var.hosted_zone_id
+  name    = var.cloudfront_origin_domain_name
   type    = "A"
 
   alias {
@@ -1194,12 +1272,14 @@ resource "aws_ecs_task_definition" "service" {
 }
 
 resource "aws_ecs_service" "web" {
-  name            = "${local.prefix}-web"
-  cluster         = aws_ecs_cluster.open_uptime.id
-  task_definition = aws_ecs_task_definition.service["web"].arn
-  desired_count   = local.services.web.desired_count
-  launch_type     = "FARGATE"
-  tags            = local.tags
+  name                    = "${local.prefix}-web"
+  cluster                 = aws_ecs_cluster.open_uptime.id
+  task_definition         = aws_ecs_task_definition.service["web"].arn
+  desired_count           = local.services.web.desired_count
+  launch_type             = "FARGATE"
+  enable_ecs_managed_tags = true
+  propagate_tags          = "SERVICE"
+  tags                    = local.tags
 
   deployment_circuit_breaker {
     enable   = true
@@ -1226,12 +1306,14 @@ resource "aws_ecs_service" "worker" {
     for key, value in local.services : key => value if key != "web" && key != "migration"
   }
 
-  name            = "${local.prefix}-${each.key}"
-  cluster         = aws_ecs_cluster.open_uptime.id
-  task_definition = aws_ecs_task_definition.service[each.key].arn
-  desired_count   = each.value.desired_count
-  launch_type     = "FARGATE"
-  tags            = local.tags
+  name                    = "${local.prefix}-${each.key}"
+  cluster                 = aws_ecs_cluster.open_uptime.id
+  task_definition         = aws_ecs_task_definition.service[each.key].arn
+  desired_count           = each.value.desired_count
+  launch_type             = "FARGATE"
+  enable_ecs_managed_tags = true
+  propagate_tags          = "SERVICE"
+  tags                    = local.tags
 
   deployment_circuit_breaker {
     enable   = true
