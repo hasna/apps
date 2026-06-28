@@ -1,8 +1,12 @@
 {
   "schema_version": 1,
+  "id": "wks_2tyysw05cwap",
   "slug": "open-uptime",
   "name": "Open Uptime",
   "kind": "open-source",
+  "root_id": null,
+  "recipe_id": null,
+  "primary_path": "/home/hasna/workspace/hasna/opensource/open-uptime",
   "git_remote": "https://github.com/hasna/uptime.git",
   "tags": [
     "uptime",
@@ -11,16 +15,9 @@
   ],
   "integrations": {
     "github_repo": "hasna/uptime",
-    "github_url": "https://github.com/hasna/uptime"
+    "github_url": "https://github.com/hasna/uptime",
+    "todos_project_id": "e65d26fa-7cb6-4d4f-a709-bf3cc8d6d616",
+    "todos_task_list_id": "66dbbbf5-36cb-4c99-9f0c-f873034c5efb"
   },
-  "metadata": {
-    "stage": "active",
-    "priority": "high",
-    "owner": "hasna",
-    "operational_tracking_doc": "docs/operational-tracking.md",
-    "cloud_primary_status": "preflighted_not_live",
-    "projects_primary_location_is_not_cloud_authority": true,
-    "private_deployment_ids_live_outside_repo": true
-  },
-  "generated_at": "2026-06-28T14:45:00.000Z"
+  "generated_at": "2026-06-28T17:04:47.319Z"
 }
