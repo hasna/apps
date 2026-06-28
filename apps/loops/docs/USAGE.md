@@ -243,12 +243,14 @@ loops templates render bounded-agent-worker-verifier \
   --var sandbox=danger-full-access
 ```
 
-Task/event agent templates default to `worktreeMode=auto`. When `projectPath`
-is an existing git repository, OpenLoops inserts a `prepare-worktree` command
-step before the worker and runs the worker/verifier from a deterministic
-worktree under `~/.hasna/loops/worktrees/<repo>/<run>`. The generated agent
-target includes worktree metadata (`mode`, `cwd`, `path`, `branch`,
-`originalCwd`) so dry-runs and workflow inspection expose the exact checkout.
+Repo-mutating task/event routes should set `worktreeMode=required` so the
+workflow fails fast instead of falling back to the main checkout. When
+`projectPath` is an existing git repository, OpenLoops inserts a
+`prepare-worktree` command step before the worker and runs the worker/verifier
+from a deterministic worktree under `~/.hasna/loops/worktrees/<repo>/<run>`.
+The generated agent target includes worktree metadata (`mode`, `cwd`, `path`,
+`branch`, `originalCwd`) so dry-runs and workflow inspection expose the exact
+checkout.
 
 Use explicit main/default checkout mode only when the task truly requires it:
 
@@ -259,7 +261,8 @@ loops templates render todos-task-worker-verifier \
   --var worktreeMode=main
 ```
 
-Use `worktreeMode=required` when non-worktree execution should fail fast, or
+Use `worktreeMode=auto` only for compatibility or mixed routes where a
+non-git/non-mutating project is expected and the fallback is recorded. Use
 `worktreeMode=off` for non-git projects. `worktreeRoot` and
 `worktreeBranchPrefix` can override the storage root and branch prefix.
 
@@ -273,7 +276,7 @@ cat task-created-event.json | loops events handle todos-task \
   --auth-profile-pool account004,account005,account006 \
   --permission-mode bypass \
   --sandbox danger-full-access \
-  --worktree-mode auto
+  --worktree-mode required
 ```
 
 Task routing is explicit opt-in. The handler skips the event without creating a
@@ -329,7 +332,7 @@ loops events drain todos-task \
   --max-active-per-project 1 \
   --max-active-per-project-group 4 \
   --max-active 12 \
-  --worktree-mode auto \
+  --worktree-mode required \
   --evidence-dir /home/hasna/.hasna/loops/reports/task-drain
 ```
 
@@ -355,7 +358,8 @@ cat event.json | loops events handle generic \
   --auth-profile-pool account004,account005,account006 \
   --permission-mode bypass \
   --sandbox danger-full-access \
-  --project-path /path/to/repo
+  --project-path /path/to/repo \
+  --worktree-mode required
 ```
 
 This is the intended deterministic-to-agentic path: a producer creates a todos
