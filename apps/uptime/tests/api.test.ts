@@ -228,6 +228,44 @@ test("hosted API uses scoped /api/v1 auth and leaves legacy routes local-only", 
   service.close();
 });
 
+test("hosted API audits monitor mutations with workspace and actor", async () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const handler = createApiHandler(service, {
+    mode: "hosted",
+    hostedTokens: [
+      { token: "write", scopes: ["uptime:write"], workspaceId: "ws_a", actor: "operator-a" },
+    ],
+  });
+
+  const create = await handler(jsonRequest(
+    "https://uptime.test/api/v1/monitors",
+    "POST",
+    { name: "audited", kind: "http", url: "https://example.com" },
+    { origin: "https://uptime.test", authorization: "Bearer write" },
+  ));
+  const monitor = await create.json();
+  const update = await handler(jsonRequest(
+    `https://uptime.test/api/v1/monitors/${monitor.id}`,
+    "PATCH",
+    { expectedStatus: 204 },
+    { origin: "https://uptime.test", authorization: "Bearer write" },
+  ));
+  const remove = await handler(new Request(`https://uptime.test/api/v1/monitors/${monitor.id}`, {
+    method: "DELETE",
+    headers: { origin: "https://uptime.test", authorization: "Bearer write" },
+  }));
+
+  expect(create.status).toBe(201);
+  expect(update.status).toBe(200);
+  expect(remove.status).toBe(200);
+  const events = service.listAuditEvents({ workspaceId: "ws_a", resourceType: "monitor", limit: 10 });
+  expect(events.map((event) => event.action)).toEqual(["monitor.delete", "monitor.update", "monitor.create"]);
+  expect(events.every((event) => event.workspaceId === "ws_a")).toBe(true);
+  expect(events.every((event) => event.actor === "operator-a")).toBe(true);
+  expect(service.listAuditEvents({ workspaceId: "ws_b" })).toHaveLength(0);
+  service.close();
+});
+
 test("hosted API import preview cannot observe monitors from another workspace", async () => {
   const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
   const handler = createApiHandler(service, {

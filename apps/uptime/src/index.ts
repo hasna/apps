@@ -6,6 +6,7 @@ export {
   normalizeHttpTargetPolicyEvidence,
   runBrowserPageCheck,
   runHostedHttpCheck,
+  runHostedTcpCheck,
   runMonitorCheck,
   runHttpCheck,
   runTcpCheck,
@@ -35,6 +36,7 @@ export type {
   HostedHttpRequestContext,
   HostedHttpRequestLike,
   HostedHttpResponse,
+  HostedTcpCheckOptions,
   MonitorCheckOptions,
 } from "./checks.js";
 export type {

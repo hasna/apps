@@ -688,6 +688,32 @@ test("hosted service rejects IPv4-mapped IPv6 private targets", () => {
   service.close();
 });
 
+test("hosted browser_page monitors cannot be enabled before browser workers exist", () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const store = service.store as UptimeStore;
+
+  expect(() => store.createMonitor({
+    name: "page-live",
+    kind: "browser_page",
+    url: "https://example.com",
+    enabled: true,
+  }, { allowBrowserPage: true, workspaceId: "ws_a" })).toThrow("must remain disabled");
+
+  const disabled = store.createMonitor({
+    name: "page-disabled",
+    kind: "browser_page",
+    url: "https://example.com",
+    enabled: false,
+  }, { allowBrowserPage: true, workspaceId: "ws_a" });
+  expect(disabled.status).toBe("paused");
+  expect(() => store.updateMonitor(disabled.id, { enabled: true }, { allowBrowserPage: true, workspaceId: "ws_a" }))
+    .toThrow("must remain disabled");
+  const renamed = store.updateMonitor(disabled.id, { name: "page-preview", enabled: false }, { allowBrowserPage: true, workspaceId: "ws_a" });
+  expect(renamed.name).toBe("page-preview");
+  expect(renamed.enabled).toBe(false);
+  service.close();
+});
+
 test("direct monitor creation keeps browser_page behind the import path", () => {
   const service = new UptimeService({ dbPath: tempDb() });
 
@@ -850,6 +876,32 @@ test("domain imports are idempotent after URL normalization and bare domains get
   expect(service.summary().totals.monitors).toBe(2);
   expect(service.store.getProvenance("domains", "domains:https://example.org/")?.monitorId).toBeTruthy();
   expect(service.store.getProvenance("domains", "domains:https://example.net/")?.monitorId).toBeTruthy();
+  service.close();
+});
+
+test("monitor provenance is scoped by workspace", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  const first = service.createMonitor({ name: "a", kind: "http", url: "https://a.example" }, { workspaceId: "ws_a" });
+  const second = service.createMonitor({ name: "b", kind: "http", url: "https://b.example" }, { workspaceId: "ws_b" });
+  service.store.upsertMonitorProvenance({
+    workspaceId: "ws_a",
+    monitorId: first.id,
+    source: "domains",
+    sourceId: "shared",
+    sourceLabel: "workspace a",
+    snapshot: { workspace: "a" },
+  });
+  service.store.upsertMonitorProvenance({
+    workspaceId: "ws_b",
+    monitorId: second.id,
+    source: "domains",
+    sourceId: "shared",
+    sourceLabel: "workspace b",
+    snapshot: { workspace: "b" },
+  });
+
+  expect(service.store.getProvenance("domains", "shared", { workspaceId: "ws_a" })?.monitorId).toBe(first.id);
+  expect(service.store.getProvenance("domains", "shared", { workspaceId: "ws_b" })?.monitorId).toBe(second.id);
   service.close();
 });
 
@@ -1318,7 +1370,7 @@ test("local backup verify and restore round trip preserves data", async () => {
   first.close();
 
   expect(backup.bytes).toBeGreaterThan(0);
-  expect(check).toMatchObject({ ok: true, integrity: "ok", schemaVersion: "4", monitors: 1, results: 1, incidents: 1 });
+  expect(check).toMatchObject({ ok: true, integrity: "ok", schemaVersion: "5", monitors: 1, results: 1, incidents: 1 });
 
   UptimeStore.restoreBackup(backup.backupPath, restorePath);
   const restored = new UptimeService({ dbPath: restorePath });
@@ -1353,7 +1405,7 @@ test("schema v1 backups missing only probe tables remain restorable", () => {
   const restored = new UptimeService({ dbPath: restorePath });
   expect(restored.listMonitors({ includeDisabled: true })).toHaveLength(1);
   expect(restored.createProbe({ name: "post-restore" }).publicKeyFingerprint).toHaveLength(64);
-  expect(restored.verifyBackup(restorePath).schemaVersion).toBe("4");
+  expect(restored.verifyBackup(restorePath).schemaVersion).toBe("5");
   restored.close();
 });
 
@@ -1381,7 +1433,7 @@ test("schema v2 backups missing only report and audit tables remain restorable",
   UptimeStore.restoreBackup(legacyPath, restorePath);
   const restored = new UptimeService({ dbPath: restorePath });
   expect(restored.listReportSchedules()).toHaveLength(0);
-  expect(restored.verifyBackup(restorePath).schemaVersion).toBe("4");
+  expect(restored.verifyBackup(restorePath).schemaVersion).toBe("5");
   restored.close();
 });
 

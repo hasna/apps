@@ -6,6 +6,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.23] - 2026-06-28
+
+### Fixed
+
+- Added hosted audit rows for monitor create, update, and delete API
+  mutations, including workspace and actor metadata.
+- Scoped monitor provenance and audit events by workspace with a schema
+  migration while keeping schema v4 backups restorable.
+- Applied hosted runtime target-policy DNS/IP checks to TCP monitors.
+- Kept hosted `browser_page` monitors disabled until browser evidence workers
+  are configured.
+
 ## [0.1.22] - 2026-06-28
 
 ### Fixed

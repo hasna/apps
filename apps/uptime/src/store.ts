@@ -75,6 +75,7 @@ export interface UptimeBackupCheck {
 }
 
 export interface MonitorProvenance {
+  workspaceId: string;
   monitorId: string;
   source: string;
   sourceId: string;
@@ -84,6 +85,7 @@ export interface MonitorProvenance {
 }
 
 export interface UpsertMonitorProvenanceInput {
+  workspaceId?: string;
   monitorId: string;
   source: string;
   sourceId: string;
@@ -123,7 +125,7 @@ const REQUIRED_TABLES = [
 ] as const;
 const PROBE_TABLES = new Set<string>(["probe_identities", "probe_check_jobs", "probe_submissions"]);
 const REPORT_AUDIT_TABLES = new Set<string>(["report_schedules", "report_runs", "audit_events"]);
-const CURRENT_SCHEMA_VERSION = "4";
+const CURRENT_SCHEMA_VERSION = "5";
 
 interface MonitorRow {
   id: string;
@@ -178,6 +180,7 @@ interface CheckLeaseRow {
 }
 
 interface MonitorProvenanceRow {
+  workspace_id: string;
   monitor_id: string;
   source: string;
   source_id: string;
@@ -258,6 +261,7 @@ interface ReportRunRow {
 
 interface AuditEventRow {
   id: string;
+  workspace_id: string | null;
   action: string;
   resource_type: string | null;
   resource_id: string | null;
@@ -395,15 +399,17 @@ export class UptimeStore {
     `);
     this.db.run(`
       CREATE TABLE IF NOT EXISTS monitor_provenance (
+        workspace_id TEXT NOT NULL DEFAULT 'local',
         monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
         source TEXT NOT NULL,
         source_id TEXT NOT NULL,
         source_label TEXT,
         imported_at TEXT NOT NULL,
         snapshot_json TEXT NOT NULL,
-        PRIMARY KEY (source, source_id)
+        PRIMARY KEY (workspace_id, source, source_id)
       )
     `);
+    this.ensureMonitorProvenanceWorkspaceScoped();
     this.db.run(`
       CREATE TABLE IF NOT EXISTS import_batches (
         id TEXT PRIMARY KEY,
@@ -495,6 +501,7 @@ export class UptimeStore {
     this.db.run(`
       CREATE TABLE IF NOT EXISTS audit_events (
         id TEXT PRIMARY KEY,
+        workspace_id TEXT,
         action TEXT NOT NULL,
         resource_type TEXT,
         resource_id TEXT,
@@ -504,6 +511,7 @@ export class UptimeStore {
         created_at TEXT NOT NULL
       )
     `);
+    this.ensureColumn("audit_events", "workspace_id", "TEXT");
     this.db.run(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         key TEXT PRIMARY KEY,
@@ -519,6 +527,7 @@ export class UptimeStore {
     this.db.run("CREATE INDEX IF NOT EXISTS idx_incidents_monitor_status ON incidents(monitor_id, status)");
     this.db.run("CREATE INDEX IF NOT EXISTS idx_check_leases_until ON check_leases(leased_until)");
     this.db.run("CREATE INDEX IF NOT EXISTS idx_monitor_provenance_monitor ON monitor_provenance(monitor_id)");
+    this.db.run("CREATE INDEX IF NOT EXISTS idx_monitor_provenance_workspace_source ON monitor_provenance(workspace_id, source, source_id)");
     this.db.run("CREATE INDEX IF NOT EXISTS idx_probe_jobs_status_due ON probe_check_jobs(status, due_at)");
     this.db.run("CREATE INDEX IF NOT EXISTS idx_probe_jobs_probe_status ON probe_check_jobs(claimed_by_probe_id, status)");
     this.db.run("CREATE INDEX IF NOT EXISTS idx_probe_submissions_probe_time ON probe_submissions(probe_id, submitted_at DESC)");
@@ -527,6 +536,7 @@ export class UptimeStore {
     this.db.run("CREATE INDEX IF NOT EXISTS idx_report_schedules_due ON report_schedules(enabled, next_run_at)");
     this.db.run("CREATE INDEX IF NOT EXISTS idx_report_runs_schedule_time ON report_runs(schedule_id, started_at DESC)");
     this.db.run("CREATE INDEX IF NOT EXISTS idx_audit_events_resource_time ON audit_events(resource_type, resource_id, created_at DESC)");
+    this.db.run("CREATE INDEX IF NOT EXISTS idx_audit_events_workspace_time ON audit_events(workspace_id, created_at DESC)");
     this.db.run("CREATE INDEX IF NOT EXISTS idx_audit_events_time ON audit_events(created_at DESC)");
   }
 
@@ -577,6 +587,9 @@ export class UptimeStore {
     if (this.mode === "hosted") assertHostedTargetAllowed(input);
     const normalized = normalizeCreateMonitor(input, options.allowBrowserPage === true);
     if (this.mode === "hosted") assertHostedTargetAllowed(normalized);
+    if (this.mode === "hosted" && normalized.kind === "browser_page" && normalized.enabled !== false) {
+      throw new Error("hosted browser_page monitors must remain disabled until browser evidence workers are configured");
+    }
     const now = new Date().toISOString();
     const workspaceId = normalizeWorkspaceId(options.workspaceId ?? input.workspaceId ?? "local");
     const monitor: Monitor = {
@@ -666,6 +679,9 @@ export class UptimeStore {
     const updatedAt = new Date().toISOString();
     const next = normalizeUpdateMonitor(current, input, updatedAt, options.allowBrowserPage === true);
     if (this.mode === "hosted") assertHostedTargetAllowed(next);
+    if (this.mode === "hosted" && next.kind === "browser_page" && next.enabled) {
+      throw new Error("hosted browser_page monitors must remain disabled until browser evidence workers are configured");
+    }
     this.db
       .query(
         `UPDATE monitors SET
@@ -1103,8 +1119,10 @@ export class UptimeStore {
     const action = normalizeAuditText(input.action, "Audit action", 160);
     const createdAt = input.createdAt ?? new Date().toISOString();
     assertIsoTimestamp(createdAt, "Audit event createdAt");
+    const workspaceId = input.workspaceId == null ? null : normalizeWorkspaceId(input.workspaceId);
     const event: AuditEvent = {
       id: newId("aud"),
+      workspaceId,
       action,
       resourceType: normalizeNullableAuditText(input.resourceType, "Audit resourceType", 80),
       resourceId: normalizeNullableAuditText(input.resourceId, "Audit resourceId", 160),
@@ -1116,11 +1134,12 @@ export class UptimeStore {
     this.db
       .query(
         `INSERT INTO audit_events (
-          id, action, resource_type, resource_id, message, metadata_json, actor, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          id, workspace_id, action, resource_type, resource_id, message, metadata_json, actor, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         event.id,
+        event.workspaceId,
         event.action,
         event.resourceType,
         event.resourceId,
@@ -1135,6 +1154,10 @@ export class UptimeStore {
   listAuditEvents(options: ListAuditEventsOptions = {}): AuditEvent[] {
     const clauses: string[] = [];
     const args: (string | number)[] = [];
+    if (options.workspaceId) {
+      clauses.push("workspace_id = ?");
+      args.push(normalizeWorkspaceId(options.workspaceId));
+    }
     if (options.resourceType) {
       clauses.push("resource_type = ?");
       args.push(options.resourceType);
@@ -1258,27 +1281,35 @@ export class UptimeStore {
     return rows.map(checkResultFromRow);
   }
 
-  getProvenance(source: string, sourceId: string): MonitorProvenance | null {
-    const row = this.db
-      .query("SELECT * FROM monitor_provenance WHERE source = ? AND source_id = ?")
-      .get(source, sourceId) as MonitorProvenanceRow | null;
+  getProvenance(source: string, sourceId: string, options: { workspaceId?: string } = {}): MonitorProvenance | null {
+    const workspaceId = options.workspaceId ? normalizeWorkspaceId(options.workspaceId) : undefined;
+    const row = workspaceId
+      ? this.db
+        .query("SELECT * FROM monitor_provenance WHERE workspace_id = ? AND source = ? AND source_id = ?")
+        .get(workspaceId, source, sourceId) as MonitorProvenanceRow | null
+      : this.db
+        .query("SELECT * FROM monitor_provenance WHERE source = ? AND source_id = ? ORDER BY imported_at DESC LIMIT 1")
+        .get(source, sourceId) as MonitorProvenanceRow | null;
     return row ? provenanceFromRow(row) : null;
   }
 
   upsertMonitorProvenance(input: UpsertMonitorProvenanceInput): MonitorProvenance {
     const importedAt = new Date().toISOString();
+    const monitor = this.getMonitor(input.monitorId);
+    const workspaceId = normalizeWorkspaceId(input.workspaceId ?? monitor?.workspaceId ?? "local");
     this.db
       .query(
         `INSERT INTO monitor_provenance (
-          monitor_id, source, source_id, source_label, imported_at, snapshot_json
-        ) VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(source, source_id) DO UPDATE SET
+          workspace_id, monitor_id, source, source_id, source_label, imported_at, snapshot_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(workspace_id, source, source_id) DO UPDATE SET
           monitor_id = excluded.monitor_id,
           source_label = excluded.source_label,
           imported_at = excluded.imported_at,
           snapshot_json = excluded.snapshot_json`,
       )
       .run(
+        workspaceId,
         input.monitorId,
         input.source,
         input.sourceId,
@@ -1286,7 +1317,7 @@ export class UptimeStore {
         importedAt,
         JSON.stringify(input.snapshot),
       );
-    return this.getProvenance(input.source, input.sourceId)!;
+    return this.getProvenance(input.source, input.sourceId, { workspaceId })!;
   }
 
   saveImportBatch(input: SaveImportBatchInput): StoredImportBatch {
@@ -1515,6 +1546,53 @@ export class UptimeStore {
     }
   }
 
+  private ensureMonitorProvenanceWorkspaceScoped(): void {
+    const row = this.db
+      .query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'monitor_provenance'")
+      .get() as { sql: string } | null;
+    const columns = this.db.query("PRAGMA table_info(monitor_provenance)").all() as Array<{ name: string }>;
+    const hasWorkspaceId = columns.some((column) => column.name === "workspace_id");
+    const hasWorkspacePrimaryKey = Boolean(row?.sql?.includes("PRIMARY KEY (workspace_id, source, source_id)"));
+    if (hasWorkspaceId && hasWorkspacePrimaryKey) return;
+    this.db.run("PRAGMA foreign_keys = OFF");
+    this.db.run("PRAGMA legacy_alter_table = ON");
+    try {
+      const migrate = this.db.transaction(() => {
+        this.db.run("ALTER TABLE monitor_provenance RENAME TO monitor_provenance_old_workspace");
+        this.db.run(`
+          CREATE TABLE monitor_provenance (
+            workspace_id TEXT NOT NULL DEFAULT 'local',
+            monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+            source TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            source_label TEXT,
+            imported_at TEXT NOT NULL,
+            snapshot_json TEXT NOT NULL,
+            PRIMARY KEY (workspace_id, source, source_id)
+          )
+        `);
+        const workspaceSelect = hasWorkspaceId
+          ? "COALESCE(old.workspace_id, monitors.workspace_id, 'local')"
+          : "COALESCE(monitors.workspace_id, 'local')";
+        this.db.run(`
+          INSERT OR REPLACE INTO monitor_provenance (
+            workspace_id, monitor_id, source, source_id, source_label, imported_at, snapshot_json
+          )
+          SELECT
+            ${workspaceSelect}, old.monitor_id, old.source, old.source_id, old.source_label,
+            old.imported_at, old.snapshot_json
+          FROM monitor_provenance_old_workspace old
+          LEFT JOIN monitors ON monitors.id = old.monitor_id
+        `);
+        this.db.run("DROP TABLE monitor_provenance_old_workspace");
+      });
+      migrate();
+    } finally {
+      this.db.run("PRAGMA legacy_alter_table = OFF");
+      this.db.run("PRAGMA foreign_keys = ON");
+    }
+  }
+
   private vacuumInto(backupPath: string): void {
     const quoted = backupPath.replace(/'/g, "''");
     this.db.run(`VACUUM INTO '${quoted}'`);
@@ -1551,10 +1629,11 @@ function verifyBackupFile(backupPath: string): UptimeBackupCheck {
         .query("SELECT value FROM schema_migrations WHERE key = 'schema_version'")
         .get() as { value: string } | null)?.value ?? null;
     const currentOk = missingTables.length === 0 && schemaVersion === CURRENT_SCHEMA_VERSION;
+    const restorableV4 = schemaVersion === "4" && missingTables.length === 0;
     const restorableV1 = schemaVersion === "1" && missingTables.every((table) => PROBE_TABLES.has(table) || REPORT_AUDIT_TABLES.has(table));
     const restorableV2 = schemaVersion === "2" && missingTables.every((table) => REPORT_AUDIT_TABLES.has(table));
     return {
-      ok: integrity === "ok" && (currentOk || restorableV1 || restorableV2),
+      ok: integrity === "ok" && (currentOk || restorableV4 || restorableV1 || restorableV2),
       backupPath,
       integrity,
       schemaVersion,
@@ -1969,6 +2048,7 @@ function checkResultFromRow(row: CheckResultRow): CheckResult {
 
 function provenanceFromRow(row: MonitorProvenanceRow): MonitorProvenance {
   return {
+    workspaceId: row.workspace_id,
     monitorId: row.monitor_id,
     source: row.source,
     sourceId: row.source_id,
@@ -2063,6 +2143,7 @@ function reportRunFromRow(row: ReportRunRow): ReportRun {
 function auditEventFromRow(row: AuditEventRow): AuditEvent {
   return {
     id: row.id,
+    workspaceId: row.workspace_id,
     action: row.action,
     resourceType: row.resource_type,
     resourceId: row.resource_id,

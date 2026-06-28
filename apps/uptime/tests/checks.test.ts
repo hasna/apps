@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import net from "node:net";
-import { runBrowserPageCheck, runHostedHttpCheck, runHttpCheck, runMonitorCheck, runTcpCheck } from "../src/checks.js";
+import { runBrowserPageCheck, runHostedHttpCheck, runHostedTcpCheck, runHttpCheck, runMonitorCheck, runTcpCheck } from "../src/checks.js";
 import type { BrowserPageEvidence, CheckAttemptResult, Monitor } from "../src/types.js";
 
 function monitor(overrides: Partial<Monitor> = {}): Monitor {
@@ -97,6 +97,35 @@ test("hosted HTTP check rejects DNS answers to denied ranges before making a req
   if (result.evidence?.kind !== "http_target_policy") throw new Error("expected HTTP target-policy evidence");
   expect(result.evidence.decisions[0].decision).toBe("blocked");
   expect(result.evidence.decisions[0].resolvedAddresses).toEqual([{ address: "169.254.169.254", family: 4 }]);
+});
+
+test("hosted TCP check rejects DNS answers to denied ranges before opening a socket", async () => {
+  const result = await runHostedTcpCheck(monitor({
+    kind: "tcp",
+    url: null,
+    host: "database.example",
+    port: 5432,
+  }), {
+    resolveHost: async () => [{ address: "10.0.0.5", family: 4 }],
+  });
+
+  expect(result.status).toBe("down");
+  expect(result.error).toContain("private or reserved IPv4");
+});
+
+test("runMonitorCheck applies hosted target policy to TCP monitors", async () => {
+  const result = await runMonitorCheck(monitor({
+    kind: "tcp",
+    url: null,
+    host: "metadata-proxy.example",
+    port: 80,
+  }), {
+    hostedTargetPolicy: true,
+    resolveHost: async () => [{ address: "169.254.169.254", family: 4 }],
+  });
+
+  expect(result.status).toBe("down");
+  expect(result.error).toContain("private or reserved IPv4");
 });
 
 test("hosted HTTP check validates redirect targets and blocks redirect rebinding", async () => {

@@ -84,12 +84,12 @@ export interface ImportRollbackResult {
 
 export interface UptimeImportStore {
   readonly mode: "local" | "hosted";
-  createMonitor(input: ImportedMonitorInput, options?: { allowBrowserPage?: boolean }): Monitor;
-  updateMonitor(idOrName: string, input: ImportedUpdateMonitorInput, options?: { allowBrowserPage?: boolean }): Monitor;
+  createMonitor(input: ImportedMonitorInput, options?: { allowBrowserPage?: boolean; workspaceId?: string }): Monitor;
+  updateMonitor(idOrName: string, input: ImportedUpdateMonitorInput, options?: { allowBrowserPage?: boolean; workspaceId?: string }): Monitor;
   deleteMonitor(idOrName: string): boolean;
   getMonitor(idOrName: string, options?: { workspaceId?: string }): Monitor | null;
   listResults(options?: ListResultsOptions): unknown[];
-  getProvenance(source: string, sourceId: string): MonitorProvenance | null;
+  getProvenance(source: string, sourceId: string, options?: { workspaceId?: string }): MonitorProvenance | null;
   upsertMonitorProvenance(input: UpsertMonitorProvenanceInput): MonitorProvenance;
   saveImportBatch(input: { id: string; source: string; records: unknown[] }): StoredImportBatch;
   getImportBatch(batchId: string): StoredImportBatch | null;
@@ -199,7 +199,7 @@ function previewRecord(
     };
   }
   const monitorOptions = options.workspaceId ? { workspaceId: options.workspaceId } : undefined;
-  const rawProvenance = store.getProvenance(candidate.source, candidate.sourceId);
+  const rawProvenance = store.getProvenance(candidate.source, candidate.sourceId, monitorOptions);
   const provenanceMonitor = rawProvenance ? store.getMonitor(rawProvenance.monitorId, monitorOptions) : null;
   const provenance = provenanceMonitor ? rawProvenance : null;
   const monitor = provenanceMonitor ?? store.getMonitor(candidate.name, monitorOptions);

@@ -220,6 +220,7 @@ export interface ListReportRunsOptions {
 
 export interface AuditEvent {
   id: string;
+  workspaceId: string | null;
   action: string;
   resourceType: string | null;
   resourceId: string | null;
@@ -230,6 +231,7 @@ export interface AuditEvent {
 }
 
 export interface RecordAuditEventInput {
+  workspaceId?: string | null;
   action: string;
   resourceType?: string | null;
   resourceId?: string | null;
@@ -240,6 +242,7 @@ export interface RecordAuditEventInput {
 }
 
 export interface ListAuditEventsOptions {
+  workspaceId?: string;
   resourceType?: string;
   resourceId?: string;
   limit?: number;

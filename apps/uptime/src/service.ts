@@ -61,7 +61,7 @@ export interface UptimeStoreLike {
   acquireCheckLease(monitorId: string, owner: string, ttlMs: number): boolean;
   releaseCheckLease(monitorId: string, owner: string): void;
   recordCheckResult(input: Omit<CheckResult, "id" | "checkedAt"> & { checkedAt?: string; expectedMonitorRevision?: number }): CheckResult;
-  getProvenance(source: string, sourceId: string): MonitorProvenance | null;
+  getProvenance(source: string, sourceId: string, options?: { workspaceId?: string }): MonitorProvenance | null;
   upsertMonitorProvenance(input: UpsertMonitorProvenanceInput): MonitorProvenance;
   saveImportBatch(input: SaveImportBatchInput): StoredImportBatch;
   getImportBatch(batchId: string): StoredImportBatch | null;
@@ -310,11 +310,11 @@ export class UptimeService {
   }
 
   listAuditEvents(options: ListAuditEventsOptions = {}): AuditEvent[] {
-    return this.reportStore().listAuditEvents(options);
+    return this.auditStore().listAuditEvents(options);
   }
 
   recordAuditEvent(input: RecordAuditEventInput): AuditEvent {
-    return this.reportStore().recordAuditEvent(input);
+    return this.auditStore().recordAuditEvent(input);
   }
 
   async runReportSchedule(idOrName: string, options: { fetchImpl?: typeof fetch } = {}): Promise<ReportRun> {
@@ -513,6 +513,14 @@ export class UptimeService {
       }
     }
     return store as ReportStoreLike;
+  }
+
+  private auditStore(): Pick<ReportStoreLike, "recordAuditEvent" | "listAuditEvents"> {
+    const store = this.store as UptimeStoreLike;
+    if (typeof store.recordAuditEvent !== "function" || typeof store.listAuditEvents !== "function") {
+      throw new Error("audit logging requires an audit-capable store");
+    }
+    return store as Pick<ReportStoreLike, "recordAuditEvent" | "listAuditEvents">;
   }
 
   private audit(action: string, resourceType: string, resourceId: string, message: string, metadata: Record<string, unknown>): void {

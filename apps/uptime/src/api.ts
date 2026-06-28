@@ -33,11 +33,13 @@ export interface HostedToken {
   token: string;
   scopes: HostedScope[];
   workspaceId?: string;
+  actor?: string;
 }
 
 interface HostedActor {
   scopes: Set<HostedScope>;
   workspaceId: string;
+  actor: string;
 }
 
 export function createApiHandler(service: UptimeService, options: CreateApiHandlerOptions = {}): (request: Request) => Promise<Response> {
@@ -243,7 +245,9 @@ async function handleApiRoute(
     return json(service.listMonitors({ includeDisabled: url.searchParams.get("includeDisabled") === "true", workspaceId: actor?.workspaceId }));
   }
   if (request.method === "POST" && apiPath === "/api/monitors") {
-    return json(service.createMonitor(await jsonBody(request), { workspaceId: actor?.workspaceId }), 201);
+    const monitor = service.createMonitor(await jsonBody(request), { workspaceId: actor?.workspaceId });
+    if (hosted && actor) recordHostedMonitorAudit(service, actor, "monitor.create", monitor, { method: request.method, apiPath });
+    return json(monitor, 201);
   }
   if (request.method === "GET" && apiPath === "/api/incidents") {
     const status = url.searchParams.get("status");
@@ -316,10 +320,25 @@ async function handleApiRoute(
       return monitor ? json(monitor) : json({ error: "not found" }, 404);
     }
     if (request.method === "PATCH" && !monitorMatch[2]) {
-      return json(service.updateMonitor(id, await jsonBody(request), { workspaceId: actor?.workspaceId }));
+      const before = hosted ? service.getMonitor(id, { workspaceId: actor?.workspaceId }) : null;
+      const monitor = service.updateMonitor(id, await jsonBody(request), { workspaceId: actor?.workspaceId });
+      if (hosted && actor) {
+        recordHostedMonitorAudit(service, actor, "monitor.update", monitor, {
+          method: request.method,
+          apiPath,
+          previousRevision: before?.revision ?? null,
+          nextRevision: monitor.revision,
+        });
+      }
+      return json(monitor);
     }
     if (request.method === "DELETE" && !monitorMatch[2]) {
-      return json({ deleted: service.deleteMonitor(id, { workspaceId: actor?.workspaceId }) });
+      const before = hosted ? service.getMonitor(id, { workspaceId: actor?.workspaceId }) : null;
+      const deleted = service.deleteMonitor(id, { workspaceId: actor?.workspaceId });
+      if (hosted && actor && deleted && before) {
+        recordHostedMonitorAudit(service, actor, "monitor.delete", before, { method: request.method, apiPath });
+      }
+      return json({ deleted });
     }
     if (request.method === "POST" && monitorMatch[2] === "check") {
       if (hosted) throw new ApiError("hosted checks require check_jobs and probes", 501);
@@ -355,7 +374,36 @@ function requireHostedActor(request: Request, url: URL, options: CreateApiHandle
   if (requestedWorkspace && requestedWorkspace !== workspaceId) {
     throw new ApiError("workspace access denied", 403);
   }
-  return { scopes, workspaceId };
+  return {
+    scopes,
+    workspaceId,
+    actor: token.actor ?? `hosted-token:${workspaceId}:${[...scopes].sort().join(",")}`,
+  };
+}
+
+function recordHostedMonitorAudit(
+  service: UptimeService,
+  actor: HostedActor,
+  action: "monitor.create" | "monitor.update" | "monitor.delete",
+  monitor: { id: string; name: string; kind: string; enabled: boolean; revision: number; workspaceId: string },
+  metadata: Record<string, unknown>,
+): void {
+  service.recordAuditEvent({
+    workspaceId: actor.workspaceId,
+    action,
+    actor: actor.actor,
+    resourceType: "monitor",
+    resourceId: monitor.id,
+    metadata: {
+      ...metadata,
+      monitorName: monitor.name,
+      monitorKind: monitor.kind,
+      monitorEnabled: monitor.enabled,
+      monitorRevision: monitor.revision,
+      workspaceId: monitor.workspaceId,
+      scopes: [...actor.scopes].sort(),
+    },
+  });
 }
 
 function isLoopbackHost(hostname: string): boolean {
@@ -446,7 +494,14 @@ function normalizeHostedTokenEntry(entry: unknown, defaultWorkspaceId: string, s
   const workspaceId = typeof entry.workspaceId === "string" && entry.workspaceId.trim()
     ? entry.workspaceId.trim()
     : defaultWorkspaceId;
-  return { token: entry.token.trim(), scopes, workspaceId };
+  const actor = typeof entry.actor === "string" && entry.actor.trim()
+    ? entry.actor.trim()
+    : typeof entry.subject === "string" && entry.subject.trim()
+      ? entry.subject.trim()
+      : typeof entry.id === "string" && entry.id.trim()
+        ? entry.id.trim()
+        : undefined;
+  return { token: entry.token.trim(), scopes, workspaceId, actor };
 }
 
 function normalizeHostedScopes(value: unknown, source: string): HostedScope[] {

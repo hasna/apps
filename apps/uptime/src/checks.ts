@@ -25,6 +25,10 @@ export interface HostedHttpCheckOptions {
   maxRedirects?: number;
 }
 
+export interface HostedTcpCheckOptions {
+  resolveHost?: HostedDnsResolver;
+}
+
 export interface HostedHttpRequestContext {
   url: URL;
   method: string;
@@ -66,7 +70,11 @@ export async function runMonitorCheck(monitor: Monitor, options: MonitorCheckOpt
       : runHttpCheck(monitor, options.fetch ?? fetch);
   }
   if (monitor.kind === "browser_page") return runBrowserPageCheck(monitor, { fetch: options.fetch, runner: options.browserPage });
-  if (monitor.kind === "tcp") return runTcpCheck(monitor);
+  if (monitor.kind === "tcp") {
+    return options.hostedTargetPolicy
+      ? runHostedTcpCheck(monitor, { resolveHost: options.resolveHost })
+      : runTcpCheck(monitor);
+  }
   return { status: "down", latencyMs: null, error: `unsupported monitor kind: ${(monitor as { kind?: string }).kind ?? "unknown"}` };
 }
 
@@ -185,9 +193,31 @@ export async function runHostedHttpCheck(monitor: Monitor, options: HostedHttpCh
 
 export async function runTcpCheck(monitor: Monitor): Promise<CheckAttemptResult> {
   if (!monitor.host || !monitor.port) return { status: "down", latencyMs: null, error: "missing host or port" };
+  return runTcpSocket(monitor.host, monitor.port, monitor.timeoutMs);
+}
+
+export async function runHostedTcpCheck(monitor: Monitor, options: HostedTcpCheckOptions = {}): Promise<CheckAttemptResult> {
+  if (!monitor.host || !monitor.port) return { status: "down", latencyMs: null, error: "missing host or port" };
+  const resolver = options.resolveHost ?? resolveHostedHost;
+  try {
+    const addresses = normalizeResolvedAddresses(await resolver(normalizeHostedHost(monitor.host)));
+    assertHostedResolvedAddressesAllowed(monitor.host, addresses, "TCP resolved address");
+    const address = addresses[0];
+    return runTcpSocket(address.address, monitor.port, monitor.timeoutMs, address.family);
+  } catch (error) {
+    return {
+      status: "down",
+      latencyMs: null,
+      statusCode: null,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function runTcpSocket(host: string, port: number, timeoutMs: number, family?: 4 | 6): Promise<CheckAttemptResult> {
   const started = performance.now();
   return new Promise((resolve) => {
-    const socket = net.createConnection({ host: monitor.host!, port: monitor.port!, timeout: monitor.timeoutMs });
+    const socket = net.createConnection({ host, port, timeout: timeoutMs, family });
     let settled = false;
     const finish = (result: CheckAttemptResult) => {
       if (settled) return;
