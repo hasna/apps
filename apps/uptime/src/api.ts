@@ -7,13 +7,22 @@ export interface ServeOptions extends UptimeServiceOptions {
   port?: number;
   check?: boolean;
   service?: UptimeService;
+  apiToken?: string;
+  allowUnsafeRemoteMutations?: boolean;
 }
 
-export function createApiHandler(service: UptimeService): (request: Request) => Promise<Response> {
+export interface CreateApiHandlerOptions {
+  apiToken?: string;
+  allowUnsafeRemoteMutations?: boolean;
+  fetchImpl?: typeof fetch;
+  trustedLoopback?: boolean;
+}
+
+export function createApiHandler(service: UptimeService, options: CreateApiHandlerOptions = {}): (request: Request) => Promise<Response> {
   return async (request: Request) => {
     const url = new URL(request.url);
     try {
-      validateLocalMutationRequest(request, url);
+      validateLocalMutationRequest(request, url, options);
       if (request.method === "GET" && url.pathname === "/") {
         return html(dashboardHtml());
       }
@@ -22,6 +31,13 @@ export function createApiHandler(service: UptimeService): (request: Request) => 
       }
       if (request.method === "GET" && url.pathname === "/api/summary") {
         return json(service.summary());
+      }
+      if (request.method === "GET" && url.pathname === "/api/report") {
+        return json(service.buildReport());
+      }
+      if (request.method === "POST" && url.pathname === "/api/report") {
+        const input = await jsonBody(request);
+        return json(await service.sendReport({ ...input, fetchImpl: options.fetchImpl }));
       }
       if (request.method === "GET" && url.pathname === "/api/monitors") {
         return json(service.listMonitors({ includeDisabled: url.searchParams.get("includeDisabled") === "true" }));
@@ -79,7 +95,11 @@ export function serveUptime(options: ServeOptions = {}): { server: ReturnType<ty
   const server = Bun.serve({
     hostname: options.host ?? "127.0.0.1",
     port: options.port ?? 3899,
-    fetch: createApiHandler(service),
+    fetch: createApiHandler(service, {
+      apiToken: options.apiToken,
+      allowUnsafeRemoteMutations: options.allowUnsafeRemoteMutations,
+      trustedLoopback: isLoopbackHost(options.host ?? "127.0.0.1"),
+    }),
   });
   return { server, service, scheduler };
 }
@@ -110,12 +130,31 @@ function numericParam(url: URL, name: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function validateLocalMutationRequest(request: Request, url: URL): void {
+function validateLocalMutationRequest(request: Request, url: URL, options: CreateApiHandlerOptions): void {
   if (!["POST", "PATCH", "DELETE"].includes(request.method)) return;
+  const apiToken = options.apiToken ?? process.env.HASNA_UPTIME_API_TOKEN;
+  const hasToken = apiToken ? hasValidApiToken(request, apiToken) : false;
+  const allowUnsafeRemote = options.allowUnsafeRemoteMutations || process.env.HASNA_UPTIME_ALLOW_REMOTE_MUTATIONS === "1";
+  const trustedLoopback = options.trustedLoopback ?? isLoopbackHost(url.hostname);
+  if (!allowUnsafeRemote && !hasToken && (!trustedLoopback || !isLoopbackHost(url.hostname))) {
+    throw new ApiError("non-loopback host rejected for local mutation", 403);
+  }
   const origin = request.headers.get("origin");
   if (origin && origin !== `${url.protocol}//${url.host}`) {
     throw new ApiError("cross-origin mutation rejected", 403);
   }
+}
+
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+function hasValidApiToken(request: Request, token: string): boolean {
+  const authorization = request.headers.get("authorization") ?? "";
+  const bearer = authorization.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  const headerToken = request.headers.get("x-uptime-token")?.trim();
+  return bearer === token || headerToken === token;
 }
 
 async function jsonBody(request: Request): Promise<any> {

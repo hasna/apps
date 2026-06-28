@@ -73,3 +73,33 @@ test("CLI add rejects conflicting HTTP and TCP targets", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("CLI rejects control characters in monitor names", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const result = runCli(["add", "bad\nname", "--url", "https://example.com", "--json"], dbPath);
+    const body = JSON.parse(new TextDecoder().decode(result.stdout));
+
+    expect(result.exitCode).toBe(1);
+    expect(body.error).toContain("control characters");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI report dry-run prints a report without delivery configuration", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    runCli(["add", "api", "--url", "https://example.com"], dbPath);
+    const result = runCli(["report", "--dry-run"], dbPath);
+    const stdout = new TextDecoder().decode(result.stdout);
+
+    expect(result.exitCode).toBe(0);
+    expect(stdout).toContain("Open Uptime report");
+    expect(stdout).toContain("api");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

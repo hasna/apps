@@ -6,6 +6,7 @@ import { UptimeService } from "../service.js";
 import { ensureUptimeHome, uptimeDbPath, uptimeHome } from "../paths.js";
 import { packageVersion } from "../version.js";
 import { serveUptime } from "../api.js";
+import type { SendUptimeReportOptions, UptimeReportDelivery } from "../report.js";
 import type { CreateMonitorInput, Monitor, UpdateMonitorInput, UptimeSummary } from "../types.js";
 
 const program = new Command();
@@ -26,13 +27,13 @@ function wantsJson(opts?: { json?: boolean }): boolean {
 
 function print(value: unknown, text: string, opts?: { json?: boolean }): void {
   if (wantsJson(opts)) console.log(JSON.stringify(value, null, 2));
-  else console.log(text);
+  else console.log(sanitizeTerminal(text));
 }
 
 function fail(error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
   if (program.opts().json) console.log(JSON.stringify({ ok: false, error: message }, null, 2));
-  else console.error(chalk.red(message));
+  else console.error(chalk.red(sanitizeTerminal(message)));
   process.exit(1);
 }
 
@@ -259,6 +260,62 @@ program
   });
 
 program
+  .command("report")
+  .description("Build or send an uptime report through Mailery, Telephony, or Open Logs")
+  .option("--email <to>", "send an email report to one or more comma-separated recipients through Mailery")
+  .option("--from <email>", "Mailery from address")
+  .option("--mailery-url <url>", "Mailery API URL")
+  .option("--send-key <key>", "Mailery scoped send key")
+  .option("--sms <phone>", "send an SMS report to one or more comma-separated phone numbers through Telephony")
+  .option("--sms-from <phone>", "Telephony from phone number")
+  .option("--telephony-url <url>", "Telephony API URL")
+  .option("--logs", "write the report to Open Logs structured logs")
+  .option("--logs-url <url>", "Open Logs API URL")
+  .option("--logs-api-key <key>", "Open Logs API key")
+  .option("--logs-project <id>", "Open Logs project id")
+  .option("--subject <subject>", "report subject")
+  .option("--dry-run", "print the report without sending")
+  .option("-j, --json", "print JSON")
+  .action(async (opts) => {
+    try {
+      const svc = service();
+      const wantsDelivery = Boolean(opts.email || opts.sms || opts.logs);
+      if (opts.dryRun || !wantsDelivery) {
+        const report = svc.buildReport({ subject: opts.subject });
+        svc.close();
+        print(report, report.text, opts);
+        return;
+      }
+      const input: SendUptimeReportOptions = {
+        subject: opts.subject,
+        email: opts.email ? {
+          apiUrl: opts.maileryUrl,
+          sendKey: opts.sendKey,
+          from: opts.from,
+          to: splitList(opts.email),
+        } : undefined,
+        sms: opts.sms ? {
+          apiUrl: opts.telephonyUrl,
+          from: opts.smsFrom,
+          to: splitList(opts.sms),
+        } : undefined,
+        logs: opts.logs ? {
+          apiUrl: opts.logsUrl,
+          apiKey: opts.logsApiKey,
+          projectId: opts.logsProject,
+        } : undefined,
+      };
+      const deliveries = await svc.sendReport(input);
+      svc.close();
+      const failed = deliveries.filter((delivery) => !delivery.ok);
+      print(deliveries, renderDeliveries(deliveries), opts);
+      if (failed.length > 0) process.exit(1);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+program
   .command("results")
   .description("List recent check results")
   .option("--monitor <id>", "filter by monitor id")
@@ -287,7 +344,7 @@ program
       const svc = service();
       const incidents = svc.listIncidents({ status: opts.status, monitorId: opts.monitor, limit: opts.limit });
       svc.close();
-      print(incidents, incidents.length ? incidents.map((i) => `${i.status.padEnd(6)} ${i.monitorId} ${i.openedAt} ${i.reason ?? ""}`).join("\n") : "No incidents", opts);
+      print(incidents, incidents.length ? incidents.map((i) => `${i.status.padEnd(6)} ${sanitizeField(i.monitorId)} ${i.openedAt} ${sanitizeField(i.reason ?? "")}`).join("\n") : "No incidents", opts);
     } catch (error) {
       fail(error);
     }
@@ -299,10 +356,18 @@ program
   .option("--host <host>", "host to bind", "127.0.0.1")
   .option("--port <port>", "port", parseInteger, 3899)
   .option("--check", "run the scheduler while serving")
+  .option("--api-token <token>", "token required for non-loopback mutation hosts")
+  .option("--allow-unsafe-remote-mutations", "allow state-changing requests from non-loopback hosts without a token")
   .option("-j, --json", "print JSON")
   .action((opts) => {
     try {
-      const { server } = serveUptime({ host: opts.host, port: opts.port, check: opts.check });
+      const { server } = serveUptime({
+        host: opts.host,
+        port: opts.port,
+        check: opts.check,
+        apiToken: opts.apiToken,
+        allowUnsafeRemoteMutations: opts.allowUnsafeRemoteMutations,
+      });
       const data = { ok: true, url: `http://${server.hostname}:${server.port}`, scheduler: Boolean(opts.check) };
       if (wantsJson(opts)) console.log(JSON.stringify(data, null, 2));
       else console.log(`Open Uptime listening on ${chalk.cyan(data.url)}`);
@@ -322,17 +387,17 @@ function renderMonitors(monitors: Monitor[]): string {
   return monitors.map((monitor) => {
     const target = monitor.kind === "http" ? monitor.url : `${monitor.host}:${monitor.port}`;
     const status = renderStatus(monitor.status).padEnd(14);
-    return `${status} ${monitor.name.padEnd(24)} ${monitor.kind.padEnd(4)} ${target}`;
+    return `${status} ${sanitizeField(monitor.name).padEnd(24)} ${monitor.kind.padEnd(4)} ${sanitizeField(target ?? "")}`;
   }).join("\n");
 }
 
 function renderMonitorDetail(monitor: Monitor): string {
   const target = monitor.kind === "http" ? monitor.url : `${monitor.host}:${monitor.port}`;
   return [
-    `${chalk.bold(monitor.name)} ${renderStatus(monitor.status)}`,
+    `${chalk.bold(sanitizeField(monitor.name))} ${renderStatus(monitor.status)}`,
     `id: ${monitor.id}`,
     `kind: ${monitor.kind}`,
-    `target: ${target}`,
+    `target: ${sanitizeField(target ?? "")}`,
     `interval: ${monitor.intervalSeconds}s`,
     `timeout: ${monitor.timeoutMs}ms`,
     `retries: ${monitor.retryCount}`,
@@ -345,7 +410,7 @@ function renderCheckResults(results: { status: string; monitorId: string; checke
   if (results.length === 0) return "No results";
   return results.map((result) => {
     const latency = result.latencyMs == null ? "-" : `${result.latencyMs}ms`;
-    return `${renderStatus(result.status).padEnd(12)} ${result.monitorId} ${result.checkedAt} ${latency} ${result.error ?? ""}`;
+    return `${renderStatus(result.status).padEnd(12)} ${sanitizeField(result.monitorId)} ${result.checkedAt} ${latency} ${sanitizeField(result.error ?? "")}`;
   }).join("\n");
 }
 
@@ -356,9 +421,18 @@ function renderSummary(summary: UptimeSummary): string {
   for (const item of summary.monitors) {
     const uptime = item.uptimePercent == null ? "-" : `${item.uptimePercent.toFixed(2)}%`;
     const latency = item.averageLatencyMs == null ? "-" : `${item.averageLatencyMs}ms`;
-    lines.push(`${renderStatus(item.monitor.status).padEnd(12)} ${item.monitor.name.padEnd(24)} uptime ${uptime.padStart(8)} latency ${latency}`);
+    lines.push(`${renderStatus(item.monitor.status).padEnd(12)} ${sanitizeField(item.monitor.name).padEnd(24)} uptime ${uptime.padStart(8)} latency ${latency}`);
   }
   return lines.join("\n");
+}
+
+function renderDeliveries(deliveries: UptimeReportDelivery[]): string {
+  if (deliveries.length === 0) return "No report deliveries requested";
+  return deliveries.map((delivery) => {
+    const status = delivery.ok ? chalk.green("sent") : chalk.red("failed");
+    const detail = delivery.ok ? delivery.id ?? delivery.status ?? "" : delivery.error ?? "";
+    return `${status.padEnd(12)} ${delivery.channel}${detail ? ` ${sanitizeField(String(detail))}` : ""}`;
+  }).join("\n");
 }
 
 function renderStatus(status: string): string {
@@ -366,6 +440,19 @@ function renderStatus(status: string): string {
   if (status === "down") return chalk.red("down");
   if (status === "paused") return chalk.yellow("paused");
   return chalk.gray(status);
+}
+
+function splitList(value: string | undefined): string[] | undefined {
+  if (!value) return undefined;
+  return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function sanitizeTerminal(value: string): string {
+  return value.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, "");
+}
+
+function sanitizeField(value: string): string {
+  return value.replace(/[\x00-\x1f\x7f-\x9f]/g, " ");
 }
 
 program.parseAsync(process.argv);

@@ -24,6 +24,9 @@ uptime add postgres --tcp db.internal --port 5432
 uptime list
 uptime check --all
 uptime summary
+uptime report --dry-run
+uptime report --email ops@example.com --from alerts@example.com --send-key "$MAILERY_SEND_KEY"
+uptime report --sms +15550000001 --logs
 uptime incidents
 uptime serve --port 3899 --check
 ```
@@ -34,8 +37,11 @@ The local dashboard and API bind to `127.0.0.1` by default:
 open http://127.0.0.1:3899
 ```
 
-State-changing API requests reject cross-origin browser requests. Endpoints that
-accept request bodies require `content-type: application/json`.
+State-changing API requests reject cross-origin browser requests and
+non-loopback mutation hosts by default. For a trusted remote bind, set
+`HASNA_UPTIME_API_TOKEN` or pass `uptime serve --api-token <token>` and send
+`Authorization: Bearer <token>` or `X-Uptime-Token: <token>`.
+Endpoints that accept request bodies require `content-type: application/json`.
 
 ## Uptime Semantics
 
@@ -64,7 +70,7 @@ claude mcp add --scope user uptime -- uptime-mcp
 ```
 
 The MCP server exposes monitor CRUD, check execution, summary, incident, and
-result tools.
+result tools, plus an `uptime_send_report` tool for report delivery.
 
 ## SDK
 
@@ -81,6 +87,17 @@ await uptime.createMonitor({
 
 await uptime.checkAll();
 console.log(await uptime.summary());
+
+await uptime.sendReport({
+  email: {
+    apiUrl: "http://localhost:3900",
+    sendKey: process.env.MAILERY_SEND_KEY,
+    from: "alerts@example.com",
+    to: "ops@example.com",
+  },
+  sms: { apiUrl: "http://localhost:19451", to: "+15550000001" },
+  logs: { apiUrl: "http://localhost:3460", apiKey: process.env.HASNA_LOGS_API_TOKEN, projectId: "open-uptime" },
+});
 ```
 
 ## API
@@ -89,6 +106,8 @@ Run `uptime serve` and use:
 
 - `GET /health`
 - `GET /api/summary`
+- `GET /api/report`
+- `POST /api/report`
 - `GET /api/monitors`
 - `POST /api/monitors`
 - `GET /api/monitors/:id`
@@ -109,6 +128,7 @@ First release:
 - uptime percentage and latency summaries
 - local dashboard/API
 - CLI, MCP, SDK, and tests
+- Optional report delivery through Open Mailery, Open Telephony, and Open Logs
 
 Non-goals for this first release:
 
@@ -116,7 +136,8 @@ Non-goals for this first release:
 - hosted multi-tenant SaaS billing
 - synthetic browser journeys
 - public incident pages
-- external notification providers beyond extension points
+- provider-owned delivery configuration; Open Uptime sends through existing
+  Mailery, Telephony, and Logs services instead of storing their credentials
 
 ## License
 

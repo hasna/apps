@@ -43,6 +43,7 @@ interface MonitorRow {
   enabled: number;
   status: MonitorStatus;
   last_checked_at: string | null;
+  revision: number;
   created_at: string;
   updated_at: string;
 }
@@ -70,6 +71,13 @@ interface IncidentRow {
   reason: string | null;
 }
 
+interface CheckLeaseRow {
+  monitor_id: string;
+  owner: string;
+  leased_until: string;
+  acquired_at: string;
+}
+
 interface NormalizedMonitorInput {
   name: string;
   kind: "http" | "tcp";
@@ -82,6 +90,13 @@ interface NormalizedMonitorInput {
   timeoutMs: number;
   retryCount: number;
   enabled: boolean;
+}
+
+export class StaleCheckResultError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StaleCheckResultError";
+  }
 }
 
 export class UptimeStore {
@@ -120,10 +135,12 @@ export class UptimeStore {
         enabled INTEGER NOT NULL DEFAULT 1,
         status TEXT NOT NULL DEFAULT 'unknown',
         last_checked_at TEXT,
+        revision INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       )
     `);
+    this.ensureColumn("monitors", "revision", "INTEGER NOT NULL DEFAULT 1");
     this.db.run(`
       CREATE TABLE IF NOT EXISTS check_results (
         id TEXT PRIMARY KEY,
@@ -149,8 +166,17 @@ export class UptimeStore {
         reason TEXT
       )
     `);
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS check_leases (
+        monitor_id TEXT PRIMARY KEY REFERENCES monitors(id) ON DELETE CASCADE,
+        owner TEXT NOT NULL,
+        leased_until TEXT NOT NULL,
+        acquired_at TEXT NOT NULL
+      )
+    `);
     this.db.run("CREATE INDEX IF NOT EXISTS idx_results_monitor_time ON check_results(monitor_id, checked_at DESC)");
     this.db.run("CREATE INDEX IF NOT EXISTS idx_incidents_monitor_status ON incidents(monitor_id, status)");
+    this.db.run("CREATE INDEX IF NOT EXISTS idx_check_leases_until ON check_leases(leased_until)");
   }
 
   createMonitor(input: CreateMonitorInput): Monitor {
@@ -171,6 +197,7 @@ export class UptimeStore {
       enabled: normalized.enabled ?? true,
       status: normalized.enabled === false ? "paused" : "unknown",
       lastCheckedAt: null,
+      revision: 1,
       createdAt: now,
       updatedAt: now,
     };
@@ -179,8 +206,8 @@ export class UptimeStore {
         `INSERT INTO monitors (
           id, name, kind, url, host, port, method, expected_status,
           interval_seconds, timeout_ms, retry_count, enabled, status,
-          last_checked_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          last_checked_at, revision, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         monitor.id,
@@ -197,6 +224,7 @@ export class UptimeStore {
         monitor.enabled ? 1 : 0,
         monitor.status,
         monitor.lastCheckedAt,
+        monitor.revision,
         monitor.createdAt,
         monitor.updatedAt,
       );
@@ -227,7 +255,8 @@ export class UptimeStore {
         `UPDATE monitors SET
           name = ?, kind = ?, url = ?, host = ?, port = ?, method = ?,
           expected_status = ?, interval_seconds = ?, timeout_ms = ?,
-          retry_count = ?, enabled = ?, status = ?, last_checked_at = ?, updated_at = ?
+          retry_count = ?, enabled = ?, status = ?, last_checked_at = ?,
+          revision = revision + 1, updated_at = ?
         WHERE id = ?`,
       )
       .run(
@@ -247,6 +276,9 @@ export class UptimeStore {
         updatedAt,
         current.id,
       );
+    if (definitionChanged(current, next)) {
+      this.closeOpenIncident(current.id, updatedAt);
+    }
     return this.getMonitor(current.id)!;
   }
 
@@ -257,9 +289,38 @@ export class UptimeStore {
     return true;
   }
 
-  recordCheckResult(input: Omit<CheckResult, "id" | "checkedAt"> & { checkedAt?: string }): CheckResult {
+  acquireCheckLease(monitorId: string, owner: string, ttlMs: number): boolean {
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const leasedUntil = new Date(now.getTime() + Math.max(1000, ttlMs)).toISOString();
+    const tx = this.db.transaction(() => {
+      this.db
+        .query("DELETE FROM check_leases WHERE monitor_id = ? AND leased_until <= ?")
+        .run(monitorId, nowIso);
+      this.db
+        .query("INSERT OR IGNORE INTO check_leases (monitor_id, owner, leased_until, acquired_at) VALUES (?, ?, ?, ?)")
+        .run(monitorId, owner, leasedUntil, nowIso);
+      const row = this.db
+        .query("SELECT * FROM check_leases WHERE monitor_id = ?")
+        .get(monitorId) as CheckLeaseRow | null;
+      return row?.owner === owner;
+    });
+    return tx();
+  }
+
+  releaseCheckLease(monitorId: string, owner: string): void {
+    this.db.query("DELETE FROM check_leases WHERE monitor_id = ? AND owner = ?").run(monitorId, owner);
+  }
+
+  recordCheckResult(input: Omit<CheckResult, "id" | "checkedAt"> & { checkedAt?: string; expectedMonitorRevision?: number }): CheckResult {
     const monitor = this.getMonitor(input.monitorId);
     if (!monitor) throw new Error(`Monitor not found: ${input.monitorId}`);
+    if (input.expectedMonitorRevision !== undefined && monitor.revision !== input.expectedMonitorRevision) {
+      throw new StaleCheckResultError(`Monitor changed while check was in progress: ${monitor.name}`);
+    }
+    if (!monitor.enabled) {
+      throw new StaleCheckResultError(`Monitor was disabled while check was in progress: ${monitor.name}`);
+    }
     const checkedAt = input.checkedAt ?? new Date().toISOString();
     const result: CheckResult = {
       id: newId("chk"),
@@ -272,6 +333,16 @@ export class UptimeStore {
       attemptCount: Math.max(1, input.attemptCount),
     };
     const tx = this.db.transaction(() => {
+      const current = this.db
+        .query("SELECT * FROM monitors WHERE id = ?")
+        .get(result.monitorId) as MonitorRow | null;
+      if (!current) throw new Error(`Monitor not found: ${result.monitorId}`);
+      if (input.expectedMonitorRevision !== undefined && current.revision !== input.expectedMonitorRevision) {
+        throw new StaleCheckResultError(`Monitor changed while check was in progress: ${current.name}`);
+      }
+      if (!current.enabled) {
+        throw new StaleCheckResultError(`Monitor was disabled while check was in progress: ${current.name}`);
+      }
       this.db
         .query(
           `INSERT INTO check_results (
@@ -346,9 +417,16 @@ export class UptimeStore {
         down: monitors.filter((m) => m.status === "down").length,
         paused: monitors.filter((m) => !m.enabled || m.status === "paused").length,
         unknown: monitors.filter((m) => m.status === "unknown").length,
-        openIncidents: this.listIncidents({ status: "open", limit: 1000 }).length,
+        openIncidents: this.countOpenIncidents(),
       },
     };
+  }
+
+  private countOpenIncidents(): number {
+    const row = this.db
+      .query("SELECT COUNT(*) AS count FROM incidents WHERE status = 'open'")
+      .get() as { count: number } | null;
+    return Number(row?.count ?? 0);
   }
 
   private monitorSummary(monitor: Monitor): MonitorSummary {
@@ -403,13 +481,28 @@ export class UptimeStore {
         .run(result.checkedAt, result.id, open.id);
     }
   }
+
+  private closeOpenIncident(monitorId: string, closedAt: string): void {
+    this.db
+      .query("UPDATE incidents SET status = 'closed', closed_at = ? WHERE monitor_id = ? AND status = 'open'")
+      .run(closedAt, monitorId);
+  }
+
+  private ensureColumn(table: string, name: string, definition: string): void {
+    const columns = this.db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === name)) {
+      this.db.run(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+    }
+  }
 }
 
 function normalizeCreateMonitor(input: CreateMonitorInput): NormalizedMonitorInput {
   const name = input.name?.trim();
   if (!name) throw new Error("Monitor name is required");
+  rejectControlCharacters(name, "Monitor name");
   const method = normalizeMethod(input.method ?? "GET");
   const expectedStatus = normalizeExpectedStatus(input.expectedStatus);
+  const enabled = normalizeEnabled(input.enabled);
   if (input.kind === "http") {
     const url = normalizeHttpUrl(input.url);
     return {
@@ -421,11 +514,12 @@ function normalizeCreateMonitor(input: CreateMonitorInput): NormalizedMonitorInp
       intervalSeconds: boundedInteger(input.intervalSeconds ?? 60, "intervalSeconds", MIN_INTERVAL_SECONDS, MAX_INTERVAL_SECONDS),
       timeoutMs: boundedInteger(input.timeoutMs ?? 5000, "timeoutMs", MIN_TIMEOUT_MS, MAX_TIMEOUT_MS),
       retryCount: boundedInteger(input.retryCount ?? 0, "retryCount", MIN_RETRY_COUNT, MAX_RETRY_COUNT),
-      enabled: input.enabled ?? true,
+      enabled,
     };
   } else if (input.kind === "tcp") {
     const host = input.host?.trim();
     if (!host) throw new Error("TCP monitors require host");
+    rejectControlCharacters(host, "TCP host");
     if (!Number.isInteger(input.port) || input.port! <= 0 || input.port! > 65535) {
       throw new Error("TCP monitors require a port from 1 to 65535");
     }
@@ -439,11 +533,22 @@ function normalizeCreateMonitor(input: CreateMonitorInput): NormalizedMonitorInp
       intervalSeconds: boundedInteger(input.intervalSeconds ?? 60, "intervalSeconds", MIN_INTERVAL_SECONDS, MAX_INTERVAL_SECONDS),
       timeoutMs: boundedInteger(input.timeoutMs ?? 5000, "timeoutMs", MIN_TIMEOUT_MS, MAX_TIMEOUT_MS),
       retryCount: boundedInteger(input.retryCount ?? 0, "retryCount", MIN_RETRY_COUNT, MAX_RETRY_COUNT),
-      enabled: input.enabled ?? true,
+      enabled,
     };
   } else {
     throw new Error("Monitor kind must be http or tcp");
   }
+}
+
+function definitionChanged(current: Monitor, next: Monitor): boolean {
+  return (
+    next.kind !== current.kind
+    || next.url !== current.url
+    || next.host !== current.host
+    || next.port !== current.port
+    || next.method !== current.method
+    || next.expectedStatus !== current.expectedStatus
+  );
 }
 
 function normalizeUpdateMonitor(current: Monitor, input: UpdateMonitorInput, updatedAt: string): Monitor {
@@ -522,6 +627,18 @@ function normalizeExpectedStatus(value: number | null | undefined): number | nul
   return value;
 }
 
+function normalizeEnabled(value: boolean | undefined): boolean {
+  if (value === undefined) return true;
+  if (typeof value !== "boolean") throw new Error("enabled must be a boolean");
+  return value;
+}
+
+function rejectControlCharacters(value: string, label: string): void {
+  if (/[\x00-\x1f\x7f-\x9f]/.test(value)) {
+    throw new Error(`${label} must not contain control characters`);
+  }
+}
+
 function monitorFromRow(row: MonitorRow): Monitor {
   return {
     id: row.id,
@@ -538,6 +655,7 @@ function monitorFromRow(row: MonitorRow): Monitor {
     enabled: Boolean(row.enabled),
     status: row.status,
     lastCheckedAt: row.last_checked_at,
+    revision: row.revision ?? 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

@@ -16,6 +16,7 @@ test("MCP server registers uptime tools and JSON resources", async () => {
     };
 
     expect(Object.keys(server._registeredTools)).toContain("uptime_summary");
+    expect(Object.keys(server._registeredTools)).toContain("uptime_send_report");
     expect(Object.keys(server._registeredResources).sort()).toEqual([
       "uptime://incidents",
       "uptime://monitors",
@@ -30,6 +31,10 @@ test("MCP server registers uptime tools and JSON resources", async () => {
       url: "https://example.com",
       retryCount: 10_000,
     }).success).toBe(false);
+    expect(server._registeredTools.uptime_send_report.inputSchema?.safeParse({
+      logs: { apiUrl: "http://logs.test", projectId: "uptime" },
+      timeoutMs: 1000,
+    }).success).toBe(true);
     service.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });

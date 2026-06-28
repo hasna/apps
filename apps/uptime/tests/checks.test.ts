@@ -19,6 +19,7 @@ function monitor(overrides: Partial<Monitor> = {}): Monitor {
     enabled: true,
     status: "unknown",
     lastCheckedAt: null,
+    revision: 1,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     ...overrides,

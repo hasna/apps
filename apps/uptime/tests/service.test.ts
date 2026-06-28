@@ -164,6 +164,49 @@ test("runDueChecks skips a monitor already being checked", async () => {
   service.close();
 });
 
+test("cross-service due checks skip DB-leased monitors already in progress", async () => {
+  const dbPath = tempDb();
+  let release!: () => void;
+  let started!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const startedPromise = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let calls = 0;
+  const first = new UptimeService({
+    dbPath,
+    checkRunner: async () => {
+      calls += 1;
+      started();
+      await released;
+      return { status: "up", latencyMs: 1, statusCode: 200, error: null };
+    },
+  });
+  const second = new UptimeService({
+    dbPath,
+    checkRunner: async () => {
+      calls += 1;
+      return { status: "up", latencyMs: 1, statusCode: 200, error: null };
+    },
+  });
+
+  first.createMonitor({ name: "shared", kind: "http", url: "https://example.com", intervalSeconds: 1 });
+  const running = first.runDueChecks(new Date("2026-01-01T00:00:00.000Z"));
+  await startedPromise;
+  const skipped = await second.runDueChecks(new Date("2026-01-01T00:00:00.100Z"));
+  release();
+  const finished = await running;
+
+  expect(skipped).toHaveLength(0);
+  expect(finished).toHaveLength(1);
+  expect(calls).toBe(1);
+  expect(second.listResults()).toHaveLength(1);
+  first.close();
+  second.close();
+});
+
 test("overlapping due runs skip monitors checked by a newer run", async () => {
   let releaseSlow!: () => void;
   let startedSlow!: () => void;
@@ -333,6 +376,119 @@ test("target updates reset observed status and make the monitor immediately due"
   service.close();
 });
 
+test("stale in-flight checks do not overwrite updated monitor targets", async () => {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const service = new UptimeService({
+    dbPath: tempDb(),
+    checkRunner: async () => {
+      await released;
+      return { status: "up", latencyMs: 1, statusCode: 200, error: null };
+    },
+  });
+
+  service.createMonitor({ name: "api", kind: "http", url: "https://old.example/health" });
+  const running = service.checkMonitor("api");
+  service.updateMonitor("api", { url: "https://new.example/health" });
+  release();
+
+  await expect(running).rejects.toThrow("Monitor changed while check was in progress");
+  const monitor = service.getMonitor("api")!;
+  expect(monitor.url).toBe("https://new.example/health");
+  expect(monitor.status).toBe("unknown");
+  expect(monitor.lastCheckedAt).toBeNull();
+  expect(service.listResults()).toHaveLength(0);
+  service.close();
+});
+
+test("same-millisecond monitor updates still invalidate stale in-flight checks", async () => {
+  const RealDate = Date;
+  const fixed = "2026-01-01T00:00:00.000Z";
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  try {
+    globalThis.Date = class extends RealDate {
+      constructor(value?: string | number | Date) {
+        if (arguments.length === 0) super(fixed);
+        else super(value as string | number | Date);
+      }
+      static now() {
+        return new RealDate(fixed).getTime();
+      }
+    } as DateConstructor;
+    const service = new UptimeService({
+      dbPath: tempDb(),
+      checkRunner: async () => {
+        await released;
+        return { status: "up", latencyMs: 1, statusCode: 200, error: null };
+      },
+    });
+
+    service.createMonitor({ name: "api", kind: "http", url: "https://old.example/health" });
+    const running = service.checkMonitor("api");
+    service.updateMonitor("api", { url: "https://new.example/health" });
+    release();
+
+    await expect(running).rejects.toThrow("Monitor changed while check was in progress");
+    expect(service.getMonitor("api")!.revision).toBe(2);
+    expect(service.listResults()).toHaveLength(0);
+    service.close();
+  } finally {
+    globalThis.Date = RealDate;
+  }
+});
+
+test("pausing during an in-flight check does not write stale results or incidents", async () => {
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const service = new UptimeService({
+    dbPath: tempDb(),
+    checkRunner: async () => {
+      await released;
+      return { status: "down", latencyMs: 1, statusCode: 500, error: "down" };
+    },
+  });
+
+  service.createMonitor({ name: "api", kind: "http", url: "https://example.com" });
+  const running = service.checkMonitor("api");
+  service.updateMonitor("api", { enabled: false });
+  release();
+
+  await expect(running).rejects.toThrow("Monitor changed while check was in progress");
+  const monitor = service.getMonitor("api")!;
+  expect(monitor.enabled).toBe(false);
+  expect(monitor.status).toBe("paused");
+  expect(service.listResults()).toHaveLength(0);
+  expect(service.listIncidents({ status: "open" })).toHaveLength(0);
+  service.close();
+});
+
+test("target updates close old open incidents without marking them recovered", async () => {
+  const service = new UptimeService({
+    dbPath: tempDb(),
+    checkRunner: async () => ({ status: "down", latencyMs: 1, statusCode: 500, error: "old target down" }),
+  });
+
+  service.createMonitor({ name: "api", kind: "http", url: "https://old.example/health" });
+  await service.checkMonitor("api");
+  expect(service.listIncidents({ status: "open" })).toHaveLength(1);
+
+  service.updateMonitor("api", { url: "https://new.example/health" });
+  const open = service.listIncidents({ status: "open" });
+  const closed = service.listIncidents({ status: "closed" });
+
+  expect(open).toHaveLength(0);
+  expect(closed).toHaveLength(1);
+  expect(closed[0].recoveryCheckId).toBeNull();
+  service.close();
+});
+
 test("monitor validation rejects invalid definitions", () => {
   const service = new UptimeService({ dbPath: tempDb() });
 
@@ -340,6 +496,48 @@ test("monitor validation rejects invalid definitions", () => {
   expect(() => service.createMonitor({ name: "host", kind: "tcp", host: "   ", port: 80 })).toThrow("TCP monitors require host");
   expect(() => service.createMonitor({ name: "status", kind: "http", url: "https://example.com", expectedStatus: 999 })).toThrow("expectedStatus");
   expect(() => service.createMonitor({ name: "method", kind: "http", url: "https://example.com", method: "GET /" })).toThrow("HTTP method");
+  expect(() => service.createMonitor({ name: "bad\nname", kind: "http", url: "https://example.com" })).toThrow("control characters");
+  expect(() => service.createMonitor({ name: "enabled", kind: "http", url: "https://example.com", enabled: 0 as unknown as boolean })).toThrow("enabled must be a boolean");
+  service.close();
+});
+
+test("summary counts all open incidents without result-list caps", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  const monitor = service.createMonitor({ name: "m", kind: "http", url: "https://example.com" });
+  const db = (service.store as unknown as { db: any }).db;
+  const insert = db.transaction(() => {
+    for (let i = 0; i < 1001; i += 1) {
+      db.query(`
+        INSERT INTO incidents (
+          id, monitor_id, status, opened_at, closed_at, last_failure_at,
+          failure_count, recovery_check_id, reason
+        ) VALUES (?, ?, 'open', ?, NULL, ?, 1, NULL, 'down')
+      `).run(`inc_${i}`, monitor.id, `2026-01-01T00:00:${String(i % 60).padStart(2, "0")}.000Z`, "2026-01-01T00:00:00.000Z");
+    }
+  });
+  insert();
+
+  expect(service.summary().totals.openIncidents).toBe(1001);
+  service.close();
+});
+
+test("listIncidents still clamps large result requests", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  const monitor = service.createMonitor({ name: "m", kind: "http", url: "https://example.com" });
+  const db = (service.store as unknown as { db: any }).db;
+  const insert = db.transaction(() => {
+    for (let i = 0; i < 1001; i += 1) {
+      db.query(`
+        INSERT INTO incidents (
+          id, monitor_id, status, opened_at, closed_at, last_failure_at,
+          failure_count, recovery_check_id, reason
+        ) VALUES (?, ?, 'open', ?, NULL, ?, 1, NULL, 'down')
+      `).run(`inc_${i}`, monitor.id, `2026-01-01T00:00:${String(i % 60).padStart(2, "0")}.000Z`, "2026-01-01T00:00:00.000Z");
+    }
+  });
+  insert();
+
+  expect(service.listIncidents({ status: "open", limit: 5000 })).toHaveLength(1000);
   service.close();
 });
 

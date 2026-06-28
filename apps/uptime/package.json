@@ -1,6 +1,6 @@
 {
   "name": "@hasna/uptime",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local-first uptime and downtime monitoring service with CLI, MCP, SDK, SQLite persistence, and a dashboard.",
   "license": "Apache-2.0",
   "type": "module",
@@ -12,6 +12,7 @@
   "bugs": {
     "url": "https://github.com/hasna/uptime/issues"
   },
+  "readmeFilename": "README.md",
   "keywords": [
     "uptime",
     "monitoring",
@@ -53,7 +54,7 @@
     }
   },
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/index.ts src/api.ts src/service.ts src/store.ts src/checks.ts src/types.ts src/paths.ts src/dashboard.ts src/version.ts --root src --outdir dist --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist && chmod +x dist/cli/index.js dist/mcp/index.js",
+    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/index.ts src/api.ts src/service.ts src/store.ts src/checks.ts src/report.ts src/types.ts src/paths.ts src/dashboard.ts src/version.ts --root src --outdir dist --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist && chmod +x dist/cli/index.js dist/mcp/index.js",
     "typecheck": "tsc --noEmit",
     "test": "bun test ./tests",
     "dev:cli": "bun run src/cli/index.ts",

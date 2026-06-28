@@ -1,5 +1,7 @@
 import { runMonitorCheck } from "./checks.js";
-import { UptimeStore, type UptimeStoreOptions } from "./store.js";
+import { randomUUID } from "node:crypto";
+import { StaleCheckResultError, UptimeStore, type UptimeStoreOptions } from "./store.js";
+import { buildUptimeReport, sendUptimeReport, type BuildUptimeReportOptions, type SendUptimeReportOptions, type UptimeReport, type UptimeReportDelivery } from "./report.js";
 import type {
   CheckAttemptResult,
   CheckResult,
@@ -20,6 +22,7 @@ export interface UptimeServiceOptions extends UptimeStoreOptions {
 export class UptimeService {
   readonly store: UptimeStore;
   private readonly checkRunner: (monitor: Monitor) => Promise<CheckAttemptResult>;
+  private readonly leaseOwner = `svc_${randomUUID().replace(/-/g, "").slice(0, 18)}`;
   private readonly inFlightChecks = new Set<string>();
 
   constructor(options: UptimeServiceOptions = {}) {
@@ -63,11 +66,23 @@ export class UptimeService {
     return this.store.summary();
   }
 
+  buildReport(options: BuildUptimeReportOptions = {}): UptimeReport {
+    return buildUptimeReport(this.summary(), options);
+  }
+
+  async sendReport(options: SendUptimeReportOptions = {}): Promise<UptimeReportDelivery[]> {
+    return sendUptimeReport(this.summary(), options);
+  }
+
   async checkMonitor(idOrName: string): Promise<CheckResult> {
     const monitor = this.store.getMonitor(idOrName);
     if (!monitor) throw new Error(`Monitor not found: ${idOrName}`);
     if (!monitor.enabled) throw new Error(`Monitor is disabled: ${monitor.name}`);
     if (this.inFlightChecks.has(monitor.id)) throw new Error(`Monitor check already in progress: ${monitor.name}`);
+    const leaseTtlMs = Math.max(60_000, (monitor.retryCount + 1) * monitor.timeoutMs + 10_000);
+    if (!this.store.acquireCheckLease(monitor.id, this.leaseOwner, leaseTtlMs)) {
+      throw new MonitorCheckBusyError(`Monitor check already in progress: ${monitor.name}`);
+    }
     this.inFlightChecks.add(monitor.id);
     try {
       let attemptCount = 0;
@@ -85,9 +100,11 @@ export class UptimeService {
         statusCode: last!.statusCode ?? null,
         error: last!.error ?? null,
         attemptCount,
+        expectedMonitorRevision: monitor.revision,
       });
     } finally {
       this.inFlightChecks.delete(monitor.id);
+      this.store.releaseCheckLease(monitor.id, this.leaseOwner);
     }
   }
 
@@ -118,7 +135,12 @@ export class UptimeService {
     for (const monitor of due) {
       const current = this.store.getMonitor(monitor.id);
       if (!current || !this.isDue(current, now)) continue;
-      results.push(await this.checkMonitor(current.id));
+      try {
+        results.push(await this.checkMonitor(current.id));
+      } catch (error) {
+        if (error instanceof MonitorCheckBusyError || error instanceof StaleCheckResultError) continue;
+        throw error;
+      }
     }
     return results;
   }
@@ -134,4 +156,11 @@ export class UptimeService {
 
 export function createUptimeClient(options: UptimeServiceOptions = {}): UptimeService {
   return new UptimeService(options);
+}
+
+export class MonitorCheckBusyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MonitorCheckBusyError";
+  }
 }

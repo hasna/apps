@@ -169,6 +169,44 @@ export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer
   );
 
   server.registerTool(
+    "uptime_send_report",
+    {
+      title: "Send an uptime report",
+      description: "Build an uptime report and send it through Mailery email, Telephony SMS, and/or Open Logs structured logs.",
+      inputSchema: {
+        subject: z.string().optional(),
+        email: z.object({
+          apiUrl: z.string().url().optional(),
+          sendKey: z.string().optional(),
+          from: z.string().optional(),
+          to: z.union([z.string(), z.array(z.string())]).optional(),
+          providerId: z.string().optional(),
+        }).optional(),
+        sms: z.object({
+          apiUrl: z.string().url().optional(),
+          from: z.string().optional(),
+          to: z.union([z.string(), z.array(z.string())]).optional(),
+        }).optional(),
+        logs: z.object({
+          apiUrl: z.string().url().optional(),
+          apiKey: z.string().optional(),
+          projectId: z.string().optional(),
+          environment: z.string().optional(),
+          service: z.string().optional(),
+        }).optional(),
+        timeoutMs: z.number().int().min(1000).max(60000).optional(),
+      },
+    },
+    async (args) => jsonResult(await service.sendReport({
+      subject: args.subject,
+      email: args.email,
+      sms: args.sms,
+      logs: args.logs,
+      timeoutMs: args.timeoutMs,
+    })),
+  );
+
+  server.registerTool(
     "uptime_results",
     {
       title: "List uptime check results",

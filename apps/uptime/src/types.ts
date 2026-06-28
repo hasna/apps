@@ -18,6 +18,7 @@ export interface Monitor {
   enabled: boolean;
   status: MonitorStatus;
   lastCheckedAt: string | null;
+  revision: number;
   createdAt: string;
   updatedAt: string;
 }
