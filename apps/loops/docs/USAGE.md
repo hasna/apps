@@ -321,6 +321,10 @@ loops routes show <work-item-id>
 loops routes invocations
 ```
 
+Route work items are the durable reservation ledger: they include the stable
+idempotency key, task/event references, project/group keys, admitting machine
+ID, workflow/loop IDs, and the current terminal or active status.
+
 When a workflow run starts from an admitted work item, OpenLoops writes a
 manifest under:
 
@@ -364,6 +368,8 @@ starve project-specific drains. The route throttle flags are still checked for
 every candidate, so a drain can safely run every few minutes as a deterministic
 command loop: it fills only available capacity, writes compact JSON evidence
 when requested, and leaves excess ready tasks in todos for a later drain pass.
+Compact drain output includes the route reservation/work-item ID, status,
+machine ID, workflow ID, and loop ID for each considered task.
 Use `--dry-run` to preview candidates and rendered workflows without mutating
 OpenLoops state.
 

@@ -149,6 +149,7 @@ interface WorkflowWorkItemRow {
   subject_ref: string;
   project_key: string | null;
   project_group: string | null;
+  machine_id: string | null;
   priority: number;
   status: string;
   attempts: number;
@@ -385,6 +386,7 @@ function rowToWorkflowWorkItem(row: WorkflowWorkItemRow): WorkflowWorkItem {
     subjectRef: row.subject_ref,
     projectKey: row.project_key ?? undefined,
     projectGroup: row.project_group ?? undefined,
+    machineId: row.machine_id ?? undefined,
     priority: row.priority,
     status: row.status as WorkflowWorkItemStatus,
     attempts: row.attempts,
@@ -741,6 +743,7 @@ export class Store {
         subject_ref TEXT NOT NULL,
         project_key TEXT,
         project_group TEXT,
+        machine_id TEXT,
         priority INTEGER NOT NULL,
         status TEXT NOT NULL,
         attempts INTEGER NOT NULL,
@@ -757,6 +760,7 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_workflow_work_items_status_next ON workflow_work_items(status, next_attempt_at, priority DESC, created_at ASC);
       CREATE INDEX IF NOT EXISTS idx_workflow_work_items_project ON workflow_work_items(project_key, status);
       CREATE INDEX IF NOT EXISTS idx_workflow_work_items_group ON workflow_work_items(project_group, status);
+      CREATE INDEX IF NOT EXISTS idx_workflow_work_items_machine ON workflow_work_items(machine_id, status);
       CREATE INDEX IF NOT EXISTS idx_workflow_work_items_invocation ON workflow_work_items(invocation_id);
 
       CREATE TABLE IF NOT EXISTS workflow_step_runs (
@@ -879,6 +883,7 @@ export class Store {
     this.addColumnIfMissing("workflow_runs", "invocation_id", "TEXT");
     this.addColumnIfMissing("workflow_runs", "work_item_id", "TEXT");
     this.addColumnIfMissing("workflow_runs", "manifest_path", "TEXT");
+    this.addColumnIfMissing("workflow_work_items", "machine_id", "TEXT");
     this.addColumnIfMissing("workflow_step_runs", "pid", "INTEGER");
     this.addColumnIfMissing("workflow_step_runs", "goal_run_id", "TEXT");
     this.db
@@ -896,6 +901,9 @@ export class Store {
     this.db
       .query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)")
       .run("0005_workflow_invocations_and_admission", nowIso());
+    this.db
+      .query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)")
+      .run("0006_workflow_work_item_machine_id", nowIso());
   }
 
   /**
@@ -1283,10 +1291,10 @@ export class Store {
     this.db
       .query(
         `INSERT INTO workflow_work_items (id, route_key, idempotency_key, invocation_id, source_type, source_ref,
-          subject_ref, project_key, project_group, priority, status, attempts, next_attempt_at, lease_expires_at,
+          subject_ref, project_key, project_group, machine_id, priority, status, attempts, next_attempt_at, lease_expires_at,
           workflow_id, loop_id, workflow_run_id, last_reason, created_at, updated_at)
          VALUES ($id, $routeKey, $idempotencyKey, $invocationId, $sourceType, $sourceRef, $subjectRef,
-          $projectKey, $projectGroup, $priority, $status, 0, $nextAttemptAt, NULL, NULL, NULL, NULL,
+          $projectKey, $projectGroup, $machineId, $priority, $status, 0, $nextAttemptAt, NULL, NULL, NULL, NULL,
           $lastReason, $created, $updated)
          ON CONFLICT(route_key, idempotency_key) DO UPDATE SET
           invocation_id=excluded.invocation_id,
@@ -1295,6 +1303,10 @@ export class Store {
           subject_ref=excluded.subject_ref,
           project_key=excluded.project_key,
           project_group=excluded.project_group,
+          machine_id=CASE
+            WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running') THEN workflow_work_items.machine_id
+            ELSE excluded.machine_id
+          END,
           priority=excluded.priority,
           status=CASE
             WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running')
@@ -1331,6 +1343,7 @@ export class Store {
         $subjectRef: input.subjectRef,
         $projectKey: input.projectKey ?? null,
         $projectGroup: input.projectGroup ?? null,
+        $machineId: input.machineId ?? null,
         $priority: input.priority ?? 0,
         $status: status,
         $nextAttemptAt: input.nextAttemptAt ?? null,

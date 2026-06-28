@@ -261,6 +261,7 @@ export interface WorkflowWorkItem {
   subjectRef: string;
   projectKey?: string;
   projectGroup?: string;
+  machineId?: string;
   priority: number;
   status: WorkflowWorkItemStatus;
   attempts: number;
@@ -283,6 +284,7 @@ export interface UpsertWorkflowWorkItemInput {
   subjectRef: string;
   projectKey?: string;
   projectGroup?: string;
+  machineId?: string;
   priority?: number;
   status?: Extract<WorkflowWorkItemStatus, "queued" | "deferred">;
   nextAttemptAt?: string;

@@ -71,8 +71,10 @@ describe("Store", () => {
         sourceRef: "evt-1",
         subjectRef: "task-1",
         projectKey: "/tmp/open-loops",
+        machineId: "spark-test",
       });
       expect(workItem.status).toBe("queued");
+      expect(workItem.machineId).toBe("spark-test");
       expect(store.countActiveWorkflowWorkItems({ projectKey: "/tmp/open-loops" })).toEqual({ global: 0, project: 0 });
 
       const workflow = store.createWorkflow({
@@ -108,6 +110,7 @@ describe("Store", () => {
 
       store.finalizeWorkflowRun(run.id, "succeeded");
       expect(store.getWorkflowWorkItem(workItem.id)?.status).toBe("succeeded");
+      expect(store.getWorkflowWorkItem(workItem.id)?.machineId).toBe("spark-test");
       expect(store.countActiveWorkflowWorkItems({ projectKey: "/tmp/open-loops" })).toEqual({ global: 0, project: 0 });
     } finally {
       store.close();

@@ -1576,11 +1576,12 @@ describe("loops CLI", () => {
       "bypass",
     ];
 
-    const first = runCli(dataDir, args, JSON.stringify(event));
+    const first = runCli(dataDir, args, JSON.stringify(event), { LOOPS_MACHINE_ID: "spark-test" });
     expect(first.status).toBe(0);
     const firstValue = JSON.parse(first.stdout);
     expect(firstValue.deduped).toBe(false);
     expect(firstValue.idempotencyKey).toBe("todos-task:task-created-0001:task.created");
+    expect(firstValue.workItem.machineId).toBe("spark-test");
     expect(firstValue.workflow.steps).toHaveLength(2);
     expect(firstValue.loop.name).toContain("event:todos-task:task-cre:");
     expect(firstValue.loop.name).not.toContain("evt-task");
@@ -1598,12 +1599,13 @@ describe("loops CLI", () => {
       expect(["account004", "account005", "account006"]).toContain(step.target.authProfile);
     }
 
-    const second = runCli(dataDir, args, JSON.stringify(replayedEvent));
+    const second = runCli(dataDir, args, JSON.stringify(replayedEvent), { LOOPS_MACHINE_ID: "other-machine" });
     expect(second.status).toBe(0);
     const secondValue = JSON.parse(second.stdout);
     expect(secondValue.deduped).toBe(true);
     expect(secondValue.idempotencyKey).toBe(firstValue.idempotencyKey);
     expect(secondValue.loop.id).toBe(firstValue.loop.id);
+    expect(secondValue.workItem.machineId).toBe("spark-test");
   });
 
   test("routes commands expose workflow invocation admission state", () => {
@@ -1977,6 +1979,103 @@ describe("loops CLI", () => {
     expect(loops).toHaveLength(1);
   });
 
+  test("todos task drain reserves by idempotency across repeated drains", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-repeat-"));
+    const binDir = join(dataDir, "bin");
+    const repo = createGitRepo("loops-cli-event-drain-repeat-repo-");
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"$*\" == *\"ready\"* ]]; then printf '%s' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "if [[ \"$*\" == *\"task-lists\"* ]]; then printf '[]\\n'; exit 0; fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const ready = [
+      {
+        id: "task-drain-repeat",
+        title: "Repeated drain should not duplicate",
+        status: "pending",
+        working_dir: repo,
+        tags: ["auto:route"],
+      },
+    ];
+    const env = {
+      PATH: `${binDir}:/usr/bin:/bin`,
+      TODOS_READY_JSON: JSON.stringify(ready),
+      LOOPS_MACHINE_ID: "spark-repeat",
+    };
+
+    const first = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        join(dataDir, "todos-store"),
+        "--max-dispatch",
+        "1",
+        "--worktree-mode",
+        "off",
+        "--name-prefix",
+        "event:first-drain",
+      ],
+      undefined,
+      env,
+    );
+    expect(first.status).toBe(0);
+    const firstValue = JSON.parse(first.stdout);
+    expect(firstValue.created).toBe(1);
+    expect(firstValue.deduped).toBe(0);
+
+    const second = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        join(dataDir, "todos-store"),
+        "--max-dispatch",
+        "1",
+        "--worktree-mode",
+        "off",
+        "--name-prefix",
+        "event:second-drain",
+      ],
+      undefined,
+      env,
+    );
+    expect(second.status).toBe(0);
+    const secondValue = JSON.parse(second.stdout);
+    expect(secondValue.created).toBe(0);
+    expect(secondValue.deduped).toBe(1);
+    expect(secondValue.results[0].workItem.id).toBe(firstValue.results[0].workItem.id);
+    expect(secondValue.results[0].workItem.machineId).toBe("spark-repeat");
+
+    const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loops).toHaveLength(1);
+    expect(loops[0].name).toContain("event:first-drain");
+    const routes = JSON.parse(runCli(dataDir, ["--json", "routes", "list", "--route-key", "todos-task"]).stdout);
+    expect(routes).toHaveLength(1);
+    expect(routes[0]).toMatchObject({
+      id: firstValue.results[0].workItem.id,
+      idempotencyKey: "todos-task:task-drain-repeat:task.created",
+      sourceRef: "drain-todos-task-task-drain-repeat",
+      subjectRef: "task-drain-repeat",
+      machineId: "spark-repeat",
+      status: "admitted",
+    });
+  });
+
   test("todos task drain filters by task list and limits new dispatches", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-filter-"));
     const binDir = join(dataDir, "bin");
@@ -2136,6 +2235,7 @@ describe("loops CLI", () => {
         PATH: `${binDir}:/usr/bin:/bin`,
         TODOS_TASK_LISTS_JSON: JSON.stringify([{ id: "list-route", slug: "route", name: "Route" }]),
         TODOS_READY_JSON: JSON.stringify(ready),
+        LOOPS_MACHINE_ID: "spark-drain-compact",
       },
     );
 
@@ -2146,7 +2246,10 @@ describe("loops CLI", () => {
     expect(value.results[0]).toMatchObject({
       kind: "created",
       taskId: "task-drain-compact",
+      workItemStatus: "admitted",
+      machineId: "spark-drain-compact",
     });
+    expect(typeof value.results[0].workItemId).toBe("string");
     expect(value.results[0].event).toBeUndefined();
     expect(value.results[0].workflow).toBeUndefined();
     expect(existsSync(value.evidencePath)).toBe(true);

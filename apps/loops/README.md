@@ -284,6 +284,10 @@ loops routes show <work-item-id>
 loops routes invocations
 ```
 
+Route work items are the durable reservation ledger: they include the stable
+idempotency key, task/event references, project/group keys, admitting machine
+ID, workflow/loop IDs, and the current terminal or active status.
+
 Workflow run manifests are written under
 `.hasna/loops/runs/<project-slug>/<subject-key>/<run-id>/manifest.json`.
 `subject-key` is a safe derived path segment, not the raw subject reference.

@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { Database } from "bun:sqlite";
 import { Command } from "commander";
 import type {
@@ -21,6 +21,7 @@ import type {
   OverlapPolicy,
   ScheduleSpec,
   WorkflowSpec,
+  WorkflowWorkItem,
 } from "../types.js";
 import { dataDir, daemonLogPath, dbPath } from "../lib/paths.js";
 import {
@@ -903,6 +904,20 @@ function routeThrottleDryRunPreview(args: { projectPath: string; projectGroup?: 
   };
 }
 
+function currentRouteMachineId(): string {
+  const explicit = stringField(process.env.LOOPS_MACHINE_ID) ??
+    stringField(process.env.HASNA_MACHINE_ID) ??
+    stringField(process.env.MACHINE_ID);
+  if (explicit) return explicit;
+  try {
+    const local = listOpenMachines().find((machine) => machine.local)?.id;
+    if (local) return local;
+  } catch {
+    // OpenMachines is optional for local development; route evidence still gets a stable host fallback.
+  }
+  return hostname();
+}
+
 async function readEventEnvelopeFromStdin(): Promise<EventEnvelope> {
   const raw = process.env.HASNA_EVENT_JSON || (await Bun.stdin.text());
   const event = JSON.parse(raw);
@@ -944,6 +959,7 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
     process.cwd();
   const routeProjectPath = normalizeRoutePath(projectPath) ?? resolve(projectPath);
   const projectGroup = routeProjectGroup(opts.projectGroup, data, metadata);
+  const machineId = currentRouteMachineId();
   const throttleLimits = routeThrottleLimitsFromOpts(opts);
   const idempotencyKey = `todos-task:${taskId}:${event.type}`;
   const idempotencySuffix = stableSuffix(idempotencyKey);
@@ -1050,6 +1066,7 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
     subjectRef: taskId,
     projectKey: routeProjectPath,
     projectGroup,
+    machineId,
     priority: 0,
     status: "queued" as const,
   };
@@ -1253,12 +1270,16 @@ function compactDrainResult(result: TodosTaskRoutePrint): Record<string, unknown
   const event = objectField(value.event) as Partial<EventEnvelope> | undefined;
   const loop = objectField(value.loop) as Partial<Loop> | undefined;
   const workflow = objectField(value.workflow) as Partial<WorkflowSpec> | undefined;
+  const workItem = objectField(value.workItem) as Partial<WorkflowWorkItem> | undefined;
   const throttle = objectField(value.throttle) as { reason?: string; allowed?: boolean } | undefined;
   return {
     kind: result.kind,
     taskId: event?.subject,
     eventId: event?.id,
     idempotencyKey: stringField(value.idempotencyKey),
+    workItemId: stringField(workItem?.id),
+    workItemStatus: stringField(workItem?.status),
+    machineId: stringField(workItem?.machineId),
     reason: stringField(value.reason) ?? throttle?.reason,
     loopId: stringField(loop?.id),
     loopName: stringField(loop?.name),
@@ -1821,6 +1842,7 @@ eventsHandle
       process.cwd();
     const routeProjectPath = normalizeRoutePath(projectPath) ?? resolve(projectPath);
     const projectGroup = routeProjectGroup(opts.projectGroup, data, metadata);
+    const machineId = currentRouteMachineId();
     const throttleLimits = routeThrottleLimitsFromOpts(opts);
     const eventSuffix = event.id.slice(0, 8);
     const source = slugSegment(event.source, "source");
@@ -1900,6 +1922,7 @@ eventsHandle
       subjectRef: stringField(event.subject) ?? event.id,
       projectKey: routeProjectPath,
       projectGroup,
+      machineId,
       priority: 0,
       status: "queued" as const,
     };
