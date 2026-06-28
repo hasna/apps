@@ -14,6 +14,16 @@ function runCli(args: string[], dbPath: string, env: Record<string, string> = {}
   });
 }
 
+function runBuiltCli(args: string[], dbPath: string, env: Record<string, string> = {}) {
+  return Bun.spawnSync({
+    cmd: ["bun", "dist/cli/index.js", ...args],
+    cwd: process.cwd(),
+    env: { ...process.env, HASNA_UPTIME_DB: dbPath, NO_COLOR: "1", ...env },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+}
+
 async function runCliAsync(args: string[], dbPath: string, env: Record<string, string> = {}) {
   const proc = Bun.spawn({
     cmd: ["bun", "run", "src/cli/index.ts", ...args],
@@ -66,6 +76,37 @@ test("CLI data commands stay local when hosted env vars are set", () => {
     expect(add.exitCode).toBe(0);
     expect(list.exitCode).toBe(0);
     expect(JSON.parse(new TextDecoder().decode(list.stdout))).toHaveLength(1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("built CLI serve rejects raw hosted token when NODE_ENV is production", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const result = runBuiltCli([
+      "serve",
+      "--mode",
+      "hosted",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "0",
+      "--hosted-sqlite-db",
+      join(dir, "hosted.db"),
+      "--allow-hosted-local-store",
+    ], dbPath, {
+      NODE_ENV: "production",
+      HASNA_UPTIME_HOSTED_AUTH_MODE: "",
+      HASNA_UPTIME_HOSTED_TOKEN: "raw-broad",
+      HASNA_UPTIME_HOSTED_TOKENS: "",
+    });
+    const stderr = new TextDecoder().decode(result.stderr);
+
+    expect(result.exitCode).toBe(1);
+    expect(stderr).toContain("scoped hosted token JSON");
+    expect(stderr).not.toContain("Open Uptime listening");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

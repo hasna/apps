@@ -404,7 +404,7 @@ function parseHostedTokenValue(value: string, defaultWorkspaceId: string, source
     return parseHostedTokensConfig(trimmed, defaultWorkspaceId, source);
   }
   if (isHostedProductionMode()) {
-    throw new ApiError(`${source} must be scoped hosted token JSON when HASNA_UPTIME_HOSTED_AUTH_MODE=production`, 500);
+    throw new ApiError(`${source} must be scoped hosted token JSON when hosted auth mode or NODE_ENV is production`, 500);
   }
   return [{
     token: trimmed,

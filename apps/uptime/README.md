@@ -107,7 +107,8 @@ Hosted tokens can be provided as a single legacy token through
 ```
 
 Use scoped JSON for hosted deployments. A single raw hosted token is kept only
-for local compatibility and expands to broad read/write/probe/report scopes.
+for local compatibility and expands to broad read/write/probe/report scopes;
+it is rejected when hosted auth mode or `NODE_ENV` is `production`.
 Endpoints that accept request bodies require `content-type: application/json`.
 
 ## Uptime Semantics

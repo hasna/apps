@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.22] - 2026-06-28
+
+### Fixed
+
+- Clarified production hosted-token errors and docs to cover both explicit
+  hosted auth production mode and `NODE_ENV=production`.
+- Added built CLI entrypoint regression coverage for packaged hosted startup
+  rejecting raw hosted tokens under `NODE_ENV=production`.
+
 ## [0.1.21] - 2026-06-28
 
 ### Fixed

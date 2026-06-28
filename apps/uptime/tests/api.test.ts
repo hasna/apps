@@ -418,8 +418,12 @@ test("hosted API rejects raw broad hosted token in production auth mode", async 
 });
 
 test("hosted API rejects raw broad hosted token when NODE_ENV is production", async () => {
+  const previousAuthMode = process.env.HASNA_UPTIME_HOSTED_AUTH_MODE;
   const previousNodeEnv = process.env.NODE_ENV;
   const previousToken = process.env.HASNA_UPTIME_HOSTED_TOKEN;
+  const previousTokens = process.env.HASNA_UPTIME_HOSTED_TOKENS;
+  delete process.env.HASNA_UPTIME_HOSTED_AUTH_MODE;
+  delete process.env.HASNA_UPTIME_HOSTED_TOKENS;
   process.env.NODE_ENV = "production";
   process.env.HASNA_UPTIME_HOSTED_TOKEN = "raw-broad";
   const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
@@ -433,16 +437,24 @@ test("hosted API rejects raw broad hosted token when NODE_ENV is production", as
     expect((await summary.json()).error).toContain("scoped hosted token JSON");
   } finally {
     service.close();
+    if (previousAuthMode === undefined) delete process.env.HASNA_UPTIME_HOSTED_AUTH_MODE;
+    else process.env.HASNA_UPTIME_HOSTED_AUTH_MODE = previousAuthMode;
     if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = previousNodeEnv;
     if (previousToken === undefined) delete process.env.HASNA_UPTIME_HOSTED_TOKEN;
     else process.env.HASNA_UPTIME_HOSTED_TOKEN = previousToken;
+    if (previousTokens === undefined) delete process.env.HASNA_UPTIME_HOSTED_TOKENS;
+    else process.env.HASNA_UPTIME_HOSTED_TOKENS = previousTokens;
   }
 });
 
 test("built API rejects raw broad hosted token when NODE_ENV is production", async () => {
+  const previousAuthMode = process.env.HASNA_UPTIME_HOSTED_AUTH_MODE;
   const previousNodeEnv = process.env.NODE_ENV;
   const previousToken = process.env.HASNA_UPTIME_HOSTED_TOKEN;
+  const previousTokens = process.env.HASNA_UPTIME_HOSTED_TOKENS;
+  delete process.env.HASNA_UPTIME_HOSTED_AUTH_MODE;
+  delete process.env.HASNA_UPTIME_HOSTED_TOKENS;
   process.env.NODE_ENV = "production";
   process.env.HASNA_UPTIME_HOSTED_TOKEN = "raw-broad";
   const dist = await import("../dist/index.js") as unknown as {
@@ -460,10 +472,14 @@ test("built API rejects raw broad hosted token when NODE_ENV is production", asy
     expect((await summary.json()).error).toContain("scoped hosted token JSON");
   } finally {
     service.close();
+    if (previousAuthMode === undefined) delete process.env.HASNA_UPTIME_HOSTED_AUTH_MODE;
+    else process.env.HASNA_UPTIME_HOSTED_AUTH_MODE = previousAuthMode;
     if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = previousNodeEnv;
     if (previousToken === undefined) delete process.env.HASNA_UPTIME_HOSTED_TOKEN;
     else process.env.HASNA_UPTIME_HOSTED_TOKEN = previousToken;
+    if (previousTokens === undefined) delete process.env.HASNA_UPTIME_HOSTED_TOKENS;
+    else process.env.HASNA_UPTIME_HOSTED_TOKENS = previousTokens;
   }
 });
 
