@@ -274,6 +274,37 @@ deterministically and uses a different verifier profile when the pool has at
 least two entries. Use `--dry-run` to inspect the rendered workflow and loop
 input without storing anything.
 
+## OpenAutomations Runtime Binding
+
+OpenLoops can be used as an execution runtime for OpenAutomations, but it does
+not own the automation product surface. `@hasna/automations` owns automation
+specs, trigger materialization, durable run/action queue rows, DLQ/replay,
+idempotency, approvals, and audit evidence. OpenLoops only executes work that
+OpenAutomations has already materialized and explicitly handed off.
+
+The SDK exposes the boundary descriptor:
+
+```ts
+import { openAutomationsRuntimeBinding } from "@hasna/loops";
+
+const binding = openAutomationsRuntimeBinding();
+console.log(binding.handoff); // "claim-queue"
+```
+
+The claim-queue handoff uses the OpenAutomations CLI or SDK:
+
+```bash
+automations queue claim --runner open-loops:<worker-id>
+automations queue complete <action-id> --runner open-loops:<worker-id>
+automations queue fail <action-id> --runner open-loops:<worker-id> --code <code> --message <message>
+```
+
+Do not store automation specs in OpenLoops, infer automation triggers from event
+transport alone, or replace the OpenAutomations queue with loop/workflow rows.
+When a loop or workflow is used for execution, keep `HASNA_AUTOMATIONS_DIR`
+pointing at the owning OpenAutomations data root and preserve the runner id in
+completion/failure calls so OpenAutomations can enforce action leases.
+
 ## Transcript-Driven Loops
 
 OpenLoops can turn long-form media or meeting transcripts into recurring workflow work when paired with `iapp-transcriber`. The template at `docs/workflows/transcript-feedback-to-loops.json` transcribes an authorized media URL, asks an agent to extract recurring loop candidates, authors workflow specs, and validates generated workflows before scheduling. Copy it into the target repo, replace `/path/to/repo` with that repo's absolute path, and provide `TRANSCRIBER_SOURCE_URL` through the runner environment or a private, uncommitted workflow copy before storing or scheduling it. Do not commit private or signed media URLs.

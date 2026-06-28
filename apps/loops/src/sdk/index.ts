@@ -1,4 +1,4 @@
-import type { CreateLoopInput, Goal, GoalRun, Loop, LoopRun } from "../types.js";
+import type { CreateLoopInput, Goal, GoalRun, Loop, LoopRun, OpenAutomationsRuntimeBinding } from "../types.js";
 import { advanceLoop, executeClaimedRun, manualRunScheduledFor, shouldAdvanceManualRun, tick } from "../lib/scheduler.js";
 import { Store } from "../lib/store.js";
 export { runGoal } from "../lib/goal/runner.js";
@@ -107,4 +107,38 @@ export class LoopsClient {
 
 export function loops(opts: LoopsClientOptions = {}): LoopsClient {
   return new LoopsClient(opts);
+}
+
+export function openAutomationsRuntimeBinding(
+  overrides: Partial<OpenAutomationsRuntimeBinding> = {},
+): OpenAutomationsRuntimeBinding {
+  const defaults: OpenAutomationsRuntimeBinding = {
+    integration: "open-automations",
+    role: "runtime",
+    handoff: "claim-queue",
+    queueOwner: "open-automations",
+    runtimeOwner: "open-loops",
+    statusCommand: "automations status",
+    claimCommand: "automations queue claim",
+    completeCommand: "automations queue complete",
+    failCommand: "automations queue fail",
+    requiredEnvironment: ["HASNA_AUTOMATIONS_DIR"],
+    guarantees: [
+      "OpenAutomations owns automation specs, run materialization, queue state, DLQ, replay, idempotency, and approvals.",
+      "OpenLoops may execute claimed actions through explicit command or SDK handoff only.",
+      "Workers must complete or fail actions by action id and runner id so OpenAutomations can enforce queue leases.",
+    ],
+    nonGoals: [
+      "OpenLoops must not become the OpenAutomations product surface.",
+      "OpenLoops must not store automation specs or replace the OpenAutomations queue.",
+      "OpenLoops must not infer automation trigger semantics from event transport alone.",
+    ],
+  };
+  return {
+    ...defaults,
+    ...overrides,
+    requiredEnvironment: overrides.requiredEnvironment ?? defaults.requiredEnvironment,
+    guarantees: overrides.guarantees ?? defaults.guarantees,
+    nonGoals: overrides.nonGoals ?? defaults.nonGoals,
+  };
 }

@@ -77,6 +77,21 @@ export interface RuntimePreflightPolicy {
   beforeRun?: boolean;
 }
 
+export interface OpenAutomationsRuntimeBinding {
+  integration: "open-automations";
+  role: "runtime";
+  handoff: "claim-queue";
+  queueOwner: "open-automations";
+  runtimeOwner: "open-loops";
+  statusCommand: "automations status";
+  claimCommand: "automations queue claim";
+  completeCommand: "automations queue complete";
+  failCommand: "automations queue fail";
+  requiredEnvironment: string[];
+  guarantees: string[];
+  nonGoals: string[];
+}
+
 export interface CommandTarget {
   type: "command";
   command: string;

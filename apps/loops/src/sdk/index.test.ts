@@ -4,9 +4,25 @@ import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { tick } from "../lib/scheduler.js";
 import { Store } from "../lib/store.js";
-import { LoopsClient } from "./index.js";
+import { LoopsClient, openAutomationsRuntimeBinding } from "./index.js";
 
 describe("loops sdk", () => {
+  test("describes the OpenAutomations runtime handoff without claiming product ownership", () => {
+    const binding = openAutomationsRuntimeBinding();
+    expect(binding).toMatchObject({
+      integration: "open-automations",
+      role: "runtime",
+      handoff: "claim-queue",
+      queueOwner: "open-automations",
+      runtimeOwner: "open-loops",
+      claimCommand: "automations queue claim",
+      completeCommand: "automations queue complete",
+      failCommand: "automations queue fail",
+    });
+    expect(binding.guarantees.join(" ")).toContain("OpenAutomations owns automation specs");
+    expect(binding.nonGoals.join(" ")).toContain("must not become the OpenAutomations product surface");
+  });
+
   test("archives and unarchives loops through the client", async () => {
     const store = new Store(":memory:");
     const client = new LoopsClient({ store, runnerId: "manual" });
