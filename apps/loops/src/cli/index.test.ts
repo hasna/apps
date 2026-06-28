@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -1255,7 +1256,7 @@ describe("loops CLI", () => {
       "--var",
       "authProfile=account005",
       "--var",
-      "sandbox=danger-full-access",
+      "sandbox=workspace-write",
     ]);
 
     expect(render.status).toBe(0);
@@ -1268,11 +1269,102 @@ describe("loops CLI", () => {
       cwd: "/tmp/repo",
       authProfile: "account005",
       permissionMode: "bypass",
-      sandbox: "danger-full-access",
+      sandbox: "workspace-write",
     });
     expect(workflow.steps[0].target.prompt).toContain("Do not dispatch or paste prompts into tmux panes");
     expect(workflow.steps[1].target.prompt).toContain("Do not dispatch or paste prompts into tmux panes");
+    expect(workflow.steps[1].target.idleTimeoutMs).toBe(600_000);
     expect(workflow.steps[1].dependsOn).toEqual(["worker"]);
+  });
+
+  test("templates fail closed for danger-full-access unless manual break-glass is explicit", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-danger-sandbox-"));
+    const rejected = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "todos-task-worker-verifier",
+      "--var",
+      "taskId=task-danger-12345678",
+      "--var",
+      "projectPath=/tmp/repo",
+      "--var",
+      "provider=codewith",
+      "--var",
+      "sandbox=danger-full-access",
+    ]);
+    expect(rejected.status).not.toBe(0);
+    expect(rejected.stderr).toContain("manual break-glass");
+
+    const allowed = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "todos-task-worker-verifier",
+      "--var",
+      "taskId=task-danger-12345678",
+      "--var",
+      "projectPath=/tmp/repo",
+      "--var",
+      "provider=codewith",
+      "--var",
+      "sandbox=danger-full-access",
+      "--var",
+      "manualBreakGlass=true",
+    ]);
+    expect(allowed.status).toBe(0);
+    const workflow = JSON.parse(allowed.stdout);
+    expect(workflow.steps[0].target.sandbox).toBe("danger-full-access");
+    expect(workflow.steps[0].target.allowlist.commands).toContain("manual-break-glass");
+  });
+
+  test("templates render lifecycle and deterministic producer workflows", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-lifecycle-"));
+    const repo = createGitRepo("loops-cli-template-lifecycle-repo-");
+    const list = runCli(dataDir, ["--json", "templates", "list"]);
+    expect(list.status).toBe(0);
+    const ids = JSON.parse(list.stdout).map((template: { id: string }) => template.id);
+    expect(ids).toEqual(expect.arrayContaining([
+      "task-lifecycle",
+      "pr-review",
+      "scheduled-audit",
+      "knowledge-refresh",
+      "report-only",
+      "incident-response",
+      "deterministic-check-create-task",
+    ]));
+
+    const prReview = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "pr-review",
+      "--var",
+      "prUrl=https://github.com/hasna/loops/pull/123",
+      "--var",
+      `projectPath=${repo}`,
+    ]);
+    expect(prReview.status).toBe(0);
+    const prWorkflow = JSON.parse(prReview.stdout);
+    expect(prWorkflow.name).toContain("pr-review");
+    expect(prWorkflow.steps.map((step: { id: string }) => step.id)).toEqual(["prepare-worktree", "worker", "verifier"]);
+    expect(prWorkflow.steps[1].target.worktree.mode).toBe("required");
+
+    const deterministic = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "deterministic-check-create-task",
+      "--var",
+      `projectPath=${repo}`,
+      "--var",
+      "checkCommand=echo ok",
+    ]);
+    expect(deterministic.status).toBe(0);
+    const deterministicWorkflow = JSON.parse(deterministic.stdout);
+    expect(deterministicWorkflow.steps).toHaveLength(1);
+    expect(deterministicWorkflow.steps[0].target.type).toBe("command");
+    expect(deterministicWorkflow.steps[0].target.args).toEqual(["-lc", "echo ok"]);
   });
 
   test("templates select different worker and verifier auth profiles from a pool", () => {
@@ -1473,7 +1565,7 @@ describe("loops CLI", () => {
       "--var",
       "authProfilePool=account004,account005",
       "--var",
-      "sandbox=danger-full-access",
+      "sandbox=workspace-write",
     ]);
 
     expect(render.status).toBe(0);
@@ -1571,7 +1663,7 @@ describe("loops CLI", () => {
       "--auth-profile-pool",
       "account004,account005,account006",
       "--sandbox",
-      "danger-full-access",
+      "workspace-write",
       "--permission-mode",
       "bypass",
     ];
@@ -1593,7 +1685,7 @@ describe("loops CLI", () => {
         provider: "codewith",
         cwd: "/tmp/open-todos",
         permissionMode: "bypass",
-        sandbox: "danger-full-access",
+        sandbox: "workspace-write",
       });
       expect(["account004", "account005", "account006"]).toContain(step.target.authProfile);
     }
@@ -1639,6 +1731,123 @@ describe("loops CLI", () => {
     expect(shownValue.item.id).toBe(createdValue.workItem.id);
     expect(shownValue.invocation.id).toBe(createdValue.invocation.id);
     expect(shownValue.loop.id).toBe(createdValue.loop.id);
+  });
+
+  test("routes preview, create, and schedule expose first-class route lifecycle commands", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-routes-lifecycle-"));
+    const event = {
+      id: "evt-routes-lifecycle-0001",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-routes-lifecycle-0001",
+        title: "Route from routes command",
+        working_dir: "/tmp/open-loops",
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const preview = runCli(dataDir, [
+      "--json",
+      "routes",
+      "preview",
+      "todos-task",
+      "--event-json",
+      JSON.stringify(event),
+      "--sandbox",
+      "workspace-write",
+    ]);
+    expect(preview.status).toBe(0);
+    const previewValue = JSON.parse(preview.stdout);
+    expect(previewValue.loop.workflowId).toBeUndefined();
+    expect(previewValue.sandboxPreflight[0].method).toBe("provider-native-sandbox");
+
+    const created = runCli(dataDir, [
+      "--json",
+      "routes",
+      "create",
+      "todos-task",
+      "--event-json",
+      JSON.stringify(event),
+      "--sandbox",
+      "workspace-write",
+    ]);
+    expect(created.status).toBe(0);
+    const createdValue = JSON.parse(created.stdout);
+    expect(createdValue.workItem.status).toBe("admitted");
+    expect(createdValue.loop.target.input.workflowWorkItemId).toBe(createdValue.workItem.id);
+
+    const scheduled = runCli(dataDir, [
+      "--json",
+      "routes",
+      "schedule",
+      "todos-task",
+      "route-drain-test",
+      "--every",
+      "5m",
+      "--task-list",
+      "oss",
+      "--max-dispatch",
+      "2",
+      "--sandbox",
+      "workspace-write",
+    ]);
+    expect(scheduled.status).toBe(0);
+    const loop = JSON.parse(scheduled.stdout);
+    expect(loop.name).toBe("route-drain-test");
+    expect(loop.target.command).toBe("loops");
+    expect(loop.target.args).toEqual(expect.arrayContaining(["events", "drain", "todos-task", "--task-list", "oss", "--max-dispatch", "2"]));
+  });
+
+  test("routes create rejects a persisted unsafe workflow with the same generated name", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-routes-unsafe-existing-"));
+    const event = {
+      id: "evt-routes-unsafe-existing-0001",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-routes-unsafe-existing-0001",
+        title: "Unsafe existing route workflow",
+        working_dir: "/tmp/open-loops",
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+    const suffix = createHash("sha256").update("todos-task:task-routes-unsafe-existing-0001:task.created").digest("hex").slice(0, 12);
+    const workflowName = `event:todos-task:task-rou:${suffix}:workflow`;
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      store.createWorkflow({
+        name: workflowName,
+        steps: [
+          {
+            id: "worker",
+            target: {
+              type: "agent",
+              provider: "codewith",
+              prompt: "unsafe old workflow",
+              sandbox: "danger-full-access",
+            },
+          },
+        ],
+      });
+    } finally {
+      store.close();
+    }
+
+    const result = runCli(dataDir, [
+      "--json",
+      "routes",
+      "create",
+      "todos-task",
+      "--event-json",
+      JSON.stringify(event),
+      "--sandbox",
+      "workspace-write",
+    ]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("manual break-glass");
   });
 
   test("todos task event handler dry-run exposes default worktree routing for git repos", () => {
@@ -2554,7 +2763,7 @@ describe("loops CLI", () => {
         "--verifier-auth-profile",
         "account006",
         "--sandbox",
-        "danger-full-access",
+        "workspace-write",
         "--permission-mode",
         "bypass",
       ],
@@ -2713,7 +2922,7 @@ describe("loops CLI", () => {
       "--auth-profile-pool",
       "account004,account005,account006",
       "--sandbox",
-      "danger-full-access",
+      "workspace-write",
       "--permission-mode",
       "bypass",
     ];

@@ -106,6 +106,7 @@ export interface CommandTarget {
   shell?: boolean;
   env?: Record<string, string>;
   timeoutMs?: number;
+  idleTimeoutMs?: number;
   account?: AccountRef;
   preflight?: RuntimePreflightPolicy;
 }
@@ -158,6 +159,7 @@ export interface AgentTarget {
   authProfile?: string;
   extraArgs?: string[];
   timeoutMs?: number;
+  idleTimeoutMs?: number;
   configIsolation?: AgentConfigIsolation;
   permissionMode?: AgentPermissionMode;
   sandbox?: AgentSandbox;

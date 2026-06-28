@@ -17,6 +17,13 @@ import type {
 export const TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID = "todos-task-worker-verifier";
 export const EVENT_WORKER_VERIFIER_TEMPLATE_ID = "event-worker-verifier";
 export const BOUNDED_AGENT_WORKER_VERIFIER_TEMPLATE_ID = "bounded-agent-worker-verifier";
+export const TASK_LIFECYCLE_TEMPLATE_ID = "task-lifecycle";
+export const PR_REVIEW_TEMPLATE_ID = "pr-review";
+export const SCHEDULED_AUDIT_TEMPLATE_ID = "scheduled-audit";
+export const KNOWLEDGE_REFRESH_TEMPLATE_ID = "knowledge-refresh";
+export const REPORT_ONLY_TEMPLATE_ID = "report-only";
+export const INCIDENT_RESPONSE_TEMPLATE_ID = "incident-response";
+export const DETERMINISTIC_CHECK_CREATE_TASK_TEMPLATE_ID = "deterministic-check-create-task";
 
 export interface TodosTaskWorkflowTemplateInput {
   taskId: string;
@@ -39,6 +46,7 @@ export interface TodosTaskWorkflowTemplateInput {
   agent?: string;
   permissionMode?: AgentPermissionMode;
   sandbox?: AgentSandbox;
+  manualBreakGlass?: boolean;
   worktreeMode?: AgentWorktreeMode;
   worktreeRoot?: string;
   worktreeBranchPrefix?: string;
@@ -70,6 +78,7 @@ export interface EventWorkflowTemplateInput {
   agent?: string;
   permissionMode?: AgentPermissionMode;
   sandbox?: AgentSandbox;
+  manualBreakGlass?: boolean;
   worktreeMode?: AgentWorktreeMode;
   worktreeRoot?: string;
   worktreeBranchPrefix?: string;
@@ -96,6 +105,7 @@ export interface BoundedAgentWorkflowTemplateInput {
   agent?: string;
   permissionMode?: AgentPermissionMode;
   sandbox?: AgentSandbox;
+  manualBreakGlass?: boolean;
   worktreeMode?: AgentWorktreeMode;
   worktreeRoot?: string;
   worktreeBranchPrefix?: string;
@@ -124,7 +134,8 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "model", description: "Provider model." },
       { name: "variant", description: "Provider reasoning/model effort variant." },
       { name: "permissionMode", default: "bypass", description: "Provider permission mode: default, plan, auto, or bypass." },
-      { name: "sandbox", default: "danger-full-access", description: "Provider sandbox mode." },
+      { name: "sandbox", default: "workspace-write", description: "Provider sandbox mode." },
+      { name: "manualBreakGlass", default: "false", description: "Allow explicit danger-full-access in a generated workflow. Intended for manual emergency use only." },
       { name: "worktreeMode", default: "auto", description: "Worktree isolation mode: auto, required, off, or main." },
       { name: "worktreeRoot", default: "~/.hasna/loops/worktrees", description: "Base directory for OpenLoops-managed git worktrees." },
       { name: "worktreeBranchPrefix", default: "openloops", description: "Branch prefix for generated task/event worktree branches." },
@@ -153,7 +164,8 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "model", description: "Provider model." },
       { name: "variant", description: "Provider reasoning/model effort variant." },
       { name: "permissionMode", default: "bypass", description: "Provider permission mode: default, plan, auto, or bypass." },
-      { name: "sandbox", default: "danger-full-access", description: "Provider sandbox mode." },
+      { name: "sandbox", default: "workspace-write", description: "Provider sandbox mode." },
+      { name: "manualBreakGlass", default: "false", description: "Allow explicit danger-full-access in a generated workflow. Intended for manual emergency use only." },
       { name: "worktreeMode", default: "auto", description: "Worktree isolation mode: auto, required, off, or main." },
       { name: "worktreeRoot", default: "~/.hasna/loops/worktrees", description: "Base directory for OpenLoops-managed git worktrees." },
       { name: "worktreeBranchPrefix", default: "openloops", description: "Branch prefix for generated event worktree branches." },
@@ -180,11 +192,118 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "model", description: "Provider model." },
       { name: "variant", description: "Provider reasoning/model effort variant." },
       { name: "permissionMode", default: "bypass", description: "Provider permission mode: default, plan, auto, or bypass." },
-      { name: "sandbox", default: "danger-full-access", description: "Provider sandbox mode." },
+      { name: "sandbox", default: "workspace-write", description: "Provider sandbox mode." },
+      { name: "manualBreakGlass", default: "false", description: "Allow explicit danger-full-access in a generated workflow. Intended for manual emergency use only." },
       { name: "worktreeMode", default: "auto", description: "Worktree isolation mode: auto, required, off, or main." },
       { name: "worktreeRoot", default: "~/.hasna/loops/worktrees", description: "Base directory for OpenLoops-managed git worktrees." },
       { name: "worktreeBranchPrefix", default: "openloops", description: "Branch prefix for generated bounded-agent worktree branches." },
       { name: "timeoutMs", default: "2700000", description: "Step timeout in milliseconds." },
+    ],
+  },
+  {
+    id: TASK_LIFECYCLE_TEMPLATE_ID,
+    name: "Task Lifecycle",
+    description:
+      "Run the standard task-created lifecycle: triage/dedupe, plan, worker execution, independent verification, and todos closure/follow-up evidence.",
+    kind: "workflow",
+    variables: [
+      { name: "taskId", required: true, description: "Todos task id." },
+      { name: "projectPath", required: true, description: "Repository or project working directory." },
+      { name: "authProfilePool", description: "Comma-separated Codewith profiles for worker/verifier rotation." },
+      { name: "accountPool", description: "Comma-separated OpenAccounts profiles for non-Codewith providers." },
+      { name: "provider", default: "codewith", description: "Agent provider." },
+      { name: "sandbox", default: "workspace-write", description: "Provider sandbox mode." },
+      { name: "worktreeMode", default: "required", description: "Worktree isolation mode." },
+    ],
+  },
+  {
+    id: PR_REVIEW_TEMPLATE_ID,
+    name: "PR Review",
+    description:
+      "Review and drive a pull request toward merge-ready state with a worker and fresh adversarial verifier.",
+    kind: "workflow",
+    variables: [
+      { name: "prUrl", description: "Pull request URL." },
+      { name: "prNumber", description: "Pull request number." },
+      { name: "projectPath", required: true, description: "Repository working directory." },
+      { name: "authProfilePool", description: "Comma-separated Codewith profiles for worker/verifier rotation." },
+      { name: "provider", default: "codewith", description: "Agent provider." },
+      { name: "sandbox", default: "workspace-write", description: "Provider sandbox mode." },
+      { name: "worktreeMode", default: "required", description: "Worktree isolation mode." },
+    ],
+  },
+  {
+    id: SCHEDULED_AUDIT_TEMPLATE_ID,
+    name: "Scheduled Audit",
+    description:
+      "Run a bounded scheduled audit, record evidence, create follow-up tasks for actionable findings, then verify the audit result.",
+    kind: "workflow",
+    variables: [
+      { name: "objective", required: true, description: "Audit objective." },
+      { name: "projectPath", required: true, description: "Repository or project working directory." },
+      { name: "authProfilePool", description: "Comma-separated Codewith profiles for worker/verifier rotation." },
+      { name: "provider", default: "codewith", description: "Agent provider." },
+      { name: "sandbox", default: "workspace-write", description: "Provider sandbox mode." },
+      { name: "worktreeMode", default: "required", description: "Worktree isolation mode." },
+    ],
+  },
+  {
+    id: KNOWLEDGE_REFRESH_TEMPLATE_ID,
+    name: "Knowledge Refresh",
+    description:
+      "Review recent knowledge, improve structure/schema where needed, create deduped tasks for code changes, and verify the knowledge update.",
+    kind: "workflow",
+    variables: [
+      { name: "scope", description: "Knowledge scope or label to refresh." },
+      { name: "projectPath", required: true, description: "Repository or project working directory." },
+      { name: "authProfilePool", description: "Comma-separated Codewith profiles for worker/verifier rotation." },
+      { name: "provider", default: "codewith", description: "Agent provider." },
+      { name: "sandbox", default: "workspace-write", description: "Provider sandbox mode." },
+      { name: "worktreeMode", default: "required", description: "Worktree isolation mode." },
+    ],
+  },
+  {
+    id: REPORT_ONLY_TEMPLATE_ID,
+    name: "Report Only",
+    description:
+      "Produce a bounded report without mutating repositories; verifier checks evidence, scope, and absence of unauthorized changes.",
+    kind: "workflow",
+    variables: [
+      { name: "objective", required: true, description: "Report objective." },
+      { name: "projectPath", required: true, description: "Repository or project working directory." },
+      { name: "authProfilePool", description: "Comma-separated Codewith profiles for worker/verifier rotation." },
+      { name: "provider", default: "codewith", description: "Agent provider." },
+      { name: "sandbox", default: "read-only", description: "Provider sandbox mode." },
+      { name: "worktreeMode", default: "main", description: "Report-only workflows normally inspect the main checkout read-only." },
+    ],
+  },
+  {
+    id: INCIDENT_RESPONSE_TEMPLATE_ID,
+    name: "Incident Response",
+    description:
+      "Triage an incident, gather bounded evidence, apply only allowed narrow mitigation, create follow-up tasks, and verify the response.",
+    kind: "workflow",
+    variables: [
+      { name: "incidentId", description: "Incident or task id." },
+      { name: "objective", required: true, description: "Incident response objective." },
+      { name: "projectPath", required: true, description: "Repository or project working directory." },
+      { name: "authProfilePool", description: "Comma-separated Codewith profiles for worker/verifier rotation." },
+      { name: "provider", default: "codewith", description: "Agent provider." },
+      { name: "sandbox", default: "workspace-write", description: "Provider sandbox mode." },
+      { name: "worktreeMode", default: "required", description: "Worktree isolation mode." },
+    ],
+  },
+  {
+    id: DETERMINISTIC_CHECK_CREATE_TASK_TEMPLATE_ID,
+    name: "Deterministic Check Create Task",
+    description:
+      "Run a deterministic check command that writes compact evidence and upserts one deduped todos task when its expectation is not met.",
+    kind: "workflow",
+    variables: [
+      { name: "checkCommand", required: true, description: "Shell command that performs the check and task upsert." },
+      { name: "projectPath", required: true, description: "Repository or project working directory." },
+      { name: "name", description: "Workflow name." },
+      { name: "timeoutMs", default: "300000", description: "Check timeout in milliseconds." },
     ],
   },
 ];
@@ -217,6 +336,7 @@ type AgentWorkflowTemplateInput = Pick<
   | "agent"
   | "permissionMode"
   | "sandbox"
+  | "manualBreakGlass"
   | "worktreeMode"
   | "worktreeRoot"
   | "worktreeBranchPrefix"
@@ -460,6 +580,15 @@ function assertNativeAuthProfileSupport(input: AgentWorkflowTemplateInput, provi
   );
 }
 
+function failClosedSandbox(input: AgentWorkflowTemplateInput, provider: AgentProvider, sandbox: AgentSandbox | undefined): void {
+  if (!["codewith", "codex"].includes(provider)) return;
+  if (sandbox !== "danger-full-access") return;
+  if (input.manualBreakGlass) return;
+  throw new Error(
+    "danger-full-access is manual break-glass only for generated worker/verifier workflows; use sandbox=workspace-write or set manualBreakGlass=true with explicit operator approval",
+  );
+}
+
 function agentTarget(
   input: AgentWorkflowTemplateInput,
   prompt: string,
@@ -472,10 +601,11 @@ function agentTarget(
   const sandbox =
     input.sandbox ??
     (provider === "codewith" || provider === "codex"
-      ? "danger-full-access"
+      ? "workspace-write"
       : provider === "cursor"
-        ? "disabled"
+        ? "enabled"
         : undefined);
+  failClosedSandbox(input, provider, sandbox);
   return {
     type: "agent",
     provider,
@@ -499,6 +629,7 @@ function agentTarget(
       branch: plan.branch,
       reason: plan.reason,
     },
+    allowlist: input.manualBreakGlass ? { enforcement: "metadata_only", commands: ["manual-break-glass"] } : undefined,
     routing: {
       projectPath: input.routeProjectPath ?? input.projectPath,
       ...(input.projectGroup ? { projectGroup: input.projectGroup } : {}),
@@ -590,7 +721,10 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
         name: "Verifier",
         description: "Adversarially verify worker output and update todos.",
         dependsOn: ["worker"],
-        target: agentTarget(input, verifierPrompt, "verifier", input.taskId, plan),
+        target: {
+          ...agentTarget(input, verifierPrompt, "verifier", input.taskId, plan),
+          idleTimeoutMs: 10 * 60_000,
+        },
         timeoutMs: 30 * 60_000,
       },
     ]),
@@ -663,7 +797,10 @@ export function renderEventWorkerVerifierWorkflow(input: EventWorkflowTemplateIn
         name: "Verifier",
         description: "Adversarially verify event handling.",
         dependsOn: ["worker"],
-        target: agentTarget(input, verifierPrompt, "verifier", seed, plan),
+        target: {
+          ...agentTarget(input, verifierPrompt, "verifier", seed, plan),
+          idleTimeoutMs: 10 * 60_000,
+        },
         timeoutMs: 30 * 60_000,
       },
     ]),
@@ -712,14 +849,152 @@ export function renderBoundedAgentWorkerVerifierWorkflow(input: BoundedAgentWork
         name: "Verifier",
         description: "Adversarially verify the bounded objective result.",
         dependsOn: ["worker"],
-        target: agentTarget(input, verifierPrompt, "verifier", seed, plan),
+        target: {
+          ...agentTarget(input, verifierPrompt, "verifier", seed, plan),
+          idleTimeoutMs: 10 * 60_000,
+        },
         timeoutMs: Math.min(timeoutMs, 30 * 60_000),
       },
     ]),
   };
 }
 
+function renderLifecycleBoundedTemplate(id: string, values: Record<string, string | undefined>): CreateWorkflowInput | undefined {
+  const projectPath = values.projectPath ?? values.cwd ?? process.cwd();
+  const common = {
+    name: values.name,
+    projectPath,
+    routeProjectPath: values.routeProjectPath,
+    projectGroup: values.projectGroup,
+    provider: values.provider as AgentProvider | undefined,
+    authProfile: values.authProfile,
+    authProfilePool: listVar(values.authProfilePool),
+    workerAuthProfile: values.workerAuthProfile,
+    verifierAuthProfile: values.verifierAuthProfile,
+    account: values.account ? { profile: values.account, tool: values.accountTool } : undefined,
+    accountPool: accountPoolVar(values.accountPool, values.accountTool),
+    model: values.model,
+    variant: values.variant,
+    agent: values.agent,
+    permissionMode: values.permissionMode as AgentPermissionMode | undefined,
+    sandbox: values.sandbox as AgentSandbox | undefined,
+    manualBreakGlass: booleanVar(values.manualBreakGlass),
+    worktreeMode: (values.worktreeMode as AgentWorktreeMode | undefined) ?? (id === REPORT_ONLY_TEMPLATE_ID ? "main" : "required"),
+    worktreeRoot: values.worktreeRoot,
+    worktreeBranchPrefix: values.worktreeBranchPrefix,
+    timeoutMs: values.timeoutMs ? Number(values.timeoutMs) : undefined,
+  };
+  if (id === TASK_LIFECYCLE_TEMPLATE_ID) {
+    const taskId = values.taskId ?? "";
+    if (!taskId.trim()) throw new Error("taskId is required");
+    return renderBoundedAgentWorkerVerifierWorkflow({
+      ...common,
+      name: values.name ?? `task-lifecycle-${slugSegment(taskId)}-worker-verifier`,
+      objective: values.objective ?? `Run the full task lifecycle for todos task ${taskId}.`,
+      prompt:
+        values.prompt ??
+        "Triage and dedupe the task, verify it is eligible for loop execution, create or update a concise plan artifact/comment, execute only the allowed scope, validate, record evidence, and let the verifier decide final task state. Add follow-up tasks instead of broadening scope.",
+    });
+  }
+  if (id === PR_REVIEW_TEMPLATE_ID) {
+    const pr = values.prUrl ?? values.prNumber ?? "";
+    if (!pr.trim()) throw new Error("prUrl or prNumber is required");
+    return renderBoundedAgentWorkerVerifierWorkflow({
+      ...common,
+      name: values.name ?? `pr-review-${slugSegment(pr)}-worker-verifier`,
+      objective: values.objective ?? `Review and drive PR ${pr} toward merge-ready state.`,
+      prompt:
+        values.prompt ??
+        "Inspect PR state, checks, conflicts, branch freshness, review requirements, and repo policy. Apply only owned logical fixes in the isolated worktree, validate, update the PR/task with evidence, and do not merge unless policy/checks make it clearly safe.",
+    });
+  }
+  if (id === SCHEDULED_AUDIT_TEMPLATE_ID) {
+    const objective = values.objective ?? "";
+    if (!objective.trim()) throw new Error("objective is required");
+    return renderBoundedAgentWorkerVerifierWorkflow({
+      ...common,
+      name: values.name ?? `scheduled-audit-${stableIndex(`${projectPath}:${objective}`, 0xffffffff).toString(16).padStart(8, "0")}-worker-verifier`,
+      objective,
+      prompt:
+        values.prompt ??
+        "Run the bounded audit, write compact evidence, create deduped todos tasks for actionable issues, and avoid implementation unless the task explicitly allows it.",
+    });
+  }
+  if (id === KNOWLEDGE_REFRESH_TEMPLATE_ID) {
+    const scope = values.scope ?? values.label ?? "recent knowledge";
+    return renderBoundedAgentWorkerVerifierWorkflow({
+      ...common,
+      name: values.name ?? `knowledge-refresh-${slugSegment(scope)}-worker-verifier`,
+      objective: values.objective ?? `Refresh and verify ${scope}.`,
+      prompt:
+        values.prompt ??
+        "Inspect recent knowledge records, improve structure/schema where appropriate, avoid duplicates, create tasks for code changes instead of doing unrelated implementation, and record verification evidence.",
+    });
+  }
+  if (id === REPORT_ONLY_TEMPLATE_ID) {
+    const objective = values.objective ?? "";
+    if (!objective.trim()) throw new Error("objective is required");
+    return renderBoundedAgentWorkerVerifierWorkflow({
+      ...common,
+      name: values.name ?? `report-only-${stableIndex(`${projectPath}:${objective}`, 0xffffffff).toString(16).padStart(8, "0")}-worker-verifier`,
+      objective,
+      prompt:
+        values.prompt ??
+        "Produce a report only. Do not mutate repositories, tasks, secrets, databases, or external systems except for writing the requested report/evidence artifact.",
+    });
+  }
+  if (id === INCIDENT_RESPONSE_TEMPLATE_ID) {
+    const objective = values.objective ?? "";
+    if (!objective.trim()) throw new Error("objective is required");
+    const incident = values.incidentId ?? values.taskId ?? "incident";
+    return renderBoundedAgentWorkerVerifierWorkflow({
+      ...common,
+      name: values.name ?? `incident-response-${slugSegment(incident)}-worker-verifier`,
+      objective,
+      prompt:
+        values.prompt ??
+        "Triage first, gather bounded evidence, mitigate only narrow allowed issues, preserve data/history/secrets, create follow-up tasks for larger fixes, and require verifier confirmation before closure.",
+    });
+  }
+  return undefined;
+}
+
+function renderDeterministicCheckCreateTaskWorkflow(values: Record<string, string | undefined>): CreateWorkflowInput {
+  const projectPath = values.projectPath ?? values.cwd ?? process.cwd();
+  const checkCommand = values.checkCommand ?? "";
+  if (!checkCommand.trim()) throw new Error("checkCommand is required");
+  const seed = `${projectPath}:${checkCommand}`;
+  return {
+    name: values.name ?? `deterministic-check-${stableIndex(seed, 0xffffffff).toString(16).padStart(8, "0")}`,
+    description:
+      values.description ??
+      "Deterministic check that writes compact evidence and upserts one deduped todos task when the expectation is not met.",
+    version: 1,
+    steps: [
+      {
+        id: "check",
+        name: "Check",
+        description: "Run the deterministic check/task-upsert command.",
+        target: {
+          type: "command",
+          command: "bash",
+          args: ["-lc", checkCommand],
+          cwd: projectPath,
+          timeoutMs: values.timeoutMs ? Number(values.timeoutMs) : 5 * 60_000,
+          idleTimeoutMs: values.idleTimeoutMs ? Number(values.idleTimeoutMs) : 60_000,
+        },
+        timeoutMs: values.timeoutMs ? Number(values.timeoutMs) : 5 * 60_000,
+      },
+    ],
+  };
+}
+
 export function renderLoopTemplate(id: string, values: Record<string, string | undefined>): CreateWorkflowInput {
+  if (id === DETERMINISTIC_CHECK_CREATE_TASK_TEMPLATE_ID) {
+    return renderDeterministicCheckCreateTaskWorkflow(values);
+  }
+  const lifecycle = renderLifecycleBoundedTemplate(id, values);
+  if (lifecycle) return lifecycle;
   if (id === TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID) {
     return renderTodosTaskWorkerVerifierWorkflow({
       taskId: values.taskId ?? "",
@@ -740,6 +1015,7 @@ export function renderLoopTemplate(id: string, values: Record<string, string | u
       agent: values.agent,
       permissionMode: values.permissionMode as AgentPermissionMode | undefined,
       sandbox: values.sandbox as AgentSandbox | undefined,
+      manualBreakGlass: booleanVar(values.manualBreakGlass),
       worktreeMode: values.worktreeMode as AgentWorktreeMode | undefined,
       worktreeRoot: values.worktreeRoot,
       worktreeBranchPrefix: values.worktreeBranchPrefix,
@@ -770,6 +1046,7 @@ export function renderLoopTemplate(id: string, values: Record<string, string | u
       agent: values.agent,
       permissionMode: values.permissionMode as AgentPermissionMode | undefined,
       sandbox: values.sandbox as AgentSandbox | undefined,
+      manualBreakGlass: booleanVar(values.manualBreakGlass),
       worktreeMode: values.worktreeMode as AgentWorktreeMode | undefined,
       worktreeRoot: values.worktreeRoot,
       worktreeBranchPrefix: values.worktreeBranchPrefix,
@@ -795,6 +1072,7 @@ export function renderLoopTemplate(id: string, values: Record<string, string | u
       agent: values.agent,
       permissionMode: values.permissionMode as AgentPermissionMode | undefined,
       sandbox: values.sandbox as AgentSandbox | undefined,
+      manualBreakGlass: booleanVar(values.manualBreakGlass),
       worktreeMode: values.worktreeMode as AgentWorktreeMode | undefined,
       worktreeRoot: values.worktreeRoot,
       worktreeBranchPrefix: values.worktreeBranchPrefix,
@@ -810,6 +1088,14 @@ function listVar(value: string | undefined): string[] | undefined {
     .map((entry) => entry.trim())
     .filter(Boolean);
   return values?.length ? values : undefined;
+}
+
+function booleanVar(value: string | undefined): boolean | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off", ""].includes(normalized)) return false;
+  throw new Error(`expected boolean value, got ${value}`);
 }
 
 function accountPoolVar(value: string | undefined, tool?: string): AccountRef[] | undefined {

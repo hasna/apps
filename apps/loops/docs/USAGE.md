@@ -108,7 +108,7 @@ loops create agent supply-chain-watch \
   --provider codewith \
   --every 15m \
   --cwd /path/to/repo \
-  --sandbox danger-full-access \
+  --sandbox workspace-write \
   --prompt "Check for suspicious dependency or supply-chain changes. Report only concrete findings."
 ```
 
@@ -120,7 +120,7 @@ loops create agent supply-chain-watch \
   --auth-profile account001 \
   --every 15m \
   --cwd /path/to/repo \
-  --sandbox danger-full-access \
+  --sandbox workspace-write \
   --prompt "Check for suspicious dependency or supply-chain changes. Report only concrete findings."
 ```
 
@@ -216,6 +216,9 @@ Built-in templates turn common orchestration flows into reusable workflow JSON.
 `event-worker-verifier` handles any Hasna event envelope and then verifies the
 handling. `bounded-agent-worker-verifier` is for recurring bounded agent work:
 one worker runs a narrow objective, then a fresh verifier audits the result.
+The catalog also includes `task-lifecycle`, `pr-review`, `scheduled-audit`,
+`knowledge-refresh`, `report-only`, `incident-response`, and
+`deterministic-check-create-task` for common operator workflows.
 
 ```bash
 loops templates list
@@ -225,7 +228,7 @@ loops templates render todos-task-worker-verifier \
   --var projectPath=/path/to/repo \
   --var provider=codewith \
   --var authProfilePool=account004,account005,account006 \
-  --var sandbox=danger-full-access
+  --var sandbox=workspace-write
 loops templates create-workflow todos-task-worker-verifier \
   --var taskId=<task-id> \
   --var projectPath=/path/to/repo
@@ -240,7 +243,13 @@ loops templates render bounded-agent-worker-verifier \
   --var projectPath=/path/to/repo \
   --var provider=codewith \
   --var authProfilePool=account004,account005 \
-  --var sandbox=danger-full-access
+  --var sandbox=workspace-write
+loops templates render pr-review \
+  --var prUrl=https://github.com/hasna/loops/pull/123 \
+  --var projectPath=/path/to/repo
+loops templates render deterministic-check-create-task \
+  --var projectPath=/path/to/repo \
+  --var checkCommand='your deterministic check and todos upsert command'
 ```
 
 Repo-mutating task/event routes should set `worktreeMode=required` so the
@@ -276,7 +285,7 @@ cat task-created-event.json | loops events handle todos-task \
   --provider codewith \
   --auth-profile-pool account004,account005,account006 \
   --permission-mode bypass \
-  --sandbox danger-full-access \
+  --sandbox workspace-write \
   --worktree-mode required
 ```
 
@@ -316,6 +325,10 @@ store can create or migrate the local database.
 Inspect route state with:
 
 ```bash
+cat task-created-event.json | loops routes preview todos-task --sandbox workspace-write
+cat task-created-event.json | loops routes create todos-task --sandbox workspace-write
+loops routes drain todos-task --task-list oss --max-dispatch 2 --compact
+loops routes schedule todos-task route-drain-oss-5m --every 5m --task-list oss --max-dispatch 1 --compact
 loops routes list --route-key todos-task
 loops routes show <work-item-id>
 loops routes invocations
@@ -375,7 +388,7 @@ cat event.json | loops events handle generic \
   --provider codewith \
   --auth-profile-pool account004,account005,account006 \
   --permission-mode bypass \
-  --sandbox danger-full-access \
+  --sandbox workspace-write \
   --project-path /path/to/repo \
   --worktree-mode required
 ```
@@ -389,6 +402,11 @@ and uses a different verifier profile when the pool has at least two entries.
 Use `--dry-run` to inspect the rendered invocation, work item, workflow, and
 loop input without storing anything, including the worktree path and branch for
 git-backed tasks.
+
+Generated worker/verifier workflows fail closed when `sandbox=danger-full-access`
+is requested without `manualBreakGlass=true`. Use `workspace-write` for
+unattended task/event routes. Full access is an explicit manual emergency path,
+not a default automation mode.
 
 ## Transcript-Driven Loops
 

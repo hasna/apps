@@ -37,6 +37,30 @@ describe("executeLoop", () => {
     }
   });
 
+  test("times out silent commands with idleTimeoutMs", async () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "idle-timeout",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "command",
+          command: "sleep 5",
+          shell: true,
+          timeoutMs: 10_000,
+          idleTimeoutMs: 50,
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run);
+      expect(result.status).toBe("timed_out");
+      expect(result.error).toContain("idle timed out");
+    } finally {
+      store.close();
+    }
+  });
+
   test("routes machine-assigned command loops through remote transport", async () => {
     const store = new Store(":memory:");
     const root = mkdtempSync(join(tmpdir(), "loops-remote-command-"));

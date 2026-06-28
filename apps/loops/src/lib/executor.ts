@@ -60,6 +60,7 @@ interface CommandSpec {
   shell?: boolean;
   env?: Record<string, string>;
   timeoutMs: number;
+  idleTimeoutMs?: number;
   account?: AccountRef;
   accountTool?: string;
   nativeAuthProfile?: {
@@ -356,6 +357,7 @@ function commandSpec(target: ExecutableTarget): CommandSpec {
       shell: commandTarget.shell,
       env: commandTarget.env,
       timeoutMs: commandTarget.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      idleTimeoutMs: commandTarget.idleTimeoutMs,
       account: commandTarget.account,
       accountTool: commandTarget.account?.tool,
     };
@@ -366,6 +368,7 @@ function commandSpec(target: ExecutableTarget): CommandSpec {
     args: agentArgs(agentTarget),
     cwd: agentTarget.cwd,
     timeoutMs: agentTarget.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    idleTimeoutMs: agentTarget.idleTimeoutMs,
     account: agentTarget.account,
     accountTool: agentTarget.account?.tool ?? accountToolForProvider(agentTarget.provider),
     nativeAuthProfile: agentTarget.authProfile
@@ -556,6 +559,7 @@ async function executeRemoteSpec(
   let stdout = "";
   let stderr = "";
   let timedOut = false;
+  let idleTimedOut = false;
   let exitCode: number | undefined;
   let error: string | undefined;
   let plan: MachineCommandPlan;
@@ -595,18 +599,31 @@ async function executeRemoteSpec(
   if (opts.signal?.aborted) abortHandler();
   opts.signal?.addEventListener("abort", abortHandler, { once: true });
 
-  child.stdout?.on("data", (chunk: Buffer) => {
-    stdout = appendBounded(stdout, chunk, maxOutputBytes);
-  });
-  child.stderr?.on("data", (chunk: Buffer) => {
-    stderr = appendBounded(stderr, chunk, maxOutputBytes);
-  });
-
   const timer = setTimeout(() => {
     timedOut = true;
     if (child.pid) killProcessGroup(child.pid);
   }, spec.timeoutMs);
   timer.unref();
+  let idleTimer: NodeJS.Timeout | undefined;
+  const resetIdleTimer = (): void => {
+    if (!spec.idleTimeoutMs) return;
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      idleTimedOut = true;
+      if (child.pid) killProcessGroup(child.pid);
+    }, spec.idleTimeoutMs);
+    idleTimer.unref();
+  };
+  resetIdleTimer();
+
+  child.stdout?.on("data", (chunk: Buffer) => {
+    stdout = appendBounded(stdout, chunk, maxOutputBytes);
+    resetIdleTimer();
+  });
+  child.stderr?.on("data", (chunk: Buffer) => {
+    stderr = appendBounded(stderr, chunk, maxOutputBytes);
+    resetIdleTimer();
+  });
 
   try {
     const [code, signal] = (await once(child, "exit")) as [number | null, NodeJS.Signals | null];
@@ -616,18 +633,19 @@ async function executeRemoteSpec(
     error = err instanceof Error ? err.message : String(err);
   } finally {
     clearTimeout(timer);
+    if (idleTimer) clearTimeout(idleTimer);
     opts.signal?.removeEventListener("abort", abortHandler);
   }
 
   const finishedAt = nowIso();
   const durationMs = new Date(finishedAt).getTime() - new Date(startedAt).getTime();
-  if (timedOut) {
+  if (timedOut || idleTimedOut) {
     return {
       status: "timed_out",
       exitCode,
       stdout,
       stderr,
-      error: `timed out after ${spec.timeoutMs}ms`,
+      error: idleTimedOut ? `idle timed out after ${spec.idleTimeoutMs}ms without stdout/stderr` : `timed out after ${spec.timeoutMs}ms`,
       pid: child.pid,
       startedAt,
       finishedAt,
@@ -702,6 +720,7 @@ export async function executeTarget(
   let stdout = "";
   let stderr = "";
   let timedOut = false;
+  let idleTimedOut = false;
   let exitCode: number | undefined;
   let error: string | undefined;
 
@@ -765,18 +784,31 @@ export async function executeTarget(
   if (opts.signal?.aborted) abortHandler();
   opts.signal?.addEventListener("abort", abortHandler, { once: true });
 
-  child.stdout?.on("data", (chunk: Buffer) => {
-    stdout = appendBounded(stdout, chunk, maxOutputBytes);
-  });
-  child.stderr?.on("data", (chunk: Buffer) => {
-    stderr = appendBounded(stderr, chunk, maxOutputBytes);
-  });
-
   const timer = setTimeout(() => {
     timedOut = true;
     if (child.pid) killProcessGroup(child.pid);
   }, spec.timeoutMs);
   timer.unref();
+  let idleTimer: NodeJS.Timeout | undefined;
+  const resetIdleTimer = (): void => {
+    if (!spec.idleTimeoutMs) return;
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      idleTimedOut = true;
+      if (child.pid) killProcessGroup(child.pid);
+    }, spec.idleTimeoutMs);
+    idleTimer.unref();
+  };
+  resetIdleTimer();
+
+  child.stdout?.on("data", (chunk: Buffer) => {
+    stdout = appendBounded(stdout, chunk, maxOutputBytes);
+    resetIdleTimer();
+  });
+  child.stderr?.on("data", (chunk: Buffer) => {
+    stderr = appendBounded(stderr, chunk, maxOutputBytes);
+    resetIdleTimer();
+  });
 
   try {
     const [code, signal] = (await once(child, "exit")) as [number | null, NodeJS.Signals | null];
@@ -786,18 +818,19 @@ export async function executeTarget(
     error = err instanceof Error ? err.message : String(err);
   } finally {
     clearTimeout(timer);
+    if (idleTimer) clearTimeout(idleTimer);
     opts.signal?.removeEventListener("abort", abortHandler);
   }
 
   const finishedAt = nowIso();
   const durationMs = new Date(finishedAt).getTime() - new Date(startedAt).getTime();
-  if (timedOut) {
+  if (timedOut || idleTimedOut) {
     return {
       status: "timed_out",
       exitCode,
       stdout,
       stderr,
-      error: `timed out after ${spec.timeoutMs}ms`,
+      error: idleTimedOut ? `idle timed out after ${spec.idleTimeoutMs}ms without stdout/stderr` : `timed out after ${spec.timeoutMs}ms`,
       pid: child.pid,
       startedAt,
       finishedAt,

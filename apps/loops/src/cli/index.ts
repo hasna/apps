@@ -760,6 +760,7 @@ interface TodosTaskRouteOptions {
   agent?: string;
   permissionMode?: string;
   sandbox?: string;
+  manualBreakGlass?: boolean;
   projectPath?: string;
   projectGroup?: string;
   maxActive?: string;
@@ -813,6 +814,46 @@ interface TodosTaskRoutePrint {
   kind: "skipped" | "deduped" | "throttled" | "created";
   value: Record<string, unknown>;
   human: string;
+}
+
+interface RouteSandboxPreflight {
+  stepId: string;
+  provider: AgentProvider;
+  sandbox?: AgentSandbox;
+  worktreeEnabled?: boolean;
+  method: "provider-native-sandbox" | "isolated-worktree" | "manual-break-glass";
+}
+
+function generatedRouteSandboxPreflight(workflow: CreateWorkflowInput): RouteSandboxPreflight[] {
+  const checks: RouteSandboxPreflight[] = [];
+  for (const step of workflow.steps) {
+    if (step.target.type !== "agent") continue;
+    const target = step.target;
+    const worktreeEnabled = Boolean(target.worktree?.enabled);
+    if (target.sandbox === "danger-full-access") {
+      const manual = target.allowlist?.commands?.includes("manual-break-glass");
+      if (!manual) {
+        throw new Error(`route step ${step.id} uses danger-full-access without manual break-glass evidence`);
+      }
+      checks.push({ stepId: step.id, provider: target.provider, sandbox: target.sandbox, worktreeEnabled, method: "manual-break-glass" });
+      continue;
+    }
+    if (
+      (["codewith", "codex"].includes(target.provider) && (target.sandbox === "workspace-write" || target.sandbox === "read-only")) ||
+      (target.provider === "cursor" && target.sandbox === "enabled")
+    ) {
+      checks.push({ stepId: step.id, provider: target.provider, sandbox: target.sandbox, worktreeEnabled, method: "provider-native-sandbox" });
+      continue;
+    }
+    if (worktreeEnabled) {
+      checks.push({ stepId: step.id, provider: target.provider, sandbox: target.sandbox, worktreeEnabled, method: "isolated-worktree" });
+      continue;
+    }
+    throw new Error(
+      `route step ${step.id} has no verified unattended isolation; use provider sandbox workspace-write/read-only/enabled, worktreeMode=required, or explicit manual break-glass`,
+    );
+  }
+  return checks;
 }
 
 function routeThrottleLimitsFromOpts(opts: {
@@ -903,14 +944,18 @@ function routeThrottleDryRunPreview(args: { projectPath: string; projectGroup?: 
   };
 }
 
-async function readEventEnvelopeFromStdin(): Promise<EventEnvelope> {
-  const raw = process.env.HASNA_EVENT_JSON || (await Bun.stdin.text());
+async function readEventEnvelopeInput(opts: { eventJson?: string; eventFile?: string } = {}): Promise<EventEnvelope> {
+  const raw = opts.eventJson ?? (opts.eventFile ? readFileSync(opts.eventFile, "utf8") : process.env.HASNA_EVENT_JSON || (await Bun.stdin.text()));
   const event = JSON.parse(raw);
   if (!event || typeof event !== "object" || Array.isArray(event)) throw new Error("event JSON must be an object");
   if (!stringField(event.id)) throw new Error("event.id is required");
   if (!stringField(event.type)) throw new Error("event.type is required");
   if (!stringField(event.source)) throw new Error("event.source is required");
   return event as EventEnvelope;
+}
+
+async function readEventEnvelopeFromStdin(): Promise<EventEnvelope> {
+  return readEventEnvelopeInput();
 }
 
 function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions): TodosTaskRoutePrint {
@@ -1003,6 +1048,7 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
     agent: opts.agent,
     permissionMode,
     sandbox,
+    manualBreakGlass: Boolean(opts.manualBreakGlass),
     worktreeMode: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
     worktreeRoot: opts.worktreeRoot,
     worktreeBranchPrefix: opts.worktreeBranchPrefix ?? "openloops",
@@ -1013,6 +1059,7 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
   workflowBody.description =
     `Task-triggered worker/verifier workflow for ${taskTitle ?? taskId} from ${event.source}/${event.type}; ` +
     `idempotency=${idempotencyKey}; event=${event.id}; project=${projectPath}; projectGroup=${projectGroup ?? "-"}`;
+  const sandboxPreflight = generatedRouteSandboxPreflight(workflowBody);
   const invocationInput = {
     templateId: "todos-task-worker-verifier",
     sourceRef: {
@@ -1033,6 +1080,7 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
       projectGroup,
       worktreePolicy: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
       permissions: permissionMode,
+      manualBreakGlass: Boolean(opts.manualBreakGlass),
       accountPolicy: opts.authProfilePool || opts.accountPool ? "pool" : "single",
       concurrencyGroup: projectGroup ?? routeProjectPath,
     },
@@ -1076,7 +1124,7 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
       : undefined;
     return {
       kind: "created",
-      value: { deduped: false, idempotencyKey, event, invocation: invocationInput, workItem: workItemInput, workflow: workflowBody, loop: loopInput, throttle, preflight },
+      value: { deduped: false, idempotencyKey, event, invocation: invocationInput, workItem: workItemInput, workflow: workflowBody, loop: loopInput, throttle, sandboxPreflight, preflight },
       human: `dry-run ${loopName}`,
     };
   }
@@ -1084,6 +1132,7 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
   try {
     const existingWorkflowForPreflight = store.findWorkflowByName(workflowBody.name);
     const workflowPreflightSpec = existingWorkflowForPreflight ?? workflowSpecForPreflight(workflowBody, "event-preflight");
+    generatedRouteSandboxPreflight(workflowPreflightSpec);
     const preflight = opts.preflight
       ? preflightStoredWorkflow(workflowPreflightSpec, {
           name: workflowBody.name,
@@ -1170,6 +1219,230 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
         workflow: publicWorkflow(outcome.workflow),
         loop: publicLoop(outcome.loop),
         throttle: outcome.throttle,
+        sandboxPreflight,
+        preflight,
+      },
+      human: `created ${outcome.loop.id} (${outcome.loop.name}) workflow=${outcome.workflow.name} event=${event.id} idempotency=${idempotencyKey}`,
+    };
+  } finally {
+    store.close();
+  }
+}
+
+function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOptions): TodosTaskRoutePrint {
+  const data = eventData(event);
+  const metadata = eventMetadata(event);
+  const projectPath =
+    opts.projectPath ??
+    taskEventField(data, ["working_dir", "workingDir", "project_path", "projectPath", "cwd", "repo_path", "repoPath"]) ??
+    taskEventField(metadata, ["working_dir", "workingDir", "project_path", "projectPath", "project_canonical_path", "cwd", "repo_path", "repoPath"]) ??
+    process.cwd();
+  const routeProjectPath = normalizeRoutePath(projectPath) ?? resolve(projectPath);
+  const projectGroup = routeProjectGroup(opts.projectGroup, data, metadata);
+  const throttleLimits = routeThrottleLimitsFromOpts(opts);
+  const eventSuffix = event.id.slice(0, 8);
+  const source = slugSegment(event.source, "source");
+  const type = slugSegment(event.type, "type");
+  const workflowName = `${opts.namePrefix ?? "event:generic"}:${source}:${type}:${eventSuffix}:workflow`;
+  const loopName = `${opts.namePrefix ?? "event:generic"}:${source}:${type}:${eventSuffix}:run`;
+  const idempotencyKey = `generic-event:${event.source}:${event.type}:${event.id}`;
+  const provider = (opts.provider ?? "codewith") as AgentProvider;
+  if (!["claude", "cursor", "codewith", "aicopilot", "opencode", "codex"].includes(provider)) throw new Error("unsupported provider");
+  const permissionMode = permissionModeFromOpts({ permissionMode: opts.permissionMode ?? "bypass" }, provider);
+  const sandbox = sandboxFromOpts({ sandbox: opts.sandbox }, provider);
+  const authProfile = providerAuthProfileFromOpts({ authProfile: opts.authProfile }, provider);
+  const workflowBody = renderEventWorkerVerifierWorkflow({
+    eventId: event.id,
+    eventType: event.type,
+    eventSource: event.source,
+    eventSubject: stringField(event.subject),
+    eventMessage: stringField(event.message),
+    eventJson: JSON.stringify(event),
+    projectPath,
+    routeProjectPath,
+    projectGroup,
+    provider,
+    authProfile,
+    authProfilePool: splitList(opts.authProfilePool),
+    workerAuthProfile: opts.workerAuthProfile,
+    verifierAuthProfile: opts.verifierAuthProfile,
+    account: accountFromOpts(opts),
+    accountPool: accountPoolFromOpts(opts),
+    workerAccount: roleAccountFromOpts(opts, opts.workerAccount),
+    verifierAccount: roleAccountFromOpts(opts, opts.verifierAccount),
+    model: opts.model,
+    variant: opts.variant,
+    agent: opts.agent,
+    permissionMode,
+    sandbox,
+    manualBreakGlass: Boolean(opts.manualBreakGlass),
+    worktreeMode: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
+    worktreeRoot: opts.worktreeRoot,
+    worktreeBranchPrefix: opts.worktreeBranchPrefix ?? "openloops",
+  });
+  workflowBody.name = workflowName;
+  workflowBody.description = `Event-triggered worker/verifier workflow for ${event.source}/${event.type}; project=${projectPath}; projectGroup=${projectGroup ?? "-"}`;
+  const sandboxPreflight = generatedRouteSandboxPreflight(workflowBody);
+  const invocationInput = {
+    templateId: "event-worker-verifier",
+    sourceRef: {
+      kind: "event",
+      id: event.id,
+      dedupeKey: idempotencyKey,
+      raw: { source: event.source, type: event.type },
+    },
+    subjectRef: {
+      kind: "event",
+      id: stringField(event.subject) ?? event.id,
+      path: routeProjectPath,
+      raw: { message: stringField(event.message) },
+    },
+    intent: "route" as const,
+    scope: {
+      projectPath: routeProjectPath,
+      projectGroup,
+      worktreePolicy: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
+      permissions: permissionMode,
+      manualBreakGlass: Boolean(opts.manualBreakGlass),
+      accountPolicy: opts.authProfilePool || opts.accountPool ? "pool" : "single",
+      concurrencyGroup: projectGroup ?? routeProjectPath,
+    },
+    outputPolicy: {
+      report: "always" as const,
+      createTask: "on_failure" as const,
+    },
+  };
+  const workItemInput = {
+    routeKey: "generic-event",
+    idempotencyKey,
+    invocationId: "<created-invocation-id>",
+    sourceType: event.type,
+    sourceRef: event.id,
+    subjectRef: stringField(event.subject) ?? event.id,
+    projectKey: routeProjectPath,
+    projectGroup,
+    priority: 0,
+    status: "queued" as const,
+  };
+  const loopInput = {
+    name: loopName,
+    description: `Run ${workflowBody.name} once for event ${event.id}; idempotency=${idempotencyKey}`,
+    schedule: { type: "once" as const, at: new Date(Date.now() + 1_000).toISOString() },
+    target: { type: "workflow" as const, workflowId: "<created-workflow-id>", input: {} },
+    overlap: "skip" as const,
+    maxAttempts: 1,
+    retryDelayMs: 60_000,
+    leaseMs: 90 * 60_000,
+  };
+  if (opts.dryRun) {
+    const throttle = hasThrottleLimits(throttleLimits)
+      ? routeThrottleDryRunPreview({ projectPath: routeProjectPath, projectGroup, limits: throttleLimits })
+      : undefined;
+    const preflight = opts.preflight
+      ? preflightStoredWorkflow(workflowSpecForPreflight(workflowBody, "event-preflight"), {
+          name: workflowBody.name,
+          type: "generic-event-workflow",
+          event: event.id,
+        }, {})
+      : undefined;
+    return {
+      kind: "created",
+      value: { event, idempotencyKey, invocation: invocationInput, workItem: workItemInput, workflow: workflowBody, loop: loopInput, throttle, sandboxPreflight, preflight },
+      human: `dry-run ${loopName}`,
+    };
+  }
+  const store = new Store();
+  try {
+    const existingWorkflowForPreflight = store.findWorkflowByName(workflowBody.name);
+    const workflowPreflightSpec = existingWorkflowForPreflight ?? workflowSpecForPreflight(workflowBody, "event-preflight");
+    generatedRouteSandboxPreflight(workflowPreflightSpec);
+    const preflight = opts.preflight
+      ? preflightStoredWorkflow(workflowPreflightSpec, {
+          name: workflowBody.name,
+          type: "generic-event-workflow",
+          event: event.id,
+        }, {})
+      : undefined;
+    const outcome = store.writeTransaction(() => {
+      const invocation = store.createWorkflowInvocation(invocationInput);
+      const existingItem = store.findWorkflowWorkItem("generic-event", idempotencyKey);
+      if (existingItem?.loopId && ["admitted", "running", "succeeded"].includes(existingItem.status)) {
+        const existingLoop = store.getLoop(existingItem.loopId);
+        const existingWorkflow = existingItem.workflowId ? store.getWorkflow(existingItem.workflowId) : undefined;
+        return { kind: "deduped" as const, existingItem, existingLoop, existingWorkflow, invocation };
+      }
+      const throttle = hasThrottleLimits(throttleLimits)
+        ? routeThrottleDecision(store, { projectPath: routeProjectPath, projectGroup, limits: throttleLimits })
+        : undefined;
+      const workItem = store.upsertWorkflowWorkItem({
+        ...workItemInput,
+        invocationId: invocation.id,
+        status: throttle && !throttle.allowed ? "deferred" : "queued",
+        lastReason: throttle && !throttle.allowed ? throttle.reason : undefined,
+      });
+      if (throttle && !throttle.allowed) return { kind: "throttled" as const, invocation, workItem, throttle };
+      const existingWorkflow = store.findWorkflowByName(workflowBody.name);
+      const workflow = existingWorkflow ?? store.createWorkflow(workflowBody);
+      const loop = store.createLoop({
+        ...loopInput,
+        target: {
+          type: "workflow",
+          workflowId: workflow.id,
+          input: {
+            workflowInvocationId: invocation.id,
+            workflowWorkItemId: workItem.id,
+          },
+        },
+      });
+      const admitted = store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id, reason: "admitted by generic-event route" });
+      return { kind: "created" as const, invocation, workItem: admitted, workflow, loop, throttle };
+    });
+    if (outcome.kind === "deduped") {
+      return {
+        kind: "deduped",
+        value: {
+          deduped: true,
+          idempotencyKey,
+          dedupedBy: "work-item",
+          event,
+          invocation: publicWorkflowInvocation(outcome.invocation),
+          workItem: publicWorkflowWorkItem(outcome.existingItem),
+          workflow: outcome.existingWorkflow ? publicWorkflow(outcome.existingWorkflow) : undefined,
+          loop: outcome.existingLoop ? publicLoop(outcome.existingLoop) : undefined,
+        },
+        human: `deduped existing work item ${outcome.existingItem.id} for event=${event.id} idempotency=${idempotencyKey}`,
+      };
+    }
+    if (outcome.kind === "throttled") {
+      return {
+        kind: "throttled",
+        value: {
+          skipped: true,
+          queuedAtSource: true,
+          reason: outcome.throttle.reason,
+          idempotencyKey,
+          event,
+          invocation: publicWorkflowInvocation(outcome.invocation),
+          workItem: publicWorkflowWorkItem(outcome.workItem),
+          throttle: outcome.throttle,
+          workflow: workflowBody,
+          loop: loopInput,
+        },
+        human: `skipped event ${event.id}: ${outcome.throttle.reason}`,
+      };
+    }
+    return {
+      kind: "created",
+      value: {
+        deduped: false,
+        idempotencyKey,
+        event,
+        invocation: publicWorkflowInvocation(outcome.invocation),
+        workItem: publicWorkflowWorkItem(outcome.workItem),
+        workflow: publicWorkflow(outcome.workflow),
+        loop: publicLoop(outcome.loop),
+        throttle: outcome.throttle,
+        sandboxPreflight,
         preflight,
       },
       human: `created ${outcome.loop.id} (${outcome.loop.name}) workflow=${outcome.workflow.name} event=${event.id} idempotency=${idempotencyKey}`,
@@ -1500,6 +1773,220 @@ const machines = program.command("machines").description("inspect OpenMachines t
 
 const goal = program.command("goal").description("inspect goal runs");
 
+function addRouteEventOptions(command: Command): Command {
+  return command
+    .option("--event-file <file>", "read event envelope JSON from a file instead of stdin/HASNA_EVENT_JSON")
+    .option("--event-json <json>", "read event envelope JSON from this string instead of stdin/HASNA_EVENT_JSON")
+    .option("--provider <provider>", "agent provider", "codewith")
+    .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
+    .option("--auth-profile-pool <profiles>", "comma-separated provider-native auth profile pool")
+    .option("--worker-auth-profile <profile>", "provider-native auth profile for worker step")
+    .option("--verifier-auth-profile <profile>", "provider-native auth profile for verifier step")
+    .option("--account <profile>", "OpenAccounts profile name")
+    .option("--account-pool <profiles>", "comma-separated OpenAccounts profile pool")
+    .option("--worker-account <profile>", "OpenAccounts profile for worker step")
+    .option("--verifier-account <profile>", "OpenAccounts profile for verifier step")
+    .option("--account-tool <tool>", "OpenAccounts tool id")
+    .option("--model <model>", "provider model")
+    .option("--variant <variant>", "provider-specific model variant or reasoning effort")
+    .option("--agent <agent>", "provider-specific agent")
+    .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
+    .option("--sandbox <mode>", "provider sandbox")
+    .option("--manual-break-glass", "allow danger-full-access in generated worker/verifier workflow metadata; for explicit operator emergency use only")
+    .option("--project-path <path>", "fallback project/repo working directory")
+    .option("--project-group <name>", "optional project group for concurrency limits")
+    .option("--max-active <n>", "skip creating a workflow when this many active routed workflows already exist globally")
+    .option("--max-active-per-project <n>", "skip creating a workflow when this many active routed workflows already exist for the project")
+    .option("--max-active-per-project-group <n>", "skip creating a workflow when this many active routed workflows already exist for the project group")
+    .option("--worktree-mode <mode>", "worktree isolation mode: auto, required, off, or main", "auto")
+    .option("--worktree-root <path>", "base directory for OpenLoops-managed git worktrees")
+    .option("--worktree-branch-prefix <prefix>", "branch prefix for generated worktrees", "openloops")
+    .option("--name-prefix <prefix>", "workflow/loop name prefix")
+    .option("--preflight", "check generated workflow steps before storing the workflow loop");
+}
+
+function addTodosDrainOptions(command: Command): Command {
+  return command
+    .option("--todos-project <path>", "todos storage project path", defaultLoopsProject())
+    .option("--todos-project-id <id>", "filter todos ready output to one todos project id")
+    .option("--task-list <id-or-slug>", "filter ready tasks to one task-list id, slug, or name")
+    .option("--project-path-prefix <path>", "filter ready tasks to a project/repo path prefix")
+    .option("--tags <tags>", "require all comma-separated tags before routing")
+    .option("--tag <tags>", "alias for --tags")
+    .option("--limit <n>", "maximum filtered ready-task candidates to consider", "50")
+    .option("--scan-limit <n>", "maximum raw todos ready rows to fetch before filters; defaults to 500 when filters are used")
+    .option("--max-dispatch <n>", "maximum new workflow loops to create in this drain run", "1")
+    .option("--evidence-dir <path>", "write a JSON drain report to this directory")
+    .option("--compact", "print compact JSON to stdout while preserving the full evidence file")
+    .option("--provider <provider>", "agent provider", "codewith")
+    .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
+    .option("--auth-profile-pool <profiles>", "comma-separated provider-native auth profile pool")
+    .option("--worker-auth-profile <profile>", "provider-native auth profile for worker step")
+    .option("--verifier-auth-profile <profile>", "provider-native auth profile for verifier step")
+    .option("--account <profile>", "OpenAccounts profile name")
+    .option("--account-pool <profiles>", "comma-separated OpenAccounts profile pool")
+    .option("--worker-account <profile>", "OpenAccounts profile for worker step")
+    .option("--verifier-account <profile>", "OpenAccounts profile for verifier step")
+    .option("--account-tool <tool>", "OpenAccounts tool id")
+    .option("--model <model>", "provider model")
+    .option("--variant <variant>", "provider-specific model variant or reasoning effort")
+    .option("--agent <agent>", "provider-specific agent")
+    .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
+    .option("--sandbox <mode>", "provider sandbox")
+    .option("--manual-break-glass", "allow danger-full-access in generated worker/verifier workflow metadata; for explicit operator emergency use only")
+    .option("--project-path <path>", "fallback project/repo working directory")
+    .option("--project-group <name>", "optional project group for concurrency limits")
+    .option("--max-active <n>", "skip creating a workflow when this many active routed workflows already exist globally")
+    .option("--max-active-per-project <n>", "skip creating a workflow when this many active routed workflows already exist for the project")
+    .option("--max-active-per-project-group <n>", "skip creating a workflow when this many active routed workflows already exist for the project group")
+    .option("--worktree-mode <mode>", "worktree isolation mode: auto, required, off, or main", "auto")
+    .option("--worktree-root <path>", "base directory for OpenLoops-managed git worktrees")
+    .option("--worktree-branch-prefix <prefix>", "branch prefix for generated task worktrees", "openloops")
+    .option("--name-prefix <prefix>", "workflow/loop name prefix", "event:todos-task")
+    .option("--preflight", "check generated workflow steps before storing workflow loops")
+    .option("--dry-run", "preview selected tasks and generated workflow loops without storing anything");
+}
+
+function routeEventByKind(kind: string, event: EventEnvelope, opts: TodosTaskRouteOptions): TodosTaskRoutePrint {
+  if (kind === "todos-task") return routeTodosTaskEvent(event, opts);
+  if (kind === "generic") return routeGenericEvent(event, opts);
+  throw new Error("route kind must be todos-task or generic");
+}
+
+function routeDrainArgs(opts: TodosDrainOptions & { tag?: string }): string[] {
+  const args = ["events", "drain", "todos-task"];
+  const add = (flag: string, value: unknown): void => {
+    if (value !== undefined && value !== false && value !== "") args.push(flag, String(value));
+  };
+  const addBool = (flag: string, value: unknown): void => {
+    if (value === true) args.push(flag);
+  };
+  add("--todos-project", opts.todosProject);
+  add("--todos-project-id", opts.todosProjectId);
+  add("--task-list", opts.taskList);
+  add("--project-path-prefix", opts.projectPathPrefix);
+  add("--tags", opts.tags ?? opts.tag);
+  add("--limit", opts.limit);
+  add("--scan-limit", opts.scanLimit);
+  add("--max-dispatch", opts.maxDispatch);
+  add("--evidence-dir", opts.evidenceDir);
+  addBool("--compact", opts.compact);
+  add("--provider", opts.provider);
+  add("--auth-profile", opts.authProfile);
+  add("--auth-profile-pool", opts.authProfilePool);
+  add("--worker-auth-profile", opts.workerAuthProfile);
+  add("--verifier-auth-profile", opts.verifierAuthProfile);
+  add("--account", opts.account);
+  add("--account-pool", opts.accountPool);
+  add("--worker-account", opts.workerAccount);
+  add("--verifier-account", opts.verifierAccount);
+  add("--account-tool", opts.accountTool);
+  add("--model", opts.model);
+  add("--variant", opts.variant);
+  add("--agent", opts.agent);
+  add("--permission-mode", opts.permissionMode);
+  add("--sandbox", opts.sandbox);
+  addBool("--manual-break-glass", opts.manualBreakGlass);
+  add("--project-path", opts.projectPath);
+  add("--project-group", opts.projectGroup);
+  add("--max-active", opts.maxActive);
+  add("--max-active-per-project", opts.maxActivePerProject);
+  add("--max-active-per-project-group", opts.maxActivePerProjectGroup);
+  add("--worktree-mode", opts.worktreeMode);
+  add("--worktree-root", opts.worktreeRoot);
+  add("--worktree-branch-prefix", opts.worktreeBranchPrefix);
+  add("--name-prefix", opts.namePrefix);
+  addBool("--preflight", opts.preflight);
+  return args;
+}
+
+function drainTodosTaskRoutes(opts: TodosDrainOptions & { tag?: string }): void {
+  const maxDispatch = positiveInteger(opts.maxDispatch ?? "1", "--max-dispatch") ?? 1;
+  const todosProject = opts.todosProject ?? defaultLoopsProject();
+  const requiredTags = splitList(opts.tags ?? opts.tag) ?? [];
+  const taskListFilter = resolveTaskListFilter(todosProject, opts.taskList);
+  const candidateLimit = positiveInteger(opts.limit ?? "50", "--limit") ?? 50;
+  const hasPostFilters = Boolean(opts.todosProjectId || taskListFilter || opts.projectPathPrefix || requiredTags.length);
+  const defaultScanLimit = hasPostFilters ? Math.max(candidateLimit, 500) : candidateLimit;
+  const scanLimit = positiveInteger(opts.scanLimit ?? String(defaultScanLimit), "--scan-limit") ?? defaultScanLimit;
+  const ready = loadReadyTodosTasks(opts, scanLimit);
+  const filteredCandidates = ready.filter((task) => taskMatchesDrainFilters(task, {
+    projectId: opts.todosProjectId,
+    taskListId: taskListFilter,
+    projectPathPrefix: opts.projectPathPrefix,
+    tags: requiredTags,
+  }));
+  const candidates = filteredCandidates.slice(0, candidateLimit);
+  const results: TodosTaskRoutePrint[] = [];
+  let created = 0;
+  for (const task of candidates) {
+    if (created >= maxDispatch) break;
+    const event = taskDrainEvent(task);
+    const result = routeTodosTaskEvent(event, opts);
+    results.push(result);
+    if (result.kind === "created" && !opts.dryRun) created += 1;
+    if (result.kind === "created" && opts.dryRun) created += 1;
+  }
+  const report = {
+    drainedAt: new Date().toISOString(),
+    todosProject,
+    todosProjectId: opts.todosProjectId,
+    taskList: opts.taskList,
+    taskListId: taskListFilter,
+    projectPathPrefix: opts.projectPathPrefix,
+    tags: requiredTags,
+    limit: candidateLimit,
+    scanLimit,
+    filtersApplied: hasPostFilters,
+    scanned: ready.length,
+    candidates: candidates.length,
+    filteredCandidates: filteredCandidates.length,
+    scanExhausted: ready.length >= scanLimit && filteredCandidates.length < candidateLimit,
+    considered: results.length,
+    created: results.filter((result) => result.kind === "created" && !result.value.deduped).length,
+    deduped: results.filter((result) => result.kind === "deduped").length,
+    throttled: results.filter((result) => result.kind === "throttled").length,
+    skipped: results.filter((result) => result.kind === "skipped").length,
+    maxDispatch,
+    source: "todos ready",
+    dryRun: Boolean(opts.dryRun),
+    results: results.map((result) => ({ kind: result.kind, ...result.value })),
+  };
+  const evidencePath = writeRouteEvidence("todos-task-drain", report, opts.evidenceDir);
+  const output = opts.compact
+    ? {
+        drainedAt: report.drainedAt,
+        todosProject: report.todosProject,
+        todosProjectId: report.todosProjectId,
+        taskList: report.taskList,
+        taskListId: report.taskListId,
+        projectPathPrefix: report.projectPathPrefix,
+        tags: report.tags,
+        limit: report.limit,
+        scanLimit: report.scanLimit,
+        filtersApplied: report.filtersApplied,
+        scanned: report.scanned,
+        candidates: report.candidates,
+        filteredCandidates: report.filteredCandidates,
+        scanExhausted: report.scanExhausted,
+        considered: report.considered,
+        created: report.created,
+        deduped: report.deduped,
+        throttled: report.throttled,
+        skipped: report.skipped,
+        maxDispatch: report.maxDispatch,
+        source: report.source,
+        dryRun: report.dryRun,
+        evidencePath,
+        results: results.map(compactDrainResult),
+      }
+    : { ...report, evidencePath };
+  print(
+    output,
+    `drained todos ready queue: considered=${report.considered} created=${report.created} deduped=${report.deduped} throttled=${report.throttled} skipped=${report.skipped}`,
+  );
+}
+
 templates
   .command("list")
   .alias("ls")
@@ -1615,6 +2102,63 @@ routes
     }
   });
 
+addRouteEventOptions(
+  routes
+    .command("preview <kind>")
+    .description("preview a route-created workflow invocation without storing it"),
+).action(async (kind, opts) => {
+  const event = await readEventEnvelopeInput(opts);
+  const result = routeEventByKind(kind, event, { ...opts, dryRun: true });
+  print(result.value, result.human);
+});
+
+addRouteEventOptions(
+  routes
+    .command("create <kind>")
+    .description("create a route workflow invocation and admit it when capacity allows"),
+).action(async (kind, opts) => {
+  const event = await readEventEnvelopeInput(opts);
+  const result = routeEventByKind(kind, event, { ...opts, dryRun: false });
+  print(result.value, result.human);
+});
+
+addTodosDrainOptions(
+  routes
+    .command("drain <kind>")
+    .description("drain a durable source queue into bounded route workflow loops"),
+).action((kind, opts) => {
+  if (kind !== "todos-task") throw new Error("route drain currently supports kind todos-task");
+  drainTodosTaskRoutes(opts);
+});
+
+addScheduleOptions(
+  addTodosDrainOptions(
+    routes
+      .command("schedule <kind> <name>")
+      .description("schedule a deterministic route drain loop"),
+  ),
+).action((kind, name, opts) => {
+  if (kind !== "todos-task") throw new Error("route schedule currently supports kind todos-task");
+  const store = new Store();
+  try {
+    const target: LoopTarget = {
+      type: "command",
+      command: "loops",
+      args: ["--json", ...routeDrainArgs({ ...opts, compact: opts.compact ?? true })],
+      timeoutMs: parseDuration("20m"),
+      preflight: runtimePreflightFromOpts(opts),
+    };
+    const input = baseCreateInput(name, opts, target);
+    const preflight = opts.preflight
+      ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "route-drain", kind }, { loopName: name }, { machine: input.machine })
+      : undefined;
+    const loop = store.createLoop(input);
+    printCreatedLoop(loop, `created route drain loop ${loop.id} (${loop.name}) next=${loop.nextRunAt}`, preflight);
+  } finally {
+    store.close();
+  }
+});
+
 const eventsHandle = events.command("handle").description("handle a Hasna event envelope");
 
 eventsHandle
@@ -1635,6 +2179,7 @@ eventsHandle
   .option("--agent <agent>", "provider-specific agent")
   .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
   .option("--sandbox <mode>", "provider sandbox")
+  .option("--manual-break-glass", "allow danger-full-access in generated worker/verifier workflow metadata; for explicit operator emergency use only")
   .option("--project-path <path>", "fallback project/repo working directory")
   .option("--project-group <name>", "optional project group for concurrency limits")
   .option("--max-active <n>", "skip creating a workflow when this many active routed workflows already exist globally")
@@ -1683,6 +2228,7 @@ eventsDrain
   .option("--agent <agent>", "provider-specific agent")
   .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
   .option("--sandbox <mode>", "provider sandbox")
+  .option("--manual-break-glass", "allow danger-full-access in generated worker/verifier workflow metadata; for explicit operator emergency use only")
   .option("--project-path <path>", "fallback project/repo working directory")
   .option("--project-group <name>", "optional project group for concurrency limits")
   .option("--max-active <n>", "skip creating a workflow when this many active routed workflows already exist globally")
@@ -1799,6 +2345,7 @@ eventsHandle
   .option("--agent <agent>", "provider-specific agent")
   .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
   .option("--sandbox <mode>", "provider sandbox")
+  .option("--manual-break-glass", "allow danger-full-access in generated worker/verifier workflow metadata; for explicit operator emergency use only")
   .option("--project-path <path>", "fallback project/repo working directory")
   .option("--project-group <name>", "optional project group for concurrency limits")
   .option("--max-active <n>", "skip creating a workflow when this many active routed workflows already exist globally")
@@ -1857,12 +2404,14 @@ eventsHandle
       agent: opts.agent,
       permissionMode,
       sandbox,
+      manualBreakGlass: Boolean(opts.manualBreakGlass),
       worktreeMode: opts.worktreeMode as AgentWorktreeMode,
       worktreeRoot: opts.worktreeRoot,
       worktreeBranchPrefix: opts.worktreeBranchPrefix,
     });
     workflowBody.name = workflowName;
     workflowBody.description = `Event-triggered worker/verifier workflow for ${event.source}/${event.type}; project=${projectPath}; projectGroup=${projectGroup ?? "-"}`;
+    const sandboxPreflight = generatedRouteSandboxPreflight(workflowBody);
     const invocationInput = {
       templateId: "event-worker-verifier",
       sourceRef: {
@@ -1883,6 +2432,7 @@ eventsHandle
         projectGroup,
         worktreePolicy: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
         permissions: permissionMode,
+        manualBreakGlass: Boolean(opts.manualBreakGlass),
         accountPolicy: opts.authProfilePool || opts.accountPool ? "pool" : "single",
         concurrencyGroup: projectGroup ?? routeProjectPath,
       },
@@ -1925,7 +2475,7 @@ eventsHandle
           }, {})
         : undefined;
       print(
-        { event, idempotencyKey, invocation: invocationInput, workItem: workItemInput, workflow: workflowBody, loop: loopInput, throttle, preflight },
+        { event, idempotencyKey, invocation: invocationInput, workItem: workItemInput, workflow: workflowBody, loop: loopInput, throttle, sandboxPreflight, preflight },
         `dry-run ${loopName}`,
       );
       return;
@@ -1934,6 +2484,7 @@ eventsHandle
     try {
       const existingWorkflowForPreflight = store.findWorkflowByName(workflowBody.name);
       const workflowPreflightSpec = existingWorkflowForPreflight ?? workflowSpecForPreflight(workflowBody, "event-preflight");
+      generatedRouteSandboxPreflight(workflowPreflightSpec);
       const preflight = opts.preflight
         ? preflightStoredWorkflow(workflowPreflightSpec, {
             name: workflowBody.name,
@@ -2019,6 +2570,7 @@ eventsHandle
           workflow: publicWorkflow(outcome.workflow),
           loop: publicLoop(outcome.loop),
           throttle: outcome.throttle,
+          sandboxPreflight,
           preflight,
         },
         `created ${outcome.loop.id} (${outcome.loop.name}) workflow=${outcome.workflow.name} event=${event.id} idempotency=${idempotencyKey}`,

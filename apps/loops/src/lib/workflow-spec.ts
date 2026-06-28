@@ -55,6 +55,8 @@ function validateTarget(value: unknown, label: string): ExecutableTarget {
   assertObject(value, label);
   if (value.type === "command") {
     assertString(value.command, `${label}.command`);
+    optionalPositiveInteger(value.timeoutMs, `${label}.timeoutMs`);
+    optionalPositiveInteger(value.idleTimeoutMs, `${label}.idleTimeoutMs`);
     if (value.shell !== true && /\s/.test(value.command.trim())) {
       throw new Error(`${label}.command must be an executable without spaces when shell is false; put flags in args or set shell true`);
     }
@@ -65,6 +67,8 @@ function validateTarget(value: unknown, label: string): ExecutableTarget {
     assertString(value.prompt, `${label}.prompt`);
     const providers = ["claude", "cursor", "codewith", "aicopilot", "opencode", "codex"];
     if (!providers.includes(value.provider)) throw new Error(`${label}.provider must be one of ${providers.join(", ")}`);
+    optionalPositiveInteger(value.timeoutMs, `${label}.timeoutMs`);
+    optionalPositiveInteger(value.idleTimeoutMs, `${label}.idleTimeoutMs`);
     if (value.authProfile !== undefined) {
       assertString(value.authProfile, `${label}.authProfile`);
       if (value.provider !== "codewith") throw new Error(`${label}.authProfile is currently supported only for provider codewith`);
