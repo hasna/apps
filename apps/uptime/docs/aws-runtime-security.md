@@ -427,7 +427,8 @@ Default retention must be short until usage is measured.
 
 The AWS Terraform starter exposes optional AWS Budgets alerts through
 `monthly_budget_limit_usd` and `budget_alert_email_addresses`; the approved
-infra root must set real recipients before live scale-out. Budget alarms are
+infra root must set real human/on-call notification targets and prove
+non-secret delivery before live scale-out. Budget alarms and alert delivery are
 required before browser evidence or public probe scale-out.
 
 ## Implementation Blockers

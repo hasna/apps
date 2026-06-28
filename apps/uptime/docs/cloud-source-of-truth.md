@@ -449,9 +449,9 @@ ECS/API/RDS/S3/probe lag/job backlog/delivery failures, and rollback commands.
   prefix list; that header value is secret-bearing Terraform/AWS configuration,
   not public evidence. The private deployment evidence also includes a
   representative SQLite EFS backup/restore drill with integrity/count checks.
-  It is not live: live scale-up is still blocked by edge/auth smokes, alarm
-  actions, budget recipients, and production auth hardening beyond scoped
-  static operator tokens.
+  It is not live: live scale-up is still blocked by edge/auth smokes, approved
+  human/on-call SNS subscriptions and delivery smoke, and production auth
+  hardening beyond scoped static operator tokens.
 - Projects per-project cloud stores do not exist yet; current local
   `project.db` stores are not enough for cloud-backed canvases or JSON Render.
 - Browser/page monitoring lacks the artifact, redaction, retention, and storage

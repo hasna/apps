@@ -416,8 +416,9 @@ routes are backed by cloud check jobs and cloud audit rows.
   files, and AWS CloudFront/ALB configuration; restrict access accordingly.
 - Do not treat local SQLite, local project DBs, or private-probe local state as cloud
   authority after cutover.
-- Do configure owner/project/environment/service/cost-center tags and AWS
-  Budgets alert recipients in the approved infra root before live scale-out.
+- Do configure owner/project/environment/service/cost-center tags, AWS Budgets
+  notifications, approved human/on-call SNS subscriptions, and a non-secret
+  human delivery smoke in the approved infra root before live scale-out.
 
 ## Rollback
 

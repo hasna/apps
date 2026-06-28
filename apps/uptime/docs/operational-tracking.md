@@ -87,5 +87,5 @@ uptime --version
 
 AWS plan, apply, and smoke tests should run only from an approved private
 deployment root or infrastructure repository with remote state, locking, reviewed
-KMS/secrets, budget recipients, rollback instructions, and no plaintext secret
-values in Terraform state.
+KMS/secrets, approved human/on-call alert subscriptions, rollback instructions,
+and no plaintext secret values in Terraform state.
