@@ -14,6 +14,7 @@ provider "aws" {
 }
 
 data "aws_caller_identity" "current" {}
+data "aws_partition" "current" {}
 
 locals {
   prefix                = "${var.service_name}-${var.stage}"
@@ -63,6 +64,21 @@ locals {
     AppType     = var.app_type
     CostCenter  = var.cost_center
   }
+  s3_gateway_endpoint_enabled = var.enable_private_vpc_endpoints && contains(var.gateway_vpc_endpoint_services, "s3") && length(var.private_route_table_ids) > 0
+  endpoint_secret_refs        = distinct(flatten([for service in values(local.services) : values(service.secrets)]))
+  secretsmanager_secret_refs  = [for ref in local.endpoint_secret_refs : ref if can(regex(":secretsmanager:", ref))]
+  ssm_parameter_refs          = [for ref in local.endpoint_secret_refs : ref if can(regex(":ssm:", ref))]
+  secretsmanager_policy_refs = (
+    length(local.secretsmanager_secret_refs) > 0
+    ? local.secretsmanager_secret_refs
+    : ["arn:${data.aws_partition.current.partition}:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:${local.prefix}/no-secretsmanager-refs-configured-*"]
+  )
+  ssm_policy_refs = (
+    length(local.ssm_parameter_refs) > 0
+    ? local.ssm_parameter_refs
+    : ["arn:${data.aws_partition.current.partition}:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/${local.prefix}/no-ssm-refs-configured"]
+  )
+  service_log_group_arns = [for group in aws_cloudwatch_log_group.service : "${group.arn}:*"]
 }
 
 data "aws_vpc" "target" {
@@ -381,6 +397,278 @@ resource "aws_security_group_rule" "worker_egress" {
   to_port           = 0
   protocol          = "-1"
   cidr_blocks       = each.key == "public-probe" ? ["0.0.0.0/0"] : [data.aws_vpc.target.cidr_block]
+}
+
+resource "aws_security_group_rule" "web_s3_gateway_egress" {
+  count = local.s3_gateway_endpoint_enabled ? 1 : 0
+
+  type              = "egress"
+  description       = "HTTPS to S3 gateway endpoint prefix list"
+  security_group_id = aws_security_group.web.id
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  prefix_list_ids   = [aws_vpc_endpoint.gateway["s3"].prefix_list_id]
+}
+
+resource "aws_security_group_rule" "worker_s3_gateway_egress" {
+  for_each = local.s3_gateway_endpoint_enabled ? {
+    for key, value in aws_security_group.worker : key => value if key != "public-probe"
+  } : {}
+
+  type              = "egress"
+  description       = "HTTPS to S3 gateway endpoint prefix list"
+  security_group_id = each.value.id
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  prefix_list_ids   = [aws_vpc_endpoint.gateway["s3"].prefix_list_id]
+}
+
+resource "aws_security_group" "vpc_endpoints" {
+  count       = var.enable_private_vpc_endpoints ? 1 : 0
+  name        = "${local.prefix}-vpc-endpoints-sg"
+  description = "Open Uptime interface VPC endpoints"
+  vpc_id      = data.aws_vpc.target.id
+  tags        = merge(local.tags, { Component = "vpc-endpoints" })
+}
+
+resource "aws_security_group_rule" "vpc_endpoints_from_web" {
+  count                    = var.enable_private_vpc_endpoints ? 1 : 0
+  type                     = "ingress"
+  description              = "HTTPS from Open Uptime web tasks"
+  security_group_id        = aws_security_group.vpc_endpoints[0].id
+  from_port                = 443
+  to_port                  = 443
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.web.id
+}
+
+resource "aws_security_group_rule" "vpc_endpoints_from_worker" {
+  for_each = var.enable_private_vpc_endpoints ? aws_security_group.worker : {}
+
+  type                     = "ingress"
+  description              = "HTTPS from Open Uptime ${each.key} tasks"
+  security_group_id        = aws_security_group.vpc_endpoints[0].id
+  from_port                = 443
+  to_port                  = 443
+  protocol                 = "tcp"
+  source_security_group_id = each.value.id
+}
+
+resource "aws_security_group_rule" "vpc_endpoints_from_additional_sources" {
+  for_each = var.enable_private_vpc_endpoints ? toset(var.additional_vpc_endpoint_source_security_group_ids) : toset([])
+
+  type                     = "ingress"
+  description              = "HTTPS from additional approved source security group"
+  security_group_id        = aws_security_group.vpc_endpoints[0].id
+  from_port                = 443
+  to_port                  = 443
+  protocol                 = "tcp"
+  source_security_group_id = each.value
+}
+
+data "aws_iam_policy_document" "vpc_endpoint_ecr_api" {
+  statement {
+    sid       = "AllowEcrAuthorization"
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+  }
+
+  statement {
+    sid = "AllowOpenUptimeRepositoryRead"
+    actions = [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:BatchGetImage",
+      "ecr:DescribeImages",
+      "ecr:DescribeRepositories",
+      "ecr:GetDownloadUrlForLayer",
+    ]
+    resources = [aws_ecr_repository.open_uptime.arn]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+  }
+}
+
+data "aws_iam_policy_document" "vpc_endpoint_ecr_dkr" {
+  statement {
+    sid = "AllowOpenUptimeRegistryRead"
+    actions = [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:BatchGetImage",
+      "ecr:GetDownloadUrlForLayer",
+    ]
+    resources = [aws_ecr_repository.open_uptime.arn]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+  }
+}
+
+data "aws_iam_policy_document" "vpc_endpoint_logs" {
+  statement {
+    sid = "AllowOpenUptimeLogDelivery"
+    actions = [
+      "logs:CreateLogStream",
+      "logs:DescribeLogStreams",
+      "logs:PutLogEvents",
+    ]
+    resources = local.service_log_group_arns
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+  }
+}
+
+data "aws_iam_policy_document" "vpc_endpoint_secretsmanager" {
+  statement {
+    sid = "AllowOpenUptimeSecretReads"
+    actions = [
+      "secretsmanager:DescribeSecret",
+      "secretsmanager:GetSecretValue",
+    ]
+    resources = local.secretsmanager_policy_refs
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+  }
+}
+
+data "aws_iam_policy_document" "vpc_endpoint_ssm" {
+  statement {
+    sid = "AllowOpenUptimeParameterReads"
+    actions = [
+      "ssm:GetParameter",
+      "ssm:GetParameters",
+    ]
+    resources = local.ssm_policy_refs
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+  }
+}
+
+data "aws_iam_policy_document" "vpc_endpoint_sts" {
+  statement {
+    sid       = "AllowCallerIdentity"
+    actions   = ["sts:GetCallerIdentity"]
+    resources = ["*"]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+  }
+}
+
+data "aws_iam_policy_document" "vpc_endpoint_kms" {
+  statement {
+    sid = "AllowOpenUptimeKeyUse"
+    actions = [
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:GenerateDataKey*",
+    ]
+    resources = [var.kms_key_arn]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+  }
+}
+
+data "aws_iam_policy_document" "vpc_endpoint_s3" {
+  statement {
+    sid = "AllowOpenUptimeEvidenceBucket"
+    actions = [
+      "s3:AbortMultipartUpload",
+      "s3:GetBucketLocation",
+      "s3:GetObject",
+      "s3:ListBucket",
+      "s3:PutObject",
+    ]
+    resources = [
+      aws_s3_bucket.evidence.arn,
+      "${aws_s3_bucket.evidence.arn}/*",
+    ]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+  }
+
+  statement {
+    sid       = "AllowEcrLayerBucket"
+    actions   = ["s3:GetObject"]
+    resources = ["arn:${data.aws_partition.current.partition}:s3:::prod-${var.region}-starport-layer-bucket/*"]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+  }
+}
+
+resource "aws_vpc_endpoint" "interface" {
+  for_each = var.enable_private_vpc_endpoints ? toset(var.interface_vpc_endpoint_services) : toset([])
+
+  vpc_id              = data.aws_vpc.target.id
+  service_name        = "com.amazonaws.${var.region}.${each.key}"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = var.private_subnet_ids
+  security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
+  private_dns_enabled = true
+  policy = {
+    "ecr.api"      = data.aws_iam_policy_document.vpc_endpoint_ecr_api.json
+    "ecr.dkr"      = data.aws_iam_policy_document.vpc_endpoint_ecr_dkr.json
+    logs           = data.aws_iam_policy_document.vpc_endpoint_logs.json
+    secretsmanager = data.aws_iam_policy_document.vpc_endpoint_secretsmanager.json
+    ssm            = data.aws_iam_policy_document.vpc_endpoint_ssm.json
+    sts            = data.aws_iam_policy_document.vpc_endpoint_sts.json
+    kms            = data.aws_iam_policy_document.vpc_endpoint_kms.json
+  }[each.key]
+
+  tags = merge(local.tags, {
+    Name      = "${local.prefix}-${replace(each.key, ".", "-")}-endpoint"
+    Component = "vpc-endpoint"
+    Endpoint  = each.key
+  })
+}
+
+resource "aws_vpc_endpoint" "gateway" {
+  for_each = var.enable_private_vpc_endpoints && length(var.private_route_table_ids) > 0 ? toset(var.gateway_vpc_endpoint_services) : toset([])
+
+  vpc_id            = data.aws_vpc.target.id
+  service_name      = "com.amazonaws.${var.region}.${each.key}"
+  vpc_endpoint_type = "Gateway"
+  route_table_ids   = var.private_route_table_ids
+  policy = {
+    s3 = data.aws_iam_policy_document.vpc_endpoint_s3.json
+  }[each.key]
+
+  tags = merge(local.tags, {
+    Name      = "${local.prefix}-${each.key}-endpoint"
+    Component = "vpc-endpoint"
+    Endpoint  = each.key
+  })
 }
 
 resource "aws_security_group" "efs" {

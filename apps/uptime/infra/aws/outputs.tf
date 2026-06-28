@@ -75,3 +75,10 @@ output "service_names" {
     [for service in aws_ecs_service.worker : service.name],
   )
 }
+
+output "vpc_endpoint_ids" {
+  value = {
+    interface = { for service, endpoint in aws_vpc_endpoint.interface : service => endpoint.id }
+    gateway   = { for service, endpoint in aws_vpc_endpoint.gateway : service => endpoint.id }
+  }
+}

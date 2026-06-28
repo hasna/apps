@@ -80,8 +80,10 @@ The plan expects:
 - Encrypted EFS file system, access point, mount targets, and AWS Backup plan
   for `HASNA_UPTIME_HOSTED_SQLITE_DB=/data/uptime/uptime.db`.
 - S3 bucket for redacted browser evidence and generated report artifacts.
-- Secrets Manager or SSM refs for app env, hosted token, probe config, and
-  reporting channel refs.
+- Secrets Manager refs for app env, hosted token, probe config, and reporting
+  channel refs. If any ECS secret uses an SSM Parameter Store ARN, add `ssm` to
+  `interface_vpc_endpoint_services` or document the approved alternate egress
+  path before running private-only tasks.
 - CloudWatch log groups for every component plus initial web 5xx/unhealthy
   alarms. Scheduler-stall, stale-probe, and report-delivery alarms remain
   blocked until those workers emit cloud metrics.
@@ -176,8 +178,12 @@ Before setting `desired_counts.web = 1`, verify:
 - `HASNA_UPTIME_ALLOWED_ORIGINS` matches the public HTTPS edge origin;
 - CloudFront origin access is distribution-bound, not just narrowed to
   CloudFront origin-facing ranges;
-- web egress to ECR, Secrets Manager, CloudWatch Logs, S3, EFS, and any required
-  endpoints has been proven through NAT or VPC endpoints;
+- web egress to ECR, Secrets Manager or SSM, CloudWatch Logs, S3, EFS, and any
+  required endpoints has been proven from a real ECS task. Terraform endpoint
+  ids, route tables, and security-group rules are creation evidence only; the
+  scale-up evidence must include image pull, secret injection, log delivery, S3
+  access, and EFS mount checks through the selected NAT or private-endpoint
+  path;
 - scheduler, public-probe, reporter, and migration remain at `0`.
 
 Scale only the web task, then capture the ECS deployment id and task definition

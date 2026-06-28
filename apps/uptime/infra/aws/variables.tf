@@ -116,7 +116,7 @@ variable "container_image" {
 variable "runtime_package_version" {
   description = "Published @hasna/uptime package version that CodeBuild should build into the ECR image."
   type        = string
-  default     = "0.1.12"
+  default     = "0.1.13"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$", var.runtime_package_version))
@@ -234,6 +234,48 @@ variable "monthly_budget_limit_usd" {
 
 variable "budget_alert_email_addresses" {
   description = "Email recipients for AWS Budgets forecasted and actual alerts. Leave empty to skip budget creation."
+  type        = list(string)
+  default     = []
+}
+
+variable "enable_private_vpc_endpoints" {
+  description = "Create private VPC endpoints for ECS access to AWS APIs. Requires private subnet ids; S3 gateway endpoint also requires private_route_table_ids."
+  type        = bool
+  default     = false
+}
+
+variable "interface_vpc_endpoint_services" {
+  description = "Regional interface endpoint service short names to create when enable_private_vpc_endpoints is true."
+  type        = list(string)
+  default     = ["ecr.api", "ecr.dkr", "logs", "secretsmanager"]
+
+  validation {
+    condition = alltrue([
+      for service in var.interface_vpc_endpoint_services : contains(["ecr.api", "ecr.dkr", "logs", "secretsmanager", "sts", "ssm", "kms"], service)
+    ])
+    error_message = "interface_vpc_endpoint_services must contain only approved AWS service short names."
+  }
+}
+
+variable "additional_vpc_endpoint_source_security_group_ids" {
+  description = "Additional source security groups allowed to use Open Uptime interface VPC endpoints in a shared VPC. Keep empty for dedicated Open Uptime subnets."
+  type        = list(string)
+  default     = []
+}
+
+variable "gateway_vpc_endpoint_services" {
+  description = "Regional gateway endpoint service short names to create when enable_private_vpc_endpoints is true."
+  type        = list(string)
+  default     = ["s3"]
+
+  validation {
+    condition     = alltrue([for service in var.gateway_vpc_endpoint_services : contains(["s3"], service)])
+    error_message = "gateway_vpc_endpoint_services currently supports only s3."
+  }
+}
+
+variable "private_route_table_ids" {
+  description = "Private route table ids for gateway VPC endpoints such as S3. Leave empty to skip gateway endpoint creation."
   type        = list(string)
   default     = []
 }

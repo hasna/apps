@@ -104,7 +104,9 @@ Target shape inside the approved VPC:
   explicitly inspected egress path;
 - RDS access stays private and restricted by security groups;
 - VPC endpoints should be used for S3, Secrets Manager, CloudWatch Logs, ECR,
-  and SSM where practical.
+  and SSM where practical. Interface endpoint private DNS is VPC-wide, so shared
+  VPC deployments must either use the approved networking root or explicitly
+  allow every affected source security group.
 
 Security groups:
 
@@ -405,7 +407,9 @@ PR must include a rough monthly estimate for:
 
 - ALB;
 - ECS Fargate web task for the bridge and later scheduler/probe tasks;
-- NAT gateway or alternative egress;
+- NAT gateway and/or approved private VPC endpoints for ECR, Logs, Secrets
+  Manager or SSM, and S3, including runtime ECS evidence for image pull, secret
+  injection, log delivery, S3 access, and EFS mount behavior;
 - EFS/Backup bridge costs and later RDS incremental usage for the Uptime
   schema/database;
 - S3 evidence/artifact storage and requests;

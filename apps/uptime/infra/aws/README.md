@@ -52,6 +52,25 @@ type, and cost-center tags. Set `monthly_budget_limit_usd` plus
 forecasted and actual spend alerts. Leaving the email list empty skips budget
 creation and is not sufficient for live scale-out approval.
 
+Private AWS API egress can be pinned through opt-in VPC endpoints by setting
+`enable_private_vpc_endpoints = true` and passing `private_route_table_ids`.
+This creates interface endpoints for ECR API, ECR Docker, CloudWatch Logs, and
+Secrets Manager, plus an S3 gateway endpoint when route tables are supplied. The
+default is `false` so package consumers do not create endpoint hourly cost
+without explicit infra-owner approval. The S3 gateway endpoint is required for
+private ECR image layer pulls; the module adds S3 managed-prefix-list egress for
+web and non-public worker security groups when the gateway endpoint is enabled.
+Endpoint policies are scoped to the Open Uptime repository, log groups,
+configured secret refs, KMS key, evidence bucket, and the regional ECR layer
+bucket.
+
+Interface endpoint private DNS is VPC-wide. In shared VPCs, either keep endpoint
+creation in the approved networking root, or pass
+`additional_vpc_endpoint_source_security_group_ids` for every workload that must
+keep using those private DNS names. If any ECS secret ref uses SSM Parameter
+Store instead of Secrets Manager, add `ssm` to
+`interface_vpc_endpoint_services` or keep an approved non-endpoint egress path.
+
 ## Current Blockers
 
 - Hosted production auth/RBAC still needs scoped, revocable credentials.

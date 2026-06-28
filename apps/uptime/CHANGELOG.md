@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-06-28
+
+### Added
+
+- Added opt-in Terraform support for private AWS VPC endpoints. Infra owners can
+  enable interface endpoints for ECR API, ECR Docker, CloudWatch Logs, and
+  Secrets Manager, plus an S3 gateway endpoint when private route tables are
+  provided.
+
 ## [0.1.12] - 2026-06-28
 
 ### Added
