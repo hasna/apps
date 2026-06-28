@@ -1,6 +1,11 @@
 region                   = "us-east-1"
 stage                    = "prod"
 service_name             = "open-uptime"
+project_name             = "open-uptime"
+owner                    = "hasna"
+app_type                 = "opensource"
+environment              = "prod"
+cost_center              = "opensource"
 hostname                 = "uptime.example.com"
 workspace_id             = "workspace-id"
 vpc_id                   = "vpc-xxxxxxxx"
@@ -10,7 +15,7 @@ public_subnet_ids        = ["subnet-replace-public-a", "subnet-replace-public-b"
 alb_ingress_cidr_blocks = []
 private_subnet_ids       = ["subnet-replace-private-a", "subnet-replace-private-b"]
 container_image          = "123456789012.dkr.ecr.us-east-1.amazonaws.com/open-uptime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-runtime_package_version  = "0.1.8"
+runtime_package_version  = "0.1.9"
 certificate_arn          = null
 hosted_zone_id           = null
 app_env_secret_arn       = "arn:aws:secretsmanager:us-east-1:123456789012:secret:open-uptime/prod/app/env"
@@ -19,6 +24,7 @@ public_probe_secret_arn  = "arn:aws:secretsmanager:us-east-1:123456789012:secret
 reporting_secret_arn     = "arn:aws:secretsmanager:us-east-1:123456789012:secret:open-uptime/prod/reporting"
 kms_key_arn              = "arn:aws:kms:us-east-1:123456789012:key/00000000-0000-0000-0000-000000000000"
 alarm_actions            = []
+monthly_budget_limit_usd = 0
 
 desired_counts = {
   web            = 0
@@ -27,3 +33,5 @@ desired_counts = {
   reporter       = 0
   migration      = 0
 }
+
+budget_alert_email_addresses = []

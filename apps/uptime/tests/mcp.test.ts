@@ -67,11 +67,11 @@ test("MCP server registers uptime tools and JSON resources", async () => {
       records: [{ sourceId: "api", monitor: { name: "api", kind: "http", url: "https://example.com" } }],
     }).success).toBe(true);
     expect(server._registeredTools.uptime_create_probe.inputSchema?.safeParse({
-      name: "spark01",
+      name: "private-probe-01",
       publicKeyPem: "-----BEGIN PUBLIC KEY-----\nabc\n-----END PUBLIC KEY-----",
     }).success).toBe(true);
     expect(server._registeredTools.uptime_create_probe.inputSchema?.safeParse({
-      name: "spark01",
+      name: "private-probe-01",
     }).success).toBe(false);
     expect(server._registeredTools.uptime_submit_probe_result.inputSchema?.safeParse({
       probeId: "prb_1",

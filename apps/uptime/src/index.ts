@@ -5,7 +5,7 @@ export { createApiHandler, serveUptime } from "./api.js";
 export { applyImport, previewImport, rollbackImport } from "./imports.js";
 export { buildUptimeReport, sendUptimeReport } from "./report.js";
 export { generateProbeKeyPair, probePublicKeyFingerprint, probeResultSigningPayload, signProbeResult, verifyProbeResultSignature } from "./probes.js";
-export { buildAwsDeploymentPlan, buildSpark01CloudConfig, renderSpark01Env } from "./cloud-plan.js";
+export { buildAwsDeploymentPlan, buildPrivateProbeCloudConfig, renderPrivateProbeEnv } from "./cloud-plan.js";
 export { uptimeHome, uptimeDbPath, uptimeHostedFallbackDbPath, ensureUptimeHome } from "./paths.js";
 export type {
   UptimeBackup,
@@ -83,8 +83,8 @@ export type {
   AwsDeploymentPlan,
   AwsDeploymentPlanOptions,
   AwsServicePlan,
-  Spark01CloudConfig,
-  Spark01CloudConfigOptions,
+  PrivateProbeCloudConfig,
+  PrivateProbeCloudConfigOptions,
 } from "./cloud-plan.js";
 export type {
   BuildUptimeReportOptions,

@@ -441,7 +441,7 @@ project canvases. It can include safe dry-run previews and link-only refs.
 Milestone 2: imports and private probes
 
 - import apply/rollback;
-- private probe enrollment for Spark01;
+- private probe enrollment for an operator machine;
 - server health checks from Open Servers;
 - DNS/TLS/domain expiry checks from Open Domains;
 - report delivery through authorized Mailery/Telephony/Logs refs;

@@ -53,10 +53,15 @@ locals {
     }
   }
   tags = {
-    ManagedBy = "terraform"
-    Service   = var.service_name
-    Stage     = var.stage
-    Account   = var.account_name
+    ManagedBy   = "terraform"
+    Service     = var.service_name
+    Project     = var.project_name
+    Stage       = var.stage
+    Environment = var.environment
+    Account     = var.account_name
+    Owner       = var.owner
+    AppType     = var.app_type
+    CostCenter  = var.cost_center
   }
 }
 
@@ -436,7 +441,7 @@ resource "aws_efs_access_point" "uptime" {
 }
 
 resource "aws_efs_mount_target" "data" {
-  for_each        = toset(var.private_subnet_ids)
+  for_each        = { for index, subnet_id in var.private_subnet_ids : tostring(index) => subnet_id }
   file_system_id  = aws_efs_file_system.data.id
   subnet_id       = each.value
   security_groups = [aws_security_group.efs.id]
@@ -529,6 +534,7 @@ resource "aws_lb_listener" "https" {
   port              = 443
   protocol          = "HTTPS"
   certificate_arn   = var.certificate_arn
+  tags              = local.tags
 
   default_action {
     type             = "forward"
@@ -541,6 +547,7 @@ resource "aws_lb_listener" "http_cloudfront" {
   load_balancer_arn = aws_lb.open_uptime.arn
   port              = 80
   protocol          = "HTTP"
+  tags              = local.tags
 
   default_action {
     type             = "forward"
@@ -881,4 +888,36 @@ resource "aws_cloudwatch_metric_alarm" "web_unhealthy" {
     LoadBalancer = aws_lb.open_uptime.arn_suffix
     TargetGroup  = aws_lb_target_group.web.arn_suffix
   }
+}
+
+resource "aws_budgets_budget" "monthly" {
+  count        = var.monthly_budget_limit_usd > 0 && length(var.budget_alert_email_addresses) > 0 ? 1 : 0
+  name         = "${local.prefix}-monthly-budget"
+  budget_type  = "COST"
+  limit_amount = format("%.2f", var.monthly_budget_limit_usd)
+  limit_unit   = "USD"
+  time_unit    = "MONTHLY"
+
+  cost_filter {
+    name   = "TagKeyValue"
+    values = [format("user:Service$%s", var.service_name)]
+  }
+
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    notification_type          = "FORECASTED"
+    threshold                  = 80
+    threshold_type             = "PERCENTAGE"
+    subscriber_email_addresses = var.budget_alert_email_addresses
+  }
+
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    notification_type          = "ACTUAL"
+    threshold                  = 100
+    threshold_type             = "PERCENTAGE"
+    subscriber_email_addresses = var.budget_alert_email_addresses
+  }
+
+  tags = local.tags
 }

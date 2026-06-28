@@ -60,8 +60,8 @@ Deploy separate ECS/Fargate services or task roles:
   own IAM scope and alarms.
 - `open-uptime-migration`: one-off task for schema migrations and controlled
   backfills.
-- `open-uptime-private-probe`: not an AWS public service by default. Spark01 and
-  other approved private machines run signed probe agents that submit results to
+- `open-uptime-private-probe`: not an AWS public service by default. Approved
+  private machines run signed probe agents that submit results to
   the hosted API.
 
 Each role gets a separate task role and least-privilege policy. The web task
@@ -123,7 +123,7 @@ Security groups:
   the dedicated Uptime DB user.
 
 Private monitors must not run from public probe workers. They run from approved
-private probes such as Spark01 and are created only from approved inventory refs.
+private probes and are created only from approved inventory refs.
 
 ## Web Exposure And Auth
 
@@ -136,6 +136,10 @@ Public web exposure requires defense in depth:
 - first deployment may terminate viewer TLS at CloudFront's default HTTPS
   domain and restrict ALB HTTP origin ingress to CloudFront origin-facing
   ranges;
+- CloudFront prefix-list ingress is not distribution-bound by itself. Before
+  setting web desired count above `0`, add either CloudFront VPC origin/private
+  ALB routing or an ALB rule that requires a CloudFront-only origin header whose
+  value is managed outside Terraform state;
 - custom hostname deployment terminates TLS with ACM on ALB or CloudFront after
   Route53/edge ownership is approved;
 - edge access can be Cloudflare Access, OIDC, Cognito, or another Hasna-approved
@@ -293,7 +297,7 @@ artifact pipeline satisfy this contract:
 
 ## Private Probe Lifecycle
 
-Private probes such as Spark01 are first-class cloud actors:
+Private probes are first-class cloud actors:
 
 - enrollment creates a probe identity bound to workspace, machine id, allowed
   source inventories, capabilities, and trust class;
@@ -341,7 +345,7 @@ Before production cutover:
 Rollback sequence:
 
 1. pause scheduler and probe claims;
-2. revoke Spark01 primary/operator lease if involved;
+2. revoke the private probe primary/operator lease if involved;
 3. make cloud writes read-only;
 4. roll ECS service back to previous task definition if the app release failed;
 5. restore DB or run compensating migration if the data release failed;
@@ -404,7 +408,10 @@ PR must include a rough monthly estimate for:
 Evidence retention and browser trace capture are the primary variable costs.
 Default retention must be short until usage is measured.
 
-Budget alarms are required before browser evidence or public probe scale-out.
+The AWS Terraform starter exposes optional AWS Budgets alerts through
+`monthly_budget_limit_usd` and `budget_alert_email_addresses`; the approved
+infra root must set real recipients before live scale-out. Budget alarms are
+required before browser evidence or public probe scale-out.
 
 ## Implementation Blockers
 

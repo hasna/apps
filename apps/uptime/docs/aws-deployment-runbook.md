@@ -8,7 +8,7 @@ call AWS or mutate infrastructure.
 
 ```bash
 uptime cloud plan --json > open-uptime-aws-plan.json
-uptime cloud spark01-config --probe-id prb_spark01 --env > spark01-uptime.env
+uptime cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --env > private-probe-01-uptime.env
 ```
 
 Public package defaults are placeholders:
@@ -25,7 +25,7 @@ Override these with CLI flags or private deployment evidence for the real
 account, hostname, workspace id, VPC id, secret refs, and repository names.
 
 The generated AWS plan currently returns `status: "blocked"` and
-`canApply: false`. The generated Spark01 config returns `status: "blocked"` and
+`canApply: false`. The generated private-probe config returns `status: "blocked"` and
 `canStart: false`. Treat both as review/preflight artifacts until the blockers
 and required evidence in the JSON output are resolved.
 
@@ -33,7 +33,7 @@ The app repo includes a hosted runtime `Dockerfile` and Terraform/OpenTofu
 starter files in `infra/aws`. The plan output points to these files and keeps
 `applyAllowed: false`.
 
-`uptime cloud spark01-config --env` requires a real `--probe-id`; it will not
+`uptime cloud private-probe-config --env` requires a real `--probe-id`; it will not
 write a sourceable env file with a placeholder probe identity.
 
 ## Preflight
@@ -89,12 +89,12 @@ terraform -chdir=infra/aws plan -out open-uptime.tfplan
 
 Use Terraform/OpenTofu 1.9 or newer for this starter.
 
-## Spark01
+## Private Probe Operator
 
-Spark01 should be a private probe/operator machine, not the hosted source of
-truth. The generated env file points Spark01 at hosted `/api/v1` state and
-references a local private-key file path. It does not include private key or
-token contents.
+The operator machine should be a private probe/operator machine, not the hosted
+source of truth. The generated env file points the machine at hosted `/api/v1`
+state and references a local private-key file path. It does not include private
+key or token contents.
 
 The private probe service should not be enabled until hosted probe claim/submit
 routes are backed by cloud check jobs and cloud audit rows.
@@ -117,8 +117,14 @@ routes are backed by cloud check jobs and cloud audit rows.
 - Do not expose dashboard/API routes without hosted auth and workspace checks.
 - Do not expose the ALB directly in CloudFront mode; ALB ingress must be limited
   to CloudFront origin-facing ranges.
-- Do not treat local SQLite, local project DBs, or Spark01 local state as cloud
+- Do not treat CloudFront prefix-list ingress as distribution-bound origin
+  protection. Before enabling the web task, add CloudFront VPC origin/private
+  ALB routing or require a CloudFront-only origin header whose secret value is
+  not stored in Terraform state.
+- Do not treat local SQLite, local project DBs, or private-probe local state as cloud
   authority after cutover.
+- Do configure owner/project/environment/service/cost-center tags and AWS
+  Budgets alert recipients in the approved infra root before live scale-out.
 
 ## Rollback
 

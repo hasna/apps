@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { buildAwsDeploymentPlan, buildSpark01CloudConfig, renderSpark01Env } from "../src/cloud-plan.js";
+import { buildAwsDeploymentPlan, buildPrivateProbeCloudConfig, renderPrivateProbeEnv } from "../src/cloud-plan.js";
 
 test("buildAwsDeploymentPlan generates a dry-run AWS plan with generic package defaults", () => {
   const plan = buildAwsDeploymentPlan({
@@ -26,7 +26,7 @@ test("buildAwsDeploymentPlan generates a dry-run AWS plan with generic package d
   expect(buildAwsDeploymentPlan().image.uri).toContain("@sha256:<image-digest>");
   expect(plan.resources.imageBuilder).toBe("open-uptime-prod-image-builder");
   expect(plan.image.pushCommands.join("\n")).toContain("BLOCKED:");
-  expect(plan.image.pushCommands.join("\n")).toContain("@hasna/uptime@0.1.8");
+  expect(plan.image.pushCommands.join("\n")).toContain("@hasna/uptime@0.1.9");
   expect(plan.image.pushCommands.join("\n")).not.toContain("aws codebuild start-build");
   expect(plan.runbook.deploy.join("\n")).toContain("do not run migration");
   expect(plan.runbook.deploy.join("\n")).toContain("CloudFront default HTTPS domain");
@@ -98,32 +98,32 @@ test("buildAwsDeploymentPlan can describe custom ALB TLS mode without default Cl
   expect(plan.runbook.deploy.join("\n")).toContain("Create Route53/edge record");
 });
 
-test("buildSpark01CloudConfig references private key paths without inlining secrets", () => {
-  const config = buildSpark01CloudConfig({
+test("buildPrivateProbeCloudConfig references private key paths without inlining secrets", () => {
+  const config = buildPrivateProbeCloudConfig({
     apiUrl: "https://uptime.example.com/api/v1",
-    probeId: "prb_spark01",
-    probePrivateKeyFile: "~/.hasna/uptime/probes/spark01.key.pem",
+    probeId: "prb_private_01",
+    probePrivateKeyFile: "~/.hasna/uptime/probes/private-probe-01.key.pem",
   });
-  const env = renderSpark01Env(config);
+  const env = renderPrivateProbeEnv(config);
   const serialized = JSON.stringify(config);
 
-  expect(config.kind).toBe("open-uptime.spark01-cloud-config");
+  expect(config.kind).toBe("open-uptime.private-probe-cloud-config");
   expect(config.status).toBe("blocked");
   expect(config.canStart).toBe(false);
   expect(config.env.HASNA_UPTIME_MODE).toBe("hosted");
-  expect(config.env.HASNA_UPTIME_PRIVATE_PROBE_ID).toBe("prb_spark01");
+  expect(config.env.HASNA_UPTIME_PRIVATE_PROBE_ID).toBe("prb_private_01");
   expect(env).toContain("HASNA_UPTIME_API_URL=https://uptime.example.com/api/v1");
-  expect(env).toContain("HASNA_UPTIME_PRIVATE_PROBE_KEY_FILE=~/.hasna/uptime/probes/spark01.key.pem");
+  expect(env).toContain("HASNA_UPTIME_PRIVATE_PROBE_KEY_FILE=~/.hasna/uptime/probes/private-probe-01.key.pem");
   expect(config.safety).toMatchObject({ privateKeyInline: false, tokenInline: false });
   expect(serialized).not.toContain("BEGIN PRIVATE KEY");
   expect(serialized).not.toContain("Bearer ");
   expect(serialized).not.toContain("cloud-primary");
 });
 
-test("renderSpark01Env rejects missing cloud probe id", () => {
-  const config = buildSpark01CloudConfig();
+test("renderPrivateProbeEnv rejects missing cloud probe id", () => {
+  const config = buildPrivateProbeCloudConfig();
 
   expect(config.env.HASNA_UPTIME_PRIVATE_PROBE_ID).toBeUndefined();
   expect(config.blockers[0]).toContain("Cloud-registered private probe id");
-  expect(() => renderSpark01Env(config)).toThrow("HASNA_UPTIME_PRIVATE_PROBE_ID");
+  expect(() => renderPrivateProbeEnv(config)).toThrow("HASNA_UPTIME_PRIVATE_PROBE_ID");
 });

@@ -76,7 +76,7 @@ export interface AwsDeploymentPlan {
     provision: string[];
     deploy: string[];
     rollback: string[];
-    spark01: string[];
+    privateProbe: string[];
   };
   blockers: string[];
   requiredEvidence: string[];
@@ -101,7 +101,7 @@ export interface AwsServicePlan {
   secrets: Record<string, string>;
 }
 
-export interface Spark01CloudConfigOptions {
+export interface PrivateProbeCloudConfigOptions {
   apiUrl?: string;
   workspaceId?: string;
   probeId?: string;
@@ -110,8 +110,8 @@ export interface Spark01CloudConfigOptions {
   logLevel?: string;
 }
 
-export interface Spark01CloudConfig {
-  kind: "open-uptime.spark01-cloud-config";
+export interface PrivateProbeCloudConfig {
+  kind: "open-uptime.private-probe-cloud-config";
   version: 1;
   generatedAt: string;
   status: "blocked";
@@ -151,7 +151,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
   const image = clean(options.image, `${imageRepositoryUri}@sha256:<image-digest>`);
   const evidenceBucket = clean(options.evidenceBucket, `hasna-${stage}-${prefix}-evidence`);
   const hostedSqliteDbPath = clean(options.hostedSqliteDbPath, DEFAULT_HOSTED_SQLITE_DB);
-  const runtimePackageVersion = clean(options.runtimePackageVersion, "0.1.8");
+  const runtimePackageVersion = clean(options.runtimePackageVersion, "0.1.9");
   const protectedAccessMode = options.protectedAccessMode ?? DEFAULT_PROTECTED_ACCESS_MODE;
   const protectedAccessUrl = protectedAccessMode === "cloudfront_default_domain" ? "https://<cloudfront-domain>" : `https://${hostname}`;
   const cluster = `${prefix}-${stage}`;
@@ -288,9 +288,9 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
         "Disable scheduler/reporter services before data rollback.",
         "Restore EFS backup recovery point only after explicit operator approval and audit record.",
       ],
-      spark01: [
+      privateProbe: [
         "Create a private probe identity with a caller-managed public key.",
-        "Install @hasna/uptime on Spark01 and write the generated env file with mode 0600.",
+        "Install @hasna/uptime on the private probe operator machine and write the generated env file with mode 0600.",
         "Run the private probe against the hosted /api/v1 probe endpoint once it exists.",
       ],
     },
@@ -299,7 +299,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
       "The EFS SQLite bridge is single-writer only: web target desired count is 1 and scheduler/public-probe/reporter targets remain 0 until Postgres and cloud leases exist.",
       "Hosted production auth/RBAC must replace broad static hosted-token operation before exposure.",
       "Public probe execution still needs DNS, redirect, and rebinding SSRF enforcement plus cloud check-job leases.",
-      "Spark01 hosted probe enrollment, claim, submit, heartbeat, revocation, and rotation are not cloud-backed yet.",
+      "Private probe enrollment, claim, submit, heartbeat, revocation, and rotation are not cloud-backed yet.",
     ],
     requiredEvidence: [
       "Infrastructure PR/synth/plan from the approved infra repository.",
@@ -309,7 +309,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
       "Single-writer ECS evidence: one web task maximum and no scheduler/public-probe/reporter EFS mounts.",
       "EFS encryption, access point, mount-target, AWS Backup, and restore-drill evidence.",
       "S3 bucket KMS, versioning, lifecycle, and public-access-block evidence.",
-      "Spark01 private-probe registration, key-file mode, heartbeat, and revocation evidence.",
+      "Private-probe registration, key-file mode, heartbeat, and revocation evidence.",
     ],
     safety: {
       liveAwsMutation: false,
@@ -328,16 +328,16 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
   };
 }
 
-export function buildSpark01CloudConfig(options: Spark01CloudConfigOptions = {}): Spark01CloudConfig {
+export function buildPrivateProbeCloudConfig(options: PrivateProbeCloudConfigOptions = {}): PrivateProbeCloudConfig {
   const apiUrl = clean(options.apiUrl, `https://${DEFAULT_HOSTNAME}/api/v1`);
   const workspaceId = clean(options.workspaceId, DEFAULT_WORKSPACE_ID);
-  const machineId = clean(options.machineId, "spark01");
-  const privateKeyFile = clean(options.probePrivateKeyFile, "~/.hasna/uptime/probes/spark01.key.pem");
+  const machineId = clean(options.machineId, "private-probe-01");
+  const privateKeyFile = clean(options.probePrivateKeyFile, "~/.hasna/uptime/probes/private-probe-01.key.pem");
   const probeId = options.probeId?.trim();
   const blockers = [
     ...(probeId ? [] : ["Cloud-registered private probe id is required before writing a sourceable env file."]),
     "Hosted probe claim and submit routes still fail closed until cloud check_jobs and workspace stores are implemented.",
-    "Spark01 enrollment, heartbeat, revocation, rotation, and bounded offline lease handling are not implemented yet.",
+    "Private probe enrollment, heartbeat, revocation, rotation, and bounded offline lease handling are not implemented yet.",
   ];
   const env: Record<string, string> = {
     HASNA_UPTIME_MODE: "hosted",
@@ -350,7 +350,7 @@ export function buildSpark01CloudConfig(options: Spark01CloudConfigOptions = {})
   };
   if (probeId) env.HASNA_UPTIME_PRIVATE_PROBE_ID = probeId;
   return {
-    kind: "open-uptime.spark01-cloud-config",
+    kind: "open-uptime.private-probe-cloud-config",
     version: 1,
     generatedAt: new Date().toISOString(),
     status: "blocked",
@@ -362,7 +362,7 @@ export function buildSpark01CloudConfig(options: Spark01CloudConfigOptions = {})
       {
         path: privateKeyFile,
         mode: "0600",
-        purpose: "Ed25519 private key generated on Spark01; never paste into cloud config.",
+        purpose: "Ed25519 private key generated on the private probe machine; never paste into cloud config.",
       },
       {
         path: "~/.hasna/uptime/cloud.env",
@@ -372,7 +372,7 @@ export function buildSpark01CloudConfig(options: Spark01CloudConfigOptions = {})
     ],
     commands: [
       "bun install -g @hasna/uptime@latest",
-      "Generate the Spark01 private key locally and register only its public key with the hosted control plane once registration exists.",
+      "Generate the private probe key locally and register only its public key with the hosted control plane once registration exists.",
       "Write ~/.hasna/uptime/cloud.env from this plan, then source it for the private probe service.",
       "Start the private probe worker only after hosted /api/v1 probe claim/submit routes are backed by cloud jobs.",
     ],
@@ -381,7 +381,7 @@ export function buildSpark01CloudConfig(options: Spark01CloudConfigOptions = {})
       privateKeyInline: false,
       tokenInline: false,
       notes: [
-        "This config is hosted-targeted preflight: Spark01 must not start until cloud probe routes are backed by hosted state.",
+        "This config is hosted-targeted preflight: the private probe must not start until cloud probe routes are backed by hosted state.",
         "The private key file path is referenced, not embedded.",
         "Hosted token or probe auth material must come from the machine secret store, not this generated config.",
       ],
@@ -389,11 +389,11 @@ export function buildSpark01CloudConfig(options: Spark01CloudConfigOptions = {})
   };
 }
 
-export function renderSpark01Env(config: Spark01CloudConfig): string {
+export function renderPrivateProbeEnv(config: PrivateProbeCloudConfig): string {
   const required = ["HASNA_UPTIME_PRIVATE_PROBE_ID"];
   const missing = required.filter((key) => !config.env[key]);
   if (missing.length > 0) {
-    throw new Error(`Spark01 env output requires ${missing.join(", ")}`);
+    throw new Error(`private probe env output requires ${missing.join(", ")}`);
   }
   return Object.entries(config.env)
     .map(([key, value]) => `${key}=${shellEscape(value)}`)

@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-06-28
+
+### Changed
+
+- AWS Terraform EFS mount targets now use stable list-index keys so deployment
+  roots can create private subnets and Open Uptime resources in one plan.
+- AWS Terraform resources now include owner/project/environment/cost-center tags
+  and optional AWS Budgets alerts when recipients are configured.
+
 ## [0.1.8] - 2026-06-28
 
 ### Added
@@ -66,12 +75,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Dry-run AWS deployment plan generator for a reviewed AWS target,
   covering ECS/Fargate services, ECR image commands, ALB/RDS/S3/Secrets/Logs
   resources, rollback steps, and safety assertions.
-- Spark01 hosted-targeted private probe preflight config generator with JSON and
+- Private-probe hosted-targeted preflight config generator with JSON and
   env-file rendering.
-- CLI commands `uptime cloud plan` and `uptime cloud spark01-config`.
+- CLI commands `uptime cloud plan` and `uptime cloud private-probe-config`.
 - SDK export `@hasna/uptime/cloud-plan`.
 - Machine-readable `blocked`/`canApply:false` and `blocked`/`canStart:false`
-  gates plus blocker/evidence lists for AWS and Spark01 planning artifacts.
+  gates plus blocker/evidence lists for AWS and private-probe planning artifacts.
 
 ### Security
 

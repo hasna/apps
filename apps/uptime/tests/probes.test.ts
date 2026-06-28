@@ -57,7 +57,7 @@ function signedSubmission(input: {
 test("signed probe submission records a check result and completes the claimed job", () => {
   const service = new UptimeService({ dbPath: tempDb() });
   const monitor = service.createMonitor({ name: "private-api", kind: "http", url: "https://example.com/health" });
-  const probe = service.createProbe({ name: "spark01" });
+  const probe = service.createProbe({ name: "private-probe-01" });
   const job = service.claimProbeCheckJob({
     jobId: service.createProbeCheckJob({ monitorId: monitor.id, scheduleSlot: "slot-1" }).id,
     probeId: probe.id,
@@ -97,7 +97,7 @@ test("probe job creation is idempotent for a monitor schedule slot", () => {
 test("exact replay of a signed submission returns the original receipt and result", () => {
   const service = new UptimeService({ dbPath: tempDb() });
   const monitor = service.createMonitor({ name: "api", kind: "http", url: "https://example.com" });
-  const probe = service.createProbe({ name: "spark01" });
+  const probe = service.createProbe({ name: "private-probe-01" });
   const job = service.claimProbeCheckJob({
     jobId: service.createProbeCheckJob({ monitorId: monitor.id, scheduleSlot: "slot-replay" }).id,
     probeId: probe.id,
@@ -116,7 +116,7 @@ test("exact replay of a signed submission returns the original receipt and resul
 test("probe submissions reject invalid signatures without recording results", () => {
   const service = new UptimeService({ dbPath: tempDb() });
   const monitor = service.createMonitor({ name: "api", kind: "http", url: "https://example.com" });
-  const probe = service.createProbe({ name: "spark01" });
+  const probe = service.createProbe({ name: "private-probe-01" });
   const job = service.claimProbeCheckJob({
     jobId: service.createProbeCheckJob({ monitorId: monitor.id, scheduleSlot: "slot-invalid-signature" }).id,
     probeId: probe.id,
@@ -132,7 +132,7 @@ test("probe submissions reject invalid signatures without recording results", ()
 test("probe submissions reject wrong fencing tokens", () => {
   const service = new UptimeService({ dbPath: tempDb() });
   const monitor = service.createMonitor({ name: "api", kind: "http", url: "https://example.com" });
-  const probe = service.createProbe({ name: "spark01" });
+  const probe = service.createProbe({ name: "private-probe-01" });
   const job = service.claimProbeCheckJob({
     jobId: service.createProbeCheckJob({ monitorId: monitor.id, scheduleSlot: "slot-wrong-fence" }).id,
     probeId: probe.id,
@@ -152,7 +152,7 @@ test("probe submissions reject wrong fencing tokens", () => {
 test("probe submissions reject duplicate nonces", () => {
   const service = new UptimeService({ dbPath: tempDb() });
   const monitor = service.createMonitor({ name: "api", kind: "http", url: "https://example.com" });
-  const probe = service.createProbe({ name: "spark01" });
+  const probe = service.createProbe({ name: "private-probe-01" });
   const firstJob = service.claimProbeCheckJob({
     jobId: service.createProbeCheckJob({ monitorId: monitor.id, scheduleSlot: "slot-nonce-1" }).id,
     probeId: probe.id,
@@ -177,7 +177,7 @@ test("expired probe jobs can be reclaimed with a new fencing token", () => {
   const service = new UptimeService({ dbPath: tempDb() });
   try {
     const monitor = service.createMonitor({ name: "api", kind: "http", url: "https://example.com" });
-    const firstProbe = service.createProbe({ name: "spark01" });
+    const firstProbe = service.createProbe({ name: "private-probe-01" });
     const secondProbe = service.createProbe({ name: "spark02" });
     const job = service.createProbeCheckJob({ monitorId: monitor.id, scheduleSlot: "slot-reclaim" });
     const firstClaim = service.claimProbeCheckJob({ jobId: job.id, probeId: firstProbe.id, leaseTtlMs: 1000 });
@@ -213,7 +213,7 @@ test("expired probe jobs can be reclaimed with a new fencing token", () => {
 test("probe submissions reject stale monitor revisions", () => {
   const service = new UptimeService({ dbPath: tempDb() });
   const monitor = service.createMonitor({ name: "api", kind: "http", url: "https://old.example" });
-  const probe = service.createProbe({ name: "spark01" });
+  const probe = service.createProbe({ name: "private-probe-01" });
   const job = service.claimProbeCheckJob({
     jobId: service.createProbeCheckJob({ monitorId: monitor.id, scheduleSlot: "slot-stale" }).id,
     probeId: probe.id,
@@ -231,7 +231,7 @@ test("probe submissions reject stale monitor revisions", () => {
 test("probe submissions reject jobs created before monitor updates even when signed with the current revision", () => {
   const service = new UptimeService({ dbPath: tempDb() });
   const monitor = service.createMonitor({ name: "api", kind: "http", url: "https://old.example" });
-  const probe = service.createProbe({ name: "spark01" });
+  const probe = service.createProbe({ name: "private-probe-01" });
   const job = service.createProbeCheckJob({ monitorId: monitor.id, scheduleSlot: "slot-old-job" });
   const updated = service.updateMonitor(monitor.id, { url: "https://new.example" });
   const claimed = service.claimProbeCheckJob({ jobId: job.id, probeId: probe.id });
@@ -256,7 +256,7 @@ test("probe registration validates public keys and hosted service probe APIs fai
   service.close();
 
   const hosted = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
-  expect(() => hosted.createProbe({ name: "spark01" })).toThrow("hosted probe APIs require cloud check_jobs");
+  expect(() => hosted.createProbe({ name: "private-probe-01" })).toThrow("hosted probe APIs require cloud check_jobs");
   expect(() => hosted.listProbes()).toThrow("hosted probe APIs require cloud check_jobs");
   hosted.close();
 });
@@ -264,7 +264,7 @@ test("probe registration validates public keys and hosted service probe APIs fai
 test("probe submissions require a claimed job and a fresh checkedAt timestamp", () => {
   const service = new UptimeService({ dbPath: tempDb() });
   const monitor = service.createMonitor({ name: "api", kind: "http", url: "https://example.com" });
-  const probe = service.createProbe({ name: "spark01" });
+  const probe = service.createProbe({ name: "private-probe-01" });
   const unclaimed = service.createProbeCheckJob({ monitorId: monitor.id, scheduleSlot: "slot-unclaimed" });
   const badJobState = signedSubmission({
     probe,

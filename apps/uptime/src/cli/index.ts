@@ -9,8 +9,8 @@ import { ensureUptimeHome, uptimeDbPath, uptimeHome } from "../paths.js";
 import { packageVersion } from "../version.js";
 import { serveUptime } from "../api.js";
 import { generateProbeKeyPair, signProbeResult } from "../probes.js";
-import { buildAwsDeploymentPlan, buildSpark01CloudConfig, renderSpark01Env } from "../cloud-plan.js";
-import type { AwsDeploymentPlan, Spark01CloudConfig } from "../cloud-plan.js";
+import { buildAwsDeploymentPlan, buildPrivateProbeCloudConfig, renderPrivateProbeEnv } from "../cloud-plan.js";
+import type { AwsDeploymentPlan, PrivateProbeCloudConfig } from "../cloud-plan.js";
 import type { ImportSource } from "../imports.js";
 import type { SendUptimeReportOptions, UptimeReportDelivery } from "../report.js";
 import type { CreateMonitorInput, Monitor, ProbeResultSubmission, ReportRun, ReportSchedule, ReportScheduleChannels, UpdateMonitorInput, UptimeSummary } from "../types.js";
@@ -467,7 +467,7 @@ program
 
 const cloud = program
   .command("cloud")
-  .description("Generate dry-run cloud deployment and Spark01 configuration artifacts");
+  .description("Generate dry-run cloud deployment and private-probe configuration artifacts");
 
 cloud
   .command("plan")
@@ -512,19 +512,19 @@ cloud
   });
 
 cloud
-  .command("spark01-config")
-  .description("Generate Spark01 hosted-targeted private probe preflight configuration")
+  .command("private-probe-config")
+  .description("Generate hosted-targeted private probe preflight configuration")
   .option("--api-url <url>", "hosted Open Uptime API URL", "https://uptime.example.com/api/v1")
   .option("--workspace-id <id>", "workspace id", "workspace-id")
   .option("--probe-id <id>", "cloud registered private probe id")
-  .option("--private-key-file <path>", "Spark01 private probe key file", "~/.hasna/uptime/probes/spark01.key.pem")
-  .option("--machine-id <id>", "machine id", "spark01")
+  .option("--private-key-file <path>", "private probe key file", "~/.hasna/uptime/probes/private-probe-01.key.pem")
+  .option("--machine-id <id>", "machine id", "private-probe-01")
   .option("--log-level <level>", "probe log level", "info")
   .option("--env", "print shell env file instead of summary text")
   .option("-j, --json", "print JSON")
   .action((opts) => {
     try {
-      const config = buildSpark01CloudConfig({
+      const config = buildPrivateProbeCloudConfig({
         apiUrl: opts.apiUrl,
         workspaceId: opts.workspaceId,
         probeId: opts.probeId,
@@ -533,10 +533,10 @@ cloud
         logLevel: opts.logLevel,
       });
       if (opts.env && !wantsJson(opts)) {
-        console.log(renderSpark01Env(config));
+        console.log(renderPrivateProbeEnv(config));
         return;
       }
-      print(config, renderSpark01Config(config), opts);
+      print(config, renderPrivateProbeConfig(config), opts);
     } catch (error) {
       fail(error);
     }
@@ -1061,7 +1061,7 @@ function renderCloudPlan(plan: AwsDeploymentPlan): string {
   ].join("\n");
 }
 
-function renderSpark01Config(config: Spark01CloudConfig): string {
+function renderPrivateProbeConfig(config: PrivateProbeCloudConfig): string {
   return [
     `${config.machineId} ${config.mode} config`,
     `status: ${config.status}`,

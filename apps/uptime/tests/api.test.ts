@@ -53,7 +53,7 @@ test("API accepts local signed probe jobs and submissions", async () => {
   const keyPair = generateProbeKeyPair();
   const missingKeyProbe = await handler(jsonRequest("http://127.0.0.1/api/probes", "POST", { name: "no-key" }));
   const createProbe = await handler(jsonRequest("http://127.0.0.1/api/probes", "POST", {
-    name: "spark01",
+    name: "private-probe-01",
     publicKeyPem: keyPair.publicKeyPem,
   }));
   const probe = await createProbe.json();
@@ -313,7 +313,7 @@ test("hosted API fails closed for probe identities, jobs, and result ingest", as
   const create = await handler(jsonRequest(
     "https://uptime.test/api/v1/probes",
     "POST",
-    { name: "spark01" },
+    { name: "private-probe-01" },
     { origin: "https://uptime.test", authorization: "Bearer probe" },
   ));
   const job = await handler(jsonRequest(

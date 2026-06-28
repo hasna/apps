@@ -92,19 +92,19 @@ test("CLI cloud plan emits blocked dry-run JSON without live mutation commands",
   }
 });
 
-test("CLI Spark01 env requires a real cloud probe id", () => {
+test("CLI private probe env requires a real cloud probe id", () => {
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {
     const dbPath = join(dir, "uptime.db");
-    const missing = runCli(["cloud", "spark01-config", "--env"], dbPath);
-    const ok = runCli(["cloud", "spark01-config", "--probe-id", "prb_spark01", "--env"], dbPath);
+    const missing = runCli(["cloud", "private-probe-config", "--env"], dbPath);
+    const ok = runCli(["cloud", "private-probe-config", "--probe-id", "prb_private_01", "--env"], dbPath);
     const stderr = new TextDecoder().decode(missing.stderr);
     const stdout = new TextDecoder().decode(ok.stdout);
 
     expect(missing.exitCode).toBe(1);
     expect(stderr).toContain("HASNA_UPTIME_PRIVATE_PROBE_ID");
     expect(ok.exitCode).toBe(0);
-    expect(stdout).toContain("HASNA_UPTIME_PRIVATE_PROBE_ID=prb_spark01");
+    expect(stdout).toContain("HASNA_UPTIME_PRIVATE_PROBE_ID=prb_private_01");
     expect(stdout).toContain("HASNA_UPTIME_MODE=hosted");
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -255,7 +255,7 @@ test("CLI creates probes, claims jobs, and submits signed results", () => {
     const keyPath = join(dir, "probe.key.pem");
     const add = runCli(["add", "private-api", "--url", "https://example.com/health", "--json"], dbPath);
     const monitor = JSON.parse(new TextDecoder().decode(add.stdout));
-    const createProbe = runCli(["probes", "create", "spark01", "--private-key-file", keyPath, "--json"], dbPath);
+    const createProbe = runCli(["probes", "create", "private-probe-01", "--private-key-file", keyPath, "--json"], dbPath);
     const probe = JSON.parse(new TextDecoder().decode(createProbe.stdout));
     const createJob = runCli([
       "probes",
@@ -330,9 +330,9 @@ test("CLI probe create does not register identity when generated key file cannot
     const retryKeyPath = join(dir, "retry.key.pem");
     writeFileSync(existingKeyPath, "already here");
 
-    const failed = runCli(["probes", "create", "spark01", "--private-key-file", existingKeyPath, "--json"], dbPath);
+    const failed = runCli(["probes", "create", "private-probe-01", "--private-key-file", existingKeyPath, "--json"], dbPath);
     const listAfterFailure = runCli(["probes", "list", "--all", "--json"], dbPath);
-    const retry = runCli(["probes", "create", "spark01", "--private-key-file", retryKeyPath, "--json"], dbPath);
+    const retry = runCli(["probes", "create", "private-probe-01", "--private-key-file", retryKeyPath, "--json"], dbPath);
     const listAfterRetry = runCli(["probes", "list", "--all", "--json"], dbPath);
 
     expect(failed.exitCode).toBe(1);
@@ -355,7 +355,7 @@ test("CLI submits signed probe results to a served local API", async () => {
     const baseUrl = `http://${runtime.server.hostname}:${runtime.server.port}`;
     const add = runCli(["add", "remote-api", "--url", "https://example.com/health", "--json"], dbPath);
     const monitor = JSON.parse(new TextDecoder().decode(add.stdout));
-    const createProbe = runCli(["probes", "create", "spark01", "--private-key-file", keyPath, "--json"], dbPath);
+    const createProbe = runCli(["probes", "create", "private-probe-01", "--private-key-file", keyPath, "--json"], dbPath);
     const probe = JSON.parse(new TextDecoder().decode(createProbe.stdout));
     const createJob = runCli([
       "probes",

@@ -22,6 +22,36 @@ variable "service_name" {
   default     = "open-uptime"
 }
 
+variable "project_name" {
+  description = "Project tag value for cost allocation."
+  type        = string
+  default     = "open-uptime"
+}
+
+variable "owner" {
+  description = "Owner tag value for cost allocation and operations."
+  type        = string
+  default     = "hasna"
+}
+
+variable "app_type" {
+  description = "AppType tag value."
+  type        = string
+  default     = "opensource"
+}
+
+variable "environment" {
+  description = "Environment tag value."
+  type        = string
+  default     = "prod"
+}
+
+variable "cost_center" {
+  description = "CostCenter tag value."
+  type        = string
+  default     = "opensource"
+}
+
 variable "hostname" {
   description = "Public/internal hostname for Open Uptime."
   type        = string
@@ -86,7 +116,7 @@ variable "container_image" {
 variable "runtime_package_version" {
   description = "Published @hasna/uptime package version that CodeBuild should build into the ECR image."
   type        = string
-  default     = "0.1.8"
+  default     = "0.1.9"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$", var.runtime_package_version))
@@ -187,6 +217,23 @@ variable "desired_counts" {
 
 variable "alarm_actions" {
   description = "Optional SNS topic ARNs or other CloudWatch alarm action ARNs."
+  type        = list(string)
+  default     = []
+}
+
+variable "monthly_budget_limit_usd" {
+  description = "Optional monthly AWS Budgets limit in USD. Set with budget_alert_email_addresses to create a budget alert."
+  type        = number
+  default     = 0
+
+  validation {
+    condition     = var.monthly_budget_limit_usd >= 0
+    error_message = "monthly_budget_limit_usd must be non-negative."
+  }
+}
+
+variable "budget_alert_email_addresses" {
+  description = "Email recipients for AWS Budgets forecasted and actual alerts. Leave empty to skip budget creation."
   type        = list(string)
   default     = []
 }

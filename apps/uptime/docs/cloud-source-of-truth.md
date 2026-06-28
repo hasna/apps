@@ -24,7 +24,7 @@ tombstones, and audit rows.
   fallback stores after cutover. They are not authoritative in cloud mode.
 - Deletes use tombstones and versions. A local stale write must never overwrite
   a newer cloud row.
-- Spark01 can be the preferred operator/probe machine, but authority comes from
+- A private operator/probe machine can be preferred for local checks, but authority comes from
   cloud leases, service credentials, migrations, and audit records.
 - Secret values stay in AWS Secrets Manager or the owning service. Cloud records
   store secret references, channel ids, and redacted metadata only.
@@ -297,9 +297,9 @@ The minimum cloud-primary contract for Hasna services is:
 Open Uptime should implement a real cloud storage adapter instead of trying to
 reuse a generic SQLite snapshot sync as runtime storage.
 
-## Spark01 Cloud-Primary Mode
+## Private Probe Cloud-Primary Mode
 
-Spark01 should become cloud-primary only after a preflight proves:
+An operator/probe machine should become cloud-primary only after a preflight proves:
 
 - canonical service database endpoints resolve and connect using scoped service
   credentials loaded from secret refs;
@@ -309,12 +309,12 @@ Spark01 should become cloud-primary only after a preflight proves:
   with a documented owner;
 - outstanding todos conflicts are reconciled or quarantined;
 - schema versions match the release being deployed;
-- Spark01 has a unique cloud machine registration and a time-limited primary
+- the machine has a unique cloud machine registration and a time-limited primary
   operator lease;
 - local `~/.hasna` databases are backed up before migration and then treated as
   cache/fallback, not active authority.
 
-Spark01 primary status is a time-limited lease, not a boolean flag. The lease
+Operator primary status is a time-limited lease, not a boolean flag. The lease
 must include a fencing token, heartbeat deadline, revocation path, audit rows,
 and clear behavior for expiration. Cloud writers and probe workers must include
 the current fencing token for primary-only actions.
@@ -322,7 +322,7 @@ the current fencing token for primary-only actions.
 Rollback is a planned mode:
 
 1. pause new cloud writes for the affected service;
-2. revoke Spark01's primary lease;
+2. revoke the operator machine's primary lease;
 3. point CLIs back to the preflight local fallback store;
 4. keep cloud rows read-only for comparison until the incident is resolved;
 5. record the rollback in Projects, Todos, Logs, and the service audit table.
@@ -438,7 +438,7 @@ ECS/API/RDS/S3/probe lag/job backlog/delivery failures, and rollback commands.
 
 ## Acceptance Criteria
 
-- A fresh Spark01 local state directory can read and mutate cloud-backed
+- A fresh operator-machine local state directory can read and mutate cloud-backed
   projects, project stores, todos, knowledge, notes, mementos, and uptime data
   without copying a database.
 - Open Uptime cloud mode refuses to start if the cloud database is unavailable
@@ -453,7 +453,7 @@ ECS/API/RDS/S3/probe lag/job backlog/delivery failures, and rollback commands.
   project stores and support multiple canvases per project.
 - Hosted report delivery uses service-owned channel refs and secret refs only.
 - Rollback from cloud-primary to local fallback is documented and tested before
-  Spark01 cutover.
+  private-probe cutover.
 - The implementation contract covers monitor kinds/assertions, probe leases,
   target policy, incident actions, report schedules, import preview/apply,
   browser evidence, auth/RBAC, schema migrations, backups, and infra outputs.

@@ -41,12 +41,23 @@ The web task receives `HASNA_UPTIME_ALLOWED_ORIGINS` for the selected public
 HTTPS origin so hosted mutation CSRF checks still work through the private HTTP
 origin hop.
 
+CloudFront prefix-list ingress is only a network narrowing control; it is not
+bound to one distribution. Add CloudFront VPC origin/private ALB routing or an
+ALB origin-header rule with the secret value managed outside Terraform state
+before enabling the web task.
+
+All module resources carry owner, project, environment, service, account, app
+type, and cost-center tags. Set `monthly_budget_limit_usd` plus
+`budget_alert_email_addresses` in the approved infra root to create AWS Budgets
+forecasted and actual spend alerts. Leaving the email list empty skips budget
+creation and is not sufficient for live scale-out approval.
+
 ## Current Blockers
 
 - Hosted production auth/RBAC still needs scoped, revocable credentials.
 - Public probe runtime still needs execution-time DNS/redirect/rebinding SSRF
   enforcement.
-- Spark01 hosted private-probe enrollment/heartbeat/revocation is still
+- Hosted private-probe enrollment/heartbeat/revocation is still
   fail-closed.
 
 Keep `desired_count` at `0`, or at `1` for the protected web bridge only after
