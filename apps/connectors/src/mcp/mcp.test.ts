@@ -2,8 +2,10 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import { MCP_HTTP_PORT } from "./http.js";
 
 const MCP = join(import.meta.dir, "..", "..", "bin", "mcp.js");
+const README = join(import.meta.dir, "..", "..", "README.md");
 const TEST_DIR = join(import.meta.dir, "..", "..", ".test-mcp-tmp");
 const MANIFEST_PATH = join(TEST_DIR, ".connectors", "manifest.json");
 
@@ -132,6 +134,15 @@ describe("MCP Server", () => {
     expect(stderr).toBe("");
     expect(stdout).toContain("Usage: connectors-mcp");
     expect(stdout).toContain("stdio");
+    expect(stdout).toContain("default port 8854");
+    expect(stdout).not.toContain("default port 8808");
+  });
+
+  test("README documents the actual HTTP default port", () => {
+    const readme = readFileSync(README, "utf-8");
+    expect(readme).toContain(`127.0.0.1:${MCP_HTTP_PORT}/mcp`);
+    expect(readme).toContain(`127.0.0.1:${MCP_HTTP_PORT}/health`);
+    expect(readme).not.toContain("127.0.0.1:8808");
   });
 
   test("prints version and exits", async () => {

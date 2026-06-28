@@ -33,6 +33,13 @@ program
   .alias("i")
   .description("Interactive connector browser")
   .action(() => {
+    const args = process.argv.slice(2);
+    const explicitInteractive = args[0] === "interactive" || args[0] === "i";
+    if (args.length > 0 && !explicitInteractive) {
+      console.error(`Unknown command: ${args[0]}`);
+      console.error("Run 'connectors --help' for full usage.");
+      process.exit(1);
+    }
     if (!isTTY) {
       // Non-interactive fallback: show help
       console.log("Non-interactive environment detected. Use a subcommand:\n");

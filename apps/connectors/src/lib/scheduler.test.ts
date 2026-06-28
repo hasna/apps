@@ -1,5 +1,5 @@
 import { afterEach, describe, test, expect } from "bun:test";
-import { SqliteAdapter as Database } from "@hasna/cloud";
+import { SqliteDatabase as Database } from "../db/database.js";
 import { cronMatches, startScheduler, stopScheduler, triggerJob } from "./scheduler.js";
 
 function makeDb(): Database {

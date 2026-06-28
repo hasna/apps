@@ -4,7 +4,8 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { maybeStrip } from "../lib/strip.js";
-import { registerCloudTools } from "@hasna/cloud";
+import { z } from "zod";
+import { getRemoteDatabaseUrl, getSyncMetaAll, remotePull, remotePush } from "../lib/remote-sync.js";
 import pkg from "../../package.json" with { type: "json" };
 import {
   registerDiscoveryTools,
@@ -43,7 +44,32 @@ registerLlmTools(server, stripped);
 registerAgentTools(server, stripped);
 registerRateTools(server, stripped);
   registerFeedbackTools(server, stripped);
-  registerCloudTools(server, "connectors");
+
+  server.tool("storage_status", "Show connectors remote storage configuration and sync history", {}, async () => {
+    return {
+      content: [{
+        type: "text" as const,
+        text: JSON.stringify({
+          database_configured: Boolean(getRemoteDatabaseUrl()),
+          sync: getSyncMetaAll(),
+        }, null, 2),
+      }],
+    };
+  });
+
+  server.tool("storage_push", "Push local connectors SQLite data to remote PostgreSQL", {
+    tables: z.array(z.string()).optional(),
+  }, async ({ tables }) => {
+    const results = await remotePush({ tables });
+    return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
+  });
+
+  server.tool("storage_pull", "Pull remote PostgreSQL data into local connectors SQLite", {
+    tables: z.array(z.string()).optional(),
+  }, async ({ tables }) => {
+    const results = await remotePull({ tables });
+    return { content: [{ type: "text" as const, text: JSON.stringify(results, null, 2) }] };
+  });
 
   return server;
 }

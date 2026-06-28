@@ -69,7 +69,12 @@ describe("connectors MCP HTTP transport", () => {
     try {
       await client.connect(transport, { timeout: 15_000 });
       const tools = await client.listTools(undefined, { timeout: 15_000 });
-      expect(tools.tools.some((t) => t.name === "list_categories")).toBe(true);
+      const toolNames = tools.tools.map((tool) => tool.name);
+      expect(toolNames).toContain("list_categories");
+      expect(toolNames).toContain("storage_status");
+      expect(toolNames).toContain("storage_push");
+      expect(toolNames).toContain("storage_pull");
+      expect(toolNames).not.toContain("storage_sync");
 
       const result = await client.callTool(
         { name: "list_categories", arguments: {} },

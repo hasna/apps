@@ -1,9 +1,56 @@
-import { SqliteAdapter } from "@hasna/cloud";
-
-export type Database = SqliteAdapter;
+import { Database as BunDatabase, type SQLQueryBindings } from "bun:sqlite";
 import { dirname, join } from "path";
 import { homedir } from "os";
 import { mkdirSync, existsSync, readdirSync, copyFileSync, statSync } from "fs";
+
+export class SqliteDatabase {
+  private readonly db: BunDatabase;
+
+  constructor(path: string) {
+    this.db = new BunDatabase(path);
+  }
+
+  run(sql: string, params?: SQLQueryBindings | SQLQueryBindings[], ...rest: SQLQueryBindings[]) {
+    const values = normalizeBindings(params, rest);
+    return this.db.prepare(sql).run(...values);
+  }
+
+  query(sql: string) {
+    return this.db.query(sql);
+  }
+
+  prepare(sql: string) {
+    return this.db.prepare(sql);
+  }
+
+  get(sql: string, params?: SQLQueryBindings | SQLQueryBindings[], ...rest: SQLQueryBindings[]) {
+    return this.db.query(sql).get(...normalizeBindings(params, rest));
+  }
+
+  all(sql: string, params?: SQLQueryBindings | SQLQueryBindings[], ...rest: SQLQueryBindings[]) {
+    return this.db.query(sql).all(...normalizeBindings(params, rest));
+  }
+
+  exec(sql: string): void {
+    this.db.exec(sql);
+  }
+
+  close(): void {
+    this.db.close();
+  }
+
+  transaction<T extends (...args: any[]) => any>(fn: T): T {
+    return this.db.transaction(fn) as unknown as T;
+  }
+}
+
+export type Database = SqliteDatabase;
+
+function normalizeBindings(params: SQLQueryBindings | SQLQueryBindings[] | undefined, rest: SQLQueryBindings[]): SQLQueryBindings[] {
+  if (params === undefined) return rest;
+  if (Array.isArray(params)) return [...params, ...rest];
+  return [params, ...rest];
+}
 
 function mergeDirectoryContents(sourceDir: string, targetDir: string): void {
   if (!existsSync(sourceDir)) {
@@ -59,10 +106,14 @@ export function getConnectorsHome(): string {
 const DB_DIR = getConnectorsHome();
 const DB_PATH = join(DB_DIR, "connectors.db");
 
-let _db: SqliteAdapter | null = null;
+let _db: SqliteDatabase | null = null;
 let _dbPath: string | null = null;
 
-export function getDatabase(path?: string): SqliteAdapter {
+export function getDatabasePath(): string {
+  return DB_PATH;
+}
+
+export function getDatabase(path?: string): SqliteDatabase {
   const dbPath = path ?? DB_PATH;
   if (_db) {
     if (_dbPath === dbPath) return _db;
@@ -73,9 +124,10 @@ export function getDatabase(path?: string): SqliteAdapter {
   if (dbPath !== ":memory:") {
     mkdirSync(dirname(dbPath), { recursive: true });
   }
-  _db = new SqliteAdapter(dbPath);
+  _db = new SqliteDatabase(dbPath);
   _dbPath = dbPath;
   _db.run("PRAGMA journal_mode = WAL");
+  _db.run("PRAGMA foreign_keys = ON");
   migrate(_db);
   return _db;
 }

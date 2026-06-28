@@ -1,114 +1,111 @@
 import { Command } from "commander";
 import chalk from "chalk";
-import {
-  registerCloudCommands,
-  incrementalSyncPush,
-  incrementalSyncPull,
-  SqliteAdapter,
-  PgAdapter,
-  PgAdapterAsync,
-  getConnectionString,
-  getDbPath,
-  listSqliteTables,
-  listPgTables,
-  getSyncMetaAll,
-} from "@hasna/cloud";
+import { getRemoteDatabaseUrl, getSyncMetaAll, remotePull, remotePush } from "../../lib/remote-sync.js";
+import type { SyncProgress, SyncResult } from "../../lib/storage-sync.js";
+
+function parseTables(value?: string): string[] | undefined {
+  return value?.split(",").map((table) => table.trim()).filter(Boolean);
+}
+
+function progressLine(progress: SyncProgress): void {
+  if (progress.phase !== "done") return;
+  console.log(`  ${progress.table}: ${progress.rowsWritten} rows synced`);
+}
+
+function printResults(direction: "pushed" | "pulled", results: SyncResult[]): void {
+  const total = results.reduce((sum, result) => sum + result.rowsWritten, 0);
+  console.log(`Done. ${total} rows ${direction}.`);
+  for (const result of results) {
+    if (result.errors.length > 0) console.warn(`  ${result.table}: ${result.errors.join(", ")}`);
+  }
+}
+
+function printSyncError(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(chalk.red(message));
+  process.exitCode = 1;
+}
+
+function requireDatabaseUrl(): boolean {
+  if (!getRemoteDatabaseUrl()) {
+    console.error(chalk.red("Missing HASNA_CONNECTORS_DATABASE_URL or CONNECTORS_DATABASE_URL"));
+    process.exitCode = 1;
+    return false;
+  }
+  return true;
+}
 
 export function registerCommands(program: Command): void {
-  registerCloudCommands(program as any, "connectors");
+  const storageCmd = program
+    .command("storage")
+    .description("Remote PostgreSQL storage sync commands");
 
-  // Add incremental sync subcommands to the cloud command
-  // registerCloudCommands uses full syncPush/syncPull — these add delta sync as default
-  const cloudCmd = program.commands.find((c) => c.name() === "cloud");
-  if (cloudCmd) {
-    const syncCmd = cloudCmd.command("sync").description("Incremental (delta) sync — only rows changed since last sync");
+  storageCmd
+    .command("status")
+    .description("Show configured remote database and local sync history")
+    .action(() => {
+      const url = getRemoteDatabaseUrl();
+      console.log(chalk.bold("\nRemote storage:\n"));
+      console.log(`  database: ${url ? "configured" : "not configured"}`);
+      const meta = getSyncMetaAll();
+      if (!meta.length) {
+        console.log("\nNo sync history found. Run: connectors storage sync push");
+        return;
+      }
+      console.log(chalk.bold("\nSync status:\n"));
+      for (const item of meta) {
+        console.log(`  ${chalk.cyan(item.table_name.padEnd(32))} last synced: ${item.last_synced_at ?? "never"} (${item.direction})`);
+      }
+      console.log();
+    });
 
-    syncCmd
-      .command("push")
-      .description("Push local changes to cloud (incremental by default)")
-      .option("--tables <tables>", "Comma-separated table names")
-      .option("--full", "Full resync instead of incremental delta", false)
-      .action(async (opts: { tables?: string; full: boolean }) => {
-        const local = new SqliteAdapter(getDbPath("connectors"));
-        const tables = opts.tables ? opts.tables.split(",").map((t: string) => t.trim()) : listSqliteTables(local);
-        if (opts.full) {
-          const cloud = new PgAdapterAsync(getConnectionString("connectors"));
-          const { syncPush } = await import("@hasna/cloud");
-          const results = await syncPush(local, cloud, {
-            tables,
-            onProgress: (p: { phase: string; table: string; rowsWritten: number }) => {
-              if (p.phase === "done") console.log(`  ${p.table}: ${p.rowsWritten} rows pushed (full)`);
-            },
-          });
-          local.close();
-          await cloud.close();
-          const total = results.reduce((s: number, r: { rowsWritten: number }) => s + r.rowsWritten, 0);
-          console.log(`Done. ${total} rows pushed (full sync).`);
-        } else {
-          const cloud = new PgAdapter(getConnectionString("connectors"));
-          const results = incrementalSyncPush(local, cloud, tables);
-          local.close();
-          cloud.close();
-          const total = results.reduce((s, r) => s + r.synced_rows, 0);
-          const firstSync = results.filter((r) => r.first_sync).length;
-          console.log(`Done. ${total} rows pushed (incremental).${firstSync ? ` ${firstSync} table(s) had first-sync.` : ""}`);
-          for (const r of results) {
-            if (r.errors.length) console.warn(`  ${r.table}: ${r.errors.join(", ")}`);
-          }
-        }
-      });
+  const syncCmd = storageCmd
+    .command("sync")
+    .description("Sync local SQLite data with repo-owned remote PostgreSQL storage");
 
-    syncCmd
-      .command("pull")
-      .description("Pull cloud changes to local (incremental by default)")
-      .option("--tables <tables>", "Comma-separated table names")
-      .option("--full", "Full resync instead of incremental delta", false)
-      .action(async (opts: { tables?: string; full: boolean }) => {
-        const local = new SqliteAdapter(getDbPath("connectors"));
-        if (opts.full) {
-          const cloud = new PgAdapterAsync(getConnectionString("connectors"));
-          const tables = opts.tables ? opts.tables.split(",").map((t: string) => t.trim()) : await listPgTables(cloud);
-          const { syncPull } = await import("@hasna/cloud");
-          const results = await syncPull(cloud, local, {
-            tables,
-            onProgress: (p: { phase: string; table: string; rowsWritten: number }) => {
-              if (p.phase === "done") console.log(`  ${p.table}: ${p.rowsWritten} rows pulled (full)`);
-            },
-          });
-          local.close();
-          await cloud.close();
-          const total = results.reduce((s: number, r: { rowsWritten: number }) => s + r.rowsWritten, 0);
-          console.log(`Done. ${total} rows pulled (full sync).`);
-        } else {
-          const cloud = new PgAdapter(getConnectionString("connectors"));
-          const tables = opts.tables ? opts.tables.split(",").map((t: string) => t.trim()) : listSqliteTables(local);
-          const results = incrementalSyncPull(cloud, local, tables);
-          local.close();
-          cloud.close();
-          const total = results.reduce((s, r) => s + r.synced_rows, 0);
-          console.log(`Done. ${total} rows pulled (incremental).`);
-          for (const r of results) {
-            if (r.errors.length) console.warn(`  ${r.table}: ${r.errors.join(", ")}`);
-          }
-        }
-      });
+  syncCmd
+    .command("push")
+    .description("Push local changes to remote PostgreSQL")
+    .option("--tables <tables>", "Comma-separated table names")
+    .option("--full", "Compatibility flag; sync is table-wide by default", false)
+    .action(async (opts: { tables?: string }) => {
+      if (!requireDatabaseUrl()) return;
+      try {
+        const results = await remotePush({ tables: parseTables(opts.tables), onProgress: progressLine });
+        printResults("pushed", results);
+      } catch (error) {
+        printSyncError(error);
+      }
+    });
 
-    syncCmd
-      .command("status")
-      .description("Show last-synced timestamps per table")
-      .action(() => {
-        const local = new SqliteAdapter(getDbPath("connectors"));
-        const meta = getSyncMetaAll(local);
-        local.close();
-        if (!meta.length) {
-          console.log("No sync history found. Run: connectors cloud sync push");
-          return;
-        }
-        console.log(chalk.bold("\nSync status:\n"));
-        for (const m of meta) {
-          console.log(`  ${chalk.cyan(m.table_name.padEnd(32))} last synced: ${m.last_synced_at ?? "never"} (${m.direction})`);
-        }
-        console.log();
-      });
-  }
+  syncCmd
+    .command("pull")
+    .description("Pull remote PostgreSQL changes to local SQLite")
+    .option("--tables <tables>", "Comma-separated table names")
+    .option("--full", "Compatibility flag; sync is table-wide by default", false)
+    .action(async (opts: { tables?: string }) => {
+      if (!requireDatabaseUrl()) return;
+      try {
+        const results = await remotePull({ tables: parseTables(opts.tables), onProgress: progressLine });
+        printResults("pulled", results);
+      } catch (error) {
+        printSyncError(error);
+      }
+    });
+
+  syncCmd
+    .command("status")
+    .description("Show last-synced timestamps per table")
+    .action(() => {
+      const meta = getSyncMetaAll();
+      if (!meta.length) {
+        console.log("No sync history found. Run: connectors storage sync push");
+        return;
+      }
+      console.log(chalk.bold("\nSync status:\n"));
+      for (const item of meta) {
+        console.log(`  ${chalk.cyan(item.table_name.padEnd(32))} last synced: ${item.last_synced_at ?? "never"} (${item.direction})`);
+      }
+      console.log();
+    });
 }

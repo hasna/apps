@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { SqliteAdapter as Database } from "@hasna/cloud";
+import { SqliteDatabase as Database } from "./database.js";
 import {
   createJob, getJob, getJobByName, listJobs, listEnabledJobs,
   updateJob, deleteJob, touchJobLastRun,

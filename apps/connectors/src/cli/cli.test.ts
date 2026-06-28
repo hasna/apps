@@ -1098,10 +1098,16 @@ describe("CLI", () => {
     });
   });
 
-  describe("cloud", () => {
-    test("cloud command is registered in help", async () => {
+  describe("storage", () => {
+    test("storage command is registered in help", async () => {
       const { stdout } = await run("--help");
-      expect(stdout).toContain("cloud");
+      expect(stdout).toContain("storage");
+    });
+
+    test("removed cloud command fails loudly", async () => {
+      const { stderr, exitCode } = await run(["cloud", "sync", "push"]);
+      expect(exitCode).not.toBe(0);
+      expect(stderr).toContain("Unknown command: cloud");
     });
   });
 });

@@ -53,11 +53,11 @@ connectors-mcp
 ## HTTP mode
 
 ```bash
-connectors-mcp --http            # http://127.0.0.1:8808/mcp
+connectors-mcp --http            # http://127.0.0.1:8854/mcp
 MCP_HTTP=1 connectors-mcp
 ```
 
-Health: `GET http://127.0.0.1:8808/health`. MCP is also mounted on `connectors-serve` at `/mcp`.
+Health: `GET http://127.0.0.1:8854/health`. MCP is also mounted on `connectors-serve` at `/mcp`.
 
 ## REST API
 
@@ -141,14 +141,15 @@ Project-local enablement is lightweight:
 
 The package no longer copies full connector source trees into each project.
 
-## Cloud Sync
+## Remote Storage Sync
 
-This package supports cloud sync via `@hasna/cloud`:
+This package supports repo-owned remote PostgreSQL sync without the retired shared cloud runtime:
 
 ```bash
-cloud setup
-cloud sync push --service connectors
-cloud sync pull --service connectors
+export HASNA_CONNECTORS_DATABASE_URL="postgres://..."
+connectors storage status
+connectors storage sync push
+connectors storage sync pull
 ```
 
 ## Data Directory

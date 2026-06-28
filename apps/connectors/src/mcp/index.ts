@@ -6,7 +6,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { loadConnectorVersions } from "../lib/registry.js";
 import pkg from "../../package.json" with { type: "json" };
 import { buildServer } from "./server.js";
-import { isStdioMode, resolveHttpPort, startMcpHttpServer } from "./http.js";
+import { MCP_HTTP_PORT, isStdioMode, resolveHttpPort, startMcpHttpServer } from "./http.js";
 
 function hasFlag(flag: string): boolean {
   return process.argv.includes(flag);
@@ -18,7 +18,7 @@ function printHelp(): void {
 Start the Connectors MCP server over stdio or Streamable HTTP
 
 Options:
-  --http            Start Streamable HTTP server (127.0.0.1, default port 8808)
+  --http            Start Streamable HTTP server (127.0.0.1, default port ${MCP_HTTP_PORT})
   --port <port>     HTTP port (with --http)
   -V, --version     Output the version number
   -h, --help        Display help for command`);
