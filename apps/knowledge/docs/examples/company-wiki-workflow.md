@@ -14,7 +14,7 @@ knowledge wiki init --scope project --json
 Project state is created under:
 
 ```text
-.hasna/apps/knowledge/
+.hasna/knowledge/
   config.json
   knowledge.db
   artifacts/

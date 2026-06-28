@@ -457,7 +457,7 @@ describe('knowledge sqlite store', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-safety-'));
     const dbPath = join(dir, 'knowledge.db');
     migrateKnowledgeDb(dbPath);
-    const workspace = workspaceForHome(join(dir, '.hasna', 'apps', 'knowledge'));
+    const workspace = workspaceForHome(join(dir, '.hasna', 'knowledge'));
     const policy = resolveSafetyPolicy(defaultKnowledgeConfig(), workspace);
     expect(policy.network.webSearchEnabled).toBe(false);
     expect(policy.network.s3ReadsEnabled).toBe(false);

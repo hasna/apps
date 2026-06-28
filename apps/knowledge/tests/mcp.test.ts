@@ -178,10 +178,10 @@ function emptySyncBundle() {
     generated_at: '2026-06-09T00:00:00.000Z',
     source: {
       scope: 'project',
-      workspace_home: '/remote/.hasna/apps/knowledge',
+      workspace_home: '/remote/.hasna/knowledge',
       sqlite_schema_version: 6,
       machine_id: 'linux-node-a',
-      artifact_root_uri: 'file:///remote/.hasna/apps/knowledge/artifacts/',
+      artifact_root_uri: 'file:///remote/.hasna/knowledge/artifacts/',
     },
     tables: [],
     artifacts: [],
@@ -200,9 +200,9 @@ function emptyImportResult() {
     source: emptySyncBundle().source,
     target: {
       scope: 'project',
-      workspace_home: '/remote/.hasna/apps/knowledge',
+      workspace_home: '/remote/.hasna/knowledge',
       sqlite_schema_version: 6,
-      artifact_root_uri: 'file:///remote/.hasna/apps/knowledge/artifacts/',
+      artifact_root_uri: 'file:///remote/.hasna/knowledge/artifacts/',
     },
     tables: [],
     artifacts: {
@@ -248,7 +248,7 @@ describe('knowledge MCP', () => {
       extracted_text: 'MCP resolver source text from open-files.',
     })}\n`);
     await ingestOpenFilesManifest({
-      dbPath: join(dir, '.hasna', 'apps', 'knowledge', 'knowledge.db'),
+      dbPath: join(dir, '.hasna', 'knowledge', 'knowledge.db'),
       input: manifest,
     });
     const targetPath = join(dir, 'mcp-ssh-target.txt');
@@ -335,7 +335,7 @@ describe('knowledge MCP', () => {
 
       const machinesResource = parseResourceJson(await client.readResource({ uri: 'knowledge://project/machines' }));
       expect(machinesResource.ok).toBe(true);
-      expect(machinesResource.knowledge.app_path).toBe(join('.hasna', 'apps', 'knowledge'));
+      expect(machinesResource.knowledge.app_path).toBe(join('.hasna', 'knowledge'));
 
       const syncResource = parseResourceJson(await client.readResource({ uri: 'knowledge://project/sync' }));
       expect(syncResource.ok).toBe(true);

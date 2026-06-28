@@ -218,10 +218,10 @@ function emptySyncBundle() {
     generated_at: '2026-06-09T00:00:00.000Z',
     source: {
       scope: 'project',
-      workspace_home: '/remote/.hasna/apps/knowledge',
+      workspace_home: '/remote/.hasna/knowledge',
       sqlite_schema_version: 6,
       machine_id: 'linux-node-a',
-      artifact_root_uri: 'file:///remote/.hasna/apps/knowledge/artifacts/',
+      artifact_root_uri: 'file:///remote/.hasna/knowledge/artifacts/',
     },
     tables: [],
     artifacts: [],
@@ -240,9 +240,9 @@ function emptyImportResult(dryRun = true) {
     source: emptySyncBundle().source,
     target: {
       scope: 'project',
-      workspace_home: '/remote/.hasna/apps/knowledge',
+      workspace_home: '/remote/.hasna/knowledge',
       sqlite_schema_version: 6,
-      artifact_root_uri: 'file:///remote/.hasna/apps/knowledge/artifacts/',
+      artifact_root_uri: 'file:///remote/.hasna/knowledge/artifacts/',
     },
     tables: [],
     artifacts: {
@@ -269,11 +269,11 @@ describe('public knowledge sdk', () => {
     writeFileSync(source, 'The SDK facade lets apps index company wiki source context without shelling out.');
 
     expect(createKnowledgeSdk).toBe(createKnowledgeClient);
-    expect(HASNA_KNOWLEDGE_APP_PATH).toBe(join('.hasna', 'apps', 'knowledge'));
+    expect(HASNA_KNOWLEDGE_APP_PATH).toBe(join('.hasna', 'knowledge'));
     expect(EXAMPLE_KNOWLEDGE_CANONICAL.source_owner).toBe('open-files');
 
     const paths = client.paths();
-    expect(paths.home).toBe(join(dir, '.hasna', 'apps', 'knowledge'));
+    expect(paths.home).toBe(join(dir, '.hasna', 'knowledge'));
     expect(paths.config.storage.type).toBe('local');
 
     const setup = client.setup({ mode: 'hosted', canonicalExample: true });

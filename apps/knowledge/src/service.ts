@@ -83,12 +83,17 @@ import {
   ensureKnowledgeWorkspace,
   projectKnowledgeHome,
   readKnowledgeConfig,
+  resolveLegacyScopedWorkspace,
   resolveScopedWorkspace,
   workspaceForHome,
   writeKnowledgeConfig,
   type KnowledgeConfig,
   type KnowledgeWorkspace,
 } from './workspace';
+import {
+  migrateLegacyKnowledgeWorkspace,
+  type KnowledgeLegacyWorkspaceMigrationResult,
+} from './workspace-migration';
 
 export interface KnowledgeServiceOptions {
   scope?: string;
@@ -183,6 +188,8 @@ export interface KnowledgeSetupResult {
   next: string[];
   message: string;
 }
+
+export type KnowledgeLegacyPathMigrationResult = KnowledgeLegacyWorkspaceMigrationResult;
 
 export interface KnowledgeSyncSnapshotOptions {
   includeTailscale?: boolean;
@@ -1199,6 +1206,23 @@ export class KnowledgeService {
 
   validateStorage(): StorageValidationResult {
     return validateStorageConfig(this.config(), this.ensureWorkspace());
+  }
+
+  migrateLegacyPath(options: { approveWrite?: boolean; approvedBy?: string } = {}): KnowledgeLegacyPathMigrationResult {
+    const current = this.workspace;
+    const legacy = resolveLegacyScopedWorkspace(this.options.scope, this.options.cwd);
+    const result = migrateLegacyKnowledgeWorkspace({
+      scope: this.scope,
+      current,
+      legacy,
+      approveWrite: options.approveWrite,
+      approvedBy: options.approvedBy,
+    });
+    if (!result.dry_run && result.ok) {
+      this.ensuredWorkspace = undefined;
+      this.cachedConfig = undefined;
+    }
+    return result;
   }
 
   setup(options: { mode?: string; apiUrl?: string; canonicalExample?: boolean } = {}): KnowledgeSetupResult {

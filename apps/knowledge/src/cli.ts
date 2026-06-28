@@ -263,7 +263,7 @@ Commands:
   setup                        Configure local, hosted, or canonical example S3 mode
   auth login|whoami|logout     Manage hosted API credentials
   remote contracts|status      Inspect hosted client contracts/readiness
-  storage status|validate|repair-artifact-keys
+  storage status|validate|repair-artifact-keys|migrate-legacy-path
                                Inspect or repair local/S3 artifact storage metadata
   machines topology|preflight  Inspect optional machine topology/sync readiness
   sync status|doctor|snapshot|conflicts
@@ -323,9 +323,9 @@ Global Options:
   --fake                       Use deterministic fake embeddings for local tests
   --no-tailscale               Skip local Tailscale topology probing
   --no-artifact-content        Export sync bundles without embedded artifact bodies
-  --scope local|global|project  Store scope (default: global ~/.hasna/apps/knowledge/)
+  --scope local|global|project  Store scope (default: global ~/.hasna/knowledge/)
   --tables <names>             Comma-separated knowledge.db sync tables
-  --peer-workspace <path>      Peer repo root or .hasna/apps/knowledge path for local sync or remote override
+  --peer-workspace <path>      Peer repo root or .hasna/knowledge path for local sync or remote override
   --no-color                  Disable color output
   --completions <shell>       Output completions for bash|zsh|fish
   -v, --version               Show version
@@ -383,7 +383,7 @@ function printCommandHelp(command: string): void {
   if (command === 'setup') { console.log('Usage: knowledge setup --mode local|hosted [--api-url https://...] [--canonical-example] [--scope local|global|project] [--json]'); return; }
   if (command === 'auth') { console.log('Usage: knowledge auth login|whoami|logout [--api-key <key>] [--email <email>] [--org <slug>] [--api-url https://...] [--scope local|global|project] [--json]'); return; }
   if (command === 'remote') { console.log('Usage: knowledge remote contracts|status [--scope local|global|project] [--json]'); return; }
-  if (command === 'storage') { console.log('Usage: knowledge storage status|validate|repair-artifact-keys [--approve-write --approved-by <name>] [--scope local|global|project] [--json]'); return; }
+  if (command === 'storage') { console.log('Usage: knowledge storage status|validate|repair-artifact-keys|migrate-legacy-path [--approve-write --approved-by <name>] [--scope local|global|project] [--json]'); return; }
   if (command === 'machines') { console.log('Usage: knowledge machines topology [--no-tailscale] | preflight [machine] [--workspace <repo>] [--scope local|global|project] [--json]'); return; }
   if (command === 'sync') { console.log('Usage: knowledge sync status|doctor|readiness|snapshot|machines|conflicts [show|propose|resolve] [id] | dry-run|pull|push|sync|export|import [--peer-workspace <path>] [--machine <ssh-alias>] [--tables <names>] [--dry-run] [--limit <n>] [--approve-write] [--approved-by <name>] [--strategy <name>] [--mode deterministic|ai] [--model <alias|provider:model>] [--fake] [--no-tailscale] [--scope local|global|project] [--json]\n\nRemote machine sync resolves peer paths through @hasna/machines when --peer-workspace is omitted.'); return; }
   if (command === 'db') { console.log('Usage: knowledge db init|stats|storage status|push|pull|sync [--tables sources,chunks] [--scope local|global|project] [--json]'); return; }
@@ -522,6 +522,18 @@ async function run(argv: string[]): Promise<void> {
   if (!command || flags.help || command === 'help') { printCommandHelp(positional[1]); return; }
 
   const service = createKnowledgeService({ scope: flags.scope });
+  if (command === 'storage') {
+    const storageAction = positional[1] ?? 'status';
+    if (storageAction === 'migrate-legacy-path' || storageAction === 'migrate-legacy' || storageAction === 'migrate-path') {
+      const migration = service.migrateLegacyPath({
+        approveWrite: flags.approveWrite,
+        approvedBy: flags.approvedBy,
+      });
+      output(migration, flags.json);
+      if (!migration.ok && !flags.json) process.exitCode = 1;
+      return;
+    }
+  }
   const storePathOverridden = Boolean(flags.store);
   let storePath = flags.store;
   if (!storePath) {
@@ -660,7 +672,16 @@ async function run(argv: string[]): Promise<void> {
       output(repair, flags.json);
       return;
     }
-    throw new Error("Invalid storage action. Use 'status', 'validate', or 'repair-artifact-keys'.");
+    if (action === 'migrate-legacy-path' || action === 'migrate-legacy' || action === 'migrate-path') {
+      const migration = service.migrateLegacyPath({
+        approveWrite: flags.approveWrite,
+        approvedBy: flags.approvedBy,
+      });
+      output(migration, flags.json);
+      if (!migration.ok && !flags.json) process.exitCode = 1;
+      return;
+    }
+    throw new Error("Invalid storage action. Use 'status', 'validate', 'repair-artifact-keys', or 'migrate-legacy-path'.");
   }
 
   if (command === 'machines') {

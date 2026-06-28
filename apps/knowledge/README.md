@@ -8,7 +8,7 @@
 
 `knowledge` is evolving from a flat note store into a local-first knowledge
 engine for AI agents. It stores simple knowledge items today, creates a Hasna
-project workspace under `.hasna/apps/knowledge`, initializes a versioned
+project workspace under `.hasna/knowledge`, initializes a versioned
 `knowledge.db`, writes generated wiki artifacts, and exposes a stdio MCP server.
 
 CLI and MCP workspace operations share a `KnowledgeService` facade for config,
@@ -107,7 +107,7 @@ The top-level SDK also exposes `knowledge.sync.status()`,
 `knowledge.sync.snapshot()`, `knowledge.sync.conflicts()`, and
 `knowledge.sync.machines()` for app-native sync inspection.
 
-The SDK uses the same `.hasna/apps/knowledge` project workspace as the CLI. In
+The SDK uses the same `.hasna/knowledge` project workspace as the CLI. In
 local mode it writes the SQLite catalog and generated artifacts under that path.
 In hosted/canonical mode it can point generated artifacts at S3 while keeping
 raw source ownership outside knowledge. Source files remain referenced via
@@ -236,7 +236,7 @@ HASNA_KNOWLEDGE_WEB_SEARCH=1 knowledge web search "latest AI SDK web search" --p
   local workflow for open-files manifests, search, prompt runs, cited wiki
   pages, linting, reindexing, MCP, and optional hosted/S3 mode.
 - [JSON to SQLite migration](docs/migration/json-to-sqlite.md): how legacy
-  JSON notes coexist with the `.hasna/apps/knowledge` workspace and the
+  JSON notes coexist with the `.hasna/knowledge` workspace and the
   versioned SQLite catalog.
 - [AI-native architecture](docs/architecture/ai-native-knowledge-base.md):
   source boundaries, wiki model, search model, provider registry, and non-goals.
@@ -347,9 +347,10 @@ artifact directories, and config.
 knowledge storage status [--scope project] [--json]
 knowledge storage validate [--scope project] [--json]
 knowledge storage repair-artifact-keys [--approve-write --approved-by <name>] [--scope project] [--json]
+knowledge storage migrate-legacy-path [--approve-write --approved-by <name>] [--scope project] [--json]
 ```
 Show the storage contract for local or S3-backed generated artifacts. Local mode
-uses `.hasna/apps/knowledge` for config, SQLite, indexes, wiki artifacts, logs,
+uses `.hasna/knowledge` for config, SQLite, indexes, wiki artifacts, logs,
 runs, and exports. S3 mode stores generated artifacts under the configured
 knowledge bucket/prefix while `open-files` remains the source of truth for raw
 source bytes. The command also reports artifact classes, allowed source ref
@@ -368,9 +369,16 @@ portable artifact key accidentally includes the configured S3 prefix. It only
 updates metadata after `--approve-write --approved-by <name>` and records an
 audit event; it does not move S3 objects or copy raw source bytes.
 
+`storage migrate-legacy-path` is the explicit path migration for older
+app-folder workspaces. It dry-runs by default, reports JSON item counts, SQLite
+integrity, artifact counts and hashes, and only moves data after
+`--approve-write --approved-by <name>`. The write path creates a backup,
+renames the workspace into `.hasna/knowledge`, verifies the backup and moved
+tree match, and leaves only a diagnostic tombstone at the old location.
+
 For example production, the canonical generated-artifact bucket is
 `example-knowledge-prod` in `us-east-1` with prefix
-`.hasna/apps/knowledge/`. `storage status --json` exposes this under
+`.hasna/knowledge/`. `storage status --json` exposes this under
 `canonical_example` even when local storage is active. The canonical
 metadata-only secret paths are:
 
@@ -495,7 +503,7 @@ without provider credentials. Neither mode resolves or writes durable changes;
 `sync conflicts resolve` still requires `--approve-write --approved-by <name>`.
 
 `sync dry-run`, `pull`, `push`, and `sync` operate against another local repo
-root or `.hasna/apps/knowledge` path. They compare rows by table primary key,
+root or `.hasna/knowledge` path. They compare rows by table primary key,
 copy generated artifacts recorded in `storage_objects`, normalize local
 artifact URIs per machine, and record conflicts instead of overwriting
 divergent rows. They move derived catalog rows and generated artifacts only;
@@ -504,7 +512,7 @@ raw `open-files` bytes are not copied into knowledge.
 When `--machine <ssh-alias>` is supplied, peer sync uses `ssh` plus the
 remote `knowledge sync export/import` commands. The remote machine must have a
 compatible published `knowledge` CLI on PATH, and `--peer-workspace` should be
-the remote repo root or remote `.hasna/apps/knowledge` path.
+the remote repo root or remote `.hasna/knowledge` path.
 
 This command is separate from `knowledge db storage sync`: `sync` owns
 knowledge semantics and conflict visibility, while `db storage sync` moves
@@ -539,7 +547,7 @@ knowledge db storage pull [--tables sources,chunks] [--scope project] [--json]
 knowledge db storage sync [--tables sources,chunks] [--scope project] [--json]
 ```
 Initialize or inspect the versioned SQLite catalog at
-`.hasna/apps/knowledge/knowledge.db`.
+`.hasna/knowledge/knowledge.db`.
 
 `db storage` is separate from `knowledge storage`: it syncs durable catalog rows
 between local SQLite and PostgreSQL. Configure it with
@@ -735,13 +743,18 @@ knowledge help [command]
 
 ## Store Location
 
-Default global compatibility store: `~/.hasna/apps/knowledge/db.json`
+Default global compatibility store: `~/.hasna/knowledge/db.json`
 
-Project workspace: `.hasna/apps/knowledge/`
+Project workspace: `.hasna/knowledge/`
 
-The legacy `~/.open-knowledge/db.json` store is migrated into the new global
-Hasna app path on first use if the new store does not exist. Override item-store
-location with `--store <path>`.
+The legacy `~/.open-knowledge/db.json` store is migrated into the canonical
+global Hasna path on first use if the new store does not exist. Override
+item-store location with `--store <path>`.
+
+Older app-folder workspaces are not read as an operational fallback. Use
+`knowledge storage migrate-legacy-path --approve-write --approved-by <name>` to
+move one into the canonical `.hasna/knowledge/` location with backup and
+verification evidence.
 
 ## MCP Server
 
@@ -855,14 +868,14 @@ AI SDK v6 provider support through `ai`, `@ai-sdk/openai`,
 prompt, embedding, or agent command explicitly requests a model.
 
 Generated knowledge artifacts can be stored locally under
-`.hasna/apps/knowledge/artifacts` or through the S3 artifact-store adapter.
+`.hasna/knowledge/artifacts` or through the S3 artifact-store adapter.
 For example production, `knowledge setup --mode hosted
 --canonical-example --scope project --json` configures generated artifacts
-under `s3://example-knowledge-prod/.hasna/apps/knowledge/` and
+under `s3://example-knowledge-prod/.hasna/knowledge/` and
 keeps `open-files` as the raw-source owner.
 
 The default safety policy allows writes only under the resolved
-`.hasna/apps/knowledge` workspace. S3 manifest/outbox reads require
+`.hasna/knowledge` workspace. S3 manifest/outbox reads require
 `safety.network.s3_reads_enabled=true` and an allowed bucket in config, or the
 equivalent `HASNA_KNOWLEDGE_ALLOW_S3_READS=1` and
 `HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS=bucket-a,bucket-b` environment variables.

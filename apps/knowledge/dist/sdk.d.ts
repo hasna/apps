@@ -34,6 +34,7 @@ export interface KnowledgeClient {
     readonly storage: {
         readonly status: () => ReturnType<KnowledgeService['storageContract']>;
         readonly validate: () => ReturnType<KnowledgeService['validateStorage']>;
+        readonly migrateLegacyPath: (options?: Parameters<KnowledgeService['migrateLegacyPath']>[0]) => ReturnType<KnowledgeService['migrateLegacyPath']>;
         readonly artifactStore: () => ReturnType<KnowledgeService['artifactStore']>;
     };
     readonly sync: {

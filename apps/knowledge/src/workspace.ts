@@ -2,7 +2,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
-export const HASNA_KNOWLEDGE_APP_PATH = join('.hasna', 'apps', 'knowledge');
+export const HASNA_KNOWLEDGE_APP_PATH = join('.hasna', 'knowledge');
+export const LEGACY_HASNA_KNOWLEDGE_APP_PATH = join('.hasna', 'apps', 'knowledge');
 
 export interface KnowledgeWorkspace {
   home: string;
@@ -92,7 +93,7 @@ export const EXAMPLE_KNOWLEDGE_CANONICAL = {
     bucket: 'example-knowledge-prod',
     region: 'us-east-1',
     profile: 'example-infra',
-    prefix: '.hasna/apps/knowledge',
+    prefix: '.hasna/knowledge',
     server_side_encryption: 'AES256',
   },
   secrets: {
@@ -125,11 +126,26 @@ export function legacyGlobalStorePath(): string {
 }
 
 export function globalKnowledgeHome(): string {
-  return join(homedir(), '.hasna', 'apps', 'knowledge');
+  return join(homedir(), '.hasna', 'knowledge');
 }
 
 export function projectKnowledgeHome(cwd = process.cwd()): string {
   return resolve(cwd, HASNA_KNOWLEDGE_APP_PATH);
+}
+
+export function legacyGlobalKnowledgeHome(): string {
+  return join(homedir(), LEGACY_HASNA_KNOWLEDGE_APP_PATH);
+}
+
+export function legacyProjectKnowledgeHome(cwd = process.cwd()): string {
+  return resolve(cwd, LEGACY_HASNA_KNOWLEDGE_APP_PATH);
+}
+
+export function resolveLegacyScopedWorkspace(scope: string | undefined, cwd = process.cwd()): KnowledgeWorkspace {
+  if (scope === 'project' || scope === 'local') {
+    return workspaceForHome(legacyProjectKnowledgeHome(cwd));
+  }
+  return workspaceForHome(legacyGlobalKnowledgeHome());
 }
 
 export function workspaceForHome(home: string): KnowledgeWorkspace {

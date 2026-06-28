@@ -1,4 +1,5 @@
 export declare const HASNA_KNOWLEDGE_APP_PATH: string;
+export declare const LEGACY_HASNA_KNOWLEDGE_APP_PATH: string;
 export interface KnowledgeWorkspace {
     home: string;
     configPath: string;
@@ -85,7 +86,7 @@ export declare const EXAMPLE_KNOWLEDGE_CANONICAL: {
         readonly bucket: "example-knowledge-prod";
         readonly region: "us-east-1";
         readonly profile: "example-infra";
-        readonly prefix: ".hasna/apps/knowledge";
+        readonly prefix: ".hasna/knowledge";
         readonly server_side_encryption: "AES256";
     };
     readonly secrets: {
@@ -102,6 +103,9 @@ export declare function canonicalExampleKnowledgeStorage(): KnowledgeConfig['sto
 export declare function legacyGlobalStorePath(): string;
 export declare function globalKnowledgeHome(): string;
 export declare function projectKnowledgeHome(cwd?: string): string;
+export declare function legacyGlobalKnowledgeHome(): string;
+export declare function legacyProjectKnowledgeHome(cwd?: string): string;
+export declare function resolveLegacyScopedWorkspace(scope: string | undefined, cwd?: string): KnowledgeWorkspace;
 export declare function workspaceForHome(home: string): KnowledgeWorkspace;
 export declare function defaultKnowledgeConfig(): KnowledgeConfig;
 export declare function ensureKnowledgeWorkspace(home: string): KnowledgeWorkspace;

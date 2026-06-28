@@ -109,7 +109,7 @@ function isInside(root: string, target: string): boolean {
 export function assertWriteAllowed(targetPath: string, policy: SafetyPolicy): void {
   const resolved = resolve(targetPath);
   if (!policy.allowWriteRoots.some((root) => isInside(root, resolved))) {
-    throw new Error(`Safety policy denied write outside .hasna/apps/knowledge: ${targetPath}`);
+    throw new Error(`Safety policy denied write outside .hasna/knowledge: ${targetPath}`);
   }
 }
 

@@ -13,7 +13,7 @@ describe('knowledge service facade', () => {
     const sourceRef = `file://${source}`;
 
     const paths = service.paths();
-    expect(paths.home).toBe(join(dir, '.hasna', 'apps', 'knowledge'));
+    expect(paths.home).toBe(join(dir, '.hasna', 'knowledge'));
     expect(paths.config.storage.type).toBe('local');
     expect(service.storageContract().source_ownership.raw_source_bytes_stored_in_open_knowledge).toBe(false);
     expect(service.validateStorage().ok).toBe(true);

@@ -14,7 +14,7 @@ The open source package owns:
   current `KnowledgeService` facade centralizes workspace/config/safety,
   artifact storage, DB/wiki setup, source ingestion, source resolution, and
   outbox consumption.
-- Local project workspace under `.hasna/apps/knowledge`.
+- Local project workspace under `.hasna/knowledge`.
 - Source references, citations, extracted metadata, chunks, generated wiki
   artifacts, schemas, indexes, run ledgers, and search state.
 - Hybrid retrieval over keyword search, semantic vectors, wiki pages, citations,
@@ -68,7 +68,7 @@ and local artifact generation do not require this remote API.
 Project-local state lives at:
 
 ```text
-.hasna/apps/knowledge/
+.hasna/knowledge/
   config.json
   knowledge.db
   artifacts/
@@ -83,7 +83,7 @@ Project-local state lives at:
 
 The legacy JSON store at `~/.open-knowledge/db.json` remains readable for
 migration and compatibility. New project mode should prefer
-`.hasna/apps/knowledge/knowledge.db` and generated artifacts under the same app
+`.hasna/knowledge/knowledge.db` and generated artifacts under the same app
 home.
 
 Global/user state may use a Hasna data directory, but project mode is the
@@ -150,7 +150,7 @@ logic.
 
 ## Remote And S3 Mode
 
-Local mode writes artifacts to `.hasna/apps/knowledge`.
+Local mode writes artifacts to `.hasna/knowledge`.
 
 Remote/cloud mode can store generated knowledge artifacts in S3:
 
@@ -168,7 +168,7 @@ example production uses the canonical open-source knowledge bucket and app
 path-compatible prefix:
 
 ```text
-s3://example-knowledge-prod/.hasna/apps/knowledge/
+s3://example-knowledge-prod/.hasna/knowledge/
 ```
 
 The app config can be materialized with:

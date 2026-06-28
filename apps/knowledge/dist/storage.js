@@ -23,7 +23,8 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join, resolve } from "path";
-var HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "apps", "knowledge");
+var HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "knowledge");
+var LEGACY_HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "apps", "knowledge");
 var EXAMPLE_KNOWLEDGE_CANONICAL = {
   division: "xyz",
   app_type: "opensource",
@@ -34,7 +35,7 @@ var EXAMPLE_KNOWLEDGE_CANONICAL = {
     bucket: "example-knowledge-prod",
     region: "us-east-1",
     profile: "example-infra",
-    prefix: ".hasna/apps/knowledge",
+    prefix: ".hasna/knowledge",
     server_side_encryption: "AES256"
   },
   secrets: {
@@ -64,10 +65,22 @@ function legacyGlobalStorePath() {
   return join(homedir(), ".open-knowledge", "db.json");
 }
 function globalKnowledgeHome() {
-  return join(homedir(), ".hasna", "apps", "knowledge");
+  return join(homedir(), ".hasna", "knowledge");
 }
 function projectKnowledgeHome(cwd = process.cwd()) {
   return resolve(cwd, HASNA_KNOWLEDGE_APP_PATH);
+}
+function legacyGlobalKnowledgeHome() {
+  return join(homedir(), LEGACY_HASNA_KNOWLEDGE_APP_PATH);
+}
+function legacyProjectKnowledgeHome(cwd = process.cwd()) {
+  return resolve(cwd, LEGACY_HASNA_KNOWLEDGE_APP_PATH);
+}
+function resolveLegacyScopedWorkspace(scope, cwd = process.cwd()) {
+  if (scope === "project" || scope === "local") {
+    return workspaceForHome(legacyProjectKnowledgeHome(cwd));
+  }
+  return workspaceForHome(legacyGlobalKnowledgeHome());
 }
 function workspaceForHome(home) {
   return {

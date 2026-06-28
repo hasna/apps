@@ -119,7 +119,7 @@ function fakeTopology(workspaceHome: string): KnowledgeMachineTopology {
     current_platform: 'linux',
     knowledge: {
       scope: 'project',
-      app_path: '.hasna/apps/knowledge',
+      app_path: '.hasna/knowledge',
       workspace_home: workspaceHome,
     },
     machines: [
@@ -323,7 +323,7 @@ describe('knowledge machine sync ledger', () => {
     expect(dryRun.push?.dry_run).toBe(true);
     expect(dryRun.push?.tables.find((table) => table.table === 'sources')?.inserted).toBe(1);
     expect(peerService.dbStats().sources).toBe(0);
-    expect(existsSync(join(peerDir, '.hasna', 'apps', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(false);
+    expect(existsSync(join(peerDir, '.hasna', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(false);
 
     const push = await sourceService.syncPeer({
       peerWorkspace: peerDir,
@@ -341,7 +341,7 @@ describe('knowledge machine sync ledger', () => {
     expect(peerStats.sources).toBe(1);
     expect(peerStats.chunks).toBeGreaterThanOrEqual(1);
     expect(peerStats.storage_objects).toBe(4);
-    expect(existsSync(join(peerDir, '.hasna', 'apps', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(true);
+    expect(existsSync(join(peerDir, '.hasna', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(true);
 
     const secondDryRun = await sourceService.syncPeer({
       peerWorkspace: peerDir,
