@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.16] - 2026-06-28
+
+### Changed
+
+- Changed the packaged production Dockerfile to install Bun in an ECR Public
+  Node Alpine build stage, then copy only Bun, app files, and production
+  dependencies into an ECR Public Alpine runtime with CA certificates. This
+  reduces inherited OS vulnerability findings before live AWS scale-up.
+
 ## [0.1.15] - 2026-06-28
 
 ### Changed
