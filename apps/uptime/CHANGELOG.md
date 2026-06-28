@@ -6,6 +6,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-06-28
+
+### Added
+
+- CloudFront default-domain protected web access mode for first AWS deployment,
+  with ALB HTTP restricted to CloudFront origin-facing ranges.
+- Hosted public-origin allow-list support through
+  `HASNA_UPTIME_ALLOWED_ORIGINS`, wired by the AWS template for CloudFront and
+  custom HTTPS access modes.
+
+### Changed
+
+- AWS Terraform and cloud-plan defaults no longer require custom Route53/ACM
+  inputs for the first protected web deployment path.
+
 ## [0.1.7] - 2026-06-28
 
 ### Added

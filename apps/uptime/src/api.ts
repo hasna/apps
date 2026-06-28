@@ -12,6 +12,7 @@ export interface ServeOptions extends UptimeServiceOptions {
   apiToken?: string;
   hostedToken?: string;
   hostedTokens?: HostedToken[];
+  hostedAllowedOrigins?: string[];
   allowUnsafeRemoteMutations?: boolean;
 }
 
@@ -19,6 +20,7 @@ export interface CreateApiHandlerOptions {
   apiToken?: string;
   hostedToken?: string;
   hostedTokens?: HostedToken[];
+  hostedAllowedOrigins?: string[];
   allowUnsafeRemoteMutations?: boolean;
   fetchImpl?: typeof fetch;
   trustedLoopback?: boolean;
@@ -88,6 +90,7 @@ export function serveUptime(options: ServeOptions = {}): { server: ReturnType<ty
       apiToken: options.apiToken,
       hostedToken: options.hostedToken,
       hostedTokens: options.hostedTokens,
+      hostedAllowedOrigins: options.hostedAllowedOrigins,
       allowUnsafeRemoteMutations: options.allowUnsafeRemoteMutations,
       trustedLoopback: isLoopbackHost(options.host ?? "127.0.0.1"),
       mode,
@@ -150,12 +153,22 @@ async function handleHostedRequest(service: UptimeService, request: Request, url
   const scope = hostedScopeFor(request.method, apiPath);
   requireHostedActor(request, url, options, scope);
   if (["POST", "PATCH", "DELETE"].includes(request.method)) {
-    const origin = request.headers.get("origin");
-    if (origin && origin !== `${url.protocol}//${url.host}`) {
-      throw new ApiError("cross-origin mutation rejected", 403);
-    }
+    validateHostedMutationOrigin(request, url, options);
   }
   return handleApiRoute(service, request, url, apiPath, options, true);
+}
+
+function validateHostedMutationOrigin(request: Request, url: URL, options: CreateApiHandlerOptions): void {
+  const rawOrigin = request.headers.get("origin");
+  const origin = normalizeOrigin(rawOrigin);
+  if (rawOrigin && !origin) {
+    throw new ApiError("cross-origin mutation rejected", 403);
+  }
+  if (!origin) return;
+  const allowedOrigins = new Set([`${url.protocol}//${url.host}`, ...resolveHostedAllowedOrigins(options)]);
+  if (!allowedOrigins.has(origin)) {
+    throw new ApiError("cross-origin mutation rejected", 403);
+  }
 }
 
 async function handleApiRoute(
@@ -372,6 +385,35 @@ function resolveHostedTokens(options: Pick<CreateApiHandlerOptions, "hostedToken
     scopes: ["uptime:read", "uptime:write", "uptime:probe", "uptime:report"],
     workspaceId: process.env.HASNA_UPTIME_WORKSPACE_ID ?? "default",
   }];
+}
+
+function resolveHostedAllowedOrigins(options: Pick<CreateApiHandlerOptions, "hostedAllowedOrigins">): string[] {
+  const configured = options.hostedAllowedOrigins ?? splitCsv(process.env.HASNA_UPTIME_ALLOWED_ORIGINS);
+  return configured.map((origin) => normalizeAllowedOrigin(origin)).filter((origin): origin is string => Boolean(origin));
+}
+
+function splitCsv(value: string | undefined): string[] {
+  if (!value) return [];
+  return value.split(",").map((entry) => entry.trim()).filter(Boolean);
+}
+
+function normalizeAllowedOrigin(value: string): string | undefined {
+  const origin = normalizeOrigin(value);
+  if (!origin) {
+    throw new ApiError(`invalid hosted allowed origin: ${value}`, 500);
+  }
+  return origin;
+}
+
+function normalizeOrigin(value: string | null | undefined): string | undefined {
+  if (!value?.trim()) return undefined;
+  try {
+    const parsed = new URL(value.trim());
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return undefined;
+  }
 }
 
 function safeTokenEqual(candidate: string | undefined, expected: string): boolean {

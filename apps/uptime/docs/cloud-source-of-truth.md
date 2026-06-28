@@ -393,8 +393,11 @@ The preferred hosted runtime is:
   encryption, versioning, lifecycle/retention, public access block, and scoped
   IAM policies;
 - ECR image repository, ECS/Fargate service, task role, execution role, private
-  subnets, security groups, public ALB, TLS, Route53, log groups, metrics,
-  alarms, and deployment circuit breaker;
+  subnets, security groups, protected edge, public ALB origin, CloudFront
+  default-domain HTTPS or custom TLS/DNS, log groups, metrics, alarms, and
+  deployment circuit breaker;
+- hosted web task public-origin configuration through
+  `HASNA_UPTIME_ALLOWED_ORIGINS`, matching the selected HTTPS edge origin;
 - Secrets Manager or SSM parameter `valueFrom` refs in task definitions, never
   plaintext secret values in task environment;
 - owner/project/environment tags, budget alarms, and a monthly cost estimate.
@@ -424,8 +427,8 @@ ECS/API/RDS/S3/probe lag/job backlog/delivery failures, and rollback commands.
 - Conversations, notes, mementos, servers, domains, and deployment have partial
   or local-first storage models that need explicit ownership decisions.
 - Open Uptime is not registered in `@hasna/cloud` known service lists.
-- No Open Uptime AWS runtime secrets, image repository, task, ALB, TLS, alarms,
-  or backup resources exist yet in the target account.
+- No Open Uptime AWS runtime secrets, image repository, task, ALB, CloudFront
+  edge, alarms, or backup resources exist yet in the target account.
 - Projects per-project cloud stores do not exist yet; current local
   `project.db` stores are not enough for cloud-backed canvases or JSON Render.
 - Browser/page monitoring lacks the artifact, redaction, retention, and storage

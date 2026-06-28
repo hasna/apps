@@ -48,7 +48,11 @@ in `docs/aws-deployment-runbook.md` is satisfied.
 
 Deployment review artifacts live in `Dockerfile` and `infra/aws`. The Terraform
 desired counts default to zero, and `uptime cloud plan --json` exposes the
-format/init/validate/plan commands with `applyAllowed: false`. Hosted AWS
+format/init/validate/plan commands with `applyAllowed: false`. The first
+protected access path uses the CloudFront default HTTPS domain with ALB origin
+ingress restricted to CloudFront. The hosted web task must set
+`HASNA_UPTIME_ALLOWED_ORIGINS` to the public HTTPS edge origin so same-origin
+browser mutations still pass when the private origin hop is HTTP. Hosted AWS
 runtime state currently uses explicit EFS-backed SQLite via
 `HASNA_UPTIME_HOSTED_SQLITE_DB=/data/uptime/uptime.db` for one protected web
 task maximum; do not set `HASNA_UPTIME_DATABASE_URL` until the async Postgres
@@ -87,6 +91,8 @@ State-changing API requests reject cross-origin browser requests and
 non-loopback mutation hosts by default. For a trusted remote bind, set
 `HASNA_UPTIME_API_TOKEN` or pass `uptime serve --api-token <token>` and send
 `Authorization: Bearer <token>` or `X-Uptime-Token: <token>`.
+Hosted mode additionally accepts comma-separated public origins from
+`HASNA_UPTIME_ALLOWED_ORIGINS` for deployments behind a TLS-terminating edge.
 Endpoints that accept request bodies require `content-type: application/json`.
 
 ## Uptime Semantics

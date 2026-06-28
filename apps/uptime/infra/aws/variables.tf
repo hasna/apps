@@ -46,13 +46,24 @@ variable "ecr_repository_name" {
   default     = "open-uptime"
 }
 
+variable "protected_access_mode" {
+  description = "Protected web access mode. cloudfront_default_domain uses the CloudFront HTTPS default domain and restricts ALB HTTP to CloudFront origin-facing ranges. alb_https_cert uses an ALB HTTPS listener with certificate_arn."
+  type        = string
+  default     = "cloudfront_default_domain"
+
+  validation {
+    condition     = contains(["cloudfront_default_domain", "alb_https_cert"], var.protected_access_mode)
+    error_message = "protected_access_mode must be cloudfront_default_domain or alb_https_cert."
+  }
+}
+
 variable "public_subnet_ids" {
   description = "Public subnets for the ALB."
   type        = list(string)
 }
 
 variable "alb_ingress_cidr_blocks" {
-  description = "Approved HTTPS source CIDR blocks for the ALB. Keep empty until edge/source policy is approved."
+  description = "Approved HTTPS source CIDR blocks for ALB HTTPS mode. Keep empty until edge/source policy is approved."
   type        = list(string)
   default     = []
 }
@@ -75,7 +86,7 @@ variable "container_image" {
 variable "runtime_package_version" {
   description = "Published @hasna/uptime package version that CodeBuild should build into the ECR image."
   type        = string
-  default     = "0.1.7"
+  default     = "0.1.8"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$", var.runtime_package_version))
@@ -84,8 +95,19 @@ variable "runtime_package_version" {
 }
 
 variable "certificate_arn" {
-  description = "ACM certificate ARN for HTTPS listener."
+  description = "ACM certificate ARN for ALB HTTPS mode. Leave null when protected_access_mode is cloudfront_default_domain."
   type        = string
+  default     = null
+
+  validation {
+    condition     = var.certificate_arn == null || can(regex("^arn:aws:acm:", var.certificate_arn))
+    error_message = "certificate_arn must be null or an ACM certificate ARN."
+  }
+
+  validation {
+    condition     = var.protected_access_mode != "alb_https_cert" || var.certificate_arn != null
+    error_message = "certificate_arn is required when protected_access_mode is alb_https_cert."
+  }
 }
 
 variable "hosted_zone_id" {

@@ -237,6 +237,37 @@ test("hosted API still rejects cross-origin mutations with a valid token", async
   service.close();
 });
 
+test("hosted API accepts configured public origin behind a CloudFront HTTP origin hop", async () => {
+  const previousAllowedOrigins = process.env.HASNA_UPTIME_ALLOWED_ORIGINS;
+  process.env.HASNA_UPTIME_ALLOWED_ORIGINS = "https://d111111abcdef8.cloudfront.net";
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const handler = createApiHandler(service, { mode: "hosted", hostedToken: "secret" });
+
+  try {
+    const create = await handler(jsonRequest(
+      "http://internal-open-uptime-alb/api/v1/monitors",
+      "POST",
+      { name: "cloudfront", kind: "http", url: "https://example.com" },
+      { origin: "https://d111111abcdef8.cloudfront.net", authorization: "Bearer secret" },
+    ));
+    const rejected = await handler(jsonRequest(
+      "http://internal-open-uptime-alb/api/v1/monitors",
+      "POST",
+      { name: "wrong-origin", kind: "http", url: "https://example.com" },
+      { origin: "https://other.example", authorization: "Bearer secret" },
+    ));
+
+    expect(create.status).toBe(201);
+    expect(rejected.status).toBe(403);
+    expect((await rejected.json()).error).toContain("cross-origin");
+    expect(service.summary().totals.monitors).toBe(1);
+  } finally {
+    if (previousAllowedOrigins === undefined) delete process.env.HASNA_UPTIME_ALLOWED_ORIGINS;
+    else process.env.HASNA_UPTIME_ALLOWED_ORIGINS = previousAllowedOrigins;
+    service.close();
+  }
+});
+
 test("hosted API blocks raw report delivery and inline checks", async () => {
   const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
   service.createMonitor({ name: "api", kind: "http", url: "https://example.com" });

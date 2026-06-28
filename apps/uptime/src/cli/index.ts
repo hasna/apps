@@ -484,6 +484,7 @@ cloud
   .option("--ecr-repository <name>", "ECR repository name")
   .option("--image <uri>", "container image URI")
   .option("--runtime-package-version <version>", "published @hasna/uptime version for the AWS image builder")
+  .addOption(new Option("--protected-access-mode <mode>", "protected web access mode").choices(["cloudfront_default_domain", "alb_https_cert"]).default("cloudfront_default_domain"))
   .option("--evidence-bucket <name>", "S3 evidence bucket name")
   .option("-j, --json", "print JSON")
   .action((opts) => {
@@ -501,6 +502,7 @@ cloud
         ecrRepository: opts.ecrRepository,
         image: opts.image,
         runtimePackageVersion: opts.runtimePackageVersion,
+        protectedAccessMode: opts.protectedAccessMode,
         evidenceBucket: opts.evidenceBucket,
       });
       print(plan, renderCloudPlan(plan), opts);
@@ -1051,6 +1053,7 @@ function renderCloudPlan(plan: AwsDeploymentPlan): string {
     `vpc: ${plan.resources.vpcId}`,
     `efs: ${plan.resources.efsFileSystem}`,
     `hosted sqlite: ${plan.resources.hostedSqliteDbPath}`,
+    `protected access: ${plan.resources.protectedAccessMode} ${plan.resources.protectedAccessUrl}`,
     `services: ${plan.resources.services.map((service) => `${service.name}:${service.desiredCount}/${service.targetDesiredCount}`).join(", ")}`,
     `evidence bucket: ${plan.resources.evidenceBucket}`,
     `blockers: ${plan.blockers.length}`,

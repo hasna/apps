@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.6.0"
+  required_version = ">= 1.9.0"
 
   required_providers {
     aws = {
@@ -23,6 +23,8 @@ locals {
   efs_gid               = 10001
   hosted_sqlite_db_path = "/data/uptime/uptime.db"
   efs_enabled_services  = toset(["web"])
+  use_alb_https         = var.protected_access_mode == "alb_https_cert"
+  use_cloudfront        = var.protected_access_mode == "cloudfront_default_domain"
   services = {
     web = {
       desired_count = lookup(var.desired_counts, "web", 0)
@@ -60,6 +62,11 @@ locals {
 
 data "aws_vpc" "target" {
   id = var.vpc_id
+}
+
+data "aws_ec2_managed_prefix_list" "cloudfront_origin_facing" {
+  count = local.use_cloudfront ? 1 : 0
+  name  = "com.amazonaws.global.cloudfront.origin-facing"
 }
 
 resource "aws_ecr_repository" "open_uptime" {
@@ -290,7 +297,7 @@ resource "aws_security_group" "alb" {
 }
 
 resource "aws_security_group_rule" "alb_https_ingress" {
-  count             = length(var.alb_ingress_cidr_blocks) > 0 ? 1 : 0
+  count             = local.use_alb_https && length(var.alb_ingress_cidr_blocks) > 0 ? 1 : 0
   type              = "ingress"
   description       = "HTTPS"
   security_group_id = aws_security_group.alb.id
@@ -298,6 +305,17 @@ resource "aws_security_group_rule" "alb_https_ingress" {
   to_port           = 443
   protocol          = "tcp"
   cidr_blocks       = var.alb_ingress_cidr_blocks
+}
+
+resource "aws_security_group_rule" "alb_http_from_cloudfront" {
+  count             = local.use_cloudfront ? 1 : 0
+  type              = "ingress"
+  description       = "HTTP from CloudFront origin-facing ranges"
+  security_group_id = aws_security_group.alb.id
+  from_port         = 80
+  to_port           = 80
+  protocol          = "tcp"
+  prefix_list_ids   = [data.aws_ec2_managed_prefix_list.cloudfront_origin_facing[0].id]
 }
 
 resource "aws_security_group_rule" "alb_to_web" {
@@ -506,6 +524,7 @@ resource "aws_lb_target_group" "web" {
 }
 
 resource "aws_lb_listener" "https" {
+  count             = local.use_alb_https ? 1 : 0
   load_balancer_arn = aws_lb.open_uptime.arn
   port              = 443
   protocol          = "HTTPS"
@@ -517,8 +536,73 @@ resource "aws_lb_listener" "https" {
   }
 }
 
+resource "aws_lb_listener" "http_cloudfront" {
+  count             = local.use_cloudfront ? 1 : 0
+  load_balancer_arn = aws_lb.open_uptime.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.web.arn
+  }
+}
+
+resource "aws_cloudfront_distribution" "open_uptime" {
+  count           = local.use_cloudfront ? 1 : 0
+  enabled         = true
+  is_ipv6_enabled = true
+  comment         = "Open Uptime ${local.prefix} protected HTTPS edge"
+  price_class     = "PriceClass_100"
+  tags            = local.tags
+
+  origin {
+    domain_name = aws_lb.open_uptime.dns_name
+    origin_id   = "${local.prefix}-alb"
+
+    custom_origin_config {
+      http_port              = 80
+      https_port             = 443
+      origin_protocol_policy = "http-only"
+      origin_ssl_protocols   = ["TLSv1.2"]
+    }
+  }
+
+  default_cache_behavior {
+    target_origin_id       = "${local.prefix}-alb"
+    viewer_protocol_policy = "redirect-to-https"
+    compress               = true
+    allowed_methods        = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+    cached_methods         = ["GET", "HEAD"]
+    default_ttl            = 0
+    max_ttl                = 0
+    min_ttl                = 0
+
+    forwarded_values {
+      query_string = true
+      headers      = ["Authorization", "Content-Type", "Origin", "X-Uptime-Hosted-Token"]
+
+      cookies {
+        forward = "all"
+      }
+    }
+  }
+
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  viewer_certificate {
+    cloudfront_default_certificate = true
+  }
+
+  depends_on = [aws_lb_listener.http_cloudfront]
+}
+
 resource "aws_route53_record" "open_uptime" {
-  count   = var.hosted_zone_id == null ? 0 : 1
+  count   = var.hosted_zone_id == null || !local.use_alb_https ? 0 : 1
   zone_id = var.hosted_zone_id
   name    = var.hostname
   type    = "A"
@@ -670,7 +754,12 @@ resource "aws_ecs_task_definition" "service" {
         { name = "HASNA_UPTIME_WORKSPACE_ID", value = var.workspace_id },
         { name = "HASNA_UPTIME_COMPONENT", value = each.key },
         { name = "HASNA_UPTIME_HOSTNAME", value = var.hostname },
-        ], contains(local.efs_enabled_services, each.key) ? [
+        ], each.key == "web" ? [
+        {
+          name  = "HASNA_UPTIME_ALLOWED_ORIGINS"
+          value = local.use_cloudfront ? "https://${aws_cloudfront_distribution.open_uptime[0].domain_name}" : "https://${var.hostname}"
+        },
+        ] : [], contains(local.efs_enabled_services, each.key) ? [
         { name = "HASNA_UPTIME_HOSTED_SQLITE_DB", value = local.hosted_sqlite_db_path },
       ] : [])
       mountPoints = contains(local.efs_enabled_services, each.key) ? [
@@ -725,7 +814,7 @@ resource "aws_ecs_service" "web" {
     container_port   = local.container_port
   }
 
-  depends_on = [aws_lb_listener.https, aws_efs_mount_target.data]
+  depends_on = [aws_lb_listener.https, aws_lb_listener.http_cloudfront, aws_efs_mount_target.data]
 }
 
 resource "aws_ecs_service" "worker" {

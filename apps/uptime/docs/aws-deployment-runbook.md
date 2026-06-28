@@ -19,6 +19,7 @@ Public package defaults are placeholders:
 - hosted data path: EFS-mounted SQLite at `/data/uptime/uptime.db`
 - hostname: `uptime.example.com`
 - workspace id: `workspace-id`
+- protected access mode: `cloudfront_default_domain`
 
 Override these with CLI flags or private deployment evidence for the real
 account, hostname, workspace id, VPC id, secret refs, and repository names.
@@ -47,7 +48,9 @@ write a sourceable env file with a placeholder probe identity.
 
 3. Confirm the target VPC, private subnets, KMS key, and EFS/Backup plan inputs
    still match the plan.
-4. Confirm Route53/edge ownership for the chosen hostname.
+4. Confirm the protected access mode. The first deploy can use the CloudFront
+   default HTTPS domain without custom DNS or ACM. Custom hostname deploys still
+   require Route53/edge ownership and an ACM certificate.
 5. Confirm the deployment role uses short-lived credentials or OIDC, not copied
    access keys.
 
@@ -59,7 +62,9 @@ The plan expects:
 - ECS/Fargate cluster with separate services for web, scheduler, public probe,
   reporter, and one-off migrations. In the current EFS SQLite bridge, only web
   may be enabled and it must run at desired count `0` or `1`.
-- ALB, TLS certificate, target group, and security groups.
+- CloudFront default-domain HTTPS edge plus ALB HTTP origin restricted to
+  CloudFront origin-facing ranges, or an ALB HTTPS listener with ACM certificate
+  when custom DNS is approved.
 - Encrypted EFS file system, access point, mount targets, and AWS Backup plan
   for `HASNA_UPTIME_HOSTED_SQLITE_DB=/data/uptime/uptime.db`.
 - S3 bucket for redacted browser evidence and generated report artifacts.
@@ -82,6 +87,8 @@ terraform -chdir=infra/aws validate
 terraform -chdir=infra/aws plan -out open-uptime.tfplan
 ```
 
+Use Terraform/OpenTofu 1.9 or newer for this starter.
+
 ## Spark01
 
 Spark01 should be a private probe/operator machine, not the hosted source of
@@ -98,6 +105,9 @@ routes are backed by cloud check jobs and cloud audit rows.
 - Do deploy hosted mode with `HASNA_UPTIME_HOSTED_SQLITE_DB` pointing at the EFS
   mount path `/data/uptime/uptime.db`. Do not set `HASNA_UPTIME_DATABASE_URL`
   until the async Postgres adapter exists.
+- Do set `HASNA_UPTIME_ALLOWED_ORIGINS` on the hosted web task to the public
+  HTTPS edge origin, such as the CloudFront default domain or approved custom
+  hostname.
 - Do not inline AWS keys, hosted tokens, Mailery keys, Open Logs tokens, database
   URLs, or probe private keys in task definitions. Use ECS `secrets.valueFrom`
   refs such as `HASNA_UPTIME_HOSTED_TOKEN`.
@@ -105,6 +115,8 @@ routes are backed by cloud check jobs and cloud audit rows.
 - Do not enable scheduler, public-probe, reporter, or migration workers against
   the EFS SQLite bridge; those services need Postgres/cloud leases first.
 - Do not expose dashboard/API routes without hosted auth and workspace checks.
+- Do not expose the ALB directly in CloudFront mode; ALB ingress must be limited
+  to CloudFront origin-facing ranges.
 - Do not treat local SQLite, local project DBs, or Spark01 local state as cloud
   authority after cutover.
 

@@ -8,13 +8,16 @@ test("buildAwsDeploymentPlan generates a dry-run AWS plan with generic package d
   const serialized = JSON.stringify(plan);
 
   expect(plan.kind).toBe("open-uptime.aws-deployment-plan");
-  expect(plan.version).toBe(2);
+  expect(plan.version).toBe(3);
   expect(plan.accountName).toBe("aws-profile");
   expect(plan.region).toBe("us-east-1");
   expect(plan.resources.vpcId).toBe("vpc-xxxxxxxx");
   expect(plan.resources.efsFileSystem).toBe("open-uptime-prod-data");
   expect(plan.resources.efsAccessPoint).toBe("open-uptime-prod-uptime");
   expect(plan.resources.hostedSqliteDbPath).toBe("/data/uptime/uptime.db");
+  expect(plan.resources.protectedAccessMode).toBe("cloudfront_default_domain");
+  expect(plan.resources.edgeDistribution).toBe("open-uptime-prod-edge");
+  expect(plan.resources.protectedAccessUrl).toBe("https://<cloudfront-domain>");
   expect(plan.status).toBe("blocked");
   expect(plan.canApply).toBe(false);
   expect(plan.image.dockerfile).toBe("Dockerfile.package");
@@ -23,8 +26,10 @@ test("buildAwsDeploymentPlan generates a dry-run AWS plan with generic package d
   expect(buildAwsDeploymentPlan().image.uri).toContain("@sha256:<image-digest>");
   expect(plan.resources.imageBuilder).toBe("open-uptime-prod-image-builder");
   expect(plan.image.pushCommands.join("\n")).toContain("BLOCKED:");
+  expect(plan.image.pushCommands.join("\n")).toContain("@hasna/uptime@0.1.8");
   expect(plan.image.pushCommands.join("\n")).not.toContain("aws codebuild start-build");
   expect(plan.runbook.deploy.join("\n")).toContain("do not run migration");
+  expect(plan.runbook.deploy.join("\n")).toContain("CloudFront default HTTPS domain");
   expect(plan.runbook.deploy.join("\n")).not.toContain("Run the migration task");
   expect(plan.infra).toMatchObject({
     path: "infra/aws",
@@ -44,6 +49,8 @@ test("buildAwsDeploymentPlan generates a dry-run AWS plan with generic package d
     .toBe("open-uptime/prod/hosted-token");
   expect(plan.resources.services.find((service) => service.role === "web")?.environment.HASNA_UPTIME_HOSTED_SQLITE_DB)
     .toBe("/data/uptime/uptime.db");
+  expect(plan.resources.services.find((service) => service.role === "web")?.environment.HASNA_UPTIME_ALLOWED_ORIGINS)
+    .toBe("https://<cloudfront-domain>");
   expect(plan.resources.services.filter((service) => service.role !== "web").every((service) => service.environment.HASNA_UPTIME_HOSTED_SQLITE_DB === undefined)).toBe(true);
   expect(plan.resources.services.find((service) => service.role === "web")?.secrets.HASNA_UPTIME_DATABASE_URL)
     .toBeUndefined();
@@ -56,6 +63,7 @@ test("buildAwsDeploymentPlan generates a dry-run AWS plan with generic package d
     hostedLocalSqliteAllowed: false,
   });
   expect(plan.requiredEvidence).toContain("EFS encryption, access point, mount-target, AWS Backup, and restore-drill evidence.");
+  expect(plan.requiredEvidence).toContain("CloudFront-default-domain or ALB TLS auth-denial smokes, direct-origin denial evidence, and web alarm checks.");
   expect(plan.blockers.join("\n")).not.toContain("no reviewed Dockerfile");
   expect(plan.requiredEvidence.length).toBeGreaterThan(3);
   expect(serialized).not.toContain("AWS_SECRET_ACCESS_KEY");
@@ -72,6 +80,22 @@ test("buildAwsDeploymentPlan generates a dry-run AWS plan with generic package d
   expect(serialized).not.toContain("vpc-04c7f7abc1d3c3f56");
   expect(serialized).not.toContain("uptime.hasna.xyz");
   expect(serialized).not.toContain("hasna/xyz/opensource");
+});
+
+test("buildAwsDeploymentPlan can describe custom ALB TLS mode without default CloudFront edge", () => {
+  const plan = buildAwsDeploymentPlan({
+    protectedAccessMode: "alb_https_cert",
+    hostname: "uptime.example.net",
+    runtimePackageVersion: "0.1.8",
+  });
+
+  expect(plan.version).toBe(3);
+  expect(plan.resources.protectedAccessMode).toBe("alb_https_cert");
+  expect(plan.resources.edgeDistribution).toBeUndefined();
+  expect(plan.resources.protectedAccessUrl).toBe("https://uptime.example.net");
+  expect(plan.resources.services.find((service) => service.role === "web")?.environment.HASNA_UPTIME_ALLOWED_ORIGINS)
+    .toBe("https://uptime.example.net");
+  expect(plan.runbook.deploy.join("\n")).toContain("Create Route53/edge record");
 });
 
 test("buildSpark01CloudConfig references private key paths without inlining secrets", () => {

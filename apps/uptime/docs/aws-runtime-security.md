@@ -19,8 +19,9 @@ Private target-account inventory belongs in private deployment evidence, not in
 the OSS repository. Before live deployment, record:
 
 - selected AWS account/profile and region;
-- target VPC, public ALB subnets, private task subnets, KMS key, Route53/edge
-  ownership, and ACM certificate;
+- target VPC, public ALB subnets, private task subnets, KMS key, protected edge
+  mode, and, when using a custom hostname, Route53/edge ownership plus ACM
+  certificate;
 - whether an approved application Postgres exists for the future target state;
 - whether Open Uptime already has service-specific ECR, ECS, ALB, DNS, secrets,
   alarms, backup policy, and evidence bucket resources.
@@ -107,8 +108,10 @@ Target shape inside the approved VPC:
 
 Security groups:
 
-- `open-uptime-alb-sg`: inbound `443` from the chosen edge/source policy,
-  outbound only to web target group.
+- `open-uptime-alb-sg`: in `cloudfront_default_domain` mode, inbound `80` only
+  from AWS's CloudFront origin-facing managed prefix list; in `alb_https_cert`
+  mode, inbound `443` only from the approved edge/source CIDR policy. Outbound
+  is only to the web target group.
 - `open-uptime-web-sg`: inbound only from ALB, outbound to RDS, S3 endpoint,
   Secrets Manager, Logs, and internal service endpoints.
 - `open-uptime-scheduler-sg`: no inbound, outbound to RDS, Logs, Secrets
@@ -130,9 +133,16 @@ infra PR.
 
 Public web exposure requires defense in depth:
 
-- ALB terminates TLS with ACM;
+- first deployment may terminate viewer TLS at CloudFront's default HTTPS
+  domain and restrict ALB HTTP origin ingress to CloudFront origin-facing
+  ranges;
+- custom hostname deployment terminates TLS with ACM on ALB or CloudFront after
+  Route53/edge ownership is approved;
 - edge access can be Cloudflare Access, OIDC, Cognito, or another Hasna-approved
   identity layer;
+- hosted web tasks must set `HASNA_UPTIME_ALLOWED_ORIGINS` to the public HTTPS
+  edge origin so browser mutation checks do not compare CloudFront HTTPS origins
+  against the private HTTP ALB origin hop;
 - Open Uptime still enforces app-level auth and workspace RBAC on every route
   except `/health`;
 - `/health` returns only service liveness/readiness and no monitor data;
@@ -355,9 +365,10 @@ Minimum implementation path:
 5. for the EFS bridge, keep the desired count at one web task maximum and zero
    scheduler/public-probe/reporter/migration tasks;
 6. deploy ECS services by digest with deployment circuit breaker enabled;
-7. verify `/health`, auth-denied reads, authenticated dashboard, EFS backup
-   evidence, and web alarms; defer probe heartbeat, check job claim, evidence
-   upload, and report delivery smokes until worker roles are cloud-backed;
+7. verify `/health`, auth-denied reads, authenticated dashboard/API mutations
+   through the public edge origin, direct-origin denial, EFS backup evidence, and
+   web alarms; defer probe heartbeat, check job claim, evidence upload, and
+   report delivery smokes until worker roles are cloud-backed;
 8. publish/update packages only after hosted smoke passes if code changed.
 
 Open Deployment may record deployment metadata, but it must not be exposed as a
@@ -388,7 +399,7 @@ PR must include a rough monthly estimate for:
 - S3 evidence/artifact storage and requests;
 - CloudWatch logs/metrics/alarms;
 - KMS requests;
-- Route53/ACM where applicable.
+- CloudFront default-domain edge costs, and Route53/ACM where applicable.
 
 Evidence retention and browser trace capture are the primary variable costs.
 Default retention must be short until usage is measured.
@@ -398,8 +409,9 @@ Budget alarms are required before browser evidence or public probe scale-out.
 ## Implementation Blockers
 
 - No checked-out infra owner repo was found during design.
-- No ECR repository, ECS cluster, ALB, ACM cert, Route53 record, evidence bucket,
-  or service secrets exist for Open Uptime.
+- No ECR repository, ECS cluster, ALB, CloudFront distribution, evidence bucket,
+  or service secrets exist for Open Uptime; no ACM cert or Route53 record exists
+  for a later custom-hostname path.
 - Open Uptime is still SQLite-only for this bridge; only one protected web task
   may write EFS until Postgres and cloud leases exist.
 - Hosted API/dashboard auth, workspace RBAC, target policy, and Postgres leases

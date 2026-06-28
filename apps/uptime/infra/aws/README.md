@@ -15,6 +15,8 @@ terraform -chdir=infra/aws validate
 terraform -chdir=infra/aws plan -out open-uptime.tfplan
 ```
 
+Terraform 1.9 or newer is required by the variable validation in this starter.
+
 Required inputs are declared in `variables.tf` and illustrated in
 `terraform.tfvars.example`. Secrets are passed as Secrets Manager/SSM ARNs only;
 never place plaintext tokens, database URLs, private keys, or channel
@@ -30,6 +32,14 @@ adapter and cloud leases are implemented. Do not set
 The included CodeBuild project builds `@hasna/uptime` from npm with
 `Dockerfile.package` and pushes the resulting image to ECR. This avoids
 depending on a local Docker daemon for image publication.
+
+The default protected access mode is `cloudfront_default_domain`: CloudFront
+serves HTTPS on its default domain while the ALB origin accepts HTTP only from
+AWS's CloudFront origin-facing managed prefix list. Use `alb_https_cert` only
+after custom DNS and an ACM certificate are approved.
+The web task receives `HASNA_UPTIME_ALLOWED_ORIGINS` for the selected public
+HTTPS origin so hosted mutation CSRF checks still work through the private HTTP
+origin hop.
 
 ## Current Blockers
 

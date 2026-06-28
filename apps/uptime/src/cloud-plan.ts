@@ -11,6 +11,7 @@ export interface AwsDeploymentPlanOptions {
   evidenceBucket?: string;
   hostedSqliteDbPath?: string;
   runtimePackageVersion?: string;
+  protectedAccessMode?: "cloudfront_default_domain" | "alb_https_cert";
   /** @deprecated Postgres is target-state only until the async adapter is implemented. */
   rdsInstanceId?: string;
   /** @deprecated Postgres is target-state only until the async adapter is implemented. */
@@ -24,7 +25,7 @@ export interface AwsDeploymentPlanOptions {
 
 export interface AwsDeploymentPlan {
   kind: "open-uptime.aws-deployment-plan";
-  version: 2;
+  version: 3;
   generatedAt: string;
   status: "blocked";
   canApply: false;
@@ -46,6 +47,9 @@ export interface AwsDeploymentPlan {
     hostedSqliteDbPath: string;
     evidenceBucket: string;
     loadBalancer: string;
+    protectedAccessMode: "cloudfront_default_domain" | "alb_https_cert";
+    edgeDistribution?: string;
+    protectedAccessUrl: string;
     targetGroups: string[];
     securityGroups: string[];
     secrets: Record<string, string>;
@@ -133,6 +137,7 @@ const DEFAULT_HOSTNAME = "uptime.example.com";
 const DEFAULT_WORKSPACE_ID = "workspace-id";
 const DEFAULT_VPC_ID = "vpc-xxxxxxxx";
 const DEFAULT_HOSTED_SQLITE_DB = "/data/uptime/uptime.db";
+const DEFAULT_PROTECTED_ACCESS_MODE = "cloudfront_default_domain" as const;
 
 export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): AwsDeploymentPlan {
   const region = clean(options.region, DEFAULT_REGION);
@@ -146,7 +151,9 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
   const image = clean(options.image, `${imageRepositoryUri}@sha256:<image-digest>`);
   const evidenceBucket = clean(options.evidenceBucket, `hasna-${stage}-${prefix}-evidence`);
   const hostedSqliteDbPath = clean(options.hostedSqliteDbPath, DEFAULT_HOSTED_SQLITE_DB);
-  const runtimePackageVersion = clean(options.runtimePackageVersion, "0.1.7");
+  const runtimePackageVersion = clean(options.runtimePackageVersion, "0.1.8");
+  const protectedAccessMode = options.protectedAccessMode ?? DEFAULT_PROTECTED_ACCESS_MODE;
+  const protectedAccessUrl = protectedAccessMode === "cloudfront_default_domain" ? "https://<cloudfront-domain>" : `https://${hostname}`;
   const cluster = `${prefix}-${stage}`;
   const secrets = {
     appEnv: clean(options.appEnvSecretName, `open-uptime/${stage}/app/env`),
@@ -161,6 +168,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
       HASNA_UPTIME_HOSTED_SQLITE_DB: hostedSqliteDbPath,
       HASNA_UPTIME_WORKSPACE_ID: workspaceId,
       HASNA_UPTIME_HOSTNAME: hostname,
+      HASNA_UPTIME_ALLOWED_ORIGINS: protectedAccessUrl,
     }),
     servicePlan(prefix, stage, "scheduler", 0, image, workspaceId, secrets, {
       HASNA_UPTIME_MODE: "hosted",
@@ -187,7 +195,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
 
   return {
     kind: "open-uptime.aws-deployment-plan",
-    version: 2,
+    version: 3,
     generatedAt: new Date().toISOString(),
     status: "blocked",
     canApply: false,
@@ -209,6 +217,9 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
       hostedSqliteDbPath,
       evidenceBucket,
       loadBalancer: `${prefix}-${stage}-alb`,
+      protectedAccessMode,
+      edgeDistribution: protectedAccessMode === "cloudfront_default_domain" ? `${prefix}-${stage}-edge` : undefined,
+      protectedAccessUrl,
       targetGroups: [`${prefix}-${stage}-web-tg`],
       securityGroups: [
         `${prefix}-${stage}-alb-sg`,
@@ -256,7 +267,9 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
         `Infra PR must declare CodeBuild image builder ${prefix}-${stage}-image-builder for @hasna/uptime@${runtimePackageVersion}.`,
         `Infra PR must declare hardened S3 evidence bucket ${evidenceBucket} with KMS, versioning, lifecycle, and public access block.`,
         `Infra PR must declare encrypted EFS ${prefix}-${stage}-data with access point, mount targets, and AWS Backup plan.`,
-        `Infra PR must declare ECS/Fargate cluster ${cluster}, ALB, target groups, security groups, IAM roles, CloudWatch log groups, and Secrets Manager refs.`,
+        protectedAccessMode === "cloudfront_default_domain"
+          ? "Infra PR must declare CloudFront default-domain HTTPS edge, ALB HTTP listener restricted to CloudFront origin-facing ranges, ECS/Fargate cluster, target groups, security groups, IAM roles, CloudWatch log groups, and Secrets Manager refs."
+          : `Infra PR must declare ECS/Fargate cluster ${cluster}, ALB HTTPS listener, target groups, security groups, IAM roles, CloudWatch log groups, and Secrets Manager refs.`,
         "Only apply the infra plan from the approved infrastructure repository after review evidence is attached.",
       ],
       deploy: [
@@ -265,7 +278,9 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
         "For the EFS SQLite bridge, do not run migration, scheduler, public-probe, or reporter tasks; keep them at desired count 0 until Postgres and cloud leases exist.",
         `Register task definitions for ${services.map((service) => service.name).join(", ")} using valueFrom secrets.`,
         `Update ECS services in cluster ${cluster} one component at a time through the approved deploy pipeline.`,
-        `Create Route53/edge record for ${hostname} only after ALB health checks pass and auth denial smokes succeed.`,
+        protectedAccessMode === "cloudfront_default_domain"
+          ? "Use the CloudFront default HTTPS domain for first protected access; add custom DNS/certificate only after edge ownership is approved."
+          : `Create Route53/edge record for ${hostname} only after ALB health checks pass and auth denial smokes succeed.`,
       ],
       rollback: [
         "Keep previous task definition ARNs before each service update.",
@@ -290,7 +305,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
       "Infrastructure PR/synth/plan from the approved infra repository.",
       "CodeBuild image-builder run, container smoke, and immutable image digest.",
       "ECS task definitions using secrets.valueFrom only.",
-      "ALB/TLS/DNS/auth denial smokes and web alarm checks.",
+      "CloudFront-default-domain or ALB TLS auth-denial smokes, direct-origin denial evidence, and web alarm checks.",
       "Single-writer ECS evidence: one web task maximum and no scheduler/public-probe/reporter EFS mounts.",
       "EFS encryption, access point, mount-target, AWS Backup, and restore-drill evidence.",
       "S3 bucket KMS, versioning, lifecycle, and public-access-block evidence.",
@@ -303,6 +318,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
       notes: [
         "This plan generator does not call AWS.",
         "Blocked plan output intentionally avoids copy-pastable AWS mutation commands.",
+        "Default protected access uses CloudFront's HTTPS default domain so first deploy is not blocked on custom DNS or ACM.",
         "Hosted runtime uses explicit EFS-backed SQLite at HASNA_UPTIME_HOSTED_SQLITE_DB until the async Postgres adapter exists.",
         "Do not set HASNA_UPTIME_DATABASE_URL for hosted tasks until the Postgres adapter is implemented.",
         "Secrets are represented as secret names/refs and must be injected with valueFrom.",

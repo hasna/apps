@@ -14,6 +14,14 @@ output "alb_dns_name" {
   value = aws_lb.open_uptime.dns_name
 }
 
+output "cloudfront_domain_name" {
+  value = try(aws_cloudfront_distribution.open_uptime[0].domain_name, null)
+}
+
+output "protected_access_url" {
+  value = var.protected_access_mode == "cloudfront_default_domain" ? "https://${aws_cloudfront_distribution.open_uptime[0].domain_name}" : "https://${var.hostname}"
+}
+
 output "evidence_bucket" {
   value = aws_s3_bucket.evidence.bucket
 }
