@@ -1272,7 +1272,13 @@ describe("loops CLI", () => {
       sandbox: "workspace-write",
     });
     expect(workflow.steps[0].target.prompt).toContain("Do not dispatch or paste prompts into tmux panes");
+    expect(workflow.steps[0].target.prompt).toContain("todos --project /tmp/repo inspect task-12345678");
+    expect(workflow.steps[0].target.prompt).toContain("todos --project /tmp/repo comment task-12345678");
+    expect(workflow.steps[0].target.prompt).toContain("Do not mark the task complete in the worker step");
     expect(workflow.steps[1].target.prompt).toContain("Do not dispatch or paste prompts into tmux panes");
+    expect(workflow.steps[1].target.prompt).toContain("todos --project /tmp/repo inspect task-12345678");
+    expect(workflow.steps[1].target.prompt).toContain("todos --project /tmp/repo comment task-12345678");
+    expect(workflow.steps[1].target.prompt).toContain("todos --project /tmp/repo done task-12345678");
     expect(workflow.steps[1].target.idleTimeoutMs).toBe(600_000);
     expect(workflow.steps[1].dependsOn).toEqual(["worker"]);
   });

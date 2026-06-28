@@ -660,6 +660,7 @@ export function getLoopTemplate(id: string): LoopTemplateSummary | undefined {
 export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTemplateInput): CreateWorkflowInput {
   if (!input.taskId?.trim()) throw new Error("taskId is required");
   if (!input.projectPath?.trim()) throw new Error("projectPath is required");
+  const todosProjectPath = input.routeProjectPath ?? input.projectPath;
   const plan = worktreePlan(input, input.taskId);
   const taskContext = {
     taskId: input.taskId,
@@ -684,10 +685,15 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
     "",
     "You are the worker agent for a task-triggered OpenLoops workflow.",
     worktreePrompt(plan),
+    `Todos project path: ${todosProjectPath}`,
+    "Use these exact todos commands so worktree cwd inference cannot attach to the wrong project:",
+    `- Inspect first: todos --project ${todosProjectPath} inspect ${input.taskId}`,
+    `- Claim/start if appropriate: todos --project ${todosProjectPath} start ${input.taskId}`,
+    `- Record evidence: todos --project ${todosProjectPath} comment ${input.taskId} "<concise evidence and blockers>"`,
     "Investigate first before changing files. Use the todos CLI as the source of truth for the task.",
-    "Claim/start the task if appropriate, inspect the repository/project state, implement only the task scope, run focused validation, preserve unrelated user changes, and update the task with comments, evidence, changed files, commits, and blockers.",
+    "Inspect the repository/project state, implement only the task scope, run focused validation, preserve unrelated user changes, and update the task with comments, evidence, changed files, commits, and blockers.",
     "Do not dispatch or paste prompts into tmux panes. If additional work is required, create or update deduped todos tasks so task-created routing can start a fresh headless workflow.",
-    "Do not mark the task complete unless the work is genuinely done and validated.",
+    "Do not mark the task complete in the worker step; the verifier step owns completion after independent validation.",
     "",
     `Task context JSON: ${compactJson(taskContext)}`,
   ].join("\n");
@@ -696,6 +702,11 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
     "",
     "You are the verifier agent for a task-triggered OpenLoops workflow.",
     worktreePrompt(plan),
+    `Todos project path: ${todosProjectPath}`,
+    "Use these exact todos commands so worktree cwd inference cannot attach to the wrong project:",
+    `- Inspect first: todos --project ${todosProjectPath} inspect ${input.taskId}`,
+    `- Record verification: todos --project ${todosProjectPath} comment ${input.taskId} "<verification evidence or blocker>"`,
+    `- If valid and complete: todos --project ${todosProjectPath} done ${input.taskId}`,
     "Use fresh context. Inspect the task, repository state, commits, tests, and worker evidence. Act as an adversarial reviewer focused on correctness, regressions, missing tests, security, and incomplete requirements.",
     "If the work is valid, record verification evidence in todos and mark/leave the task in the correct completed state according to the todos CLI. If it is not valid, add precise follow-up tasks or comments and leave the original task open or blocked with clear evidence.",
     "Do not dispatch or paste prompts into tmux panes. If additional work is required, create or update deduped todos tasks so task-created routing can start a fresh headless workflow.",
