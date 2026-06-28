@@ -1,4 +1,16 @@
-import type { ExecutorResult, Goal, GoalRun, Loop, LoopRun, WorkflowEvent, WorkflowRun, WorkflowSpec, WorkflowStepRun } from "../types.js";
+import type {
+  ExecutorResult,
+  Goal,
+  GoalRun,
+  Loop,
+  LoopRun,
+  WorkflowEvent,
+  WorkflowInvocation,
+  WorkflowRun,
+  WorkflowSpec,
+  WorkflowStepRun,
+  WorkflowWorkItem,
+} from "../types.js";
 
 const TEXT_OUTPUT_LIMIT = 32 * 1024;
 const SENSITIVE_PAYLOAD_KEYS = new Set(["env", "error", "prompt", "reason", "stderr", "stdout"]);
@@ -95,6 +107,14 @@ export function publicWorkflow(workflow: WorkflowSpec): Record<string, unknown> 
 
 export function publicWorkflowRun(run: WorkflowRun): Record<string, unknown> {
   return { ...run, error: redact(run.error) };
+}
+
+export function publicWorkflowInvocation(invocation: WorkflowInvocation): Record<string, unknown> {
+  return redactSensitivePayload(invocation) as Record<string, unknown>;
+}
+
+export function publicWorkflowWorkItem(item: WorkflowWorkItem): Record<string, unknown> {
+  return { ...item, lastReason: redact(item.lastReason, 240) };
 }
 
 export function publicWorkflowStepRun(run: WorkflowStepRun, showOutput = false): Record<string, unknown> {

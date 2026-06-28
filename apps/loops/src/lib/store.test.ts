@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Store } from "./store.js";
 
 describe("Store", () => {
@@ -43,6 +46,203 @@ describe("Store", () => {
       );
       expect(store.getLoop(loop.id)?.machine).toEqual(loop.machine);
       expect(store.listLoops()[0]?.machine?.id).toBe("spark01");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("tracks workflow invocations, admission work items, manifests, and terminal status", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-workflow-invocation-"));
+    const store = new Store(join(root, "loops.db"));
+    try {
+      const invocation = store.createWorkflowInvocation({
+        templateId: "todos-task-worker-verifier",
+        sourceRef: { kind: "event", id: "evt-1", dedupeKey: "todos-task:task-1:task.created" },
+        subjectRef: { kind: "task", id: "task-1", path: "/tmp/open-loops" },
+        intent: "route",
+        scope: { projectPath: "/tmp/open-loops", worktreePolicy: "required" },
+        outputPolicy: { report: "always", createTask: "on_failure" },
+      });
+      const workItem = store.upsertWorkflowWorkItem({
+        routeKey: "todos-task",
+        idempotencyKey: "todos-task:task-1:task.created",
+        invocationId: invocation.id,
+        sourceType: "task.created",
+        sourceRef: "evt-1",
+        subjectRef: "task-1",
+        projectKey: "/tmp/open-loops",
+      });
+      expect(workItem.status).toBe("queued");
+      expect(store.countActiveWorkflowWorkItems({ projectKey: "/tmp/open-loops" })).toEqual({ global: 0, project: 0 });
+
+      const workflow = store.createWorkflow({
+        name: "route-task-1",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const loop = store.createLoop({
+        name: "route-task-1-run",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: {
+          type: "workflow",
+          workflowId: workflow.id,
+          input: {
+            workflowInvocationId: invocation.id,
+            workflowWorkItemId: workItem.id,
+          },
+        },
+      });
+      const admitted = store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id });
+      expect(admitted.status).toBe("admitted");
+      expect(store.countActiveWorkflowWorkItems({ projectKey: "/tmp/open-loops" })).toEqual({ global: 1, project: 1 });
+
+      const run = store.createWorkflowRun({ workflow, loop, scheduledFor: "2026-01-01T00:00:00.000Z" });
+      expect(run.invocationId).toBe(invocation.id);
+      expect(run.workItemId).toBe(workItem.id);
+      expect(run.manifestPath).toBeDefined();
+      expect(run.manifestPath).toContain("/runs/open-loops/task-task-1-");
+      expect(existsSync(run.manifestPath!)).toBe(true);
+      const manifest = JSON.parse(readFileSync(run.manifestPath!, "utf8"));
+      expect(manifest.workflowInvocation.id).toBe(invocation.id);
+      expect(manifest.workflowWorkItem.id).toBe(workItem.id);
+      expect(store.getWorkflowWorkItem(workItem.id)?.status).toBe("running");
+
+      store.finalizeWorkflowRun(run.id, "succeeded");
+      expect(store.getWorkflowWorkItem(workItem.id)?.status).toBe("succeeded");
+      expect(store.countActiveWorkflowWorkItems({ projectKey: "/tmp/open-loops" })).toEqual({ global: 0, project: 0 });
+    } finally {
+      store.close();
+    }
+  });
+
+  test("clears active admission work items when a workflow loop fails before a workflow run exists", () => {
+    const store = new Store(":memory:");
+    try {
+      const invocation = store.createWorkflowInvocation({
+        sourceRef: { kind: "event", id: "evt-preflight-fail", dedupeKey: "todos-task:preflight-fail:task.created" },
+        subjectRef: { kind: "task", id: "preflight-fail", path: "/tmp/open-loops" },
+        intent: "route",
+        scope: { projectPath: "/tmp/open-loops" },
+      });
+      const workItem = store.upsertWorkflowWorkItem({
+        routeKey: "todos-task",
+        idempotencyKey: "todos-task:preflight-fail:task.created",
+        invocationId: invocation.id,
+        sourceType: "task.created",
+        sourceRef: "evt-preflight-fail",
+        subjectRef: "preflight-fail",
+        projectKey: "/tmp/open-loops",
+      });
+      const workflow = store.createWorkflow({
+        name: "preflight-fail-workflow",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const loop = store.createLoop({
+        name: "preflight-fail-loop",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: {
+          type: "workflow",
+          workflowId: workflow.id,
+          input: {
+            workflowInvocationId: invocation.id,
+            workflowWorkItemId: workItem.id,
+          },
+        },
+        maxAttempts: 1,
+      });
+      store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id });
+      expect(store.countActiveWorkflowWorkItems({ projectKey: "/tmp/open-loops" }).project).toBe(1);
+
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      store.finalizeRun(
+        claim!.run.id,
+        {
+          status: "failed",
+          finishedAt: "2026-01-01T00:00:01.000Z",
+          durationMs: 1_000,
+          stdout: "",
+          stderr: "",
+          error: "runtime preflight failed before workflow run creation",
+        },
+        { claimedBy: "runner", now: new Date("2026-01-01T00:00:00.500Z") },
+      );
+
+      expect(store.getWorkflowWorkItem(workItem.id)?.status).toBe("failed");
+      expect(store.countActiveWorkflowWorkItems({ projectKey: "/tmp/open-loops" }).project).toBe(0);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("terminal admission work items can be explicitly replayed without preserving stale loop links", () => {
+    const store = new Store(":memory:");
+    try {
+      const firstInvocation = store.createWorkflowInvocation({
+        sourceRef: { kind: "event", id: "evt-terminal-a", dedupeKey: "todos-task:terminal:task.created" },
+        subjectRef: { kind: "task", id: "terminal", path: "/tmp/open-loops" },
+        intent: "route",
+        scope: { projectPath: "/tmp/open-loops" },
+      });
+      const workItem = store.upsertWorkflowWorkItem({
+        routeKey: "todos-task",
+        idempotencyKey: "todos-task:terminal:task.created",
+        invocationId: firstInvocation.id,
+        sourceType: "task.created",
+        sourceRef: "evt-terminal-a",
+        subjectRef: "terminal",
+        projectKey: "/tmp/open-loops",
+      });
+      const workflow = store.createWorkflow({
+        name: "terminal-replay-workflow",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const loop = store.createLoop({
+        name: "terminal-replay-loop",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "workflow", workflowId: workflow.id },
+      });
+      const admitted = store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id });
+      store.finalizeRun(
+        store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"))!.run.id,
+        {
+          status: "failed",
+          finishedAt: "2026-01-01T00:00:01.000Z",
+          durationMs: 1_000,
+          stdout: "",
+          stderr: "",
+          error: "first attempt failed",
+        },
+        { claimedBy: "runner", now: new Date("2026-01-01T00:00:00.500Z") },
+      );
+      expect(store.getWorkflowWorkItem(admitted.id)?.status).toBe("failed");
+
+      const secondInvocation = store.createWorkflowInvocation({
+        sourceRef: { kind: "event", id: "evt-terminal-b", dedupeKey: "todos-task:terminal:task.created" },
+        subjectRef: { kind: "task", id: "terminal", path: "/tmp/open-loops" },
+        intent: "route",
+        scope: { projectPath: "/tmp/open-loops" },
+      });
+      const replayed = store.upsertWorkflowWorkItem({
+        routeKey: "todos-task",
+        idempotencyKey: "todos-task:terminal:task.created",
+        invocationId: secondInvocation.id,
+        sourceType: "task.created",
+        sourceRef: "evt-terminal-b",
+        subjectRef: "terminal",
+        projectKey: "/tmp/open-loops",
+      });
+
+      expect(replayed.id).toBe(workItem.id);
+      expect(replayed.status).toBe("queued");
+      expect(replayed.loopId).toBeUndefined();
+      expect(replayed.workflowId).toBeUndefined();
+      expect(replayed.workflowRunId).toBeUndefined();
+      const nextLoop = store.createLoop({
+        name: "terminal-replay-loop-b",
+        schedule: { type: "once", at: "2026-01-01T00:01:00Z" },
+        target: { type: "workflow", workflowId: workflow.id },
+      });
+      expect(store.admitWorkflowWorkItem(replayed.id, { workflowId: workflow.id, loopId: nextLoop.id }).status).toBe("admitted");
     } finally {
       store.close();
     }

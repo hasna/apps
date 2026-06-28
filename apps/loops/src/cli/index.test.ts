@@ -1606,6 +1606,41 @@ describe("loops CLI", () => {
     expect(secondValue.loop.id).toBe(firstValue.loop.id);
   });
 
+  test("routes commands expose workflow invocation admission state", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-routes-list-"));
+    const event = {
+      id: "evt-routes-list-0001",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-routes-list-0001",
+        title: "Expose route state",
+        working_dir: "/tmp/open-loops",
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const created = runCli(dataDir, ["--json", "events", "handle", "todos-task"], JSON.stringify(event));
+    expect(created.status).toBe(0);
+    const createdValue = JSON.parse(created.stdout);
+    expect(createdValue.workItem.status).toBe("admitted");
+
+    const routes = runCli(dataDir, ["--json", "routes", "list"]);
+    expect(routes.status).toBe(0);
+    const routeRows = JSON.parse(routes.stdout);
+    expect(routeRows).toHaveLength(1);
+    expect(routeRows[0].id).toBe(createdValue.workItem.id);
+    expect(routeRows[0].routeKey).toBe("todos-task");
+
+    const shown = runCli(dataDir, ["--json", "routes", "show", createdValue.workItem.id]);
+    expect(shown.status).toBe(0);
+    const shownValue = JSON.parse(shown.stdout);
+    expect(shownValue.item.id).toBe(createdValue.workItem.id);
+    expect(shownValue.invocation.id).toBe(createdValue.invocation.id);
+    expect(shownValue.loop.id).toBe(createdValue.loop.id);
+  });
+
   test("todos task event handler dry-run exposes default worktree routing for git repos", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-worktree-"));
     const repo = createGitRepo("loops-cli-event-handler-worktree-repo-");
@@ -1849,7 +1884,14 @@ describe("loops CLI", () => {
       "required",
       "--project-path",
       "/tmp/not-a-real-openloops-required-repo",
-    ], JSON.stringify({ ...event, id: "evt-dedupe-before-render-0002" }));
+    ], JSON.stringify({
+      ...event,
+      id: "evt-dedupe-before-render-0002",
+      data: {
+        ...event.data,
+        working_dir: "/tmp/not-a-real-openloops-required-repo",
+      },
+    }));
 
     expect(replay.status).toBe(0);
     const value = JSON.parse(replay.stdout);
@@ -2393,8 +2435,8 @@ describe("loops CLI", () => {
     expect(JSON.parse(loops.stdout)).toEqual([]);
   });
 
-  test("todos task event handler dedupes legacy event-id loop names", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-legacy-dedupe-"));
+  test("todos task event handler ignores legacy event-id loop names and dedupes through work items", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-no-legacy-dedupe-"));
     const event = {
       id: "evt-task-created-legacy",
       type: "task.created",
@@ -2428,9 +2470,16 @@ describe("loops CLI", () => {
 
     expect(result.status).toBe(0);
     const value = JSON.parse(result.stdout);
-    expect(value.deduped).toBe(true);
-    expect(value.dedupedBy).toBe("legacy-event-name");
-    expect(value.loop.id).toBe(legacyLoopId);
+    expect(value.deduped).toBe(false);
+    expect(value.loop.id).not.toBe(legacyLoopId);
+    expect(value.workItem.status).toBe("admitted");
+
+    const replay = runCli(dataDir, ["--json", "events", "handle", "todos-task"], JSON.stringify({ ...event, id: "evt-task-created-legacy-replay" }));
+    expect(replay.status).toBe(0);
+    const replayValue = JSON.parse(replay.stdout);
+    expect(replayValue.deduped).toBe(true);
+    expect(replayValue.dedupedBy).toBe("work-item");
+    expect(replayValue.workItem.id).toBe(value.workItem.id);
   });
 
   test("todos task event handler dedupes by task idempotency across route prefixes", () => {
@@ -2673,8 +2722,13 @@ describe("loops CLI", () => {
     expect(first.status).toBe(0);
     const firstValue = JSON.parse(first.stdout);
     expect(firstValue.deduped).toBe(false);
+    expect(firstValue.workItem.status).toBe("admitted");
+    expect(firstValue.workItem.routeKey).toBe("generic-event");
+    expect(firstValue.invocation.sourceRef.kind).toBe("event");
     expect(firstValue.workflow.name).toContain("event:generic:knowledge:knowledge.record.created");
     expect(firstValue.workflow.steps[0].target.cwd).toBe("/tmp/open-knowledge");
+    expect(firstValue.loop.target.input.workflowInvocationId).toBe(firstValue.invocation.id);
+    expect(firstValue.loop.target.input.workflowWorkItemId).toBe(firstValue.workItem.id);
     const profiles = firstValue.workflow.steps.map((step: { target: { authProfile?: string } }) => step.target.authProfile);
     expect(new Set(profiles).size).toBe(2);
 
@@ -2682,6 +2736,67 @@ describe("loops CLI", () => {
     expect(second.status).toBe(0);
     const secondValue = JSON.parse(second.stdout);
     expect(secondValue.deduped).toBe(true);
+    expect(secondValue.dedupedBy).toBe("work-item");
+    expect(secondValue.workItem.id).toBe(firstValue.workItem.id);
     expect(secondValue.loop.id).toBe(firstValue.loop.id);
+  });
+
+  test("generic event handler throttles through admission work items", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-generic-event-throttle-"));
+    const repo = createGitRepo("loops-cli-generic-event-throttle-repo-");
+    const baseEvent = {
+      type: "knowledge.record.created",
+      source: "knowledge",
+      severity: "info",
+      data: {
+        project_path: repo,
+      },
+      time: new Date().toISOString(),
+      schemaVersion: "1.0",
+      metadata: {},
+    };
+    const args = [
+      "--json",
+      "events",
+      "handle",
+      "generic",
+      "--provider",
+      "codewith",
+      "--auth-profile",
+      "account005",
+      "--max-active-per-project",
+      "1",
+    ];
+
+    const first = runCli(dataDir, args, JSON.stringify({
+      ...baseEvent,
+      id: "evt-generic-throttle-0001",
+      subject: "record-1",
+      message: "First record",
+      data: { ...baseEvent.data, id: "record-1" },
+    }));
+    expect(first.status).toBe(0);
+    const firstValue = JSON.parse(first.stdout);
+    expect(firstValue.deduped).toBe(false);
+    expect(firstValue.workItem.status).toBe("admitted");
+
+    const second = runCli(dataDir, args, JSON.stringify({
+      ...baseEvent,
+      id: "evt-generic-throttle-0002",
+      subject: "record-2",
+      message: "Second record",
+      data: { ...baseEvent.data, id: "record-2" },
+    }));
+    expect(second.status).toBe(0);
+    const secondValue = JSON.parse(second.stdout);
+    expect(secondValue.skipped).toBe(true);
+    expect(secondValue.workItem.status).toBe("deferred");
+    expect(secondValue.reason).toContain("project active workflow limit reached");
+    expect(secondValue.throttle.counts.project).toBe(1);
+
+    const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loops).toHaveLength(1);
+    const routes = JSON.parse(runCli(dataDir, ["--json", "routes", "list", "--route-key", "generic-event"]).stdout);
+    expect(routes.map((item: { status: string }) => item.status).sort()).toEqual(["admitted", "deferred"]);
   });
 });

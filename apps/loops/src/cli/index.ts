@@ -11,7 +11,6 @@ import type {
   AgentAllowlistSpec,
   AgentPermissionMode,
   AgentProvider,
-  AgentRoutingSpec,
   AgentSandbox,
   AgentWorktreeMode,
   CatchUpPolicy,
@@ -32,8 +31,10 @@ import {
   publicRun,
   publicWorkflow,
   publicWorkflowEvent,
+  publicWorkflowInvocation,
   publicWorkflowRun,
   publicWorkflowStepRun,
+  publicWorkflowWorkItem,
   redact,
   textOutputBlocks,
 } from "../lib/format.js";
@@ -856,46 +857,13 @@ function routeProjectGroup(optsGroup: string | undefined, data: Record<string, u
     taskEventField(metadata, ["project_group", "projectGroup", "repo_group", "repoGroup", "workspace_group", "workspaceGroup"]);
 }
 
-function firstWorkflowRouting(workflow: Pick<WorkflowSpec, "steps">): AgentRoutingSpec | undefined {
-  for (const step of workflow.steps) {
-    if (step.target.type !== "agent") continue;
-    const target = step.target;
-    const projectPath = normalizeRoutePath(target.routing?.projectPath ?? target.worktree?.originalCwd ?? target.cwd);
-    const projectGroup = target.routing?.projectGroup?.trim();
-    if (projectPath || projectGroup) {
-      return {
-        ...(projectPath ? { projectPath } : {}),
-        ...(projectGroup ? { projectGroup } : {}),
-      };
-    }
-  }
-  return undefined;
-}
-
-function activeWorkflowLoopRoutes(store: Store): Array<{ loop: Loop; routing: AgentRoutingSpec }> {
-  const values: Array<{ loop: Loop; routing: AgentRoutingSpec }> = [];
-  for (const loop of store.listLoops({ status: "active", limit: 10_000 })) {
-    if (loop.target.type !== "workflow") continue;
-    const workflow = store.getWorkflow(loop.target.workflowId);
-    if (!workflow || workflow.status !== "active") continue;
-    const routing = firstWorkflowRouting(workflow);
-    if (routing) values.push({ loop, routing });
-  }
-  return values;
-}
-
 function routeThrottleDecision(
   store: Store,
   args: { projectPath: string; projectGroup?: string; limits: RouteThrottleLimits },
 ): RouteThrottleDecision {
   const projectPath = normalizeRoutePath(args.projectPath) ?? resolve(args.projectPath);
   const projectGroup = args.projectGroup?.trim() || undefined;
-  const active = activeWorkflowLoopRoutes(store);
-  const counts: RouteThrottleDecision["counts"] = {
-    global: active.length,
-    project: active.filter((entry) => normalizeRoutePath(entry.routing.projectPath) === projectPath).length,
-  };
-  if (projectGroup) counts.projectGroup = active.filter((entry) => entry.routing.projectGroup?.trim() === projectGroup).length;
+  const counts = store.countActiveWorkflowWorkItems({ projectKey: projectPath, projectGroup });
   const base = {
     projectPath,
     ...(projectGroup ? { projectGroup } : {}),
@@ -933,11 +901,6 @@ function routeThrottleDryRunPreview(args: { projectPath: string; projectGroup?: 
     ...(projectGroup ? { projectGroup } : {}),
     limits: args.limits,
   };
-}
-
-function findLoopByTaskIdempotency(store: Store, idempotencyKey: string): Loop | undefined {
-  const marker = `idempotency=${idempotencyKey}`;
-  return store.listLoops({ includeArchived: true, limit: 100_000 }).find((loop) => loop.description?.includes(marker));
 }
 
 async function readEventEnvelopeFromStdin(): Promise<EventEnvelope> {
@@ -987,24 +950,27 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
   const namePrefix = opts.namePrefix ?? "event:todos-task";
   const workflowName = `${namePrefix}:${taskId.slice(0, 8)}:${idempotencySuffix}:workflow`;
   const loopName = `${namePrefix}:${taskId.slice(0, 8)}:${idempotencySuffix}:run`;
-  const legacyLoopName = `${namePrefix}:${taskId.slice(0, 8)}:${event.id.slice(0, 8)}:run`;
   if (!opts.dryRun) {
     const store = new Store();
     try {
-      const existingLoop = store.findLoopByName(loopName) ?? store.findLoopByName(legacyLoopName) ?? findLoopByTaskIdempotency(store, idempotencyKey);
-      if (existingLoop) {
-        const existingWorkflow = existingLoop.target.type === "workflow" ? store.getWorkflow(existingLoop.target.workflowId) : undefined;
+      const existingItem = store.findWorkflowWorkItem("todos-task", idempotencyKey);
+      if (existingItem?.loopId && ["admitted", "running", "succeeded"].includes(existingItem.status)) {
+        const existingLoop = store.getLoop(existingItem.loopId);
+        const existingWorkflow = existingItem.workflowId ? store.getWorkflow(existingItem.workflowId) : undefined;
+        const existingInvocation = store.getWorkflowInvocation(existingItem.invocationId);
         return {
           kind: "deduped",
           value: {
             deduped: true,
             idempotencyKey,
-            dedupedBy: existingLoop.name === loopName ? "idempotency" : "legacy-event-name",
+            dedupedBy: "work-item",
             event,
+            invocation: existingInvocation ? publicWorkflowInvocation(existingInvocation) : undefined,
+            workItem: publicWorkflowWorkItem(existingItem),
             workflow: existingWorkflow ? publicWorkflow(existingWorkflow) : undefined,
-            loop: publicLoop(existingLoop),
+            loop: existingLoop ? publicLoop(existingLoop) : undefined,
           },
-          human: `deduped existing loop ${existingLoop.id} (${existingLoop.name}) for event=${event.id} idempotency=${idempotencyKey}`,
+          human: `deduped existing work item ${existingItem.id} for event=${event.id} idempotency=${idempotencyKey}`,
         };
       }
     } finally {
@@ -1047,11 +1013,51 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
   workflowBody.description =
     `Task-triggered worker/verifier workflow for ${taskTitle ?? taskId} from ${event.source}/${event.type}; ` +
     `idempotency=${idempotencyKey}; event=${event.id}; project=${projectPath}; projectGroup=${projectGroup ?? "-"}`;
+  const invocationInput = {
+    templateId: "todos-task-worker-verifier",
+    sourceRef: {
+      kind: "event",
+      id: event.id,
+      dedupeKey: idempotencyKey,
+      raw: { type: event.type, source: event.source, subject: event.subject },
+    },
+    subjectRef: {
+      kind: "task",
+      id: taskId,
+      path: routeProjectPath,
+      raw: { title: taskTitle, description: taskDescription },
+    },
+    intent: "route" as const,
+    scope: {
+      projectPath: routeProjectPath,
+      projectGroup,
+      worktreePolicy: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
+      permissions: permissionMode,
+      accountPolicy: opts.authProfilePool || opts.accountPool ? "pool" : "single",
+      concurrencyGroup: projectGroup ?? routeProjectPath,
+    },
+    outputPolicy: {
+      report: "always" as const,
+      createTask: "on_failure" as const,
+    },
+  };
+  const workItemInput = {
+    routeKey: "todos-task",
+    idempotencyKey,
+    invocationId: "<created-invocation-id>",
+    sourceType: event.type,
+    sourceRef: event.id,
+    subjectRef: taskId,
+    projectKey: routeProjectPath,
+    projectGroup,
+    priority: 0,
+    status: "queued" as const,
+  };
   const loopInput = {
     name: loopName,
     description: `Run ${workflowBody.name} once for task ${taskId}; idempotency=${idempotencyKey}; event=${event.id}`,
     schedule: { type: "once" as const, at: new Date(Date.now() + 1_000).toISOString() },
-    target: { type: "workflow" as const, workflowId: "<created-workflow-id>" },
+    target: { type: "workflow" as const, workflowId: "<created-workflow-id>", input: {} },
     overlap: "skip" as const,
     maxAttempts: 1,
     retryDelayMs: 60_000,
@@ -1070,7 +1076,7 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
       : undefined;
     return {
       kind: "created",
-      value: { deduped: false, idempotencyKey, event, workflow: workflowBody, loop: loopInput, throttle, preflight },
+      value: { deduped: false, idempotencyKey, event, invocation: invocationInput, workItem: workItemInput, workflow: workflowBody, loop: loopInput, throttle, preflight },
       human: `dry-run ${loopName}`,
     };
   }
@@ -1086,22 +1092,38 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
         }, {})
       : undefined;
     const outcome = store.writeTransaction(() => {
-      const existingLoop = store.findLoopByName(loopName) ?? store.findLoopByName(legacyLoopName) ?? findLoopByTaskIdempotency(store, idempotencyKey);
-      if (existingLoop) {
-        const existingWorkflow = existingLoop.target.type === "workflow" ? store.getWorkflow(existingLoop.target.workflowId) : undefined;
-        return { kind: "deduped" as const, existingLoop, existingWorkflow };
+      const invocation = store.createWorkflowInvocation(invocationInput);
+      const existingItem = store.findWorkflowWorkItem("todos-task", idempotencyKey);
+      if (existingItem?.loopId && ["admitted", "running", "succeeded"].includes(existingItem.status)) {
+        const existingLoop = store.getLoop(existingItem.loopId);
+        const existingWorkflow = existingItem.workflowId ? store.getWorkflow(existingItem.workflowId) : undefined;
+        return { kind: "deduped" as const, existingItem, existingLoop, existingWorkflow, invocation };
       }
       const throttle = hasThrottleLimits(throttleLimits)
         ? routeThrottleDecision(store, { projectPath: routeProjectPath, projectGroup, limits: throttleLimits })
         : undefined;
-      if (throttle && !throttle.allowed) return { kind: "throttled" as const, throttle };
+      const workItem = store.upsertWorkflowWorkItem({
+        ...workItemInput,
+        invocationId: invocation.id,
+        status: throttle && !throttle.allowed ? "deferred" : "queued",
+        lastReason: throttle && !throttle.allowed ? throttle.reason : undefined,
+      });
+      if (throttle && !throttle.allowed) return { kind: "throttled" as const, invocation, workItem, throttle };
       const existingWorkflow = store.findWorkflowByName(workflowBody.name);
       const workflow = existingWorkflow ?? store.createWorkflow(workflowBody);
       const loop = store.createLoop({
         ...loopInput,
-        target: { type: "workflow", workflowId: workflow.id },
+        target: {
+          type: "workflow",
+          workflowId: workflow.id,
+          input: {
+            workflowInvocationId: invocation.id,
+            workflowWorkItemId: workItem.id,
+          },
+        },
       });
-      return { kind: "created" as const, workflow, loop, throttle };
+      const admitted = store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id, reason: "admitted by todos-task route" });
+      return { kind: "created" as const, invocation, workItem: admitted, workflow, loop, throttle };
     });
     if (outcome.kind === "deduped") {
       return {
@@ -1109,12 +1131,14 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
         value: {
           deduped: true,
           idempotencyKey,
-          dedupedBy: outcome.existingLoop.name === loopName ? "idempotency" : "legacy-event-name",
+          dedupedBy: "work-item",
           event,
+          invocation: publicWorkflowInvocation(outcome.invocation),
+          workItem: publicWorkflowWorkItem(outcome.existingItem),
           workflow: outcome.existingWorkflow ? publicWorkflow(outcome.existingWorkflow) : undefined,
-          loop: publicLoop(outcome.existingLoop),
+          loop: outcome.existingLoop ? publicLoop(outcome.existingLoop) : undefined,
         },
-        human: `deduped existing loop ${outcome.existingLoop.id} (${outcome.existingLoop.name}) for event=${event.id} idempotency=${idempotencyKey}`,
+        human: `deduped existing work item ${outcome.existingItem.id} for event=${event.id} idempotency=${idempotencyKey}`,
       };
     }
     if (outcome.kind === "throttled") {
@@ -1126,6 +1150,8 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
           reason: outcome.throttle.reason,
           idempotencyKey,
           event,
+          invocation: publicWorkflowInvocation(outcome.invocation),
+          workItem: publicWorkflowWorkItem(outcome.workItem),
           throttle: outcome.throttle,
           workflow: workflowBody,
           loop: loopInput,
@@ -1139,6 +1165,8 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
         deduped: false,
         idempotencyKey,
         event,
+        invocation: publicWorkflowInvocation(outcome.invocation),
+        workItem: publicWorkflowWorkItem(outcome.workItem),
         workflow: publicWorkflow(outcome.workflow),
         loop: publicLoop(outcome.loop),
         throttle: outcome.throttle,
@@ -1464,6 +1492,8 @@ const workflows = program.command("workflows").alias("workflow").description("ma
 
 const templates = program.command("templates").alias("template").description("render and store reusable loop/workflow templates");
 
+const routes = program.command("routes").alias("route").description("inspect workflow invocation/admission routes");
+
 const events = program.command("events").description("handle Hasna event envelopes from stdin or command transport");
 
 const machines = program.command("machines").description("inspect OpenMachines topology for loop assignment");
@@ -1509,6 +1539,77 @@ templates
       const body = renderLoopTemplate(id, parseVars(opts.var));
       const workflow = store.createWorkflow(body);
       print(publicWorkflow(workflow), `created workflow ${workflow.id} (${workflow.name}) steps=${workflow.steps.length}`);
+    } finally {
+      store.close();
+    }
+  });
+
+routes
+  .command("list")
+  .description("list admission work items")
+  .option("--status <status>", "filter by work item status")
+  .option("--route-key <key>", "filter by route key")
+  .option("--limit <n>", "maximum rows", "50")
+  .action((opts) => {
+    const store = new Store();
+    try {
+      const items = store.listWorkflowWorkItems({
+        status: opts.status,
+        routeKey: opts.routeKey,
+        limit: positiveInteger(opts.limit, "--limit") ?? 50,
+      });
+      if (isJson()) print(items.map(publicWorkflowWorkItem));
+      else {
+        for (const item of items) {
+          console.log(`${item.id} ${item.status.padEnd(10)} ${item.routeKey} ${item.subjectRef} ${item.loopId ?? "-"}`);
+        }
+      }
+    } finally {
+      store.close();
+    }
+  });
+
+routes
+  .command("show <id>")
+  .description("show one admission work item")
+  .action((id) => {
+    const store = new Store();
+    try {
+      const item = store.getWorkflowWorkItem(id);
+      if (!item) throw new Error(`route work item not found: ${id}`);
+      const invocation = store.getWorkflowInvocation(item.invocationId);
+      const workflow = item.workflowId ? store.getWorkflow(item.workflowId) : undefined;
+      const loop = item.loopId ? store.getLoop(item.loopId) : undefined;
+      print(
+        {
+          item: publicWorkflowWorkItem(item),
+          invocation: invocation ? publicWorkflowInvocation(invocation) : undefined,
+          workflow: workflow ? publicWorkflow(workflow) : undefined,
+          loop: loop ? publicLoop(loop) : undefined,
+        },
+        `${item.id} ${item.status} ${item.routeKey} ${item.subjectRef}`,
+      );
+    } finally {
+      store.close();
+    }
+  });
+
+routes
+  .command("invocations")
+  .description("list workflow invocations")
+  .option("--limit <n>", "maximum rows", "50")
+  .action((opts) => {
+    const store = new Store();
+    try {
+      const invocations = store.listWorkflowInvocations({ limit: positiveInteger(opts.limit, "--limit") ?? 50 });
+      if (isJson()) print(invocations.map(publicWorkflowInvocation));
+      else {
+        for (const invocation of invocations) {
+          console.log(
+            `${invocation.id} ${invocation.intent.padEnd(8)} ${invocation.sourceRef.kind}:${invocation.sourceRef.id ?? "-"} -> ${invocation.subjectRef.kind}:${invocation.subjectRef.id ?? invocation.subjectRef.path ?? "-"}`,
+          );
+        }
+      }
     } finally {
       store.close();
     }
@@ -1726,22 +1827,7 @@ eventsHandle
     const type = slugSegment(event.type, "type");
     const workflowName = `${opts.namePrefix}:${source}:${type}:${eventSuffix}:workflow`;
     const loopName = `${opts.namePrefix}:${source}:${type}:${eventSuffix}:run`;
-    if (!opts.dryRun) {
-      const store = new Store();
-      try {
-        const existingLoop = store.findLoopByName(loopName);
-        if (existingLoop) {
-          const existingWorkflow = existingLoop.target.type === "workflow" ? store.getWorkflow(existingLoop.target.workflowId) : undefined;
-          print(
-            { deduped: true, event, workflow: existingWorkflow ? publicWorkflow(existingWorkflow) : undefined, loop: publicLoop(existingLoop) },
-            `deduped existing loop ${existingLoop.id} (${existingLoop.name})`,
-          );
-          return;
-        }
-      } finally {
-        store.close();
-      }
-    }
+    const idempotencyKey = `generic-event:${event.source}:${event.type}:${event.id}`;
     const provider = opts.provider as AgentProvider;
     if (!["claude", "cursor", "codewith", "aicopilot", "opencode", "codex"].includes(provider)) throw new Error("unsupported provider");
     const permissionMode = permissionModeFromOpts({ permissionMode: opts.permissionMode }, provider);
@@ -1777,11 +1863,51 @@ eventsHandle
     });
     workflowBody.name = workflowName;
     workflowBody.description = `Event-triggered worker/verifier workflow for ${event.source}/${event.type}; project=${projectPath}; projectGroup=${projectGroup ?? "-"}`;
+    const invocationInput = {
+      templateId: "event-worker-verifier",
+      sourceRef: {
+        kind: "event",
+        id: event.id,
+        dedupeKey: idempotencyKey,
+        raw: { source: event.source, type: event.type },
+      },
+      subjectRef: {
+        kind: "event",
+        id: stringField(event.subject) ?? event.id,
+        path: routeProjectPath,
+        raw: { message: stringField(event.message) },
+      },
+      intent: "route" as const,
+      scope: {
+        projectPath: routeProjectPath,
+        projectGroup,
+        worktreePolicy: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
+        permissions: permissionMode,
+        accountPolicy: opts.authProfilePool || opts.accountPool ? "pool" : "single",
+        concurrencyGroup: projectGroup ?? routeProjectPath,
+      },
+      outputPolicy: {
+        report: "always" as const,
+        createTask: "on_failure" as const,
+      },
+    };
+    const workItemInput = {
+      routeKey: "generic-event",
+      idempotencyKey,
+      invocationId: "<created-invocation-id>",
+      sourceType: event.type,
+      sourceRef: event.id,
+      subjectRef: stringField(event.subject) ?? event.id,
+      projectKey: routeProjectPath,
+      projectGroup,
+      priority: 0,
+      status: "queued" as const,
+    };
     const loopInput = {
       name: loopName,
-      description: `Run ${workflowBody.name} once for event ${event.id}`,
+      description: `Run ${workflowBody.name} once for event ${event.id}; idempotency=${idempotencyKey}`,
       schedule: { type: "once" as const, at: new Date(Date.now() + 1_000).toISOString() },
-      target: { type: "workflow" as const, workflowId: "<created-workflow-id>" },
+      target: { type: "workflow" as const, workflowId: "<created-workflow-id>", input: {} },
       overlap: "skip" as const,
       maxAttempts: 1,
       retryDelayMs: 60_000,
@@ -1798,7 +1924,10 @@ eventsHandle
             event: event.id,
           }, {})
         : undefined;
-      print({ event, workflow: workflowBody, loop: loopInput, throttle, preflight }, `dry-run ${loopName}`);
+      print(
+        { event, idempotencyKey, invocation: invocationInput, workItem: workItemInput, workflow: workflowBody, loop: loopInput, throttle, preflight },
+        `dry-run ${loopName}`,
+      );
       return;
     }
     const store = new Store();
@@ -1813,40 +1942,86 @@ eventsHandle
           }, {})
         : undefined;
       const outcome = store.writeTransaction(() => {
-        const existingLoop = store.findLoopByName(loopName);
-        if (existingLoop) {
-          const existingWorkflow = existingLoop.target.type === "workflow" ? store.getWorkflow(existingLoop.target.workflowId) : undefined;
-          return { kind: "deduped" as const, existingLoop, existingWorkflow };
+        const invocation = store.createWorkflowInvocation(invocationInput);
+        const existingItem = store.findWorkflowWorkItem("generic-event", idempotencyKey);
+        if (existingItem?.loopId && ["admitted", "running", "succeeded"].includes(existingItem.status)) {
+          const existingLoop = store.getLoop(existingItem.loopId);
+          const existingWorkflow = existingItem.workflowId ? store.getWorkflow(existingItem.workflowId) : undefined;
+          return { kind: "deduped" as const, existingItem, existingLoop, existingWorkflow, invocation };
         }
         const throttle = hasThrottleLimits(throttleLimits)
           ? routeThrottleDecision(store, { projectPath: routeProjectPath, projectGroup, limits: throttleLimits })
           : undefined;
-        if (throttle && !throttle.allowed) return { kind: "throttled" as const, throttle };
+        const workItem = store.upsertWorkflowWorkItem({
+          ...workItemInput,
+          invocationId: invocation.id,
+          status: throttle && !throttle.allowed ? "deferred" : "queued",
+          lastReason: throttle && !throttle.allowed ? throttle.reason : undefined,
+        });
+        if (throttle && !throttle.allowed) return { kind: "throttled" as const, invocation, workItem, throttle };
         const existingWorkflow = store.findWorkflowByName(workflowBody.name);
         const workflow = existingWorkflow ?? store.createWorkflow(workflowBody);
         const loop = store.createLoop({
           ...loopInput,
-          target: { type: "workflow", workflowId: workflow.id },
+          target: {
+            type: "workflow",
+            workflowId: workflow.id,
+            input: {
+              workflowInvocationId: invocation.id,
+              workflowWorkItemId: workItem.id,
+            },
+          },
         });
-        return { kind: "created" as const, workflow, loop, throttle };
+        const admitted = store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id, reason: "admitted by generic-event route" });
+        return { kind: "created" as const, invocation, workItem: admitted, workflow, loop, throttle };
       });
       if (outcome.kind === "deduped") {
         print(
-          { deduped: true, event, workflow: outcome.existingWorkflow ? publicWorkflow(outcome.existingWorkflow) : undefined, loop: publicLoop(outcome.existingLoop) },
-          `deduped existing loop ${outcome.existingLoop.id} (${outcome.existingLoop.name})`,
+          {
+            deduped: true,
+            idempotencyKey,
+            dedupedBy: "work-item",
+            event,
+            invocation: publicWorkflowInvocation(outcome.invocation),
+            workItem: publicWorkflowWorkItem(outcome.existingItem),
+            workflow: outcome.existingWorkflow ? publicWorkflow(outcome.existingWorkflow) : undefined,
+            loop: outcome.existingLoop ? publicLoop(outcome.existingLoop) : undefined,
+          },
+          `deduped existing work item ${outcome.existingItem.id} for event=${event.id} idempotency=${idempotencyKey}`,
         );
         return;
       }
       if (outcome.kind === "throttled") {
         print(
-          { skipped: true, queuedAtSource: true, reason: outcome.throttle.reason, event, throttle: outcome.throttle, workflow: workflowBody, loop: loopInput },
+          {
+            skipped: true,
+            queuedAtSource: true,
+            reason: outcome.throttle.reason,
+            idempotencyKey,
+            event,
+            invocation: publicWorkflowInvocation(outcome.invocation),
+            workItem: publicWorkflowWorkItem(outcome.workItem),
+            throttle: outcome.throttle,
+            workflow: workflowBody,
+            loop: loopInput,
+          },
           `skipped event ${event.id}: ${outcome.throttle.reason}`,
         );
         return;
       }
       print(
-        { deduped: false, event, workflow: publicWorkflow(outcome.workflow), loop: publicLoop(outcome.loop), throttle: outcome.throttle, preflight },
-        `created ${outcome.loop.id} (${outcome.loop.name}) workflow=${outcome.workflow.name}`,
+        {
+          deduped: false,
+          idempotencyKey,
+          event,
+          invocation: publicWorkflowInvocation(outcome.invocation),
+          workItem: publicWorkflowWorkItem(outcome.workItem),
+          workflow: publicWorkflow(outcome.workflow),
+          loop: publicLoop(outcome.loop),
+          throttle: outcome.throttle,
+          preflight,
+        },
+        `created ${outcome.loop.id} (${outcome.loop.name}) workflow=${outcome.workflow.name} event=${event.id} idempotency=${idempotencyKey}`,
       );
     } finally {
       store.close();

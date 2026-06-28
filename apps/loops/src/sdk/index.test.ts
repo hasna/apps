@@ -18,9 +18,15 @@ describe("loops sdk", () => {
       claimCommand: "automations queue claim",
       completeCommand: "automations queue complete",
       failCommand: "automations queue fail",
+      eventHandoff: {
+        envelopeCommand: "automations webhooks event",
+        handlerCommand: "loops events handle generic",
+      },
     });
     expect(binding.guarantees.join(" ")).toContain("OpenAutomations owns automation specs");
+    expect(binding.guarantees.join(" ")).toContain("exported event envelopes");
     expect(binding.nonGoals.join(" ")).toContain("must not become the OpenAutomations product surface");
+    expect(binding.eventHandoff.boundary).toContain("OpenLoops owns workflow invocation");
   });
 
   test("archives and unarchives loops through the client", async () => {

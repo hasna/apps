@@ -267,8 +267,9 @@ non-git/non-mutating project is expected and the fallback is recorded. Use
 `worktreeBranchPrefix` can override the storage root and branch prefix.
 
 For event-driven task automation, `loops events handle todos-task` reads a
-Hasna event envelope from stdin or `HASNA_EVENT_JSON`, renders the template, and
-schedules a deduped one-shot workflow loop:
+Hasna event envelope from stdin or `HASNA_EVENT_JSON`, records a
+`WorkflowInvocation`, upserts an admission work item, and admits that work item
+into a deduped one-shot workflow loop when route capacity allows:
 
 ```bash
 cat task-created-event.json | loops events handle todos-task \
@@ -300,18 +301,35 @@ cat task-created-event.json | loops events handle todos-task \
   --max-active 12
 ```
 
-The limits count active routed worker/verifier workflow loops once per workflow.
+The limits count active admitted/running OpenLoops work items once per workflow.
 `--max-active-per-project` gates new work for the same project path,
 `--max-active-per-project-group` shares a pool across related projects such as
 `oss`, and `--max-active` is the global routed-workflow cap. Project matching
 uses the canonical git top-level path when available, so repo subdirectories
-share the same project cap. A throttled event is skipped with JSON evidence and
-`queuedAtSource=true` instead of creating another worker loop; the source task
-remains the durable queue item and should be replayed/drained later by the task
-scheduler. Re-delivering the event later is safe because event handlers dedupe
-by task/event id before rendering worktree plans or checking route limits. In
+share the same project cap. A throttled event records a deferred OpenLoops
+admission work item with JSON evidence instead of creating another worker loop.
+Re-delivering the event later is safe because handlers dedupe by the work-item
+idempotency key before rendering worktree plans or checking route limits. In
 dry-run mode, throttle counts are not evaluated because opening the live loop
 store can create or migrate the local database.
+
+Inspect route state with:
+
+```bash
+loops routes list --route-key todos-task
+loops routes show <work-item-id>
+loops routes invocations
+```
+
+When a workflow run starts from an admitted work item, OpenLoops writes a
+manifest under:
+
+```text
+.hasna/loops/runs/<project-slug>/<subject-key>/<run-id>/manifest.json
+```
+
+`subject-key` is a safe derived path segment (`kind-safeSlug-shortHash`), not
+the raw subject reference. The raw `subjectRef` is stored inside the manifest.
 
 When tasks were created while capacity was full, or when bulk producers created
 many tasks at once, use the drain command instead of replaying every webhook by
@@ -363,12 +381,13 @@ cat event.json | loops events handle generic \
 ```
 
 This is the intended deterministic-to-agentic path: a producer creates a todos
-task, `@hasna/events` delivers `task.created`, OpenLoops creates a worker and a
-verifier workflow, and the workflow updates todos with evidence. Use account
-pools so worker and verifier steps do not burn the same profile; OpenLoops picks
-deterministically and uses a different verifier profile when the pool has at
-least two entries. Use `--dry-run` to inspect the rendered workflow and loop
-input without storing anything, including the worktree path and branch for
+task, `@hasna/events` delivers `task.created`, OpenLoops records the invocation
+and admission item, OpenLoops creates a worker/verifier workflow when admitted,
+and the workflow updates todos with evidence. Use account pools so worker and
+verifier steps do not burn the same profile; OpenLoops picks deterministically
+and uses a different verifier profile when the pool has at least two entries.
+Use `--dry-run` to inspect the rendered invocation, work item, workflow, and
+loop input without storing anything, including the worktree path and branch for
 git-backed tasks.
 
 ## Transcript-Driven Loops

@@ -1,9 +1,11 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import type {
   CatchUpPolicy,
   CreateLoopInput,
+  CreateWorkflowInvocationInput,
   CreateWorkflowInput,
   Goal,
   GoalAutoExecute,
@@ -16,17 +18,22 @@ import type {
   LoopStatus,
   RunStatus,
   WorkflowEvent,
+  WorkflowInvocation,
   WorkflowRun,
   WorkflowRunStatus,
   WorkflowSpec,
   WorkflowStepRun,
   WorkflowStepRunStatus,
+  WorkflowWorkItem,
+  WorkflowWorkItemStatus,
+  UpsertWorkflowWorkItemInput,
 } from "../types.js";
 import { genId, nowIso } from "./ids.js";
 import { dbPath } from "./paths.js";
 import { initialNextRun } from "./schedule.js";
 import { assertGoalTransition, rollupSummary, updateReadyFlags } from "./goal/status.js";
 import { normalizeCreateWorkflowInput } from "./workflow-spec.js";
+import { writeWorkflowRunManifest } from "./run-artifacts.js";
 
 interface DaemonLeaseFence {
   daemonLeaseId?: string;
@@ -97,14 +104,60 @@ interface WorkflowRunRow {
   workflow_name: string;
   loop_id: string | null;
   loop_run_id: string | null;
+  invocation_id: string | null;
+  work_item_id: string | null;
   scheduled_for: string | null;
   idempotency_key: string | null;
+  manifest_path: string | null;
   status: string;
   started_at: string | null;
   finished_at: string | null;
   duration_ms: number | null;
   error: string | null;
   goal_run_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface WorkflowInvocationRow {
+  id: string;
+  workflow_id: string | null;
+  template_id: string | null;
+  source_kind: string;
+  source_id: string | null;
+  source_dedupe_key: string | null;
+  source_json: string;
+  subject_kind: string;
+  subject_id: string | null;
+  subject_path: string | null;
+  subject_url: string | null;
+  subject_json: string;
+  intent: string;
+  scope_json: string | null;
+  output_policy_json: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface WorkflowWorkItemRow {
+  id: string;
+  route_key: string;
+  idempotency_key: string;
+  invocation_id: string;
+  source_type: string;
+  source_ref: string;
+  subject_ref: string;
+  project_key: string | null;
+  project_group: string | null;
+  priority: number;
+  status: string;
+  attempts: number;
+  next_attempt_at: string | null;
+  lease_expires_at: string | null;
+  workflow_id: string | null;
+  loop_id: string | null;
+  workflow_run_id: string | null;
+  last_reason: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -290,14 +343,57 @@ function rowToWorkflowRun(row: WorkflowRunRow): WorkflowRun {
     workflowName: row.workflow_name,
     loopId: row.loop_id ?? undefined,
     loopRunId: row.loop_run_id ?? undefined,
+    invocationId: row.invocation_id ?? undefined,
+    workItemId: row.work_item_id ?? undefined,
     scheduledFor: row.scheduled_for ?? undefined,
     idempotencyKey: row.idempotency_key ?? undefined,
+    manifestPath: row.manifest_path ?? undefined,
     status: row.status as WorkflowRunStatus,
     startedAt: row.started_at ?? undefined,
     finishedAt: row.finished_at ?? undefined,
     durationMs: row.duration_ms ?? undefined,
     error: row.error ?? undefined,
     goalRunId: row.goal_run_id ?? undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToWorkflowInvocation(row: WorkflowInvocationRow): WorkflowInvocation {
+  return {
+    id: row.id,
+    workflowId: row.workflow_id ?? undefined,
+    templateId: row.template_id ?? undefined,
+    sourceRef: JSON.parse(row.source_json) as WorkflowInvocation["sourceRef"],
+    subjectRef: JSON.parse(row.subject_json) as WorkflowInvocation["subjectRef"],
+    intent: row.intent as WorkflowInvocation["intent"],
+    scope: row.scope_json ? (JSON.parse(row.scope_json) as WorkflowInvocation["scope"]) : undefined,
+    outputPolicy: row.output_policy_json ? (JSON.parse(row.output_policy_json) as WorkflowInvocation["outputPolicy"]) : undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToWorkflowWorkItem(row: WorkflowWorkItemRow): WorkflowWorkItem {
+  return {
+    id: row.id,
+    routeKey: row.route_key,
+    idempotencyKey: row.idempotency_key,
+    invocationId: row.invocation_id,
+    sourceType: row.source_type,
+    sourceRef: row.source_ref,
+    subjectRef: row.subject_ref,
+    projectKey: row.project_key ?? undefined,
+    projectGroup: row.project_group ?? undefined,
+    priority: row.priority,
+    status: row.status as WorkflowWorkItemStatus,
+    attempts: row.attempts,
+    nextAttemptAt: row.next_attempt_at ?? undefined,
+    leaseExpiresAt: row.lease_expires_at ?? undefined,
+    workflowId: row.workflow_id ?? undefined,
+    loopId: row.loop_id ?? undefined,
+    workflowRunId: row.workflow_run_id ?? undefined,
+    lastReason: row.last_reason ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -434,6 +530,8 @@ export interface CreateWorkflowRunInput {
   loopRun?: LoopRun;
   scheduledFor?: string;
   idempotencyKey?: string;
+  invocationId?: string;
+  workItemId?: string;
   daemonLeaseId?: string;
 }
 
@@ -470,12 +568,26 @@ export interface RecordGoalEventInput {
   rawResponse?: unknown;
 }
 
+function workItemStatusForLoopRun(
+  status: RunStatus,
+  attempt: number,
+  maxAttempts: number | undefined,
+): WorkflowWorkItemStatus | undefined {
+  if (status === "succeeded") return "succeeded";
+  if (["failed", "timed_out", "abandoned"].includes(status)) {
+    return maxAttempts !== undefined && attempt < maxAttempts ? "admitted" : "failed";
+  }
+  return undefined;
+}
+
 export class Store {
   private db: Database;
+  private rootDir: string;
 
   constructor(path?: string) {
     const file = path ?? dbPath();
     if (file !== ":memory:") mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+    this.rootDir = file === ":memory:" ? mkdtempSync(join(tmpdir(), "open-loops-store-")) : dirname(file);
     this.db = new Database(file);
     this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec("PRAGMA journal_mode = WAL;");
@@ -571,8 +683,11 @@ export class Store {
         workflow_name TEXT NOT NULL,
         loop_id TEXT REFERENCES loops(id) ON DELETE SET NULL,
         loop_run_id TEXT REFERENCES loop_runs(id) ON DELETE SET NULL,
+        invocation_id TEXT,
+        work_item_id TEXT,
         scheduled_for TEXT,
         idempotency_key TEXT,
+        manifest_path TEXT,
         status TEXT NOT NULL,
         started_at TEXT,
         finished_at TEXT,
@@ -587,7 +702,62 @@ export class Store {
         WHERE idempotency_key IS NOT NULL;
       CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow_created ON workflow_runs(workflow_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_workflow_runs_loop_run ON workflow_runs(loop_run_id);
+      CREATE INDEX IF NOT EXISTS idx_workflow_runs_invocation ON workflow_runs(invocation_id);
+      CREATE INDEX IF NOT EXISTS idx_workflow_runs_work_item ON workflow_runs(work_item_id);
       CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status);
+
+      CREATE TABLE IF NOT EXISTS workflow_invocations (
+        id TEXT PRIMARY KEY,
+        workflow_id TEXT,
+        template_id TEXT,
+        source_kind TEXT NOT NULL,
+        source_id TEXT,
+        source_dedupe_key TEXT,
+        source_json TEXT NOT NULL,
+        subject_kind TEXT NOT NULL,
+        subject_id TEXT,
+        subject_path TEXT,
+        subject_url TEXT,
+        subject_json TEXT NOT NULL,
+        intent TEXT NOT NULL,
+        scope_json TEXT,
+        output_policy_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_workflow_invocations_source ON workflow_invocations(source_kind, source_id);
+      CREATE INDEX IF NOT EXISTS idx_workflow_invocations_subject ON workflow_invocations(subject_kind, subject_id, subject_path);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_invocations_dedupe
+        ON workflow_invocations(source_kind, source_dedupe_key)
+        WHERE source_dedupe_key IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS workflow_work_items (
+        id TEXT PRIMARY KEY,
+        route_key TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        invocation_id TEXT NOT NULL REFERENCES workflow_invocations(id) ON DELETE CASCADE,
+        source_type TEXT NOT NULL,
+        source_ref TEXT NOT NULL,
+        subject_ref TEXT NOT NULL,
+        project_key TEXT,
+        project_group TEXT,
+        priority INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        attempts INTEGER NOT NULL,
+        next_attempt_at TEXT,
+        lease_expires_at TEXT,
+        workflow_id TEXT REFERENCES workflow_specs(id) ON DELETE SET NULL,
+        loop_id TEXT REFERENCES loops(id) ON DELETE SET NULL,
+        workflow_run_id TEXT REFERENCES workflow_runs(id) ON DELETE SET NULL,
+        last_reason TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(route_key, idempotency_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_workflow_work_items_status_next ON workflow_work_items(status, next_attempt_at, priority DESC, created_at ASC);
+      CREATE INDEX IF NOT EXISTS idx_workflow_work_items_project ON workflow_work_items(project_key, status);
+      CREATE INDEX IF NOT EXISTS idx_workflow_work_items_group ON workflow_work_items(project_group, status);
+      CREATE INDEX IF NOT EXISTS idx_workflow_work_items_invocation ON workflow_work_items(invocation_id);
 
       CREATE TABLE IF NOT EXISTS workflow_step_runs (
         id TEXT PRIMARY KEY,
@@ -706,6 +876,9 @@ export class Store {
     this.addColumnIfMissing("loop_runs", "goal_run_id", "TEXT");
     this.addColumnIfMissing("workflow_specs", "goal_json", "TEXT");
     this.addColumnIfMissing("workflow_runs", "goal_run_id", "TEXT");
+    this.addColumnIfMissing("workflow_runs", "invocation_id", "TEXT");
+    this.addColumnIfMissing("workflow_runs", "work_item_id", "TEXT");
+    this.addColumnIfMissing("workflow_runs", "manifest_path", "TEXT");
     this.addColumnIfMissing("workflow_step_runs", "pid", "INTEGER");
     this.addColumnIfMissing("workflow_step_runs", "goal_run_id", "TEXT");
     this.db
@@ -720,6 +893,9 @@ export class Store {
     this.db
       .query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)")
       .run("0004_loop_archive_metadata", nowIso());
+    this.db
+      .query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)")
+      .run("0005_workflow_invocations_and_admission", nowIso());
   }
 
   /**
@@ -882,6 +1058,10 @@ export class Store {
         $daemonLeaseId: opts.daemonLeaseId ?? null,
         $now: updated,
       });
+    if (patch.status && patch.status !== "active") {
+      const status: WorkflowWorkItemStatus = patch.status === "paused" ? "deferred" : "cancelled";
+      this.setWorkflowWorkItemsForLoop(id, status, `loop ${patch.status}`, updated);
+    }
     const after = this.getLoop(id);
     if (!after) throw new Error(`loop not found after update: ${id}`);
     return after;
@@ -931,6 +1111,7 @@ export class Store {
         $archivedFromStatus: loop.status,
         $updated: updated,
       });
+    this.setWorkflowWorkItemsForLoop(loop.id, "deferred", "loop archived", updated);
     const archived = this.getLoop(loop.id);
     if (!archived) throw new Error(`loop not found after archive: ${loop.id}`);
     return archived;
@@ -959,6 +1140,7 @@ export class Store {
 
   deleteLoop(idOrName: string): boolean {
     const loop = this.requireLoop(idOrName);
+    this.setWorkflowWorkItemsForLoop(loop.id, "cancelled", "loop deleted", nowIso());
     const res = this.db.query("DELETE FROM loops WHERE id = ?").run(loop.id);
     return res.changes > 0;
   }
@@ -1035,6 +1217,271 @@ export class Store {
     const archived = this.getWorkflow(workflow.id);
     if (!archived) throw new Error(`workflow not found after archive: ${workflow.id}`);
     return archived;
+  }
+
+  createWorkflowInvocation(input: CreateWorkflowInvocationInput): WorkflowInvocation {
+    const now = nowIso();
+    const sourceDedupeKey = input.sourceRef.dedupeKey ?? undefined;
+    if (sourceDedupeKey) {
+      const existing = this.db
+        .query<WorkflowInvocationRow, [string, string]>(
+          "SELECT * FROM workflow_invocations WHERE source_kind = ? AND source_dedupe_key = ? LIMIT 1",
+        )
+        .get(input.sourceRef.kind, sourceDedupeKey);
+      if (existing) return rowToWorkflowInvocation(existing);
+    }
+    const id = input.id ?? genId();
+    this.db
+      .query(
+        `INSERT INTO workflow_invocations (id, workflow_id, template_id, source_kind, source_id, source_dedupe_key,
+          source_json, subject_kind, subject_id, subject_path, subject_url, subject_json, intent, scope_json,
+          output_policy_json, created_at, updated_at)
+         VALUES ($id, $workflowId, $templateId, $sourceKind, $sourceId, $sourceDedupeKey, $sourceJson,
+          $subjectKind, $subjectId, $subjectPath, $subjectUrl, $subjectJson, $intent, $scopeJson,
+          $outputPolicyJson, $created, $updated)`,
+      )
+      .run({
+        $id: id,
+        $workflowId: input.workflowId ?? null,
+        $templateId: input.templateId ?? null,
+        $sourceKind: input.sourceRef.kind,
+        $sourceId: input.sourceRef.id ?? null,
+        $sourceDedupeKey: sourceDedupeKey ?? null,
+        $sourceJson: JSON.stringify(input.sourceRef),
+        $subjectKind: input.subjectRef.kind,
+        $subjectId: input.subjectRef.id ?? null,
+        $subjectPath: input.subjectRef.path ?? null,
+        $subjectUrl: input.subjectRef.url ?? null,
+        $subjectJson: JSON.stringify(input.subjectRef),
+        $intent: input.intent,
+        $scopeJson: input.scope ? JSON.stringify(input.scope) : null,
+        $outputPolicyJson: input.outputPolicy ? JSON.stringify(input.outputPolicy) : null,
+        $created: now,
+        $updated: now,
+      });
+    const row = this.db.query<WorkflowInvocationRow, [string]>("SELECT * FROM workflow_invocations WHERE id = ?").get(id);
+    if (!row) throw new Error(`workflow invocation not found after create: ${id}`);
+    return rowToWorkflowInvocation(row);
+  }
+
+  getWorkflowInvocation(id: string): WorkflowInvocation | undefined {
+    const row = this.db.query<WorkflowInvocationRow, [string]>("SELECT * FROM workflow_invocations WHERE id = ?").get(id);
+    return row ? rowToWorkflowInvocation(row) : undefined;
+  }
+
+  listWorkflowInvocations(opts: { limit?: number } = {}): WorkflowInvocation[] {
+    const rows = this.db
+      .query<WorkflowInvocationRow, [number]>("SELECT * FROM workflow_invocations ORDER BY created_at DESC LIMIT ?")
+      .all(opts.limit ?? 100);
+    return rows.map(rowToWorkflowInvocation);
+  }
+
+  upsertWorkflowWorkItem(input: UpsertWorkflowWorkItemInput): WorkflowWorkItem {
+    const now = nowIso();
+    const id = genId();
+    const status = input.status ?? "queued";
+    this.db
+      .query(
+        `INSERT INTO workflow_work_items (id, route_key, idempotency_key, invocation_id, source_type, source_ref,
+          subject_ref, project_key, project_group, priority, status, attempts, next_attempt_at, lease_expires_at,
+          workflow_id, loop_id, workflow_run_id, last_reason, created_at, updated_at)
+         VALUES ($id, $routeKey, $idempotencyKey, $invocationId, $sourceType, $sourceRef, $subjectRef,
+          $projectKey, $projectGroup, $priority, $status, 0, $nextAttemptAt, NULL, NULL, NULL, NULL,
+          $lastReason, $created, $updated)
+         ON CONFLICT(route_key, idempotency_key) DO UPDATE SET
+          invocation_id=excluded.invocation_id,
+          source_type=excluded.source_type,
+          source_ref=excluded.source_ref,
+          subject_ref=excluded.subject_ref,
+          project_key=excluded.project_key,
+          project_group=excluded.project_group,
+          priority=excluded.priority,
+          status=CASE
+            WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running')
+              THEN workflow_work_items.status
+            ELSE excluded.status
+          END,
+          workflow_id=CASE
+            WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running') THEN workflow_work_items.workflow_id
+            ELSE NULL
+          END,
+          loop_id=CASE
+            WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running') THEN workflow_work_items.loop_id
+            ELSE NULL
+          END,
+          workflow_run_id=CASE
+            WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running') THEN workflow_work_items.workflow_run_id
+            ELSE NULL
+          END,
+          lease_expires_at=CASE
+            WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running') THEN workflow_work_items.lease_expires_at
+            ELSE NULL
+          END,
+          next_attempt_at=excluded.next_attempt_at,
+          last_reason=COALESCE(excluded.last_reason, workflow_work_items.last_reason),
+          updated_at=excluded.updated_at`,
+      )
+      .run({
+        $id: id,
+        $routeKey: input.routeKey,
+        $idempotencyKey: input.idempotencyKey,
+        $invocationId: input.invocationId,
+        $sourceType: input.sourceType,
+        $sourceRef: input.sourceRef,
+        $subjectRef: input.subjectRef,
+        $projectKey: input.projectKey ?? null,
+        $projectGroup: input.projectGroup ?? null,
+        $priority: input.priority ?? 0,
+        $status: status,
+        $nextAttemptAt: input.nextAttemptAt ?? null,
+        $lastReason: input.lastReason ?? null,
+        $created: now,
+        $updated: now,
+      });
+    const row = this.db
+      .query<WorkflowWorkItemRow, [string, string]>(
+        "SELECT * FROM workflow_work_items WHERE route_key = ? AND idempotency_key = ? LIMIT 1",
+      )
+      .get(input.routeKey, input.idempotencyKey);
+    if (!row) throw new Error(`workflow work item not found after upsert: ${input.routeKey}/${input.idempotencyKey}`);
+    return rowToWorkflowWorkItem(row);
+  }
+
+  getWorkflowWorkItem(id: string): WorkflowWorkItem | undefined {
+    const row = this.db.query<WorkflowWorkItemRow, [string]>("SELECT * FROM workflow_work_items WHERE id = ?").get(id);
+    return row ? rowToWorkflowWorkItem(row) : undefined;
+  }
+
+  findWorkflowWorkItem(routeKey: string, idempotencyKey: string): WorkflowWorkItem | undefined {
+    const row = this.db
+      .query<WorkflowWorkItemRow, [string, string]>(
+        "SELECT * FROM workflow_work_items WHERE route_key = ? AND idempotency_key = ? LIMIT 1",
+      )
+      .get(routeKey, idempotencyKey);
+    return row ? rowToWorkflowWorkItem(row) : undefined;
+  }
+
+  listWorkflowWorkItems(opts: { status?: WorkflowWorkItemStatus; routeKey?: string; limit?: number } = {}): WorkflowWorkItem[] {
+    const limit = opts.limit ?? 100;
+    let rows: WorkflowWorkItemRow[];
+    if (opts.status && opts.routeKey) {
+      rows = this.db
+        .query<WorkflowWorkItemRow, [string, string, number]>(
+          "SELECT * FROM workflow_work_items WHERE route_key = ? AND status = ? ORDER BY priority DESC, created_at ASC LIMIT ?",
+        )
+        .all(opts.routeKey, opts.status, limit);
+    } else if (opts.status) {
+      rows = this.db
+        .query<WorkflowWorkItemRow, [string, number]>(
+          "SELECT * FROM workflow_work_items WHERE status = ? ORDER BY priority DESC, created_at ASC LIMIT ?",
+        )
+        .all(opts.status, limit);
+    } else if (opts.routeKey) {
+      rows = this.db
+        .query<WorkflowWorkItemRow, [string, number]>(
+          "SELECT * FROM workflow_work_items WHERE route_key = ? ORDER BY created_at DESC LIMIT ?",
+        )
+        .all(opts.routeKey, limit);
+    } else {
+      rows = this.db.query<WorkflowWorkItemRow, [number]>("SELECT * FROM workflow_work_items ORDER BY created_at DESC LIMIT ?").all(limit);
+    }
+    return rows.map(rowToWorkflowWorkItem);
+  }
+
+  countActiveWorkflowWorkItems(args: { projectKey?: string; projectGroup?: string } = {}): {
+    global: number;
+    project: number;
+    projectGroup?: number;
+  } {
+    const active = ["admitted", "running"];
+    const placeholders = active.map(() => "?").join(",");
+    const global = this.db
+      .query<{ count: number }, string[]>(`SELECT COUNT(*) AS count FROM workflow_work_items WHERE status IN (${placeholders})`)
+      .get(...active)?.count ?? 0;
+    const project = args.projectKey
+      ? this.db
+          .query<{ count: number }, string[]>(
+            `SELECT COUNT(*) AS count FROM workflow_work_items WHERE status IN (${placeholders}) AND project_key = ?`,
+          )
+          .get(...active, args.projectKey)?.count ?? 0
+      : 0;
+    const projectGroup = args.projectGroup
+      ? this.db
+          .query<{ count: number }, string[]>(
+            `SELECT COUNT(*) AS count FROM workflow_work_items WHERE status IN (${placeholders}) AND project_group = ?`,
+          )
+          .get(...active, args.projectGroup)?.count ?? 0
+      : undefined;
+    return { global, project, ...(projectGroup !== undefined ? { projectGroup } : {}) };
+  }
+
+  admitWorkflowWorkItem(id: string, patch: { workflowId: string; loopId: string; reason?: string }): WorkflowWorkItem {
+    const now = nowIso();
+    const res = this.db
+      .query(
+        `UPDATE workflow_work_items
+         SET status='admitted', attempts=attempts + 1, workflow_id=$workflowId, loop_id=$loopId,
+          next_attempt_at=NULL, lease_expires_at=NULL, last_reason=$reason, updated_at=$updated
+         WHERE id=$id AND status IN ('queued', 'deferred')`,
+      )
+      .run({
+        $id: id,
+        $workflowId: patch.workflowId,
+        $loopId: patch.loopId,
+        $reason: patch.reason ?? null,
+        $updated: now,
+      });
+    const item = this.getWorkflowWorkItem(id);
+    if (!item) throw new Error(`workflow work item not found after admit: ${id}`);
+    if (res.changes !== 1) throw new Error(`workflow work item is not claimable: ${id} status=${item.status}`);
+    return item;
+  }
+
+  private setWorkflowWorkItemsForLoop(
+    loopId: string,
+    status: WorkflowWorkItemStatus,
+    reason: string | undefined,
+    updated: string,
+    statuses: WorkflowWorkItemStatus[] = ["admitted", "running"],
+  ): void {
+    const placeholders = statuses.map(() => "?").join(",");
+    this.db
+      .query(
+        `UPDATE workflow_work_items
+         SET status=?, lease_expires_at=NULL, last_reason=COALESCE(?, last_reason), updated_at=?
+         WHERE loop_id = ? AND status IN (${placeholders})`,
+      )
+      .run(status, reason ?? null, updated, loopId, ...statuses);
+  }
+
+  private setWorkflowWorkItemsForWorkflowRun(
+    workflowRunId: string,
+    status: WorkflowWorkItemStatus,
+    reason: string | undefined,
+    updated: string,
+    statuses: WorkflowWorkItemStatus[] = ["admitted", "running"],
+  ): void {
+    const placeholders = statuses.map(() => "?").join(",");
+    this.db
+      .query(
+        `UPDATE workflow_work_items
+         SET status=?, lease_expires_at=NULL, last_reason=COALESCE(?, last_reason), updated_at=?
+         WHERE workflow_run_id = ? AND status IN (${placeholders})`,
+      )
+      .run(status, reason ?? null, updated, workflowRunId, ...statuses);
+  }
+
+  private setWorkflowWorkItemsForLoopRun(run: LoopRun, reason: string | undefined, updated: string): void {
+    const loop = this.getLoop(run.loopId);
+    const status = workItemStatusForLoopRun(run.status, run.attempt, loop?.maxAttempts);
+    if (!status) return;
+    const statuses: WorkflowWorkItemStatus[] = status === "admitted"
+      ? ["admitted", "running", "failed"]
+      : ["admitted", "running"];
+    const nextReason = status === "admitted"
+      ? reason ? `attempt failed; retry pending: ${reason}` : "attempt failed; retry pending"
+      : reason;
+    this.setWorkflowWorkItemsForLoop(run.loopId, status, nextReason, updated, statuses);
   }
 
   createGoal(input: CreateGoalInput, opts: DaemonLeaseFence = {}): Goal {
@@ -1392,6 +1839,10 @@ export class Store {
 
   createWorkflowRun(input: CreateWorkflowRunInput): WorkflowRun {
     const now = nowIso();
+    const targetInput = input.loop?.target.type === "workflow" ? input.loop.target.input : undefined;
+    const invocationId = input.invocationId ?? targetInput?.workflowInvocationId ?? targetInput?.invocationId;
+    const workItemId = input.workItemId ?? targetInput?.workflowWorkItemId ?? targetInput?.workItemId;
+    let manifestPath: string | undefined;
     if (input.idempotencyKey) {
       const existing = this.db
         .query<WorkflowRunRow, [string, string]>(
@@ -1420,12 +1871,35 @@ export class Store {
       }
 
       const runId = genId();
+      const workItem = workItemId ? this.getWorkflowWorkItem(workItemId) : undefined;
+      const invocation = invocationId ? this.getWorkflowInvocation(invocationId) : undefined;
+      manifestPath = invocation || workItem
+        ? writeWorkflowRunManifest({
+            loopsDataDir: this.rootDir,
+            workflowRunId: runId,
+            workflowId: input.workflow.id,
+            workflowName: input.workflow.name,
+            invocationId,
+            workItemId,
+            projectKey: workItem?.projectKey ?? invocation?.scope?.projectPath,
+            subjectKind: invocation?.subjectRef.kind,
+            rawSubjectRef: workItem?.subjectRef ?? invocation?.subjectRef.path ?? invocation?.subjectRef.id ?? invocation?.subjectRef.url,
+            payload: {
+              workflowInvocation: invocation,
+              workflowWorkItem: workItem,
+              loopId: input.loop?.id,
+              loopRunId: input.loopRun?.id,
+              scheduledFor: input.scheduledFor ?? input.loopRun?.scheduledFor,
+            },
+          })
+        : undefined;
       this.db
         .query(
-          `INSERT INTO workflow_runs (id, workflow_id, workflow_name, loop_id, loop_run_id, scheduled_for, idempotency_key,
-            status, started_at, finished_at, duration_ms, error, created_at, updated_at)
-           VALUES ($id, $workflowId, $workflowName, $loopId, $loopRunId, $scheduledFor, $idempotencyKey,
-            'running', $started, NULL, NULL, NULL, $created, $updated)`,
+          `INSERT INTO workflow_runs (id, workflow_id, workflow_name, loop_id, loop_run_id, invocation_id, work_item_id,
+            scheduled_for, idempotency_key, manifest_path, status, started_at, finished_at, duration_ms, error,
+            created_at, updated_at)
+           VALUES ($id, $workflowId, $workflowName, $loopId, $loopRunId, $invocationId, $workItemId, $scheduledFor,
+            $idempotencyKey, $manifestPath, 'running', $started, NULL, NULL, NULL, $created, $updated)`,
         )
         .run({
           $id: runId,
@@ -1433,12 +1907,34 @@ export class Store {
           $workflowName: input.workflow.name,
           $loopId: input.loop?.id ?? null,
           $loopRunId: input.loopRun?.id ?? null,
+          $invocationId: invocationId ?? null,
+          $workItemId: workItemId ?? null,
           $scheduledFor: input.scheduledFor ?? input.loopRun?.scheduledFor ?? null,
           $idempotencyKey: input.idempotencyKey ?? null,
+          $manifestPath: manifestPath ?? null,
           $started: now,
           $created: now,
           $updated: now,
         });
+
+      if (workItemId) {
+        const workItemRes = this.db
+          .query(
+            `UPDATE workflow_work_items
+             SET status='running', workflow_run_id=$workflowRunId, lease_expires_at=$leaseExpiresAt, updated_at=$updated
+             WHERE id=$id AND status IN ('admitted', 'queued', 'deferred', 'running')`,
+          )
+          .run({
+            $id: workItemId,
+            $workflowRunId: runId,
+            $leaseExpiresAt: input.loop ? new Date(Date.now() + input.loop.leaseMs).toISOString() : null,
+            $updated: now,
+          });
+        if (workItemRes.changes !== 1) {
+          const current = this.getWorkflowWorkItem(workItemId);
+          throw new Error(`workflow work item is not runnable: ${workItemId}${current ? ` status=${current.status}` : ""}`);
+        }
+      }
 
       input.workflow.steps.forEach((step, sequence) => {
         const account = step.account ?? step.target.account;
@@ -1475,6 +1971,9 @@ export class Store {
             stepCount: input.workflow.steps.length,
             loopId: input.loop?.id,
             loopRunId: input.loopRun?.id,
+            invocationId,
+            workItemId,
+            manifestPath,
           }),
           $created: now,
         });
@@ -1489,6 +1988,7 @@ export class Store {
       } catch {
         /* transaction may already be closed */
       }
+      if (manifestPath) rmSync(manifestPath, { force: true });
       throw error;
     }
   }
@@ -1770,6 +2270,11 @@ export class Store {
         });
       changed = res.changes === 1;
       if (changed) this.appendWorkflowEvent(workflowRunId, status, undefined, { error: patch.error });
+      if (changed) {
+        const itemStatus: WorkflowWorkItemStatus =
+          status === "succeeded" ? "succeeded" : status === "cancelled" ? "cancelled" : "failed";
+        this.setWorkflowWorkItemsForWorkflowRun(workflowRunId, itemStatus, patch.error, finishedAt);
+      }
       this.db.exec("COMMIT");
     } catch (error) {
       try {
@@ -1805,6 +2310,7 @@ export class Store {
              WHERE workflow_run_id=$workflowRunId AND status IN ('pending', 'running')`,
           )
           .run({ $workflowRunId: workflowRunId, $finished: now, $reason: reason, $updated: now });
+        this.setWorkflowWorkItemsForWorkflowRun(workflowRunId, "cancelled", reason, now);
         this.appendWorkflowEvent(workflowRunId, "cancelled", undefined, { reason });
       }
       this.db.exec("COMMIT");
@@ -2158,6 +2664,7 @@ export class Store {
     const run = this.getRun(id);
     if (!run) throw new Error(`run not found after finalize: ${id}`);
     if (opts.claimedBy && res.changes !== 1) return run;
+    if (res.changes === 1) this.setWorkflowWorkItemsForLoopRun(run, patch.error, finishedAt);
     return run;
   }
 
@@ -2286,6 +2793,18 @@ export class Store {
             error: "parent loop run lease expired before completion",
             loopRunId: row.id,
           });
+          this.setWorkflowWorkItemsForWorkflowRun(workflowRow.id, "failed", "parent loop run lease expired before completion", finished);
+        }
+        const loop = this.getLoop(row.loop_id);
+        const itemStatus = workItemStatusForLoopRun("abandoned", row.attempt, loop?.maxAttempts);
+        if (itemStatus) {
+          const statuses: WorkflowWorkItemStatus[] = itemStatus === "admitted"
+            ? ["admitted", "running", "failed"]
+            : ["admitted", "running"];
+          const reason = itemStatus === "admitted"
+            ? "run lease expired before completion; retry pending"
+            : "run lease expired before completion";
+          this.setWorkflowWorkItemsForLoop(row.loop_id, itemStatus, reason, finished, statuses);
         }
         this.db.exec("COMMIT");
       } catch (error) {

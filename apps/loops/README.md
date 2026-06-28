@@ -241,8 +241,9 @@ loops templates render bounded-agent-worker-verifier \
 ```
 
 For event-driven task automation, `loops events handle todos-task` reads a
-Hasna event envelope from stdin or `HASNA_EVENT_JSON`, renders the template, and
-schedules a deduped one-shot workflow loop:
+Hasna event envelope from stdin or `HASNA_EVENT_JSON`, records a
+`WorkflowInvocation`, upserts an admission work item, and admits that work item
+into a deduped one-shot workflow loop when route capacity allows:
 
 ```bash
 cat task-created-event.json | loops events handle todos-task \
@@ -267,20 +268,35 @@ cat event.json | loops events handle generic \
 ```
 
 This is the intended deterministic-to-agentic path: a producer creates a todos
-task, `@hasna/events` delivers `task.created`, OpenLoops creates a worker and a
-verifier workflow, and the workflow updates todos with evidence. Use account
-pools so worker and verifier steps do not burn the same profile; OpenLoops picks
-deterministically and uses a different verifier profile when the pool has at
-least two entries. Use `--dry-run` to inspect the rendered workflow and loop
-input without storing anything.
+task, `@hasna/events` delivers `task.created`, OpenLoops records the invocation
+and admission item, OpenLoops creates a worker/verifier workflow when admitted,
+and the workflow updates todos with evidence. Use account pools so worker and
+verifier steps do not burn the same profile; OpenLoops picks deterministically
+and uses a different verifier profile when the pool has at least two entries.
+Use `--dry-run` to inspect the rendered invocation, work item, workflow, and
+loop input without storing anything.
+
+Inspect route state with:
+
+```bash
+loops routes list --route-key todos-task
+loops routes show <work-item-id>
+loops routes invocations
+```
+
+Workflow run manifests are written under
+`.hasna/loops/runs/<project-slug>/<subject-key>/<run-id>/manifest.json`.
+`subject-key` is a safe derived path segment, not the raw subject reference.
 
 ## OpenAutomations Runtime Binding
 
-OpenLoops can be used as an execution runtime for OpenAutomations, but it does
-not own the automation product surface. `@hasna/automations` owns automation
-specs, trigger materialization, durable run/action queue rows, DLQ/replay,
-idempotency, approvals, and audit evidence. OpenLoops only executes work that
-OpenAutomations has already materialized and explicitly handed off.
+OpenLoops can be used as an execution runtime for deterministic OpenAutomations
+product automations, but it does not own the automation product surface.
+`@hasna/automations` owns automation specs, trigger materialization, product
+automation action queues, DLQ/replay, idempotency, approvals, and audit
+evidence. OpenLoops owns agent workflow invocation/admission/runs. OpenLoops
+only executes work that OpenAutomations has explicitly handed off; it does not
+make OpenAutomations the queue owner for todos task/PR/review agent workflows.
 
 The SDK exposes the boundary descriptor:
 
@@ -289,6 +305,7 @@ import { openAutomationsRuntimeBinding } from "@hasna/loops";
 
 const binding = openAutomationsRuntimeBinding();
 console.log(binding.handoff); // "claim-queue"
+console.log(binding.eventHandoff.handlerCommand); // "loops events handle generic"
 ```
 
 The claim-queue handoff uses the OpenAutomations CLI or SDK:
@@ -298,6 +315,21 @@ automations queue claim --runner open-loops:<worker-id>
 automations queue complete <action-id> --runner open-loops:<worker-id>
 automations queue fail <action-id> --runner open-loops:<worker-id> --code <code> --message <message>
 ```
+
+For explicit event workflow routing, OpenAutomations can export the normalized
+event envelope and OpenLoops can consume it through the existing generic event
+handler:
+
+```bash
+automations --json webhooks event <route> --body-json '<json>' \
+  | loops --json events handle generic
+```
+
+This is not automation materialization in OpenLoops. It is an explicit
+event-envelope workflow handoff: OpenAutomations owns deterministic automation
+specs, webhook normalization, queue state, approvals, DLQ, and replay; OpenLoops
+owns agent workflow invocation after the operator routes the envelope to
+`loops events handle generic`.
 
 Do not store automation specs in OpenLoops, infer automation triggers from event
 transport alone, or replace the OpenAutomations queue with loop/workflow rows.

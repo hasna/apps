@@ -87,6 +87,12 @@ export interface OpenAutomationsRuntimeBinding {
   claimCommand: "automations queue claim";
   completeCommand: "automations queue complete";
   failCommand: "automations queue fail";
+  eventHandoff: {
+    envelopeCommand: "automations webhooks event";
+    handlerCommand: "loops events handle generic";
+    pipeExample: string;
+    boundary: string;
+  };
   requiredEnvironment: string[];
   guarantees: string[];
   nonGoals: string[];
@@ -180,6 +186,109 @@ export type WorkflowRunStatus = "running" | "succeeded" | "failed" | "timed_out"
 
 export type WorkflowStepRunStatus = "pending" | "running" | "succeeded" | "failed" | "timed_out" | "skipped" | "cancelled";
 
+export type WorkflowInvocationSourceKind = "task" | "event" | "schedule" | "manual" | "pr" | "review" | "knowledge";
+
+export type WorkflowInvocationSubjectKind = "repo" | "pr" | "task" | "doc" | "run" | "metric";
+
+export type WorkflowInvocationIntent = "route" | "mutate" | "review" | "evaluate" | "report";
+
+export interface WorkflowInvocationRef {
+  kind: string;
+  id?: string;
+  path?: string;
+  url?: string;
+  dedupeKey?: string;
+  raw?: Record<string, unknown>;
+}
+
+export interface WorkflowInvocationScope {
+  projectPath?: string;
+  projectGroup?: string;
+  worktreePolicy?: AgentWorktreeMode;
+  permissions?: string;
+  accountPolicy?: string;
+  concurrencyGroup?: string;
+  [key: string]: unknown;
+}
+
+export interface WorkflowInvocationOutputPolicy {
+  report?: "always" | "on_change" | "on_failure";
+  createTask?: "never" | "on_actionable" | "on_failure" | "always";
+  [key: string]: unknown;
+}
+
+export interface WorkflowInvocation {
+  id: string;
+  workflowId?: string;
+  templateId?: string;
+  sourceRef: WorkflowInvocationRef;
+  subjectRef: WorkflowInvocationRef;
+  intent: WorkflowInvocationIntent;
+  scope?: WorkflowInvocationScope;
+  outputPolicy?: WorkflowInvocationOutputPolicy;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateWorkflowInvocationInput {
+  id?: string;
+  workflowId?: string;
+  templateId?: string;
+  sourceRef: WorkflowInvocationRef;
+  subjectRef: WorkflowInvocationRef;
+  intent: WorkflowInvocationIntent;
+  scope?: WorkflowInvocationScope;
+  outputPolicy?: WorkflowInvocationOutputPolicy;
+}
+
+export type WorkflowWorkItemStatus =
+  | "queued"
+  | "deferred"
+  | "admitted"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "dead_letter"
+  | "cancelled";
+
+export interface WorkflowWorkItem {
+  id: string;
+  routeKey: string;
+  idempotencyKey: string;
+  invocationId: string;
+  sourceType: string;
+  sourceRef: string;
+  subjectRef: string;
+  projectKey?: string;
+  projectGroup?: string;
+  priority: number;
+  status: WorkflowWorkItemStatus;
+  attempts: number;
+  nextAttemptAt?: string;
+  leaseExpiresAt?: string;
+  workflowId?: string;
+  loopId?: string;
+  workflowRunId?: string;
+  lastReason?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UpsertWorkflowWorkItemInput {
+  routeKey: string;
+  idempotencyKey: string;
+  invocationId: string;
+  sourceType: string;
+  sourceRef: string;
+  subjectRef: string;
+  projectKey?: string;
+  projectGroup?: string;
+  priority?: number;
+  status?: Extract<WorkflowWorkItemStatus, "queued" | "deferred">;
+  nextAttemptAt?: string;
+  lastReason?: string;
+}
+
 export interface WorkflowStep {
   id: string;
   name?: string;
@@ -235,8 +344,11 @@ export interface WorkflowRun {
   workflowName: string;
   loopId?: string;
   loopRunId?: string;
+  invocationId?: string;
+  workItemId?: string;
   scheduledFor?: string;
   idempotencyKey?: string;
+  manifestPath?: string;
   goalRunId?: string;
   status: WorkflowRunStatus;
   startedAt?: string;
