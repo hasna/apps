@@ -2039,6 +2039,62 @@ describe("loops CLI", () => {
     expect(loops[0].name).toContain("task-dra");
   });
 
+  test("todos task drain parses large ready payloads without truncating JSON", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-large-ready-"));
+    const binDir = join(dataDir, "bin");
+    const readyFile = join(dataDir, "ready.json");
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"ready\" ]]; then cat \"$TODOS_READY_FILE\"; exit 0; fi",
+        "done",
+        "if [[ \"$*\" == *\"task-lists\"* ]]; then printf '[]\\n'; exit 0; fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    writeFileSync(
+      readyFile,
+      JSON.stringify([
+        {
+          id: "task-drain-large-ready",
+          title: "Large ready task",
+          status: "pending",
+          description: "x".repeat(9 * 1024 * 1024),
+          tags: ["manual"],
+        },
+      ]),
+    );
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        join(dataDir, "todos-store"),
+        "--tags",
+        "auto:route",
+        "--dry-run",
+      ],
+      undefined,
+      { PATH: `${binDir}:/usr/bin:/bin`, TODOS_READY_FILE: readyFile },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.scanned).toBe(1);
+    expect(value.filteredCandidates).toBe(0);
+    expect(value.considered).toBe(0);
+  });
+
   test("todos task event handler --preflight fails before storing generated workflow loops", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-preflight-fail-"));
     const home = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-preflight-home-"));

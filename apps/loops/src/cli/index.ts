@@ -327,12 +327,12 @@ function defaultLoopsProject(): string {
   return process.env.LOOPS_TASK_PROJECT || process.env.LOOPS_DATA_DIR || `${process.env.HOME ?? "/home/hasna"}/.hasna/loops`;
 }
 
-function runLocalCommand(command: string, args: string[], opts: { input?: string; timeoutMs?: number } = {}) {
+function runLocalCommand(command: string, args: string[], opts: { input?: string; timeoutMs?: number; maxBuffer?: number } = {}) {
   const result = spawnSync(command, args, {
     input: opts.input,
     encoding: "utf8",
     timeout: opts.timeoutMs ?? 30_000,
-    maxBuffer: 8 * 1024 * 1024,
+    maxBuffer: opts.maxBuffer ?? 8 * 1024 * 1024,
     env: process.env,
   });
   return {
@@ -1178,9 +1178,15 @@ function taskDrainEvent(task: TodosReadyTask): EventEnvelope {
 function loadReadyTodosTasks(opts: TodosDrainOptions, scanLimit: number): TodosReadyTask[] {
   const todosProject = opts.todosProject ?? defaultLoopsProject();
   const args = ["--project", todosProject, "--json", "ready", "--limit", String(scanLimit)];
-  const result = runLocalCommand("todos", args, { timeoutMs: 60_000 });
+  const result = runLocalCommand("todos", args, { timeoutMs: 60_000, maxBuffer: 64 * 1024 * 1024 });
   if (!result.ok) throw new Error(result.stderr || result.error || "todos ready failed");
-  const parsed = JSON.parse(result.stdout || "[]");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.stdout || "[]");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`failed to parse todos ready --json output (${result.stdout.length} bytes): ${message}`);
+  }
   if (!Array.isArray(parsed)) throw new Error("todos ready --json returned a non-array value");
   return parsed as TodosReadyTask[];
 }
