@@ -110,7 +110,7 @@ export function registerDispatchTools(server: McpServer, { shouldRegisterTool, r
       "dispatch_to_multiple",
       "Legacy/emergency fan-out: send the same tasks or task list to multiple tmux windows in sequence after a human explicitly chooses tmux delivery. A stagger delay is applied between each window.",
       {
-        targets: z.array(z.string()).min(2).describe("Array of tmux targets to dispatch to"),
+        targets: z.array(z.string()).min(2).describe("Legacy/emergency tmux targets selected explicitly by a human operator"),
         task_ids: z.array(z.string()).optional().describe("Task IDs to dispatch (use this or task_list_id)"),
         task_list_id: z.string().optional().describe("Task list ID to dispatch (use this or task_ids)"),
         stagger_ms: z.number().optional().describe("Delay between each window dispatch. Default: 500ms."),
