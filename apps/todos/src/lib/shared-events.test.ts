@@ -24,6 +24,7 @@ afterEach(() => {
   closeDatabase();
   delete process.env["TODOS_DB_PATH"];
   delete process.env["HASNA_EVENTS_DIR"];
+  delete process.env["HASNA_EVENTS_HOME"];
   if (originalHome === undefined) delete process.env["HOME"];
   else process.env["HOME"] = originalHome;
   rmSync(tempDir, { recursive: true, force: true });
@@ -108,6 +109,11 @@ describe("shared task events", () => {
     process.env["HOME"] = join(tempDir, "home");
     process.env["TODOS_DB_PATH"] = join(tempDir, "scratch", "todos.db");
 
+    expect(shouldEmitSharedTaskEvents()).toBe(false);
+
+    process.env["HASNA_EVENTS_HOME"] = join(tempDir, "events-home");
+    expect(shouldEmitSharedTaskEvents()).toBe(true);
+    delete process.env["HASNA_EVENTS_HOME"];
     expect(shouldEmitSharedTaskEvents()).toBe(false);
 
     await emitSharedTaskEvent({

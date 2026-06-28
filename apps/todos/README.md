@@ -477,10 +477,10 @@ project/list/path fields, `route_enabled` when the task metadata opts in, and an
 `manual_required`, `requires_approval`, and `approval_required`.
 
 When running route smokes or tests with an explicit temp/in-memory task database
-through `TODOS_DB_PATH` or `HASNA_TODOS_DB_PATH`, also set `HASNA_EVENTS_DIR` to
-a temp event store. Without that explicit event directory, Todos suppresses
-shared event emission for temp task databases so route-enabled scratch tasks
-cannot trigger global OpenLoops workers. Set
+through `TODOS_DB_PATH` or `HASNA_TODOS_DB_PATH`, also set `HASNA_EVENTS_DIR` or
+`HASNA_EVENTS_HOME` to a temp event store. Without an explicit event directory,
+Todos suppresses shared event emission for temp task databases so route-enabled
+scratch tasks cannot trigger global OpenLoops workers. Set
 `HASNA_TODOS_ALLOW_GLOBAL_EVENTS_FROM_TEMP_DB=1` only for deliberate integration
 tests that must exercise the global event bus.
 

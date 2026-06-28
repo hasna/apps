@@ -92,7 +92,7 @@ function isUnderTmpDir(path: string): boolean {
 export function shouldEmitSharedTaskEvents(): boolean {
   const explicitDb = explicitTaskDbPath();
   if (!explicitDb) return true;
-  if (process.env["HASNA_EVENTS_DIR"]) return true;
+  if (process.env["HASNA_EVENTS_DIR"] || process.env["HASNA_EVENTS_HOME"]) return true;
   if (isTruthyEnv(process.env[ALLOW_GLOBAL_EVENTS_FROM_TEMP_DB])) return true;
   return !(isInMemoryDbPath(explicitDb) || isUnderTmpDir(explicitDb));
 }
