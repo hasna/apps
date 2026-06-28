@@ -9,6 +9,8 @@ import { ensureUptimeHome, uptimeDbPath, uptimeHome } from "../paths.js";
 import { packageVersion } from "../version.js";
 import { serveUptime } from "../api.js";
 import { generateProbeKeyPair, signProbeResult } from "../probes.js";
+import { buildAwsDeploymentPlan, buildSpark01CloudConfig, renderSpark01Env } from "../cloud-plan.js";
+import type { AwsDeploymentPlan, Spark01CloudConfig } from "../cloud-plan.js";
 import type { ImportSource } from "../imports.js";
 import type { SendUptimeReportOptions, UptimeReportDelivery } from "../report.js";
 import type { CreateMonitorInput, Monitor, ProbeResultSubmission, ReportRun, ReportSchedule, ReportScheduleChannels, UpdateMonitorInput, UptimeSummary } from "../types.js";
@@ -458,6 +460,75 @@ program
       });
       svc.close();
       print(events, events.length ? events.map((event) => `${event.createdAt} ${event.action} ${sanitizeField(event.resourceType ?? "-")} ${sanitizeField(event.resourceId ?? "-")} ${sanitizeField(event.message ?? "")}`).join("\n") : "No audit events", opts);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+const cloud = program
+  .command("cloud")
+  .description("Generate dry-run cloud deployment and Spark01 configuration artifacts");
+
+cloud
+  .command("plan")
+  .description("Generate a dry-run AWS deployment plan for hasna-xyz-infra")
+  .option("--account <name>", "AWS account/profile label", "hasna-xyz-infra")
+  .option("--region <region>", "AWS region", "us-east-1")
+  .option("--stage <stage>", "deployment stage", "prod")
+  .option("--hostname <hostname>", "hosted Open Uptime hostname", "uptime.hasna.xyz")
+  .option("--workspace-id <id>", "workspace id", "wks_2tyysw05cwap")
+  .option("--vpc-id <id>", "target VPC id")
+  .option("--rds-instance-id <id>", "existing RDS instance id")
+  .option("--ecr-repository <name>", "ECR repository name")
+  .option("--image <uri>", "container image URI")
+  .option("--evidence-bucket <name>", "S3 evidence bucket name")
+  .option("-j, --json", "print JSON")
+  .action((opts) => {
+    try {
+      const plan = buildAwsDeploymentPlan({
+        accountName: opts.account,
+        region: opts.region,
+        stage: opts.stage,
+        hostname: opts.hostname,
+        workspaceId: opts.workspaceId,
+        vpcId: opts.vpcId,
+        rdsInstanceId: opts.rdsInstanceId,
+        ecrRepository: opts.ecrRepository,
+        image: opts.image,
+        evidenceBucket: opts.evidenceBucket,
+      });
+      print(plan, renderCloudPlan(plan), opts);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+cloud
+  .command("spark01-config")
+  .description("Generate Spark01 cloud-primary private probe configuration")
+  .option("--api-url <url>", "hosted Open Uptime API URL", "https://uptime.hasna.xyz/api/v1")
+  .option("--workspace-id <id>", "workspace id", "wks_2tyysw05cwap")
+  .option("--probe-id <id>", "cloud registered private probe id")
+  .option("--private-key-file <path>", "Spark01 private probe key file", "~/.hasna/uptime/probes/spark01.key.pem")
+  .option("--machine-id <id>", "machine id", "spark01")
+  .option("--log-level <level>", "probe log level", "info")
+  .option("--env", "print shell env file instead of summary text")
+  .option("-j, --json", "print JSON")
+  .action((opts) => {
+    try {
+      const config = buildSpark01CloudConfig({
+        apiUrl: opts.apiUrl,
+        workspaceId: opts.workspaceId,
+        probeId: opts.probeId,
+        probePrivateKeyFile: opts.privateKeyFile,
+        machineId: opts.machineId,
+        logLevel: opts.logLevel,
+      });
+      if (opts.env && !wantsJson(opts)) {
+        console.log(renderSpark01Env(config));
+        return;
+      }
+      print(config, renderSpark01Config(config), opts);
     } catch (error) {
       fail(error);
     }
@@ -956,6 +1027,38 @@ function renderReportRuns(runs: ReportRun[]): string {
     const deliveries = run.deliveries.map((delivery) => `${delivery.channel}:${delivery.ok ? "ok" : "failed"}`).join(",");
     return `${status.padEnd(12)} ${run.id} ${run.scheduleId ?? "-"} ${run.finishedAt} ${deliveries}${run.error ? ` ${sanitizeField(run.error)}` : ""}`;
   }).join("\n");
+}
+
+function renderCloudPlan(plan: AwsDeploymentPlan): string {
+  return [
+    `${plan.servicePrefix} ${plan.stage} AWS plan (${plan.accountName}/${plan.region})`,
+    `status: ${plan.status}`,
+    `can apply: ${plan.canApply}`,
+    `host: ${plan.hostname}`,
+    `cluster: ${plan.resources.ecsCluster}`,
+    `image: ${plan.image.uri}`,
+    `vpc: ${plan.resources.vpcId}`,
+    `rds: ${plan.resources.rdsInstanceId}`,
+    `services: ${plan.resources.services.map((service) => `${service.name}:${service.desiredCount}`).join(", ")}`,
+    `evidence bucket: ${plan.resources.evidenceBucket}`,
+    `blockers: ${plan.blockers.length}`,
+    "live AWS mutation: false",
+  ].join("\n");
+}
+
+function renderSpark01Config(config: Spark01CloudConfig): string {
+  return [
+    `${config.machineId} ${config.mode} config`,
+    `status: ${config.status}`,
+    `can start: ${config.canStart}`,
+    `api: ${config.env.HASNA_UPTIME_API_URL}`,
+    `workspace: ${config.env.HASNA_UPTIME_WORKSPACE_ID}`,
+    `probe: ${config.env.HASNA_UPTIME_PRIVATE_PROBE_ID ?? "<required>"}`,
+    `key file: ${config.env.HASNA_UPTIME_PRIVATE_PROBE_KEY_FILE}`,
+    `blockers: ${config.blockers.length}`,
+    "private key inline: false",
+    "token inline: false",
+  ].join("\n");
 }
 
 function renderDeliveries(deliveries: UptimeReportDelivery[]): string {

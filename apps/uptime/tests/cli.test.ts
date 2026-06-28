@@ -71,6 +71,46 @@ test("CLI data commands stay local when hosted env vars are set", () => {
   }
 });
 
+test("CLI cloud plan emits blocked dry-run JSON without live mutation commands", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const result = runCli(["cloud", "plan", "--json"], dbPath);
+    const stdout = new TextDecoder().decode(result.stdout);
+    const plan = JSON.parse(stdout);
+
+    expect(result.exitCode).toBe(0);
+    expect(plan.status).toBe("blocked");
+    expect(plan.canApply).toBe(false);
+    expect(plan.safety.liveAwsMutation).toBe(false);
+    expect(stdout).not.toContain("aws ecr create-repository");
+    expect(stdout).not.toContain("aws s3api create-bucket");
+    expect(stdout).not.toContain("aws ecs create-cluster");
+    expect(stdout).not.toContain("docker push ");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI Spark01 env requires a real cloud probe id", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const missing = runCli(["cloud", "spark01-config", "--env"], dbPath);
+    const ok = runCli(["cloud", "spark01-config", "--probe-id", "prb_spark01", "--env"], dbPath);
+    const stderr = new TextDecoder().decode(missing.stderr);
+    const stdout = new TextDecoder().decode(ok.stdout);
+
+    expect(missing.exitCode).toBe(1);
+    expect(stderr).toContain("HASNA_UPTIME_PRIVATE_PROBE_ID");
+    expect(ok.exitCode).toBe(0);
+    expect(stdout).toContain("HASNA_UPTIME_PRIVATE_PROBE_ID=prb_spark01");
+    expect(stdout).toContain("HASNA_UPTIME_MODE=hosted");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("CLI update changes monitor configuration", () => {
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {

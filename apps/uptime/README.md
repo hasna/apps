@@ -31,6 +31,8 @@ uptime report-schedules create ops --interval 3600 --email ops@example.com --fro
 uptime report-schedules run-due
 uptime report-schedules runs
 uptime audit
+uptime cloud plan --json
+uptime cloud spark01-config --probe-id prb_spark01 --env
 uptime incidents
 uptime serve --port 3899 --check
 ```
@@ -38,6 +40,11 @@ uptime serve --port 3899 --check
 Scheduled reports persist endpoint and recipient configuration, but not send
 keys or API tokens. Configure `MAILERY_SEND_KEY`, `HASNA_MAILERY_SEND_KEY`,
 `HASNA_LOGS_API_TOKEN`, or the matching service env vars before scheduled runs.
+
+The `uptime cloud ...` commands generate dry-run AWS/Spark01 planning artifacts
+only. They do not call AWS, write secrets, or produce an approved deploy script;
+current output is intentionally blocked until the infra and cloud-store evidence
+in `docs/aws-deployment-runbook.md` is satisfied.
 
 Private/local probes can submit signed results from another machine:
 

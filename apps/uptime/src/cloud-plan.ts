@@ -1,0 +1,389 @@
+export interface AwsDeploymentPlanOptions {
+  accountName?: string;
+  region?: string;
+  stage?: string;
+  servicePrefix?: string;
+  hostname?: string;
+  workspaceId?: string;
+  vpcId?: string;
+  rdsInstanceId?: string;
+  ecrRepository?: string;
+  image?: string;
+  evidenceBucket?: string;
+  hostedTokenSecretName?: string;
+  databaseSecretName?: string;
+  appEnvSecretName?: string;
+  publicProbeSecretName?: string;
+  privateProbeSecretName?: string;
+  reportingSecretName?: string;
+}
+
+export interface AwsDeploymentPlan {
+  kind: "open-uptime.aws-deployment-plan";
+  version: 1;
+  generatedAt: string;
+  status: "blocked";
+  canApply: false;
+  accountName: string;
+  region: string;
+  stage: string;
+  servicePrefix: string;
+  hostname: string;
+  workspaceId: string;
+  mode: "hosted";
+  resources: {
+    ecrRepository: string;
+    ecsCluster: string;
+    services: AwsServicePlan[];
+    vpcId: string;
+    rdsInstanceId: string;
+    evidenceBucket: string;
+    loadBalancer: string;
+    targetGroups: string[];
+    securityGroups: string[];
+    secrets: Record<string, string>;
+    logGroups: string[];
+    alarms: string[];
+  };
+  image: {
+    repository: string;
+    uri: string;
+    buildCommand: string;
+    pushCommands: string[];
+  };
+  runbook: {
+    preflight: string[];
+    provision: string[];
+    deploy: string[];
+    rollback: string[];
+    spark01: string[];
+  };
+  blockers: string[];
+  requiredEvidence: string[];
+  safety: {
+    liveAwsMutation: false;
+    plaintextSecrets: false;
+    hostedLocalSqliteAllowed: false;
+    notes: string[];
+  };
+}
+
+export interface AwsServicePlan {
+  name: string;
+  role: "web" | "scheduler" | "public-probe" | "reporter" | "migration";
+  desiredCount: number;
+  taskRole: string;
+  executionRole: string;
+  logGroup: string;
+  healthCommand?: string;
+  environment: Record<string, string>;
+  secrets: Record<string, string>;
+}
+
+export interface Spark01CloudConfigOptions {
+  apiUrl?: string;
+  workspaceId?: string;
+  probeId?: string;
+  probePrivateKeyFile?: string;
+  machineId?: string;
+  logLevel?: string;
+}
+
+export interface Spark01CloudConfig {
+  kind: "open-uptime.spark01-cloud-config";
+  version: 1;
+  generatedAt: string;
+  status: "blocked";
+  canStart: false;
+  machineId: string;
+  mode: "private-probe";
+  env: Record<string, string>;
+  files: Array<{ path: string; mode: string; purpose: string }>;
+  commands: string[];
+  blockers: string[];
+  safety: {
+    privateKeyInline: false;
+    tokenInline: false;
+    notes: string[];
+  };
+}
+
+const DEFAULT_ACCOUNT = "hasna-xyz-infra";
+const DEFAULT_REGION = "us-east-1";
+const DEFAULT_STAGE = "prod";
+const DEFAULT_PREFIX = "open-uptime";
+const DEFAULT_HOSTNAME = "uptime.hasna.xyz";
+const DEFAULT_WORKSPACE_ID = "wks_2tyysw05cwap";
+const DEFAULT_VPC_ID = "vpc-04c7f7abc1d3c3f56";
+const DEFAULT_RDS = "hasna-xyz-infra-apps-prod-postgres";
+
+export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): AwsDeploymentPlan {
+  const region = clean(options.region, DEFAULT_REGION);
+  const stage = clean(options.stage, DEFAULT_STAGE);
+  const prefix = clean(options.servicePrefix, DEFAULT_PREFIX);
+  const accountName = clean(options.accountName, DEFAULT_ACCOUNT);
+  const hostname = clean(options.hostname, DEFAULT_HOSTNAME);
+  const workspaceId = clean(options.workspaceId, DEFAULT_WORKSPACE_ID);
+  const ecrRepository = clean(options.ecrRepository, `hasna/opensource/${prefix}`);
+  const image = clean(options.image, `<account-id>.dkr.ecr.${region}.amazonaws.com/${ecrRepository}:<git-sha>`);
+  const evidenceBucket = clean(options.evidenceBucket, `hasna-${stage}-${prefix}-evidence`);
+  const cluster = `${prefix}-${stage}`;
+  const secrets = {
+    database: clean(options.databaseSecretName, `hasna/xyz/opensource/uptime/${stage}/rds`),
+    appEnv: clean(options.appEnvSecretName, `hasna/xyz/opensource/uptime/${stage}/app/env`),
+    hostedToken: clean(options.hostedTokenSecretName, `hasna/xyz/opensource/uptime/${stage}/hosted-token`),
+    publicProbe: clean(options.publicProbeSecretName, `hasna/xyz/opensource/uptime/${stage}/probe/public`),
+    privateProbe: clean(options.privateProbeSecretName, `hasna/xyz/opensource/uptime/${stage}/probe/private`),
+    reporting: clean(options.reportingSecretName, `hasna/xyz/opensource/uptime/${stage}/reporting`),
+  };
+  const services: AwsServicePlan[] = [
+    servicePlan(prefix, stage, "web", 2, image, workspaceId, secrets, {
+      HASNA_UPTIME_MODE: "hosted",
+      HASNA_UPTIME_WORKSPACE_ID: workspaceId,
+      HASNA_UPTIME_HOSTNAME: hostname,
+    }),
+    servicePlan(prefix, stage, "scheduler", 1, image, workspaceId, secrets, {
+      HASNA_UPTIME_MODE: "hosted",
+      HASNA_UPTIME_WORKSPACE_ID: workspaceId,
+      HASNA_UPTIME_COMPONENT: "scheduler",
+    }),
+    servicePlan(prefix, stage, "public-probe", 1, image, workspaceId, secrets, {
+      HASNA_UPTIME_MODE: "hosted",
+      HASNA_UPTIME_WORKSPACE_ID: workspaceId,
+      HASNA_UPTIME_COMPONENT: "public-probe",
+      HASNA_UPTIME_PROBE_LOCATION: region,
+    }),
+    servicePlan(prefix, stage, "reporter", 1, image, workspaceId, secrets, {
+      HASNA_UPTIME_MODE: "hosted",
+      HASNA_UPTIME_WORKSPACE_ID: workspaceId,
+      HASNA_UPTIME_COMPONENT: "reporter",
+    }),
+    servicePlan(prefix, stage, "migration", 0, image, workspaceId, secrets, {
+      HASNA_UPTIME_MODE: "hosted",
+      HASNA_UPTIME_WORKSPACE_ID: workspaceId,
+      HASNA_UPTIME_COMPONENT: "migration",
+    }),
+  ];
+
+  return {
+    kind: "open-uptime.aws-deployment-plan",
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    status: "blocked",
+    canApply: false,
+    accountName,
+    region,
+    stage,
+    servicePrefix: prefix,
+    hostname,
+    workspaceId,
+    mode: "hosted",
+    resources: {
+      ecrRepository,
+      ecsCluster: cluster,
+      services,
+      vpcId: clean(options.vpcId, DEFAULT_VPC_ID),
+      rdsInstanceId: clean(options.rdsInstanceId, DEFAULT_RDS),
+      evidenceBucket,
+      loadBalancer: `${prefix}-${stage}-alb`,
+      targetGroups: [`${prefix}-${stage}-web-tg`],
+      securityGroups: [
+        `${prefix}-${stage}-alb-sg`,
+        `${prefix}-${stage}-web-sg`,
+        `${prefix}-${stage}-scheduler-sg`,
+        `${prefix}-${stage}-public-probe-sg`,
+        `${prefix}-${stage}-rds-client-sg`,
+      ],
+      secrets,
+      logGroups: services.map((service) => service.logGroup),
+      alarms: [
+        `${prefix}-${stage}-web-5xx`,
+        `${prefix}-${stage}-scheduler-stalled`,
+        `${prefix}-${stage}-probe-stale`,
+        `${prefix}-${stage}-report-delivery-failures`,
+      ],
+    },
+    image: {
+      repository: ecrRepository,
+      uri: image,
+      buildCommand: "BLOCKED: add a reviewed Dockerfile/container build target before running docker build",
+      pushCommands: [
+        "BLOCKED: push only from approved CI/CD after the ECR repository and image digest policy exist",
+        "BLOCKED: deploy services by immutable image digest, not by mutable tags",
+      ],
+    },
+    runbook: {
+      preflight: [
+        `aws sts get-caller-identity --profile ${accountName}`,
+        `aws rds describe-db-instances --db-instance-identifier ${clean(options.rdsInstanceId, DEFAULT_RDS)} --region ${region}`,
+        `aws ec2 describe-vpcs --vpc-ids ${clean(options.vpcId, DEFAULT_VPC_ID)} --region ${region}`,
+        "Confirm the infra repository and Terraform/CloudFormation owner before live mutation.",
+      ],
+      provision: [
+        `Infra PR must declare or update ECR repository ${ecrRepository}.`,
+        `Infra PR must declare hardened S3 evidence bucket ${evidenceBucket} with KMS, versioning, lifecycle, and public access block.`,
+        `Infra PR must declare ECS/Fargate cluster ${cluster}, ALB, target groups, security groups, IAM roles, CloudWatch log groups, and Secrets Manager refs.`,
+        "Only apply the infra plan from the approved infrastructure repository after review evidence is attached.",
+      ],
+      deploy: [
+        "Build and publish the image only after the Dockerfile/container target is reviewed.",
+        "Run the migration task with the migrator role before web/scheduler/probe services.",
+        `Register task definitions for ${services.map((service) => service.name).join(", ")} using valueFrom secrets.`,
+        `Update ECS services in cluster ${cluster} one component at a time through the approved deploy pipeline.`,
+        `Create Route53/edge record for ${hostname} only after ALB health checks pass and auth denial smokes succeed.`,
+      ],
+      rollback: [
+        "Keep previous task definition ARNs before each service update.",
+        "Rollback through the approved deploy pipeline to the previously recorded task definition ARNs.",
+        "Disable scheduler/reporter services before data rollback.",
+        "Restore RDS snapshot only after explicit operator approval and audit record.",
+      ],
+      spark01: [
+        "Create a private probe identity with a caller-managed public key.",
+        "Install @hasna/uptime on Spark01 and write the generated env file with mode 0600.",
+        "Run the private probe against the hosted /api/v1 probe endpoint once it exists.",
+      ],
+    },
+    blockers: [
+      "The hasna-xyz-infra infrastructure owner repository was not found in this workspace.",
+      "The repo has no reviewed Dockerfile/container build target for image build and publish automation.",
+      "Hosted Postgres storage adapter and migrations are not implemented.",
+      "Hosted production auth/RBAC must replace broad static hosted-token operation before exposure.",
+      "Public probe execution still needs DNS, redirect, and rebinding SSRF enforcement plus cloud check-job leases.",
+      "Spark01 hosted probe enrollment, claim, submit, heartbeat, revocation, and rotation are not cloud-backed yet.",
+    ],
+    requiredEvidence: [
+      "Infrastructure PR/synth/plan from the approved infra repository.",
+      "Container build smoke and immutable image digest.",
+      "ECS task definitions using secrets.valueFrom only.",
+      "ALB/TLS/DNS/auth denial smokes.",
+      "RDS TLS, backups/PITR, scoped roles, and migration dry-run evidence.",
+      "S3 bucket KMS, versioning, lifecycle, and public-access-block evidence.",
+      "Spark01 private-probe registration, key-file mode, heartbeat, and revocation evidence.",
+    ],
+    safety: {
+      liveAwsMutation: false,
+      plaintextSecrets: false,
+      hostedLocalSqliteAllowed: false,
+      notes: [
+        "This plan generator does not call AWS.",
+        "Hosted runtime must use Postgres; SQLite remains local/dev fallback only.",
+        "Secrets are represented as secret names/refs and must be injected with valueFrom.",
+        "Actual deploy belongs in the deploy_release_operate_final goal node after infra review.",
+      ],
+    },
+  };
+}
+
+export function buildSpark01CloudConfig(options: Spark01CloudConfigOptions = {}): Spark01CloudConfig {
+  const apiUrl = clean(options.apiUrl, `https://${DEFAULT_HOSTNAME}/api/v1`);
+  const workspaceId = clean(options.workspaceId, DEFAULT_WORKSPACE_ID);
+  const machineId = clean(options.machineId, "spark01");
+  const privateKeyFile = clean(options.probePrivateKeyFile, "~/.hasna/uptime/probes/spark01.key.pem");
+  const probeId = options.probeId?.trim();
+  const blockers = [
+    ...(probeId ? [] : ["Cloud-registered private probe id is required before writing a sourceable env file."]),
+    "Hosted probe claim and submit routes still fail closed until cloud check_jobs and workspace stores are implemented.",
+    "Spark01 enrollment, heartbeat, revocation, rotation, and bounded offline lease handling are not implemented yet.",
+  ];
+  const env: Record<string, string> = {
+    HASNA_UPTIME_MODE: "hosted",
+    HASNA_UPTIME_API_URL: apiUrl,
+    HASNA_UPTIME_WORKSPACE_ID: workspaceId,
+    HASNA_UPTIME_MACHINE_ID: machineId,
+    HASNA_UPTIME_PRIVATE_PROBE_KEY_FILE: privateKeyFile,
+    HASNA_UPTIME_PROBE_CLASS: "private",
+    HASNA_UPTIME_LOG_LEVEL: clean(options.logLevel, "info"),
+  };
+  if (probeId) env.HASNA_UPTIME_PRIVATE_PROBE_ID = probeId;
+  return {
+    kind: "open-uptime.spark01-cloud-config",
+    version: 1,
+    generatedAt: new Date().toISOString(),
+    status: "blocked",
+    canStart: false,
+    machineId,
+    mode: "private-probe",
+    env,
+    files: [
+      {
+        path: privateKeyFile,
+        mode: "0600",
+        purpose: "Ed25519 private key generated on Spark01; never paste into cloud config.",
+      },
+      {
+        path: "~/.hasna/uptime/cloud.env",
+        mode: "0600",
+        purpose: "Non-secret cloud/probe runtime environment; token values stay in the machine secret store.",
+      },
+    ],
+    commands: [
+      "bun install -g @hasna/uptime@latest",
+      "Generate the Spark01 private key locally and register only its public key with the hosted control plane once registration exists.",
+      "Write ~/.hasna/uptime/cloud.env from this plan, then source it for the private probe service.",
+      "Start the private probe worker only after hosted /api/v1 probe claim/submit routes are backed by cloud jobs.",
+    ],
+    blockers,
+    safety: {
+      privateKeyInline: false,
+      tokenInline: false,
+      notes: [
+        "This config is cloud-primary: Spark01 submits to hosted API state instead of local SQLite.",
+        "The private key file path is referenced, not embedded.",
+        "Hosted token or probe auth material must come from the machine secret store, not this generated config.",
+      ],
+    },
+  };
+}
+
+export function renderSpark01Env(config: Spark01CloudConfig): string {
+  const required = ["HASNA_UPTIME_PRIVATE_PROBE_ID"];
+  const missing = required.filter((key) => !config.env[key]);
+  if (missing.length > 0) {
+    throw new Error(`Spark01 env output requires ${missing.join(", ")}`);
+  }
+  return Object.entries(config.env)
+    .map(([key, value]) => `${key}=${shellEscape(value)}`)
+    .join("\n");
+}
+
+function servicePlan(
+  prefix: string,
+  stage: string,
+  role: AwsServicePlan["role"],
+  desiredCount: number,
+  image: string,
+  workspaceId: string,
+  secrets: Record<string, string>,
+  environment: Record<string, string>,
+): AwsServicePlan {
+  const name = `${prefix}-${stage}-${role}`;
+  return {
+    name,
+    role,
+    desiredCount,
+    taskRole: `${name}-task-role`,
+    executionRole: `${prefix}-${stage}-execution-role`,
+    logGroup: `/ecs/${name}`,
+    healthCommand: role === "web" ? "GET /health" : undefined,
+    environment: {
+      HASNA_UPTIME_IMAGE: image,
+      ...environment,
+    },
+    secrets: role === "public-probe"
+      ? { DATABASE_URL: secrets.database, PROBE_CONFIG: secrets.publicProbe }
+      : role === "reporter"
+        ? { DATABASE_URL: secrets.database, REPORTING_CONFIG: secrets.reporting }
+        : { DATABASE_URL: secrets.database, APP_ENV: secrets.appEnv },
+  };
+}
+
+function clean(value: string | undefined, fallback: string): string {
+  const normalized = value?.trim();
+  return normalized || fallback;
+}
+
+function shellEscape(value: string): string {
+  if (/^[A-Za-z0-9_./:@~-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}

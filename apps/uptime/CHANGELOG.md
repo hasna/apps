@@ -6,6 +6,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-06-28
+
+### Added
+
+- Dry-run AWS deployment plan generator for the `hasna-xyz-infra` target,
+  covering ECS/Fargate services, ECR image commands, ALB/RDS/S3/Secrets/Logs
+  resources, rollback steps, and safety assertions.
+- Spark01 cloud-primary private probe config generator with JSON and env-file
+  rendering.
+- CLI commands `uptime cloud plan` and `uptime cloud spark01-config`.
+- SDK export `@hasna/uptime/cloud-plan`.
+- Machine-readable `blocked`/`canApply:false` and `blocked`/`canStart:false`
+  gates plus blocker/evidence lists for AWS and Spark01 planning artifacts.
+
+### Security
+
+- Cloud planning artifacts contain secret names/refs and file paths only; they
+  do not inline AWS credentials, hosted tokens, or private probe key material.
+- Cloud plan generation is dry-run only and does not call AWS.
+- Dry-run AWS output avoids copy-pastable live AWS mutation commands.
+
 ## [0.1.4] - 2026-06-28
 
 ### Added
