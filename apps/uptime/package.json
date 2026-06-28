@@ -1,6 +1,6 @@
 {
   "name": "@hasna/uptime",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Local-first uptime and downtime monitoring service with CLI, MCP, SDK, SQLite persistence, and a dashboard.",
   "license": "Apache-2.0",
   "type": "module",
@@ -24,6 +24,7 @@
     "dist",
     "README.md",
     "Dockerfile",
+    "Dockerfile.package",
     ".dockerignore",
     "infra/aws/README.md",
     "infra/aws/.terraform.lock.hcl",

@@ -6,6 +6,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-06-28
+
+### Added
+
+- Explicit hosted EFS-backed SQLite runtime path with
+  `HASNA_UPTIME_HOSTED_SQLITE_DB` and `hosted-efs-sqlite` health metadata.
+- AWS Terraform EFS file system, access point, ECS volume mount, and AWS Backup
+  plan for the hosted SQLite data store.
+- `Dockerfile.package` plus AWS CodeBuild image-builder Terraform resources to
+  build the published npm package into ECR without relying on local Docker.
+
+### Changed
+
+- Hosted AWS deployment artifacts no longer inject `HASNA_UPTIME_DATABASE_URL`;
+  the async Postgres adapter remains future work.
+- The EFS-backed SQLite bridge is single-writer only: one web task maximum and
+  scheduler/public-probe/reporter services remain disabled until Postgres and
+  cloud leases exist.
+
 ## [0.1.6] - 2026-06-28
 
 ### Added
@@ -29,7 +48,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Dry-run AWS deployment plan generator for the `hasna-xyz-infra` target,
+- Dry-run AWS deployment plan generator for a reviewed AWS target,
   covering ECS/Fargate services, ECR image commands, ALB/RDS/S3/Secrets/Logs
   resources, rollback steps, and safety assertions.
 - Spark01 hosted-targeted private probe preflight config generator with JSON and

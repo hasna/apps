@@ -1,7 +1,7 @@
 variable "account_name" {
   description = "Human-readable AWS account/profile label."
   type        = string
-  default     = "hasna-xyz-infra"
+  default     = "aws-profile"
 }
 
 variable "region" {
@@ -25,19 +25,25 @@ variable "service_name" {
 variable "hostname" {
   description = "Public/internal hostname for Open Uptime."
   type        = string
-  default     = "uptime.hasna.xyz"
+  default     = "uptime.example.com"
 }
 
 variable "workspace_id" {
   description = "Hosted Open Uptime workspace id."
   type        = string
-  default     = "wks_2tyysw05cwap"
+  default     = "workspace-id"
 }
 
 variable "vpc_id" {
   description = "Existing VPC id."
   type        = string
-  default     = "vpc-04c7f7abc1d3c3f56"
+  default     = "vpc-xxxxxxxx"
+}
+
+variable "ecr_repository_name" {
+  description = "ECR repository name for the Open Uptime image."
+  type        = string
+  default     = "open-uptime"
 }
 
 variable "public_subnet_ids" {
@@ -56,11 +62,6 @@ variable "private_subnet_ids" {
   type        = list(string)
 }
 
-variable "rds_security_group_id" {
-  description = "Existing RDS security group id that should allow Open Uptime client access."
-  type        = string
-}
-
 variable "container_image" {
   description = "Immutable Open Uptime image URI, preferably with digest."
   type        = string
@@ -68,6 +69,17 @@ variable "container_image" {
   validation {
     condition     = can(regex("@sha256:[a-f0-9]{64}$", var.container_image))
     error_message = "container_image must be an immutable image digest ending in @sha256:<64 hex chars>."
+  }
+}
+
+variable "runtime_package_version" {
+  description = "Published @hasna/uptime package version that CodeBuild should build into the ECR image."
+  type        = string
+  default     = "0.1.7"
+
+  validation {
+    condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$", var.runtime_package_version))
+    error_message = "runtime_package_version must be a semver version without the package name."
   }
 }
 
@@ -80,16 +92,6 @@ variable "hosted_zone_id" {
   description = "Route53 hosted zone id. Leave null to skip DNS record creation."
   type        = string
   default     = null
-}
-
-variable "database_secret_arn" {
-  description = "Secrets Manager/SSM ARN containing DATABASE_URL."
-  type        = string
-
-  validation {
-    condition     = can(regex("^arn:aws:(secretsmanager|ssm):", var.database_secret_arn))
-    error_message = "database_secret_arn must be a Secrets Manager or SSM ARN, not a plaintext database URL."
-  }
 }
 
 variable "app_env_secret_arn" {
@@ -154,8 +156,10 @@ variable "desired_counts" {
   }
 
   validation {
-    condition     = alltrue([for count in values(var.desired_counts) : count >= 0])
-    error_message = "desired_counts values must be non-negative."
+    condition = alltrue([for count in values(var.desired_counts) : count >= 0]) && lookup(var.desired_counts, "web", 0) <= 1 && alltrue([
+      for key in ["scheduler", "public-probe", "reporter", "migration"] : lookup(var.desired_counts, key, 0) == 0
+    ])
+    error_message = "EFS SQLite bridge requires web desired count 0 or 1 and scheduler/public-probe/reporter/migration desired counts 0."
   }
 }
 

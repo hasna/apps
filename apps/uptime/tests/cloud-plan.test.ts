@@ -1,22 +1,31 @@
 import { expect, test } from "bun:test";
 import { buildAwsDeploymentPlan, buildSpark01CloudConfig, renderSpark01Env } from "../src/cloud-plan.js";
 
-test("buildAwsDeploymentPlan generates a dry-run hasna-xyz-infra plan", () => {
+test("buildAwsDeploymentPlan generates a dry-run AWS plan with generic package defaults", () => {
   const plan = buildAwsDeploymentPlan({
-    image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/hasna/opensource/open-uptime:test",
+    image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/open-uptime:test",
   });
   const serialized = JSON.stringify(plan);
 
   expect(plan.kind).toBe("open-uptime.aws-deployment-plan");
-  expect(plan.accountName).toBe("hasna-xyz-infra");
+  expect(plan.version).toBe(2);
+  expect(plan.accountName).toBe("aws-profile");
   expect(plan.region).toBe("us-east-1");
-  expect(plan.resources.vpcId).toBe("vpc-04c7f7abc1d3c3f56");
-  expect(plan.resources.rdsInstanceId).toBe("hasna-xyz-infra-apps-prod-postgres");
+  expect(plan.resources.vpcId).toBe("vpc-xxxxxxxx");
+  expect(plan.resources.efsFileSystem).toBe("open-uptime-prod-data");
+  expect(plan.resources.efsAccessPoint).toBe("open-uptime-prod-uptime");
+  expect(plan.resources.hostedSqliteDbPath).toBe("/data/uptime/uptime.db");
   expect(plan.status).toBe("blocked");
   expect(plan.canApply).toBe(false);
-  expect(plan.image.dockerfile).toBe("Dockerfile");
-  expect(plan.image.buildCommand).toContain("docker build");
+  expect(plan.image.dockerfile).toBe("Dockerfile.package");
+  expect(plan.image.buildCommand).toContain("BLOCKED:");
+  expect(plan.image.buildCommand).toContain("Dockerfile.package");
   expect(buildAwsDeploymentPlan().image.uri).toContain("@sha256:<image-digest>");
+  expect(plan.resources.imageBuilder).toBe("open-uptime-prod-image-builder");
+  expect(plan.image.pushCommands.join("\n")).toContain("BLOCKED:");
+  expect(plan.image.pushCommands.join("\n")).not.toContain("aws codebuild start-build");
+  expect(plan.runbook.deploy.join("\n")).toContain("do not run migration");
+  expect(plan.runbook.deploy.join("\n")).not.toContain("Run the migration task");
   expect(plan.infra).toMatchObject({
     path: "infra/aws",
     applyAllowed: false,
@@ -29,11 +38,15 @@ test("buildAwsDeploymentPlan generates a dry-run hasna-xyz-infra plan", () => {
     "migration",
   ]);
   expect(plan.resources.services.every((service) => service.desiredCount === 0)).toBe(true);
-  expect(plan.resources.services.find((service) => service.role === "web")?.targetDesiredCount).toBe(2);
+  expect(plan.resources.services.find((service) => service.role === "web")?.targetDesiredCount).toBe(1);
+  expect(plan.resources.services.filter((service) => service.role !== "web").every((service) => service.targetDesiredCount === 0)).toBe(true);
   expect(plan.resources.services.find((service) => service.role === "web")?.secrets.HASNA_UPTIME_HOSTED_TOKEN)
-    .toBe("hasna/xyz/opensource/uptime/prod/hosted-token");
+    .toBe("open-uptime/prod/hosted-token");
+  expect(plan.resources.services.find((service) => service.role === "web")?.environment.HASNA_UPTIME_HOSTED_SQLITE_DB)
+    .toBe("/data/uptime/uptime.db");
+  expect(plan.resources.services.filter((service) => service.role !== "web").every((service) => service.environment.HASNA_UPTIME_HOSTED_SQLITE_DB === undefined)).toBe(true);
   expect(plan.resources.services.find((service) => service.role === "web")?.secrets.HASNA_UPTIME_DATABASE_URL)
-    .toBe("hasna/xyz/opensource/uptime/prod/rds");
+    .toBeUndefined();
   expect(plan.resources.services.find((service) => service.role === "public-probe")?.secrets.HASNA_UPTIME_DATABASE_URL)
     .toBeUndefined();
   expect(plan.resources.alarms).toEqual(["open-uptime-prod-web-5xx", "open-uptime-prod-web-unhealthy"]);
@@ -42,7 +55,7 @@ test("buildAwsDeploymentPlan generates a dry-run hasna-xyz-infra plan", () => {
     plaintextSecrets: false,
     hostedLocalSqliteAllowed: false,
   });
-  expect(plan.blockers).toContain("Hosted Postgres storage adapter and migrations are not implemented.");
+  expect(plan.requiredEvidence).toContain("EFS encryption, access point, mount-target, AWS Backup, and restore-drill evidence.");
   expect(plan.blockers.join("\n")).not.toContain("no reviewed Dockerfile");
   expect(plan.requiredEvidence.length).toBeGreaterThan(3);
   expect(serialized).not.toContain("AWS_SECRET_ACCESS_KEY");
@@ -51,13 +64,19 @@ test("buildAwsDeploymentPlan generates a dry-run hasna-xyz-infra plan", () => {
   expect(serialized).not.toContain("aws s3api create-bucket");
   expect(serialized).not.toContain("aws ecs create-cluster");
   expect(serialized).not.toContain("aws ecs update-service");
+  expect(serialized).not.toContain("aws codebuild start-build");
   expect(serialized).not.toContain("docker push ");
   expect(serialized).not.toContain("\"DATABASE_URL\"");
+  expect(serialized).not.toContain("hasna-xyz-infra");
+  expect(serialized).not.toContain("wks_2tyysw05cwap");
+  expect(serialized).not.toContain("vpc-04c7f7abc1d3c3f56");
+  expect(serialized).not.toContain("uptime.hasna.xyz");
+  expect(serialized).not.toContain("hasna/xyz/opensource");
 });
 
 test("buildSpark01CloudConfig references private key paths without inlining secrets", () => {
   const config = buildSpark01CloudConfig({
-    apiUrl: "https://uptime.hasna.xyz/api/v1",
+    apiUrl: "https://uptime.example.com/api/v1",
     probeId: "prb_spark01",
     probePrivateKeyFile: "~/.hasna/uptime/probes/spark01.key.pem",
   });
@@ -69,7 +88,7 @@ test("buildSpark01CloudConfig references private key paths without inlining secr
   expect(config.canStart).toBe(false);
   expect(config.env.HASNA_UPTIME_MODE).toBe("hosted");
   expect(config.env.HASNA_UPTIME_PRIVATE_PROBE_ID).toBe("prb_spark01");
-  expect(env).toContain("HASNA_UPTIME_API_URL=https://uptime.hasna.xyz/api/v1");
+  expect(env).toContain("HASNA_UPTIME_API_URL=https://uptime.example.com/api/v1");
   expect(env).toContain("HASNA_UPTIME_PRIVATE_PROBE_KEY_FILE=~/.hasna/uptime/probes/spark01.key.pem");
   expect(config.safety).toMatchObject({ privateKeyInline: false, tokenInline: false });
   expect(serialized).not.toContain("BEGIN PRIVATE KEY");

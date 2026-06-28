@@ -6,12 +6,16 @@ export interface AwsDeploymentPlanOptions {
   hostname?: string;
   workspaceId?: string;
   vpcId?: string;
-  rdsInstanceId?: string;
   ecrRepository?: string;
   image?: string;
   evidenceBucket?: string;
-  hostedTokenSecretName?: string;
+  hostedSqliteDbPath?: string;
+  runtimePackageVersion?: string;
+  /** @deprecated Postgres is target-state only until the async adapter is implemented. */
+  rdsInstanceId?: string;
+  /** @deprecated Postgres is target-state only until the async adapter is implemented. */
   databaseSecretName?: string;
+  hostedTokenSecretName?: string;
   appEnvSecretName?: string;
   publicProbeSecretName?: string;
   privateProbeSecretName?: string;
@@ -20,7 +24,7 @@ export interface AwsDeploymentPlanOptions {
 
 export interface AwsDeploymentPlan {
   kind: "open-uptime.aws-deployment-plan";
-  version: 1;
+  version: 2;
   generatedAt: string;
   status: "blocked";
   canApply: false;
@@ -33,10 +37,13 @@ export interface AwsDeploymentPlan {
   mode: "hosted";
   resources: {
     ecrRepository: string;
+    imageBuilder: string;
     ecsCluster: string;
     services: AwsServicePlan[];
     vpcId: string;
-    rdsInstanceId: string;
+    efsFileSystem: string;
+    efsAccessPoint: string;
+    hostedSqliteDbPath: string;
     evidenceBucket: string;
     loadBalancer: string;
     targetGroups: string[];
@@ -118,14 +125,14 @@ export interface Spark01CloudConfig {
   };
 }
 
-const DEFAULT_ACCOUNT = "hasna-xyz-infra";
+const DEFAULT_ACCOUNT = "aws-profile";
 const DEFAULT_REGION = "us-east-1";
 const DEFAULT_STAGE = "prod";
 const DEFAULT_PREFIX = "open-uptime";
-const DEFAULT_HOSTNAME = "uptime.hasna.xyz";
-const DEFAULT_WORKSPACE_ID = "wks_2tyysw05cwap";
-const DEFAULT_VPC_ID = "vpc-04c7f7abc1d3c3f56";
-const DEFAULT_RDS = "hasna-xyz-infra-apps-prod-postgres";
+const DEFAULT_HOSTNAME = "uptime.example.com";
+const DEFAULT_WORKSPACE_ID = "workspace-id";
+const DEFAULT_VPC_ID = "vpc-xxxxxxxx";
+const DEFAULT_HOSTED_SQLITE_DB = "/data/uptime/uptime.db";
 
 export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): AwsDeploymentPlan {
   const region = clean(options.region, DEFAULT_REGION);
@@ -134,37 +141,39 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
   const accountName = clean(options.accountName, DEFAULT_ACCOUNT);
   const hostname = clean(options.hostname, DEFAULT_HOSTNAME);
   const workspaceId = clean(options.workspaceId, DEFAULT_WORKSPACE_ID);
-  const ecrRepository = clean(options.ecrRepository, `hasna/opensource/${prefix}`);
+  const ecrRepository = clean(options.ecrRepository, prefix);
   const imageRepositoryUri = `<account-id>.dkr.ecr.${region}.amazonaws.com/${ecrRepository}`;
   const image = clean(options.image, `${imageRepositoryUri}@sha256:<image-digest>`);
   const evidenceBucket = clean(options.evidenceBucket, `hasna-${stage}-${prefix}-evidence`);
+  const hostedSqliteDbPath = clean(options.hostedSqliteDbPath, DEFAULT_HOSTED_SQLITE_DB);
+  const runtimePackageVersion = clean(options.runtimePackageVersion, "0.1.7");
   const cluster = `${prefix}-${stage}`;
   const secrets = {
-    database: clean(options.databaseSecretName, `hasna/xyz/opensource/uptime/${stage}/rds`),
-    appEnv: clean(options.appEnvSecretName, `hasna/xyz/opensource/uptime/${stage}/app/env`),
-    hostedToken: clean(options.hostedTokenSecretName, `hasna/xyz/opensource/uptime/${stage}/hosted-token`),
-    publicProbe: clean(options.publicProbeSecretName, `hasna/xyz/opensource/uptime/${stage}/probe/public`),
-    privateProbe: clean(options.privateProbeSecretName, `hasna/xyz/opensource/uptime/${stage}/probe/private`),
-    reporting: clean(options.reportingSecretName, `hasna/xyz/opensource/uptime/${stage}/reporting`),
+    appEnv: clean(options.appEnvSecretName, `open-uptime/${stage}/app/env`),
+    hostedToken: clean(options.hostedTokenSecretName, `open-uptime/${stage}/hosted-token`),
+    publicProbe: clean(options.publicProbeSecretName, `open-uptime/${stage}/probe/public`),
+    privateProbe: clean(options.privateProbeSecretName, `open-uptime/${stage}/probe/private`),
+    reporting: clean(options.reportingSecretName, `open-uptime/${stage}/reporting`),
   };
   const services: AwsServicePlan[] = [
-    servicePlan(prefix, stage, "web", 2, image, workspaceId, secrets, {
+    servicePlan(prefix, stage, "web", 1, image, workspaceId, secrets, {
       HASNA_UPTIME_MODE: "hosted",
+      HASNA_UPTIME_HOSTED_SQLITE_DB: hostedSqliteDbPath,
       HASNA_UPTIME_WORKSPACE_ID: workspaceId,
       HASNA_UPTIME_HOSTNAME: hostname,
     }),
-    servicePlan(prefix, stage, "scheduler", 1, image, workspaceId, secrets, {
+    servicePlan(prefix, stage, "scheduler", 0, image, workspaceId, secrets, {
       HASNA_UPTIME_MODE: "hosted",
       HASNA_UPTIME_WORKSPACE_ID: workspaceId,
       HASNA_UPTIME_COMPONENT: "scheduler",
     }),
-    servicePlan(prefix, stage, "public-probe", 1, image, workspaceId, secrets, {
+    servicePlan(prefix, stage, "public-probe", 0, image, workspaceId, secrets, {
       HASNA_UPTIME_MODE: "hosted",
       HASNA_UPTIME_WORKSPACE_ID: workspaceId,
       HASNA_UPTIME_COMPONENT: "public-probe",
       HASNA_UPTIME_PROBE_LOCATION: region,
     }),
-    servicePlan(prefix, stage, "reporter", 1, image, workspaceId, secrets, {
+    servicePlan(prefix, stage, "reporter", 0, image, workspaceId, secrets, {
       HASNA_UPTIME_MODE: "hosted",
       HASNA_UPTIME_WORKSPACE_ID: workspaceId,
       HASNA_UPTIME_COMPONENT: "reporter",
@@ -178,7 +187,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
 
   return {
     kind: "open-uptime.aws-deployment-plan",
-    version: 1,
+    version: 2,
     generatedAt: new Date().toISOString(),
     status: "blocked",
     canApply: false,
@@ -191,10 +200,13 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
     mode: "hosted",
     resources: {
       ecrRepository,
+      imageBuilder: `${prefix}-${stage}-image-builder`,
       ecsCluster: cluster,
       services,
       vpcId: clean(options.vpcId, DEFAULT_VPC_ID),
-      rdsInstanceId: clean(options.rdsInstanceId, DEFAULT_RDS),
+      efsFileSystem: `${prefix}-${stage}-data`,
+      efsAccessPoint: `${prefix}-${stage}-uptime`,
+      hostedSqliteDbPath,
       evidenceBucket,
       loadBalancer: `${prefix}-${stage}-alb`,
       targetGroups: [`${prefix}-${stage}-web-tg`],
@@ -205,6 +217,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
         `${prefix}-${stage}-public-probe-sg`,
         `${prefix}-${stage}-reporter-sg`,
         `${prefix}-${stage}-migration-sg`,
+        `${prefix}-${stage}-efs-sg`,
       ],
       secrets,
       logGroups: services.map((service) => service.logGroup),
@@ -216,10 +229,10 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
     image: {
       repository: ecrRepository,
       uri: image,
-      dockerfile: "Dockerfile",
-      buildCommand: `docker build --pull -t ${imageRepositoryUri}:<git-sha> .`,
+      dockerfile: "Dockerfile.package",
+      buildCommand: `BLOCKED: after infra approval, AWS CodeBuild builds Dockerfile.package from @hasna/uptime@${runtimePackageVersion} into ${imageRepositoryUri}`,
       pushCommands: [
-        "BLOCKED: push only from approved CI/CD after the ECR repository and image digest policy exist",
+        `BLOCKED: start ${prefix}-${stage}-image-builder only through the approved deploy pipeline after @hasna/uptime@${runtimePackageVersion} is published`,
         "BLOCKED: deploy services by immutable image digest, not by mutable tags",
       ],
     },
@@ -234,19 +247,22 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
     runbook: {
       preflight: [
         `aws sts get-caller-identity --profile ${accountName}`,
-        `aws rds describe-db-instances --db-instance-identifier ${clean(options.rdsInstanceId, DEFAULT_RDS)} --region ${region}`,
         `aws ec2 describe-vpcs --vpc-ids ${clean(options.vpcId, DEFAULT_VPC_ID)} --region ${region}`,
+        `aws efs describe-file-systems --region ${region}`,
         "Confirm the infra repository and Terraform/CloudFormation owner before live mutation.",
       ],
       provision: [
         `Infra PR must declare or update ECR repository ${ecrRepository}.`,
+        `Infra PR must declare CodeBuild image builder ${prefix}-${stage}-image-builder for @hasna/uptime@${runtimePackageVersion}.`,
         `Infra PR must declare hardened S3 evidence bucket ${evidenceBucket} with KMS, versioning, lifecycle, and public access block.`,
+        `Infra PR must declare encrypted EFS ${prefix}-${stage}-data with access point, mount targets, and AWS Backup plan.`,
         `Infra PR must declare ECS/Fargate cluster ${cluster}, ALB, target groups, security groups, IAM roles, CloudWatch log groups, and Secrets Manager refs.`,
         "Only apply the infra plan from the approved infrastructure repository after review evidence is attached.",
       ],
       deploy: [
         "Build and publish the image only after the Dockerfile/container target is reviewed.",
-        "Run the migration task with the migrator role before web/scheduler/probe services.",
+        `Start the AWS image builder for @hasna/uptime@${runtimePackageVersion} and record the pushed image digest.`,
+        "For the EFS SQLite bridge, do not run migration, scheduler, public-probe, or reporter tasks; keep them at desired count 0 until Postgres and cloud leases exist.",
         `Register task definitions for ${services.map((service) => service.name).join(", ")} using valueFrom secrets.`,
         `Update ECS services in cluster ${cluster} one component at a time through the approved deploy pipeline.`,
         `Create Route53/edge record for ${hostname} only after ALB health checks pass and auth denial smokes succeed.`,
@@ -255,7 +271,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
         "Keep previous task definition ARNs before each service update.",
         "Rollback through the approved deploy pipeline to the previously recorded task definition ARNs.",
         "Disable scheduler/reporter services before data rollback.",
-        "Restore RDS snapshot only after explicit operator approval and audit record.",
+        "Restore EFS backup recovery point only after explicit operator approval and audit record.",
       ],
       spark01: [
         "Create a private probe identity with a caller-managed public key.",
@@ -264,18 +280,19 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
       ],
     },
     blockers: [
-      "The hasna-xyz-infra infrastructure owner repository was not found in this workspace.",
-      "Hosted Postgres storage adapter and migrations are not implemented.",
+      "The infrastructure owner repository was not found in this workspace.",
+      "The EFS SQLite bridge is single-writer only: web target desired count is 1 and scheduler/public-probe/reporter targets remain 0 until Postgres and cloud leases exist.",
       "Hosted production auth/RBAC must replace broad static hosted-token operation before exposure.",
       "Public probe execution still needs DNS, redirect, and rebinding SSRF enforcement plus cloud check-job leases.",
       "Spark01 hosted probe enrollment, claim, submit, heartbeat, revocation, and rotation are not cloud-backed yet.",
     ],
     requiredEvidence: [
       "Infrastructure PR/synth/plan from the approved infra repository.",
-      "Container build smoke and immutable image digest.",
+      "CodeBuild image-builder run, container smoke, and immutable image digest.",
       "ECS task definitions using secrets.valueFrom only.",
       "ALB/TLS/DNS/auth denial smokes and web alarm checks.",
-      "RDS TLS, backups/PITR, scoped roles, and migration dry-run evidence.",
+      "Single-writer ECS evidence: one web task maximum and no scheduler/public-probe/reporter EFS mounts.",
+      "EFS encryption, access point, mount-target, AWS Backup, and restore-drill evidence.",
       "S3 bucket KMS, versioning, lifecycle, and public-access-block evidence.",
       "Spark01 private-probe registration, key-file mode, heartbeat, and revocation evidence.",
     ],
@@ -285,7 +302,9 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
       hostedLocalSqliteAllowed: false,
       notes: [
         "This plan generator does not call AWS.",
-        "Hosted runtime must use Postgres; SQLite remains local/dev fallback only.",
+        "Blocked plan output intentionally avoids copy-pastable AWS mutation commands.",
+        "Hosted runtime uses explicit EFS-backed SQLite at HASNA_UPTIME_HOSTED_SQLITE_DB until the async Postgres adapter exists.",
+        "Do not set HASNA_UPTIME_DATABASE_URL for hosted tasks until the Postgres adapter is implemented.",
         "Secrets are represented as secret names/refs and must be injected with valueFrom.",
         "Actual deploy belongs in the deploy_release_operate_final goal node after infra review.",
       ],
@@ -390,12 +409,12 @@ function servicePlan(
       ...environment,
     },
     secrets: role === "web"
-      ? { HASNA_UPTIME_DATABASE_URL: secrets.database, APP_ENV: secrets.appEnv, HASNA_UPTIME_HOSTED_TOKEN: secrets.hostedToken }
+      ? { APP_ENV: secrets.appEnv, HASNA_UPTIME_HOSTED_TOKEN: secrets.hostedToken }
       : role === "public-probe"
       ? { PROBE_CONFIG: secrets.publicProbe }
       : role === "reporter"
-        ? { HASNA_UPTIME_DATABASE_URL: secrets.database, REPORTING_CONFIG: secrets.reporting }
-        : { HASNA_UPTIME_DATABASE_URL: secrets.database, APP_ENV: secrets.appEnv },
+        ? { REPORTING_CONFIG: secrets.reporting }
+        : { APP_ENV: secrets.appEnv },
   };
 }
 

@@ -10,7 +10,7 @@ stores are repaired and preflighted.
 
 - Codewith goal plan: `2c0724a2-39dd-453c-8b88-714ab2f0601d`
 - Active bootstrap goal: `4041c050-637f-48b7-9308-0669bde26cb1`
-- Projects workspace: `open-uptime` / `wks_2tyysw05cwap`
+- Projects workspace: `open-uptime` / deployment-specific workspace id
 - GitHub repo: `hasna/uptime` private
 - Todos project: `e65d26fa-7cb6-4d4f-a709-bf3cc8d6d616`
 - Todos task-list slug: `todos-open-uptime`
@@ -40,12 +40,14 @@ Known blockers:
 - `cloud` is configured in hybrid/local posture and previously reported a stale
   non-resolving RDS endpoint.
 - `projects` storage is not configured for cloud storage.
-- no Open Uptime per-project store DB exists yet at
-  `~/.hasna/projects/by-id/wks_2tyysw05cwap/project.db`.
+- no Open Uptime per-project store DB exists yet at the deployment-specific
+  `~/.hasna/projects/by-id/<workspace-id>/project.db`.
 - `knowledge` is in local mode.
 - `todos` has unresolved sync conflicts.
 - `mementos` warns that no primary machine is configured.
-- Open Uptime itself is still local SQLite-first.
+- Open Uptime itself is local SQLite-first for development and now has an
+  explicit EFS-backed SQLite hosted bridge for the initial protected AWS web
+  deployment. The Postgres adapter remains target-state work.
 
 Until the Spark01 preflight task passes, local CLI records and this repo document
 are the durable working ledger. Do not use local/private records as cloud
@@ -57,7 +59,7 @@ authority and must not be used as cloud sync evidence.
 
 The current bridge is repo docs plus cross-service IDs. It is not a Projects
 per-project store record until the Projects store/canvas work creates and
-cloud-backs `~/.hasna/projects/by-id/wks_2tyysw05cwap/project.db`.
+cloud-backs `~/.hasna/projects/by-id/<workspace-id>/project.db`.
 
 ## Hard Hosted Gate
 
@@ -65,8 +67,8 @@ Do not expose hosted dashboard, API, MCP, report delivery, JSON Render/canvas
 specs, artifacts, browser evidence, or check execution until these are tested:
 
 - hosted auth/RBAC and workspace scoping
-- Postgres persistence with migrations, tombstones, audit, and no hidden SQLite
-  fallback
+- explicit EFS-backed hosted SQLite for the first deploy, followed by Postgres
+  persistence with migrations, tombstones, audit, and no hidden local fallback
 - shared target policy with SSRF protections
 - scheduler `check_jobs` and probe lease fencing
 - report delivery through open-mailery/open-telephony/open-logs channel refs
@@ -144,9 +146,9 @@ uptime --version
 uptime mcp --help
 ```
 
-AWS plan and smoke tests are allowed only after the `hasna-xyz-infra` repository
-is located or checked out, reviewed, and updated with least-privilege infra
-changes.
+AWS plan and smoke tests are allowed only after the approved infrastructure
+repository is located or checked out, reviewed, and updated with least-privilege
+infra changes.
 
 ## Reviewer Lanes
 

@@ -471,16 +471,19 @@ const cloud = program
 
 cloud
   .command("plan")
-  .description("Generate a dry-run AWS deployment plan for hasna-xyz-infra")
-  .option("--account <name>", "AWS account/profile label", "hasna-xyz-infra")
+  .description("Generate a dry-run AWS deployment plan")
+  .option("--account <name>", "AWS account/profile label", "aws-profile")
   .option("--region <region>", "AWS region", "us-east-1")
   .option("--stage <stage>", "deployment stage", "prod")
-  .option("--hostname <hostname>", "hosted Open Uptime hostname", "uptime.hasna.xyz")
-  .option("--workspace-id <id>", "workspace id", "wks_2tyysw05cwap")
+  .option("--hostname <hostname>", "hosted Open Uptime hostname", "uptime.example.com")
+  .option("--workspace-id <id>", "workspace id", "workspace-id")
   .option("--vpc-id <id>", "target VPC id")
-  .option("--rds-instance-id <id>", "existing RDS instance id")
+  .option("--hosted-sqlite-db <path>", "hosted SQLite path on the EFS mount")
+  .option("--rds-instance-id <id>", "deprecated; ignored until the hosted Postgres adapter exists")
+  .option("--database-secret-name <name>", "deprecated; ignored until the hosted Postgres adapter exists")
   .option("--ecr-repository <name>", "ECR repository name")
   .option("--image <uri>", "container image URI")
+  .option("--runtime-package-version <version>", "published @hasna/uptime version for the AWS image builder")
   .option("--evidence-bucket <name>", "S3 evidence bucket name")
   .option("-j, --json", "print JSON")
   .action((opts) => {
@@ -492,9 +495,12 @@ cloud
         hostname: opts.hostname,
         workspaceId: opts.workspaceId,
         vpcId: opts.vpcId,
+        hostedSqliteDbPath: opts.hostedSqliteDb,
         rdsInstanceId: opts.rdsInstanceId,
+        databaseSecretName: opts.databaseSecretName,
         ecrRepository: opts.ecrRepository,
         image: opts.image,
+        runtimePackageVersion: opts.runtimePackageVersion,
         evidenceBucket: opts.evidenceBucket,
       });
       print(plan, renderCloudPlan(plan), opts);
@@ -506,8 +512,8 @@ cloud
 cloud
   .command("spark01-config")
   .description("Generate Spark01 hosted-targeted private probe preflight configuration")
-  .option("--api-url <url>", "hosted Open Uptime API URL", "https://uptime.hasna.xyz/api/v1")
-  .option("--workspace-id <id>", "workspace id", "wks_2tyysw05cwap")
+  .option("--api-url <url>", "hosted Open Uptime API URL", "https://uptime.example.com/api/v1")
+  .option("--workspace-id <id>", "workspace id", "workspace-id")
   .option("--probe-id <id>", "cloud registered private probe id")
   .option("--private-key-file <path>", "Spark01 private probe key file", "~/.hasna/uptime/probes/spark01.key.pem")
   .option("--machine-id <id>", "machine id", "spark01")
@@ -827,6 +833,7 @@ program
   .addOption(new Option("--mode <mode>", "runtime mode").choices(["local", "hosted"]).default("local"))
   .option("--api-token <token>", "token required for non-loopback mutation hosts")
   .option("--hosted-token <token>", "scoped hosted-mode token")
+  .option("--hosted-sqlite-db <path>", "absolute SQLite database path on hosted cloud-mounted storage")
   .option("--allow-hosted-local-store", "allow hosted mode to use local SQLite as an explicit fallback")
   .option("--allow-unsafe-remote-mutations", "allow state-changing requests from non-loopback hosts without a token")
   .option("-j, --json", "print JSON")
@@ -839,6 +846,7 @@ program
         mode: opts.mode,
         apiToken: opts.apiToken,
         hostedToken: opts.hostedToken,
+        hostedSqliteDbPath: opts.hostedSqliteDb,
         allowHostedLocalStore: opts.allowHostedLocalStore,
         allowUnsafeRemoteMutations: opts.allowUnsafeRemoteMutations,
       });
@@ -1037,10 +1045,12 @@ function renderCloudPlan(plan: AwsDeploymentPlan): string {
     `host: ${plan.hostname}`,
     `cluster: ${plan.resources.ecsCluster}`,
     `image: ${plan.image.uri}`,
+    `image builder: ${plan.resources.imageBuilder}`,
     `dockerfile: ${plan.image.dockerfile}`,
     `infra: ${plan.infra.path}`,
     `vpc: ${plan.resources.vpcId}`,
-    `rds: ${plan.resources.rdsInstanceId}`,
+    `efs: ${plan.resources.efsFileSystem}`,
+    `hosted sqlite: ${plan.resources.hostedSqliteDbPath}`,
     `services: ${plan.resources.services.map((service) => `${service.name}:${service.desiredCount}/${service.targetDesiredCount}`).join(", ")}`,
     `evidence bucket: ${plan.resources.evidenceBucket}`,
     `blockers: ${plan.blockers.length}`,

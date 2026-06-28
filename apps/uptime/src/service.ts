@@ -44,7 +44,7 @@ export interface UptimeServiceOptions extends UptimeStoreOptions {
 export interface UptimeStoreLike {
   readonly dbPath: string;
   readonly mode: "local" | "hosted";
-  readonly dataMode: "local-sqlite" | "hosted-local-sqlite";
+  readonly dataMode: "local-sqlite" | "hosted-local-sqlite" | "hosted-efs-sqlite";
   close(): void;
   createMonitor(input: ImportedMonitorInput, options?: { allowBrowserPage?: boolean }): Monitor;
   updateMonitor(idOrName: string, input: ImportedUpdateMonitorInput, options?: { allowBrowserPage?: boolean }): Monitor;

@@ -565,7 +565,7 @@ test("hosted store fails closed without cloud adapter or explicit fallback", () 
   const dbPath = tempDb();
 
   expect(() => new UptimeService({ dbPath, mode: "hosted" }))
-    .toThrow("hosted mode requires a cloud data layer");
+    .toThrow("hosted mode requires HASNA_UPTIME_HOSTED_SQLITE_DB");
   expect(existsSync(dbPath)).toBe(false);
 });
 
@@ -575,7 +575,46 @@ test("hosted store does not silently use SQLite when a cloud database URL is con
     mode: "hosted",
     allowHostedLocalStore: true,
     cloudDatabaseUrl: "postgres://example.invalid/uptime",
-  })).toThrow("hosted cloud database adapter is not implemented yet");
+  })).toThrow("hosted Postgres adapter is not implemented yet");
+});
+
+test("hosted store allows non-standard SQLite paths only with explicit local fallback flag", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-hosted-sqlite-"));
+  cleanup.push(dir);
+  const hostedSqliteDbPath = join(dir, "data", "uptime.db");
+  const service = new UptimeService({ mode: "hosted", hostedSqliteDbPath, allowHostedLocalStore: true });
+  try {
+    expect(service.store.mode).toBe("hosted");
+    expect(service.store.dataMode).toBe("hosted-local-sqlite");
+    expect(service.store.dbPath).toBe(hostedSqliteDbPath);
+    const monitor = service.createMonitor({ name: "cloud", kind: "http", url: "https://example.com" });
+    expect(monitor.status).toBe("unknown");
+  } finally {
+    service.close();
+  }
+
+  const reopened = new UptimeService({ mode: "hosted", hostedSqliteDbPath, allowHostedLocalStore: true });
+  try {
+    expect(reopened.listMonitors({ includeDisabled: true }).map((monitor) => monitor.name)).toEqual(["cloud"]);
+  } finally {
+    reopened.close();
+  }
+});
+
+test("hosted cloud-mounted SQLite path must be absolute", () => {
+  expect(() => new UptimeService({ mode: "hosted", hostedSqliteDbPath: "relative/uptime.db" }))
+    .toThrow("HASNA_UPTIME_HOSTED_SQLITE_DB must be an absolute path");
+  expect(() => new UptimeService({ mode: "hosted", hostedSqliteDbPath: ":memory:" }))
+    .toThrow("HASNA_UPTIME_HOSTED_SQLITE_DB must be an absolute path");
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-hosted-bad-path-"));
+  cleanup.push(dir);
+  expect(() => new UptimeService({ mode: "hosted", hostedSqliteDbPath: join(dir, "uptime.db") }))
+    .toThrow("HASNA_UPTIME_HOSTED_SQLITE_DB must be /data/uptime/uptime.db");
+});
+
+test("hosted EFS SQLite refuses the approved path when it is not an EFS mount", () => {
+  expect(() => new UptimeService({ mode: "hosted", hostedSqliteDbPath: "/data/uptime/uptime.db" }))
+    .toThrow("must be on a mounted EFS/NFS filesystem");
 });
 
 test("default service construction stays local when hosted env vars are set", () => {

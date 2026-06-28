@@ -13,40 +13,41 @@ provider "aws" {
   region = var.region
 }
 
+data "aws_caller_identity" "current" {}
+
 locals {
-  prefix          = "${var.service_name}-${var.stage}"
-  container_port  = 3899
-  evidence_bucket = "hasna-${var.stage}-${var.service_name}-evidence"
+  prefix                = "${var.service_name}-${var.stage}"
+  container_port        = 3899
+  evidence_bucket       = "hasna-${var.stage}-${var.service_name}-evidence"
+  efs_uid               = 10001
+  efs_gid               = 10001
+  hosted_sqlite_db_path = "/data/uptime/uptime.db"
+  efs_enabled_services  = toset(["web"])
   services = {
     web = {
       desired_count = lookup(var.desired_counts, "web", 0)
-      db_access     = true
       command       = ["bun", "dist/cli/index.js", "serve", "--mode", "hosted", "--host", "0.0.0.0", "--port", tostring(local.container_port)]
-      secrets       = { HASNA_UPTIME_DATABASE_URL = var.database_secret_arn, APP_ENV = var.app_env_secret_arn, HASNA_UPTIME_HOSTED_TOKEN = var.hosted_token_secret_arn }
+      secrets       = { APP_ENV = var.app_env_secret_arn, HASNA_UPTIME_HOSTED_TOKEN = var.hosted_token_secret_arn }
     }
     scheduler = {
       desired_count = lookup(var.desired_counts, "scheduler", 0)
-      db_access     = true
       command       = ["bun", "dist/cli/index.js", "cloud", "plan"]
-      secrets       = { HASNA_UPTIME_DATABASE_URL = var.database_secret_arn, APP_ENV = var.app_env_secret_arn }
+      secrets       = { APP_ENV = var.app_env_secret_arn }
     }
     "public-probe" = {
       desired_count = lookup(var.desired_counts, "public-probe", 0)
-      db_access     = false
       command       = ["bun", "dist/cli/index.js", "cloud", "plan"]
       secrets       = { PROBE_CONFIG = var.public_probe_secret_arn }
     }
     reporter = {
       desired_count = lookup(var.desired_counts, "reporter", 0)
-      db_access     = true
       command       = ["bun", "dist/cli/index.js", "cloud", "plan"]
-      secrets       = { HASNA_UPTIME_DATABASE_URL = var.database_secret_arn, REPORTING_CONFIG = var.reporting_secret_arn }
+      secrets       = { REPORTING_CONFIG = var.reporting_secret_arn }
     }
     migration = {
       desired_count = lookup(var.desired_counts, "migration", 0)
-      db_access     = true
       command       = ["bun", "dist/cli/index.js", "cloud", "plan"]
-      secrets       = { HASNA_UPTIME_DATABASE_URL = var.database_secret_arn, APP_ENV = var.app_env_secret_arn }
+      secrets       = { APP_ENV = var.app_env_secret_arn }
     }
   }
   tags = {
@@ -62,7 +63,7 @@ data "aws_vpc" "target" {
 }
 
 resource "aws_ecr_repository" "open_uptime" {
-  name                 = "hasna/opensource/${var.service_name}"
+  name                 = var.ecr_repository_name
   image_tag_mutability = "IMMUTABLE"
 
   image_scanning_configuration {
@@ -74,6 +75,113 @@ resource "aws_ecr_repository" "open_uptime" {
   }
 
   tags = local.tags
+}
+
+resource "aws_cloudwatch_log_group" "image_builder" {
+  name              = "/aws/codebuild/${local.prefix}-image-builder"
+  retention_in_days = 14
+  kms_key_id        = var.kms_key_arn
+  tags              = local.tags
+}
+
+data "aws_iam_policy_document" "codebuild_assume_role" {
+  statement {
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["codebuild.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "image_builder" {
+  name               = "${local.prefix}-image-builder-role"
+  assume_role_policy = data.aws_iam_policy_document.codebuild_assume_role.json
+  tags               = local.tags
+}
+
+data "aws_iam_policy_document" "image_builder" {
+  statement {
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+
+  statement {
+    actions = [
+      "ecr:BatchCheckLayerAvailability",
+      "ecr:CompleteLayerUpload",
+      "ecr:DescribeImages",
+      "ecr:DescribeRepositories",
+      "ecr:InitiateLayerUpload",
+      "ecr:PutImage",
+      "ecr:UploadLayerPart",
+    ]
+    resources = [aws_ecr_repository.open_uptime.arn]
+  }
+
+  statement {
+    actions = [
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
+    ]
+    resources = ["${aws_cloudwatch_log_group.image_builder.arn}:*"]
+  }
+}
+
+resource "aws_iam_role_policy" "image_builder" {
+  name   = "${local.prefix}-image-builder-policy"
+  role   = aws_iam_role.image_builder.id
+  policy = data.aws_iam_policy_document.image_builder.json
+}
+
+resource "aws_codebuild_project" "image_builder" {
+  name         = "${local.prefix}-image-builder"
+  description  = "Build published @hasna/uptime package into the Open Uptime ECR image"
+  service_role = aws_iam_role.image_builder.arn
+  tags         = local.tags
+
+  artifacts {
+    type = "NO_ARTIFACTS"
+  }
+
+  environment {
+    compute_type    = "BUILD_GENERAL1_SMALL"
+    image           = "aws/codebuild/standard:7.0"
+    type            = "LINUX_CONTAINER"
+    privileged_mode = true
+  }
+
+  logs_config {
+    cloudwatch_logs {
+      group_name = aws_cloudwatch_log_group.image_builder.name
+      status     = "ENABLED"
+    }
+  }
+
+  source {
+    type      = "NO_SOURCE"
+    buildspec = <<-YAML
+      version: 0.2
+      phases:
+        pre_build:
+          commands:
+            - aws --version
+            - aws ecr get-login-password --region ${var.region} | docker login --username AWS --password-stdin ${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com
+        build:
+          commands:
+            - npm pack @hasna/uptime@${var.runtime_package_version}
+            - mkdir package
+            - tar -xzf hasna-uptime-*.tgz -C package --strip-components=1
+            - cd package
+            - docker build -f Dockerfile.package -t ${aws_ecr_repository.open_uptime.repository_url}:${var.runtime_package_version} .
+            - docker push ${aws_ecr_repository.open_uptime.repository_url}:${var.runtime_package_version}
+            - IMAGE_DIGEST=$(aws ecr describe-images --region ${var.region} --repository-name ${aws_ecr_repository.open_uptime.name} --image-ids imageTag=${var.runtime_package_version} --query 'imageDetails[0].imageDigest' --output text)
+            - printf '%s@%s\n' '${aws_ecr_repository.open_uptime.repository_url}' "$IMAGE_DIGEST"
+      YAML
+  }
+
+  depends_on = [aws_iam_role_policy.image_builder]
 }
 
 resource "aws_s3_bucket" "evidence" {
@@ -221,7 +329,7 @@ resource "aws_security_group_rule" "web_from_alb" {
 
 resource "aws_security_group_rule" "web_egress" {
   type              = "egress"
-  description       = "Controlled egress to AWS endpoints and database"
+  description       = "Controlled egress to AWS endpoints and EFS"
   security_group_id = aws_security_group.web.id
   from_port         = 0
   to_port           = 0
@@ -244,7 +352,7 @@ resource "aws_security_group_rule" "worker_egress" {
   for_each = aws_security_group.worker
 
   type              = "egress"
-  description       = each.key == "public-probe" ? "Public probe egress for approved public targets" : "Controlled egress to AWS endpoints and database"
+  description       = each.key == "public-probe" ? "Public probe egress for approved public targets" : "Controlled egress to AWS endpoints"
   security_group_id = each.value.id
   from_port         = 0
   to_port           = 0
@@ -252,28 +360,124 @@ resource "aws_security_group_rule" "worker_egress" {
   cidr_blocks       = each.key == "public-probe" ? ["0.0.0.0/0"] : [data.aws_vpc.target.cidr_block]
 }
 
-resource "aws_security_group_rule" "rds_from_web" {
-  type                     = "ingress"
-  from_port                = 5432
-  to_port                  = 5432
-  protocol                 = "tcp"
-  security_group_id        = var.rds_security_group_id
-  source_security_group_id = aws_security_group.web.id
-  description              = "Open Uptime web to RDS"
+resource "aws_security_group" "efs" {
+  name        = "${local.prefix}-efs-sg"
+  description = "Open Uptime EFS data store"
+  vpc_id      = data.aws_vpc.target.id
+  tags        = local.tags
 }
 
-resource "aws_security_group_rule" "rds_from_workers" {
-  for_each = {
-    for key, value in local.services : key => value if key != "web" && value.db_access
+resource "aws_security_group_rule" "efs_from_web" {
+  type                     = "ingress"
+  description              = "Open Uptime web to EFS"
+  security_group_id        = aws_security_group.efs.id
+  from_port                = 2049
+  to_port                  = 2049
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.web.id
+}
+
+resource "aws_efs_file_system" "data" {
+  creation_token = "${local.prefix}-data"
+  encrypted      = true
+  kms_key_id     = var.kms_key_arn
+  tags           = merge(local.tags, { Name = "${local.prefix}-data" })
+
+  lifecycle_policy {
+    transition_to_ia = "AFTER_30_DAYS"
+  }
+}
+
+resource "aws_efs_backup_policy" "data" {
+  file_system_id = aws_efs_file_system.data.id
+
+  backup_policy {
+    status = "ENABLED"
+  }
+}
+
+resource "aws_efs_access_point" "uptime" {
+  file_system_id = aws_efs_file_system.data.id
+
+  posix_user {
+    uid = local.efs_uid
+    gid = local.efs_gid
   }
 
-  type                     = "ingress"
-  from_port                = 5432
-  to_port                  = 5432
-  protocol                 = "tcp"
-  security_group_id        = var.rds_security_group_id
-  source_security_group_id = aws_security_group.worker[each.key].id
-  description              = "Open Uptime ${each.key} to RDS"
+  root_directory {
+    path = "/uptime"
+
+    creation_info {
+      owner_uid   = local.efs_uid
+      owner_gid   = local.efs_gid
+      permissions = "0750"
+    }
+  }
+
+  tags = merge(local.tags, { Name = "${local.prefix}-uptime" })
+}
+
+resource "aws_efs_mount_target" "data" {
+  for_each        = toset(var.private_subnet_ids)
+  file_system_id  = aws_efs_file_system.data.id
+  subnet_id       = each.value
+  security_groups = [aws_security_group.efs.id]
+}
+
+resource "aws_backup_vault" "data" {
+  name        = "${local.prefix}-data"
+  kms_key_arn = var.kms_key_arn
+  tags        = local.tags
+}
+
+resource "aws_backup_plan" "data" {
+  name = "${local.prefix}-data"
+
+  rule {
+    rule_name         = "daily"
+    target_vault_name = aws_backup_vault.data.name
+    schedule          = "cron(0 5 * * ? *)"
+
+    lifecycle {
+      delete_after = 35
+    }
+  }
+
+  tags = local.tags
+}
+
+data "aws_iam_policy_document" "backup_assume_role" {
+  statement {
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["backup.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "backup" {
+  name               = "${local.prefix}-backup-role"
+  assume_role_policy = data.aws_iam_policy_document.backup_assume_role.json
+  tags               = local.tags
+}
+
+resource "aws_iam_role_policy_attachment" "backup" {
+  role       = aws_iam_role.backup.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup"
+}
+
+resource "aws_iam_role_policy_attachment" "backup_restore" {
+  role       = aws_iam_role.backup.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForRestores"
+}
+
+resource "aws_backup_selection" "data" {
+  iam_role_arn = aws_iam_role.backup.arn
+  name         = "${local.prefix}-data"
+  plan_id      = aws_backup_plan.data.id
+  resources    = [aws_efs_file_system.data.arn]
 }
 
 resource "aws_lb" "open_uptime" {
@@ -395,6 +599,24 @@ data "aws_iam_policy_document" "task" {
     actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
     resources = [var.kms_key_arn]
   }
+
+  dynamic "statement" {
+    for_each = contains(local.efs_enabled_services, each.key) ? [1] : []
+
+    content {
+      actions = [
+        "elasticfilesystem:ClientMount",
+        "elasticfilesystem:ClientWrite",
+      ]
+      resources = [aws_efs_file_system.data.arn]
+
+      condition {
+        test     = "StringEquals"
+        variable = "elasticfilesystem:AccessPointArn"
+        values   = [aws_efs_access_point.uptime.arn]
+      }
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "task" {
@@ -414,6 +636,24 @@ resource "aws_ecs_task_definition" "service" {
   execution_role_arn       = aws_iam_role.execution.arn
   task_role_arn            = aws_iam_role.task[each.key].arn
 
+  dynamic "volume" {
+    for_each = contains(local.efs_enabled_services, each.key) ? [1] : []
+
+    content {
+      name = "uptime-data"
+
+      efs_volume_configuration {
+        file_system_id     = aws_efs_file_system.data.id
+        transit_encryption = "ENABLED"
+
+        authorization_config {
+          access_point_id = aws_efs_access_point.uptime.id
+          iam             = "ENABLED"
+        }
+      }
+    }
+  }
+
   container_definitions = jsonencode([
     {
       name      = each.key
@@ -425,12 +665,21 @@ resource "aws_ecs_task_definition" "service" {
         hostPort      = local.container_port
         protocol      = "tcp"
       }] : []
-      environment = [
+      environment = concat([
         { name = "HASNA_UPTIME_MODE", value = "hosted" },
         { name = "HASNA_UPTIME_WORKSPACE_ID", value = var.workspace_id },
         { name = "HASNA_UPTIME_COMPONENT", value = each.key },
         { name = "HASNA_UPTIME_HOSTNAME", value = var.hostname },
-      ]
+        ], contains(local.efs_enabled_services, each.key) ? [
+        { name = "HASNA_UPTIME_HOSTED_SQLITE_DB", value = local.hosted_sqlite_db_path },
+      ] : [])
+      mountPoints = contains(local.efs_enabled_services, each.key) ? [
+        {
+          sourceVolume  = "uptime-data"
+          containerPath = "/data/uptime"
+          readOnly      = false
+        }
+      ] : []
       secrets = [
         for name, value_from in each.value.secrets : {
           name      = name
@@ -476,7 +725,7 @@ resource "aws_ecs_service" "web" {
     container_port   = local.container_port
   }
 
-  depends_on = [aws_lb_listener.https]
+  depends_on = [aws_lb_listener.https, aws_efs_mount_target.data]
 }
 
 resource "aws_ecs_service" "worker" {

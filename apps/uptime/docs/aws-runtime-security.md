@@ -1,39 +1,41 @@
 # AWS Runtime And Security
 
 This document defines the target AWS architecture for running Open Uptime as an
-internal Hasna cloud service in the `hasna-xyz-infra` AWS account. It is a design
-contract for the later infrastructure and deployment implementation work; it
-does not mean Open Uptime is safe to expose today.
+internal cloud service in a reviewed AWS account. It is a design contract for
+later infrastructure and deployment implementation work; it does not mean Open
+Uptime is safe to expose today.
+
+Current deployment bridge as of 2026-06-28: the repo Terraform includes an
+EFS-backed SQLite runtime path (`HASNA_UPTIME_HOSTED_SQLITE_DB`) with an EFS
+access point and AWS Backup so exactly one protected web task can start without
+the future async Postgres adapter. Scheduler, public-probe, reporter, and
+migration workers must stay at desired count `0` and do not receive EFS mounts
+or EFS write IAM in this bridge. The Postgres/RDS sections below remain
+target-state security requirements for the eventual cloud source of truth.
 
 ## Current Account State
 
-Read-only inventory in `us-east-1` shows:
+Private target-account inventory belongs in private deployment evidence, not in
+the OSS repository. Before live deployment, record:
 
-- canonical shared apps Postgres exists as
-  `hasna-xyz-infra-apps-prod-postgres` and is private in
-  `vpc-04c7f7abc1d3c3f56`;
-- additional Postgres instances exist, including `internalapps-prod-postgres`,
-  `prod-connect`, and `prod-microservice`;
-- no ECS clusters are present;
-- ECR currently contains unrelated app repositories only;
-- no load balancers or ACM certificates were returned by the inventory command;
-- the default VPC is `172.31.0.0/16` with six public default subnets;
-- Open Uptime has no service-specific AWS runtime secrets, image repository,
-  task definition, ALB, DNS record, alarms, backup policy, or evidence bucket.
+- selected AWS account/profile and region;
+- target VPC, public ALB subnets, private task subnets, KMS key, Route53/edge
+  ownership, and ACM certificate;
+- whether an approved application Postgres exists for the future target state;
+- whether Open Uptime already has service-specific ECR, ECS, ALB, DNS, secrets,
+  alarms, backup policy, and evidence bucket resources.
 
-The local `hasna-xyz-infra` infrastructure repository was not found under the
-obvious workspace roots during this design pass. The implementation phase must
-either locate/check out that repo or create the infra change in the correct
-owner repository before touching live AWS resources.
+The implementation phase must locate/check out the approved infrastructure
+repository or create the infra change in the correct owner repository before
+touching live AWS resources.
 
 ## Architecture Decision
 
-Use ECS Fargate with ALB, canonical RDS, and S3.
-
-Do not deploy Open Uptime as SQLite on EFS for hosted mode. SQLite remains a
-local/development fallback and migration source only. The cloud source of truth
-is Postgres; browser evidence and generated report artifacts live in hardened
-S3.
+Use ECS Fargate with ALB and S3. The first deployable runtime may use
+EFS-backed SQLite with AWS Backup for a single web writer while scheduler,
+public probe, reporter, and migration workers remain disabled. The target cloud
+source of truth is Postgres; browser evidence and generated report artifacts
+live in hardened S3.
 
 App Runner is not the first choice because Open Uptime needs explicit VPC
 placement, private RDS access, separated worker roles, private probe ingestion,
@@ -93,7 +95,7 @@ identity or SLA calculations.
 
 ## Network Layout
 
-Target shape inside `vpc-04c7f7abc1d3c3f56`:
+Target shape inside the approved VPC:
 
 - public subnets: ALB and NAT gateways only;
 - new private application subnets: web, scheduler, migration tasks;
@@ -122,8 +124,8 @@ private probes such as Spark01 and are created only from approved inventory refs
 
 ## Web Exposure And Auth
 
-The expected hostname is a Hasna-controlled internal hostname such as
-`uptime.hasna.xyz`; the final hosted zone and record must be selected in the
+The expected hostname is an approved internal hostname such as
+`uptime.example.com`; the final hosted zone and record must be selected in the
 infra PR.
 
 Public web exposure requires defense in depth:
@@ -164,9 +166,9 @@ ingest, report, render, or access artifacts.
 Postgres:
 
 - choose one exact shape in the infra PR: preferably a dedicated `uptime`
-  database on `hasna-xyz-infra-apps-prod-postgres`; a dedicated schema in an
-  approved database is acceptable only if ownership, backups, and role grants are
-  explicit;
+  database on the approved application Postgres instance; a dedicated schema in
+  an approved database is acceptable only if ownership, backups, and role grants
+  are explicit;
 - use separate least-privileged roles/users: `uptime_migrator`, `uptime_web`,
   `uptime_scheduler`, `uptime_probe`, and `uptime_reporter` or read/report role;
 - runtime roles must not have DDL privileges;
@@ -190,8 +192,10 @@ S3:
 - access artifacts through short-lived signed URLs with workspace authorization
   and audit logging.
 
-No hosted runtime writes authoritative state to EFS or local task storage.
-Ephemeral task storage is for temporary files only.
+Target state: no hosted runtime writes authoritative state to EFS or local task
+storage. Current bridge exception: one web task may write the explicit
+`/data/uptime/uptime.db` EFS-backed SQLite file until the async Postgres adapter
+and cloud leases exist. Ephemeral task storage is for temporary files only.
 
 Project stores:
 
@@ -208,11 +212,11 @@ Secrets are referenced, not copied.
 
 Expected secret refs:
 
-- `hasna/xyz/opensource/uptime/prod/rds`
-- `hasna/xyz/opensource/uptime/prod/app/env`
-- `hasna/xyz/opensource/uptime/prod/probe/public`
-- `hasna/xyz/opensource/uptime/prod/probe/private`
-- `hasna/xyz/opensource/uptime/prod/reporting`
+- `open-uptime/prod/rds`
+- `open-uptime/prod/app/env`
+- `open-uptime/prod/probe/public`
+- `open-uptime/prod/probe/private`
+- `open-uptime/prod/reporting`
 - service-owned Mailery, Telephony, Logs, Projects, Todos, Knowledge, Notes,
   Mementos, Servers, Domains, and Deployment refs as needed.
 
@@ -344,15 +348,16 @@ acceptable for Open Uptime production resources.
 
 Minimum implementation path:
 
-1. add a repo-owned `Dockerfile` or Bun container build recipe;
-2. add ECR repository `open-uptime/app` or the naming selected by infra;
-3. build image from a tagged commit and push by digest;
+1. review the repo-owned `Dockerfile` and package-image `Dockerfile.package`;
+2. add the ECR repository and CodeBuild package image builder;
+3. build the published npm package into ECR and record the immutable digest;
 4. run typecheck, tests, package checks, and container smoke locally/CI;
-5. run database migration task against the target environment;
+5. for the EFS bridge, keep the desired count at one web task maximum and zero
+   scheduler/public-probe/reporter/migration tasks;
 6. deploy ECS services by digest with deployment circuit breaker enabled;
-7. verify `/health`, auth-denied reads, authenticated dashboard, DB migrations,
-   probe heartbeat, check job claim, evidence upload, report delivery, and
-   alarms;
+7. verify `/health`, auth-denied reads, authenticated dashboard, EFS backup
+   evidence, and web alarms; defer probe heartbeat, check job claim, evidence
+   upload, and report delivery smokes until worker roles are cloud-backed;
 8. publish/update packages only after hosted smoke passes if code changed.
 
 Open Deployment may record deployment metadata, but it must not be exposed as a
@@ -376,9 +381,10 @@ Every AWS resource must carry owner/project/environment/service tags. The infra
 PR must include a rough monthly estimate for:
 
 - ALB;
-- ECS Fargate web/scheduler/probe tasks;
+- ECS Fargate web task for the bridge and later scheduler/probe tasks;
 - NAT gateway or alternative egress;
-- RDS incremental usage for Uptime schema/database;
+- EFS/Backup bridge costs and later RDS incremental usage for the Uptime
+  schema/database;
 - S3 evidence/artifact storage and requests;
 - CloudWatch logs/metrics/alarms;
 - KMS requests;
@@ -392,10 +398,10 @@ Budget alarms are required before browser evidence or public probe scale-out.
 ## Implementation Blockers
 
 - No checked-out infra owner repo was found during design.
-- No Open Uptime Dockerfile/container build exists.
 - No ECR repository, ECS cluster, ALB, ACM cert, Route53 record, evidence bucket,
   or service secrets exist for Open Uptime.
-- Open Uptime is still SQLite-only and not safe for stateless ECS replacement.
+- Open Uptime is still SQLite-only for this bridge; only one protected web task
+  may write EFS until Postgres and cloud leases exist.
 - Hosted API/dashboard auth, workspace RBAC, target policy, and Postgres leases
   are not implemented.
 - Route/scope matrix, report worker ownership, private probe lifecycle, probe
@@ -409,11 +415,12 @@ Budget alarms are required before browser evidence or public probe scale-out.
 
 - A reviewed infra PR defines all runtime resources and outputs consumed by Open
   Uptime and any deployment tooling.
-- The service deploys as separate web, scheduler, public probe, and migration
-  roles with least-privilege IAM.
+- The first bridge deploy runs one web task maximum with web-only EFS write IAM;
+  scheduler, public probe, reporter, and migration roles remain disabled until
+  their cloud data paths are implemented.
 - Hosted routes except `/health` require app auth and workspace RBAC.
-- Runtime state is Postgres plus S3 artifacts; no authoritative hosted state is
-  local SQLite or EFS.
+- Final cloud-primary runtime state is Postgres plus S3 artifacts; the current
+  EFS SQLite bridge is explicitly temporary and not the target source of truth.
 - ECS task definitions use secret refs, not plaintext secret values.
 - Public probes cannot reach denied target classes; private monitors require
   private probes and approved inventory refs.

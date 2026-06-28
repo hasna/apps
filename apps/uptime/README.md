@@ -48,7 +48,13 @@ in `docs/aws-deployment-runbook.md` is satisfied.
 
 Deployment review artifacts live in `Dockerfile` and `infra/aws`. The Terraform
 desired counts default to zero, and `uptime cloud plan --json` exposes the
-format/init/validate/plan commands with `applyAllowed: false`.
+format/init/validate/plan commands with `applyAllowed: false`. Hosted AWS
+runtime state currently uses explicit EFS-backed SQLite via
+`HASNA_UPTIME_HOSTED_SQLITE_DB=/data/uptime/uptime.db` for one protected web
+task maximum; do not set `HASNA_UPTIME_DATABASE_URL` until the async Postgres
+adapter is implemented.
+`Dockerfile.package` is used by the Terraform CodeBuild image builder to build
+the published npm package into ECR from inside AWS.
 
 Private/local probes can submit signed results from another machine:
 

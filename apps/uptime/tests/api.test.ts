@@ -407,6 +407,29 @@ test("serve hosted mode rejects inline scheduler", () => {
   })).toThrow("hosted scheduler requires check_jobs and probes");
 });
 
+test("serve hosted mode allows explicit dev SQLite path only with fallback flag", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-hosted-serve-"));
+  cleanup.push(dir);
+  let runtime: ReturnType<typeof serveUptime> | undefined;
+  try {
+    runtime = serveUptime({
+      mode: "hosted",
+      hostedToken: "secret",
+      hostedSqliteDbPath: join(dir, "data", "uptime.db"),
+      allowHostedLocalStore: true,
+      port: 0,
+    });
+    const health = await fetch(`http://${runtime.server.hostname}:${runtime.server.port}/health`);
+    expect(await health.json()).toMatchObject({
+      ok: true,
+      mode: "hosted",
+      dataMode: "hosted-local-sqlite",
+    });
+  } finally {
+    runtime?.server.stop(true);
+  }
+});
+
 test("serve default stays local when hosted env vars are set", () => {
   const previousMode = process.env.HASNA_UPTIME_MODE;
   const previousToken = process.env.HASNA_UPTIME_HOSTED_TOKEN;

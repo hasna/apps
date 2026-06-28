@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, statfsSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { Database } from "bun:sqlite";
@@ -46,10 +46,14 @@ export interface UptimeStoreOptions {
   mode?: UptimeRuntimeMode;
   allowHostedLocalStore?: boolean;
   cloudDatabaseUrl?: string;
+  hostedSqliteDbPath?: string;
 }
 
 export type UptimeRuntimeMode = "local" | "hosted";
 
+export const DEFAULT_HOSTED_SQLITE_DB_PATH = "/data/uptime/uptime.db";
+
+const NFS_SUPER_MAGIC = 0x6969;
 const SECRET_URL_PARAM_PATTERN = /(token|secret|password|passwd|api[_-]?key|access[_-]?token|auth|credential|session)/i;
 
 export interface UptimeBackup {
@@ -286,25 +290,46 @@ export class StaleCheckResultError extends Error {
 export class UptimeStore {
   readonly dbPath: string;
   readonly mode: UptimeRuntimeMode;
-  readonly dataMode: "local-sqlite" | "hosted-local-sqlite";
+  readonly dataMode: "local-sqlite" | "hosted-local-sqlite" | "hosted-efs-sqlite";
   private readonly db: Database;
 
   constructor(options: UptimeStoreOptions = {}) {
     this.mode = resolveRuntimeMode(options.mode ?? "local");
     const cloudDatabaseUrl = options.cloudDatabaseUrl ?? process.env.HASNA_UPTIME_DATABASE_URL;
     if (this.mode === "hosted" && cloudDatabaseUrl) {
-      throw new Error("hosted cloud database adapter is not implemented yet");
+      throw new Error("hosted Postgres adapter is not implemented yet; use HASNA_UPTIME_HOSTED_SQLITE_DB on cloud-mounted storage for the current hosted deployment path");
     }
-    if (this.mode === "hosted" && !allowHostedLocalStore(options.allowHostedLocalStore)) {
-      throw new Error("hosted mode requires a cloud data layer; set HASNA_UPTIME_ALLOW_HOSTED_LOCAL_STORE=1 only for explicit local fallback testing");
+    const hostedSqliteDbPath = options.hostedSqliteDbPath ?? process.env.HASNA_UPTIME_HOSTED_SQLITE_DB;
+    if (this.mode === "hosted" && hostedSqliteDbPath) {
+      if (hostedSqliteDbPath === ":memory:" || !hostedSqliteDbPath.startsWith("/")) {
+        throw new Error("HASNA_UPTIME_HOSTED_SQLITE_DB must be an absolute path on mounted cloud storage");
+      }
+      const approvedHostedPath = hostedSqliteDbPath === DEFAULT_HOSTED_SQLITE_DB_PATH;
+      if (!approvedHostedPath && !allowHostedLocalStore(options.allowHostedLocalStore)) {
+        throw new Error(`HASNA_UPTIME_HOSTED_SQLITE_DB must be ${DEFAULT_HOSTED_SQLITE_DB_PATH}; set HASNA_UPTIME_ALLOW_HOSTED_LOCAL_STORE=1 only for explicit local fallback testing`);
+      }
+      const verifiedCloudMount = approvedHostedPath && isNfsMount(dirname(hostedSqliteDbPath));
+      if (approvedHostedPath && !verifiedCloudMount && !allowHostedLocalStore(options.allowHostedLocalStore)) {
+        throw new Error(`${DEFAULT_HOSTED_SQLITE_DB_PATH} must be on a mounted EFS/NFS filesystem; refusing to create hosted task-local SQLite`);
+      }
+      this.dataMode = verifiedCloudMount ? "hosted-efs-sqlite" : "hosted-local-sqlite";
+      this.dbPath = hostedSqliteDbPath;
+    } else if (this.mode === "hosted") {
+      if (!allowHostedLocalStore(options.allowHostedLocalStore)) {
+        throw new Error("hosted mode requires HASNA_UPTIME_HOSTED_SQLITE_DB on mounted cloud storage; set HASNA_UPTIME_ALLOW_HOSTED_LOCAL_STORE=1 only for explicit local fallback testing");
+      }
+      this.dataMode = "hosted-local-sqlite";
+      this.dbPath = options.dbPath ?? uptimeHostedFallbackDbPath();
+    } else {
+      this.dataMode = "local-sqlite";
+      this.dbPath = options.dbPath ?? uptimeDbPath();
     }
-    this.dataMode = this.mode === "hosted" ? "hosted-local-sqlite" : "local-sqlite";
-    this.dbPath = options.dbPath ?? (this.mode === "hosted" ? uptimeHostedFallbackDbPath() : uptimeDbPath());
-    if (this.dbPath !== ":memory:") {
+    if (this.dbPath !== ":memory:" && this.dataMode !== "hosted-efs-sqlite") {
       mkdirSync(dirname(this.dbPath), { recursive: true });
     }
     this.db = new Database(this.dbPath, { create: true });
-    this.db.run("PRAGMA journal_mode = WAL");
+    this.db.run(this.dataMode === "hosted-efs-sqlite" ? "PRAGMA journal_mode = DELETE" : "PRAGMA journal_mode = WAL");
+    this.db.run("PRAGMA busy_timeout = 5000");
     this.db.run("PRAGMA foreign_keys = ON");
     this.migrate();
   }
@@ -1463,6 +1488,14 @@ export function resolveRuntimeMode(mode?: UptimeRuntimeMode): UptimeRuntimeMode 
 
 function allowHostedLocalStore(value?: boolean): boolean {
   return value === true || process.env.HASNA_UPTIME_ALLOW_HOSTED_LOCAL_STORE === "1";
+}
+
+function isNfsMount(path: string): boolean {
+  try {
+    return statfsSync(path).type === NFS_SUPER_MAGIC;
+  } catch {
+    return false;
+  }
 }
 
 function verifyBackupFile(backupPath: string): UptimeBackupCheck {

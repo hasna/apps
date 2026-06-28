@@ -1,0 +1,41 @@
+{
+  "service": "open-uptime",
+  "package": "@hasna/uptime",
+  "intendedVersion": "0.1.7",
+  "accountProfile": "<aws-profile>",
+  "accountId": "<aws-account-id>",
+  "region": "us-east-1",
+  "workspaceId": "<workspace-id>",
+  "repo": "hasna/uptime",
+  "deploymentStatus": "preflighted-not-deployed",
+  "runtimeStore": {
+    "mode": "hosted-efs-sqlite",
+    "environmentVariable": "HASNA_UPTIME_HOSTED_SQLITE_DB",
+    "path": "/data/uptime/uptime.db",
+    "backup": "AWS Backup on encrypted EFS"
+  },
+  "awsInventory": {
+    "vpcId": "<target-vpc-id>",
+    "vpcCidr": "<target-vpc-cidr>",
+    "rdsInstanceObserved": "<optional-rds-instance-id>",
+    "rdsUsedByCurrentRuntime": false,
+    "ecrRepositoryObserved": false,
+    "route53HostedZoneObservedForHostname": false,
+    "acmCertificateObservedInRegion": false,
+    "dockerDaemonAccessibleFromOperatorMachine": false
+  },
+  "repoArtifacts": {
+    "terraform": "infra/aws",
+    "runtimeDockerfile": "Dockerfile",
+    "packageDockerfile": "Dockerfile.package",
+    "runbook": "docs/aws-deployment-runbook.md"
+  },
+  "remainingExternalPrerequisites": [
+    "Approved TLS/DNS path for the hosted Open Uptime hostname",
+    "Approved private application subnets",
+    "Terraform apply from the approved infrastructure source of truth",
+    "CodeBuild image-builder run after the npm package is published",
+    "Hosted auth/RBAC replacement for broad static hosted tokens before broad exposure"
+  ],
+  "lastUpdated": "YYYY-MM-DD"
+}

@@ -2,7 +2,6 @@
 .gitignore
 .project.json
 node_modules
-dist
 coverage
 *.tgz
 *.log

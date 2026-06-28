@@ -1,8 +1,8 @@
 # AWS Deployment Runbook
 
-This runbook is for the `hasna-xyz-infra` AWS account target. It is intentionally
-dry-run first: the local generator produces a plan and command list, but it does
-not call AWS or mutate infrastructure.
+This runbook is for a reviewed AWS account target. It is intentionally dry-run
+first: the local generator produces a plan and command list, but it does not
+call AWS or mutate infrastructure.
 
 ## Generate The Plan
 
@@ -11,16 +11,17 @@ uptime cloud plan --json > open-uptime-aws-plan.json
 uptime cloud spark01-config --probe-id prb_spark01 --env > spark01-uptime.env
 ```
 
-Defaults come from the current design inventory:
+Public package defaults are placeholders:
 
-- account/profile label: `hasna-xyz-infra`
+- account/profile label: `aws-profile`
 - region: `us-east-1`
-- VPC: `vpc-04c7f7abc1d3c3f56`
-- RDS instance: `hasna-xyz-infra-apps-prod-postgres`
-- hostname: `uptime.hasna.xyz`
-- workspace id: `wks_2tyysw05cwap`
+- VPC: `vpc-xxxxxxxx`
+- hosted data path: EFS-mounted SQLite at `/data/uptime/uptime.db`
+- hostname: `uptime.example.com`
+- workspace id: `workspace-id`
 
-Override these with CLI flags if the infra owner chooses a different value.
+Override these with CLI flags or private deployment evidence for the real
+account, hostname, workspace id, VPC id, secret refs, and repository names.
 
 The generated AWS plan currently returns `status: "blocked"` and
 `canApply: false`. The generated Spark01 config returns `status: "blocked"` and
@@ -36,15 +37,16 @@ write a sourceable env file with a placeholder probe identity.
 
 ## Preflight
 
-1. Locate the real `hasna-xyz-infra` infrastructure repository or create the
-   change in the approved owner repository.
+1. Locate the real infrastructure repository or create the change in the
+   approved owner repository.
 2. Confirm the AWS caller identity:
 
    ```bash
-   aws sts get-caller-identity --profile hasna-xyz-infra
+   aws sts get-caller-identity --profile <aws-profile>
    ```
 
-3. Confirm the target VPC and RDS instance still match the plan.
+3. Confirm the target VPC, private subnets, KMS key, and EFS/Backup plan inputs
+   still match the plan.
 4. Confirm Route53/edge ownership for the chosen hostname.
 5. Confirm the deployment role uses short-lived credentials or OIDC, not copied
    access keys.
@@ -55,11 +57,13 @@ The plan expects:
 
 - ECR repository for the Open Uptime image.
 - ECS/Fargate cluster with separate services for web, scheduler, public probe,
-  reporter, and one-off migrations.
+  reporter, and one-off migrations. In the current EFS SQLite bridge, only web
+  may be enabled and it must run at desired count `0` or `1`.
 - ALB, TLS certificate, target group, and security groups.
-- Existing private Postgres instance with dedicated Uptime roles or database.
+- Encrypted EFS file system, access point, mount targets, and AWS Backup plan
+  for `HASNA_UPTIME_HOSTED_SQLITE_DB=/data/uptime/uptime.db`.
 - S3 bucket for redacted browser evidence and generated report artifacts.
-- Secrets Manager or SSM refs for database, app env, probe config, and
+- Secrets Manager or SSM refs for app env, hosted token, probe config, and
   reporting channel refs.
 - CloudWatch log groups for every component plus initial web 5xx/unhealthy
   alarms. Scheduler-stall, stale-probe, and report-delivery alarms remain
@@ -91,10 +95,15 @@ routes are backed by cloud check jobs and cloud audit rows.
 ## Safety Rules
 
 - Do not deploy hosted mode with `HASNA_UPTIME_ALLOW_HOSTED_LOCAL_STORE=1`.
+- Do deploy hosted mode with `HASNA_UPTIME_HOSTED_SQLITE_DB` pointing at the EFS
+  mount path `/data/uptime/uptime.db`. Do not set `HASNA_UPTIME_DATABASE_URL`
+  until the async Postgres adapter exists.
 - Do not inline AWS keys, hosted tokens, Mailery keys, Open Logs tokens, database
   URLs, or probe private keys in task definitions. Use ECS `secrets.valueFrom`
-  refs such as `HASNA_UPTIME_DATABASE_URL` and `HASNA_UPTIME_HOSTED_TOKEN`.
+  refs such as `HASNA_UPTIME_HOSTED_TOKEN`.
 - Do not run public probe workers against private targets.
+- Do not enable scheduler, public-probe, reporter, or migration workers against
+  the EFS SQLite bridge; those services need Postgres/cloud leases first.
 - Do not expose dashboard/API routes without hosted auth and workspace checks.
 - Do not treat local SQLite, local project DBs, or Spark01 local state as cloud
   authority after cutover.
@@ -103,5 +112,6 @@ routes are backed by cloud check jobs and cloud audit rows.
 
 Before each service update, record the previous task definition ARN. Roll back
 by disabling scheduler/reporter work first, then restoring the previous web or
-worker task definition. RDS snapshot restore requires separate operator approval
-and an audit event.
+worker task definition. EFS backup restore requires separate operator approval,
+a selected recovery point, a replacement mount target/access point cutover, and
+an audit event.

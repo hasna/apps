@@ -8,6 +8,13 @@ The current release is local-first: Open Uptime stores SQLite under
 loopback use. Hosted cloud mode is a separate operating mode and must not be
 implemented as "sync the local SQLite database and expose it on the web".
 
+Current deployment bridge as of 2026-06-28: the deployable AWS runtime uses an
+explicit EFS-mounted SQLite database at `HASNA_UPTIME_HOSTED_SQLITE_DB` with AWS
+Backup. That is cloud-backed file storage for the first protected service
+deployment, not the final cloud source-of-truth design. The target state remains
+a first-class Postgres adapter with workspace-scoped migrations, leases,
+tombstones, and audit rows.
+
 ## Principles
 
 - Cloud-primary must mean an explicit cloud mode, not `hybrid` fallback.
@@ -29,8 +36,8 @@ implemented as "sync the local SQLite database and expose it on the web".
 
 | Surface | Cloud source of truth | Local role | Notes |
 | --- | --- | --- | --- |
-| Open Uptime | Dedicated `uptime` Postgres schema or database on the canonical Hasna XYZ apps RDS, plus object storage for browser evidence. | `~/.hasna/uptime/uptime.db` is local/dev fallback and migration source only. | Needs first-class Postgres store, migrations, distributed check leases, audit tables, and tombstones. |
-| Projects registry | `projects` database on the canonical Hasna XYZ apps RDS. | `~/.hasna/projects/projects.db` is cache/fallback. | Open Uptime project id is `wks_2tyysw05cwap`; link external service ids rather than duplicating project rows. |
+| Open Uptime | Dedicated `uptime` Postgres schema or database on the approved apps RDS, plus object storage for browser evidence. | `~/.hasna/uptime/uptime.db` is local/dev fallback and migration source only. | Needs first-class Postgres store, migrations, distributed check leases, audit tables, and tombstones. |
+| Projects registry | `projects` database on the approved apps RDS. | `~/.hasna/projects/projects.db` is cache/fallback. | Open Uptime project id is deployment-specific; link external service ids rather than duplicating project rows. |
 | Per-project stores | Cloud rows keyed by `workspace_id` and app namespace, with local cache at `$HASNA_PROJECTS_HOME/data/<workspace_id>/project.db`. | Existing `by-id/<workspace_id>/project.db` paths remain compatibility imports until migrated. | Stores todos links, canvases, JSON Render specs, loops, handoffs, mementos refs, notes refs, and knowledge refs. |
 | Project canvases | Project cloud store tables: canvases, nodes, edges, layout, render spec refs. | Local cache for offline inspection only. | Multiple canvases per project are allowed. React Flow is the editing surface; JSON Render specs are the view payload. |
 | Todos | Todos cloud database after conflict/tombstone fixes. | `~/.hasna/todos/todos.db` is cache. | Reuse the existing `open-uptime` todos project instead of creating a duplicate. Current unresolved conflicts must be reconciled before cutover. |
@@ -379,7 +386,7 @@ Canvas/render APIs must include:
 
 The preferred hosted runtime is:
 
-- canonical Hasna XYZ apps RDS with a dedicated Uptime database or schema,
+- approved apps RDS with a dedicated Uptime database or schema,
   least-privileged user, TLS, migrations, automated backups, PITR, deletion
   protection, and pre-cutover snapshots;
 - hardened S3 bucket for browser evidence and report artifacts, with KMS
@@ -392,17 +399,19 @@ The preferred hosted runtime is:
   plaintext secret values in task environment;
 - owner/project/environment tags, budget alarms, and a monthly cost estimate.
 
-EFS is not part of the target architecture unless a future requirement proves a
-shared filesystem is necessary. SQLite-on-EFS is not the cloud source of truth.
+Except for the current single-web-task deployment bridge documented above, EFS
+is not part of the target architecture unless a future requirement proves a
+shared filesystem is necessary. SQLite-on-EFS is not the final cloud source of
+truth and must not be expanded to scheduler/probe/reporter workers.
 
 Open Deployment can orchestrate or record deployment metadata only after its
 hosted mode is private or authenticated and its provider model stops storing raw
 secret values. It must not be exposed as a public upstream for Uptime.
 
-An infra change in `hasna-xyz-infra` must exist before live deployment. It must
-define the runtime resources, outputs consumed by Open Uptime/Open Deployment,
-backup/restore drills, CloudWatch alarms for ECS/API/RDS/S3/probe lag/job
-backlog/delivery failures, and rollback commands.
+An infra change in the approved infrastructure repository must exist before live
+deployment. It must define the runtime resources, outputs consumed by Open
+Uptime/Open Deployment, backup/restore drills, CloudWatch alarms for
+ECS/API/RDS/S3/probe lag/job backlog/delivery failures, and rollback commands.
 
 ## Current Blockers
 
