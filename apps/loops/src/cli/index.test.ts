@@ -2112,6 +2112,71 @@ describe("loops CLI", () => {
     expect(evidence).toContain("very long private task details");
   });
 
+  test("todos task drain derives project path from repository line in task descriptions", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-repo-line-"));
+    const repo = createGitRepo("loops-cli-event-drain-repo-line-repo-");
+    const binDir = join(dataDir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"$*\" == *\"ready\"* ]]; then printf '%s' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "if [[ \"$*\" == *\"task-lists\"* ]]; then printf '%s' \"$TODOS_TASK_LISTS_JSON\"; exit 0; fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const ready = [
+      {
+        id: "task-drain-repo-line",
+        project_id: "project-route",
+        title: "Route PR task with unstructured repo path",
+        description: `Fingerprint: github-pr:hasna/example#1\nRepository: ${repo}\nPR: https://github.com/hasna/example/pull/1`,
+        status: "pending",
+        task_list_id: "list-route",
+        tags: ["auto:route"],
+      },
+    ];
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        join(dataDir, "todos-store"),
+        "--task-list",
+        "route",
+        "--project-path-prefix",
+        repo,
+        "--tags",
+        "auto:route",
+        "--dry-run",
+        "--worktree-mode",
+        "off",
+      ],
+      undefined,
+      {
+        PATH: `${binDir}:/usr/bin:/bin`,
+        TODOS_TASK_LISTS_JSON: JSON.stringify([{ id: "list-route", slug: "route", name: "Route" }]),
+        TODOS_READY_JSON: JSON.stringify(ready),
+      },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.filteredCandidates).toBe(1);
+    expect(value.created).toBe(1);
+    expect(value.results[0].event.data.cwd).toBe(repo);
+    expect(value.results[0].event.data.project_path).toBe(repo);
+    expect(value.results[0].workflow.steps[0].target.cwd).toBe(repo);
+  });
+
   test("todos task drain parses large ready payloads without truncating JSON", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-large-ready-"));
     const binDir = join(dataDir, "bin");

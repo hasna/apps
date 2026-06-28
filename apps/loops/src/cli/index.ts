@@ -1167,17 +1167,24 @@ function taskProjectId(task: TodosReadyTask): string | undefined {
   return taskField(task, ["project_id", "projectId"]);
 }
 
+function taskDescriptionProjectPath(task: TodosReadyTask): string | undefined {
+  const text = taskField(task, ["description", "body"]);
+  const match = text?.match(/^\s*(?:Repository|Repo|Project path|Project|Working dir|Working directory):\s*(\/[^\r\n]+)/im);
+  return match?.[1]?.trim();
+}
+
 function taskProjectPath(task: TodosReadyTask): string | undefined {
   const metadata = objectField(task.metadata) ?? {};
   return taskField(task, ["working_dir", "workingDir", "project_path", "projectPath", "cwd"]) ??
-    taskEventField(metadata, ["working_dir", "workingDir", "project_path", "projectPath", "project_canonical_path", "cwd"]);
+    taskEventField(metadata, ["working_dir", "workingDir", "project_path", "projectPath", "project_canonical_path", "cwd"]) ??
+    taskDescriptionProjectPath(task);
 }
 
 function taskDrainEvent(task: TodosReadyTask): EventEnvelope {
   const taskId = taskField(task, ["id", "task_id", "taskId"]);
   if (!taskId) throw new Error("todos ready returned a task without an id");
   const metadata = objectField(task.metadata) ?? {};
-  const workingDir = taskField(task, ["working_dir", "workingDir", "project_path", "projectPath", "cwd"]);
+  const workingDir = taskProjectPath(task);
   const data: Record<string, unknown> = {
     ...task,
     id: taskId,
