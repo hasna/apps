@@ -220,6 +220,86 @@ export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer
   );
 
   server.registerTool(
+    "uptime_create_probe",
+    {
+      title: "Create a private probe identity",
+      description: "Create a local private probe identity and keypair, or register an externally managed public key.",
+      inputSchema: {
+        name: z.string(),
+        publicKeyPem: z.string(),
+        enabled: z.boolean().optional(),
+      },
+    },
+    async (args) => jsonResult(service.createProbe(args)),
+  );
+
+  server.registerTool(
+    "uptime_list_probes",
+    {
+      title: "List private probe identities",
+      description: "List local private probe identities.",
+      inputSchema: {
+        includeDisabled: z.boolean().optional(),
+      },
+    },
+    async (args) => jsonResult(service.listProbes({ includeDisabled: args.includeDisabled })),
+  );
+
+  server.registerTool(
+    "uptime_create_probe_job",
+    {
+      title: "Create a private probe check job",
+      description: "Create a local check job that a private probe can claim before submitting a signed result.",
+      inputSchema: {
+        monitorId: z.string(),
+        scheduleSlot: z.string(),
+        dueAt: z.string().optional(),
+      },
+    },
+    async (args) => jsonResult(service.createProbeCheckJob(args)),
+  );
+
+  server.registerTool(
+    "uptime_claim_probe_job",
+    {
+      title: "Claim a private probe check job",
+      description: "Claim a local private probe check job and receive a fencing token for signed result submission.",
+      inputSchema: {
+        jobId: z.string(),
+        probeId: z.string(),
+        leaseTtlMs: z.number().int().min(1000).optional(),
+      },
+    },
+    async (args) => jsonResult(service.claimProbeCheckJob(args)),
+  );
+
+  server.registerTool(
+    "uptime_submit_probe_result",
+    {
+      title: "Submit a signed private probe result",
+      description: "Submit a signed local private probe result for a claimed check job.",
+      inputSchema: {
+        probeId: z.string(),
+        jobId: z.string(),
+        scheduleSlot: z.string(),
+        fencingToken: z.string(),
+        monitorId: z.string(),
+        nonce: z.string(),
+        checkedAt: z.string(),
+        status: z.enum(["up", "down"]),
+        latencyMs: z.number().nonnegative().nullable(),
+        statusCode: z.number().int().min(100).max(599).nullable().optional(),
+        error: z.string().nullable().optional(),
+        attemptCount: z.number().int().min(1).max(20).optional(),
+        monitorRevision: z.number().int().min(1),
+        evidence: z.unknown().nullable().optional(),
+        signature: z.string(),
+      },
+    },
+    async (args) => jsonResult(service.submitProbeResult({ ...args, evidence: args.evidence as any })),
+  );
+
+  server.registerTool(
     "uptime_import_apply",
     {
       title: "Apply an uptime inventory import",

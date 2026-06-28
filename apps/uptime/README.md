@@ -31,6 +31,27 @@ uptime incidents
 uptime serve --port 3899 --check
 ```
 
+Private/local probes can submit signed results from another machine:
+
+```bash
+uptime probes create spark01 --private-key-file ./spark01-probe.key.pem
+uptime probes jobs create --monitor <monitor-id> --schedule-slot 2026-06-28T12:00:00Z
+uptime probes jobs claim <job-id> --probe <probe-id>
+uptime probes submit \
+  --probe <probe-id> \
+  --job <job-id> \
+  --schedule-slot 2026-06-28T12:00:00Z \
+  --fencing-token <claim-fencing-token> \
+  --monitor <monitor-id> \
+  --monitor-revision <claim-monitor-revision> \
+  --private-key-file ./spark01-probe.key.pem \
+  --status up
+```
+
+Generated probe private keys are written only to the explicit
+`--private-key-file` path. API and MCP probe enrollment require caller-managed
+public keys.
+
 The local dashboard and API bind to `127.0.0.1` by default:
 
 ```bash
@@ -70,7 +91,9 @@ claude mcp add --scope user uptime -- uptime-mcp
 ```
 
 The MCP server exposes monitor CRUD, check execution, summary, incident, and
-result tools, plus an `uptime_send_report` tool for report delivery.
+result tools, an `uptime_send_report` tool for report delivery, and local probe
+tools for public-key enrollment, job creation/claiming, and signed result
+submission.
 
 ## SDK
 
@@ -100,6 +123,8 @@ await uptime.sendReport({
 });
 ```
 
+Probe agents can import signing helpers from `@hasna/uptime/probes`.
+
 ## API
 
 Run `uptime serve` and use:
@@ -115,6 +140,17 @@ Run `uptime serve` and use:
 - `POST /api/monitors/:id/check`
 - `GET /api/incidents`
 - `GET /api/results?monitorId=<id>&limit=100`
+- `GET /api/probes`
+- `POST /api/probes`
+- `POST /api/probes/jobs`
+- `GET /api/probes/jobs/:id`
+- `POST /api/probes/jobs/:id/claim`
+- `POST /api/probes/results`
+
+Hosted `/api/v1/probes*` routes currently fail closed with `501` until cloud
+check jobs, workspace stores, and audit logging are implemented. Local job reads
+redact fencing tokens; the claim response is the only API response that returns
+the active fencing token.
 
 ## Scope
 
@@ -129,11 +165,14 @@ First release:
 - local dashboard/API
 - CLI, MCP, SDK, and tests
 - Optional report delivery through Open Mailery, Open Telephony, and Open Logs
+- Private/local probe identities, check jobs, signed submissions, and fenced
+  result recording for internal agents
 
 Non-goals for this first release:
 
 - Sentry-style exception tracing
 - hosted multi-tenant SaaS billing
+- hosted probe ingest before cloud check jobs and workspace-scoped storage
 - synthetic browser journeys
 - public incident pages
 - provider-owned delivery configuration; Open Uptime sends through existing

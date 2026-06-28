@@ -177,6 +177,9 @@ async function handleApiRoute(
     const input = await jsonBody(request);
     return json(await service.sendReport({ ...input, fetchImpl: options.fetchImpl }));
   }
+  if (hosted && apiPath.startsWith("/api/probes")) {
+    throw new ApiError("hosted probe APIs require cloud check_jobs, workspace stores, and audit logging", 501);
+  }
   if (request.method === "GET" && apiPath === "/api/monitors") {
     return json(service.listMonitors({ includeDisabled: url.searchParams.get("includeDisabled") === "true" }));
   }
@@ -196,6 +199,37 @@ async function handleApiRoute(
       monitorId: url.searchParams.get("monitorId") ?? undefined,
       limit: numericParam(url, "limit", 50),
     }));
+  }
+  if (request.method === "GET" && apiPath === "/api/probes") {
+    return json(service.listProbes({ includeDisabled: url.searchParams.get("includeDisabled") === "true" }));
+  }
+  if (request.method === "POST" && apiPath === "/api/probes") {
+    const input = await jsonBody(request);
+    if (!input.publicKeyPem) throw new ApiError("API probe creation requires publicKeyPem; generate keys in the probe agent or CLI", 400);
+    return json(service.createProbe(input), 201);
+  }
+  if (request.method === "POST" && apiPath === "/api/probes/jobs") {
+    return json(service.createProbeCheckJob(await jsonBody(request)), 201);
+  }
+  const probeJobMatch = apiPath.match(/^\/api\/probes\/jobs\/([^/]+)$/);
+  if (probeJobMatch) {
+    const jobId = decodeURIComponent(probeJobMatch[1]);
+    if (request.method === "GET") {
+      const job = service.getProbeCheckJob(jobId);
+      return job ? json({ ...job, fencingToken: null }) : json({ error: "not found" }, 404);
+    }
+  }
+  const probeJobClaimMatch = apiPath.match(/^\/api\/probes\/jobs\/([^/]+)\/claim$/);
+  if (request.method === "POST" && probeJobClaimMatch) {
+    const input = await jsonBody(request);
+    return json(service.claimProbeCheckJob({
+      jobId: decodeURIComponent(probeJobClaimMatch[1]),
+      probeId: input.probeId,
+      leaseTtlMs: input.leaseTtlMs,
+    }));
+  }
+  if (request.method === "POST" && apiPath === "/api/probes/results") {
+    return json(service.submitProbeResult(await jsonBody(request)), 201);
   }
   if (request.method === "POST" && apiPath === "/api/imports/preview") {
     return json(service.previewImport(await jsonBody(request)));
@@ -236,6 +270,7 @@ async function handleApiRoute(
 
 function hostedScopeFor(method: string, apiPath: string): HostedScope {
   if (method === "POST" && apiPath === "/api/report") return "uptime:report";
+  if (apiPath.startsWith("/api/probes")) return method === "GET" ? "uptime:read" : "uptime:probe";
   if (method === "POST" && (apiPath === "/api/check-all" || /\/check$/.test(apiPath))) return "uptime:probe";
   if (method === "GET") return "uptime:read";
   if (method === "POST" || method === "PATCH" || method === "DELETE") return "uptime:write";

@@ -17,6 +17,11 @@ test("MCP server registers uptime tools and JSON resources", async () => {
 
     expect(Object.keys(server._registeredTools)).toContain("uptime_summary");
     expect(Object.keys(server._registeredTools)).toContain("uptime_send_report");
+    expect(Object.keys(server._registeredTools)).toContain("uptime_create_probe");
+    expect(Object.keys(server._registeredTools)).toContain("uptime_list_probes");
+    expect(Object.keys(server._registeredTools)).toContain("uptime_create_probe_job");
+    expect(Object.keys(server._registeredTools)).toContain("uptime_claim_probe_job");
+    expect(Object.keys(server._registeredTools)).toContain("uptime_submit_probe_result");
     expect(Object.keys(server._registeredTools)).toContain("uptime_import_preview");
     expect(Object.keys(server._registeredTools)).toContain("uptime_import_apply");
     expect(Object.keys(server._registeredTools)).toContain("uptime_import_rollback");
@@ -42,6 +47,39 @@ test("MCP server registers uptime tools and JSON resources", async () => {
       source: "manual",
       records: [{ sourceId: "api", monitor: { name: "api", kind: "http", url: "https://example.com" } }],
     }).success).toBe(true);
+    expect(server._registeredTools.uptime_create_probe.inputSchema?.safeParse({
+      name: "spark01",
+      publicKeyPem: "-----BEGIN PUBLIC KEY-----\nabc\n-----END PUBLIC KEY-----",
+    }).success).toBe(true);
+    expect(server._registeredTools.uptime_create_probe.inputSchema?.safeParse({
+      name: "spark01",
+    }).success).toBe(false);
+    expect(server._registeredTools.uptime_submit_probe_result.inputSchema?.safeParse({
+      probeId: "prb_1",
+      jobId: "job_1",
+      scheduleSlot: "slot-1",
+      fencingToken: "fence_1",
+      monitorId: "mon_1",
+      nonce: "nonce-1",
+      checkedAt: new Date().toISOString(),
+      status: "up",
+      latencyMs: 10,
+      statusCode: 200,
+      attemptCount: 1,
+      monitorRevision: 1,
+      evidence: null,
+      signature: "sig",
+    }).success).toBe(true);
+    expect(server._registeredTools.uptime_submit_probe_result.inputSchema?.safeParse({
+      probeId: "prb_1",
+      monitorId: "mon_1",
+      nonce: "nonce-1",
+      checkedAt: new Date().toISOString(),
+      status: "up",
+      latencyMs: 10,
+      monitorRevision: 1,
+      signature: "sig",
+    }).success).toBe(false);
     service.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });

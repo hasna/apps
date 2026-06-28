@@ -23,6 +23,10 @@ import type {
   Monitor,
   MonitorSummary,
   MonitorStatus,
+  ProbeCheckJob,
+  ProbeCheckJobStatus,
+  ProbeIdentity,
+  ProbeSubmissionReceipt,
   UptimeSummary,
 } from "./types.js";
 
@@ -87,8 +91,9 @@ export interface SaveImportBatchInput {
   records: unknown[];
 }
 
-const REQUIRED_TABLES = ["schema_migrations", "monitors", "check_results", "incidents", "check_leases", "monitor_provenance", "import_batches"] as const;
-const CURRENT_SCHEMA_VERSION = "1";
+const REQUIRED_TABLES = ["schema_migrations", "monitors", "check_results", "incidents", "check_leases", "monitor_provenance", "import_batches", "probe_identities", "probe_check_jobs", "probe_submissions"] as const;
+const PROBE_TABLES = new Set<string>(["probe_identities", "probe_check_jobs", "probe_submissions"]);
+const CURRENT_SCHEMA_VERSION = "2";
 
 interface MonitorRow {
   id: string;
@@ -157,6 +162,43 @@ interface ImportBatchRow {
   created_at: string;
   rolled_back_at: string | null;
   records_json: string;
+}
+
+interface ProbeIdentityRow {
+  id: string;
+  name: string;
+  public_key_pem: string;
+  public_key_fingerprint: string;
+  enabled: number;
+  created_at: string;
+  last_seen_at: string | null;
+}
+
+interface ProbeSubmissionRow {
+  id: string;
+  probe_id: string;
+  job_id: string | null;
+  monitor_id: string;
+  check_result_id: string;
+  nonce: string;
+  checked_at: string;
+  submitted_at: string;
+}
+
+interface ProbeCheckJobRow {
+  id: string;
+  monitor_id: string;
+  monitor_revision: number | null;
+  schedule_slot: string;
+  status: ProbeCheckJobStatus;
+  claimed_by_probe_id: string | null;
+  fencing_token: string | null;
+  due_at: string;
+  claimed_at: string | null;
+  lease_expires_at: string | null;
+  submitted_result_id: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 interface NormalizedMonitorInput {
@@ -283,6 +325,50 @@ export class UptimeStore {
       )
     `);
     this.db.run(`
+      CREATE TABLE IF NOT EXISTS probe_identities (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        public_key_pem TEXT NOT NULL,
+        public_key_fingerprint TEXT NOT NULL UNIQUE,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        last_seen_at TEXT
+      )
+    `);
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS probe_submissions (
+        id TEXT PRIMARY KEY,
+        probe_id TEXT NOT NULL REFERENCES probe_identities(id) ON DELETE CASCADE,
+        job_id TEXT NOT NULL,
+        monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+        check_result_id TEXT NOT NULL REFERENCES check_results(id) ON DELETE CASCADE,
+        nonce TEXT NOT NULL,
+        checked_at TEXT NOT NULL,
+        submitted_at TEXT NOT NULL,
+        UNIQUE (probe_id, nonce)
+      )
+    `);
+    this.ensureColumn("probe_submissions", "job_id", "TEXT");
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS probe_check_jobs (
+        id TEXT PRIMARY KEY,
+        monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+        monitor_revision INTEGER NOT NULL DEFAULT 1,
+        schedule_slot TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'claimed', 'submitted', 'expired', 'cancelled')),
+        claimed_by_probe_id TEXT REFERENCES probe_identities(id) ON DELETE SET NULL,
+        fencing_token TEXT,
+        due_at TEXT NOT NULL,
+        claimed_at TEXT,
+        lease_expires_at TEXT,
+        submitted_result_id TEXT REFERENCES check_results(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (monitor_id, schedule_slot)
+      )
+    `);
+    this.ensureColumn("probe_check_jobs", "monitor_revision", "INTEGER NOT NULL DEFAULT 1");
+    this.db.run(`
       CREATE TABLE IF NOT EXISTS check_leases (
         monitor_id TEXT PRIMARY KEY REFERENCES monitors(id) ON DELETE CASCADE,
         owner TEXT NOT NULL,
@@ -304,6 +390,11 @@ export class UptimeStore {
     this.db.run("CREATE INDEX IF NOT EXISTS idx_incidents_monitor_status ON incidents(monitor_id, status)");
     this.db.run("CREATE INDEX IF NOT EXISTS idx_check_leases_until ON check_leases(leased_until)");
     this.db.run("CREATE INDEX IF NOT EXISTS idx_monitor_provenance_monitor ON monitor_provenance(monitor_id)");
+    this.db.run("CREATE INDEX IF NOT EXISTS idx_probe_jobs_status_due ON probe_check_jobs(status, due_at)");
+    this.db.run("CREATE INDEX IF NOT EXISTS idx_probe_jobs_probe_status ON probe_check_jobs(claimed_by_probe_id, status)");
+    this.db.run("CREATE INDEX IF NOT EXISTS idx_probe_submissions_probe_time ON probe_submissions(probe_id, submitted_at DESC)");
+    this.db.run("CREATE INDEX IF NOT EXISTS idx_probe_submissions_monitor_time ON probe_submissions(monitor_id, checked_at DESC)");
+    this.db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_probe_submissions_job ON probe_submissions(job_id) WHERE job_id IS NOT NULL AND job_id != ''");
   }
 
   backup(destinationPath?: string): UptimeBackup {
@@ -470,6 +561,240 @@ export class UptimeStore {
     return true;
   }
 
+  createProbeIdentity(input: { name: string; publicKeyPem: string; publicKeyFingerprint: string; enabled?: boolean }): ProbeIdentity {
+    const name = input.name.trim();
+    if (!name) throw new Error("Probe name is required");
+    rejectControlCharacters(name, "Probe name");
+    const now = new Date().toISOString();
+    const probe: ProbeIdentity = {
+      id: newId("prb"),
+      name,
+      publicKeyPem: input.publicKeyPem.trim(),
+      publicKeyFingerprint: input.publicKeyFingerprint,
+      enabled: input.enabled ?? true,
+      createdAt: now,
+      lastSeenAt: null,
+    };
+    if (!probe.publicKeyPem) throw new Error("Probe public key is required");
+    this.db
+      .query(
+        `INSERT INTO probe_identities (
+          id, name, public_key_pem, public_key_fingerprint, enabled, created_at, last_seen_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        probe.id,
+        probe.name,
+        probe.publicKeyPem,
+        probe.publicKeyFingerprint,
+        probe.enabled ? 1 : 0,
+        probe.createdAt,
+        probe.lastSeenAt,
+      );
+    return probe;
+  }
+
+  listProbeIdentities(options: { includeDisabled?: boolean } = {}): ProbeIdentity[] {
+    const rows = options.includeDisabled
+      ? this.db.query("SELECT * FROM probe_identities ORDER BY name ASC").all() as ProbeIdentityRow[]
+      : this.db.query("SELECT * FROM probe_identities WHERE enabled = 1 ORDER BY name ASC").all() as ProbeIdentityRow[];
+    return rows.map(probeIdentityFromRow);
+  }
+
+  getProbeIdentity(idOrName: string): ProbeIdentity | null {
+    const row = this.db
+      .query("SELECT * FROM probe_identities WHERE id = ? OR name = ?")
+      .get(idOrName, idOrName) as ProbeIdentityRow | null;
+    return row ? probeIdentityFromRow(row) : null;
+  }
+
+  updateProbeIdentity(idOrName: string, input: { enabled?: boolean; name?: string }): ProbeIdentity {
+    const current = this.getProbeIdentity(idOrName);
+    if (!current) throw new Error(`Probe not found: ${idOrName}`);
+    const name = input.name === undefined ? current.name : input.name.trim();
+    if (!name) throw new Error("Probe name is required");
+    rejectControlCharacters(name, "Probe name");
+    const enabled = input.enabled ?? current.enabled;
+    this.db
+      .query("UPDATE probe_identities SET name = ?, enabled = ? WHERE id = ?")
+      .run(name, enabled ? 1 : 0, current.id);
+    return this.getProbeIdentity(current.id)!;
+  }
+
+  touchProbeIdentity(idOrName: string, seenAt = new Date().toISOString()): void {
+    const probe = this.getProbeIdentity(idOrName);
+    if (!probe) throw new Error(`Probe not found: ${idOrName}`);
+    this.db.query("UPDATE probe_identities SET last_seen_at = ? WHERE id = ?").run(seenAt, probe.id);
+  }
+
+  createProbeCheckJob(input: { monitorId: string; scheduleSlot: string; dueAt?: string }): ProbeCheckJob {
+    const monitor = this.getMonitor(input.monitorId);
+    if (!monitor) throw new Error(`Monitor not found: ${input.monitorId}`);
+    if (!monitor.enabled) throw new Error(`Monitor is disabled: ${monitor.name}`);
+    const scheduleSlot = normalizeScheduleSlot(input.scheduleSlot);
+    const dueAt = input.dueAt ?? new Date().toISOString();
+    assertIsoTimestamp(dueAt, "Probe job dueAt");
+    const now = new Date().toISOString();
+    const existing = this.db
+      .query("SELECT * FROM probe_check_jobs WHERE monitor_id = ? AND schedule_slot = ?")
+      .get(monitor.id, scheduleSlot) as ProbeCheckJobRow | null;
+    if (existing) return probeCheckJobFromRow(existing);
+    const job: ProbeCheckJob = {
+      id: newId("job"),
+      monitorId: monitor.id,
+      monitorRevision: monitor.revision,
+      scheduleSlot,
+      status: "pending",
+      claimedByProbeId: null,
+      fencingToken: null,
+      dueAt,
+      claimedAt: null,
+      leaseExpiresAt: null,
+      submittedResultId: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.db
+      .query(
+        `INSERT INTO probe_check_jobs (
+          id, monitor_id, monitor_revision, schedule_slot, status, claimed_by_probe_id, fencing_token,
+          due_at, claimed_at, lease_expires_at, submitted_result_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        job.id,
+        job.monitorId,
+        job.monitorRevision,
+        job.scheduleSlot,
+        job.status,
+        job.claimedByProbeId,
+        job.fencingToken,
+        job.dueAt,
+        job.claimedAt,
+        job.leaseExpiresAt,
+        job.submittedResultId,
+        job.createdAt,
+        job.updatedAt,
+      );
+    return job;
+  }
+
+  getProbeCheckJob(id: string): ProbeCheckJob | null {
+    const row = this.db.query("SELECT * FROM probe_check_jobs WHERE id = ?").get(id) as ProbeCheckJobRow | null;
+    return row ? probeCheckJobFromRow(row) : null;
+  }
+
+  claimProbeCheckJob(input: { jobId: string; probeId: string; leaseTtlMs?: number }): ProbeCheckJob {
+    const tx = this.db.transaction(() => {
+      const probe = this.getProbeIdentity(input.probeId);
+      if (!probe) throw new Error(`Probe not found: ${input.probeId}`);
+      if (!probe.enabled) throw new Error(`Probe is disabled: ${probe.name}`);
+      const current = this.getProbeCheckJob(input.jobId);
+      if (!current) throw new Error(`Probe job not found: ${input.jobId}`);
+      const now = new Date();
+      const nowIso = now.toISOString();
+      if (current.status === "submitted") throw new Error("Probe job already submitted");
+      if (current.status === "cancelled") throw new Error("Probe job is cancelled");
+      if (current.dueAt > nowIso) throw new Error("Probe job is not due yet");
+      const leaseExpired = Boolean(current.leaseExpiresAt && current.leaseExpiresAt <= nowIso);
+      if (current.status === "claimed" && !leaseExpired && current.claimedByProbeId !== probe.id) {
+        throw new Error("Probe job already claimed by another probe");
+      }
+      if (current.status !== "pending" && current.status !== "claimed" && current.status !== "expired") {
+        throw new Error(`Probe job is not claimable: ${current.status}`);
+      }
+      const leaseExpiresAt = new Date(now.getTime() + Math.max(1_000, input.leaseTtlMs ?? 120_000)).toISOString();
+      const fencingToken = newId("fence");
+      const update = this.db
+        .query(
+          `UPDATE probe_check_jobs
+           SET status = 'claimed', claimed_by_probe_id = ?, fencing_token = ?, claimed_at = ?, lease_expires_at = ?, updated_at = ?
+           WHERE id = ?
+             AND submitted_result_id IS NULL
+             AND (
+               status IN ('pending', 'expired')
+               OR (status = 'claimed' AND (claimed_by_probe_id = ? OR lease_expires_at <= ?))
+             )`,
+        )
+        .run(probe.id, fencingToken, nowIso, leaseExpiresAt, nowIso, current.id, probe.id, nowIso);
+      if (statementChanges(update) !== 1) throw new Error("Probe job claim raced; retry");
+      this.touchProbeIdentity(probe.id, nowIso);
+      return this.getProbeCheckJob(current.id)!;
+    });
+    return tx();
+  }
+
+  completeProbeCheckJob(input: { jobId: string; probeId: string; fencingToken: string; checkResultId: string; submittedAt?: string }): ProbeCheckJob {
+    const job = this.getProbeCheckJob(input.jobId);
+    if (!job) throw new Error(`Probe job not found: ${input.jobId}`);
+    const submittedAt = input.submittedAt ?? new Date().toISOString();
+    if (job.status !== "claimed") throw new Error(`Probe job is not claimable for submission: ${job.status}`);
+    if (job.claimedByProbeId !== input.probeId) throw new Error("Probe job was claimed by another probe");
+    if (job.fencingToken !== input.fencingToken) throw new Error("Probe job fencing token is invalid");
+    if (!job.leaseExpiresAt || job.leaseExpiresAt <= submittedAt) {
+      this.expireProbeCheckJob(job.id, submittedAt);
+      throw new Error("Probe job lease expired");
+    }
+    const update = this.db
+      .query(
+        `UPDATE probe_check_jobs
+         SET status = 'submitted', submitted_result_id = ?, updated_at = ?
+         WHERE id = ?
+           AND status = 'claimed'
+           AND claimed_by_probe_id = ?
+           AND fencing_token = ?
+           AND lease_expires_at > ?
+           AND submitted_result_id IS NULL`,
+      )
+      .run(input.checkResultId, submittedAt, job.id, input.probeId, input.fencingToken, submittedAt);
+    if (statementChanges(update) !== 1) throw new Error("Probe job submission raced; retry");
+    return this.getProbeCheckJob(job.id)!;
+  }
+
+  private expireProbeCheckJob(jobId: string, updatedAt = new Date().toISOString()): void {
+    this.db
+      .query("UPDATE probe_check_jobs SET status = 'expired', updated_at = ? WHERE id = ? AND status != 'submitted'")
+      .run(updatedAt, jobId);
+  }
+
+  getProbeSubmission(probeId: string, nonce: string): ProbeSubmissionReceipt | null {
+    const row = this.db
+      .query("SELECT * FROM probe_submissions WHERE probe_id = ? AND nonce = ?")
+      .get(probeId, nonce) as ProbeSubmissionRow | null;
+    return row ? probeSubmissionFromRow(row) : null;
+  }
+
+  recordProbeSubmission(input: Omit<ProbeSubmissionReceipt, "id" | "submittedAt"> & { submittedAt?: string }): ProbeSubmissionReceipt {
+    const submittedAt = input.submittedAt ?? new Date().toISOString();
+    const receipt: ProbeSubmissionReceipt = {
+      id: newId("psb"),
+      probeId: input.probeId,
+      jobId: input.jobId,
+      monitorId: input.monitorId,
+      checkResultId: input.checkResultId,
+      nonce: input.nonce,
+      checkedAt: input.checkedAt,
+      submittedAt,
+    };
+    this.db
+      .query(
+        `INSERT INTO probe_submissions (
+          id, probe_id, job_id, monitor_id, check_result_id, nonce, checked_at, submitted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        receipt.id,
+        receipt.probeId,
+        receipt.jobId,
+        receipt.monitorId,
+        receipt.checkResultId,
+        receipt.nonce,
+        receipt.checkedAt,
+        receipt.submittedAt,
+      );
+    return receipt;
+  }
+
   acquireCheckLease(monitorId: string, owner: string, ttlMs: number): boolean {
     const now = new Date();
     const nowIso = now.toISOString();
@@ -549,6 +874,11 @@ export class UptimeStore {
     });
     tx();
     return result;
+  }
+
+  getCheckResult(id: string): CheckResult | null {
+    const row = this.db.query("SELECT * FROM check_results WHERE id = ?").get(id) as CheckResultRow | null;
+    return row ? checkResultFromRow(row) : null;
   }
 
   listResults(options: ListResultsOptions = {}): CheckResult[] {
@@ -817,8 +1147,10 @@ function verifyBackupFile(backupPath: string): UptimeBackupCheck {
       : (db
         .query("SELECT value FROM schema_migrations WHERE key = 'schema_version'")
         .get() as { value: string } | null)?.value ?? null;
+    const currentOk = missingTables.length === 0 && schemaVersion === CURRENT_SCHEMA_VERSION;
+    const restorableV1 = schemaVersion === "1" && missingTables.every((table) => PROBE_TABLES.has(table));
     return {
-      ok: integrity === "ok" && missingTables.length === 0 && schemaVersion === CURRENT_SCHEMA_VERSION,
+      ok: integrity === "ok" && (currentOk || restorableV1),
       backupPath,
       integrity,
       schemaVersion,
@@ -995,6 +1327,20 @@ function rejectControlCharacters(value: string, label: string): void {
   }
 }
 
+function normalizeScheduleSlot(value: string): string {
+  const slot = value.trim();
+  if (!slot) throw new Error("Probe job scheduleSlot is required");
+  if (slot.length > 128) throw new Error("Probe job scheduleSlot is too long");
+  rejectControlCharacters(slot, "Probe job scheduleSlot");
+  return slot;
+}
+
+function assertIsoTimestamp(value: string, label: string): void {
+  if (!Number.isFinite(Date.parse(value))) {
+    throw new Error(`${label} must be an ISO timestamp`);
+  }
+}
+
 function monitorFromRow(row: MonitorRow): Monitor {
   return {
     id: row.id,
@@ -1053,6 +1399,49 @@ function importBatchFromRow(row: ImportBatchRow): StoredImportBatch {
   };
 }
 
+function probeIdentityFromRow(row: ProbeIdentityRow): ProbeIdentity {
+  return {
+    id: row.id,
+    name: row.name,
+    publicKeyPem: row.public_key_pem,
+    publicKeyFingerprint: row.public_key_fingerprint,
+    enabled: Boolean(row.enabled),
+    createdAt: row.created_at,
+    lastSeenAt: row.last_seen_at,
+  };
+}
+
+function probeSubmissionFromRow(row: ProbeSubmissionRow): ProbeSubmissionReceipt {
+  return {
+    id: row.id,
+    probeId: row.probe_id,
+    jobId: row.job_id ?? "",
+    monitorId: row.monitor_id,
+    checkResultId: row.check_result_id,
+    nonce: row.nonce,
+    checkedAt: row.checked_at,
+    submittedAt: row.submitted_at,
+  };
+}
+
+function probeCheckJobFromRow(row: ProbeCheckJobRow): ProbeCheckJob {
+  return {
+    id: row.id,
+    monitorId: row.monitor_id,
+    monitorRevision: row.monitor_revision ?? 1,
+    scheduleSlot: row.schedule_slot,
+    status: row.status,
+    claimedByProbeId: row.claimed_by_probe_id,
+    fencingToken: row.fencing_token,
+    dueAt: row.due_at,
+    claimedAt: row.claimed_at,
+    leaseExpiresAt: row.lease_expires_at,
+    submittedResultId: row.submitted_result_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function parseEvidence(value: string | null): CheckEvidence | null {
   if (!value) return null;
   const parsed = parseJson(value);
@@ -1095,6 +1484,10 @@ function boundedInteger(value: number, label: string, min: number, max: number):
 function clampLimit(value: number): number {
   if (!Number.isFinite(value)) return 50;
   return Math.max(1, Math.min(Math.floor(value), MAX_RESULT_LIMIT));
+}
+
+function statementChanges(result: unknown): number {
+  return Number((result as { changes?: number } | null)?.changes ?? 0);
 }
 
 function round(value: number, places: number): number {

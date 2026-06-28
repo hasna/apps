@@ -4,6 +4,7 @@ export { runBrowserPageCheck, runMonitorCheck, runHttpCheck, runTcpCheck } from 
 export { createApiHandler, serveUptime } from "./api.js";
 export { applyImport, previewImport, rollbackImport } from "./imports.js";
 export { buildUptimeReport, sendUptimeReport } from "./report.js";
+export { generateProbeKeyPair, probePublicKeyFingerprint, probeResultSigningPayload, signProbeResult, verifyProbeResultSignature } from "./probes.js";
 export { uptimeHome, uptimeDbPath, uptimeHostedFallbackDbPath, ensureUptimeHome } from "./paths.js";
 export type {
   UptimeBackup,
@@ -51,10 +52,16 @@ export type {
   MonitorKind,
   MonitorStatus,
   MonitorSummary,
+  ProbeCheckJob,
+  ProbeCheckJobStatus,
+  ProbeIdentity,
+  ProbeResultSubmission,
+  ProbeSubmissionReceipt,
   SchedulerHandle,
   UpdateMonitorInput,
   UptimeSummary,
 } from "./types.js";
+export type { ProbeKeyPair, ProbeSigningInput } from "./probes.js";
 export type {
   BuildUptimeReportOptions,
   SendUptimeReportOptions,

@@ -6,6 +6,30 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-06-28
+
+### Added
+
+- Private/local probe identities, check jobs, fenced signed submissions, and
+  probe signing helpers exported from `@hasna/uptime/probes`.
+- CLI commands for `uptime probes create`, `uptime probes jobs create`,
+  `uptime probes jobs claim`, and `uptime probes submit`.
+- Local API and MCP probe surfaces for public-key enrollment, job
+  creation/claiming, and signed result submission.
+
+### Changed
+
+- Bumped the local SQLite schema to version 2 while keeping schema version 1
+  backups restorable when they are only missing the new probe tables.
+- Hosted probe ingest fails closed until cloud check jobs, workspace stores, and
+  audit logging are implemented.
+
+### Security
+
+- API and MCP probe enrollment require caller-managed public keys; generated
+  private keys are written only by the CLI to an explicit private-key file.
+- Probe job reads redact fencing tokens outside the claim response.
+
 ## [0.1.2] - 2026-06-28
 
 ### Fixed

@@ -70,6 +70,73 @@ export interface CheckAttemptResult {
   evidence?: CheckEvidence | null;
 }
 
+export interface ProbeIdentity {
+  id: string;
+  name: string;
+  publicKeyPem: string;
+  publicKeyFingerprint: string;
+  enabled: boolean;
+  createdAt: string;
+  lastSeenAt: string | null;
+}
+
+export interface CreateProbeInput {
+  name: string;
+  publicKeyPem?: string;
+  enabled?: boolean;
+}
+
+export interface CreateProbeResult extends ProbeIdentity {
+  privateKeyPem?: string;
+}
+
+export interface ProbeResultSubmission {
+  probeId: string;
+  jobId: string;
+  scheduleSlot: string;
+  fencingToken: string;
+  monitorId: string;
+  nonce: string;
+  checkedAt: string;
+  status: CheckStatus;
+  latencyMs: number | null;
+  statusCode?: number | null;
+  error?: string | null;
+  attemptCount?: number;
+  monitorRevision: number;
+  evidence?: CheckEvidence | null;
+  signature: string;
+}
+
+export interface ProbeSubmissionReceipt {
+  id: string;
+  probeId: string;
+  jobId: string;
+  monitorId: string;
+  checkResultId: string;
+  nonce: string;
+  checkedAt: string;
+  submittedAt: string;
+}
+
+export type ProbeCheckJobStatus = "pending" | "claimed" | "submitted" | "expired" | "cancelled";
+
+export interface ProbeCheckJob {
+  id: string;
+  monitorId: string;
+  monitorRevision: number;
+  scheduleSlot: string;
+  status: ProbeCheckJobStatus;
+  claimedByProbeId: string | null;
+  fencingToken: string | null;
+  dueAt: string;
+  claimedAt: string | null;
+  leaseExpiresAt: string | null;
+  submittedResultId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type CheckEvidence = BrowserPageEvidence;
 
 export interface BrowserPageEvidence {

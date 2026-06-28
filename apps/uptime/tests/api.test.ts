@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApiHandler, serveUptime } from "../src/api.js";
+import { generateProbeKeyPair, signProbeResult, type ProbeSigningInput } from "../src/probes.js";
 import { UptimeService } from "../src/service.js";
 
 const cleanup: string[] = [];
@@ -37,6 +38,69 @@ test("API creates monitors and returns summary", async () => {
   expect(create.status).toBe(201);
   expect(created.name).toBe("api");
   expect(body.totals.monitors).toBe(1);
+  service.close();
+});
+
+test("API accepts local signed probe jobs and submissions", async () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  const handler = createApiHandler(service);
+  const createMonitor = await handler(jsonRequest("http://127.0.0.1/api/monitors", "POST", {
+    name: "private-api",
+    kind: "http",
+    url: "https://example.com/health",
+  }));
+  const monitor = await createMonitor.json();
+  const keyPair = generateProbeKeyPair();
+  const missingKeyProbe = await handler(jsonRequest("http://127.0.0.1/api/probes", "POST", { name: "no-key" }));
+  const createProbe = await handler(jsonRequest("http://127.0.0.1/api/probes", "POST", {
+    name: "spark01",
+    publicKeyPem: keyPair.publicKeyPem,
+  }));
+  const probe = await createProbe.json();
+  const createJob = await handler(jsonRequest("http://127.0.0.1/api/probes/jobs", "POST", {
+    monitorId: monitor.id,
+    scheduleSlot: "api-slot-1",
+  }));
+  const job = await createJob.json();
+  const claimJob = await handler(jsonRequest(`http://127.0.0.1/api/probes/jobs/${job.id}/claim`, "POST", {
+    probeId: probe.id,
+  }));
+  const claimed = await claimJob.json();
+  const readJob = await handler(new Request(`http://127.0.0.1/api/probes/jobs/${job.id}`));
+  const readableJob = await readJob.json();
+  const unsigned: ProbeSigningInput = {
+    probeId: probe.id,
+    jobId: claimed.id,
+    scheduleSlot: claimed.scheduleSlot,
+    fencingToken: claimed.fencingToken,
+    monitorId: monitor.id,
+    nonce: "api-nonce-1",
+    checkedAt: new Date().toISOString(),
+    status: "up",
+    latencyMs: 23,
+    statusCode: 200,
+    error: null,
+    attemptCount: 1,
+    monitorRevision: monitor.revision,
+    evidence: null,
+  };
+  const submit = await handler(jsonRequest("http://127.0.0.1/api/probes/results", "POST", {
+    ...unsigned,
+    signature: signProbeResult(unsigned, keyPair.privateKeyPem),
+  }));
+  const body = await submit.json();
+
+  expect(createProbe.status).toBe(201);
+  expect(missingKeyProbe.status).toBe(400);
+  expect(probe.privateKeyPem).toBeUndefined();
+  expect(createJob.status).toBe(201);
+  expect(claimJob.status).toBe(200);
+  expect(readJob.status).toBe(200);
+  expect(readableJob.fencingToken).toBeNull();
+  expect(submit.status).toBe(201);
+  expect(body.result.status).toBe("up");
+  expect(body.receipt.jobId).toBe(claimed.id);
+  expect(service.getProbeCheckJob(claimed.id)?.status).toBe("submitted");
   service.close();
 });
 
@@ -199,6 +263,46 @@ test("hosted API blocks raw report delivery and inline checks", async () => {
   expect((await report.json()).error).toContain("channel refs");
   expect(checkAll.status).toBe(501);
   expect((await checkAll.json()).error).toContain("check_jobs");
+  service.close();
+});
+
+test("hosted API fails closed for probe identities, jobs, and result ingest", async () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const handler = createApiHandler(service, {
+    mode: "hosted",
+    hostedTokens: [
+      { token: "read", scopes: ["uptime:read"] },
+      { token: "probe", scopes: ["uptime:probe"] },
+    ],
+  });
+
+  const list = await handler(new Request("https://uptime.test/api/v1/probes", {
+    headers: { authorization: "Bearer read" },
+  }));
+  const create = await handler(jsonRequest(
+    "https://uptime.test/api/v1/probes",
+    "POST",
+    { name: "spark01" },
+    { origin: "https://uptime.test", authorization: "Bearer probe" },
+  ));
+  const job = await handler(jsonRequest(
+    "https://uptime.test/api/v1/probes/jobs",
+    "POST",
+    { monitorId: "mon_missing", scheduleSlot: "slot-1" },
+    { origin: "https://uptime.test", authorization: "Bearer probe" },
+  ));
+  const result = await handler(jsonRequest(
+    "https://uptime.test/api/v1/probes/results",
+    "POST",
+    {},
+    { origin: "https://uptime.test", authorization: "Bearer probe" },
+  ));
+
+  expect(list.status).toBe(501);
+  expect(create.status).toBe(501);
+  expect(job.status).toBe(501);
+  expect(result.status).toBe(501);
+  expect((await result.json()).error).toContain("cloud check_jobs");
   service.close();
 });
 

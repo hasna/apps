@@ -1,15 +1,17 @@
 #!/usr/bin/env bun
 import { Command, Option } from "commander";
 import chalk from "chalk";
-import { existsSync, readFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { UptimeService } from "../service.js";
 import { UptimeStore } from "../store.js";
 import { ensureUptimeHome, uptimeDbPath, uptimeHome } from "../paths.js";
 import { packageVersion } from "../version.js";
 import { serveUptime } from "../api.js";
+import { generateProbeKeyPair, signProbeResult } from "../probes.js";
 import type { ImportSource } from "../imports.js";
 import type { SendUptimeReportOptions, UptimeReportDelivery } from "../report.js";
-import type { CreateMonitorInput, Monitor, UpdateMonitorInput, UptimeSummary } from "../types.js";
+import type { CreateMonitorInput, Monitor, ProbeResultSubmission, UpdateMonitorInput, UptimeSummary } from "../types.js";
 
 const program = new Command();
 
@@ -407,6 +409,163 @@ imports
     }
   });
 
+const probes = program
+  .command("probes")
+  .description("Manage private probe identities and signed probe result submissions");
+
+probes
+  .command("create <name>")
+  .description("Create a private probe identity; generates an Ed25519 keypair unless --public-key-file is provided")
+  .option("--public-key-file <path>", "PEM public key file for an externally managed probe key")
+  .option("--private-key-file <path>", "where to write a generated PEM private key; required unless --public-key-file is used")
+  .option("--disabled", "create the probe disabled")
+  .option("-j, --json", "print JSON")
+  .action((name, opts) => {
+    let generatedPrivateKeyFile: string | undefined;
+    let svc: UptimeService | undefined;
+    try {
+      if (opts.publicKeyFile && opts.privateKeyFile) throw new Error("Choose either --public-key-file or --private-key-file, not both");
+      if (!opts.publicKeyFile && !opts.privateKeyFile) throw new Error("generated probe keys require --private-key-file");
+      const generatedKeyPair = opts.publicKeyFile ? undefined : generateProbeKeyPair();
+      if (generatedKeyPair) {
+        writeFileSync(opts.privateKeyFile, generatedKeyPair.privateKeyPem, { mode: 0o600, flag: "wx" });
+        generatedPrivateKeyFile = opts.privateKeyFile;
+      }
+      svc = service();
+      const probe = svc.createProbe({
+        name,
+        publicKeyPem: opts.publicKeyFile ? readFileSync(opts.publicKeyFile, "utf8") : generatedKeyPair?.publicKeyPem,
+        enabled: opts.disabled ? false : true,
+      });
+      svc.close();
+      svc = undefined;
+      const output = generatedPrivateKeyFile
+        ? { ...probe, privateKeyFile: generatedPrivateKeyFile }
+        : probe;
+      print(output, `Created probe ${probe.name} (${probe.id})`, opts);
+    } catch (error) {
+      svc?.close();
+      if (generatedPrivateKeyFile) {
+        try {
+          unlinkSync(generatedPrivateKeyFile);
+        } catch {
+          // Best-effort cleanup; the original create error is more useful.
+        }
+      }
+      fail(error);
+    }
+  });
+
+probes
+  .command("list")
+  .description("List private probe identities")
+  .option("--all", "include disabled probes")
+  .option("-j, --json", "print JSON")
+  .action((opts) => {
+    try {
+      const svc = service();
+      const items = svc.listProbes({ includeDisabled: opts.all });
+      svc.close();
+      print(items, items.length ? items.map((item) => `${item.enabled ? "enabled " : "disabled"} ${item.id} ${sanitizeField(item.name)} ${item.lastSeenAt ?? "-"}`).join("\n") : "No probes", opts);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+const probeJobs = probes
+  .command("jobs")
+  .description("Create and claim private probe check jobs");
+
+probeJobs
+  .command("create")
+  .description("Create a probe check job for one monitor and schedule slot")
+  .requiredOption("--monitor <id>", "monitor id")
+  .requiredOption("--schedule-slot <slot>", "unique schedule slot for this monitor")
+  .option("--due-at <iso>", "when the job is due", new Date().toISOString())
+  .option("-j, --json", "print JSON")
+  .action((opts) => {
+    try {
+      const svc = service();
+      const job = svc.createProbeCheckJob({
+        monitorId: opts.monitor,
+        scheduleSlot: opts.scheduleSlot,
+        dueAt: opts.dueAt,
+      });
+      svc.close();
+      print(job, `Created probe job ${job.id} for ${job.monitorId}`, opts);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+probeJobs
+  .command("claim <job-id>")
+  .description("Claim a probe check job and receive its fencing token")
+  .requiredOption("--probe <id>", "probe id")
+  .option("--lease-ms <ms>", "lease duration in milliseconds", parseInteger, 120_000)
+  .option("-j, --json", "print JSON")
+  .action((jobId, opts) => {
+    try {
+      const svc = service();
+      const job = svc.claimProbeCheckJob({
+        jobId,
+        probeId: opts.probe,
+        leaseTtlMs: opts.leaseMs,
+      });
+      svc.close();
+      print(job, `Claimed probe job ${job.id}`, opts);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+probes
+  .command("submit")
+  .description("Submit a signed probe result locally or to a remote Open Uptime API")
+  .requiredOption("--probe <id>", "probe id")
+  .requiredOption("--job <id>", "claimed probe job id")
+  .requiredOption("--schedule-slot <slot>", "schedule slot from the claimed job")
+  .requiredOption("--fencing-token <token>", "fencing token from the claimed job")
+  .requiredOption("--monitor <id>", "monitor id")
+  .requiredOption("--private-key-file <path>", "PEM private key file used to sign the result")
+  .addOption(new Option("--status <status>", "probe result status").choices(["up", "down"]).makeOptionMandatory())
+  .option("--nonce <nonce>", "unique submission nonce")
+  .option("--checked-at <iso>", "check timestamp", new Date().toISOString())
+  .option("--latency <ms>", "latency in milliseconds", parseNumber)
+  .option("--status-code <status>", "HTTP status code", parseInteger)
+  .option("--error <message>", "failure message")
+  .option("--attempts <count>", "attempt count", parseInteger, 1)
+  .requiredOption("--monitor-revision <revision>", "monitor revision observed by the probe", parseInteger)
+  .option("--api-url <url>", "remote Open Uptime base URL; submits to /api/probes/results unless the URL already ends in /api or /api/v1")
+  .option("--token <token>", "Bearer token for the remote hosted API")
+  .option("-j, --json", "print JSON")
+  .action(async (opts) => {
+    try {
+      const submission = buildProbeSubmission(opts);
+      if (opts.apiUrl) {
+        const response = await fetch(probeSubmitUrl(opts.apiUrl), {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            accept: "application/json",
+            ...(opts.token ? { authorization: `Bearer ${opts.token}` } : {}),
+          },
+          body: JSON.stringify(submission),
+        });
+        const body = await response.json();
+        print(body, response.ok ? `Submitted probe result for ${submission.monitorId}` : JSON.stringify(body), opts);
+        if (!response.ok) process.exit(1);
+        return;
+      }
+      const svc = service();
+      const result = svc.submitProbeResult(submission);
+      svc.close();
+      print(result, `Submitted probe result for ${submission.monitorId}`, opts);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
 program
   .command("backup [path]")
   .description("Create and verify a local SQLite backup")
@@ -480,6 +639,57 @@ function parseInteger(value: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed)) throw new Error(`Expected integer, got ${value}`);
   return parsed;
+}
+
+function parseNumber(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) throw new Error(`Expected number, got ${value}`);
+  return parsed;
+}
+
+function buildProbeSubmission(opts: {
+  probe: string;
+  job: string;
+  scheduleSlot: string;
+  fencingToken: string;
+  monitor: string;
+  privateKeyFile: string;
+  status: "up" | "down";
+  nonce?: string;
+  checkedAt: string;
+  latency?: number;
+  statusCode?: number;
+  error?: string;
+  attempts?: number;
+  monitorRevision: number;
+}): ProbeResultSubmission {
+  const input = {
+    probeId: opts.probe,
+    jobId: opts.job,
+    scheduleSlot: opts.scheduleSlot,
+    fencingToken: opts.fencingToken,
+    monitorId: opts.monitor,
+    nonce: opts.nonce ?? `cli_${randomUUID()}`,
+    checkedAt: opts.checkedAt,
+    status: opts.status,
+    latencyMs: opts.latency ?? null,
+    statusCode: opts.statusCode,
+    error: opts.error,
+    attemptCount: opts.attempts,
+    monitorRevision: opts.monitorRevision,
+    evidence: null,
+  };
+  return {
+    ...input,
+    signature: signProbeResult(input, readFileSync(opts.privateKeyFile, "utf8")),
+  };
+}
+
+function probeSubmitUrl(apiUrl: string): string {
+  const base = apiUrl.replace(/\/+$/, "");
+  if (/\/api\/v1$/.test(base)) return `${base}/probes/results`;
+  if (/\/api$/.test(base)) return `${base}/probes/results`;
+  return `${base}/api/probes/results`;
 }
 
 function renderMonitors(monitors: Monitor[]): string {

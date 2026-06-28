@@ -1131,13 +1131,42 @@ test("local backup verify and restore round trip preserves data", async () => {
   first.close();
 
   expect(backup.bytes).toBeGreaterThan(0);
-  expect(check).toMatchObject({ ok: true, integrity: "ok", schemaVersion: "1", monitors: 1, results: 1, incidents: 1 });
+  expect(check).toMatchObject({ ok: true, integrity: "ok", schemaVersion: "2", monitors: 1, results: 1, incidents: 1 });
 
   UptimeStore.restoreBackup(backup.backupPath, restorePath);
   const restored = new UptimeService({ dbPath: restorePath });
   expect(restored.listMonitors({ includeDisabled: true })).toHaveLength(1);
   expect(restored.listResults()).toHaveLength(1);
   expect(restored.listIncidents({ status: "open" })).toHaveLength(1);
+  restored.close();
+});
+
+test("schema v1 backups missing only probe tables remain restorable", () => {
+  const legacyPath = tempDb();
+  const restorePath = join(mkdtempSync(join(tmpdir(), "open-uptime-v1-restore-")), "restored.db");
+  cleanup.push(restorePath.replace(/\/restored\.db$/, ""));
+  const source = new UptimeService({ dbPath: legacyPath });
+  source.createMonitor({ name: "legacy", kind: "http", url: "https://example.com" });
+  source.close();
+
+  const db = new Database(legacyPath);
+  db.run("PRAGMA foreign_keys = OFF");
+  db.run("DROP TABLE probe_submissions");
+  db.run("DROP TABLE probe_check_jobs");
+  db.run("DROP TABLE probe_identities");
+  db.query("UPDATE schema_migrations SET value = '1' WHERE key = 'schema_version'").run();
+  db.run("PRAGMA foreign_keys = ON");
+  db.close();
+
+  const check = UptimeStore.verifyBackup(legacyPath);
+  expect(check).toMatchObject({ ok: true, integrity: "ok", schemaVersion: "1", monitors: 1 });
+  expect(check.missingTables.sort()).toEqual(["probe_check_jobs", "probe_identities", "probe_submissions"].sort());
+
+  UptimeStore.restoreBackup(legacyPath, restorePath);
+  const restored = new UptimeService({ dbPath: restorePath });
+  expect(restored.listMonitors({ includeDisabled: true })).toHaveLength(1);
+  expect(restored.createProbe({ name: "post-restore" }).publicKeyFingerprint).toHaveLength(64);
+  expect(restored.verifyBackup(restorePath).schemaVersion).toBe("2");
   restored.close();
 });
 
