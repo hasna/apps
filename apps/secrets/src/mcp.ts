@@ -1,9 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { registerCloudTools } from "@hasna/cloud";
 import { realpathSync } from "node:fs";
-import { homedir } from "node:os";
-import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import {
   STORAGE_TABLES,
@@ -32,7 +30,6 @@ import {
   registerUser,
   listUsers,
 } from "./store.js";
-import { PG_MIGRATIONS } from "./pg-migrations.js";
 
 const SECRET_TYPES = ["api_key", "password", "token", "credential", "other"] as const;
 const VAULT_ITEM_KINDS = ["login", "address", "identity", "payment_card", "secure_note", "api_key", "custom"] as const;
@@ -341,8 +338,6 @@ export function buildServer(): McpServer {
     }
   );
 
-  const vaultPath = process.env.HASNA_SECRETS_DB_PATH ?? process.env.OPEN_SECRETS_DB ?? join(homedir(), ".hasna", "secrets", "vault.db");
-  registerCloudTools(server, "secrets", { migrations: PG_MIGRATIONS, dbPath: vaultPath });
   return server;
 }
 
