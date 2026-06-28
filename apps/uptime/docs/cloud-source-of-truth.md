@@ -436,10 +436,11 @@ ECS/API/RDS/S3/probe lag/job backlog/delivery failures, and rollback commands.
 - Open Uptime is not registered in `@hasna/cloud` known service lists.
 - A private Hasna AWS bridge now has zero-count runtime resources, including
   ECR, dormant ECS services, ALB, CloudFront default-domain edge, logs, alarms,
-  EFS, Backup, and Secrets Manager containers. It is not live: services remain
-  at desired count `0`, secret values are not populated, and live scale-up is
-  still blocked by origin binding, smoke tests, alarm actions, budget
-  recipients, and restore evidence.
+  EFS, Backup, and Secrets Manager containers. The public Terraform module now
+  defines explicit ECS container health checks for every task definition. It is
+  not live: services remain at desired count `0`, secret values are not
+  populated, and live scale-up is still blocked by origin binding, smoke tests,
+  alarm actions, budget recipients, and restore evidence.
 - Projects per-project cloud stores do not exist yet; current local
   `project.db` stores are not enough for cloud-backed canvases or JSON Render.
 - Browser/page monitoring lacks the artifact, redaction, retention, and storage

@@ -71,6 +71,12 @@ Keep this disabled when private endpoints are the approved egress path. Runtime
 scale-up still requires ECS task evidence for image pull, secret injection, log
 delivery, S3 access, and EFS mount behavior.
 
+Every ECS task definition includes an explicit container health check. The web
+task checks `GET /health` through Bun's built-in `fetch`; disabled non-web roles
+currently run a hosted-environment sanity check so scheduler, public-probe,
+reporter, and migration tasks do not start from empty ECS health semantics when
+their long-running workers are later enabled.
+
 Interface endpoint private DNS is VPC-wide. In shared VPCs, either keep endpoint
 creation in the approved networking root, or pass
 `additional_vpc_endpoint_source_security_group_ids` for every workload that must

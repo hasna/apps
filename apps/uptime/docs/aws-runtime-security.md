@@ -427,7 +427,6 @@ required before browser evidence or public probe scale-out.
 
 ## Implementation Blockers
 
-- No checked-out infra owner repo was found during design.
 - A private Hasna AWS bridge now has zero-count runtime resources, including
   ECR, dormant ECS services, ALB, CloudFront default-domain distribution,
   evidence bucket, encrypted logs, Backup, EFS, and service secret containers.
@@ -456,6 +455,9 @@ required before browser evidence or public probe scale-out.
 - Final cloud-primary runtime state is Postgres plus S3 artifacts; the current
   EFS SQLite bridge is explicitly temporary and not the target source of truth.
 - ECS task definitions use secret refs, not plaintext secret values.
+- ECS task definitions include explicit container health checks: web checks
+  `/health`, while disabled non-web roles use a hosted-environment sanity check
+  until their long-running worker commands are implemented.
 - Public probes cannot reach denied target classes; private monitors require
   private probes and approved inventory refs.
 - Backups, restore drill, rollback sequence, alarms, and cost estimate are

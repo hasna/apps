@@ -151,7 +151,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
   const image = clean(options.image, `${imageRepositoryUri}@sha256:<image-digest>`);
   const evidenceBucket = clean(options.evidenceBucket, `hasna-${stage}-${prefix}-evidence`);
   const hostedSqliteDbPath = clean(options.hostedSqliteDbPath, DEFAULT_HOSTED_SQLITE_DB);
-  const runtimePackageVersion = clean(options.runtimePackageVersion, "0.1.17");
+  const runtimePackageVersion = clean(options.runtimePackageVersion, "0.1.18");
   const protectedAccessMode = options.protectedAccessMode ?? DEFAULT_PROTECTED_ACCESS_MODE;
   const protectedAccessUrl = protectedAccessMode === "cloudfront_default_domain" ? "https://<cloudfront-domain>" : `https://${hostname}`;
   const cluster = `${prefix}-${stage}`;
@@ -419,7 +419,7 @@ function servicePlan(
     taskRole: `${name}-task-role`,
     executionRole: `${prefix}-${stage}-execution-role`,
     logGroup: `/ecs/${name}`,
-    healthCommand: role === "web" ? "GET /health" : undefined,
+    healthCommand: role === "web" ? "GET /health" : "hosted environment sanity check",
     environment: {
       HASNA_UPTIME_IMAGE: image,
       ...environment,

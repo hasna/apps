@@ -80,6 +80,12 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(main).toContain("aws_s3_bucket_lifecycle_configuration");
   expect(main).toContain("DenyInsecureTransport");
   expect(main).toContain("deployment_circuit_breaker");
+  expect(main).toContain("service_health_checks");
+  expect(main).toContain("healthCheck = local.service_health_checks[each.key]");
+  expect(main).toContain("fetch('http://127.0.0.1:${local.container_port}/health')");
+  for (const component of ["scheduler", "public-probe", "reporter", "migration"]) {
+    expect(main).toContain(`HASNA_UPTIME_COMPONENT === '${component}'`);
+  }
   expect(main).toContain('resource "aws_cloudwatch_metric_alarm" "web_5xx"');
   expect(main).toContain('resource "aws_cloudwatch_metric_alarm" "web_unhealthy"');
   expect(outputs).toContain('output "log_group_names"');
@@ -126,7 +132,7 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(variables).toContain("web            = 0");
   expect(tfvars).toContain("container_image");
   expect(tfvars).toContain('protected_access_mode    = "cloudfront_default_domain"');
-  expect(tfvars).toContain('runtime_package_version  = "0.1.17"');
+  expect(tfvars).toContain('runtime_package_version  = "0.1.18"');
   expect(tfvars).toContain('project_name             = "open-uptime"');
   expect(tfvars).toContain("monthly_budget_limit_usd");
   expect(tfvars).toContain("private_route_table_ids");

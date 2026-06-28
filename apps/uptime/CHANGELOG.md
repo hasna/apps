@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.18] - 2026-06-28
+
+### Changed
+
+- Added explicit ECS container health checks to the AWS Terraform module task
+  definitions. The web task checks `/health`, while disabled non-web roles use
+  a hosted-environment sanity check until their worker entrypoints are enabled.
+- Updated cloud planning and AWS deployment docs to keep the zero-count
+  deployment status clear while the private root is repinned and verified.
+
 ## [0.1.17] - 2026-06-28
 
 ### Fixed

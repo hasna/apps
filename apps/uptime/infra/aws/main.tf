@@ -79,6 +79,43 @@ locals {
     : ["arn:${data.aws_partition.current.partition}:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/${local.prefix}/no-ssm-refs-configured"]
   )
   service_log_group_arns = [for group in aws_cloudwatch_log_group.service : "${group.arn}:*"]
+  service_health_checks = {
+    web = {
+      command     = ["CMD-SHELL", "bun -e \"const r = await fetch('http://127.0.0.1:${local.container_port}/health'); process.exit(r.ok ? 0 : 1)\""]
+      interval    = 30
+      timeout     = 5
+      retries     = 3
+      startPeriod = 30
+    }
+    scheduler = {
+      command     = ["CMD-SHELL", "bun -e \"process.exit(process.env.HASNA_UPTIME_MODE === 'hosted' && process.env.HASNA_UPTIME_COMPONENT === 'scheduler' ? 0 : 1)\""]
+      interval    = 30
+      timeout     = 5
+      retries     = 3
+      startPeriod = 30
+    }
+    "public-probe" = {
+      command     = ["CMD-SHELL", "bun -e \"process.exit(process.env.HASNA_UPTIME_MODE === 'hosted' && process.env.HASNA_UPTIME_COMPONENT === 'public-probe' ? 0 : 1)\""]
+      interval    = 30
+      timeout     = 5
+      retries     = 3
+      startPeriod = 30
+    }
+    reporter = {
+      command     = ["CMD-SHELL", "bun -e \"process.exit(process.env.HASNA_UPTIME_MODE === 'hosted' && process.env.HASNA_UPTIME_COMPONENT === 'reporter' ? 0 : 1)\""]
+      interval    = 30
+      timeout     = 5
+      retries     = 3
+      startPeriod = 30
+    }
+    migration = {
+      command     = ["CMD-SHELL", "bun -e \"process.exit(process.env.HASNA_UPTIME_MODE === 'hosted' && process.env.HASNA_UPTIME_COMPONENT === 'migration' ? 0 : 1)\""]
+      interval    = 30
+      timeout     = 5
+      retries     = 3
+      startPeriod = 30
+    }
+  }
 }
 
 data "aws_vpc" "target" {
@@ -1090,6 +1127,7 @@ resource "aws_ecs_task_definition" "service" {
           readOnly      = false
         }
       ] : []
+      healthCheck = local.service_health_checks[each.key]
       secrets = [
         for name, value_from in each.value.secrets : {
           name      = name
