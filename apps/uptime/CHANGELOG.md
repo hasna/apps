@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-06-28
+
+### Fixed
+
+- Republished with npm-compatible metadata so the registry package page receives
+  the README content.
+
 ## [0.1.1] - 2026-06-28
 
 ### Added
