@@ -42,6 +42,7 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   const outputs = read("infra/aws/outputs.tf");
   const variables = read("infra/aws/variables.tf");
   const tfvars = read("infra/aws/terraform.tfvars.example");
+  const awsRunbook = read("docs/aws-deployment-runbook.md");
   const packageJson = JSON.parse(read("package.json")) as { files?: string[] };
   const deploymentMetadataExample = read("docs/deployment-metadata.example.json");
   const combined = [main, variables, tfvars].join("\n");
@@ -88,6 +89,13 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(main).not.toContain("HASNA_UPTIME_DATABASE_URL");
   expect(main).toMatch(/efs_enabled_services\s+= toset\(\["web"\]\)/);
   expect(main).toContain('resource "aws_iam_role_policy" "execution_secrets"');
+  expect(main).toContain("kms:ViaService");
+  expect(main).toContain("secretsmanager.${var.region}.amazonaws.com");
+  expect(main).toContain("ssm.${var.region}.amazonaws.com");
+  expect(main).toContain("kms:EncryptionContext:SecretARN");
+  expect(main).toContain("kms:EncryptionContext:PARAMETER_ARN");
+  expect(main).toContain("s3.${var.region}.amazonaws.com");
+  expect(main).toContain("kms:EncryptionContext:aws:s3:arn");
   expect(main).toContain('resource "aws_security_group" "worker"');
   expect(main).toContain('key != "web" && key != "migration"');
   expect(main).toContain('each.key == "public-probe" ? ["0.0.0.0/0"] : [data.aws_vpc.target.cidr_block]');
@@ -130,6 +138,7 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(main).toContain("service_health_checks");
   expect(main).toContain("healthCheck = local.service_health_checks[each.key]");
   expect(main).toContain("fetch('http://127.0.0.1:${local.container_port}/health')");
+  expect(main).toContain("depends_on = [aws_lb_listener.https, aws_lb_listener.http_cloudfront, aws_lb_listener_rule.http_cloudfront_origin_verify, aws_lb_listener_rule.https_cloudfront_origin_verify, aws_efs_mount_target.data]");
   for (const component of ["scheduler", "public-probe", "reporter", "migration"]) {
     expect(main).toContain(`"cloud", "workers", "run", "--role", "${component}"`);
     expect(main).toContain(`cloud workers preflight --role ${component} --healthcheck --json`);
@@ -146,7 +155,12 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(outputs).toContain('output "cloudfront_origin_verify_header_name"');
   expect(outputs).toContain('output "cloudfront_origin_protocol_policy"');
   expect(outputs).toContain('output "cloudfront_origin_domain_name"');
+  expect(outputs).toContain('output "cloudfront_distribution_id"');
+  expect(outputs).toContain('output "alb_security_group_id"');
+  expect(outputs).toContain('output "alb_listener_arns"');
+  expect(outputs).toContain('output "web_target_group_arn"');
   expect(outputs).not.toContain('output "cloudfront_origin_verify_header_value"');
+  expect(outputs).not.toContain("cloudfront_origin_verify_header_value");
   expect(outputs).toContain("var.hosted_token_secret_arn");
   expect(outputs).toContain("aws_cloudwatch_log_group.service");
   expect(outputs).toContain("aws_cloudwatch_metric_alarm.web_5xx.alarm_name");
@@ -191,7 +205,7 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(tfvars).toContain("enable_cloudfront_origin_verify_header");
   expect(tfvars).toContain("cloudfront_origin_verify_header_name");
   expect(tfvars).toContain("cloudfront_origin_verify_header_value  = null");
-  expect(tfvars).toContain('runtime_package_version   = "0.1.27"');
+  expect(tfvars).toContain('runtime_package_version   = "0.1.28"');
   expect(tfvars).toContain("runtime_package_integrity = null");
   expect(tfvars).toContain('project_name             = "open-uptime"');
   expect(tfvars).toContain("monthly_budget_limit_usd");
@@ -209,6 +223,18 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(tfvars).toContain("hosted_zone_id           = null");
   expect(tfvars).toContain("@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   expect(variables).toContain("certificate_arn is required when protected_access_mode is alb_https_cert or CloudFront HTTPS origin is enabled");
+  expect(variables).toContain("certificate ARN in the deployment region");
+  expect(variables).toContain("arn:(aws|aws-us-gov|aws-cn):acm:${var.region}");
+  expect(awsRunbook).toContain("## Sanitized Origin Evidence");
+  expect(awsRunbook).toContain("aws resourcegroupstaggingapi get-resources");
+  expect(awsRunbook).toContain("Do not run `aws cloudfront list-distributions`");
+  expect(awsRunbook).not.toContain("\naws cloudfront list-distributions \\");
+  expect(awsRunbook).toContain("umask 077");
+  expect(awsRunbook).toContain("chmod 600 *.tfplan");
+  expect(awsRunbook).toContain("ActionsEnabled");
+  expect(awsRunbook).toContain("endpointRedacted");
+  expect(awsRunbook).toContain("Treat any private");
+  expect(awsRunbook).toContain("CloudFront/ELB read that can reveal custom headers as secret-bearing");
   expect(tfvars).toContain("kms_key_arn");
   expect(tfvars).not.toContain("database_secret_arn");
   expect(tfvars).not.toContain("rds_security_group_id");

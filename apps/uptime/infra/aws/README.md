@@ -59,6 +59,13 @@ selected HTTP or HTTPS origin listener.
 Terraform marks the value sensitive, but it still lives in encrypted Terraform
 state and in CloudFront/ALB configuration; restrict state, saved plan,
 CloudFront distribution-read, and ELB listener-rule-read access accordingly.
+For shared deployment evidence, prefer the non-secret outputs
+`cloudfront_distribution_id`, `cloudfront_origin_protocol_policy`,
+`cloudfront_origin_domain_name`, `cloudfront_origin_verify_header_enabled`,
+`cloudfront_origin_verify_header_name`, `alb_listener_arns`,
+`alb_security_group_id`, and `web_target_group_arn`. Do not paste CloudFront
+distribution list/config responses or unfiltered listener-rule conditions into
+shared logs because those APIs can include the origin verification header value.
 
 All module resources carry owner, project, environment, service, account, app
 type, and cost-center tags. ECS services enable AWS-managed tags and propagate

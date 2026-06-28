@@ -6,6 +6,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.28] - 2026-06-29
+
+### Added
+
+- Added non-secret Terraform outputs for CloudFront distribution id, ALB
+  listener ARNs, ALB security group id, and web target group ARN so protected
+  web origin evidence can be collected without reading origin header material.
+
+### Changed
+
+- Updated AWS deployment docs to prefer no-secret origin evidence commands and
+  explicitly avoid shared logs from APIs that can include the CloudFront origin
+  verification header value.
+
 ## [0.1.27] - 2026-06-29
 
 ### Added

@@ -1128,9 +1128,46 @@ data "aws_iam_policy_document" "execution_secrets" {
     ]))
   }
 
-  statement {
-    actions   = ["kms:Decrypt"]
-    resources = [var.kms_key_arn]
+  dynamic "statement" {
+    for_each = length(local.secretsmanager_secret_refs) > 0 ? [1] : []
+
+    content {
+      actions   = ["kms:Decrypt"]
+      resources = [var.kms_key_arn]
+
+      condition {
+        test     = "StringEquals"
+        variable = "kms:ViaService"
+        values   = ["secretsmanager.${var.region}.amazonaws.com"]
+      }
+
+      condition {
+        test     = "StringLike"
+        variable = "kms:EncryptionContext:SecretARN"
+        values   = local.secretsmanager_secret_refs
+      }
+    }
+  }
+
+  dynamic "statement" {
+    for_each = length(local.ssm_parameter_refs) > 0 ? [1] : []
+
+    content {
+      actions   = ["kms:Decrypt"]
+      resources = [var.kms_key_arn]
+
+      condition {
+        test     = "StringEquals"
+        variable = "kms:ViaService"
+        values   = ["ssm.${var.region}.amazonaws.com"]
+      }
+
+      condition {
+        test     = "StringLike"
+        variable = "kms:EncryptionContext:PARAMETER_ARN"
+        values   = local.ssm_parameter_refs
+      }
+    }
   }
 }
 
@@ -1162,6 +1199,18 @@ data "aws_iam_policy_document" "task" {
   statement {
     actions   = ["kms:Decrypt", "kms:GenerateDataKey"]
     resources = [var.kms_key_arn]
+
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ViaService"
+      values   = ["s3.${var.region}.amazonaws.com"]
+    }
+
+    condition {
+      test     = "StringLike"
+      variable = "kms:EncryptionContext:aws:s3:arn"
+      values   = ["${aws_s3_bucket.evidence.arn}/${each.key}/*"]
+    }
   }
 
   dynamic "statement" {
@@ -1298,7 +1347,7 @@ resource "aws_ecs_service" "web" {
     container_port   = local.container_port
   }
 
-  depends_on = [aws_lb_listener.https, aws_lb_listener.http_cloudfront, aws_lb_listener_rule.http_cloudfront_origin_verify, aws_efs_mount_target.data]
+  depends_on = [aws_lb_listener.https, aws_lb_listener.http_cloudfront, aws_lb_listener_rule.http_cloudfront_origin_verify, aws_lb_listener_rule.https_cloudfront_origin_verify, aws_efs_mount_target.data]
 }
 
 resource "aws_ecs_service" "worker" {

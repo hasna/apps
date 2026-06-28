@@ -241,7 +241,7 @@ variable "container_image" {
 variable "runtime_package_version" {
   description = "Published @hasna/uptime package version that CodeBuild should build into the ECR image."
   type        = string
-  default     = "0.1.27"
+  default     = "0.1.28"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$", var.runtime_package_version))
@@ -267,8 +267,8 @@ variable "certificate_arn" {
   default     = null
 
   validation {
-    condition     = var.certificate_arn == null || can(regex("^arn:aws:acm:", var.certificate_arn))
-    error_message = "certificate_arn must be null or an ACM certificate ARN."
+    condition     = var.certificate_arn == null || can(regex("^arn:(aws|aws-us-gov|aws-cn):acm:${var.region}:[0-9]{12}:certificate/[0-9A-Fa-f-]{36}$", var.certificate_arn))
+    error_message = "certificate_arn must be null or an ACM certificate ARN in the deployment region."
   }
 
   validation {

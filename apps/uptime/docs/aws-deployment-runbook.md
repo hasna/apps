@@ -46,6 +46,7 @@ start a private probe until the JSON output says `canStart: true`.
 2. Set the operator shell variables used by the command snippets:
 
    ```bash
+   umask 077
    : "${AWS_PROFILE_NAME:?set AWS_PROFILE_NAME to the reviewed AWS profile}"
    AWS_REGION="${AWS_REGION:-us-east-1}"
    TF_DIR="${TF_DIR:-infra/aws}"
@@ -222,6 +223,60 @@ aws ecs describe-services \
   --query 'services[0].{taskDefinition:taskDefinition,deployments:deployments[*].{id:id,status:status,desired:desiredCount,running:runningCount}}'
 ```
 
+## Sanitized Origin Evidence
+
+Capture origin-binding evidence before and after web scale-up without printing
+the CloudFront custom origin header value. Prefer Terraform outputs, tag-only
+resource inventory, and ALB/security-group describe calls that do not return
+custom origin headers:
+
+```bash
+CLOUDFRONT_DISTRIBUTION_ID="$(terraform -chdir="$TF_DIR" output -raw cloudfront_distribution_id)"
+ALB_DNS_NAME="$(terraform -chdir="$TF_DIR" output -raw alb_dns_name)"
+ALB_LISTENERS_JSON="$(terraform -chdir="$TF_DIR" output -json alb_listener_arns)"
+ALB_SECURITY_GROUP_ID="$(terraform -chdir="$TF_DIR" output -raw alb_security_group_id)"
+ORIGIN_POLICY="$(terraform -chdir="$TF_DIR" output -raw cloudfront_origin_protocol_policy)"
+ORIGIN_HOST="$(terraform -chdir="$TF_DIR" output -raw cloudfront_origin_domain_name)"
+ORIGIN_HEADER_ENABLED="$(terraform -chdir="$TF_DIR" output -raw cloudfront_origin_verify_header_enabled)"
+ORIGIN_HEADER_NAME="$(terraform -chdir="$TF_DIR" output -raw cloudfront_origin_verify_header_name)"
+
+printf '{"cloudfrontDistributionId":"%s","albDnsName":"%s","originPolicy":"%s","originHost":"%s","originHeaderEnabled":"%s","originHeaderName":"%s"}\n' \
+  "$CLOUDFRONT_DISTRIBUTION_ID" \
+  "$ALB_DNS_NAME" \
+  "$ORIGIN_POLICY" \
+  "$ORIGIN_HOST" \
+  "$ORIGIN_HEADER_ENABLED" \
+  "$ORIGIN_HEADER_NAME"
+
+aws resourcegroupstaggingapi get-resources \
+  --profile "$AWS_PROFILE_NAME" \
+  --region "$AWS_REGION" \
+  --resource-type-filters cloudfront:distribution \
+  --tag-filters Key=Service,Values=open-uptime Key=Environment,Values=prod \
+  --query 'ResourceTagMappingList[].{arn:ResourceARN,tags:Tags[?Key==`Service` || Key==`Environment` || Key==`Stage` || Key==`Project`]}'
+
+aws elbv2 describe-listeners \
+  --profile "$AWS_PROFILE_NAME" \
+  --region "$AWS_REGION" \
+  --listener-arns "$(echo "$ALB_LISTENERS_JSON" | jq -r '.http_cloudfront // .https')" \
+  --query 'Listeners[].{arn:ListenerArn,port:Port,protocol:Protocol,defaultActions:DefaultActions[].Type}'
+
+aws ec2 describe-security-groups \
+  --profile "$AWS_PROFILE_NAME" \
+  --region "$AWS_REGION" \
+  --group-ids "$ALB_SECURITY_GROUP_ID" \
+  --query 'SecurityGroups[].{groupId:GroupId,ingress:IpPermissions[].{protocol:IpProtocol,from:FromPort,to:ToPort,prefixLists:PrefixListIds[].PrefixListId}}'
+```
+
+Do not run `aws cloudfront list-distributions`,
+`aws cloudfront get-distribution`, `aws cloudfront get-distribution-config`, or
+unfiltered `aws elbv2 describe-rules` into shared logs or public evidence; those
+APIs can return the private origin verification header value. Treat any private
+CloudFront/ELB read that can reveal custom headers as secret-bearing. If a
+reviewer must inspect the rule condition directly, do it in a private shell and
+record only sanitized facts: header enabled, header name, listener protocol,
+rule priority, and that requests without the header return `403`.
+
 ## Smoke Checks
 
 Run these checks through the public edge URL and record the redacted JSON report.
@@ -303,15 +358,28 @@ Verify the initial web alarms exist and are not already alarming:
 ```bash
 WEB_5XX_ALARM="$(terraform -chdir="$TF_DIR" output -json alarm_names | jq -r '.web_5xx')"
 WEB_UNHEALTHY_ALARM="$(terraform -chdir="$TF_DIR" output -json alarm_names | jq -r '.web_unhealthy')"
+OPS_ALERTS_TOPIC_ARN="$(terraform -chdir="$TF_DIR" output -raw ops_alerts_topic_arn 2>/dev/null || true)"
 aws cloudwatch describe-alarms \
   --profile "$AWS_PROFILE_NAME" \
   --region "$AWS_REGION" \
   --alarm-names "$WEB_5XX_ALARM" "$WEB_UNHEALTHY_ALARM" \
-  --query 'MetricAlarms[*].{name:AlarmName,state:StateValue,reason:StateReason}'
+  --query 'MetricAlarms[*].{name:AlarmName,state:StateValue,reason:StateReason,actionsEnabled:ActionsEnabled,alarmActions:AlarmActions,okActions:OKActions,insufficientDataActions:InsufficientDataActions,dimensions:Dimensions}'
+
+if [ -n "$OPS_ALERTS_TOPIC_ARN" ]; then
+  aws sns list-subscriptions-by-topic \
+    --profile "$AWS_PROFILE_NAME" \
+    --region "$AWS_REGION" \
+    --topic-arn "$OPS_ALERTS_TOPIC_ARN" \
+    --output json \
+    | jq '[.Subscriptions[] | {protocol:.Protocol, owner:.Owner, status:(if .SubscriptionArn == "PendingConfirmation" then "pending" else "confirmed" end), endpointRedacted:"redacted"}]'
+fi
 ```
 
 Scheduler-stall, stale-probe, and report-delivery alarms stay blocked until
 those workers are implemented, emit metrics, and are enabled.
+Record a non-secret SNS delivery smoke id and redacted delivery destination
+counts before live scale-out. Internal SQS audit delivery is useful evidence,
+but it does not replace approved human/on-call subscriptions.
 
 ## Backups And Restore Evidence
 
@@ -462,6 +530,10 @@ routes are backed by cloud check jobs and cloud audit rows.
   the public repo and shared logs. Terraform redacts the sensitive input in CLI
   output, but the value is still stored in encrypted Terraform state, saved plan
   files, and AWS CloudFront/ALB configuration; restrict access accordingly.
+- Keep private Terraform plan artifacts owner-only. Before creating saved plans,
+  set `umask 077`; after historical plan creation, run `chmod 600 *.tfplan` in
+  the private evidence plan directory. Terraform plan files can contain
+  sensitive values even when CLI output is redacted.
 - Do not treat `cloudfront_origin_protocol_policy = "http-only"` as final for
   token-bearing traffic. The module supports `https-only`, but that mode needs a
   real origin DNS name and matching ACM certificate because CloudFront verifies

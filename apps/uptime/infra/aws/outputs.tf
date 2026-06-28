@@ -18,6 +18,10 @@ output "cloudfront_domain_name" {
   value = try(aws_cloudfront_distribution.open_uptime[0].domain_name, null)
 }
 
+output "cloudfront_distribution_id" {
+  value = try(aws_cloudfront_distribution.open_uptime[0].id, null)
+}
+
 output "cloudfront_origin_protocol_policy" {
   value = local.use_cloudfront ? var.cloudfront_origin_protocol_policy : null
 }
@@ -36,6 +40,21 @@ output "cloudfront_origin_verify_header_enabled" {
 
 output "cloudfront_origin_verify_header_name" {
   value = local.use_origin_verify ? var.cloudfront_origin_verify_header_name : null
+}
+
+output "alb_security_group_id" {
+  value = aws_security_group.alb.id
+}
+
+output "alb_listener_arns" {
+  value = {
+    http_cloudfront = try(aws_lb_listener.http_cloudfront[0].arn, null)
+    https           = try(aws_lb_listener.https[0].arn, null)
+  }
+}
+
+output "web_target_group_arn" {
+  value = aws_lb_target_group.web.arn
 }
 
 output "evidence_bucket" {
