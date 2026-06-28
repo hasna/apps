@@ -16,9 +16,12 @@ test("Dockerfile builds a hosted non-root Bun runtime without plaintext secrets"
   expect(dockerfile).toContain("--uid 10001");
   expect(dockerfile).toContain("USER uptime");
   expect(dockerfile).toContain("HEALTHCHECK");
+  expect(packageDockerfile).toContain("FROM public.ecr.aws/docker/library/node:22-slim AS runtime");
+  expect(packageDockerfile).toContain("npm install -g bun@1.3.13");
   expect(packageDockerfile).toContain("COPY dist ./dist");
   expect(packageDockerfile).toContain("bun install --production");
   expect(packageDockerfile).toContain("--uid 10001");
+  expect(packageDockerfile).not.toContain("FROM oven/bun");
   expect(dockerignore).not.toMatch(/^dist$/m);
   expect(dockerfile).not.toContain("mkdir -p /data/uptime");
   expect(packageDockerfile).not.toContain("mkdir -p /data/uptime");
@@ -120,7 +123,7 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(variables).toContain("web            = 0");
   expect(tfvars).toContain("container_image");
   expect(tfvars).toContain('protected_access_mode    = "cloudfront_default_domain"');
-  expect(tfvars).toContain('runtime_package_version  = "0.1.14"');
+  expect(tfvars).toContain('runtime_package_version  = "0.1.15"');
   expect(tfvars).toContain('project_name             = "open-uptime"');
   expect(tfvars).toContain("monthly_budget_limit_usd");
   expect(tfvars).toContain("private_route_table_ids");

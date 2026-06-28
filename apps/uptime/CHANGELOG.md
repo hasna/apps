@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.15] - 2026-06-28
+
+### Changed
+
+- Changed the packaged production Dockerfile to use Docker Official
+  `node:22-slim` from Amazon ECR Public and install Bun inside the image. This
+  avoids Docker Hub unauthenticated pull-rate limits during AWS CodeBuild image
+  builds.
+
 ## [0.1.14] - 2026-06-28
 
 ### Added
