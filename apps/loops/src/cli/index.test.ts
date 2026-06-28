@@ -1857,6 +1857,185 @@ describe("loops CLI", () => {
     expect(value.loop.id).toBe(created.loop.id);
   });
 
+  test("todos task drain uses todos ready and throttles active workflows per project", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-throttle-"));
+    const binDir = join(dataDir, "bin");
+    const callsFile = join(dataDir, "todos-calls.txt");
+    const repo = createGitRepo("loops-cli-event-drain-throttle-repo-");
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "printf '%s\\n' \"$*\" >> \"$CALLS_FILE\"",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"task-lists\" ]]; then printf '[]\\n'; exit 0; fi",
+        "done",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"ready\" ]]; then printf '%s\\n' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "done",
+        "printf 'unexpected todos command: %s\\n' \"$*\" >&2",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const ready = [
+      {
+        id: "task-drain-throttle-a",
+        title: "Route first ready task",
+        status: "pending",
+        working_dir: repo,
+        tags: ["auto:route"],
+      },
+      {
+        id: "task-drain-throttle-b",
+        title: "Route second ready task",
+        status: "pending",
+        working_dir: repo,
+        tags: ["auto:route"],
+      },
+    ];
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        join(dataDir, "todos-store"),
+        "--limit",
+        "10",
+        "--max-dispatch",
+        "5",
+        "--max-active-per-project",
+        "1",
+        "--worktree-mode",
+        "off",
+      ],
+      undefined,
+      { PATH: `${binDir}:/usr/bin:/bin`, CALLS_FILE: callsFile, TODOS_READY_JSON: JSON.stringify(ready) },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.source).toBe("todos ready");
+    expect(value.scanned).toBe(2);
+    expect(value.candidates).toBe(2);
+    expect(value.considered).toBe(2);
+    expect(value.created).toBe(1);
+    expect(value.throttled).toBe(1);
+    expect(value.results[1].queuedAtSource).toBe(true);
+    expect(readFileSync(callsFile, "utf8")).toContain("ready --limit 10");
+
+    const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loops).toHaveLength(1);
+  });
+
+  test("todos task drain filters by task list and limits new dispatches", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-filter-"));
+    const binDir = join(dataDir, "bin");
+    const callsFile = join(dataDir, "todos-calls.txt");
+    const repo = createGitRepo("loops-cli-event-drain-filter-repo-");
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "printf '%s\\n' \"$*\" >> \"$CALLS_FILE\"",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"task-lists\" ]]; then printf '%s\\n' \"$TODOS_TASK_LISTS_JSON\"; exit 0; fi",
+        "done",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"project-route\" ]]; then printf 'project id leaked into todos ready args\\n' >&2; exit 7; fi",
+        "done",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"ready\" ]]; then printf '%s\\n' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "done",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const ready = [
+      {
+        id: "task-drain-filter-a",
+        project_id: "project-route",
+        title: "Route matching list task",
+        status: "pending",
+        task_list_id: "list-route",
+        working_dir: repo,
+        tags: ["auto:route", "repoops"],
+      },
+      {
+        id: "task-drain-filter-b",
+        project_id: "project-route",
+        title: "Route second matching list task later",
+        status: "pending",
+        task_list_id: "list-route",
+        working_dir: repo,
+        tags: ["auto:route", "repoops"],
+      },
+      {
+        id: "task-drain-filter-c",
+        project_id: "project-other",
+        title: "Ignore other list task",
+        status: "pending",
+        task_list_id: "list-route",
+        working_dir: repo,
+        tags: ["auto:route", "repoops"],
+      },
+    ];
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        join(dataDir, "todos-store"),
+        "--task-list",
+        "route",
+        "--todos-project-id",
+        "project-route",
+        "--tags",
+        "repoops",
+        "--max-dispatch",
+        "1",
+        "--worktree-mode",
+        "off",
+      ],
+      undefined,
+      {
+        PATH: `${binDir}:/usr/bin:/bin`,
+        CALLS_FILE: callsFile,
+        TODOS_TASK_LISTS_JSON: JSON.stringify([{ id: "list-route", slug: "route", name: "Route" }]),
+        TODOS_READY_JSON: JSON.stringify(ready),
+      },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.scanned).toBe(3);
+    expect(value.candidates).toBe(2);
+    expect(value.filteredCandidates).toBe(2);
+    expect(value.scanLimit).toBe(500);
+    expect(value.considered).toBe(1);
+    expect(value.created).toBe(1);
+    expect(value.taskListId).toBe("list-route");
+    expect(readFileSync(callsFile, "utf8")).toContain("ready --limit 500");
+
+    const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loops).toHaveLength(1);
+    expect(loops[0].name).toContain("task-dra");
+  });
+
   test("todos task event handler --preflight fails before storing generated workflow loops", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-preflight-fail-"));
     const home = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-preflight-home-"));
