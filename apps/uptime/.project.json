@@ -7,12 +7,29 @@
   "root_id": null,
   "recipe_id": null,
   "primary_path": "/home/hasna/workspace/hasna/opensource/open-uptime",
-  "git_remote": null,
+  "git_remote": "https://github.com/hasna/uptime.git",
   "tags": [
     "uptime",
     "monitoring",
     "oss"
   ],
-  "integrations": {},
-  "generated_at": "2026-06-27T15:19:04.264Z"
+  "integrations": {
+    "github_repo": "hasna/uptime",
+    "github_url": "https://github.com/hasna/uptime",
+    "todos_project_id": "e65d26fa-7cb6-4d4f-a709-bf3cc8d6d616",
+    "todos_task_list_id": "66dbbbf5-36cb-4c99-9f0c-f873034c5efb",
+    "todos_task_list_slug": "todos-open-uptime",
+    "todos_plan_id": "070aeb46-71a8-41a3-bd7b-18846ad7e5c3"
+  },
+  "metadata": {
+    "stage": "active",
+    "priority": "high",
+    "owner": "hasna",
+    "active_todos_plan_id": "070aeb46-71a8-41a3-bd7b-18846ad7e5c3",
+    "active_todos_task_list_id": "66dbbbf5-36cb-4c99-9f0c-f873034c5efb",
+    "operational_tracking_doc": "docs/operational-tracking.md",
+    "cloud_primary_status": "blocked_until_spark01_preflight",
+    "projects_primary_location_is_not_cloud_authority": true
+  },
+  "generated_at": "2026-06-28T09:46:00.000Z"
 }
