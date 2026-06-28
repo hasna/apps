@@ -330,13 +330,20 @@ aws efs create-mount-target \
 ```
 
 Validate the restored `/data/uptime/uptime.db` from a staging host or task with
-read-only SQLite integrity checks. Capture only counts and integrity status, not
-monitor targets or secrets:
+read-only SQLite integrity checks. For a zero-count pre-production deployment
+where `uptime.db` does not exist yet, create a representative restore-drill DB
+with the same SQLite access path and record it separately. Capture only counts
+and integrity status, not monitor targets or secrets:
 
 ```bash
 sqlite3 /mnt/restore/uptime/uptime.db 'PRAGMA integrity_check;'
 sqlite3 /mnt/restore/uptime/uptime.db 'SELECT COUNT(*) FROM monitors;'
 ```
+
+Do not count a restore as complete if the task only proves that EFS mounted.
+The evidence must include the restored DB path, `PRAGMA integrity_check = ok`,
+schema version, sanitized table counts, and cleanup proof for the temporary
+mount target and file system.
 
 After evidence is recorded, delete the staging mount target and restored file
 system. Never mount the restored file system over production during a drill.

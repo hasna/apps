@@ -444,12 +444,13 @@ ECS/API/RDS/S3/probe lag/job backlog/delivery failures, and rollback commands.
   `AWSCURRENT` versions, and one-off web task smokes proved image pull/startup,
   secret injection, CloudWatch log delivery, EFS read/write, S3 PutObject, and
   NAT HTTPS egress while services stayed at desired count `0`. The Terraform
-  module supports CloudFront-only origin verification headers so the ALB can
-  reject direct origin requests that only share CloudFront's managed prefix
-  list; that header value is secret-bearing Terraform/AWS configuration, not
-  public evidence. It is not live: live scale-up is still blocked by
-  applying/proving the origin header in the private root, edge/auth smokes,
-  alarm actions, budget recipients, and an EFS restore drill.
+  private deployment has CloudFront-only origin verification headers applied so
+  the ALB rejects direct origin requests that only share CloudFront's managed
+  prefix list; that header value is secret-bearing Terraform/AWS configuration,
+  not public evidence. The private deployment evidence also includes a
+  representative SQLite EFS backup/restore drill with integrity/count checks.
+  It is not live: live scale-up is still blocked by edge/auth smokes, alarm
+  actions, budget recipients, and production auth hardening.
 - Projects per-project cloud stores do not exist yet; current local
   `project.db` stores are not enough for cloud-backed canvases or JSON Render.
 - Browser/page monitoring lacks the artifact, redaction, retention, and storage

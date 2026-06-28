@@ -435,9 +435,9 @@ required before browser evidence or public probe scale-out.
 - A private Hasna AWS bridge now has zero-count runtime resources, including
   ECR, dormant ECS services, ALB, CloudFront default-domain distribution,
   evidence bucket, encrypted logs, Backup, EFS, and service secret containers.
-  It is not live: services remain at desired count `0`, secret values are not
-  populated, and no ACM cert or Route53 record exists for a later
-  custom-hostname path.
+  It is not live: services remain at desired count `0`, secrets have
+  `AWSCURRENT` values but hosted auth is still bootstrap-token grade, and no
+  ACM cert or Route53 record exists for a later custom-hostname path.
 - Open Uptime is still SQLite-only for this bridge; only one protected web task
   may write EFS until Postgres and cloud leases exist.
 - Hosted API/dashboard auth, workspace RBAC, target policy, and Postgres leases
