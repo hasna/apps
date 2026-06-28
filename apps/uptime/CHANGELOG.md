@@ -11,7 +11,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Added Terraform outputs for log groups, web alarms, backup vault, and backup
-  plan, and the KMS key ARN so the AWS runbook can use output-driven commands.
+  plan, KMS key ARN, and secret refs so the AWS runbook can use output-driven
+  commands.
 - Expanded the AWS deployment runbook restore drill with AWS Backup restore-job,
   polling, staging mount-target, validation, and cleanup steps.
 - Made the AWS runbook command blocks use explicit shell variables and

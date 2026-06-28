@@ -30,6 +30,15 @@ output "kms_key_arn" {
   value = var.kms_key_arn
 }
 
+output "secret_refs" {
+  value = {
+    app_env      = var.app_env_secret_arn
+    hosted_token = var.hosted_token_secret_arn
+    public_probe = var.public_probe_secret_arn
+    reporting    = var.reporting_secret_arn
+  }
+}
+
 output "log_group_names" {
   value = merge(
     { image_builder = aws_cloudwatch_log_group.image_builder.name },

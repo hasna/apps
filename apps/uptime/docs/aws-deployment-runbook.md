@@ -152,7 +152,7 @@ then re-plan with all services still at `0`.
 Populate Secrets Manager values out of band. Verify metadata only:
 
 ```bash
-terraform -chdir="$TF_DIR" output -json secret_names | jq -r '.[]' | while read -r SECRET_ID; do
+terraform -chdir="$TF_DIR" output -json secret_refs | jq -r '.[]' | while read -r SECRET_ID; do
   aws secretsmanager describe-secret \
     --profile "$AWS_PROFILE_NAME" \
     --region "$AWS_REGION" \
