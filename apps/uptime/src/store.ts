@@ -14,11 +14,15 @@ import {
   MIN_TIMEOUT_MS,
 } from "./limits.js";
 import type {
+  AuditEvent,
   CheckEvidence,
   CheckResult,
+  CreateReportScheduleInput,
   Incident,
   ImportedMonitorInput,
   ImportedUpdateMonitorInput,
+  ListAuditEventsOptions,
+  ListReportRunsOptions,
   ListResultsOptions,
   Monitor,
   MonitorSummary,
@@ -27,6 +31,13 @@ import type {
   ProbeCheckJobStatus,
   ProbeIdentity,
   ProbeSubmissionReceipt,
+  RecordAuditEventInput,
+  ReportDeliveryRecord,
+  ReportRun,
+  ReportRunStatus,
+  ReportSchedule,
+  ReportScheduleChannels,
+  UpdateReportScheduleInput,
   UptimeSummary,
 } from "./types.js";
 
@@ -91,9 +102,24 @@ export interface SaveImportBatchInput {
   records: unknown[];
 }
 
-const REQUIRED_TABLES = ["schema_migrations", "monitors", "check_results", "incidents", "check_leases", "monitor_provenance", "import_batches", "probe_identities", "probe_check_jobs", "probe_submissions"] as const;
+const REQUIRED_TABLES = [
+  "schema_migrations",
+  "monitors",
+  "check_results",
+  "incidents",
+  "check_leases",
+  "monitor_provenance",
+  "import_batches",
+  "probe_identities",
+  "probe_check_jobs",
+  "probe_submissions",
+  "report_schedules",
+  "report_runs",
+  "audit_events",
+] as const;
 const PROBE_TABLES = new Set<string>(["probe_identities", "probe_check_jobs", "probe_submissions"]);
-const CURRENT_SCHEMA_VERSION = "2";
+const REPORT_AUDIT_TABLES = new Set<string>(["report_schedules", "report_runs", "audit_events"]);
+const CURRENT_SCHEMA_VERSION = "3";
 
 interface MonitorRow {
   id: string;
@@ -199,6 +225,41 @@ interface ProbeCheckJobRow {
   submitted_result_id: string | null;
   created_at: string;
   updated_at: string;
+}
+
+interface ReportScheduleRow {
+  id: string;
+  name: string;
+  enabled: number;
+  interval_seconds: number;
+  next_run_at: string;
+  last_run_at: string | null;
+  subject: string | null;
+  channels_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ReportRunRow {
+  id: string;
+  schedule_id: string | null;
+  status: ReportRunStatus;
+  started_at: string;
+  finished_at: string;
+  deliveries_json: string;
+  error: string | null;
+  report_json: string | null;
+}
+
+interface AuditEventRow {
+  id: string;
+  action: string;
+  resource_type: string | null;
+  resource_id: string | null;
+  message: string | null;
+  metadata_json: string;
+  actor: string | null;
+  created_at: string;
 }
 
 interface NormalizedMonitorInput {
@@ -377,6 +438,44 @@ export class UptimeStore {
       )
     `);
     this.db.run(`
+      CREATE TABLE IF NOT EXISTS report_schedules (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        interval_seconds INTEGER NOT NULL,
+        next_run_at TEXT NOT NULL,
+        last_run_at TEXT,
+        subject TEXT,
+        channels_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `);
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS report_runs (
+        id TEXT PRIMARY KEY,
+        schedule_id TEXT REFERENCES report_schedules(id) ON DELETE SET NULL,
+        status TEXT NOT NULL CHECK (status IN ('success', 'failed')),
+        started_at TEXT NOT NULL,
+        finished_at TEXT NOT NULL,
+        deliveries_json TEXT NOT NULL,
+        error TEXT,
+        report_json TEXT
+      )
+    `);
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS audit_events (
+        id TEXT PRIMARY KEY,
+        action TEXT NOT NULL,
+        resource_type TEXT,
+        resource_id TEXT,
+        message TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        actor TEXT,
+        created_at TEXT NOT NULL
+      )
+    `);
+    this.db.run(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
@@ -395,6 +494,10 @@ export class UptimeStore {
     this.db.run("CREATE INDEX IF NOT EXISTS idx_probe_submissions_probe_time ON probe_submissions(probe_id, submitted_at DESC)");
     this.db.run("CREATE INDEX IF NOT EXISTS idx_probe_submissions_monitor_time ON probe_submissions(monitor_id, checked_at DESC)");
     this.db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_probe_submissions_job ON probe_submissions(job_id) WHERE job_id IS NOT NULL AND job_id != ''");
+    this.db.run("CREATE INDEX IF NOT EXISTS idx_report_schedules_due ON report_schedules(enabled, next_run_at)");
+    this.db.run("CREATE INDEX IF NOT EXISTS idx_report_runs_schedule_time ON report_runs(schedule_id, started_at DESC)");
+    this.db.run("CREATE INDEX IF NOT EXISTS idx_audit_events_resource_time ON audit_events(resource_type, resource_id, created_at DESC)");
+    this.db.run("CREATE INDEX IF NOT EXISTS idx_audit_events_time ON audit_events(created_at DESC)");
   }
 
   backup(destinationPath?: string): UptimeBackup {
@@ -795,6 +898,218 @@ export class UptimeStore {
     return receipt;
   }
 
+  createReportSchedule(input: CreateReportScheduleInput): ReportSchedule {
+    const normalized = normalizeReportScheduleInput(input);
+    const now = new Date().toISOString();
+    const schedule: ReportSchedule = {
+      id: newId("rps"),
+      name: normalized.name,
+      enabled: normalized.enabled,
+      intervalSeconds: normalized.intervalSeconds,
+      nextRunAt: normalized.nextRunAt,
+      lastRunAt: null,
+      subject: normalized.subject,
+      channels: normalized.channels,
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.db
+      .query(
+        `INSERT INTO report_schedules (
+          id, name, enabled, interval_seconds, next_run_at, last_run_at,
+          subject, channels_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        schedule.id,
+        schedule.name,
+        schedule.enabled ? 1 : 0,
+        schedule.intervalSeconds,
+        schedule.nextRunAt,
+        schedule.lastRunAt,
+        schedule.subject,
+        JSON.stringify(schedule.channels),
+        schedule.createdAt,
+        schedule.updatedAt,
+      );
+    return schedule;
+  }
+
+  listReportSchedules(options: { includeDisabled?: boolean } = {}): ReportSchedule[] {
+    const rows = options.includeDisabled
+      ? this.db.query("SELECT * FROM report_schedules ORDER BY name ASC").all() as ReportScheduleRow[]
+      : this.db.query("SELECT * FROM report_schedules WHERE enabled = 1 ORDER BY name ASC").all() as ReportScheduleRow[];
+    return rows.map(reportScheduleFromRow);
+  }
+
+  listDueReportSchedules(nowIso = new Date().toISOString()): ReportSchedule[] {
+    assertIsoTimestamp(nowIso, "Report schedule due timestamp");
+    const rows = this.db
+      .query("SELECT * FROM report_schedules WHERE enabled = 1 AND next_run_at <= ? ORDER BY next_run_at ASC, name ASC")
+      .all(nowIso) as ReportScheduleRow[];
+    return rows.map(reportScheduleFromRow);
+  }
+
+  getReportSchedule(idOrName: string): ReportSchedule | null {
+    const row = this.db
+      .query("SELECT * FROM report_schedules WHERE id = ? OR name = ?")
+      .get(idOrName, idOrName) as ReportScheduleRow | null;
+    return row ? reportScheduleFromRow(row) : null;
+  }
+
+  updateReportSchedule(idOrName: string, input: UpdateReportScheduleInput): ReportSchedule {
+    const current = this.getReportSchedule(idOrName);
+    if (!current) throw new Error(`Report schedule not found: ${idOrName}`);
+    const normalized = normalizeReportScheduleInput({
+      name: input.name ?? current.name,
+      intervalSeconds: input.intervalSeconds ?? current.intervalSeconds,
+      nextRunAt: input.nextRunAt ?? current.nextRunAt,
+      enabled: input.enabled ?? current.enabled,
+      subject: input.subject === undefined ? current.subject : input.subject,
+      channels: input.channels ?? current.channels,
+    });
+    const updatedAt = new Date().toISOString();
+    this.db
+      .query(
+        `UPDATE report_schedules SET
+          name = ?, enabled = ?, interval_seconds = ?, next_run_at = ?,
+          subject = ?, channels_json = ?, updated_at = ?
+        WHERE id = ?`,
+      )
+      .run(
+        normalized.name,
+        normalized.enabled ? 1 : 0,
+        normalized.intervalSeconds,
+        normalized.nextRunAt,
+        normalized.subject,
+        JSON.stringify(normalized.channels),
+        updatedAt,
+        current.id,
+      );
+    return this.getReportSchedule(current.id)!;
+  }
+
+  deleteReportSchedule(idOrName: string): boolean {
+    const current = this.getReportSchedule(idOrName);
+    if (!current) return false;
+    this.db.query("DELETE FROM report_schedules WHERE id = ?").run(current.id);
+    return true;
+  }
+
+  recordReportRun(input: {
+    scheduleId?: string | null;
+    status: ReportRunStatus;
+    startedAt?: string;
+    finishedAt?: string;
+    deliveries?: ReportDeliveryRecord[];
+    error?: string | null;
+    reportJson?: Record<string, unknown> | null;
+  }): ReportRun {
+    const startedAt = input.startedAt ?? new Date().toISOString();
+    const finishedAt = input.finishedAt ?? new Date().toISOString();
+    assertIsoTimestamp(startedAt, "Report run startedAt");
+    assertIsoTimestamp(finishedAt, "Report run finishedAt");
+    if (input.status !== "success" && input.status !== "failed") {
+      throw new Error("Report run status must be success or failed");
+    }
+    if (input.scheduleId && !this.getReportSchedule(input.scheduleId)) {
+      throw new Error(`Report schedule not found: ${input.scheduleId}`);
+    }
+    const run: ReportRun = {
+      id: newId("rpr"),
+      scheduleId: input.scheduleId ?? null,
+      status: input.status,
+      startedAt,
+      finishedAt,
+      deliveries: normalizeReportDeliveries(input.deliveries ?? []),
+      error: normalizeNullableRedactedText(input.error, "Report run error", 1000),
+      reportJson: input.reportJson ?? null,
+    };
+    this.db
+      .query(
+        `INSERT INTO report_runs (
+          id, schedule_id, status, started_at, finished_at, deliveries_json,
+          error, report_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        run.id,
+        run.scheduleId,
+        run.status,
+        run.startedAt,
+        run.finishedAt,
+        JSON.stringify(run.deliveries),
+        run.error,
+        run.reportJson ? JSON.stringify(run.reportJson) : null,
+      );
+    if (run.scheduleId) {
+      this.advanceReportSchedule(run.scheduleId, run.finishedAt);
+    }
+    return run;
+  }
+
+  listReportRuns(options: ListReportRunsOptions = {}): ReportRun[] {
+    const limit = clampLimit(options.limit ?? 50);
+    const rows = options.scheduleId
+      ? this.db
+        .query("SELECT * FROM report_runs WHERE schedule_id = ? ORDER BY started_at DESC, id DESC LIMIT ?")
+        .all(options.scheduleId, limit) as ReportRunRow[]
+      : this.db.query("SELECT * FROM report_runs ORDER BY started_at DESC, id DESC LIMIT ?").all(limit) as ReportRunRow[];
+    return rows.map(reportRunFromRow);
+  }
+
+  recordAuditEvent(input: RecordAuditEventInput): AuditEvent {
+    const action = normalizeAuditText(input.action, "Audit action", 160);
+    const createdAt = input.createdAt ?? new Date().toISOString();
+    assertIsoTimestamp(createdAt, "Audit event createdAt");
+    const event: AuditEvent = {
+      id: newId("aud"),
+      action,
+      resourceType: normalizeNullableAuditText(input.resourceType, "Audit resourceType", 80),
+      resourceId: normalizeNullableAuditText(input.resourceId, "Audit resourceId", 160),
+      message: normalizeNullableAuditText(input.message, "Audit message", 500),
+      metadata: normalizeAuditMetadata(input.metadata ?? {}),
+      actor: normalizeNullableAuditText(input.actor, "Audit actor", 160),
+      createdAt,
+    };
+    this.db
+      .query(
+        `INSERT INTO audit_events (
+          id, action, resource_type, resource_id, message, metadata_json, actor, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        event.id,
+        event.action,
+        event.resourceType,
+        event.resourceId,
+        event.message,
+        JSON.stringify(event.metadata),
+        event.actor,
+        event.createdAt,
+      );
+    return event;
+  }
+
+  listAuditEvents(options: ListAuditEventsOptions = {}): AuditEvent[] {
+    const clauses: string[] = [];
+    const args: (string | number)[] = [];
+    if (options.resourceType) {
+      clauses.push("resource_type = ?");
+      args.push(options.resourceType);
+    }
+    if (options.resourceId) {
+      clauses.push("resource_id = ?");
+      args.push(options.resourceId);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    args.push(clampLimit(options.limit ?? 50));
+    const rows = this.db
+      .query(`SELECT * FROM audit_events ${where} ORDER BY created_at DESC, id DESC LIMIT ?`)
+      .all(...args) as AuditEventRow[];
+    return rows.map(auditEventFromRow);
+  }
+
   acquireCheckLease(monitorId: string, owner: string, ttlMs: number): boolean {
     const now = new Date();
     const nowIso = now.toISOString();
@@ -1061,6 +1376,20 @@ export class UptimeStore {
       .run(closedAt, monitorId);
   }
 
+  private advanceReportSchedule(scheduleId: string, finishedAt: string): void {
+    const schedule = this.getReportSchedule(scheduleId);
+    if (!schedule) throw new Error(`Report schedule not found: ${scheduleId}`);
+    const finishedMs = Date.parse(finishedAt);
+    let nextMs = Math.max(Date.parse(schedule.nextRunAt), finishedMs);
+    do {
+      nextMs += schedule.intervalSeconds * 1000;
+    } while (nextMs <= finishedMs);
+    const nextRunAt = new Date(nextMs).toISOString();
+    this.db
+      .query("UPDATE report_schedules SET last_run_at = ?, next_run_at = ?, updated_at = ? WHERE id = ?")
+      .run(finishedAt, nextRunAt, finishedAt, schedule.id);
+  }
+
   private ensureColumn(table: string, name: string, definition: string): void {
     const columns = this.db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     if (!columns.some((column) => column.name === name)) {
@@ -1148,9 +1477,10 @@ function verifyBackupFile(backupPath: string): UptimeBackupCheck {
         .query("SELECT value FROM schema_migrations WHERE key = 'schema_version'")
         .get() as { value: string } | null)?.value ?? null;
     const currentOk = missingTables.length === 0 && schemaVersion === CURRENT_SCHEMA_VERSION;
-    const restorableV1 = schemaVersion === "1" && missingTables.every((table) => PROBE_TABLES.has(table));
+    const restorableV1 = schemaVersion === "1" && missingTables.every((table) => PROBE_TABLES.has(table) || REPORT_AUDIT_TABLES.has(table));
+    const restorableV2 = schemaVersion === "2" && missingTables.every((table) => REPORT_AUDIT_TABLES.has(table));
     return {
-      ok: integrity === "ok" && (currentOk || restorableV1),
+      ok: integrity === "ok" && (currentOk || restorableV1 || restorableV2),
       backupPath,
       integrity,
       schemaVersion,
@@ -1335,6 +1665,181 @@ function normalizeScheduleSlot(value: string): string {
   return slot;
 }
 
+function normalizeReportScheduleInput(input: CreateReportScheduleInput): {
+  name: string;
+  intervalSeconds: number;
+  nextRunAt: string;
+  enabled: boolean;
+  subject: string | null;
+  channels: ReportScheduleChannels;
+} {
+  const name = input.name?.trim();
+  if (!name) throw new Error("Report schedule name is required");
+  rejectControlCharacters(name, "Report schedule name");
+  const intervalSeconds = boundedInteger(input.intervalSeconds, "intervalSeconds", MIN_INTERVAL_SECONDS, MAX_INTERVAL_SECONDS);
+  const nextRunAt = input.nextRunAt ?? new Date().toISOString();
+  assertIsoTimestamp(nextRunAt, "Report schedule nextRunAt");
+  const enabled = normalizeEnabled(input.enabled);
+  const subject = normalizeNullableBoundedText(input.subject, "Report schedule subject", 200);
+  const channels = normalizeReportChannels(input.channels);
+  return { name, intervalSeconds, nextRunAt, enabled, subject, channels };
+}
+
+function normalizeReportChannels(channels: ReportScheduleChannels | undefined): ReportScheduleChannels {
+  if (!channels || typeof channels !== "object") throw new Error("Report schedule channels are required");
+  const normalized: ReportScheduleChannels = {};
+  if (channels.email !== undefined) normalized.email = normalizeChannelTarget(channels.email, "email", ["apiUrl", "from", "to", "subject", "providerId"]);
+  if (channels.sms !== undefined) normalized.sms = normalizeChannelTarget(channels.sms, "sms", ["apiUrl", "from", "to"]);
+  if (channels.logs !== undefined) normalized.logs = normalizeChannelTarget(channels.logs, "logs", ["apiUrl", "projectId", "environment", "service"]);
+  if (!normalized.email && !normalized.sms && !normalized.logs) {
+    throw new Error("Report schedule requires at least one channel");
+  }
+  return normalized;
+}
+
+function normalizeChannelTarget(value: unknown, channel: string, allowedKeys: string[]): boolean | Record<string, string | string[]> {
+  if (value === false || value == null) return false;
+  if (value === true) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Report schedule ${channel} channel must be true or an object`);
+  }
+  const record = value as Record<string, unknown>;
+  const normalized: Record<string, string | string[]> = {};
+  for (const [key, rawValue] of Object.entries(record)) {
+    if (!allowedKeys.includes(key)) {
+      if (/key|token|secret|password|credential|auth/i.test(key)) {
+        throw new Error("Report schedules must not persist API keys or tokens; use environment variables or cloud channel refs");
+      }
+      throw new Error(`Unsupported report schedule ${channel} channel field: ${key}`);
+    }
+    if (rawValue === undefined || rawValue === null || rawValue === "") continue;
+    if (key === "apiUrl" && Array.isArray(rawValue)) {
+      throw new Error(`Report schedule ${channel}.${key} must be a string`);
+    }
+    if (Array.isArray(rawValue)) {
+      const items = rawValue.map((item) => normalizeBoundedText(String(item), `Report schedule ${channel}.${key}`, 300));
+      if (items.length > 0) normalized[key] = items;
+    } else if (typeof rawValue === "string" || typeof rawValue === "number") {
+      normalized[key] = key === "apiUrl"
+        ? normalizeHttpIntegrationUrl(String(rawValue))
+        : normalizeBoundedText(String(rawValue), `Report schedule ${channel}.${key}`, 500);
+    } else {
+      throw new Error(`Report schedule ${channel}.${key} must be a string or string array`);
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : true;
+}
+
+function normalizeHttpIntegrationUrl(value: string): string {
+  const parsed = new URL(value.trim());
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Report schedule integration API URL must use http or https");
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("Report schedule integration API URL must not include credentials");
+  }
+  for (const key of parsed.searchParams.keys()) {
+    if (SECRET_URL_PARAM_PATTERN.test(key)) {
+      throw new Error("Report schedule integration API URL must not include secret query parameters");
+    }
+  }
+  parsed.hash = "";
+  return parsed.toString();
+}
+
+function normalizeReportDeliveries(deliveries: ReportDeliveryRecord[]): ReportDeliveryRecord[] {
+  return deliveries.map((delivery) => {
+    if (delivery.channel !== "email" && delivery.channel !== "sms" && delivery.channel !== "logs") {
+      throw new Error("Report delivery channel must be email, sms, or logs");
+    }
+    return {
+      channel: delivery.channel,
+      ok: Boolean(delivery.ok),
+      status: delivery.status,
+      id: delivery.id === undefined ? undefined : normalizeRedactedText(String(delivery.id), "Report delivery id", 300),
+      error: delivery.error === undefined ? undefined : normalizeRedactedText(String(delivery.error), "Report delivery error", 1000),
+    };
+  });
+}
+
+function normalizeAuditText(value: string | undefined | null, label: string, maxLength: number): string {
+  return normalizeBoundedText(value ?? "", label, maxLength);
+}
+
+function normalizeNullableAuditText(value: string | undefined | null, label: string, maxLength: number): string | null {
+  return normalizeNullableBoundedText(value, label, maxLength);
+}
+
+function normalizeNullableBoundedText(value: string | undefined | null, label: string, maxLength: number): string | null {
+  if (value == null) return null;
+  const normalized = normalizeRedactedText(value, label, maxLength);
+  return normalized || null;
+}
+
+function normalizeBoundedText(value: string, label: string, maxLength: number): string {
+  const normalized = value.trim();
+  rejectControlCharacters(normalized, label);
+  if (normalized.length > maxLength) throw new Error(`${label} is too long`);
+  return normalized;
+}
+
+function normalizeNullableRedactedText(value: string | undefined | null, label: string, maxLength: number): string | null {
+  if (value == null) return null;
+  const normalized = normalizeRedactedText(value, label, maxLength);
+  return normalized || null;
+}
+
+function normalizeRedactedText(value: string, label: string, maxLength: number): string {
+  return normalizeBoundedText(redactSecretString(value), label, maxLength);
+}
+
+function normalizeAuditMetadata(value: Record<string, unknown>): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Audit metadata must be an object");
+  }
+  return redactAuditSecrets(JSON.parse(JSON.stringify(value))) as Record<string, unknown>;
+}
+
+function redactAuditSecrets(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactAuditSecrets);
+  if (typeof value === "string") return redactSecretString(value);
+  if (!value || typeof value !== "object") return value;
+  const output: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    output[key] = /key|token|secret|password|credential|auth/i.test(key) ? "[REDACTED]" : redactAuditSecrets(nested);
+  }
+  return output;
+}
+
+function redactSecretString(value: string): string {
+  let output = value.replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]");
+  output = output.replace(/https?:\/\/[^\s"'<>]+/gi, (match) => redactUrlString(match));
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(output)) return output;
+  return redactUrlString(output);
+}
+
+function redactUrlString(value: string): string {
+  let trailing = "";
+  let candidate = value;
+  while (/[),.;\]]$/.test(candidate)) {
+    trailing = `${candidate.slice(-1)}${trailing}`;
+    candidate = candidate.slice(0, -1);
+  }
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.username) parsed.username = "[REDACTED]";
+    if (parsed.password) parsed.password = "[REDACTED]";
+    for (const key of [...parsed.searchParams.keys()]) {
+      if (SECRET_URL_PARAM_PATTERN.test(key)) parsed.searchParams.set(key, "[REDACTED]");
+    }
+    parsed.hash = "";
+    return `${parsed.toString()}${trailing}`;
+  } catch {
+    // Keep the bounded-text validation path as the final guard for malformed values.
+    return value;
+  }
+}
+
 function assertIsoTimestamp(value: string, label: string): void {
   if (!Number.isFinite(Date.parse(value))) {
     throw new Error(`${label} must be an ISO timestamp`);
@@ -1442,10 +1947,68 @@ function probeCheckJobFromRow(row: ProbeCheckJobRow): ProbeCheckJob {
   };
 }
 
+function reportScheduleFromRow(row: ReportScheduleRow): ReportSchedule {
+  return {
+    id: row.id,
+    name: row.name,
+    enabled: Boolean(row.enabled),
+    intervalSeconds: row.interval_seconds,
+    nextRunAt: row.next_run_at,
+    lastRunAt: row.last_run_at,
+    subject: row.subject,
+    channels: parseReportChannels(row.channels_json),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function reportRunFromRow(row: ReportRunRow): ReportRun {
+  return {
+    id: row.id,
+    scheduleId: row.schedule_id,
+    status: row.status,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    deliveries: parseReportDeliveries(row.deliveries_json),
+    error: row.error,
+    reportJson: parseRecord(row.report_json),
+  };
+}
+
+function auditEventFromRow(row: AuditEventRow): AuditEvent {
+  return {
+    id: row.id,
+    action: row.action,
+    resourceType: row.resource_type,
+    resourceId: row.resource_id,
+    message: row.message,
+    metadata: parseRecord(row.metadata_json) ?? {},
+    actor: row.actor,
+    createdAt: row.created_at,
+  };
+}
+
 function parseEvidence(value: string | null): CheckEvidence | null {
   if (!value) return null;
   const parsed = parseJson(value);
   return parsed && typeof parsed === "object" ? parsed as CheckEvidence : null;
+}
+
+function parseReportChannels(value: string): ReportScheduleChannels {
+  const parsed = parseJson(value);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  return parsed as ReportScheduleChannels;
+}
+
+function parseReportDeliveries(value: string): ReportDeliveryRecord[] {
+  const parsed = parseJson(value);
+  return Array.isArray(parsed) ? parsed as ReportDeliveryRecord[] : [];
+}
+
+function parseRecord(value: string | null): Record<string, unknown> | null {
+  if (!value) return null;
+  const parsed = parseJson(value);
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
 }
 
 function parseJson(value: string): unknown {

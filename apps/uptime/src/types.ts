@@ -137,6 +137,112 @@ export interface ProbeCheckJob {
   updatedAt: string;
 }
 
+export type ReportScheduleStatus = "enabled" | "disabled";
+export type ReportRunStatus = "success" | "failed";
+export type ReportDeliveryChannel = "email" | "sms" | "logs";
+
+export interface ReportDeliveryRecord {
+  channel: ReportDeliveryChannel;
+  ok: boolean;
+  status?: number;
+  id?: string;
+  error?: string;
+}
+
+export interface ReportEmailChannelConfig {
+  apiUrl?: string;
+  from?: string;
+  to?: string | string[];
+  subject?: string;
+  providerId?: string;
+}
+
+export interface ReportSmsChannelConfig {
+  apiUrl?: string;
+  from?: string;
+  to?: string | string[];
+}
+
+export interface ReportLogsChannelConfig {
+  apiUrl?: string;
+  projectId?: string;
+  environment?: string;
+  service?: string;
+}
+
+export interface ReportScheduleChannels {
+  email?: boolean | ReportEmailChannelConfig;
+  sms?: boolean | ReportSmsChannelConfig;
+  logs?: boolean | ReportLogsChannelConfig;
+}
+
+export interface ReportSchedule {
+  id: string;
+  name: string;
+  enabled: boolean;
+  intervalSeconds: number;
+  nextRunAt: string;
+  lastRunAt: string | null;
+  subject: string | null;
+  channels: ReportScheduleChannels;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateReportScheduleInput {
+  name: string;
+  intervalSeconds: number;
+  nextRunAt?: string;
+  enabled?: boolean;
+  subject?: string | null;
+  channels: ReportScheduleChannels;
+}
+
+export type UpdateReportScheduleInput = Partial<CreateReportScheduleInput>;
+
+export interface ReportRun {
+  id: string;
+  scheduleId: string | null;
+  status: ReportRunStatus;
+  startedAt: string;
+  finishedAt: string;
+  deliveries: ReportDeliveryRecord[];
+  error: string | null;
+  reportJson: Record<string, unknown> | null;
+}
+
+export interface ListReportRunsOptions {
+  scheduleId?: string;
+  limit?: number;
+}
+
+export interface AuditEvent {
+  id: string;
+  action: string;
+  resourceType: string | null;
+  resourceId: string | null;
+  message: string | null;
+  metadata: Record<string, unknown>;
+  actor: string | null;
+  createdAt: string;
+}
+
+export interface RecordAuditEventInput {
+  action: string;
+  resourceType?: string | null;
+  resourceId?: string | null;
+  message?: string | null;
+  metadata?: Record<string, unknown>;
+  actor?: string | null;
+  createdAt?: string;
+}
+
+export interface ListAuditEventsOptions {
+  resourceType?: string;
+  resourceId?: string;
+  limit?: number;
+}
+
 export type CheckEvidence = BrowserPageEvidence;
 
 export interface BrowserPageEvidence {

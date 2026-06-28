@@ -597,6 +597,77 @@ test("API builds and sends reports with injected fetch", async () => {
   service.close();
 });
 
+test("API manages scheduled reports, report runs, and audit events", async () => {
+  const calls: string[] = [];
+  const service = new UptimeService({ dbPath: tempDb() });
+  service.createMonitor({ name: "api", kind: "http", url: "https://example.com" });
+  const handler = createApiHandler(service, {
+    fetchImpl: (async (url: string | URL | Request) => {
+      calls.push(String(url));
+      return new Response(JSON.stringify({ id: "ok" }), { status: 201 });
+    }) as typeof fetch,
+  });
+
+  const create = await handler(jsonRequest("http://127.0.0.1:3899/api/report-schedules", "POST", {
+    name: "ops",
+    intervalSeconds: 60,
+    nextRunAt: "2026-01-01T00:00:00.000Z",
+    channels: { logs: { apiUrl: "http://logs.test", projectId: "uptime" } },
+  }));
+  const schedule = await create.json();
+  const run = await handler(new Request(`http://127.0.0.1:3899/api/report-schedules/${schedule.id}/run`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  }));
+  const runs = await handler(new Request(`http://127.0.0.1:3899/api/report-runs?scheduleId=${schedule.id}`));
+  const audit = await handler(new Request(`http://127.0.0.1:3899/api/audit-events?resourceId=${schedule.id}`));
+  const list = await handler(new Request("http://127.0.0.1:3899/api/report-schedules?includeDisabled=true"));
+
+  expect(create.status).toBe(201);
+  expect(run.status).toBe(200);
+  expect((await run.json()).status).toBe("success");
+  expect(await runs.json()).toHaveLength(1);
+  expect((await audit.json()).map((event: any) => event.action)).toContain("report_schedule.run");
+  expect(await list.json()).toHaveLength(1);
+  expect(calls).toEqual(["http://logs.test/api/logs/structured?format=json&source=structured&service=open-uptime&project_id=uptime&environment=test"]);
+  service.close();
+});
+
+test("hosted API fails closed for report schedules, runs, and audit events", async () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const handler = createApiHandler(service, {
+    mode: "hosted",
+    hostedTokens: [
+      { token: "read", scopes: ["uptime:read"] },
+      { token: "report", scopes: ["uptime:report"] },
+    ],
+  });
+
+  const list = await handler(new Request("https://uptime.test/api/v1/report-schedules", {
+    headers: { authorization: "Bearer read" },
+  }));
+  const createSchedule = await handler(jsonRequest(
+    "https://uptime.test/api/v1/report-schedules",
+    "POST",
+    { name: "ops", intervalSeconds: 60, channels: { logs: true } },
+    { origin: "https://uptime.test", authorization: "Bearer report" },
+  ));
+  const runs = await handler(new Request("https://uptime.test/api/v1/report-runs", {
+    headers: { authorization: "Bearer read" },
+  }));
+  const audit = await handler(new Request("https://uptime.test/api/v1/audit-events", {
+    headers: { authorization: "Bearer read" },
+  }));
+
+  expect(list.status).toBe(501);
+  expect(createSchedule.status).toBe(501);
+  expect(runs.status).toBe(501);
+  expect(audit.status).toBe(501);
+  expect((await createSchedule.json()).error).toContain("cloud channel refs");
+  service.close();
+});
+
 test("dashboard route returns HTML", async () => {
   const service = new UptimeService({ dbPath: tempDb() });
   const handler = createApiHandler(service);

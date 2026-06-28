@@ -177,8 +177,53 @@ async function handleApiRoute(
     const input = await jsonBody(request);
     return json(await service.sendReport({ ...input, fetchImpl: options.fetchImpl }));
   }
+  if (hosted && (apiPath.startsWith("/api/report-schedules") || apiPath.startsWith("/api/report-runs") || apiPath.startsWith("/api/audit-events"))) {
+    throw new ApiError("hosted report schedules require cloud channel refs, workspace stores, and audit logging", 501);
+  }
   if (hosted && apiPath.startsWith("/api/probes")) {
     throw new ApiError("hosted probe APIs require cloud check_jobs, workspace stores, and audit logging", 501);
+  }
+  if (request.method === "GET" && apiPath === "/api/report-schedules") {
+    return json(service.listReportSchedules({ includeDisabled: url.searchParams.get("includeDisabled") === "true" }));
+  }
+  if (request.method === "POST" && apiPath === "/api/report-schedules") {
+    return json(service.createReportSchedule(await jsonBody(request)), 201);
+  }
+  if (request.method === "POST" && apiPath === "/api/report-schedules/run-due") {
+    const input = await jsonBody(request);
+    const now = input.now ? new Date(input.now) : new Date();
+    return json(await service.runDueReportSchedules(now, { fetchImpl: options.fetchImpl }));
+  }
+  const reportScheduleRunMatch = apiPath.match(/^\/api\/report-schedules\/([^/]+)\/run$/);
+  if (request.method === "POST" && reportScheduleRunMatch) {
+    return json(await service.runReportSchedule(decodeURIComponent(reportScheduleRunMatch[1]), { fetchImpl: options.fetchImpl }));
+  }
+  const reportScheduleMatch = apiPath.match(/^\/api\/report-schedules\/([^/]+)$/);
+  if (reportScheduleMatch) {
+    const id = decodeURIComponent(reportScheduleMatch[1]);
+    if (request.method === "GET") {
+      const schedule = service.getReportSchedule(id);
+      return schedule ? json(schedule) : json({ error: "not found" }, 404);
+    }
+    if (request.method === "PATCH") {
+      return json(service.updateReportSchedule(id, await jsonBody(request)));
+    }
+    if (request.method === "DELETE") {
+      return json({ deleted: service.deleteReportSchedule(id) });
+    }
+  }
+  if (request.method === "GET" && apiPath === "/api/report-runs") {
+    return json(service.listReportRuns({
+      scheduleId: url.searchParams.get("scheduleId") ?? undefined,
+      limit: numericParam(url, "limit", 50),
+    }));
+  }
+  if (request.method === "GET" && apiPath === "/api/audit-events") {
+    return json(service.listAuditEvents({
+      resourceType: url.searchParams.get("resourceType") ?? undefined,
+      resourceId: url.searchParams.get("resourceId") ?? undefined,
+      limit: numericParam(url, "limit", 50),
+    }));
   }
   if (request.method === "GET" && apiPath === "/api/monitors") {
     return json(service.listMonitors({ includeDisabled: url.searchParams.get("includeDisabled") === "true" }));
@@ -270,6 +315,8 @@ async function handleApiRoute(
 
 function hostedScopeFor(method: string, apiPath: string): HostedScope {
   if (method === "POST" && apiPath === "/api/report") return "uptime:report";
+  if (apiPath.startsWith("/api/report-schedules") || apiPath.startsWith("/api/report-runs")) return method === "GET" ? "uptime:read" : "uptime:report";
+  if (apiPath.startsWith("/api/audit-events")) return method === "GET" ? "uptime:read" : "uptime:admin";
   if (apiPath.startsWith("/api/probes")) return method === "GET" ? "uptime:read" : "uptime:probe";
   if (method === "POST" && (apiPath === "/api/check-all" || /\/check$/.test(apiPath))) return "uptime:probe";
   if (method === "GET") return "uptime:read";

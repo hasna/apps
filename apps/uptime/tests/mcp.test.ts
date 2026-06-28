@@ -17,6 +17,12 @@ test("MCP server registers uptime tools and JSON resources", async () => {
 
     expect(Object.keys(server._registeredTools)).toContain("uptime_summary");
     expect(Object.keys(server._registeredTools)).toContain("uptime_send_report");
+    expect(Object.keys(server._registeredTools)).toContain("uptime_create_report_schedule");
+    expect(Object.keys(server._registeredTools)).toContain("uptime_list_report_schedules");
+    expect(Object.keys(server._registeredTools)).toContain("uptime_run_report_schedule");
+    expect(Object.keys(server._registeredTools)).toContain("uptime_run_due_report_schedules");
+    expect(Object.keys(server._registeredTools)).toContain("uptime_report_runs");
+    expect(Object.keys(server._registeredTools)).toContain("uptime_audit_events");
     expect(Object.keys(server._registeredTools)).toContain("uptime_create_probe");
     expect(Object.keys(server._registeredTools)).toContain("uptime_list_probes");
     expect(Object.keys(server._registeredTools)).toContain("uptime_create_probe_job");
@@ -26,8 +32,11 @@ test("MCP server registers uptime tools and JSON resources", async () => {
     expect(Object.keys(server._registeredTools)).toContain("uptime_import_apply");
     expect(Object.keys(server._registeredTools)).toContain("uptime_import_rollback");
     expect(Object.keys(server._registeredResources).sort()).toEqual([
+      "uptime://audit-events",
       "uptime://incidents",
       "uptime://monitors",
+      "uptime://report-runs",
+      "uptime://report-schedules",
       "uptime://summary",
     ]);
 
@@ -43,6 +52,16 @@ test("MCP server registers uptime tools and JSON resources", async () => {
       logs: { apiUrl: "http://logs.test", projectId: "uptime" },
       timeoutMs: 1000,
     }).success).toBe(true);
+    expect(server._registeredTools.uptime_create_report_schedule.inputSchema?.safeParse({
+      name: "ops",
+      intervalSeconds: 60,
+      channels: { logs: { apiUrl: "http://logs.test", projectId: "uptime" } },
+    }).success).toBe(true);
+    expect(server._registeredTools.uptime_create_report_schedule.inputSchema?.safeParse({
+      name: "ops",
+      intervalSeconds: 60,
+      channels: { logs: { apiUrl: "http://logs.test", apiKey: "secret" } },
+    }).success).toBe(false);
     expect(server._registeredTools.uptime_import_preview.inputSchema?.safeParse({
       source: "manual",
       records: [{ sourceId: "api", monitor: { name: "api", kind: "http", url: "https://example.com" } }],

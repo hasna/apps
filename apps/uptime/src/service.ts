@@ -5,22 +5,31 @@ import { generateProbeKeyPair, probePublicKeyFingerprint, verifyProbeResultSigna
 import { StaleCheckResultError, UptimeStore, type MonitorProvenance, type SaveImportBatchInput, type StoredImportBatch, type UpsertMonitorProvenanceInput, type UptimeBackup, type UptimeBackupCheck, type UptimeStoreOptions } from "./store.js";
 import { buildUptimeReport, sendUptimeReport, type BuildUptimeReportOptions, type SendUptimeReportOptions, type UptimeReport, type UptimeReportDelivery } from "./report.js";
 import type {
+  AuditEvent,
   CheckAttemptResult,
   CheckResult,
+  CreateReportScheduleInput,
   CreateProbeInput,
   CreateProbeResult,
   CreateMonitorInput,
   Incident,
   ImportedMonitorInput,
   ImportedUpdateMonitorInput,
+  ListAuditEventsOptions,
+  ListReportRunsOptions,
   ListResultsOptions,
   Monitor,
   ProbeCheckJob,
   ProbeIdentity,
   ProbeResultSubmission,
   ProbeSubmissionReceipt,
+  RecordAuditEventInput,
+  ReportDeliveryRecord,
+  ReportRun,
+  ReportSchedule,
   SchedulerHandle,
   UpdateMonitorInput,
+  UpdateReportScheduleInput,
   UptimeSummary,
 } from "./types.js";
 
@@ -67,6 +76,24 @@ export interface UptimeStoreLike {
   completeProbeCheckJob?(input: { jobId: string; probeId: string; fencingToken: string; checkResultId: string; submittedAt?: string }): ProbeCheckJob;
   getProbeSubmission?(probeId: string, nonce: string): ProbeSubmissionReceipt | null;
   recordProbeSubmission?(input: Omit<ProbeSubmissionReceipt, "id" | "submittedAt"> & { submittedAt?: string }): ProbeSubmissionReceipt;
+  createReportSchedule?(input: CreateReportScheduleInput): ReportSchedule;
+  listReportSchedules?(options?: { includeDisabled?: boolean }): ReportSchedule[];
+  listDueReportSchedules?(nowIso?: string): ReportSchedule[];
+  getReportSchedule?(idOrName: string): ReportSchedule | null;
+  updateReportSchedule?(idOrName: string, input: UpdateReportScheduleInput): ReportSchedule;
+  deleteReportSchedule?(idOrName: string): boolean;
+  recordReportRun?(input: {
+    scheduleId?: string | null;
+    status: "success" | "failed";
+    startedAt?: string;
+    finishedAt?: string;
+    deliveries?: ReportDeliveryRecord[];
+    error?: string | null;
+    reportJson?: Record<string, unknown> | null;
+  }): ReportRun;
+  listReportRuns?(options?: ListReportRunsOptions): ReportRun[];
+  recordAuditEvent?(input: RecordAuditEventInput): AuditEvent;
+  listAuditEvents?(options?: ListAuditEventsOptions): AuditEvent[];
   runInTransaction?<T>(fn: () => T): T;
 }
 
@@ -84,11 +111,33 @@ type ProbeStoreLike = UptimeStoreLike & {
   recordProbeSubmission(input: Omit<ProbeSubmissionReceipt, "id" | "submittedAt"> & { submittedAt?: string }): ProbeSubmissionReceipt;
 };
 
+type ReportStoreLike = UptimeStoreLike & {
+  createReportSchedule(input: CreateReportScheduleInput): ReportSchedule;
+  listReportSchedules(options?: { includeDisabled?: boolean }): ReportSchedule[];
+  listDueReportSchedules(nowIso?: string): ReportSchedule[];
+  getReportSchedule(idOrName: string): ReportSchedule | null;
+  updateReportSchedule(idOrName: string, input: UpdateReportScheduleInput): ReportSchedule;
+  deleteReportSchedule(idOrName: string): boolean;
+  recordReportRun(input: {
+    scheduleId?: string | null;
+    status: "success" | "failed";
+    startedAt?: string;
+    finishedAt?: string;
+    deliveries?: ReportDeliveryRecord[];
+    error?: string | null;
+    reportJson?: Record<string, unknown> | null;
+  }): ReportRun;
+  listReportRuns(options?: ListReportRunsOptions): ReportRun[];
+  recordAuditEvent(input: RecordAuditEventInput): AuditEvent;
+  listAuditEvents(options?: ListAuditEventsOptions): AuditEvent[];
+};
+
 export class UptimeService {
   readonly store: UptimeStoreLike;
   private readonly checkRunner: (monitor: Monitor) => Promise<CheckAttemptResult>;
   private readonly leaseOwner = `svc_${randomUUID().replace(/-/g, "").slice(0, 18)}`;
   private readonly inFlightChecks = new Set<string>();
+  private readonly inFlightReportSchedules = new Set<string>();
 
   constructor(options: UptimeServiceOptions = {}) {
     this.store = options.store ?? new UptimeStore({ mode: "local", ...options });
@@ -210,6 +259,122 @@ export class UptimeService {
     return sendUptimeReport(this.summary(), options);
   }
 
+  createReportSchedule(input: CreateReportScheduleInput): ReportSchedule {
+    const store = this.reportStore();
+    const schedule = store.createReportSchedule(input);
+    this.audit("report_schedule.create", "report_schedule", schedule.id, `Created report schedule ${schedule.name}`, {
+      name: schedule.name,
+      enabled: schedule.enabled,
+      intervalSeconds: schedule.intervalSeconds,
+      channels: enabledReportChannels(schedule),
+    });
+    return schedule;
+  }
+
+  listReportSchedules(options: { includeDisabled?: boolean } = {}): ReportSchedule[] {
+    return this.reportStore().listReportSchedules(options);
+  }
+
+  getReportSchedule(idOrName: string): ReportSchedule | null {
+    return this.reportStore().getReportSchedule(idOrName);
+  }
+
+  updateReportSchedule(idOrName: string, input: UpdateReportScheduleInput): ReportSchedule {
+    const store = this.reportStore();
+    const schedule = store.updateReportSchedule(idOrName, input);
+    this.audit("report_schedule.update", "report_schedule", schedule.id, `Updated report schedule ${schedule.name}`, {
+      name: schedule.name,
+      enabled: schedule.enabled,
+      intervalSeconds: schedule.intervalSeconds,
+      channels: enabledReportChannels(schedule),
+    });
+    return schedule;
+  }
+
+  deleteReportSchedule(idOrName: string): boolean {
+    const store = this.reportStore();
+    const schedule = store.getReportSchedule(idOrName);
+    const deleted = store.deleteReportSchedule(idOrName);
+    if (deleted && schedule) {
+      this.audit("report_schedule.delete", "report_schedule", schedule.id, `Deleted report schedule ${schedule.name}`, {
+        name: schedule.name,
+      });
+    }
+    return deleted;
+  }
+
+  listReportRuns(options: ListReportRunsOptions = {}): ReportRun[] {
+    return this.reportStore().listReportRuns(options);
+  }
+
+  listAuditEvents(options: ListAuditEventsOptions = {}): AuditEvent[] {
+    return this.reportStore().listAuditEvents(options);
+  }
+
+  recordAuditEvent(input: RecordAuditEventInput): AuditEvent {
+    return this.reportStore().recordAuditEvent(input);
+  }
+
+  async runReportSchedule(idOrName: string, options: { fetchImpl?: typeof fetch } = {}): Promise<ReportRun> {
+    const store = this.reportStore();
+    const schedule = store.getReportSchedule(idOrName);
+    if (!schedule) throw new Error(`Report schedule not found: ${idOrName}`);
+    if (!schedule.enabled) throw new Error(`Report schedule is disabled: ${schedule.name}`);
+    if (this.inFlightReportSchedules.has(schedule.id)) throw new Error(`Report schedule already running: ${schedule.name}`);
+    this.inFlightReportSchedules.add(schedule.id);
+    try {
+      const startedAt = new Date().toISOString();
+      let deliveries: UptimeReportDelivery[] = [];
+      let error: string | null = null;
+      let reportJson: Record<string, unknown> | null = null;
+      try {
+        const report = this.buildReport({ subject: schedule.subject ?? undefined });
+        reportJson = report.json;
+        deliveries = await this.sendReport({
+          subject: schedule.subject ?? undefined,
+          email: schedule.channels.email as SendUptimeReportOptions["email"],
+          sms: schedule.channels.sms as SendUptimeReportOptions["sms"],
+          logs: schedule.channels.logs as SendUptimeReportOptions["logs"],
+          fetchImpl: options.fetchImpl,
+        });
+        const failed = deliveries.filter((delivery) => !delivery.ok);
+        if (failed.length > 0) {
+          error = failed.map((delivery) => `${delivery.channel}: ${delivery.error ?? delivery.status ?? "failed"}`).join("; ");
+        }
+      } catch (caught) {
+        error = caught instanceof Error ? caught.message : String(caught);
+      }
+      const finishedAt = new Date().toISOString();
+      const run = store.recordReportRun({
+        scheduleId: schedule.id,
+        status: error ? "failed" : "success",
+        startedAt,
+        finishedAt,
+        deliveries,
+        error,
+        reportJson,
+      });
+      this.audit("report_schedule.run", "report_schedule", schedule.id, `Ran report schedule ${schedule.name}`, {
+        runId: run.id,
+        status: run.status,
+        deliveryChannels: run.deliveries.map((delivery) => ({ channel: delivery.channel, ok: delivery.ok })),
+      });
+      return run;
+    } finally {
+      this.inFlightReportSchedules.delete(schedule.id);
+    }
+  }
+
+  async runDueReportSchedules(now: Date = new Date(), options: { fetchImpl?: typeof fetch } = {}): Promise<ReportRun[]> {
+    const store = this.reportStore();
+    const schedules = store.listDueReportSchedules(now.toISOString());
+    const runs: ReportRun[] = [];
+    for (const schedule of schedules) {
+      runs.push(await this.runReportSchedule(schedule.id, options));
+    }
+    return runs;
+  }
+
   async checkMonitor(idOrName: string): Promise<CheckResult> {
     if (this.store.mode === "hosted") throw new Error("hosted checks require check_jobs and probes");
     const monitor = this.store.getMonitor(idOrName);
@@ -256,11 +421,14 @@ export class UptimeService {
     return results;
   }
 
-  startScheduler(options: { tickMs?: number } = {}): SchedulerHandle {
+  startScheduler(options: { tickMs?: number; reportFetchImpl?: typeof fetch } = {}): SchedulerHandle {
     if (this.store.mode === "hosted") throw new Error("hosted scheduler requires check_jobs and probes");
     const tickMs = options.tickMs ?? 1000;
     const timer = setInterval(() => {
       void this.runDueChecks().catch((error) => {
+        console.error(error instanceof Error ? error.message : String(error));
+      });
+      void this.runDueReportSchedules(new Date(), { fetchImpl: options.reportFetchImpl }).catch((error) => {
         console.error(error instanceof Error ? error.message : String(error));
       });
     }, tickMs);
@@ -318,6 +486,42 @@ export class UptimeService {
       }
     }
     return store as ProbeStoreLike;
+  }
+
+  private reportStore(): ReportStoreLike {
+    if (this.store.mode === "hosted") {
+      throw new Error("hosted report schedules require cloud channel refs, workspace stores, and audit logging");
+    }
+    const store = this.store as UptimeStoreLike;
+    const required: Array<keyof ReportStoreLike> = [
+      "createReportSchedule",
+      "listReportSchedules",
+      "listDueReportSchedules",
+      "getReportSchedule",
+      "updateReportSchedule",
+      "deleteReportSchedule",
+      "recordReportRun",
+      "listReportRuns",
+      "recordAuditEvent",
+      "listAuditEvents",
+    ];
+    for (const method of required) {
+      if (typeof store[method] !== "function") {
+        throw new Error("report scheduling requires a report-capable store");
+      }
+    }
+    return store as ReportStoreLike;
+  }
+
+  private audit(action: string, resourceType: string, resourceId: string, message: string, metadata: Record<string, unknown>): void {
+    this.reportStore().recordAuditEvent({
+      action,
+      resourceType,
+      resourceId,
+      message,
+      metadata,
+      actor: "local",
+    });
   }
 
   private submitProbeResultInTransaction(input: ProbeResultSubmission): { result: CheckResult; receipt: ProbeSubmissionReceipt } {
@@ -395,6 +599,10 @@ export class MonitorCheckBusyError extends Error {
     super(message);
     this.name = "MonitorCheckBusyError";
   }
+}
+
+function enabledReportChannels(schedule: ReportSchedule): string[] {
+  return (["email", "sms", "logs"] as const).filter((channel) => Boolean(schedule.channels[channel]));
 }
 
 function validateProbeSubmission(input: ProbeResultSubmission): void {

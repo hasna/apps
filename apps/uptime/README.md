@@ -27,9 +27,17 @@ uptime summary
 uptime report --dry-run
 uptime report --email ops@example.com --from alerts@example.com --send-key "$MAILERY_SEND_KEY"
 uptime report --sms +15550000001 --logs
+uptime report-schedules create ops --interval 3600 --email ops@example.com --from alerts@example.com
+uptime report-schedules run-due
+uptime report-schedules runs
+uptime audit
 uptime incidents
 uptime serve --port 3899 --check
 ```
+
+Scheduled reports persist endpoint and recipient configuration, but not send
+keys or API tokens. Configure `MAILERY_SEND_KEY`, `HASNA_MAILERY_SEND_KEY`,
+`HASNA_LOGS_API_TOKEN`, or the matching service env vars before scheduled runs.
 
 Private/local probes can submit signed results from another machine:
 
@@ -91,9 +99,9 @@ claude mcp add --scope user uptime -- uptime-mcp
 ```
 
 The MCP server exposes monitor CRUD, check execution, summary, incident, and
-result tools, an `uptime_send_report` tool for report delivery, and local probe
-tools for public-key enrollment, job creation/claiming, and signed result
-submission.
+result tools, an `uptime_send_report` tool for one-shot report delivery,
+scheduled report tools, local audit event reads, and local probe tools for
+public-key enrollment, job creation/claiming, and signed result submission.
 
 ## SDK
 
@@ -121,6 +129,16 @@ await uptime.sendReport({
   sms: { apiUrl: "http://localhost:19451", to: "+15550000001" },
   logs: { apiUrl: "http://localhost:3460", apiKey: process.env.HASNA_LOGS_API_TOKEN, projectId: "open-uptime" },
 });
+
+const schedule = uptime.createReportSchedule({
+  name: "ops",
+  intervalSeconds: 3600,
+  channels: {
+    email: { from: "alerts@example.com", to: "ops@example.com" },
+    logs: { apiUrl: "http://localhost:3460", projectId: "open-uptime" },
+  },
+});
+await uptime.runReportSchedule(schedule.id);
 ```
 
 Probe agents can import signing helpers from `@hasna/uptime/probes`.
@@ -133,6 +151,15 @@ Run `uptime serve` and use:
 - `GET /api/summary`
 - `GET /api/report`
 - `POST /api/report`
+- `GET /api/report-schedules`
+- `POST /api/report-schedules`
+- `GET /api/report-schedules/:id`
+- `PATCH /api/report-schedules/:id`
+- `DELETE /api/report-schedules/:id`
+- `POST /api/report-schedules/:id/run`
+- `POST /api/report-schedules/run-due`
+- `GET /api/report-runs?scheduleId=<id>&limit=100`
+- `GET /api/audit-events?resourceType=<type>&resourceId=<id>`
 - `GET /api/monitors`
 - `POST /api/monitors`
 - `GET /api/monitors/:id`
@@ -152,6 +179,10 @@ check jobs, workspace stores, and audit logging are implemented. Local job reads
 redact fencing tokens; the claim response is the only API response that returns
 the active fencing token.
 
+Hosted `/api/v1/report-schedules*`, `/api/v1/report-runs`, and
+`/api/v1/audit-events` also fail closed until cloud channel refs, workspace
+stores, and cloud audit logging are implemented.
+
 ## Scope
 
 First release:
@@ -165,6 +196,7 @@ First release:
 - local dashboard/API
 - CLI, MCP, SDK, and tests
 - Optional report delivery through Open Mailery, Open Telephony, and Open Logs
+- Scheduled report definitions, report run history, and local audit events
 - Private/local probe identities, check jobs, signed submissions, and fenced
   result recording for internal agents
 

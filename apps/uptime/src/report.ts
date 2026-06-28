@@ -1,4 +1,4 @@
-import type { MonitorSummary, UptimeSummary } from "./types.js";
+import type { MonitorSummary, ReportDeliveryRecord, UptimeSummary } from "./types.js";
 
 export interface BuildUptimeReportOptions {
   subject?: string;
@@ -44,13 +44,7 @@ export interface UptimeLogsReportTarget {
   service?: string;
 }
 
-export interface UptimeReportDelivery {
-  channel: "email" | "sms" | "logs";
-  ok: boolean;
-  status?: number;
-  id?: string;
-  error?: string;
-}
+export interface UptimeReportDelivery extends ReportDeliveryRecord {}
 
 const DEFAULT_MAILERY_API_URL = "http://localhost:3900";
 const DEFAULT_TELEPHONY_API_URL = "http://localhost:19451";

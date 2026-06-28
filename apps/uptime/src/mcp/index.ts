@@ -55,6 +55,39 @@ export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer
     async (uri) => jsonResource(uri, service.listIncidents({ limit: 100 })),
   );
 
+  server.registerResource(
+    "uptime_report_schedules",
+    "uptime://report-schedules",
+    {
+      title: "Open Uptime Report Schedules",
+      description: "Scheduled uptime reports and delivery channel configuration.",
+      mimeType: "application/json",
+    },
+    async (uri) => jsonResource(uri, service.listReportSchedules({ includeDisabled: true })),
+  );
+
+  server.registerResource(
+    "uptime_report_runs",
+    "uptime://report-runs",
+    {
+      title: "Open Uptime Report Runs",
+      description: "Recent scheduled report delivery runs.",
+      mimeType: "application/json",
+    },
+    async (uri) => jsonResource(uri, service.listReportRuns({ limit: 100 })),
+  );
+
+  server.registerResource(
+    "uptime_audit_events",
+    "uptime://audit-events",
+    {
+      title: "Open Uptime Audit Events",
+      description: "Recent local audit events.",
+      mimeType: "application/json",
+    },
+    async (uri) => jsonResource(uri, service.listAuditEvents({ limit: 100 })),
+  );
+
   server.registerTool(
     "uptime_create_monitor",
     {
@@ -204,6 +237,86 @@ export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer
       logs: args.logs,
       timeoutMs: args.timeoutMs,
     })),
+  );
+
+  server.registerTool(
+    "uptime_create_report_schedule",
+    {
+      title: "Create a scheduled uptime report",
+      description: "Create a local scheduled uptime report. Persistent schedules do not accept API keys; configure Mailery/Open Logs credentials through environment variables.",
+      inputSchema: {
+        name: z.string(),
+        intervalSeconds: z.number().int().min(MIN_INTERVAL_SECONDS).max(MAX_INTERVAL_SECONDS),
+        nextRunAt: z.string().optional(),
+        enabled: z.boolean().optional(),
+        subject: z.string().nullable().optional(),
+        channels: reportScheduleChannelsSchema(),
+      },
+    },
+    async (args) => jsonResult(service.createReportSchedule(args)),
+  );
+
+  server.registerTool(
+    "uptime_list_report_schedules",
+    {
+      title: "List scheduled uptime reports",
+      description: "List local scheduled uptime reports.",
+      inputSchema: {
+        includeDisabled: z.boolean().optional(),
+      },
+    },
+    async (args) => jsonResult(service.listReportSchedules({ includeDisabled: args.includeDisabled })),
+  );
+
+  server.registerTool(
+    "uptime_run_report_schedule",
+    {
+      title: "Run one scheduled uptime report",
+      description: "Run a local scheduled uptime report now and record the run.",
+      inputSchema: {
+        idOrName: z.string(),
+      },
+    },
+    async (args) => jsonResult(await service.runReportSchedule(args.idOrName)),
+  );
+
+  server.registerTool(
+    "uptime_run_due_report_schedules",
+    {
+      title: "Run due scheduled uptime reports",
+      description: "Run all due local scheduled uptime reports and record runs.",
+      inputSchema: {
+        now: z.string().optional(),
+      },
+    },
+    async (args) => jsonResult(await service.runDueReportSchedules(args.now ? new Date(args.now) : new Date())),
+  );
+
+  server.registerTool(
+    "uptime_report_runs",
+    {
+      title: "List scheduled report runs",
+      description: "List local scheduled report run history.",
+      inputSchema: {
+        scheduleId: z.string().optional(),
+        limit: z.number().int().min(1).max(MAX_RESULT_LIMIT).optional(),
+      },
+    },
+    async (args) => jsonResult(service.listReportRuns({ scheduleId: args.scheduleId, limit: args.limit })),
+  );
+
+  server.registerTool(
+    "uptime_audit_events",
+    {
+      title: "List audit events",
+      description: "List recent local audit events.",
+      inputSchema: {
+        resourceType: z.string().optional(),
+        resourceId: z.string().optional(),
+        limit: z.number().int().min(1).max(MAX_RESULT_LIMIT).optional(),
+      },
+    },
+    async (args) => jsonResult(service.listAuditEvents({ resourceType: args.resourceType, resourceId: args.resourceId, limit: args.limit })),
   );
 
   server.registerTool(
@@ -376,6 +489,29 @@ function jsonResource(uri: URL, value: unknown) {
 
 function errorResult(message: string) {
   return { content: [{ type: "text" as const, text: message }], isError: true };
+}
+
+function reportScheduleChannelsSchema() {
+  return z.object({
+    email: z.union([z.literal(true), z.object({
+      apiUrl: z.string().url().optional(),
+      from: z.string().optional(),
+      to: z.union([z.string(), z.array(z.string())]).optional(),
+      subject: z.string().optional(),
+      providerId: z.string().optional(),
+    }).strict()]).optional(),
+    sms: z.union([z.literal(true), z.object({
+      apiUrl: z.string().url().optional(),
+      from: z.string().optional(),
+      to: z.union([z.string(), z.array(z.string())]).optional(),
+    }).strict()]).optional(),
+    logs: z.union([z.literal(true), z.object({
+      apiUrl: z.string().url().optional(),
+      projectId: z.string().optional(),
+      environment: z.string().optional(),
+      service: z.string().optional(),
+    }).strict()]).optional(),
+  });
 }
 
 if (import.meta.main) {

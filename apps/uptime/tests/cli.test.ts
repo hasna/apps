@@ -143,6 +143,49 @@ test("CLI report dry-run prints a report without delivery configuration", () => 
   }
 });
 
+test("CLI report-schedules create, run-due, runs, and audit work", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const env = { HASNA_MAILERY_SEND_KEY: "", MAILERY_SEND_KEY: "", ESK: "" };
+    runCli(["add", "api", "--url", "https://example.com"], dbPath);
+    const create = runCli([
+      "report-schedules",
+      "create",
+      "ops",
+      "--interval",
+      "60",
+      "--next-run-at",
+      "2026-01-01T00:00:00.000Z",
+      "--email",
+      "ops@example.com",
+      "--from",
+      "ops@example.com",
+      "--json",
+    ], dbPath, env);
+    const list = runCli(["report-schedules", "list", "--all", "--json"], dbPath, env);
+    const due = runCli([
+      "report-schedules",
+      "run-due",
+      "--now",
+      "2026-01-01T00:00:00.000Z",
+      "--json",
+    ], dbPath, env);
+    const runs = runCli(["report-schedules", "runs", "--json"], dbPath, env);
+    const audit = runCli(["audit", "--json"], dbPath, env);
+
+    expect(create.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(create.stdout)).name).toBe("ops");
+    expect(JSON.parse(new TextDecoder().decode(list.stdout))).toHaveLength(1);
+    expect(due.exitCode).toBe(1);
+    expect(JSON.parse(new TextDecoder().decode(due.stdout))[0].status).toBe("failed");
+    expect(JSON.parse(new TextDecoder().decode(runs.stdout))).toHaveLength(1);
+    expect(JSON.parse(new TextDecoder().decode(audit.stdout)).map((event: any) => event.action)).toContain("report_schedule.run");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("CLI imports preview and apply manual records", () => {
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {

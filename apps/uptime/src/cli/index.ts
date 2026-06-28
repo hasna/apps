@@ -11,7 +11,7 @@ import { serveUptime } from "../api.js";
 import { generateProbeKeyPair, signProbeResult } from "../probes.js";
 import type { ImportSource } from "../imports.js";
 import type { SendUptimeReportOptions, UptimeReportDelivery } from "../report.js";
-import type { CreateMonitorInput, Monitor, ProbeResultSubmission, UpdateMonitorInput, UptimeSummary } from "../types.js";
+import type { CreateMonitorInput, Monitor, ProbeResultSubmission, ReportRun, ReportSchedule, ReportScheduleChannels, UpdateMonitorInput, UptimeSummary } from "../types.js";
 
 const program = new Command();
 
@@ -314,6 +314,150 @@ program
       const failed = deliveries.filter((delivery) => !delivery.ok);
       print(deliveries, renderDeliveries(deliveries), opts);
       if (failed.length > 0) process.exit(1);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+const reportSchedules = program
+  .command("report-schedules")
+  .alias("schedules")
+  .description("Manage scheduled uptime reports");
+
+reportSchedules
+  .command("create <name>")
+  .description("Create a scheduled uptime report")
+  .requiredOption("--interval <seconds>", "report interval in seconds", parseInteger)
+  .option("--next-run-at <iso>", "first due timestamp", new Date().toISOString())
+  .option("--subject <subject>", "report subject")
+  .option("--email <to>", "email recipients; Mailery send key is read from env at run time")
+  .option("--from <email>", "Mailery from address")
+  .option("--mailery-url <url>", "Mailery API URL")
+  .option("--sms <phone>", "SMS recipients")
+  .option("--sms-from <phone>", "Telephony from phone number")
+  .option("--telephony-url <url>", "Telephony API URL")
+  .option("--logs", "write scheduled report runs to Open Logs")
+  .option("--logs-url <url>", "Open Logs API URL")
+  .option("--logs-project <id>", "Open Logs project id")
+  .option("--disabled", "create the schedule disabled")
+  .option("-j, --json", "print JSON")
+  .action((name, opts) => {
+    try {
+      const svc = service();
+      const schedule = svc.createReportSchedule({
+        name,
+        intervalSeconds: opts.interval,
+        nextRunAt: opts.nextRunAt,
+        enabled: opts.disabled ? false : true,
+        subject: opts.subject,
+        channels: buildReportScheduleChannels(opts),
+      });
+      svc.close();
+      print(schedule, `Created report schedule ${schedule.name}`, opts);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+reportSchedules
+  .command("list")
+  .description("List scheduled uptime reports")
+  .option("--all", "include disabled schedules")
+  .option("-j, --json", "print JSON")
+  .action((opts) => {
+    try {
+      const svc = service();
+      const schedules = svc.listReportSchedules({ includeDisabled: opts.all });
+      svc.close();
+      print(schedules, renderReportSchedules(schedules), opts);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+reportSchedules
+  .command("run <id-or-name>")
+  .description("Run one scheduled report now and record a run")
+  .option("-j, --json", "print JSON")
+  .action(async (idOrName, opts) => {
+    try {
+      const svc = service();
+      const run = await svc.runReportSchedule(idOrName);
+      svc.close();
+      print(run, renderReportRuns([run]), opts);
+      if (run.status === "failed") process.exit(1);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+reportSchedules
+  .command("run-due")
+  .description("Run all due scheduled reports and record runs")
+  .option("--now <iso>", "due timestamp", new Date().toISOString())
+  .option("-j, --json", "print JSON")
+  .action(async (opts) => {
+    try {
+      const svc = service();
+      const runs = await svc.runDueReportSchedules(new Date(opts.now));
+      svc.close();
+      print(runs, renderReportRuns(runs), opts);
+      if (runs.some((run) => run.status === "failed")) process.exit(1);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+reportSchedules
+  .command("delete <id-or-name>")
+  .alias("rm")
+  .description("Delete a scheduled uptime report")
+  .option("-j, --json", "print JSON")
+  .action((idOrName, opts) => {
+    try {
+      const svc = service();
+      const deleted = svc.deleteReportSchedule(idOrName);
+      svc.close();
+      print({ deleted }, deleted ? `Deleted report schedule ${idOrName}` : `Not found: ${idOrName}`, opts);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+reportSchedules
+  .command("runs")
+  .description("List scheduled report runs")
+  .option("--schedule <id>", "filter by report schedule id")
+  .option("--limit <n>", "max rows", parseInteger, 20)
+  .option("-j, --json", "print JSON")
+  .action((opts) => {
+    try {
+      const svc = service();
+      const runs = svc.listReportRuns({ scheduleId: opts.schedule, limit: opts.limit });
+      svc.close();
+      print(runs, renderReportRuns(runs), opts);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+program
+  .command("audit")
+  .description("List local audit events")
+  .option("--resource-type <type>", "filter by resource type")
+  .option("--resource-id <id>", "filter by resource id")
+  .option("--limit <n>", "max rows", parseInteger, 20)
+  .option("-j, --json", "print JSON")
+  .action((opts) => {
+    try {
+      const svc = service();
+      const events = svc.listAuditEvents({
+        resourceType: opts.resourceType,
+        resourceId: opts.resourceId,
+        limit: opts.limit,
+      });
+      svc.close();
+      print(events, events.length ? events.map((event) => `${event.createdAt} ${event.action} ${sanitizeField(event.resourceType ?? "-")} ${sanitizeField(event.resourceId ?? "-")} ${sanitizeField(event.message ?? "")}`).join("\n") : "No audit events", opts);
     } catch (error) {
       fail(error);
     }
@@ -759,6 +903,59 @@ function renderSummary(summary: UptimeSummary): string {
     lines.push(`${renderStatus(item.monitor.status).padEnd(12)} ${sanitizeField(item.monitor.name).padEnd(24)} uptime ${uptime.padStart(8)} latency ${latency}`);
   }
   return lines.join("\n");
+}
+
+function buildReportScheduleChannels(opts: {
+  email?: string;
+  from?: string;
+  maileryUrl?: string;
+  sms?: string;
+  smsFrom?: string;
+  telephonyUrl?: string;
+  logs?: boolean;
+  logsUrl?: string;
+  logsProject?: string;
+}): ReportScheduleChannels {
+  const channels: ReportScheduleChannels = {};
+  if (opts.email) {
+    channels.email = {
+      apiUrl: opts.maileryUrl,
+      from: opts.from,
+      to: splitList(opts.email),
+    };
+  }
+  if (opts.sms) {
+    channels.sms = {
+      apiUrl: opts.telephonyUrl,
+      from: opts.smsFrom,
+      to: splitList(opts.sms),
+    };
+  }
+  if (opts.logs) {
+    channels.logs = {
+      apiUrl: opts.logsUrl,
+      projectId: opts.logsProject,
+    };
+  }
+  return channels;
+}
+
+function renderReportSchedules(schedules: ReportSchedule[]): string {
+  if (schedules.length === 0) return "No report schedules";
+  return schedules.map((schedule) => {
+    const status = schedule.enabled ? "enabled " : "disabled";
+    const channels = (["email", "sms", "logs"] as const).filter((channel) => Boolean(schedule.channels[channel])).join(",");
+    return `${status} ${schedule.id} ${sanitizeField(schedule.name).padEnd(24)} every ${schedule.intervalSeconds}s next ${schedule.nextRunAt} ${channels}`;
+  }).join("\n");
+}
+
+function renderReportRuns(runs: ReportRun[]): string {
+  if (runs.length === 0) return "No report runs";
+  return runs.map((run) => {
+    const status = run.status === "success" ? chalk.green("success") : chalk.red("failed");
+    const deliveries = run.deliveries.map((delivery) => `${delivery.channel}:${delivery.ok ? "ok" : "failed"}`).join(",");
+    return `${status.padEnd(12)} ${run.id} ${run.scheduleId ?? "-"} ${run.finishedAt} ${deliveries}${run.error ? ` ${sanitizeField(run.error)}` : ""}`;
+  }).join("\n");
 }
 
 function renderDeliveries(deliveries: UptimeReportDelivery[]): string {

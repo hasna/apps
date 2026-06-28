@@ -1114,6 +1114,134 @@ test("import preview blocks unsafe hosted targets before apply", () => {
   service.close();
 });
 
+test("scheduled reports record runs, advance due time, and audit actions", async () => {
+  const calls: string[] = [];
+  const service = new UptimeService({ dbPath: tempDb() });
+  service.createMonitor({ name: "api", kind: "http", url: "https://example.com" });
+  const schedule = service.createReportSchedule({
+    name: "ops",
+    intervalSeconds: 60,
+    nextRunAt: "2026-01-01T00:00:00.000Z",
+    channels: {
+      logs: { apiUrl: "http://logs.test", projectId: "uptime" },
+    },
+  });
+
+  const runs = await service.runDueReportSchedules(new Date("2026-01-01T00:00:00.000Z"), {
+    fetchImpl: (async (url: string | URL | Request) => {
+      calls.push(String(url));
+      return new Response(JSON.stringify({ id: "log_1" }), { status: 201 });
+    }) as typeof fetch,
+  });
+  const updated = service.getReportSchedule(schedule.id)!;
+  const audit = service.listAuditEvents({ resourceType: "report_schedule", resourceId: schedule.id, limit: 10 });
+
+  expect(runs).toHaveLength(1);
+  expect(runs[0]).toMatchObject({ scheduleId: schedule.id, status: "success" });
+  expect(runs[0].deliveries[0]).toMatchObject({ channel: "logs", ok: true });
+  expect(updated.lastRunAt).toBe(runs[0].finishedAt);
+  expect(updated.nextRunAt > runs[0].finishedAt).toBe(true);
+  expect(service.listReportRuns({ scheduleId: schedule.id })).toHaveLength(1);
+  expect(audit.map((event) => event.action)).toContain("report_schedule.run");
+  expect(audit.map((event) => event.action)).toContain("report_schedule.create");
+  expect(calls).toEqual(["http://logs.test/api/logs/structured?format=json&source=structured&service=open-uptime&project_id=uptime&environment=test"]);
+  service.close();
+});
+
+test("local scheduler runs due report schedules when enabled", async () => {
+  const calls: string[] = [];
+  const service = new UptimeService({
+    dbPath: tempDb(),
+    checkRunner: async () => ({ status: "up", latencyMs: 1, statusCode: 200, error: null }),
+  });
+  service.createMonitor({ name: "api", kind: "http", url: "https://example.com" });
+  service.createReportSchedule({
+    name: "ops",
+    intervalSeconds: 60,
+    nextRunAt: new Date(Date.now() - 1000).toISOString(),
+    channels: {
+      logs: { apiUrl: "http://logs.test", projectId: "uptime" },
+    },
+  });
+
+  const scheduler = service.startScheduler({
+    tickMs: 10,
+    reportFetchImpl: (async (url: string | URL | Request) => {
+      calls.push(String(url));
+      return new Response(JSON.stringify({ id: "log_1" }), { status: 201 });
+    }) as typeof fetch,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  scheduler.stop();
+
+  expect(service.listReportRuns()).toHaveLength(1);
+  expect(calls).toEqual(["http://logs.test/api/logs/structured?format=json&source=structured&service=open-uptime&project_id=uptime&environment=test"]);
+  service.close();
+});
+
+test("scheduled reports reject persisted API keys and redact audit metadata", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+
+  expect(() => service.createReportSchedule({
+    name: "secret",
+    intervalSeconds: 60,
+    channels: {
+      email: { to: "ops@example.com", sendKey: "esk_secret" } as never,
+    },
+  })).toThrow("must not persist API keys");
+  expect(() => service.createReportSchedule({
+    name: "secret-url-userinfo",
+    intervalSeconds: 60,
+    channels: {
+      logs: { apiUrl: "http://user:pass@logs.test", projectId: "uptime" },
+    },
+  })).toThrow("must not include credentials");
+  expect(() => service.createReportSchedule({
+    name: "secret-url-query",
+    intervalSeconds: 60,
+    channels: {
+      logs: { apiUrl: "http://logs.test?api_key=secret", projectId: "uptime" },
+    },
+  })).toThrow("must not include secret query");
+
+  const event = service.recordAuditEvent({
+    action: "test.secret",
+    metadata: {
+      sendKey: "esk_secret",
+      nested: { apiToken: "tok_secret", ok: true },
+      url: "http://user:pass@logs.test/path?api_key=secret#secret",
+      auth: "Bearer abc123",
+    },
+  });
+  const run = (service.store as UptimeStore).recordReportRun({
+    status: "failed",
+    error: "Bearer abc123 failed at http://logs.test/path?api_key=secret",
+    deliveries: [{ channel: "logs", ok: false, error: "bad token abc123", id: "abc123" }],
+  });
+
+  expect(JSON.stringify(event.metadata)).not.toContain("esk_secret");
+  expect(JSON.stringify(event.metadata)).not.toContain("tok_secret");
+  expect(JSON.stringify(event.metadata)).not.toContain("user:pass");
+  expect(JSON.stringify(event.metadata)).not.toContain("api_key=secret");
+  expect(run.error).not.toContain("abc123");
+  expect(run.error).not.toContain("api_key=secret");
+  expect(event.metadata.sendKey).toBe("[REDACTED]");
+  service.close();
+});
+
+test("hosted service rejects local report schedules until cloud channel refs exist", async () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+
+  expect(() => service.createReportSchedule({
+    name: "hosted",
+    intervalSeconds: 60,
+    channels: { logs: true },
+  })).toThrow("hosted report schedules require cloud channel refs");
+  expect(() => service.listReportSchedules()).toThrow("hosted report schedules require cloud channel refs");
+  await expect(service.runDueReportSchedules()).rejects.toThrow("hosted report schedules require cloud channel refs");
+  service.close();
+});
+
 test("local backup verify and restore round trip preserves data", async () => {
   const dbPath = tempDb();
   const backupPath = join(mkdtempSync(join(tmpdir(), "open-uptime-backup-")), "backup.db");
@@ -1131,7 +1259,7 @@ test("local backup verify and restore round trip preserves data", async () => {
   first.close();
 
   expect(backup.bytes).toBeGreaterThan(0);
-  expect(check).toMatchObject({ ok: true, integrity: "ok", schemaVersion: "2", monitors: 1, results: 1, incidents: 1 });
+  expect(check).toMatchObject({ ok: true, integrity: "ok", schemaVersion: "3", monitors: 1, results: 1, incidents: 1 });
 
   UptimeStore.restoreBackup(backup.backupPath, restorePath);
   const restored = new UptimeService({ dbPath: restorePath });
@@ -1166,7 +1294,35 @@ test("schema v1 backups missing only probe tables remain restorable", () => {
   const restored = new UptimeService({ dbPath: restorePath });
   expect(restored.listMonitors({ includeDisabled: true })).toHaveLength(1);
   expect(restored.createProbe({ name: "post-restore" }).publicKeyFingerprint).toHaveLength(64);
-  expect(restored.verifyBackup(restorePath).schemaVersion).toBe("2");
+  expect(restored.verifyBackup(restorePath).schemaVersion).toBe("3");
+  restored.close();
+});
+
+test("schema v2 backups missing only report and audit tables remain restorable", () => {
+  const legacyPath = tempDb();
+  const restorePath = join(mkdtempSync(join(tmpdir(), "open-uptime-v2-restore-")), "restored.db");
+  cleanup.push(restorePath.replace(/\/restored\.db$/, ""));
+  const source = new UptimeService({ dbPath: legacyPath });
+  source.createMonitor({ name: "legacy-v2", kind: "http", url: "https://example.com" });
+  source.close();
+
+  const db = new Database(legacyPath);
+  db.run("PRAGMA foreign_keys = OFF");
+  db.run("DROP TABLE audit_events");
+  db.run("DROP TABLE report_runs");
+  db.run("DROP TABLE report_schedules");
+  db.query("UPDATE schema_migrations SET value = '2' WHERE key = 'schema_version'").run();
+  db.run("PRAGMA foreign_keys = ON");
+  db.close();
+
+  const check = UptimeStore.verifyBackup(legacyPath);
+  expect(check).toMatchObject({ ok: true, integrity: "ok", schemaVersion: "2", monitors: 1 });
+  expect(check.missingTables.sort()).toEqual(["audit_events", "report_runs", "report_schedules"].sort());
+
+  UptimeStore.restoreBackup(legacyPath, restorePath);
+  const restored = new UptimeService({ dbPath: restorePath });
+  expect(restored.listReportSchedules()).toHaveLength(0);
+  expect(restored.verifyBackup(restorePath).schemaVersion).toBe("3");
   restored.close();
 });
 

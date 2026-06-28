@@ -6,6 +6,32 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-06-28
+
+### Added
+
+- Local scheduled uptime reports with persisted schedules, run history, and due
+  execution through Mailery email, Telephony SMS, and Open Logs.
+- CLI commands under `uptime report-schedules` plus `uptime audit`.
+- Local API and MCP surfaces for report schedules, report runs, and audit
+  events.
+- Immutable local audit events for report schedule create/update/delete/run
+  actions.
+
+### Changed
+
+- Bumped the local SQLite schema to version 3 while keeping schema version 1
+  and 2 backups restorable when they only lack newer probe/report/audit tables.
+- Hosted report schedule routes fail closed until cloud channel refs, workspace
+  stores, and audit logging are implemented.
+
+### Security
+
+- Persisted report schedules reject inline API keys and tokens; scheduled runs
+  resolve Mailery/Open Logs credentials from environment variables or future
+  cloud channel refs.
+- Audit metadata redacts token/key/secret-like fields before persistence.
+
 ## [0.1.3] - 2026-06-28
 
 ### Added
