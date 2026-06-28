@@ -117,8 +117,9 @@ Security groups:
 - `open-uptime-scheduler-sg`: no inbound, outbound to RDS, Logs, Secrets
   Manager, and notification services through approved endpoints.
 - `open-uptime-public-probe-sg`: no inbound, outbound through the public target
-  policy path. The application target policy still enforces SSRF rules because
-  security groups cannot express DNS rebinding or URL semantics.
+  policy path once public probe execution is enabled. Keep desired count `0`
+  until the application target policy enforces DNS rebinding and URL semantics
+  that security groups cannot express.
 - `open-uptime-rds-client-sg`: allowed by the canonical RDS security group for
   the dedicated Uptime DB user.
 
@@ -258,9 +259,13 @@ role. Do not store AWS access keys in Open Deployment local DB rows.
 
 ## Egress And SSRF Boundaries
 
-AWS network controls and application target policy are both required.
+AWS network controls and application target policy are both required. The
+current hosted API enforces configuration-time checks for direct denied hosts,
+secret-bearing URLs, and private DNS suffixes. Public probe execution remains
+disabled until execution-time DNS resolution, address pinning, redirect
+validation, rebinding protection, and policy-decision logging are implemented.
 
-Hosted public probes deny:
+The required hosted public-probe policy must deny:
 
 - loopback, link-local, metadata endpoints, RFC1918, multicast, wildcard,
   unspecified, carrier-grade NAT, and IPv6 ULA/link-local ranges;

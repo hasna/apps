@@ -228,6 +228,41 @@ test("hosted API uses scoped /api/v1 auth and leaves legacy routes local-only", 
   service.close();
 });
 
+test("hosted API import preview cannot observe monitors from another workspace", async () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const handler = createApiHandler(service, {
+    mode: "hosted",
+    hostedTokens: [
+      { token: "write-a", scopes: ["uptime:write"], workspaceId: "ws_a" },
+      { token: "write-b", scopes: ["uptime:write"], workspaceId: "ws_b" },
+    ],
+  });
+
+  const create = await handler(jsonRequest(
+    "https://uptime.test/api/v1/monitors",
+    "POST",
+    { name: "shared-name", kind: "http", url: "https://a.example.com" },
+    { origin: "https://uptime.test", authorization: "Bearer write-a" },
+  ));
+  const preview = await handler(jsonRequest(
+    "https://uptime.test/api/v1/imports/preview",
+    "POST",
+    {
+      source: "manual",
+      records: [{ sourceId: "manual:shared-name", monitor: { name: "shared-name", kind: "http", url: "https://b.example.com" } }],
+    },
+    { origin: "https://uptime.test", authorization: "Bearer write-b" },
+  ));
+  const body = await preview.json();
+
+  expect(create.status).toBe(201);
+  expect(preview.status).toBe(200);
+  expect(body.items[0]).toMatchObject({ action: "create", monitor: null, provenance: null });
+  expect(JSON.stringify(body)).not.toContain("ws_a");
+  expect(JSON.stringify(body)).not.toContain("a.example.com");
+  service.close();
+});
+
 test("hosted API fails closed when auth token is not configured", async () => {
   const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
   const handler = createApiHandler(service, { mode: "hosted" });

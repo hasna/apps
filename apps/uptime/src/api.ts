@@ -293,7 +293,7 @@ async function handleApiRoute(
     return json(service.submitProbeResult(await jsonBody(request)), 201);
   }
   if (request.method === "POST" && apiPath === "/api/imports/preview") {
-    return json(service.previewImport(await jsonBody(request)));
+    return json(service.previewImport(await jsonBody(request), { workspaceId: actor?.workspaceId }));
   }
   if (request.method === "POST" && apiPath === "/api/imports/apply") {
     if (hosted) throw new ApiError("hosted import apply requires cloud import_batches and audit", 501);

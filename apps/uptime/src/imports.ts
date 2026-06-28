@@ -87,7 +87,7 @@ export interface UptimeImportStore {
   createMonitor(input: ImportedMonitorInput, options?: { allowBrowserPage?: boolean }): Monitor;
   updateMonitor(idOrName: string, input: ImportedUpdateMonitorInput, options?: { allowBrowserPage?: boolean }): Monitor;
   deleteMonitor(idOrName: string): boolean;
-  getMonitor(idOrName: string): Monitor | null;
+  getMonitor(idOrName: string, options?: { workspaceId?: string }): Monitor | null;
   listResults(options?: ListResultsOptions): unknown[];
   getProvenance(source: string, sourceId: string): MonitorProvenance | null;
   upsertMonitorProvenance(input: UpsertMonitorProvenanceInput): MonitorProvenance;
@@ -97,9 +97,9 @@ export interface UptimeImportStore {
   runInTransaction?<T>(fn: () => T): T;
 }
 
-export function previewImport(store: UptimeImportStore, request: ImportRequest): ImportPreview {
+export function previewImport(store: UptimeImportStore, request: ImportRequest, options: { workspaceId?: string } = {}): ImportPreview {
   const source = normalizeSource(request.source);
-  const items = dedupePreviewItems(request.records.map((record) => previewRecord(store, source, record, request.defaults ?? {})));
+  const items = dedupePreviewItems(request.records.map((record) => previewRecord(store, source, record, request.defaults ?? {}, options)));
   return {
     source,
     generatedAt: new Date().toISOString(),
@@ -174,7 +174,13 @@ export function rollbackImport(store: UptimeImportStore, batchId: string): Impor
   };
 }
 
-function previewRecord(store: UptimeImportStore, source: ImportSource, record: unknown, defaults: Partial<CreateMonitorInput>): ImportPreviewItem {
+function previewRecord(
+  store: UptimeImportStore,
+  source: ImportSource,
+  record: unknown,
+  defaults: Partial<CreateMonitorInput>,
+  options: { workspaceId?: string },
+): ImportPreviewItem {
   const warnings: string[] = [];
   let candidate: ImportCandidate;
   try {
@@ -192,13 +198,16 @@ function previewRecord(store: UptimeImportStore, source: ImportSource, record: u
       reason: error instanceof Error ? error.message : String(error),
     };
   }
-  const provenance = store.getProvenance(candidate.source, candidate.sourceId);
-  const monitor = provenance ? store.getMonitor(provenance.monitorId) : store.getMonitor(candidate.name);
-  if (provenance && !monitor) {
+  const monitorOptions = options.workspaceId ? { workspaceId: options.workspaceId } : undefined;
+  const rawProvenance = store.getProvenance(candidate.source, candidate.sourceId);
+  const provenanceMonitor = rawProvenance ? store.getMonitor(rawProvenance.monitorId, monitorOptions) : null;
+  const provenance = provenanceMonitor ? rawProvenance : null;
+  const monitor = provenanceMonitor ?? store.getMonitor(candidate.name, monitorOptions);
+  if (rawProvenance && !provenanceMonitor && !options.workspaceId) {
     return { candidate, action: "create", monitor: null, provenance, warnings: ["source provenance points to a missing monitor"], reason: null };
   }
   if (provenance && monitor) {
-    const nameOwner = store.getMonitor(candidate.name);
+    const nameOwner = store.getMonitor(candidate.name, monitorOptions);
     if (nameOwner && nameOwner.id !== monitor.id) {
       return {
         candidate,

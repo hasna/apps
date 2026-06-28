@@ -11,12 +11,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Added Terraform outputs for log groups, web alarms, backup vault, and backup
-  plan so the AWS runbook can use output-driven commands.
+  plan, and the KMS key ARN so the AWS runbook can use output-driven commands.
 - Expanded the AWS deployment runbook restore drill with AWS Backup restore-job,
   polling, staging mount-target, validation, and cleanup steps.
+- Made the AWS runbook command blocks use explicit shell variables and
+  consistent Terraform working-directory flags.
 - Hardened hosted target policy to normalize IPv4-mapped IPv6 literals before
   rejecting loopback, private, link-local, metadata, carrier-grade NAT,
   unspecified, and multicast IPv4 ranges.
+- Hardened hosted target policy to reject the full IPv6 link-local `fe80::/10`
+  range.
+- Scoped hosted import preview lookups by workspace so preview responses cannot
+  reveal monitors from another hosted workspace.
 - Documented DNS resolution, redirect, and rebinding enforcement as required
   gates before enabling hosted public probe execution.
 

@@ -80,6 +80,7 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(outputs).toContain('output "alarm_names"');
   expect(outputs).toContain('output "backup_vault_name"');
   expect(outputs).toContain('output "backup_plan_id"');
+  expect(outputs).toContain('output "kms_key_arn"');
   expect(outputs).toContain("aws_cloudwatch_log_group.service");
   expect(outputs).toContain("aws_cloudwatch_metric_alarm.web_5xx.alarm_name");
   expect(outputs).toContain("aws_backup_vault.data.name");

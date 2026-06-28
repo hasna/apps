@@ -85,10 +85,11 @@ function isDeniedIpv6(ip: string): boolean {
   const normalized = ip.toLowerCase();
   const mappedIpv4 = ipv4FromMappedIpv6(normalized);
   if (mappedIpv4) return isDeniedIpv4(mappedIpv4);
+  const words = parseIpv6Words(normalized);
   return (
     normalized === "::"
     || normalized === "::1"
-    || normalized.startsWith("fe80:")
+    || (words !== null && (words[0] & 0xffc0) === 0xfe80)
     || normalized.startsWith("fc")
     || normalized.startsWith("fd")
     || normalized.startsWith("ff")

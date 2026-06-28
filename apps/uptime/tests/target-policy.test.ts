@@ -31,3 +31,18 @@ test("hosted target policy allows public IPv4-mapped IPv6 literals", () => {
   expect(() => assertHostedHttpUrlAllowed("https://[::ffff:0808:0808]/")).not.toThrow();
   expect(() => assertHostedHostAllowed("::ffff:0808:0808", "TCP host")).not.toThrow();
 });
+
+test("hosted target policy rejects the full IPv6 link-local range", () => {
+  for (const url of [
+    "http://[fe80::1]/",
+    "http://[fe90::1]/",
+    "http://[fea0::1]/",
+    "http://[febf::1]/",
+  ]) {
+    expect(() => assertHostedHttpUrlAllowed(url)).toThrow("private or reserved IPv6");
+  }
+
+  for (const host of ["fe80::1", "fe90::1", "fea0::1", "febf::1"]) {
+    expect(() => assertHostedHostAllowed(host, "TCP host")).toThrow("private or reserved IPv6");
+  }
+});

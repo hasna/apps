@@ -26,6 +26,10 @@ output "evidence_bucket" {
   value = aws_s3_bucket.evidence.bucket
 }
 
+output "kms_key_arn" {
+  value = var.kms_key_arn
+}
+
 output "log_group_names" {
   value = merge(
     { image_builder = aws_cloudwatch_log_group.image_builder.name },

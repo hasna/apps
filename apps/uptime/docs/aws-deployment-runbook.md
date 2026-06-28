@@ -40,20 +40,29 @@ write a sourceable env file with a placeholder probe identity.
 
 1. Locate the real infrastructure repository or create the change in the
    approved owner repository.
-2. Confirm the AWS caller identity:
+2. Set the operator shell variables used by the command snippets:
 
    ```bash
-   aws sts get-caller-identity --profile <aws-profile>
+   : "${AWS_PROFILE_NAME:?set AWS_PROFILE_NAME to the reviewed AWS profile}"
+   AWS_REGION="${AWS_REGION:-us-east-1}"
+   TF_DIR="${TF_DIR:-infra/aws}"
+   PLAN_FILE="${PLAN_FILE:-open-uptime.tfplan}"
    ```
 
-3. Confirm the target VPC, private subnets, KMS key, and EFS/Backup plan inputs
+3. Confirm the AWS caller identity:
+
+   ```bash
+   aws sts get-caller-identity --profile "$AWS_PROFILE_NAME"
+   ```
+
+4. Confirm the target VPC, private subnets, KMS key, and EFS/Backup plan inputs
    still match the plan.
-4. Confirm the protected access mode. The first deploy can use the CloudFront
+5. Confirm the protected access mode. The first deploy can use the CloudFront
    default HTTPS domain without custom DNS or ACM. Custom hostname deploys still
    require Route53/edge ownership and an ACM certificate.
-5. Confirm the deployment role uses short-lived credentials or OIDC, not copied
+6. Confirm the deployment role uses short-lived credentials or OIDC, not copied
    access keys.
-6. Create a private evidence directory outside the public repository. Store
+7. Create a private evidence directory outside the public repository. Store
    command output, plan summaries, screenshots, and incident notes there. Do
    not store tokens, database URLs, probe private keys, or secret values.
 
@@ -84,10 +93,10 @@ copy-pastable AWS mutation commands.
 Plan the included Terraform/OpenTofu starter without a backend:
 
 ```bash
-terraform -chdir=infra/aws fmt -check
-terraform -chdir=infra/aws init -backend=false
-terraform -chdir=infra/aws validate
-terraform -chdir=infra/aws plan -out open-uptime.tfplan
+terraform -chdir="$TF_DIR" fmt -check
+terraform -chdir="$TF_DIR" init -backend=false
+terraform -chdir="$TF_DIR" validate
+terraform -chdir="$TF_DIR" plan -out "$PLAN_FILE"
 ```
 
 Use Terraform/OpenTofu 1.9 or newer for this starter.
@@ -101,14 +110,14 @@ desired count `0`.
    dormant:
 
    ```bash
-   terraform show -json open-uptime.tfplan \
+   terraform -chdir="$TF_DIR" show -json "$PLAN_FILE" \
      | jq -r '.resource_changes[] | select(.type=="aws_ecs_service") | [.address, .change.after.desired_count] | @tsv'
    ```
 
 2. Confirm Terraform is not managing secret values:
 
    ```bash
-   terraform show -json open-uptime.tfplan \
+   terraform -chdir="$TF_DIR" show -json "$PLAN_FILE" \
      | jq -r '.resource_changes[] | select(.type | test("secret_version|random_password|random_string")) | .address'
    ```
 
@@ -117,7 +126,7 @@ desired count `0`.
 3. Apply only the reviewed zero-count plan:
 
    ```bash
-   terraform apply open-uptime.tfplan
+   terraform -chdir="$TF_DIR" apply "$PLAN_FILE"
    ```
 
 4. Capture outputs, the source commit, the package version, the plan summary,
@@ -130,10 +139,11 @@ or the declared image builder. Record only the immutable digest, not build logs
 that contain environment values:
 
 ```bash
+IMAGE_BUILDER_PROJECT="$(terraform -chdir="$TF_DIR" output -raw image_builder_project_name)"
 aws codebuild start-build \
-  --profile <aws-profile> \
-  --region <region> \
-  --project-name <image-builder-project>
+  --profile "$AWS_PROFILE_NAME" \
+  --region "$AWS_REGION" \
+  --project-name "$IMAGE_BUILDER_PROJECT"
 ```
 
 Update the approved infra root so `container_image` is the immutable ECR digest,
@@ -142,8 +152,16 @@ then re-plan with all services still at `0`.
 Populate Secrets Manager values out of band. Verify metadata only:
 
 ```bash
-aws secretsmanager describe-secret --profile <aws-profile> --region <region> --secret-id <secret-name>
-aws secretsmanager list-secret-version-ids --profile <aws-profile> --region <region> --secret-id <secret-name>
+terraform -chdir="$TF_DIR" output -json secret_names | jq -r '.[]' | while read -r SECRET_ID; do
+  aws secretsmanager describe-secret \
+    --profile "$AWS_PROFILE_NAME" \
+    --region "$AWS_REGION" \
+    --secret-id "$SECRET_ID"
+  aws secretsmanager list-secret-version-ids \
+    --profile "$AWS_PROFILE_NAME" \
+    --region "$AWS_REGION" \
+    --secret-id "$SECRET_ID"
+done
 ```
 
 Each required secret must have an `AWSCURRENT` version before any task is
@@ -166,11 +184,11 @@ Scale only the web task, then capture the ECS deployment id and task definition
 ARN:
 
 ```bash
-ECS_CLUSTER="$(terraform output -raw ecs_cluster_name)"
-WEB_SERVICE="$(terraform output -json service_names | jq -r '.[] | select(endswith("-web"))')"
+ECS_CLUSTER="$(terraform -chdir="$TF_DIR" output -raw ecs_cluster_name)"
+WEB_SERVICE="$(terraform -chdir="$TF_DIR" output -json service_names | jq -r '.[] | select(endswith("-web"))')"
 aws ecs describe-services \
-  --profile <aws-profile> \
-  --region <region> \
+  --profile "$AWS_PROFILE_NAME" \
+  --region "$AWS_REGION" \
   --cluster "$ECS_CLUSTER" \
   --services "$WEB_SERVICE" \
   --query 'services[0].{taskDefinition:taskDefinition,deployments:deployments[*].{id:id,status:status,desired:desiredCount,running:runningCount}}'
@@ -182,10 +200,14 @@ Run these checks through the public edge URL and record status codes and request
 ids. Use a scoped hosted token only from the operator secret store.
 
 ```bash
-curl -fsS https://<edge-host>/health
-curl -i https://<edge-host>/
-curl -i https://<edge-host>/api/v1/summary
-curl -i -H "Authorization: Bearer <token-from-secret-store>" https://<edge-host>/api/v1/summary
+EDGE_URL="$(terraform -chdir="$TF_DIR" output -raw protected_access_url)"
+: "${HOSTED_TOKEN_FILE:?set HOSTED_TOKEN_FILE to a 0600 file containing the scoped hosted token}"
+HOSTED_TOKEN="$(tr -d '\n' < "$HOSTED_TOKEN_FILE")"
+
+curl -fsS "$EDGE_URL/health"
+curl -i "$EDGE_URL/"
+curl -i "$EDGE_URL/api/v1/summary"
+curl -i -H "Authorization: Bearer $HOSTED_TOKEN" "$EDGE_URL/api/v1/summary"
 ```
 
 Expected results:
@@ -202,21 +224,21 @@ Expected results:
 Inspect recent web logs without printing secrets:
 
 ```bash
-WEB_LOG_GROUP="$(terraform output -json log_group_names | jq -r '.web')"
+WEB_LOG_GROUP="$(terraform -chdir="$TF_DIR" output -json log_group_names | jq -r '.web')"
 aws logs tail "$WEB_LOG_GROUP" \
-  --profile <aws-profile> \
-  --region <region> \
+  --profile "$AWS_PROFILE_NAME" \
+  --region "$AWS_REGION" \
   --since 15m
 ```
 
 Verify the initial web alarms exist and are not already alarming:
 
 ```bash
-WEB_5XX_ALARM="$(terraform output -json alarm_names | jq -r '.web_5xx')"
-WEB_UNHEALTHY_ALARM="$(terraform output -json alarm_names | jq -r '.web_unhealthy')"
+WEB_5XX_ALARM="$(terraform -chdir="$TF_DIR" output -json alarm_names | jq -r '.web_5xx')"
+WEB_UNHEALTHY_ALARM="$(terraform -chdir="$TF_DIR" output -json alarm_names | jq -r '.web_unhealthy')"
 aws cloudwatch describe-alarms \
-  --profile <aws-profile> \
-  --region <region> \
+  --profile "$AWS_PROFILE_NAME" \
+  --region "$AWS_REGION" \
   --alarm-names "$WEB_5XX_ALARM" "$WEB_UNHEALTHY_ALARM" \
   --query 'MetricAlarms[*].{name:AlarmName,state:StateValue,reason:StateReason}'
 ```
@@ -229,22 +251,22 @@ those workers are implemented, emit metrics, and are enabled.
 Verify EFS backup coverage after the first apply:
 
 ```bash
-BACKUP_VAULT="$(terraform output -raw backup_vault_name)"
-EFS_FILE_SYSTEM_ID="$(terraform output -raw efs_file_system_id)"
+BACKUP_VAULT="$(terraform -chdir="$TF_DIR" output -raw backup_vault_name)"
+EFS_FILE_SYSTEM_ID="$(terraform -chdir="$TF_DIR" output -raw efs_file_system_id)"
 EFS_FILE_SYSTEM_ARN="$(aws efs describe-file-systems \
-  --profile <aws-profile> \
-  --region <region> \
+  --profile "$AWS_PROFILE_NAME" \
+  --region "$AWS_REGION" \
   --file-system-id "$EFS_FILE_SYSTEM_ID" \
   --query 'FileSystems[0].FileSystemArn' \
   --output text)"
 
 aws backup list-protected-resources \
-  --profile <aws-profile> \
-  --region <region> \
+  --profile "$AWS_PROFILE_NAME" \
+  --region "$AWS_REGION" \
   --query "Results[?ResourceArn=='$EFS_FILE_SYSTEM_ARN'].[ResourceArn,LastBackupTime]"
 aws backup list-recovery-points-by-backup-vault \
-  --profile <aws-profile> \
-  --region <region> \
+  --profile "$AWS_PROFILE_NAME" \
+  --region "$AWS_REGION" \
   --backup-vault-name "$BACKUP_VAULT" \
   --query "RecoveryPoints[?ResourceArn=='$EFS_FILE_SYSTEM_ARN'].[RecoveryPointArn,Status,CreationDate]"
 ```
@@ -259,15 +281,15 @@ and subnet. The metadata keys are AWS Backup EFS restore metadata; keep the
 staging file system encrypted with the Open Uptime KMS key.
 
 ```bash
-RECOVERY_POINT_ARN="<selected-recovery-point-arn>"
-RESTORE_ROLE_ARN="<aws-backup-restore-role-arn>"
-STAGING_SUBNET_ID="<staging-private-subnet-id>"
-STAGING_SECURITY_GROUP_ID="<staging-efs-security-group-id>"
-KMS_KEY_ARN="$(terraform output -raw kms_key_arn)"
+: "${RECOVERY_POINT_ARN:?set RECOVERY_POINT_ARN to the selected recovery point ARN}"
+: "${RESTORE_ROLE_ARN:?set RESTORE_ROLE_ARN to the AWS Backup restore role ARN}"
+: "${STAGING_SUBNET_ID:?set STAGING_SUBNET_ID to the staging private subnet id}"
+: "${STAGING_SECURITY_GROUP_ID:?set STAGING_SECURITY_GROUP_ID to the staging EFS security group id}"
+KMS_KEY_ARN="$(terraform -chdir="$TF_DIR" output -raw kms_key_arn)"
 
 RESTORE_JOB_ID="$(aws backup start-restore-job \
-  --profile <aws-profile> \
-  --region <region> \
+  --profile "$AWS_PROFILE_NAME" \
+  --region "$AWS_REGION" \
   --recovery-point-arn "$RECOVERY_POINT_ARN" \
   --iam-role-arn "$RESTORE_ROLE_ARN" \
   --resource-type EFS \
@@ -276,8 +298,8 @@ RESTORE_JOB_ID="$(aws backup start-restore-job \
   --output text)"
 
 aws backup describe-restore-job \
-  --profile <aws-profile> \
-  --region <region> \
+  --profile "$AWS_PROFILE_NAME" \
+  --region "$AWS_REGION" \
   --restore-job-id "$RESTORE_JOB_ID" \
   --query '{status:Status,createdResourceArn:CreatedResourceArn,statusMessage:StatusMessage}'
 ```
@@ -287,15 +309,15 @@ temporary mount target for the restored file system in the staging subnet:
 
 ```bash
 RESTORED_EFS_ID="$(aws backup describe-restore-job \
-  --profile <aws-profile> \
-  --region <region> \
+  --profile "$AWS_PROFILE_NAME" \
+  --region "$AWS_REGION" \
   --restore-job-id "$RESTORE_JOB_ID" \
   --query 'CreatedResourceArn' \
   --output text | awk -F/ '{print $NF}')"
 
 aws efs create-mount-target \
-  --profile <aws-profile> \
-  --region <region> \
+  --profile "$AWS_PROFILE_NAME" \
+  --region "$AWS_REGION" \
   --file-system-id "$RESTORED_EFS_ID" \
   --subnet-id "$STAGING_SUBNET_ID" \
   --security-groups "$STAGING_SECURITY_GROUP_ID"
@@ -372,11 +394,11 @@ Before each service update, record the previous task definition ARN and current
 desired counts:
 
 ```bash
-ECS_CLUSTER="$(terraform output -raw ecs_cluster_name)"
-WEB_SERVICE="$(terraform output -json service_names | jq -r '.[] | select(endswith("-web"))')"
+ECS_CLUSTER="$(terraform -chdir="$TF_DIR" output -raw ecs_cluster_name)"
+WEB_SERVICE="$(terraform -chdir="$TF_DIR" output -json service_names | jq -r '.[] | select(endswith("-web"))')"
 aws ecs describe-services \
-  --profile <aws-profile> \
-  --region <region> \
+  --profile "$AWS_PROFILE_NAME" \
+  --region "$AWS_REGION" \
   --cluster "$ECS_CLUSTER" \
   --services "$WEB_SERVICE" \
   --query 'services[0].{taskDefinition:taskDefinition,desired:desiredCount,running:runningCount}'
@@ -386,8 +408,8 @@ If web health fails after scale-up, first scale web back to `0`:
 
 ```bash
 aws ecs update-service \
-  --profile <aws-profile> \
-  --region <region> \
+  --profile "$AWS_PROFILE_NAME" \
+  --region "$AWS_REGION" \
   --cluster "$ECS_CLUSTER" \
   --service "$WEB_SERVICE" \
   --desired-count 0
@@ -397,12 +419,13 @@ If a later task definition is bad, restore the previous task definition and keep
 workers disabled:
 
 ```bash
+: "${PREVIOUS_TASK_DEFINITION_ARN:?set PREVIOUS_TASK_DEFINITION_ARN from the pre-update evidence}"
 aws ecs update-service \
-  --profile <aws-profile> \
-  --region <region> \
+  --profile "$AWS_PROFILE_NAME" \
+  --region "$AWS_REGION" \
   --cluster "$ECS_CLUSTER" \
   --service "$WEB_SERVICE" \
-  --task-definition <previous-task-definition-arn> \
+  --task-definition "$PREVIOUS_TASK_DEFINITION_ARN" \
   --desired-count 1
 ```
 

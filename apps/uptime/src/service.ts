@@ -228,8 +228,8 @@ export class UptimeService {
     return this.store.runInTransaction ? this.store.runInTransaction(execute) : execute();
   }
 
-  previewImport(request: ImportRequest): ImportPreview {
-    return previewImport(this.store, request);
+  previewImport(request: ImportRequest, options: { workspaceId?: string } = {}): ImportPreview {
+    return previewImport(this.store, request, options);
   }
 
   applyImport(request: ImportRequest): ImportApplyResult {

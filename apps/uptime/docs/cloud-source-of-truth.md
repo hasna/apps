@@ -119,10 +119,13 @@ or delete workspace B data.
 
 ## Target Policy
 
-All outbound traffic uses one shared target policy at both configuration time and
-execution time.
+The target-state architecture uses one shared target policy at both
+configuration time and execution time. The current hosted API implements only
+the configuration-time portion for direct targets; public probe execution stays
+disabled until runtime DNS resolution, address pinning, redirect validation,
+DNS-rebinding protection, and decision records exist.
 
-Public probes deny:
+Public probes must deny:
 
 - loopback, wildcard, unspecified, link-local, multicast, RFC1918, carrier-grade
   NAT, IPv6 ULA/link-local, and cloud metadata ranges;
