@@ -975,9 +975,9 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
     "cwd",
   ]);
   const projectPath =
-    opts.projectPath ??
     dataProjectPath ??
     metadataProjectPath ??
+    opts.projectPath ??
     process.cwd();
   const routeProjectPath = normalizeRoutePath(projectPath) ?? resolve(projectPath);
   const projectGroup = routeProjectGroup(opts.projectGroup, data, metadata);

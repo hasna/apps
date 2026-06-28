@@ -2155,6 +2155,8 @@ describe("loops CLI", () => {
         "route",
         "--project-path-prefix",
         repo,
+        "--project-path",
+        "/home/hasna",
         "--tags",
         "auto:route",
         "--dry-run",
