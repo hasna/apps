@@ -162,7 +162,7 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(tfvars).toContain("enable_cloudfront_origin_verify_header");
   expect(tfvars).toContain("cloudfront_origin_verify_header_name");
   expect(tfvars).toContain("cloudfront_origin_verify_header_value  = null");
-  expect(tfvars).toContain('runtime_package_version  = "0.1.20"');
+  expect(tfvars).toContain('runtime_package_version  = "0.1.21"');
   expect(tfvars).toContain('project_name             = "open-uptime"');
   expect(tfvars).toContain("monthly_budget_limit_usd");
   expect(tfvars).toContain("private_route_table_ids");
@@ -184,7 +184,7 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(tfvars).not.toContain("rds_security_group_id");
   expect(tfvars).toContain('"public-probe" = 0');
   expect(tfvars).not.toContain("public_probe = 0");
-  expect(packageJson.files).not.toContain("docs/deployment-metadata.example.json");
+  expect(packageJson.files).toContain("docs/*.json");
   expect(deploymentMetadataExample).not.toContain("private-account-label");
   expect(deploymentMetadataExample).not.toContain("private-workspace-id");
   expect(combined).not.toContain("Hasna XYZ");

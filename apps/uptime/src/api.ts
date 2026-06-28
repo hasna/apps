@@ -468,7 +468,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isHostedProductionMode(): boolean {
-  return process.env.HASNA_UPTIME_HOSTED_AUTH_MODE === "production" || process.env.NODE_ENV === "production";
+  return runtimeEnv("HASNA_UPTIME_HOSTED_AUTH_MODE") === "production" || runtimeEnv("NODE_ENV") === "production";
+}
+
+function runtimeEnv(name: string): string | undefined {
+  return process.env[name];
 }
 
 function resolveHostedAllowedOrigins(options: Pick<CreateApiHandlerOptions, "hostedAllowedOrigins">): string[] {

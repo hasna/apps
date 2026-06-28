@@ -6,6 +6,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.21] - 2026-06-28
+
+### Fixed
+
+- Fixed hosted production auth mode detection in bundled package output so
+  `NODE_ENV=production` rejects legacy raw hosted tokens unless scoped hosted
+  token JSON is configured.
+
+### Changed
+
+- Included all cloud deployment docs in the npm package so package consumers
+  receive the runtime security, source-of-truth, metadata, and runbook context.
+
 ## [0.1.20] - 2026-06-28
 
 ### Added
