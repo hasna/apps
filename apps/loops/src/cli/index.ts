@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { Database } from "bun:sqlite";
 import { Command } from "commander";
 import type {
@@ -342,6 +343,40 @@ function runLocalCommand(command: string, args: string[], opts: { input?: string
     stderr: result.stderr || "",
     error: result.error ? String(result.error.message || result.error) : "",
   };
+}
+
+function runLocalCommandWithStdoutFile(
+  command: string,
+  args: string[],
+  opts: { input?: string; timeoutMs?: number; maxBuffer?: number } = {},
+) {
+  const tempDir = mkdtempSync(join(tmpdir(), "loops-command-output-"));
+  const stdoutPath = join(tempDir, "stdout");
+  const stdoutFd = openSync(stdoutPath, "w");
+  let result: ReturnType<typeof spawnSync>;
+  try {
+    result = spawnSync(command, args, {
+      input: opts.input,
+      encoding: "utf8",
+      timeout: opts.timeoutMs ?? 30_000,
+      maxBuffer: opts.maxBuffer ?? 8 * 1024 * 1024,
+      env: process.env,
+      stdio: ["pipe", stdoutFd, "pipe"],
+    });
+  } finally {
+    closeSync(stdoutFd);
+  }
+  try {
+    return {
+      ok: result.status === 0,
+      status: result.status,
+      stdout: readFileSync(stdoutPath, "utf8"),
+      stderr: typeof result.stderr === "string" ? result.stderr : result.stderr?.toString() || "",
+      error: result.error ? String(result.error.message || result.error) : "",
+    };
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
 }
 
 function ensureTodosTaskList(project: string, slug: string, name: string, description: string): string {
@@ -1178,7 +1213,7 @@ function taskDrainEvent(task: TodosReadyTask): EventEnvelope {
 function loadReadyTodosTasks(opts: TodosDrainOptions, scanLimit: number): TodosReadyTask[] {
   const todosProject = opts.todosProject ?? defaultLoopsProject();
   const args = ["--project", todosProject, "--json", "ready", "--limit", String(scanLimit)];
-  const result = runLocalCommand("todos", args, { timeoutMs: 60_000, maxBuffer: 64 * 1024 * 1024 });
+  const result = runLocalCommandWithStdoutFile("todos", args, { timeoutMs: 60_000, maxBuffer: 64 * 1024 * 1024 });
   if (!result.ok) throw new Error(result.stderr || result.error || "todos ready failed");
   let parsed: unknown;
   try {
