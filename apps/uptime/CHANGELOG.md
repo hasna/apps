@@ -6,6 +6,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-06-28
+
+### Changed
+
+- Added Terraform outputs for log groups, web alarms, backup vault, and backup
+  plan so the AWS runbook can use output-driven commands.
+- Expanded the AWS deployment runbook restore drill with AWS Backup restore-job,
+  polling, staging mount-target, validation, and cleanup steps.
+- Hardened hosted target policy to normalize IPv4-mapped IPv6 literals before
+  rejecting loopback, private, link-local, metadata, carrier-grade NAT,
+  unspecified, and multicast IPv4 ranges.
+- Documented DNS resolution, redirect, and rebinding enforcement as required
+  gates before enabling hosted public probe execution.
+
 ## [0.1.10] - 2026-06-28
 
 ### Changed

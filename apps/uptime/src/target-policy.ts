@@ -83,6 +83,8 @@ function isDeniedIpv4(ip: string): boolean {
 
 function isDeniedIpv6(ip: string): boolean {
   const normalized = ip.toLowerCase();
+  const mappedIpv4 = ipv4FromMappedIpv6(normalized);
+  if (mappedIpv4) return isDeniedIpv4(mappedIpv4);
   return (
     normalized === "::"
     || normalized === "::1"
@@ -90,10 +92,65 @@ function isDeniedIpv6(ip: string): boolean {
     || normalized.startsWith("fc")
     || normalized.startsWith("fd")
     || normalized.startsWith("ff")
-    || normalized.startsWith("::ffff:127.")
-    || normalized.startsWith("::ffff:10.")
-    || normalized.startsWith("::ffff:169.254.")
-    || /^::ffff:172\.(1[6-9]|2\d|3[0-1])\./.test(normalized)
-    || normalized.startsWith("::ffff:192.168.")
   );
+}
+
+function ipv4FromMappedIpv6(ip: string): string | null {
+  const words = parseIpv6Words(ip);
+  if (!words) return null;
+  if (
+    words[0] !== 0
+    || words[1] !== 0
+    || words[2] !== 0
+    || words[3] !== 0
+    || words[4] !== 0
+    || words[5] !== 0xffff
+  ) {
+    return null;
+  }
+  return [
+    words[6] >> 8,
+    words[6] & 0xff,
+    words[7] >> 8,
+    words[7] & 0xff,
+  ].join(".");
+}
+
+function parseIpv6Words(value: string): number[] | null {
+  let ip = value.toLowerCase();
+  const zoneIndex = ip.indexOf("%");
+  if (zoneIndex >= 0) ip = ip.slice(0, zoneIndex);
+  if (ip.includes(".")) {
+    const lastColon = ip.lastIndexOf(":");
+    if (lastColon < 0) return null;
+    const ipv4 = parseIpv4Words(ip.slice(lastColon + 1));
+    if (!ipv4) return null;
+    ip = `${ip.slice(0, lastColon)}:${((ipv4[0] << 8) | ipv4[1]).toString(16)}:${((ipv4[2] << 8) | ipv4[3]).toString(16)}`;
+  }
+
+  const compressed = ip.split("::");
+  if (compressed.length > 2) return null;
+  const left = parseIpv6Side(compressed[0]);
+  const right = compressed.length === 2 ? parseIpv6Side(compressed[1]) : [];
+  if (!left || !right) return null;
+
+  if (compressed.length === 1) return left.length === 8 ? left : null;
+  const missing = 8 - left.length - right.length;
+  if (missing < 1) return null;
+  return [...left, ...Array<number>(missing).fill(0), ...right];
+}
+
+function parseIpv6Side(value: string): number[] | null {
+  if (!value) return [];
+  const words = value.split(":");
+  if (words.some((word) => !/^[0-9a-f]{1,4}$/.test(word))) return null;
+  return words.map((word) => Number.parseInt(word, 16));
+}
+
+function parseIpv4Words(value: string): [number, number, number, number] | null {
+  const words = value.split(".").map((part) => Number(part));
+  if (words.length !== 4 || words.some((word) => !Number.isInteger(word) || word < 0 || word > 255)) {
+    return null;
+  }
+  return words as [number, number, number, number];
 }

@@ -364,9 +364,14 @@ test("hosted API enforces target policy at monitor creation", async () => {
   const cases = [
     { name: "loopback", kind: "http", url: "http://127.0.0.1:3000" },
     { name: "metadata", kind: "http", url: "http://169.254.169.254/latest/meta-data" },
+    { name: "mapped-loopback", kind: "http", url: "http://[::ffff:7f00:1]/" },
+    { name: "mapped-private", kind: "http", url: "http://[::ffff:a00:1]/" },
+    { name: "mapped-metadata", kind: "http", url: "http://[::ffff:a9fe:a9fe]/" },
+    { name: "mapped-private-2", kind: "http", url: "http://[::ffff:c0a8:1]/" },
     { name: "userinfo", kind: "http", url: "https://user:pass@example.com" },
     { name: "secret-query", kind: "http", url: "https://example.com/?api_key=secret" },
     { name: "private-tcp", kind: "tcp", host: "10.0.0.1", port: 5432 },
+    { name: "mapped-private-tcp", kind: "tcp", host: "::ffff:a00:1", port: 5432 },
   ];
 
   for (const input of cases) {

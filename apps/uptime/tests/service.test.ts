@@ -669,6 +669,20 @@ test("hosted service rejects inline SDK checks and scheduler entrypoints", async
   service.close();
 });
 
+test("hosted service rejects IPv4-mapped IPv6 private targets", () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  expect(() => service.createMonitor({ name: "mapped-loopback", kind: "http", url: "http://[::ffff:7f00:1]/" }))
+    .toThrow("private or reserved IPv6");
+  expect(() => service.createMonitor({ name: "mapped-private", kind: "http", url: "http://[::ffff:a00:1]/" }))
+    .toThrow("private or reserved IPv6");
+  expect(() => service.createMonitor({ name: "mapped-metadata", kind: "http", url: "http://[::ffff:a9fe:a9fe]/" }))
+    .toThrow("private or reserved IPv6");
+  expect(() => service.createMonitor({ name: "mapped-tcp", kind: "tcp", host: "::ffff:c0a8:1", port: 5432 }))
+    .toThrow("private or reserved IPv6");
+  expect(service.summary().totals.monitors).toBe(0);
+  service.close();
+});
+
 test("direct monitor creation keeps browser_page behind the import path", () => {
   const service = new UptimeService({ dbPath: tempDb() });
 

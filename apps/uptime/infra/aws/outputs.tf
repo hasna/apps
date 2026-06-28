@@ -26,6 +26,28 @@ output "evidence_bucket" {
   value = aws_s3_bucket.evidence.bucket
 }
 
+output "log_group_names" {
+  value = merge(
+    { image_builder = aws_cloudwatch_log_group.image_builder.name },
+    { for role, group in aws_cloudwatch_log_group.service : role => group.name },
+  )
+}
+
+output "alarm_names" {
+  value = {
+    web_5xx       = aws_cloudwatch_metric_alarm.web_5xx.alarm_name
+    web_unhealthy = aws_cloudwatch_metric_alarm.web_unhealthy.alarm_name
+  }
+}
+
+output "backup_vault_name" {
+  value = aws_backup_vault.data.name
+}
+
+output "backup_plan_id" {
+  value = aws_backup_plan.data.id
+}
+
 output "efs_file_system_id" {
   value = aws_efs_file_system.data.id
 }

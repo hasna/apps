@@ -166,11 +166,13 @@ Scale only the web task, then capture the ECS deployment id and task definition
 ARN:
 
 ```bash
+ECS_CLUSTER="$(terraform output -raw ecs_cluster_name)"
+WEB_SERVICE="$(terraform output -json service_names | jq -r '.[] | select(endswith("-web"))')"
 aws ecs describe-services \
   --profile <aws-profile> \
   --region <region> \
-  --cluster <ecs-cluster> \
-  --services <web-service> \
+  --cluster "$ECS_CLUSTER" \
+  --services "$WEB_SERVICE" \
   --query 'services[0].{taskDefinition:taskDefinition,deployments:deployments[*].{id:id,status:status,desired:desiredCount,running:runningCount}}'
 ```
 
@@ -200,7 +202,8 @@ Expected results:
 Inspect recent web logs without printing secrets:
 
 ```bash
-aws logs tail /ecs/<web-service> \
+WEB_LOG_GROUP="$(terraform output -json log_group_names | jq -r '.web')"
+aws logs tail "$WEB_LOG_GROUP" \
   --profile <aws-profile> \
   --region <region> \
   --since 15m
@@ -209,10 +212,12 @@ aws logs tail /ecs/<web-service> \
 Verify the initial web alarms exist and are not already alarming:
 
 ```bash
+WEB_5XX_ALARM="$(terraform output -json alarm_names | jq -r '.web_5xx')"
+WEB_UNHEALTHY_ALARM="$(terraform output -json alarm_names | jq -r '.web_unhealthy')"
 aws cloudwatch describe-alarms \
   --profile <aws-profile> \
   --region <region> \
-  --alarm-names <web-5xx-alarm> <web-unhealthy-alarm> \
+  --alarm-names "$WEB_5XX_ALARM" "$WEB_UNHEALTHY_ALARM" \
   --query 'MetricAlarms[*].{name:AlarmName,state:StateValue,reason:StateReason}'
 ```
 
@@ -224,20 +229,89 @@ those workers are implemented, emit metrics, and are enabled.
 Verify EFS backup coverage after the first apply:
 
 ```bash
+BACKUP_VAULT="$(terraform output -raw backup_vault_name)"
+EFS_FILE_SYSTEM_ID="$(terraform output -raw efs_file_system_id)"
+EFS_FILE_SYSTEM_ARN="$(aws efs describe-file-systems \
+  --profile <aws-profile> \
+  --region <region> \
+  --file-system-id "$EFS_FILE_SYSTEM_ID" \
+  --query 'FileSystems[0].FileSystemArn' \
+  --output text)"
+
 aws backup list-protected-resources \
   --profile <aws-profile> \
   --region <region> \
-  --query 'Results[?ResourceType==`EFS`].[ResourceArn,LastBackupTime]'
+  --query "Results[?ResourceArn=='$EFS_FILE_SYSTEM_ARN'].[ResourceArn,LastBackupTime]"
 aws backup list-recovery-points-by-backup-vault \
   --profile <aws-profile> \
   --region <region> \
-  --backup-vault-name <backup-vault>
+  --backup-vault-name "$BACKUP_VAULT" \
+  --query "RecoveryPoints[?ResourceArn=='$EFS_FILE_SYSTEM_ARN'].[RecoveryPointArn,Status,CreationDate]"
 ```
 
 A restore drill must restore to a separate file system or staging target first.
 Do not overwrite the production EFS file system during a drill. Record the
 recovery point ARN, restore job id, target resource, validation result, and
 cleanup action.
+
+Run the restore drill with a dedicated restore role and a staging security group
+and subnet. The metadata keys are AWS Backup EFS restore metadata; keep the
+staging file system encrypted with the Open Uptime KMS key.
+
+```bash
+RECOVERY_POINT_ARN="<selected-recovery-point-arn>"
+RESTORE_ROLE_ARN="<aws-backup-restore-role-arn>"
+STAGING_SUBNET_ID="<staging-private-subnet-id>"
+STAGING_SECURITY_GROUP_ID="<staging-efs-security-group-id>"
+KMS_KEY_ARN="$(terraform output -raw kms_key_arn)"
+
+RESTORE_JOB_ID="$(aws backup start-restore-job \
+  --profile <aws-profile> \
+  --region <region> \
+  --recovery-point-arn "$RECOVERY_POINT_ARN" \
+  --iam-role-arn "$RESTORE_ROLE_ARN" \
+  --resource-type EFS \
+  --metadata "file-system-id=$EFS_FILE_SYSTEM_ID,newFileSystem=true,encrypted=true,kmsKeyId=$KMS_KEY_ARN,performanceMode=generalPurpose,throughputMode=bursting" \
+  --query 'RestoreJobId' \
+  --output text)"
+
+aws backup describe-restore-job \
+  --profile <aws-profile> \
+  --region <region> \
+  --restore-job-id "$RESTORE_JOB_ID" \
+  --query '{status:Status,createdResourceArn:CreatedResourceArn,statusMessage:StatusMessage}'
+```
+
+Poll `describe-restore-job` until `Status` is `COMPLETED`, then create a
+temporary mount target for the restored file system in the staging subnet:
+
+```bash
+RESTORED_EFS_ID="$(aws backup describe-restore-job \
+  --profile <aws-profile> \
+  --region <region> \
+  --restore-job-id "$RESTORE_JOB_ID" \
+  --query 'CreatedResourceArn' \
+  --output text | awk -F/ '{print $NF}')"
+
+aws efs create-mount-target \
+  --profile <aws-profile> \
+  --region <region> \
+  --file-system-id "$RESTORED_EFS_ID" \
+  --subnet-id "$STAGING_SUBNET_ID" \
+  --security-groups "$STAGING_SECURITY_GROUP_ID"
+```
+
+Validate the restored `/data/uptime/uptime.db` from a staging host or task with
+read-only SQLite integrity checks. Capture only counts and integrity status, not
+monitor targets or secrets:
+
+```bash
+sqlite3 /mnt/restore/uptime/uptime.db 'PRAGMA integrity_check;'
+sqlite3 /mnt/restore/uptime/uptime.db 'SELECT COUNT(*) FROM monitors;'
+```
+
+After evidence is recorded, delete the staging mount target and restored file
+system. Never mount the restored file system over production during a drill.
 
 ## Reports And Reporter Gate
 
@@ -273,6 +347,11 @@ routes are backed by cloud check jobs and cloud audit rows.
   URLs, or probe private keys in task definitions. Use ECS `secrets.valueFrom`
   refs such as `HASNA_UPTIME_HOSTED_TOKEN`.
 - Do not run public probe workers against private targets.
+- Do not enable public probe workers until runtime target policy resolves and
+  pins DNS answers, rejects redirects and DNS rebinding into denied ranges, and
+  emits target-policy decision records. The current configuration-time policy
+  blocks direct denied hosts, including IPv4-mapped IPv6 forms, but it is not a
+  substitute for execution-time DNS and redirect enforcement.
 - Do not enable scheduler, public-probe, reporter, or migration workers against
   the EFS SQLite bridge; those services need Postgres/cloud leases first.
 - Do not expose dashboard/API routes without hosted auth and workspace checks.
@@ -293,11 +372,13 @@ Before each service update, record the previous task definition ARN and current
 desired counts:
 
 ```bash
+ECS_CLUSTER="$(terraform output -raw ecs_cluster_name)"
+WEB_SERVICE="$(terraform output -json service_names | jq -r '.[] | select(endswith("-web"))')"
 aws ecs describe-services \
   --profile <aws-profile> \
   --region <region> \
-  --cluster <ecs-cluster> \
-  --services <service-name> \
+  --cluster "$ECS_CLUSTER" \
+  --services "$WEB_SERVICE" \
   --query 'services[0].{taskDefinition:taskDefinition,desired:desiredCount,running:runningCount}'
 ```
 
@@ -307,8 +388,8 @@ If web health fails after scale-up, first scale web back to `0`:
 aws ecs update-service \
   --profile <aws-profile> \
   --region <region> \
-  --cluster <ecs-cluster> \
-  --service <web-service> \
+  --cluster "$ECS_CLUSTER" \
+  --service "$WEB_SERVICE" \
   --desired-count 0
 ```
 
@@ -319,8 +400,8 @@ workers disabled:
 aws ecs update-service \
   --profile <aws-profile> \
   --region <region> \
-  --cluster <ecs-cluster> \
-  --service <web-service> \
+  --cluster "$ECS_CLUSTER" \
+  --service "$WEB_SERVICE" \
   --task-definition <previous-task-definition-arn> \
   --desired-count 1
 ```

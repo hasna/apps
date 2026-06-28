@@ -32,6 +32,7 @@ test("Dockerfile builds a hosted non-root Bun runtime without plaintext secrets"
 
 test("AWS infra templates use secret refs and keep services scaled down by default", () => {
   const main = read("infra/aws/main.tf");
+  const outputs = read("infra/aws/outputs.tf");
   const variables = read("infra/aws/variables.tf");
   const tfvars = read("infra/aws/terraform.tfvars.example");
   const packageJson = JSON.parse(read("package.json")) as { files?: string[] };
@@ -75,6 +76,13 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(main).toContain("deployment_circuit_breaker");
   expect(main).toContain('resource "aws_cloudwatch_metric_alarm" "web_5xx"');
   expect(main).toContain('resource "aws_cloudwatch_metric_alarm" "web_unhealthy"');
+  expect(outputs).toContain('output "log_group_names"');
+  expect(outputs).toContain('output "alarm_names"');
+  expect(outputs).toContain('output "backup_vault_name"');
+  expect(outputs).toContain('output "backup_plan_id"');
+  expect(outputs).toContain("aws_cloudwatch_log_group.service");
+  expect(outputs).toContain("aws_cloudwatch_metric_alarm.web_5xx.alarm_name");
+  expect(outputs).toContain("aws_backup_vault.data.name");
   expect(main).toContain('resource "aws_budgets_budget" "monthly"');
   expect(main).toContain("budget_alert_email_addresses");
   expect(main).toContain("TagKeyValue");
@@ -88,7 +96,7 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(variables).toContain("web            = 0");
   expect(tfvars).toContain("container_image");
   expect(tfvars).toContain('protected_access_mode    = "cloudfront_default_domain"');
-  expect(tfvars).toContain('runtime_package_version  = "0.1.10"');
+  expect(tfvars).toContain('runtime_package_version  = "0.1.11"');
   expect(tfvars).toContain('project_name             = "open-uptime"');
   expect(tfvars).toContain("monthly_budget_limit_usd");
   expect(tfvars).toContain("budget_alert_email_addresses");
