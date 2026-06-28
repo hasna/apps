@@ -53,6 +53,15 @@ export function createApiHandler(service: UptimeService, options: CreateApiHandl
       if (request.method === "GET" && url.pathname === "/health") {
         return json({ ok: true, service: "uptime", mode, dataMode: service.store.dataMode });
       }
+      if (request.method === "GET" && url.pathname === "/ready") {
+        if (mode === "hosted") requireHostedActor(request, url, options, "uptime:read");
+        const readiness = service.readiness();
+        return json({
+          service: "uptime",
+          ...readiness,
+          auth: mode === "hosted" ? { configured: true, checked: true } : { configured: false, checked: false },
+        }, readiness.ok ? 200 : 503);
+      }
       if (mode === "hosted") {
         return await handleHostedRequest(service, request, url, options);
       } else {

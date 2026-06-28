@@ -17,6 +17,7 @@ export { buildUptimeReport, sendUptimeReport } from "./report.js";
 export { generateProbeKeyPair, probePublicKeyFingerprint, probeResultSigningPayload, signProbeResult, verifyProbeResultSignature } from "./probes.js";
 export { buildAwsDeploymentPlan, buildPrivateProbeCloudConfig, renderPrivateProbeEnv } from "./cloud-plan.js";
 export { runHostedPublicChecksWorker } from "./workers.js";
+export { runEdgeSmoke } from "./edge-smoke.js";
 export { uptimeHome, uptimeDbPath, uptimeHostedFallbackDbPath, ensureUptimeHome } from "./paths.js";
 export type {
   UptimeBackup,
@@ -27,6 +28,8 @@ export type {
   SaveImportBatchInput,
   StoredImportBatch,
   UpsertMonitorProvenanceInput,
+  UptimeStoreReadiness,
+  UptimeStoreReadinessCheck,
 } from "./store.js";
 export type {
   BrowserPageRunner,
@@ -112,6 +115,11 @@ export type {
   HostedPublicChecksWorkerOptions,
   HostedPublicChecksWorkerSummary,
 } from "./workers.js";
+export type {
+  EdgeSmokeCheck,
+  EdgeSmokeOptions,
+  EdgeSmokeReport,
+} from "./edge-smoke.js";
 export type {
   BuildUptimeReportOptions,
   SendUptimeReportOptions,

@@ -162,9 +162,12 @@ Public web exposure requires defense in depth:
 - hosted web tasks must set `HASNA_UPTIME_ALLOWED_ORIGINS` to the public HTTPS
   edge origin so browser mutation checks do not compare CloudFront HTTPS origins
   against the ALB origin hostname;
-- Open Uptime still enforces app-level auth and workspace RBAC on every route
-  except `/health`;
-- `/health` returns only service liveness/readiness and no monitor data;
+- Open Uptime still enforces scoped hosted static-token auth and workspace
+  checks on hosted API routes except `/health`; this is an operator-smoke bridge
+  and not final production identity/RBAC;
+- `/health` returns only service liveness and no monitor data;
+- `/ready` is authenticated in hosted mode and must return `productionReady=true`
+  before protected web promotion evidence is accepted;
 - all dashboard, API, MCP-over-HTTP, JSON Render, canvas, import, report, and
   artifact endpoints require actor, workspace, and scope.
 
@@ -447,15 +450,16 @@ required before browser evidence or public probe scale-out.
 
 ## Implementation Blockers
 
-- A private Hasna AWS bridge now has zero-count runtime resources, including
-  ECR, dormant ECS services, ALB, CloudFront default-domain distribution,
-  evidence bucket, encrypted logs, Backup, EFS, and service secret containers.
-  It is not live: services remain at desired count `0`, secrets have
-  `AWSCURRENT` values, scoped hosted-token descriptors can be used for operator
-  smokes, and the HTTPS-origin/custom-hostname path still needs an approved ACM
-  cert, DNS record, plan/apply, and edge smoke. Terraform blocks
-  `desired_counts.web > 0` in CloudFront mode unless origin verification is
-  enabled and either HTTPS-origin mode is configured or
+- The approved private Hasna AWS bridge must prove zero-count runtime resources
+  in private evidence before any live scale-up: ECR, dormant ECS services, ALB,
+  CloudFront default-domain distribution, evidence bucket, encrypted logs,
+  Backup, EFS, and service secret containers. A bridge is not live while
+  services remain at desired count `0`. Private evidence must prove current
+  secret versions, scoped hosted-token descriptors used only for operator
+  smokes, and either the approved HTTPS-origin/custom-hostname path or explicit
+  bounded HTTP-origin risk acceptance. Terraform blocks `desired_counts.web >
+  0` in CloudFront mode unless origin verification is enabled and either
+  HTTPS-origin mode is configured or
   `allow_cloudfront_http_origin_live_traffic = true` records explicit bounded
   smoke risk acceptance. Full production identity/RBAC is still not implemented.
 - Open Uptime is still SQLite-only for this bridge; only one protected web task

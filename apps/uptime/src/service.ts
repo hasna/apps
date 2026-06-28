@@ -2,7 +2,7 @@ import { normalizeBrowserEvidence, normalizeHttpTargetPolicyEvidence, runMonitor
 import { createPublicKey, randomUUID } from "node:crypto";
 import { applyImport, previewImport, rollbackImport, type ImportApplyResult, type ImportPreview, type ImportRequest, type ImportRollbackResult } from "./imports.js";
 import { generateProbeKeyPair, probePublicKeyFingerprint, verifyProbeResultSignature } from "./probes.js";
-import { StaleCheckResultError, UptimeStore, type MonitorProvenance, type SaveImportBatchInput, type StoredImportBatch, type UpsertMonitorProvenanceInput, type UptimeBackup, type UptimeBackupCheck, type UptimeStoreOptions } from "./store.js";
+import { StaleCheckResultError, UptimeStore, type MonitorProvenance, type SaveImportBatchInput, type StoredImportBatch, type UpsertMonitorProvenanceInput, type UptimeBackup, type UptimeBackupCheck, type UptimeStoreOptions, type UptimeStoreReadiness } from "./store.js";
 import { buildUptimeReport, sendUptimeReport, type BuildUptimeReportOptions, type SendUptimeReportOptions, type UptimeReport, type UptimeReportDelivery } from "./report.js";
 import type {
   AuditEvent,
@@ -59,6 +59,7 @@ export interface UptimeStoreLike {
   listResults(options?: ListResultsOptions): CheckResult[];
   listIncidents(options?: { status?: "open" | "closed"; monitorId?: string; workspaceId?: string; limit?: number }): Incident[];
   summary(options?: { workspaceId?: string }): UptimeSummary;
+  readiness(): UptimeStoreReadiness;
   backup(destinationPath?: string): UptimeBackup;
   verifyBackup(backupPath: string): UptimeBackupCheck;
   acquireCheckLease(monitorId: string, owner: string, ttlMs: number): boolean;
@@ -188,6 +189,10 @@ export class UptimeService {
 
   summary(options: { workspaceId?: string } = {}): UptimeSummary {
     return this.store.summary(options);
+  }
+
+  readiness(): UptimeStoreReadiness {
+    return this.store.readiness();
   }
 
   createProbe(input: CreateProbeInput): CreateProbeResult {

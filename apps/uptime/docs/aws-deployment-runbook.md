@@ -224,28 +224,51 @@ aws ecs describe-services \
 
 ## Smoke Checks
 
-Run these checks through the public edge URL and record status codes and request
-ids. Use a scoped hosted token only from the operator secret store.
+Run these checks through the public edge URL and record the redacted JSON report.
+Use scoped hosted tokens only from the operator secret store. The command reads
+token values from environment variables and never prints them.
 
 ```bash
 EDGE_URL="$(terraform -chdir="$TF_DIR" output -raw protected_access_url)"
-: "${HOSTED_TOKEN_FILE:?set HOSTED_TOKEN_FILE to a 0600 file containing the scoped read hosted token}"
-HOSTED_TOKEN="$(tr -d '\n' < "$HOSTED_TOKEN_FILE")"
+DIRECT_ORIGIN_URL="http://$(terraform -chdir="$TF_DIR" output -raw alb_dns_name)"
+: "${WORKSPACE_ID:?set to the hosted workspace id}"
+: "${HASNA_UPTIME_EDGE_READ_TOKEN:?set from operator secret store}"
+: "${HASNA_UPTIME_EDGE_WRITE_TOKEN:?set from operator secret store}"
+: "${HASNA_UPTIME_EDGE_PROBE_TOKEN:?set from operator secret store}"
+: "${HASNA_UPTIME_EDGE_REPORT_TOKEN:?set from operator secret store}"
 
-curl -fsS "$EDGE_URL/health"
-curl -i "$EDGE_URL/"
-curl -i "$EDGE_URL/api/v1/summary"
-curl -i -H "Authorization: Bearer $HOSTED_TOKEN" "$EDGE_URL/api/v1/summary"
+uptime cloud edge-smoke \
+  --url "$EDGE_URL" \
+  --workspace-id "$WORKSPACE_ID" \
+  --mutation \
+  --direct-origin-url "$DIRECT_ORIGIN_URL" \
+  --allow-direct-origin-unreachable \
+  --require-promotion-ready \
+  --json
 ```
 
 Expected results:
 
 - `/health` returns `200` and no monitor data.
+- authenticated `/ready` returns `200` with `productionReady=true`. Hosted
+  local SQLite fallback must return a non-ready result and is not promotion
+  evidence.
 - Dashboard and API reads without auth return `401` or the approved identity
   layer denial.
 - Authenticated API reads return only the authorized workspace.
+- A read token cannot mutate, a denied browser `Origin` cannot mutate, and a
+  write token can create and delete only the disabled smoke monitor.
+- Hosted report delivery, probe APIs, import apply, and inline checks remain
+  fail-closed until their cloud job/channel/audit systems are implemented.
 - Direct ALB origin access is denied unless it is the approved CloudFront origin
-  path.
+  path. For the current private-network ALB model, an HTTP timeout/refusal from
+  outside CloudFront ranges is acceptable only when
+  `--allow-direct-origin-unreachable` is explicitly present in the private
+  evidence run; by default, unreachable direct-origin checks fail the smoke.
+
+Manual curls are acceptable only as extra diagnostics; the deployment evidence
+must include the `uptime cloud edge-smoke --json` report because it records the
+full protected-access matrix without leaking token values.
 
 Hosted deployments should store scoped hosted-token JSON in Secrets Manager, not
 a single broad raw token. The runtime accepts `HASNA_UPTIME_HOSTED_TOKENS` JSON
@@ -501,7 +524,8 @@ A deployment record is not complete until it contains:
 - source commit, package version, published package integrity, and image digest;
 - Terraform plan summary and zero-count desired-count proof;
 - secret metadata proof showing `AWSCURRENT` without secret values;
-- protected edge smoke results and direct-origin denial evidence;
+- `uptime cloud edge-smoke --json` results with `promotionReady=true`, plus
+  direct-origin denial evidence;
 - ECS service/task definition evidence;
 - CloudWatch log tail and alarm-state readback;
 - backup vault, protected-resource, recovery-point, and restore-drill evidence;

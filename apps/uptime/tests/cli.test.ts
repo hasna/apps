@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { serveUptime } from "../src/api.js";
+import { runEdgeSmoke } from "../src/edge-smoke.js";
 
 function runCli(args: string[], dbPath: string, env: Record<string, string> = {}) {
   return Bun.spawnSync({
@@ -230,6 +231,348 @@ test("CLI hosted worker entrypoints preflight and fail closed", () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("CLI cloud edge-smoke verifies hosted auth, fail-closed routes, mutation cleanup, and direct-origin denial", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  let runtime: ReturnType<typeof serveUptime> | undefined;
+  let directOrigin: ReturnType<typeof Bun.serve> | undefined;
+  try {
+    const dbPath = join(dir, "uptime.db");
+    runtime = serveUptime({
+      mode: "hosted",
+      hostedSqliteDbPath: dbPath,
+      allowHostedLocalStore: true,
+      port: 0,
+      hostedTokens: [
+        { token: "read-secret", scopes: ["uptime:read"], workspaceId: "ws_cli", actor: "cli-read" },
+        { token: "write-secret", scopes: ["uptime:write"], workspaceId: "ws_cli", actor: "cli-write" },
+        { token: "probe-secret", scopes: ["uptime:probe"], workspaceId: "ws_cli", actor: "cli-probe" },
+        { token: "report-secret", scopes: ["uptime:report"], workspaceId: "ws_cli", actor: "cli-report" },
+      ],
+    });
+    directOrigin = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => new Response("denied", { status: 403 }),
+    });
+    const edgeUrl = `http://${runtime.server.hostname}:${runtime.server.port}`;
+    const directOriginUrl = `http://${directOrigin.hostname}:${directOrigin.port}`;
+    const smoke = await runCliAsync([
+      "cloud",
+      "edge-smoke",
+      "--url",
+      edgeUrl,
+      "--workspace-id",
+      "ws_cli",
+      "--mutation",
+      "--direct-origin-url",
+      directOriginUrl,
+      "--smoke-id",
+      "cli-test",
+      "--json",
+    ], dbPath, {
+      HASNA_UPTIME_EDGE_READ_TOKEN: "read-secret",
+      HASNA_UPTIME_EDGE_WRITE_TOKEN: "write-secret",
+      HASNA_UPTIME_EDGE_PROBE_TOKEN: "probe-secret",
+      HASNA_UPTIME_EDGE_REPORT_TOKEN: "report-secret",
+    });
+    const stdout = new TextDecoder().decode(smoke.stdout);
+    const stderr = new TextDecoder().decode(smoke.stderr);
+    const report = JSON.parse(stdout);
+
+    expect(smoke.exitCode).toBe(1);
+    expect(report).toMatchObject({
+      kind: "open-uptime.edge-smoke",
+      status: "failed",
+      promotionReady: false,
+      workspaceId: "ws_cli",
+      mutationRequested: true,
+      smokeId: "cli-test",
+    });
+    expect(Object.fromEntries(report.checks.map((check: { name: string; ok: boolean }) => [check.name, check.ok]))).toMatchObject({
+      health: true,
+      readiness: false,
+      "unauth-dashboard-denied": true,
+      "unauth-ready-denied": true,
+      "unauth-summary-denied": true,
+      "unauth-monitors-denied": true,
+      "authenticated-dashboard-fail-closed": true,
+      "read-token-allowed": true,
+      "wrong-workspace-denied": true,
+      "wrong-workspace-mutation-denied": true,
+      "wrong-scope-mutation-denied": true,
+      "denied-origin-mutation": true,
+      "report-delivery-fail-closed": true,
+      "probe-api-fail-closed": true,
+      "import-apply-fail-closed": true,
+      "inline-check-fail-closed": true,
+      "write-mutation-roundtrip": true,
+      "direct-origin-denied": true,
+    });
+    expect(report.checks.find((check: { name: string }) => check.name === "readiness").promotionOk).toBe(false);
+    expect(stdout).not.toContain("read-secret");
+    expect(stdout).not.toContain("write-secret");
+    expect(stdout).not.toContain("probe-secret");
+    expect(stdout).not.toContain("report-secret");
+    expect(stderr).not.toContain("read-secret");
+    expect(stderr).not.toContain("write-secret");
+    expect(stderr).not.toContain("probe-secret");
+    expect(stderr).not.toContain("report-secret");
+    expect(runtime.service.listMonitors({ workspaceId: "ws_cli" })).toHaveLength(0);
+  } finally {
+    runtime?.server.stop(true);
+    runtime?.service.close();
+    directOrigin?.stop(true);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI cloud edge-smoke distinguishes passing partial checks from promotion readiness", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  let runtime: ReturnType<typeof serveUptime> | undefined;
+  try {
+    const dbPath = join(dir, "uptime.db");
+    runtime = serveUptime({
+      mode: "hosted",
+      hostedSqliteDbPath: dbPath,
+      allowHostedLocalStore: true,
+      port: 0,
+      hostedTokens: [
+        { token: "read-secret", scopes: ["uptime:read"], workspaceId: "ws_cli", actor: "cli-read" },
+        { token: "write-secret", scopes: ["uptime:write"], workspaceId: "ws_cli", actor: "cli-write" },
+        { token: "probe-secret", scopes: ["uptime:probe"], workspaceId: "ws_cli", actor: "cli-probe" },
+        { token: "report-secret", scopes: ["uptime:report"], workspaceId: "ws_cli", actor: "cli-report" },
+      ],
+    });
+    const edgeUrl = `http://${runtime.server.hostname}:${runtime.server.port}`;
+    const partial = await runCliAsync([
+      "cloud",
+      "edge-smoke",
+      "--url",
+      edgeUrl,
+      "--workspace-id",
+      "ws_cli",
+      "--json",
+    ], dbPath, {
+      HASNA_UPTIME_EDGE_READ_TOKEN: "read-secret",
+      HASNA_UPTIME_EDGE_WRITE_TOKEN: "write-secret",
+      HASNA_UPTIME_EDGE_PROBE_TOKEN: "probe-secret",
+      HASNA_UPTIME_EDGE_REPORT_TOKEN: "report-secret",
+    });
+    const strict = await runCliAsync([
+      "cloud",
+      "edge-smoke",
+      "--url",
+      edgeUrl,
+      "--workspace-id",
+      "ws_cli",
+      "--require-promotion-ready",
+      "--json",
+    ], dbPath, {
+      HASNA_UPTIME_EDGE_READ_TOKEN: "read-secret",
+      HASNA_UPTIME_EDGE_WRITE_TOKEN: "write-secret",
+      HASNA_UPTIME_EDGE_PROBE_TOKEN: "probe-secret",
+      HASNA_UPTIME_EDGE_REPORT_TOKEN: "report-secret",
+    });
+    const report = JSON.parse(new TextDecoder().decode(partial.stdout));
+
+    expect(partial.exitCode).toBe(1);
+    expect(report.status).toBe("failed");
+    expect(report.promotionReady).toBe(false);
+    expect(report.checks.filter((check: { skipped?: boolean }) => check.skipped).map((check: { name: string }) => check.name)).toEqual([
+      "write-mutation-roundtrip",
+      "direct-origin-denied",
+    ]);
+    expect(strict.exitCode).toBe(1);
+    expect(new TextDecoder().decode(strict.stdout)).not.toContain("read-secret");
+  } finally {
+    runtime?.server.stop(true);
+    runtime?.service.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI cloud edge-smoke rejects successful direct-origin allowed statuses", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const result = runCli([
+      "cloud",
+      "edge-smoke",
+      "--url",
+      "https://edge.example",
+      "--workspace-id",
+      "ws_cli",
+      "--direct-origin-url",
+      "https://origin.example",
+      "--direct-origin-allowed-status",
+      "200",
+      "--json",
+    ], dbPath);
+    const body = JSON.parse(new TextDecoder().decode(result.stdout));
+
+    expect(result.exitCode).toBe(1);
+    expect(body.error).toContain("4xx/5xx");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI cloud edge-smoke requires explicit opt-in for unreachable direct origins", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  let runtime: ReturnType<typeof serveUptime> | undefined;
+  try {
+    const dbPath = join(dir, "uptime.db");
+    runtime = serveUptime({
+      mode: "hosted",
+      hostedSqliteDbPath: dbPath,
+      allowHostedLocalStore: true,
+      port: 0,
+      hostedTokens: [
+        { token: "read-secret", scopes: ["uptime:read"], workspaceId: "ws_cli", actor: "cli-read" },
+        { token: "write-secret", scopes: ["uptime:write"], workspaceId: "ws_cli", actor: "cli-write" },
+        { token: "probe-secret", scopes: ["uptime:probe"], workspaceId: "ws_cli", actor: "cli-probe" },
+        { token: "report-secret", scopes: ["uptime:report"], workspaceId: "ws_cli", actor: "cli-report" },
+      ],
+    });
+    const edgeUrl = `http://${runtime.server.hostname}:${runtime.server.port}`;
+    const directOriginUrl = "http://127.0.0.1:1";
+    const commonArgs = [
+      "cloud",
+      "edge-smoke",
+      "--url",
+      edgeUrl,
+      "--workspace-id",
+      "ws_cli",
+      "--direct-origin-url",
+      directOriginUrl,
+      "--timeout-ms",
+      "100",
+      "--json",
+    ];
+    const env = {
+      HASNA_UPTIME_EDGE_READ_TOKEN: "read-secret",
+      HASNA_UPTIME_EDGE_WRITE_TOKEN: "write-secret",
+      HASNA_UPTIME_EDGE_PROBE_TOKEN: "probe-secret",
+      HASNA_UPTIME_EDGE_REPORT_TOKEN: "report-secret",
+    };
+    const blocked = await runCliAsync(commonArgs, dbPath, env);
+    const allowed = await runCliAsync([
+      ...commonArgs.slice(0, -1),
+      "--allow-direct-origin-unreachable",
+      "--json",
+    ], dbPath, env);
+    const blockedReport = JSON.parse(new TextDecoder().decode(blocked.stdout));
+    const allowedReport = JSON.parse(new TextDecoder().decode(allowed.stdout));
+
+    expect(blocked.exitCode).toBe(1);
+    expect(blockedReport.checks.find((check: { name: string }) => check.name === "direct-origin-denied").ok).toBe(false);
+    expect(allowed.exitCode).toBe(1);
+    expect(allowedReport.directOriginUnreachableAllowed).toBe(true);
+    expect(allowedReport.checks.find((check: { name: string }) => check.name === "direct-origin-denied").ok).toBe(true);
+  } finally {
+    runtime?.server.stop(true);
+    runtime?.service.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI cloud edge-smoke rejects credentialed or path-bearing evidence URLs", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const withUserinfo = runCli([
+      "cloud",
+      "edge-smoke",
+      "--url",
+      "https://user:pass@edge.example",
+      "--workspace-id",
+      "ws_cli",
+      "--json",
+    ], dbPath);
+    const withPath = runCli([
+      "cloud",
+      "edge-smoke",
+      "--url",
+      "https://edge.example/private-token-path?api_key=secret",
+      "--workspace-id",
+      "ws_cli",
+      "--json",
+    ], dbPath);
+
+    expect(withUserinfo.exitCode).toBe(1);
+    expect(JSON.parse(new TextDecoder().decode(withUserinfo.stdout)).error).toContain("must not include username or password");
+    expect(new TextDecoder().decode(withUserinfo.stdout)).not.toContain("user:pass");
+    expect(withPath.exitCode).toBe(1);
+    expect(JSON.parse(new TextDecoder().decode(withPath.stdout)).error).toContain("without a path");
+    expect(new TextDecoder().decode(withPath.stdout)).not.toContain("api_key");
+    expect(new TextDecoder().decode(withPath.stdout)).not.toContain("secret");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("edge-smoke negative mutation probes use a high-entropy non-colliding target", async () => {
+  const deletePaths: string[] = [];
+  const fetchImpl = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const url = new URL(input.toString());
+    const method = init?.method ?? "GET";
+    const headers = new Headers(init?.headers);
+    const authorized = headers.has("authorization");
+
+    if (method === "GET" && url.pathname === "/health") {
+      return Response.json({ ok: true, service: "uptime" });
+    }
+    if (method === "GET" && url.pathname === "/ready") {
+      return authorized
+        ? Response.json({ ok: true, productionReady: true })
+        : Response.json({ error: "unauthorized" }, { status: 401 });
+    }
+    if (method === "GET" && url.pathname === "/") {
+      return authorized
+        ? Response.json({ error: "hosted dashboard disabled" }, { status: 501 })
+        : Response.json({ error: "unauthorized" }, { status: 401 });
+    }
+    if (method === "GET" && url.pathname === "/api/v1/summary") {
+      return Response.json({ error: "unauthorized" }, { status: 401 });
+    }
+    if (method === "GET" && url.pathname === "/api/v1/monitors") {
+      if (!authorized) return Response.json({ error: "unauthorized" }, { status: 401 });
+      if (url.searchParams.get("workspaceId") !== "ws_cli") return Response.json({ error: "forbidden" }, { status: 403 });
+      return Response.json([]);
+    }
+    if (method === "DELETE" && url.pathname.startsWith("/api/v1/monitors/")) {
+      deletePaths.push(url.pathname);
+      return Response.json({ error: "forbidden" }, { status: 403 });
+    }
+    if (url.pathname === "/api/v1/report" || url.pathname === "/api/v1/probes" || url.pathname === "/api/v1/imports/apply" || url.pathname === "/api/v1/check-all") {
+      return Response.json({ error: "not implemented" }, { status: 501 });
+    }
+    return Response.json({ error: "unexpected test request", path: url.pathname, method }, { status: 500 });
+  }) as typeof fetch;
+
+  const report = await runEdgeSmoke({
+    url: "https://edge.example",
+    workspaceId: "ws_cli",
+    readToken: "read-secret",
+    writeToken: "write-secret",
+    probeToken: "probe-secret",
+    reportToken: "report-secret",
+    fetchImpl,
+  });
+
+  expect(report.status).toBe("passed");
+  expect(report.promotionReady).toBe(false);
+  expect(deletePaths).toHaveLength(3);
+  expect(new Set(deletePaths)).toHaveLength(1);
+  expect(deletePaths[0]?.startsWith("/api/v1/monitors/edge-smoke-negative-")).toBe(true);
+  expect(deletePaths[0]).not.toContain("edge-smoke-nonexistent");
+  expect(Object.fromEntries(report.checks.map((check) => [check.name, check.ok]))).toMatchObject({
+    "wrong-workspace-mutation-denied": true,
+    "wrong-scope-mutation-denied": true,
+    "denied-origin-mutation": true,
+  });
 });
 
 test("CLI update changes monitor configuration", () => {

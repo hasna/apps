@@ -46,10 +46,14 @@ keys or API tokens. Configure `MAILERY_SEND_KEY`, `HASNA_MAILERY_SEND_KEY`,
 Private probe env output is blocked by default while hosted probe routes remain
 fail-closed; `--allow-blocked-env` is for review artifacts only, not startup.
 
-The `uptime cloud ...` commands generate dry-run AWS/private-probe planning artifacts
-only. They do not call AWS, write secrets, or produce an approved deploy script;
-current output is intentionally blocked until the infra and cloud-store evidence
-in `docs/aws-deployment-runbook.md` is satisfied.
+The `uptime cloud plan` and `uptime cloud private-probe-config` commands
+generate dry-run AWS/private-probe planning artifacts. They do not call AWS,
+write secrets, or produce an approved deploy script; current output is
+intentionally blocked until the infra and cloud-store evidence in
+`docs/aws-deployment-runbook.md` is satisfied. The `cloud public-checks` and
+`cloud edge-smoke` commands are operational smokes: they perform bounded hosted
+checks or HTTP requests and must be run only with approved private evidence
+handling.
 
 Deployment review artifacts live in `Dockerfile` and `infra/aws`. The Terraform
 desired counts default to zero, and `uptime cloud plan --json` exposes the
@@ -71,6 +75,14 @@ entrypoints fail closed until Postgres, check jobs, channel refs, and migration
 plans exist. `uptime cloud public-checks worker` is only a bounded EFS SQLite
 bridge loop around hosted HTTP/TCP smoke checks; it is not the final cloud
 `check_jobs`/lease/fencing protocol.
+`uptime cloud edge-smoke` is the repeatable protected-web promotion smoke. It
+checks `/health`, authenticated `/ready`, unauthenticated denial, scoped reads,
+wrong-workspace denial, wrong-scope and denied-origin mutations, fail-closed
+hosted report/probe/import/check routes, optional write-token create/delete
+cleanup, and direct-origin denial without printing token values. A zero-count
+deployment is only provisioned infrastructure; do not describe it as live
+protected web access until this smoke passes against a running web task with
+`promotionReady=true`.
 `Dockerfile.package` is used by the Terraform CodeBuild image builder to build
 the published npm package into ECR from inside AWS.
 
@@ -201,6 +213,7 @@ Probe agents can import signing helpers from `@hasna/uptime/probes`.
 Run `uptime serve` and use:
 
 - `GET /health`
+- `GET /ready`
 - `GET /api/summary`
 - `GET /api/report`
 - `POST /api/report`

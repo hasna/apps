@@ -228,6 +228,39 @@ test("hosted API uses scoped /api/v1 auth and leaves legacy routes local-only", 
   service.close();
 });
 
+test("hosted readiness is authenticated and reports production data-mode gate without secrets", async () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const handler = createApiHandler(service, {
+    mode: "hosted",
+    hostedTokens: [
+      { token: "read", scopes: ["uptime:read"], workspaceId: "ws_a", actor: "operator-a" },
+    ],
+  });
+
+  const health = await handler(new Request("https://uptime.test/health"));
+  const unauthReady = await handler(new Request("https://uptime.test/ready"));
+  const ready = await handler(new Request("https://uptime.test/ready", {
+    headers: { authorization: "Bearer read", "x-uptime-workspace": "ws_a" },
+  }));
+  const body = await ready.json();
+
+  expect(health.status).toBe(200);
+  expect(unauthReady.status).toBe(401);
+  expect(ready.status).toBe(503);
+  expect(body).toMatchObject({
+    service: "uptime",
+    ok: false,
+    productionReady: false,
+    mode: "hosted",
+    dataMode: "hosted-local-sqlite",
+    schemaVersion: "5",
+    auth: { configured: true, checked: true },
+  });
+  expect(body.checks.map((check: { name: string }) => check.name)).toContain("hosted-data-mode");
+  expect(JSON.stringify(body)).not.toContain("read");
+  service.close();
+});
+
 test("hosted API audits monitor mutations with workspace and actor", async () => {
   const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
   const handler = createApiHandler(service, {

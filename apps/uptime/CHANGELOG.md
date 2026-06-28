@@ -6,6 +6,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.27] - 2026-06-29
+
+### Added
+
+- Added authenticated hosted `/ready` readiness reporting with schema, table,
+  SQLite quick-check, and hosted production data-mode gates.
+- Added `uptime cloud edge-smoke` and the `@hasna/uptime/edge-smoke` SDK export
+  for protected edge promotion evidence without printing token values.
+
+### Changed
+
+- Updated AWS deployment docs to require the repeatable edge smoke before
+  treating web scale-up as protected live access, and clarified that zero-count
+  deployments are provisioned infrastructure, not live service.
+
 ## [0.1.26] - 2026-06-29
 
 ### Added

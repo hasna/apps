@@ -74,6 +74,23 @@ export interface UptimeBackupCheck {
   incidents: number;
 }
 
+export interface UptimeStoreReadinessCheck {
+  name: string;
+  ok: boolean;
+  requiredForPromotion: boolean;
+  detail: string;
+}
+
+export interface UptimeStoreReadiness {
+  ok: boolean;
+  productionReady: boolean;
+  mode: UptimeRuntimeMode;
+  dataMode: "local-sqlite" | "hosted-local-sqlite" | "hosted-efs-sqlite";
+  schemaVersion: string | null;
+  missingTables: string[];
+  checks: UptimeStoreReadinessCheck[];
+}
+
 export interface MonitorProvenance {
   workspaceId: string;
   monitorId: string;
@@ -559,6 +576,41 @@ export class UptimeStore {
 
   verifyBackup(backupPath: string): UptimeBackupCheck {
     return verifyBackupFile(backupPath);
+  }
+
+  readiness(): UptimeStoreReadiness {
+    const tableRows = this.db
+      .query("SELECT name FROM sqlite_master WHERE type = 'table'")
+      .all() as Array<{ name: string }>;
+    const tables = new Set(tableRows.map((row) => row.name));
+    const missingTables = REQUIRED_TABLES.filter((table) => !tables.has(table));
+    const schemaVersion = tables.has("schema_migrations")
+      ? (this.db
+        .query("SELECT value FROM schema_migrations WHERE key = 'schema_version'")
+        .get() as { value?: string } | null)?.value ?? null
+      : null;
+    const quickCheck = (this.db.query("PRAGMA quick_check").get() as { quick_check?: string } | null)?.quick_check ?? "missing";
+    const checks: UptimeStoreReadinessCheck[] = [
+      { name: "sqlite-quick-check", ok: quickCheck === "ok", requiredForPromotion: true, detail: quickCheck },
+      { name: "schema-version", ok: schemaVersion === CURRENT_SCHEMA_VERSION, requiredForPromotion: true, detail: schemaVersion ?? "<missing>" },
+      { name: "required-tables", ok: missingTables.length === 0, requiredForPromotion: true, detail: missingTables.length === 0 ? "all present" : missingTables.join(",") },
+      {
+        name: "hosted-data-mode",
+        ok: this.mode !== "hosted" || this.dataMode === "hosted-efs-sqlite",
+        requiredForPromotion: true,
+        detail: this.dataMode,
+      },
+    ];
+    const serviceOk = checks.every((check) => check.ok);
+    return {
+      ok: serviceOk,
+      productionReady: serviceOk,
+      mode: this.mode,
+      dataMode: this.dataMode,
+      schemaVersion,
+      missingTables,
+      checks,
+    };
   }
 
   static verifyBackup(backupPath: string): UptimeBackupCheck {

@@ -426,9 +426,9 @@ ECS/API/RDS/S3/probe lag/job backlog/delivery failures, and rollback commands.
 ## Current Blockers
 
 - Open Uptime has no Postgres/cloud store and no distributed leases.
-- Hosted API reads are protected only by a broad bootstrap token, and the hosted
-  dashboard shell still fails closed; production-grade identity/RBAC is not
-  implemented yet.
+- Hosted API reads use static scoped hosted-token descriptors for operator
+  smokes, and the hosted dashboard shell still fails closed; production-grade
+  identity/RBAC is not implemented yet.
 - Outbound target policy for hosted HTTP/TCP checks exists in the SDK and the
   `uptime cloud public-checks run-due` operator path. A bounded
   `uptime cloud public-checks worker` EFS SQLite bridge loop exists for
@@ -440,19 +440,18 @@ ECS/API/RDS/S3/probe lag/job backlog/delivery failures, and rollback commands.
 - Conversations, notes, mementos, servers, domains, and deployment have partial
   or local-first storage models that need explicit ownership decisions.
 - Open Uptime is not registered in `@hasna/cloud` known service lists.
-- A private Hasna AWS bridge now has zero-count runtime resources, including
+- A private Hasna AWS bridge can provide zero-count runtime resources, including
   ECR, dormant ECS services, ALB, CloudFront default-domain edge, logs, alarms,
-  EFS, Backup, and Secrets Manager containers. The public Terraform module now
-  defines explicit ECS container health checks for every task definition. The
-  active private secret refs under `hasna/xyz/opensource/uptime/prod/*` have
-  `AWSCURRENT` versions, and one-off web task smokes proved image pull/startup,
-  secret injection, CloudWatch log delivery, EFS read/write, S3 PutObject, and
-  NAT HTTPS egress while services stayed at desired count `0`. The Terraform
-  private deployment has CloudFront-only origin verification headers applied so
-  the ALB rejects direct origin requests that only share CloudFront's managed
-  prefix list; that header value is secret-bearing Terraform/AWS configuration,
-  not public evidence. The private deployment evidence also includes a
-  representative SQLite EFS backup/restore drill with integrity/count checks.
+  EFS, Backup, and Secrets Manager containers. The public Terraform module
+  defines explicit ECS container health checks for every task definition.
+  Private deployment evidence must prove secret refs have `AWSCURRENT` versions,
+  one-off web task smokes covered image pull/startup, secret injection,
+  CloudWatch log delivery, EFS read/write, S3 PutObject, and NAT HTTPS egress
+  while services stayed at desired count `0`, and the selected origin
+  verification posture denies direct-origin access. The origin header value is
+  secret-bearing Terraform/AWS configuration, not public evidence. Private
+  deployment evidence should also include a representative SQLite EFS
+  backup/restore drill with integrity/count checks.
   It is not live: live scale-up is still blocked by edge/auth smokes, approved
   human/on-call SNS subscriptions and delivery smoke, and production auth
   hardening beyond scoped static operator tokens. Terraform now prevents

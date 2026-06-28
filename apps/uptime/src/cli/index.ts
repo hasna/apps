@@ -11,6 +11,7 @@ import { serveUptime } from "../api.js";
 import { generateProbeKeyPair, signProbeResult } from "../probes.js";
 import { buildAwsDeploymentPlan, buildPrivateProbeCloudConfig, renderPrivateProbeEnv } from "../cloud-plan.js";
 import { runHostedPublicChecksWorker } from "../workers.js";
+import { runEdgeSmoke, type EdgeSmokeReport } from "../edge-smoke.js";
 import type { AwsDeploymentPlan, PrivateProbeCloudConfig } from "../cloud-plan.js";
 import type { ImportSource } from "../imports.js";
 import type { SendUptimeReportOptions, UptimeReportDelivery } from "../report.js";
@@ -562,6 +563,48 @@ const cloudWorkers = cloud
   .command("workers")
   .description("Inspect and run hosted worker entrypoints");
 
+cloud
+  .command("edge-smoke")
+  .description("Smoke protected hosted web access without printing tokens")
+  .requiredOption("--url <url>", "CloudFront or protected edge URL")
+  .requiredOption("--workspace-id <id>", "workspace id to verify")
+  .option("--read-token-env <name>", "environment variable containing a scoped read token", "HASNA_UPTIME_EDGE_READ_TOKEN")
+  .option("--write-token-env <name>", "environment variable containing a scoped write token", "HASNA_UPTIME_EDGE_WRITE_TOKEN")
+  .option("--probe-token-env <name>", "environment variable containing a scoped probe token", "HASNA_UPTIME_EDGE_PROBE_TOKEN")
+  .option("--report-token-env <name>", "environment variable containing a scoped report token", "HASNA_UPTIME_EDGE_REPORT_TOKEN")
+  .option("--admin-token-env <name>", "optional fallback environment variable containing a scoped admin token", "HASNA_UPTIME_EDGE_ADMIN_TOKEN")
+  .option("--mutation", "create and delete a disabled smoke monitor with the write token")
+  .option("--direct-origin-url <url>", "direct ALB/origin URL that must deny requests without the CloudFront origin header")
+  .option("--direct-origin-allowed-status <statuses>", "comma-separated statuses accepted for direct-origin denial", parseStatusList, [403])
+  .option("--allow-direct-origin-unreachable", "treat a direct-origin timeout/refusal as explicit denial evidence for private-network ALB models")
+  .option("--timeout-ms <ms>", "per-request timeout in milliseconds", parseInteger, 10_000)
+  .option("--smoke-id <id>", "stable smoke id for evidence and cleanup naming")
+  .option("--require-promotion-ready", "exit non-zero unless mutation and direct-origin checks also passed")
+  .option("-j, --json", "print JSON")
+  .action(async (opts) => {
+    try {
+      const report = await runEdgeSmoke({
+        url: opts.url,
+        workspaceId: opts.workspaceId,
+        readToken: readTokenEnv(opts.readTokenEnv),
+        writeToken: readTokenEnv(opts.writeTokenEnv),
+        probeToken: readTokenEnv(opts.probeTokenEnv),
+        reportToken: readTokenEnv(opts.reportTokenEnv),
+        adminToken: readTokenEnv(opts.adminTokenEnv),
+        mutation: opts.mutation,
+        directOriginUrl: opts.directOriginUrl,
+        directOriginAllowedStatuses: opts.directOriginAllowedStatus,
+        directOriginUnreachableAllowed: opts.allowDirectOriginUnreachable,
+        timeoutMs: opts.timeoutMs,
+        smokeId: opts.smokeId,
+      });
+      print(report, renderEdgeSmokeReport(report), opts);
+      if (report.status === "failed" || (opts.requirePromotionReady && !report.promotionReady)) process.exit(1);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
 cloudWorkers
   .command("preflight")
   .description("Check one hosted worker entrypoint without starting work")
@@ -995,6 +1038,18 @@ function parseInteger(value: string): number {
   return parsed;
 }
 
+function parseStatusList(value: string): number[] {
+  const statuses = value.split(",").map((item) => parseInteger(item.trim()));
+  if (statuses.length === 0) throw new Error("Expected at least one HTTP status");
+  return statuses;
+}
+
+function readTokenEnv(name: string): string | undefined {
+  const envName = name.trim();
+  if (!envName) throw new Error("token environment variable name cannot be empty");
+  return process.env[envName]?.trim() || undefined;
+}
+
 function parseNumber(value: string): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) throw new Error(`Expected number, got ${value}`);
@@ -1325,6 +1380,24 @@ function renderHostedWorkerPreflight(preflight: HostedWorkerPreflight): string {
     `workspace: ${sanitizeField(preflight.workspaceId ?? "<unset>")}`,
     `blockers: ${preflight.blockers.length}`,
     ...preflight.blockers.map((blocker) => `- ${sanitizeField(blocker)}`),
+  ].join("\n");
+}
+
+function renderEdgeSmokeReport(report: EdgeSmokeReport): string {
+  return [
+    "protected edge smoke",
+    `status: ${report.status}`,
+    `promotion ready: ${report.promotionReady}`,
+    `edge: ${sanitizeField(report.edgeUrl)}`,
+    `workspace: ${sanitizeField(report.workspaceId ?? "<unset>")}`,
+    `direct origin: ${report.directOriginUrl ? sanitizeField(report.directOriginUrl) : "<not checked>"}`,
+    `direct origin unreachable allowed: ${report.directOriginUnreachableAllowed}`,
+    ...report.checks.map((check) => {
+      const state = check.skipped ? "skipped" : check.ok ? "ok" : "failed";
+      const status = check.status === undefined ? "" : ` http=${check.status}`;
+      return `- ${state.padEnd(7)} ${check.name}${status} ${sanitizeField(check.detail)}`;
+    }),
+    ...(report.nextActions.length ? ["next actions:", ...report.nextActions.map((action) => `- ${sanitizeField(action)}`)] : []),
   ].join("\n");
 }
 
