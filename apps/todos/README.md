@@ -339,6 +339,34 @@ MCP clients can use `require_approval_gate`, `approve_approval_gate`,
 `list_approval_gates`. Gate events are written to task audit history and, when
 a run is linked, to the local run ledger.
 
+### OpenAutomations Approval And Evidence Handoff
+
+OpenAutomations approval gates can be mirrored to Todos approval gates when an
+automation action affects external systems, spends money, mutates production
+state, or needs human consent. Use the automation run id as the linked run or
+metadata reference, and keep the approval decision id in task/run evidence:
+
+```bash
+todos approvals require <task-id> automation:<action-id> \
+  --requester automations \
+  --reviewer operator \
+  --reason "OpenAutomations action requires consent"
+todos approvals approve <task-id> automation:<action-id> \
+  --reviewer operator \
+  --note "Approved action execution"
+todos record-verification <task-id> "automations queue complete <action-id>" \
+  --status passed \
+  --summary "Action completed by runner open-loops:<worker-id>"
+```
+
+Todos owns task approvals, task comments, verification evidence, audit-ledger
+checkpoints, and release evidence. OpenAutomations owns automation specs,
+action queue leases, DLQ/replay, and action approval state. Store only redacted
+summaries, action ids, run ids, decision ids, artifact paths, and verification
+commands in Todos; do not store raw event payloads, secret values, connector
+tokens, or full action inputs unless the task explicitly requires them and they
+have been redacted.
+
 ## Local Review Queues
 
 Review queues turn local task review into an explicit agent workflow: request a
