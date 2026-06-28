@@ -2236,6 +2236,45 @@ describe("loops CLI", () => {
     expect(value.loop.id).toBe(legacyLoopId);
   });
 
+  test("todos task event handler dedupes by task idempotency across route prefixes", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-idempotency-dedupe-"));
+    const event = {
+      id: "evt-task-created-cross-prefix-a",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-created-cross-prefix",
+        title: "Do not duplicate across route drains",
+        working_dir: "/tmp/open-todos",
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const first = runCli(
+      dataDir,
+      ["--json", "events", "handle", "todos-task", "--name-prefix", "event:first-route"],
+      JSON.stringify(event),
+    );
+    expect(first.status).toBe(0);
+    const created = JSON.parse(first.stdout);
+
+    const replay = runCli(
+      dataDir,
+      ["--json", "events", "handle", "todos-task", "--name-prefix", "event:second-route"],
+      JSON.stringify({ ...event, id: "evt-task-created-cross-prefix-b" }),
+    );
+
+    expect(replay.status).toBe(0);
+    const value = JSON.parse(replay.stdout);
+    expect(value.deduped).toBe(true);
+    expect(value.idempotencyKey).toBe("todos-task:task-created-cross-prefix:task.created");
+    expect(value.loop.id).toBe(created.loop.id);
+
+    const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loops).toHaveLength(1);
+  });
+
   test("todos task event handler uses metadata project path when task data has no cwd", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-metadata-cwd-"));
     const event = {

@@ -899,6 +899,11 @@ function routeThrottleDryRunPreview(args: { projectPath: string; projectGroup?: 
   };
 }
 
+function findLoopByTaskIdempotency(store: Store, idempotencyKey: string): Loop | undefined {
+  const marker = `idempotency=${idempotencyKey}`;
+  return store.listLoops({ includeArchived: true, limit: 100_000 }).find((loop) => loop.description?.includes(marker));
+}
+
 async function readEventEnvelopeFromStdin(): Promise<EventEnvelope> {
   const raw = process.env.HASNA_EVENT_JSON || (await Bun.stdin.text());
   const event = JSON.parse(raw);
@@ -950,7 +955,7 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
   if (!opts.dryRun) {
     const store = new Store();
     try {
-      const existingLoop = store.findLoopByName(loopName) ?? store.findLoopByName(legacyLoopName);
+      const existingLoop = store.findLoopByName(loopName) ?? store.findLoopByName(legacyLoopName) ?? findLoopByTaskIdempotency(store, idempotencyKey);
       if (existingLoop) {
         const existingWorkflow = existingLoop.target.type === "workflow" ? store.getWorkflow(existingLoop.target.workflowId) : undefined;
         return {
@@ -1045,7 +1050,7 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
         }, {})
       : undefined;
     const outcome = store.writeTransaction(() => {
-      const existingLoop = store.findLoopByName(loopName) ?? store.findLoopByName(legacyLoopName);
+      const existingLoop = store.findLoopByName(loopName) ?? store.findLoopByName(legacyLoopName) ?? findLoopByTaskIdempotency(store, idempotencyKey);
       if (existingLoop) {
         const existingWorkflow = existingLoop.target.type === "workflow" ? store.getWorkflow(existingLoop.target.workflowId) : undefined;
         return { kind: "deduped" as const, existingLoop, existingWorkflow };
