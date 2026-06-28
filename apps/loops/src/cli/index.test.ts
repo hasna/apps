@@ -2004,6 +2004,8 @@ describe("loops CLI", () => {
         "route",
         "--todos-project-id",
         "project-route",
+        "--project-path-prefix",
+        repo,
         "--tags",
         "repoops",
         "--max-dispatch",
@@ -2029,6 +2031,7 @@ describe("loops CLI", () => {
     expect(value.considered).toBe(1);
     expect(value.created).toBe(1);
     expect(value.taskListId).toBe("list-route");
+    expect(value.projectPathPrefix).toBe(repo);
     expect(readFileSync(callsFile, "utf8")).toContain("ready --limit 500");
 
     const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);

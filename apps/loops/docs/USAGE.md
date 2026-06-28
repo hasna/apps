@@ -320,6 +320,7 @@ loops events drain todos-task \
   --todos-project /home/hasna/.hasna/loops \
   --task-list repoops-pr-queue \
   --tags auto:route \
+  --project-path-prefix /home/hasna/workspace/hasna/opensource \
   --provider codewith \
   --auth-profile-pool account004,account005,account006 \
   --project-group oss \
@@ -334,14 +335,16 @@ loops events drain todos-task \
 
 `--max-dispatch` caps new workflow-loop creation per drain run. `--limit` caps
 filtered ready-task candidates, while `--scan-limit` controls how many raw
-`todos ready` rows are fetched before filters. When `--task-list`, `--tags`, or
-`--todos-project-id` are set, the default scan limit is raised to 500 so a busy
-shared queue is less likely to starve project-specific drains. The route
-throttle flags are still checked for every candidate, so a drain can safely run
-every few minutes as a deterministic command loop: it fills only available
-capacity, writes compact JSON evidence when requested, and leaves excess ready
-tasks in todos for a later drain pass. Use `--dry-run` to preview candidates and
-rendered workflows without mutating OpenLoops state.
+`todos ready` rows are fetched before filters. Use `--task-list`, `--tags`,
+`--todos-project-id`, and `--project-path-prefix` to keep each drain aligned
+with the route/name-prefix it services. When any of those filters are set, the
+default scan limit is raised to 500 so a busy shared queue is less likely to
+starve project-specific drains. The route throttle flags are still checked for
+every candidate, so a drain can safely run every few minutes as a deterministic
+command loop: it fills only available capacity, writes compact JSON evidence
+when requested, and leaves excess ready tasks in todos for a later drain pass.
+Use `--dry-run` to preview candidates and rendered workflows without mutating
+OpenLoops state.
 
 For other Hasna apps that expose `@hasna/events` webhooks, use the generic
 handler:

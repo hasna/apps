@@ -765,6 +765,7 @@ interface TodosDrainOptions extends TodosTaskRouteOptions {
   todosProjectId?: string;
   taskList?: string;
   tags?: string;
+  projectPathPrefix?: string;
   limit?: string;
   scanLimit?: string;
   maxDispatch?: string;
@@ -1125,6 +1126,12 @@ function taskProjectId(task: TodosReadyTask): string | undefined {
   return taskField(task, ["project_id", "projectId"]);
 }
 
+function taskProjectPath(task: TodosReadyTask): string | undefined {
+  const metadata = objectField(task.metadata) ?? {};
+  return taskField(task, ["working_dir", "workingDir", "project_path", "projectPath", "cwd"]) ??
+    taskEventField(metadata, ["working_dir", "workingDir", "project_path", "projectPath", "project_canonical_path", "cwd"]);
+}
+
 function taskDrainEvent(task: TodosReadyTask): EventEnvelope {
   const taskId = taskField(task, ["id", "task_id", "taskId"]);
   if (!taskId) throw new Error("todos ready returned a task without an id");
@@ -1183,9 +1190,16 @@ function resolveTaskListFilter(todosProject: string, filter: string | undefined)
   return match?.id ?? wanted;
 }
 
-function taskMatchesDrainFilters(task: TodosReadyTask, filters: { projectId?: string; taskListId?: string; tags: string[] }): boolean {
+function taskMatchesDrainFilters(task: TodosReadyTask, filters: { projectId?: string; taskListId?: string; projectPathPrefix?: string; tags: string[] }): boolean {
   if (filters.projectId && taskProjectId(task) !== filters.projectId) return false;
   if (filters.taskListId && taskListId(task) !== filters.taskListId) return false;
+  if (filters.projectPathPrefix) {
+    const path = taskProjectPath(task);
+    if (!path) return false;
+    const normalizedPath = normalizeRoutePath(path) ?? resolve(path);
+    const normalizedPrefix = normalizeRoutePath(filters.projectPathPrefix) ?? resolve(filters.projectPathPrefix);
+    if (normalizedPath !== normalizedPrefix && !normalizedPath.startsWith(`${normalizedPrefix}/`)) return false;
+  }
   if (filters.tags.length) {
     const taskTags = new Set(tagsFromValue(task.tags));
     for (const tag of filters.tags) {
@@ -1469,6 +1483,7 @@ eventsDrain
   .option("--todos-project <path>", "todos storage project path", defaultLoopsProject())
   .option("--todos-project-id <id>", "filter todos ready output to one todos project id")
   .option("--task-list <id-or-slug>", "filter ready tasks to one task-list id, slug, or name")
+  .option("--project-path-prefix <path>", "filter ready tasks to a project/repo path prefix")
   .option("--tags <tags>", "require all comma-separated tags before routing")
   .option("--tag <tags>", "alias for --tags")
   .option("--limit <n>", "maximum filtered ready-task candidates to consider", "50")
@@ -1507,13 +1522,14 @@ eventsDrain
     const requiredTags = splitList(opts.tags ?? opts.tag) ?? [];
     const taskListFilter = resolveTaskListFilter(todosProject, opts.taskList);
     const candidateLimit = positiveInteger(opts.limit ?? "50", "--limit") ?? 50;
-    const hasPostFilters = Boolean(opts.todosProjectId || taskListFilter || requiredTags.length);
+    const hasPostFilters = Boolean(opts.todosProjectId || taskListFilter || opts.projectPathPrefix || requiredTags.length);
     const defaultScanLimit = hasPostFilters ? Math.max(candidateLimit, 500) : candidateLimit;
     const scanLimit = positiveInteger(opts.scanLimit ?? String(defaultScanLimit), "--scan-limit") ?? defaultScanLimit;
     const ready = loadReadyTodosTasks(opts, scanLimit);
     const filteredCandidates = ready.filter((task) => taskMatchesDrainFilters(task, {
       projectId: opts.todosProjectId,
       taskListId: taskListFilter,
+      projectPathPrefix: opts.projectPathPrefix,
       tags: requiredTags,
     }));
     const candidates = filteredCandidates.slice(0, candidateLimit);
@@ -1533,6 +1549,7 @@ eventsDrain
       todosProjectId: opts.todosProjectId,
       taskList: opts.taskList,
       taskListId: taskListFilter,
+      projectPathPrefix: opts.projectPathPrefix,
       tags: requiredTags,
       limit: candidateLimit,
       scanLimit,
