@@ -1,8 +1,9 @@
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { Database } from "bun:sqlite";
-import { uptimeDbPath } from "./paths.js";
+import { uptimeDbPath, uptimeHostedFallbackDbPath } from "./paths.js";
+import { assertHostedTargetAllowed } from "./target-policy.js";
 import {
   MAX_INTERVAL_SECONDS,
   MAX_RESULT_LIMIT,
@@ -26,7 +27,33 @@ import type {
 
 export interface UptimeStoreOptions {
   dbPath?: string;
+  mode?: UptimeRuntimeMode;
+  allowHostedLocalStore?: boolean;
+  cloudDatabaseUrl?: string;
 }
+
+export type UptimeRuntimeMode = "local" | "hosted";
+
+export interface UptimeBackup {
+  sourcePath: string;
+  backupPath: string;
+  bytes: number;
+  createdAt: string;
+}
+
+export interface UptimeBackupCheck {
+  ok: boolean;
+  backupPath: string;
+  integrity: string;
+  schemaVersion: string | null;
+  missingTables: string[];
+  monitors: number;
+  results: number;
+  incidents: number;
+}
+
+const REQUIRED_TABLES = ["schema_migrations", "monitors", "check_results", "incidents", "check_leases"] as const;
+const CURRENT_SCHEMA_VERSION = "1";
 
 interface MonitorRow {
   id: string;
@@ -101,10 +128,21 @@ export class StaleCheckResultError extends Error {
 
 export class UptimeStore {
   readonly dbPath: string;
+  readonly mode: UptimeRuntimeMode;
+  readonly dataMode: "local-sqlite" | "hosted-local-sqlite";
   private readonly db: Database;
 
   constructor(options: UptimeStoreOptions = {}) {
-    this.dbPath = options.dbPath ?? uptimeDbPath();
+    this.mode = resolveRuntimeMode(options.mode ?? "local");
+    const cloudDatabaseUrl = options.cloudDatabaseUrl ?? process.env.HASNA_UPTIME_DATABASE_URL;
+    if (this.mode === "hosted" && cloudDatabaseUrl) {
+      throw new Error("hosted cloud database adapter is not implemented yet");
+    }
+    if (this.mode === "hosted" && !allowHostedLocalStore(options.allowHostedLocalStore)) {
+      throw new Error("hosted mode requires a cloud data layer; set HASNA_UPTIME_ALLOW_HOSTED_LOCAL_STORE=1 only for explicit local fallback testing");
+    }
+    this.dataMode = this.mode === "hosted" ? "hosted-local-sqlite" : "local-sqlite";
+    this.dbPath = options.dbPath ?? (this.mode === "hosted" ? uptimeHostedFallbackDbPath() : uptimeDbPath());
     if (this.dbPath !== ":memory:") {
       mkdirSync(dirname(this.dbPath), { recursive: true });
     }
@@ -174,13 +212,67 @@ export class UptimeStore {
         acquired_at TEXT NOT NULL
       )
     `);
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `);
+    this.db
+      .query("INSERT OR REPLACE INTO schema_migrations (key, value, updated_at) VALUES ('schema_version', ?, ?)")
+      .run(CURRENT_SCHEMA_VERSION, new Date().toISOString());
     this.db.run("CREATE INDEX IF NOT EXISTS idx_results_monitor_time ON check_results(monitor_id, checked_at DESC)");
     this.db.run("CREATE INDEX IF NOT EXISTS idx_incidents_monitor_status ON incidents(monitor_id, status)");
     this.db.run("CREATE INDEX IF NOT EXISTS idx_check_leases_until ON check_leases(leased_until)");
   }
 
+  backup(destinationPath?: string): UptimeBackup {
+    if (this.dbPath === ":memory:" && !destinationPath) {
+      throw new Error("backup path is required for in-memory stores");
+    }
+    const createdAt = new Date().toISOString();
+    const backupPath = destinationPath ?? join(dirname(this.dbPath), "backups", `uptime-${createdAt.replace(/[:.]/g, "-")}.db`);
+    mkdirSync(dirname(backupPath), { recursive: true });
+    if (this.dbPath === ":memory:") {
+      this.vacuumInto(backupPath);
+    } else {
+      this.db.run("PRAGMA wal_checkpoint(TRUNCATE)");
+      copyFileSync(this.dbPath, backupPath);
+    }
+    const bytes = statSync(backupPath).size;
+    return { sourcePath: this.dbPath, backupPath, bytes, createdAt };
+  }
+
+  verifyBackup(backupPath: string): UptimeBackupCheck {
+    return verifyBackupFile(backupPath);
+  }
+
+  static verifyBackup(backupPath: string): UptimeBackupCheck {
+    return verifyBackupFile(backupPath);
+  }
+
+  static restoreBackup(backupPath: string, destinationPath = uptimeDbPath()): UptimeBackup {
+    const check = verifyBackupFile(backupPath);
+    if (!check.ok) throw new Error(`backup integrity check failed: ${check.integrity}`);
+    if (destinationPath === ":memory:") throw new Error("cannot restore a backup to an in-memory store");
+    if (existsSync(destinationPath) || existsSync(`${destinationPath}-wal`) || existsSync(`${destinationPath}-shm`)) {
+      throw new Error("restore destination already exists or has SQLite sidecar files");
+    }
+    mkdirSync(dirname(destinationPath), { recursive: true });
+    copyFileSync(backupPath, destinationPath);
+    const bytes = statSync(destinationPath).size;
+    return {
+      sourcePath: backupPath,
+      backupPath: destinationPath,
+      bytes,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
   createMonitor(input: CreateMonitorInput): Monitor {
     const normalized = normalizeCreateMonitor(input);
+    if (this.mode === "hosted") assertHostedTargetAllowed(normalized);
     const now = new Date().toISOString();
     const monitor: Monitor = {
       id: newId("mon"),
@@ -250,6 +342,7 @@ export class UptimeStore {
     if (!current) throw new Error(`Monitor not found: ${idOrName}`);
     const updatedAt = new Date().toISOString();
     const next = normalizeUpdateMonitor(current, input, updatedAt);
+    if (this.mode === "hosted") assertHostedTargetAllowed(next);
     this.db
       .query(
         `UPDATE monitors SET
@@ -494,6 +587,60 @@ export class UptimeStore {
       this.db.run(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
     }
   }
+
+  private vacuumInto(backupPath: string): void {
+    const quoted = backupPath.replace(/'/g, "''");
+    this.db.run(`VACUUM INTO '${quoted}'`);
+  }
+}
+
+export function resolveRuntimeMode(mode?: UptimeRuntimeMode): UptimeRuntimeMode {
+  const value = mode ?? process.env.HASNA_UPTIME_MODE ?? "local";
+  if (value === "local" || value === "hosted") return value;
+  throw new Error("HASNA_UPTIME_MODE must be local or hosted");
+}
+
+function allowHostedLocalStore(value?: boolean): boolean {
+  return value === true || process.env.HASNA_UPTIME_ALLOW_HOSTED_LOCAL_STORE === "1";
+}
+
+function verifyBackupFile(backupPath: string): UptimeBackupCheck {
+  const db = new Database(backupPath, { readonly: true });
+  try {
+    const integrityRow = db.query("PRAGMA integrity_check").get() as { integrity_check?: string } | null;
+    const integrity = String(integrityRow?.integrity_check ?? "unknown");
+    const missingTables = REQUIRED_TABLES.filter((table) => !tableExists(db, table));
+    const schemaVersion = missingTables.includes("schema_migrations")
+      ? null
+      : (db
+        .query("SELECT value FROM schema_migrations WHERE key = 'schema_version'")
+        .get() as { value: string } | null)?.value ?? null;
+    return {
+      ok: integrity === "ok" && missingTables.length === 0 && schemaVersion === CURRENT_SCHEMA_VERSION,
+      backupPath,
+      integrity,
+      schemaVersion,
+      missingTables,
+      monitors: tableCount(db, "monitors"),
+      results: tableCount(db, "check_results"),
+      incidents: tableCount(db, "incidents"),
+    };
+  } finally {
+    db.close();
+  }
+}
+
+function tableCount(db: Database, table: string): number {
+  if (!tableExists(db, table)) return 0;
+  const row = db.query(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number } | null;
+  return Number(row?.count ?? 0);
+}
+
+function tableExists(db: Database, table: string): boolean {
+  const row = db
+    .query("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(table) as { count: number } | null;
+  return Number(row?.count ?? 0) > 0;
 }
 
 function normalizeCreateMonitor(input: CreateMonitorInput): NormalizedMonitorInput {

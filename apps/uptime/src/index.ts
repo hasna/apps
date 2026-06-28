@@ -3,7 +3,13 @@ export { UptimeStore } from "./store.js";
 export { runMonitorCheck, runHttpCheck, runTcpCheck } from "./checks.js";
 export { createApiHandler, serveUptime } from "./api.js";
 export { buildUptimeReport, sendUptimeReport } from "./report.js";
-export { uptimeHome, uptimeDbPath, ensureUptimeHome } from "./paths.js";
+export { uptimeHome, uptimeDbPath, uptimeHostedFallbackDbPath, ensureUptimeHome } from "./paths.js";
+export type {
+  UptimeBackup,
+  UptimeBackupCheck,
+  UptimeRuntimeMode,
+  UptimeStoreOptions,
+} from "./store.js";
 export type {
   CheckAttemptResult,
   CheckResult,

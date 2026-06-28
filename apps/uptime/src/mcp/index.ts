@@ -20,7 +20,7 @@ export interface CreateMcpServerOptions {
 
 export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer {
   const server = new McpServer({ name: "uptime", version: packageVersion() });
-  const service = options.service ?? new UptimeService();
+  const service = options.service ?? new UptimeService({ mode: "local" });
 
   server.registerResource(
     "uptime_summary",

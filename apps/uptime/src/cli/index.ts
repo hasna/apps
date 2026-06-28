@@ -3,6 +3,7 @@ import { Command, Option } from "commander";
 import chalk from "chalk";
 import { existsSync } from "node:fs";
 import { UptimeService } from "../service.js";
+import { UptimeStore } from "../store.js";
 import { ensureUptimeHome, uptimeDbPath, uptimeHome } from "../paths.js";
 import { packageVersion } from "../version.js";
 import { serveUptime } from "../api.js";
@@ -18,7 +19,7 @@ program
   .option("-j, --json", "print JSON");
 
 function service(): UptimeService {
-  return new UptimeService();
+  return new UptimeService({ mode: "local" });
 }
 
 function wantsJson(opts?: { json?: boolean }): boolean {
@@ -351,12 +352,52 @@ program
   });
 
 program
+  .command("backup [path]")
+  .description("Create and verify a local SQLite backup")
+  .option("-j, --json", "print JSON")
+  .action((path, opts) => {
+    try {
+      const svc = service();
+      const backup = svc.backup(path);
+      const check = svc.verifyBackup(backup.backupPath);
+      svc.close();
+      const data = { ok: check.ok, backup, check };
+      print(data, `Backed up ${backup.sourcePath} to ${backup.backupPath} (${backup.bytes} bytes)`, opts);
+      if (!check.ok) process.exit(1);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+program
+  .command("restore <backup-path>")
+  .description("Restore a verified local SQLite backup")
+  .option("--db <path>", "destination database path", uptimeDbPath())
+  .option("--yes", "confirm overwrite of the destination database")
+  .option("-j, --json", "print JSON")
+  .action((backupPath, opts) => {
+    try {
+      if (!opts.yes) throw new Error("restore requires --yes");
+      const restored = UptimeStore.restoreBackup(backupPath, opts.db);
+      const check = UptimeStore.verifyBackup(opts.db);
+      const data = { ok: check.ok, restored, check };
+      print(data, `Restored ${backupPath} to ${opts.db}`, opts);
+      if (!check.ok) process.exit(1);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+program
   .command("serve")
   .description("Serve the local API and dashboard")
   .option("--host <host>", "host to bind", "127.0.0.1")
   .option("--port <port>", "port", parseInteger, 3899)
   .option("--check", "run the scheduler while serving")
+  .addOption(new Option("--mode <mode>", "runtime mode").choices(["local", "hosted"]).default("local"))
   .option("--api-token <token>", "token required for non-loopback mutation hosts")
+  .option("--hosted-token <token>", "scoped hosted-mode token")
+  .option("--allow-hosted-local-store", "allow hosted mode to use local SQLite as an explicit fallback")
   .option("--allow-unsafe-remote-mutations", "allow state-changing requests from non-loopback hosts without a token")
   .option("-j, --json", "print JSON")
   .action((opts) => {
@@ -365,10 +406,13 @@ program
         host: opts.host,
         port: opts.port,
         check: opts.check,
+        mode: opts.mode,
         apiToken: opts.apiToken,
+        hostedToken: opts.hostedToken,
+        allowHostedLocalStore: opts.allowHostedLocalStore,
         allowUnsafeRemoteMutations: opts.allowUnsafeRemoteMutations,
       });
-      const data = { ok: true, url: `http://${server.hostname}:${server.port}`, scheduler: Boolean(opts.check) };
+      const data = { ok: true, url: `http://${server.hostname}:${server.port}`, scheduler: Boolean(opts.check), mode: opts.mode };
       if (wantsJson(opts)) console.log(JSON.stringify(data, null, 2));
       else console.log(`Open Uptime listening on ${chalk.cyan(data.url)}`);
     } catch (error) {

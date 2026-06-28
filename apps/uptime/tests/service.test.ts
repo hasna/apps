@@ -1,8 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Database } from "bun:sqlite";
 import { UptimeService } from "../src/service.js";
+import { UptimeStore } from "../src/store.js";
 import type { CheckAttemptResult, Monitor } from "../src/types.js";
 
 const cleanup: string[] = [];
@@ -556,4 +558,128 @@ test("monitors, results, and incidents persist after reopening the store", async
   expect(reopened.listResults()).toHaveLength(1);
   expect(reopened.listIncidents({ status: "open" })).toHaveLength(1);
   reopened.close();
+});
+
+test("hosted store fails closed without cloud adapter or explicit fallback", () => {
+  const dbPath = tempDb();
+
+  expect(() => new UptimeService({ dbPath, mode: "hosted" }))
+    .toThrow("hosted mode requires a cloud data layer");
+  expect(existsSync(dbPath)).toBe(false);
+});
+
+test("hosted store does not silently use SQLite when a cloud database URL is configured", () => {
+  expect(() => new UptimeService({
+    dbPath: tempDb(),
+    mode: "hosted",
+    allowHostedLocalStore: true,
+    cloudDatabaseUrl: "postgres://example.invalid/uptime",
+  })).toThrow("hosted cloud database adapter is not implemented yet");
+});
+
+test("default service construction stays local when hosted env vars are set", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-env-"));
+  cleanup.push(dir);
+  const previousMode = process.env.HASNA_UPTIME_MODE;
+  const previousToken = process.env.HASNA_UPTIME_HOSTED_TOKEN;
+  const previousDb = process.env.HASNA_UPTIME_DB;
+  process.env.HASNA_UPTIME_MODE = "hosted";
+  process.env.HASNA_UPTIME_HOSTED_TOKEN = "hosted-secret";
+  process.env.HASNA_UPTIME_DB = join(dir, "uptime.db");
+  try {
+    const service = new UptimeService();
+    expect(service.store.mode).toBe("local");
+    expect(service.store.dataMode).toBe("local-sqlite");
+    service.createMonitor({ name: "local-default", kind: "http", url: "https://example.com" });
+    expect(service.summary().totals.monitors).toBe(1);
+    service.close();
+
+    const store = new UptimeStore();
+    expect(store.mode).toBe("local");
+    expect(store.dataMode).toBe("local-sqlite");
+    store.close();
+  } finally {
+    if (previousMode === undefined) delete process.env.HASNA_UPTIME_MODE;
+    else process.env.HASNA_UPTIME_MODE = previousMode;
+    if (previousToken === undefined) delete process.env.HASNA_UPTIME_HOSTED_TOKEN;
+    else process.env.HASNA_UPTIME_HOSTED_TOKEN = previousToken;
+    if (previousDb === undefined) delete process.env.HASNA_UPTIME_DB;
+    else process.env.HASNA_UPTIME_DB = previousDb;
+  }
+});
+
+test("hosted service rejects inline SDK checks and scheduler entrypoints", async () => {
+  let calls = 0;
+  const service = new UptimeService({
+    dbPath: tempDb(),
+    mode: "hosted",
+    allowHostedLocalStore: true,
+    checkRunner: async () => {
+      calls += 1;
+      return { status: "up", latencyMs: 1, statusCode: 200, error: null };
+    },
+  });
+  service.createMonitor({ name: "hosted", kind: "http", url: "https://example.com" });
+
+  await expect(service.checkMonitor("hosted")).rejects.toThrow("hosted checks require check_jobs and probes");
+  await expect(service.checkAll()).rejects.toThrow("hosted checks require check_jobs and probes");
+  await expect(service.runDueChecks()).rejects.toThrow("hosted checks require check_jobs and probes");
+  expect(() => service.startScheduler()).toThrow("hosted scheduler requires check_jobs and probes");
+  expect(calls).toBe(0);
+  service.close();
+});
+
+test("local backup verify and restore round trip preserves data", async () => {
+  const dbPath = tempDb();
+  const backupPath = join(mkdtempSync(join(tmpdir(), "open-uptime-backup-")), "backup.db");
+  const restorePath = join(mkdtempSync(join(tmpdir(), "open-uptime-restore-")), "restored.db");
+  cleanup.push(backupPath.replace(/\/backup\.db$/, ""));
+  cleanup.push(restorePath.replace(/\/restored\.db$/, ""));
+  const first = new UptimeService({
+    dbPath,
+    checkRunner: async () => ({ status: "down", latencyMs: 5, statusCode: 500, error: "boom" }),
+  });
+  first.createMonitor({ name: "backup", kind: "http", url: "https://example.com" });
+  await first.checkMonitor("backup");
+  const backup = first.backup(backupPath);
+  const check = first.verifyBackup(backup.backupPath);
+  first.close();
+
+  expect(backup.bytes).toBeGreaterThan(0);
+  expect(check).toMatchObject({ ok: true, integrity: "ok", schemaVersion: "1", monitors: 1, results: 1, incidents: 1 });
+
+  UptimeStore.restoreBackup(backup.backupPath, restorePath);
+  const restored = new UptimeService({ dbPath: restorePath });
+  expect(restored.listMonitors({ includeDisabled: true })).toHaveLength(1);
+  expect(restored.listResults()).toHaveLength(1);
+  expect(restored.listIncidents({ status: "open" })).toHaveLength(1);
+  restored.close();
+});
+
+test("backup verification rejects empty or wrong-schema SQLite databases", () => {
+  const wrongPath = tempDb();
+  const db = new Database(wrongPath, { create: true });
+  db.run("CREATE TABLE other (id TEXT PRIMARY KEY)");
+  db.close();
+
+  const check = UptimeStore.verifyBackup(wrongPath);
+
+  expect(check.ok).toBe(false);
+  expect(check.integrity).toBe("ok");
+  expect(check.missingTables).toContain("monitors");
+  expect(() => UptimeStore.restoreBackup(wrongPath, tempDb())).toThrow("backup integrity check failed");
+});
+
+test("restore refuses existing destinations and SQLite sidecars", async () => {
+  const source = new UptimeService({ dbPath: tempDb() });
+  source.createMonitor({ name: "restore", kind: "http", url: "https://example.com" });
+  const backup = source.backup(join(mkdtempSync(join(tmpdir(), "open-uptime-restore-backup-")), "backup.db"));
+  cleanup.push(backup.backupPath.replace(/\/backup\.db$/, ""));
+  source.close();
+
+  const destination = tempDb();
+  const existing = new UptimeService({ dbPath: destination });
+  existing.close();
+
+  expect(() => UptimeStore.restoreBackup(backup.backupPath, destination)).toThrow("restore destination already exists");
 });

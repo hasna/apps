@@ -10,6 +10,10 @@ export function uptimeDbPath(): string {
   return process.env.HASNA_UPTIME_DB || join(uptimeHome(), "uptime.db");
 }
 
+export function uptimeHostedFallbackDbPath(): string {
+  return process.env.HASNA_UPTIME_HOSTED_FALLBACK_DB || join(uptimeHome(), "hosted-fallback", "uptime.db");
+}
+
 export function ensureUptimeHome(): string {
   const home = uptimeHome();
   mkdirSync(home, { recursive: true });

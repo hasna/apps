@@ -3,11 +3,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-function runCli(args: string[], dbPath: string) {
+function runCli(args: string[], dbPath: string, env: Record<string, string> = {}) {
   return Bun.spawnSync({
     cmd: ["bun", "run", "src/cli/index.ts", ...args],
     cwd: process.cwd(),
-    env: { ...process.env, HASNA_UPTIME_DB: dbPath, NO_COLOR: "1" },
+    env: { ...process.env, HASNA_UPTIME_DB: dbPath, NO_COLOR: "1", ...env },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -27,6 +27,24 @@ test("CLI init, add, and list work with JSON output", () => {
     const monitors = JSON.parse(new TextDecoder().decode(list.stdout));
     expect(monitors).toHaveLength(1);
     expect(monitors[0].name).toBe("api");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI data commands stay local when hosted env vars are set", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const env = { HASNA_UPTIME_MODE: "hosted", HASNA_UPTIME_HOSTED_TOKEN: "hosted-secret" };
+    const init = runCli(["init", "--json"], dbPath, env);
+    const add = runCli(["add", "api", "--url", "https://example.com", "--json"], dbPath, env);
+    const list = runCli(["list", "--all", "--json"], dbPath, env);
+
+    expect(init.exitCode).toBe(0);
+    expect(add.exitCode).toBe(0);
+    expect(list.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(list.stdout))).toHaveLength(1);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

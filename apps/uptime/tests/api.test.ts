@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createApiHandler } from "../src/api.js";
+import { createApiHandler, serveUptime } from "../src/api.js";
 import { UptimeService } from "../src/service.js";
 
 const cleanup: string[] = [];
@@ -89,6 +89,186 @@ test("API allows non-loopback mutation hosts with an API token", async () => {
   expect(response.status).toBe(201);
   expect(service.summary().totals.monitors).toBe(1);
   service.close();
+});
+
+test("hosted API uses scoped /api/v1 auth and leaves legacy routes local-only", async () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const handler = createApiHandler(service, {
+    mode: "hosted",
+    hostedTokens: [
+      { token: "read", scopes: ["uptime:read"], workspaceId: "ws_a" },
+      { token: "write", scopes: ["uptime:write"], workspaceId: "ws_a" },
+    ],
+  });
+
+  const health = await handler(new Request("https://uptime.test/health"));
+  const dashboard = await handler(new Request("https://uptime.test/"));
+  const authedDashboard = await handler(new Request("https://uptime.test/", {
+    headers: { authorization: "Bearer read" },
+  }));
+  const summary = await handler(new Request("https://uptime.test/api/v1/summary"));
+  const legacySummary = await handler(new Request("https://uptime.test/api/summary", {
+    headers: { authorization: "Bearer read" },
+  }));
+  const authedSummary = await handler(new Request("https://uptime.test/api/v1/summary", {
+    headers: { authorization: "Bearer read" },
+  }));
+  const readCreate = await handler(jsonRequest(
+    "https://uptime.test/api/v1/monitors",
+    "POST",
+    { name: "read-only", kind: "http", url: "https://example.com" },
+    { origin: "https://uptime.test", authorization: "Bearer read" },
+  ));
+  const create = await handler(jsonRequest(
+    "https://uptime.test/api/v1/monitors",
+    "POST",
+    { name: "hosted", kind: "http", url: "https://example.com" },
+    { origin: "https://uptime.test", authorization: "Bearer write" },
+  ));
+  const workspaceMismatch = await handler(new Request("https://uptime.test/api/v1/summary", {
+    headers: { authorization: "Bearer read", "x-uptime-workspace": "ws_b" },
+  }));
+
+  expect(health.status).toBe(200);
+  expect(await health.json()).toMatchObject({ ok: true, mode: "hosted", dataMode: "hosted-local-sqlite" });
+  expect(dashboard.status).toBe(401);
+  expect(authedDashboard.status).toBe(501);
+  expect(summary.status).toBe(401);
+  expect(legacySummary.status).toBe(404);
+  expect(authedSummary.status).toBe(200);
+  expect(readCreate.status).toBe(403);
+  expect(create.status).toBe(201);
+  expect(workspaceMismatch.status).toBe(403);
+  expect(service.summary().totals.monitors).toBe(1);
+  service.close();
+});
+
+test("hosted API fails closed when auth token is not configured", async () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const handler = createApiHandler(service, { mode: "hosted" });
+
+  const health = await handler(new Request("https://uptime.test/health"));
+  const summary = await handler(new Request("https://uptime.test/api/v1/summary"));
+
+  expect(health.status).toBe(200);
+  expect(summary.status).toBe(503);
+  expect((await summary.json()).error).toContain("hosted auth token is not configured");
+  service.close();
+});
+
+test("hosted API still rejects cross-origin mutations with a valid token", async () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const handler = createApiHandler(service, { mode: "hosted", hostedToken: "secret" });
+
+  const response = await handler(jsonRequest(
+    "https://uptime.test/api/v1/monitors",
+    "POST",
+    { name: "hosted-csrf", kind: "http", url: "https://example.com" },
+    { origin: "https://evil.test", authorization: "Bearer secret" },
+  ));
+
+  expect(response.status).toBe(403);
+  expect((await response.json()).error).toContain("cross-origin");
+  expect(service.summary().totals.monitors).toBe(0);
+  service.close();
+});
+
+test("hosted API blocks raw report delivery and inline checks", async () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  service.createMonitor({ name: "api", kind: "http", url: "https://example.com" });
+  const handler = createApiHandler(service, {
+    mode: "hosted",
+    hostedTokens: [
+      { token: "report", scopes: ["uptime:report"] },
+      { token: "probe", scopes: ["uptime:probe"] },
+    ],
+  });
+
+  const report = await handler(jsonRequest(
+    "https://uptime.test/api/v1/report",
+    "POST",
+    { logs: { apiUrl: "https://logs.example", projectId: "open-uptime" } },
+    { origin: "https://uptime.test", authorization: "Bearer report" },
+  ));
+  const checkAll = await handler(new Request("https://uptime.test/api/v1/check-all", {
+    method: "POST",
+    headers: { origin: "https://uptime.test", authorization: "Bearer probe" },
+  }));
+
+  expect(report.status).toBe(501);
+  expect((await report.json()).error).toContain("channel refs");
+  expect(checkAll.status).toBe(501);
+  expect((await checkAll.json()).error).toContain("check_jobs");
+  service.close();
+});
+
+test("hosted API enforces target policy at monitor creation", async () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const handler = createApiHandler(service, { mode: "hosted", hostedToken: "secret" });
+  const cases = [
+    { name: "loopback", kind: "http", url: "http://127.0.0.1:3000" },
+    { name: "metadata", kind: "http", url: "http://169.254.169.254/latest/meta-data" },
+    { name: "userinfo", kind: "http", url: "https://user:pass@example.com" },
+    { name: "secret-query", kind: "http", url: "https://example.com/?api_key=secret" },
+    { name: "private-tcp", kind: "tcp", host: "10.0.0.1", port: 5432 },
+  ];
+
+  for (const input of cases) {
+    const response = await handler(jsonRequest(
+      "https://uptime.test/api/v1/monitors",
+      "POST",
+      input,
+      { origin: "https://uptime.test", authorization: "Bearer secret" },
+    ));
+    expect(response.status).toBe(400);
+  }
+  expect(service.summary().totals.monitors).toBe(0);
+  service.close();
+});
+
+test("hosted handler rejects a local-mode service", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  expect(() => createApiHandler(service, { mode: "hosted", hostedToken: "secret" }))
+    .toThrow("API mode hosted does not match store mode local");
+  service.close();
+});
+
+test("serve hosted mode requires an auth token before startup", () => {
+  expect(() => serveUptime({
+    mode: "hosted",
+    allowHostedLocalStore: true,
+    dbPath: tempDb(),
+  })).toThrow("hosted mode requires HASNA_UPTIME_HOSTED_TOKEN or --hosted-token");
+});
+
+test("serve hosted mode rejects inline scheduler", () => {
+  expect(() => serveUptime({
+    mode: "hosted",
+    allowHostedLocalStore: true,
+    hostedToken: "secret",
+    check: true,
+    dbPath: tempDb(),
+  })).toThrow("hosted scheduler requires check_jobs and probes");
+});
+
+test("serve default stays local when hosted env vars are set", () => {
+  const previousMode = process.env.HASNA_UPTIME_MODE;
+  const previousToken = process.env.HASNA_UPTIME_HOSTED_TOKEN;
+  process.env.HASNA_UPTIME_MODE = "hosted";
+  delete process.env.HASNA_UPTIME_HOSTED_TOKEN;
+  let runtime: ReturnType<typeof serveUptime> | undefined;
+  try {
+    runtime = serveUptime({ dbPath: tempDb(), port: 0 });
+    expect(runtime.service.store.mode).toBe("local");
+    expect(runtime.service.store.dataMode).toBe("local-sqlite");
+  } finally {
+    runtime?.server.stop(true);
+    runtime?.service.close();
+    if (previousMode === undefined) delete process.env.HASNA_UPTIME_MODE;
+    else process.env.HASNA_UPTIME_MODE = previousMode;
+    if (previousToken === undefined) delete process.env.HASNA_UPTIME_HOSTED_TOKEN;
+    else process.env.HASNA_UPTIME_HOSTED_TOKEN = previousToken;
+  }
 });
 
 test("API rejects tokenless mutations when served on a non-loopback bind even with loopback Host", async () => {

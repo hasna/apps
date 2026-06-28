@@ -1,6 +1,6 @@
 import { runMonitorCheck } from "./checks.js";
 import { randomUUID } from "node:crypto";
-import { StaleCheckResultError, UptimeStore, type UptimeStoreOptions } from "./store.js";
+import { StaleCheckResultError, UptimeStore, type UptimeBackup, type UptimeBackupCheck, type UptimeStoreOptions } from "./store.js";
 import { buildUptimeReport, sendUptimeReport, type BuildUptimeReportOptions, type SendUptimeReportOptions, type UptimeReport, type UptimeReportDelivery } from "./report.js";
 import type {
   CheckAttemptResult,
@@ -15,18 +15,38 @@ import type {
 } from "./types.js";
 
 export interface UptimeServiceOptions extends UptimeStoreOptions {
-  store?: UptimeStore;
+  store?: UptimeStoreLike;
   checkRunner?: (monitor: Monitor) => Promise<CheckAttemptResult>;
 }
 
+export interface UptimeStoreLike {
+  readonly dbPath: string;
+  readonly mode: "local" | "hosted";
+  readonly dataMode: "local-sqlite" | "hosted-local-sqlite";
+  close(): void;
+  createMonitor(input: CreateMonitorInput): Monitor;
+  updateMonitor(idOrName: string, input: UpdateMonitorInput): Monitor;
+  deleteMonitor(idOrName: string): boolean;
+  listMonitors(options?: { includeDisabled?: boolean }): Monitor[];
+  getMonitor(idOrName: string): Monitor | null;
+  listResults(options?: ListResultsOptions): CheckResult[];
+  listIncidents(options?: { status?: "open" | "closed"; monitorId?: string; limit?: number }): Incident[];
+  summary(): UptimeSummary;
+  backup(destinationPath?: string): UptimeBackup;
+  verifyBackup(backupPath: string): UptimeBackupCheck;
+  acquireCheckLease(monitorId: string, owner: string, ttlMs: number): boolean;
+  releaseCheckLease(monitorId: string, owner: string): void;
+  recordCheckResult(input: Omit<CheckResult, "id" | "checkedAt"> & { checkedAt?: string; expectedMonitorRevision?: number }): CheckResult;
+}
+
 export class UptimeService {
-  readonly store: UptimeStore;
+  readonly store: UptimeStoreLike;
   private readonly checkRunner: (monitor: Monitor) => Promise<CheckAttemptResult>;
   private readonly leaseOwner = `svc_${randomUUID().replace(/-/g, "").slice(0, 18)}`;
   private readonly inFlightChecks = new Set<string>();
 
   constructor(options: UptimeServiceOptions = {}) {
-    this.store = options.store ?? new UptimeStore(options);
+    this.store = options.store ?? new UptimeStore({ mode: "local", ...options });
     this.checkRunner = options.checkRunner ?? runMonitorCheck;
   }
 
@@ -66,15 +86,27 @@ export class UptimeService {
     return this.store.summary();
   }
 
+  backup(destinationPath?: string): UptimeBackup {
+    return this.store.backup(destinationPath);
+  }
+
+  verifyBackup(backupPath: string): UptimeBackupCheck {
+    return this.store.verifyBackup(backupPath);
+  }
+
   buildReport(options: BuildUptimeReportOptions = {}): UptimeReport {
     return buildUptimeReport(this.summary(), options);
   }
 
   async sendReport(options: SendUptimeReportOptions = {}): Promise<UptimeReportDelivery[]> {
+    if (this.store.mode === "hosted" && (options.email || options.sms || options.logs)) {
+      throw new Error("hosted report delivery requires configured channel refs");
+    }
     return sendUptimeReport(this.summary(), options);
   }
 
   async checkMonitor(idOrName: string): Promise<CheckResult> {
+    if (this.store.mode === "hosted") throw new Error("hosted checks require check_jobs and probes");
     const monitor = this.store.getMonitor(idOrName);
     if (!monitor) throw new Error(`Monitor not found: ${idOrName}`);
     if (!monitor.enabled) throw new Error(`Monitor is disabled: ${monitor.name}`);
@@ -109,6 +141,7 @@ export class UptimeService {
   }
 
   async checkAll(): Promise<CheckResult[]> {
+    if (this.store.mode === "hosted") throw new Error("hosted checks require check_jobs and probes");
     const monitors = this.store.listMonitors();
     const results: CheckResult[] = [];
     for (const monitor of monitors) {
@@ -118,6 +151,7 @@ export class UptimeService {
   }
 
   startScheduler(options: { tickMs?: number } = {}): SchedulerHandle {
+    if (this.store.mode === "hosted") throw new Error("hosted scheduler requires check_jobs and probes");
     const tickMs = options.tickMs ?? 1000;
     const timer = setInterval(() => {
       void this.runDueChecks().catch((error) => {
@@ -130,6 +164,7 @@ export class UptimeService {
   }
 
   async runDueChecks(now: Date = new Date()): Promise<CheckResult[]> {
+    if (this.store.mode === "hosted") throw new Error("hosted checks require check_jobs and probes");
     const due = this.store.listMonitors().filter((monitor) => this.isDue(monitor, now));
     const results: CheckResult[] = [];
     for (const monitor of due) {
@@ -155,7 +190,7 @@ export class UptimeService {
 }
 
 export function createUptimeClient(options: UptimeServiceOptions = {}): UptimeService {
-  return new UptimeService(options);
+  return new UptimeService({ mode: "local", ...options });
 }
 
 export class MonitorCheckBusyError extends Error {
