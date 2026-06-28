@@ -4,6 +4,7 @@ import { getDatabase, now } from "../db/database.js";
 import { getTask, listTasks, updateTask } from "../db/tasks.js";
 import type { Task, TaskPriority, TaskStatus } from "../types/index.js";
 import { loadConfig, saveConfig, type ReviewRoutingRuleConfig } from "./config.js";
+import { databasePathFromDatabase } from "./event-emission-safety.js";
 import { emitLocalEventHooksQuiet } from "./event-hooks.js";
 import {
   getTaskReview,
@@ -213,6 +214,7 @@ function writeQueue(task: Task, queue: ReviewQueueMetadata, actor: string, actio
   emitLocalEventHooksQuiet({
     type: `review.${action}`,
     payload: { task_id: task.id, queue: queue.queue, state: queue.state, reviewer: queue.reviewer, claimed_by: queue.claimed_by },
+    databasePath: databasePathFromDatabase(d),
   });
   return itemFromTask(taskOrThrow(task.id, d), queue, d);
 }

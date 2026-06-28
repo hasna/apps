@@ -11,6 +11,7 @@ import {
 } from "../types/index.js";
 import { LOCK_EXPIRY_MINUTES, clearExpiredLocks, getDatabase, isLockExpired, lockExpiryCutoff, now } from "./database.js";
 import { checkCompletionGuard } from "../lib/completion-guard.js";
+import { databasePathFromDatabase } from "../lib/event-emission-safety.js";
 import { emitLocalEventHooksQuiet } from "../lib/event-hooks.js";
 import { emitSharedTaskEventQuiet, taskEventData } from "../lib/shared-events.js";
 import { logTaskChange } from "./audit.js";
@@ -51,6 +52,7 @@ export function startTask(
   db?: Database,
 ): Task {
   const d = db || getDatabase();
+  const databasePath = databasePathFromDatabase(d);
   const task = getTask(id, d);
   if (!task) throw new TaskNotFoundError(id);
   assertStartable(task, agentId);
@@ -67,6 +69,7 @@ export function startTask(
         title: task.title,
         blockers: blocking.map((b) => ({ id: b.id, short_id: b.short_id, title: b.title, status: b.status })),
       },
+      databasePath,
     });
     throw new Error(`Task is blocked by ${blocking.length} unfinished dependency(ies): ${blockerIds}`);
   }
@@ -93,8 +96,8 @@ export function startTask(
   const startedTask = { ...task, status: "in_progress" as const, assigned_to: agentId, locked_by: agentId, locked_at: timestamp, started_at: task.started_at || timestamp, version: task.version + 1, updated_at: timestamp };
   const payload = taskEventData(startedTask, { agent_id: agentId });
   dispatchWebhook("task.started", payload, d).catch(() => {});
-  emitLocalEventHooksQuiet({ type: "task.started", payload });
-  emitSharedTaskEventQuiet({ type: "task.started", task: startedTask, data: { agent_id: agentId } });
+  emitLocalEventHooksQuiet({ type: "task.started", payload, databasePath });
+  emitSharedTaskEventQuiet({ type: "task.started", task: startedTask, data: { agent_id: agentId }, databasePath });
 
   // Return constructed result — no re-fetch
   return startedTask;
@@ -107,6 +110,7 @@ export function completeTask(
   options?: { files_changed?: string[]; test_results?: string; commit_hash?: string; notes?: string; attachment_ids?: string[]; skip_recurrence?: boolean; confidence?: number; completed_at?: string },
 ): Task {
   const d = db || getDatabase();
+  const databasePath = databasePathFromDatabase(d);
   const task = getTask(id, d);
   if (!task) throw new TaskNotFoundError(id);
 
@@ -175,8 +179,8 @@ export function completeTask(
   };
   const completionPayload = taskEventData(completedTaskForEvent, { agent_id: agentId, completed_at: timestamp });
   dispatchWebhook("task.completed", completionPayload, d).catch(() => {});
-  emitLocalEventHooksQuiet({ type: "task.completed", payload: completionPayload });
-  emitSharedTaskEventQuiet({ type: "task.completed", task: completedTaskForEvent, data: { agent_id: agentId, completed_at: timestamp } });
+  emitLocalEventHooksQuiet({ type: "task.completed", payload: completionPayload, databasePath });
+  emitSharedTaskEventQuiet({ type: "task.completed", task: completedTaskForEvent, data: { agent_id: agentId, completed_at: timestamp }, databasePath });
 
   // Auto-spawn next recurring task
   let spawnedTask: Task | null = null;
@@ -235,8 +239,8 @@ export function completeTask(
       const depTask = getTask(dep.id, d);
       const payload = depTask ? taskEventData(depTask, { unblocked_by: id }) : { id: dep.id, unblocked_by: id, title: dep.title };
       dispatchWebhook("task.unblocked", payload, d).catch(() => {});
-      emitLocalEventHooksQuiet({ type: "task.unblocked", payload });
-      if (depTask) emitSharedTaskEventQuiet({ type: "task.unblocked", task: depTask, data: { unblocked_by: id } });
+      emitLocalEventHooksQuiet({ type: "task.unblocked", payload, databasePath });
+      if (depTask) emitSharedTaskEventQuiet({ type: "task.unblocked", task: depTask, data: { unblocked_by: id }, databasePath });
     }
   }
 
@@ -479,6 +483,7 @@ export function failTask(
   db?: Database,
 ): { task: Task; retryTask?: Task } {
   const d = db || getDatabase();
+  const databasePath = databasePathFromDatabase(d);
   const task = getTask(id, d);
   if (!task) throw new TaskNotFoundError(id);
 
@@ -513,8 +518,8 @@ export function failTask(
   logTaskChange(id, "fail", "status", task.status, "failed", agentId || null, d);
   const failurePayload = taskEventData(failedTask, { reason, error_code: options?.error_code, agent_id: agentId });
   dispatchWebhook("task.failed", failurePayload, d).catch(() => {});
-  emitLocalEventHooksQuiet({ type: "task.failed", payload: failurePayload });
-  emitSharedTaskEventQuiet({ type: "task.failed", task: failedTask, data: { reason, error_code: options?.error_code, agent_id: agentId }, severity: "warning" });
+  emitLocalEventHooksQuiet({ type: "task.failed", payload: failurePayload, databasePath });
+  emitSharedTaskEventQuiet({ type: "task.failed", task: failedTask, data: { reason, error_code: options?.error_code, agent_id: agentId }, severity: "warning", databasePath });
 
   // Auto-retry: create a new pending copy with exponential backoff
   let retryTask: Task | undefined;
@@ -611,6 +616,7 @@ export function stealTask(
   db?: Database,
 ): Task | null {
   const d = db || getDatabase();
+  const databasePath = databasePathFromDatabase(d);
   const staleMinutes = opts?.stale_minutes ?? 30;
   const staleTasks = getStaleTasks(staleMinutes, { project_id: opts?.project_id, task_list_id: opts?.task_list_id }, d);
   if (staleTasks.length === 0) return null;
@@ -634,8 +640,8 @@ export function stealTask(
   const stolenTask = { ...target, assigned_to: agentId, locked_by: agentId, locked_at: timestamp, updated_at: timestamp, version: target.version + 1 };
   const payload = taskEventData(stolenTask, { agent_id: agentId, stolen_from: target.assigned_to });
   dispatchWebhook("task.assigned", payload, d).catch(() => {});
-  emitLocalEventHooksQuiet({ type: "task.assigned", payload });
-  emitSharedTaskEventQuiet({ type: "task.assigned", task: stolenTask, data: { agent_id: agentId, stolen_from: target.assigned_to } });
+  emitLocalEventHooksQuiet({ type: "task.assigned", payload, databasePath });
+  emitSharedTaskEventQuiet({ type: "task.assigned", task: stolenTask, data: { agent_id: agentId, stolen_from: target.assigned_to }, databasePath });
 
   return stolenTask;
 }

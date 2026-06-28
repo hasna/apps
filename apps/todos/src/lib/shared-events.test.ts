@@ -3,10 +3,13 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Database } from "bun:sqlite";
 import { EventsClient } from "@hasna/events";
 import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
 import { createProject } from "../db/projects.js";
+import { runMigrations } from "../db/schema.js";
 import { createTaskList } from "../db/task-lists.js";
+import { createTask } from "../db/tasks.js";
 import type { Task } from "../types/index.js";
 import { emitSharedTaskEvent } from "./shared-events.js";
 
@@ -27,6 +30,65 @@ afterEach(() => {
 });
 
 describe("shared task events", () => {
+  test("does not deliver temp database lifecycle events to the default shared events store", async () => {
+    const previousEventsDir = process.env["HASNA_EVENTS_DIR"];
+    const previousEventsHome = process.env["HASNA_EVENTS_HOME"];
+    const previousHome = process.env["HOME"];
+    const previousDbPath = process.env["TODOS_DB_PATH"];
+    const isolatedHome = join(tempDir, "default-home");
+    try {
+      delete process.env["HASNA_EVENTS_DIR"];
+      delete process.env["HASNA_EVENTS_HOME"];
+      process.env["HOME"] = isolatedHome;
+      process.env["TODOS_DB_PATH"] = join(tempDir, "ephemeral.db");
+
+      await emitSharedTaskEvent({ type: "task.created", task: makeTask({ title: "Suppressed temp event" }) });
+
+      expect(existsSync(join(isolatedHome, ".hasna", "events", "events.json"))).toBe(false);
+    } finally {
+      if (previousEventsDir === undefined) delete process.env["HASNA_EVENTS_DIR"];
+      else process.env["HASNA_EVENTS_DIR"] = previousEventsDir;
+      if (previousEventsHome === undefined) delete process.env["HASNA_EVENTS_HOME"];
+      else process.env["HASNA_EVENTS_HOME"] = previousEventsHome;
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
+      else process.env["TODOS_DB_PATH"] = previousDbPath;
+    }
+  });
+
+  test("does not deliver explicit in-memory database lifecycle events to the default shared events store", async () => {
+    const previousEventsDir = process.env["HASNA_EVENTS_DIR"];
+    const previousEventsHome = process.env["HASNA_EVENTS_HOME"];
+    const previousHome = process.env["HOME"];
+    const previousDbPath = process.env["TODOS_DB_PATH"];
+    const isolatedHome = join(tempDir, "explicit-default-home");
+    const explicitDb = new Database(":memory:");
+    explicitDb.run("PRAGMA foreign_keys = ON");
+    runMigrations(explicitDb);
+    try {
+      delete process.env["HASNA_EVENTS_DIR"];
+      delete process.env["HASNA_EVENTS_HOME"];
+      delete process.env["TODOS_DB_PATH"];
+      process.env["HOME"] = isolatedHome;
+
+      createTask({ title: "Explicit DB suppressed event" }, explicitDb);
+      await Bun.sleep(50);
+
+      expect(existsSync(join(isolatedHome, ".hasna", "events", "events.json"))).toBe(false);
+    } finally {
+      explicitDb.close();
+      if (previousEventsDir === undefined) delete process.env["HASNA_EVENTS_DIR"];
+      else process.env["HASNA_EVENTS_DIR"] = previousEventsDir;
+      if (previousEventsHome === undefined) delete process.env["HASNA_EVENTS_HOME"];
+      else process.env["HASNA_EVENTS_HOME"] = previousEventsHome;
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
+      else process.env["TODOS_DB_PATH"] = previousDbPath;
+    }
+  });
+
   test("enriches task.created events with project and task-list routing metadata", async () => {
     const db = getDatabase();
     const project = createProject({

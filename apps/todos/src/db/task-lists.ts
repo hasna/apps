@@ -3,6 +3,7 @@ import type { CreateTaskListInput, TaskList, TaskListRow, UpdateTaskListInput } 
 import { TaskListNotFoundError } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 import { slugify } from "./projects.js";
+import { currentStorageMachineId, recordStorageTombstone } from "./storage-tombstones.js";
 
 function rowToTaskList(row: TaskListRow): TaskList {
   return {
@@ -16,6 +17,7 @@ export function createTaskList(input: CreateTaskListInput, db?: Database): TaskL
   const id = uuid();
   const timestamp = now();
   const slug = input.slug || slugify(input.name);
+  const machineId = currentStorageMachineId(d);
 
   // For standalone task lists (no project), enforce slug uniqueness manually
   // SQLite UNIQUE(project_id, slug) treats NULL project_ids as distinct
@@ -29,9 +31,9 @@ export function createTaskList(input: CreateTaskListInput, db?: Database): TaskL
   }
 
   d.run(
-    `INSERT INTO task_lists (id, project_id, slug, name, description, metadata, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, input.project_id || null, slug, input.name, input.description || null, JSON.stringify(input.metadata || {}), timestamp, timestamp],
+    `INSERT INTO task_lists (id, project_id, slug, name, description, metadata, created_at, updated_at, machine_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, input.project_id || null, slug, input.name, input.description || null, JSON.stringify(input.metadata || {}), timestamp, timestamp, machineId],
   );
 
   return getTaskList(id, d)!;
@@ -91,6 +93,13 @@ export function updateTaskList(id: string, input: UpdateTaskListInput, db?: Data
 
 export function deleteTaskList(id: string, db?: Database): boolean {
   const d = db || getDatabase();
+  const list = getTaskList(id, d);
+  if (!list) return false;
+  recordStorageTombstone({
+    object_type: "task_lists",
+    object_id: id,
+    payload: list as unknown as Record<string, unknown>,
+  }, d);
   return d.run("DELETE FROM task_lists WHERE id = ?", [id]).changes > 0;
 }
 

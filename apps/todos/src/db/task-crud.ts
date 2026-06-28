@@ -15,11 +15,13 @@ import {
 } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 import { checkCompletionGuard } from "../lib/completion-guard.js";
+import { databasePathFromDatabase } from "../lib/event-emission-safety.js";
 import { emitLocalEventHooksQuiet } from "../lib/event-hooks.js";
 import { emitSharedTaskEventQuiet, taskEventData } from "../lib/shared-events.js";
 import { logTaskChange } from "./audit.js";
 import { dispatchWebhook } from "./webhooks.js";
 import { getChecklist } from "./checklists.js";
+import { currentStorageMachineId, recordStorageTombstone } from "./storage-tombstones.js";
 
 // Re-export helpers for use by other modules
 export function rowToTask(row: TaskRow): Task {
@@ -65,6 +67,7 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
   const d = db || getDatabase();
   const timestamp = now();
   const tags = input.tags || [];
+  const machineId = currentStorageMachineId(d);
 
   // assigned_by = who created this task (always the calling agent)
   // assigned_from_project = which project they were in when they assigned it
@@ -76,8 +79,8 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       d.run(
-        `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, cycle_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, sla_minutes, confidence, retry_count, max_retries, retry_after, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id, reason, spawned_from_session, assigned_by, assigned_from_project, task_type)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, cycle_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, sla_minutes, confidence, retry_count, max_retries, retry_after, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id, reason, spawned_from_session, assigned_by, assigned_from_project, task_type, machine_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           null,
@@ -116,6 +119,7 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
           assignedBy || null,
           assignedFromProject || null,
           input.task_type || null,
+          machineId,
         ],
       );
       break; // success
@@ -135,9 +139,10 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
 
   const task = getTask(id, d)!;
   const payload = taskEventData(task);
+  const databasePath = databasePathFromDatabase(d);
   dispatchWebhook("task.created", payload, d).catch(() => {});
-  emitLocalEventHooksQuiet({ type: "task.created", payload });
-  emitSharedTaskEventQuiet({ type: "task.created", task });
+  emitLocalEventHooksQuiet({ type: "task.created", payload, databasePath });
+  emitSharedTaskEventQuiet({ type: "task.created", task, databasePath });
   return task;
 }
 
@@ -675,26 +680,27 @@ export function updateTask(
   };
 
   // Webhook dispatch for assignment and status changes
+  const databasePath = databasePathFromDatabase(d);
   if (input.assigned_to !== undefined && input.assigned_to !== task.assigned_to) {
     const payload = taskEventData(updatedTask, { assigned_to: input.assigned_to, old_assigned_to: task.assigned_to });
     dispatchWebhook("task.assigned", payload, d).catch(() => {});
-    emitLocalEventHooksQuiet({ type: "task.assigned", payload });
-    emitSharedTaskEventQuiet({ type: "task.assigned", task: updatedTask, data: { old_assigned_to: task.assigned_to } });
+    emitLocalEventHooksQuiet({ type: "task.assigned", payload, databasePath });
+    emitSharedTaskEventQuiet({ type: "task.assigned", task: updatedTask, data: { old_assigned_to: task.assigned_to }, databasePath });
   }
   if (input.status !== undefined && input.status !== task.status) {
     const payload = taskEventData(updatedTask, { old_status: task.status, new_status: input.status });
     dispatchWebhook("task.status_changed", payload, d).catch(() => {});
-    emitLocalEventHooksQuiet({ type: "task.status_changed", payload });
-    emitSharedTaskEventQuiet({ type: "task.status_changed", task: updatedTask, data: { old_status: task.status, new_status: input.status } });
+    emitLocalEventHooksQuiet({ type: "task.status_changed", payload, databasePath });
+    emitSharedTaskEventQuiet({ type: "task.status_changed", task: updatedTask, data: { old_status: task.status, new_status: input.status }, databasePath });
   }
   if (input.approved_by !== undefined) {
-    emitLocalEventHooksQuiet({ type: "approval.decided", payload: { id, approved_by: input.approved_by, title: task.title } });
+    emitLocalEventHooksQuiet({ type: "approval.decided", payload: { id, approved_by: input.approved_by, title: task.title }, databasePath });
   }
 
   const updatePayload = taskEventData(updatedTask);
   dispatchWebhook("task.updated", updatePayload, d).catch(() => {});
-  emitLocalEventHooksQuiet({ type: "task.updated", payload: updatePayload });
-  emitSharedTaskEventQuiet({ type: "task.updated", task: updatedTask });
+  emitLocalEventHooksQuiet({ type: "task.updated", payload: updatePayload, databasePath });
+  emitSharedTaskEventQuiet({ type: "task.updated", task: updatedTask, databasePath });
 
   // Return updated task without re-fetching from DB
   return updatedTask;
@@ -702,6 +708,14 @@ export function updateTask(
 
 export function deleteTask(id: string, db?: Database): boolean {
   const d = db || getDatabase();
+  const row = d.query("SELECT * FROM tasks WHERE id = ?").get(id) as TaskRow | null;
+  if (!row) return false;
+  recordStorageTombstone({
+    object_type: "tasks",
+    object_id: id,
+    payload: rowToTask(row) as unknown as Record<string, unknown>,
+    version: row.version,
+  }, d);
   const result = d.run("DELETE FROM tasks WHERE id = ?", [id]);
   return result.changes > 0;
 }

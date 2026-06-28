@@ -7,6 +7,7 @@ import type {
 export type TodosPostgresSyncRecordType =
   | "tasks"
   | "projects"
+  | "project_machine_paths"
   | "plans"
   | "agents"
   | "task_lists"
@@ -43,7 +44,12 @@ export interface PostgresTodosSyncPushResult {
 
 export interface TodosPostgresSyncRecordRow {
   object_type: TodosPostgresSyncRecordType;
+  object_id?: string;
   payload: unknown;
+  updated_at?: string | Date;
+  deleted_at?: string | Date | null;
+  source_machine_id?: string | null;
+  version?: number | null;
 }
 
 export const DEFAULT_TODOS_POSTGRES_SYNC_TABLE = "todos_sync_records";
@@ -140,7 +146,7 @@ export class PostgresTodosSyncStore {
 
   async pullSnapshot(options: PullPostgresTodosSnapshotOptions = {}): Promise<TodosStorageSnapshot> {
     const params: unknown[] = [this.service];
-    const filters = ["service = $1", "deleted_at IS NULL"];
+    const filters = ["service = $1"];
     if (options.since) {
       params.push(options.since);
       filters.push(`updated_at > $${params.length}::timestamptz`);
@@ -151,7 +157,7 @@ export class PostgresTodosSyncStore {
     }
 
     const response = await this.client.query<TodosPostgresSyncRecordRow>(
-      `SELECT object_type, payload FROM ${this.tableName}
+      `SELECT object_type, object_id, payload, updated_at, deleted_at, source_machine_id, version FROM ${this.tableName}
        WHERE ${filters.join(" AND ")}
        ORDER BY updated_at ASC, object_type ASC, object_id ASC`,
       params,
@@ -198,11 +204,20 @@ function snapshotEntries(snapshot: TodosStorageSnapshot): Array<{
   return [
     ...snapshot.tasks.map((payload) => entry("tasks", payload as unknown as Record<string, unknown>, snapshot.exportedAt)),
     ...snapshot.projects.map((payload) => entry("projects", payload as unknown as Record<string, unknown>, snapshot.exportedAt)),
+    ...(snapshot.projectMachinePaths ?? []).map((payload) => entry("project_machine_paths", payload as unknown as Record<string, unknown>, snapshot.exportedAt)),
     ...snapshot.plans.map((payload) => entry("plans", payload as unknown as Record<string, unknown>, snapshot.exportedAt)),
     ...snapshot.agents.map((payload) => entry("agents", payload as unknown as Record<string, unknown>, snapshot.exportedAt)),
     ...snapshot.taskLists.map((payload) => entry("task_lists", payload as unknown as Record<string, unknown>, snapshot.exportedAt)),
     ...snapshot.templates.map((payload) => entry("templates", payload as unknown as Record<string, unknown>, snapshot.exportedAt)),
     ...snapshot.auditHistory.map((payload) => entry("audit_history", payload as unknown as Record<string, unknown>, snapshot.exportedAt)),
+    ...(snapshot.tombstones ?? []).map((tombstone) => ({
+      type: tombstone.object_type,
+      id: tombstone.object_id,
+      payload: tombstone.payload ?? { id: tombstone.object_id, deleted_at: tombstone.deleted_at },
+      updatedAt: tombstone.updated_at || tombstone.deleted_at,
+      deletedAt: tombstone.deleted_at,
+      version: tombstone.version ?? null,
+    })),
   ];
 }
 
@@ -225,17 +240,37 @@ function rowsToSnapshot(rows: TodosPostgresSyncRecordRow[]): TodosStorageSnapsho
     source: "postgres",
     tasks: [],
     projects: [],
+    projectMachinePaths: [],
     plans: [],
     agents: [],
     taskLists: [],
     templates: [],
     auditHistory: [],
+    tombstones: [],
   };
 
   for (const row of rows) {
     const payload = payloadRecord(row.payload);
+    const deletedAt = stringValue(row.deleted_at);
+    if (deletedAt) {
+      snapshot.tombstones ??= [];
+      snapshot.tombstones.push({
+        object_type: row.object_type,
+        object_id: stringValue(row.object_id) ?? stringValue(payload["id"]) ?? "",
+        deleted_at: deletedAt,
+        updated_at: stringValue(row.updated_at) ?? deletedAt,
+        source_machine_id: stringValue(row.source_machine_id),
+        payload,
+        version: numberValue(row.version),
+      });
+      continue;
+    }
     if (row.object_type === "tasks") snapshot.tasks.push(payload as unknown as TodosStorageSnapshot["tasks"][number]);
     else if (row.object_type === "projects") snapshot.projects.push(payload as unknown as TodosStorageSnapshot["projects"][number]);
+    else if (row.object_type === "project_machine_paths") {
+      snapshot.projectMachinePaths ??= [];
+      snapshot.projectMachinePaths.push(payload as unknown as NonNullable<TodosStorageSnapshot["projectMachinePaths"]>[number]);
+    }
     else if (row.object_type === "plans") snapshot.plans.push(payload as unknown as TodosStorageSnapshot["plans"][number]);
     else if (row.object_type === "agents") snapshot.agents.push(payload as unknown as TodosStorageSnapshot["agents"][number]);
     else if (row.object_type === "task_lists") snapshot.taskLists.push(payload as unknown as TodosStorageSnapshot["taskLists"][number]);
@@ -252,6 +287,7 @@ function payloadRecord(value: unknown): Record<string, unknown> {
 }
 
 function stringValue(value: unknown): string | null {
+  if (value instanceof Date) return value.toISOString();
   return typeof value === "string" && value ? value : null;
 }
 

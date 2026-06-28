@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
+import { listMachineLocalPaths, removeMachineLocalPath, setMachineLocalPath } from "../db/projects.js";
 import { runMigrations } from "../db/schema.js";
 import {
   addTaskRunArtifact,
@@ -41,6 +42,7 @@ import {
   type TodosStorageAdapter,
   type TodosStorageSnapshot,
 } from "../storage.js";
+import { s3CredentialsFromEnv } from "../cli/commands/storage-commands.js";
 
 let db: Database;
 
@@ -198,6 +200,7 @@ describe("storage adapter contracts", () => {
   test("exports and imports local SQLite snapshots through the storage adapter", async () => {
     const source = createLocalSqliteTodosStorageAdapter({ db });
     const project = await source.projects.create({ name: "Snapshot Project", path: "/tmp/snapshot-project" });
+    const machinePath = setMachineLocalPath(project.id, "/machine/snapshot-project", db);
     const task = await source.tasks.create({
       title: "Snapshot task",
       project_id: project.id,
@@ -217,6 +220,12 @@ describe("storage adapter contracts", () => {
       expect(imported.errors).toEqual([]);
       expect(imported.inserted).toBeGreaterThanOrEqual(3);
       expect(await target.projects.get(project.id)).toMatchObject({ name: "Snapshot Project" });
+      expect(listMachineLocalPaths(project.id, targetDb)).toEqual([
+        expect.objectContaining({
+          id: machinePath.id,
+          path: "/machine/snapshot-project",
+        }),
+      ]);
       expect(await target.tasks.get(task.id)).toMatchObject({
         title: "Snapshot task",
         tags: ["snapshot"],
@@ -225,6 +234,108 @@ describe("storage adapter contracts", () => {
       expect(await target.audit.getTaskHistory(task.id)).toEqual([
         expect.objectContaining({ action: "test", agent_id: "snapshot-agent" }),
       ]);
+    } finally {
+      targetDb.close();
+    }
+  });
+
+  test("propagates local hard deletes through explicit storage tombstones", async () => {
+    const source = createLocalSqliteTodosStorageAdapter({ db });
+    const project = await source.projects.create({ name: "Tombstone Project", path: "/tmp/tombstone-project" });
+    const task = await source.tasks.create({
+      title: "Delete me remotely",
+      project_id: project.id,
+      tags: ["tombstone"],
+    });
+    const initialSnapshot = await source.sync.exportSnapshot!();
+    const targetDb = new Database(":memory:");
+    targetDb.run("PRAGMA foreign_keys = ON");
+    runMigrations(targetDb);
+    try {
+      const target = createLocalSqliteTodosStorageAdapter({ db: targetDb });
+      await target.sync.importSnapshot!(initialSnapshot);
+      expect(await target.tasks.get(task.id)).toMatchObject({ title: "Delete me remotely" });
+
+      expect(await source.tasks.delete(task.id)).toBe(true);
+      const deleteSnapshot = await source.sync.exportSnapshot!();
+      expect(deleteSnapshot.tasks.map((item) => item.id)).not.toContain(task.id);
+      expect(deleteSnapshot.tombstones).toEqual([
+        expect.objectContaining({
+          object_type: "tasks",
+          object_id: task.id,
+          payload: expect.objectContaining({ title: "Delete me remotely" }),
+        }),
+      ]);
+
+      const imported = await target.sync.importSnapshot!(deleteSnapshot);
+      expect(imported.errors).toEqual([]);
+      expect(imported.deleted).toBe(1);
+      expect(await target.tasks.get(task.id)).toBeNull();
+    } finally {
+      targetDb.close();
+    }
+  });
+
+  test("does not resurrect locally deleted rows from stale SQLite snapshots", async () => {
+    const source = createLocalSqliteTodosStorageAdapter({ db });
+    const task = await source.tasks.create({ title: "Stale remote task" });
+    const staleSnapshot = await source.sync.exportSnapshot!();
+    const targetDb = new Database(":memory:");
+    targetDb.run("PRAGMA foreign_keys = ON");
+    runMigrations(targetDb);
+    try {
+      const target = createLocalSqliteTodosStorageAdapter({ db: targetDb });
+      await target.sync.importSnapshot!(staleSnapshot);
+      expect(await target.tasks.get(task.id)).toMatchObject({ title: "Stale remote task" });
+
+      expect(await target.tasks.delete(task.id)).toBe(true);
+      const imported = await target.sync.importSnapshot!(staleSnapshot);
+
+      expect(imported.errors).toEqual([]);
+      expect(imported.skipped).toBeGreaterThan(0);
+      expect(await target.tasks.get(task.id)).toBeNull();
+    } finally {
+      targetDb.close();
+    }
+  });
+
+  test("propagates non-task local hard deletes through explicit storage tombstones", async () => {
+    const source = createLocalSqliteTodosStorageAdapter({ db });
+    const project = await source.projects.create({ name: "Domain Tombstones", path: "/tmp/domain-tombstones" });
+    const machinePath = setMachineLocalPath(project.id, "/machine/domain-tombstones", db);
+    const taskList = await source.taskLists.create({ name: "Delete List", slug: "delete-list", project_id: project.id });
+    const plan = await source.plans.create({ name: "Delete Plan", project_id: project.id, task_list_id: taskList.id });
+    const template = await source.templates.create({ name: "Delete Template", title_pattern: "Delete task", project_id: project.id });
+    const initialSnapshot = await source.sync.exportSnapshot!();
+    const targetDb = new Database(":memory:");
+    targetDb.run("PRAGMA foreign_keys = ON");
+    runMigrations(targetDb);
+    try {
+      const target = createLocalSqliteTodosStorageAdapter({ db: targetDb });
+      await target.sync.importSnapshot!(initialSnapshot);
+      expect(await target.plans.get(plan.id)).toMatchObject({ name: "Delete Plan" });
+      expect(await target.taskLists.get(taskList.id)).toMatchObject({ name: "Delete List" });
+      expect(await target.templates.get(template.id)).toMatchObject({ name: "Delete Template" });
+      expect(listMachineLocalPaths(project.id, targetDb)).toEqual([
+        expect.objectContaining({ id: machinePath.id }),
+      ]);
+
+      expect(await source.plans.delete(plan.id)).toBe(true);
+      expect(await source.taskLists.delete(taskList.id)).toBe(true);
+      expect(await source.templates.delete(template.id)).toBe(true);
+      expect(removeMachineLocalPath(project.id, machinePath.machine_id, db)).toBe(true);
+      const deleteSnapshot = await source.sync.exportSnapshot!();
+      expect(deleteSnapshot.tombstones?.map((tombstone) => tombstone.object_type)).toEqual(
+        expect.arrayContaining(["plans", "task_lists", "templates", "project_machine_paths"]),
+      );
+
+      const imported = await target.sync.importSnapshot!(deleteSnapshot);
+      expect(imported.errors).toEqual([]);
+      expect(imported.deleted).toBeGreaterThanOrEqual(4);
+      expect(await target.plans.get(plan.id)).toBeNull();
+      expect(await target.taskLists.get(taskList.id)).toBeNull();
+      expect(await target.templates.get(template.id)).toBeNull();
+      expect(listMachineLocalPaths(project.id, targetDb)).toEqual([]);
     } finally {
       targetDb.close();
     }
@@ -423,14 +534,124 @@ describe("storage adapter contracts", () => {
       sourceMachineId: "spark01",
     });
     const project = await adapter.projects.create({ name: "Direct Remote", path: "/tmp/direct-remote" });
-    const task = await adapter.tasks.create({ title: "Direct remote task", project_id: project.id });
+    const taskList = await adapter.taskLists.create({ name: "Direct Remote List", slug: "direct-remote", project_id: project.id });
+    const task = await adapter.tasks.create({ title: "Direct remote task", project_id: project.id, task_list_id: taskList.id });
+    const plan = await adapter.plans.create({ name: "Direct Remote Plan", project_id: project.id, task_list_id: taskList.id });
+    const agent = await adapter.agents.register({ name: "direct-remote-agent", project_id: project.id });
+    if ("conflict" in agent) throw new Error(agent.message);
+    const template = await adapter.templates.create({ name: "Direct Remote Template", title_pattern: "Direct ${name}" });
+    await adapter.audit.logTaskChange(task.id, "updated", "status", "pending", "in_progress", agent.id);
+    const snapshot = await adapter.sync.exportSnapshot!();
 
     expect(adapter.kind).toBe("postgres");
     expect(await adapter.tasks.get(task.id)).toMatchObject({
       title: "Direct remote task",
       short_id: "DR-00001",
     });
+    expect(snapshot.projects).toEqual([expect.objectContaining({ id: project.id, machine_id: "spark01" })]);
+    expect(snapshot.taskLists).toEqual([expect.objectContaining({ id: taskList.id, machine_id: "spark01" })]);
+    expect(snapshot.tasks).toEqual([expect.objectContaining({ id: task.id, machine_id: "spark01" })]);
+    expect(snapshot.plans).toEqual([expect.objectContaining({ id: plan.id, machine_id: "spark01" })]);
+    expect(snapshot.agents).toEqual([expect.objectContaining({ id: agent.id, machine_id: "spark01" })]);
+    expect(snapshot.templates).toEqual([expect.objectContaining({ id: template.id, machine_id: "spark01" })]);
+    expect(snapshot.auditHistory).toEqual([
+      expect.objectContaining({ task_id: task.id, machine_id: "spark01" }),
+      expect.objectContaining({ task_id: task.id, machine_id: "spark01" }),
+    ]);
     expect(postgres.calls.some((call) => call.values?.includes("spark01"))).toBe(true);
+  });
+
+  test("preserves direct Postgres tombstone clocks and rejects stale import records", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({
+      client: postgres.client,
+      sourceMachineId: "spark01",
+    });
+    const task = await adapter.tasks.create({ title: "Protected remote task" }, { requestId: "spark01" });
+    const updated = await adapter.tasks.update(task.id, {
+      version: task.version,
+      title: "Protected remote task updated",
+    });
+    const staleSnapshot: TodosStorageSnapshot = {
+      exportedAt: "2026-06-08T00:00:00.000Z",
+      source: "sqlite",
+      tasks: [],
+      projects: [],
+      plans: [],
+      agents: [],
+      taskLists: [],
+      templates: [],
+      auditHistory: [],
+      tombstones: [{
+        object_type: "tasks",
+        object_id: task.id,
+        deleted_at: "2000-01-01T00:00:00.000Z",
+        updated_at: "2000-01-01T00:00:00.000Z",
+        payload: { id: task.id, title: "stale delete" },
+      }],
+    };
+
+    const staleDelete = await adapter.sync.importSnapshot!(staleSnapshot);
+    expect(staleDelete.skipped).toBe(1);
+    expect(await adapter.tasks.get(task.id)).toMatchObject({
+      id: task.id,
+      title: "Protected remote task updated",
+    });
+
+    const deleteSnapshot: TodosStorageSnapshot = {
+      exportedAt: "2030-01-01T00:00:00.000Z",
+      source: "sqlite",
+      tasks: [],
+      projects: [],
+      plans: [],
+      agents: [],
+      taskLists: [],
+      templates: [],
+      auditHistory: [],
+      tombstones: [{
+        object_type: "tasks",
+        object_id: "deleted-remote-task",
+        deleted_at: "2030-01-01T00:00:00.000Z",
+        updated_at: "2030-01-01T00:00:00.000Z",
+        payload: { id: "deleted-remote-task", title: "deleted remotely" },
+      }],
+    };
+    const deleteImport = await adapter.sync.importSnapshot!(deleteSnapshot);
+    expect(deleteImport.deleted).toBe(1);
+
+    const staleLiveSnapshot: TodosStorageSnapshot = {
+      exportedAt: "2020-01-01T00:00:00.000Z",
+      source: "sqlite",
+      tasks: [{
+        id: "deleted-remote-task",
+        title: "stale live row",
+        status: "pending",
+        priority: "medium",
+        tags: [],
+        metadata: {},
+        version: 1,
+        created_at: "2020-01-01T00:00:00.000Z",
+        updated_at: "2020-01-01T00:00:00.000Z",
+      } as TodosStorageSnapshot["tasks"][number]],
+      projects: [],
+      plans: [],
+      agents: [],
+      taskLists: [],
+      templates: [],
+      auditHistory: [],
+    };
+    await adapter.sync.importSnapshot!(staleLiveSnapshot);
+    const exported = await adapter.sync.exportSnapshot!();
+
+    expect(await adapter.tasks.get("deleted-remote-task")).toBeNull();
+    expect(exported.tombstones).toEqual([
+      expect.objectContaining({
+        object_type: "tasks",
+        object_id: "deleted-remote-task",
+        deleted_at: "2030-01-01T00:00:00.000Z",
+      }),
+    ]);
+    expect(updated.version).toBe(task.version + 1);
   });
 
   test("builds a hybrid local plus Postgres sync adapter from native config", async () => {
@@ -551,11 +772,13 @@ describe("storage adapter contracts", () => {
         } as TodosStorageSnapshot["tasks"][number],
       ],
       projects: [],
+      projectMachinePaths: [],
       plans: [],
       agents: [],
       taskLists: [],
       templates: [],
       auditHistory: [],
+      tombstones: [],
     };
 
     await store.ensureSchema();
@@ -568,6 +791,32 @@ describe("storage adapter contracts", () => {
     expect(calls.some((call) => call.values?.includes("apple06"))).toBe(true);
     expect(pulled.tasks).toEqual([expect.objectContaining({ id: "task-1", title: "Remote task" })]);
     expect(calls.some((call) => call.sql.includes("object_type = ANY"))).toBe(true);
+  });
+
+  test("round-trips Postgres tombstones instead of filtering deletes out of pulls", async () => {
+    const postgres = createMemoryPostgresClient();
+    const local = createHybridTodosStorageAdapter({
+      local: { db },
+      postgresClient: postgres.client,
+      sourceMachineId: "apple06",
+    });
+    const task = await local.tasks.create({ title: "Remote tombstone task" });
+
+    await local.remote.pushSnapshot();
+    expect(await local.tasks.delete(task.id)).toBe(true);
+    await local.remote.pushSnapshot();
+
+    const remote = createPostgresTodosSyncStore(postgres.client, { sourceMachineId: "spark01" });
+    const snapshot = await remote.pullSnapshot({ objectTypes: ["tasks"] });
+
+    expect(snapshot.tasks).toEqual([]);
+    expect(snapshot.tombstones).toEqual([
+      expect.objectContaining({
+        object_type: "tasks",
+        object_id: task.id,
+        payload: expect.objectContaining({ title: "Remote tombstone task" }),
+      }),
+    ]);
   });
 
   test("creates a hybrid adapter directly with a Postgres sync store", async () => {
@@ -733,6 +982,18 @@ describe("storage adapter contracts", () => {
       rmSync(artifactRoot, { recursive: true, force: true });
     }
   });
+
+  test("accepts fallback S3 credential env names for CLI apply mode", () => {
+    expect(s3CredentialsFromEnv({
+      TODOS_S3_ACCESS_KEY_ID: "fallback-access",
+      TODOS_S3_SECRET_ACCESS_KEY: "fallback-secret",
+      TODOS_S3_SESSION_TOKEN: "fallback-session",
+    })).toEqual({
+      accessKeyId: "fallback-access",
+      secretAccessKey: "fallback-secret",
+      sessionToken: "fallback-session",
+    });
+  });
 });
 
 function expectStore(
@@ -786,12 +1047,19 @@ function createMemoryPostgresClient(): {
       if (sql.includes("INSERT INTO todos_sync_records")) {
         const [service, objectType, objectId, payload, updatedAt] = values;
         const syncStoreInsert = sql.includes("$6::timestamptz");
-        rows.set(recordKey(service, objectType, objectId), {
+        const key = recordKey(service, objectType, objectId);
+        const existing = rows.get(key);
+        const nextUpdatedAt = String(updatedAt);
+        const guarded = sql.includes("updated_at <= EXCLUDED.updated_at") || sql.includes("updated_at IS NULL OR");
+        if (existing && guarded && compareIsoClock(existing.updatedAt, nextUpdatedAt) > 0) {
+          return { rows: [] as T[] };
+        }
+        rows.set(key, {
           service: String(service),
           objectType: String(objectType),
           objectId: String(objectId),
           payload: parseJsonb(payload),
-          updatedAt: String(updatedAt),
+          updatedAt: nextUpdatedAt,
           deletedAt: nullableString(syncStoreInsert ? values[5] : null),
           version: nullableNumber(syncStoreInsert ? values[7] : values[6]),
         });
@@ -808,7 +1076,13 @@ function createMemoryPostgresClient(): {
         return { rows: [] as T[] };
       }
 
-      if (sql.includes("SELECT object_type, object_id, payload, updated_at")) {
+      if (sql.includes("WHERE service = $1 AND object_type = $2") && sql.includes("object_id = $3") && !sql.includes("deleted_at IS NULL")) {
+        const [service, objectType, objectId] = values;
+        const row = rows.get(recordKey(service, objectType, objectId));
+        return { rows: (row ? [toQueryRow(row)] : []) as T[] };
+      }
+
+      if (sql.includes("WHERE service = $1 AND object_type = $2")) {
         const [service, objectType, objectId] = values;
         const selected = objectId === undefined
           ? [...rows.values()].filter((row) => row.service === service && row.objectType === objectType && !row.deletedAt)
@@ -822,13 +1096,18 @@ function createMemoryPostgresClient(): {
         return { rows: selected.map(toQueryRow) as T[] };
       }
 
-      if (sql.includes("SELECT object_type, payload FROM todos_sync_records")) {
-        const [service, since, objectTypes] = values;
+      if (sql.includes("SELECT object_type, object_id, payload, updated_at")) {
+        const [service] = values;
+        let index = 1;
+        const since = sql.includes("updated_at >") ? values[index++] : null;
+        const objectTypes = sql.includes("object_type = ANY") ? values[index] : null;
         const allowed = Array.isArray(objectTypes) ? new Set(objectTypes.map(String)) : null;
         const selected = [...rows.values()]
-          .filter((row) => row.service === service && !row.deletedAt)
+          .filter((row) => row.service === service)
           .filter((row) => !since || row.updatedAt > String(since))
-          .filter((row) => !allowed || allowed.has(row.objectType));
+          .filter((row) => !allowed || allowed.has(row.objectType))
+          .filter((row) => sql.includes("deleted_at IS NOT NULL") ? Boolean(row.deletedAt) : true);
+        selected.sort((a, b) => a.updatedAt.localeCompare(b.updatedAt) || a.objectType.localeCompare(b.objectType) || a.objectId.localeCompare(b.objectId));
         return { rows: selected.map(toQueryRow) as T[] };
       }
 
@@ -877,4 +1156,11 @@ function nullableString(value: unknown): string | null {
 
 function nullableNumber(value: unknown): number | null {
   return typeof value === "number" ? value : null;
+}
+
+function compareIsoClock(left: string, right: string): number {
+  const leftClock = Date.parse(left);
+  const rightClock = Date.parse(right);
+  if (Number.isNaN(leftClock) || Number.isNaN(rightClock)) return left.localeCompare(right);
+  return leftClock - rightClock;
 }

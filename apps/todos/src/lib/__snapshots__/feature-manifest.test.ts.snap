@@ -149,12 +149,11 @@ exports[`feature manifest normalizes manifest for deterministic snapshots 1`] = 
       "ops": 8,
       "projects": 1,
       "security": 7,
-      "storage": 7,
       "tasks": 162,
-      "workflow": 57,
+      "workflow": 59,
     },
-    "tools_for_profile_count": 301,
-    "total_tools": 325,
+    "tools_for_profile_count": 296,
+    "total_tools": 320,
   },
   "profiles": [
     "read_only",
@@ -169,7 +168,7 @@ exports[`feature manifest normalizes manifest for deterministic snapshots 1`] = 
     "cli_command_count": 162,
     "env_var_count": 7,
     "feature_area_count": 6,
-    "mcp_tool_count": 325,
+    "mcp_tool_count": 320,
     "profile_count": 6,
   },
 }
@@ -184,7 +183,7 @@ Active profile: minimal — Low-token MCP session bootstrap and task workflow
 Summary:
   Feature areas: 6
   CLI commands:  162
-  MCP tools:     325 (8 in active profile)
+  MCP tools:     320 (8 in active profile)
   Profiles:      6
   Env vars:      7
 
@@ -207,8 +206,7 @@ MCP tool groups:
   - Import and export: 29 tools
   - Operations: 8 tools
   - Security: 7 tools
-  - Storage bridge: 7 tools
-  - Workflow utilities: 57 tools
+  - Workflow utilities: 59 tools
 
 Profiles:
   - read_only: Read tasks, projects, search — no mutations

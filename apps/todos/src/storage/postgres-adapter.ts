@@ -30,6 +30,7 @@ import type {
   TodosStorageContext,
   TodosStorageImportResult,
   TodosStorageSnapshot,
+  TodosStorageTombstone,
   TodosTaskClaimFilter,
   TodosTaskCompletionOptions,
   TodosTaskFailureOptions,
@@ -58,8 +59,9 @@ interface RemoteRecordRow {
   object_type: string;
   object_id: string;
   payload: unknown;
-  updated_at?: string;
-  deleted_at?: string | null;
+  updated_at?: string | Date;
+  deleted_at?: string | Date | null;
+  source_machine_id?: string | null;
   version?: number | null;
 }
 
@@ -67,6 +69,11 @@ interface RemoteRecord<T> {
   objectId: string;
   payload: T;
   updatedAt: string;
+}
+
+interface RemoteRecordClock {
+  updatedAt: string;
+  deletedAt: string | null;
 }
 
 export function createPostgresTodosStorageAdapter(
@@ -180,6 +187,10 @@ class PostgresJsonRecordStore {
     this.cursorTableName = options.cursorTableName ?? DEFAULT_TODOS_POSTGRES_CURSOR_TABLE;
   }
 
+  machineId(context?: TodosStorageContext): string | null {
+    return context?.requestId ?? this.sourceMachineId ?? null;
+  }
+
   async ensureSchema(): Promise<void> {
     this.schemaReady ??= (async () => {
       for (const sql of postgresTodosSyncSchemaSql(this.tableName, this.cursorTableName)) {
@@ -221,6 +232,29 @@ class PostgresJsonRecordStore {
     }));
   }
 
+  async listTombstones(): Promise<TodosStorageTombstone[]> {
+    await this.ensureSchema();
+    const result = await this.options.client.query<RemoteRecordRow>(
+      `SELECT object_type, object_id, payload, updated_at, deleted_at, source_machine_id, version
+       FROM ${this.tableName}
+       WHERE service = $1 AND deleted_at IS NOT NULL
+       ORDER BY updated_at ASC, object_type ASC, object_id ASC`,
+      [this.service],
+    );
+    return result.rows.map((row) => {
+      const deletedAt = stringValue(row.deleted_at) ?? stringValue(row.updated_at) ?? new Date().toISOString();
+      return {
+        object_type: row.object_type as TodosStorageTombstone["object_type"],
+        object_id: row.object_id,
+        deleted_at: deletedAt,
+        updated_at: stringValue(row.updated_at) ?? deletedAt,
+        source_machine_id: stringValue(row.source_machine_id),
+        payload: payloadRecord<Record<string, unknown>>(row.payload),
+        version: numberValue(row.version),
+      };
+    });
+  }
+
   async upsert<T extends { id: string; updated_at?: string; created_at?: string; version?: number }>(
     type: RemoteObjectType,
     value: T,
@@ -238,7 +272,8 @@ class PostgresJsonRecordStore {
         updated_at = EXCLUDED.updated_at,
         deleted_at = NULL,
         source_machine_id = EXCLUDED.source_machine_id,
-        version = EXCLUDED.version`,
+        version = EXCLUDED.version
+      WHERE ${this.tableName}.updated_at IS NULL OR ${this.tableName}.updated_at <= EXCLUDED.updated_at`,
       [
         this.service,
         type,
@@ -257,15 +292,74 @@ class PostgresJsonRecordStore {
     const existing = await this.get<Record<string, unknown>>(type, id);
     if (!existing) return false;
     const timestamp = new Date().toISOString();
+    return this.tombstone({
+      object_type: type,
+      object_id: id,
+      deleted_at: timestamp,
+      updated_at: timestamp,
+      payload: existing,
+      version: numberValue(existing["version"]),
+    }, context);
+  }
+
+  async tombstone(
+    tombstone: {
+      object_type: RemoteObjectType;
+      object_id: string;
+      deleted_at: string;
+      updated_at?: string;
+      source_machine_id?: string | null;
+      payload?: Record<string, unknown> | null;
+      version?: number | null;
+    },
+    context: TodosStorageContext = {},
+  ): Promise<boolean> {
+    await this.ensureSchema();
+    const deletedAt = stringValue(tombstone.deleted_at) ?? new Date().toISOString();
+    const updatedAt = stringValue(tombstone.updated_at) ?? deletedAt;
+    const existing = await this.clock(tombstone.object_type, tombstone.object_id);
+    if (existing && compareClock(existing.updatedAt, updatedAt) > 0) return false;
     await this.options.client.query(
-      `UPDATE ${this.tableName}
-       SET deleted_at = $4::timestamptz,
-           updated_at = $4::timestamptz,
-           source_machine_id = $5
-       WHERE service = $1 AND object_type = $2 AND object_id = $3`,
-      [this.service, type, id, timestamp, context.requestId ?? this.sourceMachineId ?? null],
+      `INSERT INTO ${this.tableName} (
+        service, object_type, object_id, payload, updated_at,
+        deleted_at, source_machine_id, version
+      ) VALUES ($1, $2, $3, $4::jsonb, $5::timestamptz, $6::timestamptz, $7, $8)
+      ON CONFLICT (service, object_type, object_id) DO UPDATE SET
+        payload = EXCLUDED.payload,
+        updated_at = EXCLUDED.updated_at,
+        deleted_at = EXCLUDED.deleted_at,
+        source_machine_id = EXCLUDED.source_machine_id,
+        version = EXCLUDED.version
+      WHERE ${this.tableName}.updated_at IS NULL OR ${this.tableName}.updated_at <= EXCLUDED.updated_at`,
+      [
+        this.service,
+        tombstone.object_type,
+        tombstone.object_id,
+        JSON.stringify(tombstone.payload ?? { id: tombstone.object_id, deleted_at: deletedAt }),
+        updatedAt,
+        deletedAt,
+        tombstone.source_machine_id ?? context.requestId ?? this.sourceMachineId ?? null,
+        tombstone.version ?? null,
+      ],
     );
     return true;
+  }
+
+  async clock(type: RemoteObjectType, id: string): Promise<RemoteRecordClock | null> {
+    await this.ensureSchema();
+    const result = await this.options.client.query<RemoteRecordRow>(
+      `SELECT object_type, object_id, updated_at, deleted_at
+       FROM ${this.tableName}
+       WHERE service = $1 AND object_type = $2 AND object_id = $3
+       LIMIT 1`,
+      [this.service, type, id],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      updatedAt: stringValue(row.updated_at) ?? new Date().toISOString(),
+      deletedAt: stringValue(row.deleted_at),
+    };
   }
 
   async getCursor(name: string): Promise<string | null> {
@@ -345,6 +439,9 @@ async function createTask(input: CreateTaskInput, store: PostgresJsonRecordStore
     runner_completed_at: null,
     current_step: null,
     total_steps: null,
+    machine_id: store.machineId(context),
+    synced_at: null,
+    archived_at: null,
   };
   await store.upsert("tasks", task, context);
   await logTaskChange(task.id, "created", "status", null, task.status, task.assigned_by ?? task.agent_id, store, context);
@@ -491,6 +588,8 @@ async function createProject(input: CreateProjectInput, store: PostgresJsonRecor
     task_counter: 0,
     created_at: timestamp,
     updated_at: timestamp,
+    machine_id: store.machineId(context),
+    synced_at: null,
   };
   return store.upsert("projects", project, context);
 }
@@ -517,6 +616,8 @@ async function createPlan(input: CreatePlanInput, store: PostgresJsonRecordStore
     status: input.status ?? "active",
     created_at: timestamp,
     updated_at: timestamp,
+    machine_id: store.machineId(context),
+    synced_at: null,
   }, context);
 }
 
@@ -553,6 +654,8 @@ async function registerAgent(
     session_id: input.session_id ?? context?.sessionId ?? existing?.session_id ?? null,
     working_dir: input.working_dir ?? existing?.working_dir ?? null,
     active_project_id: input.project_id ?? context?.projectId ?? existing?.active_project_id ?? null,
+    machine_id: existing?.machine_id ?? store.machineId(context),
+    synced_at: existing?.synced_at ?? null,
   };
   return store.upsert("agents", agent, context);
 }
@@ -581,6 +684,8 @@ async function createTaskList(input: CreateTaskListInput, store: PostgresJsonRec
     metadata: input.metadata ?? {},
     created_at: timestamp,
     updated_at: timestamp,
+    machine_id: store.machineId(context),
+    synced_at: null,
   }, context);
 }
 
@@ -609,6 +714,8 @@ async function createTemplate(input: CreateTemplateInput, store: PostgresJsonRec
     plan_id: input.plan_id ?? null,
     metadata: input.metadata ?? {},
     created_at: timestamp,
+    machine_id: store.machineId(context),
+    synced_at: null,
   }, context);
 }
 
@@ -644,6 +751,7 @@ async function logTaskChange(
     new_value: newValue ?? null,
     agent_id: agentId ?? context?.agentId ?? null,
     created_at: new Date().toISOString(),
+    machine_id: store.machineId(context),
   };
   return store.upsert("audit_history", entry, context);
 }
@@ -668,11 +776,13 @@ async function exportSnapshot(store: PostgresJsonRecordStore): Promise<TodosStor
     source: "postgres",
     tasks: await store.list<Task>("tasks"),
     projects: await store.list<Project>("projects"),
+    projectMachinePaths: await store.list<NonNullable<TodosStorageSnapshot["projectMachinePaths"]>[number]>("project_machine_paths"),
     plans: await store.list<Plan>("plans"),
     agents: await store.list<Agent>("agents"),
     taskLists: await store.list<TaskList>("task_lists"),
     templates: await store.list<TaskTemplate>("templates"),
     auditHistory: await store.list<TaskHistory>("audit_history"),
+    tombstones: await store.listTombstones(),
   };
 }
 
@@ -681,13 +791,14 @@ async function importSnapshot(
   store: PostgresJsonRecordStore,
   context?: TodosStorageContext,
 ): Promise<TodosStorageImportResult> {
-  const result: TodosStorageImportResult = { inserted: 0, updated: 0, skipped: 0, errors: [] };
+  const result: TodosStorageImportResult = { inserted: 0, updated: 0, deleted: 0, skipped: 0, errors: [] };
   const entries: ReadonlyArray<readonly [
     RemoteObjectType,
     { id: string; updated_at?: string; created_at?: string; version?: number },
   ]> = [
     ...snapshot.tasks.map((row) => ["tasks", row] as const),
     ...snapshot.projects.map((row) => ["projects", row] as const),
+    ...(snapshot.projectMachinePaths ?? []).map((row) => ["project_machine_paths", row] as const),
     ...snapshot.plans.map((row) => ["plans", row] as const),
     ...snapshot.agents.map((row) => ["agents", row] as const),
     ...snapshot.taskLists.map((row) => ["task_lists", row] as const),
@@ -700,6 +811,23 @@ async function importSnapshot(
       await store.upsert(type, row, context);
       if (existing) result.updated += 1;
       else result.inserted += 1;
+    } catch (error) {
+      result.errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  for (const tombstone of snapshot.tombstones ?? []) {
+    try {
+      const deleted = await store.tombstone({
+        object_type: tombstone.object_type,
+        object_id: tombstone.object_id,
+        deleted_at: tombstone.deleted_at,
+        updated_at: tombstone.updated_at,
+        source_machine_id: tombstone.source_machine_id ?? null,
+        payload: tombstone.payload ?? null,
+        version: tombstone.version ?? null,
+      }, context);
+      if (deleted) result.deleted = (result.deleted ?? 0) + 1;
+      else result.skipped += 1;
     } catch (error) {
       result.errors.push(error instanceof Error ? error.message : String(error));
     }
@@ -778,7 +906,15 @@ function payloadRecord<T>(value: unknown): T {
 }
 
 function stringValue(value: unknown): string | null {
+  if (value instanceof Date) return value.toISOString();
   return typeof value === "string" && value ? value : null;
+}
+
+function compareClock(left: string, right: string): number {
+  const leftClock = Date.parse(left);
+  const rightClock = Date.parse(right);
+  if (Number.isNaN(leftClock) || Number.isNaN(rightClock)) return left.localeCompare(right);
+  return leftClock - rightClock;
 }
 
 function numberValue(value: unknown): number | null {

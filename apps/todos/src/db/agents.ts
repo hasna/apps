@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { Agent, AgentConflictError, AgentRow, AgentStatus, RegisterAgentInput } from "../types/index.js";
 import { getDatabase, now } from "./database.js";
+import { currentStorageMachineId } from "./storage-tombstones.js";
 import {
   InvalidAgentNameError,
   normalizeAgentNameInput,
@@ -81,6 +82,7 @@ function rowToAgent(row: AgentRow): Agent {
  */
 export function registerAgent(input: RegisterAgentInput, db?: Database): Agent | AgentConflictError {
   const d = db || getDatabase();
+  const machineId = currentStorageMachineId(d);
   const existingNames = (d.query("SELECT name FROM agents").all() as { name: string }[]).map((row) => row.name);
   const normalizedName = validateAgentName(input.name, existingNames);
 
@@ -136,6 +138,10 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent |
       updates.push("active_project_id = ?");
       params.push(input.project_id);
     }
+    if (!existing.machine_id && machineId) {
+      updates.push("machine_id = ?");
+      params.push(machineId);
+    }
     params.push(existing.id);
     d.run(`UPDATE agents SET ${updates.join(", ")} WHERE id = ?`, params);
     return getAgent(existing.id, d)!;
@@ -145,14 +151,15 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent |
   const timestamp = now();
 
   d.run(
-    `INSERT INTO agents (id, name, description, role, title, level, permissions, capabilities, reports_to, org_id, metadata, created_at, last_seen_at, session_id, working_dir, active_project_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO agents (id, name, description, role, title, level, permissions, capabilities, reports_to, org_id, metadata, created_at, last_seen_at, session_id, working_dir, active_project_id, machine_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [id, normalizedName, input.description || null, input.role || "agent",
      input.title || null, input.level || null,
      JSON.stringify(input.permissions || ["*"]), JSON.stringify(input.capabilities || []),
      input.reports_to || null,
      input.org_id || null, JSON.stringify(input.metadata || {}), timestamp, timestamp,
-     input.session_id || null, input.working_dir || null, input.project_id && input.session_id ? input.project_id : null],
+     input.session_id || null, input.working_dir || null, input.project_id && input.session_id ? input.project_id : null,
+     machineId],
   );
 
   return getAgent(id, d)!;

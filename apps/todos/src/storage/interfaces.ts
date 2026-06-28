@@ -172,16 +172,38 @@ export interface TodosStorageSnapshot {
   source: TodosStorageKind;
   tasks: Task[];
   projects: Project[];
+  projectMachinePaths?: TodosProjectMachinePath[];
   plans: Plan[];
   agents: Agent[];
   taskLists: TaskList[];
   templates: TaskTemplate[];
   auditHistory: TaskHistory[];
+  tombstones?: TodosStorageTombstone[];
+}
+
+export interface TodosStorageTombstone {
+  object_type: "tasks" | "projects" | "project_machine_paths" | "plans" | "agents" | "task_lists" | "templates" | "audit_history";
+  object_id: string;
+  deleted_at: string;
+  updated_at: string;
+  source_machine_id?: string | null;
+  payload?: Record<string, unknown> | null;
+  version?: number | null;
+}
+
+export interface TodosProjectMachinePath {
+  id: string;
+  project_id: string;
+  machine_id: string;
+  path: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface TodosStorageImportResult {
   inserted: number;
   updated: number;
+  deleted?: number;
   skipped: number;
   errors: string[];
 }

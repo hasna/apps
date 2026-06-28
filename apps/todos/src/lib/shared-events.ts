@@ -14,6 +14,7 @@ import {
   TODOS_TASK_ROUTE_STATE_SCHEMA_VERSION,
   workflowPointersFromMetadata,
 } from "./task-route-contract.js";
+import { shouldEmitSharedTaskEvents } from "./event-emission-safety.js";
 
 const SOURCE = "todos";
 
@@ -147,7 +148,9 @@ export async function emitSharedTaskEvent(input: {
   message?: string;
   severity?: EventSeverity;
   dedupeKey?: string;
+  databasePath?: string;
 }): Promise<void> {
+  if (!shouldEmitSharedTaskEvents(input.databasePath)) return;
   const data = taskEventData(input.task, input.data);
   await new EventsClient().emit(
     {

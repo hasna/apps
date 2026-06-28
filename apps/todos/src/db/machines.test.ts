@@ -152,6 +152,7 @@ describe("backfillMachineId", () => {
     const db = getDatabase();
     const project = createProject({ name: "test", path: "/tmp/test-backfill" });
     const task = createTask({ title: "Test task", project_id: project.id });
+    db.run("UPDATE tasks SET machine_id = NULL WHERE id = ?", [task.id]);
 
     // Verify task has no machine_id initially
     const row = db.query("SELECT machine_id FROM tasks WHERE id = ?").get(task.id) as { machine_id: string | null };
@@ -168,6 +169,7 @@ describe("backfillMachineId", () => {
   it("should stamp machine_id on projects without one", () => {
     const db = getDatabase();
     const project = createProject({ name: "test-proj", path: "/tmp/test-backfill-proj" });
+    db.run("UPDATE projects SET machine_id = NULL WHERE id = ?", [project.id]);
 
     const row = db.query("SELECT machine_id FROM projects WHERE id = ?").get(project.id) as { machine_id: string | null };
     expect(row.machine_id).toBeNull();
@@ -181,6 +183,8 @@ describe("backfillMachineId", () => {
   it("should stamp machine_id on agents without one", () => {
     const db = getDatabase();
     const agent = registerAgent({ name: "testagent" });
+    if ("conflict" in agent) throw new Error(agent.message);
+    db.run("UPDATE agents SET machine_id = NULL WHERE id = ?", [agent.id]);
 
     const row = db.query("SELECT machine_id FROM agents WHERE id = ?").get(agent.id) as { machine_id: string | null };
     expect(row.machine_id).toBeNull();

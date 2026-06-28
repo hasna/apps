@@ -232,5 +232,6 @@ function pointerPatch(
 ): string | undefined {
   if (!Object.prototype.hasOwnProperty.call(input, key)) return previous;
   const value = input[key];
+  if (value === undefined) return previous;
   return typeof value === "string" && value.trim() ? value : undefined;
 }

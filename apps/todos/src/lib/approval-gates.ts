@@ -5,6 +5,7 @@ import { getDatabase, now } from "../db/database.js";
 import { addTaskRunEvent, getTaskRun, resolveTaskRunId } from "../db/task-runs.js";
 import { getTask } from "../db/tasks.js";
 import { TaskNotFoundError } from "../types/index.js";
+import { databasePathFromDatabase } from "./event-emission-safety.js";
 import { emitLocalEventHooksQuiet } from "./event-hooks.js";
 
 export type ApprovalGateStatus = "pending" | "approved" | "rejected" | "expired";
@@ -130,6 +131,7 @@ function logApprovalEvent(taskId: string, action: string, gate: ApprovalGate, ag
     emitLocalEventHooksQuiet({
       type: "approval.decided",
       payload: { task_id: taskId, gate: gate.gate, status: gate.status, reviewer: gate.reviewer, run_id: gate.run_id },
+      databasePath: databasePathFromDatabase(db),
     });
   }
 }

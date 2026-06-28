@@ -564,6 +564,23 @@ export function ensureSchema(db: Database): void {
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_machine_paths_project ON project_machine_paths(project_id)");
   ensureIndex("CREATE INDEX IF NOT EXISTS idx_project_machine_paths_machine ON project_machine_paths(machine_id)");
 
+  // Local tombstones for remote/native storage sync. Core CRUD may hard-delete
+  // rows locally, but sync needs a durable delete marker for the next push.
+  ensureTable("storage_tombstones", `
+    CREATE TABLE storage_tombstones (
+      id TEXT PRIMARY KEY,
+      object_type TEXT NOT NULL,
+      object_id TEXT NOT NULL,
+      deleted_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      source_machine_id TEXT,
+      payload TEXT,
+      version INTEGER,
+      UNIQUE(object_type, object_id)
+    )`);
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_storage_tombstones_object ON storage_tombstones(object_type, object_id)");
+  ensureIndex("CREATE INDEX IF NOT EXISTS idx_storage_tombstones_updated ON storage_tombstones(updated_at)");
+
   // Machine registry
   ensureTable("machines", `
     CREATE TABLE machines (

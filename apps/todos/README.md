@@ -283,7 +283,7 @@ todos extract-watch . --dry-run --max-runs 1 --json
 
 Created tasks are tagged with `extracted` and linked back to the source file.
 MCP clients can call `extract_todos` and `watch_source_todos` for the same
-offline workflow; no hosted code search, cloud sync, or telemetry is used.
+offline workflow; no hosted code search, hosted sync, or telemetry is used.
 
 ## Local Editor Integrations
 
@@ -1077,7 +1077,7 @@ todos calendar import team.ics --json
 
 Recurring task rules are mapped into ICS `RRULE` values when possible, and task
 SLA thresholds appear as local calendar events without any Google Calendar,
-hosted API, or cloud sync dependency. MCP clients use `create_calendar_item`,
+hosted API, or hosted sync dependency. MCP clients use `create_calendar_item`,
 `list_calendar_events`, `export_calendar_ics`, and `import_calendar_ics`.
 
 ## Local Saved Search Views

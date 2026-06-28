@@ -408,11 +408,6 @@ export const ALL_MCP_TOOLS = [
   "template_history",
   "todos_inbox",
   "todos_retro",
-  "todos_storage_conflicts",
-  "todos_storage_feedback",
-  "todos_storage_pull",
-  "todos_storage_push",
-  "todos_storage_status",
   "trust_workspace",
   "unarchive_agent",
   "unarchive_task",
@@ -562,12 +557,6 @@ const MCP_GROUP_DEFS: Array<{ id: string; name: string; description: string; mat
     description: "Sandbox, trust, secrets, crypto, and verification.",
     match: (t) =>
       /sandbox|trust|secret|crypto|verification|policy_pack|redact|scan_/.test(t),
-  },
-  {
-    id: "storage",
-    name: "Storage bridge",
-    description: "Optional storage sync tools (admin profile).",
-    match: (t) => t.startsWith("todos_storage_") || t === "sync_all" || t === "migrate_pg",
   },
   {
     id: "workflow",

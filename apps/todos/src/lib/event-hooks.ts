@@ -10,6 +10,7 @@ import {
   type LocalEventHookConfig,
   type LocalEventHookTarget,
 } from "./config.js";
+import { shouldDeliverLocalLifecycleHooks } from "./event-emission-safety.js";
 
 export const LOCAL_EVENT_TYPES = [
   "task.created",
@@ -72,6 +73,7 @@ export interface LocalEventHookDispatchInput {
   payload?: unknown;
   hooks?: LocalEventHookConfig[];
   timestamp?: string;
+  databasePath?: string;
 }
 
 export interface LocalEventHookDispatchResult {
@@ -303,6 +305,7 @@ export async function emitLocalEventHooks(input: LocalEventHookDispatchInput): P
 }
 
 export function emitLocalEventHooksQuiet(input: LocalEventHookDispatchInput): void {
+  if (!shouldDeliverLocalLifecycleHooks(input.databasePath)) return;
   emitLocalEventHooks(input).catch(() => {});
 }
 

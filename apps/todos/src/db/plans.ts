@@ -1,17 +1,20 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import type { CreatePlanInput, Plan, UpdatePlanInput } from "../types/index.js";
 import { PlanNotFoundError } from "../types/index.js";
+import { databasePathFromDatabase } from "../lib/event-emission-safety.js";
 import { emitLocalEventHooksQuiet } from "../lib/event-hooks.js";
 import { getDatabase, now, uuid } from "./database.js";
+import { currentStorageMachineId, recordStorageTombstone } from "./storage-tombstones.js";
 
 export function createPlan(input: CreatePlanInput, db?: Database): Plan {
   const d = db || getDatabase();
   const id = uuid();
   const timestamp = now();
+  const machineId = currentStorageMachineId(d);
 
   d.run(
-    `INSERT INTO plans (id, project_id, task_list_id, agent_id, name, description, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO plans (id, project_id, task_list_id, agent_id, name, description, status, created_at, updated_at, machine_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       input.project_id || null,
@@ -22,6 +25,7 @@ export function createPlan(input: CreatePlanInput, db?: Database): Plan {
       input.status || "active",
       timestamp,
       timestamp,
+      machineId,
     ],
   );
 
@@ -86,12 +90,20 @@ export function updatePlan(
   emitLocalEventHooksQuiet({
     type: "plan.updated",
     payload: { id, old_status: plan.status, new_status: updated.status, name: updated.name, project_id: updated.project_id },
+    databasePath: databasePathFromDatabase(d),
   });
   return updated;
 }
 
 export function deletePlan(id: string, db?: Database): boolean {
   const d = db || getDatabase();
+  const plan = getPlan(id, d);
+  if (!plan) return false;
+  recordStorageTombstone({
+    object_type: "plans",
+    object_id: id,
+    payload: plan as unknown as Record<string, unknown>,
+  }, d);
   const result = d.run("DELETE FROM plans WHERE id = ?", [id]);
   return result.changes > 0;
 }

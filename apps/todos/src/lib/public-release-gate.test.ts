@@ -64,9 +64,20 @@ describe("public release gate", () => {
     expect(failures.map((failure) => failure.check)).toContain("dependency-boundary");
   });
 
-  test("rejects public docs with npm install, open-todos, or secret-like values", () => {
+  test("rejects public docs with npm install, legacy cloud markers, or secret-like values", () => {
+    const legacyMarkers = [
+      "Cloud" + " sync",
+      `@hasna/${"cloud"}`,
+      `${"open"}-${"cloud"}`,
+      `${"cloud"}-${"mcp"}`,
+      `--${"cloud"}`,
+      `HASNA_${"CLOUD"}_URL`,
+      `register${"Cloud"}Tools`,
+      `register${"Cloud"}Commands`,
+      `HASNA_${"RDS"}_PASSWORD`,
+    ];
     const failures = validatePublicTextSurfaces([
-      { path: "README.md", text: `npm install -g @hasna/todos\nAWS_ACCESS_KEY_ID="${"AKIA"}1234567890123456"` },
+      { path: "README.md", text: `npm install -g @hasna/todos\n${legacyMarkers.join("\n")}\nAWS_ACCESS_KEY_ID="${"AKIA"}1234567890123456"` },
       { path: "sdk/package.json", text: "https://github.com/hasna/open-todos" },
     ]);
 

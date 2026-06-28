@@ -3,8 +3,12 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Database } from "bun:sqlite";
 import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
+import { runMigrations } from "../db/schema.js";
+import { finishTaskRun, startTaskRun } from "../db/task-runs.js";
 import { completeTask, createTask, startTask } from "../db/tasks.js";
+import { approveApprovalGate, requestApprovalGate } from "./approval-gates.js";
 import { resetConfig } from "./config.js";
 import {
   emitLocalEventHooks,
@@ -13,6 +17,8 @@ import {
   testLocalEventHook,
   upsertLocalEventHook,
 } from "./event-hooks.js";
+import { shouldDeliverLocalLifecycleHooks } from "./event-emission-safety.js";
+import { approveReviewItem, claimReviewItem, requestReviewQueue } from "./review-queues.js";
 
 let home: string;
 let previousHome: string | undefined;
@@ -37,6 +43,134 @@ afterEach(() => {
 });
 
 describe("local event hooks", () => {
+  test("suppresses quiet lifecycle hooks for temp databases using a non-isolated todos home", () => {
+    const previousHome = process.env["HOME"];
+    const previousDbPath = process.env["TODOS_DB_PATH"];
+    try {
+      process.env["HOME"] = "/var/empty/todos-home";
+      process.env["TODOS_DB_PATH"] = join(tmpdir(), "todos-ephemeral-hooks.db");
+
+      expect(shouldDeliverLocalLifecycleHooks()).toBe(false);
+    } finally {
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
+      else process.env["TODOS_DB_PATH"] = previousDbPath;
+    }
+  });
+
+  test("suppresses quiet lifecycle hooks for explicit in-memory databases using a non-isolated todos home", async () => {
+    const previousHome = process.env["HOME"];
+    const previousDbPath = process.env["TODOS_DB_PATH"];
+    const nonTempHome = join("/home/hasna/.cache", `todos-event-hooks-home-${Date.now()}`);
+    const filePath = join(home, "explicit-lifecycle.jsonl");
+    const explicitDb = new Database(":memory:");
+    explicitDb.run("PRAGMA foreign_keys = ON");
+    runMigrations(explicitDb);
+    try {
+      process.env["HOME"] = nonTempHome;
+      delete process.env["TODOS_DB_PATH"];
+      resetConfig();
+      upsertLocalEventHook({
+        name: "explicit-lifecycle",
+        events: ["task.created"],
+        target: "file",
+        file_path: filePath,
+      });
+
+      createTask({ title: "Explicit lifecycle" }, explicitDb);
+      await Bun.sleep(50);
+
+      expect(existsSync(filePath)).toBe(false);
+    } finally {
+      explicitDb.close();
+      resetConfig();
+      rmSync(nonTempHome, { recursive: true, force: true });
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
+      else process.env["TODOS_DB_PATH"] = previousDbPath;
+    }
+  });
+
+  test("suppresses quiet run hooks for explicit in-memory databases using a non-isolated todos home", async () => {
+    const previousHome = process.env["HOME"];
+    const previousDbPath = process.env["TODOS_DB_PATH"];
+    const nonTempHome = join("/home/hasna/.cache", `todos-run-hooks-home-${Date.now()}`);
+    const filePath = join(home, "explicit-run.jsonl");
+    const explicitDb = new Database(":memory:");
+    explicitDb.run("PRAGMA foreign_keys = ON");
+    runMigrations(explicitDb);
+    try {
+      process.env["HOME"] = nonTempHome;
+      delete process.env["TODOS_DB_PATH"];
+      resetConfig();
+      upsertLocalEventHook({
+        name: "explicit-run",
+        events: ["run.started", "run.completed", "run.failed"],
+        target: "file",
+        file_path: filePath,
+      });
+
+      const task = createTask({ title: "Explicit run hooks" }, explicitDb);
+      const completed = startTaskRun({ task_id: task.id, title: "Completed run" }, explicitDb);
+      finishTaskRun({ run_id: completed.id, status: "completed" }, explicitDb);
+      const failed = startTaskRun({ task_id: task.id, title: "Failed run" }, explicitDb);
+      finishTaskRun({ run_id: failed.id, status: "failed" }, explicitDb);
+      await Bun.sleep(50);
+
+      expect(existsSync(filePath)).toBe(false);
+    } finally {
+      explicitDb.close();
+      resetConfig();
+      rmSync(nonTempHome, { recursive: true, force: true });
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
+      else process.env["TODOS_DB_PATH"] = previousDbPath;
+    }
+  });
+
+  test("suppresses quiet approval and review hooks for explicit in-memory databases using a non-isolated todos home", async () => {
+    const previousHome = process.env["HOME"];
+    const previousDbPath = process.env["TODOS_DB_PATH"];
+    const nonTempHome = join("/home/hasna/.cache", `todos-review-hooks-home-${Date.now()}`);
+    const filePath = join(home, "explicit-review.jsonl");
+    const explicitDb = new Database(":memory:");
+    explicitDb.run("PRAGMA foreign_keys = ON");
+    runMigrations(explicitDb);
+    try {
+      process.env["HOME"] = nonTempHome;
+      delete process.env["TODOS_DB_PATH"];
+      resetConfig();
+      upsertLocalEventHook({
+        name: "explicit-review",
+        events: ["approval.decided", "review.requested", "review.claimed", "review.approved"],
+        target: "file",
+        file_path: filePath,
+      });
+
+      const approvalTask = createTask({ title: "Explicit approval hooks" }, explicitDb);
+      requestApprovalGate({ task_id: approvalTask.id, gate: "publish", requester: "agent" }, explicitDb);
+      approveApprovalGate({ task_id: approvalTask.id, gate: "publish", reviewer: "reviewer" }, explicitDb);
+      const reviewTask = createTask({ title: "Explicit review hooks" }, explicitDb);
+      requestReviewQueue({ task_id: reviewTask.id, requester: "agent", reviewer: "reviewer" }, explicitDb);
+      claimReviewItem({ task_id: reviewTask.id, reviewer: "reviewer" }, explicitDb);
+      approveReviewItem({ task_id: reviewTask.id, reviewer: "reviewer" }, explicitDb);
+      await Bun.sleep(50);
+
+      expect(existsSync(filePath)).toBe(false);
+    } finally {
+      explicitDb.close();
+      resetConfig();
+      rmSync(nonTempHome, { recursive: true, force: true });
+      if (previousHome === undefined) delete process.env["HOME"];
+      else process.env["HOME"] = previousHome;
+      if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
+      else process.env["TODOS_DB_PATH"] = previousDbPath;
+    }
+  });
+
   test("stores local hook config and appends redacted signed JSONL events", async () => {
     const filePath = join(home, "events", "audit.jsonl");
     const hook = upsertLocalEventHook({

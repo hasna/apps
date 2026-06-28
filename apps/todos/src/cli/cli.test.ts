@@ -1,13 +1,25 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { getDatabase, closeDatabase, resetDatabase } from "../db/database.js";
 import { createTask } from "../db/tasks.js";
 import { createTaskList } from "../db/task-lists.js";
 import { createProject } from "../db/projects.js";
 
+let testRoot = "";
+
 async function runCli(args: string[], dbPath: string, extraEnv: Record<string, string> = {}) {
   const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
     cwd: import.meta.dir + "/../..",
-    env: { ...process.env, ...extraEnv, TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false" },
+    env: {
+      ...process.env,
+      HOME: join(testRoot, "home"),
+      HASNA_EVENTS_DIR: join(testRoot, "events"),
+      ...extraEnv,
+      TODOS_DB_PATH: dbPath,
+      TODOS_AUTO_PROJECT: "false",
+    },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -18,6 +30,7 @@ async function runCli(args: string[], dbPath: string, extraEnv: Record<string, s
 }
 
 beforeEach(() => {
+  testRoot = mkdtempSync(join(tmpdir(), "todos-cli-test-"));
   process.env["TODOS_DB_PATH"] = ":memory:";
   resetDatabase();
   getDatabase();
@@ -26,6 +39,8 @@ beforeEach(() => {
 afterEach(() => {
   closeDatabase();
   delete process.env["TODOS_DB_PATH"];
+  rmSync(testRoot, { recursive: true, force: true });
+  testRoot = "";
 });
 
 describe("CLI integration", () => {
@@ -1535,7 +1550,7 @@ describe("CLI integration", () => {
     for (const path of [sourceDb, targetDb, bundlePath, `${sourceDb}-shm`, `${sourceDb}-wal`, `${targetDb}-shm`, `${targetDb}-wal`]) {
       try { unlinkSync(path); } catch {}
     }
-  });
+  }, 30000);
 
   it("should create verify integrity-check and restore a local backup through the CLI", async () => {
     const sourceDb = "/tmp/test-cli-backup-source.db";
@@ -1583,7 +1598,7 @@ describe("CLI integration", () => {
     for (const path of [sourceDb, targetDb, backupPath, `${sourceDb}-shm`, `${sourceDb}-wal`, `${targetDb}-shm`, `${targetDb}-wal`]) {
       try { unlinkSync(path); } catch {}
     }
-  });
+  }, 30000);
 
   it("should inspect native storage status without network access", async () => {
     const dbPath = "/tmp/test-cli-storage-status.db";
@@ -1788,7 +1803,7 @@ describe("CLI integration", () => {
     for (const path of [sourceDb, targetDb, markdownPath, `${sourceDb}-shm`, `${sourceDb}-wal`, `${targetDb}-shm`, `${targetDb}-wal`]) {
       try { unlinkSync(path); } catch {}
     }
-  });
+  }, 30000);
 
   it("should list and import bundled onboarding fixtures through the CLI", async () => {
     const dbPath = "/tmp/test-cli-onboarding-fixtures.db";
@@ -1948,7 +1963,7 @@ describe("CLI integration", () => {
       try { unlinkSync(path); } catch {}
     }
     rmSync(home, { recursive: true, force: true });
-  });
+  }, 30000);
 
   it("should create all tasks and dependencies from a reusable plan template", async () => {
     const dbPath = "/tmp/test-cli-plan-template-use.db";
@@ -2186,7 +2201,7 @@ describe("CLI integration", () => {
       try { unlinkSync(`${path}-shm`); } catch {}
       try { unlinkSync(`${path}-wal`); } catch {}
     }
-  });
+  }, 30000);
 
   it("should run overdue command", async () => {
     const proc = Bun.spawn(

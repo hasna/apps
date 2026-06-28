@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { TaskHistory } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
+import { currentStorageMachineId } from "./storage-tombstones.js";
 
 export function logTaskChange(
   taskId: string,
@@ -14,10 +15,11 @@ export function logTaskChange(
   const d = db || getDatabase();
   const id = uuid();
   const timestamp = now();
+  const machineId = currentStorageMachineId(d);
   d.run(
-    `INSERT INTO task_history (id, task_id, action, field, old_value, new_value, agent_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [id, taskId, action, field || null, oldValue ?? null, newValue ?? null, agentId || null, timestamp],
+    `INSERT INTO task_history (id, task_id, action, field, old_value, new_value, agent_id, created_at, machine_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, taskId, action, field || null, oldValue ?? null, newValue ?? null, agentId || null, timestamp, machineId],
   );
 
   try {
@@ -35,7 +37,7 @@ export function logTaskChange(
     /* activity_log table may not exist in legacy DBs until migration */
   }
 
-  return { id, task_id: taskId, action, field: field || null, old_value: oldValue ?? null, new_value: newValue ?? null, agent_id: agentId || null, created_at: timestamp };
+  return { id, task_id: taskId, action, field: field || null, old_value: oldValue ?? null, new_value: newValue ?? null, agent_id: agentId || null, created_at: timestamp, machine_id: machineId };
 }
 
 export function getTaskHistory(taskId: string, db?: Database): TaskHistory[] {
