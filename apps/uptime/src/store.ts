@@ -14,14 +14,15 @@ import {
   MIN_TIMEOUT_MS,
 } from "./limits.js";
 import type {
+  CheckEvidence,
   CheckResult,
-  CreateMonitorInput,
   Incident,
+  ImportedMonitorInput,
+  ImportedUpdateMonitorInput,
   ListResultsOptions,
   Monitor,
   MonitorSummary,
   MonitorStatus,
-  UpdateMonitorInput,
   UptimeSummary,
 } from "./types.js";
 
@@ -33,6 +34,8 @@ export interface UptimeStoreOptions {
 }
 
 export type UptimeRuntimeMode = "local" | "hosted";
+
+const SECRET_URL_PARAM_PATTERN = /(token|secret|password|passwd|api[_-]?key|access[_-]?token|auth|credential|session)/i;
 
 export interface UptimeBackup {
   sourcePath: string;
@@ -52,13 +55,45 @@ export interface UptimeBackupCheck {
   incidents: number;
 }
 
-const REQUIRED_TABLES = ["schema_migrations", "monitors", "check_results", "incidents", "check_leases"] as const;
+export interface MonitorProvenance {
+  monitorId: string;
+  source: string;
+  sourceId: string;
+  sourceLabel: string | null;
+  importedAt: string;
+  snapshot: unknown;
+}
+
+export interface UpsertMonitorProvenanceInput {
+  monitorId: string;
+  source: string;
+  sourceId: string;
+  sourceLabel?: string | null;
+  snapshot: unknown;
+}
+
+export interface StoredImportBatch {
+  id: string;
+  source: string;
+  status: "applied" | "rolled_back";
+  createdAt: string;
+  rolledBackAt: string | null;
+  records: unknown[];
+}
+
+export interface SaveImportBatchInput {
+  id: string;
+  source: string;
+  records: unknown[];
+}
+
+const REQUIRED_TABLES = ["schema_migrations", "monitors", "check_results", "incidents", "check_leases", "monitor_provenance", "import_batches"] as const;
 const CURRENT_SCHEMA_VERSION = "1";
 
 interface MonitorRow {
   id: string;
   name: string;
-  kind: "http" | "tcp";
+  kind: "http" | "tcp" | "browser_page";
   url: string | null;
   host: string | null;
   port: number | null;
@@ -84,6 +119,7 @@ interface CheckResultRow {
   status_code: number | null;
   error: string | null;
   attempt_count: number;
+  evidence_json: string | null;
 }
 
 interface IncidentRow {
@@ -105,9 +141,27 @@ interface CheckLeaseRow {
   acquired_at: string;
 }
 
+interface MonitorProvenanceRow {
+  monitor_id: string;
+  source: string;
+  source_id: string;
+  source_label: string | null;
+  imported_at: string;
+  snapshot_json: string;
+}
+
+interface ImportBatchRow {
+  id: string;
+  source: string;
+  status: "applied" | "rolled_back";
+  created_at: string;
+  rolled_back_at: string | null;
+  records_json: string;
+}
+
 interface NormalizedMonitorInput {
   name: string;
-  kind: "http" | "tcp";
+  kind: "http" | "tcp" | "browser_page";
   url?: string;
   host?: string;
   port?: number;
@@ -161,7 +215,7 @@ export class UptimeStore {
       CREATE TABLE IF NOT EXISTS monitors (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL UNIQUE,
-        kind TEXT NOT NULL CHECK (kind IN ('http', 'tcp')),
+        kind TEXT NOT NULL CHECK (kind IN ('http', 'tcp', 'browser_page')),
         url TEXT,
         host TEXT,
         port INTEGER,
@@ -179,6 +233,7 @@ export class UptimeStore {
       )
     `);
     this.ensureColumn("monitors", "revision", "INTEGER NOT NULL DEFAULT 1");
+    this.ensureMonitorKindAllowsBrowserPage();
     this.db.run(`
       CREATE TABLE IF NOT EXISTS check_results (
         id TEXT PRIMARY KEY,
@@ -188,9 +243,11 @@ export class UptimeStore {
         latency_ms REAL,
         status_code INTEGER,
         error TEXT,
-        attempt_count INTEGER NOT NULL DEFAULT 1
+        attempt_count INTEGER NOT NULL DEFAULT 1,
+        evidence_json TEXT
       )
     `);
+    this.ensureColumn("check_results", "evidence_json", "TEXT");
     this.db.run(`
       CREATE TABLE IF NOT EXISTS incidents (
         id TEXT PRIMARY KEY,
@@ -202,6 +259,27 @@ export class UptimeStore {
         failure_count INTEGER NOT NULL DEFAULT 1,
         recovery_check_id TEXT,
         reason TEXT
+      )
+    `);
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS monitor_provenance (
+        monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+        source TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        source_label TEXT,
+        imported_at TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        PRIMARY KEY (source, source_id)
+      )
+    `);
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS import_batches (
+        id TEXT PRIMARY KEY,
+        source TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('applied', 'rolled_back')),
+        created_at TEXT NOT NULL,
+        rolled_back_at TEXT,
+        records_json TEXT NOT NULL
       )
     `);
     this.db.run(`
@@ -225,6 +303,7 @@ export class UptimeStore {
     this.db.run("CREATE INDEX IF NOT EXISTS idx_results_monitor_time ON check_results(monitor_id, checked_at DESC)");
     this.db.run("CREATE INDEX IF NOT EXISTS idx_incidents_monitor_status ON incidents(monitor_id, status)");
     this.db.run("CREATE INDEX IF NOT EXISTS idx_check_leases_until ON check_leases(leased_until)");
+    this.db.run("CREATE INDEX IF NOT EXISTS idx_monitor_provenance_monitor ON monitor_provenance(monitor_id)");
   }
 
   backup(destinationPath?: string): UptimeBackup {
@@ -270,8 +349,9 @@ export class UptimeStore {
     };
   }
 
-  createMonitor(input: CreateMonitorInput): Monitor {
-    const normalized = normalizeCreateMonitor(input);
+  createMonitor(input: ImportedMonitorInput, options: { allowBrowserPage?: boolean } = {}): Monitor {
+    if (this.mode === "hosted") assertHostedTargetAllowed(input);
+    const normalized = normalizeCreateMonitor(input, options.allowBrowserPage === true);
     if (this.mode === "hosted") assertHostedTargetAllowed(normalized);
     const now = new Date().toISOString();
     const monitor: Monitor = {
@@ -337,11 +417,19 @@ export class UptimeStore {
     return row ? monitorFromRow(row) : null;
   }
 
-  updateMonitor(idOrName: string, input: UpdateMonitorInput): Monitor {
+  updateMonitor(idOrName: string, input: ImportedUpdateMonitorInput, options: { allowBrowserPage?: boolean } = {}): Monitor {
     const current = this.getMonitor(idOrName);
     if (!current) throw new Error(`Monitor not found: ${idOrName}`);
+    if (this.mode === "hosted") {
+      assertHostedTargetAllowed({
+        kind: input.kind ?? current.kind,
+        url: input.url ?? current.url ?? undefined,
+        host: input.host ?? current.host ?? undefined,
+        port: input.port ?? current.port ?? undefined,
+      });
+    }
     const updatedAt = new Date().toISOString();
-    const next = normalizeUpdateMonitor(current, input, updatedAt);
+    const next = normalizeUpdateMonitor(current, input, updatedAt, options.allowBrowserPage === true);
     if (this.mode === "hosted") assertHostedTargetAllowed(next);
     this.db
       .query(
@@ -424,6 +512,7 @@ export class UptimeStore {
       statusCode: input.statusCode,
       error: input.error,
       attemptCount: Math.max(1, input.attemptCount),
+      evidence: input.evidence ?? null,
     };
     const tx = this.db.transaction(() => {
       const current = this.db
@@ -439,8 +528,8 @@ export class UptimeStore {
       this.db
         .query(
           `INSERT INTO check_results (
-            id, monitor_id, checked_at, status, latency_ms, status_code, error, attempt_count
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            id, monitor_id, checked_at, status, latency_ms, status_code, error, attempt_count, evidence_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           result.id,
@@ -451,6 +540,7 @@ export class UptimeStore {
           result.statusCode,
           result.error,
           result.attemptCount,
+          result.evidence ? JSON.stringify(result.evidence) : null,
         );
       this.db
         .query("UPDATE monitors SET status = ?, last_checked_at = ?, updated_at = ? WHERE id = ?")
@@ -469,6 +559,66 @@ export class UptimeStore {
         .all(options.monitorId, limit) as CheckResultRow[]
       : this.db.query("SELECT * FROM check_results ORDER BY checked_at DESC LIMIT ?").all(limit) as CheckResultRow[];
     return rows.map(checkResultFromRow);
+  }
+
+  getProvenance(source: string, sourceId: string): MonitorProvenance | null {
+    const row = this.db
+      .query("SELECT * FROM monitor_provenance WHERE source = ? AND source_id = ?")
+      .get(source, sourceId) as MonitorProvenanceRow | null;
+    return row ? provenanceFromRow(row) : null;
+  }
+
+  upsertMonitorProvenance(input: UpsertMonitorProvenanceInput): MonitorProvenance {
+    const importedAt = new Date().toISOString();
+    this.db
+      .query(
+        `INSERT INTO monitor_provenance (
+          monitor_id, source, source_id, source_label, imported_at, snapshot_json
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source, source_id) DO UPDATE SET
+          monitor_id = excluded.monitor_id,
+          source_label = excluded.source_label,
+          imported_at = excluded.imported_at,
+          snapshot_json = excluded.snapshot_json`,
+      )
+      .run(
+        input.monitorId,
+        input.source,
+        input.sourceId,
+        input.sourceLabel ?? null,
+        importedAt,
+        JSON.stringify(input.snapshot),
+      );
+    return this.getProvenance(input.source, input.sourceId)!;
+  }
+
+  saveImportBatch(input: SaveImportBatchInput): StoredImportBatch {
+    const createdAt = new Date().toISOString();
+    this.db
+      .query("INSERT INTO import_batches (id, source, status, created_at, rolled_back_at, records_json) VALUES (?, ?, 'applied', ?, NULL, ?)")
+      .run(input.id, input.source, createdAt, JSON.stringify(input.records));
+    return this.getImportBatch(input.id)!;
+  }
+
+  getImportBatch(batchId: string): StoredImportBatch | null {
+    const row = this.db
+      .query("SELECT * FROM import_batches WHERE id = ?")
+      .get(batchId) as ImportBatchRow | null;
+    return row ? importBatchFromRow(row) : null;
+  }
+
+  markImportBatchRolledBack(batchId: string): StoredImportBatch {
+    const rolledBackAt = new Date().toISOString();
+    this.db
+      .query("UPDATE import_batches SET status = 'rolled_back', rolled_back_at = ? WHERE id = ?")
+      .run(rolledBackAt, batchId);
+    const batch = this.getImportBatch(batchId);
+    if (!batch) throw new Error(`Import batch not found: ${batchId}`);
+    return batch;
+  }
+
+  runInTransaction<T>(fn: () => T): T {
+    return this.db.transaction(fn)();
   }
 
   listIncidents(options: { status?: "open" | "closed"; monitorId?: string; limit?: number } = {}): Incident[] {
@@ -588,6 +738,58 @@ export class UptimeStore {
     }
   }
 
+  private ensureMonitorKindAllowsBrowserPage(): void {
+    const row = this.db
+      .query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'monitors'")
+      .get() as { sql: string } | null;
+    if (!row?.sql || row.sql.includes("browser_page")) return;
+    this.db.run("PRAGMA foreign_keys = OFF");
+    this.db.run("PRAGMA legacy_alter_table = ON");
+    try {
+      const migrate = this.db.transaction(() => {
+        this.db.run("ALTER TABLE monitors RENAME TO monitors_old_kind");
+        this.db.run(`
+          CREATE TABLE monitors (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            kind TEXT NOT NULL CHECK (kind IN ('http', 'tcp', 'browser_page')),
+            url TEXT,
+            host TEXT,
+            port INTEGER,
+            method TEXT NOT NULL DEFAULT 'GET',
+            expected_status INTEGER,
+            interval_seconds INTEGER NOT NULL DEFAULT 60,
+            timeout_ms INTEGER NOT NULL DEFAULT 5000,
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            status TEXT NOT NULL DEFAULT 'unknown',
+            last_checked_at TEXT,
+            revision INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          )
+        `);
+        this.db.run(`
+          INSERT INTO monitors (
+            id, name, kind, url, host, port, method, expected_status,
+            interval_seconds, timeout_ms, retry_count, enabled, status,
+            last_checked_at, revision, created_at, updated_at
+          )
+          SELECT
+            id, name, kind, url, host, port, method, expected_status,
+            interval_seconds, timeout_ms, retry_count, enabled, status,
+            last_checked_at, revision, created_at, updated_at
+          FROM monitors_old_kind
+        `);
+        this.db.run("DROP TABLE monitors_old_kind");
+      });
+      migrate();
+    } finally {
+      this.db.run("PRAGMA legacy_alter_table = OFF");
+      this.db.run("PRAGMA foreign_keys = ON");
+    }
+  }
+
   private vacuumInto(backupPath: string): void {
     const quoted = backupPath.replace(/'/g, "''");
     this.db.run(`VACUUM INTO '${quoted}'`);
@@ -643,14 +845,17 @@ function tableExists(db: Database, table: string): boolean {
   return Number(row?.count ?? 0) > 0;
 }
 
-function normalizeCreateMonitor(input: CreateMonitorInput): NormalizedMonitorInput {
+function normalizeCreateMonitor(input: ImportedMonitorInput, allowBrowserPage = false): NormalizedMonitorInput {
   const name = input.name?.trim();
   if (!name) throw new Error("Monitor name is required");
   rejectControlCharacters(name, "Monitor name");
   const method = normalizeMethod(input.method ?? "GET");
   const expectedStatus = normalizeExpectedStatus(input.expectedStatus);
   const enabled = normalizeEnabled(input.enabled);
-  if (input.kind === "http") {
+  if (input.kind === "http" || input.kind === "browser_page") {
+    if (input.kind === "browser_page" && !allowBrowserPage) {
+      throw new Error("browser_page monitors must be imported with explicit browser evidence support");
+    }
     const url = normalizeHttpUrl(input.url);
     return {
       name,
@@ -683,7 +888,7 @@ function normalizeCreateMonitor(input: CreateMonitorInput): NormalizedMonitorInp
       enabled,
     };
   } else {
-    throw new Error("Monitor kind must be http or tcp");
+    throw new Error("Monitor kind must be http, tcp, or browser_page");
   }
 }
 
@@ -698,7 +903,7 @@ function definitionChanged(current: Monitor, next: Monitor): boolean {
   );
 }
 
-function normalizeUpdateMonitor(current: Monitor, input: UpdateMonitorInput, updatedAt: string): Monitor {
+function normalizeUpdateMonitor(current: Monitor, input: ImportedUpdateMonitorInput, updatedAt: string, allowBrowserPage = false): Monitor {
   const merged: Monitor = {
     ...current,
     ...input,
@@ -717,7 +922,7 @@ function normalizeUpdateMonitor(current: Monitor, input: UpdateMonitorInput, upd
     timeoutMs: merged.timeoutMs,
     retryCount: merged.retryCount,
     enabled: merged.enabled,
-  });
+  }, allowBrowserPage || current.kind === "browser_page");
   const checkDefinitionChanged = (
     normalized.kind !== current.kind
     || (normalized.url ?? null) !== current.url
@@ -757,6 +962,10 @@ function normalizeHttpUrl(value: string | undefined): string {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error("HTTP monitor url must use http or https");
   }
+  for (const key of [...parsed.searchParams.keys()]) {
+    if (SECRET_URL_PARAM_PATTERN.test(key)) parsed.searchParams.set(key, "[redacted]");
+  }
+  parsed.hash = "";
   return parsed.toString();
 }
 
@@ -818,7 +1027,44 @@ function checkResultFromRow(row: CheckResultRow): CheckResult {
     statusCode: row.status_code,
     error: row.error,
     attemptCount: row.attempt_count,
+    evidence: parseEvidence(row.evidence_json),
   };
+}
+
+function provenanceFromRow(row: MonitorProvenanceRow): MonitorProvenance {
+  return {
+    monitorId: row.monitor_id,
+    source: row.source,
+    sourceId: row.source_id,
+    sourceLabel: row.source_label,
+    importedAt: row.imported_at,
+    snapshot: parseJson(row.snapshot_json),
+  };
+}
+
+function importBatchFromRow(row: ImportBatchRow): StoredImportBatch {
+  return {
+    id: row.id,
+    source: row.source,
+    status: row.status,
+    createdAt: row.created_at,
+    rolledBackAt: row.rolled_back_at,
+    records: Array.isArray(parseJson(row.records_json)) ? parseJson(row.records_json) as unknown[] : [],
+  };
+}
+
+function parseEvidence(value: string | null): CheckEvidence | null {
+  if (!value) return null;
+  const parsed = parseJson(value);
+  return parsed && typeof parsed === "object" ? parsed as CheckEvidence : null;
+}
+
+function parseJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 
 function incidentFromRow(row: IncidentRow): Incident {

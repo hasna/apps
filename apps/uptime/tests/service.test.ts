@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
+import { runMonitorCheck } from "../src/checks.js";
 import { UptimeService } from "../src/service.js";
 import { UptimeStore } from "../src/store.js";
 import type { CheckAttemptResult, Monitor } from "../src/types.js";
@@ -626,6 +627,490 @@ test("hosted service rejects inline SDK checks and scheduler entrypoints", async
   await expect(service.runDueChecks()).rejects.toThrow("hosted checks require check_jobs and probes");
   expect(() => service.startScheduler()).toThrow("hosted scheduler requires check_jobs and probes");
   expect(calls).toBe(0);
+  service.close();
+});
+
+test("direct monitor creation keeps browser_page behind the import path", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+
+  expect(() => service.createMonitor({ name: "page", kind: "browser_page", url: "https://example.com" } as never))
+    .toThrow("browser_page monitors must be imported");
+  service.close();
+});
+
+test("import preview/apply is dry-run, idempotent, and stores browser evidence metadata", async () => {
+  const dbPath = tempDb();
+  const service = new UptimeService({
+    dbPath,
+    checkRunner: (monitor) => runMonitorCheck(monitor, {
+      browserPage: async () => ({
+        finalUrl: "https://example.com/app?token=secret",
+        navigationStatus: 200,
+        consoleErrors: [],
+        pageErrors: [],
+        failedRequests: [],
+        screenshot: {
+          ref: "artifact://screenshots/home",
+          sha256: "b".repeat(64),
+          bytes: 120,
+          contentType: "image/png",
+        },
+      }),
+    }),
+  });
+
+  const request = {
+    source: "manual" as const,
+    records: [{
+      sourceId: "home-page",
+      monitor: { name: "home page", kind: "browser_page", url: "https://example.com/app?api_key=secret" },
+      localPath: "/home/hasna/private/project",
+      secretToken: "secret",
+    }],
+  };
+  const preview = service.previewImport(request);
+  expect(preview.totals).toMatchObject({ create: 1 });
+  expect(service.summary().totals.monitors).toBe(0);
+
+  const applied = service.applyImport(request);
+  expect(applied.totals).toMatchObject({ create: 1 });
+  expect(service.getMonitor("home page")?.kind).toBe("browser_page");
+
+  const second = service.applyImport(request);
+  expect(second.totals).toMatchObject({ unchanged: 1 });
+
+  const result = await service.checkMonitor("home page");
+  expect(result.evidence?.screenshot?.ref).toBe("artifact://screenshots/home");
+  expect(result.evidence?.finalUrl).toBe("https://example.com/app?token=%5Bredacted%5D");
+  service.close();
+
+  const reopened = new UptimeService({ dbPath });
+  const stored = reopened.listResults({ limit: 1 })[0];
+  expect(stored.evidence?.screenshot?.bytes).toBe(120);
+  const rolledBack = reopened.rollbackImport(applied.batchId);
+  expect(rolledBack.items[0].action).toBe("disabled");
+  expect(reopened.getMonitor("home page")?.enabled).toBe(false);
+  expect(reopened.listResults()).toHaveLength(1);
+  reopened.close();
+});
+
+test("legacy monitor tables are migrated before browser_page imports", () => {
+  const dbPath = tempDb();
+  const db = new Database(dbPath, { create: true });
+  db.run(`
+    CREATE TABLE monitors (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      kind TEXT NOT NULL CHECK (kind IN ('http', 'tcp')),
+      url TEXT,
+      host TEXT,
+      port INTEGER,
+      method TEXT NOT NULL DEFAULT 'GET',
+      expected_status INTEGER,
+      interval_seconds INTEGER NOT NULL DEFAULT 60,
+      timeout_ms INTEGER NOT NULL DEFAULT 5000,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'unknown',
+      last_checked_at TEXT,
+      revision INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )
+  `);
+  db.close();
+
+  const service = new UptimeService({ dbPath });
+  const applied = service.applyImport({
+    source: "manual",
+    records: [{ sourceId: "page", monitor: { name: "page", kind: "browser_page", url: "https://example.com" } }],
+  });
+
+  expect(applied.totals.create).toBe(1);
+  expect(service.getMonitor("page")?.kind).toBe("browser_page");
+  service.close();
+});
+
+test("import mappings cover projects, servers, domains, and deployment sources", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  const cases = [
+    {
+      source: "projects" as const,
+      sourceId: "proj_api",
+      record: { id: "proj_api", name: "Project API", url: "https://project.example/health", path: "/home/hasna/private/project", apiToken: "secret" },
+      expected: { kind: "http", url: "https://project.example/health" },
+    },
+    {
+      source: "servers" as const,
+      sourceId: "srv_db",
+      record: { id: "srv_db", name: "DB Server", kind: "tcp", hostname: "db.example.com", port: 5432 },
+      expected: { kind: "tcp", host: "db.example.com", port: 5432 },
+    },
+    {
+      source: "domains" as const,
+      sourceId: "dom_example",
+      record: { id: "dom_example", domain: "example.org" },
+      expected: { kind: "http", url: "https://example.org/" },
+    },
+    {
+      source: "deployment" as const,
+      sourceId: "dep_prod",
+      record: { id: "dep_prod", name: "Production", environmentUrl: "https://deploy.example" },
+      expected: { kind: "http", url: "https://deploy.example/" },
+    },
+  ];
+
+  for (const item of cases) {
+    const preview = service.previewImport({ source: item.source, records: [item.record] });
+    expect(preview.totals.create).toBe(1);
+    const applied = service.applyImport({ source: item.source, records: [item.record] });
+    expect(applied.totals.create).toBe(1);
+    const monitor = applied.items[0].after!;
+    expect(monitor).toMatchObject(item.expected);
+    expect(service.applyImport({ source: item.source, records: [item.record] }).totals.unchanged).toBe(1);
+    const provenance = service.store.getProvenance(item.source, item.sourceId);
+    expect(provenance?.monitorId).toBe(monitor.id);
+    expect(JSON.stringify(provenance?.snapshot)).not.toContain("/home/hasna/private");
+    expect(JSON.stringify(provenance?.snapshot)).not.toContain("secret");
+  }
+  service.close();
+});
+
+test("domain imports are idempotent after URL normalization and bare domains get unique source ids", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  const request = {
+    source: "domains" as const,
+    records: [{ domain: "example.org" }, { domain: "example.net" }],
+  };
+
+  const applied = service.applyImport(request);
+  const second = service.applyImport(request);
+
+  expect(applied.totals.create).toBe(2);
+  expect(second.totals.unchanged).toBe(2);
+  expect(service.summary().totals.monitors).toBe(2);
+  expect(service.store.getProvenance("domains", "domains:https://example.org/")?.monitorId).toBeTruthy();
+  expect(service.store.getProvenance("domains", "domains:https://example.net/")?.monitorId).toBeTruthy();
+  service.close();
+});
+
+test("URL-only import records use normalized fallback identity", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  const request = {
+    source: "manual" as const,
+    records: [
+      { url: "https://example.com" },
+      { url: "https://example.com/" },
+    ],
+  };
+
+  const preview = service.previewImport(request);
+  const applied = service.applyImport(request);
+
+  expect(preview.totals).toMatchObject({ create: 1, conflict: 1 });
+  expect(applied.totals).toMatchObject({ create: 1, conflict: 1 });
+  expect(service.summary().totals.monitors).toBe(1);
+  expect(service.store.getProvenance("manual", "manual:https://example.com/")?.monitorId).toBeTruthy();
+  service.close();
+});
+
+test("TCP imports preserve live target hosts while hosted fallback redacts private hosts", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  const applied = service.applyImport({
+    source: "servers",
+    records: [{ id: "db", name: "db", kind: "tcp", hostname: "db.internal", port: 5432 }],
+  });
+
+  expect(applied.totals.create).toBe(1);
+  expect(applied.items[0].after?.host).toBe("db.internal");
+  service.close();
+
+  const hosted = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const preview = hosted.previewImport({
+    source: "servers",
+    records: [{ id: "db", name: "db", kind: "tcp", hostname: "db.internal", port: 5432 }],
+  });
+  expect(preview.totals.blocked).toBe(1);
+  expect(preview.items[0].candidate.host).toBe("[private-host]");
+  expect(JSON.stringify(preview)).not.toContain("db.internal");
+  hosted.close();
+});
+
+test("URL-only import records redact secret params in generated identity", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  const request = {
+    source: "manual" as const,
+    records: [{ url: "https://example.com/?api_key=secret" }],
+  };
+
+  const preview = service.previewImport(request);
+  const applied = service.applyImport(request);
+
+  expect(preview.totals.create).toBe(1);
+  expect(preview.items[0].candidate.sourceId).toBe("manual:https://example.com/?api_key=%5Bredacted%5D");
+  expect(preview.items[0].candidate.name).toBe("manual-https://example.com/?api_key=%5Bredacted%5D");
+  expect(JSON.stringify(preview)).not.toContain("api_key=secret");
+  expect(JSON.stringify(applied)).not.toContain("api_key=secret");
+  expect(service.store.getProvenance("manual", "manual:https://example.com/?api_key=%5Bredacted%5D")?.monitorId).toBeTruthy();
+  service.close();
+});
+
+test("import preview detects updates to imported monitor settings", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  service.applyImport({
+    source: "manual",
+    records: [{ sourceId: "api", monitor: { name: "api", kind: "http", url: "https://example.com", intervalSeconds: 60 } }],
+  });
+
+  const preview = service.previewImport({
+    source: "manual",
+    records: [{ sourceId: "api", monitor: { name: "api", kind: "http", url: "https://example.com", intervalSeconds: 30 } }],
+  });
+  const applied = service.applyImport({
+    source: "manual",
+    records: [{ sourceId: "api", monitor: { name: "api", kind: "http", url: "https://example.com", intervalSeconds: 30 } }],
+  });
+
+  expect(preview.totals.update).toBe(1);
+  expect(applied.totals.update).toBe(1);
+  expect(service.getMonitor("api")?.intervalSeconds).toBe(30);
+  service.close();
+});
+
+test("import preview blocks malformed URLs without aborting dry-run", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  const preview = service.previewImport({
+    source: "manual",
+    records: [{ sourceId: "bad", monitor: { name: "bad", kind: "http", url: "https://[bad" } }],
+  });
+
+  expect(preview.totals.blocked).toBe(1);
+  expect(preview.items[0].reason).toBeTruthy();
+  expect(service.summary().totals.monitors).toBe(0);
+  service.close();
+});
+
+test("import preview blocks apply-invalid fields before writes", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  const request = {
+    source: "manual" as const,
+    records: [
+      { sourceId: "bad-name", monitor: { name: "bad\nname", kind: "http", url: "https://example.com" } },
+      { sourceId: "bad-method", monitor: { name: "bad method", kind: "http", url: "https://example.com", method: "GET /" } },
+      { sourceId: "bad-status", monitor: { name: "bad status", kind: "http", url: "https://example.com", expectedStatus: 999 } },
+      { sourceId: "bad-interval", monitor: { name: "bad interval", kind: "http", url: "https://example.com", intervalSeconds: 0 } },
+      { sourceId: "bad-timeout", monitor: { name: "bad timeout", kind: "http", url: "https://example.com", timeoutMs: 0 } },
+      { sourceId: "bad-retry", monitor: { name: "bad retry", kind: "http", url: "https://example.com", retryCount: 11 } },
+      { sourceId: "bad-host", monitor: { name: "bad host", kind: "tcp", host: "db\nexample", port: 5432 } },
+    ],
+  };
+
+  const preview = service.previewImport(request);
+  const applied = service.applyImport(request);
+
+  expect(preview.totals.blocked).toBe(7);
+  expect(applied.totals.blocked).toBe(7);
+  expect(service.summary().totals.monitors).toBe(0);
+  service.close();
+});
+
+test("import idempotency normalizes methods and preserves omitted expected status", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  service.applyImport({
+    source: "manual",
+    records: [{ sourceId: "api", monitor: { name: "api", kind: "http", url: "https://example.com", method: "get", expectedStatus: 204 } }],
+  });
+
+  const lowercaseMethod = service.previewImport({
+    source: "manual",
+    records: [{ sourceId: "api", monitor: { name: "api", kind: "http", url: "https://example.com", method: "get", expectedStatus: 204 } }],
+  });
+  const omittedStatus = service.previewImport({
+    source: "manual",
+    records: [{ sourceId: "api", monitor: { name: "api", kind: "http", url: "https://example.com", method: "GET" } }],
+  });
+
+  expect(lowercaseMethod.totals.unchanged).toBe(1);
+  expect(omittedStatus.totals.unchanged).toBe(1);
+  service.close();
+});
+
+test("import updates can clear an expected status with explicit null", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  service.applyImport({
+    source: "manual",
+    records: [{ sourceId: "api", monitor: { name: "api", kind: "http", url: "https://example.com", expectedStatus: 204 } }],
+  });
+
+  const preview = service.previewImport({
+    source: "manual",
+    records: [{ sourceId: "api", monitor: { name: "api", kind: "http", url: "https://example.com", expectedStatus: null } }],
+  });
+  const applied = service.applyImport({
+    source: "manual",
+    records: [{ sourceId: "api", monitor: { name: "api", kind: "http", url: "https://example.com", expectedStatus: null } }],
+  });
+
+  expect(preview.totals.update).toBe(1);
+  expect(applied.totals.update).toBe(1);
+  expect(service.getMonitor("api")?.expectedStatus).toBeNull();
+  service.close();
+});
+
+test("import preview reports rename conflicts before apply", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  service.createMonitor({ name: "taken", kind: "http", url: "https://taken.example" });
+  service.applyImport({
+    source: "manual",
+    records: [{ sourceId: "api", monitor: { name: "api", kind: "http", url: "https://example.com" } }],
+  });
+
+  const preview = service.previewImport({
+    source: "manual",
+    records: [{ sourceId: "api", monitor: { name: "taken", kind: "http", url: "https://example.com" } }],
+  });
+
+  expect(preview.totals.conflict).toBe(1);
+  expect(preview.items[0].reason).toContain("another monitor");
+  service.close();
+});
+
+test("import preview dedupes intra-batch duplicates before writes", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  const request = {
+    source: "manual" as const,
+    records: [
+      { sourceId: "api", monitor: { name: "api", kind: "http", url: "https://example.com/a" } },
+      { sourceId: "api", monitor: { name: "api duplicate", kind: "http", url: "https://example.com/b" } },
+      { sourceId: "api-2", monitor: { name: "api", kind: "http", url: "https://example.com/c" } },
+    ],
+  };
+
+  const preview = service.previewImport(request);
+  expect(preview.totals).toMatchObject({ create: 1, conflict: 2 });
+  const applied = service.applyImport(request);
+  expect(applied.totals).toMatchObject({ create: 1, conflict: 2 });
+  expect(service.summary().totals.monitors).toBe(1);
+  service.close();
+});
+
+test("import preview snapshots redact embedded local paths and secret-like values", () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const preview = service.previewImport({
+    source: "manual",
+    records: [{
+      sourceId: "api",
+      monitor: { name: "api", kind: "http", url: "https://example.com" },
+      message: "error at /home/hasna/private/file token=abc",
+    }],
+  });
+  const snapshot = JSON.stringify(preview.items[0].candidate.snapshot);
+
+  expect(snapshot).toContain("[local-path]");
+  expect(snapshot).toContain("token=[redacted]");
+  expect(snapshot).not.toContain("/home/hasna/private");
+  expect(snapshot).not.toContain("token=abc");
+  service.close();
+});
+
+test("import preview and apply do not leak secret-bearing target fragments", () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const rawSourceId = "https://example.com/callback#access_token=secret";
+  const preview = service.previewImport({
+    source: "manual",
+    records: [{
+      sourceId: rawSourceId,
+      monitor: { name: "callback", kind: "browser_page", url: "https://example.com/callback#access_token=secret" },
+    }],
+  });
+
+  expect(preview.totals.blocked).toBe(1);
+  expect(preview.items[0].reason).toContain("fragment contains secret-like data");
+  expect(preview.items[0].candidate.sourceId).toBe("https://example.com/callback");
+  expect(JSON.stringify(preview)).not.toContain("access_token=secret");
+  service.close();
+
+  const local = new UptimeService({ dbPath: tempDb() });
+  local.applyImport({
+    source: "manual",
+    records: [{
+      sourceId: rawSourceId,
+      monitor: { name: "callback", kind: "browser_page", url: "https://example.com/callback#access_token=secret" },
+    }],
+  });
+  expect(local.getMonitor("callback")?.url).toBe("https://example.com/callback");
+  expect(local.store.getProvenance("manual", "https://example.com/callback")?.monitorId).toBeTruthy();
+  expect(JSON.stringify(local.store.getProvenance("manual", "https://example.com/callback"))).not.toContain("access_token=secret");
+  local.close();
+});
+
+test("browser imports do not echo raw host metadata", () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const preview = service.previewImport({
+    source: "manual",
+    records: [{
+      sourceId: "page",
+      monitor: {
+        name: "page",
+        kind: "browser_page",
+        url: "https://example.com",
+        host: "/home/hasna/private token=secret",
+      },
+    }],
+  });
+
+  expect(preview.totals.create).toBe(1);
+  expect(preview.items[0].candidate.host).toBeUndefined();
+  expect(JSON.stringify(preview)).not.toContain("/home/hasna/private");
+  expect(JSON.stringify(preview)).not.toContain("token=secret");
+  service.close();
+});
+
+test("browser imports do not use hostname as a name fallback", () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const preview = service.previewImport({
+    source: "manual",
+    records: [{
+      sourceId: "page",
+      kind: "browser_page",
+      url: "https://example.com/app",
+      hostname: "internal.admin.local",
+    }],
+  });
+
+  expect(preview.totals.create).toBe(1);
+  expect(preview.items[0].candidate.name).toBe("manual-https://example.com/app");
+  expect(preview.items[0].candidate.host).toBeUndefined();
+  expect(JSON.stringify(preview)).not.toContain("internal.admin.local");
+  expect(JSON.stringify(preview)).toContain("[private-host]");
+  service.close();
+});
+
+test("import preview blocks unsafe hosted targets before apply", () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const preview = service.previewImport({
+    source: "manual",
+    records: [{ sourceId: "metadata", monitor: { name: "metadata", kind: "http", url: "http://169.254.169.254/latest/meta-data" } }],
+  });
+
+  expect(preview.totals).toMatchObject({ blocked: 1 });
+  expect(preview.items[0].reason).toContain("private or reserved IPv4");
+  const secretPreview = service.previewImport({
+    source: "manual",
+    records: [{
+      sourceId: "https://example.com/?api_key=secret#access_token=secret",
+      monitor: { name: "secret", kind: "http", url: "https://example.com/?api_key=secret" },
+    }],
+  });
+  expect(secretPreview.totals).toMatchObject({ blocked: 1 });
+  expect(secretPreview.items[0].candidate.sourceId).toBe("https://example.com/?api_key=%5Bredacted%5D");
+  expect(secretPreview.items[0].candidate.url).toBe("https://example.com/?api_key=%5Bredacted%5D");
+  expect(JSON.stringify(secretPreview)).not.toContain("api_key=secret");
+  expect(JSON.stringify(secretPreview)).not.toContain("access_token=secret");
+  expect(() => service.applyImport({
+    source: "manual",
+    records: [{ sourceId: "api", monitor: { name: "api", kind: "http", url: "https://example.com" } }],
+  })).toThrow("hosted import apply requires cloud import_batches and audit");
   service.close();
 });
 

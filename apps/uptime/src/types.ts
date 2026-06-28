@@ -1,4 +1,5 @@
-export type MonitorKind = "http" | "tcp";
+export type MonitorKind = "http" | "tcp" | "browser_page";
+export type CreateMonitorKind = "http" | "tcp";
 export type MonitorStatus = "unknown" | "up" | "down" | "paused";
 export type CheckStatus = "up" | "down";
 export type IncidentStatus = "open" | "closed";
@@ -25,7 +26,7 @@ export interface Monitor {
 
 export interface CreateMonitorInput {
   name: string;
-  kind: MonitorKind;
+  kind: CreateMonitorKind;
   url?: string;
   host?: string;
   port?: number;
@@ -37,7 +38,15 @@ export interface CreateMonitorInput {
   enabled?: boolean;
 }
 
+export interface ImportedMonitorInput extends Omit<CreateMonitorInput, "kind"> {
+  kind: MonitorKind;
+}
+
 export type UpdateMonitorInput = Partial<Omit<CreateMonitorInput, "kind">> & {
+  kind?: CreateMonitorKind;
+};
+
+export type ImportedUpdateMonitorInput = Partial<Omit<ImportedMonitorInput, "kind">> & {
   kind?: MonitorKind;
 };
 
@@ -50,6 +59,7 @@ export interface CheckResult {
   statusCode: number | null;
   error: string | null;
   attemptCount: number;
+  evidence: CheckEvidence | null;
 }
 
 export interface CheckAttemptResult {
@@ -57,6 +67,37 @@ export interface CheckAttemptResult {
   latencyMs: number | null;
   statusCode?: number | null;
   error?: string | null;
+  evidence?: CheckEvidence | null;
+}
+
+export type CheckEvidence = BrowserPageEvidence;
+
+export interface BrowserPageEvidence {
+  kind: "browser_page";
+  finalUrl: string | null;
+  navigationStatus: number | null;
+  consoleErrors: string[];
+  pageErrors: string[];
+  failedRequests: BrowserFailedRequest[];
+  screenshot: EvidenceArtifact | null;
+  artifacts: EvidenceArtifact[];
+  redacted: boolean;
+  redactionStatus: "redacted";
+  retentionClass: "short";
+}
+
+export interface BrowserFailedRequest {
+  url: string;
+  statusCode: number | null;
+  error: string | null;
+}
+
+export interface EvidenceArtifact {
+  ref: string;
+  sha256: string;
+  bytes: number;
+  contentType: string;
+  retentionClass: "short";
 }
 
 export interface Incident {

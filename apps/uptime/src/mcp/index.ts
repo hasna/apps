@@ -207,6 +207,44 @@ export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer
   );
 
   server.registerTool(
+    "uptime_import_preview",
+    {
+      title: "Preview an uptime inventory import",
+      description: "Preview monitor candidates from manual, projects, servers, domains, or deployment records without writing.",
+      inputSchema: {
+        source: z.enum(["manual", "projects", "servers", "domains", "deployment"]),
+        records: z.array(z.unknown()),
+      },
+    },
+    async (args) => jsonResult(service.previewImport({ source: args.source, records: args.records })),
+  );
+
+  server.registerTool(
+    "uptime_import_apply",
+    {
+      title: "Apply an uptime inventory import",
+      description: "Apply monitor candidates from manual, projects, servers, domains, or deployment records idempotently.",
+      inputSchema: {
+        source: z.enum(["manual", "projects", "servers", "domains", "deployment"]),
+        records: z.array(z.unknown()),
+      },
+    },
+    async (args) => jsonResult(service.applyImport({ source: args.source, records: args.records })),
+  );
+
+  server.registerTool(
+    "uptime_import_rollback",
+    {
+      title: "Rollback an uptime import batch",
+      description: "Rollback config changes from an import batch while preserving check history.",
+      inputSchema: {
+        batchId: z.string(),
+      },
+    },
+    async (args) => jsonResult(service.rollbackImport(args.batchId)),
+  );
+
+  server.registerTool(
     "uptime_results",
     {
       title: "List uptime check results",

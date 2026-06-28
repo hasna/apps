@@ -226,6 +226,58 @@ test("hosted API enforces target policy at monitor creation", async () => {
   service.close();
 });
 
+test("API previews and applies import candidates", async () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  const handler = createApiHandler(service);
+  const payload = {
+    source: "manual",
+    records: [{ sourceId: "api", monitor: { name: "api import", kind: "http", url: "https://example.com/health" } }],
+  };
+
+  const preview = await handler(jsonRequest("http://127.0.0.1/api/imports/preview", "POST", payload));
+  const previewBody = await preview.json();
+  const apply = await handler(jsonRequest("http://127.0.0.1/api/imports/apply", "POST", payload));
+  const applyBody = await apply.json();
+
+  expect(preview.status).toBe(200);
+  expect(previewBody.totals.create).toBe(1);
+  expect(service.summary().totals.monitors).toBe(1);
+  expect(apply.status).toBe(201);
+  expect(applyBody.batchId).toStartWith("imp_");
+  expect(applyBody.totals.create).toBe(1);
+  service.close();
+});
+
+test("hosted API import apply and rollback fail closed", async () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const handler = createApiHandler(service, { mode: "hosted", hostedToken: "secret" });
+
+  const preview = await handler(jsonRequest(
+    "https://uptime.test/api/v1/imports/preview",
+    "POST",
+    { source: "manual", records: [{ sourceId: "api", monitor: { name: "api", kind: "http", url: "https://example.com" } }] },
+    { origin: "https://uptime.test", authorization: "Bearer secret" },
+  ));
+  const apply = await handler(jsonRequest(
+    "https://uptime.test/api/v1/imports/apply",
+    "POST",
+    { source: "manual", records: [{ sourceId: "api", monitor: { name: "api", kind: "http", url: "https://example.com" } }] },
+    { origin: "https://uptime.test", authorization: "Bearer secret" },
+  ));
+  const rollback = await handler(jsonRequest(
+    "https://uptime.test/api/v1/imports/imp_missing/rollback",
+    "POST",
+    {},
+    { origin: "https://uptime.test", authorization: "Bearer secret" },
+  ));
+
+  expect(preview.status).toBe(200);
+  expect(apply.status).toBe(501);
+  expect((await apply.json()).error).toContain("cloud import_batches");
+  expect(rollback.status).toBe(501);
+  service.close();
+});
+
 test("hosted handler rejects a local-mode service", () => {
   const service = new UptimeService({ dbPath: tempDb() });
   expect(() => createApiHandler(service, { mode: "hosted", hostedToken: "secret" }))

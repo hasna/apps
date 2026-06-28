@@ -213,7 +213,7 @@ export function dashboardHtml(): string {
       clear(root);
       for (const item of summary.monitors) {
         const m = item.monitor;
-        const target = m.kind === 'http' ? m.url : m.host + ':' + m.port;
+        const target = m.kind === 'tcp' ? m.host + ':' + m.port : m.url;
         const incident = item.openIncident ? 'open since ' + new Date(item.openIncident.openedAt).toLocaleString() : '-';
         const tr = document.createElement('tr');
         const name = document.createElement('td');

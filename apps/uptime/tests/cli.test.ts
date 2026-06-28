@@ -121,3 +121,25 @@ test("CLI report dry-run prints a report without delivery configuration", () => 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("CLI imports preview and apply manual records", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const record = JSON.stringify({
+      sourceId: "api",
+      monitor: { name: "api import", kind: "http", url: "https://example.com/health" },
+    });
+    const preview = runCli(["imports", "preview", "--source", "manual", "--record", record, "--json"], dbPath);
+    const apply = runCli(["imports", "apply", "--source", "manual", "--record", record, "--json"], dbPath);
+    const list = runCli(["list", "--all", "--json"], dbPath);
+
+    expect(preview.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(preview.stdout)).totals.create).toBe(1);
+    expect(apply.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(apply.stdout)).batchId).toStartWith("imp_");
+    expect(JSON.parse(new TextDecoder().decode(list.stdout))[0].name).toBe("api import");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

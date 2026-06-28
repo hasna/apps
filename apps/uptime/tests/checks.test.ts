@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import net from "node:net";
-import { runHttpCheck, runMonitorCheck, runTcpCheck } from "../src/checks.js";
+import { runBrowserPageCheck, runHttpCheck, runMonitorCheck, runTcpCheck } from "../src/checks.js";
 import type { Monitor } from "../src/types.js";
 
 function monitor(overrides: Partial<Monitor> = {}): Monitor {
@@ -89,4 +89,140 @@ test("TCP check records connection failures", async () => {
 
   expect(result.status).toBe("down");
   expect(result.error).toBeTruthy();
+});
+
+test("browser_page checks fail closed without an explicit browser runner", async () => {
+  const result = await runBrowserPageCheck(monitor({ kind: "browser_page" }));
+
+  expect(result.status).toBe("down");
+  expect(result.error).toContain("browser runner");
+  expect(result.evidence?.kind).toBe("browser_page");
+  expect(result.evidence?.redacted).toBe(true);
+});
+
+test("browser_page checks capture only redacted evidence metadata", async () => {
+  const result = await runMonitorCheck(monitor({
+    kind: "browser_page",
+    url: "https://example.com/app?api_key=secret",
+  }), {
+    browserPage: async () => ({
+      finalUrl: "https://example.com/app?token=secret",
+      navigationStatus: 200,
+      consoleErrors: ["Bearer abc.def"],
+      pageErrors: ["password=hunter2 at /home/hasna/private/file"],
+      failedRequests: [{ url: "https://example.com/api?access_token=secret", statusCode: 500, error: "secret=leaked" }],
+      screenshot: {
+        ref: "artifact://screenshots/one",
+        sha256: "a".repeat(64),
+        bytes: 42,
+        contentType: "image/png",
+      },
+    }),
+  });
+
+  expect(result.status).toBe("down");
+  expect(result.evidence).toMatchObject({
+    finalUrl: "https://example.com/app?token=%5Bredacted%5D",
+    redactionStatus: "redacted",
+    retentionClass: "short",
+  });
+  expect(result.evidence?.consoleErrors[0]).toBe("Bearer [redacted]");
+  expect(result.evidence?.pageErrors[0]).toBe("password=[redacted] at [local-path]");
+  expect(result.evidence?.failedRequests[0].url).toBe("https://example.com/api?access_token=%5Bredacted%5D");
+  expect(result.evidence?.failedRequests[0].error).toBe("secret=[redacted]");
+  expect(result.evidence?.screenshot?.retentionClass).toBe("short");
+});
+
+test("browser_page evidence redacts artifact content types", async () => {
+  const result = await runBrowserPageCheck(monitor({ kind: "browser_page" }), {
+    runner: async () => ({
+      finalUrl: "https://example.com",
+      navigationStatus: 200,
+      screenshot: {
+        ref: "artifact://screenshots/one",
+        sha256: "a".repeat(64),
+        bytes: 42,
+        contentType: "image/png; token=secret /home/hasna/private",
+      },
+      artifacts: [{
+        ref: "artifact://trace/one",
+        sha256: "b".repeat(64),
+        bytes: 84,
+        contentType: "application/json; Bearer abc /Users/hasna/private",
+        retentionClass: "short",
+      }],
+    }),
+  });
+
+  expect(result.evidence?.screenshot?.contentType).toBe("image/png; token=[redacted] [local-path]");
+  expect(result.evidence?.artifacts[0].contentType).toBe("application/json; Bearer [redacted] [local-path]");
+});
+
+test("browser_page evidence rejects raw local artifact paths", async () => {
+  const result = await runBrowserPageCheck(monitor({ kind: "browser_page" }), {
+    runner: async () => ({
+      finalUrl: "https://example.com",
+      navigationStatus: 200,
+      screenshot: {
+        ref: "/tmp/screenshot.png",
+        sha256: "a".repeat(64),
+        bytes: 10,
+      },
+    }),
+  });
+
+  expect(result.status).toBe("down");
+  expect(result.error).toContain("local paths");
+});
+
+test("browser_page evidence blocks non-http evidence URLs and file artifact refs", async () => {
+  const result = await runBrowserPageCheck(monitor({ kind: "browser_page" }), {
+    runner: async () => ({
+      finalUrl: "file:///Users/hasna/private.html",
+      navigationStatus: 200,
+      failedRequests: [{ url: "data:text/plain,token=secret", statusCode: null, error: null }],
+    }),
+  });
+
+  expect(result.evidence?.finalUrl).toBe("[blocked-url]");
+  expect(result.evidence?.failedRequests[0].url).toBe("[blocked-url]");
+
+  const artifact = await runBrowserPageCheck(monitor({ kind: "browser_page" }), {
+    runner: async () => ({
+      finalUrl: "https://example.com",
+      navigationStatus: 200,
+      screenshot: {
+        ref: "File:///Users/hasna/private.png",
+        sha256: "a".repeat(64),
+        bytes: 10,
+      },
+    }),
+  });
+  expect(artifact.status).toBe("down");
+  expect(artifact.error).toContain("local paths");
+});
+
+test("browser_page evidence strips URL fragments", async () => {
+  const result = await runBrowserPageCheck(monitor({ kind: "browser_page" }), {
+    runner: async () => ({
+      finalUrl: "https://example.com/callback#access_token=secret",
+      navigationStatus: 200,
+      failedRequests: [{ url: "https://example.com/api#token=secret", statusCode: 500, error: null }],
+    }),
+  });
+
+  expect(result.evidence?.finalUrl).toBe("https://example.com/callback");
+  expect(result.evidence?.failedRequests[0].url).toBe("https://example.com/api");
+});
+
+test("browser_page runner exceptions redact top-level errors", async () => {
+  const result = await runBrowserPageCheck(monitor({ kind: "browser_page" }), {
+    runner: async () => {
+      throw new Error("Bearer abc apiToken=secret at /home/hasna/private/file");
+    },
+  });
+
+  expect(result.status).toBe("down");
+  expect(result.error).toBe("Bearer [redacted] apiToken=[redacted] at [local-path]");
+  expect(result.evidence?.pageErrors[0]).toBe("Bearer [redacted] apiToken=[redacted] at [local-path]");
 });

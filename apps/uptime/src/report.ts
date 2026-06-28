@@ -126,7 +126,7 @@ function renderMonitorLine(item: MonitorSummary): string {
 }
 
 function targetLabel(item: MonitorSummary): string {
-  return item.monitor.kind === "http" ? item.monitor.url ?? "" : `${item.monitor.host}:${item.monitor.port}`;
+  return item.monitor.kind === "tcp" ? `${item.monitor.host}:${item.monitor.port}` : item.monitor.url ?? "";
 }
 
 function resolveEmailTarget(value: boolean | UptimeEmailReportTarget): UptimeEmailReportTarget {

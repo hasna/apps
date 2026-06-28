@@ -1,12 +1,13 @@
 #!/usr/bin/env bun
 import { Command, Option } from "commander";
 import chalk from "chalk";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { UptimeService } from "../service.js";
 import { UptimeStore } from "../store.js";
 import { ensureUptimeHome, uptimeDbPath, uptimeHome } from "../paths.js";
 import { packageVersion } from "../version.js";
 import { serveUptime } from "../api.js";
+import type { ImportSource } from "../imports.js";
 import type { SendUptimeReportOptions, UptimeReportDelivery } from "../report.js";
 import type { CreateMonitorInput, Monitor, UpdateMonitorInput, UptimeSummary } from "../types.js";
 
@@ -351,6 +352,61 @@ program
     }
   });
 
+const imports = program
+  .command("imports")
+  .description("Preview, apply, and rollback inventory imports");
+
+imports
+  .command("preview")
+  .description("Preview monitor candidates from an import source without writing")
+  .requiredOption("--source <source>", "manual, projects, servers, domains, or deployment")
+  .option("--record <json>", "one JSON record")
+  .option("--file <path>", "JSON file containing an array or { records }")
+  .option("-j, --json", "print JSON")
+  .action((opts) => {
+    try {
+      const svc = service();
+      const preview = svc.previewImport(parseImportPayload(opts));
+      svc.close();
+      print(preview, renderImportPreview(preview), opts);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+imports
+  .command("apply")
+  .description("Apply monitor candidates from an import source idempotently")
+  .requiredOption("--source <source>", "manual, projects, servers, domains, or deployment")
+  .option("--record <json>", "one JSON record")
+  .option("--file <path>", "JSON file containing an array or { records }")
+  .option("-j, --json", "print JSON")
+  .action((opts) => {
+    try {
+      const svc = service();
+      const result = svc.applyImport(parseImportPayload(opts));
+      svc.close();
+      print(result, `Applied import batch ${result.batchId}: ${renderImportTotals(result.totals)}`, opts);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+imports
+  .command("rollback <batch-id>")
+  .description("Rollback config changes from an import batch while preserving check history")
+  .option("-j, --json", "print JSON")
+  .action((batchId, opts) => {
+    try {
+      const svc = service();
+      const result = svc.rollbackImport(batchId);
+      svc.close();
+      print(result, `Rolled back import batch ${result.batchId}`, opts);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
 program
   .command("backup [path]")
   .description("Create and verify a local SQLite backup")
@@ -429,14 +485,14 @@ function parseInteger(value: string): number {
 function renderMonitors(monitors: Monitor[]): string {
   if (monitors.length === 0) return "No monitors";
   return monitors.map((monitor) => {
-    const target = monitor.kind === "http" ? monitor.url : `${monitor.host}:${monitor.port}`;
+    const target = monitor.kind === "tcp" ? `${monitor.host}:${monitor.port}` : monitor.url;
     const status = renderStatus(monitor.status).padEnd(14);
     return `${status} ${sanitizeField(monitor.name).padEnd(24)} ${monitor.kind.padEnd(4)} ${sanitizeField(target ?? "")}`;
   }).join("\n");
 }
 
 function renderMonitorDetail(monitor: Monitor): string {
-  const target = monitor.kind === "http" ? monitor.url : `${monitor.host}:${monitor.port}`;
+  const target = monitor.kind === "tcp" ? `${monitor.host}:${monitor.port}` : monitor.url;
   return [
     `${chalk.bold(sanitizeField(monitor.name))} ${renderStatus(monitor.status)}`,
     `id: ${monitor.id}`,
@@ -456,6 +512,31 @@ function renderCheckResults(results: { status: string; monitorId: string; checke
     const latency = result.latencyMs == null ? "-" : `${result.latencyMs}ms`;
     return `${renderStatus(result.status).padEnd(12)} ${sanitizeField(result.monitorId)} ${result.checkedAt} ${latency} ${sanitizeField(result.error ?? "")}`;
   }).join("\n");
+}
+
+function parseImportPayload(opts: { source: string; record?: string; file?: string }) {
+  if (opts.record && opts.file) throw new Error("Choose either --record or --file, not both");
+  const raw = opts.record ?? (opts.file ? readFileSync(opts.file, "utf8") : undefined);
+  if (!raw) throw new Error("imports require --record or --file");
+  const parsed = JSON.parse(raw) as unknown;
+  const records = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === "object" && Array.isArray((parsed as { records?: unknown }).records)
+      ? (parsed as { records: unknown[] }).records
+      : [parsed];
+  return { source: opts.source as ImportSource, records };
+}
+
+function renderImportPreview(preview: { totals: Record<string, number>; items: Array<{ action: string; candidate: { name: string; kind: string }; reason: string | null }> }): string {
+  const rows = preview.items.map((item) => `${item.action.padEnd(9)} ${sanitizeField(item.candidate.name).padEnd(24)} ${item.candidate.kind}${item.reason ? ` ${sanitizeField(item.reason)}` : ""}`);
+  return [`Import preview: ${renderImportTotals(preview.totals)}`, ...rows].join("\n");
+}
+
+function renderImportTotals(totals: Record<string, number>): string {
+  return Object.entries(totals)
+    .filter(([, count]) => count > 0)
+    .map(([action, count]) => `${action}=${count}`)
+    .join(" ") || "no changes";
 }
 
 function renderSummary(summary: UptimeSummary): string {

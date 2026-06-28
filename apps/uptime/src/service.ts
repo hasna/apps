@@ -1,12 +1,15 @@
 import { runMonitorCheck } from "./checks.js";
 import { randomUUID } from "node:crypto";
-import { StaleCheckResultError, UptimeStore, type UptimeBackup, type UptimeBackupCheck, type UptimeStoreOptions } from "./store.js";
+import { applyImport, previewImport, rollbackImport, type ImportApplyResult, type ImportPreview, type ImportRequest, type ImportRollbackResult } from "./imports.js";
+import { StaleCheckResultError, UptimeStore, type MonitorProvenance, type SaveImportBatchInput, type StoredImportBatch, type UpsertMonitorProvenanceInput, type UptimeBackup, type UptimeBackupCheck, type UptimeStoreOptions } from "./store.js";
 import { buildUptimeReport, sendUptimeReport, type BuildUptimeReportOptions, type SendUptimeReportOptions, type UptimeReport, type UptimeReportDelivery } from "./report.js";
 import type {
   CheckAttemptResult,
   CheckResult,
   CreateMonitorInput,
   Incident,
+  ImportedMonitorInput,
+  ImportedUpdateMonitorInput,
   ListResultsOptions,
   Monitor,
   SchedulerHandle,
@@ -24,8 +27,8 @@ export interface UptimeStoreLike {
   readonly mode: "local" | "hosted";
   readonly dataMode: "local-sqlite" | "hosted-local-sqlite";
   close(): void;
-  createMonitor(input: CreateMonitorInput): Monitor;
-  updateMonitor(idOrName: string, input: UpdateMonitorInput): Monitor;
+  createMonitor(input: ImportedMonitorInput, options?: { allowBrowserPage?: boolean }): Monitor;
+  updateMonitor(idOrName: string, input: ImportedUpdateMonitorInput, options?: { allowBrowserPage?: boolean }): Monitor;
   deleteMonitor(idOrName: string): boolean;
   listMonitors(options?: { includeDisabled?: boolean }): Monitor[];
   getMonitor(idOrName: string): Monitor | null;
@@ -37,6 +40,12 @@ export interface UptimeStoreLike {
   acquireCheckLease(monitorId: string, owner: string, ttlMs: number): boolean;
   releaseCheckLease(monitorId: string, owner: string): void;
   recordCheckResult(input: Omit<CheckResult, "id" | "checkedAt"> & { checkedAt?: string; expectedMonitorRevision?: number }): CheckResult;
+  getProvenance(source: string, sourceId: string): MonitorProvenance | null;
+  upsertMonitorProvenance(input: UpsertMonitorProvenanceInput): MonitorProvenance;
+  saveImportBatch(input: SaveImportBatchInput): StoredImportBatch;
+  getImportBatch(batchId: string): StoredImportBatch | null;
+  markImportBatchRolledBack(batchId: string): StoredImportBatch;
+  runInTransaction?<T>(fn: () => T): T;
 }
 
 export class UptimeService {
@@ -86,6 +95,18 @@ export class UptimeService {
     return this.store.summary();
   }
 
+  previewImport(request: ImportRequest): ImportPreview {
+    return previewImport(this.store, request);
+  }
+
+  applyImport(request: ImportRequest): ImportApplyResult {
+    return applyImport(this.store, request);
+  }
+
+  rollbackImport(batchId: string): ImportRollbackResult {
+    return rollbackImport(this.store, batchId);
+  }
+
   backup(destinationPath?: string): UptimeBackup {
     return this.store.backup(destinationPath);
   }
@@ -131,6 +152,7 @@ export class UptimeService {
         latencyMs: last!.latencyMs,
         statusCode: last!.statusCode ?? null,
         error: last!.error ?? null,
+        evidence: last!.evidence ?? null,
         attemptCount,
         expectedMonitorRevision: monitor.revision,
       });

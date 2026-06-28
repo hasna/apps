@@ -3,10 +3,10 @@ import type { CreateMonitorInput, Monitor } from "./types.js";
 
 type MonitorTarget = Pick<CreateMonitorInput | Monitor, "kind" | "url" | "host" | "port">;
 
-const SECRET_PARAM_PATTERN = /(^|[_-])(token|secret|password|passwd|api[_-]?key|access[_-]?token|auth|credential|session)([_-]|$)/i;
+const SECRET_PARAM_PATTERN = /(token|secret|password|passwd|api[_-]?key|access[_-]?token|auth|credential|session)/i;
 
 export function assertHostedTargetAllowed(target: MonitorTarget): void {
-  if (target.kind === "http") {
+  if (target.kind === "http" || target.kind === "browser_page") {
     if (!target.url) throw new Error("HTTP monitors require url");
     assertHostedHttpUrlAllowed(target.url);
     return;
@@ -19,7 +19,7 @@ export function assertHostedTargetAllowed(target: MonitorTarget): void {
     }
     return;
   }
-  throw new Error("Monitor kind must be http or tcp");
+  throw new Error("Monitor kind must be http, tcp, or browser_page");
 }
 
 export function assertHostedHttpUrlAllowed(value: string): void {
@@ -34,6 +34,9 @@ export function assertHostedHttpUrlAllowed(value: string): void {
     if (SECRET_PARAM_PATTERN.test(key)) {
       throw new Error(`hosted target URL query parameter is not allowed: ${key}`);
     }
+  }
+  if (parsed.hash && SECRET_PARAM_PATTERN.test(parsed.hash)) {
+    throw new Error("hosted target URL fragment contains secret-like data");
   }
   assertHostedHostAllowed(parsed.hostname, "HTTP host");
 }

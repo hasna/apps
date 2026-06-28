@@ -197,6 +197,18 @@ async function handleApiRoute(
       limit: numericParam(url, "limit", 50),
     }));
   }
+  if (request.method === "POST" && apiPath === "/api/imports/preview") {
+    return json(service.previewImport(await jsonBody(request)));
+  }
+  if (request.method === "POST" && apiPath === "/api/imports/apply") {
+    if (hosted) throw new ApiError("hosted import apply requires cloud import_batches and audit", 501);
+    return json(service.applyImport(await jsonBody(request)), 201);
+  }
+  const importRollbackMatch = apiPath.match(/^\/api\/imports\/([^/]+)\/rollback$/);
+  if (request.method === "POST" && importRollbackMatch) {
+    if (hosted) throw new ApiError("hosted import rollback requires cloud import_batches and audit", 501);
+    return json(service.rollbackImport(decodeURIComponent(importRollbackMatch[1])));
+  }
   if (request.method === "POST" && apiPath === "/api/check-all") {
     if (hosted) throw new ApiError("hosted checks require check_jobs and probes", 501);
     return json(await service.checkAll());
