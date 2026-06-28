@@ -702,8 +702,6 @@ export class Store {
         WHERE idempotency_key IS NOT NULL;
       CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow_created ON workflow_runs(workflow_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_workflow_runs_loop_run ON workflow_runs(loop_run_id);
-      CREATE INDEX IF NOT EXISTS idx_workflow_runs_invocation ON workflow_runs(invocation_id);
-      CREATE INDEX IF NOT EXISTS idx_workflow_runs_work_item ON workflow_runs(work_item_id);
       CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status);
 
       CREATE TABLE IF NOT EXISTS workflow_invocations (
@@ -881,6 +879,7 @@ export class Store {
     this.addColumnIfMissing("workflow_runs", "manifest_path", "TEXT");
     this.addColumnIfMissing("workflow_step_runs", "pid", "INTEGER");
     this.addColumnIfMissing("workflow_step_runs", "goal_run_id", "TEXT");
+    this.createWorkflowRunBackfillIndexes();
     this.db
       .query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)")
       .run("0001_initial_and_workflows", nowIso());
@@ -909,6 +908,13 @@ export class Store {
     const columns = this.db.query(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
     if (columns.some((c) => c.name === column)) return;
     this.db.query(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
+  }
+
+  private createWorkflowRunBackfillIndexes(): void {
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_workflow_runs_invocation ON workflow_runs(invocation_id);
+      CREATE INDEX IF NOT EXISTS idx_workflow_runs_work_item ON workflow_runs(work_item_id);
+    `);
   }
 
   private assertDaemonLeaseFence(opts: DaemonLeaseFence = {}, now: string = nowIso()): void {

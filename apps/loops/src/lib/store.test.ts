@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -693,6 +694,48 @@ describe("Store", () => {
       }
       const offending = issued.filter((sql) => /ALTER\s+TABLE\s+\w+\s+ADD\s+COLUMN/i.test(sql));
       expect(offending).toEqual([]);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("migrates legacy workflow_runs before creating invocation indexes", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-legacy-workflow-runs-"));
+    const dbFile = join(root, "loops.db");
+    const legacy = new Database(dbFile);
+    try {
+      legacy.exec(`
+        CREATE TABLE workflow_runs (
+          id TEXT PRIMARY KEY,
+          workflow_id TEXT NOT NULL,
+          workflow_name TEXT NOT NULL,
+          loop_id TEXT,
+          loop_run_id TEXT,
+          scheduled_for TEXT,
+          idempotency_key TEXT,
+          status TEXT NOT NULL,
+          started_at TEXT,
+          finished_at TEXT,
+          duration_ms INTEGER,
+          error TEXT,
+          goal_run_id TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+      `);
+    } finally {
+      legacy.close();
+    }
+
+    const store = new Store(dbFile);
+    try {
+      const columns = store["db"].query("PRAGMA table_info(workflow_runs)").all() as Array<{ name: string }>;
+      expect(columns.map((column) => column.name)).toContain("invocation_id");
+      expect(columns.map((column) => column.name)).toContain("work_item_id");
+      expect(columns.map((column) => column.name)).toContain("manifest_path");
+      const indexes = store["db"].query("PRAGMA index_list(workflow_runs)").all() as Array<{ name: string }>;
+      expect(indexes.map((index) => index.name)).toContain("idx_workflow_runs_invocation");
+      expect(indexes.map((index) => index.name)).toContain("idx_workflow_runs_work_item");
     } finally {
       store.close();
     }
