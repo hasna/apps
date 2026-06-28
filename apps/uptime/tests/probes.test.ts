@@ -127,6 +127,97 @@ test("probe submissions normalize browser evidence before storing it", () => {
   service.close();
 });
 
+test("probe submissions preserve HTTP target-policy evidence", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  const monitor = service.createMonitor({ name: "api-policy", kind: "http", url: "https://example.com" });
+  const probe = service.createProbe({ name: "private-probe-01" });
+  const job = service.claimProbeCheckJob({
+    jobId: service.createProbeCheckJob({ monitorId: monitor.id, scheduleSlot: "slot-http-policy" }).id,
+    probeId: probe.id,
+  });
+  const submission = signedSubmission({
+    probe,
+    monitor,
+    job,
+    privateKeyPem: probe.privateKeyPem!,
+    evidence: {
+      kind: "http_target_policy",
+      mode: "hosted",
+      finalUrl: "https://example.com/health?token=secret",
+      redirectCount: 0,
+      decisions: [{
+        stage: "request",
+        decision: "allowed",
+        url: "https://example.com/health?api_key=secret",
+        host: "example.com",
+        targetClass: "public_http",
+        probeClass: "public",
+        protocol: "https:",
+        resolvedAddresses: [{ address: "93.184.216.34", family: 4 }],
+        ruleId: "hosted-http-runtime-target-policy",
+        reason: "Bearer abc at /Users/example/private/file",
+      }],
+      redacted: true,
+      redactionStatus: "redacted",
+      retentionClass: "short",
+    },
+  });
+
+  const { result } = service.submitProbeResult(submission);
+  expect(result.evidence?.kind).toBe("http_target_policy");
+  if (result.evidence?.kind !== "http_target_policy") throw new Error("expected HTTP target-policy evidence");
+  expect(result.evidence.finalUrl).toBe("https://example.com/health?token=%5Bredacted%5D");
+  expect(result.evidence.decisions[0]).toMatchObject({
+    targetClass: "public_http",
+    probeClass: "public",
+    resolvedAddresses: [{ address: "93.184.216.34", family: 4 }],
+  });
+  expect(JSON.stringify(result.evidence)).not.toContain("secret");
+  expect(JSON.stringify(result.evidence)).not.toContain("/Users/example/private");
+  service.close();
+});
+
+test("probe submissions reject malformed HTTP target-policy evidence", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  const monitor = service.createMonitor({ name: "api-policy-invalid", kind: "http", url: "https://example.com" });
+  const probe = service.createProbe({ name: "private-probe-01" });
+  const job = service.claimProbeCheckJob({
+    jobId: service.createProbeCheckJob({ monitorId: monitor.id, scheduleSlot: "slot-http-policy-invalid" }).id,
+    probeId: probe.id,
+  });
+  const malformedEvidence = {
+    kind: "http_target_policy",
+    mode: "hosted",
+    finalUrl: null,
+    redirectCount: 0,
+    decisions: [{
+      stage: "request",
+      decision: "blocked",
+      url: "https://example.com",
+      host: "example.com",
+      targetClass: "public_http",
+      probeClass: "public",
+      protocol: "https:",
+      resolvedAddresses: [],
+      ruleId: "hosted-http-runtime-target-policy",
+      reason: 123,
+    }],
+    redacted: true,
+    redactionStatus: "redacted",
+    retentionClass: "short",
+  } as unknown as CheckEvidence;
+  const submission = signedSubmission({
+    probe,
+    monitor,
+    job,
+    privateKeyPem: probe.privateKeyPem!,
+    evidence: malformedEvidence,
+  });
+
+  expect(() => service.submitProbeResult(submission)).toThrow("HTTP target-policy evidence is invalid");
+  service.close();
+});
+
 test("probe submissions reject local artifact refs in evidence", () => {
   const service = new UptimeService({ dbPath: tempDb() });
   const monitor = service.createMonitor({ name: "api", kind: "http", url: "https://example.com" });

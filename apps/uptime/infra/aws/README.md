@@ -55,8 +55,9 @@ creation and is not sufficient for live scale-out approval.
 ## Current Blockers
 
 - Hosted production auth/RBAC still needs scoped, revocable credentials.
-- Public probe runtime still needs execution-time DNS/redirect/rebinding SSRF
-  enforcement.
+- Public probe runtime has SDK-level hosted HTTP target-policy enforcement, but
+  the public-probe worker and cloud check-job lease path are still disabled until
+  they are wired to that runner and validated in AWS.
 - Hosted private-probe enrollment/heartbeat/revocation is still
   fail-closed.
 

@@ -4,6 +4,46 @@ import type { CreateMonitorInput, Monitor } from "./types.js";
 type MonitorTarget = Pick<CreateMonitorInput | Monitor, "kind" | "url" | "host" | "port">;
 
 const SECRET_PARAM_PATTERN = /(token|secret|password|passwd|api[_-]?key|access[_-]?token|auth|credential|session)/i;
+const DENIED_IPV4_CIDRS = [
+  ["0.0.0.0", 8],
+  ["10.0.0.0", 8],
+  ["100.64.0.0", 10],
+  ["127.0.0.0", 8],
+  ["169.254.0.0", 16],
+  ["172.16.0.0", 12],
+  ["192.0.0.0", 24],
+  ["192.0.2.0", 24],
+  ["192.88.99.0", 24],
+  ["192.168.0.0", 16],
+  ["198.18.0.0", 15],
+  ["198.51.100.0", 24],
+  ["203.0.113.0", 24],
+  ["224.0.0.0", 4],
+  ["240.0.0.0", 4],
+] as const;
+
+const DENIED_IPV6_CIDRS = [
+  ["::", 128],
+  ["::1", 128],
+  ["64:ff9b::", 96],
+  ["64:ff9b:1::", 48],
+  ["100::", 64],
+  ["100:0:0:1::", 64],
+  ["2001::", 23],
+  ["2001:db8::", 32],
+  ["2002::", 16],
+  ["2620:4f:8000::", 48],
+  ["3fff::", 20],
+  ["5f00::", 16],
+  ["fc00::", 7],
+  ["fe80::", 10],
+  ["ff00::", 8],
+] as const;
+
+export interface HostedResolvedAddress {
+  address: string;
+  family?: 4 | 6 | number;
+}
 
 export function assertHostedTargetAllowed(target: MonitorTarget): void {
   if (target.kind === "http" || target.kind === "browser_page") {
@@ -42,7 +82,7 @@ export function assertHostedHttpUrlAllowed(value: string): void {
 }
 
 export function assertHostedHostAllowed(hostname: string, label = "host"): void {
-  const host = normalizeHost(hostname);
+  const host = normalizeHostedHost(hostname);
   if (!host) throw new Error(`${label} is required`);
   if (host === "localhost" || host.endsWith(".localhost")) {
     throw new Error(`${label} is not allowed in hosted mode: localhost`);
@@ -59,46 +99,57 @@ export function assertHostedHostAllowed(hostname: string, label = "host"): void 
   }
 }
 
-function normalizeHost(hostname: string): string {
+export function assertHostedResolvedAddressesAllowed(hostname: string, addresses: HostedResolvedAddress[], label = "resolved address"): void {
+  if (addresses.length === 0) {
+    throw new Error(`${label} is not allowed in hosted mode: DNS returned no addresses for ${normalizeHostedHost(hostname) || "host"}`);
+  }
+  for (const entry of addresses) {
+    assertHostedAddressAllowed(entry.address, label);
+  }
+}
+
+export function assertHostedAddressAllowed(address: string, label = "resolved address"): void {
+  const host = normalizeHostedHost(address);
+  const ipVersion = net.isIP(host);
+  if (ipVersion === 4 && isDeniedIpv4(host)) {
+    throw new Error(`${label} is not allowed in hosted mode: private or reserved IPv4`);
+  }
+  if (ipVersion === 6 && isDeniedIpv6(host)) {
+    throw new Error(`${label} is not allowed in hosted mode: private or reserved IPv6`);
+  }
+  if (ipVersion === 0) {
+    throw new Error(`${label} is not allowed in hosted mode: DNS returned a non-IP address`);
+  }
+}
+
+export function normalizeHostedHost(hostname: string): string {
   return hostname.trim().toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
 }
 
 function isDeniedIpv4(ip: string): boolean {
-  const parts = ip.split(".").map((part) => Number(part));
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return true;
-  }
-  const [a, b] = parts;
-  return (
-    a === 0
-    || a === 10
-    || a === 127
-    || (a === 100 && b >= 64 && b <= 127)
-    || (a === 169 && b === 254)
-    || (a === 172 && b >= 16 && b <= 31)
-    || (a === 192 && b === 168)
-    || a >= 224
-  );
+  const parts = parseIpv4Words(ip);
+  if (!parts) return true;
+  return DENIED_IPV4_CIDRS.some(([base, prefix]) => ipv4MatchesCidr(parts, parseIpv4Words(base)!, prefix));
 }
 
 function isDeniedIpv6(ip: string): boolean {
   const normalized = ip.toLowerCase();
-  const mappedIpv4 = ipv4FromMappedIpv6(normalized);
-  if (mappedIpv4) return isDeniedIpv4(mappedIpv4);
   const words = parseIpv6Words(normalized);
-  return (
-    normalized === "::"
-    || normalized === "::1"
-    || (words !== null && (words[0] & 0xffc0) === 0xfe80)
-    || normalized.startsWith("fc")
-    || normalized.startsWith("fd")
-    || normalized.startsWith("ff")
-  );
+  if (!words) return true;
+  const mappedIpv4 = ipv4FromMappedIpv6Words(words);
+  if (mappedIpv4) return isDeniedIpv4(mappedIpv4);
+  return isIpv4CompatibleIpv6(words)
+    || DENIED_IPV6_CIDRS.some(([base, prefix]) => ipv6MatchesCidr(words, parseIpv6Words(base)!, prefix));
 }
 
-function ipv4FromMappedIpv6(ip: string): string | null {
-  const words = parseIpv6Words(ip);
-  if (!words) return null;
+function isIpv4CompatibleIpv6(words: number[] | null): boolean {
+  if (!words) return false;
+  if (!words.slice(0, 6).every((word) => word === 0)) return false;
+  if (words[6] === 0 && (words[7] === 0 || words[7] === 1)) return false;
+  return true;
+}
+
+function ipv4FromMappedIpv6Words(words: number[]): string | null {
   if (
     words[0] !== 0
     || words[1] !== 0
@@ -109,12 +160,36 @@ function ipv4FromMappedIpv6(ip: string): string | null {
   ) {
     return null;
   }
+  return ipv4FromWords(words[6], words[7]);
+}
+
+function ipv4FromWords(high: number, low: number): string {
   return [
-    words[6] >> 8,
-    words[6] & 0xff,
-    words[7] >> 8,
-    words[7] & 0xff,
+    high >> 8,
+    high & 0xff,
+    low >> 8,
+    low & 0xff,
   ].join(".");
+}
+
+function ipv4MatchesCidr(parts: [number, number, number, number], base: [number, number, number, number], prefix: number): boolean {
+  const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+  return ((ipv4ToNumber(parts) & mask) >>> 0) === ((ipv4ToNumber(base) & mask) >>> 0);
+}
+
+function ipv4ToNumber(parts: [number, number, number, number]): number {
+  return (((parts[0] << 24) >>> 0) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+}
+
+function ipv6MatchesCidr(words: number[], base: number[], prefix: number): boolean {
+  const fullWords = Math.floor(prefix / 16);
+  for (let index = 0; index < fullWords; index += 1) {
+    if (words[index] !== base[index]) return false;
+  }
+  const remainingBits = prefix % 16;
+  if (remainingBits === 0) return true;
+  const mask = (0xffff << (16 - remainingBits)) & 0xffff;
+  return (words[fullWords] & mask) === (base[fullWords] & mask);
 }
 
 function parseIpv6Words(value: string): number[] | null {

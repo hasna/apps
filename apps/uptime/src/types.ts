@@ -245,7 +245,34 @@ export interface ListAuditEventsOptions {
   limit?: number;
 }
 
-export type CheckEvidence = BrowserPageEvidence;
+export type CheckEvidence = BrowserPageEvidence | HttpTargetPolicyEvidence;
+
+export interface HttpTargetPolicyEvidence {
+  kind: "http_target_policy";
+  mode: "hosted";
+  finalUrl: string | null;
+  redirectCount: number;
+  decisions: HttpTargetPolicyDecision[];
+  redacted: boolean;
+  redactionStatus: "redacted";
+  retentionClass: "short";
+}
+
+export interface HttpTargetPolicyDecision {
+  stage: "request" | "redirect";
+  decision: "allowed" | "blocked";
+  url: string;
+  host: string;
+  targetClass: "public_http";
+  probeClass: "public";
+  protocol: "http:" | "https:";
+  resolvedAddresses: Array<{
+    address: string;
+    family: 4 | 6;
+  }>;
+  ruleId: string;
+  reason: string | null;
+}
 
 export interface BrowserPageEvidence {
   kind: "browser_page";

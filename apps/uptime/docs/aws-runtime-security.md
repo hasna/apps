@@ -118,8 +118,8 @@ Security groups:
   Manager, and notification services through approved endpoints.
 - `open-uptime-public-probe-sg`: no inbound, outbound through the public target
   policy path once public probe execution is enabled. Keep desired count `0`
-  until the application target policy enforces DNS rebinding and URL semantics
-  that security groups cannot express.
+  until the public-probe worker claims cloud jobs through the hosted HTTP runner,
+  emits target-policy evidence, and has AWS smoke evidence.
 - `open-uptime-rds-client-sg`: allowed by the canonical RDS security group for
   the dedicated Uptime DB user.
 
@@ -261,9 +261,12 @@ role. Do not store AWS access keys in Open Deployment local DB rows.
 
 AWS network controls and application target policy are both required. The
 current hosted API enforces configuration-time checks for direct denied hosts,
-secret-bearing URLs, and private DNS suffixes. Public probe execution remains
-disabled until execution-time DNS resolution, address pinning, redirect
-validation, rebinding protection, and policy-decision logging are implemented.
+secret-bearing URLs, and private DNS suffixes. The SDK also exposes
+`runHostedHttpCheck` for hosted public HTTP probes; it resolves DNS at
+execution time, denies unsafe answers, pins the validated address into the
+request, validates redirects, and records target-policy decisions. Public probe
+execution remains disabled until cloud check-job leases are wired to this runner
+and the behavior is validated in AWS.
 
 The required hosted public-probe policy must deny:
 

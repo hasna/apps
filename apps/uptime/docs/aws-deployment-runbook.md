@@ -369,11 +369,11 @@ routes are backed by cloud check jobs and cloud audit rows.
   URLs, or probe private keys in task definitions. Use ECS `secrets.valueFrom`
   refs such as `HASNA_UPTIME_HOSTED_TOKEN`.
 - Do not run public probe workers against private targets.
-- Do not enable public probe workers until runtime target policy resolves and
-  pins DNS answers, rejects redirects and DNS rebinding into denied ranges, and
-  emits target-policy decision records. The current configuration-time policy
-  blocks direct denied hosts, including IPv4-mapped IPv6 forms, but it is not a
-  substitute for execution-time DNS and redirect enforcement.
+- Do not enable public probe workers until their cloud check-job path calls
+  `runHostedHttpCheck`, records target-policy decision evidence, and passes AWS
+  smokes for denied DNS answers, redirect-to-denied targets, and address
+  pinning. The SDK runner now handles execution-time DNS and redirect
+  enforcement, but it is not active until the worker is wired to it.
 - Do not enable scheduler, public-probe, reporter, or migration workers against
   the EFS SQLite bridge; those services need Postgres/cloud leases first.
 - Do not expose dashboard/API routes without hosted auth and workspace checks.

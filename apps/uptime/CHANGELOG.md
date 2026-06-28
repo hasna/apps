@@ -6,6 +6,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-06-28
+
+### Added
+
+- Added hosted HTTP runtime target-policy checks through `runHostedHttpCheck`.
+  The runner resolves DNS at execution time, rejects denied answers, pins the
+  validated address into the request, validates redirects, and records
+  target-policy decision evidence.
+- Added `isBrowserPageEvidence` and `isHttpTargetPolicyEvidence` SDK helpers for
+  narrowing the expanded `CheckEvidence` union.
+
+### Changed
+
+- Tightened hosted target policy coverage for reserved IPv4 documentation and
+  benchmark ranges plus IPv4-compatible, translation, transition, documentation,
+  and other special-purpose IPv6 forms.
+- Updated AWS planning and runbook docs so public probes remain blocked until
+  cloud check-job workers are wired to the hosted HTTP runner and validated in
+  AWS.
+
 ## [0.1.11] - 2026-06-28
 
 ### Changed

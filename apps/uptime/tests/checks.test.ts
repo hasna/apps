@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import net from "node:net";
-import { runBrowserPageCheck, runHttpCheck, runMonitorCheck, runTcpCheck } from "../src/checks.js";
-import type { Monitor } from "../src/types.js";
+import { runBrowserPageCheck, runHostedHttpCheck, runHttpCheck, runMonitorCheck, runTcpCheck } from "../src/checks.js";
+import type { BrowserPageEvidence, CheckAttemptResult, Monitor } from "../src/types.js";
 
 function monitor(overrides: Partial<Monitor> = {}): Monitor {
   return {
@@ -27,6 +27,11 @@ function monitor(overrides: Partial<Monitor> = {}): Monitor {
   };
 }
 
+function expectBrowserEvidence(result: CheckAttemptResult): BrowserPageEvidence {
+  if (result.evidence?.kind !== "browser_page") throw new Error("expected browser page evidence");
+  return result.evidence;
+}
+
 test("HTTP check accepts 2xx and 3xx by default", async () => {
   const result = await runHttpCheck(monitor(), async () => ({ status: 302 }));
   expect(result.status).toBe("up");
@@ -39,6 +44,111 @@ test("HTTP check enforces exact expected status when configured", async () => {
   expect(result.status).toBe("down");
   expect(result.statusCode).toBe(200);
   expect(result.error).toBe("unexpected status 200");
+});
+
+test("hosted HTTP check resolves and pins the allowed address used for the request", async () => {
+  const pinnedAddresses: string[] = [];
+  const result = await runHostedHttpCheck(monitor({
+    url: "https://example.com/status",
+    expectedStatus: 204,
+  }), {
+    resolveHost: async (hostname) => {
+      expect(hostname).toBe("example.com");
+      return [{ address: "93.184.216.34", family: 4 }];
+    },
+    request: async (context) => {
+      pinnedAddresses.push(context.address.address);
+      expect(context.url.hostname).toBe("example.com");
+      expect(context.address.family).toBe(4);
+      return { status: 204 };
+    },
+  });
+
+  expect(result.status).toBe("up");
+  expect(result.statusCode).toBe(204);
+  expect(pinnedAddresses).toEqual(["93.184.216.34"]);
+  expect(result.evidence?.kind).toBe("http_target_policy");
+  if (result.evidence?.kind !== "http_target_policy") throw new Error("expected HTTP target-policy evidence");
+  expect(result.evidence.decisions[0]).toMatchObject({
+    decision: "allowed",
+    host: "example.com",
+    targetClass: "public_http",
+    probeClass: "public",
+    resolvedAddresses: [{ address: "93.184.216.34", family: 4 }],
+  });
+});
+
+test("hosted HTTP check rejects DNS answers to denied ranges before making a request", async () => {
+  let requested = false;
+  const result = await runHostedHttpCheck(monitor({
+    url: "https://metadata-proxy.example/status",
+  }), {
+    resolveHost: async () => [{ address: "169.254.169.254", family: 4 }],
+    request: async () => {
+      requested = true;
+      return { status: 200 };
+    },
+  });
+
+  expect(requested).toBe(false);
+  expect(result.status).toBe("down");
+  expect(result.error).toContain("private or reserved IPv4");
+  expect(result.evidence?.kind).toBe("http_target_policy");
+  if (result.evidence?.kind !== "http_target_policy") throw new Error("expected HTTP target-policy evidence");
+  expect(result.evidence.decisions[0].decision).toBe("blocked");
+  expect(result.evidence.decisions[0].resolvedAddresses).toEqual([{ address: "169.254.169.254", family: 4 }]);
+});
+
+test("hosted HTTP check validates redirect targets and blocks redirect rebinding", async () => {
+  const requestedHosts: string[] = [];
+  const result = await runHostedHttpCheck(monitor({
+    url: "https://example.com/start",
+  }), {
+    resolveHost: async (hostname) => hostname === "example.com"
+      ? [{ address: "93.184.216.34", family: 4 }]
+      : [{ address: "10.0.0.5", family: 4 }],
+    request: async (context) => {
+      requestedHosts.push(context.url.hostname);
+      return { status: 302, headers: { location: "https://rebind.example/health" } };
+    },
+  });
+
+  expect(requestedHosts).toEqual(["example.com"]);
+  expect(result.status).toBe("down");
+  expect(result.error).toContain("private or reserved IPv4");
+  expect(result.evidence?.kind).toBe("http_target_policy");
+  if (result.evidence?.kind !== "http_target_policy") throw new Error("expected HTTP target-policy evidence");
+  expect(result.evidence.redirectCount).toBe(1);
+  expect(result.evidence.decisions.map((decision) => decision.decision)).toEqual(["allowed", "blocked"]);
+  expect(result.evidence.decisions[1].host).toBe("rebind.example");
+});
+
+test("hosted HTTP check rejects redirect targets resolving to IPv4-translated IPv6", async () => {
+  const requestedHosts: string[] = [];
+  const result = await runHostedHttpCheck(monitor({
+    url: "https://example.com/start",
+  }), {
+    resolveHost: async (hostname) => hostname === "example.com"
+      ? [{ address: "93.184.216.34", family: 4 }]
+      : [{ address: "64:ff9b::a9fe:a9fe", family: 6 }],
+    request: async (context) => {
+      requestedHosts.push(context.url.hostname);
+      return { status: 301, headers: { location: "https://nat64.example/metadata" } };
+    },
+  });
+
+  expect(requestedHosts).toEqual(["example.com"]);
+  expect(result.status).toBe("down");
+  expect(result.error).toContain("private or reserved IPv6");
+  expect(result.evidence?.kind).toBe("http_target_policy");
+  if (result.evidence?.kind !== "http_target_policy") throw new Error("expected HTTP target-policy evidence");
+  expect(result.evidence.decisions.map((decision) => decision.decision)).toEqual(["allowed", "blocked"]);
+  expect(result.evidence.decisions[1]).toMatchObject({
+    host: "nat64.example",
+    targetClass: "public_http",
+    probeClass: "public",
+    resolvedAddresses: [{ address: "64:ff9b::a9fe:a9fe", family: 6 }],
+  });
 });
 
 test("disabled monitors are not probed", async () => {
@@ -127,11 +237,12 @@ test("browser_page checks capture only redacted evidence metadata", async () => 
     redactionStatus: "redacted",
     retentionClass: "short",
   });
-  expect(result.evidence?.consoleErrors[0]).toBe("Bearer [redacted]");
-  expect(result.evidence?.pageErrors[0]).toBe("password=[redacted] at [local-path]");
-  expect(result.evidence?.failedRequests[0].url).toBe("https://example.com/api?access_token=%5Bredacted%5D");
-  expect(result.evidence?.failedRequests[0].error).toBe("secret=[redacted]");
-  expect(result.evidence?.screenshot?.retentionClass).toBe("short");
+  const evidence = expectBrowserEvidence(result);
+  expect(evidence.consoleErrors[0]).toBe("Bearer [redacted]");
+  expect(evidence.pageErrors[0]).toBe("password=[redacted] at [local-path]");
+  expect(evidence.failedRequests[0].url).toBe("https://example.com/api?access_token=%5Bredacted%5D");
+  expect(evidence.failedRequests[0].error).toBe("secret=[redacted]");
+  expect(evidence.screenshot?.retentionClass).toBe("short");
 });
 
 test("browser_page evidence redacts artifact content types", async () => {
@@ -155,8 +266,9 @@ test("browser_page evidence redacts artifact content types", async () => {
     }),
   });
 
-  expect(result.evidence?.screenshot?.contentType).toBe("image/png; token=[redacted] [local-path]");
-  expect(result.evidence?.artifacts[0].contentType).toBe("application/json; Bearer [redacted] [local-path]");
+  const evidence = expectBrowserEvidence(result);
+  expect(evidence.screenshot?.contentType).toBe("image/png; token=[redacted] [local-path]");
+  expect(evidence.artifacts[0].contentType).toBe("application/json; Bearer [redacted] [local-path]");
 });
 
 test("browser_page evidence rejects raw local artifact paths", async () => {
@@ -185,8 +297,9 @@ test("browser_page evidence blocks non-http evidence URLs and file artifact refs
     }),
   });
 
-  expect(result.evidence?.finalUrl).toBe("[blocked-url]");
-  expect(result.evidence?.failedRequests[0].url).toBe("[blocked-url]");
+  const evidence = expectBrowserEvidence(result);
+  expect(evidence.finalUrl).toBe("[blocked-url]");
+  expect(evidence.failedRequests[0].url).toBe("[blocked-url]");
 
   const artifact = await runBrowserPageCheck(monitor({ kind: "browser_page" }), {
     runner: async () => ({
@@ -212,8 +325,9 @@ test("browser_page evidence strips URL fragments", async () => {
     }),
   });
 
-  expect(result.evidence?.finalUrl).toBe("https://example.com/callback");
-  expect(result.evidence?.failedRequests[0].url).toBe("https://example.com/api");
+  const evidence = expectBrowserEvidence(result);
+  expect(evidence.finalUrl).toBe("https://example.com/callback");
+  expect(evidence.failedRequests[0].url).toBe("https://example.com/api");
 });
 
 test("browser_page runner exceptions redact top-level errors", async () => {
@@ -225,5 +339,5 @@ test("browser_page runner exceptions redact top-level errors", async () => {
 
   expect(result.status).toBe("down");
   expect(result.error).toBe("Bearer [redacted] apiToken=[redacted] at [local-path]");
-  expect(result.evidence?.pageErrors[0]).toBe("Bearer [redacted] apiToken=[redacted] at [local-path]");
+  expect(expectBrowserEvidence(result).pageErrors[0]).toBe("Bearer [redacted] apiToken=[redacted] at [local-path]");
 });

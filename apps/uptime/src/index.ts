@@ -1,6 +1,15 @@
 export { createUptimeClient, UptimeService } from "./service.js";
 export { UptimeStore } from "./store.js";
-export { runBrowserPageCheck, runMonitorCheck, runHttpCheck, runTcpCheck } from "./checks.js";
+export {
+  isBrowserPageEvidence,
+  isHttpTargetPolicyEvidence,
+  normalizeHttpTargetPolicyEvidence,
+  runBrowserPageCheck,
+  runHostedHttpCheck,
+  runMonitorCheck,
+  runHttpCheck,
+  runTcpCheck,
+} from "./checks.js";
 export { createApiHandler, serveUptime } from "./api.js";
 export { applyImport, previewImport, rollbackImport } from "./imports.js";
 export { buildUptimeReport, sendUptimeReport } from "./report.js";
@@ -21,6 +30,12 @@ export type {
   BrowserPageRunner,
   BrowserPageRunnerResult,
   FetchLike,
+  HostedDnsResolver,
+  HostedHttpCheckOptions,
+  HostedHttpRequestContext,
+  HostedHttpRequestLike,
+  HostedHttpResponse,
+  MonitorCheckOptions,
 } from "./checks.js";
 export type {
   ImportAction,
@@ -48,6 +63,8 @@ export type {
   ImportedMonitorInput,
   ImportedUpdateMonitorInput,
   EvidenceArtifact,
+  HttpTargetPolicyDecision,
+  HttpTargetPolicyEvidence,
   Incident,
   IncidentStatus,
   ListAuditEventsOptions,

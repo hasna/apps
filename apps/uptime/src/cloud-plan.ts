@@ -151,7 +151,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
   const image = clean(options.image, `${imageRepositoryUri}@sha256:<image-digest>`);
   const evidenceBucket = clean(options.evidenceBucket, `hasna-${stage}-${prefix}-evidence`);
   const hostedSqliteDbPath = clean(options.hostedSqliteDbPath, DEFAULT_HOSTED_SQLITE_DB);
-  const runtimePackageVersion = clean(options.runtimePackageVersion, "0.1.11");
+  const runtimePackageVersion = clean(options.runtimePackageVersion, "0.1.12");
   const protectedAccessMode = options.protectedAccessMode ?? DEFAULT_PROTECTED_ACCESS_MODE;
   const protectedAccessUrl = protectedAccessMode === "cloudfront_default_domain" ? "https://<cloudfront-domain>" : `https://${hostname}`;
   const cluster = `${prefix}-${stage}`;
@@ -298,7 +298,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
       "The infrastructure owner repository was not found in this workspace.",
       "The EFS SQLite bridge is single-writer only: web target desired count is 1 and scheduler/public-probe/reporter targets remain 0 until Postgres and cloud leases exist.",
       "Hosted production auth/RBAC must replace broad static hosted-token operation before exposure.",
-      "Public probe execution still needs DNS, redirect, and rebinding SSRF enforcement plus cloud check-job leases.",
+      "Public probe execution still needs cloud check-job leases wired to runHostedHttpCheck and live policy-decision log evidence.",
       "Private probe enrollment, claim, submit, heartbeat, revocation, and rotation are not cloud-backed yet.",
     ],
     requiredEvidence: [

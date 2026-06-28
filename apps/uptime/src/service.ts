@@ -1,4 +1,4 @@
-import { normalizeBrowserEvidence, runMonitorCheck } from "./checks.js";
+import { normalizeBrowserEvidence, normalizeHttpTargetPolicyEvidence, runMonitorCheck } from "./checks.js";
 import { createPublicKey, randomUUID } from "node:crypto";
 import { applyImport, previewImport, rollbackImport, type ImportApplyResult, type ImportPreview, type ImportRequest, type ImportRollbackResult } from "./imports.js";
 import { generateProbeKeyPair, probePublicKeyFingerprint, verifyProbeResultSignature } from "./probes.js";
@@ -7,6 +7,7 @@ import { buildUptimeReport, sendUptimeReport, type BuildUptimeReportOptions, typ
 import type {
   AuditEvent,
   CheckAttemptResult,
+  CheckEvidence,
   CheckResult,
   CreateReportScheduleInput,
   CreateProbeInput,
@@ -560,7 +561,7 @@ export class UptimeService {
     if (job.claimedByProbeId !== probe.id) throw new Error("Probe job was claimed by another probe");
     if (job.fencingToken !== input.fencingToken) throw new Error("Probe job fencing token is invalid");
     if (!job.leaseExpiresAt || job.leaseExpiresAt <= new Date().toISOString()) throw new Error("Probe job lease expired");
-    const evidence = input.evidence ? normalizeBrowserEvidence(monitor.url ?? monitor.host ?? "https://example.invalid", input.evidence) : null;
+    const evidence = input.evidence ? normalizeSubmittedEvidence(monitor.url ?? monitor.host ?? "https://example.invalid", input.evidence) : null;
     const result = this.store.recordCheckResult({
       monitorId: monitor.id,
       checkedAt: input.checkedAt,
@@ -605,6 +606,12 @@ export class MonitorCheckBusyError extends Error {
 
 function enabledReportChannels(schedule: ReportSchedule): string[] {
   return (["email", "sms", "logs"] as const).filter((channel) => Boolean(schedule.channels[channel]));
+}
+
+function normalizeSubmittedEvidence(sourceUrl: string, evidence: CheckEvidence): CheckEvidence {
+  if (evidence.kind === "browser_page") return normalizeBrowserEvidence(sourceUrl, evidence);
+  if (evidence.kind === "http_target_policy") return normalizeHttpTargetPolicyEvidence(evidence);
+  throw new Error("Unsupported probe evidence kind");
 }
 
 function validateProbeSubmission(input: ProbeResultSubmission): void {

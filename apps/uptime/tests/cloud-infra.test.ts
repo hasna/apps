@@ -99,7 +99,7 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(variables).toContain("web            = 0");
   expect(tfvars).toContain("container_image");
   expect(tfvars).toContain('protected_access_mode    = "cloudfront_default_domain"');
-  expect(tfvars).toContain('runtime_package_version  = "0.1.11"');
+  expect(tfvars).toContain('runtime_package_version  = "0.1.12"');
   expect(tfvars).toContain('project_name             = "open-uptime"');
   expect(tfvars).toContain("monthly_budget_limit_usd");
   expect(tfvars).toContain("budget_alert_email_addresses");

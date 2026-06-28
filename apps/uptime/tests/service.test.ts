@@ -6,7 +6,7 @@ import { Database } from "bun:sqlite";
 import { runMonitorCheck } from "../src/checks.js";
 import { UptimeService } from "../src/service.js";
 import { UptimeStore } from "../src/store.js";
-import type { CheckAttemptResult, Monitor } from "../src/types.js";
+import type { BrowserPageEvidence, CheckAttemptResult, CheckResult, Monitor } from "../src/types.js";
 
 const cleanup: string[] = [];
 
@@ -20,6 +20,11 @@ function tempDb(): string {
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-"));
   cleanup.push(dir);
   return join(dir, "uptime.db");
+}
+
+function expectBrowserEvidence(result: CheckResult): BrowserPageEvidence {
+  if (result.evidence?.kind !== "browser_page") throw new Error("expected browser page evidence");
+  return result.evidence;
 }
 
 test("creates monitors and records successful checks", async () => {
@@ -733,13 +738,14 @@ test("import preview/apply is dry-run, idempotent, and stores browser evidence m
   expect(second.totals).toMatchObject({ unchanged: 1 });
 
   const result = await service.checkMonitor("home page");
-  expect(result.evidence?.screenshot?.ref).toBe("artifact://screenshots/home");
-  expect(result.evidence?.finalUrl).toBe("https://example.com/app?token=%5Bredacted%5D");
+  const resultEvidence = expectBrowserEvidence(result);
+  expect(resultEvidence.screenshot?.ref).toBe("artifact://screenshots/home");
+  expect(resultEvidence.finalUrl).toBe("https://example.com/app?token=%5Bredacted%5D");
   service.close();
 
   const reopened = new UptimeService({ dbPath });
   const stored = reopened.listResults({ limit: 1 })[0];
-  expect(stored.evidence?.screenshot?.bytes).toBe(120);
+  expect(expectBrowserEvidence(stored).screenshot?.bytes).toBe(120);
   const rolledBack = reopened.rollbackImport(applied.batchId);
   expect(rolledBack.items[0].action).toBe("disabled");
   expect(reopened.getMonitor("home page")?.enabled).toBe(false);

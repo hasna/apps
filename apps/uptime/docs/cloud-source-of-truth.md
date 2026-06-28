@@ -120,10 +120,13 @@ or delete workspace B data.
 ## Target Policy
 
 The target-state architecture uses one shared target policy at both
-configuration time and execution time. The current hosted API implements only
-the configuration-time portion for direct targets; public probe execution stays
-disabled until runtime DNS resolution, address pinning, redirect validation,
-DNS-rebinding protection, and decision records exist.
+configuration time and execution time. The current hosted API implements
+configuration-time checks for direct targets, and the SDK exposes
+`runHostedHttpCheck` for hosted public HTTP probes. That runner performs runtime
+DNS resolution, address pinning, redirect validation, DNS-rebinding protection,
+and decision-record evidence. Public probe execution stays disabled until cloud
+check-job leases and the public-probe worker are wired to that runner and
+validated in AWS.
 
 Public probes must deny:
 
@@ -423,7 +426,8 @@ ECS/API/RDS/S3/probe lag/job backlog/delivery failures, and rollback commands.
 
 - Open Uptime has no Postgres/cloud store and no distributed leases.
 - Hosted API/dashboard reads are not protected yet.
-- Outbound target policy for SSRF/private-network protection is missing.
+- Outbound target policy for hosted HTTP probes exists in the SDK, but the
+  cloud public-probe worker and lease path are not wired to it yet.
 - `@hasna/cloud` hybrid mode still returns SQLite, so it is not cloud-primary.
 - The local cloud config currently points at a stale/non-resolving database host.
 - Todos has unresolved conflicts that must be reconciled before cloud cutover.
