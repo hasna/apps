@@ -134,6 +134,7 @@ export function registerProjectCommands(program: Command) {
     .description("Discover a local workspace and initialize project task state")
     .option("--name <name>", "Project display name")
     .option("--task-list <slug>", "Default task list slug")
+    .option("--route-enabled", "Mark the default task list as eligible for OpenLoops task-created routing")
     .option("--dry-run", "Show discovery without writing local state")
     .action(async (inputPath: string | undefined, opts) => {
       const globalOpts = program.opts();
@@ -143,6 +144,7 @@ export function registerProjectCommands(program: Command) {
           path: inputPath || globalOpts.project || process.cwd(),
           name: opts.name,
           taskListSlug: opts.taskList,
+          routeEnabled: Boolean(opts.routeEnabled),
           dryRun: opts.dryRun,
         });
 
@@ -162,6 +164,7 @@ export function registerProjectCommands(program: Command) {
         }
         if (result.project) console.log(`  ${chalk.dim("Project:")}    ${result.project.id.slice(0, 8)} ${result.created.project ? "(created)" : "(existing)"}`);
         if (result.taskList) console.log(`  ${chalk.dim("Task list:")}  ${result.taskList.slug} ${result.created.taskList ? "(created)" : "(existing)"}`);
+        if (result.taskList?.metadata.route_enabled === true) console.log(`  ${chalk.dim("Routing:")}    route-enabled`);
         if (result.created.sources.length > 0) {
           console.log(`  ${chalk.dim("Sources:")}    ${result.created.sources.join(", ")}`);
         }

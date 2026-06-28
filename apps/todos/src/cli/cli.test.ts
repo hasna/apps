@@ -189,6 +189,77 @@ describe("CLI integration", () => {
     }
   });
 
+  it("exposes route state and workflow pointers through task automation commands", async () => {
+    const dbPath = "/tmp/test-cli-task-routing.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    try {
+      const created = await runCli([
+        "--json",
+        "task",
+        "upsert",
+        "--fingerprint",
+        "route:cli:1",
+        "--title",
+        "Routeable task",
+        "--metadata-json",
+        "{\"route_enabled\":true}",
+      ], dbPath);
+      expect(created.exitCode).toBe(0);
+      const payload = JSON.parse(created.stdout);
+
+      const routeState = await runCli(["--json", "task", "route-state", payload.task.id], dbPath);
+      expect(routeState.exitCode).toBe(0);
+      expect(JSON.parse(routeState.stdout).eligible).toBe(true);
+
+      const pointers = await runCli([
+        "--json",
+        "task",
+        "workflow-pointers",
+        payload.task.id,
+        "--invocation",
+        "inv_cli",
+        "--run",
+        "run_cli",
+        "--manifest",
+        "/tmp/todos-cli-routing/manifest.json",
+        "--state",
+        "working",
+      ], dbPath);
+      expect(pointers.exitCode).toBe(0);
+      const updated = JSON.parse(pointers.stdout);
+      expect(updated.route_state.pointers).toMatchObject({
+        current_workflow_invocation_id: "inv_cli",
+        current_run_id: "run_cli",
+        workflow_state: "working",
+      });
+
+      const cleared = await runCli([
+        "--json",
+        "task",
+        "workflow-pointers",
+        payload.task.id,
+        "--clear-run",
+        "--clear-manifest",
+        "--state",
+        "review",
+      ], dbPath);
+      expect(cleared.exitCode).toBe(0);
+      const clearedPayload = JSON.parse(cleared.stdout);
+      expect(clearedPayload.route_state.pointers.current_workflow_invocation_id).toBe("inv_cli");
+      expect(clearedPayload.route_state.pointers.current_run_id).toBeUndefined();
+      expect(clearedPayload.route_state.pointers.latest_manifest_path).toBeUndefined();
+      expect(clearedPayload.route_state.pointers.workflow_state).toBe("review");
+
+      const ready = await runCli(["ready", "--json"], dbPath);
+      expect(ready.exitCode).toBe(0);
+      expect(JSON.parse(ready.stdout)[0].route_state.eligible).toBe(true);
+    } finally {
+      try { unlinkSync(dbPath); } catch {}
+    }
+  });
+
   it("should reject invalid add priority before SQLite validation", async () => {
     const result = await runCli(["add", "Invalid priority task", "--priority", "urgent"], ":memory:");
 

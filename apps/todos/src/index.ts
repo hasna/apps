@@ -376,6 +376,36 @@ export type {
   ProjectWorkspaceDiscovery,
 } from "./lib/project-bootstrap.js";
 
+// Task routing and workflow invocation pointers
+export {
+  getTaskRouteState,
+  setTaskWorkflowPointers,
+} from "./lib/task-routing.js";
+export type {
+  SetTaskWorkflowPointersInput,
+  TaskRouteContext,
+  TaskRouteGates,
+  TaskRouteState,
+} from "./lib/task-routing.js";
+export {
+  TASK_WORKFLOW_POINTER_SCHEMA_VERSION,
+  TODOS_TASK_ROUTE_STATE_SCHEMA_VERSION,
+  booleanField,
+  classifyProjectKind,
+  compactWorkflowPointers,
+  inferRootProjectId,
+  isWorktreePath,
+  objectField,
+  routeEnabledForTask,
+  routingAutomationMetadata,
+  workflowPointersFromMetadata,
+} from "./lib/task-route-contract.js";
+export type {
+  ResolvedTaskRouteContext,
+  TaskRoutingAutomationMetadata,
+  TaskWorkflowPointers,
+} from "./lib/task-route-contract.js";
+
 // Comments
 export {
   addComment,

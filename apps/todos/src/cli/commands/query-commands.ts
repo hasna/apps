@@ -1347,7 +1347,8 @@ export function registerQueryCommands(program: Command) {
       });
       const limited = ready.slice(0, parseInt(opts.limit, 10));
       if (opts.json || globalOpts.json) {
-        console.log(JSON.stringify(limited));
+        const { getTaskRouteState } = await import("../../lib/task-routing.js");
+        console.log(JSON.stringify(limited.map((task) => ({ ...task, route_state: getTaskRouteState(task, db) }))));
         return;
       }
       if (limited.length === 0) {

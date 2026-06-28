@@ -54,6 +54,7 @@ describe("shared task events", () => {
     expect(events[0].metadata).toMatchObject({
       package: "@hasna/todos",
       todos_event_schema_version: 1,
+      route_state_schema_version: "todos.task_route_state.v1",
       task_id: task.id,
       task_short_id: "OEV-1",
       project_id: project.id,
@@ -64,6 +65,7 @@ describe("shared task events", () => {
       project_kind: "open-source",
       route_enabled: true,
       automation: { no_auto: false },
+      route_blocked_by_no_auto: false,
       working_dir: "/home/hasna/workspace/hasna/opensource/open-events",
       root_project_id: project.id,
       task_list_id: taskList.id,
@@ -96,6 +98,26 @@ describe("shared task events", () => {
       manual_required: false,
       requires_approval: true,
     });
+    expect(event.metadata.route_blocked_by_no_auto).toBe(true);
+    expect(event.metadata.route_blocked_by_approval).toBe(true);
+  });
+
+  test("includes workflow invocation pointers in task events", async () => {
+    const task = makeTask({
+      metadata: {
+        route_enabled: true,
+        current_workflow_invocation_id: "inv_123",
+        current_run_id: "run_456",
+        latest_manifest_path: "/home/hasna/.hasna/loops/runs/open-codewith/task/run_456/manifest.json",
+      },
+    });
+
+    await emitSharedTaskEvent({ type: "task.updated", task });
+
+    const [event] = await new EventsClient().listEvents();
+    expect(event.metadata.current_workflow_invocation_id).toBe("inv_123");
+    expect(event.metadata.current_run_id).toBe("run_456");
+    expect(event.metadata.latest_manifest_path).toBe("/home/hasna/.hasna/loops/runs/open-codewith/task/run_456/manifest.json");
   });
 
   test("metadata can drive positive and negative open-source route delivery", async () => {

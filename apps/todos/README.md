@@ -429,52 +429,53 @@ MCP clients can use `set_local_event_hook`, `list_local_event_hooks`,
 `test_local_event_hook`, and `remove_local_event_hook`. Hook delivery is
 local-only; it does not call hosted webhooks or cloud automation services.
 
-## Shared Event Webhooks
+## Shared Task Events And Route State
 
-Task lifecycle changes also emit shared `@hasna/events` events with source
-`todos`. Use `todos webhooks` for durable command or webhook subscriptions. This
-is the preferred bridge for automation that should react to new tasks without
-polling:
+Task lifecycle changes emit shared `@hasna/events` events with source `todos`.
+Todos is the human-visible task ledger: it emits task intent, routing gates, and
+workflow artifact pointers. OpenEvents owns durable channel delivery/replay, and
+OpenLoops owns workflow admission, work-item leases, agent execution, evaluator
+cycles, and run manifests.
+
+Use `project-bootstrap --route-enabled` to opt a project task list into
+task-created routing, then inspect route state with deterministic JSON before a
+route or workflow starts:
 
 ```bash
-todos webhooks add loops \
-  --id openloops-task-created \
-  --transport command \
-  --source todos \
-  --type task.created \
-  --metadata 'project_path=/home/hasna/workspace/hasna/opensource/*' \
-  --metadata-json 'route_enabled=true' \
-  --metadata-json 'automation.no_auto!=true' \
-  --metadata-json 'automation.manual_required!=true' \
-  --metadata-json 'automation.requires_approval!=true' \
-  --metadata-json 'automation.approval_required!=true' \
-  --arg=events \
-  --arg=handle \
-  --arg=todos-task \
-  --arg=--provider \
-  --arg=codewith \
-  --arg=--auth-profile-pool \
-  --arg=account004,account005,account006 \
-  --arg=--permission-mode \
-  --arg=bypass \
-  --arg=--sandbox \
-  --arg=danger-full-access \
-  --arg=--worktree-mode \
-  --arg=required \
-  --timeout-ms 900000 \
+todos project-bootstrap . --route-enabled --json
+todos ready --json
+todos task route-state <task-id> --json
+```
+
+`todos ready --json` includes a `route_state` object for each pending unblocked
+task. `route_state.schema_version` is `todos.task_route_state.v1`. It exposes
+`eligible`, denial `reasons`, dependency blockers, route context, boolean gates,
+and compact OpenLoops pointers:
+
+- `current_workflow_invocation_id`
+- `current_run_id`
+- `latest_manifest_path`
+- `latest_evaluation_path`
+- `workflow_state`
+
+OpenLoops updates those pointers after admission or evaluator progress:
+
+```bash
+todos task workflow-pointers <task-id> \
+  --invocation <workflow-invocation-id> \
+  --run <workflow-run-id> \
+  --manifest /home/hasna/.hasna/loops/runs/<project>/<subject>/<run>/manifest.json \
+  --state working \
   --json
 ```
 
-When a task is created, `@hasna/events` sends the event JSON on stdin and in
-`HASNA_EVENT_JSON`. OpenLoops uses that event to create a deduped one-shot
-worker/verifier workflow for the task. Use account-profile pools instead of a
-single pinned profile, and require isolated worktrees for repo-mutating routes.
-The event data includes task identity,
-title, description, project/list ids, working directory, tags, metadata, status,
-priority, approval state, and timestamps. Event metadata includes routing-safe
-project/list/path fields, `route_enabled` when the task metadata opts in, and an
-`automation` object containing only boolean routing gates such as `no_auto`,
-`manual_required`, `requires_approval`, and `approval_required`.
+Shared task event data includes task identity, title, description, project/list
+ids, working directory, tags, metadata, status, priority, approval state, and
+timestamps. Event metadata includes routing-safe project/list/path fields,
+`route_enabled` when task or task-list metadata opts in, route-state schema
+version, compact workflow pointers, and an `automation` object containing only
+boolean routing gates such as `no_auto`, `manual_required`,
+`requires_approval`, and `approval_required`.
 
 Production task-created routes should fail closed:
 
@@ -482,14 +483,14 @@ Production task-created routes should fail closed:
   approved routing tag such as `auto:route`.
 - Add negative automation predicates so `no_auto`, manual, and approval-gated
   tasks do not invoke the route.
-- Scope by project path, task list, tags, or repo metadata before invoking
-  OpenLoops.
+- Scope by project path, task list, tags, or repo metadata before invoking an
+  OpenLoops route.
 - Avoid overlapping opt-in channels for the same task family unless the target
-  handler is idempotent. `loops events handle todos-task` dedupes by task id and
+  handler is idempotent. OpenLoops task-event admission dedupes by task id and
   event type, but a narrower subscription still avoids wasted invocations.
 
 For tag opt-in, use a second route with the same deny predicates and
-`--data 'tags=auto:route'` instead of `--metadata-json 'route_enabled=true'`.
+`tags=auto:route` instead of `route_enabled=true`.
 Tasks without one of those opt-ins are intentionally no-route. Local event hooks
 remain available for local-only JSONL/socket/script integrations.
 

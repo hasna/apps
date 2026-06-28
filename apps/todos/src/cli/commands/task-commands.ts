@@ -95,6 +95,11 @@ function parseJsonValue(value: string | undefined): unknown {
   }
 }
 
+function pointerOption(value: string | undefined, clear: boolean): string | null | undefined {
+  if (value !== undefined) return value;
+  return clear ? null : undefined;
+}
+
 function parseTags(value: string | undefined): string[] | undefined {
   return value ? value.split(",").map((tag) => tag.trim()).filter(Boolean) : undefined;
 }
@@ -265,6 +270,87 @@ export function registerTaskCommands(program: Command) {
       } else {
         console.log(chalk.green(result.created ? "Task created:" : "Task updated:"));
         console.log(formatTaskLine(result.task));
+      }
+    });
+
+  task
+    .command("route-state <id>")
+    .description("Show deterministic routing eligibility and workflow pointers for a task")
+    .action(async (id: string) => {
+      const globalOpts = program.opts();
+      const resolvedId = resolveTaskId(id);
+      const { getTaskRouteState } = await import("../../lib/task-routing.js");
+      let state;
+      try {
+        state = getTaskRouteState(resolvedId);
+      } catch (e) {
+        handleError(e);
+      }
+
+      if (globalOpts.json) {
+        output(state, true);
+        return;
+      }
+
+      console.log(chalk.bold("Task route state"));
+      console.log(`  ${chalk.dim("Task:")}       ${state.task_short_id || state.task_id.slice(0, 8)}`);
+      console.log(`  ${chalk.dim("Eligible:")}   ${state.eligible ? chalk.green("yes") : chalk.yellow("no")}`);
+      console.log(`  ${chalk.dim("Reasons:")}    ${state.reasons.length > 0 ? state.reasons.join(", ") : "none"}`);
+      console.log(`  ${chalk.dim("Route:")}      ${state.route.concurrency_key}`);
+      if (state.pointers.current_workflow_invocation_id) {
+        console.log(`  ${chalk.dim("Invocation:")} ${state.pointers.current_workflow_invocation_id}`);
+      }
+      if (state.pointers.current_run_id) {
+        console.log(`  ${chalk.dim("Run:")}        ${state.pointers.current_run_id}`);
+      }
+      if (state.pointers.latest_manifest_path) {
+        console.log(`  ${chalk.dim("Manifest:")}   ${state.pointers.latest_manifest_path}`);
+      }
+    });
+
+  task
+    .command("workflow-pointers <id>")
+    .description("Update OpenLoops workflow invocation/run artifact pointers on a task")
+    .option("--invocation <id>", "Current workflow invocation ID")
+    .option("--run <id>", "Current workflow run ID")
+    .option("--manifest <path>", "Latest run manifest path")
+    .option("--evaluation <path>", "Latest evaluator artifact path")
+    .option("--state <state>", "Human-visible workflow state")
+    .option("--actor <agent>", "Agent or workflow updating the pointers")
+    .option("--clear", "Clear all workflow pointers before applying explicit pointer values")
+    .option("--clear-invocation", "Clear current workflow invocation ID")
+    .option("--clear-run", "Clear current workflow run ID")
+    .option("--clear-manifest", "Clear latest run manifest path")
+    .option("--clear-evaluation", "Clear latest evaluator artifact path")
+    .option("--clear-state", "Clear human-visible workflow state")
+    .action(async (id: string, opts) => {
+      const globalOpts = program.opts();
+      const resolvedId = resolveTaskId(id);
+      const { getTaskRouteState, setTaskWorkflowPointers } = await import("../../lib/task-routing.js");
+      let taskResult;
+      try {
+        taskResult = setTaskWorkflowPointers(resolvedId, {
+          current_workflow_invocation_id: pointerOption(opts.invocation, Boolean(opts.clear || opts.clearInvocation)),
+          current_run_id: pointerOption(opts.run, Boolean(opts.clear || opts.clearRun)),
+          latest_manifest_path: pointerOption(opts.manifest, Boolean(opts.clear || opts.clearManifest)),
+          latest_evaluation_path: pointerOption(opts.evaluation, Boolean(opts.clear || opts.clearEvaluation)),
+          workflow_state: pointerOption(opts.state, Boolean(opts.clear || opts.clearState)),
+          actor: opts.actor || globalOpts.agent || "cli",
+        });
+      } catch (e) {
+        handleError(e);
+      }
+      const state = getTaskRouteState(taskResult.id);
+
+      if (globalOpts.json) {
+        output({ task: taskResult, route_state: state }, true);
+        return;
+      }
+
+      console.log(chalk.green("Workflow pointers updated:"));
+      console.log(formatTaskLine(taskResult));
+      if (state.pointers.latest_manifest_path) {
+        console.log(`  ${chalk.dim("Manifest:")} ${state.pointers.latest_manifest_path}`);
       }
     });
 
