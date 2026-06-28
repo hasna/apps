@@ -75,6 +75,60 @@ Hosted SaaS products should use `HostedConnectorsClient` from
 `/api/v1` endpoint with bearer API keys and does not require local connector
 installs or individual connector packages.
 
+## OpenActions And OpenAutomations Boundary
+
+Connector operations may be exposed to OpenAutomations as `@hasna/actions`
+manifests, but Connectors remains the owner of connector discovery,
+enablement, consent, and credential health. An automation action should name
+the connector operation and pass only scoped inputs plus references to
+credentials that Connectors can resolve.
+
+Recommended action shape:
+
+```json
+{
+  "schemaVersion": "1.0",
+  "id": "connectors.github.issue.create",
+  "name": "Create GitHub issue",
+  "version": "1.0.0",
+  "bindings": [
+    {
+      "kind": "sdk",
+      "package": "@hasna/connectors",
+      "export": "runConnectorOperation",
+      "metadata": {
+        "connector": "github",
+        "operation": "issues.create"
+      }
+    }
+  ],
+  "secrets": [
+    {
+      "name": "github",
+      "ref": "hasna/xyz/opensource/connectors/prod/github",
+      "required": true,
+      "redaction": "full"
+    }
+  ],
+  "approval": {
+    "mode": "manual",
+    "requiresApproval": true,
+    "reason": "Creates or mutates data in an external account"
+  },
+  "audit": {
+    "eventSource": "hasna.connectors",
+    "redactPaths": ["secrets", "input.token", "input.authorization"],
+    "evidenceRefs": ["connector:github", "operation:issues.create", "credentialScope:repo"]
+  }
+}
+```
+
+OpenAutomations owns the durable run/action queue and DLQ. Connectors owns
+runtime auth checks, connector-specific consent, credential refresh, and
+provider response normalization. Raw OAuth tokens, API keys, refresh tokens,
+and session cookies must not be placed in automation specs, action queues, task
+comments, or run evidence; use secret references and redacted audit metadata.
+
 ## Project Layout
 
 Project-local enablement is lightweight:
