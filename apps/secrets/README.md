@@ -67,6 +67,34 @@ const status = getSecretReferenceStatus();
 console.log(status.counts.byType.api_key);
 ```
 
+### Secret References For Automations
+
+Deterministic automations and action manifests must reference secrets by key,
+not embed raw values. In `@hasna/actions` manifests this appears as
+`secrets[].ref`; in lower-level payloads it may be named `secretRef`. The
+reference value is the same slash-delimited key used by this vault:
+
+```json
+{
+  "secretRef": "hasna/xyz/opensource/connectors/prod/github",
+  "scope": "repo:issues:write",
+  "reason": "Create a GitHub issue from an approved automation action"
+}
+```
+
+Minimum contract for OpenAutomations and `@hasna/actions` consumers:
+
+- automation specs, queued action payloads, todos comments, and run evidence
+  store `secretRef` strings only
+- the runtime that resolves a reference must check the requested scope before
+  handing a value to a connector or command
+- audit records may include the secret key, type, scope, resolver package,
+  and decision, but never the decrypted value
+- redaction must treat keys named `secretRef`, `secret`, `token`, `apiKey`,
+  `authorization`, and provider credential fields as sensitive
+- replay should re-resolve the reference at execution time instead of storing a
+  historical secret value in the automation queue
+
 Export redacted compact JSON for review:
 
 ```bash
