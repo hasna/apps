@@ -48,8 +48,17 @@ export interface AwsDeploymentPlan {
   image: {
     repository: string;
     uri: string;
+    dockerfile: string;
     buildCommand: string;
     pushCommands: string[];
+  };
+  infra: {
+    path: string;
+    fmtCommand: string;
+    initCommand: string;
+    validateCommand: string;
+    planCommand: string;
+    applyAllowed: false;
   };
   runbook: {
     preflight: string[];
@@ -72,6 +81,7 @@ export interface AwsServicePlan {
   name: string;
   role: "web" | "scheduler" | "public-probe" | "reporter" | "migration";
   desiredCount: number;
+  targetDesiredCount: number;
   taskRole: string;
   executionRole: string;
   logGroup: string;
@@ -125,7 +135,8 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
   const hostname = clean(options.hostname, DEFAULT_HOSTNAME);
   const workspaceId = clean(options.workspaceId, DEFAULT_WORKSPACE_ID);
   const ecrRepository = clean(options.ecrRepository, `hasna/opensource/${prefix}`);
-  const image = clean(options.image, `<account-id>.dkr.ecr.${region}.amazonaws.com/${ecrRepository}:<git-sha>`);
+  const imageRepositoryUri = `<account-id>.dkr.ecr.${region}.amazonaws.com/${ecrRepository}`;
+  const image = clean(options.image, `${imageRepositoryUri}@sha256:<image-digest>`);
   const evidenceBucket = clean(options.evidenceBucket, `hasna-${stage}-${prefix}-evidence`);
   const cluster = `${prefix}-${stage}`;
   const secrets = {
@@ -192,25 +203,33 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
         `${prefix}-${stage}-web-sg`,
         `${prefix}-${stage}-scheduler-sg`,
         `${prefix}-${stage}-public-probe-sg`,
-        `${prefix}-${stage}-rds-client-sg`,
+        `${prefix}-${stage}-reporter-sg`,
+        `${prefix}-${stage}-migration-sg`,
       ],
       secrets,
       logGroups: services.map((service) => service.logGroup),
       alarms: [
         `${prefix}-${stage}-web-5xx`,
-        `${prefix}-${stage}-scheduler-stalled`,
-        `${prefix}-${stage}-probe-stale`,
-        `${prefix}-${stage}-report-delivery-failures`,
+        `${prefix}-${stage}-web-unhealthy`,
       ],
     },
     image: {
       repository: ecrRepository,
       uri: image,
-      buildCommand: "BLOCKED: add a reviewed Dockerfile/container build target before running docker build",
+      dockerfile: "Dockerfile",
+      buildCommand: `docker build --pull -t ${imageRepositoryUri}:<git-sha> .`,
       pushCommands: [
         "BLOCKED: push only from approved CI/CD after the ECR repository and image digest policy exist",
         "BLOCKED: deploy services by immutable image digest, not by mutable tags",
       ],
+    },
+    infra: {
+      path: "infra/aws",
+      fmtCommand: "terraform -chdir=infra/aws fmt -check",
+      initCommand: "terraform -chdir=infra/aws init -backend=false",
+      validateCommand: "terraform -chdir=infra/aws validate",
+      planCommand: "terraform -chdir=infra/aws plan -out open-uptime.tfplan",
+      applyAllowed: false,
     },
     runbook: {
       preflight: [
@@ -246,7 +265,6 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
     },
     blockers: [
       "The hasna-xyz-infra infrastructure owner repository was not found in this workspace.",
-      "The repo has no reviewed Dockerfile/container build target for image build and publish automation.",
       "Hosted Postgres storage adapter and migrations are not implemented.",
       "Hosted production auth/RBAC must replace broad static hosted-token operation before exposure.",
       "Public probe execution still needs DNS, redirect, and rebinding SSRF enforcement plus cloud check-job leases.",
@@ -256,7 +274,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
       "Infrastructure PR/synth/plan from the approved infra repository.",
       "Container build smoke and immutable image digest.",
       "ECS task definitions using secrets.valueFrom only.",
-      "ALB/TLS/DNS/auth denial smokes.",
+      "ALB/TLS/DNS/auth denial smokes and web alarm checks.",
       "RDS TLS, backups/PITR, scoped roles, and migration dry-run evidence.",
       "S3 bucket KMS, versioning, lifecycle, and public-access-block evidence.",
       "Spark01 private-probe registration, key-file mode, heartbeat, and revocation evidence.",
@@ -328,7 +346,7 @@ export function buildSpark01CloudConfig(options: Spark01CloudConfigOptions = {})
       privateKeyInline: false,
       tokenInline: false,
       notes: [
-        "This config is cloud-primary: Spark01 submits to hosted API state instead of local SQLite.",
+        "This config is hosted-targeted preflight: Spark01 must not start until cloud probe routes are backed by hosted state.",
         "The private key file path is referenced, not embedded.",
         "Hosted token or probe auth material must come from the machine secret store, not this generated config.",
       ],
@@ -361,7 +379,8 @@ function servicePlan(
   return {
     name,
     role,
-    desiredCount,
+    desiredCount: 0,
+    targetDesiredCount: desiredCount,
     taskRole: `${name}-task-role`,
     executionRole: `${prefix}-${stage}-execution-role`,
     logGroup: `/ecs/${name}`,
@@ -370,11 +389,13 @@ function servicePlan(
       HASNA_UPTIME_IMAGE: image,
       ...environment,
     },
-    secrets: role === "public-probe"
-      ? { DATABASE_URL: secrets.database, PROBE_CONFIG: secrets.publicProbe }
+    secrets: role === "web"
+      ? { HASNA_UPTIME_DATABASE_URL: secrets.database, APP_ENV: secrets.appEnv, HASNA_UPTIME_HOSTED_TOKEN: secrets.hostedToken }
+      : role === "public-probe"
+      ? { PROBE_CONFIG: secrets.publicProbe }
       : role === "reporter"
-        ? { DATABASE_URL: secrets.database, REPORTING_CONFIG: secrets.reporting }
-        : { DATABASE_URL: secrets.database, APP_ENV: secrets.appEnv },
+        ? { HASNA_UPTIME_DATABASE_URL: secrets.database, REPORTING_CONFIG: secrets.reporting }
+        : { HASNA_UPTIME_DATABASE_URL: secrets.database, APP_ENV: secrets.appEnv },
   };
 }
 

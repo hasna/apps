@@ -10,3 +10,6 @@ bun.lockb
 .codewith/
 .takumi/
 coverage/
+.terraform/
+*.tfstate
+*.tfstate.*

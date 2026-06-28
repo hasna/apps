@@ -505,7 +505,7 @@ cloud
 
 cloud
   .command("spark01-config")
-  .description("Generate Spark01 cloud-primary private probe configuration")
+  .description("Generate Spark01 hosted-targeted private probe preflight configuration")
   .option("--api-url <url>", "hosted Open Uptime API URL", "https://uptime.hasna.xyz/api/v1")
   .option("--workspace-id <id>", "workspace id", "wks_2tyysw05cwap")
   .option("--probe-id <id>", "cloud registered private probe id")
@@ -1037,9 +1037,11 @@ function renderCloudPlan(plan: AwsDeploymentPlan): string {
     `host: ${plan.hostname}`,
     `cluster: ${plan.resources.ecsCluster}`,
     `image: ${plan.image.uri}`,
+    `dockerfile: ${plan.image.dockerfile}`,
+    `infra: ${plan.infra.path}`,
     `vpc: ${plan.resources.vpcId}`,
     `rds: ${plan.resources.rdsInstanceId}`,
-    `services: ${plan.resources.services.map((service) => `${service.name}:${service.desiredCount}`).join(", ")}`,
+    `services: ${plan.resources.services.map((service) => `${service.name}:${service.desiredCount}/${service.targetDesiredCount}`).join(", ")}`,
     `evidence bucket: ${plan.resources.evidenceBucket}`,
     `blockers: ${plan.blockers.length}`,
     "live AWS mutation: false",

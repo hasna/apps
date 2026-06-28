@@ -6,6 +6,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-06-28
+
+### Added
+
+- Bun-based hosted runtime `Dockerfile` and `.dockerignore`.
+- Reviewable Terraform/OpenTofu AWS starter plan under `infra/aws` for ECR,
+  S3 evidence storage, ECS/Fargate services, ALB/TLS/DNS, task roles,
+  CloudWatch logs, security groups, and secret refs.
+- Cloud plan SDK/CLI fields that point to `Dockerfile` and `infra/aws` with
+  format/init/validate/plan commands while keeping apply disabled.
+
+### Security
+
+- AWS infra templates use secret ARNs/valueFrom references and example
+  placeholders only; no plaintext service tokens, database URLs, or private keys
+  are stored in the repo.
+- Terraform desired counts default to zero until hosted cloud-store/auth/probe
+  blockers are closed.
+
 ## [0.1.5] - 2026-06-28
 
 ### Added
@@ -13,8 +32,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Dry-run AWS deployment plan generator for the `hasna-xyz-infra` target,
   covering ECS/Fargate services, ECR image commands, ALB/RDS/S3/Secrets/Logs
   resources, rollback steps, and safety assertions.
-- Spark01 cloud-primary private probe config generator with JSON and env-file
-  rendering.
+- Spark01 hosted-targeted private probe preflight config generator with JSON and
+  env-file rendering.
 - CLI commands `uptime cloud plan` and `uptime cloud spark01-config`.
 - SDK export `@hasna/uptime/cloud-plan`.
 - Machine-readable `blocked`/`canApply:false` and `blocked`/`canStart:false`

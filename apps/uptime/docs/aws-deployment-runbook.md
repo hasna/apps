@@ -27,6 +27,10 @@ The generated AWS plan currently returns `status: "blocked"` and
 `canStart: false`. Treat both as review/preflight artifacts until the blockers
 and required evidence in the JSON output are resolved.
 
+The app repo includes a hosted runtime `Dockerfile` and Terraform/OpenTofu
+starter files in `infra/aws`. The plan output points to these files and keeps
+`applyAllowed: false`.
+
 `uptime cloud spark01-config --env` requires a real `--probe-id`; it will not
 write a sourceable env file with a placeholder probe identity.
 
@@ -57,12 +61,22 @@ The plan expects:
 - S3 bucket for redacted browser evidence and generated report artifacts.
 - Secrets Manager or SSM refs for database, app env, probe config, and
   reporting channel refs.
-- CloudWatch log groups and alarms for web 5xx, scheduler stalls, stale probes,
-  and report delivery failures.
+- CloudWatch log groups for every component plus initial web 5xx/unhealthy
+  alarms. Scheduler-stall, stale-probe, and report-delivery alarms remain
+  blocked until those workers emit cloud metrics.
 
 Provision these through the approved infrastructure repository and reviewed
 plan/apply flow. The local `uptime cloud plan` output intentionally avoids
 copy-pastable AWS mutation commands.
+
+Plan the included Terraform/OpenTofu starter without a backend:
+
+```bash
+terraform -chdir=infra/aws fmt -check
+terraform -chdir=infra/aws init -backend=false
+terraform -chdir=infra/aws validate
+terraform -chdir=infra/aws plan -out open-uptime.tfplan
+```
 
 ## Spark01
 
@@ -77,8 +91,9 @@ routes are backed by cloud check jobs and cloud audit rows.
 ## Safety Rules
 
 - Do not deploy hosted mode with `HASNA_UPTIME_ALLOW_HOSTED_LOCAL_STORE=1`.
-- Do not inline AWS keys, hosted tokens, Mailery keys, Open Logs tokens, or
-  probe private keys in task definitions.
+- Do not inline AWS keys, hosted tokens, Mailery keys, Open Logs tokens, database
+  URLs, or probe private keys in task definitions. Use ECS `secrets.valueFrom`
+  refs such as `HASNA_UPTIME_DATABASE_URL` and `HASNA_UPTIME_HOSTED_TOKEN`.
 - Do not run public probe workers against private targets.
 - Do not expose dashboard/API routes without hosted auth and workspace checks.
 - Do not treat local SQLite, local project DBs, or Spark01 local state as cloud

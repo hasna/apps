@@ -46,6 +46,10 @@ only. They do not call AWS, write secrets, or produce an approved deploy script;
 current output is intentionally blocked until the infra and cloud-store evidence
 in `docs/aws-deployment-runbook.md` is satisfied.
 
+Deployment review artifacts live in `Dockerfile` and `infra/aws`. The Terraform
+desired counts default to zero, and `uptime cloud plan --json` exposes the
+format/init/validate/plan commands with `applyAllowed: false`.
+
 Private/local probes can submit signed results from another machine:
 
 ```bash

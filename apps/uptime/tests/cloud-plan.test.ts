@@ -14,6 +14,13 @@ test("buildAwsDeploymentPlan generates a dry-run hasna-xyz-infra plan", () => {
   expect(plan.resources.rdsInstanceId).toBe("hasna-xyz-infra-apps-prod-postgres");
   expect(plan.status).toBe("blocked");
   expect(plan.canApply).toBe(false);
+  expect(plan.image.dockerfile).toBe("Dockerfile");
+  expect(plan.image.buildCommand).toContain("docker build");
+  expect(buildAwsDeploymentPlan().image.uri).toContain("@sha256:<image-digest>");
+  expect(plan.infra).toMatchObject({
+    path: "infra/aws",
+    applyAllowed: false,
+  });
   expect(plan.resources.services.map((service) => service.role)).toEqual([
     "web",
     "scheduler",
@@ -21,12 +28,22 @@ test("buildAwsDeploymentPlan generates a dry-run hasna-xyz-infra plan", () => {
     "reporter",
     "migration",
   ]);
+  expect(plan.resources.services.every((service) => service.desiredCount === 0)).toBe(true);
+  expect(plan.resources.services.find((service) => service.role === "web")?.targetDesiredCount).toBe(2);
+  expect(plan.resources.services.find((service) => service.role === "web")?.secrets.HASNA_UPTIME_HOSTED_TOKEN)
+    .toBe("hasna/xyz/opensource/uptime/prod/hosted-token");
+  expect(plan.resources.services.find((service) => service.role === "web")?.secrets.HASNA_UPTIME_DATABASE_URL)
+    .toBe("hasna/xyz/opensource/uptime/prod/rds");
+  expect(plan.resources.services.find((service) => service.role === "public-probe")?.secrets.HASNA_UPTIME_DATABASE_URL)
+    .toBeUndefined();
+  expect(plan.resources.alarms).toEqual(["open-uptime-prod-web-5xx", "open-uptime-prod-web-unhealthy"]);
   expect(plan.safety).toMatchObject({
     liveAwsMutation: false,
     plaintextSecrets: false,
     hostedLocalSqliteAllowed: false,
   });
   expect(plan.blockers).toContain("Hosted Postgres storage adapter and migrations are not implemented.");
+  expect(plan.blockers.join("\n")).not.toContain("no reviewed Dockerfile");
   expect(plan.requiredEvidence.length).toBeGreaterThan(3);
   expect(serialized).not.toContain("AWS_SECRET_ACCESS_KEY");
   expect(serialized).not.toContain("BEGIN PRIVATE KEY");
@@ -35,6 +52,7 @@ test("buildAwsDeploymentPlan generates a dry-run hasna-xyz-infra plan", () => {
   expect(serialized).not.toContain("aws ecs create-cluster");
   expect(serialized).not.toContain("aws ecs update-service");
   expect(serialized).not.toContain("docker push ");
+  expect(serialized).not.toContain("\"DATABASE_URL\"");
 });
 
 test("buildSpark01CloudConfig references private key paths without inlining secrets", () => {
@@ -56,6 +74,7 @@ test("buildSpark01CloudConfig references private key paths without inlining secr
   expect(config.safety).toMatchObject({ privateKeyInline: false, tokenInline: false });
   expect(serialized).not.toContain("BEGIN PRIVATE KEY");
   expect(serialized).not.toContain("Bearer ");
+  expect(serialized).not.toContain("cloud-primary");
 });
 
 test("renderSpark01Env rejects missing cloud probe id", () => {

@@ -1,0 +1,28 @@
+region                   = "us-east-1"
+stage                    = "prod"
+service_name             = "open-uptime"
+hostname                 = "uptime.hasna.xyz"
+workspace_id             = "wks_2tyysw05cwap"
+vpc_id                   = "vpc-04c7f7abc1d3c3f56"
+public_subnet_ids        = ["subnet-replace-public-a", "subnet-replace-public-b"]
+alb_ingress_cidr_blocks = []
+private_subnet_ids       = ["subnet-replace-private-a", "subnet-replace-private-b"]
+rds_security_group_id    = "sg-replace-rds"
+container_image          = "123456789012.dkr.ecr.us-east-1.amazonaws.com/hasna/opensource/open-uptime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+certificate_arn          = "arn:aws:acm:us-east-1:123456789012:certificate/replace"
+hosted_zone_id           = "ZREPLACE"
+database_secret_arn      = "arn:aws:secretsmanager:us-east-1:123456789012:secret:hasna/xyz/opensource/uptime/prod/rds"
+app_env_secret_arn       = "arn:aws:secretsmanager:us-east-1:123456789012:secret:hasna/xyz/opensource/uptime/prod/app/env"
+hosted_token_secret_arn  = "arn:aws:secretsmanager:us-east-1:123456789012:secret:hasna/xyz/opensource/uptime/prod/hosted-token"
+public_probe_secret_arn  = "arn:aws:secretsmanager:us-east-1:123456789012:secret:hasna/xyz/opensource/uptime/prod/probe/public"
+reporting_secret_arn     = "arn:aws:secretsmanager:us-east-1:123456789012:secret:hasna/xyz/opensource/uptime/prod/reporting"
+kms_key_arn              = "arn:aws:kms:us-east-1:123456789012:key/00000000-0000-0000-0000-000000000000"
+alarm_actions            = []
+
+desired_counts = {
+  web            = 0
+  scheduler      = 0
+  "public-probe" = 0
+  reporter       = 0
+  migration      = 0
+}
