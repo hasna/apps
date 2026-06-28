@@ -856,6 +856,31 @@ function generatedRouteSandboxPreflight(workflow: CreateWorkflowInput): RouteSan
   return checks;
 }
 
+function generatedRouteWorkflowSignature(workflow: Pick<WorkflowSpec, "version" | "goal" | "steps"> | CreateWorkflowInput): string {
+  return JSON.stringify({
+    version: workflow.version ?? 1,
+    goal: workflow.goal ?? null,
+    steps: workflow.steps,
+  });
+}
+
+function canReuseGeneratedRouteWorkflow(existing: WorkflowSpec, generated: CreateWorkflowInput): boolean {
+  if (generatedRouteWorkflowSignature(existing) !== generatedRouteWorkflowSignature(generated)) return false;
+  try {
+    generatedRouteSandboxPreflight(existing);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function routeWorkflowForStorage(store: Store, workflowBody: CreateWorkflowInput): WorkflowSpec {
+  const existingWorkflow = store.findWorkflowByName(workflowBody.name);
+  if (existingWorkflow && canReuseGeneratedRouteWorkflow(existingWorkflow, workflowBody)) return existingWorkflow;
+  if (existingWorkflow) store.archiveWorkflow(existingWorkflow.id);
+  return store.createWorkflow(workflowBody);
+}
+
 function routeThrottleLimitsFromOpts(opts: {
   maxActive?: string;
   maxActivePerProject?: string;
@@ -1130,8 +1155,7 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
   }
   const store = new Store();
   try {
-    const existingWorkflowForPreflight = store.findWorkflowByName(workflowBody.name);
-    const workflowPreflightSpec = existingWorkflowForPreflight ?? workflowSpecForPreflight(workflowBody, "event-preflight");
+    const workflowPreflightSpec = workflowSpecForPreflight(workflowBody, "event-preflight");
     generatedRouteSandboxPreflight(workflowPreflightSpec);
     const preflight = opts.preflight
       ? preflightStoredWorkflow(workflowPreflightSpec, {
@@ -1158,8 +1182,7 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
         lastReason: throttle && !throttle.allowed ? throttle.reason : undefined,
       });
       if (throttle && !throttle.allowed) return { kind: "throttled" as const, invocation, workItem, throttle };
-      const existingWorkflow = store.findWorkflowByName(workflowBody.name);
-      const workflow = existingWorkflow ?? store.createWorkflow(workflowBody);
+      const workflow = routeWorkflowForStorage(store, workflowBody);
       const loop = store.createLoop({
         ...loopInput,
         target: {
@@ -1353,8 +1376,7 @@ function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOptions): T
   }
   const store = new Store();
   try {
-    const existingWorkflowForPreflight = store.findWorkflowByName(workflowBody.name);
-    const workflowPreflightSpec = existingWorkflowForPreflight ?? workflowSpecForPreflight(workflowBody, "event-preflight");
+    const workflowPreflightSpec = workflowSpecForPreflight(workflowBody, "event-preflight");
     generatedRouteSandboxPreflight(workflowPreflightSpec);
     const preflight = opts.preflight
       ? preflightStoredWorkflow(workflowPreflightSpec, {
@@ -1381,8 +1403,7 @@ function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOptions): T
         lastReason: throttle && !throttle.allowed ? throttle.reason : undefined,
       });
       if (throttle && !throttle.allowed) return { kind: "throttled" as const, invocation, workItem, throttle };
-      const existingWorkflow = store.findWorkflowByName(workflowBody.name);
-      const workflow = existingWorkflow ?? store.createWorkflow(workflowBody);
+      const workflow = routeWorkflowForStorage(store, workflowBody);
       const loop = store.createLoop({
         ...loopInput,
         target: {
@@ -2482,8 +2503,7 @@ eventsHandle
     }
     const store = new Store();
     try {
-      const existingWorkflowForPreflight = store.findWorkflowByName(workflowBody.name);
-      const workflowPreflightSpec = existingWorkflowForPreflight ?? workflowSpecForPreflight(workflowBody, "event-preflight");
+      const workflowPreflightSpec = workflowSpecForPreflight(workflowBody, "event-preflight");
       generatedRouteSandboxPreflight(workflowPreflightSpec);
       const preflight = opts.preflight
         ? preflightStoredWorkflow(workflowPreflightSpec, {
@@ -2510,8 +2530,7 @@ eventsHandle
           lastReason: throttle && !throttle.allowed ? throttle.reason : undefined,
         });
         if (throttle && !throttle.allowed) return { kind: "throttled" as const, invocation, workItem, throttle };
-        const existingWorkflow = store.findWorkflowByName(workflowBody.name);
-        const workflow = existingWorkflow ?? store.createWorkflow(workflowBody);
+        const workflow = routeWorkflowForStorage(store, workflowBody);
         const loop = store.createLoop({
           ...loopInput,
           target: {

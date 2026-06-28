@@ -1704,6 +1704,64 @@ describe("loops CLI", () => {
     expect(secondValue.loop.id).toBe(firstValue.loop.id);
   });
 
+  test("todos task event handler replaces stale generated workflow policy metadata", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-stale-workflow-"));
+    const event = {
+      id: "evt-task-stale-policy-0001",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-stale-policy-0001",
+        title: "Refresh generated route policy",
+        working_dir: "/tmp/open-loops",
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+    const args = [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--provider",
+      "codewith",
+      "--sandbox",
+      "danger-full-access",
+      "--manual-break-glass",
+      "--permission-mode",
+      "bypass",
+    ];
+
+    const preview = runCli(dataDir, [...args, "--dry-run"], JSON.stringify(event));
+    expect(preview.status).toBe(0);
+    const previewValue = JSON.parse(preview.stdout);
+    const staleWorkflow = {
+      name: previewValue.workflow.name,
+      description: "stale generated route workflow missing breakglass metadata",
+      version: 1,
+      steps: previewValue.workflow.steps.map((step: { target: Record<string, unknown> }) => ({
+        ...step,
+        target: {
+          ...step.target,
+          allowlist: undefined,
+        },
+      })),
+    };
+    const staleCreated = runCli(dataDir, ["--json", "workflows", "create", workflowFile(dataDir, staleWorkflow)]);
+    expect(staleCreated.status).toBe(0);
+    const staleValue = JSON.parse(staleCreated.stdout);
+
+    const routed = runCli(dataDir, args, JSON.stringify(event));
+    expect(routed.status).toBe(0);
+    const routedValue = JSON.parse(routed.stdout);
+    expect(routedValue.workflow.id).not.toBe(staleValue.id);
+    expect(routedValue.workflow.steps[0].target.allowlist.commands).toContain("manual-break-glass");
+
+    const staleAfter = runCli(dataDir, ["--json", "workflows", "show", staleValue.id]);
+    expect(staleAfter.status).toBe(0);
+    expect(JSON.parse(staleAfter.stdout).status).toBe("archived");
+  });
+
   test("routes commands expose workflow invocation admission state", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-routes-list-"));
     const event = {
@@ -1806,7 +1864,7 @@ describe("loops CLI", () => {
     expect(loop.target.args).toEqual(expect.arrayContaining(["events", "drain", "todos-task", "--task-list", "oss", "--max-dispatch", "2"]));
   });
 
-  test("routes create rejects a persisted unsafe workflow with the same generated name", () => {
+  test("routes create replaces a stale persisted unsafe workflow with the same generated name", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-routes-unsafe-existing-"));
     const event = {
       id: "evt-routes-unsafe-existing-0001",
@@ -1822,9 +1880,10 @@ describe("loops CLI", () => {
     };
     const suffix = createHash("sha256").update("todos-task:task-routes-unsafe-existing-0001:task.created").digest("hex").slice(0, 12);
     const workflowName = `event:todos-task:task-rou:${suffix}:workflow`;
+    let staleWorkflowId = "";
     const store = new Store(join(dataDir, "loops.db"));
     try {
-      store.createWorkflow({
+      const staleWorkflow = store.createWorkflow({
         name: workflowName,
         steps: [
           {
@@ -1838,6 +1897,7 @@ describe("loops CLI", () => {
           },
         ],
       });
+      staleWorkflowId = staleWorkflow.id;
     } finally {
       store.close();
     }
@@ -1852,8 +1912,14 @@ describe("loops CLI", () => {
       "--sandbox",
       "workspace-write",
     ]);
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("manual break-glass");
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.workflow.id).not.toBe(staleWorkflowId);
+    expect(value.workflow.steps[0].target.sandbox).toBe("workspace-write");
+
+    const staleAfter = runCli(dataDir, ["--json", "workflows", "show", staleWorkflowId]);
+    expect(staleAfter.status).toBe(0);
+    expect(JSON.parse(staleAfter.stdout).status).toBe("archived");
   });
 
   test("todos task event handler dry-run exposes default worktree routing for git repos", () => {
@@ -2613,7 +2679,7 @@ describe("loops CLI", () => {
     expect(value.loop.id).toBe(created.loop.id);
   });
 
-  test("todos task event handler --preflight validates reused workflows before storing loop", () => {
+  test("todos task event handler --preflight replaces stale generated workflows before storing loop", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-preflight-existing-workflow-"));
     const event = {
       id: "evt-existing-workflow-preflight",
@@ -2630,24 +2696,30 @@ describe("loops CLI", () => {
     const preview = runCli(dataDir, ["--json", "events", "handle", "todos-task", "--dry-run"], JSON.stringify(event));
     expect(preview.status).toBe(0);
     const previewValue = JSON.parse(preview.stdout);
+    let staleWorkflowId = "";
     const store = new Store(join(dataDir, "loops.db"));
     try {
-      store.createWorkflow({
+      const staleWorkflow = store.createWorkflow({
         name: previewValue.workflow.name,
         steps: [{ id: "stale", target: { type: "command", command: "openloops-definitely-missing-binary" } }],
       });
+      staleWorkflowId = staleWorkflow.id;
     } finally {
       store.close();
     }
 
     const result = runCli(dataDir, ["--json", "events", "handle", "todos-task", "--preflight"], JSON.stringify(event));
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
     const value = JSON.parse(result.stdout);
-    expect(value.preflight.error).toContain("workflow step stale preflight failed");
+    expect(value.workflow.id).not.toBe(staleWorkflowId);
+    expect(value.loop.target.workflowId).toBe(value.workflow.id);
     const loops = runCli(dataDir, ["--json", "list"]);
-    expect(JSON.parse(loops.stdout)).toEqual([]);
+    expect(JSON.parse(loops.stdout)).toHaveLength(1);
+
+    const staleAfter = runCli(dataDir, ["--json", "workflows", "show", staleWorkflowId]);
+    expect(staleAfter.status).toBe(0);
+    expect(JSON.parse(staleAfter.stdout).status).toBe("archived");
   });
 
   test("todos task event handler ignores legacy event-id loop names and dedupes through work items", () => {
