@@ -2137,6 +2137,7 @@ describe("loops CLI", () => {
         description: `Fingerprint: github-pr:hasna/example#1\nRepository: ${repo}\nPR: https://github.com/hasna/example/pull/1`,
         status: "pending",
         task_list_id: "list-route",
+        working_dir: "/home/hasna",
         tags: ["auto:route"],
       },
     ];

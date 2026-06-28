@@ -1175,9 +1175,11 @@ function taskDescriptionProjectPath(task: TodosReadyTask): string | undefined {
 
 function taskProjectPath(task: TodosReadyTask): string | undefined {
   const metadata = objectField(task.metadata) ?? {};
-  return taskField(task, ["working_dir", "workingDir", "project_path", "projectPath", "cwd"]) ??
-    taskEventField(metadata, ["working_dir", "workingDir", "project_path", "projectPath", "project_canonical_path", "cwd"]) ??
-    taskDescriptionProjectPath(task);
+  return taskField(task, ["project_path", "projectPath"]) ??
+    taskEventField(metadata, ["project_path", "projectPath", "project_canonical_path"]) ??
+    taskDescriptionProjectPath(task) ??
+    taskField(task, ["working_dir", "workingDir", "cwd"]) ??
+    taskEventField(metadata, ["working_dir", "workingDir", "cwd"]);
 }
 
 function taskDrainEvent(task: TodosReadyTask): EventEnvelope {
