@@ -276,6 +276,147 @@ test("hosted API fails closed when auth token is not configured", async () => {
   service.close();
 });
 
+test("hosted API reads scoped token descriptors from environment JSON", async () => {
+  const previousTokens = process.env.HASNA_UPTIME_HOSTED_TOKENS;
+  const previousToken = process.env.HASNA_UPTIME_HOSTED_TOKEN;
+  const previousWorkspace = process.env.HASNA_UPTIME_WORKSPACE_ID;
+  process.env.HASNA_UPTIME_WORKSPACE_ID = "ws_env";
+  process.env.HASNA_UPTIME_HOSTED_TOKEN = "legacy-broad-token";
+  process.env.HASNA_UPTIME_HOSTED_TOKENS = JSON.stringify({
+    tokens: [
+      { token: "env-read", scopes: ["uptime:read"] },
+      { token: "env-write", scopes: ["uptime:write"], workspaceId: "ws_env" },
+    ],
+  });
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const handler = createApiHandler(service, { mode: "hosted" });
+
+  try {
+    const readSummary = await handler(new Request("https://uptime.test/api/v1/summary", {
+      headers: { authorization: "Bearer env-read" },
+    }));
+    const readCreate = await handler(jsonRequest(
+      "https://uptime.test/api/v1/monitors",
+      "POST",
+      { name: "read-only", kind: "http", url: "https://example.com" },
+      { origin: "https://uptime.test", authorization: "Bearer env-read" },
+    ));
+    const writeCreate = await handler(jsonRequest(
+      "https://uptime.test/api/v1/monitors",
+      "POST",
+      { name: "writer", kind: "http", url: "https://example.com" },
+      { origin: "https://uptime.test", authorization: "Bearer env-write" },
+    ));
+    const legacyFallback = await handler(new Request("https://uptime.test/api/v1/summary", {
+      headers: { authorization: "Bearer legacy-broad-token" },
+    }));
+    const workspaceMismatch = await handler(new Request("https://uptime.test/api/v1/summary?workspaceId=other", {
+      headers: { authorization: "Bearer env-read" },
+    }));
+
+    expect(readSummary.status).toBe(200);
+    expect(readCreate.status).toBe(403);
+    expect(writeCreate.status).toBe(201);
+    expect(legacyFallback.status).toBe(401);
+    expect(workspaceMismatch.status).toBe(403);
+    expect(service.summary().totals.monitors).toBe(1);
+  } finally {
+    service.close();
+    if (previousTokens === undefined) delete process.env.HASNA_UPTIME_HOSTED_TOKENS;
+    else process.env.HASNA_UPTIME_HOSTED_TOKENS = previousTokens;
+    if (previousToken === undefined) delete process.env.HASNA_UPTIME_HOSTED_TOKEN;
+    else process.env.HASNA_UPTIME_HOSTED_TOKEN = previousToken;
+    if (previousWorkspace === undefined) delete process.env.HASNA_UPTIME_WORKSPACE_ID;
+    else process.env.HASNA_UPTIME_WORKSPACE_ID = previousWorkspace;
+  }
+});
+
+test("hosted API accepts descriptor JSON from HASNA_UPTIME_HOSTED_TOKEN", async () => {
+  const previousTokens = process.env.HASNA_UPTIME_HOSTED_TOKENS;
+  const previousToken = process.env.HASNA_UPTIME_HOSTED_TOKEN;
+  delete process.env.HASNA_UPTIME_HOSTED_TOKENS;
+  process.env.HASNA_UPTIME_HOSTED_TOKEN = JSON.stringify({
+    tokens: [
+      { token: "json-read", scopes: ["uptime:read"], workspaceId: "ws_json" },
+      { token: "json-write", scopes: ["uptime:write"], workspaceId: "ws_json" },
+    ],
+  });
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const handler = createApiHandler(service, { mode: "hosted" });
+
+  try {
+    const summary = await handler(new Request("https://uptime.test/api/v1/summary", {
+      headers: { authorization: "Bearer json-read" },
+    }));
+    const readCreate = await handler(jsonRequest(
+      "https://uptime.test/api/v1/monitors",
+      "POST",
+      { name: "read-only", kind: "http", url: "https://example.com" },
+      { origin: "https://uptime.test", authorization: "Bearer json-read" },
+    ));
+    const writeCreate = await handler(jsonRequest(
+      "https://uptime.test/api/v1/monitors",
+      "POST",
+      { name: "writer", kind: "http", url: "https://example.com" },
+      { origin: "https://uptime.test", authorization: "Bearer json-write" },
+    ));
+
+    expect(summary.status).toBe(200);
+    expect(readCreate.status).toBe(403);
+    expect(writeCreate.status).toBe(201);
+  } finally {
+    service.close();
+    if (previousTokens === undefined) delete process.env.HASNA_UPTIME_HOSTED_TOKENS;
+    else process.env.HASNA_UPTIME_HOSTED_TOKENS = previousTokens;
+    if (previousToken === undefined) delete process.env.HASNA_UPTIME_HOSTED_TOKEN;
+    else process.env.HASNA_UPTIME_HOSTED_TOKEN = previousToken;
+  }
+});
+
+test("hosted API rejects invalid hosted token descriptors", async () => {
+  const previousTokens = process.env.HASNA_UPTIME_HOSTED_TOKENS;
+  process.env.HASNA_UPTIME_HOSTED_TOKENS = JSON.stringify({
+    tokens: [{ token: "bad", scopes: ["uptime:root"] }],
+  });
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const handler = createApiHandler(service, { mode: "hosted" });
+
+  try {
+    const summary = await handler(new Request("https://uptime.test/api/v1/summary", {
+      headers: { authorization: "Bearer bad" },
+    }));
+    expect(summary.status).toBe(500);
+    expect((await summary.json()).error).toContain("invalid hosted scope");
+  } finally {
+    service.close();
+    if (previousTokens === undefined) delete process.env.HASNA_UPTIME_HOSTED_TOKENS;
+    else process.env.HASNA_UPTIME_HOSTED_TOKENS = previousTokens;
+  }
+});
+
+test("hosted API rejects raw broad hosted token in production auth mode", async () => {
+  const previousAuthMode = process.env.HASNA_UPTIME_HOSTED_AUTH_MODE;
+  const previousToken = process.env.HASNA_UPTIME_HOSTED_TOKEN;
+  process.env.HASNA_UPTIME_HOSTED_AUTH_MODE = "production";
+  process.env.HASNA_UPTIME_HOSTED_TOKEN = "raw-broad";
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const handler = createApiHandler(service, { mode: "hosted" });
+
+  try {
+    const summary = await handler(new Request("https://uptime.test/api/v1/summary", {
+      headers: { authorization: "Bearer raw-broad" },
+    }));
+    expect(summary.status).toBe(500);
+    expect((await summary.json()).error).toContain("scoped hosted token JSON");
+  } finally {
+    service.close();
+    if (previousAuthMode === undefined) delete process.env.HASNA_UPTIME_HOSTED_AUTH_MODE;
+    else process.env.HASNA_UPTIME_HOSTED_AUTH_MODE = previousAuthMode;
+    if (previousToken === undefined) delete process.env.HASNA_UPTIME_HOSTED_TOKEN;
+    else process.env.HASNA_UPTIME_HOSTED_TOKEN = previousToken;
+  }
+});
+
 test("hosted API still rejects cross-origin mutations with a valid token", async () => {
   const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
   const handler = createApiHandler(service, { mode: "hosted", hostedToken: "secret" });

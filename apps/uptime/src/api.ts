@@ -380,14 +380,95 @@ function resolveApiToken(token?: string): string | undefined {
 }
 
 function resolveHostedTokens(options: Pick<CreateApiHandlerOptions, "hostedToken" | "hostedTokens">): HostedToken[] {
-  if (options.hostedTokens?.length) return options.hostedTokens;
+  const defaultWorkspaceId = process.env.HASNA_UPTIME_WORKSPACE_ID ?? "default";
+  if (options.hostedTokens?.length) {
+    return normalizeHostedTokenEntries(options.hostedTokens, defaultWorkspaceId);
+  }
+  const configuredTokens = process.env.HASNA_UPTIME_HOSTED_TOKENS;
+  if (configuredTokens?.trim()) {
+    return parseHostedTokensConfig(configuredTokens, defaultWorkspaceId, "HASNA_UPTIME_HOSTED_TOKENS");
+  }
   const token = options.hostedToken ?? process.env.HASNA_UPTIME_HOSTED_TOKEN;
   if (!token?.trim()) return [];
+  return parseHostedTokenValue(token, defaultWorkspaceId, options.hostedToken ? "--hosted-token" : "HASNA_UPTIME_HOSTED_TOKEN");
+}
+
+const HOSTED_SCOPES: readonly HostedScope[] = ["uptime:read", "uptime:write", "uptime:probe", "uptime:report", "uptime:admin"];
+const HOSTED_SCOPE_SET = new Set<HostedScope>(HOSTED_SCOPES);
+const LEGACY_HOSTED_TOKEN_SCOPES: HostedScope[] = ["uptime:read", "uptime:write", "uptime:probe", "uptime:report"];
+
+function parseHostedTokenValue(value: string, defaultWorkspaceId: string, source: string): HostedToken[] {
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    return parseHostedTokensConfig(trimmed, defaultWorkspaceId, source);
+  }
+  if (isHostedProductionMode()) {
+    throw new ApiError(`${source} must be scoped hosted token JSON when HASNA_UPTIME_HOSTED_AUTH_MODE=production`, 500);
+  }
   return [{
-    token: token.trim(),
-    scopes: ["uptime:read", "uptime:write", "uptime:probe", "uptime:report"],
-    workspaceId: process.env.HASNA_UPTIME_WORKSPACE_ID ?? "default",
+    token: trimmed,
+    scopes: LEGACY_HOSTED_TOKEN_SCOPES,
+    workspaceId: defaultWorkspaceId,
   }];
+}
+
+function parseHostedTokensConfig(value: string, defaultWorkspaceId: string, source: string): HostedToken[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new ApiError(`${source} must be valid hosted token JSON`, 500);
+  }
+  const entries = Array.isArray(parsed)
+    ? parsed
+    : isRecord(parsed) && Array.isArray(parsed.tokens)
+      ? parsed.tokens
+      : isRecord(parsed) && typeof parsed.token === "string"
+        ? [parsed]
+        : undefined;
+  if (!entries) throw new ApiError(`${source} must be a token object, token array, or object with tokens[]`, 500);
+  return normalizeHostedTokenEntries(entries, defaultWorkspaceId, source);
+}
+
+function normalizeHostedTokenEntries(entries: unknown[], defaultWorkspaceId: string, source = "hostedTokens"): HostedToken[] {
+  const tokens = entries.map((entry, index) => normalizeHostedTokenEntry(entry, defaultWorkspaceId, `${source}[${index}]`));
+  if (tokens.length === 0) throw new ApiError(`${source} must configure at least one hosted token`, 500);
+  return tokens;
+}
+
+function normalizeHostedTokenEntry(entry: unknown, defaultWorkspaceId: string, source: string): HostedToken {
+  if (!isRecord(entry)) throw new ApiError(`${source} must be an object`, 500);
+  if (typeof entry.token !== "string" || !entry.token.trim()) {
+    throw new ApiError(`${source}.token is required`, 500);
+  }
+  const scopes = normalizeHostedScopes(entry.scopes, `${source}.scopes`);
+  const workspaceId = typeof entry.workspaceId === "string" && entry.workspaceId.trim()
+    ? entry.workspaceId.trim()
+    : defaultWorkspaceId;
+  return { token: entry.token.trim(), scopes, workspaceId };
+}
+
+function normalizeHostedScopes(value: unknown, source: string): HostedScope[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new ApiError(`${source} must be a non-empty array`, 500);
+  }
+  const scopes = new Set<HostedScope>();
+  for (const scope of value) {
+    if (typeof scope !== "string" || !HOSTED_SCOPE_SET.has(scope as HostedScope)) {
+      throw new ApiError(`${source} contains an invalid hosted scope`, 500);
+    }
+    scopes.add(scope as HostedScope);
+  }
+  return [...scopes];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isHostedProductionMode(): boolean {
+  return process.env.HASNA_UPTIME_HOSTED_AUTH_MODE === "production" || process.env.NODE_ENV === "production";
 }
 
 function resolveHostedAllowedOrigins(options: Pick<CreateApiHandlerOptions, "hostedAllowedOrigins">): string[] {

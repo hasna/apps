@@ -207,7 +207,7 @@ ids. Use a scoped hosted token only from the operator secret store.
 
 ```bash
 EDGE_URL="$(terraform -chdir="$TF_DIR" output -raw protected_access_url)"
-: "${HOSTED_TOKEN_FILE:?set HOSTED_TOKEN_FILE to a 0600 file containing the scoped hosted token}"
+: "${HOSTED_TOKEN_FILE:?set HOSTED_TOKEN_FILE to a 0600 file containing the scoped read hosted token}"
 HOSTED_TOKEN="$(tr -d '\n' < "$HOSTED_TOKEN_FILE")"
 
 curl -fsS "$EDGE_URL/health"
@@ -224,6 +224,22 @@ Expected results:
 - Authenticated API reads return only the authorized workspace.
 - Direct ALB origin access is denied unless it is the approved CloudFront origin
   path.
+
+Hosted deployments should store scoped hosted-token JSON in Secrets Manager, not
+a single broad raw token. The runtime accepts `HASNA_UPTIME_HOSTED_TOKENS` JSON
+or JSON-compatible `HASNA_UPTIME_HOSTED_TOKEN` values shaped like:
+
+```json
+{
+  "tokens": [
+    { "token": "<read-token>", "scopes": ["uptime:read"], "workspaceId": "<workspace-id>" },
+    { "token": "<write-token>", "scopes": ["uptime:write"], "workspaceId": "<workspace-id>" }
+  ]
+}
+```
+
+Do not record token values in runbooks, logs, task overrides, or deployment
+evidence.
 
 ## Logs And Alarms
 

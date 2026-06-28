@@ -93,6 +93,21 @@ non-loopback mutation hosts by default. For a trusted remote bind, set
 `Authorization: Bearer <token>` or `X-Uptime-Token: <token>`.
 Hosted mode additionally accepts comma-separated public origins from
 `HASNA_UPTIME_ALLOWED_ORIGINS` for deployments behind a TLS-terminating edge.
+Hosted tokens can be provided as a single legacy token through
+`HASNA_UPTIME_HOSTED_TOKEN`, or as scoped JSON through
+`HASNA_UPTIME_HOSTED_TOKENS`:
+
+```json
+{
+  "tokens": [
+    { "token": "read-token", "scopes": ["uptime:read"], "workspaceId": "default" },
+    { "token": "write-token", "scopes": ["uptime:write"], "workspaceId": "default" }
+  ]
+}
+```
+
+Use scoped JSON for hosted deployments. A single raw hosted token is kept only
+for local compatibility and expands to broad read/write/probe/report scopes.
 Endpoints that accept request bodies require `content-type: application/json`.
 
 ## Uptime Semantics

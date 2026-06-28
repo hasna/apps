@@ -436,8 +436,9 @@ required before browser evidence or public probe scale-out.
   ECR, dormant ECS services, ALB, CloudFront default-domain distribution,
   evidence bucket, encrypted logs, Backup, EFS, and service secret containers.
   It is not live: services remain at desired count `0`, secrets have
-  `AWSCURRENT` values but hosted auth is still bootstrap-token grade, and no
-  ACM cert or Route53 record exists for a later custom-hostname path.
+  `AWSCURRENT` values, scoped hosted-token descriptors can be used for operator
+  smokes, and no ACM cert or Route53 record exists for a later custom-hostname
+  path. Full production identity/RBAC is still not implemented.
 - Open Uptime is still SQLite-only for this bridge; only one protected web task
   may write EFS until Postgres and cloud leases exist.
 - Hosted API/dashboard auth, workspace RBAC, target policy, and Postgres leases

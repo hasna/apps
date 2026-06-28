@@ -6,6 +6,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.20] - 2026-06-28
+
+### Added
+
+- Added hosted-token JSON descriptor parsing from
+  `HASNA_UPTIME_HOSTED_TOKENS` and JSON-compatible
+  `HASNA_UPTIME_HOSTED_TOKEN` values, allowing deployed secrets to provide
+  scoped workspace tokens instead of one broad raw token.
+
+### Changed
+
+- Updated hosted auth docs and AWS runbook guidance to prefer scoped static
+  operator tokens for zero-count smokes while keeping full production
+  identity/RBAC as a live gate.
+
 ## [0.1.19] - 2026-06-28
 
 ### Added

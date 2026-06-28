@@ -201,7 +201,7 @@ variable "container_image" {
 variable "runtime_package_version" {
   description = "Published @hasna/uptime package version that CodeBuild should build into the ECR image."
   type        = string
-  default     = "0.1.19"
+  default     = "0.1.20"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$", var.runtime_package_version))
@@ -242,7 +242,7 @@ variable "app_env_secret_arn" {
 }
 
 variable "hosted_token_secret_arn" {
-  description = "Secrets Manager/SSM ARN containing HASNA_UPTIME_HOSTED_TOKEN for hosted web auth bootstrap."
+  description = "Secrets Manager/SSM ARN injected as HASNA_UPTIME_HOSTED_TOKEN. Hosted deployments should store scoped hosted-token JSON descriptors here, not a single broad raw token."
   type        = string
 
   validation {

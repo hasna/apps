@@ -834,7 +834,7 @@ program
   .option("--check", "run the scheduler while serving")
   .addOption(new Option("--mode <mode>", "runtime mode").choices(["local", "hosted"]).default("local"))
   .option("--api-token <token>", "token required for non-loopback mutation hosts")
-  .option("--hosted-token <token>", "scoped hosted-mode token")
+  .option("--hosted-token <token>", "hosted-mode token for local/dev use; deployments should prefer scoped hosted-token JSON in secret env")
   .option("--hosted-sqlite-db <path>", "absolute SQLite database path on hosted cloud-mounted storage")
   .option("--allow-hosted-local-store", "allow hosted mode to use local SQLite as an explicit fallback")
   .option("--allow-unsafe-remote-mutations", "allow state-changing requests from non-loopback hosts without a token")

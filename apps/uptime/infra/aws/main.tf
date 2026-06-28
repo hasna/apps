@@ -1153,6 +1153,7 @@ resource "aws_ecs_task_definition" "service" {
       }] : []
       environment = concat([
         { name = "HASNA_UPTIME_MODE", value = "hosted" },
+        { name = "HASNA_UPTIME_HOSTED_AUTH_MODE", value = "production" },
         { name = "HASNA_UPTIME_WORKSPACE_ID", value = var.workspace_id },
         { name = "HASNA_UPTIME_COMPONENT", value = each.key },
         { name = "HASNA_UPTIME_HOSTNAME", value = var.hostname },
