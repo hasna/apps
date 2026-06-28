@@ -280,6 +280,15 @@ function idFromResponse(data: unknown): string | undefined {
   for (const key of ["id", "message_id", "event_id"]) {
     if (typeof record[key] === "string") return record[key];
   }
+  if (Array.isArray(record.events)) {
+    for (const event of record.events) {
+      if (!event || typeof event !== "object") continue;
+      const eventRecord = event as Record<string, unknown>;
+      for (const key of ["id", "event_id"]) {
+        if (typeof eventRecord[key] === "string") return eventRecord[key];
+      }
+    }
+  }
   return undefined;
 }
 

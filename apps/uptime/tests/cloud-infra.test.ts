@@ -19,7 +19,7 @@ test("Dockerfile builds a hosted non-root Bun runtime without plaintext secrets"
   expect(packageDockerfile).toContain("FROM public.ecr.aws/docker/library/node:22-alpine AS bun");
   expect(packageDockerfile).toContain("FROM public.ecr.aws/docker/library/alpine:3.22 AS runtime");
   expect(packageDockerfile).toContain("npm install -g bun@1.3.13");
-  expect(packageDockerfile).toContain("apk add --no-cache ca-certificates");
+  expect(packageDockerfile).toContain("apk add --no-cache ca-certificates libgcc libstdc++");
   expect(packageDockerfile).toContain("COPY dist ./dist");
   expect(packageDockerfile).toContain("bun install --production");
   expect(packageDockerfile).toContain("-u 10001");
@@ -126,7 +126,7 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(variables).toContain("web            = 0");
   expect(tfvars).toContain("container_image");
   expect(tfvars).toContain('protected_access_mode    = "cloudfront_default_domain"');
-  expect(tfvars).toContain('runtime_package_version  = "0.1.16"');
+  expect(tfvars).toContain('runtime_package_version  = "0.1.17"');
   expect(tfvars).toContain('project_name             = "open-uptime"');
   expect(tfvars).toContain("monthly_budget_limit_usd");
   expect(tfvars).toContain("private_route_table_ids");

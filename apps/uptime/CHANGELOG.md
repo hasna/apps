@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.17] - 2026-06-28
+
+### Fixed
+
+- Added Alpine `libgcc` and `libstdc++` runtime packages to the packaged
+  production Dockerfile so the copied Bun binary can run in the final image.
+- Read Open Logs structured ingest IDs from nested `events[]` responses when
+  recording report delivery receipts.
+
 ## [0.1.16] - 2026-06-28
 
 ### Changed

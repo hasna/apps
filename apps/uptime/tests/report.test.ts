@@ -161,3 +161,20 @@ test("sendUptimeReport reads Open Logs API token env names and redacts success i
     else process.env.HASNA_LOGS_API_TOKEN = previous;
   }
 });
+
+test("sendUptimeReport reads Open Logs structured ingest event ids", async () => {
+  const deliveries = await sendUptimeReport(summary(), {
+    logs: {
+      apiUrl: "http://logs.test",
+      apiKey: "logs_secret",
+      projectId: "uptime",
+    },
+    fetchImpl: (async () => new Response(JSON.stringify({
+      events: [{ id: "evt_123" }],
+    }), { status: 201 })) as unknown as typeof fetch,
+  });
+
+  expect(deliveries).toEqual([
+    { channel: "logs", ok: true, status: 201, id: "evt_123" },
+  ]);
+});
