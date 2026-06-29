@@ -306,9 +306,11 @@ loops templates create-workflow custom-report \
 Use `--source builtin`, `--source custom`, or `--source all` on
 `list`, `show`, `render`, and `create-workflow` when automation needs an
 explicit source. Custom template ids and names cannot override built-ins.
-Custom templates fail closed for `danger-full-access`; use built-in templates
-with explicit break-glass handling for emergency workflows that need that
-sandbox.
+Custom templates fail closed for `danger-full-access`, dangerous passthrough
+arguments, and implicit Codewith/Codex full-access defaults. If a custom
+Codewith/Codex template uses `permissionMode: "bypass"`, it must also set
+`sandbox` to `workspace-write` or `read-only`. Use built-in templates with
+explicit break-glass handling for emergency workflows that need full access.
 
 For event-driven task automation, `loops events handle todos-task` reads a
 Hasna event envelope from stdin or `HASNA_EVENT_JSON`, records a

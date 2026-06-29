@@ -356,6 +356,11 @@ const CUSTOM_TEMPLATE_VARIABLE_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 const CUSTOM_TEMPLATE_VARIABLE_TYPES = new Set<LoopTemplateVariableType>(["string", "number", "boolean", "json", "string[]"]);
 const CUSTOM_TEMPLATE_PLACEHOLDER = /\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g;
 const CUSTOM_TEMPLATE_EXACT_PLACEHOLDER = /^\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}$/;
+const CUSTOM_TEMPLATE_DANGEROUS_ARG_PATTERNS = [
+  "danger-full-access",
+  "dangerously-bypass",
+  "dangerously-skip",
+];
 
 function compactJson(value: unknown): string {
   return JSON.stringify(value);
@@ -752,6 +757,12 @@ function validateCustomTemplateId(id: string, label: string): void {
   }
 }
 
+function optionalTemplateBoolean(value: unknown, label: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") throw new Error(`${label} must be a boolean`);
+  return value;
+}
+
 function validateCustomTemplateVariables(value: unknown, label: string): LoopTemplateVariable[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
@@ -771,31 +782,63 @@ function validateCustomTemplateVariables(value: unknown, label: string): LoopTem
     if (type && !CUSTOM_TEMPLATE_VARIABLE_TYPES.has(type)) {
       throw new Error(`${entryLabel}.type must be one of ${[...CUSTOM_TEMPLATE_VARIABLE_TYPES].join(", ")}`);
     }
-    if (defaultValue === "danger-full-access") {
-      throw new Error(`${entryLabel}.default cannot be danger-full-access in a custom template`);
+    if (defaultValue && CUSTOM_TEMPLATE_DANGEROUS_ARG_PATTERNS.some((pattern) => defaultValue.includes(pattern))) {
+      throw new Error(`${entryLabel}.default cannot contain dangerous sandbox or bypass flags in a custom template`);
     }
     return {
       name,
       description,
-      required: entry.required === undefined ? undefined : Boolean(entry.required),
+      required: optionalTemplateBoolean(entry.required, `${entryLabel}.required`),
       default: defaultValue,
       type,
     };
   });
 }
 
-function assertNoDangerFullAccess(value: unknown, label: string): void {
+function hasDangerousArg(value: string): boolean {
+  return CUSTOM_TEMPLATE_DANGEROUS_ARG_PATTERNS.some((pattern) => value.includes(pattern));
+}
+
+function assertNoDangerousCustomTemplateScalars(value: unknown, label: string): void {
+  if (typeof value === "string") {
+    if (hasDangerousArg(value)) {
+      throw new Error(`${label} contains a dangerous sandbox or bypass flag; custom templates must not request danger-full-access`);
+    }
+    return;
+  }
   if (!value || typeof value !== "object") return;
   if (Array.isArray(value)) {
-    value.forEach((entry, index) => assertNoDangerFullAccess(entry, `${label}[${index}]`));
+    value.forEach((entry, index) => assertNoDangerousCustomTemplateScalars(entry, `${label}[${index}]`));
     return;
   }
   for (const [key, entry] of Object.entries(value)) {
-    if (key === "sandbox" && entry === "danger-full-access") {
-      throw new Error(`${label}.${key} uses danger-full-access; custom templates must not request danger-full-access`);
-    }
-    assertNoDangerFullAccess(entry, `${label}.${key}`);
+    assertNoDangerousCustomTemplateScalars(entry, `${label}.${key}`);
   }
+}
+
+function assertNoImplicitDangerFullAccess(value: unknown, label: string): void {
+  if (!value || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => assertNoImplicitDangerFullAccess(entry, `${label}[${index}]`));
+    return;
+  }
+  const object = value as Record<string, unknown>;
+  if (
+    object.type === "agent" &&
+    (object.provider === "codewith" || object.provider === "codex") &&
+    object.permissionMode === "bypass" &&
+    object.sandbox === undefined
+  ) {
+    throw new Error(`${label} uses permissionMode=bypass for ${object.provider} without an explicit sandbox; set sandbox=workspace-write or read-only`);
+  }
+  for (const [key, entry] of Object.entries(object)) {
+    assertNoImplicitDangerFullAccess(entry, `${label}.${key}`);
+  }
+}
+
+function assertCustomTemplateSafety(value: unknown, label: string): void {
+  assertNoDangerousCustomTemplateScalars(value, label);
+  assertNoImplicitDangerFullAccess(value, label);
 }
 
 function customTemplateDefinitionFromJson(value: unknown, sourcePath: string): CustomLoopTemplateDefinition {
@@ -808,7 +851,7 @@ function customTemplateDefinitionFromJson(value: unknown, sourcePath: string): C
   const variables = validateCustomTemplateVariables(value.variables, `${sourcePath}.variables`);
   if (value.workflow === undefined) throw new Error(`${sourcePath}.workflow is required`);
   assertRecord(value.workflow, `${sourcePath}.workflow`);
-  assertNoDangerFullAccess(value.workflow, `${sourcePath}.workflow`);
+  assertCustomTemplateSafety(value.workflow, `${sourcePath}.workflow`);
   return { id, name, description, kind, variables, workflow: value.workflow };
 }
 
@@ -853,10 +896,10 @@ function assertNoTemplateCollisions(entries: CustomLoopTemplateEntry[]): void {
   }
 }
 
-function loadCustomLoopTemplates(): CustomLoopTemplateEntry[] {
+function loadCustomLoopTemplatesRaw(): CustomLoopTemplateEntry[] {
   const dir = customLoopTemplatesDir();
   if (!existsSync(dir)) return [];
-  const entries = readdirSync(dir, { withFileTypes: true })
+  return readdirSync(dir, { withFileTypes: true })
     .filter((entry) => entry.name.endsWith(".json"))
     .sort((left, right) => left.name.localeCompare(right.name))
     .map((entry) => {
@@ -865,6 +908,10 @@ function loadCustomLoopTemplates(): CustomLoopTemplateEntry[] {
       if (!entry.isFile()) throw new Error(`custom template registry entry is not a regular file: ${file}`);
       return readCustomTemplateFile(file);
     });
+}
+
+function loadCustomLoopTemplates(): CustomLoopTemplateEntry[] {
+  const entries = loadCustomLoopTemplatesRaw();
   assertNoTemplateCollisions(entries);
   return entries;
 }
@@ -957,23 +1004,28 @@ function renderCustomTemplateNode(value: unknown, values: Record<string, unknown
 function renderCustomLoopTemplate(entry: CustomLoopTemplateEntry, values: Record<string, string | undefined>): CreateWorkflowInput {
   const renderedValues = customTemplateValues(entry.definition, values);
   const rendered = renderCustomTemplateNode(entry.definition.workflow, renderedValues, entry.definition.id);
-  assertNoDangerFullAccess(rendered, `custom template ${entry.definition.id}.workflow`);
-  return workflowBodyFromJson(rendered);
+  assertCustomTemplateSafety(rendered, `custom template ${entry.definition.id}.workflow`);
+  const workflow = workflowBodyFromJson(rendered);
+  assertCustomTemplateSafety(workflow, `custom template ${entry.definition.id}.workflow`);
+  return workflow;
 }
 
 export function validateCustomLoopTemplateFile(file: string): LoopTemplateSummary {
-  const entry = readCustomTemplateFile(resolve(file));
-  assertNoTemplateCollisions([entry]);
+  const source = resolve(file);
+  const entry = readCustomTemplateFile(source);
+  const existing = loadCustomLoopTemplatesRaw().filter((template) => resolve(template.path) !== source);
+  assertNoTemplateCollisions([...existing, entry]);
   return structuredClone(entry.summary);
 }
 
 export function importCustomLoopTemplate(file: string, opts: CustomLoopTemplateImportOptions = {}): CustomLoopTemplateImportResult {
   const source = resolve(file);
   const entry = readCustomTemplateFile(source);
-  assertNoTemplateCollisions([entry]);
   const dir = ensureCustomLoopTemplatesDir();
   const destination = join(dir, `${entry.definition.id}.json`);
   const replaced = existsSync(destination);
+  const existing = loadCustomLoopTemplatesRaw().filter((template) => resolve(template.path) !== resolve(destination));
+  assertNoTemplateCollisions([...existing, { ...entry, path: destination, summary: customTemplateSummary(entry.definition, destination) }]);
   if (replaced) {
     const stat = lstatSync(destination);
     if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`refusing to replace non-regular custom template file: ${destination}`);

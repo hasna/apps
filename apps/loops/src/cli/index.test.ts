@@ -1686,11 +1686,81 @@ describe("loops CLI", () => {
     expect(list.status).not.toBe(0);
     expect(list.stderr).toContain("danger-full-access");
 
-    const invalidFile = join(dataDir, "invalid-template.json");
+    const invalidDataDir = mkdtempSync(join(tmpdir(), "loops-cli-custom-template-invalid-shape-"));
+    const invalidFile = join(invalidDataDir, "invalid-template.json");
     writeFileSync(invalidFile, JSON.stringify({ id: "invalid", name: "Invalid", kind: "workflow" }));
-    const imported = runCli(dataDir, ["--json", "templates", "import", invalidFile]);
+    const imported = runCli(invalidDataDir, ["--json", "templates", "import", invalidFile]);
     expect(imported.status).not.toBe(0);
     expect(imported.stderr).toContain("description");
+
+    const invalidRequiredFile = join(invalidDataDir, "invalid-required-template.json");
+    writeFileSync(invalidRequiredFile, JSON.stringify({
+      id: "invalid-required",
+      name: "Invalid Required",
+      description: "Invalid required flag.",
+      kind: "workflow",
+      variables: [{ name: "objective", required: "false" }],
+      workflow: {
+        name: "invalid-required",
+        steps: [{ id: "check", target: { type: "command", command: "true" } }],
+      },
+    }));
+    const invalidRequired = runCli(invalidDataDir, ["--json", "templates", "import", invalidRequiredFile]);
+    expect(invalidRequired.status).not.toBe(0);
+    expect(invalidRequired.stderr).toContain("required");
+
+    const implicitDangerDataDir = mkdtempSync(join(tmpdir(), "loops-cli-custom-template-implicit-danger-"));
+    const implicitDangerFile = join(implicitDangerDataDir, "implicit-danger-template.json");
+    writeFileSync(implicitDangerFile, JSON.stringify({
+      id: "implicit-danger",
+      name: "Implicit Danger",
+      description: "Codewith bypass without explicit sandbox.",
+      kind: "workflow",
+      workflow: {
+        name: "implicit-danger",
+        steps: [
+          {
+            id: "worker",
+            target: {
+              type: "agent",
+              provider: "codewith",
+              prompt: "/goal implicit danger",
+              permissionMode: "bypass",
+            },
+          },
+        ],
+      },
+    }));
+    const implicitDanger = runCli(implicitDangerDataDir, ["--json", "templates", "import", implicitDangerFile]);
+    expect(implicitDanger.status).not.toBe(0);
+    expect(implicitDanger.stderr).toContain("explicit sandbox");
+
+    const extraArgsDangerDataDir = mkdtempSync(join(tmpdir(), "loops-cli-custom-template-extra-args-danger-"));
+    const extraArgsDangerFile = join(extraArgsDangerDataDir, "extra-args-danger-template.json");
+    writeFileSync(extraArgsDangerFile, JSON.stringify({
+      id: "extra-args-danger",
+      name: "Extra Args Danger",
+      description: "Dangerous sandbox hidden in extra args.",
+      kind: "workflow",
+      workflow: {
+        name: "extra-args-danger",
+        steps: [
+          {
+            id: "worker",
+            target: {
+              type: "agent",
+              provider: "codewith",
+              prompt: "/goal extra args danger",
+              sandbox: "workspace-write",
+              extraArgs: ["--sandbox", "danger-full-access"],
+            },
+          },
+        ],
+      },
+    }));
+    const extraArgsDanger = runCli(extraArgsDangerDataDir, ["--json", "templates", "import", extraArgsDangerFile]);
+    expect(extraArgsDanger.status).not.toBe(0);
+    expect(extraArgsDanger.stderr).toContain("dangerous sandbox");
 
     const safeDataDir = mkdtempSync(join(tmpdir(), "loops-cli-custom-template-safe-render-"));
     const safeFile = join(safeDataDir, "safe-template.json");
@@ -1756,6 +1826,34 @@ describe("loops CLI", () => {
     const imported = runCli(dataDir, ["--json", "templates", "import", collisionFile]);
     expect(imported.status).not.toBe(0);
     expect(imported.stderr).toContain("collides with built-in");
+
+    const firstCustomFile = join(dataDir, "first-custom-template.json");
+    writeFileSync(firstCustomFile, JSON.stringify({
+      id: "custom-one",
+      name: "Custom One",
+      description: "First custom template.",
+      kind: "workflow",
+      workflow: {
+        name: "custom-one",
+        steps: [{ id: "check", target: { type: "command", command: "true" } }],
+      },
+    }));
+    expect(runCli(dataDir, ["--json", "templates", "import", firstCustomFile]).status).toBe(0);
+
+    const customNameCollisionFile = join(dataDir, "custom-name-collision-template.json");
+    writeFileSync(customNameCollisionFile, JSON.stringify({
+      id: "custom-two",
+      name: "custom-one",
+      description: "Second custom template with name colliding with an existing id.",
+      kind: "workflow",
+      workflow: {
+        name: "custom-two",
+        steps: [{ id: "check", target: { type: "command", command: "true" } }],
+      },
+    }));
+    const customNameCollision = runCli(dataDir, ["--json", "templates", "import", customNameCollisionFile]);
+    expect(customNameCollision.status).not.toBe(0);
+    expect(customNameCollision.stderr).toContain("collides with");
 
     const render = runCli(dataDir, [
       "--json",
