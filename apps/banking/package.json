@@ -1,0 +1,68 @@
+{
+  "name": "@hasna/banking",
+  "version": "0.0.1",
+  "description": "Agent-safe banking control plane for Hasna infrastructure and AI agents.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hasna/banking.git"
+  },
+  "homepage": "https://github.com/hasna/banking",
+  "bugs": {
+    "url": "https://github.com/hasna/banking/issues"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "bin": {
+    "banking": "dist/cli/index.js",
+    "banking-mcp": "dist/mcp/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "CONTRIBUTING.md"
+  ],
+  "scripts": {
+    "build": "rm -rf dist && bun build src/index.ts --outdir dist --target bun --format esm && bun build src/cli/index.ts --outfile dist/cli/index.js --target bun --format esm && bun build src/mcp/index.ts --outfile dist/mcp/index.js --target bun --format esm && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "lint": "tsc --noEmit",
+    "smoke:cli": "bun run src/cli/index.ts --help && bun run src/cli/index.ts providers list --json",
+    "smoke:mcp": "bun run src/mcp/index.ts --help",
+    "smoke:dist": "bun scripts/smoke-dist.ts",
+    "pack:check": "bun pm pack --dry-run --ignore-scripts",
+    "verify:release": "bun run typecheck && bun test && bun run build && bun run smoke:dist && bun run pack:check",
+    "dev:cli": "bun run src/cli/index.ts",
+    "dev:mcp": "bun run src/mcp/index.ts",
+    "postinstall": "bun scripts/postinstall.ts",
+    "prepack": "bun run verify:release",
+    "prepublishOnly": "bun run verify:release"
+  },
+  "keywords": [
+    "banking",
+    "open-banking",
+    "agents",
+    "mcp",
+    "payments",
+    "cards",
+    "hasna"
+  ],
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.14",
+    "typescript": "5.9.3"
+  }
+}
