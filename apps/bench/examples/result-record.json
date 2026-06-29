@@ -1,0 +1,30 @@
+{
+  "eventType": "manual-fixture",
+  "payload": {
+    "source": "examples/result-record.json",
+    "note": "Deterministic local result fixture for CLI and SDK smoke tests."
+  },
+  "metrics": [
+    {
+      "metricId": "accuracy",
+      "value": 0.72,
+      "unit": "ratio",
+      "direction": "higher-is-better"
+    },
+    {
+      "metricId": "exact_match",
+      "value": 0.68,
+      "unit": "ratio",
+      "direction": "higher-is-better"
+    }
+  ],
+  "usage": {
+    "inputTokens": 120,
+    "outputTokens": 34,
+    "costUsd": 0.012,
+    "latencyMs": 1400
+  },
+  "labels": {
+    "fixture": true
+  }
+}

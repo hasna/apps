@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "wks_jw63302y9eb4",
+  "slug": "open-bench",
+  "name": "@hasna/bench",
+  "kind": "open-source",
+  "root_id": null,
+  "recipe_id": null,
+  "primary_path": "/home/hasna/workspace/hasna/opensource/open-bench",
+  "git_remote": null,
+  "tags": [],
+  "integrations": {
+    "todos_project_id": "a4fe4014-2217-4689-b855-a1a3323a4b40",
+    "todos_task_list_id": "ec1dbda3-707a-4547-9f19-24a100389d1a"
+  },
+  "generated_at": "2026-06-29T19:23:34.887Z"
+}
