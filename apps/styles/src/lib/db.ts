@@ -1,7 +1,89 @@
-import { SqliteAdapter as Database } from "@hasna/cloud";
+import { Database } from "bun:sqlite";
+import type { Statement } from "bun:sqlite";
 import { join, dirname } from "path";
 import { mkdirSync, existsSync, copyFileSync } from "fs";
 import { getStylesDir } from "./paths.js";
+
+interface RunResult {
+  changes: number;
+  lastInsertRowid: number | bigint;
+}
+
+interface PreparedStatement {
+  run(...params: any[]): RunResult;
+  get(...params: any[]): any;
+  all(...params: any[]): any[];
+  finalize(): void;
+}
+
+class StylesSqliteAdapter {
+  private db: Database;
+
+  constructor(path: string) {
+    this.db = new Database(path, { create: true });
+    this.db.exec("PRAGMA journal_mode=WAL");
+    this.db.exec("PRAGMA foreign_keys=ON");
+  }
+
+  run(sql: string, ...params: any[]): RunResult {
+    const result = this.db.prepare(sql).run(...params);
+    return {
+      changes: result.changes,
+      lastInsertRowid: result.lastInsertRowid,
+    };
+  }
+
+  get(sql: string, ...params: any[]): any {
+    return this.db.prepare(sql).get(...params);
+  }
+
+  all(sql: string, ...params: any[]): any[] {
+    return this.db.prepare(sql).all(...params);
+  }
+
+  exec(sql: string): void {
+    this.db.exec(sql);
+  }
+
+  query(sql: string): Statement {
+    return this.db.query(sql);
+  }
+
+  prepare(sql: string): PreparedStatement {
+    const stmt = this.db.prepare(sql);
+    return {
+      run(...params: any[]) {
+        const result = stmt.run(...params);
+        return {
+          changes: result.changes,
+          lastInsertRowid: result.lastInsertRowid,
+        };
+      },
+      get(...params: any[]) {
+        return stmt.get(...params);
+      },
+      all(...params: any[]) {
+        return stmt.all(...params);
+      },
+      finalize() {
+        stmt.finalize();
+      },
+    };
+  }
+
+  close(): void {
+    this.db.close();
+  }
+
+  transaction<T>(fn: () => T): T {
+    const wrapped = this.db.transaction(fn);
+    return wrapped();
+  }
+
+  get raw(): Database {
+    return this.db;
+  }
+}
 
 export function getDataDir(): string {
   return getStylesDir();
@@ -9,7 +91,7 @@ export function getDataDir(): string {
 
 export const DB_PATH = join(getDataDir(), "styles.db");
 
-let _db: Database | null = null;
+let _db: StylesSqliteAdapter | null = null;
 let _dbPath: string = DB_PATH;
 
 export function resetDb(): void {
@@ -22,19 +104,19 @@ export function setDbPath(path: string): void {
   _dbPath = path;
 }
 
-export function getDb(): Database {
+export function getDb(): StylesSqliteAdapter {
   if (_db) return _db;
   _db = initDb();
   return _db;
 }
 
-export function initDb(): Database {
+export function initDb(): StylesSqliteAdapter {
   const dir = dirname(_dbPath);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
 
-  const db = new Database(_dbPath);
+  const db = new StylesSqliteAdapter(_dbPath);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS style_profiles (

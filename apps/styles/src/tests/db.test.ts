@@ -62,6 +62,15 @@ describe("db", () => {
       const db = initDb();
       expect(db).toBeDefined();
     });
+
+    test("enables WAL and foreign keys", () => {
+      const db = initDb();
+      const journal = db.get("PRAGMA journal_mode") as { journal_mode: string };
+      const foreignKeys = db.get("PRAGMA foreign_keys") as { foreign_keys: number };
+
+      expect(journal.journal_mode).toBe("wal");
+      expect(foreignKeys.foreign_keys).toBe(1);
+    });
   });
 
   describe("getDb", () => {
@@ -87,6 +96,25 @@ describe("db", () => {
       expect(tableNames).toContain("extracted_style_kits");
       expect(tableNames).toContain("agent_presence");
       expect(tableNames).toContain("feedback");
+    });
+
+    test("keeps the exported compatibility API", () => {
+      const db = getDb();
+
+      db.run("CREATE TABLE compat_test (id TEXT PRIMARY KEY, value TEXT)");
+      db.run("INSERT INTO compat_test (id, value) VALUES (?, ?)", "one", "alpha");
+
+      expect(db.raw).toBeDefined();
+      expect(db.get("SELECT value FROM compat_test WHERE id = ?", "one")).toEqual({ value: "alpha" });
+      expect(db.all("SELECT id FROM compat_test ORDER BY id")).toEqual([{ id: "one" }]);
+
+      const result = db.transaction(() => {
+        db.run("INSERT INTO compat_test (id, value) VALUES (?, ?)", "two", "beta");
+        return "committed";
+      });
+
+      expect(result).toBe("committed");
+      expect(db.get("SELECT value FROM compat_test WHERE id = ?", "two")).toEqual({ value: "beta" });
     });
   });
 

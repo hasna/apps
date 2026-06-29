@@ -45,16 +45,6 @@ styles-mcp --http
 - Health: `GET http://127.0.0.1:8837/health`
 - MCP: `http://127.0.0.1:8837/mcp`
 
-## Cloud Sync
-
-This package supports cloud sync via `@hasna/cloud`:
-
-```bash
-cloud setup
-cloud sync push --service styles
-cloud sync pull --service styles
-```
-
 ## Data Directory
 
 Data is stored in `~/.hasna/styles/`. Existing `~/.open-styles/` or

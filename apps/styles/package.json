@@ -1,6 +1,6 @@
 {
   "name": "@hasna/styles",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "Style management platform for AI coding agents — profiles, preferences, health checks, and design system enforcement",
   "type": "module",
   "bin": {
@@ -24,7 +24,7 @@
   "types": "./dist/index.d.ts",
   "scripts": {
     "clean": "rm -rf bin/ dist/",
-    "build": "bun run clean && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk --external playwright && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun --external playwright --external ink --external react --external react-devtools-core && bun build ./src/index.ts --outdir ./dist --target bun --external playwright && (tsc --emitDeclarationOnly --declaration --outDir dist || true) && for f in ./bin/index.js ./bin/mcp.js; do if [ -f \"$f\" ] && ! head -1 \"$f\" | grep -q '^#!'; then printf '#!/usr/bin/env bun\\n' | cat - \"$f\" > \"$f.tmp\" && mv \"$f.tmp\" \"$f\" && chmod +x \"$f\"; fi; done",
+    "build": "bun run clean && bun build ./src/cli/index.tsx --outdir ./bin --target bun --external ink --external react --external chalk --external playwright && bun build ./src/mcp/index.ts --outfile ./bin/mcp.js --target bun --external playwright --external ink --external react --external react-devtools-core && bun build ./src/index.ts --outdir ./dist --target bun --external playwright && tsc --emitDeclarationOnly --declaration --outDir dist && for f in ./bin/index.js ./bin/mcp.js; do if [ -f \"$f\" ] && ! head -1 \"$f\" | grep -q '^#!'; then printf '#!/usr/bin/env bun\\n' | cat - \"$f\" > \"$f.tmp\" && mv \"$f.tmp\" \"$f\" && chmod +x \"$f\"; fi; done",
     "test": "bun test",
     "dev": "bun run ./src/cli/index.tsx",
     "dev:mcp": "bun --watch run ./src/mcp/index.ts",
@@ -58,7 +58,6 @@
     "typescript": "^5"
   },
   "dependencies": {
-    "@hasna/cloud": "0.1.24",
     "@hasna/events": "^0.1.6",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "chalk": "^5.3.0",
