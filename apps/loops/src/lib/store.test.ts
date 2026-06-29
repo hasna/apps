@@ -1,11 +1,35 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "./store.js";
 
 describe("Store", () => {
+  test("hardens existing store directory and sqlite files to owner-only permissions", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-store-permissions-"));
+    const dbFile = join(root, "loops.db");
+    const legacy = new Database(dbFile);
+    try {
+      legacy.exec("CREATE TABLE legacy_probe (id TEXT PRIMARY KEY);");
+    } finally {
+      legacy.close();
+    }
+    chmodSync(root, 0o755);
+    chmodSync(dbFile, 0o644);
+
+    const store = new Store(dbFile);
+    try {
+      expect(statSync(root).mode & 0o777).toBe(0o700);
+      expect(statSync(dbFile).mode & 0o777).toBe(0o600);
+      for (const sqliteSidecar of [`${dbFile}-wal`, `${dbFile}-shm`]) {
+        if (existsSync(sqliteSidecar)) expect(statSync(sqliteSidecar).mode & 0o777).toBe(0o600);
+      }
+    } finally {
+      store.close();
+    }
+  });
+
   test("creates loops and claims one run per scheduled slot", () => {
     const store = new Store(":memory:");
     try {

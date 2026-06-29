@@ -1371,6 +1371,22 @@ describe("loops CLI", () => {
     expect(deterministicWorkflow.steps).toHaveLength(1);
     expect(deterministicWorkflow.steps[0].target.type).toBe("command");
     expect(deterministicWorkflow.steps[0].target.args).toEqual(["-lc", "echo ok"]);
+
+    const reportOnly = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "report-only",
+      "--var",
+      `projectPath=${repo}`,
+      "--var",
+      "objective=Inspect recent work and write a report only",
+    ]);
+    expect(reportOnly.status).toBe(0);
+    const reportWorkflow = JSON.parse(reportOnly.stdout);
+    expect(reportWorkflow.steps.map((step: { id: string }) => step.id)).toEqual(["worker", "verifier"]);
+    expect(reportWorkflow.steps.map((step: { target: { sandbox?: string } }) => step.target.sandbox)).toEqual(["read-only", "read-only"]);
+    expect(reportWorkflow.steps.map((step: { target: { worktree?: { mode?: string } } }) => step.target.worktree?.mode)).toEqual(["main", "main"]);
   });
 
   test("templates select different worker and verifier auth profiles from a pool", () => {

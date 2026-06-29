@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type {
@@ -580,17 +580,35 @@ function workItemStatusForLoopRun(
   return undefined;
 }
 
+function chmodIfExists(path: string, mode: number): void {
+  try {
+    if (existsSync(path)) chmodSync(path, mode);
+  } catch {
+    // Permission hardening is best-effort because external filesystems can reject chmod.
+  }
+}
+
+function ensurePrivateStorePath(file: string): void {
+  const dir = dirname(file);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodIfExists(dir, 0o700);
+  chmodIfExists(file, 0o600);
+  chmodIfExists(`${file}-wal`, 0o600);
+  chmodIfExists(`${file}-shm`, 0o600);
+}
+
 export class Store {
   private db: Database;
   private rootDir: string;
 
   constructor(path?: string) {
     const file = path ?? dbPath();
-    if (file !== ":memory:") mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+    if (file !== ":memory:") ensurePrivateStorePath(file);
     this.rootDir = file === ":memory:" ? mkdtempSync(join(tmpdir(), "open-loops-store-")) : dirname(file);
     this.db = new Database(file);
     this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec("PRAGMA journal_mode = WAL;");
+    if (file !== ":memory:") ensurePrivateStorePath(file);
     this.migrate();
   }
 

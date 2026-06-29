@@ -318,7 +318,7 @@ function agentArgs(target: AgentTarget): string[] {
       return args;
     case "codex":
       if (target.variant) args.push("-c", `model_reasoning_effort=${configStringValue(target.variant)}`);
-      args.push("exec", "--json", "--ephemeral", "--ask-for-approval", "never", "--sandbox", codewithLikeSandbox(target));
+      args.push("exec", "--json", "--ephemeral", "--sandbox", codewithLikeSandbox(target), "--skip-git-repo-check");
       if (isolation === "safe") args.push("--ignore-rules");
       if (target.cwd) args.push("--cd", target.cwd);
       if (target.model) args.push("--model", target.model);

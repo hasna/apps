@@ -67,12 +67,15 @@ describe("agent adapters", () => {
         env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
       });
       expect(result.status).toBe("succeeded");
-      expect(result.stdout).toContain("exec");
-      expect(result.stdout).toContain("--json");
-      expect(result.stdout).toContain("--ephemeral");
-      expect(result.stdout).toContain("--ignore-rules");
-      expect(result.stdout).toContain("stdin:say ok");
-      expect(result.stdout.trim().split(/\r?\n/)).not.toContain("say ok");
+      const args = result.stdout.trim().split(/\r?\n/);
+      expect(args).toContain("exec");
+      expect(args).toContain("--json");
+      expect(args).toContain("--ephemeral");
+      expect(args).toContain("--ignore-rules");
+      expect(args).toContain("--skip-git-repo-check");
+      expect(args).not.toContain("--ask-for-approval");
+      expect(args).toContain("stdin:say ok");
+      expect(args).not.toContain("say ok");
     } finally {
       store.close();
     }

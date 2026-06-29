@@ -888,7 +888,7 @@ function renderLifecycleBoundedTemplate(id: string, values: Record<string, strin
     variant: values.variant,
     agent: values.agent,
     permissionMode: values.permissionMode as AgentPermissionMode | undefined,
-    sandbox: values.sandbox as AgentSandbox | undefined,
+    sandbox: (values.sandbox as AgentSandbox | undefined) ?? (id === REPORT_ONLY_TEMPLATE_ID ? "read-only" : undefined),
     manualBreakGlass: booleanVar(values.manualBreakGlass),
     worktreeMode: (values.worktreeMode as AgentWorktreeMode | undefined) ?? (id === REPORT_ONLY_TEMPLATE_ID ? "main" : "required"),
     worktreeRoot: values.worktreeRoot,
