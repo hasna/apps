@@ -122,6 +122,7 @@ describe("kernel engine", () => {
   it("attaches to Kernel cdp_ws_url and deletes the Kernel session on close", async () => {
     const deletes: string[] = [];
     const attached: string[] = [];
+    const connectOptions: Array<{ timeoutMs?: number } | undefined> = [];
     setKernelSecretsProviderForTests(secretsProvider());
     setKernelClientFactoryForTests(() => ({
       browsers: {
@@ -133,16 +134,38 @@ describe("kernel engine", () => {
         },
       },
     }));
-    setKernelCdpConnectorForTests(async (cdpUrl) => {
+    setKernelCdpConnectorForTests(async (cdpUrl, options) => {
       attached.push(cdpUrl);
+      connectOptions.push(options);
       return {} as Browser;
     });
 
     const connected = await connectKernelBrowser({ authMode: "off" });
     expect(attached).toEqual(["wss://kernel.test/cdp-2"]);
+    expect(connectOptions).toEqual([{ timeoutMs: 120_000 }]);
 
     await connected.close();
     expect(deletes).toEqual(["kernel-session-2"]);
+  });
+
+  it("passes explicit Kernel request timeout to CDP attach", async () => {
+    const connectOptions: Array<{ timeoutMs?: number } | undefined> = [];
+    setKernelSecretsProviderForTests(secretsProvider());
+    setKernelClientFactoryForTests(() => ({
+      browsers: {
+        async create() {
+          return { session_id: "kernel-session-timeout", cdp_ws_url: "wss://kernel.test/cdp-timeout" };
+        },
+        async deleteByID() {},
+      },
+    }));
+    setKernelCdpConnectorForTests(async (_cdpUrl, options) => {
+      connectOptions.push(options);
+      return {} as Browser;
+    });
+
+    await connectKernelBrowser({ authMode: "off", requestTimeoutMs: 180_000 });
+    expect(connectOptions).toEqual([{ timeoutMs: 180_000 }]);
   });
 
   it("redacts Kernel CDP URLs from attach errors", async () => {

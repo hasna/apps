@@ -3,9 +3,10 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import type { SessionOptions } from "../../types/index.js";
-import { createSession, resolveKernelRemoteSessionId } from "../../lib/session.js";
+import { resolveKernelRemoteSessionId } from "../../lib/session.js";
 import {
   captureKernelComputerScreenshotToDownloads,
+  createKernelSandbox,
   deleteKernelBrowser,
   downloadKernelFileToDownloads,
   downloadKernelReplayToDownloads,
@@ -17,6 +18,7 @@ import {
   listKernelReplays,
   retrieveKernelBrowser,
   runKernelComputerAction,
+  redactKernelSensitiveText,
   startKernelReplay,
   stopKernelReplay,
 } from "../../engines/kernel.js";
@@ -284,21 +286,52 @@ export function register(program: Command) {
 
   addKernelOptions(kernel
     .command("open")
-    .description("Create a Kernel browser session through open-browser and return local plus remote ids")
+    .description("Create a Kernel cloud browser session and return its remote id")
     .option("--url <url>", "Start URL")
     .option("--headed", "Run headful for live view/computer controls")
     .option("--json", "Output as JSON"))
     .action(async (opts: KernelCliOptions & { url?: string; headed?: boolean; json?: boolean }) => {
-      const { session } = await createSession({
-        engine: "kernel",
+      const sessionOptions = kernelSessionOptionsFromCli(opts);
+      const sandbox = await createKernelSandbox({
         startUrl: opts.url,
         headless: !opts.headed,
-        ...kernelSessionOptionsFromCli(opts),
+        persistenceId: sessionOptions.kernelPersistenceId,
+        profileId: sessionOptions.kernelProfileId,
+        profileName: sessionOptions.kernelProfileName,
+        saveProfileChanges: sessionOptions.kernelSaveProfileChanges,
+        timeoutSeconds: sessionOptions.kernelTimeoutSeconds,
+        projectId: sessionOptions.kernelProjectId,
+        baseUrl: sessionOptions.kernelBaseUrl,
+        requestTimeoutMs: sessionOptions.kernelRequestTimeoutMs,
+        proxyId: sessionOptions.kernelProxyId,
+        gpu: sessionOptions.kernelGpu,
+        kioskMode: sessionOptions.kernelKioskMode,
+        tags: sessionOptions.kernelTags,
+        env: sessionOptions.kernelEnv,
+        envSecrets: sessionOptions.kernelEnvSecrets,
+        authMode: sessionOptions.kernelAuthMode,
+        telemetry: sessionOptions.kernelTelemetry,
+        chromePolicy: sessionOptions.kernelChromePolicy,
       });
-      printJsonOrText({ session }, opts.json, () => {
-        console.log(chalk.green(`✓ Session created: ${session.id}`));
-        console.log(chalk.gray(`  Kernel: ${session.remote_session_id ?? "unknown"}`));
-        if (session.browser_live_view_url) console.log(chalk.gray(`  Live view: ${session.browser_live_view_url}`));
+      const session = {
+        id: sandbox.metadata.sessionId,
+        engine: "kernel",
+        remote_session_id: sandbox.metadata.sessionId,
+        start_url: opts.url,
+        persistence_id: sandbox.metadata.persistenceId,
+        browser_live_view_url: sandbox.metadata.browserLiveViewUrl ? redactKernelSensitiveText(sandbox.metadata.browserLiveViewUrl) : undefined,
+        status: "active",
+      };
+      const metadata = {
+        ...sandbox.metadata,
+        cdpWsUrl: "[redacted-kernel-websocket-url]",
+        webdriverWsUrl: sandbox.metadata.webdriverWsUrl ? "[redacted-kernel-websocket-url]" : undefined,
+        browserLiveViewUrl: sandbox.metadata.browserLiveViewUrl ? redactKernelSensitiveText(sandbox.metadata.browserLiveViewUrl) : undefined,
+        baseUrl: sandbox.metadata.baseUrl ? redactKernelSensitiveText(sandbox.metadata.baseUrl) : undefined,
+      };
+      printJsonOrText({ session, metadata }, opts.json, () => {
+        console.log(chalk.green(`✓ Kernel session created: ${sandbox.metadata.sessionId}`));
+        if (sandbox.metadata.browserLiveViewUrl) console.log(chalk.gray(`  Live view: ${redactKernelSensitiveText(sandbox.metadata.browserLiveViewUrl)}`));
       });
     });
 }

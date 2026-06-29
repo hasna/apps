@@ -266,7 +266,7 @@ export interface KernelRuntimeStatus {
 }
 
 type KernelClientFactory = (apiKey: string, config?: KernelClientConfig) => KernelClientLike | Promise<KernelClientLike>;
-type KernelCdpConnector = (cdpUrl: string) => Promise<Browser>;
+type KernelCdpConnector = (cdpUrl: string, options?: { timeoutMs?: number }) => Promise<Browser>;
 
 let kernelClientFactoryOverride: KernelClientFactory | undefined;
 let secretsProviderOverride: KernelSecretsProvider | undefined;
@@ -445,7 +445,9 @@ export async function connectKernelBrowser(options: KernelCreateOptions = {}): P
   const sandbox = await createKernelSandbox(options);
   const connector = cdpConnectorOverride ?? connectToExistingBrowser;
   try {
-    const browser = await connector(sandbox.metadata.cdpWsUrl);
+    const browser = await connector(sandbox.metadata.cdpWsUrl, {
+      timeoutMs: options.requestTimeoutMs ?? 120_000,
+    });
     return {
       browser,
       metadata: sandbox.metadata,
