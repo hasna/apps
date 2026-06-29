@@ -64,8 +64,11 @@ import {
   listLoopTemplates,
   loopTemplatesDir,
   renderEventWorkerVerifierWorkflow,
+  renderTaskLifecycleWorkflow,
   renderLoopTemplate,
   renderTodosTaskWorkerVerifierWorkflow,
+  TASK_LIFECYCLE_TEMPLATE_ID,
+  TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID,
   validateCustomLoopTemplateFile,
   validateLoopTemplateRegistry,
 } from "../lib/templates.js";
@@ -316,11 +319,13 @@ function accountFromOpts(opts: {
   account?: string;
   accountTool?: string;
   accountPool?: string;
+  triageAccount?: string;
+  plannerAccount?: string;
   workerAccount?: string;
   verifierAccount?: string;
 }): AccountRef | undefined {
-  if (!opts.account && opts.accountTool && !opts.accountPool && !opts.workerAccount && !opts.verifierAccount) {
-    throw new Error("--account-tool requires --account, --account-pool, --worker-account, or --verifier-account");
+  if (!opts.account && opts.accountTool && !opts.accountPool && !opts.triageAccount && !opts.plannerAccount && !opts.workerAccount && !opts.verifierAccount) {
+    throw new Error("--account-tool requires --account, --account-pool, --triage-account, --planner-account, --worker-account, or --verifier-account");
   }
   return opts.account ? { profile: opts.account, tool: opts.accountTool } : undefined;
 }
@@ -796,13 +801,18 @@ interface RouteThrottleDecision {
 }
 
 interface TodosTaskRouteOptions {
+  template?: string;
   provider?: string;
   authProfile?: string;
   authProfilePool?: string;
+  triageAuthProfile?: string;
+  plannerAuthProfile?: string;
   workerAuthProfile?: string;
   verifierAuthProfile?: string;
   account?: string;
   accountPool?: string;
+  triageAccount?: string;
+  plannerAccount?: string;
   workerAccount?: string;
   verifierAccount?: string;
   accountTool?: string;
@@ -1041,6 +1051,21 @@ function routeThrottleDryRunPreview(args: { projectPath: string; projectGroup?: 
   };
 }
 
+const TODOS_TASK_ROUTE_TEMPLATE_IDS = new Set([
+  TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID,
+  TASK_LIFECYCLE_TEMPLATE_ID,
+]);
+
+function todosTaskRouteTemplateId(opts: { template?: string }): string {
+  const id = (opts.template ?? TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID).trim();
+  if (!TODOS_TASK_ROUTE_TEMPLATE_IDS.has(id)) {
+    throw new Error(
+      `--template must be ${[...TODOS_TASK_ROUTE_TEMPLATE_IDS].join(" or ")} for todos-task routes`,
+    );
+  }
+  return id;
+}
+
 async function readEventEnvelopeInput(opts: { eventJson?: string; eventFile?: string } = {}): Promise<EventEnvelope> {
   const raw = opts.eventJson ?? (opts.eventFile ? readFileSync(opts.eventFile, "utf8") : process.env.HASNA_EVENT_JSON || (await Bun.stdin.text()));
   const event = JSON.parse(raw);
@@ -1124,7 +1149,8 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
   const permissionMode = permissionModeFromOpts({ permissionMode: opts.permissionMode ?? "bypass" }, provider);
   const sandbox = sandboxFromOpts({ sandbox: opts.sandbox }, provider);
   const authProfile = providerAuthProfileFromOpts({ authProfile: opts.authProfile }, provider);
-  let workflowBody = renderTodosTaskWorkerVerifierWorkflow({
+  const templateId = todosTaskRouteTemplateId(opts);
+  const workflowInput = {
     taskId,
     taskTitle,
     taskDescription,
@@ -1134,10 +1160,14 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
     provider,
     authProfile,
     authProfilePool: splitList(opts.authProfilePool),
+    triageAuthProfile: opts.triageAuthProfile,
+    plannerAuthProfile: opts.plannerAuthProfile,
     workerAuthProfile: opts.workerAuthProfile,
     verifierAuthProfile: opts.verifierAuthProfile,
     account: accountFromOpts(opts),
     accountPool: accountPoolFromOpts(opts),
+    triageAccount: roleAccountFromOpts(opts, opts.triageAccount),
+    plannerAccount: roleAccountFromOpts(opts, opts.plannerAccount),
     workerAccount: roleAccountFromOpts(opts, opts.workerAccount),
     verifierAccount: roleAccountFromOpts(opts, opts.verifierAccount),
     model: opts.model,
@@ -1153,10 +1183,13 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
     eventId: event.id,
     eventType: event.type,
     todosProjectPath: opts.todosProject,
-  });
+  };
+  let workflowBody = templateId === TASK_LIFECYCLE_TEMPLATE_ID
+    ? renderTaskLifecycleWorkflow(workflowInput)
+    : renderTodosTaskWorkerVerifierWorkflow(workflowInput);
   workflowBody.name = workflowName;
   workflowBody.description =
-    `Task-triggered worker/verifier workflow for ${taskTitle ?? taskId} from ${event.source}/${event.type}; ` +
+    `Task-triggered ${templateId} workflow for ${taskTitle ?? taskId} from ${event.source}/${event.type}; ` +
     `idempotency=${idempotencyKey}; event=${event.id}; project=${projectPath}; projectGroup=${projectGroup ?? "-"}`;
   workflowBody = normalizeWorkflowForStorage(workflowBody, {
     name: workflowName,
@@ -1164,8 +1197,11 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
     event: event.id,
   });
   const sandboxPreflight = generatedRouteSandboxPreflight(workflowBody);
+  const hasExplicitRoleAccount =
+    Boolean(opts.triageAuthProfile || opts.plannerAuthProfile || opts.workerAuthProfile || opts.verifierAuthProfile) ||
+    Boolean(opts.triageAccount || opts.plannerAccount || opts.workerAccount || opts.verifierAccount);
   const invocationInput = {
-    templateId: "todos-task-worker-verifier",
+    templateId,
     sourceRef: {
       kind: "event",
       id: event.id,
@@ -1185,7 +1221,7 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
       worktreePolicy: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
       permissions: permissionMode,
       manualBreakGlass: Boolean(opts.manualBreakGlass),
-      accountPolicy: opts.authProfilePool || opts.accountPool ? "pool" : "single",
+      accountPolicy: opts.authProfilePool || opts.accountPool ? "pool" : hasExplicitRoleAccount ? "role-explicit" : "single",
       concurrencyGroup: projectGroup ?? routeProjectPath,
     },
     outputPolicy: {
@@ -1887,13 +1923,18 @@ function addRouteEventOptions(command: Command): Command {
     .option("--event-file <file>", "read event envelope JSON from a file instead of stdin/HASNA_EVENT_JSON")
     .option("--event-json <json>", "read event envelope JSON from this string instead of stdin/HASNA_EVENT_JSON")
     .option("--todos-project <path>", "todos storage project path for generated task commands", defaultLoopsProject())
+    .option("--template <id>", "todos-task route workflow template: todos-task-worker-verifier or task-lifecycle", TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID)
     .option("--provider <provider>", "agent provider", "codewith")
     .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
     .option("--auth-profile-pool <profiles>", "comma-separated provider-native auth profile pool")
+    .option("--triage-auth-profile <profile>", "provider-native auth profile for triage step")
+    .option("--planner-auth-profile <profile>", "provider-native auth profile for planner step")
     .option("--worker-auth-profile <profile>", "provider-native auth profile for worker step")
     .option("--verifier-auth-profile <profile>", "provider-native auth profile for verifier step")
     .option("--account <profile>", "OpenAccounts profile name")
     .option("--account-pool <profiles>", "comma-separated OpenAccounts profile pool")
+    .option("--triage-account <profile>", "OpenAccounts profile for triage step")
+    .option("--planner-account <profile>", "OpenAccounts profile for planner step")
     .option("--worker-account <profile>", "OpenAccounts profile for worker step")
     .option("--verifier-account <profile>", "OpenAccounts profile for verifier step")
     .option("--account-tool <tool>", "OpenAccounts tool id")
@@ -1929,13 +1970,18 @@ function addTodosDrainOptions(command: Command, opts: { includeDryRun?: boolean;
     .option("--max-dispatch <n>", "maximum new workflow loops to create in this drain run", "1")
     .option("--evidence-dir <path>", "write a JSON drain report to this directory")
     .option("--compact", "print compact JSON to stdout while preserving the full evidence file")
+    .option("--template <id>", "todos-task route workflow template: todos-task-worker-verifier or task-lifecycle", TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID)
     .option("--provider <provider>", "agent provider", "codewith")
     .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
     .option("--auth-profile-pool <profiles>", "comma-separated provider-native auth profile pool")
+    .option("--triage-auth-profile <profile>", "provider-native auth profile for triage step")
+    .option("--planner-auth-profile <profile>", "provider-native auth profile for planner step")
     .option("--worker-auth-profile <profile>", "provider-native auth profile for worker step")
     .option("--verifier-auth-profile <profile>", "provider-native auth profile for verifier step")
     .option("--account <profile>", "OpenAccounts profile name")
     .option("--account-pool <profiles>", "comma-separated OpenAccounts profile pool")
+    .option("--triage-account <profile>", "OpenAccounts profile for triage step")
+    .option("--planner-account <profile>", "OpenAccounts profile for planner step")
     .option("--worker-account <profile>", "OpenAccounts profile for worker step")
     .option("--verifier-account <profile>", "OpenAccounts profile for verifier step")
     .option("--account-tool <tool>", "OpenAccounts tool id")
@@ -1986,13 +2032,18 @@ function routeDrainArgs(opts: TodosDrainOptions & { tag?: string }): string[] {
   add("--max-dispatch", opts.maxDispatch);
   add("--evidence-dir", opts.evidenceDir);
   addBool("--compact", opts.compact);
+  add("--template", opts.template);
   add("--provider", opts.provider);
   add("--auth-profile", opts.authProfile);
   add("--auth-profile-pool", opts.authProfilePool);
+  add("--triage-auth-profile", opts.triageAuthProfile);
+  add("--planner-auth-profile", opts.plannerAuthProfile);
   add("--worker-auth-profile", opts.workerAuthProfile);
   add("--verifier-auth-profile", opts.verifierAuthProfile);
   add("--account", opts.account);
   add("--account-pool", opts.accountPool);
+  add("--triage-account", opts.triageAccount);
+  add("--planner-account", opts.plannerAccount);
   add("--worker-account", opts.workerAccount);
   add("--verifier-account", opts.verifierAccount);
   add("--account-tool", opts.accountTool);
@@ -2054,6 +2105,7 @@ function drainTodosTaskRoutes(opts: TodosDrainOptions & { tag?: string }): void 
   const report = {
     drainedAt: new Date().toISOString(),
     todosProject,
+    templateId: todosTaskRouteTemplateId(opts),
     todosProjectId: opts.todosProjectId,
     taskList: opts.taskList,
     taskListId: taskListFilter,
@@ -2081,6 +2133,7 @@ function drainTodosTaskRoutes(opts: TodosDrainOptions & { tag?: string }): void 
     ? {
         drainedAt: report.drainedAt,
         todosProject: report.todosProject,
+        templateId: report.templateId,
         todosProjectId: report.todosProjectId,
         taskList: report.taskList,
         taskListId: report.taskListId,
@@ -2383,13 +2436,18 @@ eventsHandle
   .command("todos-task")
   .description("create a one-shot worker/verifier workflow loop for a todos task event")
   .option("--todos-project <path>", "todos storage project path for generated task commands", defaultLoopsProject())
+  .option("--template <id>", "todos-task route workflow template: todos-task-worker-verifier or task-lifecycle", TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID)
   .option("--provider <provider>", "agent provider", "codewith")
   .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
   .option("--auth-profile-pool <profiles>", "comma-separated provider-native auth profile pool")
+  .option("--triage-auth-profile <profile>", "provider-native auth profile for triage step")
+  .option("--planner-auth-profile <profile>", "provider-native auth profile for planner step")
   .option("--worker-auth-profile <profile>", "provider-native auth profile for worker step")
   .option("--verifier-auth-profile <profile>", "provider-native auth profile for verifier step")
   .option("--account <profile>", "OpenAccounts profile name")
   .option("--account-pool <profiles>", "comma-separated OpenAccounts profile pool")
+  .option("--triage-account <profile>", "OpenAccounts profile for triage step")
+  .option("--planner-account <profile>", "OpenAccounts profile for planner step")
   .option("--worker-account <profile>", "OpenAccounts profile for worker step")
   .option("--verifier-account <profile>", "OpenAccounts profile for verifier step")
   .option("--account-tool <tool>", "OpenAccounts tool id")

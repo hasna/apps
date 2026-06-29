@@ -2367,6 +2367,215 @@ describe("loops CLI", () => {
     expect(loop.target.args).toEqual(expect.arrayContaining(["events", "drain", "todos-task", "--task-list", "oss", "--max-dispatch", "2"]));
   });
 
+  test("todos task routes can select the full task-lifecycle template", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-routes-task-lifecycle-"));
+    const event = {
+      id: "evt-routes-task-lifecycle-0001",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-routes-task-lifecycle-0001",
+        title: "Route through full lifecycle",
+        description: "Exercise triage, planner, worker, and verifier.",
+        working_dir: "/tmp/open-codewith",
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const preview = runCli(dataDir, [
+      "--json",
+      "routes",
+      "preview",
+      "todos-task",
+      "--event-json",
+      JSON.stringify(event),
+      "--template",
+      "task-lifecycle",
+      "--triage-auth-profile",
+      "account004",
+      "--planner-auth-profile",
+      "account005",
+      "--worker-auth-profile",
+      "account006",
+      "--verifier-auth-profile",
+      "account007",
+      "--sandbox",
+      "workspace-write",
+    ]);
+    expect(preview.status).toBe(0);
+    const previewValue = JSON.parse(preview.stdout);
+    expect(previewValue.invocation.templateId).toBe("task-lifecycle");
+    expect(previewValue.invocation.scope.accountPolicy).toBe("role-explicit");
+    expect(previewValue.workflow.steps.map((step: { id: string }) => step.id)).toEqual([
+      "triage",
+      "triage-gate",
+      "planner",
+      "planner-gate",
+      "worker",
+      "verifier",
+    ]);
+    const stepsById = Object.fromEntries(previewValue.workflow.steps.map((step: { id: string }) => [step.id, step])) as Record<string, any>;
+    expect(stepsById.triage.target.authProfile).toBe("account004");
+    expect(stepsById.planner.target.authProfile).toBe("account005");
+    expect(stepsById.worker.target.authProfile).toBe("account006");
+    expect(stepsById.verifier.target.authProfile).toBe("account007");
+    expect(stepsById.planner.dependsOn).toEqual(["triage-gate"]);
+    expect(stepsById.worker.dependsOn).toEqual(["planner-gate"]);
+    expect(stepsById["triage-gate"].target.type).toBe("command");
+    expect(stepsById["triage-gate"].target.args.join("\n")).toContain("--json inspect");
+    expect(stepsById["triage-gate"].target.args.join("\n")).toContain("openloops:triage=go task=task-routes-task-lifecycle-0001 event=evt-routes-task-lifecycle-0001");
+    expect(stepsById["planner-gate"].target.args.join("\n")).toContain("openloops:planner=go task=task-routes-task-lifecycle-0001 event=evt-routes-task-lifecycle-0001");
+    expect(stepsById["triage-gate"].target.args.join("\n")).toContain("task lifecycle ${stage} gate blocked");
+    expect(stepsById["planner-gate"].target.args.join("\n")).toContain("task lifecycle ${stage} gate blocked");
+    expect(previewValue.workflow.description).toContain("task-lifecycle");
+
+    const fakeBin = join(dataDir, "fake-bin");
+    mkdirSync(fakeBin, { recursive: true });
+    const fakeTodos = join(fakeBin, "todos");
+    writeFileSync(fakeTodos, "#!/usr/bin/env bash\nprintf '%s' \"$FAKE_TODOS_JSON\"\n");
+    chmodSync(fakeTodos, 0o755);
+    const runGate = (stepId: "triage-gate" | "planner-gate", task: Record<string, unknown>) => spawnSync(
+      "bash",
+      ["-lc", `PATH=${JSON.stringify(fakeBin)}:$PATH\n${stepsById[stepId].target.args[1]}`],
+      {
+        env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ""}`, FAKE_TODOS_JSON: JSON.stringify(task) },
+        encoding: "utf8",
+      },
+    );
+    const baseTask = {
+      id: "task-routes-task-lifecycle-0001",
+      status: "pending",
+      tags: ["auto:route"],
+      comments: [{ content: "openloops:triage=go task=task-routes-task-lifecycle-0001 event=evt-routes-task-lifecycle-0001\neligible" }],
+    };
+    expect(runGate("triage-gate", baseTask).status).toBe(0);
+    expect(runGate("triage-gate", {
+      ...baseTask,
+      comments: [{ content: "not adding openloops:triage=go task=task-routes-task-lifecycle-0001 event=evt-routes-task-lifecycle-0001" }],
+    }).status).not.toBe(0);
+    expect(runGate("triage-gate", {
+      ...baseTask,
+      requires_approval: true,
+    }).status).not.toBe(0);
+    expect(runGate("triage-gate", {
+      ...baseTask,
+      tags: ["auto:route", "no-auto"],
+    }).status).not.toBe(0);
+    expect(runGate("triage-gate", {
+      ...baseTask,
+      manual_required: true,
+    }).status).not.toBe(0);
+    expect(runGate("triage-gate", {
+      ...baseTask,
+      comments: [
+        { content: "openloops:triage=go task=task-routes-task-lifecycle-0001 event=evt-routes-task-lifecycle-0001\nold", created_at: "2026-01-01T00:00:00.000Z" },
+        { content: "openloops:triage=blocked task=task-routes-task-lifecycle-0001 event=evt-routes-task-lifecycle-0001\nnew", created_at: "2026-01-01T00:01:00.000Z" },
+      ],
+    }).status).not.toBe(0);
+    expect(runGate("planner-gate", {
+      ...baseTask,
+      comments: [{ content: "openloops:planner=go task=task-routes-task-lifecycle-0001 event=evt-routes-task-lifecycle-0001\nplan" }],
+    }).status).toBe(0);
+
+    const invalid = runCli(dataDir, [
+      "--json",
+      "routes",
+      "preview",
+      "todos-task",
+      "--event-json",
+      JSON.stringify(event),
+      "--template",
+      "pr-review",
+    ]);
+    expect(invalid.status).not.toBe(0);
+    expect(invalid.stderr).toContain("--template must be todos-task-worker-verifier or task-lifecycle");
+  });
+
+  test("routes schedule preserves selected todos task template in the drain loop", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-routes-template-schedule-"));
+
+    const scheduled = runCli(dataDir, [
+      "--json",
+      "routes",
+      "schedule",
+      "todos-task",
+      "route-drain-template-test",
+      "--every",
+      "5m",
+      "--template",
+      "task-lifecycle",
+      "--triage-auth-profile",
+      "account004",
+      "--planner-auth-profile",
+      "account005",
+      "--task-list",
+      "oss",
+      "--max-dispatch",
+      "2",
+      "--sandbox",
+      "workspace-write",
+    ]);
+    expect(scheduled.status).toBe(0);
+    const loop = JSON.parse(scheduled.stdout);
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--template", "task-lifecycle"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--triage-auth-profile", "account004", "--planner-auth-profile", "account005"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--max-dispatch", "2"]));
+  });
+
+  test("todos task lifecycle routes preserve explicit OpenAccounts role accounts", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-routes-task-lifecycle-accounts-"));
+    const repo = createGitRepo("loops-cli-routes-task-lifecycle-accounts-repo-");
+    const event = {
+      id: "evt-routes-task-lifecycle-accounts-0001",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-routes-task-lifecycle-accounts-0001",
+        title: "Route through full lifecycle with OpenAccounts",
+        working_dir: repo,
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const preview = runCli(dataDir, [
+      "--json",
+      "routes",
+      "preview",
+      "todos-task",
+      "--event-json",
+      JSON.stringify(event),
+      "--template",
+      "task-lifecycle",
+      "--provider",
+      "claude",
+      "--account-tool",
+      "claude",
+      "--triage-account",
+      "triage-profile",
+      "--planner-account",
+      "planner-profile",
+      "--worker-account",
+      "worker-profile",
+      "--verifier-account",
+      "verifier-profile",
+      "--worktree-mode",
+      "required",
+    ]);
+
+    expect(preview.status).toBe(0);
+    const previewValue = JSON.parse(preview.stdout);
+    expect(previewValue.invocation.scope.accountPolicy).toBe("role-explicit");
+    const stepsById = Object.fromEntries(previewValue.workflow.steps.map((step: { id: string }) => [step.id, step])) as Record<string, any>;
+    expect(stepsById.triage.target.account).toEqual({ profile: "triage-profile", tool: "claude" });
+    expect(stepsById.planner.target.account).toEqual({ profile: "planner-profile", tool: "claude" });
+    expect(stepsById.worker.target.account).toEqual({ profile: "worker-profile", tool: "claude" });
+    expect(stepsById.verifier.target.account).toEqual({ profile: "verifier-profile", tool: "claude" });
+    expect(stepsById.triage.dependsOn).toEqual(["prepare-worktree"]);
+    expect(stepsById.worker.dependsOn).toEqual(["planner-gate"]);
+  });
+
   test("routes schedule rejects drain dry-run instead of storing a surprising loop", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-routes-schedule-dry-run-"));
 

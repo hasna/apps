@@ -43,7 +43,7 @@ interface DaemonLeaseFence {
 const DEFAULT_RECOVERY_BATCH_LIMIT = 100;
 const DEFAULT_RECOVERY_SCAN_MULTIPLIER = 5;
 const LIVE_EXPIRED_RUN_GRACE_MS = 60_000;
-const GENERATED_ROUTE_TEMPLATE_IDS = new Set(["todos-task-worker-verifier", "event-worker-verifier"]);
+const GENERATED_ROUTE_TEMPLATE_IDS = new Set(["todos-task-worker-verifier", "task-lifecycle", "event-worker-verifier"]);
 const GENERATED_ROUTE_KEYS = new Set(["todos-task", "generic-event"]);
 
 interface LoopRow {

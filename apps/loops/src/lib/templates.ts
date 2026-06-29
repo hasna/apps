@@ -41,10 +41,14 @@ export interface TodosTaskWorkflowTemplateInput {
   provider?: AgentProvider;
   authProfile?: string;
   authProfilePool?: string[];
+  triageAuthProfile?: string;
+  plannerAuthProfile?: string;
   workerAuthProfile?: string;
   verifierAuthProfile?: string;
   account?: AccountRef;
   accountPool?: AccountRef[];
+  triageAccount?: AccountRef;
+  plannerAccount?: AccountRef;
   workerAccount?: AccountRef;
   verifierAccount?: AccountRef;
   model?: string;
@@ -74,10 +78,14 @@ export interface EventWorkflowTemplateInput {
   provider?: AgentProvider;
   authProfile?: string;
   authProfilePool?: string[];
+  triageAuthProfile?: string;
+  plannerAuthProfile?: string;
   workerAuthProfile?: string;
   verifierAuthProfile?: string;
   account?: AccountRef;
   accountPool?: AccountRef[];
+  triageAccount?: AccountRef;
+  plannerAccount?: AccountRef;
   workerAccount?: AccountRef;
   verifierAccount?: AccountRef;
   model?: string;
@@ -102,10 +110,14 @@ export interface BoundedAgentWorkflowTemplateInput {
   provider?: AgentProvider;
   authProfile?: string;
   authProfilePool?: string[];
+  triageAuthProfile?: string;
+  plannerAuthProfile?: string;
   workerAuthProfile?: string;
   verifierAuthProfile?: string;
   account?: AccountRef;
   accountPool?: AccountRef[];
+  triageAccount?: AccountRef;
+  plannerAccount?: AccountRef;
   workerAccount?: AccountRef;
   verifierAccount?: AccountRef;
   model?: string;
@@ -222,6 +234,10 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "taskId", required: true, description: "Todos task id." },
       { name: "projectPath", required: true, description: "Repository or project working directory." },
       { name: "authProfilePool", description: "Comma-separated Codewith profiles for worker/verifier rotation." },
+      { name: "triageAuthProfile", description: "Provider-native auth profile for the triage step." },
+      { name: "plannerAuthProfile", description: "Provider-native auth profile for the planner step." },
+      { name: "workerAuthProfile", description: "Provider-native auth profile for the worker step." },
+      { name: "verifierAuthProfile", description: "Provider-native auth profile for the verifier step." },
       { name: "accountPool", description: "Comma-separated OpenAccounts profiles for non-Codewith providers." },
       { name: "provider", default: "codewith", description: "Agent provider." },
       { name: "sandbox", default: "workspace-write", description: "Provider sandbox mode." },
@@ -379,10 +395,14 @@ type AgentWorkflowTemplateInput = Pick<
   | "provider"
   | "authProfile"
   | "authProfilePool"
+  | "triageAuthProfile"
+  | "plannerAuthProfile"
   | "workerAuthProfile"
   | "verifierAuthProfile"
   | "account"
   | "accountPool"
+  | "triageAccount"
+  | "plannerAccount"
   | "workerAccount"
   | "verifierAccount"
   | "model"
@@ -397,7 +417,7 @@ type AgentWorkflowTemplateInput = Pick<
   | "worktreeBranchPrefix"
 >;
 
-type AgentWorkflowRole = "worker" | "verifier";
+type AgentWorkflowRole = "triage" | "planner" | "worker" | "verifier";
 
 interface WorktreePlan extends AgentWorktreeSpec {
   prepareStep?: WorkflowStep;
@@ -416,16 +436,22 @@ function rolePoolValue<T>(pool: T[] | undefined, seed: string, role: AgentWorkfl
   if (!pool?.length) return undefined;
   const workerIndex = stableIndex(seed, pool.length);
   if (role === "worker" || pool.length === 1) return pool[workerIndex];
-  return pool[(workerIndex + 1) % pool.length];
+  if (role === "verifier") return pool[(workerIndex + 1) % pool.length];
+  if (role === "planner") return pool[(workerIndex + 2) % pool.length];
+  return pool[(workerIndex + 3) % pool.length];
 }
 
 function authProfileForRole(input: AgentWorkflowTemplateInput, role: AgentWorkflowRole, seed: string): string | undefined {
+  if (role === "triage" && input.triageAuthProfile) return input.triageAuthProfile;
+  if (role === "planner" && input.plannerAuthProfile) return input.plannerAuthProfile;
   if (role === "worker" && input.workerAuthProfile) return input.workerAuthProfile;
   if (role === "verifier" && input.verifierAuthProfile) return input.verifierAuthProfile;
   return rolePoolValue(input.authProfilePool, seed, role) ?? input.authProfile;
 }
 
 function accountForRole(input: AgentWorkflowTemplateInput, role: AgentWorkflowRole, seed: string): AccountRef | undefined {
+  if (role === "triage" && input.triageAccount) return input.triageAccount;
+  if (role === "planner" && input.plannerAccount) return input.plannerAccount;
   if (role === "worker" && input.workerAccount) return input.workerAccount;
   if (role === "verifier" && input.verifierAccount) return input.verifierAccount;
   return rolePoolValue(input.accountPool, seed, role) ?? input.account;
@@ -626,12 +652,14 @@ function assertNativeAuthProfileSupport(input: AgentWorkflowTemplateInput, provi
   const hasNativeAuthProfiles = Boolean(
     input.authProfile ||
       input.authProfilePool?.length ||
+      input.triageAuthProfile ||
+      input.plannerAuthProfile ||
       input.workerAuthProfile ||
       input.verifierAuthProfile,
   );
   if (!hasNativeAuthProfiles) return;
   throw new Error(
-    `authProfile, authProfilePool, workerAuthProfile, and verifierAuthProfile are supported only for provider codewith; use account/accountPool for ${provider} profile isolation`,
+    `authProfile, authProfilePool, triageAuthProfile, plannerAuthProfile, workerAuthProfile, and verifierAuthProfile are supported only for provider codewith; use account/accountPool for ${provider} profile isolation`,
   );
 }
 
@@ -697,9 +725,10 @@ function agentTarget(
 
 function workflowStepsWithWorktree(plan: WorktreePlan, steps: WorkflowStep[]): WorkflowStep[] {
   if (!plan.prepareStep) return steps;
+  const firstStepId = steps[0]?.id;
   return [
     plan.prepareStep,
-    ...steps.map((step) => step.id === "worker"
+    ...steps.map((step) => step.id === firstStepId
       ? { ...step, dependsOn: [...new Set([...(step.dependsOn ?? []), plan.prepareStep!.id])] }
       : step),
   ];
@@ -1147,6 +1176,217 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
   };
 }
 
+export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInput): CreateWorkflowInput {
+  if (!input.taskId?.trim()) throw new Error("taskId is required");
+  if (!input.projectPath?.trim()) throw new Error("projectPath is required");
+  const todosProjectPath = input.todosProjectPath ?? input.routeProjectPath ?? input.projectPath;
+  const plan = worktreePlan(input, input.taskId);
+  const taskContext = {
+    taskId: input.taskId,
+    taskTitle: input.taskTitle,
+    taskDescription: input.taskDescription,
+    eventId: input.eventId,
+    eventType: input.eventType,
+    projectPath: input.projectPath,
+    routeProjectPath: input.routeProjectPath,
+    projectGroup: input.projectGroup,
+    todosProjectPath,
+    worktree: {
+      mode: plan.mode,
+      enabled: plan.enabled,
+      cwd: plan.cwd,
+      path: plan.path,
+      branch: plan.branch,
+      reason: plan.reason,
+    },
+  };
+  const shared = [
+    worktreePrompt(plan),
+    `Todos project path: ${todosProjectPath}`,
+    "Use these exact todos commands so worktree cwd inference cannot attach to the wrong project:",
+    `- Inspect first: todos --project ${todosProjectPath} inspect ${input.taskId}`,
+    `- Record evidence: todos --project ${todosProjectPath} comment ${input.taskId} "<concise evidence, decision, or blocker>"`,
+    "Do not dispatch or paste prompts into tmux panes. If additional work is required, create or update deduped todos tasks so task-created routing can start a fresh headless workflow.",
+    "Preserve unrelated user changes and keep scope tied to the task acceptance criteria.",
+    "",
+    `Task context JSON: ${compactJson(taskContext)}`,
+  ].join("\n");
+  const gateMarker = (stage: "triage" | "planner", state: "go" | "blocked"): string =>
+    `openloops:${stage}=${state} task=${input.taskId}${input.eventId ? ` event=${input.eventId}` : ""}`;
+  const gateCommand = (stage: "triage" | "planner"): string => [
+    "set -euo pipefail",
+    `task_json="$(todos --project ${shellQuote(todosProjectPath)} --json inspect ${shellQuote(input.taskId)})"`,
+    `TASK_JSON="$task_json" STAGE=${shellQuote(stage)} bun - <<'BUN'`,
+    "const raw = process.env.TASK_JSON || '{}';",
+    "const payload = JSON.parse(raw);",
+    "const task = payload.task && typeof payload.task === 'object' ? payload.task : payload;",
+    "const stage = process.env.STAGE || 'lifecycle';",
+    `const goMarker = ${JSON.stringify(gateMarker(stage, "go"))};`,
+    `const blockedMarker = ${JSON.stringify(gateMarker(stage, "blocked"))};`,
+    "const status = String(task.status || '').toLowerCase().replace(/_/g, '-');",
+    "const metadata = task.metadata && typeof task.metadata === 'object' ? task.metadata : {};",
+    "const automation = metadata.automation && typeof metadata.automation === 'object' ? metadata.automation : {};",
+    "const comments = Array.isArray(task.comments) ? task.comments : [];",
+    "const blockedStatuses = new Set(['blocked', 'cancelled', 'canceled', 'failed', 'archived', 'deleted', 'done', 'completed']);",
+    "const truthy = (value) => value === true || value === 1 || value === '1' || String(value).toLowerCase() === 'true' || String(value).toLowerCase() === 'yes';",
+    "const falsey = (value) => value === false || value === 0 || value === '0' || String(value).toLowerCase() === 'false' || String(value).toLowerCase() === 'no';",
+    "const commentText = (comment) => String(comment?.content ?? comment?.text ?? comment?.body ?? comment?.comment ?? '');",
+    "const tagsFrom = (value) => Array.isArray(value) ? value.map(String) : typeof value === 'string' ? value.split(',') : [];",
+    "const records = [task, metadata, automation].filter((entry) => entry && typeof entry === 'object');",
+    "const tags = new Set(records.flatMap((entry) => [entry.tags, entry.task_tags, entry.taskTags].flatMap(tagsFrom)).map((tag) => tag.trim().toLowerCase()).filter(Boolean));",
+    "const markerState = (comment) => {",
+    "  const line = commentText(comment).trimStart().split(/\\r?\\n/, 1)[0]?.trimEnd() || '';",
+    "  if (line === goMarker) return 'go';",
+    "  if (line === blockedMarker) return 'blocked';",
+    "  if (line.startsWith(`openloops:${stage}=`)) return `invalid marker: ${line}`;",
+    "  return undefined;",
+    "};",
+    "const markerTime = (comment, index) => {",
+    "  const rawTime = comment?.created_at ?? comment?.createdAt ?? comment?.updated_at ?? comment?.updatedAt;",
+    "  const parsed = rawTime ? Date.parse(String(rawTime)) : Number.NaN;",
+    "  return Number.isFinite(parsed) ? parsed : index;",
+    "};",
+    "const markers = comments",
+    "  .map((comment, index) => ({ state: markerState(comment), order: markerTime(comment, index), index }))",
+    "  .filter((entry) => entry.state)",
+    "  .sort((a, b) => a.order - b.order || a.index - b.index);",
+    "const latestMarker = markers.at(-1)?.state;",
+    "const blockers = [];",
+    "if (blockedStatuses.has(status)) blockers.push(`task status is ${status}`);",
+    "for (const tag of ['no-auto', 'manual', 'manual-required', 'approval-required']) {",
+    "  if (tags.has(tag)) blockers.push(`task has disallowed tag ${tag}`);",
+    "}",
+    "for (const [key, source] of records.entries()) {",
+    "  if (truthy(source.no_auto) || truthy(source.noAuto)) blockers.push(`${key}.no_auto is true`);",
+    "  if (truthy(source.manual) || truthy(source.manual_required) || truthy(source.manualRequired) || String(source.mode || '').toLowerCase() === 'manual') blockers.push(`${key}.manual/mode requires manual handling`);",
+    "  if (truthy(source.requires_approval) || truthy(source.requiresApproval) || truthy(source.approval_required) || truthy(source.approvalRequired)) blockers.push(`${key}.requires_approval is true`);",
+    "  if (falsey(source.auto) || falsey(source.enabled) || falsey(source.allowed) || falsey(source.automation_allowed) || falsey(source.automationAllowed) || falsey(source.loop_allowed) || falsey(source.loopAllowed)) blockers.push(`${key} disallows loop automation`);",
+    "}",
+    "if (latestMarker !== 'go') blockers.push(latestMarker ? `latest ${stage} marker is ${latestMarker}` : `missing exact ${goMarker} comment`);",
+    "if (blockers.length) {",
+    "  console.error(`task lifecycle ${stage} gate blocked ${task.id || task.taskId || 'task'}: ${blockers.join('; ')}`);",
+    "  process.exit(12);",
+    "}",
+    "console.log(`task lifecycle ${stage} gate passed for ${task.id || task.taskId || 'task'} status=${status || 'unknown'}`);",
+    "BUN",
+  ].join("\n");
+  const triagePrompt = [
+    `/goal Triage todos task ${input.taskId} for safe automated execution.`,
+    "",
+    "You are the triage step for a full task-triggered OpenLoops lifecycle.",
+    shared,
+    "Decide whether the task is eligible for loop execution. Check status, dependencies, duplicate tasks, no-auto/manual/approval metadata, project path, acceptance criteria, and whether the requested work should be split before implementation.",
+    "Do not implement repo changes in this step.",
+    `If the task is eligible for automated planning, add a task comment whose first line is exactly: ${gateMarker("triage", "go")}`,
+    "Include the triage decision, duplicates/dependencies found, and any follow-up tasks created in that same comment.",
+    `If the task should not proceed automatically, run: todos --project ${todosProjectPath} update ${input.taskId} --status blocked`,
+    `Then add a task comment whose first line is exactly: ${gateMarker("triage", "blocked")}`,
+    "The deterministic triage gate will stop later steps unless the latest triage marker is the exact go marker and the task has no blocked/no-auto/manual/approval-required state.",
+  ].join("\n");
+  const plannerPrompt = [
+    `/goal Plan todos task ${input.taskId} before implementation.`,
+    "",
+    "You are the planner step for a full task-triggered OpenLoops lifecycle.",
+    shared,
+    "Read the triage comment and current task details.",
+    `If the task is ready for implementation, add a task comment whose first line is exactly: ${gateMarker("planner", "go")}`,
+    "In that same comment, include a concise implementation plan: files/areas to inspect, validation commands, risk checks, expected commit/PR behavior, and any cross-repo tasks that should be created separately.",
+    `Do not implement repo changes in this step. If the task is too broad or unsafe for automation, run: todos --project ${todosProjectPath} update ${input.taskId} --status blocked`,
+    `Then add a task comment whose first line is exactly: ${gateMarker("planner", "blocked")}`,
+    "Create smaller deduped tasks and record evidence. The deterministic planner gate will stop the worker unless the latest planner marker is the exact go marker and the task has no blocked/no-auto/manual/approval-required state.",
+  ].join("\n");
+  const workerPrompt = [
+    `/goal Complete todos task ${input.taskId} according to the planner evidence.`,
+    "",
+    "You are the worker step for a full task-triggered OpenLoops lifecycle.",
+    shared,
+    `- Claim/start if appropriate: todos --project ${todosProjectPath} start ${input.taskId}`,
+    "Read the triage and planner comments first. Implement only the scoped task, run focused validation, and record changed files, commits, evidence, blockers, and residual risks.",
+    "Do not mark the task complete in the worker step; the verifier step owns completion after independent validation.",
+  ].join("\n");
+  const verifierPrompt = [
+    `/goal Verify todos task ${input.taskId} after the full lifecycle worker step.`,
+    "",
+    "You are the verifier step for a full task-triggered OpenLoops lifecycle.",
+    shared,
+    `- Record verification: todos --project ${todosProjectPath} comment ${input.taskId} "<verification evidence or blocker>"`,
+    `- If valid and complete: todos --project ${todosProjectPath} done ${input.taskId}`,
+    "Use fresh context. Inspect triage, plan, worker evidence, repo state, commits, tests, and acceptance criteria. Act as an adversarial reviewer focused on correctness, regressions, missing tests, security, and incomplete requirements.",
+    "If the work is valid, record verification evidence in todos and mark/leave the task completed according to the todos CLI. If not valid, add precise follow-up tasks or comments and leave the original task open or blocked with clear evidence.",
+    "Do not make broad unrelated changes. Only apply tiny verification fixes when they are necessary and low risk; otherwise create follow-up tasks.",
+  ].join("\n");
+
+  return {
+    name: `task-lifecycle-${input.taskId.slice(0, 8)}-triage-plan-worker-verifier`,
+    description: `Full task lifecycle workflow for ${taskLabel(input)}`,
+    version: 1,
+    steps: workflowStepsWithWorktree(plan, [
+      {
+        id: "triage",
+        name: "Triage",
+        description: "Check task eligibility, duplicates, dependencies, and automation gates.",
+        target: agentTarget(input, triagePrompt, "triage", input.taskId, plan),
+        timeoutMs: 20 * 60_000,
+      },
+      {
+        id: "triage-gate",
+        name: "Triage Gate",
+        description: "Stop the lifecycle before planning when triage blocked or disallowed automation.",
+        dependsOn: ["triage"],
+        target: {
+          type: "command",
+          command: "bash",
+          args: ["-lc", gateCommand("triage")],
+          cwd: plan.cwd,
+          timeoutMs: 2 * 60_000,
+        },
+        timeoutMs: 2 * 60_000,
+      },
+      {
+        id: "planner",
+        name: "Planner",
+        description: "Create a concise implementation plan and split unsafe scope before work starts.",
+        dependsOn: ["triage-gate"],
+        target: agentTarget(input, plannerPrompt, "planner", input.taskId, plan),
+        timeoutMs: 25 * 60_000,
+      },
+      {
+        id: "planner-gate",
+        name: "Planner Gate",
+        description: "Stop the lifecycle before implementation when planning blocked or disallowed automation.",
+        dependsOn: ["planner"],
+        target: {
+          type: "command",
+          command: "bash",
+          args: ["-lc", gateCommand("planner")],
+          cwd: plan.cwd,
+          timeoutMs: 2 * 60_000,
+        },
+        timeoutMs: 2 * 60_000,
+      },
+      {
+        id: "worker",
+        name: "Worker",
+        description: "Implement the todos task according to triage and planner evidence.",
+        dependsOn: ["planner-gate"],
+        target: agentTarget(input, workerPrompt, "worker", input.taskId, plan),
+        timeoutMs: 45 * 60_000,
+      },
+      {
+        id: "verifier",
+        name: "Verifier",
+        description: "Adversarially verify worker output and update todos.",
+        dependsOn: ["worker"],
+        target: {
+          ...agentTarget(input, verifierPrompt, "verifier", input.taskId, plan),
+          idleTimeoutMs: 10 * 60_000,
+        },
+        timeoutMs: 30 * 60_000,
+      },
+    ]),
+  };
+}
+
 export function renderEventWorkerVerifierWorkflow(input: EventWorkflowTemplateInput): CreateWorkflowInput {
   if (!input.eventId?.trim()) throw new Error("eventId is required");
   if (!input.eventType?.trim()) throw new Error("eventType is required");
@@ -1304,13 +1544,39 @@ function renderLifecycleBoundedTemplate(id: string, values: Record<string, strin
   if (id === TASK_LIFECYCLE_TEMPLATE_ID) {
     const taskId = values.taskId ?? "";
     if (!taskId.trim()) throw new Error("taskId is required");
-    return renderBoundedAgentWorkerVerifierWorkflow({
-      ...common,
-      name: values.name ?? `task-lifecycle-${slugSegment(taskId)}-worker-verifier`,
-      objective: values.objective ?? `Run the full task lifecycle for todos task ${taskId}.`,
-      prompt:
-        values.prompt ??
-        "Triage and dedupe the task, verify it is eligible for loop execution, create or update a concise plan artifact/comment, execute only the allowed scope, validate, record evidence, and let the verifier decide final task state. Add follow-up tasks instead of broadening scope.",
+    return renderTaskLifecycleWorkflow({
+      taskId,
+      taskTitle: values.taskTitle,
+      taskDescription: values.taskDescription,
+      projectPath,
+      todosProjectPath: values.todosProjectPath ?? values.todosProject,
+      routeProjectPath: values.routeProjectPath,
+      projectGroup: values.projectGroup,
+      provider: values.provider as AgentProvider | undefined,
+      authProfile: values.authProfile,
+      authProfilePool: listVar(values.authProfilePool),
+      triageAuthProfile: values.triageAuthProfile,
+      plannerAuthProfile: values.plannerAuthProfile,
+      workerAuthProfile: values.workerAuthProfile,
+      verifierAuthProfile: values.verifierAuthProfile,
+      account: values.account ? { profile: values.account, tool: values.accountTool } : undefined,
+      accountPool: accountPoolVar(values.accountPool, values.accountTool),
+      triageAccount: values.triageAccount ? { profile: values.triageAccount, tool: values.accountTool } : undefined,
+      plannerAccount: values.plannerAccount ? { profile: values.plannerAccount, tool: values.accountTool } : undefined,
+      workerAccount: values.workerAccount ? { profile: values.workerAccount, tool: values.accountTool } : undefined,
+      verifierAccount: values.verifierAccount ? { profile: values.verifierAccount, tool: values.accountTool } : undefined,
+      model: values.model,
+      variant: values.variant,
+      agent: values.agent,
+      addDirs: listVar(values.addDirs ?? values.addDir),
+      permissionMode: values.permissionMode as AgentPermissionMode | undefined,
+      sandbox: values.sandbox as AgentSandbox | undefined,
+      manualBreakGlass: booleanVar(values.manualBreakGlass),
+      worktreeMode: (values.worktreeMode as AgentWorktreeMode | undefined) ?? "required",
+      worktreeRoot: values.worktreeRoot,
+      worktreeBranchPrefix: values.worktreeBranchPrefix,
+      eventId: values.eventId,
+      eventType: values.eventType,
     });
   }
   if (id === PR_REVIEW_TEMPLATE_ID) {

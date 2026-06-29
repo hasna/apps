@@ -319,6 +319,7 @@ into a deduped one-shot workflow loop when route capacity allows:
 
 ```bash
 cat task-created-event.json | loops events handle todos-task \
+  --template task-lifecycle \
   --provider codewith \
   --auth-profile-pool account004,account005,account006 \
   --permission-mode bypass \
@@ -327,6 +328,19 @@ cat task-created-event.json | loops events handle todos-task \
   --add-dir "$HOME/.hasna/todos,$HOME/.hasna/loops" \
   --worktree-mode required
 ```
+
+By default, `todos-task` routes use `todos-task-worker-verifier` for backwards
+compatibility. Use `--template task-lifecycle` to run the full triage ->
+planner -> worker -> verifier lifecycle. The route rejects unrelated templates
+such as `pr-review` so a todos task cannot accidentally use the wrong contract.
+The lifecycle template adds deterministic gates after triage and planning. If
+either step marks the task blocked, omits its contextual
+`openloops:triage=go task=<id> event=<event-id>` /
+`openloops:planner=go task=<id> event=<event-id>` marker comment, or the task
+is no-auto/manual/approval-required, the worker step is not started. Use
+`--triage-auth-profile`, `--planner-auth-profile`, `--worker-auth-profile`, and
+`--verifier-auth-profile` when exact Codewith profiles are needed, or use
+`--auth-profile-pool` for deterministic role rotation.
 
 For other Hasna apps that expose `@hasna/events` webhooks, use the generic
 handler:
@@ -383,6 +397,7 @@ dispatch:
 loops routes schedule todos-task oss-task-route-drain \
   --every 5m \
   --todos-project "$HOME/.hasna/loops" \
+  --template task-lifecycle \
   --project-path-prefix /home/hasna/workspace/hasna/opensource \
   --tags auto:route \
   --provider codewith \

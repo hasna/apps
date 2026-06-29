@@ -345,6 +345,7 @@ into a deduped one-shot workflow loop when route capacity allows:
 
 ```bash
 cat task-created-event.json | loops events handle todos-task \
+  --template task-lifecycle \
   --provider codewith \
   --auth-profile-pool account004,account005,account006 \
   --permission-mode bypass \
@@ -361,6 +362,20 @@ blocked, completed/done, cancelled/canceled, failed, archived, manual,
 approval-required, or `no-auto` tasks. This guard exists even when the upstream
 `@hasna/events` webhook filter is misconfigured, so task existence alone is not
 permission to execute agent work.
+
+By default, `todos-task` routes use `todos-task-worker-verifier` for backwards
+compatibility. Use `--template task-lifecycle` when the task should run the full
+triage -> planner -> worker -> verifier lifecycle. The route rejects unrelated
+workflow templates such as `pr-review` so a todos task cannot accidentally use a
+template with the wrong contract.
+The lifecycle template inserts deterministic gate steps after triage and after
+planning. If either agent marks the task blocked, omits its contextual
+`openloops:triage=go task=<id> event=<event-id>` /
+`openloops:planner=go task=<id> event=<event-id>` marker comment, or the task
+is marked no-auto/manual/approval-required, the next agent step is not started.
+Use `--triage-auth-profile`, `--planner-auth-profile`,
+`--worker-auth-profile`, and `--verifier-auth-profile` for exact Codewith role
+profiles, or use `--auth-profile-pool` for deterministic role rotation.
 
 Use route throttles to avoid stampeding agents when a producer creates many
 tasks at once:
@@ -426,6 +441,7 @@ locks, or non-pending states stay queued in todos and are not routed:
 ```bash
 loops events drain todos-task \
   --todos-project "$HOME/.hasna/loops" \
+  --template task-lifecycle \
   --task-list repoops-pr-queue \
   --tags auto:route \
   --project-path-prefix /home/hasna/workspace/hasna/opensource \
@@ -461,6 +477,7 @@ For the Hasna OSS task-created route, keep the drain deterministic and narrow:
 loops routes schedule todos-task oss-task-route-drain \
   --every 5m \
   --todos-project "$HOME/.hasna/loops" \
+  --template task-lifecycle \
   --project-path-prefix /home/hasna/workspace/hasna/opensource \
   --tags auto:route \
   --provider codewith \

@@ -209,6 +209,53 @@ describe("Store", () => {
     }
   });
 
+  test("archives generated task-lifecycle route workflows after terminal runs", () => {
+    const store = new Store(":memory:");
+    try {
+      const invocation = store.createWorkflowInvocation({
+        templateId: "task-lifecycle",
+        sourceRef: { kind: "event", id: "evt-task-lifecycle-route", dedupeKey: "todos-task:task-lifecycle-route" },
+        subjectRef: { kind: "task", id: "task-lifecycle-route", path: "/tmp/open-loops" },
+        intent: "route",
+        scope: { projectPath: "/tmp/open-loops" },
+      });
+      const workItem = store.upsertWorkflowWorkItem({
+        routeKey: "todos-task",
+        idempotencyKey: "todos-task:task-lifecycle-route",
+        invocationId: invocation.id,
+        sourceType: "task.created",
+        sourceRef: "evt-task-lifecycle-route",
+        subjectRef: "task-lifecycle-route",
+        projectKey: "/tmp/open-loops",
+      });
+      const workflow = store.createWorkflow({
+        name: "task-lifecycle-route-workflow",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const loop = store.createLoop({
+        name: "task-lifecycle-route-loop",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: {
+          type: "workflow",
+          workflowId: workflow.id,
+          input: {
+            workflowInvocationId: invocation.id,
+            workflowWorkItemId: workItem.id,
+          },
+        },
+      });
+      store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id });
+      const run = store.createWorkflowRun({ workflow, loop, scheduledFor: "2026-01-01T00:00:00.000Z" });
+
+      store.finalizeWorkflowRun(run.id, "succeeded");
+
+      expect(store.getWorkflow(workflow.id)?.status).toBe("archived");
+      expect(store.listWorkflowEvents(run.id).map((event) => event.eventType)).toContain("workflow_archived");
+    } finally {
+      store.close();
+    }
+  });
+
   test("does not archive reusable workflows after ordinary terminal runs", () => {
     const store = new Store(":memory:");
     try {
