@@ -15,9 +15,10 @@ describe("contacts CLI storage contract", () => {
     expect(cliSource).toContain("registerStorageCommands(program)");
     expect(storageSource).toContain(".command(\"storage\")");
     expect(storageSource).toContain(".command(\"status\")");
-    expect(storageSource).toContain(".command(\"cloud\")");
     expect(storageSource).toContain(".command(\"push\")");
     expect(storageSource).toContain(".command(\"pull\")");
+    expect(storageSource).toContain(".command(\"sync\")");
+    expect(storageSource).toContain(".command(\"cloud\")");
     expect(storageSource).toContain(".command(\"feedback\")");
     for (const term of forbidden) {
       expect(cliSource).not.toContain(term);

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDataDir, getDatabase, getDbPath, resetDatabase } from "./database.js";
@@ -14,6 +14,10 @@ let tempRoot: string | null = null;
 function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) delete process.env[name];
   else process.env[name] = value;
+}
+
+function mode(path: string): number {
+  return statSync(path).mode & 0o777;
 }
 
 afterEach(() => {
@@ -45,6 +49,44 @@ describe("contacts data directory", () => {
     expect(getDbPath()).toBe(join(newDir, "contacts.db"));
     expect(existsSync(join(newDir, "contacts.db"))).toBe(true);
     expect(readFileSync(join(newDir, "contacts.db"), "utf8")).toBe("legacy-db");
+    expect(mode(join(tempRoot, ".hasna"))).toBe(0o700);
+    expect(mode(newDir)).toBe(0o700);
+    expect(mode(join(newDir, "contacts.db"))).toBe(0o600);
+  });
+
+  it("creates managed contacts storage with owner-only permissions", () => {
+    tempRoot = mkdtempSync(join(tmpdir(), "contacts-private-home-"));
+
+    process.env["HOME"] = tempRoot;
+    delete process.env["USERPROFILE"];
+    delete process.env["CONTACTS_DB_PATH"];
+    delete process.env["HASNA_CONTACTS_DB_PATH"];
+    resetDatabase();
+
+    const db = getDatabase();
+    const dbPath = getDbPath();
+    db.run("INSERT INTO tags (id, name) VALUES (?, ?)", "tag-private", "Private");
+
+    expect(mode(join(tempRoot, ".hasna"))).toBe(0o700);
+    expect(mode(join(tempRoot, ".hasna", "contacts"))).toBe(0o700);
+    expect(mode(dbPath)).toBe(0o600);
+  });
+
+  it("does not chmod existing custom database parent directories", () => {
+    tempRoot = mkdtempSync(join(tmpdir(), "contacts-custom-db-"));
+    const customDir = join(tempRoot, "shared");
+    const dbPath = join(customDir, "contacts.db");
+    mkdirSync(customDir, { recursive: true });
+    chmodSync(customDir, 0o777);
+
+    process.env["CONTACTS_DB_PATH"] = dbPath;
+    delete process.env["HASNA_CONTACTS_DB_PATH"];
+    resetDatabase();
+
+    getDatabase();
+
+    expect(mode(customDir)).toBe(0o777);
+    expect(mode(dbPath)).toBe(0o600);
   });
 });
 

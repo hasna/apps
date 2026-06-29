@@ -26,7 +26,7 @@ import {
   removeContactFromGroup,
   listContactsInGroup,
 } from "../../db/groups.js";
-import { getDatabase, getDbPath } from "../../db/database.js";
+import { getDatabase, getDbPath, getDataDir, resetDatabase } from "../../db/database.js";
 import { importContacts } from "../../lib/import.js";
 import { exportContacts } from "../../lib/export.js";
 import { findEmailDuplicates, findNameDuplicates } from "../../lib/dedup.js";
@@ -35,7 +35,7 @@ import type {
   CreateContactInput,
   Group,
 } from "../../types/index.js";
-import { readFileSync, writeFileSync, existsSync, copyFileSync, statSync, mkdirSync, readdirSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, copyFileSync, statSync, mkdirSync, readdirSync, chmodSync } from "fs";
 import { extname, join } from "path";
 import { renderTable, formatContact, promptUser as prompt, confirmUser as confirm } from "../utils.js";
 
@@ -887,7 +887,6 @@ program
   .option("--output <path>", "Output path")
   .option("--list", "List existing backups")
   .action((opts: { output?: string; list?: boolean }) => {
-    const { getDataDir } = require("../../db/database.js") as typeof import("../../db/database.js");
     const backupDir = join(getDataDir(), "backups");
 
     if (opts.list) {
@@ -920,10 +919,16 @@ program
       process.exit(1);
     }
 
-    mkdirSync(backupDir, { recursive: true });
+    mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+    chmodSync(backupDir, 0o700);
+    const db = getDatabase();
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    resetDatabase();
+
     const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
     const dest = opts.output || join(backupDir, `contacts-${ts}.db`);
     copyFileSync(src, dest);
+    chmodSync(dest, 0o600);
     const size = statSync(dest).size;
     console.log(chalk.green(`\n✓ Backed up to ${dest} (${(size / 1024).toFixed(1)} KB)\n`));
   });

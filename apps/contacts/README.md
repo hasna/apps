@@ -52,14 +52,32 @@ cloud runtime commands or MCP tools.
 ```bash
 contacts storage status
 contacts storage status --json
-contacts cloud status --json
+contacts storage push --tables contacts,companies
+contacts storage pull --tables contacts,companies
+contacts storage sync
 ```
 
-`contacts cloud status` remains as a compatibility alias that reports local
-storage and remote-sync availability. `contacts cloud push` and
-`contacts cloud pull` return a clear unsupported message until repo-native
-remote sync is configured inside this package. `contacts cloud feedback` saves
-feedback locally in the contacts database.
+Optional cross-machine sync uses contacts-owned PostgreSQL storage. Set one of:
+
+```bash
+export HASNA_CONTACTS_POSTGRES_URL="postgres://..."
+# or OPEN_CONTACTS_POSTGRES_URL / CONTACTS_POSTGRES_URL
+```
+
+Remote PostgreSQL connections require verified TLS for non-local hosts. Local
+PostgreSQL development URLs can disable TLS explicitly.
+
+By default, remote sync covers contacts, companies, tags, and the other
+non-sensitive relationship tables. `webhooks`, `contact_documents`, and
+`contact_health` are excluded until explicitly requested with `--tables`. Sync
+is a non-destructive merge: it inserts or updates rows and does not propagate
+deletes or tombstones.
+
+`contacts cloud status`, `contacts cloud push`, `contacts cloud pull`, and
+`contacts cloud sync` remain compatibility aliases for the contacts-owned
+storage commands. They do not load or depend on the deprecated shared cloud
+runtime. `contacts cloud feedback` saves feedback locally in the contacts
+database.
 
 ## Data Directory
 

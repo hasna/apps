@@ -20,9 +20,13 @@ describe("contacts MCP storage contract", () => {
     );
 
     expect(registeredTools).toContain("contacts_storage_status");
+    expect(registeredTools).toContain("contacts_storage_push");
+    expect(registeredTools).toContain("contacts_storage_pull");
+    expect(registeredTools).toContain("contacts_storage_sync");
     expect(registeredTools).toContain("contacts_cloud_status");
     expect(registeredTools).toContain("contacts_cloud_push");
     expect(registeredTools).toContain("contacts_cloud_pull");
+    expect(registeredTools).toContain("contacts_cloud_sync");
     expect(registeredTools).toContain("contacts_cloud_feedback");
     for (const term of forbidden) {
       expect(mcpSource).not.toContain(term);

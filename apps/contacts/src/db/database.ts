@@ -1,24 +1,45 @@
 import { SqliteAdapter } from "./sqlite-adapter.js";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+
+function ensurePrivateDir(dir: string): void {
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(dir, 0o700);
+}
+
+function ensureCreatedPrivateDir(dir: string): void {
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+}
+
+function protectDatabaseArtifacts(dbPath: string): void {
+  if (dbPath === ":memory:") return;
+  for (const artifact of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+    if (existsSync(artifact)) chmodSync(artifact, 0o600);
+  }
+}
 
 export function getDataDir(): string {
   const home = process.env["HOME"] || process.env["USERPROFILE"] || "~";
+  const hasnaDir = join(home, ".hasna");
   const newDir = join(home, ".hasna", "contacts");
   const oldDir = join(home, ".contacts");
 
   // Auto-migrate old dir to new location
   if (existsSync(oldDir) && !existsSync(newDir)) {
-    mkdirSync(newDir, { recursive: true });
+    ensurePrivateDir(hasnaDir);
+    ensurePrivateDir(newDir);
     for (const file of readdirSync(oldDir)) {
       const oldPath = join(oldDir, file);
       if (statSync(oldPath).isFile()) {
-        copyFileSync(oldPath, join(newDir, file));
+        const newPath = join(newDir, file);
+        copyFileSync(oldPath, newPath);
+        chmodSync(newPath, 0o600);
       }
     }
   }
 
-  mkdirSync(newDir, { recursive: true });
+  ensurePrivateDir(hasnaDir);
+  ensurePrivateDir(newDir);
   return newDir;
 }
 
@@ -31,7 +52,7 @@ export function getDbPath(): string {
 function ensureDir(filePath: string): void {
   if (filePath === ":memory:") return;
   const dir = dirname(resolve(filePath));
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  ensureCreatedPrivateDir(dir);
 }
 
 const MIGRATIONS = [
@@ -578,11 +599,13 @@ export function getDatabase(path?: string): ContactsDatabase {
   db.exec("PRAGMA journal_mode=WAL");
   db.exec("PRAGMA foreign_keys=ON");
   runMigrations(db);
+  protectDatabaseArtifacts(dbPath);
   _db = db;
   return db;
 }
 
 export function resetDatabase(): void {
+  _db?.close();
   _db = null;
 }
 
