@@ -11,6 +11,7 @@ import { serveUptime } from "../api.js";
 import { generateProbeKeyPair, signProbeResult } from "../probes.js";
 import { buildAwsDeploymentPlan, buildPrivateProbeCloudConfig, renderPrivateProbeEnv } from "../cloud-plan.js";
 import { buildPostgresMigrationPlan, renderPostgresMigrationPlan } from "../postgres-plan.js";
+import { buildPostgresMigrationDryRun, renderPostgresMigrationRun, runPostgresMigration } from "../postgres.js";
 import { summarizeHostedReportChannelRefs, type HostedReportChannelRefSummary } from "../report-channel-refs.js";
 import { runHostedPublicChecksWorker } from "../workers.js";
 import { runEdgeSmoke, type EdgeSmokeReport } from "../edge-smoke.js";
@@ -550,6 +551,31 @@ cloud
         return;
       }
       print(plan, renderPostgresMigrationPlan(plan), opts);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+cloud
+  .command("postgres-migrate")
+  .description("Dry-run or explicitly apply the reviewed Postgres schema and RLS migration")
+  .option("--schema <name>", "Postgres schema name", "uptime")
+  .option("--database-url <url>", "Postgres URL to validate and redact; defaults to HASNA_UPTIME_DATABASE_URL")
+  .option("--workspace-setting <name>", "session setting used by RLS policies", "app.workspace_id")
+  .option("--apply", "apply migrations; default is dry-run only")
+  .option("--confirm-schema <name>", "required with --apply and must equal --schema")
+  .option("-j, --json", "print JSON")
+  .action(async (opts) => {
+    try {
+      const run = await runPostgresMigration({
+        schemaName: opts.schema,
+        databaseUrl: opts.databaseUrl,
+        workspaceSetting: opts.workspaceSetting,
+        apply: opts.apply === true,
+        confirmSchema: opts.confirmSchema,
+      });
+      print(run, renderPostgresMigrationRun(run), opts);
+      if (run.status === "blocked" || run.status === "failed") process.exit(1);
     } catch (error) {
       fail(error);
     }
@@ -1384,7 +1410,14 @@ function buildHostedWorkerPreflight(role: HostedWorkerRole): HostedWorkerPreflig
     checks.push({ name: "public-probe-job-claims", ok: false, detail: "not implemented" });
   }
   if (role === "migration") {
-    checks.push({ name: "cloud-migration-plan", ok: false, detail: "not implemented" });
+    const migration = buildPostgresMigrationDryRun();
+    checks.push({
+      name: "cloud-migration-runner",
+      ok: migration.status === "planned",
+      detail: migration.status === "planned"
+        ? `dry-run ready: schema=${migration.schemaName}, statements=${migration.statementCounts.total}, database=${migration.database.redactedUrl ?? "<unset>"}`
+        : `blocked: ${migration.migrationBlockers.join("; ")}`,
+    });
   }
   const blockers = checks
     .filter((check) => !check.ok)
@@ -1435,7 +1468,7 @@ function hostedWorkerNextActions(role: HostedWorkerRole): string[] {
   }
   return [
     ...shared,
-    "Implement reviewed cloud schema migrations with dry-run counts, backup evidence, and rollback instructions.",
+    "Run uptime cloud postgres-migrate in dry-run mode, then apply with --apply --confirm-schema only from the migration task after backup and rollback evidence are current.",
   ];
 }
 

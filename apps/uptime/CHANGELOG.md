@@ -6,6 +6,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.34] - 2026-06-29
+
+### Added
+
+- Added `uptime cloud postgres-migrate` and the `@hasna/uptime/postgres` SDK
+  export for redacted Postgres migration dry-runs and explicit schema applies.
+- Added migration-runner safeguards for TLS database URLs, `--confirm-schema`
+  apply confirmation, transactional DDL, idempotent RLS policy creation,
+  `FORCE ROW LEVEL SECURITY`, and table/policy/index verification.
+- Added regression coverage for migration dry-runs, guarded applies, rollback
+  redaction, missing-policy/index verification, and migration worker preflight.
+
+### Changed
+
+- Migration worker preflight can now distinguish a ready Postgres schema
+  migration runner from the still-blocked runtime Postgres store.
+- Hosted promotion remains blocked until the async Postgres runtime store,
+  workspace-scoped transactions, cloud leases, reporter state, alarms, and
+  edge/product readiness gates are implemented.
+
 ## [0.1.33] - 2026-06-29
 
 ### Added

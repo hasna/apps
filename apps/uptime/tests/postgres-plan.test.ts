@@ -13,12 +13,15 @@ test("buildPostgresMigrationPlan emits a blocked cloud-store schema with tombsto
   expect(plan.database).toMatchObject({
     configured: true,
     validPostgresUrl: true,
+    tlsRequired: true,
     redactedUrl: "postgres://user:redacted@example.invalid:5432/uptime",
   });
   expect(plan.requiredTables).toContain("monitors");
   expect(plan.requiredTables).toContain("check_jobs");
   expect(plan.requiredTables).toContain("audit_events");
   expect(plan.requiredTables).toContain("sync_tombstones");
+  expect(plan.requiredPolicies).toContain("monitors_workspace_scope");
+  expect(plan.requiredIndexes).toContain("monitors_workspace_name_active_idx");
   expect(plan.migrationStatements.join("\n")).toContain("CREATE TABLE IF NOT EXISTS \"uptime\".\"sync_tombstones\"");
   expect(plan.migrationStatements.join("\n")).toContain("probe_policy jsonb");
   expect(plan.migrationStatements.join("\n")).toContain("probe_policy_hash text NOT NULL");
@@ -28,6 +31,8 @@ test("buildPostgresMigrationPlan emits a blocked cloud-store schema with tombsto
   expect(plan.migrationStatements.join("\n")).toContain("deleted_at timestamptz");
   expect(plan.migrationStatements.join("\n")).toContain("monitors_workspace_name_active_idx");
   expect(plan.rlsStatements).toContain("ALTER TABLE \"uptime\".\"monitors\" ENABLE ROW LEVEL SECURITY;");
+  expect(plan.rlsStatements).toContain("ALTER TABLE \"uptime\".\"monitors\" FORCE ROW LEVEL SECURITY;");
+  expect(plan.rlsStatements.join("\n")).toContain("IF NOT EXISTS");
   expect(plan.rlsStatements.join("\n")).toContain("workspace_id = current_setting('app.workspace_id', true)");
   expect(plan.safetyChecks.find((check) => check.name === "async-runtime-adapter")).toMatchObject({
     ok: false,
@@ -45,8 +50,10 @@ test("buildPostgresMigrationPlan stays blocked without a database URL", () => {
     configured: false,
     redactedUrl: null,
     validPostgresUrl: false,
+    tlsRequired: false,
   });
   expect(plan.blockers).toContain("postgres-url: <unset>");
+  expect(plan.blockers).toContain("postgres-tls: <unset>");
 });
 
 test("buildPostgresMigrationPlan rejects unsafe identifiers", () => {
@@ -58,12 +65,13 @@ test("renderPostgresMigrationPlan is a concise non-secret summary", () => {
   const plan = buildPostgresMigrationPlan({
     schemaName: "uptime_prod",
     workspaceSetting: "hasna.workspace_id",
-    databaseUrl: "postgresql://svc:secret@db.example.invalid/app",
+    databaseUrl: "postgresql://svc:secret@db.example.invalid/app?sslmode=require",
   });
   const rendered = renderPostgresMigrationPlan(plan);
 
   expect(rendered).toContain("Open Uptime Postgres migration plan (uptime_prod)");
   expect(rendered).toContain("database: postgresql://user:redacted@db.example.invalid/app");
+  expect(rendered).toContain("database TLS: required");
   expect(rendered).toContain("workspace setting: hasna.workspace_id");
   expect(rendered).not.toContain("secret");
 });

@@ -88,9 +88,16 @@ optional SQL for the intended Postgres schema, including workspace-scoped
 tables, `version`/`deleted_at` tombstone fields, `actor`/`origin`/
 `idempotency_key` metadata, `audit_events`, `sync_tombstones`, `check_jobs`,
 fencing-token lease fields, and RLS policies based on a session workspace
-setting. It intentionally does not connect to Postgres or apply migrations; the
-runtime remains fail-closed until the async Postgres store is implemented and
-reviewed against the approved database.
+setting.
+
+The `uptime cloud postgres-migrate` command is the reviewed migration-runner
+surface for that schema. It defaults to dry-run metadata, requires TLS database
+URLs, requires `--apply --confirm-schema <schema>` for DDL, wraps statements in
+a transaction, uses idempotent policy creation plus `FORCE ROW LEVEL SECURITY`,
+and verifies required tables, policies, and indexes without printing database
+credentials. This only moves the migration gate forward. The runtime remains
+fail-closed until an explicit async Postgres store is implemented and reviewed
+against the approved database with workspace-scoped transaction discipline.
 
 The current hosted SQLite bridge is still not cloud-primary, but it now follows
 the minimum hosted storage contract where it is used for controlled smokes:

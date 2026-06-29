@@ -48,6 +48,11 @@ specs, artifacts, browser evidence, or check execution until these are tested:
   identity and lease fencing exist in `0.1.33`; hosted cloud workers still need
   the async cloud store, deploy drain, backlog/stale-lease metrics, and RLS/audit
   runtime before scale-up
+- Postgres migration readiness: the migration runner can now dry-run and apply
+  the reviewed schema with TLS enforcement, explicit schema confirmation,
+  transactional DDL, idempotent/forced RLS, and table/policy/index verification.
+  This is not runtime promotion evidence; the async Postgres store and
+  transaction-scoped workspace isolation are still blockers.
 - report delivery through open-mailery/open-telephony/open-logs channel refs:
   reporter preflight validates the service-owned channel-ref catalog shape, but
   hosted delivery remains disabled until Postgres, idempotent report runs,

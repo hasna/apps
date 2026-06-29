@@ -18,6 +18,7 @@ export { parseHostedReportChannelRefs, summarizeHostedReportChannelRefCatalog, s
 export { generateProbeKeyPair, probePublicKeyFingerprint, probeResultSigningPayload, signProbeResult, verifyProbeResultSignature } from "./probes.js";
 export { buildAwsDeploymentPlan, buildPrivateProbeCloudConfig, renderPrivateProbeEnv } from "./cloud-plan.js";
 export { buildPostgresMigrationPlan, redactPostgresUrl, renderPostgresMigrationPlan } from "./postgres-plan.js";
+export { buildPostgresMigrationDryRun, createPostgresPool, renderPostgresMigrationRun, runPostgresMigration } from "./postgres.js";
 export { runHostedPublicChecksWorker } from "./workers.js";
 export { runEdgeSmoke } from "./edge-smoke.js";
 export { uptimeHome, uptimeDbPath, uptimeHostedFallbackDbPath, ensureUptimeHome } from "./paths.js";
@@ -115,6 +116,11 @@ export type {
   PostgresMigrationPlan,
   PostgresMigrationPlanOptions,
 } from "./postgres-plan.js";
+export type {
+  PostgresMigrationRun,
+  PostgresMigrationRunOptions,
+  PostgresQueryClient,
+} from "./postgres.js";
 export type {
   HostedPublicCheckRunner,
   HostedPublicChecksWorkerIteration,

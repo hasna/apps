@@ -22,9 +22,12 @@ export interface PostgresMigrationPlan {
     configured: boolean;
     redactedUrl: string | null;
     validPostgresUrl: boolean;
+    tlsRequired: boolean;
   };
   workspaceSetting: string;
   requiredTables: string[];
+  requiredPolicies: string[];
+  requiredIndexes: string[];
   migrationStatements: string[];
   rlsStatements: string[];
   safetyChecks: Array<{ name: string; ok: boolean; detail: string }>;
@@ -47,6 +50,13 @@ const REQUIRED_TABLES = [
 ] as const;
 
 const RLS_TABLES = REQUIRED_TABLES.filter((table) => table !== "schema_migrations");
+const REQUIRED_INDEXES = [
+  "monitors_workspace_status_idx",
+  "monitors_workspace_name_active_idx",
+  "check_results_workspace_monitor_time_idx",
+  "check_jobs_workspace_status_due_idx",
+  "audit_events_workspace_time_idx",
+] as const;
 
 export function buildPostgresMigrationPlan(options: PostgresMigrationPlanOptions = {}): PostgresMigrationPlan {
   const schemaName = normalizeIdentifier(options.schemaName ?? DEFAULT_POSTGRES_SCHEMA, "Postgres schema name");
@@ -55,11 +65,18 @@ export function buildPostgresMigrationPlan(options: PostgresMigrationPlanOptions
   const database = databaseUrl ? parsePostgresUrl(databaseUrl) : null;
   const migrationStatements = buildMigrationStatements(schemaName);
   const rlsStatements = buildRlsStatements(schemaName, workspaceSetting);
+  const requiredPolicies = expectedRlsPolicies();
+  const requiredIndexes = [...REQUIRED_INDEXES];
   const safetyChecks = [
     {
       name: "postgres-url",
       ok: Boolean(database?.validPostgresUrl),
       detail: database ? database.redactedUrl : "<unset>",
+    },
+    {
+      name: "postgres-tls",
+      ok: Boolean(database?.validPostgresUrl && database.tlsRequired),
+      detail: database ? (database.tlsRequired ? "required" : "missing sslmode=require or ssl=true") : "<unset>",
     },
     {
       name: "workspace-scope-setting",
@@ -73,8 +90,18 @@ export function buildPostgresMigrationPlan(options: PostgresMigrationPlanOptions
     },
     {
       name: "rls-policies",
-      ok: rlsStatements.length === RLS_TABLES.length * 2,
+      ok: rlsStatements.length === RLS_TABLES.length * 3 && rlsStatements.every((statement) => statement.includes("ENABLE ROW LEVEL SECURITY") || statement.includes("FORCE ROW LEVEL SECURITY") || statement.includes("IF NOT EXISTS")),
       detail: `${rlsStatements.length} statements`,
+    },
+    {
+      name: "rls-force",
+      ok: RLS_TABLES.every((tableName) => rlsStatements.some((statement) => statement.includes(`."${tableName}" FORCE ROW LEVEL SECURITY`))),
+      detail: `${RLS_TABLES.length} tables`,
+    },
+    {
+      name: "index-verification-targets",
+      ok: REQUIRED_INDEXES.length > 0,
+      detail: `${REQUIRED_INDEXES.length} indexes`,
     },
     {
       name: "async-runtime-adapter",
@@ -94,9 +121,12 @@ export function buildPostgresMigrationPlan(options: PostgresMigrationPlanOptions
       configured: Boolean(databaseUrl),
       redactedUrl: database?.redactedUrl ?? null,
       validPostgresUrl: database?.validPostgresUrl ?? false,
+      tlsRequired: database?.tlsRequired ?? false,
     },
     workspaceSetting,
     requiredTables: [...REQUIRED_TABLES],
+    requiredPolicies,
+    requiredIndexes,
     migrationStatements,
     rlsStatements,
     safetyChecks,
@@ -116,9 +146,12 @@ export function renderPostgresMigrationPlan(plan: PostgresMigrationPlan): string
     `status: ${plan.status}`,
     `can apply: ${plan.canApply}`,
     `database: ${plan.database.redactedUrl ?? "<unset>"}`,
+    `database TLS: ${plan.database.tlsRequired ? "required" : "missing"}`,
     `schema version: ${plan.schemaVersion}`,
     `workspace setting: ${plan.workspaceSetting}`,
     `tables: ${plan.requiredTables.join(", ")}`,
+    `policies: ${plan.requiredPolicies.join(", ")}`,
+    `indexes: ${plan.requiredIndexes.join(", ")}`,
     `migration statements: ${plan.migrationStatements.length}`,
     `rls statements: ${plan.rlsStatements.length}`,
     `blockers: ${plan.blockers.length}`,
@@ -130,17 +163,18 @@ export function redactPostgresUrl(value: string): string {
   return parsePostgresUrl(value).redactedUrl;
 }
 
-function parsePostgresUrl(value: string): { redactedUrl: string; validPostgresUrl: boolean } {
+function parsePostgresUrl(value: string): { redactedUrl: string; validPostgresUrl: boolean; tlsRequired: boolean } {
   try {
     const url = new URL(value);
     const validPostgresUrl = url.protocol === "postgres:" || url.protocol === "postgresql:";
+    const tlsRequired = url.searchParams.get("sslmode") === "require" || url.searchParams.get("sslmode") === "verify-full" || url.searchParams.get("ssl") === "true";
     if (url.username) url.username = "user";
     if (url.password) url.password = "redacted";
     url.search = "";
     url.hash = "";
-    return { redactedUrl: url.toString(), validPostgresUrl };
+    return { redactedUrl: url.toString(), validPostgresUrl, tlsRequired };
   } catch {
-    return { redactedUrl: "<invalid-url>", validPostgresUrl: false };
+    return { redactedUrl: "<invalid-url>", validPostgresUrl: false, tlsRequired: false };
   }
 }
 
@@ -388,10 +422,39 @@ ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.up
 
 function buildRlsStatements(schemaName: string, workspaceSetting: string): string[] {
   const currentWorkspace = `current_setting('${workspaceSetting}', true)`;
+  const schemaLiteral = sqlLiteral(schemaName);
   return RLS_TABLES.flatMap((tableName) => [
     `ALTER TABLE ${q(schemaName, tableName)} ENABLE ROW LEVEL SECURITY;`,
-    `CREATE POLICY ${tableName}_workspace_scope ON ${q(schemaName, tableName)}
+    `ALTER TABLE ${q(schemaName, tableName)} FORCE ROW LEVEL SECURITY;`,
+    `DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_policies
+    WHERE schemaname = ${schemaLiteral}
+      AND tablename = ${sqlLiteral(tableName)}
+      AND policyname = ${sqlLiteral(policyNameFor(tableName))}
+  ) THEN
+    CREATE POLICY ${quoteIdentifier(policyNameFor(tableName))} ON ${q(schemaName, tableName)}
   USING (workspace_id = ${currentWorkspace})
-  WITH CHECK (workspace_id = ${currentWorkspace});`,
+  WITH CHECK (workspace_id = ${currentWorkspace});
+  END IF;
+END $$;`,
   ]);
+}
+
+function expectedRlsPolicies(): string[] {
+  return RLS_TABLES.map(policyNameFor);
+}
+
+function policyNameFor(tableName: string): string {
+  return `${tableName}_workspace_scope`;
+}
+
+function quoteIdentifier(value: string): string {
+  return `"${value.replace(/"/g, "\"\"")}"`;
+}
+
+function sqlLiteral(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
 }

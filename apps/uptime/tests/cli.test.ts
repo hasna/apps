@@ -166,6 +166,50 @@ test("CLI cloud postgres-plan emits redacted blocked schema plan and SQL", () =>
   }
 });
 
+test("CLI cloud postgres-migrate dry-run is redacted and apply is guarded", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const dryRun = runCli([
+      "cloud",
+      "postgres-migrate",
+      "--database-url",
+      "postgres://svc:raw-password@db.example.invalid/uptime?sslmode=require",
+      "--json",
+    ], dbPath);
+    const applyWithoutConfirm = runCli([
+      "cloud",
+      "postgres-migrate",
+      "--database-url",
+      "postgres://svc:raw-password@db.example.invalid/uptime?sslmode=require",
+      "--apply",
+      "--json",
+    ], dbPath);
+    const dryRunStdout = new TextDecoder().decode(dryRun.stdout);
+    const applyStdout = new TextDecoder().decode(applyWithoutConfirm.stdout);
+    const dryRunJson = JSON.parse(dryRunStdout);
+    const applyJson = JSON.parse(applyStdout);
+
+    expect(dryRun.exitCode).toBe(0);
+    expect(dryRunJson).toMatchObject({
+      kind: "open-uptime.postgres-migration-run",
+      mode: "dry-run",
+      status: "planned",
+      runtimePromotionReady: false,
+    });
+    expect(dryRunJson.migrationBlockers).toEqual([]);
+    expect(dryRunJson.runtimeBlockers).toContain("async-runtime-adapter: not wired to UptimeService yet");
+    expect(dryRunStdout).not.toContain("raw-password");
+    expect(dryRunStdout).not.toContain("sslmode=require");
+    expect(applyWithoutConfirm.exitCode).toBe(1);
+    expect(applyJson.status).toBe("blocked");
+    expect(applyJson.migrationBlockers).toContain("confirm-schema: expected uptime");
+    expect(applyStdout).not.toContain("raw-password");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("CLI private probe env requires a real cloud probe id", () => {
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {
@@ -259,6 +303,39 @@ test("CLI hosted worker entrypoints preflight and fail closed", () => {
     expect(runJson.ok).toBe(false);
     expect(runJson.preflight.role).toBe("public-probe");
     expect(runJson.error).toContain("blocked");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI migration worker preflight sees Postgres migration dry-run but still blocks runtime start", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const env = {
+      HASNA_UPTIME_MODE: "hosted",
+      HASNA_UPTIME_COMPONENT: "migration",
+      HASNA_UPTIME_WORKSPACE_ID: "ws_cli",
+      HASNA_UPTIME_DATABASE_URL: "postgres://svc:raw-password@db.example.invalid/uptime?sslmode=require",
+    };
+    const preflight = runCli(["cloud", "workers", "preflight", "--role", "migration", "--json"], dbPath, env);
+    const stdout = new TextDecoder().decode(preflight.stdout);
+    const body = JSON.parse(stdout);
+    const migrationRunner = body.checks.find((check: any) => check.name === "cloud-migration-runner");
+
+    expect(preflight.exitCode).toBe(0);
+    expect(body).toMatchObject({
+      role: "migration",
+      status: "blocked",
+      canStart: false,
+      workspaceId: "ws_cli",
+    });
+    expect(migrationRunner).toMatchObject({ ok: true });
+    expect(migrationRunner.detail).toContain("dry-run ready");
+    expect(body.blockers.join("\n")).toContain("postgres-adapter");
+    expect(body.blockers.join("\n")).toContain("cloud-worker-leases");
+    expect(stdout).not.toContain("raw-password");
+    expect(stdout).not.toContain("sslmode=require");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

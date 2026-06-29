@@ -518,6 +518,12 @@ routes are backed by cloud check jobs and cloud audit rows.
 - Do deploy hosted mode with `HASNA_UPTIME_HOSTED_SQLITE_DB` pointing at the EFS
   mount path `/data/uptime/uptime.db`. Do not set `HASNA_UPTIME_DATABASE_URL`
   until the async Postgres adapter exists.
+- Use `uptime cloud postgres-migrate` only from the reviewed migration path.
+  Dry-run output is safe for redacted review. Actual DDL requires
+  `--apply --confirm-schema <schema>`, a TLS database URL, current backup and
+  rollback evidence, and a migration task/operator context. A successful
+  migration does not make hosted web, scheduler, public-probe, reporter, or
+  private-probe runtime promotion-ready by itself.
 - Do set `HASNA_UPTIME_ALLOWED_ORIGINS` on the hosted web task to the public
   HTTPS edge origin, such as the CloudFront default domain or approved custom
   hostname.
