@@ -35,6 +35,7 @@ export interface KernelCliOptions {
   kernelBaseUrl?: string;
   kernelRequestTimeoutMs?: string;
   kernelProxyId?: string;
+  kernelStealth?: boolean;
   kernelGpu?: boolean;
   kernelKioskMode?: boolean;
   kernelTag?: string[];
@@ -92,6 +93,7 @@ export function addKernelOptions(command: Command): Command {
     .option("--kernel-base-url <url>", "Custom Kernel API base URL")
     .option("--kernel-request-timeout-ms <ms>", "Kernel SDK request timeout")
     .option("--kernel-proxy-id <id>", "Kernel proxy id")
+    .option("--kernel-stealth", "Enable Kernel stealth mode with managed anti-detection/CAPTCHA support")
     .option("--kernel-gpu", "Enable Kernel GPU browser session")
     .option("--kernel-kiosk-mode", "Hide address bar and tabs in Kernel live view")
     .option("--kernel-tag <key=value>", "Kernel session tag; repeatable", collect, [])
@@ -113,6 +115,7 @@ export function kernelSessionOptionsFromCli(opts: KernelCliOptions): Partial<Ses
     kernelBaseUrl: opts.kernelBaseUrl,
     kernelRequestTimeoutMs: parseNumber(opts.kernelRequestTimeoutMs, "--kernel-request-timeout-ms"),
     kernelProxyId: opts.kernelProxyId,
+    stealth: opts.kernelStealth,
     kernelGpu: opts.kernelGpu,
     kernelKioskMode: opts.kernelKioskMode,
     kernelTags: parsePairs(opts.kernelTag, "--kernel-tag"),
@@ -304,6 +307,7 @@ export function register(program: Command) {
         baseUrl: sessionOptions.kernelBaseUrl,
         requestTimeoutMs: sessionOptions.kernelRequestTimeoutMs,
         proxyId: sessionOptions.kernelProxyId,
+        stealth: sessionOptions.stealth,
         gpu: sessionOptions.kernelGpu,
         kioskMode: sessionOptions.kernelKioskMode,
         tags: sessionOptions.kernelTags,

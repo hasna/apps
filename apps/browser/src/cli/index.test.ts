@@ -145,7 +145,14 @@ describe("CLI — help flags", () => {
     expect(code).toBe(0);
     expect(stdout).toContain("--kernel-persistence-id");
     expect(stdout).toContain("--kernel-profile-id");
+    expect(stdout).toContain("--kernel-stealth");
     expect(stdout).toContain("--kernel-env-secret");
+  });
+
+  it("browser kernel open --help shows stealth mode", async () => {
+    const { stdout, code } = await runCli("kernel", "open", "--help");
+    expect(code).toBe(0);
+    expect(stdout).toContain("--kernel-stealth");
   });
 
   it("browser extension --help shows subcommands", async () => {
