@@ -13,7 +13,7 @@ grow through descriptors instead of ad hoc command branches.
 | Mercury | https://docs.mercury.com/docs/getting-started | Auth, token tiers, token scope model, IP whitelist requirements, and token lifecycle. |
 | Mercury | https://docs.mercury.com/docs/api-token-security-policies | Token downgrade/deletion windows, IP whitelist policy, and custom scope behavior. |
 | Mercury | https://docs.mercury.com/docs/using-mercury-sandbox | Sandbox base URL and sandbox-token separation. |
-| Mercury | https://docs.mercury.com/changelog/cards-api-now-available | Confirms card issue/manage API support and no sensitive card-number retrieval. |
+| Mercury | https://docs.mercury.com/changelog/cards-api-now-available | Confirms card issue/manage API support; sensitive card-number retrieval remains undocumented in this inventory. |
 | Mercury | Local official CLI `mercury version 0.10.2` | Resource and subcommand parity target for `banking`. |
 | BCR | https://www.bcr.ro/en/open-banking | Official BCR page confirms Developer Portal registration and PSD2 Account Information plus Payment Initiation APIs. |
 | Erste Group | https://developers.erstegroup.com/ | Official portal; public page is a JS app backed by `webapi.developers.erstegroup.com/api/v1`. |
@@ -233,7 +233,7 @@ CLI commands should be thin adapters over descriptors:
 - `banking ops describe mercury.cards.create`;
 - `banking mercury cards list ...`;
 - `banking mercury cards create --dry-run ...`;
-- `banking mercury cards create --execute --approval <id> --idempotency-key <key> ...`;
+- `banking mercury cards create --environment production --execute --approval <id> --idempotency-key <key> ...`;
 - `banking erste-bcr consents create ...`;
 - `banking erste-bcr accounts list --consent <id> ...`;
 - `banking erste-bcr payments sepa-credit-transfer --dry-run ...`.
@@ -247,13 +247,18 @@ through the registry so the SDK and MCP surfaces stay aligned.
 2. Add Mercury read descriptors for every listed read/download/list/get
    endpoint, with cursor pagination and filters.
 3. Add Mercury mutation descriptors as dry-run request envelopes first.
-4. Add Mercury sandbox conformance tests and only then enable gated live
+4. Add Mercury token readiness checks before any live execution: explicit
+   environment, token tier, required custom scopes, IP whitelist posture,
+   freshness/deletion risk, and normalized `MERCURY_API_KEY`/token aliases.
+5. Add Mercury sandbox conformance tests and only then enable gated live
    execution for low-risk metadata writes.
-5. Enable card and money movement mutations only after idempotency, approvals,
+6. Enable card and money movement mutations only after idempotency, approvals,
    audit, outbox, retry classification, and redaction tests pass.
-6. Add Erste BCR PSD2 descriptors using Berlin Group-compatible fixtures.
-7. Keep BCR sandbox/live calls disabled until TPP registration credentials and
+7. Update Erste BCR provider contracts and secret allowlists for portal app id,
+   API key, certificate/key material, redirect URIs, and consent metadata before
+   implementing PSD2 descriptors.
+8. Add Erste BCR PSD2 descriptors using Berlin Group-compatible fixtures.
+9. Keep BCR sandbox/live calls disabled until TPP registration credentials and
    exact BCR OpenAPI YAML are available.
-8. Add adversarial security, architecture, provider-parity, and release reviews
+10. Add adversarial security, architecture, provider-parity, and release reviews
    before publishing the next patch release.
-
