@@ -71,7 +71,16 @@ The SDK exports provider capability cards and provider-agnostic primitives for:
 - policy and idempotency decisions before provider side effects;
 - maker-checker approval records;
 - redacted audit events and reconciliation records;
-- storage interfaces for later dev/prod implementations.
+- storage interfaces, a Bun SQLite dev store, and a Postgres reference schema.
+
+## Store Safety
+
+The production storage contract is documented in
+[`docs/schema/postgres.sql`](docs/schema/postgres.sql). Production execution
+must reserve idempotency, persist the intent, validate approval, enqueue
+outbox work, and append audit evidence in one serializable transaction before
+any provider side effect. The exported SQLite store is dev-only and intended
+for local tests and non-live workflows.
 
 ## MCP
 

@@ -1,5 +1,6 @@
 import type { Money } from "./money.ts";
 import type { ProviderId } from "./providers.ts";
+import { hashPayload } from "./idempotency.ts";
 
 export type ProviderEventKind = "payment" | "card_authorization" | "card_lifecycle" | "balance" | "transaction";
 export type ReconciliationStatus = "pending" | "matched" | "mismatch" | "indeterminate";
@@ -12,6 +13,16 @@ export interface ProviderEvent {
   readonly occurredAt: string;
   readonly amount?: Money;
   readonly rawHash: string;
+}
+
+export interface ProviderWebhookInput {
+  readonly id: string;
+  readonly providerId: ProviderId;
+  readonly kind: ProviderEventKind;
+  readonly providerObjectId: string;
+  readonly occurredAt: string;
+  readonly amount?: Money;
+  readonly rawPayload: unknown;
 }
 
 export interface ReconciliationRecord {
@@ -50,4 +61,28 @@ export function reconcileProviderEvent(intentId: string | undefined, providerEve
     checkedAt: new Date().toISOString(),
   };
   return intentId ? { ...record, intentId } : record;
+}
+
+export function normalizeProviderWebhookEvent(input: ProviderWebhookInput): ProviderEvent {
+  return {
+    id: input.id,
+    providerId: input.providerId,
+    kind: input.kind,
+    providerObjectId: input.providerObjectId,
+    occurredAt: input.occurredAt,
+    ...(input.amount ? { amount: input.amount } : {}),
+    rawHash: hashWebhookPayload(input.rawPayload),
+  };
+}
+
+export function createReconciliationHook(input: {
+  readonly intentId?: string;
+  readonly providerEvent: ProviderEvent;
+  readonly expectedAmount?: Money;
+}): ReconciliationRecord {
+  return reconcileProviderEvent(input.intentId, input.providerEvent, input.expectedAmount);
+}
+
+function hashWebhookPayload(payload: unknown): string {
+  return hashPayload(payload);
 }

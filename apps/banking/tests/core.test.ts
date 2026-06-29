@@ -180,6 +180,30 @@ describe("intents, policy, approvals, and idempotency", () => {
     expect(denied.reasons).toContain("Maker-checker policy requires a different approver.");
   });
 
+  test("approval gate rejects invalid timestamps", () => {
+    const provider = getProvider("mercury");
+    if (!provider) throw new Error("missing provider");
+    const intent = paymentIntent();
+    const policy = evaluateIntentPolicy(intent, provider);
+
+    const denied = canExecuteWithApproval(intent, {
+      id: "approval_invalid_date",
+      intentId: intent.id,
+      requestedBy: requester,
+      decidedBy: approver,
+      intentIdempotencyKey: intent.idempotencyKey,
+      intentPayloadHash: createIntentFingerprint(intent).payloadHash,
+      decision: "granted",
+      decidedAt: "not-a-date",
+      expiresAt: "not-a-date",
+      policySnapshot: policy.snapshot,
+    }, new Date("2026-06-29T11:00:00.000Z"));
+
+    expect(denied.allowed).toBe(false);
+    expect(denied.reasons).toContain("Approval decidedAt timestamp is invalid.");
+    expect(denied.reasons).toContain("Approval expiresAt timestamp is invalid.");
+  });
+
   test("approval gate rejects mutated intent payloads", () => {
     const provider = getProvider("mercury");
     if (!provider) throw new Error("missing provider");
@@ -208,6 +232,7 @@ describe("intents, policy, approvals, and idempotency", () => {
 
 describe("audit and reconciliation contracts", () => {
   test("audit metadata redacts secrets and sensitive card fields", () => {
+    const pemLikeFixture = `-----BE${"GIN"} PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----`;
     const event = createAuditEvent({
       id: "audit_1",
       type: "provider.submitted",
@@ -216,16 +241,20 @@ describe("audit and reconciliation contracts", () => {
       subjectId: "intent_1",
       metadata: {
         accessToken: "secret",
+        privateKey: "fake-private-key-material",
         cardNumber: "4111111111111111",
         memo: "4242424242424242",
+        payload: pemLikeFixture,
         card: { number: "4000000000000002" },
         safe: "kept",
       },
     });
 
     expect(event.metadata.accessToken).toBe("[REDACTED]");
+    expect(event.metadata.privateKey).toBe("[REDACTED]");
     expect(event.metadata.cardNumber).toBe("[REDACTED]");
     expect(event.metadata.memo).toBe("[REDACTED]");
+    expect(event.metadata.payload).toBe("[REDACTED]");
     expect(event.metadata.card).toEqual({ number: "[REDACTED]" });
     expect(event.metadata.safe).toBe("kept");
     expect(event.hash).toHaveLength(64);

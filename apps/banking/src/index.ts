@@ -1,5 +1,6 @@
 export * from "./core/index.ts";
 export * from "./providers/index.ts";
+export * from "./store/index.ts";
 
 import { listProviders } from "./providers/index.ts";
 import {
