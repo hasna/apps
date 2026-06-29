@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildPostgresPoolConfig,
+  ensureMarkdownDataDir,
   listFeedback,
   openMarkdownDatabase,
   resolveMachineId,
@@ -58,6 +59,18 @@ describe("markdown storage", () => {
     const dbPath = join(env.HASNA_MARKDOWN_DIR, "markdown.db");
     expect(statSync(env.HASNA_MARKDOWN_DIR).mode & 0o777).toBe(0o700);
     expect(statSync(dbPath).mode & 0o777).toBe(0o600);
+  });
+
+  test("status and ensure create a private local storage directory", () => {
+    const env = tempEnv();
+    rmSync(env.HASNA_MARKDOWN_DIR, { recursive: true, force: true });
+
+    expect(ensureMarkdownDataDir(env)).toBe(env.HASNA_MARKDOWN_DIR);
+    expect(statSync(env.HASNA_MARKDOWN_DIR).mode & 0o777).toBe(0o700);
+
+    rmSync(env.HASNA_MARKDOWN_DIR, { recursive: true, force: true });
+    storageStatus(env);
+    expect(statSync(env.HASNA_MARKDOWN_DIR).mode & 0o777).toBe(0o700);
   });
 
   test("ignores empty primary remote env before fallback", () => {

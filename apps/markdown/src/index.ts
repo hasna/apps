@@ -68,6 +68,7 @@ export type { PipelineOptions } from "./lib/pipeline.js";
 // ─── Storage ─────────────────────────────────────────────────
 export {
   buildPostgresPoolConfig,
+  ensureMarkdownDataDir,
   getMarkdownDataDir,
   getMarkdownDbPath,
   listFeedback,

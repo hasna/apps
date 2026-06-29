@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import type { Pool, PoolConfig } from "pg";
 
@@ -62,6 +62,13 @@ export function getMarkdownDbPath(env: Env = process.env): string {
   return join(getMarkdownDataDir(env), "markdown.db");
 }
 
+export function ensureMarkdownDataDir(env: Env = process.env): string {
+  const dir = getMarkdownDataDir(env);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodIfExists(dir, 0o700);
+  return dir;
+}
+
 export function resolveMachineId(env: Env = process.env): string {
   return firstNonEmpty(
     env.HASNA_MARKDOWN_MACHINE_ID,
@@ -86,6 +93,7 @@ export function resolveRemoteDatabaseUrl(env: Env = process.env):
 
 export function storageStatus(env: Env = process.env): MarkdownStorageStatus {
   const remote = resolveRemoteDatabaseUrl(env);
+  ensureMarkdownDataDir(env);
 
   return {
     localPath: getMarkdownDbPath(env),
@@ -102,9 +110,7 @@ export function storageStatus(env: Env = process.env): MarkdownStorageStatus {
 
 export function openMarkdownDatabase(env: Env = process.env): Database {
   const dbPath = getMarkdownDbPath(env);
-  const dir = dirname(dbPath);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  chmodIfExists(dir, 0o700);
+  const dir = ensureMarkdownDataDir(env);
 
   const db = new Database(dbPath);
   db.exec("PRAGMA journal_mode = WAL");
