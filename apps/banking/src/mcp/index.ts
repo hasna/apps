@@ -172,7 +172,7 @@ function policyInput(input: Readonly<Record<string, unknown>>): BankingPolicy {
   return {
     liveMode: input.liveMode === true,
     environment: input.environment === "production" ? "production" : "sandbox",
-    requireApprovalForProviderSideEffects: input.requireApprovalForProviderSideEffects !== false,
+    requireApprovalForProviderSideEffects: true,
     allowSensitiveCardData: false,
   };
 }

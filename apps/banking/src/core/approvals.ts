@@ -83,6 +83,9 @@ export function canExecuteWithApproval(intent: BankingIntent, approval: Approval
   if (approval.decidedBy.id === intent.requester.id) {
     reasons.push("Maker-checker policy requires a different approver.");
   }
+  if (approval.decidedBy.type !== "human") {
+    reasons.push("Approval must be decided by a human approver.");
+  }
   if (approval.policySnapshot.providerId !== intent.providerId || approval.policySnapshot.intentType !== intent.type) {
     reasons.push("Approval policy snapshot does not match the intent.");
   }

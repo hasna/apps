@@ -33,6 +33,22 @@ describe("banking-mcp scaffold", () => {
     expect(result.policyDecision.kind).toBe("requires_approval");
   });
 
+  test("local payment request dispatch ignores approval-disable input", () => {
+    const result = runMcpTool("banking_payment_request", {
+      providerId: "mercury",
+      sourceAccountId: "acct_1",
+      counterpartyName: "Vendor",
+      amount: "10.00",
+      currency: "USD",
+      liveMode: true,
+      environment: "production",
+      requireApprovalForProviderSideEffects: false,
+    }) as { readonly policyDecision: { readonly kind: string; readonly snapshot: { readonly requireApprovalForProviderSideEffects: boolean } } };
+
+    expect(result.policyDecision.kind).toBe("requires_approval");
+    expect(result.policyDecision.snapshot.requireApprovalForProviderSideEffects).toBe(true);
+  });
+
   test("local read and admin dispatch return distinct gated responses", () => {
     const read = runMcpTool("banking_accounts_list", { providerId: "mercury" }) as { readonly status: string };
     const admin = runMcpTool("banking_admin_provider_verify_operation") as { readonly status: string };

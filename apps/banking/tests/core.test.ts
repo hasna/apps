@@ -72,6 +72,21 @@ describe("intents, policy, approvals, and idempotency", () => {
     expect(decision.reasons).toContain("Payment exceeds no-approval limit.");
   });
 
+  test("live side effects require approval even when a caller disables approval policy", () => {
+    const provider = getProvider("mercury");
+    if (!provider) throw new Error("missing provider");
+
+    const decision = evaluateIntentPolicy(paymentIntent(), provider, {
+      liveMode: true,
+      environment: "production",
+      requireApprovalForProviderSideEffects: false,
+      allowSensitiveCardData: false,
+    });
+
+    expect(decision.kind).toBe("requires_approval");
+    expect(decision.reasons).toContain("Provider side effects require approval.");
+  });
+
   test("card side effects fail closed until provider operation conformance is verified", () => {
     const provider = getProvider("mercury");
     if (!provider) throw new Error("missing provider");
@@ -178,6 +193,29 @@ describe("intents, policy, approvals, and idempotency", () => {
     expect(allowed.allowed).toBe(true);
     expect(denied.allowed).toBe(false);
     expect(denied.reasons).toContain("Maker-checker policy requires a different approver.");
+  });
+
+  test("approval gate rejects non-human approvers", () => {
+    const provider = getProvider("mercury");
+    if (!provider) throw new Error("missing provider");
+    const intent = paymentIntent();
+    const policy = evaluateIntentPolicy(intent, provider);
+
+    const denied = canExecuteWithApproval(intent, {
+      id: "approval_agent",
+      intentId: intent.id,
+      requestedBy: requester,
+      decidedBy: { id: "agent-reviewer", type: "agent" },
+      intentIdempotencyKey: intent.idempotencyKey,
+      intentPayloadHash: createIntentFingerprint(intent).payloadHash,
+      decision: "granted",
+      decidedAt: "2026-06-29T10:00:00.000Z",
+      expiresAt: "2026-06-29T12:00:00.000Z",
+      policySnapshot: policy.snapshot,
+    }, new Date("2026-06-29T11:00:00.000Z"));
+
+    expect(denied.allowed).toBe(false);
+    expect(denied.reasons).toContain("Approval must be decided by a human approver.");
   });
 
   test("approval gate rejects invalid timestamps", () => {

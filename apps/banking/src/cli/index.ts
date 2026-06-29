@@ -239,7 +239,7 @@ function policyInput(parsed: ParsedArgs): BankingPolicy {
   return {
     liveMode: option(parsed, "live") === "true",
     environment: environment(option(parsed, "environment") ?? "sandbox"),
-    requireApprovalForProviderSideEffects: option(parsed, "require-approval") !== "false",
+    requireApprovalForProviderSideEffects: true,
     allowSensitiveCardData: false,
   };
 }

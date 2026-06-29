@@ -28,6 +28,48 @@ describe("banking CLI scaffold", () => {
     ])).toBe(0);
   });
 
+  test("payment request ignores approval-disable flag", () => {
+    const originalLog = console.log;
+    let output = "";
+    console.log = (...args: unknown[]) => {
+      output += args.join(" ");
+    };
+    try {
+      expect(runCli([
+        "payments",
+        "request",
+        "--provider",
+        "mercury",
+        "--account",
+        "acct_1",
+        "--amount",
+        "10.00",
+        "--currency",
+        "USD",
+        "--to",
+        "Vendor",
+        "--live",
+        "true",
+        "--environment",
+        "production",
+        "--require-approval",
+        "false",
+        "--json",
+      ])).toBe(0);
+    } finally {
+      console.log = originalLog;
+    }
+
+    const parsed = JSON.parse(output) as {
+      readonly policyDecision: {
+        readonly kind: string;
+        readonly snapshot: { readonly requireApprovalForProviderSideEffects: boolean };
+      };
+    };
+    expect(parsed.policyDecision.kind).toBe("requires_approval");
+    expect(parsed.policyDecision.snapshot.requireApprovalForProviderSideEffects).toBe(true);
+  });
+
   test("card request envelope exits successfully even when policy denies execution", () => {
     expect(runCli([
       "cards",

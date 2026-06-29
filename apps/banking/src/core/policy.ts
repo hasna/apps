@@ -79,7 +79,7 @@ export function evaluateIntentPolicy(
 
   denials.push(...validatePositiveSideEffectMoney(intent));
 
-  if (policy.requireApprovalForProviderSideEffects && isProviderSideEffect(intent)) {
+  if (isProviderSideEffect(intent)) {
     approvalReasons.push("Provider side effects require approval.");
   }
 
