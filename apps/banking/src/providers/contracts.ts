@@ -93,7 +93,9 @@ export const PROVIDER_CONFORMANCE_CONTRACTS: readonly ProviderConformanceContrac
       source("Mercury create transaction", "https://docs.mercury.com/reference/createtransaction"),
     ],
     constraints: [
+      "Mercury send-money requires recipientId, idempotencyKey, amount >= 0.01, paymentMethod ach/check/domesticWire, and purpose when paymentMethod is domesticWire.",
       "Card lifecycle operations are documented but remain non-executable until sandbox/live conformance confirms scopes, amount units, limits, and idempotency behavior.",
+      "Sensitive card data is unsupported until an exact official sensitive-card endpoint source is documented.",
       "All money movement and card lifecycle operations require maker-checker approval and idempotency reservation before provider submission.",
     ],
     operations: [
@@ -103,7 +105,13 @@ export const PROVIDER_CONFORMANCE_CONTRACTS: readonly ProviderConformanceContrac
       write("payments.create", "money_movement", ["transactions:write"], ["MERCURY_API_TOKEN"], ["sandbox", "production"], {
         method: "POST",
         path: "/api/v1/account/{accountId}/transactions",
-      }, ["Verify ACH/check/wire amount units and recipient requirements against Mercury sandbox before enabling."]),
+      }, [
+        "Require provider recipientId before provider submission.",
+        "Map provider-agnostic rail to Mercury paymentMethod ach, check, or domesticWire only.",
+        "Reject Mercury payment amounts below 0.01 before provider submission.",
+        "Require purpose when mapped Mercury paymentMethod is domesticWire.",
+        "Verify amount units and recipient requirements against Mercury sandbox before enabling.",
+      ]),
       read("payments.status", ["transactions:read"], ["MERCURY_API_TOKEN"], { method: "GET", path: "/api/v1/transaction/{transactionId}" }),
       read("cards.list", ["cards:write"], ["MERCURY_API_TOKEN"], { method: "GET", path: "/api/v1/account/{accountId}/cards" }),
       card("cards.createVirtual", ["cards:write"], ["MERCURY_API_TOKEN"], ["sandbox", "production"], undefined, [
@@ -113,7 +121,7 @@ export const PROVIDER_CONFORMANCE_CONTRACTS: readonly ProviderConformanceContrac
       card("cards.freeze", ["cards:write"], ["MERCURY_API_TOKEN"], ["sandbox", "production"]),
       card("cards.unfreeze", ["cards:write"], ["MERCURY_API_TOKEN"], ["sandbox", "production"]),
       card("cards.terminate", ["cards:write"], ["MERCURY_API_TOKEN"], ["sandbox", "production"]),
-      sensitive("cards.revealSensitiveData", ["cards:sensitive:read"], ["MERCURY_API_TOKEN"], ["sandbox", "production"]),
+      unsupported("cards.revealSensitiveData", "sensitive_read"),
       webhook("webhooks.subscribe", ["MERCURY_API_TOKEN"], ["sandbox", "production"], [
         "Verify Mercury webhook payload signatures and event replay behavior before trusting provider state.",
       ]),
@@ -128,8 +136,9 @@ export const PROVIDER_CONFORMANCE_CONTRACTS: readonly ProviderConformanceContrac
       source("bunq ordering a card", "https://doc.bunq.com/tutorials/how-to-manage-your-cards/ordering-a-card"),
     ],
     constraints: [
-      "Write operations require bunq API context, device/session-server setup, and request signing with a private key.",
+      "Write operations require bunq API context, device/session-server setup, X-Bunq-Client-Authentication, X-Bunq-Client-Request-Id, geolocation headers, and request signing with a private key.",
       "Card management is contract-only until direct API fixtures verify card create/update/freeze semantics in sandbox.",
+      "Sensitive card/CVC data is unsupported until an exact official endpoint source is documented.",
     ],
     operations: [
       read("accounts.list", ["monetary-account:read"], ["BUNQ_API_KEY", "BUNQ_PRIVATE_KEY"], { method: "GET", path: "/user/{userID}/monetary-account" }, true),
@@ -151,7 +160,7 @@ export const PROVIDER_CONFORMANCE_CONTRACTS: readonly ProviderConformanceContrac
       card("cards.freeze", ["card:write"], ["BUNQ_API_KEY", "BUNQ_PRIVATE_KEY"], ["sandbox", "production"], undefined, undefined, true),
       card("cards.unfreeze", ["card:write"], ["BUNQ_API_KEY", "BUNQ_PRIVATE_KEY"], ["sandbox", "production"], undefined, undefined, true),
       unsupported("cards.terminate", "card_side_effect"),
-      sensitive("cards.revealSensitiveData", ["card-cvc2:read"], ["BUNQ_API_KEY", "BUNQ_PRIVATE_KEY"], ["sandbox", "production"], true),
+      unsupported("cards.revealSensitiveData", "sensitive_read"),
       webhook("webhooks.subscribe", ["BUNQ_API_KEY", "BUNQ_PRIVATE_KEY"], ["sandbox", "production"], [
         "Verify callback category filters and signature behavior before trusting webhook state.",
       ], true),
@@ -168,6 +177,7 @@ export const PROVIDER_CONFORMANCE_CONTRACTS: readonly ProviderConformanceContrac
     constraints: [
       "Business card management is documented as unavailable in Sandbox; card plans must block sandbox execution.",
       "Business API integrations require scope checks and JWT/certificate-backed authentication before provider calls.",
+      "Card creation requires request_id idempotency, virtual-only creation, and spending-limit conformance before provider submission.",
     ],
     operations: [
       read("accounts.list", ["READ"], ["REVOLUT_CLIENT_ID", "REVOLUT_PRIVATE_KEY"], { method: "GET", path: "/1.0/accounts" }),
@@ -197,7 +207,12 @@ export const PROVIDER_CONFORMANCE_CONTRACTS: readonly ProviderConformanceContrac
       card("cards.createVirtual", ["WRITE"], ["REVOLUT_CLIENT_ID", "REVOLUT_PRIVATE_KEY"], ["production"], {
         method: "POST",
         path: "/1.0/cards",
-      }, ["Blocked in Sandbox by Revolut docs; production requires manual API Support and card-limit confirmation."]),
+      }, [
+        "Blocked in Sandbox by Revolut docs; production requires manual API Support and card-limit confirmation.",
+        "Map the intent idempotency key to Revolut request_id before provider submission.",
+        "Create-card plans are virtual-only until physical-card contract evidence exists.",
+        "Verify spending-limit constraints and period semantics before provider submission.",
+      ]),
       card("cards.updateSettings", ["WRITE"], ["REVOLUT_CLIENT_ID", "REVOLUT_PRIVATE_KEY"], ["production"], { method: "PATCH", path: "/1.0/cards/{card_id}" }),
       card("cards.freeze", ["WRITE"], ["REVOLUT_CLIENT_ID", "REVOLUT_PRIVATE_KEY"], ["production"], { method: "POST", path: "/1.0/cards/{card_id}/freeze" }),
       card("cards.unfreeze", ["WRITE"], ["REVOLUT_CLIENT_ID", "REVOLUT_PRIVATE_KEY"], ["production"], { method: "POST", path: "/1.0/cards/{card_id}/unfreeze" }),
@@ -315,6 +330,9 @@ export function assertProviderConformanceContract(contract: ProviderConformanceC
     operations.add(operation.operation);
     if (operation.operation.startsWith("cards.") && !provider.capabilities.cards && operation.support !== "unsupported") {
       throw new Error(`${contract.providerId} cannot support card operation ${operation.operation}`);
+    }
+    if (operation.operation === "cards.revealSensitiveData" && !provider.capabilities.sensitiveCardData && operation.support !== "unsupported") {
+      throw new Error(`${contract.providerId} cannot support sensitive card data without capability evidence`);
     }
     if (operation.operation.startsWith("cards.") && provider.cardOperations.productionOnly && operation.environments.includes("sandbox")) {
       throw new Error(`${contract.providerId} cannot expose sandbox card operation ${operation.operation}`);

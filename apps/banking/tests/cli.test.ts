@@ -11,21 +11,39 @@ describe("banking CLI scaffold", () => {
   });
 
   test("payment request envelope exits successfully", () => {
-    expect(runCli([
-      "payments",
-      "request",
-      "--provider",
-      "mercury",
-      "--account",
-      "acct_1",
-      "--amount",
-      "10.00",
-      "--currency",
-      "USD",
-      "--to",
-      "Vendor",
-      "--json",
-    ])).toBe(0);
+    const originalLog = console.log;
+    let output = "";
+    console.log = (...args: unknown[]) => {
+      output += args.join(" ");
+    };
+    try {
+      expect(runCli([
+        "payments",
+        "request",
+        "--provider",
+        "mercury",
+        "--account",
+        "acct_1",
+        "--amount",
+        "10.00",
+        "--currency",
+        "USD",
+        "--to",
+        "Vendor",
+        "--recipient",
+        "recipient_123",
+        "--json",
+      ])).toBe(0);
+    } finally {
+      console.log = originalLog;
+    }
+
+    const parsed = JSON.parse(output) as {
+      readonly intent: {
+        readonly counterparty: { readonly providerRecipientId?: string };
+      };
+    };
+    expect(parsed.intent.counterparty.providerRecipientId).toBe("recipient_123");
   });
 
   test("payment request ignores approval-disable flag", () => {

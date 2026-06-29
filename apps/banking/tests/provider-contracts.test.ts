@@ -43,6 +43,41 @@ describe("provider conformance contracts", () => {
     expect(plan.reasons).toContain("Provider operation is not verified for live execution; only conformance planning is allowed.");
   });
 
+  test("Mercury payment contract encodes documented send-money constraints", () => {
+    const contract = getProviderConformanceContract("mercury");
+    const operation = contract?.operations.find((candidate) => candidate.operation === "payments.create");
+    const gates = `${contract?.constraints.join(" ")} ${operation?.releaseGates.join(" ")}`;
+
+    expect(operation?.requiresIdempotencyKey).toBe(true);
+    expect(operation?.requiredScopes).toEqual(["transactions:write"]);
+    expect(operation?.endpoint).toEqual({ method: "POST", path: "/api/v1/account/{accountId}/transactions" });
+    expect(gates).toContain("recipientId");
+    expect(gates).toContain("amount >= 0.01");
+    expect(gates).toContain("ach, check, or domesticWire");
+    expect(gates).toContain("purpose");
+  });
+
+  test("Mercury and bunq do not expose sensitive card data without exact endpoint evidence", () => {
+    for (const providerId of ["mercury", "bunq"] as const) {
+      const provider = getProvider(providerId);
+      const operation = getProviderConformanceContract(providerId)?.operations.find((candidate) => candidate.operation === "cards.revealSensitiveData");
+      const plan = planProviderOperation({
+        providerId,
+        operation: "cards.revealSensitiveData",
+        environment: "production",
+        grantedScopes: [],
+        env: {},
+      });
+
+      expect(provider?.capabilities.sensitiveCardData).toBe(false);
+      expect(provider?.scopes.sensitiveCardData).toEqual([]);
+      expect(provider?.cardOperations.revealSensitiveData).toBe("unsupported");
+      expect(operation?.support).toBe("unsupported");
+      expect(plan.status).toBe("blocked");
+      expect(plan.reasons).toContain("Provider contract marks operation unsupported.");
+    }
+  });
+
   test("Revolut Business card management blocks sandbox plans", () => {
     const operation = getProviderConformanceContract("revolut-business")?.operations.find((candidate) => candidate.operation === "cards.createVirtual");
     const plan = planProviderOperation({
@@ -61,6 +96,7 @@ describe("provider conformance contracts", () => {
 
   test("bunq write operations require request signing and private-key credentials", () => {
     const operation = getProviderConformanceContract("bunq")?.operations.find((candidate) => candidate.operation === "payments.create");
+    const contract = getProviderConformanceContract("bunq");
     const missingEnv = planProviderOperation({
       providerId: "bunq",
       operation: "payments.create",
@@ -71,6 +107,9 @@ describe("provider conformance contracts", () => {
 
     expect(operation?.requiresRequestSigning).toBe(true);
     expect(operation?.requiredEnv).toContain("BUNQ_PRIVATE_KEY");
+    expect(contract?.constraints.join(" ")).toContain("X-Bunq-Client-Authentication");
+    expect(contract?.constraints.join(" ")).toContain("X-Bunq-Client-Request-Id");
+    expect(contract?.constraints.join(" ")).toContain("geolocation headers");
     expect(missingEnv.status).toBe("blocked");
     expect(missingEnv.missingEnvKeys).toContain("BUNQ_PRIVATE_KEY");
   });

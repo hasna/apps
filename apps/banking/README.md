@@ -47,7 +47,7 @@ bun add @hasna/banking
 ```bash
 banking --help
 banking providers list --json
-banking payments request --provider mercury --account acct_123 --amount 10.00 --currency USD --to "Vendor" --json
+banking payments request --provider mercury --account acct_123 --amount 10.00 --currency USD --to "Vendor" --recipient recipient_123 --rail ach --json
 banking cards request --provider mercury --account acct_123 --label "Ops" --limit-month 250.00 --currency USD --json
 ```
 
