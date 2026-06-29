@@ -31,6 +31,7 @@
     "docs",
     "scripts/postinstall.ts",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "SECURITY.md",
     "CONTRIBUTING.md"

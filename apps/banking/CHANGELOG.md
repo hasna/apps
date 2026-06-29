@@ -1,0 +1,28 @@
+# Changelog
+
+## 0.0.1 - 2026-06-29
+
+Initial public release of `@hasna/banking`.
+
+### Added
+
+- Provider capability cards for Mercury, bunq, Revolut Business, and Erste BCR.
+- Typed SDK primitives for money, intents, policy, approvals, idempotency, audit, reconciliation, and provider contracts.
+- `banking` CLI with provider listing and request-envelope commands for payments and cards.
+- `banking-mcp` entrypoint with safe tool descriptors and local request-envelope dispatch helpers.
+- Postgres reference schema plus a Bun SQLite dev store for non-live tests and local workflows.
+- Provider conformance contracts and contract-only staged adapters for the initial provider set.
+- GitHub Actions CI for typecheck, tests, build, smoke, pack dry-run, and secret-pattern scanning.
+
+### Safety Notes
+
+- No provider adapter executes live bank calls in this release.
+- Money movement and card side effects are request-oriented and require policy, idempotency, maker-checker approval, audit, and reconciliation gates before future live execution.
+- Mercury and bunq sensitive-card-data operations are explicitly unsupported until exact official endpoint evidence exists.
+- Revolut Business card management remains production-only because official docs mark card creation unavailable in Sandbox.
+- Erste BCR is modeled as PSD2 AIS/PIS only, with no direct card-control surface.
+
+### Validation
+
+- `bun run verify:release` passes with typecheck, 53 tests, build, dist smoke, and pack dry-run.
+- Four adversarial review gates are required before publish: security/compliance, architecture/maintainability, provider/API feasibility, and public release/publishing.

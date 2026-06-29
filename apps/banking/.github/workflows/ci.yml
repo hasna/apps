@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Scan public tree for secret patterns
+        run: |
+          set -euo pipefail
+          sk="sk-"
+          gh="gh"
+          pkg_prefix="npm"
+          secret_word="secret"
+          ctx_prefix="ctx7"
+          xai_prefix="x"
+          google_prefix="AI"
+          aws_prefix="AK"
+          pattern="${sk}ant-|${sk}proj-|${pkg_prefix}_[A-Za-z]|${gh}o_|${gh}p_|${secret_word}-token:|${ctx_prefix}sk-|${xai_prefix}ai-|${google_prefix}za[A-Za-z0-9]|${aws_prefix}IA[A-Z0-9]"
+          if git grep -n -I -E "$pattern" -- . ':!.github/workflows/ci.yml'; then
+            echo "Potential secret pattern detected"
+            exit 1
+          fi
+
+      - name: Verify release build
+        run: bun run verify:release
+
+      - name: Smoke CLI and MCP entrypoints
+        run: |
+          bun run smoke:cli
+          bun run smoke:mcp
