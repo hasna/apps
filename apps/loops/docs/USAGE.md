@@ -254,6 +254,65 @@ loops templates render deterministic-check-create-task \
   --var checkCommand='your deterministic check and todos upsert command'
 ```
 
+Custom reusable workflow templates live under the OpenLoops app data directory:
+`~/.hasna/loops/templates` by default, or `$LOOPS_DATA_DIR/templates` when
+`LOOPS_DATA_DIR` is set. Store templates as declarative JSON files; listing,
+showing, and rendering templates never executes workflow steps or mutates the
+registry.
+
+```json
+{
+  "id": "custom-report",
+  "name": "Custom Report",
+  "description": "Run a custom report workflow from the local template registry.",
+  "kind": "workflow",
+  "variables": [
+    { "name": "objective", "required": true, "description": "Report objective." },
+    { "name": "projectPath", "required": true, "description": "Working directory." },
+    { "name": "timeoutMs", "default": "300000", "type": "number" }
+  ],
+  "workflow": {
+    "name": "custom-report-${objective}",
+    "steps": [
+      {
+        "id": "worker",
+        "target": {
+          "type": "agent",
+          "provider": "codewith",
+          "prompt": "/goal ${objective}\nProduce the requested report only.",
+          "cwd": "${projectPath}",
+          "configIsolation": "safe",
+          "permissionMode": "bypass",
+          "sandbox": "workspace-write",
+          "timeoutMs": "${timeoutMs}"
+        },
+        "timeoutMs": "${timeoutMs}"
+      }
+    ]
+  }
+}
+```
+
+```bash
+loops templates validate ./custom-report.json
+loops templates import ./custom-report.json
+loops templates list --source custom
+loops templates show custom-report
+loops templates render custom-report \
+  --var objective="Check docs drift" \
+  --var projectPath=/path/to/repo
+loops templates create-workflow custom-report \
+  --var objective="Check docs drift" \
+  --var projectPath=/path/to/repo
+```
+
+Use `--source builtin`, `--source custom`, or `--source all` on
+`list`, `show`, `render`, and `create-workflow` when automation needs an
+explicit source. Custom template ids and names cannot override built-ins.
+Custom templates fail closed for `danger-full-access`; use built-in templates
+with explicit break-glass handling for emergency workflows that need that
+sandbox.
+
 Repo-mutating task/event routes should set `worktreeMode=required` so the
 workflow fails fast instead of falling back to the main checkout. When
 `projectPath` is an existing git repository, OpenLoops inserts a
@@ -553,6 +612,20 @@ production loop. Route commands store a small cursor in
 `<LOOPS_DATA_DIR>/route-cursors.json` so bounded `--max-actions` runs advance
 through all findings over repeated scheduled runs instead of reprocessing only
 the first batch.
+
+For a deliberate operator rename, use the first-class rename command instead of
+turning a one-off naming preference into hygiene policy:
+
+```bash
+loops rename machine-todos-drain-oss-repos-strict-5m machine-todos-drain-oss-repos
+loops --json rename <loop-id> machine-ops-loop-health-route-tasks
+```
+
+`rename` preserves the loop id, schedule, run history, archive state, and target
+configuration. It rejects empty or duplicate names and writes a SQLite backup
+under `<LOOPS_DATA_DIR>/backups` before mutating the loop row. Human-facing
+names should describe scope and responsibility; cadence belongs in schedule
+metadata and operator tables.
 
 Archive loops when retiring old automation but preserving history:
 

@@ -283,6 +283,86 @@ describe("loops CLI", () => {
     expect(value.backupPath).toBeUndefined();
   });
 
+  test("rename changes only the loop name and writes a backup", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-rename-"));
+    const create = runCli(dataDir, ["--json", "create", "command", "old-loop-name", "--at", futureAt(), "--cmd", "true"]);
+    expect(create.status).toBe(0);
+    const created = JSON.parse(create.stdout);
+
+    const rename = runCli(dataDir, ["--json", "rename", created.id, "better-loop-name"]);
+
+    expect(rename.status).toBe(0);
+    const value = JSON.parse(rename.stdout);
+    expect(value).toMatchObject({
+      changed: true,
+      id: created.id,
+      oldName: "old-loop-name",
+      newName: "better-loop-name",
+    });
+    expect(value.backupPath).toContain(join(dataDir, "backups"));
+    expect(existsSync(value.backupPath)).toBe(true);
+
+    const renamed = runCli(dataDir, ["--json", "show", created.id]);
+    expect(renamed.status).toBe(0);
+    const loop = JSON.parse(renamed.stdout);
+    expect(loop.id).toBe(created.id);
+    expect(loop.name).toBe("better-loop-name");
+    expect(loop.schedule).toEqual(created.schedule);
+
+    const oldName = runCli(dataDir, ["--json", "show", "old-loop-name"]);
+    expect(oldName.status).not.toBe(0);
+  });
+
+  test("rename reports no-op without writing a backup", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-rename-noop-"));
+    const create = runCli(dataDir, ["create", "command", "stable-name", "--at", futureAt(), "--cmd", "true"]);
+    expect(create.status).toBe(0);
+
+    const rename = runCli(dataDir, ["--json", "rename", "stable-name", " stable-name "]);
+
+    expect(rename.status).toBe(0);
+    const value = JSON.parse(rename.stdout);
+    expect(value.changed).toBe(false);
+    expect(value.backupPath).toBeUndefined();
+    expect(value.newName).toBe("stable-name");
+  });
+
+  test("rename rejects duplicate and empty names", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-rename-invalid-"));
+    expect(runCli(dataDir, ["create", "command", "first-loop", "--at", futureAt(), "--cmd", "true"]).status).toBe(0);
+    expect(runCli(dataDir, ["create", "command", "second-loop", "--at", futureAt(), "--cmd", "true"]).status).toBe(0);
+
+    const duplicate = runCli(dataDir, ["--json", "rename", "first-loop", "second-loop"]);
+    expect(duplicate.status).not.toBe(0);
+    expect(duplicate.stderr).toContain("loop name already exists");
+
+    const empty = runCli(dataDir, ["--json", "rename", "first-loop", "   "]);
+    expect(empty.status).not.toBe(0);
+    expect(empty.stderr).toContain("loop name must not be empty");
+  });
+
+  test("rename preserves archived loop state", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-rename-archived-"));
+    const create = runCli(dataDir, ["--json", "create", "command", "archived-rename-source", "--at", futureAt(), "--cmd", "true"]);
+    expect(create.status).toBe(0);
+    const created = JSON.parse(create.stdout);
+    expect(runCli(dataDir, ["archive", created.id]).status).toBe(0);
+
+    const rename = runCli(dataDir, ["--json", "rename", created.id, "archived-rename-target"]);
+
+    expect(rename.status).toBe(0);
+    const value = JSON.parse(rename.stdout);
+    expect(value.changed).toBe(true);
+    expect(value.loop.archivedAt).toBeDefined();
+    expect(value.loop.archivedFromStatus).toBeDefined();
+
+    const show = runCli(dataDir, ["--json", "show", "archived-rename-target"]);
+    expect(show.status).toBe(0);
+    const loop = JSON.parse(show.stdout);
+    expect(loop.id).toBe(created.id);
+    expect(loop.archivedAt).toBeDefined();
+  });
+
   test("hygiene duplicates groups overlapping loops by normalized name, cwd, and schedule", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-hygiene-duplicates-"));
     expect(runCli(dataDir, ["create", "command", "machine-foo", "--every", "1h", "--cmd", "true", "--cwd", "/tmp/repo"]).status).toBe(0);
@@ -1470,6 +1550,227 @@ describe("loops CLI", () => {
     expect(show.stdout).toContain("default=required");
     expect(show.stdout).toContain("loops templates render task-lifecycle");
     expect(show.stdout).toContain("loops templates create-workflow task-lifecycle");
+  });
+
+  test("custom templates import, list, show, render, and create workflow", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-custom-template-"));
+    const sourceFile = join(dataDir, "custom-report-template.json");
+    writeFileSync(sourceFile, JSON.stringify({
+      id: "custom-report",
+      name: "Custom Report",
+      description: "Run a custom report workflow from the local template registry.",
+      kind: "workflow",
+      variables: [
+        { name: "objective", required: true, description: "Report objective." },
+        { name: "projectPath", required: true, description: "Working directory." },
+        { name: "provider", default: "codewith", description: "Agent provider." },
+        { name: "sandbox", default: "workspace-write", description: "Sandbox mode." },
+        { name: "timeoutMs", default: "300000", type: "number", description: "Step timeout." },
+      ],
+      workflow: {
+        name: "custom-report-${objective}",
+        description: "Report workflow for ${objective}",
+        version: 1,
+        steps: [
+          {
+            id: "worker",
+            name: "Worker",
+            description: "Produce the custom report.",
+            target: {
+              type: "agent",
+              provider: "${provider}",
+              prompt: "/goal ${objective}\nProduce the requested report only.",
+              cwd: "${projectPath}",
+              configIsolation: "safe",
+              permissionMode: "bypass",
+              sandbox: "${sandbox}",
+              timeoutMs: "${timeoutMs}",
+            },
+            timeoutMs: "${timeoutMs}",
+          },
+        ],
+      },
+    }));
+
+    const imported = runCli(dataDir, ["--json", "templates", "import", sourceFile]);
+    expect(imported.status).toBe(0);
+    const importResult = JSON.parse(imported.stdout);
+    expect(importResult.template).toMatchObject({ id: "custom-report", source: "custom" });
+    expect(importResult.path).toContain(join(dataDir, "templates", "custom-report.json"));
+
+    const list = runCli(dataDir, ["--json", "templates", "list"]);
+    expect(list.status).toBe(0);
+    const listed = JSON.parse(list.stdout) as Array<{ id: string; source: string }>;
+    expect(listed).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "todos-task-worker-verifier", source: "builtin" }),
+      expect.objectContaining({ id: "custom-report", source: "custom" }),
+    ]));
+
+    const customOnly = runCli(dataDir, ["--json", "templates", "list", "--source", "custom"]);
+    expect(customOnly.status).toBe(0);
+    expect(JSON.parse(customOnly.stdout).map((template: { id: string }) => template.id)).toEqual(["custom-report"]);
+
+    const show = runCli(dataDir, ["--json", "templates", "show", "custom-report"]);
+    expect(show.status).toBe(0);
+    const shown = JSON.parse(show.stdout);
+    expect(shown.source).toBe("custom");
+    expect(shown.sourcePath).toContain("custom-report.json");
+
+    const render = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "custom-report",
+      "--var",
+      "objective=Docs drift",
+      "--var",
+      "projectPath=/tmp/repo",
+      "--var",
+      "timeoutMs=120000",
+    ]);
+    expect(render.status).toBe(0);
+    const workflow = JSON.parse(render.stdout);
+    expect(workflow.name).toBe("custom-report-Docs drift");
+    expect(workflow.steps[0].target).toMatchObject({
+      type: "agent",
+      provider: "codewith",
+      cwd: "/tmp/repo",
+      sandbox: "workspace-write",
+      timeoutMs: 120000,
+    });
+    expect(workflow.steps[0].timeoutMs).toBe(120000);
+
+    const created = runCli(dataDir, [
+      "--json",
+      "templates",
+      "create-workflow",
+      "custom-report",
+      "--var",
+      "objective=Docs drift",
+      "--var",
+      "projectPath=/tmp/repo",
+    ]);
+    expect(created.status).toBe(0);
+    const stored = JSON.parse(created.stdout);
+    expect(stored.name).toBe("custom-report-Docs drift");
+    expect(stored.steps).toHaveLength(1);
+  });
+
+  test("custom templates fail closed for invalid and dangerous definitions", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-custom-template-invalid-"));
+    const registryDir = join(dataDir, "templates");
+    mkdirSync(registryDir, { recursive: true });
+    const dangerous = join(registryDir, "danger.json");
+    writeFileSync(dangerous, JSON.stringify({
+      id: "danger",
+      name: "Danger",
+      description: "Dangerous custom workflow.",
+      kind: "workflow",
+      workflow: {
+        name: "danger",
+        steps: [
+          {
+            id: "worker",
+            target: {
+              type: "agent",
+              provider: "codewith",
+              prompt: "/goal danger",
+              sandbox: "danger-full-access",
+            },
+          },
+        ],
+      },
+    }));
+
+    const list = runCli(dataDir, ["--json", "templates", "list", "--source", "custom"]);
+    expect(list.status).not.toBe(0);
+    expect(list.stderr).toContain("danger-full-access");
+
+    const invalidFile = join(dataDir, "invalid-template.json");
+    writeFileSync(invalidFile, JSON.stringify({ id: "invalid", name: "Invalid", kind: "workflow" }));
+    const imported = runCli(dataDir, ["--json", "templates", "import", invalidFile]);
+    expect(imported.status).not.toBe(0);
+    expect(imported.stderr).toContain("description");
+
+    const safeDataDir = mkdtempSync(join(tmpdir(), "loops-cli-custom-template-safe-render-"));
+    const safeFile = join(safeDataDir, "safe-template.json");
+    writeFileSync(safeFile, JSON.stringify({
+      id: "safe-custom",
+      name: "Safe Custom",
+      description: "Custom template with sandbox variable.",
+      kind: "workflow",
+      variables: [
+        { name: "sandbox", default: "workspace-write" },
+      ],
+      workflow: {
+        name: "safe-custom",
+        steps: [
+          {
+            id: "worker",
+            target: {
+              type: "agent",
+              provider: "codewith",
+              prompt: "/goal safe",
+              sandbox: "${sandbox}",
+            },
+          },
+        ],
+      },
+    }));
+    const safeImport = runCli(safeDataDir, ["--json", "templates", "import", safeFile]);
+    expect(safeImport.status).toBe(0);
+    const render = runCli(safeDataDir, [
+      "--json",
+      "templates",
+      "render",
+      "safe-custom",
+      "--var",
+      "sandbox=danger-full-access",
+    ]);
+    expect(render.status).not.toBe(0);
+    expect(render.stderr).toContain("danger-full-access");
+  });
+
+  test("custom templates cannot override built-in template ids", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-custom-template-collision-"));
+    const collisionFile = join(dataDir, "collision-template.json");
+    writeFileSync(collisionFile, JSON.stringify({
+      id: "todos-task-worker-verifier",
+      name: "Collision",
+      description: "This must not override the built-in template.",
+      kind: "workflow",
+      workflow: {
+        name: "collision",
+        steps: [
+          {
+            id: "worker",
+            target: {
+              type: "command",
+              command: "true",
+            },
+          },
+        ],
+      },
+    }));
+
+    const imported = runCli(dataDir, ["--json", "templates", "import", collisionFile]);
+    expect(imported.status).not.toBe(0);
+    expect(imported.stderr).toContain("collides with built-in");
+
+    const render = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "todos-task-worker-verifier",
+      "--var",
+      "taskId=task-collision-12345678",
+      "--var",
+      "projectPath=/tmp/repo",
+    ]);
+    expect(render.status).toBe(0);
+    const workflow = JSON.parse(render.stdout);
+    expect(workflow.name).toContain("todos-task-task-col");
+    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["worker", "verifier"]);
   });
 
   test("templates select different worker and verifier auth profiles from a pool", () => {

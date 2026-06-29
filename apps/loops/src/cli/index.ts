@@ -60,10 +60,14 @@ import { listOpenMachines, resolveLoopMachine } from "../lib/machines.js";
 import { packageVersion } from "../lib/version.js";
 import {
   getLoopTemplate,
+  importCustomLoopTemplate,
   listLoopTemplates,
+  loopTemplatesDir,
   renderEventWorkerVerifierWorkflow,
   renderLoopTemplate,
   renderTodosTaskWorkerVerifierWorkflow,
+  validateCustomLoopTemplateFile,
+  validateLoopTemplateRegistry,
 } from "../lib/templates.js";
 import type { EventEnvelope } from "@hasna/events";
 
@@ -2113,9 +2117,20 @@ function formatTemplateVariable(template: LoopTemplateSummary, name: string): st
   return `  --var ${name}=${placeholder}`;
 }
 
+function templateSource(value: string | undefined): "all" | "builtin" | "custom" {
+  const source = value ?? "all";
+  if (source === "all" || source === "builtin" || source === "custom") return source;
+  throw new Error("--source must be all, builtin, or custom");
+}
+
+function addTemplateSourceOption(command: Command, defaultValue = "all"): Command {
+  return command.option("--source <source>", "template source: all, builtin, or custom", defaultValue);
+}
+
 function printTemplateDetails(template: LoopTemplateSummary): void {
   console.log(`${template.id} (${template.kind})`);
   console.log(template.name);
+  if (template.source) console.log(`source: ${template.source}${template.sourcePath ? ` (${template.sourcePath})` : ""}`);
   console.log("");
   console.log(template.description);
   console.log("");
@@ -2159,41 +2174,70 @@ function printWorkflowListWarning(args: { shown: number; total: number; status?:
 templates
   .command("list")
   .alias("ls")
-  .description("list built-in OpenLoops templates")
-  .action(() => {
-    const values = listLoopTemplates();
+  .description("list OpenLoops templates")
+  .option("--source <source>", "template source: all, builtin, or custom", "all")
+  .action((opts) => {
+    const values = listLoopTemplates({ source: templateSource(opts.source) });
     if (isJson()) print(values);
     else {
       for (const template of values) {
-        console.log(`${template.id}\t${template.kind}\t${template.description}`);
+        console.log(`${template.id}\t${template.source ?? "builtin"}\t${template.kind}\t${template.description}`);
       }
     }
   });
 
-templates.command("show <id>").description("show a built-in template").action((id) => {
-  const template = getLoopTemplate(id);
+templates
+  .command("import <file>")
+  .alias("add")
+  .description("import a custom workflow template JSON file into the local registry")
+  .option("--replace", "replace an existing custom template with the same id")
+  .action((file, opts) => {
+    const result = importCustomLoopTemplate(file, { replace: Boolean(opts.replace) });
+    print(result, `${result.replaced ? "replaced" : "imported"} custom template ${result.template.id} -> ${result.path}`);
+  });
+
+templates
+  .command("validate [file]")
+  .description("validate a custom template JSON file or the local template registry")
+  .option("--source <source>", "template source to validate when no file is given: all, builtin, or custom", "all")
+  .action((file, opts) => {
+    if (file) {
+      const template = validateCustomLoopTemplateFile(file);
+      print({ ok: true, template, customDir: loopTemplatesDir() }, `valid custom template ${template.id}`);
+      return;
+    }
+    const result = validateLoopTemplateRegistry({ source: templateSource(opts.source) });
+    print(result, `valid template registry (${result.templates.length} templates) customDir=${result.customDir}`);
+  });
+
+addTemplateSourceOption(templates.command("show <id>").description("show a template")).action((id, opts) => {
+  const template = getLoopTemplate(id, { source: templateSource(opts.source) });
   if (!template) throw new Error(`template not found: ${id}`);
   if (isJson()) print(template);
   else printTemplateDetails(template);
 });
 
-templates
-  .command("render <id>")
-  .description("render a template as workflow JSON")
-  .option("--var <key=value>", "template variable; may be repeated", collectValues, [] as string[])
+addTemplateSourceOption(
+  templates
+    .command("render <id>")
+    .description("render a template as workflow JSON")
+    .option("--var <key=value>", "template variable; may be repeated", collectValues, [] as string[]),
+)
   .action((id, opts) => {
-    const workflow = renderLoopTemplate(id, parseVars(opts.var));
+    const workflow = renderLoopTemplate(id, parseVars(opts.var), { source: templateSource(opts.source) });
     print(workflow, JSON.stringify(workflow, null, 2));
   });
 
-templates
-  .command("create-workflow <id>")
-  .description("render and store a template as a workflow")
-  .option("--var <key=value>", "template variable; may be repeated", collectValues, [] as string[])
+addTemplateSourceOption(
+  templates
+    .command("create-workflow <id>")
+    .description("render and store a template as a workflow")
+    .option("--var <key=value>", "template variable; may be repeated", collectValues, [] as string[]),
+)
   .action((id, opts) => {
     const store = new Store();
     try {
-      const body = renderLoopTemplate(id, parseVars(opts.var));
+      const body = renderLoopTemplate(id, parseVars(opts.var), { source: templateSource(opts.source) });
       const workflow = store.createWorkflow(body);
       print(publicWorkflow(workflow), `created workflow ${workflow.id} (${workflow.name}) steps=${workflow.steps.length}`);
     } finally {
@@ -3274,6 +3318,54 @@ hygiene
 program.command("pause <idOrName>").action((idOrName) => updateStatus(idOrName, "paused"));
 program.command("resume <idOrName>").action((idOrName) => updateStatus(idOrName, "active"));
 program.command("stop <idOrName>").action((idOrName) => updateStatus(idOrName, "stopped"));
+
+program
+  .command("rename <idOrName> <newName>")
+  .description("rename a loop without changing its id, schedule, runs, or history")
+  .action((idOrName, newName) => {
+    const store = new Store();
+    try {
+      const loop = store.requireLoop(idOrName);
+      const oldName = loop.name;
+      const trimmed = String(newName).trim();
+      if (!trimmed) throw new Error("loop name must not be empty");
+
+      const existing = store.findLoopByName(trimmed);
+      if (existing && existing.id !== loop.id) {
+        throw new Error(`loop name already exists: ${trimmed} (${existing.id})`);
+      }
+
+      if (trimmed === oldName) {
+        print(
+          {
+            changed: false,
+            id: loop.id,
+            oldName,
+            newName: oldName,
+            loop: publicLoop(loop),
+          },
+          `${loop.id} unchanged (${oldName})`,
+        );
+        return;
+      }
+
+      const backupPath = backupLoopsDatabase("rename");
+      const renamed = store.renameLoop(loop.id, trimmed);
+      print(
+        {
+          changed: true,
+          id: renamed.id,
+          oldName,
+          newName: renamed.name,
+          backupPath,
+          loop: publicLoop(renamed),
+        },
+        `${renamed.id} renamed ${oldName} -> ${renamed.name}\nbackup=${backupPath}`,
+      );
+    } finally {
+      store.close();
+    }
+  });
 
 function updateStatus(idOrName: string, status: "paused" | "active" | "stopped"): void {
   const store = new Store();

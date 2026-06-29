@@ -325,12 +325,15 @@ export interface CreateWorkflowInput {
 }
 
 export type LoopTemplateKind = "workflow" | "loop";
+export type LoopTemplateSource = "builtin" | "custom";
+export type LoopTemplateVariableType = "string" | "number" | "boolean" | "json" | "string[]";
 
 export interface LoopTemplateVariable {
   name: string;
   description?: string;
   required?: boolean;
   default?: string;
+  type?: LoopTemplateVariableType;
 }
 
 export interface LoopTemplateSummary {
@@ -339,6 +342,8 @@ export interface LoopTemplateSummary {
   description: string;
   kind: LoopTemplateKind;
   variables: LoopTemplateVariable[];
+  source?: LoopTemplateSource;
+  sourcePath?: string;
 }
 
 export interface WorkflowRun {
