@@ -221,14 +221,138 @@ describe("provider conformance contracts", () => {
       operation: "cards.createVirtual",
       environment: "production",
       grantedScopes: ["PIS"],
-      env: { ERSTE_CLIENT_ID: "set" },
+      env: { ERSTE_CLIENT_ID: "set", ERSTE_TPP_CERT_PATH: "set", ERSTE_TPP_KEY_PATH: "set" },
     });
     const payment = contract?.operations.find((candidate) => candidate.operation === "payments.create");
+    const paymentStatus = contract?.operations.find((candidate) => candidate.operation === "payments.status");
+    const paymentAuthorisationUpdate = contract?.operations.find((candidate) => candidate.operation === "paymentAuthorisations.update");
 
     expect(payment?.requiresSCA).toBe(true);
     expect(payment?.requiredScopes).toEqual(["PIS"]);
+    expect(payment?.endpoint).toEqual({ method: "POST", path: "/v1/{payment-service}/{payment-product}" });
+    expect(paymentStatus?.requiredScopes).toEqual(["PIS"]);
+    expect(paymentStatus?.scopeArea).toBe("payments");
+    expect(paymentAuthorisationUpdate?.requiredScopes).toEqual(["PIS"]);
+    expect(paymentAuthorisationUpdate?.scopeArea).toBe("payments");
     expect(cardPlan.status).toBe("blocked");
     expect(cardPlan.reasons).toContain("Provider contract marks operation unsupported.");
+  });
+
+  test("Erste BCR contract covers Berlin Group PSD2 AIS/PIS and consent flows", () => {
+    const contract = getProviderConformanceContract("erste-bcr");
+    const operationIds = contract?.operations.map((operation) => operation.operation) ?? [];
+    const consentCreate = getOperationDescriptor("erste-bcr.consents.create");
+    const paymentAuthorisation = getOperationDescriptor("erste-bcr.paymentAuthorisations.update");
+    const cardAccount = getOperationDescriptor("erste-bcr.cardAccounts.list");
+    const fundsConfirmation = getOperationDescriptor("erste-bcr.fundsConfirmations.create");
+
+    expect(operationIds.length).toBeGreaterThanOrEqual(55);
+    expect(operationIds).toEqual(expect.arrayContaining([
+      "oauth.startFlow",
+      "consents.create",
+      "consents.status.get",
+      "consents.authorisations.update",
+      "accounts.get",
+      "balances.get",
+      "transactions.get",
+      "payments.create",
+      "payments.cancel",
+      "bulkPayments.extendedStatus.get",
+      "paymentAuthorisations.create",
+      "paymentCancellationAuthorisations.update",
+      "payments.creditorConfirmation.update",
+    ]));
+    expect(contract?.docs.map((doc) => doc.url)).toContain("https://gitlab.com/the-berlin-group/nextgenpsd2");
+    expect(contract?.constraints.join(" ")).toContain("NextGenPSD2 core v1.3.16");
+    expect(consentCreate).toMatchObject({
+      safetyClass: "auth_flow",
+      requiresOperationPlan: true,
+      requiresRequestSigning: true,
+      endpoint: { method: "POST", path: "/v1/consents" },
+    });
+    expect(paymentAuthorisation).toMatchObject({
+      safetyClass: "auth_flow",
+      requiresOperationPlan: true,
+      endpoint: { method: "PUT", path: "/v1/{payment-service}/{payment-product}/{paymentId}/authorisations/{authorisationId}" },
+    });
+    expect(cardAccount).toMatchObject({
+      support: "unsupported",
+      executionMode: "unsupported",
+    });
+    expect(fundsConfirmation).toMatchObject({
+      support: "unsupported",
+      executionMode: "unsupported",
+    });
+  });
+
+  test("Erste BCR planner handles environment-scoped TPP credentials", () => {
+    const sandboxPlan = planProviderOperation({
+      providerId: "erste-bcr",
+      operation: "payments.create",
+      environment: "sandbox",
+      grantedScopes: ["PIS"],
+      env: {
+        ERSTE_SANDBOX_CLIENT_ID: "set",
+        ERSTE_TPP_CERT_PATH: "set",
+        ERSTE_TPP_KEY_PATH: "set",
+      },
+    });
+    const wrongEnvironmentPlan = planProviderOperation({
+      providerId: "erste-bcr",
+      operation: "payments.create",
+      environment: "production",
+      grantedScopes: ["PIS"],
+      env: {
+        ERSTE_SANDBOX_CLIENT_ID: "set",
+        ERSTE_TPP_CERT_PATH: "set",
+        ERSTE_TPP_KEY_PATH: "set",
+      },
+    });
+    const aisOnlyPaymentStatusPlan = planProviderOperation({
+      providerId: "erste-bcr",
+      operation: "payments.status",
+      environment: "production",
+      grantedScopes: ["AIS"],
+      env: {
+        ERSTE_PRODUCTION_CLIENT_ID: "set",
+        ERSTE_TPP_CERT_PATH: "set",
+        ERSTE_TPP_KEY_PATH: "set",
+      },
+    });
+    const pisPaymentStatusPlan = planProviderOperation({
+      providerId: "erste-bcr",
+      operation: "payments.status",
+      environment: "production",
+      grantedScopes: ["PIS"],
+      env: {
+        ERSTE_PRODUCTION_CLIENT_ID: "set",
+        ERSTE_TPP_CERT_PATH: "set",
+        ERSTE_TPP_KEY_PATH: "set",
+      },
+    });
+    const oauthPlan = planProviderOperation({
+      providerId: "erste-bcr",
+      operation: "oauth.startFlow",
+      environment: "production",
+      env: {
+        ERSTE_PRODUCTION_CLIENT_ID: "set",
+        ERSTE_PRODUCTION_CLIENT_SECRET: "set",
+      },
+    });
+
+    expect(sandboxPlan.status).toBe("ready_for_conformance");
+    expect(sandboxPlan.acceptedEnvKeys).toEqual(["ERSTE_SANDBOX_CLIENT_ID", "ERSTE_TPP_CERT_PATH", "ERSTE_TPP_KEY_PATH"]);
+    expect(sandboxPlan.missingEnvKeys).toEqual([]);
+    expect(sandboxPlan.executable).toBe(false);
+    expect(wrongEnvironmentPlan.status).toBe("blocked");
+    expect(wrongEnvironmentPlan.acceptedEnvKeys).toEqual(["ERSTE_TPP_CERT_PATH", "ERSTE_TPP_KEY_PATH"]);
+    expect(wrongEnvironmentPlan.missingEnvKeys).toContain("ERSTE_PRODUCTION_CLIENT_ID");
+    expect(aisOnlyPaymentStatusPlan.status).toBe("blocked");
+    expect(aisOnlyPaymentStatusPlan.missingScopes).toEqual(["PIS"]);
+    expect(pisPaymentStatusPlan.status).toBe("ready_for_conformance");
+    expect(pisPaymentStatusPlan.missingScopes).toEqual([]);
+    expect(oauthPlan.status).toBe("blocked");
+    expect(oauthPlan.missingEnvKeys).toEqual(["ERSTE_REDIRECT_URI"]);
   });
 
   test("staged adapters expose plan-only descriptors with no live execution", () => {

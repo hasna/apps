@@ -8,10 +8,19 @@ export type ProviderOperationKind =
   | "accountStatements.download"
   | "accountTransactions.list"
   | "accountTransactions.get"
+  | "accountCheques.list"
   | "accounts.get"
   | "accounts.list"
   | "attachments.get"
   | "balances.get"
+  | "bulkPartyVerification.create"
+  | "bulkPartyVerification.get"
+  | "bulkPartyVerification.status.get"
+  | "bulkPayments.extendedStatus.get"
+  | "cardAccounts.get"
+  | "cardAccounts.list"
+  | "cardBalances.get"
+  | "cardTransactions.list"
   | "cards.cancel"
   | "cards.get"
   | "cards.createVirtual"
@@ -25,6 +34,14 @@ export type ProviderOperationKind =
   | "categories.delete"
   | "categories.list"
   | "categories.update"
+  | "consents.authorisations.create"
+  | "consents.authorisations.get"
+  | "consents.authorisations.list"
+  | "consents.authorisations.update"
+  | "consents.create"
+  | "consents.delete"
+  | "consents.get"
+  | "consents.status.get"
   | "counterparties.list"
   | "credit.list"
   | "customers.create"
@@ -34,6 +51,7 @@ export type ProviderOperationKind =
   | "customers.update"
   | "events.get"
   | "events.list"
+  | "fundsConfirmations.create"
   | "internalTransfers.create"
   | "invoices.attachments.list"
   | "invoices.cancel"
@@ -46,7 +64,19 @@ export type ProviderOperationKind =
   | "oauth.startFlow"
   | "onboarding.submit"
   | "organization.get"
+  | "partyVerification.create"
+  | "paymentAuthorisations.create"
+  | "paymentAuthorisations.get"
+  | "paymentAuthorisations.list"
+  | "paymentAuthorisations.update"
+  | "paymentCancellationAuthorisations.create"
+  | "paymentCancellationAuthorisations.get"
+  | "paymentCancellationAuthorisations.list"
+  | "paymentCancellationAuthorisations.update"
+  | "payments.cancel"
   | "payments.create"
+  | "payments.creditorConfirmation.update"
+  | "payments.get"
   | "payments.requestSendMoney"
   | "payments.status"
   | "recipients.attachments.list"
@@ -60,6 +90,14 @@ export type ProviderOperationKind =
   | "safes.list"
   | "sendMoneyApprovalRequests.get"
   | "sendMoneyApprovalRequests.list"
+  | "signingBaskets.authorisations.create"
+  | "signingBaskets.authorisations.get"
+  | "signingBaskets.authorisations.list"
+  | "signingBaskets.authorisations.update"
+  | "signingBaskets.create"
+  | "signingBaskets.delete"
+  | "signingBaskets.get"
+  | "signingBaskets.status.get"
   | "statements.download"
   | "transactions.attachments.upload"
   | "transactions.get"
@@ -152,6 +190,12 @@ export interface ProviderOperationPlanInput {
 const checkedAt = "2026-06-29";
 const MERCURY_ENV = ["MERCURY_API_KEY", "MERCURY_SANDBOX_API_KEY", "MERCURY_PRODUCTION_API_KEY"] as const;
 const MERCURY_OAUTH_ENV = ["MERCURY_OAUTH_CLIENT_ID", "MERCURY_OAUTH_CLIENT_SECRET", "MERCURY_OAUTH_REDIRECT_URI"] as const;
+const ERSTE_CLIENT_ID_ENV = ["ERSTE_CLIENT_ID", "ERSTE_SANDBOX_CLIENT_ID", "ERSTE_PRODUCTION_CLIENT_ID"] as const;
+const ERSTE_CLIENT_SECRET_ENV = ["ERSTE_CLIENT_SECRET", "ERSTE_SANDBOX_CLIENT_SECRET", "ERSTE_PRODUCTION_CLIENT_SECRET"] as const;
+const ERSTE_CERT_ENV = ["ERSTE_TPP_CERT_PATH", "ERSTE_QWAC_CERT_PATH"] as const;
+const ERSTE_KEY_ENV = ["ERSTE_TPP_KEY_PATH", "ERSTE_QWAC_KEY_PATH"] as const;
+const ERSTE_TPP_ENV = [...ERSTE_CLIENT_ID_ENV, ...ERSTE_CERT_ENV, ...ERSTE_KEY_ENV] as const;
+const ERSTE_OAUTH_ENV = [...ERSTE_CLIENT_ID_ENV, ...ERSTE_CLIENT_SECRET_ENV, "ERSTE_REDIRECT_URI"] as const;
 
 export const PROVIDER_CONFORMANCE_CONTRACTS: readonly ProviderConformanceContract[] = [
   {
@@ -421,20 +465,100 @@ export const PROVIDER_CONFORMANCE_CONTRACTS: readonly ProviderConformanceContrac
       source("BCR Open Banking", "https://www.bcr.ro/en/open-banking"),
       source("Erste Developer Portal", "https://developers.erstegroup.com/"),
       source("Erste Open Banking", "https://www.erstegroup.com/en/erste-open-banking"),
+      source("Berlin Group NextGenPSD2 downloads", "https://www.berlin-group.org/nextgenpsd2-downloads"),
+      source("Berlin Group NextGenPSD2 OpenAPI", "https://gitlab.com/the-berlin-group/nextgenpsd2"),
     ],
     constraints: [
       "Treat BCR as PSD2 Account Information and Payment Initiation only until a separate commercial API grants broader control.",
-      "All production use requires registered TPP status, consent, SCA, and redirect/session handling.",
-      "No direct card lifecycle or sensitive card data contract is exposed.",
+      "BCR public docs require Developer Portal registration for Sandbox and Production and name PSD2 Account Information plus Payment Initiation APIs.",
+      "Use Berlin Group NextGenPSD2 core v1.3.16 as the public conformance shape until the BCR portal publishes bank-specific YAML to the registered TPP.",
+      "All production use requires registered TPP status, valid client credentials, certificate-backed transport/signing setup, consent, SCA, and redirect/session handling.",
+      "Consent ids, authorisation ids, PSU redirect state, certificates, private keys, and tokens must never be stored in provider-visible logs or task comments.",
+      "BCR-specific base paths, bank id slugs, PSU headers, OAuth endpoints, payment products, and optional operations must be verified against the portal before live execution.",
+      "No direct card lifecycle, sensitive card data, Mercury-style webhook, recipient book, treasury, SAFE, customer, invoice, or category contract is exposed.",
     ],
     operations: [
-      read("accounts.list", ["AIS"], ["ERSTE_CLIENT_ID"], undefined, false, true),
-      read("balances.get", ["AIS"], ["ERSTE_CLIENT_ID"], undefined, false, true),
-      read("transactions.list", ["AIS"], ["ERSTE_CLIENT_ID"], undefined, false, true),
-      write("payments.create", "money_movement", ["PIS"], ["ERSTE_CLIENT_ID"], ["sandbox", "production"], undefined, [
-        "Verify PSD2 payment product matrix, consent redirect, SCA status polling, and bank-specific PSU headers.",
-      ], false, true),
+      ersteAuth("oauth.startFlow", undefined, ERSTE_OAUTH_ENV, [
+        "Verify Erste Developer Portal OAuth/redirect endpoints, registered redirect URI, state, and PKCE requirements before enabling.",
+      ]),
+      ersteAuth("oauth.obtainToken", undefined, ERSTE_OAUTH_ENV, [
+        "Verify token exchange and refresh semantics; never print access, refresh, or PSU-facing tokens.",
+      ]),
+      ersteAuth("consents.create", psd2("POST", "/consents"), ERSTE_TPP_ENV, [
+        "Create account-information consent only after validating recurrence, combined-service flag, access object, PSU redirect state, and certificate posture.",
+      ], ["AIS"], "read"),
+      ersteRead("consents.get", psd2("GET", "/consents/{consentId}"), true),
+      ersteAuth("consents.delete", psd2("DELETE", "/consents/{consentId}"), ERSTE_TPP_ENV, [
+        "Consent deletion revokes access and must be recorded as an irreversible external state change.",
+      ], ["AIS"], "read"),
+      ersteRead("consents.status.get", psd2("GET", "/consents/{consentId}/status"), true),
+      ersteAuth("consents.authorisations.create", psd2("POST", "/consents/{consentId}/authorisations"), ERSTE_TPP_ENV, [
+        "Start consent SCA authorisation only with a valid PSU redirect/session state envelope.",
+      ], ["AIS"], "read"),
+      ersteRead("consents.authorisations.list", psd2("GET", "/consents/{consentId}/authorisations"), true),
+      ersteRead("consents.authorisations.get", psd2("GET", "/consents/{consentId}/authorisations/{authorisationId}"), true),
+      ersteAuth("consents.authorisations.update", psd2("PUT", "/consents/{consentId}/authorisations/{authorisationId}"), ERSTE_TPP_ENV, [
+        "Only use for embedded/decoupled SCA variants after the portal confirms BCR supports them.",
+      ], ["AIS"], "read"),
+      ersteRead("accounts.list", psd2("GET", "/accounts"), true),
+      ersteRead("accounts.get", psd2("GET", "/accounts/{account-id}"), true),
+      ersteRead("balances.get", psd2("GET", "/accounts/{account-id}/balances"), true),
+      ersteRead("transactions.list", psd2("GET", "/accounts/{account-id}/transactions"), true),
+      ersteRead("transactions.get", psd2("GET", "/accounts/{account-id}/transactions/{transactionId}"), true),
+      ersteRead("accountCheques.list", psd2("GET", "/accounts/{account-id}/cheques"), true, [
+        "Treat cheques as optional AIS; keep conformance-only until BCR YAML confirms support.",
+      ]),
+      erstePayment("payments.create", psd2("POST", "/{payment-service}/{payment-product}"), [
+        "Verify BCR payment-service and payment-product matrix before using; public portal examples mention sepa-credit-transfers but BCR-specific products are portal-gated.",
+        "Map local idempotency to Berlin Group X-Request-ID and persist redirect/SCA status without storing PSU credentials.",
+      ]),
+      erstePaymentRead("payments.get", psd2("GET", "/{payment-service}/{payment-product}/{paymentId}"), true),
+      erstePaymentRead("payments.status", psd2("GET", "/{payment-service}/{payment-product}/{paymentId}/status"), true),
+      erstePayment("payments.cancel", psd2("DELETE", "/{payment-service}/{payment-product}/{paymentId}"), [
+        "Cancellation availability is payment-product and bank specific; require portal confirmation and explicit approval.",
+      ]),
+      erstePaymentRead("bulkPayments.extendedStatus.get", psd2("GET", "/bulk-payments/{payment-product}/{paymentId}/extended-status"), true, [
+        "Only use for bulk payment products after BCR portal product matrix confirms support.",
+      ]),
+      ersteAuth("paymentAuthorisations.create", psd2("POST", "/{payment-service}/{payment-product}/{paymentId}/authorisations"), ERSTE_TPP_ENV, [
+        "Start payment SCA only after the payment resource and redirect state are persisted.",
+      ], ["PIS"], "payments"),
+      erstePaymentRead("paymentAuthorisations.list", psd2("GET", "/{payment-service}/{payment-product}/{paymentId}/authorisations"), true),
+      erstePaymentRead("paymentAuthorisations.get", psd2("GET", "/{payment-service}/{payment-product}/{paymentId}/authorisations/{authorisationId}"), true),
+      ersteAuth("paymentAuthorisations.update", psd2("PUT", "/{payment-service}/{payment-product}/{paymentId}/authorisations/{authorisationId}"), ERSTE_TPP_ENV, [
+        "Only use embedded/decoupled SCA updates after BCR confirms the SCA approach for the payment product.",
+      ], ["PIS"], "payments"),
+      ersteAuth("paymentCancellationAuthorisations.create", psd2("POST", "/{payment-service}/{payment-product}/{paymentId}/cancellation-authorisations"), ERSTE_TPP_ENV, [
+        "Start cancellation SCA only after cancellation intent approval and provider status verification.",
+      ], ["PIS"], "payments"),
+      erstePaymentRead("paymentCancellationAuthorisations.list", psd2("GET", "/{payment-service}/{payment-product}/{paymentId}/cancellation-authorisations"), true),
+      erstePaymentRead("paymentCancellationAuthorisations.get", psd2("GET", "/{payment-service}/{payment-product}/{paymentId}/cancellation-authorisations/{authorisationId}"), true),
+      ersteAuth("paymentCancellationAuthorisations.update", psd2("PUT", "/{payment-service}/{payment-product}/{paymentId}/cancellation-authorisations/{authorisationId}"), ERSTE_TPP_ENV, [
+        "Only use embedded/decoupled cancellation SCA after BCR confirms support.",
+      ], ["PIS"], "payments"),
+      erstePayment("payments.creditorConfirmation.update", psd2("PUT", "/{payment-service}/{payment-product}/{paymentId}/creditor-confirmation"), [
+        "Creditor confirmation is a late-stage payment mutation and must remain conformance-only until BCR confirms support.",
+      ]),
+      unsupported("cardAccounts.list", "read"),
+      unsupported("cardAccounts.get", "read"),
+      unsupported("cardBalances.get", "read"),
+      unsupported("cardTransactions.list", "read"),
+      unsupported("fundsConfirmations.create", "money_movement"),
+      unsupported("signingBaskets.create", "money_movement"),
+      unsupported("signingBaskets.get", "read"),
+      unsupported("signingBaskets.delete", "metadata_write"),
+      unsupported("signingBaskets.status.get", "read"),
+      unsupported("signingBaskets.authorisations.create", "auth_flow"),
+      unsupported("signingBaskets.authorisations.list", "read"),
+      unsupported("signingBaskets.authorisations.get", "read"),
+      unsupported("signingBaskets.authorisations.update", "auth_flow"),
+      unsupported("partyVerification.create", "metadata_write"),
+      unsupported("bulkPartyVerification.create", "metadata_write"),
+      unsupported("bulkPartyVerification.get", "read"),
+      unsupported("bulkPartyVerification.status.get", "read"),
       unsupported("counterparties.list", "read"),
+      unsupported("categories.list", "read"),
+      unsupported("transactions.update", "metadata_write"),
       unsupported("cards.list", "read"),
       unsupported("cards.createVirtual", "card_side_effect"),
       unsupported("cards.updateSettings", "card_side_effect"),
@@ -523,6 +647,14 @@ function missingRequiredEnvKeysForOperation(
   const missing: string[] = [];
   const mercuryApiAliases = new Set<string>(MERCURY_ENV);
   const usesMercuryApiKeyGroup = required.some((key) => mercuryApiAliases.has(key));
+  const scopedEnvGroups = [
+    envScopedGroup(ERSTE_CLIENT_ID_ENV, "ERSTE_SANDBOX_CLIENT_ID", "ERSTE_PRODUCTION_CLIENT_ID"),
+    envScopedGroup(ERSTE_CLIENT_SECRET_ENV, "ERSTE_SANDBOX_CLIENT_SECRET", "ERSTE_PRODUCTION_CLIENT_SECRET"),
+  ];
+  const plainEnvGroups = [
+    plainEnvGroup(ERSTE_CERT_ENV, "ERSTE_TPP_CERT_PATH"),
+    plainEnvGroup(ERSTE_KEY_ENV, "ERSTE_TPP_KEY_PATH"),
+  ];
 
   if (usesMercuryApiKeyGroup) {
     const accepted = acceptedMercuryApiKeys(allowedKeys, environment);
@@ -530,10 +662,25 @@ function missingRequiredEnvKeysForOperation(
       missing.push(environment === "sandbox" ? "MERCURY_SANDBOX_API_KEY" : "MERCURY_PRODUCTION_API_KEY");
     }
   }
+  for (const group of scopedEnvGroups) {
+    if (!required.some((key) => group.keys.has(key))) continue;
+    if (acceptedScopedEnvKeys(allowedKeys, group, environment).length === 0) {
+      missing.push(environment === "sandbox" ? group.sandboxKey : group.productionKey);
+    }
+  }
+  for (const group of plainEnvGroups) {
+    if (!required.some((key) => group.keys.has(key))) continue;
+    if (acceptedPlainEnvKeys(allowedKeys, group).length === 0) missing.push(group.preferredKey);
+  }
 
   const allowed = new Set(allowedKeys);
+  const groupedKeys = new Set<string>([
+    ...MERCURY_ENV,
+    ...scopedEnvGroups.flatMap((group) => [...group.keys]),
+    ...plainEnvGroups.flatMap((group) => [...group.keys]),
+  ]);
   for (const key of required) {
-    if (mercuryApiAliases.has(key)) continue;
+    if (groupedKeys.has(key)) continue;
     if (!allowed.has(key)) missing.push(key);
   }
 
@@ -548,11 +695,32 @@ function acceptedEnvKeysForOperation(
   const accepted = new Set<string>();
   const required = operation.requiredEnv;
   const mercuryApiAliases = new Set<string>(MERCURY_ENV);
+  const scopedEnvGroups = [
+    envScopedGroup(ERSTE_CLIENT_ID_ENV, "ERSTE_SANDBOX_CLIENT_ID", "ERSTE_PRODUCTION_CLIENT_ID"),
+    envScopedGroup(ERSTE_CLIENT_SECRET_ENV, "ERSTE_SANDBOX_CLIENT_SECRET", "ERSTE_PRODUCTION_CLIENT_SECRET"),
+  ];
+  const plainEnvGroups = [
+    plainEnvGroup(ERSTE_CERT_ENV, "ERSTE_TPP_CERT_PATH"),
+    plainEnvGroup(ERSTE_KEY_ENV, "ERSTE_TPP_KEY_PATH"),
+  ];
   if (required.some((key) => mercuryApiAliases.has(key))) {
     for (const key of acceptedMercuryApiKeys(allowedKeys, environment)) accepted.add(key);
   }
+  for (const group of scopedEnvGroups) {
+    if (!required.some((key) => group.keys.has(key))) continue;
+    for (const key of acceptedScopedEnvKeys(allowedKeys, group, environment)) accepted.add(key);
+  }
+  for (const group of plainEnvGroups) {
+    if (!required.some((key) => group.keys.has(key))) continue;
+    for (const key of acceptedPlainEnvKeys(allowedKeys, group)) accepted.add(key);
+  }
+  const groupedKeys = new Set<string>([
+    ...MERCURY_ENV,
+    ...scopedEnvGroups.flatMap((group) => [...group.keys]),
+    ...plainEnvGroups.flatMap((group) => [...group.keys]),
+  ]);
   for (const key of allowedKeys) {
-    if (mercuryApiAliases.has(key)) continue;
+    if (groupedKeys.has(key)) continue;
     if (required.includes(key)) accepted.add(key);
   }
   return [...accepted];
@@ -562,6 +730,43 @@ function acceptedMercuryApiKeys(allowedKeys: readonly string[], environment: Pro
   const allowed = new Set(allowedKeys);
   const envSpecific = environment === "sandbox" ? "MERCURY_SANDBOX_API_KEY" : "MERCURY_PRODUCTION_API_KEY";
   return ["MERCURY_API_KEY", envSpecific].filter((key) => allowed.has(key));
+}
+
+interface EnvScopedGroup {
+  readonly keys: ReadonlySet<string>;
+  readonly genericKey: string;
+  readonly sandboxKey: string;
+  readonly productionKey: string;
+}
+
+interface PlainEnvGroup {
+  readonly keys: ReadonlySet<string>;
+  readonly preferredKey: string;
+}
+
+function envScopedGroup(keys: readonly string[], sandboxKey: string, productionKey: string): EnvScopedGroup {
+  const genericKey = keys[0];
+  if (!genericKey) throw new Error("Environment-scoped group must include a generic key.");
+  return { keys: new Set(keys), genericKey, sandboxKey, productionKey };
+}
+
+function plainEnvGroup(keys: readonly string[], preferredKey: string): PlainEnvGroup {
+  return { keys: new Set(keys), preferredKey };
+}
+
+function acceptedScopedEnvKeys(
+  allowedKeys: readonly string[],
+  group: EnvScopedGroup,
+  environment: ProviderEnvironment,
+): readonly string[] {
+  const allowed = new Set(allowedKeys);
+  const envSpecific = environment === "sandbox" ? group.sandboxKey : group.productionKey;
+  return [group.genericKey, envSpecific].filter((key) => allowed.has(key));
+}
+
+function acceptedPlainEnvKeys(allowedKeys: readonly string[], group: PlainEnvGroup): readonly string[] {
+  const allowed = new Set(allowedKeys);
+  return [...group.keys].filter((key) => allowed.has(key));
 }
 
 export function assertProviderConformanceContract(contract: ProviderConformanceContract): void {
@@ -596,6 +801,10 @@ function api(method: ProviderEndpointContract["method"], path: string): Provider
 
 function oauth(method: ProviderEndpointContract["method"], path: string): ProviderEndpointContract {
   return { method, path, server: "oauth2" };
+}
+
+function psd2(method: ProviderEndpointContract["method"], path: string): ProviderEndpointContract {
+  return { method, path: `/v1${path}` };
 }
 
 function mercuryRead(
@@ -658,24 +867,87 @@ function mercurySensitiveWrite(
   ]);
 }
 
-function authOperation(
+function ersteRead(
   operation: ProviderOperationKind,
   endpoint: ProviderEndpointContract,
+  requiresSCA: boolean,
+  releaseGates: readonly string[] = [],
+): ProviderOperationContract {
+  const contract = read(operation, ["AIS"], ERSTE_TPP_ENV, endpoint, true, requiresSCA, "read");
+  return {
+    ...contract,
+    releaseGates: [
+      ...contract.releaseGates,
+      "Verify BCR bank id, base path, PSU headers, consent scope, SCA status handling, and response redaction before live reads.",
+      ...releaseGates,
+    ],
+  };
+}
+
+function erstePaymentRead(
+  operation: ProviderOperationKind,
+  endpoint: ProviderEndpointContract,
+  requiresSCA: boolean,
+  releaseGates: readonly string[] = [],
+): ProviderOperationContract {
+  const contract = read(operation, ["PIS"], ERSTE_TPP_ENV, endpoint, true, requiresSCA, "payments");
+  return {
+    ...contract,
+    releaseGates: [
+      ...contract.releaseGates,
+      "Verify BCR payment product, PSU headers, SCA status handling, and provider status redaction before trusting payment-backed reads.",
+      ...releaseGates,
+    ],
+  };
+}
+
+function ersteAuth(
+  operation: ProviderOperationKind,
+  endpoint: ProviderEndpointContract | undefined,
   requiredEnv: readonly string[],
   releaseGates: readonly string[] = [],
+  requiredScopes: readonly string[] = [],
+  scopeArea?: ProviderScopeArea,
+): ProviderOperationContract {
+  return authOperation(operation, endpoint, requiredEnv, [
+    "Verify Erste/BCR portal registration, redirect allowlisting, certificate posture, SCA approach, and token storage before enabling.",
+    ...releaseGates,
+  ], true, requiredScopes, scopeArea);
+}
+
+function erstePayment(
+  operation: ProviderOperationKind,
+  endpoint: ProviderEndpointContract,
+  releaseGates: readonly string[] = [],
+): ProviderOperationContract {
+  return write(operation, "money_movement", ["PIS"], ERSTE_TPP_ENV, ["sandbox", "production"], endpoint, [
+    "Verify BCR payment product support, PSU headers, SCA redirect/decoupled handling, X-Request-ID idempotency, and status mapping before execution.",
+    ...releaseGates,
+  ], true, true);
+}
+
+function authOperation(
+  operation: ProviderOperationKind,
+  endpoint: ProviderEndpointContract | undefined,
+  requiredEnv: readonly string[],
+  releaseGates: readonly string[] = [],
+  requiresRequestSigning = false,
+  requiredScopes: readonly string[] = [],
+  scopeArea?: ProviderScopeArea,
 ): ProviderOperationContract {
   return {
     operation,
     effect: "auth_flow",
     support: "documented_unverified",
     environments: ["sandbox", "production"],
-    requiredScopes: [],
+    ...(scopeArea ? { scopeArea } : {}),
+    requiredScopes,
     requiredEnv,
     requiresApproval: true,
     requiresIdempotencyKey: true,
-    requiresRequestSigning: false,
+    requiresRequestSigning,
     requiresSCA: false,
-    endpoint,
+    ...(endpoint ? { endpoint } : {}),
     releaseGates: [
       "Verify OAuth client registration, redirect URI allowlisting, PKCE/state handling, and token storage before enabling.",
       ...releaseGates,
@@ -690,13 +962,14 @@ function read(
   endpoint?: ProviderEndpointContract,
   requiresRequestSigning = false,
   requiresSCA = false,
+  scopeArea: ProviderScopeArea = "read",
 ): ProviderOperationContract {
   return {
     operation,
     effect: "read",
     support: "documented_unverified",
     environments: ["sandbox", "production"],
-    scopeArea: "read",
+    scopeArea,
     requiredScopes,
     requiredEnv,
     requiresApproval: false,

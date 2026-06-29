@@ -13,6 +13,11 @@
   approvals, internal transfers, categories, customers, invoices, attachments,
   events, organization, users, credit, treasury, SAFE requests, statements,
   webhooks, onboarding, and OAuth.
+- Erste BCR PSD2 descriptor coverage using BCR/Erste public docs and the
+  current Berlin Group NextGenPSD2 OpenAPI baseline: OAuth/redirect assumptions,
+  consent lifecycle, consent/payment SCA authorisations, AIS
+  accounts/balances/transactions, PIS create/get/status/cancel, cancellation
+  authorisations, and creditor confirmation.
 - MCP request-envelope parity for card unfreeze and terminate lifecycle actions.
 
 ### Changed
@@ -24,6 +29,9 @@
   operation-plan requirements for future submit gates.
 - Mercury provider preflight metadata now uses `MERCURY_API_KEY` as the
   canonical credential name while accepting sandbox/production-specific aliases.
+- Erste BCR provider preflight metadata now accepts environment-specific client
+  aliases plus TPP/QWAC certificate and key path variables, while keeping all
+  PSD2 operations conformance-plan only.
 - MCP environment parsing now rejects invalid environment values instead of
   silently falling back to sandbox.
 

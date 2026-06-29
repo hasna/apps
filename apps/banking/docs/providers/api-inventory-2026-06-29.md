@@ -19,6 +19,7 @@ grow through descriptors instead of ad hoc command branches.
 | Erste Group | https://developers.erstegroup.com/ | Official portal; public page is a JS app backed by `webapi.developers.erstegroup.com/api/v1`. |
 | Erste Group | https://www.erstegroup.com/en/erste-open-banking | Describes PSD2 API access, explicit consent, sandbox flow, and ErsteConnect commercial API positioning. |
 | Berlin Group | https://www.berlin-group.org/nextgenpsd2-downloads | Current NextGenPSD2 spec source; last updated 2025-12-02 and points to GitLab OpenAPI YAML files. |
+| Berlin Group | https://gitlab.com/the-berlin-group/nextgenpsd2 | Current OpenAPI repository; core PSD2 compliancy release is `psd2-api_v1.3.16-2025-11-27.openapi.yaml`. |
 
 The Erste Developer Portal bundle exposes public references to `bank.bcr`,
 `bank.eboe`, AIS/PIS labels, sample paths, and an OpenAPI document backend
@@ -172,17 +173,29 @@ PSD2 access provider, not as a direct institution-control provider like Mercury.
   published documents, but anonymous direct calls to likely BCR slugs were not
   accessible from this host on 2026-06-29.
 - Berlin Group remains the normative open-banking API shape until the BCR
-  portal YAML is available through registration.
+  portal YAML is available through registration. The current public OpenAPI
+  baseline is NextGenPSD2 core `1.3.16`, released 2025-11-27.
+- The current Berlin Group core OpenAPI exposes method/path families for PIS
+  payment resources, payment/cancellation authorisations, AIS accounts,
+  balances and transactions, account information consents, funds confirmations,
+  signing baskets, party verification, and creditor confirmation. BCR's public
+  page only names AIS and PIS, so the extra families stay unsupported in
+  `erste-bcr` until BCR-specific portal evidence exists.
 
 ### Erste BCR Required Operations
 
 | Area | Required `banking` operations |
 | --- | --- |
-| TPP setup | provider config validation for portal app id, API key, QWAC/QSeal or client cert/key paths, redirect URIs, sandbox/live environment ids |
-| Consent | create consent, get consent status, list consent accounts, delete consent, persist consent metadata without exposing PSU secrets |
-| AIS accounts | list accounts, get account, get balances, list transactions, get transaction details when supported, handle booking/pending views |
-| PIS payments | initiate SEPA credit transfer, initiate supported domestic Romanian payment types only after BCR YAML confirms names and payloads, get payment status, cancel if supported |
-| SCA | redirect/decoupled flow state machine, PSU redirect URL handling, SCA status polling, expired/failed consent/payment recovery |
+| TPP setup | provider config validation for portal app id, API key when applicable, QWAC/QSeal or client cert/key paths, redirect URIs, sandbox/live environment ids |
+| OAuth/redirect | start authorization, exchange token, validate redirect URI/state, and persist token references without logging token values |
+| Consent | create consent, get consent, get consent status, delete consent, and persist consent metadata without exposing PSU secrets |
+| Consent SCA | create/list/get/update consent authorisations, with redirect/decoupled/embedded variants gated until BCR confirms support |
+| AIS accounts | list accounts, get account, get balances, list transactions, get transaction details when supported, handle booking/pending views, keep cheques optional |
+| PIS payments | initiate supported payment products only after BCR YAML confirms names and payloads, get payment resource, get payment status, cancel if supported, get bulk extended status when supported |
+| Payment SCA | create/list/get/update payment authorisations and cancellation authorisations, including expired/failed SCA recovery |
+| Payment confirmation | creditor confirmation update only after BCR confirms the product supports it |
+| Unsupported Berlin core extras | card-account AIS, funds confirmation, signing baskets, party verification, and generic webhooks remain unsupported for BCR until BCR-specific portal evidence exists |
+| SCA | redirect/decoupled/embedded flow state machine, PSU redirect URL handling, SCA status polling, expired/failed consent/payment recovery |
 | Security | mTLS/certificate loading from secrets or paths, no certificate material in logs, no refresh token dumps, request signing hooks if BCR requires them |
 | Conformance | Berlin Group fixture tests, sandbox happy paths once credentials exist, negative tests for missing certificates, missing consent, expired SCA, and unsupported card operations |
 
@@ -194,6 +207,10 @@ advertise or implement:
 - virtual-card creation;
 - card nickname/spend-limit updates;
 - card freeze/unfreeze/cancel;
+- card-account AIS operations unless BCR explicitly publishes support;
+- confirmation-of-funds operations unless BCR explicitly publishes support;
+- signing basket operations unless BCR explicitly publishes support;
+- party or bulk-party verification operations unless BCR explicitly publishes support;
 - direct account/routing credential management;
 - generic webhooks equivalent to Mercury webhooks;
 - recipient book management outside payment initiation payloads.

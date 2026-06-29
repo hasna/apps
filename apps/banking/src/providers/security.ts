@@ -30,7 +30,24 @@ const PROVIDER_ENV_ALLOWLIST: Readonly<Record<ProviderId, readonly string[]>> = 
   ],
   bunq: ["BUNQ_API_KEY", "BUNQ_DEVICE_ID", "BUNQ_PRIVATE_KEY"],
   "revolut-business": ["REVOLUT_CLIENT_ID", "REVOLUT_PRIVATE_KEY", "REVOLUT_REFRESH_TOKEN"],
-  "erste-bcr": ["ERSTE_CLIENT_ID", "ERSTE_CLIENT_SECRET", "ERSTE_REDIRECT_URI"],
+  "erste-bcr": [
+    "ERSTE_CLIENT_ID",
+    "ERSTE_SANDBOX_CLIENT_ID",
+    "ERSTE_PRODUCTION_CLIENT_ID",
+    "ERSTE_CLIENT_SECRET",
+    "ERSTE_SANDBOX_CLIENT_SECRET",
+    "ERSTE_PRODUCTION_CLIENT_SECRET",
+    "ERSTE_REDIRECT_URI",
+    "ERSTE_API_KEY",
+    "ERSTE_SANDBOX_API_KEY",
+    "ERSTE_PRODUCTION_API_KEY",
+    "ERSTE_TPP_CERT_PATH",
+    "ERSTE_TPP_KEY_PATH",
+    "ERSTE_QWAC_CERT_PATH",
+    "ERSTE_QWAC_KEY_PATH",
+    "ERSTE_QSEAL_CERT_PATH",
+    "ERSTE_QSEAL_KEY_PATH",
+  ],
 };
 
 const PROVIDER_REQUIRED_ENV_GROUPS: Readonly<Record<ProviderId, readonly (readonly string[])[]>> = {
@@ -39,7 +56,11 @@ const PROVIDER_REQUIRED_ENV_GROUPS: Readonly<Record<ProviderId, readonly (readon
   ],
   bunq: [["BUNQ_API_KEY"], ["BUNQ_PRIVATE_KEY"]],
   "revolut-business": [["REVOLUT_CLIENT_ID"], ["REVOLUT_PRIVATE_KEY"]],
-  "erste-bcr": [["ERSTE_CLIENT_ID"]],
+  "erste-bcr": [
+    ["ERSTE_CLIENT_ID", "ERSTE_SANDBOX_CLIENT_ID", "ERSTE_PRODUCTION_CLIENT_ID"],
+    ["ERSTE_TPP_CERT_PATH", "ERSTE_QWAC_CERT_PATH"],
+    ["ERSTE_TPP_KEY_PATH", "ERSTE_QWAC_KEY_PATH"],
+  ],
 };
 
 export function providerEnvAllowlist(providerId: ProviderId): readonly string[] {

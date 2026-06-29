@@ -107,6 +107,49 @@ describe("banking CLI scaffold", () => {
     expect(parsed.plan.reasons).toContain("Provider operation is not verified for live execution; only conformance planning is allowed.");
   });
 
+  test("ops plan returns non-executable Erste BCR PSD2 conformance plans", async () => {
+    const originalLog = console.log;
+    let output = "";
+    console.log = (...args: unknown[]) => {
+      output += args.join(" ");
+    };
+    try {
+      expect(await runCli([
+        "ops",
+        "plan",
+        "erste-bcr.payments.create",
+        "--environment",
+        "sandbox",
+        "--scopes",
+        "PIS",
+        "--env-keys",
+        "ERSTE_SANDBOX_CLIENT_ID,ERSTE_TPP_CERT_PATH,ERSTE_TPP_KEY_PATH",
+        "--json",
+      ])).toBe(0);
+    } finally {
+      console.log = originalLog;
+    }
+
+    const parsed = JSON.parse(output) as {
+      readonly operation: {
+        readonly operationId: string;
+        readonly safetyClass: string;
+        readonly requiresSCA: boolean;
+        readonly providerSideEffectsEnabled: boolean;
+      };
+      readonly plan: { readonly status: string; readonly executable: boolean; readonly acceptedEnvKeys: readonly string[] };
+    };
+    expect(parsed.operation).toMatchObject({
+      operationId: "erste-bcr.payments.create",
+      safetyClass: "money_movement",
+      requiresSCA: true,
+      providerSideEffectsEnabled: false,
+    });
+    expect(parsed.plan.status).toBe("ready_for_conformance");
+    expect(parsed.plan.executable).toBe(false);
+    expect(parsed.plan.acceptedEnvKeys).toEqual(["ERSTE_SANDBOX_CLIENT_ID", "ERSTE_TPP_CERT_PATH", "ERSTE_TPP_KEY_PATH"]);
+  });
+
   test("payment request envelope exits successfully", async () => {
     const originalLog = console.log;
     let output = "";

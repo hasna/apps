@@ -204,7 +204,7 @@ export const PROVIDERS: readonly ProviderCapabilityCard[] = [
       invoices: no,
       transactions: yes,
       counterparties: no,
-      oauth: no,
+      oauth: yes,
       onboarding: no,
       organization: no,
       payments: yes,
@@ -242,9 +242,14 @@ export const PROVIDERS: readonly ProviderCapabilityCard[] = [
       "https://www.bcr.ro/en/open-banking",
       "https://developers.erstegroup.com/",
       "https://www.erstegroup.com/en/erste-open-banking",
+      "https://www.berlin-group.org/nextgenpsd2-downloads",
+      "https://gitlab.com/the-berlin-group/nextgenpsd2",
     ],
-    releaseGate: "Treat as PSD2 AIS/PIS only until a commercial API grants broader account or card control.",
-    limitations: ["Requires PSD2/TPP consent and SCA flows; no direct card-control capability is exposed in the public scope."],
+    releaseGate: "Treat as PSD2 AIS/PIS only until BCR portal registration and bank-specific OpenAPI details verify broader access.",
+    limitations: [
+      "Requires registered TPP status, Developer Portal app credentials, consent, SCA/redirect handling, and certificate-backed request transport/signing before live calls.",
+      "Public BCR docs name PSD2 Account Information and Payment Initiation only; direct card-control, sensitive card data, funds confirmation, signing basket, and party-verification capabilities stay unsupported until BCR-specific evidence exists.",
+    ],
   },
 ] as const;
 

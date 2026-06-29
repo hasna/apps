@@ -33,6 +33,12 @@ describe("banking-mcp scaffold", () => {
     };
     expect(list.operations.map((operation) => operation.operationId)).toContain("mercury.cards.freeze");
 
+    const bcr = runMcpTool("banking_ops_list", { providerId: "erste-bcr", includeUnsupported: true }) as {
+      readonly operations: readonly [{ readonly operationId: string; readonly executionMode: string }];
+    };
+    expect(bcr.operations.map((operation) => operation.operationId)).toContain("erste-bcr.consents.create");
+    expect(bcr.operations.find((operation) => operation.operationId === "erste-bcr.cardAccounts.list")?.executionMode).toBe("unsupported");
+
     const describe = runMcpTool("banking_ops_describe", { operationId: "mercury.cards.freeze" }) as {
       readonly operation: { readonly operationId: string; readonly liveReadEnabled: boolean; readonly providerSideEffectsEnabled: boolean };
     };
@@ -71,6 +77,24 @@ describe("banking-mcp scaffold", () => {
     expect(result.operation.requiresOperationPlan).toBe(true);
     expect(result.plan.status).toBe("ready_for_conformance");
     expect(result.plan.executable).toBe(false);
+
+    const bcr = runMcpTool("banking_ops_plan", {
+      operationId: "erste-bcr.consents.create",
+      environment: "production",
+      grantedScopes: ["AIS"],
+      envKeys: ["ERSTE_PRODUCTION_CLIENT_ID", "ERSTE_TPP_CERT_PATH", "ERSTE_TPP_KEY_PATH"],
+    }) as {
+      readonly operation: { readonly operationId: string; readonly safetyClass: string; readonly requiresRequestSigning: boolean };
+      readonly plan: { readonly status: string; readonly executable: boolean };
+    };
+
+    expect(bcr.operation).toMatchObject({
+      operationId: "erste-bcr.consents.create",
+      safetyClass: "auth_flow",
+      requiresRequestSigning: true,
+    });
+    expect(bcr.plan.status).toBe("ready_for_conformance");
+    expect(bcr.plan.executable).toBe(false);
   });
 
   test("local payment request dispatch creates an approval-gated envelope", () => {

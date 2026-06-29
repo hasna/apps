@@ -50,6 +50,8 @@ banking providers list --json
 banking ops list --provider mercury --json
 banking ops describe mercury.cards.createVirtual --json
 banking ops plan mercury.internalTransfers.create --environment sandbox --scopes transactions:write --env-keys MERCURY_API_KEY --json
+banking ops list --provider erste-bcr --json
+banking ops plan erste-bcr.payments.create --environment sandbox --scopes PIS --env-keys ERSTE_SANDBOX_CLIENT_ID,ERSTE_TPP_CERT_PATH,ERSTE_TPP_KEY_PATH --json
 banking accounts list --provider mercury --live true --environment sandbox --limit 5 --json
 banking balances get --provider mercury --account acct_123 --live true --environment sandbox --json
 banking cards list --provider mercury --live true --environment sandbox --limit 1000 --json
@@ -86,6 +88,15 @@ approval/idempotency gates, and separate flags for live reads versus
 provider-side effects. Mercury live reads are enabled only for the implemented
 read operations. Provider-side mutation execution remains disabled until the
 descriptor's conformance, approval, idempotency, audit, and release gates pass.
+
+The Erste BCR registry covers the PSD2/Open Banking surface as a conformance
+plan: OAuth/redirect assumptions, consent lifecycle, consent and payment SCA
+authorisations, AIS accounts/balances/transactions, PIS create/get/status/cancel
+operations, cancellation authorisations, and creditor confirmation. It uses BCR
+and Erste public docs plus the current Berlin Group NextGenPSD2 OpenAPI shape.
+Direct card control, sensitive card data, card-account AIS, funds confirmation,
+signing baskets, party verification, and Mercury-style webhooks remain
+unsupported until BCR-specific portal evidence proves availability.
 
 ## SDK
 
