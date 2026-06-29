@@ -43,17 +43,18 @@ evidence:
 
 For the 2026-06-29 hosted deployment track, published public package versions
 remain release and zero-count deployment evidence only after the matching
-private deployment metadata records that result. Version `0.1.60` is prepared
-with Postgres monitor-ingress target-policy enforcement; the prior zero-count
+private deployment metadata records that result. Version `0.1.61` is prepared
+with shared-evidence sanitizer support; the prior zero-count
 deployment path remains not live runtime evidence until private deployment
 metadata records the matching image refresh. Hosted reporter, protected web/API
 scale-out, private probes, and cloud-primary promotion remain blocked until the
 hard hosted gate below is satisfied.
 
-## 0.1.60 Runtime Readiness Snapshot
+## 0.1.61 Runtime Readiness Snapshot
 
 | Area | Current evidence | Status |
 | --- | --- | --- |
+| Shared evidence | SDK/CLI sanitizer can redact raw AWS identifiers, CloudFront/ALB hosts, private URLs, Terraform artifacts, image digests, local paths, recipients, database URLs, tokens, and unsafe object keys before evidence is copied into shared docs or project metadata. | Sanitized evidence is not live readiness; protected web, workers, reports, private probes, and cloud-primary gates still need runtime proof. |
 | Target policy | Hosted API/import paths, worker review paths, and direct Postgres monitor upserts reject unsafe public-hosted targets before execution or storage; enabled browser-page rows remain blocked. | Still blocked on approved private inventory refs, live denied-target AWS smokes, browser evidence isolation, and full hosted service adapter wiring. |
 | Reporter | Channel-ref shape validation and Postgres report metadata helpers exist. | Blocked on server-side secret loading, S3 artifact writes/signing, Open Logs audit export, delivery alarms, and live liveness/drain evidence. |
 | Scheduler | Bounded Postgres scheduler review batches can create public-safe deterministic `check_jobs`. | Blocked on hosted service/API integration, lease ownership, deploy drain, metrics, alarms, and live RLS evidence. |

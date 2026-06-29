@@ -5,13 +5,14 @@ import { join } from "node:path";
 import { serveUptime } from "../src/api.js";
 import { runEdgeSmoke } from "../src/edge-smoke.js";
 
-function runCli(args: string[], dbPath: string, env: Record<string, string> = {}) {
+function runCli(args: string[], dbPath: string, env: Record<string, string> = {}, stdin?: string) {
   return Bun.spawnSync({
     cmd: ["bun", "run", "src/cli/index.ts", ...args],
     cwd: process.cwd(),
     env: { ...process.env, HASNA_UPTIME_DB: dbPath, NO_COLOR: "1", ...env },
     stdout: "pipe",
     stderr: "pipe",
+    ...(stdin === undefined ? {} : { stdin: new TextEncoder().encode(stdin) }),
   });
 }
 
@@ -251,6 +252,83 @@ test("CLI cloud postgres-migrate dry-run is redacted and apply is guarded", () =
     expect(applyJson.status).toBe("blocked");
     expect(applyJson.migrationBlockers).toContain("confirm-schema: expected uptime");
     expect(applyStdout).not.toContain("raw-password");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI evidence sanitize emits sanitized JSON and can fail on unsafe input", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const inputPath = join(dir, "unsafe.json");
+    const rawValues = [
+      "123456789012",
+      "https://d123456789abc.cloudfront.net",
+      "http://internal-origin.us-east-1.elb.amazonaws.com",
+      "postgres://user:password@db.example.invalid/uptime",
+      "/tmp/open-uptime-prod.tfplan",
+      "ops@example.com",
+      "+15555550123",
+      "ghp_abcdefghijklmnopqrstuvwxyz",
+    ];
+    writeFileSync(inputPath, JSON.stringify({
+      account: rawValues[0],
+      edge: rawValues[1],
+      origin: rawValues[2],
+      database: rawValues[3],
+      plan: rawValues[4],
+      email: rawValues[5],
+      phone: rawValues[6],
+      [rawValues[7]]: "dynamic secret key",
+    }));
+
+    const allowed = runCli(["evidence", "sanitize", "--file", inputPath], dbPath);
+    const failed = runCli(["evidence", "sanitize", "--file", inputPath, "--fail-on-unsafe"], dbPath);
+    const allowedStdout = new TextDecoder().decode(allowed.stdout);
+    const failedStdout = new TextDecoder().decode(failed.stdout);
+    const allowedReport = JSON.parse(allowedStdout);
+    const failedReport = JSON.parse(failedStdout);
+
+    expect(allowed.exitCode).toBe(0);
+    expect(failed.exitCode).toBe(1);
+    expect(allowedReport.status).toBe("unsafe");
+    expect(failedReport.unsafe).toBe(true);
+    for (const raw of rawValues) {
+      expect(allowedStdout).not.toContain(raw);
+      expect(failedStdout).not.toContain(raw);
+    }
+    expect(allowedStdout).not.toContain(inputPath);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI evidence sanitize supports stdin, text mode, and cloud alias", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const piped = runCli(["evidence", "sanitize", "--file", "-"], dbPath, {}, "{\"url\":\"http://127.0.0.1:3000/health\",\"ok\":false}");
+    const text = runCli(["evidence", "sanitize", "--input-format", "text", "--fail-on-unsafe"], dbPath, {}, "token=rawsecret");
+    const alias = runCli(["cloud", "evidence-sanitize", "--text", "{\"safe\":true}", "--input-format", "json"], dbPath);
+    const unsafeAlias = runCli(["cloud", "evidence-sanitize", "--text", "{\"url\":\"http://127.0.0.1:3000\"}", "--input-format", "json"], dbPath);
+    const allowedUnsafeAlias = runCli(["cloud", "evidence-sanitize", "--text", "{\"url\":\"http://127.0.0.1:3000\"}", "--input-format", "json", "--allow-unsafe"], dbPath);
+    const pipedReport = JSON.parse(new TextDecoder().decode(piped.stdout));
+    const textStdout = new TextDecoder().decode(text.stdout);
+    const aliasReport = JSON.parse(new TextDecoder().decode(alias.stdout));
+    const unsafeAliasReport = JSON.parse(new TextDecoder().decode(unsafeAlias.stdout));
+
+    expect(piped.exitCode).toBe(0);
+    expect(pipedReport.unsafe).toBe(true);
+    expect(JSON.stringify(pipedReport)).not.toContain("127.0.0.1");
+    expect(text.exitCode).toBe(1);
+    expect(textStdout).not.toContain("rawsecret");
+    expect(alias.exitCode).toBe(0);
+    expect(aliasReport.status).toBe("safe");
+    expect(unsafeAlias.exitCode).toBe(1);
+    expect(unsafeAliasReport.unsafe).toBe(true);
+    expect(new TextDecoder().decode(unsafeAlias.stdout)).not.toContain("127.0.0.1");
+    expect(allowedUnsafeAlias.exitCode).toBe(0);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

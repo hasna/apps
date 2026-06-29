@@ -18,6 +18,7 @@ import { summarizeHostedReportChannelRefs, type HostedReportChannelRefSummary } 
 import { runHostedPublicChecksWorker, runPostgresPublicProbeWorker, runPostgresSchedulerWorker, type PostgresPublicProbeWorkerSummary, type PostgresSchedulerWorkerSummary } from "../workers.js";
 import { emitWorkerRuntimeMetricEnvelope, workerRuntimeMetricOptionsFromEnv, type WorkerRuntimeMetric, type WorkerRuntimeRole } from "../worker-metrics.js";
 import { redactEdgeSmokeReportForEvidence, runEdgeSmoke, type EdgeSmokeReport, type RedactedEdgeSmokeReport } from "../edge-smoke.js";
+import { sanitizeEvidenceInput, type EvidenceSanitizerInputFormat } from "../evidence-sanitizer.js";
 import type { AwsDeploymentPlan, PrivateProbeCloudConfig } from "../cloud-plan.js";
 import type { PostgresMigrationPlan } from "../postgres-plan.js";
 import type { PostgresPrivateProbePreflight } from "../postgres-runtime.js";
@@ -483,6 +484,21 @@ program
     }
   });
 
+const evidence = program
+  .command("evidence")
+  .description("Sanitize and validate evidence before sharing");
+
+evidence
+  .command("sanitize")
+  .description("Sanitize rollout evidence before sharing it in docs, todos, or project metadata")
+  .option("--file <path>", "input file path; use - for stdin")
+  .option("--text <value>", "literal evidence text or JSON")
+  .addOption(new Option("--input-format <format>", "input format").choices(["auto", "json", "text"]).default("auto"))
+  .option("--fail-on-unsafe", "exit non-zero after printing JSON when unsafe evidence is found")
+  .action((opts) => {
+    runEvidenceSanitizeCli(opts);
+  });
+
 const cloud = program
   .command("cloud")
   .description("Generate dry-run cloud deployment and private-probe configuration artifacts");
@@ -533,6 +549,18 @@ cloud
     } catch (error) {
       fail(error);
     }
+  });
+
+cloud
+  .command("evidence-sanitize")
+  .description("Alias for evidence sanitize, scoped to cloud rollout evidence")
+  .option("--file <path>", "input file path; use - for stdin")
+  .option("--text <value>", "literal evidence text or JSON")
+  .addOption(new Option("--input-format <format>", "input format").choices(["auto", "json", "text"]).default("auto"))
+  .option("--fail-on-unsafe", "exit non-zero after printing JSON when unsafe evidence is found")
+  .option("--allow-unsafe", "exit zero even when unsafe evidence was found; for private operator inspection only")
+  .action((opts) => {
+    runEvidenceSanitizeCli({ ...opts, failOnUnsafe: opts.failOnUnsafe || !opts.allowUnsafe });
   });
 
 cloud
@@ -2448,6 +2476,28 @@ function renderStatus(status: string): string {
 function splitList(value: string | undefined): string[] | undefined {
   if (!value) return undefined;
   return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function runEvidenceSanitizeCli(opts: { file?: string; text?: string; inputFormat?: EvidenceSanitizerInputFormat; failOnUnsafe?: boolean }): void {
+  try {
+    const source = opts.text !== undefined ? "text" : opts.file ? opts.file === "-" ? "stdin" : "file" : "stdin";
+    const report = sanitizeEvidenceInput(readEvidenceInput(opts), {
+      inputFormat: opts.inputFormat ?? "auto",
+      source,
+    });
+    console.log(JSON.stringify(report, null, 2));
+    if (opts.failOnUnsafe && report.unsafe) process.exit(1);
+  } catch (error) {
+    fail(error, { json: true });
+  }
+}
+
+function readEvidenceInput(opts: { file?: string; text?: string }): string {
+  if (opts.text !== undefined) return opts.text;
+  if (opts.file === "-") return readFileSync(0, "utf8");
+  if (opts.file) return readFileSync(opts.file, "utf8");
+  if (process.stdin.isTTY) throw new Error("evidence input requires --file, --text, or piped stdin");
+  return readFileSync(0, "utf8");
 }
 
 function sanitizeTerminal(value: string): string {

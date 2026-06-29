@@ -48,6 +48,7 @@ export {
   WORKER_RUNTIME_METRIC_NAMESPACE,
 } from "./worker-metrics.js";
 export { redactEdgeSmokeReportForEvidence, runEdgeSmoke } from "./edge-smoke.js";
+export { parseEvidenceInput, renderEvidenceSanitizeReport, renderEvidenceSanitizerReport, sanitizeEvidenceForSharing, sanitizeEvidenceInput } from "./evidence-sanitizer.js";
 export { uptimeHome, uptimeDbPath, uptimeHostedFallbackDbPath, ensureUptimeHome } from "./paths.js";
 export type {
   UptimeBackup,
@@ -218,6 +219,17 @@ export type {
   WorkerRuntimeMetricSink,
   WorkerRuntimeMetricSinkEvent,
 } from "./workers.js";
+export type {
+  EvidenceSanitizeFinding,
+  EvidenceSanitizeOptions,
+  EvidenceSanitizeReport,
+  EvidenceSanitizeStatus,
+  EvidenceSanitizerFinding,
+  EvidenceSanitizerInputFormat,
+  EvidenceSanitizerOptions,
+  EvidenceSanitizerReport,
+  EvidenceSanitizerStatus,
+} from "./evidence-sanitizer.js";
 export type {
   PublicProbeWorkerMetricSummary,
   ReporterWorkerMetricSummary,

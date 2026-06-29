@@ -11,7 +11,7 @@ const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
 
 test("published package exports and bins are usable after build", async () => {
   const exportChecks: Record<string, string[]> = {
-    ".": ["UptimeService", "UptimeStore", "buildUptimeReport"],
+    ".": ["UptimeService", "UptimeStore", "buildUptimeReport", "sanitizeEvidenceInput"],
     "./api": ["createApiHandler", "serveUptime"],
     "./storage": ["UptimeStore"],
     "./probes": ["generateProbeKeyPair", "signProbeResult"],
@@ -23,6 +23,7 @@ test("published package exports and bins are usable after build", async () => {
     "./workers": ["runHostedPublicChecksWorker", "runPostgresPublicProbeWorker", "runPostgresSchedulerWorker"],
     "./worker-metrics": ["buildWorkerRuntimeMetricEnvelope", "schedulerWorkerRuntimeMetrics", "publicProbeWorkerRuntimeMetrics", "reporterWorkerRuntimeMetrics"],
     "./edge-smoke": ["runEdgeSmoke"],
+    "./evidence-sanitizer": ["sanitizeEvidenceInput"],
   };
 
   for (const [subpath, expected] of Object.entries(exportChecks)) {
@@ -58,6 +59,7 @@ test("package dry-run includes release artifacts and excludes source-only files"
     "dist/index.js",
     "dist/cli/index.js",
     "dist/mcp/index.js",
+    "dist/evidence-sanitizer.js",
     "dist/worker-metrics.js",
     "Dockerfile.package",
     "infra/aws/main.tf",

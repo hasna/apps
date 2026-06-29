@@ -319,6 +319,19 @@ and direct-origin URLs as well as token values. `--raw-evidence-urls` is only fo
 private operator terminals and must not be pasted into shared status, todos,
 project events, or public docs.
 
+Before copying any protected-web smoke, Terraform plan summary, image refresh
+summary, report delivery summary, alarm evidence, or backup/restore evidence
+into shared docs, todos, project metadata, or release notes, run the evidence
+sanitizer:
+
+```bash
+uptime cloud evidence-sanitize --file rollout-evidence.json
+```
+
+The cloud alias fails on unsafe evidence by default. Use `--allow-unsafe` only
+inside a private operator terminal to inspect the sanitized JSON. Passing this
+sanitizer means the artifact is safer to share; it is not live-readiness proof.
+
 Expected results:
 
 - `/health` returns `200` and no monitor data.

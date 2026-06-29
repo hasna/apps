@@ -56,6 +56,7 @@ uptime cloud postgres-private-probe preflight --workspace-id ws_internal --probe
 uptime cloud public-checks worker --workspace-id ws_internal --max-iterations 1 --hosted-sqlite-db /data/uptime/uptime.db --allow-public-checks-bridge
 uptime cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --json
 uptime cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --env --allow-blocked-env
+uptime evidence sanitize --file rollout-evidence.json --fail-on-unsafe
 uptime incidents
 uptime serve --port 3899 --check
 ```
@@ -74,6 +75,15 @@ cloud-store evidence are satisfied. The `cloud public-checks` and
 `cloud edge-smoke` commands are operational smokes: they perform bounded hosted
 checks or HTTP requests and must be run only with approved private evidence
 handling.
+`uptime evidence sanitize` is the shared-evidence gate for rollout notes, task
+comments, project metadata, and runbook snippets. It emits sanitized JSON and
+can fail operator scripts with `--fail-on-unsafe` when raw ARNs, account ids,
+CloudFront/ALB hosts, private URLs, Terraform artifacts, image digests, local
+paths, recipients, database URLs, tokens, or unsafe object keys are found.
+`uptime cloud evidence-sanitize` is the fail-closed cloud rollout alias and
+exits non-zero on unsafe evidence unless `--allow-unsafe` is used for private
+operator inspection. Passing this sanitizer does not make infrastructure live;
+it only proves the evidence artifact is safe to share.
 
 Deployment review artifacts live in `Dockerfile` and `infra/aws`. The Terraform
 desired counts default to zero, and `uptime cloud plan --json` exposes the

@@ -6,6 +6,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.61] - 2026-06-30
+
+### Added
+
+- Added an SDK and CLI evidence sanitizer for shared rollout evidence. The new
+  `sanitizeEvidenceInput` SDK export and `uptime evidence sanitize` CLI redact
+  raw AWS identifiers, CloudFront/ALB hosts, private URLs, Terraform artifacts,
+  image digests, local paths, recipients, bearer/provider tokens, database URLs,
+  and unsafe object keys before evidence is copied into docs, todos, project
+  metadata, or release notes.
+- Added `uptime cloud evidence-sanitize` as a cloud-rollout alias for existing
+  operator scripts. Both commands emit sanitized JSON; the top-level command
+  supports `--fail-on-unsafe` for CI, while the cloud alias fails on unsafe
+  evidence by default and requires `--allow-unsafe` for private inspection.
+
+### Changed
+
+- Updated release metadata defaults for the packaged AWS module to
+  `@hasna/uptime@0.1.61`.
+
 ## [0.1.60] - 2026-06-30
 
 ### Changed
