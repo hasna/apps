@@ -6,6 +6,33 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.36] - 2026-06-29
+
+### Added
+
+- Added workspace-scoped hosted report channel-ref readiness checks so reporter
+  preflight only treats refs for the current `HASNA_UPTIME_WORKSPACE_ID` as
+  startable input.
+- Added package export/bin/packlist regression coverage and stricter Postgres
+  schema-contract tests for workspace/idempotency metadata.
+
+### Changed
+
+- Hosted worker `--healthcheck` is now readiness-like and exits non-zero while
+  `canStart=false`.
+- The temporary hosted public-checks EFS SQLite bridge now requires
+  `--allow-public-checks-bridge` or `HASNA_UPTIME_ALLOW_PUBLIC_CHECKS_BRIDGE=1`.
+- Raw broad hosted tokens are rejected by default; local compatibility now
+  requires `HASNA_UPTIME_ALLOW_LEGACY_HOSTED_TOKEN=1`.
+
+### Security
+
+- One-shot report delivery URLs now reject secret-shaped query parameters and
+  provider-echoed secret query values are redacted.
+- Hosted reporter delivery remains fail-closed until Postgres/cloud store,
+  report-run/delivery-attempt state, idempotency, retry/backoff, artifact
+  storage, audit export, and alarms exist.
+
 ## [0.1.35] - 2026-06-29
 
 ### Changed

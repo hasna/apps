@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { serveUptime } from "../src/api.js";
@@ -237,6 +237,32 @@ test("CLI hosted public-check command is workspace scoped and bounded", () => {
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {
     const dbPath = join(dir, "uptime.db");
+    const blockedDbPath = join(dir, "blocked.db");
+    const blocked = runCli([
+      "cloud",
+      "public-checks",
+      "run-due",
+      "--workspace-id",
+      "ws_cli",
+      "--hosted-sqlite-db",
+      blockedDbPath,
+      "--allow-hosted-local-store",
+      "--json",
+    ], blockedDbPath, { HASNA_UPTIME_WORKSPACE_ID: "" });
+    const blockedWorkerDbPath = join(dir, "blocked-worker.db");
+    const blockedWorker = runCli([
+      "cloud",
+      "public-checks",
+      "worker",
+      "--workspace-id",
+      "ws_cli",
+      "--max-iterations",
+      "1",
+      "--hosted-sqlite-db",
+      blockedWorkerDbPath,
+      "--allow-hosted-local-store",
+      "--json",
+    ], blockedWorkerDbPath, { HASNA_UPTIME_WORKSPACE_ID: "" });
     const missingWorkspace = runCli([
       "cloud",
       "public-checks",
@@ -244,6 +270,7 @@ test("CLI hosted public-check command is workspace scoped and bounded", () => {
       "--hosted-sqlite-db",
       dbPath,
       "--allow-hosted-local-store",
+      "--allow-public-checks-bridge",
       "--json",
     ], dbPath, { HASNA_UPTIME_WORKSPACE_ID: "" });
     const ok = runCli([
@@ -255,9 +282,16 @@ test("CLI hosted public-check command is workspace scoped and bounded", () => {
       "--hosted-sqlite-db",
       dbPath,
       "--allow-hosted-local-store",
+      "--allow-public-checks-bridge",
       "--json",
     ], dbPath, { HASNA_UPTIME_WORKSPACE_ID: "" });
 
+    expect(blocked.exitCode).toBe(1);
+    expect(JSON.parse(new TextDecoder().decode(blocked.stdout)).error).toContain("public-checks bridge is blocked");
+    expect(existsSync(blockedDbPath)).toBe(false);
+    expect(blockedWorker.exitCode).toBe(1);
+    expect(JSON.parse(new TextDecoder().decode(blockedWorker.stdout)).error).toContain("public-checks bridge is blocked");
+    expect(existsSync(blockedWorkerDbPath)).toBe(false);
     expect(missingWorkspace.exitCode).toBe(1);
     expect(JSON.parse(new TextDecoder().decode(missingWorkspace.stdout)).error).toContain("workspace id");
     expect(ok.exitCode).toBe(0);
@@ -285,7 +319,7 @@ test("CLI hosted worker entrypoints preflight and fail closed", () => {
     const run = runCli(["cloud", "workers", "run", "--role", "public-probe", "--json"], dbPath, env);
 
     expect(preflight.exitCode).toBe(0);
-    expect(healthcheck.exitCode).toBe(0);
+    expect(healthcheck.exitCode).toBe(1);
     expect(badHealthcheck.exitCode).toBe(1);
     const preflightJson = JSON.parse(new TextDecoder().decode(preflight.stdout));
     expect(preflightJson).toMatchObject({
@@ -303,6 +337,25 @@ test("CLI hosted worker entrypoints preflight and fail closed", () => {
     expect(runJson.ok).toBe(false);
     expect(runJson.preflight.role).toBe("public-probe");
     expect(runJson.error).toContain("blocked");
+
+    for (const role of ["scheduler", "public-probe", "reporter", "migration"]) {
+      const roleEnv = { ...env, HASNA_UPTIME_COMPONENT: role };
+      const roleHealth = runCli(["cloud", "workers", "preflight", "--role", role, "--healthcheck", "--json"], dbPath, roleEnv);
+      const roleRun = runCli(["cloud", "workers", "run", "--role", role, "--json"], dbPath, roleEnv);
+      const roleRunJson = JSON.parse(new TextDecoder().decode(roleRun.stdout));
+
+      expect(roleHealth.exitCode).toBe(1);
+      expect(roleRun.exitCode).toBe(1);
+      expect(roleRunJson).toMatchObject({
+        ok: false,
+        preflight: {
+          role,
+          status: "blocked",
+          canStart: false,
+          workspaceId: "ws_cli",
+        },
+      });
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -358,6 +411,7 @@ test("CLI reporter preflight validates hosted report channel refs while staying 
             service: "mailery",
             secretRef: "arn:aws:secretsmanager:us-east-1:123456789012:secret:open-uptime/prod/reporting-email",
             targetRef: "ops",
+            workspaceId: "ws_cli",
           },
           {
             id: "ops-logs",
@@ -365,13 +419,16 @@ test("CLI reporter preflight validates hosted report channel refs while staying 
             service: "logs",
             secretRef: "arn:aws:ssm:us-east-1:123456789012:parameter/open-uptime/prod/reporting/logs",
             targetRef: "open-uptime",
+            workspaceId: "ws_cli",
           },
         ],
       }),
     };
     const preflight = runCli(["cloud", "workers", "preflight", "--role", "reporter", "--json"], dbPath, env);
-    const body = JSON.parse(new TextDecoder().decode(preflight.stdout));
+    const stdout = new TextDecoder().decode(preflight.stdout);
+    const body = JSON.parse(stdout);
     const channelRefs = body.checks.find((check: any) => check.name === "cloud-channel-refs");
+    const checks = Object.fromEntries(body.checks.map((check: { name: string; ok: boolean }) => [check.name, check.ok]));
 
     expect(preflight.exitCode).toBe(0);
     expect(body).toMatchObject({
@@ -383,8 +440,121 @@ test("CLI reporter preflight validates hosted report channel refs while staying 
     expect(channelRefs).toMatchObject({ ok: true });
     expect(channelRefs.detail).toContain("email=1");
     expect(channelRefs.detail).toContain("logs=1");
+    expect(channelRefs.detail).toContain("workspace-enabled=2");
+    expect(channelRefs.detail).toContain("unscoped-enabled=0");
+    expect(channelRefs.detail).toContain("other-workspace-enabled=0");
+    expect(checks).toMatchObject({
+      "cloud-channel-refs": true,
+      "report-run-cloud-store": false,
+      "report-delivery-attempts": false,
+      "report-delivery-idempotency": false,
+      "report-delivery-retry-backoff": false,
+      "report-artifact-store": false,
+      "report-audit-export": false,
+      "report-delivery-alarms": false,
+    });
     expect(body.blockers.join("\n")).toContain("postgres-adapter");
     expect(body.blockers.join("\n")).toContain("cloud-worker-leases");
+    expect(body.blockers.join("\n")).toContain("report-delivery-idempotency");
+    expect(body.blockers.join("\n")).toContain("report-delivery-alarms");
+    expect(stdout).not.toContain("arn:aws:secretsmanager");
+    expect(stdout).not.toContain("arn:aws:ssm");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI reporter preflight rejects unscoped, wrong-workspace, and raw channel refs", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const baseEnv = {
+      HASNA_UPTIME_MODE: "hosted",
+      HASNA_UPTIME_COMPONENT: "reporter",
+      HASNA_UPTIME_WORKSPACE_ID: "ws_cli",
+    };
+    const secretRef = "arn:aws:secretsmanager:us-east-1:123456789012:secret:open-uptime/prod/reporting-email";
+    const cases = [
+      {
+        catalog: {
+          version: "open-uptime.report-channel-refs.v1",
+          channels: [{ id: "ops-email", channel: "email", service: "mailery", secretRef }],
+        },
+        detail: "unscoped-enabled=1",
+        forbidden: secretRef,
+      },
+      {
+        catalog: {
+          version: "open-uptime.report-channel-refs.v1",
+          channels: [{ id: "ops-email", channel: "email", service: "mailery", secretRef, workspaceId: "ws_other" }],
+        },
+        detail: "other-workspace-enabled=1",
+        forbidden: "ws_other",
+      },
+      {
+        catalog: {
+          version: "open-uptime.report-channel-refs.v1",
+          channels: [{ id: "ops-email", channel: "email", service: "mailery", secretRef, workspaceId: "ws_cli", enabled: false }],
+        },
+        detail: "enabled=0",
+        forbidden: secretRef,
+      },
+      {
+        catalog: {
+          version: "open-uptime.report-channel-refs.v1",
+          channels: [{ id: "bad", channel: "email", service: "mailery", secretRef, workspaceId: "ws_cli", apiUrl: "https://mailery.example/?api_key=raw-secret" }],
+        },
+        detail: "invalid:",
+        forbidden: "raw-secret",
+      },
+    ];
+
+    for (const item of cases) {
+      const result = runCli(["cloud", "workers", "preflight", "--role", "reporter", "--json"], dbPath, {
+        ...baseEnv,
+        HASNA_UPTIME_REPORT_CHANNEL_REFS_JSON: JSON.stringify(item.catalog),
+      });
+      const stdout = new TextDecoder().decode(result.stdout);
+      const body = JSON.parse(stdout);
+      const channelRefs = body.checks.find((check: any) => check.name === "cloud-channel-refs");
+
+      expect(result.exitCode).toBe(0);
+      expect(channelRefs.ok).toBe(false);
+      expect(channelRefs.detail).toContain(item.detail);
+      expect(body.blockers.join("\n")).toContain("cloud-channel-refs");
+      expect(stdout).not.toContain(item.forbidden);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("built CLI worker paths preserve subcommand JSON failures", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const env = {
+      HASNA_UPTIME_MODE: "hosted",
+      HASNA_UPTIME_COMPONENT: "scheduler",
+      HASNA_UPTIME_WORKSPACE_ID: "ws_cli",
+    };
+    const invalidRole = runBuiltCli(["cloud", "workers", "preflight", "--role", "nope", "--json"], dbPath, env);
+    const blockedRun = runBuiltCli(["cloud", "workers", "run", "--role", "scheduler", "--json"], dbPath, env);
+    const invalidRoleBody = JSON.parse(new TextDecoder().decode(invalidRole.stdout));
+    const blockedRunBody = JSON.parse(new TextDecoder().decode(blockedRun.stdout));
+
+    expect(invalidRole.exitCode).toBe(1);
+    expect(invalidRoleBody.error).toContain("Unknown hosted worker role");
+    expect(blockedRun.exitCode).toBe(1);
+    expect(blockedRunBody).toMatchObject({
+      ok: false,
+      preflight: {
+        role: "scheduler",
+        status: "blocked",
+        canStart: false,
+      },
+    });
+    expect(new TextDecoder().decode(invalidRole.stderr)).toBe("");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

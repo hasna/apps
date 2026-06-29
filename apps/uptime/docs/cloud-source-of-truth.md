@@ -473,8 +473,10 @@ ECS/API/RDS/S3/probe lag/job backlog/delivery failures, and rollback commands.
 - Outbound target policy for hosted HTTP/TCP checks exists in the SDK and the
   `uptime cloud public-checks run-due` operator path. A bounded
   `uptime cloud public-checks worker` EFS SQLite bridge loop exists for
-  controlled smokes, but the cloud public-probe `check_jobs` lease/fencing path
-  and sustained ECS worker readiness are not wired yet.
+  controlled smokes only when `--allow-public-checks-bridge` or
+  `HASNA_UPTIME_ALLOW_PUBLIC_CHECKS_BRIDGE=1` is explicitly set, but the cloud
+  public-probe `check_jobs` lease/fencing path and sustained ECS worker
+  readiness are not wired yet.
 - `@hasna/cloud` hybrid mode still returns SQLite, so it is not cloud-primary.
 - The local cloud config currently points at a stale/non-resolving database host.
 - Todos has unresolved conflicts that must be reconciled before cloud cutover.

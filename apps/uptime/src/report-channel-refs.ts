@@ -20,8 +20,12 @@ export interface HostedReportChannelRefSummary {
   configured: boolean;
   valid: boolean;
   version: string | null;
+  workspaceId: string | null;
   total: number;
   enabled: number;
+  enabledForWorkspace: number;
+  enabledWithoutWorkspace: number;
+  enabledForOtherWorkspaces: number;
   byChannel: Record<HostedReportChannel, number>;
   enabledByChannel: Record<HostedReportChannel, number>;
   errors: string[];
@@ -36,11 +40,11 @@ const CATALOG_KEYS = new Set(["version", "channels"]);
 const ALLOWED_KEYS = new Set(["id", "channel", "service", "secretRef", "targetRef", "workspaceId", "enabled"]);
 const FORBIDDEN_KEYS = /apiUrl|url|token|key|password|credential|secretValue|recipient|to|from|phone|emailAddress/i;
 
-export function summarizeHostedReportChannelRefs(input: string | undefined | null): HostedReportChannelRefSummary {
+export function summarizeHostedReportChannelRefs(input: string | undefined | null, options: { workspaceId?: string | null } = {}): HostedReportChannelRefSummary {
   const raw = input?.trim();
   if (!raw) return emptySummary(false, "missing HASNA_UPTIME_REPORT_CHANNEL_REFS_JSON");
   try {
-    return summarizeHostedReportChannelRefCatalog(parseHostedReportChannelRefs(raw));
+    return summarizeHostedReportChannelRefCatalog(parseHostedReportChannelRefs(raw), options);
   } catch (error) {
     return {
       ...emptySummary(true),
@@ -71,19 +75,32 @@ export function parseHostedReportChannelRefs(input: string): HostedReportChannel
   return { version: catalog.version, channels };
 }
 
-export function summarizeHostedReportChannelRefCatalog(catalog: HostedReportChannelRefCatalog): HostedReportChannelRefSummary {
+export function summarizeHostedReportChannelRefCatalog(catalog: HostedReportChannelRefCatalog, options: { workspaceId?: string | null } = {}): HostedReportChannelRefSummary {
+  const workspaceId = options.workspaceId?.trim() || null;
   const byChannel = { ...EMPTY_COUNTS };
   const enabledByChannel = { ...EMPTY_COUNTS };
+  let enabledForWorkspace = 0;
+  let enabledWithoutWorkspace = 0;
+  let enabledForOtherWorkspaces = 0;
   for (const channel of catalog.channels) {
     byChannel[channel.channel] += 1;
-    if (channel.enabled !== false) enabledByChannel[channel.channel] += 1;
+    if (channel.enabled !== false) {
+      enabledByChannel[channel.channel] += 1;
+      if (!channel.workspaceId) enabledWithoutWorkspace += 1;
+      else if (workspaceId && channel.workspaceId === workspaceId) enabledForWorkspace += 1;
+      else enabledForOtherWorkspaces += 1;
+    }
   }
   return {
     configured: true,
     valid: true,
     version: catalog.version,
+    workspaceId,
     total: catalog.channels.length,
     enabled: catalog.channels.filter((channel) => channel.enabled !== false).length,
+    enabledForWorkspace,
+    enabledWithoutWorkspace,
+    enabledForOtherWorkspaces,
     byChannel,
     enabledByChannel,
     errors: [],
@@ -172,8 +189,12 @@ function emptySummary(configured: boolean, error?: string): HostedReportChannelR
     configured,
     valid: false,
     version: null,
+    workspaceId: null,
     total: 0,
     enabled: 0,
+    enabledForWorkspace: 0,
+    enabledWithoutWorkspace: 0,
+    enabledForOtherWorkspaces: 0,
     byChannel: { ...EMPTY_COUNTS },
     enabledByChannel: { ...EMPTY_COUNTS },
     errors: error ? [error] : [],

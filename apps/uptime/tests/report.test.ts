@@ -89,6 +89,27 @@ test("hosted report channel refs validate service-owned secret refs without raw 
   });
 });
 
+test("hosted report channel refs summarize workspace scope without exposing refs", () => {
+  const secretRef = "arn:aws:secretsmanager:us-east-1:123456789012:secret:open-uptime/prod/reporting-email";
+  const summary = summarizeHostedReportChannelRefs(JSON.stringify({
+    version: "open-uptime.report-channel-refs.v1",
+    channels: [
+      { id: "ops-email", channel: "email", service: "mailery", secretRef, workspaceId: "wks_a" },
+      { id: "ops-disabled", channel: "email", service: "mailery", secretRef, workspaceId: "wks_b", enabled: false },
+      { id: "ops-logs", channel: "logs", service: "logs", secretRef: "arn:aws:ssm:us-east-1:123456789012:parameter/open-uptime/prod/reporting/logs" },
+    ],
+  }), { workspaceId: "wks_a" });
+
+  expect(summary).toMatchObject({
+    valid: true,
+    enabled: 2,
+    enabledForWorkspace: 1,
+    enabledWithoutWorkspace: 1,
+    enabledForOtherWorkspaces: 0,
+  });
+  expect(JSON.stringify(summary)).not.toContain(secretRef);
+});
+
 test("hosted report channel refs reject raw URLs, recipients, and token-shaped fields", () => {
   const rawUrl = summarizeHostedReportChannelRefs(JSON.stringify({
     version: "open-uptime.report-channel-refs.v1",
@@ -290,6 +311,42 @@ test("sendUptimeReport rejects integration API URLs with embedded credentials", 
   expect(deliveries).toEqual([
     { channel: "logs", ok: false, error: "Integration API URL must not include username or password" },
   ]);
+});
+
+test("sendUptimeReport rejects integration API URLs with secret query parameters", async () => {
+  let calls = 0;
+  const deliveries = await sendUptimeReport(summary(), {
+    logs: {
+      apiUrl: "http://logs.test/ingest?api_key=secret",
+      apiKey: "logs_secret",
+      projectId: "uptime",
+    },
+    fetchImpl: (async () => {
+      calls += 1;
+      return new Response("{}");
+    }) as unknown as typeof fetch,
+  });
+
+  expect(calls).toBe(0);
+  expect(deliveries).toEqual([
+    { channel: "logs", ok: false, error: "Integration API URL must not include secret query parameters" },
+  ]);
+});
+
+test("sendUptimeReport redacts provider-echoed secret query parameters", async () => {
+  const deliveries = await sendUptimeReport(summary(), {
+    logs: {
+      apiUrl: "http://logs.test",
+      apiKey: "logs_secret",
+      projectId: "uptime",
+    },
+    fetchImpl: (async () => new Response(JSON.stringify({
+      error: "failed at https://logs.test/ingest?token=raw-token&ok=1 with api_key=raw-key and Bearer abc123",
+    }), { status: 401 })) as unknown as typeof fetch,
+  });
+
+  expect(deliveries[0].ok).toBe(false);
+  expect(deliveries[0].error).toBe("failed at https://logs.test/ingest?token=[REDACTED]&ok=1 with api_key=[REDACTED] and Bearer [REDACTED]");
 });
 
 test("sendUptimeReport reads Open Logs API token env names and redacts success ids", async () => {

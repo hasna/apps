@@ -55,8 +55,9 @@ specs, artifacts, browser evidence, or check execution until these are tested:
   transaction-scoped workspace isolation are still blockers.
 - report delivery through open-mailery/open-telephony/open-logs channel refs:
   reporter preflight validates the service-owned channel-ref catalog shape, but
-  hosted delivery remains disabled until Postgres, idempotent report runs,
-  retry/backoff, artifacts, audit export, and delivery alarms exist
+  hosted delivery remains disabled until Postgres, report-run storage,
+  delivery-attempt state, idempotency, retry/backoff, artifacts, audit export,
+  and delivery alarms exist
 - JSON Render and canvas redaction
 - browser evidence isolation
 - private probe identity, revocation, and isolation

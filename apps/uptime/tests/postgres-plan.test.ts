@@ -43,6 +43,31 @@ test("buildPostgresMigrationPlan emits a blocked cloud-store schema with tombsto
   expect(serialized).not.toContain("sslmode=require");
 });
 
+test("Postgres migration table contracts keep workspace, idempotency, and duplicate guards", () => {
+  const plan = buildPostgresMigrationPlan({
+    databaseUrl: "postgres://uptime_user:super-secret@example.invalid:5432/uptime?sslmode=require",
+  });
+  const sql = plan.migrationStatements.join("\n");
+  const table = (name: string) => {
+    const pattern = new RegExp(`CREATE TABLE IF NOT EXISTS "uptime"\\."${name}" \\([\\s\\S]*?\\n\\);`);
+    const match = sql.match(pattern);
+    if (!match) throw new Error(`missing table ${name}`);
+    return match[0];
+  };
+
+  for (const name of ["monitors", "check_results", "incidents", "check_jobs", "probe_identities", "probe_submissions", "report_schedules", "report_runs", "audit_events", "sync_tombstones"]) {
+    expect(table(name)).toContain("workspace_id text NOT NULL");
+  }
+  for (const name of ["monitors", "check_results", "incidents", "check_jobs", "probe_identities", "probe_submissions", "report_schedules", "report_runs", "audit_events", "sync_tombstones"]) {
+    expect(table(name)).toContain("idempotency_key text");
+  }
+  expect(table("check_jobs")).toContain("UNIQUE (workspace_id, monitor_id, monitor_version, schedule_slot, probe_policy_hash)");
+  expect(table("probe_submissions")).toContain("UNIQUE (workspace_id, probe_id, nonce)");
+  expect(table("probe_submissions")).toContain("UNIQUE (workspace_id, job_id)");
+  expect(table("report_runs")).not.toContain("UNIQUE (workspace_id, idempotency_key)");
+  expect(plan.blockers).toContain("async-runtime-adapter: not wired to UptimeService yet");
+});
+
 test("buildPostgresMigrationPlan stays blocked without a database URL", () => {
   const plan = buildPostgresMigrationPlan();
 

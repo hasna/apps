@@ -465,8 +465,8 @@ function parseHostedTokenValue(value: string, defaultWorkspaceId: string, source
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     return parseHostedTokensConfig(trimmed, defaultWorkspaceId, source);
   }
-  if (isHostedProductionMode()) {
-    throw new ApiError(`${source} must be scoped hosted token JSON when hosted auth mode or NODE_ENV is production`, 500);
+  if (!allowLegacyHostedToken()) {
+    throw new ApiError(`${source} must be scoped hosted token JSON; set HASNA_UPTIME_ALLOW_LEGACY_HOSTED_TOKEN=1 only for local compatibility`, 500);
   }
   return [{
     token: trimmed,
@@ -538,6 +538,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isHostedProductionMode(): boolean {
   return runtimeEnv("HASNA_UPTIME_HOSTED_AUTH_MODE") === "production" || runtimeEnv("NODE_ENV") === "production";
+}
+
+function allowLegacyHostedToken(): boolean {
+  return !isHostedProductionMode() && runtimeEnv("HASNA_UPTIME_ALLOW_LEGACY_HOSTED_TOKEN") === "1";
 }
 
 function runtimeEnv(name: string): string | undefined {

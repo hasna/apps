@@ -350,6 +350,11 @@ or JSON-compatible `HASNA_UPTIME_HOSTED_TOKEN` values shaped like:
 }
 ```
 
+Raw hosted tokens are rejected by default. They are only a local compatibility
+escape hatch when `HASNA_UPTIME_ALLOW_LEGACY_HOSTED_TOKEN=1`, still expand to
+broad read/write/probe/report scopes, and remain rejected in production auth
+mode or when `NODE_ENV=production`.
+
 Do not record token values in runbooks, logs, task overrides, or deployment
 evidence.
 
@@ -493,8 +498,9 @@ system. Never mount the restored file system over production during a drill.
 
 Report preview can be tested locally or through authenticated read APIs. Hosted
 delivery attempts through Mailery, Telephony, or Open Logs must stay disabled
-until the reporter has cloud channel refs, idempotency storage, retry/backoff
-state, audit rows, and delivery alarms.
+until the reporter has cloud channel refs, authoritative report-run storage,
+delivery-attempt state, idempotency storage, retry/backoff state, redacted
+artifact storage, audit export, and delivery alarms.
 
 `uptime cloud workers preflight --role reporter --json` validates
 `HASNA_UPTIME_REPORT_CHANNEL_REFS_JSON` as an operator-provided, server-owned
@@ -545,9 +551,11 @@ routes are backed by cloud check jobs and cloud audit rows.
   passes AWS smokes for denied DNS answers, redirect-to-denied targets, and
   address pinning. The SDK and `uptime cloud public-checks run-due` path now
   handle execution-time DNS and redirect enforcement for bounded smokes. The
-  `uptime cloud public-checks worker` command is an EFS SQLite bridge loop for
-  controlled smoke testing only; it is not the final cloud
-  `check_jobs`/lease/fencing protocol.
+  `uptime cloud public-checks run-due` and `worker` commands are blocked unless
+  `--allow-public-checks-bridge` or
+  `HASNA_UPTIME_ALLOW_PUBLIC_CHECKS_BRIDGE=1` is set for a reviewed EFS SQLite
+  bridge smoke. They are not the final cloud `check_jobs`/lease/fencing
+  protocol.
 - Do not enable scheduler, public-probe, reporter, or migration workers against
   the EFS SQLite bridge; those services need Postgres/cloud leases first.
 - Do not expose dashboard/API routes without hosted auth and workspace checks.

@@ -49,7 +49,7 @@ uptime cloud plan --json
 uptime cloud postgres-plan --json
 uptime cloud postgres-plan --sql
 uptime cloud workers preflight --role public-probe --json
-uptime cloud public-checks worker --workspace-id ws_internal --max-iterations 1 --hosted-sqlite-db /data/uptime/uptime.db
+uptime cloud public-checks worker --workspace-id ws_internal --max-iterations 1 --hosted-sqlite-db /data/uptime/uptime.db --allow-public-checks-bridge
 uptime cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --json
 uptime cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --env --allow-blocked-env
 uptime incidents
@@ -92,12 +92,16 @@ The interim hosted SQLite bridge now also requires explicit workspace context
 for hosted store/API reads and mutations, hides tombstoned monitors from active
 queries, records hosted monitor deletes in `sync_tombstones`, and keeps active
 monitor names unique only among non-deleted rows.
-`uptime cloud workers preflight --role <role>` reports why hosted scheduler,
-public-probe, reporter, and migration roles remain blocked. Their `run`
-entrypoints fail closed until Postgres, check jobs, channel refs, and migration
-plans exist. `uptime cloud public-checks worker` is only a bounded EFS SQLite
-bridge loop around hosted HTTP/TCP smoke checks; it is not the final cloud
-`check_jobs`/lease/fencing protocol.
+`uptime cloud workers preflight --role <role>` reports machine-checkable
+blockers for hosted scheduler, public-probe, reporter, and migration roles.
+`--healthcheck` is readiness-like and exits non-zero while `canStart=false`.
+Their `run` entrypoints fail closed until Postgres, check jobs, channel refs,
+report-run state, delivery-attempt idempotency/retry state, report artifact
+storage, audit export, alarms, and migration plans exist.
+`uptime cloud public-checks run-due` and `worker` are only bounded EFS SQLite
+bridge paths around hosted HTTP/TCP smoke checks, and they require
+`--allow-public-checks-bridge` or `HASNA_UPTIME_ALLOW_PUBLIC_CHECKS_BRIDGE=1`.
+They are not the final cloud `check_jobs`/lease/fencing protocol.
 `uptime cloud edge-smoke` is the repeatable protected-web promotion smoke. It
 checks `/health`, authenticated `/ready`, unauthenticated denial, scoped reads,
 wrong-workspace denial, wrong-scope and denied-origin mutations, fail-closed
@@ -158,9 +162,9 @@ non-loopback mutation hosts by default. For a trusted remote bind, set
 `Authorization: Bearer <token>` or `X-Uptime-Token: <token>`.
 Hosted mode additionally accepts comma-separated public origins from
 `HASNA_UPTIME_ALLOWED_ORIGINS` for deployments behind a TLS-terminating edge.
-Hosted tokens can be provided as a single legacy token through
-`HASNA_UPTIME_HOSTED_TOKEN`, or as scoped JSON through
-`HASNA_UPTIME_HOSTED_TOKENS`:
+Hosted tokens must be provided as scoped JSON through
+`HASNA_UPTIME_HOSTED_TOKENS`, or as a JSON-compatible
+`HASNA_UPTIME_HOSTED_TOKEN` value:
 
 ```json
 {
@@ -171,9 +175,11 @@ Hosted tokens can be provided as a single legacy token through
 }
 ```
 
-Use scoped JSON for hosted deployments. A single raw hosted token is kept only
-for local compatibility and expands to broad read/write/probe/report scopes;
-it is rejected when hosted auth mode or `NODE_ENV` is `production`.
+Use scoped JSON for hosted deployments. A single raw hosted token is rejected
+by default. It is kept only for local compatibility behind
+`HASNA_UPTIME_ALLOW_LEGACY_HOSTED_TOKEN=1`, expands to broad
+read/write/probe/report scopes, and is still rejected when hosted auth mode or
+`NODE_ENV` is `production`.
 Endpoints that accept request bodies require `content-type: application/json`.
 
 ## Uptime Semantics

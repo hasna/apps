@@ -50,9 +50,9 @@ function print(value: unknown, text: string, opts?: { json?: boolean }): void {
   else console.log(sanitizeTerminal(text));
 }
 
-function fail(error: unknown): never {
+function fail(error: unknown, opts?: { json?: boolean }): never {
   const message = error instanceof Error ? error.message : String(error);
-  if (program.opts().json) console.log(JSON.stringify({ ok: false, error: message }, null, 2));
+  if (wantsJson(opts)) console.log(JSON.stringify({ ok: false, error: message }, null, 2));
   else console.error(chalk.red(sanitizeTerminal(message)));
   process.exit(1);
 }
@@ -663,15 +663,15 @@ cloudWorkers
   .command("preflight")
   .description("Check one hosted worker entrypoint without starting work")
   .requiredOption("--role <role>", "scheduler, public-probe, reporter, or migration")
-  .option("--healthcheck", "exit non-zero when hosted mode, component, or workspace env is invalid")
+  .option("--healthcheck", "exit non-zero unless the worker is fully ready to start")
   .option("-j, --json", "print JSON")
   .action((opts) => {
     try {
       const preflight = buildHostedWorkerPreflight(parseWorkerRole(opts.role));
       print(preflight, renderHostedWorkerPreflight(preflight), opts);
-      if (opts.healthcheck && !hostedWorkerEnvironmentOk(preflight)) process.exit(1);
+      if (opts.healthcheck && !preflight.canStart) process.exit(1);
     } catch (error) {
-      fail(error);
+      fail(error, opts);
     }
   });
 
@@ -692,13 +692,13 @@ cloudWorkers
       }
       process.exit(1);
     } catch (error) {
-      fail(error);
+      fail(error, opts);
     }
   });
 
 const cloudPublicChecks = cloud
   .command("public-checks")
-  .description("Run hosted public HTTP/TCP checks against the configured hosted store");
+  .description("Run the temporary hosted public-checks bridge for reviewed EFS SQLite smokes");
 
 cloudPublicChecks
   .command("run-due")
@@ -707,9 +707,11 @@ cloudPublicChecks
   .option("--now <iso>", "due timestamp", new Date().toISOString())
   .option("--hosted-sqlite-db <path>", "hosted SQLite path on cloud-mounted storage")
   .option("--allow-hosted-local-store", "allow hosted mode to use local SQLite as an explicit fallback")
+  .option("--allow-public-checks-bridge", "allow the temporary EFS SQLite public-checks bridge for reviewed smoke tests")
   .option("-j, --json", "print JSON")
   .action(async (opts) => {
     try {
+      assertPublicChecksBridgeAllowed(opts);
       const svc = hostedService({
         hostedSqliteDb: opts.hostedSqliteDb,
         allowHostedLocalStore: opts.allowHostedLocalStore,
@@ -720,7 +722,7 @@ cloudPublicChecks
       const data = { ok: true, workspaceId, checked: results.length, results };
       print(data, results.length ? renderCheckResults(results) : "No due hosted public checks", opts);
     } catch (error) {
-      fail(error);
+      fail(error, opts);
     }
   });
 
@@ -733,6 +735,7 @@ cloudPublicChecks
   .option("--max-iterations <n>", "stop after this many iterations", parseInteger)
   .option("--hosted-sqlite-db <path>", "hosted SQLite path on cloud-mounted storage")
   .option("--allow-hosted-local-store", "allow hosted mode to use local SQLite as an explicit fallback")
+  .option("--allow-public-checks-bridge", "allow the temporary EFS SQLite public-checks bridge for reviewed smoke tests")
   .option("-j, --json", "print JSON")
   .action(async (opts) => {
     const abortController = new AbortController();
@@ -740,6 +743,7 @@ cloudPublicChecks
     process.once("SIGINT", onSignal);
     process.once("SIGTERM", onSignal);
     try {
+      assertPublicChecksBridgeAllowed(opts);
       const svc = hostedService({
         hostedSqliteDb: opts.hostedSqliteDb,
         allowHostedLocalStore: opts.allowHostedLocalStore,
@@ -761,7 +765,7 @@ cloudPublicChecks
       svc.close();
       print(summary, renderHostedPublicChecksWorkerSummary(summary), opts);
     } catch (error) {
-      fail(error);
+      fail(error, opts);
     } finally {
       process.removeListener("SIGINT", onSignal);
       process.removeListener("SIGTERM", onSignal);
@@ -1077,7 +1081,7 @@ program
   .option("--check", "run the scheduler while serving")
   .addOption(new Option("--mode <mode>", "runtime mode").choices(["local", "hosted"]).default("local"))
   .option("--api-token <token>", "token required for non-loopback mutation hosts")
-  .option("--hosted-token <token>", "hosted-mode token for local/dev use; deployments should prefer scoped hosted-token JSON in secret env")
+  .option("--hosted-token <token>", "hosted-mode scoped token JSON; raw tokens require HASNA_UPTIME_ALLOW_LEGACY_HOSTED_TOKEN=1")
   .option("--hosted-sqlite-db <path>", "absolute SQLite database path on hosted cloud-mounted storage")
   .option("--allow-hosted-local-store", "allow hosted mode to use local SQLite as an explicit fallback")
   .option("--allow-unsafe-remote-mutations", "allow state-changing requests from non-loopback hosts without a token")
@@ -1403,8 +1407,12 @@ function buildHostedWorkerPreflight(role: HostedWorkerRole): HostedWorkerPreflig
     { name: "cloud-worker-leases", ok: false, detail: "not implemented" },
   ];
   if (role === "reporter") {
-    const channelRefs = summarizeHostedReportChannelRefs(process.env.HASNA_UPTIME_REPORT_CHANNEL_REFS_JSON ?? process.env.HASNA_UPTIME_REPORT_CHANNEL_REFS);
-    checks.push({ name: "cloud-channel-refs", ok: channelRefs.valid && channelRefs.enabled > 0, detail: renderChannelRefSummary(channelRefs) });
+    const channelRefs = summarizeHostedReportChannelRefs(
+      process.env.HASNA_UPTIME_REPORT_CHANNEL_REFS_JSON ?? process.env.HASNA_UPTIME_REPORT_CHANNEL_REFS,
+      { workspaceId },
+    );
+    checks.push({ name: "cloud-channel-refs", ok: hostedChannelRefsReady(channelRefs), detail: renderChannelRefSummary(channelRefs) });
+    checks.push(...hostedReporterReadinessChecks());
   }
   if (role === "public-probe") {
     checks.push({ name: "public-probe-job-claims", ok: false, detail: "not implemented" });
@@ -1439,7 +1447,64 @@ function buildHostedWorkerPreflight(role: HostedWorkerRole): HostedWorkerPreflig
 function renderChannelRefSummary(summary: HostedReportChannelRefSummary): string {
   if (!summary.configured) return "not configured";
   if (!summary.valid) return `invalid: ${summary.errors.join("; ")}`;
-  return `valid catalog: total=${summary.total}, enabled=${summary.enabled}, email=${summary.enabledByChannel.email}, sms=${summary.enabledByChannel.sms}, logs=${summary.enabledByChannel.logs}`;
+  return [
+    `valid catalog: total=${summary.total}`,
+    `enabled=${summary.enabled}`,
+    `email=${summary.enabledByChannel.email}`,
+    `sms=${summary.enabledByChannel.sms}`,
+    `logs=${summary.enabledByChannel.logs}`,
+    `workspace-enabled=${summary.enabledForWorkspace}`,
+    `unscoped-enabled=${summary.enabledWithoutWorkspace}`,
+    `other-workspace-enabled=${summary.enabledForOtherWorkspaces}`,
+  ].join(", ");
+}
+
+function hostedChannelRefsReady(summary: HostedReportChannelRefSummary): boolean {
+  return summary.valid
+    && Boolean(summary.workspaceId)
+    && summary.enabledForWorkspace > 0
+    && summary.enabledWithoutWorkspace === 0
+    && summary.enabledForOtherWorkspaces === 0;
+}
+
+function hostedReporterReadinessChecks(): Array<{ name: string; ok: boolean; detail: string }> {
+  return [
+    {
+      name: "report-run-cloud-store",
+      ok: false,
+      detail: "hosted report_runs/report_schedules are blocked until the async Postgres store is authoritative",
+    },
+    {
+      name: "report-delivery-attempts",
+      ok: false,
+      detail: "delivery attempts table/state machine is not implemented for hosted reporter workers",
+    },
+    {
+      name: "report-delivery-idempotency",
+      ok: false,
+      detail: "stable provider idempotency keys and duplicate suppression are not implemented",
+    },
+    {
+      name: "report-delivery-retry-backoff",
+      ok: false,
+      detail: "retry/backoff state and exhaustion handling are not implemented",
+    },
+    {
+      name: "report-artifact-store",
+      ok: false,
+      detail: "redacted report artifact storage is not implemented",
+    },
+    {
+      name: "report-audit-export",
+      ok: false,
+      detail: "hosted delivery audit export to Open Logs is not implemented",
+    },
+    {
+      name: "report-delivery-alarms",
+      ok: false,
+      detail: "reporter lag, failure, and retry-exhaustion alarms are not proven",
+    },
+  ];
 }
 
 function hostedWorkerNextActions(role: HostedWorkerRole): string[] {
@@ -1463,7 +1528,7 @@ function hostedWorkerNextActions(role: HostedWorkerRole): string[] {
     return [
       ...shared,
       "Provide HASNA_UPTIME_REPORT_CHANNEL_REFS_JSON with workspace-authorized Mailery, Telephony, and Open Logs refs; do not inline URLs, recipients, API keys, or tokens.",
-      "Implement idempotent delivery keys, retry/backoff, delivery audit export, and delivery alarms before scaling reporter.",
+      "Implement the hosted report-run store, delivery-attempt state machine, idempotent delivery keys, retry/backoff, redacted artifact storage, delivery audit export, and reporter alarms before scaling reporter.",
     ];
   }
   return [
@@ -1503,12 +1568,6 @@ function renderEdgeSmokeReport(report: EdgeSmokeReport): string {
   ].join("\n");
 }
 
-function hostedWorkerEnvironmentOk(preflight: HostedWorkerPreflight): boolean {
-  return preflight.checks
-    .filter((check) => check.name === "hosted-mode" || check.name === "component" || check.name === "workspace")
-    .every((check) => check.ok);
-}
-
 function renderDeliveries(deliveries: UptimeReportDelivery[]): string {
   if (deliveries.length === 0) return "No report deliveries requested";
   return deliveries.map((delivery) => {
@@ -1532,6 +1591,11 @@ function splitList(value: string | undefined): string[] | undefined {
 
 function sanitizeTerminal(value: string): string {
   return value.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, "");
+}
+
+function assertPublicChecksBridgeAllowed(opts: { allowPublicChecksBridge?: boolean }): void {
+  if (opts.allowPublicChecksBridge || process.env.HASNA_UPTIME_ALLOW_PUBLIC_CHECKS_BRIDGE === "1") return;
+  throw new Error("hosted public-checks bridge is blocked until explicitly reviewed; pass --allow-public-checks-bridge or set HASNA_UPTIME_ALLOW_PUBLIC_CHECKS_BRIDGE=1 only for EFS SQLite bridge smokes");
 }
 
 function sanitizeField(value: string): string {

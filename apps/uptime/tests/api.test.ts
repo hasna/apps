@@ -7,6 +7,9 @@ import { generateProbeKeyPair, signProbeResult, type ProbeSigningInput } from ".
 import { UptimeService } from "../src/service.js";
 
 const cleanup: string[] = [];
+const HOSTED_SECRET_TOKEN_JSON = JSON.stringify({
+  tokens: [{ token: "secret", scopes: ["uptime:read", "uptime:write", "uptime:probe", "uptime:report"], workspaceId: "default" }],
+});
 
 afterEach(() => {
   while (cleanup.length > 0) rmSync(cleanup.pop()!, { recursive: true, force: true });
@@ -488,6 +491,63 @@ test("hosted API rejects raw broad hosted token in production auth mode", async 
   }
 });
 
+test("hosted API rejects raw broad hosted token by default", async () => {
+  const previousAuthMode = process.env.HASNA_UPTIME_HOSTED_AUTH_MODE;
+  const previousAllowLegacy = process.env.HASNA_UPTIME_ALLOW_LEGACY_HOSTED_TOKEN;
+  const previousToken = process.env.HASNA_UPTIME_HOSTED_TOKEN;
+  const previousTokens = process.env.HASNA_UPTIME_HOSTED_TOKENS;
+  delete process.env.HASNA_UPTIME_HOSTED_AUTH_MODE;
+  delete process.env.HASNA_UPTIME_ALLOW_LEGACY_HOSTED_TOKEN;
+  delete process.env.HASNA_UPTIME_HOSTED_TOKENS;
+  process.env.HASNA_UPTIME_HOSTED_TOKEN = "raw-broad";
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const handler = createApiHandler(service, { mode: "hosted" });
+
+  try {
+    const summary = await handler(new Request("https://uptime.test/api/v1/summary", {
+      headers: { authorization: "Bearer raw-broad" },
+    }));
+    expect(summary.status).toBe(500);
+    expect((await summary.json()).error).toContain("scoped hosted token JSON");
+  } finally {
+    service.close();
+    if (previousAuthMode === undefined) delete process.env.HASNA_UPTIME_HOSTED_AUTH_MODE;
+    else process.env.HASNA_UPTIME_HOSTED_AUTH_MODE = previousAuthMode;
+    if (previousAllowLegacy === undefined) delete process.env.HASNA_UPTIME_ALLOW_LEGACY_HOSTED_TOKEN;
+    else process.env.HASNA_UPTIME_ALLOW_LEGACY_HOSTED_TOKEN = previousAllowLegacy;
+    if (previousToken === undefined) delete process.env.HASNA_UPTIME_HOSTED_TOKEN;
+    else process.env.HASNA_UPTIME_HOSTED_TOKEN = previousToken;
+    if (previousTokens === undefined) delete process.env.HASNA_UPTIME_HOSTED_TOKENS;
+    else process.env.HASNA_UPTIME_HOSTED_TOKENS = previousTokens;
+  }
+});
+
+test("hosted API allows raw broad hosted token only with explicit local compatibility flag", async () => {
+  const previousAllowLegacy = process.env.HASNA_UPTIME_ALLOW_LEGACY_HOSTED_TOKEN;
+  const previousToken = process.env.HASNA_UPTIME_HOSTED_TOKEN;
+  const previousTokens = process.env.HASNA_UPTIME_HOSTED_TOKENS;
+  delete process.env.HASNA_UPTIME_HOSTED_TOKENS;
+  process.env.HASNA_UPTIME_ALLOW_LEGACY_HOSTED_TOKEN = "1";
+  process.env.HASNA_UPTIME_HOSTED_TOKEN = "raw-local";
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const handler = createApiHandler(service, { mode: "hosted" });
+
+  try {
+    const summary = await handler(new Request("https://uptime.test/api/v1/summary", {
+      headers: { authorization: "Bearer raw-local" },
+    }));
+    expect(summary.status).toBe(200);
+  } finally {
+    service.close();
+    if (previousAllowLegacy === undefined) delete process.env.HASNA_UPTIME_ALLOW_LEGACY_HOSTED_TOKEN;
+    else process.env.HASNA_UPTIME_ALLOW_LEGACY_HOSTED_TOKEN = previousAllowLegacy;
+    if (previousToken === undefined) delete process.env.HASNA_UPTIME_HOSTED_TOKEN;
+    else process.env.HASNA_UPTIME_HOSTED_TOKEN = previousToken;
+    if (previousTokens === undefined) delete process.env.HASNA_UPTIME_HOSTED_TOKENS;
+    else process.env.HASNA_UPTIME_HOSTED_TOKENS = previousTokens;
+  }
+});
+
 test("hosted API rejects raw broad hosted token when NODE_ENV is production", async () => {
   const previousAuthMode = process.env.HASNA_UPTIME_HOSTED_AUTH_MODE;
   const previousNodeEnv = process.env.NODE_ENV;
@@ -556,7 +616,7 @@ test("built API rejects raw broad hosted token when NODE_ENV is production", asy
 
 test("hosted API still rejects cross-origin mutations with a valid token", async () => {
   const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
-  const handler = createApiHandler(service, { mode: "hosted", hostedToken: "secret" });
+  const handler = createApiHandler(service, { mode: "hosted", hostedToken: HOSTED_SECRET_TOKEN_JSON });
 
   const response = await handler(jsonRequest(
     "https://uptime.test/api/v1/monitors",
@@ -575,7 +635,7 @@ test("hosted API accepts configured public origin behind a CloudFront edge origi
   const previousAllowedOrigins = process.env.HASNA_UPTIME_ALLOWED_ORIGINS;
   process.env.HASNA_UPTIME_ALLOWED_ORIGINS = "https://d111111abcdef8.cloudfront.net";
   const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
-  const handler = createApiHandler(service, { mode: "hosted", hostedToken: "secret" });
+  const handler = createApiHandler(service, { mode: "hosted", hostedToken: HOSTED_SECRET_TOKEN_JSON });
 
   try {
     const create = await handler(jsonRequest(
@@ -673,7 +733,7 @@ test("hosted API fails closed for probe identities, jobs, and result ingest", as
 
 test("hosted API enforces target policy at monitor creation", async () => {
   const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
-  const handler = createApiHandler(service, { mode: "hosted", hostedToken: "secret" });
+  const handler = createApiHandler(service, { mode: "hosted", hostedToken: HOSTED_SECRET_TOKEN_JSON });
   const cases = [
     { name: "loopback", kind: "http", url: "http://127.0.0.1:3000" },
     { name: "metadata", kind: "http", url: "http://169.254.169.254/latest/meta-data" },
@@ -724,7 +784,7 @@ test("API previews and applies import candidates", async () => {
 
 test("hosted API import apply and rollback fail closed", async () => {
   const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
-  const handler = createApiHandler(service, { mode: "hosted", hostedToken: "secret" });
+  const handler = createApiHandler(service, { mode: "hosted", hostedToken: HOSTED_SECRET_TOKEN_JSON });
 
   const preview = await handler(jsonRequest(
     "https://uptime.test/api/v1/imports/preview",
@@ -754,7 +814,7 @@ test("hosted API import apply and rollback fail closed", async () => {
 
 test("hosted handler rejects a local-mode service", () => {
   const service = new UptimeService({ dbPath: tempDb() });
-  expect(() => createApiHandler(service, { mode: "hosted", hostedToken: "secret" }))
+  expect(() => createApiHandler(service, { mode: "hosted", hostedToken: HOSTED_SECRET_TOKEN_JSON }))
     .toThrow("API mode hosted does not match store mode local");
   service.close();
 });
@@ -771,7 +831,7 @@ test("serve hosted mode rejects inline scheduler", () => {
   expect(() => serveUptime({
     mode: "hosted",
     allowHostedLocalStore: true,
-    hostedToken: "secret",
+    hostedToken: HOSTED_SECRET_TOKEN_JSON,
     check: true,
     dbPath: tempDb(),
   })).toThrow("hosted scheduler requires check_jobs and probes");
@@ -784,7 +844,7 @@ test("serve hosted mode allows explicit dev SQLite path only with fallback flag"
   try {
     runtime = serveUptime({
       mode: "hosted",
-      hostedToken: "secret",
+      hostedToken: HOSTED_SECRET_TOKEN_JSON,
       hostedSqliteDbPath: join(dir, "data", "uptime.db"),
       allowHostedLocalStore: true,
       port: 0,

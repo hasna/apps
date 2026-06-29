@@ -487,10 +487,14 @@ required before browser evidence or public probe scale-out.
 - ECS task definitions include explicit container health checks: web checks
   `/health`, while disabled non-web roles run
   `uptime cloud workers preflight --role <role> --healthcheck` and fail their
-  environment health check if hosted mode, component identity, or workspace env
-  is invalid. Their main commands call fail-closed
+  readiness health check while `canStart=false`, including when hosted mode,
+  component identity, workspace env, or role-specific cloud prerequisites are
+  invalid. Their main commands call fail-closed
   `uptime cloud workers run --role <role>` entrypoints until the real cloud data
-  paths are implemented.
+  paths are implemented. Reporter preflight also names the report-run store,
+  delivery-attempt state machine, provider idempotency, retry/backoff,
+  redacted artifact storage, audit export, and delivery alarms as explicit
+  blockers.
 - Public probes cannot reach denied target classes; private monitors require
   private probes and approved inventory refs.
 - Backups, restore drill, rollback sequence, alarms, and cost estimate are
