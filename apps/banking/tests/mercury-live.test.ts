@@ -123,18 +123,33 @@ describe("Mercury live read adapter", () => {
     ]);
   });
 
-  test("lists transactions through account-scoped read-only endpoint", async () => {
+  test("lists organization-wide transactions through the current read-only endpoint", async () => {
     const client = createMercuryReadClient({
       environment: "production",
       apiKey: "test-token",
       fetch: async (url) => {
-        expect(String(url)).toBe("https://api.mercury.com/api/v1/account/acct_1/transactions?limit=1");
-        return jsonResponse({ transactions: [{ id: "txn_1", amount: "1.00", status: "posted" }] });
+        expect(String(url)).toBe("https://api.mercury.com/api/v1/transactions?limit=1&order=desc");
+        return jsonResponse({ transactions: [{ id: "txn_1", accountId: "acct_1", amount: "1.00", status: "posted" }] });
+      },
+    });
+
+    await expect(client.listTransactions({ limit: 1, order: "desc" })).resolves.toEqual([
+      { id: "txn_1", accountId: "acct_1", amount: "1.00", status: "posted" },
+    ]);
+  });
+
+  test("filters transactions by account when requested", async () => {
+    const client = createMercuryReadClient({
+      environment: "production",
+      apiKey: "test-token",
+      fetch: async (url) => {
+        expect(String(url)).toBe("https://api.mercury.com/api/v1/transactions?accountId=acct_1&limit=1");
+        return jsonResponse({ transactions: [{ id: "txn_1", accountId: "acct_1", amount: "1.00", status: "posted" }] });
       },
     });
 
     await expect(client.listTransactions({ accountId: "acct_1", limit: 1 })).resolves.toEqual([
-      { id: "txn_1", amount: "1.00", status: "posted" },
+      { id: "txn_1", accountId: "acct_1", amount: "1.00", status: "posted" },
     ]);
   });
 
@@ -149,6 +164,8 @@ describe("Mercury live read adapter", () => {
 
     await expect(client.listAccounts({ limit: 1001 })).rejects.toThrow("Mercury limit must be between 1 and 1000.");
     await expect(client.listCards({ limit: 1001 })).rejects.toThrow("Mercury limit must be between 1 and 1000.");
+    await expect(client.listTransactions({ limit: 1001 })).rejects.toThrow("Mercury limit must be between 1 and 1000.");
+    await expect(client.listTransactions({ order: "newest" as "desc" })).rejects.toThrow("Mercury order must be asc or desc.");
   });
 
   test("fails closed when list responses do not include the expected array", async () => {

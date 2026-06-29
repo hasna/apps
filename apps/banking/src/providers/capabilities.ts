@@ -46,6 +46,7 @@ export const PROVIDERS: readonly ProviderCapabilityCard[] = [
     docs: [
       "https://docs.mercury.com/changelog",
       "https://docs.mercury.com/reference/listcards",
+      "https://docs.mercury.com/reference/listtransactions",
       "https://docs.mercury.com/reference/getaccountcards",
       "https://docs.mercury.com/reference/createtransaction",
     ],

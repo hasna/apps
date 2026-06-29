@@ -90,6 +90,7 @@ export const PROVIDER_CONFORMANCE_CONTRACTS: readonly ProviderConformanceContrac
     docs: [
       source("Mercury API changelog", "https://docs.mercury.com/changelog"),
       source("Mercury list cards", "https://docs.mercury.com/reference/listcards"),
+      source("Mercury list all transactions", "https://docs.mercury.com/reference/listtransactions"),
       source("Mercury get cards for account", "https://docs.mercury.com/reference/getaccountcards"),
       source("Mercury create transaction", "https://docs.mercury.com/reference/createtransaction"),
     ],
@@ -102,7 +103,7 @@ export const PROVIDER_CONFORMANCE_CONTRACTS: readonly ProviderConformanceContrac
     operations: [
       read("accounts.list", ["accounts:read"], ["MERCURY_API_TOKEN"], { method: "GET", path: "/api/v1/accounts" }),
       read("balances.get", ["accounts:read"], ["MERCURY_API_TOKEN"], { method: "GET", path: "/api/v1/account/{accountId}" }),
-      read("transactions.list", ["transactions:read"], ["MERCURY_API_TOKEN"], { method: "GET", path: "/api/v1/account/{accountId}/transactions" }),
+      read("transactions.list", ["transactions:read"], ["MERCURY_API_TOKEN"], { method: "GET", path: "/api/v1/transactions" }),
       write("payments.create", "money_movement", ["transactions:write"], ["MERCURY_API_TOKEN"], ["sandbox", "production"], {
         method: "POST",
         path: "/api/v1/account/{accountId}/transactions",

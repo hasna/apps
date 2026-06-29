@@ -19,7 +19,7 @@ describe("banking CLI scaffold", () => {
       console.log = originalLog;
     }
 
-    expect(output).toBe("0.0.50.0.5");
+    expect(output).toBe("0.0.60.0.6");
     expect(output).not.toContain("Usage:");
   });
 
@@ -192,6 +192,87 @@ describe("banking CLI scaffold", () => {
     expect(parsed.accounts[0].routingNumber).toBeUndefined();
     expect(parsed.accounts[0].accountNumberLast4).toBe("7890");
     expect(parsed.accounts[0].routingNumberLast4).toBe("0021");
+  });
+
+  test("Mercury live transactions list uses the org-wide endpoint and accepts latest-first order", async () => {
+    const originalLog = console.log;
+    let output = "";
+    console.log = (...args: unknown[]) => {
+      output += args.join(" ");
+    };
+    try {
+      expect(await runCli([
+        "transactions",
+        "list",
+        "--provider",
+        "mercury",
+        "--live",
+        "true",
+        "--environment",
+        "production",
+        "--secret-key",
+        "fixture-secret-key",
+        "--limit",
+        "2",
+        "--order",
+        "desc",
+        "--json",
+      ], {
+        readSecret: () => "test-token",
+        fetch: async (url) => {
+          expect(String(url)).toBe("https://api.mercury.com/api/v1/transactions?limit=2&order=desc");
+          return new Response(JSON.stringify({
+            transactions: [{ id: "txn_1", accountId: "acct_1", amount: "1.00", status: "posted", kind: "creditCardTransaction" }],
+            page: {},
+          }));
+        },
+      })).toBe(0);
+    } finally {
+      console.log = originalLog;
+    }
+
+    const parsed = JSON.parse(output) as {
+      readonly transactions: readonly [{ readonly id: string; readonly kind?: string; readonly accountId?: string }];
+    };
+    expect(parsed.transactions).toHaveLength(1);
+    expect(parsed.transactions[0]).toMatchObject({ id: "txn_1", accountId: "acct_1", kind: "creditCardTransaction" });
+  });
+
+  test("Mercury live transactions list can filter by account", async () => {
+    const originalLog = console.log;
+    let output = "";
+    console.log = (...args: unknown[]) => {
+      output += args.join(" ");
+    };
+    try {
+      expect(await runCli([
+        "transactions",
+        "list",
+        "--provider",
+        "mercury",
+        "--account",
+        "acct_1",
+        "--live",
+        "true",
+        "--environment",
+        "production",
+        "--secret-key",
+        "fixture-secret-key",
+        "--limit",
+        "1",
+        "--json",
+      ], {
+        readSecret: () => "test-token",
+        fetch: async (url) => {
+          expect(String(url)).toBe("https://api.mercury.com/api/v1/transactions?accountId=acct_1&limit=1");
+          return new Response(JSON.stringify({ transactions: [{ id: "txn_1", accountId: "acct_1", amount: "1.00", status: "posted" }] }));
+        },
+      })).toBe(0);
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(JSON.parse(output).transactions).toHaveLength(1);
   });
 
   test("Mercury live cards list uses the org-wide endpoint and accepts limit", async () => {

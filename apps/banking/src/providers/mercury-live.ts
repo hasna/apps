@@ -49,6 +49,7 @@ export interface MercuryCardSummary {
 
 export interface MercuryTransactionSummary {
   readonly id: string;
+  readonly accountId?: string;
   readonly amount: unknown;
   readonly status: string;
   readonly kind?: string;
@@ -62,7 +63,7 @@ export interface MercuryReadClient {
   listAccounts(input?: { readonly limit?: number }): Promise<readonly MercuryAccountSummary[]>;
   getBalance(input: { readonly accountId: string }): Promise<MercuryBalanceSummary>;
   listCards(input?: { readonly accountId?: string; readonly limit?: number }): Promise<readonly MercuryCardSummary[]>;
-  listTransactions(input: { readonly accountId: string; readonly limit?: number }): Promise<readonly MercuryTransactionSummary[]>;
+  listTransactions(input?: { readonly accountId?: string; readonly limit?: number; readonly order?: "asc" | "desc" }): Promise<readonly MercuryTransactionSummary[]>;
 }
 
 export class MercuryCredentialError extends Error {
@@ -153,9 +154,11 @@ export function createMercuryReadClient(input: MercuryReadClientInput): MercuryR
       });
       return arrayFromPayload(payload, "cards").map(normalizeCard);
     },
-    async listTransactions(input) {
-      const payload = await request(`/account/${encodeURIComponent(input.accountId)}/transactions`, {
+    async listTransactions(input = {}) {
+      const payload = await request("/transactions", {
+        accountId: input.accountId,
         limit: limitParam(input.limit),
+        order: orderParam(input.order),
       });
       return arrayFromPayload(payload, "transactions").map(normalizeTransaction);
     },
@@ -183,6 +186,14 @@ function limitParam(limit: number | undefined): number | undefined {
     throw new MercuryApiError(400, "Mercury limit must be between 1 and 1000.");
   }
   return Math.trunc(limit);
+}
+
+function orderParam(order: "asc" | "desc" | undefined): "asc" | "desc" | undefined {
+  if (order === undefined) return undefined;
+  if (order !== "asc" && order !== "desc") {
+    throw new MercuryApiError(400, "Mercury order must be asc or desc.");
+  }
+  return order;
 }
 
 function arrayFromPayload(payload: unknown, key: string): readonly Record<string, unknown>[] {
@@ -237,6 +248,7 @@ function normalizeTransaction(value: unknown): MercuryTransactionSummary {
   const record = expectRecord(value, "Mercury transaction");
   return {
     id: requiredString(record, "id"),
+    ...stringProp(record, "accountId"),
     amount: requiredUnknown(record, "amount"),
     status: requiredString(record, "status"),
     ...stringProp(record, "kind"),

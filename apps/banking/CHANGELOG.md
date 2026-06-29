@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.6 - 2026-06-29
+
+### Fixed
+
+- Mercury live `transactions list` now uses the current organization-wide `GET /api/v1/transactions` endpoint with optional `--account` filtering and `--order asc|desc` support, so latest company-wide transaction reads include credit-card activity instead of only account-scoped deposit transactions.
+
 ## 0.0.5 - 2026-06-29
 
 ### Fixed

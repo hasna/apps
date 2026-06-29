@@ -12,7 +12,7 @@ import {
   type ProviderId,
 } from "../index.ts";
 
-const VERSION = "0.0.5";
+const VERSION = "0.0.6";
 
 interface ParsedArgs {
   readonly positionals: readonly string[];
@@ -36,7 +36,7 @@ Usage:
   banking providers show <provider> [--json]
   banking accounts list --provider <provider> [--live true --environment <sandbox|production> --secret-key <key>] [--limit <n>] [--json]
   banking balances get --provider <provider> --account <id> [--live true --environment <sandbox|production> --secret-key <key>] [--json]
-  banking transactions list --provider <provider> --account <id> [--live true --environment <sandbox|production> --secret-key <key>] [--limit <n>] [--json]
+  banking transactions list --provider <provider> [--account <id>] [--live true --environment <sandbox|production> --secret-key <key>] [--limit <n>] [--order <asc|desc>] [--json]
   banking payments quote --provider <provider> --account <id> --amount <decimal> --currency <code> --to <name> [--recipient <provider-recipient-id>] [--rail <rail>] [--json]
   banking payments request --provider <provider> --account <id> --amount <decimal> --currency <code> --to <name> [--recipient <provider-recipient-id>] [--rail <rail>] [--json]
   banking payments status --provider <provider> --request <id> [--json]
@@ -144,10 +144,12 @@ export async function runCli(argv: readonly string[] = Bun.argv.slice(2), runtim
         const provider = providerId(requiredOption(parsed, "provider"));
         if (provider !== "mercury") return failLiveUnsupported("transactions list", provider, parsed.json);
         const limit = limitOption(parsed);
+        const order = orderOption(parsed);
         emit({
           transactions: await mercuryReadClient(parsed, runtime).listTransactions({
-            accountId: requiredOption(parsed, "account"),
+            ...optionalOption(parsed, "account", "accountId"),
             ...(limit ? { limit } : {}),
+            ...(order ? { order } : {}),
           }),
         }, parsed.json);
         return 0;
@@ -313,6 +315,13 @@ function limitOption(parsed: ParsedArgs): number | undefined {
     throw new Error("--limit must be between 1 and 1000.");
   }
   return Math.trunc(parsedValue);
+}
+
+function orderOption(parsed: ParsedArgs): "asc" | "desc" | undefined {
+  const value = option(parsed, "order");
+  if (!value) return undefined;
+  if (value !== "asc" && value !== "desc") throw new Error("--order must be asc or desc.");
+  return value;
 }
 
 function mercuryReadClient(parsed: ParsedArgs, runtime: CliRuntime) {
