@@ -41,6 +41,7 @@ import {
   signDocumentLocally,
 } from "../lib/workflow.js";
 import { setupSigningDomain } from "../lib/domain-integration.js";
+import { getPackageVersion } from "../lib/package-info.js";
 
 const program = new Command();
 
@@ -87,7 +88,7 @@ function createAgentAttestationSignature(opts: Record<string, unknown>): string 
 program
   .name("open-signatures")
   .description("Open-source agreement and e-signature workflows")
-  .version("0.1.12");
+  .version(getPackageVersion());
 
 // ── document ─────────────────────────────────────────────────────────────────
 

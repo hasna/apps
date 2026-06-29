@@ -1,5 +1,6 @@
-import { writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
+import fontkit from "@pdf-lib/fontkit";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { renderMarkdown } from "./markdown-template.js";
 import { getRenderedOutputPath } from "./files.js";
@@ -40,6 +41,20 @@ const MARGIN_TOP = 64;
 const MARGIN_BOTTOM = 64;
 const BODY_SIZE = 11;
 const LINE_HEIGHT = 17;
+const FONT_CANDIDATES = [
+  "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+  "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+  "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+  "/Library/Fonts/Arial Unicode.ttf",
+];
+const BOLD_FONT_CANDIDATES = [
+  "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+  "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+];
+const ITALIC_FONT_CANDIDATES = [
+  "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf",
+  "/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf",
+];
 
 export async function renderMarkdownToPdf(input: {
   markdown: string;
@@ -48,9 +63,7 @@ export async function renderMarkdownToPdf(input: {
 }): Promise<MarkdownPdfResult> {
   const rendered = await renderMarkdown(input.markdown, input.variables ?? {}, input.outputName ?? "document.md");
   const pdfDoc = await PDFDocument.create();
-  const regular = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const bold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  const italic = await pdfDoc.embedFont(StandardFonts.HelveticaOblique);
+  const { regular, bold, italic } = await loadFonts(pdfDoc);
   const pages = [pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT])];
   const cursor: LayoutCursor = { pageIndex: 0, x: MARGIN_X, y: PAGE_HEIGHT - MARGIN_TOP };
   const fields: RenderedSignatureField[] = [];
@@ -178,12 +191,35 @@ export async function renderMarkdownFileToPdf(input: {
   path: string;
   variables?: Record<string, unknown>;
 }): Promise<MarkdownPdfResult> {
-  const { readFileSync } = await import("node:fs");
   return renderMarkdownToPdf({
     markdown: readFileSync(input.path, "utf-8"),
     variables: input.variables,
     outputName: basename(input.path),
   });
+}
+
+async function loadFonts(pdfDoc: PDFDocument) {
+  const regularPath = firstExistingPath(FONT_CANDIDATES);
+  if (!regularPath) {
+    return {
+      regular: await pdfDoc.embedFont(StandardFonts.Helvetica),
+      bold: await pdfDoc.embedFont(StandardFonts.HelveticaBold),
+      italic: await pdfDoc.embedFont(StandardFonts.HelveticaOblique),
+    };
+  }
+
+  pdfDoc.registerFontkit(fontkit);
+  const boldPath = firstExistingPath(BOLD_FONT_CANDIDATES) ?? regularPath;
+  const italicPath = firstExistingPath(ITALIC_FONT_CANDIDATES) ?? regularPath;
+  return {
+    regular: await pdfDoc.embedFont(readFileSync(regularPath)),
+    bold: await pdfDoc.embedFont(readFileSync(boldPath)),
+    italic: await pdfDoc.embedFont(readFileSync(italicPath)),
+  };
+}
+
+function firstExistingPath(paths: string[]): string | undefined {
+  return paths.find((path) => existsSync(path));
 }
 
 function stripMarkdownInline(value: string): string {

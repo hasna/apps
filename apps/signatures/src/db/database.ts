@@ -1,4 +1,4 @@
-import { SqliteAdapter } from "@hasna/cloud";
+import { Database } from "bun:sqlite";
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
@@ -9,7 +9,7 @@ type QueryResult<T> = {
   run(...params: unknown[]): unknown;
 };
 
-type SignaturesDatabase = Omit<SqliteAdapter, "query"> & {
+type SignaturesDatabase = Omit<Database, "query"> & {
   query<T = unknown, P extends unknown[] = unknown[]>(sql: string): {
     get(...params: P): T | undefined;
     all(...params: P): T[];
@@ -61,9 +61,8 @@ export function getDatabase(): SignaturesDatabase {
   if (db) return db;
 
   const path = getDbPath();
-  const isMemory = path === ":memory:";
 
-  db = new SqliteAdapter(path) as unknown as SignaturesDatabase;
+  db = new Database(path) as unknown as SignaturesDatabase;
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA busy_timeout = 5000");

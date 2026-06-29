@@ -5,7 +5,6 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { registerCloudTools } from "@hasna/cloud";
 import { z } from "zod";
 
 import {
@@ -54,15 +53,10 @@ import { getSetting, setSetting } from "../db/settings.js";
 import { getDatabase } from "../db/database.js";
 import { isCerebrasConfigured } from "../lib/pdf-detector.js";
 import { createDocumentFromMarkdown, sendDocumentForSignature, sendDocumentWithProvider, signDocumentLocally } from "../lib/workflow.js";
+import { getPackageVersion } from "../lib/package-info.js";
 import type { RecipientStatus, SessionStatus, SignerType } from "../types/index.js";
 
 import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
-
-function registerCompatibleCloudTools(server: Server): void {
-  if (typeof (server as unknown as { tool?: unknown }).tool === "function") {
-    registerCloudTools(server as never, "signatures");
-  }
-}
 
 function maskSetting(key: string, value: unknown): unknown {
   const lower = key.toLowerCase();
@@ -73,7 +67,7 @@ function maskSetting(key: string, value: unknown): unknown {
 
 export function buildServer(): Server {
   const server = new Server(
-    { name: "signatures", version: "0.1.0" },
+    { name: "signatures", version: getPackageVersion() },
     { capabilities: { tools: {} } }
   );
 
@@ -1056,7 +1050,8 @@ export function buildServer(): Server {
         case "send_feedback": {
           const a = args as Record<string, unknown>;
           const db = getDatabase();
-          db.run("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)", [a["message"] as string, (a["email"] as string) || null, (a["category"] as string) || "general", "0.1.1"]);
+          db.query("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)")
+            .run(a["message"] as string, (a["email"] as string) || null, (a["category"] as string) || "general", "0.1.1");
           return { content: [{ type: "text", text: "Feedback saved. Thank you!" }] };
         }
 
@@ -1080,7 +1075,6 @@ async function main() {
   if (isStdioMode(args)) {
     const transport = new StdioServerTransport();
     const s = buildServer();
-    registerCompatibleCloudTools(s);
     await s.connect(transport);
     return;
   }
@@ -1088,11 +1082,7 @@ async function main() {
   startMcpHttpServer({
     name: "signatures",
     port: resolveMcpHttpPort(args),
-    buildServer: () => {
-      const s = buildServer();
-      registerCompatibleCloudTools(s);
-      return s;
-    },
+    buildServer,
   });
 }
 

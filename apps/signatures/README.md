@@ -320,13 +320,13 @@ Configuration values containing `key`, `secret`, or `token` are masked in MCP re
 
 ## Data Directory
 
-Data is stored under:
+When `SIGNATURES_DB_PATH` or `HASNA_SIGNATURES_DB_PATH` is set, that file is
+used as the SQLite database. Otherwise, a git checkout uses the repo-local
+`.signatures/signatures.db`; outside a git checkout, data is stored under:
 
 ```text
 ~/.hasna/signatures/
 ```
-
-Set `SIGNATURES_DB_PATH` or `HASNA_SIGNATURES_DB_PATH` to override the SQLite database path.
 
 ## Security Model
 

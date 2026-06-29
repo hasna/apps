@@ -41,6 +41,7 @@ import { shareDocument, receiveDocument } from "../lib/attachments-integration.j
 import { getSetting, setSetting, getAllSettings } from "../db/settings.js";
 import { createDocumentFromMarkdown, sendDocumentForSignature, sendDocumentWithProvider, signDocumentLocally } from "../lib/workflow.js";
 import { setupSigningDomain } from "../lib/domain-integration.js";
+import { getPackageVersion } from "../lib/package-info.js";
 import type { RecipientStatus, SessionStatus, SignerType } from "../types/index.js";
 
 const PORT = parseInt(process.env["PORT"] ?? "19440", 10);
@@ -207,7 +208,7 @@ Bun.serve({
     try {
       // Health
       if (path === "/health" && method === "GET") {
-        return json({ status: "ok", version: "0.1.12", port: PORT });
+        return json({ status: "ok", version: getPackageVersion(), port: PORT });
       }
 
       // Stats
