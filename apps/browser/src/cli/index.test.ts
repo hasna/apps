@@ -81,6 +81,29 @@ describe("CLI — one-shot browse commands", () => {
     expect(parsed.links_count).toBe(1);
     expect(parsed.screenshot).toBeString();
   }, 10_000);
+
+  it("check --json tolerates concurrent shared SQLite startup", async () => {
+    const runs = await Promise.all(
+      [1, 2, 3].map((n) =>
+        runCliWithTimeout(
+          [
+            "check",
+            `data:text/html,<title>Concurrent ${n}</title><p>${n}</p>`,
+            "--json",
+          ],
+          10_000,
+        )
+      )
+    );
+
+    for (const [index, result] of runs.entries()) {
+      expect(result.timedOut).toBe(false);
+      expect(result.code).toBe(0);
+      expect(result.stderr).not.toContain("SQLITE_BUSY");
+      const parsed = JSON.parse(result.stdout);
+      expect(parsed.title).toBe(`Concurrent ${index + 1}`);
+    }
+  }, 20_000);
 });
 
 describe("CLI — help flags", () => {
