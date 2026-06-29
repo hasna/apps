@@ -11,7 +11,8 @@ import { getChannelTopics, getSessionTopics, getTrendingTopics } from "../../lib
 import { getConversationSummary } from "../../lib/summary.js";
 import { buildGraph, getAgentNetwork, getGraphStats } from "../../lib/graph.js";
 import { listChannelNotificationSubscriptions, readChannelNotifications } from "../../lib/channel-notifications.js";
-import { renderContent } from "../../lib/terminal-markdown.js";
+import { windowItems } from "../../lib/compact-output.js";
+import { getCliWindow, printCompactFooter } from "../compact.js";
 import pkg from "../../../package.json";
 
 export function registerAnalyticsCommands(program: Command): void {
@@ -196,11 +197,13 @@ export function registerAnalyticsCommands(program: Command): void {
   program
     .command("context")
     .description("One-shot session boot context for agents: online agents, unread DMs, channels, recent activity")
+    .option("--limit <n>", "Max rows per section", parseInt)
     .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const agent = resolveIdentity();
       heartbeat(agent);
       const db = getDb();
+      const window = getCliWindow({ limit: opts.limit });
 
       // Online agents
       const onlineAgents = listAgents({ online_only: true });
@@ -245,8 +248,10 @@ export function registerAnalyticsCommands(program: Command): void {
 
         // Online agents
         if (onlineAgents.length > 0) {
-          const names = onlineAgents.map((a) => chalk.green(a.agent)).join(", ");
+          const onlinePage = windowItems(onlineAgents, window);
+          const names = onlinePage.items.map((a) => chalk.green(a.agent)).join(", ");
           console.log(`${chalk.bold("Online agents:")} ${names}`);
+          if (onlinePage.hasMore) console.log(chalk.dim(`  More agents: rerun with --limit ${Math.min(onlineAgents.length, window.limit + 10)}.`));
         } else {
           console.log(`${chalk.bold("Online agents:")} ${chalk.dim("none")}`);
         }
@@ -263,20 +268,24 @@ export function registerAnalyticsCommands(program: Command): void {
 
         // Channels
         if (myChannels.length > 0) {
+          const channelPage = windowItems(myChannels, window);
           console.log(`${chalk.bold("My channels:")}`);
-          for (const sp of myChannels) {
+          for (const sp of channelPage.items) {
             const unread = sp.unread > 0 ? chalk.yellow(` (${sp.unread} unread)`) : "";
             console.log(`  ${chalk.magenta("#" + sp.name)}${unread}`);
           }
+          if (channelPage.hasMore) console.log(chalk.dim(`  More channels: rerun with --limit ${Math.min(myChannels.length, window.limit + 10)}.`));
         } else {
           console.log(`${chalk.bold("My channels:")} ${chalk.dim("none")}`);
         }
 
         if (subscriptions.length > 0) {
+          const subscriptionPage = windowItems(subscriptions, window);
           console.log(`${chalk.bold("Subscribed channels:")}`);
-          for (const row of subscriptions) {
+          for (const row of subscriptionPage.items) {
             console.log(`  ${chalk.magenta("#" + row.channel)} ${chalk.dim(`preview ${row.preview_chars} chars`)}`);
           }
+          if (subscriptionPage.hasMore) console.log(chalk.dim(`  More subscriptions: rerun with --limit ${Math.min(subscriptions.length, window.limit + 10)}.`));
         } else {
           console.log(`${chalk.bold("Subscribed channels:")} ${chalk.dim("none")}`);
         }
@@ -302,9 +311,13 @@ export function registerAnalyticsCommands(program: Command): void {
     .command("sessions")
     .description("List conversation sessions")
     .option("--agent <id>", "Filter sessions involving this agent")
+    .option("--limit <n>", "Max sessions to show", parseInt)
+    .option("--cursor <n>", "Skip first N sessions for pagination", parseInt)
     .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const sessions = listSessions(opts.agent);
+      const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
+      const page = windowItems(sessions, window);
 
       if (opts.json) {
         console.log(JSON.stringify(sessions, null, 2));
@@ -312,13 +325,21 @@ export function registerAnalyticsCommands(program: Command): void {
         if (sessions.length === 0) {
           console.log(chalk.dim("No sessions found."));
         } else {
-          for (const s of sessions) {
+          for (const s of page.items) {
             const unread = s.unread_count > 0 ? chalk.green(` (${s.unread_count} unread)`) : "";
             const participants = s.participants.join(", ");
             console.log(
               `${chalk.bold(s.session_id)} — ${participants} — ${s.message_count} messages${unread}`
             );
           }
+          printCompactFooter({
+            shown: page.count,
+            total: page.total,
+            hasMore: page.hasMore,
+            nextCursor: page.nextCursor,
+            limitCapped: window.limitCapped,
+            detailHint: "Use conversations read --session <id> --verbose for message bodies.",
+          });
         }
       }
       closeDb();

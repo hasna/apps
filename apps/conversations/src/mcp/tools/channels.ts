@@ -14,6 +14,7 @@ import { listChannelNotificationSubscriptions, markAllChannelNotificationsRead, 
 import { resolveIdentity } from "../../lib/identity.js";
 import { recordReadReceiptsBatch } from "../../lib/messages.js";
 import { getConversationSummary } from "../../lib/summary.js";
+import { compactQueriedMessages, compactWindowedChannels, jsonText, resolveMcpWindow } from "../compact.js";
 
 export function registerChannelTools(server: McpServer): void {
 
@@ -62,6 +63,9 @@ export function registerChannelTools(server: McpServer): void {
     inputSchema: {
       project_id: z.string().optional(),
       include_archived: z.coerce.boolean().optional(),
+      limit: z.coerce.number().optional(),
+      cursor: z.coerce.number().optional(),
+      verbose: z.coerce.boolean().optional().describe("Return legacy raw channel array"),
     },
   }, async (args: Record<string, any>) => {
     const { project_id, include_archived } = args;
@@ -72,7 +76,7 @@ export function registerChannelTools(server: McpServer): void {
     const channels = listChannels(opts);
 
     return {
-      content: [{ type: "text", text: JSON.stringify(channels) }],
+      content: [{ type: "text", text: jsonText(args.verbose ? channels : compactWindowedChannels(channels, args)) }],
     };
   });
 
@@ -124,24 +128,38 @@ export function registerChannelTools(server: McpServer): void {
       threads_only: z.coerce.boolean().optional().describe("Only return root messages (hides thread replies)"),
       include_reply_counts: z.coerce.boolean().optional().describe("Include reply_count on each message"),
       latest: z.coerce.number().optional().describe("Return the N most recent messages, newest first"),
+      cursor: z.coerce.number().optional().describe("Alias for offset pagination"),
+      verbose: z.coerce.boolean().optional().describe("Return full raw message records instead of compact previews"),
     },
   }, async (args: Record<string, any>) => {
     const { channel, from: fromParam, since, limit, mark_read, max_content_length, threads_only, include_reply_counts, latest } = args;
-    const messages = readMessages({ channel, since, limit, max_content_length, threads_only, include_reply_counts, latest });
+    const window = resolveMcpWindow(args);
+    const verbose = args.verbose === true;
+    const messages = readMessages({
+      channel,
+      since,
+      limit: verbose ? limit : window.limit + 1,
+      offset: verbose ? args.cursor : window.offset,
+      max_content_length: verbose ? max_content_length : undefined,
+      threads_only,
+      include_reply_counts,
+      latest,
+    });
+    const visible = verbose ? messages : messages.slice(0, window.limit);
 
-    if (mark_read !== false && messages.length > 0) {
-      markReadByIds(messages.map((m) => m.id));
+    if (mark_read !== false && visible.length > 0) {
+      markReadByIds(visible.map((m) => m.id));
     }
 
     // Record per-agent read receipts for all channel messages
-    if (fromParam && messages.length > 0) {
+    if (fromParam && visible.length > 0) {
       const agent = resolveIdentity(fromParam);
-      recordReadReceiptsBatch(messages.map((m) => m.id), agent);
-      markChannelNotificationsRead(agent, messages.map((m) => m.id));
+      recordReadReceiptsBatch(visible.map((m) => m.id), agent);
+      markChannelNotificationsRead(agent, visible.map((m) => m.id));
     }
 
     return {
-      content: [{ type: "text", text: JSON.stringify(messages) }],
+      content: [{ type: "text", text: jsonText(verbose ? messages : compactQueriedMessages(messages, args)) }],
     };
   });
 

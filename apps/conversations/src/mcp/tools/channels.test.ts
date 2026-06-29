@@ -84,8 +84,9 @@ describe("channels MCP tools", () => {
         name: "list_channels",
         arguments: {},
       }) as any) as any;
-      expect(Array.isArray(result)).toBe(true);
-      expect(result.length).toBeGreaterThan(0);
+      expect(Array.isArray(result.channels)).toBe(true);
+      expect(result.channels.length).toBeGreaterThan(0);
+      expect(result.compact).toBe(true);
     });
 
     test("filters by project_id", async () => {
@@ -93,7 +94,7 @@ describe("channels MCP tools", () => {
         name: "list_channels",
         arguments: { project_id: "nonexistent-proj" },
       }) as any) as any;
-      expect(Array.isArray(result)).toBe(true);
+      expect(Array.isArray(result.channels)).toBe(true);
     });
 
     test("accepts archived filter", async () => {
@@ -101,7 +102,7 @@ describe("channels MCP tools", () => {
         name: "list_channels",
         arguments: { include_archived: true },
       }) as any) as any;
-      expect(Array.isArray(result)).toBe(true);
+      expect(Array.isArray(result.channels)).toBe(true);
     });
   });
 
@@ -139,7 +140,8 @@ describe("channels MCP tools", () => {
         name: "read_channel",
         arguments: { channel: "test-channel-1" },
       }) as any) as any;
-      expect(Array.isArray(result)).toBe(true);
+      expect(Array.isArray(result.messages)).toBe(true);
+      expect(result.compact).toBe(true);
     });
 
     test("reads with limit", async () => {
@@ -147,7 +149,7 @@ describe("channels MCP tools", () => {
         name: "read_channel",
         arguments: { channel: "test-channel-1", limit: 1 },
       }) as any) as any;
-      expect(result.length).toBeLessThanOrEqual(1);
+      expect(result.count).toBeLessThanOrEqual(1);
     });
 
     test("reads with mark_read=false", async () => {
@@ -155,7 +157,7 @@ describe("channels MCP tools", () => {
         name: "read_channel",
         arguments: { channel: "test-channel-1", mark_read: false },
       }) as any) as any;
-      expect(Array.isArray(result)).toBe(true);
+      expect(Array.isArray(result.messages)).toBe(true);
     });
 
     test("records per-agent read receipts", async () => {
@@ -163,7 +165,7 @@ describe("channels MCP tools", () => {
         name: "read_channel",
         arguments: { channel: "test-channel-1", from: "reader-agent", mark_read: true },
       }) as any) as any;
-      expect(Array.isArray(result)).toBe(true);
+      expect(Array.isArray(result.messages)).toBe(true);
     });
 
     test("supports threads_only and include_reply_counts", async () => {
@@ -171,7 +173,7 @@ describe("channels MCP tools", () => {
         name: "read_channel",
         arguments: { channel: "test-channel-1", threads_only: true, include_reply_counts: true },
       }) as any) as any;
-      expect(Array.isArray(result)).toBe(true);
+      expect(Array.isArray(result.messages)).toBe(true);
     });
 
     test("supports latest param", async () => {
@@ -179,7 +181,7 @@ describe("channels MCP tools", () => {
         name: "read_channel",
         arguments: { channel: "test-channel-1", latest: 3 },
       }) as any) as any;
-      expect(Array.isArray(result)).toBe(true);
+      expect(Array.isArray(result.messages)).toBe(true);
     });
   });
 

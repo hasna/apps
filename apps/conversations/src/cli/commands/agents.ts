@@ -4,6 +4,8 @@ import { getDb, closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { heartbeat, registerAgent, isAgentConflict, listAgents, removePresence, renameAgent, getPresence, setPresenceProject } from "../../lib/presence.js";
 import { getProject, getProjectByName } from "../../lib/projects.js";
+import { windowItems } from "../../lib/compact-output.js";
+import { getCliWindow, printCompactFooter } from "../compact.js";
 
 type PresenceView = {
   online: boolean;
@@ -58,12 +60,16 @@ export function registerAgentCommands(program: Command): void {
     .command("list")
     .description("List all agents with their presence status")
     .option("--online", "Only show online agents")
+    .option("--limit <n>", "Max agents to show", parseInt)
+    .option("--cursor <n>", "Skip first N agents for pagination", parseInt)
     .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const agent = resolveIdentity();
       heartbeat(agent);
 
       const agentsList = listAgents({ online_only: opts.online });
+      const window = getCliWindow({ limit: opts.limit, cursor: opts.cursor });
+      const page = windowItems(agentsList, window);
 
       if (opts.json) {
         console.log(JSON.stringify(agentsList, null, 2));
@@ -71,12 +77,20 @@ export function registerAgentCommands(program: Command): void {
         if (agentsList.length === 0) {
           console.log(chalk.dim("No agents found."));
         } else {
-          for (const a of agentsList) {
+          for (const a of page.items) {
             const status = a.online ? chalk.green("online") : chalk.dim("offline");
             const lastSeen = chalk.dim(a.last_seen_at.slice(0, 19));
             const agentName = a.agent === agent ? chalk.cyan(`${a.agent} (you)`) : chalk.cyan(a.agent);
             console.log(`  ${agentName}  ${status}  ${chalk.dim(a.status)}  ${lastSeen}`);
           }
+          printCompactFooter({
+            shown: page.count,
+            total: page.total,
+            hasMore: page.hasMore,
+            nextCursor: page.nextCursor,
+            limitCapped: window.limitCapped,
+            detailHint: "Use --online to filter active agents.",
+          });
         }
       }
       closeDb();

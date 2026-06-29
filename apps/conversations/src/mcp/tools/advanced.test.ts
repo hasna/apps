@@ -254,7 +254,8 @@ describe("advanced MCP tools", () => {
         name: "hot_sessions",
         arguments: { limit: 5 },
       }) as any) as any;
-      expect(Array.isArray(result)).toBe(true);
+      expect(Array.isArray(result.sessions)).toBe(true);
+      expect(result.count).toBe(result.sessions.length);
     });
   });
 
@@ -294,7 +295,8 @@ describe("advanced MCP tools", () => {
         name: "list_locks",
         arguments: {},
       }) as any) as any;
-      expect(Array.isArray(result)).toBe(true);
+      expect(Array.isArray(result.locks)).toBe(true);
+      expect(result.count).toBe(result.locks.length);
     });
 
     test("bulk_acquire_lock acquires multiple locks", async () => {

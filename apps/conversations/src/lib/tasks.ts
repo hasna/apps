@@ -552,6 +552,9 @@ export function searchTasks(opts: SearchTasksOptions): SearchResultTask[] {
   const limit = Number.isFinite(opts.limit) && (opts.limit as number) > 0
     ? Math.floor(opts.limit as number)
     : 20;
+  const offset = Number.isFinite(opts.offset) && (opts.offset as number) > 0
+    ? Math.floor(opts.offset as number)
+    : 0;
   const sortByRelevance = opts.sort !== "recent";
   const query = opts.query.trim();
   const terms = query.split(/\s+/).filter(Boolean);
@@ -571,9 +574,10 @@ export function searchTasks(opts: SearchTasksOptions): SearchResultTask[] {
       }
 
       // Get matching task ids ordered by relevance
+      const scanLimit = Math.max(limit + offset, limit) * 3;
       const ftsRows = db.prepare(
         `SELECT rowid, rank, snippet(tasks_fts, 0, '**', '**', '...', 10) as snippet
-         FROM tasks_fts WHERE tasks_fts MATCH ? ORDER BY rank LIMIT ${limit * 3}`
+         FROM tasks_fts WHERE tasks_fts MATCH ? ORDER BY rank LIMIT ${scanLimit}`
       ).all(ftsQuery) as Array<{ rowid: number; rank: number; snippet: string }>;
 
       if (ftsRows.length === 0) {
@@ -619,10 +623,10 @@ export function searchTasks(opts: SearchTasksOptions): SearchResultTask[] {
             relevance_score: Math.round((1 - Math.abs(fts.rank) / maxRank) * 100),
           });
 
-          if (results.length >= limit) break;
+          if (results.length >= limit + offset) break;
         }
 
-        return results;
+        return offset > 0 ? results.slice(offset, offset + limit) : results;
       }
     } catch {
       // FTS5 failed — fall through to LIKE
@@ -652,7 +656,7 @@ export function searchTasks(opts: SearchTasksOptions): SearchResultTask[] {
     : "ORDER BY t.created_at DESC";
 
   const rows = db.prepare(
-    `SELECT t.* FROM tasks t WHERE ${conditions.join(" AND ")} ${orderClause} LIMIT ${limit}`
+    `SELECT t.* FROM tasks t WHERE ${conditions.join(" AND ")} ${orderClause} LIMIT ${limit} OFFSET ${offset}`
   ).all(...params) as Record<string, unknown>[];
 
   return rows.map(row => {

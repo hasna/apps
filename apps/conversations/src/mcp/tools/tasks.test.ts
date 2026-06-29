@@ -299,7 +299,14 @@ describe("task MCP tools", () => {
       });
       const data = parseJSON(result as any);
       expect(data.count).toBe(1);
-      expect(data.comments[0].content).toBe("First comment");
+      expect(data.compact).toBe(true);
+      expect(data.comments[0].preview).toBe("First comment");
+
+      const verbose = await client.callTool({
+        name: "get_comments",
+        arguments: { task_id: id, verbose: true },
+      });
+      expect(parseJSON(verbose as any).comments[0].content).toBe("First comment");
     });
   });
 
@@ -340,7 +347,7 @@ describe("task MCP tools", () => {
         name: "get_task_tree",
         arguments: { parent_id: rootTask.id },
       });
-      const tree = parseJSON(result as any);
+      const tree = parseJSON(result as any).tree;
       expect(tree.subject).toBe("Root");
       expect(tree.children).toHaveLength(1);
     });

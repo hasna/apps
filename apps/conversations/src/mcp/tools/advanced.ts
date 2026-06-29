@@ -13,6 +13,8 @@ import { listHotSessions } from "../../lib/hot.js";
 import { getChannelTopics, getSessionTopics, getTrendingTopics } from "../../lib/topics.js";
 import { getConversationSummary } from "../../lib/summary.js";
 import { buildGraph, getRelated, getAgentNetwork, getGraphStats } from "../../lib/graph.js";
+import { pageQueriedItems, summarizeMessage, windowItems } from "../../lib/compact-output.js";
+import { jsonText, resolveMcpWindow } from "../compact.js";
 
 export function registerAdvancedTools(server: McpServer, pkgVersion: string): void {
 
@@ -136,14 +138,34 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       channel: z.string().optional().describe("Filter to a specific channel"),
       unread_only: z.coerce.boolean().optional().describe("Only unread (not yet notified) mentions (default: true)"),
       limit: z.coerce.number().optional().describe("Max results (default: 50)"),
+      cursor: z.coerce.number().optional().describe("Skip first N mention results"),
+      verbose: z.coerce.boolean().optional().describe("Return full raw mention message records"),
     },
   }, async (args: Record<string, any>) => {
+    const window = resolveMcpWindow(args);
+    const verbose = args.verbose === true;
     const results = getMessagesForAgent(args.agent as string, {
       channel: args.channel,
       unread_only: args.unread_only ?? true,
-      limit: args.limit,
+      limit: verbose ? args.limit : window.offset + window.limit + 1,
     });
-    return { content: [{ type: "text", text: JSON.stringify({ mentions: results, count: results.length }) }] };
+    if (verbose) return { content: [{ type: "text", text: jsonText({ mentions: results, count: results.length, compact: false }) }] };
+    const page = pageQueriedItems(results.slice(window.offset), window);
+    return {
+      content: [{
+        type: "text",
+        text: jsonText({
+          mentions: page.items.map((item) => ({ mention_id: item.mention_id, message: summarizeMessage(item.message) })),
+          count: page.count,
+          limit: page.limit,
+          cursor: page.cursor,
+          next_cursor: page.next_cursor,
+          has_more: page.has_more,
+          compact: true,
+          hint: "Use verbose:true for full mention messages or get_message with an id.",
+        }),
+      }],
+    };
   });
 
   server.registerTool("mark_mentions_read", {
@@ -252,15 +274,18 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       min_score: z.coerce.number().optional(),
       channel: z.string().optional(),
       project_id: z.string().optional(),
+      cursor: z.coerce.number().optional(),
     },
   }, async (args: Record<string, any>) => {
+    const window = resolveMcpWindow(args);
     const sessions = listHotSessions({
-      limit: args.limit,
+      limit: window.offset + window.limit + 1,
       min_score: args.min_score,
       channel: args.channel,
       project_id: args.project_id,
     });
-    return { content: [{ type: "text", text: JSON.stringify(sessions) }] };
+    const page = pageQueriedItems(sessions, window);
+    return { content: [{ type: "text", text: jsonText({ sessions: page.items, count: page.count, limit: page.limit, cursor: page.cursor, next_cursor: page.next_cursor, has_more: page.has_more }) }] };
   });
 
   // ---- Lock Tools ----
@@ -326,10 +351,14 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     inputSchema: {
       resource_type: z.string().optional(),
       agent_id: z.string().optional(),
+      limit: z.coerce.number().optional(),
+      cursor: z.coerce.number().optional(),
     },
   }, async (args: Record<string, any>) => {
     const locks = listLocksEnriched({ resource_type: args.resource_type, agent_id: args.agent_id });
-    return { content: [{ type: "text", text: JSON.stringify(locks) }] };
+    const window = resolveMcpWindow(args);
+    const page = windowItems(locks, window);
+    return { content: [{ type: "text", text: jsonText({ locks: page.items, count: page.count, total: page.total, next_cursor: page.nextCursor, has_more: page.hasMore }) }] };
   });
 
   server.registerTool("bulk_acquire_lock", {
@@ -380,12 +409,22 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     inputSchema: {
       message_id: z.coerce.number(),
       limit: z.coerce.number().optional(),
+      verbose: z.coerce.boolean().optional().describe("Return full raw parent/reply message records"),
     },
   }, async (args: Record<string, any>) => {
     let replies = getThreadReplies(args.message_id);
     if (args.limit) replies = replies.slice(0, args.limit);
     const parent = getMessageById(args.message_id);
-    return { content: [{ type: "text", text: JSON.stringify({ parent, replies, reply_count: replies.length }) }] };
+    const payload = args.verbose
+      ? { parent, replies, reply_count: replies.length, compact: false }
+      : {
+          parent: parent ? summarizeMessage(parent) : null,
+          replies: replies.map((reply) => summarizeMessage(reply)),
+          reply_count: replies.length,
+          compact: true,
+          hint: "Use verbose:true for full thread messages or get_message with an id.",
+        };
+    return { content: [{ type: "text", text: jsonText(payload) }] };
   });
 
   server.registerTool("read_thread", {
@@ -393,12 +432,22 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
     inputSchema: {
       message_id: z.coerce.number(),
       limit: z.coerce.number().optional(),
+      verbose: z.coerce.boolean().optional().describe("Return full raw parent/reply message records"),
     },
   }, async (args: Record<string, any>) => {
     let replies = getThreadReplies(args.message_id);
     if (args.limit) replies = replies.slice(0, args.limit);
     const parent = getMessageById(args.message_id);
-    return { content: [{ type: "text", text: JSON.stringify({ parent, replies, reply_count: replies.length }) }] };
+    const payload = args.verbose
+      ? { parent, replies, reply_count: replies.length, compact: false }
+      : {
+          parent: parent ? summarizeMessage(parent) : null,
+          replies: replies.map((reply) => summarizeMessage(reply)),
+          reply_count: replies.length,
+          compact: true,
+          hint: "Use verbose:true for full thread messages or get_message with an id.",
+        };
+    return { content: [{ type: "text", text: jsonText(payload) }] };
   });
 
   // ---- Meta Tools ----
@@ -451,7 +500,7 @@ export function registerAdvancedTools(server: McpServer, pkgVersion: string): vo
       send_message: "Send DM to agent. Required: to, content. Optional: from?, priority?(low|normal|high|urgent), blocking?",
       read_messages: "Read messages with filters. Optional: session_id?, from?, to?, channel?, since?(ISO), limit?, unread_only?, mark_read?(default true \u2014 auto-marks returned messages as read, pass false to peek without consuming)",
       get_message: "Get the full content of a specific message by id. Required: id",
-      read_digest: "Lightweight unread digest \u2014 preview only (no full bodies), auto-marks read, never overflows tokens. Returns { messages, total_unread, shown }. Optional: channel?, session_id?, to?, since?(ISO), limit?, project_id?",
+      read_digest: "Cursored byte-capped digest — preview snippets only, no full bodies, non-destructive unless mark_read:true. Returns { digest_id, message_ids, next_cursor, messages, byte_length }. Optional: channel?, session_id?, to?, since?(ISO), cursor?(message id), max_bytes?, limit?, unread_only?, mark_read?, project_id?",
       list_sessions: "List all DM sessions. Optional: agent?(filter by participant)",
       reply: "Reply to a specific message, creating a thread (sets reply_to). Use read_thread to retrieve. Required: message_id, content. Optional: from?",
       mark_read: "Mark messages as read. Optional: from?, ids?(array), all?(bool \u2014 mark all unread)",

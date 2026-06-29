@@ -4,6 +4,8 @@ import { createProject, listProjects, getProject, getProjectByName, updateProjec
 import { createConversationsProjectPanel } from "../../lib/project-panel.js";
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
+import { previewText } from "../../lib/compact-output.js";
+import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor } from "../compact.js";
 
 export function requireDeleteConfirmation(confirmed?: boolean): void {
   if (!confirmed) {
@@ -125,6 +127,7 @@ export function registerProjectCommands(program: Command): void {
     .option("--status <status>", "Filter by status (active/archived)")
     .option("--limit <n>", "Limit results", parseInt)
     .option("--offset <n>", "Skip first N results", parseInt)
+    .option("--cursor <n>", "Skip first N results for pagination", parseInt)
     .option("-j, --json", "Output as JSON")
     .action((opts) => {
       const status = opts.status === "active" || opts.status === "archived" ? opts.status : undefined;
@@ -137,11 +140,16 @@ export function registerProjectCommands(program: Command): void {
         console.error(chalk.red(e.message));
         process.exit(1);
       }
+      const cursor = opts.cursor ?? offset;
+      const window = getCliWindow({ limit, cursor });
       const projects = listProjects({
         ...(status ? { status } : {}),
-        ...(limit !== undefined ? { limit } : {}),
-        ...(offset !== undefined ? { offset } : {}),
+        ...(opts.json ? (limit !== undefined ? { limit } : {}) : { limit: queryLimitFor(window) }),
+        ...(opts.json ? (cursor !== undefined ? { offset: cursor } : {}) : { offset: window.offset }),
       });
+      const page = opts.json
+        ? { items: projects, count: projects.length, hasMore: false, nextCursor: null }
+        : pageFromQuery(projects, window);
 
       if (opts.json) {
         console.log(JSON.stringify(projects, null, 2));
@@ -149,11 +157,18 @@ export function registerProjectCommands(program: Command): void {
         if (projects.length === 0) {
           console.log(chalk.dim("No projects found."));
         } else {
-          for (const p of projects) {
-            const desc = p.description ? chalk.dim(` — ${p.description}`) : "";
+          for (const p of page.items) {
+            const desc = p.description ? chalk.dim(` - ${previewText(p.description, 90)}`) : "";
             const statusBadge = p.status === "archived" ? chalk.yellow(" [archived]") : "";
             console.log(`${chalk.bold(p.name)}${desc}${statusBadge}  ${p.channel_count} channels`);
           }
+          printCompactFooter({
+            shown: page.count,
+            hasMore: page.hasMore,
+            nextCursor: page.nextCursor,
+            limitCapped: window.limitCapped,
+            detailHint: "Use conversations project get <id-or-name> for details.",
+          });
         }
       }
       closeDb();

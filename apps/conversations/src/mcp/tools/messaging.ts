@@ -10,6 +10,7 @@ import { z } from "zod";
 import { sendMessage, readMessages, readDigest, markRead, markReadByIds, markChannelRead, getMessageById, searchMessages, markAllRead, exportMessages, deleteMessage, editMessage, pinMessage, unpinMessage, getPinnedMessages, markUnreadByIds } from "../../lib/messages.js";
 import { listSessions } from "../../lib/sessions.js";
 import { resolveIdentity } from "../../lib/identity.js";
+import { compactQueriedMessages, compactQueriedSearchMessages, compactWindowedSessions, jsonText, resolveMcpWindow } from "../compact.js";
 
 export function registerMessagingTools(
   server: McpServer,
@@ -113,20 +114,30 @@ export function registerMessagingTools(
       mentions_only: z.string().optional().describe("Only return messages that @mention this agent"),
       latest: z.coerce.number().optional().describe("Return the N most recent unread messages, newest first. Shorthand for order:desc + limit:N."),
       offset: z.coerce.number().optional().describe("Skip first N messages for pagination (use with limit)"),
+      cursor: z.coerce.number().optional().describe("Alias for offset"),
+      verbose: z.coerce.boolean().optional().describe("Return full raw message records instead of compact previews"),
     },
   }, async (args: Record<string, any>) => {
     const agent = resolveIdentity(args.from);
+    const window = resolveMcpWindow(args);
+    const verbose = args.verbose === true;
     const messages = readMessages({
       ...args,
+      limit: verbose ? args.limit : window.limit + 1,
+      offset: verbose ? (args.offset ?? args.cursor) : window.offset,
       project_id: args.project_id ?? resolveProjectId(undefined, agent),
     });
 
     if (args.mark_read !== false && messages.length > 0) {
-      markReadByIds(messages.map((m) => m.id), agent);
+      const visible = verbose ? messages : messages.slice(0, window.limit);
+      markReadByIds(visible.map((m) => m.id), agent);
     }
 
+    const payload = verbose
+      ? { messages, count: messages.length, offset: args.offset ?? args.cursor ?? 0, compact: false }
+      : compactQueriedMessages(messages, args);
     return {
-      content: [{ type: "text", text: JSON.stringify({ messages, count: messages.length, offset: args.offset ?? 0 }) }],
+      content: [{ type: "text", text: jsonText(payload) }],
     };
   });
 
@@ -153,13 +164,16 @@ export function registerMessagingTools(
     description: "List all sessions by agent.",
     inputSchema: {
       agent: z.string().optional(),
+      limit: z.coerce.number().optional(),
+      cursor: z.coerce.number().optional(),
+      verbose: z.coerce.boolean().optional().describe("Return legacy raw session array"),
     },
   }, async (args: Record<string, any>) => {
     const { agent } = args;
     const sessions = listSessions(agent);
 
     return {
-      content: [{ type: "text", text: JSON.stringify(sessions) }],
+      content: [{ type: "text", text: jsonText(args.verbose ? sessions : compactWindowedSessions(sessions, args)) }],
     };
   });
 
@@ -268,17 +282,30 @@ export function registerMessagingTools(
       until: z.string().optional().describe("ISO 8601 date — only messages before this"),
       sort: z.enum(["relevance", "recent"]).optional().describe("Sort order (default: relevance)"),
       limit: z.coerce.number().optional().describe("Max results (default: 20)"),
+      cursor: z.coerce.number().optional().describe("Skip first N results for pagination"),
+      verbose: z.coerce.boolean().optional().describe("Return full raw message records instead of compact previews"),
     },
   }, async (args: Record<string, any>) => {
-    const { query, channel, from, to, since, until, sort, limit } = args;
-    const results = searchMessages({ query, channel, from, to, since, until, sort, limit });
+    const { query, channel, from, to, since, until, sort } = args;
+    const window = resolveMcpWindow(args);
+    const verbose = args.verbose === true;
+    const results = searchMessages({
+      query,
+      channel,
+      from,
+      to,
+      since,
+      until,
+      sort,
+      limit: verbose ? args.limit : window.limit + 1,
+      offset: verbose ? args.cursor : window.offset,
+    });
 
+    const payload = verbose
+      ? { results, count: results.length, query, compact: false }
+      : compactQueriedSearchMessages(results, args);
     return {
-      content: [{ type: "text", text: JSON.stringify({
-        results,
-        count: results.length,
-        query,
-      }) }],
+      content: [{ type: "text", text: jsonText(payload) }],
     };
   });
 
@@ -302,20 +329,52 @@ export function registerMessagingTools(
   });
 
   server.registerTool("read_digest", {
-    description: "Lightweight unread message digest — returns preview-only summaries, auto-marks as read. Use instead of read_messages on busy channels to avoid token overflow.",
+    description: "Cursored byte-capped channel digest. Returns preview-only snippets plus digest_id, message_ids, and next_cursor; use on busy channels instead of replaying read_messages.",
     inputSchema: {
       channel: z.string().optional(),
       session_id: z.string().optional(),
       to: z.string().optional(),
       since: z.string().optional(),
+      cursor: z.coerce.number().optional().describe("Only include messages after this message ID"),
+      max_bytes: z.coerce.number().optional().describe("Maximum JSON payload size in bytes"),
       limit: z.coerce.number().optional(),
+      unread_only: z.coerce.boolean().optional().describe("Only include unread messages"),
+      mark_read: z.coerce.boolean().optional().describe("Mark returned messages read after building the digest"),
+      from: z.string().optional().describe("Reader identity for mark_read"),
       project_id: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const { channel, session_id, to, since, limit, project_id } = args;
-    const result = readDigest({ channel, session_id, to, since, limit, project_id });
+    const { channel, session_id, to, since, cursor, max_bytes, limit, unread_only, mark_read, from: fromParam, project_id } = args;
+    const agent = resolveIdentity(fromParam);
+    if (!channel && !session_id && !to) {
+      return {
+        content: [{ type: "text", text: "Provide channel, session_id, or to for read_digest." }],
+        isError: true,
+      };
+    }
+    let result;
+    try {
+      result = readDigest({
+        channel,
+        session_id,
+        to,
+        since,
+        cursor,
+        max_bytes,
+        limit,
+        unread_only,
+        mark_read,
+        reader: mark_read ? agent : undefined,
+        project_id: project_id ?? resolveProjectId(undefined, agent),
+      });
+    } catch (error) {
+      return {
+        content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
+        isError: true,
+      };
+    }
     return {
-      content: [{ type: "text", text: JSON.stringify(result) }],
+      content: [{ type: "text", text: jsonText(result) }],
     };
   });
 
@@ -412,13 +471,23 @@ export function registerMessagingTools(
       channel: z.string().optional(),
       session_id: z.string().optional(),
       limit: z.coerce.number().optional(),
+      cursor: z.coerce.number().optional(),
+      verbose: z.coerce.boolean().optional().describe("Return full raw message records instead of compact previews"),
     },
   }, async (args: Record<string, any>) => {
-    const { channel, session_id, limit } = args;
-    const messages = getPinnedMessages({ channel, session_id, limit });
+    const { channel, session_id } = args;
+    const window = resolveMcpWindow(args);
+    const verbose = args.verbose === true;
+    const messages = getPinnedMessages({
+      channel,
+      session_id,
+      limit: verbose ? args.limit : window.limit + 1,
+      offset: verbose ? args.cursor : window.offset,
+    });
 
+    const payload = verbose ? messages : compactQueriedMessages(messages, args);
     return {
-      content: [{ type: "text", text: JSON.stringify(messages) }],
+      content: [{ type: "text", text: jsonText(payload) }],
     };
   });
 

@@ -13,6 +13,7 @@
 export {
   sendMessage,
   readMessages,
+  readDigest,
   markRead,
   markSessionRead,
   markChannelRead,
@@ -27,6 +28,15 @@ export {
   getPinnedMessages,
   getUnreadBlockers,
   getThreadReplies,
+  DEFAULT_DIGEST_MAX_BYTES,
+  MIN_DIGEST_MAX_BYTES,
+  MAX_DIGEST_MAX_BYTES,
+} from "./lib/messages.js";
+
+export type {
+  DigestMessage,
+  DigestResult,
+  ReadDigestOptions,
 } from "./lib/messages.js";
 
 export {

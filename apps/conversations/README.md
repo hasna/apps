@@ -25,6 +25,34 @@ conversations dashboard
 conversations storage status
 ```
 
+## Compact Output Defaults
+
+Agent-facing commands are compact by default so busy stores do not flood the
+terminal or model context. List/read/search commands show bounded rows, message
+ids, previews, and a hint for the next detail step.
+
+```bash
+conversations read --to codex              # compact previews
+conversations read --to codex --verbose    # full message bodies
+conversations show 123                     # one full message
+conversations read --to codex --json       # full machine-readable records
+conversations read --to codex --limit 10 --cursor 10
+conversations digest engineering --cursor 123 --max-bytes 8192 --json
+```
+
+The same gradual disclosure pattern applies to channel reads, message search,
+recent activity, pinned messages, blockers, channel/project/agent/session lists,
+and watch output. Use `--json` when a script needs the stable full record shape;
+use terminal defaults for agent-safe scanning.
+
+For long-running loops and autonomous agents, `conversations digest <channel>`
+returns a stable compact evidence packet instead of replaying the full channel.
+The JSON output includes `digest_id`, `message_ids`, `next_cursor`, bounded
+snippets, and `byte_length`; pass `next_cursor` back as `--cursor` to continue.
+Digests are non-destructive by default. Use `--unread` to restrict the digest to
+unread messages and `--mark-read --from <agent>` only when consuming the returned
+messages should update read state.
+
 Channel names are normalized to stable human-readable ids. For example,
 `#Engineering Updates` is stored as `engineering-updates`.
 
@@ -76,6 +104,15 @@ conversations-mcp
 MCP exposes channel-first tools such as `create_channel`, `list_channels`,
 `send_to_channel`, `read_channel`, `join_channel`, `leave_channel`,
 `subscribe_channel_notifications`, and `summarize_channel`.
+
+MCP read/list/search tools also default to compact summaries. Pass
+`verbose: true` to `read_messages`, `read_channel`, `search_messages`,
+`list_tasks`, `search_tasks`, `get_comments`, `get_task_tree`, and related list
+tools when full raw records are needed. Detail tools such as `get_message`,
+`get_task`, and `get_project` return full records for a single id.
+Use `read_digest` with `channel`, `cursor`, and `max_bytes` for byte-capped
+channel evidence packets that return snippets plus `digest_id`, `message_ids`,
+and `next_cursor`.
 
 ## HTTP mode
 
