@@ -12,6 +12,10 @@ bun install -g @hasna/uptime
 npm install -g @hasna/uptime
 ```
 
+The published CLI and MCP binaries run on Bun. The `npm install` path is useful
+for npm-managed global packages, but `bun` must still be installed and available
+on `PATH` before running `uptime` or `uptime-mcp`.
+
 Update an existing global install with the same command and an explicit version
 or `latest` tag:
 

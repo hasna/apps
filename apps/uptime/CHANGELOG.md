@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.30] - 2026-06-29
+
+### Changed
+
+- Documented Bun as the required runtime for npm-managed global installs.
+- Pinned the package image builder and runtime base images by registry digest.
+
 ## [0.1.29] - 2026-06-29
 
 ### Changed

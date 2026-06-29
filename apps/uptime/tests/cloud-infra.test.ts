@@ -16,8 +16,8 @@ test("Dockerfile builds a hosted non-root Bun runtime without plaintext secrets"
   expect(dockerfile).toContain("--uid 10001");
   expect(dockerfile).toContain("USER uptime");
   expect(dockerfile).toContain("HEALTHCHECK");
-  expect(packageDockerfile).toContain("FROM public.ecr.aws/docker/library/node:22-alpine AS bun");
-  expect(packageDockerfile).toContain("FROM public.ecr.aws/docker/library/alpine:3.22 AS runtime");
+  expect(packageDockerfile).toContain("FROM public.ecr.aws/docker/library/node:22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2 AS bun");
+  expect(packageDockerfile).toContain("FROM public.ecr.aws/docker/library/alpine:3.22@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce AS runtime");
   expect(packageDockerfile).toContain("npm install -g bun@1.3.13");
   expect(packageDockerfile).toContain("apk add --no-cache ca-certificates libgcc libstdc++");
   expect(packageDockerfile).toContain("COPY dist ./dist");
@@ -210,7 +210,7 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(tfvars).toContain("enable_cloudfront_origin_verify_header");
   expect(tfvars).toContain("cloudfront_origin_verify_header_name");
   expect(tfvars).toContain("cloudfront_origin_verify_header_value  = null");
-  expect(tfvars).toContain('runtime_package_version   = "0.1.29"');
+  expect(tfvars).toContain('runtime_package_version   = "0.1.30"');
   expect(tfvars).toContain("runtime_package_integrity = null");
   expect(tfvars).toContain("allow_unpinned_runtime_package_integrity = false");
   expect(tfvars).toContain('project_name             = "open-uptime"');
