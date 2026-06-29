@@ -6,6 +6,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.35] - 2026-06-29
+
+### Changed
+
+- CloudFront origin requests now forward `X-Uptime-Workspace` and
+  `Idempotency-Key` in addition to auth, token, origin, and content-type
+  headers, so protected-edge smoke can prove header-based workspace and
+  idempotency behavior instead of relying only on query strings.
+- `uptime cloud edge-smoke` now includes a header-only workspace readiness check
+  and sends an `Idempotency-Key` on the mutation cleanup delete.
+- Deployment docs now call out the required public-edge header contract for
+  future promotion evidence.
+
+### Security
+
+- This release does not scale hosted services or make runtime promotion-ready.
+  It only closes a protected-edge forwarding gap required before live
+  token-bearing traffic.
+- Origin verification header-name validation now rejects `Idempotency-Key` and
+  `X-Uptime-Workspace` so the secret CloudFront-only verification value cannot
+  collide with viewer-controlled app headers.
+
 ## [0.1.34] - 2026-06-29
 
 ### Added

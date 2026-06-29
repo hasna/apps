@@ -156,6 +156,7 @@ variable "cloudfront_origin_verify_header_name" {
         "content-type",
         "cookie",
         "host",
+        "idempotency-key",
         "if-match",
         "if-modified-since",
         "if-none-match",
@@ -176,6 +177,7 @@ variable "cloudfront_origin_verify_header_name" {
         "via",
         "x-real-ip",
         "x-uptime-hosted-token",
+        "x-uptime-workspace",
       ], lower(var.cloudfront_origin_verify_header_name))
     )
     error_message = "cloudfront_origin_verify_header_name must be a safe CloudFront custom origin header name and must not use reserved, app-forwarded, or viewer-controlled header names."
@@ -241,7 +243,7 @@ variable "container_image" {
 variable "runtime_package_version" {
   description = "Published @hasna/uptime package version that CodeBuild should build into the ECR image."
   type        = string
-  default     = "0.1.34"
+  default     = "0.1.35"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$", var.runtime_package_version))

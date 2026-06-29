@@ -672,6 +672,8 @@ test("CLI cloud edge-smoke rejects credentialed or path-bearing evidence URLs", 
 
 test("edge-smoke negative mutation probes use a high-entropy non-colliding target", async () => {
   const deletePaths: string[] = [];
+  const headerOnlyReadyRequests: string[] = [];
+  const deleteIdempotencyKeys: string[] = [];
   const fetchImpl = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
     const url = new URL(input.toString());
     const method = init?.method ?? "GET";
@@ -682,6 +684,9 @@ test("edge-smoke negative mutation probes use a high-entropy non-colliding targe
       return Response.json({ ok: true, service: "uptime" });
     }
     if (method === "GET" && url.pathname === "/ready") {
+      if (headers.get("x-uptime-workspace") === "ws_cli" && !url.searchParams.has("workspaceId")) {
+        headerOnlyReadyRequests.push(url.toString());
+      }
       return authorized
         ? Response.json({ ok: true, productionReady: true })
         : Response.json({ error: "unauthorized" }, { status: 401 });
@@ -701,6 +706,8 @@ test("edge-smoke negative mutation probes use a high-entropy non-colliding targe
     }
     if (method === "DELETE" && url.pathname.startsWith("/api/v1/monitors/")) {
       deletePaths.push(url.pathname);
+      const idempotencyKey = headers.get("idempotency-key");
+      if (idempotencyKey) deleteIdempotencyKeys.push(idempotencyKey);
       return Response.json({ error: "forbidden" }, { status: 403 });
     }
     if (url.pathname === "/api/v1/report" || url.pathname === "/api/v1/probes" || url.pathname === "/api/v1/imports/apply" || url.pathname === "/api/v1/check-all") {
@@ -723,12 +730,94 @@ test("edge-smoke negative mutation probes use a high-entropy non-colliding targe
   expect(report.promotionReady).toBe(false);
   expect(deletePaths).toHaveLength(3);
   expect(new Set(deletePaths)).toHaveLength(1);
+  expect(headerOnlyReadyRequests).toHaveLength(1);
+  expect(headerOnlyReadyRequests[0]).not.toContain("workspaceId=");
+  expect(deleteIdempotencyKeys).toHaveLength(0);
   expect(deletePaths[0]?.startsWith("/api/v1/monitors/edge-smoke-negative-")).toBe(true);
   expect(deletePaths[0]).not.toContain("edge-smoke-nonexistent");
   expect(Object.fromEntries(report.checks.map((check) => [check.name, check.ok]))).toMatchObject({
+    "workspace-header-forwarded": true,
     "wrong-workspace-mutation-denied": true,
     "wrong-scope-mutation-denied": true,
     "denied-origin-mutation": true,
+  });
+});
+
+test("edge-smoke mutation cleanup sends an idempotency key and proves header-only workspace readiness", async () => {
+  const deleteIdempotencyKeys: string[] = [];
+  const headerOnlyReadyRequests: string[] = [];
+  let createdId = "mon_smoke";
+  const fetchImpl = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const url = new URL(input.toString());
+    const method = init?.method ?? "GET";
+    const headers = new Headers(init?.headers);
+    const authorized = headers.has("authorization");
+
+    if (method === "GET" && url.pathname === "/health") {
+      return Response.json({ ok: true, service: "uptime" });
+    }
+    if (method === "GET" && url.pathname === "/ready") {
+      if (headers.get("x-uptime-workspace") === "ws_cli" && !url.searchParams.has("workspaceId")) {
+        headerOnlyReadyRequests.push(url.toString());
+      }
+      return authorized
+        ? Response.json({ ok: true, productionReady: true })
+        : Response.json({ error: "unauthorized" }, { status: 401 });
+    }
+    if (method === "GET" && url.pathname === "/") {
+      return authorized
+        ? Response.json({ error: "hosted dashboard disabled" }, { status: 501 })
+        : Response.json({ error: "unauthorized" }, { status: 401 });
+    }
+    if (method === "GET" && url.pathname === "/api/v1/summary") {
+      return Response.json({ error: "unauthorized" }, { status: 401 });
+    }
+    if (method === "GET" && url.pathname === "/api/v1/monitors") {
+      if (!authorized) return Response.json({ error: "unauthorized" }, { status: 401 });
+      if (url.searchParams.get("workspaceId") !== "ws_cli") return Response.json({ error: "forbidden" }, { status: 403 });
+      return Response.json([]);
+    }
+    if (method === "POST" && url.pathname === "/api/v1/monitors") {
+      if (headers.get("origin") === "https://evil.example") return Response.json({ error: "forbidden" }, { status: 403 });
+      if (!authorized) return Response.json({ error: "unauthorized" }, { status: 401 });
+      if (url.searchParams.get("workspaceId") !== "ws_cli") return Response.json({ error: "forbidden" }, { status: 403 });
+      const body = await new Request(input, init).json() as { name?: string };
+      createdId = String(body.name ?? "mon_smoke");
+      return Response.json({ id: createdId }, { status: 201 });
+    }
+    if (method === "DELETE" && url.pathname === `/api/v1/monitors/${encodeURIComponent(createdId)}`) {
+      const idempotencyKey = headers.get("idempotency-key");
+      if (idempotencyKey) deleteIdempotencyKeys.push(idempotencyKey);
+      return Response.json({ deleted: true });
+    }
+    if (method === "DELETE" && url.pathname.startsWith("/api/v1/monitors/")) {
+      return Response.json({ error: "forbidden" }, { status: 403 });
+    }
+    if (url.pathname === "/api/v1/report" || url.pathname === "/api/v1/probes" || url.pathname === "/api/v1/imports/apply" || url.pathname === "/api/v1/check-all") {
+      return Response.json({ error: "not implemented" }, { status: 501 });
+    }
+    return Response.json({ error: "unexpected test request", path: url.pathname, method }, { status: 500 });
+  }) as typeof fetch;
+
+  const report = await runEdgeSmoke({
+    url: "https://edge.example",
+    workspaceId: "ws_cli",
+    readToken: "read-secret",
+    writeToken: "write-secret",
+    probeToken: "probe-secret",
+    reportToken: "report-secret",
+    mutation: true,
+    smokeId: "smoke-fixed",
+    fetchImpl,
+  });
+
+  expect(report.status).toBe("passed");
+  expect(headerOnlyReadyRequests).toHaveLength(1);
+  expect(headerOnlyReadyRequests[0]).not.toContain("workspaceId=");
+  expect(deleteIdempotencyKeys).toEqual(["edge-smoke:smoke-fixed:delete:edge-smoke-smoke-fixed"]);
+  expect(Object.fromEntries(report.checks.map((check) => [check.name, check.ok]))).toMatchObject({
+    "workspace-header-forwarded": true,
+    "write-mutation-roundtrip": true,
   });
 });
 

@@ -1047,7 +1047,7 @@ resource "aws_cloudfront_distribution" "open_uptime" {
 
     forwarded_values {
       query_string = true
-      headers      = ["Authorization", "Content-Type", "Origin", "X-Uptime-Hosted-Token"]
+      headers      = ["Authorization", "Content-Type", "Idempotency-Key", "Origin", "X-Uptime-Hosted-Token", "X-Uptime-Workspace"]
 
       cookies {
         forward = "all"

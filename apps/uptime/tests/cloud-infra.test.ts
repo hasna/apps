@@ -129,9 +129,11 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
     "content-length",
     "content-type",
     "host",
+    "idempotency-key",
     "origin",
     "x-real-ip",
     "x-uptime-hosted-token",
+    "x-uptime-workspace",
   ]) {
     expect(variables).toContain(`"${disallowedHeader}"`);
   }
@@ -203,6 +205,10 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(main).toContain('required_version = ">= 1.9.0"');
   expect(main).toContain("HASNA_UPTIME_ALLOWED_ORIGINS");
   expect(main).toContain("aws_cloudfront_distribution.open_uptime[0].domain_name");
+  expect(main).toContain("default_ttl            = 0");
+  expect(main).toContain("max_ttl                = 0");
+  expect(main).toContain("min_ttl                = 0");
+  expect(main).toContain('headers      = ["Authorization", "Content-Type", "Idempotency-Key", "Origin", "X-Uptime-Hosted-Token", "X-Uptime-Workspace"]');
   expect(variables).toContain("web            = 0");
   expect(tfvars).toContain("container_image");
   expect(tfvars).toContain('protected_access_mode    = "cloudfront_default_domain"');
@@ -212,7 +218,7 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(tfvars).toContain("enable_cloudfront_origin_verify_header");
   expect(tfvars).toContain("cloudfront_origin_verify_header_name");
   expect(tfvars).toContain("cloudfront_origin_verify_header_value  = null");
-  expect(tfvars).toContain('runtime_package_version   = "0.1.34"');
+  expect(tfvars).toContain('runtime_package_version   = "0.1.35"');
   expect(tfvars).toContain("runtime_package_integrity = null");
   expect(tfvars).toContain("allow_unpinned_runtime_package_integrity = false");
   expect(tfvars).toContain('project_name             = "open-uptime"');

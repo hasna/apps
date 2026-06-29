@@ -141,6 +141,12 @@ Hosted tests must prove unauthenticated reads fail, mutation requests without
 the right scope fail, and workspace A cannot read, mutate, check, report, import,
 or delete workspace B data.
 
+The public edge must preserve the headers needed for that contract:
+`Authorization`, `X-Uptime-Hosted-Token`, `X-Uptime-Workspace`,
+`Idempotency-Key`, `Content-Type`, and `Origin`. Promotion evidence must prove
+the `X-Uptime-Workspace` and `Idempotency-Key` header paths through CloudFront
+instead of relying only on query-string workspace selection.
+
 ## Target Policy
 
 The target-state architecture uses one shared target policy at both

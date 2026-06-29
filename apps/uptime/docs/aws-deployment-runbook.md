@@ -315,7 +315,10 @@ Expected results:
   layer denial.
 - Authenticated API reads return only the authorized workspace.
 - A read token cannot mutate, a denied browser `Origin` cannot mutate, and a
-  write token can create and delete only the disabled smoke monitor.
+  write token can create and delete only the disabled smoke monitor. The delete
+  leg must carry an `Idempotency-Key` through the edge.
+- Header-only readiness must pass with `X-Uptime-Workspace`; evidence that works
+  only through `?workspaceId=` is not enough.
 - Hosted report delivery, probe APIs, import apply, and inline checks remain
   fail-closed until their cloud job/channel/audit systems are implemented.
 - Direct ALB origin access is denied unless it is the approved CloudFront origin
@@ -327,6 +330,12 @@ Expected results:
 Manual curls are acceptable only as extra diagnostics; the deployment evidence
 must include the `uptime cloud edge-smoke --json` report because it records the
 full protected-access matrix without leaking token values.
+
+The CloudFront origin request path must forward `Authorization`,
+`X-Uptime-Hosted-Token`, `X-Uptime-Workspace`, `Idempotency-Key`,
+`Content-Type`, and `Origin` to the ALB. Future promotion evidence should prove
+the workspace header path through the edge; using only `?workspaceId=` query
+parameters is not sufficient for the protected-web gate.
 
 Hosted deployments should store scoped hosted-token JSON in Secrets Manager, not
 a single broad raw token. The runtime accepts `HASNA_UPTIME_HOSTED_TOKENS` JSON

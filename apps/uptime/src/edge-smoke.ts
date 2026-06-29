@@ -64,6 +64,7 @@ export async function runEdgeSmoke(options: EdgeSmokeOptions): Promise<EdgeSmoke
     "unauth-monitors-denied",
   ]));
   checks.push(await guardedCheck("authenticated-dashboard-fail-closed", () => checkAuthenticatedDashboard(edgeUrl, workspaceId, options.readToken, fetchImpl, timeoutMs)));
+  checks.push(await guardedCheck("workspace-header-forwarded", () => checkWorkspaceHeaderForwarded(edgeUrl, workspaceId, options.readToken, fetchImpl, timeoutMs)));
   checks.push(await guardedCheck("read-token-allowed", () => checkReadAllowed(edgeUrl, workspaceId, options.readToken, fetchImpl, timeoutMs)));
   checks.push(await guardedCheck("wrong-workspace-denied", () => checkWrongWorkspaceDenied(edgeUrl, workspaceId, options.readToken, fetchImpl, timeoutMs)));
   checks.push(await guardedCheck("wrong-workspace-mutation-denied", () => checkWrongWorkspaceMutationDenied(edgeUrl, workspaceId, options.writeToken, negativeMutationTarget, fetchImpl, timeoutMs)));
@@ -242,6 +243,40 @@ async function checkReadAllowed(baseUrl: string, workspaceId: string | null, tok
     requiredForPromotion: true,
     status: response.status,
     detail: response.status === 200 && Array.isArray(json) ? "scoped read token can list monitors" : `expected 200 JSON array, got ${response.status}`,
+  };
+}
+
+async function checkWorkspaceHeaderForwarded(baseUrl: string, workspaceId: string | null, token: string | undefined, fetchImpl: typeof fetch, timeoutMs: number): Promise<EdgeSmokeCheck> {
+  if (!workspaceId) {
+    return {
+      name: "workspace-header-forwarded",
+      ok: false,
+      requiredForPromotion: true,
+      detail: "workspace id missing",
+    };
+  }
+  if (!token?.trim()) {
+    return {
+      name: "workspace-header-forwarded",
+      ok: false,
+      requiredForPromotion: true,
+      detail: "read token missing",
+    };
+  }
+  const response = await request(fetchImpl, apiUrl(baseUrl, "/ready", null), {
+    method: "GET",
+    timeoutMs,
+    headers: authHeaders(token, workspaceId),
+  });
+  const json = await responseJson(response);
+  const ok = response.status === 200 && isRecord(json) && json.ok === true;
+  return {
+    name: "workspace-header-forwarded",
+    ok,
+    promotionOk: ok && isRecord(json) && json.productionReady === true,
+    requiredForPromotion: true,
+    status: response.status,
+    detail: ok ? "workspace header reached hosted readiness without query fallback" : `expected header-only readiness 200, got ${response.status}`,
   };
 }
 
@@ -425,10 +460,14 @@ async function checkMutationRoundTrip(
     }];
   }
   try {
+    const deleteHeaders = {
+      ...headers,
+      "idempotency-key": `edge-smoke:${smokeId}:delete:${monitorId}`,
+    };
     const deleteResponse = await request(fetchImpl, apiUrl(baseUrl, `/api/v1/monitors/${encodeURIComponent(monitorId)}`, workspaceId), {
       method: "DELETE",
       timeoutMs,
-      headers,
+      headers: deleteHeaders,
     });
     const deleted = await responseJson(deleteResponse) as { deleted?: unknown } | null;
     if (deleteResponse.status !== 200 || deleted?.deleted !== true) {
