@@ -64,3 +64,27 @@ export { createLLMClient, buildPrompt, MockLLMClient } from "./lib/llm-client.js
 // ─── Pipeline ────────────────────────────────────────────────
 export { parseFromFile, parseFromString, validate, compile, run } from "./lib/pipeline.js";
 export type { PipelineOptions } from "./lib/pipeline.js";
+
+// ─── Storage ─────────────────────────────────────────────────
+export {
+  buildPostgresPoolConfig,
+  getMarkdownDataDir,
+  getMarkdownDbPath,
+  listFeedback,
+  openMarkdownDatabase,
+  resolveMachineId,
+  resolveRemoteDatabaseUrl,
+  saveFeedback,
+  storagePull,
+  storagePush,
+  storageStatus,
+  storageSync,
+} from "./storage.js";
+export type {
+  FeedbackRecord,
+  MarkdownStorageStatus,
+  MarkdownStorageTable,
+  SaveFeedbackInput,
+  StorageDirection,
+  StorageSyncResult,
+} from "./storage.js";

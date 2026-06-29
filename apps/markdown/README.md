@@ -51,19 +51,27 @@ Endpoints on `127.0.0.1` only:
 omp-serve
 ```
 
-## Cloud Sync
-
-This package supports cloud sync via `@hasna/cloud`:
-
-```bash
-cloud setup
-cloud sync push --service markdown
-cloud sync pull --service markdown
-```
-
 ## Data Directory
 
-Data is stored in `~/.hasna/markdown/`.
+Runtime data is stored locally in `~/.hasna/markdown/markdown.db` by default.
+Set `HASNA_MARKDOWN_DIR` or `MARKDOWN_DIR` to move the local store.
+
+Feedback rows include a machine identifier. The resolver checks
+`HASNA_MARKDOWN_MACHINE_ID`, `MARKDOWN_MACHINE_ID`, `HASNA_MACHINE_ID`,
+`OPEN_MACHINES_ID`, then `MACHINE_ID` before falling back to the host name.
+
+Optional remote mirroring uses Postgres directly:
+
+```bash
+export HASNA_MARKDOWN_DATABASE_URL="postgres://user:pass@example.com/markdown?sslmode=require"
+omp storage status
+omp storage push
+omp storage pull
+omp storage sync
+```
+
+The local SQLite database remains the runtime source. The remote database is an
+append-only feedback mirror; deletes are not propagated.
 
 ## License
 

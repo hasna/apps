@@ -7,6 +7,7 @@ import { parseFromFile, validate, compile, run } from "../lib/pipeline.js";
 import { validateAndLint } from "../validator/validate.js";
 import { createLLMClient } from "../lib/llm-client.js";
 import { getPackageVersion } from "../lib/package-version.js";
+import { storagePull, storagePush, storageStatus, storageSync } from "../storage.js";
 import { writeFileSync, existsSync } from "fs";
 import type { OmpError, LLMClientOptions } from "../types/index.js";
 
@@ -325,6 +326,56 @@ accepts: items created; visible in list endpoint
     console.log(`  Run ${chalk.cyan(`omp run ${filename}`)} to execute it`);
   });
 
+// ─── storage ─────────────────────────────────────────────────
+
+const storage = program
+  .command("storage")
+  .description("Inspect and sync markdown-owned local storage");
+
+storage
+  .command("status")
+  .description("Show local SQLite path, machine identity, and optional remote status")
+  .option("-j, --json", "Output result as JSON")
+  .action((opts: { json?: boolean }) => {
+    const status = storageStatus();
+    if (opts.json) {
+      printJson(status);
+      return;
+    }
+
+    console.log(chalk.bold("Markdown storage"));
+    console.log(`  Local: ${status.localPath}`);
+    console.log(`  Machine: ${status.machineId}`);
+    console.log(`  Runtime: ${status.runtimeStorage}`);
+    console.log(`  Remote: ${status.remoteConfigured ? `${status.remoteRole} (${status.remoteEnv})` : "not configured"}`);
+    console.log(`  Tables: ${status.tables.join(", ")}`);
+    console.log(`  Conflict policy: ${status.conflictPolicy}`);
+  });
+
+storage
+  .command("push")
+  .description("Push local feedback rows to the optional Postgres mirror")
+  .option("-j, --json", "Output result as JSON")
+  .action(async (opts: { json?: boolean }) => {
+    await printStorageResult(await storagePush(), opts);
+  });
+
+storage
+  .command("pull")
+  .description("Pull feedback rows from the optional Postgres mirror")
+  .option("-j, --json", "Output result as JSON")
+  .action(async (opts: { json?: boolean }) => {
+    await printStorageResult(await storagePull(), opts);
+  });
+
+storage
+  .command("sync")
+  .description("Push local feedback, then pull remote feedback")
+  .option("-j, --json", "Output result as JSON")
+  .action(async (opts: { json?: boolean }) => {
+    await printStorageResult(await storageSync(), opts);
+  });
+
 // ─── Helpers ─────────────────────────────────────────────────
 
 function printErrors(errors: OmpError[]) {
@@ -341,6 +392,31 @@ function printErrors(errors: OmpError[]) {
 
 function printJson(payload: unknown) {
   console.log(JSON.stringify(payload, null, 2));
+}
+
+async function printStorageResult(
+  result: Awaited<ReturnType<typeof storagePush>>,
+  opts: { json?: boolean }
+) {
+  if (opts.json) {
+    printJson(result);
+  } else {
+    console.log(chalk.bold(`Storage ${result.direction}`));
+    console.log(`  Local: ${result.localPath}`);
+    console.log(`  Machine: ${result.machineId}`);
+    console.log(`  Remote: ${result.remoteConfigured ? result.remoteEnv : "not configured"}`);
+    console.log(`  Rows read: ${result.rowsRead}`);
+    console.log(`  Rows written: ${result.rowsWritten}`);
+    if (result.errors.length > 0) {
+      for (const error of result.errors) {
+        console.error(chalk.red(`  Error: ${error}`));
+      }
+    }
+  }
+
+  if (result.errors.length > 0) {
+    process.exit(1);
+  }
 }
 
 function parseLLMOption(opt: string): LLMClientOptions {

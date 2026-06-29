@@ -1,4 +1,3 @@
-import { dirname, join } from "node:path";
 import { Server } from "@modelcontextprotocol/sdk/server";
 import {
   CallToolRequestSchema,
@@ -6,27 +5,12 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { parseFromFile, parseFromString, validate, compile, run } from "../lib/pipeline.js";
 import { getPackageVersion } from "../lib/package-version.js";
+import { saveFeedback, storagePull, storagePush, storageStatus, storageSync } from "../storage.js";
 import { validateAndLint } from "../validator/validate.js";
-import { existsSync, mkdirSync } from "fs";
-import { homedir } from "os";
-import { createRequire } from "module";
-
-const require = createRequire(import.meta.url);
 
 export { getPackageVersion };
 
 const _agentReg = new Map<string, { id: string; name: string; last_seen_at: string; project_id?: string }>();
-
-function getFeedbackDb(version: string) {
-  const dbPath = join(homedir(), ".hasna", "markdown", "markdown.db");
-  const dir = dirname(dbPath);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const { Database } = require("bun:sqlite");
-  const db = new Database(dbPath);
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))), message TEXT NOT NULL, email TEXT, category TEXT DEFAULT 'general', version TEXT, machine_id TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')))");
-  return db;
-}
 
 export function buildServer(version: string = getPackageVersion()): Server {
   const server = new Server(
@@ -118,6 +102,26 @@ export function buildServer(version: string = getPackageVersion()): Server {
         description: "Send feedback about this service",
         inputSchema: { type: "object" as const, properties: { message: { type: "string" }, email: { type: "string" }, category: { type: "string", enum: ["bug", "feature", "general"] } }, required: ["message"] },
       },
+      {
+        name: "storage_status",
+        description: "Show markdown-owned local storage status and optional remote mirror configuration.",
+        inputSchema: { type: "object" as const, properties: {} },
+      },
+      {
+        name: "storage_push",
+        description: "Push local feedback rows to the optional Postgres mirror.",
+        inputSchema: { type: "object" as const, properties: {} },
+      },
+      {
+        name: "storage_pull",
+        description: "Pull feedback rows from the optional Postgres mirror.",
+        inputSchema: { type: "object" as const, properties: {} },
+      },
+      {
+        name: "storage_sync",
+        description: "Push local feedback rows, then pull remote feedback rows.",
+        inputSchema: { type: "object" as const, properties: {} },
+      },
     ],
   }));
 
@@ -158,10 +162,23 @@ export function buildServer(version: string = getPackageVersion()): Server {
         }
         case "send_feedback": {
           const p = args as { message: string; email?: string; category?: string };
-          const db = getFeedbackDb(version);
-          db.prepare("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)").run(p.message, p.email || null, p.category || "general", version);
-          db.close();
-          return { content: [{ type: "text" as const, text: "Feedback saved. Thank you!" }] };
+          const record = saveFeedback({ message: p.message, email: p.email, category: p.category, version });
+          return { content: [{ type: "text" as const, text: JSON.stringify({ id: record.id, machine_id: record.machine_id, created_at: record.created_at }) }] };
+        }
+        case "storage_status": {
+          return { content: [{ type: "text" as const, text: JSON.stringify(storageStatus(), null, 2) }] };
+        }
+        case "storage_push": {
+          const result = await storagePush();
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }], isError: result.errors.length > 0 };
+        }
+        case "storage_pull": {
+          const result = await storagePull();
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }], isError: result.errors.length > 0 };
+        }
+        case "storage_sync": {
+          const result = await storageSync();
+          return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }], isError: result.errors.length > 0 };
         }
         case "markdown_validate": {
           const doc = args?.file

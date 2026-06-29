@@ -2,12 +2,16 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildServer } from "./server.js";
 import { DEFAULT_HTTP_PORT, HTTP_NAME, isHttpMode, resolveHttpPort, startHttpServer } from "./http.js";
 import { getMcpHelpText, handleMcpCliArgs } from "./index.js";
 
 let httpServer: ReturnType<typeof startHttpServer> | undefined;
 let httpPort = 0;
+const tempDirs: string[] = [];
 
 function runMcp(args: string[]) {
   return Bun.spawnSync({
@@ -67,9 +71,49 @@ describe("MCP HTTP transport", () => {
     const tools = await client.listTools();
     expect(tools.tools.map((tool) => tool.name)).toContain("markdown_validate");
     expect(tools.tools.map((tool) => tool.name)).toContain("list_agents");
+    expect(tools.tools.map((tool) => tool.name)).toContain("storage_status");
 
     await client.close();
     await server.close();
+  });
+
+  test("send_feedback stores feedback with machine identity in local storage", async () => {
+    const originalDir = process.env.HASNA_MARKDOWN_DIR;
+    const originalMachine = process.env.HASNA_MARKDOWN_MACHINE_ID;
+    const dir = mkdtempSync(join(tmpdir(), "open-markdown-mcp-"));
+    tempDirs.push(dir);
+    process.env.HASNA_MARKDOWN_DIR = dir;
+    process.env.HASNA_MARKDOWN_MACHINE_ID = "mcp-machine-1";
+
+    try {
+      const server = buildServer("0.0.0-test");
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: "feedback-test", version: "0.0.1" });
+
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+
+      const feedback = await client.callTool({
+        name: "send_feedback",
+        arguments: { message: "MCP feedback", category: "bug" },
+      });
+      const payload = JSON.parse((feedback.content as Array<{ type: string; text: string }>)[0].text) as { machine_id: string };
+      expect(payload.machine_id).toBe("mcp-machine-1");
+
+      const status = await client.callTool({ name: "storage_status", arguments: {} });
+      const statusPayload = JSON.parse((status.content as Array<{ type: string; text: string }>)[0].text) as { machineId: string; runtimeStorage: string };
+      expect(statusPayload.machineId).toBe("mcp-machine-1");
+      expect(statusPayload.runtimeStorage).toBe("local-sqlite");
+
+      await client.close();
+      await server.close();
+    } finally {
+      if (originalDir === undefined) delete process.env.HASNA_MARKDOWN_DIR;
+      else process.env.HASNA_MARKDOWN_DIR = originalDir;
+
+      if (originalMachine === undefined) delete process.env.HASNA_MARKDOWN_MACHINE_ID;
+      else process.env.HASNA_MARKDOWN_MACHINE_ID = originalMachine;
+    }
   });
 
   test("resolves HTTP mode and default port", () => {
@@ -156,4 +200,8 @@ describe("MCP HTTP transport", () => {
 
 afterAll(() => {
   httpServer?.close();
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop();
+    if (dir) rmSync(dir, { recursive: true, force: true });
+  }
 });
