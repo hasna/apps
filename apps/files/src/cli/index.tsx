@@ -37,7 +37,7 @@ import { acknowledgeKnowledgeSourceOutbox, pollKnowledgeSourceOutbox } from "../
 import { runDbIntegrityCheck, runOpsStateSnapshot } from "../lib/ops-loop.js";
 import { getDb, getDbPath } from "../db/database.js";
 import { requireId } from "../db/resolve.js";
-import { dirname, resolve, join } from "path";
+import { basename, dirname, resolve, join } from "path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import type {
   FilesContextPack,
@@ -1169,6 +1169,34 @@ projs.command("add <project-id> <file-id>").action((projId: string, fileId: stri
     console.log(chalk.green("✓ Added to project"));
   } catch (e) { console.error(chalk.red((e as Error).message)); process.exit(1); }
 });
+
+program
+  .command("project-panel")
+  .description("Emit a contract-valid project dashboard panel for files")
+  .option("--project <project>", "Project id, name, or slug. Defaults to the current folder name")
+  .option("--limit <n>", "Maximum panel items/resources", "20")
+  .option("--contract", "Emit hasna.project_panel.v1 contract JSON")
+  .option("--json", "Output JSON")
+  .action(async (opts: { project?: string; limit: string; contract?: boolean; json?: boolean }) => {
+    try {
+      const { createFilesProjectPanel } = await import("../lib/project-panel.js");
+      const panel = createFilesProjectPanel(opts.project ?? basename(process.cwd()), {
+        limit: parseIntFlag(opts.limit, "limit", { min: 1 }),
+      });
+      if (opts.json || opts.contract) {
+        console.log(JSON.stringify(panel, null, 2));
+        return;
+      }
+      console.log(chalk.bold(panel.title));
+      console.log(panel.summary ?? chalk.dim("No summary."));
+      for (const metric of panel.metrics) {
+        console.log(`${chalk.dim(metric.id)} ${metric.value}${metric.unit ? ` ${metric.unit}` : ""}`);
+      }
+    } catch (e) {
+      console.error(chalk.red((e as Error).message));
+      process.exit(1);
+    }
+  });
 
 // ─── info ────────────────────────────────────────────────────────────────────
 
