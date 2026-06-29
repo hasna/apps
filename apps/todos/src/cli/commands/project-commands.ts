@@ -22,7 +22,7 @@ import {
 } from "../../lib/saved-search-views.js";
 import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../../lib/sync.js";
 import { getAgentTaskListId } from "../../lib/config.js";
-import { autoProject, autoDetectProject, handleError, output, formatTaskLine, normalizeStatus, resolveTaskId } from "../helpers.js";
+import { autoProject, autoDetectProject, handleError, output, formatTaskLine, normalizeStatus, resolveExplicitProject, resolveTaskId } from "../helpers.js";
 
 function collectOption(value: string, previous: string[] = []): string[] {
   return [...previous, value];
@@ -527,6 +527,40 @@ export function registerProjectCommands(program: Command) {
       for (const p of projects) {
         const taskList = p.task_list_id ? chalk.cyan(` [${p.task_list_id}]`) : "";
         console.log(`${chalk.dim(p.id.slice(0, 8))} ${chalk.bold(p.name)} ${chalk.dim(p.path)}${taskList}${p.description ? ` - ${p.description}` : ""}`);
+      }
+    });
+
+  program
+    .command("project-panel")
+    .description("Emit a contract-valid project dashboard panel for todos")
+    .option("--project <project>", "Project path, id, task-list slug, or name. Defaults to the detected project")
+    .option("--limit <n>", "Maximum panel items/resources", "20")
+    .option("--contract", "Emit hasna.project_panel.v1 contract JSON")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts: { project?: string; limit?: string; contract?: boolean; json?: boolean }) => {
+      try {
+        const globalOpts = program.opts();
+        const project = opts.project ? resolveExplicitProject(opts.project) : autoDetectProject(globalOpts);
+        if (!project) {
+          console.error(chalk.red("Project not found: provide --project or run inside a registered project"));
+          process.exit(1);
+        }
+
+        const { createTodosProjectPanel } = await import("../../lib/project-panel.js");
+        const limit = opts.limit ? Number(opts.limit) : 20;
+        const panel = createTodosProjectPanel(project.id, { limit });
+        if (opts.json || opts.contract || globalOpts.json) {
+          output(panel, true);
+          return;
+        }
+
+        console.log(chalk.bold(`${panel.title}: ${project.name}`));
+        console.log(panel.summary ?? chalk.dim("No summary."));
+        for (const metric of panel.metrics) {
+          console.log(`${chalk.dim(metric.id)} ${metric.value}${metric.unit ?? ""}`);
+        }
+      } catch (error) {
+        handleError(error);
       }
     });
 
