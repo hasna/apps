@@ -129,11 +129,12 @@ Job lease semantics:
 - deploy drain pauses new claims and lets in-flight leases expire or finish;
 - alarms fire for stale leases and backlog.
 
-Current implementation note: `@hasna/uptime@0.1.32` implements the deterministic
+Current implementation note: `@hasna/uptime@0.1.33` implements the deterministic
 job key, probe policy hash, class/location claim checks, same-probe claim retry
-idempotency, and nonce payload conflict rejection in the local SQLite probe
-scaffold. Deploy drain, backlog/stale-lease metrics, and hosted cloud-worker
-enablement remain future cloud-store gates.
+idempotency, nonce payload conflict rejection in the local SQLite probe
+scaffold, and service-owned report channel-ref catalog validation for hosted
+reporter preflight. Deploy drain, backlog/stale-lease metrics, live report
+delivery, and hosted cloud-worker enablement remain future cloud-store gates.
 
 ## Inventory Import Workflow
 
@@ -315,6 +316,40 @@ alarms for stuck or failed runs.
 The local direct `apiUrl`/key style can remain for local development. Hosted
 report APIs reject raw URLs, keys, arbitrary recipients, and arbitrary Logs
 project ids.
+
+Hosted reporter preflight accepts only an operator-provided, server-owned
+channel-ref catalog in `HASNA_UPTIME_REPORT_CHANNEL_REFS_JSON`. This catalog is
+runtime configuration for the hosted service. It is not a client request body,
+MCP input, or schedule payload shape:
+
+```json
+{
+  "version": "open-uptime.report-channel-refs.v1",
+  "channels": [
+    {
+      "id": "ops-email",
+      "channel": "email",
+      "service": "mailery",
+      "secretRef": "arn:aws:secretsmanager:us-east-1:123456789012:secret:open-uptime/prod/reporting-email",
+      "targetRef": "workspace-ops"
+    },
+    {
+      "id": "ops-logs",
+      "channel": "logs",
+      "service": "logs",
+      "secretRef": "arn:aws:ssm:us-east-1:123456789012:parameter/open-uptime/prod/reporting/logs",
+      "targetRef": "open-uptime-prod"
+    }
+  ]
+}
+```
+
+The catalog is a validation contract only until the hosted Postgres store,
+report-run idempotency, retry/backoff, artifact storage, audit export, and
+delivery alarms are implemented. It must not contain raw `apiUrl`, recipient,
+token, key, password, or secret value fields. Hosted schedule/API/MCP requests
+must later reference approved channel ids only; clients must never submit
+`secretRef` values.
 
 ## Dashboard Views
 

@@ -85,21 +85,24 @@ export async function sendUptimeReport(summary: UptimeSummary, options: SendUpti
   const deliveries: UptimeReportDelivery[] = [];
 
   if (options.email) {
-    deliveries.push(await sendEmailReport(report, resolveEmailTarget(options.email), fetchImpl, timeoutMs));
+    const emailTarget = resolveEmailTarget(options.email);
+    deliveries.push(await sendReportSafely("email", emailTarget, () => sendEmailReport(report, emailTarget, fetchImpl, timeoutMs)));
   }
   if (options.sms) {
     const smsTarget = resolveSmsTarget(options.sms);
     const recipients = splitTargets(smsTarget.to);
     if (recipients.length === 0) {
-      deliveries.push(await sendSmsReport(report, smsTarget, fetchImpl, timeoutMs));
+      deliveries.push(await sendReportSafely("sms", smsTarget, () => sendSmsReport(report, smsTarget, fetchImpl, timeoutMs)));
     } else {
       for (const target of recipients) {
-        deliveries.push(await sendSmsReport(report, { ...smsTarget, to: target }, fetchImpl, timeoutMs));
+        const perRecipientTarget = { ...smsTarget, to: target };
+        deliveries.push(await sendReportSafely("sms", perRecipientTarget, () => sendSmsReport(report, perRecipientTarget, fetchImpl, timeoutMs)));
       }
     }
   }
   if (options.logs) {
-    deliveries.push(await sendLogsReport(report, resolveLogsTarget(options.logs), fetchImpl, timeoutMs));
+    const logsTarget = resolveLogsTarget(options.logs);
+    deliveries.push(await sendReportSafely("logs", logsTarget, () => sendLogsReport(report, logsTarget, fetchImpl, timeoutMs)));
   }
 
   return deliveries;
@@ -201,9 +204,23 @@ async function sendLogsReport(report: UptimeReport, target: UptimeLogsReportTarg
       timestamp: report.generatedAt,
       level: report.summary.totals.down > 0 || report.summary.totals.openIncidents > 0 ? "warn" : "info",
       message: report.subject,
+      _open_logs_event_id: `open-uptime:report:${report.generatedAt}`,
       report: report.json,
     },
   }, fetchImpl, timeoutMs, secretsForTarget(target));
+}
+
+async function sendReportSafely(
+  channel: UptimeReportDelivery["channel"],
+  target: UptimeEmailReportTarget | UptimeSmsReportTarget | UptimeLogsReportTarget,
+  action: () => Promise<UptimeReportDelivery>,
+): Promise<UptimeReportDelivery> {
+  try {
+    return await action();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { channel, ok: false, error: redactSecrets(message, secretsForTarget(target)) };
+  }
 }
 
 async function requestJson(
@@ -257,6 +274,9 @@ function normalizeUrl(value: string): string {
   const parsed = new URL(value.trim());
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error("Integration API URL must use http or https");
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("Integration API URL must not include username or password");
   }
   return parsed.toString().replace(/\/$/, "");
 }
@@ -323,16 +343,6 @@ function secretsForTarget(target: UptimeEmailReportTarget | UptimeSmsReportTarge
     const value = (target as Record<string, unknown>)[key];
     if (typeof value === "string" && value.trim()) values.add(value.trim());
   }
-  const apiUrl = (target as { apiUrl?: string }).apiUrl;
-  if (apiUrl) {
-    try {
-      const parsed = new URL(apiUrl);
-      if (parsed.username) values.add(decodeURIComponent(parsed.username));
-      if (parsed.password) values.add(decodeURIComponent(parsed.password));
-    } catch {
-      // Invalid URLs are rejected by normalizeUrl before network calls.
-    }
-  }
   return [...values];
 }
 
@@ -342,6 +352,7 @@ function redactSecrets(value: string, secrets: string[] = []): string {
     if (secret.length >= 3) redacted = redacted.split(secret).join("[REDACTED]");
   }
   return redacted
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)([^@\s/:]+):([^@\s/]*)@/gi, "$1[REDACTED]:[REDACTED]@")
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")
     .replace(/\besk_[A-Za-z0-9._~+/=-]+/g, "esk_[REDACTED]");
 }

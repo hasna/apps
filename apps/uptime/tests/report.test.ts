@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { parseHostedReportChannelRefs, summarizeHostedReportChannelRefs } from "../src/report-channel-refs.js";
 import { buildUptimeReport, sendUptimeReport } from "../src/report.js";
 import type { UptimeSummary } from "../src/types.js";
 
@@ -55,6 +56,135 @@ function summary(): UptimeSummary {
   };
 }
 
+test("hosted report channel refs validate service-owned secret refs without raw destinations", () => {
+  const catalog = parseHostedReportChannelRefs(JSON.stringify({
+    version: "open-uptime.report-channel-refs.v1",
+    channels: [
+      {
+        id: "ops-email",
+        channel: "email",
+        service: "mailery",
+        secretRef: "arn:aws:secretsmanager:us-east-1:123456789012:secret:open-uptime/prod/reporting-email",
+        targetRef: "workspace-ops",
+        workspaceId: "wks_123",
+      },
+      {
+        id: "ops-logs",
+        channel: "logs",
+        service: "logs",
+        secretRef: "arn:aws:ssm:us-east-1:123456789012:parameter/open-uptime/prod/reporting/logs",
+        targetRef: "open-uptime-prod",
+      },
+    ],
+  }));
+  const summary = summarizeHostedReportChannelRefs(JSON.stringify(catalog));
+
+  expect(catalog.channels.map((channel) => channel.id)).toEqual(["ops-email", "ops-logs"]);
+  expect(summary).toMatchObject({
+    configured: true,
+    valid: true,
+    total: 2,
+    enabled: 2,
+    enabledByChannel: { email: 1, sms: 0, logs: 1 },
+  });
+});
+
+test("hosted report channel refs reject raw URLs, recipients, and token-shaped fields", () => {
+  const rawUrl = summarizeHostedReportChannelRefs(JSON.stringify({
+    version: "open-uptime.report-channel-refs.v1",
+    channels: [{
+      id: "bad",
+      channel: "email",
+      service: "mailery",
+      secretRef: "arn:aws:secretsmanager:us-east-1:123456789012:secret:open-uptime/prod/reporting",
+      apiUrl: "https://mailery.example",
+    }],
+  }));
+  const rawRecipient = summarizeHostedReportChannelRefs(JSON.stringify({
+    version: "open-uptime.report-channel-refs.v1",
+    channels: [{
+      id: "bad2",
+      channel: "sms",
+      service: "telephony",
+      secretRef: "arn:aws:secretsmanager:us-east-1:123456789012:secret:open-uptime/prod/reporting",
+      to: "+15550101010",
+    }],
+  }));
+  const topLevelToken = summarizeHostedReportChannelRefs(JSON.stringify({
+    version: "open-uptime.report-channel-refs.v1",
+    apiToken: "esk_test",
+    channels: [],
+  }));
+
+  expect(rawUrl.valid).toBe(false);
+  expect(rawUrl.errors.join("\n")).toContain("must not contain raw URLs");
+  expect(rawRecipient.valid).toBe(false);
+  expect(rawRecipient.errors.join("\n")).toContain("must not contain raw URLs");
+  expect(topLevelToken.valid).toBe(false);
+  expect(topLevelToken.errors.join("\n")).toContain("must not contain raw URLs");
+});
+
+test("hosted report channel refs reject invalid secret refs and phone-like refs", () => {
+  const wrongSecretManagerResource = summarizeHostedReportChannelRefs(JSON.stringify({
+    version: "open-uptime.report-channel-refs.v1",
+    channels: [{
+      id: "bad-secret",
+      channel: "email",
+      service: "mailery",
+      secretRef: "arn:aws:secretsmanager:us-east-1:123456789012:parameter/open-uptime/prod/reporting",
+    }],
+  }));
+  const wrongSsmResource = summarizeHostedReportChannelRefs(JSON.stringify({
+    version: "open-uptime.report-channel-refs.v1",
+    channels: [{
+      id: "bad-ssm",
+      channel: "logs",
+      service: "logs",
+      secretRef: "arn:aws:ssm:us-east-1:123456789012:secret:open-uptime/prod/reporting",
+    }],
+  }));
+  const phoneRef = summarizeHostedReportChannelRefs(JSON.stringify({
+    version: "open-uptime.report-channel-refs.v1",
+    channels: [{
+      id: "15550101010",
+      channel: "sms",
+      service: "telephony",
+      secretRef: "arn:aws:ssm:us-east-1:123456789012:parameter/open-uptime/prod/reporting/sms",
+    }],
+  }));
+  const phoneTargetRef = summarizeHostedReportChannelRefs(JSON.stringify({
+    version: "open-uptime.report-channel-refs.v1",
+    channels: [{
+      id: "ops-sms",
+      channel: "sms",
+      service: "telephony",
+      secretRef: "arn:aws:ssm:us-east-1:123456789012:parameter/open-uptime/prod/reporting/sms",
+      targetRef: "15550101010",
+    }],
+  }));
+  const dashedPhoneTargetRef = summarizeHostedReportChannelRefs(JSON.stringify({
+    version: "open-uptime.report-channel-refs.v1",
+    channels: [{
+      id: "ops-sms",
+      channel: "sms",
+      service: "telephony",
+      secretRef: "arn:aws:ssm:us-east-1:123456789012:parameter/open-uptime/prod/reporting/sms",
+      targetRef: "155-501-01010",
+    }],
+  }));
+
+  expect(wrongSecretManagerResource.valid).toBe(false);
+  expect(wrongSecretManagerResource.errors.join("\n")).toContain("secretRef must be an AWS Secrets Manager or SSM Parameter ARN");
+  expect(wrongSsmResource.valid).toBe(false);
+  expect(wrongSsmResource.errors.join("\n")).toContain("secretRef must be an AWS Secrets Manager or SSM Parameter ARN");
+  expect(phoneRef.valid).toBe(false);
+  expect(phoneRef.errors.join("\n")).toContain("must not look like a raw phone number");
+  expect(phoneTargetRef.valid).toBe(false);
+  expect(phoneTargetRef.errors.join("\n")).toContain("must not look like a raw phone number");
+  expect(dashedPhoneTargetRef.valid).toBe(false);
+  expect(dashedPhoneTargetRef.errors.join("\n")).toContain("must not look like a raw phone number");
+});
+
 test("buildUptimeReport renders text, HTML, and structured JSON", () => {
   const report = buildUptimeReport(summary());
 
@@ -104,6 +234,7 @@ test("sendUptimeReport calls Mailery, Telephony, and Open Logs APIs", async () =
   expect(calls[0].init.headers).toHaveProperty("authorization", "Bearer esk_test");
   expect(calls[0].body.to).toEqual(["team@example.com"]);
   expect(calls[1].body.to).toBe("+15550000001");
+  expect(calls[2].body._open_logs_event_id).toBe("open-uptime:report:2026-06-28T12:00:00.000Z");
   expect(calls[2].body.report.kind).toBe("open-uptime.report");
 });
 
@@ -128,7 +259,7 @@ test("sendUptimeReport reports missing channel configuration without network cal
 test("sendUptimeReport redacts configured secrets echoed by providers", async () => {
   const deliveries = await sendUptimeReport(summary(), {
     logs: {
-      apiUrl: "http://user:pass@logs.test",
+      apiUrl: "http://logs.test",
       apiKey: "logs_secret",
       projectId: "uptime",
     },
@@ -139,6 +270,26 @@ test("sendUptimeReport redacts configured secrets echoed by providers", async ()
 
   expect(deliveries[0].ok).toBe(false);
   expect(deliveries[0].error).toBe("invalid api key [REDACTED] at http://[REDACTED]:[REDACTED]@logs.test with Bearer [REDACTED]");
+});
+
+test("sendUptimeReport rejects integration API URLs with embedded credentials", async () => {
+  let calls = 0;
+  const deliveries = await sendUptimeReport(summary(), {
+    logs: {
+      apiUrl: "http://user:pass@logs.test",
+      apiKey: "logs_secret",
+      projectId: "uptime",
+    },
+    fetchImpl: (async () => {
+      calls += 1;
+      return new Response("{}");
+    }) as unknown as typeof fetch,
+  });
+
+  expect(calls).toBe(0);
+  expect(deliveries).toEqual([
+    { channel: "logs", ok: false, error: "Integration API URL must not include username or password" },
+  ]);
 });
 
 test("sendUptimeReport reads Open Logs API token env names and redacts success ids", async () => {

@@ -68,6 +68,10 @@ test("buildAwsDeploymentPlan generates a dry-run AWS plan with generic package d
   expect(plan.resources.services.filter((service) => service.role !== "web").every((service) => service.targetDesiredCount === 0)).toBe(true);
   expect(plan.resources.services.find((service) => service.role === "web")?.secrets.HASNA_UPTIME_HOSTED_TOKEN)
     .toBe("open-uptime/prod/hosted-token");
+  expect(plan.resources.services.find((service) => service.role === "reporter")?.secrets.HASNA_UPTIME_REPORT_CHANNEL_REFS_JSON)
+    .toBe("open-uptime/prod/reporting");
+  expect(plan.resources.services.find((service) => service.role === "reporter")?.secrets.REPORTING_CONFIG)
+    .toBeUndefined();
   expect(plan.resources.services.find((service) => service.role === "web")?.environment.HASNA_UPTIME_HOSTED_SQLITE_DB)
     .toBe("/data/uptime/uptime.db");
   expect(plan.resources.services.find((service) => service.role === "web")?.environment.HASNA_UPTIME_ALLOWED_ORIGINS)

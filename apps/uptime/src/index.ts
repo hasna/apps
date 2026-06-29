@@ -14,6 +14,7 @@ export {
 export { createApiHandler, serveUptime } from "./api.js";
 export { applyImport, previewImport, rollbackImport } from "./imports.js";
 export { buildUptimeReport, sendUptimeReport } from "./report.js";
+export { parseHostedReportChannelRefs, summarizeHostedReportChannelRefCatalog, summarizeHostedReportChannelRefs } from "./report-channel-refs.js";
 export { generateProbeKeyPair, probePublicKeyFingerprint, probeResultSigningPayload, signProbeResult, verifyProbeResultSignature } from "./probes.js";
 export { buildAwsDeploymentPlan, buildPrivateProbeCloudConfig, renderPrivateProbeEnv } from "./cloud-plan.js";
 export { buildPostgresMigrationPlan, redactPostgresUrl, renderPostgresMigrationPlan } from "./postgres-plan.js";
@@ -134,3 +135,10 @@ export type {
   UptimeReportDelivery,
   UptimeSmsReportTarget,
 } from "./report.js";
+export type {
+  HostedReportChannel,
+  HostedReportChannelRef,
+  HostedReportChannelRefCatalog,
+  HostedReportChannelRefSummary,
+  HostedReportChannelService,
+} from "./report-channel-refs.js";

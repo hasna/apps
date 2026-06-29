@@ -51,7 +51,7 @@ locals {
     reporter = {
       desired_count = lookup(var.desired_counts, "reporter", 0)
       command       = ["bun", "dist/cli/index.js", "cloud", "workers", "run", "--role", "reporter"]
-      secrets       = { REPORTING_CONFIG = var.reporting_secret_arn }
+      secrets       = { HASNA_UPTIME_REPORT_CHANNEL_REFS_JSON = var.reporting_secret_arn }
     }
     migration = {
       desired_count = lookup(var.desired_counts, "migration", 0)

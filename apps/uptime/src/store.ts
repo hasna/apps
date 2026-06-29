@@ -2158,6 +2158,9 @@ function normalizeHttpUrl(value: string | undefined): string {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error("HTTP monitor url must use http or https");
   }
+  if (parsed.username || parsed.password) {
+    throw new Error("HTTP monitor url must not include username or password");
+  }
   for (const key of [...parsed.searchParams.keys()]) {
     if (SECRET_URL_PARAM_PATTERN.test(key)) parsed.searchParams.set(key, "[redacted]");
   }

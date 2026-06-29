@@ -501,6 +501,7 @@ test("monitor validation rejects invalid definitions", () => {
   const service = new UptimeService({ dbPath: tempDb() });
 
   expect(() => service.createMonitor({ name: "ftp", kind: "http", url: "ftp://example.com" })).toThrow("http or https");
+  expect(() => service.createMonitor({ name: "userinfo", kind: "http", url: "https://user:pass@example.com" })).toThrow("username or password");
   expect(() => service.createMonitor({ name: "host", kind: "tcp", host: "   ", port: 80 })).toThrow("TCP monitors require host");
   expect(() => service.createMonitor({ name: "status", kind: "http", url: "https://example.com", expectedStatus: 999 })).toThrow("expectedStatus");
   expect(() => service.createMonitor({ name: "method", kind: "http", url: "https://example.com", method: "GET /" })).toThrow("HTTP method");

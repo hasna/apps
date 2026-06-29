@@ -11,6 +11,7 @@ import { serveUptime } from "../api.js";
 import { generateProbeKeyPair, signProbeResult } from "../probes.js";
 import { buildAwsDeploymentPlan, buildPrivateProbeCloudConfig, renderPrivateProbeEnv } from "../cloud-plan.js";
 import { buildPostgresMigrationPlan, renderPostgresMigrationPlan } from "../postgres-plan.js";
+import { summarizeHostedReportChannelRefs, type HostedReportChannelRefSummary } from "../report-channel-refs.js";
 import { runHostedPublicChecksWorker } from "../workers.js";
 import { runEdgeSmoke, type EdgeSmokeReport } from "../edge-smoke.js";
 import type { AwsDeploymentPlan, PrivateProbeCloudConfig } from "../cloud-plan.js";
@@ -1376,7 +1377,8 @@ function buildHostedWorkerPreflight(role: HostedWorkerRole): HostedWorkerPreflig
     { name: "cloud-worker-leases", ok: false, detail: "not implemented" },
   ];
   if (role === "reporter") {
-    checks.push({ name: "cloud-channel-refs", ok: false, detail: "not implemented" });
+    const channelRefs = summarizeHostedReportChannelRefs(process.env.HASNA_UPTIME_REPORT_CHANNEL_REFS_JSON ?? process.env.HASNA_UPTIME_REPORT_CHANNEL_REFS);
+    checks.push({ name: "cloud-channel-refs", ok: channelRefs.valid && channelRefs.enabled > 0, detail: renderChannelRefSummary(channelRefs) });
   }
   if (role === "public-probe") {
     checks.push({ name: "public-probe-job-claims", ok: false, detail: "not implemented" });
@@ -1401,6 +1403,12 @@ function buildHostedWorkerPreflight(role: HostedWorkerRole): HostedWorkerPreflig
   };
 }
 
+function renderChannelRefSummary(summary: HostedReportChannelRefSummary): string {
+  if (!summary.configured) return "not configured";
+  if (!summary.valid) return `invalid: ${summary.errors.join("; ")}`;
+  return `valid catalog: total=${summary.total}, enabled=${summary.enabled}, email=${summary.enabledByChannel.email}, sms=${summary.enabledByChannel.sms}, logs=${summary.enabledByChannel.logs}`;
+}
+
 function hostedWorkerNextActions(role: HostedWorkerRole): string[] {
   const shared = [
     "Keep the ECS service desired count at 0 until this preflight reports canStart=true.",
@@ -1421,7 +1429,8 @@ function hostedWorkerNextActions(role: HostedWorkerRole): string[] {
   if (role === "reporter") {
     return [
       ...shared,
-      "Implement workspace-authorized report channel refs, idempotent delivery keys, retry/backoff, and delivery alarms.",
+      "Provide HASNA_UPTIME_REPORT_CHANNEL_REFS_JSON with workspace-authorized Mailery, Telephony, and Open Logs refs; do not inline URLs, recipients, API keys, or tokens.",
+      "Implement idempotent delivery keys, retry/backoff, delivery audit export, and delivery alarms before scaling reporter.",
     ];
   }
   return [

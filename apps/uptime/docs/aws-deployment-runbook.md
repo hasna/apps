@@ -487,6 +487,17 @@ delivery attempts through Mailery, Telephony, or Open Logs must stay disabled
 until the reporter has cloud channel refs, idempotency storage, retry/backoff
 state, audit rows, and delivery alarms.
 
+`uptime cloud workers preflight --role reporter --json` validates
+`HASNA_UPTIME_REPORT_CHANNEL_REFS_JSON` as an operator-provided, server-owned
+Mailery, Telephony, and Open Logs channel-ref catalog. This environment value is
+runtime configuration, not a client request, MCP input, or schedule payload. A
+valid catalog only proves the configured refs are shaped safely and contain no
+raw URLs, recipients, tokens, keys, or secret values; clients must later submit
+approved channel ids only, never `secretRef` values. It is not permission to
+scale the reporter while the Postgres store, worker leases, report-run
+idempotency, artifact storage, retry/backoff, audit export, and delivery alarms
+are still blocked.
+
 Do not set `desired_counts.reporter = 1` until a reviewed runbook section exists
 for report retry, duplicate suppression, provider failure handling, and delivery
 audit export.

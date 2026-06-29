@@ -264,6 +264,55 @@ test("CLI hosted worker entrypoints preflight and fail closed", () => {
   }
 });
 
+test("CLI reporter preflight validates hosted report channel refs while staying blocked", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const env = {
+      HASNA_UPTIME_MODE: "hosted",
+      HASNA_UPTIME_COMPONENT: "reporter",
+      HASNA_UPTIME_WORKSPACE_ID: "ws_cli",
+      HASNA_UPTIME_REPORT_CHANNEL_REFS_JSON: JSON.stringify({
+        version: "open-uptime.report-channel-refs.v1",
+        channels: [
+          {
+            id: "ops-email",
+            channel: "email",
+            service: "mailery",
+            secretRef: "arn:aws:secretsmanager:us-east-1:123456789012:secret:open-uptime/prod/reporting-email",
+            targetRef: "ops",
+          },
+          {
+            id: "ops-logs",
+            channel: "logs",
+            service: "logs",
+            secretRef: "arn:aws:ssm:us-east-1:123456789012:parameter/open-uptime/prod/reporting/logs",
+            targetRef: "open-uptime",
+          },
+        ],
+      }),
+    };
+    const preflight = runCli(["cloud", "workers", "preflight", "--role", "reporter", "--json"], dbPath, env);
+    const body = JSON.parse(new TextDecoder().decode(preflight.stdout));
+    const channelRefs = body.checks.find((check: any) => check.name === "cloud-channel-refs");
+
+    expect(preflight.exitCode).toBe(0);
+    expect(body).toMatchObject({
+      role: "reporter",
+      status: "blocked",
+      canStart: false,
+      workspaceId: "ws_cli",
+    });
+    expect(channelRefs).toMatchObject({ ok: true });
+    expect(channelRefs.detail).toContain("email=1");
+    expect(channelRefs.detail).toContain("logs=1");
+    expect(body.blockers.join("\n")).toContain("postgres-adapter");
+    expect(body.blockers.join("\n")).toContain("cloud-worker-leases");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("CLI cloud edge-smoke verifies hosted auth, fail-closed routes, mutation cleanup, and direct-origin denial", async () => {
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   let runtime: ReturnType<typeof serveUptime> | undefined;

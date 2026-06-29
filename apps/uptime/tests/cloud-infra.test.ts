@@ -87,6 +87,8 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(main).toContain("expected_runtime_package_integrity = coalesce(var.runtime_package_integrity, \"\")");
   expect(main).toContain("Dockerfile.package");
   expect(main).toContain("HASNA_UPTIME_HOSTED_TOKEN");
+  expect(main).toContain("HASNA_UPTIME_REPORT_CHANNEL_REFS_JSON");
+  expect(main).not.toContain("REPORTING_CONFIG");
   expect(main).toContain("HASNA_UPTIME_HOSTED_SQLITE_DB");
   expect(main).not.toContain("HASNA_UPTIME_DATABASE_URL");
   expect(main).toMatch(/efs_enabled_services\s+= toset\(\["web"\]\)/);
@@ -210,7 +212,7 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(tfvars).toContain("enable_cloudfront_origin_verify_header");
   expect(tfvars).toContain("cloudfront_origin_verify_header_name");
   expect(tfvars).toContain("cloudfront_origin_verify_header_value  = null");
-  expect(tfvars).toContain('runtime_package_version   = "0.1.32"');
+  expect(tfvars).toContain('runtime_package_version   = "0.1.33"');
   expect(tfvars).toContain("runtime_package_integrity = null");
   expect(tfvars).toContain("allow_unpinned_runtime_package_integrity = false");
   expect(tfvars).toContain('project_name             = "open-uptime"');

@@ -496,7 +496,7 @@ function servicePlan(
       : role === "public-probe"
       ? { PROBE_CONFIG: secrets.publicProbe }
       : role === "reporter"
-        ? { REPORTING_CONFIG: secrets.reporting }
+        ? { HASNA_UPTIME_REPORT_CHANNEL_REFS_JSON: secrets.reporting }
         : { APP_ENV: secrets.appEnv },
   };
 }

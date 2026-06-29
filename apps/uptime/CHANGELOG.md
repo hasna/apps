@@ -6,6 +6,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.33] - 2026-06-29
+
+### Added
+
+- Added hosted report channel-ref catalog validation for service-owned Mailery,
+  Telephony, and Open Logs secret references without accepting raw destinations,
+  tokens, URLs, or client-submitted secret refs.
+- Added reporter worker preflight evidence for configured channel-ref catalogs
+  while keeping hosted reporter startup blocked on the remaining cloud store,
+  lease, retry, audit, artifact, and alarm gates.
+- Added regression coverage for rejecting monitor URLs with embedded
+  credentials and for stamping Open Logs report deliveries with a source event
+  id.
+
+### Changed
+
+- Hosted report docs now describe the approved channel-id contract and clarify
+  that clients must not submit provider credentials, raw recipients, or secret
+  references.
+
 ## [0.1.32] - 2026-06-29
 
 ### Added
