@@ -64,4 +64,11 @@ export const PROJECT_MANAGEMENT_SKILLS: SkillMeta[] = [
     category: "Project Management",
     tags: ["retrospective", "project", "feedback", "improvement"],
   },
+  {
+    name: "project-dashboard-reports",
+    displayName: "Project Dashboard Reports",
+    description: "Create, validate, and serve standardized Hasna project dashboard reports",
+    category: "Project Management",
+    tags: ["projects", "dashboard", "reports", "json-render"],
+  },
 ];

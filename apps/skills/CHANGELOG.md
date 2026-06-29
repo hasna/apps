@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.52] - 2026-06-29
+
+### Added
+- Bundled `project-dashboard-reports` skill for Hasna agent-managed project
+  dashboards, `.hasna/project` layout, Projects JSON Render/React Flow viewer
+  workflow, provider panel commands, `#iproj-*` channel naming, and redaction
+  boundaries.
+
 ## [0.1.12] - 2026-03-12
 
 ### Added
