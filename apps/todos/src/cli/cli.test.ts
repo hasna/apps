@@ -304,6 +304,58 @@ describe("CLI integration", () => {
     try { unlinkSync("/tmp/test-cli-list.db"); } catch {}
   });
 
+  it("should emit complete parseable JSON for large list output", async () => {
+    const dbPath = join(testRoot, "large-list.db");
+    const previousDbPath = process.env["TODOS_DB_PATH"];
+    closeDatabase();
+    process.env["TODOS_DB_PATH"] = dbPath;
+    resetDatabase();
+    const db = getDatabase();
+    const longText = "large-json-payload ".repeat(90);
+    const seedTasks = db.transaction(() => {
+      for (let i = 0; i < 180; i += 1) {
+        createTask({
+          title: `Large pending task ${i}`,
+          description: `${longText}${i}`,
+          status: "pending",
+          priority: "medium",
+          tags: ["large-json"],
+        }, db);
+      }
+      for (let i = 0; i < 80; i += 1) {
+        createTask({
+          title: `Large completed task ${i}`,
+          description: `${longText}${i}`,
+          status: "completed",
+          priority: "low",
+          tags: ["large-json"],
+        }, db);
+      }
+    });
+    seedTasks();
+    closeDatabase();
+    if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
+    else process.env["TODOS_DB_PATH"] = previousDbPath;
+    resetDatabase();
+
+    const globalJson = await runCli(["list", "--json"], dbPath);
+    expect(globalJson.exitCode).toBe(0);
+    expect(globalJson.stderr).toBe("");
+    expect(globalJson.stdout.length).toBeGreaterThan(64 * 1024);
+    expect(JSON.parse(globalJson.stdout)).toHaveLength(180);
+
+    const formatJson = await runCli(["list", "--format", "json"], dbPath);
+    expect(formatJson.exitCode).toBe(0);
+    expect(formatJson.stderr).toBe("");
+    expect(JSON.parse(formatJson.stdout)).toHaveLength(180);
+
+    const completedJson = await runCli(["list", "--status", "completed", "--json"], dbPath);
+    expect(completedJson.exitCode).toBe(0);
+    expect(completedJson.stderr).toBe("");
+    expect(completedJson.stdout.length).toBeGreaterThan(64 * 1024);
+    expect(JSON.parse(completedJson.stdout)).toHaveLength(80);
+  });
+
   it("should run usage report command", async () => {
     const dbPath = "/tmp/test-cli-usage.db";
     const { unlinkSync } = await import("node:fs");

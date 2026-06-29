@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.69] - 2026-06-29
+
+### Fixed
+- Keep large CLI JSON output complete when stdout is piped, including `todos list --json` and `todos list --format json` for large or status-filtered task lists.
+
 ## [0.11.59] - 2026-06-27
 
 ### Added
