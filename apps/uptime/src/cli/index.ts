@@ -17,7 +17,7 @@ import { buildPostgresReportRuntimeReadiness } from "../postgres-report-runtime.
 import { summarizeHostedReportChannelRefs, type HostedReportChannelRefSummary } from "../report-channel-refs.js";
 import { runHostedPublicChecksWorker, runPostgresPublicProbeWorker, runPostgresSchedulerWorker, type PostgresPublicProbeWorkerSummary, type PostgresSchedulerWorkerSummary } from "../workers.js";
 import { emitWorkerRuntimeMetricEnvelope, workerRuntimeMetricOptionsFromEnv, type WorkerRuntimeMetric, type WorkerRuntimeRole } from "../worker-metrics.js";
-import { runEdgeSmoke, type EdgeSmokeReport } from "../edge-smoke.js";
+import { redactEdgeSmokeReportForEvidence, runEdgeSmoke, type EdgeSmokeReport, type RedactedEdgeSmokeReport } from "../edge-smoke.js";
 import type { AwsDeploymentPlan, PrivateProbeCloudConfig } from "../cloud-plan.js";
 import type { PostgresMigrationPlan } from "../postgres-plan.js";
 import type { ImportSource } from "../imports.js";
@@ -652,6 +652,7 @@ cloud
   .option("--allow-direct-origin-unreachable", "treat a direct-origin timeout/refusal as explicit denial evidence for private-network ALB models")
   .option("--timeout-ms <ms>", "per-request timeout in milliseconds", parseInteger, 10_000)
   .option("--smoke-id <id>", "stable smoke id for evidence and cleanup naming")
+  .option("--raw-evidence-urls", "print raw edge and direct-origin URLs; use only in a private operator terminal")
   .option("--require-promotion-ready", "exit non-zero unless mutation and direct-origin checks also passed")
   .option("-j, --json", "print JSON")
   .action(async (opts) => {
@@ -671,7 +672,8 @@ cloud
         timeoutMs: opts.timeoutMs,
         smokeId: opts.smokeId,
       });
-      print(report, renderEdgeSmokeReport(report), opts);
+      const outputReport = opts.rawEvidenceUrls ? report : redactEdgeSmokeReportForEvidence(report);
+      print(outputReport, renderEdgeSmokeReport(outputReport), opts);
       if (report.status === "failed" || (opts.requirePromotionReady && !report.promotionReady)) process.exit(1);
     } catch (error) {
       fail(error);
@@ -2325,7 +2327,7 @@ function renderHostedWorkerPreflight(preflight: HostedWorkerPreflight): string {
   ].join("\n");
 }
 
-function renderEdgeSmokeReport(report: EdgeSmokeReport): string {
+function renderEdgeSmokeReport(report: EdgeSmokeReport | RedactedEdgeSmokeReport): string {
   return [
     "protected edge smoke",
     `status: ${report.status}`,

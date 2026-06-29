@@ -238,9 +238,9 @@ aws ecs describe-services \
 ## Sanitized Origin Evidence
 
 Capture origin-binding evidence before and after web scale-up without printing
-the CloudFront custom origin header value. Prefer Terraform outputs, tag-only
-resource inventory, and ALB/security-group describe calls that do not return
-custom origin headers:
+the CloudFront custom origin header value or resource identifiers. Private
+operators may read identifiers into shell variables, but shared evidence should
+be booleans, counts, status codes, and non-secret protocol choices only:
 
 ```bash
 CLOUDFRONT_DISTRIBUTION_ID="$(terraform -chdir="$TF_DIR" output -raw cloudfront_distribution_id)"
@@ -252,32 +252,32 @@ ORIGIN_HOST="$(terraform -chdir="$TF_DIR" output -raw cloudfront_origin_domain_n
 ORIGIN_HEADER_ENABLED="$(terraform -chdir="$TF_DIR" output -raw cloudfront_origin_verify_header_enabled)"
 ORIGIN_HEADER_NAME="$(terraform -chdir="$TF_DIR" output -raw cloudfront_origin_verify_header_name)"
 
-printf '{"cloudfrontDistributionId":"%s","albDnsName":"%s","originPolicy":"%s","originHost":"%s","originHeaderEnabled":"%s","originHeaderName":"%s"}\n' \
-  "$CLOUDFRONT_DISTRIBUTION_ID" \
-  "$ALB_DNS_NAME" \
+printf '{"cloudfrontDistributionConfigured":%s,"albDnsConfigured":%s,"originPolicy":"%s","originHostConfigured":%s,"originHeaderEnabled":%s,"originHeaderNameConfigured":%s}\n' \
+  "$([ -n "$CLOUDFRONT_DISTRIBUTION_ID" ] && echo true || echo false)" \
+  "$([ -n "$ALB_DNS_NAME" ] && echo true || echo false)" \
   "$ORIGIN_POLICY" \
-  "$ORIGIN_HOST" \
+  "$([ -n "$ORIGIN_HOST" ] && echo true || echo false)" \
   "$ORIGIN_HEADER_ENABLED" \
-  "$ORIGIN_HEADER_NAME"
+  "$([ -n "$ORIGIN_HEADER_NAME" ] && echo true || echo false)"
 
 aws resourcegroupstaggingapi get-resources \
   --profile "$AWS_PROFILE_NAME" \
   --region "$AWS_REGION" \
   --resource-type-filters cloudfront:distribution \
   --tag-filters Key=Service,Values=open-uptime Key=Environment,Values=prod \
-  --query 'ResourceTagMappingList[].{arn:ResourceARN,tags:Tags[?Key==`Service` || Key==`Environment` || Key==`Stage` || Key==`Project`]}'
+  --query '{cloudfrontTaggedResourceCount:length(ResourceTagMappingList)}'
 
 aws elbv2 describe-listeners \
   --profile "$AWS_PROFILE_NAME" \
   --region "$AWS_REGION" \
   --listener-arns "$(echo "$ALB_LISTENERS_JSON" | jq -r '.http_cloudfront // .https')" \
-  --query 'Listeners[].{arn:ListenerArn,port:Port,protocol:Protocol,defaultActions:DefaultActions[].Type}'
+  --query 'Listeners[].{port:Port,protocol:Protocol,defaultActions:DefaultActions[].Type}'
 
 aws ec2 describe-security-groups \
   --profile "$AWS_PROFILE_NAME" \
   --region "$AWS_REGION" \
   --group-ids "$ALB_SECURITY_GROUP_ID" \
-  --query 'SecurityGroups[].{groupId:GroupId,ingress:IpPermissions[].{protocol:IpProtocol,from:FromPort,to:ToPort,prefixLists:PrefixListIds[].PrefixListId}}'
+  --query 'SecurityGroups[].{ingressRuleCount:length(IpPermissions),prefixListIngressRuleCount:length(IpPermissions[?length(PrefixListIds) > `0`])}'
 ```
 
 Do not run `aws cloudfront list-distributions`,
@@ -286,8 +286,8 @@ unfiltered `aws elbv2 describe-rules` into shared logs or public evidence; those
 APIs can return the private origin verification header value. Treat any private
 CloudFront/ELB read that can reveal custom headers as secret-bearing. If a
 reviewer must inspect the rule condition directly, do it in a private shell and
-record only sanitized facts: header enabled, header name, listener protocol,
-rule priority, and that requests without the header return `403`.
+record only sanitized facts: header configured, listener protocol, rule count or
+priority presence, and that requests without the header return `403`.
 
 ## Smoke Checks
 
@@ -314,6 +314,11 @@ uptime cloud edge-smoke \
   --json
 ```
 
+The default JSON/text output is the shareable evidence form: it redacts the edge
+and direct-origin URLs as well as token values. `--raw-evidence-urls` is only for
+private operator terminals and must not be pasted into shared status, todos,
+project events, or public docs.
+
 Expected results:
 
 - `/health` returns `200` and no monitor data.
@@ -330,9 +335,11 @@ Expected results:
   only through `?workspaceId=` is not enough.
 - Hosted report delivery, probe APIs, import apply, and inline checks remain
   fail-closed until their cloud job/channel/audit systems are implemented.
-- Direct ALB origin access is denied unless it is the approved CloudFront origin
-  path. For the current private-network ALB model, an HTTP timeout/refusal from
-  outside CloudFront ranges is acceptable only when
+- Direct ALB origin access returns the fixed `403` origin-verification denial
+  unless it is the approved CloudFront origin path. Other 4xx/5xx responses are
+  not sufficient promotion evidence because they can hide downstream failure. For
+  the current private-network ALB model, an HTTP timeout/refusal from outside
+  CloudFront ranges is acceptable only when
   `--allow-direct-origin-unreachable` is explicitly present in the private
   evidence run; by default, unreachable direct-origin checks fail the smoke.
 
@@ -747,8 +754,8 @@ A deployment record is not complete until it contains:
 - source commit, package version, published package integrity, and image digest;
 - Terraform plan summary and zero-count desired-count proof;
 - secret metadata proof showing `AWSCURRENT` without secret values;
-- `uptime cloud edge-smoke --json` results with `promotionReady=true`, plus
-  direct-origin denial evidence;
+- redacted `uptime cloud edge-smoke --json` results with `promotionReady=true`,
+  plus fixed-403 or explicitly unreachable direct-origin denial evidence;
 - ECS service/task definition evidence;
 - CloudWatch log tail and alarm-state readback;
 - backup vault, protected-resource, recovery-point, and restore-drill evidence;

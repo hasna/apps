@@ -46,7 +46,7 @@ export {
   WORKER_RUNTIME_METRIC_DIMENSIONS,
   WORKER_RUNTIME_METRIC_NAMESPACE,
 } from "./worker-metrics.js";
-export { runEdgeSmoke } from "./edge-smoke.js";
+export { redactEdgeSmokeReportForEvidence, runEdgeSmoke } from "./edge-smoke.js";
 export { uptimeHome, uptimeDbPath, uptimeHostedFallbackDbPath, ensureUptimeHome } from "./paths.js";
 export type {
   UptimeBackup,
@@ -230,6 +230,7 @@ export type {
   EdgeSmokeCheck,
   EdgeSmokeOptions,
   EdgeSmokeReport,
+  RedactedEdgeSmokeReport,
 } from "./edge-smoke.js";
 export type {
   BuildUptimeReportOptions,

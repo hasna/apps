@@ -200,11 +200,11 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
   const protectedAccessUrl = protectedAccessMode === "cloudfront_default_domain" ? "https://<cloudfront-domain>" : `https://${hostname}`;
   const cluster = `${prefix}-${stage}`;
   const secrets = {
-    appEnv: clean(options.appEnvSecretName, `open-uptime/${stage}/app/env`),
-    hostedToken: clean(options.hostedTokenSecretName, `open-uptime/${stage}/hosted-token`),
-    publicProbe: clean(options.publicProbeSecretName, `open-uptime/${stage}/probe/public`),
-    privateProbe: clean(options.privateProbeSecretName, `open-uptime/${stage}/probe/private`),
-    reporting: clean(options.reportingSecretName, `open-uptime/${stage}/reporting`),
+    appEnv: secretRefClass(options.appEnvSecretName, "<app-env-secret-ref>"),
+    hostedToken: secretRefClass(options.hostedTokenSecretName, "<hosted-token-secret-ref>"),
+    publicProbe: secretRefClass(options.publicProbeSecretName, "<public-probe-secret-ref>"),
+    privateProbe: secretRefClass(options.privateProbeSecretName, "<private-probe-secret-ref>"),
+    reporting: secretRefClass(options.reportingSecretName, "<reporting-channel-catalog-secret-ref>"),
   };
   const services: AwsServicePlan[] = [
     servicePlan(prefix, stage, "web", 1, image, workspaceId, secrets, {
@@ -531,6 +531,10 @@ function servicePlan(
 function clean(value: string | undefined, fallback: string): string {
   const normalized = value?.trim();
   return normalized || fallback;
+}
+
+function secretRefClass(value: string | undefined, fallback: string): string {
+  return value?.trim() ? "<custom-secret-ref>" : fallback;
 }
 
 function shellEscape(value: string): string {

@@ -43,7 +43,7 @@ evidence:
 
 For the 2026-06-29 hosted deployment track, published public package versions
 remain release and zero-count deployment evidence only after the matching
-private deployment metadata records that result. Version `0.1.57` is the next
+private deployment metadata records that result. Version `0.1.58` is the next
 worker-runtime metric producer target until publish and zero-count evidence are
 recorded. Hosted reporter, protected web/API scale-out, and cloud-primary
 promotion remain blocked until the hard hosted gate below is satisfied.

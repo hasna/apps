@@ -144,7 +144,9 @@ hosted report/probe/import/check routes, optional write-token create/delete
 cleanup, and direct-origin denial without printing token values. A zero-count
 deployment is only provisioned infrastructure; do not describe it as live
 protected web access until this smoke passes against a running web task with
-`promotionReady=true`.
+`promotionReady=true`. JSON and text output redact edge and direct-origin URLs
+by default; use `--raw-evidence-urls` only in a private operator terminal and do
+not paste that output into shared evidence.
 `Dockerfile.package` is used by the Terraform CodeBuild image builder to build
 the published npm package into ECR from inside AWS.
 

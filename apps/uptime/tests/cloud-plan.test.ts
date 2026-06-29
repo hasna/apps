@@ -67,9 +67,9 @@ test("buildAwsDeploymentPlan generates a dry-run AWS plan with generic package d
   expect(plan.resources.services.find((service) => service.role === "web")?.targetDesiredCount).toBe(1);
   expect(plan.resources.services.filter((service) => service.role !== "web").every((service) => service.targetDesiredCount === 0)).toBe(true);
   expect(plan.resources.services.find((service) => service.role === "web")?.secrets.HASNA_UPTIME_HOSTED_TOKEN)
-    .toBe("open-uptime/prod/hosted-token");
+    .toBe("<hosted-token-secret-ref>");
   expect(plan.resources.services.find((service) => service.role === "reporter")?.secrets.HASNA_UPTIME_REPORT_CHANNEL_REFS_JSON)
-    .toBe("open-uptime/prod/reporting");
+    .toBe("<reporting-channel-catalog-secret-ref>");
   expect(plan.resources.services.find((service) => service.role === "reporter")?.secrets.REPORTING_CONFIG)
     .toBeUndefined();
   expect(plan.resources.services.find((service) => service.role === "web")?.environment.HASNA_UPTIME_HOSTED_SQLITE_DB)
@@ -113,6 +113,7 @@ test("buildAwsDeploymentPlan generates a dry-run AWS plan with generic package d
   expect(plan.requiredEvidence.length).toBeGreaterThan(3);
   expect(serialized).not.toContain("AWS_SECRET_ACCESS_KEY");
   expect(serialized).not.toContain("BEGIN PRIVATE KEY");
+  expect(serialized).not.toContain("open-uptime/prod/");
   expect(serialized).not.toContain("aws ecr create-repository");
   expect(serialized).not.toContain("aws s3api create-bucket");
   expect(serialized).not.toContain("aws ecs create-cluster");

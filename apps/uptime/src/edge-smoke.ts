@@ -43,6 +43,17 @@ export interface EdgeSmokeReport {
   nextActions: string[];
 }
 
+export interface RedactedEdgeSmokeReport extends Omit<EdgeSmokeReport, "checks" | "edgeUrl" | "directOriginUrl" | "nextActions" | "workspaceId" | "smokeId"> {
+  edgeUrl: "[redacted-edge-url]";
+  directOriginUrl: "[redacted-direct-origin-url]" | null;
+  workspaceId: "[redacted-workspace-id]" | null;
+  smokeId: "[redacted-smoke-id]";
+  checks: EdgeSmokeCheck[];
+  nextActions: string[];
+  redacted: true;
+  redactionStatus: "redacted";
+}
+
 export async function runEdgeSmoke(options: EdgeSmokeOptions): Promise<EdgeSmokeReport> {
   const startedAt = new Date().toISOString();
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -118,6 +129,23 @@ export async function runEdgeSmoke(options: EdgeSmokeOptions): Promise<EdgeSmoke
     finishedAt,
     checks,
     nextActions: edgeSmokeNextActions(checks, promotionReady),
+  };
+}
+
+export function redactEdgeSmokeReportForEvidence(report: EdgeSmokeReport): RedactedEdgeSmokeReport {
+  return {
+    ...report,
+    edgeUrl: "[redacted-edge-url]",
+    directOriginUrl: report.directOriginUrl ? "[redacted-direct-origin-url]" : null,
+    workspaceId: report.workspaceId ? "[redacted-workspace-id]" : null,
+    smokeId: "[redacted-smoke-id]",
+    checks: report.checks.map((check) => ({
+      ...check,
+      detail: redactEdgeSmokeEvidenceText(check.detail, report),
+    })),
+    nextActions: report.nextActions.map((action) => redactEdgeSmokeEvidenceText(action, report)),
+    redacted: true,
+    redactionStatus: "redacted",
   };
 }
 
@@ -672,11 +700,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function normalizeDirectOriginDeniedStatuses(statuses?: number[]): number[] {
   const values = statuses?.length ? statuses : [403];
   for (const status of values) {
-    if (!Number.isInteger(status) || status < 400 || status > 599) {
-      throw new Error("direct-origin allowed statuses must be HTTP 4xx/5xx denial statuses");
+    if (status !== 403) {
+      throw new Error("direct-origin denial evidence requires the fixed HTTP 403 status; use --allow-direct-origin-unreachable only for explicit private-network unreachable evidence paired with origin-binding readback");
     }
   }
   return [...new Set(values)];
+}
+
+function redactEdgeSmokeEvidenceText(value: string, report: EdgeSmokeReport): string {
+  let redacted = value;
+  redacted = redacted.split(report.edgeUrl).join("[redacted-edge-url]");
+  if (report.directOriginUrl) redacted = redacted.split(report.directOriginUrl).join("[redacted-direct-origin-url]");
+  if (report.workspaceId) redacted = redacted.split(report.workspaceId).join("[redacted-workspace-id]");
+  redacted = redacted.split(report.smokeId).join("[redacted-smoke-id]");
+  return redacted.replace(/https?:\/\/[^\s"'<>]+/gi, "[redacted-url]");
 }
 
 function authHeaders(token: string, workspaceId: string | null): Record<string, string> {

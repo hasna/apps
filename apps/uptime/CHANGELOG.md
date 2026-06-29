@@ -6,6 +6,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.58] - 2026-06-30
+
+### Changed
+
+- Redacted `cloud edge-smoke` evidence output now hides edge URL,
+  direct-origin URL, workspace id, and smoke id by default. Raw edge evidence
+  URLs are available only with `--raw-evidence-urls` for private operator
+  terminals.
+- Tightened direct-origin denial evidence to the fixed HTTP `403` origin
+  verification denial, with explicit unreachable-origin evidence still allowed
+  only for private-network models.
+- Changed generic AWS dry-run plan output and runbook evidence guidance to use
+  secret/resource classes, booleans, and counts instead of concrete secret refs
+  or resource identifiers in shared evidence.
+
 ## [0.1.57] - 2026-06-30
 
 ### Added

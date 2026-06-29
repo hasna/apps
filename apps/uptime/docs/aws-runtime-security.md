@@ -268,15 +268,18 @@ Project stores:
 
 Secrets are referenced, not copied.
 
-Expected secret refs:
+Expected secret-ref classes:
 
-- `open-uptime/prod/rds`
-- `open-uptime/prod/app/env`
-- `open-uptime/prod/probe/public`
-- `open-uptime/prod/probe/private`
-- `open-uptime/prod/reporting`
+- app environment descriptor;
+- hosted token descriptor;
+- public probe descriptor;
+- private probe descriptor;
+- reporting channel catalog;
 - service-owned Mailery, Telephony, Logs, Projects, Todos, Knowledge, Notes,
   Mementos, Servers, Domains, and Deployment refs as needed.
+
+Public/shared evidence should name these classes only. Exact AWS Secrets Manager
+or SSM paths belong in private Terraform state and private deployment metadata.
 
 ECS task definitions must use Secrets Manager or SSM `valueFrom` entries for
 secret-bearing values. They must not inline plaintext secret values in

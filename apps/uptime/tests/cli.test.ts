@@ -1200,9 +1200,9 @@ test("CLI cloud edge-smoke verifies hosted auth, fail-closed routes, mutation cl
       kind: "open-uptime.edge-smoke",
       status: "failed",
       promotionReady: false,
-      workspaceId: "ws_cli",
+      workspaceId: "[redacted-workspace-id]",
       mutationRequested: true,
-      smokeId: "cli-test",
+      smokeId: "[redacted-smoke-id]",
     });
     expect(Object.fromEntries(report.checks.map((check: { name: string; ok: boolean }) => [check.name, check.ok]))).toMatchObject({
       health: true,
@@ -1224,7 +1224,15 @@ test("CLI cloud edge-smoke verifies hosted auth, fail-closed routes, mutation cl
       "write-mutation-roundtrip": true,
       "direct-origin-denied": true,
     });
+    expect(report.redacted).toBe(true);
+    expect(report.redactionStatus).toBe("redacted");
+    expect(report.edgeUrl).toBe("[redacted-edge-url]");
+    expect(report.directOriginUrl).toBe("[redacted-direct-origin-url]");
     expect(report.checks.find((check: { name: string }) => check.name === "readiness").promotionOk).toBe(false);
+    expect(stdout).not.toContain(edgeUrl);
+    expect(stdout).not.toContain(directOriginUrl);
+    expect(stdout).not.toContain("ws_cli");
+    expect(stdout).not.toContain("cli-test");
     expect(stdout).not.toContain("read-secret");
     expect(stdout).not.toContain("write-secret");
     expect(stdout).not.toContain("probe-secret");
@@ -1327,7 +1335,7 @@ test("CLI cloud edge-smoke rejects successful direct-origin allowed statuses", (
     const body = JSON.parse(new TextDecoder().decode(result.stdout));
 
     expect(result.exitCode).toBe(1);
-    expect(body.error).toContain("4xx/5xx");
+    expect(body.error).toContain("fixed HTTP 403");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1385,9 +1393,69 @@ test("CLI cloud edge-smoke requires explicit opt-in for unreachable direct origi
     expect(allowed.exitCode).toBe(1);
     expect(allowedReport.directOriginUnreachableAllowed).toBe(true);
     expect(allowedReport.checks.find((check: { name: string }) => check.name === "direct-origin-denied").ok).toBe(true);
+    expect(JSON.stringify(allowedReport)).not.toContain(edgeUrl);
+    expect(JSON.stringify(allowedReport)).not.toContain(directOriginUrl);
+    expect(JSON.stringify(allowedReport)).not.toContain("ws_cli");
   } finally {
     runtime?.server.stop(true);
     runtime?.service.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI cloud edge-smoke prints raw URLs only with explicit private-terminal opt-in", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  let runtime: ReturnType<typeof serveUptime> | undefined;
+  let directOrigin: ReturnType<typeof Bun.serve> | undefined;
+  try {
+    const dbPath = join(dir, "uptime.db");
+    runtime = serveUptime({
+      mode: "hosted",
+      hostedSqliteDbPath: dbPath,
+      allowHostedLocalStore: true,
+      port: 0,
+      hostedTokens: [
+        { token: "read-secret", scopes: ["uptime:read"], workspaceId: "ws_cli", actor: "cli-read" },
+        { token: "write-secret", scopes: ["uptime:write"], workspaceId: "ws_cli", actor: "cli-write" },
+        { token: "probe-secret", scopes: ["uptime:probe"], workspaceId: "ws_cli", actor: "cli-probe" },
+        { token: "report-secret", scopes: ["uptime:report"], workspaceId: "ws_cli", actor: "cli-report" },
+      ],
+    });
+    directOrigin = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => new Response("denied", { status: 403 }),
+    });
+    const edgeUrl = `http://${runtime.server.hostname}:${runtime.server.port}`;
+    const directOriginUrl = `http://${directOrigin.hostname}:${directOrigin.port}`;
+    const result = await runCliAsync([
+      "cloud",
+      "edge-smoke",
+      "--url",
+      edgeUrl,
+      "--workspace-id",
+      "ws_cli",
+      "--direct-origin-url",
+      directOriginUrl,
+      "--raw-evidence-urls",
+      "--json",
+    ], dbPath, {
+      HASNA_UPTIME_EDGE_READ_TOKEN: "read-secret",
+      HASNA_UPTIME_EDGE_WRITE_TOKEN: "write-secret",
+      HASNA_UPTIME_EDGE_PROBE_TOKEN: "probe-secret",
+      HASNA_UPTIME_EDGE_REPORT_TOKEN: "report-secret",
+    });
+    const body = JSON.parse(new TextDecoder().decode(result.stdout));
+
+    expect(result.exitCode).toBe(1);
+    expect(body.redacted).toBeUndefined();
+    expect(body.edgeUrl).toBe(edgeUrl);
+    expect(body.directOriginUrl).toBe(directOriginUrl);
+    expect(new TextDecoder().decode(result.stdout)).not.toContain("read-secret");
+  } finally {
+    runtime?.server.stop(true);
+    runtime?.service.close();
+    directOrigin?.stop(true);
     rmSync(dir, { recursive: true, force: true });
   }
 });
