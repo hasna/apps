@@ -1732,7 +1732,7 @@ describe("loops CLI", () => {
     expect(first.status).toBe(0);
     const firstValue = JSON.parse(first.stdout);
     expect(firstValue.deduped).toBe(false);
-    expect(firstValue.idempotencyKey).toBe("todos-task:task-created-0001:task.created");
+    expect(firstValue.idempotencyKey).toBe("todos-task:task-created-0001");
     expect(firstValue.workflow.steps).toHaveLength(2);
     expect(firstValue.loop.name).toContain("event:todos-task:task-cre:");
     expect(firstValue.loop.name).not.toContain("evt-task");
@@ -1919,6 +1919,26 @@ describe("loops CLI", () => {
     expect(loop.target.args).toEqual(expect.arrayContaining(["events", "drain", "todos-task", "--task-list", "oss", "--max-dispatch", "2"]));
   });
 
+  test("routes schedule rejects drain dry-run instead of storing a surprising loop", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-routes-schedule-dry-run-"));
+
+    const scheduled = runCli(dataDir, [
+      "routes",
+      "schedule",
+      "todos-task",
+      "route-drain-dry-run",
+      "--every",
+      "5m",
+      "--dry-run",
+    ]);
+
+    expect(scheduled.status).not.toBe(0);
+    expect(scheduled.stderr).toContain("unknown option '--dry-run'");
+
+    const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loops).toHaveLength(0);
+  });
+
   test("routes create replaces a stale persisted unsafe workflow with the same generated name", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-routes-unsafe-existing-"));
     const event = {
@@ -1933,7 +1953,7 @@ describe("loops CLI", () => {
       },
       timestamp: new Date().toISOString(),
     };
-    const suffix = createHash("sha256").update("todos-task:task-routes-unsafe-existing-0001:task.created").digest("hex").slice(0, 12);
+    const suffix = createHash("sha256").update("todos-task:task-routes-unsafe-existing-0001").digest("hex").slice(0, 12);
     const workflowName = `event:todos-task:task-rou:${suffix}:workflow`;
     let staleWorkflowId = "";
     const store = new Store(join(dataDir, "loops.db"));
@@ -2860,7 +2880,41 @@ describe("loops CLI", () => {
     expect(replay.status).toBe(0);
     const value = JSON.parse(replay.stdout);
     expect(value.deduped).toBe(true);
-    expect(value.idempotencyKey).toBe("todos-task:task-created-cross-prefix:task.created");
+    expect(value.idempotencyKey).toBe("todos-task:task-created-cross-prefix");
+    expect(value.loop.id).toBe(created.loop.id);
+
+    const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loops).toHaveLength(1);
+  });
+
+  test("todos task event handler dedupes task updates against the same task route", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-task-update-dedupe-"));
+    const event = {
+      id: "evt-task-created-update-dedupe-a",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-created-update-dedupe",
+        title: "Only one worker per task",
+        working_dir: "/tmp/open-todos",
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const first = runCli(dataDir, ["--json", "events", "handle", "todos-task"], JSON.stringify(event));
+    expect(first.status).toBe(0);
+    const created = JSON.parse(first.stdout);
+
+    const update = runCli(
+      dataDir,
+      ["--json", "events", "handle", "todos-task"],
+      JSON.stringify({ ...event, id: "evt-task-created-update-dedupe-b", type: "task.updated" }),
+    );
+    expect(update.status).toBe(0);
+    const value = JSON.parse(update.stdout);
+    expect(value.deduped).toBe(true);
+    expect(value.idempotencyKey).toBe("todos-task:task-created-update-dedupe");
     expect(value.loop.id).toBe(created.loop.id);
 
     const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
@@ -3089,6 +3143,44 @@ describe("loops CLI", () => {
     expect(secondValue.dedupedBy).toBe("work-item");
     expect(secondValue.workItem.id).toBe(firstValue.workItem.id);
     expect(secondValue.loop.id).toBe(firstValue.loop.id);
+  });
+
+  test("generic event dry-run rejects unsupported provider add dirs", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-generic-event-invalid-adddirs-"));
+    const event = {
+      id: "evt-generic-invalid-adddirs",
+      type: "knowledge.record.created",
+      source: "knowledge",
+      subject: "record-invalid-adddirs",
+      data: {
+        id: "record-invalid-adddirs",
+        project_path: "/tmp/open-knowledge",
+      },
+      time: new Date().toISOString(),
+      schemaVersion: "1.0",
+      metadata: {},
+    };
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "handle",
+        "generic",
+        "--provider",
+        "cursor",
+        "--add-dir",
+        "/tmp/knowledge-store",
+        "--dry-run",
+      ],
+      JSON.stringify(event),
+    );
+
+    expect(result.status).toBe(1);
+    const value = JSON.parse(result.stdout);
+    expect(value.created).toBe(false);
+    expect(value.validation.error).toContain("addDirs is currently supported only for provider codewith or codex");
   });
 
   test("generic event handler throttles through admission work items", () => {

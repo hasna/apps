@@ -73,7 +73,8 @@ describe("agent adapters", () => {
       expect(args).toContain("--ephemeral");
       expect(args).toContain("--ignore-rules");
       expect(args).toContain("--skip-git-repo-check");
-      expect(args).not.toContain("--ask-for-approval");
+      expect(args).toContain("--ask-for-approval");
+      expect(args[args.indexOf("--ask-for-approval") + 1]).toBe("never");
       expect(args).toContain("stdin:say ok");
       expect(args).not.toContain("say ok");
     } finally {
@@ -357,6 +358,64 @@ describe("agent adapters", () => {
       const claim = store.claimRun(loop, new Date().toISOString(), "test");
       expect(claim).toBeDefined();
       await expect(executeLoop(loop, claim!.run)).rejects.toThrow("claude.sandbox is not supported");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("rejects SDK-created provider options that adapters do not support", async () => {
+    const store = new Store(":memory:");
+    try {
+      const cursorLoop = store.createLoop({
+        name: "bad-cursor-variant-agent",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "cursor",
+          prompt: "say ok",
+          variant: "max",
+          configIsolation: "safe",
+        },
+      });
+      const cursorClaim = store.claimRun(cursorLoop, new Date().toISOString(), "test");
+      expect(cursorClaim).toBeDefined();
+      await expect(executeLoop(cursorLoop, cursorClaim!.run)).rejects.toThrow("cursor.variant");
+
+      const codexLoop = store.createLoop({
+        name: "bad-codex-agent",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "codex",
+          prompt: "say ok",
+          agent: "reviewer",
+          configIsolation: "safe",
+        },
+      });
+      const codexClaim = store.claimRun(codexLoop, new Date().toISOString(), "test");
+      expect(codexClaim).toBeDefined();
+      await expect(executeLoop(codexLoop, codexClaim!.run)).rejects.toThrow("codex.agent");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("rejects invalid SDK-created config isolation", async () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "bad-config-isolation-agent",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "codewith",
+          prompt: "say ok",
+          configIsolation: "sfae" as "safe",
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      await expect(executeLoop(loop, claim!.run)).rejects.toThrow("configIsolation");
     } finally {
       store.close();
     }

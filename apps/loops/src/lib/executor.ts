@@ -86,6 +86,7 @@ const AUTH_ENV_KEYS = [
   "CODEWITH_HOME",
   "CODEX_HOME",
   "CURSOR_CONFIG_DIR",
+  "CURSOR_API_KEY",
   "OPENCODE_CONFIG_DIR",
   "AICOPILOT_CONFIG_DIR",
   "ANTHROPIC_API_KEY",
@@ -213,6 +214,10 @@ function assertSupportedAgentOptions(target: AgentTarget): void {
   assertStringOption(target.model, `${target.provider}.model`);
   assertStringOption(target.agent, `${target.provider}.agent`);
   assertStringOption(target.authProfile, `${target.provider}.authProfile`);
+  assertStringOption(target.configIsolation, `${target.provider}.configIsolation`);
+  if (target.configIsolation !== undefined && target.configIsolation !== "safe" && target.configIsolation !== "none") {
+    throw new Error(`${target.provider}.configIsolation must be safe or none`);
+  }
   if (target.authProfile !== undefined && target.provider !== "codewith") {
     throw new Error(`${target.provider}.authProfile is supported only for codewith`);
   }
@@ -225,6 +230,7 @@ function assertSupportedAgentOptions(target: AgentTarget): void {
   if (target.sandbox && !["read-only", "workspace-write", "danger-full-access", "enabled", "disabled"].includes(target.sandbox)) {
     throw new Error(`${target.provider}.sandbox is not supported: ${target.sandbox}`);
   }
+  if (target.provider === "codex" && target.agent !== undefined) throw new Error("codex.agent is not supported");
   if (["codewith", "codex"].includes(target.provider)) {
     if (target.permissionMode && !["default", "bypass"].includes(target.permissionMode)) {
       throw new Error(`${target.provider}.permissionMode supports only default or bypass`);
@@ -237,6 +243,7 @@ function assertSupportedAgentOptions(target: AgentTarget): void {
     return;
   }
   if (target.provider === "cursor") {
+    if (target.variant !== undefined) throw new Error("cursor.variant is not supported");
     if (target.permissionMode === "auto") throw new Error("cursor.permissionMode auto is not supported; use provider-specific extraArgs for Cursor auto-review");
     if (target.sandbox !== undefined && target.sandbox !== "enabled" && target.sandbox !== "disabled") {
       throw new Error("cursor.sandbox must be enabled or disabled");
@@ -279,10 +286,8 @@ function agentArgs(target: AgentTarget): string[] {
           "set -eu",
           "if command -v agent >/dev/null 2>&1; then",
           "  exec agent \"$@\"",
-          "elif command -v cursor >/dev/null 2>&1; then",
-          "  exec cursor agent \"$@\"",
           "else",
-          "  echo 'Executable not found in PATH: cursor agent or agent' >&2",
+          "  echo 'Executable not found in PATH: agent' >&2",
           "  exit 127",
           "fi",
         ].join("\n"),
@@ -322,7 +327,7 @@ function agentArgs(target: AgentTarget): string[] {
       return args;
     case "codex":
       if (target.variant) args.push("-c", `model_reasoning_effort=${configStringValue(target.variant)}`);
-      args.push("exec", "--json", "--ephemeral", "--sandbox", codewithLikeSandbox(target), "--skip-git-repo-check");
+      args.push("--ask-for-approval", "never", "exec", "--json", "--ephemeral", "--sandbox", codewithLikeSandbox(target), "--skip-git-repo-check");
       if (isolation === "safe") args.push("--ignore-rules");
       if (target.cwd) args.push("--cd", target.cwd);
       for (const dir of target.addDirs ?? []) args.push("--add-dir", dir);
@@ -379,7 +384,7 @@ function commandSpec(target: ExecutableTarget): CommandSpec {
     nativeAuthProfile: agentTarget.authProfile
       ? { provider: agentTarget.provider, profile: agentTarget.authProfile }
       : undefined,
-    preflightAnyOf: agentTarget.provider === "cursor" ? ["cursor", "agent"] : undefined,
+    preflightAnyOf: agentTarget.provider === "cursor" ? ["agent"] : undefined,
     stdin: agentTarget.prompt,
     allowlist: agentTarget.allowlist,
   };

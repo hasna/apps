@@ -131,7 +131,7 @@ describe("executeLoop", () => {
     }
   });
 
-  test("cursor preflight requires cursor or agent binary, not only sh", () => {
+  test("cursor preflight requires standalone agent binary, not only sh", () => {
     const home = mkdtempSync(join(tmpdir(), "loops-cursor-preflight-"));
     const store = new Store(":memory:");
     try {
@@ -147,6 +147,34 @@ describe("executeLoop", () => {
       });
       expect(() =>
         preflightTarget(loop.target as any, {}, { env: { PATH: "/usr/bin:/bin", HOME: home } }),
+      ).toThrow("none of required executables found");
+    } finally {
+      store.close();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("cursor preflight does not accept cursor wrapper without standalone agent", () => {
+    const home = mkdtempSync(join(tmpdir(), "loops-cursor-preflight-wrapper-"));
+    const binDir = join(home, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fakeCursor = join(binDir, "cursor");
+    writeFileSync(fakeCursor, "#!/usr/bin/env bash\nexit 0\n");
+    chmodSync(fakeCursor, 0o755);
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "cursor-preflight-wrapper",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "cursor",
+          prompt: "say ok",
+          configIsolation: "safe",
+        },
+      });
+      expect(() =>
+        preflightTarget(loop.target as any, {}, { env: { PATH: `${binDir}:/usr/bin:/bin`, HOME: home } }),
       ).toThrow("none of required executables found");
     } finally {
       store.close();

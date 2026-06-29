@@ -5,7 +5,7 @@ OpenLoops is a local CLI and daemon for persistent loops and workflows: schedule
 It supports deterministic command loops, JSON-defined workflows, and guarded CLI adapters for headless coding agents:
 
 - `claude`
-- `cursor agent` or `agent`
+- `agent` (Cursor Agent CLI)
 - `codewith exec`
 - `aicopilot run`
 - `opencode run`
@@ -578,8 +578,8 @@ The adapters intentionally use provider command surfaces instead of pretending e
 - Claude uses `claude -p --output-format json` and safe-mode/local setting sources by default.
 - Codewith uses `codewith --ask-for-approval never exec --json --ephemeral --skip-git-repo-check`, with `--add-dir` for explicit extra writable directories.
 - AI Copilot and OpenCode use `run --format json --pure`.
-- Cursor is CLI-first for now via standalone `agent -p` when available, with `cursor agent -p` as a compatibility fallback; treat output as less stable until a stronger public SDK contract is selected.
-- Codex uses `codex exec --json --ephemeral --skip-git-repo-check`, with `--add-dir` for explicit extra writable directories where supported.
+- Cursor is CLI-first for now via the standalone `agent -p` binary. OpenLoops no longer falls back to `cursor agent`; install the standalone Cursor Agent CLI so preflight and scheduled runs use the same executable.
+- Codex uses `codex --ask-for-approval never exec --json --ephemeral --skip-git-repo-check`, with `--add-dir` for explicit extra writable directories where supported.
 - Agent prompts are sent through child stdin instead of argv so prompt bodies do not appear in process listings.
 - When `--account` or a step `account` is set, OpenLoops resolves `accounts env <profile> --tool <tool>` before spawning the target, strips inherited tool home/API-key variables, and applies the selected profile only to that process. Missing account profiles fail before the provider binary receives the prompt.
 - `--auth-profile` and step `authProfile` are provider-native auth selectors. They currently apply to Codewith and are passed to Codewith as `--auth-profile <name>` before `exec`; they do not call OpenAccounts.

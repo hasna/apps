@@ -120,6 +120,112 @@ describe("workflow goal spec validation", () => {
     ).toThrow("variant");
   });
 
+  test("rejects malformed step-level workflow fields", () => {
+    expect(() =>
+      workflowBodyFromJson({
+        name: "bad-dependencies",
+        steps: [
+          {
+            id: "worker",
+            dependsOn: "prepare",
+            target: { type: "command", command: "true" },
+          },
+        ],
+      }),
+    ).toThrow("dependsOn");
+
+    expect(() =>
+      workflowBodyFromJson({
+        name: "bad-continue-on-failure",
+        steps: [
+          {
+            id: "worker",
+            continueOnFailure: "false",
+            target: { type: "command", command: "true" },
+          },
+        ],
+      }),
+    ).toThrow("continueOnFailure");
+
+    expect(() =>
+      workflowBodyFromJson({
+        name: "bad-step-timeout",
+        steps: [
+          {
+            id: "worker",
+            timeoutMs: 0,
+            target: { type: "command", command: "true" },
+          },
+        ],
+      }),
+    ).toThrow("timeoutMs");
+
+    expect(() =>
+      workflowBodyFromJson({
+        name: "bad-step-account",
+        steps: [
+          {
+            id: "worker",
+            account: { tool: "codewith" },
+            target: { type: "command", command: "true" },
+          },
+        ],
+      }),
+    ).toThrow("account.profile");
+  });
+
+  test("rejects invalid agent config isolation", () => {
+    expect(() =>
+      workflowBodyFromJson({
+        name: "bad-config-isolation",
+        steps: [
+          {
+            id: "worker",
+            target: { type: "agent", provider: "codewith", prompt: "do it", configIsolation: "sfae" },
+          },
+        ],
+      }),
+    ).toThrow("configIsolation");
+  });
+
+  test("rejects provider options that would be ignored by adapters", () => {
+    expect(() =>
+      workflowBodyFromJson({
+        name: "bad-cursor-variant",
+        steps: [
+          {
+            id: "worker",
+            target: { type: "agent", provider: "cursor", prompt: "do it", variant: "max" },
+          },
+        ],
+      }),
+    ).toThrow("variant");
+
+    expect(() =>
+      workflowBodyFromJson({
+        name: "bad-codex-agent",
+        steps: [
+          {
+            id: "worker",
+            target: { type: "agent", provider: "codex", prompt: "do it", agent: "reviewer" },
+          },
+        ],
+      }),
+    ).toThrow("agent");
+
+    expect(() =>
+      workflowBodyFromJson({
+        name: "bad-model-type",
+        steps: [
+          {
+            id: "worker",
+            target: { type: "agent", provider: "codewith", prompt: "do it", model: 123 },
+          },
+        ],
+      }),
+    ).toThrow("model");
+  });
+
   test("accepts the transcript feedback workflow fixture", () => {
     const fixture = JSON.parse(
       readFileSync(new URL("../../docs/workflows/transcript-feedback-to-loops.json", import.meta.url), "utf8"),

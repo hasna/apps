@@ -17,6 +17,12 @@ function optionalPositiveInteger(value: unknown, label: string): number | undefi
   return value as number;
 }
 
+function optionalBoolean(value: unknown, label: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") throw new Error(`${label} must be a boolean`);
+  return value;
+}
+
 function optionalStringArray(value: unknown, label: string): string[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
@@ -27,6 +33,17 @@ function optionalStringArray(value: unknown, label: string): string[] | undefine
     })
     .filter(Boolean);
   return values.length ? values : undefined;
+}
+
+function optionalAccountRef(value: unknown, label: string) {
+  if (value === undefined) return undefined;
+  assertObject(value, label);
+  assertString(value.profile, `${label}.profile`);
+  if (value.tool !== undefined) assertString(value.tool, `${label}.tool`);
+  return {
+    profile: value.profile.trim(),
+    tool: typeof value.tool === "string" ? value.tool.trim() : undefined,
+  };
 }
 
 export function normalizeGoalSpec(value: unknown, label = "goal"): GoalSpec | undefined {
@@ -73,7 +90,15 @@ function validateTarget(value: unknown, label: string): ExecutableTarget {
       assertString(value.authProfile, `${label}.authProfile`);
       if (value.provider !== "codewith") throw new Error(`${label}.authProfile is currently supported only for provider codewith`);
     }
+    if (value.configIsolation !== undefined) {
+      assertString(value.configIsolation, `${label}.configIsolation`);
+      if (!["safe", "none"].includes(value.configIsolation)) throw new Error(`${label}.configIsolation must be safe or none`);
+    }
+    if (value.model !== undefined) assertString(value.model, `${label}.model`);
     if (value.variant !== undefined) assertString(value.variant, `${label}.variant`);
+    if (value.agent !== undefined) assertString(value.agent, `${label}.agent`);
+    if (value.provider === "cursor" && value.variant !== undefined) throw new Error(`${label}.variant is not supported for provider cursor`);
+    if (value.provider === "codex" && value.agent !== undefined) throw new Error(`${label}.agent is not supported for provider codex`);
     optionalStringArray(value.addDirs, `${label}.addDirs`);
     if (Array.isArray(value.addDirs) && value.addDirs.length > 0 && !["codewith", "codex"].includes(value.provider)) {
       throw new Error(`${label}.addDirs is currently supported only for provider codewith or codex`);
@@ -154,8 +179,10 @@ export function normalizeCreateWorkflowInput(input: CreateWorkflowInput): Create
       id: step.id,
       goal: normalizeGoalSpec(step.goal, `workflow.steps[${index}].goal`),
       target: validateTarget(step.target, `workflow.steps[${index}].target`),
-      dependsOn: step.dependsOn ?? [],
-      continueOnFailure: step.continueOnFailure ?? false,
+      dependsOn: optionalStringArray(step.dependsOn, `workflow.steps[${index}].dependsOn`) ?? [],
+      continueOnFailure: optionalBoolean(step.continueOnFailure, `workflow.steps[${index}].continueOnFailure`) ?? false,
+      timeoutMs: optionalPositiveInteger(step.timeoutMs, `workflow.steps[${index}].timeoutMs`),
+      account: optionalAccountRef(step.account, `workflow.steps[${index}].account`),
     };
   });
   for (const step of steps) {

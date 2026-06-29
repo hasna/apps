@@ -40,6 +40,10 @@ interface DaemonLeaseFence {
   now?: Date;
 }
 
+const DEFAULT_RECOVERY_BATCH_LIMIT = 100;
+const DEFAULT_RECOVERY_SCAN_MULTIPLIER = 5;
+const LIVE_EXPIRED_RUN_GRACE_MS = 60_000;
+
 interface LoopRow {
   id: string;
   name: string;
@@ -606,6 +610,7 @@ export class Store {
     if (file !== ":memory:") ensurePrivateStorePath(file);
     this.rootDir = file === ":memory:" ? mkdtempSync(join(tmpdir(), "open-loops-store-")) : dirname(file);
     this.db = new Database(file);
+    this.db.exec("PRAGMA foreign_keys = ON;");
     this.db.exec("PRAGMA busy_timeout = 5000;");
     this.db.exec("PRAGMA journal_mode = WAL;");
     if (file !== ":memory:") ensurePrivateStorePath(file);
@@ -669,6 +674,7 @@ export class Store {
       );
       CREATE INDEX IF NOT EXISTS idx_runs_loop ON loop_runs(loop_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_runs_status ON loop_runs(status);
+      CREATE INDEX IF NOT EXISTS idx_runs_status_lease ON loop_runs(status, lease_expires_at);
       CREATE INDEX IF NOT EXISTS idx_runs_scheduled ON loop_runs(scheduled_for);
 
       CREATE TABLE IF NOT EXISTS daemon_lease (
@@ -1040,17 +1046,18 @@ export class Store {
     return rows.map(rowToLoop);
   }
 
-  dueLoops(now: Date): Loop[] {
+  dueLoops(now: Date, limit = 500): Loop[] {
     const rows = this.db
-      .query<LoopRow, [string]>(
+      .query<LoopRow, [string, number]>(
         `SELECT * FROM loops
          WHERE status = 'active'
            AND archived_at IS NULL
            AND next_run_at IS NOT NULL
            AND next_run_at <= ?
-         ORDER BY next_run_at ASC`,
+         ORDER BY next_run_at ASC
+         LIMIT ?`,
       )
-      .all(now.toISOString());
+      .all(now.toISOString(), limit);
     return rows.map(rowToLoop);
   }
 
@@ -1059,32 +1066,44 @@ export class Store {
     patch: Partial<Pick<Loop, "status" | "nextRunAt" | "retryScheduledFor" | "expiresAt">>,
     opts: DaemonLeaseFence = {},
   ): Loop {
-    const current = this.getLoop(id);
-    if (!current) throw new Error(`loop not found: ${id}`);
     const updated = (opts.now ?? new Date()).toISOString();
-    const merged: Loop = { ...current, ...patch, updatedAt: updated };
-    this.db
-      .query(
-        `UPDATE loops SET status=$status, next_run_at=$nextRun, retry_scheduled_for=$retrySlot,
-         expires_at=$expiresAt, updated_at=$updated
-         WHERE id=$id
-           AND ($daemonLeaseId IS NULL OR EXISTS (
-             SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
-           ))`,
-      )
-      .run({
-        $id: id,
-        $status: merged.status,
-        $nextRun: merged.nextRunAt ?? null,
-        $retrySlot: merged.retryScheduledFor ?? null,
-        $expiresAt: merged.expiresAt ?? null,
-        $updated: merged.updatedAt,
-        $daemonLeaseId: opts.daemonLeaseId ?? null,
-        $now: updated,
-      });
-    if (patch.status && patch.status !== "active") {
-      const status: WorkflowWorkItemStatus = patch.status === "paused" ? "deferred" : "cancelled";
-      this.setWorkflowWorkItemsForLoop(id, status, `loop ${patch.status}`, updated);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.getLoop(id);
+      if (!current) throw new Error(`loop not found: ${id}`);
+      const merged: Loop = { ...current, ...patch, updatedAt: updated };
+      const res = this.db
+        .query(
+          `UPDATE loops SET status=$status, next_run_at=$nextRun, retry_scheduled_for=$retrySlot,
+           expires_at=$expiresAt, updated_at=$updated
+           WHERE id=$id
+             AND ($daemonLeaseId IS NULL OR EXISTS (
+               SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+             ))`,
+        )
+        .run({
+          $id: id,
+          $status: merged.status,
+          $nextRun: merged.nextRunAt ?? null,
+          $retrySlot: merged.retryScheduledFor ?? null,
+          $expiresAt: merged.expiresAt ?? null,
+          $updated: merged.updatedAt,
+          $daemonLeaseId: opts.daemonLeaseId ?? null,
+          $now: updated,
+        });
+      if (res.changes !== 1) throw new Error("daemon lease lost");
+      if (patch.status && patch.status !== "active") {
+        const status: WorkflowWorkItemStatus = patch.status === "paused" ? "deferred" : "cancelled";
+        this.setWorkflowWorkItemsForLoop(id, status, `loop ${patch.status}`, updated);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
     }
     const after = this.getLoop(id);
     if (!after) throw new Error(`loop not found after update: ${id}`);
@@ -2743,14 +2762,48 @@ export class Store {
     return rows.map(rowToRun);
   }
 
-  recoverExpiredRunLeases(now: Date = new Date(), opts: DaemonLeaseFence = {}): LoopRun[] {
+  private deferLiveExpiredRun(id: string, now: Date, opts: DaemonLeaseFence = {}): void {
+    const updated = now.toISOString();
+    const deferredUntil = new Date(now.getTime() + LIVE_EXPIRED_RUN_GRACE_MS).toISOString();
+    this.db
+      .query(
+        `UPDATE loop_runs SET lease_expires_at=$deferredUntil, updated_at=$updated
+         WHERE id=$id AND status='running' AND lease_expires_at <= $now
+           AND ($daemonLeaseId IS NULL OR EXISTS (
+             SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+           ))`,
+      )
+      .run({
+        $id: id,
+        $deferredUntil: deferredUntil,
+        $updated: updated,
+        $now: updated,
+        $daemonLeaseId: opts.daemonLeaseId ?? null,
+      });
+  }
+
+  recoverExpiredRunLeases(now: Date = new Date(), opts: DaemonLeaseFence & { limit?: number; scanLimit?: number } = {}): LoopRun[] {
+    const limit = Math.max(1, Math.min(1_000, Math.floor(opts.limit ?? DEFAULT_RECOVERY_BATCH_LIMIT)));
+    const scanLimit = Math.max(limit, Math.min(5_000, Math.floor(opts.scanLimit ?? limit * DEFAULT_RECOVERY_SCAN_MULTIPLIER)));
     const rows = this.db
-      .query<RunRow, [string]>("SELECT * FROM loop_runs WHERE status = 'running' AND lease_expires_at <= ?")
-      .all(now.toISOString());
+      .query<RunRow, [string, number]>(
+        `SELECT * FROM loop_runs
+         WHERE status = 'running' AND lease_expires_at <= ?
+         ORDER BY lease_expires_at ASC
+         LIMIT ?`,
+      )
+      .all(now.toISOString(), scanLimit);
     const recovered: LoopRun[] = [];
     for (const row of rows) {
-      if (row.pid && isProcessAlive(row.pid)) continue;
-      if (this.hasLiveWorkflowStepProcesses(row.id)) continue;
+      if (recovered.length >= limit) break;
+      if (row.pid && isProcessAlive(row.pid)) {
+        this.deferLiveExpiredRun(row.id, now, opts);
+        continue;
+      }
+      if (this.hasLiveWorkflowStepProcesses(row.id)) {
+        this.deferLiveExpiredRun(row.id, now, opts);
+        continue;
+      }
       const finished = now.toISOString();
       this.db.exec("BEGIN IMMEDIATE");
       try {

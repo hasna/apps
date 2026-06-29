@@ -139,6 +139,27 @@ describe("Store", () => {
     }
   });
 
+  test("enforces workflow foreign keys for workflow runs", () => {
+    const store = new Store(":memory:");
+    try {
+      expect(() =>
+        store.createWorkflowRun({
+          workflow: {
+            id: "missing-workflow",
+            name: "missing-workflow",
+            version: 1,
+            status: "active",
+            steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        }),
+      ).toThrow();
+    } finally {
+      store.close();
+    }
+  });
+
   test("clears active admission work items when a workflow loop fails before a workflow run exists", () => {
     const store = new Store(":memory:");
     try {
@@ -344,6 +365,63 @@ describe("Store", () => {
     }
   });
 
+  test("recovers expired run leases in bounded batches", () => {
+    const store = new Store(":memory:");
+    try {
+      const loops = [0, 1, 2].map((index) =>
+        store.createLoop(
+          {
+            name: `expired-batch-${index}`,
+            schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+            target: { type: "command", command: "true" },
+            leaseMs: 10,
+          },
+          new Date("2025-12-31T00:00:00Z"),
+        ),
+      );
+      for (const loop of loops) {
+        expect(store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"))).toBeDefined();
+      }
+
+      const recovered = store.recoverExpiredRunLeases(new Date("2026-01-01T00:00:01Z"), { limit: 2 });
+      expect(recovered).toHaveLength(2);
+      expect(store.listRuns({ status: "abandoned" })).toHaveLength(2);
+      expect(store.listRuns({ status: "running" })).toHaveLength(1);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("expired run recovery does not starve behind live expired rows", () => {
+    const store = new Store(":memory:");
+    try {
+      const loops = [0, 1, 2].map((index) =>
+        store.createLoop(
+          {
+            name: `expired-live-scan-${index}`,
+            schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+            target: { type: "command", command: "true" },
+            leaseMs: 10,
+          },
+          new Date("2025-12-31T00:00:00Z"),
+        ),
+      );
+      const claims = loops.map((loop) =>
+        store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"))!,
+      );
+      store.markRunPid(claims[0]!.run.id, process.pid, "runner");
+      store.markRunPid(claims[1]!.run.id, process.pid, "runner");
+
+      const recovered = store.recoverExpiredRunLeases(new Date("2026-01-01T00:00:01Z"), { limit: 1, scanLimit: 3 });
+      expect(recovered).toHaveLength(1);
+      expect(recovered[0]?.id).toBe(claims[2]!.run.id);
+      expect(store.getRun(claims[0]!.run.id)?.leaseExpiresAt).toBe("2026-01-01T00:01:01.000Z");
+      expect(store.getRun(claims[1]!.run.id)?.leaseExpiresAt).toBe("2026-01-01T00:01:01.000Z");
+    } finally {
+      store.close();
+    }
+  });
+
   test("only one connection can claim a scheduled slot", () => {
     const path = `${process.env.TMPDIR ?? "/tmp"}/loops-claim-${Date.now()}-${Math.random()}.db`;
     const first = new Store(path);
@@ -533,6 +611,59 @@ describe("Store", () => {
       expect(final.status).toBe("running");
       expect(final.stdout).toBeUndefined();
       expect(final.finishedAt).toBeUndefined();
+    } finally {
+      store.close();
+    }
+  });
+
+  test("fenced loop updates cannot mutate workflow work items after daemon lease loss", () => {
+    const store = new Store(":memory:");
+    try {
+      expect(
+        store.acquireDaemonLease({
+          id: "daemon",
+          pid: 1,
+          hostname: "host",
+          ttlMs: 60_000,
+        })?.id,
+      ).toBe("daemon");
+      const invocation = store.createWorkflowInvocation({
+        sourceRef: { kind: "event", id: "evt-loop-fence", dedupeKey: "todos-task:loop-fence" },
+        subjectRef: { kind: "task", id: "loop-fence", path: "/tmp/open-loops" },
+        intent: "route",
+        scope: { projectPath: "/tmp/open-loops" },
+      });
+      const workItem = store.upsertWorkflowWorkItem({
+        routeKey: "todos-task",
+        idempotencyKey: "todos-task:loop-fence",
+        invocationId: invocation.id,
+        sourceType: "task.created",
+        sourceRef: "evt-loop-fence",
+        subjectRef: "loop-fence",
+        projectKey: "/tmp/open-loops",
+      });
+      const workflow = store.createWorkflow({
+        name: "loop-fence-workflow",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const loop = store.createLoop({
+        name: "loop-fence-run",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: {
+          type: "workflow",
+          workflowId: workflow.id,
+          input: {
+            workflowInvocationId: invocation.id,
+            workflowWorkItemId: workItem.id,
+          },
+        },
+      });
+      store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id });
+
+      store.releaseDaemonLease("daemon");
+      expect(() => store.updateLoop(loop.id, { status: "paused" }, { daemonLeaseId: "daemon" })).toThrow("daemon lease lost");
+      expect(store.getLoop(loop.id)?.status).toBe("active");
+      expect(store.getWorkflowWorkItem(workItem.id)?.status).toBe("admitted");
     } finally {
       store.close();
     }

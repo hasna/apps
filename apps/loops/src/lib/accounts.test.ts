@@ -77,6 +77,74 @@ cat
     }
   });
 
+  test("strips inherited Cursor API env before applying a Cursor account profile", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-cursor-accounts-"));
+    const binDir = join(root, "bin");
+    const profileDir = join(root, "cursor-profile");
+    mkdirSync(binDir);
+    mkdirSync(profileDir);
+
+    const accounts = join(binDir, "accounts");
+    await Bun.write(
+      accounts,
+      `#!/usr/bin/env bash
+if [[ "$1" != "env" || "$2" != "cursor-work" || "$3" != "--tool" || "$4" != "cursor" ]]; then
+  echo "unexpected accounts args: $*" >&2
+  exit 2
+fi
+printf 'export CURSOR_CONFIG_DIR="%s"\\n' "${profileDir}"
+`,
+    );
+    chmodSync(accounts, 0o755);
+
+    const agent = join(binDir, "agent");
+    await Bun.write(
+      agent,
+      `#!/usr/bin/env bash
+if [[ "$CURSOR_CONFIG_DIR" != "${profileDir}" ]]; then
+  echo "bad CURSOR_CONFIG_DIR=$CURSOR_CONFIG_DIR" >&2
+  exit 3
+fi
+if [[ -n "\${CURSOR_API_KEY:-}" || -n "\${OPENAI_API_KEY:-}" ]]; then
+  echo "inherited cursor/openai auth env leaked" >&2
+  exit 4
+fi
+printf '%s\\n' "$@"
+printf 'stdin:'
+cat
+`,
+    );
+    chmodSync(agent, 0o755);
+
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "cursor-account",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "cursor",
+          prompt: "say ok",
+          account: { profile: "cursor-work", tool: "cursor" },
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: {
+          ...process.env,
+          PATH: `${binDir}:${process.env.PATH}`,
+          CURSOR_API_KEY: "leak",
+          OPENAI_API_KEY: "leak",
+        },
+      });
+      expect(result.status).toBe("succeeded");
+      expect(result.stdout).toContain("stdin:say ok");
+    } finally {
+      store.close();
+    }
+  });
+
   test("fails account preflight before spawning the provider", async () => {
     const root = mkdtempSync(join(tmpdir(), "loops-accounts-fail-"));
     const binDir = join(root, "bin");

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ExecutorResult } from "../types.js";
-import { executeClaimedRun, manualRunScheduledFor, manualRunSource, shouldAdvanceManualRun, tick } from "./scheduler.js";
+import { claimDueRuns, executeClaimedRun, manualRunScheduledFor, manualRunSource, shouldAdvanceManualRun, tick } from "./scheduler.js";
 import { Store } from "./store.js";
 
 function result(status: ExecutorResult["status"], at: string): ExecutorResult {
@@ -177,6 +177,41 @@ describe("scheduler", () => {
       expect(store.getRun(claim!.run.id)?.status).toBe("running");
       expect(store.getLoop(loop.id)?.retryScheduledFor).toBeUndefined();
       expect(store.getLoop(loop.id)?.nextRunAt).toBe(firstSlot);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("claim due runs counts skipped slots against the per-tick budget", () => {
+    const store = new Store(":memory:");
+    try {
+      const loops = [0, 1].map((index) =>
+        store.createLoop(
+          {
+            name: `overlap-skip-budget-${index}`,
+            schedule: { type: "interval", everyMs: 60_000 },
+            target: { type: "command", command: "true" },
+            overlap: "skip",
+            leaseMs: 10 * 60_000,
+          },
+          new Date("2026-01-01T00:00:00Z"),
+        ),
+      );
+      for (const loop of loops) {
+        expect(store.claimRun(loop, "2026-01-01T00:00:00.000Z", "active", new Date("2026-01-01T00:00:00Z"))).toBeDefined();
+        store.updateLoop(loop.id, { nextRunAt: "2026-01-01T00:01:00.000Z" });
+      }
+
+      const out = claimDueRuns({
+        store,
+        runnerId: "daemon",
+        maxClaims: 1,
+        now: () => new Date("2026-01-01T00:01:00Z"),
+      });
+
+      expect(out.claims).toHaveLength(0);
+      expect(out.skipped).toHaveLength(1);
+      expect(store.listRuns({ status: "skipped" })).toHaveLength(1);
     } finally {
       store.close();
     }

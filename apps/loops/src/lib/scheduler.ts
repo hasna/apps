@@ -288,12 +288,13 @@ export function claimDueRuns(deps: SchedulerDeps & { maxClaims?: number }): Clai
   const claimed: LoopRun[] = [];
   const skipped: LoopRun[] = [];
   const maxClaims = Math.max(0, deps.maxClaims ?? Number.POSITIVE_INFINITY);
+  if (maxClaims === 0) return { claims, claimed, completed: [], skipped, recovered, expired };
 
   for (const loop of deps.store.dueLoops(now)) {
-    if (claims.length >= maxClaims) break;
+    if (claims.length + skipped.length >= maxClaims) break;
     const plan = dueSlots(loop, now);
     for (const slot of plan.slots) {
-      if (claims.length >= maxClaims) break;
+      if (claims.length + skipped.length >= maxClaims) break;
       const run = claimSlot(deps, loop, slot);
       if (!run) continue;
       if ("loop" in run) {
