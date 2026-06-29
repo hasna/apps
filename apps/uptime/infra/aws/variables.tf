@@ -576,6 +576,28 @@ variable "additional_vpc_endpoint_source_security_group_ids" {
   default     = []
 }
 
+variable "additional_vpc_endpoint_principal_arns" {
+  description = "Additional IAM principal ARNs allowed by private VPC endpoint policies in shared-VPC deployments, keyed by endpoint purpose. Keep every list empty unless a reviewed non-Open-Uptime principal must use that exact endpoint policy path."
+  type = object({
+    ecr         = optional(list(string), [])
+    logs        = optional(list(string), [])
+    secret_read = optional(list(string), [])
+    sts         = optional(list(string), [])
+    kms         = optional(list(string), [])
+    s3_evidence = optional(list(string), [])
+  })
+  default = {}
+
+  validation {
+    condition = alltrue(flatten([
+      for arns in values(var.additional_vpc_endpoint_principal_arns) : [
+        for arn in arns : can(regex("^arn:(aws|aws-us-gov|aws-cn):iam::[0-9]{12}:(role|user)/[A-Za-z0-9+=,.@_/-]+$", arn))
+      ]
+    ]))
+    error_message = "additional_vpc_endpoint_principal_arns values must contain IAM role or user ARNs."
+  }
+}
+
 variable "gateway_vpc_endpoint_services" {
   description = "Regional gateway endpoint service short names to create when enable_private_vpc_endpoints is true."
   type        = list(string)

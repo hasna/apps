@@ -74,6 +74,35 @@ locals {
   endpoint_secret_refs        = distinct(flatten([for service in values(local.services) : values(service.secrets)]))
   secretsmanager_secret_refs  = [for ref in local.endpoint_secret_refs : ref if can(regex(":secretsmanager:", ref))]
   ssm_parameter_refs          = [for ref in local.endpoint_secret_refs : ref if can(regex(":ssm:", ref))]
+  endpoint_task_principal_arns = [
+    for role in values(aws_iam_role.task) : role.arn
+  ]
+  endpoint_ecr_principal_arns = distinct(concat(
+    [aws_iam_role.execution.arn],
+    var.additional_vpc_endpoint_principal_arns.ecr,
+  ))
+  endpoint_logs_principal_arns = distinct(concat(
+    [aws_iam_role.execution.arn],
+    var.additional_vpc_endpoint_principal_arns.logs,
+  ))
+  endpoint_secret_read_principal_arns = distinct(concat(
+    [aws_iam_role.execution.arn],
+    var.additional_vpc_endpoint_principal_arns.secret_read,
+  ))
+  endpoint_sts_principal_arns = distinct(concat(
+    [aws_iam_role.execution.arn],
+    local.endpoint_task_principal_arns,
+    var.additional_vpc_endpoint_principal_arns.sts,
+  ))
+  endpoint_kms_principal_arns = distinct(concat(
+    [aws_iam_role.execution.arn],
+    local.endpoint_task_principal_arns,
+    var.additional_vpc_endpoint_principal_arns.kms,
+  ))
+  endpoint_s3_evidence_principal_arns = distinct(concat(
+    local.endpoint_task_principal_arns,
+    var.additional_vpc_endpoint_principal_arns.s3_evidence,
+  ))
   secretsmanager_policy_refs = (
     length(local.secretsmanager_secret_refs) > 0
     ? local.secretsmanager_secret_refs
@@ -621,8 +650,8 @@ data "aws_iam_policy_document" "vpc_endpoint_ecr_api" {
     resources = ["*"]
 
     principals {
-      type        = "*"
-      identifiers = ["*"]
+      type        = "AWS"
+      identifiers = local.endpoint_ecr_principal_arns
     }
   }
 
@@ -638,8 +667,8 @@ data "aws_iam_policy_document" "vpc_endpoint_ecr_api" {
     resources = [aws_ecr_repository.open_uptime.arn]
 
     principals {
-      type        = "*"
-      identifiers = ["*"]
+      type        = "AWS"
+      identifiers = local.endpoint_ecr_principal_arns
     }
   }
 }
@@ -655,8 +684,8 @@ data "aws_iam_policy_document" "vpc_endpoint_ecr_dkr" {
     resources = [aws_ecr_repository.open_uptime.arn]
 
     principals {
-      type        = "*"
-      identifiers = ["*"]
+      type        = "AWS"
+      identifiers = local.endpoint_ecr_principal_arns
     }
   }
 }
@@ -672,8 +701,8 @@ data "aws_iam_policy_document" "vpc_endpoint_logs" {
     resources = local.service_log_group_arns
 
     principals {
-      type        = "*"
-      identifiers = ["*"]
+      type        = "AWS"
+      identifiers = local.endpoint_logs_principal_arns
     }
   }
 }
@@ -688,8 +717,8 @@ data "aws_iam_policy_document" "vpc_endpoint_secretsmanager" {
     resources = local.secretsmanager_policy_refs
 
     principals {
-      type        = "*"
-      identifiers = ["*"]
+      type        = "AWS"
+      identifiers = local.endpoint_secret_read_principal_arns
     }
   }
 }
@@ -704,8 +733,8 @@ data "aws_iam_policy_document" "vpc_endpoint_ssm" {
     resources = local.ssm_policy_refs
 
     principals {
-      type        = "*"
-      identifiers = ["*"]
+      type        = "AWS"
+      identifiers = local.endpoint_secret_read_principal_arns
     }
   }
 }
@@ -717,8 +746,8 @@ data "aws_iam_policy_document" "vpc_endpoint_sts" {
     resources = ["*"]
 
     principals {
-      type        = "*"
-      identifiers = ["*"]
+      type        = "AWS"
+      identifiers = local.endpoint_sts_principal_arns
     }
   }
 }
@@ -734,8 +763,8 @@ data "aws_iam_policy_document" "vpc_endpoint_kms" {
     resources = [var.kms_key_arn]
 
     principals {
-      type        = "*"
-      identifiers = ["*"]
+      type        = "AWS"
+      identifiers = local.endpoint_kms_principal_arns
     }
   }
 }
@@ -759,6 +788,12 @@ data "aws_iam_policy_document" "vpc_endpoint_s3" {
       type        = "*"
       identifiers = ["*"]
     }
+
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:PrincipalArn"
+      values   = local.endpoint_s3_evidence_principal_arns
+    }
   }
 
   statement {
@@ -769,6 +804,12 @@ data "aws_iam_policy_document" "vpc_endpoint_s3" {
     principals {
       type        = "*"
       identifiers = ["*"]
+    }
+
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:PrincipalArn"
+      values   = local.endpoint_ecr_principal_arns
     }
   }
 }

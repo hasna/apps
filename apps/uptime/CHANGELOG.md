@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.52] - 2026-06-29
+
+### Security
+
+- Hardened the packaged AWS VPC endpoint policies so ECR, logs,
+  Secrets Manager, SSM, STS, KMS, and S3 endpoint paths use service-keyed
+  principal scopes instead of wildcard endpoint principals.
+- Added a service-keyed `additional_vpc_endpoint_principal_arns` escape hatch
+  for reviewed shared-VPC principals, with S3 gateway endpoint restrictions
+  enforced through `aws:PrincipalArn` conditions.
+
 ## [0.1.51] - 2026-06-29
 
 ### Changed

@@ -217,10 +217,32 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(main).toContain('data "aws_iam_policy_document" "vpc_endpoint_secretsmanager"');
   expect(main).toContain('data "aws_iam_policy_document" "vpc_endpoint_logs"');
   expect(main).toContain('data "aws_iam_policy_document" "vpc_endpoint_ecr_api"');
+  expect(main).toContain("endpoint_task_principal_arns");
+  expect(main).toContain("endpoint_ecr_principal_arns");
+  expect(main).toContain("endpoint_logs_principal_arns");
+  expect(main).toContain("endpoint_secret_read_principal_arns");
+  expect(main).toContain("endpoint_sts_principal_arns");
+  expect(main).toContain("endpoint_kms_principal_arns");
+  expect(main).toContain("endpoint_s3_evidence_principal_arns");
+  expect(main).not.toContain("endpoint_runtime_principal_arns");
+  expect(main).toContain("var.additional_vpc_endpoint_principal_arns");
+  expect(main).toContain("identifiers = local.endpoint_ecr_principal_arns");
+  expect(main).toContain("identifiers = local.endpoint_logs_principal_arns");
+  expect(main).toContain("identifiers = local.endpoint_secret_read_principal_arns");
+  expect(main).toContain("identifiers = local.endpoint_sts_principal_arns");
+  expect(main).toContain("identifiers = local.endpoint_kms_principal_arns");
+  expect(main).toContain('variable = "aws:PrincipalArn"');
+  expect(main).toContain("values   = local.endpoint_s3_evidence_principal_arns");
+  expect(main).toContain("values   = local.endpoint_ecr_principal_arns");
   expect(main).toContain('aws_security_group_rule" "web_s3_gateway_egress"');
   expect(main).toContain('aws_security_group_rule" "worker_s3_gateway_egress"');
   expect(main).toContain('aws_vpc_endpoint.gateway["s3"].prefix_list_id');
   expect(main).toContain("additional_vpc_endpoint_source_security_group_ids");
+  expect(variables).toContain("additional_vpc_endpoint_principal_arns");
+  expect(variables).toContain("keyed by endpoint purpose");
+  expect(variables).toContain("secret_read");
+  expect(variables).toContain("s3_evidence");
+  expect(variables).toContain("additional_vpc_endpoint_principal_arns values must contain IAM role or user ARNs");
   expect(main).toContain("prod-${var.region}-starport-layer-bucket");
   expect(main).toContain("policy = {");
   expect(main).toContain("var.enable_private_vpc_endpoints");
@@ -267,6 +289,10 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(tfvars).toContain("enable_nat_task_egress");
   expect(tfvars).toContain("enable_private_vpc_endpoints = false");
   expect(tfvars).toContain("additional_vpc_endpoint_source_security_group_ids");
+  expect(tfvars).toContain("additional_vpc_endpoint_principal_arns = {");
+  for (const endpointPrincipalKey of ["ecr", "logs", "secret_read", "sts", "kms", "s3_evidence"]) {
+    expect(tfvars).toMatch(new RegExp(`\\b${endpointPrincipalKey}\\s+= \\[\\]`));
+  }
   expect(tfvars).toContain("budget_alert_email_addresses");
   expect(tfvars).toContain("backup_retention_days = 35");
   expect(tfvars).toContain('backup_vault_lock_mode = "disabled"');

@@ -106,7 +106,12 @@ Target shape inside the approved VPC:
 - VPC endpoints should be used for S3, Secrets Manager, CloudWatch Logs, ECR,
   and SSM where practical. Interface endpoint private DNS is VPC-wide, so shared
   VPC deployments must either use the approved networking root or explicitly
-  allow every affected source security group.
+  allow every affected source security group and IAM principal. Endpoint
+  policies for Secrets Manager, SSM, and KMS must not use wildcard principals
+  when they can reach hosted-token, reporting-channel, or other secret-bearing
+  material. Any extra shared-VPC IAM principal must be granted per endpoint
+  purpose, not through a single catch-all list, and S3 gateway endpoint principal
+  restrictions must use `aws:PrincipalArn` conditions.
 
 Security groups:
 

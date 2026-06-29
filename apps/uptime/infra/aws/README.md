@@ -91,7 +91,21 @@ private ECR image layer pulls; the module adds S3 managed-prefix-list egress for
 web and non-public worker security groups when the gateway endpoint is enabled.
 Endpoint policies are scoped to the Open Uptime repository, log groups,
 configured secret refs, KMS key, evidence bucket, and the regional ECR layer
-bucket.
+bucket. By default those endpoint policies also restrict callers to the module
+created Open Uptime roles: ECR, logs, Secrets Manager, and SSM use the ECS
+execution role; STS and KMS use the execution role plus task roles; S3 evidence
+uses task roles; and the S3 gateway endpoint uses `aws:PrincipalArn` conditions
+because S3 gateway endpoint principal restriction cannot be expressed by
+replacing `Principal = "*"`.
+
+In a shared VPC, `additional_vpc_endpoint_source_security_group_ids` only opens
+the network path. Use the service-keyed
+`additional_vpc_endpoint_principal_arns` object only for reviewed non-Open
+Uptime IAM principals that must use an exact endpoint policy path, such as
+`ecr`, `logs`, `secret_read`, `sts`, `kms`, or `s3_evidence`. Adding a principal
+to `secret_read`, `kms`, or `s3_evidence` expands access to secret-bearing or
+runtime-evidence paths at the endpoint-policy layer and must have separate
+operator approval plus identity/resource-policy evidence.
 
 If private endpoints are not approved yet, infra owners can instead set
 `enable_nat_task_egress = true` to allow web and non-public worker task security
@@ -123,8 +137,12 @@ placeholder.
 Interface endpoint private DNS is VPC-wide. In shared VPCs, either keep endpoint
 creation in the approved networking root, or pass
 `additional_vpc_endpoint_source_security_group_ids` for every workload that must
-keep using those private DNS names. If any ECS secret ref uses SSM Parameter
-Store instead of Secrets Manager, add `ssm` to
+keep using those private DNS names and
+the matching service key in `additional_vpc_endpoint_principal_arns` for every
+reviewed IAM principal that must pass endpoint policy evaluation. Do not use
+wildcard principals for Secrets Manager, SSM, or KMS endpoints that can reach
+hosted token or reporting channel material. If any ECS secret ref uses SSM
+Parameter Store instead of Secrets Manager, add `ssm` to
 `interface_vpc_endpoint_services` or keep an approved non-endpoint egress path.
 
 ## Current Blockers
