@@ -1419,7 +1419,17 @@ type CloudMemoryServiceStatus = "ready" | "blocked";
 interface CloudMemoryEnvGroup {
   name: string;
   anyOf: string[];
+  aliases?: CloudMemoryEnvAlias[];
+  kind?: CloudMemoryEnvAliasKind;
   optional?: boolean;
+}
+
+type CloudMemoryEnvAliasKind = "present" | "postgres-url" | "remote-storage-mode" | "s3-bucket";
+
+interface CloudMemoryEnvAlias {
+  name: string;
+  jsonField?: string;
+  kind?: CloudMemoryEnvAliasKind;
 }
 
 interface CloudMemoryServiceDefinition {
@@ -1533,10 +1543,11 @@ function buildCloudMemoryPreflight(options: { machineId?: string } = {}): CloudM
 
 function buildCloudMemoryServicePreflight(definition: CloudMemoryServiceDefinition): CloudMemoryServicePreflight {
   const env = definition.envGroups.map((group) => {
-    const configuredEnv = configuredEnvNames(group.anyOf);
+    const anyOf = cloudMemoryEnvGroupNames(group);
+    const configuredEnv = configuredEnvNames(group);
     return {
       name: group.name,
-      anyOf: group.anyOf,
+      anyOf,
       configuredEnv,
       required: group.optional !== true,
       ok: group.optional === true || configuredEnv.length > 0,
@@ -1587,7 +1598,14 @@ function cloudMemoryServiceDefinitions(): CloudMemoryServiceDefinition[] {
       label: "Projects",
       owner: "open-projects",
       statusCommand: "projects storage status --json",
-      envGroups: [{ name: "database", anyOf: ["HASNA_PROJECTS_DATABASE_URL", "PROJECTS_DATABASE_URL"] }],
+      envGroups: [{
+        name: "database",
+        anyOf: ["HASNA_PROJECTS_DATABASE_URL", "PROJECTS_DATABASE_URL"],
+        aliases: [
+          { name: "HASNA_OPEN_PROJECTS_DB_LIVE_CONNECTION_STRING", kind: "postgres-url" },
+          { name: "HASNA_XYZ_OPENSOURCE_PROJECTS_PROD_LIVE_RDS", jsonField: "database_url", kind: "postgres-url" },
+        ],
+      }],
       proofEnv: "HASNA_PROJECTS_CLOUD_PRIMARY_READY",
       evidenceBlockers: [
         "per-project stores, canvases, tombstones, conflict quarantine, and rollback evidence are not proven from this process",
@@ -1603,9 +1621,22 @@ function cloudMemoryServiceDefinitions(): CloudMemoryServiceDefinition[] {
       owner: "open-todos",
       statusCommand: "todos storage status --json && todos storage sync-plan --json",
       envGroups: [
-        { name: "mode", anyOf: ["HASNA_TODOS_STORAGE_MODE", "TODOS_STORAGE_MODE"] },
-        { name: "database", anyOf: ["HASNA_TODOS_DATABASE_URL", "TODOS_DATABASE_URL"] },
-        { name: "artifact-bucket", anyOf: ["HASNA_TODOS_S3_BUCKET", "TODOS_S3_BUCKET"], optional: true },
+        {
+          name: "mode",
+          anyOf: ["HASNA_TODOS_STORAGE_MODE", "TODOS_STORAGE_MODE"],
+          kind: "remote-storage-mode",
+        },
+        {
+          name: "database",
+          anyOf: ["HASNA_TODOS_DATABASE_URL", "TODOS_DATABASE_URL"],
+          aliases: [{ name: "HASNA_XYZ_OPENSOURCE_TODOS_PROD_LIVE_RDS", jsonField: "database_url", kind: "postgres-url" }],
+        },
+        {
+          name: "artifact-bucket",
+          anyOf: ["HASNA_TODOS_S3_BUCKET", "TODOS_S3_BUCKET"],
+          aliases: [{ name: "HASNA_XYZ_OPENSOURCE_TODOS_PROD_LIVE_S3", jsonField: "bucket", kind: "s3-bucket" }],
+          optional: true,
+        },
       ],
       proofEnv: "HASNA_TODOS_CLOUD_PRIMARY_READY",
       evidenceBlockers: [
@@ -1621,7 +1652,11 @@ function cloudMemoryServiceDefinitions(): CloudMemoryServiceDefinition[] {
       label: "Conversations",
       owner: "open-conversations",
       statusCommand: "conversations storage status --json && conversations storage migrate --dry-run",
-      envGroups: [{ name: "database", anyOf: ["HASNA_CONVERSATIONS_DATABASE_URL", "CONVERSATIONS_DATABASE_URL"] }],
+      envGroups: [{
+        name: "database",
+        anyOf: ["HASNA_CONVERSATIONS_DATABASE_URL", "CONVERSATIONS_DATABASE_URL"],
+        aliases: [{ name: "HASNA_XYZ_OPENSOURCE_CONVERSATIONS_PROD_LIVE_RDS", jsonField: "database_url", kind: "postgres-url" }],
+      }],
       proofEnv: "HASNA_CONVERSATIONS_CLOUD_PRIMARY_READY",
       evidenceBlockers: [
         "full message/history ownership, conflict behavior, and rollback evidence are not proven from this process",
@@ -1799,8 +1834,84 @@ function renderCloudMemoryPreflight(preflight: CloudMemoryPreflight): string {
   ].join("\n");
 }
 
-function configuredEnvNames(names: string[]): string[] {
-  return names.filter((name) => Boolean(process.env[name]?.trim()));
+function cloudMemoryEnvGroupNames(group: CloudMemoryEnvGroup): string[] {
+  return [...group.anyOf, ...(group.aliases ?? []).map((alias) => alias.name)];
+}
+
+function configuredEnvNames(group: CloudMemoryEnvGroup): string[] {
+  const direct = group.anyOf
+    .filter((name, index, names) => names.indexOf(name) === index)
+    .filter((name) => cloudMemoryEnvConfigured(name, group.kind ? { name, kind: group.kind } : undefined));
+  if (direct.length > 0) return direct;
+  return (group.aliases ?? [])
+    .map((alias) => alias.name)
+    .filter((name, index, names) => names.indexOf(name) === index)
+    .filter((name) => cloudMemoryEnvConfigured(name, group.aliases?.find((alias) => alias.name === name)));
+}
+
+function cloudMemoryEnvConfigured(name: string, alias?: CloudMemoryEnvAlias): boolean {
+  const value = process.env[name]?.trim();
+  if (!value) return false;
+  if (!alias) return true;
+  const candidate = alias.jsonField
+    ? cloudMemoryMetadataField(value, alias.jsonField)
+    : value;
+  return candidate !== null && cloudMemoryAliasValueValid(candidate, alias.kind ?? "present");
+}
+
+function cloudMemoryMetadataField(value: string, field: string): string | null {
+  const parsed = parseCloudMemoryMetadataObject(value);
+  const fieldValue = parsed?.[field];
+  return typeof fieldValue === "string" && fieldValue.trim().length > 0
+    ? fieldValue.trim()
+    : null;
+}
+
+function parseCloudMemoryMetadataObject(value: string): Record<string, unknown> | null {
+  const direct = parseJsonObject(value);
+  if (direct) return direct;
+
+  try {
+    const decoded = JSON.parse(value) as unknown;
+    if (typeof decoded === "string") return parseJsonObject(decoded);
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function parseJsonObject(value: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function cloudMemoryAliasValueValid(value: string, kind: CloudMemoryEnvAlias["kind"]): boolean {
+  if (kind === "postgres-url") return cloudMemoryPostgresUrlValid(value);
+  if (kind === "remote-storage-mode") {
+    const normalized = value.trim().toLowerCase();
+    return normalized === "remote" || normalized === "hybrid";
+  }
+  if (kind === "s3-bucket") return /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(value) && !value.includes("..");
+  return value.trim().length > 0;
+}
+
+function cloudMemoryPostgresUrlValid(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") return false;
+    if (!url.hostname.trim()) return false;
+    return url.searchParams.get("sslmode") === "require"
+      || url.searchParams.get("sslmode") === "verify-full"
+      || url.searchParams.get("ssl") === "true";
+  } catch {
+    return false;
+  }
 }
 
 function envFlagEnabled(name: string): boolean {

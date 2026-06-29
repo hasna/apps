@@ -45,6 +45,52 @@ async function runCliAsync(args: string[], dbPath: string, env: Record<string, s
   };
 }
 
+function cloudMemoryEnv(overrides: Record<string, string> = {}) {
+  return {
+    HASNA_UPTIME_MACHINE_ID: "",
+    HASNA_UPTIME_SPARK01_MACHINE_REGISTRATION_READY: "",
+    HASNA_UPTIME_SPARK01_PRIMARY_LEASE_READY: "",
+    HASNA_UPTIME_SPARK01_BOOTSTRAP_TOKEN_REVOKED: "",
+    HASNA_UPTIME_SPARK01_PRIVATE_PROBE_READY: "",
+    HASNA_UPTIME_SPARK01_ROLLBACK_REHEARSED: "",
+    HASNA_PROJECTS_DATABASE_URL: "",
+    PROJECTS_DATABASE_URL: "",
+    HASNA_OPEN_PROJECTS_DB_LIVE_CONNECTION_STRING: "",
+    HASNA_XYZ_OPENSOURCE_PROJECTS_PROD_LIVE_RDS: "",
+    HASNA_PROJECTS_CLOUD_PRIMARY_READY: "",
+    HASNA_TODOS_STORAGE_MODE: "",
+    TODOS_STORAGE_MODE: "",
+    HASNA_TODOS_DATABASE_URL: "",
+    TODOS_DATABASE_URL: "",
+    HASNA_XYZ_OPENSOURCE_TODOS_PROD_LIVE_RDS: "",
+    HASNA_TODOS_S3_BUCKET: "",
+    TODOS_S3_BUCKET: "",
+    HASNA_XYZ_OPENSOURCE_TODOS_PROD_LIVE_S3: "",
+    HASNA_TODOS_CLOUD_PRIMARY_READY: "",
+    HASNA_CONVERSATIONS_DATABASE_URL: "",
+    CONVERSATIONS_DATABASE_URL: "",
+    HASNA_XYZ_OPENSOURCE_CONVERSATIONS_PROD_LIVE_RDS: "",
+    HASNA_CONVERSATIONS_CLOUD_PRIMARY_READY: "",
+    HASNA_MEMENTOS_DATABASE_URL: "",
+    MEMENTOS_DATABASE_URL: "",
+    HASNA_MEMENTOS_CLOUD_PRIMARY_READY: "",
+    HASNA_KNOWLEDGE_DATABASE_URL: "",
+    KNOWLEDGE_DATABASE_URL: "",
+    KNOWLEDGE_API_URL: "",
+    HASNA_KNOWLEDGE_API_KEY: "",
+    KNOWLEDGE_API_KEY: "",
+    HASNA_KNOWLEDGE_CLOUD_PRIMARY_READY: "",
+    HASNA_NOTES_DATABASE_URL: "",
+    NOTES_DATABASE_URL: "",
+    HASNA_NOTES_S3_BUCKET: "",
+    NOTES_S3_BUCKET: "",
+    HASNA_NOTES_CLOUD_PRIMARY_READY: "",
+    HASNA_UPTIME_DATABASE_URL: "",
+    HASNA_UPTIME_POSTGRES_RUNTIME_READY: "",
+    ...overrides,
+  };
+}
+
 test("CLI init, add, and list work with JSON output", () => {
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {
@@ -214,31 +260,7 @@ test("CLI cloud memory preflight blocks Spark01 cloud-primary by default", () =>
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {
     const dbPath = join(dir, "uptime.db");
-    const env = {
-      HASNA_PROJECTS_DATABASE_URL: "",
-      PROJECTS_DATABASE_URL: "",
-      HASNA_TODOS_STORAGE_MODE: "",
-      HASNA_TODOS_DATABASE_URL: "",
-      TODOS_DATABASE_URL: "",
-      HASNA_CONVERSATIONS_DATABASE_URL: "",
-      CONVERSATIONS_DATABASE_URL: "",
-      HASNA_MEMENTOS_DATABASE_URL: "",
-      MEMENTOS_DATABASE_URL: "",
-      HASNA_KNOWLEDGE_DATABASE_URL: "",
-      KNOWLEDGE_DATABASE_URL: "",
-      KNOWLEDGE_API_URL: "",
-      HASNA_NOTES_DATABASE_URL: "",
-      NOTES_DATABASE_URL: "",
-      HASNA_NOTES_S3_BUCKET: "",
-      NOTES_S3_BUCKET: "",
-      HASNA_UPTIME_DATABASE_URL: "",
-      HASNA_UPTIME_MACHINE_ID: "",
-      HASNA_UPTIME_SPARK01_MACHINE_REGISTRATION_READY: "",
-      HASNA_UPTIME_SPARK01_PRIMARY_LEASE_READY: "",
-      HASNA_UPTIME_SPARK01_BOOTSTRAP_TOKEN_REVOKED: "",
-      HASNA_UPTIME_SPARK01_PRIVATE_PROBE_READY: "",
-      HASNA_UPTIME_SPARK01_ROLLBACK_REHEARSED: "",
-    };
+    const env = cloudMemoryEnv();
     const preflight = runCli(["cloud", "memory-preflight", "--json"], dbPath, env);
     const healthcheck = runCli(["cloud", "memory-preflight", "--healthcheck", "--json"], dbPath, env);
     const stdout = new TextDecoder().decode(preflight.stdout);
@@ -264,11 +286,200 @@ test("CLI cloud memory preflight blocks Spark01 cloud-primary by default", () =>
   }
 });
 
+test("CLI cloud memory preflight detects canonical live metadata without leaking values", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const preflight = runCli(["cloud", "memory-preflight", "--machine-id", "spark01", "--json"], dbPath, cloudMemoryEnv({
+      HASNA_OPEN_PROJECTS_DB_LIVE_CONNECTION_STRING: "postgres://projects:raw-projects-password@db.example.invalid/projects?sslmode=require",
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_XYZ_OPENSOURCE_TODOS_PROD_LIVE_RDS: JSON.stringify({
+        database_url: "postgres://todos:raw-todos-password@db.example.invalid/todos?sslmode=require",
+        database: "todos",
+      }),
+      HASNA_XYZ_OPENSOURCE_TODOS_PROD_LIVE_S3: JSON.stringify({ bucket: "raw-todos-bucket", region: "us-east-1" }),
+      HASNA_XYZ_OPENSOURCE_CONVERSATIONS_PROD_LIVE_RDS: JSON.stringify(JSON.stringify({
+        database_url: "postgres://conv:raw-conv-password@db.example.invalid/conversations?sslmode=require",
+        database: "conversations",
+      })),
+    }));
+    const stdout = new TextDecoder().decode(preflight.stdout);
+    const body = JSON.parse(stdout);
+    const services = Object.fromEntries(body.services.map((service: any) => [service.name, service]));
+
+    expect(preflight.exitCode).toBe(0);
+    expect(body.status).toBe("blocked");
+    expect(body.canPromote).toBe(false);
+    expect(services.projects).toMatchObject({ status: "blocked", configured: true, proofConfigured: false, cloudPrimary: false });
+    expect(services.todos).toMatchObject({ status: "blocked", configured: true, proofConfigured: false, cloudPrimary: false });
+    expect(services.conversations).toMatchObject({ status: "blocked", configured: true, proofConfigured: false, cloudPrimary: false });
+    expect(services.projects.env.find((group: any) => group.name === "database").configuredEnv).toContain("HASNA_OPEN_PROJECTS_DB_LIVE_CONNECTION_STRING");
+    expect(services.todos.env.find((group: any) => group.name === "mode").configuredEnv).toEqual(["HASNA_TODOS_STORAGE_MODE"]);
+    expect(services.todos.env.find((group: any) => group.name === "database").configuredEnv).toEqual(["HASNA_XYZ_OPENSOURCE_TODOS_PROD_LIVE_RDS"]);
+    expect(services.todos.env.find((group: any) => group.name === "artifact-bucket").configuredEnv).toEqual(["HASNA_XYZ_OPENSOURCE_TODOS_PROD_LIVE_S3"]);
+    expect(services.conversations.env.find((group: any) => group.name === "database").configuredEnv).toEqual(["HASNA_XYZ_OPENSOURCE_CONVERSATIONS_PROD_LIVE_RDS"]);
+    expect(body.blockers.join("\n")).toContain("HASNA_PROJECTS_CLOUD_PRIMARY_READY");
+    expect(body.blockers.join("\n")).toContain("HASNA_TODOS_CLOUD_PRIMARY_READY");
+    expect(body.blockers.join("\n")).toContain("HASNA_CONVERSATIONS_CLOUD_PRIMARY_READY");
+    expect(stdout).not.toContain("raw-projects-password");
+    expect(stdout).not.toContain("raw-todos-password");
+    expect(stdout).not.toContain("raw-conv-password");
+    expect(stdout).not.toContain("raw-todos-bucket");
+    expect(stdout).not.toContain("postgres://");
+    expect(stdout).not.toContain("db.example.invalid");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI cloud memory preflight does not treat canonical metadata as proof or storage mode", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const preflight = runCli(["cloud", "memory-preflight", "--machine-id", "spark01", "--json"], dbPath, cloudMemoryEnv({
+      HASNA_XYZ_OPENSOURCE_TODOS_PROD_LIVE_RDS: JSON.stringify({
+        database_url: "postgres://todos:raw-todos-password@db.example.invalid/todos?sslmode=require",
+      }),
+      HASNA_XYZ_OPENSOURCE_TODOS_PROD_LIVE_S3: JSON.stringify({ bucket: "valid-todos-bucket", region: "us-east-1" }),
+      HASNA_TODOS_CLOUD_PRIMARY_READY: "1",
+      HASNA_PROJECTS_CLOUD_PRIMARY_READY: "1",
+      HASNA_CONVERSATIONS_CLOUD_PRIMARY_READY: "1",
+    }));
+    const stdout = new TextDecoder().decode(preflight.stdout);
+    const body = JSON.parse(stdout);
+    const services = Object.fromEntries(body.services.map((service: any) => [service.name, service]));
+    const todosMode = services.todos.env.find((group: any) => group.name === "mode");
+    const todosDatabase = services.todos.env.find((group: any) => group.name === "database");
+
+    expect(preflight.exitCode).toBe(0);
+    expect(services.todos).toMatchObject({ status: "blocked", configured: false, proofConfigured: true, cloudPrimary: false });
+    expect(todosMode.configuredEnv).toEqual([]);
+    expect(todosDatabase.configuredEnv).toEqual(["HASNA_XYZ_OPENSOURCE_TODOS_PROD_LIVE_RDS"]);
+    expect(services.todos.blockers.join("\n")).toContain("mode: missing one of HASNA_TODOS_STORAGE_MODE");
+    expect(stdout).not.toContain("raw-todos-password");
+    expect(stdout).not.toContain("postgres://");
+    expect(stdout).not.toContain("db.example.invalid");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI cloud memory preflight rejects local todos storage mode even with proof", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const preflight = runCli(["cloud", "memory-preflight", "--machine-id", "spark01", "--json"], dbPath, cloudMemoryEnv({
+      HASNA_TODOS_STORAGE_MODE: "local",
+      HASNA_TODOS_DATABASE_URL: "postgres://todos:raw-todos-password@db.example.invalid/todos",
+      HASNA_TODOS_CLOUD_PRIMARY_READY: "1",
+    }));
+    const stdout = new TextDecoder().decode(preflight.stdout);
+    const body = JSON.parse(stdout);
+    const services = Object.fromEntries(body.services.map((service: any) => [service.name, service]));
+    const todosMode = services.todos.env.find((group: any) => group.name === "mode");
+
+    expect(preflight.exitCode).toBe(0);
+    expect(services.todos).toMatchObject({ status: "blocked", configured: false, proofConfigured: true, cloudPrimary: false });
+    expect(todosMode.configuredEnv).toEqual([]);
+    expect(services.todos.blockers.join("\n")).toContain("mode: missing one of HASNA_TODOS_STORAGE_MODE");
+    expect(stdout).not.toContain("raw-todos-password");
+    expect(stdout).not.toContain("postgres://");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI cloud memory preflight rejects malformed canonical metadata even with proof", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const preflight = runCli(["cloud", "memory-preflight", "--machine-id", "spark01", "--json"], dbPath, cloudMemoryEnv({
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_XYZ_OPENSOURCE_TODOS_PROD_LIVE_RDS: `"{\"database_url\":\"postgres://todos:raw-todos-password@db.example.invalid/todos?sslmode=require\"}`,
+      HASNA_TODOS_CLOUD_PRIMARY_READY: "1",
+    }));
+    const stdout = new TextDecoder().decode(preflight.stdout);
+    const body = JSON.parse(stdout);
+    const services = Object.fromEntries(body.services.map((service: any) => [service.name, service]));
+    const todosDatabase = services.todos.env.find((group: any) => group.name === "database");
+
+    expect(preflight.exitCode).toBe(0);
+    expect(services.todos).toMatchObject({ status: "blocked", configured: false, proofConfigured: true, cloudPrimary: false });
+    expect(todosDatabase.configuredEnv).toEqual([]);
+    expect(services.todos.blockers.join("\n")).toContain("database: missing one of HASNA_TODOS_DATABASE_URL");
+    expect(stdout).not.toContain("raw-todos-password");
+    expect(stdout).not.toContain("postgres://");
+    expect(stdout).not.toContain("db.example.invalid");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI cloud memory preflight rejects hostless canonical postgres aliases even with proof", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const preflight = runCli(["cloud", "memory-preflight", "--machine-id", "spark01", "--json"], dbPath, cloudMemoryEnv({
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_XYZ_OPENSOURCE_TODOS_PROD_LIVE_RDS: JSON.stringify({
+        database_url: "postgres:///todos?sslmode=require",
+      }),
+      HASNA_TODOS_CLOUD_PRIMARY_READY: "1",
+    }));
+    const stdout = new TextDecoder().decode(preflight.stdout);
+    const body = JSON.parse(stdout);
+    const services = Object.fromEntries(body.services.map((service: any) => [service.name, service]));
+    const todosDatabase = services.todos.env.find((group: any) => group.name === "database");
+
+    expect(preflight.exitCode).toBe(0);
+    expect(services.todos).toMatchObject({ status: "blocked", configured: false, proofConfigured: true, cloudPrimary: false });
+    expect(todosDatabase.configuredEnv).toEqual([]);
+    expect(stdout).not.toContain("postgres:///");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI cloud memory preflight rejects invalid canonical metadata aliases without leaking values", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const preflight = runCli(["cloud", "memory-preflight", "--machine-id", "spark01", "--json"], dbPath, cloudMemoryEnv({
+      HASNA_OPEN_PROJECTS_DB_LIVE_CONNECTION_STRING: "postgres://projects:raw-projects-password@db.example.invalid/projects",
+      HASNA_XYZ_OPENSOURCE_PROJECTS_PROD_LIVE_RDS: `"{\"database_url\":\"raw-malformed-project-secret"`,
+      HASNA_TODOS_STORAGE_MODE: "remote",
+      HASNA_XYZ_OPENSOURCE_TODOS_PROD_LIVE_RDS: `"{\"database_url\":\"not-a-postgres-url-with-raw-secret\"}`,
+      HASNA_XYZ_OPENSOURCE_TODOS_PROD_LIVE_S3: `"{\"bucket\":\"Invalid_Bucket_With_Raw_Secret\"}`,
+      HASNA_XYZ_OPENSOURCE_CONVERSATIONS_PROD_LIVE_RDS: `"{\"database_url\":\"postgres://conv:raw-conv-password@db.example.invalid/conversations\"}`,
+    }));
+    const stdout = new TextDecoder().decode(preflight.stdout);
+    const body = JSON.parse(stdout);
+    const services = Object.fromEntries(body.services.map((service: any) => [service.name, service]));
+
+    expect(preflight.exitCode).toBe(0);
+    expect(services.projects).toMatchObject({ configured: false, cloudPrimary: false });
+    expect(services.todos).toMatchObject({ configured: false, cloudPrimary: false });
+    expect(services.conversations).toMatchObject({ configured: false, cloudPrimary: false });
+    expect(services.todos.env.find((group: any) => group.name === "mode").configuredEnv).toEqual(["HASNA_TODOS_STORAGE_MODE"]);
+    expect(services.todos.env.find((group: any) => group.name === "database").configuredEnv).toEqual([]);
+    expect(services.todos.env.find((group: any) => group.name === "artifact-bucket").configuredEnv).toEqual([]);
+    expect(stdout).not.toContain("raw-projects-password");
+    expect(stdout).not.toContain("raw-malformed-project-secret");
+    expect(stdout).not.toContain("not-a-postgres-url-with-raw-secret");
+    expect(stdout).not.toContain("Invalid_Bucket_With_Raw_Secret");
+    expect(stdout).not.toContain("raw-conv-password");
+    expect(stdout).not.toContain("postgres://");
+    expect(stdout).not.toContain("db.example.invalid");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("CLI cloud memory preflight reports env names without leaking secret values", () => {
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {
     const dbPath = join(dir, "uptime.db");
-    const preflight = runCli(["cloud", "memory-preflight", "--machine-id", "spark01", "--json"], dbPath, {
+    const preflight = runCli(["cloud", "memory-preflight", "--machine-id", "spark01", "--json"], dbPath, cloudMemoryEnv({
       HASNA_PROJECTS_DATABASE_URL: "postgres://projects:raw-projects-password@db.example.invalid/projects",
       HASNA_PROJECTS_CLOUD_PRIMARY_READY: "1",
       HASNA_TODOS_STORAGE_MODE: "remote",
@@ -292,7 +503,7 @@ test("CLI cloud memory preflight reports env names without leaking secret values
       HASNA_UPTIME_SPARK01_BOOTSTRAP_TOKEN_REVOKED: "1",
       HASNA_UPTIME_SPARK01_PRIVATE_PROBE_READY: "1",
       HASNA_UPTIME_SPARK01_ROLLBACK_REHEARSED: "1",
-    });
+    }));
     const stdout = new TextDecoder().decode(preflight.stdout);
     const body = JSON.parse(stdout);
     const services = Object.fromEntries(body.services.map((service: any) => [service.name, service]));
@@ -330,13 +541,13 @@ test("CLI cloud memory preflight binds machine evidence to the selected machine 
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {
     const dbPath = join(dir, "uptime.db");
-    const sparkEnv = {
+    const sparkEnv = cloudMemoryEnv({
       HASNA_UPTIME_SPARK01_MACHINE_REGISTRATION_READY: "1",
       HASNA_UPTIME_SPARK01_PRIMARY_LEASE_READY: "1",
       HASNA_UPTIME_SPARK01_BOOTSTRAP_TOKEN_REVOKED: "1",
       HASNA_UPTIME_SPARK01_PRIVATE_PROBE_READY: "1",
       HASNA_UPTIME_SPARK01_ROLLBACK_REHEARSED: "1",
-    };
+    });
     const workerWithSparkEvidence = runCli(["cloud", "memory-preflight", "--machine-id", "worker02", "--json"], dbPath, sparkEnv);
     const workerBody = JSON.parse(new TextDecoder().decode(workerWithSparkEvidence.stdout));
     const workerChecks = Object.fromEntries(workerBody.machineChecks.map((check: any) => [check.name, check]));
@@ -382,8 +593,9 @@ test("built CLI cloud memory preflight is available and fails closed", () => {
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {
     const dbPath = join(dir, "uptime.db");
-    const report = runBuiltCli(["cloud", "memory-preflight", "--json"], dbPath);
-    const healthcheck = runBuiltCli(["cloud", "memory-preflight", "--healthcheck", "--json"], dbPath);
+    const env = cloudMemoryEnv();
+    const report = runBuiltCli(["cloud", "memory-preflight", "--json"], dbPath, env);
+    const healthcheck = runBuiltCli(["cloud", "memory-preflight", "--healthcheck", "--json"], dbPath, env);
     const body = JSON.parse(new TextDecoder().decode(report.stdout));
 
     expect(report.exitCode).toBe(0);

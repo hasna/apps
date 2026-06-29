@@ -6,6 +6,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.39] - 2026-06-29
+
+### Changed
+
+- `uptime cloud memory-preflight` now recognizes existing Hasna canonical live
+  metadata environment names for Projects, Todos, and Conversations as
+  configuration evidence without printing or depending on the secret values.
+
+### Security
+
+- Canonical live metadata only satisfies the configuration check. Spark01 and
+  service cloud-primary status still require audited proof envs, sync evidence,
+  and the existing Open Uptime Postgres/runtime blockers to be resolved.
+
 ## [0.1.38] - 2026-06-29
 
 ### Added
