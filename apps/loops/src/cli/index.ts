@@ -100,6 +100,32 @@ function preflightFailed(error: unknown, context: Record<string, unknown>): neve
   process.exit(1);
 }
 
+function validationFailed(error: unknown, context: Record<string, unknown>): never {
+  if (!isJson()) throw error;
+  const message = error instanceof Error ? error.message : String(error);
+  print({
+    ok: false,
+    created: false,
+    validation: {
+      ok: false,
+      error: redact(message, 320),
+    },
+    ...context,
+  });
+  process.exit(1);
+}
+
+function validateLoopTargetForStorage(target: Exclude<LoopTarget, { type: "workflow" }>, context: Record<string, unknown>): void {
+  try {
+    workflowBodyFromJson({
+      name: "loop-target-validation",
+      steps: [{ id: "target", target }],
+    });
+  } catch (error) {
+    validationFailed(error, context);
+  }
+}
+
 function preflightLoopTarget(
   target: Exclude<LoopTarget, { type: "workflow" }>,
   context: Record<string, unknown>,
@@ -1753,6 +1779,7 @@ addGoalOptions(
       preflight: runtimePreflightFromOpts(opts),
     };
     const input = baseCreateInput(name, opts, target);
+    validateLoopTargetForStorage(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "agent", provider });
     const preflight = opts.preflight
       ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "agent", provider }, { loopName: name }, { machine: input.machine })
       : undefined;

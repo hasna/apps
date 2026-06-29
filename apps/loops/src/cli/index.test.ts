@@ -99,6 +99,34 @@ describe("loops CLI", () => {
     expect(value.runNow.advancesLoop).toBe(false);
   });
 
+  test("create agent rejects unsupported provider add dirs before storing", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-create-agent-adddirs-"));
+
+    const create = runCli(dataDir, [
+      "--json",
+      "create",
+      "agent",
+      "bad-cursor-adddirs",
+      "--provider",
+      "cursor",
+      "--prompt",
+      "noop",
+      "--add-dir",
+      "/tmp/hasna-todos",
+      "--at",
+      futureAt(),
+    ]);
+
+    expect(create.status).toBe(1);
+    const value = JSON.parse(create.stdout);
+    expect(value.created).toBe(false);
+    expect(value.validation.error).toContain("addDirs is currently supported only for provider codewith or codex");
+
+    const list = runCli(dataDir, ["--json", "list"]);
+    expect(list.status).toBe(0);
+    expect(JSON.parse(list.stdout)).toHaveLength(0);
+  });
+
   test("run-now falls back to an ad hoc slot when the due slot is already terminal", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-terminal-due-"));
     const store = new Store(join(dataDir, "loops.db"));
