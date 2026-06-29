@@ -1,12 +1,12 @@
 import type { Command } from "commander";
-import { getStorageConnectionString } from "../../db/cloud-config.js";
+import { getStorageConnectionString } from "../../db/storage-config.js";
 import {
   getStorageStatus,
   parseStorageTables,
   pullStorageChanges,
   pushStorageChanges,
   syncStorageChanges,
-} from "../../db/cloud-sync.js";
+} from "../../db/storage-sync.js";
 
 function printJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
@@ -124,7 +124,4 @@ function installStorageSubcommands(storage: Command): void {
 
 export function registerStorageCommands(program: Command): void {
   installStorageSubcommands(program.command("storage").description("Manage brains local/remote storage sync"));
-  installStorageSubcommands(program.command("cloud", { hidden: true }).description("Deprecated alias for storage commands"));
 }
-
-export const registerCloudCommands = registerStorageCommands;

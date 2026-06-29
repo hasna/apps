@@ -10,7 +10,7 @@ import { registerModelsCommands } from "./commands/models.js";
 import { registerFinetuneCommands } from "./commands/finetune.js";
 import { registerDataCommands } from "./commands/data.js";
 import { registerCollectionsCommands } from "./commands/collections.js";
-import { registerStorageCommands } from "./commands/cloud.js";
+import { registerStorageCommands } from "./commands/storage.js";
 import { getPackageVersion } from "../lib/package-metadata.js";
 import { parseRemoveType } from "./remove.js";
 

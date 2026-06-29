@@ -1,14 +1,14 @@
 {
   "name": "@hasna/brains",
-  "version": "0.0.32",
+  "version": "0.0.33",
   "description": "Fine-tuned model tracker and trainer — wraps OpenAI + Thinker Labs, gathers training data from todos/mementos/conversations/sessions",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "brains": "./dist/cli/index.js",
-    "brains-mcp": "./dist/mcp/index.js",
-    "brains-serve": "./dist/server/index.js"
+    "brains": "dist/cli/index.js",
+    "brains-mcp": "dist/mcp/index.js",
+    "brains-serve": "dist/server/index.js"
   },
   "exports": {
     ".": {
@@ -35,6 +35,7 @@
     "db:generate": "bunx drizzle-kit generate",
     "db:migrate": "bunx drizzle-kit migrate",
     "db:studio": "bunx drizzle-kit studio",
+    "prepublishOnly": "bun run typecheck && bun test && bun run build",
     "postinstall": "mkdir -p $HOME/.hasna/brains/datasets 2>/dev/null || true"
   },
   "keywords": [
@@ -52,11 +53,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasna/open-brains.git"
+    "url": "git+https://github.com/hasna/brains.git"
   },
-  "homepage": "https://github.com/hasna/open-brains",
+  "homepage": "https://github.com/hasna/brains",
   "bugs": {
-    "url": "https://github.com/hasna/open-brains/issues"
+    "url": "https://github.com/hasna/brains/issues"
   },
   "engines": {
     "bun": ">=1.0.0"

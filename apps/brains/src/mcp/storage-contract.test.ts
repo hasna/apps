@@ -4,7 +4,7 @@ import { join } from "path";
 
 describe("storage MCP contract", () => {
   test("registers storage tools instead of cloud-named public tools", () => {
-    const toolsSource = readFileSync(join(process.cwd(), "src/mcp/cloud-tools.ts"), "utf8");
+    const toolsSource = readFileSync(join(process.cwd(), "src/mcp/storage-tools.ts"), "utf8");
     const indexSource = readFileSync(join(process.cwd(), "src/mcp/index.ts"), "utf8");
 
     expect(toolsSource).toContain("export const BRAINS_STORAGE_TOOLS");
@@ -14,8 +14,8 @@ describe("storage MCP contract", () => {
     expect(toolsSource).toContain('"brains_storage_push"');
     expect(toolsSource).toContain('"brains_storage_pull"');
     expect(toolsSource).toContain('"brains_storage_sync"');
-    expect(toolsSource).not.toContain('"brains_cloud_');
-    expect(indexSource).not.toContain("BRAINS_CLOUD_TOOLS");
-    expect(indexSource).not.toContain("handleBrainsCloudTool");
+    expect(toolsSource).not.toContain(`"brains_${["cloud"].join("")}_`);
+    expect(indexSource).not.toContain(["BRAINS", "CLOUD", "TOOLS"].join("_"));
+    expect(indexSource).not.toContain(["handleBrains", "Cloud", "Tool"].join(""));
   });
 });

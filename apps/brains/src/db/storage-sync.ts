@@ -1,6 +1,6 @@
 import type { SqliteAdapter } from "./sqlite-adapter.js";
 import { getBrainsDbPath, getRawDb } from "./index.js";
-import { getStorageConfig, getStorageConnectionString } from "./cloud-config.js";
+import { getStorageConfig, getStorageConnectionString } from "./storage-config.js";
 import { PgAdapterAsync } from "./remote-storage.js";
 import { PG_MIGRATIONS } from "./pg-migrations.js";
 
@@ -23,16 +23,12 @@ export interface StorageStatus {
   tables: Array<{ table: string; rows: number }>;
 }
 
-export type CloudStatus = StorageStatus;
-
 export const STORAGE_TABLES = [
   "fine_tuned_models",
   "training_jobs",
   "training_datasets",
   "feedback",
 ] as const;
-
-export const CLOUD_TABLES = STORAGE_TABLES;
 
 const TABLE_KEYS: Record<string, string[]> = {
   fine_tuned_models: ["id"],
@@ -118,15 +114,11 @@ export async function getStoragePg(): Promise<PgAdapterAsync> {
   return new PgAdapterAsync(getStorageConnectionString("brains"));
 }
 
-export const getCloudPg = getStoragePg;
-
 export async function runStorageMigrations(remote: PgAdapterAsync): Promise<void> {
   for (const migration of PG_MIGRATIONS) {
     await remote.exec(migration);
   }
 }
-
-export const runCloudMigrations = runStorageMigrations;
 
 export function getStorageStatus(db: SqliteAdapter = getRawDb()): StorageStatus {
   const config = getStorageConfig();
@@ -148,8 +140,6 @@ export function getStorageStatus(db: SqliteAdapter = getRawDb()): StorageStatus 
     db.close();
   }
 }
-
-export const getCloudStatus = getStorageStatus;
 
 export async function pushStorageChanges(tables: string[] = [...STORAGE_TABLES]): Promise<StorageSyncResult[]> {
   const db = getRawDb();
@@ -177,8 +167,6 @@ export async function pushStorageChanges(tables: string[] = [...STORAGE_TABLES])
   return results;
 }
 
-export const pushCloudChanges = pushStorageChanges;
-
 export async function pullStorageChanges(tables: string[] = [...STORAGE_TABLES]): Promise<StorageSyncResult[]> {
   const db = getRawDb();
   const remote = await getStoragePg();
@@ -205,8 +193,6 @@ export async function pullStorageChanges(tables: string[] = [...STORAGE_TABLES])
   return results;
 }
 
-export const pullCloudChanges = pullStorageChanges;
-
 export async function syncStorageChanges(tables: string[] = [...STORAGE_TABLES]): Promise<{ push: StorageSyncResult[]; pull: StorageSyncResult[] }> {
   return {
     push: await pushStorageChanges(tables),
@@ -214,12 +200,8 @@ export async function syncStorageChanges(tables: string[] = [...STORAGE_TABLES])
   };
 }
 
-export const syncCloudChanges = syncStorageChanges;
-
 export function parseStorageTables(raw?: string): string[] {
   if (!raw) return [...STORAGE_TABLES];
   const requested = raw.split(",").map((table) => table.trim()).filter(Boolean);
   return requested.length > 0 ? requested : [...STORAGE_TABLES];
 }
-
-export const parseCloudTables = parseStorageTables;

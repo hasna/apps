@@ -4,7 +4,7 @@ import {
   pullStorageChanges,
   pushStorageChanges,
   syncStorageChanges,
-} from "../db/cloud-sync.js";
+} from "../db/storage-sync.js";
 
 type McpToolResult = {
   content: Array<{ type: "text"; text: string }>;
@@ -57,8 +57,6 @@ export const BRAINS_STORAGE_TOOLS = [
   },
 ] as const;
 
-export const BRAINS_CLOUD_TOOLS = BRAINS_STORAGE_TOOLS;
-
 export async function handleBrainsStorageTool(name: string, args: unknown): Promise<McpToolResult | null> {
   const tables = parseStorageTables((args as { tables?: string } | undefined)?.tables);
 
@@ -79,5 +77,3 @@ export async function handleBrainsStorageTool(name: string, args: unknown): Prom
     return err(error);
   }
 }
-
-export const handleBrainsCloudTool = handleBrainsStorageTool;

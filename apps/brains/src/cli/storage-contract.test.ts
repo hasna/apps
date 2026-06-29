@@ -32,12 +32,12 @@ describe("storage CLI contract", () => {
     expect(help).not.toContain("cloud");
   });
 
-  test("keeps cloud as a hidden migration alias", () => {
-    const source = readFileSync(join(process.cwd(), "src/cli/commands/cloud.ts"), "utf8");
+  test("registers only storage commands", () => {
+    const source = readFileSync(join(process.cwd(), "src/cli/commands/storage.ts"), "utf8");
 
     expect(source).toContain("export function registerStorageCommands");
     expect(source).toContain('program.command("storage")');
-    expect(source).toContain('program.command("cloud", { hidden: true })');
-    expect(source).toContain("export const registerCloudCommands = registerStorageCommands");
+    expect(source).not.toContain('program.command("cloud"');
+    expect(source).not.toContain(["register", "Cloud", "Commands"].join(""));
   });
 });

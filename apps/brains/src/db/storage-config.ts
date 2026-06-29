@@ -3,7 +3,6 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 export type StorageMode = "local" | "remote" | "hybrid";
-export type CloudMode = StorageMode | "cloud";
 
 export interface StorageConfig {
   mode: StorageMode;
@@ -16,28 +15,14 @@ export interface StorageConfig {
   };
 }
 
-export type CloudConfig = StorageConfig;
-
 export const STORAGE_DATABASE_ENV = ["HASNA_BRAINS_DATABASE_URL", "BRAINS_DATABASE_URL"] as const;
-export const DEPRECATED_CLOUD_DATABASE_ENV = [
-  "HASNA_BRAINS_CLOUD_DATABASE_URL",
-  "OPEN_BRAINS_CLOUD_DATABASE_URL",
-  "BRAINS_CLOUD_DATABASE_URL",
-] as const;
 
 export const STORAGE_MODE_ENV = ["HASNA_BRAINS_STORAGE_MODE", "BRAINS_STORAGE_MODE"] as const;
-export const DEPRECATED_CLOUD_MODE_ENV = [
-  "HASNA_BRAINS_CLOUD_MODE",
-  "OPEN_BRAINS_CLOUD_MODE",
-  "BRAINS_CLOUD_MODE",
-] as const;
 
 const STORAGE_CONFIG_PATH = join(homedir(), ".hasna", "brains", "storage", "config.json");
-const DEPRECATED_CLOUD_CONFIG_PATH = join(homedir(), ".hasna", "brains", "cloud", "config.json");
 
 function normalizeMode(value: string | undefined): StorageMode | undefined {
   if (value === "local" || value === "hybrid" || value === "remote") return value;
-  if (value === "cloud") return "remote";
   return undefined;
 }
 
@@ -50,10 +35,8 @@ function firstEnv(names: readonly string[]): string | undefined {
 }
 
 export function getStorageDatabaseUrl(): string | undefined {
-  return firstEnv(STORAGE_DATABASE_ENV) ?? firstEnv(DEPRECATED_CLOUD_DATABASE_ENV);
+  return firstEnv(STORAGE_DATABASE_ENV);
 }
-
-export const getCloudDatabaseUrl = getStorageDatabaseUrl;
 
 export function getStorageConfig(): StorageConfig {
   const config: StorageConfig = {
@@ -67,10 +50,9 @@ export function getStorageConfig(): StorageConfig {
     },
   };
 
-  const configPath = existsSync(STORAGE_CONFIG_PATH) ? STORAGE_CONFIG_PATH : DEPRECATED_CLOUD_CONFIG_PATH;
-  if (existsSync(configPath)) {
+  if (existsSync(STORAGE_CONFIG_PATH)) {
     try {
-      const raw = JSON.parse(readFileSync(configPath, "utf-8")) as Partial<StorageConfig> & { mode?: CloudMode };
+      const raw = JSON.parse(readFileSync(STORAGE_CONFIG_PATH, "utf-8")) as Partial<StorageConfig> & { mode?: StorageMode };
       config.mode = normalizeMode(raw.mode) ?? config.mode;
       config.rds = { ...config.rds, ...(raw.rds ?? {}) };
     } catch {
@@ -78,7 +60,7 @@ export function getStorageConfig(): StorageConfig {
     }
   }
 
-  const modeOverride = firstEnv(STORAGE_MODE_ENV) ?? firstEnv(DEPRECATED_CLOUD_MODE_ENV);
+  const modeOverride = firstEnv(STORAGE_MODE_ENV);
   const normalizedMode = normalizeMode(modeOverride);
   if (normalizedMode) {
     config.mode = normalizedMode;
@@ -88,8 +70,6 @@ export function getStorageConfig(): StorageConfig {
 
   return config;
 }
-
-export const getCloudConfig = getStorageConfig;
 
 export function getStorageConnectionString(dbName = "brains"): string {
   const direct = getStorageDatabaseUrl();
@@ -109,5 +89,3 @@ export function getStorageConnectionString(dbName = "brains"): string {
   const sslParam = ssl ? "?sslmode=require" : "";
   return `postgres://${username}:${encodeURIComponent(password)}@${host}:${port}/${dbName}${sslParam}`;
 }
-
-export const getConnectionString = getStorageConnectionString;

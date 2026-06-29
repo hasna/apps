@@ -19,7 +19,7 @@ import { gatherFromSessions } from "../lib/gatherers/sessions.js";
 import type { TrainingExample } from "../lib/gatherers/types.js";
 import { getPackageVersion } from "../lib/package-metadata.js";
 import { McpGatherSchema, McpFinetuneStartSchema, McpFinetuneStatusSchema } from "../lib/schemas.js";
-import { BRAINS_STORAGE_TOOLS, handleBrainsStorageTool } from "./cloud-tools.js";
+import { BRAINS_STORAGE_TOOLS, handleBrainsStorageTool } from "./storage-tools.js";
 import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 
 // --- helpers ---

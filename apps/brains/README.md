@@ -61,8 +61,8 @@ brains storage pull
 ```
 
 Set `HASNA_BRAINS_DATABASE_URL` for a direct PostgreSQL connection, or configure `~/.hasna/brains/storage/config.json` for the brains RDS host settings.
-Deprecated migration aliases are still accepted: `HASNA_BRAINS_CLOUD_DATABASE_URL`,
-`OPEN_BRAINS_CLOUD_DATABASE_URL`, and `BRAINS_CLOUD_DATABASE_URL`.
+Legacy cloud aliases are not used. Configure remote storage with the storage
+environment variables above.
 
 ## Data Directory
 
