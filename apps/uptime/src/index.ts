@@ -33,7 +33,7 @@ export {
   PostgresReportRuntime,
   sanitizePostgresReportRuntimeError,
 } from "./postgres-report-runtime.js";
-export { runHostedPublicChecksWorker, runPostgresPublicProbeWorker } from "./workers.js";
+export { runHostedPublicChecksWorker, runPostgresPublicProbeWorker, runPostgresSchedulerWorker } from "./workers.js";
 export { runEdgeSmoke } from "./edge-smoke.js";
 export { uptimeHome, uptimeDbPath, uptimeHostedFallbackDbPath, ensureUptimeHome } from "./paths.js";
 export type {

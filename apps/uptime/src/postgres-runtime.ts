@@ -139,6 +139,17 @@ export interface CreatePostgresCheckJobInput {
   idempotencyKey?: string | null;
 }
 
+export interface ListPostgresSchedulerMonitorsOptions {
+  workspaceId?: string;
+  now?: string;
+  limit?: number;
+  cursor?: {
+    sortAt: string;
+    id: string;
+  };
+  probePolicy?: ProbePolicy;
+}
+
 export interface PostgresMonitorSnapshot {
   workspaceId: string;
   id: string;
@@ -182,6 +193,19 @@ export interface ListDuePostgresCheckJobsOptions {
   workspaceId?: string;
   now?: string;
   limit?: number;
+  probeClass?: ProbeClass;
+  probeId?: string;
+}
+
+export interface DeferPostgresSchedulerMonitorInput {
+  workspaceId?: string;
+  monitorId: string;
+  monitorRevision: number;
+  deferredAt?: string;
+  reason?: string | null;
+  actor?: string | null;
+  origin?: string | null;
+  idempotencyKey?: string | null;
 }
 
 export interface GetPostgresMonitorOptions {
@@ -521,8 +545,136 @@ export class PostgresRuntime {
           probe_policy_hash, status, due_at, deploy_generation, actor, origin, idempotency_key
         ) VALUES ($1, $2, $3, $4, $5::jsonb, $6::timestamptz, $7::jsonb, $8, 'pending', $9::timestamptz, $10, $11, $12, $13)
         ON CONFLICT (workspace_id, monitor_id, monitor_version, schedule_slot, probe_policy_hash) DO UPDATE SET
-          updated_at = ${this.table("check_jobs")}.updated_at
-        WHERE ${this.table("check_jobs")}.deleted_at IS NULL
+          monitor_snapshot = CASE
+            WHEN ${this.table("check_jobs")}.submitted_result_id IS NULL
+             AND (
+               ${this.table("check_jobs")}.deleted_at IS NOT NULL
+               OR ${this.table("check_jobs")}.monitor_snapshot = '{}'::jsonb
+               OR ${this.table("check_jobs")}.status = 'cancelled'
+             )
+            THEN EXCLUDED.monitor_snapshot
+            ELSE ${this.table("check_jobs")}.monitor_snapshot
+          END,
+          status = CASE
+            WHEN ${this.table("check_jobs")}.submitted_result_id IS NULL
+             AND (
+               ${this.table("check_jobs")}.deleted_at IS NOT NULL
+               OR ${this.table("check_jobs")}.monitor_snapshot = '{}'::jsonb
+               OR ${this.table("check_jobs")}.status = 'cancelled'
+             )
+            THEN 'pending'
+            ELSE ${this.table("check_jobs")}.status
+          END,
+          due_at = CASE
+            WHEN ${this.table("check_jobs")}.submitted_result_id IS NULL
+             AND (
+               ${this.table("check_jobs")}.deleted_at IS NOT NULL
+               OR ${this.table("check_jobs")}.monitor_snapshot = '{}'::jsonb
+               OR ${this.table("check_jobs")}.status = 'cancelled'
+             )
+            THEN EXCLUDED.due_at
+            ELSE ${this.table("check_jobs")}.due_at
+          END,
+          claimed_by_probe_id = CASE
+            WHEN ${this.table("check_jobs")}.submitted_result_id IS NULL
+             AND (
+               ${this.table("check_jobs")}.deleted_at IS NOT NULL
+               OR ${this.table("check_jobs")}.monitor_snapshot = '{}'::jsonb
+               OR ${this.table("check_jobs")}.status = 'cancelled'
+             )
+            THEN NULL
+            ELSE ${this.table("check_jobs")}.claimed_by_probe_id
+          END,
+          fencing_token = CASE
+            WHEN ${this.table("check_jobs")}.submitted_result_id IS NULL
+             AND (
+               ${this.table("check_jobs")}.deleted_at IS NOT NULL
+               OR ${this.table("check_jobs")}.monitor_snapshot = '{}'::jsonb
+               OR ${this.table("check_jobs")}.status = 'cancelled'
+             )
+            THEN NULL
+            ELSE ${this.table("check_jobs")}.fencing_token
+          END,
+          claimed_at = CASE
+            WHEN ${this.table("check_jobs")}.submitted_result_id IS NULL
+             AND (
+               ${this.table("check_jobs")}.deleted_at IS NOT NULL
+               OR ${this.table("check_jobs")}.monitor_snapshot = '{}'::jsonb
+               OR ${this.table("check_jobs")}.status = 'cancelled'
+             )
+            THEN NULL
+            ELSE ${this.table("check_jobs")}.claimed_at
+          END,
+          lease_expires_at = CASE
+            WHEN ${this.table("check_jobs")}.submitted_result_id IS NULL
+             AND (
+               ${this.table("check_jobs")}.deleted_at IS NOT NULL
+               OR ${this.table("check_jobs")}.monitor_snapshot = '{}'::jsonb
+               OR ${this.table("check_jobs")}.status = 'cancelled'
+             )
+            THEN NULL
+            ELSE ${this.table("check_jobs")}.lease_expires_at
+          END,
+          deleted_at = CASE
+            WHEN ${this.table("check_jobs")}.submitted_result_id IS NULL
+             AND (
+               ${this.table("check_jobs")}.deleted_at IS NOT NULL
+               OR ${this.table("check_jobs")}.monitor_snapshot = '{}'::jsonb
+               OR ${this.table("check_jobs")}.status = 'cancelled'
+             )
+            THEN NULL
+            ELSE ${this.table("check_jobs")}.deleted_at
+          END,
+          actor = CASE
+            WHEN ${this.table("check_jobs")}.submitted_result_id IS NULL
+             AND (
+               ${this.table("check_jobs")}.deleted_at IS NOT NULL
+               OR ${this.table("check_jobs")}.monitor_snapshot = '{}'::jsonb
+               OR ${this.table("check_jobs")}.status = 'cancelled'
+             )
+            THEN EXCLUDED.actor
+            ELSE ${this.table("check_jobs")}.actor
+          END,
+          origin = CASE
+            WHEN ${this.table("check_jobs")}.submitted_result_id IS NULL
+             AND (
+               ${this.table("check_jobs")}.deleted_at IS NOT NULL
+               OR ${this.table("check_jobs")}.monitor_snapshot = '{}'::jsonb
+               OR ${this.table("check_jobs")}.status = 'cancelled'
+             )
+            THEN EXCLUDED.origin
+            ELSE ${this.table("check_jobs")}.origin
+          END,
+          idempotency_key = CASE
+            WHEN ${this.table("check_jobs")}.submitted_result_id IS NULL
+             AND (
+               ${this.table("check_jobs")}.deleted_at IS NOT NULL
+               OR ${this.table("check_jobs")}.monitor_snapshot = '{}'::jsonb
+               OR ${this.table("check_jobs")}.status = 'cancelled'
+             )
+            THEN EXCLUDED.idempotency_key
+            ELSE ${this.table("check_jobs")}.idempotency_key
+          END,
+          updated_at = CASE
+            WHEN ${this.table("check_jobs")}.submitted_result_id IS NULL
+             AND (
+               ${this.table("check_jobs")}.deleted_at IS NOT NULL
+               OR ${this.table("check_jobs")}.monitor_snapshot = '{}'::jsonb
+               OR ${this.table("check_jobs")}.status = 'cancelled'
+             )
+            THEN now()
+            ELSE ${this.table("check_jobs")}.updated_at
+          END,
+          version = CASE
+            WHEN ${this.table("check_jobs")}.submitted_result_id IS NULL
+             AND (
+               ${this.table("check_jobs")}.deleted_at IS NOT NULL
+               OR ${this.table("check_jobs")}.monitor_snapshot = '{}'::jsonb
+               OR ${this.table("check_jobs")}.status = 'cancelled'
+             )
+            THEN ${this.table("check_jobs")}.version + 1
+            ELSE ${this.table("check_jobs")}.version
+          END
         RETURNING *`,
         [
           workspaceId,
@@ -544,16 +696,74 @@ export class PostgresRuntime {
     return checkJobFromRow(firstRow(result, "check job"));
   }
 
+  async listSchedulerMonitors(options: ListPostgresSchedulerMonitorsOptions = {}): Promise<PostgresMonitorRecord[]> {
+    const workspaceId = normalizeWorkspaceId(options.workspaceId ?? this.workspaceId);
+    const now = normalizeIsoTimestamp(options.now ?? this.clock().toISOString(), "scheduler monitor now");
+    const limit = clampLimit(options.limit ?? 50);
+    const cursorSortAt = options.cursor ? normalizeIsoTimestamp(options.cursor.sortAt, "scheduler monitor cursor sortAt") : null;
+    const cursorId = options.cursor ? normalizeId(options.cursor.id) : "";
+    const probePolicyHash = options.probePolicy ? hashProbePolicy(normalizeProbePolicy(options.probePolicy)) : null;
+    const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
+      `SELECT * FROM ${this.table("monitors")}
+       WHERE workspace_id = $1
+         AND enabled = true
+         AND kind IN ('http', 'tcp')
+         AND deleted_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1
+           FROM ${this.table("check_jobs")} AS open_job
+           WHERE open_job.workspace_id = ${this.table("monitors")}.workspace_id
+             AND open_job.monitor_id = ${this.table("monitors")}.id
+             AND open_job.monitor_version = ${this.table("monitors")}.version
+             AND open_job.deleted_at IS NULL
+             AND open_job.submitted_result_id IS NULL
+             AND open_job.status IN ('pending', 'claimed', 'expired')
+             AND ($6::text IS NULL OR open_job.probe_policy_hash = $6)
+         )
+         AND (
+           last_checked_at IS NULL
+           OR last_checked_at + (interval_seconds::bigint * interval '1 second') <= $2::timestamptz
+         )
+         AND (
+           $4::timestamptz IS NULL
+           OR (COALESCE(last_checked_at, created_at), id) > ($4::timestamptz, $5)
+         )
+       ORDER BY COALESCE(last_checked_at, created_at) ASC, id ASC
+       LIMIT $3`,
+      [workspaceId, now, limit, cursorSortAt, cursorId, probePolicyHash],
+    ));
+    return result.rows.map((row) => monitorFromRow(row as Record<string, unknown>));
+  }
+
   async listDueCheckJobs(options: ListDuePostgresCheckJobsOptions = {}): Promise<PostgresCheckJobRecord[]> {
     const workspaceId = normalizeWorkspaceId(options.workspaceId ?? this.workspaceId);
     const now = normalizeIsoTimestamp(options.now ?? this.clock().toISOString(), "due check job now");
     const limit = clampLimit(options.limit ?? 50);
+    const probeClass = options.probeClass ? normalizeProbeClass(options.probeClass) : null;
+    const probeId = options.probeId ? normalizeId(options.probeId) : null;
     const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
       `SELECT * FROM ${this.table("check_jobs")}
        WHERE workspace_id = $1
          AND deleted_at IS NULL
          AND submitted_result_id IS NULL
          AND monitor_snapshot <> '{}'::jsonb
+         AND ($4::text IS NULL OR COALESCE(probe_policy->>'probeClass', probe_policy->>'probe_class') = $4)
+         AND (
+           $5::text IS NULL
+           OR EXISTS (
+             SELECT 1
+             FROM ${this.table("probe_identities")} AS due_probe
+             WHERE due_probe.workspace_id = ${this.table("check_jobs")}.workspace_id
+               AND due_probe.id = $5
+               AND due_probe.enabled = true
+               AND due_probe.deleted_at IS NULL
+               AND COALESCE(${this.table("check_jobs")}.probe_policy->>'probeClass', ${this.table("check_jobs")}.probe_policy->>'probe_class') = due_probe.probe_class
+               AND (
+                 jsonb_array_length(COALESCE(${this.table("check_jobs")}.probe_policy->'locations', '[]'::jsonb)) = 0
+                 OR (${this.table("check_jobs")}.probe_policy->'locations') ? due_probe.probe_location
+               )
+           )
+         )
          AND due_at <= $2::timestamptz
          AND (
            status IN ('pending', 'expired')
@@ -561,9 +771,36 @@ export class PostgresRuntime {
          )
        ORDER BY due_at ASC, created_at ASC, id ASC
        LIMIT $3`,
-      [workspaceId, now, limit],
+      [workspaceId, now, limit, probeClass, probeId],
     ));
     return result.rows.map((row) => redactCheckJobForDiscovery(checkJobFromRow(row as Record<string, unknown>)));
+  }
+
+  async deferSchedulerMonitor(input: DeferPostgresSchedulerMonitorInput): Promise<PostgresMonitorRecord | null> {
+    const workspaceId = normalizeWorkspaceId(input.workspaceId ?? this.workspaceId);
+    const monitorId = normalizeId(input.monitorId);
+    const monitorRevision = normalizePositiveInteger(input.monitorRevision, "scheduler monitor revision");
+    const deferredAt = normalizeIsoTimestamp(input.deferredAt ?? this.clock().toISOString(), "scheduler monitor deferredAt");
+    const actor = normalizeNullableOpaqueText(input.actor, "scheduler monitor actor", 160);
+    const origin = normalizeNullableOpaqueText(input.origin, "scheduler monitor origin", 200);
+    const idempotencyKey = normalizeNullableOpaqueText(input.idempotencyKey, "scheduler monitor idempotency key", 256);
+    const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
+      `UPDATE ${this.table("monitors")}
+       SET last_checked_at = GREATEST(COALESCE(last_checked_at, $4::timestamptz), $4::timestamptz),
+           actor = $5,
+           origin = $6,
+           idempotency_key = $7,
+           updated_at = now()
+       WHERE workspace_id = $1
+         AND id = $2
+         AND version = $3
+         AND enabled = true
+         AND deleted_at IS NULL
+       RETURNING *`,
+      [workspaceId, monitorId, monitorRevision, deferredAt, actor, origin, idempotencyKey],
+    ));
+    const row = result.rows[0];
+    return row ? monitorFromRow(row as Record<string, unknown>) : null;
   }
 
   async claimCheckJob(input: ClaimPostgresCheckJobInput): Promise<PostgresCheckJobRecord | null> {
@@ -1071,7 +1308,7 @@ export function buildPostgresRuntimeReadiness(options: Pick<PostgresRuntimeOptio
     },
     { name: "postgres-monitor-store", ok: true, detail: "workspace-scoped monitor upsert/tombstone methods are implemented" },
     { name: "postgres-probe-identity-store", ok: true, detail: "workspace-scoped probe identity methods include class and location" },
-    { name: "postgres-check-jobs-leases", ok: true, detail: "deterministic check_jobs creation, due discovery, claim, fencing, and completion methods are implemented" },
+    { name: "postgres-check-jobs-leases", ok: true, detail: "deterministic check_jobs creation, scheduler due monitor discovery, due job discovery, claim, fencing, and completion methods are implemented" },
     { name: "postgres-probe-submission-replay-guard", ok: true, detail: "nonce replay conflict detection uses payload_hash" },
     { name: "postgres-audit-tombstones", ok: true, detail: "audit_events and sync_tombstones writers are implemented" },
     { name: "uptime-service-integration", ok: false, detail: "UptimeService and hosted worker loops are not wired to this runtime yet" },

@@ -768,7 +768,34 @@ test("CLI hosted worker entrypoints preflight and fail closed", () => {
           workspaceId: "ws_cli",
         },
       });
+      if (role === "scheduler") {
+        const roleHealthJson = JSON.parse(new TextDecoder().decode(roleHealth.stdout));
+        const schedulerChecks = Object.fromEntries(roleHealthJson.checks.map((check: { name: string; ok: boolean }) => [check.name, check.ok]));
+        expect(schedulerChecks).toMatchObject({
+          "scheduler-job-creation": true,
+          "cloud-worker-leases": false,
+        });
+        expect(roleHealthJson.blockers.join("\n")).not.toContain("scheduler-job-creation");
+      }
     }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI Postgres scheduler runner requires explicit workspace", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const result = runCli(["cloud", "postgres-scheduler", "run", "--json"], dbPath, {
+      HASNA_UPTIME_MODE: "hosted",
+      HASNA_UPTIME_WORKSPACE_ID: "",
+    });
+    const body = JSON.parse(new TextDecoder().decode(result.stdout));
+
+    expect(result.exitCode).toBe(1);
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain("--workspace-id");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

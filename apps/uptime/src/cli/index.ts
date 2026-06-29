@@ -15,7 +15,7 @@ import { buildPostgresMigrationDryRun, renderPostgresMigrationRun, runPostgresMi
 import { buildPostgresRuntimeReadiness, createPostgresRuntime, sanitizePostgresRuntimeError } from "../postgres-runtime.js";
 import { buildPostgresReportRuntimeReadiness } from "../postgres-report-runtime.js";
 import { summarizeHostedReportChannelRefs, type HostedReportChannelRefSummary } from "../report-channel-refs.js";
-import { runHostedPublicChecksWorker, runPostgresPublicProbeWorker, type PostgresPublicProbeWorkerSummary } from "../workers.js";
+import { runHostedPublicChecksWorker, runPostgresPublicProbeWorker, runPostgresSchedulerWorker, type PostgresPublicProbeWorkerSummary, type PostgresSchedulerWorkerSummary } from "../workers.js";
 import { runEdgeSmoke, type EdgeSmokeReport } from "../edge-smoke.js";
 import type { AwsDeploymentPlan, PrivateProbeCloudConfig } from "../cloud-plan.js";
 import type { PostgresMigrationPlan } from "../postgres-plan.js";
@@ -794,6 +794,52 @@ const cloudPostgresPublicProbe = cloud
   .command("postgres-public-probe")
   .description("Run bounded Postgres public-probe review batches without enabling hosted ECS workers");
 
+const cloudPostgresScheduler = cloud
+  .command("postgres-scheduler")
+  .description("Create bounded Postgres check_jobs review batches without enabling hosted ECS workers");
+
+cloudPostgresScheduler
+  .command("run")
+  .description("Run one bounded Postgres scheduler review batch for due public-safe monitors")
+  .option("--workspace-id <id>", "workspace id; defaults to HASNA_UPTIME_WORKSPACE_ID but must resolve explicitly")
+  .option("--schema <name>", "Postgres schema name", "uptime")
+  .option("--limit <n>", "max due monitors to inspect", parseInteger, 50)
+  .option("--max-monitors <n>", "max monitors to process", parseInteger, 50)
+  .option("--max-jobs <n>", "max check_jobs to create", parseInteger, 100)
+  .option("--max-slots-per-monitor <n>", "max catch-up slots per monitor", parseInteger, 1)
+  .option("--catchup-window-ms <ms>", "max catch-up window in milliseconds", parseInteger, 300_000)
+  .option("--probe-locations <locations>", "comma-separated public probe locations")
+  .option("-j, --json", "print JSON")
+  .action(async (opts) => {
+    let runtime: ReturnType<typeof createPostgresRuntime> | null = null;
+    try {
+      const workspaceId = requireExplicitWorkspaceId(opts.workspaceId);
+      runtime = createPostgresRuntime({
+        schemaName: opts.schema,
+        workspaceId,
+      });
+      const summary = await runPostgresSchedulerWorker({
+        runtime,
+        workspaceId,
+        limit: opts.limit,
+        maxMonitors: opts.maxMonitors,
+        maxJobs: opts.maxJobs,
+        maxSlotsPerMonitor: opts.maxSlotsPerMonitor,
+        catchupWindowMs: opts.catchupWindowMs,
+        probePolicy: {
+          probeClass: "public",
+          locations: parseLocations(opts.probeLocations),
+        },
+      });
+      print(summary, renderPostgresSchedulerWorkerSummary(summary), opts);
+      if (summary.status !== "completed") process.exitCode = 1;
+    } catch (error) {
+      fail(new Error(sanitizePostgresRuntimeError(error, process.env.HASNA_UPTIME_DATABASE_URL)), opts);
+    } finally {
+      await runtime?.close();
+    }
+  });
+
 cloudPostgresPublicProbe
   .command("run")
   .description("Run one bounded Postgres public-probe review batch from existing check_jobs")
@@ -1431,6 +1477,29 @@ function renderHostedPublicChecksWorkerSummary(summary: HostedPublicChecksWorker
   ].join("\n");
 }
 
+function renderPostgresSchedulerWorkerSummary(summary: PostgresSchedulerWorkerSummary): string {
+  return [
+    "postgres scheduler worker",
+    `status: ${summary.status}`,
+    `workspace: ${summary.workspaceId ?? "<unset>"}`,
+    `discovered: ${summary.discovered}`,
+    `scheduled: ${summary.scheduled}`,
+    `skipped: ${summary.skipped}`,
+    `failed: ${summary.failed}`,
+    `started: ${summary.startedAt}`,
+    `finished: ${summary.finishedAt}`,
+    ...summary.results.map((result) => [
+      "-",
+      result.action.padEnd(9),
+      sanitizeField(result.monitorId),
+      result.monitorRevision == null ? "-" : String(result.monitorRevision),
+      `jobs=${result.scheduled}`,
+      result.jobIds.length ? result.jobIds.map(sanitizeField).join(",") : "-",
+      result.reason ? sanitizeField(result.reason) : "",
+    ].filter(Boolean).join(" ")),
+  ].join("\n");
+}
+
 function renderPostgresPublicProbeWorkerSummary(summary: PostgresPublicProbeWorkerSummary): string {
   return [
     "postgres public-probe worker",
@@ -1797,7 +1866,7 @@ function cloudMemoryServiceDefinitions(): CloudMemoryServiceDefinition[] {
       acceptsProof: false,
       implementationBlockers: [
         "hosted Postgres runtime is not fully wired through UptimeService, hosted API routes, scheduler/reporter loops, and live worker promotion",
-        "report-run storage, scheduler slot creation, deploy drain, backlog metrics, stale-lease alarms, and worker rollback evidence are not implemented as authoritative cloud paths",
+        "report-run storage, scheduler leases, deploy drain, backlog metrics, stale-lease alarms, and worker rollback evidence are not implemented as authoritative cloud paths",
       ],
       evidenceBlockers: [
         "EFS SQLite bridge is not cloud-primary and must stay a bounded web-only bridge until the full async Postgres hosted runtime is wired and verified",
@@ -1987,7 +2056,7 @@ function envFlagEnabled(name: string): boolean {
 
 function requireExplicitWorkspaceId(value?: string): string {
   const workspaceId = value?.trim() || process.env.HASNA_UPTIME_WORKSPACE_ID?.trim();
-  if (!workspaceId) throw new Error("Postgres public-probe worker requires --workspace-id or HASNA_UPTIME_WORKSPACE_ID");
+  if (!workspaceId) throw new Error("Postgres worker requires --workspace-id or HASNA_UPTIME_WORKSPACE_ID");
   if (/[\x00-\x1f\x7f-\x9f]/.test(workspaceId)) throw new Error("workspace id must not contain control characters");
   return workspaceId;
 }
@@ -2046,13 +2115,13 @@ function buildHostedWorkerPreflight(role: HostedWorkerRole): HostedWorkerPreflig
       name: "postgres-adapter",
       ok: false,
       detail: postgresRuntime.capabilities.monitorStore && postgresRuntime.capabilities.checkJobLeases
-        ? "Postgres core runtime facade and bounded public-probe runner exist, but UptimeService/API/scheduler/reporter loops are not fully integrated"
+        ? "Postgres core runtime facade plus bounded scheduler/public-probe runners exist, but UptimeService/API/scheduler/reporter loops are not fully integrated"
         : "async runtime store not implemented",
     },
     { name: "postgres-runtime-schema-verified", ok: runtimeCheck("postgres-runtime-schema-verified")?.ok ?? false, detail: runtimeCheck("postgres-runtime-schema-verified")?.detail ?? "not verified in this process" },
     { name: "postgres-monitor-store", ok: postgresRuntime.capabilities.monitorStore, detail: "workspace-scoped monitor upsert/tombstone methods are implemented" },
     { name: "postgres-probe-identity-store", ok: postgresRuntime.capabilities.probeIdentityStore, detail: "workspace-scoped probe identity methods include class and location" },
-    { name: "postgres-check-jobs-leases", ok: postgresRuntime.capabilities.checkJobLeases, detail: "deterministic check_jobs create/due/claim/complete methods are implemented" },
+    { name: "postgres-check-jobs-leases", ok: postgresRuntime.capabilities.checkJobLeases, detail: "deterministic check_jobs creation, scheduler due monitor discovery, due job discovery, claim, fencing, and completion methods are implemented" },
     { name: "postgres-audit-tombstones", ok: postgresRuntime.capabilities.auditWriter && postgresRuntime.capabilities.tombstoneWriter, detail: "audit_events and sync_tombstones writers are implemented" },
     { name: "cloud-worker-leases", ok: false, detail: "live worker ownership, deploy drain, backlog metrics, and stale-lease alarms are not proven" },
   ];
@@ -2066,6 +2135,9 @@ function buildHostedWorkerPreflight(role: HostedWorkerRole): HostedWorkerPreflig
   }
   if (role === "public-probe") {
     checks.push({ name: "public-probe-job-claims", ok: true, detail: "bounded uptime cloud postgres-public-probe run can claim, run, and submit existing Postgres check_jobs; live ECS promotion is still blocked" });
+  }
+  if (role === "scheduler") {
+    checks.push({ name: "scheduler-job-creation", ok: true, detail: "bounded uptime cloud postgres-scheduler run can create public-safe deterministic Postgres check_jobs; live ECS promotion is still blocked" });
   }
   if (role === "migration") {
     const migration = buildPostgresMigrationDryRun();
@@ -2185,7 +2257,7 @@ function hostedWorkerNextActions(role: HostedWorkerRole): string[] {
   if (role === "scheduler") {
     return [
       ...shared,
-      "Implement deterministic check_jobs creation with a scheduler lease and duplicate-slot protection.",
+      "Run the bounded Postgres scheduler against disposable and approved hosted Postgres, then prove scheduler lease ownership, deploy drain, backlog/stale-lease alarms, and sustained rollback evidence before scaling ECS.",
     ];
   }
   if (role === "public-probe") {

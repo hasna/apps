@@ -127,6 +127,18 @@ class FakeRuntimeClient implements PostgresQueryClient {
     if (sql.includes("SELECT * FROM \"uptime\".\"check_jobs\"") && sql.includes("FOR UPDATE")) {
       return { rows: this.job ? [snakeJob(this.job)] : [], rowCount: this.job ? 1 : 0 };
     }
+    if (sql.includes("SELECT * FROM \"uptime\".\"monitors\"") && sql.includes("NOT EXISTS")) {
+      const requestedProbePolicyHash = params?.[5] == null ? null : String(params[5]);
+      const hasOpenCurrentJob = this.job
+        && this.monitor
+        && this.job.workspaceId === this.monitor.workspaceId
+        && this.job.monitorId === this.monitor.id
+        && this.job.monitorRevision === this.monitor.revision
+        && this.job.submittedResultId === null
+        && (this.job.status === "pending" || this.job.status === "claimed" || this.job.status === "expired")
+        && (!requestedProbePolicyHash || this.job.probePolicyHash === requestedProbePolicyHash);
+      return { rows: hasOpenCurrentJob || !this.monitor ? [] : [snakeMonitor(this.monitor)], rowCount: hasOpenCurrentJob || !this.monitor ? 0 : 1 };
+    }
     if (sql.includes("SELECT * FROM \"uptime\".\"monitors\"")) {
       return { rows: this.monitor ? [snakeMonitor(this.monitor)] : [], rowCount: this.monitor ? 1 : 0 };
     }
@@ -308,6 +320,16 @@ test("Postgres runtime records monitors, probe leases, submissions, audit, and t
     actor: "scheduler",
   });
   const due = await runtime.listDueCheckJobs({ now: "2026-06-29T10:01:00.000Z" });
+  const schedulerMonitors = await runtime.listSchedulerMonitors({
+    now: "2026-06-29T10:01:00.000Z",
+    limit: 10,
+    probePolicy: { probeClass: "public", locations: ["us-east-1", "eu-west-1"] },
+  });
+  const schedulerMonitorsOtherPolicy = await runtime.listSchedulerMonitors({
+    now: "2026-06-29T10:01:00.000Z",
+    limit: 10,
+    probePolicy: { probeClass: "private", locations: ["machine002"] },
+  });
   const fetchedMonitor = await runtime.getMonitor({ id: monitor.id });
   const claimed = await runtime.claimCheckJob({
     jobId: job.id,
@@ -394,6 +416,8 @@ test("Postgres runtime records monitors, probe leases, submissions, audit, and t
   expect(expectedJobKey).toMatch(/^sha256:[a-f0-9]{64}$/);
   expect(job.id).toBe(`job_${expectedJobKey.replace("sha256:", "").slice(0, 32)}`);
   expect(fetchedMonitor?.id).toBe(monitor.id);
+  expect(schedulerMonitors).toHaveLength(0);
+  expect(schedulerMonitorsOtherPolicy).toHaveLength(1);
   expect(due[0]!.fencingToken).toBeNull();
   expect(claimed?.status).toBe("claimed");
   expect(claimed?.claimedByProbeId).toBe(probe.id);
@@ -414,6 +438,12 @@ test("Postgres runtime records monitors, probe leases, submissions, audit, and t
   expect(client.queries.some((query) => query.sql.includes("set_config($1, $2, true)") && query.params?.[0] === "app.workspace_id")).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("now() + ($5::bigint * interval '1 millisecond')"))).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("monitor_snapshot <> '{}'::jsonb"))).toBe(true);
+  expect(client.queries.some((query) => query.sql.includes("NOT EXISTS") && query.sql.includes("open_job.status IN ('pending', 'claimed', 'expired')"))).toBe(true);
+  expect(client.queries.some((query) => query.sql.includes("AND ($6::text IS NULL OR open_job.probe_policy_hash = $6)") && typeof query.params?.[5] === "string")).toBe(true);
+  expect(client.queries.some((query) => query.sql.includes("kind IN ('http', 'tcp')"))).toBe(true);
+  expect(client.queries.some((query) => query.sql.includes("(COALESCE(last_checked_at, created_at), id) >"))).toBe(true);
+  expect(client.queries.some((query) => query.sql.includes("last_checked_at + (interval_seconds::bigint * interval '1 second')"))).toBe(true);
+  expect(client.queries.some((query) => query.sql.includes("monitor_snapshot = '{}'::jsonb") && query.sql.includes("deleted_at IS NOT NULL"))).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("AND fencing_token = $5"))).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("payload_hash IS NOT DISTINCT FROM EXCLUDED.payload_hash"))).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("UPDATE \"uptime\".\"monitors\"") && query.sql.includes("version = $5"))).toBe(true);

@@ -6,6 +6,41 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.44] - 2026-06-29
+
+### Added
+
+- Added `uptime cloud postgres-scheduler run` for bounded, explicit-workspace
+  Postgres scheduler review batches that create deterministic `check_jobs` for
+  due public-safe HTTP/TCP monitors without promoting generic hosted workers.
+- Added `runPostgresSchedulerWorker` on the `@hasna/uptime/workers` SDK export
+  with interval-aligned schedule slots, bounded catch-up, producer-side hosted
+  target-policy checks, and audit metadata for created jobs.
+
+### Changed
+
+- Postgres runtime now exposes workspace-scoped scheduler monitor discovery and
+  excludes unsupported monitor kinds and monitors that already have open
+  pending/claimed/expired jobs for the same revision.
+- Postgres check-job creation can safely reactivate soft-deleted, cancelled, or
+  empty-snapshot historical rows for the same deterministic job key instead of
+  failing scheduler replays.
+- The Postgres public-probe worker requests due jobs for its concrete probe id
+  so class and location policy are filtered before claiming. It also rejects
+  wrong-workspace discovery rows before attempting a claim, and refuses
+  non-public probe-policy jobs before network execution.
+
+### Security
+
+- Hosted worker startup remains blocked: scheduler/public-probe/reporter generic
+  ECS commands still fail closed, healthcheck preflight still returns
+  `canStart=false`, and ECS desired counts remain zero by default.
+- The new scheduler command supports only public probe policy until private
+  target inventory/provenance exists, and refuses public jobs for hosted-denied
+  URLs, hosts, or DNS answers. Its bounded worker defers denied targets for the
+  current monitor interval so permanently blocked rows cannot starve later
+  public-safe monitors across repeated batches.
+
 ## [0.1.43] - 2026-06-29
 
 ### Added

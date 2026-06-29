@@ -1,14 +1,18 @@
 import { createHash } from "node:crypto";
+import dns from "node:dns/promises";
 import { runMonitorCheck, type HostedDnsResolver, type HostedHttpRequestLike } from "./checks.js";
 import { probeResultPayloadHash } from "./probes.js";
+import { assertHostedResolvedAddressesAllowed, assertHostedTargetAllowed, normalizeHostedHost, type HostedResolvedAddress } from "./target-policy.js";
 import {
   sanitizePostgresRuntimeError,
+  type CreatePostgresCheckJobInput,
   type PostgresCheckJobRecord,
   type PostgresMonitorSnapshot,
+  type PostgresMonitorRecord,
   type PostgresRuntime,
   type SubmitPostgresProbeCheckResult,
 } from "./postgres-runtime.js";
-import type { CheckAttemptResult, CheckEvidence, CheckResult, Monitor } from "./types.js";
+import type { CheckAttemptResult, CheckEvidence, CheckResult, Monitor, MonitorKind, ProbePolicy } from "./types.js";
 
 export interface HostedPublicCheckRunner {
   runDueHostedPublicChecks(now?: Date, options?: { workspaceId?: string }): Promise<CheckResult[]>;
@@ -44,7 +48,7 @@ export interface HostedPublicChecksWorkerSummary {
 }
 
 export interface PostgresPublicProbeRuntime {
-  listDueCheckJobs(options?: { workspaceId?: string; now?: string; limit?: number }): Promise<PostgresCheckJobRecord[]>;
+  listDueCheckJobs(options?: { workspaceId?: string; now?: string; limit?: number; probeClass?: "public" | "private"; probeId?: string }): Promise<PostgresCheckJobRecord[]>;
   claimCheckJob(input: { workspaceId?: string; jobId: string; probeId: string; leaseTtlMs?: number }): Promise<PostgresCheckJobRecord | null>;
   getMonitor(input: { workspaceId?: string; id: string }): Promise<PostgresMonitorSnapshot | null>;
   cancelClaimedCheckJob(input: {
@@ -99,6 +103,69 @@ export interface PostgresPublicProbeWorkerOptions {
   hostedResolveHost?: HostedDnsResolver;
   hostedHttpRequest?: HostedHttpRequestLike;
   hostedMaxRedirects?: number;
+}
+
+export interface PostgresSchedulerRuntime {
+  listSchedulerMonitors(options?: { workspaceId?: string; now?: string; limit?: number; cursor?: { sortAt: string; id: string }; probePolicy?: ProbePolicy }): Promise<PostgresMonitorRecord[]>;
+  createCheckJob(input: CreatePostgresCheckJobInput): Promise<PostgresCheckJobRecord>;
+  deferSchedulerMonitor?(input: {
+    workspaceId?: string;
+    monitorId: string;
+    monitorRevision: number;
+    deferredAt?: string;
+    reason?: string | null;
+    actor?: string | null;
+    origin?: string | null;
+    idempotencyKey?: string | null;
+  }): Promise<PostgresMonitorRecord | null>;
+  recordAuditEvent?(input: {
+    workspaceId?: string;
+    action: string;
+    resourceType?: string | null;
+    resourceId?: string | null;
+    message?: string | null;
+    metadata?: Record<string, unknown>;
+    actor?: string | null;
+    origin?: string | null;
+    idempotencyKey?: string | null;
+  }): Promise<unknown>;
+}
+
+export interface PostgresSchedulerWorkerOptions {
+  runtime: PostgresSchedulerRuntime | PostgresRuntime;
+  workspaceId?: string;
+  now?: () => Date;
+  limit?: number;
+  maxMonitors?: number;
+  maxJobs?: number;
+  maxSlotsPerMonitor?: number;
+  catchupWindowMs?: number;
+  probePolicy?: ProbePolicy;
+  supportedKinds?: MonitorKind[];
+  hostedResolveHost?: HostedDnsResolver;
+}
+
+export interface PostgresSchedulerWorkerMonitorResult {
+  monitorId: string;
+  monitorRevision: number | null;
+  action: "scheduled" | "skipped" | "failed";
+  scheduled: number;
+  jobIds: string[];
+  scheduleSlots: string[];
+  reason: string | null;
+}
+
+export interface PostgresSchedulerWorkerSummary {
+  kind: "open-uptime.postgres-scheduler-worker";
+  status: "completed" | "partial";
+  workspaceId: string | null;
+  discovered: number;
+  scheduled: number;
+  skipped: number;
+  failed: number;
+  startedAt: string;
+  finishedAt: string;
+  results: PostgresSchedulerWorkerMonitorResult[];
 }
 
 export interface PostgresPublicProbeWorkerJobResult {
@@ -173,6 +240,204 @@ export async function runHostedPublicChecksWorker(options: HostedPublicChecksWor
   };
 }
 
+export async function runPostgresSchedulerWorker(options: PostgresSchedulerWorkerOptions): Promise<PostgresSchedulerWorkerSummary> {
+  const limit = normalizePositiveInteger(options.limit ?? options.maxMonitors ?? 50, "limit");
+  const maxMonitors = normalizePositiveInteger(options.maxMonitors ?? limit, "maxMonitors");
+  const maxJobs = normalizePositiveInteger(options.maxJobs ?? 100, "maxJobs");
+  const maxSlotsPerMonitor = normalizePositiveInteger(options.maxSlotsPerMonitor ?? 1, "maxSlotsPerMonitor");
+  const catchupWindowMs = normalizePositiveInteger(options.catchupWindowMs ?? 300_000, "catchupWindowMs");
+  const clock = options.now ?? (() => new Date());
+  const startedAt = clock().toISOString();
+  const workspaceId = normalizeOptionalText(options.workspaceId);
+  const probePolicy = normalizeSchedulerProbePolicy(options.probePolicy);
+  const supportedKinds = new Set(options.supportedKinds ?? ["http", "tcp"]);
+  const resolveHost = options.hostedResolveHost ?? resolveSchedulerHostedHost;
+  const results: PostgresSchedulerWorkerMonitorResult[] = [];
+  let discoveredCount = 0;
+  let processedMonitors = 0;
+  let scheduledCount = 0;
+  let skippedCount = 0;
+  let failedCount = 0;
+  let cursor: { sortAt: string; id: string } | undefined;
+
+  while (scheduledCount < maxJobs && processedMonitors < maxMonitors) {
+    const monitors = await options.runtime.listSchedulerMonitors({
+      workspaceId,
+      now: startedAt,
+      limit,
+      cursor,
+      probePolicy,
+    });
+    discoveredCount += monitors.length;
+    if (monitors.length === 0) break;
+
+    for (const monitor of monitors) {
+      if (scheduledCount >= maxJobs) break;
+      if (processedMonitors >= maxMonitors) break;
+      cursor = schedulerMonitorCursor(monitor);
+      if (workspaceId && monitor.workspaceId !== workspaceId) {
+        processedMonitors += 1;
+        skippedCount += 1;
+        results.push({
+          monitorId: monitor.id,
+          monitorRevision: monitor.revision,
+          action: "skipped",
+          scheduled: 0,
+          jobIds: [],
+          scheduleSlots: [],
+          reason: "workspace_mismatch",
+        });
+        continue;
+      }
+      if (!supportedKinds.has(monitor.kind)) {
+        processedMonitors += 1;
+        skippedCount += 1;
+        results.push({
+          monitorId: monitor.id,
+          monitorRevision: monitor.revision,
+          action: "skipped",
+          scheduled: 0,
+          jobIds: [],
+          scheduleSlots: [],
+          reason: "unsupported_monitor_kind",
+        });
+        continue;
+      }
+      try {
+        await assertSchedulerPublicTargetAllowed(monitor, resolveHost);
+      } catch (error) {
+        const reason = `target_policy_blocked: ${sanitizeWorkerError(error)}`;
+        try {
+          await options.runtime.deferSchedulerMonitor?.({
+            workspaceId: monitor.workspaceId,
+            monitorId: monitor.id,
+            monitorRevision: monitor.revision,
+            deferredAt: startedAt,
+            reason,
+            actor: "postgres-scheduler-worker",
+            origin: "open-uptime.cloud.postgres-scheduler",
+            idempotencyKey: `scheduler-defer:${monitor.id}:${monitor.revision}:${startedAt}`,
+          });
+        } catch (deferError) {
+          processedMonitors += 1;
+          failedCount += 1;
+          results.push({
+            monitorId: monitor.id,
+            monitorRevision: monitor.revision,
+            action: "failed",
+            scheduled: 0,
+            jobIds: [],
+            scheduleSlots: [],
+            reason: `target_policy_defer_failed: ${sanitizeWorkerError(deferError)}`,
+          });
+          continue;
+        }
+        processedMonitors += 1;
+        skippedCount += 1;
+        results.push({
+          monitorId: monitor.id,
+          monitorRevision: monitor.revision,
+          action: "skipped",
+          scheduled: 0,
+          jobIds: [],
+          scheduleSlots: [],
+          reason,
+        });
+        continue;
+      }
+      try {
+        const slots = dueScheduleSlotsForMonitor(monitor, new Date(startedAt), { maxSlotsPerMonitor, catchupWindowMs })
+          .slice(0, Math.max(0, maxJobs - scheduledCount));
+        if (slots.length === 0) {
+          processedMonitors += 1;
+          skippedCount += 1;
+          results.push({
+            monitorId: monitor.id,
+            monitorRevision: monitor.revision,
+            action: "skipped",
+            scheduled: 0,
+            jobIds: [],
+            scheduleSlots: [],
+            reason: "not_due",
+          });
+          continue;
+        }
+        const jobIds: string[] = [];
+        const scheduleSlots: string[] = [];
+        for (const scheduleSlot of slots) {
+          const job = await options.runtime.createCheckJob({
+            workspaceId: monitor.workspaceId,
+            monitorId: monitor.id,
+            monitorRevision: monitor.revision,
+            scheduleSlot,
+            dueAt: scheduleSlot,
+            probePolicy,
+            actor: "postgres-scheduler-worker",
+            origin: "open-uptime.cloud.postgres-scheduler",
+            idempotencyKey: `scheduler:${monitor.id}:${monitor.revision}:${scheduleSlot}`,
+          });
+          jobIds.push(job.id);
+          scheduleSlots.push(job.scheduleSlot);
+          scheduledCount += 1;
+        }
+        results.push({
+          monitorId: monitor.id,
+          monitorRevision: monitor.revision,
+          action: "scheduled",
+          scheduled: slots.length,
+          jobIds,
+          scheduleSlots,
+          reason: null,
+        });
+        processedMonitors += 1;
+        await options.runtime.recordAuditEvent?.({
+          workspaceId: monitor.workspaceId,
+          action: "scheduler.check_jobs.created",
+          resourceType: "monitor",
+          resourceId: monitor.id,
+          message: `Scheduled ${slots.length} check job(s) for monitor ${monitor.id}`,
+          metadata: {
+            monitorRevision: monitor.revision,
+            scheduleSlots,
+            probePolicy,
+            bounded: true,
+          },
+          actor: "postgres-scheduler-worker",
+          origin: "open-uptime.cloud.postgres-scheduler",
+          idempotencyKey: `scheduler-audit:${monitor.id}:${monitor.revision}:${scheduleSlots.join(",")}`,
+        });
+      } catch (error) {
+        processedMonitors += 1;
+        failedCount += 1;
+        results.push({
+          monitorId: monitor.id,
+          monitorRevision: monitor.revision,
+          action: "failed",
+          scheduled: 0,
+          jobIds: [],
+          scheduleSlots: [],
+          reason: sanitizeWorkerError(error),
+        });
+      }
+    }
+
+    if (monitors.length < limit) break;
+  }
+
+  return {
+    kind: "open-uptime.postgres-scheduler-worker",
+    status: failedCount > 0 ? "partial" : "completed",
+    workspaceId: workspaceId ?? null,
+    discovered: discoveredCount,
+    scheduled: scheduledCount,
+    skipped: skippedCount,
+    failed: failedCount,
+    startedAt,
+    finishedAt: clock().toISOString(),
+    results,
+  };
+}
+
 export async function runPostgresPublicProbeWorker(options: PostgresPublicProbeWorkerOptions): Promise<PostgresPublicProbeWorkerSummary> {
   const probeId = normalizeRequiredText(options.probeId, "probeId");
   const limit = normalizePositiveInteger(options.limit ?? options.maxJobs ?? 10, "limit");
@@ -185,6 +450,8 @@ export async function runPostgresPublicProbeWorker(options: PostgresPublicProbeW
     workspaceId,
     now: startedAt,
     limit,
+    probeClass: "public",
+    probeId,
   });
   const results: PostgresPublicProbeWorkerJobResult[] = [];
   let claimedCount = 0;
@@ -194,8 +461,18 @@ export async function runPostgresPublicProbeWorker(options: PostgresPublicProbeW
 
   for (const candidate of due.slice(0, maxJobs)) {
     try {
+      if (workspaceId && candidate.workspaceId !== workspaceId) {
+        skippedCount += 1;
+        results.push({ jobId: candidate.id, monitorId: candidate.monitorId, action: "skipped", status: null, checkResultId: null, reason: "workspace_mismatch" });
+        continue;
+      }
+      if (candidate.probePolicy.probeClass !== "public") {
+        skippedCount += 1;
+        results.push({ jobId: candidate.id, monitorId: candidate.monitorId, action: "skipped", status: null, checkResultId: null, reason: "non_public_probe_policy" });
+        continue;
+      }
       const claimed = await options.runtime.claimCheckJob({
-        workspaceId: candidate.workspaceId,
+        workspaceId: workspaceId ?? candidate.workspaceId,
         jobId: candidate.id,
         probeId,
         leaseTtlMs,
@@ -206,6 +483,18 @@ export async function runPostgresPublicProbeWorker(options: PostgresPublicProbeW
         continue;
       }
       claimedCount += 1;
+      if (workspaceId && claimed.workspaceId !== workspaceId) {
+        failedCount += 1;
+        results.push({ jobId: candidate.id, monitorId: candidate.monitorId, action: "failed", status: null, checkResultId: null, reason: "workspace_mismatch" });
+        continue;
+      }
+      if (claimed.probePolicy.probeClass !== "public") {
+        const cancelled = await cancelClaimedJob(options.runtime, claimed, probeId, "non_public_probe_policy");
+        if (!cancelled) throw new Error("failed to cancel non_public_probe_policy job");
+        skippedCount += 1;
+        results.push({ jobId: claimed.id, monitorId: claimed.monitorId, action: "skipped", status: null, checkResultId: null, reason: "non_public_probe_policy" });
+        continue;
+      }
       if (claimed.monitorSnapshot.kind !== "http" && claimed.monitorSnapshot.kind !== "tcp") {
         const cancelled = await cancelClaimedJob(options.runtime, claimed, probeId, "unsupported_monitor_kind");
         if (!cancelled) throw new Error("failed to cancel unsupported_monitor_kind job");
@@ -338,6 +627,31 @@ function normalizePositiveInteger(value: number, name: string): number {
   return value;
 }
 
+function normalizeSchedulerProbePolicy(policy: ProbePolicy | undefined): ProbePolicy {
+  const probeClass = policy?.probeClass ?? "public";
+  if (probeClass !== "public" && probeClass !== "private") throw new Error("probePolicy.probeClass must be public or private");
+  if (probeClass !== "public") throw new Error("postgres scheduler worker currently supports only public probe policy");
+  const locations = Array.from(new Set((policy?.locations ?? []).map((location) => {
+    const trimmed = location.trim();
+    if (!trimmed) throw new Error("probePolicy.locations must not contain empty values");
+    if (/[\x00-\x1f\x7f-\x9f]/.test(trimmed)) throw new Error("probePolicy.locations must not contain control characters");
+    return trimmed;
+  }))).sort((left, right) => left.localeCompare(right));
+  return { probeClass, locations };
+}
+
+async function assertSchedulerPublicTargetAllowed(monitor: PostgresMonitorRecord, resolver: HostedDnsResolver): Promise<void> {
+  assertHostedTargetAllowed(monitor);
+  const host = monitor.kind === "http" && monitor.url
+    ? normalizeHostedHost(new URL(monitor.url).hostname)
+    : monitor.kind === "tcp" && monitor.host
+      ? normalizeHostedHost(monitor.host)
+      : null;
+  if (!host) throw new Error("monitor target host is required");
+  const addresses = await resolver(host);
+  assertHostedResolvedAddressesAllowed(host, addresses, "scheduler resolved address");
+}
+
 async function runPostgresPublicProbeAttempt(
   monitor: Monitor,
   options: Pick<PostgresPublicProbeWorkerOptions, "hostedResolveHost" | "hostedHttpRequest" | "hostedMaxRedirects">,
@@ -419,6 +733,55 @@ function normalizeRequiredText(value: string, name: string): string {
 function normalizeOptionalText(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized || undefined;
+}
+
+function schedulerMonitorCursor(monitor: PostgresMonitorRecord): { sortAt: string; id: string } {
+  return {
+    sortAt: monitor.lastCheckedAt ?? monitor.createdAt,
+    id: monitor.id,
+  };
+}
+
+async function resolveSchedulerHostedHost(hostname: string): Promise<HostedResolvedAddress[]> {
+  const records = await dns.lookup(normalizeHostedHost(hostname), { all: true });
+  return records
+    .filter((record): record is { address: string; family: 4 | 6 } => record.family === 4 || record.family === 6)
+    .map((record) => ({ address: record.address, family: record.family }));
+}
+
+function dueScheduleSlotsForMonitor(
+  monitor: Pick<PostgresMonitorRecord, "intervalSeconds" | "lastCheckedAt">,
+  now: Date,
+  options: { maxSlotsPerMonitor: number; catchupWindowMs: number },
+): string[] {
+  const intervalMs = monitor.intervalSeconds * 1000;
+  if (!Number.isFinite(intervalMs) || intervalMs <= 0) throw new Error("monitor intervalSeconds must be positive");
+  const nowMs = now.getTime();
+  if (!Number.isFinite(nowMs)) throw new Error("scheduler now must be valid");
+  const latestSlotMs = floorToInterval(nowMs, intervalMs);
+  const lastCheckedMs = monitor.lastCheckedAt ? Date.parse(monitor.lastCheckedAt) : Number.NaN;
+  const firstDueMs = Number.isFinite(lastCheckedMs)
+    ? floorToInterval(lastCheckedMs + intervalMs, intervalMs)
+    : latestSlotMs;
+  const boundedEarliestMs = Math.max(
+    firstDueMs,
+    latestSlotMs - ((options.maxSlotsPerMonitor - 1) * intervalMs),
+    nowMs - options.catchupWindowMs,
+  );
+  const firstSlotMs = ceilToInterval(boundedEarliestMs, intervalMs);
+  const slots: string[] = [];
+  for (let slotMs = firstSlotMs; slotMs <= latestSlotMs && slots.length < options.maxSlotsPerMonitor; slotMs += intervalMs) {
+    slots.push(new Date(slotMs).toISOString());
+  }
+  return slots;
+}
+
+function floorToInterval(value: number, interval: number): number {
+  return Math.floor(value / interval) * interval;
+}
+
+function ceilToInterval(value: number, interval: number): number {
+  return Math.ceil(value / interval) * interval;
 }
 
 function sanitizeWorkerError(error: unknown): string {
