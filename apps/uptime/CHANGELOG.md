@@ -6,6 +6,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.41] - 2026-06-29
+
+### Added
+
+- Added a Postgres report-runtime helper for finished report-run metadata,
+  report delivery-attempt state, per-attempt idempotency, retry/backoff
+  metadata, stale-lease reclaim, and redacted report artifact metadata refs.
+- Added reporter preflight checks that expose the narrower report-runtime
+  metadata capabilities while keeping hosted reporter startup blocked.
+
+### Security
+
+- Report-runtime writes use transaction-scoped workspace settings on a checked
+  out Postgres client, avoid returning stale fencing tokens from discovery,
+  require live leases for completion, store report JSON only as hash metadata,
+  and reject raw recipient or URL-shaped delivery refs.
+- Hosted reporter `canStart` remains false even when report-runtime schema
+  evidence is present; S3 artifact writes, audit export, alarms, and full
+  cloud-store promotion remain blocked.
+
 ## [0.1.40] - 2026-06-29
 
 ### Added

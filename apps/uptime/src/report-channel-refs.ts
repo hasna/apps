@@ -34,6 +34,7 @@ export interface HostedReportChannelRefSummary {
 const EMPTY_COUNTS: Record<HostedReportChannel, number> = { email: 0, sms: 0, logs: 0 };
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 const PHONE_LIKE_REF_PATTERN = /^[\d_.:-]+$/;
+const SECRET_LIKE_REF_PATTERN = /(^Bearer\s+|=|postgres(?:ql)?:\/\/|^(esk|sk)_[A-Za-z0-9._~+/=-]{12,})/i;
 const AWS_SECRETS_MANAGER_REF_PATTERN = /^arn:aws[a-z-]*:secretsmanager:[a-z0-9-]+:\d{12}:secret:[A-Za-z0-9/_+=.@:-]+$/;
 const AWS_SSM_PARAMETER_REF_PATTERN = /^arn:aws[a-z-]*:ssm:[a-z0-9-]+:\d{12}:parameter\/[A-Za-z0-9/_+=.@:-]+$/;
 const CATALOG_KEYS = new Set(["version", "channels"]);
@@ -69,7 +70,7 @@ export function parseHostedReportChannelRefs(input: string): HostedReportChannel
   const channels = catalog.channels.map((value, index) => normalizeChannelRef(value, index));
   const ids = new Set<string>();
   for (const channel of channels) {
-    if (ids.has(channel.id)) throw new Error(`duplicate report channel ref id: ${channel.id}`);
+    if (ids.has(channel.id)) throw new Error("duplicate report channel ref id");
     ids.add(channel.id);
   }
   return { version: catalog.version, channels };
@@ -115,16 +116,16 @@ function normalizeChannelRef(value: unknown, index: number): HostedReportChannel
   validateObjectKeys(record, ALLOWED_KEYS, "report channel ref");
 
   const id = normalizeOpaqueRefId(record.id, `report channel ref ${index} id`);
-  const channel = normalizeChannel(record.channel, id);
-  const service = normalizeService(record.service, id);
+  const channel = normalizeChannel(record.channel);
+  const service = normalizeService(record.service);
   const expectedService = expectedServiceForChannel(channel);
   if (service !== expectedService) {
-    throw new Error(`report channel ref ${id} service must be ${expectedService} for ${channel}`);
+    throw new Error(`report channel ref service must be ${expectedService} for ${channel}`);
   }
-  const secretRef = normalizeSecretRef(record.secretRef, id);
+  const secretRef = normalizeSecretRef(record.secretRef);
   const targetRef = record.targetRef === undefined ? undefined : normalizeOpaqueRefId(record.targetRef, `report channel ref ${id} targetRef`);
   const workspaceId = record.workspaceId === undefined ? undefined : normalizeRefId(record.workspaceId, `report channel ref ${id} workspaceId`);
-  const enabled = record.enabled === undefined ? undefined : normalizeBoolean(record.enabled, id);
+  const enabled = record.enabled === undefined ? undefined : normalizeBoolean(record.enabled);
   return { id, channel, service, secretRef, targetRef, workspaceId, enabled };
 }
 
@@ -151,17 +152,20 @@ function normalizeOpaqueRefId(value: unknown, label: string): string {
   if (PHONE_LIKE_REF_PATTERN.test(normalized) && normalized.replace(/\D/g, "").length >= 7) {
     throw new Error(`${label} must not look like a raw phone number`);
   }
+  if (SECRET_LIKE_REF_PATTERN.test(normalized)) {
+    throw new Error(`${label} must not look like secret material`);
+  }
   return normalized;
 }
 
-function normalizeChannel(value: unknown, id: string): HostedReportChannel {
+function normalizeChannel(value: unknown): HostedReportChannel {
   if (value === "email" || value === "sms" || value === "logs") return value;
-  throw new Error(`report channel ref ${id} channel must be email, sms, or logs`);
+  throw new Error("report channel ref channel must be email, sms, or logs");
 }
 
-function normalizeService(value: unknown, id: string): HostedReportChannelService {
+function normalizeService(value: unknown): HostedReportChannelService {
   if (value === "mailery" || value === "telephony" || value === "logs") return value;
-  throw new Error(`report channel ref ${id} service must be mailery, telephony, or logs`);
+  throw new Error("report channel ref service must be mailery, telephony, or logs");
 }
 
 function expectedServiceForChannel(channel: HostedReportChannel): HostedReportChannelService {
@@ -170,17 +174,17 @@ function expectedServiceForChannel(channel: HostedReportChannel): HostedReportCh
   return "logs";
 }
 
-function normalizeSecretRef(value: unknown, id: string): string {
-  if (typeof value !== "string") throw new Error(`report channel ref ${id} secretRef must be a string`);
+function normalizeSecretRef(value: unknown): string {
+  if (typeof value !== "string") throw new Error("report channel ref secretRef must be a string");
   const normalized = value.trim();
   if (!AWS_SECRETS_MANAGER_REF_PATTERN.test(normalized) && !AWS_SSM_PARAMETER_REF_PATTERN.test(normalized)) {
-    throw new Error(`report channel ref ${id} secretRef must be an AWS Secrets Manager or SSM Parameter ARN`);
+    throw new Error("report channel ref secretRef must be an AWS Secrets Manager or SSM Parameter ARN");
   }
   return normalized;
 }
 
-function normalizeBoolean(value: unknown, id: string): boolean {
-  if (typeof value !== "boolean") throw new Error(`report channel ref ${id} enabled must be boolean`);
+function normalizeBoolean(value: unknown): boolean {
+  if (typeof value !== "boolean") throw new Error("report channel ref enabled must be boolean");
   return value;
 }
 

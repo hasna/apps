@@ -12,6 +12,7 @@ import { generateProbeKeyPair, signProbeResult } from "../probes.js";
 import { buildAwsDeploymentPlan, buildPrivateProbeCloudConfig, renderPrivateProbeEnv } from "../cloud-plan.js";
 import { buildPostgresMigrationPlan, renderPostgresMigrationPlan } from "../postgres-plan.js";
 import { buildPostgresMigrationDryRun, renderPostgresMigrationRun, runPostgresMigration } from "../postgres.js";
+import { buildPostgresReportRuntimeReadiness } from "../postgres-report-runtime.js";
 import { summarizeHostedReportChannelRefs, type HostedReportChannelRefSummary } from "../report-channel-refs.js";
 import { runHostedPublicChecksWorker } from "../workers.js";
 import { runEdgeSmoke, type EdgeSmokeReport } from "../edge-smoke.js";
@@ -2028,31 +2029,51 @@ function hostedChannelRefsReady(summary: HostedReportChannelRefSummary): boolean
 }
 
 function hostedReporterReadinessChecks(): Array<{ name: string; ok: boolean; detail: string }> {
+  const reportRuntime = buildPostgresReportRuntimeReadiness({
+    workspaceId: process.env.HASNA_UPTIME_WORKSPACE_ID,
+    schemaVerified: process.env.HASNA_UPTIME_REPORT_RUNTIME_SCHEMA_VERIFIED === "1",
+  });
+  const runtimeCheck = (name: string): { name: string; ok: boolean; detail: string } | undefined =>
+    reportRuntime.checks.find((check) => check.name === name);
+  const schemaCheck = runtimeCheck("report-runtime-schema-verified");
+  const metadataWriter = runtimeCheck("report-run-metadata-writer");
   return [
     {
       name: "report-run-cloud-store",
       ok: false,
-      detail: "hosted report_runs/report_schedules are blocked until the async Postgres store is authoritative",
+      detail: reportRuntime.capabilities.reportRunWriter
+        ? `${metadataWriter?.detail ?? "Postgres report_runs metadata writer exists"}, but the hosted reporter loop is not yet authoritative`
+        : "hosted report_runs/report_schedules are blocked until the async Postgres store is authoritative",
     },
     {
       name: "report-delivery-attempts",
-      ok: false,
-      detail: "Postgres report_delivery_attempts schema is planned, but the hosted reporter state machine is not implemented",
+      ok: reportRuntime.capabilities.deliveryAttemptState,
+      detail: "Postgres report_delivery_attempts writer and claim/complete state machine are implemented",
     },
     {
       name: "report-delivery-idempotency",
-      ok: false,
-      detail: "stable provider idempotency keys and duplicate suppression are not implemented",
+      ok: reportRuntime.capabilities.deliveryIdempotency,
+      detail: "stable per-attempt provider idempotency keys and duplicate attempt suppression are implemented; schedule/window claiming is still blocked",
     },
     {
       name: "report-delivery-retry-backoff",
-      ok: false,
-      detail: "retry/backoff state and exhaustion handling are not implemented",
+      ok: reportRuntime.capabilities.retryBackoffMetadata,
+      detail: "retry/backoff metadata, stale-lease reclaim, and retry exhaustion state are implemented for delivery attempts",
     },
     {
-      name: "report-artifact-store",
+      name: "report-artifact-metadata-store",
+      ok: reportRuntime.capabilities.artifactMetadataWriter,
+      detail: "Postgres report_artifacts metadata writer is implemented for redacted refs",
+    },
+    {
+      name: "report-runtime-schema-verified",
+      ok: schemaCheck?.ok ?? false,
+      detail: schemaCheck?.detail ?? "not verified in this process",
+    },
+    {
+      name: "report-artifact-object-store",
       ok: false,
-      detail: "Postgres report_artifacts metadata is planned, but the S3 artifact write/signing path is not implemented",
+      detail: "S3 artifact write/signing path is not implemented",
     },
     {
       name: "report-audit-export",

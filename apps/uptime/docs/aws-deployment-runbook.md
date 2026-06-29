@@ -498,9 +498,12 @@ system. Never mount the restored file system over production during a drill.
 
 Report preview can be tested locally or through authenticated read APIs. Hosted
 delivery attempts through Mailery, Telephony, or Open Logs must stay disabled
-until the reporter has cloud channel refs, authoritative report-run storage,
-delivery-attempt state, idempotency storage, retry/backoff state, redacted
-artifact storage, audit export, and delivery alarms.
+until the reporter has cloud channel refs, authoritative report schedule/run
+claiming, redacted S3 artifact writes/signing, audit export, delivery alarms,
+and reviewed live-worker rollback evidence. The Postgres report-runtime helper
+can write finished report metadata, delivery-attempt state, per-attempt
+idempotency keys, retry/backoff metadata, and redacted artifact metadata refs,
+but this is narrower than hosted reporter readiness.
 
 `uptime cloud workers preflight --role reporter --json` validates
 `HASNA_UPTIME_REPORT_CHANNEL_REFS_JSON` as an operator-provided, server-owned
@@ -509,9 +512,9 @@ runtime configuration, not a client request, MCP input, or schedule payload. A
 valid catalog only proves the configured refs are shaped safely and contain no
 raw URLs, recipients, tokens, keys, or secret values; clients must later submit
 approved channel ids only, never `secretRef` values. It is not permission to
-scale the reporter while the Postgres store, worker leases, report-run
-idempotency, artifact storage, retry/backoff, audit export, and delivery alarms
-are still blocked.
+scale the reporter while the full Postgres store, worker leases, schedule/window
+claiming, S3 object artifact storage, audit export, and delivery alarms are
+still blocked.
 
 Do not set `desired_counts.reporter = 1` until a reviewed runbook section exists
 for report retry, duplicate suppression, provider failure handling, and delivery

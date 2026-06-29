@@ -847,19 +847,95 @@ test("CLI reporter preflight validates hosted report channel refs while staying 
     expect(checks).toMatchObject({
       "cloud-channel-refs": true,
       "report-run-cloud-store": false,
-      "report-delivery-attempts": false,
-      "report-delivery-idempotency": false,
-      "report-delivery-retry-backoff": false,
-      "report-artifact-store": false,
+      "report-delivery-attempts": true,
+      "report-delivery-idempotency": true,
+      "report-delivery-retry-backoff": true,
+      "report-artifact-metadata-store": true,
+      "report-runtime-schema-verified": false,
+      "report-artifact-object-store": false,
       "report-audit-export": false,
       "report-delivery-alarms": false,
     });
     expect(body.blockers.join("\n")).toContain("postgres-adapter");
     expect(body.blockers.join("\n")).toContain("cloud-worker-leases");
-    expect(body.blockers.join("\n")).toContain("report-delivery-idempotency");
+    expect(body.blockers.join("\n")).toContain("report-runtime-schema-verified");
+    expect(body.blockers.join("\n")).toContain("report-artifact-object-store");
     expect(body.blockers.join("\n")).toContain("report-delivery-alarms");
     expect(stdout).not.toContain("arn:aws:secretsmanager");
     expect(stdout).not.toContain("arn:aws:ssm");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI reporter preflight with report runtime schema evidence still fails closed", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const env = {
+      HASNA_UPTIME_MODE: "hosted",
+      HASNA_UPTIME_COMPONENT: "reporter",
+      HASNA_UPTIME_WORKSPACE_ID: "ws_cli",
+      HASNA_UPTIME_DATABASE_URL: "postgres://svc:raw-password@db.example.invalid/uptime?sslmode=require",
+      HASNA_UPTIME_REPORT_RUNTIME_SCHEMA_VERIFIED: "1",
+      HASNA_UPTIME_REPORT_CHANNEL_REFS_JSON: JSON.stringify({
+        version: "open-uptime.report-channel-refs.v1",
+        channels: [
+          {
+            id: "ops-email",
+            channel: "email",
+            service: "mailery",
+            secretRef: "arn:aws:secretsmanager:us-east-1:123456789012:secret:open-uptime/prod/reporting-email",
+            targetRef: "ops",
+            workspaceId: "ws_cli",
+          },
+        ],
+      }),
+    };
+    const preflight = runCli(["cloud", "workers", "preflight", "--role", "reporter", "--healthcheck", "--json"], dbPath, env);
+    const run = runCli(["cloud", "workers", "run", "--role", "reporter", "--json"], dbPath, env);
+    const preflightBody = JSON.parse(new TextDecoder().decode(preflight.stdout));
+    const runBody = JSON.parse(new TextDecoder().decode(run.stdout));
+    const checks = Object.fromEntries(preflightBody.checks.map((check: { name: string; ok: boolean }) => [check.name, check.ok]));
+    const stdout = new TextDecoder().decode(preflight.stdout);
+
+    expect(preflight.exitCode).toBe(1);
+    expect(run.exitCode).toBe(1);
+    expect(preflightBody).toMatchObject({
+      role: "reporter",
+      status: "blocked",
+      canStart: false,
+      workspaceId: "ws_cli",
+    });
+    expect(runBody).toMatchObject({
+      ok: false,
+      preflight: {
+        role: "reporter",
+        status: "blocked",
+        canStart: false,
+      },
+    });
+    expect(checks).toMatchObject({
+      "cloud-channel-refs": true,
+      "report-delivery-attempts": true,
+      "report-delivery-idempotency": true,
+      "report-delivery-retry-backoff": true,
+      "report-artifact-metadata-store": true,
+      "report-runtime-schema-verified": true,
+      "report-run-cloud-store": false,
+      "report-artifact-object-store": false,
+      "report-audit-export": false,
+      "report-delivery-alarms": false,
+    });
+    expect(preflightBody.blockers.join("\n")).toContain("postgres-adapter");
+    expect(preflightBody.blockers.join("\n")).toContain("cloud-worker-leases");
+    expect(preflightBody.blockers.join("\n")).toContain("report-run-cloud-store");
+    expect(preflightBody.blockers.join("\n")).toContain("report-artifact-object-store");
+    expect(preflightBody.blockers.join("\n")).toContain("report-audit-export");
+    expect(preflightBody.blockers.join("\n")).toContain("report-delivery-alarms");
+    expect(stdout).not.toContain("raw-password");
+    expect(stdout).not.toContain("sslmode=require");
+    expect(stdout).not.toContain("arn:aws:secretsmanager");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

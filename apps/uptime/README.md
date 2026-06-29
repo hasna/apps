@@ -85,7 +85,10 @@ resolves to the ALB and matches `certificate_arn`, or an explicit risk
 acceptance. Hosted AWS runtime state currently uses explicit EFS-backed SQLite via
 `HASNA_UPTIME_HOSTED_SQLITE_DB=/data/uptime/uptime.db` for one protected web
 task maximum; do not set `HASNA_UPTIME_DATABASE_URL` until the async Postgres
-adapter is implemented. `uptime cloud postgres-plan` exposes the reviewed
+adapter is implemented for the full service store. The Postgres report-runtime
+helper can write finished report metadata, delivery-attempt state, retry
+metadata, and redacted artifact metadata refs for review, but it is not a
+hosted service-store promotion gate. `uptime cloud postgres-plan` exposes the reviewed
 target schema, workspace RLS policy shape, tombstones, audit tables,
 idempotency fields, and check-job lease tables for private review without
 connecting to Postgres or printing credentials.
@@ -97,8 +100,10 @@ monitor names unique only among non-deleted rows.
 blockers for hosted scheduler, public-probe, reporter, and migration roles.
 `--healthcheck` is readiness-like and exits non-zero while `canStart=false`.
 Their `run` entrypoints fail closed until Postgres, check jobs, channel refs,
-report-run state, delivery-attempt idempotency/retry state, report artifact
-storage, audit export, alarms, and migration plans exist.
+authoritative report schedule/run claiming, object artifact storage, audit
+export, alarms, and migration plans exist. Reporter preflight may show narrower
+Postgres metadata capabilities as implemented while still returning
+`canStart=false`.
 `uptime cloud public-checks run-due` and `worker` are only bounded EFS SQLite
 bridge paths around hosted HTTP/TCP smoke checks, and they require
 `--allow-public-checks-bridge` or `HASNA_UPTIME_ALLOW_PUBLIC_CHECKS_BRIDGE=1`.

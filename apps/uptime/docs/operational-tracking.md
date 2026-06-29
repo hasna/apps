@@ -54,10 +54,13 @@ specs, artifacts, browser evidence, or check execution until these are tested:
   This is not runtime promotion evidence; the async Postgres store and
   transaction-scoped workspace isolation are still blockers.
 - report delivery through open-mailery/open-telephony/open-logs channel refs:
-  reporter preflight validates the service-owned channel-ref catalog shape, but
-  hosted delivery remains disabled until Postgres, report-run storage,
-  delivery-attempt state, idempotency, retry/backoff, artifacts, audit export,
-  and delivery alarms exist
+  reporter preflight validates the service-owned channel-ref catalog shape.
+  Postgres report metadata helpers now cover finished report-run rows,
+  delivery-attempt claim/complete state, per-attempt idempotency, retry/backoff
+  metadata, and redacted artifact metadata refs under transaction-scoped
+  workspace settings. Hosted delivery remains disabled until authoritative
+  schedule/window claiming, full service-store promotion, S3 artifact writes and
+  signing, audit export, alarms, and live-worker rollback evidence exist
 - JSON Render and canvas redaction
 - browser evidence isolation
 - private probe identity, revocation, and isolation

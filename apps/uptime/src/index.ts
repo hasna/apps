@@ -19,6 +19,13 @@ export { generateProbeKeyPair, probePublicKeyFingerprint, probeResultSigningPayl
 export { buildAwsDeploymentPlan, buildPrivateProbeCloudConfig, renderPrivateProbeEnv } from "./cloud-plan.js";
 export { buildPostgresMigrationPlan, redactPostgresUrl, renderPostgresMigrationPlan } from "./postgres-plan.js";
 export { buildPostgresMigrationDryRun, createPostgresPool, renderPostgresMigrationRun, runPostgresMigration } from "./postgres.js";
+export {
+  buildPostgresReportRuntimeReadiness,
+  createPostgresReportRuntime,
+  deliveryAttemptIdempotencyKey,
+  PostgresReportRuntime,
+  sanitizePostgresReportRuntimeError,
+} from "./postgres-report-runtime.js";
 export { runHostedPublicChecksWorker } from "./workers.js";
 export { runEdgeSmoke } from "./edge-smoke.js";
 export { uptimeHome, uptimeDbPath, uptimeHostedFallbackDbPath, ensureUptimeHome } from "./paths.js";
@@ -121,6 +128,22 @@ export type {
   PostgresMigrationRunOptions,
   PostgresQueryClient,
 } from "./postgres.js";
+export type {
+  ClaimPostgresReportDeliveryAttemptInput,
+  CompletePostgresReportDeliveryAttemptInput,
+  CreatePostgresReportDeliveryAttemptInput,
+  ListDuePostgresReportDeliveryAttemptsOptions,
+  PostgresReportArtifactRecord,
+  PostgresReportArtifactRetentionClass,
+  PostgresReportArtifactType,
+  PostgresReportDeliveryAttemptRecord,
+  PostgresReportDeliveryAttemptStatus,
+  PostgresReportRunRecord,
+  PostgresReportRuntimeOptions,
+  PostgresReportRuntimeReadiness,
+  RecordPostgresReportArtifactInput,
+  RecordPostgresReportRunInput,
+} from "./postgres-report-runtime.js";
 export type {
   HostedPublicCheckRunner,
   HostedPublicChecksWorkerIteration,
