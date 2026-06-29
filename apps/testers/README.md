@@ -239,19 +239,10 @@ Default port **8840** (`--port` / `MCP_HTTP_PORT`). Endpoints: `GET /health`, `P
 testers-serve
 ```
 
-## Cloud Sync
-
-This package supports cloud sync via `@hasna/cloud`:
-
-```bash
-cloud setup
-cloud sync push --service testers
-cloud sync pull --service testers
-```
-
 ## Data Directory
 
-Data is stored in `~/.hasna/testers/`.
+Data is stored locally in `~/.hasna/testers/`. Override the database path with
+`HASNA_TESTERS_DB_PATH` or `TESTERS_DB_PATH`.
 
 ## License
 

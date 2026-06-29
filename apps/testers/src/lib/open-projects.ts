@@ -12,12 +12,23 @@ export interface OpenProjectsMirrorResult {
   created: boolean;
 }
 
+type OpenProject = {
+  id: string;
+  slug: string;
+  name: string;
+  description?: string | null;
+  primary_path?: string | null;
+  path?: string | null;
+};
+
 export async function importFromOpenProjects(ref: string): Promise<OpenProjectsMirrorResult> {
   const sdk = await import("@hasna/projects");
   const openProject = resolveOpenProject(sdk, ref);
   if (!openProject) throw new Error(`open-projects project not found: ${ref}`);
+  const path = getOpenProjectPath(openProject);
+  if (!path) throw new Error(`open-projects project has no primary path: ${ref}`);
 
-  const existing = getProjectByPath(openProject.path)
+  const existing = getProjectByPath(path)
     ?? listProjects().find((project) => project.settings.openProjectsProjectId === openProject.id);
   if (existing) {
     return {
@@ -29,7 +40,7 @@ export async function importFromOpenProjects(ref: string): Promise<OpenProjectsM
 
   const project = createTesterProject({
     name: openProject.name,
-    path: openProject.path,
+    path,
     description: openProject.description ?? undefined,
     settings: {
       openProjectsProjectId: openProject.id,
@@ -58,9 +69,8 @@ export async function exportToOpenProjects(projectIdOrName: string): Promise<Ope
   const existing = sdk.getProjectByPath(project.path);
   const openProject = existing ?? sdk.createProject({
     name: project.name,
-    path: project.path,
+    primary_path: project.path,
     description: project.description ?? undefined,
-    git_init: false,
     tags: ["testers"],
   });
 
@@ -78,11 +88,15 @@ function resolveOpenProject(sdk: typeof import("@hasna/projects"), ref: string) 
     ?? sdk.listProjects({ status: "active", limit: 1000 }).find((project) => project.name === ref || project.slug === ref);
 }
 
-function toOpenProjectRef(openProject: { id: string; slug: string; name: string; path: string }) {
+function getOpenProjectPath(openProject: OpenProject): string | null {
+  return openProject.primary_path ?? openProject.path ?? null;
+}
+
+function toOpenProjectRef(openProject: OpenProject) {
   return {
     id: openProject.id,
     slug: openProject.slug,
     name: openProject.name,
-    path: openProject.path,
+    path: getOpenProjectPath(openProject) ?? "",
   };
 }

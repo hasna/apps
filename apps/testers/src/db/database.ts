@@ -1,5 +1,4 @@
 import { Database } from "bun:sqlite";
-import { SqliteAdapter } from "@hasna/cloud";
 import { mkdirSync, existsSync } from "fs";
 import { dirname, join } from "path";
 import { getHomeDir, migrateLegacyDirectory } from "../lib/paths.js";
@@ -705,7 +704,7 @@ export function getDatabase(): Database {
     mkdirSync(dir, { recursive: true });
   }
 
-  db = new SqliteAdapter(dbPath) as unknown as Database;
+  db = new Database(dbPath, { create: true });
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec("PRAGMA busy_timeout = 5000");

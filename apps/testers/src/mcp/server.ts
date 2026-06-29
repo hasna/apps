@@ -3,7 +3,6 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { registerCloudTools } from "@hasna/cloud";
 import pkg from "../../package.json";
 
 import { createScenario, getScenario, getScenarioByShortId, listScenarios, updateScenario, deleteScenario, findStaleScenarios } from "../db/scenarios.js";
@@ -2459,8 +2458,17 @@ server.tool(
     try {
       const persona = getPersona(personaId);
       if (!persona) return errorResponse(notFoundErr(personaId, "Persona"));
-      const { syncPersonaFromContact } = await import("../lib/contacts-connector.js");
+      const { getContactsAvailability, syncPersonaFromContact } = await import("../lib/contacts-connector.js");
       const updated = syncPersonaFromContact(persona.id);
+      const contacts = getContactsAvailability();
+      if (!contacts.available) {
+        return json({
+          synced: false,
+          contactsAvailable: false,
+          contactsDbPath: contacts.dbPath,
+          message: "Contacts database not found. Set HASNA_CONTACTS_DB_PATH or OPEN_CONTACTS_DB if contacts are stored elsewhere.",
+        });
+      }
       if (!updated) return json({ synced: false, message: "No linked contact found or no changes needed" });
       return json({ synced: true, persona: redactPersona(updated) });
     } catch (e) {
@@ -2647,10 +2655,6 @@ server.tool(
     }
   },
 );
-
-// ─── Cloud ────────────────────────────────────────────────────────────────────
-
-registerCloudTools(server, "testers");
 
 return server;
 }

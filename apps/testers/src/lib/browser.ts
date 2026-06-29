@@ -279,8 +279,10 @@ export async function launchBrowserEngine(
   return launchPlaywright({ headless: config.headless, viewport: config.viewport });
 }
 
+const PLAYWRIGHT_CLI_VERSION = "1.60.0";
+
 /**
- * Installs Chromium for Playwright using bunx.
+ * Installs browser binaries for the Playwright runtime version this package uses.
  */
 export async function installBrowser(
   engine?: import("../types/index.js").BrowserEngine,
@@ -295,7 +297,7 @@ export async function installBrowser(
   const dependencyFlag = options.withDeps ? " --with-deps" : "";
 
   try {
-    execSync(`bunx playwright install${dependencyFlag} ${browserName}`, {
+    execSync(`bunx playwright@${PLAYWRIGHT_CLI_VERSION} install${dependencyFlag} ${browserName}`, {
       stdio: "inherit",
     });
   } catch (error) {

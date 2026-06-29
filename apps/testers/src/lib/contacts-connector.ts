@@ -20,17 +20,30 @@ interface ContactsContact {
   notes?: string | null;
 }
 
-function getContactsDb() {
-  const { Database } = require("bun:sqlite");
-  const { existsSync } = require("fs");
+export interface ContactsAvailability {
+  available: boolean;
+  dbPath: string;
+}
+
+function resolveContactsDbPath(): string {
   const { join } = require("path");
   const { homedir } = require("os");
 
-  const envPath = process.env["HASNA_CONTACTS_DB_PATH"] ?? process.env["OPEN_CONTACTS_DB"];
-  const dbPath = envPath ?? join(homedir(), ".hasna", "contacts", "contacts.db");
-  if (!existsSync(dbPath)) return null;
+  return process.env["HASNA_CONTACTS_DB_PATH"] ?? process.env["OPEN_CONTACTS_DB"] ?? join(homedir(), ".hasna", "contacts", "contacts.db");
+}
 
-  const db = new Database(dbPath, { readonly: true });
+export function getContactsAvailability(): ContactsAvailability {
+  const { existsSync } = require("fs");
+  const dbPath = resolveContactsDbPath();
+  return { available: existsSync(dbPath), dbPath };
+}
+
+function getContactsDb() {
+  const { Database } = require("bun:sqlite");
+  const availability = getContactsAvailability();
+  if (!availability.available) return null;
+
+  const db = new Database(availability.dbPath, { readonly: true });
   return db;
 }
 
@@ -76,12 +89,31 @@ export function importPersonasFromContacts(options: {
   tags?: string[];
   projectId?: string;
   dryRun?: boolean;
-}): { imported: number; skipped: number; personas: Array<{ contactId: string; name: string; personaId?: string }> } {
+}): {
+  imported: number;
+  skipped: number;
+  personas: Array<{ contactId: string; name: string; personaId?: string }>;
+  contactsAvailable: boolean;
+  contactsDbPath: string;
+  skippedReason?: string;
+} {
   const tags = options.tags ?? ["test-user", "tester", "qa"];
+  const availability = getContactsAvailability();
+  if (!availability.available) {
+    return {
+      imported: 0,
+      skipped: 0,
+      personas: [],
+      contactsAvailable: false,
+      contactsDbPath: availability.dbPath,
+      skippedReason: "contacts_database_not_found",
+    };
+  }
+
   const contacts = listContactsByTag(tags);
 
   if (contacts.length === 0) {
-    return { imported: 0, skipped: 0, personas: [] };
+    return { imported: 0, skipped: 0, personas: [], contactsAvailable: true, contactsDbPath: availability.dbPath };
   }
 
   // Build set of existing personas linked to contacts
@@ -129,7 +161,7 @@ export function importPersonasFromContacts(options: {
     results.push({ contactId: contact.id, name: contactName, personaId: persona.id });
   }
 
-  return { imported, skipped, personas: results };
+  return { imported, skipped, personas: results, contactsAvailable: true, contactsDbPath: availability.dbPath };
 }
 
 /**
