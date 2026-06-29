@@ -20,14 +20,14 @@ bun install -g @hasna/shield
 shield scan .
 
 # Focused secret-exposure scan (repo files, git history, processes, tmux)
-security secrets .
+shield secrets .
 
 # Check if a package is compromised (axios/litellm/Trivy supply chain attacks)
-security check-package axios 1.14.1
-security check-package litellm 1.82.8 --ecosystem pypi
+shield check-package axios 1.14.1
+shield check-package litellm 1.82.8 --ecosystem pypi
 
 # List known supply chain attack advisories
-security advisories
+shield advisories
 
 # Quick scan (secrets + dependencies only)
 shield scan . --quick
@@ -78,13 +78,13 @@ Configure alerts for new supply chain detections:
 
 ```bash
 # Check alert status
-security alerts status
+shield alerts status
 
 # Test alerts with a known advisory
-security alerts test
+shield alerts test
 
 # Enable alerts (min severity: critical)
-security alerts enable
+shield alerts enable
 ```
 
 Supports: **Slack**, **Discord**, **Webhook**, **Twitter/X**, **Email**
@@ -127,7 +127,7 @@ API endpoints:
 
 ```
 shield scan [path]              Run shield scan
-security secrets [options] [path] Focused secret-exposure scan (files + live context)
+shield secrets [options] [path] Focused secret-exposure scan (files + live context)
 shield findings                 List findings
 shield explain <id>             AI explanation for a finding
 shield fix <id>                 AI-suggested fix
@@ -135,12 +135,15 @@ shield review                   Review staged git changes
 shield init                     Initialize for this repo
 shield baseline                 Mark findings as baseline
 shield score                    Show shield score
-security check-package <name>     Check if package is compromised
-security advisories               List supply chain advisories
-security alerts status|test|...   Manage alert channels
+shield check-package <name>     Check if package is compromised
+shield advisories               List supply chain advisories
+shield alerts status|test|...   Manage alert channels
 shield mcp --claude|--all       Install MCP server
 shield serve                    Start web dashboard
 ```
+
+The legacy `@hasna/security` package is now a command-alias shim for existing
+installs. New installs should use `@hasna/shield`.
 
 ## Data
 
@@ -158,17 +161,19 @@ Stored in `~/.hasna/security/` (override with `SECURITY_DB` env var).
 Useful flags:
 
 ```bash
-security secrets . --repo-only
-security secrets . --json
-security secrets . --severity high --fail-on medium
+shield secrets . --repo-only
+shield secrets . --json
+shield secrets . --severity high --fail-on medium
 ```
 
-## Cloud Sync
+## Storage
 
-```bash
-cloud sync push --service security
-cloud sync pull --service security
-```
+Shield stores local state in `~/.hasna/security/` by default. Set
+`SECURITY_DB=/path/to/shield.db` to use a specific SQLite database file.
+
+`HASNA_SHIELD_STORAGE_MODE` and `HASNA_SECURITY_STORAGE_MODE` currently accept
+only `local`. Remote storage must be implemented through shield-owned adapters,
+not through a shared runtime package.
 
 ## HTTP mode
 

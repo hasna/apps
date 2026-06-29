@@ -1,7 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { readFileSync } from "fs";
 import { z } from "zod";
-import { registerCloudTools } from "@hasna/cloud";
 
 import { getDb } from "../db/database.js";
 import { seedBuiltinRules } from "../db/index.js";
@@ -121,9 +120,6 @@ export function createMcpServer(): McpServer {
       }
     },
   );
-
-  registerCloudTools(server, "shield");
-
   return server;
 }
 

@@ -22,7 +22,7 @@ export function registerFindingsCommand(program: Command): void {
         getDb();
         const scans = listScans(undefined, 1);
         if (scans.length === 0) {
-          console.log(chalk.yellow("\n  No scans found. Run `security scan` first.\n"));
+          console.log(chalk.yellow("\n  No scans found. Run `shield scan` first.\n"));
           return;
         }
 

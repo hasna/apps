@@ -5,6 +5,7 @@ import { type ConfigFile, DEFAULT_CONFIG } from "../types/index.js";
 
 const CONFIG_DIR_NAME = ".security";
 const CONFIG_FILE_NAME = "config.json";
+const PROJECT_GITIGNORE_ENTRIES = ["*.db", "*.db-journal", "*.db-wal", "*.db-shm", "cache/"];
 
 function homeDir(): string {
   return process.env.HOME || process.env.USERPROFILE || homedir();
@@ -120,7 +121,18 @@ export function initProject(path: string): void {
 
   // Create .gitignore inside .security to ignore cache/db files
   const gitignorePath = join(configDir, ".gitignore");
+  const current = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf-8") : "";
+  const currentEntries = new Set(
+    current
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean),
+  );
+  const missingEntries = PROJECT_GITIGNORE_ENTRIES.filter((entry) => !currentEntries.has(entry));
   if (!existsSync(gitignorePath)) {
-    writeFileSync(gitignorePath, "*.db\n*.db-journal\ncache/\n", "utf-8");
+    writeFileSync(gitignorePath, PROJECT_GITIGNORE_ENTRIES.join("\n") + "\n", "utf-8");
+  } else if (missingEntries.length > 0) {
+    const prefix = current.length === 0 || current.endsWith("\n") ? current : current + "\n";
+    writeFileSync(gitignorePath, prefix + missingEntries.join("\n") + "\n", "utf-8");
   }
 }

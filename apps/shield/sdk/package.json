@@ -10,7 +10,7 @@
     "./schemas": { "import": "./dist/schemas.js", "types": "./dist/schemas.d.ts" }
   },
   "scripts": {
-    "build": "bun build src/index.ts src/schemas.ts --outdir dist --target node",
+    "build": "bun build src/index.ts src/schemas.ts --outdir dist --target node && tsc -p tsconfig.json --emitDeclarationOnly",
     "test": "bun test"
   },
   "dependencies": {

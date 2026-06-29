@@ -132,6 +132,27 @@ describe("config", () => {
 
       const gitignorePath = join(getProjectConfigDir(tempDir), ".gitignore");
       expect(existsSync(gitignorePath)).toBe(true);
+      const gitignore = readFileSync(gitignorePath, "utf-8");
+      expect(gitignore).toContain("*.db");
+      expect(gitignore).toContain("*.db-journal");
+      expect(gitignore).toContain("*.db-wal");
+      expect(gitignore).toContain("*.db-shm");
+    });
+
+    test("upgrades existing .gitignore with WAL database sidecars", () => {
+      const configDir = getProjectConfigDir(tempDir);
+      mkdirSync(configDir, { recursive: true });
+      const gitignorePath = join(configDir, ".gitignore");
+      writeFileSync(gitignorePath, "*.db\ncache/\n", "utf-8");
+
+      initProject(tempDir);
+
+      const gitignore = readFileSync(gitignorePath, "utf-8");
+      expect(gitignore).toContain("*.db");
+      expect(gitignore).toContain("*.db-journal");
+      expect(gitignore).toContain("*.db-wal");
+      expect(gitignore).toContain("*.db-shm");
+      expect(gitignore.match(/\*\.db\n/g)?.length ?? 0).toBe(1);
     });
 
     test("is idempotent (does not overwrite existing config)", () => {

@@ -302,6 +302,6 @@ export function seedBuiltinRules(dbOverride?: ReturnType<typeof getDb>): void {
       );
     }
   });
-  // SqliteAdapter auto-executes; bun:sqlite returns a callable
+  // Some SQLite implementations execute transactions immediately; bun:sqlite returns a callable.
   if (typeof txn === "function") txn();
 }

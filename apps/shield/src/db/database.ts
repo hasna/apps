@@ -1,5 +1,4 @@
 import { Database } from "bun:sqlite";
-import { SqliteAdapter } from "@hasna/cloud";
 import { copyFileSync, existsSync, mkdirSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
@@ -10,10 +9,22 @@ function homeDir(): string {
   return process.env.HOME || process.env.USERPROFILE || homedir();
 }
 
+function resolveStorageMode(): "local" {
+  const mode = (process.env.HASNA_SHIELD_STORAGE_MODE || process.env.HASNA_SECURITY_STORAGE_MODE || "local").toLowerCase();
+  if (mode === "local") return "local";
+  throw new Error(
+    `Unsupported shield storage mode "${mode}". ` +
+      "Only local SQLite storage is supported by this package; remote storage must use shield-owned adapters.",
+  );
+}
+
 function getDbPath(): string {
+  resolveStorageMode();
   if (process.env.SECURITY_DB) return process.env.SECURITY_DB;
-  const local = join(process.cwd(), ".shield", "shield.db");
-  if (existsSync(dirname(local))) return local;
+  const projectSecurity = join(process.cwd(), ".security", "shield.db");
+  if (existsSync(dirname(projectSecurity))) return projectSecurity;
+  const projectShield = join(process.cwd(), ".shield", "shield.db");
+  if (existsSync(dirname(projectShield))) return projectShield;
 
   const home = homeDir();
   const dbPath = join(home, ".hasna", "security", "shield.db");
@@ -57,7 +68,7 @@ export function getDb(): Database {
   if (_db) return _db;
   const dbPath = getDbPath();
   mkdirSync(dirname(dbPath), { recursive: true });
-  _db = new SqliteAdapter(dbPath) as unknown as Database;
+  _db = new Database(dbPath);
   _db.exec("PRAGMA journal_mode = WAL");
   _db.exec("PRAGMA foreign_keys = ON");
   _db.exec("PRAGMA busy_timeout = 5000");
@@ -99,10 +110,11 @@ function runMigrations(db: Database): void {
 
   for (const migration of MIGRATIONS) {
     if (applied.has(migration.name)) continue;
-    db.transaction(() => {
+    const applyMigration = db.transaction(() => {
       db.exec(migration.sql);
       db.prepare("INSERT INTO _migrations (name) VALUES (?)").run(migration.name);
     });
+    if (typeof applyMigration === "function") applyMigration();
   }
 }
 

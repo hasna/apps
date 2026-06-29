@@ -1,5 +1,5 @@
 /**
- * PostgreSQL migrations for open-security cloud sync.
+ * PostgreSQL migrations for shield-owned remote storage.
  *
  * Equivalent of the SQLite migrations in database.ts, translated for PostgreSQL.
  * Each element is a standalone SQL string that must be executed in order.

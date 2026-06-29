@@ -22,7 +22,9 @@ describe("git hooks", () => {
     const contents = readFileSync(result.hookPath, "utf-8");
 
     expect(result.installed).toBe(true);
-    expect(contents).toContain("managed-by-open-security");
+    expect(contents).toContain("managed-by-open-shield");
+    expect(contents).toContain("shield secrets . --format terminal --fail-on high --no-git-history");
+    expect(contents).toContain("./node_modules/.bin/shield secrets . --format terminal --fail-on high --no-git-history");
     expect(contents).toContain("security secrets . --format terminal --fail-on high --no-git-history");
     expect(contents).toContain("bun run ./dist/cli/index.js secrets . --format terminal --fail-on high --no-git-history");
     expect(contents).toContain("bun run ./src/cli/index.tsx secrets . --format terminal --fail-on high --no-git-history");
@@ -47,6 +49,19 @@ describe("git hooks", () => {
     const result = installPrePushHook(tempDir, { force: true });
     expect(result.installed).toBe(true);
     expect(result.skipped).toBe(false);
-    expect(readFileSync(hookPath, "utf-8")).toContain("managed-by-open-security");
+    expect(readFileSync(hookPath, "utf-8")).toContain("managed-by-open-shield");
+  });
+
+  test("installPrePushHook upgrades a legacy managed hook", () => {
+    const hookPath = join(tempDir, ".git", "hooks", "pre-push");
+    writeFileSync(hookPath, "#!/usr/bin/env bash\n# managed-by-open-security\nsecurity secrets .\n", "utf-8");
+
+    const result = installPrePushHook(tempDir);
+    const contents = readFileSync(hookPath, "utf-8");
+
+    expect(result.installed).toBe(true);
+    expect(result.skipped).toBe(false);
+    expect(contents).toContain("managed-by-open-shield");
+    expect(contents).toContain("shield secrets . --format terminal --fail-on high --no-git-history");
   });
 });
