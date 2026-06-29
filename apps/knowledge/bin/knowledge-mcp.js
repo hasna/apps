@@ -11250,7 +11250,7 @@ function finalize(ctx, schema) {
     result.$schema = "http://json-schema.org/draft-07/schema#";
   } else if (ctx.target === "draft-04") {
     result.$schema = "http://json-schema.org/draft-04/schema#";
-  } else if (ctx.target === "openapi-3.0") {} else {}
+  } else if (ctx.target === "openapi-3.0") {}
   if (ctx.external?.uri) {
     const id = ctx.external.registry.get(schema)?.id;
     if (!id)
@@ -11511,7 +11511,7 @@ var formatMap, stringProcessor = (schema, ctx, _json, _params) => {
     if (val === undefined) {
       if (ctx.unrepresentable === "throw") {
         throw new Error("Literal `undefined` cannot be represented in JSON Schema");
-      } else {}
+      }
     } else if (typeof val === "bigint") {
       if (ctx.unrepresentable === "throw") {
         throw new Error("BigInt literals cannot be represented in JSON Schema");
@@ -14997,7 +14997,7 @@ import { existsSync as existsSync12, readFileSync as readFileSync12, writeFileSy
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
-  version: "0.2.72",
+  version: "0.2.73",
   description: "Agent-friendly local knowledge CLI with JSON output, pagination, and safe destructive actions",
   type: "module",
   exports: {
@@ -15066,6 +15066,7 @@ var package_default = {
     "@ai-sdk/openai": "^3.0.68",
     "@aws-sdk/client-s3": "^3.1063.0",
     "@aws-sdk/credential-providers": "^3.1063.0",
+    "@hasna/contracts": "^0.2.2",
     "@hasna/events": "^0.1.3",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/json-schema": "^7.0.15",

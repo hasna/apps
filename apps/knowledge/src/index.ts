@@ -45,6 +45,11 @@ export {
   type KnowledgeSyncSnapshotOptions,
 } from './service.js';
 export {
+  createKnowledgeProjectPanel,
+  formatKnowledgeProjectPanel,
+  type KnowledgeProjectPanelOptions,
+} from './project-panel.js';
+export {
   proposeKnowledgeSyncConflictResolutionWithAi,
   type KnowledgeSyncConflictAiProposalOptions,
 } from './conflict-agent.js';
