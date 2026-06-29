@@ -91,7 +91,12 @@ task maximum; do not set `HASNA_UPTIME_DATABASE_URL` until the full hosted
 Postgres runtime adapter is wired through `UptimeService`, the API, and worker
 loops. The `@hasna/uptime/postgres-runtime` export is a bounded core facade for
 workspace-scoped monitor upserts, probe identities, check jobs, probe
-submissions, audit rows, and tombstones. It is SDK/runtime groundwork, not a
+submissions, audit rows, and tombstones. Monitor upserts enforce the mandatory
+`hosted-public` target policy before any Postgres row is written, so unsafe
+loopback, metadata, private DNS, private/reserved IP, secret-bearing URL, and
+unsafe TCP targets are rejected at ingestion. Enabled `browser_page` rows remain
+blocked until browser evidence workers are configured, and private targets still
+need future inventory-backed provenance. It is SDK/runtime groundwork, not a
 hosted service-store promotion gate. `uptime cloud postgres-scheduler run`
 creates one bounded batch of deterministic Postgres `check_jobs` for due
 public-safe HTTP/TCP monitors with producer-side hosted target-policy checks.

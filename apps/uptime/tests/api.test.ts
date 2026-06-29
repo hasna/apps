@@ -761,6 +761,53 @@ test("hosted API enforces target policy at monitor creation", async () => {
   service.close();
 });
 
+test("hosted API enforces target policy on monitor patch before mutation and audit", async () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const handler = createApiHandler(service, { mode: "hosted", hostedToken: HOSTED_SECRET_TOKEN_JSON });
+
+  const create = await handler(jsonRequest(
+    "https://uptime.test/api/v1/monitors",
+    "POST",
+    { name: "safe", kind: "http", url: "https://example.com/health" },
+    { origin: "https://uptime.test", authorization: "Bearer secret" },
+  ));
+  const monitor = await create.json();
+  const patch = await handler(jsonRequest(
+    `https://uptime.test/api/v1/monitors/${monitor.id}`,
+    "PATCH",
+    { url: "http://169.254.169.254/latest/meta-data" },
+    { origin: "https://uptime.test", authorization: "Bearer secret" },
+  ));
+  const body = await patch.json();
+  const stored = service.getMonitor(monitor.id, { workspaceId: "default" });
+  const audits = service.listAuditEvents({ workspaceId: "default", resourceType: "monitor", resourceId: monitor.id });
+
+  expect(create.status).toBe(201);
+  expect(patch.status).toBe(400);
+  expect(body.error).toContain("private or reserved IPv4");
+  expect(stored?.url).toBe("https://example.com/health");
+  expect(stored?.revision).toBe(monitor.revision);
+  expect(audits.map((event) => event.action)).toEqual(["monitor.create"]);
+  service.close();
+});
+
+test("local API keeps local target behavior outside hosted mode", async () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  const handler = createApiHandler(service);
+
+  const response = await handler(jsonRequest(
+    "http://127.0.0.1:3899/api/monitors",
+    "POST",
+    { name: "local dev", kind: "http", url: "http://127.0.0.1:3000/health" },
+  ));
+  const monitor = await response.json();
+
+  expect(response.status).toBe(201);
+  expect(monitor.url).toBe("http://127.0.0.1:3000/health");
+  expect(service.summary().totals.monitors).toBe(1);
+  service.close();
+});
+
 test("API previews and applies import candidates", async () => {
   const service = new UptimeService({ dbPath: tempDb() });
   const handler = createApiHandler(service);

@@ -763,6 +763,11 @@ test("Postgres runtime honors custom workspace setting and rejects unsafe hosted
     databaseUrl: "postgres://svc:secret@db.example.invalid/uptime",
     workspaceId: "ws_runtime",
   })).toThrow("sslmode=require");
+  expect(() => createPostgresRuntime({
+    client: new FakeRuntimeClient(),
+    workspaceId: "ws_runtime",
+    monitorTargetPolicy: "private-inventory" as never,
+  })).toThrow("hosted-public");
 
   const previousMode = process.env.HASNA_UPTIME_MODE;
   const previousWorkspace = process.env.HASNA_UPTIME_WORKSPACE_ID;
@@ -778,8 +783,80 @@ test("Postgres runtime honors custom workspace setting and rejects unsafe hosted
   }
 });
 
+test("Postgres runtime enforces the hosted-public monitor target policy before persistence", async () => {
+  const client = new FakeRuntimeClient();
+  const runtime = createPostgresRuntime({ client, workspaceId: "ws_runtime" });
+
+  const unsafeTargets = [
+    {
+      input: { name: "Loopback", kind: "http" as const, url: "http://127.0.0.1:3000" },
+      message: "private or reserved IPv4",
+    },
+    {
+      input: { name: "Metadata", kind: "http" as const, url: "http://169.254.169.254/latest/meta-data" },
+      message: "private or reserved IPv4",
+    },
+    {
+      input: { name: "Private DNS", kind: "http" as const, url: "https://api.internal/health" },
+      message: "private DNS",
+    },
+    {
+      input: { name: "Browser fragment", kind: "browser_page" as const, url: "https://example.com/callback#access_token=secret" },
+      message: "fragment contains secret-like data",
+    },
+    {
+      input: { name: "Private TCP", kind: "tcp" as const, host: "10.0.0.1", port: 5432 },
+      message: "private or reserved IPv4",
+    },
+  ];
+
+  for (const target of unsafeTargets) {
+    await expect(runtime.upsertMonitor(target.input)).rejects.toThrow(target.message);
+  }
+  expect(client.queries.some((query) => query.sql.includes("INSERT INTO \"uptime\".\"monitors\""))).toBe(false);
+
+  const http = await runtime.upsertMonitor({ name: "Public HTTP", kind: "http", url: "https://example.com/health" });
+  const tcp = await runtime.upsertMonitor({ name: "Public TCP", kind: "tcp", host: "example.com", port: 443 });
+
+  expect(http.kind).toBe("http");
+  expect(http.url).toBe("https://example.com/health");
+  expect(tcp.kind).toBe("tcp");
+  expect(tcp.host).toBe("example.com");
+  expect(tcp.port).toBe(443);
+});
+
+test("Postgres runtime keeps browser page monitors disabled until browser workers exist", async () => {
+  const client = new FakeRuntimeClient();
+  const runtime = createPostgresRuntime({ client, workspaceId: "ws_runtime" });
+
+  await expect(runtime.upsertMonitor({
+    name: "Browser default enabled",
+    kind: "browser_page",
+    url: "https://example.com/app",
+  })).rejects.toThrow("browser_page monitors must remain disabled");
+  await expect(runtime.upsertMonitor({
+    name: "Browser explicit enabled",
+    kind: "browser_page",
+    url: "https://example.com/app",
+    enabled: true,
+  })).rejects.toThrow("browser_page monitors must remain disabled");
+  expect(client.queries.some((query) => query.sql.includes("INSERT INTO \"uptime\".\"monitors\""))).toBe(false);
+
+  const monitor = await runtime.upsertMonitor({
+    name: "Browser candidate",
+    kind: "browser_page",
+    url: "https://example.com/app",
+    enabled: false,
+    status: "up",
+  });
+
+  expect(monitor.enabled).toBe(false);
+  expect(monitor.status).toBe("paused");
+});
+
 test("Postgres runtime rejects unredacted evidence, secret metadata, and unsafe monitor URLs", async () => {
-  const runtime = createPostgresRuntime({ client: new FakeRuntimeClient(), workspaceId: "ws_runtime" });
+  const client = new FakeRuntimeClient();
+  const runtime = createPostgresRuntime({ client, workspaceId: "ws_runtime" });
 
   await expect(runtime.upsertMonitor({
     name: "Unsafe",

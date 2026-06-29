@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createPostgresPool, type PostgresQueryClient } from "./postgres.js";
 import { buildPostgresMigrationPlan, redactPostgresUrl } from "./postgres-plan.js";
 import { probeResultPayloadHash } from "./probes.js";
+import { assertHostedTargetAllowed } from "./target-policy.js";
 import type {
   CheckEvidence,
   CheckStatus,
@@ -14,6 +15,8 @@ import type {
 
 export const POSTGRES_RUNTIME_VERSION = 1;
 
+export type PostgresMonitorTargetPolicy = "hosted-public";
+
 export interface PostgresRuntimeOptions {
   databaseUrl?: string;
   schemaName?: string;
@@ -21,6 +24,7 @@ export interface PostgresRuntimeOptions {
   workspaceSetting?: string;
   client?: PostgresQueryClient;
   now?: () => Date;
+  monitorTargetPolicy?: PostgresMonitorTargetPolicy;
 }
 
 export interface PostgresRuntimeReadiness {
@@ -436,9 +440,11 @@ export class PostgresRuntime {
   private readonly workspaceId: string;
   private readonly workspaceSetting: string;
   private readonly clock: () => Date;
+  private readonly monitorTargetPolicy: PostgresMonitorTargetPolicy;
 
   constructor(options: PostgresRuntimeOptions = {}) {
     this.schemaName = normalizeSchemaName(options.schemaName ?? "uptime");
+    this.monitorTargetPolicy = normalizePostgresMonitorTargetPolicy(options.monitorTargetPolicy ?? "hosted-public");
     const resolvedWorkspaceId = options.workspaceId ?? process.env.HASNA_UPTIME_WORKSPACE_ID;
     if ((process.env.HASNA_UPTIME_MODE ?? "").trim() === "hosted" && !resolvedWorkspaceId) {
       throw new Error("Postgres runtime requires HASNA_UPTIME_WORKSPACE_ID or workspaceId in hosted mode");
@@ -474,6 +480,17 @@ export class PostgresRuntime {
     const idempotencyKey = normalizeNullableOpaqueText(input.idempotencyKey, "monitor idempotency key", 256);
     const id = normalizeId(input.id ?? deterministicId("mon", workspaceId, idempotencyKey ?? input.name, input.kind));
     const kind = normalizeMonitorKind(input.kind);
+    const url = normalizeNullableMonitorUrl(input.url);
+    const host = normalizeNullableHost(input.host);
+    const port = normalizeNullablePort(input.port);
+    const method = normalizeMethod(input.method ?? "GET");
+    const expectedStatus = normalizeNullableExpectedStatus(input.expectedStatus);
+    const enabled = input.enabled ?? true;
+    const status = enabled ? normalizeMonitorStatus(input.status ?? "unknown") : "paused";
+    this.assertMonitorTargetAllowed({ kind, url, host, port });
+    if (kind === "browser_page" && enabled) {
+      throw new Error("Postgres browser_page monitors must remain disabled until browser evidence workers are configured");
+    }
     const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
       `INSERT INTO ${this.table("monitors")} (
         workspace_id, id, name, kind, url, host, port, method, expected_status,
@@ -509,16 +526,16 @@ export class PostgresRuntime {
         id,
         normalizeName(input.name, "monitor name"),
         kind,
-        normalizeNullableMonitorUrl(input.url),
-        normalizeNullableHost(input.host),
-        normalizeNullablePort(input.port),
-        normalizeMethod(input.method ?? "GET"),
-        normalizeNullableExpectedStatus(input.expectedStatus),
+        url,
+        host,
+        port,
+        method,
+        expectedStatus,
         normalizePositiveInteger(input.intervalSeconds ?? 60, "monitor intervalSeconds"),
         normalizePositiveInteger(input.timeoutMs ?? 5000, "monitor timeoutMs"),
         normalizeNonNegativeInteger(input.retryCount ?? 0, "monitor retryCount"),
-        input.enabled ?? true,
-        normalizeMonitorStatus(input.status ?? "unknown"),
+        enabled,
+        status,
         normalizeNullableIsoTimestamp(input.lastCheckedAt, "monitor lastCheckedAt"),
         normalizeNullableOpaqueText(input.actor, "monitor actor", 160),
         normalizeNullableOpaqueText(input.origin, "monitor origin", 160),
@@ -526,6 +543,13 @@ export class PostgresRuntime {
       ],
     ));
     return monitorFromRow(firstRow(result, "monitor"));
+  }
+
+  private assertMonitorTargetAllowed(target: { kind: MonitorKind; url: string | null; host: string | null; port: number | null }): void {
+    if (this.monitorTargetPolicy !== "hosted-public") {
+      throw new Error("Postgres monitor target policy must be hosted-public");
+    }
+    assertHostedTargetAllowed(target);
   }
 
   async upsertProbeIdentity(input: UpsertPostgresProbeIdentityInput): Promise<PostgresProbeIdentityRecord> {
@@ -1893,6 +1917,11 @@ function redactCheckJobForDiscovery(job: PostgresCheckJobRecord): PostgresCheckJ
 function normalizeMonitorKind(value: string): MonitorKind {
   if (value === "http" || value === "tcp" || value === "browser_page") return value;
   throw new Error("monitor kind must be http, tcp, or browser_page");
+}
+
+function normalizePostgresMonitorTargetPolicy(value: string): PostgresMonitorTargetPolicy {
+  if (value === "hosted-public") return value;
+  throw new Error("Postgres monitor target policy must be hosted-public");
 }
 
 function normalizeMonitorStatus(value: string): MonitorStatus {

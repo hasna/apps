@@ -6,6 +6,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.60] - 2026-06-30
+
+### Changed
+
+- Enforced the shared hosted target policy inside `PostgresRuntime.upsertMonitor`
+  before any monitor row is written, so direct Postgres monitor ingestion now
+  rejects loopback, metadata, private DNS, private/reserved IP, secret fragment,
+  and unsafe TCP targets using the same policy family as hosted API/import and
+  worker review paths.
+- Codified Postgres monitor ingestion as a `hosted-public` target-policy
+  boundary. Private targets still require future inventory-backed provenance,
+  and enabled `browser_page` monitors remain blocked until browser evidence
+  workers are configured.
+- Updated release metadata defaults for the packaged AWS module to
+  `@hasna/uptime@0.1.60`.
+
 ## [0.1.59] - 2026-06-30
 
 ### Added
