@@ -1,10 +1,10 @@
 # Security Policy
 
 Report security issues privately to the maintainers before opening a public
-issue. Use GitHub private advisories at
-`https://github.com/hasna/uptime/security/advisories/new` or email
-`security@hasna.xyz`. Do not include secrets, private endpoints, or internal
-network details in public reports.
+issue. Email `security@hasna.xyz`; if the GitHub repository is public and
+advisories are enabled, maintainers may move the report into a private GitHub
+advisory. Do not include secrets, private endpoints, or internal network details
+in public reports.
 
 ## Defaults
 

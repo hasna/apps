@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.29] - 2026-06-29
+
+### Changed
+
+- Removed internal operator runbooks and cloud architecture/gap documents from
+  the published npm package while keeping repository docs and the reusable
+  `infra/aws` Terraform module intact.
+- Added explicit global upgrade instructions to the README and removed the
+  private GitHub advisory link from the packaged security policy.
+
 ## [0.1.28] - 2026-06-29
 
 ### Added

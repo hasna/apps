@@ -162,14 +162,17 @@ aws codebuild start-build \
 
 The private infra root should set `runtime_package_integrity` to the published
 npm `dist.integrity` value for the exact `runtime_package_version`. The image
-builder verifies that value before extracting the package. If the value is not
-set, record why the tarball is not integrity-pinned and keep the service
-not-live.
+builder refuses to extract the package unless that value matches, or unless
+`allow_unpinned_runtime_package_integrity=true` is deliberately set for a
+zero-count review build. Keep the service not-live when the package is not
+integrity-pinned.
 
 Update the approved infra root so `container_image` is the immutable ECR digest,
 then re-plan with all services still at `0`.
 
-Populate Secrets Manager values out of band. Verify metadata only:
+Populate Secrets Manager values out of band. `secret_refs` is a sensitive output;
+use this loop only in a private operator terminal and paste only redacted
+metadata summaries into shared evidence:
 
 ```bash
 terraform -chdir="$TF_DIR" output -json secret_refs | jq -r '.[]' | while read -r SECRET_ID; do
@@ -420,7 +423,7 @@ staging file system encrypted with the Open Uptime KMS key.
 : "${RESTORE_ROLE_ARN:?set RESTORE_ROLE_ARN to the AWS Backup restore role ARN}"
 : "${STAGING_SUBNET_ID:?set STAGING_SUBNET_ID to the staging private subnet id}"
 : "${STAGING_SECURITY_GROUP_ID:?set STAGING_SECURITY_GROUP_ID to the staging EFS security group id}"
-KMS_KEY_ARN="$(terraform -chdir="$TF_DIR" output -raw kms_key_arn)"
+KMS_KEY_ARN="$(terraform -chdir="$TF_DIR" output -raw kms_key_arn)" # sensitive output; do not paste
 
 RESTORE_JOB_ID="$(aws backup start-restore-job \
   --profile "$AWS_PROFILE_NAME" \

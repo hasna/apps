@@ -170,7 +170,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
   const image = clean(options.image, `${imageRepositoryUri}@sha256:<image-digest>`);
   const evidenceBucket = clean(options.evidenceBucket, `hasna-${stage}-${prefix}-evidence`);
   const hostedSqliteDbPath = clean(options.hostedSqliteDbPath, DEFAULT_HOSTED_SQLITE_DB);
-  const runtimePackageVersion = clean(options.runtimePackageVersion, "0.1.28");
+  const runtimePackageVersion = clean(options.runtimePackageVersion, "0.1.29");
   const runtimePackageIntegrity = options.runtimePackageIntegrity?.trim() || undefined;
   const protectedAccessMode = options.protectedAccessMode ?? DEFAULT_PROTECTED_ACCESS_MODE;
   const cloudfrontOriginProtocolPolicy = options.cloudfrontOriginProtocolPolicy ?? DEFAULT_CLOUDFRONT_ORIGIN_PROTOCOL_POLICY;
@@ -384,7 +384,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
         "Do not set HASNA_UPTIME_DATABASE_URL for hosted tasks until the Postgres adapter is implemented.",
         "Secrets are represented as secret names/refs and must be injected with valueFrom.",
         "Set runtime_package_integrity in the approved infra root after publish so the AWS image builder verifies the npm tarball before ECR build.",
-        "Actual deploy belongs in the deploy_release_operate_final goal node after infra review.",
+        "Actual deploy belongs in the approved deployment workflow after infra review.",
       ],
     },
   };

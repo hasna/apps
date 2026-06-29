@@ -241,7 +241,7 @@ variable "container_image" {
 variable "runtime_package_version" {
   description = "Published @hasna/uptime package version that CodeBuild should build into the ECR image."
   type        = string
-  default     = "0.1.28"
+  default     = "0.1.29"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$", var.runtime_package_version))
@@ -250,7 +250,7 @@ variable "runtime_package_version" {
 }
 
 variable "runtime_package_integrity" {
-  description = "Optional expected npm dist.integrity value for @hasna/uptime@runtime_package_version. When set, CodeBuild verifies the registry tarball integrity before building the image."
+  description = "Expected npm dist.integrity value for @hasna/uptime@runtime_package_version. CodeBuild refuses to build without this unless allow_unpinned_runtime_package_integrity is explicitly true."
   type        = string
   default     = null
   nullable    = true
@@ -259,6 +259,21 @@ variable "runtime_package_integrity" {
     condition     = var.runtime_package_integrity == null || can(regex("^sha512-[A-Za-z0-9+/=]+$", var.runtime_package_integrity))
     error_message = "runtime_package_integrity must be null or an npm sha512 integrity string."
   }
+
+  validation {
+    condition = (
+      var.runtime_package_integrity != null
+      || var.allow_unpinned_runtime_package_integrity
+      || alltrue([for desired_count in values(var.desired_counts) : desired_count == 0])
+    )
+    error_message = "runtime_package_integrity is required before scaling any service above zero unless allow_unpinned_runtime_package_integrity is explicitly true."
+  }
+}
+
+variable "allow_unpinned_runtime_package_integrity" {
+  description = "Explicit escape hatch for zero-count review builds without a pinned npm dist.integrity. Keep false for deployable/live paths."
+  type        = bool
+  default     = false
 }
 
 variable "certificate_arn" {

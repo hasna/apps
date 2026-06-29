@@ -42,7 +42,7 @@ test("buildAwsDeploymentPlan generates a dry-run AWS plan with generic package d
   expect(buildAwsDeploymentPlan().image.uri).toContain("@sha256:<image-digest>");
   expect(plan.resources.imageBuilder).toBe("open-uptime-prod-image-builder");
   expect(plan.image.pushCommands.join("\n")).toContain("BLOCKED:");
-  expect(plan.image.pushCommands.join("\n")).toContain("@hasna/uptime@0.1.28");
+  expect(plan.image.pushCommands.join("\n")).toContain("@hasna/uptime@0.1.29");
   expect(plan.runbook.deploy.join("\n")).toContain("must verify npm dist.integrity sha512-exampleIntegrity==");
   expect(plan.requiredEvidence).toContain("Published package dist.integrity pinned in the private infra root or an explicit not-live exception.");
   expect(plan.image.pushCommands.join("\n")).not.toContain("aws codebuild start-build");

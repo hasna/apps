@@ -80,7 +80,9 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(main).toContain('resource "aws_route53_record" "cloudfront_origin"');
   expect(main).toContain("npm pack @hasna/uptime@");
   expect(main).toContain("EXPECTED_RUNTIME_PACKAGE_INTEGRITY");
+  expect(main).toContain("ALLOW_UNPINNED_RUNTIME_PACKAGE_INTEGRITY");
   expect(main).toContain("npm view @hasna/uptime@${var.runtime_package_version} dist.integrity");
+  expect(main).toContain("runtime package integrity is required before image build");
   expect(main).toContain("runtime package integrity mismatch");
   expect(main).toContain("expected_runtime_package_integrity = coalesce(var.runtime_package_integrity, \"\")");
   expect(main).toContain("Dockerfile.package");
@@ -111,6 +113,8 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(variables).toContain("web desired count above 0 requires CloudFront HTTPS-origin mode");
   expect(variables).toContain("hosted_token_secret_arn");
   expect(variables).toContain("runtime_package_integrity must be null or an npm sha512 integrity string");
+  expect(variables).toContain("runtime_package_integrity is required before scaling any service above zero");
+  expect(variables).toContain("variable \"allow_unpinned_runtime_package_integrity\"");
   expect(variables).toContain('"public-probe" = 0');
   expect(variables).toContain("enable_cloudfront_origin_verify_header can only be true when protected_access_mode is cloudfront_default_domain");
   expect(variables).toContain("cloudfront_origin_protocol_policy must be http-only or https-only");
@@ -151,6 +155,7 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(outputs).toContain('output "backup_plan_id"');
   expect(outputs).toContain('output "kms_key_arn"');
   expect(outputs).toContain('output "secret_refs"');
+  expect(outputs).toContain("sensitive = true");
   expect(outputs).toContain('output "cloudfront_origin_verify_header_enabled"');
   expect(outputs).toContain('output "cloudfront_origin_verify_header_name"');
   expect(outputs).toContain('output "cloudfront_origin_protocol_policy"');
@@ -205,8 +210,9 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(tfvars).toContain("enable_cloudfront_origin_verify_header");
   expect(tfvars).toContain("cloudfront_origin_verify_header_name");
   expect(tfvars).toContain("cloudfront_origin_verify_header_value  = null");
-  expect(tfvars).toContain('runtime_package_version   = "0.1.28"');
+  expect(tfvars).toContain('runtime_package_version   = "0.1.29"');
   expect(tfvars).toContain("runtime_package_integrity = null");
+  expect(tfvars).toContain("allow_unpinned_runtime_package_integrity = false");
   expect(tfvars).toContain('project_name             = "open-uptime"');
   expect(tfvars).toContain("monthly_budget_limit_usd");
   expect(tfvars).toContain("private_route_table_ids");
@@ -240,7 +246,9 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(tfvars).not.toContain("rds_security_group_id");
   expect(tfvars).toContain('"public-probe" = 0');
   expect(tfvars).not.toContain("public_probe = 0");
-  expect(packageJson.files).toContain("docs/*.json");
+  expect(packageJson.files).not.toContain("docs/*.md");
+  expect(packageJson.files).not.toContain("docs/*.json");
+  expect(packageJson.files).toContain("infra/aws/*.tf");
   expect(packageJson.files).toContain("bun.lock");
   expect(deploymentMetadataExample).not.toContain("private-account-label");
   expect(deploymentMetadataExample).not.toContain("private-workspace-id");

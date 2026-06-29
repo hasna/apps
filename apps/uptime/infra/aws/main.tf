@@ -242,10 +242,15 @@ resource "aws_codebuild_project" "image_builder" {
         build:
           commands:
             - EXPECTED_RUNTIME_PACKAGE_INTEGRITY='${local.expected_runtime_package_integrity}'
+            - ALLOW_UNPINNED_RUNTIME_PACKAGE_INTEGRITY='${var.allow_unpinned_runtime_package_integrity}'
             - PACKAGE_TARBALL=$(npm pack @hasna/uptime@${var.runtime_package_version} --silent)
             - PACKAGE_INTEGRITY=$(npm view @hasna/uptime@${var.runtime_package_version} dist.integrity --json | tr -d '"')
             - test -n "$PACKAGE_INTEGRITY"
             - |
+              if [ -z "$EXPECTED_RUNTIME_PACKAGE_INTEGRITY" ] && [ "$ALLOW_UNPINNED_RUNTIME_PACKAGE_INTEGRITY" != "true" ]; then
+                echo "runtime package integrity is required before image build" >&2
+                exit 1
+              fi
               if [ -n "$EXPECTED_RUNTIME_PACKAGE_INTEGRITY" ] && [ "$PACKAGE_INTEGRITY" != "$EXPECTED_RUNTIME_PACKAGE_INTEGRITY" ]; then
                 echo "runtime package integrity mismatch" >&2
                 exit 1

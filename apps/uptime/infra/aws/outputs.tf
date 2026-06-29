@@ -62,7 +62,8 @@ output "evidence_bucket" {
 }
 
 output "kms_key_arn" {
-  value = var.kms_key_arn
+  value     = var.kms_key_arn
+  sensitive = true
 }
 
 output "secret_refs" {
@@ -72,6 +73,7 @@ output "secret_refs" {
     public_probe = var.public_probe_secret_arn
     reporting    = var.reporting_secret_arn
   }
+  sensitive = true
 }
 
 output "log_group_names" {

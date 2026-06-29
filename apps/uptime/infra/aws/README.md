@@ -31,11 +31,13 @@ adapter and cloud leases are implemented. Do not set
 
 The included CodeBuild project builds `@hasna/uptime` from npm with
 `Dockerfile.package` and pushes the resulting image to ECR. This avoids
-depending on a local Docker daemon for image publication. Set
-`runtime_package_integrity` in the private root after publish to make CodeBuild
-verify the npm tarball `dist.integrity` before extracting it. The package image
-also installs production dependencies from the published `bun.lock` with
-`--frozen-lockfile`.
+depending on a local Docker daemon for image publication.
+`runtime_package_integrity` must be set in the private root after publish so
+CodeBuild can verify the npm tarball `dist.integrity` before extracting it.
+The image builder refuses unpinned packages unless
+`allow_unpinned_runtime_package_integrity=true` is deliberately set for a
+zero-count review build. The package image also installs production dependencies
+from the published `bun.lock` with `--frozen-lockfile`.
 
 The default protected access mode is `cloudfront_default_domain`: CloudFront
 serves HTTPS on its default domain while the ALB origin is limited to AWS's
@@ -66,6 +68,9 @@ For shared deployment evidence, prefer the non-secret outputs
 `alb_security_group_id`, and `web_target_group_arn`. Do not paste CloudFront
 distribution list/config responses or unfiltered listener-rule conditions into
 shared logs because those APIs can include the origin verification header value.
+Outputs such as `secret_refs` and `kms_key_arn` are marked sensitive; use them
+only in private operator terminals and do not paste their values into shared
+evidence.
 
 All module resources carry owner, project, environment, service, account, app
 type, and cost-center tags. ECS services enable AWS-managed tags and propagate

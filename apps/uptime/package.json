@@ -1,6 +1,6 @@
 {
   "name": "@hasna/uptime",
-  "version": "0.1.28",
+  "version": "0.1.29",
   "description": "Local-first uptime and downtime monitoring service with CLI, MCP, SDK, SQLite persistence, and a dashboard.",
   "license": "Apache-2.0",
   "type": "module",
@@ -31,8 +31,6 @@
     "infra/aws/.terraform.lock.hcl",
     "infra/aws/*.tf",
     "infra/aws/terraform.tfvars.example",
-    "docs/*.md",
-    "docs/*.json",
     "CHANGELOG.md",
     "LICENSE",
     "NOTICE",
@@ -86,8 +84,7 @@
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:server": "bun run src/cli/index.ts serve",
-    "prepublishOnly": "bun run build && bun run typecheck && bun test",
-    "postinstall": "mkdir -p $HOME/.hasna/uptime 2>/dev/null || true"
+    "prepublishOnly": "bun run build && bun run typecheck && bun test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

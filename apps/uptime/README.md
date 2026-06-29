@@ -9,6 +9,16 @@ local dashboard.
 
 ```bash
 bun install -g @hasna/uptime
+npm install -g @hasna/uptime
+```
+
+Update an existing global install with the same command and an explicit version
+or `latest` tag:
+
+```bash
+bun install -g @hasna/uptime@latest
+npm install -g @hasna/uptime@latest
+uptime --version
 ```
 
 Local data is stored in `~/.hasna/uptime/uptime.db`. Set
@@ -49,8 +59,8 @@ fail-closed; `--allow-blocked-env` is for review artifacts only, not startup.
 The `uptime cloud plan` and `uptime cloud private-probe-config` commands
 generate dry-run AWS/private-probe planning artifacts. They do not call AWS,
 write secrets, or produce an approved deploy script; current output is
-intentionally blocked until the infra and cloud-store evidence in
-`docs/aws-deployment-runbook.md` is satisfied. The `cloud public-checks` and
+intentionally blocked until the repository deployment runbook, infra, and
+cloud-store evidence are satisfied. The `cloud public-checks` and
 `cloud edge-smoke` commands are operational smokes: they perform bounded hosted
 checks or HTTP requests and must be run only with approved private evidence
 handling.
@@ -85,6 +95,11 @@ protected web access until this smoke passes against a running web task with
 `promotionReady=true`.
 `Dockerfile.package` is used by the Terraform CodeBuild image builder to build
 the published npm package into ECR from inside AWS.
+
+The npm package includes runtime code, CLI/MCP/SDK exports, legal/security docs,
+Docker build inputs, and the reusable `infra/aws` Terraform module. Internal
+operator runbooks, cloud architecture notes, and deployment evidence records
+stay in the repository and are not included in the published tarball.
 
 Private/local probes can submit signed results from another machine:
 
