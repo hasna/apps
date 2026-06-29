@@ -21,20 +21,30 @@ reconciliation gates.
 
 ## Initial Provider Scope
 
-- Mercury: institution provider, including virtual-card lifecycle after amount
-  units, scopes, IP policy, and sandbox are verified.
-- bunq: institution provider after API context/session/signing and sandbox
-  conformance are implemented.
-- Revolut Business: institution provider with production-only card-management
-  caveats encoded.
-- Erste BCR: PSD2/open-banking access provider for AIS/PIS only unless broader
-  commercial API access is proven.
+- Mercury: institution provider with live read-only adapters for accounts,
+  balances, organization-wide cards, and organization-wide transactions.
+- bunq: institution provider modeled through conformance contracts until API
+  context/session/signing and sandbox conformance are implemented.
+- Revolut Business: institution provider modeled through conformance contracts
+  with production-only card-management caveats encoded.
+- Erste BCR: PSD2/open-banking access provider for AIS/PIS conformance only
+  unless broader commercial API access is proven.
 
 Live money movement and virtual-card actions will remain gated by provider
 scope checks, policy, idempotency, approvals, audit logging, and reconciliation.
 Provider cards may document bank capabilities before adapters are released, but
 card mutations fail closed until the exact operation is marked verified by a
 provider conformance task.
+
+## Current Execution Posture
+
+| Surface | Current behavior |
+| --- | --- |
+| Mercury read operations | Live read-only for `accounts.list`, `balances.get`, `cards.list`, and `transactions.list` when `--live true` and an explicit environment are supplied. |
+| Mercury mutations | Descriptor and request-envelope only. Payments, internal transfers, card lifecycle, webhooks, recipients, attachments, categories, customers, invoices, onboarding, and metadata writes do not execute provider side effects. |
+| Erste BCR PSD2 AIS/PIS | Descriptor and conformance-fixture only. Consent, SCA, account, transaction, payment, cancellation, and creditor-confirmation flows are modeled but not executed against sandbox or production. |
+| Erste BCR non-PSD2 extras | Unsupported. Direct card control, card-account AIS, funds confirmation, signing baskets, party verification, sensitive card data, and Mercury-style webhooks fail closed. |
+| MCP tools | Local descriptors and request envelopes only. Generic card MCP helpers deny unsupported providers such as Erste BCR through policy. |
 
 ## Install
 
@@ -54,7 +64,7 @@ banking ops list --provider erste-bcr --json
 banking ops plan erste-bcr.payments.create --environment sandbox --scopes PIS --env-keys ERSTE_SANDBOX_CLIENT_ID,ERSTE_TPP_CERT_PATH,ERSTE_TPP_KEY_PATH --json
 banking accounts list --provider mercury --live true --environment sandbox --limit 5 --json
 banking balances get --provider mercury --account acct_123 --live true --environment sandbox --json
-banking cards list --provider mercury --live true --environment sandbox --limit 1000 --json
+banking cards list --provider mercury --live true --environment sandbox --limit 100 --json
 banking cards list --provider mercury --account acct_123 --live true --environment sandbox --limit 100 --json
 banking transactions list --provider mercury --live true --environment sandbox --limit 10 --order desc --json
 banking transactions list --provider mercury --account acct_123 --live true --environment sandbox --limit 10 --order desc --json
@@ -64,16 +74,24 @@ banking cards request --provider mercury --account acct_123 --label "Ops" --limi
 
 Mercury live reads are available for accounts, balances, transactions, and
 cards when `--live true` is set and credentials are supplied through
-`MERCURY_API_KEY` or `--secret-key <secret-key>`. Account and routing numbers
-are reduced to last-four summaries. Provider-backed reads for other providers
-still fail closed until their adapters are implemented. Admin commands are
-explicitly gated.
+`MERCURY_SANDBOX_API_KEY`, `MERCURY_PRODUCTION_API_KEY`, `MERCURY_API_KEY`, or
+`--secret-key <local-secret-reference>`. Account and routing numbers are reduced to
+last-four summaries. Provider-backed reads for other providers still fail closed
+until their adapters are implemented. Admin commands are explicitly gated.
 
 `--environment` is required for every live read. Use `sandbox` for test
 credentials and `production` only when you intentionally want production
-Mercury data. Public installs should prefer `MERCURY_API_KEY`; `--secret-key`
-is an optional integration for machines that already have a compatible local
-`secrets` CLI.
+Mercury data. Public installs should prefer environment variables; `--secret-key`
+is a reference looked up through a compatible local `secrets` CLI, not a place
+to paste the raw Mercury token. The live smoke command is read-only, returns
+summary counts only, and skips by default unless
+`BANKING_MERCURY_LIVE_SMOKE=true` is present.
+
+For source checkouts:
+
+```bash
+BANKING_MERCURY_LIVE_SMOKE=true BANKING_MERCURY_ENVIRONMENT=sandbox BANKING_MERCURY_LIVE_SMOKE_LIMIT=1 bun run smoke:mercury:live
+```
 
 `banking ops list`, `banking ops describe`, and `banking ops plan` expose the
 shared provider operation registry used to expand CLI, SDK, and MCP surfaces.
@@ -97,6 +115,13 @@ and Erste public docs plus the current Berlin Group NextGenPSD2 OpenAPI shape.
 Direct card control, sensitive card data, card-account AIS, funds confirmation,
 signing baskets, party verification, and Mercury-style webhooks remain
 unsupported until BCR-specific portal evidence proves availability.
+
+Erste BCR credential preflight accepts client id aliases plus certificate/key
+path variables such as `ERSTE_SANDBOX_CLIENT_ID`, `ERSTE_PRODUCTION_CLIENT_ID`,
+`ERSTE_TPP_CERT_PATH`, and `ERSTE_TPP_KEY_PATH`. Raw certificate PEM, private
+key PEM, access tokens, refresh tokens, PSU credentials, and SCA authentication
+data must never be passed through CLI args, logs, task comments, or provider
+visible metadata.
 
 ## SDK
 
@@ -124,6 +149,10 @@ must reserve idempotency, persist the intent, validate approval, enqueue
 outbox work, and append audit evidence in one serializable transaction before
 any provider side effect. The exported SQLite store is dev-only and intended
 for local tests and non-live workflows.
+
+See [`docs/migration/iapp-payments-to-banking.md`](docs/migration/iapp-payments-to-banking.md)
+for the migration checklist from existing payment integrations to the
+provider-operation model.
 
 ## MCP
 

@@ -18,6 +18,14 @@
   consent lifecycle, consent/payment SCA authorisations, AIS
   accounts/balances/transactions, PIS create/get/status/cancel, cancellation
   authorisations, and creditor confirmation.
+- Mercury live-read conformance guard and opt-in sanitized smoke runner for
+  accounts, balances, organization-wide cards, and organization-wide
+  transactions.
+- Erste BCR PSD2 conformance guard with non-executable consent/payment SCA
+  fixtures, PIS idempotency status checks, `X-Request-ID` mapping, and
+  certificate/key path boundaries.
+- Migration notes for moving existing payment integrations to the `banking`
+  provider-operation model.
 - MCP request-envelope parity for card unfreeze and terminate lifecycle actions.
 
 ### Changed
@@ -34,6 +42,19 @@
   PSD2 operations conformance-plan only.
 - MCP environment parsing now rejects invalid environment values instead of
   silently falling back to sandbox.
+- Unsupported provider operations, including Erste BCR direct card-control
+  descriptors, no longer report MCP exposure even when a generic global MCP tool
+  exists.
+
+### Safety Notes
+
+- Mercury is the only provider with live reads, and only the explicit read-only
+  allowlist is implemented. Provider-side mutations remain disabled.
+- Erste BCR remains PSD2 AIS/PIS conformance-only; no sandbox or production BCR
+  calls are made by this package.
+- BCR certificate and key handling is path-based in public surfaces. Raw PEM,
+  token, PSU credential, and SCA authentication material is forbidden from logs
+  and task evidence.
 
 ## 0.0.6 - 2026-06-29
 

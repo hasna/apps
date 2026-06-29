@@ -1,9 +1,10 @@
 # Provider API inventory - 2026-06-29
 
 This inventory is the source baseline for expanding `@hasna/banking` beyond the
-0.0.6 read-only Mercury adapter. It intentionally separates verified provider
-capabilities from implementation decisions so the CLI, SDK, and MCP server can
-grow through descriptors instead of ad hoc command branches.
+0.0.6 read-only Mercury adapter and the current Mercury/Erste BCR conformance
+registry. It intentionally separates verified provider capabilities from
+implementation decisions so the CLI, SDK, and MCP server can grow through
+descriptors instead of ad hoc command branches.
 
 ## Sources Checked
 
@@ -35,6 +36,11 @@ network-gated until a TPP account or documented public download URL is available
 - provider capability listing;
 - Mercury live reads for accounts, balances, organization-wide cards, and
   organization-wide transactions;
+- Mercury conformance assertions pinning the exact live-read allowlist and
+  keeping all mutation descriptors non-executable;
+- Erste BCR PSD2 conformance assertions for AIS/PIS descriptors, consent/payment
+  SCA fixtures, PIS idempotency and `X-Request-ID` mapping, certificate/key path
+  boundaries, and unsupported card-control behavior;
 - request envelopes for payments and card actions;
 - SDK primitives for money, intents, policy, approvals, idempotency, audit,
   reconciliation, and provider contracts;
@@ -219,9 +225,9 @@ These are not PSD2 AIS/PIS capabilities in the public source set.
 
 ## Scalable CLI Architecture Requirements
 
-The next implementation node should introduce a provider operation registry with
-typed descriptors. The descriptor should drive CLI, SDK, MCP, docs, tests, and
-policy gates from one source.
+The implementation now uses a provider operation registry with typed
+descriptors. The descriptor drives CLI, SDK, MCP, docs, tests, and policy gates
+from one source.
 
 Each operation descriptor should include:
 
@@ -260,22 +266,30 @@ through the registry so the SDK and MCP surfaces stay aligned.
 
 ## Implementation Gates
 
+Completed gates:
+
 1. Build the operation registry and derive CLI/MCP provider validation from it.
-2. Add Mercury read descriptors for every listed read/download/list/get
-   endpoint, with cursor pagination and filters.
+2. Add Mercury descriptors for the current official API families, with
+   implemented live reads limited to accounts, balances, cards, and
+   transactions.
 3. Add Mercury mutation descriptors as dry-run request envelopes first.
-4. Add Mercury token readiness checks before any live execution: explicit
+4. Add Mercury live-read conformance tests and an opt-in sanitized smoke runner
+   that returns summary counts only.
+5. Add Erste BCR PSD2 descriptors using Berlin Group-compatible fixtures.
+6. Add Erste BCR PSD2 conformance tests for consent lifecycle, SCA
+   redirect/decoupled/embedded fixture state, PIS idempotency/status checks,
+   certificate/key path boundaries, and unsupported card operations.
+
+Remaining gates:
+
+1. Add Mercury token readiness checks before any live execution: explicit
    environment, token tier, required custom scopes, IP whitelist posture,
    freshness/deletion risk, and normalized `MERCURY_API_KEY`/token aliases.
-5. Add Mercury sandbox conformance tests and only then enable gated live
+2. Add Mercury sandbox conformance tests and only then enable gated live
    execution for low-risk metadata writes.
-6. Enable card and money movement mutations only after idempotency, approvals,
+3. Enable card and money movement mutations only after idempotency, approvals,
    audit, outbox, retry classification, and redaction tests pass.
-7. Update Erste BCR provider contracts and secret allowlists for portal app id,
-   API key, certificate/key material, redirect URIs, and consent metadata before
-   implementing PSD2 descriptors.
-8. Add Erste BCR PSD2 descriptors using Berlin Group-compatible fixtures.
-9. Keep BCR sandbox/live calls disabled until TPP registration credentials and
+4. Keep BCR sandbox/live calls disabled until TPP registration credentials and
    exact BCR OpenAPI YAML are available.
-10. Add adversarial security, architecture, provider-parity, and release reviews
+5. Add adversarial security, architecture, provider-parity, and release reviews
    before publishing the next patch release.
