@@ -270,6 +270,8 @@ const semanticActionSchema = z.object({
   confidence: z.number(),
   risk: z.enum(["none", "navigation", "external_mutation", "sensitive"]),
   requiresApproval: z.boolean(),
+  policyTags: z.array(z.string()).optional(),
+  policyReason: z.string().optional(),
   reason: z.string().optional(),
   value: z.union([z.string(), z.boolean()]).optional(),
   preconditions: z.array(z.string()).optional(),

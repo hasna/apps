@@ -54,6 +54,17 @@ browser validate https://example.com "the cart drawer is open" --json
 The same surface is exposed through MCP as `browser_page_map`,
 `browser_observe`, `browser_act`, and `browser_validate`.
 
+`observe` builds deterministic candidate actions first. Model assistance, when
+enabled, ranks those bounded candidate IDs; it cannot invent selectors, refs,
+JavaScript, or new actions. `act` refreshes the current page map before running
+cached or direct actions and reclassifies the target against generic policy
+tags such as `account_creation`, `credential_entry`, `legal_acceptance`,
+`captcha`, `mfa`, `payment`, and `external_mutation`.
+
+Actions tagged as sensitive or externally mutating require explicit approval.
+This is intentionally generic: the policy is based on DOM/form semantics and
+labels, not website-specific scripts.
+
 Skills should describe the task, risk policy, model prompts, output schema, and
 stop conditions. Browser owns the page map, refs, actions, screenshots,
 recordings, downloads, evidence, and session cleanup. Site-specific JavaScript

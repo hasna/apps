@@ -6,6 +6,7 @@ import {
   getSemanticActionCacheScope,
   observeSemanticActions,
   runSemanticAction,
+  type SemanticAction,
   type SemanticPageMap,
 } from "./semantic-actions.js";
 
@@ -121,6 +122,106 @@ describe("semantic actions", () => {
     expect(action?.requiresApproval).toBe(true);
   });
 
+  it("rejects model invented selectors when ranking bounded candidates", () => {
+    const pageMap: SemanticPageMap = {
+      url: "https://example.test/signin",
+      title: "Sign in",
+      text: "",
+      interactive_count: 1,
+      elements: [
+        { ref: "@e1", role: "button", name: "Continue", visible: true, enabled: true },
+      ],
+      forms: [
+        {
+          fields: [
+            { tag: "input", type: "password", id: "password", label: "Password", selector: "#password" },
+          ],
+        },
+      ],
+    };
+    const candidates: SemanticAction[] = [
+      {
+        id: "act_click_e1",
+        kind: "click",
+        ref: "@e1",
+        label: "Continue",
+        confidence: 0.7,
+        risk: "navigation",
+        requiresApproval: false,
+      },
+    ];
+
+    const invented = coerceModelAction({
+      id: "not-a-candidate",
+      kind: "fill",
+      ref: "selector:#password",
+      selector: "#password",
+      confidence: 1,
+      risk: "none",
+    }, pageMap, "click continue", candidates);
+    expect(invented).toBeNull();
+
+    const ranked = coerceModelAction({
+      id: "act_click_e1",
+      selector: "#password",
+      confidence: 1,
+      risk: "none",
+    }, pageMap, "click continue", candidates);
+    expect(ranked?.ref).toBe("@e1");
+    expect(ranked?.selector).toBeUndefined();
+    expect(ranked?.risk).toBe("navigation");
+  });
+
+  it("marks password, legal consent, and account submit actions as approval-gated", async () => {
+    await page.setContent(`
+      <main>
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="new-password">
+        <label><input id="terms" type="checkbox"> I agree to the Terms and Privacy Policy</label>
+        <button>Create account</button>
+      </main>
+    `);
+
+    const password = await observeSemanticActions(page, "semantic-test-policy-password", "fill password", {
+      useModel: false,
+    });
+    expect(password.actions[0].risk).toBe("sensitive");
+    expect(password.actions[0].requiresApproval).toBe(true);
+    expect(password.actions[0].policyTags).toContain("credential_entry");
+
+    const terms = await observeSemanticActions(page, "semantic-test-policy-terms", "check terms", {
+      useModel: false,
+    });
+    expect(terms.actions[0].risk).toBe("sensitive");
+    expect(terms.actions[0].requiresApproval).toBe(true);
+    expect(terms.actions[0].policyTags).toContain("legal_acceptance");
+
+    const submit = await observeSemanticActions(page, "semantic-test-policy-submit", "click create account", {
+      useModel: false,
+    });
+    expect(submit.actions[0].risk).toBe("sensitive");
+    expect(submit.actions[0].requiresApproval).toBe(true);
+    expect(submit.actions[0].policyTags).toContain("account_creation");
+  });
+
+  it("omits readonly fields from semantic form candidates", async () => {
+    await page.setContent(`
+      <main>
+        <label for="readonly-email">Email</label>
+        <input id="readonly-email" readonly value="locked@example.test">
+        <label for="editable-email">Email</label>
+        <input id="editable-email">
+      </main>
+    `);
+
+    const observed = await observeSemanticActions(page, "semantic-test-readonly", "fill email", {
+      useModel: false,
+    });
+
+    expect(observed.actions.some((action) => action.selector === "#readonly-email")).toBe(false);
+    expect(observed.actions[0].selector).toBe("#editable-email");
+  });
+
   it("rejects cached actions when the same URL page fingerprint changes", async () => {
     await page.setContent(`<button>Continue</button>`);
     const observed = await observeSemanticActions(page, "semantic-test-cache", "click continue", {
@@ -136,5 +237,19 @@ describe("semantic actions", () => {
     expect(second.scope.url).toBe(first.scope.url);
     expect(second.scope.fingerprint).not.toBe(first.scope.fingerprint);
     expect(getCachedSemanticAction("semantic-test-cache", observed.actions[0].id, second.scope)).toBeNull();
+  });
+
+  it("rejects cached actions when the page URL changes", async () => {
+    await page.goto("data:text/html,<button>Continue</button>");
+    const observed = await observeSemanticActions(page, "semantic-test-cache-url", "click continue", {
+      useModel: false,
+    });
+    const first = await getSemanticActionCacheScope(page, "semantic-test-cache-url");
+
+    expect(getCachedSemanticAction("semantic-test-cache-url", observed.actions[0].id, first.scope)).not.toBeNull();
+    expect(getCachedSemanticAction("semantic-test-cache-url", observed.actions[0].id, {
+      url: "https://example.test/other",
+      fingerprint: first.scope.fingerprint,
+    })).toBeNull();
   });
 });

@@ -24,10 +24,18 @@ skills define task instructions, risk policy, prompts, output schemas, and stop
 conditions. Browser records and caches what happened, but it does not own a
 first-class recipe registry or durable site-specific manifests.
 
-Model-assisted steps operate on sanitized page maps. Website content is
-untrusted input, not an instruction source. Secrets should be passed only as
-runtime variables to execution tools, not embedded into page maps or model
-prompts.
+`observe` starts with deterministic candidate actions from refs and sanitized
+form fields. Model-assisted steps rank those candidate action IDs only; website
+content is untrusted input, not an instruction source, and model output cannot
+introduce new selectors or JavaScript. `act` revalidates cached or direct
+actions against the current page map before execution.
+
+Semantic risk is classified through generic DOM/form policy tags, including
+account creation, credential entry/submit, legal acceptance, CAPTCHA, MFA,
+payment, file upload/download, destructive actions, navigation, and external
+mutation. Sensitive and externally mutating actions fail closed unless the
+caller explicitly approves the risk. Secrets should be passed only as runtime
+variables to execution tools, not embedded into page maps or model prompts.
 
 ## Backend Comparison
 
