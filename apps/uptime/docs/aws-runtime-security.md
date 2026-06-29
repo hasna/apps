@@ -157,8 +157,8 @@ Public web exposure requires defense in depth:
   distribution or listener-rule read access;
 - custom hostname deployment terminates TLS with ACM on ALB or CloudFront after
   Route53/edge ownership is approved;
-- edge access can be Cloudflare Access, OIDC, Cognito, or another Hasna-approved
-  identity layer;
+- edge access can be Cloudflare Access, OIDC, Cognito, or another
+  organization-approved identity layer;
 - hosted web tasks must set `HASNA_UPTIME_ALLOWED_ORIGINS` to the public HTTPS
   edge origin so browser mutation checks do not compare CloudFront HTTPS origins
   against the ALB origin hostname;
@@ -475,7 +475,7 @@ required before browser evidence or public probe scale-out.
 
 ## Implementation Blockers
 
-- The approved private Hasna AWS bridge must prove zero-count runtime resources
+- The approved private AWS bridge must prove zero-count runtime resources
   in private evidence before any live scale-up: ECR, dormant ECS services, ALB,
   CloudFront default-domain distribution, evidence bucket, encrypted logs,
   Backup, EFS, and service secret containers. A bridge is not live while

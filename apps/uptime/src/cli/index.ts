@@ -585,8 +585,8 @@ cloud
 
 cloud
   .command("memory-preflight")
-  .description("Fail-closed cloud-primary readiness gate for task memory and Spark01 promotion")
-  .option("--machine-id <id>", "operator/probe machine id; defaults to HASNA_UPTIME_MACHINE_ID or spark01")
+  .description("Fail-closed cloud-primary readiness gate for task memory and operator-machine promotion")
+  .option("--machine-id <id>", "operator/probe machine id; defaults to HASNA_UPTIME_MACHINE_ID or operator-01")
   .option("--healthcheck", "exit non-zero unless cloud memory and machine-primary gates are promotion-ready")
   .option("-j, --json", "print JSON")
   .action((opts) => {
@@ -1928,7 +1928,7 @@ function buildCloudMemoryMachineChecks(identity: CloudMemoryMachineIdentity): Cl
 function cloudMemoryNextActions(services: CloudMemoryServicePreflight[]): string[] {
   const blocked = services.filter((service) => !service.cloudPrimary);
   return [
-    "Do not call Spark01 cloud-primary and do not scale hosted workers while this preflight is blocked.",
+    "Do not call the selected operator machine cloud-primary and do not scale hosted workers while this preflight is blocked.",
     "Record only redacted, count-only evidence; never paste DB URLs, secret values, note bodies, messages, mementos, or knowledge chunks.",
     "Run each service status command from this report and store sanitized counts/booleans in todos knowledge before any migration.",
     "Take local backups and freeze or conflict-quarantine legacy writes before any cloud backfill.",
@@ -2062,7 +2062,7 @@ function requireExplicitWorkspaceId(value?: string): string {
 }
 
 function resolveCloudMemoryMachineIdentity(optionMachineId?: string): CloudMemoryMachineIdentity {
-  const rawMachineId = optionMachineId?.trim() || process.env.HASNA_UPTIME_MACHINE_ID?.trim() || "spark01";
+  const rawMachineId = optionMachineId?.trim() || process.env.HASNA_UPTIME_MACHINE_ID?.trim() || "operator-01";
   const secretLike = /(secret|token|password|passwd|pwd|api[_:.-]?key|credential|bearer|jwt|private)/i.test(rawMachineId);
   const valid = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(rawMachineId) && !secretLike;
   const machineId = valid ? rawMachineId : "invalid-machine-id";

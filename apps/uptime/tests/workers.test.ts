@@ -187,7 +187,7 @@ test("postgres scheduler worker ignores open jobs for other probe policies", asy
     monitorId: monitor.id,
     monitorRevision: monitor.revision,
     monitorSnapshot: monitor,
-    probePolicy: { probeClass: "private", locations: ["machine002"] },
+    probePolicy: { probeClass: "private", locations: ["operator-02"] },
     probePolicyHash: "b".repeat(64),
     status: "pending",
     submittedResultId: null,

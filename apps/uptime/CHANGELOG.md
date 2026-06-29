@@ -6,6 +6,21 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.49] - 2026-06-29
+
+### Changed
+
+- Replaced the default cloud memory preflight machine id and public examples
+  with generic operator-machine names.
+- Genericized public cloud readiness docs so concrete deployment evidence,
+  private account choices, local machine names, and operator state remain in
+  private deployment metadata.
+
+### Security
+
+- Replaced realistic-looking AWS account and secret-ref examples in the packaged
+  Terraform tfvars template with explicit placeholders.
+
 ## [0.1.48] - 2026-06-29
 
 ### Added
@@ -211,33 +226,33 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- `uptime cloud memory-preflight` now recognizes existing Hasna canonical live
+- `uptime cloud memory-preflight` now recognizes existing canonical live
   metadata environment names for Projects, Todos, and Conversations as
   configuration evidence without printing or depending on the secret values.
 
 ### Security
 
-- Canonical live metadata only satisfies the configuration check. Spark01 and
-  service cloud-primary status still require audited proof envs, sync evidence,
-  and the existing Open Uptime Postgres/runtime blockers to be resolved.
+- Canonical live metadata only satisfies the configuration check. The selected
+  operator machine and service cloud-primary status still require audited proof
+  envs, sync evidence, and the existing Open Uptime Postgres/runtime blockers to
+  be resolved.
 
 ## [0.1.38] - 2026-06-29
 
 ### Added
 
 - Added `uptime cloud memory-preflight` as a redacted, fail-closed promotion
-  gate for Hasna cloud-backed project/task memory and Spark01 operator-machine
-  readiness.
+  gate for cloud-backed project/task memory and operator-machine readiness.
 - Added regression coverage for healthcheck exit behavior, built CLI
   availability, per-machine proof-env binding, and redaction of database URLs,
   API keys, secret refs, secret-looking machine IDs, and canonical secret paths.
 
 ### Security
 
-- The memory preflight does not promote Spark01, does not scale hosted workers,
-  and keeps Notes and Open Uptime blocked until Notes has audited cloud
-  metadata/object storage and Open Uptime has an authoritative async Postgres
-  runtime adapter with leases, report storage, and probe fencing.
+- The memory preflight does not promote an operator machine, does not scale
+  hosted workers, and keeps Notes and Open Uptime blocked until Notes has
+  audited cloud metadata/object storage and Open Uptime has an authoritative
+  async Postgres runtime adapter with leases, report storage, and probe fencing.
 
 ## [0.1.37] - 2026-06-29
 

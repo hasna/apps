@@ -279,13 +279,13 @@ test("two scheduler instances create one deterministic job for the same contract
     workspaceId: "ws_a",
     monitorId: monitor.id,
     scheduleSlot: "2026-01-01T00:00:00.000Z",
-    probePolicy: { probeClass: "private", locations: ["spark01"] },
+    probePolicy: { probeClass: "private", locations: ["operator-01"] },
   });
   const second = schedulerB.createProbeCheckJob({
     workspaceId: "ws_a",
     monitorId: monitor.id,
     scheduleSlot: "2026-01-01T00:00:00.000Z",
-    probePolicy: { probeClass: "private", locations: ["spark01"] },
+    probePolicy: { probeClass: "private", locations: ["operator-01"] },
   });
   const rows = (schedulerA.store as unknown as { db: { query(sql: string): { get(...args: unknown[]): { count: number } } } }).db
     .query("SELECT count(*) AS count FROM probe_check_jobs WHERE workspace_id = ? AND monitor_id = ? AND schedule_slot = ?")
@@ -305,7 +305,7 @@ test("probe jobs are distinct across monitor revisions and probe policies", () =
   const privateJob = service.createProbeCheckJob({
     monitorId: monitor.id,
     scheduleSlot: slot,
-    probePolicy: { probeClass: "private", locations: ["spark01"] },
+    probePolicy: { probeClass: "private", locations: ["operator-01"] },
   });
   const publicJob = service.createProbeCheckJob({
     monitorId: monitor.id,
@@ -316,7 +316,7 @@ test("probe jobs are distinct across monitor revisions and probe policies", () =
   const nextRevisionJob = service.createProbeCheckJob({
     monitorId: updated.id,
     scheduleSlot: slot,
-    probePolicy: { probeClass: "private", locations: ["spark01"] },
+    probePolicy: { probeClass: "private", locations: ["operator-01"] },
   });
 
   expect(privateJob.id).not.toBe(publicJob.id);
@@ -329,11 +329,11 @@ test("probe jobs are distinct across monitor revisions and probe policies", () =
 test("same-probe claim retry keeps the original fencing token", () => {
   const service = new UptimeService({ dbPath: tempDb() });
   const monitor = service.createMonitor({ name: "api", kind: "http", url: "https://example.com" });
-  const probe = service.createProbe({ name: "private-probe-01", probeClass: "private", probeLocation: "spark01" });
+  const probe = service.createProbe({ name: "private-probe-01", probeClass: "private", probeLocation: "operator-01" });
   const created = service.createProbeCheckJob({
     monitorId: monitor.id,
     scheduleSlot: "slot-same-probe-retry",
-    probePolicy: { probeClass: "private", locations: ["spark01"] },
+    probePolicy: { probeClass: "private", locations: ["operator-01"] },
   });
   const first = service.claimProbeCheckJob({ jobId: created.id, probeId: probe.id });
   const retry = service.claimProbeCheckJob({ jobId: created.id, probeId: probe.id });
@@ -348,23 +348,23 @@ test("probe claims enforce workspace, class, and location policy", () => {
   const service = new UptimeService({ dbPath: tempDb() });
   const monitor = service.createMonitor({ workspaceId: "ws_a", name: "api", kind: "http", url: "https://example.com" });
   const privateLocal = service.createProbe({ name: "private-local", workspaceId: "ws_a", probeClass: "private", probeLocation: "local" });
-  const wrongWorkspace = service.createProbe({ name: "wrong-ws", workspaceId: "ws_b", probeClass: "private", probeLocation: "spark01" });
+  const wrongWorkspace = service.createProbe({ name: "wrong-ws", workspaceId: "ws_b", probeClass: "private", probeLocation: "operator-01" });
   const publicJob = service.createProbeCheckJob({
     workspaceId: "ws_a",
     monitorId: monitor.id,
     scheduleSlot: "slot-public-only",
     probePolicy: { probeClass: "public", locations: ["us-east-1"] },
   });
-  const sparkJob = service.createProbeCheckJob({
+  const siteOnlyJob = service.createProbeCheckJob({
     workspaceId: "ws_a",
     monitorId: monitor.id,
-    scheduleSlot: "slot-spark-only",
-    probePolicy: { probeClass: "private", locations: ["spark01"] },
+    scheduleSlot: "slot-site-only",
+    probePolicy: { probeClass: "private", locations: ["operator-01"] },
   });
 
-  expect(() => service.claimProbeCheckJob({ jobId: sparkJob.id, probeId: wrongWorkspace.id })).toThrow("another workspace");
+  expect(() => service.claimProbeCheckJob({ jobId: siteOnlyJob.id, probeId: wrongWorkspace.id })).toThrow("another workspace");
   expect(() => service.claimProbeCheckJob({ jobId: publicJob.id, probeId: privateLocal.id })).toThrow("Probe class");
-  expect(() => service.claimProbeCheckJob({ jobId: sparkJob.id, probeId: privateLocal.id })).toThrow("Probe location");
+  expect(() => service.claimProbeCheckJob({ jobId: siteOnlyJob.id, probeId: privateLocal.id })).toThrow("Probe location");
   service.close();
 });
 
@@ -470,7 +470,7 @@ test("expired probe jobs can be reclaimed with a new fencing token", () => {
   try {
     const monitor = service.createMonitor({ name: "api", kind: "http", url: "https://example.com" });
     const firstProbe = service.createProbe({ name: "private-probe-01" });
-    const secondProbe = service.createProbe({ name: "spark02" });
+    const secondProbe = service.createProbe({ name: "probe02" });
     const job = service.createProbeCheckJob({ monitorId: monitor.id, scheduleSlot: "slot-reclaim" });
     const firstClaim = service.claimProbeCheckJob({ jobId: job.id, probeId: firstProbe.id, leaseTtlMs: 1000 });
 

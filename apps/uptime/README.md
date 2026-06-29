@@ -137,26 +137,29 @@ protected web access until this smoke passes against a running web task with
 the published npm package into ECR from inside AWS.
 
 The npm package includes runtime code, CLI/MCP/SDK exports, legal/security docs,
-Docker build inputs, and the reusable `infra/aws` Terraform module. Internal
-operator runbooks, cloud architecture notes, and deployment evidence records
-stay in the repository and are not included in the published tarball.
+Docker build inputs, and the reusable `infra/aws` Terraform module. Public
+operator runbooks and cloud architecture notes are generic templates. Concrete
+deployment evidence, private account choices, local machine names, and operator
+state belong in private deployment metadata, not in public docs or packages.
 
 `uptime cloud memory-preflight --json` prints a redacted report and exits `0`
 for inspection even when blocked. Use
 `uptime cloud memory-preflight --healthcheck --json` as the fail-closed gate for
-calling Spark01 or the Hasna project/task memory stack cloud-primary. It reports
-only service names, configured environment variable names, booleans, and
+calling an operator machine or a companion project/task memory stack
+cloud-primary. It reports only service names, configured environment variable
+names, booleans, and
 blockers. It checks env presence but does not retain or print database URLs, API
 keys, secret refs, notes, mementos, messages, knowledge chunks, Terraform state,
 or monitor private targets. `--healthcheck` exits non-zero until Projects,
-Todos, Conversations, Mementos, Knowledge, and the Spark01 machine lease checks
-all have audited cloud-primary evidence. Notes and Open Uptime are harder
-blockers: they remain blocked until Notes has audited cloud metadata/object
-storage and Open Uptime has the full hosted Postgres service adapter, leases,
-report storage, and probe fencing.
-Machine evidence is bound to the selected `--machine-id`: `spark01` uses
-`HASNA_UPTIME_SPARK01_*` proof flags, while another machine such as `worker02`
-must use its own `HASNA_UPTIME_WORKER02_*` proof flags. Secret-looking or
+Todos, Conversations, Mementos, Knowledge, and the selected operator-machine
+lease checks all have audited cloud-primary evidence. Notes and Open Uptime are
+harder blockers: they remain blocked until Notes has audited cloud
+metadata/object storage and Open Uptime has the full hosted Postgres service
+adapter, leases, report storage, and probe fencing.
+Machine evidence is bound to the selected `--machine-id`: `operator-01` uses
+`HASNA_UPTIME_OPERATOR_01_*` proof flags, while another machine such as
+`worker-02` must use its own `HASNA_UPTIME_WORKER_02_*` proof flags.
+Secret-looking or
 malformed machine IDs are rejected and rendered only as `invalid-machine-id`.
 
 Private/local probes can submit signed results from another machine:
@@ -165,13 +168,13 @@ Private/local probes can submit signed results from another machine:
 uptime probes create private-probe-01 \
   --private-key-file ./private-probe-01.key.pem \
   --probe-class private \
-  --probe-location spark01 \
-  --machine-id spark01
+  --probe-location private-site-01 \
+  --machine-id operator-01
 uptime probes jobs create \
   --monitor <monitor-id> \
   --schedule-slot 2026-06-28T12:00:00Z \
   --probe-class private \
-  --probe-locations spark01
+  --probe-locations private-site-01
 uptime probes jobs claim <job-id> --probe <probe-id>
 uptime probes submit \
   --probe <probe-id> \

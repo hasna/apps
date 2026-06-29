@@ -48,11 +48,11 @@ async function runCliAsync(args: string[], dbPath: string, env: Record<string, s
 function cloudMemoryEnv(overrides: Record<string, string> = {}) {
   return {
     HASNA_UPTIME_MACHINE_ID: "",
-    HASNA_UPTIME_SPARK01_MACHINE_REGISTRATION_READY: "",
-    HASNA_UPTIME_SPARK01_PRIMARY_LEASE_READY: "",
-    HASNA_UPTIME_SPARK01_BOOTSTRAP_TOKEN_REVOKED: "",
-    HASNA_UPTIME_SPARK01_PRIVATE_PROBE_READY: "",
-    HASNA_UPTIME_SPARK01_ROLLBACK_REHEARSED: "",
+    HASNA_UPTIME_OPERATOR_01_MACHINE_REGISTRATION_READY: "",
+    HASNA_UPTIME_OPERATOR_01_PRIMARY_LEASE_READY: "",
+    HASNA_UPTIME_OPERATOR_01_BOOTSTRAP_TOKEN_REVOKED: "",
+    HASNA_UPTIME_OPERATOR_01_PRIVATE_PROBE_READY: "",
+    HASNA_UPTIME_OPERATOR_01_ROLLBACK_REHEARSED: "",
     HASNA_PROJECTS_DATABASE_URL: "",
     PROJECTS_DATABASE_URL: "",
     HASNA_OPEN_PROJECTS_DB_LIVE_CONNECTION_STRING: "",
@@ -256,7 +256,7 @@ test("CLI cloud postgres-migrate dry-run is redacted and apply is guarded", () =
   }
 });
 
-test("CLI cloud memory preflight blocks Spark01 cloud-primary by default", () => {
+test("CLI cloud memory preflight blocks operator machine cloud-primary by default", () => {
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {
     const dbPath = join(dir, "uptime.db");
@@ -273,7 +273,7 @@ test("CLI cloud memory preflight blocks Spark01 cloud-primary by default", () =>
       kind: "open-uptime.cloud-memory-preflight",
       status: "blocked",
       canPromote: false,
-      machineId: "spark01",
+      machineId: "operator-01",
     });
     expect(services.notes).toMatchObject({ status: "blocked", cloudPrimary: false });
     expect(services.uptime).toMatchObject({ status: "blocked", cloudPrimary: false });
@@ -290,7 +290,7 @@ test("CLI cloud memory preflight detects canonical live metadata without leaking
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {
     const dbPath = join(dir, "uptime.db");
-    const preflight = runCli(["cloud", "memory-preflight", "--machine-id", "spark01", "--json"], dbPath, cloudMemoryEnv({
+    const preflight = runCli(["cloud", "memory-preflight", "--machine-id", "operator-01", "--json"], dbPath, cloudMemoryEnv({
       HASNA_OPEN_PROJECTS_DB_LIVE_CONNECTION_STRING: "postgres://projects:raw-projects-password@db.example.invalid/projects?sslmode=require",
       HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_XYZ_OPENSOURCE_TODOS_PROD_LIVE_RDS: JSON.stringify({
@@ -336,7 +336,7 @@ test("CLI cloud memory preflight does not treat canonical metadata as proof or s
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {
     const dbPath = join(dir, "uptime.db");
-    const preflight = runCli(["cloud", "memory-preflight", "--machine-id", "spark01", "--json"], dbPath, cloudMemoryEnv({
+    const preflight = runCli(["cloud", "memory-preflight", "--machine-id", "operator-01", "--json"], dbPath, cloudMemoryEnv({
       HASNA_XYZ_OPENSOURCE_TODOS_PROD_LIVE_RDS: JSON.stringify({
         database_url: "postgres://todos:raw-todos-password@db.example.invalid/todos?sslmode=require",
       }),
@@ -368,7 +368,7 @@ test("CLI cloud memory preflight rejects local todos storage mode even with proo
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {
     const dbPath = join(dir, "uptime.db");
-    const preflight = runCli(["cloud", "memory-preflight", "--machine-id", "spark01", "--json"], dbPath, cloudMemoryEnv({
+    const preflight = runCli(["cloud", "memory-preflight", "--machine-id", "operator-01", "--json"], dbPath, cloudMemoryEnv({
       HASNA_TODOS_STORAGE_MODE: "local",
       HASNA_TODOS_DATABASE_URL: "postgres://todos:raw-todos-password@db.example.invalid/todos",
       HASNA_TODOS_CLOUD_PRIMARY_READY: "1",
@@ -393,7 +393,7 @@ test("CLI cloud memory preflight rejects malformed canonical metadata even with 
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {
     const dbPath = join(dir, "uptime.db");
-    const preflight = runCli(["cloud", "memory-preflight", "--machine-id", "spark01", "--json"], dbPath, cloudMemoryEnv({
+    const preflight = runCli(["cloud", "memory-preflight", "--machine-id", "operator-01", "--json"], dbPath, cloudMemoryEnv({
       HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_XYZ_OPENSOURCE_TODOS_PROD_LIVE_RDS: `"{\"database_url\":\"postgres://todos:raw-todos-password@db.example.invalid/todos?sslmode=require\"}`,
       HASNA_TODOS_CLOUD_PRIMARY_READY: "1",
@@ -419,7 +419,7 @@ test("CLI cloud memory preflight rejects hostless canonical postgres aliases eve
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {
     const dbPath = join(dir, "uptime.db");
-    const preflight = runCli(["cloud", "memory-preflight", "--machine-id", "spark01", "--json"], dbPath, cloudMemoryEnv({
+    const preflight = runCli(["cloud", "memory-preflight", "--machine-id", "operator-01", "--json"], dbPath, cloudMemoryEnv({
       HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_XYZ_OPENSOURCE_TODOS_PROD_LIVE_RDS: JSON.stringify({
         database_url: "postgres:///todos?sslmode=require",
@@ -444,7 +444,7 @@ test("CLI cloud memory preflight rejects invalid canonical metadata aliases with
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {
     const dbPath = join(dir, "uptime.db");
-    const preflight = runCli(["cloud", "memory-preflight", "--machine-id", "spark01", "--json"], dbPath, cloudMemoryEnv({
+    const preflight = runCli(["cloud", "memory-preflight", "--machine-id", "operator-01", "--json"], dbPath, cloudMemoryEnv({
       HASNA_OPEN_PROJECTS_DB_LIVE_CONNECTION_STRING: "postgres://projects:raw-projects-password@db.example.invalid/projects",
       HASNA_XYZ_OPENSOURCE_PROJECTS_PROD_LIVE_RDS: `"{\"database_url\":\"raw-malformed-project-secret"`,
       HASNA_TODOS_STORAGE_MODE: "remote",
@@ -479,12 +479,12 @@ test("CLI cloud memory preflight reports env names without leaking secret values
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {
     const dbPath = join(dir, "uptime.db");
-    const preflight = runCli(["cloud", "memory-preflight", "--machine-id", "spark01", "--json"], dbPath, cloudMemoryEnv({
+    const preflight = runCli(["cloud", "memory-preflight", "--machine-id", "operator-01", "--json"], dbPath, cloudMemoryEnv({
       HASNA_PROJECTS_DATABASE_URL: "postgres://projects:raw-projects-password@db.example.invalid/projects",
       HASNA_PROJECTS_CLOUD_PRIMARY_READY: "1",
       HASNA_TODOS_STORAGE_MODE: "remote",
       HASNA_TODOS_DATABASE_URL: "postgres://todos:raw-todos-password@db.example.invalid/todos",
-      HASNA_TODOS_S3_BUCKET: "hasna-xyz-opensource-todos-prod",
+      HASNA_TODOS_S3_BUCKET: "example-opensource-todos-prod",
       HASNA_TODOS_CLOUD_PRIMARY_READY: "true",
       HASNA_CONVERSATIONS_DATABASE_URL: "postgres://conv:raw-conv-password@db.example.invalid/conversations",
       HASNA_CONVERSATIONS_CLOUD_PRIMARY_READY: "yes",
@@ -494,15 +494,15 @@ test("CLI cloud memory preflight reports env names without leaking secret values
       HASNA_KNOWLEDGE_API_KEY: "raw-knowledge-api-key",
       HASNA_KNOWLEDGE_CLOUD_PRIMARY_READY: "1",
       HASNA_NOTES_DATABASE_URL: "postgres://notes:raw-notes-password@db.example.invalid/notes",
-      HASNA_NOTES_S3_BUCKET: "hasna-xyz-opensource-notes-prod",
+      HASNA_NOTES_S3_BUCKET: "example-opensource-notes-prod",
       HASNA_NOTES_CLOUD_PRIMARY_READY: "1",
       HASNA_UPTIME_DATABASE_URL: "postgres://uptime:raw-uptime-password@db.example.invalid/uptime",
       HASNA_UPTIME_POSTGRES_RUNTIME_READY: "1",
-      HASNA_UPTIME_SPARK01_MACHINE_REGISTRATION_READY: "1",
-      HASNA_UPTIME_SPARK01_PRIMARY_LEASE_READY: "1",
-      HASNA_UPTIME_SPARK01_BOOTSTRAP_TOKEN_REVOKED: "1",
-      HASNA_UPTIME_SPARK01_PRIVATE_PROBE_READY: "1",
-      HASNA_UPTIME_SPARK01_ROLLBACK_REHEARSED: "1",
+      HASNA_UPTIME_OPERATOR_01_MACHINE_REGISTRATION_READY: "1",
+      HASNA_UPTIME_OPERATOR_01_PRIMARY_LEASE_READY: "1",
+      HASNA_UPTIME_OPERATOR_01_BOOTSTRAP_TOKEN_REVOKED: "1",
+      HASNA_UPTIME_OPERATOR_01_PRIVATE_PROBE_READY: "1",
+      HASNA_UPTIME_OPERATOR_01_ROLLBACK_REHEARSED: "1",
     }));
     const stdout = new TextDecoder().decode(preflight.stdout);
     const body = JSON.parse(stdout);
@@ -531,7 +531,7 @@ test("CLI cloud memory preflight reports env names without leaking secret values
     expect(stdout).not.toContain("raw-knowledge-token");
     expect(stdout).not.toContain("raw-knowledge-api-key");
     expect(stdout).not.toContain("postgres://");
-    expect(stdout).not.toContain("hasna/xyz/opensource");
+    expect(stdout).not.toContain("example/opensource");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -541,38 +541,38 @@ test("CLI cloud memory preflight binds machine evidence to the selected machine 
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {
     const dbPath = join(dir, "uptime.db");
-    const sparkEnv = cloudMemoryEnv({
-      HASNA_UPTIME_SPARK01_MACHINE_REGISTRATION_READY: "1",
-      HASNA_UPTIME_SPARK01_PRIMARY_LEASE_READY: "1",
-      HASNA_UPTIME_SPARK01_BOOTSTRAP_TOKEN_REVOKED: "1",
-      HASNA_UPTIME_SPARK01_PRIVATE_PROBE_READY: "1",
-      HASNA_UPTIME_SPARK01_ROLLBACK_REHEARSED: "1",
+    const operatorEnv = cloudMemoryEnv({
+      HASNA_UPTIME_OPERATOR_01_MACHINE_REGISTRATION_READY: "1",
+      HASNA_UPTIME_OPERATOR_01_PRIMARY_LEASE_READY: "1",
+      HASNA_UPTIME_OPERATOR_01_BOOTSTRAP_TOKEN_REVOKED: "1",
+      HASNA_UPTIME_OPERATOR_01_PRIVATE_PROBE_READY: "1",
+      HASNA_UPTIME_OPERATOR_01_ROLLBACK_REHEARSED: "1",
     });
-    const workerWithSparkEvidence = runCli(["cloud", "memory-preflight", "--machine-id", "worker02", "--json"], dbPath, sparkEnv);
-    const workerBody = JSON.parse(new TextDecoder().decode(workerWithSparkEvidence.stdout));
+    const workerWithOperatorEvidence = runCli(["cloud", "memory-preflight", "--machine-id", "worker-02", "--json"], dbPath, operatorEnv);
+    const workerBody = JSON.parse(new TextDecoder().decode(workerWithOperatorEvidence.stdout));
     const workerChecks = Object.fromEntries(workerBody.machineChecks.map((check: any) => [check.name, check]));
-    const invalidMachine = runCli(["cloud", "memory-preflight", "--machine-id", "!!!", "--json"], dbPath, sparkEnv);
+    const invalidMachine = runCli(["cloud", "memory-preflight", "--machine-id", "!!!", "--json"], dbPath, operatorEnv);
     const invalidBody = JSON.parse(new TextDecoder().decode(invalidMachine.stdout));
     const invalidChecks = Object.fromEntries(invalidBody.machineChecks.map((check: any) => [check.name, check]));
-    const secretMachineJson = runCli(["cloud", "memory-preflight", "--machine-id", "raw-machine-password", "--json"], dbPath, sparkEnv);
-    const secretMachineText = runCli(["cloud", "memory-preflight", "--machine-id", "raw-machine-token"], dbPath, sparkEnv);
+    const secretMachineJson = runCli(["cloud", "memory-preflight", "--machine-id", "raw-machine-password", "--json"], dbPath, operatorEnv);
+    const secretMachineText = runCli(["cloud", "memory-preflight", "--machine-id", "raw-machine-token"], dbPath, operatorEnv);
     const secretBody = JSON.parse(new TextDecoder().decode(secretMachineJson.stdout));
     const secretJsonStdout = new TextDecoder().decode(secretMachineJson.stdout);
     const secretTextStdout = new TextDecoder().decode(secretMachineText.stdout);
 
-    expect(workerWithSparkEvidence.exitCode).toBe(0);
-    expect(workerBody.machineId).toBe("worker02");
+    expect(workerWithOperatorEvidence.exitCode).toBe(0);
+    expect(workerBody.machineId).toBe("worker-02");
     expect(workerChecks["machine-id"]).toMatchObject({ ok: true });
     expect(workerChecks["cloud-machine-registration"]).toMatchObject({
       ok: false,
-      envName: "HASNA_UPTIME_WORKER02_MACHINE_REGISTRATION_READY",
+      envName: "HASNA_UPTIME_WORKER_02_MACHINE_REGISTRATION_READY",
     });
     expect(workerChecks["primary-lease"]).toMatchObject({
       ok: false,
-      envName: "HASNA_UPTIME_WORKER02_PRIMARY_LEASE_READY",
+      envName: "HASNA_UPTIME_WORKER_02_PRIMARY_LEASE_READY",
     });
-    expect(workerBody.blockers.join("\n")).toContain("HASNA_UPTIME_WORKER02_MACHINE_REGISTRATION_READY");
-    expect(workerBody.blockers.join("\n")).not.toContain("HASNA_UPTIME_SPARK01_MACHINE_REGISTRATION_READY");
+    expect(workerBody.blockers.join("\n")).toContain("HASNA_UPTIME_WORKER_02_MACHINE_REGISTRATION_READY");
+    expect(workerBody.blockers.join("\n")).not.toContain("HASNA_UPTIME_OPERATOR_01_MACHINE_REGISTRATION_READY");
 
     expect(invalidMachine.exitCode).toBe(0);
     expect(invalidBody.machineId).toBe("invalid-machine-id");
@@ -604,7 +604,7 @@ test("built CLI cloud memory preflight is available and fails closed", () => {
       kind: "open-uptime.cloud-memory-preflight",
       status: "blocked",
       canPromote: false,
-      machineId: "spark01",
+      machineId: "operator-01",
     });
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -1690,9 +1690,9 @@ test("CLI creates probes, claims jobs, and submits signed results", () => {
       "--probe-class",
       "private",
       "--probe-location",
-      "spark01",
+      "operator-01",
       "--machine-id",
-      "machine002",
+      "operator-02",
       "--json",
     ], dbPath);
     const probe = JSON.parse(new TextDecoder().decode(createProbe.stdout));
@@ -1707,7 +1707,7 @@ test("CLI creates probes, claims jobs, and submits signed results", () => {
       "--probe-class",
       "private",
       "--probe-locations",
-      "spark01",
+      "operator-01",
       "--json",
     ], dbPath);
     const job = JSON.parse(new TextDecoder().decode(createJob.stdout));
@@ -1754,10 +1754,10 @@ test("CLI creates probes, claims jobs, and submits signed results", () => {
     expect(probe.privateKeyPem).toBeUndefined();
     expect(probe.privateKeyFile).toBe(keyPath);
     expect(probe.probeClass).toBe("private");
-    expect(probe.probeLocation).toBe("spark01");
-    expect(probe.machineId).toBe("machine002");
+    expect(probe.probeLocation).toBe("operator-01");
+    expect(probe.machineId).toBe("operator-02");
     expect(createJob.exitCode).toBe(0);
-    expect(job.probePolicy).toEqual({ probeClass: "private", locations: ["spark01"] });
+    expect(job.probePolicy).toEqual({ probeClass: "private", locations: ["operator-01"] });
     expect(claimJob.exitCode).toBe(0);
     expect(submit.exitCode).toBe(0);
     expect(claimed.fencingToken).toBeTruthy();

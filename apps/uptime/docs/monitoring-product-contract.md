@@ -330,15 +330,15 @@ MCP input, or schedule payload shape:
       "id": "ops-email",
       "channel": "email",
       "service": "mailery",
-      "secretRef": "arn:aws:secretsmanager:us-east-1:123456789012:secret:open-uptime/prod/reporting-email",
+      "secretRef": "<aws-secretsmanager-reporting-email-ref>",
       "targetRef": "workspace-ops"
     },
     {
       "id": "ops-logs",
       "channel": "logs",
       "service": "logs",
-      "secretRef": "arn:aws:ssm:us-east-1:123456789012:parameter/open-uptime/prod/reporting/logs",
-      "targetRef": "open-uptime-prod"
+      "secretRef": "<aws-ssm-reporting-logs-ref>",
+      "targetRef": "workspace-logs"
     }
   ]
 }
@@ -361,7 +361,7 @@ catalog. The resolver requires explicit selected channel ids from an already
 authorized schedule/run, accepts a runtime secret-loader callback, loads the
 server-owned secret payload for each selected workspace-scoped ref, verifies the
 secret payload version/service/target binding, and prepares Mailery, Telephony,
-and Open Logs API calls using the existing Hasna endpoints:
+and Open Logs API calls using approved service endpoints:
 
 - Mailery: `POST /api/v1/send` with `Authorization: Bearer <sendKey>`;
 - Telephony: `POST /api/sms/send`, optionally with a server-owned bearer token;

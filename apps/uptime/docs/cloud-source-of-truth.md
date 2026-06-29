@@ -1,7 +1,7 @@
 # Cloud Source Of Truth
 
-This document defines the target source-of-truth model for running Open Uptime as
-an internal Hasna cloud service while keeping local developer workflows intact.
+This document defines the target source-of-truth model for running Open Uptime
+as a hosted cloud service while keeping local developer workflows intact.
 
 The current release is local-first: Open Uptime stores SQLite under
 `~/.hasna/uptime`, and the dashboard/API are intended for local or trusted
@@ -340,7 +340,7 @@ the recipient/channel is authorized for that workspace and target class.
 
 ## Sync And Conflict Contract
 
-The minimum cloud-primary contract for Hasna services is:
+The minimum cloud-primary contract for hosted services is:
 
 1. `status` command shows effective mode, redacted database env name, schema
    version, machine id, sync cursor, conflict count, and whether local storage
@@ -391,10 +391,11 @@ checks env presence but does not retain or print database URLs, API keys, secret
 refs, private note/message/memory/knowledge bodies, Terraform state, or monitor
 private targets. The current command has no local-only exception override; every
 listed service must either pass its audited cloud-primary checks or remain an
-explicit blocker. It must not be used to claim Spark01 cloud-primary while Notes
-and Open Uptime still lack authoritative cloud storage/runtime adapters.
-Machine proof flags are machine-specific: `spark01` uses
-`HASNA_UPTIME_SPARK01_*`, and any other `--machine-id` derives its own
+explicit blocker. It must not be used to claim an operator machine
+cloud-primary while Notes and Open Uptime still lack authoritative cloud
+storage/runtime adapters.
+Machine proof flags are machine-specific: `operator-01` uses
+`HASNA_UPTIME_OPERATOR_01_*`, and any other `--machine-id` derives its own
 `HASNA_UPTIME_<MACHINE_ID>_*` prefix. Secret-looking or malformed machine IDs
 are rejected and rendered only as `invalid-machine-id`.
 
@@ -529,7 +530,7 @@ ECS/API/RDS/S3/probe lag/job backlog/delivery failures, and rollback commands.
 - Conversations, notes, mementos, servers, domains, and deployment have partial
   or local-first storage models that need explicit ownership decisions.
 - Open Uptime is not registered in `@hasna/cloud` known service lists.
-- A private Hasna AWS bridge can provide zero-count runtime resources, including
+- A private AWS bridge can provide zero-count runtime resources, including
   ECR, dormant ECS services, ALB, CloudFront default-domain edge, logs, alarms,
   EFS, Backup, and Secrets Manager containers. The public Terraform module
   defines explicit ECS container health checks for every task definition.

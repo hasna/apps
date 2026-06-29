@@ -328,7 +328,7 @@ test("Postgres runtime records monitors, probe leases, submissions, audit, and t
   const schedulerMonitorsOtherPolicy = await runtime.listSchedulerMonitors({
     now: "2026-06-29T10:01:00.000Z",
     limit: 10,
-    probePolicy: { probeClass: "private", locations: ["machine002"] },
+    probePolicy: { probeClass: "private", locations: ["operator-02"] },
   });
   const fetchedMonitor = await runtime.getMonitor({ id: monitor.id });
   const claimed = await runtime.claimCheckJob({

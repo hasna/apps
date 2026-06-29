@@ -249,9 +249,14 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(tfvars).toContain("enable_cloudfront_origin_verify_header");
   expect(tfvars).toContain("cloudfront_origin_verify_header_name");
   expect(tfvars).toContain("cloudfront_origin_verify_header_value  = null");
-  expect(tfvars).toContain('runtime_package_version   = "0.1.48"');
+  expect(tfvars).toContain('container_image          = "<ecr-image-uri-or-digest>"');
+  expect(tfvars).toContain('runtime_package_version   = "0.1.49"');
   expect(tfvars).toContain("runtime_package_integrity = null");
   expect(tfvars).toContain("allow_unpinned_runtime_package_integrity = false");
+  expect(tfvars).toContain('app_env_secret_arn       = "<app-env-secret-arn>"');
+  expect(tfvars).toContain('kms_key_arn              = "<kms-key-arn>"');
+  expect(tfvars).not.toContain("123456789012");
+  expect(tfvars).not.toContain("arn:aws:");
   expect(tfvars).toContain("live_ops_backend_state_hardened     = false");
   expect(tfvars).toContain("live_ops_human_alert_delivery_ready = false");
   expect(tfvars).toContain("live_ops_backup_restore_ready       = false");
@@ -275,7 +280,7 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(main).not.toContain("for_each        = toset(var.private_subnet_ids)");
   expect(tfvars).toContain("certificate_arn          = null");
   expect(tfvars).toContain("hosted_zone_id           = null");
-  expect(tfvars).toContain("@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  expect(tfvars).toContain("<ecr-image-uri-or-digest>");
   expect(variables).toContain("certificate_arn is required when protected_access_mode is alb_https_cert or CloudFront HTTPS origin is enabled");
   expect(variables).toContain("certificate ARN in the deployment region");
   expect(variables).toContain("arn:(aws|aws-us-gov|aws-cn):acm:${var.region}");
