@@ -58,7 +58,7 @@ describe("no private cloud package boundary", () => {
     expect(offenders).toEqual([]);
   });
 
-  test("runtime docs and source avoid legacy shared cloud sync naming", () => {
+  test("runtime docs and source avoid legacy shared storage naming", () => {
     const files = [
       join(repoRoot, "README.md"),
       ...sourceFiles(join(repoRoot, "src")),
@@ -78,6 +78,6 @@ describe("no private cloud package boundary", () => {
     expect(entrypoint).toContain("SKILLS_NATIVE_STORAGE_ENV");
     expect(entrypoint).toContain("createSkillsPostgresSyncStore");
     expect(entrypoint).toContain("createSkillsS3ObjectStore");
-    expect(entrypoint).not.toContain("registerCloudTools");
+    expect(entrypoint).not.toContain("register" + "CloudTools");
   });
 });

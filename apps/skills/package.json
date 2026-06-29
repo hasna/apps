@@ -1,6 +1,6 @@
 {
   "name": "@hasna/skills",
-  "version": "0.1.50",
+  "version": "0.1.51",
   "description": "Skills library for AI coding agents",
   "type": "module",
   "bin": {
@@ -41,7 +41,9 @@
     "dev:watch": "bun --watch run ./src/cli/index.tsx",
     "dev:mcp": "bun --watch run ./src/mcp/index.ts",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "bun run build",
+    "verify:release": "bun run scripts/release-guard.ts",
+    "prepack": "bun run build && bun run verify:release",
+    "prepublishOnly": "bun run typecheck && bun run test",
     "postinstall": "mkdir -p $HOME/.hasna/skills/custom 2>/dev/null || true"
   },
   "keywords": [
