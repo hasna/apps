@@ -32,6 +32,9 @@ reconciliation gates.
 
 Live money movement and virtual-card actions will remain gated by provider
 scope checks, policy, idempotency, approvals, audit logging, and reconciliation.
+Provider cards may document bank capabilities before adapters are released, but
+card mutations fail closed until the exact operation is marked verified by a
+provider conformance task.
 
 ## Install
 
@@ -49,11 +52,20 @@ banking providers list --json
 ## SDK
 
 ```ts
-import { createBankingClient } from "@hasna/banking";
+import { createBankingClient, evaluateIntentPolicy, moneyFromDecimal } from "@hasna/banking";
 
 const banking = createBankingClient();
 console.log(banking.listProviders());
 ```
+
+The SDK exports provider capability cards and provider-agnostic primitives for:
+
+- exact minor-unit money values;
+- request-oriented payment and card intents;
+- policy and idempotency decisions before provider side effects;
+- maker-checker approval records;
+- redacted audit events and reconciliation records;
+- storage interfaces for later dev/prod implementations.
 
 ## MCP
 
