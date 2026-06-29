@@ -99,6 +99,15 @@ credentials. This only moves the migration gate forward. The runtime remains
 fail-closed until an explicit async Postgres store is implemented and reviewed
 against the approved database with workspace-scoped transaction discipline.
 
+`0.1.42` adds the first bounded Postgres core runtime facade. It can write
+workspace-scoped monitor rows, probe identities, deterministic `check_jobs`,
+probe submissions with payload-hash replay checks, check results, audit events,
+and sync tombstones. It parameterizes the RLS workspace setting and rejects
+non-TLS database URLs when it owns the pool. This still is not the authoritative
+hosted store until `UptimeService`, hosted API routes, scheduler/public-probe
+worker loops, live RLS verification, deploy drain, backlog/stale-lease metrics,
+and alarms use it end to end.
+
 The current hosted SQLite bridge is still not cloud-primary, but it now follows
 the minimum hosted storage contract where it is used for controlled smokes:
 hosted reads and mutations require explicit workspace context, active monitor

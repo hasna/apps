@@ -13,6 +13,7 @@ export interface PostgresReportRuntimeOptions {
   databaseUrl?: string;
   schemaName?: string;
   workspaceId?: string;
+  workspaceSetting?: string;
   client?: PostgresQueryClient;
   now?: () => Date;
 }
@@ -183,11 +184,17 @@ export class PostgresReportRuntime {
   private readonly ownedClient: PostgresReportRuntimeClient | null;
   private readonly schemaName: string;
   private readonly workspaceId: string;
+  private readonly workspaceSetting: string;
   private readonly clock: () => Date;
 
   constructor(options: PostgresReportRuntimeOptions = {}) {
     this.schemaName = normalizeSchemaName(options.schemaName ?? "uptime");
-    this.workspaceId = normalizeWorkspaceId(options.workspaceId ?? process.env.HASNA_UPTIME_WORKSPACE_ID ?? "default");
+    const resolvedWorkspaceId = options.workspaceId ?? process.env.HASNA_UPTIME_WORKSPACE_ID;
+    if ((process.env.HASNA_UPTIME_MODE ?? "").trim() === "hosted" && !resolvedWorkspaceId) {
+      throw new Error("Postgres report runtime requires HASNA_UPTIME_WORKSPACE_ID or workspaceId in hosted mode");
+    }
+    this.workspaceId = normalizeWorkspaceId(resolvedWorkspaceId ?? "default");
+    this.workspaceSetting = normalizeWorkspaceSetting(options.workspaceSetting ?? "app.workspace_id");
     this.clock = options.now ?? (() => new Date());
     if (options.client) {
       this.client = options.client;
@@ -195,6 +202,14 @@ export class PostgresReportRuntime {
     } else {
       const databaseUrl = options.databaseUrl ?? process.env.HASNA_UPTIME_DATABASE_URL;
       if (!databaseUrl) throw new Error("HASNA_UPTIME_DATABASE_URL is required for Postgres report runtime");
+      const plan = buildPostgresMigrationPlan({
+        databaseUrl,
+        schemaName: this.schemaName,
+        workspaceSetting: this.workspaceSetting,
+      });
+      if (!plan.database.validPostgresUrl || !plan.database.tlsRequired) {
+        throw new Error("Postgres report runtime requires a postgres:// or postgresql:// URL with sslmode=require, sslmode=verify-full, or ssl=true");
+      }
       this.client = createPostgresPool(databaseUrl) as PostgresReportRuntimeClient;
       this.ownedClient = this.client;
     }
@@ -447,7 +462,7 @@ export class PostgresReportRuntime {
     const txClient = await this.transactionClient();
     try {
       await txClient.query("BEGIN");
-      await txClient.query("SELECT set_config('app.workspace_id', $1, true)", [workspaceId]);
+      await txClient.query("SELECT set_config($1, $2, true)", [this.workspaceSetting, workspaceId]);
       const result = await action(txClient);
       await txClient.query("COMMIT");
       return result;
@@ -472,12 +487,13 @@ export function createPostgresReportRuntime(options: PostgresReportRuntimeOption
   return new PostgresReportRuntime(options);
 }
 
-export function buildPostgresReportRuntimeReadiness(options: Pick<PostgresReportRuntimeOptions, "databaseUrl" | "schemaName" | "workspaceId"> & {
+export function buildPostgresReportRuntimeReadiness(options: Pick<PostgresReportRuntimeOptions, "databaseUrl" | "schemaName" | "workspaceId" | "workspaceSetting"> & {
   schemaVerified?: boolean;
 } = {}): PostgresReportRuntimeReadiness {
   const plan = buildPostgresMigrationPlan({
     databaseUrl: options.databaseUrl ?? process.env.HASNA_UPTIME_DATABASE_URL,
     schemaName: options.schemaName,
+    workspaceSetting: options.workspaceSetting,
   });
   const workspaceId = normalizeOptionalWorkspaceId(options.workspaceId ?? process.env.HASNA_UPTIME_WORKSPACE_ID);
   const migrationBlockers = plan.blockers.filter((blocker) => !blocker.startsWith("async-runtime-adapter:"));
@@ -711,6 +727,14 @@ function normalizeSchemaName(value: string): string {
 
 function normalizeWorkspaceId(value: string): string {
   return normalizeOpaqueText(value, "workspace id", 128);
+}
+
+function normalizeWorkspaceSetting(value: string): string {
+  const trimmed = value.trim();
+  if (!/^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)+$/.test(trimmed)) {
+    throw new Error("workspace setting must be a dotted lowercase setting such as app.workspace_id");
+  }
+  return trimmed;
 }
 
 function normalizeOptionalWorkspaceId(value: string | undefined): string | null {

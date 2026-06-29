@@ -17,7 +17,7 @@ class FakeReportClient implements PostgresQueryClient {
 
   async query(sql: string, params?: unknown[]): Promise<{ rows: unknown[]; rowCount: number }> {
     this.queries.push({ sql, params });
-    if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK" || sql.includes("set_config('app.workspace_id'")) {
+    if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK" || sql.includes("set_config(")) {
       return { rows: [], rowCount: 0 };
     }
     if (sql.includes("INSERT INTO \"uptime\".\"report_runs\"")) {
@@ -200,7 +200,7 @@ test("Postgres report runtime records report runs, attempts, claims, completions
   expect(artifact.retentionClass).toBe("standard");
   expect(artifact.redacted).toBe(true);
   expect(client.queries.map((query) => query.sql).filter((sql) => sql === "BEGIN")).toHaveLength(7);
-  expect(client.queries.some((query) => query.sql.includes("set_config('app.workspace_id'"))).toBe(true);
+  expect(client.queries.some((query) => query.sql.includes("set_config($1, $2, true)") && query.params?.[0] === "app.workspace_id")).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("lease_expires_at = now() + ($5::bigint * interval '1 millisecond')"))).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("status = 'sending' AND lease_expires_at <= now()"))).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("status = 'sending' AND lease_expires_at <= $2::timestamptz"))).toBe(true);
@@ -325,6 +325,40 @@ test("Postgres report runtime readiness can be marked ready only with schema evi
   expect(readiness.status).toBe("ready");
   expect(readiness.canWriteReportMetadata).toBe(true);
   expect(readiness.blockers).toEqual([]);
+});
+
+test("Postgres report runtime honors custom workspace setting and rejects unsafe hosted construction", async () => {
+  const client = new FakeReportClient();
+  const runtime = createPostgresReportRuntime({
+    client,
+    workspaceId: "ws_runtime",
+    workspaceSetting: "hasna.workspace_id",
+  });
+
+  await runtime.recordReportRun({
+    id: "rpr_runtime",
+    status: "success",
+    deliveries: [],
+  });
+
+  expect(client.queries.some((query) => query.sql.includes("set_config($1, $2, true)") && query.params?.[0] === "hasna.workspace_id")).toBe(true);
+  expect(() => createPostgresReportRuntime({
+    databaseUrl: "postgres://svc:secret@db.example.invalid/uptime",
+    workspaceId: "ws_runtime",
+  })).toThrow("sslmode=require");
+
+  const previousMode = process.env.HASNA_UPTIME_MODE;
+  const previousWorkspace = process.env.HASNA_UPTIME_WORKSPACE_ID;
+  try {
+    process.env.HASNA_UPTIME_MODE = "hosted";
+    delete process.env.HASNA_UPTIME_WORKSPACE_ID;
+    expect(() => createPostgresReportRuntime({ client: new FakeReportClient() })).toThrow("workspace");
+  } finally {
+    if (previousMode == null) delete process.env.HASNA_UPTIME_MODE;
+    else process.env.HASNA_UPTIME_MODE = previousMode;
+    if (previousWorkspace == null) delete process.env.HASNA_UPTIME_WORKSPACE_ID;
+    else process.env.HASNA_UPTIME_WORKSPACE_ID = previousWorkspace;
+  }
 });
 
 test("Postgres report runtime sanitizes database URLs and bearer material in errors", () => {

@@ -12,6 +12,7 @@ import { generateProbeKeyPair, signProbeResult } from "../probes.js";
 import { buildAwsDeploymentPlan, buildPrivateProbeCloudConfig, renderPrivateProbeEnv } from "../cloud-plan.js";
 import { buildPostgresMigrationPlan, renderPostgresMigrationPlan } from "../postgres-plan.js";
 import { buildPostgresMigrationDryRun, renderPostgresMigrationRun, runPostgresMigration } from "../postgres.js";
+import { buildPostgresRuntimeReadiness } from "../postgres-runtime.js";
 import { buildPostgresReportRuntimeReadiness } from "../postgres-report-runtime.js";
 import { summarizeHostedReportChannelRefs, type HostedReportChannelRefSummary } from "../report-channel-refs.js";
 import { runHostedPublicChecksWorker } from "../workers.js";
@@ -494,8 +495,8 @@ cloud
   .option("--workspace-id <id>", "workspace id", "workspace-id")
   .option("--vpc-id <id>", "target VPC id")
   .option("--hosted-sqlite-db <path>", "hosted SQLite path on the EFS mount")
-  .option("--rds-instance-id <id>", "deprecated; ignored until the hosted Postgres adapter exists")
-  .option("--database-secret-name <name>", "deprecated; ignored until the hosted Postgres adapter exists")
+  .option("--rds-instance-id <id>", "deprecated; ignored until the full hosted Postgres runtime adapter is wired")
+  .option("--database-secret-name <name>", "deprecated; ignored until the full hosted Postgres runtime adapter is wired")
   .option("--ecr-repository <name>", "ECR repository name")
   .option("--image <uri>", "container image URI")
   .option("--runtime-package-version <version>", "published @hasna/uptime version for the AWS image builder")
@@ -1959,12 +1960,29 @@ function buildHostedWorkerPreflight(role: HostedWorkerRole): HostedWorkerPreflig
   const mode = process.env.HASNA_UPTIME_MODE?.trim() || "";
   const component = process.env.HASNA_UPTIME_COMPONENT?.trim() || "";
   const workspaceId = process.env.HASNA_UPTIME_WORKSPACE_ID?.trim() || "";
+  const postgresRuntime = buildPostgresRuntimeReadiness({
+    workspaceId,
+    schemaVerified: process.env.HASNA_UPTIME_POSTGRES_RUNTIME_SCHEMA_VERIFIED === "1",
+  });
+  const runtimeCheck = (name: string): { name: string; ok: boolean; detail: string } | undefined =>
+    postgresRuntime.checks.find((check) => check.name === name);
   const checks = [
     { name: "hosted-mode", ok: mode === "hosted", detail: mode || "<unset>" },
     { name: "component", ok: !component || component === role, detail: component || "<unset>" },
     { name: "workspace", ok: Boolean(workspaceId), detail: workspaceId || "<unset>" },
     { name: "postgres-schema-plan", ok: true, detail: "available through uptime cloud postgres-plan" },
-    { name: "postgres-adapter", ok: false, detail: "async runtime store not implemented" },
+    {
+      name: "postgres-adapter",
+      ok: false,
+      detail: postgresRuntime.capabilities.monitorStore && postgresRuntime.capabilities.checkJobLeases
+        ? "Postgres core runtime facade exists, but UptimeService/API/worker loops are not integrated"
+        : "async runtime store not implemented",
+    },
+    { name: "postgres-runtime-schema-verified", ok: runtimeCheck("postgres-runtime-schema-verified")?.ok ?? false, detail: runtimeCheck("postgres-runtime-schema-verified")?.detail ?? "not verified in this process" },
+    { name: "postgres-monitor-store", ok: postgresRuntime.capabilities.monitorStore, detail: "workspace-scoped monitor upsert/tombstone methods are implemented" },
+    { name: "postgres-probe-identity-store", ok: postgresRuntime.capabilities.probeIdentityStore, detail: "workspace-scoped probe identity methods include class and location" },
+    { name: "postgres-check-jobs-leases", ok: postgresRuntime.capabilities.checkJobLeases, detail: "deterministic check_jobs create/due/claim/complete methods are implemented" },
+    { name: "postgres-audit-tombstones", ok: postgresRuntime.capabilities.auditWriter && postgresRuntime.capabilities.tombstoneWriter, detail: "audit_events and sync_tombstones writers are implemented" },
     { name: "cloud-worker-leases", ok: false, detail: "not implemented" },
   ];
   if (role === "reporter") {

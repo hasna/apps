@@ -6,6 +6,38 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.42] - 2026-06-29
+
+### Added
+
+- Added a Postgres core runtime facade with workspace-scoped transactions,
+  monitor upsert/tombstone methods, probe identity storage, deterministic
+  `check_jobs` creation, due discovery, claim/fencing/completion helpers,
+  probe submission replay protection, audit event writes, and sync tombstones.
+- Added `@hasna/uptime/postgres-runtime` SDK exports and hosted worker preflight
+  evidence for the bounded Postgres runtime capabilities.
+
+### Changed
+
+- Bumped the reviewed Postgres cloud schema contract to version 3 so
+  `probe_identities` include `probe_location` and `probe_submissions` include
+  monitor revision, schedule slot, class/location, policy hash, and payload hash.
+- Added explicit v2-to-v3 Postgres upgrade statements for those columns instead
+  of relying only on `CREATE TABLE IF NOT EXISTS` definitions.
+- Report and core Postgres runtimes now use the configured RLS workspace setting
+  instead of hardcoding `app.workspace_id`.
+- Postgres check-job claim retries by the same probe now preserve the active
+  fencing token, successful duplicate probe submissions return the existing
+  result, and tombstones soft-delete every advertised resource type.
+
+### Security
+
+- Postgres runtimes now reject non-TLS database URLs when they create their own
+  pool and require an explicit workspace in hosted mode.
+- Hosted worker startup remains blocked: the core runtime facade is not yet
+  wired into `UptimeService`, hosted API routes, worker loops, alarms, deploy
+  drain, or live ECS scaling.
+
 ## [0.1.41] - 2026-06-29
 
 ### Added

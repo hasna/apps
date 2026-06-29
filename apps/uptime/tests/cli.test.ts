@@ -730,6 +730,18 @@ test("CLI hosted worker entrypoints preflight and fail closed", () => {
       canStart: false,
       workspaceId: "ws_cli",
     });
+    const preflightChecks = Object.fromEntries(preflightJson.checks.map((check: { name: string; ok: boolean }) => [check.name, check.ok]));
+    expect(preflightChecks).toMatchObject({
+      "postgres-adapter": false,
+      "postgres-runtime-schema-verified": false,
+      "postgres-monitor-store": true,
+      "postgres-probe-identity-store": true,
+      "postgres-check-jobs-leases": true,
+      "postgres-audit-tombstones": true,
+      "cloud-worker-leases": false,
+      "public-probe-job-claims": false,
+    });
+    expect(preflightJson.blockers.join("\n")).toContain("postgres-adapter");
     expect(preflightJson.blockers.join("\n")).toContain("public-probe-job-claims");
     expect(preflightJson.blockers.join("\n")).toContain("cloud-worker-leases");
 

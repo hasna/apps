@@ -20,6 +20,13 @@ export { buildAwsDeploymentPlan, buildPrivateProbeCloudConfig, renderPrivateProb
 export { buildPostgresMigrationPlan, redactPostgresUrl, renderPostgresMigrationPlan } from "./postgres-plan.js";
 export { buildPostgresMigrationDryRun, createPostgresPool, renderPostgresMigrationRun, runPostgresMigration } from "./postgres.js";
 export {
+  buildPostgresRuntimeReadiness,
+  checkJobIdempotencyKey,
+  createPostgresRuntime,
+  PostgresRuntime,
+  sanitizePostgresRuntimeError,
+} from "./postgres-runtime.js";
+export {
   buildPostgresReportRuntimeReadiness,
   createPostgresReportRuntime,
   deliveryAttemptIdempotencyKey,
@@ -128,6 +135,26 @@ export type {
   PostgresMigrationRunOptions,
   PostgresQueryClient,
 } from "./postgres.js";
+export type {
+  ClaimPostgresCheckJobInput,
+  CreatePostgresCheckJobInput,
+  ListDuePostgresCheckJobsOptions,
+  PostgresAuditEventRecord,
+  PostgresCheckJobRecord,
+  PostgresCheckResultRecord,
+  PostgresMonitorRecord,
+  PostgresProbeIdentityRecord,
+  PostgresProbeSubmissionRecord,
+  PostgresRuntimeOptions,
+  PostgresRuntimeReadiness,
+  PostgresSyncTombstoneRecord,
+  RecordPostgresAuditEventInput,
+  SubmitPostgresProbeCheckResult,
+  SubmitPostgresProbeCheckResultInput,
+  TombstonePostgresResourceInput,
+  UpsertPostgresMonitorInput,
+  UpsertPostgresProbeIdentityInput,
+} from "./postgres-runtime.js";
 export type {
   ClaimPostgresReportDeliveryAttemptInput,
   CompletePostgresReportDeliveryAttemptInput,

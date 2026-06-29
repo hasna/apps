@@ -84,14 +84,18 @@ token-bearing live traffic needs `https-only` with an origin hostname that
 resolves to the ALB and matches `certificate_arn`, or an explicit risk
 acceptance. Hosted AWS runtime state currently uses explicit EFS-backed SQLite via
 `HASNA_UPTIME_HOSTED_SQLITE_DB=/data/uptime/uptime.db` for one protected web
-task maximum; do not set `HASNA_UPTIME_DATABASE_URL` until the async Postgres
-adapter is implemented for the full service store. The Postgres report-runtime
-helper can write finished report metadata, delivery-attempt state, retry
-metadata, and redacted artifact metadata refs for review, but it is not a
-hosted service-store promotion gate. `uptime cloud postgres-plan` exposes the reviewed
-target schema, workspace RLS policy shape, tombstones, audit tables,
-idempotency fields, and check-job lease tables for private review without
-connecting to Postgres or printing credentials.
+task maximum; do not set `HASNA_UPTIME_DATABASE_URL` until the full hosted
+Postgres runtime adapter is wired through `UptimeService`, the API, and worker
+loops. The `@hasna/uptime/postgres-runtime` export is a bounded core facade for
+workspace-scoped monitor upserts, probe identities, check jobs, probe
+submissions, audit rows, and tombstones. It is SDK/runtime groundwork, not a
+hosted service-store promotion gate. The `@hasna/uptime/postgres-report-runtime`
+export can write finished report metadata, delivery-attempt state, retry
+metadata, and redacted artifact metadata refs for review, but it is also not a
+promotion gate. `uptime cloud postgres-plan` exposes the reviewed target schema,
+workspace RLS policy shape, tombstones, audit tables, idempotency fields, and
+check-job lease tables for private review without connecting to Postgres or
+printing credentials.
 The interim hosted SQLite bridge now also requires explicit workspace context
 for hosted store/API reads and mutations, hides tombstoned monitors from active
 queries, records hosted monitor deletes in `sync_tombstones`, and keeps active
@@ -135,8 +139,8 @@ or monitor private targets. `--healthcheck` exits non-zero until Projects,
 Todos, Conversations, Mementos, Knowledge, and the Spark01 machine lease checks
 all have audited cloud-primary evidence. Notes and Open Uptime are harder
 blockers: they remain blocked until Notes has audited cloud metadata/object
-storage and Open Uptime has the async Postgres runtime adapter, leases, report
-storage, and probe fencing.
+storage and Open Uptime has the full hosted Postgres service adapter, leases,
+report storage, and probe fencing.
 Machine evidence is bound to the selected `--machine-id`: `spark01` uses
 `HASNA_UPTIME_SPARK01_*` proof flags, while another machine such as `worker02`
 must use its own `HASNA_UPTIME_WORKER02_*` proof flags. Secret-looking or

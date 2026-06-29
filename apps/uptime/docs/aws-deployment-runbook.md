@@ -505,6 +505,14 @@ can write finished report metadata, delivery-attempt state, per-attempt
 idempotency keys, retry/backoff metadata, and redacted artifact metadata refs,
 but this is narrower than hosted reporter readiness.
 
+`0.1.42` adds a separate Postgres core runtime facade for monitor rows, probe
+identities, deterministic `check_jobs`, check results, audit events, and
+sync tombstones. Treat it as SDK/runtime groundwork only. Do not set
+`HASNA_UPTIME_DATABASE_URL` on hosted ECS tasks or raise any worker desired count
+until the service/API/worker loops are wired to the runtime, live RLS/schema
+verification passes against the approved DB, and scheduler/probe/reporter
+alarms plus deploy-drain evidence exist.
+
 `uptime cloud workers preflight --role reporter --json` validates
 `HASNA_UPTIME_REPORT_CHANNEL_REFS_JSON` as an operator-provided, server-owned
 Mailery, Telephony, and Open Logs channel-ref catalog. This environment value is
@@ -535,7 +543,8 @@ routes are backed by cloud check jobs and cloud audit rows.
 - Do not deploy hosted mode with `HASNA_UPTIME_ALLOW_HOSTED_LOCAL_STORE=1`.
 - Do deploy hosted mode with `HASNA_UPTIME_HOSTED_SQLITE_DB` pointing at the EFS
   mount path `/data/uptime/uptime.db`. Do not set `HASNA_UPTIME_DATABASE_URL`
-  until the async Postgres adapter exists.
+  until the full hosted Postgres runtime adapter is wired through
+  `UptimeService`, the API, and worker loops.
 - Use `uptime cloud postgres-migrate` only from the reviewed migration path.
   Dry-run output is safe for redacted review. Actual DDL requires
   `--apply --confirm-schema <schema>`, a TLS database URL, current backup and

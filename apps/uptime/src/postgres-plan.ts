@@ -1,5 +1,5 @@
-export const POSTGRES_PLAN_VERSION = 2;
-export const POSTGRES_SCHEMA_VERSION = "2";
+export const POSTGRES_PLAN_VERSION = 3;
+export const POSTGRES_SCHEMA_VERSION = "3";
 export const DEFAULT_POSTGRES_SCHEMA = "uptime";
 export const DEFAULT_WORKSPACE_SETTING = "app.workspace_id";
 
@@ -320,6 +320,7 @@ ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.up
   id text NOT NULL,
   name text NOT NULL,
   probe_class text NOT NULL CHECK (probe_class IN ('public', 'private')),
+  probe_location text NOT NULL DEFAULT 'default',
   machine_id text,
   public_key_pem text NOT NULL,
   public_key_fingerprint text NOT NULL,
@@ -345,6 +346,12 @@ ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.up
   monitor_id text NOT NULL,
   check_result_id text NOT NULL,
   nonce text NOT NULL,
+  monitor_revision bigint NOT NULL,
+  schedule_slot timestamptz NOT NULL,
+  probe_class text NOT NULL CHECK (probe_class IN ('public', 'private')),
+  probe_location text NOT NULL,
+  probe_policy_hash text NOT NULL,
+  payload_hash text NOT NULL DEFAULT '',
   checked_at timestamptz NOT NULL,
   submitted_at timestamptz NOT NULL DEFAULT now(),
   actor text,
@@ -473,6 +480,7 @@ ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.up
   metadata_json jsonb NOT NULL DEFAULT '{}'::jsonb,
   PRIMARY KEY (workspace_id, resource_type, resource_id)
 );`,
+    ...buildSchemaUpgradeStatements(schemaName),
     `CREATE INDEX IF NOT EXISTS monitors_workspace_status_idx ON ${q(schemaName, "monitors")} (workspace_id, status, enabled) WHERE deleted_at IS NULL;`,
     `CREATE UNIQUE INDEX IF NOT EXISTS monitors_workspace_name_active_idx ON ${q(schemaName, "monitors")} (workspace_id, name) WHERE deleted_at IS NULL;`,
     `CREATE INDEX IF NOT EXISTS check_results_workspace_monitor_time_idx ON ${q(schemaName, "check_results")} (workspace_id, monitor_id, checked_at DESC) WHERE deleted_at IS NULL;`,
@@ -483,6 +491,51 @@ ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.up
     `CREATE UNIQUE INDEX IF NOT EXISTS report_delivery_attempts_idempotency_idx ON ${q(schemaName, "report_delivery_attempts")} (workspace_id, idempotency_key) WHERE deleted_at IS NULL;`,
     `CREATE INDEX IF NOT EXISTS report_artifacts_run_idx ON ${q(schemaName, "report_artifacts")} (workspace_id, report_run_id, artifact_type) WHERE deleted_at IS NULL;`,
     `CREATE INDEX IF NOT EXISTS audit_events_workspace_time_idx ON ${q(schemaName, "audit_events")} (workspace_id, created_at DESC) WHERE deleted_at IS NULL;`,
+  ];
+}
+
+function buildSchemaUpgradeStatements(schemaName: string): string[] {
+  const probeIdentities = q(schemaName, "probe_identities");
+  const probeSubmissions = q(schemaName, "probe_submissions");
+  return [
+    `ALTER TABLE ${probeIdentities} ADD COLUMN IF NOT EXISTS probe_location text;`,
+    `UPDATE ${probeIdentities} SET probe_location = 'default' WHERE probe_location IS NULL;`,
+    `ALTER TABLE ${probeIdentities} ALTER COLUMN probe_location SET DEFAULT 'default';`,
+    `ALTER TABLE ${probeIdentities} ALTER COLUMN probe_location SET NOT NULL;`,
+    `ALTER TABLE ${probeSubmissions} ADD COLUMN IF NOT EXISTS monitor_revision bigint;`,
+    `UPDATE ${probeSubmissions} SET monitor_revision = 1 WHERE monitor_revision IS NULL;`,
+    `ALTER TABLE ${probeSubmissions} ALTER COLUMN monitor_revision SET DEFAULT 1;`,
+    `ALTER TABLE ${probeSubmissions} ALTER COLUMN monitor_revision SET NOT NULL;`,
+    `ALTER TABLE ${probeSubmissions} ADD COLUMN IF NOT EXISTS schedule_slot timestamptz;`,
+    `UPDATE ${probeSubmissions} SET schedule_slot = checked_at WHERE schedule_slot IS NULL;`,
+    `ALTER TABLE ${probeSubmissions} ALTER COLUMN schedule_slot SET NOT NULL;`,
+    `ALTER TABLE ${probeSubmissions} ADD COLUMN IF NOT EXISTS probe_class text;`,
+    `UPDATE ${probeSubmissions} SET probe_class = 'private' WHERE probe_class IS NULL;`,
+    `ALTER TABLE ${probeSubmissions} ALTER COLUMN probe_class SET NOT NULL;`,
+    `DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'probe_submissions_probe_class_check'
+      AND conrelid = ${sqlLiteral(`${schemaName}.probe_submissions`)}::regclass
+  ) THEN
+    ALTER TABLE ${probeSubmissions}
+      ADD CONSTRAINT probe_submissions_probe_class_check CHECK (probe_class IN ('public', 'private')) NOT VALID;
+  END IF;
+END $$;`,
+    `ALTER TABLE ${probeSubmissions} VALIDATE CONSTRAINT probe_submissions_probe_class_check;`,
+    `ALTER TABLE ${probeSubmissions} ADD COLUMN IF NOT EXISTS probe_location text;`,
+    `UPDATE ${probeSubmissions} SET probe_location = 'default' WHERE probe_location IS NULL;`,
+    `ALTER TABLE ${probeSubmissions} ALTER COLUMN probe_location SET DEFAULT 'default';`,
+    `ALTER TABLE ${probeSubmissions} ALTER COLUMN probe_location SET NOT NULL;`,
+    `ALTER TABLE ${probeSubmissions} ADD COLUMN IF NOT EXISTS probe_policy_hash text;`,
+    `UPDATE ${probeSubmissions} SET probe_policy_hash = 'legacy' WHERE probe_policy_hash IS NULL;`,
+    `ALTER TABLE ${probeSubmissions} ALTER COLUMN probe_policy_hash SET NOT NULL;`,
+    `ALTER TABLE ${probeSubmissions} ADD COLUMN IF NOT EXISTS payload_hash text;`,
+    `UPDATE ${probeSubmissions} SET payload_hash = '' WHERE payload_hash IS NULL;`,
+    `ALTER TABLE ${probeSubmissions} ALTER COLUMN payload_hash SET DEFAULT '';`,
+    `ALTER TABLE ${probeSubmissions} ALTER COLUMN payload_hash SET NOT NULL;`,
   ];
 }
 

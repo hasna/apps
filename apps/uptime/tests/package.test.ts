@@ -18,6 +18,7 @@ test("published package exports and bins are usable after build", async () => {
     "./cloud-plan": ["buildAwsDeploymentPlan", "buildPrivateProbeCloudConfig"],
     "./postgres-plan": ["buildPostgresMigrationPlan", "renderPostgresMigrationPlan"],
     "./postgres": ["buildPostgresMigrationDryRun", "runPostgresMigration"],
+    "./postgres-runtime": ["buildPostgresRuntimeReadiness", "createPostgresRuntime"],
     "./postgres-report-runtime": ["buildPostgresReportRuntimeReadiness", "createPostgresReportRuntime"],
     "./workers": ["runHostedPublicChecksWorker"],
     "./edge-smoke": ["runEdgeSmoke"],
