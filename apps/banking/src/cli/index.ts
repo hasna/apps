@@ -23,7 +23,25 @@ function emit(value: unknown, json: boolean): void {
     console.log(JSON.stringify(value, null, 2));
     return;
   }
+  if (typeof value !== "string") {
+    console.log(JSON.stringify(value, null, 2));
+    return;
+  }
   console.log(String(value));
+}
+
+function failNotImplemented(command: string, json: boolean): number {
+  const payload = {
+    status: "not_implemented",
+    command,
+    message: "Provider adapters are not implemented in this scaffold yet.",
+  };
+  if (json) {
+    console.error(JSON.stringify(payload, null, 2));
+  } else {
+    console.error(`${command} is not implemented in this scaffold yet.`);
+  }
+  return 2;
 }
 
 export function runCli(argv: readonly string[] = Bun.argv.slice(2)): number {
@@ -53,14 +71,7 @@ export function runCli(argv: readonly string[] = Bun.argv.slice(2)): number {
   }
 
   if (args[0] === "accounts" && args[1] === "list") {
-    emit(
-      {
-        status: "not_implemented",
-        message: "Provider adapters are not implemented in this scaffold yet.",
-      },
-      json,
-    );
-    return 0;
+    return failNotImplemented("accounts list", json);
   }
 
   console.error(`Unknown command: ${args.join(" ")}`);

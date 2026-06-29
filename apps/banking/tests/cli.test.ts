@@ -13,4 +13,8 @@ describe("banking CLI scaffold", () => {
   test("unknown command fails closed", () => {
     expect(runCli(["pay", "now"])).toBe(1);
   });
+
+  test("unimplemented provider-backed commands fail closed", () => {
+    expect(runCli(["accounts", "list", "--json"])).toBe(2);
+  });
 });

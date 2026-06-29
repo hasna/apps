@@ -63,5 +63,5 @@ banking-mcp --list-tools
 ```
 
 The full MCP protocol server lands with the agent-safe surfaces. The scaffold
-already declares the planned tool names so downstream integration work can
-target stable names.
+labels the declared MCP names as planned so downstream integration work can
+target stable names without mistaking them for implemented tools.

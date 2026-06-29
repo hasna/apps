@@ -28,6 +28,7 @@
   },
   "files": [
     "dist",
+    "scripts/postinstall.ts",
     "README.md",
     "LICENSE",
     "SECURITY.md",

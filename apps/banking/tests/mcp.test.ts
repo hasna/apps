@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { listMcpTools, runMcp } from "../src/mcp/index.ts";
+import { listMcpTools, listPlannedMcpTools, runMcp } from "../src/mcp/index.ts";
 
 describe("banking-mcp scaffold", () => {
   test("declares initial agent-safe tool names", () => {
@@ -10,5 +10,9 @@ describe("banking-mcp scaffold", () => {
 
   test("help exits successfully", () => {
     expect(runMcp(["--help"])).toBe(0);
+  });
+
+  test("planned tools are labeled as planned", () => {
+    expect(listPlannedMcpTools()[0]?.status).toBe("planned");
   });
 });

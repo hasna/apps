@@ -30,4 +30,4 @@ Before publishing:
 - run staged and full-tree secret scans
 - complete four adversarial review gates: security/compliance, architecture,
   provider/API feasibility, and release/publication
-- record evidence in the `#open-banking` channel and Todos plan
+- record release evidence in the issue, pull request, or release notes

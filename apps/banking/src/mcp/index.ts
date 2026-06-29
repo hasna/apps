@@ -31,6 +31,10 @@ export function listMcpTools(): readonly string[] {
   ];
 }
 
+export function listPlannedMcpTools(): readonly { readonly name: string; readonly status: "planned" }[] {
+  return listMcpTools().map((name) => ({ name, status: "planned" as const }));
+}
+
 export function runMcp(argv: readonly string[] = Bun.argv.slice(2)): number {
   if (argv.includes("--help") || argv.includes("-h")) {
     printHelp();
@@ -43,7 +47,7 @@ export function runMcp(argv: readonly string[] = Bun.argv.slice(2)): number {
   }
 
   if (argv.includes("--list-tools")) {
-    console.log(JSON.stringify({ tools: listMcpTools(), providers: listProviders() }, null, 2));
+    console.log(JSON.stringify({ plannedTools: listPlannedMcpTools(), providers: listProviders() }, null, 2));
     return 0;
   }
 
