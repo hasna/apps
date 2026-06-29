@@ -6,6 +6,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.37] - 2026-06-29
+
+### Changed
+
+- Updated AWS Terraform defaults and deployment metadata examples to point at
+  the current package version.
+
+### Security
+
+- Expanded one-shot report integration URL rejection and provider-error
+  redaction for additional credential-shaped query fields including `key`,
+  `sig`, `signature`, `jwt`, and OAuth-style `code` values.
+
 ## [0.1.36] - 2026-06-29
 
 ### Added

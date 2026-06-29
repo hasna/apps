@@ -315,22 +315,32 @@ test("sendUptimeReport rejects integration API URLs with embedded credentials", 
 
 test("sendUptimeReport rejects integration API URLs with secret query parameters", async () => {
   let calls = 0;
-  const deliveries = await sendUptimeReport(summary(), {
-    logs: {
-      apiUrl: "http://logs.test/ingest?api_key=secret",
-      apiKey: "logs_secret",
-      projectId: "uptime",
-    },
-    fetchImpl: (async () => {
-      calls += 1;
-      return new Response("{}");
-    }) as unknown as typeof fetch,
-  });
+  const secretUrls = [
+    "http://logs.test/ingest?api_key=secret",
+    "http://logs.test/ingest?key=secret",
+    "http://logs.test/ingest?signature=secret",
+    "http://logs.test/ingest?jwt=secret",
+    "http://logs.test/ingest?code=secret",
+  ];
 
+  for (const apiUrl of secretUrls) {
+    const deliveries = await sendUptimeReport(summary(), {
+      logs: {
+        apiUrl,
+        apiKey: "logs_secret",
+        projectId: "uptime",
+      },
+      fetchImpl: (async () => {
+        calls += 1;
+        return new Response("{}");
+      }) as unknown as typeof fetch,
+    });
+
+    expect(deliveries).toEqual([
+      { channel: "logs", ok: false, error: "Integration API URL must not include secret query parameters" },
+    ]);
+  }
   expect(calls).toBe(0);
-  expect(deliveries).toEqual([
-    { channel: "logs", ok: false, error: "Integration API URL must not include secret query parameters" },
-  ]);
 });
 
 test("sendUptimeReport redacts provider-echoed secret query parameters", async () => {
@@ -341,12 +351,12 @@ test("sendUptimeReport redacts provider-echoed secret query parameters", async (
       projectId: "uptime",
     },
     fetchImpl: (async () => new Response(JSON.stringify({
-      error: "failed at https://logs.test/ingest?token=raw-token&ok=1 with api_key=raw-key and Bearer abc123",
+      error: "failed at https://logs.test/ingest?token=raw-token&ok=1&signature=raw-sig&jwt=raw-jwt with key=raw-key code=raw-code and Bearer abc123",
     }), { status: 401 })) as unknown as typeof fetch,
   });
 
   expect(deliveries[0].ok).toBe(false);
-  expect(deliveries[0].error).toBe("failed at https://logs.test/ingest?token=[REDACTED]&ok=1 with api_key=[REDACTED] and Bearer [REDACTED]");
+  expect(deliveries[0].error).toBe("failed at https://logs.test/ingest?token=[REDACTED]&ok=1&signature=[REDACTED]&jwt=[REDACTED] with key=[REDACTED] code=[REDACTED] and Bearer [REDACTED]");
 });
 
 test("sendUptimeReport reads Open Logs API token env names and redacts success ids", async () => {

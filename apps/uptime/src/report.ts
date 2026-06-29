@@ -50,7 +50,8 @@ const DEFAULT_MAILERY_API_URL = "http://localhost:3900";
 const DEFAULT_TELEPHONY_API_URL = "http://localhost:19451";
 const DEFAULT_LOGS_API_URL = "http://localhost:3460";
 const DEFAULT_TIMEOUT_MS = 15_000;
-const SECRET_URL_PARAM_PATTERN = /(token|secret|password|passwd|api[_-]?key|access[_-]?token|auth|credential|session)/i;
+const SECRET_URL_PARAM_PATTERN = /(token|secret|password|passwd|api[_-]?key|access[_-]?token|auth|credential|session|signature|oauth)/i;
+const SECRET_URL_PARAM_EXACT_NAMES = new Set(["key", "sig", "signature", "jwt", "code"]);
 
 export function buildUptimeReport(summary: UptimeSummary, options: BuildUptimeReportOptions = {}): UptimeReport {
   const subject = options.subject ?? defaultSubject(summary);
@@ -280,7 +281,7 @@ function normalizeUrl(value: string): string {
     throw new Error("Integration API URL must not include username or password");
   }
   for (const key of parsed.searchParams.keys()) {
-    if (SECRET_URL_PARAM_PATTERN.test(key)) {
+    if (isSecretUrlParamName(key)) {
       throw new Error("Integration API URL must not include secret query parameters");
     }
   }
@@ -359,10 +360,18 @@ function redactSecrets(value: string, secrets: string[] = []): string {
   }
   return redacted
     .replace(/([a-z][a-z0-9+.-]*:\/\/)([^@\s/:]+):([^@\s/]*)@/gi, "$1[REDACTED]:[REDACTED]@")
-    .replace(/([?&])([^=\s&#?]*(?:token|secret|password|passwd|api[_-]?key|access[_-]?token|auth|credential|session)[^=\s&#?]*)=([^&#\s]*)/gi, "$1$2=[REDACTED]")
-    .replace(/\b([A-Za-z0-9_.-]*(?:token|secret|password|passwd|api[_-]?key|access[_-]?token|auth|credential|session)[A-Za-z0-9_.-]*)=([^\s&#]+)/gi, "$1=[REDACTED]")
+    .replace(/([?&])([^=\s&#?]+)=([^&#\s]*)/gi, (match, prefix: string, key: string) =>
+      isSecretUrlParamName(key) ? `${prefix}${key}=[REDACTED]` : match)
+    .replace(/\b([A-Za-z0-9_.-]+)=([^\s&#]+)/gi, (match, key: string) =>
+      isSecretUrlParamName(key) ? `${key}=[REDACTED]` : match)
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")
     .replace(/\besk_[A-Za-z0-9._~+/=-]+/g, "esk_[REDACTED]");
+}
+
+function isSecretUrlParamName(key: string): boolean {
+  const normalized = key.trim().toLowerCase();
+  if (SECRET_URL_PARAM_EXACT_NAMES.has(normalized)) return true;
+  return SECRET_URL_PARAM_PATTERN.test(normalized);
 }
 
 function redactOptional(value: string | undefined, secrets: string[]): string | undefined {
