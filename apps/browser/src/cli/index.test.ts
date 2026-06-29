@@ -245,6 +245,23 @@ describe("CLI — semantic browser tools", () => {
     expect(parsed.actions[0].label).toContain("Sign in");
   }, 15_000);
 
+  it("observe can target form fields extracted from the sanitized form map", async () => {
+    const result = await runCliWithTimeout([
+      "observe",
+      "data:text/html,<title>Form Demo</title><form><label for=email>Email Address</label><input id=email name=email type=email placeholder=user@domain.com><button disabled>Continue</button></form>",
+      "find the email field",
+      "--no-ai",
+      "--json",
+    ], 10_000);
+
+    expect(result.timedOut).toBe(false);
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.actions[0].kind).toBe("fill");
+    expect(parsed.actions[0].ref).toBe("selector:#email");
+    expect(parsed.actions[0].selector).toBe("#email");
+  }, 15_000);
+
   it("validate checks assertions without requiring a model", async () => {
     const result = await runCliWithTimeout([
       "validate",

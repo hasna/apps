@@ -256,6 +256,7 @@ const semanticActionSchema = z.object({
   id: z.string(),
   kind: z.enum(["click", "fill", "select", "check", "hover"]),
   ref: z.string(),
+  selector: z.string().optional(),
   label: z.string(),
   confidence: z.number(),
   risk: z.enum(["none", "navigation", "external_mutation", "sensitive"]),
