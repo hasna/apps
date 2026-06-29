@@ -410,6 +410,119 @@ describe("Store", () => {
     }
   });
 
+  test("deduped workflow invocations refresh routing metadata only through replayable work items", () => {
+    const store = new Store(":memory:");
+    try {
+      const first = store.createWorkflowInvocation({
+        templateId: "todos-task-worker-verifier",
+        sourceRef: { kind: "event", id: "evt-route-old", dedupeKey: "todos-task:reroute" },
+        subjectRef: { kind: "task", id: "reroute", path: "/tmp/open-codewith" },
+        intent: "route",
+        scope: { projectPath: "/tmp/open-codewith", accountPolicy: "single" },
+        outputPolicy: { report: "always", createTask: "on_failure" },
+      });
+      const workItem = store.upsertWorkflowWorkItem({
+        routeKey: "todos-task",
+        idempotencyKey: "todos-task:reroute",
+        invocationId: first.id,
+        sourceType: "task.created",
+        sourceRef: "evt-route-old",
+        subjectRef: "reroute",
+        projectKey: "/tmp/open-codewith",
+      });
+
+      const second = store.createWorkflowInvocation({
+        templateId: "task-lifecycle",
+        sourceRef: { kind: "event", id: "evt-route-new", dedupeKey: "todos-task:reroute" },
+        subjectRef: { kind: "task", id: "reroute", path: "/tmp/open-codewith", raw: { title: "Updated title" } },
+        intent: "route",
+        scope: { projectPath: "/tmp/open-codewith", accountPolicy: "pool", worktreePolicy: "required" },
+        outputPolicy: { report: "always", createTask: "on_actionable" },
+      });
+
+      expect(second.id).toBe(first.id);
+      expect(second.templateId).toBe("todos-task-worker-verifier");
+      expect(second.sourceRef.id).toBe("evt-route-old");
+
+      const refreshed = store.refreshWorkflowInvocationForWorkItem(workItem.id, {
+        templateId: "task-lifecycle",
+        sourceRef: { kind: "event", id: "evt-route-new", dedupeKey: "todos-task:reroute" },
+        subjectRef: { kind: "task", id: "reroute", path: "/tmp/open-codewith", raw: { title: "Updated title" } },
+        intent: "route",
+        scope: { projectPath: "/tmp/open-codewith", accountPolicy: "pool", worktreePolicy: "required" },
+        outputPolicy: { report: "always", createTask: "on_actionable" },
+      });
+
+      expect(refreshed.id).toBe(first.id);
+      expect(refreshed.templateId).toBe("task-lifecycle");
+      expect(refreshed.sourceRef.id).toBe("evt-route-new");
+      expect(refreshed.subjectRef.raw).toEqual({ title: "Updated title" });
+      expect(refreshed.scope).toMatchObject({ accountPolicy: "pool", worktreePolicy: "required" });
+      expect(refreshed.outputPolicy?.createTask).toBe("on_actionable");
+      expect(new Date(refreshed.updatedAt).getTime()).toBeGreaterThanOrEqual(new Date(first.updatedAt).getTime());
+    } finally {
+      store.close();
+    }
+  });
+
+  test("workflow invocation refresh rejects active and terminal work item history", () => {
+    const store = new Store(":memory:");
+    try {
+      const refreshInput = {
+        templateId: "task-lifecycle",
+        sourceRef: { kind: "event" as const, id: "evt-route-new", dedupeKey: "todos-task:stable" },
+        subjectRef: { kind: "task" as const, id: "stable", path: "/tmp/open-codewith", raw: { title: "Updated title" } },
+        intent: "route" as const,
+        scope: { projectPath: "/tmp/open-codewith", accountPolicy: "pool" },
+        outputPolicy: { report: "always" as const, createTask: "on_actionable" as const },
+      };
+      const invocation = store.createWorkflowInvocation({
+        templateId: "todos-task-worker-verifier",
+        sourceRef: { kind: "event", id: "evt-route-old", dedupeKey: "todos-task:stable" },
+        subjectRef: { kind: "task", id: "stable", path: "/tmp/open-codewith" },
+        intent: "route",
+        scope: { projectPath: "/tmp/open-codewith", accountPolicy: "single" },
+        outputPolicy: { report: "always", createTask: "on_failure" },
+      });
+      const workItem = store.upsertWorkflowWorkItem({
+        routeKey: "todos-task",
+        idempotencyKey: "todos-task:stable",
+        invocationId: invocation.id,
+        sourceType: "task.created",
+        sourceRef: "evt-route-old",
+        subjectRef: "stable",
+        projectKey: "/tmp/open-codewith",
+      });
+      const workflow = store.createWorkflow({
+        name: "stable-history-workflow",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const loop = store.createLoop({
+        name: "stable-history-loop",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: {
+          type: "workflow",
+          workflowId: workflow.id,
+          input: {
+            workflowInvocationId: invocation.id,
+            workflowWorkItemId: workItem.id,
+          },
+        },
+      });
+      store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id });
+
+      expect(() => store.refreshWorkflowInvocationForWorkItem(workItem.id, refreshInput)).toThrow("not refreshable");
+      expect(store.getWorkflowInvocation(invocation.id)?.templateId).toBe("todos-task-worker-verifier");
+
+      const run = store.createWorkflowRun({ workflow, loop, scheduledFor: "2026-01-01T00:00:00.000Z" });
+      store.finalizeWorkflowRun(run.id, "succeeded");
+      expect(() => store.refreshWorkflowInvocationForWorkItem(workItem.id, refreshInput)).toThrow("not refreshable");
+      expect(store.getWorkflowInvocation(invocation.id)?.templateId).toBe("todos-task-worker-verifier");
+    } finally {
+      store.close();
+    }
+  });
+
   test("archives loops without deleting run history and hides them from default lists", () => {
     const store = new Store(":memory:");
     try {

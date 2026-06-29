@@ -2747,6 +2747,103 @@ describe("loops CLI", () => {
     expect(loops).toHaveLength(1);
   });
 
+  test("todos task event handler refreshes invocation metadata when admitting a deferred task with a new template", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-reroute-template-"));
+    const repo = createGitRepo("loops-cli-event-handler-reroute-template-repo-");
+    const baseEvent = {
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        title: "Queue rerouted project task",
+        working_dir: repo,
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+    const throttledArgs = [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--max-active-per-project",
+      "1",
+    ];
+
+    const first = runCli(dataDir, throttledArgs, JSON.stringify({
+      ...baseEvent,
+      id: "evt-reroute-template-active",
+      data: { ...baseEvent.data, id: "task-reroute-template-active" },
+    }));
+    expect(first.status).toBe(0);
+    const firstValue = JSON.parse(first.stdout);
+    expect(firstValue.workItem.status).toBe("admitted");
+    expect(firstValue.invocation.templateId).toBe("todos-task-worker-verifier");
+
+    const activeDedupe = runCli(dataDir, [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--template",
+      "task-lifecycle",
+    ], JSON.stringify({
+      ...baseEvent,
+      id: "evt-reroute-template-active-again",
+      data: { ...baseEvent.data, id: "task-reroute-template-active" },
+    }));
+    expect(activeDedupe.status).toBe(0);
+    const activeDedupeValue = JSON.parse(activeDedupe.stdout);
+    expect(activeDedupeValue.deduped).toBe(true);
+    expect(activeDedupeValue.invocation.id).toBe(firstValue.invocation.id);
+    expect(activeDedupeValue.invocation.templateId).toBe("todos-task-worker-verifier");
+    expect(activeDedupeValue.invocation.sourceRef.id).toBe("evt-reroute-template-active");
+
+    const deferred = runCli(dataDir, throttledArgs, JSON.stringify({
+      ...baseEvent,
+      id: "evt-reroute-template-deferred",
+      data: { ...baseEvent.data, id: "task-reroute-template-deferred" },
+    }));
+    expect(deferred.status).toBe(0);
+    const deferredValue = JSON.parse(deferred.stdout);
+    expect(deferredValue.skipped).toBe(true);
+    expect(deferredValue.workItem.status).toBe("deferred");
+    expect(deferredValue.invocation.templateId).toBe("todos-task-worker-verifier");
+
+    const admitted = runCli(dataDir, [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--template",
+      "task-lifecycle",
+      "--auth-profile-pool",
+      "account004,account005",
+      "--worktree-mode",
+      "required",
+    ], JSON.stringify({
+      ...baseEvent,
+      id: "evt-reroute-template-deferred-again",
+      data: { ...baseEvent.data, id: "task-reroute-template-deferred" },
+    }));
+    expect(admitted.status).toBe(0);
+    const admittedValue = JSON.parse(admitted.stdout);
+    expect(admittedValue.workItem.id).toBe(deferredValue.workItem.id);
+    expect(admittedValue.workItem.status).toBe("admitted");
+    expect(admittedValue.invocation.id).toBe(deferredValue.invocation.id);
+    expect(admittedValue.invocation.templateId).toBe("task-lifecycle");
+    expect(admittedValue.invocation.sourceRef.id).toBe("evt-reroute-template-deferred-again");
+    expect(admittedValue.invocation.scope.accountPolicy).toBe("pool");
+    expect(admittedValue.invocation.scope.worktreePolicy).toBe("required");
+    expect(admittedValue.invocation.outputPolicy.createTask).toBe("on_failure");
+    expect(admittedValue.workflow.steps.map((step: { id: string }) => step.id)).toContain("triage");
+
+    const shown = runCli(dataDir, ["--json", "routes", "show", admittedValue.workItem.id]);
+    expect(shown.status).toBe(0);
+    const shownValue = JSON.parse(shown.stdout);
+    expect(shownValue.invocation.templateId).toBe("task-lifecycle");
+    expect(shownValue.invocation.sourceRef.id).toBe("evt-reroute-template-deferred-again");
+  });
+
   test("todos task event handler canonicalizes repo subdirectories for per-project throttles", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-canonical-throttle-"));
     const repo = createGitRepo("loops-cli-event-handler-canonical-throttle-repo-");

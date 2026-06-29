@@ -1386,6 +1386,71 @@ export class Store {
     return rowToWorkflowInvocation(row);
   }
 
+  refreshWorkflowInvocationForWorkItem(workItemId: string, input: CreateWorkflowInvocationInput): WorkflowInvocation {
+    const sourceDedupeKey = input.sourceRef.dedupeKey ?? undefined;
+    if (!sourceDedupeKey) throw new Error("cannot refresh workflow invocation without sourceRef.dedupeKey");
+    const now = nowIso();
+    const claimableStatuses: WorkflowWorkItemStatus[] = ["queued", "deferred", "failed", "dead_letter", "cancelled"];
+    const statusBindings = Object.fromEntries(claimableStatuses.map((status, index) => [`$status${index}`, status]));
+    const placeholders = claimableStatuses.map((_, index) => `$status${index}`).join(",");
+    const result = this.db
+      .query(
+        `UPDATE workflow_invocations
+         SET workflow_id=COALESCE($workflowId, workflow_id),
+          template_id=COALESCE($templateId, template_id),
+          source_id=COALESCE($sourceId, source_id),
+          source_json=$sourceJson,
+          subject_kind=$subjectKind,
+          subject_id=COALESCE($subjectId, subject_id),
+          subject_path=COALESCE($subjectPath, subject_path),
+          subject_url=COALESCE($subjectUrl, subject_url),
+          subject_json=$subjectJson,
+          intent=$intent,
+          scope_json=COALESCE($scopeJson, scope_json),
+          output_policy_json=COALESCE($outputPolicyJson, output_policy_json),
+          updated_at=$updated
+         WHERE source_kind=$sourceKind
+          AND source_dedupe_key=$sourceDedupeKey
+          AND EXISTS (
+            SELECT 1
+            FROM workflow_work_items
+            WHERE id=$workItemId
+              AND invocation_id=workflow_invocations.id
+              AND status IN (${placeholders})
+          )`,
+      )
+      .run({
+        $workItemId: workItemId,
+        $sourceKind: input.sourceRef.kind,
+        $sourceDedupeKey: sourceDedupeKey,
+        $workflowId: input.workflowId ?? null,
+        $templateId: input.templateId ?? null,
+        $sourceId: input.sourceRef.id ?? null,
+        $sourceJson: JSON.stringify(input.sourceRef),
+        $subjectKind: input.subjectRef.kind,
+        $subjectId: input.subjectRef.id ?? null,
+        $subjectPath: input.subjectRef.path ?? null,
+        $subjectUrl: input.subjectRef.url ?? null,
+        $subjectJson: JSON.stringify(input.subjectRef),
+        $intent: input.intent,
+        $scopeJson: input.scope ? JSON.stringify(input.scope) : null,
+        $outputPolicyJson: input.outputPolicy ? JSON.stringify(input.outputPolicy) : null,
+        $updated: now,
+        ...statusBindings,
+      });
+    if (result.changes !== 1) throw new Error(`workflow work item is not refreshable: ${workItemId}`);
+    const updated = this.db
+      .query<WorkflowInvocationRow, [string]>(
+        `SELECT workflow_invocations.*
+         FROM workflow_invocations
+         JOIN workflow_work_items ON workflow_work_items.invocation_id = workflow_invocations.id
+         WHERE workflow_work_items.id = ?`,
+      )
+      .get(workItemId);
+    if (!updated) throw new Error(`workflow invocation not found after refresh for work item: ${workItemId}`);
+    return rowToWorkflowInvocation(updated);
+  }
+
   getWorkflowInvocation(id: string): WorkflowInvocation | undefined {
     const row = this.db.query<WorkflowInvocationRow, [string]>("SELECT * FROM workflow_invocations WHERE id = ?").get(id);
     return row ? rowToWorkflowInvocation(row) : undefined;

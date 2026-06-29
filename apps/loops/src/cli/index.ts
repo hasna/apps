@@ -1296,7 +1296,8 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
         status: throttle && !throttle.allowed ? "deferred" : "queued",
         lastReason: throttle && !throttle.allowed ? throttle.reason : undefined,
       });
-      if (throttle && !throttle.allowed) return { kind: "throttled" as const, invocation, workItem, throttle };
+      const refreshedInvocation = store.refreshWorkflowInvocationForWorkItem(workItem.id, invocationInput);
+      if (throttle && !throttle.allowed) return { kind: "throttled" as const, invocation: refreshedInvocation, workItem, throttle };
       const workflow = routeWorkflowForStorage(store, workflowBody);
       const loop = store.createLoop({
         ...loopInput,
@@ -1304,13 +1305,13 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
           type: "workflow",
           workflowId: workflow.id,
           input: {
-            workflowInvocationId: invocation.id,
+            workflowInvocationId: refreshedInvocation.id,
             workflowWorkItemId: workItem.id,
           },
         },
       });
       const admitted = store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id, reason: "admitted by todos-task route" });
-      return { kind: "created" as const, invocation, workItem: admitted, workflow, loop, throttle };
+      return { kind: "created" as const, invocation: refreshedInvocation, workItem: admitted, workflow, loop, throttle };
     });
     if (outcome.kind === "deduped") {
       return {
@@ -1523,7 +1524,8 @@ function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOptions): T
         status: throttle && !throttle.allowed ? "deferred" : "queued",
         lastReason: throttle && !throttle.allowed ? throttle.reason : undefined,
       });
-      if (throttle && !throttle.allowed) return { kind: "throttled" as const, invocation, workItem, throttle };
+      const refreshedInvocation = store.refreshWorkflowInvocationForWorkItem(workItem.id, invocationInput);
+      if (throttle && !throttle.allowed) return { kind: "throttled" as const, invocation: refreshedInvocation, workItem, throttle };
       const workflow = routeWorkflowForStorage(store, workflowBody);
       const loop = store.createLoop({
         ...loopInput,
@@ -1531,13 +1533,13 @@ function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOptions): T
           type: "workflow",
           workflowId: workflow.id,
           input: {
-            workflowInvocationId: invocation.id,
+            workflowInvocationId: refreshedInvocation.id,
             workflowWorkItemId: workItem.id,
           },
         },
       });
       const admitted = store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id, reason: "admitted by generic-event route" });
-      return { kind: "created" as const, invocation, workItem: admitted, workflow, loop, throttle };
+      return { kind: "created" as const, invocation: refreshedInvocation, workItem: admitted, workflow, loop, throttle };
     });
     if (outcome.kind === "deduped") {
       return {
