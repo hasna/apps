@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.51] - 2026-06-29
+
+### Changed
+
+- Updated the packaged Terraform tfvars example so
+  `runtime_package_version` matches the published package version.
+
 ## [0.1.50] - 2026-06-29
 
 ### Changed

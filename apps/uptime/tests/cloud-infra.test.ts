@@ -47,7 +47,7 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   const variables = read("infra/aws/variables.tf");
   const tfvars = read("infra/aws/terraform.tfvars.example");
   const awsRunbook = read("docs/aws-deployment-runbook.md");
-  const packageJson = JSON.parse(read("package.json")) as { files?: string[] };
+  const packageJson = JSON.parse(read("package.json")) as { files?: string[]; version: string };
   const deploymentMetadataExample = read("docs/deployment-metadata.example.json");
   const combined = [main, variables, tfvars].join("\n");
 
@@ -250,7 +250,7 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(tfvars).toContain("cloudfront_origin_verify_header_name");
   expect(tfvars).toContain("cloudfront_origin_verify_header_value  = null");
   expect(tfvars).toContain('container_image          = "<ecr-image-uri-or-digest>"');
-  expect(tfvars).toContain('runtime_package_version   = "0.1.49"');
+  expect(tfvars).toContain(`runtime_package_version   = "${packageJson.version}"`);
   expect(tfvars).toContain("runtime_package_integrity = null");
   expect(tfvars).toContain("allow_unpinned_runtime_package_integrity = false");
   expect(tfvars).toContain('app_env_secret_arn       = "<app-env-secret-arn>"');
