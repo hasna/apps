@@ -13,6 +13,7 @@ import {
   type PostgresSyncTombstoneRecord,
 } from "../src/postgres-runtime.js";
 import type { PostgresQueryClient } from "../src/postgres.js";
+import { probeResultPayloadHash } from "../src/probes.js";
 
 class FakeRuntimeClient implements PostgresQueryClient {
   readonly queries: Array<{ sql: string; params?: unknown[] }> = [];
@@ -76,22 +77,24 @@ class FakeRuntimeClient implements PostgresQueryClient {
     }
     if (sql.includes("INSERT INTO \"uptime\".\"check_jobs\"")) {
       if (!this.job) {
+        const monitorSnapshot = JSON.parse(String(params?.[4]));
         this.job = {
           workspaceId: String(params?.[0]),
           id: String(params?.[1]),
           monitorId: String(params?.[2]),
           monitorRevision: Number(params?.[3]),
-          scheduleSlot: String(params?.[4]),
-          probePolicy: JSON.parse(String(params?.[5])),
-          probePolicyHash: String(params?.[6]),
+          monitorSnapshot,
+          scheduleSlot: String(params?.[5]),
+          probePolicy: JSON.parse(String(params?.[6])),
+          probePolicyHash: String(params?.[7]),
           status: "pending",
           claimedByProbeId: null,
           fencingToken: null,
-          dueAt: String(params?.[7]),
+          dueAt: String(params?.[8]),
           claimedAt: null,
           leaseExpiresAt: null,
           submittedResultId: null,
-          deployGeneration: Number(params?.[8]),
+          deployGeneration: Number(params?.[9]),
           version: 1,
           createdAt: "2026-06-29T10:00:00.000Z",
           updatedAt: "2026-06-29T10:00:00.000Z",
@@ -124,6 +127,9 @@ class FakeRuntimeClient implements PostgresQueryClient {
     if (sql.includes("SELECT * FROM \"uptime\".\"check_jobs\"") && sql.includes("FOR UPDATE")) {
       return { rows: this.job ? [snakeJob(this.job)] : [], rowCount: this.job ? 1 : 0 };
     }
+    if (sql.includes("SELECT * FROM \"uptime\".\"monitors\"")) {
+      return { rows: this.monitor ? [snakeMonitor(this.monitor)] : [], rowCount: this.monitor ? 1 : 0 };
+    }
     if (sql.includes("SELECT id, probe_class, probe_location") && sql.includes("FROM \"uptime\".\"probe_identities\"")) {
       return {
         rows: this.probe ? [{
@@ -133,6 +139,18 @@ class FakeRuntimeClient implements PostgresQueryClient {
         }] : [],
         rowCount: this.probe ? 1 : 0,
       };
+    }
+    if (sql.includes("UPDATE \"uptime\".\"monitors\"") && sql.includes("last_checked_at = $4")) {
+      if (!this.monitor || this.monitor.id !== String(params?.[1]) || this.monitor.revision !== Number(params?.[4])) {
+        return { rows: [], rowCount: 0 };
+      }
+      this.monitor = {
+        ...this.monitor,
+        status: params?.[2] as PostgresMonitorRecord["status"],
+        lastCheckedAt: String(params?.[3]),
+        updatedAt: "2026-06-29T10:01:10.000Z",
+      };
+      return { rows: [snakeMonitor(this.monitor)], rowCount: 1 };
     }
     if (sql.includes("INSERT INTO \"uptime\".\"check_results\"")) {
       this.result = {
@@ -190,6 +208,19 @@ class FakeRuntimeClient implements PostgresQueryClient {
         ...this.job,
         status: "submitted",
         submittedResultId: String(params?.[3]),
+        fencingToken: null,
+        leaseExpiresAt: null,
+        version: this.job.version + 1,
+      };
+      return { rows: [snakeJob(this.job)], rowCount: 1 };
+    }
+    if (sql.includes("UPDATE \"uptime\".\"check_jobs\"") && sql.includes("status = 'cancelled'")) {
+      if (!this.job || this.job.status !== "claimed" || this.job.fencingToken !== params?.[3]) {
+        return { rows: [], rowCount: 0 };
+      }
+      this.job = {
+        ...this.job,
+        status: "cancelled",
         fencingToken: null,
         leaseExpiresAt: null,
         version: this.job.version + 1,
@@ -277,6 +308,7 @@ test("Postgres runtime records monitors, probe leases, submissions, audit, and t
     actor: "scheduler",
   });
   const due = await runtime.listDueCheckJobs({ now: "2026-06-29T10:01:00.000Z" });
+  const fetchedMonitor = await runtime.getMonitor({ id: monitor.id });
   const claimed = await runtime.claimCheckJob({
     jobId: job.id,
     probeId: probe.id,
@@ -287,6 +319,32 @@ test("Postgres runtime records monitors, probe leases, submissions, audit, and t
     probeId: probe.id,
     leaseTtlMs: 120_000,
   });
+  const submittedEvidence = {
+    kind: "http_target_policy" as const,
+    mode: "hosted" as const,
+    finalUrl: "https://example.com/health",
+    redirectCount: 0,
+    decisions: [],
+    redacted: true,
+    redactionStatus: "redacted" as const,
+    retentionClass: "short" as const,
+  };
+  const submittedPayloadHash = probeResultPayloadHash({
+    probeId: probe.id,
+    jobId: job.id,
+    scheduleSlot,
+    fencingToken: claimed!.fencingToken!,
+    monitorId: monitor.id,
+    nonce: "nonce-1",
+    checkedAt: "2026-06-29T10:01:10.000Z",
+    status: "up",
+    latencyMs: 42,
+    statusCode: 200,
+    error: null,
+    attemptCount: 1,
+    monitorRevision: monitor.revision,
+    evidence: submittedEvidence,
+  });
   const submitted = await runtime.submitProbeCheckResult({
     jobId: job.id,
     probeId: probe.id,
@@ -296,17 +354,8 @@ test("Postgres runtime records monitors, probe leases, submissions, audit, and t
     status: "up",
     latencyMs: 42,
     statusCode: 200,
-    payloadHash: "b".repeat(64),
-    evidence: {
-      kind: "http_target_policy",
-      mode: "hosted",
-      finalUrl: "https://example.com/health",
-      redirectCount: 0,
-      decisions: [],
-      redacted: true,
-      redactionStatus: "redacted",
-      retentionClass: "short",
-    },
+    payloadHash: submittedPayloadHash,
+    evidence: submittedEvidence,
   });
   const replayedSubmission = await runtime.submitProbeCheckResult({
     jobId: job.id,
@@ -317,7 +366,8 @@ test("Postgres runtime records monitors, probe leases, submissions, audit, and t
     status: "up",
     latencyMs: 42,
     statusCode: 200,
-    payloadHash: "b".repeat(64),
+    payloadHash: submittedPayloadHash,
+    evidence: submittedEvidence,
   });
   const audit = await runtime.recordAuditEvent({
     action: "check.submitted",
@@ -343,6 +393,7 @@ test("Postgres runtime records monitors, probe leases, submissions, audit, and t
   });
   expect(expectedJobKey).toMatch(/^sha256:[a-f0-9]{64}$/);
   expect(job.id).toBe(`job_${expectedJobKey.replace("sha256:", "").slice(0, 32)}`);
+  expect(fetchedMonitor?.id).toBe(monitor.id);
   expect(due[0]!.fencingToken).toBeNull();
   expect(claimed?.status).toBe("claimed");
   expect(claimed?.claimedByProbeId).toBe(probe.id);
@@ -350,9 +401,11 @@ test("Postgres runtime records monitors, probe leases, submissions, audit, and t
   expect(submitted.job.status).toBe("submitted");
   expect(submitted.job.fencingToken).toBeNull();
   expect(submitted.result.status).toBe("up");
+  expect(client.monitor?.status).toBe("up");
+  expect(client.monitor?.lastCheckedAt).toBe("2026-06-29T10:01:10.000Z");
   expect(submitted.result.probeLocation).toBe("eu-west-1");
   expect(submitted.submission.probeLocation).toBe("eu-west-1");
-  expect(submitted.submission.payloadHash).toBe("b".repeat(64));
+  expect(submitted.submission.payloadHash).toBe(submittedPayloadHash);
   expect(replayedSubmission.submission.checkResultId).toBe(submitted.submission.checkResultId);
   expect(replayedSubmission.job.status).toBe("submitted");
   expect(audit.metadata).toEqual({ result: "up" });
@@ -360,8 +413,10 @@ test("Postgres runtime records monitors, probe leases, submissions, audit, and t
   expect(client.queries.map((query) => query.sql).filter((sql) => sql === "BEGIN").length).toBeGreaterThanOrEqual(8);
   expect(client.queries.some((query) => query.sql.includes("set_config($1, $2, true)") && query.params?.[0] === "app.workspace_id")).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("now() + ($5::bigint * interval '1 millisecond')"))).toBe(true);
+  expect(client.queries.some((query) => query.sql.includes("monitor_snapshot <> '{}'::jsonb"))).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("AND fencing_token = $5"))).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("payload_hash IS NOT DISTINCT FROM EXCLUDED.payload_hash"))).toBe(true);
+  expect(client.queries.some((query) => query.sql.includes("UPDATE \"uptime\".\"monitors\"") && query.sql.includes("version = $5"))).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("sync_tombstones"))).toBe(true);
   expect(client.releaseCount).toBeGreaterThan(0);
 });
@@ -390,6 +445,37 @@ test("Postgres runtime soft-deletes every advertised tombstone resource type", a
   expect(sql).toContain("UPDATE \"uptime\".\"incidents\"");
 });
 
+test("Postgres runtime rejects probe payload hash mismatches", async () => {
+  const client = new FakeRuntimeClient();
+  const runtime = createPostgresRuntime({ client, workspaceId: "ws_runtime" });
+  await runtime.upsertMonitor({ id: "mon_homepage", name: "Homepage", kind: "http", url: "https://example.com" });
+  await runtime.upsertProbeIdentity({
+    id: "prb_public",
+    name: "Public us-east-1",
+    probeClass: "public",
+    probeLocation: "us-east-1",
+    publicKeyPem: "-----BEGIN PUBLIC KEY-----\nfake\n-----END PUBLIC KEY-----",
+    publicKeyFingerprint: "a".repeat(64),
+  });
+  const job = await runtime.createCheckJob({
+    monitorId: "mon_homepage",
+    monitorRevision: 1,
+    scheduleSlot: "2026-06-29T10:00:00.000Z",
+    probePolicy: { probeClass: "public", locations: ["us-east-1"] },
+  });
+  const claimed = await runtime.claimCheckJob({ jobId: job.id, probeId: "prb_public" });
+
+  await expect(runtime.submitProbeCheckResult({
+    jobId: job.id,
+    probeId: "prb_public",
+    fencingToken: claimed!.fencingToken!,
+    nonce: "nonce-1",
+    checkedAt: "2026-06-29T10:01:10.000Z",
+    status: "up",
+    payloadHash: "d".repeat(64),
+  })).rejects.toThrow("payload hash mismatch");
+});
+
 test("Postgres runtime rejects probe nonce replay with a different payload hash", async () => {
   const client = new FakeRuntimeClient();
   const runtime = createPostgresRuntime({ client, workspaceId: "ws_runtime" });
@@ -409,6 +495,22 @@ test("Postgres runtime rejects probe nonce replay with a different payload hash"
     probePolicy: { probeClass: "public", locations: ["us-east-1"] },
   });
   const claimed = await runtime.claimCheckJob({ jobId: job.id, probeId: "prb_public" });
+  const payloadHash = probeResultPayloadHash({
+    probeId: "prb_public",
+    jobId: job.id,
+    scheduleSlot: job.scheduleSlot,
+    fencingToken: claimed!.fencingToken!,
+    monitorId: "mon_homepage",
+    nonce: "nonce-1",
+    checkedAt: "2026-06-29T10:01:10.000Z",
+    status: "up",
+    latencyMs: null,
+    statusCode: null,
+    error: null,
+    attemptCount: 1,
+    monitorRevision: 1,
+    evidence: null,
+  });
   client.submission = {
     workspaceId: "ws_runtime",
     id: "psb_existing",
@@ -434,7 +536,7 @@ test("Postgres runtime rejects probe nonce replay with a different payload hash"
     nonce: "nonce-1",
     checkedAt: "2026-06-29T10:01:10.000Z",
     status: "up",
-    payloadHash: "d".repeat(64),
+    payloadHash,
   })).rejects.toThrow("nonce replay conflict");
 });
 
@@ -592,6 +694,7 @@ function snakeJob(row: PostgresCheckJobRecord): Record<string, unknown> {
     id: row.id,
     monitor_id: row.monitorId,
     monitor_version: row.monitorRevision,
+    monitor_snapshot: JSON.stringify(row.monitorSnapshot),
     schedule_slot: row.scheduleSlot,
     probe_policy: JSON.stringify(row.probePolicy),
     probe_policy_hash: row.probePolicyHash,

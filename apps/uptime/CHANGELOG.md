@@ -6,6 +6,41 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.43] - 2026-06-29
+
+### Added
+
+- Added `uptime cloud postgres-public-probe run` for bounded, explicit-workspace
+  Postgres public-probe review batches from existing `check_jobs`.
+- Added `runPostgresPublicProbeWorker` on the `@hasna/uptime/workers` SDK export
+  so private validation can exercise the Postgres claim, execution, cancellation,
+  and submission path without promoting the generic hosted worker entrypoint.
+
+### Changed
+
+- Bumped the reviewed Postgres cloud schema contract to version 4 so
+  `check_jobs` store an immutable `monitor_snapshot` for the monitor revision
+  they were created from.
+- Postgres check-job creation now snapshots the enabled monitor row inside the
+  workspace transaction, and probe result submission updates monitor status only
+  when the current monitor revision still matches the job revision.
+- The Postgres public-probe runner cancels unsupported, disabled, missing, or
+  stale-revision claimed jobs with a fenced `cancelClaimedCheckJob` update
+  instead of broad tombstone mutation.
+
+### Security
+
+- Hosted worker startup remains blocked: `uptime cloud workers run --role
+  public-probe` still fails closed, healthcheck preflight still returns
+  `canStart=false`, and ECS desired counts remain zero by default.
+- The new Postgres public-probe command is not the EFS SQLite
+  `cloud public-checks` bridge, does not create schedule slots, does not enable
+  hosted probe API routes, and does not make hosted worker preflight
+  promotion-ready.
+- Worker errors are sanitized before rendering so database URLs, bearer
+  material, and other credential-shaped values are not printed in CLI JSON or
+  terminal output.
+
 ## [0.1.42] - 2026-06-29
 
 ### Added

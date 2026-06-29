@@ -12,10 +12,10 @@ import { generateProbeKeyPair, signProbeResult } from "../probes.js";
 import { buildAwsDeploymentPlan, buildPrivateProbeCloudConfig, renderPrivateProbeEnv } from "../cloud-plan.js";
 import { buildPostgresMigrationPlan, renderPostgresMigrationPlan } from "../postgres-plan.js";
 import { buildPostgresMigrationDryRun, renderPostgresMigrationRun, runPostgresMigration } from "../postgres.js";
-import { buildPostgresRuntimeReadiness } from "../postgres-runtime.js";
+import { buildPostgresRuntimeReadiness, createPostgresRuntime, sanitizePostgresRuntimeError } from "../postgres-runtime.js";
 import { buildPostgresReportRuntimeReadiness } from "../postgres-report-runtime.js";
 import { summarizeHostedReportChannelRefs, type HostedReportChannelRefSummary } from "../report-channel-refs.js";
-import { runHostedPublicChecksWorker } from "../workers.js";
+import { runHostedPublicChecksWorker, runPostgresPublicProbeWorker, type PostgresPublicProbeWorkerSummary } from "../workers.js";
 import { runEdgeSmoke, type EdgeSmokeReport } from "../edge-smoke.js";
 import type { AwsDeploymentPlan, PrivateProbeCloudConfig } from "../cloud-plan.js";
 import type { PostgresMigrationPlan } from "../postgres-plan.js";
@@ -53,9 +53,9 @@ function print(value: unknown, text: string, opts?: { json?: boolean }): void {
 }
 
 function fail(error: unknown, opts?: { json?: boolean }): never {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = sanitizeTerminal(error instanceof Error ? error.message : String(error));
   if (wantsJson(opts)) console.log(JSON.stringify({ ok: false, error: message }, null, 2));
-  else console.error(chalk.red(sanitizeTerminal(message)));
+  else console.error(chalk.red(message));
   process.exit(1);
 }
 
@@ -790,6 +790,45 @@ cloudPublicChecks
     }
   });
 
+const cloudPostgresPublicProbe = cloud
+  .command("postgres-public-probe")
+  .description("Run bounded Postgres public-probe review batches without enabling hosted ECS workers");
+
+cloudPostgresPublicProbe
+  .command("run")
+  .description("Run one bounded Postgres public-probe review batch from existing check_jobs")
+  .requiredOption("--probe-id <id>", "enabled public probe identity id")
+  .option("--workspace-id <id>", "workspace id; defaults to HASNA_UPTIME_WORKSPACE_ID but must resolve explicitly")
+  .option("--schema <name>", "Postgres schema name", "uptime")
+  .option("--limit <n>", "max due jobs to inspect", parseInteger, 10)
+  .option("--max-jobs <n>", "max claimed jobs to process", parseInteger, 10)
+  .option("--lease-ttl-ms <ms>", "claim lease TTL in milliseconds", parseInteger, 120_000)
+  .option("-j, --json", "print JSON")
+  .action(async (opts) => {
+    let runtime: ReturnType<typeof createPostgresRuntime> | null = null;
+    try {
+      const workspaceId = requireExplicitWorkspaceId(opts.workspaceId);
+      runtime = createPostgresRuntime({
+        schemaName: opts.schema,
+        workspaceId,
+      });
+      const summary = await runPostgresPublicProbeWorker({
+        runtime,
+        probeId: opts.probeId,
+        workspaceId,
+        limit: opts.limit,
+        maxJobs: opts.maxJobs,
+        leaseTtlMs: opts.leaseTtlMs,
+      });
+      print(summary, renderPostgresPublicProbeWorkerSummary(summary), opts);
+      if (summary.status !== "completed") process.exitCode = 1;
+    } catch (error) {
+      fail(new Error(sanitizePostgresRuntimeError(error, process.env.HASNA_UPTIME_DATABASE_URL)), opts);
+    } finally {
+      await runtime?.close();
+    }
+  });
+
 program
   .command("results")
   .description("List recent check results")
@@ -1392,6 +1431,31 @@ function renderHostedPublicChecksWorkerSummary(summary: HostedPublicChecksWorker
   ].join("\n");
 }
 
+function renderPostgresPublicProbeWorkerSummary(summary: PostgresPublicProbeWorkerSummary): string {
+  return [
+    "postgres public-probe worker",
+    `status: ${summary.status}`,
+    `workspace: ${summary.workspaceId ?? "<unset>"}`,
+    `probe: ${sanitizeField(summary.probeId)}`,
+    `discovered: ${summary.discovered}`,
+    `claimed: ${summary.claimed}`,
+    `submitted: ${summary.submitted}`,
+    `skipped: ${summary.skipped}`,
+    `failed: ${summary.failed}`,
+    `started: ${summary.startedAt}`,
+    `finished: ${summary.finishedAt}`,
+    ...summary.results.map((result) => [
+      "-",
+      result.action.padEnd(9),
+      sanitizeField(result.jobId),
+      result.monitorId ? sanitizeField(result.monitorId) : "<no-monitor>",
+      result.status ?? "-",
+      result.checkResultId ? sanitizeField(result.checkResultId) : "-",
+      result.reason ? sanitizeField(result.reason) : "",
+    ].filter(Boolean).join(" ")),
+  ].join("\n");
+}
+
 type HostedWorkerRole = "scheduler" | "public-probe" | "reporter" | "migration";
 
 interface HostedWorkerPreflight {
@@ -1732,14 +1796,14 @@ function cloudMemoryServiceDefinitions(): CloudMemoryServiceDefinition[] {
       proofEnv: "HASNA_UPTIME_POSTGRES_RUNTIME_READY",
       acceptsProof: false,
       implementationBlockers: [
-        "hosted Postgres runtime adapter is not implemented; setting HASNA_UPTIME_DATABASE_URL currently makes hosted runtime fail closed",
-        "check_jobs leases, report-run storage, probe identity, and worker fencing are not implemented as authoritative cloud paths",
+        "hosted Postgres runtime is not fully wired through UptimeService, hosted API routes, scheduler/reporter loops, and live worker promotion",
+        "report-run storage, scheduler slot creation, deploy drain, backlog metrics, stale-lease alarms, and worker rollback evidence are not implemented as authoritative cloud paths",
       ],
       evidenceBlockers: [
-        "EFS SQLite bridge is not cloud-primary and must stay a bounded web-only bridge until async Postgres runtime exists",
+        "EFS SQLite bridge is not cloud-primary and must stay a bounded web-only bridge until the full async Postgres hosted runtime is wired and verified",
       ],
       nextActions: [
-        "Implement the async Postgres runtime adapter with workspace-scoped RLS, tombstones, audit rows, and distributed leases.",
+        "Wire the async Postgres runtime through service/API/worker contracts with workspace-scoped RLS, tombstones, audit rows, and distributed leases.",
         "Keep scheduler, public-probe, reporter, and migration ECS desired counts at 0 until worker preflights canStart=true.",
       ],
     },
@@ -1921,6 +1985,13 @@ function envFlagEnabled(name: string): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
+function requireExplicitWorkspaceId(value?: string): string {
+  const workspaceId = value?.trim() || process.env.HASNA_UPTIME_WORKSPACE_ID?.trim();
+  if (!workspaceId) throw new Error("Postgres public-probe worker requires --workspace-id or HASNA_UPTIME_WORKSPACE_ID");
+  if (/[\x00-\x1f\x7f-\x9f]/.test(workspaceId)) throw new Error("workspace id must not contain control characters");
+  return workspaceId;
+}
+
 function resolveCloudMemoryMachineIdentity(optionMachineId?: string): CloudMemoryMachineIdentity {
   const rawMachineId = optionMachineId?.trim() || process.env.HASNA_UPTIME_MACHINE_ID?.trim() || "spark01";
   const secretLike = /(secret|token|password|passwd|pwd|api[_:.-]?key|credential|bearer|jwt|private)/i.test(rawMachineId);
@@ -1975,7 +2046,7 @@ function buildHostedWorkerPreflight(role: HostedWorkerRole): HostedWorkerPreflig
       name: "postgres-adapter",
       ok: false,
       detail: postgresRuntime.capabilities.monitorStore && postgresRuntime.capabilities.checkJobLeases
-        ? "Postgres core runtime facade exists, but UptimeService/API/worker loops are not integrated"
+        ? "Postgres core runtime facade and bounded public-probe runner exist, but UptimeService/API/scheduler/reporter loops are not fully integrated"
         : "async runtime store not implemented",
     },
     { name: "postgres-runtime-schema-verified", ok: runtimeCheck("postgres-runtime-schema-verified")?.ok ?? false, detail: runtimeCheck("postgres-runtime-schema-verified")?.detail ?? "not verified in this process" },
@@ -1983,7 +2054,7 @@ function buildHostedWorkerPreflight(role: HostedWorkerRole): HostedWorkerPreflig
     { name: "postgres-probe-identity-store", ok: postgresRuntime.capabilities.probeIdentityStore, detail: "workspace-scoped probe identity methods include class and location" },
     { name: "postgres-check-jobs-leases", ok: postgresRuntime.capabilities.checkJobLeases, detail: "deterministic check_jobs create/due/claim/complete methods are implemented" },
     { name: "postgres-audit-tombstones", ok: postgresRuntime.capabilities.auditWriter && postgresRuntime.capabilities.tombstoneWriter, detail: "audit_events and sync_tombstones writers are implemented" },
-    { name: "cloud-worker-leases", ok: false, detail: "not implemented" },
+    { name: "cloud-worker-leases", ok: false, detail: "live worker ownership, deploy drain, backlog metrics, and stale-lease alarms are not proven" },
   ];
   if (role === "reporter") {
     const channelRefs = summarizeHostedReportChannelRefs(
@@ -1994,7 +2065,7 @@ function buildHostedWorkerPreflight(role: HostedWorkerRole): HostedWorkerPreflig
     checks.push(...hostedReporterReadinessChecks());
   }
   if (role === "public-probe") {
-    checks.push({ name: "public-probe-job-claims", ok: false, detail: "not implemented" });
+    checks.push({ name: "public-probe-job-claims", ok: true, detail: "bounded uptime cloud postgres-public-probe run can claim, run, and submit existing Postgres check_jobs; live ECS promotion is still blocked" });
   }
   if (role === "migration") {
     const migration = buildPostgresMigrationDryRun();
@@ -2120,7 +2191,7 @@ function hostedWorkerNextActions(role: HostedWorkerRole): string[] {
   if (role === "public-probe") {
     return [
       ...shared,
-      "Implement cloud job claiming, fencing tokens, target-policy decision logs, and result ingestion for public HTTP/TCP checks.",
+      "Run the bounded Postgres public-probe worker against disposable and approved hosted Postgres, then prove deploy drain, backlog/stale-lease alarms, and sustained liveness before scaling ECS.",
     ];
   }
   if (role === "reporter") {

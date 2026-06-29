@@ -48,16 +48,19 @@ specs, artifacts, browser evidence, or check execution until these are tested:
   identity and lease fencing exist in `0.1.33`, and `0.1.42` adds a bounded
   Postgres runtime facade for deterministic job creation, due discovery,
   claim/fencing/completion, probe submission replay protection, audit rows, and
-  tombstones. Hosted cloud workers still need `UptimeService`/API integration,
-  deploy drain, backlog/stale-lease metrics, live RLS verification, and alarms
-  before scale-up
+  tombstones. `0.1.43` adds a bounded Postgres public-probe review batch runner
+  over existing `check_jobs` with immutable monitor snapshots and fenced
+  cancellation of stale or unsupported jobs. Hosted cloud workers still need
+  `UptimeService`/API integration, scheduler slot creation, deploy drain,
+  backlog/stale-lease metrics, live RLS verification, and alarms before scale-up
 - Postgres migration/runtime readiness: the migration runner can dry-run and
   apply the reviewed schema with TLS enforcement, explicit schema confirmation,
   transactional DDL, idempotent/forced RLS, and table/policy/index verification.
-  `0.1.42` also exposes `@hasna/uptime/postgres-runtime` for workspace-scoped
-  core writes, but this is still not runtime promotion evidence because service
-  contracts, hosted worker loops, live DB schema verification, and operations
-  alarms remain blockers.
+  `0.1.42` exposes `@hasna/uptime/postgres-runtime` for workspace-scoped core
+  writes, and `0.1.43` exposes `runPostgresPublicProbeWorker` for bounded
+  review batches. These are still not runtime promotion evidence because
+  service contracts, hosted worker loops, live DB schema verification, and
+  operations alarms remain blockers.
 - report delivery through open-mailery/open-telephony/open-logs channel refs:
   reporter preflight validates the service-owned channel-ref catalog shape.
   Postgres report metadata helpers now cover finished report-run rows,

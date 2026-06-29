@@ -108,6 +108,14 @@ hosted store until `UptimeService`, hosted API routes, scheduler/public-probe
 worker loops, live RLS verification, deploy drain, backlog/stale-lease metrics,
 and alarms use it end to end.
 
+`0.1.43` adds a bounded `uptime cloud postgres-public-probe run` review command
+over existing Postgres `check_jobs`. It requires an explicit workspace and
+probe id, claims jobs with fencing tokens, runs HTTP/TCP checks through the
+hosted target policy, records probe results, and fenced-cancels unsupported,
+disabled, missing, or stale-revision jobs. It does not create schedule slots,
+does not enable hosted probe API routes, and does not change the generic hosted
+worker `canStart=false` preflight state.
+
 The current hosted SQLite bridge is still not cloud-primary, but it now follows
 the minimum hosted storage contract where it is used for controlled smokes:
 hosted reads and mutations require explicit workspace context, active monitor
@@ -491,7 +499,10 @@ ECS/API/RDS/S3/probe lag/job backlog/delivery failures, and rollback commands.
 
 ## Current Blockers
 
-- Open Uptime has no Postgres/cloud store and no distributed leases.
+- Open Uptime has a bounded Postgres runtime facade and public-probe review
+  batch runner, but no fully wired Postgres service store, hosted API probe
+  routes, scheduler loop, deploy drain, backlog/stale-lease alarms, or sustained
+  ECS worker readiness.
 - Hosted API reads use static scoped hosted-token descriptors for operator
   smokes, and the hosted dashboard shell still fails closed; production-grade
   identity/RBAC is not implemented yet.
@@ -499,9 +510,10 @@ ECS/API/RDS/S3/probe lag/job backlog/delivery failures, and rollback commands.
   `uptime cloud public-checks run-due` operator path. A bounded
   `uptime cloud public-checks worker` EFS SQLite bridge loop exists for
   controlled smokes only when `--allow-public-checks-bridge` or
-  `HASNA_UPTIME_ALLOW_PUBLIC_CHECKS_BRIDGE=1` is explicitly set, but the cloud
-  public-probe `check_jobs` lease/fencing path and sustained ECS worker
-  readiness are not wired yet.
+  `HASNA_UPTIME_ALLOW_PUBLIC_CHECKS_BRIDGE=1` is explicitly set. A separate
+  bounded `uptime cloud postgres-public-probe run` command can review existing
+  Postgres `check_jobs` with lease fencing, but sustained ECS worker readiness
+  is not wired yet.
 - `@hasna/cloud` hybrid mode still returns SQLite, so it is not cloud-primary.
 - The local cloud config currently points at a stale/non-resolving database host.
 - Todos has unresolved conflicts that must be reconciled before cloud cutover.

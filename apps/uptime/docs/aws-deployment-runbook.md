@@ -513,6 +513,16 @@ until the service/API/worker loops are wired to the runtime, live RLS/schema
 verification passes against the approved DB, and scheduler/probe/reporter
 alarms plus deploy-drain evidence exist.
 
+`0.1.43` adds `uptime cloud postgres-public-probe run` for bounded private
+review of existing Postgres `check_jobs`. It requires an explicit workspace id
+and probe id, uses the hosted target policy for HTTP/TCP execution, and
+fenced-cancels stale or unsupported claimed jobs. Use it only against a
+disposable or approved Postgres review database until live RLS, schema-version
+evidence, deploy drain, backlog/stale-lease alarms, and sustained worker
+rollback evidence exist. It is not the EFS SQLite `cloud public-checks` bridge,
+does not create scheduler slots, and does not permit changing the ECS
+public-probe command or desired count.
+
 `uptime cloud workers preflight --role reporter --json` validates
 `HASNA_UPTIME_REPORT_CHANNEL_REFS_JSON` as an operator-provided, server-owned
 Mailery, Telephony, and Open Logs channel-ref catalog. This environment value is
@@ -558,16 +568,19 @@ routes are backed by cloud check jobs and cloud audit rows.
   URLs, or probe private keys in task definitions. Use ECS `secrets.valueFrom`
   refs such as `HASNA_UPTIME_HOSTED_TOKEN`.
 - Do not run public probe workers against private targets.
-- Do not enable public probe workers until their cloud check-job path calls the
-  hosted public-check runner, records target-policy decision evidence, and
-  passes AWS smokes for denied DNS answers, redirect-to-denied targets, and
-  address pinning. The SDK and `uptime cloud public-checks run-due` path now
-  handle execution-time DNS and redirect enforcement for bounded smokes. The
+- Do not enable public probe workers until their cloud check-job path is wired
+  through the hosted service/API contracts, records target-policy decision
+  evidence, and passes AWS smokes for denied DNS answers, redirect-to-denied
+  targets, address pinning, deploy drain, backlog metrics, stale leases, and
+  rollback. The SDK and `uptime cloud public-checks run-due` path handle
+  execution-time DNS and redirect enforcement for bounded EFS SQLite smokes. The
   `uptime cloud public-checks run-due` and `worker` commands are blocked unless
   `--allow-public-checks-bridge` or
   `HASNA_UPTIME_ALLOW_PUBLIC_CHECKS_BRIDGE=1` is set for a reviewed EFS SQLite
   bridge smoke. They are not the final cloud `check_jobs`/lease/fencing
-  protocol.
+  protocol. The separate `uptime cloud postgres-public-probe run` command can
+  review existing Postgres `check_jobs`, but it does not create scheduler slots
+  or make the generic ECS public-probe worker startable.
 - Do not enable scheduler, public-probe, reporter, or migration workers against
   the EFS SQLite bridge; those services need Postgres/cloud leases first.
 - Do not expose dashboard/API routes without hosted auth and workspace checks.

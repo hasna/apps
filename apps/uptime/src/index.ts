@@ -33,7 +33,7 @@ export {
   PostgresReportRuntime,
   sanitizePostgresReportRuntimeError,
 } from "./postgres-report-runtime.js";
-export { runHostedPublicChecksWorker } from "./workers.js";
+export { runHostedPublicChecksWorker, runPostgresPublicProbeWorker } from "./workers.js";
 export { runEdgeSmoke } from "./edge-smoke.js";
 export { uptimeHome, uptimeDbPath, uptimeHostedFallbackDbPath, ensureUptimeHome } from "./paths.js";
 export type {
@@ -137,12 +137,15 @@ export type {
 } from "./postgres.js";
 export type {
   ClaimPostgresCheckJobInput,
+  CancelPostgresClaimedCheckJobInput,
   CreatePostgresCheckJobInput,
+  GetPostgresMonitorOptions,
   ListDuePostgresCheckJobsOptions,
   PostgresAuditEventRecord,
   PostgresCheckJobRecord,
   PostgresCheckResultRecord,
   PostgresMonitorRecord,
+  PostgresMonitorSnapshot,
   PostgresProbeIdentityRecord,
   PostgresProbeSubmissionRecord,
   PostgresRuntimeOptions,
@@ -176,6 +179,10 @@ export type {
   HostedPublicChecksWorkerIteration,
   HostedPublicChecksWorkerOptions,
   HostedPublicChecksWorkerSummary,
+  PostgresPublicProbeRuntime,
+  PostgresPublicProbeWorkerJobResult,
+  PostgresPublicProbeWorkerOptions,
+  PostgresPublicProbeWorkerSummary,
 } from "./workers.js";
 export type {
   EdgeSmokeCheck,

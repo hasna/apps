@@ -218,7 +218,7 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(tfvars).toContain("enable_cloudfront_origin_verify_header");
   expect(tfvars).toContain("cloudfront_origin_verify_header_name");
   expect(tfvars).toContain("cloudfront_origin_verify_header_value  = null");
-  expect(tfvars).toContain('runtime_package_version   = "0.1.42"');
+  expect(tfvars).toContain('runtime_package_version   = "0.1.43"');
   expect(tfvars).toContain("runtime_package_integrity = null");
   expect(tfvars).toContain("allow_unpinned_runtime_package_integrity = false");
   expect(tfvars).toContain('project_name             = "open-uptime"');

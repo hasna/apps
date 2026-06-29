@@ -739,10 +739,10 @@ test("CLI hosted worker entrypoints preflight and fail closed", () => {
       "postgres-check-jobs-leases": true,
       "postgres-audit-tombstones": true,
       "cloud-worker-leases": false,
-      "public-probe-job-claims": false,
+      "public-probe-job-claims": true,
     });
     expect(preflightJson.blockers.join("\n")).toContain("postgres-adapter");
-    expect(preflightJson.blockers.join("\n")).toContain("public-probe-job-claims");
+    expect(preflightJson.blockers.join("\n")).not.toContain("public-probe-job-claims");
     expect(preflightJson.blockers.join("\n")).toContain("cloud-worker-leases");
 
     expect(run.exitCode).toBe(1);
@@ -769,6 +769,24 @@ test("CLI hosted worker entrypoints preflight and fail closed", () => {
         },
       });
     }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("CLI Postgres public-probe runner requires explicit workspace", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const result = runCli(["cloud", "postgres-public-probe", "run", "--probe-id", "prb_public", "--json"], dbPath, {
+      HASNA_UPTIME_MODE: "hosted",
+      HASNA_UPTIME_WORKSPACE_ID: "",
+    });
+    const body = JSON.parse(new TextDecoder().decode(result.stdout));
+
+    expect(result.exitCode).toBe(1);
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain("--workspace-id");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

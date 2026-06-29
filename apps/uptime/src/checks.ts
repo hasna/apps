@@ -2,7 +2,7 @@ import dns from "node:dns/promises";
 import http, { type IncomingHttpHeaders } from "node:http";
 import https from "node:https";
 import net from "node:net";
-import { assertHostedHttpUrlAllowed, assertHostedResolvedAddressesAllowed, normalizeHostedHost, type HostedResolvedAddress } from "./target-policy.js";
+import { assertHostedHostAllowed, assertHostedHttpUrlAllowed, assertHostedResolvedAddressesAllowed, normalizeHostedHost, type HostedResolvedAddress } from "./target-policy.js";
 import type { BrowserFailedRequest, BrowserPageEvidence, CheckAttemptResult, EvidenceArtifact, HttpTargetPolicyDecision, HttpTargetPolicyEvidence, Monitor } from "./types.js";
 
 export type FetchLike = (input: string, init: RequestInit) => Promise<{ status: number }>;
@@ -200,7 +200,9 @@ export async function runHostedTcpCheck(monitor: Monitor, options: HostedTcpChec
   if (!monitor.host || !monitor.port) return { status: "down", latencyMs: null, error: "missing host or port" };
   const resolver = options.resolveHost ?? resolveHostedHost;
   try {
-    const addresses = normalizeResolvedAddresses(await resolver(normalizeHostedHost(monitor.host)));
+    const host = normalizeHostedHost(monitor.host);
+    assertHostedHostAllowed(host, "TCP host");
+    const addresses = normalizeResolvedAddresses(await resolver(host));
     assertHostedResolvedAddressesAllowed(monitor.host, addresses, "TCP resolved address");
     const address = addresses[0];
     return runTcpSocket(address.address, monitor.port, monitor.timeoutMs, address.family);

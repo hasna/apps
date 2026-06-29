@@ -20,7 +20,7 @@ test("published package exports and bins are usable after build", async () => {
     "./postgres": ["buildPostgresMigrationDryRun", "runPostgresMigration"],
     "./postgres-runtime": ["buildPostgresRuntimeReadiness", "createPostgresRuntime"],
     "./postgres-report-runtime": ["buildPostgresReportRuntimeReadiness", "createPostgresReportRuntime"],
-    "./workers": ["runHostedPublicChecksWorker"],
+    "./workers": ["runHostedPublicChecksWorker", "runPostgresPublicProbeWorker"],
     "./edge-smoke": ["runEdgeSmoke"],
   };
 

@@ -284,9 +284,12 @@ current hosted API enforces configuration-time checks for direct denied hosts,
 secret-bearing URLs, and private DNS suffixes. The SDK also exposes
 `runHostedHttpCheck` for hosted public HTTP probes; it resolves DNS at
 execution time, denies unsafe answers, pins the validated address into the
-request, validates redirects, and records target-policy decisions. Public probe
-execution remains disabled until cloud check-job leases are wired to this runner
-and the behavior is validated in AWS.
+request, validates redirects, and records target-policy decisions. The bounded
+`uptime cloud postgres-public-probe run` review command can claim existing
+Postgres `check_jobs` and run HTTP/TCP checks through that policy, but generic
+public-probe ECS execution remains disabled until the service/API scheduler
+contracts, deploy drain, backlog/stale-lease alarms, and AWS behavior are
+validated end to end.
 
 The required hosted public-probe policy must deny:
 
@@ -482,7 +485,9 @@ required before browser evidence or public probe scale-out.
   Uptime and any deployment tooling.
 - The first bridge deploy runs one web task maximum with web-only EFS write IAM;
   scheduler, public probe, reporter, and migration roles remain disabled until
-  their cloud data paths are implemented.
+  their cloud data paths are implemented and validated. The bounded Postgres
+  public-probe review command does not change desired counts or the generic ECS
+  public-probe worker command.
 - Hosted routes except `/health` require app auth and workspace RBAC.
 - Final cloud-primary runtime state is Postgres plus S3 artifacts; the current
   EFS SQLite bridge is explicitly temporary and not the target source of truth.

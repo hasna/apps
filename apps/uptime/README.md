@@ -50,6 +50,7 @@ uptime cloud memory-preflight --healthcheck --json
 uptime cloud postgres-plan --json
 uptime cloud postgres-plan --sql
 uptime cloud workers preflight --role public-probe --json
+uptime cloud postgres-public-probe run --workspace-id ws_internal --probe-id prb_public_01 --max-jobs 10 --json
 uptime cloud public-checks worker --workspace-id ws_internal --max-iterations 1 --hosted-sqlite-db /data/uptime/uptime.db --allow-public-checks-bridge
 uptime cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --json
 uptime cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --env --allow-blocked-env
@@ -89,8 +90,13 @@ Postgres runtime adapter is wired through `UptimeService`, the API, and worker
 loops. The `@hasna/uptime/postgres-runtime` export is a bounded core facade for
 workspace-scoped monitor upserts, probe identities, check jobs, probe
 submissions, audit rows, and tombstones. It is SDK/runtime groundwork, not a
-hosted service-store promotion gate. The `@hasna/uptime/postgres-report-runtime`
-export can write finished report metadata, delivery-attempt state, retry
+hosted service-store promotion gate. `uptime cloud postgres-public-probe run`
+runs one bounded Postgres public-probe review batch from existing `check_jobs`.
+This is not the EFS SQLite `cloud public-checks` bridge, does not create
+schedule slots, does not enable hosted API probe routes, and does not make
+hosted worker preflight `canStart=true`. The
+`@hasna/uptime/postgres-report-runtime` export can write finished report
+metadata, delivery-attempt state, retry
 metadata, and redacted artifact metadata refs for review, but it is also not a
 promotion gate. `uptime cloud postgres-plan` exposes the reviewed target schema,
 workspace RLS policy shape, tombstones, audit tables, idempotency fields, and
@@ -103,11 +109,12 @@ monitor names unique only among non-deleted rows.
 `uptime cloud workers preflight --role <role>` reports machine-checkable
 blockers for hosted scheduler, public-probe, reporter, and migration roles.
 `--healthcheck` is readiness-like and exits non-zero while `canStart=false`.
-Their `run` entrypoints fail closed until Postgres, check jobs, channel refs,
-authoritative report schedule/run claiming, object artifact storage, audit
-export, alarms, and migration plans exist. Reporter preflight may show narrower
-Postgres metadata capabilities as implemented while still returning
-`canStart=false`.
+Their generic `run` entrypoints fail closed until Postgres service integration,
+channel refs, authoritative report schedule/run claiming, object artifact
+storage, audit export, alarms, and migration plans exist. Public-probe preflight
+can name the bounded Postgres public-probe batch runner as implemented while
+still returning `canStart=false`; the ECS worker command remains the blocked
+generic `cloud workers run --role public-probe` path.
 `uptime cloud public-checks run-due` and `worker` are only bounded EFS SQLite
 bridge paths around hosted HTTP/TCP smoke checks, and they require
 `--allow-public-checks-bridge` or `HASNA_UPTIME_ALLOW_PUBLIC_CHECKS_BRIDGE=1`.

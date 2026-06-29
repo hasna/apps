@@ -1,5 +1,5 @@
-export const POSTGRES_PLAN_VERSION = 3;
-export const POSTGRES_SCHEMA_VERSION = "3";
+export const POSTGRES_PLAN_VERSION = 4;
+export const POSTGRES_SCHEMA_VERSION = "4";
 export const DEFAULT_POSTGRES_SCHEMA = "uptime";
 export const DEFAULT_WORKSPACE_SETTING = "app.workspace_id";
 
@@ -293,6 +293,7 @@ ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.up
   id text NOT NULL,
   monitor_id text NOT NULL,
   monitor_version bigint NOT NULL,
+  monitor_snapshot jsonb NOT NULL,
   schedule_slot timestamptz NOT NULL,
   probe_policy jsonb NOT NULL DEFAULT '{}'::jsonb,
   probe_policy_hash text NOT NULL,
@@ -495,9 +496,47 @@ ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.up
 }
 
 function buildSchemaUpgradeStatements(schemaName: string): string[] {
+  const checkJobs = q(schemaName, "check_jobs");
+  const monitors = q(schemaName, "monitors");
   const probeIdentities = q(schemaName, "probe_identities");
   const probeSubmissions = q(schemaName, "probe_submissions");
   return [
+    `ALTER TABLE ${checkJobs} ADD COLUMN IF NOT EXISTS monitor_snapshot jsonb;`,
+    `UPDATE ${checkJobs} AS job
+SET monitor_snapshot = jsonb_build_object(
+  'workspaceId', monitor.workspace_id,
+  'id', monitor.id,
+  'name', monitor.name,
+  'kind', monitor.kind,
+  'url', monitor.url,
+  'host', monitor.host,
+  'port', monitor.port,
+  'method', monitor.method,
+  'expectedStatus', monitor.expected_status,
+  'intervalSeconds', monitor.interval_seconds,
+  'timeoutMs', monitor.timeout_ms,
+  'retryCount', monitor.retry_count,
+  'enabled', monitor.enabled,
+  'status', monitor.status,
+  'lastCheckedAt', monitor.last_checked_at,
+  'revision', monitor.version,
+  'createdAt', monitor.created_at,
+  'updatedAt', monitor.updated_at
+)
+FROM ${monitors} AS monitor
+WHERE job.workspace_id = monitor.workspace_id
+  AND job.monitor_id = monitor.id
+  AND job.monitor_version = monitor.version
+  AND job.monitor_snapshot IS NULL;`,
+    `UPDATE ${checkJobs} SET monitor_snapshot = '{}'::jsonb WHERE monitor_snapshot IS NULL;`,
+    `UPDATE ${checkJobs}
+SET status = 'cancelled',
+    updated_at = now(),
+    version = version + 1
+WHERE monitor_snapshot = '{}'::jsonb
+  AND status IN ('pending', 'claimed', 'expired');`,
+    `ALTER TABLE ${checkJobs} ALTER COLUMN monitor_snapshot SET NOT NULL;`,
+    `ALTER TABLE ${checkJobs} ALTER COLUMN monitor_snapshot DROP DEFAULT;`,
     `ALTER TABLE ${probeIdentities} ADD COLUMN IF NOT EXISTS probe_location text;`,
     `UPDATE ${probeIdentities} SET probe_location = 'default' WHERE probe_location IS NULL;`,
     `ALTER TABLE ${probeIdentities} ALTER COLUMN probe_location SET DEFAULT 'default';`,

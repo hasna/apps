@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createPostgresPool, type PostgresQueryClient } from "./postgres.js";
 import { buildPostgresMigrationPlan, redactPostgresUrl } from "./postgres-plan.js";
+import { probeResultPayloadHash } from "./probes.js";
 import type {
   CheckEvidence,
   CheckStatus,
@@ -138,11 +139,43 @@ export interface CreatePostgresCheckJobInput {
   idempotencyKey?: string | null;
 }
 
+export interface PostgresMonitorSnapshot {
+  workspaceId: string;
+  id: string;
+  name: string;
+  kind: MonitorKind;
+  url: string | null;
+  host: string | null;
+  port: number | null;
+  method: string;
+  expectedStatus: number | null;
+  intervalSeconds: number;
+  timeoutMs: number;
+  retryCount: number;
+  enabled: boolean;
+  status: MonitorStatus;
+  lastCheckedAt: string | null;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ClaimPostgresCheckJobInput {
   workspaceId?: string;
   jobId: string;
   probeId: string;
   leaseTtlMs?: number;
+}
+
+export interface CancelPostgresClaimedCheckJobInput {
+  workspaceId?: string;
+  jobId: string;
+  probeId: string;
+  fencingToken: string;
+  reason?: string | null;
+  actor?: string | null;
+  origin?: string | null;
+  idempotencyKey?: string | null;
 }
 
 export interface ListDuePostgresCheckJobsOptions {
@@ -151,11 +184,17 @@ export interface ListDuePostgresCheckJobsOptions {
   limit?: number;
 }
 
+export interface GetPostgresMonitorOptions {
+  workspaceId?: string;
+  id: string;
+}
+
 export interface PostgresCheckJobRecord {
   workspaceId: string;
   id: string;
   monitorId: string;
   monitorRevision: number;
+  monitorSnapshot: PostgresMonitorSnapshot;
   scheduleSlot: string;
   probePolicy: ProbePolicy;
   probePolicyHash: string;
@@ -438,6 +477,18 @@ export class PostgresRuntime {
     return probeIdentityFromRow(firstRow(result, "probe identity"));
   }
 
+  async getMonitor(input: GetPostgresMonitorOptions): Promise<PostgresMonitorRecord | null> {
+    const workspaceId = normalizeWorkspaceId(input.workspaceId ?? this.workspaceId);
+    const id = normalizeId(input.id);
+    const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
+      `SELECT * FROM ${this.table("monitors")}
+       WHERE workspace_id = $1 AND id = $2 AND deleted_at IS NULL`,
+      [workspaceId, id],
+    ));
+    const row = result.rows[0];
+    return row ? monitorFromRow(row as Record<string, unknown>) : null;
+  }
+
   async createCheckJob(input: CreatePostgresCheckJobInput): Promise<PostgresCheckJobRecord> {
     const workspaceId = normalizeWorkspaceId(input.workspaceId ?? this.workspaceId);
     const monitorId = normalizeId(input.monitorId);
@@ -453,30 +504,43 @@ export class PostgresRuntime {
       scheduleSlot,
       probePolicyHash,
     }));
-    const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
-      `INSERT INTO ${this.table("check_jobs")} (
-        workspace_id, id, monitor_id, monitor_version, schedule_slot, probe_policy,
-        probe_policy_hash, status, due_at, deploy_generation, actor, origin, idempotency_key
-      ) VALUES ($1, $2, $3, $4, $5::timestamptz, $6::jsonb, $7, 'pending', $8::timestamptz, $9, $10, $11, $12)
-      ON CONFLICT (workspace_id, monitor_id, monitor_version, schedule_slot, probe_policy_hash) DO UPDATE SET
-        updated_at = ${this.table("check_jobs")}.updated_at
-      WHERE ${this.table("check_jobs")}.deleted_at IS NULL
-      RETURNING *`,
-      [
-        workspaceId,
-        id,
-        monitorId,
-        monitorRevision,
-        scheduleSlot,
-        JSON.stringify(probePolicy),
-        probePolicyHash,
-        dueAt,
-        normalizeNonNegativeInteger(input.deployGeneration ?? 0, "deployGeneration"),
-        normalizeNullableOpaqueText(input.actor, "check job actor", 160),
-        normalizeNullableOpaqueText(input.origin, "check job origin", 160),
-        normalizeNullableOpaqueText(input.idempotencyKey, "check job idempotency key", 256),
-      ],
-    ));
+    const result = await this.withWorkspaceTransaction(workspaceId, async (client) => {
+      const monitorResult = await client.query(
+        `SELECT * FROM ${this.table("monitors")}
+         WHERE workspace_id = $1
+           AND id = $2
+           AND version = $3
+           AND enabled = true
+           AND deleted_at IS NULL`,
+        [workspaceId, monitorId, monitorRevision],
+      );
+      const monitorSnapshot = monitorSnapshotFromMonitor(monitorFromRow(firstRow(monitorResult, "monitor snapshot")));
+      return client.query(
+        `INSERT INTO ${this.table("check_jobs")} (
+          workspace_id, id, monitor_id, monitor_version, monitor_snapshot, schedule_slot, probe_policy,
+          probe_policy_hash, status, due_at, deploy_generation, actor, origin, idempotency_key
+        ) VALUES ($1, $2, $3, $4, $5::jsonb, $6::timestamptz, $7::jsonb, $8, 'pending', $9::timestamptz, $10, $11, $12, $13)
+        ON CONFLICT (workspace_id, monitor_id, monitor_version, schedule_slot, probe_policy_hash) DO UPDATE SET
+          updated_at = ${this.table("check_jobs")}.updated_at
+        WHERE ${this.table("check_jobs")}.deleted_at IS NULL
+        RETURNING *`,
+        [
+          workspaceId,
+          id,
+          monitorId,
+          monitorRevision,
+          JSON.stringify(monitorSnapshot),
+          scheduleSlot,
+          JSON.stringify(probePolicy),
+          probePolicyHash,
+          dueAt,
+          normalizeNonNegativeInteger(input.deployGeneration ?? 0, "deployGeneration"),
+          normalizeNullableOpaqueText(input.actor, "check job actor", 160),
+          normalizeNullableOpaqueText(input.origin, "check job origin", 160),
+          normalizeNullableOpaqueText(input.idempotencyKey, "check job idempotency key", 256),
+        ],
+      );
+    });
     return checkJobFromRow(firstRow(result, "check job"));
   }
 
@@ -489,6 +553,7 @@ export class PostgresRuntime {
        WHERE workspace_id = $1
          AND deleted_at IS NULL
          AND submitted_result_id IS NULL
+         AND monitor_snapshot <> '{}'::jsonb
          AND due_at <= $2::timestamptz
          AND (
            status IN ('pending', 'expired')
@@ -507,8 +572,9 @@ export class PostgresRuntime {
     const probeId = normalizeId(input.probeId);
     const leaseTtlMs = normalizePositiveInteger(input.leaseTtlMs ?? 120_000, "leaseTtlMs");
     const fencingToken = `fence_${randomUUID().replace(/-/g, "")}`;
-    const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
-      `WITH probe AS (
+    return this.withWorkspaceTransaction(workspaceId, async (client) => {
+      const result = await client.query(
+        `WITH probe AS (
          SELECT id, probe_class, probe_location
          FROM ${this.table("probe_identities")}
          WHERE workspace_id = $1 AND id = $3 AND enabled = true AND deleted_at IS NULL
@@ -546,6 +612,7 @@ export class PostgresRuntime {
          AND job.id = $2
          AND job.deleted_at IS NULL
          AND job.submitted_result_id IS NULL
+         AND job.monitor_snapshot <> '{}'::jsonb
          AND job.due_at <= now()
          AND (
            job.status IN ('pending', 'expired')
@@ -557,7 +624,45 @@ export class PostgresRuntime {
            OR (job.probe_policy->'locations') ? probe.probe_location
          )
        RETURNING job.*`,
-      [workspaceId, jobId, probeId, fencingToken, leaseTtlMs],
+        [workspaceId, jobId, probeId, fencingToken, leaseTtlMs],
+      );
+      const row = result.rows[0];
+      return row ? checkJobFromRow(row as Record<string, unknown>) : null;
+    });
+  }
+
+  async cancelClaimedCheckJob(input: CancelPostgresClaimedCheckJobInput): Promise<PostgresCheckJobRecord | null> {
+    const workspaceId = normalizeWorkspaceId(input.workspaceId ?? this.workspaceId);
+    const jobId = normalizeId(input.jobId);
+    const probeId = normalizeId(input.probeId);
+    const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
+      `UPDATE ${this.table("check_jobs")}
+       SET status = 'cancelled',
+           fencing_token = NULL,
+           lease_expires_at = NULL,
+           actor = $5,
+           origin = $6,
+           idempotency_key = $7,
+           updated_at = now(),
+           version = version + 1
+       WHERE workspace_id = $1
+         AND id = $2
+         AND deleted_at IS NULL
+         AND status = 'claimed'
+         AND claimed_by_probe_id = $3
+         AND fencing_token = $4
+         AND lease_expires_at > now()
+         AND submitted_result_id IS NULL
+       RETURNING *`,
+      [
+        workspaceId,
+        jobId,
+        probeId,
+        normalizeOpaqueText(input.fencingToken, "fencing token", 160),
+        normalizeNullableOpaqueText(input.actor, "check job cancel actor", 160),
+        normalizeNullableOpaqueText(input.origin, "check job cancel origin", 160),
+        normalizeNullableOpaqueText(input.idempotencyKey ?? input.reason, "check job cancel idempotency key", 256),
+      ],
     ));
     const row = result.rows[0];
     return row ? checkJobFromRow(row as Record<string, unknown>) : null;
@@ -568,21 +673,16 @@ export class PostgresRuntime {
     const jobId = normalizeId(input.jobId);
     const probeId = normalizeId(input.probeId);
     const checkedAt = normalizeIsoTimestamp(input.checkedAt, "probe checkedAt");
-    const payloadHash = normalizeSha256(input.payloadHash, "probe payload hash");
+    const suppliedPayloadHash = normalizeSha256(input.payloadHash, "probe payload hash");
     const evidence = input.evidence == null ? null : normalizeEvidence(input.evidence);
-    const resultId = deterministicId("chk", workspaceId, jobId, probeId, payloadHash);
-    const submissionId = deterministicId("psb", workspaceId, probeId, input.nonce);
+    const normalizedNonce = normalizeNonce(input.nonce);
+    const fencingToken = normalizeOpaqueText(input.fencingToken, "fencing token", 160);
+    const status = normalizeCheckStatus(input.status);
+    const latencyMs = normalizeNullableNonNegativeNumber(input.latencyMs, "latencyMs");
+    const statusCode = normalizeNullableExpectedStatus(input.statusCode);
+    const error = normalizeNullableRedactedText(input.error, "check result error", 1000);
+    const attemptCount = normalizePositiveInteger(input.attemptCount ?? 1, "attemptCount");
     return this.withWorkspaceTransaction(workspaceId, async (client) => {
-      const existingSubmission = await client.query(
-        `SELECT * FROM ${this.table("probe_submissions")}
-         WHERE workspace_id = $1 AND probe_id = $2 AND nonce = $3 AND deleted_at IS NULL`,
-        [workspaceId, probeId, normalizeNonce(input.nonce)],
-      );
-      const existing = existingSubmission.rows[0] as Record<string, unknown> | undefined;
-      if (existing && String(existing.payload_hash ?? "") !== payloadHash) {
-        throw new Error("probe submission nonce replay conflict");
-      }
-      const existingSubmissionRecord = existing ? probeSubmissionFromRow(existing) : null;
       const jobResult = await client.query(
         `SELECT * FROM ${this.table("check_jobs")}
          WHERE workspace_id = $1 AND id = $2 AND deleted_at IS NULL
@@ -591,6 +691,37 @@ export class PostgresRuntime {
       );
       const currentJob = jobResult.rows[0] ? checkJobFromRow(jobResult.rows[0] as Record<string, unknown>) : null;
       if (!currentJob) throw new Error("probe check job not found");
+      const payloadHash = probeResultPayloadHash({
+        probeId,
+        jobId: currentJob.id,
+        scheduleSlot: currentJob.scheduleSlot,
+        fencingToken,
+        monitorId: currentJob.monitorId,
+        nonce: normalizedNonce,
+        checkedAt,
+        status,
+        latencyMs,
+        statusCode,
+        error,
+        attemptCount,
+        monitorRevision: currentJob.monitorRevision,
+        evidence,
+      });
+      if (suppliedPayloadHash !== payloadHash) {
+        throw new Error("probe payload hash mismatch");
+      }
+      const resultId = deterministicId("chk", workspaceId, currentJob.id, probeId, payloadHash);
+      const submissionId = deterministicId("psb", workspaceId, probeId, normalizedNonce);
+      const existingSubmission = await client.query(
+        `SELECT * FROM ${this.table("probe_submissions")}
+         WHERE workspace_id = $1 AND probe_id = $2 AND nonce = $3 AND deleted_at IS NULL`,
+        [workspaceId, probeId, normalizedNonce],
+      );
+      const existing = existingSubmission.rows[0] as Record<string, unknown> | undefined;
+      if (existing && String(existing.payload_hash ?? "") !== payloadHash) {
+        throw new Error("probe submission nonce replay conflict");
+      }
+      const existingSubmissionRecord = existing ? probeSubmissionFromRow(existing) : null;
       if (existingSubmissionRecord) {
         if (currentJob.submittedResultId !== existingSubmissionRecord.checkResultId) {
           throw new Error("probe submission replay conflict");
@@ -622,6 +753,28 @@ export class PostgresRuntime {
       if (currentJob.probePolicy.locations.length > 0 && !currentJob.probePolicy.locations.includes(submittedProbeLocation)) {
         throw new Error("probe location does not match check job policy");
       }
+      const monitorUpdate = await client.query(
+        `UPDATE ${this.table("monitors")}
+         SET status = $3,
+             last_checked_at = $4::timestamptz,
+             updated_at = now()
+         WHERE workspace_id = $1
+           AND id = $2
+           AND version = $5
+           AND enabled = true
+           AND deleted_at IS NULL
+         RETURNING *`,
+        [
+          workspaceId,
+          currentJob.monitorId,
+          normalizeMonitorStatus(status === "up" ? "up" : "down"),
+          checkedAt,
+          currentJob.monitorRevision,
+        ],
+      );
+      if (!monitorUpdate.rows[0]) {
+        throw new Error("monitor changed since check job was created");
+      }
       const result = await client.query(
         `INSERT INTO ${this.table("check_results")} (
           workspace_id, id, monitor_id, job_id, probe_id, monitor_version,
@@ -646,11 +799,11 @@ export class PostgresRuntime {
           submittedProbeLocation,
           currentJob.probePolicyHash,
           checkedAt,
-          normalizeCheckStatus(input.status),
-          normalizeNullableNonNegativeNumber(input.latencyMs, "latencyMs"),
-          normalizeNullableExpectedStatus(input.statusCode),
-          normalizeNullableRedactedText(input.error, "check result error", 1000),
-          normalizePositiveInteger(input.attemptCount ?? 1, "attemptCount"),
+          status,
+          latencyMs,
+          statusCode,
+          error,
+          attemptCount,
           evidence == null ? null : JSON.stringify(evidence),
           normalizeNullableOpaqueText(input.actor, "check result actor", 160),
           normalizeNullableOpaqueText(input.origin, "check result origin", 160),
@@ -675,7 +828,7 @@ export class PostgresRuntime {
           currentJob.id,
           currentJob.monitorId,
           resultId,
-          normalizeNonce(input.nonce),
+          normalizedNonce,
           payloadHash,
           checkedAt,
           normalizeNullableOpaqueText(input.actor, "probe submission actor", 160),
@@ -705,7 +858,7 @@ export class PostgresRuntime {
            AND lease_expires_at > now()
            AND submitted_result_id IS NULL
          RETURNING *`,
-        [workspaceId, currentJob.id, probeId, resultId, normalizeOpaqueText(input.fencingToken, "fencing token", 160)],
+        [workspaceId, currentJob.id, probeId, resultId, fencingToken],
       );
       const completedJob = completed.rows[0];
       if (!completedJob) throw new Error("probe check job completion conflict");
@@ -1014,6 +1167,29 @@ function monitorFromRow(row: Record<string, unknown>): PostgresMonitorRecord {
   };
 }
 
+function monitorSnapshotFromMonitor(row: PostgresMonitorRecord): PostgresMonitorSnapshot {
+  return {
+    workspaceId: row.workspaceId,
+    id: row.id,
+    name: row.name,
+    kind: row.kind,
+    url: row.url,
+    host: row.host,
+    port: row.port,
+    method: row.method,
+    expectedStatus: row.expectedStatus,
+    intervalSeconds: row.intervalSeconds,
+    timeoutMs: row.timeoutMs,
+    retryCount: row.retryCount,
+    enabled: row.enabled,
+    status: row.status,
+    lastCheckedAt: row.lastCheckedAt,
+    revision: row.revision,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
 function probeIdentityFromRow(row: Record<string, unknown>): PostgresProbeIdentityRecord {
   return {
     workspaceId: stringField(row.workspace_id),
@@ -1037,6 +1213,7 @@ function checkJobFromRow(row: Record<string, unknown>): PostgresCheckJobRecord {
     id: stringField(row.id),
     monitorId: stringField(row.monitor_id),
     monitorRevision: numberField(row.monitor_version),
+    monitorSnapshot: monitorSnapshotFromJson(row.monitor_snapshot),
     scheduleSlot: isoFromField(row.schedule_slot),
     probePolicy: normalizeProbePolicy(parseJsonObject(row.probe_policy) as unknown as ProbePolicy),
     probePolicyHash: stringField(row.probe_policy_hash),
@@ -1051,6 +1228,30 @@ function checkJobFromRow(row: Record<string, unknown>): PostgresCheckJobRecord {
     version: numberField(row.version),
     createdAt: isoFromField(row.created_at),
     updatedAt: isoFromField(row.updated_at),
+  };
+}
+
+function monitorSnapshotFromJson(value: unknown): PostgresMonitorSnapshot {
+  const raw = parseJsonObject(value);
+  return {
+    workspaceId: normalizeWorkspaceId(stringField(raw.workspaceId)),
+    id: normalizeId(stringField(raw.id)),
+    name: normalizeName(stringField(raw.name), "monitor snapshot name"),
+    kind: normalizeMonitorKind(stringField(raw.kind)),
+    url: normalizeNullableMonitorUrl(nullableStringField(raw.url)),
+    host: normalizeNullableHost(nullableStringField(raw.host)),
+    port: normalizeNullablePort(nullableNumberField(raw.port)),
+    method: normalizeMethod(stringField(raw.method)),
+    expectedStatus: normalizeNullableExpectedStatus(nullableNumberField(raw.expectedStatus)),
+    intervalSeconds: normalizePositiveInteger(numberField(raw.intervalSeconds), "monitor snapshot intervalSeconds"),
+    timeoutMs: normalizePositiveInteger(numberField(raw.timeoutMs), "monitor snapshot timeoutMs"),
+    retryCount: normalizeNonNegativeInteger(numberField(raw.retryCount), "monitor snapshot retryCount"),
+    enabled: booleanField(raw.enabled),
+    status: normalizeMonitorStatus(stringField(raw.status)),
+    lastCheckedAt: normalizeNullableIsoTimestamp(nullableStringField(raw.lastCheckedAt), "monitor snapshot lastCheckedAt"),
+    revision: normalizePositiveInteger(numberField(raw.revision), "monitor snapshot revision"),
+    createdAt: normalizeIsoTimestamp(stringField(raw.createdAt), "monitor snapshot createdAt"),
+    updatedAt: normalizeIsoTimestamp(stringField(raw.updatedAt), "monitor snapshot updatedAt"),
   };
 }
 

@@ -113,6 +113,26 @@ test("hosted TCP check rejects DNS answers to denied ranges before opening a soc
   expect(result.error).toContain("private or reserved IPv4");
 });
 
+test("hosted TCP check rejects denied hostnames before DNS resolution", async () => {
+  for (const host of ["localhost", "api.internal"]) {
+    let resolverCalled = false;
+    const result = await runHostedTcpCheck(monitor({
+      kind: "tcp",
+      url: null,
+      host,
+      port: 5432,
+    }), {
+      resolveHost: async () => {
+        resolverCalled = true;
+        return [{ address: "93.184.216.34", family: 4 }];
+      },
+    });
+
+    expect(result.status).toBe("down");
+    expect(resolverCalled).toBe(false);
+  }
+});
+
 test("runMonitorCheck applies hosted target policy to TCP monitors", async () => {
   const result = await runMonitorCheck(monitor({
     kind: "tcp",

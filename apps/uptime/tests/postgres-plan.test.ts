@@ -29,12 +29,17 @@ test("buildPostgresMigrationPlan emits a blocked cloud-store schema with tombsto
   expect(plan.requiredIndexes).toContain("report_delivery_attempts_due_idx");
   expect(plan.requiredIndexes).toContain("report_delivery_attempts_idempotency_idx");
   expect(plan.requiredIndexes).toContain("report_artifacts_run_idx");
-  expect(plan.schemaVersion).toBe("3");
+  expect(plan.schemaVersion).toBe("4");
   expect(plan.migrationStatements.join("\n")).toContain("CREATE TABLE IF NOT EXISTS \"uptime\".\"sync_tombstones\"");
   expect(plan.migrationStatements.join("\n")).toContain("CREATE TABLE IF NOT EXISTS \"uptime\".\"report_delivery_attempts\"");
   expect(plan.migrationStatements.join("\n")).toContain("CREATE TABLE IF NOT EXISTS \"uptime\".\"report_artifacts\"");
   expect(plan.migrationStatements.join("\n")).toContain("probe_policy jsonb");
   expect(plan.migrationStatements.join("\n")).toContain("probe_policy_hash text NOT NULL");
+  expect(plan.migrationStatements.join("\n")).toContain("monitor_snapshot jsonb NOT NULL");
+  expect(plan.migrationStatements.join("\n")).toContain("ALTER TABLE \"uptime\".\"check_jobs\" ADD COLUMN IF NOT EXISTS monitor_snapshot jsonb");
+  expect(plan.migrationStatements.join("\n")).toContain("jsonb_build_object");
+  expect(plan.migrationStatements.join("\n")).toContain("WHERE monitor_snapshot = '{}'::jsonb");
+  expect(plan.migrationStatements.join("\n")).toContain("ALTER TABLE \"uptime\".\"check_jobs\" ALTER COLUMN monitor_snapshot DROP DEFAULT");
   expect(plan.migrationStatements.join("\n")).toContain("ALTER TABLE \"uptime\".\"probe_identities\" ADD COLUMN IF NOT EXISTS probe_location text");
   expect(plan.migrationStatements.join("\n")).toContain("ALTER TABLE \"uptime\".\"probe_submissions\" ADD COLUMN IF NOT EXISTS monitor_revision bigint");
   expect(plan.migrationStatements.join("\n")).toContain("UPDATE \"uptime\".\"probe_submissions\" SET schedule_slot = checked_at WHERE schedule_slot IS NULL");
@@ -83,6 +88,8 @@ test("Postgres migration table contracts keep workspace, idempotency, and duplic
     expect(table(name)).toContain("idempotency_key text");
   }
   expect(table("check_jobs")).toContain("UNIQUE (workspace_id, monitor_id, monitor_version, schedule_slot, probe_policy_hash)");
+  expect(table("check_jobs")).toContain("monitor_snapshot jsonb NOT NULL");
+  expect(table("check_jobs")).not.toContain("monitor_snapshot jsonb NOT NULL DEFAULT '{}'::jsonb");
   expect(table("probe_submissions")).toContain("UNIQUE (workspace_id, probe_id, nonce)");
   expect(table("probe_submissions")).toContain("UNIQUE (workspace_id, job_id)");
   expect(table("probe_submissions")).toContain("monitor_revision bigint NOT NULL");
