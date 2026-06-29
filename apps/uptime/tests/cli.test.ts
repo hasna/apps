@@ -905,7 +905,7 @@ test("CLI reporter preflight validates hosted report channel refs while staying 
       "cloud-channel-refs": true,
       "report-run-cloud-store": false,
       "report-channel-secret-loader": false,
-      "report-schedule-claiming": false,
+      "report-schedule-claiming": true,
       "report-run-state-machine": false,
       "report-delivery-attempts": true,
       "report-delivery-idempotency": true,
@@ -920,7 +920,7 @@ test("CLI reporter preflight validates hosted report channel refs while staying 
     expect(body.blockers.join("\n")).toContain("cloud-worker-leases");
     expect(body.blockers.join("\n")).toContain("report-runtime-schema-verified");
     expect(body.blockers.join("\n")).toContain("report-channel-secret-loader");
-    expect(body.blockers.join("\n")).toContain("report-schedule-claiming");
+    expect(body.blockers.join("\n")).not.toContain("report-schedule-claiming");
     expect(body.blockers.join("\n")).toContain("report-run-state-machine");
     expect(body.blockers.join("\n")).toContain("report-artifact-object-store");
     expect(body.blockers.join("\n")).toContain("report-delivery-alarms");
@@ -987,7 +987,7 @@ test("CLI reporter preflight with report runtime schema evidence still fails clo
       "report-runtime-schema-verified": true,
       "report-run-cloud-store": false,
       "report-channel-secret-loader": false,
-      "report-schedule-claiming": false,
+      "report-schedule-claiming": true,
       "report-run-state-machine": false,
       "report-artifact-object-store": false,
       "report-audit-export": false,
@@ -997,7 +997,7 @@ test("CLI reporter preflight with report runtime schema evidence still fails clo
     expect(preflightBody.blockers.join("\n")).toContain("cloud-worker-leases");
     expect(preflightBody.blockers.join("\n")).toContain("report-run-cloud-store");
     expect(preflightBody.blockers.join("\n")).toContain("report-channel-secret-loader");
-    expect(preflightBody.blockers.join("\n")).toContain("report-schedule-claiming");
+    expect(preflightBody.blockers.join("\n")).not.toContain("report-schedule-claiming");
     expect(preflightBody.blockers.join("\n")).toContain("report-run-state-machine");
     expect(preflightBody.blockers.join("\n")).toContain("report-artifact-object-store");
     expect(preflightBody.blockers.join("\n")).toContain("report-audit-export");

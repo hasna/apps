@@ -7,11 +7,15 @@ import {
   type PostgresReportArtifactRecord,
   type PostgresReportDeliveryAttemptRecord,
   type PostgresReportRunRecord,
+  type PostgresReportScheduleClaimRecord,
 } from "../src/postgres-report-runtime.js";
 import type { PostgresQueryClient } from "../src/postgres.js";
 
 class FakeReportClient implements PostgresQueryClient {
   readonly queries: Array<{ sql: string; params?: unknown[] }> = [];
+  now = "2026-06-29T08:05:00.000Z";
+  schedule: PostgresReportScheduleClaimRecord | null = null;
+  rawScheduleChannels: unknown | null = null;
   deliveryAttempt: PostgresReportDeliveryAttemptRecord | null = null;
   releaseCount = 0;
 
@@ -37,6 +41,47 @@ class FakeReportClient implements PostgresQueryClient {
         idempotencyKey: params?.[12] == null ? null : String(params[12]),
       };
       return { rows: [snakeReportRun(row)], rowCount: 1 };
+    }
+    if (sql.includes("SELECT * FROM \"uptime\".\"report_schedules\"")) {
+      if (!this.schedule) return { rows: [], rowCount: 0 };
+      const due = this.schedule.enabled && this.schedule.nextRunAt <= String(params?.[1]);
+      const leaseExpired = !this.schedule.fencingToken || !this.schedule.leaseExpiresAt || this.schedule.leaseExpiresAt <= String(params?.[1]);
+      return { rows: due && leaseExpired ? [this.snakeSchedule()] : [], rowCount: due && leaseExpired ? 1 : 0 };
+    }
+    if (sql.includes("UPDATE \"uptime\".\"report_schedules\"") && sql.includes("SET claimed_by_worker_id = $3")) {
+      if (!this.schedule) return { rows: [], rowCount: 0 };
+      const now = this.now;
+      const due = this.schedule.enabled && this.schedule.nextRunAt <= now;
+      const leaseExpired = !this.schedule.fencingToken || !this.schedule.leaseExpiresAt || this.schedule.leaseExpiresAt <= now;
+      if (!due || !leaseExpired) return { rows: [], rowCount: 0 };
+      this.schedule = {
+        ...this.schedule,
+        claimedByWorkerId: String(params?.[2]),
+        fencingToken: String(params?.[3]),
+        leaseExpiresAt: new Date(new Date(now).getTime() + Number(params?.[4])).toISOString(),
+        version: this.schedule.version + 1,
+      };
+      return { rows: [this.snakeSchedule()], rowCount: 1 };
+    }
+    if (sql.includes("UPDATE \"uptime\".\"report_schedules\"") && sql.includes("claimed_by_worker_id = NULL")) {
+      if (!this.schedule) return { rows: [], rowCount: 0 };
+      if (!this.schedule.leaseExpiresAt || this.schedule.leaseExpiresAt <= this.now) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (this.schedule.claimedByWorkerId !== String(params?.[2]) || this.schedule.fencingToken !== String(params?.[3])) {
+        return { rows: [], rowCount: 0 };
+      }
+      const nextRunAt = new Date(new Date(this.schedule.nextRunAt).getTime() + this.schedule.intervalSeconds * 1000).toISOString();
+      this.schedule = {
+        ...this.schedule,
+        lastRunAt: this.schedule.nextRunAt,
+        nextRunAt,
+        claimedByWorkerId: null,
+        fencingToken: null,
+        leaseExpiresAt: null,
+        version: this.schedule.version + 1,
+      };
+      return { rows: [this.snakeSchedule()], rowCount: 1 };
     }
     if (sql.includes("INSERT INTO \"uptime\".\"report_delivery_attempts\"")) {
       this.deliveryAttempt = {
@@ -128,6 +173,14 @@ class FakeReportClient implements PostgresQueryClient {
 
   release(): void {
     this.releaseCount += 1;
+  }
+
+  private snakeSchedule(): Record<string, unknown> {
+    const row = snakeSchedule(this.schedule!);
+    if (this.rawScheduleChannels != null) {
+      row.channels_json = JSON.stringify(this.rawScheduleChannels);
+    }
+    return row;
   }
 }
 
@@ -246,6 +299,169 @@ test("Postgres report runtime redacts stale fencing tokens from due discovery", 
   expect(due[0]!.fencingToken).toBeNull();
 });
 
+test("Postgres report runtime claims due report schedule windows with fencing", async () => {
+  const client = new FakeReportClient();
+  client.schedule = {
+    workspaceId: "ws_runtime",
+    id: "rps_daily",
+    name: "daily",
+    enabled: true,
+    intervalSeconds: 3600,
+    nextRunAt: "2026-06-29T08:00:00.000Z",
+    lastRunAt: null,
+    subject: "Daily uptime",
+    channels: { email: false, sms: false, logs: true },
+    claimedByWorkerId: null,
+    fencingToken: null,
+    leaseExpiresAt: null,
+    version: 1,
+  };
+  const runtime = createPostgresReportRuntime({
+    client,
+    workspaceId: "ws_runtime",
+    now: () => new Date("2026-06-29T08:05:00.000Z"),
+  });
+
+  const due = await runtime.listDueReportSchedules({ now: "2026-06-29T08:05:00.000Z" });
+  const claimed = await runtime.claimReportSchedule({
+    id: "rps_daily",
+    workerId: "reporter-1",
+    now: "2026-06-29T08:05:00.000Z",
+    leaseTtlMs: 60_000,
+  });
+  const blockedWhileLeased = await runtime.claimReportSchedule({
+    id: "rps_daily",
+    workerId: "reporter-2",
+    now: "2026-06-29T08:05:30.000Z",
+    leaseTtlMs: 60_000,
+  });
+  const badComplete = await runtime.completeReportScheduleClaim({
+    id: "rps_daily",
+    workerId: "reporter-2",
+    fencingToken: claimed!.fencingToken!,
+    finishedAt: "2026-06-29T08:05:30.000Z",
+  });
+  const completed = await runtime.completeReportScheduleClaim({
+    id: "rps_daily",
+    workerId: "reporter-1",
+    fencingToken: claimed!.fencingToken!,
+    finishedAt: "2026-06-29T08:05:30.000Z",
+  });
+
+  expect(due).toHaveLength(1);
+  expect(due[0]!.fencingToken).toBeNull();
+  expect(due[0]!.channels).toEqual({ email: false, sms: false, logs: true });
+  expect(claimed?.lastRunAt).toBeNull();
+  expect(claimed?.nextRunAt).toBe("2026-06-29T08:00:00.000Z");
+  expect(claimed?.claimedByWorkerId).toBe("reporter-1");
+  expect(claimed?.fencingToken).toMatch(/^rsf_/);
+  expect(claimed?.leaseExpiresAt).toBe("2026-06-29T08:06:00.000Z");
+  expect(blockedWhileLeased).toBeNull();
+  expect(badComplete).toBeNull();
+  expect(completed?.lastRunAt).toBe("2026-06-29T08:00:00.000Z");
+  expect(completed?.nextRunAt).toBe("2026-06-29T09:00:00.000Z");
+  expect(completed?.claimedByWorkerId).toBeNull();
+  expect(completed?.fencingToken).toBeNull();
+  expect(client.queries.some((query) => query.sql.includes("next_run_at = next_run_at + (interval_seconds::bigint * interval '1 second')"))).toBe(true);
+  expect(client.queries.some((query) => query.sql.includes("AND fencing_token = $4"))).toBe(true);
+});
+
+test("Postgres report runtime reclaims expired report schedule claims without skipping the window", async () => {
+  const client = new FakeReportClient();
+  client.schedule = {
+    workspaceId: "ws_runtime",
+    id: "rps_daily",
+    name: "daily",
+    enabled: true,
+    intervalSeconds: 3600,
+    nextRunAt: "2026-06-29T08:00:00.000Z",
+    lastRunAt: null,
+    subject: "Daily uptime",
+    channels: { email: false, sms: false, logs: true },
+    claimedByWorkerId: null,
+    fencingToken: null,
+    leaseExpiresAt: null,
+    version: 1,
+  };
+  const runtime = createPostgresReportRuntime({ client, workspaceId: "ws_runtime" });
+
+  client.now = "2026-06-29T08:05:00.000Z";
+  const firstClaim = await runtime.claimReportSchedule({
+    id: "rps_daily",
+    workerId: "reporter-1",
+    leaseTtlMs: 60_000,
+  });
+
+  client.now = "2026-06-29T08:06:01.000Z";
+  const reclaimed = await runtime.claimReportSchedule({
+    id: "rps_daily",
+    workerId: "reporter-2",
+    leaseTtlMs: 60_000,
+  });
+  const staleComplete = await runtime.completeReportScheduleClaim({
+    id: "rps_daily",
+    workerId: "reporter-1",
+    fencingToken: firstClaim!.fencingToken!,
+  });
+  const completed = await runtime.completeReportScheduleClaim({
+    id: "rps_daily",
+    workerId: "reporter-2",
+    fencingToken: reclaimed!.fencingToken!,
+  });
+
+  expect(firstClaim?.lastRunAt).toBeNull();
+  expect(firstClaim?.nextRunAt).toBe("2026-06-29T08:00:00.000Z");
+  expect(reclaimed?.lastRunAt).toBeNull();
+  expect(reclaimed?.nextRunAt).toBe("2026-06-29T08:00:00.000Z");
+  expect(reclaimed?.claimedByWorkerId).toBe("reporter-2");
+  expect(staleComplete).toBeNull();
+  expect(completed?.lastRunAt).toBe("2026-06-29T08:00:00.000Z");
+  expect(completed?.nextRunAt).toBe("2026-06-29T09:00:00.000Z");
+  expect(client.queries.some((query) => query.sql.includes("AND next_run_at <= now()"))).toBe(true);
+  expect(client.queries.some((query) => query.sql.includes("AND lease_expires_at > now()"))).toBe(true);
+});
+
+test("Postgres report runtime omits raw channel payloads from report schedule discovery and claims", async () => {
+  const client = new FakeReportClient();
+  client.schedule = {
+    workspaceId: "ws_runtime",
+    id: "rps_sensitive",
+    name: "sensitive",
+    enabled: true,
+    intervalSeconds: 3600,
+    nextRunAt: "2026-06-29T08:00:00.000Z",
+    lastRunAt: null,
+    subject: "Sensitive uptime",
+    channels: { email: true, sms: true, logs: true },
+    claimedByWorkerId: null,
+    fencingToken: null,
+    leaseExpiresAt: null,
+    version: 1,
+  };
+  client.rawScheduleChannels = {
+    email: { apiUrl: "https://mailery.example.invalid/send", to: "ops@example.invalid", from: "status@example.invalid" },
+    sms: { to: "+15550101010" },
+    logs: { apiUrl: "https://logs.example.invalid/ingest?token=raw-secret", projectId: "open-uptime" },
+  };
+  const runtime = createPostgresReportRuntime({ client, workspaceId: "ws_runtime" });
+
+  const due = await runtime.listDueReportSchedules({ now: "2026-06-29T08:05:00.000Z" });
+  const claimed = await runtime.claimReportSchedule({
+    id: "rps_sensitive",
+    workerId: "reporter-1",
+    leaseTtlMs: 60_000,
+  });
+
+  const serialized = JSON.stringify({ due, claimed });
+  expect(due[0]!.channels).toEqual({ email: true, sms: true, logs: true });
+  expect(claimed?.channels).toEqual({ email: true, sms: true, logs: true });
+  expect(serialized).not.toContain("ops@example.invalid");
+  expect(serialized).not.toContain("+15550101010");
+  expect(serialized).not.toContain("mailery.example.invalid");
+  expect(serialized).not.toContain("logs.example.invalid");
+  expect(serialized).not.toContain("raw-secret");
+});
+
 test("Postgres report runtime rejects local artifacts and secret-looking refs", async () => {
   const runtime = createPostgresReportRuntime({ client: new FakeReportClient(), workspaceId: "ws_runtime" });
 
@@ -342,7 +558,7 @@ test("Postgres report runtime readiness can be marked ready only with schema evi
   expect(checks).toMatchObject({
     "report-runtime-schema-verified": true,
     "report-run-metadata-writer": true,
-    "report-schedule-claiming": false,
+    "report-schedule-claiming": true,
     "report-run-state-machine": false,
     "report-artifact-object-store": false,
     "report-audit-export": false,
@@ -351,13 +567,13 @@ test("Postgres report runtime readiness can be marked ready only with schema evi
   });
   expect(readiness.capabilities).toMatchObject({
     reportRunWriter: true,
-    scheduleClaiming: false,
+    scheduleClaiming: true,
     reportRunStateMachine: false,
     artifactObjectWriter: false,
     auditExport: false,
     deliveryAlarms: false,
   });
-  expect(readiness.blockers.join("\n")).toContain("report-schedule-claiming");
+  expect(readiness.blockers.join("\n")).not.toContain("report-schedule-claiming");
   expect(readiness.blockers.join("\n")).toContain("reporter-worker-liveness");
 });
 
@@ -427,6 +643,24 @@ function snakeReportRun(row: PostgresReportRunRecord): Record<string, unknown> {
     actor: row.actor,
     origin: row.origin,
     idempotency_key: row.idempotencyKey,
+  };
+}
+
+function snakeSchedule(row: PostgresReportScheduleClaimRecord): Record<string, unknown> {
+  return {
+    workspace_id: row.workspaceId,
+    id: row.id,
+    name: row.name,
+    enabled: row.enabled,
+    interval_seconds: row.intervalSeconds,
+    next_run_at: row.nextRunAt,
+    last_run_at: row.lastRunAt,
+    subject: row.subject,
+    channels_json: JSON.stringify(row.channels),
+    claimed_by_worker_id: row.claimedByWorkerId,
+    fencing_token: row.fencingToken,
+    lease_expires_at: row.leaseExpiresAt,
+    version: row.version,
   };
 }
 

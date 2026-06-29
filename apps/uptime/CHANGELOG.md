@@ -6,6 +6,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.53] - 2026-06-29
+
+### Added
+
+- Added transactional Postgres report schedule/window claiming with worker
+  leases and fencing tokens so hosted reporter review code can claim a due
+  schedule exactly once before creating delivery attempts.
+- Added redacted report schedule channel summaries for Postgres schedule claim
+  records so due discovery and claims never expose raw recipients or provider
+  endpoint payloads.
+- Added schema version 5 Postgres migration coverage for report schedule lease
+  fields and the report schedule due index.
+
+### Changed
+
+- Reporter preflight now treats report schedule/window claiming as implemented
+  while still blocking live reporter start on service-store promotion, channel
+  secret loading, the report run state machine, S3 artifact writes, audit
+  export, delivery alarms, and worker liveness.
+
 ## [0.1.52] - 2026-06-29
 
 ### Security

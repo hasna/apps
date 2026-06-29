@@ -159,10 +159,13 @@ export type {
   UpsertPostgresProbeIdentityInput,
 } from "./postgres-runtime.js";
 export type {
+  ClaimPostgresReportScheduleInput,
+  CompletePostgresReportScheduleClaimInput,
   ClaimPostgresReportDeliveryAttemptInput,
   CompletePostgresReportDeliveryAttemptInput,
   CreatePostgresReportDeliveryAttemptInput,
   ListDuePostgresReportDeliveryAttemptsOptions,
+  ListDuePostgresReportSchedulesOptions,
   PostgresReportArtifactRecord,
   PostgresReportArtifactRetentionClass,
   PostgresReportArtifactType,
@@ -171,6 +174,8 @@ export type {
   PostgresReportRunRecord,
   PostgresReportRuntimeOptions,
   PostgresReportRuntimeReadiness,
+  PostgresReportScheduleChannelSummary,
+  PostgresReportScheduleClaimRecord,
   RecordPostgresReportArtifactInput,
   RecordPostgresReportRunInput,
 } from "./postgres-report-runtime.js";

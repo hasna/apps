@@ -26,10 +26,11 @@ test("buildPostgresMigrationPlan emits a blocked cloud-store schema with tombsto
   expect(plan.requiredPolicies).toContain("report_delivery_attempts_workspace_scope");
   expect(plan.requiredPolicies).toContain("report_artifacts_workspace_scope");
   expect(plan.requiredIndexes).toContain("monitors_workspace_name_active_idx");
+  expect(plan.requiredIndexes).toContain("report_schedules_due_idx");
   expect(plan.requiredIndexes).toContain("report_delivery_attempts_due_idx");
   expect(plan.requiredIndexes).toContain("report_delivery_attempts_idempotency_idx");
   expect(plan.requiredIndexes).toContain("report_artifacts_run_idx");
-  expect(plan.schemaVersion).toBe("4");
+  expect(plan.schemaVersion).toBe("5");
   expect(plan.migrationStatements.join("\n")).toContain("CREATE TABLE IF NOT EXISTS \"uptime\".\"sync_tombstones\"");
   expect(plan.migrationStatements.join("\n")).toContain("CREATE TABLE IF NOT EXISTS \"uptime\".\"report_delivery_attempts\"");
   expect(plan.migrationStatements.join("\n")).toContain("CREATE TABLE IF NOT EXISTS \"uptime\".\"report_artifacts\"");
@@ -46,6 +47,7 @@ test("buildPostgresMigrationPlan emits a blocked cloud-store schema with tombsto
   expect(plan.migrationStatements.join("\n")).toContain("VALIDATE CONSTRAINT probe_submissions_probe_class_check");
   expect(plan.migrationStatements.join("\n")).toContain("UNIQUE (workspace_id, monitor_id, monitor_version, schedule_slot, probe_policy_hash)");
   expect(plan.migrationStatements.join("\n")).toContain("UNIQUE (workspace_id, report_run_id, channel, channel_ref_id, attempt_number)");
+  expect(plan.migrationStatements.join("\n")).toContain("CREATE INDEX IF NOT EXISTS report_schedules_due_idx");
   expect(plan.migrationStatements.join("\n")).toContain("CREATE INDEX IF NOT EXISTS report_delivery_attempts_due_idx");
   expect(plan.migrationStatements.join("\n")).toContain("CREATE UNIQUE INDEX IF NOT EXISTS report_delivery_attempts_idempotency_idx");
   expect(plan.migrationStatements.join("\n")).toContain("storage_ref text NOT NULL");
@@ -99,6 +101,9 @@ test("Postgres migration table contracts keep workspace, idempotency, and duplic
   expect(table("probe_submissions")).toContain("probe_policy_hash text NOT NULL");
   expect(table("probe_submissions")).toContain("payload_hash text NOT NULL DEFAULT ''");
   expect(table("probe_identities")).toContain("probe_location text NOT NULL DEFAULT 'default'");
+  expect(table("report_schedules")).toContain("claimed_by_worker_id text");
+  expect(table("report_schedules")).toContain("fencing_token text");
+  expect(table("report_schedules")).toContain("lease_expires_at timestamptz");
   expect(table("report_delivery_attempts")).toContain("channel_ref_id text NOT NULL");
   expect(table("report_delivery_attempts")).toContain("provider text NOT NULL");
   expect(table("report_delivery_attempts")).toContain("request_hash text");

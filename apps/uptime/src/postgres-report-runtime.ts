@@ -77,6 +77,50 @@ export interface PostgresReportRunRecord {
   idempotencyKey: string | null;
 }
 
+export interface ListDuePostgresReportSchedulesOptions {
+  workspaceId?: string;
+  now?: string;
+  limit?: number;
+}
+
+export interface ClaimPostgresReportScheduleInput {
+  workspaceId?: string;
+  id: string;
+  workerId: string;
+  now?: string;
+  leaseTtlMs?: number;
+}
+
+export interface CompletePostgresReportScheduleClaimInput {
+  workspaceId?: string;
+  id: string;
+  workerId: string;
+  fencingToken: string;
+  finishedAt?: string;
+}
+
+export interface PostgresReportScheduleChannelSummary {
+  email: boolean;
+  sms: boolean;
+  logs: boolean;
+}
+
+export interface PostgresReportScheduleClaimRecord {
+  workspaceId: string;
+  id: string;
+  name: string;
+  enabled: boolean;
+  intervalSeconds: number;
+  nextRunAt: string;
+  lastRunAt: string | null;
+  subject: string | null;
+  channels: PostgresReportScheduleChannelSummary;
+  claimedByWorkerId: string | null;
+  fencingToken: string | null;
+  leaseExpiresAt: string | null;
+  version: number;
+}
+
 export interface CreatePostgresReportDeliveryAttemptInput {
   id?: string;
   workspaceId?: string;
@@ -270,6 +314,79 @@ export class PostgresReportRuntime {
     const row = result.rows[0];
     if (!row) throw new Error("report run idempotency conflict");
     return reportRunFromRow(row as Record<string, unknown>);
+  }
+
+  async listDueReportSchedules(options: ListDuePostgresReportSchedulesOptions = {}): Promise<PostgresReportScheduleClaimRecord[]> {
+    const workspaceId = normalizeWorkspaceId(options.workspaceId ?? this.workspaceId);
+    const now = normalizeIsoTimestamp(options.now ?? this.clock().toISOString(), "due report schedule now");
+    const limit = clampLimit(options.limit ?? 50);
+    const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
+      `SELECT * FROM ${this.table("report_schedules")}
+       WHERE workspace_id = $1
+         AND enabled = true
+         AND deleted_at IS NULL
+         AND next_run_at <= $2::timestamptz
+         AND (fencing_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= $2::timestamptz)
+       ORDER BY next_run_at ASC, created_at ASC, id ASC
+       LIMIT $3`,
+      [workspaceId, now, limit],
+    ));
+    return result.rows.map((row) => redactReportScheduleClaim(scheduleClaimFromRow(row)));
+  }
+
+  async claimReportSchedule(input: ClaimPostgresReportScheduleInput): Promise<PostgresReportScheduleClaimRecord | null> {
+    const workspaceId = normalizeWorkspaceId(input.workspaceId ?? this.workspaceId);
+    const id = normalizeId(input.id);
+    const workerId = normalizeOpaqueText(input.workerId, "worker id", 160);
+    if (input.now != null) normalizeIsoTimestamp(input.now, "report schedule claim now");
+    const leaseTtlMs = normalizePositiveInteger(input.leaseTtlMs ?? 300_000, "leaseTtlMs");
+    const fencingToken = `rsf_${randomUUID().replace(/-/g, "")}`;
+    const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
+      `UPDATE ${this.table("report_schedules")}
+       SET claimed_by_worker_id = $3,
+           fencing_token = $4,
+           lease_expires_at = now() + ($5::bigint * interval '1 millisecond'),
+           updated_at = now(),
+           version = version + 1
+       WHERE workspace_id = $1
+         AND id = $2
+         AND enabled = true
+         AND deleted_at IS NULL
+         AND next_run_at <= now()
+         AND (fencing_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= now())
+       RETURNING *`,
+      [workspaceId, id, workerId, fencingToken, leaseTtlMs],
+    ));
+    const row = result.rows[0];
+    return row ? scheduleClaimFromRow(row) : null;
+  }
+
+  async completeReportScheduleClaim(input: CompletePostgresReportScheduleClaimInput): Promise<PostgresReportScheduleClaimRecord | null> {
+    const workspaceId = normalizeWorkspaceId(input.workspaceId ?? this.workspaceId);
+    const id = normalizeId(input.id);
+    const workerId = normalizeOpaqueText(input.workerId, "worker id", 160);
+    const fencingToken = normalizeOpaqueText(input.fencingToken, "fencing token", 160);
+    if (input.finishedAt != null) normalizeIsoTimestamp(input.finishedAt, "report schedule claim finishedAt");
+    const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
+      `UPDATE ${this.table("report_schedules")}
+       SET last_run_at = next_run_at,
+           next_run_at = next_run_at + (interval_seconds::bigint * interval '1 second'),
+           claimed_by_worker_id = NULL,
+           fencing_token = NULL,
+           lease_expires_at = NULL,
+           updated_at = now(),
+           version = version + 1
+       WHERE workspace_id = $1
+         AND id = $2
+         AND deleted_at IS NULL
+         AND claimed_by_worker_id = $3
+         AND fencing_token = $4
+         AND lease_expires_at > now()
+       RETURNING *`,
+      [workspaceId, id, workerId, fencingToken],
+    ));
+    const row = result.rows[0];
+    return row ? scheduleClaimFromRow(row) : null;
   }
 
   async createDeliveryAttempt(input: CreatePostgresReportDeliveryAttemptInput): Promise<PostgresReportDeliveryAttemptRecord> {
@@ -522,14 +639,14 @@ export function buildPostgresReportRuntimeReadiness(options: Pick<PostgresReport
       ok: schemaVerified,
       detail: schemaVerified ? "caller supplied schema verification evidence" : "not verified in this process",
     },
-    { name: "report-run-metadata-writer", ok: true, detail: "implemented for finished report_runs metadata; schedule claiming is not implemented" },
+    { name: "report-run-metadata-writer", ok: true, detail: "implemented for finished report_runs metadata" },
+    { name: "report-schedule-claiming", ok: true, detail: "transactional report schedule/window claiming with worker lease and fencing is implemented" },
     { name: "report-delivery-attempt-state", ok: true, detail: "implemented for pending/sending/succeeded/failed/retry_exhausted" },
     { name: "report-delivery-idempotency", ok: true, detail: "stable idempotency keys and duplicate suppression are implemented" },
     { name: "report-delivery-retry-backoff", ok: true, detail: "next_retry_at and retry_after_seconds metadata are implemented" },
     { name: "report-artifact-metadata-writer", ok: true, detail: "implemented for redacted artifact metadata refs only" },
   ];
   const promotionChecks = [
-    { name: "report-schedule-claiming", ok: false, detail: "transactional report schedule/window claiming is not implemented" },
     { name: "report-run-state-machine", ok: false, detail: "hosted report run state machine is not implemented beyond finished success/failed metadata" },
     { name: "report-artifact-object-store", ok: false, detail: "S3/object artifact writing and signing are not implemented" },
     { name: "report-audit-export", ok: false, detail: "delivery audit export to Open Logs is not implemented" },
@@ -560,7 +677,7 @@ export function buildPostgresReportRuntimeReadiness(options: Pick<PostgresReport
     blockers,
     capabilities: {
       reportRunWriter: true,
-      scheduleClaiming: false,
+      scheduleClaiming: true,
       reportRunStateMachine: false,
       deliveryAttemptState: true,
       deliveryIdempotency: true,
@@ -619,6 +736,28 @@ function reportRunFromRow(row: Record<string, unknown>): PostgresReportRunRecord
     origin: nullableStringField(row, "origin"),
     idempotencyKey: nullableStringField(row, "idempotency_key"),
   };
+}
+
+function scheduleClaimFromRow(row: Record<string, unknown>): PostgresReportScheduleClaimRecord {
+  return {
+    workspaceId: stringField(row, "workspace_id"),
+    id: stringField(row, "id"),
+    name: stringField(row, "name"),
+    enabled: Boolean(row.enabled),
+    intervalSeconds: numberField(row, "interval_seconds"),
+    nextRunAt: isoStringField(row, "next_run_at"),
+    lastRunAt: nullableIsoStringField(row, "last_run_at"),
+    subject: nullableStringField(row, "subject"),
+    channels: summarizeScheduleChannels(row.channels_json),
+    claimedByWorkerId: nullableStringField(row, "claimed_by_worker_id"),
+    fencingToken: nullableStringField(row, "fencing_token"),
+    leaseExpiresAt: nullableIsoStringField(row, "lease_expires_at"),
+    version: numberField(row, "version"),
+  };
+}
+
+function redactReportScheduleClaim(record: PostgresReportScheduleClaimRecord): PostgresReportScheduleClaimRecord {
+  return { ...record, fencingToken: null };
 }
 
 function deliveryAttemptFromRow(row: Record<string, unknown>): PostgresReportDeliveryAttemptRecord {
@@ -685,6 +824,18 @@ function parseDeliveries(value: unknown): ReportDeliveryRecord[] {
 function parseRecord(value: unknown): Record<string, unknown> | null {
   const parsed = typeof value === "string" ? parseJson(value) : value;
   return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+}
+
+function summarizeScheduleChannels(value: unknown): PostgresReportScheduleChannelSummary {
+  const parsed = typeof value === "string" ? parseJson(value) : value;
+  const record = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : {};
+  return {
+    email: Boolean(record.email),
+    sms: Boolean(record.sms),
+    logs: Boolean(record.logs),
+  };
 }
 
 function normalizeReportJsonMetadata(value: Record<string, unknown> | null | undefined): Record<string, unknown> | null {

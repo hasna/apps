@@ -1,5 +1,5 @@
-export const POSTGRES_PLAN_VERSION = 4;
-export const POSTGRES_SCHEMA_VERSION = "4";
+export const POSTGRES_PLAN_VERSION = 5;
+export const POSTGRES_SCHEMA_VERSION = "5";
 export const DEFAULT_POSTGRES_SCHEMA = "uptime";
 export const DEFAULT_WORKSPACE_SETTING = "app.workspace_id";
 
@@ -57,6 +57,7 @@ const REQUIRED_INDEXES = [
   "monitors_workspace_name_active_idx",
   "check_results_workspace_monitor_time_idx",
   "check_jobs_workspace_status_due_idx",
+  "report_schedules_due_idx",
   "report_runs_workspace_status_time_idx",
   "report_delivery_attempts_run_idx",
   "report_delivery_attempts_due_idx",
@@ -378,6 +379,9 @@ ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.up
   actor text,
   origin text,
   idempotency_key text,
+  claimed_by_worker_id text,
+  fencing_token text,
+  lease_expires_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (workspace_id, id),
@@ -486,6 +490,7 @@ ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.up
     `CREATE UNIQUE INDEX IF NOT EXISTS monitors_workspace_name_active_idx ON ${q(schemaName, "monitors")} (workspace_id, name) WHERE deleted_at IS NULL;`,
     `CREATE INDEX IF NOT EXISTS check_results_workspace_monitor_time_idx ON ${q(schemaName, "check_results")} (workspace_id, monitor_id, checked_at DESC) WHERE deleted_at IS NULL;`,
     `CREATE INDEX IF NOT EXISTS check_jobs_workspace_status_due_idx ON ${q(schemaName, "check_jobs")} (workspace_id, status, due_at) WHERE deleted_at IS NULL;`,
+    `CREATE INDEX IF NOT EXISTS report_schedules_due_idx ON ${q(schemaName, "report_schedules")} (workspace_id, enabled, next_run_at, lease_expires_at) WHERE deleted_at IS NULL;`,
     `CREATE INDEX IF NOT EXISTS report_runs_workspace_status_time_idx ON ${q(schemaName, "report_runs")} (workspace_id, status, started_at DESC) WHERE deleted_at IS NULL;`,
     `CREATE INDEX IF NOT EXISTS report_delivery_attempts_run_idx ON ${q(schemaName, "report_delivery_attempts")} (workspace_id, report_run_id, status, scheduled_at) WHERE deleted_at IS NULL;`,
     `CREATE INDEX IF NOT EXISTS report_delivery_attempts_due_idx ON ${q(schemaName, "report_delivery_attempts")} (workspace_id, status, COALESCE(next_retry_at, scheduled_at)) WHERE deleted_at IS NULL;`,
@@ -500,6 +505,7 @@ function buildSchemaUpgradeStatements(schemaName: string): string[] {
   const monitors = q(schemaName, "monitors");
   const probeIdentities = q(schemaName, "probe_identities");
   const probeSubmissions = q(schemaName, "probe_submissions");
+  const reportSchedules = q(schemaName, "report_schedules");
   return [
     `ALTER TABLE ${checkJobs} ADD COLUMN IF NOT EXISTS monitor_snapshot jsonb;`,
     `UPDATE ${checkJobs} AS job
@@ -575,6 +581,9 @@ END $$;`,
     `UPDATE ${probeSubmissions} SET payload_hash = '' WHERE payload_hash IS NULL;`,
     `ALTER TABLE ${probeSubmissions} ALTER COLUMN payload_hash SET DEFAULT '';`,
     `ALTER TABLE ${probeSubmissions} ALTER COLUMN payload_hash SET NOT NULL;`,
+    `ALTER TABLE ${reportSchedules} ADD COLUMN IF NOT EXISTS claimed_by_worker_id text;`,
+    `ALTER TABLE ${reportSchedules} ADD COLUMN IF NOT EXISTS fencing_token text;`,
+    `ALTER TABLE ${reportSchedules} ADD COLUMN IF NOT EXISTS lease_expires_at timestamptz;`,
   ];
 }
 

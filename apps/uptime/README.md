@@ -116,7 +116,7 @@ monitor names unique only among non-deleted rows.
 blockers for hosted scheduler, public-probe, reporter, and migration roles.
 `--healthcheck` is readiness-like and exits non-zero while `canStart=false`.
 Their generic `run` entrypoints fail closed until Postgres service integration,
-channel refs, authoritative report schedule/run claiming, object artifact
+channel refs, authoritative report run state transitions, object artifact
 storage, audit export, alarms, and migration plans exist. Public-probe preflight
 and scheduler preflight can name the bounded Postgres review runners as
 implemented while still returning `canStart=false`; the ECS worker commands

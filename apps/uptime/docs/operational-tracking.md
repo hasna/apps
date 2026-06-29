@@ -70,8 +70,8 @@ specs, artifacts, browser evidence, or check execution until these are tested:
   delivery-attempt claim/complete state, per-attempt idempotency, retry/backoff
   metadata, and redacted artifact metadata refs under transaction-scoped
   workspace settings. Hosted delivery remains disabled until authoritative
-  schedule/window claiming, full service-store promotion, S3 artifact writes and
-  signing, audit export, alarms, and live-worker rollback evidence exist
+  report run state transitions, full service-store promotion, S3 artifact writes
+  and signing, audit export, alarms, and live-worker rollback evidence exist
 - JSON Render and canvas redaction
 - browser evidence isolation
 - private probe identity, revocation, and isolation

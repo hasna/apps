@@ -2214,7 +2214,7 @@ function hostedReporterReadinessChecks(): Array<{ name: string; ok: boolean; det
     {
       name: "report-schedule-claiming",
       ok: reportRuntime.capabilities.scheduleClaiming,
-      detail: runtimeCheck("report-schedule-claiming")?.detail ?? "transactional report schedule/window claiming is not implemented",
+      detail: runtimeCheck("report-schedule-claiming")?.detail ?? "transactional report schedule/window claiming was not reported by the runtime readiness check",
     },
     {
       name: "report-run-state-machine",
@@ -2229,7 +2229,7 @@ function hostedReporterReadinessChecks(): Array<{ name: string; ok: boolean; det
     {
       name: "report-delivery-idempotency",
       ok: reportRuntime.capabilities.deliveryIdempotency,
-      detail: "stable per-attempt provider idempotency keys and duplicate attempt suppression are implemented; schedule/window claiming is still blocked",
+      detail: "stable per-attempt provider idempotency keys and duplicate attempt suppression are implemented",
     },
     {
       name: "report-delivery-retry-backoff",
