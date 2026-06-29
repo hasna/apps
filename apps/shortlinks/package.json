@@ -1,7 +1,7 @@
 {
   "name": "@hasna/shortlinks",
-  "version": "0.1.22",
-  "description": "CLI-only shortlink manager for custom domains, click tracking, Cloudflare setup, and @hasna cloud sync",
+  "version": "0.1.23",
+  "description": "CLI-only shortlink manager for custom domains, click tracking, Cloudflare setup, and app-owned Postgres runtime support",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -20,6 +20,14 @@
     "./cloudflare": {
       "types": "./dist/cloudflare.d.ts",
       "import": "./dist/cloudflare.js"
+    },
+    "./postgres": {
+      "types": "./dist/pg-store.d.ts",
+      "import": "./dist/pg-store.js"
+    },
+    "./runtime": {
+      "types": "./dist/runtime.d.ts",
+      "import": "./dist/runtime.js"
     }
   },
   "files": [
@@ -31,11 +39,11 @@
     "SECURITY.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external @hasna/cloud && bun build src/index.ts --outdir dist --target bun --external @hasna/cloud && bun build src/server.ts --outdir dist --target bun --external @hasna/cloud && bun build src/cloudflare.ts --outdir dist --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun && bun build src/index.ts --outdir dist --target bun && bun build src/server.ts --outdir dist --target bun && bun build src/cloudflare.ts --outdir dist --target bun && bun build src/runtime.ts --outdir dist --target bun && bun build src/pg-store.ts --outdir dist --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.ts",
-    "prepublishOnly": "bun run test && bun run build"
+    "prepublishOnly": "bun run typecheck && bun run test && bun run build"
   },
   "keywords": [
     "shortlinks",
@@ -66,12 +74,13 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/cloud": "0.1.30",
     "@hasna/events": "^0.1.6",
     "chalk": "^5.4.1",
-    "commander": "^13.1.0"
+    "commander": "^13.1.0",
+    "pg": "^8.13.3"
   },
   "devDependencies": {
+    "@types/pg": "^8.11.11",
     "@types/bun": "^1.2.4",
     "typescript": "^5.7.3"
   }

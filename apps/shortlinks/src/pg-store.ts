@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { formatShortUrl, getClickSalt, normalizeHostname } from "./config.js";
 import { makeId, now } from "./database.js";
 import { getMachineId } from "./machine.js";
+import { getShortlinksDatabaseSsl, getShortlinksDatabaseUrl } from "./runtime.js";
 import { DEFAULT_SLUG_LENGTH, normalizeSlug, randomToken } from "./slug.js";
 import type { AddDomainInput, Click, ClickInput, CreateLinkInput, Domain, Link, LinkStats } from "./types.js";
 
@@ -11,6 +12,23 @@ type PgAdapterLike = {
   run(sql: string, ...params: unknown[]): Promise<unknown>;
   close?: () => Promise<void>;
 };
+
+type PgPoolLike = {
+  query<T = any>(sql: string, values?: unknown[]): Promise<{ rows: T[] }>;
+  connect(): Promise<PgClientLike>;
+  end(): Promise<void>;
+};
+
+type PgClientLike = {
+  query<T = any>(sql: string, values?: unknown[]): Promise<{ rows: T[] }>;
+  release(): void;
+};
+
+type PgPoolConstructor = new (config: Record<string, unknown>) => PgPoolLike;
+
+export interface PgConnectionOptions {
+  ssl?: boolean;
+}
 
 type LinkRow = Omit<Link, "active" | "metadata" | "hostname"> & {
   active: number | boolean;
@@ -35,6 +53,52 @@ function parseJsonObject(value: string | Record<string, unknown> | null | undefi
     return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
   } catch {
     return {};
+  }
+}
+
+async function loadPgPool(): Promise<PgPoolConstructor> {
+  const importer = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<{ Pool: PgPoolConstructor }>;
+  const module = await importer("pg");
+  return module.Pool;
+}
+
+function toPostgresSql(sql: string): string {
+  let index = 0;
+  return sql.replace(/\?/g, () => `$${++index}`);
+}
+
+function createPgPoolConfig(connectionString: string, options: PgConnectionOptions = {}): Record<string, unknown> {
+  const ssl = options.ssl ?? true;
+  return {
+    connectionString,
+    ...(ssl ? { ssl: { rejectUnauthorized: true } } : { ssl: false }),
+  };
+}
+
+class PgPoolAdapter implements PgAdapterLike {
+  private constructor(private readonly pool: PgPoolLike) {}
+
+  static async create(connectionString: string, options: PgConnectionOptions = {}): Promise<PgPoolAdapter> {
+    const Pool = await loadPgPool();
+    return new PgPoolAdapter(new Pool(createPgPoolConfig(connectionString, options)));
+  }
+
+  async get(sql: string, ...params: unknown[]): Promise<any> {
+    const result = await this.pool.query(toPostgresSql(sql), params);
+    return result.rows[0] ?? null;
+  }
+
+  async all(sql: string, ...params: unknown[]): Promise<any[]> {
+    const result = await this.pool.query(toPostgresSql(sql), params);
+    return result.rows;
+  }
+
+  async run(sql: string, ...params: unknown[]): Promise<unknown> {
+    return this.pool.query(toPostgresSql(sql), params);
+  }
+
+  async close(): Promise<void> {
+    await this.pool.end();
   }
 }
 
@@ -106,14 +170,16 @@ function clickFromRow(row: ClickRow): Click {
 export class PgShortlinksStore {
   constructor(private readonly pg: PgAdapterLike) {}
 
-  static async fromConnectionString(connectionString: string): Promise<PgShortlinksStore> {
-    const { PgAdapterAsync } = await import("@hasna/cloud");
-    return new PgShortlinksStore(new PgAdapterAsync(connectionString));
+  static async fromConnectionString(connectionString: string, options: PgConnectionOptions = {}): Promise<PgShortlinksStore> {
+    return new PgShortlinksStore(await PgPoolAdapter.create(connectionString, options));
   }
 
-  static async fromCloud(service = "shortlinks"): Promise<PgShortlinksStore> {
-    const { getConnectionString } = await import("@hasna/cloud");
-    return PgShortlinksStore.fromConnectionString(getConnectionString(service));
+  static async fromEnv(env: NodeJS.ProcessEnv = process.env): Promise<PgShortlinksStore> {
+    const connectionString = getShortlinksDatabaseUrl(env);
+    if (!connectionString) {
+      throw new Error("HASNA_SHORTLINKS_DATABASE_URL is required when shortlinks uses the postgres store");
+    }
+    return PgShortlinksStore.fromConnectionString(connectionString, { ssl: getShortlinksDatabaseSsl(env) });
   }
 
   async close(): Promise<void> {
@@ -403,5 +469,61 @@ export class PgShortlinksStore {
       if (!exists) return slug;
     }
     throw new Error("Could not generate an unused slug after 32 attempts.");
+  }
+}
+
+export async function applyPostgresMigrations(
+  connectionString: string,
+  migrations: string[],
+  options: PgConnectionOptions = {},
+): Promise<{ service: "shortlinks"; applied: number[]; skipped: number[] }> {
+  const Pool = await loadPgPool();
+  const pool = new Pool(createPgPoolConfig(connectionString, options));
+  const client = await pool.connect();
+  const run = (sql: string, ...params: unknown[]) => client.query(toPostgresSql(sql), params);
+  const get = async (sql: string, ...params: unknown[]) => {
+    const result = await run(sql, ...params);
+    return result.rows[0] ?? null;
+  };
+  const applied: number[] = [];
+  const skipped: number[] = [];
+  try {
+    await run("BEGIN");
+    await run(`
+      SELECT pg_advisory_xact_lock(hashtext(?))
+    `, "shortlinks:migrations");
+
+    await run(`
+      CREATE TABLE IF NOT EXISTS _shortlinks_migrations (
+        id INTEGER PRIMARY KEY,
+        service TEXT NOT NULL DEFAULT 'shortlinks',
+        applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+
+    for (let i = 0; i < migrations.length; i += 1) {
+      const id = i + 1;
+      const existing = await get("SELECT id FROM _shortlinks_migrations WHERE id = ? LIMIT 1", id);
+      if (existing) {
+        skipped.push(id);
+        continue;
+      }
+      await run(migrations[i]!);
+      await run("INSERT INTO _shortlinks_migrations (id, service, applied_at) VALUES (?, ?, now())", id, "shortlinks");
+      applied.push(id);
+    }
+
+    await run("COMMIT");
+    return { service: "shortlinks", applied, skipped };
+  } catch (error) {
+    try {
+      await run("ROLLBACK");
+    } catch {
+      // Keep the original migration error; rollback failures are secondary.
+    }
+    throw error;
+  } finally {
+    client.release();
+    await pool.end();
   }
 }

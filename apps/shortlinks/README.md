@@ -2,7 +2,7 @@
 
 CLI-only shortlink management for custom domains.
 
-`shortlinks` creates Bitly-style short URLs, supports multiple domains, records click analytics, can run a tiny redirect server, and includes helper commands for Cloudflare DNS/Workers, `@hasna/domains`, and `@hasna/cloud` sync. Production serving can run directly against the shared RDS database with `--cloud`; local SQLite is only for explicit local/offline use.
+`shortlinks` creates Bitly-style short URLs, supports multiple domains, records click analytics, can run a tiny redirect server, and includes helper commands for Cloudflare DNS/Workers and `@hasna/domains`. It defaults to local SQLite and can serve from an app-owned PostgreSQL database when `HASNA_SHORTLINKS_STORE=postgres` and `HASNA_SHORTLINKS_DATABASE_URL` are configured.
 
 [![npm](https://img.shields.io/npm/v/@hasna/shortlinks)](https://www.npmjs.com/package/@hasna/shortlinks)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
@@ -64,7 +64,6 @@ shortlinks link enable home --domain has.na
 shortlinks stats home --domain has.na
 
 shortlinks serve --port 8787
-shortlinks serve --cloud --port 8787
 shortlinks doctor
 ```
 
@@ -125,36 +124,32 @@ shortlinks domain buy new-short-domain.ai --dry-run
 
 This package does not install or call any removed `connect-*` packages.
 
-## Cloud Sync
+## PostgreSQL Runtime
 
-`shortlinks` is compatible with `@hasna/cloud` conventions:
-
-```bash
-cloud setup
-shortlinks cloud migrate
-shortlinks cloud push
-shortlinks cloud pull
-shortlinks cloud sync
-```
-
-The cloud database service name is `shortlinks`.
-Use direct RDS mode for production and live management:
+Production serving can use a shortlinks-owned PostgreSQL database without any shared table-sync package:
 
 ```bash
-shortlinks --cloud create https://example.com
-shortlinks --cloud link list
-shortlinks serve --cloud --host 127.0.0.1 --port 8787
+export HASNA_SHORTLINKS_STORE=postgres
+export HASNA_SHORTLINKS_DATABASE_URL=postgres://shortlinks:password@db.example.com:5432/shortlinks
+export HASNA_SHORTLINKS_DATABASE_SSL=true
+
+shortlinks postgres status
+shortlinks postgres plan --schema-sql
+shortlinks postgres migrate
+shortlinks --store postgres serve --host 127.0.0.1 --port 8787 --default-host has.na
 ```
+
+The canonical production runtime secret path is `hasna/xyz/opensource/shortlinks/prod/postgres`. Use the URL environment variables above rather than writing shared runtime config files into the shortlinks data directory.
 
 ## AWS Origin
 
 For an apex domain that needs stable A records, `infra/aws-ec2-user-data.sh` bootstraps a small EC2 redirect origin with:
 
 - `@hasna/shortlinks` installed through Bun
-- direct reads and click writes against the `shortlinks` RDS database through `@hasna/cloud`
+- direct reads and click writes against the app-owned `shortlinks` PostgreSQL database
 - Caddy terminating HTTPS and proxying to `shortlinks serve`
 
-The script reads the RDS password from AWS Secrets Manager through the instance role; it does not contain secret values.
+The script reads the connection settings from AWS Secrets Manager through the instance role; it does not contain secret values.
 
 ## Development
 

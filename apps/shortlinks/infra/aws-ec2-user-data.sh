@@ -4,9 +4,7 @@ set -euo pipefail
 export AWS_REGION="${AWS_REGION:-us-east-1}"
 export SHORTLINKS_HOME="/var/lib/shortlinks"
 export SHORTLINKS_PACKAGE="@hasna/shortlinks@latest"
-export RDS_SECRET_ID="rds!db-7a451ce6-83a9-40fa-b24a-81e5d5943511"
-export RDS_HOST="hasnaxyz-prod-opensource.c4limg0qgqvk.us-east-1.rds.amazonaws.com"
-export RDS_USERNAME="hasna_admin"
+export SHORTLINKS_DATABASE_SECRET_ID="${SHORTLINKS_DATABASE_SECRET_ID:-hasna/xyz/opensource/shortlinks/prod/postgres}"
 
 dnf update -y
 dnf install -y awscli jq tar gzip shadow-utils libcap
@@ -15,28 +13,14 @@ if ! id shortlinks >/dev/null 2>&1; then
   useradd --system --create-home --home-dir "${SHORTLINKS_HOME}" --shell /sbin/nologin shortlinks
 fi
 
-install -d -o shortlinks -g shortlinks "${SHORTLINKS_HOME}/.hasna/cloud"
 install -d -o shortlinks -g shortlinks "${SHORTLINKS_HOME}/.hasna/shortlinks"
-
-cat > "${SHORTLINKS_HOME}/.hasna/cloud/config.json" <<CLOUD_CONFIG
-{
-  "rds": {
-    "host": "${RDS_HOST}",
-    "port": 5432,
-    "username": "${RDS_USERNAME}",
-    "password_env": "HASNA_RDS_PASSWORD",
-    "ssl": true
-  },
-  "mode": "hybrid",
-  "feedback_endpoint": "https://feedback.hasna.com/api/v1/feedback",
-  "auto_sync_interval_minutes": 0,
-  "sync": {
-    "schedule_minutes": 0
-  }
-}
-CLOUD_CONFIG
-chown shortlinks:shortlinks "${SHORTLINKS_HOME}/.hasna/cloud/config.json"
-chmod 600 "${SHORTLINKS_HOME}/.hasna/cloud/config.json"
+cat > /etc/shortlinks.env <<ENV
+SHORTLINKS_DATABASE_SECRET_ID=${SHORTLINKS_DATABASE_SECRET_ID}
+HASNA_SHORTLINKS_STORE=postgres
+HASNA_SHORTLINKS_DATABASE_SSL=true
+ENV
+chown root:shortlinks /etc/shortlinks.env
+chmod 640 /etc/shortlinks.env
 
 su -s /bin/bash shortlinks -c 'curl -fsSL https://bun.sh/install | bash'
 su -s /bin/bash shortlinks -c "${SHORTLINKS_HOME}/.bun/bin/bun install -g ${SHORTLINKS_PACKAGE} --no-cache"
@@ -48,16 +32,32 @@ set -euo pipefail
 export AWS_REGION="${AWS_REGION:-us-east-1}"
 export HOME="/var/lib/shortlinks"
 export PATH="/var/lib/shortlinks/.bun/bin:/usr/local/bin:/usr/bin:/bin"
-export NODE_TLS_REJECT_UNAUTHORIZED="0"
+export HASNA_SHORTLINKS_STORE="postgres"
+export HASNA_SHORTLINKS_DATABASE_SSL="${HASNA_SHORTLINKS_DATABASE_SSL:-true}"
 
 secret_json="$(aws secretsmanager get-secret-value \
   --region "${AWS_REGION}" \
-  --secret-id "rds!db-7a451ce6-83a9-40fa-b24a-81e5d5943511" \
+  --secret-id "${SHORTLINKS_DATABASE_SECRET_ID:-hasna/xyz/opensource/shortlinks/prod/postgres}" \
   --query SecretString \
   --output text)"
 
-export HASNA_RDS_PASSWORD
-HASNA_RDS_PASSWORD="$(jq -r '.password' <<<"${secret_json}")"
+connection_url="$(jq -r '(.connectionString // .connection_string // .url // .database_url // empty)' <<<"${secret_json}")"
+if [[ -z "${connection_url}" ]]; then
+  db_host="$(jq -r '.host // empty' <<<"${secret_json}")"
+  db_port="$(jq -r '.port // 5432' <<<"${secret_json}")"
+  db_name="$(jq -r '.database // .dbname // "shortlinks"' <<<"${secret_json}")"
+  db_user="$(jq -r '.username // .user // empty' <<<"${secret_json}")"
+  db_password="$(jq -r '.password // empty' <<<"${secret_json}")"
+  if [[ -z "${db_host}" || -z "${db_user}" || -z "${db_password}" ]]; then
+    echo "Shortlinks database secret must include connectionString/url or host, username, and password." >&2
+    exit 1
+  fi
+  db_user_encoded="$(jq -nr --arg value "${db_user}" '$value|@uri')"
+  db_password_encoded="$(jq -nr --arg value "${db_password}" '$value|@uri')"
+  connection_url="postgres://${db_user_encoded}:${db_password_encoded}@${db_host}:${db_port}/${db_name}"
+fi
+
+export HASNA_SHORTLINKS_DATABASE_URL="${connection_url}"
 
 exec "$@"
 RUNNER
@@ -90,8 +90,9 @@ Group=shortlinks
 WorkingDirectory=/var/lib/shortlinks
 Environment=HOME=/var/lib/shortlinks
 Environment=PATH=/var/lib/shortlinks/.bun/bin:/usr/local/bin:/usr/bin:/bin
-Environment=SHORTLINKS_STORE=cloud
-ExecStart=/usr/local/bin/shortlinks-env-exec shortlinks serve --cloud --host 127.0.0.1 --port 8787 --default-host has.na
+EnvironmentFile=/etc/shortlinks.env
+ExecStartPre=/usr/local/bin/shortlinks-env-exec shortlinks postgres migrate
+ExecStart=/usr/local/bin/shortlinks-env-exec shortlinks --store postgres serve --host 127.0.0.1 --port 8787 --default-host has.na
 Restart=always
 RestartSec=5
 
@@ -133,4 +134,4 @@ CADDY
 systemctl daemon-reload
 systemctl enable shortlinks.service caddy.service
 systemctl start shortlinks.service
-systemctl start caddy.service || true
+systemctl start caddy.service
