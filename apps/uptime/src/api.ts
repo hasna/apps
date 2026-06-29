@@ -343,7 +343,12 @@ async function handleApiRoute(
     }
     if (request.method === "DELETE" && !monitorMatch[2]) {
       const before = hosted ? service.getMonitor(id, { workspaceId: actor?.workspaceId }) : null;
-      const deleted = service.deleteMonitor(id, { workspaceId: actor?.workspaceId });
+      const deleted = service.deleteMonitor(id, {
+        workspaceId: actor?.workspaceId,
+        actor: actor?.actor,
+        origin: "hosted-api",
+        idempotencyKey: request.headers.get("idempotency-key") ?? undefined,
+      });
       if (hosted && actor && deleted && before) {
         recordHostedMonitorAudit(service, actor, "monitor.delete", before, { method: request.method, apiPath });
       }

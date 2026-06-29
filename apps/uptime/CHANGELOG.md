@@ -6,6 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.31] - 2026-06-29
+
+### Added
+
+- Added `uptime cloud postgres-plan` and the `@hasna/uptime/postgres-plan` SDK
+  export for a blocked, redacted Postgres schema/RLS/tombstone review artifact.
+- Added hosted SQLite bridge tombstones for monitor deletes, including
+  actor/origin/idempotency metadata and regression coverage.
+
+### Changed
+
+- Hosted store, service, and import-preview paths now require explicit
+  workspace context for hosted reads and mutations.
+- Replaced monitor table-level name uniqueness with an active-monitor partial
+  unique index so tombstoned hosted monitors do not permanently reserve names.
+- Updated cloud source-of-truth docs to describe the current hosted storage
+  bridge contract and the target Postgres migration shape.
+
 ## [0.1.30] - 2026-06-29
 
 ### Changed

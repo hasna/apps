@@ -52,7 +52,7 @@ export interface UptimeStoreLike {
   close(): void;
   createMonitor(input: ImportedMonitorInput, options?: { allowBrowserPage?: boolean; workspaceId?: string }): Monitor;
   updateMonitor(idOrName: string, input: ImportedUpdateMonitorInput, options?: { allowBrowserPage?: boolean; workspaceId?: string }): Monitor;
-  deleteMonitor(idOrName: string, options?: { workspaceId?: string }): boolean;
+  deleteMonitor(idOrName: string, options?: { workspaceId?: string; actor?: string; origin?: string; idempotencyKey?: string }): boolean;
   listMonitors(options?: { includeDisabled?: boolean; workspaceId?: string }): Monitor[];
   getMonitor(idOrName: string, options?: { workspaceId?: string }): Monitor | null;
   getCheckResult?(id: string): CheckResult | null;
@@ -64,7 +64,7 @@ export interface UptimeStoreLike {
   verifyBackup(backupPath: string): UptimeBackupCheck;
   acquireCheckLease(monitorId: string, owner: string, ttlMs: number): boolean;
   releaseCheckLease(monitorId: string, owner: string): void;
-  recordCheckResult(input: Omit<CheckResult, "id" | "checkedAt"> & { checkedAt?: string; expectedMonitorRevision?: number }): CheckResult;
+  recordCheckResult(input: Omit<CheckResult, "id" | "checkedAt"> & { checkedAt?: string; expectedMonitorRevision?: number; workspaceId?: string }): CheckResult;
   getProvenance(source: string, sourceId: string, options?: { workspaceId?: string }): MonitorProvenance | null;
   upsertMonitorProvenance(input: UpsertMonitorProvenanceInput): MonitorProvenance;
   saveImportBatch(input: SaveImportBatchInput): StoredImportBatch;
@@ -167,7 +167,7 @@ export class UptimeService {
     return this.store.updateMonitor(idOrName, input, options);
   }
 
-  deleteMonitor(idOrName: string, options: { workspaceId?: string } = {}): boolean {
+  deleteMonitor(idOrName: string, options: { workspaceId?: string; actor?: string; origin?: string; idempotencyKey?: string } = {}): boolean {
     return this.store.deleteMonitor(idOrName, options);
   }
 
@@ -519,6 +519,7 @@ export class UptimeService {
         evidence: last!.evidence ?? null,
         attemptCount,
         expectedMonitorRevision: monitor.revision,
+        workspaceId: monitor.workspaceId,
       });
     } finally {
       this.inFlightChecks.delete(monitor.id);
@@ -671,6 +672,7 @@ export class UptimeService {
       evidence,
       attemptCount: input.attemptCount ?? 1,
       expectedMonitorRevision: input.monitorRevision,
+      workspaceId: monitor.workspaceId,
     });
     const receipt = store.recordProbeSubmission({
       probeId: probe.id,

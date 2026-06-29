@@ -82,6 +82,23 @@ The first cloud schema must be implemented as a real Postgres adapter. A generic
 or backfill, but it is not the runtime data store for checks, probes, incidents,
 reports, or operator actions.
 
+The repository now exposes the blocked target schema as
+`uptime cloud postgres-plan`. The command emits redacted review metadata and
+optional SQL for the intended Postgres schema, including workspace-scoped
+tables, `version`/`deleted_at` tombstone fields, `actor`/`origin`/
+`idempotency_key` metadata, `audit_events`, `sync_tombstones`, `check_jobs`,
+fencing-token lease fields, and RLS policies based on a session workspace
+setting. It intentionally does not connect to Postgres or apply migrations; the
+runtime remains fail-closed until the async Postgres store is implemented and
+reviewed against the approved database.
+
+The current hosted SQLite bridge is still not cloud-primary, but it now follows
+the minimum hosted storage contract where it is used for controlled smokes:
+hosted reads and mutations require explicit workspace context, active monitor
+queries exclude `deleted_at` rows, hosted monitor deletes write
+`sync_tombstones` with actor/origin/idempotency metadata, and monitor-name
+uniqueness applies only to active rows so tombstoned names can be recreated.
+
 ## Auth, Workspace, And Audit Contract
 
 Hosted mode is closed by default:

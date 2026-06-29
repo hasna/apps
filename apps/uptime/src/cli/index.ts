@@ -10,9 +10,11 @@ import { packageVersion } from "../version.js";
 import { serveUptime } from "../api.js";
 import { generateProbeKeyPair, signProbeResult } from "../probes.js";
 import { buildAwsDeploymentPlan, buildPrivateProbeCloudConfig, renderPrivateProbeEnv } from "../cloud-plan.js";
+import { buildPostgresMigrationPlan, renderPostgresMigrationPlan } from "../postgres-plan.js";
 import { runHostedPublicChecksWorker } from "../workers.js";
 import { runEdgeSmoke, type EdgeSmokeReport } from "../edge-smoke.js";
 import type { AwsDeploymentPlan, PrivateProbeCloudConfig } from "../cloud-plan.js";
+import type { PostgresMigrationPlan } from "../postgres-plan.js";
 import type { ImportSource } from "../imports.js";
 import type { SendUptimeReportOptions, UptimeReportDelivery } from "../report.js";
 import type { CreateMonitorInput, Monitor, ProbeResultSubmission, ReportRun, ReportSchedule, ReportScheduleChannels, UpdateMonitorInput, UptimeSummary } from "../types.js";
@@ -522,6 +524,31 @@ cloud
         evidenceBucket: opts.evidenceBucket,
       });
       print(plan, renderCloudPlan(plan), opts);
+    } catch (error) {
+      fail(error);
+    }
+  });
+
+cloud
+  .command("postgres-plan")
+  .description("Generate the blocked Postgres cloud-store schema and RLS migration plan")
+  .option("--schema <name>", "Postgres schema name", "uptime")
+  .option("--database-url <url>", "Postgres URL to validate and redact; defaults to HASNA_UPTIME_DATABASE_URL")
+  .option("--workspace-setting <name>", "session setting used by RLS policies", "app.workspace_id")
+  .option("--sql", "print SQL instead of the summary text")
+  .option("-j, --json", "print JSON")
+  .action((opts) => {
+    try {
+      const plan = buildPostgresMigrationPlan({
+        schemaName: opts.schema,
+        databaseUrl: opts.databaseUrl,
+        workspaceSetting: opts.workspaceSetting,
+      });
+      if (opts.sql && !wantsJson(opts)) {
+        console.log(renderPostgresMigrationSql(plan));
+        return;
+      }
+      print(plan, renderPostgresMigrationPlan(plan), opts);
     } catch (error) {
       fail(error);
     }
@@ -1262,6 +1289,16 @@ function renderPrivateProbeConfig(config: PrivateProbeCloudConfig): string {
   ].join("\n");
 }
 
+function renderPostgresMigrationSql(plan: PostgresMigrationPlan): string {
+  return [
+    "-- Open Uptime Postgres migration plan",
+    "-- Review and apply only through the approved private infra/runbook path.",
+    "-- This CLI never connects to Postgres or prints database credentials.",
+    ...plan.migrationStatements,
+    ...plan.rlsStatements,
+  ].join("\n\n");
+}
+
 interface HostedPublicChecksWorkerSummary {
   kind: "open-uptime.hosted-public-checks-worker";
   status: "completed" | "stopped";
@@ -1312,7 +1349,8 @@ function buildHostedWorkerPreflight(role: HostedWorkerRole): HostedWorkerPreflig
     { name: "hosted-mode", ok: mode === "hosted", detail: mode || "<unset>" },
     { name: "component", ok: !component || component === role, detail: component || "<unset>" },
     { name: "workspace", ok: Boolean(workspaceId), detail: workspaceId || "<unset>" },
-    { name: "postgres-adapter", ok: false, detail: "not implemented" },
+    { name: "postgres-schema-plan", ok: true, detail: "available through uptime cloud postgres-plan" },
+    { name: "postgres-adapter", ok: false, detail: "async runtime store not implemented" },
     { name: "cloud-worker-leases", ok: false, detail: "not implemented" },
   ];
   if (role === "reporter") {
@@ -1344,7 +1382,7 @@ function buildHostedWorkerPreflight(role: HostedWorkerRole): HostedWorkerPreflig
 function hostedWorkerNextActions(role: HostedWorkerRole): string[] {
   const shared = [
     "Keep the ECS service desired count at 0 until this preflight reports canStart=true.",
-    "Move authoritative hosted state from the EFS SQLite bridge to the cloud store with transactional leases.",
+    "Review uptime cloud postgres-plan, then move authoritative hosted state from the EFS SQLite bridge to the async Postgres store with transactional leases.",
   ];
   if (role === "scheduler") {
     return [

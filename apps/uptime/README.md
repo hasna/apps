@@ -46,6 +46,8 @@ uptime report-schedules run-due
 uptime report-schedules runs
 uptime audit
 uptime cloud plan --json
+uptime cloud postgres-plan --json
+uptime cloud postgres-plan --sql
 uptime cloud workers preflight --role public-probe --json
 uptime cloud public-checks worker --workspace-id ws_internal --max-iterations 1 --hosted-sqlite-db /data/uptime/uptime.db
 uptime cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --json
@@ -82,7 +84,14 @@ resolves to the ALB and matches `certificate_arn`, or an explicit risk
 acceptance. Hosted AWS runtime state currently uses explicit EFS-backed SQLite via
 `HASNA_UPTIME_HOSTED_SQLITE_DB=/data/uptime/uptime.db` for one protected web
 task maximum; do not set `HASNA_UPTIME_DATABASE_URL` until the async Postgres
-adapter is implemented.
+adapter is implemented. `uptime cloud postgres-plan` exposes the reviewed
+target schema, workspace RLS policy shape, tombstones, audit tables,
+idempotency fields, and check-job lease tables for private review without
+connecting to Postgres or printing credentials.
+The interim hosted SQLite bridge now also requires explicit workspace context
+for hosted store/API reads and mutations, hides tombstoned monitors from active
+queries, records hosted monitor deletes in `sync_tombstones`, and keeps active
+monitor names unique only among non-deleted rows.
 `uptime cloud workers preflight --role <role>` reports why hosted scheduler,
 public-probe, reporter, and migration roles remain blocked. Their `run`
 entrypoints fail closed until Postgres, check jobs, channel refs, and migration

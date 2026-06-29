@@ -139,10 +139,12 @@ const REQUIRED_TABLES = [
   "report_schedules",
   "report_runs",
   "audit_events",
+  "sync_tombstones",
 ] as const;
 const PROBE_TABLES = new Set<string>(["probe_identities", "probe_check_jobs", "probe_submissions"]);
 const REPORT_AUDIT_TABLES = new Set<string>(["report_schedules", "report_runs", "audit_events"]);
-const CURRENT_SCHEMA_VERSION = "5";
+const TOMBSTONE_TABLES = new Set<string>(["sync_tombstones"]);
+const CURRENT_SCHEMA_VERSION = "6";
 
 interface MonitorRow {
   id: string;
@@ -161,6 +163,7 @@ interface MonitorRow {
   status: MonitorStatus;
   last_checked_at: string | null;
   revision: number;
+  deleted_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -380,12 +383,15 @@ export class UptimeStore {
         last_checked_at TEXT,
         revision INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        UNIQUE (workspace_id, name)
+        updated_at TEXT NOT NULL
       )
     `);
     this.ensureColumn("monitors", "workspace_id", "TEXT NOT NULL DEFAULT 'local'");
     this.ensureColumn("monitors", "revision", "INTEGER NOT NULL DEFAULT 1");
+    this.ensureColumn("monitors", "deleted_at", "TEXT");
+    this.ensureColumn("monitors", "actor", "TEXT");
+    this.ensureColumn("monitors", "origin", "TEXT");
+    this.ensureColumn("monitors", "idempotency_key", "TEXT");
     this.ensureMonitorKindAllowsBrowserPage();
     this.db.run(`
       CREATE TABLE IF NOT EXISTS check_results (
@@ -530,6 +536,20 @@ export class UptimeStore {
     `);
     this.ensureColumn("audit_events", "workspace_id", "TEXT");
     this.db.run(`
+      CREATE TABLE IF NOT EXISTS sync_tombstones (
+        workspace_id TEXT NOT NULL,
+        resource_type TEXT NOT NULL,
+        resource_id TEXT NOT NULL,
+        deleted_at TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        actor TEXT,
+        origin TEXT,
+        idempotency_key TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        PRIMARY KEY (workspace_id, resource_type, resource_id)
+      )
+    `);
+    this.db.run(`
       CREATE TABLE IF NOT EXISTS schema_migrations (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL,
@@ -540,6 +560,7 @@ export class UptimeStore {
       .query("INSERT OR REPLACE INTO schema_migrations (key, value, updated_at) VALUES ('schema_version', ?, ?)")
       .run(CURRENT_SCHEMA_VERSION, new Date().toISOString());
     this.db.run("CREATE INDEX IF NOT EXISTS idx_results_monitor_time ON check_results(monitor_id, checked_at DESC)");
+    this.db.run("CREATE UNIQUE INDEX IF NOT EXISTS idx_monitors_workspace_name_active ON monitors(workspace_id, name) WHERE deleted_at IS NULL");
     this.db.run("CREATE INDEX IF NOT EXISTS idx_monitors_workspace_enabled_name ON monitors(workspace_id, enabled, name)");
     this.db.run("CREATE INDEX IF NOT EXISTS idx_incidents_monitor_status ON incidents(monitor_id, status)");
     this.db.run("CREATE INDEX IF NOT EXISTS idx_check_leases_until ON check_leases(leased_until)");
@@ -555,6 +576,7 @@ export class UptimeStore {
     this.db.run("CREATE INDEX IF NOT EXISTS idx_audit_events_resource_time ON audit_events(resource_type, resource_id, created_at DESC)");
     this.db.run("CREATE INDEX IF NOT EXISTS idx_audit_events_workspace_time ON audit_events(workspace_id, created_at DESC)");
     this.db.run("CREATE INDEX IF NOT EXISTS idx_audit_events_time ON audit_events(created_at DESC)");
+    this.db.run("CREATE INDEX IF NOT EXISTS idx_sync_tombstones_workspace_time ON sync_tombstones(workspace_id, deleted_at DESC)");
   }
 
   backup(destinationPath?: string): UptimeBackup {
@@ -643,7 +665,7 @@ export class UptimeStore {
       throw new Error("hosted browser_page monitors must remain disabled until browser evidence workers are configured");
     }
     const now = new Date().toISOString();
-    const workspaceId = normalizeWorkspaceId(options.workspaceId ?? input.workspaceId ?? "local");
+    const workspaceId = this.scopedWorkspaceId(options.workspaceId ?? input.workspaceId, "createMonitor") ?? "local";
     const monitor: Monitor = {
       id: newId("mon"),
       workspaceId,
@@ -696,13 +718,14 @@ export class UptimeStore {
   }
 
   listMonitors(options: { includeDisabled?: boolean; workspaceId?: string } = {}): Monitor[] {
-    const workspaceId = options.workspaceId ? normalizeWorkspaceId(options.workspaceId) : undefined;
+    const workspaceId = this.scopedWorkspaceId(options.workspaceId, "listMonitors");
     const clauses: string[] = [];
     const args: string[] = [];
     if (workspaceId) {
       clauses.push("workspace_id = ?");
       args.push(workspaceId);
     }
+    clauses.push("deleted_at IS NULL");
     if (!options.includeDisabled) clauses.push("enabled = 1");
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
     const rows = this.db.query(`SELECT * FROM monitors ${where} ORDER BY name ASC`).all(...args) as MonitorRow[];
@@ -710,9 +733,9 @@ export class UptimeStore {
   }
 
   getMonitor(idOrName: string, options: { workspaceId?: string } = {}): Monitor | null {
-    const workspaceId = options.workspaceId ? normalizeWorkspaceId(options.workspaceId) : undefined;
+    const workspaceId = this.scopedWorkspaceId(options.workspaceId, "getMonitor");
     const row = this.db
-      .query(`SELECT * FROM monitors WHERE (id = ? OR name = ?)${workspaceId ? " AND workspace_id = ?" : ""}`)
+      .query(`SELECT * FROM monitors WHERE (id = ? OR name = ?) AND deleted_at IS NULL${workspaceId ? " AND workspace_id = ?" : ""}`)
       .get(...(workspaceId ? [idOrName, idOrName, workspaceId] : [idOrName, idOrName])) as MonitorRow | null;
     return row ? monitorFromRow(row) : null;
   }
@@ -766,9 +789,48 @@ export class UptimeStore {
     return this.getMonitor(current.id, { workspaceId: options.workspaceId })!;
   }
 
-  deleteMonitor(idOrName: string, options: { workspaceId?: string } = {}): boolean {
+  deleteMonitor(idOrName: string, options: { workspaceId?: string; actor?: string; origin?: string; idempotencyKey?: string } = {}): boolean {
     const current = this.getMonitor(idOrName, { workspaceId: options.workspaceId });
     if (!current) return false;
+    if (this.mode === "hosted") {
+      const deletedAt = new Date().toISOString();
+      const actor = normalizeNullableAuditText(options.actor, "Delete actor", 160);
+      const origin = normalizeNullableAuditText(options.origin ?? "hosted-sqlite-bridge", "Delete origin", 160);
+      const idempotencyKey = normalizeNullableAuditText(options.idempotencyKey, "Delete idempotency key", 160);
+      const tx = this.db.transaction(() => {
+        const update = this.db
+          .query(`
+            UPDATE monitors
+            SET enabled = 0,
+                status = 'paused',
+                revision = revision + 1,
+                deleted_at = ?,
+                actor = ?,
+                origin = ?,
+                idempotency_key = ?,
+                updated_at = ?
+            WHERE id = ? AND workspace_id = ? AND deleted_at IS NULL
+          `)
+          .run(deletedAt, actor, origin, idempotencyKey, deletedAt, current.id, current.workspaceId);
+        if (statementChanges(update) !== 1) return false;
+        this.db
+          .query(`
+            INSERT INTO sync_tombstones (
+              workspace_id, resource_type, resource_id, deleted_at, version, actor, origin, idempotency_key, metadata_json
+            ) VALUES (?, 'monitor', ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(workspace_id, resource_type, resource_id) DO UPDATE SET
+              deleted_at = excluded.deleted_at,
+              version = excluded.version,
+              actor = excluded.actor,
+              origin = excluded.origin,
+              idempotency_key = excluded.idempotency_key,
+              metadata_json = excluded.metadata_json
+          `)
+          .run(current.workspaceId, current.id, deletedAt, current.revision + 1, actor, origin, idempotencyKey, JSON.stringify({ name: current.name, kind: current.kind }));
+        return true;
+      });
+      return tx();
+    }
     this.db.query("DELETE FROM monitors WHERE id = ?").run(current.id);
     return true;
   }
@@ -1249,8 +1311,9 @@ export class UptimeStore {
     this.db.query("DELETE FROM check_leases WHERE monitor_id = ? AND owner = ?").run(monitorId, owner);
   }
 
-  recordCheckResult(input: Omit<CheckResult, "id" | "checkedAt"> & { checkedAt?: string; expectedMonitorRevision?: number }): CheckResult {
-    const monitor = this.getMonitor(input.monitorId);
+  recordCheckResult(input: Omit<CheckResult, "id" | "checkedAt"> & { checkedAt?: string; expectedMonitorRevision?: number; workspaceId?: string }): CheckResult {
+    const workspaceId = this.scopedWorkspaceId(input.workspaceId, "recordCheckResult");
+    const monitor = this.getMonitor(input.monitorId, { workspaceId });
     if (!monitor) throw new Error(`Monitor not found: ${input.monitorId}`);
     if (input.expectedMonitorRevision !== undefined && monitor.revision !== input.expectedMonitorRevision) {
       throw new StaleCheckResultError(`Monitor changed while check was in progress: ${monitor.name}`);
@@ -1272,8 +1335,8 @@ export class UptimeStore {
     };
     const tx = this.db.transaction(() => {
       const current = this.db
-        .query("SELECT * FROM monitors WHERE id = ?")
-        .get(result.monitorId) as MonitorRow | null;
+        .query(`SELECT * FROM monitors WHERE id = ? AND deleted_at IS NULL${workspaceId ? " AND workspace_id = ?" : ""}`)
+        .get(...(workspaceId ? [result.monitorId, workspaceId] : [result.monitorId])) as MonitorRow | null;
       if (!current) throw new Error(`Monitor not found: ${result.monitorId}`);
       if (input.expectedMonitorRevision !== undefined && current.revision !== input.expectedMonitorRevision) {
         throw new StaleCheckResultError(`Monitor changed while check was in progress: ${current.name}`);
@@ -1314,7 +1377,7 @@ export class UptimeStore {
 
   listResults(options: ListResultsOptions = {}): CheckResult[] {
     const limit = clampLimit(options.limit ?? 50);
-    const workspaceId = options.workspaceId ? normalizeWorkspaceId(options.workspaceId) : undefined;
+    const workspaceId = this.scopedWorkspaceId(options.workspaceId, "listResults");
     const clauses: string[] = [];
     const args: (string | number)[] = [];
     if (options.monitorId) {
@@ -1328,7 +1391,7 @@ export class UptimeStore {
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
     args.push(limit);
     const rows = this.db
-      .query(`SELECT check_results.* FROM check_results JOIN monitors ON monitors.id = check_results.monitor_id ${where} ORDER BY checked_at DESC LIMIT ?`)
+      .query(`SELECT check_results.* FROM check_results JOIN monitors ON monitors.id = check_results.monitor_id AND monitors.deleted_at IS NULL ${where} ORDER BY checked_at DESC LIMIT ?`)
       .all(...args) as CheckResultRow[];
     return rows.map(checkResultFromRow);
   }
@@ -1412,10 +1475,12 @@ export class UptimeStore {
       clauses.push("incidents.monitor_id = ?");
       args.push(options.monitorId);
     }
-    if (options.workspaceId) {
+    const workspaceId = this.scopedWorkspaceId(options.workspaceId, "listIncidents");
+    if (workspaceId) {
       clauses.push("monitors.workspace_id = ?");
-      args.push(normalizeWorkspaceId(options.workspaceId));
+      args.push(workspaceId);
     }
+    clauses.push("monitors.deleted_at IS NULL");
     const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
     args.push(clampLimit(options.limit ?? 50));
     const rows = this.db
@@ -1432,7 +1497,8 @@ export class UptimeStore {
   }
 
   summary(options: { workspaceId?: string } = {}): UptimeSummary {
-    const monitors = this.listMonitors({ includeDisabled: true, workspaceId: options.workspaceId });
+    const workspaceId = this.scopedWorkspaceId(options.workspaceId, "summary");
+    const monitors = this.listMonitors({ includeDisabled: true, workspaceId });
     const summaries = monitors.map((monitor) => this.monitorSummary(monitor));
     return {
       generatedAt: new Date().toISOString(),
@@ -1444,7 +1510,7 @@ export class UptimeStore {
         down: monitors.filter((m) => m.status === "down").length,
         paused: monitors.filter((m) => !m.enabled || m.status === "paused").length,
         unknown: monitors.filter((m) => m.status === "unknown").length,
-        openIncidents: this.countOpenIncidents(options.workspaceId),
+        openIncidents: this.countOpenIncidents(workspaceId),
       },
     };
   }
@@ -1452,12 +1518,12 @@ export class UptimeStore {
   private countOpenIncidents(workspaceId?: string): number {
     if (workspaceId) {
       const row = this.db
-        .query("SELECT COUNT(*) AS count FROM incidents JOIN monitors ON monitors.id = incidents.monitor_id WHERE incidents.status = 'open' AND monitors.workspace_id = ?")
+        .query("SELECT COUNT(*) AS count FROM incidents JOIN monitors ON monitors.id = incidents.monitor_id WHERE incidents.status = 'open' AND monitors.workspace_id = ? AND monitors.deleted_at IS NULL")
         .get(normalizeWorkspaceId(workspaceId)) as { count: number } | null;
       return Number(row?.count ?? 0);
     }
     const row = this.db
-      .query("SELECT COUNT(*) AS count FROM incidents WHERE status = 'open'")
+      .query("SELECT COUNT(*) AS count FROM incidents JOIN monitors ON monitors.id = incidents.monitor_id WHERE incidents.status = 'open' AND monitors.deleted_at IS NULL")
       .get() as { count: number } | null;
     return Number(row?.count ?? 0);
   }
@@ -1547,8 +1613,8 @@ export class UptimeStore {
       .query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'monitors'")
       .get() as { sql: string } | null;
     const needsBrowserPage = !row?.sql?.includes("browser_page");
-    const needsWorkspaceUnique = Boolean(row?.sql?.includes("name TEXT NOT NULL UNIQUE"));
-    if (!row?.sql || (!needsBrowserPage && !needsWorkspaceUnique)) return;
+    const needsLegacyNameUnique = Boolean(row?.sql?.includes("name TEXT NOT NULL UNIQUE") || row?.sql?.includes("UNIQUE (workspace_id, name)"));
+    if (!row?.sql || (!needsBrowserPage && !needsLegacyNameUnique)) return;
     this.db.run("PRAGMA foreign_keys = OFF");
     this.db.run("PRAGMA legacy_alter_table = ON");
     try {
@@ -1572,21 +1638,26 @@ export class UptimeStore {
             status TEXT NOT NULL DEFAULT 'unknown',
             last_checked_at TEXT,
             revision INTEGER NOT NULL DEFAULT 1,
+            deleted_at TEXT,
+            actor TEXT,
+            origin TEXT,
+            idempotency_key TEXT,
             created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            UNIQUE (workspace_id, name)
+            updated_at TEXT NOT NULL
           )
         `);
         this.db.run(`
           INSERT INTO monitors (
             id, workspace_id, name, kind, url, host, port, method, expected_status,
             interval_seconds, timeout_ms, retry_count, enabled, status,
-            last_checked_at, revision, created_at, updated_at
+            last_checked_at, revision, deleted_at, actor, origin, idempotency_key,
+            created_at, updated_at
           )
           SELECT
             id, workspace_id, name, kind, url, host, port, method, expected_status,
             interval_seconds, timeout_ms, retry_count, enabled, status,
-            last_checked_at, revision, created_at, updated_at
+            last_checked_at, revision, deleted_at, actor, origin, idempotency_key,
+            created_at, updated_at
           FROM monitors_old_kind
         `);
         this.db.run("DROP TABLE monitors_old_kind");
@@ -1649,6 +1720,14 @@ export class UptimeStore {
     const quoted = backupPath.replace(/'/g, "''");
     this.db.run(`VACUUM INTO '${quoted}'`);
   }
+
+  private scopedWorkspaceId(value: string | undefined, operation: string): string | undefined {
+    if (this.mode === "hosted") {
+      if (!value?.trim()) throw new Error(`hosted ${operation} requires workspaceId`);
+      return normalizeWorkspaceId(value);
+    }
+    return value ? normalizeWorkspaceId(value) : undefined;
+  }
 }
 
 export function resolveRuntimeMode(mode?: UptimeRuntimeMode): UptimeRuntimeMode {
@@ -1681,11 +1760,12 @@ function verifyBackupFile(backupPath: string): UptimeBackupCheck {
         .query("SELECT value FROM schema_migrations WHERE key = 'schema_version'")
         .get() as { value: string } | null)?.value ?? null;
     const currentOk = missingTables.length === 0 && schemaVersion === CURRENT_SCHEMA_VERSION;
-    const restorableV4 = schemaVersion === "4" && missingTables.length === 0;
-    const restorableV1 = schemaVersion === "1" && missingTables.every((table) => PROBE_TABLES.has(table) || REPORT_AUDIT_TABLES.has(table));
-    const restorableV2 = schemaVersion === "2" && missingTables.every((table) => REPORT_AUDIT_TABLES.has(table));
+    const restorableV5 = schemaVersion === "5" && missingTables.every((table) => TOMBSTONE_TABLES.has(table));
+    const restorableV4 = schemaVersion === "4" && missingTables.every((table) => TOMBSTONE_TABLES.has(table));
+    const restorableV1 = schemaVersion === "1" && missingTables.every((table) => PROBE_TABLES.has(table) || REPORT_AUDIT_TABLES.has(table) || TOMBSTONE_TABLES.has(table));
+    const restorableV2 = schemaVersion === "2" && missingTables.every((table) => REPORT_AUDIT_TABLES.has(table) || TOMBSTONE_TABLES.has(table));
     return {
-      ok: integrity === "ok" && (currentOk || restorableV4 || restorableV1 || restorableV2),
+      ok: integrity === "ok" && (currentOk || restorableV5 || restorableV4 || restorableV1 || restorableV2),
       backupPath,
       integrity,
       schemaVersion,

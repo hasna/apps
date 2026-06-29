@@ -224,7 +224,7 @@ test("hosted API uses scoped /api/v1 auth and leaves legacy routes local-only", 
   expect(await otherWorkspaceMonitors.json()).toHaveLength(1);
   expect(crossWorkspaceGet.status).toBe(404);
   expect(workspaceMismatch.status).toBe(403);
-  expect(service.summary().totals.monitors).toBe(2);
+  expect(service.summary({ workspaceId: "ws_a" }).totals.monitors + service.summary({ workspaceId: "ws_b" }).totals.monitors).toBe(2);
   service.close();
 });
 
@@ -253,7 +253,7 @@ test("hosted readiness is authenticated and reports production data-mode gate wi
     productionReady: false,
     mode: "hosted",
     dataMode: "hosted-local-sqlite",
-    schemaVersion: "5",
+    schemaVersion: "6",
     auth: { configured: true, checked: true },
   });
   expect(body.checks.map((check: { name: string }) => check.name)).toContain("hosted-data-mode");
@@ -390,7 +390,7 @@ test("hosted API reads scoped token descriptors from environment JSON", async ()
     expect(writeCreate.status).toBe(201);
     expect(legacyFallback.status).toBe(401);
     expect(workspaceMismatch.status).toBe(403);
-    expect(service.summary().totals.monitors).toBe(1);
+    expect(service.summary({ workspaceId: "ws_env" }).totals.monitors).toBe(1);
   } finally {
     service.close();
     if (previousTokens === undefined) delete process.env.HASNA_UPTIME_HOSTED_TOKENS;
@@ -567,7 +567,7 @@ test("hosted API still rejects cross-origin mutations with a valid token", async
 
   expect(response.status).toBe(403);
   expect((await response.json()).error).toContain("cross-origin");
-  expect(service.summary().totals.monitors).toBe(0);
+  expect(service.summary({ workspaceId: "default" }).totals.monitors).toBe(0);
   service.close();
 });
 
@@ -594,7 +594,7 @@ test("hosted API accepts configured public origin behind a CloudFront edge origi
     expect(create.status).toBe(201);
     expect(rejected.status).toBe(403);
     expect((await rejected.json()).error).toContain("cross-origin");
-    expect(service.summary().totals.monitors).toBe(1);
+    expect(service.summary({ workspaceId: "default" }).totals.monitors).toBe(1);
   } finally {
     if (previousAllowedOrigins === undefined) delete process.env.HASNA_UPTIME_ALLOWED_ORIGINS;
     else process.env.HASNA_UPTIME_ALLOWED_ORIGINS = previousAllowedOrigins;
@@ -604,7 +604,7 @@ test("hosted API accepts configured public origin behind a CloudFront edge origi
 
 test("hosted API blocks raw report delivery and inline checks", async () => {
   const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
-  service.createMonitor({ name: "api", kind: "http", url: "https://example.com" });
+  service.createMonitor({ workspaceId: "default", name: "api", kind: "http", url: "https://example.com" });
   const handler = createApiHandler(service, {
     mode: "hosted",
     hostedTokens: [
@@ -696,7 +696,7 @@ test("hosted API enforces target policy at monitor creation", async () => {
     ));
     expect(response.status).toBe(400);
   }
-  expect(service.summary().totals.monitors).toBe(0);
+  expect(service.summary({ workspaceId: "default" }).totals.monitors).toBe(0);
   service.close();
 });
 

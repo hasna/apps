@@ -98,6 +98,9 @@ export interface UptimeImportStore {
 }
 
 export function previewImport(store: UptimeImportStore, request: ImportRequest, options: { workspaceId?: string } = {}): ImportPreview {
+  if (store.mode === "hosted" && !options.workspaceId?.trim()) {
+    throw new Error("hosted import preview requires workspaceId");
+  }
   const source = normalizeSource(request.source);
   const items = dedupePreviewItems(request.records.map((record) => previewRecord(store, source, record, request.defaults ?? {}, options)));
   return {

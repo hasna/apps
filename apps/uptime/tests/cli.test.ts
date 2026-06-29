@@ -135,6 +135,37 @@ test("CLI cloud plan emits blocked dry-run JSON without live mutation commands",
   }
 });
 
+test("CLI cloud postgres-plan emits redacted blocked schema plan and SQL", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const jsonResult = runCli([
+      "cloud",
+      "postgres-plan",
+      "--database-url",
+      "postgres://svc:raw-password@db.example.invalid/uptime?sslmode=require",
+      "--json",
+    ], dbPath);
+    const sqlResult = runCli(["cloud", "postgres-plan", "--schema", "uptime_prod", "--sql"], dbPath);
+    const jsonStdout = new TextDecoder().decode(jsonResult.stdout);
+    const sqlStdout = new TextDecoder().decode(sqlResult.stdout);
+    const plan = JSON.parse(jsonStdout);
+
+    expect(jsonResult.exitCode).toBe(0);
+    expect(plan.status).toBe("blocked");
+    expect(plan.canApply).toBe(false);
+    expect(plan.database.redactedUrl).toBe("postgres://user:redacted@db.example.invalid/uptime");
+    expect(jsonStdout).not.toContain("raw-password");
+    expect(jsonStdout).not.toContain("sslmode=require");
+    expect(sqlResult.exitCode).toBe(0);
+    expect(sqlStdout).toContain("CREATE TABLE IF NOT EXISTS \"uptime_prod\".\"sync_tombstones\"");
+    expect(sqlStdout).toContain("ENABLE ROW LEVEL SECURITY");
+    expect(sqlStdout).not.toContain("postgres://");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("CLI private probe env requires a real cloud probe id", () => {
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {

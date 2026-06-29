@@ -592,7 +592,7 @@ test("hosted store allows non-standard SQLite paths only with explicit local fal
     expect(service.store.mode).toBe("hosted");
     expect(service.store.dataMode).toBe("hosted-local-sqlite");
     expect(service.store.dbPath).toBe(hostedSqliteDbPath);
-    const monitor = service.createMonitor({ name: "cloud", kind: "http", url: "https://example.com" });
+    const monitor = service.createMonitor({ workspaceId: "ws_a", name: "cloud", kind: "http", url: "https://example.com" });
     expect(monitor.status).toBe("unknown");
   } finally {
     service.close();
@@ -600,10 +600,54 @@ test("hosted store allows non-standard SQLite paths only with explicit local fal
 
   const reopened = new UptimeService({ mode: "hosted", hostedSqliteDbPath, allowHostedLocalStore: true });
   try {
-    expect(reopened.listMonitors({ includeDisabled: true }).map((monitor) => monitor.name)).toEqual(["cloud"]);
+    expect(reopened.listMonitors({ workspaceId: "ws_a", includeDisabled: true }).map((monitor) => monitor.name)).toEqual(["cloud"]);
   } finally {
     reopened.close();
   }
+});
+
+test("hosted monitor deletes create tombstones and free active monitor names", () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const first = service.createMonitor({ workspaceId: "ws_a", name: "api", kind: "http", url: "https://example.com" });
+  service.createMonitor({ workspaceId: "ws_b", name: "api", kind: "http", url: "https://example.org" });
+
+  expect(service.deleteMonitor(first.id, { workspaceId: "ws_b" })).toBe(false);
+  expect(service.deleteMonitor(first.id, {
+    workspaceId: "ws_a",
+    actor: "operator-a",
+    origin: "api-test",
+    idempotencyKey: "delete-1",
+  })).toBe(true);
+  expect(service.getMonitor(first.id, { workspaceId: "ws_a" })).toBeNull();
+  expect(service.listMonitors({ workspaceId: "ws_a", includeDisabled: true })).toHaveLength(0);
+  const replacement = service.createMonitor({ workspaceId: "ws_a", name: "api", kind: "http", url: "https://example.net" });
+  expect(replacement.id).not.toBe(first.id);
+
+  const db = (service.store as unknown as { db: Database }).db;
+  const tombstone = db
+    .query("SELECT * FROM sync_tombstones WHERE workspace_id = ? AND resource_type = 'monitor' AND resource_id = ?")
+    .get("ws_a", first.id) as {
+      workspace_id: string;
+      resource_type: string;
+      resource_id: string;
+      version: number;
+      actor: string | null;
+      origin: string | null;
+      idempotency_key: string | null;
+      metadata_json: string;
+    } | null;
+  expect(tombstone).toMatchObject({
+    workspace_id: "ws_a",
+    resource_type: "monitor",
+    resource_id: first.id,
+    version: 2,
+    actor: "operator-a",
+    origin: "api-test",
+    idempotency_key: "delete-1",
+  });
+  expect(JSON.parse(tombstone!.metadata_json)).toMatchObject({ name: "api", kind: "http" });
+  expect(service.listMonitors({ workspaceId: "ws_b" })).toHaveLength(1);
+  service.close();
 });
 
 test("hosted public due checks run only scoped HTTP/TCP monitors with hosted target policy", async () => {
@@ -733,7 +777,7 @@ test("hosted service rejects inline SDK checks and scheduler entrypoints", async
       return { status: "up", latencyMs: 1, statusCode: 200, error: null };
     },
   });
-  service.createMonitor({ name: "hosted", kind: "http", url: "https://example.com" });
+  service.createMonitor({ workspaceId: "ws_a", name: "hosted", kind: "http", url: "https://example.com" });
 
   await expect(service.checkMonitor("hosted")).rejects.toThrow("hosted checks require check_jobs and probes");
   await expect(service.checkAll()).rejects.toThrow("hosted checks require check_jobs and probes");
@@ -753,7 +797,7 @@ test("hosted service rejects IPv4-mapped IPv6 private targets", () => {
     .toThrow("private or reserved IPv6");
   expect(() => service.createMonitor({ name: "mapped-tcp", kind: "tcp", host: "::ffff:c0a8:1", port: 5432 }))
     .toThrow("private or reserved IPv6");
-  expect(service.summary().totals.monitors).toBe(0);
+  expect(service.summary({ workspaceId: "ws_a" }).totals.monitors).toBe(0);
   service.close();
 });
 
@@ -1009,7 +1053,7 @@ test("TCP imports preserve live target hosts while hosted fallback redacts priva
   const preview = hosted.previewImport({
     source: "servers",
     records: [{ id: "db", name: "db", kind: "tcp", hostname: "db.internal", port: 5432 }],
-  });
+  }, { workspaceId: "ws_a" });
   expect(preview.totals.blocked).toBe(1);
   expect(preview.items[0].candidate.host).toBe("[private-host]");
   expect(JSON.stringify(preview)).not.toContain("db.internal");
@@ -1183,7 +1227,7 @@ test("import preview snapshots redact embedded local paths and secret-like value
       monitor: { name: "api", kind: "http", url: "https://example.com" },
       message: "error at /Users/example/private/file token=abc",
     }],
-  });
+  }, { workspaceId: "ws_a" });
   const snapshot = JSON.stringify(preview.items[0].candidate.snapshot);
 
   expect(snapshot).toContain("[local-path]");
@@ -1202,7 +1246,7 @@ test("import preview and apply do not leak secret-bearing target fragments", () 
       sourceId: rawSourceId,
       monitor: { name: "callback", kind: "browser_page", url: "https://example.com/callback#access_token=secret" },
     }],
-  });
+  }, { workspaceId: "ws_a" });
 
   expect(preview.totals.blocked).toBe(1);
   expect(preview.items[0].reason).toContain("fragment contains secret-like data");
@@ -1237,7 +1281,7 @@ test("browser imports do not echo raw host metadata", () => {
         host: "/Users/example/private token=secret",
       },
     }],
-  });
+  }, { workspaceId: "ws_a" });
 
   expect(preview.totals.create).toBe(1);
   expect(preview.items[0].candidate.host).toBeUndefined();
@@ -1256,7 +1300,7 @@ test("browser imports do not use hostname as a name fallback", () => {
       url: "https://example.com/app",
       hostname: "internal.admin.local",
     }],
-  });
+  }, { workspaceId: "ws_a" });
 
   expect(preview.totals.create).toBe(1);
   expect(preview.items[0].candidate.name).toBe("manual-https://example.com/app");
@@ -1271,7 +1315,7 @@ test("import preview blocks unsafe hosted targets before apply", () => {
   const preview = service.previewImport({
     source: "manual",
     records: [{ sourceId: "metadata", monitor: { name: "metadata", kind: "http", url: "http://169.254.169.254/latest/meta-data" } }],
-  });
+  }, { workspaceId: "ws_a" });
 
   expect(preview.totals).toMatchObject({ blocked: 1 });
   expect(preview.items[0].reason).toContain("private or reserved IPv4");
@@ -1281,7 +1325,7 @@ test("import preview blocks unsafe hosted targets before apply", () => {
       sourceId: "https://example.com/?api_key=secret#access_token=secret",
       monitor: { name: "secret", kind: "http", url: "https://example.com/?api_key=secret" },
     }],
-  });
+  }, { workspaceId: "ws_a" });
   expect(secretPreview.totals).toMatchObject({ blocked: 1 });
   expect(secretPreview.items[0].candidate.sourceId).toBe("https://example.com/?api_key=%5Bredacted%5D");
   expect(secretPreview.items[0].candidate.url).toBe("https://example.com/?api_key=%5Bredacted%5D");
@@ -1439,7 +1483,7 @@ test("local backup verify and restore round trip preserves data", async () => {
   first.close();
 
   expect(backup.bytes).toBeGreaterThan(0);
-  expect(check).toMatchObject({ ok: true, integrity: "ok", schemaVersion: "5", monitors: 1, results: 1, incidents: 1 });
+  expect(check).toMatchObject({ ok: true, integrity: "ok", schemaVersion: "6", monitors: 1, results: 1, incidents: 1 });
 
   UptimeStore.restoreBackup(backup.backupPath, restorePath);
   const restored = new UptimeService({ dbPath: restorePath });
@@ -1474,7 +1518,7 @@ test("schema v1 backups missing only probe tables remain restorable", () => {
   const restored = new UptimeService({ dbPath: restorePath });
   expect(restored.listMonitors({ includeDisabled: true })).toHaveLength(1);
   expect(restored.createProbe({ name: "post-restore" }).publicKeyFingerprint).toHaveLength(64);
-  expect(restored.verifyBackup(restorePath).schemaVersion).toBe("5");
+  expect(restored.verifyBackup(restorePath).schemaVersion).toBe("6");
   restored.close();
 });
 
@@ -1502,7 +1546,7 @@ test("schema v2 backups missing only report and audit tables remain restorable",
   UptimeStore.restoreBackup(legacyPath, restorePath);
   const restored = new UptimeService({ dbPath: restorePath });
   expect(restored.listReportSchedules()).toHaveLength(0);
-  expect(restored.verifyBackup(restorePath).schemaVersion).toBe("5");
+  expect(restored.verifyBackup(restorePath).schemaVersion).toBe("6");
   restored.close();
 });
 
