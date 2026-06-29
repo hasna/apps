@@ -15,7 +15,7 @@ import type { BrowserEngine } from "./helpers.js";
 
 export function register(server: McpServer) {
 
-// ── Scripts (browser + connector + AI workflows, SQLite-backed) ──────────────
+// ── Scripts (browser + connector + AI steps, SQLite-backed) ──────────────────
 
 registerTool(server,
   "browser_script_run",

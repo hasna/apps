@@ -1,4 +1,4 @@
-// ─── Data, scripts, workflows, recordings, agents, gallery, downloads, meta ──
+// ─── Data, scripts, recordings, agents, gallery, downloads, meta ─────────────
 
 import { register as registerRecordings } from "./recordings.js";
 import { register as registerVideos } from "./videos.js";

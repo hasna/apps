@@ -7,6 +7,7 @@ import { navigate } from "../../lib/actions.js";
 import { getText, getLinks, extract } from "../../lib/extractor.js";
 import { takeScreenshot } from "../../lib/screenshot.js";
 import { crawl } from "../../lib/crawler.js";
+import { getSemanticPageMap, observeSemanticActions, runSemanticAction, validateSemanticPage } from "../../lib/semantic-actions.js";
 import type { BrowserEngine } from "../../types/index.js";
 import { limited, parseLimit, printHint, printListFooter, truncate } from "../output.js";
 
@@ -48,6 +49,149 @@ program
       if (text) console.log(chalk.white(`\n${text.slice(0, 500)}...`));
     }
     await closeSession(session.id);
+  });
+
+// ─── semantic page tools ─────────────────────────────────────────────────────
+
+program
+  .command("page-map <url>")
+  .description("Return a semantic page map: sanitized text, forms, and interactive refs for agent planning")
+  .option("--engine <engine>", "Browser engine", "auto")
+  .option("--headed", "Run in headed (visible) mode")
+  .option("--max-elements <n>", "Maximum interactive refs to return", "80")
+  .option("--max-text-chars <n>", "Maximum sanitized text characters", "4000")
+  .option("--json", "Output as JSON")
+  .action(async (url: string, opts: { engine: string; headed?: boolean; maxElements: string; maxTextChars: string; json?: boolean }) => {
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
+    try {
+      await navigate(page, url);
+      const pageMap = await getSemanticPageMap(page, session.id, {
+        maxElements: parseInt(opts.maxElements, 10) || 80,
+        maxTextChars: parseInt(opts.maxTextChars, 10) || 4000,
+      });
+      if (opts.json) {
+        console.log(JSON.stringify({ session_id: session.id, ...pageMap }, null, 2));
+      } else {
+        console.log(chalk.green(`✓ ${pageMap.title}`));
+        console.log(chalk.gray(`  ${pageMap.url}`));
+        console.log(chalk.gray(`  ${pageMap.elements.length}/${pageMap.interactive_count} interactive refs, ${pageMap.forms.length} forms`));
+        for (const element of pageMap.elements.slice(0, 20)) {
+          console.log(`${element.ref} ${element.role} ${truncate(element.name, 70)}${element.enabled ? "" : " disabled"}`);
+        }
+        printHint("Use --json for full sanitized text/forms, or browser observe <url> <instruction>.");
+      }
+    } finally {
+      await closeSession(session.id);
+    }
+  });
+
+program
+  .command("observe <url> <instruction...>")
+  .description("Ask Browser to find actionable page affordances for an instruction, returning structured actions")
+  .option("--engine <engine>", "Browser engine", "auto")
+  .option("--headed", "Run in headed (visible) mode")
+  .option("--max-actions <n>", "Maximum actions to return", "8")
+  .option("--max-elements <n>", "Maximum interactive refs to inspect", "80")
+  .option("--model <model>", "Model alias/provider model for semantic ranking", "fast")
+  .option("--no-ai", "Disable model ranking and use deterministic matching only")
+  .option("--json", "Output as JSON")
+  .action(async (url: string, instructionParts: string[], opts: { engine: string; headed?: boolean; maxActions: string; maxElements: string; model: string; ai?: boolean; json?: boolean }) => {
+    const instruction = instructionParts.join(" ");
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
+    try {
+      await navigate(page, url);
+      const result = await observeSemanticActions(page, session.id, instruction, {
+        maxActions: parseInt(opts.maxActions, 10) || 8,
+        maxElements: parseInt(opts.maxElements, 10) || 80,
+        useModel: opts.ai !== false,
+        infer: { model: opts.model },
+      });
+      if (opts.json) {
+        console.log(JSON.stringify({ session_id: session.id, ...result }, null, 2));
+      } else {
+        console.log(chalk.green(`✓ observed ${result.actions.length} action${result.actions.length === 1 ? "" : "s"}`));
+        console.log(chalk.gray(`  ${result.title}`));
+        for (const action of result.actions) {
+          const approval = action.requiresApproval ? chalk.yellow(" approval") : "";
+          console.log(`${action.id} ${action.kind} ${action.ref} ${truncate(action.label, 60)} confidence=${action.confidence.toFixed(2)} risk=${action.risk}${approval}`);
+        }
+        printHint("Use --json for full action records. Browser will not execute from observe.");
+      }
+    } finally {
+      await closeSession(session.id);
+    }
+  });
+
+program
+  .command("act <url> <instruction...>")
+  .description("Observe the best semantic action for an instruction and execute it if risk policy allows")
+  .option("--engine <engine>", "Browser engine", "auto")
+  .option("--headed", "Run in headed (visible) mode")
+  .option("--model <model>", "Model alias/provider model for semantic ranking", "fast")
+  .option("--value <value>", "Value for fill/select actions")
+  .option("--checked <boolean>", "Boolean value for check actions")
+  .option("--allow-risk", "Allow actions that require explicit risk approval")
+  .option("--screenshot", "Capture a screenshot after acting")
+  .option("--json", "Output as JSON")
+  .action(async (url: string, instructionParts: string[], opts: { engine: string; headed?: boolean; model: string; value?: string; checked?: string; allowRisk?: boolean; screenshot?: boolean; json?: boolean }) => {
+    const instruction = instructionParts.join(" ");
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
+    try {
+      await navigate(page, url);
+      const observed = await observeSemanticActions(page, session.id, instruction, {
+        maxActions: 1,
+        useModel: true,
+        infer: { model: opts.model },
+      });
+      const action = observed.actions[0];
+      if (!action) throw new Error(`No semantic action found for instruction: ${instruction}`);
+      const checked = opts.checked === undefined ? undefined : opts.checked === "true";
+      const acted = await runSemanticAction(page, session.id, action, {
+        value: checked ?? opts.value,
+        allowRisk: opts.allowRisk,
+      });
+      const screenshot = opts.screenshot ? await takeScreenshot(page, { sessionId: session.id, maxWidth: 1280, quality: 70 }) : undefined;
+      const result = { session_id: session.id, observed, acted, screenshot };
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(chalk.green(`✓ ${acted.action.kind} ${acted.action.ref} ${truncate(acted.action.label, 60)}`));
+        console.log(chalk.gray(`  ${acted.url}`));
+        if (screenshot) console.log(chalk.gray(`  Screenshot: ${screenshot.path}`));
+      }
+    } finally {
+      await closeSession(session.id);
+    }
+  });
+
+program
+  .command("validate <url> <assertion...>")
+  .description("Validate a page assertion using sanitized text and optional fast structured model reasoning")
+  .option("--engine <engine>", "Browser engine", "auto")
+  .option("--headed", "Run in headed (visible) mode")
+  .option("--model <model>", "Model alias/provider model for semantic validation", "fast")
+  .option("--no-ai", "Disable model validation and use deterministic text matching only")
+  .option("--json", "Output as JSON")
+  .action(async (url: string, assertionParts: string[], opts: { engine: string; headed?: boolean; model: string; ai?: boolean; json?: boolean }) => {
+    const assertion = assertionParts.join(" ");
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
+    try {
+      await navigate(page, url);
+      const result = await validateSemanticPage(page, assertion, {
+        useModel: opts.ai !== false,
+        infer: { model: opts.model },
+      });
+      if (opts.json) {
+        console.log(JSON.stringify({ session_id: session.id, ...result }, null, 2));
+      } else {
+        console.log(result.ok ? chalk.green("✓ assertion passed") : chalk.red("✗ assertion failed"));
+        console.log(chalk.gray(`  confidence=${result.confidence.toFixed(2)} method=${result.method}`));
+        console.log(chalk.gray(`  ${result.evidence}`));
+      }
+      if (!result.ok) process.exitCode = 1;
+    } finally {
+      await closeSession(session.id);
+    }
   });
 
 // ─── check ───────────────────────────────────────────────────────────────────

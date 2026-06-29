@@ -183,21 +183,6 @@ export const PG_MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_auth_flows_domain ON auth_flows(domain)`,
   `CREATE INDEX IF NOT EXISTS idx_auth_flows_name ON auth_flows(name)`,
 
-  // Migration 7: Workflows
-  `CREATE TABLE IF NOT EXISTS workflows (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
-    description TEXT,
-    steps TEXT NOT NULL DEFAULT '[]',
-    start_url TEXT,
-    last_run TEXT,
-    last_heal TEXT,
-    heal_count INTEGER DEFAULT 0,
-    run_count INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT NOW()::text,
-    updated_at TEXT DEFAULT NOW()::text
-  )`,
-
   // Migration 8: Datasets + API endpoints
   `CREATE TABLE IF NOT EXISTS datasets (
     id TEXT PRIMARY KEY,

@@ -46,6 +46,12 @@ describe("DB schema", () => {
     expect(row?.journal_mode).toBe("wal");
   });
 
+  it("waits briefly for concurrent writers", () => {
+    const db = getDatabase();
+    const row = db.query<{ timeout: number }, []>("PRAGMA busy_timeout").get();
+    expect(row?.timeout).toBe(5000);
+  });
+
   it("returns same instance on repeated calls", () => {
     const db1 = getDatabase();
     const db2 = getDatabase();

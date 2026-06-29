@@ -81,6 +81,29 @@ describe("CLI — one-shot browse commands", () => {
     expect(parsed.links_count).toBe(1);
     expect(parsed.screenshot).toBeString();
   }, 10_000);
+
+  it("check --json tolerates concurrent shared SQLite startup", async () => {
+    const runs = await Promise.all(
+      [1, 2, 3].map((n) =>
+        runCliWithTimeout(
+          [
+            "check",
+            `data:text/html,<title>Concurrent ${n}</title><p>${n}</p>`,
+            "--json",
+          ],
+          10_000,
+        )
+      )
+    );
+
+    for (const [index, result] of runs.entries()) {
+      expect(result.timedOut).toBe(false);
+      expect(result.code).toBe(0);
+      expect(result.stderr).not.toContain("SQLITE_BUSY");
+      const parsed = JSON.parse(result.stdout);
+      expect(parsed.title).toBe(`Concurrent ${index + 1}`);
+    }
+  }, 20_000);
 });
 
 describe("CLI — help flags", () => {
@@ -93,6 +116,9 @@ describe("CLI — help flags", () => {
     expect(stdout).toContain("navigate");
     expect(stdout).toContain("session");
     expect(stdout).toContain("extension");
+    expect(stdout).toContain("observe");
+    expect(stdout).toContain("page-map");
+    expect(stdout).toContain("validate");
     expect(stdout).toContain("agent");
     expect(stdout).toContain("events");
     expect(stdout).toContain("project");
@@ -188,6 +214,52 @@ describe("CLI — help flags", () => {
     expect(code).not.toBe(0);
     expect(stderr).toContain("Unknown --format");
   });
+
+  it("browser observe --help documents semantic actions", async () => {
+    const { stdout, code } = await runCli("observe", "--help");
+    expect(code).toBe(0);
+    expect(stdout).toContain("structured actions");
+    expect(stdout).toContain("--no-ai");
+    expect(stdout).toContain("--max-actions");
+  });
+});
+
+describe("CLI — semantic browser tools", () => {
+  beforeEach(setupDb);
+  afterEach(teardownDb);
+
+  it("observe returns structured actions from a sanitized page map", async () => {
+    const result = await runCliWithTimeout([
+      "observe",
+      "data:text/html,<title>Semantic Demo</title><button>Sign in</button>",
+      "find the sign in button",
+      "--no-ai",
+      "--json",
+    ], 10_000);
+
+    expect(result.timedOut).toBe(false);
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.title).toBe("Semantic Demo");
+    expect(parsed.actions[0].kind).toBe("click");
+    expect(parsed.actions[0].label).toContain("Sign in");
+  }, 15_000);
+
+  it("validate checks assertions without requiring a model", async () => {
+    const result = await runCliWithTimeout([
+      "validate",
+      "data:text/html,<title>Semantic Demo</title><main>cart drawer is open</main>",
+      "cart drawer open",
+      "--no-ai",
+      "--json",
+    ], 10_000);
+
+    expect(result.timedOut).toBe(false);
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.ok).toBe(true);
+    expect(parsed.method).toBe("text");
+  }, 15_000);
 });
 
 describe("CLI — session commands (DB-only)", () => {
@@ -227,7 +299,7 @@ describe("CLI — script commands", () => {
 
   it("script list hides long descriptions unless verbose while JSON stays full fidelity", async () => {
     const { createScript } = await import("../db/scripts.js");
-    const description = `Detailed workflow description ${"very ".repeat(80)}long tail`;
+    const description = `Detailed automation script description ${"very ".repeat(80)}long tail`;
     createScript({
       name: "noisy-script",
       domain: "example.com",
@@ -242,7 +314,7 @@ describe("CLI — script commands", () => {
 
     const verbose = await runCli("script", "list", "--verbose");
     expect(verbose.code).toBe(0);
-    expect(verbose.stdout).toContain("Detailed workflow description");
+    expect(verbose.stdout).toContain("Detailed automation script description");
     expect(verbose.stdout).not.toContain(description);
 
     const full = await runCli("script", "list", "--json");

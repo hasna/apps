@@ -8,6 +8,27 @@ The current engine set also includes Bun.WebView, TUI, and the explicit-only
 Chrome extension engine. The extension engine is not part of auto-routing: it
 is selected only when the caller asks for `engine: "extension"`.
 
+## Semantic Agent Surface
+
+Browser exposes a small semantic surface for agents and skills:
+
+- `page-map` builds a sanitized page model with text, forms, and interactive
+  refs.
+- `observe` maps a task instruction to structured candidate actions.
+- `act` executes a selected ref action with risk checks.
+- `validate` checks postconditions against sanitized page state.
+
+This keeps Browser focused on page understanding, deterministic execution,
+evidence, and session cleanup. Reusable domain behavior belongs in skills:
+skills define task instructions, risk policy, prompts, output schemas, and stop
+conditions. Browser records and caches what happened, but it does not own a
+first-class recipe registry or durable site-specific manifests.
+
+Model-assisted steps operate on sanitized page maps. Website content is
+untrusted input, not an instruction source. Secrets should be passed only as
+runtime variables to execution tools, not embedded into page maps or model
+prompts.
+
 ## Backend Comparison
 
 | Feature | Chrome DevTools | Playwright | Lightpanda |

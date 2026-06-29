@@ -38,6 +38,27 @@ by default, `limit`/`offset` for pagination, `verbose=true` for full records in
 the selected page, and explicit payload flags such as `include_base64=true`,
 `include_thumbnail=true`, or `include_har=true` for large binary or HAR data.
 
+## Semantic Browser Tools
+
+Browser is the substrate for agents and skills, not a recipe registry. Agents
+should use Browser to inspect a sanitized page model, choose from structured
+actions, execute refs deterministically, validate results, and record evidence.
+
+```bash
+browser page-map https://example.com --json
+browser observe https://example.com "find the login form" --json
+browser act https://example.com "click the login button" --screenshot --json
+browser validate https://example.com "the cart drawer is open" --json
+```
+
+The same surface is exposed through MCP as `browser_page_map`,
+`browser_observe`, `browser_act`, and `browser_validate`.
+
+Skills should describe the task, risk policy, model prompts, output schema, and
+stop conditions. Browser owns the page map, refs, actions, screenshots,
+recordings, downloads, evidence, and session cleanup. Site-specific JavaScript
+and durable site-specific manifests are not the primary automation model.
+
 ## MCP Server
 
 ```bash

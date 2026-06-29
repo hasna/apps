@@ -67,6 +67,7 @@ export function getDatabase(path?: string): TypedDb {
 
   _db = new Database(resolvedPath) as unknown as TypedDb;
   _dbPath = resolvedPath;
+  _db.exec("PRAGMA busy_timeout=5000;");
   _db.exec("PRAGMA journal_mode=WAL;");
   _db.exec("PRAGMA foreign_keys=ON;");
 
@@ -127,12 +128,6 @@ function runMigrations(db: TypedDb): void {
       applied_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
-
-  const applied = new Set(
-    (db.query("SELECT version FROM schema_migrations").all() as { version: number }[]).map(
-      (r) => r.version
-    )
-  );
 
   const migrations: Array<{ version: number; sql: string }> = [
     {
@@ -325,24 +320,6 @@ function runMigrations(db: TypedDb): void {
       `,
     },
     {
-      version: 7,
-      sql: `
-        CREATE TABLE IF NOT EXISTS workflows (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL UNIQUE,
-          description TEXT,
-          steps TEXT NOT NULL DEFAULT '[]',
-          start_url TEXT,
-          last_run TEXT,
-          last_heal TEXT,
-          heal_count INTEGER DEFAULT 0,
-          run_count INTEGER DEFAULT 0,
-          created_at TEXT DEFAULT (datetime('now')),
-          updated_at TEXT DEFAULT (datetime('now'))
-        );
-      `,
-    },
-    {
       version: 8,
       sql: `
         CREATE TABLE IF NOT EXISTS datasets (
@@ -471,12 +448,24 @@ function runMigrations(db: TypedDb): void {
     },
   ];
 
-  for (const m of migrations) {
-    if (!applied.has(m.version)) {
-      db.transaction(() => {
+  db.exec("BEGIN IMMEDIATE;");
+  try {
+    const applied = new Set(
+      (db.query("SELECT version FROM schema_migrations").all() as { version: number }[]).map(
+        (r) => r.version
+      )
+    );
+
+    for (const m of migrations) {
+      if (!applied.has(m.version)) {
         db.exec(m.sql);
         db.prepare("INSERT INTO schema_migrations (version) VALUES (?)").run(m.version);
-      })();
+        applied.add(m.version);
+      }
     }
+    db.exec("COMMIT;");
+  } catch (err) {
+    try { db.exec("ROLLBACK;"); } catch {}
+    throw err;
   }
 }

@@ -3,6 +3,7 @@ import type { Browser } from "playwright";
 import {
   connectKernelBrowser,
   createKernelSandbox,
+  executeKernelPlaywright,
   setKernelCdpConnectorForTests,
   setKernelClientFactoryForTests,
   setKernelSecretsProviderForTests,
@@ -213,5 +214,41 @@ describe("kernel engine", () => {
     expect(sandbox.metadata.authConnectionId).toBe("auth-1");
     expect(sandbox.metadata.authStatus).toBe("AUTHENTICATED");
     expect(sandbox.metadata.authLiveViewUrl).toBe("https://kernel.test/auth-live");
+  });
+
+  it("executes Playwright code through Kernel SDK and redacts capability URLs", async () => {
+    const calls: unknown[] = [];
+    setKernelSecretsProviderForTests(secretsProvider());
+    setKernelClientFactoryForTests(() => ({
+      browsers: {
+        async create() {
+          throw new Error("not used");
+        },
+        async deleteByID() {},
+        playwright: {
+          async execute(sessionId, params) {
+            calls.push({ sessionId, params });
+            return {
+              result: {
+                url: "wss://kernel.test/devtools/browser/secret-token",
+                nested: ["https://kernel.test/live/secret-token"],
+              },
+            };
+          },
+        },
+      },
+    }));
+
+    const result = await executeKernelPlaywright("kernel-session-4", "return await page.title()", {
+      timeoutSec: 12,
+    });
+
+    expect(calls).toEqual([{
+      sessionId: "kernel-session-4",
+      params: { code: "return await page.title()", timeout_sec: 12 },
+    }]);
+    expect(JSON.stringify(result)).toContain("[redacted-cdp-url]");
+    expect(JSON.stringify(result)).toContain("[redacted-url]");
+    expect(JSON.stringify(result)).not.toContain("secret-token");
   });
 });

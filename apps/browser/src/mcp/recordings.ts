@@ -1,4 +1,4 @@
-// ─── Recording, workflow, crawl, and auth flow tools ─────────────────────────
+// ─── Recording, crawl, and auth flow tools ───────────────────────────────────
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { compactList, truncateText } from "./compact.js";
@@ -16,7 +16,6 @@ import {
   recordStep,
   crawl,
   listRecordings,
-  logEvent,
 } from "./helpers.js";
 import type { BrowserEngine } from "./helpers.js";
 
@@ -105,77 +104,6 @@ registerTool(server,
         hint: "Set verbose=true for full steps, or use browser_record_export for a specific recording.",
       });
       return json({ recordings: compact.items, count: compact.count, total: compact.total, limit: compact.limit, truncated: compact.truncated, next_offset: compact.next_offset, hint: compact.hint });
-    } catch (e) { return err(e); }
-  }
-);
-
-// ── Workflow Tools ─────────────────────────────────────────────────────────
-
-registerTool(server,
-  "browser_workflow_save",
-  "Save a recording as a reusable workflow with self-healing replay",
-  { recording_id: z.string(), name: z.string(), description: z.string().optional() },
-  async ({ recording_id, name, description }) => {
-    try {
-      const { saveWorkflowFromRecording } = await import("../lib/workflows.js");
-      return json(saveWorkflowFromRecording(recording_id, name, description));
-    } catch (e) { return err(e); }
-  }
-);
-
-registerTool(server,
-  "browser_workflow_list",
-  "List saved workflows. Compact by default; set verbose=true for full workflow records.",
-  { limit: z.number().optional().default(25), offset: z.number().optional().default(0), verbose: z.boolean().optional().default(false) },
-  async ({ limit, offset, verbose }) => {
-    try {
-      const { listWorkflows } = await import("../lib/workflows.js");
-      const workflows = listWorkflows();
-      if (verbose) {
-        const page = compactList(workflows, limit, (workflow: any) => workflow, { offset });
-        return json({ workflows: page.items, count: page.count, total: page.total, limit: page.limit, truncated: page.truncated, next_offset: page.next_offset });
-      }
-      const compact = compactList(workflows, limit, (workflow: any) => ({
-        name: workflow.name,
-        description: truncateText(workflow.description, 140) || undefined,
-        steps: workflow.steps?.length ?? 0,
-        created_at: workflow.created_at,
-        updated_at: workflow.updated_at,
-      }), {
-        offset,
-        hint: "Set verbose=true for full workflow step records.",
-      });
-      return json({ workflows: compact.items, count: compact.count, total: compact.total, limit: compact.limit, truncated: compact.truncated, next_offset: compact.next_offset, hint: compact.hint });
-    } catch (e) { return err(e); }
-  }
-);
-
-registerTool(server,
-  "browser_workflow_run",
-  "Run a saved workflow with self-healing. If selectors changed, auto-adapts and reports what was healed.",
-  { session_id: z.string().optional(), name: z.string() },
-  async ({ session_id, name }) => {
-    try {
-      const sid = resolveSessionId(session_id);
-      const page = getSessionPage(sid);
-      const { getWorkflowByName, runWorkflow } = await import("../lib/workflows.js");
-      const workflow = getWorkflowByName(name);
-      if (!workflow) return err(new Error(`Workflow '${name}' not found`));
-      const result = await runWorkflow(workflow, page);
-      logEvent(sid, "workflow_run", { name, ...result });
-      return json(result);
-    } catch (e) { return err(e); }
-  }
-);
-
-registerTool(server,
-  "browser_workflow_delete",
-  "Delete a saved workflow",
-  { name: z.string() },
-  async ({ name }) => {
-    try {
-      const { deleteWorkflow } = await import("../lib/workflows.js");
-      return json({ deleted: deleteWorkflow(name) });
     } catch (e) { return err(e); }
   }
 );

@@ -44,6 +44,14 @@ import {
   logEvent,
 } from "./helpers.js";
 import { assertBrowserCapability } from "../lib/policy.js";
+import {
+  getCachedSemanticAction,
+  getSemanticPageMap,
+  observeSemanticActions,
+  runSemanticAction,
+  validateSemanticPage,
+  type SemanticAction,
+} from "../lib/semantic-actions.js";
 
 export function register(server: McpServer) {
 
@@ -192,6 +200,122 @@ registerTool(server,
       const page = getSessionPage(sid);
       await reload(page);
       return json({ url: page.url() });
+    } catch (e) { return err(e); }
+  }
+);
+
+// ── Semantic Agent Tools ─────────────────────────────────────────────────────
+
+registerTool(server,
+  "browser_page_map",
+  "Return a sanitized semantic page map: title, URL, interactive refs, forms, and visible text for agent planning.",
+  {
+    session_id: z.string().optional(),
+    max_elements: z.number().optional().default(80),
+    max_text_chars: z.number().optional().default(4000),
+  },
+  async ({ session_id, max_elements, max_text_chars }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      const pageMap = await getSemanticPageMap(page, sid, { maxElements: max_elements, maxTextChars: max_text_chars });
+      logEvent(sid, "page_map", { elements: pageMap.elements.length, forms: pageMap.forms.length });
+      return json(pageMap);
+    } catch (e) { return err(e); }
+  }
+);
+
+registerTool(server,
+  "browser_observe",
+  "Find structured page actions for an instruction. This does not execute; use browser_act with action_id or action.",
+  {
+    session_id: z.string().optional(),
+    instruction: z.string(),
+    max_actions: z.number().optional().default(8),
+    max_elements: z.number().optional().default(80),
+    use_model: z.boolean().optional().default(true),
+    model: z.string().optional().default("fast"),
+  },
+  async ({ session_id, instruction, max_actions, max_elements, use_model, model }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      const result = await observeSemanticActions(page, sid, instruction, {
+        maxActions: max_actions,
+        maxElements: max_elements,
+        useModel: use_model,
+        infer: { model },
+      });
+      logEvent(sid, "observe", { instruction, actions: result.actions.length, modelUsed: result.modelUsed });
+      return json(result);
+    } catch (e) { return err(e); }
+  }
+);
+
+const semanticActionSchema = z.object({
+  id: z.string(),
+  kind: z.enum(["click", "fill", "select", "check", "hover"]),
+  ref: z.string(),
+  label: z.string(),
+  confidence: z.number(),
+  risk: z.enum(["none", "navigation", "external_mutation", "sensitive"]),
+  requiresApproval: z.boolean(),
+  reason: z.string().optional(),
+  value: z.union([z.string(), z.boolean()]).optional(),
+  preconditions: z.array(z.string()).optional(),
+  postconditions: z.array(z.string()).optional(),
+});
+
+registerTool(server,
+  "browser_act",
+  "Execute a structured semantic action by action_id/action, or observe an instruction and execute the best action when risk policy allows.",
+  {
+    session_id: z.string().optional(),
+    action_id: z.string().optional(),
+    action: semanticActionSchema.optional(),
+    instruction: z.string().optional(),
+    value: z.union([z.string(), z.boolean()]).optional(),
+    allow_risk: z.boolean().optional().default(false),
+    screenshot: z.boolean().optional().default(false),
+  },
+  async ({ session_id, action_id, action, instruction, value, allow_risk, screenshot }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      let resolved = action as SemanticAction | undefined;
+      if (!resolved && action_id) resolved = getCachedSemanticAction(sid, action_id) ?? undefined;
+      if (!resolved && instruction) {
+        const observed = await observeSemanticActions(page, sid, instruction, { maxActions: 1 });
+        resolved = observed.actions[0];
+      }
+      if (!resolved) return err(new Error("Provide action, action_id from browser_observe, or instruction."));
+      const result = await runSemanticAction(page, sid, resolved, { value, allowRisk: allow_risk });
+      const output: Record<string, unknown> = { ...result };
+      if (screenshot) {
+        output.screenshot = await takeScreenshot(page, { maxWidth: 1280, quality: 70, track: false });
+      }
+      logEvent(sid, "act", { action: resolved.id, kind: resolved.kind, risk: resolved.risk });
+      return json(output);
+    } catch (e) { return errWithScreenshot(e, session_id); }
+  }
+);
+
+registerTool(server,
+  "browser_validate",
+  "Validate a page assertion from sanitized page content and optional fast structured model reasoning.",
+  {
+    session_id: z.string().optional(),
+    assertion: z.string(),
+    use_model: z.boolean().optional().default(true),
+    model: z.string().optional().default("fast"),
+  },
+  async ({ session_id, assertion, use_model, model }) => {
+    try {
+      const sid = resolveSessionId(session_id);
+      const page = getSessionPage(sid);
+      const result = await validateSemanticPage(page, assertion, { useModel: use_model, infer: { model } });
+      logEvent(sid, "validate", { assertion, ok: result.ok, confidence: result.confidence });
+      return json(result);
     } catch (e) { return err(e); }
   }
 );
