@@ -128,19 +128,20 @@ program
   .option("--engine <engine>", "Browser engine", "auto")
   .option("--headed", "Run in headed (visible) mode")
   .option("--model <model>", "Model alias/provider model for semantic ranking", "fast")
+  .option("--no-ai", "Disable model ranking and use deterministic matching only")
   .option("--value <value>", "Value for fill/select actions")
   .option("--checked <boolean>", "Boolean value for check actions")
   .option("--allow-risk", "Allow actions that require explicit risk approval")
   .option("--screenshot", "Capture a screenshot after acting")
   .option("--json", "Output as JSON")
-  .action(async (url: string, instructionParts: string[], opts: { engine: string; headed?: boolean; model: string; value?: string; checked?: string; allowRisk?: boolean; screenshot?: boolean; json?: boolean }) => {
+  .action(async (url: string, instructionParts: string[], opts: { engine: string; headed?: boolean; model: string; ai?: boolean; value?: string; checked?: string; allowRisk?: boolean; screenshot?: boolean; json?: boolean }) => {
     const instruction = instructionParts.join(" ");
     const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
     try {
       await navigate(page, url);
       const observed = await observeSemanticActions(page, session.id, instruction, {
         maxActions: 1,
-        useModel: true,
+        useModel: opts.ai !== false,
         infer: { model: opts.model },
       });
       const action = observed.actions[0];

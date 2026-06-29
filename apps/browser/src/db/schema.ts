@@ -446,6 +446,12 @@ function runMigrations(db: TypedDb): void {
         CREATE INDEX IF NOT EXISTS idx_sessions_persistence ON sessions(persistence_id);
       `,
     },
+    {
+      version: 13,
+      sql: `
+        DROP TABLE IF EXISTS workflows;
+      `,
+    },
   ];
 
   db.exec("BEGIN IMMEDIATE;");

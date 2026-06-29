@@ -298,6 +298,9 @@ export const PG_MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_sessions_remote_session ON sessions(remote_session_id)`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_persistence ON sessions(persistence_id)`,
 
+  // Drop legacy workflow storage. The workflow product surface was removed.
+  `DROP TABLE IF EXISTS workflows`,
+
   // Lazy tables from url-watcher.ts
   `CREATE TABLE IF NOT EXISTS watch_jobs (
     id         TEXT PRIMARY KEY,

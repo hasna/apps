@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -50,6 +51,19 @@ describe("DB schema", () => {
     const db = getDatabase();
     const row = db.query<{ timeout: number }, []>("PRAGMA busy_timeout").get();
     expect(row?.timeout).toBe(5000);
+  });
+
+  it("drops the removed workflow storage table on upgraded installs", () => {
+    const dbPath = join(tmpDir, "test.db");
+    const oldDb = new Database(dbPath);
+    oldDb.exec("CREATE TABLE workflows (id TEXT PRIMARY KEY)");
+    oldDb.close();
+
+    const db = getDatabase();
+    const row = db
+      .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' AND name='workflows'")
+      .get();
+    expect(row).toBeNull();
   });
 
   it("returns same instance on repeated calls", () => {

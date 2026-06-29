@@ -284,7 +284,7 @@ registerTool(server,
       const sid = resolveSessionId(session_id);
       const page = getSessionPage(sid);
       let resolved = action as SemanticAction | undefined;
-      if (!resolved && action_id) resolved = getCachedSemanticAction(sid, action_id) ?? undefined;
+      if (!resolved && action_id) resolved = getCachedSemanticAction(sid, action_id, page.url()) ?? undefined;
       if (!resolved && instruction) {
         const observed = await observeSemanticActions(page, sid, instruction, { maxActions: 1 });
         resolved = observed.actions[0];

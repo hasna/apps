@@ -86,6 +86,7 @@ const STOPWORDS = new Set([
 ]);
 
 const actionCache = new Map<string, Map<string, SemanticAction>>();
+const actionCacheUrls = new Map<string, string>();
 
 function normalizeText(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9@._ -]+/g, " ").replace(/\s+/g, " ").trim();
@@ -138,6 +139,17 @@ function inferRisk(label: string, instruction: string, kind: SemanticActionKind)
 
 function actionId(ref: string, kind: SemanticActionKind): string {
   return `act_${kind}_${ref.replace(/^@/, "").replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 80)}`;
+}
+
+const RISK_RANK: Record<SemanticRisk, number> = {
+  none: 0,
+  navigation: 1,
+  external_mutation: 2,
+  sensitive: 3,
+};
+
+function maxRisk(a: SemanticRisk, b: SemanticRisk): SemanticRisk {
+  return RISK_RANK[a] >= RISK_RANK[b] ? a : b;
 }
 
 function deterministicFieldActions(pageMap: SemanticPageMap, instruction: string): SemanticAction[] {
@@ -208,36 +220,41 @@ function deterministicActions(pageMap: SemanticPageMap, instruction: string): Se
     .sort((a, b) => b.confidence - a.confidence);
 }
 
-function coerceModelAction(raw: unknown, pageMap: SemanticPageMap, instruction: string): SemanticAction | null {
+export function coerceModelAction(raw: unknown, pageMap: SemanticPageMap, instruction: string): SemanticAction | null {
   if (!raw || typeof raw !== "object") return null;
   const record = raw as Record<string, unknown>;
-  const ref = typeof record.ref === "string" ? record.ref : "";
-  const element = pageMap.elements.find((candidate) => candidate.ref === ref);
-  const selector = typeof record.selector === "string" ? record.selector : undefined;
+  const rawRef = typeof record.ref === "string" ? record.ref : "";
+  const element = pageMap.elements.find((candidate) => candidate.ref === rawRef);
+  const rawSelector = typeof record.selector === "string" ? record.selector : undefined;
+  const rawSelectorFromRef = rawRef.startsWith("selector:") ? rawRef.slice("selector:".length) : undefined;
+  const selector = element ? undefined : (rawSelector ?? rawSelectorFromRef);
   const field = selector
     ? pageMap.forms.flatMap((form) => form.fields).find((candidate) => candidate.selector === selector)
     : undefined;
   if (!element && !field) return null;
   const targetRole = element?.role ?? (field ? fieldRole(field) : "");
   const targetLabel = element?.name ?? (field ? fieldLabel(field) : "");
+  const ref = element ? element.ref : `selector:${field!.selector}`;
   const kind = ["click", "fill", "select", "check", "hover"].includes(String(record.kind))
     ? String(record.kind) as SemanticActionKind
     : inferKind(instruction, { ref, role: targetRole, name: targetLabel, visible: true, enabled: true });
   const risk = inferRisk(targetLabel, instruction, kind);
+  const modelRisk = typeof record.risk === "string" && ["none", "navigation", "external_mutation", "sensitive"].includes(record.risk)
+    ? record.risk as SemanticRisk
+    : risk.risk;
+  const resolvedRisk = maxRisk(risk.risk, modelRisk);
   const confidence = typeof record.confidence === "number"
     ? Math.max(0, Math.min(1, record.confidence))
     : 0.6;
   return {
-    id: typeof record.id === "string" ? record.id : actionId(ref || `selector:${selector}`, kind),
+    id: actionId(ref, kind),
     kind,
-    ref: ref || `selector:${selector}`,
+    ref,
     selector,
     label: typeof record.label === "string" ? record.label : targetLabel,
     confidence,
-    risk: typeof record.risk === "string" && ["none", "navigation", "external_mutation", "sensitive"].includes(record.risk)
-      ? record.risk as SemanticRisk
-      : risk.risk,
-    requiresApproval: typeof record.requiresApproval === "boolean" ? record.requiresApproval : risk.requiresApproval,
+    risk: resolvedRisk,
+    requiresApproval: resolvedRisk === "sensitive" || risk.requiresApproval || record.requiresApproval === true,
     reason: typeof record.reason === "string" ? record.reason : undefined,
     value: typeof record.value === "string" || typeof record.value === "boolean" ? record.value : undefined,
     preconditions: Array.isArray(record.preconditions) ? record.preconditions.filter((v): v is string => typeof v === "string") : undefined,
@@ -245,14 +262,22 @@ function coerceModelAction(raw: unknown, pageMap: SemanticPageMap, instruction: 
   };
 }
 
-export function cacheSemanticActions(sessionId: string, actions: SemanticAction[]): void {
-  const sessionCache = actionCache.get(sessionId) ?? new Map<string, SemanticAction>();
+export function cacheSemanticActions(sessionId: string, actions: SemanticAction[], url?: string): void {
+  const sessionCache = new Map<string, SemanticAction>();
   for (const action of actions) sessionCache.set(action.id, action);
   actionCache.set(sessionId, sessionCache);
+  if (url) actionCacheUrls.set(sessionId, url);
 }
 
-export function getCachedSemanticAction(sessionId: string, actionId: string): SemanticAction | null {
+export function getCachedSemanticAction(sessionId: string, actionId: string, currentUrl?: string): SemanticAction | null {
+  const cachedUrl = actionCacheUrls.get(sessionId);
+  if (currentUrl && cachedUrl && currentUrl !== cachedUrl) return null;
   return actionCache.get(sessionId)?.get(actionId) ?? null;
+}
+
+export function clearCachedSemanticActions(sessionId: string): void {
+  actionCache.delete(sessionId);
+  actionCacheUrls.delete(sessionId);
 }
 
 export async function getSemanticPageMap(
@@ -266,13 +291,48 @@ export async function getSemanticPageMap(
   setLastSnapshot(sessionId, snapshot);
   const sanitized = sanitizeText((await getText(page)).slice(0, maxTextChars));
   const forms = await page.evaluate(() => {
+    function attrValue(value: string): string {
+      return value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
+    }
+    function unique(selector: string): string | undefined {
+      try {
+        return document.querySelectorAll(selector).length === 1 ? selector : undefined;
+      } catch {
+        return undefined;
+      }
+    }
     function cssPath(el: Element): string {
       const id = el.getAttribute("id");
-      if (id) return `#${CSS.escape(id)}`;
+      if (id) {
+        const selector = unique(`#${CSS.escape(id)}`);
+        if (selector) return selector;
+      }
       const name = el.getAttribute("name");
       const tag = el.tagName.toLowerCase();
-      if (name) return `${tag}[name="${CSS.escape(name)}"]`;
-      return tag;
+      if (name) {
+        const selector = unique(`${tag}[name="${attrValue(name)}"]`);
+        if (selector) return selector;
+      }
+      for (const attr of ["aria-label", "placeholder", "data-testid", "data-test"]) {
+        const value = el.getAttribute(attr);
+        if (!value) continue;
+        const selector = unique(`${tag}[${attr}="${attrValue(value)}"]`);
+        if (selector) return selector;
+      }
+      const parts: string[] = [];
+      let node: Element | null = el;
+      while (node && node.tagName.toLowerCase() !== "html") {
+        const nodeTag = node.tagName.toLowerCase();
+        const parent: Element | null = node.parentElement;
+        if (!parent) break;
+        const siblings = Array.from(parent.children as HTMLCollectionOf<Element>).filter((child: Element) => child.tagName === node!.tagName);
+        const index = siblings.indexOf(node) + 1;
+        parts.unshift(siblings.length > 1 ? `${nodeTag}:nth-of-type(${index})` : nodeTag);
+        const selector = unique(parts.join(" > "));
+        if (selector) return selector;
+        node = parent;
+      }
+      return parts.join(" > ") || tag;
     }
     function labelFor(el: Element): string | undefined {
       const id = el.getAttribute("id");
@@ -283,12 +343,14 @@ export async function getSemanticPageMap(
       const wrapping = el.closest("label");
       return wrapping?.textContent?.trim().slice(0, 120) || undefined;
     }
-    return Array.from(document.forms).slice(0, 20).map((form) => ({
-      name: form.getAttribute("name") || undefined,
-      id: form.getAttribute("id") || undefined,
-      action: form.getAttribute("action") || undefined,
-      method: form.getAttribute("method") || undefined,
-      fields: Array.from(form.querySelectorAll("input, textarea, select")).slice(0, 60).map((field) => ({
+    function isActionableField(field: Element): boolean {
+      if (field instanceof HTMLInputElement && field.type === "hidden") return false;
+      if ((field as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement).disabled) return false;
+      if (field.getAttribute("aria-hidden") === "true") return false;
+      return true;
+    }
+    function mapField(field: Element) {
+      return {
         tag: field.tagName.toLowerCase(),
         type: field.getAttribute("type") || undefined,
         name: field.getAttribute("name") || undefined,
@@ -297,8 +359,20 @@ export async function getSemanticPageMap(
         label: labelFor(field) || undefined,
         required: field.hasAttribute("required"),
         selector: cssPath(field),
-      })),
+      };
+    }
+    const allFields = Array.from(document.querySelectorAll("input, textarea, select"))
+      .filter(isActionableField)
+      .slice(0, 120);
+    const formMaps = Array.from(document.forms).slice(0, 20).map((form) => ({
+      name: form.getAttribute("name") || undefined,
+      id: form.getAttribute("id") || undefined,
+      action: form.getAttribute("action") || undefined,
+      method: form.getAttribute("method") || undefined,
+      fields: allFields.filter((field) => field.closest("form") === form).slice(0, 60).map(mapField),
     }));
+    const looseFields = allFields.filter((field) => !field.closest("form")).slice(0, 60).map(mapField);
+    return looseFields.length > 0 ? [...formMaps, { fields: looseFields }] : formMaps;
   }).catch(() => []);
 
   return {
@@ -350,7 +424,7 @@ export async function observeSemanticActions(
   const selected = actions
     .sort((a, b) => b.confidence - a.confidence)
     .slice(0, maxActions);
-  cacheSemanticActions(sessionId, selected);
+  cacheSemanticActions(sessionId, selected, pageMap.url);
   return {
     instruction,
     url: pageMap.url,
