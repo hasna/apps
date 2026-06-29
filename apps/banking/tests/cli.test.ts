@@ -27,6 +27,52 @@ describe("banking CLI scaffold", () => {
     expect(await runCli(["providers", "list", "--json"])).toBe(0);
   });
 
+  test("ops list exposes provider operation descriptors", async () => {
+    const originalLog = console.log;
+    let output = "";
+    console.log = (...args: unknown[]) => {
+      output += args.join(" ");
+    };
+    try {
+      expect(await runCli(["ops", "list", "--provider=mercury", "--json"])).toBe(0);
+    } finally {
+      console.log = originalLog;
+    }
+
+    const parsed = JSON.parse(output) as {
+      readonly operations: readonly [{ readonly providerId: string; readonly operationId: string }];
+    };
+    expect(parsed.operations.length).toBeGreaterThan(0);
+    expect(parsed.operations.every((operation) => operation.providerId === "mercury")).toBe(true);
+    expect(parsed.operations.map((operation) => operation.operationId)).toContain("mercury.cards.createVirtual");
+  });
+
+  test("ops describe supports -- positional delimiter", async () => {
+    const originalLog = console.log;
+    let output = "";
+    console.log = (...args: unknown[]) => {
+      output += args.join(" ");
+    };
+    try {
+      expect(await runCli(["ops", "describe", "--json", "--", "mercury.cards.freeze"])).toBe(0);
+    } finally {
+      console.log = originalLog;
+    }
+
+    const parsed = JSON.parse(output) as {
+      readonly operation: {
+        readonly operationId: string;
+        readonly safetyClass: string;
+        readonly liveReadEnabled: boolean;
+        readonly providerSideEffectsEnabled: boolean;
+      };
+    };
+    expect(parsed.operation.operationId).toBe("mercury.cards.freeze");
+    expect(parsed.operation.safetyClass).toBe("card_lifecycle");
+    expect(parsed.operation.liveReadEnabled).toBe(false);
+    expect(parsed.operation.providerSideEffectsEnabled).toBe(false);
+  });
+
   test("payment request envelope exits successfully", async () => {
     const originalLog = console.log;
     let output = "";

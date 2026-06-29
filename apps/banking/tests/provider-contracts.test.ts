@@ -3,8 +3,10 @@ import {
   createStagedProviderAdapter,
   getProviderConformanceContract,
   getProvider,
+  getOperationDescriptor,
   listProviderAdapterDescriptors,
   listProviderConformanceContracts,
+  listOperationDescriptors,
   planProviderOperation,
 } from "../src/index.ts";
 
@@ -31,7 +33,7 @@ describe("provider conformance contracts", () => {
       operation: "cards.createVirtual",
       environment: "sandbox",
       grantedScopes: ["cards:write"],
-      env: { MERCURY_API_TOKEN: "set" },
+      env: { MERCURY_API_KEY: "set" },
     });
 
     expect(operation?.support).toBe("documented_unverified");
@@ -138,7 +140,7 @@ describe("provider conformance contracts", () => {
       operation: "payments.create",
       environment: "sandbox",
       grantedScopes: ["transactions:write"],
-      env: { MERCURY_API_TOKEN: "set" },
+      env: { MERCURY_API_KEY: "set" },
     });
 
     expect(descriptors).toHaveLength(4);
@@ -148,6 +150,40 @@ describe("provider conformance contracts", () => {
     expect(adapter.descriptor.plannedOperations).toContain("payments.create");
     expect(plan.status).toBe("ready_for_conformance");
     expect(plan.executable).toBe(false);
+  });
+
+  test("operation registry derives provider descriptors from conformance contracts", () => {
+    const mercuryOperations = listOperationDescriptors({ providerId: "mercury" });
+    const freeze = getOperationDescriptor("mercury.cards.freeze");
+    const accounts = getOperationDescriptor("mercury.accounts.list");
+
+    expect(mercuryOperations.map((operation) => operation.operationId)).toContain("mercury.cards.freeze");
+    expect(freeze).toMatchObject({
+      providerId: "mercury",
+      operationId: "mercury.cards.freeze",
+      resource: "cards",
+      action: "freeze",
+      safetyClass: "card_lifecycle",
+      executionMode: "dry_run_only",
+      liveReadEnabled: false,
+      providerSideEffectsEnabled: false,
+      requiresOperationPlan: true,
+    });
+    expect(freeze?.mcp).toMatchObject({ toolName: "banking_card_freeze_request", exposed: true });
+    expect(freeze?.cli.providerFirstCommand).toEqual(["mercury", "cards", "freeze"]);
+    expect(accounts).toMatchObject({
+      executionMode: "implemented_read",
+      liveReadEnabled: true,
+      providerSideEffectsEnabled: false,
+      requiresOperationPlan: false,
+    });
+  });
+
+  test("operation registry maps descriptors to the real CLI command surface", () => {
+    expect(getOperationDescriptor("mercury.payments.create")?.cli.command).toEqual(["payments", "request"]);
+    expect(getOperationDescriptor("mercury.cards.createVirtual")?.cli.command).toEqual(["cards", "request"]);
+    expect(getOperationDescriptor("mercury.cards.updateSettings")?.cli.command).toEqual(["cards", "update"]);
+    expect(getOperationDescriptor("mercury.cards.freeze")?.cli.command).toEqual(["cards", "freeze"]);
   });
 
   test("all provider operations stay non-executable until release gates explicitly verify them", () => {
@@ -177,6 +213,11 @@ describe("provider conformance contracts", () => {
           env,
         });
         expect(plan.executable).toBe(false);
+        const descriptor = getOperationDescriptor(`${contract.providerId}.${operation.operation}`);
+        expect(descriptor?.providerSideEffectsEnabled).toBe(false);
+        if (operation.support !== "unsupported" && operation.effect !== "read") {
+          expect(descriptor?.requiresOperationPlan).toBe(true);
+        }
         if (operation.support !== "unsupported") {
           expect(plan.reasons).toContain("Provider operation is not verified for live execution; only conformance planning is allowed.");
         }

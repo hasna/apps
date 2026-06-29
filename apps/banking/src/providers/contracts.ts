@@ -82,6 +82,7 @@ export interface ProviderOperationPlanInput {
 }
 
 const checkedAt = "2026-06-29";
+const MERCURY_ENV = ["MERCURY_API_KEY", "MERCURY_SANDBOX_API_KEY", "MERCURY_PRODUCTION_API_KEY"] as const;
 
 export const PROVIDER_CONFORMANCE_CONTRACTS: readonly ProviderConformanceContract[] = [
   {
@@ -101,10 +102,10 @@ export const PROVIDER_CONFORMANCE_CONTRACTS: readonly ProviderConformanceContrac
       "All money movement and card lifecycle operations require maker-checker approval and idempotency reservation before provider submission.",
     ],
     operations: [
-      read("accounts.list", ["accounts:read"], ["MERCURY_API_TOKEN"], { method: "GET", path: "/api/v1/accounts" }),
-      read("balances.get", ["accounts:read"], ["MERCURY_API_TOKEN"], { method: "GET", path: "/api/v1/account/{accountId}" }),
-      read("transactions.list", ["transactions:read"], ["MERCURY_API_TOKEN"], { method: "GET", path: "/api/v1/transactions" }),
-      write("payments.create", "money_movement", ["transactions:write"], ["MERCURY_API_TOKEN"], ["sandbox", "production"], {
+      read("accounts.list", ["accounts:read"], MERCURY_ENV, { method: "GET", path: "/api/v1/accounts" }),
+      read("balances.get", ["accounts:read"], MERCURY_ENV, { method: "GET", path: "/api/v1/account/{accountId}" }),
+      read("transactions.list", ["transactions:read"], MERCURY_ENV, { method: "GET", path: "/api/v1/transactions" }),
+      write("payments.create", "money_movement", ["transactions:write"], MERCURY_ENV, ["sandbox", "production"], {
         method: "POST",
         path: "/api/v1/account/{accountId}/transactions",
       }, [
@@ -114,17 +115,17 @@ export const PROVIDER_CONFORMANCE_CONTRACTS: readonly ProviderConformanceContrac
         "Require purpose when mapped Mercury paymentMethod is domesticWire.",
         "Verify amount units and recipient requirements against Mercury sandbox before enabling.",
       ]),
-      read("payments.status", ["transactions:read"], ["MERCURY_API_TOKEN"], { method: "GET", path: "/api/v1/transaction/{transactionId}" }),
-      read("cards.list", ["cards:write"], ["MERCURY_API_TOKEN"], { method: "GET", path: "/api/v1/cards" }),
-      card("cards.createVirtual", ["cards:write"], ["MERCURY_API_TOKEN"], ["sandbox", "production"], undefined, [
+      read("payments.status", ["transactions:read"], MERCURY_ENV, { method: "GET", path: "/api/v1/transaction/{transactionId}" }),
+      read("cards.list", ["cards:write"], MERCURY_ENV, { method: "GET", path: "/api/v1/cards" }),
+      card("cards.createVirtual", ["cards:write"], MERCURY_ENV, ["sandbox", "production"], undefined, [
         "Confirm the newly documented card issue endpoint and sandbox lifecycle semantics before any live execution.",
       ]),
-      card("cards.updateSettings", ["cards:write"], ["MERCURY_API_TOKEN"], ["sandbox", "production"]),
-      card("cards.freeze", ["cards:write"], ["MERCURY_API_TOKEN"], ["sandbox", "production"]),
-      card("cards.unfreeze", ["cards:write"], ["MERCURY_API_TOKEN"], ["sandbox", "production"]),
-      card("cards.terminate", ["cards:write"], ["MERCURY_API_TOKEN"], ["sandbox", "production"]),
+      card("cards.updateSettings", ["cards:write"], MERCURY_ENV, ["sandbox", "production"]),
+      card("cards.freeze", ["cards:write"], MERCURY_ENV, ["sandbox", "production"]),
+      card("cards.unfreeze", ["cards:write"], MERCURY_ENV, ["sandbox", "production"]),
+      card("cards.terminate", ["cards:write"], MERCURY_ENV, ["sandbox", "production"]),
       unsupported("cards.revealSensitiveData", "sensitive_read"),
-      webhook("webhooks.subscribe", ["MERCURY_API_TOKEN"], ["sandbox", "production"], [
+      webhook("webhooks.subscribe", MERCURY_ENV, ["sandbox", "production"], [
         "Verify Mercury webhook payload signatures and event replay behavior before trusting provider state.",
       ]),
     ],

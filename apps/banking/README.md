@@ -47,6 +47,8 @@ bun add @hasna/banking
 ```bash
 banking --help
 banking providers list --json
+banking ops list --provider mercury --json
+banking ops describe mercury.cards.createVirtual --json
 banking accounts list --provider mercury --live true --environment sandbox --limit 5 --json
 banking balances get --provider mercury --account acct_123 --live true --environment sandbox --json
 banking cards list --provider mercury --live true --environment sandbox --limit 1000 --json
@@ -69,6 +71,15 @@ credentials and `production` only when you intentionally want production
 Mercury data. Public installs should prefer `MERCURY_API_KEY`; `--secret-key`
 is an optional integration for machines that already have a compatible local
 `secrets` CLI.
+
+`banking ops list` and `banking ops describe` expose the shared provider
+operation registry used to expand CLI, SDK, and MCP surfaces. Descriptors include
+provider id, resource/action, safety class, environment support, auth scope/env
+requirements, endpoint metadata when known, approval/idempotency gates, and
+separate flags for live reads versus provider-side effects. Mercury live reads
+are enabled only for the implemented read operations. Provider-side mutation
+execution remains disabled until the descriptor's conformance, approval,
+idempotency, audit, and release gates pass.
 
 ## SDK
 

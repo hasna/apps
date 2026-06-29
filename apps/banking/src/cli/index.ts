@@ -2,7 +2,12 @@
 import {
   createMercuryReadClient,
   createBankingClient,
+  listOperationDescriptors,
   moneyInput,
+  parseProviderEnvironment,
+  parseProviderId,
+  requireOperationDescriptor,
+  type BankingOperationSafetyClass,
   type MercuryReadClientInput,
   type MercuryFetch,
   type BankingPolicy,
@@ -32,6 +37,8 @@ function printHelp(): void {
 Usage:
   banking --help
   banking --version
+  banking ops list [--provider <provider>] [--safety <class>] [--include-unsupported true] [--json]
+  banking ops describe <provider.operation> [--json]
   banking providers list [--json]
   banking providers show <provider> [--json]
   banking accounts list --provider <provider> [--live true --environment <sandbox|production> --secret-key <key>] [--limit <n>] [--json]
@@ -109,6 +116,23 @@ export async function runCli(argv: readonly string[] = Bun.argv.slice(2), runtim
       return 0;
     }
 
+    if (args[0] === "ops" && args[1] === "list") {
+      const provider = option(parsed, "provider");
+      emit({
+        operations: listOperationDescriptors({
+          ...(provider ? { providerId: parseProviderId(provider) } : {}),
+          ...optionalSafetyClass(parsed),
+          includeUnsupported: option(parsed, "include-unsupported") === "true",
+        }),
+      }, parsed.json);
+      return 0;
+    }
+
+    if (args[0] === "ops" && args[1] === "describe") {
+      emit({ operation: requireOperationDescriptor(requiredPositional(args, 2, "operation")) }, parsed.json);
+      return 0;
+    }
+
     if (args[0] === "providers" && args[1] === "list") {
       emit({ providers: createBankingClient().listProviders() }, parsed.json);
       return 0;
@@ -122,7 +146,7 @@ export async function runCli(argv: readonly string[] = Bun.argv.slice(2), runtim
 
     if (args[0] === "accounts" && args[1] === "list") {
       if (isLive(parsed)) {
-        const provider = providerId(requiredOption(parsed, "provider"));
+        const provider = parseProviderId(requiredOption(parsed, "provider"));
         if (provider !== "mercury") return failLiveUnsupported("accounts list", provider, parsed.json);
         const limit = limitOption(parsed);
         emit({ accounts: await mercuryReadClient(parsed, runtime).listAccounts(limit ? { limit } : {}) }, parsed.json);
@@ -132,7 +156,7 @@ export async function runCli(argv: readonly string[] = Bun.argv.slice(2), runtim
     }
     if (args[0] === "balances" && args[1] === "get") {
       if (isLive(parsed)) {
-        const provider = providerId(requiredOption(parsed, "provider"));
+        const provider = parseProviderId(requiredOption(parsed, "provider"));
         if (provider !== "mercury") return failLiveUnsupported("balances get", provider, parsed.json);
         emit({ balance: await mercuryReadClient(parsed, runtime).getBalance({ accountId: requiredOption(parsed, "account") }) }, parsed.json);
         return 0;
@@ -141,7 +165,7 @@ export async function runCli(argv: readonly string[] = Bun.argv.slice(2), runtim
     }
     if (args[0] === "transactions" && args[1] === "list") {
       if (isLive(parsed)) {
-        const provider = providerId(requiredOption(parsed, "provider"));
+        const provider = parseProviderId(requiredOption(parsed, "provider"));
         if (provider !== "mercury") return failLiveUnsupported("transactions list", provider, parsed.json);
         const limit = limitOption(parsed);
         const order = orderOption(parsed);
@@ -158,7 +182,7 @@ export async function runCli(argv: readonly string[] = Bun.argv.slice(2), runtim
     }
     if (args[0] === "cards" && args[1] === "list") {
       if (isLive(parsed)) {
-        const provider = providerId(requiredOption(parsed, "provider"));
+        const provider = parseProviderId(requiredOption(parsed, "provider"));
         if (provider !== "mercury") return failLiveUnsupported("cards list", provider, parsed.json);
         const limit = limitOption(parsed);
         emit({
@@ -183,7 +207,7 @@ export async function runCli(argv: readonly string[] = Bun.argv.slice(2), runtim
     if (args[0] === "payments" && args[1] === "status") {
       const providerPaymentId = option(parsed, "provider-payment");
       emit(createBankingClient().createPaymentStatus({
-        providerId: providerId(requiredOption(parsed, "provider")),
+        providerId: parseProviderId(requiredOption(parsed, "provider")),
         requester: actor(parsed),
         reason: option(parsed, "reason") ?? "payment status requested from CLI",
         paymentRequestId: requiredOption(parsed, "request"),
@@ -195,7 +219,7 @@ export async function runCli(argv: readonly string[] = Bun.argv.slice(2), runtim
     if (args[0] === "cards" && args[1] === "request") {
       const spendingControls = cardSpendingControls(parsed);
       emit(createBankingClient().createCardRequest({
-        providerId: providerId(requiredOption(parsed, "provider")),
+        providerId: parseProviderId(requiredOption(parsed, "provider")),
         requester: actor(parsed),
         reason: option(parsed, "reason") ?? "virtual card requested from CLI",
         accountId: requiredOption(parsed, "account"),
@@ -208,7 +232,7 @@ export async function runCli(argv: readonly string[] = Bun.argv.slice(2), runtim
     if (args[0] === "cards" && args[1] === "update") {
       const label = option(parsed, "label");
       emit(createBankingClient().createCardUpdate({
-        providerId: providerId(requiredOption(parsed, "provider")),
+        providerId: parseProviderId(requiredOption(parsed, "provider")),
         requester: actor(parsed),
         reason: option(parsed, "reason") ?? "card update requested from CLI",
         cardId: requiredOption(parsed, "card"),
@@ -219,7 +243,7 @@ export async function runCli(argv: readonly string[] = Bun.argv.slice(2), runtim
 
     if (args[0] === "cards" && ["freeze", "unfreeze", "terminate"].includes(args[1] ?? "")) {
       emit(createBankingClient().createCardLifecycle({
-        providerId: providerId(requiredOption(parsed, "provider")),
+        providerId: parseProviderId(requiredOption(parsed, "provider")),
         requester: actor(parsed),
         reason: option(parsed, "reason") ?? `card ${args[1]} requested from CLI`,
         cardId: requiredOption(parsed, "card"),
@@ -247,14 +271,24 @@ export async function runCli(argv: readonly string[] = Bun.argv.slice(2), runtim
 function parseArgs(argv: readonly string[]): ParsedArgs {
   const options: Record<string, string | true> = {};
   const positionals: string[] = [];
+  let positionalOnly = false;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (!arg) continue;
-    if (!arg.startsWith("--")) {
+    if (arg === "--") {
+      positionalOnly = true;
+      continue;
+    }
+    if (positionalOnly || !arg.startsWith("--")) {
       positionals.push(arg);
       continue;
     }
     const key = arg.slice(2);
+    const equalsIndex = key.indexOf("=");
+    if (equalsIndex >= 0) {
+      options[key.slice(0, equalsIndex)] = key.slice(equalsIndex + 1);
+      continue;
+    }
     if (key === "json") {
       options[key] = true;
       continue;
@@ -273,7 +307,7 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
 function paymentInput(parsed: ParsedArgs) {
   const providerRecipientId = option(parsed, "recipient");
   return {
-    providerId: providerId(requiredOption(parsed, "provider")),
+    providerId: parseProviderId(requiredOption(parsed, "provider")),
     requester: actor(parsed),
     reason: option(parsed, "reason") ?? "payment intent requested from CLI",
     sourceAccountId: requiredOption(parsed, "account"),
@@ -297,7 +331,7 @@ function cardSpendingControls(parsed: ParsedArgs) {
 function policyInput(parsed: ParsedArgs): BankingPolicy {
   return {
     liveMode: option(parsed, "live") === "true",
-    environment: environment(option(parsed, "environment") ?? "sandbox"),
+    environment: parseProviderEnvironment(option(parsed, "environment") ?? "sandbox"),
     requireApprovalForProviderSideEffects: true,
     allowSensitiveCardData: false,
   };
@@ -327,7 +361,7 @@ function orderOption(parsed: ParsedArgs): "asc" | "desc" | undefined {
 function mercuryReadClient(parsed: ParsedArgs, runtime: CliRuntime) {
   const secretKey = option(parsed, "secret-key");
   const input: MercuryReadClientInput = {
-    environment: environment(requiredOption(parsed, "environment")),
+    environment: parseProviderEnvironment(requiredOption(parsed, "environment")),
     ...(secretKey ? { secretKey } : {}),
     ...(runtime.env ? { env: runtime.env } : {}),
     ...(runtime.fetch ? { fetch: runtime.fetch } : {}),
@@ -344,29 +378,20 @@ function actor(parsed: ParsedArgs) {
 }
 
 function requireProvider(value: string | undefined) {
-  const id = providerId(value);
+  const id = parseProviderId(value);
   const provider = createBankingClient().getProvider(id);
   if (!provider) throw new Error(`Unknown provider: ${id}`);
   return provider;
 }
 
-function providerId(value: string | undefined): ProviderId {
-  if (!value) throw new Error("Missing required --provider value.");
-  if (!["mercury", "bunq", "revolut-business", "erste-bcr"].includes(value)) {
-    throw new Error(`Unknown provider: ${value}`);
-  }
-  return value as ProviderId;
-}
-
-function environment(value: string): ProviderEnvironment {
-  if (value !== "sandbox" && value !== "production") {
-    throw new Error(`Unknown environment: ${value}`);
-  }
-  return value;
-}
-
 function currency(value: string): CurrencyCode {
   return value.toUpperCase() as CurrencyCode;
+}
+
+function requiredPositional(args: readonly string[], index: number, label: string): string {
+  const value = args[index];
+  if (!value) throw new Error(`Missing required ${label}.`);
+  return value;
 }
 
 function requiredOption(parsed: ParsedArgs, key: string): string {
@@ -383,6 +408,15 @@ function option(parsed: ParsedArgs, key: string): string | undefined {
 function optionalOption(parsed: ParsedArgs, key: string, targetKey: string): Record<string, string> {
   const value = option(parsed, key);
   return value ? { [targetKey]: value } : {};
+}
+
+function optionalSafetyClass(parsed: ParsedArgs): { readonly safetyClass?: BankingOperationSafetyClass } {
+  const safetyClass = option(parsed, "safety");
+  if (!safetyClass) return {};
+  if (!["read", "metadata_write", "money_movement", "card_lifecycle", "sensitive_read", "webhook_mutation"].includes(safetyClass)) {
+    throw new Error(`Unknown safety class: ${safetyClass}`);
+  }
+  return { safetyClass: safetyClass as BankingOperationSafetyClass };
 }
 
 function hasFlag(parsed: ParsedArgs, args: readonly string[], key: string, short: string): boolean {

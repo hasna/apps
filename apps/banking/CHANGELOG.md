@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Shared provider operation registry derived from conformance contracts, exposed
+  through SDK exports, `banking ops list`, `banking ops describe`, and MCP
+  operation discovery tools.
+- MCP request-envelope parity for card unfreeze and terminate lifecycle actions.
+
+### Changed
+
+- CLI provider validation is derived from the provider registry, and the parser
+  now supports `--key=value` plus `--` positional delimiters.
+- Operation descriptors now use explicit CLI/MCP surface maps, separate
+  Mercury live-read flags from provider-side mutation execution, and expose
+  operation-plan requirements for future submit gates.
+- Mercury provider preflight metadata now uses `MERCURY_API_KEY` as the
+  canonical credential name while accepting sandbox/production-specific aliases.
+- MCP environment parsing now rejects invalid environment values instead of
+  silently falling back to sandbox.
+
 ## 0.0.6 - 2026-06-29
 
 ### Fixed

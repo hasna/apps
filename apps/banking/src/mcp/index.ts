@@ -1,7 +1,11 @@
 #!/usr/bin/env bun
 import {
   createBankingClient,
+  listOperationDescriptors,
   moneyInput,
+  parseProviderEnvironment,
+  parseProviderId,
+  requireOperationDescriptor,
   type BankingPolicy,
   type CurrencyCode,
   type PaymentRail,
@@ -19,6 +23,8 @@ export interface McpToolDescriptor {
 }
 
 const TOOL_DESCRIPTORS: readonly McpToolDescriptor[] = [
+  { name: "banking_ops_list", status: "implemented", description: "List provider operation descriptors." },
+  { name: "banking_ops_describe", status: "implemented", description: "Describe one provider operation descriptor." },
   { name: "banking_providers_list", status: "implemented", description: "List provider capability cards." },
   { name: "banking_provider_get", status: "implemented", description: "Get one provider capability card." },
   { name: "banking_accounts_list", status: "provider_backed_pending", description: "List provider accounts once adapters are implemented." },
@@ -31,6 +37,8 @@ const TOOL_DESCRIPTORS: readonly McpToolDescriptor[] = [
   { name: "banking_card_request", status: "implemented", description: "Create a local virtual-card request intent envelope." },
   { name: "banking_card_update_request", status: "implemented", description: "Create a local card update intent envelope." },
   { name: "banking_card_freeze_request", status: "implemented", description: "Create a local card freeze intent envelope." },
+  { name: "banking_card_unfreeze_request", status: "implemented", description: "Create a local card unfreeze intent envelope." },
+  { name: "banking_card_terminate_request", status: "implemented", description: "Create a local card termination intent envelope." },
   { name: "banking_admin_provider_verify_operation", status: "admin_gated", description: "Future admin-gated provider operation verification." },
 ];
 
@@ -61,6 +69,15 @@ export function listPlannedMcpTools(): readonly { readonly name: string; readonl
 export function runMcpTool(name: string, input: Readonly<Record<string, unknown>> = {}): unknown {
   const client = createBankingClient();
   switch (name) {
+    case "banking_ops_list":
+      return {
+        operations: listOperationDescriptors({
+          ...(optionalString(input.providerId) ? { providerId: providerId(input.providerId) } : {}),
+          includeUnsupported: input.includeUnsupported === true,
+        }),
+      };
+    case "banking_ops_describe":
+      return { operation: requireOperationDescriptor(requiredString(input.operationId, "operationId")) };
     case "banking_providers_list":
       return { providers: client.listProviders() };
     case "banking_provider_get":
@@ -110,13 +127,11 @@ export function runMcpTool(name: string, input: Readonly<Record<string, unknown>
         ...(label ? { label } : {}),
       }, policyInput(input));
     case "banking_card_freeze_request":
-      return client.createCardLifecycle({
-        providerId: providerId(input.providerId),
-        requester: actor(input),
-        reason: stringInput(input.reason, "card freeze requested from MCP"),
-        cardId: requiredString(input.cardId, "cardId"),
-        kind: "freeze",
-      }, policyInput(input));
+      return cardLifecycle(input, "freeze", "card freeze requested from MCP");
+    case "banking_card_unfreeze_request":
+      return cardLifecycle(input, "unfreeze", "card unfreeze requested from MCP");
+    case "banking_card_terminate_request":
+      return cardLifecycle(input, "terminate", "card termination requested from MCP");
     case "banking_admin_provider_verify_operation":
       return {
         status: "admin_approval_required",
@@ -171,7 +186,7 @@ function paymentInput(input: Readonly<Record<string, unknown>>) {
 function policyInput(input: Readonly<Record<string, unknown>>): BankingPolicy {
   return {
     liveMode: input.liveMode === true,
-    environment: input.environment === "production" ? "production" : "sandbox",
+    environment: input.environment === undefined ? "sandbox" : parseProviderEnvironment(requiredString(input.environment, "environment"), "environment"),
     requireApprovalForProviderSideEffects: true,
     allowSensitiveCardData: false,
   };
@@ -185,11 +200,17 @@ function actor(input: Readonly<Record<string, unknown>>) {
 }
 
 function providerId(value: unknown): ProviderId {
-  const id = requiredString(value, "providerId");
-  if (!["mercury", "bunq", "revolut-business", "erste-bcr"].includes(id)) {
-    throw new Error(`Unknown provider: ${id}`);
-  }
-  return id as ProviderId;
+  return parseProviderId(requiredString(value, "providerId"), "providerId");
+}
+
+function cardLifecycle(input: Readonly<Record<string, unknown>>, kind: "freeze" | "unfreeze" | "terminate", fallbackReason: string) {
+  return createBankingClient().createCardLifecycle({
+    providerId: providerId(input.providerId),
+    requester: actor(input),
+    reason: stringInput(input.reason, fallbackReason),
+    cardId: requiredString(input.cardId, "cardId"),
+    kind,
+  }, policyInput(input));
 }
 
 function requiredString(value: unknown, field: string): string {
