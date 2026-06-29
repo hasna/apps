@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.54] - 2026-06-29
+
+### Fixed
+- Corrected the `project-dashboard-reports` Mailery provider-panel example to
+  use the released `mailery project-panel` command.
+
 ## [0.1.53] - 2026-06-29
 
 ### Fixed
