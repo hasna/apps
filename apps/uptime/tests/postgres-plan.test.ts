@@ -20,12 +20,29 @@ test("buildPostgresMigrationPlan emits a blocked cloud-store schema with tombsto
   expect(plan.requiredTables).toContain("check_jobs");
   expect(plan.requiredTables).toContain("audit_events");
   expect(plan.requiredTables).toContain("sync_tombstones");
+  expect(plan.requiredTables).toContain("report_delivery_attempts");
+  expect(plan.requiredTables).toContain("report_artifacts");
   expect(plan.requiredPolicies).toContain("monitors_workspace_scope");
+  expect(plan.requiredPolicies).toContain("report_delivery_attempts_workspace_scope");
+  expect(plan.requiredPolicies).toContain("report_artifacts_workspace_scope");
   expect(plan.requiredIndexes).toContain("monitors_workspace_name_active_idx");
+  expect(plan.requiredIndexes).toContain("report_delivery_attempts_due_idx");
+  expect(plan.requiredIndexes).toContain("report_delivery_attempts_idempotency_idx");
+  expect(plan.requiredIndexes).toContain("report_artifacts_run_idx");
+  expect(plan.schemaVersion).toBe("2");
   expect(plan.migrationStatements.join("\n")).toContain("CREATE TABLE IF NOT EXISTS \"uptime\".\"sync_tombstones\"");
+  expect(plan.migrationStatements.join("\n")).toContain("CREATE TABLE IF NOT EXISTS \"uptime\".\"report_delivery_attempts\"");
+  expect(plan.migrationStatements.join("\n")).toContain("CREATE TABLE IF NOT EXISTS \"uptime\".\"report_artifacts\"");
   expect(plan.migrationStatements.join("\n")).toContain("probe_policy jsonb");
   expect(plan.migrationStatements.join("\n")).toContain("probe_policy_hash text NOT NULL");
   expect(plan.migrationStatements.join("\n")).toContain("UNIQUE (workspace_id, monitor_id, monitor_version, schedule_slot, probe_policy_hash)");
+  expect(plan.migrationStatements.join("\n")).toContain("UNIQUE (workspace_id, report_run_id, channel, channel_ref_id, attempt_number)");
+  expect(plan.migrationStatements.join("\n")).toContain("CREATE INDEX IF NOT EXISTS report_delivery_attempts_due_idx");
+  expect(plan.migrationStatements.join("\n")).toContain("CREATE UNIQUE INDEX IF NOT EXISTS report_delivery_attempts_idempotency_idx");
+  expect(plan.migrationStatements.join("\n")).toContain("storage_ref text NOT NULL");
+  expect(plan.migrationStatements.join("\n")).toContain("sha256 text NOT NULL");
+  expect(plan.migrationStatements.join("\n")).toContain("redacted boolean NOT NULL DEFAULT true");
+  expect(plan.migrationStatements.join("\n")).toContain("retention_class text NOT NULL DEFAULT 'standard'");
   expect(plan.migrationStatements.join("\n")).toContain("fencing_token text");
   expect(plan.migrationStatements.join("\n")).toContain("idempotency_key text");
   expect(plan.migrationStatements.join("\n")).toContain("deleted_at timestamptz");
@@ -55,15 +72,26 @@ test("Postgres migration table contracts keep workspace, idempotency, and duplic
     return match[0];
   };
 
-  for (const name of ["monitors", "check_results", "incidents", "check_jobs", "probe_identities", "probe_submissions", "report_schedules", "report_runs", "audit_events", "sync_tombstones"]) {
+  for (const name of ["monitors", "check_results", "incidents", "check_jobs", "probe_identities", "probe_submissions", "report_schedules", "report_runs", "report_delivery_attempts", "report_artifacts", "audit_events", "sync_tombstones"]) {
     expect(table(name)).toContain("workspace_id text NOT NULL");
   }
-  for (const name of ["monitors", "check_results", "incidents", "check_jobs", "probe_identities", "probe_submissions", "report_schedules", "report_runs", "audit_events", "sync_tombstones"]) {
+  for (const name of ["monitors", "check_results", "incidents", "check_jobs", "probe_identities", "probe_submissions", "report_schedules", "report_runs", "report_delivery_attempts", "report_artifacts", "audit_events", "sync_tombstones"]) {
     expect(table(name)).toContain("idempotency_key text");
   }
   expect(table("check_jobs")).toContain("UNIQUE (workspace_id, monitor_id, monitor_version, schedule_slot, probe_policy_hash)");
   expect(table("probe_submissions")).toContain("UNIQUE (workspace_id, probe_id, nonce)");
   expect(table("probe_submissions")).toContain("UNIQUE (workspace_id, job_id)");
+  expect(table("report_delivery_attempts")).toContain("channel_ref_id text NOT NULL");
+  expect(table("report_delivery_attempts")).toContain("provider text NOT NULL");
+  expect(table("report_delivery_attempts")).toContain("request_hash text");
+  expect(table("report_delivery_attempts")).toContain("response_hash text");
+  expect(table("report_delivery_attempts")).toContain("claimed_by_worker_id text");
+  expect(table("report_delivery_attempts")).toContain("fencing_token text");
+  expect(table("report_delivery_attempts")).toContain("lease_expires_at timestamptz");
+  expect(table("report_delivery_attempts")).toContain("version bigint NOT NULL DEFAULT 1");
+  expect(table("report_artifacts")).toContain("storage_ref text NOT NULL");
+  expect(table("report_artifacts")).toContain("redacted boolean NOT NULL DEFAULT true");
+  expect(table("report_artifacts")).toContain("retention_class text NOT NULL DEFAULT 'standard'");
   expect(table("report_runs")).not.toContain("UNIQUE (workspace_id, idempotency_key)");
   expect(plan.blockers).toContain("async-runtime-adapter: not wired to UptimeService yet");
 });

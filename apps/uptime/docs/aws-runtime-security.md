@@ -210,6 +210,9 @@ Postgres:
 - run migrations before web/scheduler/probe rollout;
 - include `workspace_id`, `version`, `deleted_at`, audit/idempotency fields, and
   optimistic concurrency on mutable tables;
+- include `report_delivery_attempts` for channel-ref delivery retries and
+  provider idempotency keys, and `report_artifacts` for redacted artifact
+  metadata pointing at S3/object storage rather than raw report bytes;
 - enable automated backups and PITR on the RDS instance;
 - take pre-cutover snapshots before migration or destructive schema changes;
 - block destructive migrations unless backup and rollback checks pass.

@@ -1,5 +1,5 @@
-export const POSTGRES_PLAN_VERSION = 1;
-export const POSTGRES_SCHEMA_VERSION = "1";
+export const POSTGRES_PLAN_VERSION = 2;
+export const POSTGRES_SCHEMA_VERSION = "2";
 export const DEFAULT_POSTGRES_SCHEMA = "uptime";
 export const DEFAULT_WORKSPACE_SETTING = "app.workspace_id";
 
@@ -45,6 +45,8 @@ const REQUIRED_TABLES = [
   "probe_submissions",
   "report_schedules",
   "report_runs",
+  "report_delivery_attempts",
+  "report_artifacts",
   "audit_events",
   "sync_tombstones",
 ] as const;
@@ -55,6 +57,11 @@ const REQUIRED_INDEXES = [
   "monitors_workspace_name_active_idx",
   "check_results_workspace_monitor_time_idx",
   "check_jobs_workspace_status_due_idx",
+  "report_runs_workspace_status_time_idx",
+  "report_delivery_attempts_run_idx",
+  "report_delivery_attempts_due_idx",
+  "report_delivery_attempts_idempotency_idx",
+  "report_artifacts_run_idx",
   "audit_events_workspace_time_idx",
 ] as const;
 
@@ -385,6 +392,60 @@ ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.up
   deleted_at timestamptz,
   PRIMARY KEY (workspace_id, id)
 );`,
+    `CREATE TABLE IF NOT EXISTS ${q(schemaName, "report_delivery_attempts")} (
+  workspace_id text NOT NULL,
+  id text NOT NULL,
+  report_run_id text NOT NULL,
+  channel text NOT NULL CHECK (channel IN ('email', 'sms', 'logs')),
+  channel_ref_id text NOT NULL,
+  provider text NOT NULL,
+  attempt_number integer NOT NULL CHECK (attempt_number > 0),
+  status text NOT NULL CHECK (status IN ('pending', 'sending', 'succeeded', 'failed', 'retry_exhausted')),
+  idempotency_key text NOT NULL,
+  scheduled_at timestamptz NOT NULL,
+  started_at timestamptz,
+  finished_at timestamptz,
+  next_retry_at timestamptz,
+  response_status integer,
+  provider_message_id text,
+  error text,
+  retry_after_seconds integer,
+  request_hash text,
+  response_hash text,
+  claimed_by_worker_id text,
+  fencing_token text,
+  lease_expires_at timestamptz,
+  version bigint NOT NULL DEFAULT 1,
+  actor text,
+  origin text,
+  deleted_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (workspace_id, id),
+  UNIQUE (workspace_id, report_run_id, channel, channel_ref_id, attempt_number),
+  FOREIGN KEY (workspace_id, report_run_id) REFERENCES ${q(schemaName, "report_runs")} (workspace_id, id)
+);`,
+    `CREATE TABLE IF NOT EXISTS ${q(schemaName, "report_artifacts")} (
+  workspace_id text NOT NULL,
+  id text NOT NULL,
+  report_run_id text NOT NULL,
+  artifact_type text NOT NULL CHECK (artifact_type IN ('json', 'html', 'pdf', 'summary')),
+  storage_ref text NOT NULL,
+  sha256 text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+  byte_size bigint NOT NULL CHECK (byte_size >= 0),
+  redacted boolean NOT NULL DEFAULT true,
+  retention_class text NOT NULL DEFAULT 'standard' CHECK (retention_class IN ('standard', 'compliance', 'legal_hold')),
+  kms_key_ref text,
+  actor text,
+  origin text,
+  idempotency_key text,
+  deleted_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (workspace_id, id),
+  UNIQUE (workspace_id, report_run_id, artifact_type, sha256),
+  FOREIGN KEY (workspace_id, report_run_id) REFERENCES ${q(schemaName, "report_runs")} (workspace_id, id)
+);`,
     `CREATE TABLE IF NOT EXISTS ${q(schemaName, "audit_events")} (
   workspace_id text NOT NULL,
   id text NOT NULL,
@@ -416,6 +477,11 @@ ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.up
     `CREATE UNIQUE INDEX IF NOT EXISTS monitors_workspace_name_active_idx ON ${q(schemaName, "monitors")} (workspace_id, name) WHERE deleted_at IS NULL;`,
     `CREATE INDEX IF NOT EXISTS check_results_workspace_monitor_time_idx ON ${q(schemaName, "check_results")} (workspace_id, monitor_id, checked_at DESC) WHERE deleted_at IS NULL;`,
     `CREATE INDEX IF NOT EXISTS check_jobs_workspace_status_due_idx ON ${q(schemaName, "check_jobs")} (workspace_id, status, due_at) WHERE deleted_at IS NULL;`,
+    `CREATE INDEX IF NOT EXISTS report_runs_workspace_status_time_idx ON ${q(schemaName, "report_runs")} (workspace_id, status, started_at DESC) WHERE deleted_at IS NULL;`,
+    `CREATE INDEX IF NOT EXISTS report_delivery_attempts_run_idx ON ${q(schemaName, "report_delivery_attempts")} (workspace_id, report_run_id, status, scheduled_at) WHERE deleted_at IS NULL;`,
+    `CREATE INDEX IF NOT EXISTS report_delivery_attempts_due_idx ON ${q(schemaName, "report_delivery_attempts")} (workspace_id, status, COALESCE(next_retry_at, scheduled_at)) WHERE deleted_at IS NULL;`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS report_delivery_attempts_idempotency_idx ON ${q(schemaName, "report_delivery_attempts")} (workspace_id, idempotency_key) WHERE deleted_at IS NULL;`,
+    `CREATE INDEX IF NOT EXISTS report_artifacts_run_idx ON ${q(schemaName, "report_artifacts")} (workspace_id, report_run_id, artifact_type) WHERE deleted_at IS NULL;`,
     `CREATE INDEX IF NOT EXISTS audit_events_workspace_time_idx ON ${q(schemaName, "audit_events")} (workspace_id, created_at DESC) WHERE deleted_at IS NULL;`,
   ];
 }

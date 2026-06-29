@@ -6,6 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.40] - 2026-06-29
+
+### Added
+
+- Expanded the Postgres cloud-store migration plan with workspace-scoped
+  `report_delivery_attempts` and `report_artifacts` tables, RLS policies, and
+  verification indexes for hosted report retry/idempotency state and redacted
+  artifact metadata.
+- Added regression coverage proving the new report delivery/artifact tables are
+  included in dry-run and apply verification targets without printing database
+  credentials.
+
+### Changed
+
+- Hosted reporter preflight now distinguishes schema-planned report delivery
+  attempts/artifacts from the still-blocked runtime state machine, S3 artifact
+  write path, retry/backoff, audit export, and delivery alarms.
+
 ## [0.1.39] - 2026-06-29
 
 ### Changed

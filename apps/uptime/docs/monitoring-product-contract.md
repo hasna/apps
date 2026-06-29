@@ -346,10 +346,14 @@ MCP input, or schedule payload shape:
 
 The catalog is a validation contract only until the hosted Postgres store,
 report-run idempotency, retry/backoff, artifact storage, audit export, and
-delivery alarms are implemented. It must not contain raw `apiUrl`, recipient,
-token, key, password, or secret value fields. Hosted schedule/API/MCP requests
-must later reference approved channel ids only; clients must never submit
-`secretRef` values.
+delivery alarms are implemented. The Postgres migration plan includes
+workspace-scoped `report_delivery_attempts` and `report_artifacts` tables so the
+runtime can later persist retry/idempotency state, claim/fencing metadata,
+retention class, and redacted artifact metadata without storing provider secrets
+or raw report bytes in SQL. It must not contain raw `apiUrl`, recipient, token,
+key, password, or secret value fields. Hosted schedule/API/MCP requests must
+later reference approved channel ids only; clients must never submit `secretRef`
+values.
 
 ## Dashboard Views
 

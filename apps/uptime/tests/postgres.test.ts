@@ -97,6 +97,8 @@ test("runPostgresMigration applies migration statements transactionally and veri
     "probe_submissions",
     "report_schedules",
     "report_runs",
+    "report_delivery_attempts",
+    "report_artifacts",
     "audit_events",
     "sync_tombstones",
   ], [
@@ -108,6 +110,8 @@ test("runPostgresMigration applies migration statements transactionally and veri
     "probe_submissions_workspace_scope",
     "report_schedules_workspace_scope",
     "report_runs_workspace_scope",
+    "report_delivery_attempts_workspace_scope",
+    "report_artifacts_workspace_scope",
     "audit_events_workspace_scope",
     "sync_tombstones_workspace_scope",
   ], [
@@ -115,6 +119,11 @@ test("runPostgresMigration applies migration statements transactionally and veri
     "monitors_workspace_name_active_idx",
     "check_results_workspace_monitor_time_idx",
     "check_jobs_workspace_status_due_idx",
+    "report_runs_workspace_status_time_idx",
+    "report_delivery_attempts_run_idx",
+    "report_delivery_attempts_due_idx",
+    "report_delivery_attempts_idempotency_idx",
+    "report_artifacts_run_idx",
     "audit_events_workspace_time_idx",
   ]);
   const run = await runPostgresMigration({
@@ -131,6 +140,8 @@ test("runPostgresMigration applies migration statements transactionally and veri
   expect(run.missingIndexes).toEqual([]);
   expect(client.queries[0]?.sql).toBe("BEGIN");
   expect(client.queries.some((query) => query.sql.includes("CREATE TABLE IF NOT EXISTS \"uptime\".\"sync_tombstones\""))).toBe(true);
+  expect(client.queries.some((query) => query.sql.includes("CREATE TABLE IF NOT EXISTS \"uptime\".\"report_delivery_attempts\""))).toBe(true);
+  expect(client.queries.some((query) => query.sql.includes("CREATE TABLE IF NOT EXISTS \"uptime\".\"report_artifacts\""))).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("ENABLE ROW LEVEL SECURITY"))).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("FORCE ROW LEVEL SECURITY"))).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("IF NOT EXISTS"))).toBe(true);
@@ -168,6 +179,8 @@ test("runPostgresMigration reports missing policies and indexes after apply", as
     "probe_submissions",
     "report_schedules",
     "report_runs",
+    "report_delivery_attempts",
+    "report_artifacts",
     "audit_events",
     "sync_tombstones",
   ], [], []);

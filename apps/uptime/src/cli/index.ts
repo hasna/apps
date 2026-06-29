@@ -2037,7 +2037,7 @@ function hostedReporterReadinessChecks(): Array<{ name: string; ok: boolean; det
     {
       name: "report-delivery-attempts",
       ok: false,
-      detail: "delivery attempts table/state machine is not implemented for hosted reporter workers",
+      detail: "Postgres report_delivery_attempts schema is planned, but the hosted reporter state machine is not implemented",
     },
     {
       name: "report-delivery-idempotency",
@@ -2052,7 +2052,7 @@ function hostedReporterReadinessChecks(): Array<{ name: string; ok: boolean; det
     {
       name: "report-artifact-store",
       ok: false,
-      detail: "redacted report artifact storage is not implemented",
+      detail: "Postgres report_artifacts metadata is planned, but the S3 artifact write/signing path is not implemented",
     },
     {
       name: "report-audit-export",
