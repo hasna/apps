@@ -19,7 +19,7 @@ describe("banking CLI scaffold", () => {
       console.log = originalLog;
     }
 
-    expect(output).toBe("0.0.40.0.4");
+    expect(output).toBe("0.0.50.0.5");
     expect(output).not.toContain("Usage:");
   });
 
@@ -194,10 +194,10 @@ describe("banking CLI scaffold", () => {
     expect(parsed.accounts[0].routingNumberLast4).toBe("0021");
   });
 
-  test("Mercury live cards list requires an account id", async () => {
-    const originalError = console.error;
+  test("Mercury live cards list uses the org-wide endpoint and accepts limit", async () => {
+    const originalLog = console.log;
     let output = "";
-    console.error = (...args: unknown[]) => {
+    console.log = (...args: unknown[]) => {
       output += args.join(" ");
     };
     try {
@@ -212,24 +212,34 @@ describe("banking CLI scaffold", () => {
         "production",
         "--secret-key",
         "fixture-secret-key",
+        "--limit",
+        "2",
         "--json",
       ], {
         readSecret: () => "test-token",
-        fetch: async () => {
-          throw new Error("should not call Mercury without account id");
+        fetch: async (url) => {
+          expect(String(url)).toBe("https://api.mercury.com/api/v1/cards?limit=2");
+          return new Response(JSON.stringify({
+            cards: [{ id: "card_1", accountId: "acct_1", lastFour: "4242", status: "active", type: "virtual", kind: "credit" }],
+            page: {},
+          }));
         },
-      })).toBe(1);
+      })).toBe(0);
     } finally {
-      console.error = originalError;
+      console.log = originalLog;
     }
 
-    expect(output).toContain("Missing required --account value.");
+    const parsed = JSON.parse(output) as {
+      readonly cards: readonly [{ readonly id: string; readonly kind?: string; readonly type?: string }];
+    };
+    expect(parsed.cards).toHaveLength(1);
+    expect(parsed.cards[0]).toMatchObject({ id: "card_1", kind: "credit", type: "virtual" });
   });
 
-  test("Mercury live cards list rejects unsupported limit option", async () => {
-    const originalError = console.error;
+  test("Mercury live cards list can filter by account", async () => {
+    const originalLog = console.log;
     let output = "";
-    console.error = (...args: unknown[]) => {
+    console.log = (...args: unknown[]) => {
       output += args.join(" ");
     };
     try {
@@ -251,15 +261,16 @@ describe("banking CLI scaffold", () => {
         "--json",
       ], {
         readSecret: () => "test-token",
-        fetch: async () => {
-          throw new Error("should not call Mercury with unsupported cards limit");
+        fetch: async (url) => {
+          expect(String(url)).toBe("https://api.mercury.com/api/v1/cards?accountId=acct_1&limit=1");
+          return new Response(JSON.stringify({ cards: [{ id: "card_1", accountId: "acct_1", lastFour: "4242", status: "active" }] }));
         },
-      })).toBe(1);
+      })).toBe(0);
     } finally {
-      console.error = originalError;
+      console.log = originalLog;
     }
 
-    expect(output).toContain("--limit is not supported for Mercury cards list.");
+    expect(JSON.parse(output).cards).toHaveLength(1);
   });
 
   test("Mercury live reads require explicit environment", async () => {

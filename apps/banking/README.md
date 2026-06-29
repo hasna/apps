@@ -49,7 +49,8 @@ banking --help
 banking providers list --json
 banking accounts list --provider mercury --live true --environment sandbox --limit 5 --json
 banking balances get --provider mercury --account acct_123 --live true --environment sandbox --json
-banking cards list --provider mercury --account acct_123 --live true --environment sandbox --json
+banking cards list --provider mercury --live true --environment sandbox --limit 1000 --json
+banking cards list --provider mercury --account acct_123 --live true --environment sandbox --limit 100 --json
 banking transactions list --provider mercury --account acct_123 --live true --environment sandbox --limit 10 --json
 banking payments request --provider mercury --account acct_123 --amount 10.00 --currency USD --to "Vendor" --recipient recipient_123 --rail ach --json
 banking cards request --provider mercury --account acct_123 --label "Ops" --limit-month 250.00 --currency USD --json

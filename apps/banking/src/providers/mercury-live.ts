@@ -61,7 +61,7 @@ export interface MercuryTransactionSummary {
 export interface MercuryReadClient {
   listAccounts(input?: { readonly limit?: number }): Promise<readonly MercuryAccountSummary[]>;
   getBalance(input: { readonly accountId: string }): Promise<MercuryBalanceSummary>;
-  listCards(input: { readonly accountId: string }): Promise<readonly MercuryCardSummary[]>;
+  listCards(input?: { readonly accountId?: string; readonly limit?: number }): Promise<readonly MercuryCardSummary[]>;
   listTransactions(input: { readonly accountId: string; readonly limit?: number }): Promise<readonly MercuryTransactionSummary[]>;
 }
 
@@ -104,10 +104,15 @@ export function createMercuryReadClient(input: MercuryReadClientInput): MercuryR
   const baseUrl = input.baseUrl ?? mercuryBaseUrl(input.environment);
   const fetchImpl = input.fetch ?? fetch;
 
-  async function request(path: string, params?: Readonly<Record<string, string | number | undefined>>): Promise<unknown> {
+  async function request(path: string, params?: Readonly<Record<string, string | number | readonly string[] | undefined>>): Promise<unknown> {
     const url = new URL(`${baseUrl}${path}`);
     for (const [key, value] of Object.entries(params ?? {})) {
-      if (value !== undefined) url.searchParams.set(key, String(value));
+      if (value === undefined) continue;
+      if (Array.isArray(value)) {
+        for (const entry of value) url.searchParams.append(key, entry);
+        continue;
+      }
+      url.searchParams.set(key, String(value));
     }
 
     const response = await fetchImpl(url, {
@@ -141,8 +146,11 @@ export function createMercuryReadClient(input: MercuryReadClientInput): MercuryR
         ...(account.status ? { status: account.status } : {}),
       };
     },
-    async listCards(input) {
-      const payload = await request(`/account/${encodeURIComponent(input.accountId)}/cards`);
+    async listCards(input = {}) {
+      const payload = await request("/cards", {
+        accountId: input.accountId,
+        limit: limitParam(input.limit),
+      });
       return arrayFromPayload(payload, "cards").map(normalizeCard);
     },
     async listTransactions(input) {

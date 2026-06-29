@@ -90,25 +90,49 @@ describe("Mercury live read adapter", () => {
     });
   });
 
-  test("lists cards and transactions through read-only endpoints", async () => {
+  test("lists organization-wide cards through the current read-only endpoint", async () => {
     const client = createMercuryReadClient({
       environment: "production",
       apiKey: "test-token",
       fetch: async (url) => {
-        const value = String(url);
-        if (value === "https://api.mercury.com/api/v1/account/acct_1/cards") {
-          return jsonResponse({ cards: [{ cardId: "card_1", accountId: "acct_1", lastFourDigits: "4242", status: "active" }] });
-        }
-        if (value === "https://api.mercury.com/api/v1/account/acct_1/transactions?limit=1") {
-          return jsonResponse({ transactions: [{ id: "txn_1", amount: "1.00", status: "posted" }] });
-        }
-        throw new Error(`unexpected URL: ${value}`);
+        expect(String(url)).toBe("https://api.mercury.com/api/v1/cards?limit=2");
+        return jsonResponse({
+          cards: [{ id: "card_1", accountId: "acct_1", lastFour: "4242", status: "active", type: "virtual", kind: "credit" }],
+          page: {},
+        });
       },
     });
 
-    await expect(client.listCards({ accountId: "acct_1" })).resolves.toEqual([
+    await expect(client.listCards({ limit: 2 })).resolves.toEqual([
+      { id: "card_1", accountId: "acct_1", lastFour: "4242", status: "active", type: "virtual", kind: "credit" },
+    ]);
+  });
+
+  test("filters cards by account when requested", async () => {
+    const client = createMercuryReadClient({
+      environment: "production",
+      apiKey: "test-token",
+      fetch: async (url) => {
+        expect(String(url)).toBe("https://api.mercury.com/api/v1/cards?accountId=acct_1&limit=1");
+        return jsonResponse({ cards: [{ cardId: "card_1", accountId: "acct_1", lastFourDigits: "4242", status: "active" }] });
+      },
+    });
+
+    await expect(client.listCards({ accountId: "acct_1", limit: 1 })).resolves.toEqual([
       { id: "card_1", accountId: "acct_1", lastFour: "4242", status: "active" },
     ]);
+  });
+
+  test("lists transactions through account-scoped read-only endpoint", async () => {
+    const client = createMercuryReadClient({
+      environment: "production",
+      apiKey: "test-token",
+      fetch: async (url) => {
+        expect(String(url)).toBe("https://api.mercury.com/api/v1/account/acct_1/transactions?limit=1");
+        return jsonResponse({ transactions: [{ id: "txn_1", amount: "1.00", status: "posted" }] });
+      },
+    });
+
     await expect(client.listTransactions({ accountId: "acct_1", limit: 1 })).resolves.toEqual([
       { id: "txn_1", amount: "1.00", status: "posted" },
     ]);
@@ -124,6 +148,7 @@ describe("Mercury live read adapter", () => {
     });
 
     await expect(client.listAccounts({ limit: 1001 })).rejects.toThrow("Mercury limit must be between 1 and 1000.");
+    await expect(client.listCards({ limit: 1001 })).rejects.toThrow("Mercury limit must be between 1 and 1000.");
   });
 
   test("fails closed when list responses do not include the expected array", async () => {

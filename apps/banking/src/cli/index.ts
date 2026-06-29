@@ -12,7 +12,7 @@ import {
   type ProviderId,
 } from "../index.ts";
 
-const VERSION = "0.0.4";
+const VERSION = "0.0.5";
 
 interface ParsedArgs {
   readonly positionals: readonly string[];
@@ -40,7 +40,7 @@ Usage:
   banking payments quote --provider <provider> --account <id> --amount <decimal> --currency <code> --to <name> [--recipient <provider-recipient-id>] [--rail <rail>] [--json]
   banking payments request --provider <provider> --account <id> --amount <decimal> --currency <code> --to <name> [--recipient <provider-recipient-id>] [--rail <rail>] [--json]
   banking payments status --provider <provider> --request <id> [--json]
-  banking cards list --provider <provider> --account <id> [--live true --environment <sandbox|production> --secret-key <key>] [--json]
+  banking cards list --provider <provider> [--account <id>] [--live true --environment <sandbox|production> --secret-key <key>] [--limit <n>] [--json]
   banking cards request --provider <provider> --account <id> --label <label> [--limit-month <decimal> --currency <code>] [--json]
   banking cards update --provider <provider> --card <id> [--label <label>] [--json]
   banking cards freeze|unfreeze|terminate --provider <provider> --card <id> [--json]
@@ -158,10 +158,11 @@ export async function runCli(argv: readonly string[] = Bun.argv.slice(2), runtim
       if (isLive(parsed)) {
         const provider = providerId(requiredOption(parsed, "provider"));
         if (provider !== "mercury") return failLiveUnsupported("cards list", provider, parsed.json);
-        if (option(parsed, "limit")) throw new Error("--limit is not supported for Mercury cards list.");
+        const limit = limitOption(parsed);
         emit({
           cards: await mercuryReadClient(parsed, runtime).listCards({
-            accountId: requiredOption(parsed, "account"),
+            ...optionalOption(parsed, "account", "accountId"),
+            ...(limit ? { limit } : {}),
           }),
         }, parsed.json);
         return 0;
@@ -368,6 +369,11 @@ function requiredOption(parsed: ParsedArgs, key: string): string {
 function option(parsed: ParsedArgs, key: string): string | undefined {
   const value = parsed.options[key];
   return typeof value === "string" ? value : undefined;
+}
+
+function optionalOption(parsed: ParsedArgs, key: string, targetKey: string): Record<string, string> {
+  const value = option(parsed, key);
+  return value ? { [targetKey]: value } : {};
 }
 
 function hasFlag(parsed: ParsedArgs, args: readonly string[], key: string, short: string): boolean {

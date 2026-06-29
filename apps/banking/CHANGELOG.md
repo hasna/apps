@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.5 - 2026-06-29
+
+### Fixed
+
+- Mercury live `cards list` now uses the current organization-wide `GET /api/v1/cards` endpoint with optional `--account` filtering and `--limit` support, instead of undercounting via the legacy account-scoped card path.
+
 ## 0.0.4 - 2026-06-29
 
 ### Fixed

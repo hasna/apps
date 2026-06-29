@@ -89,6 +89,7 @@ export const PROVIDER_CONFORMANCE_CONTRACTS: readonly ProviderConformanceContrac
     checkedAt,
     docs: [
       source("Mercury API changelog", "https://docs.mercury.com/changelog"),
+      source("Mercury list cards", "https://docs.mercury.com/reference/listcards"),
       source("Mercury get cards for account", "https://docs.mercury.com/reference/getaccountcards"),
       source("Mercury create transaction", "https://docs.mercury.com/reference/createtransaction"),
     ],
@@ -113,7 +114,7 @@ export const PROVIDER_CONFORMANCE_CONTRACTS: readonly ProviderConformanceContrac
         "Verify amount units and recipient requirements against Mercury sandbox before enabling.",
       ]),
       read("payments.status", ["transactions:read"], ["MERCURY_API_TOKEN"], { method: "GET", path: "/api/v1/transaction/{transactionId}" }),
-      read("cards.list", ["cards:write"], ["MERCURY_API_TOKEN"], { method: "GET", path: "/api/v1/account/{accountId}/cards" }),
+      read("cards.list", ["cards:write"], ["MERCURY_API_TOKEN"], { method: "GET", path: "/api/v1/cards" }),
       card("cards.createVirtual", ["cards:write"], ["MERCURY_API_TOKEN"], ["sandbox", "production"], undefined, [
         "Confirm the newly documented card issue endpoint and sandbox lifecycle semantics before any live execution.",
       ]),

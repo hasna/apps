@@ -1,6 +1,6 @@
 {
   "name": "@hasna/banking",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "Agent-safe banking control plane for Hasna infrastructure and AI agents.",
   "type": "module",
   "license": "Apache-2.0",
