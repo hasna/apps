@@ -43,19 +43,21 @@ evidence:
 
 For the 2026-06-29 hosted deployment track, published public package versions
 remain release and zero-count deployment evidence only after the matching
-private deployment metadata records that result. Version `0.1.58` is published
-and zero-count refreshed with shared edge-smoke evidence redacted by default,
-but it is still not live runtime evidence. Hosted reporter, protected web/API
-scale-out, and cloud-primary promotion remain blocked until the hard hosted gate
-below is satisfied.
+private deployment metadata records that result. Version `0.1.59` is published
+with read-only Postgres private-probe preflight evidence, and the prior
+zero-count deployment path remains not live runtime evidence until private
+deployment metadata records the matching image refresh. Hosted reporter,
+protected web/API scale-out, private probes, and cloud-primary promotion remain
+blocked until the hard hosted gate below is satisfied.
 
-## 0.1.58 Runtime Readiness Snapshot
+## 0.1.59 Runtime Readiness Snapshot
 
 | Area | Current evidence | Status |
 | --- | --- | --- |
 | Reporter | Channel-ref shape validation and Postgres report metadata helpers exist. | Blocked on server-side secret loading, S3 artifact writes/signing, Open Logs audit export, delivery alarms, and live liveness/drain evidence. |
 | Scheduler | Bounded Postgres scheduler review batches can create public-safe deterministic `check_jobs`. | Blocked on hosted service/API integration, lease ownership, deploy drain, metrics, alarms, and live RLS evidence. |
 | Public probe | Bounded Postgres public-probe review batches can claim, execute, and submit existing public-safe jobs. | Blocked on hosted worker promotion gates, denied-target AWS smokes, backlog metrics, and rollback evidence. |
+| Private probe | Read-only Postgres identity preflight can inspect a scoped probe identity and private-job counters without exposing key material. | Blocked on hosted probe APIs, heartbeat, revocation, rotation, approved inventory refs, target seed policy, alarms, and live evidence. |
 | Worker alarms | Terraform alarm contracts exist and are default-off. | Blocked until metric producers, approved alarm actions, and human/on-call delivery smoke are proven. |
 | Human alert delivery | Internal audit queue and budget notification wiring may be private evidence. | Blocked until approved human/on-call subscriptions and a non-secret delivery smoke are recorded. |
 | Logs and audit | CloudWatch log groups and one-off version smoke evidence exist. | Zero-count evidence only; no live scheduler/public-probe/reporter log streams or Open Logs audit export. |

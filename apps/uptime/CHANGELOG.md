@@ -24,9 +24,9 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   review passes. Hosted probe routes still require service/API integration,
   heartbeat, revocation, rotation, inventory-backed private targets, alarms, and
   live operational evidence.
-- Updated operational tracking to record `0.1.58` as published and zero-count
-  refreshed, and added a report/log/alarm readiness snapshot that separates
-  zero-count evidence from live-readiness blockers.
+- Updated operational tracking to record `0.1.59` as published with
+  private-probe preflight evidence, and added a readiness snapshot that
+  separates zero-count evidence from live-readiness blockers.
 
 ## [0.1.58] - 2026-06-30
 

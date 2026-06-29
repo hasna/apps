@@ -129,12 +129,14 @@ Job lease semantics:
 - deploy drain pauses new claims and lets in-flight leases expire or finish;
 - alarms fire for stale leases and backlog.
 
-Current implementation note: `@hasna/uptime@0.1.33` implements the deterministic
+Current implementation note: `@hasna/uptime@0.1.59` implements the deterministic
 job key, probe policy hash, class/location claim checks, same-probe claim retry
 idempotency, nonce payload conflict rejection in the local SQLite probe
-scaffold, and service-owned report channel-ref catalog validation for hosted
-reporter preflight. Deploy drain, backlog/stale-lease metrics, live report
-delivery, and hosted cloud-worker enablement remain future cloud-store gates.
+scaffold, service-owned report channel-ref catalog validation for hosted
+reporter preflight, and a read-only Postgres private-probe identity preflight.
+Deploy drain, backlog/stale-lease metrics, live report delivery, private-probe
+heartbeat/revocation/rotation, and hosted cloud-worker enablement remain future
+cloud-store gates.
 
 ## Inventory Import Workflow
 

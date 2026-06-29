@@ -52,6 +52,7 @@ uptime cloud postgres-plan --sql
 uptime cloud workers preflight --role public-probe --json
 uptime cloud postgres-scheduler run --workspace-id ws_internal --max-jobs 100 --json
 uptime cloud postgres-public-probe run --workspace-id ws_internal --probe-id prb_public_01 --max-jobs 10 --json
+uptime cloud postgres-private-probe preflight --workspace-id ws_internal --probe-id prb_private_01 --machine-id private-probe-01 --healthcheck --json
 uptime cloud public-checks worker --workspace-id ws_internal --max-iterations 1 --hosted-sqlite-db /data/uptime/uptime.db --allow-public-checks-bridge
 uptime cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --json
 uptime cloud private-probe-config --probe-id prb_private_01 --machine-id private-probe-01 --env --allow-blocked-env
