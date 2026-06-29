@@ -474,8 +474,8 @@ The preferred hosted runtime is:
   least-privileged user, TLS, migrations, automated backups, PITR, deletion
   protection, and pre-cutover snapshots;
 - hardened S3 bucket for browser evidence and report artifacts, with KMS
-  encryption, versioning, lifecycle/retention, public access block, and scoped
-  IAM policies;
+  encryption, versioning, lifecycle/retention, public access block, explicit
+  deny rules for non-KMS or wrong-key uploads, and scoped IAM policies;
 - ECR image repository, ECS/Fargate service, task role, execution role, private
   subnets, security groups, protected edge, public ALB origin, CloudFront
   default-domain HTTPS or custom TLS/DNS, log groups, metrics, alarms, and
@@ -484,6 +484,9 @@ The preferred hosted runtime is:
   `HASNA_UPTIME_ALLOWED_ORIGINS`, matching the selected HTTPS edge origin;
 - Secrets Manager or SSM parameter `valueFrom` refs in task definitions, never
   plaintext secret values in task environment;
+- Terraform scale-up gates that require explicit backend-state, human-alert,
+  backup/restore, and evidence-retention readiness before any `web` desired
+  count above zero;
 - owner/project/environment tags, budget alarms, and a monthly cost estimate.
 
 Except for the current single-web-task deployment bridge documented above, EFS

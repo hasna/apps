@@ -117,6 +117,11 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(variables).toContain("allow_cloudfront_http_origin_live_traffic");
   expect(variables).toContain("web desired count above 0 in cloudfront_default_domain mode requires enable_cloudfront_origin_verify_header=true");
   expect(variables).toContain("web desired count above 0 requires CloudFront HTTPS-origin mode");
+  expect(variables).toContain("live_ops_backend_state_hardened");
+  expect(variables).toContain("live_ops_human_alert_delivery_ready");
+  expect(variables).toContain("live_ops_backup_restore_ready");
+  expect(variables).toContain("live_ops_evidence_retention_ready");
+  expect(variables).toContain("web desired count above 0 requires live_ops_backend_state_hardened");
   expect(variables).toContain("hosted_token_secret_arn");
   expect(variables).toContain("runtime_package_integrity must be null or an npm sha512 integrity string");
   expect(variables).toContain("runtime_package_integrity is required before scaling any service above zero");
@@ -144,6 +149,12 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(main).toContain("aws_s3_bucket_public_access_block");
   expect(main).toContain("aws_s3_bucket_lifecycle_configuration");
   expect(main).toContain("DenyInsecureTransport");
+  expect(main).toContain("DenyExplicitNonKmsObjectUploads");
+  expect(main).toContain("DenyWrongKmsKeyObjectUploads");
+  expect(main).toContain("s3:x-amz-server-side-encryption");
+  expect(main).toContain("s3:x-amz-server-side-encryption-aws-kms-key-id");
+  expect(main).toContain('values   = ["aws:kms"]');
+  expect(main).toContain("values   = [var.kms_key_arn]");
   expect(main).toContain("deployment_circuit_breaker");
   expect(main).toContain("enable_ecs_managed_tags = true");
   expect(main).toContain('propagate_tags          = "SERVICE"');
@@ -161,6 +172,7 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(outputs).toContain('output "alarm_names"');
   expect(outputs).toContain('output "backup_vault_name"');
   expect(outputs).toContain('output "backup_plan_id"');
+  expect(outputs).toContain('output "evidence_bucket"');
   expect(outputs).toContain('output "kms_key_arn"');
   expect(outputs).toContain('output "secret_refs"');
   expect(outputs).toContain("sensitive = true");
@@ -222,9 +234,13 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(tfvars).toContain("enable_cloudfront_origin_verify_header");
   expect(tfvars).toContain("cloudfront_origin_verify_header_name");
   expect(tfvars).toContain("cloudfront_origin_verify_header_value  = null");
-  expect(tfvars).toContain('runtime_package_version   = "0.1.46"');
+  expect(tfvars).toContain('runtime_package_version   = "0.1.47"');
   expect(tfvars).toContain("runtime_package_integrity = null");
   expect(tfvars).toContain("allow_unpinned_runtime_package_integrity = false");
+  expect(tfvars).toContain("live_ops_backend_state_hardened     = false");
+  expect(tfvars).toContain("live_ops_human_alert_delivery_ready = false");
+  expect(tfvars).toContain("live_ops_backup_restore_ready       = false");
+  expect(tfvars).toContain("live_ops_evidence_retention_ready   = false");
   expect(tfvars).toContain('project_name             = "open-uptime"');
   expect(tfvars).toContain("monthly_budget_limit_usd");
   expect(tfvars).toContain("private_route_table_ids");

@@ -243,7 +243,7 @@ variable "container_image" {
 variable "runtime_package_version" {
   description = "Published @hasna/uptime package version that CodeBuild should build into the ECR image."
   type        = string
-  default     = "0.1.46"
+  default     = "0.1.47"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$", var.runtime_package_version))
@@ -389,12 +389,49 @@ variable "desired_counts" {
     )
     error_message = "web desired count above 0 requires CloudFront HTTPS-origin mode, or explicit allow_cloudfront_http_origin_live_traffic=true risk acceptance for a bounded smoke."
   }
+
+  validation {
+    condition = (
+      lookup(var.desired_counts, "web", 0) == 0
+      || (
+        var.live_ops_backend_state_hardened
+        && var.live_ops_human_alert_delivery_ready
+        && var.live_ops_backup_restore_ready
+        && var.live_ops_evidence_retention_ready
+      )
+    )
+    error_message = "web desired count above 0 requires live_ops_backend_state_hardened, live_ops_human_alert_delivery_ready, live_ops_backup_restore_ready, and live_ops_evidence_retention_ready."
+  }
 }
 
 variable "alarm_actions" {
   description = "Optional SNS topic ARNs or other CloudWatch alarm action ARNs."
   type        = list(string)
   default     = []
+}
+
+variable "live_ops_backend_state_hardened" {
+  description = "Set true only after the Terraform backend state path for this workload is hardened for secret-bearing state, including reviewed KMS, principal, retention/Object Lock or accepted equivalent, and operator access evidence."
+  type        = bool
+  default     = false
+}
+
+variable "live_ops_human_alert_delivery_ready" {
+  description = "Set true only after approved human/on-call alarm and budget recipients are configured and a non-secret delivery smoke is recorded."
+  type        = bool
+  default     = false
+}
+
+variable "live_ops_backup_restore_ready" {
+  description = "Set true only after backup readiness, retention, and restore evidence for the currently pinned runtime path are recorded."
+  type        = bool
+  default     = false
+}
+
+variable "live_ops_evidence_retention_ready" {
+  description = "Set true only after evidence/artifact retention, KMS policy, deletion controls, and rollback/break-glass expectations are reviewed for live traffic."
+  type        = bool
+  default     = false
 }
 
 variable "monthly_budget_limit_usd" {

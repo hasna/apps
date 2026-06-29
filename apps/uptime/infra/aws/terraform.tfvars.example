@@ -22,7 +22,7 @@ alb_ingress_cidr_blocks = []
 private_subnet_ids       = ["subnet-replace-private-a", "subnet-replace-private-b"]
 private_route_table_ids  = ["rtb-replace-private"]
 container_image          = "123456789012.dkr.ecr.us-east-1.amazonaws.com/open-uptime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-runtime_package_version   = "0.1.46"
+runtime_package_version   = "0.1.47"
 runtime_package_integrity = null
 allow_unpinned_runtime_package_integrity = false
 certificate_arn          = null
@@ -45,5 +45,10 @@ desired_counts = {
   reporter       = 0
   migration      = 0
 }
+
+live_ops_backend_state_hardened     = false
+live_ops_human_alert_delivery_ready = false
+live_ops_backup_restore_ready       = false
+live_ops_evidence_retention_ready   = false
 
 budget_alert_email_addresses = []

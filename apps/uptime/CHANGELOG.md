@@ -6,6 +6,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.47] - 2026-06-29
+
+### Security
+
+- Hardened the AWS evidence bucket policy to deny explicit non-KMS object
+  uploads and object uploads that specify a KMS key other than the configured
+  Open Uptime KMS key.
+- Added explicit Terraform live-ops readiness gates for backend state,
+  human/on-call alert delivery, backup/restore evidence, and evidence retention
+  before the web service can scale above zero.
+
 ## [0.1.46] - 2026-06-29
 
 ### Added

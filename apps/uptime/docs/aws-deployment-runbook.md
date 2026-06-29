@@ -91,7 +91,9 @@ The plan expects:
   an ACM certificate.
 - Encrypted EFS file system, access point, mount targets, and AWS Backup plan
   for `HASNA_UPTIME_HOSTED_SQLITE_DB=/data/uptime/uptime.db`.
-- S3 bucket for redacted browser evidence and generated report artifacts.
+- S3 bucket for redacted browser evidence and generated report artifacts, with
+  KMS default encryption plus bucket-policy denies for explicit non-KMS uploads
+  and uploads that specify the wrong KMS key.
 - Secrets Manager refs for app env, hosted token, probe config, and reporting
   channel refs. If any ECS secret uses an SSM Parameter Store ARN, add `ssm` to
   `interface_vpc_endpoint_services` or document the approved alternate egress
@@ -99,6 +101,13 @@ The plan expects:
 - CloudWatch log groups for every component plus initial web 5xx/unhealthy
   alarms. Scheduler-stall, stale-probe, and report-delivery alarms remain
   blocked until those workers emit cloud metrics.
+
+The module also keeps `desired_counts.web > 0` behind explicit ops-readiness
+booleans. Leave `live_ops_backend_state_hardened`,
+`live_ops_human_alert_delivery_ready`, `live_ops_backup_restore_ready`, and
+`live_ops_evidence_retention_ready` as `false` until current no-secret evidence
+proves those gates for the exact pinned package, image, Terraform backend, and
+alert/backup/evidence path.
 
 Provision these through the approved infrastructure repository and reviewed
 plan/apply flow. The local `uptime cloud plan` output intentionally avoids

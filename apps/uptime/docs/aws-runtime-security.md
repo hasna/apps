@@ -222,6 +222,9 @@ S3:
 - create a dedicated evidence/artifact bucket or scoped prefix;
 - enable KMS encryption, versioning, lifecycle/retention, and public access
   block;
+- deny explicit non-KMS object uploads and object uploads that specify a KMS key
+  other than the configured Open Uptime key; clients that omit SSE headers still
+  use the bucket default KMS encryption;
 - store browser screenshots, traces, network evidence, generated report HTML,
   generated report JSON, and import/export artifacts only after redaction;
 - access artifacts through short-lived signed URLs with workspace authorization
@@ -231,6 +234,9 @@ Target state: no hosted runtime writes authoritative state to EFS or local task
 storage. Current bridge exception: one web task may write the explicit
 `/data/uptime/uptime.db` EFS-backed SQLite file until the async Postgres adapter
 and cloud leases exist. Ephemeral task storage is for temporary files only.
+The Terraform module blocks `web` scale-up unless protected-access gates and
+explicit live-ops readiness booleans for backend state, human alert delivery,
+backup/restore, and evidence retention are all set for the reviewed deployment.
 
 Project stores:
 
