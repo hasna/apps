@@ -36,6 +36,16 @@ export {
   sanitizePostgresReportRuntimeError,
 } from "./postgres-report-runtime.js";
 export { runHostedPublicChecksWorker, runPostgresPublicProbeWorker, runPostgresSchedulerWorker } from "./workers.js";
+export {
+  buildWorkerRuntimeMetricEnvelope,
+  emitWorkerRuntimeMetricEnvelope,
+  publicProbeWorkerRuntimeMetrics,
+  reporterWorkerRuntimeMetrics,
+  schedulerWorkerRuntimeMetrics,
+  workerRuntimeMetricOptionsFromEnv,
+  WORKER_RUNTIME_METRIC_DIMENSIONS,
+  WORKER_RUNTIME_METRIC_NAMESPACE,
+} from "./worker-metrics.js";
 export { runEdgeSmoke } from "./edge-smoke.js";
 export { uptimeHome, uptimeDbPath, uptimeHostedFallbackDbPath, ensureUptimeHome } from "./paths.js";
 export type {
@@ -140,6 +150,9 @@ export type {
 export type {
   ClaimPostgresCheckJobInput,
   CancelPostgresClaimedCheckJobInput,
+  CountDuePostgresCheckJobsOptions,
+  CountPostgresSchedulerBacklogOptions,
+  CountPostgresStaleCheckJobLeasesOptions,
   CreatePostgresCheckJobInput,
   GetPostgresMonitorOptions,
   ListDuePostgresCheckJobsOptions,
@@ -197,7 +210,22 @@ export type {
   PostgresPublicProbeWorkerJobResult,
   PostgresPublicProbeWorkerOptions,
   PostgresPublicProbeWorkerSummary,
+  WorkerRuntimeMetricSink,
+  WorkerRuntimeMetricSinkEvent,
 } from "./workers.js";
+export type {
+  PublicProbeWorkerMetricSummary,
+  ReporterWorkerMetricSummary,
+  SchedulerWorkerMetricSummary,
+  WorkerRuntimeMetric,
+  WorkerRuntimeMetricEmitterOptions,
+  WorkerRuntimeMetricEnvelope,
+  WorkerRuntimeMetricEnvelopeOptions,
+  WorkerRuntimeMetricEnvironmentOptions,
+  WorkerRuntimeMetricName,
+  WorkerRuntimeMetricUnit,
+  WorkerRuntimeRole,
+} from "./worker-metrics.js";
 export type {
   EdgeSmokeCheck,
   EdgeSmokeOptions,

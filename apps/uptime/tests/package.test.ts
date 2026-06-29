@@ -21,6 +21,7 @@ test("published package exports and bins are usable after build", async () => {
     "./postgres-runtime": ["buildPostgresRuntimeReadiness", "createPostgresRuntime"],
     "./postgres-report-runtime": ["buildPostgresReportRuntimeReadiness", "createPostgresReportRuntime"],
     "./workers": ["runHostedPublicChecksWorker", "runPostgresPublicProbeWorker", "runPostgresSchedulerWorker"],
+    "./worker-metrics": ["buildWorkerRuntimeMetricEnvelope", "schedulerWorkerRuntimeMetrics", "publicProbeWorkerRuntimeMetrics", "reporterWorkerRuntimeMetrics"],
     "./edge-smoke": ["runEdgeSmoke"],
   };
 
@@ -57,6 +58,7 @@ test("package dry-run includes release artifacts and excludes source-only files"
     "dist/index.js",
     "dist/cli/index.js",
     "dist/mcp/index.js",
+    "dist/worker-metrics.js",
     "Dockerfile.package",
     "infra/aws/main.tf",
     "infra/aws/variables.tf",

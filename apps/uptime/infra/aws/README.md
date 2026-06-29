@@ -140,6 +140,10 @@ custom metrics, `worker_runtime_metric_producers_ready = true`,
 `live_ops_human_alert_delivery_ready = true`, and `alarm_actions` contains an
 approved human/on-call destination. Alarm dimensions intentionally avoid raw
 workspace ids and use only `Service`, `Stage`, and `Role`.
+The public package includes SDK helpers and opt-in EMF review telemetry for the
+bounded Postgres scheduler and public-probe commands, but this is not enough to
+enable the alarms. Reporter metrics, human/on-call delivery, and alarm-state
+readback must also be proven first.
 
 | Alarm key | Metric | Role | Statistic | Period | Missing data |
 | --- | --- | --- | --- | --- | --- |

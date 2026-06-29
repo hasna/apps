@@ -385,10 +385,14 @@ request-provided credentials.
 
 The Terraform module includes a default-off worker runtime alarm contract behind
 `enable_worker_runtime_alarms`. Do not enable it as readiness evidence until the
-workers emit the matching custom metrics and approved human/on-call delivery is
-proven. The contract covers scheduler backlog/stale leases/heartbeat age,
-public-probe backlog/submission failures/heartbeat age, and reporter lag/failed
-deliveries/retry-exhausted deliveries/heartbeat age.
+scheduler, public-probe, and reporter workers all emit the matching custom
+metrics and approved human/on-call delivery is proven. The bounded scheduler and
+public-probe review commands can emit EMF for producer-contract review only; the
+reporter path still needs hosted lag/delivery/retry metrics before
+`worker_runtime_metric_producers_ready` can be true. The contract covers
+scheduler backlog/stale leases/heartbeat age, public-probe backlog/submission
+failures/heartbeat age, and reporter lag/failed deliveries/retry-exhausted
+deliveries/heartbeat age.
 
 ## Backup, Restore, And Rollback
 

@@ -16,6 +16,7 @@ import { buildPostgresRuntimeReadiness, createPostgresRuntime, sanitizePostgresR
 import { buildPostgresReportRuntimeReadiness } from "../postgres-report-runtime.js";
 import { summarizeHostedReportChannelRefs, type HostedReportChannelRefSummary } from "../report-channel-refs.js";
 import { runHostedPublicChecksWorker, runPostgresPublicProbeWorker, runPostgresSchedulerWorker, type PostgresPublicProbeWorkerSummary, type PostgresSchedulerWorkerSummary } from "../workers.js";
+import { emitWorkerRuntimeMetricEnvelope, workerRuntimeMetricOptionsFromEnv, type WorkerRuntimeMetric, type WorkerRuntimeRole } from "../worker-metrics.js";
 import { runEdgeSmoke, type EdgeSmokeReport } from "../edge-smoke.js";
 import type { AwsDeploymentPlan, PrivateProbeCloudConfig } from "../cloud-plan.js";
 import type { PostgresMigrationPlan } from "../postgres-plan.js";
@@ -809,6 +810,7 @@ cloudPostgresScheduler
   .option("--max-slots-per-monitor <n>", "max catch-up slots per monitor", parseInteger, 1)
   .option("--catchup-window-ms <ms>", "max catch-up window in milliseconds", parseInteger, 300_000)
   .option("--probe-locations <locations>", "comma-separated public probe locations")
+  .option("--emit-cloudwatch-emf", "write CloudWatch EMF worker runtime metrics to stderr for review telemetry")
   .option("-j, --json", "print JSON")
   .action(async (opts) => {
     let runtime: ReturnType<typeof createPostgresRuntime> | null = null;
@@ -832,6 +834,7 @@ cloudPostgresScheduler
         },
       });
       print(summary, renderPostgresSchedulerWorkerSummary(summary), opts);
+      maybeEmitWorkerRuntimeMetrics("scheduler", summary.metrics, opts);
       if (summary.status !== "completed") process.exitCode = 1;
     } catch (error) {
       fail(new Error(sanitizePostgresRuntimeError(error, process.env.HASNA_UPTIME_DATABASE_URL)), opts);
@@ -849,6 +852,7 @@ cloudPostgresPublicProbe
   .option("--limit <n>", "max due jobs to inspect", parseInteger, 10)
   .option("--max-jobs <n>", "max claimed jobs to process", parseInteger, 10)
   .option("--lease-ttl-ms <ms>", "claim lease TTL in milliseconds", parseInteger, 120_000)
+  .option("--emit-cloudwatch-emf", "write CloudWatch EMF worker runtime metrics to stderr for review telemetry")
   .option("-j, --json", "print JSON")
   .action(async (opts) => {
     let runtime: ReturnType<typeof createPostgresRuntime> | null = null;
@@ -867,6 +871,7 @@ cloudPostgresPublicProbe
         leaseTtlMs: opts.leaseTtlMs,
       });
       print(summary, renderPostgresPublicProbeWorkerSummary(summary), opts);
+      maybeEmitWorkerRuntimeMetrics("public-probe", summary.metrics, opts);
       if (summary.status !== "completed") process.exitCode = 1;
     } catch (error) {
       fail(new Error(sanitizePostgresRuntimeError(error, process.env.HASNA_UPTIME_DATABASE_URL)), opts);
@@ -2059,6 +2064,17 @@ function requireExplicitWorkspaceId(value?: string): string {
   if (!workspaceId) throw new Error("Postgres worker requires --workspace-id or HASNA_UPTIME_WORKSPACE_ID");
   if (/[\x00-\x1f\x7f-\x9f]/.test(workspaceId)) throw new Error("workspace id must not contain control characters");
   return workspaceId;
+}
+
+function maybeEmitWorkerRuntimeMetrics(role: WorkerRuntimeRole, metrics: WorkerRuntimeMetric[], opts: Record<string, unknown>): void {
+  if (!opts.emitCloudwatchEmf) return;
+  const environment = workerRuntimeMetricOptionsFromEnv();
+  emitWorkerRuntimeMetricEnvelope({
+    role,
+    metrics,
+    ...environment,
+    write: (line) => console.error(line),
+  });
 }
 
 function resolveCloudMemoryMachineIdentity(optionMachineId?: string): CloudMemoryMachineIdentity {

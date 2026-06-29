@@ -150,6 +150,19 @@ export interface ListPostgresSchedulerMonitorsOptions {
   probePolicy?: ProbePolicy;
 }
 
+export interface CountPostgresSchedulerBacklogOptions {
+  workspaceId?: string;
+  now?: string;
+  probePolicy?: ProbePolicy;
+}
+
+export interface CountPostgresStaleCheckJobLeasesOptions {
+  workspaceId?: string;
+  now?: string;
+  probeClass?: ProbeClass;
+  probeId?: string;
+}
+
 export interface PostgresMonitorSnapshot {
   workspaceId: string;
   id: string;
@@ -193,6 +206,13 @@ export interface ListDuePostgresCheckJobsOptions {
   workspaceId?: string;
   now?: string;
   limit?: number;
+  probeClass?: ProbeClass;
+  probeId?: string;
+}
+
+export interface CountDuePostgresCheckJobsOptions {
+  workspaceId?: string;
+  now?: string;
   probeClass?: ProbeClass;
   probeId?: string;
 }
@@ -735,6 +755,37 @@ export class PostgresRuntime {
     return result.rows.map((row) => monitorFromRow(row as Record<string, unknown>));
   }
 
+  async countSchedulerBacklog(options: CountPostgresSchedulerBacklogOptions = {}): Promise<number> {
+    const workspaceId = normalizeWorkspaceId(options.workspaceId ?? this.workspaceId);
+    const now = normalizeIsoTimestamp(options.now ?? this.clock().toISOString(), "scheduler backlog now");
+    const probePolicyHash = options.probePolicy ? hashProbePolicy(normalizeProbePolicy(options.probePolicy)) : null;
+    const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
+      `SELECT COUNT(*)::int AS backlog
+       FROM ${this.table("monitors")}
+       WHERE workspace_id = $1
+         AND enabled = true
+         AND kind IN ('http', 'tcp')
+         AND deleted_at IS NULL
+         AND NOT EXISTS (
+           SELECT 1
+           FROM ${this.table("check_jobs")} AS open_job
+           WHERE open_job.workspace_id = ${this.table("monitors")}.workspace_id
+             AND open_job.monitor_id = ${this.table("monitors")}.id
+             AND open_job.monitor_version = ${this.table("monitors")}.version
+             AND open_job.deleted_at IS NULL
+             AND open_job.submitted_result_id IS NULL
+             AND open_job.status IN ('pending', 'claimed', 'expired')
+             AND ($3::text IS NULL OR open_job.probe_policy_hash = $3)
+         )
+         AND (
+           last_checked_at IS NULL
+           OR last_checked_at + (interval_seconds::bigint * interval '1 second') <= $2::timestamptz
+         )`,
+      [workspaceId, now, probePolicyHash],
+    ));
+    return numberFromCountRow(firstRow(result, "scheduler backlog"), "backlog");
+  }
+
   async listDueCheckJobs(options: ListDuePostgresCheckJobsOptions = {}): Promise<PostgresCheckJobRecord[]> {
     const workspaceId = normalizeWorkspaceId(options.workspaceId ?? this.workspaceId);
     const now = normalizeIsoTimestamp(options.now ?? this.clock().toISOString(), "due check job now");
@@ -774,6 +825,66 @@ export class PostgresRuntime {
       [workspaceId, now, limit, probeClass, probeId],
     ));
     return result.rows.map((row) => redactCheckJobForDiscovery(checkJobFromRow(row as Record<string, unknown>)));
+  }
+
+  async countDueCheckJobs(options: CountDuePostgresCheckJobsOptions = {}): Promise<number> {
+    const workspaceId = normalizeWorkspaceId(options.workspaceId ?? this.workspaceId);
+    const now = normalizeIsoTimestamp(options.now ?? this.clock().toISOString(), "due check job count now");
+    const probeClass = options.probeClass ? normalizeProbeClass(options.probeClass) : null;
+    const probeId = options.probeId ? normalizeId(options.probeId) : null;
+    const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
+      `SELECT COUNT(*)::int AS due_count
+       FROM ${this.table("check_jobs")}
+       WHERE workspace_id = $1
+         AND deleted_at IS NULL
+         AND submitted_result_id IS NULL
+         AND monitor_snapshot <> '{}'::jsonb
+         AND ($3::text IS NULL OR COALESCE(probe_policy->>'probeClass', probe_policy->>'probe_class') = $3)
+         AND (
+           $4::text IS NULL
+           OR EXISTS (
+             SELECT 1
+             FROM ${this.table("probe_identities")} AS due_probe
+             WHERE due_probe.workspace_id = ${this.table("check_jobs")}.workspace_id
+               AND due_probe.id = $4
+               AND due_probe.enabled = true
+               AND due_probe.deleted_at IS NULL
+               AND COALESCE(${this.table("check_jobs")}.probe_policy->>'probeClass', ${this.table("check_jobs")}.probe_policy->>'probe_class') = due_probe.probe_class
+               AND (
+                 jsonb_array_length(COALESCE(${this.table("check_jobs")}.probe_policy->'locations', '[]'::jsonb)) = 0
+                 OR (${this.table("check_jobs")}.probe_policy->'locations') ? due_probe.probe_location
+               )
+           )
+         )
+         AND due_at <= $2::timestamptz
+         AND (
+           status IN ('pending', 'expired')
+           OR (status = 'claimed' AND lease_expires_at <= $2::timestamptz)
+         )`,
+      [workspaceId, now, probeClass, probeId],
+    ));
+    return numberFromCountRow(firstRow(result, "due check job count"), "due_count");
+  }
+
+  async countStaleCheckJobLeases(options: CountPostgresStaleCheckJobLeasesOptions = {}): Promise<number> {
+    const workspaceId = normalizeWorkspaceId(options.workspaceId ?? this.workspaceId);
+    const now = normalizeIsoTimestamp(options.now ?? this.clock().toISOString(), "stale check job lease now");
+    const probeClass = options.probeClass ? normalizeProbeClass(options.probeClass) : null;
+    const probeId = options.probeId ? normalizeId(options.probeId) : null;
+    const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
+      `SELECT COUNT(*)::int AS stale_leases
+       FROM ${this.table("check_jobs")}
+       WHERE workspace_id = $1
+         AND deleted_at IS NULL
+         AND submitted_result_id IS NULL
+         AND monitor_snapshot <> '{}'::jsonb
+         AND status = 'claimed'
+         AND lease_expires_at <= $2::timestamptz
+         AND ($3::text IS NULL OR COALESCE(probe_policy->>'probeClass', probe_policy->>'probe_class') = $3)
+         AND ($4::text IS NULL OR claimed_by_probe_id = $4)`,
+      [workspaceId, now, probeClass, probeId],
+    ));
+    return numberFromCountRow(firstRow(result, "stale check job leases"), "stale_leases");
   }
 
   async deferSchedulerMonitor(input: DeferPostgresSchedulerMonitorInput): Promise<PostgresMonitorRecord | null> {
@@ -1797,6 +1908,13 @@ function firstRow(result: { rows: unknown[] }, label: string): Record<string, un
   const row = result.rows[0] as Record<string, unknown> | undefined;
   if (!row) throw new Error(`${label} write returned no row`);
   return row;
+}
+
+function numberFromCountRow(row: Record<string, unknown>, key: string): number {
+  const value = row[key];
+  const count = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(count) || count < 0) throw new Error(`invalid Postgres count for ${key}`);
+  return count;
 }
 
 async function rollbackQuietly(client: PostgresQueryClient): Promise<void> {

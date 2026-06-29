@@ -6,6 +6,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.57] - 2026-06-30
+
+### Added
+
+- Added a worker runtime metrics SDK and package export for the default-off
+  CloudWatch alarm contract. The SDK emits CloudWatch EMF envelopes with the
+  exact `OpenUptime/Worker` metric names and `Service`, `Stage`, `Role`
+  dimensions used by Terraform.
+- Added opt-in `--emit-cloudwatch-emf` review telemetry for bounded Postgres
+  scheduler and public-probe runs. Scheduler metrics use post-run backlog and
+  stale-lease counts; public-probe metrics count submission failures separately
+  from policy skips and cancellations.
+
+### Changed
+
+- Kept hosted worker `canStart=false`, ECS worker commands fail-closed, and
+  Terraform `worker_runtime_metric_producers_ready=false` by default. Reporter
+  metric helpers exist, but hosted reporter worker promotion remains blocked on
+  secret loading, S3 artifacts, audit export, alarms, and live liveness evidence.
+
 ## [0.1.56] - 2026-06-29
 
 ### Added

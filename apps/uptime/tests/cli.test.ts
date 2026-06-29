@@ -783,6 +783,47 @@ test("CLI hosted worker entrypoints preflight and fail closed", () => {
   }
 });
 
+test("CLI worker metric env does not flip hosted worker readiness", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const env = {
+      HASNA_UPTIME_MODE: "hosted",
+      HASNA_UPTIME_COMPONENT: "scheduler",
+      HASNA_UPTIME_WORKSPACE_ID: "ws_cli",
+      HASNA_UPTIME_DATABASE_URL: "postgres://svc:raw-password@db.example.invalid/uptime?sslmode=require",
+      HASNA_UPTIME_POSTGRES_RUNTIME_SCHEMA_VERIFIED: "1",
+      HASNA_UPTIME_WORKER_METRIC_NAMESPACE: "OpenUptime/Worker",
+      HASNA_UPTIME_WORKER_METRIC_SERVICE: "open-uptime-prod",
+      HASNA_UPTIME_STAGE: "prod",
+    };
+    const preflight = runCli(["cloud", "workers", "preflight", "--role", "scheduler", "--healthcheck", "--json"], dbPath, env);
+    const run = runCli(["cloud", "workers", "run", "--role", "scheduler", "--json"], dbPath, env);
+    const preflightBody = JSON.parse(new TextDecoder().decode(preflight.stdout));
+    const runBody = JSON.parse(new TextDecoder().decode(run.stdout));
+
+    expect(preflight.exitCode).toBe(1);
+    expect(run.exitCode).toBe(1);
+    expect(preflightBody).toMatchObject({
+      role: "scheduler",
+      status: "blocked",
+      canStart: false,
+    });
+    expect(runBody).toMatchObject({
+      ok: false,
+      preflight: {
+        role: "scheduler",
+        status: "blocked",
+        canStart: false,
+      },
+    });
+    expect(JSON.stringify(preflightBody)).not.toContain("raw-password");
+    expect(JSON.stringify(preflightBody)).not.toContain("Workspace");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("CLI Postgres scheduler runner requires explicit workspace", () => {
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {

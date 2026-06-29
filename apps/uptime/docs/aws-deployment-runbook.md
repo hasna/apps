@@ -408,6 +408,12 @@ approved human/on-call delivery is proven. The default-off contract covers
 scheduler backlog/stale leases/heartbeat age, public-probe backlog/submission
 failures/heartbeat age, and reporter lag/failed deliveries/retry exhaustion/
 heartbeat age.
+The bounded Postgres scheduler and public-probe review commands can emit
+CloudWatch EMF with `--emit-cloudwatch-emf` after a review batch. Treat that as
+producer-contract evidence only: it does not make ECS worker commands startable,
+does not prove reporter metrics, and must not flip
+`worker_runtime_metric_producers_ready` until reporter lag/delivery/retry and
+heartbeat metrics are emitted by the hosted reporter path too.
 Record a non-secret SNS delivery smoke id and redacted delivery destination
 counts before live scale-out. Internal SQS audit delivery is useful evidence,
 but it does not replace approved human/on-call subscriptions.

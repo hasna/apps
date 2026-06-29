@@ -126,6 +126,13 @@ scheduler, public-probe, and reporter roles. Keep
 `enable_worker_runtime_alarms=false` until those workers emit the matching
 custom metrics and approved human/on-call delivery is proven; the contract is
 not a live-readiness claim by itself.
+Bounded Postgres scheduler and public-probe review commands can write
+CloudWatch EMF telemetry with `--emit-cloudwatch-emf`; this is review telemetry
+only and does not change `cloud workers run --role <role>` or worker preflight
+readiness. The reporter metric helpers exist in the SDK, but hosted reporter
+startup remains blocked until channel secret loading, S3 artifact writing,
+Open Logs audit export, delivery alarms, and live worker liveness evidence are
+implemented and proven.
 `uptime cloud public-checks run-due` and `worker` are only bounded EFS SQLite
 bridge paths around hosted HTTP/TCP smoke checks, and they require
 `--allow-public-checks-bridge` or `HASNA_UPTIME_ALLOW_PUBLIC_CHECKS_BRIDGE=1`.

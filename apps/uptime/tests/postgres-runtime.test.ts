@@ -105,6 +105,16 @@ class FakeRuntimeClient implements PostgresQueryClient {
     if (sql.includes("SELECT * FROM \"uptime\".\"check_jobs\"") && sql.includes("ORDER BY due_at")) {
       return { rows: this.job ? [snakeJob(this.job)] : [], rowCount: this.job ? 1 : 0 };
     }
+    if (sql.includes("COUNT(*)::int AS due_count")) {
+      return {
+        rows: [{ due_count: this.job && this.job.submittedResultId === null ? 1 : 0 }],
+        rowCount: 1,
+      };
+    }
+    if (sql.includes("COUNT(*)::int AS stale_leases")) {
+      const stale = this.job?.status === "claimed" && this.job.submittedResultId === null ? 1 : 0;
+      return { rows: [{ stale_leases: stale }], rowCount: 1 };
+    }
     if (sql.includes("WITH probe AS") && sql.includes("UPDATE \"uptime\".\"check_jobs\" AS job")) {
       if (!this.job || !this.probe) return { rows: [], rowCount: 0 };
       if (this.job.status === "claimed" && this.job.claimedByProbeId === String(params?.[2]) && this.job.fencingToken) {
@@ -138,6 +148,18 @@ class FakeRuntimeClient implements PostgresQueryClient {
         && (this.job.status === "pending" || this.job.status === "claimed" || this.job.status === "expired")
         && (!requestedProbePolicyHash || this.job.probePolicyHash === requestedProbePolicyHash);
       return { rows: hasOpenCurrentJob || !this.monitor ? [] : [snakeMonitor(this.monitor)], rowCount: hasOpenCurrentJob || !this.monitor ? 0 : 1 };
+    }
+    if (sql.includes("COUNT(*)::int AS backlog")) {
+      const requestedProbePolicyHash = params?.[2] == null ? null : String(params[2]);
+      const hasOpenCurrentJob = this.job
+        && this.monitor
+        && this.job.workspaceId === this.monitor.workspaceId
+        && this.job.monitorId === this.monitor.id
+        && this.job.monitorRevision === this.monitor.revision
+        && this.job.submittedResultId === null
+        && (this.job.status === "pending" || this.job.status === "claimed" || this.job.status === "expired")
+        && (!requestedProbePolicyHash || this.job.probePolicyHash === requestedProbePolicyHash);
+      return { rows: [{ backlog: hasOpenCurrentJob || !this.monitor ? 0 : 1 }], rowCount: 1 };
     }
     if (sql.includes("SELECT * FROM \"uptime\".\"monitors\"")) {
       return { rows: this.monitor ? [snakeMonitor(this.monitor)] : [], rowCount: this.monitor ? 1 : 0 };
@@ -330,12 +352,18 @@ test("Postgres runtime records monitors, probe leases, submissions, audit, and t
     limit: 10,
     probePolicy: { probeClass: "private", locations: ["operator-02"] },
   });
+  const schedulerBacklog = await runtime.countSchedulerBacklog({
+    now: "2026-06-29T10:01:00.000Z",
+    probePolicy: { probeClass: "private", locations: ["operator-02"] },
+  });
   const fetchedMonitor = await runtime.getMonitor({ id: monitor.id });
   const claimed = await runtime.claimCheckJob({
     jobId: job.id,
     probeId: probe.id,
     leaseTtlMs: 120_000,
   });
+  const dueCount = await runtime.countDueCheckJobs({ now: "2026-06-29T10:01:00.000Z", probeClass: "public", probeId: probe.id });
+  const staleLeaseCount = await runtime.countStaleCheckJobLeases({ now: "2026-06-29T10:04:00.000Z", probeClass: "public", probeId: probe.id });
   const retriedClaim = await runtime.claimCheckJob({
     jobId: job.id,
     probeId: probe.id,
@@ -418,8 +446,11 @@ test("Postgres runtime records monitors, probe leases, submissions, audit, and t
   expect(fetchedMonitor?.id).toBe(monitor.id);
   expect(schedulerMonitors).toHaveLength(0);
   expect(schedulerMonitorsOtherPolicy).toHaveLength(1);
+  expect(schedulerBacklog).toBe(1);
   expect(due[0]!.fencingToken).toBeNull();
   expect(claimed?.status).toBe("claimed");
+  expect(dueCount).toBe(1);
+  expect(staleLeaseCount).toBe(1);
   expect(claimed?.claimedByProbeId).toBe(probe.id);
   expect(retriedClaim?.fencingToken).toBe(claimed?.fencingToken);
   expect(submitted.job.status).toBe("submitted");
@@ -443,6 +474,14 @@ test("Postgres runtime records monitors, probe leases, submissions, audit, and t
   expect(client.queries.some((query) => query.sql.includes("kind IN ('http', 'tcp')"))).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("(COALESCE(last_checked_at, created_at), id) >"))).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("last_checked_at + (interval_seconds::bigint * interval '1 second')"))).toBe(true);
+  expect(client.queries.some((query) => query.sql.includes("COUNT(*)::int AS backlog") && query.sql.includes("NOT EXISTS"))).toBe(true);
+  const dueCountQuery = client.queries.find((query) => query.sql.includes("COUNT(*)::int AS due_count"));
+  expect(dueCountQuery?.sql).toContain("monitor_snapshot <> '{}'::jsonb");
+  expect(dueCountQuery?.sql).toContain("($3::text IS NULL OR COALESCE(probe_policy->>'probeClass', probe_policy->>'probe_class') = $3)");
+  expect(dueCountQuery?.sql).toContain("$4::text IS NULL");
+  expect(highestSqlPlaceholder(dueCountQuery?.sql ?? "")).toBe(dueCountQuery?.params?.length ?? 0);
+  expect(dueCountQuery?.params).toEqual(["ws_runtime", "2026-06-29T10:01:00.000Z", "public", probe.id]);
+  expect(client.queries.some((query) => query.sql.includes("COUNT(*)::int AS stale_leases") && query.sql.includes("claimed_by_probe_id"))).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("monitor_snapshot = '{}'::jsonb") && query.sql.includes("deleted_at IS NOT NULL"))).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("AND fencing_token = $5"))).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("payload_hash IS NOT DISTINCT FROM EXCLUDED.payload_hash"))).toBe(true);
@@ -815,4 +854,8 @@ function snakeTombstone(row: PostgresSyncTombstoneRecord): Record<string, unknow
     idempotency_key: row.idempotencyKey,
     metadata_json: JSON.stringify(row.metadata),
   };
+}
+
+function highestSqlPlaceholder(sql: string): number {
+  return Math.max(0, ...Array.from(sql.matchAll(/\$(\d+)/g), (match) => Number(match[1])));
 }

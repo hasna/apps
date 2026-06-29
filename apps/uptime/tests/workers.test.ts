@@ -161,10 +161,17 @@ test("postgres scheduler worker creates one deterministic public job across repe
     status: "completed",
     workspaceId: "ws_worker",
     discovered: 1,
+    backlog: 0,
+    staleLeases: 0,
     scheduled: 1,
     skipped: 0,
     failed: 0,
   });
+  expect(first.metrics).toEqual([
+    { name: "SchedulerBacklog", value: 0, unit: "Count" },
+    { name: "SchedulerStaleLeases", value: 0, unit: "Count" },
+    { name: "WorkerHeartbeatAgeSeconds", value: 0, unit: "Seconds" },
+  ]);
   expect(first.results[0]!.scheduleSlots).toEqual(["2026-06-29T10:00:00.000Z"]);
   expect(first.results[0]!.jobIds).toHaveLength(1);
   expect(second.discovered).toBe(0);
@@ -370,6 +377,53 @@ test("postgres scheduler worker bounds catch-up slots deterministically", async 
   ]);
 });
 
+test("postgres scheduler worker emits post-run backlog and stale lease metrics", async () => {
+  const runtime = new FakePostgresSchedulerRuntime({
+    monitors: [
+      {
+        ...baseMonitor(),
+        id: "mon_a",
+        lastCheckedAt: "2026-06-29T09:59:00.000Z",
+      },
+      {
+        ...baseMonitor(),
+        id: "mon_b",
+        lastCheckedAt: "2026-06-29T09:59:00.000Z",
+      },
+    ],
+  });
+  runtime.jobs.push({
+    ...baseJob(),
+    id: "job_stale",
+    monitorId: "mon_stale",
+    status: "claimed",
+    claimedByProbeId: "prb_public",
+    leaseExpiresAt: "2026-06-29T09:59:00.000Z",
+  });
+  const metricEvents: any[] = [];
+
+  const summary = await runPostgresSchedulerWorker({
+    runtime,
+    workspaceId: "ws_worker",
+    maxJobs: 1,
+    now: () => new Date("2026-06-29T10:00:17.000Z"),
+    hostedResolveHost: async () => [{ address: "93.184.216.34", family: 4 }],
+    metricSink: (event) => {
+      metricEvents.push(event);
+    },
+  });
+
+  expect(summary.scheduled).toBe(1);
+  expect(summary.backlog).toBe(1);
+  expect(summary.staleLeases).toBe(1);
+  expect(summary.metrics).toEqual([
+    { name: "SchedulerBacklog", value: 1, unit: "Count" },
+    { name: "SchedulerStaleLeases", value: 1, unit: "Count" },
+    { name: "WorkerHeartbeatAgeSeconds", value: 0, unit: "Seconds" },
+  ]);
+  expect(metricEvents).toEqual([{ role: "scheduler", metrics: summary.metrics, emittedAt: summary.finishedAt }]);
+});
+
 test("postgres public-probe worker claims, runs hosted target-policy check, and submits result", async () => {
   const runtime = new FakePostgresPublicProbeRuntime();
   const summary = await runPostgresPublicProbeWorker({
@@ -401,11 +455,18 @@ test("postgres public-probe worker claims, runs hosted target-policy check, and 
     workspaceId: "ws_worker",
     probeId: "prb_public",
     discovered: 1,
+    backlog: 0,
     claimed: 1,
     submitted: 1,
+    submissionFailures: 0,
     skipped: 0,
     failed: 0,
   });
+  expect(summary.metrics).toEqual([
+    { name: "ProbeJobBacklog", value: 0, unit: "Count" },
+    { name: "ProbeSubmissionFailures", value: 0, unit: "Count" },
+    { name: "WorkerHeartbeatAgeSeconds", value: 0, unit: "Seconds" },
+  ]);
   expect(runtime.submissions).toHaveLength(1);
   expect(runtime.submissions[0]!.payloadHash).toMatch(/^[a-f0-9]{64}$/);
   expect(runtime.submissions[0]!.nonce).toMatch(/^nonce_[a-f0-9]{48}$/);
@@ -552,17 +613,33 @@ test("postgres public-probe worker cancels unsupported monitor kinds without run
 test("postgres public-probe worker reports partial status on failed job processing", async () => {
   const runtime = new FakePostgresPublicProbeRuntime();
   runtime.failSubmit = true;
+  const metricEvents: any[] = [];
 
   const summary = await runPostgresPublicProbeWorker({
     runtime,
     probeId: "prb_public",
     workspaceId: "ws_worker",
+    now: sequenceClock([
+      "2026-06-29T10:00:00.000Z",
+      "2026-06-29T10:00:05.000Z",
+      "2026-06-29T10:00:06.000Z",
+    ]),
     hostedResolveHost: async () => [{ address: "93.184.216.34", family: 4 }],
     hostedHttpRequest: async () => ({ status: 200 }),
+    metricSink: (event) => {
+      metricEvents.push(event);
+    },
   });
 
   expect(summary.status).toBe("partial");
   expect(summary.failed).toBe(1);
+  expect(summary.submissionFailures).toBe(1);
+  expect(summary.metrics).toEqual([
+    { name: "ProbeJobBacklog", value: 0, unit: "Count" },
+    { name: "ProbeSubmissionFailures", value: 1, unit: "Count" },
+    { name: "WorkerHeartbeatAgeSeconds", value: 0, unit: "Seconds" },
+  ]);
+  expect(metricEvents).toEqual([{ role: "public-probe", metrics: summary.metrics, emittedAt: summary.finishedAt }]);
   expect(summary.results[0]!.action).toBe("failed");
   expect(summary.results[0]!.reason).toBe("submit failed");
 });
@@ -608,6 +685,7 @@ test("postgres public-probe worker treats failed fenced cancellation as partial"
 
   expect(summary.status).toBe("partial");
   expect(summary.failed).toBe(1);
+  expect(summary.submissionFailures).toBe(0);
   expect(summary.skipped).toBe(0);
   expect(summary.results[0]!.action).toBe("failed");
   expect(summary.results[0]!.reason).toBe("failed to cancel monitor_revision_changed job");
@@ -696,9 +774,20 @@ class FakePostgresPublicProbeRuntime implements PostgresPublicProbeRuntime {
 
   async listDueCheckJobs(options?: { workspaceId?: string; now?: string; limit?: number; probeClass?: "public" | "private"; probeId?: string }): Promise<PostgresCheckJobRecord[]> {
     this.listDueRequests.push(options ?? {});
+    return this.filterDueJobs(options);
+  }
+
+  async countDueCheckJobs(options?: { workspaceId?: string; now?: string; limit?: number; probeClass?: "public" | "private"; probeId?: string }): Promise<number> {
+    return this.filterDueJobs(options).length;
+  }
+
+  private filterDueJobs(options?: { workspaceId?: string; now?: string; limit?: number; probeClass?: "public" | "private"; probeId?: string }): PostgresCheckJobRecord[] {
     const probeClass = options?.probeId ? fakeProbeClass(options.probeId) : null;
     const probeLocation = options?.probeId ? fakeProbeLocation(options.probeId) : null;
+    const now = Date.parse(options?.now ?? "2026-06-29T10:00:00.000Z");
     return this.jobs
+      .filter((job) => job.submittedResultId === null)
+      .filter((job) => job.status === "pending" || job.status === "expired" || (job.status === "claimed" && (!job.leaseExpiresAt || Date.parse(job.leaseExpiresAt) <= now)))
       .filter((job) => !options?.probeClass || job.probePolicy.probeClass === options.probeClass)
       .filter((job) => !probeClass || job.probePolicy.probeClass === probeClass)
       .filter((job) => !probeLocation || job.probePolicy.locations.length === 0 || job.probePolicy.locations.includes(probeLocation))
@@ -828,6 +917,26 @@ class FakePostgresSchedulerRuntime implements PostgresSchedulerRuntime {
   }
 
   async listSchedulerMonitors(options?: { workspaceId?: string; now?: string; limit?: number; cursor?: { sortAt: string; id: string }; probePolicy?: ProbePolicy }): Promise<PostgresMonitorRecord[]> {
+    return this.filterSchedulerMonitors(options);
+  }
+
+  async countSchedulerBacklog(options?: { workspaceId?: string; now?: string; probePolicy?: ProbePolicy }): Promise<number> {
+    return this.filterSchedulerMonitors(options).length;
+  }
+
+  async countStaleCheckJobLeases(options?: { workspaceId?: string; now?: string; probeClass?: "public" | "private"; probeId?: string }): Promise<number> {
+    const now = Date.parse(options?.now ?? "2026-06-29T10:00:00.000Z");
+    return this.jobs
+      .filter((job) => !options?.workspaceId || job.workspaceId === options.workspaceId)
+      .filter((job) => job.submittedResultId === null)
+      .filter((job) => job.status === "claimed")
+      .filter((job) => job.leaseExpiresAt && Date.parse(job.leaseExpiresAt) <= now)
+      .filter((job) => !options?.probeClass || job.probePolicy.probeClass === options.probeClass)
+      .filter((job) => !options?.probeId || job.claimedByProbeId === options.probeId)
+      .length;
+  }
+
+  private filterSchedulerMonitors(options?: { workspaceId?: string; now?: string; limit?: number; cursor?: { sortAt: string; id: string }; probePolicy?: ProbePolicy }): PostgresMonitorRecord[] {
     const now = Date.parse(options?.now ?? "2026-06-29T10:00:00.000Z");
     return this.monitors
       .filter((monitor) => this.leakWorkspaces || !options?.workspaceId || monitor.workspaceId === options.workspaceId)

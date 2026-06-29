@@ -5,6 +5,9 @@ import { probeResultPayloadHash } from "./probes.js";
 import { assertHostedResolvedAddressesAllowed, assertHostedTargetAllowed, normalizeHostedHost, type HostedResolvedAddress } from "./target-policy.js";
 import {
   sanitizePostgresRuntimeError,
+  type CountDuePostgresCheckJobsOptions,
+  type CountPostgresSchedulerBacklogOptions,
+  type CountPostgresStaleCheckJobLeasesOptions,
   type CreatePostgresCheckJobInput,
   type PostgresCheckJobRecord,
   type PostgresMonitorSnapshot,
@@ -12,6 +15,12 @@ import {
   type PostgresRuntime,
   type SubmitPostgresProbeCheckResult,
 } from "./postgres-runtime.js";
+import {
+  publicProbeWorkerRuntimeMetrics,
+  schedulerWorkerRuntimeMetrics,
+  type WorkerRuntimeMetric,
+  type WorkerRuntimeRole,
+} from "./worker-metrics.js";
 import type { CheckAttemptResult, CheckEvidence, CheckResult, Monitor, MonitorKind, ProbePolicy } from "./types.js";
 
 export interface HostedPublicCheckRunner {
@@ -49,6 +58,7 @@ export interface HostedPublicChecksWorkerSummary {
 
 export interface PostgresPublicProbeRuntime {
   listDueCheckJobs(options?: { workspaceId?: string; now?: string; limit?: number; probeClass?: "public" | "private"; probeId?: string }): Promise<PostgresCheckJobRecord[]>;
+  countDueCheckJobs?(options?: CountDuePostgresCheckJobsOptions): Promise<number>;
   claimCheckJob(input: { workspaceId?: string; jobId: string; probeId: string; leaseTtlMs?: number }): Promise<PostgresCheckJobRecord | null>;
   getMonitor(input: { workspaceId?: string; id: string }): Promise<PostgresMonitorSnapshot | null>;
   cancelClaimedCheckJob(input: {
@@ -103,10 +113,13 @@ export interface PostgresPublicProbeWorkerOptions {
   hostedResolveHost?: HostedDnsResolver;
   hostedHttpRequest?: HostedHttpRequestLike;
   hostedMaxRedirects?: number;
+  metricSink?: WorkerRuntimeMetricSink;
 }
 
 export interface PostgresSchedulerRuntime {
   listSchedulerMonitors(options?: { workspaceId?: string; now?: string; limit?: number; cursor?: { sortAt: string; id: string }; probePolicy?: ProbePolicy }): Promise<PostgresMonitorRecord[]>;
+  countSchedulerBacklog?(options?: CountPostgresSchedulerBacklogOptions): Promise<number>;
+  countStaleCheckJobLeases?(options?: CountPostgresStaleCheckJobLeasesOptions): Promise<number>;
   createCheckJob(input: CreatePostgresCheckJobInput): Promise<PostgresCheckJobRecord>;
   deferSchedulerMonitor?(input: {
     workspaceId?: string;
@@ -143,7 +156,16 @@ export interface PostgresSchedulerWorkerOptions {
   probePolicy?: ProbePolicy;
   supportedKinds?: MonitorKind[];
   hostedResolveHost?: HostedDnsResolver;
+  metricSink?: WorkerRuntimeMetricSink;
 }
+
+export interface WorkerRuntimeMetricSinkEvent {
+  role: WorkerRuntimeRole;
+  metrics: WorkerRuntimeMetric[];
+  emittedAt: string;
+}
+
+export type WorkerRuntimeMetricSink = (event: WorkerRuntimeMetricSinkEvent) => void | Promise<void>;
 
 export interface PostgresSchedulerWorkerMonitorResult {
   monitorId: string;
@@ -160,11 +182,14 @@ export interface PostgresSchedulerWorkerSummary {
   status: "completed" | "partial";
   workspaceId: string | null;
   discovered: number;
+  backlog: number;
+  staleLeases: number;
   scheduled: number;
   skipped: number;
   failed: number;
   startedAt: string;
   finishedAt: string;
+  metrics: WorkerRuntimeMetric[];
   results: PostgresSchedulerWorkerMonitorResult[];
 }
 
@@ -183,12 +208,15 @@ export interface PostgresPublicProbeWorkerSummary {
   workspaceId: string | null;
   probeId: string;
   discovered: number;
+  backlog: number;
   claimed: number;
   submitted: number;
+  submissionFailures: number;
   skipped: number;
   failed: number;
   startedAt: string;
   finishedAt: string;
+  metrics: WorkerRuntimeMetric[];
   results: PostgresPublicProbeWorkerJobResult[];
 }
 
@@ -424,18 +452,45 @@ export async function runPostgresSchedulerWorker(options: PostgresSchedulerWorke
     if (monitors.length < limit) break;
   }
 
-  return {
-    kind: "open-uptime.postgres-scheduler-worker",
-    status: failedCount > 0 ? "partial" : "completed",
-    workspaceId: workspaceId ?? null,
+  const finishedAt = clock().toISOString();
+  const backlog = await countSchedulerBacklog(options.runtime, {
+    workspaceId,
+    now: finishedAt,
+    probePolicy,
+    fallback: Math.max(0, discoveredCount - results.length),
+  });
+  const staleLeases = await countStaleCheckJobLeases(options.runtime, {
+    workspaceId,
+    now: finishedAt,
+    probeClass: probePolicy.probeClass,
+    fallback: 0,
+  });
+  const metrics = schedulerWorkerRuntimeMetrics({
     discovered: discoveredCount,
     scheduled: scheduledCount,
     skipped: skippedCount,
     failed: failedCount,
-    startedAt,
-    finishedAt: clock().toISOString(),
+    backlog,
+    staleLeases,
     results,
-  };
+  });
+  const summary = {
+    kind: "open-uptime.postgres-scheduler-worker",
+    status: failedCount > 0 ? "partial" : "completed",
+    workspaceId: workspaceId ?? null,
+    discovered: discoveredCount,
+    backlog,
+    staleLeases,
+    scheduled: scheduledCount,
+    skipped: skippedCount,
+    failed: failedCount,
+    startedAt,
+    finishedAt,
+    metrics,
+    results,
+  } satisfies PostgresSchedulerWorkerSummary;
+  await options.metricSink?.({ role: "scheduler", metrics, emittedAt: finishedAt });
+  return summary;
 }
 
 export async function runPostgresPublicProbeWorker(options: PostgresPublicProbeWorkerOptions): Promise<PostgresPublicProbeWorkerSummary> {
@@ -456,6 +511,7 @@ export async function runPostgresPublicProbeWorker(options: PostgresPublicProbeW
   const results: PostgresPublicProbeWorkerJobResult[] = [];
   let claimedCount = 0;
   let submittedCount = 0;
+  let submissionFailureCount = 0;
   let skippedCount = 0;
   let failedCount = 0;
 
@@ -556,7 +612,7 @@ export async function runPostgresPublicProbeWorker(options: PostgresPublicProbeW
         monitorRevision: claimed.monitorRevision,
         evidence: attempt.evidence ?? null,
       };
-      const submitted = await options.runtime.submitProbeCheckResult({
+      const submitted = await submitProbeResultForWorker(options.runtime, {
         workspaceId: claimed.workspaceId,
         jobId: claimed.id,
         probeId,
@@ -573,6 +629,9 @@ export async function runPostgresPublicProbeWorker(options: PostgresPublicProbeW
         actor: "postgres-public-probe-worker",
         origin: "open-uptime.worker.postgres-public-probe",
         idempotencyKey: nonce,
+      }).catch((error) => {
+        submissionFailureCount += 1;
+        throw error;
       });
       submittedCount += 1;
       results.push({
@@ -606,20 +665,87 @@ export async function runPostgresPublicProbeWorker(options: PostgresPublicProbeW
     }
   }
 
-  return {
+  const finishedAt = clock().toISOString();
+  const backlog = await countDueCheckJobs(options.runtime, {
+    workspaceId,
+    now: finishedAt,
+    probeClass: "public",
+    probeId,
+    fallback: Math.max(0, due.length - claimedCount),
+  });
+  const metrics = publicProbeWorkerRuntimeMetrics({
+    discovered: due.length,
+    backlog,
+    claimed: claimedCount,
+    submitted: submittedCount,
+    skipped: skippedCount,
+    failed: failedCount,
+    submissionFailures: submissionFailureCount,
+  });
+  const summary = {
     kind: "open-uptime.postgres-public-probe-worker",
     status: failedCount > 0 ? "partial" : "completed",
     workspaceId: workspaceId ?? null,
     probeId,
     discovered: due.length,
+    backlog,
     claimed: claimedCount,
     submitted: submittedCount,
+    submissionFailures: submissionFailureCount,
     skipped: skippedCount,
     failed: failedCount,
     startedAt,
-    finishedAt: clock().toISOString(),
+    finishedAt,
+    metrics,
     results,
-  };
+  } satisfies PostgresPublicProbeWorkerSummary;
+  await options.metricSink?.({ role: "public-probe", metrics, emittedAt: finishedAt });
+  return summary;
+}
+
+async function countSchedulerBacklog(
+  runtime: PostgresSchedulerRuntime | PostgresRuntime,
+  options: CountPostgresSchedulerBacklogOptions & { fallback: number },
+): Promise<number> {
+  if (!runtime.countSchedulerBacklog) return options.fallback;
+  return runtime.countSchedulerBacklog({
+    workspaceId: options.workspaceId,
+    now: options.now,
+    probePolicy: options.probePolicy,
+  });
+}
+
+async function countStaleCheckJobLeases(
+  runtime: PostgresSchedulerRuntime | PostgresRuntime,
+  options: CountPostgresStaleCheckJobLeasesOptions & { fallback: number },
+): Promise<number> {
+  if (!runtime.countStaleCheckJobLeases) return options.fallback;
+  return runtime.countStaleCheckJobLeases({
+    workspaceId: options.workspaceId,
+    now: options.now,
+    probeClass: options.probeClass,
+    probeId: options.probeId,
+  });
+}
+
+async function countDueCheckJobs(
+  runtime: PostgresPublicProbeRuntime | PostgresRuntime,
+  options: CountDuePostgresCheckJobsOptions & { fallback: number },
+): Promise<number> {
+  if (!runtime.countDueCheckJobs) return options.fallback;
+  return runtime.countDueCheckJobs({
+    workspaceId: options.workspaceId,
+    now: options.now,
+    probeClass: options.probeClass,
+    probeId: options.probeId,
+  });
+}
+
+async function submitProbeResultForWorker(
+  runtime: PostgresPublicProbeRuntime | PostgresRuntime,
+  input: Parameters<PostgresPublicProbeRuntime["submitProbeCheckResult"]>[0],
+): Promise<SubmitPostgresProbeCheckResult> {
+  return runtime.submitProbeCheckResult(input);
 }
 
 function normalizePositiveInteger(value: number, name: string): number {
