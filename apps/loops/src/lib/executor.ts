@@ -312,6 +312,7 @@ function agentArgs(target: AgentTarget): string[] {
       );
       if (isolation === "safe") args.push("--ignore-rules");
       if (target.cwd) args.push("--cd", target.cwd);
+      for (const dir of target.addDirs ?? []) args.push("--add-dir", dir);
       if (target.model) args.push("--model", target.model);
       if (target.agent) args.push("--agent", target.agent);
       args.push(...(target.extraArgs ?? []));
@@ -321,6 +322,7 @@ function agentArgs(target: AgentTarget): string[] {
       args.push("exec", "--json", "--ephemeral", "--sandbox", codewithLikeSandbox(target), "--skip-git-repo-check");
       if (isolation === "safe") args.push("--ignore-rules");
       if (target.cwd) args.push("--cd", target.cwd);
+      for (const dir of target.addDirs ?? []) args.push("--add-dir", dir);
       if (target.model) args.push("--model", target.model);
       args.push(...(target.extraArgs ?? []));
       return args;

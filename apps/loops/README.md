@@ -224,7 +224,9 @@ loops templates render todos-task-worker-verifier \
   --var projectPath=/path/to/repo \
   --var provider=codewith \
   --var authProfilePool=account004,account005,account006 \
-  --var sandbox=workspace-write
+  --var sandbox=workspace-write \
+  --var todosProjectPath=$HOME/.hasna/loops \
+  --var addDirs=$HOME/.hasna/todos,$HOME/.hasna/loops
 loops templates create-workflow todos-task-worker-verifier \
   --var taskId=<task-id> \
   --var projectPath=/path/to/repo
@@ -260,6 +262,8 @@ cat task-created-event.json | loops events handle todos-task \
   --auth-profile-pool account004,account005,account006 \
   --permission-mode bypass \
   --sandbox workspace-write \
+  --todos-project "$HOME/.hasna/loops" \
+  --add-dir "$HOME/.hasna/todos,$HOME/.hasna/loops" \
   --worktree-mode required
 ```
 
@@ -289,6 +293,13 @@ Generated worker/verifier workflows fail closed when `sandbox=danger-full-access
 is requested without `manualBreakGlass=true`. Use `workspace-write` for
 unattended task/event routes. Full access is an explicit manual emergency path,
 not a default automation mode.
+
+When a sandboxed Codewith/Codex worker must update app stores outside the repo
+worktree, pass those stores explicitly with `--add-dir` or template `addDirs`.
+For task-created routes, pass `--todos-project` so worker/verifier prompts use
+the actual todos storage project while repo routing and worktree isolation still
+use the repository path. This avoids `danger-full-access` for normal todos
+comments, completion state, and loop evidence writes.
 
 Inspect route state with:
 
@@ -484,10 +495,10 @@ On Linux this writes a user systemd service. On macOS it writes a LaunchAgent pl
 The adapters intentionally use provider command surfaces instead of pretending every agent has one SDK:
 
 - Claude uses `claude -p --output-format json` and safe-mode/local setting sources by default.
-- Codewith uses `codewith --ask-for-approval never exec --json --ephemeral --skip-git-repo-check`.
+- Codewith uses `codewith --ask-for-approval never exec --json --ephemeral --skip-git-repo-check`, with `--add-dir` for explicit extra writable directories.
 - AI Copilot and OpenCode use `run --format json --pure`.
 - Cursor is CLI-first for now via `cursor agent -p`, with `agent -p` as the fallback launcher on machines that expose the standalone Cursor Agent binary; treat output as less stable until a stronger public SDK contract is selected.
-- Codex uses `codex exec --json --ephemeral --ask-for-approval never`.
+- Codex uses `codex exec --json --ephemeral --skip-git-repo-check`, with `--add-dir` for explicit extra writable directories where supported.
 - Agent prompts are sent through child stdin instead of argv so prompt bodies do not appear in process listings.
 - When `--account` or a step `account` is set, OpenLoops resolves `accounts env <profile> --tool <tool>` before spawning the target, strips inherited tool home/API-key variables, and applies the selected profile only to that process. Missing account profiles fail before the provider binary receives the prompt.
 - `--auth-profile` and step `authProfile` are provider-native auth selectors. They currently apply to Codewith and are passed to Codewith as `--auth-profile <name>` before `exec`; they do not call OpenAccounts.

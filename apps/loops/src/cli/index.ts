@@ -298,6 +298,11 @@ function allowlistFromOpts(opts: { allowTool?: string[]; allowCommand?: string[]
   };
 }
 
+function listFromRepeatedOpts(value: string[] | undefined): string[] | undefined {
+  const values = (value ?? []).flatMap((entry) => splitList(entry) ?? []);
+  return values.length ? values : undefined;
+}
+
 function accountPoolFromOpts(opts: { accountPool?: string; accountTool?: string }): AccountRef[] | undefined {
   return splitList(opts.accountPool)?.map((profile) => ({ profile, tool: opts.accountTool }));
 }
@@ -758,6 +763,7 @@ interface TodosTaskRouteOptions {
   model?: string;
   variant?: string;
   agent?: string;
+  addDir?: string[];
   permissionMode?: string;
   sandbox?: string;
   manualBreakGlass?: boolean;
@@ -772,6 +778,7 @@ interface TodosTaskRouteOptions {
   namePrefix?: string;
   preflight?: boolean;
   dryRun?: boolean;
+  todosProject?: string;
 }
 
 interface TodosReadyTask {
@@ -1071,6 +1078,7 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
     model: opts.model,
     variant: opts.variant,
     agent: opts.agent,
+    addDirs: listFromRepeatedOpts(opts.addDir),
     permissionMode,
     sandbox,
     manualBreakGlass: Boolean(opts.manualBreakGlass),
@@ -1079,6 +1087,7 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
     worktreeBranchPrefix: opts.worktreeBranchPrefix ?? "openloops",
     eventId: event.id,
     eventType: event.type,
+    todosProjectPath: opts.todosProject,
   });
   workflowBody.name = workflowName;
   workflowBody.description =
@@ -1296,6 +1305,7 @@ function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOptions): T
     model: opts.model,
     variant: opts.variant,
     agent: opts.agent,
+    addDirs: listFromRepeatedOpts(opts.addDir),
     permissionMode,
     sandbox,
     manualBreakGlass: Boolean(opts.manualBreakGlass),
@@ -1702,6 +1712,7 @@ addGoalOptions(
         .option("--variant <variant>", "provider-specific model variant or reasoning effort")
         .option("--agent <agent>", "provider-specific agent")
         .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
+        .option("--add-dir <dir>", "additional writable directory for provider sandboxes; may be repeated or comma-separated", collectValues, [] as string[])
         .option("--timeout <duration>", "run timeout")
         .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass")
         .option("--sandbox <mode>", "provider sandbox: codewith/codex use read-only/workspace-write/danger-full-access; cursor uses enabled/disabled")
@@ -1732,6 +1743,7 @@ addGoalOptions(
       variant: opts.variant,
       agent: opts.agent,
       authProfile: providerAuthProfileFromOpts(opts, provider),
+      addDirs: listFromRepeatedOpts(opts.addDir),
       timeoutMs: opts.timeout ? parseDuration(opts.timeout) : undefined,
       configIsolation: opts.configIsolation,
       permissionMode: permissionModeFromOpts(opts, provider),
@@ -1798,6 +1810,7 @@ function addRouteEventOptions(command: Command): Command {
   return command
     .option("--event-file <file>", "read event envelope JSON from a file instead of stdin/HASNA_EVENT_JSON")
     .option("--event-json <json>", "read event envelope JSON from this string instead of stdin/HASNA_EVENT_JSON")
+    .option("--todos-project <path>", "todos storage project path for generated task commands", defaultLoopsProject())
     .option("--provider <provider>", "agent provider", "codewith")
     .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
     .option("--auth-profile-pool <profiles>", "comma-separated provider-native auth profile pool")
@@ -1811,6 +1824,7 @@ function addRouteEventOptions(command: Command): Command {
     .option("--model <model>", "provider model")
     .option("--variant <variant>", "provider-specific model variant or reasoning effort")
     .option("--agent <agent>", "provider-specific agent")
+    .option("--add-dir <dir>", "additional writable directory for provider sandboxes; may be repeated or comma-separated", collectValues, [] as string[])
     .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
     .option("--sandbox <mode>", "provider sandbox")
     .option("--manual-break-glass", "allow danger-full-access in generated worker/verifier workflow metadata; for explicit operator emergency use only")
@@ -1852,6 +1866,7 @@ function addTodosDrainOptions(command: Command): Command {
     .option("--model <model>", "provider model")
     .option("--variant <variant>", "provider-specific model variant or reasoning effort")
     .option("--agent <agent>", "provider-specific agent")
+    .option("--add-dir <dir>", "additional writable directory for provider sandboxes; may be repeated or comma-separated", collectValues, [] as string[])
     .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
     .option("--sandbox <mode>", "provider sandbox")
     .option("--manual-break-glass", "allow danger-full-access in generated worker/verifier workflow metadata; for explicit operator emergency use only")
@@ -1905,6 +1920,7 @@ function routeDrainArgs(opts: TodosDrainOptions & { tag?: string }): string[] {
   add("--model", opts.model);
   add("--variant", opts.variant);
   add("--agent", opts.agent);
+  for (const dir of listFromRepeatedOpts(opts.addDir) ?? []) add("--add-dir", dir);
   add("--permission-mode", opts.permissionMode);
   add("--sandbox", opts.sandbox);
   addBool("--manual-break-glass", opts.manualBreakGlass);
@@ -2185,6 +2201,7 @@ const eventsHandle = events.command("handle").description("handle a Hasna event 
 eventsHandle
   .command("todos-task")
   .description("create a one-shot worker/verifier workflow loop for a todos task event")
+  .option("--todos-project <path>", "todos storage project path for generated task commands", defaultLoopsProject())
   .option("--provider <provider>", "agent provider", "codewith")
   .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
   .option("--auth-profile-pool <profiles>", "comma-separated provider-native auth profile pool")
@@ -2198,6 +2215,7 @@ eventsHandle
   .option("--model <model>", "provider model")
   .option("--variant <variant>", "provider-specific model variant or reasoning effort")
   .option("--agent <agent>", "provider-specific agent")
+  .option("--add-dir <dir>", "additional writable directory for provider sandboxes; may be repeated or comma-separated", collectValues, [] as string[])
   .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
   .option("--sandbox <mode>", "provider sandbox")
   .option("--manual-break-glass", "allow danger-full-access in generated worker/verifier workflow metadata; for explicit operator emergency use only")
@@ -2247,6 +2265,7 @@ eventsDrain
   .option("--model <model>", "provider model")
   .option("--variant <variant>", "provider-specific model variant or reasoning effort")
   .option("--agent <agent>", "provider-specific agent")
+  .option("--add-dir <dir>", "additional writable directory for provider sandboxes; may be repeated or comma-separated", collectValues, [] as string[])
   .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
   .option("--sandbox <mode>", "provider sandbox")
   .option("--manual-break-glass", "allow danger-full-access in generated worker/verifier workflow metadata; for explicit operator emergency use only")
@@ -2364,6 +2383,7 @@ eventsHandle
   .option("--model <model>", "provider model")
   .option("--variant <variant>", "provider-specific model variant or reasoning effort")
   .option("--agent <agent>", "provider-specific agent")
+  .option("--add-dir <dir>", "additional writable directory for provider sandboxes; may be repeated or comma-separated", collectValues, [] as string[])
   .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
   .option("--sandbox <mode>", "provider sandbox")
   .option("--manual-break-glass", "allow danger-full-access in generated worker/verifier workflow metadata; for explicit operator emergency use only")

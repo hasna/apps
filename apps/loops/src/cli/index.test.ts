@@ -1252,11 +1252,15 @@ describe("loops CLI", () => {
       "--var",
       "projectPath=/tmp/repo",
       "--var",
+      "todosProjectPath=/tmp/todos-store",
+      "--var",
       "provider=codewith",
       "--var",
       "authProfile=account005",
       "--var",
       "sandbox=workspace-write",
+      "--var",
+      "addDirs=/tmp/todos-store,/tmp/loops-store",
     ]);
 
     expect(render.status).toBe(0);
@@ -1270,15 +1274,17 @@ describe("loops CLI", () => {
       authProfile: "account005",
       permissionMode: "bypass",
       sandbox: "workspace-write",
+      addDirs: ["/tmp/todos-store", "/tmp/loops-store"],
     });
     expect(workflow.steps[0].target.prompt).toContain("Do not dispatch or paste prompts into tmux panes");
-    expect(workflow.steps[0].target.prompt).toContain("todos --project /tmp/repo inspect task-12345678");
-    expect(workflow.steps[0].target.prompt).toContain("todos --project /tmp/repo comment task-12345678");
+    expect(workflow.steps[0].target.prompt).toContain("todos --project /tmp/todos-store inspect task-12345678");
+    expect(workflow.steps[0].target.prompt).toContain("todos --project /tmp/todos-store comment task-12345678");
     expect(workflow.steps[0].target.prompt).toContain("Do not mark the task complete in the worker step");
     expect(workflow.steps[1].target.prompt).toContain("Do not dispatch or paste prompts into tmux panes");
-    expect(workflow.steps[1].target.prompt).toContain("todos --project /tmp/repo inspect task-12345678");
-    expect(workflow.steps[1].target.prompt).toContain("todos --project /tmp/repo comment task-12345678");
-    expect(workflow.steps[1].target.prompt).toContain("todos --project /tmp/repo done task-12345678");
+    expect(workflow.steps[1].target.prompt).toContain("todos --project /tmp/todos-store inspect task-12345678");
+    expect(workflow.steps[1].target.prompt).toContain("todos --project /tmp/todos-store comment task-12345678");
+    expect(workflow.steps[1].target.prompt).toContain("todos --project /tmp/todos-store done task-12345678");
+    expect(workflow.steps[1].target.addDirs).toEqual(["/tmp/todos-store", "/tmp/loops-store"]);
     expect(workflow.steps[1].target.idleTimeoutMs).toBe(600_000);
     expect(workflow.steps[1].dependsOn).toEqual(["worker"]);
   });
@@ -1684,6 +1690,10 @@ describe("loops CLI", () => {
       "account005",
       "--auth-profile-pool",
       "account004,account005,account006",
+      "--todos-project",
+      "/tmp/todos-store",
+      "--add-dir",
+      "/tmp/todos-store,/tmp/loops-store",
       "--sandbox",
       "workspace-write",
       "--permission-mode",
@@ -1708,6 +1718,7 @@ describe("loops CLI", () => {
         cwd: "/tmp/open-todos",
         permissionMode: "bypass",
         sandbox: "workspace-write",
+        addDirs: ["/tmp/todos-store", "/tmp/loops-store"],
       });
       expect(["account004", "account005", "account006"]).toContain(step.target.authProfile);
     }
@@ -2252,6 +2263,8 @@ describe("loops CLI", () => {
         "5",
         "--max-active-per-project",
         "1",
+        "--add-dir",
+        join(dataDir, "todos-store"),
         "--worktree-mode",
         "off",
       ],
@@ -2272,6 +2285,8 @@ describe("loops CLI", () => {
 
     const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
     expect(loops).toHaveLength(1);
+    const worker = value.results[0].workflow.steps.find((step: { id: string }) => step.id === "worker");
+    expect(worker.target.addDirs).toEqual([join(dataDir, "todos-store")]);
   });
 
   test("todos task drain filters by task list and limits new dispatches", () => {

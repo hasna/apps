@@ -30,6 +30,7 @@ export interface TodosTaskWorkflowTemplateInput {
   taskTitle?: string;
   taskDescription?: string;
   projectPath: string;
+  todosProjectPath?: string;
   routeProjectPath?: string;
   projectGroup?: string;
   provider?: AgentProvider;
@@ -44,6 +45,7 @@ export interface TodosTaskWorkflowTemplateInput {
   model?: string;
   variant?: string;
   agent?: string;
+  addDirs?: string[];
   permissionMode?: AgentPermissionMode;
   sandbox?: AgentSandbox;
   manualBreakGlass?: boolean;
@@ -76,6 +78,7 @@ export interface EventWorkflowTemplateInput {
   model?: string;
   variant?: string;
   agent?: string;
+  addDirs?: string[];
   permissionMode?: AgentPermissionMode;
   sandbox?: AgentSandbox;
   manualBreakGlass?: boolean;
@@ -103,6 +106,7 @@ export interface BoundedAgentWorkflowTemplateInput {
   model?: string;
   variant?: string;
   agent?: string;
+  addDirs?: string[];
   permissionMode?: AgentPermissionMode;
   sandbox?: AgentSandbox;
   manualBreakGlass?: boolean;
@@ -123,6 +127,7 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "taskId", required: true, description: "Todos task id to execute." },
       { name: "taskTitle", description: "Human-readable task title." },
       { name: "projectPath", required: true, description: "Repository or project working directory." },
+      { name: "todosProjectPath", description: "Todos storage project path used in worker/verifier commands." },
       { name: "routeProjectPath", description: "Canonical project path used for scheduler concurrency limits." },
       { name: "projectGroup", description: "Optional project group used for scheduler concurrency limits." },
       { name: "provider", default: "codewith", description: "Agent provider: codewith, claude, cursor, opencode, aicopilot, or codex." },
@@ -133,6 +138,7 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "accountPool", description: "Comma-separated OpenAccounts profiles; worker/verifier are selected deterministically." },
       { name: "model", description: "Provider model." },
       { name: "variant", description: "Provider reasoning/model effort variant." },
+      { name: "addDirs", description: "Comma-separated additional writable directories for provider sandboxes." },
       { name: "permissionMode", default: "bypass", description: "Provider permission mode: default, plan, auto, or bypass." },
       { name: "sandbox", default: "workspace-write", description: "Provider sandbox mode." },
       { name: "manualBreakGlass", default: "false", description: "Allow explicit danger-full-access in a generated workflow. Intended for manual emergency use only." },
@@ -163,6 +169,7 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "accountPool", description: "Comma-separated OpenAccounts profiles; worker/verifier are selected deterministically." },
       { name: "model", description: "Provider model." },
       { name: "variant", description: "Provider reasoning/model effort variant." },
+      { name: "addDirs", description: "Comma-separated additional writable directories for provider sandboxes." },
       { name: "permissionMode", default: "bypass", description: "Provider permission mode: default, plan, auto, or bypass." },
       { name: "sandbox", default: "workspace-write", description: "Provider sandbox mode." },
       { name: "manualBreakGlass", default: "false", description: "Allow explicit danger-full-access in a generated workflow. Intended for manual emergency use only." },
@@ -334,6 +341,7 @@ type AgentWorkflowTemplateInput = Pick<
   | "model"
   | "variant"
   | "agent"
+  | "addDirs"
   | "permissionMode"
   | "sandbox"
   | "manualBreakGlass"
@@ -614,6 +622,7 @@ function agentTarget(
     model: input.model,
     variant: input.variant,
     agent: input.agent,
+    addDirs: input.addDirs,
     authProfile: provider === "codewith" ? authProfileForRole(input, role, seed) : undefined,
     configIsolation: "safe",
     permissionMode: input.permissionMode ?? "bypass",
@@ -660,7 +669,7 @@ export function getLoopTemplate(id: string): LoopTemplateSummary | undefined {
 export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTemplateInput): CreateWorkflowInput {
   if (!input.taskId?.trim()) throw new Error("taskId is required");
   if (!input.projectPath?.trim()) throw new Error("projectPath is required");
-  const todosProjectPath = input.routeProjectPath ?? input.projectPath;
+  const todosProjectPath = input.todosProjectPath ?? input.routeProjectPath ?? input.projectPath;
   const plan = worktreePlan(input, input.taskId);
   const taskContext = {
     taskId: input.taskId,
@@ -887,6 +896,7 @@ function renderLifecycleBoundedTemplate(id: string, values: Record<string, strin
     model: values.model,
     variant: values.variant,
     agent: values.agent,
+    addDirs: listVar(values.addDirs ?? values.addDir),
     permissionMode: values.permissionMode as AgentPermissionMode | undefined,
     sandbox: (values.sandbox as AgentSandbox | undefined) ?? (id === REPORT_ONLY_TEMPLATE_ID ? "read-only" : undefined),
     manualBreakGlass: booleanVar(values.manualBreakGlass),
@@ -1012,6 +1022,7 @@ export function renderLoopTemplate(id: string, values: Record<string, string | u
       taskTitle: values.taskTitle,
       taskDescription: values.taskDescription,
       projectPath: values.projectPath ?? values.cwd ?? process.cwd(),
+      todosProjectPath: values.todosProjectPath ?? values.todosProject,
       routeProjectPath: values.routeProjectPath,
       projectGroup: values.projectGroup,
       provider: values.provider as AgentProvider | undefined,
@@ -1024,6 +1035,7 @@ export function renderLoopTemplate(id: string, values: Record<string, string | u
       model: values.model,
       variant: values.variant,
       agent: values.agent,
+      addDirs: listVar(values.addDirs ?? values.addDir),
       permissionMode: values.permissionMode as AgentPermissionMode | undefined,
       sandbox: values.sandbox as AgentSandbox | undefined,
       manualBreakGlass: booleanVar(values.manualBreakGlass),
@@ -1055,6 +1067,7 @@ export function renderLoopTemplate(id: string, values: Record<string, string | u
       model: values.model,
       variant: values.variant,
       agent: values.agent,
+      addDirs: listVar(values.addDirs ?? values.addDir),
       permissionMode: values.permissionMode as AgentPermissionMode | undefined,
       sandbox: values.sandbox as AgentSandbox | undefined,
       manualBreakGlass: booleanVar(values.manualBreakGlass),
@@ -1081,6 +1094,7 @@ export function renderLoopTemplate(id: string, values: Record<string, string | u
       model: values.model,
       variant: values.variant,
       agent: values.agent,
+      addDirs: listVar(values.addDirs ?? values.addDir),
       permissionMode: values.permissionMode as AgentPermissionMode | undefined,
       sandbox: values.sandbox as AgentSandbox | undefined,
       manualBreakGlass: booleanVar(values.manualBreakGlass),

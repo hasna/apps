@@ -185,6 +185,7 @@ describe("agent adapters", () => {
           provider: "codewith",
           prompt: "say ok",
           sandbox: "danger-full-access",
+          addDirs: ["/tmp/hasna-todos", "/tmp/hasna-loops"],
           configIsolation: "safe",
         },
       });
@@ -196,6 +197,9 @@ describe("agent adapters", () => {
       expect(result.status).toBe("succeeded");
       const args = result.stdout.trim().split(/\r?\n/);
       expect(args[args.indexOf("--sandbox") + 1]).toBe("danger-full-access");
+      expect(args).toContain("--add-dir");
+      expect(args[args.indexOf("--add-dir") + 1]).toBe("/tmp/hasna-todos");
+      expect(args).toContain("/tmp/hasna-loops");
       expect(args).toContain("stdin:say ok");
     } finally {
       store.close();

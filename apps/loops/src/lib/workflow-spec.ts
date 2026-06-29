@@ -74,6 +74,7 @@ function validateTarget(value: unknown, label: string): ExecutableTarget {
       if (value.provider !== "codewith") throw new Error(`${label}.authProfile is currently supported only for provider codewith`);
     }
     if (value.variant !== undefined) assertString(value.variant, `${label}.variant`);
+    optionalStringArray(value.addDirs, `${label}.addDirs`);
     if (value.permissionMode !== undefined) {
       assertString(value.permissionMode, `${label}.permissionMode`);
       const permissionModes = ["default", "plan", "auto", "bypass"];

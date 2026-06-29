@@ -158,6 +158,7 @@ export interface AgentTarget {
   agent?: string;
   authProfile?: string;
   extraArgs?: string[];
+  addDirs?: string[];
   timeoutMs?: number;
   idleTimeoutMs?: number;
   configIsolation?: AgentConfigIsolation;
