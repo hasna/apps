@@ -71,6 +71,11 @@ export interface SemanticActResult {
   title: string;
 }
 
+export interface SemanticActionCacheScope {
+  url?: string;
+  fingerprint?: string;
+}
+
 export interface SemanticValidationResult {
   ok: boolean;
   confidence: number;
@@ -87,6 +92,7 @@ const STOPWORDS = new Set([
 
 const actionCache = new Map<string, Map<string, SemanticAction>>();
 const actionCacheUrls = new Map<string, string>();
+const actionCacheFingerprints = new Map<string, string>();
 
 function normalizeText(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9@._ -]+/g, " ").replace(/\s+/g, " ").trim();
@@ -150,6 +156,39 @@ const RISK_RANK: Record<SemanticRisk, number> = {
 
 function maxRisk(a: SemanticRisk, b: SemanticRisk): SemanticRisk {
   return RISK_RANK[a] >= RISK_RANK[b] ? a : b;
+}
+
+function stableHash(value: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+export function semanticPageFingerprint(pageMap: SemanticPageMap): string {
+  return stableHash(JSON.stringify({
+    url: pageMap.url,
+    title: pageMap.title,
+    elements: pageMap.elements.map((element) => [
+      element.ref,
+      element.role,
+      element.name,
+      element.visible,
+      element.enabled,
+    ]),
+    fields: pageMap.forms.flatMap((form) => form.fields.map((field) => [
+      field.selector,
+      field.tag,
+      field.type,
+      field.name,
+      field.id,
+      field.placeholder,
+      field.label,
+      field.required,
+    ])),
+  }));
 }
 
 function deterministicFieldActions(pageMap: SemanticPageMap, instruction: string): SemanticAction[] {
@@ -251,7 +290,7 @@ export function coerceModelAction(raw: unknown, pageMap: SemanticPageMap, instru
     kind,
     ref,
     selector,
-    label: typeof record.label === "string" ? record.label : targetLabel,
+    label: targetLabel,
     confidence,
     risk: resolvedRisk,
     requiresApproval: resolvedRisk === "sensitive" || risk.requiresApproval || record.requiresApproval === true,
@@ -262,22 +301,45 @@ export function coerceModelAction(raw: unknown, pageMap: SemanticPageMap, instru
   };
 }
 
-export function cacheSemanticActions(sessionId: string, actions: SemanticAction[], url?: string): void {
+export function cacheSemanticActions(sessionId: string, actions: SemanticAction[], url?: string, fingerprint?: string): void {
   const sessionCache = new Map<string, SemanticAction>();
   for (const action of actions) sessionCache.set(action.id, action);
   actionCache.set(sessionId, sessionCache);
   if (url) actionCacheUrls.set(sessionId, url);
+  if (fingerprint) actionCacheFingerprints.set(sessionId, fingerprint);
 }
 
-export function getCachedSemanticAction(sessionId: string, actionId: string, currentUrl?: string): SemanticAction | null {
+export function getCachedSemanticAction(
+  sessionId: string,
+  actionId: string,
+  current?: SemanticActionCacheScope,
+): SemanticAction | null {
   const cachedUrl = actionCacheUrls.get(sessionId);
-  if (currentUrl && cachedUrl && currentUrl !== cachedUrl) return null;
+  if (current?.url && cachedUrl && current.url !== cachedUrl) return null;
+  const cachedFingerprint = actionCacheFingerprints.get(sessionId);
+  if (current?.fingerprint && cachedFingerprint && current.fingerprint !== cachedFingerprint) return null;
   return actionCache.get(sessionId)?.get(actionId) ?? null;
 }
 
 export function clearCachedSemanticActions(sessionId: string): void {
   actionCache.delete(sessionId);
   actionCacheUrls.delete(sessionId);
+  actionCacheFingerprints.delete(sessionId);
+}
+
+export async function getSemanticActionCacheScope(
+  page: Page,
+  sessionId: string,
+  opts: { maxElements?: number; maxTextChars?: number } = {},
+): Promise<{ pageMap: SemanticPageMap; scope: Required<SemanticActionCacheScope> }> {
+  const pageMap = await getSemanticPageMap(page, sessionId, opts);
+  return {
+    pageMap,
+    scope: {
+      url: pageMap.url,
+      fingerprint: semanticPageFingerprint(pageMap),
+    },
+  };
 }
 
 export async function getSemanticPageMap(
@@ -424,7 +486,7 @@ export async function observeSemanticActions(
   const selected = actions
     .sort((a, b) => b.confidence - a.confidence)
     .slice(0, maxActions);
-  cacheSemanticActions(sessionId, selected, pageMap.url);
+  cacheSemanticActions(sessionId, selected, pageMap.url, semanticPageFingerprint(pageMap));
   return {
     instruction,
     url: pageMap.url,
@@ -440,36 +502,40 @@ export async function runSemanticAction(
   action: SemanticAction,
   opts: { value?: string | boolean; allowRisk?: boolean } = {},
 ): Promise<SemanticActResult> {
-  if (action.requiresApproval && !opts.allowRisk) {
+  if ((action.requiresApproval || action.risk === "sensitive") && !opts.allowRisk) {
     throw new Error(`Action '${action.id}' requires approval because risk=${action.risk}`);
   }
   const value = opts.value ?? action.value;
   const selector = action.selector ?? (action.ref.startsWith("selector:") ? action.ref.slice("selector:".length) : undefined);
   const method: SemanticActResult["method"] = selector ? "selector" : "ref";
-  switch (action.kind) {
-    case "click":
-      if (selector) await click(page, selector);
-      else await clickRef(page, sessionId, action.ref);
-      break;
-    case "fill":
-      if (typeof value !== "string") throw new Error(`Action '${action.id}' needs a string value`);
-      if (selector) await fill(page, selector, value);
-      else await fillRef(page, sessionId, action.ref, value);
-      break;
-    case "select":
-      if (typeof value !== "string") throw new Error(`Action '${action.id}' needs a string value`);
-      if (selector) await selectOption(page, selector, value);
-      else await selectRef(page, sessionId, action.ref, value);
-      break;
-    case "check":
-      if (typeof value !== "boolean") throw new Error(`Action '${action.id}' needs a boolean value`);
-      if (selector) await checkBox(page, selector, value);
-      else await checkRef(page, sessionId, action.ref, value);
-      break;
-    case "hover":
-      if (selector) await hover(page, selector);
-      else await hoverRef(page, sessionId, action.ref);
-      break;
+  try {
+    switch (action.kind) {
+      case "click":
+        if (selector) await click(page, selector);
+        else await clickRef(page, sessionId, action.ref);
+        break;
+      case "fill":
+        if (typeof value !== "string") throw new Error(`Action '${action.id}' needs a string value`);
+        if (selector) await fill(page, selector, value);
+        else await fillRef(page, sessionId, action.ref, value);
+        break;
+      case "select":
+        if (typeof value !== "string") throw new Error(`Action '${action.id}' needs a string value`);
+        if (selector) await selectOption(page, selector, value);
+        else await selectRef(page, sessionId, action.ref, value);
+        break;
+      case "check":
+        if (typeof value !== "boolean") throw new Error(`Action '${action.id}' needs a boolean value`);
+        if (selector) await checkBox(page, selector, value);
+        else await checkRef(page, sessionId, action.ref, value);
+        break;
+      case "hover":
+        if (selector) await hover(page, selector);
+        else await hoverRef(page, sessionId, action.ref);
+        break;
+    }
+  } finally {
+    clearCachedSemanticActions(sessionId);
   }
   return {
     action,

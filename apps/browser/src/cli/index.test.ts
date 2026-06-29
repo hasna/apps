@@ -262,6 +262,24 @@ describe("CLI — semantic browser tools", () => {
     expect(parsed.actions[0].selector).toBe("#email");
   }, 15_000);
 
+  it("act can execute deterministic semantic field actions without a model", async () => {
+    const result = await runCliWithTimeout([
+      "act",
+      "data:text/html,<title>Act Demo</title><label for=email>Email Address</label><input id=email type=email>",
+      "find the email field",
+      "--no-ai",
+      "--value",
+      "user@example.com",
+      "--json",
+    ], 10_000);
+
+    expect(result.timedOut).toBe(false);
+    expect(result.code).toBe(0);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed.acted.method).toBe("selector");
+    expect(parsed.acted.action.selector).toBe("#email");
+  }, 15_000);
+
   it("validate checks assertions without requiring a model", async () => {
     const result = await runCliWithTimeout([
       "validate",

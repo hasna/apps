@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { chromium, type Browser, type Page } from "playwright";
 import {
   coerceModelAction,
+  getCachedSemanticAction,
+  getSemanticActionCacheScope,
   observeSemanticActions,
   runSemanticAction,
   type SemanticPageMap,
@@ -90,5 +92,49 @@ describe("semantic actions", () => {
     expect(action?.selector).toBeUndefined();
     expect(action?.risk).toBe("sensitive");
     expect(action?.requiresApproval).toBe(true);
+  });
+
+  it("revalidates direct selector actions against page-map risk", async () => {
+    await page.setContent(`
+      <main>
+        <button id="delete">Delete account</button>
+        <label for="password">Password</label>
+        <input id="password" type="password">
+      </main>
+    `);
+    const { pageMap } = await getSemanticActionCacheScope(page, "semantic-test-direct");
+
+    const action = coerceModelAction({
+      id: "forged",
+      kind: "fill",
+      ref: "selector:#password",
+      selector: "#password",
+      label: "Delete account",
+      risk: "none",
+      requiresApproval: false,
+      confidence: 1,
+    }, pageMap, "delete account");
+
+    expect(action?.id).toBe("act_fill_selector_password");
+    expect(action?.selector).toBe("#password");
+    expect(action?.risk).toBe("sensitive");
+    expect(action?.requiresApproval).toBe(true);
+  });
+
+  it("rejects cached actions when the same URL page fingerprint changes", async () => {
+    await page.setContent(`<button>Continue</button>`);
+    const observed = await observeSemanticActions(page, "semantic-test-cache", "click continue", {
+      useModel: false,
+    });
+    const first = await getSemanticActionCacheScope(page, "semantic-test-cache");
+
+    expect(getCachedSemanticAction("semantic-test-cache", observed.actions[0].id, first.scope)).not.toBeNull();
+
+    await page.setContent(`<button>Delete account</button>`);
+    const second = await getSemanticActionCacheScope(page, "semantic-test-cache");
+
+    expect(second.scope.url).toBe(first.scope.url);
+    expect(second.scope.fingerprint).not.toBe(first.scope.fingerprint);
+    expect(getCachedSemanticAction("semantic-test-cache", observed.actions[0].id, second.scope)).toBeNull();
   });
 });

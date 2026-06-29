@@ -45,12 +45,17 @@ import {
 } from "./helpers.js";
 import { assertBrowserCapability } from "../lib/policy.js";
 import {
+  clearCachedSemanticActions,
+  coerceModelAction,
   getCachedSemanticAction,
+  getSemanticActionCacheScope,
   getSemanticPageMap,
   observeSemanticActions,
   runSemanticAction,
   validateSemanticPage,
   type SemanticAction,
+  type SemanticActionCacheScope,
+  type SemanticPageMap,
 } from "../lib/semantic-actions.js";
 
 export function register(server: McpServer) {
@@ -80,6 +85,7 @@ registerTool(server,
       } else {
         await navigate(page, url, timeout);
       }
+      clearCachedSemanticActions(sid);
       // Use property access for Bun (no evaluate call), page.title()/url() for Playwright
       const title = await getTitle(page);
       const current_url = await getUrl(page);
@@ -171,6 +177,7 @@ registerTool(server,
       const sid = resolveSessionId(session_id);
       const page = getSessionPage(sid);
       await goBack(page);
+      clearCachedSemanticActions(sid);
       return json({ url: page.url() });
     } catch (e) { return err(e); }
   }
@@ -185,6 +192,7 @@ registerTool(server,
       const sid = resolveSessionId(session_id);
       const page = getSessionPage(sid);
       await goForward(page);
+      clearCachedSemanticActions(sid);
       return json({ url: page.url() });
     } catch (e) { return err(e); }
   }
@@ -199,6 +207,7 @@ registerTool(server,
       const sid = resolveSessionId(session_id);
       const page = getSessionPage(sid);
       await reload(page);
+      clearCachedSemanticActions(sid);
       return json({ url: page.url() });
     } catch (e) { return err(e); }
   }
@@ -284,7 +293,17 @@ registerTool(server,
       const sid = resolveSessionId(session_id);
       const page = getSessionPage(sid);
       let resolved = action as SemanticAction | undefined;
-      if (!resolved && action_id) resolved = getCachedSemanticAction(sid, action_id, page.url()) ?? undefined;
+      let pageMap: SemanticPageMap | undefined;
+      let scope: Required<SemanticActionCacheScope> | undefined;
+      if (action || action_id) {
+        const current = await getSemanticActionCacheScope(page, sid);
+        pageMap = current.pageMap;
+        scope = current.scope;
+      }
+      if (resolved && pageMap) {
+        resolved = coerceModelAction(resolved, pageMap, instruction ?? resolved.label) ?? undefined;
+      }
+      if (!resolved && action_id && scope) resolved = getCachedSemanticAction(sid, action_id, scope) ?? undefined;
       if (!resolved && instruction) {
         const observed = await observeSemanticActions(page, sid, instruction, { maxActions: 1 });
         resolved = observed.actions[0];
