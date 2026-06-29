@@ -2,9 +2,10 @@
 // OMP HTTP Server — REST API for OMP operations
 
 import { parseFromFile, parseFromString, validate, compile, run } from "../lib/pipeline.js";
+import { getPackageVersion } from "../lib/package-version.js";
 import { validateAndLint } from "../validator/validate.js";
 
-const VERSION = "0.1.3";
+const VERSION = getPackageVersion();
 export const DEFAULT_PORT = 7070;
 
 type PortEnv = Record<string, string | undefined>;

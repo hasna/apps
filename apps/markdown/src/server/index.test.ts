@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { parseServerCliArgs, getServerHelpText, resolveServerPort, createServer } from "./index.js";
 
 describe("server CLI flags", () => {
@@ -14,10 +16,11 @@ describe("server CLI flags", () => {
 
   test("prints version and exits when --version is used", () => {
     const out: string[] = [];
+    const pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")) as { version: string };
     const parsed = parseServerCliArgs(["--version"], (msg) => out.push(msg));
 
     expect(parsed.handled).toBe(true);
-    expect(out).toEqual(["0.1.3"]);
+    expect(out).toEqual([pkg.version]);
   });
 
   test("parses --port value", () => {
