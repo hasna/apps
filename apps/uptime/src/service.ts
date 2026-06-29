@@ -1,7 +1,7 @@
 import { normalizeBrowserEvidence, normalizeHttpTargetPolicyEvidence, runMonitorCheck, type HostedDnsResolver, type HostedHttpRequestLike } from "./checks.js";
 import { createPublicKey, randomUUID } from "node:crypto";
 import { applyImport, previewImport, rollbackImport, type ImportApplyResult, type ImportPreview, type ImportRequest, type ImportRollbackResult } from "./imports.js";
-import { generateProbeKeyPair, probePublicKeyFingerprint, verifyProbeResultSignature } from "./probes.js";
+import { generateProbeKeyPair, probePublicKeyFingerprint, probeResultPayloadHash, verifyProbeResultSignature } from "./probes.js";
 import { StaleCheckResultError, UptimeStore, type MonitorProvenance, type SaveImportBatchInput, type StoredImportBatch, type UpsertMonitorProvenanceInput, type UptimeBackup, type UptimeBackupCheck, type UptimeStoreOptions, type UptimeStoreReadiness } from "./store.js";
 import { buildUptimeReport, sendUptimeReport, type BuildUptimeReportOptions, type SendUptimeReportOptions, type UptimeReport, type UptimeReportDelivery } from "./report.js";
 import type {
@@ -37,6 +37,41 @@ import type {
 const MAX_PROBE_RESULT_AGE_MS = 15 * 60_000;
 const MAX_PROBE_RESULT_FUTURE_MS = 5 * 60_000;
 
+type RecordCheckResultInput = Omit<CheckResult,
+  "id" | "checkedAt" | "workspaceId" | "jobId" | "probeId" | "monitorRevision" |
+  "scheduleSlot" | "probeClass" | "probeLocation" | "probePolicyHash"
+> & {
+  checkedAt?: string;
+  expectedMonitorRevision?: number;
+  workspaceId?: string;
+  jobId?: string | null;
+  probeId?: string | null;
+  monitorRevision?: number | null;
+  scheduleSlot?: string | null;
+  probeClass?: "public" | "private" | null;
+  probeLocation?: string | null;
+  probePolicyHash?: string | null;
+};
+
+type CreateProbeIdentityInput = {
+  name: string;
+  publicKeyPem: string;
+  publicKeyFingerprint: string;
+  workspaceId?: string;
+  probeClass?: "public" | "private";
+  probeLocation?: string;
+  machineId?: string | null;
+  enabled?: boolean;
+};
+
+type CreateProbeCheckJobInput = {
+  monitorId: string;
+  scheduleSlot: string;
+  dueAt?: string;
+  workspaceId?: string;
+  probePolicy?: ProbeCheckJob["probePolicy"];
+};
+
 export interface UptimeServiceOptions extends UptimeStoreOptions {
   store?: UptimeStoreLike;
   checkRunner?: (monitor: Monitor) => Promise<CheckAttemptResult>;
@@ -64,18 +99,18 @@ export interface UptimeStoreLike {
   verifyBackup(backupPath: string): UptimeBackupCheck;
   acquireCheckLease(monitorId: string, owner: string, ttlMs: number): boolean;
   releaseCheckLease(monitorId: string, owner: string): void;
-  recordCheckResult(input: Omit<CheckResult, "id" | "checkedAt"> & { checkedAt?: string; expectedMonitorRevision?: number; workspaceId?: string }): CheckResult;
+  recordCheckResult(input: RecordCheckResultInput): CheckResult;
   getProvenance(source: string, sourceId: string, options?: { workspaceId?: string }): MonitorProvenance | null;
   upsertMonitorProvenance(input: UpsertMonitorProvenanceInput): MonitorProvenance;
   saveImportBatch(input: SaveImportBatchInput): StoredImportBatch;
   getImportBatch(batchId: string): StoredImportBatch | null;
   markImportBatchRolledBack(batchId: string): StoredImportBatch;
-  createProbeIdentity?(input: { name: string; publicKeyPem: string; publicKeyFingerprint: string; enabled?: boolean }): ProbeIdentity;
+  createProbeIdentity?(input: CreateProbeIdentityInput): ProbeIdentity;
   listProbeIdentities?(options?: { includeDisabled?: boolean }): ProbeIdentity[];
   getProbeIdentity?(idOrName: string): ProbeIdentity | null;
   updateProbeIdentity?(idOrName: string, input: { enabled?: boolean; name?: string }): ProbeIdentity;
   touchProbeIdentity?(idOrName: string, seenAt?: string): void;
-  createProbeCheckJob?(input: { monitorId: string; scheduleSlot: string; dueAt?: string }): ProbeCheckJob;
+  createProbeCheckJob?(input: CreateProbeCheckJobInput): ProbeCheckJob;
   getProbeCheckJob?(id: string): ProbeCheckJob | null;
   claimProbeCheckJob?(input: { jobId: string; probeId: string; leaseTtlMs?: number }): ProbeCheckJob;
   completeProbeCheckJob?(input: { jobId: string; probeId: string; fencingToken: string; checkResultId: string; submittedAt?: string }): ProbeCheckJob;
@@ -103,12 +138,12 @@ export interface UptimeStoreLike {
 }
 
 type ProbeStoreLike = UptimeStoreLike & {
-  createProbeIdentity(input: { name: string; publicKeyPem: string; publicKeyFingerprint: string; enabled?: boolean }): ProbeIdentity;
+  createProbeIdentity(input: CreateProbeIdentityInput): ProbeIdentity;
   listProbeIdentities(options?: { includeDisabled?: boolean }): ProbeIdentity[];
   getProbeIdentity(idOrName: string): ProbeIdentity | null;
   updateProbeIdentity(idOrName: string, input: { enabled?: boolean; name?: string }): ProbeIdentity;
   touchProbeIdentity(idOrName: string, seenAt?: string): void;
-  createProbeCheckJob(input: { monitorId: string; scheduleSlot: string; dueAt?: string }): ProbeCheckJob;
+  createProbeCheckJob(input: CreateProbeCheckJobInput): ProbeCheckJob;
   getProbeCheckJob(id: string): ProbeCheckJob | null;
   claimProbeCheckJob(input: { jobId: string; probeId: string; leaseTtlMs?: number }): ProbeCheckJob;
   completeProbeCheckJob(input: { jobId: string; probeId: string; fencingToken: string; checkResultId: string; submittedAt?: string }): ProbeCheckJob;
@@ -209,6 +244,10 @@ export class UptimeService {
       name: input.name,
       publicKeyPem: keyPair.publicKeyPem,
       publicKeyFingerprint: keyPair.publicKeyFingerprint,
+      workspaceId: input.workspaceId,
+      probeClass: input.probeClass,
+      probeLocation: input.probeLocation,
+      machineId: input.machineId,
       enabled: input.enabled,
     });
     return { ...probe, privateKeyPem: keyPair.privateKeyPem };
@@ -226,7 +265,7 @@ export class UptimeService {
     return this.probeStore().updateProbeIdentity(idOrName, input);
   }
 
-  createProbeCheckJob(input: { monitorId: string; scheduleSlot: string; dueAt?: string }): ProbeCheckJob {
+  createProbeCheckJob(input: CreateProbeCheckJobInput): ProbeCheckJob {
     return this.probeStore().createProbeCheckJob(input);
   }
 
@@ -644,9 +683,15 @@ export class UptimeService {
     if (!verifyProbeResultSignature({ ...input, probeId: probe.id, monitorId: monitor.id }, probe.publicKeyPem)) {
       throw new Error("Probe result signature is invalid");
     }
+    const payloadHash = probeResultPayloadHash({ ...input, probeId: probe.id, monitorId: monitor.id });
     const existingReceipt = store.getProbeSubmission(probe.id, input.nonce);
     if (existingReceipt) {
-      if (existingReceipt.jobId !== input.jobId || existingReceipt.monitorId !== monitor.id || existingReceipt.checkedAt !== input.checkedAt) {
+      if (
+        existingReceipt.payloadHash !== payloadHash
+        || existingReceipt.jobId !== input.jobId
+        || existingReceipt.monitorId !== monitor.id
+        || existingReceipt.checkedAt !== input.checkedAt
+      ) {
         throw new Error("Probe nonce already submitted");
       }
       const existingResult = this.store.getCheckResult?.(existingReceipt.checkResultId);
@@ -661,9 +706,21 @@ export class UptimeService {
     if (job.claimedByProbeId !== probe.id) throw new Error("Probe job was claimed by another probe");
     if (job.fencingToken !== input.fencingToken) throw new Error("Probe job fencing token is invalid");
     if (!job.leaseExpiresAt || job.leaseExpiresAt <= new Date().toISOString()) throw new Error("Probe job lease expired");
+    if (job.workspaceId !== monitor.workspaceId || probe.workspaceId !== job.workspaceId) throw new Error("Probe job belongs to another workspace");
+    if (probe.probeClass !== job.probePolicy.probeClass) throw new Error("Probe class is not allowed for this job");
+    if (job.probePolicy.locations.length > 0 && !job.probePolicy.locations.includes(probe.probeLocation)) {
+      throw new Error("Probe location is not allowed for this job");
+    }
     const evidence = input.evidence ? normalizeSubmittedEvidence(monitor.url ?? monitor.host ?? "https://example.invalid", input.evidence) : null;
     const result = this.store.recordCheckResult({
       monitorId: monitor.id,
+      jobId: job.id,
+      probeId: probe.id,
+      monitorRevision: job.monitorRevision,
+      scheduleSlot: job.scheduleSlot,
+      probeClass: probe.probeClass,
+      probeLocation: probe.probeLocation,
+      probePolicyHash: job.probePolicyHash,
       checkedAt: input.checkedAt,
       status: input.status,
       latencyMs: input.latencyMs,
@@ -675,9 +732,16 @@ export class UptimeService {
       workspaceId: monitor.workspaceId,
     });
     const receipt = store.recordProbeSubmission({
+      workspaceId: job.workspaceId,
       probeId: probe.id,
       jobId: job.id,
       monitorId: monitor.id,
+      monitorRevision: job.monitorRevision,
+      scheduleSlot: job.scheduleSlot,
+      probeClass: probe.probeClass,
+      probeLocation: probe.probeLocation,
+      probePolicyHash: job.probePolicyHash,
+      payloadHash,
       checkResultId: result.id,
       nonce: input.nonce,
       checkedAt: input.checkedAt,

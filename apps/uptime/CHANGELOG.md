@@ -6,6 +6,29 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.32] - 2026-06-29
+
+### Added
+
+- Added local deterministic probe check-job identity using workspace,
+  monitor revision, schedule slot, and probe-policy hash.
+- Added probe workspace/class/location/machine metadata, probe-policy metadata
+  on jobs and results, and payload-hash replay conflict detection.
+- Added regression coverage for two-scheduler job idempotency, monitor
+  revision and probe-policy separation, same-probe claim retries, probe
+  class/location enforcement, and conflicting nonce payloads.
+
+### Changed
+
+- Same-probe job claim retries now return the existing fencing token instead of
+  silently rotating it.
+- Local CLI and MCP probe job surfaces can specify workspace, probe class,
+  probe location, machine id, and job probe policy.
+- Hosted readiness now treats every SQLite bridge mode as non-promotion-ready
+  until the async cloud store is implemented.
+- AWS cloud-plan defaults now follow the package version instead of a stale
+  literal package version.
+
 ## [0.1.31] - 2026-06-29
 
 ### Added

@@ -235,6 +235,14 @@ They use cloud jobs and cloud leases:
 Two-probe race tests must prove that one schedule slot produces one authoritative
 result and that stale fencing tokens cannot submit or overwrite results.
 
+As of `@hasna/uptime@0.1.32`, the local SQLite probe scaffolding uses
+workspace/monitor-revision/schedule-slot/probe-policy deterministic job
+identity, stores probe class/location and policy hashes on jobs/results, keeps
+same-probe claim retries idempotent, and rejects nonce reuse with a different
+signed payload. This is local contract coverage only: hosted probe APIs and
+cloud workers remain fail-closed until the async cloud store, deploy drain,
+backlog/stale-lease metrics, and RLS/audit-backed runtime are implemented.
+
 ## Import Preview And Apply Contract
 
 Import is a reviewable workflow, not direct bulk creation.

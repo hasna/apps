@@ -1,3 +1,5 @@
+import { packageVersion } from "./version.js";
+
 export interface AwsDeploymentPlanOptions {
   accountName?: string;
   region?: string;
@@ -170,7 +172,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
   const image = clean(options.image, `${imageRepositoryUri}@sha256:<image-digest>`);
   const evidenceBucket = clean(options.evidenceBucket, `hasna-${stage}-${prefix}-evidence`);
   const hostedSqliteDbPath = clean(options.hostedSqliteDbPath, DEFAULT_HOSTED_SQLITE_DB);
-  const runtimePackageVersion = clean(options.runtimePackageVersion, "0.1.30");
+  const runtimePackageVersion = clean(options.runtimePackageVersion, packageVersion());
   const runtimePackageIntegrity = options.runtimePackageIntegrity?.trim() || undefined;
   const protectedAccessMode = options.protectedAccessMode ?? DEFAULT_PROTECTED_ACCESS_MODE;
   const cloudfrontOriginProtocolPolicy = options.cloudfrontOriginProtocolPolicy ?? DEFAULT_CLOUDFRONT_ORIGIN_PROTOCOL_POLICY;

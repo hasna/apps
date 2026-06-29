@@ -21,6 +21,8 @@ test("buildPostgresMigrationPlan emits a blocked cloud-store schema with tombsto
   expect(plan.requiredTables).toContain("sync_tombstones");
   expect(plan.migrationStatements.join("\n")).toContain("CREATE TABLE IF NOT EXISTS \"uptime\".\"sync_tombstones\"");
   expect(plan.migrationStatements.join("\n")).toContain("probe_policy jsonb");
+  expect(plan.migrationStatements.join("\n")).toContain("probe_policy_hash text NOT NULL");
+  expect(plan.migrationStatements.join("\n")).toContain("UNIQUE (workspace_id, monitor_id, monitor_version, schedule_slot, probe_policy_hash)");
   expect(plan.migrationStatements.join("\n")).toContain("fencing_token text");
   expect(plan.migrationStatements.join("\n")).toContain("idempotency_key text");
   expect(plan.migrationStatements.join("\n")).toContain("deleted_at timestamptz");

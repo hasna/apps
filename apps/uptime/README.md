@@ -117,8 +117,16 @@ stay in the repository and are not included in the published tarball.
 Private/local probes can submit signed results from another machine:
 
 ```bash
-uptime probes create private-probe-01 --private-key-file ./private-probe-01.key.pem
-uptime probes jobs create --monitor <monitor-id> --schedule-slot 2026-06-28T12:00:00Z
+uptime probes create private-probe-01 \
+  --private-key-file ./private-probe-01.key.pem \
+  --probe-class private \
+  --probe-location spark01 \
+  --machine-id spark01
+uptime probes jobs create \
+  --monitor <monitor-id> \
+  --schedule-slot 2026-06-28T12:00:00Z \
+  --probe-class private \
+  --probe-locations spark01
 uptime probes jobs claim <job-id> --probe <probe-id>
 uptime probes submit \
   --probe <probe-id> \
@@ -131,6 +139,9 @@ uptime probes submit \
   --status up
 ```
 
+Local probe jobs use deterministic identity over workspace, monitor revision,
+schedule slot, and probe policy; same-probe claim retries keep the active
+fencing token instead of rotating it.
 Generated probe private keys are written only to the explicit
 `--private-key-file` path. API and MCP probe enrollment require caller-managed
 public keys.

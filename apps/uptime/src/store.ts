@@ -1,6 +1,6 @@
 import { copyFileSync, existsSync, mkdirSync, statfsSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Database } from "bun:sqlite";
 import { uptimeDbPath, uptimeHostedFallbackDbPath } from "./paths.js";
 import { assertHostedTargetAllowed } from "./target-policy.js";
@@ -29,7 +29,9 @@ import type {
   MonitorStatus,
   ProbeCheckJob,
   ProbeCheckJobStatus,
+  ProbeClass,
   ProbeIdentity,
+  ProbePolicy,
   ProbeSubmissionReceipt,
   RecordAuditEventInput,
   ReportDeliveryRecord,
@@ -144,7 +146,7 @@ const REQUIRED_TABLES = [
 const PROBE_TABLES = new Set<string>(["probe_identities", "probe_check_jobs", "probe_submissions"]);
 const REPORT_AUDIT_TABLES = new Set<string>(["report_schedules", "report_runs", "audit_events"]);
 const TOMBSTONE_TABLES = new Set<string>(["sync_tombstones"]);
-const CURRENT_SCHEMA_VERSION = "6";
+const CURRENT_SCHEMA_VERSION = "7";
 
 interface MonitorRow {
   id: string;
@@ -170,7 +172,15 @@ interface MonitorRow {
 
 interface CheckResultRow {
   id: string;
+  workspace_id: string | null;
   monitor_id: string;
+  job_id: string | null;
+  probe_id: string | null;
+  monitor_revision: number | null;
+  schedule_slot: string | null;
+  probe_class: ProbeClass | null;
+  probe_location: string | null;
+  probe_policy_hash: string | null;
   checked_at: string;
   status: "up" | "down";
   latency_ms: number | null;
@@ -220,9 +230,13 @@ interface ImportBatchRow {
 
 interface ProbeIdentityRow {
   id: string;
+  workspace_id: string | null;
   name: string;
   public_key_pem: string;
   public_key_fingerprint: string;
+  probe_class: ProbeClass | null;
+  probe_location: string | null;
+  machine_id: string | null;
   enabled: number;
   created_at: string;
   last_seen_at: string | null;
@@ -230,9 +244,16 @@ interface ProbeIdentityRow {
 
 interface ProbeSubmissionRow {
   id: string;
+  workspace_id: string | null;
   probe_id: string;
   job_id: string | null;
   monitor_id: string;
+  monitor_revision: number | null;
+  schedule_slot: string | null;
+  probe_class: ProbeClass | null;
+  probe_location: string | null;
+  probe_policy_hash: string | null;
+  payload_hash: string | null;
   check_result_id: string;
   nonce: string;
   checked_at: string;
@@ -241,9 +262,12 @@ interface ProbeSubmissionRow {
 
 interface ProbeCheckJobRow {
   id: string;
+  workspace_id: string | null;
   monitor_id: string;
   monitor_revision: number | null;
   schedule_slot: string;
+  probe_policy_json: string | null;
+  probe_policy_hash: string | null;
   status: ProbeCheckJobStatus;
   claimed_by_probe_id: string | null;
   fencing_token: string | null;
@@ -396,7 +420,15 @@ export class UptimeStore {
     this.db.run(`
       CREATE TABLE IF NOT EXISTS check_results (
         id TEXT PRIMARY KEY,
+        workspace_id TEXT,
         monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+        job_id TEXT,
+        probe_id TEXT,
+        monitor_revision INTEGER,
+        schedule_slot TEXT,
+        probe_class TEXT CHECK (probe_class IN ('public', 'private')),
+        probe_location TEXT,
+        probe_policy_hash TEXT,
         checked_at TEXT NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('up', 'down')),
         latency_ms REAL,
@@ -406,6 +438,14 @@ export class UptimeStore {
         evidence_json TEXT
       )
     `);
+    this.ensureColumn("check_results", "workspace_id", "TEXT");
+    this.ensureColumn("check_results", "job_id", "TEXT");
+    this.ensureColumn("check_results", "probe_id", "TEXT");
+    this.ensureColumn("check_results", "monitor_revision", "INTEGER");
+    this.ensureColumn("check_results", "schedule_slot", "TEXT");
+    this.ensureColumn("check_results", "probe_class", "TEXT");
+    this.ensureColumn("check_results", "probe_location", "TEXT");
+    this.ensureColumn("check_results", "probe_policy_hash", "TEXT");
     this.ensureColumn("check_results", "evidence_json", "TEXT");
     this.db.run(`
       CREATE TABLE IF NOT EXISTS incidents (
@@ -446,20 +486,35 @@ export class UptimeStore {
     this.db.run(`
       CREATE TABLE IF NOT EXISTS probe_identities (
         id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
         name TEXT NOT NULL UNIQUE,
         public_key_pem TEXT NOT NULL,
         public_key_fingerprint TEXT NOT NULL UNIQUE,
+        probe_class TEXT NOT NULL DEFAULT 'private' CHECK (probe_class IN ('public', 'private')),
+        probe_location TEXT NOT NULL DEFAULT 'local',
+        machine_id TEXT,
         enabled INTEGER NOT NULL DEFAULT 1,
         created_at TEXT NOT NULL,
         last_seen_at TEXT
       )
     `);
+    this.ensureColumn("probe_identities", "workspace_id", "TEXT NOT NULL DEFAULT 'local'");
+    this.ensureColumn("probe_identities", "probe_class", "TEXT NOT NULL DEFAULT 'private'");
+    this.ensureColumn("probe_identities", "probe_location", "TEXT NOT NULL DEFAULT 'local'");
+    this.ensureColumn("probe_identities", "machine_id", "TEXT");
     this.db.run(`
       CREATE TABLE IF NOT EXISTS probe_submissions (
         id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
         probe_id TEXT NOT NULL REFERENCES probe_identities(id) ON DELETE CASCADE,
         job_id TEXT NOT NULL,
         monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+        monitor_revision INTEGER NOT NULL DEFAULT 1,
+        schedule_slot TEXT NOT NULL DEFAULT '',
+        probe_class TEXT NOT NULL DEFAULT 'private' CHECK (probe_class IN ('public', 'private')),
+        probe_location TEXT NOT NULL DEFAULT 'local',
+        probe_policy_hash TEXT NOT NULL DEFAULT '',
+        payload_hash TEXT NOT NULL DEFAULT '',
         check_result_id TEXT NOT NULL REFERENCES check_results(id) ON DELETE CASCADE,
         nonce TEXT NOT NULL,
         checked_at TEXT NOT NULL,
@@ -468,12 +523,22 @@ export class UptimeStore {
       )
     `);
     this.ensureColumn("probe_submissions", "job_id", "TEXT");
+    this.ensureColumn("probe_submissions", "workspace_id", "TEXT NOT NULL DEFAULT 'local'");
+    this.ensureColumn("probe_submissions", "monitor_revision", "INTEGER NOT NULL DEFAULT 1");
+    this.ensureColumn("probe_submissions", "schedule_slot", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("probe_submissions", "probe_class", "TEXT NOT NULL DEFAULT 'private'");
+    this.ensureColumn("probe_submissions", "probe_location", "TEXT NOT NULL DEFAULT 'local'");
+    this.ensureColumn("probe_submissions", "probe_policy_hash", "TEXT NOT NULL DEFAULT ''");
+    this.ensureColumn("probe_submissions", "payload_hash", "TEXT NOT NULL DEFAULT ''");
     this.db.run(`
       CREATE TABLE IF NOT EXISTS probe_check_jobs (
         id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL DEFAULT 'local',
         monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
         monitor_revision INTEGER NOT NULL DEFAULT 1,
         schedule_slot TEXT NOT NULL,
+        probe_policy_json TEXT NOT NULL,
+        probe_policy_hash TEXT NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('pending', 'claimed', 'submitted', 'expired', 'cancelled')),
         claimed_by_probe_id TEXT REFERENCES probe_identities(id) ON DELETE SET NULL,
         fencing_token TEXT,
@@ -483,10 +548,10 @@ export class UptimeStore {
         submitted_result_id TEXT REFERENCES check_results(id) ON DELETE SET NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
-        UNIQUE (monitor_id, schedule_slot)
+        UNIQUE (workspace_id, monitor_id, monitor_revision, schedule_slot, probe_policy_hash)
       )
     `);
-    this.ensureColumn("probe_check_jobs", "monitor_revision", "INTEGER NOT NULL DEFAULT 1");
+    this.ensureProbeCheckJobsContract();
     this.db.run(`
       CREATE TABLE IF NOT EXISTS check_leases (
         monitor_id TEXT PRIMARY KEY REFERENCES monitors(id) ON DELETE CASCADE,
@@ -618,9 +683,9 @@ export class UptimeStore {
       { name: "required-tables", ok: missingTables.length === 0, requiredForPromotion: true, detail: missingTables.length === 0 ? "all present" : missingTables.join(",") },
       {
         name: "hosted-data-mode",
-        ok: this.mode !== "hosted" || this.dataMode === "hosted-efs-sqlite",
+        ok: this.mode !== "hosted",
         requiredForPromotion: true,
-        detail: this.dataMode,
+        detail: this.mode === "hosted" ? `${this.dataMode}: sqlite bridge is not cloud-primary` : this.dataMode,
       },
     ];
     const serviceOk = checks.every((check) => check.ok);
@@ -835,16 +900,33 @@ export class UptimeStore {
     return true;
   }
 
-  createProbeIdentity(input: { name: string; publicKeyPem: string; publicKeyFingerprint: string; enabled?: boolean }): ProbeIdentity {
+  createProbeIdentity(input: {
+    name: string;
+    publicKeyPem: string;
+    publicKeyFingerprint: string;
+    workspaceId?: string;
+    probeClass?: ProbeClass;
+    probeLocation?: string;
+    machineId?: string | null;
+    enabled?: boolean;
+  }): ProbeIdentity {
     const name = input.name.trim();
     if (!name) throw new Error("Probe name is required");
     rejectControlCharacters(name, "Probe name");
+    const workspaceId = normalizeWorkspaceId(input.workspaceId ?? "local");
+    const probeClass = normalizeProbeClass(input.probeClass ?? "private");
+    const probeLocation = normalizeProbeLocation(input.probeLocation ?? "local");
+    const machineId = normalizeNullableProbeText(input.machineId ?? null, "Probe machine id");
     const now = new Date().toISOString();
     const probe: ProbeIdentity = {
       id: newId("prb"),
+      workspaceId,
       name,
       publicKeyPem: input.publicKeyPem.trim(),
       publicKeyFingerprint: input.publicKeyFingerprint,
+      probeClass,
+      probeLocation,
+      machineId,
       enabled: input.enabled ?? true,
       createdAt: now,
       lastSeenAt: null,
@@ -853,14 +935,19 @@ export class UptimeStore {
     this.db
       .query(
         `INSERT INTO probe_identities (
-          id, name, public_key_pem, public_key_fingerprint, enabled, created_at, last_seen_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          id, workspace_id, name, public_key_pem, public_key_fingerprint,
+          probe_class, probe_location, machine_id, enabled, created_at, last_seen_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         probe.id,
+        probe.workspaceId,
         probe.name,
         probe.publicKeyPem,
         probe.publicKeyFingerprint,
+        probe.probeClass,
+        probe.probeLocation,
+        probe.machineId,
         probe.enabled ? 1 : 0,
         probe.createdAt,
         probe.lastSeenAt,
@@ -901,23 +988,38 @@ export class UptimeStore {
     this.db.query("UPDATE probe_identities SET last_seen_at = ? WHERE id = ?").run(seenAt, probe.id);
   }
 
-  createProbeCheckJob(input: { monitorId: string; scheduleSlot: string; dueAt?: string }): ProbeCheckJob {
-    const monitor = this.getMonitor(input.monitorId);
+  createProbeCheckJob(input: { monitorId: string; scheduleSlot: string; dueAt?: string; workspaceId?: string; probePolicy?: ProbePolicy }): ProbeCheckJob {
+    const monitor = this.getMonitor(input.monitorId, { workspaceId: input.workspaceId });
     if (!monitor) throw new Error(`Monitor not found: ${input.monitorId}`);
     if (!monitor.enabled) throw new Error(`Monitor is disabled: ${monitor.name}`);
     const scheduleSlot = normalizeScheduleSlot(input.scheduleSlot);
+    const probePolicy = normalizeProbePolicy(input.probePolicy);
+    const probePolicyHash = hashProbePolicy(probePolicy);
     const dueAt = input.dueAt ?? new Date().toISOString();
     assertIsoTimestamp(dueAt, "Probe job dueAt");
     const now = new Date().toISOString();
-    const existing = this.db
-      .query("SELECT * FROM probe_check_jobs WHERE monitor_id = ? AND schedule_slot = ?")
-      .get(monitor.id, scheduleSlot) as ProbeCheckJobRow | null;
-    if (existing) return probeCheckJobFromRow(existing);
-    const job: ProbeCheckJob = {
-      id: newId("job"),
+    const jobId = deterministicProbeJobId({
+      workspaceId: monitor.workspaceId,
       monitorId: monitor.id,
       monitorRevision: monitor.revision,
       scheduleSlot,
+      probePolicyHash,
+    });
+    const existing = this.db
+      .query(`
+        SELECT * FROM probe_check_jobs
+        WHERE workspace_id = ? AND monitor_id = ? AND monitor_revision = ? AND schedule_slot = ? AND probe_policy_hash = ?
+      `)
+      .get(monitor.workspaceId, monitor.id, monitor.revision, scheduleSlot, probePolicyHash) as ProbeCheckJobRow | null;
+    if (existing) return probeCheckJobFromRow(existing);
+    const job: ProbeCheckJob = {
+      id: jobId,
+      workspaceId: monitor.workspaceId,
+      monitorId: monitor.id,
+      monitorRevision: monitor.revision,
+      scheduleSlot,
+      probePolicy,
+      probePolicyHash,
       status: "pending",
       claimedByProbeId: null,
       fencingToken: null,
@@ -930,16 +1032,20 @@ export class UptimeStore {
     };
     this.db
       .query(
-        `INSERT INTO probe_check_jobs (
-          id, monitor_id, monitor_revision, schedule_slot, status, claimed_by_probe_id, fencing_token,
+        `INSERT OR IGNORE INTO probe_check_jobs (
+          id, workspace_id, monitor_id, monitor_revision, schedule_slot, probe_policy_json, probe_policy_hash,
+          status, claimed_by_probe_id, fencing_token,
           due_at, claimed_at, lease_expires_at, submitted_result_id, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         job.id,
+        job.workspaceId,
         job.monitorId,
         job.monitorRevision,
         job.scheduleSlot,
+        JSON.stringify(job.probePolicy),
+        job.probePolicyHash,
         job.status,
         job.claimedByProbeId,
         job.fencingToken,
@@ -950,7 +1056,14 @@ export class UptimeStore {
         job.createdAt,
         job.updatedAt,
       );
-    return job;
+    const stored = this.db
+      .query(`
+        SELECT * FROM probe_check_jobs
+        WHERE workspace_id = ? AND monitor_id = ? AND monitor_revision = ? AND schedule_slot = ? AND probe_policy_hash = ?
+      `)
+      .get(job.workspaceId, job.monitorId, job.monitorRevision, job.scheduleSlot, job.probePolicyHash) as ProbeCheckJobRow | null;
+    if (!stored) throw new Error("Probe job creation raced; retry");
+    return probeCheckJobFromRow(stored);
   }
 
   getProbeCheckJob(id: string): ProbeCheckJob | null {
@@ -965,6 +1078,11 @@ export class UptimeStore {
       if (!probe.enabled) throw new Error(`Probe is disabled: ${probe.name}`);
       const current = this.getProbeCheckJob(input.jobId);
       if (!current) throw new Error(`Probe job not found: ${input.jobId}`);
+      if (probe.workspaceId !== current.workspaceId) throw new Error("Probe job belongs to another workspace");
+      if (probe.probeClass !== current.probePolicy.probeClass) throw new Error("Probe class is not allowed for this job");
+      if (current.probePolicy.locations.length > 0 && !current.probePolicy.locations.includes(probe.probeLocation)) {
+        throw new Error("Probe location is not allowed for this job");
+      }
       const now = new Date();
       const nowIso = now.toISOString();
       if (current.status === "submitted") throw new Error("Probe job already submitted");
@@ -973,6 +1091,9 @@ export class UptimeStore {
       const leaseExpired = Boolean(current.leaseExpiresAt && current.leaseExpiresAt <= nowIso);
       if (current.status === "claimed" && !leaseExpired && current.claimedByProbeId !== probe.id) {
         throw new Error("Probe job already claimed by another probe");
+      }
+      if (current.status === "claimed" && !leaseExpired && current.claimedByProbeId === probe.id) {
+        return current;
       }
       if (current.status !== "pending" && current.status !== "claimed" && current.status !== "expired") {
         throw new Error(`Probe job is not claimable: ${current.status}`);
@@ -1042,9 +1163,16 @@ export class UptimeStore {
     const submittedAt = input.submittedAt ?? new Date().toISOString();
     const receipt: ProbeSubmissionReceipt = {
       id: newId("psb"),
+      workspaceId: input.workspaceId,
       probeId: input.probeId,
       jobId: input.jobId,
       monitorId: input.monitorId,
+      monitorRevision: input.monitorRevision,
+      scheduleSlot: input.scheduleSlot,
+      probeClass: input.probeClass,
+      probeLocation: input.probeLocation,
+      probePolicyHash: input.probePolicyHash,
+      payloadHash: input.payloadHash,
       checkResultId: input.checkResultId,
       nonce: input.nonce,
       checkedAt: input.checkedAt,
@@ -1053,14 +1181,23 @@ export class UptimeStore {
     this.db
       .query(
         `INSERT INTO probe_submissions (
-          id, probe_id, job_id, monitor_id, check_result_id, nonce, checked_at, submitted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          id, workspace_id, probe_id, job_id, monitor_id, monitor_revision, schedule_slot,
+          probe_class, probe_location, probe_policy_hash, payload_hash,
+          check_result_id, nonce, checked_at, submitted_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         receipt.id,
+        receipt.workspaceId,
         receipt.probeId,
         receipt.jobId,
         receipt.monitorId,
+        receipt.monitorRevision,
+        receipt.scheduleSlot,
+        receipt.probeClass,
+        receipt.probeLocation,
+        receipt.probePolicyHash,
+        receipt.payloadHash,
         receipt.checkResultId,
         receipt.nonce,
         receipt.checkedAt,
@@ -1311,7 +1448,21 @@ export class UptimeStore {
     this.db.query("DELETE FROM check_leases WHERE monitor_id = ? AND owner = ?").run(monitorId, owner);
   }
 
-  recordCheckResult(input: Omit<CheckResult, "id" | "checkedAt"> & { checkedAt?: string; expectedMonitorRevision?: number; workspaceId?: string }): CheckResult {
+  recordCheckResult(input: Omit<CheckResult,
+    "id" | "checkedAt" | "workspaceId" | "jobId" | "probeId" | "monitorRevision" |
+    "scheduleSlot" | "probeClass" | "probeLocation" | "probePolicyHash"
+  > & {
+    checkedAt?: string;
+    expectedMonitorRevision?: number;
+    workspaceId?: string;
+    jobId?: string | null;
+    probeId?: string | null;
+    monitorRevision?: number | null;
+    scheduleSlot?: string | null;
+    probeClass?: ProbeClass | null;
+    probeLocation?: string | null;
+    probePolicyHash?: string | null;
+  }): CheckResult {
     const workspaceId = this.scopedWorkspaceId(input.workspaceId, "recordCheckResult");
     const monitor = this.getMonitor(input.monitorId, { workspaceId });
     if (!monitor) throw new Error(`Monitor not found: ${input.monitorId}`);
@@ -1324,7 +1475,15 @@ export class UptimeStore {
     const checkedAt = input.checkedAt ?? new Date().toISOString();
     const result: CheckResult = {
       id: newId("chk"),
+      workspaceId: monitor.workspaceId,
       monitorId: monitor.id,
+      jobId: normalizeNullableProbeText(input.jobId ?? null, "Check result job id"),
+      probeId: normalizeNullableProbeText(input.probeId ?? null, "Check result probe id"),
+      monitorRevision: input.monitorRevision ?? input.expectedMonitorRevision ?? null,
+      scheduleSlot: input.scheduleSlot ? normalizeScheduleSlot(input.scheduleSlot) : null,
+      probeClass: input.probeClass == null ? null : normalizeProbeClass(input.probeClass),
+      probeLocation: input.probeLocation == null ? null : normalizeProbeLocation(input.probeLocation),
+      probePolicyHash: input.probePolicyHash ? normalizeHash(input.probePolicyHash, "Check result probe policy hash") : null,
       checkedAt,
       status: input.status,
       latencyMs: input.latencyMs,
@@ -1347,12 +1506,22 @@ export class UptimeStore {
       this.db
         .query(
           `INSERT INTO check_results (
-            id, monitor_id, checked_at, status, latency_ms, status_code, error, attempt_count, evidence_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            id, workspace_id, monitor_id, job_id, probe_id, monitor_revision, schedule_slot,
+            probe_class, probe_location, probe_policy_hash, checked_at, status, latency_ms,
+            status_code, error, attempt_count, evidence_json
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           result.id,
+          result.workspaceId,
           result.monitorId,
+          result.jobId,
+          result.probeId,
+          result.monitorRevision,
+          result.scheduleSlot,
+          result.probeClass,
+          result.probeLocation,
+          result.probePolicyHash,
           result.checkedAt,
           result.status,
           result.latencyMs,
@@ -1608,6 +1777,85 @@ export class UptimeStore {
     }
   }
 
+  private ensureProbeCheckJobsContract(): void {
+    const row = this.db
+      .query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'probe_check_jobs'")
+      .get() as { sql: string } | null;
+    const columns = this.db.query("PRAGMA table_info(probe_check_jobs)").all() as Array<{ name: string }>;
+    const columnNames = new Set(columns.map((column) => column.name));
+    const required = ["workspace_id", "monitor_revision", "probe_policy_json", "probe_policy_hash"];
+    const hasRequiredColumns = required.every((column) => columnNames.has(column));
+    const hasContractUnique = Boolean(row?.sql?.includes("UNIQUE (workspace_id, monitor_id, monitor_revision, schedule_slot, probe_policy_hash)"));
+    if (hasRequiredColumns && hasContractUnique) return;
+
+    const defaultPolicy = normalizeProbePolicy(undefined);
+    const defaultPolicyJson = JSON.stringify(defaultPolicy).replace(/'/g, "''");
+    const defaultPolicyHash = hashProbePolicy(defaultPolicy);
+    const selectColumn = (name: string, fallbackSql: string) => columnNames.has(name) ? `old.${name}` : fallbackSql;
+    const workspaceSql = columnNames.has("workspace_id")
+      ? "old.workspace_id"
+      : "COALESCE(monitors.workspace_id, 'local')";
+    this.db.run("PRAGMA foreign_keys = OFF");
+    this.db.run("PRAGMA legacy_alter_table = ON");
+    try {
+      const migrate = this.db.transaction(() => {
+        this.db.run("ALTER TABLE probe_check_jobs RENAME TO probe_check_jobs_old_contract");
+        this.db.run(`
+          CREATE TABLE probe_check_jobs (
+            id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL DEFAULT 'local',
+            monitor_id TEXT NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+            monitor_revision INTEGER NOT NULL DEFAULT 1,
+            schedule_slot TEXT NOT NULL,
+            probe_policy_json TEXT NOT NULL,
+            probe_policy_hash TEXT NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('pending', 'claimed', 'submitted', 'expired', 'cancelled')),
+            claimed_by_probe_id TEXT REFERENCES probe_identities(id) ON DELETE SET NULL,
+            fencing_token TEXT,
+            due_at TEXT NOT NULL,
+            claimed_at TEXT,
+            lease_expires_at TEXT,
+            submitted_result_id TEXT REFERENCES check_results(id) ON DELETE SET NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (workspace_id, monitor_id, monitor_revision, schedule_slot, probe_policy_hash)
+          )
+        `);
+        this.db.run(`
+          INSERT OR IGNORE INTO probe_check_jobs (
+            id, workspace_id, monitor_id, monitor_revision, schedule_slot, probe_policy_json,
+            probe_policy_hash, status, claimed_by_probe_id, fencing_token, due_at, claimed_at,
+            lease_expires_at, submitted_result_id, created_at, updated_at
+          )
+          SELECT
+            old.id,
+            ${workspaceSql},
+            old.monitor_id,
+            COALESCE(${selectColumn("monitor_revision", "monitors.revision")}, monitors.revision, 1),
+            old.schedule_slot,
+            COALESCE(${selectColumn("probe_policy_json", `'${defaultPolicyJson}'`)}, '${defaultPolicyJson}'),
+            COALESCE(${selectColumn("probe_policy_hash", `'${defaultPolicyHash}'`)}, '${defaultPolicyHash}'),
+            old.status,
+            old.claimed_by_probe_id,
+            old.fencing_token,
+            old.due_at,
+            old.claimed_at,
+            old.lease_expires_at,
+            old.submitted_result_id,
+            old.created_at,
+            old.updated_at
+          FROM probe_check_jobs_old_contract old
+          JOIN monitors ON monitors.id = old.monitor_id
+        `);
+        this.db.run("DROP TABLE probe_check_jobs_old_contract");
+      });
+      migrate();
+    } finally {
+      this.db.run("PRAGMA legacy_alter_table = OFF");
+      this.db.run("PRAGMA foreign_keys = ON");
+    }
+  }
+
   private ensureMonitorKindAllowsBrowserPage(): void {
     const row = this.db
       .query("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'monitors'")
@@ -1760,12 +2008,13 @@ function verifyBackupFile(backupPath: string): UptimeBackupCheck {
         .query("SELECT value FROM schema_migrations WHERE key = 'schema_version'")
         .get() as { value: string } | null)?.value ?? null;
     const currentOk = missingTables.length === 0 && schemaVersion === CURRENT_SCHEMA_VERSION;
+    const restorableV6 = schemaVersion === "6" && missingTables.length === 0;
     const restorableV5 = schemaVersion === "5" && missingTables.every((table) => TOMBSTONE_TABLES.has(table));
     const restorableV4 = schemaVersion === "4" && missingTables.every((table) => TOMBSTONE_TABLES.has(table));
     const restorableV1 = schemaVersion === "1" && missingTables.every((table) => PROBE_TABLES.has(table) || REPORT_AUDIT_TABLES.has(table) || TOMBSTONE_TABLES.has(table));
     const restorableV2 = schemaVersion === "2" && missingTables.every((table) => REPORT_AUDIT_TABLES.has(table) || TOMBSTONE_TABLES.has(table));
     return {
-      ok: integrity === "ok" && (currentOk || restorableV5 || restorableV4 || restorableV1 || restorableV2),
+      ok: integrity === "ok" && (currentOk || restorableV6 || restorableV5 || restorableV4 || restorableV1 || restorableV2),
       backupPath,
       integrity,
       schemaVersion,
@@ -2065,6 +2314,84 @@ function normalizeNullableAuditText(value: string | undefined | null, label: str
   return normalizeNullableBoundedText(value, label, maxLength);
 }
 
+function normalizeProbeClass(value: string): ProbeClass {
+  if (value === "public" || value === "private") return value;
+  throw new Error("Probe class must be public or private");
+}
+
+function normalizeProbeLocation(value: string): string {
+  const normalized = normalizeBoundedText(value, "Probe location", 120);
+  if (!normalized) throw new Error("Probe location is required");
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,119}$/.test(normalized)) {
+    throw new Error("Probe location contains unsupported characters");
+  }
+  return normalized;
+}
+
+function normalizeNullableProbeText(value: string | undefined | null, label: string): string | null {
+  return normalizeNullableBoundedText(value, label, 160);
+}
+
+function normalizeProbePolicy(input: ProbePolicy | undefined): ProbePolicy {
+  const probeClass = normalizeProbeClass(input?.probeClass ?? "private");
+  const locations = Array.from(new Set((input?.locations ?? [])
+    .map((location) => normalizeProbeLocation(location))
+    .sort((left, right) => left.localeCompare(right))));
+  return { probeClass, locations };
+}
+
+function parseProbePolicy(value: string | null, expectedHash: string | null): ProbePolicy {
+  if (!value) return normalizeProbePolicy(undefined);
+  try {
+    const parsed = JSON.parse(value) as ProbePolicy;
+    const policy = normalizeProbePolicy(parsed);
+    if (expectedHash && expectedHash !== hashProbePolicy(policy)) {
+      throw new Error("Probe policy hash mismatch");
+    }
+    return policy;
+  } catch {
+    return normalizeProbePolicy(undefined);
+  }
+}
+
+function hashProbePolicy(policy: ProbePolicy): string {
+  return createHash("sha256").update(stableJson(policy)).digest("hex");
+}
+
+function deterministicProbeJobId(input: {
+  workspaceId: string;
+  monitorId: string;
+  monitorRevision: number;
+  scheduleSlot: string;
+  probePolicyHash: string;
+}): string {
+  const hash = createHash("sha256").update(stableJson({
+    version: "open-uptime.probe-job.v1",
+    workspaceId: input.workspaceId,
+    monitorId: input.monitorId,
+    monitorRevision: input.monitorRevision,
+    scheduleSlot: input.scheduleSlot,
+    probePolicyHash: input.probePolicyHash,
+  })).digest("hex");
+  return `job_${hash.slice(0, 32)}`;
+}
+
+function normalizeHash(value: string, label: string): string {
+  const normalized = normalizeBoundedText(value, label, 128);
+  if (!/^[a-f0-9]{64}$/.test(normalized)) throw new Error(`${label} must be a SHA-256 hex digest`);
+  return normalized;
+}
+
+function stableJson(value: unknown): string {
+  if (value === undefined) return "null";
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, nested]) => nested !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right));
+  return `{${entries.map(([key, nested]) => `${JSON.stringify(key)}:${stableJson(nested)}`).join(",")}}`;
+}
+
 function normalizeNullableBoundedText(value: string | undefined | null, label: string, maxLength: number): string | null {
   if (value == null) return null;
   const normalized = normalizeRedactedText(value, label, maxLength);
@@ -2167,7 +2494,15 @@ function monitorFromRow(row: MonitorRow): Monitor {
 function checkResultFromRow(row: CheckResultRow): CheckResult {
   return {
     id: row.id,
+    workspaceId: row.workspace_id ?? null,
     monitorId: row.monitor_id,
+    jobId: row.job_id ?? null,
+    probeId: row.probe_id ?? null,
+    monitorRevision: row.monitor_revision ?? null,
+    scheduleSlot: row.schedule_slot ?? null,
+    probeClass: row.probe_class == null ? null : normalizeProbeClass(row.probe_class),
+    probeLocation: row.probe_location ?? null,
+    probePolicyHash: row.probe_policy_hash ?? null,
     checkedAt: row.checked_at,
     status: row.status,
     latencyMs: row.latency_ms,
@@ -2204,9 +2539,13 @@ function importBatchFromRow(row: ImportBatchRow): StoredImportBatch {
 function probeIdentityFromRow(row: ProbeIdentityRow): ProbeIdentity {
   return {
     id: row.id,
+    workspaceId: row.workspace_id ?? "local",
     name: row.name,
     publicKeyPem: row.public_key_pem,
     publicKeyFingerprint: row.public_key_fingerprint,
+    probeClass: normalizeProbeClass(row.probe_class ?? "private"),
+    probeLocation: normalizeProbeLocation(row.probe_location ?? "local"),
+    machineId: row.machine_id ?? null,
     enabled: Boolean(row.enabled),
     createdAt: row.created_at,
     lastSeenAt: row.last_seen_at,
@@ -2216,9 +2555,16 @@ function probeIdentityFromRow(row: ProbeIdentityRow): ProbeIdentity {
 function probeSubmissionFromRow(row: ProbeSubmissionRow): ProbeSubmissionReceipt {
   return {
     id: row.id,
+    workspaceId: row.workspace_id ?? "local",
     probeId: row.probe_id,
     jobId: row.job_id ?? "",
     monitorId: row.monitor_id,
+    monitorRevision: row.monitor_revision ?? 1,
+    scheduleSlot: row.schedule_slot ?? "",
+    probeClass: normalizeProbeClass(row.probe_class ?? "private"),
+    probeLocation: normalizeProbeLocation(row.probe_location ?? "local"),
+    probePolicyHash: row.probe_policy_hash ?? "",
+    payloadHash: row.payload_hash ?? "",
     checkResultId: row.check_result_id,
     nonce: row.nonce,
     checkedAt: row.checked_at,
@@ -2227,11 +2573,15 @@ function probeSubmissionFromRow(row: ProbeSubmissionRow): ProbeSubmissionReceipt
 }
 
 function probeCheckJobFromRow(row: ProbeCheckJobRow): ProbeCheckJob {
+  const probePolicy = parseProbePolicy(row.probe_policy_json, row.probe_policy_hash);
   return {
     id: row.id,
+    workspaceId: row.workspace_id ?? "local",
     monitorId: row.monitor_id,
     monitorRevision: row.monitor_revision ?? 1,
     scheduleSlot: row.schedule_slot,
+    probePolicy,
+    probePolicyHash: row.probe_policy_hash ?? hashProbePolicy(probePolicy),
     status: row.status,
     claimedByProbeId: row.claimed_by_probe_id,
     fencingToken: row.fencing_token,

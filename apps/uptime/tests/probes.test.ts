@@ -269,6 +269,105 @@ test("probe job creation is idempotent for a monitor schedule slot", () => {
   service.close();
 });
 
+test("two scheduler instances create one deterministic job for the same contract key", () => {
+  const dbPath = tempDb();
+  const schedulerA = new UptimeService({ dbPath });
+  const schedulerB = new UptimeService({ dbPath });
+  const monitor = schedulerA.createMonitor({ workspaceId: "ws_a", name: "api", kind: "http", url: "https://example.com/health" });
+
+  const first = schedulerA.createProbeCheckJob({
+    workspaceId: "ws_a",
+    monitorId: monitor.id,
+    scheduleSlot: "2026-01-01T00:00:00.000Z",
+    probePolicy: { probeClass: "private", locations: ["spark01"] },
+  });
+  const second = schedulerB.createProbeCheckJob({
+    workspaceId: "ws_a",
+    monitorId: monitor.id,
+    scheduleSlot: "2026-01-01T00:00:00.000Z",
+    probePolicy: { probeClass: "private", locations: ["spark01"] },
+  });
+  const rows = (schedulerA.store as unknown as { db: { query(sql: string): { get(...args: unknown[]): { count: number } } } }).db
+    .query("SELECT count(*) AS count FROM probe_check_jobs WHERE workspace_id = ? AND monitor_id = ? AND schedule_slot = ?")
+    .get("ws_a", monitor.id, "2026-01-01T00:00:00.000Z");
+
+  expect(first.id).toBe(second.id);
+  expect(first.probePolicyHash).toBe(second.probePolicyHash);
+  expect(rows.count).toBe(1);
+  schedulerA.close();
+  schedulerB.close();
+});
+
+test("probe jobs are distinct across monitor revisions and probe policies", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  const monitor = service.createMonitor({ name: "api", kind: "http", url: "https://old.example/health" });
+  const slot = "2026-01-01T00:01:00.000Z";
+  const privateJob = service.createProbeCheckJob({
+    monitorId: monitor.id,
+    scheduleSlot: slot,
+    probePolicy: { probeClass: "private", locations: ["spark01"] },
+  });
+  const publicJob = service.createProbeCheckJob({
+    monitorId: monitor.id,
+    scheduleSlot: slot,
+    probePolicy: { probeClass: "public", locations: ["us-east-1"] },
+  });
+  const updated = service.updateMonitor(monitor.id, { url: "https://new.example/health" });
+  const nextRevisionJob = service.createProbeCheckJob({
+    monitorId: updated.id,
+    scheduleSlot: slot,
+    probePolicy: { probeClass: "private", locations: ["spark01"] },
+  });
+
+  expect(privateJob.id).not.toBe(publicJob.id);
+  expect(privateJob.probePolicyHash).not.toBe(publicJob.probePolicyHash);
+  expect(nextRevisionJob.id).not.toBe(privateJob.id);
+  expect(nextRevisionJob.monitorRevision).toBe(updated.revision);
+  service.close();
+});
+
+test("same-probe claim retry keeps the original fencing token", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  const monitor = service.createMonitor({ name: "api", kind: "http", url: "https://example.com" });
+  const probe = service.createProbe({ name: "private-probe-01", probeClass: "private", probeLocation: "spark01" });
+  const created = service.createProbeCheckJob({
+    monitorId: monitor.id,
+    scheduleSlot: "slot-same-probe-retry",
+    probePolicy: { probeClass: "private", locations: ["spark01"] },
+  });
+  const first = service.claimProbeCheckJob({ jobId: created.id, probeId: probe.id });
+  const retry = service.claimProbeCheckJob({ jobId: created.id, probeId: probe.id });
+  const submission = signedSubmission({ probe, monitor, job: first, privateKeyPem: probe.privateKeyPem! });
+
+  expect(retry.fencingToken).toBe(first.fencingToken);
+  expect(service.submitProbeResult(submission).receipt.jobId).toBe(first.id);
+  service.close();
+});
+
+test("probe claims enforce workspace, class, and location policy", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  const monitor = service.createMonitor({ workspaceId: "ws_a", name: "api", kind: "http", url: "https://example.com" });
+  const privateLocal = service.createProbe({ name: "private-local", workspaceId: "ws_a", probeClass: "private", probeLocation: "local" });
+  const wrongWorkspace = service.createProbe({ name: "wrong-ws", workspaceId: "ws_b", probeClass: "private", probeLocation: "spark01" });
+  const publicJob = service.createProbeCheckJob({
+    workspaceId: "ws_a",
+    monitorId: monitor.id,
+    scheduleSlot: "slot-public-only",
+    probePolicy: { probeClass: "public", locations: ["us-east-1"] },
+  });
+  const sparkJob = service.createProbeCheckJob({
+    workspaceId: "ws_a",
+    monitorId: monitor.id,
+    scheduleSlot: "slot-spark-only",
+    probePolicy: { probeClass: "private", locations: ["spark01"] },
+  });
+
+  expect(() => service.claimProbeCheckJob({ jobId: sparkJob.id, probeId: wrongWorkspace.id })).toThrow("another workspace");
+  expect(() => service.claimProbeCheckJob({ jobId: publicJob.id, probeId: privateLocal.id })).toThrow("Probe class");
+  expect(() => service.claimProbeCheckJob({ jobId: sparkJob.id, probeId: privateLocal.id })).toThrow("Probe location");
+  service.close();
+});
+
 test("exact replay of a signed submission returns the original receipt and result", () => {
   const service = new UptimeService({ dbPath: tempDb() });
   const monitor = service.createMonitor({ name: "api", kind: "http", url: "https://example.com" });
@@ -284,6 +383,24 @@ test("exact replay of a signed submission returns the original receipt and resul
 
   expect(replay.result.id).toBe(first.result.id);
   expect(replay.receipt.id).toBe(first.receipt.id);
+  expect(service.listResults()).toHaveLength(1);
+  service.close();
+});
+
+test("duplicate nonce with a different payload is rejected before a second result is recorded", () => {
+  const service = new UptimeService({ dbPath: tempDb() });
+  const monitor = service.createMonitor({ name: "api", kind: "http", url: "https://example.com" });
+  const probe = service.createProbe({ name: "private-probe-01" });
+  const job = service.claimProbeCheckJob({
+    jobId: service.createProbeCheckJob({ monitorId: monitor.id, scheduleSlot: "slot-replay-conflict" }).id,
+    probeId: probe.id,
+  });
+  const nonce = "replay-conflict";
+  const first = signedSubmission({ probe, monitor, job, privateKeyPem: probe.privateKeyPem!, nonce, status: "up" });
+  const conflicting = signedSubmission({ probe, monitor, job, privateKeyPem: probe.privateKeyPem!, nonce, status: "down", statusCode: 500 });
+
+  service.submitProbeResult(first);
+  expect(() => service.submitProbeResult(conflicting)).toThrow("Probe nonce already submitted");
   expect(service.listResults()).toHaveLength(1);
   service.close();
 });

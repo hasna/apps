@@ -750,7 +750,20 @@ test("CLI creates probes, claims jobs, and submits signed results", () => {
     const keyPath = join(dir, "probe.key.pem");
     const add = runCli(["add", "private-api", "--url", "https://example.com/health", "--json"], dbPath);
     const monitor = JSON.parse(new TextDecoder().decode(add.stdout));
-    const createProbe = runCli(["probes", "create", "private-probe-01", "--private-key-file", keyPath, "--json"], dbPath);
+    const createProbe = runCli([
+      "probes",
+      "create",
+      "private-probe-01",
+      "--private-key-file",
+      keyPath,
+      "--probe-class",
+      "private",
+      "--probe-location",
+      "spark01",
+      "--machine-id",
+      "machine002",
+      "--json",
+    ], dbPath);
     const probe = JSON.parse(new TextDecoder().decode(createProbe.stdout));
     const createJob = runCli([
       "probes",
@@ -760,6 +773,10 @@ test("CLI creates probes, claims jobs, and submits signed results", () => {
       monitor.id,
       "--schedule-slot",
       "cli-slot-1",
+      "--probe-class",
+      "private",
+      "--probe-locations",
+      "spark01",
       "--json",
     ], dbPath);
     const job = JSON.parse(new TextDecoder().decode(createJob.stdout));
@@ -805,7 +822,11 @@ test("CLI creates probes, claims jobs, and submits signed results", () => {
     expect(createProbe.exitCode).toBe(0);
     expect(probe.privateKeyPem).toBeUndefined();
     expect(probe.privateKeyFile).toBe(keyPath);
+    expect(probe.probeClass).toBe("private");
+    expect(probe.probeLocation).toBe("spark01");
+    expect(probe.machineId).toBe("machine002");
     expect(createJob.exitCode).toBe(0);
+    expect(job.probePolicy).toEqual({ probeClass: "private", locations: ["spark01"] });
     expect(claimJob.exitCode).toBe(0);
     expect(submit.exitCode).toBe(0);
     expect(claimed.fencingToken).toBeTruthy();

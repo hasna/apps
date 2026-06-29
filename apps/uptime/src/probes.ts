@@ -61,6 +61,10 @@ export function probeResultSigningPayload(input: ProbeSigningInput): string {
   });
 }
 
+export function probeResultPayloadHash(input: ProbeSigningInput): string {
+  return createHash("sha256").update(probeResultSigningPayload(input)).digest("hex");
+}
+
 function stableJson(value: unknown): string {
   if (value === undefined) return "null";
   if (value === null || typeof value !== "object") return JSON.stringify(value);

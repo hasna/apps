@@ -340,6 +340,10 @@ export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer
       inputSchema: {
         name: z.string(),
         publicKeyPem: z.string(),
+        workspaceId: z.string().optional(),
+        probeClass: z.enum(["public", "private"]).optional(),
+        probeLocation: z.string().optional(),
+        machineId: z.string().nullable().optional(),
         enabled: z.boolean().optional(),
       },
     },
@@ -367,6 +371,11 @@ export function createMcpServer(options: CreateMcpServerOptions = {}): McpServer
         monitorId: z.string(),
         scheduleSlot: z.string(),
         dueAt: z.string().optional(),
+        workspaceId: z.string().optional(),
+        probePolicy: z.object({
+          probeClass: z.enum(["public", "private"]),
+          locations: z.array(z.string()).default([]),
+        }).optional(),
       },
     },
     async (args) => jsonResult(service.createProbeCheckJob(args)),

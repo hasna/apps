@@ -44,7 +44,10 @@ specs, artifacts, browser evidence, or check execution until these are tested:
 - explicit EFS-backed hosted SQLite for the first deploy, followed by Postgres
   persistence with migrations, tombstones, audit, and no hidden local fallback
 - shared target policy with SSRF protections
-- scheduler `check_jobs` and probe lease fencing
+- scheduler `check_jobs` and probe lease fencing: local deterministic job
+  identity and lease fencing exist in `0.1.32`; hosted cloud workers still need
+  the async cloud store, deploy drain, backlog/stale-lease metrics, and RLS/audit
+  runtime before scale-up
 - report delivery through open-mailery/open-telephony/open-logs channel refs
 - JSON Render and canvas redaction
 - browser evidence isolation

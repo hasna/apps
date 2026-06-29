@@ -253,7 +253,7 @@ test("hosted readiness is authenticated and reports production data-mode gate wi
     productionReady: false,
     mode: "hosted",
     dataMode: "hosted-local-sqlite",
-    schemaVersion: "6",
+    schemaVersion: "7",
     auth: { configured: true, checked: true },
   });
   expect(body.checks.map((check: { name: string }) => check.name)).toContain("hosted-data-mode");

@@ -17,7 +17,7 @@ import type { AwsDeploymentPlan, PrivateProbeCloudConfig } from "../cloud-plan.j
 import type { PostgresMigrationPlan } from "../postgres-plan.js";
 import type { ImportSource } from "../imports.js";
 import type { SendUptimeReportOptions, UptimeReportDelivery } from "../report.js";
-import type { CreateMonitorInput, Monitor, ProbeResultSubmission, ReportRun, ReportSchedule, ReportScheduleChannels, UpdateMonitorInput, UptimeSummary } from "../types.js";
+import type { CreateMonitorInput, Monitor, ProbePolicy, ProbeResultSubmission, ReportRun, ReportSchedule, ReportScheduleChannels, UpdateMonitorInput, UptimeSummary } from "../types.js";
 
 const program = new Command();
 
@@ -840,6 +840,10 @@ probes
   .description("Create a private probe identity; generates an Ed25519 keypair unless --public-key-file is provided")
   .option("--public-key-file <path>", "PEM public key file for an externally managed probe key")
   .option("--private-key-file <path>", "where to write a generated PEM private key; required unless --public-key-file is used")
+  .option("--workspace <id>", "workspace id for the local probe identity")
+  .addOption(new Option("--probe-class <class>", "probe class").choices(["public", "private"]).default("private"))
+  .option("--probe-location <location>", "probe location", "local")
+  .option("--machine-id <id>", "machine id for private probe operators")
   .option("--disabled", "create the probe disabled")
   .option("-j, --json", "print JSON")
   .action((name, opts) => {
@@ -857,6 +861,10 @@ probes
       const probe = svc.createProbe({
         name,
         publicKeyPem: opts.publicKeyFile ? readFileSync(opts.publicKeyFile, "utf8") : generatedKeyPair?.publicKeyPem,
+        workspaceId: opts.workspace,
+        probeClass: opts.probeClass,
+        probeLocation: opts.probeLocation,
+        machineId: opts.machineId,
         enabled: opts.disabled ? false : true,
       });
       svc.close();
@@ -888,7 +896,7 @@ probes
       const svc = service();
       const items = svc.listProbes({ includeDisabled: opts.all });
       svc.close();
-      print(items, items.length ? items.map((item) => `${item.enabled ? "enabled " : "disabled"} ${item.id} ${sanitizeField(item.name)} ${item.lastSeenAt ?? "-"}`).join("\n") : "No probes", opts);
+      print(items, items.length ? items.map((item) => `${item.enabled ? "enabled " : "disabled"} ${item.id} ${sanitizeField(item.workspaceId)} ${item.probeClass} ${sanitizeField(item.probeLocation)} ${sanitizeField(item.name)} ${item.lastSeenAt ?? "-"}`).join("\n") : "No probes", opts);
     } catch (error) {
       fail(error);
     }
@@ -904,14 +912,23 @@ probeJobs
   .requiredOption("--monitor <id>", "monitor id")
   .requiredOption("--schedule-slot <slot>", "unique schedule slot for this monitor")
   .option("--due-at <iso>", "when the job is due", new Date().toISOString())
+  .option("--workspace <id>", "workspace id for hosted-style local stores")
+  .addOption(new Option("--probe-class <class>", "required probe class").choices(["public", "private"]).default("private"))
+  .option("--probe-locations <locations>", "comma-separated allowed probe locations")
   .option("-j, --json", "print JSON")
   .action((opts) => {
     try {
       const svc = service();
+      const probePolicy: ProbePolicy = {
+        probeClass: opts.probeClass,
+        locations: parseLocations(opts.probeLocations),
+      };
       const job = svc.createProbeCheckJob({
+        workspaceId: opts.workspace,
         monitorId: opts.monitor,
         scheduleSlot: opts.scheduleSlot,
         dueAt: opts.dueAt,
+        probePolicy,
       });
       svc.close();
       print(job, `Created probe job ${job.id} for ${job.monitorId}`, opts);
@@ -1081,6 +1098,11 @@ function parseNumber(value: string): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) throw new Error(`Expected number, got ${value}`);
   return parsed;
+}
+
+function parseLocations(value: string | undefined): string[] {
+  if (!value?.trim()) return [];
+  return value.split(",").map((item) => item.trim()).filter(Boolean);
 }
 
 function buildProbeSubmission(opts: {

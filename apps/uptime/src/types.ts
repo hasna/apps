@@ -54,7 +54,15 @@ export type ImportedUpdateMonitorInput = Partial<Omit<ImportedMonitorInput, "kin
 
 export interface CheckResult {
   id: string;
+  workspaceId: string | null;
   monitorId: string;
+  jobId: string | null;
+  probeId: string | null;
+  monitorRevision: number | null;
+  scheduleSlot: string | null;
+  probeClass: ProbeClass | null;
+  probeLocation: string | null;
+  probePolicyHash: string | null;
   checkedAt: string;
   status: CheckStatus;
   latencyMs: number | null;
@@ -74,17 +82,27 @@ export interface CheckAttemptResult {
 
 export interface ProbeIdentity {
   id: string;
+  workspaceId: string;
   name: string;
   publicKeyPem: string;
   publicKeyFingerprint: string;
+  probeClass: ProbeClass;
+  probeLocation: string;
+  machineId: string | null;
   enabled: boolean;
   createdAt: string;
   lastSeenAt: string | null;
 }
 
+export type ProbeClass = "public" | "private";
+
 export interface CreateProbeInput {
   name: string;
   publicKeyPem?: string;
+  workspaceId?: string;
+  probeClass?: ProbeClass;
+  probeLocation?: string;
+  machineId?: string | null;
   enabled?: boolean;
 }
 
@@ -112,9 +130,16 @@ export interface ProbeResultSubmission {
 
 export interface ProbeSubmissionReceipt {
   id: string;
+  workspaceId: string;
   probeId: string;
   jobId: string;
   monitorId: string;
+  monitorRevision: number;
+  scheduleSlot: string;
+  probeClass: ProbeClass;
+  probeLocation: string;
+  probePolicyHash: string;
+  payloadHash: string;
   checkResultId: string;
   nonce: string;
   checkedAt: string;
@@ -125,9 +150,12 @@ export type ProbeCheckJobStatus = "pending" | "claimed" | "submitted" | "expired
 
 export interface ProbeCheckJob {
   id: string;
+  workspaceId: string;
   monitorId: string;
   monitorRevision: number;
   scheduleSlot: string;
+  probePolicy: ProbePolicy;
+  probePolicyHash: string;
   status: ProbeCheckJobStatus;
   claimedByProbeId: string | null;
   fencingToken: string | null;
@@ -137,6 +165,11 @@ export interface ProbeCheckJob {
   submittedResultId: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ProbePolicy {
+  probeClass: ProbeClass;
+  locations: string[];
 }
 
 export type ReportScheduleStatus = "enabled" | "disabled";

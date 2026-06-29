@@ -33,7 +33,15 @@ test("hosted public checks worker is bounded and does not overlap ticks", async 
       active -= 1;
       return [{
         id: `chk_${calls.length}`,
+        workspaceId: "ws_worker",
         monitorId: "mon_1",
+        jobId: null,
+        probeId: null,
+        monitorRevision: null,
+        scheduleSlot: null,
+        probeClass: null,
+        probeLocation: null,
+        probePolicyHash: null,
         checkedAt: now.toISOString(),
         status: "up",
         latencyMs: 1,

@@ -1483,7 +1483,7 @@ test("local backup verify and restore round trip preserves data", async () => {
   first.close();
 
   expect(backup.bytes).toBeGreaterThan(0);
-  expect(check).toMatchObject({ ok: true, integrity: "ok", schemaVersion: "6", monitors: 1, results: 1, incidents: 1 });
+  expect(check).toMatchObject({ ok: true, integrity: "ok", schemaVersion: "7", monitors: 1, results: 1, incidents: 1 });
 
   UptimeStore.restoreBackup(backup.backupPath, restorePath);
   const restored = new UptimeService({ dbPath: restorePath });
@@ -1518,7 +1518,7 @@ test("schema v1 backups missing only probe tables remain restorable", () => {
   const restored = new UptimeService({ dbPath: restorePath });
   expect(restored.listMonitors({ includeDisabled: true })).toHaveLength(1);
   expect(restored.createProbe({ name: "post-restore" }).publicKeyFingerprint).toHaveLength(64);
-  expect(restored.verifyBackup(restorePath).schemaVersion).toBe("6");
+  expect(restored.verifyBackup(restorePath).schemaVersion).toBe("7");
   restored.close();
 });
 
@@ -1546,7 +1546,7 @@ test("schema v2 backups missing only report and audit tables remain restorable",
   UptimeStore.restoreBackup(legacyPath, restorePath);
   const restored = new UptimeService({ dbPath: restorePath });
   expect(restored.listReportSchedules()).toHaveLength(0);
-  expect(restored.verifyBackup(restorePath).schemaVersion).toBe("6");
+  expect(restored.verifyBackup(restorePath).schemaVersion).toBe("7");
   restored.close();
 });
 
