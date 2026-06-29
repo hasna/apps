@@ -2207,6 +2207,21 @@ function hostedReporterReadinessChecks(): Array<{ name: string; ok: boolean; det
         : "hosted report_runs/report_schedules are blocked until the async Postgres store is authoritative",
     },
     {
+      name: "report-channel-secret-loader",
+      ok: false,
+      detail: "server-side channel-ref secret resolution is implemented as a callback contract but not wired to approved AWS Secrets Manager/SSM IAM in the hosted reporter",
+    },
+    {
+      name: "report-schedule-claiming",
+      ok: reportRuntime.capabilities.scheduleClaiming,
+      detail: runtimeCheck("report-schedule-claiming")?.detail ?? "transactional report schedule/window claiming is not implemented",
+    },
+    {
+      name: "report-run-state-machine",
+      ok: reportRuntime.capabilities.reportRunStateMachine,
+      detail: runtimeCheck("report-run-state-machine")?.detail ?? "hosted report run state machine is not implemented",
+    },
+    {
       name: "report-delivery-attempts",
       ok: reportRuntime.capabilities.deliveryAttemptState,
       detail: "Postgres report_delivery_attempts writer and claim/complete state machine are implemented",

@@ -6,6 +6,38 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.46] - 2026-06-29
+
+### Added
+
+- Added `sendHostedUptimeReport` on the SDK export for server-side hosted
+  report delivery through selected, workspace-scoped Mailery, Telephony, and
+  Open Logs channel refs.
+
+### Changed
+
+- Reporter preflight now distinguishes metadata-writer readiness from full
+  reporter-worker promotion readiness and explicitly blocks on missing schedule
+  claiming, report-run state machine, channel-ref secret-loader IAM wiring, S3
+  artifact writes, Open Logs audit export, delivery alarms, and live worker
+  liveness evidence.
+- Hosted report delivery requires explicit selected channel ref ids instead of
+  fan-out to every enabled workspace ref.
+- Expanded third-party notices for the Postgres client dependency family.
+
+### Security
+
+- Hosted report delivery masks monitor target URLs, hosts, ports, and
+  target-like incident text before creating Mailery, Telephony, Open Logs, or
+  request-hash payloads.
+- Hosted delivery evidence now redacts provider-echoed recipients, phone
+  numbers, target refs, secret refs, API URLs, and bearer/send-key material; raw
+  target refs are represented only as hashes.
+- Postgres report delivery attempts now reject mismatched channel/provider pairs
+  such as `email` with `logs`.
+- Hosted reporter startup remains blocked and ECS desired counts must remain
+  zero until the remaining cloud runtime gates are proven.
+
 ## [0.1.45] - 2026-06-29
 
 ### Fixed

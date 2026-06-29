@@ -13,7 +13,7 @@ export {
 } from "./checks.js";
 export { createApiHandler, serveUptime } from "./api.js";
 export { applyImport, previewImport, rollbackImport } from "./imports.js";
-export { buildUptimeReport, sendUptimeReport } from "./report.js";
+export { buildUptimeReport, sendHostedUptimeReport, sendUptimeReport } from "./report.js";
 export { parseHostedReportChannelRefs, summarizeHostedReportChannelRefCatalog, summarizeHostedReportChannelRefs } from "./report-channel-refs.js";
 export { generateProbeKeyPair, probePublicKeyFingerprint, probeResultSigningPayload, signProbeResult, verifyProbeResultSignature } from "./probes.js";
 export { buildAwsDeploymentPlan, buildPrivateProbeCloudConfig, renderPrivateProbeEnv } from "./cloud-plan.js";
@@ -191,6 +191,13 @@ export type {
 } from "./edge-smoke.js";
 export type {
   BuildUptimeReportOptions,
+  HostedLogsChannelSecretPayload,
+  HostedMaileryChannelSecretPayload,
+  HostedReportChannelSecretLoader,
+  HostedReportChannelSecretPayload,
+  HostedReportDelivery,
+  HostedTelephonyChannelSecretPayload,
+  SendHostedUptimeReportOptions,
   SendUptimeReportOptions,
   UptimeEmailReportTarget,
   UptimeLogsReportTarget,

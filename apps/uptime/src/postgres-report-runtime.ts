@@ -33,10 +33,15 @@ export interface PostgresReportRuntimeReadiness {
   blockers: string[];
   capabilities: {
     reportRunWriter: boolean;
+    scheduleClaiming: boolean;
+    reportRunStateMachine: boolean;
     deliveryAttemptState: boolean;
     deliveryIdempotency: boolean;
     retryBackoffMetadata: boolean;
     artifactMetadataWriter: boolean;
+    artifactObjectWriter: boolean;
+    auditExport: boolean;
+    deliveryAlarms: boolean;
   };
 }
 
@@ -273,6 +278,9 @@ export class PostgresReportRuntime {
     const channel = normalizeChannel(input.channel);
     const channelRefId = normalizeRuntimeRefId(input.channelRefId, "channel ref id", 160);
     const provider = normalizeDeliveryProvider(input.provider);
+    if (provider !== expectedProviderForChannel(channel)) {
+      throw new Error(`provider must be ${expectedProviderForChannel(channel)} for ${channel}`);
+    }
     const attemptNumber = normalizePositiveInteger(input.attemptNumber ?? 1, "attempt number");
     const scheduledAt = normalizeIsoTimestamp(input.scheduledAt ?? this.clock().toISOString(), "delivery scheduledAt");
     const idempotencyKey = normalizeOpaqueText(
@@ -498,7 +506,7 @@ export function buildPostgresReportRuntimeReadiness(options: Pick<PostgresReport
   const workspaceId = normalizeOptionalWorkspaceId(options.workspaceId ?? process.env.HASNA_UPTIME_WORKSPACE_ID);
   const migrationBlockers = plan.blockers.filter((blocker) => !blocker.startsWith("async-runtime-adapter:"));
   const schemaVerified = options.schemaVerified === true;
-  const checks = [
+  const metadataChecks = [
     {
       name: "postgres-url-configured",
       ok: plan.database.validPostgresUrl,
@@ -520,15 +528,28 @@ export function buildPostgresReportRuntimeReadiness(options: Pick<PostgresReport
     { name: "report-delivery-retry-backoff", ok: true, detail: "next_retry_at and retry_after_seconds metadata are implemented" },
     { name: "report-artifact-metadata-writer", ok: true, detail: "implemented for redacted artifact metadata refs only" },
   ];
-  const blockers = [
+  const promotionChecks = [
+    { name: "report-schedule-claiming", ok: false, detail: "transactional report schedule/window claiming is not implemented" },
+    { name: "report-run-state-machine", ok: false, detail: "hosted report run state machine is not implemented beyond finished success/failed metadata" },
+    { name: "report-artifact-object-store", ok: false, detail: "S3/object artifact writing and signing are not implemented" },
+    { name: "report-audit-export", ok: false, detail: "delivery audit export to Open Logs is not implemented" },
+    { name: "report-delivery-alarms", ok: false, detail: "reporter lag, failed delivery, and retry-exhaustion alarms are not proven" },
+    { name: "reporter-worker-liveness", ok: false, detail: "live reporter worker leases, drain, and rollback evidence are not proven" },
+  ];
+  const checks = [...metadataChecks, ...promotionChecks];
+  const metadataBlockers = [
     ...migrationBlockers,
-    ...checks.filter((check) => !check.ok).map((check) => `${check.name}: ${check.detail}`),
+    ...metadataChecks.filter((check) => !check.ok).map((check) => `${check.name}: ${check.detail}`),
+  ];
+  const blockers = [
+    ...metadataBlockers,
+    ...promotionChecks.filter((check) => !check.ok).map((check) => `${check.name}: ${check.detail}`),
   ];
   return {
     kind: "open-uptime.postgres-report-runtime-readiness",
     version: POSTGRES_REPORT_RUNTIME_VERSION,
     status: blockers.length === 0 ? "ready" : "blocked",
-    canWriteReportMetadata: blockers.length === 0,
+    canWriteReportMetadata: metadataBlockers.length === 0,
     schemaName: plan.schemaName,
     workspaceId,
     database: {
@@ -539,10 +560,15 @@ export function buildPostgresReportRuntimeReadiness(options: Pick<PostgresReport
     blockers,
     capabilities: {
       reportRunWriter: true,
+      scheduleClaiming: false,
+      reportRunStateMachine: false,
       deliveryAttemptState: true,
       deliveryIdempotency: true,
       retryBackoffMetadata: true,
       artifactMetadataWriter: true,
+      artifactObjectWriter: false,
+      auditExport: false,
+      deliveryAlarms: false,
     },
   };
 }
@@ -779,6 +805,12 @@ function normalizeDeliveryProvider(value: string): "mailery" | "telephony" | "lo
   const provider = normalizeOpaqueText(value, "provider", 80);
   if (provider === "mailery" || provider === "telephony" || provider === "logs") return provider;
   throw new Error("provider must be mailery, telephony, or logs");
+}
+
+function expectedProviderForChannel(channel: ReportDeliveryChannel): "mailery" | "telephony" | "logs" {
+  if (channel === "email") return "mailery";
+  if (channel === "sms") return "telephony";
+  return "logs";
 }
 
 function normalizeIsoTimestamp(value: string, label: string): string {

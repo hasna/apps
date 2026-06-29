@@ -87,6 +87,45 @@ COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+## PostgreSQL client dependency family
+
+Open Uptime depends on `pg` for explicit Postgres cloud/runtime integration.
+The checked-in lockfile resolves the following runtime packages:
+
+| Package | Version | License | Source |
+| --- | --- | --- | --- |
+| pg | 8.22.0 | MIT | https://github.com/brianc/node-postgres |
+| pg-cloudflare | 1.4.0 | MIT | https://github.com/brianc/node-postgres |
+| pg-connection-string | 2.14.0 | MIT | https://github.com/brianc/node-postgres/tree/master/packages/pg-connection-string |
+| pg-pool | 3.14.0 | MIT | https://github.com/brianc/node-postgres/tree/master/packages/pg-pool |
+| pg-protocol | 1.15.0 | MIT | https://github.com/brianc/node-postgres |
+| pg-types | 2.2.0 | MIT | https://github.com/brianc/node-pg-types |
+| pgpass | 1.0.5 | MIT | https://github.com/hoegaarden/pgpass |
+| postgres-array | 2.0.0 | MIT | https://github.com/bendrucker/postgres-array |
+| postgres-bytea | 1.0.1 | MIT | https://github.com/bendrucker/postgres-bytea |
+| postgres-date | 1.0.7 | MIT | https://github.com/bendrucker/postgres-date |
+| postgres-interval | 1.2.0 | MIT | https://github.com/bendrucker/postgres-interval |
+| xtend | 4.0.2 | MIT | https://github.com/Raynos/xtend |
+| pg-int8 | 1.0.1 | ISC | https://github.com/charmander/pg-int8 |
+| split2 | 4.2.0 | ISC | https://github.com/mcollina/split2 |
+
+The MIT-licensed packages above are distributed under the MIT license text
+included in this notice file.
+
+ISC License
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above copyright
+notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+
 ## zod
 
 - Version: 4.4.3

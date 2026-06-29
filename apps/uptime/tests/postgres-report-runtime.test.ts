@@ -285,6 +285,20 @@ test("Postgres report runtime rejects local artifacts and secret-looking refs", 
     provider: "https://logs.example",
   })).rejects.toThrow("provider must be");
 
+  await expect(runtime.createDeliveryAttempt({
+    reportRunId: "rpr_runtime",
+    channel: "email",
+    channelRefId: "ops-email",
+    provider: "logs",
+  })).rejects.toThrow("provider must be mailery for email");
+
+  await expect(runtime.createDeliveryAttempt({
+    reportRunId: "rpr_runtime",
+    channel: "sms",
+    channelRefId: "ops-sms",
+    provider: "mailery",
+  })).rejects.toThrow("provider must be telephony for sms");
+
   await expect(runtime.recordArtifact({
     reportRunId: "rpr_runtime",
     artifactType: "json",
@@ -321,10 +335,30 @@ test("Postgres report runtime readiness can be marked ready only with schema evi
     workspaceId: "ws_runtime",
     schemaVerified: true,
   });
+  const checks = Object.fromEntries(readiness.checks.map((check) => [check.name, check.ok]));
 
-  expect(readiness.status).toBe("ready");
+  expect(readiness.status).toBe("blocked");
   expect(readiness.canWriteReportMetadata).toBe(true);
-  expect(readiness.blockers).toEqual([]);
+  expect(checks).toMatchObject({
+    "report-runtime-schema-verified": true,
+    "report-run-metadata-writer": true,
+    "report-schedule-claiming": false,
+    "report-run-state-machine": false,
+    "report-artifact-object-store": false,
+    "report-audit-export": false,
+    "report-delivery-alarms": false,
+    "reporter-worker-liveness": false,
+  });
+  expect(readiness.capabilities).toMatchObject({
+    reportRunWriter: true,
+    scheduleClaiming: false,
+    reportRunStateMachine: false,
+    artifactObjectWriter: false,
+    auditExport: false,
+    deliveryAlarms: false,
+  });
+  expect(readiness.blockers.join("\n")).toContain("report-schedule-claiming");
+  expect(readiness.blockers.join("\n")).toContain("reporter-worker-liveness");
 });
 
 test("Postgres report runtime honors custom workspace setting and rejects unsafe hosted construction", async () => {

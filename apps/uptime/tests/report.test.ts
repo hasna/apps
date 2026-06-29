@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { parseHostedReportChannelRefs, summarizeHostedReportChannelRefs } from "../src/report-channel-refs.js";
-import { buildUptimeReport, sendUptimeReport } from "../src/report.js";
+import { buildUptimeReport, sendHostedUptimeReport, sendUptimeReport } from "../src/report.js";
 import type { UptimeSummary } from "../src/types.js";
 
 function summary(): UptimeSummary {
@@ -395,4 +395,206 @@ test("sendUptimeReport reads Open Logs structured ingest event ids", async () =>
   expect(deliveries).toEqual([
     { channel: "logs", ok: true, status: 201, id: "evt_123" },
   ]);
+});
+
+test("sendHostedUptimeReport resolves workspace channel refs through server-owned secrets", async () => {
+  const secretRef = (name: string) => `arn:aws:secretsmanager:us-east-1:123456789012:secret:open-uptime/prod/reporting/${name}`;
+  const catalog = parseHostedReportChannelRefs(JSON.stringify({
+    version: "open-uptime.report-channel-refs.v1",
+    channels: [
+      { id: "ops-email", channel: "email", service: "mailery", secretRef: secretRef("email"), targetRef: "ops-team", workspaceId: "wks_hosted" },
+      { id: "ops-sms", channel: "sms", service: "telephony", secretRef: secretRef("sms"), targetRef: "ops-phone", workspaceId: "wks_hosted" },
+      { id: "ops-logs", channel: "logs", service: "logs", secretRef: secretRef("logs"), targetRef: "ops-log-stream", workspaceId: "wks_hosted" },
+    ],
+  }));
+  const secrets = new Map<string, Record<string, unknown>>([
+    [secretRef("email"), {
+      version: "open-uptime.report-channel-secret.v1",
+      service: "mailery",
+      targetRef: "ops-team",
+      apiUrl: "http://mailery.hosted",
+      sendKey: "esk_hosted_secret",
+      from: "ops@example.com",
+      to: ["team@example.com"],
+      providerId: "ses-prod",
+    }],
+    [secretRef("sms"), {
+      version: "open-uptime.report-channel-secret.v1",
+      service: "telephony",
+      targetRef: "ops-phone",
+      apiUrl: "http://telephony.hosted",
+      apiKey: "telephony_secret",
+      from: "+15550000000",
+      to: ["+15550000001"],
+    }],
+    [secretRef("logs"), {
+      version: "open-uptime.report-channel-secret.v1",
+      service: "logs",
+      targetRef: "ops-log-stream",
+      apiUrl: "http://logs.hosted",
+      apiKey: "logs_hosted_secret",
+      projectId: "open-uptime-prod",
+      environment: "prod",
+      serviceName: "open-uptime",
+    }],
+  ]);
+  const calls: Array<{ url: string; init: RequestInit; body: any }> = [];
+  const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
+    calls.push({
+      url: String(url),
+      init: init ?? {},
+      body: JSON.parse(String(init?.body ?? "{}")),
+    });
+    return new Response(JSON.stringify({ id: `ok_${calls.length}`, message_id: `msg_${calls.length}` }), { status: 202 });
+  };
+
+  const deliveries = await sendHostedUptimeReport(summary(), {
+    workspaceId: "wks_hosted",
+    catalog,
+    channelRefIds: ["ops-email", "ops-sms", "ops-logs"],
+    loadSecret: (ref) => secrets.get(ref) ?? "{}",
+    fetchImpl: fetchImpl as unknown as typeof fetch,
+  });
+
+  expect(deliveries.map((delivery) => delivery.ok)).toEqual([true, true, true]);
+  expect(deliveries.every((delivery) => delivery.redacted)).toBe(true);
+  expect(deliveries.map((delivery) => delivery.channelRefId)).toEqual(["ops-email", "ops-sms", "ops-logs"]);
+  expect(deliveries.map((delivery) => delivery.provider)).toEqual(["mailery", "telephony", "logs"]);
+  expect(deliveries.every((delivery) => delivery.requestHash?.match(/^[a-f0-9]{64}$/))).toBe(true);
+  expect(calls.map((call) => call.url)).toEqual([
+    "http://mailery.hosted/api/v1/send",
+    "http://telephony.hosted/api/sms/send",
+    "http://logs.hosted/api/logs/structured?format=json&source=structured&service=open-uptime&project_id=open-uptime-prod&environment=prod",
+  ]);
+  expect(calls[0].init.headers).toHaveProperty("authorization", "Bearer esk_hosted_secret");
+  expect(calls[1].init.headers).toHaveProperty("authorization", "Bearer telephony_secret");
+  expect(calls[2].init.headers).toHaveProperty("authorization", "Bearer logs_hosted_secret");
+  expect(calls[0].body.provider_id).toBe("ses-prod");
+  expect(calls[0].body.to).toEqual(["team@example.com"]);
+  expect(calls[1].body.to).toBe("+15550000001");
+  expect(calls[2].body.message).toContain("Open Uptime alert");
+  expect(calls[0].body.text).not.toContain("https://example.com/health");
+  expect(calls[0].body.text).toContain("[REDACTED_TARGET]");
+  expect(JSON.stringify(calls[2].body.report)).not.toContain("https://example.com/health");
+  expect(JSON.stringify(calls[2].body.report)).toContain("open-uptime.hosted-report-redaction.v1");
+  const serialized = JSON.stringify(deliveries);
+  expect(serialized).not.toContain("esk_hosted_secret");
+  expect(serialized).not.toContain("telephony_secret");
+  expect(serialized).not.toContain("logs_hosted_secret");
+  expect(serialized).not.toContain("team@example.com");
+  expect(serialized).not.toContain("+15550000001");
+});
+
+test("sendHostedUptimeReport fails closed for unscoped refs and mismatched secret payloads", async () => {
+  const secretRef = "arn:aws:secretsmanager:us-east-1:123456789012:secret:open-uptime/prod/reporting/email";
+  const unscoped = parseHostedReportChannelRefs(JSON.stringify({
+    version: "open-uptime.report-channel-refs.v1",
+    channels: [{ id: "ops-email", channel: "email", service: "mailery", secretRef }],
+  }));
+  await expect(sendHostedUptimeReport(summary(), {
+    workspaceId: "wks_hosted",
+    catalog: unscoped,
+    channelRefIds: ["ops-email"],
+    loadSecret: () => ({}),
+  })).rejects.toThrow("requires every enabled channel ref to be scoped");
+
+  const scoped = parseHostedReportChannelRefs(JSON.stringify({
+    version: "open-uptime.report-channel-refs.v1",
+    channels: [{ id: "ops-email", channel: "email", service: "mailery", secretRef, workspaceId: "wks_hosted" }],
+  }));
+  const deliveries = await sendHostedUptimeReport(summary(), {
+    workspaceId: "wks_hosted",
+    catalog: scoped,
+    channelRefIds: ["ops-email"],
+    loadSecret: () => JSON.stringify({
+      version: "open-uptime.report-channel-secret.v1",
+      service: "logs",
+      apiKey: "logs_secret",
+    }),
+    fetchImpl: (async () => {
+      throw new Error("network should not be called");
+    }) as unknown as typeof fetch,
+  });
+
+  expect(deliveries).toEqual([{
+    channel: "email",
+    ok: false,
+    error: "hosted report channel secret payload service must match the channel ref",
+    channelRefId: "ops-email",
+    provider: "mailery",
+    targetRef: null,
+    targetRefHash: null,
+    requestHash: null,
+    redacted: true,
+  }]);
+  expect(JSON.stringify(deliveries)).not.toContain("logs_secret");
+});
+
+test("sendHostedUptimeReport sends only selected refs and redacts provider echoes", async () => {
+  const emailRef = "arn:aws:secretsmanager:us-east-1:123456789012:secret:open-uptime/prod/reporting/email";
+  const logsRef = "arn:aws:ssm:us-east-1:123456789012:parameter/open-uptime/prod/reporting/logs";
+  const catalog = parseHostedReportChannelRefs(JSON.stringify({
+    version: "open-uptime.report-channel-refs.v1",
+    channels: [
+      { id: "ops-email", channel: "email", service: "mailery", secretRef: emailRef, targetRef: "ops-team", workspaceId: "wks_hosted" },
+      { id: "ops-logs", channel: "logs", service: "logs", secretRef: logsRef, targetRef: "ops-log-stream", workspaceId: "wks_hosted" },
+    ],
+  }));
+  const calls: string[] = [];
+  const deliveries = await sendHostedUptimeReport(summary(), {
+    workspaceId: "wks_hosted",
+    catalog,
+    channelRefIds: ["ops-email"],
+    loadSecret: () => ({
+      version: "open-uptime.report-channel-secret.v1",
+      service: "mailery",
+      targetRef: "ops-team",
+      apiUrl: "http://mailery.hosted",
+      sendKey: "esk_hosted_secret",
+      from: "ops@example.com",
+      to: ["team@example.com"],
+    }),
+    fetchImpl: (async (url: string | URL | Request) => {
+      calls.push(String(url));
+      return new Response(JSON.stringify({
+        id: "team@example.com +15550000001 ops-team esk_hosted_secret",
+      }), { status: 202 });
+    }) as unknown as typeof fetch,
+  });
+
+  expect(calls).toEqual(["http://mailery.hosted/api/v1/send"]);
+  expect(deliveries).toHaveLength(1);
+  expect(deliveries[0].id).toBe("[REDACTED] [REDACTED_PHONE] [REDACTED] [REDACTED]");
+  expect(JSON.stringify(deliveries)).not.toContain("team@example.com");
+  expect(JSON.stringify(deliveries)).not.toContain("+15550000001");
+  expect(JSON.stringify(deliveries)).not.toContain("ops-team");
+  await expect(sendHostedUptimeReport(summary(), {
+    workspaceId: "wks_hosted",
+    catalog,
+    channelRefIds: [],
+    loadSecret: () => ({}),
+  })).rejects.toThrow("requires explicit selected channel ref ids");
+});
+
+test("sendHostedUptimeReport redacts secret loader failures", async () => {
+  const secretRef = "arn:aws:secretsmanager:us-east-1:123456789012:secret:open-uptime/prod/reporting/email";
+  const catalog = parseHostedReportChannelRefs(JSON.stringify({
+    version: "open-uptime.report-channel-refs.v1",
+    channels: [{ id: "ops-email", channel: "email", service: "mailery", secretRef, targetRef: "ops-team", workspaceId: "wks_hosted" }],
+  }));
+
+  const deliveries = await sendHostedUptimeReport(summary(), {
+    workspaceId: "wks_hosted",
+    catalog,
+    channelRefIds: ["ops-email"],
+    loadSecret: () => {
+      throw new Error(`failed ${secretRef} with Bearer abc123 and ops@example.com`);
+    },
+  });
+
+  expect(deliveries[0].ok).toBe(false);
+  expect(deliveries[0].error).toBe("failed [REDACTED] with Bearer [REDACTED] and [REDACTED_EMAIL]");
+  expect(JSON.stringify(deliveries)).not.toContain(secretRef);
+  expect(JSON.stringify(deliveries)).not.toContain("abc123");
+  expect(JSON.stringify(deliveries)).not.toContain("ops@example.com");
 });

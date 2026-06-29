@@ -356,6 +356,28 @@ schedule/API/MCP requests must
 later reference approved channel ids only; clients must never submit `secretRef`
 values.
 
+Hosted delivery code now has a separate server-side resolver for the channel-ref
+catalog. The resolver requires explicit selected channel ids from an already
+authorized schedule/run, accepts a runtime secret-loader callback, loads the
+server-owned secret payload for each selected workspace-scoped ref, verifies the
+secret payload version/service/target binding, and prepares Mailery, Telephony,
+and Open Logs API calls using the existing Hasna endpoints:
+
+- Mailery: `POST /api/v1/send` with `Authorization: Bearer <sendKey>`;
+- Telephony: `POST /api/sms/send`, optionally with a server-owned bearer token;
+- Open Logs: `POST /api/logs/structured` with server-side bearer auth.
+
+The delivery result returned to report/runtime code includes channel id,
+provider, hashed target ref, status, provider id, and a stable request hash. It does
+not include recipient addresses, phone numbers, API URLs with credentials,
+tokens, send keys, raw report bytes, provider-echoed targets, or secret payload
+JSON. Hosted delivery uses a redacted report payload by default: monitor target
+URLs, hosts, ports, and target-like incident text are masked before email, SMS,
+Open Logs, request-hash, or delivery evidence creation. This is still not
+permission to scale the reporter: report schedule/window claiming, S3 artifact
+object writes, delivery audit export, and reporter alarms remain required before
+live promotion.
+
 ## Dashboard Views
 
 Hosted UI is a work-focused operator app, not a marketing surface.

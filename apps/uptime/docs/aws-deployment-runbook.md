@@ -538,6 +538,21 @@ scale the reporter while the full Postgres store, worker leases, schedule/window
 claiming, S3 object artifact storage, audit export, and delivery alarms are
 still blocked.
 
+Hosted report delivery must use the server-side channel-ref resolver, not the
+local direct `--mailery-url`, `--telephony-url`, recipient, or token flags. The
+report schedule/run must select explicit approved channel ids; the resolver must
+not fan out to every enabled ref in the catalog. The runtime secret loader
+resolves each selected `secretRef` to a
+`open-uptime.report-channel-secret.v1` payload, verifies the service and target
+binding, and sends only through the approved Mailery `/api/v1/send`, Telephony
+`/api/sms/send`, and Open Logs `/api/logs/structured` APIs. Delivery evidence
+may record channel ids, provider ids, response ids, status codes, target-ref
+hashes, and request hashes. It must not record raw recipients, phone numbers, tokens,
+send keys, full secret payloads, provider-echoed targets, raw target refs, or Terraform
+state/saved-plan bodies. Hosted delivery redacts monitor target URLs, hosts,
+ports, and target-like incident text before creating email, SMS, Open Logs, or
+request-hash payloads.
+
 Do not set `desired_counts.reporter = 1` until a reviewed runbook section exists
 for report retry, duplicate suppression, provider failure handling, and delivery
 audit export.
