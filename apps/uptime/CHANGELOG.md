@@ -6,6 +6,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.55] - 2026-06-29
+
+### Changed
+
+- Aligned the packaged Terraform `runtime_package_version` default and public
+  deployment metadata example with the published package version so package
+  consumers do not build an older runtime by default.
+- Added a public operational status vocabulary for distinguishing package
+  releases, private image refreshes, zero-count deploys, live scale-out, and
+  cloud-primary promotion.
+- Clarified rollback instructions for zero-count image refreshes so restoring a
+  previous web task definition keeps desired count `0` unless live scale-up
+  gates already passed.
+
 ## [0.1.54] - 2026-06-29
 
 ### Added

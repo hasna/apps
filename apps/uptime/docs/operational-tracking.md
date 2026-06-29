@@ -19,6 +19,33 @@ Private deployment metadata may record exact task ids, reviewer ids, AWS account
 ids, backend state keys, and machine-local paths. Keep that metadata outside the
 package and outside public docs.
 
+## Status Vocabulary
+
+Use these terms in public docs, project summaries, and sanitized deployment
+evidence:
+
+- **Public package released** means an npm package, git tag, and GitHub release
+  exist for the version. It does not mean cloud runtime is live.
+- **Private image refresh** means an approved private infra root built and
+  pinned an immutable image for the package version. It is private evidence and
+  must not expose account ids, image digests, hostnames, secret refs, or URLs in
+  public docs.
+- **Zero-count deployed** means Terraform has applied metadata, task
+  definitions, or image references while every ECS desired count remains `0`.
+  It is not user-visible service availability.
+- **Live scale-out ready** means the protected web/API service may scale above
+  `0` only after auth, edge/origin, alarms, rollback, human alert, backup, and
+  evidence-retention gates pass.
+- **Cloud-primary** means cloud-backed state is authoritative for the listed
+  workflow. Local SQLite, project databases, notes, todos, conversations, and
+  probe files are still caches or development inputs until each service passes
+  its own cloud-primary migration and lease checks.
+
+For the 2026-06-29 hosted deployment track, public package releases through
+`0.1.55` remain release and zero-count deployment evidence. Hosted reporter,
+protected web/API scale-out, and cloud-primary promotion remain blocked until
+the hard hosted gate below is satisfied.
+
 ## Cloud-Primary Status
 
 Local CLI records and local project databases are not cloud authority. Hosted

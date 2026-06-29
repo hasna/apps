@@ -708,8 +708,8 @@ aws ecs update-service \
   --desired-count 0
 ```
 
-If a later task definition is bad, restore the previous task definition and keep
-workers disabled:
+If a later task definition is bad during a zero-count image refresh, restore the
+previous task definition and keep web plus workers disabled:
 
 ```bash
 : "${PREVIOUS_TASK_DEFINITION_ARN:?set PREVIOUS_TASK_DEFINITION_ARN from the pre-update evidence}"
@@ -719,8 +719,11 @@ aws ecs update-service \
   --cluster "$ECS_CLUSTER" \
   --service "$WEB_SERVICE" \
   --task-definition "$PREVIOUS_TASK_DEFINITION_ARN" \
-  --desired-count 1
+  --desired-count 0
 ```
+
+Only use a nonzero desired count after the live web scale-up gates are met and
+the pre-update evidence shows the service was already live.
 
 Disable scheduler/reporter/probe work before data rollback. EFS backup restore
 requires separate operator approval, a selected recovery point, a replacement
