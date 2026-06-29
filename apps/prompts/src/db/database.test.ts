@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { getDbPath } from "./database.js"
+import { getDbPath, resolveStorageMode } from "./database.js"
 
 describe("database path resolution", () => {
   let originalHome: string | undefined
@@ -10,6 +10,8 @@ describe("database path resolution", () => {
   let originalDbPath: string | undefined
   let originalHasnaDbPath: string | undefined
   let originalScope: string | undefined
+  let originalStorageMode: string | undefined
+  let originalLegacyStorageMode: string | undefined
   let originalCwd: string
   let tempRoot: string
 
@@ -19,12 +21,16 @@ describe("database path resolution", () => {
     originalDbPath = process.env["PROMPTS_DB_PATH"]
     originalHasnaDbPath = process.env["HASNA_PROMPTS_DB_PATH"]
     originalScope = process.env["PROMPTS_DB_SCOPE"]
+    originalStorageMode = process.env["HASNA_PROMPTS_STORAGE_MODE"]
+    originalLegacyStorageMode = process.env["PROMPTS_STORAGE_MODE"]
     originalCwd = process.cwd()
     tempRoot = mkdtempSync(join(tmpdir(), "prompts-db-"))
     delete process.env["PROMPTS_DB_PATH"]
     delete process.env["HASNA_PROMPTS_DB_PATH"]
     delete process.env["USERPROFILE"]
     delete process.env["PROMPTS_DB_SCOPE"]
+    delete process.env["HASNA_PROMPTS_STORAGE_MODE"]
+    delete process.env["PROMPTS_STORAGE_MODE"]
   })
 
   afterEach(() => {
@@ -34,6 +40,8 @@ describe("database path resolution", () => {
     restoreEnv("PROMPTS_DB_PATH", originalDbPath)
     restoreEnv("HASNA_PROMPTS_DB_PATH", originalHasnaDbPath)
     restoreEnv("PROMPTS_DB_SCOPE", originalScope)
+    restoreEnv("HASNA_PROMPTS_STORAGE_MODE", originalStorageMode)
+    restoreEnv("PROMPTS_STORAGE_MODE", originalLegacyStorageMode)
     rmSync(tempRoot, { recursive: true, force: true })
   })
 
@@ -70,6 +78,12 @@ describe("database path resolution", () => {
 
     expect(getDbPath()).toBe(projectDb)
     expect(existsSync(join(home, ".hasna", "prompts", "prompts.db"))).toBe(false)
+  })
+
+  test("rejects unsupported storage modes", () => {
+    process.env["HASNA_PROMPTS_STORAGE_MODE"] = "shared"
+
+    expect(() => resolveStorageMode()).toThrow("Unsupported prompts storage mode")
   })
 })
 

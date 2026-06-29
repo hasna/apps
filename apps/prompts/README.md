@@ -38,19 +38,16 @@ Endpoints: `GET /health` → `{"status":"ok","name":"prompts"}`, MCP at `/mcp`. 
 prompts-serve
 ```
 
-## Cloud Sync
-
-This package supports cloud sync via `@hasna/cloud`:
-
-```bash
-cloud setup
-cloud sync push --service prompts
-cloud sync pull --service prompts
-```
-
 ## Data Directory
 
-Data is stored in `~/.hasna/prompts/`.
+Data is stored locally in `~/.hasna/prompts/` by default.
+
+- Set `HASNA_PROMPTS_DB_PATH` to point at a specific SQLite database file.
+- Set `PROMPTS_DB_SCOPE=project` to use the nearest project `.prompts/prompts.db`.
+- Set `HASNA_PROMPTS_STORAGE_MODE=local` to make the storage mode explicit.
+
+Remote or hosted deployments should provide a prompts-owned storage adapter or
+service boundary. This package owns its database adapter and MCP tool surface.
 
 ## License
 

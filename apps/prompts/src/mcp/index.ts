@@ -2,7 +2,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { isStdioMode, startMcpHttpServer, resolveMcpHttpPort } from "./http.js"
-import { registerCloudTools } from "@hasna/cloud"
 import { z } from "zod"
 import { getPrompt, listPrompts, listPromptsSlim, updatePrompt, deletePrompt, usePrompt, upsertPrompt, getPromptStats, pinPrompt, setNextPrompt, setExpiry, getTrending, promptToSaveResult } from "../db/prompts.js"
 import { listVersions, restoreVersion } from "../db/versions.js"
@@ -1321,7 +1320,6 @@ server.tool(
   }
 );
 
-registerCloudTools(server, "prompts")
 return server;
 }
 

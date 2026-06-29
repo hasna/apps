@@ -1,8 +1,19 @@
-import { SqliteAdapter as Database } from "@hasna/cloud"
+import { Database } from "bun:sqlite"
 import { join } from "path"
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs"
 
 let _db: Database | null = null
+
+export type PromptsStorageMode = "local"
+
+export function resolveStorageMode(): PromptsStorageMode {
+  const raw = process.env["HASNA_PROMPTS_STORAGE_MODE"] ?? process.env["PROMPTS_STORAGE_MODE"] ?? "local"
+  const mode = raw.toLowerCase()
+  if (mode !== "local") {
+    throw new Error(`Unsupported prompts storage mode "${raw}". @hasna/prompts currently supports local SQLite storage only.`)
+  }
+  return "local"
+}
 
 export function getDbPath(): string {
   // Support env var overrides
@@ -57,6 +68,7 @@ function mergeDirectoryContents(sourceDir: string, targetDir: string): void {
 export function getDatabase(): Database {
   if (_db) return _db
 
+  resolveStorageMode()
   const dbPath = getDbPath()
   if (dbPath !== ":memory:") {
     const dir = dbPath.substring(0, dbPath.lastIndexOf("/"))
