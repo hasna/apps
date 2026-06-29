@@ -32,5 +32,5 @@ fi
 
 for chunk in "${chunks[@]}"; do
   # shellcheck disable=SC2086
-  bun test $chunk
+  bun test --max-concurrency=1 $chunk
 done
