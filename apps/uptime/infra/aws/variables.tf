@@ -243,7 +243,7 @@ variable "container_image" {
 variable "runtime_package_version" {
   description = "Published @hasna/uptime package version that CodeBuild should build into the ECR image."
   type        = string
-  default     = "0.1.55"
+  default     = "0.1.56"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$", var.runtime_package_version))
@@ -408,6 +408,41 @@ variable "alarm_actions" {
   description = "Optional SNS topic ARNs or other CloudWatch alarm action ARNs."
   type        = list(string)
   default     = []
+}
+
+variable "enable_worker_runtime_alarms" {
+  description = "Create default-off CloudWatch alarm contracts for scheduler, public-probe, and reporter worker runtime metrics. Keep false until workers emit the documented metrics and alert delivery is approved."
+  type        = bool
+  default     = false
+
+  validation {
+    condition = (
+      !var.enable_worker_runtime_alarms
+      || (
+        var.worker_runtime_metric_producers_ready
+        && var.live_ops_human_alert_delivery_ready
+        && length(var.alarm_actions) > 0
+      )
+    )
+    error_message = "enable_worker_runtime_alarms requires worker_runtime_metric_producers_ready=true, live_ops_human_alert_delivery_ready=true, and at least one alarm action."
+  }
+}
+
+variable "worker_runtime_metric_producers_ready" {
+  description = "Set true only after scheduler, public-probe, and reporter workers emit the documented custom CloudWatch metrics with Service/Stage/Role dimensions."
+  type        = bool
+  default     = false
+}
+
+variable "worker_runtime_alarm_namespace" {
+  description = "CloudWatch custom metric namespace for Open Uptime worker runtime alarms."
+  type        = string
+  default     = "OpenUptime/Worker"
+
+  validation {
+    condition     = length(trimspace(var.worker_runtime_alarm_namespace)) > 0 && length(var.worker_runtime_alarm_namespace) <= 255
+    error_message = "worker_runtime_alarm_namespace must be a non-empty CloudWatch namespace of at most 255 characters."
+  }
 }
 
 variable "backup_retention_days" {

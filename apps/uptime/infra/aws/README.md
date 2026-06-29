@@ -134,6 +134,26 @@ cloud prerequisites. Their main container commands call fail-closed
 public-probe, reporter, and migration tasks no longer use `cloud plan` as a
 placeholder.
 
+Worker runtime alarms are defined as a default-off contract. Keep
+`enable_worker_runtime_alarms = false` until every worker emits the matching
+custom metrics, `worker_runtime_metric_producers_ready = true`,
+`live_ops_human_alert_delivery_ready = true`, and `alarm_actions` contains an
+approved human/on-call destination. Alarm dimensions intentionally avoid raw
+workspace ids and use only `Service`, `Stage`, and `Role`.
+
+| Alarm key | Metric | Role | Statistic | Period | Missing data |
+| --- | --- | --- | --- | --- | --- |
+| `scheduler_backlog` | `SchedulerBacklog` | scheduler | Maximum | 300s | notBreaching |
+| `scheduler_stale_leases` | `SchedulerStaleLeases` | scheduler | Maximum | 300s | notBreaching |
+| `scheduler_heartbeat_age` | `WorkerHeartbeatAgeSeconds` | scheduler | Maximum | 60s | breaching |
+| `public_probe_backlog` | `ProbeJobBacklog` | public-probe | Maximum | 300s | notBreaching |
+| `public_probe_submission_failures` | `ProbeSubmissionFailures` | public-probe | Sum | 300s | notBreaching |
+| `public_probe_heartbeat_age` | `WorkerHeartbeatAgeSeconds` | public-probe | Maximum | 60s | breaching |
+| `reporter_lag` | `ReporterLagSeconds` | reporter | Maximum | 300s | notBreaching |
+| `reporter_failed_deliveries` | `ReportDeliveryFailures` | reporter | Sum | 300s | notBreaching |
+| `reporter_retry_exhausted` | `ReportDeliveryRetryExhausted` | reporter | Sum | 300s | notBreaching |
+| `reporter_heartbeat_age` | `WorkerHeartbeatAgeSeconds` | reporter | Maximum | 60s | breaching |
+
 Interface endpoint private DNS is VPC-wide. In shared VPCs, either keep endpoint
 creation in the approved networking root, or pass
 `additional_vpc_endpoint_source_security_group_ids` for every workload that must

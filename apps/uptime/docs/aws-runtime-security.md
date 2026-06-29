@@ -383,6 +383,13 @@ Minimum CloudWatch/monitoring resources:
 Alert destinations must use service-owned channel refs, not raw webhook URLs or
 request-provided credentials.
 
+The Terraform module includes a default-off worker runtime alarm contract behind
+`enable_worker_runtime_alarms`. Do not enable it as readiness evidence until the
+workers emit the matching custom metrics and approved human/on-call delivery is
+proven. The contract covers scheduler backlog/stale leases/heartbeat age,
+public-probe backlog/submission failures/heartbeat age, and reporter lag/failed
+deliveries/retry-exhausted deliveries/heartbeat age.
+
 ## Backup, Restore, And Rollback
 
 Before production cutover:

@@ -41,10 +41,12 @@ evidence:
   probe files are still caches or development inputs until each service passes
   its own cloud-primary migration and lease checks.
 
-For the 2026-06-29 hosted deployment track, public package releases through
-`0.1.55` remain release and zero-count deployment evidence. Hosted reporter,
-protected web/API scale-out, and cloud-primary promotion remain blocked until
-the hard hosted gate below is satisfied.
+For the 2026-06-29 hosted deployment track, published public package versions
+remain release and zero-count deployment evidence only after the matching
+private deployment metadata records that result. Version `0.1.56` is the next
+worker-runtime alarm contract target until publish and zero-count evidence are
+recorded. Hosted reporter, protected web/API scale-out, and cloud-primary
+promotion remain blocked until the hard hosted gate below is satisfied.
 
 ## Cloud-Primary Status
 

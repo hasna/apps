@@ -121,6 +121,11 @@ and migration plans exist. Public-probe preflight and scheduler/reporter
 preflight can name the bounded Postgres review primitives as
 implemented while still returning `canStart=false`; the ECS worker commands
 remain the blocked generic `cloud workers run --role <role>` paths.
+The Terraform module includes a default-off worker runtime alarm contract for
+scheduler, public-probe, and reporter roles. Keep
+`enable_worker_runtime_alarms=false` until those workers emit the matching
+custom metrics and approved human/on-call delivery is proven; the contract is
+not a live-readiness claim by itself.
 `uptime cloud public-checks run-due` and `worker` are only bounded EFS SQLite
 bridge paths around hosted HTTP/TCP smoke checks, and they require
 `--allow-public-checks-bridge` or `HASNA_UPTIME_ALLOW_PUBLIC_CHECKS_BRIDGE=1`.

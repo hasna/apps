@@ -10,7 +10,7 @@ test("buildAwsDeploymentPlan generates a dry-run AWS plan with generic package d
   const serialized = JSON.stringify(plan);
 
   expect(plan.kind).toBe("open-uptime.aws-deployment-plan");
-  expect(plan.version).toBe(4);
+  expect(plan.version).toBe(5);
   expect(plan.accountName).toBe("aws-profile");
   expect(plan.region).toBe("us-east-1");
   expect(plan.resources.vpcId).toBe("vpc-xxxxxxxx");
@@ -82,12 +82,30 @@ test("buildAwsDeploymentPlan generates a dry-run AWS plan with generic package d
   expect(plan.resources.services.find((service) => service.role === "public-probe")?.secrets.HASNA_UPTIME_DATABASE_URL)
     .toBeUndefined();
   expect(plan.resources.alarms).toEqual(["open-uptime-prod-web-5xx", "open-uptime-prod-web-unhealthy"]);
+  expect(plan.resources.workerRuntimeAlarms).toMatchObject({
+    enabledByDefault: false,
+    namespace: "OpenUptime/Worker",
+    metricProducersReady: false,
+  });
+  expect(plan.resources.workerRuntimeAlarms.alarms).toEqual([
+    "open-uptime-prod-scheduler-backlog",
+    "open-uptime-prod-scheduler-stale-leases",
+    "open-uptime-prod-scheduler-heartbeat-age",
+    "open-uptime-prod-public-probe-backlog",
+    "open-uptime-prod-public-probe-submission-failures",
+    "open-uptime-prod-public-probe-heartbeat-age",
+    "open-uptime-prod-reporter-lag",
+    "open-uptime-prod-reporter-failed-deliveries",
+    "open-uptime-prod-reporter-retry-exhausted",
+    "open-uptime-prod-reporter-heartbeat-age",
+  ]);
   expect(plan.safety).toMatchObject({
     liveAwsMutation: false,
     plaintextSecrets: false,
     hostedLocalSqliteAllowed: false,
   });
   expect(plan.requiredEvidence).toContain("EFS encryption, access point, mount-target, AWS Backup, and restore-drill evidence.");
+  expect(plan.requiredEvidence).toContain("Worker runtime alarm metric producers, alarm-state readback, and approved human/on-call delivery smoke before enabling scheduler/public-probe/reporter alarms.");
   expect(plan.requiredEvidence).toContain("CloudFront-default-domain origin-header config, origin transport decision, direct-origin denial evidence, auth-denial smokes, and web alarm checks.");
   expect(plan.blockers.join("\n")).toContain("origin verification header binding");
   expect(plan.blockers.join("\n")).toContain("origin transport is still http-only");
@@ -134,7 +152,7 @@ test("buildAwsDeploymentPlan can describe custom ALB TLS mode without default Cl
     runtimePackageVersion: "0.1.8",
   });
 
-  expect(plan.version).toBe(4);
+  expect(plan.version).toBe(5);
   expect(plan.resources.protectedAccessMode).toBe("alb_https_cert");
   expect(plan.resources.edgeDistribution).toBeUndefined();
   expect(plan.resources.cloudfrontOrigin).toBeUndefined();

@@ -30,7 +30,7 @@ export interface AwsDeploymentPlanOptions {
 
 export interface AwsDeploymentPlan {
   kind: "open-uptime.aws-deployment-plan";
-  version: 4;
+  version: 5;
   generatedAt: string;
   status: "blocked";
   canApply: false;
@@ -74,6 +74,12 @@ export interface AwsDeploymentPlan {
     secrets: Record<string, string>;
     logGroups: string[];
     alarms: string[];
+    workerRuntimeAlarms: {
+      enabledByDefault: false;
+      namespace: string;
+      metricProducersReady: false;
+      alarms: string[];
+    };
   };
   image: {
     repository: string;
@@ -159,6 +165,20 @@ const DEFAULT_VPC_ID = "vpc-xxxxxxxx";
 const DEFAULT_HOSTED_SQLITE_DB = "/data/uptime/uptime.db";
 const DEFAULT_PROTECTED_ACCESS_MODE = "cloudfront_default_domain" as const;
 const DEFAULT_CLOUDFRONT_ORIGIN_PROTOCOL_POLICY = "http-only" as const;
+const DEFAULT_WORKER_RUNTIME_ALARM_NAMESPACE = "OpenUptime/Worker";
+
+const WORKER_RUNTIME_ALARM_KEYS = [
+  "scheduler-backlog",
+  "scheduler-stale-leases",
+  "scheduler-heartbeat-age",
+  "public-probe-backlog",
+  "public-probe-submission-failures",
+  "public-probe-heartbeat-age",
+  "reporter-lag",
+  "reporter-failed-deliveries",
+  "reporter-retry-exhausted",
+  "reporter-heartbeat-age",
+] as const;
 
 export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): AwsDeploymentPlan {
   const region = clean(options.region, DEFAULT_REGION);
@@ -219,7 +239,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
 
   return {
     kind: "open-uptime.aws-deployment-plan",
-    version: 4,
+    version: 5,
     generatedAt: new Date().toISOString(),
     status: "blocked",
     canApply: false,
@@ -284,6 +304,12 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
         `${prefix}-${stage}-web-5xx`,
         `${prefix}-${stage}-web-unhealthy`,
       ],
+      workerRuntimeAlarms: {
+        enabledByDefault: false,
+        namespace: DEFAULT_WORKER_RUNTIME_ALARM_NAMESPACE,
+        metricProducersReady: false,
+        alarms: WORKER_RUNTIME_ALARM_KEYS.map((key) => `${prefix}-${stage}-${key}`),
+      },
     },
     image: {
       repository: ecrRepository,
@@ -370,6 +396,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
       "Single-writer ECS evidence: one web task maximum and no scheduler/public-probe/reporter EFS mounts.",
       "EFS encryption, access point, mount-target, AWS Backup, and restore-drill evidence.",
       "S3 bucket KMS, versioning, lifecycle, and public-access-block evidence.",
+      "Worker runtime alarm metric producers, alarm-state readback, and approved human/on-call delivery smoke before enabling scheduler/public-probe/reporter alarms.",
       "Private-probe registration, key-file mode, heartbeat, and revocation evidence.",
     ],
     safety: {

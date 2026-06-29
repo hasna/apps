@@ -151,6 +151,128 @@ locals {
       startPeriod = 30
     }
   }
+  worker_runtime_alarms = {
+    scheduler_backlog = {
+      role               = "scheduler"
+      name               = "backlog"
+      description        = "Open Uptime scheduler due-monitor backlog"
+      metric_name        = "SchedulerBacklog"
+      statistic          = "Maximum"
+      period             = 300
+      evaluation_periods = 3
+      threshold          = 1
+      comparison         = "GreaterThanOrEqualToThreshold"
+      treat_missing      = "notBreaching"
+    }
+    scheduler_stale_leases = {
+      role               = "scheduler"
+      name               = "stale-leases"
+      description        = "Open Uptime scheduler stale or expired job leases"
+      metric_name        = "SchedulerStaleLeases"
+      statistic          = "Maximum"
+      period             = 300
+      evaluation_periods = 2
+      threshold          = 1
+      comparison         = "GreaterThanOrEqualToThreshold"
+      treat_missing      = "notBreaching"
+    }
+    scheduler_heartbeat_age = {
+      role               = "scheduler"
+      name               = "heartbeat-age"
+      description        = "Open Uptime scheduler worker heartbeat age"
+      metric_name        = "WorkerHeartbeatAgeSeconds"
+      statistic          = "Maximum"
+      period             = 60
+      evaluation_periods = 5
+      threshold          = 300
+      comparison         = "GreaterThanOrEqualToThreshold"
+      treat_missing      = "breaching"
+    }
+    public_probe_backlog = {
+      role               = "public-probe"
+      name               = "backlog"
+      description        = "Open Uptime public probe check-job backlog"
+      metric_name        = "ProbeJobBacklog"
+      statistic          = "Maximum"
+      period             = 300
+      evaluation_periods = 3
+      threshold          = 1
+      comparison         = "GreaterThanOrEqualToThreshold"
+      treat_missing      = "notBreaching"
+    }
+    public_probe_submission_failures = {
+      role               = "public-probe"
+      name               = "submission-failures"
+      description        = "Open Uptime public probe submission failures"
+      metric_name        = "ProbeSubmissionFailures"
+      statistic          = "Sum"
+      period             = 300
+      evaluation_periods = 2
+      threshold          = 1
+      comparison         = "GreaterThanOrEqualToThreshold"
+      treat_missing      = "notBreaching"
+    }
+    public_probe_heartbeat_age = {
+      role               = "public-probe"
+      name               = "heartbeat-age"
+      description        = "Open Uptime public probe worker heartbeat age"
+      metric_name        = "WorkerHeartbeatAgeSeconds"
+      statistic          = "Maximum"
+      period             = 60
+      evaluation_periods = 5
+      threshold          = 300
+      comparison         = "GreaterThanOrEqualToThreshold"
+      treat_missing      = "breaching"
+    }
+    reporter_lag = {
+      role               = "reporter"
+      name               = "lag"
+      description        = "Open Uptime scheduled report lag"
+      metric_name        = "ReporterLagSeconds"
+      statistic          = "Maximum"
+      period             = 300
+      evaluation_periods = 3
+      threshold          = 900
+      comparison         = "GreaterThanOrEqualToThreshold"
+      treat_missing      = "notBreaching"
+    }
+    reporter_failed_deliveries = {
+      role               = "reporter"
+      name               = "failed-deliveries"
+      description        = "Open Uptime failed report delivery attempts"
+      metric_name        = "ReportDeliveryFailures"
+      statistic          = "Sum"
+      period             = 300
+      evaluation_periods = 2
+      threshold          = 1
+      comparison         = "GreaterThanOrEqualToThreshold"
+      treat_missing      = "notBreaching"
+    }
+    reporter_retry_exhausted = {
+      role               = "reporter"
+      name               = "retry-exhausted"
+      description        = "Open Uptime report deliveries that exhausted retries"
+      metric_name        = "ReportDeliveryRetryExhausted"
+      statistic          = "Sum"
+      period             = 300
+      evaluation_periods = 1
+      threshold          = 1
+      comparison         = "GreaterThanOrEqualToThreshold"
+      treat_missing      = "notBreaching"
+    }
+    reporter_heartbeat_age = {
+      role               = "reporter"
+      name               = "heartbeat-age"
+      description        = "Open Uptime reporter worker heartbeat age"
+      metric_name        = "WorkerHeartbeatAgeSeconds"
+      statistic          = "Maximum"
+      period             = 60
+      evaluation_periods = 5
+      threshold          = 300
+      comparison         = "GreaterThanOrEqualToThreshold"
+      treat_missing      = "breaching"
+    }
+  }
 }
 
 data "aws_vpc" "target" {
@@ -1521,6 +1643,30 @@ resource "aws_cloudwatch_metric_alarm" "web_unhealthy" {
   dimensions = {
     LoadBalancer = aws_lb.open_uptime.arn_suffix
     TargetGroup  = aws_lb_target_group.web.arn_suffix
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "worker_runtime" {
+  for_each = var.enable_worker_runtime_alarms ? local.worker_runtime_alarms : {}
+
+  alarm_name          = "${local.prefix}-${each.value.role}-${each.value.name}"
+  alarm_description   = each.value.description
+  namespace           = var.worker_runtime_alarm_namespace
+  metric_name         = each.value.metric_name
+  statistic           = each.value.statistic
+  period              = each.value.period
+  evaluation_periods  = each.value.evaluation_periods
+  threshold           = each.value.threshold
+  comparison_operator = each.value.comparison
+  treat_missing_data  = each.value.treat_missing
+  alarm_actions       = var.alarm_actions
+  ok_actions          = var.alarm_actions
+  tags                = merge(local.tags, { Component = each.value.role, AlarmType = each.value.name })
+
+  dimensions = {
+    Service = local.prefix
+    Stage   = var.stage
+    Role    = each.value.role
   }
 }
 

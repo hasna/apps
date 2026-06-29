@@ -90,6 +90,22 @@ output "alarm_names" {
   }
 }
 
+output "worker_runtime_alarm_names" {
+  value = { for key, alarm in aws_cloudwatch_metric_alarm.worker_runtime : key => alarm.alarm_name }
+}
+
+output "worker_runtime_alarm_contract" {
+  value = {
+    enabled                  = var.enable_worker_runtime_alarms
+    namespace                = var.worker_runtime_alarm_namespace
+    metric_producers_ready   = var.worker_runtime_metric_producers_ready
+    human_alerts_ready       = var.live_ops_human_alert_delivery_ready
+    alarm_actions_configured = length(var.alarm_actions) > 0
+    dimensions               = ["Service", "Stage", "Role"]
+    contract_keys            = keys(local.worker_runtime_alarms)
+  }
+}
+
 output "backup_vault_name" {
   value = aws_backup_vault.data.name
 }

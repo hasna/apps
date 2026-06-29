@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.56] - 2026-06-29
+
+### Added
+
+- Added default-off Terraform worker runtime alarm contracts for scheduler,
+  public-probe, and reporter roles. The contract covers backlog, stale lease or
+  heartbeat age, probe submission failures, reporter lag, failed deliveries, and
+  retry-exhausted deliveries while keeping hosted worker scale-out blocked until
+  the workers emit those metrics and approved alert delivery is proven.
+
 ## [0.1.55] - 2026-06-29
 
 ### Changed

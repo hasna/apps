@@ -401,8 +401,13 @@ if [ -n "$OPS_ALERTS_TOPIC_ARN" ]; then
 fi
 ```
 
-Scheduler-stall, stale-probe, and report-delivery alarms stay blocked until
-those workers are implemented, emit metrics, and are enabled.
+Worker/report alarm definitions are available behind
+`enable_worker_runtime_alarms`. Keep that flag `false` until scheduler,
+public-probe, and reporter workers emit the documented runtime metrics and
+approved human/on-call delivery is proven. The default-off contract covers
+scheduler backlog/stale leases/heartbeat age, public-probe backlog/submission
+failures/heartbeat age, and reporter lag/failed deliveries/retry exhaustion/
+heartbeat age.
 Record a non-secret SNS delivery smoke id and redacted delivery destination
 counts before live scale-out. Internal SQS audit delivery is useful evidence,
 but it does not replace approved human/on-call subscriptions.

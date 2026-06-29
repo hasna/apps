@@ -588,7 +588,8 @@ test("built API rejects raw broad hosted token when NODE_ENV is production", asy
   delete process.env.HASNA_UPTIME_HOSTED_TOKENS;
   process.env.NODE_ENV = "production";
   process.env.HASNA_UPTIME_HOSTED_TOKEN = "raw-broad";
-  const dist = await import("../dist/index.js") as unknown as {
+  const distPath = "../dist/index.js";
+  const dist = await import(distPath) as unknown as {
     UptimeService: typeof UptimeService;
     createApiHandler: (service: unknown, options: { mode: "hosted" }) => (request: Request) => Promise<Response>;
   };
