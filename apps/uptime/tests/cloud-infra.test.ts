@@ -23,6 +23,10 @@ test("Dockerfile builds a hosted non-root Bun runtime without plaintext secrets"
   expect(packageDockerfile).toContain("COPY dist ./dist");
   expect(packageDockerfile).toContain("COPY package.json bun.lock ./");
   expect(packageDockerfile).toContain("bun install --production --frozen-lockfile");
+  expect(dockerfile).toContain("/usr/local/bin/uptime");
+  expect(dockerfile).toContain('exec bun /app/dist/cli/index.js "$@"');
+  expect(packageDockerfile).toContain("/usr/local/bin/uptime");
+  expect(packageDockerfile).toContain('exec bun /app/dist/cli/index.js "$@"');
   expect(packageDockerfile).toContain("-u 10001");
   expect(packageDockerfile).not.toContain("FROM oven/bun");
   expect(packageDockerfile).not.toContain("node:22-slim");
@@ -218,7 +222,7 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(tfvars).toContain("enable_cloudfront_origin_verify_header");
   expect(tfvars).toContain("cloudfront_origin_verify_header_name");
   expect(tfvars).toContain("cloudfront_origin_verify_header_value  = null");
-  expect(tfvars).toContain('runtime_package_version   = "0.1.44"');
+  expect(tfvars).toContain('runtime_package_version   = "0.1.45"');
   expect(tfvars).toContain("runtime_package_integrity = null");
   expect(tfvars).toContain("allow_unpinned_runtime_package_integrity = false");
   expect(tfvars).toContain('project_name             = "open-uptime"');

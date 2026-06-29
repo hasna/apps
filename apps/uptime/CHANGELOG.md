@@ -6,6 +6,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.45] - 2026-06-29
+
+### Fixed
+
+- Added an `/usr/local/bin/uptime` wrapper to both runtime Dockerfiles so
+  package-built hosted images expose the app CLI directly and version smokes can
+  validate `uptime --version` without relying on the internal Bun command path.
+
 ## [0.1.44] - 2026-06-29
 
 ### Added
