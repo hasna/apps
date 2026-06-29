@@ -47,7 +47,13 @@ bun add @hasna/banking
 ```bash
 banking --help
 banking providers list --json
+banking payments request --provider mercury --account acct_123 --amount 10.00 --currency USD --to "Vendor" --json
+banking cards request --provider mercury --account acct_123 --label "Ops" --limit-month 250.00 --currency USD --json
 ```
+
+Provider-backed reads such as `accounts list`, `balances get`,
+`transactions list`, and `cards list` fail closed until adapters are
+implemented. Admin commands are explicitly gated.
 
 ## SDK
 
@@ -74,6 +80,6 @@ banking-mcp --help
 banking-mcp --list-tools
 ```
 
-The full MCP protocol server lands with the agent-safe surfaces. The scaffold
-labels the declared MCP names as planned so downstream integration work can
-target stable names without mistaking them for implemented tools.
+The MCP entrypoint exposes stable tool descriptors and local request-envelope
+dispatch helpers. The full MCP protocol server lands after the store and
+provider adapter nodes.
