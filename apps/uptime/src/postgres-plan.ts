@@ -1,5 +1,5 @@
-export const POSTGRES_PLAN_VERSION = 5;
-export const POSTGRES_SCHEMA_VERSION = "5";
+export const POSTGRES_PLAN_VERSION = 6;
+export const POSTGRES_SCHEMA_VERSION = "6";
 export const DEFAULT_POSTGRES_SCHEMA = "uptime";
 export const DEFAULT_WORKSPACE_SETTING = "app.workspace_id";
 
@@ -59,6 +59,7 @@ const REQUIRED_INDEXES = [
   "check_jobs_workspace_status_due_idx",
   "report_schedules_due_idx",
   "report_runs_workspace_status_time_idx",
+  "report_runs_schedule_window_idx",
   "report_delivery_attempts_run_idx",
   "report_delivery_attempts_due_idx",
   "report_delivery_attempts_idempotency_idx",
@@ -391,9 +392,9 @@ ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.up
   workspace_id text NOT NULL,
   id text NOT NULL,
   schedule_id text,
-  status text NOT NULL CHECK (status IN ('success', 'failed')),
+  status text NOT NULL CHECK (status IN ('pending', 'running', 'succeeded', 'failed', 'retry_exhausted')),
   started_at timestamptz NOT NULL,
-  finished_at timestamptz NOT NULL,
+  finished_at timestamptz,
   deliveries_json jsonb NOT NULL,
   error text,
   report_json jsonb,
@@ -401,6 +402,10 @@ ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.up
   actor text,
   origin text,
   idempotency_key text,
+  claimed_by_worker_id text,
+  fencing_token text,
+  lease_expires_at timestamptz,
+  version bigint NOT NULL DEFAULT 1,
   deleted_at timestamptz,
   PRIMARY KEY (workspace_id, id)
 );`,
@@ -492,6 +497,7 @@ ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.up
     `CREATE INDEX IF NOT EXISTS check_jobs_workspace_status_due_idx ON ${q(schemaName, "check_jobs")} (workspace_id, status, due_at) WHERE deleted_at IS NULL;`,
     `CREATE INDEX IF NOT EXISTS report_schedules_due_idx ON ${q(schemaName, "report_schedules")} (workspace_id, enabled, next_run_at, lease_expires_at) WHERE deleted_at IS NULL;`,
     `CREATE INDEX IF NOT EXISTS report_runs_workspace_status_time_idx ON ${q(schemaName, "report_runs")} (workspace_id, status, started_at DESC) WHERE deleted_at IS NULL;`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS report_runs_schedule_window_idx ON ${q(schemaName, "report_runs")} (workspace_id, schedule_id, started_at) WHERE schedule_id IS NOT NULL AND deleted_at IS NULL;`,
     `CREATE INDEX IF NOT EXISTS report_delivery_attempts_run_idx ON ${q(schemaName, "report_delivery_attempts")} (workspace_id, report_run_id, status, scheduled_at) WHERE deleted_at IS NULL;`,
     `CREATE INDEX IF NOT EXISTS report_delivery_attempts_due_idx ON ${q(schemaName, "report_delivery_attempts")} (workspace_id, status, COALESCE(next_retry_at, scheduled_at)) WHERE deleted_at IS NULL;`,
     `CREATE UNIQUE INDEX IF NOT EXISTS report_delivery_attempts_idempotency_idx ON ${q(schemaName, "report_delivery_attempts")} (workspace_id, idempotency_key) WHERE deleted_at IS NULL;`,
@@ -505,6 +511,7 @@ function buildSchemaUpgradeStatements(schemaName: string): string[] {
   const monitors = q(schemaName, "monitors");
   const probeIdentities = q(schemaName, "probe_identities");
   const probeSubmissions = q(schemaName, "probe_submissions");
+  const reportRuns = q(schemaName, "report_runs");
   const reportSchedules = q(schemaName, "report_schedules");
   return [
     `ALTER TABLE ${checkJobs} ADD COLUMN IF NOT EXISTS monitor_snapshot jsonb;`,
@@ -584,6 +591,18 @@ END $$;`,
     `ALTER TABLE ${reportSchedules} ADD COLUMN IF NOT EXISTS claimed_by_worker_id text;`,
     `ALTER TABLE ${reportSchedules} ADD COLUMN IF NOT EXISTS fencing_token text;`,
     `ALTER TABLE ${reportSchedules} ADD COLUMN IF NOT EXISTS lease_expires_at timestamptz;`,
+    `ALTER TABLE ${reportRuns} ADD COLUMN IF NOT EXISTS claimed_by_worker_id text;`,
+    `ALTER TABLE ${reportRuns} ADD COLUMN IF NOT EXISTS fencing_token text;`,
+    `ALTER TABLE ${reportRuns} ADD COLUMN IF NOT EXISTS lease_expires_at timestamptz;`,
+    `ALTER TABLE ${reportRuns} ADD COLUMN IF NOT EXISTS version bigint DEFAULT 1;`,
+    `UPDATE ${reportRuns} SET version = 1 WHERE version IS NULL;`,
+    `ALTER TABLE ${reportRuns} ALTER COLUMN version SET DEFAULT 1;`,
+    `ALTER TABLE ${reportRuns} ALTER COLUMN version SET NOT NULL;`,
+    `ALTER TABLE ${reportRuns} ALTER COLUMN finished_at DROP NOT NULL;`,
+    `ALTER TABLE ${reportRuns} DROP CONSTRAINT IF EXISTS report_runs_status_check;`,
+    `UPDATE ${reportRuns} SET status = 'succeeded' WHERE status = 'success';`,
+    `ALTER TABLE ${reportRuns} ADD CONSTRAINT report_runs_status_check CHECK (status IN ('pending', 'running', 'succeeded', 'failed', 'retry_exhausted')) NOT VALID;`,
+    `ALTER TABLE ${reportRuns} VALIDATE CONSTRAINT report_runs_status_check;`,
   ];
 }
 

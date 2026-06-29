@@ -101,10 +101,10 @@ deferred for the current monitor interval so repeated review batches can reach
 later public-safe monitors. These commands are not the EFS SQLite `cloud
 public-checks` bridge, do not enable hosted API probe routes, and do not make
 hosted worker preflight `canStart=true`. The
-`@hasna/uptime/postgres-report-runtime` export can write finished report
-metadata, delivery-attempt state, retry
-metadata, and redacted artifact metadata refs for review, but it is also not a
-promotion gate. `uptime cloud postgres-plan` exposes the reviewed target schema,
+`@hasna/uptime/postgres-report-runtime` export can claim report schedule
+windows, begin and finish fenced report runs, write delivery-attempt state,
+retry metadata, and redacted artifact metadata refs for review, but it is also
+not a promotion gate. `uptime cloud postgres-plan` exposes the reviewed target schema,
 workspace RLS policy shape, tombstones, audit tables, idempotency fields, and
 check-job lease tables for private review without connecting to Postgres or
 printing credentials.
@@ -116,9 +116,9 @@ monitor names unique only among non-deleted rows.
 blockers for hosted scheduler, public-probe, reporter, and migration roles.
 `--healthcheck` is readiness-like and exits non-zero while `canStart=false`.
 Their generic `run` entrypoints fail closed until Postgres service integration,
-channel refs, authoritative report run state transitions, object artifact
-storage, audit export, alarms, and migration plans exist. Public-probe preflight
-and scheduler preflight can name the bounded Postgres review runners as
+approved channel secret loading, object artifact storage, audit export, alarms,
+and migration plans exist. Public-probe preflight and scheduler/reporter
+preflight can name the bounded Postgres review primitives as
 implemented while still returning `canStart=false`; the ECS worker commands
 remain the blocked generic `cloud workers run --role <role>` paths.
 `uptime cloud public-checks run-due` and `worker` are only bounded EFS SQLite

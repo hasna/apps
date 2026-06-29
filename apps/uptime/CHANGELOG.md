@@ -6,6 +6,36 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.54] - 2026-06-29
+
+### Added
+
+- Added a fenced Postgres report-run state machine for hosted reporter review
+  work: schedule claims can now begin a deterministic schedule-window report run,
+  finish it with its own worker lease/fencing token, and advance the schedule in
+  the same transaction.
+- Added schema version 6 Postgres migration coverage for report run
+  `pending/running/succeeded/failed/retry_exhausted` states, nullable
+  `finished_at`, worker lease fields, versioning, and a unique schedule-window
+  index.
+- Added regression coverage for stale schedule completion, two-worker report-run
+  fencing, failed delivery retry metadata, and migration verification of the new
+  report-run index.
+
+### Changed
+
+- Delivery attempt idempotency no longer depends on `scheduled_at`, so replays of
+  the same report run/channel/attempt number use a stable key.
+- Reporter preflight now treats report-run metadata and the fenced report-run
+  state machine as implemented when schema evidence is supplied, while still
+  blocking live reporter start on approved secret loading, S3 artifact writes,
+  audit export, delivery alarms, and worker liveness.
+
+### Security
+
+- Terminal delivery-attempt completion now clears active worker claim fields, and
+  failed delivery attempts must include `nextRetryAt` or use `retry_exhausted`.
+
 ## [0.1.53] - 2026-06-29
 
 ### Added

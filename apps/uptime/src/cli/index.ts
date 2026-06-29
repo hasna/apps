@@ -2198,13 +2198,15 @@ function hostedReporterReadinessChecks(): Array<{ name: string; ok: boolean; det
     reportRuntime.checks.find((check) => check.name === name);
   const schemaCheck = runtimeCheck("report-runtime-schema-verified");
   const metadataWriter = runtimeCheck("report-run-metadata-writer");
+  const stateMachine = runtimeCheck("report-run-state-machine");
+  const reportRunCloudStoreReady = reportRuntime.canWriteReportMetadata && reportRuntime.capabilities.reportRunStateMachine;
   return [
     {
       name: "report-run-cloud-store",
-      ok: false,
-      detail: reportRuntime.capabilities.reportRunWriter
-        ? `${metadataWriter?.detail ?? "Postgres report_runs metadata writer exists"}, but the hosted reporter loop is not yet authoritative`
-        : "hosted report_runs/report_schedules are blocked until the async Postgres store is authoritative",
+      ok: reportRunCloudStoreReady,
+      detail: reportRunCloudStoreReady
+        ? `${metadataWriter?.detail ?? "Postgres report_runs metadata writer exists"}; ${stateMachine?.detail ?? "state machine implemented"}`
+        : "hosted report_runs require schema verification plus the fenced report run state machine before promotion",
     },
     {
       name: "report-channel-secret-loader",
@@ -2234,7 +2236,7 @@ function hostedReporterReadinessChecks(): Array<{ name: string; ok: boolean; det
     {
       name: "report-delivery-retry-backoff",
       ok: reportRuntime.capabilities.retryBackoffMetadata,
-      detail: "retry/backoff metadata, stale-lease reclaim, and retry exhaustion state are implemented for delivery attempts",
+      detail: "retry metadata and retry_exhausted state are implemented; hosted retry policy remains blocked on reporter alarms",
     },
     {
       name: "report-artifact-metadata-store",
@@ -2285,7 +2287,7 @@ function hostedWorkerNextActions(role: HostedWorkerRole): string[] {
     return [
       ...shared,
       "Provide HASNA_UPTIME_REPORT_CHANNEL_REFS_JSON with workspace-authorized Mailery, Telephony, and Open Logs refs; do not inline URLs, recipients, API keys, or tokens.",
-      "Implement the hosted report-run store, delivery-attempt state machine, idempotent delivery keys, retry/backoff, redacted artifact storage, delivery audit export, and reporter alarms before scaling reporter.",
+      "Wire the server-side channel secret loader, redacted artifact object storage, delivery audit export, reporter alarms, and liveness/drain evidence before scaling reporter.",
     ];
   }
   return [

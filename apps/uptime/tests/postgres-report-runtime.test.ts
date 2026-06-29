@@ -16,6 +16,7 @@ class FakeReportClient implements PostgresQueryClient {
   now = "2026-06-29T08:05:00.000Z";
   schedule: PostgresReportScheduleClaimRecord | null = null;
   rawScheduleChannels: unknown | null = null;
+  reportRun: PostgresReportRunRecord | null = null;
   deliveryAttempt: PostgresReportDeliveryAttemptRecord | null = null;
   releaseCount = 0;
 
@@ -25,13 +26,37 @@ class FakeReportClient implements PostgresQueryClient {
       return { rows: [], rowCount: 0 };
     }
     if (sql.includes("INSERT INTO \"uptime\".\"report_runs\"")) {
-      const row: PostgresReportRunRecord = {
+      if (sql.includes("'running', $4::timestamptz")) {
+        const existingVersion = this.reportRun?.id === String(params?.[1]) ? this.reportRun.version : 0;
+        this.reportRun = {
+          workspaceId: String(params?.[0]),
+          id: String(params?.[1]),
+          scheduleId: params?.[2] == null ? null : String(params[2]),
+          status: "running",
+          startedAt: String(params?.[3]),
+          finishedAt: null,
+          deliveries: [],
+          error: null,
+          reportJson: null,
+          artifactRef: null,
+          actor: params?.[4] == null ? null : String(params[4]),
+          origin: params?.[5] == null ? null : String(params[5]),
+          idempotencyKey: params?.[6] == null ? null : String(params[6]),
+          claimedByWorkerId: params?.[7] == null ? null : String(params[7]),
+          fencingToken: params?.[8] == null ? null : String(params[8]),
+          leaseExpiresAt: addMillis(this.now, Number(params?.[9])),
+          version: existingVersion + 1,
+        };
+        return { rows: [snakeReportRun(this.reportRun)], rowCount: 1 };
+      }
+      const status = params?.[3] === "success" ? "succeeded" : params?.[3] as PostgresReportRunRecord["status"];
+      this.reportRun = {
         workspaceId: String(params?.[0]),
         id: String(params?.[1]),
         scheduleId: params?.[2] == null ? null : String(params[2]),
-        status: params?.[3] as PostgresReportRunRecord["status"],
+        status,
         startedAt: String(params?.[4]),
-        finishedAt: String(params?.[5]),
+        finishedAt: params?.[5] == null ? null : String(params[5]),
         deliveries: JSON.parse(String(params?.[6])),
         error: params?.[7] == null ? null : String(params[7]),
         reportJson: params?.[8] == null ? null : JSON.parse(String(params[8])),
@@ -39,14 +64,95 @@ class FakeReportClient implements PostgresQueryClient {
         actor: params?.[10] == null ? null : String(params[10]),
         origin: params?.[11] == null ? null : String(params[11]),
         idempotencyKey: params?.[12] == null ? null : String(params[12]),
+        claimedByWorkerId: null,
+        fencingToken: null,
+        leaseExpiresAt: null,
+        version: 1,
       };
-      return { rows: [snakeReportRun(row)], rowCount: 1 };
+      return { rows: [snakeReportRun(this.reportRun)], rowCount: 1 };
     }
     if (sql.includes("SELECT * FROM \"uptime\".\"report_schedules\"")) {
       if (!this.schedule) return { rows: [], rowCount: 0 };
+      if (sql.includes("FOR UPDATE")) {
+        const claimMatches = this.schedule.workspaceId === String(params?.[0])
+          && this.schedule.id === String(params?.[1])
+          && this.schedule.enabled
+          && this.schedule.claimedByWorkerId === String(params?.[2])
+          && this.schedule.fencingToken === String(params?.[3])
+          && Boolean(this.schedule.leaseExpiresAt)
+          && this.schedule.leaseExpiresAt! > this.now;
+        return { rows: claimMatches ? [this.snakeSchedule()] : [], rowCount: claimMatches ? 1 : 0 };
+      }
       const due = this.schedule.enabled && this.schedule.nextRunAt <= String(params?.[1]);
       const leaseExpired = !this.schedule.fencingToken || !this.schedule.leaseExpiresAt || this.schedule.leaseExpiresAt <= String(params?.[1]);
       return { rows: due && leaseExpired ? [this.snakeSchedule()] : [], rowCount: due && leaseExpired ? 1 : 0 };
+    }
+    if (sql.includes("UPDATE \"uptime\".\"report_runs\"") && sql.includes("SET status = 'running'")) {
+      if (!this.reportRun) return { rows: [], rowCount: 0 };
+      const expired = !this.reportRun.leaseExpiresAt || this.reportRun.leaseExpiresAt <= this.now;
+      if (this.reportRun.workspaceId !== String(params?.[0]) || this.reportRun.id !== String(params?.[1])) return { rows: [], rowCount: 0 };
+      if (this.reportRun.status !== "pending" && !(this.reportRun.status === "running" && expired)) return { rows: [], rowCount: 0 };
+      this.reportRun = {
+        ...this.reportRun,
+        status: "running",
+        claimedByWorkerId: String(params?.[2]),
+        fencingToken: String(params?.[3]),
+        leaseExpiresAt: addMillis(this.now, Number(params?.[4])),
+        version: this.reportRun.version + 1,
+      };
+      return { rows: [snakeReportRun(this.reportRun)], rowCount: 1 };
+    }
+    if (sql.includes("UPDATE \"uptime\".\"report_runs\"") && sql.includes("AND schedule_id = $9")) {
+      if (!this.reportRun) return { rows: [], rowCount: 0 };
+      const claimMatches = this.reportRun.workspaceId === String(params?.[0])
+        && this.reportRun.id === String(params?.[1])
+        && this.reportRun.scheduleId === String(params?.[8])
+        && this.reportRun.startedAt === String(params?.[9])
+        && this.reportRun.status === "running"
+        && this.reportRun.claimedByWorkerId === String(params?.[10])
+        && this.reportRun.fencingToken === String(params?.[11])
+        && Boolean(this.reportRun.leaseExpiresAt)
+        && this.reportRun.leaseExpiresAt! > this.now;
+      if (!claimMatches) return { rows: [], rowCount: 0 };
+      this.reportRun = {
+        ...this.reportRun,
+        status: params?.[2] as PostgresReportRunRecord["status"],
+        finishedAt: String(params?.[3]),
+        deliveries: JSON.parse(String(params?.[4])),
+        error: params?.[5] == null ? null : String(params[5]),
+        reportJson: params?.[6] == null ? null : JSON.parse(String(params[6])),
+        artifactRef: params?.[7] == null ? null : String(params[7]),
+        claimedByWorkerId: null,
+        fencingToken: null,
+        leaseExpiresAt: null,
+        version: this.reportRun.version + 1,
+      };
+      return { rows: [snakeReportRun(this.reportRun)], rowCount: 1 };
+    }
+    if (sql.includes("UPDATE \"uptime\".\"report_runs\"") && sql.includes("finished_at = $4::timestamptz")) {
+      if (!this.reportRun) return { rows: [], rowCount: 0 };
+      const claimMatches = this.reportRun.workspaceId === String(params?.[0])
+        && this.reportRun.id === String(params?.[1])
+        && this.reportRun.status === "running"
+        && this.reportRun.claimedByWorkerId === String(params?.[8])
+        && this.reportRun.fencingToken === String(params?.[9])
+        && Boolean(this.reportRun.leaseExpiresAt)
+        && this.reportRun.leaseExpiresAt! > this.now;
+      if (!claimMatches) return { rows: [], rowCount: 0 };
+      this.reportRun = {
+        ...this.reportRun,
+        status: params?.[2] as PostgresReportRunRecord["status"],
+        finishedAt: String(params?.[3]),
+        deliveries: JSON.parse(String(params?.[4])),
+        error: params?.[5] == null ? null : String(params[5]),
+        reportJson: params?.[6] == null ? null : JSON.parse(String(params[6])),
+        artifactRef: params?.[7] == null ? null : String(params[7]),
+        claimedByWorkerId: null,
+        fencingToken: null,
+        leaseExpiresAt: null,
+        version: this.reportRun.version + 1,
+      };
+      return { rows: [snakeReportRun(this.reportRun)], rowCount: 1 };
     }
     if (sql.includes("UPDATE \"uptime\".\"report_schedules\"") && sql.includes("SET claimed_by_worker_id = $3")) {
       if (!this.schedule) return { rows: [], rowCount: 0 };
@@ -70,6 +176,15 @@ class FakeReportClient implements PostgresQueryClient {
       }
       if (this.schedule.claimedByWorkerId !== String(params?.[2]) || this.schedule.fencingToken !== String(params?.[3])) {
         return { rows: [], rowCount: 0 };
+      }
+      if (sql.includes("AND report_schedule.next_run_at = $5::timestamptz") && this.schedule.nextRunAt !== String(params?.[4])) {
+        return { rows: [], rowCount: 0 };
+      }
+      if (sql.includes("AND EXISTS")) {
+        const terminalRunExists = this.reportRun?.scheduleId === this.schedule.id
+          && this.reportRun.startedAt === this.schedule.nextRunAt
+          && isTerminalReportRunStatus(this.reportRun.status);
+        if (!terminalRunExists) return { rows: [], rowCount: 0 };
       }
       const nextRunAt = new Date(new Date(this.schedule.nextRunAt).getTime() + this.schedule.intervalSeconds * 1000).toISOString();
       this.schedule = {
@@ -140,6 +255,7 @@ class FakeReportClient implements PostgresQueryClient {
         error: params?.[7] == null ? null : String(params[7]),
         retryAfterSeconds: params?.[8] == null ? null : Number(params[8]),
         responseHash: params?.[9] == null ? null : String(params[9]),
+        claimedByWorkerId: null,
         leaseExpiresAt: null,
         fencingToken: null,
         version: this.deliveryAttempt.version + 1,
@@ -232,23 +348,30 @@ test("Postgres report runtime records report runs, attempts, claims, completions
   });
 
   expect(run.workspaceId).toBe("ws_runtime");
+  expect(run.status).toBe("succeeded");
+  expect(run.finishedAt).toBe("2026-06-29T08:00:00.000Z");
+  expect(run.claimedByWorkerId).toBeNull();
+  expect(run.fencingToken).toBeNull();
+  expect(run.leaseExpiresAt).toBeNull();
+  expect(run.version).toBe(1);
   expect(run.reportJson).toEqual({
     kind: "open-uptime.report-json-metadata",
     sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
     redacted: true,
     storage: "artifact-required",
   });
-  expect(attempt.idempotencyKey).toBe(deliveryAttemptIdempotencyKey("ws_runtime", run.id, "email", "ops-email", 1, "2026-06-29T08:00:00.000Z"));
+  expect(attempt.idempotencyKey).toBe(deliveryAttemptIdempotencyKey("ws_runtime", run.id, "email", "ops-email", 1));
   expect(due).toHaveLength(1);
   expect(claimed?.status).toBe("sending");
   expect(claimed?.claimedByWorkerId).toBe("reporter-1");
   expect(completed?.status).toBe("succeeded");
   expect(completed?.responseStatus).toBe(202);
+  expect(completed?.claimedByWorkerId).toBeNull();
   expect(completed?.fencingToken).toBeNull();
   expect(await runtime.completeDeliveryAttempt({
     id: attempt.id,
     fencingToken: claimed!.fencingToken!,
-    status: "failed",
+    status: "retry_exhausted",
   })).toBeNull();
   expect(artifact.retentionClass).toBe("standard");
   expect(artifact.redacted).toBe(true);
@@ -262,6 +385,7 @@ test("Postgres report runtime records report runs, attempts, claims, completions
   expect(client.queries.some((query) => query.sql.includes("AND lease_expires_at > now()"))).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("IS NOT DISTINCT FROM EXCLUDED.report_json"))).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("IS NOT DISTINCT FROM EXCLUDED.request_hash"))).toBe(true);
+  expect(client.queries.some((query) => query.sql.includes("scheduled_at IS NOT DISTINCT FROM EXCLUDED.scheduled_at"))).toBe(false);
   expect(client.queries.some((query) => query.sql.includes("ON CONFLICT (workspace_id, idempotency_key)"))).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("fencing_token"))).toBe(true);
   expect(client.releaseCount).toBeGreaterThan(0);
@@ -297,6 +421,44 @@ test("Postgres report runtime redacts stale fencing tokens from due discovery", 
   expect(due).toHaveLength(1);
   expect(due[0]!.status).toBe("sending");
   expect(due[0]!.fencingToken).toBeNull();
+});
+
+test("Postgres report runtime requires retry metadata for failed delivery attempts", async () => {
+  const client = new FakeReportClient();
+  const runtime = createPostgresReportRuntime({
+    client,
+    workspaceId: "ws_runtime",
+    now: () => new Date("2026-06-29T08:00:00.000Z"),
+  });
+  const attempt = await runtime.createDeliveryAttempt({
+    reportRunId: "rpr_runtime",
+    channel: "logs",
+    channelRefId: "ops-logs",
+    provider: "logs",
+  });
+  const claimed = await runtime.claimDeliveryAttempt({
+    id: attempt.id,
+    workerId: "reporter-1",
+    leaseTtlMs: 60_000,
+  });
+
+  await expect(runtime.completeDeliveryAttempt({
+    id: attempt.id,
+    fencingToken: claimed!.fencingToken!,
+    status: "failed",
+  })).rejects.toThrow("nextRetryAt");
+
+  const completed = await runtime.completeDeliveryAttempt({
+    id: attempt.id,
+    fencingToken: claimed!.fencingToken!,
+    status: "failed",
+    nextRetryAt: "2026-06-29T08:10:00.000Z",
+    error: "temporary provider failure",
+  });
+
+  expect(completed?.status).toBe("failed");
+  expect(completed?.nextRetryAt).toBe("2026-06-29T08:10:00.000Z");
+  expect(completed?.claimedByWorkerId).toBeNull();
 });
 
 test("Postgres report runtime claims due report schedule windows with fencing", async () => {
@@ -341,12 +503,37 @@ test("Postgres report runtime claims due report schedule windows with fencing", 
     fencingToken: claimed!.fencingToken!,
     finishedAt: "2026-06-29T08:05:30.000Z",
   });
-  const completed = await runtime.completeReportScheduleClaim({
+  const prematureComplete = await runtime.completeReportScheduleClaim({
     id: "rps_daily",
     workerId: "reporter-1",
     fencingToken: claimed!.fencingToken!,
     finishedAt: "2026-06-29T08:05:30.000Z",
   });
+  const reportRun = await runtime.beginReportRunForScheduleClaim({
+    scheduleId: "rps_daily",
+    workerId: "reporter-1",
+    scheduleFencingToken: claimed!.fencingToken!,
+    leaseTtlMs: 60_000,
+    actor: "reporter",
+  });
+  const wrongFinish = await runtime.finishReportRunForScheduleClaim({
+    scheduleId: "rps_daily",
+    workerId: "reporter-2",
+    scheduleFencingToken: claimed!.fencingToken!,
+    reportRunFencingToken: reportRun!.fencingToken!,
+    status: "succeeded",
+  });
+  const finished = await runtime.finishReportRunForScheduleClaim({
+    scheduleId: "rps_daily",
+    workerId: "reporter-1",
+    scheduleFencingToken: claimed!.fencingToken!,
+    reportRunFencingToken: reportRun!.fencingToken!,
+    status: "succeeded",
+    deliveries: [{ channel: "logs", ok: true, id: "log_123" }],
+    reportJson: { totals: { down: 0 } },
+    artifactRef: "artifact://reports/rps_daily/2026-06-29T08:00:00.000Z.json",
+  });
+  const completed = finished?.schedule;
 
   expect(due).toHaveLength(1);
   expect(due[0]!.fencingToken).toBeNull();
@@ -358,12 +545,23 @@ test("Postgres report runtime claims due report schedule windows with fencing", 
   expect(claimed?.leaseExpiresAt).toBe("2026-06-29T08:06:00.000Z");
   expect(blockedWhileLeased).toBeNull();
   expect(badComplete).toBeNull();
+  expect(prematureComplete).toBeNull();
+  expect(reportRun?.status).toBe("running");
+  expect(reportRun?.startedAt).toBe("2026-06-29T08:00:00.000Z");
+  expect(reportRun?.claimedByWorkerId).toBe("reporter-1");
+  expect(reportRun?.fencingToken).toMatch(/^rrf_/);
+  expect(wrongFinish).toBeNull();
+  expect(finished?.reportRun.status).toBe("succeeded");
+  expect(finished?.reportRun.finishedAt).toBe("2026-06-29T08:05:00.000Z");
+  expect(finished?.reportRun.claimedByWorkerId).toBeNull();
   expect(completed?.lastRunAt).toBe("2026-06-29T08:00:00.000Z");
   expect(completed?.nextRunAt).toBe("2026-06-29T09:00:00.000Z");
   expect(completed?.claimedByWorkerId).toBeNull();
   expect(completed?.fencingToken).toBeNull();
-  expect(client.queries.some((query) => query.sql.includes("next_run_at = next_run_at + (interval_seconds::bigint * interval '1 second')"))).toBe(true);
+  expect(client.queries.some((query) => query.sql.includes("next_run_at = report_schedule.next_run_at + (report_schedule.interval_seconds::bigint * interval '1 second')"))).toBe(true);
   expect(client.queries.some((query) => query.sql.includes("AND fencing_token = $4"))).toBe(true);
+  expect(client.queries.some((query) => query.sql.includes("AND EXISTS"))).toBe(true);
+  expect(client.queries.some((query) => query.sql.includes("AND started_at = $10::timestamptz"))).toBe(true);
 });
 
 test("Postgres report runtime reclaims expired report schedule claims without skipping the window", async () => {
@@ -383,7 +581,11 @@ test("Postgres report runtime reclaims expired report schedule claims without sk
     leaseExpiresAt: null,
     version: 1,
   };
-  const runtime = createPostgresReportRuntime({ client, workspaceId: "ws_runtime" });
+  const runtime = createPostgresReportRuntime({
+    client,
+    workspaceId: "ws_runtime",
+    now: () => new Date(client.now),
+  });
 
   client.now = "2026-06-29T08:05:00.000Z";
   const firstClaim = await runtime.claimReportSchedule({
@@ -403,11 +605,20 @@ test("Postgres report runtime reclaims expired report schedule claims without sk
     workerId: "reporter-1",
     fencingToken: firstClaim!.fencingToken!,
   });
-  const completed = await runtime.completeReportScheduleClaim({
-    id: "rps_daily",
+  const reportRun = await runtime.beginReportRunForScheduleClaim({
+    scheduleId: "rps_daily",
     workerId: "reporter-2",
-    fencingToken: reclaimed!.fencingToken!,
+    scheduleFencingToken: reclaimed!.fencingToken!,
+    leaseTtlMs: 60_000,
   });
+  const finished = await runtime.finishReportRunForScheduleClaim({
+    scheduleId: "rps_daily",
+    workerId: "reporter-2",
+    scheduleFencingToken: reclaimed!.fencingToken!,
+    reportRunFencingToken: reportRun!.fencingToken!,
+    status: "succeeded",
+  });
+  const completed = finished?.schedule;
 
   expect(firstClaim?.lastRunAt).toBeNull();
   expect(firstClaim?.nextRunAt).toBe("2026-06-29T08:00:00.000Z");
@@ -415,6 +626,8 @@ test("Postgres report runtime reclaims expired report schedule claims without sk
   expect(reclaimed?.nextRunAt).toBe("2026-06-29T08:00:00.000Z");
   expect(reclaimed?.claimedByWorkerId).toBe("reporter-2");
   expect(staleComplete).toBeNull();
+  expect(reportRun?.startedAt).toBe("2026-06-29T08:00:00.000Z");
+  expect(finished?.reportRun.status).toBe("succeeded");
   expect(completed?.lastRunAt).toBe("2026-06-29T08:00:00.000Z");
   expect(completed?.nextRunAt).toBe("2026-06-29T09:00:00.000Z");
   expect(client.queries.some((query) => query.sql.includes("AND next_run_at <= now()"))).toBe(true);
@@ -559,7 +772,7 @@ test("Postgres report runtime readiness can be marked ready only with schema evi
     "report-runtime-schema-verified": true,
     "report-run-metadata-writer": true,
     "report-schedule-claiming": true,
-    "report-run-state-machine": false,
+    "report-run-state-machine": true,
     "report-artifact-object-store": false,
     "report-audit-export": false,
     "report-delivery-alarms": false,
@@ -568,12 +781,13 @@ test("Postgres report runtime readiness can be marked ready only with schema evi
   expect(readiness.capabilities).toMatchObject({
     reportRunWriter: true,
     scheduleClaiming: true,
-    reportRunStateMachine: false,
+    reportRunStateMachine: true,
     artifactObjectWriter: false,
     auditExport: false,
     deliveryAlarms: false,
   });
   expect(readiness.blockers.join("\n")).not.toContain("report-schedule-claiming");
+  expect(readiness.blockers.join("\n")).not.toContain("report-run-state-machine");
   expect(readiness.blockers.join("\n")).toContain("reporter-worker-liveness");
 });
 
@@ -643,7 +857,19 @@ function snakeReportRun(row: PostgresReportRunRecord): Record<string, unknown> {
     actor: row.actor,
     origin: row.origin,
     idempotency_key: row.idempotencyKey,
+    claimed_by_worker_id: row.claimedByWorkerId,
+    fencing_token: row.fencingToken,
+    lease_expires_at: row.leaseExpiresAt,
+    version: row.version,
   };
+}
+
+function addMillis(timestamp: string, millis: number): string {
+  return new Date(new Date(timestamp).getTime() + millis).toISOString();
+}
+
+function isTerminalReportRunStatus(status: PostgresReportRunRecord["status"]): boolean {
+  return status === "succeeded" || status === "failed" || status === "retry_exhausted";
 }
 
 function snakeSchedule(row: PostgresReportScheduleClaimRecord): Record<string, unknown> {

@@ -121,6 +121,7 @@ test("runPostgresMigration applies migration statements transactionally and veri
     "check_jobs_workspace_status_due_idx",
     "report_schedules_due_idx",
     "report_runs_workspace_status_time_idx",
+    "report_runs_schedule_window_idx",
     "report_delivery_attempts_run_idx",
     "report_delivery_attempts_due_idx",
     "report_delivery_attempts_idempotency_idx",

@@ -345,8 +345,8 @@ MCP input, or schedule payload shape:
 ```
 
 The catalog is a validation contract only until the hosted Postgres store,
-report-run state machine, S3 artifact storage/signing, audit export, and
-delivery alarms are implemented. The Postgres migration plan and report
+S3 artifact storage/signing, audit export, delivery alarms, and live reporter
+liveness/drain evidence are implemented. The Postgres migration plan and report
 runtime include workspace-scoped `report_delivery_attempts` and
 `report_artifacts` metadata so the runtime can persist per-attempt idempotency,
 retry state, claim/fencing metadata, retention class, and redacted artifact refs
@@ -357,14 +357,16 @@ later reference approved channel ids only; clients must never submit `secretRef`
 values.
 
 The Postgres report runtime also includes transactional report schedule/window
-claiming. A reporter worker can claim one due schedule with a fenced worker
-lease, then completion advances `last_run_at` and `next_run_at`. This prevents
-duplicate workers from processing the same due window without skipping the
-window after an expired unfinished claim. Schedule discovery and claim records
-expose only channel presence booleans, never raw recipients, provider endpoints,
-secret refs, or channel payloads. This is still not permission to scale the
-hosted reporter until report runs, artifact object storage, audit export,
-delivery alarms, and worker liveness are proven end to end.
+claiming plus a fenced report-run state machine. A reporter worker can claim one
+due schedule, begin a deterministic run for that schedule window, finish it with
+its own worker lease/fencing token, and advance `last_run_at`/`next_run_at` in
+the same transaction. This prevents duplicate workers from processing the same
+due window without skipping the window after an expired unfinished claim.
+Schedule discovery and claim records expose only channel presence booleans,
+never raw recipients, provider endpoints, secret refs, or channel payloads. This
+is still not permission to scale the hosted reporter until artifact object
+storage, approved secret loading, audit export, delivery alarms, and worker
+liveness are proven end to end.
 
 Hosted delivery code now has a separate server-side resolver for the channel-ref
 catalog. The resolver requires explicit selected channel ids from an already

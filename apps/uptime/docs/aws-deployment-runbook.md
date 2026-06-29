@@ -553,13 +553,12 @@ system. Never mount the restored file system over production during a drill.
 
 Report preview can be tested locally or through authenticated read APIs. Hosted
 delivery attempts through Mailery, Telephony, or Open Logs must stay disabled
-until the reporter has cloud channel refs, authoritative report run state
-transitions, redacted S3 artifact writes/signing, audit export, delivery alarms,
-and reviewed live-worker rollback evidence. The Postgres report-runtime helper
-can claim due report schedule windows, write finished report metadata,
-delivery-attempt state, per-attempt idempotency keys, retry/backoff metadata,
-and redacted artifact metadata refs, but this is narrower than hosted reporter
-readiness.
+until the reporter has approved channel secret loading, redacted S3 artifact
+writes/signing, audit export, delivery alarms, and reviewed live-worker rollback
+evidence. The Postgres report-runtime helper can claim due report schedule
+windows, begin and finish fenced report runs, write delivery-attempt state,
+stable per-attempt idempotency keys, retry metadata, and redacted artifact
+metadata refs, but this is narrower than hosted reporter readiness.
 
 `0.1.42` adds a separate Postgres core runtime facade for monitor rows, probe
 identities, deterministic `check_jobs`, check results, audit events, and

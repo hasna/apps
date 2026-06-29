@@ -31,6 +31,8 @@ export {
   createPostgresReportRuntime,
   deliveryAttemptIdempotencyKey,
   PostgresReportRuntime,
+  reportRunIdForScheduleWindow,
+  reportRunScheduleWindowIdempotencyKey,
   sanitizePostgresReportRuntimeError,
 } from "./postgres-report-runtime.js";
 export { runHostedPublicChecksWorker, runPostgresPublicProbeWorker, runPostgresSchedulerWorker } from "./workers.js";
@@ -159,11 +161,16 @@ export type {
   UpsertPostgresProbeIdentityInput,
 } from "./postgres-runtime.js";
 export type {
-  ClaimPostgresReportScheduleInput,
-  CompletePostgresReportScheduleClaimInput,
+  BeginPostgresReportRunForScheduleClaimInput,
   ClaimPostgresReportDeliveryAttemptInput,
+  ClaimPostgresReportRunInput,
+  ClaimPostgresReportScheduleInput,
   CompletePostgresReportDeliveryAttemptInput,
+  CompletePostgresReportRunInput,
+  CompletePostgresReportScheduleClaimInput,
   CreatePostgresReportDeliveryAttemptInput,
+  FinishPostgresReportRunForScheduleClaimInput,
+  FinishPostgresReportRunForScheduleClaimResult,
   ListDuePostgresReportDeliveryAttemptsOptions,
   ListDuePostgresReportSchedulesOptions,
   PostgresReportArtifactRecord,
@@ -171,7 +178,9 @@ export type {
   PostgresReportArtifactType,
   PostgresReportDeliveryAttemptRecord,
   PostgresReportDeliveryAttemptStatus,
+  PostgresReportRunInputStatus,
   PostgresReportRunRecord,
+  PostgresReportRunStatus,
   PostgresReportRuntimeOptions,
   PostgresReportRuntimeReadiness,
   PostgresReportScheduleChannelSummary,
