@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { PG_MIGRATIONS } from "./pg-migrations.js";
 
-describe("PostgreSQL cloud migrations", () => {
+describe("PostgreSQL remote database migrations", () => {
   test("include late SQLite schema used by tester-platform features", () => {
     const sql = PG_MIGRATIONS.join("\n");
 
