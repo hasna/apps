@@ -15,6 +15,18 @@ export interface MercuryReadClientInput extends MercuryCredentialInput {
 
 export type MercuryFetch = (input: URL | RequestInfo, init?: RequestInit) => Promise<Response>;
 
+export interface MercuryCursorPaginationInput {
+  readonly limit?: number;
+  readonly order?: "asc" | "desc";
+  readonly startAfter?: string;
+  readonly endBefore?: string;
+  readonly startAt?: string;
+}
+
+export interface MercuryTransactionListInput extends MercuryCursorPaginationInput {
+  readonly accountId?: string;
+}
+
 export interface MercuryAccountSummary {
   readonly id: string;
   readonly name?: string;
@@ -60,10 +72,10 @@ export interface MercuryTransactionSummary {
 }
 
 export interface MercuryReadClient {
-  listAccounts(input?: { readonly limit?: number }): Promise<readonly MercuryAccountSummary[]>;
+  listAccounts(input?: Omit<MercuryCursorPaginationInput, "startAt">): Promise<readonly MercuryAccountSummary[]>;
   getBalance(input: { readonly accountId: string }): Promise<MercuryBalanceSummary>;
-  listCards(input?: { readonly accountId?: string; readonly limit?: number }): Promise<readonly MercuryCardSummary[]>;
-  listTransactions(input?: { readonly accountId?: string; readonly limit?: number; readonly order?: "asc" | "desc" }): Promise<readonly MercuryTransactionSummary[]>;
+  listCards(input?: Omit<MercuryCursorPaginationInput, "startAt"> & { readonly accountId?: string }): Promise<readonly MercuryCardSummary[]>;
+  listTransactions(input?: MercuryTransactionListInput): Promise<readonly MercuryTransactionSummary[]>;
 }
 
 export class MercuryCredentialError extends Error {
@@ -85,9 +97,10 @@ export class MercuryApiError extends Error {
 
 export function resolveMercuryApiKey(input: MercuryCredentialInput): string {
   const env = input.env ?? Bun.env;
+  const environmentKey = `MERCURY_${input.environment.toUpperCase()}_API_KEY`;
   const direct = input.apiKey
-    ?? env.MERCURY_API_KEY
-    ?? env[`MERCURY_${input.environment.toUpperCase()}_API_KEY`];
+    ?? env[environmentKey]
+    ?? env.MERCURY_API_KEY;
   if (direct && direct.trim().length > 0) return direct.trim();
 
   if (input.secretKey) {
@@ -96,7 +109,7 @@ export function resolveMercuryApiKey(input: MercuryCredentialInput): string {
   }
 
   throw new MercuryCredentialError(
-    "Missing Mercury API key. Set MERCURY_API_KEY, or pass --secret-key only on machines with a compatible local secrets CLI.",
+    "Missing Mercury API key. Set MERCURY_<ENVIRONMENT>_API_KEY, MERCURY_API_KEY, or pass --secret-key only on machines with a compatible local secrets CLI.",
   );
 }
 
@@ -116,24 +129,38 @@ export function createMercuryReadClient(input: MercuryReadClientInput): MercuryR
       url.searchParams.set(key, String(value));
     }
 
-    const response = await fetchImpl(url, {
-      headers: {
-        accept: "application/json",
-        authorization: `Bearer ${apiKey}`,
-      },
-    });
+    let response: Response;
+    try {
+      response = await fetchImpl(url, {
+        headers: {
+          accept: "application/json",
+          authorization: `Bearer ${apiKey}`,
+        },
+      });
+    } catch {
+      throw new MercuryApiError(502, "Mercury API request failed before receiving a response.");
+    }
 
-    const text = await response.text();
+    let text: string;
+    try {
+      text = await response.text();
+    } catch {
+      throw new MercuryApiError(502, "Mercury API response body could not be read.");
+    }
     if (!response.ok) {
       throw new MercuryApiError(response.status, `Mercury API request failed with HTTP ${response.status}.`);
     }
     if (!text.trim()) return {};
-    return JSON.parse(text) as unknown;
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      throw new MercuryApiError(502, "Mercury API response was not valid JSON.");
+    }
   }
 
   return {
     async listAccounts(input = {}) {
-      const payload = await request("/accounts", { limit: limitParam(input.limit) });
+      const payload = await request("/accounts", cursorParams(input));
       return arrayFromPayload(payload, "accounts").map(normalizeAccount);
     },
     async getBalance(input) {
@@ -150,15 +177,14 @@ export function createMercuryReadClient(input: MercuryReadClientInput): MercuryR
     async listCards(input = {}) {
       const payload = await request("/cards", {
         accountId: input.accountId,
-        limit: limitParam(input.limit),
+        ...cursorParams(input),
       });
       return arrayFromPayload(payload, "cards").map(normalizeCard);
     },
     async listTransactions(input = {}) {
       const payload = await request("/transactions", {
         accountId: input.accountId,
-        limit: limitParam(input.limit),
-        order: orderParam(input.order),
+        ...cursorParams(input, { allowStartAt: true }),
       });
       return arrayFromPayload(payload, "transactions").map(normalizeTransaction);
     },
@@ -194,6 +220,36 @@ function orderParam(order: "asc" | "desc" | undefined): "asc" | "desc" | undefin
     throw new MercuryApiError(400, "Mercury order must be asc or desc.");
   }
   return order;
+}
+
+function cursorParams(
+  input: MercuryCursorPaginationInput,
+  options: { readonly allowStartAt?: boolean } = {},
+): Readonly<Record<string, string | number | undefined>> {
+  const startAfter = cursorParam("startAfter", input.startAfter);
+  const endBefore = cursorParam("endBefore", input.endBefore);
+  const startAt = cursorParam("startAt", input.startAt);
+  const cursorCount = [startAfter, endBefore, startAt].filter(Boolean).length;
+  if (cursorCount > 1) {
+    throw new MercuryApiError(400, "Mercury cursor pagination accepts only one of startAfter, endBefore, or startAt.");
+  }
+  if (startAt && options.allowStartAt !== true) {
+    throw new MercuryApiError(400, "Mercury startAt pagination is only supported for transaction lists.");
+  }
+  return {
+    limit: limitParam(input.limit),
+    order: orderParam(input.order),
+    start_after: startAfter,
+    end_before: endBefore,
+    ...(options.allowStartAt ? { start_at: startAt } : {}),
+  };
+}
+
+function cursorParam(name: string, value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) throw new MercuryApiError(400, `Mercury ${name} cursor must be non-empty.`);
+  return trimmed;
 }
 
 function arrayFromPayload(payload: unknown, key: string): readonly Record<string, unknown>[] {

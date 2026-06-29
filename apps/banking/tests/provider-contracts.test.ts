@@ -7,6 +7,7 @@ import {
   listProviderAdapterDescriptors,
   listProviderConformanceContracts,
   listOperationDescriptors,
+  MERCURY_LIVE_READ_OPERATION_IDS,
   planProviderOperation,
 } from "../src/index.ts";
 
@@ -407,6 +408,26 @@ describe("provider conformance contracts", () => {
       endpoint: { method: "GET", path: "/api/v1/account/{accountId}/cards" },
       mcp: { exposed: false },
     });
+  });
+
+  test("Mercury live execution is limited to the explicit read-only allowlist", () => {
+    const mercuryOperations = listOperationDescriptors({ providerId: "mercury", includeUnsupported: true });
+    const liveReadOperationIds = mercuryOperations
+      .filter((operation) => operation.liveReadEnabled)
+      .map((operation) => operation.operationId)
+      .sort();
+
+    expect(liveReadOperationIds).toEqual([...MERCURY_LIVE_READ_OPERATION_IDS].sort());
+    for (const operation of mercuryOperations) {
+      expect(operation.providerSideEffectsEnabled).toBe(false);
+      if (!liveReadOperationIds.includes(operation.operationId)) {
+        expect(operation.executionMode).not.toBe("implemented_read");
+      }
+      if (operation.safetyClass !== "read" && operation.support !== "unsupported") {
+        expect(operation.requiresOperationPlan).toBe(true);
+        expect(operation.executionMode).toBe("dry_run_only");
+      }
+    }
   });
 
   test("operation registry maps descriptors to the real CLI command surface", () => {

@@ -43,13 +43,13 @@ Usage:
   banking ops plan <provider.operation> --environment <sandbox|production> [--scopes <scope,...>] [--env-keys <KEY,...>] [--json]
   banking providers list [--json]
   banking providers show <provider> [--json]
-  banking accounts list --provider <provider> [--live true --environment <sandbox|production> --secret-key <key>] [--limit <n>] [--json]
+  banking accounts list --provider <provider> [--live true --environment <sandbox|production> --secret-key <key>] [--limit <n>] [--order <asc|desc>] [--start-after <id>|--end-before <id>] [--json]
   banking balances get --provider <provider> --account <id> [--live true --environment <sandbox|production> --secret-key <key>] [--json]
-  banking transactions list --provider <provider> [--account <id>] [--live true --environment <sandbox|production> --secret-key <key>] [--limit <n>] [--order <asc|desc>] [--json]
+  banking transactions list --provider <provider> [--account <id>] [--live true --environment <sandbox|production> --secret-key <key>] [--limit <n>] [--order <asc|desc>] [--start-after <id>|--end-before <id>|--start-at <id>] [--json]
   banking payments quote --provider <provider> --account <id> --amount <decimal> --currency <code> --to <name> [--recipient <provider-recipient-id>] [--rail <rail>] [--json]
   banking payments request --provider <provider> --account <id> --amount <decimal> --currency <code> --to <name> [--recipient <provider-recipient-id>] [--rail <rail>] [--json]
   banking payments status --provider <provider> --request <id> [--json]
-  banking cards list --provider <provider> [--account <id>] [--live true --environment <sandbox|production> --secret-key <key>] [--limit <n>] [--json]
+  banking cards list --provider <provider> [--account <id>] [--live true --environment <sandbox|production> --secret-key <key>] [--limit <n>] [--order <asc|desc>] [--start-after <id>|--end-before <id>] [--json]
   banking cards request --provider <provider> --account <id> --label <label> [--limit-month <decimal> --currency <code>] [--json]
   banking cards update --provider <provider> --card <id> [--label <label>] [--json]
   banking cards freeze|unfreeze|terminate --provider <provider> --card <id> [--json]
@@ -165,8 +165,11 @@ export async function runCli(argv: readonly string[] = Bun.argv.slice(2), runtim
       if (isLive(parsed)) {
         const provider = parseProviderId(requiredOption(parsed, "provider"));
         if (provider !== "mercury") return failLiveUnsupported("accounts list", provider, parsed.json);
-        const limit = limitOption(parsed);
-        emit({ accounts: await mercuryReadClient(parsed, runtime).listAccounts(limit ? { limit } : {}) }, parsed.json);
+        emit({ accounts: await mercuryReadClient(parsed, runtime).listAccounts({
+          ...limitInput(parsed),
+          ...orderInput(parsed),
+          ...cursorInput(parsed),
+        }) }, parsed.json);
         return 0;
       }
       return failNotImplemented("accounts list", parsed.json);
@@ -184,13 +187,12 @@ export async function runCli(argv: readonly string[] = Bun.argv.slice(2), runtim
       if (isLive(parsed)) {
         const provider = parseProviderId(requiredOption(parsed, "provider"));
         if (provider !== "mercury") return failLiveUnsupported("transactions list", provider, parsed.json);
-        const limit = limitOption(parsed);
-        const order = orderOption(parsed);
         emit({
           transactions: await mercuryReadClient(parsed, runtime).listTransactions({
             ...optionalOption(parsed, "account", "accountId"),
-            ...(limit ? { limit } : {}),
-            ...(order ? { order } : {}),
+            ...limitInput(parsed),
+            ...orderInput(parsed),
+            ...cursorInput(parsed, { allowStartAt: true }),
           }),
         }, parsed.json);
         return 0;
@@ -201,11 +203,12 @@ export async function runCli(argv: readonly string[] = Bun.argv.slice(2), runtim
       if (isLive(parsed)) {
         const provider = parseProviderId(requiredOption(parsed, "provider"));
         if (provider !== "mercury") return failLiveUnsupported("cards list", provider, parsed.json);
-        const limit = limitOption(parsed);
         emit({
           cards: await mercuryReadClient(parsed, runtime).listCards({
             ...optionalOption(parsed, "account", "accountId"),
-            ...(limit ? { limit } : {}),
+            ...limitInput(parsed),
+            ...orderInput(parsed),
+            ...cursorInput(parsed),
           }),
         }, parsed.json);
         return 0;
@@ -373,6 +376,33 @@ function orderOption(parsed: ParsedArgs): "asc" | "desc" | undefined {
   if (!value) return undefined;
   if (value !== "asc" && value !== "desc") throw new Error("--order must be asc or desc.");
   return value;
+}
+
+function limitInput(parsed: ParsedArgs): { readonly limit?: number } {
+  const limit = limitOption(parsed);
+  return limit ? { limit } : {};
+}
+
+function orderInput(parsed: ParsedArgs): { readonly order?: "asc" | "desc" } {
+  const order = orderOption(parsed);
+  return order ? { order } : {};
+}
+
+function cursorInput(
+  parsed: ParsedArgs,
+  options: { readonly allowStartAt?: boolean } = {},
+): { readonly startAfter?: string; readonly endBefore?: string; readonly startAt?: string } {
+  const startAfter = option(parsed, "start-after");
+  const endBefore = option(parsed, "end-before");
+  const startAt = option(parsed, "start-at");
+  const cursorCount = [startAfter, endBefore, startAt].filter(Boolean).length;
+  if (cursorCount > 1) throw new Error("Use only one of --start-after, --end-before, or --start-at.");
+  if (startAt && options.allowStartAt !== true) throw new Error("--start-at is only supported for transactions list.");
+  return {
+    ...(startAfter ? { startAfter } : {}),
+    ...(endBefore ? { endBefore } : {}),
+    ...(options.allowStartAt && startAt ? { startAt } : {}),
+  };
 }
 
 function mercuryReadClient(parsed: ParsedArgs, runtime: CliRuntime) {

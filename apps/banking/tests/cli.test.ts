@@ -228,6 +228,44 @@ describe("banking CLI scaffold", () => {
     expect(parsed.policyDecision.snapshot.requireApprovalForProviderSideEffects).toBe(true);
   });
 
+  test("card lifecycle envelopes ignore approval-disable flag in live mode", async () => {
+    const originalLog = console.log;
+    let output = "";
+    console.log = (...args: unknown[]) => {
+      output += args.join(" ");
+    };
+    try {
+      expect(await runCli([
+        "cards",
+        "freeze",
+        "--provider",
+        "mercury",
+        "--card",
+        "card_1",
+        "--live",
+        "true",
+        "--environment",
+        "production",
+        "--require-approval",
+        "false",
+        "--json",
+      ])).toBe(0);
+    } finally {
+      console.log = originalLog;
+    }
+
+    const parsed = JSON.parse(output) as {
+      readonly policyDecision: {
+        readonly kind: string;
+        readonly reasons: readonly string[];
+        readonly snapshot: { readonly requireApprovalForProviderSideEffects: boolean };
+      };
+    };
+    expect(parsed.policyDecision.kind).toBe("deny");
+    expect(parsed.policyDecision.reasons).toContain("Provider card operation is documented but not verified for execution.");
+    expect(parsed.policyDecision.snapshot.requireApprovalForProviderSideEffects).toBe(true);
+  });
+
   test("card request envelope exits successfully even when policy denies execution", async () => {
     expect(await runCli([
       "cards",
@@ -317,6 +355,45 @@ describe("banking CLI scaffold", () => {
     expect(parsed.accounts[0].routingNumberLast4).toBe("0021");
   });
 
+  test("Mercury live accounts list passes documented cursor pagination flags", async () => {
+    const originalLog = console.log;
+    let output = "";
+    console.log = (...args: unknown[]) => {
+      output += args.join(" ");
+    };
+    try {
+      expect(await runCli([
+        "accounts",
+        "list",
+        "--provider",
+        "mercury",
+        "--live",
+        "true",
+        "--environment",
+        "production",
+        "--secret-key",
+        "fixture-secret-key",
+        "--limit",
+        "2",
+        "--order",
+        "desc",
+        "--start-after",
+        "acct_prev",
+        "--json",
+      ], {
+        readSecret: () => "test-token",
+        fetch: async (url) => {
+          expect(String(url)).toBe("https://api.mercury.com/api/v1/accounts?limit=2&order=desc&start_after=acct_prev");
+          return new Response(JSON.stringify({ accounts: [{ id: "acct_1" }] }));
+        },
+      })).toBe(0);
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(JSON.parse(output).accounts).toHaveLength(1);
+  });
+
   test("Mercury live transactions list uses the org-wide endpoint and accepts latest-first order", async () => {
     const originalLog = console.log;
     let output = "";
@@ -389,6 +466,43 @@ describe("banking CLI scaffold", () => {
         fetch: async (url) => {
           expect(String(url)).toBe("https://api.mercury.com/api/v1/transactions?accountId=acct_1&limit=1");
           return new Response(JSON.stringify({ transactions: [{ id: "txn_1", accountId: "acct_1", amount: "1.00", status: "posted" }] }));
+        },
+      })).toBe(0);
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(JSON.parse(output).transactions).toHaveLength(1);
+  });
+
+  test("Mercury live transactions list passes documented cursor pagination flags", async () => {
+    const originalLog = console.log;
+    let output = "";
+    console.log = (...args: unknown[]) => {
+      output += args.join(" ");
+    };
+    try {
+      expect(await runCli([
+        "transactions",
+        "list",
+        "--provider",
+        "mercury",
+        "--live",
+        "true",
+        "--environment",
+        "production",
+        "--secret-key",
+        "fixture-secret-key",
+        "--limit",
+        "2",
+        "--start-at",
+        "txn_0",
+        "--json",
+      ], {
+        readSecret: () => "test-token",
+        fetch: async (url) => {
+          expect(String(url)).toBe("https://api.mercury.com/api/v1/transactions?limit=2&start_at=txn_0");
+          return new Response(JSON.stringify({ transactions: [{ id: "txn_1", amount: "1.00", status: "posted" }] }));
         },
       })).toBe(0);
     } finally {
@@ -477,6 +591,45 @@ describe("banking CLI scaffold", () => {
     expect(JSON.parse(output).cards).toHaveLength(1);
   });
 
+  test("Mercury live cards list passes documented cursor pagination flags", async () => {
+    const originalLog = console.log;
+    let output = "";
+    console.log = (...args: unknown[]) => {
+      output += args.join(" ");
+    };
+    try {
+      expect(await runCli([
+        "cards",
+        "list",
+        "--provider",
+        "mercury",
+        "--live",
+        "true",
+        "--environment",
+        "production",
+        "--secret-key",
+        "fixture-secret-key",
+        "--limit",
+        "2",
+        "--order",
+        "desc",
+        "--end-before",
+        "card_next",
+        "--json",
+      ], {
+        readSecret: () => "test-token",
+        fetch: async (url) => {
+          expect(String(url)).toBe("https://api.mercury.com/api/v1/cards?limit=2&order=desc&end_before=card_next");
+          return new Response(JSON.stringify({ cards: [{ id: "card_1", status: "active" }] }));
+        },
+      })).toBe(0);
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(JSON.parse(output).cards).toHaveLength(1);
+  });
+
   test("Mercury live reads require explicit environment", async () => {
     const originalError = console.error;
     let output = "";
@@ -503,5 +656,70 @@ describe("banking CLI scaffold", () => {
     }
 
     expect(output).toContain("Missing required --environment value.");
+  });
+
+  test("Mercury live reads reject non-Mercury providers before creating a live client", async () => {
+    const originalError = console.error;
+    let output = "";
+    console.error = (...args: unknown[]) => {
+      output += args.join(" ");
+    };
+    try {
+      expect(await runCli([
+        "accounts",
+        "list",
+        "--provider",
+        "erste-bcr",
+        "--live",
+        "true",
+        "--environment",
+        "production",
+        "--json",
+      ], {
+        fetch: async () => {
+          throw new Error("should not call a live adapter for non-Mercury providers");
+        },
+      })).toBe(2);
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(JSON.parse(output).message).toContain("Mercury only");
+  });
+
+  test("Mercury live read cursor flags reject conflicting values before fetch", async () => {
+    const originalError = console.error;
+    let output = "";
+    console.error = (...args: unknown[]) => {
+      output += args.join(" ");
+    };
+    try {
+      expect(await runCli([
+        "accounts",
+        "list",
+        "--provider",
+        "mercury",
+        "--live",
+        "true",
+        "--environment",
+        "production",
+        "--secret-key",
+        "fixture-secret-key",
+        "--start-after",
+        "acct_1",
+        "--end-before",
+        "acct_2",
+        "--json",
+      ], {
+        readSecret: () => "test-token",
+        fetch: async () => {
+          throw new Error("should not call Mercury with invalid cursor flags");
+        },
+      })).toBe(1);
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(JSON.parse(output).message).toContain("Use only one of --start-after, --end-before, or --start-at.");
   });
 });

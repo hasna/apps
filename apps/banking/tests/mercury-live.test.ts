@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
+  assertMercuryLiveConformance,
+  runMercuryLiveReadSmoke,
+} from "../src/providers/mercury-conformance.ts";
+import {
   MercuryApiError,
   MercuryCredentialError,
   createMercuryReadClient,
@@ -15,6 +19,16 @@ describe("Mercury live read adapter", () => {
         throw new Error("should not call secrets");
       },
     })).toBe("env-token");
+  });
+
+  test("prefers environment-specific credentials over the generic alias", () => {
+    expect(resolveMercuryApiKey({
+      environment: "production",
+      env: {
+        MERCURY_API_KEY: "generic-token",
+        MERCURY_PRODUCTION_API_KEY: "production-token",
+      },
+    })).toBe("production-token");
   });
 
   test("resolves credentials from explicit secret key", () => {
@@ -65,6 +79,19 @@ describe("Mercury live read adapter", () => {
       accountNumberLast4: "7890",
       routingNumberLast4: "0021",
     }]);
+  });
+
+  test("lists accounts with documented cursor pagination parameters", async () => {
+    const client = createMercuryReadClient({
+      environment: "production",
+      apiKey: "test-token",
+      fetch: async (url) => {
+        expect(String(url)).toBe("https://api.mercury.com/api/v1/accounts?limit=3&order=desc&start_after=acct_prev");
+        return jsonResponse({ accounts: [{ id: "acct_1" }] });
+      },
+    });
+
+    await expect(client.listAccounts({ limit: 3, order: "desc", startAfter: "acct_prev" })).resolves.toEqual([{ id: "acct_1" }]);
   });
 
   test("gets balance through the Mercury account endpoint", async () => {
@@ -123,6 +150,21 @@ describe("Mercury live read adapter", () => {
     ]);
   });
 
+  test("lists cards with documented cursor pagination parameters", async () => {
+    const client = createMercuryReadClient({
+      environment: "production",
+      apiKey: "test-token",
+      fetch: async (url) => {
+        expect(String(url)).toBe("https://api.mercury.com/api/v1/cards?limit=2&order=desc&end_before=card_next");
+        return jsonResponse({ cards: [{ id: "card_1", status: "active" }] });
+      },
+    });
+
+    await expect(client.listCards({ limit: 2, order: "desc", endBefore: "card_next" })).resolves.toEqual([
+      { id: "card_1", status: "active" },
+    ]);
+  });
+
   test("lists organization-wide transactions through the current read-only endpoint", async () => {
     const client = createMercuryReadClient({
       environment: "production",
@@ -135,6 +177,21 @@ describe("Mercury live read adapter", () => {
 
     await expect(client.listTransactions({ limit: 1, order: "desc" })).resolves.toEqual([
       { id: "txn_1", accountId: "acct_1", amount: "1.00", status: "posted" },
+    ]);
+  });
+
+  test("lists transactions with documented cursor pagination parameters", async () => {
+    const client = createMercuryReadClient({
+      environment: "production",
+      apiKey: "test-token",
+      fetch: async (url) => {
+        expect(String(url)).toBe("https://api.mercury.com/api/v1/transactions?limit=2&order=asc&start_at=txn_0");
+        return jsonResponse({ transactions: [{ id: "txn_1", amount: "1.00", status: "posted" }] });
+      },
+    });
+
+    await expect(client.listTransactions({ limit: 2, order: "asc", startAt: "txn_0" })).resolves.toEqual([
+      { id: "txn_1", amount: "1.00", status: "posted" },
     ]);
   });
 
@@ -166,6 +223,29 @@ describe("Mercury live read adapter", () => {
     await expect(client.listCards({ limit: 1001 })).rejects.toThrow("Mercury limit must be between 1 and 1000.");
     await expect(client.listTransactions({ limit: 1001 })).rejects.toThrow("Mercury limit must be between 1 and 1000.");
     await expect(client.listTransactions({ order: "newest" as "desc" })).rejects.toThrow("Mercury order must be asc or desc.");
+  });
+
+  test("rejects conflicting cursor pagination before calling Mercury", async () => {
+    const client = createMercuryReadClient({
+      environment: "production",
+      apiKey: "test-token",
+      fetch: async () => {
+        throw new Error("should not call Mercury with invalid pagination");
+      },
+    });
+
+    await expect(client.listAccounts({ startAfter: "acct_1", endBefore: "acct_2" })).rejects.toThrow(
+      "Mercury cursor pagination accepts only one of startAfter, endBefore, or startAt.",
+    );
+    await expect(client.listAccounts({ startAt: "acct_1" } as never)).rejects.toThrow(
+      "Mercury startAt pagination is only supported for transaction lists.",
+    );
+    await expect(client.listCards({ startAfter: "card_1", endBefore: "card_2" })).rejects.toThrow(
+      "Mercury cursor pagination accepts only one of startAfter, endBefore, or startAt.",
+    );
+    await expect(client.listTransactions({ startAfter: "txn_1", startAt: "txn_2" })).rejects.toThrow(
+      "Mercury cursor pagination accepts only one of startAfter, endBefore, or startAt.",
+    );
   });
 
   test("fails closed when list responses do not include the expected array", async () => {
@@ -218,6 +298,138 @@ describe("Mercury live read adapter", () => {
       expect(error).toBeInstanceOf(MercuryApiError);
       expect(String(error)).not.toContain("do-not-leak");
     }
+  });
+
+  test("redacts fetch and malformed JSON failures", async () => {
+    const fetchFailureClient = createMercuryReadClient({
+      environment: "production",
+      apiKey: "test-token",
+      fetch: async () => {
+        throw new Error("network failed for acct_secret");
+      },
+    });
+    try {
+      await fetchFailureClient.listAccounts();
+      throw new Error("expected fetch failure");
+    } catch (error) {
+      expect(String(error)).toContain("Mercury API request failed before receiving a response.");
+      expect(String(error)).not.toContain("acct_secret");
+    }
+
+    const malformedJsonClient = createMercuryReadClient({
+      environment: "production",
+      apiKey: "test-token",
+      fetch: async () => new Response("{\"accounts\":[{\"id\":\"acct_secret\"}"),
+    });
+    try {
+      await malformedJsonClient.listAccounts();
+      throw new Error("expected malformed JSON failure");
+    } catch (error) {
+      expect(String(error)).toContain("Mercury API response was not valid JSON.");
+      expect(String(error)).not.toContain("acct_secret");
+    }
+  });
+
+  test("Mercury live conformance pins the exact read-only live operation set", () => {
+    const report = assertMercuryLiveConformance();
+
+    expect(report).toMatchObject({
+      providerId: "mercury",
+      status: "passed",
+      providerSideEffectsEnabled: false,
+      mutationExecutionMode: "disabled",
+    });
+    expect(report.liveReadOperationIds).toEqual([
+      "mercury.accounts.list",
+      "mercury.balances.get",
+      "mercury.cards.list",
+      "mercury.transactions.list",
+    ]);
+    expect(report.mutationOperationIds).toContain("mercury.cards.freeze");
+    expect(report.sensitiveReadOperationIds).toContain("mercury.attachments.get");
+  });
+
+  test("live smoke runner executes only read endpoints and returns summary counts", async () => {
+    const requestedUrls: string[] = [];
+    const client = createMercuryReadClient({
+      environment: "production",
+      apiKey: "test-token",
+      fetch: async (url) => {
+        requestedUrls.push(String(url));
+        if (String(url).endsWith("/accounts?limit=1&order=asc")) {
+          return jsonResponse({
+            accounts: [{
+              id: "acct_secret",
+              accountNumber: "masked-account-7890",
+              routingNumber: "masked-routing-0021",
+            }],
+          });
+        }
+        if (String(url).endsWith("/cards?limit=1")) {
+          return jsonResponse({ cards: [{ id: "card_secret", lastFour: "4242", status: "active" }] });
+        }
+        if (String(url).endsWith("/transactions?limit=1&order=desc")) {
+          return jsonResponse({ transactions: [{ id: "txn_secret", amount: "1.00", status: "posted" }] });
+        }
+        if (String(url).endsWith("/account/acct_secret")) {
+          return jsonResponse({ id: "acct_secret", currentBalance: "100.00", availableBalance: "90.00" });
+        }
+        throw new Error(`unexpected URL ${String(url)}`);
+      },
+    });
+
+    const summary = await runMercuryLiveReadSmoke(client, { environment: "production" });
+    const serialized = JSON.stringify(summary);
+
+    expect(summary).toMatchObject({
+      providerId: "mercury",
+      environment: "production",
+      mode: "read_only_summary",
+      status: "passed",
+      counts: { accounts: 1, cards: 1, transactions: 1, balances: 1 },
+      balanceSource: "first_account",
+      redaction: "summary_counts_only",
+      mutationExecutionMode: "disabled",
+    });
+    expect(summary.executedOperationIds).toEqual([
+      "mercury.accounts.list",
+      "mercury.balances.get",
+      "mercury.cards.list",
+      "mercury.transactions.list",
+    ]);
+    expect(requestedUrls).toEqual([
+      "https://api.mercury.com/api/v1/accounts?limit=1&order=asc",
+      "https://api.mercury.com/api/v1/cards?limit=1",
+      "https://api.mercury.com/api/v1/transactions?limit=1&order=desc",
+      "https://api.mercury.com/api/v1/account/acct_secret",
+    ]);
+    expect(serialized).not.toContain("acct_secret");
+    expect(serialized).not.toContain("card_secret");
+    expect(serialized).not.toContain("txn_secret");
+    expect(serialized).not.toContain("4242");
+    expect(serialized).not.toContain("7890");
+  });
+
+  test("live smoke script emits sanitized failure output", () => {
+    const result = Bun.spawnSync(["bun", "scripts/smoke-mercury-live.ts"], {
+      cwd: new URL("..", import.meta.url).pathname,
+      env: {
+        PATH: Bun.env.PATH ?? "",
+        HOME: Bun.env.HOME ?? "",
+        BANKING_MERCURY_LIVE_SMOKE: "true",
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const stderr = new TextDecoder().decode(result.stderr);
+    const stdout = new TextDecoder().decode(result.stdout);
+
+    expect(result.exitCode).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("\"errorClass\": \"configuration_error\"");
+    expect(stderr).toContain("Output is sanitized");
+    expect(stderr).not.toContain("Missing required");
+    expect(stderr).not.toContain(["secret", "token:"].join("-"));
   });
 });
 
