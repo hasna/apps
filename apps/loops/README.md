@@ -315,6 +315,38 @@ loops routes show <work-item-id>
 loops routes invocations
 ```
 
+For Hasna OSS task-created routing, use a deterministic drain instead of tmux
+dispatch:
+
+```bash
+loops routes schedule todos-task oss-task-route-drain \
+  --every 5m \
+  --todos-project "$HOME/.hasna/loops" \
+  --project-path-prefix /home/hasna/workspace/hasna/opensource \
+  --tags auto:route \
+  --provider codewith \
+  --auth-profile-pool account004,account005,account006 \
+  --add-dir "$HOME/.hasna/todos,$HOME/.hasna/loops" \
+  --project-group oss \
+  --max-dispatch 2 \
+  --scan-limit 5000 \
+  --max-active-per-project 1 \
+  --max-active-per-project-group 4 \
+  --max-active 12 \
+  --worktree-mode required \
+  --evidence-dir "$HOME/.hasna/loops/reports/oss-task-route-drain" \
+  --compact
+```
+
+Only route tasks that explicitly opt in with `auto:route`, `route_enabled=true`,
+or `automation.allowed=true`. Use Codewith account pools, required worktrees,
+max-active throttles, and bounded evidence directories. Do not dispatch or paste
+task prompts into tmux panes. Keep `--scan-limit` large enough for the local
+ready-task backlog; otherwise low-priority or newly-created tasks can sit beyond
+the scanned window. Generated one-shot task/event route workflow specs are
+archived automatically when their workflow run reaches a terminal state;
+workflow run history and manifests are preserved.
+
 Workflow run manifests are written under
 `.hasna/loops/runs/<project-slug>/<subject-key>/<run-id>/manifest.json`.
 `subject-key` is a safe derived path segment, not the raw subject reference.

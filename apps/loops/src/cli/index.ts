@@ -17,6 +17,7 @@ import type {
   CreateLoopInput,
   CreateWorkflowInput,
   Loop,
+  LoopTemplateSummary,
   LoopTarget,
   OverlapPolicy,
   ScheduleSpec,
@@ -191,6 +192,13 @@ function positiveInteger(raw: string | undefined, label: string): number | undef
   if (raw === undefined) return undefined;
   const value = Number(raw);
   if (!Number.isInteger(value) || value <= 0) throw new Error(`${label} must be a positive integer`);
+  return value;
+}
+
+function nonNegativeInteger(raw: string | undefined, label: string): number | undefined {
+  if (raw === undefined) return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) throw new Error(`${label} must be a non-negative integer`);
   return value;
 }
 
@@ -855,6 +863,25 @@ interface TodosTaskRoutePrint {
   kind: "skipped" | "deduped" | "throttled" | "created";
   value: Record<string, unknown>;
   human: string;
+}
+
+function skippedDrainTask(task: TodosReadyTask, event: EventEnvelope | undefined, reason: string): TodosTaskRoutePrint {
+  const taskId = taskField(task, ["id", "task_id", "taskId"]) ?? event?.subject ?? "unknown";
+  return {
+    kind: "skipped",
+    value: {
+      skipped: true,
+      reason,
+      taskId,
+      event,
+      routeError: true,
+    },
+    human: `skipped task ${taskId}: ${reason}`,
+  };
+}
+
+function isSkippableDrainRouteError(message: string): boolean {
+  return message.startsWith("worktreeMode=required but projectPath is not an existing git repository:");
 }
 
 interface RouteSandboxPreflight {
@@ -2006,8 +2033,16 @@ function drainTodosTaskRoutes(opts: TodosDrainOptions & { tag?: string }): void 
   let created = 0;
   for (const task of candidates) {
     if (created >= maxDispatch) break;
-    const event = taskDrainEvent(task);
-    const result = routeTodosTaskEvent(event, opts);
+    let event: EventEnvelope | undefined;
+    let result: TodosTaskRoutePrint;
+    try {
+      event = taskDrainEvent(task);
+      result = routeTodosTaskEvent(event, opts);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!isSkippableDrainRouteError(message)) throw error;
+      result = skippedDrainTask(task, event, redact(message, 640) ?? "route task failed");
+    }
     results.push(result);
     if (result.kind === "created" && !opts.dryRun) created += 1;
     if (result.kind === "created" && opts.dryRun) created += 1;
@@ -2072,6 +2107,55 @@ function drainTodosTaskRoutes(opts: TodosDrainOptions & { tag?: string }): void 
   );
 }
 
+function formatTemplateVariable(template: LoopTemplateSummary, name: string): string {
+  const variable = template.variables.find((entry) => entry.name === name);
+  const placeholder = variable?.default ? variable.default : `<${name}>`;
+  return `  --var ${name}=${placeholder}`;
+}
+
+function printTemplateDetails(template: LoopTemplateSummary): void {
+  console.log(`${template.id} (${template.kind})`);
+  console.log(template.name);
+  console.log("");
+  console.log(template.description);
+  console.log("");
+  console.log("Variables:");
+  const nameWidth = Math.max(...template.variables.map((variable) => variable.name.length), 4);
+  for (const variable of template.variables) {
+    const required = variable.required ? "required" : "optional";
+    const defaultValue = variable.default ? ` default=${variable.default}` : "";
+    const description = variable.description ? `  ${variable.description}` : "";
+    console.log(`  ${variable.name.padEnd(nameWidth)}  ${required}${defaultValue}${description}`);
+  }
+  const requiredVariables = template.variables.filter((variable) => variable.required).map((variable) => variable.name);
+  const hintVariables = requiredVariables.length ? requiredVariables : template.variables.slice(0, 2).map((variable) => variable.name);
+  const renderArgs = hintVariables.map((name) => formatTemplateVariable(template, name));
+  const renderHint = renderArgs.length ? ` \\\n${renderArgs.join(" \\\n")}` : "";
+  console.log("");
+  console.log("Usage:");
+  console.log(`  loops templates render ${template.id}${renderHint}`);
+  if (template.kind === "workflow") console.log(`  loops templates create-workflow ${template.id}${renderHint}`);
+}
+
+function workflowStatusFromOpts(status: string | undefined, all: boolean | undefined): WorkflowSpec["status"] | undefined {
+  if (all) {
+    if (status && status !== "active") throw new Error("use either --all or --status, not both");
+    return undefined;
+  }
+  const value = status ?? "active";
+  if (value === "all") return undefined;
+  if (value === "active" || value === "archived") return value;
+  throw new Error("--status must be active, archived, or all");
+}
+
+function printWorkflowListWarning(args: { shown: number; total: number; status?: WorkflowSpec["status"]; offset: number; limit?: number }): void {
+  if (args.shown + args.offset >= args.total && args.offset === 0) return;
+  const scope = args.status ?? "all";
+  const nextOffset = args.offset + args.shown;
+  const next = args.limit && nextOffset < args.total ? ` next page: --limit ${args.limit} --offset ${nextOffset}` : "";
+  console.error(`showing ${args.offset + args.shown} of ${args.total} ${scope} workflows.${next}`);
+}
+
 templates
   .command("list")
   .alias("ls")
@@ -2089,7 +2173,8 @@ templates
 templates.command("show <id>").description("show a built-in template").action((id) => {
   const template = getLoopTemplate(id);
   if (!template) throw new Error(`template not found: ${id}`);
-  print(template, `${template.id} ${template.kind}`);
+  if (isJson()) print(template);
+  else printTemplateDetails(template);
 });
 
 templates
@@ -2434,17 +2519,25 @@ workflows
 workflows
   .command("list")
   .alias("ls")
-  .option("--status <status>", "active or archived", "active")
+  .option("--status <status>", "active, archived, or all", "active")
+  .option("--all", "include active and archived workflows")
+  .option("--limit <n>", "maximum rows to print; omitted means all matching workflows")
+  .option("--offset <n>", "number of matching rows to skip before printing", "0")
   .action((opts) => {
     const store = new Store();
     try {
-      const workflowsList = store.listWorkflows({ status: opts.status });
+      const status = workflowStatusFromOpts(opts.status, opts.all);
+      const limit = positiveInteger(opts.limit, "--limit");
+      const offset = nonNegativeInteger(opts.offset, "--offset") ?? 0;
+      const workflowsList = store.listWorkflows({ status, limit, offset });
+      const total = store.countWorkflows({ status });
       if (isJson()) print(workflowsList.map(publicWorkflow));
       else {
         for (const workflow of workflowsList) {
           console.log(`${workflow.id}  ${workflow.status.padEnd(8)}  steps=${workflow.steps.length}  ${workflow.name}`);
         }
       }
+      if (limit !== undefined || offset > 0) printWorkflowListWarning({ shown: workflowsList.length, total, status, offset, limit });
     } finally {
       store.close();
     }

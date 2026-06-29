@@ -879,6 +879,38 @@ describe("loops CLI", () => {
     expect(JSON.parse(list.stdout)).toEqual([]);
   });
 
+  test("workflows list is complete by default and warns for explicit pages", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-workflows-list-complete-"));
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      for (let index = 0; index < 205; index += 1) {
+        store.createWorkflow({
+          name: `workflow-list-${String(index).padStart(3, "0")}`,
+          steps: [{ id: "step", target: { type: "command", command: "true" } }],
+        });
+      }
+    } finally {
+      store.close();
+    }
+
+    const complete = runCli(dataDir, ["--json", "workflows", "list"]);
+    expect(complete.status).toBe(0);
+    expect(JSON.parse(complete.stdout)).toHaveLength(205);
+    expect(complete.stderr).toBe("");
+
+    const limited = runCli(dataDir, ["--json", "workflows", "list", "--limit", "10"]);
+    expect(limited.status).toBe(0);
+    expect(JSON.parse(limited.stdout)).toHaveLength(10);
+    expect(limited.stderr).toContain("showing 10 of 205 active workflows");
+    expect(limited.stderr).toContain("--offset 10");
+
+    const archived = runCli(dataDir, ["--json", "workflows", "archive", "workflow-list-000"]);
+    expect(archived.status).toBe(0);
+    const all = runCli(dataDir, ["--json", "workflows", "list", "--all"]);
+    expect(all.status).toBe(0);
+    expect(JSON.parse(all.stdout)).toHaveLength(205);
+  });
+
   test("health JSON reports failed expectations with classification and task upsert fields", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-health-json-"));
     const store = new Store(join(dataDir, "loops.db"));
@@ -1423,6 +1455,23 @@ describe("loops CLI", () => {
     expect(reportWorkflow.steps.map((step: { target: { worktree?: { mode?: string } } }) => step.target.worktree?.mode)).toEqual(["main", "main"]);
   });
 
+  test("templates show explains task-lifecycle variables and usage", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-show-"));
+
+    const show = runCli(dataDir, ["templates", "show", "task-lifecycle"]);
+
+    expect(show.status).toBe(0);
+    expect(show.stdout).toContain("task-lifecycle (workflow)");
+    expect(show.stdout).toContain("Task Lifecycle");
+    expect(show.stdout).toContain("Run the standard task-created lifecycle");
+    expect(show.stdout).toContain("taskId");
+    expect(show.stdout).toContain("required");
+    expect(show.stdout).toContain("worktreeMode");
+    expect(show.stdout).toContain("default=required");
+    expect(show.stdout).toContain("loops templates render task-lifecycle");
+    expect(show.stdout).toContain("loops templates create-workflow task-lifecycle");
+  });
+
   test("templates select different worker and verifier auth profiles from a pool", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-pool-"));
     const render = runCli(dataDir, [
@@ -1939,6 +1988,18 @@ describe("loops CLI", () => {
     expect(loops).toHaveLength(0);
   });
 
+  test("docs include the OSS task route drain safety recipe", () => {
+    const usage = readFileSync(new URL("../../docs/USAGE.md", import.meta.url), "utf8");
+
+    expect(usage).toContain("/home/hasna/workspace/hasna/opensource");
+    expect(usage).toContain("--tags auto:route");
+    expect(usage).toContain("--auth-profile-pool account004,account005,account006");
+    expect(usage).toContain("--worktree-mode required");
+    expect(usage).toContain("--max-active-per-project");
+    expect(usage).toContain("--evidence-dir");
+    expect(usage).toMatch(/Do not dispatch\s+or paste task prompts into tmux panes/);
+  });
+
   test("routes create replaces a stale persisted unsafe workflow with the same generated name", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-routes-unsafe-existing-"));
     const event = {
@@ -2335,6 +2396,84 @@ describe("loops CLI", () => {
     expect(loops).toHaveLength(1);
     const worker = value.results[0].workflow.steps.find((step: { id: string }) => step.id === "worker");
     expect(worker.target.addDirs).toEqual([join(dataDir, "todos-store")]);
+  });
+
+  test("todos task drain skips non-routeable tasks and continues dispatching", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-skip-non-git-"));
+    const binDir = join(dataDir, "bin");
+    const repo = createGitRepo("loops-cli-event-drain-skip-non-git-repo-");
+    const nonGit = join(dataDir, "not-a-repo");
+    mkdirSync(nonGit, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"task-lists\" ]]; then printf '[]\\n'; exit 0; fi",
+        "done",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"ready\" ]]; then printf '%s\\n' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "done",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const ready = [
+      {
+        id: "task-drain-non-git",
+        title: "Bad route task",
+        status: "pending",
+        working_dir: nonGit,
+        tags: ["auto:route"],
+      },
+      {
+        id: "task-drain-good-repo",
+        title: "Good route task",
+        status: "pending",
+        working_dir: repo,
+        tags: ["auto:route"],
+      },
+    ];
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        join(dataDir, "todos-store"),
+        "--limit",
+        "10",
+        "--max-dispatch",
+        "5",
+        "--worktree-mode",
+        "required",
+      ],
+      undefined,
+      { PATH: `${binDir}:/usr/bin:/bin`, TODOS_READY_JSON: JSON.stringify(ready) },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.considered).toBe(2);
+    expect(value.skipped).toBe(1);
+    expect(value.created).toBe(1);
+    expect(value.results[0]).toMatchObject({
+      kind: "skipped",
+      taskId: "task-drain-non-git",
+      routeError: true,
+    });
+    expect(value.results[0].reason).toContain("worktreeMode=required");
+    expect(value.results[1].kind).toBe("created");
+    expect(value.results[1].event.subject).toBe("task-drain-good-repo");
+
+    const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loops).toHaveLength(1);
   });
 
   test("todos task drain filters by task list and limits new dispatches", () => {

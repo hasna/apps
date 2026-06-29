@@ -43,6 +43,8 @@ interface DaemonLeaseFence {
 const DEFAULT_RECOVERY_BATCH_LIMIT = 100;
 const DEFAULT_RECOVERY_SCAN_MULTIPLIER = 5;
 const LIVE_EXPIRED_RUN_GRACE_MS = 60_000;
+const GENERATED_ROUTE_TEMPLATE_IDS = new Set(["todos-task-worker-verifier", "event-worker-verifier"]);
+const GENERATED_ROUTE_KEYS = new Set(["todos-task", "generic-event"]);
 
 interface LoopRow {
   id: string;
@@ -1241,14 +1243,36 @@ export class Store {
     })();
   }
 
-  listWorkflows(opts: { status?: WorkflowSpec["status"]; limit?: number } = {}): WorkflowSpec[] {
-    const limit = opts.limit ?? 200;
-    const rows = opts.status
-      ? this.db
-          .query<WorkflowRow, [string, number]>("SELECT * FROM workflow_specs WHERE status = ? ORDER BY updated_at DESC LIMIT ?")
-          .all(opts.status, limit)
-      : this.db.query<WorkflowRow, [number]>("SELECT * FROM workflow_specs ORDER BY status ASC, updated_at DESC LIMIT ?").all(limit);
+  listWorkflows(opts: { status?: WorkflowSpec["status"]; limit?: number; offset?: number } = {}): WorkflowSpec[] {
+    const offset = Math.max(0, opts.offset ?? 0);
+    let rows: WorkflowRow[];
+    if (opts.status && opts.limit !== undefined) {
+      rows = this.db
+        .query<WorkflowRow, [string, number, number]>(
+          "SELECT * FROM workflow_specs WHERE status = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+        )
+        .all(opts.status, opts.limit, offset);
+    } else if (opts.status) {
+      rows = this.db
+        .query<WorkflowRow, [string, number]>("SELECT * FROM workflow_specs WHERE status = ? ORDER BY updated_at DESC LIMIT -1 OFFSET ?")
+        .all(opts.status, offset);
+    } else if (opts.limit !== undefined) {
+      rows = this.db
+        .query<WorkflowRow, [number, number]>("SELECT * FROM workflow_specs ORDER BY status ASC, updated_at DESC LIMIT ? OFFSET ?")
+        .all(opts.limit, offset);
+    } else {
+      rows = this.db
+        .query<WorkflowRow, [number]>("SELECT * FROM workflow_specs ORDER BY status ASC, updated_at DESC LIMIT -1 OFFSET ?")
+        .all(offset);
+    }
     return rows.map(rowToWorkflow);
+  }
+
+  countWorkflows(opts: { status?: WorkflowSpec["status"] } = {}): number {
+    const row = opts.status
+      ? this.db.query<{ count: number }, [string]>("SELECT COUNT(*) AS count FROM workflow_specs WHERE status = ?").get(opts.status)
+      : this.db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM workflow_specs").get();
+    return row?.count ?? 0;
   }
 
   archiveWorkflow(idOrName: string): WorkflowSpec {
@@ -1260,6 +1284,61 @@ export class Store {
     const archived = this.getWorkflow(workflow.id);
     if (!archived) throw new Error(`workflow not found after archive: ${workflow.id}`);
     return archived;
+  }
+
+  private generatedRouteArchiveContext(args: { workflowId: string; loopId?: string; workItemId?: string }) {
+    if (!args.loopId || !args.workItemId) return undefined;
+    const workItem = this.getWorkflowWorkItem(args.workItemId);
+    if (!workItem || !GENERATED_ROUTE_KEYS.has(workItem.routeKey)) return undefined;
+    const invocation = this.getWorkflowInvocation(workItem.invocationId);
+    if (!invocation?.templateId || !GENERATED_ROUTE_TEMPLATE_IDS.has(invocation.templateId)) return undefined;
+    const loop = this.getLoop(args.loopId);
+    if (!loop || loop.schedule.type !== "once" || loop.target.type !== "workflow" || loop.target.workflowId !== args.workflowId) return undefined;
+    const input = loop.target.input ?? {};
+    if (input.workflowWorkItemId && input.workflowWorkItemId !== workItem.id) return undefined;
+    if (input.workflowInvocationId && input.workflowInvocationId !== invocation.id) return undefined;
+    if (workItem.workflowId && workItem.workflowId !== args.workflowId) return undefined;
+    const workflow = this.getWorkflow(args.workflowId);
+    if (!workflow) return undefined;
+    return { workflow, loop, workItem, invocation };
+  }
+
+  private maybeArchiveGeneratedRouteWorkflow(args: { workflowId: string; loopId?: string; workItemId?: string; workflowRunId?: string; updated: string }): void {
+    const context = this.generatedRouteArchiveContext(args);
+    if (!context) return;
+    const { workflow, loop, workItem } = context;
+    if (!workflow || workflow.status !== "active") return;
+    const nonTerminal = this.db
+      .query<{ count: number }, [string]>(
+        `SELECT COUNT(*) AS count FROM workflow_runs
+         WHERE workflow_id = ? AND status NOT IN ('succeeded', 'failed', 'timed_out', 'cancelled')`,
+      )
+      .get(args.workflowId)?.count ?? 0;
+    if (nonTerminal > 0) return;
+    const res = this.db
+      .query("UPDATE workflow_specs SET status='archived', updated_at=? WHERE id=? AND status='active'")
+      .run(args.updated, args.workflowId);
+    if (res.changes === 1 && args.workflowRunId) {
+      this.appendWorkflowEvent(args.workflowRunId, "workflow_archived", undefined, {
+        workflowId: args.workflowId,
+        loopId: loop.id,
+        workItemId: workItem.id,
+        routeKey: workItem.routeKey,
+        reason: "terminal generated one-shot route workflow",
+      });
+    }
+  }
+
+  private maybeArchiveTerminalGeneratedRouteWorkflow(workflowRunId: string, updated: string): void {
+    const run = this.getWorkflowRun(workflowRunId);
+    if (!run) return;
+    this.maybeArchiveGeneratedRouteWorkflow({
+      workflowId: run.workflowId,
+      loopId: run.loopId,
+      workItemId: run.workItemId,
+      workflowRunId,
+      updated,
+    });
   }
 
   createWorkflowInvocation(input: CreateWorkflowInvocationInput): WorkflowInvocation {
@@ -2317,6 +2396,7 @@ export class Store {
         const itemStatus: WorkflowWorkItemStatus =
           status === "succeeded" ? "succeeded" : status === "cancelled" ? "cancelled" : "failed";
         this.setWorkflowWorkItemsForWorkflowRun(workflowRunId, itemStatus, patch.error, finishedAt);
+        this.maybeArchiveTerminalGeneratedRouteWorkflow(workflowRunId, finishedAt);
       }
       this.db.exec("COMMIT");
     } catch (error) {
@@ -2355,6 +2435,7 @@ export class Store {
           .run({ $workflowRunId: workflowRunId, $finished: now, $reason: reason, $updated: now });
         this.setWorkflowWorkItemsForWorkflowRun(workflowRunId, "cancelled", reason, now);
         this.appendWorkflowEvent(workflowRunId, "cancelled", undefined, { reason });
+        this.maybeArchiveTerminalGeneratedRouteWorkflow(workflowRunId, now);
       }
       this.db.exec("COMMIT");
       return this.requireWorkflowRun(workflowRunId);
@@ -2707,7 +2788,20 @@ export class Store {
     const run = this.getRun(id);
     if (!run) throw new Error(`run not found after finalize: ${id}`);
     if (opts.claimedBy && res.changes !== 1) return run;
-    if (res.changes === 1) this.setWorkflowWorkItemsForLoopRun(run, patch.error, finishedAt);
+    if (res.changes === 1) {
+      this.setWorkflowWorkItemsForLoopRun(run, patch.error, finishedAt);
+      const loop = this.getLoop(run.loopId);
+      const itemStatus = workItemStatusForLoopRun(run.status, run.attempt, loop?.maxAttempts);
+      if (loop?.target.type === "workflow" && itemStatus && itemStatus !== "admitted") {
+        const workItemId = loop.target.input?.workflowWorkItemId ?? loop.target.input?.workItemId;
+        this.maybeArchiveGeneratedRouteWorkflow({
+          workflowId: loop.target.workflowId,
+          loopId: loop.id,
+          workItemId,
+          updated: finishedAt,
+        });
+      }
+    }
     return run;
   }
 
@@ -2871,6 +2965,7 @@ export class Store {
             loopRunId: row.id,
           });
           this.setWorkflowWorkItemsForWorkflowRun(workflowRow.id, "failed", "parent loop run lease expired before completion", finished);
+          this.maybeArchiveTerminalGeneratedRouteWorkflow(workflowRow.id, finished);
         }
         const loop = this.getLoop(row.loop_id);
         const itemStatus = workItemStatusForLoopRun("abandoned", row.attempt, loop?.maxAttempts);
@@ -2882,6 +2977,15 @@ export class Store {
             ? "run lease expired before completion; retry pending"
             : "run lease expired before completion";
           this.setWorkflowWorkItemsForLoop(row.loop_id, itemStatus, reason, finished, statuses);
+          if (loop?.target.type === "workflow" && itemStatus !== "admitted") {
+            const workItemId = loop.target.input?.workflowWorkItemId ?? loop.target.input?.workItemId;
+            this.maybeArchiveGeneratedRouteWorkflow({
+              workflowId: loop.target.workflowId,
+              loopId: loop.id,
+              workItemId,
+              updated: finished,
+            });
+          }
         }
         this.db.exec("COMMIT");
       } catch (error) {

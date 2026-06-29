@@ -367,13 +367,13 @@ loops events drain todos-task \
   --todos-project "$HOME/.hasna/loops" \
   --task-list repoops-pr-queue \
   --tags auto:route \
-  --project-path-prefix "$HOME/workspace/hasna/opensource" \
+  --project-path-prefix /home/hasna/workspace/hasna/opensource \
   --provider codewith \
   --auth-profile-pool account004,account005,account006 \
   --add-dir "$HOME/.hasna/todos,$HOME/.hasna/loops" \
   --project-group oss \
   --max-dispatch 2 \
-  --scan-limit 500 \
+  --scan-limit 5000 \
   --max-active-per-project 1 \
   --max-active-per-project-group 4 \
   --max-active 12 \
@@ -393,6 +393,45 @@ command loop: it fills only available capacity, writes compact JSON evidence
 when requested, and leaves excess ready tasks in todos for a later drain pass.
 Use `--dry-run` to preview candidates and rendered workflows without mutating
 OpenLoops state.
+
+For the Hasna OSS task-created route, keep the drain deterministic and narrow:
+
+```bash
+loops routes schedule todos-task oss-task-route-drain \
+  --every 5m \
+  --todos-project "$HOME/.hasna/loops" \
+  --project-path-prefix /home/hasna/workspace/hasna/opensource \
+  --tags auto:route \
+  --provider codewith \
+  --auth-profile-pool account004,account005,account006 \
+  --add-dir "$HOME/.hasna/todos,$HOME/.hasna/loops" \
+  --project-group oss \
+  --max-dispatch 2 \
+  --scan-limit 5000 \
+  --max-active-per-project 1 \
+  --max-active-per-project-group 4 \
+  --max-active 12 \
+  --worktree-mode required \
+  --evidence-dir "$HOME/.hasna/loops/reports/oss-task-route-drain" \
+  --compact
+```
+
+Only tasks under `/home/hasna/workspace/hasna/opensource` that explicitly opt
+in with the `auto:route` tag, `route_enabled=true`, or
+`automation.allowed=true` should be routed. Keep repo-mutating worker/verifier
+runs on a Codewith account pool with `--worktree-mode required`. Do not dispatch
+or paste task prompts into tmux panes. Use max-active throttles and
+`--max-dispatch` to bound agent fan-out, and write compact evidence into a
+bounded reports directory so operators can audit each drain without unbounded
+stdout or loop history growth. Keep `--scan-limit` large enough for the current
+ready-task backlog; if the scan is exhausted before matching tasks appear, the
+drain will correctly do no work.
+
+Generated task/event route workflow specs are lifecycle-managed. After a
+generated one-shot route workflow run reaches `succeeded`, `failed`,
+`timed_out`, or `cancelled`, OpenLoops archives the generated workflow spec while
+preserving workflow run, step, event, manifest, loop, invocation, and work-item
+history.
 
 For other Hasna apps that expose `@hasna/events` webhooks, use the generic
 handler:

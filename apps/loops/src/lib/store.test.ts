@@ -134,6 +134,55 @@ describe("Store", () => {
       store.finalizeWorkflowRun(run.id, "succeeded");
       expect(store.getWorkflowWorkItem(workItem.id)?.status).toBe("succeeded");
       expect(store.countActiveWorkflowWorkItems({ projectKey: "/tmp/open-loops" })).toEqual({ global: 0, project: 0 });
+      expect(store.getWorkflow(workflow.id)?.status).toBe("archived");
+      expect(store.listWorkflowRuns({ workflowId: workflow.id })).toHaveLength(1);
+      expect(store.listWorkflowEvents(run.id).map((event) => event.eventType)).toContain("workflow_archived");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("does not archive route-shaped workflows without generated route template metadata", () => {
+    const store = new Store(":memory:");
+    try {
+      const invocation = store.createWorkflowInvocation({
+        sourceRef: { kind: "event", id: "evt-reusable-route", dedupeKey: "todos-task:reusable-route" },
+        subjectRef: { kind: "task", id: "reusable-route", path: "/tmp/open-loops" },
+        intent: "route",
+        scope: { projectPath: "/tmp/open-loops" },
+      });
+      const workItem = store.upsertWorkflowWorkItem({
+        routeKey: "todos-task",
+        idempotencyKey: "todos-task:reusable-route",
+        invocationId: invocation.id,
+        sourceType: "task.created",
+        sourceRef: "evt-reusable-route",
+        subjectRef: "reusable-route",
+        projectKey: "/tmp/open-loops",
+      });
+      const workflow = store.createWorkflow({
+        name: "reusable-route-shaped-workflow",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const loop = store.createLoop({
+        name: "reusable-route-shaped-loop",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: {
+          type: "workflow",
+          workflowId: workflow.id,
+          input: {
+            workflowInvocationId: invocation.id,
+            workflowWorkItemId: workItem.id,
+          },
+        },
+      });
+      store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id });
+      const run = store.createWorkflowRun({ workflow, loop, scheduledFor: "2026-01-01T00:00:00.000Z" });
+
+      store.finalizeWorkflowRun(run.id, "succeeded");
+
+      expect(store.getWorkflow(workflow.id)?.status).toBe("active");
+      expect(store.listWorkflowEvents(run.id).map((event) => event.eventType)).not.toContain("workflow_archived");
     } finally {
       store.close();
     }
@@ -160,10 +209,29 @@ describe("Store", () => {
     }
   });
 
+  test("does not archive reusable workflows after ordinary terminal runs", () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "manual-reusable-workflow",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const run = store.createWorkflowRun({ workflow, scheduledFor: "2026-01-01T00:00:00.000Z" });
+
+      store.finalizeWorkflowRun(run.id, "succeeded");
+
+      expect(store.getWorkflow(workflow.id)?.status).toBe("active");
+      expect(store.listWorkflowEvents(run.id).map((event) => event.eventType)).not.toContain("workflow_archived");
+    } finally {
+      store.close();
+    }
+  });
+
   test("clears active admission work items when a workflow loop fails before a workflow run exists", () => {
     const store = new Store(":memory:");
     try {
       const invocation = store.createWorkflowInvocation({
+        templateId: "todos-task-worker-verifier",
         sourceRef: { kind: "event", id: "evt-preflight-fail", dedupeKey: "todos-task:preflight-fail:task.created" },
         subjectRef: { kind: "task", id: "preflight-fail", path: "/tmp/open-loops" },
         intent: "route",
@@ -215,6 +283,7 @@ describe("Store", () => {
 
       expect(store.getWorkflowWorkItem(workItem.id)?.status).toBe("failed");
       expect(store.countActiveWorkflowWorkItems({ projectKey: "/tmp/open-loops" }).project).toBe(0);
+      expect(store.getWorkflow(workflow.id)?.status).toBe("archived");
     } finally {
       store.close();
     }
@@ -360,6 +429,63 @@ describe("Store", () => {
       const recovered = store.recoverExpiredRunLeases(new Date("2026-01-01T00:00:01Z"));
       expect(recovered).toHaveLength(1);
       expect(recovered[0]?.status).toBe("abandoned");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("archives generated route workflows when expired lease recovery fails their workflow run", () => {
+    const store = new Store(":memory:");
+    try {
+      const invocation = store.createWorkflowInvocation({
+        templateId: "todos-task-worker-verifier",
+        sourceRef: { kind: "event", id: "evt-lease-route", dedupeKey: "todos-task:lease-route" },
+        subjectRef: { kind: "task", id: "lease-route", path: "/tmp/open-loops" },
+        intent: "route",
+        scope: { projectPath: "/tmp/open-loops" },
+      });
+      const workItem = store.upsertWorkflowWorkItem({
+        routeKey: "todos-task",
+        idempotencyKey: "todos-task:lease-route",
+        invocationId: invocation.id,
+        sourceType: "task.created",
+        sourceRef: "evt-lease-route",
+        subjectRef: "lease-route",
+        projectKey: "/tmp/open-loops",
+      });
+      const workflow = store.createWorkflow({
+        name: "lease-route-workflow",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const loop = store.createLoop(
+        {
+          name: "lease-route-loop",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: {
+            type: "workflow",
+            workflowId: workflow.id,
+            input: {
+              workflowInvocationId: invocation.id,
+              workflowWorkItemId: workItem.id,
+            },
+          },
+          leaseMs: 10,
+          maxAttempts: 1,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id });
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      const workflowRun = store.createWorkflowRun({ workflow, loop, loopRun: claim!.run });
+
+      const recovered = store.recoverExpiredRunLeases(new Date("2026-01-01T00:00:01Z"));
+
+      expect(recovered).toHaveLength(1);
+      expect(store.getWorkflowRun(workflowRun.id)?.status).toBe("failed");
+      expect(store.getWorkflowWorkItem(workItem.id)?.status).toBe("failed");
+      expect(store.getWorkflow(workflow.id)?.status).toBe("archived");
+      expect(store.listWorkflowEvents(workflowRun.id).map((event) => event.eventType)).toContain("workflow_archived");
     } finally {
       store.close();
     }
