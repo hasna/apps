@@ -3,6 +3,7 @@ dist/
 dashboard/node_modules/
 dashboard/dist/
 .contacts/
+.hasna/
 *.db
 *.db-shm
 *.db-wal

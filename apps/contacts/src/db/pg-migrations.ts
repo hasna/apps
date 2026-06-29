@@ -1,5 +1,5 @@
 /**
- * PostgreSQL migrations for open-contacts cloud sync.
+ * PostgreSQL schema translations for deployments that provide their own database adapter.
  *
  * Equivalent of the SQLite migrations in database.ts, translated for PostgreSQL.
  * Each element is a standalone SQL string that must be executed in order.

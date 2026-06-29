@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 import { registerEventCommands, registerWebhookCommands } from "@hasna/events/commander";
 import { program } from "commander";
-import { registerCloudCommands } from "@hasna/cloud";
 import { registerCoreCommands } from "./commands/core.js";
 import { registerCrmCommands } from "./commands/crm.js";
 import { registerAdvancedCommands } from "./commands/advanced.js";
+import { registerStorageCommands } from "./storage.js";
 import { createRequire } from "node:module";
 
 const _require = createRequire(import.meta.url);
@@ -18,7 +18,7 @@ program
 registerCoreCommands(program);
 registerCrmCommands(program);
 registerAdvancedCommands(program);
-registerCloudCommands(program, "contacts");
+registerStorageCommands(program);
 registerWebhookCommands(program, { source: "contacts" });
 registerEventCommands(program, { source: "contacts", eventsCommandName: "hasna-events" });
 

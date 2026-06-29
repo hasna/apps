@@ -1,4 +1,4 @@
-import { SqliteAdapter } from "@hasna/cloud";
+import { SqliteAdapter } from "./sqlite-adapter.js";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
@@ -566,7 +566,7 @@ const MIGRATIONS = [
   `,
 ];
 
-export type ContactsDatabase = InstanceType<typeof SqliteAdapter>;
+export type ContactsDatabase = SqliteAdapter;
 
 let _db: ContactsDatabase | null = null;
 
@@ -577,11 +577,6 @@ export function getDatabase(path?: string): ContactsDatabase {
   const db = new SqliteAdapter(dbPath);
   db.exec("PRAGMA journal_mode=WAL");
   db.exec("PRAGMA foreign_keys=ON");
-  // Compatibility shim: older @hasna/cloud versions may lack .query().
-  // Polyfill it with .prepare() which has the same .get()/.all()/.run() API.
-  if (typeof (db as unknown as Record<string, unknown>)["query"] !== "function") {
-    (db as unknown as Record<string, unknown>)["query"] = (sql: string) => db.prepare(sql);
-  }
   runMigrations(db);
   _db = db;
   return db;
@@ -599,18 +594,46 @@ export function now(): string {
   return new Date().toISOString();
 }
 
-function runMigrations(db: ContactsDatabase): void {
+function quoteIdentifier(identifier: string): string {
+  return `"${identifier.replaceAll('"', '""')}"`;
+}
+
+function columnExists(db: ContactsDatabase, table: string, column: string): boolean {
+  const rows = db.query(`PRAGMA table_info(${quoteIdentifier(table)})`).all() as Array<{ name: string }>;
+  return rows.some((row) => row.name === column);
+}
+
+function makeAddColumnStatementsIdempotent(db: ContactsDatabase, sql: string): string {
+  return sql
+    .split("\n")
+    .map((line) => {
+      const match = line.match(/^(\s*)ALTER\s+TABLE\s+([A-Za-z_][A-Za-z0-9_]*)\s+ADD\s+COLUMN\s+([A-Za-z_][A-Za-z0-9_]*)\b(.*);\s*$/i);
+      if (!match) return line;
+
+      const [, indent = "", table = "", column = ""] = match;
+      return columnExists(db, table, column)
+        ? `${indent}-- skipped existing column ${table}.${column}`
+        : line;
+    })
+    .join("\n");
+}
+
+function applyMigration(db: ContactsDatabase, sql: string, version: number): void {
+  const migrationSql = makeAddColumnStatementsIdempotent(db, sql);
   try {
-    const row = db.query("SELECT MAX(version) as v FROM _migrations").get() as { v: number | null };
-    const current = row?.v ?? -1;
-    for (let i = current + 1; i < MIGRATIONS.length; i++) {
-      db.exec(MIGRATIONS[i]!);
-      db.exec(`INSERT OR REPLACE INTO _migrations(version) VALUES(${i})`);
-    }
-  } catch {
-    for (const m of MIGRATIONS) {
-      try { db.exec(m); } catch {}
-    }
-    try { db.exec(`INSERT OR REPLACE INTO _migrations(version) VALUES(${MIGRATIONS.length - 1})`); } catch {}
+    db.exec(migrationSql);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to apply contacts migration ${version}: ${message}`);
+  }
+}
+
+function runMigrations(db: ContactsDatabase): void {
+  db.exec("CREATE TABLE IF NOT EXISTS _migrations (version INTEGER PRIMARY KEY)");
+  const row = db.query("SELECT MAX(version) as v FROM _migrations").get() as { v: number | null };
+  const current = row?.v ?? -1;
+  for (let i = current + 1; i < MIGRATIONS.length; i++) {
+    applyMigration(db, MIGRATIONS[i]!, i);
+    db.exec(`INSERT OR REPLACE INTO _migrations(version) VALUES(${i})`);
   }
 }

@@ -1,5 +1,10 @@
 // Database
 export { getDatabase, resetDatabase } from "./db/database.js";
+export { SqliteAdapter } from "./db/sqlite-adapter.js";
+export { getStorageStatus, CONTACTS_STORAGE_TABLES } from "./db/storage.js";
+export type { ContactsStorageStatus, StorageTableStatus } from "./db/storage.js";
+export { saveLocalFeedback } from "./db/feedback.js";
+export type { LocalFeedbackInput, LocalFeedbackResult } from "./db/feedback.js";
 
 // Contacts
 export {

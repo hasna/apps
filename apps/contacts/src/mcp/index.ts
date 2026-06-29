@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { registerCloudTools } from "@hasna/cloud";
 import { registerContactsTools } from "./register-tools.js";
+import { registerContactsStorageTools } from "./storage-tools.js";
 import { isHttpMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
 
 function getServerVersion(): string {
@@ -20,7 +20,7 @@ function getServerVersion(): string {
 export function buildServer(): McpServer {
   const server = new McpServer({ name: "contacts", version: getServerVersion() });
   registerContactsTools(server);
-  registerCloudTools(server, "contacts");
+  registerContactsStorageTools(server);
   return server;
 }
 

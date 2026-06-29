@@ -44,15 +44,22 @@ The REST server (`contacts-serve`) also exposes `/health` and `/mcp` when runnin
 contacts-serve
 ```
 
-## Cloud Sync
+## Storage
 
-This package supports cloud sync via `@hasna/cloud`:
+Contacts owns its local SQLite storage directly. It does not depend on shared
+cloud runtime commands or MCP tools.
 
 ```bash
-cloud setup
-cloud sync push --service contacts
-cloud sync pull --service contacts
+contacts storage status
+contacts storage status --json
+contacts cloud status --json
 ```
+
+`contacts cloud status` remains as a compatibility alias that reports local
+storage and remote-sync availability. `contacts cloud push` and
+`contacts cloud pull` return a clear unsupported message until repo-native
+remote sync is configured inside this package. `contacts cloud feedback` saves
+feedback locally in the contacts database.
 
 ## Data Directory
 
