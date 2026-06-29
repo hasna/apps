@@ -10,4 +10,5 @@ temp/
 .takumi/
 *.pem
 *.key
+*.tgz
 imported_modules.txt

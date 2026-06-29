@@ -1,11 +1,10 @@
 {
   "name": "@hasna/terminal",
-  "version": "4.3.17",
+  "version": "4.3.18",
   "description": "Smart terminal wrapper for AI agents and humans — structured output, token compression, MCP server, natural language",
   "type": "module",
   "files": [
     "dist/**",
-    "src/**",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
@@ -21,11 +20,14 @@
     "benchmark": "bun run build && bun benchmarks/benchmark.mjs",
     "benchmark:real": "bun run build && bun benchmarks/real-cli-benchmark.mjs",
     "test": "bun test",
+    "no-cloud:source": "bun test src/no-cloud-contract.test.ts",
+    "no-cloud:pack": "bun run build && bun scripts/no-cloud-artifact-scan.mjs",
+    "prepack": "bun run build && bun scripts/no-cloud-artifact-scan.mjs",
+    "prepublishOnly": "bun test && bun run build && bun scripts/no-cloud-artifact-scan.mjs",
     "postinstall": "mkdir -p $HOME/.hasna/terminal/profiles $HOME/.hasna/terminal/outputs 2>/dev/null || true"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
-    "@hasna/cloud": "0.1.24",
     "@hasna/events": "^0.1.6",
     "@hasna/mementos": "^0.10.0",
     "@modelcontextprotocol/sdk": "^1.27.1",

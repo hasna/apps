@@ -1,5 +1,17 @@
 # Changelog
 
+## [4.3.18] - 2026-06-29
+### Changed
+- Removed the retired shared cloud MCP helper registration and dependency from
+  the terminal package.
+- Replaced the README legacy sync section with the terminal-owned local storage
+  boundary.
+- Added source and packed-artifact no-cloud release gates.
+
+This is a patch release because the shared cloud helper is being retired across
+the open-source package set; terminal-owned functionality remains local and the
+MCP server still exposes the terminal-native tool groups.
+
 ## [0.7.0] - 2026-03-15
 ### Added
 - `terminal exec` command — smart execution for AI agents with full pipeline

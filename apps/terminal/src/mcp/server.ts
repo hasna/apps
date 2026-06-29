@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { createSession } from "../sessions-db.js";
+import { getPackageVersion } from "../package-info.js";
 import { createHelpers } from "./tools/helpers.js";
 
 // Tool registration modules
@@ -16,14 +17,13 @@ import { registerProcessTools } from "./tools/process.js";
 import { registerBatchTools } from "./tools/batch.js";
 import { registerMemoryTools } from "./tools/memory.js";
 import { registerMetaTools } from "./tools/meta.js";
-import { registerCloudTools } from "@hasna/cloud";
 
 // ── server ───────────────────────────────────────────────────────────────────
 
 export function createServer(): McpServer {
   const server = new McpServer({
     name: "terminal",
-    version: "4.2.0",
+    version: getPackageVersion(),
   });
 
   // Create a session for this MCP server instance
@@ -51,7 +51,6 @@ export function createServer(): McpServer {
   registerBatchTools(server, h);
   registerMemoryTools(server, h);
   registerMetaTools(server, h);
-  registerCloudTools(server, "terminal");
 
   // ── Agent Tools ──────────────────────────────────────────────────────────
   const _agentReg = new Map<string, { id: string; name: string; last_seen_at: string; project_id?: string }>();

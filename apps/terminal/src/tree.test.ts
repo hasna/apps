@@ -1,12 +1,12 @@
 import { describe, it, expect } from "bun:test";
 import { buildTree, compactTree } from "./tree.js";
-import { join } from "path";
+import { basename } from "path";
 
 describe("buildTree", () => {
   it("builds tree from current directory", () => {
     const tree = buildTree(process.cwd(), { maxDepth: 1 });
     expect(tree.type).toBe("dir");
-    expect(tree.name).toBe("open-terminal");
+    expect(tree.name).toBe(basename(process.cwd()));
     expect(Array.isArray(tree.children)).toBe(true);
   });
 

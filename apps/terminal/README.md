@@ -92,19 +92,15 @@ The app gets there through several cheap layers:
 - local learned prompt-to-command mappings so repeated agent requests can skip AI entirely
 - persistent economy/session stats so agents can measure token savings, cost, and ROI over time
 
-## Cloud Sync
-
-This package supports cloud sync via `@hasna/cloud`:
-
-```bash
-cloud setup
-cloud sync push --service terminal
-cloud sync pull --service terminal
-```
-
 ## Data Directory
 
-Data is stored in `~/.hasna/terminal/`.
+Terminal stores local profiles, command output manifests, session records, and
+cache data under `~/.hasna/terminal/`.
+
+The MCP server exposes terminal-native tools only. It does not register shared
+cloud helper tools; any future remote sync should be implemented as
+terminal-owned storage commands.
+
 
 ## License
 
