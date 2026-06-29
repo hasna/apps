@@ -55,8 +55,17 @@ import {
   listProviderProfiles,
   searchProviderProfiles,
 } from "../lib/provider-profiles.js";
+import {
+  STORAGE_SYNC_TABLES,
+  collectStorageSyncErrors,
+  getStorageSyncStatus,
+  storagePull,
+  storagePush,
+  storageSync,
+} from "../lib/storage-sync.js";
 
 const VERSION = readPackageVersion(import.meta.url);
+const storageTableSchema = z.enum(STORAGE_SYNC_TABLES);
 
 export interface McpsMcpToolDefinition {
   name: string;
@@ -94,6 +103,11 @@ function jsonContent(value: unknown) {
 
 function errorContent(text: string) {
   return { ...textContent(text), isError: true };
+}
+
+function storageResultContent(value: Awaited<ReturnType<typeof storagePush>> | Awaited<ReturnType<typeof storageSync>>) {
+  const errors = collectStorageSyncErrors(value);
+  return errors.length > 0 ? { ...jsonContent(value), isError: true } : jsonContent(value);
 }
 
 function localConsent(input: Record<string, unknown>): LocalCommandConsent {
@@ -309,6 +323,42 @@ export function buildMcpTools(): McpsMcpToolDefinition[] {
         if (!entry) return errorContent(`Server "${String(id)}" not found.`);
         return jsonContent(redactServerEnv(entry));
       },
+    },
+    {
+      name: "storage_status",
+      description: "Show app-owned MCP registry storage configuration and sync metadata.",
+      paramsSchema: {},
+      run: () => jsonContent(getStorageSyncStatus()),
+    },
+    {
+      name: "storage_push",
+      description: "Push local open-mcps registry tables to the configured Postgres database.",
+      paramsSchema: {
+        tables: z.array(storageTableSchema).optional().describe("Tables to push"),
+      },
+      run: async ({ tables }) => storageResultContent(await storagePush({
+        tables: Array.isArray(tables) ? tables.map(String) : undefined,
+      })),
+    },
+    {
+      name: "storage_pull",
+      description: "Pull open-mcps registry tables from the configured Postgres database.",
+      paramsSchema: {
+        tables: z.array(storageTableSchema).optional().describe("Tables to pull"),
+      },
+      run: async ({ tables }) => storageResultContent(await storagePull({
+        tables: Array.isArray(tables) ? tables.map(String) : undefined,
+      })),
+    },
+    {
+      name: "storage_sync",
+      description: "Push then pull open-mcps registry tables with the configured Postgres database.",
+      paramsSchema: {
+        tables: z.array(storageTableSchema).optional().describe("Tables to sync"),
+      },
+      run: async ({ tables }) => storageResultContent(await storageSync({
+        tables: Array.isArray(tables) ? tables.map(String) : undefined,
+      })),
     },
     {
       name: "find_mcp_servers",

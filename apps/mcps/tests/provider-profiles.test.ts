@@ -279,6 +279,10 @@ describe("provider profiles", () => {
 
   it("keeps PostgreSQL migrations in parity with SQLite storage", () => {
     const joined = PG_MIGRATIONS.join("\n");
+    expect(joined).toContain("CREATE EXTENSION IF NOT EXISTS pgcrypto");
+    expect(joined).toContain("credential_refs TEXT NOT NULL DEFAULT '{}'");
+    expect(joined).toContain("CREATE TABLE IF NOT EXISTS machines");
+    expect(joined).toContain("idx_machines_enabled");
     expect(joined).toContain("CREATE TABLE IF NOT EXISTS provider_profiles");
     expect(joined).toContain("display_name TEXT NOT NULL");
     expect(joined).toContain("fallback_endpoints TEXT NOT NULL DEFAULT '[]'");

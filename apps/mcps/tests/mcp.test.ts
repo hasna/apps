@@ -238,5 +238,9 @@ describe("MCP server tools", () => {
       import: "./dist/mcp/index.js",
       types: "./dist/mcp/index.d.ts",
     });
+    expect(pkg.exports["./storage"]).toEqual({
+      import: "./dist/storage.js",
+      types: "./dist/storage.d.ts",
+    });
   });
 });
