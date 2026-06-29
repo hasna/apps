@@ -2,22 +2,22 @@ import { describe, expect, test } from "bun:test";
 import { runCli } from "../src/cli/index.ts";
 
 describe("banking CLI scaffold", () => {
-  test("help exits successfully", () => {
-    expect(runCli(["--help"])).toBe(0);
+  test("help exits successfully", async () => {
+    expect(await runCli(["--help"])).toBe(0);
   });
 
-  test("provider list exits successfully", () => {
-    expect(runCli(["providers", "list", "--json"])).toBe(0);
+  test("provider list exits successfully", async () => {
+    expect(await runCli(["providers", "list", "--json"])).toBe(0);
   });
 
-  test("payment request envelope exits successfully", () => {
+  test("payment request envelope exits successfully", async () => {
     const originalLog = console.log;
     let output = "";
     console.log = (...args: unknown[]) => {
       output += args.join(" ");
     };
     try {
-      expect(runCli([
+      expect(await runCli([
         "payments",
         "request",
         "--provider",
@@ -46,14 +46,14 @@ describe("banking CLI scaffold", () => {
     expect(parsed.intent.counterparty.providerRecipientId).toBe("recipient_123");
   });
 
-  test("payment request ignores approval-disable flag", () => {
+  test("payment request ignores approval-disable flag", async () => {
     const originalLog = console.log;
     let output = "";
     console.log = (...args: unknown[]) => {
       output += args.join(" ");
     };
     try {
-      expect(runCli([
+      expect(await runCli([
         "payments",
         "request",
         "--provider",
@@ -88,8 +88,8 @@ describe("banking CLI scaffold", () => {
     expect(parsed.policyDecision.snapshot.requireApprovalForProviderSideEffects).toBe(true);
   });
 
-  test("card request envelope exits successfully even when policy denies execution", () => {
-    expect(runCli([
+  test("card request envelope exits successfully even when policy denies execution", async () => {
+    expect(await runCli([
       "cards",
       "request",
       "--provider",
@@ -106,15 +106,170 @@ describe("banking CLI scaffold", () => {
     ])).toBe(0);
   });
 
-  test("admin commands are gated", () => {
-    expect(runCli(["admin", "providers", "verify-operation", "--json"])).toBe(3);
+  test("admin commands are gated", async () => {
+    expect(await runCli(["admin", "providers", "verify-operation", "--json"])).toBe(3);
   });
 
-  test("unknown command fails closed", () => {
-    expect(runCli(["pay", "now"])).toBe(1);
+  test("unknown command fails closed", async () => {
+    expect(await runCli(["pay", "now"])).toBe(1);
   });
 
-  test("unimplemented provider-backed commands fail closed", () => {
-    expect(runCli(["accounts", "list", "--json"])).toBe(2);
+  test("unimplemented provider-backed commands fail closed", async () => {
+    expect(await runCli(["accounts", "list", "--json"])).toBe(2);
+  });
+
+  test("Mercury live accounts list uses explicit secret key and redacts account numbers", async () => {
+    const originalLog = console.log;
+    let output = "";
+    console.log = (...args: unknown[]) => {
+      output += args.join(" ");
+    };
+    try {
+      expect(await runCli([
+        "accounts",
+        "list",
+        "--provider",
+        "mercury",
+        "--live",
+        "true",
+        "--environment",
+        "production",
+        "--secret-key",
+        "fixture-secret-key",
+        "--limit",
+        "1",
+        "--json",
+      ], {
+        readSecret: (key) => key === "fixture-secret-key" ? "test-token" : undefined,
+        fetch: async (url, init) => {
+          expect(String(url)).toBe("https://api.mercury.com/api/v1/accounts?limit=1");
+          expect(new Headers(init?.headers).get("authorization")).toBe("Bearer test-token");
+          return new Response(JSON.stringify({
+            accounts: [{
+              id: "acct_123",
+              name: "Ops",
+              accountNumber: "masked-account-7890",
+              routingNumber: "masked-routing-0021",
+              currentBalance: "10.00",
+              availableBalance: "9.00",
+            }],
+            page: {},
+          }));
+        },
+      })).toBe(0);
+    } finally {
+      console.log = originalLog;
+    }
+
+    const parsed = JSON.parse(output) as {
+      readonly accounts: readonly [{
+        readonly id: string;
+        readonly accountNumber?: string;
+        readonly accountNumberLast4?: string;
+        readonly routingNumber?: string;
+        readonly routingNumberLast4?: string;
+      }];
+    };
+    expect(parsed.accounts[0].id).toBe("acct_123");
+    expect(parsed.accounts[0].accountNumber).toBeUndefined();
+    expect(parsed.accounts[0].routingNumber).toBeUndefined();
+    expect(parsed.accounts[0].accountNumberLast4).toBe("7890");
+    expect(parsed.accounts[0].routingNumberLast4).toBe("0021");
+  });
+
+  test("Mercury live cards list requires an account id", async () => {
+    const originalError = console.error;
+    let output = "";
+    console.error = (...args: unknown[]) => {
+      output += args.join(" ");
+    };
+    try {
+      expect(await runCli([
+        "cards",
+        "list",
+        "--provider",
+        "mercury",
+        "--live",
+        "true",
+        "--environment",
+        "production",
+        "--secret-key",
+        "fixture-secret-key",
+        "--json",
+      ], {
+        readSecret: () => "test-token",
+        fetch: async () => {
+          throw new Error("should not call Mercury without account id");
+        },
+      })).toBe(1);
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(output).toContain("Missing required --account value.");
+  });
+
+  test("Mercury live cards list rejects unsupported limit option", async () => {
+    const originalError = console.error;
+    let output = "";
+    console.error = (...args: unknown[]) => {
+      output += args.join(" ");
+    };
+    try {
+      expect(await runCli([
+        "cards",
+        "list",
+        "--provider",
+        "mercury",
+        "--account",
+        "acct_1",
+        "--live",
+        "true",
+        "--environment",
+        "production",
+        "--secret-key",
+        "fixture-secret-key",
+        "--limit",
+        "1",
+        "--json",
+      ], {
+        readSecret: () => "test-token",
+        fetch: async () => {
+          throw new Error("should not call Mercury with unsupported cards limit");
+        },
+      })).toBe(1);
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(output).toContain("--limit is not supported for Mercury cards list.");
+  });
+
+  test("Mercury live reads require explicit environment", async () => {
+    const originalError = console.error;
+    let output = "";
+    console.error = (...args: unknown[]) => {
+      output += args.join(" ");
+    };
+    try {
+      expect(await runCli([
+        "accounts",
+        "list",
+        "--provider",
+        "mercury",
+        "--live",
+        "true",
+        "--json",
+      ], {
+        readSecret: () => "test-token",
+        fetch: async () => {
+          throw new Error("should not call Mercury without explicit environment");
+        },
+      })).toBe(1);
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(output).toContain("Missing required --environment value.");
   });
 });

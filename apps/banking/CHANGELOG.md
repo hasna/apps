@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.0.3 - 2026-06-29
+
+### Added
+
+- Read-only live Mercury adapter for accounts, balances, cards, and transactions.
+- `banking` CLI live-read mode for Mercury using `--live true`, explicit `--environment`, and either `MERCURY_API_KEY` or optional `--secret-key`.
+- Credential resolution through env vars or an explicit local `secrets get` key on machines that provide that CLI, without printing token values.
+- Redacted Mercury account summaries that expose last-four account/routing numbers instead of full values.
+
+### Safety Notes
+
+- Live money movement and card mutations are still not executed by `banking`; they remain request envelopes and provider-conformance gated.
+- Live reads are currently Mercury-only. bunq, Revolut Business, and Erste BCR remain contract-only.
+- Production Mercury reads require explicit `--environment production`; live commands do not default to production.
+- Mercury API error bodies are not surfaced to callers, avoiding accidental token/provider-detail leakage.
+
 ## 0.0.2 - 2026-06-29
 
 Initial public release of `@hasna/banking`.

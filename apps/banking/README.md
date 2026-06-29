@@ -47,13 +47,26 @@ bun add @hasna/banking
 ```bash
 banking --help
 banking providers list --json
+banking accounts list --provider mercury --live true --environment sandbox --limit 5 --json
+banking balances get --provider mercury --account acct_123 --live true --environment sandbox --json
+banking cards list --provider mercury --account acct_123 --live true --environment sandbox --json
+banking transactions list --provider mercury --account acct_123 --live true --environment sandbox --limit 10 --json
 banking payments request --provider mercury --account acct_123 --amount 10.00 --currency USD --to "Vendor" --recipient recipient_123 --rail ach --json
 banking cards request --provider mercury --account acct_123 --label "Ops" --limit-month 250.00 --currency USD --json
 ```
 
-Provider-backed reads such as `accounts list`, `balances get`,
-`transactions list`, and `cards list` fail closed until adapters are
-implemented. Admin commands are explicitly gated.
+Mercury live reads are available for accounts, balances, transactions, and
+cards when `--live true` is set and credentials are supplied through
+`MERCURY_API_KEY` or `--secret-key <secret-key>`. Account and routing numbers
+are reduced to last-four summaries. Provider-backed reads for other providers
+still fail closed until their adapters are implemented. Admin commands are
+explicitly gated.
+
+`--environment` is required for every live read. Use `sandbox` for test
+credentials and `production` only when you intentionally want production
+Mercury data. Public installs should prefer `MERCURY_API_KEY`; `--secret-key`
+is an optional integration for machines that already have a compatible local
+`secrets` CLI.
 
 ## SDK
 

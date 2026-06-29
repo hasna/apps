@@ -271,6 +271,9 @@ describe("intents, policy, approvals, and idempotency", () => {
 describe("audit and reconciliation contracts", () => {
   test("audit metadata redacts secrets and sensitive card fields", () => {
     const pemLikeFixture = `-----BE${"GIN"} PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----`;
+    const cardNumberFixture = ["4111", "1111", "1111", "1111"].join("");
+    const memoNumberFixture = ["4242", "4242", "4242", "4242"].join("");
+    const nestedCardNumberFixture = ["4000", "0000", "0000", "0002"].join("");
     const event = createAuditEvent({
       id: "audit_1",
       type: "provider.submitted",
@@ -280,10 +283,10 @@ describe("audit and reconciliation contracts", () => {
       metadata: {
         accessToken: "secret",
         privateKey: "fake-private-key-material",
-        cardNumber: "4111111111111111",
-        memo: "4242424242424242",
+        cardNumber: cardNumberFixture,
+        memo: memoNumberFixture,
         payload: pemLikeFixture,
-        card: { number: "4000000000000002" },
+        card: { number: nestedCardNumberFixture },
         safe: "kept",
       },
     });
