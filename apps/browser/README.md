@@ -34,6 +34,36 @@ Use automation only on domains, accounts, and data you are authorized to
 operate, and stop for manual approval when a site presents authentication,
 CAPTCHA, MFA, payment, or account-safety challenges.
 
+## Workflow Ownership
+
+Reusable browser workflows are Browser-owned runtime assets. Local workflow
+manifests belong under the Browser data directory:
+
+```text
+~/.hasna/browser/workflows/
+```
+
+Project folders may contain source notes, tests, and run evidence, but they
+should not become separate workflow registries. Use the first-class workflow
+CLI surface for file-backed manifests:
+
+```bash
+browser workflow dir
+browser workflow list
+browser workflow show farfetch
+browser workflow validate farfetch
+browser workflow run farfetch public-smoke --json
+```
+
+Workflow bundles can either be single `*.workflow.json` files or directories
+with `manifest.json` plus action scripts. Relative `scriptFile` paths are
+resolved from the manifest directory, so site-specific executable workflow code
+stays under the Browser workflow directory.
+
+Workflow runs that use Kernel, Secrets, Mailery, or agentic decision steps
+should keep Browser as the authority for safety gates, evidence capture, secret
+redaction, and session cleanup.
+
 ## MCP Server
 
 ```bash

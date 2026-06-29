@@ -16,6 +16,7 @@ import { register as registerScript } from "./commands/script.js";
 import { register as registerTools } from "./commands/tools.js";
 import { register as registerExtension } from "./commands/extension.js";
 import { register as registerKernel } from "./commands/kernel.js";
+import { register as registerWorkflow } from "./commands/workflow.js";
 
 async function registerSharedEvents(program: Command): Promise<void> {
   try {
@@ -35,6 +36,7 @@ registerScript(program);
 registerTools(program);
 registerExtension(program);
 registerKernel(program);
+registerWorkflow(program);
 registerStorageCommands(program);
 await registerSharedEvents(program);
 

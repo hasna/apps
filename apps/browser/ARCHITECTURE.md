@@ -8,6 +8,33 @@ The current engine set also includes Bun.WebView, TUI, and the explicit-only
 Chrome extension engine. The extension engine is not part of auto-routing: it
 is selected only when the caller asks for `engine: "extension"`.
 
+## Workflow Ownership
+
+Browser owns reusable workflow storage. File-backed workflow manifests live in:
+
+```text
+~/.hasna/browser/workflows/
+```
+
+Other projects may generate evidence, tests, or site-specific runner code, but
+workflow definitions should be installed into Browser's data directory rather
+than copied into project-local registries.
+
+The first-class `browser workflow` CLI surface owns file-backed manifests:
+
+- `dir` to print the canonical workflow directory.
+- `list`, `show`, and `validate` for workflow discovery and schema checks.
+- `run` for execution through Browser-owned engines, including Kernel.
+- action scripts live beside their manifests under the Browser workflow
+  directory and run with bounded helpers for screenshot/evidence capture,
+  page text/elements, deterministic stop gates, and cleanup.
+
+Agentic workflow steps should be typed and bounded. They can classify pages,
+select among visible candidates, or propose selector repair, but deterministic
+Browser code remains responsible for validation and execution. Secrets should
+not be passed to agentic steps, and interactive CAPTCHA handling should use
+supported provider behavior or a stop/human gate.
+
 ## Backend Comparison
 
 | Feature | Chrome DevTools | Playwright | Lightpanda |
