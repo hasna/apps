@@ -158,6 +158,7 @@ export function getChannelMembers(channelName: string): ChannelMember[] {
 }
 
 export function updateChannel(name: string, updates: {
+  name?: string;
   description?: string | null;
   topic?: string | null;
   project_id?: string | null;
@@ -165,7 +166,14 @@ export function updateChannel(name: string, updates: {
   tags?: string[] | null;
 }): Channel {
   const db = getDb();
-  const channelName = normalizeChannelName(name);
+  let channelName = normalizeChannelName(name);
+
+  // A rename (new name) is applied first so subsequent field updates target the
+  // renamed channel. renameChannel handles existence + uniqueness validation.
+  if (updates.name !== undefined && normalizeChannelName(updates.name) !== channelName) {
+    const renamed = renameChannel(channelName, updates.name);
+    channelName = renamed.name;
+  }
 
   const existing = db.prepare("SELECT * FROM channels WHERE name = ?").get(channelName) as Record<string, unknown> | null;
   if (!existing) {
@@ -212,6 +220,99 @@ export function updateChannel(name: string, updates: {
     `UPDATE channels SET ${sets.join(", ")} WHERE name = ? RETURNING *`
   ).get(...params) as Record<string, unknown>;
 
+  return parseChannel(row);
+}
+
+function localTableExists(db: ReturnType<typeof getDb>, table: string): boolean {
+  return Boolean(
+    db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(table),
+  );
+}
+
+function localHasColumn(db: ReturnType<typeof getDb>, table: string, column: string): boolean {
+  if (!localTableExists(db, table)) return false;
+  return db
+    .prepare(`PRAGMA table_info("${table.replace(/"/g, '""')}")`)
+    .all()
+    .some((row) => (row as { name: string }).name === column);
+}
+
+/**
+ * Rename a channel from `oldName` to `newName`, preserving all messages,
+ * members, subscriptions, mentions, tasks, graph edges, and locks.
+ *
+ * Both names are normalized to Slack-like channel identifiers. The rename:
+ *  - fails if the (normalized) old channel does not exist,
+ *  - fails if the (normalized) new channel name already exists,
+ *  - is a no-op returning the existing channel when old and new normalize equal,
+ *  - updates the channel row in place (by name) and rewrites every table that
+ *    references the channel name, all inside a single transaction.
+ */
+export function renameChannel(oldName: string, newName: string): Channel {
+  const db = getDb();
+  const from = normalizeChannelName(oldName);
+  const to = normalizeChannelName(newName);
+
+  const existing = db.prepare("SELECT * FROM channels WHERE name = ?").get(from) as Record<string, unknown> | null;
+  if (!existing) {
+    throw new Error(`Channel not found: ${from}`);
+  }
+
+  if (from === to) {
+    return parseChannel(existing);
+  }
+
+  const conflict = db.prepare("SELECT name FROM channels WHERE name = ?").get(to);
+  if (conflict) {
+    throw new Error(`Channel #${to} already exists.`);
+  }
+
+  db.exec("BEGIN");
+  try {
+    // Channel row itself (PK is the name column).
+    db.prepare("UPDATE channels SET name = ? WHERE name = ?").run(to, from);
+
+    // Messages: channel field, the channel's session id, and the to_agent
+    // field (channel messages address the channel name as recipient).
+    if (localHasColumn(db, "messages", "channel")) {
+      db.prepare(
+        "UPDATE messages SET channel = ?, to_agent = CASE WHEN to_agent = ? THEN ? ELSE to_agent END WHERE channel = ?",
+      ).run(to, from, to, from);
+    }
+    db.prepare("UPDATE messages SET session_id = ? WHERE session_id = ?").run(`channel:${to}`, `channel:${from}`);
+
+    // Membership and subscriptions.
+    if (localTableExists(db, "channel_members")) {
+      db.prepare("UPDATE channel_members SET channel = ? WHERE channel = ?").run(to, from);
+    }
+    if (localTableExists(db, "channel_subscriptions")) {
+      db.prepare("UPDATE channel_subscriptions SET channel = ? WHERE channel = ?").run(to, from);
+    }
+
+    // Mentions and tasks reference the channel by name.
+    if (localHasColumn(db, "message_mentions", "channel")) {
+      db.prepare("UPDATE message_mentions SET channel = ? WHERE channel = ?").run(to, from);
+    }
+    if (localHasColumn(db, "tasks", "channel")) {
+      db.prepare("UPDATE tasks SET channel = ? WHERE channel = ?").run(to, from);
+    }
+
+    // Graph edges and resource locks reference the channel as a typed entity.
+    if (localTableExists(db, "graph_edges")) {
+      db.prepare("UPDATE graph_edges SET from_id = ? WHERE from_type = 'channel' AND from_id = ?").run(to, from);
+      db.prepare("UPDATE graph_edges SET to_id = ? WHERE to_type = 'channel' AND to_id = ?").run(to, from);
+    }
+    if (localTableExists(db, "resource_locks")) {
+      db.prepare("UPDATE resource_locks SET resource_id = ? WHERE resource_type = 'channel' AND resource_id = ?").run(to, from);
+    }
+
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  const row = db.prepare("SELECT * FROM channels WHERE name = ?").get(to) as Record<string, unknown>;
   return parseChannel(row);
 }
 

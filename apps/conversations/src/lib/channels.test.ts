@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { createChannel, updateChannel, archiveChannel, unarchiveChannel, listChannels, getChannel, joinChannel, leaveChannel, getChannelMembers, isChannelMember } from "./channels";
+import { createChannel, updateChannel, renameChannel, archiveChannel, unarchiveChannel, listChannels, getChannel, joinChannel, leaveChannel, getChannelMembers, isChannelMember } from "./channels";
 import { createProject } from "./projects";
-import { sendMessage } from "./messages";
+import { sendMessage, readMessages } from "./messages";
 import { closeDb } from "./db";
 import { unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -220,6 +220,114 @@ describe("updateChannel", () => {
     createChannel("general", "alice", { description: "Original" });
     const channel = updateChannel("general", {});
     expect(channel.description).toBe("Original");
+  });
+});
+
+describe("renameChannel", () => {
+  test("renames a channel and returns the new channel", () => {
+    createChannel("old-name", "alice", { description: "Desc", topic: "Topic" });
+    const channel = renameChannel("old-name", "new-name");
+    expect(channel.name).toBe("new-name");
+    expect(channel.description).toBe("Desc");
+    expect(channel.topic).toBe("Topic");
+    expect(getChannel("old-name")).toBeNull();
+    expect(getChannel("new-name")?.name).toBe("new-name");
+  });
+
+  test("normalizes the new name", () => {
+    createChannel("old-name", "alice");
+    const channel = renameChannel("old-name", "#New Name!");
+    expect(channel.name).toBe("new-name");
+    expect(getChannel("new-name")?.name).toBe("new-name");
+  });
+
+  test("throws when the source channel does not exist", () => {
+    expect(() => renameChannel("nonexistent", "whatever")).toThrow("Channel not found");
+  });
+
+  test("throws when the target name already exists", () => {
+    createChannel("alpha", "alice");
+    createChannel("beta", "alice");
+    expect(() => renameChannel("alpha", "beta")).toThrow("already exists");
+  });
+
+  test("is a no-op when old and new normalize to the same name", () => {
+    createChannel("general", "alice", { description: "Same" });
+    const channel = renameChannel("#General", "general");
+    expect(channel.name).toBe("general");
+    expect(channel.description).toBe("Same");
+  });
+
+  test("preserves messages across the rename", () => {
+    createChannel("old-name", "alice");
+    sendMessage({ from: "alice", to: "old-name", content: "first", channel: "old-name", session_id: "channel:old-name" });
+    sendMessage({ from: "bob", to: "old-name", content: "second", channel: "old-name", session_id: "channel:old-name" });
+
+    renameChannel("old-name", "new-name");
+
+    const oldMsgs = readMessages({ channel: "old-name" });
+    const newMsgs = readMessages({ channel: "new-name" });
+    expect(oldMsgs).toHaveLength(0);
+    expect(newMsgs).toHaveLength(2);
+    expect(newMsgs.map((m) => m.content).sort()).toEqual(["first", "second"]);
+    // Session id and recipient are rewritten to the new channel.
+    expect(newMsgs.every((m) => m.session_id === "channel:new-name")).toBe(true);
+    expect(newMsgs.every((m) => m.channel === "new-name")).toBe(true);
+  });
+
+  test("preserves members across the rename", () => {
+    createChannel("old-name", "alice");
+    joinChannel("old-name", "bob");
+    joinChannel("old-name", "charlie");
+
+    renameChannel("old-name", "new-name");
+
+    const members = getChannelMembers("new-name").map((m) => m.agent).sort();
+    expect(members).toEqual(["alice", "bob", "charlie"]);
+    expect(getChannelMembers("old-name")).toHaveLength(0);
+    expect(isChannelMember("new-name", "bob")).toBe(true);
+  });
+
+  test("keeps the message count on the renamed channel", () => {
+    createChannel("old-name", "alice");
+    sendMessage({ from: "alice", to: "old-name", content: "hi", channel: "old-name" });
+    renameChannel("old-name", "new-name");
+
+    const channels = listChannels();
+    expect(channels).toHaveLength(1);
+    expect(channels[0].name).toBe("new-name");
+    expect(channels[0].message_count).toBe(1);
+    expect(channels[0].member_count).toBe(1);
+  });
+});
+
+describe("updateChannel rename via --name", () => {
+  test("renames when name is provided", () => {
+    createChannel("old-name", "alice", { description: "Keep" });
+    const channel = updateChannel("old-name", { name: "renamed" });
+    expect(channel.name).toBe("renamed");
+    expect(channel.description).toBe("Keep");
+    expect(getChannel("old-name")).toBeNull();
+  });
+
+  test("renames and updates other fields in one call", () => {
+    createChannel("old-name", "alice", { description: "Old" });
+    const channel = updateChannel("old-name", { name: "renamed", description: "New desc" });
+    expect(channel.name).toBe("renamed");
+    expect(channel.description).toBe("New desc");
+  });
+
+  test("throws when renaming to an existing channel", () => {
+    createChannel("alpha", "alice");
+    createChannel("beta", "alice");
+    expect(() => updateChannel("alpha", { name: "beta" })).toThrow("already exists");
+  });
+
+  test("ignores name when it normalizes to the current name", () => {
+    createChannel("general", "alice", { description: "Desc" });
+    const channel = updateChannel("general", { name: "#General", topic: "New topic" });
+    expect(channel.name).toBe("general");
+    expect(channel.topic).toBe("New topic");
   });
 });
 

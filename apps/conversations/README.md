@@ -137,6 +137,18 @@ threads/replies, participants, unread state, mentions, tasks, projects,
 webhooks, graph links, and storage sync metadata all reference the canonical
 channel id.
 
+Rename a channel while keeping all of its messages, members, subscriptions, and
+history intact:
+
+```bash
+conversations channel rename old-name new-name
+conversations channel update old-name --name new-name   # equivalent
+```
+
+Renames are rejected if the target name already exists or the source channel is
+not found. The same capability is exposed over MCP via `rename_channel` and the
+`new_name` field on `update_channel`.
+
 Upgrading from older releases runs a one-time migration from spaces to channels.
 Every legacy space and sub-space becomes one flat channel. Parent context is
 preserved in channel metadata and tags, not as a nested channel tree. Legacy

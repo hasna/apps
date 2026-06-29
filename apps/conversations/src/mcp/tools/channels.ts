@@ -9,7 +9,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { sendMessage, readMessages, markReadByIds } from "../../lib/messages.js";
-import { createChannel, updateChannel, archiveChannel, unarchiveChannel, listChannels, getChannel, joinChannel, leaveChannel } from "../../lib/channels.js";
+import { createChannel, updateChannel, renameChannel, archiveChannel, unarchiveChannel, listChannels, getChannel, joinChannel, leaveChannel } from "../../lib/channels.js";
 import { listChannelNotificationSubscriptions, markAllChannelNotificationsRead, markChannelNotificationsRead, readChannelNotifications, subscribeToChannelNotifications, unsubscribeFromChannelNotifications } from "../../lib/channel-notifications.js";
 import { resolveIdentity } from "../../lib/identity.js";
 import { recordReadReceiptsBatch } from "../../lib/messages.js";
@@ -290,22 +290,44 @@ export function registerChannelTools(server: McpServer): void {
   });
 
   server.registerTool("update_channel", {
-    description: "Update channel description, topic, or project.",
+    description: "Update channel name (rename), description, topic, or project. Pass new_name to rename while preserving messages, members, and history.",
     inputSchema: {
       name: z.string(),
+      new_name: z.string().optional().describe("Rename the channel to this name (preserves messages/members/history)"),
       description: z.string().optional(),
       topic: z.string().optional(),
       project_id: z.string().optional(),
     },
   }, async (args: Record<string, any>) => {
-    const { name, description, topic, project_id } = args;
-    const updates: { description?: string; topic?: string | null; project_id?: string | null } = {};
+    const { name, new_name, description, topic, project_id } = args;
+    const updates: { name?: string; description?: string; topic?: string | null; project_id?: string | null } = {};
+    if (new_name !== undefined) updates.name = new_name;
     if (description !== undefined) updates.description = description;
     if (topic !== undefined) updates.topic = topic === "null" ? null : topic;
     if (project_id !== undefined) updates.project_id = project_id === "null" ? null : project_id;
 
     try {
       const sp = updateChannel(name, updates);
+      return {
+        content: [{ type: "text", text: JSON.stringify(sp) }],
+      };
+    } catch (e: any) {
+      return {
+        content: [{ type: "text", text: e.message }],
+        isError: true,
+      };
+    }
+  });
+
+  server.registerTool("rename_channel", {
+    description: "Rename a channel, preserving its messages, members, subscriptions, and history.",
+    inputSchema: {
+      name: z.string().describe("Current channel name"),
+      new_name: z.string().describe("New channel name"),
+    },
+  }, async (args: Record<string, any>) => {
+    try {
+      const sp = renameChannel(args.name, args.new_name);
       return {
         content: [{ type: "text", text: JSON.stringify(sp) }],
       };

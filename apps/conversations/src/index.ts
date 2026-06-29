@@ -50,6 +50,7 @@ export type { SessionActivity } from "./lib/sessions.js";
 export {
   createChannel,
   updateChannel,
+  renameChannel,
   archiveChannel,
   unarchiveChannel,
   listChannels,

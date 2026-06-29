@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { recordReadReceiptsBatch, sendMessage, readMessages } from "../../lib/messages.js";
-import { createChannel, updateChannel, archiveChannel, unarchiveChannel, listChannels, getChannel, joinChannel, leaveChannel, getChannelMembers } from "../../lib/channels.js";
+import { createChannel, updateChannel, renameChannel, archiveChannel, unarchiveChannel, listChannels, getChannel, joinChannel, leaveChannel, getChannelMembers } from "../../lib/channels.js";
 import { listChannelNotificationSubscriptions, markChannelNotificationsRead, subscribeToChannelNotifications, unsubscribeFromChannelNotifications } from "../../lib/channel-notifications.js";
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
@@ -108,6 +108,7 @@ export function registerChannelCommands(program: Command): void {
     .command("update")
     .description("Update a channel")
     .argument("<name>", "Channel name")
+    .option("--name <new-name>", "Rename the channel to this name")
     .option("--description <text>", "New description")
     .option("--topic <text>", "New topic")
     .option("--project <id>", "New project ID")
@@ -119,7 +120,15 @@ export function registerChannelCommands(program: Command): void {
         process.exit(1);
       }
 
-      const updates: { description?: string; topic?: string | null; project_id?: string | null } = {};
+      const updates: { name?: string; description?: string; topic?: string | null; project_id?: string | null } = {};
+      if (opts.name !== undefined) {
+        const newName = typeof opts.name === "string" ? opts.name.trim() : "";
+        if (!newName) {
+          console.error(chalk.red("New channel name cannot be empty."));
+          process.exit(1);
+        }
+        updates.name = newName;
+      }
       if (opts.description !== undefined) updates.description = opts.description;
       if (opts.topic !== undefined) updates.topic = opts.topic || null;
       if (opts.project !== undefined) updates.project_id = opts.project || null;
@@ -130,6 +139,38 @@ export function registerChannelCommands(program: Command): void {
           console.log(JSON.stringify(sp, null, 2));
         } else {
           console.log(chalk.green(`Channel #${sp.name} updated.`));
+        }
+      } catch (e: any) {
+        console.error(chalk.red(e.message));
+        process.exit(1);
+      }
+      closeDb();
+    });
+
+  channel
+    .command("rename")
+    .description("Rename a channel, preserving its messages, members, and history")
+    .argument("<name>", "Current channel name")
+    .argument("<new-name>", "New channel name")
+    .option("-j, --json", "Output as JSON")
+    .action((name, newName, opts) => {
+      const channelName = typeof name === "string" ? name.trim() : "";
+      const target = typeof newName === "string" ? newName.trim() : "";
+      if (!channelName) {
+        console.error(chalk.red("Channel name cannot be empty."));
+        process.exit(1);
+      }
+      if (!target) {
+        console.error(chalk.red("New channel name cannot be empty."));
+        process.exit(1);
+      }
+
+      try {
+        const sp = renameChannel(channelName, target);
+        if (opts.json) {
+          console.log(JSON.stringify(sp, null, 2));
+        } else {
+          console.log(chalk.green(`Channel renamed to #${sp.name}.`));
         }
       } catch (e: any) {
         console.error(chalk.red(e.message));

@@ -231,6 +231,51 @@ describe("channels MCP tools", () => {
       });
       expect((result as any).isError).toBe(true);
     });
+
+    test("renames a channel via new_name", async () => {
+      await client.callTool({
+        name: "create_channel",
+        arguments: { name: "update-rename-src", from: "creator" },
+      });
+      const result = parseResult(await client.callTool({
+        name: "update_channel",
+        arguments: { name: "update-rename-src", new_name: "update-rename-dst" },
+      }) as any) as any;
+      expect(result.name).toBe("update-rename-dst");
+    });
+  });
+
+  describe("rename_channel", () => {
+    test("renames a channel preserving identity", async () => {
+      await client.callTool({
+        name: "create_channel",
+        arguments: { name: "rename-src", from: "creator", description: "Keep me" },
+      });
+      const result = parseResult(await client.callTool({
+        name: "rename_channel",
+        arguments: { name: "rename-src", new_name: "rename-dst" },
+      }) as any) as any;
+      expect(result.name).toBe("rename-dst");
+      expect(result.description).toBe("Keep me");
+    });
+
+    test("returns error for nonexistent channel", async () => {
+      const result = await client.callTool({
+        name: "rename_channel",
+        arguments: { name: "no-such-rename", new_name: "whatever" },
+      });
+      expect((result as any).isError).toBe(true);
+    });
+
+    test("returns error when target already exists", async () => {
+      await client.callTool({ name: "create_channel", arguments: { name: "rename-conflict-a", from: "creator" } });
+      await client.callTool({ name: "create_channel", arguments: { name: "rename-conflict-b", from: "creator" } });
+      const result = await client.callTool({
+        name: "rename_channel",
+        arguments: { name: "rename-conflict-a", new_name: "rename-conflict-b" },
+      });
+      expect((result as any).isError).toBe(true);
+    });
   });
 
   describe("archive_channel / unarchive_channel", () => {
