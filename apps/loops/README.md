@@ -299,7 +299,9 @@ worktree, pass those stores explicitly with `--add-dir` or template `addDirs`.
 For task-created routes, pass `--todos-project` so worker/verifier prompts use
 the actual todos storage project while repo routing and worktree isolation still
 use the repository path. This avoids `danger-full-access` for normal todos
-comments, completion state, and loop evidence writes.
+comments, completion state, and loop evidence writes. `addDirs` is intentionally
+accepted only for Codewith/Codex until other providers expose equivalent
+directory-scoped write controls.
 
 Inspect route state with:
 
@@ -497,7 +499,7 @@ The adapters intentionally use provider command surfaces instead of pretending e
 - Claude uses `claude -p --output-format json` and safe-mode/local setting sources by default.
 - Codewith uses `codewith --ask-for-approval never exec --json --ephemeral --skip-git-repo-check`, with `--add-dir` for explicit extra writable directories.
 - AI Copilot and OpenCode use `run --format json --pure`.
-- Cursor is CLI-first for now via `cursor agent -p`, with `agent -p` as the fallback launcher on machines that expose the standalone Cursor Agent binary; treat output as less stable until a stronger public SDK contract is selected.
+- Cursor is CLI-first for now via standalone `agent -p` when available, with `cursor agent -p` as a compatibility fallback; treat output as less stable until a stronger public SDK contract is selected.
 - Codex uses `codex exec --json --ephemeral --skip-git-repo-check`, with `--add-dir` for explicit extra writable directories where supported.
 - Agent prompts are sent through child stdin instead of argv so prompt bodies do not appear in process listings.
 - When `--account` or a step `account` is set, OpenLoops resolves `accounts env <profile> --tool <tool>` before spawning the target, strips inherited tool home/API-key variables, and applies the selected profile only to that process. Missing account profiles fail before the provider binary receives the prompt.

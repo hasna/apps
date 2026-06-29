@@ -75,6 +75,9 @@ function validateTarget(value: unknown, label: string): ExecutableTarget {
     }
     if (value.variant !== undefined) assertString(value.variant, `${label}.variant`);
     optionalStringArray(value.addDirs, `${label}.addDirs`);
+    if (Array.isArray(value.addDirs) && value.addDirs.length > 0 && !["codewith", "codex"].includes(value.provider)) {
+      throw new Error(`${label}.addDirs is currently supported only for provider codewith or codex`);
+    }
     if (value.permissionMode !== undefined) {
       assertString(value.permissionMode, `${label}.permissionMode`);
       const permissionModes = ["default", "plan", "auto", "bypass"];

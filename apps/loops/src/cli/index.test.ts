@@ -3030,6 +3030,8 @@ describe("loops CLI", () => {
       "account005",
       "--auth-profile-pool",
       "account004,account005,account006",
+      "--add-dir",
+      "/tmp/knowledge-store,/tmp/loops-store",
       "--sandbox",
       "workspace-write",
       "--permission-mode",
@@ -3045,6 +3047,8 @@ describe("loops CLI", () => {
     expect(firstValue.invocation.sourceRef.kind).toBe("event");
     expect(firstValue.workflow.name).toContain("event:generic:knowledge:knowledge.record.created");
     expect(firstValue.workflow.steps[0].target.cwd).toBe("/tmp/open-knowledge");
+    expect(firstValue.workflow.steps[0].target.addDirs).toEqual(["/tmp/knowledge-store", "/tmp/loops-store"]);
+    expect(firstValue.workflow.steps[1].target.addDirs).toEqual(["/tmp/knowledge-store", "/tmp/loops-store"]);
     expect(firstValue.loop.target.input.workflowInvocationId).toBe(firstValue.invocation.id);
     expect(firstValue.loop.target.input.workflowWorkItemId).toBe(firstValue.workItem.id);
     const profiles = firstValue.workflow.steps.map((step: { target: { authProfile?: string } }) => step.target.authProfile);

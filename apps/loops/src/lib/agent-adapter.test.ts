@@ -249,7 +249,7 @@ describe("agent adapters", () => {
     await Bun.write(fake, "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\"\nprintf 'stdin:'\ncat\n");
     chmodSync(fake, 0o755);
     const fakeCursor = join(binDir, "cursor");
-    await Bun.write(fakeCursor, "#!/usr/bin/env bash\nif [[ \"${1:-}\" != \"agent\" ]]; then exit 64; fi\nshift\nexec agent \"$@\"\n");
+    await Bun.write(fakeCursor, "#!/usr/bin/env bash\necho 'cursor wrapper should not be used when standalone agent exists' >&2\nexit 64\n");
     chmodSync(fakeCursor, 0o755);
 
     const store = new Store(":memory:");
@@ -289,7 +289,7 @@ describe("agent adapters", () => {
     await Bun.write(fake, "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\"\nprintf 'stdin:'\ncat\n");
     chmodSync(fake, 0o755);
     const fakeCursor = join(binDir, "cursor");
-    await Bun.write(fakeCursor, "#!/usr/bin/env bash\nif [[ \"${1:-}\" != \"agent\" ]]; then exit 64; fi\nshift\nexec agent \"$@\"\n");
+    await Bun.write(fakeCursor, "#!/usr/bin/env bash\necho 'cursor wrapper should not be used when standalone agent exists' >&2\nexit 64\n");
     chmodSync(fakeCursor, 0o755);
 
     const store = new Store(":memory:");
@@ -313,6 +313,28 @@ describe("agent adapters", () => {
       const args = result.stdout.trim().split(/\r?\n/);
       expect(args).toContain("--sandbox");
       expect(args[args.indexOf("--sandbox") + 1]).toBe("enabled");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("rejects cursor addDirs instead of silently ignoring them", async () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "cursor-add-dir-agent",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "cursor",
+          prompt: "say ok",
+          addDirs: ["/tmp/hasna-todos"],
+          configIsolation: "safe",
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      await expect(executeLoop(loop, claim!.run)).rejects.toThrow("cursor.addDirs");
     } finally {
       store.close();
     }

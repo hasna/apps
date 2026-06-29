@@ -2443,6 +2443,7 @@ eventsHandle
       model: opts.model,
       variant: opts.variant,
       agent: opts.agent,
+      addDirs: listFromRepeatedOpts(opts.addDir),
       permissionMode,
       sandbox,
       manualBreakGlass: Boolean(opts.manualBreakGlass),

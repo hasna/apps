@@ -216,6 +216,9 @@ function assertSupportedAgentOptions(target: AgentTarget): void {
   if (target.authProfile !== undefined && target.provider !== "codewith") {
     throw new Error(`${target.provider}.authProfile is supported only for codewith`);
   }
+  if (target.addDirs?.length && !["codewith", "codex"].includes(target.provider)) {
+    throw new Error(`${target.provider}.addDirs is currently supported only for codewith or codex`);
+  }
   if (target.permissionMode && !["default", "plan", "auto", "bypass"].includes(target.permissionMode)) {
     throw new Error(`${target.provider}.permissionMode must be default, plan, auto, or bypass`);
   }
@@ -274,10 +277,10 @@ function agentArgs(target: AgentTarget): string[] {
         "-c",
         [
           "set -eu",
-          "if command -v cursor >/dev/null 2>&1; then",
-          "  exec cursor agent \"$@\"",
-          "elif command -v agent >/dev/null 2>&1; then",
+          "if command -v agent >/dev/null 2>&1; then",
           "  exec agent \"$@\"",
+          "elif command -v cursor >/dev/null 2>&1; then",
+          "  exec cursor agent \"$@\"",
           "else",
           "  echo 'Executable not found in PATH: cursor agent or agent' >&2",
           "  exit 127",
