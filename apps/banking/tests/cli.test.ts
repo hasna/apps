@@ -6,6 +6,23 @@ describe("banking CLI scaffold", () => {
     expect(await runCli(["--help"])).toBe(0);
   });
 
+  test("version exits successfully without help output", async () => {
+    const originalLog = console.log;
+    let output = "";
+    console.log = (...args: unknown[]) => {
+      output += args.join(" ");
+    };
+    try {
+      expect(await runCli(["--version"])).toBe(0);
+      expect(await runCli(["-v"])).toBe(0);
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(output).toBe("0.0.40.0.4");
+    expect(output).not.toContain("Usage:");
+  });
+
   test("provider list exits successfully", async () => {
     expect(await runCli(["providers", "list", "--json"])).toBe(0);
   });

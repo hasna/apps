@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.4 - 2026-06-29
+
+### Fixed
+
+- `banking --version` now prints only the CLI version instead of falling through to help output.
+
 ## 0.0.3 - 2026-06-29
 
 ### Added

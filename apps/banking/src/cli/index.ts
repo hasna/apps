@@ -12,7 +12,7 @@ import {
   type ProviderId,
 } from "../index.ts";
 
-const VERSION = "0.0.3";
+const VERSION = "0.0.4";
 
 interface ParsedArgs {
   readonly positionals: readonly string[];
@@ -99,13 +99,13 @@ export async function runCli(argv: readonly string[] = Bun.argv.slice(2), runtim
   const args = parsed.positionals;
 
   try {
-    if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
-      printHelp();
+    if (hasFlag(parsed, args, "version", "-v")) {
+      emit(VERSION, parsed.json);
       return 0;
     }
 
-    if (args.includes("--version") || args.includes("-v")) {
-      emit(VERSION, parsed.json);
+    if (args.length === 0 || hasFlag(parsed, args, "help", "-h")) {
+      printHelp();
       return 0;
     }
 
@@ -368,6 +368,10 @@ function requiredOption(parsed: ParsedArgs, key: string): string {
 function option(parsed: ParsedArgs, key: string): string | undefined {
   const value = parsed.options[key];
   return typeof value === "string" ? value : undefined;
+}
+
+function hasFlag(parsed: ParsedArgs, args: readonly string[], key: string, short: string): boolean {
+  return parsed.options[key] === true || args.includes(short);
 }
 
 if (import.meta.main) {
