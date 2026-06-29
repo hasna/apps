@@ -887,6 +887,14 @@ resource "aws_backup_vault" "data" {
   tags        = local.tags
 }
 
+resource "aws_backup_vault_lock_configuration" "data" {
+  count               = var.backup_vault_lock_mode == "disabled" ? 0 : 1
+  backup_vault_name   = aws_backup_vault.data.name
+  min_retention_days  = var.backup_vault_lock_min_retention_days
+  max_retention_days  = var.backup_vault_lock_max_retention_days
+  changeable_for_days = var.backup_vault_lock_mode == "compliance" ? var.backup_vault_lock_changeable_for_days : null
+}
+
 resource "aws_backup_plan" "data" {
   name = "${local.prefix}-data"
 
@@ -896,7 +904,7 @@ resource "aws_backup_plan" "data" {
     schedule          = "cron(0 5 * * ? *)"
 
     lifecycle {
-      delete_after = 35
+      delete_after = var.backup_retention_days
     }
   }
 

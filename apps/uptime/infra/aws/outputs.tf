@@ -98,6 +98,20 @@ output "backup_plan_id" {
   value = aws_backup_plan.data.id
 }
 
+output "backup_retention_days" {
+  value = var.backup_retention_days
+}
+
+output "backup_vault_lock_configuration" {
+  value = {
+    enabled             = var.backup_vault_lock_mode != "disabled"
+    mode                = var.backup_vault_lock_mode
+    min_retention_days  = var.backup_vault_lock_mode != "disabled" ? var.backup_vault_lock_min_retention_days : null
+    max_retention_days  = var.backup_vault_lock_mode != "disabled" ? var.backup_vault_lock_max_retention_days : null
+    changeable_for_days = var.backup_vault_lock_mode == "compliance" ? var.backup_vault_lock_changeable_for_days : null
+  }
+}
+
 output "efs_file_system_id" {
   value = aws_efs_file_system.data.id
 }

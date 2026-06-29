@@ -473,6 +473,8 @@ The preferred hosted runtime is:
 - approved apps RDS with a dedicated Uptime database or schema,
   least-privileged user, TLS, migrations, automated backups, PITR, deletion
   protection, and pre-cutover snapshots;
+- AWS Backup coverage for the temporary EFS bridge, including a reviewed Backup
+  Vault Lock retention window before live scale-out;
 - hardened S3 bucket for browser evidence and report artifacts, with KMS
   encryption, versioning, lifecycle/retention, public access block, explicit
   deny rules for non-KMS or wrong-key uploads, and scoped IAM policies;

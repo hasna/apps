@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.48] - 2026-06-29
+
+### Added
+
+- Added opt-in Terraform support for AWS Backup Vault Lock with retention-window
+  validation, non-secret lock configuration outputs, tfvars examples, and
+  deployment runbook guidance. The lock remains disabled by default so
+  operators can review the retention policy before applying any irreversible
+  account state.
+
 ## [0.1.47] - 2026-06-29
 
 ### Security

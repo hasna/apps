@@ -100,6 +100,17 @@ Keep this disabled when private endpoints are the approved egress path. Runtime
 scale-up still requires ECS task evidence for image pull, secret injection, log
 delivery, S3 access, and EFS mount behavior.
 
+The AWS Backup vault lock is intentionally opt-in. Leave
+`backup_vault_lock_mode = "disabled"` until the infra owner approves the
+retention policy and records review evidence. Use
+`backup_vault_lock_mode = "governance"` for a removable privileged-operator
+rollout; it omits `backup_vault_lock_changeable_for_days`. Use
+`backup_vault_lock_mode = "compliance"` only after explicit approval; it
+requires `backup_vault_lock_changeable_for_days` and becomes immutable after the
+grace period expires. The module validates that `backup_retention_days` fits
+inside the configured minimum and maximum lock retention window before enabling
+the lock.
+
 Every ECS task definition includes an explicit container health check. The web
 task checks `GET /health` through Bun's built-in `fetch`; disabled non-web roles
 run `uptime cloud workers preflight --role <role> --healthcheck`, which verifies
@@ -119,6 +130,8 @@ Store instead of Secrets Manager, add `ssm` to
 ## Current Blockers
 
 - Hosted production auth/RBAC still needs scoped, revocable credentials.
+- Backup Vault Lock remains disabled until an approved retention window and lock
+  mode are recorded and applied through `backup_vault_lock_mode`.
 - The default `http-only` CloudFront origin bridge must be replaced with the
   explicit HTTPS-origin mode or consciously accepted with documented risk before
   token-bearing live traffic. The module blocks `desired_counts.web > 0` in

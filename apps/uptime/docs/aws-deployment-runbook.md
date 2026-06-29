@@ -432,6 +432,52 @@ aws backup list-recovery-points-by-backup-vault \
   --query "RecoveryPoints[?ResourceArn=='$EFS_FILE_SYSTEM_ARN'].[RecoveryPointArn,Status,CreationDate]"
 ```
 
+Before live scale-out, approve and record the backup retention policy, then set
+the Terraform lock variables in the private infra root. Do not enable the lock
+from the AWS console; use Terraform so the retention window is reviewable:
+
+```hcl
+backup_retention_days = 35
+backup_vault_lock_mode = "governance"
+backup_vault_lock_min_retention_days = 35
+backup_vault_lock_max_retention_days = 3650
+backup_vault_lock_changeable_for_days = null
+```
+
+Governance mode is removable by privileged IAM users, so it is the conservative
+first rollout. Compliance mode is the irreversible path: set
+`backup_vault_lock_mode = "compliance"` and
+`backup_vault_lock_changeable_for_days = 7` only after explicit account-owner
+approval. After that grace period expires, the lock cannot be changed or deleted
+by any user or by AWS. After apply, rerun the backup readiness audit and record
+the sanitized output before setting `live_ops_backup_restore_ready = true`.
+The mode mapping follows the
+[AWS Backup Vault Lock documentation](https://docs.aws.amazon.com/aws-backup/latest/devguide/vault-lock.html)
+and
+[Terraform `aws_backup_vault_lock_configuration` documentation](https://github.com/hashicorp/terraform-provider-aws/blob/main/website/docs/r/backup_vault_lock_configuration.html.markdown):
+omitting `ChangeableForDays` creates governance mode; including it creates
+compliance mode.
+
+Before switching from governance to compliance mode, audit every existing
+recovery point lifecycle in the vault. AWS Backup Vault Lock minimum and maximum
+retention settings do not rewrite recovery points that already exist, and an
+existing recovery point with indefinite retention can create permanent storage
+cost after the compliance grace period expires.
+
+```bash
+aws backup list-recovery-points-by-backup-vault \
+  --profile "$AWS_PROFILE_NAME" \
+  --region "$AWS_REGION" \
+  --backup-vault-name "$BACKUP_VAULT" \
+  --query 'RecoveryPoints[*].{status:Status,deleteAfter:Lifecycle.DeleteAfterDays,created:CreationDate}' \
+  --output json \
+  | jq '{count:length, missingDeleteAfter:([.[] | select((.deleteAfter // null) == null)] | length), minDeleteAfter:([.[] | .deleteAfter // empty] | min), maxDeleteAfter:([.[] | .deleteAfter // empty] | max)}'
+```
+
+Do not enable compliance mode if any recovery point has missing or indefinite
+retention, or if min/max lifecycle values contradict the approved retention
+policy.
+
 A restore drill must restore to a separate file system or staging target first.
 Do not overwrite the production EFS file system during a drill. Record the
 recovery point ARN, restore job id, target resource, validation result, and

@@ -1,7 +1,7 @@
 {
   "service": "open-uptime",
   "package": "@hasna/uptime",
-  "intendedVersion": "0.1.47",
+  "intendedVersion": "0.1.48",
   "accountProfile": "<aws-profile>",
   "accountId": "<aws-account-id>",
   "region": "us-east-1",
@@ -12,7 +12,7 @@
     "mode": "hosted-efs-sqlite",
     "environmentVariable": "HASNA_UPTIME_HOSTED_SQLITE_DB",
     "path": "/data/uptime/uptime.db",
-    "backup": "AWS Backup on encrypted EFS"
+    "backup": "AWS Backup on encrypted EFS with Terraform-managed Backup Vault Lock after retention approval"
   },
   "protectedAccess": {
     "mode": "cloudfront_default_domain",

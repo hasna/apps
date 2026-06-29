@@ -230,6 +230,18 @@ S3:
 - access artifacts through short-lived signed URLs with workspace authorization
   and audit logging.
 
+AWS Backup:
+
+- keep the EFS backup plan retention aligned with the approved retention policy;
+- enable AWS Backup Vault Lock only through Terraform after account-owner
+  approval;
+- use `backup_vault_lock_mode = "governance"` for the first removable rollout;
+- use `backup_vault_lock_mode = "compliance"` with a non-null
+  `backup_vault_lock_changeable_for_days` grace period only after irreversible
+  compliance-mode behavior is explicitly approved;
+- rerun the backup readiness audit and record sanitized evidence before
+  considering `live_ops_backup_restore_ready` true.
+
 Target state: no hosted runtime writes authoritative state to EFS or local task
 storage. Current bridge exception: one web task may write the explicit
 `/data/uptime/uptime.db` EFS-backed SQLite file until the async Postgres adapter

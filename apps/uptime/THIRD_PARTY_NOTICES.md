@@ -25,6 +25,7 @@ from this runtime notice list.
 | commander | 13.1.0 | MIT | https://github.com/tj/commander.js |
 | content-disposition | 1.1.0 | MIT | https://github.com/jshttp/content-disposition |
 | content-type | 1.0.5 | MIT | https://github.com/jshttp/content-type |
+| content-type | 2.0.0 | MIT | https://github.com/jshttp/content-type |
 | cookie | 0.7.2 | MIT | https://github.com/jshttp/cookie |
 | cookie-signature | 1.2.2 | MIT | https://github.com/visionmedia/node-cookie-signature |
 | cors | 2.8.6 | MIT | https://github.com/expressjs/cors |

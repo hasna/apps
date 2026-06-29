@@ -111,6 +111,10 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(main).toContain('resource "aws_efs_file_system" "data"');
   expect(main).toContain('resource "aws_efs_access_point" "uptime"');
   expect(main).toContain('resource "aws_backup_plan" "data"');
+  expect(main).toContain('resource "aws_backup_vault_lock_configuration" "data"');
+  expect(main).toContain('count               = var.backup_vault_lock_mode == "disabled" ? 0 : 1');
+  expect(main).toContain('changeable_for_days = var.backup_vault_lock_mode == "compliance" ? var.backup_vault_lock_changeable_for_days : null');
+  expect(main).toContain("delete_after = var.backup_retention_days");
   expect(main).toContain("efs_volume_configuration");
   expect(main).toContain("transit_encryption = \"ENABLED\"");
   expect(variables).toContain("EFS SQLite bridge requires web desired count 0 or 1");
@@ -121,6 +125,14 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(variables).toContain("live_ops_human_alert_delivery_ready");
   expect(variables).toContain("live_ops_backup_restore_ready");
   expect(variables).toContain("live_ops_evidence_retention_ready");
+  expect(variables).toContain('variable "backup_retention_days"');
+  expect(variables).toContain('variable "backup_vault_lock_mode"');
+  expect(variables).toContain("backup_vault_lock_mode must be disabled, governance, or compliance");
+  expect(variables).toContain("governance omits changeable_for_days");
+  expect(variables).toContain("backup_vault_lock_min_retention_days must be less than or equal to backup_retention_days when backup_vault_lock_mode is governance or compliance");
+  expect(variables).toContain("backup_vault_lock_max_retention_days must be greater than or equal to backup_retention_days when backup_vault_lock_mode is governance or compliance");
+  expect(variables).toContain("backup_vault_lock_changeable_for_days must be null or between 3 and 36500");
+  expect(variables).toContain("backup_vault_lock_changeable_for_days must be set only when backup_vault_lock_mode is compliance");
   expect(variables).toContain("web desired count above 0 requires live_ops_backend_state_hardened");
   expect(variables).toContain("hosted_token_secret_arn");
   expect(variables).toContain("runtime_package_integrity must be null or an npm sha512 integrity string");
@@ -172,6 +184,9 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(outputs).toContain('output "alarm_names"');
   expect(outputs).toContain('output "backup_vault_name"');
   expect(outputs).toContain('output "backup_plan_id"');
+  expect(outputs).toContain('output "backup_retention_days"');
+  expect(outputs).toContain('output "backup_vault_lock_configuration"');
+  expect(outputs).toContain("mode                = var.backup_vault_lock_mode");
   expect(outputs).toContain('output "evidence_bucket"');
   expect(outputs).toContain('output "kms_key_arn"');
   expect(outputs).toContain('output "secret_refs"');
@@ -234,7 +249,7 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(tfvars).toContain("enable_cloudfront_origin_verify_header");
   expect(tfvars).toContain("cloudfront_origin_verify_header_name");
   expect(tfvars).toContain("cloudfront_origin_verify_header_value  = null");
-  expect(tfvars).toContain('runtime_package_version   = "0.1.47"');
+  expect(tfvars).toContain('runtime_package_version   = "0.1.48"');
   expect(tfvars).toContain("runtime_package_integrity = null");
   expect(tfvars).toContain("allow_unpinned_runtime_package_integrity = false");
   expect(tfvars).toContain("live_ops_backend_state_hardened     = false");
@@ -248,6 +263,11 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(tfvars).toContain("enable_private_vpc_endpoints = false");
   expect(tfvars).toContain("additional_vpc_endpoint_source_security_group_ids");
   expect(tfvars).toContain("budget_alert_email_addresses");
+  expect(tfvars).toContain("backup_retention_days = 35");
+  expect(tfvars).toContain('backup_vault_lock_mode = "disabled"');
+  expect(tfvars).toContain("backup_vault_lock_min_retention_days = 35");
+  expect(tfvars).toContain("backup_vault_lock_max_retention_days = 3650");
+  expect(tfvars).toContain("backup_vault_lock_changeable_for_days = null");
   expect(outputs).toContain('output "vpc_endpoint_ids"');
   expect(outputs).toContain("aws_vpc_endpoint.interface");
   expect(outputs).toContain("aws_vpc_endpoint.gateway");

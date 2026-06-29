@@ -243,7 +243,7 @@ variable "container_image" {
 variable "runtime_package_version" {
   description = "Published @hasna/uptime package version that CodeBuild should build into the ECR image."
   type        = string
-  default     = "0.1.47"
+  default     = "0.1.48"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$", var.runtime_package_version))
@@ -408,6 +408,89 @@ variable "alarm_actions" {
   description = "Optional SNS topic ARNs or other CloudWatch alarm action ARNs."
   type        = list(string)
   default     = []
+}
+
+variable "backup_retention_days" {
+  description = "Retention period for the Open Uptime EFS AWS Backup rule. Keep aligned with any backup vault lock retention window."
+  type        = number
+  default     = 35
+
+  validation {
+    condition     = var.backup_retention_days >= 1 && var.backup_retention_days <= 36500
+    error_message = "backup_retention_days must be between 1 and 36500."
+  }
+}
+
+variable "backup_vault_lock_mode" {
+  description = "AWS Backup Vault Lock mode. Use disabled until retention is approved; governance omits changeable_for_days and remains removable by privileged IAM users; compliance sets changeable_for_days and becomes immutable after the grace period."
+  type        = string
+  default     = "disabled"
+
+  validation {
+    condition     = contains(["disabled", "governance", "compliance"], var.backup_vault_lock_mode)
+    error_message = "backup_vault_lock_mode must be disabled, governance, or compliance."
+  }
+}
+
+variable "backup_vault_lock_min_retention_days" {
+  description = "Minimum retention enforced by AWS Backup Vault Lock when backup_vault_lock_mode is governance or compliance."
+  type        = number
+  default     = 35
+
+  validation {
+    condition     = var.backup_vault_lock_min_retention_days >= 1 && var.backup_vault_lock_min_retention_days <= 36500
+    error_message = "backup_vault_lock_min_retention_days must be between 1 and 36500."
+  }
+
+  validation {
+    condition = (
+      var.backup_vault_lock_mode == "disabled"
+      || var.backup_vault_lock_min_retention_days <= var.backup_retention_days
+    )
+    error_message = "backup_vault_lock_min_retention_days must be less than or equal to backup_retention_days when backup_vault_lock_mode is governance or compliance."
+  }
+}
+
+variable "backup_vault_lock_max_retention_days" {
+  description = "Maximum retention enforced by AWS Backup Vault Lock when backup_vault_lock_mode is governance or compliance."
+  type        = number
+  default     = 3650
+
+  validation {
+    condition     = var.backup_vault_lock_max_retention_days >= 1 && var.backup_vault_lock_max_retention_days <= 36500
+    error_message = "backup_vault_lock_max_retention_days must be between 1 and 36500."
+  }
+
+  validation {
+    condition = (
+      var.backup_vault_lock_mode == "disabled"
+      || var.backup_vault_lock_max_retention_days >= var.backup_retention_days
+    )
+    error_message = "backup_vault_lock_max_retention_days must be greater than or equal to backup_retention_days when backup_vault_lock_mode is governance or compliance."
+  }
+}
+
+variable "backup_vault_lock_changeable_for_days" {
+  description = "Compliance-mode grace period before AWS Backup Vault Lock becomes immutable. Must be null unless backup_vault_lock_mode is compliance; governance mode omits this value."
+  type        = number
+  default     = null
+  nullable    = true
+
+  validation {
+    condition = (
+      var.backup_vault_lock_changeable_for_days == null
+      || (var.backup_vault_lock_changeable_for_days >= 3 && var.backup_vault_lock_changeable_for_days <= 36500)
+    )
+    error_message = "backup_vault_lock_changeable_for_days must be null or between 3 and 36500."
+  }
+
+  validation {
+    condition = (
+      (var.backup_vault_lock_mode == "compliance" && var.backup_vault_lock_changeable_for_days != null)
+      || (var.backup_vault_lock_mode != "compliance" && var.backup_vault_lock_changeable_for_days == null)
+    )
+    error_message = "backup_vault_lock_changeable_for_days must be set only when backup_vault_lock_mode is compliance, and must be null for disabled or governance."
+  }
 }
 
 variable "live_ops_backend_state_hardened" {
