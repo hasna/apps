@@ -157,7 +157,7 @@ export function classifyBrowserActionRisk(input: BrowserActionRiskInput): Browse
     risk = maxActionRisk(risk, "sensitive");
   }
 
-  if (actionLike && has(all, /\b(add to cart|save address|save changes|submit|send|post|publish|upload|remove|unsubscribe)\b/)) {
+  if (actionLike && has(all, /\b(add to cart|apply|approve|book|cancel|change|confirm|create|decline|edit|enroll|invite|post|publish|remove|request|reserve|reschedule|save address|save changes|schedule|send|share|submit|unsubscribe|update|upload)\b/)) {
     addTag(tags, "external_mutation");
     risk = maxActionRisk(risk, "external_mutation");
   }

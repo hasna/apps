@@ -89,4 +89,18 @@ describe("browser capability policy", () => {
     expect(mutation.risk).toBe("external_mutation");
     expect(mutation.requiresApproval).toBe(true);
   });
+
+  it("approval-gates generic mutating verbs without site-specific rules", () => {
+    for (const label of ["Confirm appointment", "Book reservation", "Update profile", "Create project"]) {
+      const result = classifyBrowserActionRisk({
+        kind: "click",
+        label,
+        role: "button",
+        instruction: label.toLowerCase(),
+      });
+      expect(result.risk).toBe("external_mutation");
+      expect(result.requiresApproval).toBe(true);
+      expect(result.tags).toContain("external_mutation");
+    }
+  });
 });
