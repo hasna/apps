@@ -238,7 +238,7 @@ export async function sendHostedUptimeReport(summary: UptimeSummary, options: Se
   return deliveries;
 }
 
-function buildHostedUptimeReport(summary: UptimeSummary, options: BuildUptimeReportOptions = {}): UptimeReport {
+export function buildHostedUptimeReport(summary: UptimeSummary, options: BuildUptimeReportOptions = {}): UptimeReport {
   const report = buildUptimeReport(redactSummaryTargets(summary), options);
   return {
     ...report,

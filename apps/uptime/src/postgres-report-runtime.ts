@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { sanitizeEvidenceInput } from "./evidence-sanitizer.js";
 import { createPostgresPool, type PostgresQueryClient } from "./postgres.js";
 import { buildPostgresMigrationPlan, redactPostgresUrl } from "./postgres-plan.js";
 import type { ReportDeliveryChannel, ReportDeliveryRecord } from "./types.js";
@@ -41,7 +42,9 @@ export interface PostgresReportRuntimeReadiness {
     deliveryIdempotency: boolean;
     retryBackoffMetadata: boolean;
     artifactMetadataWriter: boolean;
+    artifactObjectWriterContract: boolean;
     artifactObjectWriter: boolean;
+    auditExportContract: boolean;
     auditExport: boolean;
     deliveryAlarms: boolean;
   };
@@ -282,6 +285,117 @@ export interface PostgresReportArtifactRecord {
   actor: string | null;
   origin: string | null;
   idempotencyKey: string | null;
+}
+
+export type PostgresReportArtifactBody = string | Uint8Array | Record<string, unknown>;
+
+export interface PostgresReportArtifactObjectWriteInput {
+  workspaceId: string;
+  reportRunId: string;
+  artifactType: PostgresReportArtifactType;
+  suggestedKey: string;
+  contentType: string;
+  body: Uint8Array;
+  sha256: string;
+  byteSize: number;
+  redacted: true;
+  retentionClass: PostgresReportArtifactRetentionClass;
+  actor: string | null;
+  origin: string | null;
+  idempotencyKey: string | null;
+}
+
+export interface PostgresReportArtifactObjectWriteResult {
+  storageRef: string;
+  sha256?: string;
+  byteSize?: number;
+  kmsKeyRef?: string | null;
+  etag?: string | null;
+  versionId?: string | null;
+}
+
+export type PostgresReportArtifactObjectWriter = (
+  input: PostgresReportArtifactObjectWriteInput,
+) => Promise<PostgresReportArtifactObjectWriteResult> | PostgresReportArtifactObjectWriteResult;
+
+export interface WritePostgresReportArtifactInput {
+  runtime: PostgresReportRuntime;
+  workspaceId?: string;
+  reportRunId: string;
+  artifactType: PostgresReportArtifactType;
+  body: PostgresReportArtifactBody;
+  contentType?: string;
+  retentionClass?: PostgresReportArtifactRetentionClass;
+  actor?: string | null;
+  origin?: string | null;
+  idempotencyKey?: string | null;
+  writer: PostgresReportArtifactObjectWriter;
+}
+
+export interface WritePostgresReportArtifactResult {
+  artifact: PostgresReportArtifactRecord;
+  object: {
+    storageRef: string;
+    sha256: string;
+    byteSize: number;
+    kmsKeyRef: string | null;
+    etag: string | null;
+    versionId: string | null;
+  };
+}
+
+export interface PostgresReportAuditExportEvent {
+  kind: "open-uptime.report-audit";
+  version: 1;
+  eventId: string;
+  idempotencyKey: string;
+  workspaceIdHash: string;
+  reportRunId: string | null;
+  deliveryAttemptId: string | null;
+  action: string;
+  status: "succeeded" | "failed" | "retry_exhausted" | "artifact_written" | "artifact_failed";
+  occurredAt: string;
+  channel: ReportDeliveryChannel | null;
+  channelRefId: string | null;
+  provider: "mailery" | "telephony" | "logs" | null;
+  requestHash: string | null;
+  responseHash: string | null;
+  artifactRefHash: string | null;
+  metadata: Record<string, unknown>;
+  redacted: true;
+}
+
+export interface BuildPostgresReportAuditEventInput {
+  workspaceId?: string;
+  reportRunId?: string | null;
+  deliveryAttemptId?: string | null;
+  action: string;
+  status: PostgresReportAuditExportEvent["status"];
+  occurredAt?: string;
+  channel?: ReportDeliveryChannel | null;
+  channelRefId?: string | null;
+  provider?: "mailery" | "telephony" | "logs" | null;
+  requestHash?: string | null;
+  responseHash?: string | null;
+  artifactRef?: string | null;
+  idempotencyKey?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface PostgresReportAuditExportResult {
+  ok: boolean;
+  id?: string | null;
+  status?: number | null;
+  error?: string | null;
+  redacted: true;
+}
+
+export type PostgresReportAuditExporter = (
+  event: PostgresReportAuditExportEvent,
+) => Promise<PostgresReportAuditExportResult> | PostgresReportAuditExportResult;
+
+export interface ExportPostgresReportAuditEventInput extends BuildPostgresReportAuditEventInput {
+  exporter: PostgresReportAuditExporter;
 }
 
 export class PostgresReportRuntime {
@@ -746,7 +860,7 @@ export class PostgresReportRuntime {
         scheduledAt,
         normalizeNullableIsoTimestamp(input.nextRetryAt, "delivery nextRetryAt"),
         normalizeNullableHttpStatus(input.responseStatus),
-        normalizeNullableOpaqueText(input.providerMessageId, "provider message id", 200),
+        normalizeNullableProviderEvidenceId(input.providerMessageId, "provider message id", 200),
         normalizeNullableRedactedText(input.error, "delivery error", 1000),
         normalizeNullablePositiveInteger(input.retryAfterSeconds, "retryAfterSeconds"),
         normalizeNullableSha256(input.requestHash, "request hash"),
@@ -846,7 +960,7 @@ export class PostgresReportRuntime {
         finishedAt,
         normalizeNullableIsoTimestamp(input.nextRetryAt, "delivery nextRetryAt"),
         normalizeNullableHttpStatus(input.responseStatus),
-        normalizeNullableOpaqueText(input.providerMessageId, "provider message id", 200),
+        normalizeNullableProviderEvidenceId(input.providerMessageId, "provider message id", 200),
         normalizeNullableRedactedText(input.error, "delivery error", 1000),
         normalizeNullablePositiveInteger(input.retryAfterSeconds, "retryAfterSeconds"),
         normalizeNullableSha256(input.responseHash, "response hash"),
@@ -887,7 +1001,7 @@ export class PostgresReportRuntime {
         normalizeNonNegativeInteger(input.byteSize, "artifact byteSize"),
         true,
         normalizeRetentionClass(input.retentionClass ?? "standard"),
-        normalizeNullableOpaqueText(input.kmsKeyRef, "artifact kms key ref", 300),
+        normalizeNullableProviderEvidenceId(input.kmsKeyRef, "artifact kms key ref", 300),
         normalizeNullableOpaqueText(input.actor, "artifact actor", 160),
         normalizeNullableOpaqueText(input.origin, "artifact origin", 160),
         normalizeNullableOpaqueText(input.idempotencyKey, "artifact idempotency key", 256),
@@ -925,6 +1039,130 @@ export function createPostgresReportRuntime(options: PostgresReportRuntimeOption
   return new PostgresReportRuntime(options);
 }
 
+export async function writePostgresReportArtifact(input: WritePostgresReportArtifactInput): Promise<WritePostgresReportArtifactResult> {
+  const workspaceId = resolveHostedHelperWorkspaceId(input.workspaceId, "report artifact writer");
+  const reportRunId = normalizeId(input.reportRunId);
+  const artifactType = normalizeArtifactType(input.artifactType);
+  const retentionClass = normalizeRetentionClass(input.retentionClass ?? "standard");
+  const actor = normalizeNullableOpaqueText(input.actor, "artifact actor", 160);
+  const origin = normalizeNullableOpaqueText(input.origin, "artifact origin", 160);
+  const contentType = normalizeContentType(input.contentType ?? defaultArtifactContentType(artifactType));
+  const body = normalizeArtifactBody(input.body);
+  assertSafeReportArtifactBody(body);
+  const sha = sha256Bytes(body);
+  const byteSize = body.byteLength;
+  const idempotencyKey = normalizeArtifactIdempotencyKey(input.idempotencyKey, workspaceId, reportRunId, artifactType, sha);
+  const suggestedKey = suggestedArtifactKey(workspaceId, reportRunId, artifactType, sha);
+  let object: PostgresReportArtifactObjectWriteResult;
+  try {
+    object = await input.writer({
+      workspaceId,
+      reportRunId,
+      artifactType,
+      suggestedKey,
+      contentType,
+      body,
+      sha256: sha,
+      byteSize,
+      redacted: true,
+      retentionClass,
+      actor,
+      origin,
+      idempotencyKey,
+    });
+  } catch (error) {
+    throw new Error(sanitizeUnsafeAuditError(sanitizePostgresReportRuntimeError(error)));
+  }
+  const storageRef = normalizeArtifactRef(object.storageRef, "artifact object storage ref");
+  const objectSha = object.sha256 == null ? sha : normalizeSha256(object.sha256, "artifact object sha256");
+  const objectByteSize = object.byteSize == null ? byteSize : normalizeNonNegativeInteger(object.byteSize, "artifact object byteSize");
+  if (objectSha !== sha) throw new Error("artifact object writer returned a mismatched sha256");
+  if (objectByteSize !== byteSize) throw new Error("artifact object writer returned a mismatched byteSize");
+  const artifact = await input.runtime.recordArtifact({
+    workspaceId,
+    reportRunId,
+    artifactType,
+    storageRef,
+    sha256: sha,
+    byteSize,
+    redacted: true,
+    retentionClass,
+    kmsKeyRef: object.kmsKeyRef ?? null,
+    actor,
+    origin,
+    idempotencyKey,
+  });
+  return {
+    artifact,
+    object: {
+      storageRef,
+      sha256: sha,
+      byteSize,
+      kmsKeyRef: artifact.kmsKeyRef,
+      etag: normalizeNullableProviderEvidenceId(object.etag ?? null, "artifact object etag", 160),
+      versionId: normalizeNullableProviderEvidenceId(object.versionId ?? null, "artifact object version id", 200),
+    },
+  };
+}
+
+export function buildPostgresReportAuditEvent(input: BuildPostgresReportAuditEventInput): PostgresReportAuditExportEvent {
+  const workspaceId = resolveHostedHelperWorkspaceId(input.workspaceId, "report audit export");
+  const channel = input.channel == null ? null : normalizeChannel(input.channel);
+  const provider = input.provider == null ? null : normalizeDeliveryProvider(input.provider);
+  if (channel && provider && provider !== expectedProviderForChannel(channel)) {
+    throw new Error(`audit provider must be ${expectedProviderForChannel(channel)} for ${channel}`);
+  }
+  const base = {
+    kind: "open-uptime.report-audit",
+    version: 1,
+    workspaceIdHash: sha256(workspaceId),
+    reportRunId: normalizeNullableOpaqueText(input.reportRunId, "report run id", 160),
+    deliveryAttemptId: normalizeNullableOpaqueText(input.deliveryAttemptId, "delivery attempt id", 160),
+    action: normalizeOpaqueText(input.action, "audit action", 120),
+    status: normalizeAuditStatus(input.status),
+    occurredAt: normalizeIsoTimestamp(input.occurredAt ?? new Date().toISOString(), "audit occurredAt"),
+    channel,
+    channelRefId: input.channelRefId == null ? null : normalizeRuntimeRefId(input.channelRefId, "audit channel ref id", 160),
+    provider,
+    requestHash: normalizeNullableSha256(stripSha256Prefix(input.requestHash), "audit request hash"),
+    responseHash: normalizeNullableSha256(stripSha256Prefix(input.responseHash), "audit response hash"),
+    artifactRefHash: input.artifactRef == null ? null : sha256(normalizeArtifactRef(input.artifactRef, "audit artifact ref")),
+    metadata: normalizeAuditMetadata(input.metadata ?? {}),
+    redacted: true,
+  } satisfies Omit<PostgresReportAuditExportEvent, "eventId" | "idempotencyKey">;
+  const idempotencyKey = normalizeAuditIdempotencyKey(input.idempotencyKey, base);
+  const event: PostgresReportAuditExportEvent = {
+    ...base,
+    eventId: deterministicId("rae", idempotencyKey),
+    idempotencyKey,
+  };
+  assertSafeAuditEvent(event);
+  return event;
+}
+
+export async function exportPostgresReportAuditEvent(input: ExportPostgresReportAuditEventInput): Promise<PostgresReportAuditExportResult> {
+  const event = buildPostgresReportAuditEvent(input);
+  try {
+    const result = await input.exporter(event);
+    const normalized: PostgresReportAuditExportResult = {
+      ok: Boolean(result.ok),
+      id: result.id == null ? null : normalizeProviderEvidenceId(result.id, "audit export id", 200),
+      status: result.status == null ? null : normalizeNullableHttpStatus(result.status),
+      error: result.error == null ? null : sanitizeUnsafeAuditError(normalizeNullableRedactedText(result.error, "audit export error", 1000) ?? ""),
+      redacted: true,
+    };
+    assertSafeAuditEvent(normalized);
+    return normalized;
+  } catch (error) {
+    const message = sanitizeUnsafeAuditError(sanitizePostgresReportRuntimeError(error));
+    return {
+      ok: false,
+      error: message,
+      redacted: true,
+    };
+  }
+}
+
 export function buildPostgresReportRuntimeReadiness(options: Pick<PostgresReportRuntimeOptions, "databaseUrl" | "schemaName" | "workspaceId" | "workspaceSetting"> & {
   schemaVerified?: boolean;
 } = {}): PostgresReportRuntimeReadiness {
@@ -959,12 +1197,30 @@ export function buildPostgresReportRuntimeReadiness(options: Pick<PostgresReport
     { name: "report-delivery-idempotency", ok: true, detail: "stable idempotency keys and duplicate suppression are implemented" },
     { name: "report-delivery-retry-backoff", ok: true, detail: "next_retry_at and retry_after_seconds metadata are implemented" },
     { name: "report-artifact-metadata-writer", ok: true, detail: "implemented for redacted artifact metadata refs only" },
+    { name: "report-artifact-object-writer-contract", ok: true, detail: "callback-based artifact object writer validates redacted body bytes, sha256, byteSize, storage ref, retention class, and Postgres metadata recording" },
+    { name: "report-audit-export-contract", ok: true, detail: "callback-based Open Logs audit export validates sanitizer-safe redacted event payloads and redacted exporter results" },
   ];
   const promotionChecks = [
-    { name: "report-artifact-object-store", ok: false, detail: "S3/object artifact writing and signing are not implemented" },
-    { name: "report-audit-export", ok: false, detail: "delivery audit export to Open Logs is not implemented" },
-    { name: "report-delivery-alarms", ok: false, detail: "reporter lag, failed delivery, and retry-exhaustion alarms are not proven" },
-    { name: "reporter-worker-liveness", ok: false, detail: "live reporter worker leases, drain, and rollback evidence are not proven" },
+    {
+      name: "report-artifact-object-store",
+      ok: false,
+      detail: "artifact object writer contract exists, but approved S3/object storage wiring, signing, IAM, and smoke evidence are not proven",
+    },
+    {
+      name: "report-audit-export",
+      ok: false,
+      detail: "audit export contract exists, but approved Open Logs wiring and delivery smoke evidence are not proven",
+    },
+    {
+      name: "report-delivery-alarms",
+      ok: false,
+      detail: "reporter lag, failed delivery, and retry-exhaustion alarms are not proven",
+    },
+    {
+      name: "reporter-worker-liveness",
+      ok: false,
+      detail: "live reporter worker leases, drain, and rollback evidence are not proven",
+    },
   ];
   const checks = [...metadataChecks, ...promotionChecks];
   const metadataBlockers = [
@@ -996,7 +1252,9 @@ export function buildPostgresReportRuntimeReadiness(options: Pick<PostgresReport
       deliveryIdempotency: true,
       retryBackoffMetadata: true,
       artifactMetadataWriter: true,
+      artifactObjectWriterContract: true,
       artifactObjectWriter: false,
+      auditExportContract: true,
       auditExport: false,
       deliveryAlarms: false,
     },
@@ -1177,6 +1435,132 @@ function normalizeReportJsonMetadata(value: Record<string, unknown> | null | und
   };
 }
 
+function normalizeArtifactBody(value: PostgresReportArtifactBody): Uint8Array {
+  if (typeof value === "string") return new TextEncoder().encode(value);
+  if (value instanceof Uint8Array) return value;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("report artifact body must be a string, Uint8Array, or JSON object");
+  }
+  return new TextEncoder().encode(JSON.stringify(value));
+}
+
+function assertSafeReportArtifactBody(body: Uint8Array): void {
+  let decoded: string;
+  try {
+    decoded = new TextDecoder("utf-8", { fatal: true }).decode(body);
+  } catch {
+    throw new Error("report artifact body must be UTF-8 text so it can be redaction-checked before object storage");
+  }
+  if (/\bhttps?:\/\/[^\s"'<>]+/i.test(decoded)) {
+    throw new Error("report artifact body must not contain raw URLs; use hosted report redaction before writing artifacts");
+  }
+  if (/\b(?:[a-z0-9-]+\.)+[a-z]{2,}:\d{1,5}\b/i.test(decoded) || /\b(?:[a-z0-9-]+\.)+(?:internal|local)\b/i.test(decoded)) {
+    throw new Error("report artifact body must not contain raw host targets; use hosted report redaction before writing artifacts");
+  }
+  const report = sanitizeEvidenceInput(decoded, { inputFormat: "auto", source: "postgres-report-artifact-body" });
+  if (report.unsafe) {
+    throw new Error(`report artifact body must be redacted before object storage; sanitizer findings=${report.summary.findings}`);
+  }
+}
+
+function normalizeAuditMetadata(value: Record<string, unknown>): Record<string, unknown> {
+  const report = sanitizeEvidenceInput(value, { source: "postgres-report-audit-metadata" });
+  if (report.unsafe) throw new Error(`audit metadata must be redacted before export; sanitizer findings=${report.summary.findings}`);
+  if (!report.sanitized || typeof report.sanitized !== "object" || Array.isArray(report.sanitized)) {
+    throw new Error("audit metadata must be a JSON object");
+  }
+  return report.sanitized as Record<string, unknown>;
+}
+
+function sanitizeUnsafeAuditError(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "redacted audit error";
+  try {
+    const report = sanitizeEvidenceInput(trimmed, { inputFormat: "text", source: "postgres-report-audit-error" });
+    return typeof report.sanitized === "string" ? report.sanitized : "redacted audit error";
+  } catch {
+    return "redacted audit error";
+  }
+}
+
+function assertSafeAuditEvent(value: unknown): void {
+  const report = sanitizeEvidenceInput(value, { source: "postgres-report-audit-event" });
+  if (report.unsafe) throw new Error(`audit export payload must be redacted before export; sanitizer findings=${report.summary.findings}`);
+}
+
+function normalizeAuditStatus(value: string): PostgresReportAuditExportEvent["status"] {
+  if (value === "succeeded" || value === "failed" || value === "retry_exhausted" || value === "artifact_written" || value === "artifact_failed") return value;
+  throw new Error("audit status must be succeeded, failed, retry_exhausted, artifact_written, or artifact_failed");
+}
+
+function normalizeContentType(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*(?:;\s*charset=utf-8)?$/.test(trimmed)) {
+    throw new Error("artifact content type must be a safe media type");
+  }
+  return trimmed;
+}
+
+function defaultArtifactContentType(value: PostgresReportArtifactType): string {
+  if (value === "json") return "application/json";
+  if (value === "html") return "text/html; charset=utf-8";
+  if (value === "summary") return "text/plain; charset=utf-8";
+  return "application/pdf";
+}
+
+function suggestedArtifactKey(workspaceId: string, reportRunId: string, artifactType: PostgresReportArtifactType, artifactSha256: string): string {
+  return `reports/${sha256(workspaceId).slice(0, 16)}/${sha256(reportRunId).slice(0, 24)}/${artifactSha256}.${artifactType}`;
+}
+
+function resolveHostedHelperWorkspaceId(value: string | undefined, label: string): string {
+  const resolved = value ?? process.env.HASNA_UPTIME_WORKSPACE_ID;
+  if ((process.env.HASNA_UPTIME_MODE ?? "").trim() === "hosted" && !resolved) {
+    throw new Error(`${label} requires workspaceId or HASNA_UPTIME_WORKSPACE_ID in hosted mode`);
+  }
+  return normalizeWorkspaceId(resolved ?? "default");
+}
+
+function artifactIdempotencyKey(workspaceId: string, reportRunId: string, artifactType: PostgresReportArtifactType, artifactSha256: string): string {
+  return `sha256:${sha256([
+    "open-uptime.report-artifact-object.v1",
+    workspaceId,
+    reportRunId,
+    artifactType,
+    artifactSha256,
+  ].join("\u001f"))}`;
+}
+
+function normalizeArtifactIdempotencyKey(
+  value: string | null | undefined,
+  workspaceId: string,
+  reportRunId: string,
+  artifactType: PostgresReportArtifactType,
+  artifactSha256: string,
+): string {
+  const expected = artifactIdempotencyKey(workspaceId, reportRunId, artifactType, artifactSha256);
+  if (value == null || value.trim() === "") return expected;
+  const normalized = normalizeOpaqueText(value, "artifact idempotency key", 256);
+  if (normalized !== expected) throw new Error("artifact idempotency key must match artifact bytes");
+  return normalized;
+}
+
+function auditEventIdempotencyKey(value: Omit<PostgresReportAuditExportEvent, "eventId" | "idempotencyKey">): string {
+  return `raeik_${sha256(JSON.stringify(value))}`;
+}
+
+function normalizeAuditIdempotencyKey(value: string | null | undefined, event: Omit<PostgresReportAuditExportEvent, "eventId" | "idempotencyKey">): string {
+  const expected = auditEventIdempotencyKey(event);
+  if (value == null || value.trim() === "") return expected;
+  const normalized = normalizeOpaqueText(value, "audit idempotency key", 256);
+  if (normalized !== expected) throw new Error("audit idempotency key must match the redacted audit event");
+  return normalized;
+}
+
+function stripSha256Prefix(value: string | null | undefined): string | null | undefined {
+  if (value == null) return value;
+  return value.trim().replace(/^sha256:/i, "");
+}
+
 function parseJson(value: string): unknown {
   try {
     return JSON.parse(value);
@@ -1289,6 +1673,18 @@ function normalizeRuntimeRefId(value: string, label: string, maxLength: number):
   if (/^[\d_.:+()-]+$/.test(ref) && ref.replace(/\D/g, "").length >= 7) throw new Error(`${label} must not be a raw phone number`);
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(ref)) throw new Error(`${label} must not be a URL`);
   return ref;
+}
+
+function normalizeProviderEvidenceId(value: string, label: string, maxLength: number): string {
+  const ref = normalizeRuntimeRefId(value, label, maxLength);
+  const report = sanitizeEvidenceInput(ref, { inputFormat: "text", source: label });
+  if (report.unsafe) throw new Error(`${label} must be redacted before storage`);
+  return ref;
+}
+
+function normalizeNullableProviderEvidenceId(value: string | null | undefined, label: string, maxLength: number): string | null {
+  if (value == null || value.trim() === "") return null;
+  return normalizeProviderEvidenceId(value, label, maxLength);
 }
 
 function normalizeDeliveryProvider(value: string): "mailery" | "telephony" | "logs" {
@@ -1415,6 +1811,10 @@ function deterministicId(prefix: string, ...parts: string[]): string {
 }
 
 function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function sha256Bytes(value: Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 

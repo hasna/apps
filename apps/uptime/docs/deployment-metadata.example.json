@@ -1,7 +1,7 @@
 {
   "service": "open-uptime",
   "package": "@hasna/uptime",
-  "intendedVersion": "0.1.61",
+  "intendedVersion": "0.1.62",
   "accountProfile": "<aws-profile>",
   "accountId": "<aws-account-id>",
   "region": "us-east-1",

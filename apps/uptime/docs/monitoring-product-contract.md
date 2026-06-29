@@ -129,15 +129,17 @@ Job lease semantics:
 - deploy drain pauses new claims and lets in-flight leases expire or finish;
 - alarms fire for stale leases and backlog.
 
-Current implementation note: `@hasna/uptime@0.1.61` implements the deterministic
+Current implementation note: `@hasna/uptime@0.1.62` implements the deterministic
 job key, probe policy hash, class/location claim checks, same-probe claim retry
 idempotency, nonce payload conflict rejection in the local SQLite probe
 scaffold, service-owned report channel-ref catalog validation for hosted
 reporter preflight, a read-only Postgres private-probe identity preflight, and
 mandatory `hosted-public` target-policy enforcement for Postgres monitor
 upserts. It also includes SDK/CLI shared-evidence sanitization for rollout
-artifacts. Enabled Postgres `browser_page` rows remain blocked until browser
-evidence workers are configured, and private targets still require future
+artifacts plus callback contracts for redacted report artifact object writes
+and sanitizer-safe Open Logs audit export payloads. Enabled Postgres
+`browser_page` rows remain blocked until browser evidence workers are configured,
+and private targets still require future
 inventory-backed provenance. Sanitized evidence is not live-readiness proof.
 Deploy drain, backlog/stale-lease metrics, live report delivery, private-probe
 heartbeat/revocation/rotation, and hosted cloud-worker enablement remain future
@@ -352,16 +354,23 @@ MCP input, or schedule payload shape:
 ```
 
 The catalog is a validation contract only until the hosted Postgres store,
-S3 artifact storage/signing, audit export, delivery alarms, and live reporter
+approved S3/object artifact writer wiring and smoke evidence, approved Open
+Logs audit export wiring and smoke evidence, delivery alarms, and live reporter
 liveness/drain evidence are implemented. The Postgres migration plan and report
 runtime include workspace-scoped `report_delivery_attempts` and
-`report_artifacts` metadata so the runtime can persist per-attempt idempotency,
-retry state, claim/fencing metadata, retention class, and redacted artifact refs
-without storing provider secrets or raw report bytes in SQL. It must not contain
-raw `apiUrl`, recipient, token, key, password, or secret value fields. Hosted
-schedule/API/MCP requests must
+`report_artifacts` metadata plus callback contracts for redacted artifact object
+writes and sanitizer-safe Open Logs audit export payloads, so the runtime can
+persist per-attempt idempotency, retry state, claim/fencing metadata, retention
+class, and redacted artifact refs without storing provider secrets or raw report
+bytes in SQL. It must not contain raw `apiUrl`, recipient, token, key, password,
+or secret value fields. Hosted schedule/API/MCP requests must
 later reference approved channel ids only; clients must never submit `secretRef`
 values.
+
+The artifact callback is an at-least-once integration boundary: object writers
+must be idempotent for the supplied hash/idempotency key, and approved S3/object
+store wiring must include reconciliation or lifecycle cleanup for objects whose
+metadata transaction fails after the external write succeeds.
 
 The Postgres report runtime also includes transactional report schedule/window
 claiming plus a fenced report-run state machine. A reporter worker can claim one
@@ -371,9 +380,9 @@ the same transaction. This prevents duplicate workers from processing the same
 due window without skipping the window after an expired unfinished claim.
 Schedule discovery and claim records expose only channel presence booleans,
 never raw recipients, provider endpoints, secret refs, or channel payloads. This
-is still not permission to scale the hosted reporter until artifact object
-storage, approved secret loading, audit export, delivery alarms, and worker
-liveness are proven end to end.
+is still not permission to scale the hosted reporter until approved artifact
+object storage wiring, approved secret loading, approved audit export wiring,
+delivery alarms, and worker liveness are proven end to end.
 
 Hosted delivery code now has a separate server-side resolver for the channel-ref
 catalog. The resolver requires explicit selected channel ids from an already
@@ -393,9 +402,9 @@ tokens, send keys, raw report bytes, provider-echoed targets, or secret payload
 JSON. Hosted delivery uses a redacted report payload by default: monitor target
 URLs, hosts, ports, and target-like incident text are masked before email, SMS,
 Open Logs, request-hash, or delivery evidence creation. This is still not
-permission to scale the reporter: S3 artifact object writes, delivery audit
-export, reporter alarms, and live worker liveness evidence remain required
-before live promotion.
+permission to scale the reporter: S3/object artifact writer wiring, delivery
+audit export wiring, reporter alarms, and live worker liveness evidence remain
+required before live promotion.
 
 ## Dashboard Views
 

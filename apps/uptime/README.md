@@ -122,8 +122,9 @@ public-checks` bridge, do not enable hosted API probe routes, and do not make
 hosted worker preflight `canStart=true`. The
 `@hasna/uptime/postgres-report-runtime` export can claim report schedule
 windows, begin and finish fenced report runs, write delivery-attempt state,
-retry metadata, and redacted artifact metadata refs for review, but it is also
-not a promotion gate. `uptime cloud postgres-plan` exposes the reviewed target schema,
+retry metadata, redacted artifact metadata refs, and validated callback
+contracts for redacted artifact object writes plus Open Logs audit export
+payloads for review, but it is also not a promotion gate. `uptime cloud postgres-plan` exposes the reviewed target schema,
 workspace RLS policy shape, tombstones, audit tables, idempotency fields, and
 check-job lease tables for private review without connecting to Postgres or
 printing credentials.
@@ -149,9 +150,10 @@ Bounded Postgres scheduler and public-probe review commands can write
 CloudWatch EMF telemetry with `--emit-cloudwatch-emf`; this is review telemetry
 only and does not change `cloud workers run --role <role>` or worker preflight
 readiness. The reporter metric helpers exist in the SDK, but hosted reporter
-startup remains blocked until channel secret loading, S3 artifact writing,
-Open Logs audit export, delivery alarms, and live worker liveness evidence are
-implemented and proven.
+startup remains blocked until channel secret loading, approved S3/object
+artifact writer wiring and smoke evidence, approved Open Logs audit export
+wiring and smoke evidence, delivery alarms, and live worker liveness evidence
+are proven.
 `uptime cloud public-checks run-due` and `worker` are only bounded EFS SQLite
 bridge paths around hosted HTTP/TCP smoke checks, and they require
 `--allow-public-checks-bridge` or `HASNA_UPTIME_ALLOW_PUBLIC_CHECKS_BRIDGE=1`.

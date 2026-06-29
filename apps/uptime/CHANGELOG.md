@@ -6,6 +6,30 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.62] - 2026-06-30
+
+### Added
+
+- Added hosted reporter callback contracts for redacted report artifact object
+  writes and sanitizer-safe Open Logs audit export payloads. The SDK validates
+  redacted artifact bodies, hash/byte-size matches, hash-only suggested object
+  keys, safe storage refs, retention metadata, deterministic audit event ids,
+  and redacted exporter results before recording report metadata.
+- Exported `buildHostedUptimeReport`, `writePostgresReportArtifact`,
+  `buildPostgresReportAuditEvent`, and `exportPostgresReportAuditEvent` from
+  the public SDK surfaces.
+
+### Changed
+
+- Updated hosted reporter preflight to distinguish implemented artifact/audit
+  callback contracts from still-blocked approved S3/Open Logs wiring, delivery
+  alarms, and live worker liveness evidence.
+- Documented the at-least-once artifact writer boundary and the need for
+  object-store reconciliation or lifecycle cleanup around failed metadata
+  transactions.
+- Updated release metadata defaults for the packaged AWS module to
+  `@hasna/uptime@0.1.62`.
+
 ## [0.1.61] - 2026-06-30
 
 ### Added

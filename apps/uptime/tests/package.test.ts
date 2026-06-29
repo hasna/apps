@@ -11,7 +11,7 @@ const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
 
 test("published package exports and bins are usable after build", async () => {
   const exportChecks: Record<string, string[]> = {
-    ".": ["UptimeService", "UptimeStore", "buildUptimeReport", "sanitizeEvidenceInput"],
+    ".": ["UptimeService", "UptimeStore", "buildHostedUptimeReport", "buildUptimeReport", "sanitizeEvidenceInput", "writePostgresReportArtifact", "buildPostgresReportAuditEvent", "exportPostgresReportAuditEvent"],
     "./api": ["createApiHandler", "serveUptime"],
     "./storage": ["UptimeStore"],
     "./probes": ["generateProbeKeyPair", "signProbeResult"],
@@ -19,7 +19,7 @@ test("published package exports and bins are usable after build", async () => {
     "./postgres-plan": ["buildPostgresMigrationPlan", "renderPostgresMigrationPlan"],
     "./postgres": ["buildPostgresMigrationDryRun", "runPostgresMigration"],
     "./postgres-runtime": ["buildPostgresRuntimeReadiness", "buildPostgresPrivateProbePreflight", "createPostgresRuntime"],
-    "./postgres-report-runtime": ["buildPostgresReportRuntimeReadiness", "createPostgresReportRuntime"],
+    "./postgres-report-runtime": ["buildPostgresReportRuntimeReadiness", "createPostgresReportRuntime", "writePostgresReportArtifact", "buildPostgresReportAuditEvent", "exportPostgresReportAuditEvent"],
     "./workers": ["runHostedPublicChecksWorker", "runPostgresPublicProbeWorker", "runPostgresSchedulerWorker"],
     "./worker-metrics": ["buildWorkerRuntimeMetricEnvelope", "schedulerWorkerRuntimeMetrics", "publicProbeWorkerRuntimeMetrics", "reporterWorkerRuntimeMetrics"],
     "./edge-smoke": ["runEdgeSmoke"],

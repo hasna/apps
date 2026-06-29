@@ -13,7 +13,7 @@ export {
 } from "./checks.js";
 export { createApiHandler, serveUptime } from "./api.js";
 export { applyImport, previewImport, rollbackImport } from "./imports.js";
-export { buildUptimeReport, sendHostedUptimeReport, sendUptimeReport } from "./report.js";
+export { buildHostedUptimeReport, buildUptimeReport, sendHostedUptimeReport, sendUptimeReport } from "./report.js";
 export { parseHostedReportChannelRefs, summarizeHostedReportChannelRefCatalog, summarizeHostedReportChannelRefs } from "./report-channel-refs.js";
 export { generateProbeKeyPair, probePublicKeyFingerprint, probeResultSigningPayload, signProbeResult, verifyProbeResultSignature } from "./probes.js";
 export { buildAwsDeploymentPlan, buildPrivateProbeCloudConfig, renderPrivateProbeEnv } from "./cloud-plan.js";
@@ -31,10 +31,13 @@ export {
   buildPostgresReportRuntimeReadiness,
   createPostgresReportRuntime,
   deliveryAttemptIdempotencyKey,
+  exportPostgresReportAuditEvent,
+  buildPostgresReportAuditEvent,
   PostgresReportRuntime,
   reportRunIdForScheduleWindow,
   reportRunScheduleWindowIdempotencyKey,
   sanitizePostgresReportRuntimeError,
+  writePostgresReportArtifact,
 } from "./postgres-report-runtime.js";
 export { runHostedPublicChecksWorker, runPostgresPublicProbeWorker, runPostgresSchedulerWorker } from "./workers.js";
 export {
@@ -181,6 +184,7 @@ export type {
 } from "./postgres-runtime.js";
 export type {
   BeginPostgresReportRunForScheduleClaimInput,
+  BuildPostgresReportAuditEventInput,
   ClaimPostgresReportDeliveryAttemptInput,
   ClaimPostgresReportRunInput,
   ClaimPostgresReportScheduleInput,
@@ -188,13 +192,21 @@ export type {
   CompletePostgresReportRunInput,
   CompletePostgresReportScheduleClaimInput,
   CreatePostgresReportDeliveryAttemptInput,
+  ExportPostgresReportAuditEventInput,
   FinishPostgresReportRunForScheduleClaimInput,
   FinishPostgresReportRunForScheduleClaimResult,
   ListDuePostgresReportDeliveryAttemptsOptions,
   ListDuePostgresReportSchedulesOptions,
+  PostgresReportArtifactBody,
+  PostgresReportArtifactObjectWriteInput,
+  PostgresReportArtifactObjectWriteResult,
+  PostgresReportArtifactObjectWriter,
   PostgresReportArtifactRecord,
   PostgresReportArtifactRetentionClass,
   PostgresReportArtifactType,
+  PostgresReportAuditExporter,
+  PostgresReportAuditExportEvent,
+  PostgresReportAuditExportResult,
   PostgresReportDeliveryAttemptRecord,
   PostgresReportDeliveryAttemptStatus,
   PostgresReportRunInputStatus,
@@ -206,6 +218,8 @@ export type {
   PostgresReportScheduleClaimRecord,
   RecordPostgresReportArtifactInput,
   RecordPostgresReportRunInput,
+  WritePostgresReportArtifactInput,
+  WritePostgresReportArtifactResult,
 } from "./postgres-report-runtime.js";
 export type {
   HostedPublicCheckRunner,

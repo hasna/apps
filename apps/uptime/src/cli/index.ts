@@ -2374,24 +2374,34 @@ function hostedReporterReadinessChecks(): Array<{ name: string; ok: boolean; det
       detail: "Postgres report_artifacts metadata writer is implemented for redacted refs",
     },
     {
+      name: "report-artifact-object-writer-contract",
+      ok: reportRuntime.capabilities.artifactObjectWriterContract,
+      detail: runtimeCheck("report-artifact-object-writer-contract")?.detail ?? "artifact object writer contract is not implemented",
+    },
+    {
+      name: "report-audit-export-contract",
+      ok: reportRuntime.capabilities.auditExportContract,
+      detail: runtimeCheck("report-audit-export-contract")?.detail ?? "audit export contract is not implemented",
+    },
+    {
       name: "report-runtime-schema-verified",
       ok: schemaCheck?.ok ?? false,
       detail: schemaCheck?.detail ?? "not verified in this process",
     },
     {
       name: "report-artifact-object-store",
-      ok: false,
-      detail: "S3 artifact write/signing path is not implemented",
+      ok: reportRuntime.capabilities.artifactObjectWriter,
+      detail: runtimeCheck("report-artifact-object-store")?.detail ?? "approved S3/object artifact writer evidence is not proven",
     },
     {
       name: "report-audit-export",
-      ok: false,
-      detail: "hosted delivery audit export to Open Logs is not implemented",
+      ok: reportRuntime.capabilities.auditExport,
+      detail: runtimeCheck("report-audit-export")?.detail ?? "approved Open Logs audit export evidence is not proven",
     },
     {
       name: "report-delivery-alarms",
-      ok: false,
-      detail: "reporter lag, failure, and retry-exhaustion alarms are not proven",
+      ok: reportRuntime.capabilities.deliveryAlarms,
+      detail: runtimeCheck("report-delivery-alarms")?.detail ?? "reporter lag, failure, and retry-exhaustion alarms are not proven",
     },
   ];
 }

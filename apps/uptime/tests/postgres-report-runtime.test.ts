@@ -1,10 +1,14 @@
 import { expect, test } from "bun:test";
 import {
   buildPostgresReportRuntimeReadiness,
+  buildPostgresReportAuditEvent,
   createPostgresReportRuntime,
   deliveryAttemptIdempotencyKey,
+  exportPostgresReportAuditEvent,
   sanitizePostgresReportRuntimeError,
+  writePostgresReportArtifact,
   type PostgresReportArtifactRecord,
+  type PostgresReportArtifactObjectWriteInput,
   type PostgresReportDeliveryAttemptRecord,
   type PostgresReportRunRecord,
   type PostgresReportScheduleClaimRecord,
@@ -738,6 +742,199 @@ test("Postgres report runtime rejects local artifacts and secret-looking refs", 
   })).rejects.toThrow("must be redacted");
 });
 
+test("Postgres report artifact writer validates redacted object contracts before metadata storage", async () => {
+  const client = new FakeReportClient();
+  const runtime = createPostgresReportRuntime({ client, workspaceId: "ws_runtime" });
+  const body = {
+    kind: "open-uptime.report",
+    redacted: true,
+    redaction_policy: "open-uptime.hosted-report-redaction.v1",
+    totals: { down: 0 },
+    monitors: [{ target: "[REDACTED_TARGET]" }],
+  };
+  const writerInputs: PostgresReportArtifactObjectWriteInput[] = [];
+
+  const result = await writePostgresReportArtifact({
+    runtime,
+    workspaceId: "ws_runtime",
+    reportRunId: "rpr_runtime",
+    artifactType: "json",
+    body,
+    retentionClass: "compliance",
+    actor: "reporter",
+    writer: (input) => {
+      writerInputs.push(input);
+      return {
+        storageRef: `s3://open-uptime-artifacts/${input.suggestedKey}`,
+        sha256: input.sha256,
+        byteSize: input.byteSize,
+        kmsKeyRef: "kms-key-ref",
+        etag: "etag-safe",
+        versionId: "version-safe",
+      };
+    },
+  });
+  const writerInput = writerInputs[0]!;
+
+  expect(writerInput?.redacted).toBe(true);
+  expect(writerInput?.retentionClass).toBe("compliance");
+  expect(writerInput?.contentType).toBe("application/json");
+  expect(writerInput?.suggestedKey).toMatch(/^reports\/[a-f0-9]{16}\/[a-f0-9]{24}\/[a-f0-9]{64}\.json$/);
+  expect(writerInput?.suggestedKey).not.toContain("rpr_runtime");
+  expect(writerInput?.sha256).toMatch(/^[a-f0-9]{64}$/);
+  expect(writerInput?.byteSize).toBeGreaterThan(0);
+  expect(writerInput?.idempotencyKey).toMatch(/^sha256:[a-f0-9]{64}$/);
+  expect(result.artifact.reportRunId).toBe("rpr_runtime");
+  expect(result.artifact.redacted).toBe(true);
+  expect(result.artifact.retentionClass).toBe("compliance");
+  expect(result.object.etag).toBe("etag-safe");
+  expect(client.queries.some((query) => query.sql.includes("INSERT INTO \"uptime\".\"report_artifacts\""))).toBe(true);
+});
+
+test("Postgres report artifact writer fails closed for unsafe bodies, refs, and hosted workspace omissions", async () => {
+  const runtime = createPostgresReportRuntime({ client: new FakeReportClient(), workspaceId: "ws_runtime" });
+  let calls = 0;
+  const writer = () => {
+    calls += 1;
+    return { storageRef: "s3://open-uptime-artifacts/reports/safe.json" };
+  };
+
+  await expect(writePostgresReportArtifact({
+    runtime,
+    workspaceId: "ws_runtime",
+    reportRunId: "rpr_runtime",
+    artifactType: "json",
+    body: { target: "https://example.com/health" },
+    writer,
+  })).rejects.toThrow("raw URLs");
+
+  await expect(writePostgresReportArtifact({
+    runtime,
+    workspaceId: "ws_runtime",
+    reportRunId: "rpr_runtime",
+    artifactType: "json",
+    body: "tcp target api.example.com:443",
+    writer,
+  })).rejects.toThrow("raw host targets");
+
+  await expect(writePostgresReportArtifact({
+    runtime,
+    workspaceId: "ws_runtime",
+    reportRunId: "rpr_runtime",
+    artifactType: "json",
+    body: { target: "[REDACTED_TARGET]" },
+    writer: () => ({ storageRef: "file:///tmp/raw.json" }),
+  })).rejects.toThrow("s3:// or artifact://");
+
+  await expect(writePostgresReportArtifact({
+    runtime,
+    workspaceId: "ws_runtime",
+    reportRunId: "rpr_runtime",
+    artifactType: "json",
+    body: { target: "[REDACTED_TARGET]" },
+    writer: (input) => ({ storageRef: "s3://open-uptime-artifacts/reports/safe.json", sha256: "a".repeat(64), byteSize: input.byteSize }),
+  })).rejects.toThrow("mismatched sha256");
+
+  const previousMode = process.env.HASNA_UPTIME_MODE;
+  const previousWorkspace = process.env.HASNA_UPTIME_WORKSPACE_ID;
+  try {
+    process.env.HASNA_UPTIME_MODE = "hosted";
+    delete process.env.HASNA_UPTIME_WORKSPACE_ID;
+    await expect(writePostgresReportArtifact({
+      runtime,
+      reportRunId: "rpr_runtime",
+      artifactType: "json",
+      body: { target: "[REDACTED_TARGET]" },
+      writer,
+    })).rejects.toThrow("requires workspaceId");
+  } finally {
+    if (previousMode == null) delete process.env.HASNA_UPTIME_MODE;
+    else process.env.HASNA_UPTIME_MODE = previousMode;
+    if (previousWorkspace == null) delete process.env.HASNA_UPTIME_WORKSPACE_ID;
+    else process.env.HASNA_UPTIME_WORKSPACE_ID = previousWorkspace;
+  }
+
+  expect(calls).toBe(0);
+});
+
+test("Postgres report audit export builds stable redacted events and sanitizes exporter evidence", async () => {
+  const event = buildPostgresReportAuditEvent({
+    workspaceId: "ws_runtime",
+    reportRunId: "rpr_runtime",
+    deliveryAttemptId: "rda_runtime",
+    action: "delivery-complete",
+    status: "succeeded",
+    occurredAt: "2026-06-29T08:10:00.000Z",
+    channel: "logs",
+    provider: "logs",
+    channelRefId: "ops-logs",
+    requestHash: `sha256:${"a".repeat(64)}`,
+    responseHash: "b".repeat(64),
+    artifactRef: "s3://open-uptime-artifacts/reports/redacted.json",
+    metadata: { attempt: 1, target: "[REDACTED_TARGET]" },
+  });
+  const same = buildPostgresReportAuditEvent({
+    workspaceId: "ws_runtime",
+    reportRunId: "rpr_runtime",
+    deliveryAttemptId: "rda_runtime",
+    action: "delivery-complete",
+    status: "succeeded",
+    occurredAt: "2026-06-29T08:10:00.000Z",
+    channel: "logs",
+    provider: "logs",
+    channelRefId: "ops-logs",
+    requestHash: "a".repeat(64),
+    responseHash: "b".repeat(64),
+    artifactRef: "s3://open-uptime-artifacts/reports/redacted.json",
+    metadata: { attempt: 1, target: "[REDACTED_TARGET]" },
+  });
+
+  expect(event.eventId).toMatch(/^rae_[a-f0-9]{32}$/);
+  expect(event.idempotencyKey).toMatch(/^raeik_[a-f0-9]{64}$/);
+  expect(event.eventId).toBe(same.eventId);
+  expect(event.workspaceIdHash).toMatch(/^[a-f0-9]{64}$/);
+  expect(JSON.stringify(event)).not.toContain("ws_runtime");
+  expect(event.artifactRefHash).toMatch(/^[a-f0-9]{64}$/);
+
+  expect(() => buildPostgresReportAuditEvent({
+    workspaceId: "ws_runtime",
+    action: "bad",
+    status: "succeeded",
+    channel: "email",
+    provider: "logs",
+  })).toThrow("provider must be mailery");
+
+  expect(() => buildPostgresReportAuditEvent({
+    workspaceId: "ws_runtime",
+    action: "bad",
+    status: "succeeded",
+    metadata: { owner: "ops@example.com" },
+  })).toThrow("audit metadata must be redacted");
+
+  const result = await exportPostgresReportAuditEvent({
+    workspaceId: "ws_runtime",
+    action: "delivery-failed",
+    status: "failed",
+    channel: "email",
+    provider: "mailery",
+    channelRefId: "ops-email",
+    exporter: () => {
+      throw new Error("failed arn:aws:secretsmanager:us-east-1:123456789012:secret:x ops@example.com +15550101010 s3://bucket/key /home/hasna/private Bearer abcdefghijklmnop");
+    },
+  });
+
+  expect(result.ok).toBe(false);
+  expect(result.redacted).toBe(true);
+  expect(result.error).toContain("[redacted-aws-arn]");
+  expect(result.error).toContain("[redacted-email]");
+  expect(result.error).toContain("[redacted-phone]");
+  expect(result.error).toContain("[redacted-s3-uri]");
+  expect(result.error).toContain("[redacted-local-path]");
+  expect(result.error).toContain("Bearer redacted");
+  expect(JSON.stringify(result)).not.toContain("ops@example.com");
+  expect(JSON.stringify(result)).not.toContain("+15550101010");
+});
+
 test("Postgres report runtime readiness is honest about schema verification", () => {
   const readiness = buildPostgresReportRuntimeReadiness({
     databaseUrl: "postgres://svc:raw-password@db.example.invalid/uptime?sslmode=require",
@@ -752,6 +949,8 @@ test("Postgres report runtime readiness is honest about schema verification", ()
   expect(checks["report-delivery-attempt-state"]).toBe(true);
   expect(checks["report-delivery-idempotency"]).toBe(true);
   expect(checks["report-artifact-metadata-writer"]).toBe(true);
+  expect(checks["report-artifact-object-writer-contract"]).toBe(true);
+  expect(checks["report-audit-export-contract"]).toBe(true);
   expect(checks["report-runtime-schema-verified"]).toBe(false);
   expect(readiness.database.redactedUrl).toBe("postgres://user:redacted@db.example.invalid/uptime");
   expect(serialized).not.toContain("raw-password");
@@ -773,6 +972,8 @@ test("Postgres report runtime readiness can be marked ready only with schema evi
     "report-run-metadata-writer": true,
     "report-schedule-claiming": true,
     "report-run-state-machine": true,
+    "report-artifact-object-writer-contract": true,
+    "report-audit-export-contract": true,
     "report-artifact-object-store": false,
     "report-audit-export": false,
     "report-delivery-alarms": false,
@@ -782,7 +983,9 @@ test("Postgres report runtime readiness can be marked ready only with schema evi
     reportRunWriter: true,
     scheduleClaiming: true,
     reportRunStateMachine: true,
+    artifactObjectWriterContract: true,
     artifactObjectWriter: false,
+    auditExportContract: true,
     auditExport: false,
     deliveryAlarms: false,
   });

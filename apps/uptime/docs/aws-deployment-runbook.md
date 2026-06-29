@@ -584,12 +584,14 @@ system. Never mount the restored file system over production during a drill.
 
 Report preview can be tested locally or through authenticated read APIs. Hosted
 delivery attempts through Mailery, Telephony, or Open Logs must stay disabled
-until the reporter has approved channel secret loading, redacted S3 artifact
-writes/signing, audit export, delivery alarms, and reviewed live-worker rollback
+until the reporter has approved channel secret loading, redacted S3/object
+artifact writer wiring and smoke evidence, approved Open Logs audit export
+wiring and smoke evidence, delivery alarms, and reviewed live-worker rollback
 evidence. The Postgres report-runtime helper can claim due report schedule
 windows, begin and finish fenced report runs, write delivery-attempt state,
-stable per-attempt idempotency keys, retry metadata, and redacted artifact
-metadata refs, but this is narrower than hosted reporter readiness.
+stable per-attempt idempotency keys, retry metadata, redacted artifact metadata
+refs, and validated callback contracts for artifact object writes and Open Logs
+audit payloads, but this is narrower than hosted reporter readiness.
 
 `0.1.42` adds a separate Postgres core runtime facade for monitor rows, probe
 identities, deterministic `check_jobs`, check results, audit events, and
@@ -621,8 +623,9 @@ valid catalog only proves the configured refs are shaped safely and contain no
 raw URLs, recipients, tokens, keys, or secret values; clients must later submit
 approved channel ids only, never `secretRef` values. It is not permission to
 scale the reporter while the full Postgres service store, worker liveness,
-report run state machine, S3 object artifact storage, audit export, and
-delivery alarms are still blocked.
+report run state machine, approved S3/object artifact storage wiring and smoke
+evidence, approved audit export wiring and smoke evidence, and delivery alarms
+are still blocked.
 
 Hosted report delivery must use the server-side channel-ref resolver, not the
 local direct `--mailery-url`, `--telephony-url`, recipient, or token flags. The

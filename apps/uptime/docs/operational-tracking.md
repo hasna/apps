@@ -43,26 +43,27 @@ evidence:
 
 For the 2026-06-29 hosted deployment track, published public package versions
 remain release and zero-count deployment evidence only after the matching
-private deployment metadata records that result. Version `0.1.61` is prepared
-with shared-evidence sanitizer support; the prior zero-count
-deployment path remains not live runtime evidence until private deployment
-metadata records the matching image refresh. Hosted reporter, protected web/API
-scale-out, private probes, and cloud-primary promotion remain blocked until the
-hard hosted gate below is satisfied.
+private deployment metadata records that result. Version `0.1.62` is prepared
+with shared-evidence sanitizer support plus hosted reporter artifact/audit
+callback contracts; the prior zero-count deployment path remains not live
+runtime evidence until private deployment metadata records the matching image
+refresh. Hosted reporter, protected web/API scale-out, private probes, and
+cloud-primary promotion remain blocked until the hard hosted gate below is
+satisfied.
 
-## 0.1.61 Runtime Readiness Snapshot
+## 0.1.62 Runtime Readiness Snapshot
 
 | Area | Current evidence | Status |
 | --- | --- | --- |
 | Shared evidence | SDK/CLI sanitizer can redact raw AWS identifiers, CloudFront/ALB hosts, private URLs, Terraform artifacts, image digests, local paths, recipients, database URLs, tokens, and unsafe object keys before evidence is copied into shared docs or project metadata. | Sanitized evidence is not live readiness; protected web, workers, reports, private probes, and cloud-primary gates still need runtime proof. |
 | Target policy | Hosted API/import paths, worker review paths, and direct Postgres monitor upserts reject unsafe public-hosted targets before execution or storage; enabled browser-page rows remain blocked. | Still blocked on approved private inventory refs, live denied-target AWS smokes, browser evidence isolation, and full hosted service adapter wiring. |
-| Reporter | Channel-ref shape validation and Postgres report metadata helpers exist. | Blocked on server-side secret loading, S3 artifact writes/signing, Open Logs audit export, delivery alarms, and live liveness/drain evidence. |
+| Reporter | Channel-ref shape validation, Postgres report metadata helpers, and callback contracts for redacted artifact object writes plus Open Logs audit export payloads exist. | Blocked on server-side secret loading, approved S3/object writer wiring/signing/smoke evidence, approved Open Logs audit export wiring/smoke evidence, delivery alarms, and live liveness/drain evidence. |
 | Scheduler | Bounded Postgres scheduler review batches can create public-safe deterministic `check_jobs`. | Blocked on hosted service/API integration, lease ownership, deploy drain, metrics, alarms, and live RLS evidence. |
 | Public probe | Bounded Postgres public-probe review batches can claim, execute, and submit existing public-safe jobs. | Blocked on hosted worker promotion gates, denied-target AWS smokes, backlog metrics, and rollback evidence. |
 | Private probe | Read-only Postgres identity preflight can inspect a scoped probe identity and private-job counters without exposing key material. | Blocked on hosted probe APIs, heartbeat, revocation, rotation, approved inventory refs, target seed policy, alarms, and live evidence. |
 | Worker alarms | Terraform alarm contracts exist and are default-off. | Blocked until metric producers, approved alarm actions, and human/on-call delivery smoke are proven. |
 | Human alert delivery | Internal audit queue and budget notification wiring may be private evidence. | Blocked until approved human/on-call subscriptions and a non-secret delivery smoke are recorded. |
-| Logs and audit | CloudWatch log groups and one-off version smoke evidence exist. | Zero-count evidence only; no live scheduler/public-probe/reporter log streams or Open Logs audit export. |
+| Logs and audit | CloudWatch log groups, one-off version smoke evidence, and a sanitizer-safe Open Logs audit export callback contract exist. | Zero-count evidence only; no live scheduler/public-probe/reporter log streams or approved Open Logs audit export wiring/smoke evidence. |
 | Backup | EFS SQLite bridge backup and restore drill evidence exists. | Zero-count evidence only; repeat after sustained live writes and treat Postgres/RDS PITR separately. |
 
 ## Cloud-Primary Status
