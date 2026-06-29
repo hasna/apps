@@ -1,7 +1,7 @@
 # Provider API inventory - 2026-06-29
 
 This inventory is the source baseline for expanding `@hasna/banking` beyond the
-0.0.6 read-only Mercury adapter and the current Mercury/Erste BCR conformance
+0.0.7 read-only Mercury adapter and the current Mercury/Erste BCR conformance
 registry. It intentionally separates verified provider capabilities from
 implementation decisions so the CLI, SDK, and MCP server can grow through
 descriptors instead of ad hoc command branches.
@@ -31,7 +31,7 @@ network-gated until a TPP account or documented public download URL is available
 
 ## Current `banking` Coverage
 
-`@hasna/banking` 0.0.6 currently supports:
+`@hasna/banking` 0.0.7 currently supports:
 
 - provider capability listing;
 - Mercury live reads for accounts, balances, organization-wide cards, and

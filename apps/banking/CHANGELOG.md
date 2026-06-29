@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+No changes yet.
+
+## 0.0.7 - 2026-06-29
+
 ### Added
 
 - Shared provider operation registry derived from conformance contracts, exposed

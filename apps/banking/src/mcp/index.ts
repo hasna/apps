@@ -13,7 +13,7 @@ import {
   type ProviderId,
 } from "../index.ts";
 
-const VERSION = "0.0.6";
+const VERSION = "0.0.7";
 
 export type McpToolStatus = "implemented" | "provider_backed_pending" | "admin_gated";
 
