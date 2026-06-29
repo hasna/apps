@@ -860,6 +860,24 @@ test("CLI Postgres public-probe runner requires explicit workspace", () => {
   }
 });
 
+test("CLI Postgres private-probe preflight requires explicit workspace", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const result = runCli(["cloud", "postgres-private-probe", "preflight", "--probe-id", "prb_private", "--json"], dbPath, {
+      HASNA_UPTIME_MODE: "hosted",
+      HASNA_UPTIME_WORKSPACE_ID: "",
+    });
+    const body = JSON.parse(new TextDecoder().decode(result.stdout));
+
+    expect(result.exitCode).toBe(1);
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain("--workspace-id");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("CLI migration worker preflight sees Postgres migration dry-run but still blocks runtime start", () => {
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {

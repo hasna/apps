@@ -20,6 +20,7 @@ export { buildAwsDeploymentPlan, buildPrivateProbeCloudConfig, renderPrivateProb
 export { buildPostgresMigrationPlan, redactPostgresUrl, renderPostgresMigrationPlan } from "./postgres-plan.js";
 export { buildPostgresMigrationDryRun, createPostgresPool, renderPostgresMigrationRun, runPostgresMigration } from "./postgres.js";
 export {
+  buildPostgresPrivateProbePreflight,
   buildPostgresRuntimeReadiness,
   checkJobIdempotencyKey,
   createPostgresRuntime,
@@ -154,6 +155,7 @@ export type {
   CountPostgresSchedulerBacklogOptions,
   CountPostgresStaleCheckJobLeasesOptions,
   CreatePostgresCheckJobInput,
+  GetPostgresProbeIdentityOptions,
   GetPostgresMonitorOptions,
   ListDuePostgresCheckJobsOptions,
   PostgresAuditEventRecord,
@@ -161,6 +163,9 @@ export type {
   PostgresCheckResultRecord,
   PostgresMonitorRecord,
   PostgresMonitorSnapshot,
+  BuildPostgresPrivateProbePreflightOptions,
+  PostgresPrivateProbePreflight,
+  PostgresPrivateProbePreflightCheck,
   PostgresProbeIdentityRecord,
   PostgresProbeSubmissionRecord,
   PostgresRuntimeOptions,

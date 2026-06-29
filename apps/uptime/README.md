@@ -98,7 +98,10 @@ public-safe HTTP/TCP monitors with producer-side hosted target-policy checks.
 review batch from existing `check_jobs`, filtered to the selected public probe
 identity's class and location before claim. Denied scheduler targets are
 deferred for the current monitor interval so repeated review batches can reach
-later public-safe monitors. These commands are not the EFS SQLite `cloud
+later public-safe monitors. `uptime cloud postgres-private-probe preflight`
+reads a private probe identity, expected machine/location/fingerprint bindings,
+and private job/lease counts from Postgres for review while keeping hosted
+private-probe startup blocked. These commands are not the EFS SQLite `cloud
 public-checks` bridge, do not enable hosted API probe routes, and do not make
 hosted worker preflight `canStart=true`. The
 `@hasna/uptime/postgres-report-runtime` export can claim report schedule

@@ -640,6 +640,27 @@ key or token contents.
 The private probe service should not be enabled until hosted probe claim/submit
 routes are backed by cloud check jobs and cloud audit rows.
 
+`0.1.59` adds a read-only Postgres private-probe preflight for identity review:
+
+```bash
+uptime cloud postgres-private-probe preflight \
+  --workspace-id "$HASNA_UPTIME_WORKSPACE_ID" \
+  --probe-id "$HASNA_UPTIME_PRIVATE_PROBE_ID" \
+  --machine-id "$HASNA_UPTIME_MACHINE_ID" \
+  --probe-location "$HASNA_UPTIME_PROBE_LOCATION" \
+  --public-key-fingerprint "<sha256-fingerprint>" \
+  --json
+```
+
+This command reads the Postgres probe identity, expected machine/location/public
+key fingerprint bindings, due private job count, and stale private lease count.
+It can prove `canUseCloudIdentityForReview=true`, but it still returns
+`canStartHostedProbe=false` and `canPromotePrivateProbe=false` until hosted
+probe claim/submit/heartbeat/revoke routes are wired to the async Postgres
+runtime, private targets come from approved inventory refs, and worker alarms
+plus live operational evidence exist. Do not include private keys, raw targets,
+tokens, database URLs, or saved Terraform state/plan contents in this output.
+
 ## Safety Rules
 
 - Do not deploy hosted mode with `HASNA_UPTIME_ALLOW_HOSTED_LOCAL_STORE=1`.

@@ -6,6 +6,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.59] - 2026-06-30
+
+### Added
+
+- Added `uptime cloud postgres-private-probe preflight` to inspect an enabled
+  private probe identity, expected machine/location/fingerprint bindings, and
+  private job/lease counts from the Postgres runtime without enabling hosted
+  private probe workers.
+- Exported `buildPostgresPrivateProbePreflight` and `getProbeIdentity` runtime
+  support for SDK consumers that need the same fail-closed private-probe
+  identity review.
+
+### Changed
+
+- Kept private probe startup and promotion blocked even when Postgres identity
+  review passes. Hosted probe routes still require service/API integration,
+  heartbeat, revocation, rotation, inventory-backed private targets, alarms, and
+  live operational evidence.
+- Updated operational tracking to record `0.1.58` as published and zero-count
+  refreshed, and added a report/log/alarm readiness snapshot that separates
+  zero-count evidence from live-readiness blockers.
+
 ## [0.1.58] - 2026-06-30
 
 ### Changed

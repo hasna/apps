@@ -43,10 +43,23 @@ evidence:
 
 For the 2026-06-29 hosted deployment track, published public package versions
 remain release and zero-count deployment evidence only after the matching
-private deployment metadata records that result. Version `0.1.58` is the next
-worker-runtime metric producer target until publish and zero-count evidence are
-recorded. Hosted reporter, protected web/API scale-out, and cloud-primary
-promotion remain blocked until the hard hosted gate below is satisfied.
+private deployment metadata records that result. Version `0.1.58` is published
+and zero-count refreshed with shared edge-smoke evidence redacted by default,
+but it is still not live runtime evidence. Hosted reporter, protected web/API
+scale-out, and cloud-primary promotion remain blocked until the hard hosted gate
+below is satisfied.
+
+## 0.1.58 Runtime Readiness Snapshot
+
+| Area | Current evidence | Status |
+| --- | --- | --- |
+| Reporter | Channel-ref shape validation and Postgres report metadata helpers exist. | Blocked on server-side secret loading, S3 artifact writes/signing, Open Logs audit export, delivery alarms, and live liveness/drain evidence. |
+| Scheduler | Bounded Postgres scheduler review batches can create public-safe deterministic `check_jobs`. | Blocked on hosted service/API integration, lease ownership, deploy drain, metrics, alarms, and live RLS evidence. |
+| Public probe | Bounded Postgres public-probe review batches can claim, execute, and submit existing public-safe jobs. | Blocked on hosted worker promotion gates, denied-target AWS smokes, backlog metrics, and rollback evidence. |
+| Worker alarms | Terraform alarm contracts exist and are default-off. | Blocked until metric producers, approved alarm actions, and human/on-call delivery smoke are proven. |
+| Human alert delivery | Internal audit queue and budget notification wiring may be private evidence. | Blocked until approved human/on-call subscriptions and a non-secret delivery smoke are recorded. |
+| Logs and audit | CloudWatch log groups and one-off version smoke evidence exist. | Zero-count evidence only; no live scheduler/public-probe/reporter log streams or Open Logs audit export. |
+| Backup | EFS SQLite bridge backup and restore drill evidence exists. | Zero-count evidence only; repeat after sustained live writes and treat Postgres/RDS PITR separately. |
 
 ## Cloud-Primary Status
 

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  buildPostgresPrivateProbePreflight,
   buildPostgresRuntimeReadiness,
   checkJobIdempotencyKey,
   createPostgresRuntime,
@@ -74,6 +75,12 @@ class FakeRuntimeClient implements PostgresQueryClient {
         version: 1,
       };
       return { rows: [snakeProbe(this.probe)], rowCount: 1 };
+    }
+    if (sql.includes("SELECT * FROM \"uptime\".\"probe_identities\"")) {
+      const requestedWorkspace = String(params?.[0]);
+      const requestedId = String(params?.[1]);
+      const found = this.probe?.workspaceId === requestedWorkspace && this.probe.id === requestedId;
+      return { rows: found ? [snakeProbe(this.probe!)] : [], rowCount: found ? 1 : 0 };
     }
     if (sql.includes("INSERT INTO \"uptime\".\"check_jobs\"")) {
       if (!this.job) {
@@ -357,6 +364,7 @@ test("Postgres runtime records monitors, probe leases, submissions, audit, and t
     probePolicy: { probeClass: "private", locations: ["operator-02"] },
   });
   const fetchedMonitor = await runtime.getMonitor({ id: monitor.id });
+  const fetchedProbe = await runtime.getProbeIdentity({ id: probe.id });
   const claimed = await runtime.claimCheckJob({
     jobId: job.id,
     probeId: probe.id,
@@ -444,6 +452,12 @@ test("Postgres runtime records monitors, probe leases, submissions, audit, and t
   expect(expectedJobKey).toMatch(/^sha256:[a-f0-9]{64}$/);
   expect(job.id).toBe(`job_${expectedJobKey.replace("sha256:", "").slice(0, 32)}`);
   expect(fetchedMonitor?.id).toBe(monitor.id);
+  expect(fetchedProbe).toMatchObject({
+    id: probe.id,
+    probeClass: "public",
+    probeLocation: "eu-west-1",
+    publicKeyFingerprint: "a".repeat(64),
+  });
   expect(schedulerMonitors).toHaveLength(0);
   expect(schedulerMonitorsOtherPolicy).toHaveLength(1);
   expect(schedulerBacklog).toBe(1);
@@ -628,6 +642,110 @@ test("Postgres runtime readiness is honest and does not promote hosted workers",
   expect(readiness.database.redactedUrl).toBe("postgres://user:redacted@db.example.invalid/uptime");
   expect(serialized).not.toContain("raw-password");
   expect(serialized).not.toContain("sslmode=require");
+});
+
+test("Postgres private probe preflight proves identity review but keeps hosted startup blocked", async () => {
+  const client = new FakeRuntimeClient();
+  const runtime = createPostgresRuntime({
+    client,
+    workspaceId: "ws_runtime",
+    now: () => new Date("2026-06-29T10:00:00.000Z"),
+  });
+  const probe = await runtime.upsertProbeIdentity({
+    id: "prb_private_operator_01",
+    name: "Operator 01 private probe",
+    probeClass: "private",
+    probeLocation: "operator-01",
+    machineId: "operator-01",
+    publicKeyPem: "-----BEGIN PUBLIC KEY-----\nfake\n-----END PUBLIC KEY-----",
+    publicKeyFingerprint: "b".repeat(64),
+    capabilities: { http: true, tcp: true },
+  });
+  const readiness = buildPostgresRuntimeReadiness({
+    databaseUrl: "postgres://svc:raw-password@db.example.invalid/uptime?sslmode=require",
+    workspaceId: "ws_runtime",
+    schemaVerified: true,
+  });
+  const preflight = buildPostgresPrivateProbePreflight({
+    runtimeReadiness: readiness,
+    probe: await runtime.getProbeIdentity({ id: probe.id }),
+    probeId: probe.id,
+    workspaceId: "ws_runtime",
+    expectedMachineId: "operator-01",
+    expectedProbeLocation: "operator-01",
+    expectedPublicKeyFingerprint: "b".repeat(64),
+    duePrivateJobs: await runtime.countDueCheckJobs({ probeClass: "private", probeId: probe.id }),
+    stalePrivateLeases: await runtime.countStaleCheckJobLeases({ probeClass: "private", probeId: probe.id }),
+  });
+  const checks = Object.fromEntries(preflight.checks.map((check) => [check.name, check.ok]));
+  const serialized = JSON.stringify(preflight);
+
+  expect(preflight.kind).toBe("open-uptime.postgres-private-probe-preflight");
+  expect(preflight.status).toBe("blocked");
+  expect(preflight.canUseCloudIdentityForReview).toBe(true);
+  expect(preflight.canStartHostedProbe).toBe(false);
+  expect(preflight.canPromotePrivateProbe).toBe(false);
+  expect(preflight.identityBlockers).toEqual([]);
+  expect(preflight.startupBlockers.join("\n")).toContain("hosted-probe-api-service-integration");
+  expect(preflight.probe).toMatchObject({
+    id: "prb_private_operator_01",
+    probeClass: "private",
+    probeLocation: "operator-01",
+    machineId: "operator-01",
+    publicKeyFingerprint: "b".repeat(64),
+    capabilityKeys: ["http", "tcp"],
+  });
+  expect(preflight.duePrivateJobs).toBe(0);
+  expect(preflight.stalePrivateLeases).toBe(0);
+  expect(checks).toMatchObject({
+    "postgres-core-runtime": true,
+    "postgres-runtime-schema-verified": true,
+    "private-probe-identity-exists": true,
+    "private-probe-machine-binding": true,
+    "private-probe-location-binding": true,
+    "private-probe-fingerprint-binding": true,
+    "hosted-probe-api-service-integration": false,
+  });
+  expect(serialized).not.toContain("raw-password");
+  expect(serialized).not.toContain("BEGIN PUBLIC KEY");
+});
+
+test("Postgres private probe preflight blocks mismatched identity bindings", () => {
+  const readiness = buildPostgresRuntimeReadiness({
+    databaseUrl: "postgres://svc:redacted@db.example.invalid/uptime?sslmode=require",
+    workspaceId: "ws_runtime",
+    schemaVerified: true,
+  });
+  const preflight = buildPostgresPrivateProbePreflight({
+    runtimeReadiness: readiness,
+    probe: {
+      workspaceId: "ws_runtime",
+      id: "prb_private_operator_01",
+      name: "Operator 01 private probe",
+      probeClass: "private",
+      probeLocation: "operator-01",
+      machineId: "operator-01",
+      publicKeyPem: "-----BEGIN PUBLIC KEY-----\nfake\n-----END PUBLIC KEY-----",
+      publicKeyFingerprint: "b".repeat(64),
+      enabled: true,
+      capabilities: { http: true },
+      lastSeenAt: null,
+      version: 1,
+    },
+    probeId: "prb_private_operator_01",
+    workspaceId: "ws_runtime",
+    expectedMachineId: "operator-02",
+    expectedProbeLocation: "operator-02",
+    expectedPublicKeyFingerprint: "c".repeat(64),
+    duePrivateJobs: 0,
+    stalePrivateLeases: 0,
+  });
+
+  expect(preflight.canUseCloudIdentityForReview).toBe(false);
+  expect(preflight.identityBlockers.join("\n")).toContain("private-probe-machine-binding");
+  expect(preflight.identityBlockers.join("\n")).toContain("private-probe-location-binding");
+  expect(preflight.identityBlockers.join("\n")).toContain("private-probe-fingerprint-binding");
+  expect(preflight.canStartHostedProbe).toBe(false);
 });
 
 test("Postgres runtime honors custom workspace setting and rejects unsafe hosted construction", async () => {

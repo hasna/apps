@@ -110,6 +110,11 @@ export interface UpsertPostgresProbeIdentityInput {
   idempotencyKey?: string | null;
 }
 
+export interface GetPostgresProbeIdentityOptions {
+  workspaceId?: string;
+  id: string;
+}
+
 export interface PostgresProbeIdentityRecord {
   workspaceId: string;
   id: string;
@@ -123,6 +128,57 @@ export interface PostgresProbeIdentityRecord {
   capabilities: Record<string, unknown>;
   lastSeenAt: string | null;
   version: number;
+}
+
+export interface PostgresPrivateProbePreflightCheck {
+  name: string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface PostgresPrivateProbePreflight {
+  kind: "open-uptime.postgres-private-probe-preflight";
+  version: 1;
+  status: "blocked";
+  canUseCloudIdentityForReview: boolean;
+  canStartHostedProbe: false;
+  canPromotePrivateProbe: false;
+  workspaceId: string | null;
+  probeId: string;
+  expectedMachineId: string | null;
+  expectedProbeLocation: string | null;
+  expectedPublicKeyFingerprint: string | null;
+  probe: {
+    id: string;
+    name: string;
+    probeClass: ProbeClass;
+    probeLocation: string;
+    machineId: string | null;
+    enabled: boolean;
+    publicKeyFingerprint: string;
+    capabilityKeys: string[];
+    lastSeenAt: string | null;
+    version: number;
+  } | null;
+  duePrivateJobs: number | null;
+  stalePrivateLeases: number | null;
+  checks: PostgresPrivateProbePreflightCheck[];
+  identityBlockers: string[];
+  startupBlockers: string[];
+  blockers: string[];
+  nextActions: string[];
+}
+
+export interface BuildPostgresPrivateProbePreflightOptions {
+  runtimeReadiness: PostgresRuntimeReadiness;
+  probe: PostgresProbeIdentityRecord | null;
+  probeId: string;
+  workspaceId?: string | null;
+  expectedMachineId?: string | null;
+  expectedProbeLocation?: string | null;
+  expectedPublicKeyFingerprint?: string | null;
+  duePrivateJobs?: number | null;
+  stalePrivateLeases?: number | null;
 }
 
 export interface CreatePostgresCheckJobInput {
@@ -519,6 +575,18 @@ export class PostgresRuntime {
       ],
     ));
     return probeIdentityFromRow(firstRow(result, "probe identity"));
+  }
+
+  async getProbeIdentity(input: GetPostgresProbeIdentityOptions): Promise<PostgresProbeIdentityRecord | null> {
+    const workspaceId = normalizeWorkspaceId(input.workspaceId ?? this.workspaceId);
+    const id = normalizeId(input.id);
+    const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
+      `SELECT * FROM ${this.table("probe_identities")}
+       WHERE workspace_id = $1 AND id = $2 AND deleted_at IS NULL`,
+      [workspaceId, id],
+    ));
+    const row = result.rows[0];
+    return row ? probeIdentityFromRow(row as Record<string, unknown>) : null;
   }
 
   async getMonitor(input: GetPostgresMonitorOptions): Promise<PostgresMonitorRecord | null> {
@@ -1457,6 +1525,146 @@ export function buildPostgresRuntimeReadiness(options: Pick<PostgresRuntimeOptio
       auditWriter: true,
       tombstoneWriter: true,
     },
+  };
+}
+
+export function buildPostgresPrivateProbePreflight(options: BuildPostgresPrivateProbePreflightOptions): PostgresPrivateProbePreflight {
+  const probeId = normalizeId(options.probeId);
+  const workspaceId = normalizeOptionalWorkspaceId(options.workspaceId ?? options.runtimeReadiness.workspaceId);
+  const expectedMachineId = normalizeNullableOpaqueText(options.expectedMachineId, "expected private probe machine id", 160);
+  const expectedProbeLocation = options.expectedProbeLocation == null ? null : normalizeProbeLocation(options.expectedProbeLocation);
+  const expectedPublicKeyFingerprint = options.expectedPublicKeyFingerprint == null
+    ? null
+    : normalizeSha256(options.expectedPublicKeyFingerprint, "expected private probe public key fingerprint");
+  const probe = options.probe && options.probe.id === probeId ? options.probe : null;
+  const schemaCheck = options.runtimeReadiness.checks.find((check) => check.name === "postgres-runtime-schema-verified");
+  const duePrivateJobs = typeof options.duePrivateJobs === "number" ? options.duePrivateJobs : null;
+  const stalePrivateLeases = typeof options.stalePrivateLeases === "number" ? options.stalePrivateLeases : null;
+  const identityChecks: PostgresPrivateProbePreflightCheck[] = [
+    {
+      name: "postgres-core-runtime",
+      ok: options.runtimeReadiness.canUseCoreRuntime,
+      detail: options.runtimeReadiness.canUseCoreRuntime
+        ? "Postgres monitor/probe/check-job/check-result/audit primitives are available for review."
+        : "Postgres runtime core is not ready; inspect postgres runtime readiness blockers.",
+    },
+    {
+      name: "postgres-runtime-schema-verified",
+      ok: schemaCheck?.ok === true,
+      detail: schemaCheck?.detail ?? "schema verification evidence was not supplied",
+    },
+    {
+      name: "private-probe-id-present",
+      ok: Boolean(probeId),
+      detail: probeId,
+    },
+    {
+      name: "private-probe-identity-exists",
+      ok: Boolean(probe),
+      detail: probe ? "enabled private probe identity can be inspected without exposing key material" : "probe identity was not found in the workspace",
+    },
+    {
+      name: "private-probe-enabled",
+      ok: probe?.enabled === true,
+      detail: probe ? `enabled=${probe.enabled}` : "probe identity missing",
+    },
+    {
+      name: "private-probe-class",
+      ok: probe?.probeClass === "private",
+      detail: probe ? `probeClass=${probe.probeClass}` : "probe identity missing",
+    },
+    {
+      name: "private-probe-machine-binding",
+      ok: !expectedMachineId || probe?.machineId === expectedMachineId,
+      detail: expectedMachineId
+        ? `expected machine ${expectedMachineId}; observed ${probe?.machineId ?? "<missing>"}`
+        : "no expected machine id supplied; machine binding not proven",
+    },
+    {
+      name: "private-probe-location-binding",
+      ok: !expectedProbeLocation || probe?.probeLocation === expectedProbeLocation,
+      detail: expectedProbeLocation
+        ? `expected location ${expectedProbeLocation}; observed ${probe?.probeLocation ?? "<missing>"}`
+        : "no expected location supplied; location binding not proven",
+    },
+    {
+      name: "private-probe-fingerprint-binding",
+      ok: !expectedPublicKeyFingerprint || probe?.publicKeyFingerprint === expectedPublicKeyFingerprint,
+      detail: expectedPublicKeyFingerprint
+        ? `expected fingerprint ${expectedPublicKeyFingerprint}; observed ${probe?.publicKeyFingerprint ?? "<missing>"}`
+        : "no expected fingerprint supplied; public-key binding not proven",
+    },
+    {
+      name: "private-due-job-count-visible",
+      ok: duePrivateJobs !== null,
+      detail: duePrivateJobs === null ? "due private job count was not read" : `${duePrivateJobs} due private jobs are visible for this probe`,
+    },
+    {
+      name: "private-stale-lease-count-visible",
+      ok: stalePrivateLeases !== null,
+      detail: stalePrivateLeases === null ? "stale private lease count was not read" : `${stalePrivateLeases} stale private leases are visible for this probe`,
+    },
+  ];
+  const startupChecks: PostgresPrivateProbePreflightCheck[] = [
+    {
+      name: "hosted-probe-api-service-integration",
+      ok: false,
+      detail: "UptimeService and hosted /api/v1 probe routes still fail closed until they are wired to the async Postgres runtime.",
+    },
+    {
+      name: "private-probe-heartbeat-revocation-rotation",
+      ok: false,
+      detail: "Heartbeat, revocation, key rotation, and bounded offline lease handling are not implemented as hosted control-plane APIs.",
+    },
+    {
+      name: "private-target-seed-policy",
+      ok: false,
+      detail: "Private server/page targets must come from approved inventory refs and SSRF policy evidence before private jobs are promoted.",
+    },
+  ];
+  const identityBlockers = identityChecks
+    .filter((check) => !check.ok)
+    .map((check) => `${check.name}: ${check.detail}`);
+  const startupBlockers = startupChecks.map((check) => `${check.name}: ${check.detail}`);
+  const canUseCloudIdentityForReview = identityBlockers.length === 0;
+  return {
+    kind: "open-uptime.postgres-private-probe-preflight",
+    version: 1,
+    status: "blocked",
+    canUseCloudIdentityForReview,
+    canStartHostedProbe: false,
+    canPromotePrivateProbe: false,
+    workspaceId,
+    probeId,
+    expectedMachineId,
+    expectedProbeLocation,
+    expectedPublicKeyFingerprint,
+    probe: probe
+      ? {
+        id: probe.id,
+        name: probe.name,
+        probeClass: probe.probeClass,
+        probeLocation: probe.probeLocation,
+        machineId: probe.machineId,
+        enabled: probe.enabled,
+        publicKeyFingerprint: probe.publicKeyFingerprint,
+        capabilityKeys: Object.keys(probe.capabilities).sort(),
+        lastSeenAt: probe.lastSeenAt,
+        version: probe.version,
+      }
+      : null,
+    duePrivateJobs,
+    stalePrivateLeases,
+    checks: [...identityChecks, ...startupChecks],
+    identityBlockers,
+    startupBlockers,
+    blockers: [...identityBlockers, ...startupBlockers],
+    nextActions: [
+      "Use this output only as private-probe identity review evidence; it is not permission to start the hosted private probe service.",
+      "Wire hosted /api/v1 probe claim/submit/heartbeat/revoke routes to the async Postgres runtime before setting canStartHostedProbe true.",
+      "Seed private targets only from approved inventory refs with SSRF/private-routing policy evidence.",
+      "Keep ECS scheduler/public-probe/reporter/private-probe workers at desired count 0 until worker preflights, alarms, and live operational gates pass.",
+    ],
   };
 }
 

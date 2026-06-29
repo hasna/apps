@@ -12,7 +12,7 @@ import { generateProbeKeyPair, signProbeResult } from "../probes.js";
 import { buildAwsDeploymentPlan, buildPrivateProbeCloudConfig, renderPrivateProbeEnv } from "../cloud-plan.js";
 import { buildPostgresMigrationPlan, renderPostgresMigrationPlan } from "../postgres-plan.js";
 import { buildPostgresMigrationDryRun, renderPostgresMigrationRun, runPostgresMigration } from "../postgres.js";
-import { buildPostgresRuntimeReadiness, createPostgresRuntime, sanitizePostgresRuntimeError } from "../postgres-runtime.js";
+import { buildPostgresPrivateProbePreflight, buildPostgresRuntimeReadiness, createPostgresRuntime, sanitizePostgresRuntimeError } from "../postgres-runtime.js";
 import { buildPostgresReportRuntimeReadiness } from "../postgres-report-runtime.js";
 import { summarizeHostedReportChannelRefs, type HostedReportChannelRefSummary } from "../report-channel-refs.js";
 import { runHostedPublicChecksWorker, runPostgresPublicProbeWorker, runPostgresSchedulerWorker, type PostgresPublicProbeWorkerSummary, type PostgresSchedulerWorkerSummary } from "../workers.js";
@@ -20,6 +20,7 @@ import { emitWorkerRuntimeMetricEnvelope, workerRuntimeMetricOptionsFromEnv, typ
 import { redactEdgeSmokeReportForEvidence, runEdgeSmoke, type EdgeSmokeReport, type RedactedEdgeSmokeReport } from "../edge-smoke.js";
 import type { AwsDeploymentPlan, PrivateProbeCloudConfig } from "../cloud-plan.js";
 import type { PostgresMigrationPlan } from "../postgres-plan.js";
+import type { PostgresPrivateProbePreflight } from "../postgres-runtime.js";
 import type { ImportSource } from "../imports.js";
 import type { SendUptimeReportOptions, UptimeReportDelivery } from "../report.js";
 import type { CreateMonitorInput, Monitor, ProbePolicy, ProbeResultSubmission, ReportRun, ReportSchedule, ReportScheduleChannels, UpdateMonitorInput, UptimeSummary } from "../types.js";
@@ -797,9 +798,71 @@ const cloudPostgresPublicProbe = cloud
   .command("postgres-public-probe")
   .description("Run bounded Postgres public-probe review batches without enabling hosted ECS workers");
 
+const cloudPostgresPrivateProbe = cloud
+  .command("postgres-private-probe")
+  .description("Inspect private probe Postgres identity readiness without enabling hosted probe workers");
+
 const cloudPostgresScheduler = cloud
   .command("postgres-scheduler")
   .description("Create bounded Postgres check_jobs review batches without enabling hosted ECS workers");
+
+cloudPostgresPrivateProbe
+  .command("preflight")
+  .description("Read a private probe identity and fail closed for hosted probe startup")
+  .requiredOption("--probe-id <id>", "enabled private probe identity id")
+  .option("--workspace-id <id>", "workspace id; defaults to HASNA_UPTIME_WORKSPACE_ID but must resolve explicitly")
+  .option("--schema <name>", "Postgres schema name", "uptime")
+  .option("--machine-id <id>", "expected private probe machine id")
+  .option("--probe-location <location>", "expected private probe location")
+  .option("--public-key-fingerprint <sha256>", "expected Ed25519 public key fingerprint")
+  .option("--healthcheck", "exit non-zero unless private probe startup is fully ready")
+  .option("-j, --json", "print JSON")
+  .action(async (opts) => {
+    let runtime: ReturnType<typeof createPostgresRuntime> | null = null;
+    try {
+      const workspaceId = requireExplicitWorkspaceId(opts.workspaceId);
+      const readiness = buildPostgresRuntimeReadiness({
+        schemaName: opts.schema,
+        workspaceId,
+        schemaVerified: process.env.HASNA_UPTIME_POSTGRES_RUNTIME_SCHEMA_VERIFIED === "1",
+      });
+      runtime = createPostgresRuntime({
+        schemaName: opts.schema,
+        workspaceId,
+      });
+      const probe = await runtime.getProbeIdentity({
+        workspaceId,
+        id: opts.probeId,
+      });
+      const duePrivateJobs = await runtime.countDueCheckJobs({
+        workspaceId,
+        probeClass: "private",
+        probeId: opts.probeId,
+      });
+      const stalePrivateLeases = await runtime.countStaleCheckJobLeases({
+        workspaceId,
+        probeClass: "private",
+        probeId: opts.probeId,
+      });
+      const preflight = buildPostgresPrivateProbePreflight({
+        runtimeReadiness: readiness,
+        probe,
+        probeId: opts.probeId,
+        workspaceId,
+        expectedMachineId: opts.machineId,
+        expectedProbeLocation: opts.probeLocation,
+        expectedPublicKeyFingerprint: opts.publicKeyFingerprint,
+        duePrivateJobs,
+        stalePrivateLeases,
+      });
+      print(preflight, renderPostgresPrivateProbePreflight(preflight), opts);
+      if (opts.healthcheck && !preflight.canStartHostedProbe) process.exitCode = 1;
+    } catch (error) {
+      fail(new Error(sanitizePostgresRuntimeError(error, process.env.HASNA_UPTIME_DATABASE_URL)), opts);
+    } finally {
+      await runtime?.close();
+    }
+  });
 
 cloudPostgresScheduler
   .command("run")
@@ -1529,6 +1592,27 @@ function renderPostgresPublicProbeWorkerSummary(summary: PostgresPublicProbeWork
       result.checkResultId ? sanitizeField(result.checkResultId) : "-",
       result.reason ? sanitizeField(result.reason) : "",
     ].filter(Boolean).join(" ")),
+  ].join("\n");
+}
+
+function renderPostgresPrivateProbePreflight(preflight: PostgresPrivateProbePreflight): string {
+  return [
+    "postgres private-probe preflight",
+    `status: ${preflight.status}`,
+    `cloud identity review: ${preflight.canUseCloudIdentityForReview}`,
+    `can start hosted probe: ${preflight.canStartHostedProbe}`,
+    `can promote private probe: ${preflight.canPromotePrivateProbe}`,
+    `workspace: ${preflight.workspaceId ?? "<unset>"}`,
+    `probe: ${sanitizeField(preflight.probeId)}`,
+    `machine: ${preflight.probe?.machineId ? sanitizeField(preflight.probe.machineId) : "<missing>"}`,
+    `location: ${preflight.probe?.probeLocation ? sanitizeField(preflight.probe.probeLocation) : "<missing>"}`,
+    `fingerprint: ${preflight.probe?.publicKeyFingerprint ?? "<missing>"}`,
+    `capabilities: ${preflight.probe?.capabilityKeys.map(sanitizeField).join(",") || "<none>"}`,
+    `due private jobs: ${preflight.duePrivateJobs ?? "<unread>"}`,
+    `stale private leases: ${preflight.stalePrivateLeases ?? "<unread>"}`,
+    `identity blockers: ${preflight.identityBlockers.length}`,
+    `startup blockers: ${preflight.startupBlockers.length}`,
+    ...preflight.blockers.map((blocker) => `- ${sanitizeField(blocker)}`),
   ].join("\n");
 }
 
