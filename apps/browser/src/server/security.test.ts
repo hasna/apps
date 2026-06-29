@@ -73,6 +73,17 @@ async function withRealServer<T>(run: (base: string) => Promise<T>): Promise<T> 
 }
 
 describe("browser server security", () => {
+  it("identifies the browser service on health checks", async () => {
+    await withRealServer(async (base) => {
+      const response = await fetch(`${base}/health`);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual(expect.objectContaining({
+        status: "ok",
+        name: "browser",
+      }));
+    });
+  });
+
   it("requires explicit auth configuration by default", async () => {
     const config = resolveSecurityConfig({});
     const response = authenticate(request(), config);

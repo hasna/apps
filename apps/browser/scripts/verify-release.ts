@@ -55,7 +55,7 @@ async function main(): Promise<void> {
     const appDir = join(tmp, "app");
     mkdirSync(appDir, { recursive: true });
     await Bun.write(join(appDir, "package.json"), JSON.stringify({ type: "module", private: true }, null, 2));
-    await run(["npm", "install", "--omit=dev", "--ignore-scripts", packed], { cwd: appDir, quiet: true });
+    await run(["npm", "install", "--omit=dev", "--ignore-scripts", packed, "--dry-run=false"], { cwd: appDir, quiet: true });
     await smokeInstalledPackage(appDir);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
@@ -85,7 +85,7 @@ function assertExtensionVersions(): void {
 }
 
 async function pack(destination: string): Promise<string> {
-  const result = await run(["npm", "pack", "--json", "--pack-destination", destination], { quiet: true });
+  const result = await run(["npm", "pack", "--json", "--pack-destination", destination, "--dry-run=false"], { quiet: true });
   const parsed = JSON.parse(result.stdout) as Array<{ filename: string }>;
   const filename = parsed[0]?.filename;
   assert(filename, "npm pack did not return a filename");

@@ -4,19 +4,25 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { createSession, closeSession, listSessions, getSessionPage } from "../../lib/session.js";
 import type { BrowserEngine } from "../../types/index.js";
+import { addKernelOptions, kernelSessionOptionsFromCli, type KernelCliOptions } from "./kernel.js";
 
 export function register(program: Command) {
 
 const sessionCmd = program.command("session").description("Manage browser sessions");
 
-sessionCmd
+addKernelOptions(sessionCmd
   .command("create")
   .description("Create a new browser session")
   .option("--engine <engine>", "Browser engine", "auto")
   .option("--url <url>", "Start URL")
-  .option("--headed", "Run in headed (visible) mode")
-  .action(async (opts: { engine: string; url?: string; headed?: boolean }) => {
-    const { session } = await createSession({ engine: opts.engine as BrowserEngine, startUrl: opts.url, headless: !opts.headed });
+  .option("--headed", "Run in headed (visible) mode"))
+  .action(async (opts: KernelCliOptions & { engine: string; url?: string; headed?: boolean }) => {
+    const { session } = await createSession({
+      engine: opts.engine as BrowserEngine,
+      startUrl: opts.url,
+      headless: !opts.headed,
+      ...kernelSessionOptionsFromCli(opts),
+    });
     console.log(chalk.green(`✓ Session created`));
     console.log(JSON.stringify(session, null, 2));
   });

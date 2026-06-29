@@ -14,6 +14,7 @@ import {
   closeSession as closeBrowserSession,
   createSession as createBrowserSession,
   getSessionPage as getBrowserSessionPage,
+  resolveKernelRemoteSessionId,
 } from "./lib/session.js";
 import {
   click as clickAction,
@@ -26,6 +27,22 @@ import {
 import { getPageInfo as getBrowserPageInfo } from "./lib/extractor.js";
 import { takeScreenshot as takeBrowserScreenshot } from "./lib/screenshot.js";
 import { listVideoRecordings as listBrowserVideos } from "./db/video-recordings.js";
+import {
+  captureKernelComputerScreenshotToDownloads,
+  deleteKernelBrowser,
+  downloadKernelFileToDownloads,
+  downloadKernelReplayToDownloads,
+  executeKernelPlaywright,
+  getKernelFileInfo,
+  getKernelStatus,
+  listKernelBrowsers,
+  listKernelFiles,
+  listKernelReplays,
+  retrieveKernelBrowser,
+  runKernelComputerAction,
+  startKernelReplay,
+  stopKernelReplay,
+} from "./engines/kernel.js";
 
 type StartVideoRecordingFn = (sessionId: string, options?: VideoRecordingOptions) => Promise<VideoRecording>;
 type StopVideoRecordingFn = (recordingId: string) => Promise<VideoRecording>;
@@ -207,6 +224,72 @@ export class BrowserSDK {
     return this.deps.listVideos(filter);
   }
 
+  async kernelStatus(options?: { remote?: boolean; limit?: number }) {
+    return getKernelStatus({ checkRemote: options?.remote, listLimit: options?.limit });
+  }
+
+  async kernelSessions(options?: { status?: string; limit?: number }) {
+    return listKernelBrowsers(options);
+  }
+
+  async kernelSession(ref: BrowserSDKSessionRef) {
+    return retrieveKernelBrowser(this.kernelRemoteId(ref));
+  }
+
+  async closeKernel(ref: BrowserSDKSessionRef) {
+    return deleteKernelBrowser(this.kernelRemoteId(ref));
+  }
+
+  async kernelFiles(ref: BrowserSDKSessionRef, path = "/") {
+    return listKernelFiles(this.kernelRemoteId(ref), path);
+  }
+
+  async kernelFileInfo(ref: BrowserSDKSessionRef, path: string) {
+    return getKernelFileInfo(this.kernelRemoteId(ref), path);
+  }
+
+  async downloadKernelFile(ref: BrowserSDKSessionRef, path: string, opts?: { filename?: string; localSessionId?: string }) {
+    return downloadKernelFileToDownloads(this.kernelRemoteId(ref), path, {
+      filename: opts?.filename,
+      localSessionId: opts?.localSessionId ?? this.localSessionId(ref),
+    });
+  }
+
+  async executeKernel(ref: BrowserSDKSessionRef, code: string, opts?: { timeoutSec?: number }) {
+    return executeKernelPlaywright(this.kernelRemoteId(ref), code, { timeoutSec: opts?.timeoutSec });
+  }
+
+  async kernelComputerScreenshot(ref: BrowserSDKSessionRef, opts?: { filename?: string; region?: { x: number; y: number; width: number; height: number } }) {
+    return captureKernelComputerScreenshotToDownloads(this.kernelRemoteId(ref), {
+      filename: opts?.filename,
+      region: opts?.region,
+      localSessionId: this.localSessionId(ref),
+    });
+  }
+
+  async kernelComputerAction(ref: BrowserSDKSessionRef, action: "click" | "move" | "type" | "press" | "scroll" | "batch", params: Record<string, unknown>) {
+    return runKernelComputerAction(this.kernelRemoteId(ref), action, params);
+  }
+
+  async kernelReplays(ref: BrowserSDKSessionRef) {
+    return listKernelReplays(this.kernelRemoteId(ref));
+  }
+
+  async startKernelReplay(ref: BrowserSDKSessionRef, opts?: { framerate?: number; maxDurationSeconds?: number; recordAudio?: boolean }) {
+    return startKernelReplay(this.kernelRemoteId(ref), opts);
+  }
+
+  async stopKernelReplay(ref: BrowserSDKSessionRef, replayId: string) {
+    return stopKernelReplay(this.kernelRemoteId(ref), replayId);
+  }
+
+  async downloadKernelReplay(ref: BrowserSDKSessionRef, replayId: string, opts?: { filename?: string; localSessionId?: string }) {
+    return downloadKernelReplayToDownloads(this.kernelRemoteId(ref), replayId, {
+      filename: opts?.filename,
+      localSessionId: opts?.localSessionId ?? this.localSessionId(ref),
+    });
+  }
+
   async close(ref: BrowserSDKSessionRef): Promise<Session> {
     const sessionId = typeof ref === "string" ? ref : ref.id;
     this.sessions.delete(sessionId);
@@ -252,6 +335,19 @@ export class BrowserSDK {
       },
       page: this.deps.getSessionPage(ref),
     };
+  }
+
+  private localSessionId(ref: BrowserSDKSessionRef): string | undefined {
+    return typeof ref === "string" ? ref : ref.id;
+  }
+
+  private kernelRemoteId(ref: BrowserSDKSessionRef): string {
+    if (typeof ref !== "string") {
+      return ref.session.remote_session_id ?? ref.session.id;
+    }
+    const cached = this.sessions.get(ref);
+    if (cached?.session.remote_session_id) return cached.session.remote_session_id;
+    return resolveKernelRemoteSessionId(ref);
   }
 
   private async runStep(handle: BrowserSDKSession, step: BrowserSDKStep): Promise<BrowserSDKStepResult> {

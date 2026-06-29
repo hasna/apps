@@ -93,6 +93,7 @@ describe("CLI — help flags", () => {
     expect(stdout).toContain("navigate");
     expect(stdout).toContain("session");
     expect(stdout).toContain("extension");
+    expect(stdout).toContain("kernel");
     expect(stdout).toContain("agent");
     expect(stdout).toContain("events");
     expect(stdout).toContain("project");
@@ -105,6 +106,23 @@ describe("CLI — help flags", () => {
     expect(stdout).toContain("create");
     expect(stdout).toContain("list");
     expect(stdout).toContain("close");
+  });
+
+  it("browser kernel --help shows Kernel operations", async () => {
+    const { stdout, code } = await runCli("kernel", "--help");
+    expect(code).toBe(0);
+    expect(stdout).toContain("status");
+    expect(stdout).toContain("sessions");
+    expect(stdout).toContain("files");
+    expect(stdout).toContain("replays");
+  });
+
+  it("browser navigate --help shows Kernel session flags", async () => {
+    const { stdout, code } = await runCli("navigate", "--help");
+    expect(code).toBe(0);
+    expect(stdout).toContain("--kernel-persistence-id");
+    expect(stdout).toContain("--kernel-profile-id");
+    expect(stdout).toContain("--kernel-env-secret");
   });
 
   it("browser extension --help shows subcommands", async () => {
