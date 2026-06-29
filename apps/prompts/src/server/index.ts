@@ -8,10 +8,37 @@ import { getDatabase } from "../db/database.js"
 import { searchPrompts, searchPromptsSlim, findSimilar } from "../lib/search.js"
 import { renderTemplate, extractVariableInfo } from "../lib/template.js"
 import { importFromJson, exportToJson } from "../lib/importer.js"
+import { getPackageVersion } from "../lib/package-info.js"
 import { buildServer } from "../mcp/index.js"
 import { handleMcpRequest } from "../mcp/http.js"
 
-const PORT = Number(process.env["PORT"] ?? process.env["PROMPTS_PORT"] ?? 19430)
+function parsePortArg(args: string[]): number | undefined {
+  const portIndex = args.indexOf("--port")
+  if (portIndex < 0) return undefined
+  const raw = args[portIndex + 1]
+  const port = Number(raw)
+  if (!raw || !Number.isInteger(port) || port < 0 || port > 65535) {
+    console.error("Invalid --port value")
+    process.exit(1)
+  }
+  return port
+}
+
+const ARGS = process.argv.slice(2)
+const PACKAGE_VERSION = getPackageVersion()
+
+if (import.meta.main) {
+  if (ARGS.includes("--version") || ARGS.includes("-V")) {
+    console.log(PACKAGE_VERSION)
+    process.exit(0)
+  }
+  if (ARGS.includes("--help") || ARGS.includes("-h")) {
+    console.log(`Usage: prompts-serve [--port <port>]\n\nOptions:\n  --port <port> Set HTTP port with PROMPTS_PORT or PORT\n  -V, --version Print package version\n  -h, --help    Show help`)
+    process.exit(0)
+  }
+}
+
+const PORT = parsePortArg(ARGS) ?? Number(process.env["PORT"] ?? process.env["PROMPTS_PORT"] ?? 19430)
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), {

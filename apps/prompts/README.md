@@ -26,8 +26,8 @@ prompts-mcp
 ## HTTP mode
 
 ```bash
-prompts-mcp --http              # default port 8828
-MCP_HTTP=1 MCP_HTTP_PORT=8828 prompts-mcp
+prompts-mcp --http              # default port 8872
+MCP_HTTP=1 MCP_HTTP_PORT=8872 prompts-mcp
 ```
 
 Endpoints: `GET /health` → `{"status":"ok","name":"prompts"}`, MCP at `/mcp`. The REST server (`prompts-serve`) also mounts `/mcp` on its port.

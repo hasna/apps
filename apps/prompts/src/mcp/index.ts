@@ -19,6 +19,7 @@ import { validateCron, getNextRunTime } from "../lib/cron.js"
 import { diffTexts, formatDiff } from "../lib/diff.js"
 import { lintAll } from "../lib/lint.js"
 import { runAudit } from "../lib/audit.js"
+import { getPackageVersion } from "../lib/package-info.js"
 import { homedir } from "os"
 import { existsSync as fsExists, readFileSync as fsRead, writeFileSync as fsWrite, mkdirSync as fsMkdir, readdirSync as fsReaddir, statSync as fsStat } from "fs"
 import { join as pathJoin, resolve as pathResolve, dirname as pathDirname } from "path"
@@ -32,6 +33,8 @@ const AGENT_CONFIGS_MCP: Record<string, { global: string; local: string; label: 
   aider:   { global: ".aider/CONVENTIONS.md",       local: ".aider.conventions.md",      label: "Aider" },
 }
 
+const PACKAGE_VERSION = getPackageVersion()
+
 function cfgPath(agent: string, global_: boolean): string | null {
   const cfg = AGENT_CONFIGS_MCP[agent.toLowerCase()]
   if (!cfg) return null
@@ -39,7 +42,7 @@ function cfgPath(agent: string, global_: boolean): string | null {
 }
 
 export function buildServer(): McpServer {
-const server = new McpServer({ name: "open-prompts", version: "0.1.0" })
+const server = new McpServer({ name: "open-prompts", version: PACKAGE_VERSION })
 
 function ok(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] }
@@ -1312,7 +1315,7 @@ server.tool(
   async (params: { message: string; email?: string; category?: string }) => {
     try {
       const db = getDatabase();
-      db.run("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)", [params.message, params.email || null, params.category || "general", "0.3.7"]);
+      db.run("INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)", [params.message, params.email || null, params.category || "general", PACKAGE_VERSION]);
       return { content: [{ type: "text" as const, text: "Feedback saved. Thank you!" }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: String(e) }], isError: true };
@@ -1325,6 +1328,14 @@ return server;
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+  if (args.includes("--version") || args.includes("-V")) {
+    console.log(PACKAGE_VERSION);
+    return;
+  }
+  if (args.includes("--help") || args.includes("-h")) {
+    console.log(`Usage: prompts-mcp [--stdio|--http] [--port <port>]\n\nOptions:\n  --stdio       Run MCP over stdio\n  --http        Run MCP over Streamable HTTP\n  --port <port> HTTP port (default: 8872)\n  -V, --version Print package version\n  -h, --help    Show help`);
+    return;
+  }
   if (isStdioMode(args)) {
     const transport = new StdioServerTransport();
     await buildServer().connect(transport);
