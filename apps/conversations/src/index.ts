@@ -77,6 +77,14 @@ export {
 } from "./lib/projects.js";
 
 export {
+  createConversationsProjectPanel,
+} from "./lib/project-panel.js";
+
+export type {
+  ConversationsProjectPanelOptions,
+} from "./lib/project-panel.js";
+
+export {
   getDb,
   getDbPath,
   closeDb,

@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import chalk from "chalk";
 import { createProject, listProjects, getProject, getProjectByName, updateProject, deleteProject } from "../../lib/projects.js";
+import { createConversationsProjectPanel } from "../../lib/project-panel.js";
 import { closeDb } from "../../lib/db.js";
 import { resolveIdentity } from "../../lib/identity.js";
 
@@ -27,6 +28,36 @@ export function parseProjectListPagination(limitInput: unknown, offsetInput: unk
 }
 
 export function registerProjectCommands(program: Command): void {
+  program
+    .command("project-panel")
+    .description("Emit a contract-valid project dashboard panel for conversations")
+    .option("--project <project>", "Project slug, name, id, or #iproj-* channel", "conversations")
+    .option("--limit <n>", "Maximum panel items/resources", parseInt, 20)
+    .option("--contract", "Emit hasna.project_panel.v1 contract JSON")
+    .option("-j, --json", "Output as JSON")
+    .action((opts) => {
+      try {
+        const panel = createConversationsProjectPanel(opts.project, { limit: opts.limit });
+        if (opts.json || opts.contract) {
+          console.log(JSON.stringify(panel, null, 2));
+        } else {
+          console.log(chalk.bold(panel.title));
+          if (panel.summary) console.log(`  ${panel.summary}`);
+          console.log(`  State: ${panel.state}`);
+          console.log(`  Items: ${panel.items.length}`);
+        }
+      } catch (e: any) {
+        if (opts.json || opts.contract) {
+          console.log(JSON.stringify({ error: e.message }));
+        } else {
+          console.error(chalk.red(e.message));
+        }
+        process.exit(1);
+      } finally {
+        closeDb();
+      }
+    });
+
   const project = program
     .command("project")
     .description("Manage projects");
