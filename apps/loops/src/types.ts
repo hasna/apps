@@ -148,10 +148,14 @@ export interface AgentRoutingSpec {
   eventSource?: string;
 }
 
-export interface AgentTarget {
+export interface AgentPromptSource {
+  type: "file";
+  path: string;
+}
+
+export interface AgentTargetBase {
   type: "agent";
   provider: AgentProvider;
-  prompt: string;
   cwd?: string;
   model?: string;
   variant?: string;
@@ -171,6 +175,15 @@ export interface AgentTarget {
   preflight?: RuntimePreflightPolicy;
 }
 
+export interface AgentTarget extends AgentTargetBase {
+  prompt: string;
+  promptSource?: AgentPromptSource;
+}
+
+export interface PromptFileAgentTarget extends AgentTargetBase {
+  promptFile: string;
+}
+
 export interface WorkflowTarget {
   type: "workflow";
   workflowId: string;
@@ -180,8 +193,10 @@ export interface WorkflowTarget {
 }
 
 export type ExecutableTarget = CommandTarget | AgentTarget;
+export type ExecutableTargetInput = CommandTarget | AgentTarget | PromptFileAgentTarget;
 
 export type LoopTarget = ExecutableTarget | WorkflowTarget;
+export type LoopTargetInput = ExecutableTargetInput | WorkflowTarget;
 
 export type WorkflowStatus = "active" | "archived";
 
@@ -304,6 +319,10 @@ export interface WorkflowStep {
   account?: AccountRef;
 }
 
+export interface WorkflowStepInput extends Omit<WorkflowStep, "target"> {
+  target: ExecutableTargetInput;
+}
+
 export interface WorkflowSpec {
   id: string;
   name: string;
@@ -320,7 +339,7 @@ export interface CreateWorkflowInput {
   name: string;
   description?: string;
   goal?: GoalSpec;
-  steps: WorkflowStep[];
+  steps: WorkflowStepInput[];
   version?: number;
 }
 
@@ -448,7 +467,7 @@ export interface CreateLoopInput {
   name: string;
   description?: string;
   schedule: ScheduleSpec;
-  target: LoopTarget;
+  target: LoopTargetInput;
   goal?: GoalSpec;
   machine?: LoopMachineRef;
   catchUp?: CatchUpPolicy;

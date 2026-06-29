@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { workflowBodyFromJson } from "./workflow-spec.js";
 
@@ -68,6 +70,90 @@ describe("workflow goal spec validation", () => {
 
     expect(workflow.steps[0]?.target.type).toBe("agent");
     expect(workflow.steps[1]?.target.type).toBe("agent");
+  });
+
+  test("resolves workflow agent promptFile relative to the workflow file directory", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-workflow-prompt-file-"));
+    const promptFile = join(root, "prompts", "worker.md");
+    mkdirSync(join(root, "prompts"), { recursive: true });
+    writeFileSync(promptFile, "read this prompt from disk\n");
+
+    const workflow = workflowBodyFromJson(
+      {
+        name: "prompt-file-workflow",
+        steps: [
+          {
+            id: "worker",
+            target: {
+              type: "agent",
+              provider: "codewith",
+              promptFile: "prompts/worker.md",
+            },
+          },
+        ],
+      },
+      undefined,
+      { baseDir: root },
+    );
+
+    const target = workflow.steps[0]?.target;
+    expect(target?.type).toBe("agent");
+    if (!target || target.type !== "agent") throw new Error("expected agent target");
+    expect(target.prompt).toBe("read this prompt from disk\n");
+    expect(target.promptSource).toEqual({ type: "file", path: promptFile });
+    expect("promptFile" in target).toBe(false);
+  });
+
+  test("rejects missing, duplicate, or empty prompt sources and strips spoofed inline promptSource", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-workflow-bad-prompt-file-"));
+    const emptyFile = join(root, "empty.md");
+    writeFileSync(emptyFile, "  \n");
+    const goodFile = join(root, "good.md");
+    writeFileSync(goodFile, "hello\n");
+
+    expect(() =>
+      workflowBodyFromJson({
+        name: "missing-agent-prompt",
+        steps: [{ id: "worker", target: { type: "agent", provider: "codewith" } }],
+      }),
+    ).toThrow("prompt");
+
+    expect(() =>
+      workflowBodyFromJson(
+        {
+          name: "duplicate-agent-prompt",
+          steps: [{ id: "worker", target: { type: "agent", provider: "codewith", prompt: "inline", promptFile: "good.md" } }],
+        },
+        undefined,
+        { baseDir: root },
+      ),
+    ).toThrow("either prompt or promptFile");
+
+    expect(() =>
+      workflowBodyFromJson(
+        {
+          name: "empty-agent-prompt-file",
+          steps: [{ id: "worker", target: { type: "agent", provider: "codewith", promptFile: "empty.md" } }],
+        },
+        undefined,
+        { baseDir: root },
+      ),
+    ).toThrow("non-empty prompt");
+
+    const inline = workflowBodyFromJson({
+      name: "spoofed-prompt-source",
+      steps: [
+        {
+          id: "worker",
+          target: { type: "agent", provider: "codewith", prompt: "inline", promptSource: { type: "file", path: goodFile } },
+        },
+      ],
+    });
+    const target = inline.steps[0]?.target;
+    expect(target?.type).toBe("agent");
+    if (!target || target.type !== "agent") throw new Error("expected agent target");
+    expect(target.prompt).toBe("inline");
+    expect(target.promptSource).toBeUndefined();
   });
 
   test("rejects provider-incompatible permission and sandbox fields", () => {

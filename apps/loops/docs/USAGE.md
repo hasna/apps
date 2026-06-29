@@ -148,6 +148,56 @@ accounts tools add codewith --label "Codewith" --env-var CODEWITH_HOME --bin cod
 accounts tools add aicopilot --label "AI Copilot" --env-var AICOPILOT_CONFIG_DIR --bin aicopilot
 ```
 
+## Prompt Files
+
+Use prompt files for production agent prompts instead of long inline strings.
+This keeps the durable prompt source reviewable and prevents shell history from
+becoming the only copy of the prompt.
+
+```bash
+mkdir -p ~/.hasna/loops/prompts
+$EDITOR ~/.hasna/loops/prompts/repo-morning-check.md
+
+loops create agent morning-check \
+  --provider codewith \
+  --auth-profile account001 \
+  --cron "0 8 * * *" \
+  --cwd /path/to/repo \
+  --prompt-file ~/.hasna/loops/prompts/repo-morning-check.md
+```
+
+Workflow JSON supports `promptFile` on agent targets. Relative paths resolve
+from the workflow JSON file's directory:
+
+```json
+{
+  "name": "repo-morning",
+  "steps": [
+    {
+      "id": "review",
+      "target": {
+        "type": "agent",
+        "provider": "codewith",
+        "cwd": "/path/to/repo",
+        "promptFile": "prompts/repo-morning-review.md"
+      }
+    }
+  ]
+}
+```
+
+OpenLoops stores the resolved prompt text for execution and records
+`promptSource` metadata with the absolute file path. Public CLI output from
+`show`, `list`, `workflows list`, `workflows show`, `workflows validate`,
+`workflows create`, and `templates render` redacts prompt bodies by default
+while keeping `promptSource` visible. Use
+`~/.hasna/loops/prompts/<stable-name>.md` as the default prompt store for local
+production loops.
+
+Reusable custom templates cannot contain `promptFile`. Keep prompt files in
+direct workflow JSON or agent loop creation; use template variables only for
+non-secret routing/configuration data.
+
 ## Workflows
 
 Create a workflow JSON file:

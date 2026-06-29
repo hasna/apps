@@ -101,6 +101,51 @@ accounts tools add codewith --label "Codewith" --env-var CODEWITH_HOME --bin cod
 accounts tools add aicopilot --label "AI Copilot" --env-var AICOPILOT_CONFIG_DIR --bin aicopilot
 ```
 
+## Prompt Files
+
+Use prompt files for production agent prompts instead of long inline strings.
+
+```bash
+mkdir -p ~/.hasna/loops/prompts
+$EDITOR ~/.hasna/loops/prompts/repo-morning-check.md
+
+loops create agent morning-check \
+  --provider codewith \
+  --auth-profile account001 \
+  --cron "0 8 * * *" \
+  --cwd /path/to/repo \
+  --prompt-file ~/.hasna/loops/prompts/repo-morning-check.md
+```
+
+Workflow JSON also supports `promptFile` on agent targets. Relative paths
+resolve from the workflow JSON file's directory:
+
+```json
+{
+  "name": "repo-morning",
+  "steps": [
+    {
+      "id": "review",
+      "target": {
+        "type": "agent",
+        "provider": "codewith",
+        "cwd": "/path/to/repo",
+        "promptFile": "prompts/repo-morning-review.md"
+      }
+    }
+  ]
+}
+```
+
+OpenLoops records `promptSource` metadata and redacts prompt bodies in public
+CLI output by default, including `templates render`. Use
+`~/.hasna/loops/prompts/<stable-name>.md` as the default prompt store for
+production loops.
+
+Reusable custom templates cannot contain `promptFile`. Keep prompt files in
+direct workflow JSON or agent loop creation; use template variables only for
+non-secret routing/configuration data.
+
 ## Goals
 
 Add `--goal` to wrap a command, agent, or workflow loop in an AI-SDK orchestration layer. OpenLoops asks the configured model to create a flat DAG plan, executes ready nodes by calling the underlying target, then runs an adversarial achievement audit before marking the goal complete.

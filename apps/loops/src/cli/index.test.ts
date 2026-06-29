@@ -127,6 +127,84 @@ describe("loops CLI", () => {
     expect(JSON.parse(list.stdout)).toHaveLength(0);
   });
 
+  test("create agent supports prompt files without printing prompt contents", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-create-agent-prompt-file-"));
+    const promptFile = join(dataDir, "prompt.md");
+    writeFileSync(promptFile, "SECRET_PROMPT_FILE_VALUE\nRun the check.\n");
+
+    const create = runCli(dataDir, [
+      "--json",
+      "create",
+      "agent",
+      "prompt-file-agent",
+      "--provider",
+      "codewith",
+      "--prompt-file",
+      promptFile,
+      "--at",
+      futureAt(),
+    ]);
+
+    expect(create.status).toBe(0);
+    expect(create.stdout).not.toContain("SECRET_PROMPT_FILE_VALUE");
+    const value = JSON.parse(create.stdout);
+    expect(value.target.prompt).toContain("[redacted");
+    expect(value.target.promptSource).toEqual({ type: "file", path: promptFile });
+
+    const show = runCli(dataDir, ["--json", "show", "prompt-file-agent"]);
+    expect(show.status).toBe(0);
+    expect(show.stdout).not.toContain("SECRET_PROMPT_FILE_VALUE");
+    expect(JSON.parse(show.stdout).target.promptSource.path).toBe(promptFile);
+
+    const list = runCli(dataDir, ["--json", "list"]);
+    expect(list.status).toBe(0);
+    expect(list.stdout).not.toContain("SECRET_PROMPT_FILE_VALUE");
+    expect(JSON.parse(list.stdout)[0].target.promptSource.path).toBe(promptFile);
+
+    const humanShow = runCli(dataDir, ["show", "prompt-file-agent"]);
+    expect(humanShow.status).toBe(0);
+    expect(humanShow.stdout).not.toContain("SECRET_PROMPT_FILE_VALUE");
+  });
+
+  test("create agent requires exactly one prompt source", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-create-agent-prompt-source-"));
+    const promptFile = join(dataDir, "prompt.md");
+    writeFileSync(promptFile, "hello\n");
+
+    const missing = runCli(dataDir, [
+      "--json",
+      "create",
+      "agent",
+      "missing-prompt",
+      "--provider",
+      "codewith",
+      "--at",
+      futureAt(),
+    ]);
+    expect(missing.status).toBe(1);
+    expect(JSON.parse(missing.stdout).validation.error).toContain("prompt");
+
+    const both = runCli(dataDir, [
+      "--json",
+      "create",
+      "agent",
+      "both-prompts",
+      "--provider",
+      "codewith",
+      "--prompt",
+      "inline",
+      "--prompt-file",
+      promptFile,
+      "--at",
+      futureAt(),
+    ]);
+    expect(both.status).toBe(1);
+    expect(JSON.parse(both.stdout).validation.error).toContain("either prompt or promptFile");
+
+    const list = runCli(dataDir, ["--json", "list"]);
+    expect(JSON.parse(list.stdout)).toEqual([]);
+  });
+
   test("run-now falls back to an ad hoc slot when the due slot is already terminal", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-terminal-due-"));
     const store = new Store(join(dataDir, "loops.db"));
@@ -890,6 +968,77 @@ describe("loops CLI", () => {
     expect(JSON.parse(list.stdout)).toEqual([]);
   });
 
+  test("workflows create resolves relative promptFile and redacts output", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-workflow-prompt-file-"));
+    writeFileSync(join(dataDir, "agent-prompt.md"), "SECRET_WORKFLOW_PROMPT_FILE\nReview only.\n");
+    const file = workflowFile(dataDir, {
+      name: "workflow-prompt-file",
+      steps: [
+        {
+          id: "review",
+          target: {
+            type: "agent",
+            provider: "codewith",
+            promptFile: "agent-prompt.md",
+          },
+        },
+      ],
+    });
+
+    const validate = runCli(dataDir, ["--json", "workflows", "validate", file]);
+    expect(validate.status).toBe(0);
+    expect(validate.stdout).not.toContain("SECRET_WORKFLOW_PROMPT_FILE");
+    const validated = JSON.parse(validate.stdout);
+    expect(validated.workflow.steps[0].target.prompt).toContain("[redacted");
+    expect(validated.workflow.steps[0].target.promptSource.path).toBe(join(dataDir, "agent-prompt.md"));
+
+    const create = runCli(dataDir, ["--json", "workflows", "create", file]);
+    expect(create.status).toBe(0);
+    expect(create.stdout).not.toContain("SECRET_WORKFLOW_PROMPT_FILE");
+
+    const show = runCli(dataDir, ["--json", "workflows", "show", "workflow-prompt-file"]);
+    expect(show.status).toBe(0);
+    expect(show.stdout).not.toContain("SECRET_WORKFLOW_PROMPT_FILE");
+    expect(JSON.parse(show.stdout).steps[0].target.promptSource.path).toBe(join(dataDir, "agent-prompt.md"));
+
+    const list = runCli(dataDir, ["--json", "workflows", "list"]);
+    expect(list.status).toBe(0);
+    expect(list.stdout).not.toContain("SECRET_WORKFLOW_PROMPT_FILE");
+    expect(JSON.parse(list.stdout)[0].steps[0].target.promptSource.path).toBe(join(dataDir, "agent-prompt.md"));
+  });
+
+  test("workflows validate and create report promptFile failures as structured redacted JSON", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-workflow-prompt-file-error-"));
+    const file = workflowFile(dataDir, {
+      name: "workflow-missing-prompt-file",
+      steps: [
+        {
+          id: "review",
+          target: {
+            type: "agent",
+            provider: "codewith",
+            promptFile: "missing-secret-prompt.md",
+          },
+        },
+      ],
+    });
+
+    const validate = runCli(dataDir, ["--json", "workflows", "validate", file]);
+    expect(validate.status).toBe(1);
+    expect(validate.stderr).toBe("");
+    const validation = JSON.parse(validate.stdout);
+    expect(validation.created).toBe(false);
+    expect(validation.validation.ok).toBe(false);
+    expect(validation.validation.error).toContain("promptFile could not be read");
+
+    const create = runCli(dataDir, ["--json", "workflows", "create", file]);
+    expect(create.status).toBe(1);
+    expect(create.stderr).toBe("");
+    const created = JSON.parse(create.stdout);
+    expect(created.created).toBe(false);
+    expect(created.validation.ok).toBe(false);
+  });
+
   test("create workflow --preflight includes step-mapped JSON evidence on success", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-create-workflow-preflight-ok-"));
     const file = workflowFile(dataDir, {
@@ -1416,14 +1565,10 @@ describe("loops CLI", () => {
       sandbox: "workspace-write",
       addDirs: ["/tmp/todos-store", "/tmp/loops-store"],
     });
-    expect(workflow.steps[0].target.prompt).toContain("Do not dispatch or paste prompts into tmux panes");
-    expect(workflow.steps[0].target.prompt).toContain("todos --project /tmp/todos-store inspect task-12345678");
-    expect(workflow.steps[0].target.prompt).toContain("todos --project /tmp/todos-store comment task-12345678");
-    expect(workflow.steps[0].target.prompt).toContain("Do not mark the task complete in the worker step");
-    expect(workflow.steps[1].target.prompt).toContain("Do not dispatch or paste prompts into tmux panes");
-    expect(workflow.steps[1].target.prompt).toContain("todos --project /tmp/todos-store inspect task-12345678");
-    expect(workflow.steps[1].target.prompt).toContain("todos --project /tmp/todos-store comment task-12345678");
-    expect(workflow.steps[1].target.prompt).toContain("todos --project /tmp/todos-store done task-12345678");
+    expect(workflow.steps[0].target.prompt).toContain("[redacted");
+    expect(workflow.steps[1].target.prompt).toContain("[redacted");
+    expect(render.stdout).not.toContain("Do not dispatch or paste prompts into tmux panes");
+    expect(render.stdout).not.toContain("todos --project /tmp/todos-store inspect task-12345678");
     expect(workflow.steps[1].target.addDirs).toEqual(["/tmp/todos-store", "/tmp/loops-store"]);
     expect(workflow.steps[1].target.idleTimeoutMs).toBe(600_000);
     expect(workflow.steps[1].dependsOn).toEqual(["worker"]);
@@ -1638,6 +1783,8 @@ describe("loops CLI", () => {
       sandbox: "workspace-write",
       timeoutMs: 120000,
     });
+    expect(workflow.steps[0].target.prompt).toContain("[redacted");
+    expect(render.stdout).not.toContain("/goal Docs drift");
     expect(workflow.steps[0].timeoutMs).toBe(120000);
 
     const created = runCli(dataDir, [
@@ -1761,6 +1908,32 @@ describe("loops CLI", () => {
     const extraArgsDanger = runCli(extraArgsDangerDataDir, ["--json", "templates", "import", extraArgsDangerFile]);
     expect(extraArgsDanger.status).not.toBe(0);
     expect(extraArgsDanger.stderr).toContain("dangerous sandbox");
+
+    const promptFileDataDir = mkdtempSync(join(tmpdir(), "loops-cli-custom-template-prompt-file-"));
+    const promptFileTemplate = join(promptFileDataDir, "prompt-file-template.json");
+    writeFileSync(promptFileTemplate, JSON.stringify({
+      id: "prompt-file-template",
+      name: "Prompt File Template",
+      description: "Custom template must not read local prompt files.",
+      kind: "workflow",
+      workflow: {
+        name: "prompt-file-template",
+        steps: [
+          {
+            id: "worker",
+            target: {
+              type: "agent",
+              provider: "codewith",
+              promptFile: "/tmp/secret-prompt.md",
+              sandbox: "workspace-write",
+            },
+          },
+        ],
+      },
+    }));
+    const promptFileImport = runCli(promptFileDataDir, ["--json", "templates", "import", promptFileTemplate]);
+    expect(promptFileImport.status).not.toBe(0);
+    expect(promptFileImport.stderr).toContain("promptFile is not allowed in custom templates");
 
     const safeDataDir = mkdtempSync(join(tmpdir(), "loops-cli-custom-template-safe-render-"));
     const safeFile = join(safeDataDir, "safe-template.json");
@@ -1932,8 +2105,9 @@ describe("loops CLI", () => {
     });
     expect(workflow.steps[1].target.worktree.branch).toContain("openloops/");
     expect(workflow.steps[2].target.cwd).toBe(workflow.steps[1].target.cwd);
-    expect(workflow.steps[1].target.prompt).toContain("Use the isolated git worktree");
-    expect(workflow.steps[1].target.prompt).toContain("Do not mutate the original checkout/main branch");
+    expect(workflow.steps[1].target.prompt).toContain("[redacted");
+    expect(render.stdout).not.toContain("Use the isolated git worktree");
+    expect(render.stdout).not.toContain("Do not mutate the original checkout/main branch");
   });
 
   test("prepare-worktree refuses a stale checkout from a different git repo", () => {
@@ -2047,7 +2221,7 @@ describe("loops CLI", () => {
     const workflow = JSON.parse(render.stdout);
     expect(workflow.name).toContain("knowledge");
     expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["worker", "verifier"]);
-    expect(workflow.steps[0].target.prompt).toContain("knowledge.record.created");
+    expect(workflow.steps[0].target.prompt).toContain("[redacted");
     expect(workflow.steps[0].target.cwd).toBe("/tmp/knowledge");
   });
 
@@ -2077,9 +2251,10 @@ describe("loops CLI", () => {
     expect(workflow.name).toContain("bounded-agent");
     expect(workflow.name).toMatch(/^bounded-agent-[a-f0-9]{8}-worker-verifier$/);
     expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["worker", "verifier"]);
-    expect(workflow.steps[0].target.prompt).toContain("/goal Check repo docs drift");
-    expect(workflow.steps[0].target.prompt).toContain("Do not dispatch or paste prompts into tmux panes");
-    expect(workflow.steps[1].target.prompt).toContain("Adversarially verify");
+    expect(workflow.steps[0].target.prompt).toContain("[redacted");
+    expect(workflow.steps[1].target.prompt).toContain("[redacted");
+    expect(render.stdout).not.toContain("/goal Check repo docs drift");
+    expect(render.stdout).not.toContain("Inspect only recent commits and queue tasks for gaps.");
     expect(new Set(workflow.steps.map((step: { target: { authProfile?: string } }) => step.target.authProfile)).size).toBe(2);
   });
 

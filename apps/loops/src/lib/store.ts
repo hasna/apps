@@ -953,13 +953,20 @@ export class Store {
 
   createLoop(input: CreateLoopInput, from: Date = new Date()): Loop {
     const now = nowIso();
+    const target =
+      input.target.type === "workflow"
+        ? input.target
+        : normalizeCreateWorkflowInput({
+            name: "loop-target-validation",
+            steps: [{ id: "target", target: input.target }],
+          }).steps[0]!.target;
     const loop: Loop = {
       id: genId(),
       name: input.name,
       description: input.description,
       status: "active",
       schedule: input.schedule,
-      target: input.target,
+      target,
       goal: input.goal,
       machine: input.machine,
       nextRunAt: initialNextRun(input.schedule, from),

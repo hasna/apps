@@ -44,6 +44,32 @@ describe("textOutputBlocks", () => {
     expect(JSON.stringify(value)).toContain("[redacted");
   });
 
+  test("keeps prompt source metadata while redacting prompt bodies", () => {
+    const value = publicLoop({
+      id: "loop",
+      name: "agent",
+      status: "active",
+      schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+      target: {
+        type: "agent",
+        provider: "codewith",
+        prompt: "SECRET_PROMPT_FILE_CONTENT should not leak",
+        promptSource: { type: "file", path: "/home/hasna/.hasna/loops/prompts/example.md" },
+      },
+      catchUp: "latest",
+      catchUpLimit: 1,
+      overlap: "skip",
+      maxAttempts: 1,
+      retryDelayMs: 60_000,
+      leaseMs: 60_000,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    });
+    const json = JSON.stringify(value);
+    expect(json).not.toContain("SECRET_PROMPT_FILE_CONTENT");
+    expect(json).toContain("/home/hasna/.hasna/loops/prompts/example.md");
+  });
+
   test("redacts workflow step prompts without leaking a prefix", () => {
     const value = publicWorkflow({
       id: "workflow",

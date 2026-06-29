@@ -865,9 +865,24 @@ function assertNoImplicitDangerFullAccess(value: unknown, label: string): void {
   }
 }
 
+function assertNoCustomTemplatePromptFiles(value: unknown, label: string): void {
+  if (!value || typeof value !== "object") return;
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => assertNoCustomTemplatePromptFiles(entry, `${label}[${index}]`));
+    return;
+  }
+  for (const [key, entry] of Object.entries(value)) {
+    if (key === "promptFile") {
+      throw new Error(`${label}.${key} is not allowed in custom templates; use direct workflow JSON for prompt-file-backed workflows`);
+    }
+    assertNoCustomTemplatePromptFiles(entry, `${label}.${key}`);
+  }
+}
+
 function assertCustomTemplateSafety(value: unknown, label: string): void {
   assertNoDangerousCustomTemplateScalars(value, label);
   assertNoImplicitDangerFullAccess(value, label);
+  assertNoCustomTemplatePromptFiles(value, label);
 }
 
 function customTemplateDefinitionFromJson(value: unknown, sourcePath: string): CustomLoopTemplateDefinition {

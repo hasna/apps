@@ -2,7 +2,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { Database } from "bun:sqlite";
 import { Command } from "commander";
@@ -123,20 +123,38 @@ function validationFailed(error: unknown, context: Record<string, unknown>): nev
   process.exit(1);
 }
 
-function validateLoopTargetForStorage(target: Exclude<LoopTarget, { type: "workflow" }>, context: Record<string, unknown>): void {
+function normalizeLoopTargetForStorage(
+  target: unknown,
+  context: Record<string, unknown>,
+  opts: { baseDir?: string } = {},
+): Exclude<LoopTarget, { type: "workflow" }> {
   try {
-    workflowBodyFromJson({
+    const workflow = workflowBodyFromJson({
       name: "loop-target-validation",
       steps: [{ id: "target", target }],
-    });
+    }, undefined, opts);
+    return workflow.steps[0]!.target as Exclude<LoopTarget, { type: "workflow" }>;
   } catch (error) {
     validationFailed(error, context);
   }
 }
 
+function validateLoopTargetForStorage(target: Exclude<LoopTarget, { type: "workflow" }>, context: Record<string, unknown>): void {
+  normalizeLoopTargetForStorage(target, context);
+}
+
 function normalizeWorkflowForStorage(body: CreateWorkflowInput, context: Record<string, unknown>): CreateWorkflowInput {
   try {
     return workflowBodyFromJson(body);
+  } catch (error) {
+    validationFailed(error, context);
+  }
+}
+
+function workflowBodyFromFile(file: string, fallbackName: string | undefined, context: Record<string, unknown>): CreateWorkflowInput {
+  try {
+    const resolved = resolve(file);
+    return workflowBodyFromJson(JSON.parse(readFileSync(resolved, "utf8")), fallbackName, { baseDir: dirname(resolved) });
   } catch (error) {
     validationFailed(error, context);
   }
@@ -176,10 +194,16 @@ function workflowSpecForPreflight(body: CreateWorkflowInput, id = "validation"):
     version: body.version ?? 1,
     status: "active",
     goal: body.goal,
-    steps: body.steps,
+    steps: body.steps as WorkflowSpec["steps"],
     createdAt: now,
     updatedAt: now,
   };
+}
+
+function publicWorkflowBody(body: CreateWorkflowInput): Record<string, unknown> {
+  const value = publicWorkflow(workflowSpecForPreflight(body, "render"));
+  const { id: _id, status: _status, createdAt: _createdAt, updatedAt: _updatedAt, ...bodyOnly } = value;
+  return bodyOnly;
 }
 
 function printTextOutput(value: { stdout?: string; stderr?: string }): void {
@@ -1819,7 +1843,8 @@ addGoalOptions(
         .command("agent <name>")
         .description("create a headless coding-agent loop")
         .requiredOption("--provider <provider>", "claude, cursor, codewith, aicopilot, opencode, or codex")
-        .requiredOption("--prompt <prompt>", "agent prompt")
+        .option("--prompt <prompt>", "agent prompt")
+        .option("--prompt-file <file>", "read the agent prompt from a markdown/text file")
         .option("--cwd <dir>", "working directory")
         .option("--model <model>", "model")
         .option("--variant <variant>", "provider-specific model variant or reasoning effort")
@@ -1847,10 +1872,11 @@ addGoalOptions(
   }
   const store = new Store();
   try {
-    const target: LoopTarget = {
+    const target = normalizeLoopTargetForStorage({
       type: "agent",
       provider,
       prompt: opts.prompt,
+      promptFile: opts.promptFile,
       cwd: opts.cwd,
       model: opts.model,
       variant: opts.variant,
@@ -1864,9 +1890,8 @@ addGoalOptions(
       allowlist: allowlistFromOpts(opts),
       account: accountFromOpts(opts),
       preflight: runtimePreflightFromOpts(opts),
-    };
+    }, { name, type: "agent", provider }, { baseDir: process.cwd() });
     const input = baseCreateInput(name, opts, target);
-    validateLoopTargetForStorage(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "agent", provider });
     const preflight = opts.preflight
       ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "agent", provider }, { loopName: name }, { machine: input.machine })
       : undefined;
@@ -2280,7 +2305,8 @@ addTemplateSourceOption(
 )
   .action((id, opts) => {
     const workflow = renderLoopTemplate(id, parseVars(opts.var), { source: templateSource(opts.source) });
-    print(workflow, JSON.stringify(workflow, null, 2));
+    const value = publicWorkflowBody(workflow);
+    print(value, JSON.stringify(value, null, 2));
   });
 
 addTemplateSourceOption(
@@ -2594,7 +2620,7 @@ workflows
   .option("--name <name>", "override workflow name from the file")
   .option("--preflight", "also check account env and target executables")
   .action((file, opts) => {
-    const body = workflowBodyFromJson(JSON.parse(readFileSync(file, "utf8")), opts.name);
+    const body = workflowBodyFromFile(file, opts.name, { file, type: "workflow" });
     const workflow = workflowSpecForPreflight(body);
     const preflight = opts.preflight ? preflightWorkflow(workflow) : undefined;
     print({ valid: true, workflow: publicWorkflow(workflow), preflight }, `valid workflow ${workflow.name} steps=${workflow.steps.length}`);
@@ -2608,7 +2634,7 @@ workflows
   .action((file, opts) => {
     const store = new Store();
     try {
-      const body = workflowBodyFromJson(JSON.parse(readFileSync(file, "utf8")), opts.name);
+      const body = workflowBodyFromFile(file, opts.name, { file, type: "workflow" });
       const preflight = opts.preflight
         ? preflightStoredWorkflow(workflowSpecForPreflight(body, "creation-preflight"), { name: body.name, type: "workflow" }, {})
         : undefined;

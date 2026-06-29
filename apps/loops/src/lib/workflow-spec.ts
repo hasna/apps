@@ -1,7 +1,14 @@
-import type { CreateWorkflowInput, ExecutableTarget, GoalSpec, WorkflowSpec, WorkflowStep } from "../types.js";
+import { readFileSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
+import type { AgentPromptSource, CreateWorkflowInput, ExecutableTarget, GoalSpec, WorkflowSpec, WorkflowStep } from "../types.js";
 import { GOAL_OBJECTIVE_MAX_CHARS } from "./goal/types.js";
 
 export type WorkflowSpecBody = Pick<WorkflowSpec, "name" | "description" | "version" | "steps">;
+export type NormalizedCreateWorkflowInput = Omit<CreateWorkflowInput, "steps"> & { steps: WorkflowStep[] };
+
+export interface WorkflowNormalizeOptions {
+  baseDir?: string;
+}
 
 function assertObject(value: unknown, label: string): asserts value is Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} must be an object`);
@@ -46,6 +53,37 @@ function optionalAccountRef(value: unknown, label: string) {
   };
 }
 
+function promptFilePath(rawPath: string, opts: WorkflowNormalizeOptions): string {
+  return isAbsolute(rawPath) ? resolve(rawPath) : resolve(opts.baseDir ?? process.cwd(), rawPath);
+}
+
+function readPromptFile(rawPath: unknown, label: string, opts: WorkflowNormalizeOptions): { prompt: string; promptSource: AgentPromptSource } {
+  assertString(rawPath, `${label}.promptFile`);
+  const path = promptFilePath(rawPath.trim(), opts);
+  let prompt: string;
+  try {
+    prompt = readFileSync(path, "utf8");
+  } catch (error) {
+    const code = error && typeof error === "object" && "code" in error ? String((error as { code?: unknown }).code) : undefined;
+    throw new Error(`${label}.promptFile could not be read${code ? `: ${code}` : ""}`);
+  }
+  if (prompt.trim() === "") throw new Error(`${label}.promptFile must contain a non-empty prompt`);
+  return { prompt, promptSource: { type: "file", path } };
+}
+
+function matchingPromptSource(value: unknown, prompt: string, opts: WorkflowNormalizeOptions): AgentPromptSource | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  if ((value as Record<string, unknown>).type !== "file") return undefined;
+  const rawPath = (value as Record<string, unknown>).path;
+  if (typeof rawPath !== "string" || rawPath.trim() === "") return undefined;
+  const path = promptFilePath(rawPath.trim(), opts);
+  try {
+    return readFileSync(path, "utf8") === prompt ? { type: "file", path } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function normalizeGoalSpec(value: unknown, label = "goal"): GoalSpec | undefined {
   if (value === undefined) return undefined;
   assertObject(value, label);
@@ -68,7 +106,7 @@ export function normalizeGoalSpec(value: unknown, label = "goal"): GoalSpec | un
   };
 }
 
-function validateTarget(value: unknown, label: string): ExecutableTarget {
+function validateTarget(value: unknown, label: string, opts: WorkflowNormalizeOptions): ExecutableTarget {
   assertObject(value, label);
   if (value.type === "command") {
     assertString(value.command, `${label}.command`);
@@ -81,7 +119,13 @@ function validateTarget(value: unknown, label: string): ExecutableTarget {
   }
   if (value.type === "agent") {
     assertString(value.provider, `${label}.provider`);
-    assertString(value.prompt, `${label}.prompt`);
+    const hasPrompt = typeof value.prompt === "string" && value.prompt.trim() !== "";
+    const hasPromptFile = typeof value.promptFile === "string" && value.promptFile.trim() !== "";
+    if (hasPrompt && hasPromptFile) throw new Error(`${label} must use either prompt or promptFile, not both`);
+    if (!hasPrompt && !hasPromptFile) throw new Error(`${label}.prompt must be a non-empty string or ${label}.promptFile must be set`);
+    const promptFields = hasPrompt
+      ? { prompt: value.prompt as string, promptSource: matchingPromptSource(value.promptSource, value.prompt as string, opts) }
+      : readPromptFile(value.promptFile, label, opts);
     const providers = ["claude", "cursor", "codewith", "aicopilot", "opencode", "codex"];
     if (!providers.includes(value.provider)) throw new Error(`${label}.provider must be one of ${providers.join(", ")}`);
     optionalPositiveInteger(value.timeoutMs, `${label}.timeoutMs`);
@@ -159,12 +203,15 @@ function validateTarget(value: unknown, label: string): ExecutableTarget {
       if (value.routing.eventType !== undefined) assertString(value.routing.eventType, `${label}.routing.eventType`);
       if (value.routing.eventSource !== undefined) assertString(value.routing.eventSource, `${label}.routing.eventSource`);
     }
-    return value as unknown as ExecutableTarget;
+    const target = { ...value };
+    delete target.promptFile;
+    delete target.promptSource;
+    return { ...target, ...promptFields } as unknown as ExecutableTarget;
   }
   throw new Error(`${label}.type must be command or agent`);
 }
 
-export function normalizeCreateWorkflowInput(input: CreateWorkflowInput): CreateWorkflowInput {
+export function normalizeCreateWorkflowInput(input: CreateWorkflowInput, opts: WorkflowNormalizeOptions = {}): NormalizedCreateWorkflowInput {
   assertString(input.name, "workflow.name");
   const goal = normalizeGoalSpec(input.goal, "goal");
   if (!Array.isArray(input.steps) || input.steps.length === 0) throw new Error("workflow.steps must contain at least one step");
@@ -178,7 +225,7 @@ export function normalizeCreateWorkflowInput(input: CreateWorkflowInput): Create
       ...step,
       id: step.id,
       goal: normalizeGoalSpec(step.goal, `workflow.steps[${index}].goal`),
-      target: validateTarget(step.target, `workflow.steps[${index}].target`),
+      target: validateTarget(step.target, `workflow.steps[${index}].target`, opts),
       dependsOn: optionalStringArray(step.dependsOn, `workflow.steps[${index}].dependsOn`) ?? [],
       continueOnFailure: optionalBoolean(step.continueOnFailure, `workflow.steps[${index}].continueOnFailure`) ?? false,
       timeoutMs: optionalPositiveInteger(step.timeoutMs, `workflow.steps[${index}].timeoutMs`),
@@ -219,7 +266,7 @@ export function workflowExecutionOrder(workflow: Pick<WorkflowSpec, "steps">): W
   return order;
 }
 
-export function workflowBodyFromJson(value: unknown, fallbackName?: string): CreateWorkflowInput {
+export function workflowBodyFromJson(value: unknown, fallbackName?: string, opts: WorkflowNormalizeOptions = {}): NormalizedCreateWorkflowInput {
   assertObject(value, "workflow file");
   const rawName = fallbackName ?? value.name;
   assertString(rawName, "workflow.name");
@@ -230,5 +277,5 @@ export function workflowBodyFromJson(value: unknown, fallbackName?: string): Cre
     goal: normalizeGoalSpec(value.goal, "goal"),
     version: typeof value.version === "number" ? value.version : undefined,
     steps: value.steps as WorkflowStep[],
-  });
+  }, opts);
 }

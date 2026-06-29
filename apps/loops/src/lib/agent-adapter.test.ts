@@ -322,20 +322,19 @@ describe("agent adapters", () => {
   test("rejects cursor addDirs instead of silently ignoring them", async () => {
     const store = new Store(":memory:");
     try {
-      const loop = store.createLoop({
-        name: "cursor-add-dir-agent",
-        schedule: { type: "once", at: new Date().toISOString() },
-        target: {
-          type: "agent",
-          provider: "cursor",
-          prompt: "say ok",
-          addDirs: ["/tmp/hasna-todos"],
-          configIsolation: "safe",
-        },
-      });
-      const claim = store.claimRun(loop, new Date().toISOString(), "test");
-      expect(claim).toBeDefined();
-      await expect(executeLoop(loop, claim!.run)).rejects.toThrow("cursor.addDirs");
+      expect(() =>
+        store.createLoop({
+          name: "cursor-add-dir-agent",
+          schedule: { type: "once", at: new Date().toISOString() },
+          target: {
+            type: "agent",
+            provider: "cursor",
+            prompt: "say ok",
+            addDirs: ["/tmp/hasna-todos"],
+            configIsolation: "safe",
+          },
+        }),
+      ).toThrow("addDirs is currently supported only for provider codewith or codex");
     } finally {
       store.close();
     }
@@ -344,20 +343,19 @@ describe("agent adapters", () => {
   test("rejects provider-invalid SDK-created agent target options", async () => {
     const store = new Store(":memory:");
     try {
-      const loop = store.createLoop({
-        name: "bad-agent-options",
-        schedule: { type: "once", at: new Date().toISOString() },
-        target: {
-          type: "agent",
-          provider: "claude",
-          prompt: "say ok",
-          sandbox: "danger-full-access",
-          configIsolation: "safe",
-        },
-      });
-      const claim = store.claimRun(loop, new Date().toISOString(), "test");
-      expect(claim).toBeDefined();
-      await expect(executeLoop(loop, claim!.run)).rejects.toThrow("claude.sandbox is not supported");
+      expect(() =>
+        store.createLoop({
+          name: "bad-agent-options",
+          schedule: { type: "once", at: new Date().toISOString() },
+          target: {
+            type: "agent",
+            provider: "claude",
+            prompt: "say ok",
+            sandbox: "danger-full-access",
+            configIsolation: "safe",
+          },
+        }),
+      ).toThrow("sandbox is currently supported only for provider codewith, codex, or cursor");
     } finally {
       store.close();
     }
@@ -366,35 +364,33 @@ describe("agent adapters", () => {
   test("rejects SDK-created provider options that adapters do not support", async () => {
     const store = new Store(":memory:");
     try {
-      const cursorLoop = store.createLoop({
-        name: "bad-cursor-variant-agent",
-        schedule: { type: "once", at: new Date().toISOString() },
-        target: {
-          type: "agent",
-          provider: "cursor",
-          prompt: "say ok",
-          variant: "max",
-          configIsolation: "safe",
-        },
-      });
-      const cursorClaim = store.claimRun(cursorLoop, new Date().toISOString(), "test");
-      expect(cursorClaim).toBeDefined();
-      await expect(executeLoop(cursorLoop, cursorClaim!.run)).rejects.toThrow("cursor.variant");
+      expect(() =>
+        store.createLoop({
+          name: "bad-cursor-variant-agent",
+          schedule: { type: "once", at: new Date().toISOString() },
+          target: {
+            type: "agent",
+            provider: "cursor",
+            prompt: "say ok",
+            variant: "max",
+            configIsolation: "safe",
+          },
+        }),
+      ).toThrow("variant is not supported for provider cursor");
 
-      const codexLoop = store.createLoop({
-        name: "bad-codex-agent",
-        schedule: { type: "once", at: new Date().toISOString() },
-        target: {
-          type: "agent",
-          provider: "codex",
-          prompt: "say ok",
-          agent: "reviewer",
-          configIsolation: "safe",
-        },
-      });
-      const codexClaim = store.claimRun(codexLoop, new Date().toISOString(), "test");
-      expect(codexClaim).toBeDefined();
-      await expect(executeLoop(codexLoop, codexClaim!.run)).rejects.toThrow("codex.agent");
+      expect(() =>
+        store.createLoop({
+          name: "bad-codex-agent",
+          schedule: { type: "once", at: new Date().toISOString() },
+          target: {
+            type: "agent",
+            provider: "codex",
+            prompt: "say ok",
+            agent: "reviewer",
+            configIsolation: "safe",
+          },
+        }),
+      ).toThrow("agent is not supported for provider codex");
     } finally {
       store.close();
     }
@@ -403,19 +399,18 @@ describe("agent adapters", () => {
   test("rejects invalid SDK-created config isolation", async () => {
     const store = new Store(":memory:");
     try {
-      const loop = store.createLoop({
-        name: "bad-config-isolation-agent",
-        schedule: { type: "once", at: new Date().toISOString() },
-        target: {
-          type: "agent",
-          provider: "codewith",
-          prompt: "say ok",
-          configIsolation: "sfae" as "safe",
-        },
-      });
-      const claim = store.claimRun(loop, new Date().toISOString(), "test");
-      expect(claim).toBeDefined();
-      await expect(executeLoop(loop, claim!.run)).rejects.toThrow("configIsolation");
+      expect(() =>
+        store.createLoop({
+          name: "bad-config-isolation-agent",
+          schedule: { type: "once", at: new Date().toISOString() },
+          target: {
+            type: "agent",
+            provider: "codewith",
+            prompt: "say ok",
+            configIsolation: "sfae" as "safe",
+          },
+        }),
+      ).toThrow("configIsolation");
     } finally {
       store.close();
     }
