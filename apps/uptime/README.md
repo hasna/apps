@@ -46,6 +46,7 @@ uptime report-schedules run-due
 uptime report-schedules runs
 uptime audit
 uptime cloud plan --json
+uptime cloud memory-preflight --healthcheck --json
 uptime cloud postgres-plan --json
 uptime cloud postgres-plan --sql
 uptime cloud workers preflight --role public-probe --json
@@ -117,6 +118,24 @@ The npm package includes runtime code, CLI/MCP/SDK exports, legal/security docs,
 Docker build inputs, and the reusable `infra/aws` Terraform module. Internal
 operator runbooks, cloud architecture notes, and deployment evidence records
 stay in the repository and are not included in the published tarball.
+
+`uptime cloud memory-preflight --json` prints a redacted report and exits `0`
+for inspection even when blocked. Use
+`uptime cloud memory-preflight --healthcheck --json` as the fail-closed gate for
+calling Spark01 or the Hasna project/task memory stack cloud-primary. It reports
+only service names, configured environment variable names, booleans, and
+blockers. It checks env presence but does not retain or print database URLs, API
+keys, secret refs, notes, mementos, messages, knowledge chunks, Terraform state,
+or monitor private targets. `--healthcheck` exits non-zero until Projects,
+Todos, Conversations, Mementos, Knowledge, and the Spark01 machine lease checks
+all have audited cloud-primary evidence. Notes and Open Uptime are harder
+blockers: they remain blocked until Notes has audited cloud metadata/object
+storage and Open Uptime has the async Postgres runtime adapter, leases, report
+storage, and probe fencing.
+Machine evidence is bound to the selected `--machine-id`: `spark01` uses
+`HASNA_UPTIME_SPARK01_*` proof flags, while another machine such as `worker02`
+must use its own `HASNA_UPTIME_WORKER02_*` proof flags. Secret-looking or
+malformed machine IDs are rejected and rendered only as `invalid-machine-id`.
 
 Private/local probes can submit signed results from another machine:
 

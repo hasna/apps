@@ -582,6 +582,22 @@ cloud
   });
 
 cloud
+  .command("memory-preflight")
+  .description("Fail-closed cloud-primary readiness gate for task memory and Spark01 promotion")
+  .option("--machine-id <id>", "operator/probe machine id; defaults to HASNA_UPTIME_MACHINE_ID or spark01")
+  .option("--healthcheck", "exit non-zero unless cloud memory and machine-primary gates are promotion-ready")
+  .option("-j, --json", "print JSON")
+  .action((opts) => {
+    try {
+      const preflight = buildCloudMemoryPreflight({ machineId: opts.machineId });
+      print(preflight, renderCloudMemoryPreflight(preflight), opts);
+      if (opts.healthcheck && !preflight.canPromote) process.exit(1);
+    } catch (error) {
+      fail(error, opts);
+    }
+  });
+
+cloud
   .command("private-probe-config")
   .description("Generate hosted-targeted private probe preflight configuration")
   .option("--api-url <url>", "hosted Open Uptime API URL", "https://uptime.example.com/api/v1")
@@ -1387,6 +1403,439 @@ interface HostedWorkerPreflight {
   blockers: string[];
   checks: Array<{ name: string; ok: boolean; detail: string }>;
   nextActions: string[];
+}
+
+type CloudMemoryServiceName =
+  | "projects"
+  | "todos"
+  | "conversations"
+  | "mementos"
+  | "knowledge"
+  | "notes"
+  | "uptime";
+
+type CloudMemoryServiceStatus = "ready" | "blocked";
+
+interface CloudMemoryEnvGroup {
+  name: string;
+  anyOf: string[];
+  optional?: boolean;
+}
+
+interface CloudMemoryServiceDefinition {
+  name: CloudMemoryServiceName;
+  label: string;
+  owner: string;
+  statusCommand: string;
+  envGroups: CloudMemoryEnvGroup[];
+  proofEnv: string;
+  implementationBlockers?: string[];
+  evidenceBlockers: string[];
+  nextActions: string[];
+  acceptsProof?: boolean;
+}
+
+interface CloudMemoryEnvGroupResult {
+  name: string;
+  anyOf: string[];
+  configuredEnv: string[];
+  required: boolean;
+  ok: boolean;
+}
+
+interface CloudMemoryServicePreflight {
+  name: CloudMemoryServiceName;
+  label: string;
+  owner: string;
+  status: CloudMemoryServiceStatus;
+  cloudPrimary: boolean;
+  configured: boolean;
+  proofEnv: string;
+  proofConfigured: boolean;
+  statusCommand: string;
+  env: CloudMemoryEnvGroupResult[];
+  blockers: string[];
+  nextActions: string[];
+}
+
+interface CloudMemoryMachineCheck {
+  name: string;
+  ok: boolean;
+  detail: string;
+  envName?: string;
+}
+
+interface CloudMemoryMachineIdentity {
+  machineId: string;
+  valid: boolean;
+  detail: string;
+}
+
+interface CloudMemoryPreflight {
+  kind: "open-uptime.cloud-memory-preflight";
+  status: "ready" | "blocked";
+  canPromote: boolean;
+  machineId: string;
+  services: CloudMemoryServicePreflight[];
+  machineChecks: CloudMemoryMachineCheck[];
+  blockers: string[];
+  nextActions: string[];
+  evidencePolicy: {
+    allowed: string[];
+    forbidden: string[];
+  };
+}
+
+function buildCloudMemoryPreflight(options: { machineId?: string } = {}): CloudMemoryPreflight {
+  const machineIdentity = resolveCloudMemoryMachineIdentity(options.machineId);
+  const machineId = machineIdentity.machineId;
+  const services = cloudMemoryServiceDefinitions().map(buildCloudMemoryServicePreflight);
+  const machineChecks = buildCloudMemoryMachineChecks(machineIdentity);
+  const blockers = [
+    ...services.flatMap((service) => service.blockers.map((blocker) => `${service.name}: ${blocker}`)),
+    ...machineChecks.filter((check) => !check.ok).map((check) => `machine.${check.name}: ${check.detail}`),
+  ];
+  const canPromote = blockers.length === 0;
+  return {
+    kind: "open-uptime.cloud-memory-preflight",
+    status: canPromote ? "ready" : "blocked",
+    canPromote,
+    machineId,
+    services,
+    machineChecks,
+    blockers,
+    nextActions: cloudMemoryNextActions(services),
+    evidencePolicy: {
+      allowed: [
+        "service names",
+        "configured environment variable names",
+        "booleans",
+        "counts",
+        "schema versions",
+        "redacted URLs",
+        "hash-only artifact identifiers",
+      ],
+      forbidden: [
+        "database URLs",
+        "secret values",
+        "API keys or tokens",
+        "message bodies",
+        "note bodies",
+        "memento values",
+        "knowledge chunks",
+        "monitor private URLs",
+        "Terraform state or saved plan bodies",
+        "task/log stream ARNs",
+      ],
+    },
+  };
+}
+
+function buildCloudMemoryServicePreflight(definition: CloudMemoryServiceDefinition): CloudMemoryServicePreflight {
+  const env = definition.envGroups.map((group) => {
+    const configuredEnv = configuredEnvNames(group.anyOf);
+    return {
+      name: group.name,
+      anyOf: group.anyOf,
+      configuredEnv,
+      required: group.optional !== true,
+      ok: group.optional === true || configuredEnv.length > 0,
+    };
+  });
+  const missingRequired = env
+    .filter((group) => group.required && !group.ok)
+    .map((group) => `${group.name}: missing one of ${group.anyOf.join(", ")}`);
+  const proofConfigured = envFlagEnabled(definition.proofEnv);
+  const implementationBlockers = definition.implementationBlockers ?? [];
+  const proofBlockers = proofConfigured
+    ? []
+    : [`${definition.proofEnv}: audited cloud-primary evidence is not configured`];
+  const evidenceBlockers = proofConfigured && definition.acceptsProof !== false
+    ? []
+    : definition.evidenceBlockers;
+  const blockers = [
+    ...missingRequired,
+    ...implementationBlockers,
+    ...evidenceBlockers,
+    ...(definition.acceptsProof === false ? [] : proofBlockers),
+  ];
+  const configured = env.filter((group) => group.required).every((group) => group.ok);
+  const cloudPrimary = configured
+    && proofConfigured
+    && blockers.length === 0
+    && definition.acceptsProof !== false;
+  return {
+    name: definition.name,
+    label: definition.label,
+    owner: definition.owner,
+    status: cloudPrimary ? "ready" : "blocked",
+    cloudPrimary,
+    configured,
+    proofEnv: definition.proofEnv,
+    proofConfigured,
+    statusCommand: definition.statusCommand,
+    env,
+    blockers,
+    nextActions: definition.nextActions,
+  };
+}
+
+function cloudMemoryServiceDefinitions(): CloudMemoryServiceDefinition[] {
+  return [
+    {
+      name: "projects",
+      label: "Projects",
+      owner: "open-projects",
+      statusCommand: "projects storage status --json",
+      envGroups: [{ name: "database", anyOf: ["HASNA_PROJECTS_DATABASE_URL", "PROJECTS_DATABASE_URL"] }],
+      proofEnv: "HASNA_PROJECTS_CLOUD_PRIMARY_READY",
+      evidenceBlockers: [
+        "per-project stores, canvases, tombstones, conflict quarantine, and rollback evidence are not proven from this process",
+      ],
+      nextActions: [
+        "Verify projects storage status reports remote/cloud mode with no local primary fallback.",
+        "Prove per-project project.db stores and canvases are cloud-backed or explicitly local-only/link-only.",
+      ],
+    },
+    {
+      name: "todos",
+      label: "Todos",
+      owner: "open-todos",
+      statusCommand: "todos storage status --json && todos storage sync-plan --json",
+      envGroups: [
+        { name: "mode", anyOf: ["HASNA_TODOS_STORAGE_MODE", "TODOS_STORAGE_MODE"] },
+        { name: "database", anyOf: ["HASNA_TODOS_DATABASE_URL", "TODOS_DATABASE_URL"] },
+        { name: "artifact-bucket", anyOf: ["HASNA_TODOS_S3_BUCKET", "TODOS_S3_BUCKET"], optional: true },
+      ],
+      proofEnv: "HASNA_TODOS_CLOUD_PRIMARY_READY",
+      evidenceBlockers: [
+        "task-row push/pull apply, tombstone pull, conflict handling, and run-artifact restore evidence are not proven from this process",
+      ],
+      nextActions: [
+        "Add or use an audited todos row sync/apply path before treating local task rows as cache.",
+        "Run count-only sync dry-runs and artifact upload/download previews before any writes.",
+      ],
+    },
+    {
+      name: "conversations",
+      label: "Conversations",
+      owner: "open-conversations",
+      statusCommand: "conversations storage status --json && conversations storage migrate --dry-run",
+      envGroups: [{ name: "database", anyOf: ["HASNA_CONVERSATIONS_DATABASE_URL", "CONVERSATIONS_DATABASE_URL"] }],
+      proofEnv: "HASNA_CONVERSATIONS_CLOUD_PRIMARY_READY",
+      evidenceBlockers: [
+        "full message/history ownership, conflict behavior, and rollback evidence are not proven from this process",
+      ],
+      nextActions: [
+        "Run migration dry-run and count-only parity checks for channels, messages, reads, reactions, mentions, graph edges, and locks.",
+        "Prove local conversation writes are frozen or conflict-quarantined during cutover.",
+      ],
+    },
+    {
+      name: "mementos",
+      label: "Mementos",
+      owner: "open-mementos",
+      statusCommand: "mementos storage status --json",
+      envGroups: [{ name: "database", anyOf: ["HASNA_MEMENTOS_DATABASE_URL", "MEMENTOS_DATABASE_URL"] }],
+      proofEnv: "HASNA_MEMENTOS_CLOUD_PRIMARY_READY",
+      evidenceBlockers: [
+        "versioned tombstones, delete propagation, conflict-clone review, and primary machine configuration are not proven from this process",
+      ],
+      nextActions: [
+        "Run mementos remote migration only after backup/rehearsal because no dry-run flag is exposed here.",
+        "Prove divergent same-key memories quarantine instead of silently overwriting cloud rows.",
+      ],
+    },
+    {
+      name: "knowledge",
+      label: "Knowledge",
+      owner: "open-knowledge",
+      statusCommand: "knowledge remote status --json && knowledge storage status --json && knowledge db storage status --json",
+      envGroups: [
+        { name: "database-or-hosted-api", anyOf: ["HASNA_KNOWLEDGE_DATABASE_URL", "KNOWLEDGE_DATABASE_URL", "KNOWLEDGE_API_URL"] },
+        { name: "hosted-api-key", anyOf: ["HASNA_KNOWLEDGE_API_KEY", "KNOWLEDGE_API_KEY"], optional: true },
+      ],
+      proofEnv: "HASNA_KNOWLEDGE_CLOUD_PRIMARY_READY",
+      evidenceBlockers: [
+        "hosted auth, artifact object storage, compatibility JSON migration, and generic-upsert conflict behavior are not proven from this process",
+      ],
+      nextActions: [
+        "Use hosted API or DB storage with redacted auth evidence; do not copy raw knowledge chunks into Open Uptime evidence.",
+        "Prove generated artifacts are in S3/hosted storage with hashes and no raw private source bytes.",
+      ],
+    },
+    {
+      name: "notes",
+      label: "Notes",
+      owner: "open-notes",
+      statusCommand: "notes config --json && notes check",
+      envGroups: [
+        { name: "metadata-database", anyOf: ["HASNA_NOTES_DATABASE_URL", "NOTES_DATABASE_URL"] },
+        { name: "object-bucket", anyOf: ["HASNA_NOTES_S3_BUCKET", "NOTES_S3_BUCKET"] },
+      ],
+      proofEnv: "HASNA_NOTES_CLOUD_PRIMARY_READY",
+      acceptsProof: false,
+      implementationBlockers: [
+        "open-notes exposes local SQLite/Markdown/audio plus fleet rsync, but no audited cloud DB/object-store storage command was found",
+      ],
+      evidenceBlockers: [
+        "note metadata/object tombstones, audio object storage, conflict behavior, and rollback evidence are not proven",
+      ],
+      nextActions: [
+        "Implement notes cloud metadata and object storage before treating notes as cloud-primary.",
+        "Keep local Markdown/audio as authoring cache until delete/tombstone and restore behavior is proven.",
+      ],
+    },
+    {
+      name: "uptime",
+      label: "Open Uptime",
+      owner: "open-uptime",
+      statusCommand: "uptime cloud postgres-plan --json && uptime cloud workers preflight --role <role> --json",
+      envGroups: [{ name: "database", anyOf: ["HASNA_UPTIME_DATABASE_URL"] }],
+      proofEnv: "HASNA_UPTIME_POSTGRES_RUNTIME_READY",
+      acceptsProof: false,
+      implementationBlockers: [
+        "hosted Postgres runtime adapter is not implemented; setting HASNA_UPTIME_DATABASE_URL currently makes hosted runtime fail closed",
+        "check_jobs leases, report-run storage, probe identity, and worker fencing are not implemented as authoritative cloud paths",
+      ],
+      evidenceBlockers: [
+        "EFS SQLite bridge is not cloud-primary and must stay a bounded web-only bridge until async Postgres runtime exists",
+      ],
+      nextActions: [
+        "Implement the async Postgres runtime adapter with workspace-scoped RLS, tombstones, audit rows, and distributed leases.",
+        "Keep scheduler, public-probe, reporter, and migration ECS desired counts at 0 until worker preflights canStart=true.",
+      ],
+    },
+  ];
+}
+
+function buildCloudMemoryMachineChecks(identity: CloudMemoryMachineIdentity): CloudMemoryMachineCheck[] {
+  const envPrefix = cloudMemoryMachineEvidenceEnvPrefix(identity.machineId);
+  const registrationEnv = `${envPrefix}_MACHINE_REGISTRATION_READY`;
+  const primaryLeaseEnv = `${envPrefix}_PRIMARY_LEASE_READY`;
+  const bootstrapTokenEnv = `${envPrefix}_BOOTSTRAP_TOKEN_REVOKED`;
+  const privateProbeEnv = `${envPrefix}_PRIVATE_PROBE_READY`;
+  const rollbackEnv = `${envPrefix}_ROLLBACK_REHEARSED`;
+  return [
+    {
+      name: "machine-id",
+      ok: identity.valid,
+      detail: identity.detail,
+    },
+    {
+      name: "cloud-machine-registration",
+      ok: envFlagEnabled(registrationEnv),
+      detail: `requires audited cloud machine identity for ${identity.machineId}; set ${registrationEnv}=1 only with evidence`,
+      envName: registrationEnv,
+    },
+    {
+      name: "primary-lease",
+      ok: envFlagEnabled(primaryLeaseEnv),
+      detail: `requires time-limited primary lease and fencing token evidence for ${identity.machineId}; set ${primaryLeaseEnv}=1 only with evidence`,
+      envName: primaryLeaseEnv,
+    },
+    {
+      name: "bootstrap-token-revoked",
+      ok: envFlagEnabled(bootstrapTokenEnv),
+      detail: `bootstrap credential for ${identity.machineId} must be single-use, expired or revoked, and absent from logs/state; set ${bootstrapTokenEnv}=1 only with evidence`,
+      envName: bootstrapTokenEnv,
+    },
+    {
+      name: "private-probe-identity",
+      ok: envFlagEnabled(privateProbeEnv),
+      detail: `requires scoped probe id, heartbeat, revocation path, and approved inventory refs for ${identity.machineId}; set ${privateProbeEnv}=1 only with evidence`,
+      envName: privateProbeEnv,
+    },
+    {
+      name: "rollback-rehearsed",
+      ok: envFlagEnabled(rollbackEnv),
+      detail: `requires pause-writes, read-only cloud comparison, local restore, and audit evidence for ${identity.machineId}; set ${rollbackEnv}=1 only with evidence`,
+      envName: rollbackEnv,
+    },
+  ];
+}
+
+function cloudMemoryNextActions(services: CloudMemoryServicePreflight[]): string[] {
+  const blocked = services.filter((service) => !service.cloudPrimary);
+  return [
+    "Do not call Spark01 cloud-primary and do not scale hosted workers while this preflight is blocked.",
+    "Record only redacted, count-only evidence; never paste DB URLs, secret values, note bodies, messages, mementos, or knowledge chunks.",
+    "Run each service status command from this report and store sanitized counts/booleans in todos knowledge before any migration.",
+    "Take local backups and freeze or conflict-quarantine legacy writes before any cloud backfill.",
+    ...(blocked.length ? [`Resolve blocked services first: ${blocked.map((service) => service.name).join(", ")}.`] : []),
+  ];
+}
+
+function renderCloudMemoryPreflight(preflight: CloudMemoryPreflight): string {
+  return [
+    "cloud memory preflight",
+    `status: ${preflight.status}`,
+    `can promote: ${preflight.canPromote}`,
+    `machine: ${sanitizeField(preflight.machineId)}`,
+    "services:",
+    ...preflight.services.map((service) => [
+      `- ${service.name}: ${service.status}`,
+      `  configured: ${service.configured}`,
+      `  cloud primary: ${service.cloudPrimary}`,
+      `  owner: ${service.owner}`,
+      `  status command: ${service.statusCommand}`,
+      `  proof env: ${service.proofEnv}=${service.proofConfigured ? "set" : "unset"}`,
+      ...service.env.map((group) => {
+        const configured = group.configuredEnv.length ? group.configuredEnv.join(", ") : "<none>";
+        return `  env ${group.name}: ${configured}`;
+      }),
+      ...service.blockers.map((blocker) => `  blocker: ${sanitizeField(blocker)}`),
+    ].join("\n")),
+    "machine checks:",
+    ...preflight.machineChecks.map((check) => `- ${check.ok ? "ok" : "blocked"} ${check.name}: ${sanitizeField(check.detail)}`),
+    `blockers: ${preflight.blockers.length}`,
+    ...preflight.blockers.map((blocker) => `- ${sanitizeField(blocker)}`),
+    "next actions:",
+    ...preflight.nextActions.map((action) => `- ${sanitizeField(action)}`),
+    "evidence allowed:",
+    ...preflight.evidencePolicy.allowed.map((item) => `- ${sanitizeField(item)}`),
+    "evidence forbidden:",
+    ...preflight.evidencePolicy.forbidden.map((item) => `- ${sanitizeField(item)}`),
+  ].join("\n");
+}
+
+function configuredEnvNames(names: string[]): string[] {
+  return names.filter((name) => Boolean(process.env[name]?.trim()));
+}
+
+function envFlagEnabled(name: string): boolean {
+  const normalized = process.env[name]?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function resolveCloudMemoryMachineIdentity(optionMachineId?: string): CloudMemoryMachineIdentity {
+  const rawMachineId = optionMachineId?.trim() || process.env.HASNA_UPTIME_MACHINE_ID?.trim() || "spark01";
+  const secretLike = /(secret|token|password|passwd|pwd|api[_:.-]?key|credential|bearer|jwt|private)/i.test(rawMachineId);
+  const valid = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(rawMachineId) && !secretLike;
+  const machineId = valid ? rawMachineId : "invalid-machine-id";
+  return {
+    machineId: machineId || "invalid-machine-id",
+    valid,
+    detail: valid
+      ? `${machineId} (machine evidence env prefix: ${cloudMemoryMachineEvidenceEnvPrefix(machineId)}_*)`
+      : "invalid machine id; use 1-128 non-secret chars matching [A-Za-z0-9][A-Za-z0-9_.:-]*",
+  };
+}
+
+function cloudMemoryMachineEvidenceEnvPrefix(machineId: string): string {
+  const suffix = machineId
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return `HASNA_UPTIME_${suffix || "MACHINE"}`;
+}
+
+function sanitizeMachineId(value: string): string {
+  return sanitizeField(value.trim())
+    .replace(/[^A-Za-z0-9_.:-]/g, "-")
+    .replace(/^-+/, "")
+    .slice(0, 128);
 }
 
 function parseWorkerRole(value: string): HostedWorkerRole {

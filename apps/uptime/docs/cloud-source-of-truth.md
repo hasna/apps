@@ -362,6 +362,22 @@ An operator/probe machine should become cloud-primary only after a preflight pro
 - local `~/.hasna` databases are backed up before migration and then treated as
   cache/fallback, not active authority.
 
+`uptime cloud memory-preflight --json` prints a redacted report for this
+checklist and exits `0` for inspection even when blocked. Use
+`uptime cloud memory-preflight --healthcheck --json` as the current fail-closed
+operator gate. It intentionally reports only redacted evidence such as service
+names, configured environment variable names, booleans, and blocker text. It
+checks env presence but does not retain or print database URLs, API keys, secret
+refs, private note/message/memory/knowledge bodies, Terraform state, or monitor
+private targets. The current command has no local-only exception override; every
+listed service must either pass its audited cloud-primary checks or remain an
+explicit blocker. It must not be used to claim Spark01 cloud-primary while Notes
+and Open Uptime still lack authoritative cloud storage/runtime adapters.
+Machine proof flags are machine-specific: `spark01` uses
+`HASNA_UPTIME_SPARK01_*`, and any other `--machine-id` derives its own
+`HASNA_UPTIME_<MACHINE_ID>_*` prefix. Secret-looking or malformed machine IDs
+are rejected and rendered only as `invalid-machine-id`.
+
 Operator primary status is a time-limited lease, not a boolean flag. The lease
 must include a fencing token, heartbeat deadline, revocation path, audit rows,
 and clear behavior for expiration. Cloud writers and probe workers must include

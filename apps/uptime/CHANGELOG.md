@@ -6,6 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.38] - 2026-06-29
+
+### Added
+
+- Added `uptime cloud memory-preflight` as a redacted, fail-closed promotion
+  gate for Hasna cloud-backed project/task memory and Spark01 operator-machine
+  readiness.
+- Added regression coverage for healthcheck exit behavior, built CLI
+  availability, per-machine proof-env binding, and redaction of database URLs,
+  API keys, secret refs, secret-looking machine IDs, and canonical secret paths.
+
+### Security
+
+- The memory preflight does not promote Spark01, does not scale hosted workers,
+  and keeps Notes and Open Uptime blocked until Notes has audited cloud
+  metadata/object storage and Open Uptime has an authoritative async Postgres
+  runtime adapter with leases, report storage, and probe fencing.
+
 ## [0.1.37] - 2026-06-29
 
 ### Changed
