@@ -54,6 +54,7 @@ import { getDatabase } from "../db/database.js";
 import { isCerebrasConfigured } from "../lib/pdf-detector.js";
 import { createDocumentFromMarkdown, sendDocumentForSignature, sendDocumentWithProvider, signDocumentLocally } from "../lib/workflow.js";
 import { getPackageVersion } from "../lib/package-info.js";
+import { handleMetadataArgs } from "../lib/metadata-args.js";
 import type { RecipientStatus, SessionStatus, SignerType } from "../types/index.js";
 
 import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
@@ -1072,6 +1073,18 @@ export function buildServer(): Server {
 
 async function main() {
   const args = process.argv.slice(2);
+  if (handleMetadataArgs(args, {
+    command: "signatures-mcp",
+    description: "Start the open-signatures MCP server.",
+    usage: "signatures-mcp [--stdio] [--http] [--port <n>]",
+    options: [
+      "  --stdio        Use stdio transport",
+      "  --http         Use Streamable HTTP transport",
+      "  --port <n>     HTTP port (default 8878 or MCP_HTTP_PORT)",
+    ],
+  })) {
+    return;
+  }
   if (isStdioMode(args)) {
     const transport = new StdioServerTransport();
     const s = buildServer();

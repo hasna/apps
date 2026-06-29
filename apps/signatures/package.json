@@ -1,6 +1,6 @@
 {
   "name": "@hasna/signatures",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "description": "Open-source agreement and e-signature workflows for Markdown, PDFs, local signing, providers, CLI, API, and MCP",
   "type": "module",
   "bin": {

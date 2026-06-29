@@ -42,9 +42,21 @@ import { getSetting, setSetting, getAllSettings } from "../db/settings.js";
 import { createDocumentFromMarkdown, sendDocumentForSignature, sendDocumentWithProvider, signDocumentLocally } from "../lib/workflow.js";
 import { setupSigningDomain } from "../lib/domain-integration.js";
 import { getPackageVersion } from "../lib/package-info.js";
+import { handleMetadataArgs } from "../lib/metadata-args.js";
 import type { RecipientStatus, SessionStatus, SignerType } from "../types/index.js";
 
 const PORT = parseInt(process.env["PORT"] ?? "19440", 10);
+
+if (handleMetadataArgs(process.argv.slice(2), {
+  command: "signatures-serve",
+  description: "Start the open-signatures HTTP API server.",
+  usage: "signatures-serve",
+  options: [
+    "  PORT=<n>       HTTP port environment override (default 19440)",
+  ],
+})) {
+  process.exit(0);
+}
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
