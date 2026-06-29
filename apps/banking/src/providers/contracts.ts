@@ -3,27 +3,95 @@ import { getProvider } from "./capabilities.ts";
 import { preflightProviderEnv, preflightProviderScopes, type ProviderScopeArea } from "./security.ts";
 
 export type ProviderOperationKind =
+  | "accountCards.list"
+  | "accountStatements.list"
+  | "accountStatements.download"
+  | "accountTransactions.list"
+  | "accountTransactions.get"
+  | "accounts.get"
   | "accounts.list"
+  | "attachments.get"
   | "balances.get"
-  | "transactions.list"
-  | "counterparties.list"
-  | "payments.create"
-  | "payments.status"
-  | "cards.list"
+  | "cards.cancel"
+  | "cards.get"
   | "cards.createVirtual"
-  | "cards.updateSettings"
   | "cards.freeze"
+  | "cards.list"
+  | "cards.updateSettings"
   | "cards.unfreeze"
   | "cards.terminate"
   | "cards.revealSensitiveData"
-  | "webhooks.subscribe";
+  | "categories.create"
+  | "categories.delete"
+  | "categories.list"
+  | "categories.update"
+  | "counterparties.list"
+  | "credit.list"
+  | "customers.create"
+  | "customers.delete"
+  | "customers.get"
+  | "customers.list"
+  | "customers.update"
+  | "events.get"
+  | "events.list"
+  | "internalTransfers.create"
+  | "invoices.attachments.list"
+  | "invoices.cancel"
+  | "invoices.create"
+  | "invoices.download"
+  | "invoices.get"
+  | "invoices.list"
+  | "invoices.update"
+  | "oauth.obtainToken"
+  | "oauth.startFlow"
+  | "onboarding.submit"
+  | "organization.get"
+  | "payments.create"
+  | "payments.requestSendMoney"
+  | "payments.status"
+  | "recipients.attachments.list"
+  | "recipients.attachments.upload"
+  | "recipients.create"
+  | "recipients.get"
+  | "recipients.list"
+  | "recipients.update"
+  | "safes.download"
+  | "safes.get"
+  | "safes.list"
+  | "sendMoneyApprovalRequests.get"
+  | "sendMoneyApprovalRequests.list"
+  | "statements.download"
+  | "transactions.attachments.upload"
+  | "transactions.get"
+  | "transactions.list"
+  | "transactions.update"
+  | "treasury.accounts.list"
+  | "treasury.statements.list"
+  | "treasury.transactions.list"
+  | "users.get"
+  | "users.list"
+  | "webhooks.create"
+  | "webhooks.delete"
+  | "webhooks.get"
+  | "webhooks.list"
+  | "webhooks.subscribe"
+  | "webhooks.update"
+  | "webhooks.verify";
 
-export type ProviderOperationEffect = "read" | "money_movement" | "card_side_effect" | "sensitive_read" | "webhook";
+export type ProviderOperationEffect =
+  | "read"
+  | "metadata_write"
+  | "money_movement"
+  | "card_side_effect"
+  | "sensitive_read"
+  | "webhook"
+  | "auth_flow";
 export type ProviderOperationPlanStatus = "ready_for_conformance" | "blocked";
 
 export interface ProviderEndpointContract {
   readonly method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   readonly path: string;
+  readonly server?: "api" | "oauth2";
 }
 
 export interface ProviderDocSource {
@@ -83,51 +151,171 @@ export interface ProviderOperationPlanInput {
 
 const checkedAt = "2026-06-29";
 const MERCURY_ENV = ["MERCURY_API_KEY", "MERCURY_SANDBOX_API_KEY", "MERCURY_PRODUCTION_API_KEY"] as const;
+const MERCURY_OAUTH_ENV = ["MERCURY_OAUTH_CLIENT_ID", "MERCURY_OAUTH_CLIENT_SECRET", "MERCURY_OAUTH_REDIRECT_URI"] as const;
 
 export const PROVIDER_CONFORMANCE_CONTRACTS: readonly ProviderConformanceContract[] = [
   {
     providerId: "mercury",
     checkedAt,
     docs: [
+      source("Mercury llms.txt index", "https://docs.mercury.com/llms.txt"),
       source("Mercury API changelog", "https://docs.mercury.com/changelog"),
+      source("Mercury API token security policies", "https://docs.mercury.com/docs/api-token-security-policies"),
+      source("Mercury MCP supported tools", "https://docs.mercury.com/docs/supported-tools-on-mercury-mcp"),
+      source("Mercury get all accounts", "https://docs.mercury.com/reference/getaccounts"),
       source("Mercury list cards", "https://docs.mercury.com/reference/listcards"),
       source("Mercury list all transactions", "https://docs.mercury.com/reference/listtransactions"),
-      source("Mercury get cards for account", "https://docs.mercury.com/reference/getaccountcards"),
       source("Mercury create transaction", "https://docs.mercury.com/reference/createtransaction"),
+      source("Mercury create internal transfer", "https://docs.mercury.com/reference/createinternaltransfer"),
+      source("Mercury webhooks", "https://docs.mercury.com/reference/webhooks"),
+      source("Mercury OAuth2", "https://docs.mercury.com/docs/integrations-with-oauth2"),
     ],
     constraints: [
       "Mercury send-money requires recipientId, idempotencyKey, amount >= 0.01, paymentMethod ach/check/domesticWire, and purpose when paymentMethod is domesticWire.",
+      "Mercury request-send-money creates an approval request and is documented as usable without IP whitelisting, but still requires explicit approval/idempotency/audit gates before automation.",
+      "Internal transfers can move funds between depository and treasury/investment accounts; treat them as money movement.",
       "Card lifecycle operations are documented but remain non-executable until sandbox/live conformance confirms scopes, amount units, limits, and idempotency behavior.",
+      "Attachment, statement, invoice PDF, and SAFE document reads can return signed download URLs or binary documents and require redaction/download handling before agent-visible use.",
+      "Webhook create/update/delete/verify operations mutate external delivery state and require approval/idempotency plus signature verification before trusting provider events.",
+      "OAuth2 flow support is contract-only until client registration, redirect validation, PKCE, and token storage are implemented.",
       "Sensitive card data is unsupported until an exact official sensitive-card endpoint source is documented.",
-      "All money movement and card lifecycle operations require maker-checker approval and idempotency reservation before provider submission.",
+      "All money movement, card lifecycle, metadata mutation, webhook mutation, onboarding, and OAuth token operations require maker-checker approval and idempotency reservation before provider submission.",
     ],
     operations: [
-      read("accounts.list", ["accounts:read"], MERCURY_ENV, { method: "GET", path: "/api/v1/accounts" }),
-      read("balances.get", ["accounts:read"], MERCURY_ENV, { method: "GET", path: "/api/v1/account/{accountId}" }),
-      read("transactions.list", ["transactions:read"], MERCURY_ENV, { method: "GET", path: "/api/v1/transactions" }),
-      write("payments.create", "money_movement", ["transactions:write"], MERCURY_ENV, ["sandbox", "production"], {
-        method: "POST",
-        path: "/api/v1/account/{accountId}/transactions",
-      }, [
+      mercuryRead("accounts.list", ["accounts:read"], api("GET", "/accounts")),
+      mercuryRead("accounts.get", ["accounts:read"], api("GET", "/account/{accountId}")),
+      mercuryRead("balances.get", ["accounts:read"], api("GET", "/account/{accountId}")),
+      mercuryRead("accountCards.list", ["cards:write"], api("GET", "/account/{accountId}/cards")),
+      mercuryRead("accountStatements.list", ["accounts:read"], api("GET", "/account/{accountId}/statements")),
+      mercurySensitiveRead("accountStatements.download", api("GET", "/statements/{statementId}/pdf"), [
+        "Statement PDF responses are binary downloads and must not be printed to agent chat or logs.",
+      ]),
+      mercuryRead("accountTransactions.list", ["transactions:read"], api("GET", "/account/{accountId}/transactions")),
+      mercuryRead("accountTransactions.get", ["transactions:read"], api("GET", "/account/{accountId}/transaction/{transactionId}")),
+      mercurySensitiveRead("attachments.get", api("GET", "/ar/attachments/{attachmentId}"), [
+        "Attachment responses contain signed download URLs; redact URLs and refresh them only at point of use.",
+      ]),
+      card("cards.createVirtual", ["cards:write"], MERCURY_ENV, ["sandbox", "production"], api("POST", "/cards"), [
+        "Confirm cardholder userId, debit/credit kind, spending-limit units, and sandbox lifecycle semantics before live execution.",
+      ]),
+      mercuryRead("cards.get", ["cards:write"], api("GET", "/cards/{cardId}")),
+      mercuryRead("cards.list", ["cards:write"], api("GET", "/cards")),
+      card("cards.updateSettings", ["cards:write"], MERCURY_ENV, ["sandbox", "production"], api("POST", "/cards/{cardId}")),
+      card("cards.freeze", ["cards:write"], MERCURY_ENV, ["sandbox", "production"], api("POST", "/cards/{cardId}/freeze")),
+      card("cards.unfreeze", ["cards:write"], MERCURY_ENV, ["sandbox", "production"], api("POST", "/cards/{cardId}/unfreeze")),
+      card("cards.cancel", ["cards:write"], MERCURY_ENV, ["sandbox", "production"], api("POST", "/cards/{cardId}/cancel"), [
+        "Mercury names this operation cancel; it permanently closes the card and cannot be undone.",
+      ]),
+      card("cards.terminate", ["cards:write"], MERCURY_ENV, ["sandbox", "production"], api("POST", "/cards/{cardId}/cancel"), [
+        "Hasna compatibility alias for Mercury card cancel; provider execution must submit the official cancel operation.",
+      ]),
+      unsupported("cards.revealSensitiveData", "sensitive_read"),
+      mercuryMetadata("categories.create", api("POST", "/categories")),
+      mercuryMetadata("categories.delete", api("DELETE", "/categories/{expenseCategoryId}"), [
+        "Confirm category deletion impact on historical transaction metadata before execution.",
+      ]),
+      mercuryRead("categories.list", ["transactions:read"], api("GET", "/categories")),
+      mercuryMetadata("categories.update", api("POST", "/categories/{expenseCategoryId}")),
+      mercuryRead("credit.list", ["accounts:read"], api("GET", "/credit")),
+      mercuryMetadata("customers.create", api("POST", "/ar/customers")),
+      mercuryMetadata("customers.delete", api("DELETE", "/ar/customers/{customerId}"), [
+        "Customer deletion is irreversible in Mercury; require explicit human approval.",
+      ]),
+      mercuryRead("customers.get", ["accounts:read"], api("GET", "/ar/customers/{customerId}")),
+      mercuryRead("customers.list", ["accounts:read"], api("GET", "/ar/customers")),
+      mercuryMetadata("customers.update", api("POST", "/ar/customers/{customerId}")),
+      mercuryRead("events.get", ["accounts:read"], api("GET", "/events/{eventId}")),
+      mercuryRead("events.list", ["accounts:read"], api("GET", "/events")),
+      write("internalTransfers.create", "money_movement", ["transactions:write"], MERCURY_ENV, ["sandbox", "production"], api("POST", "/transfer"), [
+        "Confirm source/destination account type matrix, paired debit/credit transaction mapping, and treasury transfer semantics before execution.",
+      ]),
+      mercurySensitiveRead("invoices.attachments.list", api("GET", "/ar/invoices/{invoiceId}/attachments")),
+      mercuryMetadata("invoices.cancel", api("POST", "/ar/invoices/{invoiceId}/cancel"), [
+        "Invoice cancellation is irreversible and must be approved by a human.",
+      ]),
+      mercuryMetadata("invoices.create", api("POST", "/ar/invoices"), [
+        "Confirm destination account eligibility and whether invoice payment instructions expose real or virtual account numbers before execution.",
+      ]),
+      mercurySensitiveRead("invoices.download", api("GET", "/ar/invoices/{invoiceId}/pdf"), [
+        "Invoice PDF responses are binary downloads and must not be printed to agent chat or logs.",
+      ]),
+      mercuryRead("invoices.get", ["accounts:read"], api("GET", "/ar/invoices/{invoiceId}")),
+      mercuryRead("invoices.list", ["accounts:read"], api("GET", "/ar/invoices")),
+      mercuryMetadata("invoices.update", api("POST", "/ar/invoices/{invoiceId}")),
+      authOperation("oauth.startFlow", oauth("GET", "/oauth2/auth"), ["MERCURY_OAUTH_CLIENT_ID", "MERCURY_OAUTH_REDIRECT_URI"], [
+        "Require state, redirect URI allowlist validation, and PKCE where configured before redirect generation.",
+      ]),
+      authOperation("oauth.obtainToken", oauth("POST", "/oauth2/token"), MERCURY_OAUTH_ENV, [
+        "Token exchange must store tokens only in the secrets vault and never print access or refresh tokens.",
+      ]),
+      mercuryMetadata("onboarding.submit", api("POST", "/submit-onboarding-data"), [
+        "Onboarding payloads contain applicant data and require a dedicated schema/redaction review before execution.",
+      ]),
+      mercuryRead("organization.get", ["accounts:read"], api("GET", "/organization")),
+      write("payments.create", "money_movement", ["transactions:write"], MERCURY_ENV, ["sandbox", "production"], api("POST", "/account/{accountId}/transactions"), [
         "Require provider recipientId before provider submission.",
         "Map provider-agnostic rail to Mercury paymentMethod ach, check, or domesticWire only.",
         "Reject Mercury payment amounts below 0.01 before provider submission.",
         "Require purpose when mapped Mercury paymentMethod is domesticWire.",
         "Verify amount units and recipient requirements against Mercury sandbox before enabling.",
       ]),
-      read("payments.status", ["transactions:read"], MERCURY_ENV, { method: "GET", path: "/api/v1/transaction/{transactionId}" }),
-      read("cards.list", ["cards:write"], MERCURY_ENV, { method: "GET", path: "/api/v1/cards" }),
-      card("cards.createVirtual", ["cards:write"], MERCURY_ENV, ["sandbox", "production"], undefined, [
-        "Confirm the newly documented card issue endpoint and sandbox lifecycle semantics before any live execution.",
+      write("payments.requestSendMoney", "money_movement", ["RequestSendMoney"], MERCURY_ENV, ["sandbox", "production"], api("POST", "/account/{accountId}/request-send-money"), [
+        "This creates an approval request rather than immediately sending funds; still require local approval/idempotency/audit before provider submission.",
+        "Use a Mercury custom token with the RequestSendMoney scope for approval-queue payment creation.",
       ]),
-      card("cards.updateSettings", ["cards:write"], MERCURY_ENV, ["sandbox", "production"]),
-      card("cards.freeze", ["cards:write"], MERCURY_ENV, ["sandbox", "production"]),
-      card("cards.unfreeze", ["cards:write"], MERCURY_ENV, ["sandbox", "production"]),
-      card("cards.terminate", ["cards:write"], MERCURY_ENV, ["sandbox", "production"]),
-      unsupported("cards.revealSensitiveData", "sensitive_read"),
-      webhook("webhooks.subscribe", MERCURY_ENV, ["sandbox", "production"], [
+      mercuryRead("payments.status", ["transactions:read"], api("GET", "/transaction/{transactionId}")),
+      mercurySensitiveRead("recipients.attachments.list", api("GET", "/recipients/attachments"), [
+        "Recipient attachment records include presigned tax-form download URLs; redact URLs and never print them to agent-visible output.",
+      ]),
+      mercurySensitiveWrite("recipients.attachments.upload", api("POST", "/recipient/{recipientId}/attachments"), [
+        "Recipient tax form uploads use multipart/form-data and must avoid logging file names, contents, or signed upload metadata.",
+      ]),
+      mercuryMetadata("recipients.create", api("POST", "/recipients"), [
+        "Confirm recipient rail/account data validation and tax-form requirements before execution.",
+      ]),
+      mercuryRead("recipients.get", ["transactions:read"], api("GET", "/recipient/{recipientId}")),
+      mercuryRead("recipients.list", ["transactions:read"], api("GET", "/recipients")),
+      mercuryMetadata("recipients.update", api("POST", "/recipient/{recipientId}")),
+      mercurySensitiveRead("safes.download", api("GET", "/safes/{safeRequestId}/document"), [
+        "SAFE document responses are binary downloads and must not be printed to agent chat or logs.",
+      ]),
+      mercuryRead("safes.get", ["accounts:read"], api("GET", "/safes/{safeRequestId}")),
+      mercuryRead("safes.list", ["accounts:read"], api("GET", "/safes")),
+      mercuryRead("sendMoneyApprovalRequests.get", ["transactions:read"], api("GET", "/request-send-money/{requestId}")),
+      mercuryRead("sendMoneyApprovalRequests.list", ["transactions:read"], api("GET", "/request-send-money")),
+      mercurySensitiveRead("statements.download", api("GET", "/statements/{statementId}/pdf"), [
+        "Statement PDF responses are binary downloads and must not be printed to agent chat or logs.",
+      ]),
+      mercurySensitiveWrite("transactions.attachments.upload", api("POST", "/transaction/{transactionId}/attachments"), [
+        "Transaction attachment uploads use multipart/form-data and must avoid logging file names, contents, or signed upload metadata.",
+      ]),
+      mercuryRead("transactions.get", ["transactions:read"], api("GET", "/transaction/{transactionId}")),
+      mercuryRead("transactions.list", ["transactions:read"], api("GET", "/transactions")),
+      mercuryMetadata("transactions.update", api("PATCH", "/transaction/{transactionId}")),
+      mercuryRead("treasury.accounts.list", ["accounts:read"], api("GET", "/treasury")),
+      mercurySensitiveRead("treasury.statements.list", api("GET", "/treasury/{treasuryId}/statements"), [
+        "Treasury statements include monthly statements, trade confirmations, and tax documents; redact document URLs and binary content.",
+      ]),
+      mercuryRead("treasury.transactions.list", ["transactions:read"], api("GET", "/treasury/{treasuryId}/transactions")),
+      mercuryRead("users.get", ["accounts:read"], api("GET", "/users/{userId}")),
+      mercuryRead("users.list", ["accounts:read"], api("GET", "/users")),
+      webhook("webhooks.create", MERCURY_ENV, ["sandbox", "production"], [
         "Verify Mercury webhook payload signatures and event replay behavior before trusting provider state.",
-      ]),
+      ], api("POST", "/webhooks")),
+      webhook("webhooks.delete", MERCURY_ENV, ["sandbox", "production"], [
+        "Webhook deletion mutates external event delivery state and must be approved by a human.",
+      ], api("DELETE", "/webhooks/{webhookEndpointId}")),
+      mercuryRead("webhooks.get", ["accounts:read"], api("GET", "/webhooks/{webhookEndpointId}")),
+      mercuryRead("webhooks.list", ["accounts:read"], api("GET", "/webhooks")),
+      webhook("webhooks.subscribe", MERCURY_ENV, ["sandbox", "production"], [
+        "Compatibility alias for creating webhook subscriptions; prefer webhooks.create for official Mercury API parity.",
+      ], api("POST", "/webhooks")),
+      webhook("webhooks.update", MERCURY_ENV, ["sandbox", "production"], [
+        "Webhook updates can reactivate failed endpoints; verify status semantics before execution.",
+      ], api("POST", "/webhooks/{webhookEndpointId}")),
+      webhook("webhooks.verify", MERCURY_ENV, ["sandbox", "production"], [
+        "Webhook verification sends a test event and should be routed through an explicit operator approval.",
+      ], api("POST", "/webhooks/{webhookEndpointId}/verify")),
     ],
   },
   {
@@ -284,6 +472,8 @@ export function planProviderOperation(input: ProviderOperationPlanInput): Provid
   const env = preflightProviderEnv(input.providerId, input.env ?? {});
   const grantedScopes = input.grantedScopes ?? [];
   const missingScopes = operation.requiredScopes.filter((scope) => !grantedScopes.includes(scope));
+  const acceptedEnvKeys = acceptedEnvKeysForOperation(operation, env.allowedKeys, input.environment);
+  const missingEnvKeys = missingRequiredEnvKeysForOperation(operation, env.allowedKeys, input.environment);
   const scopeSupport = operation.scopeArea
     ? preflightProviderScopes(provider, operation.scopeArea, provider.scopes[operation.scopeArea])
     : undefined;
@@ -297,7 +487,7 @@ export function planProviderOperation(input: ProviderOperationPlanInput): Provid
   if (missingScopes.length > 0) {
     reasons.push("Missing required provider scopes.");
   }
-  if (env.missingRequiredKeys.some((key) => operation.requiredEnv.includes(key))) {
+  if (missingEnvKeys.length > 0) {
     reasons.push("Missing required provider environment keys.");
   }
   if (operation.support !== "verified") {
@@ -316,12 +506,62 @@ export function planProviderOperation(input: ProviderOperationPlanInput): Provid
     requiredScopes: operation.requiredScopes,
     grantedScopes,
     requiredEnv: operation.requiredEnv,
-    acceptedEnvKeys: env.allowedKeys.filter((key) => operation.requiredEnv.includes(key)),
+    acceptedEnvKeys,
     missingScopes,
-    missingEnvKeys: env.missingRequiredKeys.filter((key) => operation.requiredEnv.includes(key)),
+    missingEnvKeys,
     reasons,
     releaseGates: operation.releaseGates,
   };
+}
+
+function missingRequiredEnvKeysForOperation(
+  operation: ProviderOperationContract,
+  allowedKeys: readonly string[],
+  environment: ProviderEnvironment,
+): readonly string[] {
+  const required = operation.requiredEnv;
+  const missing: string[] = [];
+  const mercuryApiAliases = new Set<string>(MERCURY_ENV);
+  const usesMercuryApiKeyGroup = required.some((key) => mercuryApiAliases.has(key));
+
+  if (usesMercuryApiKeyGroup) {
+    const accepted = acceptedMercuryApiKeys(allowedKeys, environment);
+    if (accepted.length === 0) {
+      missing.push(environment === "sandbox" ? "MERCURY_SANDBOX_API_KEY" : "MERCURY_PRODUCTION_API_KEY");
+    }
+  }
+
+  const allowed = new Set(allowedKeys);
+  for (const key of required) {
+    if (mercuryApiAliases.has(key)) continue;
+    if (!allowed.has(key)) missing.push(key);
+  }
+
+  return missing;
+}
+
+function acceptedEnvKeysForOperation(
+  operation: ProviderOperationContract,
+  allowedKeys: readonly string[],
+  environment: ProviderEnvironment,
+): readonly string[] {
+  const accepted = new Set<string>();
+  const required = operation.requiredEnv;
+  const mercuryApiAliases = new Set<string>(MERCURY_ENV);
+  if (required.some((key) => mercuryApiAliases.has(key))) {
+    for (const key of acceptedMercuryApiKeys(allowedKeys, environment)) accepted.add(key);
+  }
+  for (const key of allowedKeys) {
+    if (mercuryApiAliases.has(key)) continue;
+    if (required.includes(key)) accepted.add(key);
+  }
+  return [...accepted];
+}
+
+function acceptedMercuryApiKeys(allowedKeys: readonly string[], environment: ProviderEnvironment): readonly string[] {
+  const allowed = new Set(allowedKeys);
+  const envSpecific = environment === "sandbox" ? "MERCURY_SANDBOX_API_KEY" : "MERCURY_PRODUCTION_API_KEY";
+  return ["MERCURY_API_KEY", envSpecific].filter((key) => allowed.has(key));
 }
 
 export function assertProviderConformanceContract(contract: ProviderConformanceContract): void {
@@ -350,6 +590,99 @@ function source(title: string, url: string): ProviderDocSource {
   return { title, url, checkedAt };
 }
 
+function api(method: ProviderEndpointContract["method"], path: string): ProviderEndpointContract {
+  return { method, path: `/api/v1${path}` };
+}
+
+function oauth(method: ProviderEndpointContract["method"], path: string): ProviderEndpointContract {
+  return { method, path, server: "oauth2" };
+}
+
+function mercuryRead(
+  operation: ProviderOperationKind,
+  requiredScopes: readonly string[],
+  endpoint: ProviderEndpointContract,
+  releaseGates: readonly string[] = [],
+): ProviderOperationContract {
+  const contract = read(operation, requiredScopes, MERCURY_ENV, endpoint);
+  return {
+    ...contract,
+    releaseGates: releaseGates.length > 0 ? [...contract.releaseGates, ...releaseGates] : contract.releaseGates,
+  };
+}
+
+function mercuryMetadata(
+  operation: ProviderOperationKind,
+  endpoint: ProviderEndpointContract,
+  releaseGates: readonly string[] = [],
+): ProviderOperationContract {
+  return metadataWrite(operation, [], MERCURY_ENV, ["sandbox", "production"], endpoint, [
+    "Confirm Mercury custom-token scope requirements for this endpoint before execution.",
+    ...releaseGates,
+  ]);
+}
+
+function mercurySensitiveRead(
+  operation: ProviderOperationKind,
+  endpoint: ProviderEndpointContract,
+  releaseGates: readonly string[] = [],
+): ProviderOperationContract {
+  return {
+    operation,
+    effect: "sensitive_read",
+    support: "documented_unverified",
+    environments: ["sandbox", "production"],
+    scopeArea: "read",
+    requiredScopes: ["accounts:read"],
+    requiredEnv: MERCURY_ENV,
+    requiresApproval: true,
+    requiresIdempotencyKey: false,
+    requiresRequestSigning: false,
+    requiresSCA: false,
+    endpoint,
+    releaseGates: [
+      "Verify document/download response handling, signed URL redaction, and binary artifact storage before enabling.",
+      ...releaseGates,
+    ],
+  };
+}
+
+function mercurySensitiveWrite(
+  operation: ProviderOperationKind,
+  endpoint: ProviderEndpointContract,
+  releaseGates: readonly string[] = [],
+): ProviderOperationContract {
+  return metadataWrite(operation, [], MERCURY_ENV, ["sandbox", "production"], endpoint, [
+    "Confirm multipart upload behavior and redact local filenames, file contents, and provider storage URLs.",
+    ...releaseGates,
+  ]);
+}
+
+function authOperation(
+  operation: ProviderOperationKind,
+  endpoint: ProviderEndpointContract,
+  requiredEnv: readonly string[],
+  releaseGates: readonly string[] = [],
+): ProviderOperationContract {
+  return {
+    operation,
+    effect: "auth_flow",
+    support: "documented_unverified",
+    environments: ["sandbox", "production"],
+    requiredScopes: [],
+    requiredEnv,
+    requiresApproval: true,
+    requiresIdempotencyKey: true,
+    requiresRequestSigning: false,
+    requiresSCA: false,
+    endpoint,
+    releaseGates: [
+      "Verify OAuth client registration, redirect URI allowlisting, PKCE/state handling, and token storage before enabling.",
+      ...releaseGates,
+    ],
+  };
+}
+
 function read(
   operation: ProviderOperationKind,
   requiredScopes: readonly string[],
@@ -372,6 +705,31 @@ function read(
     requiresSCA,
     ...(endpoint ? { endpoint } : {}),
     releaseGates: ["Verify response schema, pagination, account scoping, and redaction before trusting provider-backed reads."],
+  };
+}
+
+function metadataWrite(
+  operation: ProviderOperationKind,
+  requiredScopes: readonly string[],
+  requiredEnv: readonly string[],
+  environments: readonly ProviderEnvironment[],
+  endpoint?: ProviderEndpointContract,
+  releaseGates: readonly string[] = [],
+  requiresRequestSigning = false,
+): ProviderOperationContract {
+  return {
+    operation,
+    effect: "metadata_write",
+    support: "documented_unverified",
+    environments,
+    requiredScopes,
+    requiredEnv,
+    requiresApproval: true,
+    requiresIdempotencyKey: true,
+    requiresRequestSigning,
+    requiresSCA: false,
+    ...(endpoint ? { endpoint } : {}),
+    releaseGates: releaseGates.length > 0 ? releaseGates : ["Verify request schema, irreversible side effects, and provider status mapping before execution."],
   };
 }
 
@@ -457,8 +815,11 @@ function webhook(
   requiredEnv: readonly string[],
   environments: readonly ProviderEnvironment[],
   releaseGates: readonly string[],
+  endpointOrRequiresRequestSigning?: ProviderEndpointContract | boolean,
   requiresRequestSigning = false,
 ): ProviderOperationContract {
+  const endpoint = typeof endpointOrRequiresRequestSigning === "object" ? endpointOrRequiresRequestSigning : undefined;
+  const requestSigning = typeof endpointOrRequiresRequestSigning === "boolean" ? endpointOrRequiresRequestSigning : requiresRequestSigning;
   return {
     operation,
     effect: "webhook",
@@ -468,8 +829,9 @@ function webhook(
     requiredEnv,
     requiresApproval: true,
     requiresIdempotencyKey: true,
-    requiresRequestSigning,
+    requiresRequestSigning: requestSigning,
     requiresSCA: false,
+    ...(endpoint ? { endpoint } : {}),
     releaseGates,
   };
 }

@@ -5,8 +5,14 @@
 ### Added
 
 - Shared provider operation registry derived from conformance contracts, exposed
-  through SDK exports, `banking ops list`, `banking ops describe`, and MCP
-  operation discovery tools.
+  through SDK exports, `banking ops list`, `banking ops describe`, `banking ops
+  plan`, and MCP operation discovery/planning tools.
+- Mercury full-surface descriptor coverage for the current official API
+  families: accounts, account statements, account-scoped transactions/cards,
+  organization-wide transactions/cards, recipients, request-send-money
+  approvals, internal transfers, categories, customers, invoices, attachments,
+  events, organization, users, credit, treasury, SAFE requests, statements,
+  webhooks, onboarding, and OAuth.
 - MCP request-envelope parity for card unfreeze and terminate lifecycle actions.
 
 ### Changed

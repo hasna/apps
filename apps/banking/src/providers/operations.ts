@@ -15,7 +15,8 @@ export type BankingOperationSafetyClass =
   | "money_movement"
   | "card_lifecycle"
   | "sensitive_read"
-  | "webhook_mutation";
+  | "webhook_mutation"
+  | "auth_flow";
 
 export type BankingOperationExecutionMode = "implemented_read" | "dry_run_only" | "conformance_only" | "unsupported";
 
@@ -79,6 +80,8 @@ const IMPLEMENTED_CLI_OPERATIONS: ReadonlySet<ProviderOperationKind> = new Set([
 ]);
 
 const OPERATION_CLI_COMMANDS: Readonly<Partial<Record<ProviderOperationKind, readonly string[]>>> = {
+  "accountCards.list": ["cards", "list"],
+  "accountTransactions.list": ["transactions", "list"],
   "accounts.list": ["accounts", "list"],
   "balances.get": ["balances", "get"],
   "transactions.list": ["transactions", "list"],
@@ -175,7 +178,7 @@ export function mcpToolNameForOperation(_providerId: ProviderId, operation: Prov
 }
 
 function descriptorFromContract(providerId: ProviderId, contract: ProviderOperationContract): BankingOperationDescriptor {
-  const [resource, action] = contract.operation.split(".");
+  const [resource, ...actionParts] = contract.operation.split(".");
   const operationId = `${providerId}.${contract.operation}`;
   const safetyClass = safetyClassForEffect(contract.effect);
   return {
@@ -183,7 +186,7 @@ function descriptorFromContract(providerId: ProviderId, contract: ProviderOperat
     operationId,
     operation: contract.operation,
     resource: resource ?? contract.operation,
-    action: action ?? "run",
+    action: actionParts.join(".") || "run",
     safetyClass,
     executionMode: executionModeFor(operationId, contract),
     support: contract.support,
@@ -208,6 +211,8 @@ function safetyClassForEffect(effect: ProviderOperationEffect): BankingOperation
   switch (effect) {
     case "read":
       return "read";
+    case "metadata_write":
+      return "metadata_write";
     case "money_movement":
       return "money_movement";
     case "card_side_effect":
@@ -216,6 +221,8 @@ function safetyClassForEffect(effect: ProviderOperationEffect): BankingOperation
       return "sensitive_read";
     case "webhook":
       return "webhook_mutation";
+    case "auth_flow":
+      return "auth_flow";
   }
 }
 
@@ -250,8 +257,8 @@ function mcpSurfaceFor(providerId: ProviderId, operation: ProviderOperationKind)
 }
 
 function fallbackCliCommand(operation: ProviderOperationKind): readonly string[] {
-  const [resource, action] = operation.split(".");
-  return [resource ?? operation, cliAction(action ?? "run")];
+  const [resource, ...actionParts] = operation.split(".");
+  return [resource ?? operation, ...(actionParts.length > 0 ? actionParts.map(cliAction) : ["run"])];
 }
 
 function cliAction(action: string): string {

@@ -20,14 +20,23 @@ export interface ProviderScopePreflight {
 }
 
 const PROVIDER_ENV_ALLOWLIST: Readonly<Record<ProviderId, readonly string[]>> = {
-  mercury: ["MERCURY_API_KEY", "MERCURY_SANDBOX_API_KEY", "MERCURY_PRODUCTION_API_KEY"],
+  mercury: [
+    "MERCURY_API_KEY",
+    "MERCURY_SANDBOX_API_KEY",
+    "MERCURY_PRODUCTION_API_KEY",
+    "MERCURY_OAUTH_CLIENT_ID",
+    "MERCURY_OAUTH_CLIENT_SECRET",
+    "MERCURY_OAUTH_REDIRECT_URI",
+  ],
   bunq: ["BUNQ_API_KEY", "BUNQ_DEVICE_ID", "BUNQ_PRIVATE_KEY"],
   "revolut-business": ["REVOLUT_CLIENT_ID", "REVOLUT_PRIVATE_KEY", "REVOLUT_REFRESH_TOKEN"],
   "erste-bcr": ["ERSTE_CLIENT_ID", "ERSTE_CLIENT_SECRET", "ERSTE_REDIRECT_URI"],
 };
 
 const PROVIDER_REQUIRED_ENV_GROUPS: Readonly<Record<ProviderId, readonly (readonly string[])[]>> = {
-  mercury: [["MERCURY_API_KEY", "MERCURY_SANDBOX_API_KEY", "MERCURY_PRODUCTION_API_KEY"]],
+  mercury: [
+    ["MERCURY_API_KEY", "MERCURY_SANDBOX_API_KEY", "MERCURY_PRODUCTION_API_KEY"],
+  ],
   bunq: [["BUNQ_API_KEY"], ["BUNQ_PRIVATE_KEY"]],
   "revolut-business": [["REVOLUT_CLIENT_ID"], ["REVOLUT_PRIVATE_KEY"]],
   "erste-bcr": [["ERSTE_CLIENT_ID"]],

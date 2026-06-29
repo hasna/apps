@@ -5,6 +5,7 @@ import {
   moneyInput,
   parseProviderEnvironment,
   parseProviderId,
+  planProviderOperation,
   requireOperationDescriptor,
   type BankingPolicy,
   type CurrencyCode,
@@ -25,6 +26,7 @@ export interface McpToolDescriptor {
 const TOOL_DESCRIPTORS: readonly McpToolDescriptor[] = [
   { name: "banking_ops_list", status: "implemented", description: "List provider operation descriptors." },
   { name: "banking_ops_describe", status: "implemented", description: "Describe one provider operation descriptor." },
+  { name: "banking_ops_plan", status: "implemented", description: "Create a safe conformance plan for one provider operation." },
   { name: "banking_providers_list", status: "implemented", description: "List provider capability cards." },
   { name: "banking_provider_get", status: "implemented", description: "Get one provider capability card." },
   { name: "banking_accounts_list", status: "provider_backed_pending", description: "List provider accounts once adapters are implemented." },
@@ -78,6 +80,19 @@ export function runMcpTool(name: string, input: Readonly<Record<string, unknown>
       };
     case "banking_ops_describe":
       return { operation: requireOperationDescriptor(requiredString(input.operationId, "operationId")) };
+    case "banking_ops_plan": {
+      const descriptor = requireOperationDescriptor(requiredString(input.operationId, "operationId"));
+      return {
+        operation: descriptor,
+        plan: planProviderOperation({
+          providerId: descriptor.providerId,
+          operation: descriptor.operation,
+          environment: parseProviderEnvironment(requiredString(input.environment, "environment"), "environment"),
+          grantedScopes: stringArray(input.grantedScopes),
+          env: Object.fromEntries(stringArray(input.envKeys).map((key) => [key, "set"])),
+        }),
+      };
+    }
     case "banking_providers_list":
       return { providers: client.listProviders() };
     case "banking_provider_get":
@@ -201,6 +216,13 @@ function actor(input: Readonly<Record<string, unknown>>) {
 
 function providerId(value: unknown): ProviderId {
   return parseProviderId(requiredString(value, "providerId"), "providerId");
+}
+
+function stringArray(value: unknown): readonly string[] {
+  if (value === undefined) return [];
+  if (typeof value === "string") return value.split(",").map((entry) => entry.trim()).filter(Boolean);
+  if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) return value;
+  throw new Error("Expected string array input.");
 }
 
 function cardLifecycle(input: Readonly<Record<string, unknown>>, kind: "freeze" | "unfreeze" | "terminate", fallbackReason: string) {

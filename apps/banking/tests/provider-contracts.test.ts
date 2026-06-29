@@ -59,6 +59,104 @@ describe("provider conformance contracts", () => {
     expect(gates).toContain("purpose");
   });
 
+  test("Mercury contract covers the current official API families as plan-only descriptors", () => {
+    const contract = getProviderConformanceContract("mercury");
+    const operationIds = contract?.operations.map((operation) => operation.operation) ?? [];
+    const internalTransfer = contract?.operations.find((candidate) => candidate.operation === "internalTransfers.create");
+    const attachment = getOperationDescriptor("mercury.attachments.get");
+    const recipientAttachments = getOperationDescriptor("mercury.recipients.attachments.list");
+    const webhookVerify = getOperationDescriptor("mercury.webhooks.verify");
+
+    expect(operationIds.length).toBeGreaterThanOrEqual(70);
+    expect(operationIds).toEqual(expect.arrayContaining([
+      "accountStatements.download",
+      "attachments.get",
+      "categories.create",
+      "customers.create",
+      "events.list",
+      "invoices.download",
+      "internalTransfers.create",
+      "oauth.startFlow",
+      "onboarding.submit",
+      "payments.requestSendMoney",
+      "recipients.attachments.upload",
+      "safes.download",
+      "sendMoneyApprovalRequests.list",
+      "treasury.statements.list",
+      "users.list",
+      "webhooks.verify",
+    ]));
+    expect(internalTransfer).toMatchObject({
+      effect: "money_movement",
+      endpoint: { method: "POST", path: "/api/v1/transfer" },
+      requiresApproval: true,
+      requiresIdempotencyKey: true,
+    });
+    expect(attachment).toMatchObject({
+      safetyClass: "sensitive_read",
+      requiresOperationPlan: true,
+      endpoint: { method: "GET", path: "/api/v1/ar/attachments/{attachmentId}" },
+    });
+    expect(recipientAttachments).toMatchObject({
+      safetyClass: "sensitive_read",
+      requiresOperationPlan: true,
+      endpoint: { method: "GET", path: "/api/v1/recipients/attachments" },
+    });
+    expect(webhookVerify).toMatchObject({
+      safetyClass: "webhook_mutation",
+      requiresOperationPlan: true,
+      endpoint: { method: "POST", path: "/api/v1/webhooks/{webhookEndpointId}/verify" },
+    });
+  });
+
+  test("Mercury planner handles API-key aliases and OAuth env requirements per operation", () => {
+    const apiPlan = planProviderOperation({
+      providerId: "mercury",
+      operation: "transactions.list",
+      environment: "production",
+      grantedScopes: ["transactions:read"],
+      env: { MERCURY_PRODUCTION_API_KEY: "set" },
+    });
+    const oauthPlan = planProviderOperation({
+      providerId: "mercury",
+      operation: "oauth.startFlow",
+      environment: "production",
+      env: { MERCURY_OAUTH_CLIENT_ID: "set" },
+    });
+    const wrongEnvironmentKeyPlan = planProviderOperation({
+      providerId: "mercury",
+      operation: "transactions.list",
+      environment: "production",
+      grantedScopes: ["transactions:read"],
+      env: { MERCURY_SANDBOX_API_KEY: "set" },
+    });
+
+    expect(apiPlan.missingEnvKeys).toEqual([]);
+    expect(apiPlan.acceptedEnvKeys).toEqual(["MERCURY_PRODUCTION_API_KEY"]);
+    expect(wrongEnvironmentKeyPlan.status).toBe("blocked");
+    expect(wrongEnvironmentKeyPlan.acceptedEnvKeys).toEqual([]);
+    expect(wrongEnvironmentKeyPlan.missingEnvKeys).toContain("MERCURY_PRODUCTION_API_KEY");
+    expect(oauthPlan.status).toBe("blocked");
+    expect(oauthPlan.missingEnvKeys).toContain("MERCURY_OAUTH_REDIRECT_URI");
+    expect(oauthPlan.missingEnvKeys).not.toContain("MERCURY_API_KEY");
+  });
+
+  test("Mercury request-send-money uses the approval-specific scope", () => {
+    const operation = getProviderConformanceContract("mercury")?.operations.find((candidate) => candidate.operation === "payments.requestSendMoney");
+    const plan = planProviderOperation({
+      providerId: "mercury",
+      operation: "payments.requestSendMoney",
+      environment: "sandbox",
+      grantedScopes: ["RequestSendMoney"],
+      env: { MERCURY_SANDBOX_API_KEY: "set" },
+    });
+
+    expect(operation?.requiredScopes).toEqual(["RequestSendMoney"]);
+    expect(plan.status).toBe("ready_for_conformance");
+    expect(plan.missingScopes).toEqual([]);
+    expect(operation?.releaseGates.join(" ")).toContain("RequestSendMoney");
+  });
+
   test("Mercury and bunq do not expose sensitive card data without exact endpoint evidence", () => {
     for (const providerId of ["mercury", "bunq"] as const) {
       const provider = getProvider(providerId);
@@ -156,6 +254,7 @@ describe("provider conformance contracts", () => {
     const mercuryOperations = listOperationDescriptors({ providerId: "mercury" });
     const freeze = getOperationDescriptor("mercury.cards.freeze");
     const accounts = getOperationDescriptor("mercury.accounts.list");
+    const accountCards = getOperationDescriptor("mercury.accountCards.list");
 
     expect(mercuryOperations.map((operation) => operation.operationId)).toContain("mercury.cards.freeze");
     expect(freeze).toMatchObject({
@@ -177,6 +276,13 @@ describe("provider conformance contracts", () => {
       providerSideEffectsEnabled: false,
       requiresOperationPlan: false,
     });
+    expect(accountCards).toMatchObject({
+      executionMode: "conformance_only",
+      liveReadEnabled: false,
+      providerSideEffectsEnabled: false,
+      endpoint: { method: "GET", path: "/api/v1/account/{accountId}/cards" },
+      mcp: { exposed: false },
+    });
   });
 
   test("operation registry maps descriptors to the real CLI command surface", () => {
@@ -196,6 +302,9 @@ describe("provider conformance contracts", () => {
         if (operation.effect === "money_movement" || operation.effect === "card_side_effect") {
           expect(operation.requiresApproval).toBe(true);
           expect(operation.requiresIdempotencyKey).toBe(true);
+        }
+        if (operation.effect !== "read" && operation.support !== "unsupported") {
+          expect(operation.requiresApproval).toBe(true);
         }
         if (operation.operation.startsWith("cards.") && provider.cardOperations.productionOnly) {
           expect(operation.environments).not.toContain("sandbox");

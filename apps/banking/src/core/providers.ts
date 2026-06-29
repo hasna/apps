@@ -6,12 +6,25 @@ export type ProviderCardOperation = "createVirtual" | "updateSettings" | "freeze
 
 export interface BankingProviderCapabilities {
   readonly accounts: boolean;
+  readonly attachments: boolean;
   readonly balances: boolean;
+  readonly categories: boolean;
+  readonly credit: boolean;
+  readonly customers: boolean;
+  readonly events: boolean;
+  readonly invoices: boolean;
   readonly transactions: boolean;
   readonly counterparties: boolean;
+  readonly oauth: boolean;
+  readonly onboarding: boolean;
+  readonly organization: boolean;
   readonly payments: boolean;
   readonly paymentDrafts: boolean;
   readonly internalTransfers: boolean;
+  readonly safes: boolean;
+  readonly statements: boolean;
+  readonly treasury: boolean;
+  readonly users: boolean;
   readonly cards: boolean;
   readonly webhooks: boolean;
   readonly sandbox: boolean;

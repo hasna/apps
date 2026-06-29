@@ -73,6 +73,40 @@ describe("banking CLI scaffold", () => {
     expect(parsed.operation.providerSideEffectsEnabled).toBe(false);
   });
 
+  test("ops plan returns non-executable Mercury conformance plans", async () => {
+    const originalLog = console.log;
+    let output = "";
+    console.log = (...args: unknown[]) => {
+      output += args.join(" ");
+    };
+    try {
+      expect(await runCli([
+        "ops",
+        "plan",
+        "mercury.internalTransfers.create",
+        "--environment",
+        "sandbox",
+        "--scopes",
+        "transactions:write",
+        "--env-keys",
+        "MERCURY_API_KEY",
+        "--json",
+      ])).toBe(0);
+    } finally {
+      console.log = originalLog;
+    }
+
+    const parsed = JSON.parse(output) as {
+      readonly operation: { readonly operationId: string; readonly requiresOperationPlan: boolean };
+      readonly plan: { readonly status: string; readonly executable: boolean; readonly reasons: readonly string[] };
+    };
+    expect(parsed.operation.operationId).toBe("mercury.internalTransfers.create");
+    expect(parsed.operation.requiresOperationPlan).toBe(true);
+    expect(parsed.plan.status).toBe("ready_for_conformance");
+    expect(parsed.plan.executable).toBe(false);
+    expect(parsed.plan.reasons).toContain("Provider operation is not verified for live execution; only conformance planning is allowed.");
+  });
+
   test("payment request envelope exits successfully", async () => {
     const originalLog = console.log;
     let output = "";

@@ -6,6 +6,7 @@ describe("banking-mcp scaffold", () => {
   test("declares initial agent-safe tool names", () => {
     expect(listMcpTools()).toContain("banking_providers_list");
     expect(listMcpTools()).toContain("banking_ops_list");
+    expect(listMcpTools()).toContain("banking_ops_plan");
     expect(listMcpTools()).toContain("banking_payment_request");
     expect(listMcpTools()).toContain("banking_card_freeze_request");
     expect(listMcpTools()).toContain("banking_card_unfreeze_request");
@@ -54,6 +55,22 @@ describe("banking-mcp scaffold", () => {
       if (!descriptor?.mcp.exposed || !descriptor.mcp.toolName) throw new Error(`operation is not exposed: ${descriptor?.operationId ?? "missing"}`);
       expect(tools).toContain(descriptor.mcp.toolName);
     }
+  });
+
+  test("local ops plan dispatch returns a non-executable conformance plan", () => {
+    const result = runMcpTool("banking_ops_plan", {
+      operationId: "mercury.webhooks.verify",
+      environment: "sandbox",
+      envKeys: ["MERCURY_API_KEY"],
+    }) as {
+      readonly operation: { readonly operationId: string; readonly requiresOperationPlan: boolean };
+      readonly plan: { readonly status: string; readonly executable: boolean };
+    };
+
+    expect(result.operation.operationId).toBe("mercury.webhooks.verify");
+    expect(result.operation.requiresOperationPlan).toBe(true);
+    expect(result.plan.status).toBe("ready_for_conformance");
+    expect(result.plan.executable).toBe(false);
   });
 
   test("local payment request dispatch creates an approval-gated envelope", () => {

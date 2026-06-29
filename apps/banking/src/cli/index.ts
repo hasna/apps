@@ -6,6 +6,7 @@ import {
   moneyInput,
   parseProviderEnvironment,
   parseProviderId,
+  planProviderOperation,
   requireOperationDescriptor,
   type BankingOperationSafetyClass,
   type MercuryReadClientInput,
@@ -39,6 +40,7 @@ Usage:
   banking --version
   banking ops list [--provider <provider>] [--safety <class>] [--include-unsupported true] [--json]
   banking ops describe <provider.operation> [--json]
+  banking ops plan <provider.operation> --environment <sandbox|production> [--scopes <scope,...>] [--env-keys <KEY,...>] [--json]
   banking providers list [--json]
   banking providers show <provider> [--json]
   banking accounts list --provider <provider> [--live true --environment <sandbox|production> --secret-key <key>] [--limit <n>] [--json]
@@ -130,6 +132,21 @@ export async function runCli(argv: readonly string[] = Bun.argv.slice(2), runtim
 
     if (args[0] === "ops" && args[1] === "describe") {
       emit({ operation: requireOperationDescriptor(requiredPositional(args, 2, "operation")) }, parsed.json);
+      return 0;
+    }
+
+    if (args[0] === "ops" && args[1] === "plan") {
+      const descriptor = requireOperationDescriptor(requiredPositional(args, 2, "operation"));
+      emit({
+        operation: descriptor,
+        plan: planProviderOperation({
+          providerId: descriptor.providerId,
+          operation: descriptor.operation,
+          environment: parseProviderEnvironment(requiredOption(parsed, "environment")),
+          grantedScopes: csvOption(parsed, "scopes", "scope"),
+          env: Object.fromEntries(csvOption(parsed, "env-keys", "env-key").map((key) => [key, "set"])),
+        }),
+      }, parsed.json);
       return 0;
     }
 
@@ -410,10 +427,16 @@ function optionalOption(parsed: ParsedArgs, key: string, targetKey: string): Rec
   return value ? { [targetKey]: value } : {};
 }
 
+function csvOption(parsed: ParsedArgs, key: string, singularKey?: string): readonly string[] {
+  const value = option(parsed, key) ?? (singularKey ? option(parsed, singularKey) : undefined);
+  if (!value) return [];
+  return value.split(",").map((entry) => entry.trim()).filter(Boolean);
+}
+
 function optionalSafetyClass(parsed: ParsedArgs): { readonly safetyClass?: BankingOperationSafetyClass } {
   const safetyClass = option(parsed, "safety");
   if (!safetyClass) return {};
-  if (!["read", "metadata_write", "money_movement", "card_lifecycle", "sensitive_read", "webhook_mutation"].includes(safetyClass)) {
+  if (!["read", "metadata_write", "money_movement", "card_lifecycle", "sensitive_read", "webhook_mutation", "auth_flow"].includes(safetyClass)) {
     throw new Error(`Unknown safety class: ${safetyClass}`);
   }
   return { safetyClass: safetyClass as BankingOperationSafetyClass };
