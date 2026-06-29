@@ -60,7 +60,7 @@ brains storage push
 brains storage pull
 ```
 
-Set `HASNA_BRAINS_DATABASE_URL` for a direct PostgreSQL connection, or configure `~/.hasna/brains/storage/config.json` for the brains RDS host settings.
+Set `HASNA_BRAINS_DATABASE_URL` for a direct PostgreSQL connection, or configure `~/.hasna/brains/storage/config.json` with `postgres` host settings.
 Legacy cloud aliases are not used. Configure remote storage with the storage
 environment variables above.
 

@@ -18,6 +18,7 @@ import { gatherFromConversations } from "../lib/gatherers/conversations.js";
 import { gatherFromSessions } from "../lib/gatherers/sessions.js";
 import type { TrainingExample } from "../lib/gatherers/types.js";
 import { getPackageVersion } from "../lib/package-metadata.js";
+import { ensurePrivateDirectory, writePrivateTextFile } from "../lib/private-files.js";
 import { McpGatherSchema, McpFinetuneStartSchema, McpFinetuneStatusSchema } from "../lib/schemas.js";
 import { BRAINS_STORAGE_TOOLS, handleBrainsStorageTool } from "./storage-tools.js";
 import { isStdioMode, resolveMcpHttpPort, startMcpHttpServer } from "./http.js";
@@ -427,11 +428,10 @@ export function buildServer() {
         }
         const { sources, limit, output_dir } = parsed.data;
 
-        const { mkdirSync, writeFileSync } = await import("fs");
         const { join } = await import("path");
 
         const outDir = output_dir ?? defaultOutputDir();
-        mkdirSync(outDir, { recursive: true });
+        ensurePrivateDirectory(outDir);
 
         const datasets: Array<{ source: string; count: number; file_path: string }> = [];
         let totalExamples = 0;
@@ -457,7 +457,7 @@ export function buildServer() {
 
           const filePath = join(outDir, `${source}-${Date.now()}.jsonl`);
           const jsonl = examples.map((ex) => JSON.stringify(ex)).join("\n");
-          writeFileSync(filePath, jsonl, "utf-8");
+          writePrivateTextFile(filePath, jsonl);
 
           datasets.push({ source, count: examples.length, file_path: filePath });
           totalExamples += examples.length;

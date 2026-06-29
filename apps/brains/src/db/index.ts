@@ -1,12 +1,46 @@
 import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from "fs";
 import { homedir } from "os";
-import { dirname, join, resolve } from "path";
+import { dirname, isAbsolute, join, relative, resolve } from "path";
 import { SqliteAdapter } from "./sqlite-adapter.js";
 import * as schema from "./schema.js";
 
 export * from "./schema.js";
+
+function chmodIfSupported(path: string, mode: number): void {
+  try {
+    chmodSync(path, mode);
+  } catch {
+    // Some platforms/filesystems do not support POSIX modes.
+  }
+}
+
+function ensurePrivateDir(path: string): void {
+  mkdirSync(path, { recursive: true, mode: 0o700 });
+  chmodIfSupported(path, 0o700);
+}
+
+function currentBrainsDir(): string {
+  const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
+  return join(home, ".hasna", "brains");
+}
+
+function isInside(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel === "" || Boolean(rel && !rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function isMemoryDb(filePath: string): boolean {
+  return filePath === ":memory:" || filePath.startsWith("file::memory:");
+}
+
+function secureSqliteArtifacts(filePath: string): void {
+  if (isMemoryDb(filePath)) return;
+  for (const path of [filePath, `${filePath}-wal`, `${filePath}-shm`]) {
+    if (existsSync(path)) chmodIfSupported(path, 0o600);
+  }
+}
 
 function resolveDefaultDbPath(): string {
   const home = process.env["HOME"] || process.env["USERPROFILE"] || homedir();
@@ -14,7 +48,7 @@ function resolveDefaultDbPath(): string {
   const oldDir = join(home, ".brains");
 
   if (existsSync(oldDir) && !existsSync(newDir)) {
-    mkdirSync(newDir, { recursive: true });
+    ensurePrivateDir(newDir);
     try {
       for (const file of readdirSync(oldDir)) {
         const oldPath = join(oldDir, file);
@@ -22,6 +56,7 @@ function resolveDefaultDbPath(): string {
         try {
           if (statSync(oldPath).isFile()) {
             copyFileSync(oldPath, newPath);
+            chmodIfSupported(newPath, 0o600);
           }
         } catch {
           // Skip files that cannot be copied during best-effort migration.
@@ -32,15 +67,18 @@ function resolveDefaultDbPath(): string {
     }
   }
 
-  mkdirSync(newDir, { recursive: true });
+  ensurePrivateDir(newDir);
   return join(newDir, "brains.db");
 }
 
 const DEFAULT_DB_PATH = resolveDefaultDbPath();
 
 function ensureDir(filePath: string): void {
-  if (filePath === ":memory:" || filePath.startsWith("file::memory:")) return;
-  mkdirSync(dirname(filePath), { recursive: true });
+  if (isMemoryDb(filePath)) return;
+  const dir = dirname(filePath);
+  const existed = existsSync(dir);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (!existed || isInside(currentBrainsDir(), dir)) chmodIfSupported(dir, 0o700);
 }
 
 export function getBrainsDbPath(dbPath?: string): string {
@@ -100,6 +138,7 @@ export function getDb(dbPath?: string) {
   const resolvedPath = getBrainsDbPath(dbPath);
   ensureDir(resolvedPath);
   const adapter = new SqliteAdapter(resolvedPath);
+  secureSqliteArtifacts(resolvedPath);
   const sqlite = adapter.raw;
   const db = drizzle(sqlite, { schema });
 
@@ -111,6 +150,7 @@ export function getDb(dbPath?: string) {
   }
 
   ensureLocalTables(sqlite);
+  secureSqliteArtifacts(resolvedPath);
   return db;
 }
 
@@ -119,6 +159,8 @@ export function getRawDb(dbPath?: string): SqliteAdapter {
   const resolvedPath = getBrainsDbPath(dbPath);
   ensureDir(resolvedPath);
   const adapter = new SqliteAdapter(resolvedPath);
+  secureSqliteArtifacts(resolvedPath);
   ensureLocalTables(adapter.raw);
+  secureSqliteArtifacts(resolvedPath);
   return adapter;
 }

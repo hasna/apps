@@ -6,7 +6,7 @@ import { randomUUID } from "crypto";
 import { getDb, fineTunedModels, trainingJobs, trainingDatasets } from "../db/index.js";
 import { getPackageVersion } from "../lib/package-metadata.js";
 import { gatherAll } from "../lib/gatherers/index.js";
-import { mkdirSync, writeFileSync } from "fs";
+import { ensurePrivateDirectory, writePrivateTextFile } from "../lib/private-files.js";
 import { join } from "path";
 import { homedir } from "os";
 
@@ -163,7 +163,7 @@ async function handleGather(req: Request): Promise<Response> {
   const limit = body.limit ?? 500;
   const outDir = body.output_dir ?? join(homedir(), ".hasna", "brains", "datasets");
 
-  mkdirSync(outDir, { recursive: true });
+  ensurePrivateDirectory(outDir);
   const results = await gatherAll(sources, { limit });
   const db = getDb();
   const now = Date.now();
@@ -173,7 +173,7 @@ async function handleGather(req: Request): Promise<Response> {
     if (result.count === 0) continue;
     const fileName = `${result.source}-${now}.jsonl`;
     const filePath = join(outDir, fileName);
-    writeFileSync(filePath, result.examples.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
+    writePrivateTextFile(filePath, result.examples.map((e) => JSON.stringify(e)).join("\n") + "\n");
     const id = randomUUID();
     await db.insert(trainingDatasets).values({
       id,

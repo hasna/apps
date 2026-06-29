@@ -1,6 +1,6 @@
 {
   "name": "@hasna/brains",
-  "version": "0.0.33",
+  "version": "0.0.34",
   "description": "Fine-tuned model tracker and trainer — wraps OpenAI + Thinker Labs, gathers training data from todos/mementos/conversations/sessions",
   "type": "module",
   "main": "./dist/index.js",
@@ -23,7 +23,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "bun build src/cli/index.ts --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "build": "bun run clean && bun build src/cli/index.ts --outdir dist/cli --target bun --external ink --external react --external chalk --external pg --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external pg --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external pg && bun build src/index.ts --outdir dist --target bun --external pg && tsc --emitDeclarationOnly --outDir dist",
     "dev": "bun run src/cli/index.ts",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
@@ -36,7 +36,7 @@
     "db:migrate": "bunx drizzle-kit migrate",
     "db:studio": "bunx drizzle-kit studio",
     "prepublishOnly": "bun run typecheck && bun test && bun run build",
-    "postinstall": "mkdir -p $HOME/.hasna/brains/datasets 2>/dev/null || true"
+    "postinstall": "install -d -m 700 \"$HOME/.hasna/brains\" \"$HOME/.hasna/brains/datasets\" 2>/dev/null || mkdir -p \"$HOME/.hasna/brains/datasets\""
   },
   "keywords": [
     "brains",

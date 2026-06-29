@@ -6,7 +6,7 @@ export type StorageMode = "local" | "remote" | "hybrid";
 
 export interface StorageConfig {
   mode: StorageMode;
-  rds: {
+  postgres: {
     host: string;
     port: number;
     username: string;
@@ -20,6 +20,7 @@ export const STORAGE_DATABASE_ENV = ["HASNA_BRAINS_DATABASE_URL", "BRAINS_DATABA
 export const STORAGE_MODE_ENV = ["HASNA_BRAINS_STORAGE_MODE", "BRAINS_STORAGE_MODE"] as const;
 
 const STORAGE_CONFIG_PATH = join(homedir(), ".hasna", "brains", "storage", "config.json");
+type RawStorageConfig = Partial<StorageConfig> & { mode?: StorageMode; rds?: StorageConfig["postgres"] };
 
 function normalizeMode(value: string | undefined): StorageMode | undefined {
   if (value === "local" || value === "hybrid" || value === "remote") return value;
@@ -41,7 +42,7 @@ export function getStorageDatabaseUrl(): string | undefined {
 export function getStorageConfig(): StorageConfig {
   const config: StorageConfig = {
     mode: "local",
-    rds: {
+    postgres: {
       host: "",
       port: 5432,
       username: "",
@@ -52,9 +53,9 @@ export function getStorageConfig(): StorageConfig {
 
   if (existsSync(STORAGE_CONFIG_PATH)) {
     try {
-      const raw = JSON.parse(readFileSync(STORAGE_CONFIG_PATH, "utf-8")) as Partial<StorageConfig> & { mode?: StorageMode };
+      const raw = JSON.parse(readFileSync(STORAGE_CONFIG_PATH, "utf-8")) as RawStorageConfig;
       config.mode = normalizeMode(raw.mode) ?? config.mode;
-      config.rds = { ...config.rds, ...(raw.rds ?? {}) };
+      config.postgres = { ...config.postgres, ...(raw.postgres ?? raw.rds ?? {}) };
     } catch {
       // Ignore malformed storage config and keep local mode.
     }
@@ -76,7 +77,7 @@ export function getStorageConnectionString(dbName = "brains"): string {
   if (direct) return direct;
 
   const config = getStorageConfig();
-  const { host, port, username, password_env, ssl } = config.rds;
+  const { host, port, username, password_env, ssl } = config.postgres;
   if (!host || !username) {
     throw new Error("Remote storage database is not configured. Set HASNA_BRAINS_DATABASE_URL or configure ~/.hasna/brains/storage/config.json.");
   }

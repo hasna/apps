@@ -1,9 +1,10 @@
 import type { Command } from "commander";
 import { randomUUID } from "crypto";
-import { readFileSync, existsSync, mkdirSync, writeFileSync } from "fs";
+import { readFileSync, existsSync } from "fs";
 import { dirname, join } from "path";
 import { homedir } from "os";
 import { getDb, trainingDatasets } from "../../db/index.js";
+import { ensurePrivateDirectory, writePrivateTextFile } from "../../lib/private-files.js";
 import { printJson, printError, printSuccess, printInfo, printTable } from "../ui.js";
 
 const DEFAULT_DATASETS_DIR = join(homedir(), ".hasna", "brains", "datasets");
@@ -31,7 +32,7 @@ export function registerDataCommands(program: Command): void {
       }
 
       try {
-        mkdirSync(opts.output, { recursive: true });
+        ensurePrivateDirectory(opts.output);
 
         const sources = opts.source === "all"
           ? ["todos", "mementos", "conversations", "sessions"]
@@ -62,7 +63,7 @@ export function registerDataCommands(program: Command): void {
 
             const fileName = `${source}-${now}.jsonl`;
             const filePath = join(opts.output, fileName);
-            writeFileSync(filePath, examples.map((e) => JSON.stringify(e)).join('\n') + '\n', 'utf8');
+            writePrivateTextFile(filePath, examples.map((e) => JSON.stringify(e)).join("\n") + "\n");
 
             await db.insert(trainingDatasets).values({
               id: randomUUID(),
@@ -137,7 +138,7 @@ export function registerDataCommands(program: Command): void {
           if (!existsSync(f)) { printError(`File not found: ${f}`); process.exit(1); }
         }
 
-        mkdirSync(getMergeOutputDirectory(opts.output), { recursive: true });
+        ensurePrivateDirectory(getMergeOutputDirectory(opts.output));
 
         const allExamples: string[] = [];
         for (const f of files) {
@@ -158,7 +159,7 @@ export function registerDataCommands(program: Command): void {
           });
         }
 
-        writeFileSync(opts.output, finalLines.join("\n") + "\n", "utf8");
+        writePrivateTextFile(opts.output, finalLines.join("\n") + "\n");
 
         const db = getDb();
         await db.insert(trainingDatasets).values({
