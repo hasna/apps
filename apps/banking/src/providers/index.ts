@@ -5,3 +5,4 @@ export * from "./operations.ts";
 export * from "./adapters.ts";
 export * from "./mercury-live.ts";
 export * from "./mercury-conformance.ts";
+export * from "./erste-bcr-conformance.ts";

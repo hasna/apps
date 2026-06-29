@@ -150,6 +150,18 @@ describe("banking-mcp scaffold", () => {
     expect(terminate.intent.kind).toBe("terminate");
   });
 
+  test("local card dispatch denies unsupported Erste BCR card operations", () => {
+    const result = runMcpTool("banking_card_request", {
+      providerId: "erste-bcr",
+      accountId: "acct_1",
+      label: "Operations card",
+    }) as { readonly policyDecision: { readonly kind: string; readonly reasons: readonly string[] } };
+
+    expect(result.policyDecision.kind).toBe("deny");
+    expect(result.policyDecision.reasons).toContain("Provider does not support direct card control.");
+    expect(result.policyDecision.reasons).toContain("Provider does not support card operation createVirtual.");
+  });
+
   test("local read and admin dispatch return distinct gated responses", () => {
     const read = runMcpTool("banking_accounts_list", { providerId: "mercury" }) as { readonly status: string };
     const admin = runMcpTool("banking_admin_provider_verify_operation") as { readonly status: string };

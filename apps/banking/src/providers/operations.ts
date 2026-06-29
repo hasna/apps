@@ -202,7 +202,7 @@ function descriptorFromContract(providerId: ProviderId, contract: ProviderOperat
     providerSideEffectsEnabled: false,
     requiresOperationPlan: requiresOperationPlan(contract),
     cli: cliSurfaceFor(providerId, contract.operation, operationId, contract.support),
-    mcp: mcpSurfaceFor(providerId, contract.operation),
+    mcp: mcpSurfaceFor(providerId, contract.operation, contract.support),
     releaseGates: contract.releaseGates,
   };
 }
@@ -248,11 +248,11 @@ function cliSurfaceFor(
   };
 }
 
-function mcpSurfaceFor(providerId: ProviderId, operation: ProviderOperationKind): BankingOperationMcpSurface {
+function mcpSurfaceFor(providerId: ProviderId, operation: ProviderOperationKind, support: ProviderOperationSupport): BankingOperationMcpSurface {
   const toolName = mcpToolNameForOperation(providerId, operation);
   return {
     ...(toolName ? { toolName } : {}),
-    exposed: toolName ? EXPOSED_MCP_TOOLS.has(toolName) : false,
+    exposed: support !== "unsupported" && toolName ? EXPOSED_MCP_TOOLS.has(toolName) : false,
   };
 }
 
