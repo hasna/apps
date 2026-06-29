@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.50] - 2026-06-29
+
+### Changed
+
+- Reissued the 0.1.49 public package sanitization through npm publishing so the
+  registry package metadata carries a source `gitHead` for the release commit.
+
 ## [0.1.49] - 2026-06-29
 
 ### Changed
