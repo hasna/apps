@@ -1,6 +1,6 @@
 {
   "name": "@hasna/tickets",
-  "version": "0.1.20",
+  "version": "0.1.21",
   "description": "Open-source MCP-native ticketing system — bugs, features, incidents for any product, service, or app. CLI + MCP server + REST API + Web Dashboard + SDK.",
   "type": "module",
   "main": "dist/index.js",
@@ -23,14 +23,14 @@
     "README.md"
   ],
   "scripts": {
-    "build": "cd dashboard && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/index.ts --outdir dist --target bun; tsc --emitDeclarationOnly --outDir dist || true",
+    "build": "rm -rf dist && cd dashboard && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/index.ts --outdir dist --target bun && (tsc --emitDeclarationOnly --outDir dist || true)",
     "build:dashboard": "cd dashboard && bun run build",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
-    "prepublishOnly": "bun run build",
+    "prepublishOnly": "bun test && bun run build",
     "postinstall": "mkdir -p $HOME/.hasna/tickets/training 2>/dev/null || true"
   },
   "keywords": [
@@ -53,11 +53,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasna/open-tickets.git"
+    "url": "git+https://github.com/hasna/tickets.git"
   },
-  "homepage": "https://github.com/hasna/open-tickets",
+  "homepage": "https://github.com/hasna/tickets",
   "bugs": {
-    "url": "https://github.com/hasna/open-tickets/issues"
+    "url": "https://github.com/hasna/tickets/issues"
   },
   "engines": {
     "bun": ">=1.0.0"
@@ -67,7 +67,6 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.700.0",
     "@aws-sdk/client-sesv2": "^3.700.0",
-    "@hasna/cloud": "0.1.24",
     "@hasna/events": "0.1.11",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",

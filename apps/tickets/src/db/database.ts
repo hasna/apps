@@ -1,5 +1,4 @@
 import { Database } from "bun:sqlite";
-import { SqliteAdapter } from "@hasna/cloud";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { getTicketsDbPath } from "../lib/paths";
@@ -324,7 +323,7 @@ export function getDatabase(dbPath?: string): Database {
   const path = dbPath || getDbPath();
   ensureDir(path);
 
-  _db = new SqliteAdapter(path) as unknown as Database;
+  _db = new Database(path);
 
   _db.run("PRAGMA journal_mode = WAL");
   _db.run("PRAGMA busy_timeout = 5000");

@@ -1,5 +1,6 @@
 /**
- * PostgreSQL migrations for open-tickets cloud sync.
+ * PostgreSQL schema translations for external deployments that provide their
+ * own database adapter.
  *
  * Equivalent to the SQLite schema in database.ts, translated for PostgreSQL.
  */

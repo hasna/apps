@@ -42,19 +42,15 @@ tickets-mcp --http --port 8841  # default port 8841
 tickets-serve
 ```
 
-## Cloud Sync
-
-This package supports cloud sync via `@hasna/cloud`:
-
-```bash
-cloud setup
-cloud sync push --service tickets
-cloud sync pull --service tickets
-```
-
 ## Data Directory
 
-Data is stored in `~/.hasna/tickets/`.
+Tickets owns its local SQLite store directly. By default data is stored in
+`~/.hasna/tickets/`; set `HASNA_TICKETS_DB_PATH` or `TICKETS_DB_PATH` to use a
+specific database file. When no explicit path is set, the CLI also discovers
+`.tickets/tickets.db` in the current directory or an ancestor.
+
+External PostgreSQL deployments may reuse the exported `PG_MIGRATIONS` schema
+with their own database adapter.
 
 ## License
 
