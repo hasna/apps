@@ -20,5 +20,18 @@ function resolveMcpsDir(): string {
 
 export const MCPS_DIR = resolveMcpsDir();
 export const DB_PATH = process.env.HASNA_MCPS_DB_PATH ?? process.env.MCPS_DB_PATH ?? join(MCPS_DIR, "registry.db");
+export type McpsStorageMode = "local";
+
+export function resolveStorageMode(): McpsStorageMode {
+  const raw = process.env.HASNA_MCPS_STORAGE_MODE ?? process.env.MCPS_STORAGE_MODE ?? "local";
+  const mode = raw.toLowerCase();
+  if (mode !== "local") {
+    throw new Error(
+      `Unsupported MCPs storage mode "${raw}". @hasna/mcps currently supports local SQLite storage only.`,
+    );
+  }
+  return "local";
+}
+
 export const REGISTRY_API_URL = "https://registry.modelcontextprotocol.io/v0/servers";
 export const TOOL_PREFIX_SEPARATOR = "__";

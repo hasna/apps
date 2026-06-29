@@ -1,6 +1,6 @@
 {
   "name": "@hasna/mcps",
-  "version": "0.0.29",
+  "version": "0.0.30",
   "description": "Meta-MCP registry & CLI — discover, manage, and proxy MCP servers",
   "type": "module",
   "repository": {
@@ -38,12 +38,14 @@
     "dev:dashboard": "cd dashboard && bun run dev",
     "serve": "bun run src/cli/index.tsx serve",
     "test": "bun test",
+    "no-cloud:source": "bun test src/no-cloud-boundary.test.ts",
+    "no-cloud:pack": "bun run build && bun scripts/no-cloud-artifact-scan.mjs",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "bun run build",
+    "prepack": "bun run build && bun scripts/no-cloud-artifact-scan.mjs",
+    "prepublishOnly": "bun test && bun run build && bun scripts/no-cloud-artifact-scan.mjs",
     "postinstall": "mkdir -p $HOME/.hasna/mcps/cache 2>/dev/null || true"
   },
   "dependencies": {
-    "@hasna/cloud": "0.1.24",
     "@hasna/events": "^0.1.6",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "chalk": "^5.3.0",

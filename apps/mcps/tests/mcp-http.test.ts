@@ -21,7 +21,7 @@ describe("MCP HTTP transport", () => {
     clearDb();
   });
   it("stdio mode still builds and registers tools", async () => {
-    const server = buildServer({ name: "mcps-test", version: "0.0.1", cloudTools: false });
+    const server = buildServer({ name: "mcps-test", version: "0.0.1" });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "stdio-test", version: "0.0.1" });
 

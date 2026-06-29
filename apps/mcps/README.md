@@ -102,19 +102,16 @@ mcps-mcp
 
 The MCP server exposes registry, finder, machine registry, and fleet orchestration tools.
 
-## Cloud Sync
-
-This package supports cloud sync via `@hasna/cloud`:
-
-```bash
-cloud setup
-cloud sync push --service mcps
-cloud sync pull --service mcps
-```
-
 ## Data Directory
 
-Data is stored in `~/.hasna/mcps/`.
+Data is stored locally in `~/.hasna/mcps/` by default.
+
+- Set `HASNA_MCPS_DATA_DIR` to override the data directory.
+- Set `HASNA_MCPS_DB_PATH` to point at a specific SQLite database file.
+- Set `HASNA_MCPS_STORAGE_MODE=local` to make the storage mode explicit.
+
+Remote or hosted deployments should provide an mcps-owned storage adapter or
+service boundary. This package owns its database adapter and MCP tool surface.
 
 ## License
 
