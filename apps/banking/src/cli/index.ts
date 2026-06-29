@@ -9,7 +9,7 @@ import {
   type ProviderId,
 } from "../index.ts";
 
-const VERSION = "0.0.1";
+const VERSION = "0.0.2";
 
 interface ParsedArgs {
   readonly positionals: readonly string[];

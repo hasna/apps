@@ -1,8 +1,10 @@
 # Changelog
 
-## 0.0.1 - 2026-06-29
+## 0.0.2 - 2026-06-29
 
 Initial public release of `@hasna/banking`.
+
+Note: `0.0.1` was not used as the public release because npm rejected it as an unavailable previously published version while the public registry still returned 404.
 
 ### Added
 
