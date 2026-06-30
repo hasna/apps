@@ -54,6 +54,12 @@ describe("OSS no-cloud boundary", () => {
     }
   });
 
+  test("local plan artifacts stay under project .hasna storage with no remote provider hooks", () => {
+    const source = readFileSync(join(root, "src", "lib", "plan-artifacts.ts"), "utf8");
+    expect(source).toContain('".hasna", "todos", "plans"');
+    expect(source).not.toMatch(/HASNA_TODOS_STORAGE_MODE|TODOS_STORAGE_MODE|S3|Postgres|fetch\(|https?:\/\//i);
+  });
+
   test("public docs, package surfaces, and scripts stay Bun-only and secret-free", () => {
     const offenders: string[] = [];
     const forbidden = [

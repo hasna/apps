@@ -299,6 +299,28 @@ export {
   updatePlan,
   deletePlan,
 } from "./db/plans.js";
+export {
+  PLAN_MARKDOWN_SCHEMA,
+  buildPlanArtifactSnapshot,
+  inspectPlanArtifact,
+  parsePlanArtifactMarkdown,
+  readPlanArtifact,
+  renderPlanArtifactMarkdown,
+  resolvePlanArtifactPaths,
+  resolvePlanArtifactProject,
+  writePlanArtifact,
+} from "./lib/plan-artifacts.js";
+export type {
+  PlanArtifactConflict,
+  PlanArtifactInspection,
+  PlanArtifactMetadata,
+  PlanArtifactPaths,
+  PlanArtifactReadResult,
+  PlanArtifactSnapshot,
+  PlanArtifactTaskReference,
+  ResolvePlanArtifactPathInput,
+  WritePlanArtifactResult,
+} from "./lib/plan-artifacts.js";
 
 // Local project knowledge records
 export {

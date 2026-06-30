@@ -689,6 +689,80 @@ describe("CLI integration", () => {
     }
   });
 
+  it("should write and read local Markdown plan artifacts from the plans CLI", async () => {
+    const dbPath = join(testRoot, "plan-artifacts.db");
+    const projectRoot = join(testRoot, "artifact-project");
+    const { existsSync, mkdirSync, readFileSync, unlinkSync } = await import("node:fs");
+    const { createProject } = await import("../db/projects.js");
+    const { getDatabase, closeDatabase, resetDatabase } = await import("../db/database.js");
+
+    mkdirSync(projectRoot, { recursive: true });
+    const db = getDatabase(dbPath);
+    const project = createProject({ name: "Artifact Project", path: projectRoot }, db);
+    closeDatabase();
+    resetDatabase();
+
+    const created = await runCli([
+      "--project",
+      projectRoot,
+      "--json",
+      "plans",
+      "--add",
+      "CLI artifact plan",
+      "--description",
+      "Persist this plan locally",
+    ], dbPath);
+    expect(created.exitCode).toBe(0);
+    const plan = JSON.parse(created.stdout);
+    const artifactPath = join(projectRoot, ".hasna", "todos", "plans", project.id, `${plan.id}.md`);
+    expect(existsSync(artifactPath)).toBe(true);
+    expect(readFileSync(artifactPath, "utf8")).toContain("# CLI artifact plan");
+
+    const shown = await runCli([
+      "--project",
+      projectRoot,
+      "--json",
+      "plans",
+      "--show",
+      plan.id.slice(0, 8),
+    ], dbPath);
+    expect(shown.exitCode).toBe(0);
+    const details = JSON.parse(shown.stdout);
+    expect(details.plan.id).toBe(plan.id);
+    expect(details.artifact.path).toBe(artifactPath);
+    expect(details.artifact.metadata.project_id).toBe(project.id);
+    expect(details.artifact.body).toContain("Persist this plan locally");
+
+    const artifact = await runCli([
+      "--project",
+      projectRoot,
+      "--json",
+      "plans",
+      "--artifact",
+      plan.id.slice(0, 8),
+    ], dbPath);
+    expect(artifact.exitCode).toBe(0);
+    const artifactDetails = JSON.parse(artifact.stdout);
+    expect(artifactDetails.artifact.path).toBe(artifactPath);
+    expect(artifactDetails.artifact.exists).toBe(true);
+    expect(artifactDetails.artifact.conflicts).toEqual([]);
+
+    unlinkSync(artifactPath);
+    const exported = await runCli([
+      "--project",
+      projectRoot,
+      "--json",
+      "plans",
+      "--write-artifacts",
+    ], dbPath);
+    expect(exported.exitCode).toBe(0);
+    expect(JSON.parse(exported.stdout)).toMatchObject({
+      count: 1,
+      artifacts: [{ plan_id: plan.id, path: artifactPath }],
+    });
+    expect(existsSync(artifactPath)).toBe(true);
+  });
+
   it("should create and export local retrospectives from the CLI", async () => {
     const dbPath = "/tmp/test-cli-retrospectives.db";
     const { unlinkSync } = await import("node:fs");
