@@ -61,6 +61,51 @@ describe("executeLoop", () => {
     }
   });
 
+  test("allows explicit unlimited command timeout", async () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "unlimited-command",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: { type: "command", command: "sleep 0.1; printf done", shell: true, timeoutMs: null },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run);
+      expect(result.status).toBe("succeeded");
+      expect(result.stdout).toContain("done");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("agent targets default to unlimited timeout", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-agent-timeout-"));
+    const bin = join(root, "bin");
+    mkdirSync(bin, { recursive: true });
+    const codewith = join(bin, "codewith");
+    writeFileSync(codewith, "#!/usr/bin/env bash\nsleep 0.1\nprintf agent-done\n");
+    chmodSync(codewith, 0o755);
+    try {
+      const loop = store.createLoop({
+        name: "agent-default-unlimited",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: { type: "agent", provider: "codewith", prompt: "work" },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      });
+      expect(result.status).toBe("succeeded");
+      expect(result.stdout).toContain("agent-done");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("routes machine-assigned command loops through remote transport", async () => {
     const store = new Store(":memory:");
     const root = mkdtempSync(join(tmpdir(), "loops-remote-command-"));

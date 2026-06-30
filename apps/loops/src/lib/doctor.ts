@@ -119,7 +119,11 @@ export function runDoctor(store: Store): DoctorReport {
         const workflow = store.requireWorkflow(loop.target.workflowId);
         for (const step of workflowExecutionOrder(workflow)) {
           preflightTarget(
-            { ...step.target, account: step.account ?? step.target.account, timeoutMs: step.timeoutMs ?? step.target.timeoutMs },
+            {
+              ...step.target,
+              account: step.account ?? step.target.account,
+              timeoutMs: step.timeoutMs !== undefined ? step.timeoutMs : step.target.timeoutMs,
+            },
             { loopId: loop.id, loopName: loop.name, workflowId: workflow.id, workflowName: workflow.name, workflowStepId: step.id },
             { machine: loop.machine },
           );

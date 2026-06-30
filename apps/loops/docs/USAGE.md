@@ -245,6 +245,11 @@ loops workflows recover <workflow-run-id>
 loops create workflow repo-morning-loop --workflow repo-morning --cron "0 8 * * *"
 ```
 
+Use `recover` only for interrupted `running` workflow runs whose recorded child
+process is gone. Terminal `timed_out` task/event workflow runs are audit
+history; requeue them through the original task/event route after fixing the
+cause.
+
 Workflow specs are stored separately from loops. A loop can schedule a workflow, but workflow runs and step runs have their own durable rows and events. Steps run in dependency order and a scheduled workflow run is idempotent per loop slot.
 
 For command steps, `command` is the executable when `shell` is not true. Put flags in `args`:
@@ -310,6 +315,30 @@ Custom reusable workflow templates live under the OpenLoops app data directory:
 showing, and rendering templates never executes workflow steps or mutates the
 registry.
 
+Timeout policy is explicit. Deterministic command/check steps should normally
+keep finite `timeoutMs`/`idleTimeoutMs` guards so broken shell work cannot run
+forever. Agentic work steps default to no timeout in built-in worker/verifier
+and task-lifecycle templates; use `timeoutMs: null` in workflow JSON, or
+`--timeout none` / `--timeout unlimited` for CLI-created targets, when a step
+may need hours or days. Use a positive numeric `timeoutMs` only when an agentic
+step is intentionally bounded.
+
+To migrate existing workflow loops, do not edit `workflow_specs.steps_json`
+directly because historical workflow runs must keep pointing at their original
+spec. Use the append-only migrator:
+
+```bash
+loops workflows migrate-agent-timeouts --loop <loop-id-or-name>
+loops workflows migrate-agent-timeouts --loop <loop-id-or-name> --apply
+```
+
+The command dry-runs by default. With `--apply`, it creates a new workflow spec
+with the requested agent timeout policy, retargets only future executions of
+eligible non-running workflow loops, and leaves terminal timed-out workflow runs
+as audit history. Use `loops workflows recover` only for interrupted `running`
+workflow runs whose recorded child process is gone; terminal `timed_out` runs
+must be requeued by re-delivering or draining the original task/event route.
+
 ```json
 {
   "id": "custom-report",
@@ -318,8 +347,7 @@ registry.
   "kind": "workflow",
   "variables": [
     { "name": "objective", "required": true, "description": "Report objective." },
-    { "name": "projectPath", "required": true, "description": "Working directory." },
-    { "name": "timeoutMs", "default": "300000", "type": "number" }
+    { "name": "projectPath", "required": true, "description": "Working directory." }
   ],
   "workflow": {
     "name": "custom-report-${objective}",
@@ -334,9 +362,9 @@ registry.
           "configIsolation": "safe",
           "permissionMode": "bypass",
           "sandbox": "workspace-write",
-          "timeoutMs": "${timeoutMs}"
+          "timeoutMs": null
         },
-        "timeoutMs": "${timeoutMs}"
+        "timeoutMs": null
       }
     ]
   }

@@ -105,11 +105,13 @@ export interface CommandTarget {
   cwd?: string;
   shell?: boolean;
   env?: Record<string, string>;
-  timeoutMs?: number;
+  timeoutMs?: TimeoutMs;
   idleTimeoutMs?: number;
   account?: AccountRef;
   preflight?: RuntimePreflightPolicy;
 }
+
+export type TimeoutMs = number | null;
 
 export type AgentProvider = "claude" | "cursor" | "codewith" | "aicopilot" | "opencode" | "codex";
 
@@ -163,7 +165,7 @@ export interface AgentTargetBase {
   authProfile?: string;
   extraArgs?: string[];
   addDirs?: string[];
-  timeoutMs?: number;
+  timeoutMs?: TimeoutMs;
   idleTimeoutMs?: number;
   configIsolation?: AgentConfigIsolation;
   permissionMode?: AgentPermissionMode;
@@ -188,7 +190,7 @@ export interface WorkflowTarget {
   type: "workflow";
   workflowId: string;
   input?: Record<string, string>;
-  timeoutMs?: number;
+  timeoutMs?: TimeoutMs;
   preflight?: RuntimePreflightPolicy;
 }
 
@@ -315,7 +317,7 @@ export interface WorkflowStep {
   goal?: GoalSpec;
   dependsOn?: string[];
   continueOnFailure?: boolean;
-  timeoutMs?: number;
+  timeoutMs?: TimeoutMs;
   account?: AccountRef;
 }
 

@@ -48,7 +48,7 @@
         "type": "agent",
         "provider": "codewith",
         "cwd": "/path/to/repo",
-        "timeoutMs": 1800000,
+        "timeoutMs": null,
         "prompt": "Read .openloops/transcripts/latest-transcript.json and create or update docs/loop-backlog.md. Extract only recurring work that is useful enough to schedule through OpenLoops. For each candidate include cadence, target provider, allowed write scope, expected artifacts, verification command, stop condition, and the specific transcript insight that justifies it. Prefer loops for code review/security, customer feedback triage, maintenance PRs, CI optimization, knowledge capture, and workflow hygiene."
       }
     },
@@ -60,7 +60,7 @@
         "type": "agent",
         "provider": "codewith",
         "cwd": "/path/to/repo",
-        "timeoutMs": 1800000,
+        "timeoutMs": null,
         "prompt": "Use docs/loop-backlog.md to author or update workflow JSON specs under docs/workflows/generated. Each workflow must use deterministic command steps for checks, agent steps for judgment or code changes, and workflow or step goals only when the outcome needs planning. Keep prompts scoped to the target repo, name allowed paths, and include validation evidence."
       }
     },

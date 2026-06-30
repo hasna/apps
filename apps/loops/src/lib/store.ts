@@ -17,6 +17,7 @@ import type {
   LoopRun,
   LoopStatus,
   RunStatus,
+  TimeoutMs,
   WorkflowEvent,
   WorkflowInvocation,
   WorkflowRun,
@@ -1020,6 +1021,17 @@ export class Store {
     return row ? rowToLoop(row) : undefined;
   }
 
+  requireUniqueLoop(idOrName: string): Loop {
+    const byId = this.getLoop(idOrName);
+    if (byId) return byId;
+    const rows = this.db
+      .query<LoopRow, [string]>("SELECT * FROM loops WHERE name = ? ORDER BY created_at DESC LIMIT 2")
+      .all(idOrName);
+    if (rows.length === 0) throw new Error(`loop not found: ${idOrName}`);
+    if (rows.length > 1) throw new Error(`ambiguous loop name: ${idOrName}; use a loop id`);
+    return rowToLoop(rows[0]!);
+  }
+
   requireLoop(idOrName: string): Loop {
     return this.getLoop(idOrName) ?? this.findLoopByName(idOrName) ?? (() => {
       throw new Error(`loop not found: ${idOrName}`);
@@ -1117,6 +1129,144 @@ export class Store {
     const after = this.getLoop(id);
     if (!after) throw new Error(`loop not found after update: ${id}`);
     return after;
+  }
+
+  private activeLoopReferenceCount(workflowId: string): number {
+    const rows = this.db.query<{ target_json: string }, []>("SELECT target_json FROM loops WHERE archived_at IS NULL").all();
+    let count = 0;
+    for (const row of rows) {
+      try {
+        const target = JSON.parse(row.target_json) as Loop["target"];
+        if (target.type === "workflow" && target.workflowId === workflowId) count += 1;
+      } catch {
+        /* invalid target JSON is handled elsewhere by normal store reads */
+      }
+    }
+    return count;
+  }
+
+  private archiveWorkflowIfUnreferenced(workflowId: string, updated: string): WorkflowSpec | undefined {
+    if (this.activeLoopReferenceCount(workflowId) > 0) return undefined;
+    const workflow = this.getWorkflow(workflowId);
+    if (!workflow || workflow.status !== "active") return undefined;
+    const res = this.db
+      .query("UPDATE workflow_specs SET status='archived', updated_at=? WHERE id=? AND status='active'")
+      .run(updated, workflowId);
+    if (res.changes !== 1) return undefined;
+    return this.getWorkflow(workflowId);
+  }
+
+  retargetWorkflowLoop(idOrName: string, workflowId: string, opts: DaemonLeaseFence & { workflowTimeoutMs?: TimeoutMs } = {}): Loop {
+    const updated = (opts.now ?? new Date()).toISOString();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.requireLoop(idOrName);
+      if (current.target.type !== "workflow") throw new Error(`loop is not a workflow loop: ${idOrName}`);
+      if (this.hasRunningRun(current.id)) throw new Error(`refusing to retarget running loop: ${current.id}`);
+      const workflow = this.requireWorkflow(workflowId);
+      const target = { ...current.target, workflowId: workflow.id };
+      if (opts.workflowTimeoutMs !== undefined) target.timeoutMs = opts.workflowTimeoutMs;
+      const res = this.db
+        .query(
+          `UPDATE loops SET target_json=$target, updated_at=$updated
+           WHERE id=$id
+             AND ($daemonLeaseId IS NULL OR EXISTS (
+               SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+             ))`,
+        )
+        .run({
+          $id: current.id,
+          $target: JSON.stringify(target),
+          $updated: updated,
+          $daemonLeaseId: opts.daemonLeaseId ?? null,
+          $now: updated,
+        });
+      if (res.changes !== 1) throw new Error("daemon lease lost");
+      this.db.exec("COMMIT");
+      const after = this.getLoop(current.id);
+      if (!after) throw new Error(`loop not found after retarget: ${current.id}`);
+      return after;
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
+    }
+  }
+
+  createAndRetargetWorkflowLoop(
+    idOrName: string,
+    workflowInput: CreateWorkflowInput,
+    opts: DaemonLeaseFence & { workflowTimeoutMs?: TimeoutMs; archiveOld?: boolean } = {},
+  ): { loop: Loop; workflow: WorkflowSpec; previousWorkflow: WorkflowSpec; archivedOld?: WorkflowSpec } {
+    const normalized = normalizeCreateWorkflowInput(workflowInput);
+    const updated = (opts.now ?? new Date()).toISOString();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.requireUniqueLoop(idOrName);
+      if (current.target.type !== "workflow") throw new Error(`loop is not a workflow loop: ${idOrName}`);
+      if (this.hasRunningRun(current.id)) throw new Error(`refusing to retarget running loop: ${current.id}`);
+      const previousWorkflow = this.requireWorkflow(current.target.workflowId);
+      const workflow: WorkflowSpec = {
+        id: genId(),
+        name: normalized.name,
+        description: normalized.description,
+        version: normalized.version ?? 1,
+        status: "active",
+        goal: normalized.goal,
+        steps: normalized.steps,
+        createdAt: updated,
+        updatedAt: updated,
+      };
+      this.db
+        .query(
+          `INSERT INTO workflow_specs (id, name, description, version, status, goal_json, steps_json, created_at, updated_at)
+           VALUES ($id, $name, $description, $version, $status, $goal, $steps, $created, $updated)`,
+        )
+        .run({
+          $id: workflow.id,
+          $name: workflow.name,
+          $description: workflow.description ?? null,
+          $version: workflow.version,
+          $status: workflow.status,
+          $goal: workflow.goal ? JSON.stringify(workflow.goal) : null,
+          $steps: JSON.stringify(workflow.steps),
+          $created: workflow.createdAt,
+          $updated: workflow.updatedAt,
+        });
+      const target = { ...current.target, workflowId: workflow.id };
+      if (opts.workflowTimeoutMs !== undefined) target.timeoutMs = opts.workflowTimeoutMs;
+      const res = this.db
+        .query(
+          `UPDATE loops SET target_json=$target, updated_at=$updated
+           WHERE id=$id
+             AND ($daemonLeaseId IS NULL OR EXISTS (
+               SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+             ))`,
+        )
+        .run({
+          $id: current.id,
+          $target: JSON.stringify(target),
+          $updated: updated,
+          $daemonLeaseId: opts.daemonLeaseId ?? null,
+          $now: updated,
+        });
+      if (res.changes !== 1) throw new Error("daemon lease lost");
+      const archivedOld = opts.archiveOld ? this.archiveWorkflowIfUnreferenced(previousWorkflow.id, updated) : undefined;
+      this.db.exec("COMMIT");
+      const loop = this.getLoop(current.id);
+      if (!loop) throw new Error(`loop not found after retarget: ${current.id}`);
+      return { loop, workflow, previousWorkflow, archivedOld };
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
+    }
   }
 
   renameLoop(id: string, name: string, opts: DaemonLeaseFence = {}): Loop {

@@ -14,6 +14,7 @@ import type {
   LoopTemplateSummary,
   LoopTemplateVariable,
   LoopTemplateVariableType,
+  TimeoutMs,
   WorkflowStep,
 } from "../types.js";
 import { dataDir } from "./paths.js";
@@ -61,6 +62,7 @@ export interface TodosTaskWorkflowTemplateInput {
   worktreeMode?: AgentWorktreeMode;
   worktreeRoot?: string;
   worktreeBranchPrefix?: string;
+  timeoutMs?: TimeoutMs;
   eventId?: string;
   eventType?: string;
 }
@@ -98,6 +100,7 @@ export interface EventWorkflowTemplateInput {
   worktreeMode?: AgentWorktreeMode;
   worktreeRoot?: string;
   worktreeBranchPrefix?: string;
+  timeoutMs?: TimeoutMs;
 }
 
 export interface BoundedAgentWorkflowTemplateInput {
@@ -130,7 +133,7 @@ export interface BoundedAgentWorkflowTemplateInput {
   worktreeMode?: AgentWorktreeMode;
   worktreeRoot?: string;
   worktreeBranchPrefix?: string;
-  timeoutMs?: number;
+  timeoutMs?: TimeoutMs;
 }
 
 const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
@@ -162,6 +165,7 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "worktreeMode", default: "auto", description: "Worktree isolation mode: auto, required, off, or main." },
       { name: "worktreeRoot", default: "~/.hasna/loops/worktrees", description: "Base directory for OpenLoops-managed git worktrees." },
       { name: "worktreeBranchPrefix", default: "openloops", description: "Branch prefix for generated task/event worktree branches." },
+      { name: "timeoutMs", default: "unlimited", description: "Agent step timeout in milliseconds, or unlimited/none/null for no timeout. Deterministic helper steps remain bounded." },
     ],
   },
   {
@@ -193,6 +197,7 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "worktreeMode", default: "auto", description: "Worktree isolation mode: auto, required, off, or main." },
       { name: "worktreeRoot", default: "~/.hasna/loops/worktrees", description: "Base directory for OpenLoops-managed git worktrees." },
       { name: "worktreeBranchPrefix", default: "openloops", description: "Branch prefix for generated event worktree branches." },
+      { name: "timeoutMs", default: "unlimited", description: "Agent step timeout in milliseconds, or unlimited/none/null for no timeout. Deterministic helper steps remain bounded." },
     ],
   },
   {
@@ -221,7 +226,7 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "worktreeMode", default: "auto", description: "Worktree isolation mode: auto, required, off, or main." },
       { name: "worktreeRoot", default: "~/.hasna/loops/worktrees", description: "Base directory for OpenLoops-managed git worktrees." },
       { name: "worktreeBranchPrefix", default: "openloops", description: "Branch prefix for generated bounded-agent worktree branches." },
-      { name: "timeoutMs", default: "2700000", description: "Step timeout in milliseconds." },
+      { name: "timeoutMs", default: "unlimited", description: "Agent step timeout in milliseconds, or unlimited/none/null for no timeout. Deterministic helper steps remain bounded." },
     ],
   },
   {
@@ -242,6 +247,7 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "provider", default: "codewith", description: "Agent provider." },
       { name: "sandbox", default: "workspace-write", description: "Provider sandbox mode." },
       { name: "worktreeMode", default: "required", description: "Worktree isolation mode." },
+      { name: "timeoutMs", default: "unlimited", description: "Agent step timeout in milliseconds, or unlimited/none/null for no timeout. Deterministic helper steps remain bounded." },
     ],
   },
   {
@@ -387,6 +393,30 @@ function taskLabel(input: TodosTaskWorkflowTemplateInput): string {
   return head.length > 160 ? `${head.slice(0, 157)}...` : head;
 }
 
+const UNLIMITED_AGENT_TIMEOUT_MS: TimeoutMs = null;
+
+function agentTimeoutMs(input: { timeoutMs?: TimeoutMs }): TimeoutMs {
+  return input.timeoutMs === undefined ? UNLIMITED_AGENT_TIMEOUT_MS : input.timeoutMs;
+}
+
+function parseTemplateTimeoutMs(raw: string | undefined): TimeoutMs | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const normalized = raw.trim().toLowerCase();
+  if (["unlimited", "none", "null", "never", "off", "false"].includes(normalized)) return null;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error("timeoutMs must be a positive integer number of milliseconds, or unlimited/none/null");
+  }
+  return value;
+}
+
+function parseDeterministicTimeoutMs(raw: string | undefined, fallbackMs: number, label = "timeoutMs"): number {
+  if (raw === undefined || raw.trim() === "") return fallbackMs;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) throw new Error(`${label} must be a positive integer number of milliseconds`);
+  return value;
+}
+
 type AgentWorkflowTemplateInput = Pick<
   TodosTaskWorkflowTemplateInput,
   | "projectPath"
@@ -415,6 +445,7 @@ type AgentWorkflowTemplateInput = Pick<
   | "worktreeMode"
   | "worktreeRoot"
   | "worktreeBranchPrefix"
+  | "timeoutMs"
 >;
 
 type AgentWorkflowRole = "triage" | "planner" | "worker" | "verifier";
@@ -719,7 +750,7 @@ function agentTarget(
       ...(input.projectGroup ? { projectGroup: input.projectGroup } : {}),
     },
     account: accountForRole(input, role, seed),
-    timeoutMs: 45 * 60_000,
+    timeoutMs: agentTimeoutMs(input),
   };
 }
 
@@ -1174,18 +1205,15 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
         name: "Worker",
         description: "Implement the todos task and record evidence.",
         target: agentTarget(input, workerPrompt, "worker", input.taskId, plan),
-        timeoutMs: 45 * 60_000,
+        timeoutMs: agentTimeoutMs(input),
       },
       {
         id: "verifier",
         name: "Verifier",
         description: "Adversarially verify worker output and update todos.",
         dependsOn: ["worker"],
-        target: {
-          ...agentTarget(input, verifierPrompt, "verifier", input.taskId, plan),
-          idleTimeoutMs: 10 * 60_000,
-        },
-        timeoutMs: 30 * 60_000,
+        target: agentTarget(input, verifierPrompt, "verifier", input.taskId, plan),
+        timeoutMs: agentTimeoutMs(input),
       },
     ]),
   };
@@ -1341,7 +1369,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
         name: "Triage",
         description: "Check task eligibility, duplicates, dependencies, and automation gates.",
         target: agentTarget(input, triagePrompt, "triage", input.taskId, plan),
-        timeoutMs: 20 * 60_000,
+        timeoutMs: agentTimeoutMs(input),
       },
       {
         id: "triage-gate",
@@ -1363,7 +1391,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
         description: "Create a concise implementation plan and split unsafe scope before work starts.",
         dependsOn: ["triage-gate"],
         target: agentTarget(input, plannerPrompt, "planner", input.taskId, plan),
-        timeoutMs: 25 * 60_000,
+        timeoutMs: agentTimeoutMs(input),
       },
       {
         id: "planner-gate",
@@ -1385,18 +1413,15 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
         description: "Implement the todos task according to triage and planner evidence.",
         dependsOn: ["planner-gate"],
         target: agentTarget(input, workerPrompt, "worker", input.taskId, plan),
-        timeoutMs: 45 * 60_000,
+        timeoutMs: agentTimeoutMs(input),
       },
       {
         id: "verifier",
         name: "Verifier",
         description: "Adversarially verify worker output and update todos.",
         dependsOn: ["worker"],
-        target: {
-          ...agentTarget(input, verifierPrompt, "verifier", input.taskId, plan),
-          idleTimeoutMs: 10 * 60_000,
-        },
-        timeoutMs: 30 * 60_000,
+        target: agentTarget(input, verifierPrompt, "verifier", input.taskId, plan),
+        timeoutMs: agentTimeoutMs(input),
       },
     ]),
   };
@@ -1461,18 +1486,15 @@ export function renderEventWorkerVerifierWorkflow(input: EventWorkflowTemplateIn
         name: "Worker",
         description: "Handle the Hasna event and record evidence.",
         target: agentTarget(input, workerPrompt, "worker", seed, plan),
-        timeoutMs: 45 * 60_000,
+        timeoutMs: agentTimeoutMs(input),
       },
       {
         id: "verifier",
         name: "Verifier",
         description: "Adversarially verify event handling.",
         dependsOn: ["worker"],
-        target: {
-          ...agentTarget(input, verifierPrompt, "verifier", seed, plan),
-          idleTimeoutMs: 10 * 60_000,
-        },
-        timeoutMs: 30 * 60_000,
+        target: agentTarget(input, verifierPrompt, "verifier", seed, plan),
+        timeoutMs: agentTimeoutMs(input),
       },
     ]),
   };
@@ -1483,7 +1505,7 @@ export function renderBoundedAgentWorkerVerifierWorkflow(input: BoundedAgentWork
   if (!input.projectPath?.trim()) throw new Error("projectPath is required");
   const seed = `${input.projectPath}:${input.objective}`;
   const plan = worktreePlan(input, seed);
-  const timeoutMs = input.timeoutMs && Number.isFinite(input.timeoutMs) ? input.timeoutMs : 45 * 60_000;
+  const timeoutMs = agentTimeoutMs(input);
   const workerPrompt = [
     `/goal ${input.objective}`,
     "",
@@ -1520,11 +1542,8 @@ export function renderBoundedAgentWorkerVerifierWorkflow(input: BoundedAgentWork
         name: "Verifier",
         description: "Adversarially verify the bounded objective result.",
         dependsOn: ["worker"],
-        target: {
-          ...agentTarget(input, verifierPrompt, "verifier", seed, plan),
-          idleTimeoutMs: 10 * 60_000,
-        },
-        timeoutMs: Math.min(timeoutMs, 30 * 60_000),
+        target: agentTarget(input, verifierPrompt, "verifier", seed, plan),
+        timeoutMs,
       },
     ]),
   };
@@ -1554,7 +1573,7 @@ function renderLifecycleBoundedTemplate(id: string, values: Record<string, strin
     worktreeMode: (values.worktreeMode as AgentWorktreeMode | undefined) ?? (id === REPORT_ONLY_TEMPLATE_ID ? "main" : "required"),
     worktreeRoot: values.worktreeRoot,
     worktreeBranchPrefix: values.worktreeBranchPrefix,
-    timeoutMs: values.timeoutMs ? Number(values.timeoutMs) : undefined,
+    timeoutMs: parseTemplateTimeoutMs(values.timeoutMs),
   };
   if (id === TASK_LIFECYCLE_TEMPLATE_ID) {
     const taskId = values.taskId ?? "";
@@ -1590,6 +1609,7 @@ function renderLifecycleBoundedTemplate(id: string, values: Record<string, strin
       worktreeMode: (values.worktreeMode as AgentWorktreeMode | undefined) ?? "required",
       worktreeRoot: values.worktreeRoot,
       worktreeBranchPrefix: values.worktreeBranchPrefix,
+      timeoutMs: parseTemplateTimeoutMs(values.timeoutMs),
       eventId: values.eventId,
       eventType: values.eventType,
     });
@@ -1662,6 +1682,8 @@ function renderDeterministicCheckCreateTaskWorkflow(values: Record<string, strin
   const checkCommand = values.checkCommand ?? "";
   if (!checkCommand.trim()) throw new Error("checkCommand is required");
   const seed = `${projectPath}:${checkCommand}`;
+  const timeoutMs = parseDeterministicTimeoutMs(values.timeoutMs, 5 * 60_000);
+  const idleTimeoutMs = parseDeterministicTimeoutMs(values.idleTimeoutMs, 60_000, "idleTimeoutMs");
   return {
     name: values.name ?? `deterministic-check-${stableIndex(seed, 0xffffffff).toString(16).padStart(8, "0")}`,
     description:
@@ -1678,10 +1700,10 @@ function renderDeterministicCheckCreateTaskWorkflow(values: Record<string, strin
           command: "bash",
           args: ["-lc", checkCommand],
           cwd: projectPath,
-          timeoutMs: values.timeoutMs ? Number(values.timeoutMs) : 5 * 60_000,
-          idleTimeoutMs: values.idleTimeoutMs ? Number(values.idleTimeoutMs) : 60_000,
+          timeoutMs,
+          idleTimeoutMs,
         },
-        timeoutMs: values.timeoutMs ? Number(values.timeoutMs) : 5 * 60_000,
+        timeoutMs,
       },
     ],
   };
@@ -1719,6 +1741,7 @@ function renderBuiltinLoopTemplate(id: string, values: Record<string, string | u
       worktreeMode: values.worktreeMode as AgentWorktreeMode | undefined,
       worktreeRoot: values.worktreeRoot,
       worktreeBranchPrefix: values.worktreeBranchPrefix,
+      timeoutMs: parseTemplateTimeoutMs(values.timeoutMs),
       eventId: values.eventId,
       eventType: values.eventType,
     });
@@ -1751,6 +1774,7 @@ function renderBuiltinLoopTemplate(id: string, values: Record<string, string | u
       worktreeMode: values.worktreeMode as AgentWorktreeMode | undefined,
       worktreeRoot: values.worktreeRoot,
       worktreeBranchPrefix: values.worktreeBranchPrefix,
+      timeoutMs: parseTemplateTimeoutMs(values.timeoutMs),
     });
   }
   if (id === BOUNDED_AGENT_WORKER_VERIFIER_TEMPLATE_ID) {
@@ -1778,7 +1802,7 @@ function renderBuiltinLoopTemplate(id: string, values: Record<string, string | u
       worktreeMode: values.worktreeMode as AgentWorktreeMode | undefined,
       worktreeRoot: values.worktreeRoot,
       worktreeBranchPrefix: values.worktreeBranchPrefix,
-      timeoutMs: values.timeoutMs ? Number(values.timeoutMs) : undefined,
+      timeoutMs: parseTemplateTimeoutMs(values.timeoutMs),
     });
   }
   throw new Error(`unknown template: ${id}`);

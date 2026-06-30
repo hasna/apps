@@ -16,7 +16,7 @@ export interface ExecuteWorkflowOptions extends ExecuteOptions {
 
 function targetWithStepAccount(step: WorkflowStep): ExecutableTarget {
   const account = step.account ?? step.target.account;
-  const timeoutMs = step.timeoutMs ?? step.target.timeoutMs;
+  const timeoutMs = step.timeoutMs !== undefined ? step.timeoutMs : step.target.timeoutMs;
   if (!account && timeoutMs === step.target.timeoutMs) return step.target;
   return { ...step.target, account, timeoutMs } as ExecutableTarget;
 }
@@ -365,7 +365,8 @@ export async function executeLoopTarget(
         }),
     });
   }
-  const controller = loop.target.timeoutMs ? new AbortController() : undefined;
+  const workflowTimeoutMs = typeof loop.target.timeoutMs === "number" ? loop.target.timeoutMs : undefined;
+  const controller = workflowTimeoutMs !== undefined ? new AbortController() : undefined;
   let workflowTimedOut = false;
   const externalAbort = (): void => controller?.abort();
   if (controller && opts.signal?.aborted) controller.abort();
@@ -374,7 +375,7 @@ export async function executeLoopTarget(
     ? setTimeout(() => {
         workflowTimedOut = true;
         controller.abort();
-      }, loop.target.timeoutMs)
+      }, workflowTimeoutMs)
     : undefined;
   timer?.unref();
   try {
@@ -382,7 +383,7 @@ export async function executeLoopTarget(
       ...opts,
       signal: controller?.signal ?? opts.signal,
       signalTimeoutMessage: () =>
-        workflowTimedOut && loop.target.type === "workflow" ? `workflow timed out after ${loop.target.timeoutMs}ms` : undefined,
+        workflowTimedOut && loop.target.type === "workflow" ? `workflow timed out after ${workflowTimeoutMs}ms` : undefined,
       loop,
       loopRun: run,
       scheduledFor: run.scheduledFor,

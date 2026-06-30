@@ -24,6 +24,13 @@ function optionalPositiveInteger(value: unknown, label: string): number | undefi
   return value as number;
 }
 
+function optionalTimeoutMs(value: unknown, label: string): number | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (!Number.isInteger(value) || (value as number) <= 0) throw new Error(`${label} must be a positive integer or null for unlimited`);
+  return value as number;
+}
+
 function optionalBoolean(value: unknown, label: string): boolean | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "boolean") throw new Error(`${label} must be a boolean`);
@@ -110,7 +117,7 @@ function validateTarget(value: unknown, label: string, opts: WorkflowNormalizeOp
   assertObject(value, label);
   if (value.type === "command") {
     assertString(value.command, `${label}.command`);
-    optionalPositiveInteger(value.timeoutMs, `${label}.timeoutMs`);
+    optionalTimeoutMs(value.timeoutMs, `${label}.timeoutMs`);
     optionalPositiveInteger(value.idleTimeoutMs, `${label}.idleTimeoutMs`);
     if (value.shell !== true && /\s/.test(value.command.trim())) {
       throw new Error(`${label}.command must be an executable without spaces when shell is false; put flags in args or set shell true`);
@@ -128,7 +135,7 @@ function validateTarget(value: unknown, label: string, opts: WorkflowNormalizeOp
       : readPromptFile(value.promptFile, label, opts);
     const providers = ["claude", "cursor", "codewith", "aicopilot", "opencode", "codex"];
     if (!providers.includes(value.provider)) throw new Error(`${label}.provider must be one of ${providers.join(", ")}`);
-    optionalPositiveInteger(value.timeoutMs, `${label}.timeoutMs`);
+    optionalTimeoutMs(value.timeoutMs, `${label}.timeoutMs`);
     optionalPositiveInteger(value.idleTimeoutMs, `${label}.idleTimeoutMs`);
     if (value.authProfile !== undefined) {
       assertString(value.authProfile, `${label}.authProfile`);
@@ -228,7 +235,7 @@ export function normalizeCreateWorkflowInput(input: CreateWorkflowInput, opts: W
       target: validateTarget(step.target, `workflow.steps[${index}].target`, opts),
       dependsOn: optionalStringArray(step.dependsOn, `workflow.steps[${index}].dependsOn`) ?? [],
       continueOnFailure: optionalBoolean(step.continueOnFailure, `workflow.steps[${index}].continueOnFailure`) ?? false,
-      timeoutMs: optionalPositiveInteger(step.timeoutMs, `workflow.steps[${index}].timeoutMs`),
+      timeoutMs: optionalTimeoutMs(step.timeoutMs, `workflow.steps[${index}].timeoutMs`),
       account: optionalAccountRef(step.account, `workflow.steps[${index}].account`),
     };
   });

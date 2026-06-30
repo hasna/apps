@@ -638,6 +638,150 @@ describe("loops CLI", () => {
     });
   });
 
+  test("create command, agent, and workflow accept explicit unlimited timeouts", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-timeout-none-"));
+    const command = runCli(dataDir, [
+      "--json",
+      "create",
+      "command",
+      "no-timeout-command",
+      "--at",
+      futureAt(),
+      "--cmd",
+      "sleep 0.1",
+      "--timeout",
+      "none",
+    ]);
+    expect(command.status).toBe(0);
+    expect(JSON.parse(command.stdout).target.timeoutMs).toBeNull();
+
+    const agent = runCli(dataDir, [
+      "--json",
+      "create",
+      "agent",
+      "no-timeout-agent",
+      "--provider",
+      "codewith",
+      "--at",
+      futureAt(),
+      "--prompt",
+      "inspect status",
+      "--timeout",
+      "unlimited",
+    ]);
+    expect(agent.status).toBe(0);
+    expect(JSON.parse(agent.stdout).target.timeoutMs).toBeNull();
+
+    const file = workflowFile(dataDir, {
+      name: "no-timeout-workflow",
+      steps: [{ id: "step", target: { type: "command", command: "true", shell: true } }],
+    });
+    const workflowCreate = runCli(dataDir, ["--json", "workflows", "create", file]);
+    expect(workflowCreate.status).toBe(0);
+    const workflow = JSON.parse(workflowCreate.stdout);
+    const workflowLoop = runCli(dataDir, [
+      "--json",
+      "create",
+      "workflow",
+      "no-timeout-workflow-loop",
+      "--workflow",
+      workflow.id,
+      "--at",
+      futureAt(),
+      "--timeout",
+      "null",
+    ]);
+    expect(workflowLoop.status).toBe(0);
+    expect(JSON.parse(workflowLoop.stdout).target.timeoutMs).toBeNull();
+  });
+
+  test("workflows migrate-agent-timeouts clones specs and retargets loops append-only", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-migrate-agent-timeouts-"));
+    const file = workflowFile(dataDir, {
+      name: "finite-agent-workflow",
+      steps: [
+        {
+          id: "worker",
+          timeoutMs: 2_700_000,
+          target: { type: "agent", provider: "codewith", prompt: "work", timeoutMs: 2_700_000, idleTimeoutMs: 600_000 },
+        },
+      ],
+    });
+    const created = runCli(dataDir, ["--json", "workflows", "create", file]);
+    expect(created.status).toBe(0);
+    const workflow = JSON.parse(created.stdout);
+    const loop = runCli(dataDir, [
+      "--json",
+      "create",
+      "workflow",
+      "finite-agent-workflow-loop",
+      "--workflow",
+      workflow.id,
+      "--at",
+      futureAt(),
+      "--timeout",
+      "45m",
+    ]);
+    expect(loop.status).toBe(0);
+    const loopValue = JSON.parse(loop.stdout);
+
+    const dryRun = runCli(dataDir, ["--json", "workflows", "migrate-agent-timeouts", "--loop", loopValue.id]);
+    expect(dryRun.status).toBe(0);
+    expect(JSON.parse(dryRun.stdout).summary.wouldMigrate).toBe(1);
+
+    const applied = runCli(dataDir, ["--json", "workflows", "migrate-agent-timeouts", "--loop", loopValue.id, "--apply"]);
+    expect(applied.status).toBe(0);
+    const appliedValue = JSON.parse(applied.stdout);
+    expect(appliedValue.summary.migrated).toBe(1);
+    const nextWorkflowId = appliedValue.rows[0].workflow.id;
+    expect(nextWorkflowId).not.toBe(workflow.id);
+
+    const shownLoop = runCli(dataDir, ["--json", "show", loopValue.id]);
+    expect(shownLoop.status).toBe(0);
+    const shownLoopValue = JSON.parse(shownLoop.stdout);
+    expect(shownLoopValue.target.workflowId).toBe(nextWorkflowId);
+    expect(shownLoopValue.target.timeoutMs).toBeNull();
+
+    const shownWorkflow = runCli(dataDir, ["--json", "workflows", "show", nextWorkflowId]);
+    expect(shownWorkflow.status).toBe(0);
+    const migratedWorkflow = JSON.parse(shownWorkflow.stdout);
+    expect(migratedWorkflow.steps[0].timeoutMs).toBeNull();
+    expect(migratedWorkflow.steps[0].target.timeoutMs).toBeNull();
+    expect(migratedWorkflow.steps[0].target.idleTimeoutMs).toBeUndefined();
+
+    const oldWorkflow = runCli(dataDir, ["--json", "workflows", "show", workflow.id]);
+    expect(oldWorkflow.status).toBe(0);
+    expect(JSON.parse(oldWorkflow.stdout).status).toBe("active");
+  });
+
+  test("workflows migrate-agent-timeouts rejects ambiguous loop names", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-migrate-ambiguous-loop-"));
+    const file = workflowFile(dataDir, {
+      name: "ambiguous-agent-workflow",
+      steps: [{ id: "worker", target: { type: "agent", provider: "codewith", prompt: "work", timeoutMs: 2_700_000 } }],
+    });
+    const created = runCli(dataDir, ["--json", "workflows", "create", file]);
+    expect(created.status).toBe(0);
+    const workflow = JSON.parse(created.stdout);
+    for (const at of [futureAt(), new Date(Date.now() + 120_000).toISOString()]) {
+      const loop = runCli(dataDir, [
+        "--json",
+        "create",
+        "workflow",
+        "duplicate-loop-name",
+        "--workflow",
+        workflow.id,
+        "--at",
+        at,
+      ]);
+      expect(loop.status).toBe(0);
+    }
+
+    const migrated = runCli(dataDir, ["--json", "workflows", "migrate-agent-timeouts", "--loop", "duplicate-loop-name"]);
+    expect(migrated.status).not.toBe(0);
+    expect(migrated.stderr).toContain("ambiguous loop name");
+  });
+
   test("create stores runtime preflight policy on command, agent, and workflow loops", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-runtime-preflight-"));
     const command = runCli(dataDir, [
@@ -1570,8 +1714,31 @@ describe("loops CLI", () => {
     expect(render.stdout).not.toContain("Do not dispatch or paste prompts into tmux panes");
     expect(render.stdout).not.toContain("todos --project /tmp/todos-store inspect task-12345678");
     expect(workflow.steps[1].target.addDirs).toEqual(["/tmp/todos-store", "/tmp/loops-store"]);
-    expect(workflow.steps[1].target.idleTimeoutMs).toBe(600_000);
+    expect(workflow.steps[0].target.timeoutMs).toBeNull();
+    expect(workflow.steps[0].timeoutMs).toBeNull();
+    expect(workflow.steps[1].target.timeoutMs).toBeNull();
+    expect(workflow.steps[1].timeoutMs).toBeNull();
+    expect(workflow.steps[1].target.idleTimeoutMs).toBeUndefined();
     expect(workflow.steps[1].dependsOn).toEqual(["worker"]);
+
+    const finiteRender = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "todos-task-worker-verifier",
+      "--var",
+      "taskId=task-87654321",
+      "--var",
+      "projectPath=/tmp/repo",
+      "--var",
+      "provider=codewith",
+      "--var",
+      "timeoutMs=600000",
+    ]);
+    expect(finiteRender.status).toBe(0);
+    const finiteWorkflow = JSON.parse(finiteRender.stdout);
+    expect(finiteWorkflow.steps[0].timeoutMs).toBe(600_000);
+    expect(finiteWorkflow.steps[1].timeoutMs).toBe(600_000);
   });
 
   test("templates fail closed for danger-full-access unless manual break-glass is explicit", () => {
@@ -1646,6 +1813,33 @@ describe("loops CLI", () => {
     expect(prWorkflow.name).toContain("pr-review");
     expect(prWorkflow.steps.map((step: { id: string }) => step.id)).toEqual(["prepare-worktree", "worker", "verifier"]);
     expect(prWorkflow.steps[1].target.worktree.mode).toBe("required");
+    expect(prWorkflow.steps[1].timeoutMs).toBeNull();
+    expect(prWorkflow.steps[2].timeoutMs).toBeNull();
+    expect(prWorkflow.steps[2].target.idleTimeoutMs).toBeUndefined();
+
+    const lifecycle = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "task-lifecycle",
+      "--var",
+      "taskId=task-lifecycle-12345678",
+      "--var",
+      `projectPath=${repo}`,
+      "--var",
+      "provider=codewith",
+      "--var",
+      "timeoutMs=600000",
+    ]);
+    expect(lifecycle.status).toBe(0);
+    const lifecycleWorkflow = JSON.parse(lifecycle.stdout);
+    const lifecycleStepsById = Object.fromEntries(lifecycleWorkflow.steps.map((step: { id: string }) => [step.id, step]));
+    expect(lifecycleStepsById.triage.timeoutMs).toBe(600_000);
+    expect(lifecycleStepsById.planner.timeoutMs).toBe(600_000);
+    expect(lifecycleStepsById.worker.timeoutMs).toBe(600_000);
+    expect(lifecycleStepsById.verifier.timeoutMs).toBe(600_000);
+    expect(lifecycleStepsById["triage-gate"].timeoutMs).toBe(120_000);
+    expect(lifecycleStepsById["planner-gate"].timeoutMs).toBe(120_000);
 
     const deterministic = runCli(dataDir, [
       "--json",
@@ -1662,6 +1856,22 @@ describe("loops CLI", () => {
     expect(deterministicWorkflow.steps).toHaveLength(1);
     expect(deterministicWorkflow.steps[0].target.type).toBe("command");
     expect(deterministicWorkflow.steps[0].target.args).toEqual(["-lc", "echo ok"]);
+    expect(deterministicWorkflow.steps[0].target.timeoutMs).toBe(300_000);
+
+    const deterministicNoTimeout = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "deterministic-check-create-task",
+      "--var",
+      `projectPath=${repo}`,
+      "--var",
+      "checkCommand=echo ok",
+      "--var",
+      "timeoutMs=none",
+    ]);
+    expect(deterministicNoTimeout.status).not.toBe(0);
+    expect(deterministicNoTimeout.stderr).toContain("timeoutMs");
 
     const reportOnly = runCli(dataDir, [
       "--json",
@@ -2223,6 +2433,33 @@ describe("loops CLI", () => {
     expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["worker", "verifier"]);
     expect(workflow.steps[0].target.prompt).toContain("[redacted");
     expect(workflow.steps[0].target.cwd).toBe("/tmp/knowledge");
+    expect(workflow.steps[0].timeoutMs).toBeNull();
+    expect(workflow.steps[1].timeoutMs).toBeNull();
+
+    const finiteRender = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "event-worker-verifier",
+      "--var",
+      "eventId=evt-87654321",
+      "--var",
+      "eventType=knowledge.record.created",
+      "--var",
+      "eventSource=knowledge",
+      "--var",
+      "eventJson={\"id\":\"evt-87654321\"}",
+      "--var",
+      "projectPath=/tmp/knowledge",
+      "--var",
+      "provider=codewith",
+      "--var",
+      "timeoutMs=600000",
+    ]);
+    expect(finiteRender.status).toBe(0);
+    const finiteWorkflow = JSON.parse(finiteRender.stdout);
+    expect(finiteWorkflow.steps[0].timeoutMs).toBe(600_000);
+    expect(finiteWorkflow.steps[1].timeoutMs).toBe(600_000);
   });
 
   test("templates render bounded agent worker/verifier workflow JSON", () => {
@@ -2256,6 +2493,8 @@ describe("loops CLI", () => {
     expect(render.stdout).not.toContain("/goal Check repo docs drift");
     expect(render.stdout).not.toContain("Inspect only recent commits and queue tasks for gaps.");
     expect(new Set(workflow.steps.map((step: { target: { authProfile?: string } }) => step.target.authProfile)).size).toBe(2);
+    expect(workflow.steps[0].timeoutMs).toBeNull();
+    expect(workflow.steps[1].timeoutMs).toBeNull();
   });
 
   test("templates select different OpenAccounts profiles from a pool", () => {
@@ -2349,6 +2588,8 @@ describe("loops CLI", () => {
       "workspace-write",
       "--permission-mode",
       "bypass",
+      "--timeout",
+      "10m",
     ];
 
     const first = runCli(dataDir, args, JSON.stringify(event));
@@ -2371,6 +2612,8 @@ describe("loops CLI", () => {
         sandbox: "workspace-write",
         addDirs: ["/tmp/todos-store", "/tmp/loops-store"],
       });
+      expect(step.timeoutMs).toBe(600_000);
+      expect(step.target.timeoutMs).toBe(600_000);
       expect(["account004", "account005", "account006"]).toContain(step.target.authProfile);
     }
 
@@ -2499,6 +2742,8 @@ describe("loops CLI", () => {
       JSON.stringify(event),
       "--sandbox",
       "workspace-write",
+      "--timeout",
+      "10m",
     ]);
     expect(preview.status).toBe(0);
     const previewValue = JSON.parse(preview.stdout);
@@ -2534,12 +2779,14 @@ describe("loops CLI", () => {
       "2",
       "--sandbox",
       "workspace-write",
+      "--timeout",
+      "10m",
     ]);
     expect(scheduled.status).toBe(0);
     const loop = JSON.parse(scheduled.stdout);
     expect(loop.name).toBe("route-drain-test");
     expect(loop.target.command).toBe("loops");
-    expect(loop.target.args).toEqual(expect.arrayContaining(["events", "drain", "todos-task", "--task-list", "oss", "--max-dispatch", "2"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["events", "drain", "todos-task", "--task-list", "oss", "--max-dispatch", "2", "--timeout", "10m"]));
   });
 
   test("todos task routes can select the full task-lifecycle template", () => {

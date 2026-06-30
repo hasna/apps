@@ -231,6 +231,34 @@ describe("workflow runner", () => {
     }
   });
 
+  test("allows explicit unlimited workflow step timeouts", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-unlimited-timeout-"));
+    const marker = join(root, "completed");
+    try {
+      const workflow = store.createWorkflow({
+        name: "unlimited-step",
+        steps: [
+          {
+            id: "slow",
+            timeoutMs: null,
+            target: { type: "command", command: `sleep 0.1; printf done > ${JSON.stringify(marker)}`, shell: true },
+          },
+        ],
+      });
+      const result = await executeWorkflow(store, workflow);
+      const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0]!;
+      const step = store.getWorkflowStepRun(run.id, "slow")!;
+      expect(result.status).toBe("succeeded");
+      expect(run.status).toBe("succeeded");
+      expect(step.status).toBe("succeeded");
+      expect(readFileSync(marker, "utf8")).toBe("done");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("expired loop leases also fail linked workflow runs", async () => {
     const store = new Store(":memory:");
     try {

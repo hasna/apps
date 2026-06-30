@@ -59,7 +59,7 @@ interface CommandSpec {
   cwd?: string;
   shell?: boolean;
   env?: Record<string, string>;
-  timeoutMs: number;
+  timeoutMs?: number | null;
   idleTimeoutMs?: number;
   account?: AccountRef;
   accountTool?: string;
@@ -366,7 +366,7 @@ function commandSpec(target: ExecutableTarget): CommandSpec {
       cwd: commandTarget.cwd,
       shell: commandTarget.shell,
       env: commandTarget.env,
-      timeoutMs: commandTarget.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      timeoutMs: commandTarget.timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : commandTarget.timeoutMs,
       idleTimeoutMs: commandTarget.idleTimeoutMs,
       account: commandTarget.account,
       accountTool: commandTarget.account?.tool,
@@ -377,7 +377,7 @@ function commandSpec(target: ExecutableTarget): CommandSpec {
     command: providerCommand(agentTarget.provider),
     args: agentArgs(agentTarget),
     cwd: agentTarget.cwd,
-    timeoutMs: agentTarget.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    timeoutMs: agentTarget.timeoutMs ?? null,
     idleTimeoutMs: agentTarget.idleTimeoutMs,
     account: agentTarget.account,
     accountTool: agentTarget.account?.tool ?? accountToolForProvider(agentTarget.provider),
@@ -609,11 +609,14 @@ async function executeRemoteSpec(
   if (opts.signal?.aborted) abortHandler();
   opts.signal?.addEventListener("abort", abortHandler, { once: true });
 
-  const timer = setTimeout(() => {
-    timedOut = true;
-    if (child.pid) killProcessGroup(child.pid);
-  }, spec.timeoutMs);
-  timer.unref();
+  const timer =
+    typeof spec.timeoutMs === "number"
+      ? setTimeout(() => {
+          timedOut = true;
+          if (child.pid) killProcessGroup(child.pid);
+        }, spec.timeoutMs)
+      : undefined;
+  timer?.unref();
   let idleTimer: NodeJS.Timeout | undefined;
   const resetIdleTimer = (): void => {
     if (!spec.idleTimeoutMs) return;
@@ -642,7 +645,7 @@ async function executeRemoteSpec(
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
     if (idleTimer) clearTimeout(idleTimer);
     opts.signal?.removeEventListener("abort", abortHandler);
   }
@@ -794,11 +797,14 @@ export async function executeTarget(
   if (opts.signal?.aborted) abortHandler();
   opts.signal?.addEventListener("abort", abortHandler, { once: true });
 
-  const timer = setTimeout(() => {
-    timedOut = true;
-    if (child.pid) killProcessGroup(child.pid);
-  }, spec.timeoutMs);
-  timer.unref();
+  const timer =
+    typeof spec.timeoutMs === "number"
+      ? setTimeout(() => {
+          timedOut = true;
+          if (child.pid) killProcessGroup(child.pid);
+        }, spec.timeoutMs)
+      : undefined;
+  timer?.unref();
   let idleTimer: NodeJS.Timeout | undefined;
   const resetIdleTimer = (): void => {
     if (!spec.idleTimeoutMs) return;
@@ -827,7 +833,7 @@ export async function executeTarget(
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
     if (idleTimer) clearTimeout(idleTimer);
     opts.signal?.removeEventListener("abort", abortHandler);
   }

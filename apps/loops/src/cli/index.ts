@@ -206,6 +206,47 @@ function publicWorkflowBody(body: CreateWorkflowInput): Record<string, unknown> 
   return bodyOnly;
 }
 
+function workflowWithAgentTimeouts(
+  workflow: WorkflowSpec,
+  timeoutMs: number | null,
+  opts: { name?: string } = {},
+): { body: CreateWorkflowInput; changed: boolean; agentStepIds: string[] } {
+  let changed = false;
+  const agentStepIds: string[] = [];
+  const steps = workflow.steps.map((step) => {
+    if (step.target.type !== "agent") return step;
+    agentStepIds.push(step.id);
+    const target = { ...step.target, timeoutMs };
+    if (timeoutMs === null && target.idleTimeoutMs !== undefined) {
+      delete target.idleTimeoutMs;
+      changed = true;
+    }
+    if (step.timeoutMs !== timeoutMs || step.target.timeoutMs !== timeoutMs) changed = true;
+    return {
+      ...step,
+      target,
+      timeoutMs,
+    };
+  });
+  return {
+    body: {
+      name: opts.name ?? workflow.name,
+      description: workflow.description,
+      version: workflow.version,
+      goal: workflow.goal,
+      steps,
+    },
+    changed,
+    agentStepIds,
+  };
+}
+
+function workflowTimeoutMigrationName(workflow: WorkflowSpec, timeoutMs: number | null): string {
+  const policy = timeoutMs === null ? "agent-timeout-unlimited" : `agent-timeout-${timeoutMs}ms`;
+  const suffix = randomUUID().replace(/-/g, "").slice(0, 8);
+  return `${workflow.name}-${policy}-${suffix}`;
+}
+
 function printTextOutput(value: { stdout?: string; stderr?: string }): void {
   for (const line of textOutputBlocks(value, { indent: "  " })) console.log(line);
 }
@@ -237,6 +278,15 @@ function positiveDuration(raw: string | undefined, label: string): number | unde
   if (raw === undefined) return undefined;
   const value = parseDuration(raw);
   if (!Number.isFinite(value) || value <= 0) throw new Error(`${label} must be greater than zero`);
+  return value;
+}
+
+function timeoutDuration(raw: string | undefined, label: string): number | null | undefined {
+  if (raw === undefined) return undefined;
+  const normalized = raw.trim().toLowerCase();
+  if (["none", "unlimited", "null", "never", "off", "false"].includes(normalized)) return null;
+  const value = parseDuration(raw);
+  if (!Number.isFinite(value) || value <= 0) throw new Error(`${label} must be a duration greater than zero, or none/unlimited`);
   return value;
 }
 
@@ -844,6 +894,7 @@ interface TodosTaskRouteOptions {
   variant?: string;
   agent?: string;
   addDir?: string[];
+  timeout?: string;
   permissionMode?: string;
   sandbox?: string;
   manualBreakGlass?: boolean;
@@ -1198,6 +1249,7 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
     variant: opts.variant,
     agent: opts.agent,
     addDirs: listFromRepeatedOpts(opts.addDir),
+    timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
     permissionMode,
     sandbox,
     manualBreakGlass: Boolean(opts.manualBreakGlass),
@@ -1437,6 +1489,7 @@ function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOptions): T
     variant: opts.variant,
     agent: opts.agent,
     addDirs: listFromRepeatedOpts(opts.addDir),
+    timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
     permissionMode,
     sandbox,
     manualBreakGlass: Boolean(opts.manualBreakGlass),
@@ -1805,7 +1858,7 @@ addGoalOptions(
         .description("create a deterministic shell command loop")
         .requiredOption("--cmd <command>", "command string to execute")
         .option("--cwd <dir>", "working directory")
-        .option("--timeout <duration>", "run timeout")
+        .option("--timeout <duration>", "run timeout; use none/unlimited for no timeout")
         .option("--no-shell", "execute without a shell")
         .option("--preflight-each-run", "check target executables/accounts before every scheduled run")
         .option("--preflight", "check target executables/accounts before storing the loop"),
@@ -1820,7 +1873,7 @@ addGoalOptions(
       command: opts.cmd,
       cwd: opts.cwd,
       shell: opts.shell,
-      timeoutMs: opts.timeout ? parseDuration(opts.timeout) : undefined,
+      timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
       account: accountFromOpts(opts),
       preflight: runtimePreflightFromOpts(opts),
     };
@@ -1851,7 +1904,7 @@ addGoalOptions(
         .option("--agent <agent>", "provider-specific agent")
         .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
         .option("--add-dir <dir>", "additional writable directory for provider sandboxes; may be repeated or comma-separated", collectValues, [] as string[])
-        .option("--timeout <duration>", "run timeout")
+        .option("--timeout <duration>", "run timeout; use none/unlimited for no timeout")
         .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass")
         .option("--sandbox <mode>", "provider sandbox: codewith/codex use read-only/workspace-write/danger-full-access; cursor uses enabled/disabled")
         .option("--allow-tool <name>", "advisory per-session tool allowlist metadata; may be repeated or comma-separated", collectValues, [] as string[])
@@ -1883,7 +1936,7 @@ addGoalOptions(
       agent: opts.agent,
       authProfile: providerAuthProfileFromOpts(opts, provider),
       addDirs: listFromRepeatedOpts(opts.addDir),
-      timeoutMs: opts.timeout ? parseDuration(opts.timeout) : undefined,
+      timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
       configIsolation: opts.configIsolation,
       permissionMode: permissionModeFromOpts(opts, provider),
       sandbox: sandboxFromOpts(opts, provider),
@@ -1909,6 +1962,7 @@ addGoalOptions(
       .command("workflow <name>")
       .description("schedule a stored workflow")
       .requiredOption("--workflow <idOrName>", "workflow id or name")
+      .option("--timeout <duration>", "workflow run timeout; use none/unlimited for no workflow-level timeout")
       .option("--preflight-each-run", "check workflow steps before every scheduled run")
       .option("--preflight", "check workflow step executables/accounts before storing the loop"),
     ),
@@ -1920,6 +1974,7 @@ addGoalOptions(
     const target: LoopTarget = {
       type: "workflow",
       workflowId: workflow.id,
+      timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
       preflight: runtimePreflightFromOpts(opts),
     };
     const input = baseCreateInput(name, opts, target);
@@ -1969,6 +2024,7 @@ function addRouteEventOptions(command: Command): Command {
     .option("--variant <variant>", "provider-specific model variant or reasoning effort")
     .option("--agent <agent>", "provider-specific agent")
     .option("--add-dir <dir>", "additional writable directory for provider sandboxes; may be repeated or comma-separated", collectValues, [] as string[])
+    .option("--timeout <duration>", "agent step timeout; use none/unlimited for no timeout")
     .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
     .option("--sandbox <mode>", "provider sandbox")
     .option("--manual-break-glass", "allow danger-full-access in generated worker/verifier workflow metadata; for explicit operator emergency use only")
@@ -2016,6 +2072,7 @@ function addTodosDrainOptions(command: Command, opts: { includeDryRun?: boolean;
     .option("--variant <variant>", "provider-specific model variant or reasoning effort")
     .option("--agent <agent>", "provider-specific agent")
     .option("--add-dir <dir>", "additional writable directory for provider sandboxes; may be repeated or comma-separated", collectValues, [] as string[])
+    .option("--timeout <duration>", "agent step timeout; use none/unlimited for no timeout")
     .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
     .option("--sandbox <mode>", "provider sandbox")
     .option("--manual-break-glass", "allow danger-full-access in generated worker/verifier workflow metadata; for explicit operator emergency use only")
@@ -2078,6 +2135,7 @@ function routeDrainArgs(opts: TodosDrainOptions & { tag?: string }): string[] {
   add("--variant", opts.variant);
   add("--agent", opts.agent);
   for (const dir of listFromRepeatedOpts(opts.addDir) ?? []) add("--add-dir", dir);
+  add("--timeout", opts.timeout);
   add("--permission-mode", opts.permissionMode);
   add("--sandbox", opts.sandbox);
   addBool("--manual-break-glass", opts.manualBreakGlass);
@@ -2483,6 +2541,7 @@ eventsHandle
   .option("--variant <variant>", "provider-specific model variant or reasoning effort")
   .option("--agent <agent>", "provider-specific agent")
   .option("--add-dir <dir>", "additional writable directory for provider sandboxes; may be repeated or comma-separated", collectValues, [] as string[])
+  .option("--timeout <duration>", "agent step timeout; use none/unlimited for no timeout")
   .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
   .option("--sandbox <mode>", "provider sandbox")
   .option("--manual-break-glass", "allow danger-full-access in generated worker/verifier workflow metadata; for explicit operator emergency use only")
@@ -2530,6 +2589,7 @@ eventsHandle
   .option("--variant <variant>", "provider-specific model variant or reasoning effort")
   .option("--agent <agent>", "provider-specific agent")
   .option("--add-dir <dir>", "additional writable directory for provider sandboxes; may be repeated or comma-separated", collectValues, [] as string[])
+  .option("--timeout <duration>", "agent step timeout; use none/unlimited for no timeout")
   .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
   .option("--sandbox <mode>", "provider sandbox")
   .option("--manual-break-glass", "allow danger-full-access in generated worker/verifier workflow metadata; for explicit operator emergency use only")
@@ -2802,6 +2862,89 @@ workflows
         },
         `${result.run.id} recovered=${result.recoveredSteps.length}`,
       );
+    } finally {
+      store.close();
+    }
+  });
+
+workflows
+  .command("migrate-agent-timeouts")
+  .description("append-only migrate active workflow loops to a new agent timeout policy")
+  .option("--loop <idOrName>", "migrate only one loop instead of all active workflow loops")
+  .option("--timeout <duration>", "agent timeout policy; use none/unlimited for no timeout", "none")
+  .option("--apply", "create new workflow specs and retarget eligible loops")
+  .option("--archive-old", "archive old workflow specs after retargeting when no active loops still reference them")
+  .action((opts) => {
+    const store = new Store();
+    try {
+      const timeoutMs = timeoutDuration(opts.timeout, "--timeout") ?? null;
+      const candidateLoops = opts.loop
+        ? [store.requireUniqueLoop(opts.loop)]
+        : store.listLoops({ status: "active", limit: 10_000 }).filter((loop) => loop.target.type === "workflow");
+      const rows: Array<Record<string, unknown>> = [];
+
+      for (const loop of candidateLoops) {
+        if (loop.archivedAt) {
+          rows.push({ loop: publicLoop(loop), status: "skipped", reason: "loop is archived" });
+          continue;
+        }
+        if (loop.target.type !== "workflow") {
+          rows.push({ loop: publicLoop(loop), status: "skipped", reason: "loop is not a workflow loop" });
+          continue;
+        }
+        const workflow = store.requireWorkflow(loop.target.workflowId);
+        const nextWorkflowName = workflowTimeoutMigrationName(workflow, timeoutMs);
+        const migration = workflowWithAgentTimeouts(workflow, timeoutMs, { name: nextWorkflowName });
+        if (migration.agentStepIds.length === 0) {
+          rows.push({ loop: publicLoop(loop), workflow: publicWorkflow(workflow), status: "skipped", reason: "workflow has no agent steps" });
+          continue;
+        }
+        if (!migration.changed) {
+          rows.push({ loop: publicLoop(loop), workflow: publicWorkflow(workflow), status: "skipped", reason: "agent timeout policy already matches" });
+          continue;
+        }
+        if (store.hasRunningRun(loop.id)) {
+          rows.push({ loop: publicLoop(loop), workflow: publicWorkflow(workflow), status: "blocked", reason: "loop has a running run; retry after it finishes" });
+          continue;
+        }
+
+        if (!opts.apply) {
+          rows.push({
+            loop: publicLoop(loop),
+            workflow: publicWorkflow(workflow),
+            status: "would_migrate",
+            agentStepIds: migration.agentStepIds,
+            nextWorkflowName,
+            timeoutMs,
+          });
+          continue;
+        }
+
+        const migrated = store.createAndRetargetWorkflowLoop(loop.id, migration.body, {
+          workflowTimeoutMs: timeoutMs,
+          archiveOld: Boolean(opts.archiveOld),
+        });
+        rows.push({
+          loop: publicLoop(migrated.loop),
+          previousWorkflow: publicWorkflow(migrated.previousWorkflow),
+          workflow: publicWorkflow(migrated.workflow),
+          archivedOld: migrated.archivedOld ? publicWorkflow(migrated.archivedOld) : undefined,
+          status: "migrated",
+          agentStepIds: migration.agentStepIds,
+          timeoutMs,
+        });
+      }
+
+      const summary = {
+        apply: Boolean(opts.apply),
+        timeoutMs,
+        total: rows.length,
+        migrated: rows.filter((row) => row.status === "migrated").length,
+        wouldMigrate: rows.filter((row) => row.status === "would_migrate").length,
+        blocked: rows.filter((row) => row.status === "blocked").length,
+        skipped: rows.filter((row) => row.status === "skipped").length,
+      };
+      print({ summary, rows }, opts.apply ? `migrated=${summary.migrated} blocked=${summary.blocked} skipped=${summary.skipped}` : `would_migrate=${summary.wouldMigrate} blocked=${summary.blocked} skipped=${summary.skipped}`);
     } finally {
       store.close();
     }

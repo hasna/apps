@@ -72,6 +72,29 @@ describe("workflow goal spec validation", () => {
     expect(workflow.steps[1]?.target.type).toBe("agent");
   });
 
+  test("accepts explicit unlimited timeoutMs on targets and steps", () => {
+    const workflow = workflowBodyFromJson({
+      name: "unlimited-timeouts",
+      steps: [
+        {
+          id: "command",
+          timeoutMs: null,
+          target: { type: "command", command: "true", timeoutMs: null },
+        },
+        {
+          id: "agent",
+          timeoutMs: null,
+          target: { type: "agent", provider: "codewith", prompt: "do work", timeoutMs: null },
+        },
+      ],
+    });
+
+    expect(workflow.steps[0]?.timeoutMs).toBeNull();
+    expect(workflow.steps[0]?.target.timeoutMs).toBeNull();
+    expect(workflow.steps[1]?.timeoutMs).toBeNull();
+    expect(workflow.steps[1]?.target.timeoutMs).toBeNull();
+  });
+
   test("resolves workflow agent promptFile relative to the workflow file directory", () => {
     const root = mkdtempSync(join(tmpdir(), "loops-workflow-prompt-file-"));
     const promptFile = join(root, "prompts", "worker.md");
