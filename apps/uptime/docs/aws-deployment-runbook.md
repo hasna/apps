@@ -663,6 +663,17 @@ do not treat report, incident, result, import, probe, scheduler, browser, or
 reporter routes as cloud-primary until their Postgres-backed contracts and live
 evidence exist.
 
+`0.1.69` adds a bounded hosted Postgres probe API adapter for explicit
+`hostedPostgresProbeRuntime` wiring. It can enroll probe identities with an
+admin-scoped hosted token, claim existing `check_jobs` with a token bound to the
+same `probeId`, and accept signed probe result submissions after verifying the
+probe public key from workspace-scoped Postgres storage. It does not enable
+hosted probe listing, API job creation, heartbeat, revocation, rotation, worker
+service startup, private target seeding, or private-probe scale-out. Keep those
+gates blocked until the inventory-backed private target refs,
+SSRF/private-routing evidence, worker alarms, deploy drain, and live probe
+liveness evidence are recorded.
+
 Example reporter evidence shape:
 
 ```json
@@ -739,8 +750,11 @@ source of truth. The generated env file points the machine at hosted `/api/v1`
 state and references a local private-key file path. It does not include private
 key or token contents.
 
-The private probe service should not be enabled until hosted probe claim/submit
-routes are backed by cloud check jobs and cloud audit rows.
+The private probe service should not be enabled until the hosted service wiring
+injects the audited `hostedPostgresProbeRuntime`, probe tokens are bound to
+their exact `probeId`, private targets come from approved inventory refs, and
+heartbeat, revocation, rotation, alarms, deploy drain, and live liveness evidence
+are all recorded.
 
 `0.1.59` adds a read-only Postgres private-probe preflight for identity review:
 
@@ -757,11 +771,13 @@ uptime cloud postgres-private-probe preflight \
 This command reads the Postgres probe identity, expected machine/location/public
 key fingerprint bindings, due private job count, and stale private lease count.
 It can prove `canUseCloudIdentityForReview=true`, but it still returns
-`canStartHostedProbe=false` and `canPromotePrivateProbe=false` until hosted
-probe claim/submit/heartbeat/revoke routes are wired to the async Postgres
-runtime, private targets come from approved inventory refs, and worker alarms
-plus live operational evidence exist. Do not include private keys, raw targets,
-tokens, database URLs, or saved Terraform state/plan contents in this output.
+`canStartHostedProbe=false` and `canPromotePrivateProbe=false`. The bounded
+`0.1.69` API adapter can claim and submit through an injected audited Postgres
+probe runtime, but hosted service startup, heartbeat/revoke/rotation routes,
+approved private inventory refs, worker alarms, deploy drain, and live
+operational evidence remain required before promotion. Do not include private
+keys, raw targets, tokens, database URLs, or saved Terraform state/plan contents
+in this output.
 
 ## Safety Rules
 

@@ -3,20 +3,33 @@ import { dashboardHtml } from "./dashboard.js";
 import { sanitizeEvidenceInput } from "./evidence-sanitizer.js";
 import { sanitizePostgresReportRuntimeError, type ListPostgresReportRunsOptions, type PostgresReportRunRecord, type PostgresReportScheduleRecord } from "./postgres-report-runtime.js";
 import { sanitizePostgresRuntimeError } from "./postgres-runtime.js";
+import { probePublicKeyFingerprint, probeResultPayloadHash, verifyProbeResultSignature } from "./probes.js";
 import { UptimeService, type UptimeServiceOptions } from "./service.js";
 import { resolveRuntimeMode, type UptimeRuntimeMode } from "./store.js";
 import type {
+  ClaimPostgresCheckJobInput,
   PostgresAuditEventRecord,
+  PostgresCheckJobRecord,
+  PostgresCheckResultRecord,
   PostgresMonitorMutationAuditInput,
   PostgresMonitorMutationResult,
   PostgresMonitorTombstoneResult,
   PostgresMonitorRecord,
+  PostgresCheckJobMutationResult,
+  PostgresProbeIdentityRecord,
+  PostgresProbeIdentityMutationResult,
+  PostgresProbeMutationAuditInput,
+  PostgresProbeSubmissionRecord,
   PostgresSyncTombstoneRecord,
   RecordPostgresAuditEventInput,
+  SubmitPostgresProbeCheckResult,
+  SubmitPostgresProbeCheckResultMutationResult,
+  SubmitPostgresProbeCheckResultInput,
   TombstonePostgresResourceInput,
+  UpsertPostgresProbeIdentityInput,
   UpsertPostgresMonitorInput,
 } from "./postgres-runtime.js";
-import type { AuditEvent, ListAuditEventsOptions, RecordAuditEventInput, ReportRun, ReportSchedule, SchedulerHandle, Monitor, UptimeSummary } from "./types.js";
+import type { AuditEvent, CheckResult, ListAuditEventsOptions, ProbeCheckJob, ProbeIdentity, ProbeResultSubmission, ProbeSubmissionReceipt, RecordAuditEventInput, ReportRun, ReportSchedule, SchedulerHandle, Monitor, UptimeSummary } from "./types.js";
 
 export interface ServeOptions extends UptimeServiceOptions {
   host?: string;
@@ -28,6 +41,7 @@ export interface ServeOptions extends UptimeServiceOptions {
   hostedTokens?: HostedToken[];
   hostedAllowedOrigins?: string[];
   hostedPostgresRuntime?: HostedPostgresMonitorRuntime;
+  hostedPostgresProbeRuntime?: HostedPostgresProbeRuntime;
   hostedPostgresReportRuntime?: HostedPostgresReportRuntime;
   allowUnsafeRemoteMutations?: boolean;
 }
@@ -38,6 +52,7 @@ export interface CreateApiHandlerOptions {
   hostedTokens?: HostedToken[];
   hostedAllowedOrigins?: string[];
   hostedPostgresRuntime?: HostedPostgresMonitorRuntime;
+  hostedPostgresProbeRuntime?: HostedPostgresProbeRuntime;
   hostedPostgresReportRuntime?: HostedPostgresReportRuntime;
   allowUnsafeRemoteMutations?: boolean;
   fetchImpl?: typeof fetch;
@@ -52,12 +67,14 @@ export interface HostedToken {
   scopes: HostedScope[];
   workspaceId?: string;
   actor?: string;
+  probeId?: string;
 }
 
 interface HostedActor {
   scopes: Set<HostedScope>;
   workspaceId: string;
   actor: string;
+  probeId?: string;
 }
 
 export interface HostedPostgresMonitorRuntime {
@@ -67,6 +84,17 @@ export interface HostedPostgresMonitorRuntime {
   getMonitor(input: { workspaceId?: string; id: string }): Promise<PostgresMonitorRecord | null>;
   tombstoneResource(input: TombstonePostgresResourceInput & { resourceType: "monitor" }): Promise<PostgresSyncTombstoneRecord>;
   tombstoneMonitorWithAudit(input: TombstonePostgresResourceInput & { resourceType: "monitor" }, audit: PostgresMonitorMutationAuditInput): Promise<PostgresMonitorTombstoneResult>;
+  recordAuditEvent(input: RecordPostgresAuditEventInput): Promise<PostgresAuditEventRecord>;
+}
+
+export interface HostedPostgresProbeRuntime {
+  upsertProbeIdentity(input: UpsertPostgresProbeIdentityInput): Promise<PostgresProbeIdentityRecord>;
+  upsertProbeIdentityWithAudit(input: UpsertPostgresProbeIdentityInput, audit: PostgresProbeMutationAuditInput): Promise<PostgresProbeIdentityMutationResult>;
+  getProbeIdentity(input: { workspaceId?: string; id: string }): Promise<PostgresProbeIdentityRecord | null>;
+  claimCheckJob(input: ClaimPostgresCheckJobInput): Promise<PostgresCheckJobRecord | null>;
+  claimCheckJobWithAudit(input: ClaimPostgresCheckJobInput, audit: PostgresProbeMutationAuditInput): Promise<PostgresCheckJobMutationResult | null>;
+  submitProbeCheckResult(input: SubmitPostgresProbeCheckResultInput): Promise<SubmitPostgresProbeCheckResult>;
+  submitProbeCheckResultWithAudit(input: SubmitPostgresProbeCheckResultInput, audit: PostgresProbeMutationAuditInput): Promise<SubmitPostgresProbeCheckResultMutationResult>;
   recordAuditEvent(input: RecordPostgresAuditEventInput): Promise<PostgresAuditEventRecord>;
 }
 
@@ -189,6 +217,7 @@ export function serveUptime(options: ServeOptions = {}): { server: ReturnType<ty
       hostedTokens: options.hostedTokens,
       hostedAllowedOrigins: options.hostedAllowedOrigins,
       hostedPostgresRuntime: options.hostedPostgresRuntime,
+      hostedPostgresProbeRuntime: options.hostedPostgresProbeRuntime,
       hostedPostgresReportRuntime: options.hostedPostgresReportRuntime,
       allowUnsafeRemoteMutations: options.allowUnsafeRemoteMutations,
       trustedLoopback: isLoopbackHost(options.host ?? "127.0.0.1"),
@@ -304,7 +333,12 @@ async function handleApiRoute(
     return await handleHostedReportRoute(request, url, apiPath, options.hostedPostgresReportRuntime, actor);
   }
   if (hosted && apiPath.startsWith("/api/probes")) {
-    throw new ApiError("hosted probe APIs require cloud check_jobs, workspace stores, and audit logging", 501);
+    if (!actor) throw new ApiError("hosted actor is required", 500);
+    const runtime = resolveHostedPostgresProbeRuntime(options);
+    if (!runtime) {
+      throw new ApiError("hosted probe APIs require cloud check_jobs, workspace stores, and audit logging", 501);
+    }
+    return await handleHostedProbeRoute(request, url, apiPath, runtime, actor);
   }
   if (request.method === "GET" && apiPath === "/api/report-schedules") {
     return json(service.listReportSchedules({ includeDisabled: url.searchParams.get("includeDisabled") === "true" }));
@@ -583,16 +617,36 @@ function sanitizeApiError(error: unknown, options: CreateApiHandlerOptions): str
   if (error instanceof ApiError && raw === "monitor update conflict") return raw;
   const sanitized = options.hostedPostgresReportRuntime
       ? sanitizePostgresReportRuntimeError(raw, process.env.HASNA_UPTIME_DATABASE_URL)
-      : options.hostedPostgresRuntime
+      : (options.hostedPostgresRuntime || options.hostedPostgresProbeRuntime)
         ? sanitizePostgresRuntimeError(raw, process.env.HASNA_UPTIME_DATABASE_URL)
         : raw;
   const redacted = sanitized
+    .replace(/-----BEGIN [A-Z ]+KEY-----[\s\S]*?-----END [A-Z ]+KEY-----/g, "key_redacted")
+    .replace(/\bfence_[A-Za-z0-9_-]+\b/g, "fence_redacted")
     .replace(/\b(?:SELECT|INSERT|UPDATE|DELETE|WITH|BEGIN|COMMIT|ROLLBACK)\b[\s\S]*/gi, "database operation failed")
     .replace(/\b(?:arn:aws:[^\s,;]+|[0-9]{12}|(?:vpc|subnet|sg|task|fs|fsmt|rtb|igw|nat|eni|eipalloc|vpce|vol|snap|ami)-[0-9a-f]{8,36})\b/gi, "resource_redacted");
-  if ((options.hostedPostgresRuntime || options.hostedPostgresReportRuntime) && /\b(?:duplicate key|violates .*constraint|constraint|Key \(|relation|column|schema)\b/i.test(redacted)) {
+  if ((options.hostedPostgresRuntime || options.hostedPostgresReportRuntime || options.hostedPostgresProbeRuntime) && /\b(?:duplicate key|violates .*constraint|constraint|Key \(|relation|column|schema)\b/i.test(redacted)) {
     return "database operation failed";
   }
   return redacted;
+}
+
+function resolveHostedPostgresProbeRuntime(options: CreateApiHandlerOptions): HostedPostgresProbeRuntime | undefined {
+  return options.hostedPostgresProbeRuntime ?? (
+    isHostedPostgresProbeRuntime(options.hostedPostgresRuntime) ? options.hostedPostgresRuntime : undefined
+  );
+}
+
+function isHostedPostgresProbeRuntime(value: unknown): value is HostedPostgresProbeRuntime {
+  const candidate = value as Partial<HostedPostgresProbeRuntime> | undefined;
+  return typeof candidate?.upsertProbeIdentity === "function"
+    && typeof candidate.upsertProbeIdentityWithAudit === "function"
+    && typeof candidate.getProbeIdentity === "function"
+    && typeof candidate.claimCheckJob === "function"
+    && typeof candidate.claimCheckJobWithAudit === "function"
+    && typeof candidate.submitProbeCheckResult === "function"
+    && typeof candidate.submitProbeCheckResultWithAudit === "function"
+    && typeof candidate.recordAuditEvent === "function";
 }
 
 function postgresMonitorDefinitionChanged(current: PostgresMonitorRecord, input: Record<string, unknown>): boolean {
@@ -610,11 +664,137 @@ function hostedScopeFor(method: string, apiPath: string): HostedScope {
   if (method === "POST" && apiPath === "/api/report") return "uptime:report";
   if (apiPath.startsWith("/api/report-schedules") || apiPath.startsWith("/api/report-runs")) return method === "GET" ? "uptime:read" : "uptime:report";
   if (apiPath.startsWith("/api/audit-events")) return method === "GET" ? "uptime:read" : "uptime:admin";
+  if (method === "POST" && apiPath === "/api/probes") return "uptime:admin";
   if (apiPath.startsWith("/api/probes")) return method === "GET" ? "uptime:read" : "uptime:probe";
   if (method === "POST" && (apiPath === "/api/check-all" || /\/check$/.test(apiPath))) return "uptime:probe";
   if (method === "GET") return "uptime:read";
   if (method === "POST" || method === "PATCH" || method === "DELETE") return "uptime:write";
   return "uptime:read";
+}
+
+async function handleHostedProbeRoute(
+  request: Request,
+  url: URL,
+  apiPath: string,
+  runtime: HostedPostgresProbeRuntime,
+  actor: HostedActor,
+): Promise<Response> {
+  if (request.method === "GET" && apiPath === "/api/probes") {
+    throw new ApiError("hosted probe identity listing requires paginated probe inventory review", 501);
+  }
+  if (request.method === "POST" && apiPath === "/api/probes") {
+    const input = await jsonBody(request);
+    if (!input.publicKeyPem) throw new ApiError("hosted probe enrollment requires publicKeyPem; generate keys on the probe machine", 400);
+    const computedFingerprint = probePublicKeyFingerprint(String(input.publicKeyPem));
+    if (input.publicKeyFingerprint && String(input.publicKeyFingerprint) !== computedFingerprint) {
+      throw new ApiError("hosted probe public key fingerprint mismatch", 400);
+    }
+    const idempotencyKey = request.headers.get("idempotency-key") ?? undefined;
+    const { probe } = await runtime.upsertProbeIdentityWithAudit({
+      id: input.id,
+      workspaceId: actor.workspaceId,
+      name: input.name,
+      probeClass: input.probeClass ?? "private",
+      probeLocation: input.probeLocation,
+      machineId: input.machineId,
+      publicKeyPem: input.publicKeyPem,
+      publicKeyFingerprint: computedFingerprint,
+      enabled: input.enabled,
+      capabilities: input.capabilities,
+      actor: actor.actor,
+      origin: "hosted-api",
+      idempotencyKey,
+    }, hostedPostgresProbeAuditInput(actor, "probe_identity.upsert", "probe_identity", input.id, idempotencyKey, {
+      method: request.method,
+      apiPath,
+      requestHash: hostedProbeEnrollmentRequestHash(input, computedFingerprint),
+    }));
+    return json(postgresProbeIdentityToProbeIdentity(probe), 201);
+  }
+  const probeIdentityMatch = apiPath.match(/^\/api\/probes\/([^/]+)$/);
+  if (request.method === "GET" && probeIdentityMatch && decodeURIComponent(probeIdentityMatch[1]!) !== "jobs") {
+    const probe = await runtime.getProbeIdentity({ workspaceId: actor.workspaceId, id: decodeURIComponent(probeIdentityMatch[1]!) });
+    return probe ? json(postgresProbeIdentityToProbeIdentity(probe)) : json({ error: "not found" }, 404);
+  }
+  if (request.method === "POST" && apiPath === "/api/probes/jobs") {
+    throw new ApiError("hosted probe job creation requires scheduler-owned cloud leases", 501);
+  }
+  const probeJobMatch = apiPath.match(/^\/api\/probes\/jobs\/([^/]+)$/);
+  if (request.method === "GET" && probeJobMatch) {
+    throw new ApiError("hosted probe job reads require scoped check-job inventory review", 501);
+  }
+  const probeJobClaimMatch = apiPath.match(/^\/api\/probes\/jobs\/([^/]+)\/claim$/);
+  if (request.method === "POST" && probeJobClaimMatch) {
+    const input = await jsonBody(request);
+    if (!input.probeId) throw new ApiError("probeId is required", 400);
+    const probeId = requireProbeBoundActor(actor, String(input.probeId));
+    const claimed = await runtime.claimCheckJobWithAudit({
+      workspaceId: actor.workspaceId,
+      jobId: decodeURIComponent(probeJobClaimMatch[1]!),
+      probeId,
+      leaseTtlMs: input.leaseTtlMs,
+    }, hostedPostgresProbeAuditInput(actor, "probe_job.claim", "check_job", decodeURIComponent(probeJobClaimMatch[1]!), request.headers.get("idempotency-key") ?? undefined, {
+      method: request.method,
+      apiPath,
+      requestHash: hostedProbeRequestHash({ probeId, leaseTtlMs: input.leaseTtlMs }),
+    }));
+    const job = claimed?.job ?? null;
+    if (!job) return json({ error: "not found or not claimable" }, 404);
+    return json(postgresCheckJobToProbeCheckJob(job, { includeFencingToken: true, includeMonitorSnapshot: true }));
+  }
+  if (request.method === "POST" && apiPath === "/api/probes/results") {
+    const input = await jsonBody(request) as ProbeResultSubmission;
+    if (!input.probeId) throw new ApiError("probeId is required", 400);
+    const probeId = requireProbeBoundActor(actor, String(input.probeId));
+    const probe = await runtime.getProbeIdentity({ workspaceId: actor.workspaceId, id: probeId });
+    if (!probe || !probe.enabled) throw new ApiError("probe identity not found", 404);
+    if (!verifyProbeResultSignature(input, probe.publicKeyPem)) {
+      throw new ApiError("probe result signature is invalid", 400);
+    }
+    const unsigned = {
+      probeId,
+      jobId: input.jobId,
+      scheduleSlot: input.scheduleSlot,
+      fencingToken: input.fencingToken,
+      monitorId: input.monitorId,
+      nonce: input.nonce,
+      checkedAt: input.checkedAt,
+      status: input.status,
+      latencyMs: input.latencyMs,
+      statusCode: input.statusCode ?? null,
+      error: input.error ?? null,
+      attemptCount: input.attemptCount ?? 1,
+      monitorRevision: input.monitorRevision,
+      evidence: input.evidence ?? null,
+    };
+    const submitted = await submitHostedPostgresProbeCheckResult(runtime, {
+      workspaceId: actor.workspaceId,
+      jobId: input.jobId,
+      probeId,
+      fencingToken: input.fencingToken,
+      nonce: input.nonce,
+      checkedAt: input.checkedAt,
+      status: input.status,
+      latencyMs: input.latencyMs,
+      statusCode: input.statusCode,
+      error: input.error,
+      attemptCount: input.attemptCount,
+      evidence: input.evidence,
+      payloadHash: probeResultPayloadHash(unsigned),
+      actor: actor.actor,
+      origin: "hosted-api",
+      idempotencyKey: request.headers.get("idempotency-key") ?? undefined,
+    }, hostedPostgresProbeAuditInput(actor, "probe_result.submit", "check_job", input.jobId, request.headers.get("idempotency-key") ?? undefined, {
+      method: request.method,
+      apiPath,
+      requestHash: hostedProbeRequestHash({ payloadHash: probeResultPayloadHash(unsigned), probeId, jobId: input.jobId }),
+    }));
+    return json({
+      result: postgresCheckResultToCheckResult(submitted.result),
+      receipt: postgresProbeSubmissionToReceipt(submitted.submission),
+    }, 201);
+  }
+  return json({ error: "not found" }, 404);
 }
 
 async function handleHostedReportRoute(
@@ -892,7 +1072,22 @@ function requireHostedActor(request: Request, url: URL, options: CreateApiHandle
     scopes,
     workspaceId,
     actor: token.actor ?? `hosted-token:${workspaceId}:${[...scopes].sort().join(",")}`,
+    probeId: token.probeId,
   };
+}
+
+function requireProbeBoundActor(actor: HostedActor, requestedProbeId: string): string {
+  const probeId = normalizeHostedProbeTokenId(requestedProbeId, "probeId");
+  if (!actor.scopes.has("uptime:probe")) {
+    throw new ApiError("probe token scope is required", 403);
+  }
+  if (!actor.probeId) {
+    throw new ApiError("probe token must be bound to a probeId", 403);
+  }
+  if (actor.probeId !== probeId) {
+    throw new ApiError("probe token cannot access this probe", 403);
+  }
+  return probeId;
 }
 
 function recordHostedMonitorAudit(
@@ -1047,6 +1242,154 @@ function postgresMonitorToMonitor(record: PostgresMonitorRecord): Monitor {
   };
 }
 
+function postgresProbeIdentityToProbeIdentity(record: PostgresProbeIdentityRecord): Omit<ProbeIdentity, "publicKeyPem" | "createdAt"> & { publicKeyPem?: never; createdAt?: never; capabilityKeys: string[]; version: number } {
+  return {
+    id: record.id,
+    workspaceId: record.workspaceId,
+    name: record.name,
+    publicKeyFingerprint: record.publicKeyFingerprint,
+    probeClass: record.probeClass,
+    probeLocation: record.probeLocation,
+    machineId: record.machineId,
+    enabled: record.enabled,
+    lastSeenAt: record.lastSeenAt,
+    capabilityKeys: Object.keys(record.capabilities).sort(),
+    version: record.version,
+  };
+}
+
+function postgresCheckJobToProbeCheckJob(record: PostgresCheckJobRecord, options: { includeFencingToken?: boolean; includeMonitorSnapshot?: boolean } = {}): ProbeCheckJob & { monitorSnapshot?: PostgresCheckJobRecord["monitorSnapshot"]; deployGeneration?: number; version?: number } {
+  return {
+    id: record.id,
+    workspaceId: record.workspaceId,
+    monitorId: record.monitorId,
+    monitorRevision: record.monitorRevision,
+    scheduleSlot: record.scheduleSlot,
+    probePolicy: record.probePolicy,
+    probePolicyHash: record.probePolicyHash,
+    status: record.status,
+    claimedByProbeId: record.claimedByProbeId,
+    fencingToken: options.includeFencingToken ? record.fencingToken : null,
+    dueAt: record.dueAt,
+    claimedAt: record.claimedAt,
+    leaseExpiresAt: record.leaseExpiresAt,
+    submittedResultId: record.submittedResultId,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    ...(options.includeMonitorSnapshot ? { monitorSnapshot: record.monitorSnapshot } : {}),
+    deployGeneration: record.deployGeneration,
+    version: record.version,
+  };
+}
+
+function postgresCheckResultToCheckResult(record: PostgresCheckResultRecord): CheckResult {
+  return {
+    id: record.id,
+    workspaceId: record.workspaceId,
+    monitorId: record.monitorId,
+    jobId: record.jobId,
+    probeId: record.probeId,
+    monitorRevision: record.monitorRevision,
+    scheduleSlot: record.scheduleSlot,
+    probeClass: record.probeClass,
+    probeLocation: record.probeLocation,
+    probePolicyHash: record.probePolicyHash,
+    checkedAt: record.checkedAt,
+    status: record.status,
+    latencyMs: record.latencyMs,
+    statusCode: record.statusCode,
+    error: record.error,
+    attemptCount: record.attemptCount,
+    evidence: record.evidence,
+  };
+}
+
+function postgresProbeSubmissionToReceipt(record: PostgresProbeSubmissionRecord): ProbeSubmissionReceipt {
+  return {
+    id: record.id,
+    workspaceId: record.workspaceId,
+    probeId: record.probeId,
+    jobId: record.jobId,
+    monitorId: record.monitorId,
+    monitorRevision: record.monitorRevision,
+    scheduleSlot: record.scheduleSlot,
+    probeClass: record.probeClass,
+    probeLocation: record.probeLocation,
+    probePolicyHash: record.probePolicyHash,
+    payloadHash: record.payloadHash,
+    checkResultId: record.checkResultId,
+    nonce: record.nonce,
+    checkedAt: record.checkedAt,
+    submittedAt: record.submittedAt,
+  };
+}
+
+async function submitHostedPostgresProbeCheckResult(
+  runtime: HostedPostgresProbeRuntime,
+  input: SubmitPostgresProbeCheckResultInput,
+  audit: PostgresProbeMutationAuditInput,
+): Promise<SubmitPostgresProbeCheckResultMutationResult> {
+  try {
+    return await runtime.submitProbeCheckResultWithAudit(input, audit);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("payload hash mismatch")) {
+      throw new ApiError("probe result payload hash mismatch", 400);
+    }
+    if (error instanceof Error && error.message.includes("nonce replay")) {
+      throw new ApiError("probe result nonce replay conflict", 409);
+    }
+    if (error instanceof Error && error.message.includes("completion conflict")) {
+      throw new ApiError("probe check job completion conflict", 409);
+    }
+    if (error instanceof Error && error.message.includes("not found")) {
+      throw new ApiError("probe check job not found", 404);
+    }
+    throw error;
+  }
+}
+
+function hostedPostgresProbeAuditInput(
+  actor: HostedActor,
+  action: "probe_identity.upsert" | "probe_job.claim" | "probe_result.submit",
+  resourceType: "probe_identity" | "check_job",
+  resourceId: string | null | undefined,
+  idempotencyKey: string | null | undefined,
+  metadata: Record<string, unknown>,
+): PostgresProbeMutationAuditInput {
+  return {
+    workspaceId: actor.workspaceId,
+    action,
+    resourceType,
+    resourceId: resourceId ?? null,
+    message: null,
+    metadata: {
+      ...metadata,
+      scopes: [...actor.scopes].sort(),
+      probeId: actor.probeId ?? null,
+    },
+    actor: actor.actor,
+    origin: "hosted-api",
+    idempotencyKey: idempotencyKey ?? null,
+  };
+}
+
+function hostedProbeEnrollmentRequestHash(input: Record<string, unknown>, publicKeyFingerprint: string): string {
+  return hostedProbeRequestHash({
+    id: input.id,
+    name: input.name,
+    probeClass: input.probeClass ?? "private",
+    probeLocation: input.probeLocation,
+    machineId: input.machineId,
+    publicKeyFingerprint,
+    enabled: input.enabled,
+    capabilities: input.capabilities,
+  });
+}
+
+function hostedProbeRequestHash(input: Record<string, unknown>): string {
+  return `sha256:${createHash("sha256").update(stableJson(input)).digest("hex")}`;
+}
+
 function stableJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map((entry) => stableJson(entry)).join(",")}]`;
@@ -1191,7 +1534,10 @@ function normalizeHostedTokenEntry(entry: unknown, defaultWorkspaceId: string, s
       : typeof entry.id === "string" && entry.id.trim()
         ? entry.id.trim()
         : undefined;
-  return { token: entry.token.trim(), scopes, workspaceId, actor };
+  const probeId = typeof entry.probeId === "string" && entry.probeId.trim()
+    ? normalizeHostedProbeTokenId(entry.probeId, `${source}.probeId`, 500)
+    : undefined;
+  return { token: entry.token.trim(), scopes, workspaceId, actor, probeId };
 }
 
 function normalizeHostedScopes(value: unknown, source: string): HostedScope[] {
@@ -1210,6 +1556,14 @@ function normalizeHostedScopes(value: unknown, source: string): HostedScope[] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeHostedProbeTokenId(value: string, source: string, status = 400): string {
+  const normalized = value.trim();
+  if (!normalized) throw new ApiError(`${source} is required`, status);
+  if (normalized.length > 160) throw new ApiError(`${source} must be 160 characters or less`, status);
+  if (/[\u0000-\u001f\u007f]/.test(normalized)) throw new ApiError(`${source} must not include control characters`, status);
+  return normalized;
 }
 
 function isHostedProductionMode(): boolean {

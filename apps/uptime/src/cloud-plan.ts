@@ -368,7 +368,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
       privateProbe: [
         "Create a private probe identity with a caller-managed public key.",
         "Install @hasna/uptime on the private probe operator machine and write the generated env file with mode 0600.",
-        "Run the private probe against the hosted /api/v1 probe endpoint once it exists.",
+        "Run the private probe only after the hosted service injects the audited probe runtime and the remaining private-probe gates pass.",
       ],
     },
     blockers: [
@@ -385,7 +385,7 @@ export function buildAwsDeploymentPlan(options: AwsDeploymentPlanOptions = {}): 
       "The EFS SQLite bridge is single-writer only: web target desired count is 1 and scheduler/public-probe/reporter targets remain 0 until Postgres and cloud leases exist.",
       "Hosted production auth/RBAC must replace broad static hosted-token operation before exposure.",
       "Public probe execution still needs cloud check-job leases wired to runHostedHttpCheck and live policy-decision log evidence.",
-      "Private probe enrollment, claim, submit, heartbeat, revocation, and rotation are not cloud-backed yet.",
+      "Private probe live startup still needs service wiring for the audited probe runtime, probe-id-bound tokens, heartbeat, revocation, rotation, private target refs, alarms, deploy drain, and liveness evidence.",
     ],
     requiredEvidence: [
       "Infrastructure PR/synth/plan from the approved infra repository.",
@@ -463,16 +463,16 @@ export function buildPrivateProbeCloudConfig(options: PrivateProbeCloudConfigOpt
     ],
     commands: [
       "bun install -g @hasna/uptime@latest",
-      "Generate the private probe key locally and register only its public key with the hosted control plane once registration exists.",
+      "Generate the private probe key locally and register only its public key with the hosted control plane once audited runtime wiring is approved.",
       "Write ~/.hasna/uptime/cloud.env from this plan, then source it for the private probe service.",
-      "Start the private probe worker only after hosted /api/v1 probe claim/submit routes are backed by cloud jobs.",
+      "Start the private probe worker only after hosted /api/v1 probe claim/submit routes are wired with probe-id-bound tokens and all heartbeat/revocation/rotation/private-target/alarm gates pass.",
     ],
     blockers,
     safety: {
       privateKeyInline: false,
       tokenInline: false,
       notes: [
-        "This config is hosted-targeted preflight: the private probe must not start until cloud probe routes are backed by hosted state.",
+        "This config is hosted-targeted preflight: the private probe must not start until cloud probe routes are backed by hosted state and live private-probe gates pass.",
         "The private key file path is referenced, not embedded.",
         "Hosted token or probe auth material must come from the machine secret store, not this generated config.",
       ],

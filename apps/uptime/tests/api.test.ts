@@ -2,8 +2,8 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createApiHandler, serveUptime, type HostedPostgresMonitorRuntime, type HostedPostgresReportRuntime } from "../src/api.js";
-import { generateProbeKeyPair, signProbeResult, type ProbeSigningInput } from "../src/probes.js";
+import { createApiHandler, serveUptime, type HostedPostgresMonitorRuntime, type HostedPostgresProbeRuntime, type HostedPostgresReportRuntime } from "../src/api.js";
+import { generateProbeKeyPair, probeResultPayloadHash, signProbeResult, type ProbeSigningInput } from "../src/probes.js";
 import { UptimeService } from "../src/service.js";
 import type { PostgresReportRunRecord, PostgresReportScheduleRecord } from "../src/postgres-report-runtime.js";
 import type {
@@ -12,12 +12,23 @@ import type {
   PostgresMonitorMutationResult,
   PostgresMonitorTombstoneResult,
   PostgresMonitorRecord,
+  PostgresCheckJobMutationResult,
+  PostgresCheckJobRecord,
+  PostgresCheckResultRecord,
+  PostgresProbeIdentityRecord,
+  PostgresProbeIdentityMutationResult,
+  PostgresProbeMutationAuditInput,
+  PostgresProbeSubmissionRecord,
   PostgresSyncTombstoneRecord,
   RecordPostgresAuditEventInput,
+  SubmitPostgresProbeCheckResult,
+  SubmitPostgresProbeCheckResultMutationResult,
+  SubmitPostgresProbeCheckResultInput,
   TombstonePostgresResourceInput,
+  UpsertPostgresProbeIdentityInput,
   UpsertPostgresMonitorInput,
 } from "../src/postgres-runtime.js";
-import type { AuditEvent, RecordAuditEventInput, ReportScheduleChannels } from "../src/types.js";
+import type { AuditEvent, CheckEvidence, ProbePolicy, RecordAuditEventInput, ReportScheduleChannels } from "../src/types.js";
 
 const cleanup: string[] = [];
 const HOSTED_SECRET_TOKEN_JSON = JSON.stringify({
@@ -226,6 +237,252 @@ class FakeHostedPostgresMonitorRuntime implements HostedPostgresMonitorRuntime {
       idempotencyKey: input.idempotencyKey ?? null,
       createdAt: input.createdAt ?? new Date(0).toISOString(),
     };
+  }
+}
+
+class FakeHostedPostgresProbeRuntime implements HostedPostgresProbeRuntime {
+  readonly probes = new Map<string, PostgresProbeIdentityRecord>();
+  readonly jobs = new Map<string, PostgresCheckJobRecord>();
+  readonly audits: RecordPostgresAuditEventInput[] = [];
+  readonly submissions: PostgresProbeSubmissionRecord[] = [];
+  private sequence = 0;
+
+  async upsertProbeIdentity(input: UpsertPostgresProbeIdentityInput): Promise<PostgresProbeIdentityRecord> {
+    const workspaceId = input.workspaceId ?? "default";
+    const id = input.id ?? `prb_${++this.sequence}`;
+    const key = `${workspaceId}:${id}`;
+    const existing = this.probes.get(key);
+    const probe: PostgresProbeIdentityRecord = {
+      workspaceId,
+      id,
+      name: input.name,
+      probeClass: input.probeClass,
+      probeLocation: input.probeLocation ?? "default",
+      machineId: input.machineId ?? null,
+      publicKeyPem: input.publicKeyPem,
+      publicKeyFingerprint: input.publicKeyFingerprint,
+      enabled: input.enabled ?? existing?.enabled ?? true,
+      capabilities: input.capabilities ?? existing?.capabilities ?? {},
+      lastSeenAt: input.lastSeenAt ?? existing?.lastSeenAt ?? null,
+      version: (existing?.version ?? 0) + 1,
+    };
+    this.probes.set(key, probe);
+    return probe;
+  }
+
+  async upsertProbeIdentityWithAudit(input: UpsertPostgresProbeIdentityInput, audit: PostgresProbeMutationAuditInput): Promise<PostgresProbeIdentityMutationResult> {
+    const probe = await this.upsertProbeIdentity(input);
+    const event = await this.recordAuditEvent({
+      ...audit,
+      resourceType: "probe_identity",
+      resourceId: audit.resourceId ?? probe.id,
+      metadata: {
+        ...(audit.metadata ?? {}),
+        probeId: probe.id,
+        probeClass: probe.probeClass,
+        probeLocation: probe.probeLocation,
+      },
+    });
+    return { probe, audit: event };
+  }
+
+  async getProbeIdentity(input: { workspaceId?: string; id: string }): Promise<PostgresProbeIdentityRecord | null> {
+    return this.probes.get(`${input.workspaceId ?? "default"}:${input.id}`) ?? null;
+  }
+
+  async claimCheckJob(input: { workspaceId?: string; jobId: string; probeId: string; leaseTtlMs?: number }): Promise<PostgresCheckJobRecord | null> {
+    const workspaceId = input.workspaceId ?? "default";
+    const job = this.jobs.get(`${workspaceId}:${input.jobId}`);
+    const probe = this.probes.get(`${workspaceId}:${input.probeId}`);
+    if (!job || !probe || !probe.enabled || job.status === "submitted" || job.submittedResultId) return null;
+    if (probe.probeClass !== job.probePolicy.probeClass) return null;
+    if (job.probePolicy.locations.length > 0 && !job.probePolicy.locations.includes(probe.probeLocation)) return null;
+    const claimed: PostgresCheckJobRecord = {
+      ...job,
+      status: "claimed",
+      claimedByProbeId: probe.id,
+      fencingToken: job.claimedByProbeId === probe.id && job.fencingToken ? job.fencingToken : "fence_fake_1",
+      claimedAt: "2026-01-01T00:00:01.000Z",
+      leaseExpiresAt: "2026-01-01T00:05:01.000Z",
+      version: job.version + 1,
+      updatedAt: "2026-01-01T00:00:01.000Z",
+    };
+    this.jobs.set(`${workspaceId}:${input.jobId}`, claimed);
+    return claimed;
+  }
+
+  async claimCheckJobWithAudit(input: { workspaceId?: string; jobId: string; probeId: string; leaseTtlMs?: number }, audit: PostgresProbeMutationAuditInput): Promise<PostgresCheckJobMutationResult | null> {
+    const job = await this.claimCheckJob(input);
+    if (!job) return null;
+    const event = await this.recordAuditEvent({
+      ...audit,
+      resourceType: "check_job",
+      resourceId: audit.resourceId ?? job.id,
+      metadata: {
+        ...(audit.metadata ?? {}),
+        probeId: job.claimedByProbeId,
+        monitorId: job.monitorId,
+        monitorRevision: job.monitorRevision,
+      },
+    });
+    return { job, audit: event };
+  }
+
+  async submitProbeCheckResult(input: SubmitPostgresProbeCheckResultInput): Promise<SubmitPostgresProbeCheckResult> {
+    const workspaceId = input.workspaceId ?? "default";
+    const job = this.jobs.get(`${workspaceId}:${input.jobId}`);
+    const probe = this.probes.get(`${workspaceId}:${input.probeId}`);
+    if (!job || !probe || job.status !== "claimed" || job.claimedByProbeId !== probe.id || job.fencingToken !== input.fencingToken) {
+      throw new Error("probe check job completion conflict");
+    }
+    const expectedHash = probeResultPayloadHash({
+      probeId: probe.id,
+      jobId: job.id,
+      scheduleSlot: job.scheduleSlot,
+      fencingToken: input.fencingToken,
+      monitorId: job.monitorId,
+      nonce: input.nonce,
+      checkedAt: input.checkedAt,
+      status: input.status,
+      latencyMs: input.latencyMs ?? null,
+      statusCode: input.statusCode ?? null,
+      error: input.error ?? null,
+      attemptCount: input.attemptCount ?? 1,
+      monitorRevision: job.monitorRevision,
+      evidence: input.evidence ?? null,
+    });
+    if (input.payloadHash !== expectedHash) throw new Error("probe payload hash mismatch");
+    const result: PostgresCheckResultRecord = {
+      workspaceId,
+      id: "chk_fake_1",
+      monitorId: job.monitorId,
+      jobId: job.id,
+      probeId: probe.id,
+      monitorRevision: job.monitorRevision,
+      scheduleSlot: job.scheduleSlot,
+      probeClass: probe.probeClass,
+      probeLocation: probe.probeLocation,
+      probePolicyHash: job.probePolicyHash,
+      checkedAt: input.checkedAt,
+      status: input.status,
+      latencyMs: input.latencyMs ?? null,
+      statusCode: input.statusCode ?? null,
+      error: input.error ?? null,
+      attemptCount: input.attemptCount ?? 1,
+      evidence: input.evidence ?? null,
+      actor: input.actor ?? null,
+      origin: input.origin ?? null,
+      idempotencyKey: input.idempotencyKey ?? null,
+    };
+    const submission: PostgresProbeSubmissionRecord = {
+      workspaceId,
+      id: "psb_fake_1",
+      probeId: probe.id,
+      jobId: job.id,
+      monitorId: job.monitorId,
+      monitorRevision: job.monitorRevision,
+      scheduleSlot: job.scheduleSlot,
+      probeClass: probe.probeClass,
+      probeLocation: probe.probeLocation,
+      probePolicyHash: job.probePolicyHash,
+      payloadHash: input.payloadHash,
+      checkResultId: result.id,
+      nonce: input.nonce,
+      checkedAt: input.checkedAt,
+      submittedAt: "2026-01-01T00:00:02.000Z",
+    };
+    const completed = {
+      ...job,
+      status: "submitted" as const,
+      fencingToken: null,
+      leaseExpiresAt: null,
+      submittedResultId: result.id,
+      updatedAt: "2026-01-01T00:00:02.000Z",
+      version: job.version + 1,
+    };
+    this.jobs.set(`${workspaceId}:${job.id}`, completed);
+    this.submissions.push(submission);
+    return { job: completed, result, submission };
+  }
+
+  async submitProbeCheckResultWithAudit(input: SubmitPostgresProbeCheckResultInput, audit: PostgresProbeMutationAuditInput): Promise<SubmitPostgresProbeCheckResultMutationResult> {
+    const submitted = await this.submitProbeCheckResult(input);
+    const event = await this.recordAuditEvent({
+      ...audit,
+      resourceType: "check_job",
+      resourceId: audit.resourceId ?? submitted.job.id,
+      metadata: {
+        ...(audit.metadata ?? {}),
+        probeId: submitted.submission.probeId,
+        monitorId: submitted.submission.monitorId,
+        monitorRevision: submitted.submission.monitorRevision,
+        resultStatus: submitted.result.status,
+      },
+    });
+    return { ...submitted, audit: event };
+  }
+
+  async recordAuditEvent(input: RecordPostgresAuditEventInput): Promise<PostgresAuditEventRecord> {
+    this.audits.push(input);
+    return {
+      workspaceId: input.workspaceId ?? "default",
+      id: `aud_probe_${this.audits.length}`,
+      action: input.action,
+      resourceType: input.resourceType ?? null,
+      resourceId: input.resourceId ?? null,
+      message: input.message ?? null,
+      metadata: input.metadata ?? {},
+      actor: input.actor ?? null,
+      origin: input.origin ?? null,
+      idempotencyKey: input.idempotencyKey ?? null,
+      createdAt: input.createdAt ?? "2026-01-01T00:00:00.000Z",
+    };
+  }
+
+  seedJob(job: Partial<PostgresCheckJobRecord> & { workspaceId: string; id: string; monitorId: string; monitorRevision: number; probePolicy: ProbePolicy }): PostgresCheckJobRecord {
+    const now = "2026-01-01T00:00:00.000Z";
+    const seeded: PostgresCheckJobRecord = {
+      workspaceId: job.workspaceId,
+      id: job.id,
+      monitorId: job.monitorId,
+      monitorRevision: job.monitorRevision,
+      monitorSnapshot: job.monitorSnapshot ?? {
+        workspaceId: job.workspaceId,
+        id: job.monitorId,
+        name: "Private HTTP",
+        kind: "http",
+        url: "https://private.example.invalid/health",
+        host: null,
+        port: null,
+        method: "GET",
+        expectedStatus: 200,
+        intervalSeconds: 60,
+        timeoutMs: 5000,
+        retryCount: 0,
+        enabled: true,
+        status: "unknown",
+        lastCheckedAt: null,
+        revision: job.monitorRevision,
+        createdAt: now,
+        updatedAt: now,
+      },
+      scheduleSlot: job.scheduleSlot ?? "2026-01-01T00:00:00.000Z",
+      probePolicy: job.probePolicy,
+      probePolicyHash: job.probePolicyHash ?? "hash_private_operator_01",
+      status: job.status ?? "pending",
+      claimedByProbeId: job.claimedByProbeId ?? null,
+      fencingToken: job.fencingToken ?? null,
+      dueAt: job.dueAt ?? now,
+      claimedAt: job.claimedAt ?? null,
+      leaseExpiresAt: job.leaseExpiresAt ?? null,
+      submittedResultId: job.submittedResultId ?? null,
+      deployGeneration: job.deployGeneration ?? 1,
+      version: job.version ?? 1,
+      createdAt: job.createdAt ?? now,
+      updatedAt: job.updatedAt ?? now,
+    };
+    this.jobs.set(`${seeded.workspaceId}:${seeded.id}`, seeded);
+    return seeded;
   }
 }
 
@@ -575,6 +832,166 @@ test("API accepts local signed probe jobs and submissions", async () => {
   expect(body.result.status).toBe("up");
   expect(body.receipt.jobId).toBe(claimed.id);
   expect(service.getProbeCheckJob(claimed.id)?.status).toBe("submitted");
+  service.close();
+});
+
+test("hosted API routes probe enrollment, claims, and signed submissions through Postgres probe storage safely", async () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const probeRuntime = new FakeHostedPostgresProbeRuntime();
+  const keyPair = generateProbeKeyPair();
+  const idempotencyHeader = "idempotency-key";
+  const handler = createApiHandler(service, {
+    mode: "hosted",
+    hostedPostgresProbeRuntime: probeRuntime,
+    hostedTokens: [
+      { token: "admin", scopes: ["uptime:admin", "uptime:read"], workspaceId: "ws_a", actor: "admin-a" },
+      { token: "probe", scopes: ["uptime:probe"], workspaceId: "ws_a", actor: "probe-a", probeId: "prb_private_operator_01" },
+      { token: "unbound-probe", scopes: ["uptime:probe"], workspaceId: "ws_a", actor: "probe-unbound" },
+      { token: "wrong-probe", scopes: ["uptime:probe"], workspaceId: "ws_a", actor: "probe-wrong", probeId: "prb_private_operator_02" },
+      { token: "other-probe", scopes: ["uptime:probe"], workspaceId: "ws_b", actor: "probe-b", probeId: "prb_private_operator_01" },
+      { token: "read", scopes: ["uptime:read"], workspaceId: "ws_a", actor: "reader-a" },
+    ],
+  });
+
+  const enrollmentBody = {
+    id: "prb_private_operator_01",
+    name: "Operator private probe",
+    publicKeyPem: keyPair.publicKeyPem,
+    probeClass: "private",
+    probeLocation: "operator-01",
+    machineId: "operator-01",
+    capabilities: { http: true, tcp: true },
+  };
+  const probeTokenEnrollment = await handler(jsonRequest(
+    "https://uptime.test/api/v1/probes",
+    "POST",
+    enrollmentBody,
+    { origin: "https://uptime.test", authorization: "Bearer probe" },
+  ));
+  const enroll = await handler(jsonRequest(
+    "https://uptime.test/api/v1/probes",
+    "POST",
+    enrollmentBody,
+    { origin: "https://uptime.test", authorization: "Bearer admin", [idempotencyHeader]: "enroll-private-01" },
+  ));
+  const enrolled = await enroll.json();
+  const readIdentity = await handler(new Request("https://uptime.test/api/v1/probes/prb_private_operator_01", {
+    headers: { authorization: "Bearer read" },
+  }));
+  const readIdentityText = JSON.stringify(await readIdentity.json());
+  const seeded = probeRuntime.seedJob({
+    workspaceId: "ws_a",
+    id: "job_private_1",
+    monitorId: "mon_private_1",
+    monitorRevision: 3,
+    probePolicy: { probeClass: "private", locations: ["operator-01"] },
+  });
+  const workspaceMismatchClaim = await handler(jsonRequest(
+    `https://uptime.test/api/v1/probes/jobs/${seeded.id}/claim`,
+    "POST",
+    { probeId: "prb_private_operator_01" },
+    { origin: "https://uptime.test", authorization: "Bearer other-probe" },
+  ));
+  const unboundProbeClaim = await handler(jsonRequest(
+    `https://uptime.test/api/v1/probes/jobs/${seeded.id}/claim`,
+    "POST",
+    { probeId: "prb_private_operator_01" },
+    { origin: "https://uptime.test", authorization: "Bearer unbound-probe" },
+  ));
+  const wrongProbeClaim = await handler(jsonRequest(
+    `https://uptime.test/api/v1/probes/jobs/${seeded.id}/claim`,
+    "POST",
+    { probeId: "prb_private_operator_01" },
+    { origin: "https://uptime.test", authorization: "Bearer wrong-probe" },
+  ));
+  const adminProbeClaim = await handler(jsonRequest(
+    `https://uptime.test/api/v1/probes/jobs/${seeded.id}/claim`,
+    "POST",
+    { probeId: "prb_private_operator_01" },
+    { origin: "https://uptime.test", authorization: "Bearer admin" },
+  ));
+  const claim = await handler(jsonRequest(
+    `https://uptime.test/api/v1/probes/jobs/${seeded.id}/claim`,
+    "POST",
+    { probeId: "prb_private_operator_01", leaseTtlMs: 120_000 },
+    { origin: "https://uptime.test", authorization: "Bearer probe", [idempotencyHeader]: "claim-job-1" },
+  ));
+  const claimed = await claim.json();
+  const unsigned: ProbeSigningInput = {
+    probeId: "prb_private_operator_01",
+    jobId: claimed.id,
+    scheduleSlot: claimed.scheduleSlot,
+    fencingToken: claimed.fencingToken,
+    monitorId: claimed.monitorId,
+    nonce: "nonce-hosted-1",
+    checkedAt: "2026-01-01T00:00:30.000Z",
+    status: "up",
+    latencyMs: 42,
+    statusCode: 200,
+    error: null,
+    attemptCount: 1,
+    monitorRevision: claimed.monitorRevision,
+    evidence: null,
+  };
+  const badSignature = await handler(jsonRequest(
+    "https://uptime.test/api/v1/probes/results",
+    "POST",
+    { ...unsigned, signature: "not-valid" },
+    { origin: "https://uptime.test", authorization: "Bearer probe" },
+  ));
+  const adminSubmit = await handler(jsonRequest(
+    "https://uptime.test/api/v1/probes/results",
+    "POST",
+    { ...unsigned, signature: signProbeResult(unsigned, keyPair.privateKeyPem) },
+    { origin: "https://uptime.test", authorization: "Bearer admin" },
+  ));
+  expect(badSignature.status).toBe(400);
+  expect(adminSubmit.status).toBe(403);
+  expect(probeRuntime.submissions).toHaveLength(0);
+  const submit = await handler(jsonRequest(
+    "https://uptime.test/api/v1/probes/results",
+    "POST",
+    { ...unsigned, signature: signProbeResult(unsigned, keyPair.privateKeyPem) },
+    { origin: "https://uptime.test", authorization: "Bearer probe", [idempotencyHeader]: "submit-job-1" },
+  ));
+  const submitted = await submit.json();
+  const list = await handler(new Request("https://uptime.test/api/v1/probes", {
+    headers: { authorization: "Bearer read" },
+  }));
+  const serialized = JSON.stringify({ enrolled, claimed, submitted, readIdentityText });
+
+  expect(probeTokenEnrollment.status).toBe(403);
+  expect(enroll.status).toBe(201);
+  expect(enrolled).toMatchObject({
+    id: "prb_private_operator_01",
+    probeClass: "private",
+    probeLocation: "operator-01",
+    machineId: "operator-01",
+    capabilityKeys: ["http", "tcp"],
+  });
+  expect(serialized).not.toContain("BEGIN PUBLIC KEY");
+  expect(enrolled.publicKeyPem).toBeUndefined();
+  expect(readIdentity.status).toBe(200);
+  expect(readIdentityText).not.toContain("BEGIN PUBLIC KEY");
+  expect(workspaceMismatchClaim.status).toBe(404);
+  expect(unboundProbeClaim.status).toBe(403);
+  expect(wrongProbeClaim.status).toBe(403);
+  expect(adminProbeClaim.status).toBe(403);
+  expect(claim.status).toBe(200);
+  expect(claimed.fencingToken).toBe("fence_fake_1");
+  expect(claimed.monitorSnapshot).toMatchObject({ id: "mon_private_1", kind: "http" });
+  expect(probeRuntime.submissions).toHaveLength(1);
+  expect(submit.status).toBe(201);
+  expect(submitted.result.status).toBe("up");
+  expect(submitted.receipt.jobId).toBe("job_private_1");
+  expect(probeRuntime.jobs.get("ws_a:job_private_1")?.status).toBe("submitted");
+  expect(list.status).toBe(501);
+  expect(probeRuntime.audits.map((audit) => audit.action)).toEqual([
+    "probe_identity.upsert",
+    "probe_job.claim",
+    "probe_result.submit",
+  ]);
+  expect(probeRuntime.audits.every((audit) => audit.workspaceId === "ws_a")).toBe(true);
   service.close();
 });
 
@@ -1576,6 +1993,7 @@ test("hosted API fails closed for probe identities, jobs, and result ingest", as
     hostedTokens: [
       { token: "read", scopes: ["uptime:read"] },
       { token: "probe", scopes: ["uptime:probe"] },
+      { token: "admin", scopes: ["uptime:admin"] },
     ],
   });
 
@@ -1586,7 +2004,7 @@ test("hosted API fails closed for probe identities, jobs, and result ingest", as
     "https://uptime.test/api/v1/probes",
     "POST",
     { name: "private-probe-01" },
-    { origin: "https://uptime.test", authorization: "Bearer probe" },
+    { origin: "https://uptime.test", authorization: "Bearer admin" },
   ));
   const job = await handler(jsonRequest(
     "https://uptime.test/api/v1/probes/jobs",

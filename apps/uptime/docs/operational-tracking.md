@@ -62,11 +62,16 @@ provenance atomically, redacts artifact/audit API output, and keeps hosted
 report execution routes fail-closed. The prior zero-count deployment path
 remains not live runtime evidence until private deployment metadata records the
 matching image refresh.
+Version `0.1.69` adds a bounded hosted Postgres probe API adapter for
+admin-scoped probe enrollment, probe-id-bound check-job claims, and signed
+result submission with mutation/audit helpers. It keeps probe listing, API job
+creation, heartbeat, revocation, rotation, worker startup, private target seed
+policy, and live private-probe promotion blocked.
 Hosted reporter,
 protected web/API scale-out, private probes, and cloud-primary promotion remain
 blocked until the hard hosted gate below is satisfied.
 
-## 0.1.68 Runtime Readiness Snapshot
+## 0.1.69 Runtime Readiness Snapshot
 
 | Area | Current evidence | Status |
 | --- | --- | --- |
@@ -77,7 +82,7 @@ blocked until the hard hosted gate below is satisfied.
 | Reporter | Channel-ref shape validation, a bounded hosted report-control-plane adapter, Postgres report metadata helpers, callback contracts for redacted artifact object writes plus Open Logs audit export payloads, and workspace-bound `HASNA_UPTIME_REPORTER_PROMOTION_EVIDENCE_JSON` for redacted operator evidence exist. | Evidence JSON can prove individual report promotion checks only after private smoke/review evidence exists and names the active workspace. Startup still blocks on server-side secret loading, service-store integration, worker lease ownership, deploy drain, and cloud-worker readiness. |
 | Scheduler | Bounded Postgres scheduler review batches can create public-safe deterministic `check_jobs`. | Blocked on hosted service/API integration, lease ownership, deploy drain, metrics, alarms, and live RLS evidence. |
 | Public probe | Bounded Postgres public-probe review batches can claim, execute, and submit existing public-safe jobs. | Blocked on hosted worker promotion gates, denied-target AWS smokes, backlog metrics, and rollback evidence. |
-| Private probe | Read-only Postgres identity preflight can inspect a scoped probe identity and private-job counters without exposing key material. | Blocked on hosted probe APIs, heartbeat, revocation, rotation, approved inventory refs, target seed policy, alarms, and live evidence. |
+| Private probe | Bounded hosted Postgres probe API wiring can enroll identities with admin scope, claim existing jobs only with a token bound to the same `probeId`, verify signed submissions, write mutation audit through runtime helpers, and avoid returning raw public keys. Read-only private probe preflight can still inspect identity bindings and private-job counters. | Blocked on hosted probe listing, API job creation, heartbeat, revocation, rotation, approved inventory refs, target seed policy, alarms, deploy drain, and live evidence. |
 | Worker alarms | Terraform alarm contracts exist and are default-off. | Blocked until metric producers, approved alarm actions, and human/on-call delivery smoke are proven. |
 | Human alert delivery | Internal audit queue and budget notification wiring may be private evidence. | Blocked until approved human/on-call subscriptions and a non-secret delivery smoke are recorded. |
 | Logs and audit | CloudWatch log groups, one-off version smoke evidence, and a sanitizer-safe Open Logs audit export callback contract exist. | Zero-count evidence only; no live scheduler/public-probe/reporter log streams or approved Open Logs audit export wiring/smoke evidence. |

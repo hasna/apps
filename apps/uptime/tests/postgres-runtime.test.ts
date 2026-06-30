@@ -722,6 +722,110 @@ test("Postgres runtime monitor mutation helpers write audit in the same transact
   expect(firstCommit).toBeGreaterThan(firstAudit);
 });
 
+test("Postgres runtime probe mutation helpers write audit in the same transaction", async () => {
+  const client = new FakeRuntimeClient();
+  const runtime = createPostgresRuntime({
+    client,
+    workspaceId: "ws_runtime",
+    now: () => new Date("2026-06-29T10:00:00.000Z"),
+  });
+
+  const monitor = await runtime.upsertMonitor({
+    id: "mon_homepage",
+    name: "Homepage",
+    kind: "http",
+    url: "https://example.com/health",
+  });
+  const { probe, audit: enrollmentAudit } = await runtime.upsertProbeIdentityWithAudit({
+    id: "prb_public",
+    name: "Public eu-west-1",
+    probeClass: "public",
+    probeLocation: "eu-west-1",
+    publicKeyPem: "-----BEGIN PUBLIC KEY-----\nfake\n-----END PUBLIC KEY-----",
+    publicKeyFingerprint: "a".repeat(64),
+    capabilities: { http: true },
+    idempotencyKey: "probe-enroll",
+  }, {
+    action: "probe_identity.upsert",
+    actor: "operator",
+    origin: "hosted-api",
+    idempotencyKey: "request-enroll",
+    metadata: { requestHash: "sha256:" + "b".repeat(64) },
+  });
+  const job = await runtime.createCheckJob({
+    monitorId: monitor.id,
+    monitorRevision: monitor.revision,
+    scheduleSlot: "2026-06-29T10:00:00.000Z",
+    probePolicy: { probeClass: "public", locations: ["eu-west-1"] },
+    actor: "scheduler",
+  });
+  const claimed = await runtime.claimCheckJobWithAudit({
+    jobId: job.id,
+    probeId: probe.id,
+    leaseTtlMs: 120_000,
+  }, {
+    action: "probe_job.claim",
+    resourceType: "check_job",
+    resourceId: job.id,
+    actor: "public-probe",
+    origin: "hosted-api",
+    idempotencyKey: "request-claim",
+    metadata: { requestHash: "sha256:" + "c".repeat(64) },
+  });
+  const payloadHash = probeResultPayloadHash({
+    probeId: probe.id,
+    jobId: job.id,
+    scheduleSlot: job.scheduleSlot,
+    fencingToken: claimed!.job.fencingToken!,
+    monitorId: monitor.id,
+    nonce: "nonce-audited-1",
+    checkedAt: "2026-06-29T10:01:10.000Z",
+    status: "up",
+    latencyMs: 42,
+    statusCode: 200,
+    error: null,
+    attemptCount: 1,
+    monitorRevision: monitor.revision,
+    evidence: null,
+  });
+  const submitted = await runtime.submitProbeCheckResultWithAudit({
+    jobId: job.id,
+    probeId: probe.id,
+    fencingToken: claimed!.job.fencingToken!,
+    nonce: "nonce-audited-1",
+    checkedAt: "2026-06-29T10:01:10.000Z",
+    status: "up",
+    latencyMs: 42,
+    statusCode: 200,
+    payloadHash,
+  }, {
+    action: "probe_result.submit",
+    resourceType: "check_job",
+    resourceId: job.id,
+    actor: "public-probe",
+    origin: "hosted-api",
+    idempotencyKey: "request-submit",
+    metadata: { requestHash: "sha256:" + "d".repeat(64) },
+  });
+  const auditInserts = client.queries.filter((query) => query.sql.includes("INSERT INTO \"uptime\".\"audit_events\""));
+
+  expect(enrollmentAudit.action).toBe("probe_identity.upsert");
+  expect(claimed?.audit.action).toBe("probe_job.claim");
+  expect(submitted.audit.action).toBe("probe_result.submit");
+  expect(submitted.submission.payloadHash).toBe(payloadHash);
+  expect(auditInserts.map((query) => query.params?.[2])).toEqual([
+    "probe_identity.upsert",
+    "probe_job.claim",
+    "probe_result.submit",
+  ]);
+  expect(JSON.stringify(auditInserts.map((query) => query.params?.[6]))).not.toContain("BEGIN PUBLIC KEY");
+  expect(JSON.stringify(auditInserts.map((query) => query.params?.[6]))).not.toContain("fence_");
+  const claimMutation = client.queries.findIndex((query) => query.sql.includes("UPDATE \"uptime\".\"check_jobs\" AS job"));
+  const claimAudit = client.queries.findIndex((query) => query.sql.includes("INSERT INTO \"uptime\".\"audit_events\"") && query.params?.[2] === "probe_job.claim");
+  expect(claimMutation).toBeGreaterThan(-1);
+  expect(claimAudit).toBeGreaterThan(claimMutation);
+});
+
 test("Postgres runtime soft-deletes every advertised tombstone resource type", async () => {
   const client = new FakeRuntimeClient();
   const runtime = createPostgresRuntime({

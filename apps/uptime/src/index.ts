@@ -15,6 +15,7 @@ export { createApiHandler, serveUptime } from "./api.js";
 export type {
   CreateApiHandlerOptions,
   HostedPostgresMonitorRuntime,
+  HostedPostgresProbeRuntime,
   HostedPostgresReportRuntime,
   HostedScope,
   HostedToken,

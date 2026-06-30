@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const root = process.cwd();
@@ -8,6 +9,195 @@ const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
   bin: Record<string, string>;
   exports: Record<string, { import: string }>;
 };
+
+function jsonRequest(url: string, method: string, body: unknown, headers: Record<string, string> = {}): Request {
+  return new Request(url, {
+    method,
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify(body),
+  });
+}
+
+class PackageProbeRuntime {
+  readonly probes = new Map<string, any>();
+  readonly jobs = new Map<string, any>();
+  readonly submissions: any[] = [];
+  readonly audits: any[] = [];
+
+  async upsertProbeIdentity(input: any): Promise<any> {
+    const workspaceId = input.workspaceId ?? "default";
+    const probe = {
+      workspaceId,
+      id: input.id,
+      name: input.name,
+      probeClass: input.probeClass,
+      probeLocation: input.probeLocation ?? "default",
+      machineId: input.machineId ?? null,
+      publicKeyPem: input.publicKeyPem,
+      publicKeyFingerprint: input.publicKeyFingerprint,
+      enabled: input.enabled ?? true,
+      capabilities: input.capabilities ?? {},
+      lastSeenAt: null,
+      version: 1,
+    };
+    this.probes.set(`${workspaceId}:${probe.id}`, probe);
+    return probe;
+  }
+
+  async upsertProbeIdentityWithAudit(input: any, audit: any): Promise<any> {
+    const probe = await this.upsertProbeIdentity(input);
+    const event = await this.recordAuditEvent({ ...audit, resourceType: "probe_identity", resourceId: probe.id });
+    return { probe, audit: event };
+  }
+
+  async getProbeIdentity(input: any): Promise<any | null> {
+    return this.probes.get(`${input.workspaceId ?? "default"}:${input.id}`) ?? null;
+  }
+
+  async claimCheckJob(input: any): Promise<any | null> {
+    const workspaceId = input.workspaceId ?? "default";
+    const probe = this.probes.get(`${workspaceId}:${input.probeId}`);
+    const job = this.jobs.get(`${workspaceId}:${input.jobId}`);
+    if (!probe || !job) return null;
+    const claimed = {
+      ...job,
+      status: "claimed",
+      claimedByProbeId: probe.id,
+      fencingToken: "fence_pkg",
+      claimedAt: "2026-01-01T00:00:01.000Z",
+      leaseExpiresAt: "2026-01-01T00:05:01.000Z",
+      updatedAt: "2026-01-01T00:00:01.000Z",
+      version: job.version + 1,
+    };
+    this.jobs.set(`${workspaceId}:${input.jobId}`, claimed);
+    return claimed;
+  }
+
+  async claimCheckJobWithAudit(input: any, audit: any): Promise<any | null> {
+    const job = await this.claimCheckJob(input);
+    if (!job) return null;
+    const event = await this.recordAuditEvent({ ...audit, resourceType: "check_job", resourceId: job.id });
+    return { job, audit: event };
+  }
+
+  async submitProbeCheckResult(input: any): Promise<any> {
+    const workspaceId = input.workspaceId ?? "default";
+    const job = this.jobs.get(`${workspaceId}:${input.jobId}`);
+    if (!job || job.claimedByProbeId !== input.probeId || job.fencingToken !== input.fencingToken) {
+      throw new Error("probe check job completion conflict");
+    }
+    const result = {
+      workspaceId,
+      id: "chk_pkg",
+      monitorId: job.monitorId,
+      jobId: job.id,
+      probeId: input.probeId,
+      monitorRevision: job.monitorRevision,
+      scheduleSlot: job.scheduleSlot,
+      probeClass: "private",
+      probeLocation: "pkg",
+      probePolicyHash: job.probePolicyHash,
+      checkedAt: input.checkedAt,
+      status: input.status,
+      latencyMs: input.latencyMs ?? null,
+      statusCode: input.statusCode ?? null,
+      error: input.error ?? null,
+      attemptCount: input.attemptCount ?? 1,
+      evidence: input.evidence ?? null,
+      actor: input.actor ?? null,
+      origin: input.origin ?? null,
+      idempotencyKey: input.idempotencyKey ?? null,
+    };
+    const submission = {
+      workspaceId,
+      id: "psb_pkg",
+      probeId: input.probeId,
+      jobId: job.id,
+      monitorId: job.monitorId,
+      monitorRevision: job.monitorRevision,
+      scheduleSlot: job.scheduleSlot,
+      probeClass: "private",
+      probeLocation: "pkg",
+      probePolicyHash: job.probePolicyHash,
+      payloadHash: input.payloadHash,
+      checkResultId: result.id,
+      nonce: input.nonce,
+      checkedAt: input.checkedAt,
+      submittedAt: "2026-01-01T00:00:02.000Z",
+    };
+    const completed = { ...job, status: "submitted", fencingToken: null, leaseExpiresAt: null, submittedResultId: result.id };
+    this.jobs.set(`${workspaceId}:${job.id}`, completed);
+    this.submissions.push(submission);
+    return { job: completed, result, submission };
+  }
+
+  async submitProbeCheckResultWithAudit(input: any, audit: any): Promise<any> {
+    const submitted = await this.submitProbeCheckResult(input);
+    const event = await this.recordAuditEvent({ ...audit, resourceType: "check_job", resourceId: submitted.job.id });
+    return { ...submitted, audit: event };
+  }
+
+  async recordAuditEvent(input: any): Promise<any> {
+    this.audits.push(input);
+    return {
+      workspaceId: input.workspaceId ?? "default",
+      id: `aud_pkg_${this.audits.length}`,
+      action: input.action,
+      resourceType: input.resourceType ?? null,
+      resourceId: input.resourceId ?? null,
+      message: input.message ?? null,
+      metadata: input.metadata ?? {},
+      actor: input.actor ?? null,
+      origin: input.origin ?? null,
+      idempotencyKey: input.idempotencyKey ?? null,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    };
+  }
+
+  seedJob(): void {
+    const now = "2026-01-01T00:00:00.000Z";
+    this.jobs.set("ws_pkg:job_pkg", {
+      workspaceId: "ws_pkg",
+      id: "job_pkg",
+      monitorId: "mon_pkg",
+      monitorRevision: 1,
+      monitorSnapshot: {
+        workspaceId: "ws_pkg",
+        id: "mon_pkg",
+        name: "Package private HTTP",
+        kind: "http",
+        url: "https://private.example.invalid/health",
+        host: null,
+        port: null,
+        method: "GET",
+        expectedStatus: 200,
+        intervalSeconds: 60,
+        timeoutMs: 5000,
+        retryCount: 0,
+        enabled: true,
+        status: "unknown",
+        lastCheckedAt: null,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      },
+      scheduleSlot: now,
+      probePolicy: { probeClass: "private", locations: ["pkg"] },
+      probePolicyHash: "hash_pkg",
+      status: "pending",
+      claimedByProbeId: null,
+      fencingToken: null,
+      dueAt: now,
+      claimedAt: null,
+      leaseExpiresAt: null,
+      submittedResultId: null,
+      deployGeneration: 1,
+      version: 1,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+}
 
 test("published package exports and bins are usable after build", async () => {
   const exportChecks: Record<string, string[]> = {
@@ -58,6 +248,15 @@ test("generated API declarations expose hosted Postgres adapters", () => {
   expect(apiDeclaration).toContain("offset?: number;");
   expect(apiDeclaration).toContain("tombstoneResource(input:");
   expect(apiDeclaration).toContain("tombstoneMonitorWithAudit(input:");
+  expect(apiDeclaration).toContain("interface HostedPostgresProbeRuntime");
+  expect(apiDeclaration).toContain("probeId?: string;");
+  expect(apiDeclaration).toContain("hostedPostgresProbeRuntime?: HostedPostgresProbeRuntime;");
+  expect(apiDeclaration).toContain("upsertProbeIdentity(input:");
+  expect(apiDeclaration).toContain("upsertProbeIdentityWithAudit(input:");
+  expect(apiDeclaration).toContain("claimCheckJob(input:");
+  expect(apiDeclaration).toContain("claimCheckJobWithAudit(input:");
+  expect(apiDeclaration).toContain("submitProbeCheckResult(input:");
+  expect(apiDeclaration).toContain("submitProbeCheckResultWithAudit(input:");
   expect(apiDeclaration).toContain("interface HostedPostgresReportRuntime");
   expect(apiDeclaration).toContain("hostedPostgresReportRuntime?: HostedPostgresReportRuntime;");
   expect(apiDeclaration).toContain("createReportScheduleWithAudit(input:");
@@ -65,8 +264,84 @@ test("generated API declarations expose hosted Postgres adapters", () => {
   expect(apiDeclaration).toContain("tombstoneReportScheduleWithAudit(input:");
   expect(apiDeclaration).toContain("listReportRuns(options?");
   expect(apiDeclaration).toContain("listAuditEvents(options?");
+  expect(indexDeclaration).toContain("HostedPostgresProbeRuntime");
   expect(indexDeclaration).toContain("HostedPostgresReportRuntime");
   expect(indexDeclaration).toContain("PostgresReportScheduleMutationAuditInput");
+});
+
+test("built API enforces probe-bound hosted adapter behavior", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-package-"));
+  try {
+    const { UptimeService } = await import(pkg.name) as Record<string, any>;
+    const { createApiHandler } = await import(`${pkg.name}/api`) as Record<string, any>;
+    const { generateProbeKeyPair, signProbeResult } = await import(`${pkg.name}/probes`) as Record<string, any>;
+    const service = new UptimeService({ dbPath: join(dir, "uptime.db"), mode: "hosted", allowHostedLocalStore: true });
+    const runtime = new PackageProbeRuntime();
+    const keyPair = generateProbeKeyPair();
+    const handler = createApiHandler(service, {
+      mode: "hosted",
+      hostedPostgresProbeRuntime: runtime,
+      hostedTokens: [
+        { token: "admin", scopes: ["uptime:admin", "uptime:read"], workspaceId: "ws_pkg", actor: "admin" },
+        { token: "probe", scopes: ["uptime:probe"], workspaceId: "ws_pkg", actor: "probe", probeId: "prb_pkg" },
+        { token: "unbound", scopes: ["uptime:probe"], workspaceId: "ws_pkg", actor: "unbound" },
+        { token: "read", scopes: ["uptime:read"], workspaceId: "ws_pkg", actor: "reader" },
+      ],
+    });
+    const enroll = await handler(jsonRequest("https://uptime.test/api/v1/probes", "POST", {
+      id: "prb_pkg",
+      name: "Package probe",
+      publicKeyPem: keyPair.publicKeyPem,
+      probeClass: "private",
+      probeLocation: "pkg",
+    }, { origin: "https://uptime.test", authorization: "Bearer admin", "idempotency-key": "pkg-enroll" }));
+    runtime.seedJob();
+    const unboundClaim = await handler(jsonRequest("https://uptime.test/api/v1/probes/jobs/job_pkg/claim", "POST", {
+      probeId: "prb_pkg",
+    }, { origin: "https://uptime.test", authorization: "Bearer unbound" }));
+    const claim = await handler(jsonRequest("https://uptime.test/api/v1/probes/jobs/job_pkg/claim", "POST", {
+      probeId: "prb_pkg",
+    }, { origin: "https://uptime.test", authorization: "Bearer probe", "idempotency-key": "pkg-claim" }));
+    const claimed = await claim.json();
+    const unsigned = {
+      probeId: "prb_pkg",
+      jobId: claimed.id,
+      scheduleSlot: claimed.scheduleSlot,
+      fencingToken: claimed.fencingToken,
+      monitorId: claimed.monitorId,
+      nonce: "pkg-nonce-1",
+      checkedAt: "2026-01-01T00:00:30.000Z",
+      status: "up",
+      latencyMs: 17,
+      statusCode: 200,
+      error: null,
+      attemptCount: 1,
+      monitorRevision: claimed.monitorRevision,
+      evidence: null,
+    };
+    const submit = await handler(jsonRequest("https://uptime.test/api/v1/probes/results", "POST", {
+      ...unsigned,
+      signature: signProbeResult(unsigned, keyPair.privateKeyPem),
+    }, { origin: "https://uptime.test", authorization: "Bearer probe", "idempotency-key": "pkg-submit" }));
+    const list = await handler(new Request("https://uptime.test/api/v1/probes", {
+      headers: { authorization: "Bearer read" },
+    }));
+
+    expect(enroll.status).toBe(201);
+    expect(JSON.stringify(await enroll.clone().json())).not.toContain("BEGIN PUBLIC KEY");
+    expect(unboundClaim.status).toBe(403);
+    expect(claim.status).toBe(200);
+    expect(claimed.fencingToken).toBe("fence_pkg");
+    expect(claimed.monitorSnapshot).toMatchObject({ id: "mon_pkg", kind: "http" });
+    expect(submit.status).toBe(201);
+    expect((await submit.json()).result.status).toBe("up");
+    expect(list.status).toBe(501);
+    expect(runtime.submissions).toHaveLength(1);
+    expect(runtime.audits.map((audit) => audit.action)).toEqual(["probe_identity.upsert", "probe_job.claim", "probe_result.submit"]);
+    service.close();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("package dry-run includes release artifacts and excludes source-only files", () => {

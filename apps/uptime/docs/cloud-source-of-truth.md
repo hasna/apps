@@ -130,6 +130,17 @@ still blocks `/api/v1/report-schedules/run-due` and
 `/api/v1/report-schedules/:id/run`; live hosted reporter execution remains a
 separate promotion gate.
 
+`0.1.69` adds an explicit `hostedPostgresProbeRuntime` API adapter for bounded
+probe control-plane wiring. The hosted API can enroll probe identities with an
+admin-scoped token, claim existing `check_jobs` with a probe-scoped token bound
+to the same `probeId`, and verify signed result submissions against the
+workspace-scoped probe public key before writing Postgres check results. Probe
+enrollment, claim, and submit require runtime mutation-with-audit helpers so the
+mutation and audit row share the same workspace transaction. It does not make
+private probes cloud-primary or live: probe listing, API-created jobs,
+heartbeat, revocation, rotation, inventory-backed private target refs, alarms,
+deploy drain, and live worker evidence are still separate gates.
+
 `0.1.44` adds a bounded `uptime cloud postgres-scheduler run` review command
 that creates deterministic Postgres `check_jobs` for due public-safe HTTP/TCP
 monitors with interval-aligned slots, bounded catch-up, and producer-side hosted
@@ -160,8 +171,9 @@ Hosted mode is closed by default:
   `uptime:probe`, `uptime:report`, `uptime:admin`, and service-specific import
   scopes.
 - probe tokens and operator tokens are separate. A probe can claim jobs and
-  submit results, but cannot read unrelated monitor configuration, export
-  reports, mutate imports, or administer workspaces.
+  submit results only when its hosted token descriptor is bound to the matching
+  `probeId`, and it cannot read unrelated monitor configuration, export reports,
+  mutate imports, or administer workspaces.
 - workspace isolation is enforced in the storage layer through RLS or equivalent
   scoped queries, workspace-scoped unique indexes, and service methods that
   require explicit workspace context.
@@ -296,10 +308,12 @@ identity, stores probe class/location and policy hashes on jobs/results, keeps
 same-probe claim retries idempotent, and rejects nonce reuse with a different
 signed payload. Reporter preflight can also validate service-owned channel-ref
 catalogs without accepting raw provider destinations or credentials. This is
-local contract coverage only: hosted probe APIs, live report delivery, and cloud
-workers remain fail-closed until the async cloud store, deploy drain,
-backlog/stale-lease metrics, retry/audit/artifact delivery semantics, and
-RLS/audit-backed runtime are implemented.
+local contract coverage only. Hosted probe enrollment, claim, and submit have a
+bounded audited Postgres adapter when `hostedPostgresProbeRuntime` is injected,
+but live report delivery, heartbeat/revocation/rotation, API-created jobs, and
+cloud workers remain fail-closed until deploy drain, backlog/stale-lease
+metrics, retry/audit/artifact delivery semantics, and RLS/audit-backed runtime
+promotion evidence are implemented.
 
 ## Import Preview And Apply Contract
 
@@ -531,8 +545,9 @@ ECS/API/RDS/S3/probe lag/job backlog/delivery failures, and rollback commands.
 ## Current Blockers
 
 - Open Uptime has a bounded Postgres runtime facade, scheduler review runner,
-  and public-probe review runner, but no fully wired Postgres service store,
-  hosted API probe routes, scheduler lease loop, deploy drain,
+  public-probe review runner, and audited hosted probe enrollment/claim/submit
+  adapter, but no fully wired Postgres service store, hosted probe listing/job
+  creation/heartbeat/revocation/rotation routes, scheduler lease loop, deploy drain,
   backlog/stale-lease alarms, or sustained ECS worker readiness.
 - Hosted API reads use static scoped hosted-token descriptors for operator
   smokes, and the hosted dashboard shell still fails closed; production-grade

@@ -389,6 +389,8 @@ export interface SubmitPostgresProbeCheckResult {
   submission: PostgresProbeSubmissionRecord;
 }
 
+export type PostgresProbeAuditAction = "probe_identity.upsert" | "probe_job.claim" | "probe_result.submit";
+
 export interface RecordPostgresAuditEventInput {
   id?: string;
   workspaceId?: string;
@@ -422,6 +424,25 @@ export type PostgresMonitorAuditAction = "monitor.create" | "monitor.update" | "
 export interface PostgresMonitorMutationAuditInput extends Omit<RecordPostgresAuditEventInput, "action" | "resourceType"> {
   action: PostgresMonitorAuditAction;
   resourceType?: "monitor";
+}
+
+export interface PostgresProbeMutationAuditInput extends Omit<RecordPostgresAuditEventInput, "action" | "resourceType"> {
+  action: PostgresProbeAuditAction;
+  resourceType?: "probe_identity" | "check_job";
+}
+
+export interface PostgresProbeIdentityMutationResult {
+  probe: PostgresProbeIdentityRecord;
+  audit: PostgresAuditEventRecord;
+}
+
+export interface PostgresCheckJobMutationResult {
+  job: PostgresCheckJobRecord;
+  audit: PostgresAuditEventRecord;
+}
+
+export interface SubmitPostgresProbeCheckResultMutationResult extends SubmitPostgresProbeCheckResult {
+  audit: PostgresAuditEventRecord;
 }
 
 export interface TombstonePostgresResourceInput {
@@ -656,9 +677,44 @@ export class PostgresRuntime {
 
   async upsertProbeIdentity(input: UpsertPostgresProbeIdentityInput): Promise<PostgresProbeIdentityRecord> {
     const workspaceId = normalizeWorkspaceId(input.workspaceId ?? this.workspaceId);
+    return this.withWorkspaceTransaction(workspaceId, (client) => this.upsertProbeIdentityInTransaction(client, workspaceId, input));
+  }
+
+  async upsertProbeIdentityWithAudit(input: UpsertPostgresProbeIdentityInput, auditInput: PostgresProbeMutationAuditInput): Promise<PostgresProbeIdentityMutationResult> {
+    const workspaceId = normalizeWorkspaceId(input.workspaceId ?? auditInput.workspaceId ?? this.workspaceId);
+    return this.withWorkspaceTransaction(workspaceId, async (client) => {
+      const requestedProbeId = normalizeId(input.id ?? deterministicId("prb", workspaceId, input.publicKeyFingerprint));
+      const replayedAudit = await this.findProbeMutationAuditReplay(client, workspaceId, {
+        ...auditInput,
+        resourceType: "probe_identity",
+        resourceId: auditInput.resourceId ?? requestedProbeId,
+      });
+      if (replayedAudit) {
+        const requestedHash = normalizeReplayRequestHash(auditInput.metadata?.requestHash);
+        const replayedHash = normalizeReplayRequestHash(replayedAudit.metadata.requestHash);
+        if (requestedHash && replayedHash && requestedHash !== replayedHash) {
+          throw new Error("probe identity idempotency conflict");
+        }
+        const probe = await this.getProbeIdentityInTransaction(client, workspaceId, requestedProbeId);
+        if (!probe) throw new Error("probe identity replay conflict");
+        return { probe, audit: replayedAudit };
+      }
+      const probe = await this.upsertProbeIdentityInTransaction(client, workspaceId, { ...input, workspaceId });
+      const audit = await this.recordAuditEventInTransaction(client, workspaceId, stableAuditInput(workspaceId, {
+        ...auditInput,
+        workspaceId,
+        resourceType: "probe_identity",
+        resourceId: auditInput.resourceId ?? probe.id,
+        metadata: probeAuditMetadata(probe, auditInput.metadata ?? {}),
+      }));
+      return { probe, audit };
+    });
+  }
+
+  private async upsertProbeIdentityInTransaction(client: PostgresQueryClient, workspaceId: string, input: UpsertPostgresProbeIdentityInput): Promise<PostgresProbeIdentityRecord> {
     const idempotencyKey = normalizeNullableOpaqueText(input.idempotencyKey, "probe idempotency key", 256);
     const id = normalizeId(input.id ?? deterministicId("prb", workspaceId, input.publicKeyFingerprint));
-    const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
+    const result = await client.query(
       `INSERT INTO ${this.table("probe_identities")} (
         workspace_id, id, name, probe_class, probe_location, machine_id, public_key_pem,
         public_key_fingerprint, enabled, capabilities, last_seen_at, actor, origin, idempotency_key
@@ -699,20 +755,47 @@ export class PostgresRuntime {
         normalizeNullableOpaqueText(input.origin, "probe origin", 160),
         idempotencyKey,
       ],
-    ));
+    );
     return probeIdentityFromRow(firstRow(result, "probe identity"));
   }
 
   async getProbeIdentity(input: GetPostgresProbeIdentityOptions): Promise<PostgresProbeIdentityRecord | null> {
     const workspaceId = normalizeWorkspaceId(input.workspaceId ?? this.workspaceId);
     const id = normalizeId(input.id);
-    const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
+    return this.withWorkspaceTransaction(workspaceId, (client) => this.getProbeIdentityInTransaction(client, workspaceId, id));
+  }
+
+  private async getProbeIdentityInTransaction(client: PostgresQueryClient, workspaceId: string, id: string): Promise<PostgresProbeIdentityRecord | null> {
+    const result = await client.query(
       `SELECT * FROM ${this.table("probe_identities")}
        WHERE workspace_id = $1 AND id = $2 AND deleted_at IS NULL`,
       [workspaceId, id],
-    ));
+    );
     const row = result.rows[0];
     return row ? probeIdentityFromRow(row as Record<string, unknown>) : null;
+  }
+
+  private async findProbeMutationAuditReplay(
+    client: PostgresQueryClient,
+    workspaceId: string,
+    input: PostgresProbeMutationAuditInput,
+  ): Promise<PostgresAuditEventRecord | null> {
+    const idempotencyKey = normalizeNullableOpaqueText(input.idempotencyKey, "probe audit idempotency key", 256);
+    if (!idempotencyKey || !input.resourceId || !input.resourceType) return null;
+    const result = await client.query(
+      `SELECT * FROM ${this.table("audit_events")}
+       WHERE workspace_id = $1
+         AND action = $2
+         AND resource_type = $3
+         AND resource_id = $4
+         AND idempotency_key = $5
+         AND deleted_at IS NULL
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`,
+      [workspaceId, input.action, normalizeOpaqueText(input.resourceType, "probe audit resource type", 120), normalizeId(input.resourceId), idempotencyKey],
+    );
+    const row = result.rows[0];
+    return row ? auditEventFromRow(row as Record<string, unknown>) : null;
   }
 
   async getMonitor(input: GetPostgresMonitorOptions): Promise<PostgresMonitorRecord | null> {
@@ -1121,13 +1204,32 @@ export class PostgresRuntime {
 
   async claimCheckJob(input: ClaimPostgresCheckJobInput): Promise<PostgresCheckJobRecord | null> {
     const workspaceId = normalizeWorkspaceId(input.workspaceId ?? this.workspaceId);
+    return this.withWorkspaceTransaction(workspaceId, (client) => this.claimCheckJobInTransaction(client, workspaceId, input));
+  }
+
+  async claimCheckJobWithAudit(input: ClaimPostgresCheckJobInput, auditInput: PostgresProbeMutationAuditInput): Promise<PostgresCheckJobMutationResult | null> {
+    const workspaceId = normalizeWorkspaceId(input.workspaceId ?? auditInput.workspaceId ?? this.workspaceId);
+    return this.withWorkspaceTransaction(workspaceId, async (client) => {
+      const job = await this.claimCheckJobInTransaction(client, workspaceId, { ...input, workspaceId });
+      if (!job) return null;
+      const audit = await this.recordAuditEventInTransaction(client, workspaceId, stableAuditInput(workspaceId, {
+        ...auditInput,
+        workspaceId,
+        resourceType: "check_job",
+        resourceId: auditInput.resourceId ?? job.id,
+        metadata: probeCheckJobAuditMetadata(job, auditInput.metadata ?? {}),
+      }));
+      return { job, audit };
+    });
+  }
+
+  private async claimCheckJobInTransaction(client: PostgresQueryClient, workspaceId: string, input: ClaimPostgresCheckJobInput): Promise<PostgresCheckJobRecord | null> {
     const jobId = normalizeId(input.jobId);
     const probeId = normalizeId(input.probeId);
     const leaseTtlMs = normalizePositiveInteger(input.leaseTtlMs ?? 120_000, "leaseTtlMs");
     const fencingToken = `fence_${randomUUID().replace(/-/g, "")}`;
-    return this.withWorkspaceTransaction(workspaceId, async (client) => {
-      const result = await client.query(
-        `WITH probe AS (
+    const result = await client.query(
+      `WITH probe AS (
          SELECT id, probe_class, probe_location
          FROM ${this.table("probe_identities")}
          WHERE workspace_id = $1 AND id = $3 AND enabled = true AND deleted_at IS NULL
@@ -1175,13 +1277,12 @@ export class PostgresRuntime {
          AND (
            jsonb_array_length(COALESCE(job.probe_policy->'locations', '[]'::jsonb)) = 0
            OR (job.probe_policy->'locations') ? probe.probe_location
-         )
+       )
        RETURNING job.*`,
-        [workspaceId, jobId, probeId, fencingToken, leaseTtlMs],
-      );
-      const row = result.rows[0];
-      return row ? checkJobFromRow(row as Record<string, unknown>) : null;
-    });
+      [workspaceId, jobId, probeId, fencingToken, leaseTtlMs],
+    );
+    const row = result.rows[0];
+    return row ? checkJobFromRow(row as Record<string, unknown>) : null;
   }
 
   async cancelClaimedCheckJob(input: CancelPostgresClaimedCheckJobInput): Promise<PostgresCheckJobRecord | null> {
@@ -1223,6 +1324,25 @@ export class PostgresRuntime {
 
   async submitProbeCheckResult(input: SubmitPostgresProbeCheckResultInput): Promise<SubmitPostgresProbeCheckResult> {
     const workspaceId = normalizeWorkspaceId(input.workspaceId ?? this.workspaceId);
+    return this.withWorkspaceTransaction(workspaceId, (client) => this.submitProbeCheckResultInTransaction(client, workspaceId, input));
+  }
+
+  async submitProbeCheckResultWithAudit(input: SubmitPostgresProbeCheckResultInput, auditInput: PostgresProbeMutationAuditInput): Promise<SubmitPostgresProbeCheckResultMutationResult> {
+    const workspaceId = normalizeWorkspaceId(input.workspaceId ?? auditInput.workspaceId ?? this.workspaceId);
+    return this.withWorkspaceTransaction(workspaceId, async (client) => {
+      const submitted = await this.submitProbeCheckResultInTransaction(client, workspaceId, { ...input, workspaceId });
+      const audit = await this.recordAuditEventInTransaction(client, workspaceId, stableAuditInput(workspaceId, {
+        ...auditInput,
+        workspaceId,
+        resourceType: "check_job",
+        resourceId: auditInput.resourceId ?? submitted.job.id,
+        metadata: probeSubmissionAuditMetadata(submitted, auditInput.metadata ?? {}),
+      }));
+      return { ...submitted, audit };
+    });
+  }
+
+  private async submitProbeCheckResultInTransaction(client: PostgresQueryClient, workspaceId: string, input: SubmitPostgresProbeCheckResultInput): Promise<SubmitPostgresProbeCheckResult> {
     const jobId = normalizeId(input.jobId);
     const probeId = normalizeId(input.probeId);
     const checkedAt = normalizeIsoTimestamp(input.checkedAt, "probe checkedAt");
@@ -1235,41 +1355,40 @@ export class PostgresRuntime {
     const statusCode = normalizeNullableExpectedStatus(input.statusCode);
     const error = normalizeNullableRedactedText(input.error, "check result error", 1000);
     const attemptCount = normalizePositiveInteger(input.attemptCount ?? 1, "attemptCount");
-    return this.withWorkspaceTransaction(workspaceId, async (client) => {
-      const jobResult = await client.query(
-        `SELECT * FROM ${this.table("check_jobs")}
+    const jobResult = await client.query(
+      `SELECT * FROM ${this.table("check_jobs")}
          WHERE workspace_id = $1 AND id = $2 AND deleted_at IS NULL
          FOR UPDATE`,
-        [workspaceId, jobId],
-      );
-      const currentJob = jobResult.rows[0] ? checkJobFromRow(jobResult.rows[0] as Record<string, unknown>) : null;
-      if (!currentJob) throw new Error("probe check job not found");
-      const payloadHash = probeResultPayloadHash({
-        probeId,
-        jobId: currentJob.id,
-        scheduleSlot: currentJob.scheduleSlot,
-        fencingToken,
-        monitorId: currentJob.monitorId,
-        nonce: normalizedNonce,
-        checkedAt,
-        status,
-        latencyMs,
-        statusCode,
-        error,
-        attemptCount,
-        monitorRevision: currentJob.monitorRevision,
-        evidence,
-      });
-      if (suppliedPayloadHash !== payloadHash) {
-        throw new Error("probe payload hash mismatch");
-      }
-      const resultId = deterministicId("chk", workspaceId, currentJob.id, probeId, payloadHash);
-      const submissionId = deterministicId("psb", workspaceId, probeId, normalizedNonce);
-      const existingSubmission = await client.query(
-        `SELECT * FROM ${this.table("probe_submissions")}
+      [workspaceId, jobId],
+    );
+    const currentJob = jobResult.rows[0] ? checkJobFromRow(jobResult.rows[0] as Record<string, unknown>) : null;
+    if (!currentJob) throw new Error("probe check job not found");
+    const payloadHash = probeResultPayloadHash({
+      probeId,
+      jobId: currentJob.id,
+      scheduleSlot: currentJob.scheduleSlot,
+      fencingToken,
+      monitorId: currentJob.monitorId,
+      nonce: normalizedNonce,
+      checkedAt,
+      status,
+      latencyMs,
+      statusCode,
+      error,
+      attemptCount,
+      monitorRevision: currentJob.monitorRevision,
+      evidence,
+    });
+    if (suppliedPayloadHash !== payloadHash) {
+      throw new Error("probe payload hash mismatch");
+    }
+    const resultId = deterministicId("chk", workspaceId, currentJob.id, probeId, payloadHash);
+    const submissionId = deterministicId("psb", workspaceId, probeId, normalizedNonce);
+    const existingSubmission = await client.query(
+      `SELECT * FROM ${this.table("probe_submissions")}
          WHERE workspace_id = $1 AND probe_id = $2 AND nonce = $3 AND deleted_at IS NULL`,
-        [workspaceId, probeId, normalizedNonce],
-      );
+      [workspaceId, probeId, normalizedNonce],
+    );
       const existing = existingSubmission.rows[0] as Record<string, unknown> | undefined;
       if (existing && String(existing.payload_hash ?? "") !== payloadHash) {
         throw new Error("probe submission nonce replay conflict");
@@ -1420,7 +1539,6 @@ export class PostgresRuntime {
         result: checkResultFromRow(firstRow(result, "check result")),
         submission: probeSubmissionFromRow(firstRow(submission, "probe submission")),
       };
-    });
   }
 
   async recordAuditEvent(input: RecordPostgresAuditEventInput): Promise<PostgresAuditEventRecord> {
@@ -2233,6 +2351,57 @@ function monitorAuditMetadata(monitor: PostgresMonitorRecord, metadata: Record<s
     monitorEnabled: monitor.enabled,
     monitorRevision: monitor.revision,
     workspaceId: monitor.workspaceId,
+  };
+}
+
+function probeAuditMetadata(probe: PostgresProbeIdentityRecord, metadata: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...metadata,
+    workspaceId: probe.workspaceId,
+    probeId: probe.id,
+    probeClass: probe.probeClass,
+    probeLocation: probe.probeLocation,
+    machineBound: Boolean(probe.machineId),
+    publicKeyFingerprint: probe.publicKeyFingerprint,
+    capabilityKeys: Object.keys(probe.capabilities).sort(),
+  };
+}
+
+function probeCheckJobAuditMetadata(job: PostgresCheckJobRecord, metadata: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...metadata,
+    workspaceId: job.workspaceId,
+    jobId: job.id,
+    monitorId: job.monitorId,
+    monitorRevision: job.monitorRevision,
+    probeId: job.claimedByProbeId,
+    probeClass: job.probePolicy.probeClass,
+    locationCount: job.probePolicy.locations.length,
+    scheduleSlot: job.scheduleSlot,
+  };
+}
+
+function probeSubmissionAuditMetadata(submitted: SubmitPostgresProbeCheckResult, metadata: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...metadata,
+    workspaceId: submitted.submission.workspaceId,
+    jobId: submitted.job.id,
+    monitorId: submitted.submission.monitorId,
+    monitorRevision: submitted.submission.monitorRevision,
+    probeId: submitted.submission.probeId,
+    resultStatus: submitted.result.status,
+    payloadHash: submitted.submission.payloadHash,
+  };
+}
+
+function stableAuditInput(workspaceId: string, input: RecordPostgresAuditEventInput): RecordPostgresAuditEventInput {
+  const idempotencyKey = normalizeNullableOpaqueText(input.idempotencyKey, "audit idempotency key", 256);
+  const resourceType = input.resourceType ?? "";
+  const resourceId = input.resourceId ?? "";
+  return {
+    ...input,
+    idempotencyKey,
+    id: input.id ?? (idempotencyKey ? deterministicId("aud", workspaceId, input.action, resourceType, resourceId, idempotencyKey) : undefined),
   };
 }
 

@@ -103,9 +103,19 @@ through `UptimeService` and worker loops. `0.1.67` includes an explicit
 `hostedPostgresRuntime` API option for a bounded hosted monitor control plane:
 `/api/v1/summary` and `/api/v1/monitors*` can use Postgres monitor rows,
 audit rows, expected-revision PATCH guards, idempotent PATCH replay, and
-tombstones without falling back to the SQLite bridge. Report, incident, result,
-import, probe, browser, scheduler, and reporter routes remain fail-closed until
-each has its own authoritative Postgres storage path. The
+tombstones without falling back to the SQLite bridge. `0.1.69` adds an explicit
+`hostedPostgresProbeRuntime` API option for bounded hosted probe control-plane
+wiring: admin-scoped `/api/v1/probes` enrollment, probe-id-bound
+`/api/v1/probes/jobs/:id/claim`, and signed `/api/v1/probes/results`
+submission can use workspace-scoped Postgres probe identities and `check_jobs`.
+Claim and submit require an `uptime:probe` hosted token descriptor bound to the
+same `probeId`; admin-only tokens can enroll identities but cannot claim jobs or
+submit results. Hosted probe mutations use runtime audit helpers, responses do
+not expose raw public key material, and hosted probe listing, job creation,
+heartbeat, revocation, rotation, worker promotion, and live private-probe
+startup remain blocked. Report, incident, result, import,
+browser, scheduler, and reporter routes remain fail-closed until each has its
+own authoritative Postgres storage path. The
 `@hasna/uptime/postgres-runtime` export is a bounded core facade for
 workspace-scoped monitor upserts, monitor listing, probe identities, check jobs, probe
 submissions, audit rows, and tombstones. Monitor upserts enforce the mandatory
@@ -125,8 +135,10 @@ later public-safe monitors. `uptime cloud postgres-private-probe preflight`
 reads a private probe identity, expected machine/location/fingerprint bindings,
 and private job/lease counts from Postgres for review while keeping hosted
 private-probe startup blocked. These commands are not the EFS SQLite `cloud
-public-checks` bridge, do not enable hosted API probe routes, and do not make
-hosted worker preflight `canStart=true`. The
+public-checks` bridge and do not make hosted worker preflight
+`canStart=true`; the hosted API adapter is bounded to enrollment, claim, and
+signed result submission until heartbeat/revocation/rotation, alarms, deploy
+drain, inventory-backed private target refs, and live worker evidence exist. The
 `@hasna/uptime/postgres-report-runtime` export can claim report schedule
 windows, begin and finish fenced report runs, write delivery-attempt state,
 retry metadata, redacted artifact metadata refs, and validated callback
@@ -377,10 +389,12 @@ Run `uptime serve` and use:
 - `POST /api/probes/jobs/:id/claim`
 - `POST /api/probes/results`
 
-Hosted `/api/v1/probes*` routes currently fail closed with `501` until cloud
-check jobs, workspace stores, and audit logging are implemented. Local job reads
-redact fencing tokens; the claim response is the only API response that returns
-the active fencing token.
+Hosted `/api/v1/probes*` routes fail closed with `501` unless an embedding host
+injects a `hostedPostgresProbeRuntime` with audited mutation helpers. With that
+adapter, enrollment, probe-bound claim, and signed result submission are
+available; listing, API job creation, job reads, heartbeat, revocation, and
+rotation still fail closed. Local job reads redact fencing tokens; the claim
+response is the only API response that returns the active fencing token.
 
 Hosted `POST /api/v1/report`, `/api/v1/report-schedules*`, `/api/v1/report-runs`, and
 `/api/v1/audit-events` also fail closed until cloud channel refs, workspace
