@@ -601,6 +601,15 @@ stable per-attempt idempotency keys, retry metadata, redacted artifact metadata
 refs, and validated callback contracts for artifact object writes and Open Logs
 audit payloads, but this is narrower than hosted reporter readiness.
 
+The hosted report-control-plane adapter may be enabled only by passing an
+explicit `hostedPostgresReportRuntime` to the API handler. It can create, list,
+patch, and tombstone report schedule metadata; list report runs; and list audit
+events from workspace-scoped Postgres storage. It must reject raw provider
+destinations and boolean channel fan-out selectors in favor of explicit
+approved `channelRefIds`, and it must continue returning 501 for
+`run-due`/single-schedule execution routes until the reporter promotion gate
+above is satisfied.
+
 `0.1.42` adds a separate Postgres core runtime facade for monitor rows, probe
 identities, deterministic `check_jobs`, check results, audit events, and
 sync tombstones. Treat it as SDK/runtime groundwork only. Do not set

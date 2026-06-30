@@ -120,6 +120,16 @@ deliberately leaves reports, incidents, results, import apply, probes, browser
 checks, scheduler loops, and reporter delivery fail-closed until their
 Postgres-backed contracts are implemented and reviewed.
 
+`0.1.68` adds an explicit `hostedPostgresReportRuntime` API adapter for hosted
+report schedule metadata, report-run reads, and report audit reads. Schedule
+create/update/delete use
+atomic Postgres audit helpers with actor, origin, idempotency key, request hash,
+and expected-revision provenance. The adapter only accepts explicit
+`channelRefIds` and redacts artifact refs plus audit payloads on API reads. It
+still blocks `/api/v1/report-schedules/run-due` and
+`/api/v1/report-schedules/:id/run`; live hosted reporter execution remains a
+separate promotion gate.
+
 `0.1.44` adds a bounded `uptime cloud postgres-scheduler run` review command
 that creates deterministic Postgres `check_jobs` for due public-safe HTTP/TCP
 monitors with interval-aligned slots, bounded catch-up, and producer-side hosted

@@ -1,5 +1,7 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { dashboardHtml } from "./dashboard.js";
+import { sanitizeEvidenceInput } from "./evidence-sanitizer.js";
+import { sanitizePostgresReportRuntimeError, type ListPostgresReportRunsOptions, type PostgresReportRunRecord, type PostgresReportScheduleRecord } from "./postgres-report-runtime.js";
 import { sanitizePostgresRuntimeError } from "./postgres-runtime.js";
 import { UptimeService, type UptimeServiceOptions } from "./service.js";
 import { resolveRuntimeMode, type UptimeRuntimeMode } from "./store.js";
@@ -14,7 +16,7 @@ import type {
   TombstonePostgresResourceInput,
   UpsertPostgresMonitorInput,
 } from "./postgres-runtime.js";
-import type { Monitor, SchedulerHandle, UptimeSummary } from "./types.js";
+import type { AuditEvent, ListAuditEventsOptions, RecordAuditEventInput, ReportRun, ReportSchedule, SchedulerHandle, Monitor, UptimeSummary } from "./types.js";
 
 export interface ServeOptions extends UptimeServiceOptions {
   host?: string;
@@ -26,6 +28,7 @@ export interface ServeOptions extends UptimeServiceOptions {
   hostedTokens?: HostedToken[];
   hostedAllowedOrigins?: string[];
   hostedPostgresRuntime?: HostedPostgresMonitorRuntime;
+  hostedPostgresReportRuntime?: HostedPostgresReportRuntime;
   allowUnsafeRemoteMutations?: boolean;
 }
 
@@ -35,6 +38,7 @@ export interface CreateApiHandlerOptions {
   hostedTokens?: HostedToken[];
   hostedAllowedOrigins?: string[];
   hostedPostgresRuntime?: HostedPostgresMonitorRuntime;
+  hostedPostgresReportRuntime?: HostedPostgresReportRuntime;
   allowUnsafeRemoteMutations?: boolean;
   fetchImpl?: typeof fetch;
   trustedLoopback?: boolean;
@@ -64,6 +68,64 @@ export interface HostedPostgresMonitorRuntime {
   tombstoneResource(input: TombstonePostgresResourceInput & { resourceType: "monitor" }): Promise<PostgresSyncTombstoneRecord>;
   tombstoneMonitorWithAudit(input: TombstonePostgresResourceInput & { resourceType: "monitor" }, audit: PostgresMonitorMutationAuditInput): Promise<PostgresMonitorTombstoneResult>;
   recordAuditEvent(input: RecordPostgresAuditEventInput): Promise<PostgresAuditEventRecord>;
+}
+
+type HostedReportScheduleAuditInput = {
+  workspaceId?: string;
+  action: "report_schedule.create" | "report_schedule.update" | "report_schedule.delete";
+  resourceType: "report_schedule";
+  resourceId?: string | null;
+  actor?: string | null;
+  origin?: string | null;
+  idempotencyKey?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export interface HostedPostgresReportRuntime {
+  createReportSchedule(input: {
+    id?: string;
+    workspaceId?: string;
+    name: string;
+    intervalSeconds: number;
+    nextRunAt?: string;
+    enabled?: boolean;
+    subject?: string | null;
+    channels: ReportSchedule["channels"];
+    actor?: string | null;
+    origin?: string | null;
+    idempotencyKey?: string | null;
+  }): Promise<PostgresReportScheduleRecord>;
+  createReportScheduleWithAudit(input: Parameters<HostedPostgresReportRuntime["createReportSchedule"]>[0], audit: HostedReportScheduleAuditInput): Promise<{ schedule: PostgresReportScheduleRecord; audit: AuditEvent }>;
+  listReportSchedules(options?: { workspaceId?: string; includeDisabled?: boolean; limit?: number; offset?: number }): Promise<PostgresReportScheduleRecord[]>;
+  getReportSchedule(input: { workspaceId?: string; idOrName: string }): Promise<PostgresReportScheduleRecord | null>;
+  updateReportSchedule(input: {
+    workspaceId?: string;
+    idOrName: string;
+    name?: string;
+    intervalSeconds?: number;
+    nextRunAt?: string;
+    enabled?: boolean;
+    subject?: string | null;
+    channels?: ReportSchedule["channels"];
+    actor?: string | null;
+    origin?: string | null;
+    idempotencyKey?: string | null;
+    expectedRevision?: number | null;
+  }): Promise<PostgresReportScheduleRecord>;
+  updateReportScheduleWithAudit(input: Parameters<HostedPostgresReportRuntime["updateReportSchedule"]>[0], audit: HostedReportScheduleAuditInput): Promise<{ schedule: PostgresReportScheduleRecord; audit: AuditEvent }>;
+  tombstoneReportSchedule(input: {
+    workspaceId?: string;
+    idOrName: string;
+    actor?: string | null;
+    origin?: string | null;
+    idempotencyKey?: string | null;
+    expectedRevision?: number | null;
+    deletedAt?: string;
+  }): Promise<PostgresReportScheduleRecord | null>;
+  tombstoneReportScheduleWithAudit(input: Parameters<HostedPostgresReportRuntime["tombstoneReportSchedule"]>[0], audit: HostedReportScheduleAuditInput): Promise<{ schedule: PostgresReportScheduleRecord | null; audit: AuditEvent | null }>;
+  listReportRuns(options?: ListPostgresReportRunsOptions): Promise<PostgresReportRunRecord[]>;
+  recordAuditEvent(input: RecordAuditEventInput): Promise<AuditEvent>;
+  listAuditEvents(options?: ListAuditEventsOptions & { offset?: number }): Promise<AuditEvent[]>;
 }
 
 export function createApiHandler(service: UptimeService, options: CreateApiHandlerOptions = {}): (request: Request) => Promise<Response> {
@@ -127,6 +189,7 @@ export function serveUptime(options: ServeOptions = {}): { server: ReturnType<ty
       hostedTokens: options.hostedTokens,
       hostedAllowedOrigins: options.hostedAllowedOrigins,
       hostedPostgresRuntime: options.hostedPostgresRuntime,
+      hostedPostgresReportRuntime: options.hostedPostgresReportRuntime,
       allowUnsafeRemoteMutations: options.allowUnsafeRemoteMutations,
       trustedLoopback: isLoopbackHost(options.host ?? "127.0.0.1"),
       mode,
@@ -234,7 +297,11 @@ async function handleApiRoute(
     return json(await service.sendReport({ ...input, fetchImpl: options.fetchImpl }));
   }
   if (hosted && (apiPath.startsWith("/api/report-schedules") || apiPath.startsWith("/api/report-runs") || apiPath.startsWith("/api/audit-events"))) {
-    throw new ApiError("hosted report schedules require cloud channel refs, workspace stores, and audit logging", 501);
+    if (!actor) throw new ApiError("hosted actor is required", 500);
+    if (!options.hostedPostgresReportRuntime) {
+      throw new ApiError("hosted report schedules require Postgres report storage", 501);
+    }
+    return await handleHostedReportRoute(request, url, apiPath, options.hostedPostgresReportRuntime, actor);
   }
   if (hosted && apiPath.startsWith("/api/probes")) {
     throw new ApiError("hosted probe APIs require cloud check_jobs, workspace stores, and audit logging", 501);
@@ -514,13 +581,15 @@ async function handleApiRoute(
 function sanitizeApiError(error: unknown, options: CreateApiHandlerOptions): string {
   const raw = error instanceof Error ? error.message : String(error);
   if (error instanceof ApiError && raw === "monitor update conflict") return raw;
-  const sanitized = options.hostedPostgresRuntime
-    ? sanitizePostgresRuntimeError(raw, process.env.HASNA_UPTIME_DATABASE_URL)
-    : raw;
+  const sanitized = options.hostedPostgresReportRuntime
+      ? sanitizePostgresReportRuntimeError(raw, process.env.HASNA_UPTIME_DATABASE_URL)
+      : options.hostedPostgresRuntime
+        ? sanitizePostgresRuntimeError(raw, process.env.HASNA_UPTIME_DATABASE_URL)
+        : raw;
   const redacted = sanitized
     .replace(/\b(?:SELECT|INSERT|UPDATE|DELETE|WITH|BEGIN|COMMIT|ROLLBACK)\b[\s\S]*/gi, "database operation failed")
     .replace(/\b(?:arn:aws:[^\s,;]+|[0-9]{12}|(?:vpc|subnet|sg|task|fs|fsmt|rtb|igw|nat|eni|eipalloc|vpce|vol|snap|ami)-[0-9a-f]{8,36})\b/gi, "resource_redacted");
-  if (options.hostedPostgresRuntime && /\b(?:duplicate key|violates .*constraint|constraint|Key \(|relation|column|schema)\b/i.test(redacted)) {
+  if ((options.hostedPostgresRuntime || options.hostedPostgresReportRuntime) && /\b(?:duplicate key|violates .*constraint|constraint|Key \(|relation|column|schema)\b/i.test(redacted)) {
     return "database operation failed";
   }
   return redacted;
@@ -546,6 +615,262 @@ function hostedScopeFor(method: string, apiPath: string): HostedScope {
   if (method === "GET") return "uptime:read";
   if (method === "POST" || method === "PATCH" || method === "DELETE") return "uptime:write";
   return "uptime:read";
+}
+
+async function handleHostedReportRoute(
+  request: Request,
+  url: URL,
+  apiPath: string,
+  runtime: HostedPostgresReportRuntime,
+  actor: HostedActor,
+): Promise<Response> {
+  if (request.method === "POST" && apiPath === "/api/report-schedules/run-due") {
+    throw new ApiError("hosted report execution requires reporter worker promotion evidence", 501);
+  }
+  const reportScheduleRunMatch = apiPath.match(/^\/api\/report-schedules\/([^/]+)\/run$/);
+  if (request.method === "POST" && reportScheduleRunMatch) {
+    throw new ApiError("hosted report execution requires reporter worker promotion evidence", 501);
+  }
+  if (request.method === "GET" && apiPath === "/api/report-schedules") {
+    const schedules = await runtime.listReportSchedules({
+      workspaceId: actor.workspaceId,
+      includeDisabled: url.searchParams.get("includeDisabled") === "true",
+      limit: numericParam(url, "limit", 250),
+      offset: numericParam(url, "offset", 0),
+    });
+    return json(schedules.map(postgresReportScheduleToReportSchedule));
+  }
+  if (request.method === "POST" && apiPath === "/api/report-schedules") {
+    const input = await jsonBody(request);
+    const idempotencyKey = request.headers.get("idempotency-key") ?? undefined;
+    const { schedule } = await createHostedPostgresReportSchedule(runtime, {
+      ...input,
+      workspaceId: actor.workspaceId,
+      actor: actor.actor,
+      origin: "hosted-api",
+      idempotencyKey,
+    }, hostedPostgresReportAuditInput(actor, "report_schedule.create", idempotencyKey, {
+      method: request.method,
+      apiPath,
+      requestHash: hostedReportScheduleRequestHash(input),
+    }));
+    return json(postgresReportScheduleToReportSchedule(schedule), 201);
+  }
+  const reportScheduleMatch = apiPath.match(/^\/api\/report-schedules\/([^/]+)$/);
+  if (reportScheduleMatch) {
+    const idOrName = decodeURIComponent(reportScheduleMatch[1]);
+    if (request.method === "GET") {
+      const schedule = await runtime.getReportSchedule({ workspaceId: actor.workspaceId, idOrName });
+      return schedule ? json(postgresReportScheduleToReportSchedule(schedule)) : json({ error: "not found" }, 404);
+    }
+    if (request.method === "PATCH") {
+      const input = await jsonBody(request);
+      const before = await runtime.getReportSchedule({ workspaceId: actor.workspaceId, idOrName });
+      if (!before) return json({ error: "not found" }, 404);
+      const idempotencyKey = request.headers.get("idempotency-key") ?? undefined;
+      const { schedule } = await updateHostedPostgresReportSchedule(runtime, {
+        ...input,
+        workspaceId: actor.workspaceId,
+        idOrName: before.id,
+        actor: actor.actor,
+        origin: "hosted-api",
+        idempotencyKey,
+        expectedRevision: before.revision,
+      }, hostedPostgresReportAuditInput(actor, "report_schedule.update", idempotencyKey, {
+        resourceId: before.id,
+        method: request.method,
+        apiPath,
+        requestHash: hostedReportScheduleRequestHash(input),
+      }));
+      return json(postgresReportScheduleToReportSchedule(schedule));
+    }
+    if (request.method === "DELETE") {
+      const idempotencyKey = request.headers.get("idempotency-key") ?? undefined;
+      const { schedule } = await tombstoneHostedPostgresReportSchedule(runtime, {
+        workspaceId: actor.workspaceId,
+        idOrName,
+        actor: actor.actor,
+        origin: "hosted-api",
+        idempotencyKey,
+      }, hostedPostgresReportAuditInput(actor, "report_schedule.delete", idempotencyKey, {
+        method: request.method,
+        apiPath,
+      }));
+      return json({ deleted: Boolean(schedule) });
+    }
+  }
+  if (request.method === "GET" && apiPath === "/api/report-runs") {
+    const runs = await runtime.listReportRuns({
+      workspaceId: actor.workspaceId,
+      scheduleId: url.searchParams.get("scheduleId") ?? undefined,
+      limit: numericParam(url, "limit", 50),
+      offset: numericParam(url, "offset", 0),
+    });
+    return json(runs.map(postgresReportRunToReportRun));
+  }
+  if (request.method === "GET" && apiPath === "/api/audit-events") {
+    const audits = await runtime.listAuditEvents({
+      workspaceId: actor.workspaceId,
+      resourceType: url.searchParams.get("resourceType") ?? undefined,
+      resourceId: url.searchParams.get("resourceId") ?? undefined,
+      limit: numericParam(url, "limit", 50),
+      offset: numericParam(url, "offset", 0),
+    });
+    return json(audits.map(sanitizeHostedAuditEventForApi));
+  }
+  return json({ error: "not found" }, 404);
+}
+
+async function createHostedPostgresReportSchedule(
+  runtime: HostedPostgresReportRuntime,
+  input: Parameters<HostedPostgresReportRuntime["createReportSchedule"]>[0],
+  audit: Parameters<HostedPostgresReportRuntime["createReportScheduleWithAudit"]>[1],
+): Promise<{ schedule: PostgresReportScheduleRecord; audit: AuditEvent }> {
+  try {
+    return await runtime.createReportScheduleWithAudit(input, audit);
+  } catch (error) {
+    throw reportRuntimeApiError(error);
+  }
+}
+
+async function updateHostedPostgresReportSchedule(
+  runtime: HostedPostgresReportRuntime,
+  input: Parameters<HostedPostgresReportRuntime["updateReportSchedule"]>[0],
+  audit: Parameters<HostedPostgresReportRuntime["updateReportScheduleWithAudit"]>[1],
+): Promise<{ schedule: PostgresReportScheduleRecord; audit: AuditEvent }> {
+  try {
+    return await runtime.updateReportScheduleWithAudit(input, audit);
+  } catch (error) {
+    throw reportRuntimeApiError(error);
+  }
+}
+
+async function tombstoneHostedPostgresReportSchedule(
+  runtime: HostedPostgresReportRuntime,
+  input: Parameters<HostedPostgresReportRuntime["tombstoneReportSchedule"]>[0],
+  audit: Parameters<HostedPostgresReportRuntime["tombstoneReportScheduleWithAudit"]>[1],
+): Promise<{ schedule: PostgresReportScheduleRecord | null; audit: AuditEvent | null }> {
+  try {
+    return await runtime.tombstoneReportScheduleWithAudit(input, audit);
+  } catch (error) {
+    throw reportRuntimeApiError(error);
+  }
+}
+
+function reportRuntimeApiError(error: unknown): ApiError {
+  if (error instanceof ApiError) return error;
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("idempotency conflict")) return new ApiError("idempotency key conflict", 409);
+  if (message.includes("revision conflict") || message.includes("update conflict")) return new ApiError("report schedule update conflict", 409);
+  if (message.includes("duplicate key") || message.includes("unique constraint")) return new ApiError("report schedule conflict", 409);
+  if (message.includes("not found")) return new ApiError("report schedule not found", 404);
+  return new ApiError(sanitizePostgresReportRuntimeError(error), 400);
+}
+
+function hostedPostgresReportAuditInput(
+  actor: HostedActor,
+  action: "report_schedule.create" | "report_schedule.update" | "report_schedule.delete",
+  idempotencyKey: string | null | undefined,
+  metadata: Record<string, unknown> & { resourceId?: string },
+): HostedReportScheduleAuditInput {
+  const { resourceId, ...safeMetadata } = metadata;
+  return {
+    workspaceId: actor.workspaceId,
+    action,
+    actor: actor.actor,
+    origin: "hosted-api",
+    resourceType: "report_schedule",
+    resourceId: resourceId ?? null,
+    idempotencyKey,
+    metadata: {
+      ...safeMetadata,
+      channels: safeMetadata.channels ?? null,
+      workspaceId: actor.workspaceId,
+      scopes: [...actor.scopes].sort(),
+    },
+  };
+}
+
+function postgresReportScheduleToReportSchedule(record: PostgresReportScheduleRecord): ReportSchedule {
+  return {
+    id: record.id,
+    name: record.name,
+    enabled: record.enabled,
+    intervalSeconds: record.intervalSeconds,
+    nextRunAt: record.nextRunAt,
+    lastRunAt: record.lastRunAt,
+    subject: record.subject,
+    channels: record.channels,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  };
+}
+
+function postgresReportRunToReportRun(record: PostgresReportRunRecord): ReportRun | (Omit<PostgresReportRunRecord, "workspaceId" | "actor" | "origin" | "idempotencyKey" | "claimedByWorkerId" | "fencingToken" | "leaseExpiresAt" | "version" | "artifactRef"> & { status: string; artifactRefHash: string | null }) {
+  if (record.status === "succeeded" || record.status === "failed") {
+    return {
+      id: record.id,
+      scheduleId: record.scheduleId,
+      status: record.status === "succeeded" ? "success" : "failed",
+      startedAt: record.startedAt,
+      finishedAt: record.finishedAt ?? record.startedAt,
+      deliveries: record.deliveries,
+      error: record.error,
+      reportJson: record.reportJson,
+    };
+  }
+  return {
+    id: record.id,
+    scheduleId: record.scheduleId,
+    status: record.status,
+    startedAt: record.startedAt,
+    finishedAt: record.finishedAt,
+    deliveries: record.deliveries,
+    error: record.error,
+    reportJson: record.reportJson,
+    artifactRefHash: record.artifactRef ? `sha256:${createHash("sha256").update(record.artifactRef).digest("hex")}` : null,
+  };
+}
+
+function sanitizeHostedAuditEventForApi(event: AuditEvent): AuditEvent {
+  return {
+    id: event.id,
+    workspaceId: event.workspaceId,
+    action: event.action,
+    resourceType: event.resourceType,
+    resourceId: event.resourceId,
+    message: sanitizeHostedAuditText(event.message),
+    metadata: sanitizeHostedAuditMetadata(event.metadata),
+    actor: event.actor,
+    createdAt: event.createdAt,
+  };
+}
+
+function sanitizeHostedAuditText(value: string | null): string | null {
+  if (value == null || value.trim() === "") return null;
+  const report = sanitizeEvidenceInput(value, { inputFormat: "text", source: "hosted-report-audit-message" });
+  return typeof report.sanitized === "string" && report.sanitized.trim()
+    ? report.sanitized.trim()
+    : "redacted";
+}
+
+function sanitizeHostedAuditMetadata(value: Record<string, unknown>): Record<string, unknown> {
+  const report = sanitizeEvidenceInput(value, { source: "hosted-report-audit-metadata" });
+  return report.sanitized && typeof report.sanitized === "object" && !Array.isArray(report.sanitized)
+    ? report.sanitized as Record<string, unknown>
+    : {};
+}
+
+function enabledReportScheduleChannels(channels: ReportSchedule["channels"]): string[] {
+  return (["email", "sms", "logs"] as const).filter((channel) => Boolean(channels[channel]));
+}
+
+function hostedReportScheduleRequestHash(input: Record<string, unknown>): string {
+  const normalized: Record<string, unknown> = {};
+  for (const key of ["name", "intervalSeconds", "nextRunAt", "enabled", "subject", "channels"]) {
+    if (Object.prototype.hasOwnProperty.call(input, key)) normalized[key] = input[key];
+  }
+  return `sha256:${createHash("sha256").update(stableJson(normalized)).digest("hex")}`;
 }
 
 function requireHostedActor(request: Request, url: URL, options: CreateApiHandlerOptions, scope: HostedScope): HostedActor {

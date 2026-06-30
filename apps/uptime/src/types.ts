@@ -205,10 +205,14 @@ export interface ReportLogsChannelConfig {
   service?: string;
 }
 
+export interface ReportChannelRefSelection {
+  channelRefIds: string[];
+}
+
 export interface ReportScheduleChannels {
-  email?: boolean | ReportEmailChannelConfig;
-  sms?: boolean | ReportSmsChannelConfig;
-  logs?: boolean | ReportLogsChannelConfig;
+  email?: boolean | ReportEmailChannelConfig | ReportChannelRefSelection;
+  sms?: boolean | ReportSmsChannelConfig | ReportChannelRefSelection;
+  logs?: boolean | ReportLogsChannelConfig | ReportChannelRefSelection;
 }
 
 export interface ReportSchedule {
@@ -271,6 +275,8 @@ export interface RecordAuditEventInput {
   message?: string | null;
   metadata?: Record<string, unknown>;
   actor?: string | null;
+  origin?: string | null;
+  idempotencyKey?: string | null;
   createdAt?: string;
 }
 

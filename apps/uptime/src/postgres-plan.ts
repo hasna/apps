@@ -385,8 +385,7 @@ ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.up
   lease_expires_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  PRIMARY KEY (workspace_id, id),
-  UNIQUE (workspace_id, name)
+  PRIMARY KEY (workspace_id, id)
 );`,
     `CREATE TABLE IF NOT EXISTS ${q(schemaName, "report_runs")} (
   workspace_id text NOT NULL,
@@ -496,6 +495,7 @@ ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.up
     `CREATE INDEX IF NOT EXISTS check_results_workspace_monitor_time_idx ON ${q(schemaName, "check_results")} (workspace_id, monitor_id, checked_at DESC) WHERE deleted_at IS NULL;`,
     `CREATE INDEX IF NOT EXISTS check_jobs_workspace_status_due_idx ON ${q(schemaName, "check_jobs")} (workspace_id, status, due_at) WHERE deleted_at IS NULL;`,
     `CREATE INDEX IF NOT EXISTS report_schedules_due_idx ON ${q(schemaName, "report_schedules")} (workspace_id, enabled, next_run_at, lease_expires_at) WHERE deleted_at IS NULL;`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS report_schedules_workspace_name_active_idx ON ${q(schemaName, "report_schedules")} (workspace_id, name) WHERE deleted_at IS NULL;`,
     `CREATE INDEX IF NOT EXISTS report_runs_workspace_status_time_idx ON ${q(schemaName, "report_runs")} (workspace_id, status, started_at DESC) WHERE deleted_at IS NULL;`,
     `CREATE UNIQUE INDEX IF NOT EXISTS report_runs_schedule_window_idx ON ${q(schemaName, "report_runs")} (workspace_id, schedule_id, started_at) WHERE schedule_id IS NOT NULL AND deleted_at IS NULL;`,
     `CREATE INDEX IF NOT EXISTS report_delivery_attempts_run_idx ON ${q(schemaName, "report_delivery_attempts")} (workspace_id, report_run_id, status, scheduled_at) WHERE deleted_at IS NULL;`,
@@ -591,6 +591,8 @@ END $$;`,
     `ALTER TABLE ${reportSchedules} ADD COLUMN IF NOT EXISTS claimed_by_worker_id text;`,
     `ALTER TABLE ${reportSchedules} ADD COLUMN IF NOT EXISTS fencing_token text;`,
     `ALTER TABLE ${reportSchedules} ADD COLUMN IF NOT EXISTS lease_expires_at timestamptz;`,
+    `ALTER TABLE ${reportSchedules} DROP CONSTRAINT IF EXISTS report_schedules_workspace_id_name_key;`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS report_schedules_workspace_name_active_idx ON ${reportSchedules} (workspace_id, name) WHERE deleted_at IS NULL;`,
     `ALTER TABLE ${reportRuns} ADD COLUMN IF NOT EXISTS claimed_by_worker_id text;`,
     `ALTER TABLE ${reportRuns} ADD COLUMN IF NOT EXISTS fencing_token text;`,
     `ALTER TABLE ${reportRuns} ADD COLUMN IF NOT EXISTS lease_expires_at timestamptz;`,

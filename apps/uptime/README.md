@@ -131,7 +131,13 @@ hosted worker preflight `canStart=true`. The
 windows, begin and finish fenced report runs, write delivery-attempt state,
 retry metadata, redacted artifact metadata refs, and validated callback
 contracts for redacted artifact object writes plus Open Logs audit export
-payloads for review, but it is also not a promotion gate. `uptime cloud postgres-plan` exposes the reviewed target schema,
+payloads for review, but it is also not a promotion gate. `0.1.68` adds an
+explicit `hostedPostgresReportRuntime` adapter for report schedule metadata,
+report-run reads, and audit reads; it still rejects hosted report execution
+until reporter worker promotion evidence and delivery wiring are reviewed.
+Hosted report schedules must select explicit approved
+`channelRefIds`, never raw provider URLs, recipients, tokens, or boolean
+fan-out selectors. `uptime cloud postgres-plan` exposes the reviewed target schema,
 workspace RLS policy shape, tombstones, audit tables, idempotency fields, and
 check-job lease tables for private review without connecting to Postgres or
 printing credentials.

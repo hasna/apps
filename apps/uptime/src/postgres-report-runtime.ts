@@ -1,8 +1,20 @@
 import { createHash, randomUUID } from "node:crypto";
 import { sanitizeEvidenceInput } from "./evidence-sanitizer.js";
+import { MAX_INTERVAL_SECONDS, MIN_INTERVAL_SECONDS } from "./limits.js";
 import { createPostgresPool, type PostgresQueryClient } from "./postgres.js";
 import { buildPostgresMigrationPlan, redactPostgresUrl } from "./postgres-plan.js";
-import type { ReportDeliveryChannel, ReportDeliveryRecord } from "./types.js";
+import type {
+  AuditEvent,
+  CreateReportScheduleInput,
+  ListAuditEventsOptions,
+  ListReportRunsOptions,
+  RecordAuditEventInput,
+  ReportChannelRefSelection,
+  ReportDeliveryChannel,
+  ReportDeliveryRecord,
+  ReportScheduleChannels,
+  UpdateReportScheduleInput,
+} from "./types.js";
 
 export const POSTGRES_REPORT_RUNTIME_VERSION = 1;
 
@@ -231,6 +243,86 @@ export interface PostgresReportScheduleClaimRecord {
   fencingToken: string | null;
   leaseExpiresAt: string | null;
   version: number;
+}
+
+export interface PostgresReportScheduleRecord {
+  workspaceId: string;
+  id: string;
+  name: string;
+  enabled: boolean;
+  intervalSeconds: number;
+  nextRunAt: string;
+  lastRunAt: string | null;
+  subject: string | null;
+  channels: ReportScheduleChannels;
+  revision: number;
+  actor: string | null;
+  origin: string | null;
+  idempotencyKey: string | null;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+export interface CreatePostgresReportScheduleInput extends CreateReportScheduleInput {
+  id?: string;
+  workspaceId?: string;
+  actor?: string | null;
+  origin?: string | null;
+  idempotencyKey?: string | null;
+}
+
+export interface ListPostgresReportSchedulesOptions {
+  workspaceId?: string;
+  includeDisabled?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export interface GetPostgresReportScheduleInput {
+  workspaceId?: string;
+  idOrName: string;
+}
+
+export interface UpdatePostgresReportScheduleInput extends UpdateReportScheduleInput {
+  workspaceId?: string;
+  idOrName: string;
+  actor?: string | null;
+  origin?: string | null;
+  idempotencyKey?: string | null;
+  expectedRevision?: number | null;
+}
+
+export interface TombstonePostgresReportScheduleInput {
+  workspaceId?: string;
+  idOrName: string;
+  actor?: string | null;
+  origin?: string | null;
+  idempotencyKey?: string | null;
+  expectedRevision?: number | null;
+  deletedAt?: string;
+}
+
+export interface PostgresReportScheduleMutationAuditInput extends RecordAuditEventInput {
+  action: "report_schedule.create" | "report_schedule.update" | "report_schedule.delete";
+  resourceType: "report_schedule";
+  resourceId?: string | null;
+  idempotencyKey?: string | null;
+}
+
+export interface PostgresReportScheduleMutationResult {
+  schedule: PostgresReportScheduleRecord;
+  audit: AuditEvent;
+}
+
+export interface PostgresReportScheduleTombstoneResult {
+  schedule: PostgresReportScheduleRecord | null;
+  audit: AuditEvent | null;
+}
+
+export interface ListPostgresReportRunsOptions extends ListReportRunsOptions {
+  workspaceId?: string;
+  offset?: number;
 }
 
 export interface CreatePostgresReportDeliveryAttemptInput {
@@ -489,6 +581,165 @@ export class PostgresReportRuntime {
 
   async close(): Promise<void> {
     await this.ownedClient?.end?.();
+  }
+
+  async createReportSchedule(input: CreatePostgresReportScheduleInput): Promise<PostgresReportScheduleRecord> {
+    const workspaceId = normalizeWorkspaceId(input.workspaceId ?? this.workspaceId);
+    return this.withWorkspaceTransaction(workspaceId, (client) => this.createReportScheduleInTransaction(client, workspaceId, input));
+  }
+
+  async createReportScheduleWithAudit(input: CreatePostgresReportScheduleInput, auditInput: PostgresReportScheduleMutationAuditInput): Promise<PostgresReportScheduleMutationResult> {
+    const workspaceId = normalizeWorkspaceId(input.workspaceId ?? auditInput.workspaceId ?? this.workspaceId);
+    const idempotencyKey = normalizeNullableOpaqueText(input.idempotencyKey ?? auditInput.idempotencyKey, "report schedule idempotency key", 256);
+    const scheduleId = input.id ?? (idempotencyKey ? deterministicId("rps", workspaceId, idempotencyKey) : undefined);
+    return this.withWorkspaceTransaction(workspaceId, async (client) => {
+      const auditResourceId = scheduleId ? normalizeId(scheduleId) : normalizeNullableOpaqueText(auditInput.resourceId, "audit resource id", 160);
+      const replay = auditResourceId
+        ? await this.findReportScheduleMutationAuditReplay(client, workspaceId, auditInput, auditResourceId)
+        : null;
+      if (replay) {
+        if (!auditResourceId) throw new Error("report schedule idempotency conflict");
+        this.assertReportScheduleReplayHashMatches(replay, auditInput);
+        const schedule = await this.getReportScheduleIncludingDeletedInTransaction(client, workspaceId, auditResourceId);
+        if (!schedule || schedule.deletedAt) throw new Error("report schedule idempotency conflict");
+        return { schedule, audit: replay };
+      }
+      const schedule = await this.createReportScheduleInTransaction(client, workspaceId, { ...input, id: scheduleId, idempotencyKey });
+      const audit = await this.recordAuditEventInTransaction(client, workspaceId, {
+        ...auditInput,
+        workspaceId,
+        resourceType: "report_schedule",
+        resourceId: schedule.id,
+        idempotencyKey,
+      });
+      return { schedule, audit };
+    });
+  }
+
+  async listReportSchedules(options: ListPostgresReportSchedulesOptions = {}): Promise<PostgresReportScheduleRecord[]> {
+    const workspaceId = normalizeWorkspaceId(options.workspaceId ?? this.workspaceId);
+    const limit = clampLimit(options.limit ?? 250);
+    const offset = normalizeNonNegativeInteger(options.offset ?? 0, "offset");
+    const includeDisabled = options.includeDisabled === true;
+    const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
+      `SELECT * FROM ${this.table("report_schedules")}
+       WHERE workspace_id = $1
+         AND deleted_at IS NULL
+         AND ($2::boolean = true OR enabled = true)
+       ORDER BY name ASC, created_at ASC, id ASC
+       LIMIT $3 OFFSET $4`,
+      [workspaceId, includeDisabled, limit, offset],
+    ));
+    return result.rows.map((row) => reportScheduleFromRow(row as Record<string, unknown>));
+  }
+
+  async getReportSchedule(input: GetPostgresReportScheduleInput): Promise<PostgresReportScheduleRecord | null> {
+    const workspaceId = normalizeWorkspaceId(input.workspaceId ?? this.workspaceId);
+    const idOrName = normalizeOpaqueText(input.idOrName, "report schedule id or name", 160);
+    return this.withWorkspaceTransaction(workspaceId, (client) => this.getReportScheduleInTransaction(client, workspaceId, idOrName));
+  }
+
+  async updateReportSchedule(input: UpdatePostgresReportScheduleInput): Promise<PostgresReportScheduleRecord> {
+    const workspaceId = normalizeWorkspaceId(input.workspaceId ?? this.workspaceId);
+    return this.withWorkspaceTransaction(workspaceId, (client) => this.updateReportScheduleInTransaction(client, workspaceId, input));
+  }
+
+  async updateReportScheduleWithAudit(input: UpdatePostgresReportScheduleInput, auditInput: PostgresReportScheduleMutationAuditInput): Promise<PostgresReportScheduleMutationResult> {
+    const workspaceId = normalizeWorkspaceId(input.workspaceId ?? auditInput.workspaceId ?? this.workspaceId);
+    const idOrName = normalizeOpaqueText(input.idOrName, "report schedule id or name", 160);
+    return this.withWorkspaceTransaction(workspaceId, async (client) => {
+      const current = await this.getReportScheduleInTransaction(client, workspaceId, idOrName);
+      if (!current) throw new Error("report schedule not found");
+      const replay = await this.findReportScheduleMutationAuditReplay(client, workspaceId, auditInput, current.id);
+      if (replay) {
+        this.assertReportScheduleReplayHashMatches(replay, auditInput);
+        return { schedule: current, audit: replay };
+      }
+      const schedule = await this.updateReportScheduleInTransaction(client, workspaceId, { ...input, idOrName: current.id });
+      const audit = await this.recordAuditEventInTransaction(client, workspaceId, {
+        ...auditInput,
+        workspaceId,
+        resourceType: "report_schedule",
+        resourceId: schedule.id,
+        idempotencyKey: input.idempotencyKey ?? auditInput.idempotencyKey,
+      });
+      return { schedule, audit };
+    });
+  }
+
+  async tombstoneReportSchedule(input: TombstonePostgresReportScheduleInput): Promise<PostgresReportScheduleRecord | null> {
+    const workspaceId = normalizeWorkspaceId(input.workspaceId ?? this.workspaceId);
+    return this.withWorkspaceTransaction(workspaceId, (client) => this.tombstoneReportScheduleInTransaction(client, workspaceId, input));
+  }
+
+  async tombstoneReportScheduleWithAudit(input: TombstonePostgresReportScheduleInput, auditInput: PostgresReportScheduleMutationAuditInput): Promise<PostgresReportScheduleTombstoneResult> {
+    const workspaceId = normalizeWorkspaceId(input.workspaceId ?? auditInput.workspaceId ?? this.workspaceId);
+    const idOrName = normalizeOpaqueText(input.idOrName, "report schedule id or name", 160);
+    return this.withWorkspaceTransaction(workspaceId, async (client) => {
+      const current = await this.getReportScheduleIncludingDeletedInTransaction(client, workspaceId, idOrName);
+      if (!current) return { schedule: null, audit: null };
+      const replay = await this.findReportScheduleMutationAuditReplay(client, workspaceId, auditInput, current.id);
+      if (replay) {
+        this.assertReportScheduleReplayHashMatches(replay, auditInput);
+        return { schedule: current, audit: replay };
+      }
+      if (current.deletedAt) return { schedule: null, audit: null };
+      const schedule = await this.tombstoneReportScheduleInTransaction(client, workspaceId, {
+        ...input,
+        idOrName: current.id,
+        expectedRevision: current.revision,
+      });
+      if (!schedule) return { schedule: null, audit: null };
+      const audit = await this.recordAuditEventInTransaction(client, workspaceId, {
+        ...auditInput,
+        workspaceId,
+        resourceType: "report_schedule",
+        resourceId: schedule.id,
+        idempotencyKey: input.idempotencyKey ?? auditInput.idempotencyKey,
+      });
+      return { schedule, audit };
+    });
+  }
+
+  async listReportRuns(options: ListPostgresReportRunsOptions = {}): Promise<PostgresReportRunRecord[]> {
+    const workspaceId = normalizeWorkspaceId(options.workspaceId ?? this.workspaceId);
+    const limit = clampLimit(options.limit ?? 50);
+    const offset = normalizeNonNegativeInteger(options.offset ?? 0, "offset");
+    const scheduleId = normalizeNullableOpaqueText(options.scheduleId, "report schedule id", 160);
+    const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
+      `SELECT * FROM ${this.table("report_runs")}
+       WHERE workspace_id = $1
+         AND deleted_at IS NULL
+         AND ($2::text IS NULL OR schedule_id = $2)
+       ORDER BY started_at DESC, id DESC
+       LIMIT $3 OFFSET $4`,
+      [workspaceId, scheduleId, limit, offset],
+    ));
+    return result.rows.map((row) => reportRunFromRow(row as Record<string, unknown>));
+  }
+
+  async recordAuditEvent(input: RecordAuditEventInput): Promise<AuditEvent> {
+    const workspaceId = normalizeWorkspaceId(input.workspaceId ?? this.workspaceId);
+    return this.withWorkspaceTransaction(workspaceId, (client) => this.recordAuditEventInTransaction(client, workspaceId, input));
+  }
+
+  async listAuditEvents(options: ListAuditEventsOptions & { offset?: number } = {}): Promise<AuditEvent[]> {
+    const workspaceId = normalizeWorkspaceId(options.workspaceId ?? this.workspaceId);
+    const resourceType = normalizeNullableOpaqueText(options.resourceType, "audit resource type", 120);
+    const resourceId = normalizeNullableOpaqueText(options.resourceId, "audit resource id", 160);
+    const limit = clampLimit(options.limit ?? 50);
+    const offset = normalizeNonNegativeInteger(options.offset ?? 0, "offset");
+    const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
+      `SELECT * FROM ${this.table("audit_events")}
+       WHERE workspace_id = $1
+         AND deleted_at IS NULL
+         AND ($2::text IS NULL OR resource_type = $2)
+         AND ($3::text IS NULL OR resource_id = $3)
+       ORDER BY created_at DESC, id DESC
+       LIMIT $4 OFFSET $5`,
+      [workspaceId, resourceType, resourceId, limit, offset],
+    ));
+    return result.rows.map((row) => auditEventFromRow(row as Record<string, unknown>));
   }
 
   async recordReportRun(input: RecordPostgresReportRunInput): Promise<PostgresReportRunRecord> {
@@ -1063,6 +1314,246 @@ export class PostgresReportRuntime {
     return artifactFromRow(firstRow(result, "report artifact"));
   }
 
+  private async createReportScheduleInTransaction(client: PostgresQueryClient, workspaceId: string, input: CreatePostgresReportScheduleInput): Promise<PostgresReportScheduleRecord> {
+    const normalized = normalizePostgresReportScheduleInput(input);
+    const idempotencyKey = normalizeNullableOpaqueText(input.idempotencyKey, "report schedule idempotency key", 256);
+    const id = normalizeId(input.id ?? deterministicId("rps", workspaceId, idempotencyKey ?? randomUUID()));
+    const result = await client.query(
+      `INSERT INTO ${this.table("report_schedules")} (
+        workspace_id, id, name, enabled, interval_seconds, next_run_at,
+        last_run_at, subject, channels_json, actor, origin, idempotency_key
+      ) VALUES ($1, $2, $3, $4, $5, $6::timestamptz, NULL, $7, $8::jsonb, $9, $10, $11)
+      ON CONFLICT (workspace_id, id) DO UPDATE SET
+        idempotency_key = ${this.table("report_schedules")}.idempotency_key
+      WHERE ${this.table("report_schedules")}.deleted_at IS NULL
+        AND ${this.table("report_schedules")}.idempotency_key IS NOT DISTINCT FROM EXCLUDED.idempotency_key
+        AND ${this.table("report_schedules")}.name IS NOT DISTINCT FROM EXCLUDED.name
+        AND ${this.table("report_schedules")}.enabled IS NOT DISTINCT FROM EXCLUDED.enabled
+        AND ${this.table("report_schedules")}.interval_seconds IS NOT DISTINCT FROM EXCLUDED.interval_seconds
+        AND ${this.table("report_schedules")}.next_run_at IS NOT DISTINCT FROM EXCLUDED.next_run_at
+        AND ${this.table("report_schedules")}.subject IS NOT DISTINCT FROM EXCLUDED.subject
+        AND ${this.table("report_schedules")}.channels_json IS NOT DISTINCT FROM EXCLUDED.channels_json
+      RETURNING *`,
+      [
+        workspaceId,
+        id,
+        normalized.name,
+        normalized.enabled,
+        normalized.intervalSeconds,
+        normalized.nextRunAt,
+        normalized.subject,
+        JSON.stringify(normalized.channels),
+        normalizeNullableOpaqueText(input.actor, "report schedule actor", 160),
+        normalizeNullableOpaqueText(input.origin, "report schedule origin", 160),
+        idempotencyKey,
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error("report schedule idempotency conflict");
+    return reportScheduleFromRow(row as Record<string, unknown>);
+  }
+
+  private async updateReportScheduleInTransaction(client: PostgresQueryClient, workspaceId: string, input: UpdatePostgresReportScheduleInput): Promise<PostgresReportScheduleRecord> {
+    const idOrName = normalizeOpaqueText(input.idOrName, "report schedule id or name", 160);
+    const idempotencyKey = normalizeNullableOpaqueText(input.idempotencyKey, "report schedule idempotency key", 256);
+    const expectedRevision = normalizePositiveInteger(input.expectedRevision ?? 0, "expectedRevision");
+    const current = await this.getReportScheduleInTransaction(client, workspaceId, idOrName);
+    if (!current) throw new Error("report schedule not found");
+    if (expectedRevision !== current.revision) throw new Error("report schedule revision conflict");
+    const normalized = normalizePostgresReportScheduleInput({
+      name: input.name ?? current.name,
+      intervalSeconds: input.intervalSeconds ?? current.intervalSeconds,
+      nextRunAt: input.nextRunAt ?? current.nextRunAt,
+      enabled: input.enabled ?? current.enabled,
+      subject: input.subject === undefined ? current.subject : input.subject,
+      channels: input.channels ?? current.channels,
+    });
+    const result = await client.query(
+      `UPDATE ${this.table("report_schedules")}
+       SET name = $3,
+           enabled = $4,
+           interval_seconds = $5,
+           next_run_at = $6::timestamptz,
+           subject = $7,
+           channels_json = $8::jsonb,
+           actor = $9,
+           origin = $10,
+           idempotency_key = $11,
+           updated_at = now(),
+           version = version + 1
+       WHERE workspace_id = $1
+         AND id = $2
+         AND deleted_at IS NULL
+         AND version = $12::bigint
+       RETURNING *`,
+      [
+        workspaceId,
+        current.id,
+        normalized.name,
+        normalized.enabled,
+        normalized.intervalSeconds,
+        normalized.nextRunAt,
+        normalized.subject,
+        JSON.stringify(normalized.channels),
+        normalizeNullableOpaqueText(input.actor, "report schedule actor", 160),
+        normalizeNullableOpaqueText(input.origin, "report schedule origin", 160),
+        idempotencyKey,
+        expectedRevision,
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error("report schedule revision conflict");
+    return reportScheduleFromRow(row as Record<string, unknown>);
+  }
+
+  private async tombstoneReportScheduleInTransaction(client: PostgresQueryClient, workspaceId: string, input: TombstonePostgresReportScheduleInput): Promise<PostgresReportScheduleRecord | null> {
+    const idOrName = normalizeOpaqueText(input.idOrName, "report schedule id or name", 160);
+    const expectedRevision = normalizePositiveInteger(input.expectedRevision ?? 0, "expectedRevision");
+    const deletedAt = normalizeIsoTimestamp(input.deletedAt ?? this.clock().toISOString(), "report schedule deletedAt");
+    const actor = normalizeNullableOpaqueText(input.actor, "report schedule actor", 160);
+    const origin = normalizeNullableOpaqueText(input.origin, "report schedule origin", 160);
+    const idempotencyKey = normalizeNullableOpaqueText(input.idempotencyKey, "report schedule idempotency key", 256);
+    const current = await this.getReportScheduleInTransaction(client, workspaceId, idOrName);
+    if (!current) return null;
+    if (expectedRevision !== current.revision) throw new Error("report schedule revision conflict");
+    const result = await client.query(
+      `UPDATE ${this.table("report_schedules")}
+       SET enabled = false,
+           deleted_at = $3::timestamptz,
+           actor = $4,
+           origin = $5,
+           idempotency_key = $6,
+           updated_at = now(),
+           version = version + 1
+       WHERE workspace_id = $1
+         AND id = $2
+         AND deleted_at IS NULL
+         AND version = $7::bigint
+       RETURNING *`,
+      [workspaceId, current.id, deletedAt, actor, origin, idempotencyKey, expectedRevision],
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error("report schedule revision conflict");
+    const tombstoned = reportScheduleFromRow(row as Record<string, unknown>);
+    await client.query(
+      `INSERT INTO ${this.table("sync_tombstones")} (
+        workspace_id, resource_type, resource_id, deleted_at, version, actor, origin, idempotency_key, metadata_json
+      ) VALUES ($1, 'report_schedule', $2, $3::timestamptz, $4, $5, $6, $7, $8::jsonb)
+      ON CONFLICT (workspace_id, resource_type, resource_id) DO UPDATE SET
+        deleted_at = EXCLUDED.deleted_at,
+        version = EXCLUDED.version,
+        actor = EXCLUDED.actor,
+        origin = EXCLUDED.origin,
+        idempotency_key = EXCLUDED.idempotency_key,
+        metadata_json = EXCLUDED.metadata_json`,
+      [
+        workspaceId,
+        tombstoned.id,
+        deletedAt,
+        tombstoned.revision,
+        actor,
+        origin,
+        idempotencyKey,
+        JSON.stringify({ name: tombstoned.name, resourceType: "report_schedule" }),
+      ],
+    );
+    return tombstoned;
+  }
+
+  private async getReportScheduleInTransaction(client: PostgresQueryClient, workspaceId: string, idOrName: string): Promise<PostgresReportScheduleRecord | null> {
+    const result = await client.query(
+      `SELECT * FROM ${this.table("report_schedules")}
+       WHERE workspace_id = $1
+         AND (id = $2 OR name = $2)
+         AND deleted_at IS NULL
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`,
+      [workspaceId, idOrName],
+    );
+    const row = result.rows[0];
+    return row ? reportScheduleFromRow(row as Record<string, unknown>) : null;
+  }
+
+  private async getReportScheduleIncludingDeletedInTransaction(client: PostgresQueryClient, workspaceId: string, idOrName: string): Promise<PostgresReportScheduleRecord | null> {
+    const result = await client.query(
+      `SELECT * FROM ${this.table("report_schedules")}
+       WHERE workspace_id = $1
+         AND (id = $2 OR name = $2)
+       ORDER BY deleted_at IS NULL DESC, updated_at DESC, id DESC
+       LIMIT 1`,
+      [workspaceId, idOrName],
+    );
+    const row = result.rows[0];
+    return row ? reportScheduleFromRow(row as Record<string, unknown>) : null;
+  }
+
+  private async findReportScheduleMutationAuditReplay(
+    client: PostgresQueryClient,
+    workspaceId: string,
+    input: PostgresReportScheduleMutationAuditInput,
+    resourceId: string,
+  ): Promise<AuditEvent | null> {
+    const idempotencyKey = normalizeNullableOpaqueText(input.idempotencyKey, "audit idempotency key", 256);
+    if (!idempotencyKey) return null;
+    const result = await client.query(
+      `SELECT * FROM ${this.table("audit_events")}
+       WHERE workspace_id = $1
+         AND action = $2
+         AND resource_type = 'report_schedule'
+         AND resource_id = $3
+         AND idempotency_key = $4
+         AND deleted_at IS NULL
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`,
+      [workspaceId, input.action, normalizeId(resourceId), idempotencyKey],
+    );
+    const row = result.rows[0];
+    return row ? auditEventFromRow(row as Record<string, unknown>) : null;
+  }
+
+  private assertReportScheduleReplayHashMatches(replay: AuditEvent, requested: PostgresReportScheduleMutationAuditInput): void {
+    const replayedHash = replay.metadata.requestHash;
+    const requestedHash = requested.metadata?.requestHash;
+    if (typeof replayedHash === "string" && typeof requestedHash === "string" && replayedHash !== requestedHash) {
+      throw new Error("report schedule idempotency conflict");
+    }
+  }
+
+  private async recordAuditEventInTransaction(client: PostgresQueryClient, workspaceId: string, input: RecordAuditEventInput): Promise<AuditEvent> {
+    const createdAt = normalizeIsoTimestamp(input.createdAt ?? this.clock().toISOString(), "audit createdAt");
+    const action = normalizeOpaqueText(input.action, "audit action", 160);
+    const resourceType = normalizeNullableOpaqueText(input.resourceType, "audit resource type", 120);
+    const resourceId = normalizeNullableOpaqueText(input.resourceId, "audit resource id", 160);
+    const idempotencyKey = normalizeNullableOpaqueText(input.idempotencyKey, "audit idempotency key", 256);
+    const id = idempotencyKey
+      ? deterministicId("aud", workspaceId, action, resourceType ?? "", resourceId ?? "", idempotencyKey)
+      : deterministicId("aud", workspaceId, action, resourceType ?? "", resourceId ?? "", createdAt);
+    const result = await client.query(
+      `INSERT INTO ${this.table("audit_events")} (
+        workspace_id, id, action, resource_type, resource_id, message, metadata_json,
+        actor, origin, idempotency_key, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11::timestamptz)
+      ON CONFLICT (workspace_id, id) DO UPDATE SET
+        idempotency_key = ${this.table("audit_events")}.idempotency_key
+      WHERE ${this.table("audit_events")}.idempotency_key IS NOT DISTINCT FROM EXCLUDED.idempotency_key
+      RETURNING *`,
+      [
+        workspaceId,
+        id,
+        action,
+        resourceType,
+        resourceId,
+        normalizeNullableSafeEvidenceText(input.message, "audit message", 1000),
+        JSON.stringify(normalizeAuditMetadata(input.metadata ?? {})),
+        normalizeNullableOpaqueText(input.actor, "audit actor", 160),
+        normalizeNullableOpaqueText(input.origin, "audit origin", 160),
+        idempotencyKey,
+        createdAt,
+      ],
+    );
+    return auditEventFromRow(firstRow(result, "audit event"));
+  }
+
   private async withWorkspaceTransaction<T>(workspaceId: string, action: (client: PostgresQueryClient) => Promise<T>): Promise<T> {
     const txClient = await this.transactionClient();
     try {
@@ -1525,6 +2016,27 @@ function reportRunFromRow(row: Record<string, unknown>): PostgresReportRunRecord
   };
 }
 
+function reportScheduleFromRow(row: Record<string, unknown>): PostgresReportScheduleRecord {
+  return {
+    workspaceId: stringField(row, "workspace_id"),
+    id: stringField(row, "id"),
+    name: stringField(row, "name"),
+    enabled: Boolean(row.enabled),
+    intervalSeconds: numberField(row, "interval_seconds"),
+    nextRunAt: isoStringField(row, "next_run_at"),
+    lastRunAt: nullableIsoStringField(row, "last_run_at"),
+    subject: nullableStringField(row, "subject"),
+    channels: parseScheduleChannels(row.channels_json),
+    revision: numberField(row, "version"),
+    actor: nullableStringField(row, "actor"),
+    origin: nullableStringField(row, "origin"),
+    idempotencyKey: nullableStringField(row, "idempotency_key"),
+    createdAt: isoStringField(row, "created_at"),
+    updatedAt: isoStringField(row, "updated_at"),
+    deletedAt: nullableIsoStringField(row, "deleted_at"),
+  };
+}
+
 function scheduleClaimFromRow(row: Record<string, unknown>): PostgresReportScheduleClaimRecord {
   return {
     workspaceId: stringField(row, "workspace_id"),
@@ -1540,6 +2052,20 @@ function scheduleClaimFromRow(row: Record<string, unknown>): PostgresReportSched
     fencingToken: nullableStringField(row, "fencing_token"),
     leaseExpiresAt: nullableIsoStringField(row, "lease_expires_at"),
     version: numberField(row, "version"),
+  };
+}
+
+function auditEventFromRow(row: Record<string, unknown>): AuditEvent {
+  return {
+    id: stringField(row, "id"),
+    workspaceId: nullableStringField(row, "workspace_id"),
+    action: stringField(row, "action"),
+    resourceType: nullableStringField(row, "resource_type"),
+    resourceId: nullableStringField(row, "resource_id"),
+    message: normalizeNullableSafeEvidenceText(nullableStringField(row, "message"), "audit message", 1000),
+    metadata: normalizeAuditMetadata(parseRecord(row.metadata_json) ?? {}),
+    actor: nullableStringField(row, "actor"),
+    createdAt: isoStringField(row, "created_at"),
   };
 }
 
@@ -1608,6 +2134,14 @@ function parseDeliveries(value: unknown): ReportDeliveryRecord[] {
   return Array.isArray(parsed) ? parsed as ReportDeliveryRecord[] : [];
 }
 
+function parseScheduleChannels(value: unknown): ReportScheduleChannels {
+  const parsed = typeof value === "string" ? parseJson(value) : value;
+  const record = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : {};
+  return normalizePostgresReportScheduleChannels(record);
+}
+
 function parseRecord(value: unknown): Record<string, unknown> | null {
   const parsed = typeof value === "string" ? parseJson(value) : value;
   return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
@@ -1633,6 +2167,79 @@ function normalizeReportJsonMetadata(value: Record<string, unknown> | null | und
     redacted: true,
     storage: "artifact-required",
   };
+}
+
+function normalizePostgresReportScheduleInput(input: CreateReportScheduleInput): {
+  name: string;
+  intervalSeconds: number;
+  nextRunAt: string;
+  enabled: boolean;
+  subject: string | null;
+  channels: ReportScheduleChannels;
+} {
+  const name = normalizeOpaqueText(input.name ?? "", "report schedule name", 160);
+  const intervalSeconds = normalizeIntervalSeconds(input.intervalSeconds);
+  const nextRunAt = normalizeIsoTimestamp(input.nextRunAt ?? new Date().toISOString(), "report schedule nextRunAt");
+  const enabled = input.enabled === undefined ? true : normalizeBoolean(input.enabled, "report schedule enabled");
+  const subject = normalizeNullableRedactedText(input.subject, "report schedule subject", 200);
+  const channels = normalizePostgresReportScheduleChannels(input.channels);
+  return { name, intervalSeconds, nextRunAt, enabled, subject, channels };
+}
+
+function normalizePostgresReportScheduleChannels(channels: ReportScheduleChannels | Record<string, unknown> | undefined): ReportScheduleChannels {
+  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+    throw new Error("report schedule channels are required");
+  }
+  const normalized: ReportScheduleChannels = {};
+  for (const channel of ["email", "sms", "logs"] as const) {
+    const value = channels[channel];
+    if (value === undefined) continue;
+    if (value === false) {
+      normalized[channel] = false;
+      continue;
+    }
+    if (value === true) {
+      throw new Error("hosted report schedules require explicit channelRefIds");
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("hosted report schedule channels must use channelRefIds");
+    }
+    normalized[channel] = normalizeChannelRefSelection(value as Record<string, unknown>, channel);
+  }
+  if (!normalized.email && !normalized.sms && !normalized.logs) {
+    throw new Error("report schedule requires at least one channelRefId");
+  }
+  return normalized;
+}
+
+function normalizeChannelRefSelection(value: Record<string, unknown>, channel: ReportDeliveryChannel): ReportChannelRefSelection {
+  const keys = Object.keys(value);
+  if (keys.some((key) => key !== "channelRefIds")) {
+    throw new Error("hosted report schedules must not persist raw channel destinations or credentials");
+  }
+  if (!Array.isArray(value.channelRefIds)) {
+    throw new Error(`hosted report schedule ${channel} channelRefIds must be an array`);
+  }
+  const channelRefIds = value.channelRefIds.map((item, index) => {
+    if (typeof item !== "string") throw new Error(`hosted report schedule ${channel} channelRefIds[${index}] must be a string`);
+    return normalizeRuntimeRefId(item, `${channel} channelRefIds[${index}]`, 160);
+  });
+  if (channelRefIds.length === 0) throw new Error(`hosted report schedule ${channel} channelRefIds must not be empty`);
+  if (new Set(channelRefIds).size !== channelRefIds.length) throw new Error(`hosted report schedule ${channel} channelRefIds must be unique`);
+  if (channelRefIds.length > 20) throw new Error(`hosted report schedule ${channel} channelRefIds has too many entries`);
+  return { channelRefIds };
+}
+
+function normalizeIntervalSeconds(value: number): number {
+  if (!Number.isInteger(value) || value < MIN_INTERVAL_SECONDS || value > MAX_INTERVAL_SECONDS) {
+    throw new Error(`intervalSeconds must be an integer between ${MIN_INTERVAL_SECONDS} and ${MAX_INTERVAL_SECONDS}`);
+  }
+  return value;
+}
+
+function normalizeBoolean(value: boolean, label: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`${label} must be boolean`);
+  return value;
 }
 
 function normalizeArtifactBody(value: PostgresReportArtifactBody): Uint8Array {
@@ -1873,6 +2480,17 @@ function normalizeNullableRedactedText(value: string | null | undefined, label: 
   const trimmed = value.trim();
   if (trimmed.length > maxLength) throw new Error(`${label} is too long`);
   return sanitizePostgresReportRuntimeError(trimmed);
+}
+
+function normalizeNullableSafeEvidenceText(value: string | null | undefined, label: string, maxLength: number): string | null {
+  if (value == null || value.trim() === "") return null;
+  const trimmed = value.trim();
+  if (trimmed.length > maxLength) throw new Error(`${label} is too long`);
+  const report = sanitizeEvidenceInput(trimmed, { inputFormat: "text", source: label });
+  if (typeof report.sanitized === "string" && report.sanitized.trim()) {
+    return report.sanitized.trim().slice(0, maxLength);
+  }
+  return "redacted";
 }
 
 function normalizeRuntimeRefId(value: string, label: string, maxLength: number): string {

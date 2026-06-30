@@ -6,6 +6,29 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.68] - 2026-06-30
+
+### Added
+
+- Added a bounded hosted Postgres report-control-plane adapter for
+  `/api/v1/report-schedules*`, `/api/v1/report-runs`, and
+  `/api/v1/audit-events` when `createApiHandler` is supplied an explicit
+  `hostedPostgresReportRuntime`. The adapter keeps hosted report execution
+  fail-closed while allowing schedule metadata, report-run reads, and audit
+  reads to use workspace-scoped Postgres storage.
+
+### Fixed
+
+- Hosted report schedules now require explicit `channelRefIds` instead of
+  boolean fan-out selectors or raw Mailery/Telephony/Open Logs destination
+  config.
+- Hosted report schedule create/update/delete mutations now use atomic
+  Postgres audit helpers with actor/origin/idempotency provenance, request-hash
+  idempotency replay checks, and expected-revision guards for updates and
+  tombstones.
+- Hosted report-run and audit-event API responses no longer expose raw artifact
+  storage refs, fencing tokens, SQL internals, or unsafe audit text/metadata.
+
 ## [0.1.67] - 2026-06-30
 
 ### Fixed

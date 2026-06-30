@@ -140,7 +140,10 @@ was introduced in `0.1.66` and corrected in `0.1.67` for `/api/v1/summary` and
 `/api/v1/monitors*`, with workspace-scoped reads/writes, monitor-list offset
 paging, expected-revision PATCH guards, audit-key PATCH replay conflict checks,
 actor/origin/idempotency metadata, audit rows, tombstones, and fail-closed
-behavior for non-migrated hosted reads. It also includes SDK/CLI shared-evidence
+behavior for non-migrated hosted reads. `0.1.68` adds the explicit hosted
+Postgres report-control-plane adapter for report schedule metadata, report-run
+reads, and report audit reads while keeping run execution and delivery
+fail-closed behind reporter promotion gates. It also includes SDK/CLI shared-evidence
 sanitization for rollout artifacts, AWS-shaped origin-header value redaction, an
 explicit zero-count origin-header rotation exception gate, plus callback
 contracts for redacted report artifact object writes and sanitizer-safe Open

@@ -54,14 +54,19 @@ id that matches the active workspace before any individual reporter promotion
 check can pass. `0.1.67` also includes the bounded hosted Postgres monitor API
 adapter for `/api/v1/summary` and `/api/v1/monitors*`, including monitor-list
 offset paging, expected-revision PATCH guards, and audit-key PATCH replay;
-non-migrated hosted reads stay blocked rather than falling back to SQLite. The
-prior zero-count deployment path remains not live runtime evidence until private
-deployment metadata records the matching image refresh.
+non-migrated hosted reads stay blocked rather than falling back to SQLite.
+Version `0.1.68` adds the bounded hosted Postgres report-control-plane adapter
+for report schedule metadata, report-run reads, and report audit reads. It
+requires explicit approved `channelRefIds`, stores schedule mutation audit
+provenance atomically, redacts artifact/audit API output, and keeps hosted
+report execution routes fail-closed. The prior zero-count deployment path
+remains not live runtime evidence until private deployment metadata records the
+matching image refresh.
 Hosted reporter,
 protected web/API scale-out, private probes, and cloud-primary promotion remain
 blocked until the hard hosted gate below is satisfied.
 
-## 0.1.67 Runtime Readiness Snapshot
+## 0.1.68 Runtime Readiness Snapshot
 
 | Area | Current evidence | Status |
 | --- | --- | --- |
@@ -69,7 +74,7 @@ blocked until the hard hosted gate below is satisfied.
 | Protected access | Origin-header setup or rotation now requires `live_ops_backend_state_hardened=true` or an explicit zero-count exception, and AWS-shaped CloudFront/ALB header-value evidence fields are treated as secret-bearing. | This does not solve HTTPS-origin DNS/ACM, auth/RBAC, public edge promotion smoke, direct-origin proof, human alert delivery, or live scale-out. |
 | Target policy | Hosted API/import paths, worker review paths, and direct Postgres monitor upserts reject unsafe public-hosted targets before execution or storage; enabled browser-page rows remain blocked. | Still blocked on approved private inventory refs, live denied-target AWS smokes, browser evidence isolation, and full hosted service adapter wiring. |
 | Hosted monitor API | An explicit API adapter can route `/api/v1/summary` and `/api/v1/monitors*` to Postgres monitor rows with workspace scoping, actor/origin/idempotency metadata, offset paging, audit-key PATCH replay, expected-revision update guards, audit rows, and tombstones, while ignoring raw status/last-check body fields. | Bounded control-plane plumbing only; `uptime serve`, reports, incidents, results, imports, probes, scheduler loops, reporter delivery, and worker promotion are still blocked until each has authoritative Postgres storage and live evidence. |
-| Reporter | Channel-ref shape validation, Postgres report metadata helpers, callback contracts for redacted artifact object writes plus Open Logs audit export payloads, and workspace-bound `HASNA_UPTIME_REPORTER_PROMOTION_EVIDENCE_JSON` for redacted operator evidence exist. | Evidence JSON can prove individual report promotion checks only after private smoke/review evidence exists and names the active workspace. Startup still blocks on server-side secret loading, service-store integration, worker lease ownership, deploy drain, and cloud-worker readiness. |
+| Reporter | Channel-ref shape validation, a bounded hosted report-control-plane adapter, Postgres report metadata helpers, callback contracts for redacted artifact object writes plus Open Logs audit export payloads, and workspace-bound `HASNA_UPTIME_REPORTER_PROMOTION_EVIDENCE_JSON` for redacted operator evidence exist. | Evidence JSON can prove individual report promotion checks only after private smoke/review evidence exists and names the active workspace. Startup still blocks on server-side secret loading, service-store integration, worker lease ownership, deploy drain, and cloud-worker readiness. |
 | Scheduler | Bounded Postgres scheduler review batches can create public-safe deterministic `check_jobs`. | Blocked on hosted service/API integration, lease ownership, deploy drain, metrics, alarms, and live RLS evidence. |
 | Public probe | Bounded Postgres public-probe review batches can claim, execute, and submit existing public-safe jobs. | Blocked on hosted worker promotion gates, denied-target AWS smokes, backlog metrics, and rollback evidence. |
 | Private probe | Read-only Postgres identity preflight can inspect a scoped probe identity and private-job counters without exposing key material. | Blocked on hosted probe APIs, heartbeat, revocation, rotation, approved inventory refs, target seed policy, alarms, and live evidence. |

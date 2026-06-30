@@ -47,16 +47,26 @@ test("generated report promotion evidence types require workspace binding", () =
   expect(match?.[0]).not.toContain("workspaceId?: string;");
 });
 
-test("generated API declarations expose hosted Postgres monitor adapter", () => {
-  const declaration = readFileSync(join(root, "dist/api.d.ts"), "utf8");
+test("generated API declarations expose hosted Postgres adapters", () => {
+  const apiDeclaration = readFileSync(join(root, "dist/api.d.ts"), "utf8");
+  const indexDeclaration = readFileSync(join(root, "dist/index.d.ts"), "utf8");
 
-  expect(declaration).toContain("interface HostedPostgresMonitorRuntime");
-  expect(declaration).toContain("hostedPostgresRuntime?: HostedPostgresMonitorRuntime;");
-  expect(declaration).toContain("upsertMonitorWithAudit(input:");
-  expect(declaration).toContain("listMonitors(options?");
-  expect(declaration).toContain("offset?: number;");
-  expect(declaration).toContain("tombstoneResource(input:");
-  expect(declaration).toContain("tombstoneMonitorWithAudit(input:");
+  expect(apiDeclaration).toContain("interface HostedPostgresMonitorRuntime");
+  expect(apiDeclaration).toContain("hostedPostgresRuntime?: HostedPostgresMonitorRuntime;");
+  expect(apiDeclaration).toContain("upsertMonitorWithAudit(input:");
+  expect(apiDeclaration).toContain("listMonitors(options?");
+  expect(apiDeclaration).toContain("offset?: number;");
+  expect(apiDeclaration).toContain("tombstoneResource(input:");
+  expect(apiDeclaration).toContain("tombstoneMonitorWithAudit(input:");
+  expect(apiDeclaration).toContain("interface HostedPostgresReportRuntime");
+  expect(apiDeclaration).toContain("hostedPostgresReportRuntime?: HostedPostgresReportRuntime;");
+  expect(apiDeclaration).toContain("createReportScheduleWithAudit(input:");
+  expect(apiDeclaration).toContain("updateReportScheduleWithAudit(input:");
+  expect(apiDeclaration).toContain("tombstoneReportScheduleWithAudit(input:");
+  expect(apiDeclaration).toContain("listReportRuns(options?");
+  expect(apiDeclaration).toContain("listAuditEvents(options?");
+  expect(indexDeclaration).toContain("HostedPostgresReportRuntime");
+  expect(indexDeclaration).toContain("PostgresReportScheduleMutationAuditInput");
 });
 
 test("package dry-run includes release artifacts and excludes source-only files", () => {

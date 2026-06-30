@@ -2,9 +2,10 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createApiHandler, serveUptime, type HostedPostgresMonitorRuntime } from "../src/api.js";
+import { createApiHandler, serveUptime, type HostedPostgresMonitorRuntime, type HostedPostgresReportRuntime } from "../src/api.js";
 import { generateProbeKeyPair, signProbeResult, type ProbeSigningInput } from "../src/probes.js";
 import { UptimeService } from "../src/service.js";
+import type { PostgresReportRunRecord, PostgresReportScheduleRecord } from "../src/postgres-report-runtime.js";
 import type {
   PostgresAuditEventRecord,
   PostgresMonitorMutationAuditInput,
@@ -16,6 +17,7 @@ import type {
   TombstonePostgresResourceInput,
   UpsertPostgresMonitorInput,
 } from "../src/postgres-runtime.js";
+import type { AuditEvent, RecordAuditEventInput, ReportScheduleChannels } from "../src/types.js";
 
 const cleanup: string[] = [];
 const HOSTED_SECRET_TOKEN_JSON = JSON.stringify({
@@ -224,6 +226,277 @@ class FakeHostedPostgresMonitorRuntime implements HostedPostgresMonitorRuntime {
       idempotencyKey: input.idempotencyKey ?? null,
       createdAt: input.createdAt ?? new Date(0).toISOString(),
     };
+  }
+}
+
+type FakeStoredAuditEvent = AuditEvent & { origin?: string | null; idempotencyKey?: string | null };
+
+class FakeHostedPostgresReportRuntime implements HostedPostgresReportRuntime {
+  readonly schedules = new Map<string, PostgresReportScheduleRecord>();
+  readonly audits: FakeStoredAuditEvent[] = [];
+  readonly runs: PostgresReportRunRecord[] = [];
+  readonly listScheduleCalls: Array<{ workspaceId?: string; includeDisabled?: boolean; limit?: number; offset?: number }> = [];
+  readonly listRunCalls: Array<{ workspaceId?: string; scheduleId?: string; limit?: number; offset?: number }> = [];
+  readonly updateCalls: Array<{ idOrName: string; expectedRevision?: number | null }> = [];
+  private sequence = 0;
+
+  async createReportSchedule(input: Parameters<HostedPostgresReportRuntime["createReportSchedule"]>[0]): Promise<PostgresReportScheduleRecord> {
+    const workspaceId = input.workspaceId ?? "default";
+    const id = input.id ?? `rps_${++this.sequence}`;
+    const existing = this.schedules.get(`${workspaceId}:${id}`);
+    const channels = this.normalizeChannels(input.channels);
+    if (existing?.idempotencyKey && input.idempotencyKey && existing.idempotencyKey !== input.idempotencyKey) {
+      throw new Error("report schedule idempotency conflict");
+    }
+    const now = new Date(0).toISOString();
+    const schedule: PostgresReportScheduleRecord = {
+      workspaceId,
+      id,
+      name: input.name.trim(),
+      enabled: input.enabled ?? true,
+      intervalSeconds: input.intervalSeconds,
+      nextRunAt: new Date(input.nextRunAt ?? now).toISOString(),
+      lastRunAt: existing?.lastRunAt ?? null,
+      subject: input.subject ?? null,
+      channels,
+      revision: existing?.revision ?? 1,
+      actor: input.actor ?? null,
+      origin: input.origin ?? null,
+      idempotencyKey: input.idempotencyKey ?? null,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      deletedAt: null,
+    };
+    this.schedules.set(`${workspaceId}:${id}`, schedule);
+    return schedule;
+  }
+
+  async createReportScheduleWithAudit(
+    input: Parameters<HostedPostgresReportRuntime["createReportSchedule"]>[0],
+    audit: Parameters<HostedPostgresReportRuntime["createReportScheduleWithAudit"]>[1],
+  ): Promise<{ schedule: PostgresReportScheduleRecord; audit: AuditEvent }> {
+    const replay = this.findAuditReplay(input.workspaceId ?? audit.workspaceId, audit.action, audit.resourceId, audit.idempotencyKey);
+    if (replay) {
+      this.assertReplayHashMatches(replay, audit);
+      const schedule = [...this.schedules.values()].find((candidate) =>
+        candidate.workspaceId === (input.workspaceId ?? audit.workspaceId ?? "default")
+        && candidate.id === replay.resourceId
+        && !candidate.deletedAt
+      );
+      if (!schedule) throw new Error("report schedule idempotency conflict");
+      return { schedule, audit: replay };
+    }
+    const schedule = await this.createReportSchedule(input);
+    const event = await this.recordAuditEvent({
+      ...audit,
+      workspaceId: schedule.workspaceId,
+      resourceType: "report_schedule",
+      resourceId: schedule.id,
+      idempotencyKey: input.idempotencyKey ?? audit.idempotencyKey,
+    });
+    return { schedule, audit: event };
+  }
+
+  async listReportSchedules(options: { workspaceId?: string; includeDisabled?: boolean; limit?: number; offset?: number } = {}): Promise<PostgresReportScheduleRecord[]> {
+    this.listScheduleCalls.push(options);
+    const limit = options.limit ?? 250;
+    const offset = options.offset ?? 0;
+    return [...this.schedules.values()]
+      .filter((schedule) => schedule.workspaceId === (options.workspaceId ?? "default"))
+      .filter((schedule) => !schedule.deletedAt)
+      .filter((schedule) => options.includeDisabled === true || schedule.enabled)
+      .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id))
+      .slice(offset, offset + limit);
+  }
+
+  async getReportSchedule(input: { workspaceId?: string; idOrName: string }): Promise<PostgresReportScheduleRecord | null> {
+    const workspaceId = input.workspaceId ?? "default";
+    return [...this.schedules.values()].find((schedule) =>
+      schedule.workspaceId === workspaceId && !schedule.deletedAt && (schedule.id === input.idOrName || schedule.name === input.idOrName)
+    ) ?? null;
+  }
+
+  async updateReportSchedule(input: Parameters<HostedPostgresReportRuntime["updateReportSchedule"]>[0]): Promise<PostgresReportScheduleRecord> {
+    this.updateCalls.push({ idOrName: input.idOrName, expectedRevision: input.expectedRevision });
+    const before = await this.getReportSchedule({ workspaceId: input.workspaceId, idOrName: input.idOrName });
+    if (!before) throw new Error("report schedule not found");
+    if (input.expectedRevision != null && before.revision !== input.expectedRevision) {
+      throw new Error("report schedule revision conflict");
+    }
+    const schedule: PostgresReportScheduleRecord = {
+      ...before,
+      name: input.name?.trim() ?? before.name,
+      enabled: input.enabled ?? before.enabled,
+      intervalSeconds: input.intervalSeconds ?? before.intervalSeconds,
+      nextRunAt: input.nextRunAt ? new Date(input.nextRunAt).toISOString() : before.nextRunAt,
+      subject: input.subject === undefined ? before.subject : input.subject,
+      channels: input.channels ? this.normalizeChannels(input.channels) : before.channels,
+      revision: before.revision + 1,
+      actor: input.actor ?? null,
+      origin: input.origin ?? null,
+      idempotencyKey: input.idempotencyKey ?? null,
+      updatedAt: new Date(1).toISOString(),
+    };
+    this.schedules.set(`${schedule.workspaceId}:${schedule.id}`, schedule);
+    return schedule;
+  }
+
+  async updateReportScheduleWithAudit(
+    input: Parameters<HostedPostgresReportRuntime["updateReportSchedule"]>[0],
+    audit: Parameters<HostedPostgresReportRuntime["updateReportScheduleWithAudit"]>[1],
+  ): Promise<{ schedule: PostgresReportScheduleRecord; audit: AuditEvent }> {
+    const before = await this.getReportSchedule({ workspaceId: input.workspaceId, idOrName: input.idOrName });
+    if (!before) throw new Error("report schedule not found");
+    const replay = this.findAuditReplay(input.workspaceId ?? audit.workspaceId, audit.action, before.id, audit.idempotencyKey);
+    if (replay) {
+      this.assertReplayHashMatches(replay, audit);
+      return { schedule: before, audit: replay };
+    }
+    const schedule = await this.updateReportSchedule({ ...input, idOrName: before.id });
+    const event = await this.recordAuditEvent({
+      ...audit,
+      workspaceId: schedule.workspaceId,
+      resourceType: "report_schedule",
+      resourceId: schedule.id,
+      idempotencyKey: input.idempotencyKey ?? audit.idempotencyKey,
+    });
+    return { schedule, audit: event };
+  }
+
+  async tombstoneReportSchedule(input: Parameters<HostedPostgresReportRuntime["tombstoneReportSchedule"]>[0]): Promise<PostgresReportScheduleRecord | null> {
+    const before = await this.getReportSchedule({ workspaceId: input.workspaceId, idOrName: input.idOrName });
+    if (!before) return null;
+    if (input.expectedRevision != null && before.revision !== input.expectedRevision) {
+      throw new Error("report schedule revision conflict");
+    }
+    const schedule: PostgresReportScheduleRecord = {
+      ...before,
+      enabled: false,
+      deletedAt: input.deletedAt ?? new Date(2).toISOString(),
+      revision: before.revision + 1,
+      actor: input.actor ?? null,
+      origin: input.origin ?? null,
+      idempotencyKey: input.idempotencyKey ?? null,
+      updatedAt: new Date(2).toISOString(),
+    };
+    this.schedules.set(`${schedule.workspaceId}:${schedule.id}`, schedule);
+    return schedule;
+  }
+
+  async tombstoneReportScheduleWithAudit(
+    input: Parameters<HostedPostgresReportRuntime["tombstoneReportSchedule"]>[0],
+    audit: Parameters<HostedPostgresReportRuntime["tombstoneReportScheduleWithAudit"]>[1],
+  ): Promise<{ schedule: PostgresReportScheduleRecord | null; audit: AuditEvent | null }> {
+    const workspaceId = input.workspaceId ?? audit.workspaceId ?? "default";
+    const before = [...this.schedules.values()].find((schedule) =>
+      schedule.workspaceId === workspaceId && (schedule.id === input.idOrName || schedule.name === input.idOrName)
+    ) ?? null;
+    const resourceId = before?.id ?? audit.resourceId ?? null;
+    const replay = this.findAuditReplay(workspaceId, audit.action, resourceId, audit.idempotencyKey);
+    if (replay) {
+      this.assertReplayHashMatches(replay, audit);
+      return { schedule: before, audit: replay };
+    }
+    if (!before || before.deletedAt) return { schedule: null, audit: null };
+    const schedule = await this.tombstoneReportSchedule({ ...input, idOrName: before.id, expectedRevision: before.revision });
+    if (!schedule) return { schedule: null, audit: null };
+    const event = await this.recordAuditEvent({
+      ...audit,
+      workspaceId: schedule.workspaceId,
+      resourceType: "report_schedule",
+      resourceId: schedule.id,
+      idempotencyKey: input.idempotencyKey ?? audit.idempotencyKey,
+    });
+    return { schedule, audit: event };
+  }
+
+  async listReportRuns(options: Parameters<HostedPostgresReportRuntime["listReportRuns"]>[0] = {}): Promise<PostgresReportRunRecord[]> {
+    this.listRunCalls.push(options ?? {});
+    const limit = options?.limit ?? 50;
+    const offset = options?.offset ?? 0;
+    return this.runs
+      .filter((run) => run.workspaceId === (options?.workspaceId ?? "default"))
+      .filter((run) => !options?.scheduleId || run.scheduleId === options.scheduleId)
+      .slice(offset, offset + limit);
+  }
+
+  async recordAuditEvent(input: RecordAuditEventInput): Promise<FakeStoredAuditEvent> {
+    const audit: FakeStoredAuditEvent = {
+      id: `aud_${this.audits.length + 1}`,
+      workspaceId: input.workspaceId ?? "default",
+      action: input.action,
+      resourceType: input.resourceType ?? null,
+      resourceId: input.resourceId ?? null,
+      message: input.message ?? null,
+      metadata: input.metadata ?? {},
+      actor: input.actor ?? null,
+      origin: input.origin ?? null,
+      idempotencyKey: input.idempotencyKey ?? null,
+      createdAt: input.createdAt ?? new Date(0).toISOString(),
+    };
+    this.audits.push(audit);
+    return audit;
+  }
+
+  async listAuditEvents(options: Parameters<HostedPostgresReportRuntime["listAuditEvents"]>[0] = {}): Promise<AuditEvent[]> {
+    const limit = options?.limit ?? 50;
+    const offset = options?.offset ?? 0;
+    return this.audits
+      .filter((audit) => audit.workspaceId === (options?.workspaceId ?? "default"))
+      .filter((audit) => !options?.resourceType || audit.resourceType === options.resourceType)
+      .filter((audit) => !options?.resourceId || audit.resourceId === options.resourceId)
+      .slice(offset, offset + limit);
+  }
+
+  private normalizeChannels(channels: ReportScheduleChannels): ReportScheduleChannels {
+    const normalized: ReportScheduleChannels = {};
+    for (const channel of ["email", "sms", "logs"] as const) {
+      const value = channels[channel];
+      if (value === undefined) continue;
+      if (value === false) {
+        normalized[channel] = false;
+        continue;
+      }
+      if (value === true) throw new Error("hosted report schedules require explicit channelRefIds");
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error("hosted report schedule channels must use channelRefIds");
+      }
+      const keys = Object.keys(value);
+      if (keys.some((key) => key !== "channelRefIds") || !Array.isArray((value as { channelRefIds?: unknown }).channelRefIds)) {
+        throw new Error("hosted report schedules must not persist raw channel destinations or credentials");
+      }
+      const channelRefIds = (value as { channelRefIds: unknown[] }).channelRefIds.map((item, index) => {
+        if (typeof item !== "string" || item.trim() === "") {
+          throw new Error(`hosted report schedule ${channel} channelRefIds[${index}] must be a string`);
+        }
+        return item.trim();
+      });
+      if (channelRefIds.length === 0) throw new Error(`hosted report schedule ${channel} channelRefIds must not be empty`);
+      normalized[channel] = { channelRefIds };
+    }
+    if (!normalized.email && !normalized.sms && !normalized.logs) {
+      throw new Error("report schedule requires at least one channelRefId");
+    }
+    return normalized;
+  }
+
+  private findAuditReplay(workspaceId: string | null | undefined, action: string, resourceId: string | null | undefined, idempotencyKey: string | null | undefined): FakeStoredAuditEvent | null {
+    if (!idempotencyKey) return null;
+    const resolvedWorkspaceId = workspaceId ?? "default";
+    return this.audits.find((audit) =>
+      audit.workspaceId === resolvedWorkspaceId
+      && audit.action === action
+      && audit.idempotencyKey === idempotencyKey
+      && (!resourceId || audit.resourceId === resourceId)
+    ) ?? null;
+  }
+
+  private assertReplayHashMatches(existing: FakeStoredAuditEvent, audit: { metadata?: Record<string, unknown> }): void {
+    const existingHash = existing.metadata?.requestHash;
+    const nextHash = audit.metadata?.requestHash;
+    if (existingHash && nextHash && existingHash !== nextHash) {
+      throw new Error("report schedule idempotency conflict");
+    }
   }
 }
 
@@ -1769,7 +2042,154 @@ test("hosted API fails closed for report schedules, runs, and audit events", asy
   expect(createSchedule.status).toBe(501);
   expect(runs.status).toBe(501);
   expect(audit.status).toBe(501);
-  expect((await createSchedule.json()).error).toContain("cloud channel refs");
+  expect((await createSchedule.json()).error).toContain("Postgres report storage");
+  service.close();
+});
+
+test("hosted API routes report metadata through Postgres report storage safely", async () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const reportRuntime = new FakeHostedPostgresReportRuntime();
+  const handler = createApiHandler(service, {
+    mode: "hosted",
+    hostedPostgresReportRuntime: reportRuntime,
+    hostedTokens: [
+      { token: "read", scopes: ["uptime:read"], workspaceId: "ws_a", actor: "reader-a" },
+      { token: "report", scopes: ["uptime:report"], workspaceId: "ws_a", actor: "operator-a" },
+    ],
+  });
+
+  const create = await handler(jsonRequest(
+    "https://uptime.test/api/v1/report-schedules",
+    "POST",
+    {
+      name: "ops",
+      intervalSeconds: 300,
+      nextRunAt: "2026-01-01T00:00:00.000Z",
+      channels: { logs: { channelRefIds: ["logs-prod"] } },
+    },
+    { origin: "https://uptime.test", authorization: "Bearer report", "idempotency-key": "create-ops" },
+  ));
+  const schedule = await create.json();
+  const replay = await handler(jsonRequest(
+    "https://uptime.test/api/v1/report-schedules",
+    "POST",
+    {
+      name: "ops",
+      intervalSeconds: 300,
+      nextRunAt: "2026-01-01T00:00:00.000Z",
+      channels: { logs: { channelRefIds: ["logs-prod"] } },
+    },
+    { origin: "https://uptime.test", authorization: "Bearer report", "idempotency-key": "create-ops" },
+  ));
+  const conflict = await handler(jsonRequest(
+    "https://uptime.test/api/v1/report-schedules",
+    "POST",
+    {
+      name: "ops",
+      intervalSeconds: 600,
+      nextRunAt: "2026-01-01T00:00:00.000Z",
+      channels: { logs: { channelRefIds: ["logs-prod"] } },
+    },
+    { origin: "https://uptime.test", authorization: "Bearer report", "idempotency-key": "create-ops" },
+  ));
+  const list = await handler(new Request("https://uptime.test/api/v1/report-schedules?includeDisabled=true&limit=10&offset=0", {
+    headers: { authorization: "Bearer read" },
+  }));
+  const patch = await handler(jsonRequest(
+    `https://uptime.test/api/v1/report-schedules/${schedule.id}`,
+    "PATCH",
+    { subject: "Daily uptime", channels: { logs: { channelRefIds: ["logs-prod", "logs-audit"] } } },
+    { origin: "https://uptime.test", authorization: "Bearer report", "idempotency-key": "patch-ops" },
+  ));
+  const rawChannels = await handler(jsonRequest(
+    `https://uptime.test/api/v1/report-schedules/${schedule.id}`,
+    "PATCH",
+    { channels: { logs: { apiUrl: "https://logs.internal/private", projectId: "uptime" } } },
+    { origin: "https://uptime.test", authorization: "Bearer report", "idempotency-key": "patch-raw" },
+  ));
+  reportRuntime.runs.push({
+    workspaceId: "ws_a",
+    id: "rpr_1",
+    scheduleId: schedule.id,
+    status: "running",
+    startedAt: "2026-01-01T00:00:01.000Z",
+    finishedAt: null,
+    deliveries: [],
+    error: null,
+    reportJson: null,
+    artifactRef: "s3://private-bucket/ws_a/reports/rpr_1.json",
+    actor: "reporter",
+    origin: "hosted-worker",
+    idempotencyKey: null,
+    claimedByWorkerId: "worker-a",
+    fencingToken: "fence-secret",
+    leaseExpiresAt: "2026-01-01T00:05:00.000Z",
+    version: 1,
+  });
+  await reportRuntime.recordAuditEvent({
+    workspaceId: "ws_a",
+    action: "report_schedule.audit_test",
+    resourceType: "report_schedule",
+    resourceId: schedule.id,
+    message: "send alice@example.com to arn:aws:iam::123456789012:role/private",
+    metadata: { email: "alice@example.com", path: "/home/hasna/.hasna/private", object: "s3://private-bucket/report.json" },
+    actor: "operator-a",
+  });
+  const runs = await handler(new Request(`https://uptime.test/api/v1/report-runs?scheduleId=${schedule.id}`, {
+    headers: { authorization: "Bearer read" },
+  }));
+  const audit = await handler(new Request(`https://uptime.test/api/v1/audit-events?resourceId=${schedule.id}`, {
+    headers: { authorization: "Bearer read" },
+  }));
+  const run = await handler(new Request(`https://uptime.test/api/v1/report-schedules/${schedule.id}/run`, {
+    method: "POST",
+    headers: { authorization: "Bearer report", origin: "https://uptime.test", "content-type": "application/json" },
+    body: "{}",
+  }));
+  const workspaceMismatch = await handler(new Request("https://uptime.test/api/v1/report-schedules?workspaceId=ws_b", {
+    headers: { authorization: "Bearer read" },
+  }));
+  const remove = await handler(new Request(`https://uptime.test/api/v1/report-schedules/${schedule.id}`, {
+    method: "DELETE",
+    headers: { authorization: "Bearer report", origin: "https://uptime.test", "idempotency-key": "delete-ops" },
+  }));
+  const removeReplay = await handler(new Request(`https://uptime.test/api/v1/report-schedules/${schedule.id}`, {
+    method: "DELETE",
+    headers: { authorization: "Bearer report", origin: "https://uptime.test", "idempotency-key": "delete-ops" },
+  }));
+
+  expect(create.status).toBe(201);
+  expect(schedule.channels.logs).toEqual({ channelRefIds: ["logs-prod"] });
+  expect((await replay.json()).id).toBe(schedule.id);
+  expect(conflict.status).toBe(409);
+  expect((await list.json()).map((item: { id: string }) => item.id)).toEqual([schedule.id]);
+  expect(reportRuntime.listScheduleCalls.at(-1)).toEqual({ workspaceId: "ws_a", includeDisabled: true, limit: 10, offset: 0 });
+  expect(patch.status).toBe(200);
+  expect(reportRuntime.updateCalls[0]).toEqual({ idOrName: schedule.id, expectedRevision: 1 });
+  expect(rawChannels.status).toBe(400);
+  expect(JSON.stringify(await rawChannels.json())).not.toContain("logs.internal");
+  const runsBody = await runs.json();
+  expect(runs.status).toBe(200);
+  expect(runsBody[0].artifactRef).toBeUndefined();
+  expect(runsBody[0].artifactRefHash).toStartWith("sha256:");
+  expect(JSON.stringify(runsBody)).not.toContain("private-bucket");
+  const auditText = JSON.stringify(await audit.json());
+  expect(audit.status).toBe(200);
+  expect(auditText).not.toContain("alice@example.com");
+  expect(auditText).not.toContain("123456789012");
+  expect(auditText).not.toContain("/home/hasna");
+  expect(run.status).toBe(501);
+  expect(workspaceMismatch.status).toBe(403);
+  expect((await remove.json()).deleted).toBe(true);
+  expect((await removeReplay.json()).deleted).toBe(true);
+  expect(reportRuntime.audits.filter((event) => event.action === "report_schedule.create")).toHaveLength(1);
+  expect(reportRuntime.audits.find((event) => event.action === "report_schedule.create")).toMatchObject({
+    actor: "operator-a",
+    origin: "hosted-api",
+    idempotencyKey: "create-ops",
+    resourceType: "report_schedule",
+    resourceId: schedule.id,
+  });
   service.close();
 });
 
