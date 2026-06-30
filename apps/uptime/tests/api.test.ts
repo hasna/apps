@@ -47,17 +47,34 @@ class FakeHostedPostgresMonitorRuntime implements HostedPostgresMonitorRuntime {
   readonly upserts: UpsertPostgresMonitorInput[] = [];
   readonly listCalls: Array<{ workspaceId?: string; includeDisabled?: boolean; limit?: number; offset?: number }> = [];
   failListError: Error | null = null;
+  deleteBeforeNextExpectedRevisionUpsert = false;
   private sequence = 0;
 
   async upsertMonitor(input: UpsertPostgresMonitorInput): Promise<PostgresMonitorRecord> {
-    this.upserts.push(input);
     const workspaceId = input.workspaceId ?? "default";
     const id = input.id ?? `mon_${++this.sequence}`;
     const key = `${workspaceId}:${id}`;
-    const existing = this.monitors.get(key);
+    let existing = this.monitors.get(key);
+    if (this.deleteBeforeNextExpectedRevisionUpsert && input.expectedRevision != null && existing) {
+      this.deleteBeforeNextExpectedRevisionUpsert = false;
+      existing = {
+        ...existing,
+        enabled: false,
+        deletedAt: new Date(0).toISOString(),
+        revision: existing.revision + 1,
+      };
+      this.monitors.set(key, existing);
+    }
+    if (input.expectedRevision != null && (!existing || existing.deletedAt || existing.revision !== input.expectedRevision)) {
+      throw new Error("monitor revision conflict");
+    }
+    if (existing?.deletedAt) {
+      throw new Error(input.idempotencyKey ? "monitor idempotency conflict" : "monitor conflict");
+    }
     if (existing?.idempotencyKey && input.idempotencyKey) {
       throw new Error("monitor idempotency conflict");
     }
+    this.upserts.push(input);
     const now = new Date(0).toISOString();
     const enabled = input.enabled ?? existing?.enabled ?? true;
     const monitor: PostgresMonitorRecord = {
@@ -89,6 +106,25 @@ class FakeHostedPostgresMonitorRuntime implements HostedPostgresMonitorRuntime {
   }
 
   async upsertMonitorWithAudit(input: UpsertPostgresMonitorInput, audit: PostgresMonitorMutationAuditInput): Promise<PostgresMonitorMutationResult> {
+    if (audit.idempotencyKey && audit.resourceId) {
+      const replayIndex = this.audits.findIndex((existing) =>
+        existing.workspaceId === (input.workspaceId ?? audit.workspaceId)
+        && existing.action === audit.action
+        && existing.resourceType === "monitor"
+        && existing.resourceId === audit.resourceId
+        && existing.idempotencyKey === audit.idempotencyKey
+      );
+      if (replayIndex >= 0) {
+        const replayedHash = this.audits[replayIndex]?.metadata?.requestHash;
+        const requestedHash = audit.metadata?.requestHash;
+        if (typeof requestedHash === "string" && typeof replayedHash === "string" && requestedHash !== replayedHash) {
+          throw new Error("monitor idempotency conflict");
+        }
+        const monitor = await this.getMonitor({ workspaceId: input.workspaceId ?? audit.workspaceId, id: audit.resourceId });
+        if (!monitor) throw new Error("monitor revision conflict");
+        return { monitor, audit: this.auditRecord(this.audits[replayIndex]!, replayIndex + 1) };
+      }
+    }
     const monitor = await this.upsertMonitor(input);
     return {
       monitor,
@@ -171,9 +207,13 @@ class FakeHostedPostgresMonitorRuntime implements HostedPostgresMonitorRuntime {
 
   async recordAuditEvent(input: RecordPostgresAuditEventInput): Promise<PostgresAuditEventRecord> {
     this.audits.push(input);
+    return this.auditRecord(input, this.audits.length);
+  }
+
+  private auditRecord(input: RecordPostgresAuditEventInput, index: number): PostgresAuditEventRecord {
     return {
       workspaceId: input.workspaceId ?? "default",
-      id: `aud_${this.audits.length}`,
+      id: `aud_${index}`,
       action: input.action,
       resourceType: input.resourceType ?? null,
       resourceId: input.resourceId ?? null,
@@ -551,6 +591,7 @@ test("hosted API can route monitor control plane to Postgres without SQLite fall
     origin: "hosted-api",
     status: "unknown",
     lastCheckedAt: null,
+    expectedRevision: 1,
   });
   expect(postgresRuntime.upserts[2]).not.toHaveProperty("idempotencyKey");
   expect(postgresRuntime.audits.map((audit) => audit.action)).toEqual(["monitor.create", "monitor.create", "monitor.update", "monitor.delete"]);
@@ -563,6 +604,41 @@ test("hosted API can route monitor control plane to Postgres without SQLite fall
     actor: "operator-a",
     origin: "hosted-api",
     idempotencyKey: "delete-a",
+  });
+  service.close();
+});
+
+test("hosted Postgres monitor list forwards offset pagination", async () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const postgresRuntime = new FakeHostedPostgresMonitorRuntime();
+  const handler = createApiHandler(service, {
+    mode: "hosted",
+    hostedPostgresRuntime: postgresRuntime,
+    hostedTokens: [{ token: "read-a", scopes: ["uptime:read"], workspaceId: "ws_a" }],
+  });
+
+  for (const id of ["mon_001", "mon_002", "mon_003"]) {
+    await postgresRuntime.upsertMonitor({
+      workspaceId: "ws_a",
+      id,
+      name: id,
+      kind: "http",
+      url: `https://example.com/${id}`,
+    });
+  }
+
+  const response = await handler(new Request("https://uptime.test/api/v1/monitors?includeDisabled=true&limit=1&offset=1", {
+    headers: { authorization: "Bearer read-a" },
+  }));
+  const body = await response.json();
+
+  expect(response.status).toBe(200);
+  expect(body).toMatchObject([{ id: "mon_002", name: "mon_002" }]);
+  expect(postgresRuntime.listCalls.at(-1)).toMatchObject({
+    workspaceId: "ws_a",
+    includeDisabled: true,
+    limit: 1,
+    offset: 1,
   });
   service.close();
 });
@@ -597,6 +673,21 @@ test("hosted Postgres monitor create replays idempotency keys without mutating",
     { expectedStatus: 204 },
     { origin: "https://uptime.test", authorization: "Bearer write-a", "idempotency-key": "update-key" },
   ));
+  const patchBody = await patch.clone().json();
+  const patchReplay = await handler(jsonRequest(
+    `https://uptime.test/api/v1/monitors/${firstBody.id}`,
+    "PATCH",
+    { expectedStatus: 204 },
+    { origin: "https://uptime.test", authorization: "Bearer write-a", "idempotency-key": "update-key" },
+  ));
+  const patchReplayBody = await patchReplay.json();
+  const patchReplayConflict = await handler(jsonRequest(
+    `https://uptime.test/api/v1/monitors/${firstBody.id}`,
+    "PATCH",
+    { expectedStatus: 500 },
+    { origin: "https://uptime.test", authorization: "Bearer write-a", "idempotency-key": "update-key" },
+  ));
+  const patchReplayConflictBody = await patchReplayConflict.json();
   const conflict = await handler(jsonRequest(
     "https://uptime.test/api/v1/monitors",
     "POST",
@@ -609,6 +700,10 @@ test("hosted Postgres monitor create replays idempotency keys without mutating",
   expect(replay.status).toBe(201);
   expect(replayBody).toEqual(firstBody);
   expect(patch.status).toBe(200);
+  expect(patchReplay.status).toBe(200);
+  expect(patchReplayBody).toEqual(patchBody);
+  expect(patchReplayConflict.status).toBe(409);
+  expect(patchReplayConflictBody.error).toBe("idempotency key conflict");
   expect(conflict.status).toBe(409);
   expect(conflictBody.error).toBe("idempotency key conflict");
   expect(postgresRuntime.upserts).toHaveLength(2);
@@ -662,6 +757,46 @@ test("hosted Postgres create idempotency does not resurrect keyless deletes", as
     deletedAt: "1970-01-01T00:00:00.000Z",
   });
   expect(postgresRuntime.audits.map((audit) => audit.action)).toEqual(["monitor.create", "monitor.delete"]);
+  service.close();
+});
+
+test("hosted Postgres PATCH refuses stale updates after a concurrent tombstone", async () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const postgresRuntime = new FakeHostedPostgresMonitorRuntime();
+  const handler = createApiHandler(service, {
+    mode: "hosted",
+    hostedPostgresRuntime: postgresRuntime,
+    hostedTokens: [{ token: "write-a", scopes: ["uptime:write"], workspaceId: "ws_a", actor: "operator-a" }],
+  });
+
+  const create = await handler(jsonRequest(
+    "https://uptime.test/api/v1/monitors",
+    "POST",
+    { name: "race", kind: "http", url: "https://example.com/race" },
+    { origin: "https://uptime.test", authorization: "Bearer write-a", "idempotency-key": "race-create" },
+  ));
+  const monitor = await create.clone().json();
+  postgresRuntime.deleteBeforeNextExpectedRevisionUpsert = true;
+
+  const stalePatch = await handler(jsonRequest(
+    `https://uptime.test/api/v1/monitors/${monitor.id}`,
+    "PATCH",
+    { expectedStatus: 204 },
+    { origin: "https://uptime.test", authorization: "Bearer write-a", "idempotency-key": "race-update" },
+  ));
+  const body = await stalePatch.json();
+  const stored = postgresRuntime.monitors.get(`ws_a:${monitor.id}`);
+
+  expect(create.status).toBe(201);
+  expect(stalePatch.status).toBe(409);
+  expect(body.error).toBe("monitor update conflict");
+  expect(await postgresRuntime.getMonitor({ workspaceId: "ws_a", id: monitor.id })).toBeNull();
+  expect(stored).toMatchObject({
+    idempotencyKey: "race-create",
+    deletedAt: "1970-01-01T00:00:00.000Z",
+  });
+  expect(postgresRuntime.upserts).toHaveLength(1);
+  expect(postgresRuntime.audits.map((audit) => audit.action)).toEqual(["monitor.create"]);
   service.close();
 });
 

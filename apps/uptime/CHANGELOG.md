@@ -6,6 +6,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.67] - 2026-06-30
+
+### Fixed
+
+- Forwarded `offset` from hosted monitor list API requests to the Postgres
+  runtime so clients can page beyond the first bounded result set.
+- Added an expected-revision guard to hosted Postgres monitor PATCH writes so a
+  stale update cannot resurrect a concurrently tombstoned monitor row.
+- Made hosted monitor PATCH idempotency keys replay through the audit layer
+  without creating repeated monitor revisions or audit rows.
+- Updated packaged AWS module defaults and deployment metadata examples to
+  `@hasna/uptime@0.1.67`.
+
 ## [0.1.66] - 2026-06-30
 
 ### Added

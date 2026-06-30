@@ -70,6 +70,7 @@ export interface UpsertPostgresMonitorInput {
   actor?: string | null;
   origin?: string | null;
   idempotencyKey?: string | null;
+  expectedRevision?: number | null;
 }
 
 export interface PostgresMonitorRecord {
@@ -507,6 +508,18 @@ export class PostgresRuntime {
   async upsertMonitorWithAudit(input: UpsertPostgresMonitorInput, auditInput: PostgresMonitorMutationAuditInput): Promise<PostgresMonitorMutationResult> {
     const workspaceId = normalizeWorkspaceId(input.workspaceId ?? auditInput.workspaceId ?? this.workspaceId);
     return this.withWorkspaceTransaction(workspaceId, async (client) => {
+      const replayedAudit = await this.findMonitorMutationAuditReplay(client, workspaceId, auditInput);
+      if (replayedAudit && auditInput.resourceId) {
+        const requestedHash = normalizeReplayRequestHash(auditInput.metadata?.requestHash);
+        const replayedHash = normalizeReplayRequestHash(replayedAudit.metadata.requestHash);
+        if (requestedHash && replayedHash && requestedHash !== replayedHash) {
+          throw new Error("monitor idempotency conflict");
+        }
+        const resourceId = normalizeId(auditInput.resourceId);
+        const monitor = await this.getMonitorInTransaction(client, workspaceId, resourceId);
+        if (!monitor) throw new Error("monitor revision conflict");
+        return { monitor, audit: replayedAudit };
+      }
       const monitor = await this.upsertMonitorInTransaction(client, workspaceId, { ...input, workspaceId });
       const audit = await this.recordAuditEventInTransaction(client, workspaceId, {
         ...auditInput,
@@ -521,6 +534,7 @@ export class PostgresRuntime {
 
   private async upsertMonitorInTransaction(client: PostgresQueryClient, workspaceId: string, input: UpsertPostgresMonitorInput): Promise<PostgresMonitorRecord> {
     const idempotencyKey = normalizeNullableOpaqueText(input.idempotencyKey, "monitor idempotency key", 256);
+    const expectedRevision = input.expectedRevision == null ? null : normalizePositiveInteger(input.expectedRevision, "monitor expectedRevision");
     const id = normalizeId(input.id ?? deterministicId("mon", workspaceId, idempotencyKey ?? input.name, input.kind));
     const kind = normalizeMonitorKind(input.kind);
     const url = normalizeNullableMonitorUrl(input.url);
@@ -560,8 +574,10 @@ export class PostgresRuntime {
         deleted_at = NULL,
         updated_at = now(),
         version = ${this.table("monitors")}.version + 1
-      WHERE ${this.table("monitors")}.idempotency_key IS NULL
-         OR EXCLUDED.idempotency_key IS NULL
+      WHERE ${this.table("monitors")}.deleted_at IS NULL
+         AND ($19::bigint IS NULL OR ${this.table("monitors")}.version = $19)
+         AND (${this.table("monitors")}.idempotency_key IS NULL
+           OR EXCLUDED.idempotency_key IS NULL)
       RETURNING *`,
       [
         workspaceId,
@@ -582,12 +598,53 @@ export class PostgresRuntime {
         normalizeNullableOpaqueText(input.actor, "monitor actor", 160),
         normalizeNullableOpaqueText(input.origin, "monitor origin", 160),
         idempotencyKey,
+        expectedRevision,
       ],
     );
+    if (result.rows.length === 0 && expectedRevision != null) {
+      throw new Error("monitor revision conflict");
+    }
     if (result.rows.length === 0 && idempotencyKey) {
       throw new Error("monitor idempotency conflict");
     }
+    if (result.rows.length === 0) {
+      throw new Error("monitor conflict");
+    }
     return monitorFromRow(firstRow(result, "monitor"));
+  }
+
+  private async getMonitorInTransaction(client: PostgresQueryClient, workspaceId: string, id: string): Promise<PostgresMonitorRecord | null> {
+    const result = await client.query(
+      `SELECT * FROM ${this.table("monitors")}
+       WHERE workspace_id = $1 AND id = $2 AND deleted_at IS NULL`,
+      [workspaceId, id],
+    );
+    const row = result.rows[0];
+    return row ? monitorFromRow(row as Record<string, unknown>) : null;
+  }
+
+  private async findMonitorMutationAuditReplay(
+    client: PostgresQueryClient,
+    workspaceId: string,
+    input: PostgresMonitorMutationAuditInput,
+  ): Promise<PostgresAuditEventRecord | null> {
+    const idempotencyKey = normalizeNullableOpaqueText(input.idempotencyKey, "audit idempotency key", 256);
+    if (!idempotencyKey || !input.resourceId) return null;
+    const resourceId = normalizeId(input.resourceId);
+    const result = await client.query(
+      `SELECT * FROM ${this.table("audit_events")}
+       WHERE workspace_id = $1
+         AND action = $2
+         AND resource_type = 'monitor'
+         AND resource_id = $3
+         AND idempotency_key = $4
+         AND deleted_at IS NULL
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`,
+      [workspaceId, input.action, resourceId, idempotencyKey],
+    );
+    const row = result.rows[0];
+    return row ? auditEventFromRow(row as Record<string, unknown>) : null;
   }
 
   private assertMonitorTargetAllowed(target: { kind: MonitorKind; url: string | null; host: string | null; port: number | null }): void {
@@ -661,13 +718,7 @@ export class PostgresRuntime {
   async getMonitor(input: GetPostgresMonitorOptions): Promise<PostgresMonitorRecord | null> {
     const workspaceId = normalizeWorkspaceId(input.workspaceId ?? this.workspaceId);
     const id = normalizeId(input.id);
-    const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
-      `SELECT * FROM ${this.table("monitors")}
-       WHERE workspace_id = $1 AND id = $2 AND deleted_at IS NULL`,
-      [workspaceId, id],
-    ));
-    const row = result.rows[0];
-    return row ? monitorFromRow(row as Record<string, unknown>) : null;
+    return this.withWorkspaceTransaction(workspaceId, (client) => this.getMonitorInTransaction(client, workspaceId, id));
   }
 
   async listMonitors(options: ListPostgresMonitorsOptions = {}): Promise<PostgresMonitorRecord[]> {
@@ -2183,6 +2234,14 @@ function monitorAuditMetadata(monitor: PostgresMonitorRecord, metadata: Record<s
     monitorRevision: monitor.revision,
     workspaceId: monitor.workspaceId,
   };
+}
+
+function normalizeReplayRequestHash(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value !== "string" || !/^sha256:[a-f0-9]{64}$/.test(value)) {
+    throw new Error("monitor replay request hash is invalid");
+  }
+  return value;
 }
 
 function normalizeEvidence(value: CheckEvidence): CheckEvidence {

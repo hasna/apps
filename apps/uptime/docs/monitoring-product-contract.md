@@ -129,14 +129,16 @@ Job lease semantics:
 - deploy drain pauses new claims and lets in-flight leases expire or finish;
 - alarms fire for stale leases and backlog.
 
-Current implementation note: `@hasna/uptime@0.1.66` implements the deterministic
+Current implementation note: `@hasna/uptime@0.1.67` implements the deterministic
 job key, probe policy hash, class/location claim checks, same-probe claim retry
 idempotency, nonce payload conflict rejection in the local SQLite probe
 scaffold, service-owned report channel-ref catalog validation for hosted
 reporter preflight, a read-only Postgres private-probe identity preflight, and
 mandatory `hosted-public` target-policy enforcement for Postgres monitor
-upserts. It also includes an explicit hosted Postgres monitor API adapter for
-`/api/v1/summary` and `/api/v1/monitors*`, with workspace-scoped reads/writes,
+upserts. It also includes the explicit hosted Postgres monitor API adapter that
+was introduced in `0.1.66` and corrected in `0.1.67` for `/api/v1/summary` and
+`/api/v1/monitors*`, with workspace-scoped reads/writes, monitor-list offset
+paging, expected-revision PATCH guards, audit-key PATCH replay conflict checks,
 actor/origin/idempotency metadata, audit rows, tombstones, and fail-closed
 behavior for non-migrated hosted reads. It also includes SDK/CLI shared-evidence
 sanitization for rollout artifacts, AWS-shaped origin-header value redaction, an

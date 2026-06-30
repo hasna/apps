@@ -287,6 +287,7 @@ async function handleApiRoute(
         workspaceId: actor.workspaceId,
         includeDisabled: url.searchParams.get("includeDisabled") === "true",
         limit: numericParam(url, "limit", 250),
+        offset: numericParam(url, "offset", 0),
       });
       return json(monitors.map(postgresMonitorToMonitor));
     }
@@ -422,7 +423,7 @@ async function handleApiRoute(
         const idempotencyKey = request.headers.get("idempotency-key") ?? undefined;
         const targetChanged = postgresMonitorDefinitionChanged(before, input);
         const nextEnabled = input.enabled ?? before.enabled;
-        const { monitor } = await upsertHostedPostgresMonitorWithAudit(options.hostedPostgresRuntime, {
+        const updateInput: UpsertPostgresMonitorInput = {
           id: before.id,
           workspaceId: actor.workspaceId,
           name: input.name ?? before.name,
@@ -440,11 +441,14 @@ async function handleApiRoute(
           lastCheckedAt: targetChanged ? null : before.lastCheckedAt,
           actor: actor.actor,
           origin: "hosted-api",
-        }, hostedPostgresMonitorAuditInput(actor, "monitor.update", idempotencyKey, {
+          expectedRevision: before.revision,
+        };
+        const { monitor } = await upsertHostedPostgresMonitorWithAudit(options.hostedPostgresRuntime, updateInput, hostedPostgresMonitorAuditInput(actor, "monitor.update", idempotencyKey, {
           method: request.method,
           apiPath,
           previousRevision: before.revision,
-        }));
+          requestHash: hostedMonitorPatchRequestHash(input),
+        }, before.id));
         return json(postgresMonitorToMonitor(monitor));
       }
       const before = hosted ? service.getMonitor(id, { workspaceId: actor?.workspaceId }) : null;
@@ -509,6 +513,7 @@ async function handleApiRoute(
 
 function sanitizeApiError(error: unknown, options: CreateApiHandlerOptions): string {
   const raw = error instanceof Error ? error.message : String(error);
+  if (error instanceof ApiError && raw === "monitor update conflict") return raw;
   const sanitized = options.hostedPostgresRuntime
     ? sanitizePostgresRuntimeError(raw, process.env.HASNA_UPTIME_DATABASE_URL)
     : raw;
@@ -601,6 +606,9 @@ async function upsertHostedPostgresMonitorWithAudit(
     if (error instanceof Error && error.message === "monitor idempotency conflict") {
       throw new ApiError("idempotency key conflict", 409);
     }
+    if (error instanceof Error && (error.message === "monitor revision conflict" || error.message === "monitor conflict")) {
+      throw new ApiError("monitor update conflict", 409);
+    }
     throw error;
   }
 }
@@ -610,6 +618,7 @@ function hostedPostgresMonitorAuditInput(
   action: "monitor.create" | "monitor.update" | "monitor.delete",
   idempotencyKey: string | null | undefined,
   metadata: Record<string, unknown>,
+  resourceId?: string,
 ): PostgresMonitorMutationAuditInput {
   return {
     workspaceId: actor.workspaceId,
@@ -617,6 +626,7 @@ function hostedPostgresMonitorAuditInput(
     actor: actor.actor,
     origin: "hosted-api",
     resourceType: "monitor",
+    resourceId,
     idempotencyKey,
     metadata: {
       ...metadata,
@@ -668,6 +678,27 @@ function bodyMethod(value: unknown): string {
   return value == null ? "GET" : String(value).trim().toUpperCase();
 }
 
+function hostedMonitorPatchRequestHash(input: Record<string, unknown>): string {
+  const normalized: Record<string, unknown> = {};
+  const entries: Array<[string, (value: unknown) => unknown]> = [
+    ["name", bodyText],
+    ["kind", (value) => String(value ?? "")],
+    ["url", nullableBodyText],
+    ["host", nullableBodyText],
+    ["port", nullableBodyNumber],
+    ["method", bodyMethod],
+    ["expectedStatus", nullableBodyNumber],
+    ["intervalSeconds", (value) => bodyInteger(value, 60)],
+    ["timeoutMs", (value) => bodyInteger(value, 5000)],
+    ["retryCount", (value) => bodyInteger(value, 0)],
+    ["enabled", (value) => value],
+  ];
+  for (const [key, normalize] of entries) {
+    if (Object.prototype.hasOwnProperty.call(input, key)) normalized[key] = normalize(input[key]);
+  }
+  return `sha256:${createHash("sha256").update(stableJson(normalized)).digest("hex")}`;
+}
+
 function postgresMonitorToMonitor(record: PostgresMonitorRecord): Monitor {
   return {
     id: record.id,
@@ -689,6 +720,13 @@ function postgresMonitorToMonitor(record: PostgresMonitorRecord): Monitor {
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
   };
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((entry) => stableJson(entry)).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right));
+  return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`).join(",")}}`;
 }
 
 async function hostedPostgresSummary(runtime: HostedPostgresMonitorRuntime, workspaceId: string): Promise<UptimeSummary> {

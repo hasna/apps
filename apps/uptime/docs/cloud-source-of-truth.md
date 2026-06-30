@@ -110,13 +110,15 @@ and alarms use it end to end.
 
 `0.1.66` wires a bounded hosted Postgres monitor-control-plane adapter into the
 API handler for `/api/v1/summary` and `/api/v1/monitors*` when the caller
-supplies an explicit `hostedPostgresRuntime`. The adapter uses Postgres monitor
-rows for create/list/get/update/delete, carries actor/origin/idempotency
-metadata, writes monitor mutation audit rows, and tombstones deletes. It does
-not make `uptime serve` use `HASNA_UPTIME_DATABASE_URL`, does not promote
-workers, and deliberately leaves reports, incidents, results, import apply,
-probes, browser checks, scheduler loops, and reporter delivery fail-closed
-until their Postgres-backed contracts are implemented and reviewed.
+supplies an explicit `hostedPostgresRuntime`; `0.1.67` corrects that adapter
+with monitor-list offset paging, expected-revision PATCH guards, and audit-key
+PATCH replay conflict checks. The adapter uses Postgres monitor rows for
+create/list/get/update/delete, carries actor/origin/idempotency metadata, writes
+monitor mutation audit rows, and tombstones deletes. It does not make
+`uptime serve` use `HASNA_UPTIME_DATABASE_URL`, does not promote workers, and
+deliberately leaves reports, incidents, results, import apply, probes, browser
+checks, scheduler loops, and reporter delivery fail-closed until their
+Postgres-backed contracts are implemented and reviewed.
 
 `0.1.44` adds a bounded `uptime cloud postgres-scheduler run` review command
 that creates deterministic Postgres `check_jobs` for due public-safe HTTP/TCP

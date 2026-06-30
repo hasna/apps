@@ -33,9 +33,16 @@ class FakeRuntimeClient implements PostgresQueryClient {
       return { rows: [], rowCount: 0 };
     }
     if (sql.includes("INSERT INTO \"uptime\".\"monitors\"")) {
+      const requestedWorkspace = String(params?.[0]);
+      const requestedId = String(params?.[1]);
+      const expectedRevision = params?.[18] == null ? null : Number(params?.[18]);
+      const existing = this.monitor?.workspaceId === requestedWorkspace && this.monitor.id === requestedId ? this.monitor : null;
+      if (existing?.deletedAt || (expectedRevision != null && existing?.revision !== expectedRevision)) {
+        return { rows: [], rowCount: 0 };
+      }
       this.monitor = {
-        workspaceId: String(params?.[0]),
-        id: String(params?.[1]),
+        workspaceId: requestedWorkspace,
+        id: requestedId,
         name: String(params?.[2]),
         kind: params?.[3] as PostgresMonitorRecord["kind"],
         url: params?.[4] == null ? null : String(params[4]),
@@ -49,15 +56,47 @@ class FakeRuntimeClient implements PostgresQueryClient {
         enabled: Boolean(params?.[12]),
         status: params?.[13] as PostgresMonitorRecord["status"],
         lastCheckedAt: params?.[14] == null ? null : String(params[14]),
-        revision: 1,
+        revision: (existing?.revision ?? 0) + 1,
         actor: params?.[15] == null ? null : String(params[15]),
         origin: params?.[16] == null ? null : String(params[16]),
-        idempotencyKey: params?.[17] == null ? null : String(params[17]),
-        createdAt: "2026-06-29T10:00:00.000Z",
+        idempotencyKey: params?.[17] == null ? existing?.idempotencyKey ?? null : String(params[17]),
+        createdAt: existing?.createdAt ?? "2026-06-29T10:00:00.000Z",
         updatedAt: "2026-06-29T10:00:00.000Z",
         deletedAt: null,
       };
       return { rows: [snakeMonitor(this.monitor)], rowCount: 1 };
+    }
+    if (sql.includes("SELECT * FROM \"uptime\".\"monitors\"") && sql.includes("ORDER BY created_at ASC, id ASC")) {
+      const requestedWorkspace = String(params?.[0]);
+      const includeDisabled = params?.[1] === true;
+      const found = this.monitor?.workspaceId === requestedWorkspace
+        && !this.monitor.deletedAt
+        && (includeDisabled || this.monitor.enabled);
+      return { rows: found ? [snakeMonitor(this.monitor!)] : [], rowCount: found ? 1 : 0 };
+    }
+    if (sql.includes("SELECT * FROM \"uptime\".\"monitors\"") && sql.includes("ORDER BY COALESCE(last_checked_at, created_at)")) {
+      const requestedWorkspace = String(params?.[0]);
+      const probePolicyHash = params?.[5] == null ? null : String(params[5]);
+      const blockedByOpenJob = this.monitor
+        && this.job
+        && this.job.workspaceId === requestedWorkspace
+        && this.job.monitorId === this.monitor.id
+        && this.job.monitorRevision === this.monitor.revision
+        && this.job.submittedResultId === null
+        && ["pending", "claimed", "expired"].includes(this.job.status)
+        && (probePolicyHash === null || this.job.probePolicyHash === probePolicyHash);
+      const found = this.monitor?.workspaceId === requestedWorkspace
+        && !this.monitor.deletedAt
+        && this.monitor.enabled
+        && (this.monitor.kind === "http" || this.monitor.kind === "tcp")
+        && !blockedByOpenJob;
+      return { rows: found ? [snakeMonitor(this.monitor!)] : [], rowCount: found ? 1 : 0 };
+    }
+    if (sql.includes("SELECT * FROM \"uptime\".\"monitors\"")) {
+      const requestedWorkspace = String(params?.[0]);
+      const requestedId = String(params?.[1]);
+      const found = this.monitor?.workspaceId === requestedWorkspace && this.monitor.id === requestedId && !this.monitor.deletedAt;
+      return { rows: found ? [snakeMonitor(this.monitor!)] : [], rowCount: found ? 1 : 0 };
     }
     if (sql.includes("INSERT INTO \"uptime\".\"probe_identities\"")) {
       this.probe = {
@@ -283,6 +322,15 @@ class FakeRuntimeClient implements PostgresQueryClient {
         createdAt: String(params?.[10]),
       };
       return { rows: [snakeAudit(this.audit)], rowCount: 1 };
+    }
+    if (sql.includes("SELECT * FROM \"uptime\".\"audit_events\"")) {
+      const found = this.audit
+        && this.audit.workspaceId === String(params?.[0])
+        && this.audit.action === String(params?.[1])
+        && this.audit.resourceType === "monitor"
+        && this.audit.resourceId === String(params?.[2])
+        && this.audit.idempotencyKey === String(params?.[3]);
+      return { rows: found ? [snakeAudit(this.audit!)] : [], rowCount: found ? 1 : 0 };
     }
     if (sql.includes("UPDATE \"uptime\".\"monitors\"") && sql.includes("deleted_at = $3")) {
       if (this.monitor) this.monitor = { ...this.monitor, deletedAt: String(params?.[2]), enabled: false };
@@ -565,13 +613,49 @@ test("Postgres runtime monitor mutation helpers write audit in the same transact
     expectedStatus: 204,
     actor: "operator",
     origin: "hosted-api",
+    expectedRevision: created.monitor.revision,
   }, {
     action: "monitor.update",
+    resourceId: created.monitor.id,
     actor: "operator",
     origin: "hosted-api",
     idempotencyKey: "request-update",
-    metadata: { method: "PATCH", previousRevision: created.monitor.revision },
+    metadata: { method: "PATCH", previousRevision: created.monitor.revision, requestHash: "sha256:" + "a".repeat(64) },
   });
+  const replayedUpdate = await runtime.upsertMonitorWithAudit({
+    id: created.monitor.id,
+    name: "Homepage",
+    kind: "http",
+    url: "https://example.com/health",
+    expectedStatus: 204,
+    actor: "operator",
+    origin: "hosted-api",
+    expectedRevision: updated.monitor.revision,
+  }, {
+    action: "monitor.update",
+    resourceId: created.monitor.id,
+    actor: "operator",
+    origin: "hosted-api",
+    idempotencyKey: "request-update",
+    metadata: { method: "PATCH", previousRevision: updated.monitor.revision, requestHash: "sha256:" + "a".repeat(64) },
+  });
+  await expect(runtime.upsertMonitorWithAudit({
+    id: created.monitor.id,
+    name: "Homepage",
+    kind: "http",
+    url: "https://example.com/health",
+    expectedStatus: 500,
+    actor: "operator",
+    origin: "hosted-api",
+    expectedRevision: updated.monitor.revision,
+  }, {
+    action: "monitor.update",
+    resourceId: created.monitor.id,
+    actor: "operator",
+    origin: "hosted-api",
+    idempotencyKey: "request-update",
+    metadata: { method: "PATCH", previousRevision: updated.monitor.revision, requestHash: "sha256:" + "b".repeat(64) },
+  })).rejects.toThrow("monitor idempotency conflict");
   await runtime.tombstoneMonitorWithAudit({
     workspaceId: "ws_runtime",
     resourceType: "monitor",
@@ -595,11 +679,16 @@ test("Postgres runtime monitor mutation helpers write audit in the same transact
   const firstAudit = client.queries.findIndex((query) => query.sql.includes("INSERT INTO \"uptime\".\"audit_events\""));
   const firstCommit = client.queries.findIndex((query) => query.sql === "COMMIT");
 
+  expect(upsertQueries).toHaveLength(2);
   expect(upsertQueries.map((query) => query.params?.[17] ?? null)).toEqual([null, null]);
-  expect(upsertQueries[0]?.sql).toContain("WHERE \"uptime\".\"monitors\".idempotency_key IS NULL");
+  expect(upsertQueries.map((query) => query.params?.[18] ?? null)).toEqual([null, created.monitor.revision]);
+  expect(upsertQueries[0]?.sql).toContain("WHERE \"uptime\".\"monitors\".deleted_at IS NULL");
+  expect(upsertQueries[0]?.sql).toContain("AND ($19::bigint IS NULL OR \"uptime\".\"monitors\".version = $19)");
   expect(upsertQueries[0]?.sql).toContain("OR EXCLUDED.idempotency_key IS NULL");
   expect(upsertQueries[0]?.sql).toContain("idempotency_key = COALESCE(EXCLUDED.idempotency_key, \"uptime\".\"monitors\".idempotency_key)");
   expect(upsertQueries[0]?.sql).not.toContain("\"uptime\".\"monitors\".idempotency_key IS NOT DISTINCT FROM EXCLUDED.idempotency_key");
+  expect(replayedUpdate.monitor).toEqual(updated.monitor);
+  expect(replayedUpdate.audit).toEqual(updated.audit);
   expect(created.audit).toMatchObject({
     workspaceId: "ws_runtime",
     action: "monitor.create",

@@ -646,11 +646,13 @@ object keys, or provider payloads.
 
 `0.1.66` adds a bounded hosted Postgres monitor API adapter for
 `/api/v1/summary` and `/api/v1/monitors*` when the API handler is supplied an
-explicit `hostedPostgresRuntime`. Treat it as control-plane wiring only. Do not
-set `HASNA_UPTIME_DATABASE_URL` for `uptime serve`, do not scale ECS services,
-and do not treat report, incident, result, import, probe, scheduler, browser,
-or reporter routes as cloud-primary until their Postgres-backed contracts and
-live evidence exist.
+explicit `hostedPostgresRuntime`; `0.1.67` corrects it with monitor-list offset
+paging, expected-revision PATCH guards, and audit-key PATCH replay conflict
+checks. Treat it as control-plane wiring only. Do not set
+`HASNA_UPTIME_DATABASE_URL` for `uptime serve`, do not scale ECS services, and
+do not treat report, incident, result, import, probe, scheduler, browser, or
+reporter routes as cloud-primary until their Postgres-backed contracts and live
+evidence exist.
 
 Example reporter evidence shape:
 
