@@ -6,6 +6,31 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.64] - 2026-06-30
+
+### Added
+
+- Added a sanitized reporter promotion-evidence contract through
+  `HASNA_UPTIME_REPORTER_PROMOTION_EVIDENCE_JSON` and
+  `buildPostgresReportRuntimeReadiness`. The contract can mark approved
+  artifact object-store, Open Logs audit export, delivery alarm, and reporter
+  liveness evidence as proven only when the evidence is redacted,
+  workspace-matching, reviewed, and smoke-backed.
+- Added `reporter-worker-liveness` to hosted reporter preflight output so the
+  CLI exposes the same promotion gate as the SDK readiness object.
+- Included public `docs/*.md` and `docs/*.json` files in the npm package so the
+  AWS runbook, cloud source-of-truth, operational tracking, and product
+  contracts are available from the package tarball while the GitHub repository
+  remains private pending explicit approval.
+
+### Changed
+
+- Updated packaged AWS module defaults and deployment metadata examples to
+  `@hasna/uptime@0.1.64`.
+- Kept hosted reporter startup fail-closed even when promotion evidence is
+  supplied; service-store integration, channel secret loading, worker leases,
+  and other hosted worker gates still block `canStart`.
+
 ## [0.1.63] - 2026-06-30
 
 ### Added

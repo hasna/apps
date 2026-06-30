@@ -1151,6 +1151,114 @@ test("CLI reporter preflight with report runtime schema evidence still fails clo
   }
 });
 
+test("CLI reporter preflight accepts sanitized promotion evidence without starting reporter", () => {
+  const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
+  try {
+    const dbPath = join(dir, "uptime.db");
+    const env = {
+      HASNA_UPTIME_MODE: "hosted",
+      HASNA_UPTIME_COMPONENT: "reporter",
+      HASNA_UPTIME_WORKSPACE_ID: "ws_cli",
+      HASNA_UPTIME_DATABASE_URL: "postgres://svc:raw-password@db.example.invalid/uptime?sslmode=require",
+      HASNA_UPTIME_REPORT_RUNTIME_SCHEMA_VERIFIED: "1",
+      HASNA_UPTIME_REPORT_CHANNEL_REFS_JSON: JSON.stringify({
+        version: "open-uptime.report-channel-refs.v1",
+        channels: [
+          {
+            id: "ops-email",
+            channel: "email",
+            service: "mailery",
+            secretRef: "arn:aws:secretsmanager:us-east-1:123456789012:secret:open-uptime/prod/reporting-email",
+            targetRef: "ops",
+            workspaceId: "ws_cli",
+          },
+          {
+            id: "ops-logs",
+            channel: "logs",
+            service: "logs",
+            secretRef: "arn:aws:ssm:us-east-1:123456789012:parameter/open-uptime/prod/reporting/logs",
+            targetRef: "open-uptime",
+            workspaceId: "ws_cli",
+          },
+        ],
+      }),
+      HASNA_UPTIME_REPORTER_PROMOTION_EVIDENCE_JSON: JSON.stringify({
+        version: "open-uptime.reporter-promotion-evidence.v1",
+        redacted: true,
+        workspaceId: "ws_cli",
+        checkedAt: "2026-06-30T01:00:00.000Z",
+        checks: {
+          artifactObjectStore: {
+            ok: true,
+            reviewed: true,
+            smokePassed: true,
+            encrypted: true,
+            redactedOnly: true,
+            workspaceScoped: true,
+          },
+          auditExport: {
+            ok: true,
+            reviewed: true,
+            smokePassed: true,
+            redactedOnly: true,
+            workspaceScoped: true,
+            service: "logs",
+          },
+          deliveryAlarms: {
+            ok: true,
+            reviewed: true,
+            alarmCount: 4,
+            actionsConfigured: true,
+            reporterMetricsReviewed: true,
+          },
+          workerLiveness: {
+            ok: true,
+            reviewed: true,
+            sustainedRunSeconds: 300,
+            drainProven: true,
+            rollbackProven: true,
+          },
+        },
+      }),
+    };
+    const preflight = runCli(["cloud", "workers", "preflight", "--role", "reporter", "--healthcheck", "--json"], dbPath, env);
+    const stdout = new TextDecoder().decode(preflight.stdout);
+    const body = JSON.parse(stdout);
+    const checks = Object.fromEntries(body.checks.map((check: { name: string; ok: boolean }) => [check.name, check.ok]));
+
+    expect(preflight.exitCode).toBe(1);
+    expect(body).toMatchObject({
+      role: "reporter",
+      status: "blocked",
+      canStart: false,
+      workspaceId: "ws_cli",
+    });
+    expect(checks).toMatchObject({
+      "cloud-channel-refs": true,
+      "report-run-cloud-store": true,
+      "report-runtime-schema-verified": true,
+      "report-artifact-object-store": true,
+      "report-audit-export": true,
+      "report-delivery-alarms": true,
+      "reporter-worker-liveness": true,
+      "report-channel-secret-loader": false,
+    });
+    expect(body.blockers.join("\n")).not.toContain("report-artifact-object-store");
+    expect(body.blockers.join("\n")).not.toContain("report-audit-export");
+    expect(body.blockers.join("\n")).not.toContain("report-delivery-alarms");
+    expect(body.blockers.join("\n")).not.toContain("reporter-worker-liveness");
+    expect(body.blockers.join("\n")).toContain("report-channel-secret-loader");
+    expect(body.blockers.join("\n")).toContain("postgres-adapter");
+    expect(body.blockers.join("\n")).toContain("cloud-worker-leases");
+    expect(stdout).not.toContain("raw-password");
+    expect(stdout).not.toContain("sslmode=require");
+    expect(stdout).not.toContain("arn:aws:secretsmanager");
+    expect(stdout).not.toContain("arn:aws:ssm");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("CLI reporter preflight rejects unscoped, wrong-workspace, and raw channel refs", () => {
   const dir = mkdtempSync(join(tmpdir(), "open-uptime-cli-"));
   try {

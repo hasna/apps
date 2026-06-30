@@ -17,6 +17,7 @@ export interface PostgresReportRuntimeOptions {
   schemaName?: string;
   workspaceId?: string;
   workspaceSetting?: string;
+  promotionEvidenceJson?: string | null;
   client?: PostgresQueryClient;
   now?: () => Date;
 }
@@ -47,7 +48,59 @@ export interface PostgresReportRuntimeReadiness {
     auditExportContract: boolean;
     auditExport: boolean;
     deliveryAlarms: boolean;
+    reporterWorkerLiveness: boolean;
   };
+}
+
+export interface PostgresReportRuntimePromotionEvidence {
+  version: "open-uptime.reporter-promotion-evidence.v1";
+  redacted: true;
+  workspaceId?: string;
+  checkedAt?: string;
+  checks: {
+    artifactObjectStore?: PostgresReportRuntimeArtifactObjectStoreEvidence;
+    auditExport?: PostgresReportRuntimeAuditExportEvidence;
+    deliveryAlarms?: PostgresReportRuntimeDeliveryAlarmsEvidence;
+    workerLiveness?: PostgresReportRuntimeWorkerLivenessEvidence;
+  };
+}
+
+export interface PostgresReportRuntimeArtifactObjectStoreEvidence {
+  ok: boolean;
+  reviewed: boolean;
+  smokePassed: boolean;
+  encrypted: boolean;
+  redactedOnly: boolean;
+  workspaceScoped: boolean;
+  detail?: string;
+}
+
+export interface PostgresReportRuntimeAuditExportEvidence {
+  ok: boolean;
+  reviewed: boolean;
+  smokePassed: boolean;
+  redactedOnly: boolean;
+  workspaceScoped: boolean;
+  service: "logs";
+  detail?: string;
+}
+
+export interface PostgresReportRuntimeDeliveryAlarmsEvidence {
+  ok: boolean;
+  reviewed: boolean;
+  alarmCount: number;
+  actionsConfigured: boolean;
+  reporterMetricsReviewed: boolean;
+  detail?: string;
+}
+
+export interface PostgresReportRuntimeWorkerLivenessEvidence {
+  ok: boolean;
+  reviewed: boolean;
+  sustainedRunSeconds: number;
+  drainProven: boolean;
+  rollbackProven: boolean;
+  detail?: string;
 }
 
 export interface RecordPostgresReportRunInput {
@@ -1163,7 +1216,7 @@ export async function exportPostgresReportAuditEvent(input: ExportPostgresReport
   }
 }
 
-export function buildPostgresReportRuntimeReadiness(options: Pick<PostgresReportRuntimeOptions, "databaseUrl" | "schemaName" | "workspaceId" | "workspaceSetting"> & {
+export function buildPostgresReportRuntimeReadiness(options: Pick<PostgresReportRuntimeOptions, "databaseUrl" | "schemaName" | "workspaceId" | "workspaceSetting" | "promotionEvidenceJson"> & {
   schemaVerified?: boolean;
 } = {}): PostgresReportRuntimeReadiness {
   const plan = buildPostgresMigrationPlan({
@@ -1174,6 +1227,10 @@ export function buildPostgresReportRuntimeReadiness(options: Pick<PostgresReport
   const workspaceId = normalizeOptionalWorkspaceId(options.workspaceId ?? process.env.HASNA_UPTIME_WORKSPACE_ID);
   const migrationBlockers = plan.blockers.filter((blocker) => !blocker.startsWith("async-runtime-adapter:"));
   const schemaVerified = options.schemaVerified === true;
+  const promotionEvidence = parseReporterPromotionEvidence(
+    options.promotionEvidenceJson ?? process.env.HASNA_UPTIME_REPORTER_PROMOTION_EVIDENCE_JSON,
+    workspaceId,
+  );
   const metadataChecks = [
     {
       name: "postgres-url-configured",
@@ -1203,23 +1260,23 @@ export function buildPostgresReportRuntimeReadiness(options: Pick<PostgresReport
   const promotionChecks = [
     {
       name: "report-artifact-object-store",
-      ok: false,
-      detail: "artifact object writer contract exists, but approved S3/object storage wiring, signing, IAM, and smoke evidence are not proven",
+      ok: promotionEvidence.artifactObjectStore.ok,
+      detail: promotionEvidence.artifactObjectStore.detail,
     },
     {
       name: "report-audit-export",
-      ok: false,
-      detail: "audit export contract exists, but approved Open Logs wiring and delivery smoke evidence are not proven",
+      ok: promotionEvidence.auditExport.ok,
+      detail: promotionEvidence.auditExport.detail,
     },
     {
       name: "report-delivery-alarms",
-      ok: false,
-      detail: "reporter lag, failed delivery, and retry-exhaustion alarms are not proven",
+      ok: promotionEvidence.deliveryAlarms.ok,
+      detail: promotionEvidence.deliveryAlarms.detail,
     },
     {
       name: "reporter-worker-liveness",
-      ok: false,
-      detail: "live reporter worker leases, drain, and rollback evidence are not proven",
+      ok: promotionEvidence.workerLiveness.ok,
+      detail: promotionEvidence.workerLiveness.detail,
     },
   ];
   const checks = [...metadataChecks, ...promotionChecks];
@@ -1253,12 +1310,155 @@ export function buildPostgresReportRuntimeReadiness(options: Pick<PostgresReport
       retryBackoffMetadata: true,
       artifactMetadataWriter: true,
       artifactObjectWriterContract: true,
-      artifactObjectWriter: false,
+      artifactObjectWriter: promotionEvidence.artifactObjectStore.ok,
       auditExportContract: true,
-      auditExport: false,
-      deliveryAlarms: false,
+      auditExport: promotionEvidence.auditExport.ok,
+      deliveryAlarms: promotionEvidence.deliveryAlarms.ok,
+      reporterWorkerLiveness: promotionEvidence.workerLiveness.ok,
     },
   };
+}
+
+function parseReporterPromotionEvidence(raw: string | null | undefined, workspaceId: string | null): {
+  artifactObjectStore: { ok: boolean; detail: string };
+  auditExport: { ok: boolean; detail: string };
+  deliveryAlarms: { ok: boolean; detail: string };
+  workerLiveness: { ok: boolean; detail: string };
+} {
+  const missing = {
+    artifactObjectStore: { ok: false, detail: "artifact object writer contract exists, but approved S3/object storage wiring, signing, IAM, and smoke evidence are not proven" },
+    auditExport: { ok: false, detail: "audit export contract exists, but approved Open Logs wiring and delivery smoke evidence are not proven" },
+    deliveryAlarms: { ok: false, detail: "reporter lag, failed delivery, and retry-exhaustion alarms are not proven" },
+    workerLiveness: { ok: false, detail: "live reporter worker leases, drain, and rollback evidence are not proven" },
+  };
+  if (!raw?.trim()) return missing;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return failPromotionEvidence("promotion evidence JSON could not be parsed");
+  }
+  const safety = sanitizeEvidenceInput(parsed, { source: "postgres-report-runtime-promotion-evidence" });
+  if (safety.unsafe) return failPromotionEvidence(`promotion evidence failed no-secret review; findings=${safety.summary.findings}`);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return failPromotionEvidence("promotion evidence must be a JSON object");
+  }
+  const evidence = parsed as Partial<PostgresReportRuntimePromotionEvidence> & Record<string, unknown>;
+  if (evidence.version !== "open-uptime.reporter-promotion-evidence.v1") {
+    return failPromotionEvidence("promotion evidence version must be open-uptime.reporter-promotion-evidence.v1");
+  }
+  if (evidence.redacted !== true) return failPromotionEvidence("promotion evidence must declare redacted=true");
+  if (evidence.workspaceId != null) {
+    if (typeof evidence.workspaceId !== "string") return failPromotionEvidence("promotion evidence workspaceId must be a string");
+    let evidenceWorkspaceId: string;
+    try {
+      evidenceWorkspaceId = normalizeWorkspaceId(evidence.workspaceId);
+    } catch {
+      return failPromotionEvidence("promotion evidence workspaceId must be a safe workspace id");
+    }
+    if (!workspaceId || evidenceWorkspaceId !== workspaceId) {
+      return failPromotionEvidence("promotion evidence workspaceId does not match the active workspace");
+    }
+  }
+  if (evidence.checkedAt != null) {
+    try {
+      normalizeIsoTimestamp(String(evidence.checkedAt), "promotion evidence checkedAt");
+    } catch {
+      return failPromotionEvidence("promotion evidence checkedAt must be an ISO timestamp");
+    }
+  }
+  if (!evidence.checks || typeof evidence.checks !== "object" || Array.isArray(evidence.checks)) {
+    return failPromotionEvidence("promotion evidence checks must be an object");
+  }
+  const checks = evidence.checks as PostgresReportRuntimePromotionEvidence["checks"];
+  return {
+    artifactObjectStore: artifactObjectStoreEvidenceResult(checks.artifactObjectStore),
+    auditExport: auditExportEvidenceResult(checks.auditExport),
+    deliveryAlarms: deliveryAlarmsEvidenceResult(checks.deliveryAlarms),
+    workerLiveness: workerLivenessEvidenceResult(checks.workerLiveness),
+  };
+}
+
+function failPromotionEvidence(detail: string): ReturnType<typeof parseReporterPromotionEvidence> {
+  const safeDetail = sanitizePromotionDetail(detail);
+  return {
+    artifactObjectStore: { ok: false, detail: safeDetail },
+    auditExport: { ok: false, detail: safeDetail },
+    deliveryAlarms: { ok: false, detail: safeDetail },
+    workerLiveness: { ok: false, detail: safeDetail },
+  };
+}
+
+function artifactObjectStoreEvidenceResult(value: PostgresReportRuntimeArtifactObjectStoreEvidence | undefined): { ok: boolean; detail: string } {
+  if (!value) return { ok: false, detail: "approved S3/object storage wiring evidence is missing" };
+  const ok = value.ok === true
+    && value.reviewed === true
+    && value.smokePassed === true
+    && value.encrypted === true
+    && value.redactedOnly === true
+    && value.workspaceScoped === true;
+  return {
+    ok,
+    detail: ok
+      ? sanitizePromotionDetail(value.detail ?? "approved redacted artifact object store smoke evidence is present")
+      : "artifact object store evidence must prove review, smoke, encryption, redacted-only writes, and workspace scoping",
+  };
+}
+
+function auditExportEvidenceResult(value: PostgresReportRuntimeAuditExportEvidence | undefined): { ok: boolean; detail: string } {
+  if (!value) return { ok: false, detail: "approved Open Logs audit export evidence is missing" };
+  const ok = value.ok === true
+    && value.reviewed === true
+    && value.smokePassed === true
+    && value.redactedOnly === true
+    && value.workspaceScoped === true
+    && value.service === "logs";
+  return {
+    ok,
+    detail: ok
+      ? sanitizePromotionDetail(value.detail ?? "approved redacted Open Logs audit export smoke evidence is present")
+      : "Open Logs audit export evidence must prove review, smoke, redacted-only payloads, workspace scoping, and service=logs",
+  };
+}
+
+function deliveryAlarmsEvidenceResult(value: PostgresReportRuntimeDeliveryAlarmsEvidence | undefined): { ok: boolean; detail: string } {
+  if (!value) return { ok: false, detail: "approved reporter delivery alarm evidence is missing" };
+  const ok = value.ok === true
+    && value.reviewed === true
+    && Number.isInteger(value.alarmCount)
+    && value.alarmCount >= 3
+    && value.actionsConfigured === true
+    && value.reporterMetricsReviewed === true;
+  return {
+    ok,
+    detail: ok
+      ? sanitizePromotionDetail(value.detail ?? `approved reporter delivery alarm evidence is present; alarmCount=${value.alarmCount}`)
+      : "reporter delivery alarm evidence must prove review, at least three alarms, configured actions, and reporter metric review",
+  };
+}
+
+function workerLivenessEvidenceResult(value: PostgresReportRuntimeWorkerLivenessEvidence | undefined): { ok: boolean; detail: string } {
+  if (!value) return { ok: false, detail: "live reporter worker liveness evidence is missing" };
+  const ok = value.ok === true
+    && value.reviewed === true
+    && Number.isInteger(value.sustainedRunSeconds)
+    && value.sustainedRunSeconds >= 300
+    && value.drainProven === true
+    && value.rollbackProven === true;
+  return {
+    ok,
+    detail: ok
+      ? sanitizePromotionDetail(value.detail ?? `approved reporter liveness, drain, and rollback evidence is present; sustainedRunSeconds=${value.sustainedRunSeconds}`)
+      : "reporter liveness evidence must prove review, at least 300 sustained seconds, deploy drain, and rollback",
+  };
+}
+
+function sanitizePromotionDetail(value: string): string {
+  const report = sanitizeEvidenceInput(value, { inputFormat: "text", source: "postgres-report-runtime-promotion-detail" });
+  if (report.unsafe) return "redacted promotion evidence detail";
+  return typeof report.sanitized === "string" && report.sanitized.trim()
+    ? report.sanitized.trim().slice(0, 500)
+    : "redacted promotion evidence detail";
 }
 
 export function deliveryAttemptIdempotencyKey(

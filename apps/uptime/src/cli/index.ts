@@ -2403,6 +2403,11 @@ function hostedReporterReadinessChecks(): Array<{ name: string; ok: boolean; det
       ok: reportRuntime.capabilities.deliveryAlarms,
       detail: runtimeCheck("report-delivery-alarms")?.detail ?? "reporter lag, failure, and retry-exhaustion alarms are not proven",
     },
+    {
+      name: "reporter-worker-liveness",
+      ok: reportRuntime.capabilities.reporterWorkerLiveness,
+      detail: runtimeCheck("reporter-worker-liveness")?.detail ?? "live reporter worker leases, drain, and rollback evidence are not proven",
+    },
   ];
 }
 

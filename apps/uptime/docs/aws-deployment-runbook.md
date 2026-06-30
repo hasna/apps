@@ -635,6 +635,59 @@ report run state machine, approved S3/object artifact storage wiring and smoke
 evidence, approved audit export wiring and smoke evidence, and delivery alarms
 are still blocked.
 
+`0.1.64` adds `HASNA_UPTIME_REPORTER_PROMOTION_EVIDENCE_JSON` as a redacted
+operator evidence input for reporter preflight. Use it only after private
+runbook evidence has already proven the exact object-store, Open Logs export,
+alarm, and liveness checks. The JSON is intentionally boolean/count based and
+must not contain bucket names, ARNs, URLs, account ids, recipients, token names,
+object keys, or provider payloads:
+
+```json
+{
+  "version": "open-uptime.reporter-promotion-evidence.v1",
+  "redacted": true,
+  "workspaceId": "<workspace-id>",
+  "checkedAt": "2026-06-30T01:00:00.000Z",
+  "checks": {
+    "artifactObjectStore": {
+      "ok": true,
+      "reviewed": true,
+      "smokePassed": true,
+      "encrypted": true,
+      "redactedOnly": true,
+      "workspaceScoped": true
+    },
+    "auditExport": {
+      "ok": true,
+      "reviewed": true,
+      "smokePassed": true,
+      "redactedOnly": true,
+      "workspaceScoped": true,
+      "service": "logs"
+    },
+    "deliveryAlarms": {
+      "ok": true,
+      "reviewed": true,
+      "alarmCount": 4,
+      "actionsConfigured": true,
+      "reporterMetricsReviewed": true
+    },
+    "workerLiveness": {
+      "ok": true,
+      "reviewed": true,
+      "sustainedRunSeconds": 300,
+      "drainProven": true,
+      "rollbackProven": true
+    }
+  }
+}
+```
+
+The preflight rejects unsafe evidence and keeps `canStart=false` while shared
+worker gates such as the service-store adapter, channel secret loading, worker
+lease ownership, and deploy drain remain incomplete. Do not use promotion
+evidence JSON to bypass those gates.
+
 Hosted report delivery must use the server-side channel-ref resolver, not the
 local direct `--mailery-url`, `--telephony-url`, recipient, or token flags. The
 report schedule/run must select explicit approved channel ids; the resolver must

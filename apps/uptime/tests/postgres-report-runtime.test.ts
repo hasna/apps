@@ -994,6 +994,147 @@ test("Postgres report runtime readiness can be marked ready only with schema evi
   expect(readiness.blockers.join("\n")).toContain("reporter-worker-liveness");
 });
 
+test("Postgres report runtime readiness accepts sanitized partial reporter promotion evidence", () => {
+  const readiness = buildPostgresReportRuntimeReadiness({
+    databaseUrl: "postgres://svc:secret@db.example.invalid/uptime?sslmode=require",
+    workspaceId: "ws_runtime",
+    schemaVerified: true,
+    promotionEvidenceJson: JSON.stringify({
+      version: "open-uptime.reporter-promotion-evidence.v1",
+      redacted: true,
+      workspaceId: "ws_runtime",
+      checkedAt: "2026-06-30T01:00:00.000Z",
+      checks: {
+        artifactObjectStore: {
+          ok: true,
+          reviewed: true,
+          smokePassed: true,
+          encrypted: true,
+          redactedOnly: true,
+          workspaceScoped: true,
+          detail: "object writer smoke passed with redacted payloads only",
+        },
+        auditExport: {
+          ok: true,
+          reviewed: true,
+          smokePassed: true,
+          redactedOnly: true,
+          workspaceScoped: true,
+          service: "logs",
+          detail: "Open Logs redacted audit export smoke passed",
+        },
+        deliveryAlarms: {
+          ok: true,
+          reviewed: true,
+          alarmCount: 4,
+          actionsConfigured: true,
+          reporterMetricsReviewed: true,
+        },
+      },
+    }),
+  });
+  const checks = Object.fromEntries(readiness.checks.map((check) => [check.name, check.ok]));
+
+  expect(readiness.status).toBe("blocked");
+  expect(readiness.canWriteReportMetadata).toBe(true);
+  expect(checks["report-artifact-object-store"]).toBe(true);
+  expect(checks["report-audit-export"]).toBe(true);
+  expect(checks["report-delivery-alarms"]).toBe(true);
+  expect(checks["reporter-worker-liveness"]).toBe(false);
+  expect(readiness.capabilities).toMatchObject({
+    artifactObjectWriter: true,
+    auditExport: true,
+    deliveryAlarms: true,
+    reporterWorkerLiveness: false,
+  });
+  expect(readiness.blockers.join("\n")).toContain("reporter-worker-liveness");
+});
+
+test("Postgres report runtime readiness rejects unsafe reporter promotion evidence without leaking it", () => {
+  const readiness = buildPostgresReportRuntimeReadiness({
+    databaseUrl: "postgres://svc:secret@db.example.invalid/uptime?sslmode=require",
+    workspaceId: "ws_runtime",
+    schemaVerified: true,
+    promotionEvidenceJson: JSON.stringify({
+      version: "open-uptime.reporter-promotion-evidence.v1",
+      redacted: true,
+      workspaceId: "ws_runtime",
+      checks: {
+        artifactObjectStore: {
+          ok: true,
+          reviewed: true,
+          smokePassed: true,
+          encrypted: true,
+          redactedOnly: true,
+          workspaceScoped: true,
+          detail: "wrote s3://private-bucket/report.json for ops@example.com",
+        },
+      },
+    }),
+  });
+  const serialized = JSON.stringify(readiness);
+
+  expect(readiness.capabilities.artifactObjectWriter).toBe(false);
+  expect(serialized).toContain("promotion evidence failed no-secret review");
+  expect(serialized).not.toContain("private-bucket");
+  expect(serialized).not.toContain("ops@example.com");
+  expect(serialized).not.toContain("s3://");
+});
+
+test("Postgres report runtime readiness becomes ready with full sanitized promotion evidence", () => {
+  const readiness = buildPostgresReportRuntimeReadiness({
+    databaseUrl: "postgres://svc:secret@db.example.invalid/uptime?sslmode=require",
+    workspaceId: "ws_runtime",
+    schemaVerified: true,
+    promotionEvidenceJson: JSON.stringify({
+      version: "open-uptime.reporter-promotion-evidence.v1",
+      redacted: true,
+      workspaceId: "ws_runtime",
+      checks: {
+        artifactObjectStore: {
+          ok: true,
+          reviewed: true,
+          smokePassed: true,
+          encrypted: true,
+          redactedOnly: true,
+          workspaceScoped: true,
+        },
+        auditExport: {
+          ok: true,
+          reviewed: true,
+          smokePassed: true,
+          redactedOnly: true,
+          workspaceScoped: true,
+          service: "logs",
+        },
+        deliveryAlarms: {
+          ok: true,
+          reviewed: true,
+          alarmCount: 4,
+          actionsConfigured: true,
+          reporterMetricsReviewed: true,
+        },
+        workerLiveness: {
+          ok: true,
+          reviewed: true,
+          sustainedRunSeconds: 300,
+          drainProven: true,
+          rollbackProven: true,
+        },
+      },
+    }),
+  });
+
+  expect(readiness.status).toBe("ready");
+  expect(readiness.blockers).toEqual([]);
+  expect(readiness.capabilities).toMatchObject({
+    artifactObjectWriter: true,
+    auditExport: true,
+    deliveryAlarms: true,
+    reporterWorkerLiveness: true,
+  });
+});
+
 test("Postgres report runtime honors custom workspace setting and rejects unsafe hosted construction", async () => {
   const client = new FakeReportClient();
   const runtime = createPostgresReportRuntime({

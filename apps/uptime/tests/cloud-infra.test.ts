@@ -328,8 +328,10 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(tfvars).not.toContain("rds_security_group_id");
   expect(tfvars).toContain('"public-probe" = 0');
   expect(tfvars).not.toContain("public_probe = 0");
-  expect(packageJson.files).not.toContain("docs/*.md");
-  expect(packageJson.files).not.toContain("docs/*.json");
+  expect(packageJson.files).toContain("docs/*.md");
+  expect(packageJson.files).toContain("docs/*.json");
+  expect(awsRunbook).toContain("HASNA_UPTIME_REPORTER_PROMOTION_EVIDENCE_JSON");
+  expect(awsRunbook).toContain("open-uptime.reporter-promotion-evidence.v1");
   expect(packageJson.files).toContain("infra/aws/*.tf");
   expect(packageJson.files).toContain("bun.lock");
   expect(deploymentMetadataExample).not.toContain("private-account-label");
