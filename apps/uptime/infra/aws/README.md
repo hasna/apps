@@ -58,6 +58,12 @@ bound to one distribution. Before enabling the web task, set
 module then configures CloudFront to send that header, makes the ALB default
 action return `403`, and forwards only requests with the matching header on the
 selected HTTP or HTTPS origin listener.
+Because the value is stored in Terraform state and AWS edge/origin
+configuration, enabling or rotating it requires `live_ops_backend_state_hardened
+= true` or an explicit zero-count exception via
+`allow_origin_verify_header_before_backend_state_hardened = true`. That
+exception is only for reviewed setup or rotation while web desired count remains
+`0`; it is not live-traffic readiness.
 Terraform marks the value sensitive, but it still lives in encrypted Terraform
 state and in CloudFront/ALB configuration; restrict state, saved plan,
 CloudFront distribution-read, and ELB listener-rule-read access accordingly.

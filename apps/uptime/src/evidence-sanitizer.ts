@@ -325,9 +325,22 @@ function sanitizeSource(source: string | null, findings: EvidenceSanitizerFindin
 }
 
 function isSensitivePath(path: string): boolean {
-  const leaf = path.split(".").pop() ?? path;
-  return /(secret|token|password|passwd|pwd|credential|private[_-]?key|bearer|jwt|signature|cloudfront.*header.*value)/i.test(leaf)
+  const leaf = (path.split(".").pop() ?? path).replace(/\[\d+\]$/g, "");
+  return (
+    /(secret|token|password|passwd|pwd|credential|private[_-]?key|bearer|jwt|signature|cloudfront.*header.*value)/i.test(leaf)
+    || isAwsOriginHeaderValuePath(path, leaf)
+  )
     && !/(public[_-]?key|keyCount|idempotencyKey|integrity|shasum|fingerprint|envName)/i.test(leaf);
+}
+
+function isAwsOriginHeaderValuePath(path: string, leaf: string): boolean {
+  const normalized = path.toLowerCase();
+  const normalizedLeaf = leaf.toLowerCase();
+  const isValueLeaf = normalizedLeaf === "value" || normalizedLeaf === "values" || normalizedLeaf === "headervalue";
+  if (!isValueLeaf) return false;
+  return /customheaders|custom_header/.test(normalized)
+    || /httpheaderconfig|http_header/.test(normalized)
+    || /origin.*header/.test(normalized);
 }
 
 function isAllowedSensitiveValue(value: string): boolean {

@@ -119,6 +119,8 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(main).toContain("transit_encryption = \"ENABLED\"");
   expect(variables).toContain("EFS SQLite bridge requires web desired count 0 or 1");
   expect(variables).toContain("allow_cloudfront_http_origin_live_traffic");
+  expect(variables).toContain("allow_origin_verify_header_before_backend_state_hardened");
+  expect(variables).toContain("explicit zero-count rotation exception");
   expect(variables).toContain("web desired count above 0 in cloudfront_default_domain mode requires enable_cloudfront_origin_verify_header=true");
   expect(variables).toContain("web desired count above 0 requires CloudFront HTTPS-origin mode");
   expect(variables).toContain("live_ops_backend_state_hardened");
@@ -271,6 +273,7 @@ test("AWS infra templates use secret refs and keep services scaled down by defau
   expect(tfvars).toContain("enable_cloudfront_origin_verify_header");
   expect(tfvars).toContain("cloudfront_origin_verify_header_name");
   expect(tfvars).toContain("cloudfront_origin_verify_header_value  = null");
+  expect(tfvars).toContain("allow_origin_verify_header_before_backend_state_hardened = false");
   expect(tfvars).toContain('container_image          = "<ecr-image-uri-or-digest>"');
   expect(tfvars).toContain(`runtime_package_version   = "${packageJson.version}"`);
   expect(tfvars).toContain("runtime_package_integrity = null");

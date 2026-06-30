@@ -6,6 +6,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.63] - 2026-06-30
+
+### Added
+
+- Added sanitizer coverage for CloudFront and ALB origin verification header
+  values when they appear in AWS-shaped evidence fields such as `HeaderValue`
+  and `HttpHeaderConfig.Values`.
+- Added `allow_origin_verify_header_before_backend_state_hardened` to make
+  pre-hardening origin-header setup or rotation an explicit zero-count exception
+  instead of an implicit operator action.
+
+### Changed
+
+- Updated protected-access runbook guidance to treat origin-header rotations,
+  Terraform plan JSON, CloudFront distribution reads, and ALB listener-rule
+  reads as secret-bearing operator artifacts even when summaries are sanitized.
+
 ## [0.1.62] - 2026-06-30
 
 ### Added

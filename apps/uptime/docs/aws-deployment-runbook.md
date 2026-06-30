@@ -213,6 +213,10 @@ Before setting `desired_counts.web = 1`, verify:
 - CloudFront origin access is distribution-bound with the CloudFront-only origin
   verification header by setting `enable_cloudfront_origin_verify_header = true`,
   not just narrowed to CloudFront origin-facing ranges;
+- origin-header creation or rotation is blocked unless
+  `live_ops_backend_state_hardened = true`, or an explicit
+  `allow_origin_verify_header_before_backend_state_hardened = true` exception is
+  recorded for a zero-count setup/rotation window;
 - web egress to ECR, Secrets Manager or SSM, CloudWatch Logs, S3, EFS, and any
   required endpoints has been proven from a real ECS task. Terraform endpoint
   ids, route tables, and security-group rules are creation evidence only; the
@@ -288,6 +292,10 @@ CloudFront/ELB read that can reveal custom headers as secret-bearing. If a
 reviewer must inspect the rule condition directly, do it in a private shell and
 record only sanitized facts: header configured, listener protocol, rule count or
 priority presence, and that requests without the header return `403`.
+The shared evidence sanitizer redacts AWS-shaped custom-header fields such as
+CloudFront `HeaderValue` and ALB `HttpHeaderConfig.Values`, but private
+distribution/rule reads and Terraform plan JSON still remain secret-bearing
+operator artifacts and must not be pasted into shared channels.
 
 ## Smoke Checks
 

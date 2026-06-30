@@ -129,15 +129,17 @@ Job lease semantics:
 - deploy drain pauses new claims and lets in-flight leases expire or finish;
 - alarms fire for stale leases and backlog.
 
-Current implementation note: `@hasna/uptime@0.1.62` implements the deterministic
+Current implementation note: `@hasna/uptime@0.1.63` implements the deterministic
 job key, probe policy hash, class/location claim checks, same-probe claim retry
 idempotency, nonce payload conflict rejection in the local SQLite probe
 scaffold, service-owned report channel-ref catalog validation for hosted
 reporter preflight, a read-only Postgres private-probe identity preflight, and
 mandatory `hosted-public` target-policy enforcement for Postgres monitor
 upserts. It also includes SDK/CLI shared-evidence sanitization for rollout
-artifacts plus callback contracts for redacted report artifact object writes
-and sanitizer-safe Open Logs audit export payloads. Enabled Postgres
+artifacts, AWS-shaped origin-header value redaction, an explicit zero-count
+origin-header rotation exception gate, plus callback contracts for redacted
+report artifact object writes and sanitizer-safe Open Logs audit export
+payloads. Enabled Postgres
 `browser_page` rows remain blocked until browser evidence workers are configured,
 and private targets still require future
 inventory-backed provenance. Sanitized evidence is not live-readiness proof.

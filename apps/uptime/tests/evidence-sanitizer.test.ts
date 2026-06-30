@@ -85,6 +85,48 @@ test("evidence sanitizer redacts nested cloud, recipient, path, and secret-shape
   expect(renderEvidenceSanitizerReport(report)).toContain("blocked shared-evidence values");
 });
 
+test("evidence sanitizer redacts AWS origin-header values in config-shaped evidence", () => {
+  const cloudfrontHeader = "cf-origin-secret-abcdefghijklmnopqrstuvwxyz0123456789";
+  const albHeader = "alb-origin-secret-abcdefghijklmnopqrstuvwxyz0123456789";
+  const report = sanitizeEvidenceInput({
+    DistributionConfig: {
+      Origins: {
+        Items: [
+          {
+            CustomHeaders: {
+              Items: [
+                {
+                  HeaderName: "X-Open-Uptime-Origin-Verify",
+                  HeaderValue: cloudfrontHeader,
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+    Rules: [
+      {
+        Conditions: [
+          {
+            Field: "http-header",
+            HttpHeaderConfig: {
+              HttpHeaderName: "X-Open-Uptime-Origin-Verify",
+              Values: [albHeader],
+            },
+          },
+        ],
+      },
+    ],
+  });
+
+  const serialized = JSON.stringify(report);
+  expect(report.unsafe).toBe(true);
+  expect(serialized).not.toContain(cloudfrontHeader);
+  expect(serialized).not.toContain(albHeader);
+  expect(report.findings.map((finding) => finding.kind)).toContain("sensitive-field-value");
+});
+
 test("evidence sanitizer parses input formats without echoing invalid JSON", () => {
   expect(parseEvidenceInput("{\"ok\":true}", "auto")).toEqual({ value: { ok: true }, format: "json" });
   expect(parseEvidenceInput("plain evidence text", "auto")).toEqual({ value: "plain evidence text", format: "text" });

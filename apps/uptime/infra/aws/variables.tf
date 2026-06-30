@@ -136,6 +136,21 @@ variable "enable_cloudfront_origin_verify_header" {
     condition     = !var.enable_cloudfront_origin_verify_header || var.protected_access_mode == "cloudfront_default_domain"
     error_message = "enable_cloudfront_origin_verify_header can only be true when protected_access_mode is cloudfront_default_domain."
   }
+
+  validation {
+    condition = (
+      !var.enable_cloudfront_origin_verify_header
+      || var.live_ops_backend_state_hardened
+      || var.allow_origin_verify_header_before_backend_state_hardened
+    )
+    error_message = "enable_cloudfront_origin_verify_header requires live_ops_backend_state_hardened=true, or allow_origin_verify_header_before_backend_state_hardened=true for an explicit zero-count rotation exception."
+  }
+}
+
+variable "allow_origin_verify_header_before_backend_state_hardened" {
+  description = "Explicit zero-count exception for creating or rotating the secret-bearing CloudFront origin verification header before live_ops_backend_state_hardened is true. Keep false for live traffic."
+  type        = bool
+  default     = false
 }
 
 variable "cloudfront_origin_verify_header_name" {
@@ -243,7 +258,7 @@ variable "container_image" {
 variable "runtime_package_version" {
   description = "Published @hasna/uptime package version that CodeBuild should build into the ECR image."
   type        = string
-  default     = "0.1.62"
+  default     = "0.1.63"
 
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$", var.runtime_package_version))
