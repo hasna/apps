@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@hasnaxyz/styles",
+      "name": "@hasna/styles",
       "dependencies": {
         "@hasna/events": "^0.1.6",
         "@modelcontextprotocol/sdk": "^1.26.0",

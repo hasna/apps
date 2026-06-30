@@ -1,6 +1,6 @@
 {
   "name": "@hasna/styles",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "Style management platform for AI coding agents — profiles, preferences, health checks, and design system enforcement",
   "type": "module",
   "bin": {
@@ -29,7 +29,7 @@
     "dev": "bun run ./src/cli/index.tsx",
     "dev:mcp": "bun --watch run ./src/mcp/index.ts",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "bun run build",
+    "prepublishOnly": "bun run typecheck && bun run test && bun run build",
     "postinstall": "mkdir -p $HOME/.hasna/styles 2>/dev/null || true",
     "dashboard:dev": "cd dashboard && bun run dev",
     "dashboard:build": "cd dashboard && bun install && bun run build",
