@@ -2,9 +2,20 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createApiHandler, serveUptime } from "../src/api.js";
+import { createApiHandler, serveUptime, type HostedPostgresMonitorRuntime } from "../src/api.js";
 import { generateProbeKeyPair, signProbeResult, type ProbeSigningInput } from "../src/probes.js";
 import { UptimeService } from "../src/service.js";
+import type {
+  PostgresAuditEventRecord,
+  PostgresMonitorMutationAuditInput,
+  PostgresMonitorMutationResult,
+  PostgresMonitorTombstoneResult,
+  PostgresMonitorRecord,
+  PostgresSyncTombstoneRecord,
+  RecordPostgresAuditEventInput,
+  TombstonePostgresResourceInput,
+  UpsertPostgresMonitorInput,
+} from "../src/postgres-runtime.js";
 
 const cleanup: string[] = [];
 const HOSTED_SECRET_TOKEN_JSON = JSON.stringify({
@@ -27,6 +38,153 @@ function jsonRequest(url: string, method: string, body: unknown, headers: Record
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
+}
+
+class FakeHostedPostgresMonitorRuntime implements HostedPostgresMonitorRuntime {
+  readonly monitors = new Map<string, PostgresMonitorRecord>();
+  readonly audits: RecordPostgresAuditEventInput[] = [];
+  readonly tombstones: TombstonePostgresResourceInput[] = [];
+  readonly upserts: UpsertPostgresMonitorInput[] = [];
+  readonly listCalls: Array<{ workspaceId?: string; includeDisabled?: boolean; limit?: number; offset?: number }> = [];
+  failListError: Error | null = null;
+  private sequence = 0;
+
+  async upsertMonitor(input: UpsertPostgresMonitorInput): Promise<PostgresMonitorRecord> {
+    this.upserts.push(input);
+    const workspaceId = input.workspaceId ?? "default";
+    const id = input.id ?? `mon_${++this.sequence}`;
+    const key = `${workspaceId}:${id}`;
+    const existing = this.monitors.get(key);
+    if (existing?.idempotencyKey && input.idempotencyKey) {
+      throw new Error("monitor idempotency conflict");
+    }
+    const now = new Date(0).toISOString();
+    const enabled = input.enabled ?? existing?.enabled ?? true;
+    const monitor: PostgresMonitorRecord = {
+      workspaceId,
+      id,
+      name: input.name.trim(),
+      kind: input.kind,
+      url: input.url === undefined ? existing?.url ?? null : input.url == null || input.url === "" ? null : input.url.trim(),
+      host: input.host === undefined ? existing?.host ?? null : input.host == null || input.host === "" ? null : input.host.trim(),
+      port: input.port === undefined ? existing?.port ?? null : input.port,
+      method: (input.method ?? existing?.method ?? "GET").trim().toUpperCase(),
+      expectedStatus: input.expectedStatus === undefined ? existing?.expectedStatus ?? null : input.expectedStatus,
+      intervalSeconds: input.intervalSeconds ?? existing?.intervalSeconds ?? 60,
+      timeoutMs: input.timeoutMs ?? existing?.timeoutMs ?? 5000,
+      retryCount: input.retryCount ?? existing?.retryCount ?? 0,
+      enabled,
+      status: input.status ?? (enabled ? existing?.status ?? "unknown" : "paused"),
+      lastCheckedAt: input.lastCheckedAt === undefined ? existing?.lastCheckedAt ?? null : input.lastCheckedAt,
+      revision: (existing?.revision ?? 0) + 1,
+      actor: input.actor ?? null,
+      origin: input.origin ?? null,
+      idempotencyKey: input.idempotencyKey === undefined ? existing?.idempotencyKey ?? null : input.idempotencyKey,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      deletedAt: null,
+    };
+    this.monitors.set(key, monitor);
+    return monitor;
+  }
+
+  async upsertMonitorWithAudit(input: UpsertPostgresMonitorInput, audit: PostgresMonitorMutationAuditInput): Promise<PostgresMonitorMutationResult> {
+    const monitor = await this.upsertMonitor(input);
+    return {
+      monitor,
+      audit: await this.recordAuditEvent({
+        ...audit,
+        workspaceId: input.workspaceId ?? audit.workspaceId,
+        resourceType: "monitor",
+        resourceId: audit.resourceId ?? monitor.id,
+        metadata: {
+          ...(audit.metadata ?? {}),
+          monitorName: monitor.name,
+          monitorKind: monitor.kind,
+          monitorEnabled: monitor.enabled,
+          monitorRevision: monitor.revision,
+          workspaceId: monitor.workspaceId,
+        },
+      }),
+    };
+  }
+
+  async listMonitors(options: { workspaceId?: string; includeDisabled?: boolean; limit?: number; offset?: number } = {}): Promise<PostgresMonitorRecord[]> {
+    if (this.failListError) throw this.failListError;
+    this.listCalls.push(options);
+    const limit = Math.min(options.limit ?? 250, 500);
+    const offset = options.offset ?? 0;
+    return [...this.monitors.values()]
+      .filter((monitor) => monitor.workspaceId === (options.workspaceId ?? "default"))
+      .filter((monitor) => !monitor.deletedAt)
+      .filter((monitor) => options.includeDisabled === true || monitor.enabled)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
+      .slice(offset, offset + limit);
+  }
+
+  async getMonitor(input: { workspaceId?: string; id: string }): Promise<PostgresMonitorRecord | null> {
+    const monitor = this.monitors.get(`${input.workspaceId ?? "default"}:${input.id}`);
+    return monitor && !monitor.deletedAt ? monitor : null;
+  }
+
+  async tombstoneResource(input: TombstonePostgresResourceInput & { resourceType: "monitor" }): Promise<PostgresSyncTombstoneRecord> {
+    this.tombstones.push(input);
+    const workspaceId = input.workspaceId ?? "default";
+    const key = `${workspaceId}:${input.resourceId}`;
+    const existing = this.monitors.get(key);
+    const deletedAt = input.deletedAt ?? new Date(0).toISOString();
+    if (existing) {
+      this.monitors.set(key, {
+        ...existing,
+        enabled: false,
+        deletedAt,
+        revision: input.version ?? existing.revision + 1,
+        idempotencyKey: input.idempotencyKey === undefined || input.idempotencyKey === null ? existing.idempotencyKey : input.idempotencyKey,
+      });
+    }
+    return {
+      workspaceId,
+      resourceType: "monitor",
+      resourceId: input.resourceId,
+      deletedAt,
+      version: input.version ?? 1,
+      actor: input.actor ?? null,
+      origin: input.origin ?? null,
+      idempotencyKey: input.idempotencyKey ?? null,
+      metadata: input.metadata ?? {},
+    };
+  }
+
+  async tombstoneMonitorWithAudit(input: TombstonePostgresResourceInput & { resourceType: "monitor" }, audit: PostgresMonitorMutationAuditInput): Promise<PostgresMonitorTombstoneResult> {
+    const tombstone = await this.tombstoneResource(input);
+    return {
+      tombstone,
+      audit: await this.recordAuditEvent({
+        ...audit,
+        workspaceId: input.workspaceId ?? audit.workspaceId,
+        action: "monitor.delete",
+        resourceType: "monitor",
+        resourceId: input.resourceId,
+      }),
+    };
+  }
+
+  async recordAuditEvent(input: RecordPostgresAuditEventInput): Promise<PostgresAuditEventRecord> {
+    this.audits.push(input);
+    return {
+      workspaceId: input.workspaceId ?? "default",
+      id: `aud_${this.audits.length}`,
+      action: input.action,
+      resourceType: input.resourceType ?? null,
+      resourceId: input.resourceId ?? null,
+      message: input.message ?? null,
+      metadata: input.metadata ?? {},
+      actor: input.actor ?? null,
+      origin: input.origin ?? null,
+      idempotencyKey: input.idempotencyKey ?? null,
+      createdAt: input.createdAt ?? new Date(0).toISOString(),
+    };
+  }
 }
 
 test("API creates monitors and returns summary", async () => {
@@ -300,6 +458,317 @@ test("hosted API audits monitor mutations with workspace and actor", async () =>
   expect(events.every((event) => event.actor === "operator-a")).toBe(true);
   expect(service.listAuditEvents({ workspaceId: "ws_b" })).toHaveLength(0);
   service.close();
+});
+
+test("hosted API can route monitor control plane to Postgres without SQLite fallback", async () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const postgresRuntime = new FakeHostedPostgresMonitorRuntime();
+  const handler = createApiHandler(service, {
+    mode: "hosted",
+    hostedPostgresRuntime: postgresRuntime,
+    hostedTokens: [
+      { token: "read-a", scopes: ["uptime:read"], workspaceId: "ws_a", actor: "reader-a" },
+      { token: "write-a", scopes: ["uptime:write"], workspaceId: "ws_a", actor: "operator-a" },
+      { token: "read-b", scopes: ["uptime:read"], workspaceId: "ws_b", actor: "reader-b" },
+      { token: "write-b", scopes: ["uptime:write"], workspaceId: "ws_b", actor: "operator-b" },
+    ],
+  });
+
+  const createA = await handler(jsonRequest(
+    "https://uptime.test/api/v1/monitors",
+    "POST",
+    {
+      workspaceId: "ws_body_should_be_ignored",
+      name: "postgres-a",
+      kind: "http",
+      url: "https://a.example.com",
+      status: "down",
+      lastCheckedAt: "2026-01-01T00:00:00.000Z",
+    },
+    { origin: "https://uptime.test", authorization: "Bearer write-a", "idempotency-key": "create-a" },
+  ));
+  const monitorA = await createA.clone().json();
+  const createB = await handler(jsonRequest(
+    "https://uptime.test/api/v1/monitors",
+    "POST",
+    { name: "postgres-b", kind: "http", url: "https://b.example.com" },
+    { origin: "https://uptime.test", authorization: "Bearer write-b" },
+  ));
+  const summaryA = await handler(new Request("https://uptime.test/api/v1/summary", {
+    headers: { authorization: "Bearer read-a" },
+  }));
+  const monitorsA = await handler(new Request("https://uptime.test/api/v1/monitors", {
+    headers: { authorization: "Bearer read-a" },
+  }));
+  const crossWorkspaceGet = await handler(new Request(`https://uptime.test/api/v1/monitors/${monitorA.id}`, {
+    headers: { authorization: "Bearer read-b" },
+  }));
+  const updateA = await handler(jsonRequest(
+    `https://uptime.test/api/v1/monitors/${monitorA.id}`,
+    "PATCH",
+    {
+      workspaceId: "ws_body_should_be_ignored",
+      expectedStatus: 204,
+      status: "down",
+      lastCheckedAt: "2026-01-01T00:00:00.000Z",
+    },
+    { origin: "https://uptime.test", authorization: "Bearer write-a", "idempotency-key": "update-a" },
+  ));
+  const updatedA = await updateA.json();
+  const removeA = await handler(new Request(`https://uptime.test/api/v1/monitors/${monitorA.id}`, {
+    method: "DELETE",
+    headers: { origin: "https://uptime.test", authorization: "Bearer write-a", "idempotency-key": "delete-a" },
+  }));
+  const afterDelete = await handler(new Request("https://uptime.test/api/v1/monitors?includeDisabled=true", {
+    headers: { authorization: "Bearer read-a" },
+  }));
+
+  expect(createA.status).toBe(201);
+  expect(createB.status).toBe(201);
+  expect((await summaryA.json()).totals.monitors).toBe(1);
+  expect(await monitorsA.json()).toMatchObject([{ name: "postgres-a", workspaceId: "ws_a" }]);
+  expect(crossWorkspaceGet.status).toBe(404);
+  expect(updatedA).toMatchObject({ expectedStatus: 204, status: "unknown", lastCheckedAt: null });
+  expect(await removeA.json()).toEqual({ deleted: true });
+  expect(await afterDelete.json()).toEqual([]);
+  expect(service.summary({ workspaceId: "ws_a" }).totals.monitors).toBe(0);
+  expect(postgresRuntime.upserts[0]).toMatchObject({
+    workspaceId: "ws_a",
+    actor: "operator-a",
+    origin: "hosted-api",
+    idempotencyKey: "create-a",
+  });
+  expect(postgresRuntime.upserts[0]).not.toHaveProperty("status");
+  expect(postgresRuntime.upserts[0]).not.toHaveProperty("lastCheckedAt");
+  expect(postgresRuntime.upserts[1]).toMatchObject({
+    workspaceId: "ws_b",
+    actor: "operator-b",
+    origin: "hosted-api",
+  });
+  expect(postgresRuntime.upserts[2]).toMatchObject({
+    workspaceId: "ws_a",
+    actor: "operator-a",
+    origin: "hosted-api",
+    status: "unknown",
+    lastCheckedAt: null,
+  });
+  expect(postgresRuntime.upserts[2]).not.toHaveProperty("idempotencyKey");
+  expect(postgresRuntime.audits.map((audit) => audit.action)).toEqual(["monitor.create", "monitor.create", "monitor.update", "monitor.delete"]);
+  expect(postgresRuntime.audits.map((audit) => audit.idempotencyKey ?? null)).toEqual(["create-a", null, "update-a", "delete-a"]);
+  expect(postgresRuntime.audits.every((audit) => audit.workspaceId === "ws_a" || audit.workspaceId === "ws_b")).toBe(true);
+  expect(postgresRuntime.tombstones[0]).toMatchObject({
+    workspaceId: "ws_a",
+    resourceType: "monitor",
+    resourceId: monitorA.id,
+    actor: "operator-a",
+    origin: "hosted-api",
+    idempotencyKey: "delete-a",
+  });
+  service.close();
+});
+
+test("hosted Postgres monitor create replays idempotency keys without mutating", async () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const postgresRuntime = new FakeHostedPostgresMonitorRuntime();
+  const handler = createApiHandler(service, {
+    mode: "hosted",
+    hostedPostgresRuntime: postgresRuntime,
+    hostedTokens: [{ token: "write-a", scopes: ["uptime:write"], workspaceId: "ws_a", actor: "operator-a" }],
+  });
+  const body = { name: " idempotent ", kind: "http", url: " https://example.com/health ", method: "get", enabled: true };
+
+  const first = await handler(jsonRequest(
+    "https://uptime.test/api/v1/monitors",
+    "POST",
+    body,
+    { origin: "https://uptime.test", authorization: "Bearer write-a", "idempotency-key": "stable-create" },
+  ));
+  const firstBody = await first.clone().json();
+  const replay = await handler(jsonRequest(
+    "https://uptime.test/api/v1/monitors",
+    "POST",
+    body,
+    { origin: "https://uptime.test", authorization: "Bearer write-a", "idempotency-key": "stable-create" },
+  ));
+  const replayBody = await replay.json();
+  const patch = await handler(jsonRequest(
+    `https://uptime.test/api/v1/monitors/${firstBody.id}`,
+    "PATCH",
+    { expectedStatus: 204 },
+    { origin: "https://uptime.test", authorization: "Bearer write-a", "idempotency-key": "update-key" },
+  ));
+  const conflict = await handler(jsonRequest(
+    "https://uptime.test/api/v1/monitors",
+    "POST",
+    { ...body, url: "https://example.com/other" },
+    { origin: "https://uptime.test", authorization: "Bearer write-a", "idempotency-key": "stable-create" },
+  ));
+  const conflictBody = await conflict.json();
+
+  expect(first.status).toBe(201);
+  expect(replay.status).toBe(201);
+  expect(replayBody).toEqual(firstBody);
+  expect(patch.status).toBe(200);
+  expect(conflict.status).toBe(409);
+  expect(conflictBody.error).toBe("idempotency key conflict");
+  expect(postgresRuntime.upserts).toHaveLength(2);
+  expect(postgresRuntime.audits).toHaveLength(2);
+  expect(postgresRuntime.upserts[0]).toMatchObject({ idempotencyKey: "stable-create" });
+  expect(postgresRuntime.upserts[1]).not.toHaveProperty("idempotencyKey");
+  await expect(postgresRuntime.getMonitor({ workspaceId: "ws_a", id: firstBody.id })).resolves.toMatchObject({
+    idempotencyKey: "stable-create",
+    expectedStatus: 204,
+  });
+  service.close();
+});
+
+test("hosted Postgres create idempotency does not resurrect keyless deletes", async () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const postgresRuntime = new FakeHostedPostgresMonitorRuntime();
+  const handler = createApiHandler(service, {
+    mode: "hosted",
+    hostedPostgresRuntime: postgresRuntime,
+    hostedTokens: [{ token: "write-a", scopes: ["uptime:write"], workspaceId: "ws_a", actor: "operator-a" }],
+  });
+  const body = { name: "deleted-replay", kind: "http", url: "https://example.com/deleted" };
+
+  const create = await handler(jsonRequest(
+    "https://uptime.test/api/v1/monitors",
+    "POST",
+    body,
+    { origin: "https://uptime.test", authorization: "Bearer write-a", "idempotency-key": "create-before-delete" },
+  ));
+  const monitor = await create.clone().json();
+  const remove = await handler(new Request(`https://uptime.test/api/v1/monitors/${monitor.id}`, {
+    method: "DELETE",
+    headers: { origin: "https://uptime.test", authorization: "Bearer write-a" },
+  }));
+  const staleReplay = await handler(jsonRequest(
+    "https://uptime.test/api/v1/monitors",
+    "POST",
+    body,
+    { origin: "https://uptime.test", authorization: "Bearer write-a", "idempotency-key": "create-before-delete" },
+  ));
+  const staleReplayBody = await staleReplay.json();
+  const stored = postgresRuntime.monitors.get(`ws_a:${monitor.id}`);
+
+  expect(create.status).toBe(201);
+  expect(remove.status).toBe(200);
+  expect(staleReplay.status).toBe(409);
+  expect(staleReplayBody.error).toBe("idempotency key conflict");
+  expect(await postgresRuntime.getMonitor({ workspaceId: "ws_a", id: monitor.id })).toBeNull();
+  expect(stored).toMatchObject({
+    idempotencyKey: "create-before-delete",
+    deletedAt: "1970-01-01T00:00:00.000Z",
+  });
+  expect(postgresRuntime.audits.map((audit) => audit.action)).toEqual(["monitor.create", "monitor.delete"]);
+  service.close();
+});
+
+test("hosted Postgres summary paginates past the monitor list safety clamp", async () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const postgresRuntime = new FakeHostedPostgresMonitorRuntime();
+  const handler = createApiHandler(service, {
+    mode: "hosted",
+    hostedPostgresRuntime: postgresRuntime,
+    hostedTokens: [{ token: "read-a", scopes: ["uptime:read"], workspaceId: "ws_a" }],
+  });
+
+  for (let index = 0; index < 501; index++) {
+    await postgresRuntime.upsertMonitor({
+      workspaceId: "ws_a",
+      id: `mon_${String(index).padStart(4, "0")}`,
+      name: `monitor-${index}`,
+      kind: "http",
+      url: `https://example.com/${index}`,
+      enabled: index % 2 === 0,
+    });
+  }
+
+  const response = await handler(new Request("https://uptime.test/api/v1/summary", {
+    headers: { authorization: "Bearer read-a" },
+  }));
+  const body = await response.json();
+
+  expect(response.status).toBe(200);
+  expect(body.monitors).toHaveLength(501);
+  expect(body.totals).toMatchObject({
+    monitors: 501,
+    enabled: 251,
+    paused: 250,
+    unknown: 251,
+  });
+  expect(postgresRuntime.listCalls).toHaveLength(2);
+  expect(postgresRuntime.listCalls[0]).toMatchObject({ workspaceId: "ws_a", includeDisabled: true, limit: 500 });
+  expect(postgresRuntime.listCalls[0]?.offset).toBe(0);
+  expect(postgresRuntime.listCalls[1]).toMatchObject({ workspaceId: "ws_a", includeDisabled: true, limit: 500, offset: 500 });
+  service.close();
+});
+
+test("hosted Postgres adapter blocks non-migrated reads and redacts runtime errors", async () => {
+  const service = new UptimeService({ dbPath: tempDb(), mode: "hosted", allowHostedLocalStore: true });
+  const postgresRuntime = new FakeHostedPostgresMonitorRuntime();
+  const handler = createApiHandler(service, {
+    mode: "hosted",
+    hostedPostgresRuntime: postgresRuntime,
+    hostedTokens: [
+      { token: "read-a", scopes: ["uptime:read"], workspaceId: "ws_a" },
+      { token: "write-a", scopes: ["uptime:write"], workspaceId: "ws_a" },
+    ],
+  });
+
+  try {
+    const report = await handler(new Request("https://uptime.test/api/v1/report", {
+      headers: { authorization: "Bearer read-a" },
+    }));
+    const results = await handler(new Request("https://uptime.test/api/v1/results", {
+      headers: { authorization: "Bearer read-a" },
+    }));
+    const incidents = await handler(new Request("https://uptime.test/api/v1/incidents", {
+      headers: { authorization: "Bearer read-a" },
+    }));
+    const importPreview = await handler(jsonRequest(
+      "https://uptime.test/api/v1/imports/preview",
+      "POST",
+      { source: "manual", records: [] },
+      { origin: "https://uptime.test", authorization: "Bearer write-a" },
+    ));
+
+    expect(report.status).toBe(501);
+    expect(results.status).toBe(501);
+    expect(incidents.status).toBe(501);
+    expect(importPreview.status).toBe(501);
+
+    postgresRuntime.failListError = new Error(
+      "SELECT * FROM private_table failed for postgres://svc:super-secret@db.example.invalid/uptime?sslmode=require&token=raw Authorization: Bearer raw-token arn:aws:iam::123456789012:role/private",
+    );
+    const failed = await handler(new Request("https://uptime.test/api/v1/monitors", {
+      headers: { authorization: "Bearer read-a" },
+    }));
+    const body = await failed.json();
+
+    expect(failed.status).toBe(400);
+    expect(body.error).toBe("database operation failed");
+    expect(JSON.stringify(body)).not.toContain("super-secret");
+    expect(JSON.stringify(body)).not.toContain("raw-token");
+    expect(JSON.stringify(body)).not.toContain("123456789012");
+    expect(JSON.stringify(body)).not.toContain("private_table");
+
+    postgresRuntime.failListError = new Error(
+      "duplicate key value violates unique constraint \"monitors_workspace_id_id_key\" Detail: Key (workspace_id,id)=(ws_secret,mon_secret) already exists.",
+    );
+    const failedConstraint = await handler(new Request("https://uptime.test/api/v1/monitors", {
+      headers: { authorization: "Bearer read-a" },
+    }));
+    const constraintBody = await failedConstraint.json();
+
+    expect(failedConstraint.status).toBe(400);
+    expect(constraintBody.error).toBe("database operation failed");
+    expect(JSON.stringify(constraintBody)).not.toContain("monitors_workspace_id_id_key");
+    expect(JSON.stringify(constraintBody)).not.toContain("ws_secret");
+  } finally {
+    service.close();
+  }
 });
 
 test("hosted API import preview cannot observe monitors from another workspace", async () => {

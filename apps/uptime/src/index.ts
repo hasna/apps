@@ -12,6 +12,13 @@ export {
   runTcpCheck,
 } from "./checks.js";
 export { createApiHandler, serveUptime } from "./api.js";
+export type {
+  CreateApiHandlerOptions,
+  HostedPostgresMonitorRuntime,
+  HostedScope,
+  HostedToken,
+  ServeOptions,
+} from "./api.js";
 export { applyImport, previewImport, rollbackImport } from "./imports.js";
 export { buildHostedUptimeReport, buildUptimeReport, sendHostedUptimeReport, sendUptimeReport } from "./report.js";
 export { parseHostedReportChannelRefs, summarizeHostedReportChannelRefCatalog, summarizeHostedReportChannelRefs } from "./report-channel-refs.js";
@@ -26,6 +33,12 @@ export {
   createPostgresRuntime,
   PostgresRuntime,
   sanitizePostgresRuntimeError,
+} from "./postgres-runtime.js";
+export type {
+  PostgresMonitorAuditAction,
+  PostgresMonitorMutationAuditInput,
+  PostgresMonitorMutationResult,
+  PostgresMonitorTombstoneResult,
 } from "./postgres-runtime.js";
 export {
   buildPostgresReportRuntimeReadiness,

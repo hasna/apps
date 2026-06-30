@@ -1,8 +1,20 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { dashboardHtml } from "./dashboard.js";
+import { sanitizePostgresRuntimeError } from "./postgres-runtime.js";
 import { UptimeService, type UptimeServiceOptions } from "./service.js";
 import { resolveRuntimeMode, type UptimeRuntimeMode } from "./store.js";
-import type { SchedulerHandle } from "./types.js";
+import type {
+  PostgresAuditEventRecord,
+  PostgresMonitorMutationAuditInput,
+  PostgresMonitorMutationResult,
+  PostgresMonitorTombstoneResult,
+  PostgresMonitorRecord,
+  PostgresSyncTombstoneRecord,
+  RecordPostgresAuditEventInput,
+  TombstonePostgresResourceInput,
+  UpsertPostgresMonitorInput,
+} from "./postgres-runtime.js";
+import type { Monitor, SchedulerHandle, UptimeSummary } from "./types.js";
 
 export interface ServeOptions extends UptimeServiceOptions {
   host?: string;
@@ -13,6 +25,7 @@ export interface ServeOptions extends UptimeServiceOptions {
   hostedToken?: string;
   hostedTokens?: HostedToken[];
   hostedAllowedOrigins?: string[];
+  hostedPostgresRuntime?: HostedPostgresMonitorRuntime;
   allowUnsafeRemoteMutations?: boolean;
 }
 
@@ -21,6 +34,7 @@ export interface CreateApiHandlerOptions {
   hostedToken?: string;
   hostedTokens?: HostedToken[];
   hostedAllowedOrigins?: string[];
+  hostedPostgresRuntime?: HostedPostgresMonitorRuntime;
   allowUnsafeRemoteMutations?: boolean;
   fetchImpl?: typeof fetch;
   trustedLoopback?: boolean;
@@ -40,6 +54,16 @@ interface HostedActor {
   scopes: Set<HostedScope>;
   workspaceId: string;
   actor: string;
+}
+
+export interface HostedPostgresMonitorRuntime {
+  upsertMonitor(input: UpsertPostgresMonitorInput): Promise<PostgresMonitorRecord>;
+  upsertMonitorWithAudit(input: UpsertPostgresMonitorInput, audit: PostgresMonitorMutationAuditInput): Promise<PostgresMonitorMutationResult>;
+  listMonitors(options?: { workspaceId?: string; includeDisabled?: boolean; limit?: number; offset?: number }): Promise<PostgresMonitorRecord[]>;
+  getMonitor(input: { workspaceId?: string; id: string }): Promise<PostgresMonitorRecord | null>;
+  tombstoneResource(input: TombstonePostgresResourceInput & { resourceType: "monitor" }): Promise<PostgresSyncTombstoneRecord>;
+  tombstoneMonitorWithAudit(input: TombstonePostgresResourceInput & { resourceType: "monitor" }, audit: PostgresMonitorMutationAuditInput): Promise<PostgresMonitorTombstoneResult>;
+  recordAuditEvent(input: RecordPostgresAuditEventInput): Promise<PostgresAuditEventRecord>;
 }
 
 export function createApiHandler(service: UptimeService, options: CreateApiHandlerOptions = {}): (request: Request) => Promise<Response> {
@@ -73,7 +97,7 @@ export function createApiHandler(service: UptimeService, options: CreateApiHandl
       return await handleApiRoute(service, request, url, url.pathname, options, false);
     } catch (error) {
       return json(
-        { error: error instanceof Error ? error.message : String(error) },
+        { error: sanitizeApiError(error, options) },
         error instanceof ApiError ? error.status : 400,
       );
     }
@@ -102,6 +126,7 @@ export function serveUptime(options: ServeOptions = {}): { server: ReturnType<ty
       hostedToken: options.hostedToken,
       hostedTokens: options.hostedTokens,
       hostedAllowedOrigins: options.hostedAllowedOrigins,
+      hostedPostgresRuntime: options.hostedPostgresRuntime,
       allowUnsafeRemoteMutations: options.allowUnsafeRemoteMutations,
       trustedLoopback: isLoopbackHost(options.host ?? "127.0.0.1"),
       mode,
@@ -192,9 +217,15 @@ async function handleApiRoute(
   actor?: HostedActor,
 ): Promise<Response> {
   if (request.method === "GET" && apiPath === "/api/summary") {
+    if (hosted && actor && options.hostedPostgresRuntime) {
+      return json(await hostedPostgresSummary(options.hostedPostgresRuntime, actor.workspaceId));
+    }
     return json(service.summary({ workspaceId: actor?.workspaceId }));
   }
   if (request.method === "GET" && apiPath === "/api/report") {
+    if (hosted && options.hostedPostgresRuntime) {
+      throw new ApiError("hosted report reads require Postgres report storage", 501);
+    }
     return json(service.buildReport({ workspaceId: actor?.workspaceId }));
   }
   if (request.method === "POST" && apiPath === "/api/report") {
@@ -251,14 +282,59 @@ async function handleApiRoute(
     }));
   }
   if (request.method === "GET" && apiPath === "/api/monitors") {
+    if (hosted && actor && options.hostedPostgresRuntime) {
+      const monitors = await options.hostedPostgresRuntime.listMonitors({
+        workspaceId: actor.workspaceId,
+        includeDisabled: url.searchParams.get("includeDisabled") === "true",
+        limit: numericParam(url, "limit", 250),
+      });
+      return json(monitors.map(postgresMonitorToMonitor));
+    }
     return json(service.listMonitors({ includeDisabled: url.searchParams.get("includeDisabled") === "true", workspaceId: actor?.workspaceId }));
   }
   if (request.method === "POST" && apiPath === "/api/monitors") {
+    if (hosted && actor && options.hostedPostgresRuntime) {
+      const input = await jsonBody(request);
+      const idempotencyKey = request.headers.get("idempotency-key") ?? undefined;
+      const monitorId = hostedMonitorCreateId(actor.workspaceId, idempotencyKey);
+      if (idempotencyKey?.trim()) {
+        const existing = await options.hostedPostgresRuntime.getMonitor({ workspaceId: actor.workspaceId, id: monitorId });
+        if (existing) {
+          if (!hostedMonitorCreateReplayMatches(existing, input)) throw new ApiError("idempotency key conflict", 409);
+          return json(postgresMonitorToMonitor(existing), 201);
+        }
+      }
+      const { monitor } = await upsertHostedPostgresMonitorWithAudit(options.hostedPostgresRuntime, {
+        id: monitorId,
+        workspaceId: actor.workspaceId,
+        name: input.name,
+        kind: input.kind,
+        url: input.url,
+        host: input.host,
+        port: input.port,
+        method: input.method,
+        expectedStatus: input.expectedStatus,
+        intervalSeconds: input.intervalSeconds,
+        timeoutMs: input.timeoutMs,
+        retryCount: input.retryCount,
+        enabled: input.enabled,
+        actor: actor.actor,
+        origin: "hosted-api",
+        idempotencyKey,
+      }, hostedPostgresMonitorAuditInput(actor, "monitor.create", idempotencyKey, {
+        method: request.method,
+        apiPath,
+      }));
+      return json(postgresMonitorToMonitor(monitor), 201);
+    }
     const monitor = service.createMonitor(await jsonBody(request), { workspaceId: actor?.workspaceId });
     if (hosted && actor) recordHostedMonitorAudit(service, actor, "monitor.create", monitor, { method: request.method, apiPath });
     return json(monitor, 201);
   }
   if (request.method === "GET" && apiPath === "/api/incidents") {
+    if (hosted && options.hostedPostgresRuntime) {
+      throw new ApiError("hosted incidents require Postgres incident storage", 501);
+    }
     const status = url.searchParams.get("status");
     return json(service.listIncidents({
       status: status === "open" || status === "closed" ? status : undefined,
@@ -268,6 +344,9 @@ async function handleApiRoute(
     }));
   }
   if (request.method === "GET" && apiPath === "/api/results") {
+    if (hosted && options.hostedPostgresRuntime) {
+      throw new ApiError("hosted results require Postgres result storage", 501);
+    }
     return json(service.listResults({
       monitorId: url.searchParams.get("monitorId") ?? undefined,
       workspaceId: actor?.workspaceId,
@@ -306,6 +385,9 @@ async function handleApiRoute(
     return json(service.submitProbeResult(await jsonBody(request)), 201);
   }
   if (request.method === "POST" && apiPath === "/api/imports/preview") {
+    if (hosted && options.hostedPostgresRuntime) {
+      throw new ApiError("hosted import preview requires Postgres provenance storage", 501);
+    }
     return json(service.previewImport(await jsonBody(request), { workspaceId: actor?.workspaceId }));
   }
   if (request.method === "POST" && apiPath === "/api/imports/apply") {
@@ -325,10 +407,46 @@ async function handleApiRoute(
   if (monitorMatch) {
     const id = decodeURIComponent(monitorMatch[1]);
     if (request.method === "GET" && !monitorMatch[2]) {
+      if (hosted && actor && options.hostedPostgresRuntime) {
+        const monitor = await options.hostedPostgresRuntime.getMonitor({ workspaceId: actor.workspaceId, id });
+        return monitor ? json(postgresMonitorToMonitor(monitor)) : json({ error: "not found" }, 404);
+      }
       const monitor = service.getMonitor(id, { workspaceId: actor?.workspaceId });
       return monitor ? json(monitor) : json({ error: "not found" }, 404);
     }
     if (request.method === "PATCH" && !monitorMatch[2]) {
+      if (hosted && actor && options.hostedPostgresRuntime) {
+        const before = await options.hostedPostgresRuntime.getMonitor({ workspaceId: actor.workspaceId, id });
+        if (!before) return json({ error: "not found" }, 404);
+        const input = await jsonBody(request);
+        const idempotencyKey = request.headers.get("idempotency-key") ?? undefined;
+        const targetChanged = postgresMonitorDefinitionChanged(before, input);
+        const nextEnabled = input.enabled ?? before.enabled;
+        const { monitor } = await upsertHostedPostgresMonitorWithAudit(options.hostedPostgresRuntime, {
+          id: before.id,
+          workspaceId: actor.workspaceId,
+          name: input.name ?? before.name,
+          kind: input.kind ?? before.kind,
+          url: input.url === undefined ? before.url : input.url,
+          host: input.host === undefined ? before.host : input.host,
+          port: input.port === undefined ? before.port : input.port,
+          method: input.method ?? before.method,
+          expectedStatus: input.expectedStatus === undefined ? before.expectedStatus : input.expectedStatus,
+          intervalSeconds: input.intervalSeconds ?? before.intervalSeconds,
+          timeoutMs: input.timeoutMs ?? before.timeoutMs,
+          retryCount: input.retryCount ?? before.retryCount,
+          enabled: nextEnabled,
+          status: nextEnabled ? targetChanged || !before.enabled ? "unknown" : before.status : "paused",
+          lastCheckedAt: targetChanged ? null : before.lastCheckedAt,
+          actor: actor.actor,
+          origin: "hosted-api",
+        }, hostedPostgresMonitorAuditInput(actor, "monitor.update", idempotencyKey, {
+          method: request.method,
+          apiPath,
+          previousRevision: before.revision,
+        }));
+        return json(postgresMonitorToMonitor(monitor));
+      }
       const before = hosted ? service.getMonitor(id, { workspaceId: actor?.workspaceId }) : null;
       const monitor = service.updateMonitor(id, await jsonBody(request), { workspaceId: actor?.workspaceId });
       if (hosted && actor) {
@@ -342,6 +460,33 @@ async function handleApiRoute(
       return json(monitor);
     }
     if (request.method === "DELETE" && !monitorMatch[2]) {
+      if (hosted && actor && options.hostedPostgresRuntime) {
+        const before = await options.hostedPostgresRuntime.getMonitor({ workspaceId: actor.workspaceId, id });
+        if (!before) return json({ deleted: false });
+        const idempotencyKey = request.headers.get("idempotency-key") ?? undefined;
+        await options.hostedPostgresRuntime.tombstoneMonitorWithAudit({
+          workspaceId: actor.workspaceId,
+          resourceType: "monitor",
+          resourceId: before.id,
+          version: before.revision + 1,
+          actor: actor.actor,
+          origin: "hosted-api",
+          idempotencyKey,
+          metadata: {
+            monitorName: before.name,
+            monitorKind: before.kind,
+          },
+        }, hostedPostgresMonitorAuditInput(actor, "monitor.delete", idempotencyKey, {
+          method: request.method,
+          apiPath,
+          monitorName: before.name,
+          monitorKind: before.kind,
+          monitorEnabled: before.enabled,
+          monitorRevision: before.revision,
+          workspaceId: before.workspaceId,
+        }));
+        return json({ deleted: true });
+      }
       const before = hosted ? service.getMonitor(id, { workspaceId: actor?.workspaceId }) : null;
       const deleted = service.deleteMonitor(id, {
         workspaceId: actor?.workspaceId,
@@ -360,6 +505,31 @@ async function handleApiRoute(
     }
   }
   return json({ error: "not found" }, 404);
+}
+
+function sanitizeApiError(error: unknown, options: CreateApiHandlerOptions): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const sanitized = options.hostedPostgresRuntime
+    ? sanitizePostgresRuntimeError(raw, process.env.HASNA_UPTIME_DATABASE_URL)
+    : raw;
+  const redacted = sanitized
+    .replace(/\b(?:SELECT|INSERT|UPDATE|DELETE|WITH|BEGIN|COMMIT|ROLLBACK)\b[\s\S]*/gi, "database operation failed")
+    .replace(/\b(?:arn:aws:[^\s,;]+|[0-9]{12}|(?:vpc|subnet|sg|task|fs|fsmt|rtb|igw|nat|eni|eipalloc|vpce|vol|snap|ami)-[0-9a-f]{8,36})\b/gi, "resource_redacted");
+  if (options.hostedPostgresRuntime && /\b(?:duplicate key|violates .*constraint|constraint|Key \(|relation|column|schema)\b/i.test(redacted)) {
+    return "database operation failed";
+  }
+  return redacted;
+}
+
+function postgresMonitorDefinitionChanged(current: PostgresMonitorRecord, input: Record<string, unknown>): boolean {
+  return (
+    (input.kind === undefined ? current.kind : input.kind) !== current.kind
+    || (input.url === undefined ? current.url : input.url ?? null) !== current.url
+    || (input.host === undefined ? current.host : input.host ?? null) !== current.host
+    || (input.port === undefined ? current.port : input.port ?? null) !== current.port
+    || (input.method === undefined ? current.method : input.method) !== current.method
+    || (input.expectedStatus === undefined ? current.expectedStatus : input.expectedStatus ?? null) !== current.expectedStatus
+  );
 }
 
 function hostedScopeFor(method: string, apiPath: string): HostedScope {
@@ -418,6 +588,149 @@ function recordHostedMonitorAudit(
       scopes: [...actor.scopes].sort(),
     },
   });
+}
+
+async function upsertHostedPostgresMonitorWithAudit(
+  runtime: HostedPostgresMonitorRuntime,
+  input: UpsertPostgresMonitorInput,
+  audit: PostgresMonitorMutationAuditInput,
+): Promise<PostgresMonitorMutationResult> {
+  try {
+    return await runtime.upsertMonitorWithAudit(input, audit);
+  } catch (error) {
+    if (error instanceof Error && error.message === "monitor idempotency conflict") {
+      throw new ApiError("idempotency key conflict", 409);
+    }
+    throw error;
+  }
+}
+
+function hostedPostgresMonitorAuditInput(
+  actor: HostedActor,
+  action: "monitor.create" | "monitor.update" | "monitor.delete",
+  idempotencyKey: string | null | undefined,
+  metadata: Record<string, unknown>,
+): PostgresMonitorMutationAuditInput {
+  return {
+    workspaceId: actor.workspaceId,
+    action,
+    actor: actor.actor,
+    origin: "hosted-api",
+    resourceType: "monitor",
+    idempotencyKey,
+    metadata: {
+      ...metadata,
+      scopes: [...actor.scopes].sort(),
+    },
+  };
+}
+
+function hostedMonitorCreateId(workspaceId: string, idempotencyKey: string | null | undefined): string {
+  if (idempotencyKey?.trim()) {
+    return `mon_${createHash("sha256").update(`${workspaceId}\u001f${idempotencyKey.trim()}`).digest("hex").slice(0, 32)}`;
+  }
+  return `mon_${randomUUID().replace(/-/g, "").slice(0, 18)}`;
+}
+
+function hostedMonitorCreateReplayMatches(existing: PostgresMonitorRecord, input: Record<string, unknown>): boolean {
+  return existing.name === bodyText(input.name)
+    && existing.kind === input.kind
+    && existing.url === nullableBodyText(input.url)
+    && existing.host === nullableBodyText(input.host)
+    && existing.port === nullableBodyNumber(input.port)
+    && existing.method === bodyMethod(input.method)
+    && existing.expectedStatus === nullableBodyNumber(input.expectedStatus)
+    && existing.intervalSeconds === bodyInteger(input.intervalSeconds, 60)
+    && existing.timeoutMs === bodyInteger(input.timeoutMs, 5000)
+    && existing.retryCount === bodyInteger(input.retryCount, 0)
+    && existing.enabled === (input.enabled ?? true);
+}
+
+function bodyText(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+function nullableBodyText(value: unknown): string | null {
+  if (value == null || value === "") return null;
+  return String(value).trim();
+}
+
+function nullableBodyNumber(value: unknown): number | null {
+  if (value == null) return null;
+  return Number(value);
+}
+
+function bodyInteger(value: unknown, fallback: number): number {
+  return value == null ? fallback : Number(value);
+}
+
+function bodyMethod(value: unknown): string {
+  return value == null ? "GET" : String(value).trim().toUpperCase();
+}
+
+function postgresMonitorToMonitor(record: PostgresMonitorRecord): Monitor {
+  return {
+    id: record.id,
+    workspaceId: record.workspaceId,
+    name: record.name,
+    kind: record.kind,
+    url: record.url,
+    host: record.host,
+    port: record.port,
+    method: record.method,
+    expectedStatus: record.expectedStatus,
+    intervalSeconds: record.intervalSeconds,
+    timeoutMs: record.timeoutMs,
+    retryCount: record.retryCount,
+    enabled: record.enabled,
+    status: record.status,
+    lastCheckedAt: record.lastCheckedAt,
+    revision: record.revision,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+  };
+}
+
+async function hostedPostgresSummary(runtime: HostedPostgresMonitorRuntime, workspaceId: string): Promise<UptimeSummary> {
+  const pageSize = 500;
+  const maxPages = 100;
+  const records: PostgresMonitorRecord[] = [];
+  let offset = 0;
+  for (let page = 0; page < maxPages; page++) {
+    const batch = await runtime.listMonitors({
+      workspaceId,
+      includeDisabled: true,
+      limit: pageSize,
+      offset,
+    });
+    if (batch.length === 0) break;
+    records.push(...batch);
+    offset += batch.length;
+    if (batch.length < pageSize) break;
+    if (page === maxPages - 1) throw new ApiError("hosted summary monitor pagination limit exceeded", 503);
+  }
+  const monitors = records.map(postgresMonitorToMonitor);
+  return {
+    generatedAt: new Date().toISOString(),
+    monitors: monitors.map((monitor) => ({
+      monitor,
+      totalChecks: 0,
+      upChecks: 0,
+      downChecks: 0,
+      uptimePercent: null,
+      averageLatencyMs: null,
+      openIncident: null,
+    })),
+    totals: {
+      monitors: monitors.length,
+      enabled: monitors.filter((monitor) => monitor.enabled).length,
+      up: monitors.filter((monitor) => monitor.status === "up").length,
+      down: monitors.filter((monitor) => monitor.status === "down").length,
+      paused: monitors.filter((monitor) => monitor.status === "paused").length,
+      unknown: monitors.filter((monitor) => monitor.status === "unknown").length,
+      openIncidents: 0,
+    },
+  };
 }
 
 function isLoopbackHost(hostname: string): boolean {

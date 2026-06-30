@@ -47,6 +47,18 @@ test("generated report promotion evidence types require workspace binding", () =
   expect(match?.[0]).not.toContain("workspaceId?: string;");
 });
 
+test("generated API declarations expose hosted Postgres monitor adapter", () => {
+  const declaration = readFileSync(join(root, "dist/api.d.ts"), "utf8");
+
+  expect(declaration).toContain("interface HostedPostgresMonitorRuntime");
+  expect(declaration).toContain("hostedPostgresRuntime?: HostedPostgresMonitorRuntime;");
+  expect(declaration).toContain("upsertMonitorWithAudit(input:");
+  expect(declaration).toContain("listMonitors(options?");
+  expect(declaration).toContain("offset?: number;");
+  expect(declaration).toContain("tombstoneResource(input:");
+  expect(declaration).toContain("tombstoneMonitorWithAudit(input:");
+});
+
 test("package dry-run includes release artifacts and excludes source-only files", () => {
   const result = Bun.spawnSync({
     cmd: ["bun", "pm", "pack", "--dry-run"],

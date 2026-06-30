@@ -642,7 +642,17 @@ operator evidence input for reporter preflight. Use it only after private
 runbook evidence has already proven the exact object-store, Open Logs export,
 alarm, and liveness checks. The JSON is intentionally boolean/count based and
 must not contain bucket names, ARNs, URLs, account ids, recipients, token names,
-object keys, or provider payloads:
+object keys, or provider payloads.
+
+`0.1.66` adds a bounded hosted Postgres monitor API adapter for
+`/api/v1/summary` and `/api/v1/monitors*` when the API handler is supplied an
+explicit `hostedPostgresRuntime`. Treat it as control-plane wiring only. Do not
+set `HASNA_UPTIME_DATABASE_URL` for `uptime serve`, do not scale ECS services,
+and do not treat report, incident, result, import, probe, scheduler, browser,
+or reporter routes as cloud-primary until their Postgres-backed contracts and
+live evidence exist.
+
+Example reporter evidence shape:
 
 ```json
 {

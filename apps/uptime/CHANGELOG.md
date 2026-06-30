@@ -6,6 +6,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.66] - 2026-06-30
+
+### Added
+
+- Added an explicit hosted Postgres monitor-control-plane adapter option for
+  `/api/v1/summary` and `/api/v1/monitors*`. When supplied, hosted monitor
+  create/list/get/update/delete use the async Postgres runtime with workspace
+  scoping, actor/origin/idempotency metadata, audit rows, and monitor
+  tombstones instead of reading or writing the SQLite bridge.
+
+### Changed
+
+- Hosted Postgres monitor PATCH now preserves omitted fields, ignores raw
+  status/last-check body fields, and resets status plus last-check metadata
+  when the monitor target definition changes.
+- Hosted routes that are not backed by the Postgres adapter now stay
+  fail-closed instead of falling back to SQLite when the adapter is active.
+  API errors from adapter-backed paths are sanitized before they are returned.
+- Updated packaged AWS module defaults and deployment metadata examples to
+  `@hasna/uptime@0.1.66`.
+
 ## [0.1.65] - 2026-06-30
 
 ### Changed

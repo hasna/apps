@@ -97,10 +97,16 @@ token-bearing live traffic needs `https-only` with an origin hostname that
 resolves to the ALB and matches `certificate_arn`, or an explicit risk
 acceptance. Hosted AWS runtime state currently uses explicit EFS-backed SQLite via
 `HASNA_UPTIME_HOSTED_SQLITE_DB=/data/uptime/uptime.db` for one protected web
-task maximum; do not set `HASNA_UPTIME_DATABASE_URL` until the full hosted
-Postgres runtime adapter is wired through `UptimeService`, the API, and worker
-loops. The `@hasna/uptime/postgres-runtime` export is a bounded core facade for
-workspace-scoped monitor upserts, probe identities, check jobs, probe
+task maximum; do not set `HASNA_UPTIME_DATABASE_URL` for `uptime serve` or
+hosted ECS scale-out until the full hosted Postgres runtime adapter is wired
+through `UptimeService` and worker loops. `0.1.66` adds an explicit
+`hostedPostgresRuntime` API option for a bounded hosted monitor control plane:
+`/api/v1/summary` and `/api/v1/monitors*` can use Postgres monitor rows,
+audit rows, and tombstones without falling back to the SQLite bridge. Report,
+incident, result, import, probe, browser, scheduler, and reporter routes remain
+fail-closed until each has its own authoritative Postgres storage path. The
+`@hasna/uptime/postgres-runtime` export is a bounded core facade for
+workspace-scoped monitor upserts, monitor listing, probe identities, check jobs, probe
 submissions, audit rows, and tombstones. Monitor upserts enforce the mandatory
 `hosted-public` target policy before any Postgres row is written, so unsafe
 loopback, metadata, private DNS, private/reserved IP, secret-bearing URL, and

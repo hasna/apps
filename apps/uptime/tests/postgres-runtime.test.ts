@@ -504,6 +504,135 @@ test("Postgres runtime records monitors, probe leases, submissions, audit, and t
   expect(client.releaseCount).toBeGreaterThan(0);
 });
 
+test("Postgres runtime listMonitors applies workspace, active-row, and limit guards", async () => {
+  const client = new FakeRuntimeClient();
+  const runtime = createPostgresRuntime({
+    client,
+    workspaceId: "ws_runtime",
+    now: () => new Date("2026-06-29T10:00:00.000Z"),
+  });
+
+  await runtime.upsertMonitor({
+    id: "mon_homepage",
+    name: "Homepage",
+    kind: "http",
+    url: "https://example.com/health",
+  });
+  const active = await runtime.listMonitors({ limit: 7 });
+  await runtime.listMonitors({ workspaceId: "ws_other", includeDisabled: true, limit: 999, offset: 12 });
+
+  const listQueries = client.queries.filter((query) =>
+    query.sql.includes("SELECT * FROM \"uptime\".\"monitors\"")
+    && query.sql.includes("deleted_at IS NULL")
+    && query.sql.includes("($2::boolean OR enabled = true)")
+    && query.sql.includes("ORDER BY created_at ASC, id ASC")
+    && query.sql.includes("LIMIT $3 OFFSET $4")
+  );
+
+  expect(active.map((monitor) => monitor.id)).toEqual(["mon_homepage"]);
+  expect(listQueries).toHaveLength(2);
+  expect(listQueries[0]!.params).toEqual(["ws_runtime", false, 7, 0]);
+  expect(listQueries[1]!.params).toEqual(["ws_other", true, 500, 12]);
+});
+
+test("Postgres runtime monitor mutation helpers write audit in the same transaction", async () => {
+  const client = new FakeRuntimeClient();
+  const runtime = createPostgresRuntime({
+    client,
+    workspaceId: "ws_runtime",
+    now: () => new Date("2026-06-29T10:00:00.000Z"),
+  });
+
+  const created = await runtime.upsertMonitorWithAudit({
+    id: "mon_homepage",
+    name: "Homepage",
+    kind: "http",
+    url: "https://example.com/health",
+    actor: "operator",
+    origin: "hosted-api",
+  }, {
+    action: "monitor.create",
+    actor: "operator",
+    origin: "hosted-api",
+    idempotencyKey: "request-create",
+    metadata: { method: "POST" },
+  });
+  const updated = await runtime.upsertMonitorWithAudit({
+    id: created.monitor.id,
+    name: "Homepage",
+    kind: "http",
+    url: "https://example.com/health",
+    expectedStatus: 204,
+    actor: "operator",
+    origin: "hosted-api",
+  }, {
+    action: "monitor.update",
+    actor: "operator",
+    origin: "hosted-api",
+    idempotencyKey: "request-update",
+    metadata: { method: "PATCH", previousRevision: created.monitor.revision },
+  });
+  await runtime.tombstoneMonitorWithAudit({
+    workspaceId: "ws_runtime",
+    resourceType: "monitor",
+    resourceId: created.monitor.id,
+    version: updated.monitor.revision + 1,
+    actor: "operator",
+    origin: "hosted-api",
+    idempotencyKey: "request-delete",
+    metadata: { monitorName: "Homepage" },
+  }, {
+    action: "monitor.delete",
+    actor: "operator",
+    origin: "hosted-api",
+    idempotencyKey: "request-delete",
+    metadata: { method: "DELETE", monitorName: "Homepage" },
+  });
+
+  const upsertQueries = client.queries.filter((query) => query.sql.includes("INSERT INTO \"uptime\".\"monitors\""));
+  const firstBegin = client.queries.findIndex((query) => query.sql === "BEGIN");
+  const firstUpsert = client.queries.findIndex((query) => query.sql.includes("INSERT INTO \"uptime\".\"monitors\""));
+  const firstAudit = client.queries.findIndex((query) => query.sql.includes("INSERT INTO \"uptime\".\"audit_events\""));
+  const firstCommit = client.queries.findIndex((query) => query.sql === "COMMIT");
+
+  expect(upsertQueries.map((query) => query.params?.[17] ?? null)).toEqual([null, null]);
+  expect(upsertQueries[0]?.sql).toContain("WHERE \"uptime\".\"monitors\".idempotency_key IS NULL");
+  expect(upsertQueries[0]?.sql).toContain("OR EXCLUDED.idempotency_key IS NULL");
+  expect(upsertQueries[0]?.sql).toContain("idempotency_key = COALESCE(EXCLUDED.idempotency_key, \"uptime\".\"monitors\".idempotency_key)");
+  expect(upsertQueries[0]?.sql).not.toContain("\"uptime\".\"monitors\".idempotency_key IS NOT DISTINCT FROM EXCLUDED.idempotency_key");
+  expect(created.audit).toMatchObject({
+    workspaceId: "ws_runtime",
+    action: "monitor.create",
+    resourceType: "monitor",
+    resourceId: "mon_homepage",
+    idempotencyKey: "request-create",
+  });
+  expect(updated.audit).toMatchObject({
+    workspaceId: "ws_runtime",
+    action: "monitor.update",
+    resourceType: "monitor",
+    resourceId: "mon_homepage",
+    idempotencyKey: "request-update",
+  });
+  expect(client.tombstone).toMatchObject({
+    workspaceId: "ws_runtime",
+    resourceType: "monitor",
+    resourceId: "mon_homepage",
+    idempotencyKey: "request-delete",
+  });
+  expect(client.audit).toMatchObject({
+    workspaceId: "ws_runtime",
+    action: "monitor.delete",
+    resourceType: "monitor",
+    resourceId: "mon_homepage",
+    idempotencyKey: "request-delete",
+  });
+  expect(firstBegin).toBeGreaterThanOrEqual(0);
+  expect(firstUpsert).toBeGreaterThan(firstBegin);
+  expect(firstAudit).toBeGreaterThan(firstUpsert);
+  expect(firstCommit).toBeGreaterThan(firstAudit);
+});
+
 test("Postgres runtime soft-deletes every advertised tombstone resource type", async () => {
   const client = new FakeRuntimeClient();
   const runtime = createPostgresRuntime({
@@ -522,6 +651,7 @@ test("Postgres runtime soft-deletes every advertised tombstone resource type", a
 
   const sql = client.queries.map((query) => query.sql).join("\n");
   expect(sql).toContain("UPDATE \"uptime\".\"monitors\"");
+  expect(sql).toContain("idempotency_key = COALESCE($6, idempotency_key)");
   expect(sql).toContain("UPDATE \"uptime\".\"check_jobs\"");
   expect(sql).toContain("UPDATE \"uptime\".\"probe_identities\"");
   expect(sql).toContain("UPDATE \"uptime\".\"report_schedules\"");

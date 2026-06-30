@@ -97,6 +97,13 @@ export interface PostgresMonitorRecord {
   deletedAt: string | null;
 }
 
+export interface ListPostgresMonitorsOptions {
+  workspaceId?: string;
+  includeDisabled?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
 export interface UpsertPostgresProbeIdentityInput {
   id?: string;
   workspaceId?: string;
@@ -409,6 +416,13 @@ export interface PostgresAuditEventRecord {
   createdAt: string;
 }
 
+export type PostgresMonitorAuditAction = "monitor.create" | "monitor.update" | "monitor.delete";
+
+export interface PostgresMonitorMutationAuditInput extends Omit<RecordPostgresAuditEventInput, "action" | "resourceType"> {
+  action: PostgresMonitorAuditAction;
+  resourceType?: "monitor";
+}
+
 export interface TombstonePostgresResourceInput {
   workspaceId?: string;
   resourceType: "monitor" | "check_job" | "probe_identity" | "report_schedule" | "incident";
@@ -431,6 +445,16 @@ export interface PostgresSyncTombstoneRecord {
   origin: string | null;
   idempotencyKey: string | null;
   metadata: Record<string, unknown>;
+}
+
+export interface PostgresMonitorMutationResult {
+  monitor: PostgresMonitorRecord;
+  audit: PostgresAuditEventRecord;
+}
+
+export interface PostgresMonitorTombstoneResult {
+  tombstone: PostgresSyncTombstoneRecord;
+  audit: PostgresAuditEventRecord;
 }
 
 export class PostgresRuntime {
@@ -477,6 +501,25 @@ export class PostgresRuntime {
 
   async upsertMonitor(input: UpsertPostgresMonitorInput): Promise<PostgresMonitorRecord> {
     const workspaceId = normalizeWorkspaceId(input.workspaceId ?? this.workspaceId);
+    return this.withWorkspaceTransaction(workspaceId, (client) => this.upsertMonitorInTransaction(client, workspaceId, input));
+  }
+
+  async upsertMonitorWithAudit(input: UpsertPostgresMonitorInput, auditInput: PostgresMonitorMutationAuditInput): Promise<PostgresMonitorMutationResult> {
+    const workspaceId = normalizeWorkspaceId(input.workspaceId ?? auditInput.workspaceId ?? this.workspaceId);
+    return this.withWorkspaceTransaction(workspaceId, async (client) => {
+      const monitor = await this.upsertMonitorInTransaction(client, workspaceId, { ...input, workspaceId });
+      const audit = await this.recordAuditEventInTransaction(client, workspaceId, {
+        ...auditInput,
+        workspaceId,
+        resourceType: "monitor",
+        resourceId: auditInput.resourceId ?? monitor.id,
+        metadata: monitorAuditMetadata(monitor, auditInput.metadata ?? {}),
+      });
+      return { monitor, audit };
+    });
+  }
+
+  private async upsertMonitorInTransaction(client: PostgresQueryClient, workspaceId: string, input: UpsertPostgresMonitorInput): Promise<PostgresMonitorRecord> {
     const idempotencyKey = normalizeNullableOpaqueText(input.idempotencyKey, "monitor idempotency key", 256);
     const id = normalizeId(input.id ?? deterministicId("mon", workspaceId, idempotencyKey ?? input.name, input.kind));
     const kind = normalizeMonitorKind(input.kind);
@@ -491,7 +534,7 @@ export class PostgresRuntime {
     if (kind === "browser_page" && enabled) {
       throw new Error("Postgres browser_page monitors must remain disabled until browser evidence workers are configured");
     }
-    const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
+    const result = await client.query(
       `INSERT INTO ${this.table("monitors")} (
         workspace_id, id, name, kind, url, host, port, method, expected_status,
         interval_seconds, timeout_ms, retry_count, enabled, status, last_checked_at,
@@ -513,13 +556,12 @@ export class PostgresRuntime {
         last_checked_at = EXCLUDED.last_checked_at,
         actor = EXCLUDED.actor,
         origin = EXCLUDED.origin,
-        idempotency_key = EXCLUDED.idempotency_key,
+        idempotency_key = COALESCE(EXCLUDED.idempotency_key, ${this.table("monitors")}.idempotency_key),
         deleted_at = NULL,
         updated_at = now(),
         version = ${this.table("monitors")}.version + 1
       WHERE ${this.table("monitors")}.idempotency_key IS NULL
          OR EXCLUDED.idempotency_key IS NULL
-         OR ${this.table("monitors")}.idempotency_key IS NOT DISTINCT FROM EXCLUDED.idempotency_key
       RETURNING *`,
       [
         workspaceId,
@@ -541,7 +583,10 @@ export class PostgresRuntime {
         normalizeNullableOpaqueText(input.origin, "monitor origin", 160),
         idempotencyKey,
       ],
-    ));
+    );
+    if (result.rows.length === 0 && idempotencyKey) {
+      throw new Error("monitor idempotency conflict");
+    }
     return monitorFromRow(firstRow(result, "monitor"));
   }
 
@@ -623,6 +668,23 @@ export class PostgresRuntime {
     ));
     const row = result.rows[0];
     return row ? monitorFromRow(row as Record<string, unknown>) : null;
+  }
+
+  async listMonitors(options: ListPostgresMonitorsOptions = {}): Promise<PostgresMonitorRecord[]> {
+    const workspaceId = normalizeWorkspaceId(options.workspaceId ?? this.workspaceId);
+    const includeDisabled = options.includeDisabled === true;
+    const limit = clampLimit(options.limit ?? 250);
+    const offset = normalizeNonNegativeInteger(options.offset ?? 0, "monitor list offset");
+    const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
+      `SELECT * FROM ${this.table("monitors")}
+       WHERE workspace_id = $1
+         AND deleted_at IS NULL
+         AND ($2::boolean OR enabled = true)
+       ORDER BY created_at ASC, id ASC
+       LIMIT $3 OFFSET $4`,
+      [workspaceId, includeDisabled, limit, offset],
+    ));
+    return result.rows.map((row) => monitorFromRow(row as Record<string, unknown>));
   }
 
   async createCheckJob(input: CreatePostgresCheckJobInput): Promise<PostgresCheckJobRecord> {
@@ -1312,9 +1374,13 @@ export class PostgresRuntime {
 
   async recordAuditEvent(input: RecordPostgresAuditEventInput): Promise<PostgresAuditEventRecord> {
     const workspaceId = normalizeWorkspaceId(input.workspaceId ?? this.workspaceId);
+    return this.withWorkspaceTransaction(workspaceId, (client) => this.recordAuditEventInTransaction(client, workspaceId, input));
+  }
+
+  private async recordAuditEventInTransaction(client: PostgresQueryClient, workspaceId: string, input: RecordPostgresAuditEventInput): Promise<PostgresAuditEventRecord> {
     const createdAt = normalizeIsoTimestamp(input.createdAt ?? this.clock().toISOString(), "audit createdAt");
     const id = normalizeId(input.id ?? deterministicId("aud", workspaceId, input.action, input.resourceType ?? "", input.resourceId ?? "", createdAt));
-    const result = await this.withWorkspaceTransaction(workspaceId, (client) => client.query(
+    const result = await client.query(
       `INSERT INTO ${this.table("audit_events")} (
         workspace_id, id, action, resource_type, resource_id, message, metadata_json,
         actor, origin, idempotency_key, created_at
@@ -1336,120 +1402,137 @@ export class PostgresRuntime {
         normalizeNullableOpaqueText(input.idempotencyKey, "audit idempotency key", 256),
         createdAt,
       ],
-    ));
+    );
     return auditEventFromRow(firstRow(result, "audit event"));
   }
 
   async tombstoneResource(input: TombstonePostgresResourceInput): Promise<PostgresSyncTombstoneRecord> {
     const workspaceId = normalizeWorkspaceId(input.workspaceId ?? this.workspaceId);
+    return this.withWorkspaceTransaction(workspaceId, (client) => this.tombstoneResourceInTransaction(client, workspaceId, input));
+  }
+
+  async tombstoneMonitorWithAudit(input: TombstonePostgresResourceInput & { resourceType: "monitor" }, auditInput: PostgresMonitorMutationAuditInput): Promise<PostgresMonitorTombstoneResult> {
+    const workspaceId = normalizeWorkspaceId(input.workspaceId ?? auditInput.workspaceId ?? this.workspaceId);
+    return this.withWorkspaceTransaction(workspaceId, async (client) => {
+      const tombstone = await this.tombstoneResourceInTransaction(client, workspaceId, { ...input, workspaceId });
+      const audit = await this.recordAuditEventInTransaction(client, workspaceId, {
+        ...auditInput,
+        workspaceId,
+        action: "monitor.delete",
+        resourceType: "monitor",
+        resourceId: input.resourceId,
+      });
+      return { tombstone, audit };
+    });
+  }
+
+  private async tombstoneResourceInTransaction(client: PostgresQueryClient, workspaceId: string, input: TombstonePostgresResourceInput): Promise<PostgresSyncTombstoneRecord> {
     const resourceType = normalizeResourceType(input.resourceType);
     const resourceId = normalizeId(input.resourceId);
     const deletedAt = normalizeIsoTimestamp(input.deletedAt ?? this.clock().toISOString(), "tombstone deletedAt");
     const version = normalizePositiveInteger(input.version ?? 1, "tombstone version");
-    const result = await this.withWorkspaceTransaction(workspaceId, async (client) => {
-      const actor = normalizeNullableOpaqueText(input.actor, "tombstone actor", 160);
-      const origin = normalizeNullableOpaqueText(input.origin, "tombstone origin", 160);
-      const idempotencyKey = normalizeNullableOpaqueText(input.idempotencyKey, "tombstone idempotency key", 256);
-      if (resourceType === "monitor") {
-        await client.query(
-          `UPDATE ${this.table("monitors")}
-           SET deleted_at = $3::timestamptz,
-               enabled = false,
-               actor = $4,
-               origin = $5,
-               idempotency_key = $6,
-               updated_at = now(),
-               version = GREATEST(version + 1, $7)
-           WHERE workspace_id = $1 AND id = $2 AND deleted_at IS NULL`,
-          [
-            workspaceId,
-            resourceId,
-            deletedAt,
-            actor,
-            origin,
-            idempotencyKey,
-            version,
-          ],
-        );
-      } else if (resourceType === "check_job") {
-        await client.query(
-          `UPDATE ${this.table("check_jobs")}
-           SET deleted_at = $3::timestamptz,
-               status = CASE WHEN status = 'submitted' THEN status ELSE 'cancelled' END,
-               actor = $4,
-               origin = $5,
-               idempotency_key = $6,
-               updated_at = now(),
-               version = GREATEST(version + 1, $7)
-           WHERE workspace_id = $1 AND id = $2 AND deleted_at IS NULL`,
-          [workspaceId, resourceId, deletedAt, actor, origin, idempotencyKey, version],
-        );
-      } else if (resourceType === "probe_identity") {
-        await client.query(
-          `UPDATE ${this.table("probe_identities")}
-           SET deleted_at = $3::timestamptz,
-               enabled = false,
-               actor = $4,
-               origin = $5,
-               idempotency_key = $6,
-               updated_at = now(),
-               version = GREATEST(version + 1, $7)
-           WHERE workspace_id = $1 AND id = $2 AND deleted_at IS NULL`,
-          [workspaceId, resourceId, deletedAt, actor, origin, idempotencyKey, version],
-        );
-      } else if (resourceType === "report_schedule") {
-        await client.query(
-          `UPDATE ${this.table("report_schedules")}
-           SET deleted_at = $3::timestamptz,
-               enabled = false,
-               actor = $4,
-               origin = $5,
-               idempotency_key = $6,
-               updated_at = now(),
-               version = GREATEST(version + 1, $7)
-           WHERE workspace_id = $1 AND id = $2 AND deleted_at IS NULL`,
-          [workspaceId, resourceId, deletedAt, actor, origin, idempotencyKey, version],
-        );
-      } else if (resourceType === "incident") {
-        await client.query(
-          `UPDATE ${this.table("incidents")}
-           SET deleted_at = $3::timestamptz,
-               status = CASE WHEN status IN ('resolved', 'closed') THEN status ELSE 'closed' END,
-               actor = $4,
-               origin = $5,
-               idempotency_key = $6,
-               updated_at = now(),
-               version = GREATEST(version + 1, $7)
-           WHERE workspace_id = $1 AND id = $2 AND deleted_at IS NULL`,
-          [workspaceId, resourceId, deletedAt, actor, origin, idempotencyKey, version],
-        );
-      }
-      return client.query(
-        `INSERT INTO ${this.table("sync_tombstones")} (
-          workspace_id, resource_type, resource_id, deleted_at, version,
-          actor, origin, idempotency_key, metadata_json
-        ) VALUES ($1, $2, $3, $4::timestamptz, $5, $6, $7, $8, $9::jsonb)
-        ON CONFLICT (workspace_id, resource_type, resource_id) DO UPDATE SET
-          deleted_at = EXCLUDED.deleted_at,
-          version = GREATEST(${this.table("sync_tombstones")}.version, EXCLUDED.version),
-          actor = EXCLUDED.actor,
-          origin = EXCLUDED.origin,
-          idempotency_key = EXCLUDED.idempotency_key,
-          metadata_json = EXCLUDED.metadata_json
-        RETURNING *`,
+    const actor = normalizeNullableOpaqueText(input.actor, "tombstone actor", 160);
+    const origin = normalizeNullableOpaqueText(input.origin, "tombstone origin", 160);
+    const idempotencyKey = normalizeNullableOpaqueText(input.idempotencyKey, "tombstone idempotency key", 256);
+    if (resourceType === "monitor") {
+      await client.query(
+        `UPDATE ${this.table("monitors")}
+         SET deleted_at = $3::timestamptz,
+             enabled = false,
+             actor = $4,
+             origin = $5,
+             idempotency_key = COALESCE($6, idempotency_key),
+             updated_at = now(),
+             version = GREATEST(version + 1, $7)
+         WHERE workspace_id = $1 AND id = $2 AND deleted_at IS NULL`,
         [
           workspaceId,
-          resourceType,
           resourceId,
           deletedAt,
-          version,
           actor,
           origin,
           idempotencyKey,
-          JSON.stringify(normalizeMetadata(input.metadata ?? {}, "tombstone metadata")),
+          version,
         ],
       );
-    });
+    } else if (resourceType === "check_job") {
+      await client.query(
+        `UPDATE ${this.table("check_jobs")}
+         SET deleted_at = $3::timestamptz,
+             status = CASE WHEN status = 'submitted' THEN status ELSE 'cancelled' END,
+             actor = $4,
+             origin = $5,
+             idempotency_key = $6,
+             updated_at = now(),
+             version = GREATEST(version + 1, $7)
+         WHERE workspace_id = $1 AND id = $2 AND deleted_at IS NULL`,
+        [workspaceId, resourceId, deletedAt, actor, origin, idempotencyKey, version],
+      );
+    } else if (resourceType === "probe_identity") {
+      await client.query(
+        `UPDATE ${this.table("probe_identities")}
+         SET deleted_at = $3::timestamptz,
+             enabled = false,
+             actor = $4,
+             origin = $5,
+             idempotency_key = $6,
+             updated_at = now(),
+             version = GREATEST(version + 1, $7)
+         WHERE workspace_id = $1 AND id = $2 AND deleted_at IS NULL`,
+        [workspaceId, resourceId, deletedAt, actor, origin, idempotencyKey, version],
+      );
+    } else if (resourceType === "report_schedule") {
+      await client.query(
+        `UPDATE ${this.table("report_schedules")}
+         SET deleted_at = $3::timestamptz,
+             enabled = false,
+             actor = $4,
+             origin = $5,
+             idempotency_key = $6,
+             updated_at = now(),
+             version = GREATEST(version + 1, $7)
+         WHERE workspace_id = $1 AND id = $2 AND deleted_at IS NULL`,
+        [workspaceId, resourceId, deletedAt, actor, origin, idempotencyKey, version],
+      );
+    } else if (resourceType === "incident") {
+      await client.query(
+        `UPDATE ${this.table("incidents")}
+         SET deleted_at = $3::timestamptz,
+             status = CASE WHEN status IN ('resolved', 'closed') THEN status ELSE 'closed' END,
+             actor = $4,
+             origin = $5,
+             idempotency_key = $6,
+             updated_at = now(),
+             version = GREATEST(version + 1, $7)
+         WHERE workspace_id = $1 AND id = $2 AND deleted_at IS NULL`,
+        [workspaceId, resourceId, deletedAt, actor, origin, idempotencyKey, version],
+      );
+    }
+    const result = await client.query(
+      `INSERT INTO ${this.table("sync_tombstones")} (
+        workspace_id, resource_type, resource_id, deleted_at, version,
+        actor, origin, idempotency_key, metadata_json
+      ) VALUES ($1, $2, $3, $4::timestamptz, $5, $6, $7, $8, $9::jsonb)
+      ON CONFLICT (workspace_id, resource_type, resource_id) DO UPDATE SET
+        deleted_at = EXCLUDED.deleted_at,
+        version = GREATEST(${this.table("sync_tombstones")}.version, EXCLUDED.version),
+        actor = EXCLUDED.actor,
+        origin = EXCLUDED.origin,
+        idempotency_key = EXCLUDED.idempotency_key,
+        metadata_json = EXCLUDED.metadata_json
+      RETURNING *`,
+      [
+        workspaceId,
+        resourceType,
+        resourceId,
+        deletedAt,
+        version,
+        actor,
+        origin,
+        idempotencyKey,
+        JSON.stringify(normalizeMetadata(input.metadata ?? {}, "tombstone metadata")),
+      ],
+    );
     return tombstoneFromRow(firstRow(result, "sync tombstone"));
   }
 
@@ -2089,6 +2172,17 @@ function normalizePublicKeyPem(value: string): string {
 function normalizeMetadata(value: Record<string, unknown>, label: string): Record<string, unknown> {
   assertNoSecretKeys(value, label);
   return value;
+}
+
+function monitorAuditMetadata(monitor: PostgresMonitorRecord, metadata: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...metadata,
+    monitorName: monitor.name,
+    monitorKind: monitor.kind,
+    monitorEnabled: monitor.enabled,
+    monitorRevision: monitor.revision,
+    workspaceId: monitor.workspaceId,
+  };
 }
 
 function normalizeEvidence(value: CheckEvidence): CheckEvidence {
