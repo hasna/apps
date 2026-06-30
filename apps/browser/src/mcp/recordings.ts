@@ -42,7 +42,7 @@ registerTool(server,
   "Manually add a step to an active recording",
   {
     recording_id: z.string(),
-    type: z.enum(["navigate", "click", "type", "scroll", "hover", "select", "check", "evaluate"]),
+    type: z.enum(["navigate", "click", "type", "scroll", "hover", "select", "check", "wait"]),
     selector: z.string().optional(),
     value: z.string().optional(),
     url: z.string().optional(),
@@ -235,7 +235,7 @@ registerTool(server,
 
 registerTool(server,
   "browser_record_export",
-  "Export a recording as a Playwright test (.spec.ts), Puppeteer script, or JSON. Returns the generated code as text.",
+  "Export a recording as a Playwright test (.spec.ts), Puppeteer automation file, or JSON. Returns the generated artifact as text.",
   {
     recording_id: z.string().describe("ID of the recording to export"),
     format: z.enum(["playwright", "puppeteer", "json"]).optional().default("playwright").describe("Export format"),

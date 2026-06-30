@@ -612,7 +612,7 @@ export async function runSemanticAction(
   action: SemanticAction,
   opts: { value?: string | boolean; allowRisk?: boolean } = {},
 ): Promise<SemanticActResult> {
-  if ((action.requiresApproval || action.risk === "sensitive") && !opts.allowRisk) {
+  if ((action.requiresApproval || action.risk === "sensitive" || action.risk === "external_mutation") && !opts.allowRisk) {
     throw new Error(`Action '${action.id}' requires approval because risk=${action.risk}`);
   }
   const value = opts.value ?? action.value;

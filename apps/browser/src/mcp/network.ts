@@ -559,19 +559,6 @@ registerTool(server,
   }
 );
 
-registerTool(server,
-  "browser_profile_auto_refresh",
-  "Schedule automatic cookie refresh to keep a profile session alive.",
-  { name: z.string(), refresh_url: z.string(), schedule: z.string().optional().default("0 */6 * * *") },
-  async ({ name, refresh_url, schedule }) => {
-    try {
-      const { createCronJob } = await import("../lib/cron-manager.js");
-      const job = createCronJob(schedule, { url: refresh_url }, `profile-refresh:${name}`);
-      return json({ scheduled: true, profile: name, schedule, job_id: job.id });
-    } catch (e) { return err(e); }
-  }
-);
-
 // ── Performance Budget ────────────────────────────────────────────────────────
 
 registerTool(server,

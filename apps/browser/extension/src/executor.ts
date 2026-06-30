@@ -148,6 +148,15 @@ export async function executeDomJob(job: ExtJob): Promise<unknown> {
       setElementValue(el, String(payload.value ?? ""));
       return snapshot(payload.selector);
     }
+    case "select": {
+      const el = query(payload.selector);
+      if (el.tagName.toLowerCase() !== "select") {
+        throw new Error(`Element is not a select: ${String(payload.selector)}`);
+      }
+      (el as HTMLElement).focus?.();
+      setElementValue(el, String(payload.value ?? ""));
+      return snapshot(payload.selector);
+    }
     case "press": {
       const key = String(payload.key ?? "");
       const target = document.activeElement ?? document.body;
@@ -179,12 +188,6 @@ export async function executeDomJob(job: ExtJob): Promise<unknown> {
       if (payload.format === "links") return extractLinks(payload.baseUrl);
       if (payload.format === "snapshot") return snapshot(payload.selector);
       throw new Error(`Unsupported extract format: ${String(payload.format)}`);
-    case "evaluate": {
-      const expression = String(payload.expression ?? "");
-      if (!expression) throw new Error("expression required");
-      const args = Array.isArray(payload.args) ? payload.args : [];
-      return (Function("args", `"use strict"; return (${expression});`))(args);
-    }
     default:
       throw new Error(`Unsupported DOM job: ${(job as ExtJob).type}`);
   }

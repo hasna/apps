@@ -9,7 +9,7 @@ import { hasConnectedExtension } from "../lib/extension-bridge.js";
 //
 // bun        → native zero-dep (WKWebView/Chrome), fastest for basic tasks
 // lightpanda → fast static tasks (no/minimal JS needed), fallback when no bun
-// cdp        → low-level DevTools tasks (network, perf, coverage, injection)
+// cdp        → low-level DevTools tasks (network, perf, coverage)
 // playwright → full automation (forms, SPAs, auth, multi-tab, file upload)
 // extension  → explicit-only real Chrome session automation; never auto-selected
 // kernel     → explicit-only kernel.sh cloud sandbox; never auto-selected
@@ -46,7 +46,6 @@ const ENGINE_MAP: Record<UseCase, BrowserEngine> = {
   [UseCase.NETWORK_MONITOR]: "cdp",
   [UseCase.HAR_CAPTURE]:     "cdp",
   [UseCase.PERF_PROFILE]:    "cdp",
-  [UseCase.SCRIPT_INJECT]:   "cdp",
   [UseCase.COVERAGE]:        "cdp",
 };
 
@@ -144,7 +143,6 @@ export function inferUseCase(label: string): UseCase {
     har: UseCase.HAR_CAPTURE,
     perf: UseCase.PERF_PROFILE,
     performance: UseCase.PERF_PROFILE,
-    inject: UseCase.SCRIPT_INJECT,
     coverage: UseCase.COVERAGE,
     record: UseCase.RECORD_REPLAY,
     replay: UseCase.RECORD_REPLAY,

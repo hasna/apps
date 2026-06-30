@@ -330,22 +330,6 @@ registerTool(server,
   }
 );
 
-// ── Evaluate ──────────────────────────────────────────────────────────────────
-
-registerTool(server,
-  "browser_evaluate",
-  "Execute JavaScript in the page context",
-  { session_id: z.string().optional(), script: z.string() },
-  async ({ session_id, script }) => {
-    try {
-      const sid = resolveSessionId(session_id);
-      const page = getSessionPage(sid);
-      const result = await page.evaluate(script);
-      return json({ result });
-    } catch (e) { return errWithScreenshot(e, session_id); }
-  }
-);
-
 // ── Element exists ────────────────────────────────────────────────────────────
 
 registerTool(server,
@@ -554,8 +538,6 @@ registerTool(server,
             const count = await page.evaluate(`document.querySelectorAll(${JSON.stringify(sel)}).length`) as number;
             const num = parseInt(n);
             result = op === ">" ? count > num : op === ">=" ? count >= num : op === "<" ? count < num : op === "<=" ? count <= num : count === num;
-          } else {
-            result = !!(await page.evaluate(trimmed));
           }
         } catch { result = false; }
         checks.push({ assertion: trimmed, result });

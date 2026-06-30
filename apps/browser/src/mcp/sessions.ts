@@ -45,7 +45,7 @@ registerTool(server,
 ENGINES:
 - "auto" (default): picks the best engine for your use case automatically
 - "playwright": full browser automation — forms, SPAs, auth flows, multi-tab
-- "cdp": Chrome DevTools Protocol — network monitoring, perf profiling, script injection
+- "cdp": Chrome DevTools Protocol — network monitoring, perf profiling, coverage
 - "lightpanda": fast headless for static pages
 - "bun": native Bun.WebView — fastest for screenshots and scraping
 - "tui": terminal UI testing — launches a CLI/TUI app (Ink, Blessed, Bubbletea, etc.) via ttyd and connects Playwright to it. Pass the shell command as start_url (e.g. "htop", "bun run app.tsx"). All browser tools (screenshot, click, type, wait) work on the terminal. Use tui_theme to control dark/light appearance and tui_method to choose between buffer-based reads and DOM-row reads.

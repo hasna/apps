@@ -1,4 +1,4 @@
-// ─── Browse commands: navigate, check, audit, compare, screenshot, extract, eval, crawl ───
+// ─── Browse commands: navigate, check, audit, compare, screenshot, extract, crawl ───
 
 import type { Command } from "commander";
 import chalk from "chalk";
@@ -489,27 +489,6 @@ program
       };
       console.log(JSON.stringify(summary, null, 2));
       printHint("Use --json for the full structured extraction.");
-    }
-    await closeSession(session.id);
-  });
-
-// ─── eval ─────────────────────────────────────────────────────────────────────
-
-program
-  .command("eval <url> <script>")
-  .description("Run JavaScript in a page context")
-  .option("--engine <engine>", "Browser engine", "auto")
-  .option("--headed", "Run in headed (visible) mode")
-  .option("--json", "Output full result as JSON")
-  .option("--verbose", "Print a longer compact result")
-  .action(async (url: string, script: string, opts: { engine: string; headed?: boolean; json?: boolean; verbose?: boolean }) => {
-    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
-    await navigate(page, url);
-    const result = await page.evaluate(script);
-    if (opts.json) console.log(JSON.stringify(result, null, 2));
-    else {
-      console.log(truncate(JSON.stringify(result), opts.verbose ? 4000 : 1000));
-      printHint("Use --json for the full eval result.");
     }
     await closeSession(session.id);
   });

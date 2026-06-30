@@ -26,8 +26,6 @@ Use gradual disclosure when you need more:
 ```bash
 browser session list --limit 50 --verbose
 browser session show <id>
-browser script list --verbose
-browser script show <name> --limit 100
 browser gallery get <id> --json
 browser downloads list --json
 ```
@@ -78,16 +76,16 @@ browser-mcp
 
 ## HTTP mode
 
-Run a long-lived Streamable HTTP MCP server on `127.0.0.1` (default port **8802**):
+Run a long-lived Streamable HTTP MCP server on `127.0.0.1` (default port **8851**):
 
 ```bash
 browser-mcp --http
 # or: MCP_HTTP=1 browser-mcp
-# port override: --port 8802  or  MCP_HTTP_PORT=8802
+# port override: --port 8851  or  MCP_HTTP_PORT=8851
 ```
 
-- Health: `GET http://127.0.0.1:8802/health` → `{"status":"ok","name":"browser"}`
-- MCP: `http://127.0.0.1:8802/mcp`
+- Health: `GET http://127.0.0.1:8851/health` → `{"status":"ok","name":"browser"}`
+- MCP: `http://127.0.0.1:8851/mcp`
 
 Stdio remains the default when no `--http` / `MCP_HTTP=1` is set.
 
@@ -121,8 +119,7 @@ Security defaults:
 - No server-side website credentials are stored; the user's Chrome session is
   the auth.
 - The bridge accepts only explicit, token-authenticated jobs.
-- Arbitrary JavaScript `evaluate` jobs are disabled unless
-  `BROWSER_EXTENSION_ALLOW_EVAL=1`.
+- Arbitrary JavaScript jobs are not part of the extension dispatch protocol.
 - Pairing codes are short-lived and single-use; tokens can be revoked with
   `browser extension unpair`.
 - The default extension does not request `chrome.cookies`; provider-specific

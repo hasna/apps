@@ -103,4 +103,87 @@ describe("browser capability policy", () => {
       expect(result.tags).toContain("external_mutation");
     }
   });
+
+  it("approval-gates sensitive synonyms without site-specific rules", () => {
+    const cases: Array<{ label: string; kind?: string; tags: string[]; risk?: string }> = [
+      { label: "Destroy workspace", tags: ["delete", "irreversible_mutation"], risk: "sensitive" },
+      { label: "SMS code", kind: "fill", tags: ["mfa"], risk: "sensitive" },
+      { label: "Cloudflare Turnstile", tags: ["captcha"], risk: "sensitive" },
+      { label: "I am not a robot", kind: "check", tags: ["captcha"], risk: "sensitive" },
+      { label: "Passphrase", kind: "fill", tags: ["credential_entry"], risk: "sensitive" },
+      { label: "PIN", kind: "fill", tags: ["credential_entry"], risk: "sensitive" },
+      { label: "Authenticate", tags: ["credential_submit"], risk: "sensitive" },
+      { label: "Deactivate account", tags: ["delete", "irreversible_mutation"], risk: "sensitive" },
+      { label: "Erase all data", tags: ["delete", "irreversible_mutation"], risk: "sensitive" },
+      { label: "Subscribe to paid plan", tags: ["payment"], risk: "sensitive" },
+      { label: "Subscribe", tags: ["payment"], risk: "sensitive" },
+      { label: "Donate", tags: ["payment"], risk: "sensitive" },
+      { label: "Routing number", kind: "fill", tags: ["payment"], risk: "sensitive" },
+      { label: "Agree and continue", kind: "check", tags: ["legal_acceptance"], risk: "sensitive" },
+      { label: "Accept conditions", tags: ["legal_acceptance"], risk: "sensitive" },
+      { label: "Save PDF", tags: ["file_download"], risk: "external_mutation" },
+      { label: "Print invoice", tags: ["file_download"], risk: "external_mutation" },
+      { label: "Import CSV", tags: ["file_upload"], risk: "sensitive" },
+      { label: "Archive project", tags: ["delete", "irreversible_mutation"], risk: "sensitive" },
+      { label: "Restore backup", tags: ["file_upload"], risk: "sensitive" },
+      { label: "Enable integration", tags: ["external_mutation"], risk: "external_mutation" },
+    ];
+
+    for (const testCase of cases) {
+      const result = classifyBrowserActionRisk({
+        kind: testCase.kind ?? "click",
+        label: testCase.label,
+        role: testCase.kind === "fill" ? "textbox" : "button",
+        instruction: testCase.label.toLowerCase(),
+      });
+      expect(result.risk).toBe(testCase.risk);
+      expect(result.requiresApproval).toBe(true);
+      for (const tag of testCase.tags) expect(result.tags).toContain(tag as any);
+    }
+  });
+
+  it("approval-gates sensitive intent from the instruction, not only the label", () => {
+    const cases = [
+      {
+        input: { kind: "fill", label: "Code", role: "textbox", instruction: "enter the account password" },
+        tag: "credential_entry",
+        risk: "sensitive",
+      },
+      {
+        input: { kind: "fill", label: "Code", role: "textbox", instruction: "enter the PIN" },
+        tag: "credential_entry",
+        risk: "sensitive",
+      },
+      {
+        input: { kind: "click", label: "Report", role: "button", instruction: "download report" },
+        tag: "file_download",
+        risk: "external_mutation",
+      },
+      {
+        input: { kind: "click", label: "Archive", role: "button", instruction: "archive" },
+        tag: "delete",
+        risk: "sensitive",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const result = classifyBrowserActionRisk(testCase.input);
+      expect(result.risk).toBe(testCase.risk);
+      expect(result.requiresApproval).toBe(true);
+      expect(result.tags).toContain(testCase.tag);
+    }
+  });
+
+  it("does not gate obvious non-mutating view/filter labels as external mutations", () => {
+    for (const label of ["Apply filter", "Confirm view", "Request demo details"]) {
+      const result = classifyBrowserActionRisk({
+        kind: "click",
+        label,
+        role: "button",
+        instruction: label.toLowerCase(),
+      });
+      expect(result.risk).not.toBe("external_mutation");
+      expect(result.requiresApproval).toBe(false);
+    }
+  });
 });

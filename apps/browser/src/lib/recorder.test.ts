@@ -94,4 +94,29 @@ describe("recorder", () => {
   it("throws when recording step to unknown recording", () => {
     expect(() => recordStep("nonexistent", { type: "click" })).toThrow("No active recording");
   });
+
+  it("does not execute legacy evaluate steps during replay", async () => {
+    const r = startRecording("session-7", "legacy-evaluate-test", "about:blank");
+    recordStep(r.id, { type: "evaluate" as any, value: "() => { window.__recordingEval = true; }" });
+    stopRecording(r.id);
+
+    const result = await replayRecording(r.id, page);
+    const mutated = await page.evaluate(() => (window as any).__recordingEval === true);
+
+    expect(result.success).toBe(false);
+    expect(result.steps_failed).toBe(1);
+    expect(result.errors[0]).toContain("Unsupported recording step type");
+    expect(mutated).toBe(false);
+  });
+
+  it("exports scroll without arbitrary evaluate code", () => {
+    const r = startRecording("session-8", "scroll-export-test");
+    recordStep(r.id, { type: "scroll" });
+    stopRecording(r.id);
+
+    const code = exportRecording(r.id, "playwright");
+
+    expect(code).toContain("page.mouse.wheel");
+    expect(code).not.toContain("page.evaluate");
+  });
 });

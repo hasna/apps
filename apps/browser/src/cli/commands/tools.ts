@@ -1,4 +1,4 @@
-// ─── Tool commands: record, agent, project, gallery, downloads, login, attach, watch, daemon, install-browser, mcp, serve ───
+// ─── Tool commands: record, agent, project, gallery, downloads, login, attach, daemon, install-browser, mcp, serve ───
 
 import type { Command } from "commander";
 import chalk from "chalk";
@@ -812,80 +812,6 @@ daemonCmd
       console.log(chalk.gray("○ Daemon not running"));
       console.log(chalk.gray(`  Start with: browser daemon start`));
     }
-  });
-
-// ─── watch ───────────────────────────────────────────────────────────────────
-
-program
-  .command("watch <url>")
-  .description("Monitor a URL for changes — periodic screenshot + diff")
-  .option("--engine <engine>", "Browser engine", "auto")
-  .option("--interval <seconds>", "Check interval in seconds", "30")
-  .option("--threshold <percent>", "Change threshold percent to report", "5")
-  .option("--headed", "Run in headed mode")
-  .option("--json", "Output as JSON")
-  .action(async (url: string, opts: { engine: string; interval: string; threshold: string; headed?: boolean; json?: boolean }) => {
-    const intervalMs = parseInt(opts.interval) * 1000;
-    const threshold = parseFloat(opts.threshold);
-
-    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed });
-    if (!opts.json) {
-      console.log(chalk.gray(`Watching: ${url} (every ${opts.interval}s, threshold ${opts.threshold}%)`));
-      console.log(chalk.gray(`Session: ${session.id} — Press Ctrl+C to stop\n`));
-    }
-
-    await navigate(page, url);
-    let baselineResult = await takeScreenshot(page, { format: "png" });
-    let baselinePath = baselineResult.path;
-    let checkCount = 0;
-
-    if (!opts.json) console.log(chalk.blue(`[${new Date().toISOString()}] Baseline captured: ${baselinePath}`));
-
-    const check = async () => {
-      checkCount++;
-      try {
-        await page.reload({ waitUntil: "domcontentloaded" });
-        await new Promise(r => setTimeout(r, 2000)); // Wait for render
-        const newResult = await takeScreenshot(page, { format: "png" });
-
-        // Diff
-        const { diffImages } = await import("../../lib/gallery-diff.js");
-        const diff = await diffImages(baselinePath, newResult.path);
-
-        const changed = diff.changed_percent > threshold;
-        const timestamp = new Date().toISOString();
-
-        if (opts.json) {
-          console.log(JSON.stringify({ timestamp, check: checkCount, changed_percent: diff.changed_percent, changed, screenshot: newResult.path, diff_path: changed ? diff.diff_path : undefined }));
-        } else if (changed) {
-          console.log(chalk.red(`[${timestamp}] CHANGED: ${diff.changed_percent.toFixed(2)}% (${diff.changed_pixels} pixels)`));
-          console.log(chalk.gray(`  Screenshot: ${newResult.path}`));
-          console.log(chalk.gray(`  Diff: ${diff.diff_path}`));
-          // Update baseline
-          baselinePath = newResult.path;
-        } else {
-          console.log(chalk.green(`[${timestamp}] No change (${diff.changed_percent.toFixed(2)}%)`));
-        }
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (opts.json) {
-          console.log(JSON.stringify({ timestamp: new Date().toISOString(), check: checkCount, error: msg }));
-        } else {
-          console.log(chalk.red(`[${new Date().toISOString()}] Error: ${msg}`));
-        }
-      }
-    };
-
-    const timer = setInterval(check, intervalMs);
-
-    // Handle Ctrl+C gracefully
-    process.on("SIGINT", async () => {
-      clearInterval(timer);
-      if (opts.json) console.log(JSON.stringify({ event: "stopped", checks: checkCount }));
-      else console.log(chalk.gray(`\nStopping watch. ${checkCount} checks performed.`));
-      await closeSession(session.id);
-      process.exit(0);
-    });
   });
 
 // ─── mcp ─────────────────────────────────────────────────────────────────────

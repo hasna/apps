@@ -92,33 +92,6 @@ describe("coordination (announce + checkDuplicate)", () => {
   });
 });
 
-// ─── task-queue.ts ────────────────────────────────────────────────────────────
-
-describe("task queue (queueBrowserTask + getBrowserTasks)", () => {
-  it("queues a task and retrieves it", async () => {
-    const { queueBrowserTask, getBrowserTasks } = await import("./task-queue.js");
-    const queued = await queueBrowserTask({
-      title: "Extract pricing",
-      description: "Get Pro tier price from stripe.com",
-      url: "https://stripe.com/pricing",
-      priority: "high",
-    });
-    expect(queued.task_id).toBeTruthy();
-    expect(queued.title).toBe("Extract pricing");
-    const tasks = await getBrowserTasks("pending");
-    expect(tasks.length).toBeGreaterThanOrEqual(1);
-    expect(tasks.some(t => t.task_id === queued.task_id)).toBe(true);
-  });
-
-  it("completeBrowserTask removes task", async () => {
-    const { queueBrowserTask, completeBrowserTask, getBrowserTasks } = await import("./task-queue.js");
-    const queued = await queueBrowserTask({ title: "Test task", description: "desc" });
-    await completeBrowserTask(queued.task_id, { result: "done" });
-    const remaining = await getBrowserTasks("pending");
-    expect(remaining.some(t => t.task_id === queued.task_id)).toBe(false);
-  });
-});
-
 // ─── skills-runner.ts ─────────────────────────────────────────────────────────
 
 describe("skills runner (listBuiltInSkills + runBrowserSkill)", () => {

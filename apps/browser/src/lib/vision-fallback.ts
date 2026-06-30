@@ -19,7 +19,7 @@ const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
 
 /**
  * Take a screenshot and ask a vision model to find an element matching the description.
- * Returns coordinates to click.
+ * Returns coordinates for inspection; execution should go through semantic refs/actions.
  */
 export async function findElementByVision(
   page: Page,
@@ -88,19 +88,4 @@ If you cannot find the element:
       error: err instanceof Error ? err.message : String(err),
     };
   }
-}
-
-/**
- * Click at coordinates found by vision model.
- */
-export async function clickByVision(
-  page: Page,
-  description: string,
-  opts?: { model?: string }
-): Promise<VisionFindResult> {
-  const result = await findElementByVision(page, description, opts);
-  if (result.found && result.x > 0 && result.y > 0) {
-    await page.mouse.click(result.x, result.y);
-  }
-  return result;
 }

@@ -8,7 +8,6 @@ export type BrowserCapability =
   | "cdp_attach"
   | "tui_launch"
   | "extension_session"
-  | "extension_evaluate"
   | "stealth"
   | "storage_state"
   | "file_upload"
@@ -75,6 +74,10 @@ function addTag(tags: BrowserActionPolicyTag[], tag: BrowserActionPolicyTag): vo
   if (!tags.includes(tag)) tags.push(tag);
 }
 
+function addTags(tags: BrowserActionPolicyTag[], ...next: BrowserActionPolicyTag[]): void {
+  for (const tag of next) addTag(tags, tag);
+}
+
 function maxActionRisk(a: BrowserActionRisk, b: BrowserActionRisk): BrowserActionRisk {
   const rank: Record<BrowserActionRisk, number> = {
     none: 0,
@@ -102,63 +105,72 @@ export function classifyBrowserActionRisk(input: BrowserActionRiskInput): Browse
   let risk: BrowserActionRisk = "none";
 
   const actionLike = kind === "click" || kind === "check" || kind === "select";
-  const submitLikeTarget = has(target, /\b(submit|continue|next|confirm|finish|complete|done|save|send)\b/);
+  const submitLikeTarget = has(target, /\b(submit|continue|next|confirm|finish|complete|done|save|send|authenticate)\b/);
   const accountContext = has(all, /\b(create account|sign up|signup|register|registration|join|new account)\b/);
-  const credentialContext = has(all, /\b(login|log in|sign in|signin|password|credential)\b/);
+  const credentialContext = has(all, /\b(login|log in|sign in|signin|password|passphrase|passcode|pin|credential|authenticate)\b/);
 
-  if (fieldType === "password" || has(target, /\b(password|passcode|secret answer)\b/)) {
-    addTag(tags, "credential_entry");
+  if (fieldType === "password" || has(all, /\b(password|passphrase|passcode|pin|secret answer|recovery phrase|seed phrase|private key)\b/)) {
+    addTags(tags, "credential_entry");
     risk = maxActionRisk(risk, "sensitive");
   }
 
-  if (has(all, /\b(captcha|hcaptcha|recaptcha|human verification|verify you are human|i am human)\b/)) {
-    addTag(tags, "captcha");
+  if (has(all, /\b(captcha|hcaptcha|recaptcha|turnstile|cloudflare|human verification|verify you are human|i am human|not a robot|i am not a robot|robot check)\b/)) {
+    addTags(tags, "captcha");
     risk = maxActionRisk(risk, "sensitive");
   }
 
-  if (has(all, /\b(mfa|2fa|two factor|two-factor|one time|one-time|otp|totp|authenticator|verification code|security code)\b/)) {
-    addTag(tags, "mfa");
+  if (has(all, /\b(mfa|2fa|two factor|two-factor|one time|one-time|otp|totp|authenticator|authentication code|verification code|security code|sms code|text code|phone code|email code)\b/)) {
+    addTags(tags, "mfa");
     risk = maxActionRisk(risk, "sensitive");
   }
 
-  if (fieldType === "file" || has(target, /\b(upload|attach file|choose file)\b/)) {
-    addTag(tags, "file_upload");
+  if (fieldType === "file" || has(all, /\b(upload|attach file|choose file|import csv|import file|restore backup)\b/)) {
+    addTags(tags, "file_upload");
     risk = maxActionRisk(risk, "sensitive");
   }
 
-  if (has(target, /\b(download|export)\b/)) {
-    addTag(tags, "file_download");
+  if (has(all, /\b(download|export|save pdf|print invoice|print receipt)\b/)) {
+    addTags(tags, "file_download");
     risk = maxActionRisk(risk, "external_mutation");
   }
 
-  if (has(all, /\b(card number|credit card|debit card|cvv|cvc|iban|bank account|billing|payment|pay now|purchase|buy now|place order|checkout)\b/)) {
-    addTag(tags, "payment");
+  if (has(all, /\b(card number|credit card|debit card|cvv|cvc|iban|routing number|bank account|billing|payment|pay now|purchase|buy now|place order|checkout|paid plan|subscribe|donate|pledge|wire|transfer)\b/)) {
+    addTags(tags, "payment");
     risk = maxActionRisk(risk, "sensitive");
   }
 
-  if (actionLike && has(all, /\b(delete|remove account|close account|cancel subscription|terminate|revoke|wire|transfer)\b/)) {
-    addTag(tags, "delete");
-    addTag(tags, "irreversible_mutation");
+  if (actionLike && has(all, /\b(delete|destroy|erase|wipe|purge|remove account|close account|deactivate account|delete account|cancel subscription|terminate|revoke|archive|restore backup)\b/)) {
+    addTags(tags, "delete", "irreversible_mutation");
     risk = maxActionRisk(risk, "sensitive");
   }
 
-  if (actionLike && has(all, /\b(terms|privacy|policy|eula|agreement|consent|i agree|agree to|accept terms|legal)\b/)) {
-    addTag(tags, "legal_acceptance");
+  if (actionLike && has(all, /\b(terms|conditions|privacy|policy|eula|agreement|consent|i agree|agree and continue|agree to|accept terms|accept conditions|legal)\b/)) {
+    addTags(tags, "legal_acceptance");
     risk = maxActionRisk(risk, "sensitive");
   }
 
   if (actionLike && (has(target, /\b(create account|sign up|signup|register|join now|submit registration)\b/) || (submitLikeTarget && accountContext))) {
-    addTag(tags, "account_creation");
+    addTags(tags, "account_creation");
     risk = maxActionRisk(risk, "sensitive");
   }
 
-  if (actionLike && (has(target, /\b(sign in|signin|log in|login)\b/) || (submitLikeTarget && credentialContext))) {
-    addTag(tags, "credential_submit");
+  if (actionLike && (has(target, /\b(sign in|signin|log in|login|authenticate)\b/) || (submitLikeTarget && credentialContext))) {
+    addTags(tags, "credential_submit");
     risk = maxActionRisk(risk, "sensitive");
   }
 
-  if (actionLike && has(all, /\b(add to cart|apply|approve|book|cancel|change|confirm|create|decline|edit|enroll|invite|post|publish|remove|request|reserve|reschedule|save address|save changes|schedule|send|share|submit|unsubscribe|update|upload)\b/)) {
-    addTag(tags, "external_mutation");
+  if (actionLike && has(all, /\b(add to cart|approve|book|cancel|change|create|decline|edit|enroll|invite|post|publish|remove|reserve|reschedule|save address|save changes|save profile|save settings|schedule|send|share|submit|unsubscribe|update|upload|deactivate|activate|connect integration|disconnect integration|enable integration|disable integration)\b/)) {
+    addTags(tags, "external_mutation");
+    risk = maxActionRisk(risk, "external_mutation");
+  }
+
+  if (actionLike && has(all, /\bconfirm (appointment|booking|reservation|order|purchase|subscription|changes|account|email|phone|payment|address|profile|project|request)\b/)) {
+    addTags(tags, "external_mutation");
+    risk = maxActionRisk(risk, "external_mutation");
+  }
+
+  if (actionLike && has(all, /\brequest (access|approval|refund|callback|password reset|support|quote|change|cancellation)\b/)) {
+    addTags(tags, "external_mutation");
     risk = maxActionRisk(risk, "external_mutation");
   }
 

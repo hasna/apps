@@ -627,28 +627,20 @@ registerTool(server,
 
 registerTool(server,
   "browser_find_visual",
-  "Find an element using AI vision when selectors and a11y refs fail. Useful for canvas, images, custom widgets. Takes a screenshot and asks a vision model to locate the element.",
+  "Find an element using AI vision when selectors and a11y refs fail. Returns coordinates only; use semantic refs/actions for execution.",
   {
     session_id: z.string().optional(),
     description: z.string().describe("Natural language description of the element to find (e.g. 'the blue Submit button', 'the search icon in the top right')"),
-    click: z.boolean().optional().default(false).describe("Click the element after finding it"),
     model: z.string().optional().describe("Vision model to use (default: claude-sonnet-4-5-20250929)"),
   },
-  async ({ session_id, description, click: doClick, model }) => {
+  async ({ session_id, description, model }) => {
     try {
       const sid = resolveSessionId(session_id);
       const page = getSessionPage(sid);
-      if (doClick) {
-        const { clickByVision } = await import("../lib/vision-fallback.js");
-        const result = await clickByVision(page, description, { model });
-        logEvent(sid, "vision_click", { query: description, ...result });
-        return json(result);
-      } else {
-        const { findElementByVision } = await import("../lib/vision-fallback.js");
-        const result = await findElementByVision(page, description, { model });
-        logEvent(sid, "vision_find", { query: description, ...result });
-        return json(result);
-      }
+      const { findElementByVision } = await import("../lib/vision-fallback.js");
+      const result = await findElementByVision(page, description, { model });
+      logEvent(sid, "vision_find", { query: description, ...result });
+      return json(result);
     } catch (e) { return err(e); }
   }
 );

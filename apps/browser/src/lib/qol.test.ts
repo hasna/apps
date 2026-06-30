@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { chromium, type Browser, type Page } from "playwright";
 import { resetDatabase } from "../db/schema.js";
-import { clickText, fillForm, waitForText, withRetry, watchPage, getWatchChanges, stopAllWatchesForSession } from "./actions.js";
+import { clickText, fillForm, waitForText, withRetry } from "./actions.js";
 import { elementExists, getPageInfo } from "./extractor.js";
 import { ElementNotFoundError } from "../types/index.js";
 
@@ -55,7 +55,6 @@ beforeAll(async () => {
 }, 35_000);
 
 afterAll(async () => {
-  stopAllWatchesForSession();
   await page?.close({ runBeforeUnload: false }).catch(() => {});
   await browser?.close();
   testServer.stop();
@@ -221,37 +220,6 @@ describe("withRetry", () => {
     await expect(withRetry(async () => {
       throw new Error("Timeout: persistent failure");
     }, { retries: 2, delay: 10 })).rejects.toThrow("persistent failure");
-  });
-});
-
-describe("watchPage", () => {
-  it("starts watch and returns handle with id", async () => {
-    await page.goto(BASE);
-    const handle = watchPage(page, { intervalMs: 100 });
-    expect(handle.id).toBeTruthy();
-    handle.stop();
-  });
-
-  it("captures initial state on first check", async () => {
-    await page.goto(BASE);
-    const handle = watchPage(page, { intervalMs: 50 });
-    await new Promise((r) => setTimeout(r, 300));
-    const changes = getWatchChanges(handle.id);
-    expect(changes.length).toBeGreaterThanOrEqual(1);
-    handle.stop();
-  });
-
-  it("stopWatch clears the watch", async () => {
-    await page.goto(BASE);
-    const handle = watchPage(page, { intervalMs: 100 });
-    handle.stop();
-    const id = handle.id;
-    await new Promise((r) => setTimeout(r, 200));
-    // After stop, no new changes should accumulate
-    const changes = getWatchChanges(id);
-    const count1 = changes.length;
-    await new Promise((r) => setTimeout(r, 200));
-    expect(getWatchChanges(id).length).toBe(count1);
   });
 });
 

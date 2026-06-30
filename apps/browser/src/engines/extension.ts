@@ -9,7 +9,6 @@ export interface ExtensionPageOptions {
   tokenId?: string;
   serverUrl?: string;
   viewport?: { width: number; height: number };
-  allowEval?: boolean;
   approvalToken?: string;
 }
 
@@ -146,7 +145,6 @@ export class ExtensionPage {
   private readonly sessionId?: string;
   private readonly tokenId?: string;
   private readonly viewport: { width: number; height: number };
-  private readonly allowEval: boolean;
   private readonly approvalToken?: string;
   private readonly dispatcher: ExtensionDispatcher;
 
@@ -154,7 +152,6 @@ export class ExtensionPage {
     this.sessionId = opts.sessionId;
     this.tokenId = opts.tokenId || connection.token_id || undefined;
     this.viewport = opts.viewport ?? { width: 1280, height: 720 };
-    this.allowEval = opts.allowEval ?? process.env["BROWSER_EXTENSION_ALLOW_EVAL"] === "1";
     this.approvalToken = opts.approvalToken;
     this.dispatcher = opts.dispatcher ?? dispatchExtensionJob;
   }
@@ -298,16 +295,12 @@ export class ExtensionPage {
   }
 
   async evaluate<T = unknown>(fnOrExpr: string | ((...args: unknown[]) => T), ...args: unknown[]): Promise<T> {
-    if (!this.allowEval) {
-      throw new BrowserError(
-        "Extension evaluate is disabled by default. Set BROWSER_EXTENSION_ALLOW_EVAL=1 to allow arbitrary JavaScript jobs.",
-        "EXTENSION_EVAL_DISABLED",
-      );
-    }
-    const expression = typeof fnOrExpr === "function"
-      ? `(${fnOrExpr.toString()})(...${JSON.stringify(args)})`
-      : fnOrExpr;
-    return this.dispatch("evaluate", { expression, args }, 30_000);
+    void fnOrExpr;
+    void args;
+    throw new BrowserError(
+      "Extension evaluate is not supported. Use bounded extension jobs such as extract, click, fill, select, screenshot, or semantic actions.",
+      "EXTENSION_EVAL_UNSUPPORTED",
+    );
   }
 
   url(): string {
@@ -363,13 +356,7 @@ export class ExtensionPage {
   }
 
   async selectOption(selector: string, value: string): Promise<string[]> {
-    await this.evaluate((sel, nextValue) => {
-      const el = document.querySelector(sel as string) as HTMLSelectElement | null;
-      if (!el) throw new Error(`Element not found: ${sel}`);
-      el.value = String(nextValue);
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-    }, selector, value);
+    await this.dispatch("select", { selector, value }, 10_000);
     return [value];
   }
 

@@ -36,7 +36,6 @@ afterEach(() => {
   delete process.env["BROWSER_ALLOWED_DOMAINS"];
   delete process.env["BROWSER_ALLOW_RISKY_CAPABILITIES"];
   delete process.env["BROWSER_CAPABILITY_TOKEN"];
-  delete process.env["BROWSER_EXTENSION_ALLOW_EVAL"];
 });
 
 describe("extension bridge pairing", () => {
@@ -163,7 +162,7 @@ describe("extension bridge dispatch", () => {
     expect(sentJob).toBe(false);
   });
 
-  it("rejects raw evaluate dispatch unless explicitly enabled", async () => {
+  it("rejects raw evaluate dispatch as an unsupported job type", async () => {
     const pairing = createExtensionPairing();
     const token = consumeExtensionPairingCode(pairing.code);
     const data = validateExtensionToken(token.token);
@@ -176,36 +175,8 @@ describe("extension bridge dispatch", () => {
       id: "eval",
       type: "evaluate",
       payload: { expression: "document.title" },
-    }, { timeoutMs: 20 })).rejects.toThrow(/evaluate dispatch is disabled/);
+    } as any, { timeoutMs: 20 })).rejects.toThrow(/Unsupported extension job type/);
     expect(sentJob).toBe(false);
-  });
-
-  it("allows evaluate dispatch with a matching browser capability token", async () => {
-    process.env["BROWSER_CAPABILITY_TOKEN"] = "secret";
-    const pairing = createExtensionPairing();
-    const token = consumeExtensionPairingCode(pairing.code);
-    const data = validateExtensionToken(token.token);
-    attachExtensionSocket({
-      send(raw: string) {
-        const message = JSON.parse(raw);
-        if (message.type === "job") {
-          queueMicrotask(() => {
-            handleExtensionSocketMessage(data.token_id, JSON.stringify({
-              type: "result",
-              result: { id: message.job.id, ok: true, data: { title: "ok" } },
-            }));
-          });
-        }
-      },
-    }, data);
-
-    const result = await dispatchExtensionJob({
-      id: "eval-approved",
-      type: "evaluate",
-      payload: { expression: "document.title" },
-    }, { timeoutMs: 100, approvalToken: "secret" });
-
-    expect(result.ok).toBe(true);
   });
 
   it("rejects non-allowlisted navigate jobs before dispatch", async () => {

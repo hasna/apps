@@ -85,6 +85,23 @@ describe("mcp buildServer stdio registration", () => {
 
     const tools = await client.listTools();
     expect(tools.tools.some((tool) => tool.name === "browser_session_list")).toBe(true);
+    for (const removed of [
+      "browser_script_run",
+      "browser_script_save",
+      "browser_evaluate",
+      "browser_batch",
+      "browser_parallel",
+      "browser_cron_create",
+      "browser_watch_url",
+      "browser_watch_start",
+      "browser_task",
+      "browser_task_queue",
+      "browser_task_list",
+      "browser_task_complete",
+      "browser_profile_auto_refresh",
+    ]) {
+      expect(tools.tools.some((tool) => tool.name === removed)).toBe(false);
+    }
 
     await client.close();
     await server.close();

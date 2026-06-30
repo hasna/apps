@@ -103,7 +103,6 @@ describe("extension engine e2e", () => {
         BROWSER_SERVER_PORT: String(browserPort),
         BROWSER_DB_PATH: join(tmpDir, "server.db"),
         BROWSER_DATA_DIR: join(tmpDir, "server-data"),
-        BROWSER_EXTENSION_ALLOW_EVAL: "",
       },
     });
 

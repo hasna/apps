@@ -204,6 +204,22 @@ describe("semantic actions", () => {
     expect(submit.actions[0].policyTags).toContain("account_creation");
   });
 
+  it("fails closed on external mutation risk even if requiresApproval is forged false", async () => {
+    await page.setContent(`<main><button id="save">Save changes</button></main>`);
+    const action: SemanticAction = {
+      id: "forged-save",
+      kind: "click",
+      ref: "selector:#save",
+      selector: "#save",
+      label: "Save changes",
+      confidence: 1,
+      risk: "external_mutation",
+      requiresApproval: false,
+    };
+
+    await expect(runSemanticAction(page, "semantic-test-fail-closed", action)).rejects.toThrow(/requires approval/);
+  });
+
   it("omits readonly fields from semantic form candidates", async () => {
     await page.setContent(`
       <main>

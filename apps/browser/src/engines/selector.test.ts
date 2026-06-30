@@ -38,10 +38,6 @@ describe("engine selector", () => {
       expect(selectEngine(UseCase.PERF_PROFILE)).toBe("cdp");
     });
 
-    it("returns cdp for script inject", () => {
-      expect(selectEngine(UseCase.SCRIPT_INJECT)).toBe("cdp");
-    });
-
     it("returns cdp for coverage", () => {
       expect(selectEngine(UseCase.COVERAGE)).toBe("cdp");
     });

@@ -123,6 +123,9 @@ describe("CLI — help flags", () => {
     expect(stdout).toContain("events");
     expect(stdout).toContain("project");
     expect(stdout).toContain("webhooks");
+    expect(stdout).not.toMatch(/^\s+script\b/m);
+    expect(stdout).not.toMatch(/^\s+eval\b/m);
+    expect(stdout).not.toMatch(/^\s+watch\b/m);
   });
 
   it("browser session --help shows subcommands", async () => {
@@ -328,34 +331,22 @@ describe("CLI — session commands (DB-only)", () => {
   });
 });
 
-describe("CLI — script commands", () => {
+describe("CLI — removed workflow-like commands", () => {
   beforeEach(setupDb);
   afterEach(teardownDb);
 
-  it("script list hides long descriptions unless verbose while JSON stays full fidelity", async () => {
-    const { createScript } = await import("../db/scripts.js");
-    const description = `Detailed automation script description ${"very ".repeat(80)}long tail`;
-    createScript({
-      name: "noisy-script",
-      domain: "example.com",
-      description,
-      steps: [{ type: "browser", config: { url: "https://example.com" }, description: "Navigate" }],
-    });
+  it("does not expose durable script recipes or raw page eval as CLI commands", async () => {
+    const script = await runCli("script", "list");
+    expect(script.code).not.toBe(0);
+    expect(script.stderr).toContain("unknown command");
 
-    const compact = await runCli("script", "list");
-    expect(compact.code).toBe(0);
-    expect(compact.stdout).toContain("noisy-script");
-    expect(compact.stdout).not.toContain("long tail");
+    const evalCommand = await runCli("eval", "data:text/html,<main></main>", "document.title");
+    expect(evalCommand.code).not.toBe(0);
+    expect(evalCommand.stderr).toContain("unknown command");
 
-    const verbose = await runCli("script", "list", "--verbose");
-    expect(verbose.code).toBe(0);
-    expect(verbose.stdout).toContain("Detailed automation script description");
-    expect(verbose.stdout).not.toContain(description);
-
-    const full = await runCli("script", "list", "--json");
-    expect(full.code).toBe(0);
-    const parsed = JSON.parse(full.stdout);
-    expect(parsed[0].description).toBe(description);
+    const watch = await runCli("watch", "https://example.test");
+    expect(watch.code).not.toBe(0);
+    expect(watch.stderr).toContain("unknown command");
   });
 });
 
