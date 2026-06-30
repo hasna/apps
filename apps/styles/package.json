@@ -1,11 +1,11 @@
 {
   "name": "@hasna/styles",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "description": "Style management platform for AI coding agents — profiles, preferences, health checks, and design system enforcement",
   "type": "module",
   "bin": {
-    "styles": "./bin/index.js",
-    "styles-mcp": "./bin/mcp.js"
+    "styles": "bin/index.js",
+    "styles-mcp": "bin/mcp.js"
   },
   "exports": {
     ".": {
