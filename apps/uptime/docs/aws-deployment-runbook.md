@@ -824,10 +824,19 @@ tokens, database URLs, or saved Terraform state/plan contents in this output.
 
 ## Rollback
 
-Before each service update, record the previous task definition ARN and current
-desired counts:
+Before each service update, record the current source/package/image pins, task
+definition ARN, and desired counts:
 
 ```bash
+terraform -chdir="$TF_DIR" output -raw source_commit
+terraform -chdir="$TF_DIR" show -json \
+  | jq -r '
+      .values.root_module.child_modules[]?
+      | select(.address == "module.open_uptime")
+      | .resources[]?
+      | select(.address | endswith("aws_ecs_task_definition.service[\"web\"]"))
+      | .values.container_definitions
+    '
 ECS_CLUSTER="$(terraform -chdir="$TF_DIR" output -raw ecs_cluster_name)"
 WEB_SERVICE="$(terraform -chdir="$TF_DIR" output -json service_names | jq -r '.[] | select(endswith("-web"))')"
 aws ecs describe-services \
@@ -849,19 +858,36 @@ aws ecs update-service \
   --desired-count 0
 ```
 
-If a later task definition is bad during a zero-count image refresh, restore the
-previous task definition and keep web plus workers disabled:
+If a later task definition is bad during a zero-count image refresh, do not
+assume the previous ECS task definition revision is still active. Terraform may
+deregister replaced task definitions. Prefer rolling back by re-pinning the
+private root to the previous reviewed source/package/image values, planning with
+all desired counts still `0`, machine-checking that only dormant task
+definitions/service pointers change, applying the saved plan, and rerunning the
+literal version smoke plus no-drift checks.
 
 ```bash
-: "${PREVIOUS_TASK_DEFINITION_ARN:?set PREVIOUS_TASK_DEFINITION_ARN from the pre-update evidence}"
-aws ecs update-service \
-  --profile "$AWS_PROFILE_NAME" \
-  --region "$AWS_REGION" \
-  --cluster "$ECS_CLUSTER" \
-  --service "$WEB_SERVICE" \
-  --task-definition "$PREVIOUS_TASK_DEFINITION_ARN" \
-  --desired-count 0
+: "${PREVIOUS_SOURCE_REF:?set PREVIOUS_SOURCE_REF from the pre-update evidence}"
+: "${PREVIOUS_PACKAGE_VERSION:?set PREVIOUS_PACKAGE_VERSION from the pre-update evidence}"
+: "${PREVIOUS_PACKAGE_INTEGRITY:?set PREVIOUS_PACKAGE_INTEGRITY from the pre-update evidence}"
+: "${PREVIOUS_IMAGE_DIGEST:?set PREVIOUS_IMAGE_DIGEST from the pre-update evidence}"
+
+# Edit the private root to restore source_ref, module source ref,
+# runtime_package_version, runtime_package_integrity, and container_image.
+terraform -chdir="$TF_DIR" plan \
+  -var-file="$HASNA_UPTIME_TF_VARS" \
+  -out=/tmp/open-uptime-prod-rollback.tfplan \
+  -detailed-exitcode \
+  -no-color
+terraform -chdir="$TF_DIR" show -json /tmp/open-uptime-prod-rollback.tfplan \
+  | jq '{changes:[.resource_changes[]? | select(.change.actions != ["no-op"]) | {type, actions:.change.actions}]}'
+terraform -chdir="$TF_DIR" apply -no-color /tmp/open-uptime-prod-rollback.tfplan
 ```
+
+An emergency `aws ecs update-service --task-definition "$PREVIOUS_TASK_DEFINITION_ARN"
+--desired-count 0` is acceptable only after `aws ecs describe-task-definition`
+confirms that ARN is still `ACTIVE`; follow it with a Terraform re-pin so state
+converges. Record whether rollback was rehearsed or only procedural evidence.
 
 Only use a nonzero desired count after the live web scale-up gates are met and
 the pre-update evidence shows the service was already live.

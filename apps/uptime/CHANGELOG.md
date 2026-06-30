@@ -6,6 +6,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Clarified zero-count cloud rollback guidance to prefer a Terraform
+  source/package/image re-pin path instead of assuming previous ECS task
+  definition revisions remain active after replacement.
+
 ## [0.1.68] - 2026-06-30
 
 ### Added
