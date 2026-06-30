@@ -39,6 +39,14 @@ test("published package exports and bins are usable after build", async () => {
   }
 });
 
+test("generated report promotion evidence types require workspace binding", () => {
+  const declaration = readFileSync(join(root, "dist/postgres-report-runtime.d.ts"), "utf8");
+  const match = declaration.match(/interface PostgresReportRuntimePromotionEvidence \{[\s\S]*?\n\}/);
+
+  expect(match?.[0]).toContain("workspaceId: string;");
+  expect(match?.[0]).not.toContain("workspaceId?: string;");
+});
+
 test("package dry-run includes release artifacts and excludes source-only files", () => {
   const result = Bun.spawnSync({
     cmd: ["bun", "pm", "pack", "--dry-run"],

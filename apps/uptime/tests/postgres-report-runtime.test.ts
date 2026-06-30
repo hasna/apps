@@ -1050,6 +1050,203 @@ test("Postgres report runtime readiness accepts sanitized partial reporter promo
   expect(readiness.blockers.join("\n")).toContain("reporter-worker-liveness");
 });
 
+test("Postgres report runtime readiness requires promotion evidence to name the active workspace", () => {
+  const readiness = buildPostgresReportRuntimeReadiness({
+    databaseUrl: "postgres://svc:secret@db.example.invalid/uptime?sslmode=require",
+    workspaceId: "ws_runtime",
+    schemaVerified: true,
+    promotionEvidenceJson: JSON.stringify({
+      version: "open-uptime.reporter-promotion-evidence.v1",
+      redacted: true,
+      checkedAt: "2026-06-30T01:00:00.000Z",
+      checks: {
+        artifactObjectStore: {
+          ok: true,
+          reviewed: true,
+          smokePassed: true,
+          encrypted: true,
+          redactedOnly: true,
+          workspaceScoped: true,
+        },
+      },
+    }),
+  });
+  const serialized = JSON.stringify(readiness);
+
+  expect(readiness.status).toBe("blocked");
+  expect(readiness.capabilities.artifactObjectWriter).toBe(false);
+  expect(serialized).toContain("promotion evidence workspaceId is required");
+});
+
+test("Postgres report runtime readiness rejects promotion evidence without an active workspace", () => {
+  const readiness = buildPostgresReportRuntimeReadiness({
+    databaseUrl: "postgres://svc:secret@db.example.invalid/uptime?sslmode=require",
+    schemaVerified: true,
+    promotionEvidenceJson: JSON.stringify({
+      version: "open-uptime.reporter-promotion-evidence.v1",
+      redacted: true,
+      workspaceId: "ws_runtime",
+      checks: {
+        artifactObjectStore: {
+          ok: true,
+          reviewed: true,
+          smokePassed: true,
+          encrypted: true,
+          redactedOnly: true,
+          workspaceScoped: true,
+        },
+      },
+    }),
+  });
+  const serialized = JSON.stringify(readiness);
+
+  expect(readiness.status).toBe("blocked");
+  expect(readiness.workspaceId).toBeNull();
+  expect(readiness.capabilities.artifactObjectWriter).toBe(false);
+  expect(serialized).toContain("promotion evidence workspaceId does not match the active workspace");
+});
+
+test("Postgres report runtime readiness rejects mismatched promotion evidence workspace", () => {
+  const readiness = buildPostgresReportRuntimeReadiness({
+    databaseUrl: "postgres://svc:secret@db.example.invalid/uptime?sslmode=require",
+    workspaceId: "ws_runtime",
+    schemaVerified: true,
+    promotionEvidenceJson: JSON.stringify({
+      version: "open-uptime.reporter-promotion-evidence.v1",
+      redacted: true,
+      workspaceId: "ws_other",
+      checks: {
+        artifactObjectStore: {
+          ok: true,
+          reviewed: true,
+          smokePassed: true,
+          encrypted: true,
+          redactedOnly: true,
+          workspaceScoped: true,
+        },
+        auditExport: {
+          ok: true,
+          reviewed: true,
+          smokePassed: true,
+          redactedOnly: true,
+          workspaceScoped: true,
+          service: "logs",
+        },
+        deliveryAlarms: {
+          ok: true,
+          reviewed: true,
+          alarmCount: 4,
+          actionsConfigured: true,
+          reporterMetricsReviewed: true,
+        },
+        workerLiveness: {
+          ok: true,
+          reviewed: true,
+          sustainedRunSeconds: 300,
+          drainProven: true,
+          rollbackProven: true,
+        },
+      },
+    }),
+  });
+  const checks = Object.fromEntries(readiness.checks.map((check) => [check.name, check.ok]));
+
+  expect(readiness.status).toBe("blocked");
+  expect(checks).toMatchObject({
+    "report-artifact-object-store": false,
+    "report-audit-export": false,
+    "report-delivery-alarms": false,
+    "reporter-worker-liveness": false,
+  });
+  expect(readiness.blockers.join("\n")).toContain("promotion evidence workspaceId does not match the active workspace");
+});
+
+test("Postgres report runtime readiness rejects unsafe promotion evidence workspace without leaking it", () => {
+  const readiness = buildPostgresReportRuntimeReadiness({
+    databaseUrl: "postgres://svc:secret@db.example.invalid/uptime?sslmode=require",
+    workspaceId: "ws_runtime",
+    schemaVerified: true,
+    promotionEvidenceJson: JSON.stringify({
+      version: "open-uptime.reporter-promotion-evidence.v1",
+      redacted: true,
+      workspaceId: "ws runtime",
+      checks: {
+        artifactObjectStore: {
+          ok: true,
+          reviewed: true,
+          smokePassed: true,
+          encrypted: true,
+          redactedOnly: true,
+          workspaceScoped: true,
+        },
+      },
+    }),
+  });
+  const serialized = JSON.stringify(readiness);
+
+  expect(readiness.status).toBe("blocked");
+  expect(readiness.capabilities.artifactObjectWriter).toBe(false);
+  expect(serialized).toContain("promotion evidence workspaceId must be a safe workspace id");
+  expect(serialized).not.toContain("ws runtime");
+});
+
+test("Postgres report runtime readiness rejects secret-shaped promotion evidence workspace without leaking it", () => {
+  const readiness = buildPostgresReportRuntimeReadiness({
+    databaseUrl: "postgres://svc:secret@db.example.invalid/uptime?sslmode=require",
+    workspaceId: "ws_runtime",
+    schemaVerified: true,
+    promotionEvidenceJson: JSON.stringify({
+      version: "open-uptime.reporter-promotion-evidence.v1",
+      redacted: true,
+      workspaceId: "password=raw-secret",
+      checks: {
+        artifactObjectStore: {
+          ok: true,
+          reviewed: true,
+          smokePassed: true,
+          encrypted: true,
+          redactedOnly: true,
+          workspaceScoped: true,
+        },
+      },
+    }),
+  });
+  const serialized = JSON.stringify(readiness);
+
+  expect(readiness.status).toBe("blocked");
+  expect(readiness.capabilities.artifactObjectWriter).toBe(false);
+  expect(serialized).toContain("promotion evidence failed no-secret review");
+  expect(serialized).not.toContain("raw-secret");
+  expect(serialized).not.toContain("password=");
+});
+
+test("Postgres report runtime readiness rejects non-string promotion evidence workspace", () => {
+  const readiness = buildPostgresReportRuntimeReadiness({
+    databaseUrl: "postgres://svc:secret@db.example.invalid/uptime?sslmode=require",
+    workspaceId: "ws_runtime",
+    schemaVerified: true,
+    promotionEvidenceJson: JSON.stringify({
+      version: "open-uptime.reporter-promotion-evidence.v1",
+      redacted: true,
+      workspaceId: 42,
+      checks: {
+        artifactObjectStore: {
+          ok: true,
+          reviewed: true,
+          smokePassed: true,
+          encrypted: true,
+          redactedOnly: true,
+          workspaceScoped: true,
+        },
+      },
+    }),
+  });
+
+  expect(readiness.status).toBe("blocked");
+  expect(readiness.capabilities.artifactObjectWriter).toBe(false);
+  expect(JSON.stringify(readiness)).toContain("promotion evidence workspaceId is required and must be a string");
+});
+
 test("Postgres report runtime readiness rejects unsafe reporter promotion evidence without leaking it", () => {
   const readiness = buildPostgresReportRuntimeReadiness({
     databaseUrl: "postgres://svc:secret@db.example.invalid/uptime?sslmode=require",

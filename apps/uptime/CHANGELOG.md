@@ -6,6 +6,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.65] - 2026-06-30
+
+### Changed
+
+- Hardened reporter promotion evidence so
+  `HASNA_UPTIME_REPORTER_PROMOTION_EVIDENCE_JSON` must include a safe
+  `workspaceId` that matches the active reporter workspace whenever promotion
+  evidence is supplied. Missing promotion evidence still blocks by default, and
+  hosted reporter startup remains fail-closed behind the broader worker gates.
+- Updated packaged AWS module defaults and deployment metadata examples to
+  `@hasna/uptime@0.1.65`.
+
 ## [0.1.64] - 2026-06-30
 
 ### Added

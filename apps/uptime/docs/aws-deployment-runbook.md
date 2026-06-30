@@ -635,7 +635,9 @@ report run state machine, approved S3/object artifact storage wiring and smoke
 evidence, approved audit export wiring and smoke evidence, and delivery alarms
 are still blocked.
 
-`0.1.64` adds `HASNA_UPTIME_REPORTER_PROMOTION_EVIDENCE_JSON` as a redacted
+`0.1.65` requires `HASNA_UPTIME_REPORTER_PROMOTION_EVIDENCE_JSON` to include a
+safe `workspaceId` that matches the active reporter workspace whenever
+promotion evidence is supplied. `0.1.64` added the variable as a redacted
 operator evidence input for reporter preflight. Use it only after private
 runbook evidence has already proven the exact object-store, Open Logs export,
 alarm, and liveness checks. The JSON is intentionally boolean/count based and
@@ -686,7 +688,9 @@ object keys, or provider payloads:
 The preflight rejects unsafe evidence and keeps `canStart=false` while shared
 worker gates such as the service-store adapter, channel secret loading, worker
 lease ownership, and deploy drain remain incomplete. Do not use promotion
-evidence JSON to bypass those gates.
+evidence JSON to bypass those gates. Evidence without `workspaceId`, with an
+unsafe workspace id, or with a workspace id that does not match the active
+`HASNA_UPTIME_WORKSPACE_ID` is rejected fail-closed.
 
 Hosted report delivery must use the server-side channel-ref resolver, not the
 local direct `--mailery-url`, `--telephony-url`, recipient, or token flags. The

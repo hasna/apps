@@ -43,26 +43,28 @@ evidence:
 
 For the 2026-06-29 hosted deployment track, published public package versions
 remain release and zero-count deployment evidence only after the matching
-private deployment metadata records that result. Version `0.1.64` is prepared
+private deployment metadata records that result. Version `0.1.65` is prepared
 with shared-evidence sanitizer support, hosted reporter artifact/audit callback
 contracts, AWS-shaped origin-header value sanitization, and an explicit
 zero-count exception gate for pre-hardening origin-header setup or rotation.
 It also packages the public operational docs and adds a redacted reporter
 promotion-evidence contract for object-store, Open Logs audit-export, delivery
-alarm, and liveness evidence. The prior zero-count deployment path remains not
-live runtime evidence until private deployment metadata records the matching
-image refresh. Hosted reporter,
+alarm, and liveness evidence. Promotion evidence must include a safe workspace
+id that matches the active workspace before any individual reporter promotion
+check can pass. The prior zero-count deployment path remains not live runtime
+evidence until private deployment metadata records the matching image refresh.
+Hosted reporter,
 protected web/API scale-out, private probes, and cloud-primary promotion remain
 blocked until the hard hosted gate below is satisfied.
 
-## 0.1.64 Runtime Readiness Snapshot
+## 0.1.65 Runtime Readiness Snapshot
 
 | Area | Current evidence | Status |
 | --- | --- | --- |
 | Shared evidence | SDK/CLI sanitizer can redact raw AWS identifiers, CloudFront/ALB hosts, private URLs, Terraform artifacts, image digests, local paths, recipients, database URLs, tokens, and unsafe object keys before evidence is copied into shared docs or project metadata. | Sanitized evidence is not live readiness; protected web, workers, reports, private probes, and cloud-primary gates still need runtime proof. |
 | Protected access | Origin-header setup or rotation now requires `live_ops_backend_state_hardened=true` or an explicit zero-count exception, and AWS-shaped CloudFront/ALB header-value evidence fields are treated as secret-bearing. | This does not solve HTTPS-origin DNS/ACM, auth/RBAC, public edge promotion smoke, direct-origin proof, human alert delivery, or live scale-out. |
 | Target policy | Hosted API/import paths, worker review paths, and direct Postgres monitor upserts reject unsafe public-hosted targets before execution or storage; enabled browser-page rows remain blocked. | Still blocked on approved private inventory refs, live denied-target AWS smokes, browser evidence isolation, and full hosted service adapter wiring. |
-| Reporter | Channel-ref shape validation, Postgres report metadata helpers, callback contracts for redacted artifact object writes plus Open Logs audit export payloads, and `HASNA_UPTIME_REPORTER_PROMOTION_EVIDENCE_JSON` for redacted operator evidence exist. | Evidence JSON can prove individual report promotion checks only after private smoke/review evidence exists. Startup still blocks on server-side secret loading, service-store integration, worker lease ownership, deploy drain, and cloud-worker readiness. |
+| Reporter | Channel-ref shape validation, Postgres report metadata helpers, callback contracts for redacted artifact object writes plus Open Logs audit export payloads, and workspace-bound `HASNA_UPTIME_REPORTER_PROMOTION_EVIDENCE_JSON` for redacted operator evidence exist. | Evidence JSON can prove individual report promotion checks only after private smoke/review evidence exists and names the active workspace. Startup still blocks on server-side secret loading, service-store integration, worker lease ownership, deploy drain, and cloud-worker readiness. |
 | Scheduler | Bounded Postgres scheduler review batches can create public-safe deterministic `check_jobs`. | Blocked on hosted service/API integration, lease ownership, deploy drain, metrics, alarms, and live RLS evidence. |
 | Public probe | Bounded Postgres public-probe review batches can claim, execute, and submit existing public-safe jobs. | Blocked on hosted worker promotion gates, denied-target AWS smokes, backlog metrics, and rollback evidence. |
 | Private probe | Read-only Postgres identity preflight can inspect a scoped probe identity and private-job counters without exposing key material. | Blocked on hosted probe APIs, heartbeat, revocation, rotation, approved inventory refs, target seed policy, alarms, and live evidence. |

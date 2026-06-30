@@ -55,7 +55,7 @@ export interface PostgresReportRuntimeReadiness {
 export interface PostgresReportRuntimePromotionEvidence {
   version: "open-uptime.reporter-promotion-evidence.v1";
   redacted: true;
-  workspaceId?: string;
+  workspaceId: string;
   checkedAt?: string;
   checks: {
     artifactObjectStore?: PostgresReportRuntimeArtifactObjectStoreEvidence;
@@ -1348,17 +1348,17 @@ function parseReporterPromotionEvidence(raw: string | null | undefined, workspac
     return failPromotionEvidence("promotion evidence version must be open-uptime.reporter-promotion-evidence.v1");
   }
   if (evidence.redacted !== true) return failPromotionEvidence("promotion evidence must declare redacted=true");
-  if (evidence.workspaceId != null) {
-    if (typeof evidence.workspaceId !== "string") return failPromotionEvidence("promotion evidence workspaceId must be a string");
-    let evidenceWorkspaceId: string;
-    try {
-      evidenceWorkspaceId = normalizeWorkspaceId(evidence.workspaceId);
-    } catch {
-      return failPromotionEvidence("promotion evidence workspaceId must be a safe workspace id");
-    }
-    if (!workspaceId || evidenceWorkspaceId !== workspaceId) {
-      return failPromotionEvidence("promotion evidence workspaceId does not match the active workspace");
-    }
+  if (typeof evidence.workspaceId !== "string") {
+    return failPromotionEvidence("promotion evidence workspaceId is required and must be a string");
+  }
+  let evidenceWorkspaceId: string;
+  try {
+    evidenceWorkspaceId = normalizePromotionWorkspaceId(evidence.workspaceId);
+  } catch {
+    return failPromotionEvidence("promotion evidence workspaceId must be a safe workspace id");
+  }
+  if (!workspaceId || evidenceWorkspaceId !== workspaceId) {
+    return failPromotionEvidence("promotion evidence workspaceId does not match the active workspace");
   }
   if (evidence.checkedAt != null) {
     try {
@@ -1827,6 +1827,14 @@ function normalizeSchemaName(value: string): string {
 
 function normalizeWorkspaceId(value: string): string {
   return normalizeOpaqueText(value, "workspace id", 128);
+}
+
+function normalizePromotionWorkspaceId(value: string): string {
+  const normalized = normalizeWorkspaceId(value);
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/.test(normalized)) {
+    throw new Error("promotion evidence workspaceId must use a safe ref id");
+  }
+  return normalized;
 }
 
 function normalizeWorkspaceSetting(value: string): string {
