@@ -2297,6 +2297,8 @@ describe("loops CLI", () => {
       "--var",
       "authProfile=account005",
       "--var",
+      `addDirs=${join(dataDir, "todos-store")}`,
+      "--var",
       `worktreeRoot=${worktreeRoot}`,
     ]);
 
@@ -2313,6 +2315,8 @@ describe("loops CLI", () => {
       repoRoot: repo,
       root: worktreeRoot,
     });
+    expect(workflow.steps[1].target.addDirs).toEqual([join(dataDir, "todos-store"), join(repo, ".git")]);
+    expect(workflow.steps[2].target.addDirs).toEqual([join(dataDir, "todos-store"), join(repo, ".git")]);
     expect(workflow.steps[1].target.worktree.branch).toContain("openloops/");
     expect(workflow.steps[2].target.cwd).toBe(workflow.steps[1].target.cwd);
     expect(workflow.steps[1].target.prompt).toContain("[redacted");
@@ -3121,6 +3125,8 @@ describe("loops CLI", () => {
     expect(value.workflow.steps[1].target.cwd).toContain(worktreeRoot);
     expect(value.workflow.steps[1].target.worktree.enabled).toBe(true);
     expect(value.workflow.steps[1].target.worktree.originalCwd).toBe(repo);
+    expect(value.workflow.steps[1].target.addDirs).toContain(join(repo, ".git"));
+    expect(value.workflow.steps[2].target.addDirs).toContain(join(repo, ".git"));
   });
 
   test("todos task event handler throttles active workflows per project", () => {

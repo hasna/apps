@@ -452,6 +452,7 @@ type AgentWorkflowRole = "triage" | "planner" | "worker" | "verifier";
 
 interface WorktreePlan extends AgentWorktreeSpec {
   prepareStep?: WorkflowStep;
+  gitMetadataDir?: string;
 }
 
 function stableIndex(seed: string, size: number): number {
@@ -528,6 +529,20 @@ function gitRootFor(path: string): string | undefined {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
     }).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+function gitCommonDirFor(path: string): string | undefined {
+  if (!existsSync(path)) return undefined;
+  try {
+    const raw = execFileSync("git", ["-C", path, "rev-parse", "--git-common-dir"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (!raw) return undefined;
+    return isAbsolute(raw) ? raw : resolve(path, raw);
   } catch {
     return undefined;
   }
@@ -653,6 +668,7 @@ function worktreePlan(input: AgentWorkflowTemplateInput, seed: string): Worktree
     root,
     path: worktreePath,
     branch,
+    gitMetadataDir: gitCommonDirFor(repoRoot),
     prepareStep,
   };
 }
@@ -720,6 +736,15 @@ function agentTarget(
         ? "enabled"
         : undefined);
   failClosedSandbox(input, provider, sandbox);
+  const addDirs = [...(input.addDirs ?? [])];
+  if (
+    plan.enabled &&
+    plan.gitMetadataDir &&
+    (provider === "codewith" || provider === "codex") &&
+    sandbox === "workspace-write"
+  ) {
+    addDirs.push(plan.gitMetadataDir);
+  }
   return {
     type: "agent",
     provider,
@@ -728,7 +753,7 @@ function agentTarget(
     model: input.model,
     variant: input.variant,
     agent: input.agent,
-    addDirs: input.addDirs,
+    addDirs: addDirs.length ? [...new Set(addDirs)] : undefined,
     authProfile: provider === "codewith" ? authProfileForRole(input, role, seed) : undefined,
     configIsolation: "safe",
     permissionMode: input.permissionMode ?? "bypass",
