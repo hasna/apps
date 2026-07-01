@@ -416,7 +416,7 @@ function packageProbeCommand(command: string): string {
     `cmd=${quoted}`,
     'path="$(command -v "$cmd" 2>/dev/null || true)"',
     'printf "path=%s\\n" "$path"',
-    'if [ -n "$path" ]; then version="$("$cmd" --version 2>&1 || true)"; printf "version=%s\\n" "$version"; fi',
+    'if [ -n "$path" ]; then version="$("$path" --version 2>&1 || true)"; printf "version=%s\\n" "$version"; fi',
   ].join("; ");
 }
 
