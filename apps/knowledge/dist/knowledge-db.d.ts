@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite';
-export declare const CURRENT_SCHEMA_VERSION = 7;
+export declare const CURRENT_SCHEMA_VERSION = 8;
 export interface KnowledgeDbStats {
     schema_version: number;
     sources: number;
