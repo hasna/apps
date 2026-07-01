@@ -17,14 +17,14 @@ known mitigations.
 ## Local Safety Model
 
 `@hasna/knowledge` is local-first. The default workspace is
-`.hasna/apps/knowledge` for project scope and `~/.hasna/apps/knowledge` for
+`.hasna/knowledge` for project scope and `~/.hasna/knowledge` for
 global scope. Legacy note data may be migrated from `~/.open-knowledge/db.json`
-into `~/.hasna/apps/knowledge/db.json`; source ingestion into `knowledge.db`
+into `~/.hasna/knowledge/db.json`; source ingestion into `knowledge.db`
 remains explicit.
 
 Default policy:
 
-- Writes are expected to stay inside the resolved `.hasna/apps/knowledge`
+- Writes are expected to stay inside the resolved `.hasna/knowledge`
   workspace.
 - `open-files://` source access is read-only.
 - Web search is disabled unless explicitly enabled.
@@ -96,7 +96,7 @@ Security expectations:
 - Treat `file://`, `s3://`, and `https://` ingestion as bootstrap paths that
   still store only redacted derived chunks.
 - Do not put raw source files, connector credentials, or cloud storage secrets
-  under `.hasna/apps/knowledge/artifacts`.
+  under `.hasna/knowledge/artifacts`.
 - Generated wiki pages must cite source refs or explicit citation evidence.
 - Semantic search and MCP resources must preserve provenance and must not expose
   raw source bytes.

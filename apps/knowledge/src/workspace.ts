@@ -1,8 +1,9 @@
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 
-export const HASNA_KNOWLEDGE_APP_PATH = join('.hasna', 'apps', 'knowledge');
+export const HASNA_KNOWLEDGE_APP_PATH = join('.hasna', 'knowledge');
+export const LEGACY_HASNA_KNOWLEDGE_APP_PATH = join('.hasna', 'apps', 'knowledge');
 
 export interface KnowledgeWorkspace {
   home: string;
@@ -92,7 +93,7 @@ export const HASNA_XYZ_KNOWLEDGE_CANONICAL = {
     bucket: 'hasna-xyz-opensource-knowledge-prod',
     region: 'us-east-1',
     profile: 'hasna-xyz-infra',
-    prefix: '.hasna/apps/knowledge',
+    prefix: '.hasna/knowledge',
     server_side_encryption: 'AES256',
   },
   secrets: {
@@ -125,11 +126,24 @@ export function legacyGlobalStorePath(): string {
 }
 
 export function globalKnowledgeHome(): string {
+  return join(homedir(), '.hasna', 'knowledge');
+}
+
+export function legacyGlobalKnowledgeHome(): string {
   return join(homedir(), '.hasna', 'apps', 'knowledge');
 }
 
 export function projectKnowledgeHome(cwd = process.cwd()): string {
   return resolve(cwd, HASNA_KNOWLEDGE_APP_PATH);
+}
+
+export function legacyProjectKnowledgeHome(cwd = process.cwd()): string {
+  return resolve(cwd, LEGACY_HASNA_KNOWLEDGE_APP_PATH);
+}
+
+export function legacyKnowledgeHomeForScope(scope: string | undefined, cwd = process.cwd()): string {
+  if (scope === 'project' || scope === 'local') return legacyProjectKnowledgeHome(cwd);
+  return legacyGlobalKnowledgeHome();
 }
 
 export function workspaceForHome(home: string): KnowledgeWorkspace {
@@ -166,7 +180,10 @@ export function pathIsInside(parent: string, target: string): boolean {
 
 function pathHasKnowledgeAppSegment(target: string): boolean {
   const normalized = resolve(target).split(sep).join('/');
-  return normalized.endsWith('/.hasna/apps/knowledge') || normalized.includes('/.hasna/apps/knowledge/');
+  return normalized.endsWith('/.hasna/knowledge')
+    || normalized.includes('/.hasna/knowledge/')
+    || normalized.endsWith('/.hasna/apps/knowledge')
+    || normalized.includes('/.hasna/apps/knowledge/');
 }
 
 export function assertKnowledgeWritePathAllowed(
@@ -264,6 +281,68 @@ export function ensureKnowledgeWorkspace(home: string): KnowledgeWorkspace {
     writeFileSync(workspace.configPath, `${JSON.stringify(defaultKnowledgeConfig(), null, 2)}\n`);
   }
   return workspace;
+}
+
+export interface LegacyKnowledgeWorkspaceMigrationResult {
+  ok: boolean;
+  migrated: boolean;
+  dry_run: boolean;
+  source: string;
+  target: string;
+  source_exists: boolean;
+  target_exists: boolean;
+  message: string;
+}
+
+export function migrateLegacyKnowledgeWorkspace(
+  options: { scope?: string; cwd?: string; dryRun?: boolean } = {},
+): LegacyKnowledgeWorkspaceMigrationResult {
+  const source = legacyKnowledgeHomeForScope(options.scope, options.cwd);
+  const target = resolveScopedWorkspace(options.scope, options.cwd).home;
+  const sourceExists = existsSync(source);
+  const targetExists = existsSync(target);
+  const dryRun = options.dryRun === true;
+
+  if (!sourceExists) {
+    return {
+      ok: true,
+      migrated: false,
+      dry_run: dryRun,
+      source,
+      target,
+      source_exists: false,
+      target_exists: targetExists,
+      message: `No legacy knowledge workspace found at ${source}`,
+    };
+  }
+  if (targetExists) {
+    return {
+      ok: true,
+      migrated: false,
+      dry_run: dryRun,
+      source,
+      target,
+      source_exists: true,
+      target_exists: true,
+      message: `Canonical knowledge workspace already exists at ${target}`,
+    };
+  }
+  if (!dryRun) {
+    mkdirSync(dirname(target), { recursive: true });
+    cpSync(source, target, { recursive: true, errorOnExist: true });
+  }
+  return {
+    ok: true,
+    migrated: !dryRun,
+    dry_run: dryRun,
+    source,
+    target,
+    source_exists: true,
+    target_exists: !dryRun ? true : false,
+    message: dryRun
+      ? `Would copy legacy knowledge workspace from ${source} to ${target}`
+      : `Copied legacy knowledge workspace from ${source} to ${target}`,
+  };
 }
 
 export function resolveScopedWorkspace(scope: string | undefined, cwd = process.cwd()): KnowledgeWorkspace {

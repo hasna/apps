@@ -2,7 +2,7 @@
 
 ## Knowledge Write Boundary
 
-- Never write directly to `.hasna/apps/knowledge`, `.hasna/apps/knowledge/artifacts`, or generated knowledge files.
+- Never write directly to `.hasna/knowledge`, `.hasna/knowledge/artifacts`, or generated knowledge files.
 - Use the `knowledge` CLI, `knowledge-mcp`, or the `@hasna/knowledge` SDK for every durable knowledge write.
 - For generated wiki or repair writes, require `--approve-write --approved-by <name>` unless the command is explicitly dry-run only.
 - Before handing work back, run `knowledge storage validate --strict --scope project --json` when knowledge state changed.

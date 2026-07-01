@@ -8,13 +8,13 @@ import { type KnowledgeProvenanceStatus } from './provenance-validate';
 import { type ReindexRuntimeOptions } from './reindex';
 import { RemoteKnowledgeClient, type RemoteKnowledgeRegistryContract } from './remote-client';
 import { type RetrievalOptions } from './retrieval';
-import { type HybridSearchOptions } from './search';
+import { type HybridSearchOptions, type HybridSearchResult } from './search';
 import { type WebSearchOptions } from './web-search';
 import { type KnowledgeSyncConflict, type KnowledgeSyncConflictResolutionProposal, type KnowledgePeerSyncResult, type KnowledgeSyncApplyResult, type KnowledgeSyncBundle, type KnowledgeSyncMachineRow, type KnowledgeSyncSnapshotResult, type KnowledgeSyncStatus } from './sync';
 import { type WikiCompileOptions } from './wiki-compiler';
 import { type StorageContract, type StorageValidationResult } from './storage-contract';
 import { type KnowledgeStorageProtectionResult, type KnowledgeWriteBoundaryStatus } from './write-boundary';
-import { type KnowledgeConfig, type KnowledgeWorkspace } from './workspace';
+import { type KnowledgeConfig, type LegacyKnowledgeWorkspaceMigrationResult, type KnowledgeWorkspace } from './workspace';
 export type { KnowledgeStorageProtectionResult, KnowledgeWriteBoundaryStatus, KnowledgeWriteBoundaryViolation, } from './write-boundary';
 export type { KnowledgeProvenanceStatus, KnowledgeProvenanceIssue } from './provenance-validate';
 export interface KnowledgeServiceOptions {
@@ -25,9 +25,13 @@ export interface KnowledgePathsResult {
     ok: true;
     scope: string;
     home: string;
+    exists: boolean;
     config_path: string;
+    config_exists: boolean;
     json_store_path: string;
+    json_store_exists: boolean;
     knowledge_db_path: string;
+    knowledge_db_exists: boolean;
     artifacts_dir: string;
     indexes_dir: string;
     logs_dir: string;
@@ -63,6 +67,7 @@ export interface KnowledgeInventoryResult {
         json_store_path: string;
         json_store_exists: boolean;
         knowledge_db_path: string;
+        knowledge_db_exists: boolean;
         artifacts_dir: string;
         indexes_dir: string;
         logs_dir: string;
@@ -93,6 +98,49 @@ export interface KnowledgeInventoryResult {
     approval_gates: Array<Record<string, unknown>>;
     audit_events: Array<Record<string, unknown>>;
     message: string;
+}
+export interface KnowledgeProjectPanelOptions {
+    projectId: string;
+    limit?: number;
+    contract?: boolean;
+}
+export interface KnowledgeProjectPanelResult {
+    schema: 'hasna.project_panel.v1';
+    id: string;
+    createdAt: string;
+    metadata: {
+        scope: string;
+        home: string;
+        json_store_exists: boolean;
+        knowledge_db_exists: boolean;
+    };
+    projectId: string;
+    provider: {
+        kind: 'knowledge';
+        id: string;
+        name: 'Knowledge';
+        sourcePackage: '@hasna/knowledge';
+        externalId: string;
+    };
+    kind: 'knowledge';
+    title: 'Knowledge';
+    summary: string;
+    state: 'empty' | 'ok' | 'warning';
+    generatedAt: string;
+    freshness: 'unknown';
+    metrics: Array<{
+        id: string;
+        label: string;
+        value: number;
+        status: 'good' | 'warning' | 'unknown';
+        resourceRefs: string[];
+    }>;
+    items: Array<Record<string, unknown>>;
+    actions: Array<Record<string, unknown>>;
+    resourceRefs: Array<Record<string, unknown>>;
+    evidenceRefs: Array<Record<string, unknown>>;
+    renderFragment: Record<string, unknown>;
+    warnings: string[];
 }
 export interface KnowledgeSetupResult {
     ok: true;
@@ -322,7 +370,9 @@ export declare class KnowledgeService {
     get workspace(): KnowledgeWorkspace;
     ensureWorkspace(): KnowledgeWorkspace;
     jsonStorePath(): string;
-    config(): KnowledgeConfig;
+    config(options?: {
+        ensure?: boolean;
+    }): KnowledgeConfig;
     safetyPolicy(): import("./safety").SafetyPolicy;
     artifactStore(): import("./artifact-store").ArtifactStore;
     storageContract(): StorageContract;
@@ -331,6 +381,9 @@ export declare class KnowledgeService {
         strict?: boolean;
     }): KnowledgeWriteBoundaryStatus;
     protectStorageBoundary(): KnowledgeStorageProtectionResult;
+    migrateLegacyPath(options?: {
+        dryRun?: boolean;
+    }): LegacyKnowledgeWorkspaceMigrationResult;
     provenanceStatus(): KnowledgeProvenanceStatus;
     setup(options?: {
         mode?: string;
@@ -356,6 +409,7 @@ export declare class KnowledgeService {
     };
     dbStats(): import("./knowledge-db").KnowledgeDbStats;
     inventory(options?: KnowledgeInventoryOptions): KnowledgeInventoryResult;
+    projectPanel(options: KnowledgeProjectPanelOptions): KnowledgeProjectPanelResult;
     initWiki(): Promise<import("./wiki-layout").WikiLayoutInitResult>;
     compileWiki(options?: Omit<WikiCompileOptions, 'dbPath' | 'store'>): Promise<import("./wiki-compiler").WikiCompileResult>;
     fileAnswer(options: {
@@ -389,7 +443,7 @@ export declare class KnowledgeService {
     embeddingStatus(): import("./embeddings").EmbeddingStatusResult;
     indexEmbeddings(options?: Omit<EmbeddingIndexOptions, 'dbPath' | 'config'>): Promise<import("./embeddings").EmbeddingIndexResult>;
     semanticSearch(options: Omit<EmbeddingSearchOptions, 'dbPath' | 'config'>): Promise<import("./embeddings").SemanticSearchResult>;
-    search(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>): Promise<import("./search").HybridSearchResult>;
+    search(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>): Promise<HybridSearchResult>;
     retrieveContext(options: Omit<RetrievalOptions, 'dbPath' | 'config'>): Promise<import("./retrieval").KnowledgeContextPack>;
     runPrompt(options: Omit<KnowledgePromptOptions, 'dbPath' | 'config'>): Promise<import("./agent").KnowledgePromptResult>;
     webSearch(options: Omit<WebSearchOptions, 'dbPath' | 'config' | 'safetyPolicy'>): Promise<import("./web-search").WebSearchResult>;

@@ -24,7 +24,7 @@ import {
   type EmbeddingSearchOptions,
 } from './embeddings';
 import { consumeOpenFilesOutbox } from './outbox-consume';
-import { getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
+import { emptyKnowledgeDbStats, getKnowledgeDbStats, migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import { ingestOpenFilesManifest } from './manifest-ingest';
 import {
   discoverKnowledgeMachineTopology,
@@ -43,7 +43,7 @@ import { provenanceStatusFor, type KnowledgeProvenanceStatus } from './provenanc
 import { enqueueMissingEmbeddings, refreshEmbeddingIndex, reindexHealth, type ReindexRuntimeOptions } from './reindex';
 import { knowledgeRegistryContract, RemoteKnowledgeClient, type RemoteKnowledgeRegistryContract } from './remote-client';
 import { retrieveKnowledgeContext, type RetrievalOptions } from './retrieval';
-import { hybridSearch, type HybridSearchOptions } from './search';
+import { hybridSearch, type HybridSearchOptions, type HybridSearchResult } from './search';
 import { recordAuditEvent, resolveSafetyPolicy } from './safety';
 import { runProviderWebSearch, type WebSearchOptions } from './web-search';
 import {
@@ -86,13 +86,16 @@ import {
 } from './write-boundary';
 import {
   canonicalHasnaXyzKnowledgeStorage,
+  defaultKnowledgeConfig,
   ensureKnowledgeWorkspace,
+  migrateLegacyKnowledgeWorkspace,
   projectKnowledgeHome,
   readKnowledgeConfig,
   resolveScopedWorkspace,
   workspaceForHome,
   writeKnowledgeConfig,
   type KnowledgeConfig,
+  type LegacyKnowledgeWorkspaceMigrationResult,
   type KnowledgeWorkspace,
 } from './workspace';
 
@@ -112,9 +115,13 @@ export interface KnowledgePathsResult {
   ok: true;
   scope: string;
   home: string;
+  exists: boolean;
   config_path: string;
+  config_exists: boolean;
   json_store_path: string;
+  json_store_exists: boolean;
   knowledge_db_path: string;
+  knowledge_db_exists: boolean;
   artifacts_dir: string;
   indexes_dir: string;
   logs_dir: string;
@@ -153,6 +160,7 @@ export interface KnowledgeInventoryResult {
     json_store_path: string;
     json_store_exists: boolean;
     knowledge_db_path: string;
+    knowledge_db_exists: boolean;
     artifacts_dir: string;
     indexes_dir: string;
     logs_dir: string;
@@ -183,6 +191,51 @@ export interface KnowledgeInventoryResult {
   approval_gates: Array<Record<string, unknown>>;
   audit_events: Array<Record<string, unknown>>;
   message: string;
+}
+
+export interface KnowledgeProjectPanelOptions {
+  projectId: string;
+  limit?: number;
+  contract?: boolean;
+}
+
+export interface KnowledgeProjectPanelResult {
+  schema: 'hasna.project_panel.v1';
+  id: string;
+  createdAt: string;
+  metadata: {
+    scope: string;
+    home: string;
+    json_store_exists: boolean;
+    knowledge_db_exists: boolean;
+  };
+  projectId: string;
+  provider: {
+    kind: 'knowledge';
+    id: string;
+    name: 'Knowledge';
+    sourcePackage: '@hasna/knowledge';
+    externalId: string;
+  };
+  kind: 'knowledge';
+  title: 'Knowledge';
+  summary: string;
+  state: 'empty' | 'ok' | 'warning';
+  generatedAt: string;
+  freshness: 'unknown';
+  metrics: Array<{
+    id: string;
+    label: string;
+    value: number;
+    status: 'good' | 'warning' | 'unknown';
+    resourceRefs: string[];
+  }>;
+  items: Array<Record<string, unknown>>;
+  actions: Array<Record<string, unknown>>;
+  resourceRefs: Array<Record<string, unknown>>;
+  evidenceRefs: Array<Record<string, unknown>>;
+  renderFragment: Record<string, unknown>;
+  warnings: string[];
 }
 
 export interface KnowledgeSetupResult {
@@ -798,6 +851,102 @@ function legacyInventoryItem(item: KnowledgeItem): KnowledgeInventoryLegacyItem 
   };
 }
 
+function emptySearchResult(query: string, limit: number, semantic = false): HybridSearchResult {
+  return {
+    query,
+    limit,
+    mode: {
+      keyword: true,
+      catalog: true,
+      semantic,
+    },
+    semantic_provider: null,
+    semantic_model: null,
+    semantic_dimensions: null,
+    counts: {
+      keyword_results: 0,
+      catalog_results: 0,
+      semantic_results: 0,
+      merged_results: 0,
+    },
+    warnings: ['knowledge_db_missing'],
+    results: [],
+  };
+}
+
+function emptyReindexHealth(): ReturnType<typeof reindexHealth> {
+  return {
+    schema_version: 0,
+    chunks: 0,
+    vector_entries: 0,
+    missing_embeddings: 0,
+    queued: {},
+    stale_revisions: 0,
+  };
+}
+
+function emptyEmbeddingStatus(): ReturnType<typeof embeddingIndexStatus> {
+  return {
+    total_embeddings: 0,
+    total_vector_entries: 0,
+    indexes: [],
+  };
+}
+
+function emptySyncStatus(input: { scope: string; workspaceHome: string; localMachineId?: string | null }): KnowledgeSyncStatus {
+  return {
+    ok: true,
+    scope: input.scope,
+    workspace_home: input.workspaceHome,
+    sqlite_schema_version: 0,
+    local_machine_id: input.localMachineId ?? null,
+    machines: {
+      total: 0,
+      rows: [],
+    },
+    snapshots: {
+      total: 0,
+      latest: null,
+    },
+    changes: {
+      total: 0,
+      by_operation: [],
+    },
+    clocks: {
+      total: 0,
+      rows: [],
+    },
+    imports: {
+      total: 0,
+      latest: null,
+    },
+    conflicts: {
+      total: 0,
+      by_status: [],
+      open: 0,
+    },
+    table_counts: {},
+    message: '0 machine(s), 0 open sync conflict(s)',
+  };
+}
+
+function projectPanelResource(
+  kind: string,
+  id: string,
+  name: string,
+  uri: string,
+): Record<string, unknown> {
+  return {
+    kind,
+    id,
+    name,
+    uri,
+    externalId: id,
+    sourcePackage: '@hasna/knowledge',
+    tags: [],
+  };
+}
+
 function storagePrefixKey(storage: StorageContract): string | null {
   const prefix = storage.artifact_store.s3?.prefix?.replace(/^\/+|\/+$/g, '');
   return prefix ? `${prefix}/` : null;
@@ -1173,16 +1322,18 @@ export class KnowledgeService {
     return this.ensureWorkspace().jsonStorePath;
   }
 
-  config(): KnowledgeConfig {
-    if (!this.cachedConfig) {
-      const workspace = this.ensureWorkspace();
-      this.cachedConfig = readKnowledgeConfig(workspace.configPath);
+  config(options: { ensure?: boolean } = {}): KnowledgeConfig {
+    const workspace = options.ensure ? this.ensureWorkspace() : this.workspace;
+    if (!this.cachedConfig || options.ensure) {
+      this.cachedConfig = existsSync(workspace.configPath)
+        ? readKnowledgeConfig(workspace.configPath)
+        : defaultKnowledgeConfig();
     }
     return this.cachedConfig;
   }
 
   safetyPolicy() {
-    return resolveSafetyPolicy(this.config(), this.ensureWorkspace());
+    return resolveSafetyPolicy(this.config(), this.workspace);
   }
 
   artifactStore() {
@@ -1190,15 +1341,15 @@ export class KnowledgeService {
   }
 
   storageContract(): StorageContract {
-    return resolveStorageContract(this.config(), this.ensureWorkspace(), this.scope);
+    return resolveStorageContract(this.config(), this.workspace, this.scope);
   }
 
   validateStorage(): StorageValidationResult {
-    return validateStorageConfig(this.config(), this.ensureWorkspace());
+    return validateStorageConfig(this.config(), this.workspace);
   }
 
   writeBoundaryStatus(options: { strict?: boolean } = {}): KnowledgeWriteBoundaryStatus {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
     return writeBoundaryStatusFor(workspace.knowledgeDbPath, workspace, this.storageContract(), options);
   }
 
@@ -1212,14 +1363,22 @@ export class KnowledgeService {
     });
   }
 
+  migrateLegacyPath(options: { dryRun?: boolean } = {}): LegacyKnowledgeWorkspaceMigrationResult {
+    return migrateLegacyKnowledgeWorkspace({
+      scope: this.scope,
+      cwd: this.options.cwd,
+      dryRun: options.dryRun,
+    });
+  }
+
   provenanceStatus(): KnowledgeProvenanceStatus {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
     return provenanceStatusFor(workspace.knowledgeDbPath, this.storageContract());
   }
 
   setup(options: { mode?: string; apiUrl?: string; canonicalHasnaXyz?: boolean } = {}): KnowledgeSetupResult {
     const workspace = this.ensureWorkspace();
-    const current = this.config();
+    const current = this.config({ ensure: true });
     const mode = normalizeMode(options.mode) ?? current.mode;
     const apiUrl = options.apiUrl
       ? normalizeKnowledgeApiOrigin(options.apiUrl)
@@ -1297,14 +1456,18 @@ export class KnowledgeService {
   }
 
   paths(): KnowledgePathsResult {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
     return {
       ok: true,
       scope: this.scope,
       home: workspace.home,
+      exists: existsSync(workspace.home),
       config_path: workspace.configPath,
+      config_exists: existsSync(workspace.configPath),
       json_store_path: workspace.jsonStorePath,
+      json_store_exists: existsSync(workspace.jsonStorePath),
       knowledge_db_path: workspace.knowledgeDbPath,
+      knowledge_db_exists: existsSync(workspace.knowledgeDbPath),
       artifacts_dir: workspace.artifactsDir,
       indexes_dir: workspace.indexesDir,
       logs_dir: workspace.logsDir,
@@ -1321,186 +1484,205 @@ export class KnowledgeService {
   }
 
   dbStats() {
-    const workspace = this.ensureWorkspace();
-    migrateKnowledgeDb(workspace.knowledgeDbPath);
+    const workspace = this.workspace;
+    if (!existsSync(workspace.knowledgeDbPath)) return emptyKnowledgeDbStats();
     return getKnowledgeDbStats(workspace.knowledgeDbPath);
   }
 
   inventory(options: KnowledgeInventoryOptions = {}): KnowledgeInventoryResult {
-    const workspace = this.ensureWorkspace();
-    migrateKnowledgeDb(workspace.knowledgeDbPath);
+    const workspace = this.workspace;
     const limit = inventoryLimit(options.limit);
     const storePath = options.storePath ?? workspace.jsonStorePath;
     const legacyStore = readLegacyInventoryStore(storePath);
     const activeItems = legacyStore.items.filter((item) => item.archived !== true);
     const visibleItems = options.includeArchived ? legacyStore.items : activeItems;
-    const stats = getKnowledgeDbStats(workspace.knowledgeDbPath);
-    const db = openKnowledgeDb(workspace.knowledgeDbPath);
-    try {
-      const sources = rowsWithJsonFields(selectInventoryRows(db, `
-        SELECT
-          s.id,
-          s.uri,
-          s.kind,
-          s.title,
-          s.metadata_json,
-          s.acl_json,
-          s.created_at,
-          s.updated_at,
-          COUNT(DISTINCT sr.id) AS revisions,
-          COUNT(DISTINCT c.id) AS chunks
-        FROM sources s
-        LEFT JOIN source_revisions sr ON sr.source_id = s.id
-        LEFT JOIN chunks c ON c.source_revision_id = sr.id
-        GROUP BY s.id
-        ORDER BY s.updated_at DESC, s.created_at DESC
-        LIMIT ?
-      `, [limit]), ['metadata_json', 'acl_json']);
+    const dbExists = existsSync(workspace.knowledgeDbPath);
+    const stats = dbExists ? getKnowledgeDbStats(workspace.knowledgeDbPath) : emptyKnowledgeDbStats();
+    let sources: Array<Record<string, unknown>> = [];
+    let sourceRevisions: Array<Record<string, unknown>> = [];
+    let chunks: Array<Record<string, unknown>> = [];
+    let wikiPages: Array<Record<string, unknown>> = [];
+    let indexes: Array<Record<string, unknown>> = [];
+    let storageObjects: Array<Record<string, unknown>> = [];
+    let runs: Array<Record<string, unknown>> = [];
+    let vectorIndexes: Array<Record<string, unknown>> = [];
+    let reindexQueue: Array<Record<string, unknown>> = [];
+    let machines: Array<Record<string, unknown>> = [];
+    let syncConflicts: Array<Record<string, unknown>> = [];
+    let approvalGates: Array<Record<string, unknown>> = [];
+    let auditEvents: Array<Record<string, unknown>> = [];
 
-      const sourceRevisions = rowsWithJsonFields(selectInventoryRows(db, `
-        SELECT
-          sr.id,
-          s.uri AS source_uri,
-          sr.revision,
-          sr.hash,
-          sr.extracted_text_uri,
-          sr.metadata_json,
-          sr.created_at
-        FROM source_revisions sr
-        JOIN sources s ON s.id = sr.source_id
-        ORDER BY sr.created_at DESC
-        LIMIT ?
-      `, [limit]));
+    if (dbExists) {
+      const db = openKnowledgeDb(workspace.knowledgeDbPath);
+      try {
+        sources = rowsWithJsonFields(selectInventoryRows(db, `
+          SELECT
+            s.id,
+            s.uri,
+            s.kind,
+            s.title,
+            s.metadata_json,
+            s.acl_json,
+            s.created_at,
+            s.updated_at,
+            COUNT(DISTINCT sr.id) AS revisions,
+            COUNT(DISTINCT c.id) AS chunks
+          FROM sources s
+          LEFT JOIN source_revisions sr ON sr.source_id = s.id
+          LEFT JOIN chunks c ON c.source_revision_id = sr.id
+          GROUP BY s.id
+          ORDER BY s.updated_at DESC, s.created_at DESC
+          LIMIT ?
+        `, [limit]), ['metadata_json', 'acl_json']);
 
-      const chunks = rowsWithJsonFields(selectInventoryRows(db, `
-        SELECT
-          c.id,
-          c.kind,
-          c.ordinal,
-          substr(c.text, 1, 220) AS text_preview,
-          c.token_count,
-          c.start_offset,
-          c.end_offset,
-          c.metadata_json,
-          c.created_at,
-          s.uri AS source_uri,
-          sr.revision AS source_revision,
-          wp.path AS wiki_path,
-          wp.title AS wiki_title
-        FROM chunks c
-        LEFT JOIN source_revisions sr ON sr.id = c.source_revision_id
-        LEFT JOIN sources s ON s.id = sr.source_id
-        LEFT JOIN wiki_pages wp ON wp.id = c.wiki_page_id
-        ORDER BY c.created_at DESC, c.ordinal ASC
-        LIMIT ?
-      `, [limit]));
+        sourceRevisions = rowsWithJsonFields(selectInventoryRows(db, `
+          SELECT
+            sr.id,
+            s.uri AS source_uri,
+            sr.revision,
+            sr.hash,
+            sr.extracted_text_uri,
+            sr.metadata_json,
+            sr.created_at
+          FROM source_revisions sr
+          JOIN sources s ON s.id = sr.source_id
+          ORDER BY sr.created_at DESC
+          LIMIT ?
+        `, [limit]));
 
-      const wikiPages = rowsWithJsonFields(selectInventoryRows(db, `
-        SELECT id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at
-        FROM wiki_pages
-        ORDER BY updated_at DESC, created_at DESC
-        LIMIT ?
-      `, [limit]));
+        chunks = rowsWithJsonFields(selectInventoryRows(db, `
+          SELECT
+            c.id,
+            c.kind,
+            c.ordinal,
+            substr(c.text, 1, 220) AS text_preview,
+            c.token_count,
+            c.start_offset,
+            c.end_offset,
+            c.metadata_json,
+            c.created_at,
+            s.uri AS source_uri,
+            sr.revision AS source_revision,
+            wp.path AS wiki_path,
+            wp.title AS wiki_title
+          FROM chunks c
+          LEFT JOIN source_revisions sr ON sr.id = c.source_revision_id
+          LEFT JOIN sources s ON s.id = sr.source_id
+          LEFT JOIN wiki_pages wp ON wp.id = c.wiki_page_id
+          ORDER BY c.created_at DESC, c.ordinal ASC
+          LIMIT ?
+        `, [limit]));
 
-      const indexes = rowsWithJsonFields(selectInventoryRows(db, `
-        SELECT id, kind, name, artifact_uri, shard_key, metadata_json, created_at, updated_at
-        FROM knowledge_indexes
-        ORDER BY updated_at DESC, created_at DESC
-        LIMIT ?
-      `, [limit]));
+        wikiPages = rowsWithJsonFields(selectInventoryRows(db, `
+          SELECT id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at
+          FROM wiki_pages
+          ORDER BY updated_at DESC, created_at DESC
+          LIMIT ?
+        `, [limit]));
 
-      const storageObjects = rowsWithJsonFields(selectInventoryRows(db, `
-        SELECT id, artifact_uri, kind, content_type, hash, size_bytes, metadata_json, created_at, updated_at
-        FROM storage_objects
-        ORDER BY updated_at DESC, created_at DESC
-        LIMIT ?
-      `, [limit]));
+        indexes = rowsWithJsonFields(selectInventoryRows(db, `
+          SELECT id, kind, name, artifact_uri, shard_key, metadata_json, created_at, updated_at
+          FROM knowledge_indexes
+          ORDER BY updated_at DESC, created_at DESC
+          LIMIT ?
+        `, [limit]));
 
-      const runs = rowsWithJsonFields(selectInventoryRows(db, `
-        SELECT
-          id,
-          type,
-          substr(prompt, 1, 220) AS prompt_preview,
-          status,
-          provider,
-          model,
-          cost_tokens,
-          cost_usd,
-          metadata_json,
-          created_at,
-          updated_at
-        FROM runs
-        ORDER BY updated_at DESC, created_at DESC
-        LIMIT ?
-      `, [limit]));
+        storageObjects = rowsWithJsonFields(selectInventoryRows(db, `
+          SELECT id, artifact_uri, kind, content_type, hash, size_bytes, metadata_json, created_at, updated_at
+          FROM storage_objects
+          ORDER BY updated_at DESC, created_at DESC
+          LIMIT ?
+        `, [limit]));
 
-      const vectorIndexes = selectInventoryRows(db, `
-        SELECT provider, model, dimensions, status, COUNT(*) AS entries
-        FROM vector_index_entries
-        GROUP BY provider, model, dimensions, status
-        ORDER BY entries DESC
-        LIMIT ?
-      `, [limit]);
+        runs = rowsWithJsonFields(selectInventoryRows(db, `
+          SELECT
+            id,
+            type,
+            substr(prompt, 1, 220) AS prompt_preview,
+            status,
+            provider,
+            model,
+            cost_tokens,
+            cost_usd,
+            metadata_json,
+            created_at,
+            updated_at
+          FROM runs
+          ORDER BY updated_at DESC, created_at DESC
+          LIMIT ?
+        `, [limit]));
 
-      const reindexQueue = rowsWithJsonFields(selectInventoryRows(db, `
-        SELECT id, kind, target_id, source_uri, reason, status, attempts, metadata_json, created_at, updated_at
-        FROM reindex_queue
-        ORDER BY updated_at DESC, created_at DESC
-        LIMIT ?
-      `, [limit]));
+        vectorIndexes = selectInventoryRows(db, `
+          SELECT provider, model, dimensions, status, COUNT(*) AS entries
+          FROM vector_index_entries
+          GROUP BY provider, model, dimensions, status
+          ORDER BY entries DESC
+          LIMIT ?
+        `, [limit]);
 
-      const machines = rowsWithJsonFields(selectInventoryRows(db, `
-        SELECT
-          machine_id,
-          hostname,
-          platform,
-          user_label,
-          workspace_home,
-          tailscale_dns,
-          tailscale_ips_json,
-          ssh_target,
-          last_seen_at,
-          capabilities_json,
-          metadata_json,
-          created_at,
-          updated_at
-        FROM knowledge_machines
-        ORDER BY updated_at DESC, created_at DESC
-        LIMIT ?
-      `, [limit]), ['tailscale_ips_json', 'capabilities_json', 'metadata_json']);
+        reindexQueue = rowsWithJsonFields(selectInventoryRows(db, `
+          SELECT id, kind, target_id, source_uri, reason, status, attempts, metadata_json, created_at, updated_at
+          FROM reindex_queue
+          ORDER BY updated_at DESC, created_at DESC
+          LIMIT ?
+        `, [limit]));
 
-      const syncConflicts = rowsWithJsonFields(selectInventoryRows(db, `
-        SELECT
-          id,
-          entity_kind,
-          entity_id,
-          local_machine_id,
-          remote_machine_id,
-          status,
-          resolution_strategy,
-          proposed_patch_uri,
-          approved_by,
-          resolved_at,
-          metadata_json,
-          created_at
-        FROM knowledge_sync_conflicts
-        ORDER BY created_at DESC
-        LIMIT ?
-      `, [limit]));
+        machines = rowsWithJsonFields(selectInventoryRows(db, `
+          SELECT
+            machine_id,
+            hostname,
+            platform,
+            user_label,
+            workspace_home,
+            tailscale_dns,
+            tailscale_ips_json,
+            ssh_target,
+            last_seen_at,
+            capabilities_json,
+            metadata_json,
+            created_at,
+            updated_at
+          FROM knowledge_machines
+          ORDER BY updated_at DESC, created_at DESC
+          LIMIT ?
+        `, [limit]), ['tailscale_ips_json', 'capabilities_json', 'metadata_json']);
 
-      const approvalGates = rowsWithJsonFields(selectInventoryRows(db, `
-        SELECT id, action, target_uri, status, reason, approved_by, metadata_json, created_at, updated_at
-        FROM approval_gates
-        ORDER BY updated_at DESC, created_at DESC
-        LIMIT ?
-      `, [limit]));
+        syncConflicts = rowsWithJsonFields(selectInventoryRows(db, `
+          SELECT
+            id,
+            entity_kind,
+            entity_id,
+            local_machine_id,
+            remote_machine_id,
+            status,
+            resolution_strategy,
+            proposed_patch_uri,
+            approved_by,
+            resolved_at,
+            metadata_json,
+            created_at
+          FROM knowledge_sync_conflicts
+          ORDER BY created_at DESC
+          LIMIT ?
+        `, [limit]));
 
-      const auditEvents = rowsWithJsonFields(selectInventoryRows(db, `
-        SELECT id, event_type, action, target_uri, decision, metadata_json, created_at
-        FROM audit_events
-        ORDER BY created_at DESC
-        LIMIT ?
-      `, [limit]));
+        approvalGates = rowsWithJsonFields(selectInventoryRows(db, `
+          SELECT id, action, target_uri, status, reason, approved_by, metadata_json, created_at, updated_at
+          FROM approval_gates
+          ORDER BY updated_at DESC, created_at DESC
+          LIMIT ?
+        `, [limit]));
+
+        auditEvents = rowsWithJsonFields(selectInventoryRows(db, `
+          SELECT id, event_type, action, target_uri, decision, metadata_json, created_at
+          FROM audit_events
+          ORDER BY created_at DESC
+          LIMIT ?
+        `, [limit]));
+      } finally {
+        db.close();
+      }
+    }
 
       const summary = {
         legacy_items: legacyStore.items.length,
@@ -1539,6 +1721,7 @@ export class KnowledgeService {
           json_store_path: storePath,
           json_store_exists: legacyStore.exists,
           knowledge_db_path: workspace.knowledgeDbPath,
+          knowledge_db_exists: dbExists,
           artifacts_dir: workspace.artifactsDir,
           indexes_dir: workspace.indexesDir,
           logs_dir: workspace.logsDir,
@@ -1570,9 +1753,137 @@ export class KnowledgeService {
         audit_events: auditEvents,
         message: `${legacyStore.items.length} item(s), ${stats.sources} source(s), ${stats.chunks} chunk(s), ${stats.wiki_pages} wiki page(s), ${stats.storage_objects} artifact(s)`,
       };
-    } finally {
-      db.close();
-    }
+  }
+
+  projectPanel(options: KnowledgeProjectPanelOptions): KnowledgeProjectPanelResult {
+    const projectId = options.projectId.trim();
+    if (!projectId) throw new Error('Project id is required for project-panel output.');
+    const limit = inventoryLimit(options.limit);
+    const inventory = this.inventory({ limit });
+    const activeItems = inventory.summary.active_items ?? 0;
+    const sources = inventory.summary.sources ?? 0;
+    const chunks = inventory.summary.chunks ?? 0;
+    const wikiPages = inventory.summary.wiki_pages ?? 0;
+    const artifacts = inventory.summary.storage_objects ?? 0;
+    const vectorEntries = inventory.summary.vector_entries ?? 0;
+    const unresolved = (inventory.summary.sync_conflicts ?? 0) + (inventory.summary.reindex_queue ?? 0);
+    const total = activeItems + sources + chunks + wikiPages + artifacts + vectorEntries;
+    const generatedAt = new Date().toISOString();
+    const warnings: string[] = [];
+    if (!inventory.paths.knowledge_db_exists) warnings.push('knowledge_db_missing');
+    if (!inventory.paths.json_store_exists) warnings.push('json_store_missing');
+
+    const itemRows = [
+      ...inventory.items.map((item) => ({
+        kind: 'knowledge_note',
+        id: item.id,
+        title: item.title,
+        summary: item.content_preview,
+        updatedAt: item.updated_at,
+      })),
+      ...inventory.sources.map((source) => ({
+        kind: 'knowledge_source',
+        id: String(source.id ?? source.uri),
+        title: String(source.title ?? source.uri ?? 'Source'),
+        summary: `${source.chunks ?? 0} chunk(s)`,
+        updatedAt: typeof source.updated_at === 'string' ? source.updated_at : null,
+      })),
+      ...inventory.wiki_pages.map((page) => ({
+        kind: 'knowledge_wiki_page',
+        id: String(page.id ?? page.path),
+        title: String(page.title ?? page.path ?? 'Wiki page'),
+        summary: String(page.path ?? ''),
+        updatedAt: typeof page.updated_at === 'string' ? page.updated_at : null,
+      })),
+    ].slice(0, limit);
+
+    const metric = (
+      id: string,
+      label: string,
+      value: number,
+      status: 'good' | 'warning' | 'unknown' = value > 0 ? 'good' : 'unknown',
+    ) => ({ id, label, value, status, resourceRefs: [] });
+
+    return {
+      schema: 'hasna.project_panel.v1',
+      id: `knowledge_panel_${projectId}`,
+      createdAt: generatedAt,
+      metadata: {
+        scope: this.scope,
+        home: inventory.home,
+        json_store_exists: inventory.paths.json_store_exists,
+        knowledge_db_exists: inventory.paths.knowledge_db_exists,
+      },
+      projectId,
+      provider: {
+        kind: 'knowledge',
+        id: `knowledge_${projectId}`,
+        name: 'Knowledge',
+        sourcePackage: '@hasna/knowledge',
+        externalId: inventory.home,
+      },
+      kind: 'knowledge',
+      title: 'Knowledge',
+      summary: total === 0
+        ? 'No project knowledge items, sources, chunks, or wiki pages are available yet.'
+        : `${activeItems} note(s), ${sources} source(s), ${chunks} chunk(s), ${wikiPages} wiki page(s)`,
+      state: unresolved > 0 ? 'warning' : total > 0 ? 'ok' : 'empty',
+      generatedAt,
+      freshness: 'unknown',
+      metrics: [
+        metric('active_items', 'Active notes', activeItems),
+        metric('sources', 'Sources', sources),
+        metric('chunks', 'Chunks', chunks),
+        metric('wiki_pages', 'Wiki pages', wikiPages),
+        metric('artifacts', 'Artifacts', artifacts),
+        metric('vector_entries', 'Vector entries', vectorEntries),
+        metric('unresolved', 'Unresolved', unresolved, unresolved > 0 ? 'warning' : 'good'),
+      ],
+      items: itemRows,
+      actions: [
+        {
+          kind: 'action',
+          id: 'knowledge:inventory',
+          name: 'Inspect knowledge inventory',
+          externalId: 'knowledge:inventory',
+          sourcePackage: '@hasna/knowledge',
+          tags: [],
+        },
+        {
+          kind: 'action',
+          id: 'knowledge:context-pack',
+          name: 'Build cited context pack',
+          externalId: 'knowledge:context-pack',
+          sourcePackage: '@hasna/knowledge',
+          tags: [],
+        },
+        {
+          kind: 'action',
+          id: 'knowledge:ingest',
+          name: 'Ingest project source',
+          externalId: 'knowledge:ingest',
+          sourcePackage: '@hasna/knowledge',
+          tags: [],
+        },
+      ],
+      resourceRefs: [
+        projectPanelResource('project', projectId, projectId, `project://${projectId}`),
+        projectPanelResource('knowledge', `home_${projectId}`, 'Knowledge workspace', `knowledge://workspace/${projectId}`),
+        projectPanelResource('artifact', `db_${projectId}`, 'Knowledge database', `knowledge://db/${projectId}`),
+      ],
+      evidenceRefs: [],
+      renderFragment: {
+        renderer: 'json_render',
+        title: 'Knowledge',
+        imports: [],
+        spec: {
+          component: 'project.knowledge.summary',
+          metrics: ['active_items', 'sources', 'chunks', 'wiki_pages', 'unresolved'],
+          itemLimit: limit,
+        },
+      },
+      warnings,
+    };
   }
 
   async initWiki() {
@@ -1679,7 +1990,8 @@ export class KnowledgeService {
   }
 
   reindexHealth(options: Omit<ReindexRuntimeOptions, 'dbPath' | 'config'> = {}) {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
+    if (!existsSync(workspace.knowledgeDbPath)) return emptyReindexHealth();
     return reindexHealth({
       ...options,
       dbPath: workspace.knowledgeDbPath,
@@ -1714,7 +2026,8 @@ export class KnowledgeService {
   }
 
   embeddingStatus() {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
+    if (!existsSync(workspace.knowledgeDbPath)) return emptyEmbeddingStatus();
     return embeddingIndexStatus(workspace.knowledgeDbPath);
   }
 
@@ -1728,7 +2041,16 @@ export class KnowledgeService {
   }
 
   async semanticSearch(options: Omit<EmbeddingSearchOptions, 'dbPath' | 'config'>) {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
+    if (!existsSync(workspace.knowledgeDbPath)) {
+      return {
+        provider: 'openai' as const,
+        model: 'text-embedding-3-small',
+        dimensions: options.dimensions ?? 1536,
+        query: options.query,
+        results: [],
+      };
+    }
     return searchVectorIndex({
       ...options,
       dbPath: workspace.knowledgeDbPath,
@@ -1737,7 +2059,14 @@ export class KnowledgeService {
   }
 
   async search(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>) {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
+    if (!existsSync(workspace.knowledgeDbPath)) {
+      return emptySearchResult(
+        options.query,
+        Math.max(1, Math.min(options.limit ?? 10, 100)),
+        options.semantic === true || options.fake === true || Boolean(options.modelRef),
+      );
+    }
     return hybridSearch({
       ...options,
       dbPath: workspace.knowledgeDbPath,
@@ -1774,7 +2103,7 @@ export class KnowledgeService {
   }
 
   async machineTopology(options: Omit<KnowledgeMachineTopologyOptions, 'knowledge'> = {}) {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
     return discoverKnowledgeMachineTopology({
       ...options,
       knowledge: {
@@ -1785,7 +2114,7 @@ export class KnowledgeService {
   }
 
   async machinePreflight(options: Omit<KnowledgeMachinePreflightOptions, 'knowledge'> = {}) {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
     return preflightKnowledgeMachine({
       ...options,
       knowledge: {
@@ -1796,7 +2125,13 @@ export class KnowledgeService {
   }
 
   syncStatus() {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
+    if (!existsSync(workspace.knowledgeDbPath)) {
+      return emptySyncStatus({
+        scope: this.scope,
+        workspaceHome: workspace.home,
+      });
+    }
     return getKnowledgeSyncStatus({
       dbPath: workspace.knowledgeDbPath,
       scope: this.scope,

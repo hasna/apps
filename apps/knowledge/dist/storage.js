@@ -16,14 +16,18 @@ var __export = (target, all) => {
 var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
 var __require = import.meta.require;
 
+// src/db/storage-sync.ts
+import { existsSync as existsSync2 } from "fs";
+
 // src/knowledge-db.ts
 import { Database } from "bun:sqlite";
 
 // src/workspace.ts
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { dirname, join, relative, resolve, sep } from "path";
-var HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "apps", "knowledge");
+var HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "knowledge");
+var LEGACY_HASNA_KNOWLEDGE_APP_PATH = join(".hasna", "apps", "knowledge");
 var HASNA_XYZ_KNOWLEDGE_CANONICAL = {
   division: "xyz",
   app_type: "opensource",
@@ -34,7 +38,7 @@ var HASNA_XYZ_KNOWLEDGE_CANONICAL = {
     bucket: "hasna-xyz-opensource-knowledge-prod",
     region: "us-east-1",
     profile: "hasna-xyz-infra",
-    prefix: ".hasna/apps/knowledge",
+    prefix: ".hasna/knowledge",
     server_side_encryption: "AES256"
   },
   secrets: {
@@ -61,10 +65,21 @@ function canonicalHasnaXyzKnowledgeStorage() {
   };
 }
 function globalKnowledgeHome() {
+  return join(homedir(), ".hasna", "knowledge");
+}
+function legacyGlobalKnowledgeHome() {
   return join(homedir(), ".hasna", "apps", "knowledge");
 }
 function projectKnowledgeHome(cwd = process.cwd()) {
   return resolve(cwd, HASNA_KNOWLEDGE_APP_PATH);
+}
+function legacyProjectKnowledgeHome(cwd = process.cwd()) {
+  return resolve(cwd, LEGACY_HASNA_KNOWLEDGE_APP_PATH);
+}
+function legacyKnowledgeHomeForScope(scope, cwd = process.cwd()) {
+  if (scope === "project" || scope === "local")
+    return legacyProjectKnowledgeHome(cwd);
+  return legacyGlobalKnowledgeHome();
 }
 function workspaceForHome(home) {
   const normalizedHome = normalizeWorkspaceHome(home);
@@ -170,6 +185,51 @@ function ensureKnowledgeWorkspace(home) {
   }
   return workspace;
 }
+function migrateLegacyKnowledgeWorkspace(options = {}) {
+  const source = legacyKnowledgeHomeForScope(options.scope, options.cwd);
+  const target = resolveScopedWorkspace(options.scope, options.cwd).home;
+  const sourceExists = existsSync(source);
+  const targetExists = existsSync(target);
+  const dryRun = options.dryRun === true;
+  if (!sourceExists) {
+    return {
+      ok: true,
+      migrated: false,
+      dry_run: dryRun,
+      source,
+      target,
+      source_exists: false,
+      target_exists: targetExists,
+      message: `No legacy knowledge workspace found at ${source}`
+    };
+  }
+  if (targetExists) {
+    return {
+      ok: true,
+      migrated: false,
+      dry_run: dryRun,
+      source,
+      target,
+      source_exists: true,
+      target_exists: true,
+      message: `Canonical knowledge workspace already exists at ${target}`
+    };
+  }
+  if (!dryRun) {
+    mkdirSync(dirname(target), { recursive: true });
+    cpSync(source, target, { recursive: true, errorOnExist: true });
+  }
+  return {
+    ok: true,
+    migrated: !dryRun,
+    dry_run: dryRun,
+    source,
+    target,
+    source_exists: true,
+    target_exists: !dryRun ? true : false,
+    message: dryRun ? `Would copy legacy knowledge workspace from ${source} to ${target}` : `Copied legacy knowledge workspace from ${source} to ${target}`
+  };
+}
 function resolveScopedWorkspace(scope, cwd = process.cwd()) {
   if (scope === "project" || scope === "local") {
     return workspaceForHome(projectKnowledgeHome(cwd));
@@ -191,6 +251,32 @@ function writeKnowledgeConfig(path, config) {
 
 // src/knowledge-db.ts
 var CURRENT_SCHEMA_VERSION = 8;
+function emptyKnowledgeDbStats() {
+  return {
+    schema_version: 0,
+    sources: 0,
+    source_revisions: 0,
+    chunks: 0,
+    wiki_pages: 0,
+    citations: 0,
+    indexes: 0,
+    runs: 0,
+    run_events: 0,
+    redaction_findings: 0,
+    audit_events: 0,
+    approval_gates: 0,
+    storage_objects: 0,
+    embeddings: 0,
+    vector_entries: 0,
+    reindex_queue: 0,
+    knowledge_machines: 0,
+    sync_snapshots: 0,
+    sync_changes: 0,
+    sync_conflicts: 0,
+    sync_table_clocks: 0,
+    sync_imports: 0
+  };
+}
 var MIGRATION_1 = `
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
@@ -1122,8 +1208,8 @@ function normalizeStorageMode(value) {
     return normalized;
   return;
 }
-function openScopedDb(options = {}) {
-  const workspace = ensureKnowledgeWorkspace(resolveScopedWorkspace(options.scope, options.cwd).home);
+function openScopedDb(options = {}, mode = {}) {
+  const workspace = mode.ensure === false ? resolveScopedWorkspace(options.scope, options.cwd) : ensureKnowledgeWorkspace(resolveScopedWorkspace(options.scope, options.cwd).home);
   migrateKnowledgeDb(workspace.knowledgeDbPath);
   return {
     db: openKnowledgeDb(workspace.knowledgeDbPath),
@@ -1167,7 +1253,7 @@ async function runStorageMigrations(remote) {
 async function storagePush(options = {}) {
   const remote = options.remote ?? await getStoragePg();
   const ownsRemote = !options.remote;
-  const local = openScopedDb(options);
+  const local = openScopedDb(options, { ensure: true });
   try {
     await runStorageMigrations(remote);
     const results = [];
@@ -1185,7 +1271,7 @@ async function storagePush(options = {}) {
 async function storagePull(options = {}) {
   const remote = options.remote ?? await getStoragePg();
   const ownsRemote = !options.remote;
-  const local = openScopedDb(options);
+  const local = openScopedDb(options, { ensure: true });
   try {
     await runStorageMigrations(remote);
     const results = [];
@@ -1206,7 +1292,10 @@ async function storageSync(options = {}) {
   return { pull, push };
 }
 function getSyncMetaAll(options = {}) {
-  const local = openScopedDb(options);
+  const workspace = resolveScopedWorkspace(options.scope, options.cwd);
+  if (!existsSync2(workspace.knowledgeDbPath))
+    return [];
+  const local = openScopedDb(options, { ensure: false });
   try {
     ensureSyncMetaTable(local.db);
     return local.db.query("SELECT table_name, last_synced_at, direction FROM _knowledge_sync_meta ORDER BY table_name, direction").all();
@@ -1216,7 +1305,21 @@ function getSyncMetaAll(options = {}) {
 }
 function getStorageStatus(options = {}) {
   const activeEnv = getStorageDatabaseEnv();
-  const local = openScopedDb(options);
+  const workspace = resolveScopedWorkspace(options.scope, options.cwd);
+  if (!existsSync2(workspace.knowledgeDbPath)) {
+    return {
+      configured: Boolean(activeEnv),
+      mode: getStorageMode(),
+      env: STORAGE_DATABASE_ENV,
+      activeEnv: activeEnv?.name ?? null,
+      service: "knowledge",
+      scope: options.scope ?? "global",
+      databasePath: workspace.knowledgeDbPath,
+      tables: STORAGE_TABLES,
+      sync: []
+    };
+  }
+  const local = openScopedDb(options, { ensure: false });
   try {
     ensureSyncMetaTable(local.db);
     const sync = local.db.query("SELECT table_name, last_synced_at, direction FROM _knowledge_sync_meta ORDER BY table_name, direction").all();

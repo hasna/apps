@@ -8,6 +8,8 @@ export interface ManifestIngestOptions {
     now?: Date;
     maxChunkChars?: number;
     chunkOverlapChars?: number;
+    maxInputBytes?: number;
+    maxItems?: number;
 }
 export interface ManifestItemsIngestOptions {
     dbPath: string;
@@ -18,6 +20,7 @@ export interface ManifestItemsIngestOptions {
     now?: Date;
     maxChunkChars?: number;
     chunkOverlapChars?: number;
+    maxItems?: number;
 }
 export interface ManifestIngestResult {
     path: string;
@@ -29,6 +32,12 @@ export interface ManifestIngestResult {
     chunks_deleted: number;
     redactions: number;
     skipped: number;
+    items_preview: Array<{
+        source_ref: string;
+        title: string | null;
+        status: string;
+        has_text: boolean;
+    }>;
 }
 export type ManifestObject = Record<string, unknown>;
 export declare function ingestOpenFilesManifest(options: ManifestIngestOptions): Promise<ManifestIngestResult>;

@@ -40,7 +40,7 @@ describe('knowledge machine topology', () => {
       now: new Date('2026-06-09T00:00:00.000Z'),
       knowledge: {
         scope: 'project',
-        workspace_home: '/repo/.hasna/apps/knowledge',
+        workspace_home: '/repo/.hasna/knowledge',
       },
       loadOpenMachines: async () => ({
         discoverMachineTopology: () => ({
@@ -83,8 +83,8 @@ describe('knowledge machine topology', () => {
     expect(result.adapter.available).toBe(true);
     expect(result.adapter.implementation).toBe('sdk');
     expect(result.adapter.mode).toBe('auto');
-    expect(result.knowledge.app_path).toBe('.hasna/apps/knowledge');
-    expect(result.knowledge.workspace_home).toBe('/repo/.hasna/apps/knowledge');
+    expect(result.knowledge.app_path).toBe('.hasna/knowledge');
+    expect(result.knowledge.workspace_home).toBe('/repo/.hasna/knowledge');
     expect(result.machines).toHaveLength(1);
     expect(result.machines[0].local).toBe(true);
     expect(result.machines[0].tailscale.ips).toEqual(['100.64.0.2']);
@@ -112,7 +112,7 @@ describe('knowledge machine topology', () => {
       now: new Date('2026-06-09T00:00:00.000Z'),
       knowledge: {
         scope: 'project',
-        workspace_home: '/repo/.hasna/apps/knowledge',
+        workspace_home: '/repo/.hasna/knowledge',
       },
       loadOpenMachines: async () => null,
       runner: fakeCommandRunner({
@@ -154,7 +154,7 @@ describe('knowledge machine topology', () => {
       now: new Date('2026-06-09T00:00:00.000Z'),
       knowledge: {
         scope: 'project',
-        workspace_home: '/repo/.hasna/apps/knowledge',
+        workspace_home: '/repo/.hasna/knowledge',
       },
       loadOpenMachines: async () => ({
         checkMachineCompatibility: () => ({

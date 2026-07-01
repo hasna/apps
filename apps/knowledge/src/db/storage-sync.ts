@@ -1,4 +1,5 @@
 import type { Database } from 'bun:sqlite';
+import { existsSync } from 'node:fs';
 import { migrateKnowledgeDb, openKnowledgeDb } from '../knowledge-db';
 import { ensureKnowledgeWorkspace, resolveScopedWorkspace } from '../workspace';
 import { PG_MIGRATIONS } from './pg-migrations';
@@ -128,8 +129,13 @@ function normalizeStorageMode(value: string | undefined): StorageMode | undefine
   return undefined;
 }
 
-function openScopedDb(options: StorageStatusOptions = {}): { db: Database; path: string; scope: string } {
-  const workspace = ensureKnowledgeWorkspace(resolveScopedWorkspace(options.scope, options.cwd).home);
+function openScopedDb(
+  options: StorageStatusOptions = {},
+  mode: { ensure?: boolean } = {},
+): { db: Database; path: string; scope: string } {
+  const workspace = mode.ensure === false
+    ? resolveScopedWorkspace(options.scope, options.cwd)
+    : ensureKnowledgeWorkspace(resolveScopedWorkspace(options.scope, options.cwd).home);
   migrateKnowledgeDb(workspace.knowledgeDbPath);
   return {
     db: openKnowledgeDb(workspace.knowledgeDbPath),
@@ -178,7 +184,7 @@ export async function runStorageMigrations(remote: StorageRemoteAdapter): Promis
 export async function storagePush(options: StorageSyncOptions = {}): Promise<SyncResult[]> {
   const remote = options.remote ?? await getStoragePg();
   const ownsRemote = !options.remote;
-  const local = openScopedDb(options);
+  const local = openScopedDb(options, { ensure: true });
   try {
     await runStorageMigrations(remote);
     const results: SyncResult[] = [];
@@ -196,7 +202,7 @@ export async function storagePush(options: StorageSyncOptions = {}): Promise<Syn
 export async function storagePull(options: StorageSyncOptions = {}): Promise<SyncResult[]> {
   const remote = options.remote ?? await getStoragePg();
   const ownsRemote = !options.remote;
-  const local = openScopedDb(options);
+  const local = openScopedDb(options, { ensure: true });
   try {
     await runStorageMigrations(remote);
     const results: SyncResult[] = [];
@@ -218,7 +224,9 @@ export async function storageSync(options: StorageSyncOptions = {}): Promise<{ p
 }
 
 export function getSyncMetaAll(options: StorageStatusOptions = {}): SyncMeta[] {
-  const local = openScopedDb(options);
+  const workspace = resolveScopedWorkspace(options.scope, options.cwd);
+  if (!existsSync(workspace.knowledgeDbPath)) return [];
+  const local = openScopedDb(options, { ensure: false });
   try {
     ensureSyncMetaTable(local.db);
     return local.db.query('SELECT table_name, last_synced_at, direction FROM _knowledge_sync_meta ORDER BY table_name, direction').all() as SyncMeta[];
@@ -229,7 +237,21 @@ export function getSyncMetaAll(options: StorageStatusOptions = {}): SyncMeta[] {
 
 export function getStorageStatus(options: StorageStatusOptions = {}): StorageStatus {
   const activeEnv = getStorageDatabaseEnv();
-  const local = openScopedDb(options);
+  const workspace = resolveScopedWorkspace(options.scope, options.cwd);
+  if (!existsSync(workspace.knowledgeDbPath)) {
+    return {
+      configured: Boolean(activeEnv),
+      mode: getStorageMode(),
+      env: STORAGE_DATABASE_ENV,
+      activeEnv: activeEnv?.name ?? null,
+      service: 'knowledge',
+      scope: options.scope ?? 'global',
+      databasePath: workspace.knowledgeDbPath,
+      tables: STORAGE_TABLES,
+      sync: [],
+    };
+  }
+  const local = openScopedDb(options, { ensure: false });
   try {
     ensureSyncMetaTable(local.db);
     const sync = local.db.query('SELECT table_name, last_synced_at, direction FROM _knowledge_sync_meta ORDER BY table_name, direction').all() as SyncMeta[];

@@ -1,4 +1,5 @@
 export declare const HASNA_KNOWLEDGE_APP_PATH: string;
+export declare const LEGACY_HASNA_KNOWLEDGE_APP_PATH: string;
 export interface KnowledgeWorkspace {
     home: string;
     configPath: string;
@@ -85,7 +86,7 @@ export declare const HASNA_XYZ_KNOWLEDGE_CANONICAL: {
         readonly bucket: "hasna-xyz-opensource-knowledge-prod";
         readonly region: "us-east-1";
         readonly profile: "hasna-xyz-infra";
-        readonly prefix: ".hasna/apps/knowledge";
+        readonly prefix: ".hasna/knowledge";
         readonly server_side_encryption: "AES256";
     };
     readonly secrets: {
@@ -101,7 +102,10 @@ export declare const HASNA_XYZ_KNOWLEDGE_CANONICAL: {
 export declare function canonicalHasnaXyzKnowledgeStorage(): KnowledgeConfig['storage'];
 export declare function legacyGlobalStorePath(): string;
 export declare function globalKnowledgeHome(): string;
+export declare function legacyGlobalKnowledgeHome(): string;
 export declare function projectKnowledgeHome(cwd?: string): string;
+export declare function legacyProjectKnowledgeHome(cwd?: string): string;
+export declare function legacyKnowledgeHomeForScope(scope: string | undefined, cwd?: string): string;
 export declare function workspaceForHome(home: string): KnowledgeWorkspace;
 export declare function pathIsInside(parent: string, target: string): boolean;
 export declare function assertKnowledgeWritePathAllowed(targetPath: string, workspace: KnowledgeWorkspace, options?: {
@@ -110,6 +114,21 @@ export declare function assertKnowledgeWritePathAllowed(targetPath: string, work
 }): void;
 export declare function defaultKnowledgeConfig(): KnowledgeConfig;
 export declare function ensureKnowledgeWorkspace(home: string): KnowledgeWorkspace;
+export interface LegacyKnowledgeWorkspaceMigrationResult {
+    ok: boolean;
+    migrated: boolean;
+    dry_run: boolean;
+    source: string;
+    target: string;
+    source_exists: boolean;
+    target_exists: boolean;
+    message: string;
+}
+export declare function migrateLegacyKnowledgeWorkspace(options?: {
+    scope?: string;
+    cwd?: string;
+    dryRun?: boolean;
+}): LegacyKnowledgeWorkspaceMigrationResult;
 export declare function resolveScopedWorkspace(scope: string | undefined, cwd?: string): KnowledgeWorkspace;
 export declare function ensureParentDir(path: string): void;
 export declare function readKnowledgeConfig(path: string): KnowledgeConfig;

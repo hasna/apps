@@ -53,7 +53,7 @@ export interface KnowledgeStorageProtectionResult extends KnowledgeWriteBoundary
 }
 
 export const WRITE_BOUNDARY_RULES = [
-  'Agents must not write directly to .hasna/apps/knowledge or generated artifact files.',
+  'Agents must not write directly to .hasna/knowledge or generated artifact files.',
   'Use knowledge CLI, knowledge-mcp, or the @hasna/knowledge SDK for every durable knowledge write.',
   'Use --approve-write --approved-by <name> for generated wiki or repair writes that require approval.',
   'Run knowledge storage validate --strict after changes to detect direct artifact writes.',
@@ -207,7 +207,7 @@ function scanWorkspaceRoot(workspace: KnowledgeWorkspace): BoundaryScanUnsafePat
         unsafePaths.push({
           code: 'unexpected_workspace_root_entry',
           path,
-          message: 'Unexpected directory under .hasna/apps/knowledge; write generated knowledge through CLI/MCP/SDK.',
+          message: 'Unexpected directory under .hasna/knowledge; write generated knowledge through CLI/MCP/SDK.',
         });
       }
       continue;
@@ -225,7 +225,7 @@ function scanWorkspaceRoot(workspace: KnowledgeWorkspace): BoundaryScanUnsafePat
         unsafePaths.push({
           code: 'unexpected_workspace_root_entry',
           path,
-          message: 'Unexpected file under .hasna/apps/knowledge; write durable knowledge through CLI/MCP/SDK.',
+          message: 'Unexpected file under .hasna/knowledge; write durable knowledge through CLI/MCP/SDK.',
         });
       }
     }
@@ -291,112 +291,114 @@ export function writeBoundaryStatusFor(
     }
   }
 
-  migrateKnowledgeDb(dbPath);
-  const db = openKnowledgeDb(dbPath);
-  try {
-    const rows = db.query<{
-      artifact_uri: string;
-      hash: string | null;
-      metadata_json: string;
-    }, []>(
-      'SELECT artifact_uri, hash, metadata_json FROM storage_objects ORDER BY artifact_uri ASC',
-    ).all();
-    manifestArtifacts = rows.length;
-    const manifestByKey = new Map<string, { artifact_uri: string; hash: string | null }>();
-    for (const row of rows) {
-      const metadata = parseMetadataJson(row.metadata_json);
-      let key: string | null = null;
-      if (typeof metadata.key === 'string') {
-        try {
-          key = normalizeArtifactKey(metadata.key);
-        } catch (error) {
-          violations.push({
-            code: 'invalid_artifact_manifest_key',
-            severity: 'error',
-            path: null,
-            key: metadata.key,
-            artifact_uri: row.artifact_uri,
-            message: error instanceof Error ? error.message : 'storage_objects metadata contains an invalid artifact key.',
-          });
+  const manifestByKey = new Map<string, { artifact_uri: string; hash: string | null }>();
+  if (existsSync(dbPath)) {
+    migrateKnowledgeDb(dbPath);
+    const db = openKnowledgeDb(dbPath);
+    try {
+      const rows = db.query<{
+        artifact_uri: string;
+        hash: string | null;
+        metadata_json: string;
+      }, []>(
+        'SELECT artifact_uri, hash, metadata_json FROM storage_objects ORDER BY artifact_uri ASC',
+      ).all();
+      manifestArtifacts = rows.length;
+      for (const row of rows) {
+        const metadata = parseMetadataJson(row.metadata_json);
+        let key: string | null = null;
+        if (typeof metadata.key === 'string') {
+          try {
+            key = normalizeArtifactKey(metadata.key);
+          } catch (error) {
+            violations.push({
+              code: 'invalid_artifact_manifest_key',
+              severity: 'error',
+              path: null,
+              key: metadata.key,
+              artifact_uri: row.artifact_uri,
+              message: error instanceof Error ? error.message : 'storage_objects metadata contains an invalid artifact key.',
+            });
+          }
         }
+        if (key) manifestByKey.set(key, { artifact_uri: row.artifact_uri, hash: row.hash });
       }
-      if (key) manifestByKey.set(key, { artifact_uri: row.artifact_uri, hash: row.hash });
+    } finally {
+      db.close();
     }
+  }
 
-    const artifactScan = listFilesRecursive(workspace.artifactsDir);
-    for (const unsafe of artifactScan.unsafe_paths) {
+  const artifactScan = listFilesRecursive(workspace.artifactsDir);
+  for (const unsafe of artifactScan.unsafe_paths) {
+    violations.push({
+      code: unsafe.code,
+      severity: 'error',
+      path: unsafe.path,
+      key: portableRelativePath(workspace.artifactsDir, unsafe.path),
+      artifact_uri: null,
+      message: unsafe.message,
+    });
+  }
+  const artifactFiles = artifactScan.files;
+  localArtifactFiles = artifactFiles.length;
+  const seenKeys = new Set<string>();
+  for (const file of artifactFiles) {
+    const key = portableRelativePath(workspace.artifactsDir, file);
+    seenKeys.add(key);
+    if (storage.storage_type !== 'local') {
       violations.push({
-        code: unsafe.code,
+        code: 'direct_workspace_artifact_file',
         severity: 'error',
-        path: unsafe.path,
-        key: portableRelativePath(workspace.artifactsDir, unsafe.path),
+        path: file,
+        key,
         artifact_uri: null,
-        message: unsafe.message,
+        message: 'Local generated artifact file exists while generated artifact storage is configured for S3.',
       });
+      continue;
     }
-    const artifactFiles = artifactScan.files;
-    localArtifactFiles = artifactFiles.length;
-    const seenKeys = new Set<string>();
-    for (const file of artifactFiles) {
-      const key = portableRelativePath(workspace.artifactsDir, file);
-      seenKeys.add(key);
-      if (storage.storage_type !== 'local') {
+    const manifest = manifestByKey.get(key);
+    if (!manifest) {
+      violations.push({
+        code: 'untracked_artifact_file',
+        severity: 'error',
+        path: file,
+        key,
+        artifact_uri: null,
+        message: 'Generated artifact file is not recorded in storage_objects; write it through knowledge CLI/MCP/SDK.',
+      });
+      continue;
+    }
+    if (manifest.hash?.startsWith('sha256:')) {
+      const actualHash = sha256File(file);
+      if (actualHash !== manifest.hash) {
         violations.push({
-          code: 'direct_workspace_artifact_file',
+          code: 'artifact_hash_mismatch',
           severity: 'error',
           path: file,
           key,
-          artifact_uri: null,
-          message: 'Local generated artifact file exists while generated artifact storage is configured for S3.',
+          artifact_uri: manifest.artifact_uri,
+          message: 'Generated artifact file hash differs from storage_objects; this indicates a direct file edit or stale manifest.',
         });
-        continue;
-      }
-      const manifest = manifestByKey.get(key);
-      if (!manifest) {
-        violations.push({
-          code: 'untracked_artifact_file',
-          severity: 'error',
-          path: file,
-          key,
-          artifact_uri: null,
-          message: 'Generated artifact file is not recorded in storage_objects; write it through knowledge CLI/MCP/SDK.',
-        });
-        continue;
-      }
-      if (manifest.hash?.startsWith('sha256:')) {
-        const actualHash = sha256File(file);
-        if (actualHash !== manifest.hash) {
-          violations.push({
-            code: 'artifact_hash_mismatch',
-            severity: 'error',
-            path: file,
-            key,
-            artifact_uri: manifest.artifact_uri,
-            message: 'Generated artifact file hash differs from storage_objects; this indicates a direct file edit or stale manifest.',
-          });
-        }
       }
     }
+  }
 
-    if (storage.storage_type === 'local') {
-      for (const [key, manifest] of manifestByKey.entries()) {
-        const path = join(workspace.artifactsDir, ...key.split('/'));
-        if (!seenKeys.has(key) && !existsSync(path)) {
-          violations.push({
-            code: 'missing_artifact_file',
-            severity: 'error',
-            path,
-            key,
-            artifact_uri: manifest.artifact_uri,
-            message: 'storage_objects references a local artifact file that is missing from the artifact root.',
-          });
-        }
+  if (storage.storage_type === 'local') {
+    for (const [key, manifest] of manifestByKey.entries()) {
+      const path = join(workspace.artifactsDir, ...key.split('/'));
+      if (!seenKeys.has(key) && !existsSync(path)) {
+        violations.push({
+          code: 'missing_artifact_file',
+          severity: 'error',
+          path,
+          key,
+          artifact_uri: manifest.artifact_uri,
+          message: 'storage_objects references a local artifact file that is missing from the artifact root.',
+        });
       }
-    } else {
-      warnings.push('write_boundary_local_artifact_hash_check_skipped_for_s3_storage');
     }
-  } finally {
-    db.close();
+  } else {
+    warnings.push('write_boundary_local_artifact_hash_check_skipped_for_s3_storage');
   }
 
   for (const unsafe of scanWorkspaceRoot(workspace)) {
@@ -489,7 +491,7 @@ export function protectKnowledgeStorageBoundary(input: {
     rules: WRITE_BOUNDARY_RULES,
     validation_command: `knowledge storage validate --strict --scope ${scope}`,
     allowed_writers: ['knowledge CLI', 'knowledge-mcp', '@hasna/knowledge SDK'],
-    forbidden_paths: ['.hasna/apps/knowledge/** direct file writes'],
+    forbidden_paths: ['.hasna/knowledge/** direct file writes'],
   };
   mkdirSync(workspace.home, { recursive: true });
   writeFileSync(policyPath, `${JSON.stringify(policy, null, 2)}\n`);

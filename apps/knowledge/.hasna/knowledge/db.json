@@ -3,7 +3,7 @@
     {
       "id": "k_mq6edjzl_rfnn7i",
       "title": "open-knowledge architecture boundary",
-      "content": "open-knowledge exposes the user-facing knowledge CLI and knowledge-mcp MCP binary. The package is @hasna/knowledge, while open-knowledge is the repo/product name. Project state lives under .hasna/apps/knowledge with config.json, db.json, knowledge.db, and generated artifacts. open-files remains the source of truth for raw files and documents; knowledge stores source refs, revisions/hashes, redacted chunks, citations, embeddings, generated wiki artifacts, indexes, logs, runs, safety/audit records, and durable reviewed knowledge.",
+      "content": "open-knowledge exposes the user-facing knowledge CLI and knowledge-mcp MCP binary. The package is @hasna/knowledge, while open-knowledge is the repo/product name. Project state lives under .hasna/knowledge with config.json, db.json, knowledge.db, and generated artifacts. open-files remains the source of truth for raw files and documents; knowledge stores source refs, revisions/hashes, redacted chunks, citations, embeddings, generated wiki artifacts, indexes, logs, runs, safety/audit records, and durable reviewed knowledge.",
       "url": null,
       "tags": [],
       "created_at": "2026-06-09T08:48:14.961Z",

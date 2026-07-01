@@ -877,7 +877,7 @@ export function buildServer() {
   registerTool(server, 'knowledge_sync_doctor', 'Knowledge sync doctor', 'Read-only readiness report for machine sync, storage, open-files source refs, route/workspace resolution, and next commands', {
     scope: scopeField,
     machine: z.string().optional().describe('Optional remote machine id or SSH alias'),
-    peer_workspace: z.string().optional().describe('Optional peer repo root or .hasna/apps/knowledge path'),
+    peer_workspace: z.string().optional().describe('Optional peer repo root or .hasna/knowledge path'),
     tables: z.array(z.string()).optional().describe('Optional knowledge.db tables to include in recommended dry-run commands'),
     include_tailscale: z.boolean().optional().describe('Allow Tailscale route discovery when using a remote machine'),
   }, async ({ scope, machine, peer_workspace, tables, include_tailscale }) => {
@@ -984,7 +984,7 @@ export function buildServer() {
 
   registerTool(server, 'knowledge_sync_peer', 'Knowledge peer sync', 'Dry-run, pull, push, or bidirectionally sync with a local or remote peer knowledge workspace', {
     scope: scopeField,
-    peer_workspace: z.string().optional().describe('Peer repo root or .hasna/apps/knowledge path; optional for remote machine sync when machines path mapping is configured'),
+    peer_workspace: z.string().optional().describe('Peer repo root or .hasna/knowledge path; optional for remote machine sync when machines path mapping is configured'),
     machine: z.string().optional().describe('Optional remote machine id or SSH alias; when set, sync uses route-aware SSH transport'),
     direction: z.enum(['dry-run', 'pull', 'push', 'both']).optional().describe('Sync direction; dry-run previews both directions'),
     tables: z.array(z.string()).optional().describe('Optional knowledge.db tables to sync'),

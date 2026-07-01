@@ -21,7 +21,7 @@ describe('hosted-aware config and remote contracts', () => {
     expect(setup.canonical_hasna_xyz.active).toBe(false);
     expect(setup.next).toContain('knowledge auth login --api-key <key>');
 
-    const config = JSON.parse(readFileSync(join(dir, '.hasna', 'apps', 'knowledge', 'config.json'), 'utf8'));
+    const config = JSON.parse(readFileSync(join(dir, '.hasna', 'knowledge', 'config.json'), 'utf8'));
     expect(config.mode).toBe('hosted');
     expect(config.hosted.api_url).toBe('https://knowledge.example.com');
 
@@ -50,16 +50,16 @@ describe('hosted-aware config and remote contracts', () => {
 
     expect(setup.mode).toBe('hosted');
     expect(setup.storage_type).toBe('s3');
-    expect(setup.artifact_uri_prefix).toBe('s3://hasna-xyz-opensource-knowledge-prod/.hasna/apps/knowledge/');
+    expect(setup.artifact_uri_prefix).toBe('s3://hasna-xyz-opensource-knowledge-prod/.hasna/knowledge/');
     expect(setup.canonical_hasna_xyz.active).toBe(true);
 
-    const config = JSON.parse(readFileSync(join(dir, '.hasna', 'apps', 'knowledge', 'config.json'), 'utf8'));
+    const config = JSON.parse(readFileSync(join(dir, '.hasna', 'knowledge', 'config.json'), 'utf8'));
     expect(config.storage).toMatchObject({
       type: 's3',
       artifacts_root: 'artifacts',
       s3: {
         bucket: 'hasna-xyz-opensource-knowledge-prod',
-        prefix: '.hasna/apps/knowledge',
+        prefix: '.hasna/knowledge',
         region: 'us-east-1',
         profile: 'hasna-xyz-infra',
         server_side_encryption: 'AES256',

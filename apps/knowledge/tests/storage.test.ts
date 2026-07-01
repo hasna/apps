@@ -128,7 +128,7 @@ describe('knowledge database storage sync config', () => {
     expect(() => resolveTables(['chunks_fts'])).toThrow('Unknown knowledge sync table');
   });
 
-  test('storage status initializes scoped local sync metadata', () => {
+  test('storage status reports scoped local sync metadata without initializing', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-storage-status-'));
     const status = getStorageStatus({ scope: 'project', cwd: dir });
 
@@ -140,8 +140,8 @@ describe('knowledge database storage sync config', () => {
       activeEnv: null,
       sync: [],
     });
-    expect(status.databasePath).toBe(join(dir, '.hasna', 'apps', 'knowledge', 'knowledge.db'));
-    expect(existsSync(status.databasePath)).toBe(true);
+    expect(status.databasePath).toBe(join(dir, '.hasna', 'knowledge', 'knowledge.db'));
+    expect(existsSync(status.databasePath)).toBe(false);
     expect(status.tables).toEqual(STORAGE_TABLES);
   });
 

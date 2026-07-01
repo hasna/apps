@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -76,7 +76,7 @@ describe('knowledge macOS app bridge', () => {
     const dashboard = bridge.dashboard();
 
     expect(dashboard.generated_at).toBe('2026-06-22T12:00:00.000Z');
-    expect(dashboard.workspace_home).toBe(join(dir, '.hasna', 'apps', 'knowledge'));
+    expect(dashboard.workspace_home).toBe(join(dir, '.hasna', 'knowledge'));
     expect(dashboard.local.mode).toBe('local');
     expect(dashboard.local.storage_type).toBe('local');
     expect(dashboard.cloud.authenticated).toBe(false);
@@ -84,6 +84,7 @@ describe('knowledge macOS app bridge', () => {
     expect(dashboard.sections.storage.ok).toBe(true);
     expect(dashboard.sections.db.ok).toBe(true);
     expect(dashboard.counts.sources).toBe(0);
+    expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
   });
 
   test('selects local, cloud, or auto backend explicitly', () => {

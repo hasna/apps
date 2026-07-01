@@ -4,7 +4,7 @@
  * Copyright 2026 Hasna Inc.
  * Licensed under the Apache License, Version 2.0
  */
-import { defaultStorePath, loadStore, saveStore, withLock, makeId, makeShortId, ensureStore, type KnowledgeItem } from './store';
+import { defaultStorePath, loadStore, loadStoreIfExists, saveStore, withLock, makeId, makeShortId, ensureStore, type KnowledgeItem } from './store';
 import { openKnowledgeDb } from './knowledge-db';
 import { createKnowledgeService } from './service';
 import {
@@ -88,6 +88,8 @@ interface Flags {
   scope?: string;
   tables?: string;
   peerWorkspace?: string;
+  project?: string;
+  contract?: boolean;
   olderThan?: number;
   empty?: boolean;
   fake?: boolean;
@@ -103,7 +105,7 @@ interface ParseResult {
 }
 
 const EVENTS_COMMANDS = ['events', 'webhooks'];
-const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'export', 'prune', 'dedupe', 'stats', 'inventory', 'paths', 'setup', 'auth', 'remote', 'storage', 'machines', 'sync', 'db', 'wiki', 'source', 'ingest', 'reindex', 'search', 'web', 'ask', 'build', 'embeddings', 'providers', 'safety', 'help', ...EVENTS_COMMANDS];
+const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'export', 'prune', 'dedupe', 'stats', 'inventory', 'project-panel', 'paths', 'setup', 'auth', 'remote', 'storage', 'machines', 'sync', 'db', 'wiki', 'source', 'ingest', 'reindex', 'search', 'web', 'ask', 'build', 'embeddings', 'providers', 'safety', 'help', ...EVENTS_COMMANDS];
 const COMMAND_ALIASES: Record<string, string> = {
   ls: 'list',
   rm: 'delete',
@@ -171,6 +173,8 @@ function parseArgs(argv: string[]): ParseResult {
       case '--scope': flags.scope = argv[i + 1]; i += 1; break;
       case '--tables': flags.tables = argv[i + 1]; i += 1; break;
       case '--peer-workspace': flags.peerWorkspace = argv[i + 1]; i += 1; break;
+      case '--project': flags.project = argv[i + 1]; i += 1; break;
+      case '--contract': flags.contract = true; break;
       case '--older-than': flags.olderThan = Number(argv[i + 1]); i += 1; break;
       case '--empty': flags.empty = true; break;
       case '--archived': flags.archived = true; break;
@@ -250,11 +254,12 @@ Commands:
   dedupe                       Remove duplicate items by title+content (requires --yes)
   stats                        Show knowledge base statistics
   inventory                    Show all local knowledge layers and previews
+  project-panel                Emit Projects dashboard project-panel contract
   paths                        Show resolved workspace/store paths
   setup                        Configure local, hosted, or canonical Hasna XYZ S3 mode
   auth login|whoami|logout     Manage hosted API credentials
   remote contracts|status      Inspect hosted client contracts/readiness
-  storage status|validate|provenance|protect|repair-artifact-keys
+  storage status|validate|provenance|protect|repair-artifact-keys|migrate-legacy-path
                                Inspect, protect, or repair local/S3 artifact storage metadata
   machines topology|preflight  Inspect optional machine topology/sync readiness
   sync status|doctor|snapshot|conflicts
@@ -307,9 +312,11 @@ Global Options:
   --fake                       Use deterministic fake embeddings for local tests
   --no-tailscale               Skip local Tailscale topology probing
   --no-artifact-content        Export sync bundles without embedded artifact bodies
-  --scope local|global|project  Store scope (default: global ~/.hasna/apps/knowledge/)
+  --scope local|global|project  Store scope (default: global ~/.hasna/knowledge/)
   --tables <names>             Comma-separated knowledge.db sync tables
-  --peer-workspace <path>      Peer repo root or .hasna/apps/knowledge path for local sync or remote override
+  --peer-workspace <path>      Peer repo root or .hasna/knowledge path for local sync or remote override
+  --project <id>               Project id/name/slug for project-panel output
+  --contract                   Emit contract JSON for project-panel output
   --no-color                  Disable color output
   --completions <shell>       Output completions for bash|zsh|fish
   -v, --version               Show version
@@ -363,11 +370,12 @@ function printCommandHelp(command: string): void {
   if (command === 'dedupe') { console.log('Usage: knowledge dedupe --yes [--json]'); return; }
   if (command === 'stats') { console.log('Usage: knowledge stats [--json]'); return; }
   if (command === 'inventory') { console.log('Usage: knowledge inventory [--scope local|global|project] [--limit <n>] [--include-archived] [--json]'); return; }
+  if (command === 'project-panel') { console.log('Usage: knowledge project-panel --project <id|name|slug> [--limit <n>] [--scope project] [--json|--contract]'); return; }
   if (command === 'paths') { console.log('Usage: knowledge paths [--scope local|global|project] [--json]'); return; }
   if (command === 'setup') { console.log('Usage: knowledge setup --mode local|hosted [--api-url https://...] [--canonical-hasna-xyz] [--scope local|global|project] [--json]'); return; }
   if (command === 'auth') { console.log('Usage: knowledge auth login|whoami|logout [--api-key <key>] [--email <email>] [--org <slug>] [--api-url https://...] [--scope local|global|project] [--json]'); return; }
   if (command === 'remote') { console.log('Usage: knowledge remote contracts|status [--scope local|global|project] [--json]'); return; }
-  if (command === 'storage') { console.log('Usage: knowledge storage status|validate|provenance|protect|repair-artifact-keys [--strict] [--approve-write --approved-by <name>] [--scope local|global|project] [--json]'); return; }
+  if (command === 'storage') { console.log('Usage: knowledge storage status|validate|provenance|protect|repair-artifact-keys|migrate-legacy-path [--strict] [--approve-write --approved-by <name>] [--dry-run] [--scope local|global|project] [--json]'); return; }
   if (command === 'machines') { console.log('Usage: knowledge machines topology [--no-tailscale] | preflight [machine] [--workspace <repo>] [--scope local|global|project] [--json]'); return; }
   if (command === 'sync') { console.log('Usage: knowledge sync status|doctor|readiness|snapshot|machines|conflicts [show|propose|resolve] [id] | dry-run|pull|push|sync|export|import [--peer-workspace <path>] [--machine <ssh-alias>] [--tables <names>] [--dry-run] [--limit <n>] [--approve-write] [--approved-by <name>] [--strategy <name>] [--mode deterministic|ai] [--model <alias|provider:model>] [--fake] [--no-tailscale] [--scope local|global|project] [--json]\n\nRemote machine sync resolves peer paths through @hasna/machines when --peer-workspace is omitted.'); return; }
   if (command === 'db') { console.log('Usage: knowledge db init|stats|storage status|push|pull|sync [--tables sources,chunks] [--scope local|global|project] [--json]'); return; }
@@ -479,11 +487,11 @@ async function run(argv: string[]): Promise<void> {
   if (flags.completions) {
     const shell = flags.completions;
     if (shell === 'bash') {
-      console.log(`_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats inventory paths setup auth remote storage machines sync db wiki source ingest reindex search web ask build embeddings providers safety events webhooks help ls rm edit unarchive --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --purpose --model --dimensions --semantic --context --generate --approve-write --provider --mode --machine --workspace --peer-workspace --api-url --canonical-hasna-xyz --api-key --email --org --org-id --user-id --domain --file-results --full --dry-run --strict --fake --no-tailscale --no-artifact-content --no-color --scope --tables --archived --include-archived" -- "$cur")); }; complete -F _knowledge knowledge`);
+      console.log(`_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats inventory project-panel paths setup auth remote storage machines sync db wiki source ingest reindex search web ask build embeddings providers safety events webhooks help ls rm edit unarchive --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --purpose --model --dimensions --semantic --context --generate --approve-write --provider --mode --machine --workspace --peer-workspace --project --contract --api-url --canonical-hasna-xyz --api-key --email --org --org-id --user-id --domain --file-results --full --dry-run --strict --fake --no-tailscale --no-artifact-content --no-color --scope --tables --archived --include-archived" -- "$cur")); }; complete -F _knowledge knowledge`);
     } else if (shell === 'zsh') {
-      console.log(`#compdef knowledge\n_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats inventory paths setup auth remote storage machines sync db wiki source ingest reindex search web ask build embeddings providers safety events webhooks help ls rm edit unarchive)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--generate)--generate" "(--approve-write)--approve-write" "(--canonical-hasna-xyz)--canonical-hasna-xyz" "(--file-results)--file-results" "(--full)--full" "(--dry-run)--dry-run" "(--strict)--strict" "(--fake)--fake" "(--no-tailscale)--no-tailscale" "(--no-artifact-content)--no-artifact-content" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--provider)--provider[provider]:" "(--mode)--mode"\{local,hosted\}:" "(--machine)--machine[machine id or SSH alias]:" "(--workspace)--workspace[repo workspace path]:path:" "(--peer-workspace)--peer-workspace[peer repo or knowledge home path]:path:" "(--api-url)--api-url[hosted API URL]:" "(--api-key)--api-key[hosted API key]:" "(--email)--email[email]:" "(--org)--org[org slug]:" "(--org-id)--org-id[org id]:" "(--user-id)--user-id[user id]:" "(--domain)--domain[domain]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" "(--tables)--tables[comma-separated DB sync tables]:" }; _knowledge`);
+      console.log(`#compdef knowledge\n_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats inventory project-panel paths setup auth remote storage machines sync db wiki source ingest reindex search web ask build embeddings providers safety events webhooks help ls rm edit unarchive)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--generate)--generate" "(--approve-write)--approve-write" "(--canonical-hasna-xyz)--canonical-hasna-xyz" "(--file-results)--file-results" "(--full)--full" "(--dry-run)--dry-run" "(--strict)--strict" "(--fake)--fake" "(--no-tailscale)--no-tailscale" "(--no-artifact-content)--no-artifact-content" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--provider)--provider[provider]:" "(--mode)--mode"\{local,hosted\}:" "(--machine)--machine[machine id or SSH alias]:" "(--workspace)--workspace[repo workspace path]:path:" "(--peer-workspace)--peer-workspace[peer repo or knowledge home path]:path:" "(--api-url)--api-url[hosted API URL]:" "(--api-key)--api-key[hosted API key]:" "(--email)--email[email]:" "(--org)--org[org slug]:" "(--org-id)--org-id[org id]:" "(--user-id)--user-id[user id]:" "(--domain)--domain[domain]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" "(--tables)--tables[comma-separated DB sync tables]:" }; _knowledge`);
     } else if (shell === 'fish') {
-      console.log(`complete -c knowledge -f; complete -c knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats inventory paths setup auth remote storage machines sync db wiki source ingest reindex search web ask build embeddings providers safety events webhooks help ls rm edit unarchive"; complete -c knowledge -l json; complete -c knowledge -l yes -s y; complete -c knowledge -l help -s h; complete -c knowledge -l version -s v; complete -c knowledge -l desc; complete -c knowledge -l archived; complete -c knowledge -l include-archived; complete -c knowledge -l semantic; complete -c knowledge -l context; complete -c knowledge -l generate; complete -c knowledge -l approve-write; complete -c knowledge -l canonical-hasna-xyz; complete -c knowledge -l provider; complete -c knowledge -l mode; complete -c knowledge -l machine; complete -c knowledge -l workspace; complete -c knowledge -l peer-workspace; complete -c knowledge -l api-url; complete -c knowledge -l api-key; complete -c knowledge -l email; complete -c knowledge -l org; complete -c knowledge -l org-id; complete -c knowledge -l user-id; complete -c knowledge -l domain; complete -c knowledge -l file-results; complete -c knowledge -l full; complete -c knowledge -l dry-run; complete -c knowledge -l strict; complete -c knowledge -l fake; complete -c knowledge -l no-tailscale; complete -c knowledge -l no-artifact-content; complete -c knowledge -s p -l page; complete -c knowledge -s l -l limit; complete -c knowledge -s s -l search; complete -c knowledge -l sort; complete -c knowledge -l id; complete -c knowledge -l store; complete -c knowledge -l title; complete -c knowledge -l content; complete -c knowledge -l url; complete -c knowledge -s t -l tag; complete -c knowledge -l format; complete -c knowledge -l completions; complete -c knowledge -l purpose; complete -c knowledge -l model; complete -c knowledge -l dimensions; complete -c knowledge -l no-color; complete -c knowledge -l scope -a "local global project"; complete -c knowledge -l tables`);
+      console.log(`complete -c knowledge -f; complete -c knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats inventory project-panel paths setup auth remote storage machines sync db wiki source ingest reindex search web ask build embeddings providers safety events webhooks help ls rm edit unarchive"; complete -c knowledge -l json; complete -c knowledge -l yes -s y; complete -c knowledge -l help -s h; complete -c knowledge -l version -s v; complete -c knowledge -l desc; complete -c knowledge -l archived; complete -c knowledge -l include-archived; complete -c knowledge -l semantic; complete -c knowledge -l context; complete -c knowledge -l generate; complete -c knowledge -l approve-write; complete -c knowledge -l canonical-hasna-xyz; complete -c knowledge -l provider; complete -c knowledge -l mode; complete -c knowledge -l machine; complete -c knowledge -l workspace; complete -c knowledge -l peer-workspace; complete -c knowledge -l project; complete -c knowledge -l contract; complete -c knowledge -l api-url; complete -c knowledge -l api-key; complete -c knowledge -l email; complete -c knowledge -l org; complete -c knowledge -l org-id; complete -c knowledge -l user-id; complete -c knowledge -l domain; complete -c knowledge -l file-results; complete -c knowledge -l full; complete -c knowledge -l dry-run; complete -c knowledge -l strict; complete -c knowledge -l fake; complete -c knowledge -l no-tailscale; complete -c knowledge -l no-artifact-content; complete -c knowledge -s p -l page; complete -c knowledge -s l -l limit; complete -c knowledge -s s -l search; complete -c knowledge -l sort; complete -c knowledge -l id; complete -c knowledge -l store; complete -c knowledge -l title; complete -c knowledge -l content; complete -c knowledge -l url; complete -c knowledge -s t -l tag; complete -c knowledge -l format; complete -c knowledge -l completions; complete -c knowledge -l purpose; complete -c knowledge -l model; complete -c knowledge -l dimensions; complete -c knowledge -l no-color; complete -c knowledge -l scope -a "local global project"; complete -c knowledge -l tables`);
     } else {
       throw new Error("Invalid --completions value. Use 'bash', 'zsh', or 'fish'.");
     }
@@ -508,7 +516,7 @@ async function run(argv: string[]): Promise<void> {
   let storePath = flags.store;
   if (!storePath) {
     if (flags.scope === 'project' || flags.scope === 'local') {
-      storePath = service.jsonStorePath();
+      storePath = service.workspace.jsonStorePath;
     } else {
       storePath = defaultStorePath();
     }
@@ -525,6 +533,18 @@ async function run(argv: string[]): Promise<void> {
       storePath,
     });
     output(flags.json ? inventory : formatInventory(inventory), flags.json);
+    return;
+  }
+
+  if (command === 'project-panel') {
+    const projectId = flags.project ?? positional[1];
+    if (!projectId) throw new Error('Usage: knowledge project-panel --project <id|name|slug> [--json|--contract]');
+    const panel = service.projectPanel({
+      projectId,
+      limit: flags.limit,
+      contract: flags.contract,
+    });
+    output(panel, flags.json || flags.contract);
     return;
   }
 
@@ -671,7 +691,12 @@ async function run(argv: string[]): Promise<void> {
       output(repair, flags.json);
       return;
     }
-    throw new Error("Invalid storage action. Use 'status', 'validate', 'provenance', 'protect', or 'repair-artifact-keys'.");
+    if (action === 'migrate-legacy-path' || action === 'migrate-legacy') {
+      const migration = service.migrateLegacyPath({ dryRun: flags.dryRun });
+      output(migration, flags.json);
+      return;
+    }
+    throw new Error("Invalid storage action. Use 'status', 'validate', 'provenance', 'protect', 'repair-artifact-keys', or 'migrate-legacy-path'.");
   }
 
   if (command === 'machines') {
@@ -1275,12 +1300,11 @@ async function run(argv: string[]): Promise<void> {
     throw new Error("Invalid providers action. Use 'status', 'models', or 'check'.");
   }
 
-  ensureStore(storePath);
-
   if (command === 'add') {
     const title = positional[1];
     const content = positional[2];
     if (!title || !content) throw new Error('Usage: knowledge add <title> <content>');
+    ensureStore(storePath);
     withLock(storePath, () => {
       const db = loadStore(storePath);
       const item: KnowledgeItem = {
@@ -1304,54 +1328,50 @@ async function run(argv: string[]): Promise<void> {
     if (flags.format !== undefined && flags.format !== 'table' && flags.format !== 'json') {
       throw new Error("Invalid --format value for list. Use 'table' or 'json'.");
     }
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      const page = Number.isFinite(flags.page) && (flags.page as number) > 0 ? flags.page as number : 1;
-      const limit = Number.isFinite(flags.limit) && (flags.limit as number) > 0 ? flags.limit as number : 20;
-      const search = flags.search ? String(flags.search).toLowerCase() : '';
-      const tag = flags.tag ? String(flags.tag).toLowerCase() : '';
-      const useTable = flags.format === 'table' || (!flags.json && !flags.format && useColor(flags));
-      const useJson = flags.json || flags.format === 'json';
+    const db = loadStoreIfExists(storePath);
+    const page = Number.isFinite(flags.page) && (flags.page as number) > 0 ? flags.page as number : 1;
+    const limit = Number.isFinite(flags.limit) && (flags.limit as number) > 0 ? flags.limit as number : 20;
+    const search = flags.search ? String(flags.search).toLowerCase() : '';
+    const tag = flags.tag ? String(flags.tag).toLowerCase() : '';
+    const useTable = flags.format === 'table' || (!flags.json && !flags.format && useColor(flags));
+    const useJson = flags.json || flags.format === 'json';
 
-      let filtered = db.items;
-      if (flags.archived) filtered = filtered.filter((x) => x.archived === true);
-      else if (!flags.includeArchived) filtered = filtered.filter((x) => !x.archived);
-      if (search) filtered = filtered.filter((x) => x.title.toLowerCase().includes(search) || x.content.toLowerCase().includes(search));
-      if (tag) filtered = filtered.filter((x) => x.tags && x.tags.map((t) => t.toLowerCase()).includes(tag));
+    let filtered = db.items;
+    if (flags.archived) filtered = filtered.filter((x) => x.archived === true);
+    else if (!flags.includeArchived) filtered = filtered.filter((x) => !x.archived);
+    if (search) filtered = filtered.filter((x) => x.title.toLowerCase().includes(search) || x.content.toLowerCase().includes(search));
+    if (tag) filtered = filtered.filter((x) => x.tags && x.tags.map((t) => t.toLowerCase()).includes(tag));
 
-      const { sorted, sort, direction } = sortItems(filtered, flags);
-      const start = (page - 1) * limit;
-      const rows = sorted.slice(start, start + limit);
-      const totalPages = Math.max(1, Math.ceil(sorted.length / limit));
+    const { sorted, sort, direction } = sortItems(filtered, flags);
+    const start = (page - 1) * limit;
+    const rows = sorted.slice(start, start + limit);
+    const totalPages = Math.max(1, Math.ceil(sorted.length / limit));
 
-      if (useJson) { output({ ok: true, page, limit, total: sorted.length, total_pages: totalPages, sort, direction, items: rows }, true); return; }
-      if (rows.length === 0) { output(`No items found (search=${search || 'none'}, tag=${tag || 'none'})`, false); return; }
-      if (useTable) {
-        const col = (v: string) => v;
-        const header = `${col('ID')}\t${col('TITLE')}\t${col('CREATED')}\t${col('URL')}\t${col('TAGS')}`;
-        console.log(header);
-        for (const row of rows) {
-          console.log(`${row.id}\t${col(row.title)}\t${row.created_at}\t${row.url ? col(row.url) : ''}\t${row.tags?.length ? col(`[${row.tags.join(', ')}]`) : ''}`);
-        }
-        console.log(`Page ${page}/${totalPages} | showing ${rows.length} of ${sorted.length} | sort=${sort} ${direction} | search=${search || 'none'} | tag=${tag || 'none'}`);
-      } else {
-        for (const row of rows) {
-          console.log(`${row.id}\t${row.title}\t${row.created_at}${row.url ? `\t${row.url}` : ''}${row.tags?.length ? `\t[${row.tags.join(', ')}]` : ''}`);
-        }
-        console.log(`Page ${page}/${totalPages} | showing ${rows.length} of ${sorted.length} | sort=${sort} ${direction} | search=${search || 'none'} | tag=${tag || 'none'}`);
+    if (useJson) { output({ ok: true, page, limit, total: sorted.length, total_pages: totalPages, sort, direction, items: rows, store_exists: db.exists }, true); return; }
+    if (rows.length === 0) { output(`No items found (search=${search || 'none'}, tag=${tag || 'none'})`, false); return; }
+    if (useTable) {
+      const col = (v: string) => v;
+      const header = `${col('ID')}\t${col('TITLE')}\t${col('CREATED')}\t${col('URL')}\t${col('TAGS')}`;
+      console.log(header);
+      for (const row of rows) {
+        console.log(`${row.id}\t${col(row.title)}\t${row.created_at}\t${row.url ? col(row.url) : ''}\t${row.tags?.length ? col(`[${row.tags.join(', ')}]`) : ''}`);
       }
-    });
+      console.log(`Page ${page}/${totalPages} | showing ${rows.length} of ${sorted.length} | sort=${sort} ${direction} | search=${search || 'none'} | tag=${tag || 'none'}`);
+    } else {
+      for (const row of rows) {
+        console.log(`${row.id}\t${row.title}\t${row.created_at}${row.url ? `\t${row.url}` : ''}${row.tags?.length ? `\t[${row.tags.join(', ')}]` : ''}`);
+      }
+      console.log(`Page ${page}/${totalPages} | showing ${rows.length} of ${sorted.length} | sort=${sort} ${direction} | search=${search || 'none'} | tag=${tag || 'none'}`);
+    }
     return;
   }
 
   if (command === 'get') {
     requireId(flags);
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      const item = db.items.find((x) => x.id === flags.id || x.short_id === flags.id);
-      if (!item) throw new Error(`Item not found: ${flags.id}`);
-      output({ ok: true, item, message: `${item.id}: ${item.title}` }, flags.json);
-    });
+    const db = loadStoreIfExists(storePath);
+    const item = db.items.find((x) => x.id === flags.id || x.short_id === flags.id);
+    if (!item) throw new Error(`Item not found: ${flags.id}`);
+    output({ ok: true, item, store_exists: db.exists, message: `${item.id}: ${item.title}` }, flags.json);
     return;
   }
 
@@ -1416,6 +1436,8 @@ async function run(argv: string[]): Promise<void> {
   if (command === 'upsert') {
     const title = flags.title ?? positional[1];
     const content = flags.content ?? positional[2];
+    if (!flags.id && (!title || !content)) throw new Error('New item requires title and content. Example: knowledge upsert <title> <content> [--id <id>]');
+    ensureStore(storePath);
     withLock(storePath, () => {
       const db = loadStore(storePath);
       const idx = flags.id ? db.items.findIndex((x) => x.id === flags.id || x.short_id === flags.id) : -1;
@@ -1475,14 +1497,12 @@ async function run(argv: string[]): Promise<void> {
   if (command === 'export') {
     const format = flags.format ?? 'json';
     if (format !== 'json' && format !== 'jsonl') throw new Error("Invalid --format. Use 'json' or 'jsonl'.");
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      if (format === 'jsonl') {
-        for (const item of db.items) console.log(JSON.stringify(item));
-      } else {
-        output({ ok: true, items: db.items }, flags.json);
-      }
-    });
+    const db = loadStoreIfExists(storePath);
+    if (format === 'jsonl') {
+      for (const item of db.items) console.log(JSON.stringify(item));
+    } else {
+      output({ ok: true, items: db.items, store_exists: db.exists }, flags.json);
+    }
     return;
   }
 
@@ -1528,34 +1548,33 @@ async function run(argv: string[]): Promise<void> {
   }
 
   if (command === 'stats') {
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      const activeItems = db.items.filter((x) => !x.archived);
-      const total = activeItems.length;
-      const archived = db.items.length - total;
-      const withUrl = activeItems.filter((x) => x.url).length;
-      const withTags = activeItems.filter((x) => x.tags && x.tags.length > 0).length;
-      const oldest = total > 0 ? activeItems.map((x) => x.created_at).sort()[0] : null;
-      const newest = total > 0 ? activeItems.map((x) => x.created_at).sort()[total - 1] : null;
-      const tagCounts: Record<string, number> = {};
-      for (const item of activeItems) {
-        for (const tag of item.tags || []) {
-          tagCounts[tag] = (tagCounts[tag] || 0) + 1;
-        }
+    const db = loadStoreIfExists(storePath);
+    const activeItems = db.items.filter((x) => !x.archived);
+    const total = activeItems.length;
+    const archived = db.items.length - total;
+    const withUrl = activeItems.filter((x) => x.url).length;
+    const withTags = activeItems.filter((x) => x.tags && x.tags.length > 0).length;
+    const oldest = total > 0 ? activeItems.map((x) => x.created_at).sort()[0] : null;
+    const newest = total > 0 ? activeItems.map((x) => x.created_at).sort()[total - 1] : null;
+    const tagCounts: Record<string, number> = {};
+    for (const item of activeItems) {
+      for (const tag of item.tags || []) {
+        tagCounts[tag] = (tagCounts[tag] || 0) + 1;
       }
-      const topTags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([tag, count]) => ({ tag, count }));
-      output({
-        ok: true,
-        total,
-        archived,
-        with_url: withUrl,
-        with_tags: withTags,
-        oldest,
-        newest,
-        top_tags: topTags,
-        message: `${total} items | ${withUrl} with URL | ${withTags} with tags`,
-      }, flags.json);
-    });
+    }
+    const topTags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([tag, count]) => ({ tag, count }));
+    output({
+      ok: true,
+      total,
+      archived,
+      with_url: withUrl,
+      with_tags: withTags,
+      oldest,
+      newest,
+      top_tags: topTags,
+      store_exists: db.exists,
+      message: `${total} items | ${withUrl} with URL | ${withTags} with tags`,
+    }, flags.json);
     return;
   }
 

@@ -1,4 +1,5 @@
 import type { Database } from 'bun:sqlite';
+import { existsSync } from 'node:fs';
 import { normalizeArtifactKey } from './artifact-store';
 import { migrateKnowledgeDb, openKnowledgeDb } from './knowledge-db';
 import type { StorageContract } from './storage-contract';
@@ -87,6 +88,25 @@ function generatedArtifactHasAuditSupport(db: Database, key: string, uri: string
 }
 
 export function provenanceStatusFor(dbPath: string, storage: StorageContract): KnowledgeProvenanceStatus {
+  if (!existsSync(dbPath)) {
+    return {
+      ok: true,
+      read_only: true,
+      storage_type: storage.storage_type,
+      artifact_root_uri: storage.artifact_store.uri_prefix,
+      counts: {
+        storage_objects: 0,
+        wiki_pages: 0,
+        wiki_pages_with_artifacts: 0,
+        storage_objects_with_provenance: 0,
+        audit_events: 0,
+        warnings: 0,
+        errors: 0,
+      },
+      issues: [],
+      message: 'No knowledge.db found; provenance catalog is empty.',
+    };
+  }
   migrateKnowledgeDb(dbPath);
   const db = openKnowledgeDb(dbPath);
   const issues: KnowledgeProvenanceIssue[] = [];

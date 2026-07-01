@@ -4,7 +4,7 @@ This workspace is protected against direct agent writes.
 
 ## Rules
 
-- Agents must not write directly to .hasna/apps/knowledge or generated artifact files.
+- Agents must not write directly to .hasna/knowledge or generated artifact files.
 - Use knowledge CLI, knowledge-mcp, or the @hasna/knowledge SDK for every durable knowledge write.
 - Use --approve-write --approved-by <name> for generated wiki or repair writes that require approval.
 - Run knowledge storage validate --strict after changes to detect direct artifact writes.
@@ -17,4 +17,4 @@ This workspace is protected against direct agent writes.
 
 Direct file writes under this directory are treated as knowledge corruption because they bypass citations, storage manifests, run ledgers, and audit events.
 
-Workspace: /home/hasna/workspace/hasna/opensource/open-knowledge/.hasna/apps/knowledge
+Workspace: /home/hasna/Workspace/hasna/opensource/open-knowledge/.hasna/knowledge

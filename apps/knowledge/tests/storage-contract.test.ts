@@ -13,9 +13,9 @@ import {
 import { canonicalHasnaXyzKnowledgeStorage, defaultKnowledgeConfig, workspaceForHome } from '../src/workspace';
 
 describe('knowledge storage contract', () => {
-  test('describes local .hasna/apps/knowledge ownership and generated artifact classes', () => {
+  test('describes local .hasna/knowledge ownership and generated artifact classes', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-storage-contract-'));
-    const workspace = workspaceForHome(join(dir, '.hasna', 'apps', 'knowledge'));
+    const workspace = workspaceForHome(join(dir, '.hasna', 'knowledge'));
     const config = defaultKnowledgeConfig();
 
     const contract = resolveStorageContract(config, workspace, 'project');
@@ -23,7 +23,7 @@ describe('knowledge storage contract', () => {
 
     expect(validation.ok).toBe(true);
     expect(contract.scope).toBe('project');
-    expect(contract.local_layout.app_path).toBe(join('.hasna', 'apps', 'knowledge'));
+    expect(contract.local_layout.app_path).toBe(join('.hasna', 'knowledge'));
     expect(contract.local_layout.knowledge_db_path).toBe(join(workspace.home, 'knowledge.db'));
     expect(contract.artifact_store.type).toBe('local');
     expect(contract.artifact_store.uri_prefix).toBe(`file://${workspace.artifactsDir}/`);
@@ -32,12 +32,12 @@ describe('knowledge storage contract', () => {
     expect(contract.generated_artifacts.map((entry) => entry.prefix)).toContain('wiki/');
     expect(contract.scalability.indexes).toContain('not one giant index.md');
     expect(contract.canonical_hasna_xyz.active).toBe(false);
-    expect(contract.canonical_hasna_xyz.local_path).toBe(join('.hasna', 'apps', 'knowledge'));
+    expect(contract.canonical_hasna_xyz.local_path).toBe(join('.hasna', 'knowledge'));
     expect(contract.canonical_hasna_xyz.s3).toMatchObject({
       bucket: 'hasna-xyz-opensource-knowledge-prod',
       region: 'us-east-1',
-      prefix: '.hasna/apps/knowledge',
-      uri_prefix: 's3://hasna-xyz-opensource-knowledge-prod/.hasna/apps/knowledge/',
+      prefix: '.hasna/knowledge',
+      uri_prefix: 's3://hasna-xyz-opensource-knowledge-prod/.hasna/knowledge/',
     });
     expect(contract.canonical_hasna_xyz.secrets).toMatchObject({
       env: 'hasna/xyz/opensource/knowledge/prod/env',
@@ -50,7 +50,7 @@ describe('knowledge storage contract', () => {
 
   test('describes S3 artifact storage without changing open-files source ownership', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-storage-s3-'));
-    const workspace = workspaceForHome(join(dir, '.hasna', 'apps', 'knowledge'));
+    const workspace = workspaceForHome(join(dir, '.hasna', 'knowledge'));
     const config = defaultKnowledgeConfig();
     config.mode = 'hosted';
     config.storage = {
@@ -82,7 +82,7 @@ describe('knowledge storage contract', () => {
 
   test('activates canonical Hasna XYZ S3 storage when configured', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-storage-hasna-s3-'));
-    const workspace = workspaceForHome(join(dir, '.hasna', 'apps', 'knowledge'));
+    const workspace = workspaceForHome(join(dir, '.hasna', 'knowledge'));
     const config = defaultKnowledgeConfig();
     config.mode = 'hosted';
     config.storage = canonicalHasnaXyzKnowledgeStorage();
@@ -93,10 +93,10 @@ describe('knowledge storage contract', () => {
     expect(validation.ok).toBe(true);
     expect(contract.canonical_hasna_xyz.active).toBe(true);
     expect(contract.artifact_store.type).toBe('s3');
-    expect(contract.artifact_store.uri_prefix).toBe('s3://hasna-xyz-opensource-knowledge-prod/.hasna/apps/knowledge/');
+    expect(contract.artifact_store.uri_prefix).toBe('s3://hasna-xyz-opensource-knowledge-prod/.hasna/knowledge/');
     expect(contract.artifact_store.s3).toMatchObject({
       bucket: 'hasna-xyz-opensource-knowledge-prod',
-      prefix: '.hasna/apps/knowledge',
+      prefix: '.hasna/knowledge',
       region: 'us-east-1',
       profile: 'hasna-xyz-infra',
       server_side_encryption: 'AES256',

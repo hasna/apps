@@ -337,28 +337,54 @@ describe('knowledge cli', () => {
     expect(updateOut.item.content).toBe('Updated body');
   });
 
-  test('project scope uses .hasna/apps/knowledge workspace', () => {
+  test('project scope uses .hasna/knowledge workspace', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-workspace-'));
 
     const paths = runCli(['paths', '--scope', 'project', '--json'], dir);
     expect(paths.exitCode).toBe(0);
     const pathsOut = JSON.parse(new TextDecoder().decode(paths.stdout));
-    expect(pathsOut.home).toBe(join(dir, '.hasna', 'apps', 'knowledge'));
-    expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'config.json'))).toBe(true);
-    expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'runs'))).toBe(true);
-    expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'wiki'))).toBe(true);
+    expect(pathsOut.home).toBe(join(dir, '.hasna', 'knowledge'));
+    expect(pathsOut.exists).toBe(false);
+    expect(pathsOut.config_exists).toBe(false);
+    expect(pathsOut.knowledge_db_exists).toBe(false);
+    expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
 
     const storage = runCli(['storage', 'status', '--scope', 'project', '--json'], dir);
     expect(storage.exitCode).toBe(0);
     const storageOut = JSON.parse(new TextDecoder().decode(storage.stdout));
-    expect(storageOut.local_layout.app_path).toBe(join('.hasna', 'apps', 'knowledge'));
+    expect(storageOut.local_layout.app_path).toBe(join('.hasna', 'knowledge'));
     expect(storageOut.artifact_store.type).toBe('local');
     expect(storageOut.source_ownership.owner).toBe('open-files');
     expect(storageOut.source_ownership.raw_source_bytes_stored_in_open_knowledge).toBe(false);
+    expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
+
+    const emptyDbStats = runCli(['db', 'stats', '--scope', 'project', '--json'], dir);
+    expect(emptyDbStats.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(emptyDbStats.stdout)).schema_version).toBe(0);
+    expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
+
+    const emptySearch = runCli(['search', 'anything', '--scope', 'project', '--json'], dir);
+    expect(emptySearch.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(emptySearch.stdout)).results).toEqual([]);
+    expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
+
+    const emptyStats = runCli(['stats', '--scope', 'project', '--json'], dir);
+    expect(emptyStats.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(emptyStats.stdout)).store_exists).toBe(false);
+    expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
+
+    const panel = runCli(['project-panel', '--project', 'open-knowledge', '--scope', 'project', '--json'], dir);
+    expect(panel.exitCode).toBe(0);
+    const panelOut = JSON.parse(new TextDecoder().decode(panel.stdout));
+    expect(panelOut.schema).toBe('hasna.project_panel.v1');
+    expect(panelOut.metadata.home).toBe(join(dir, '.hasna', 'knowledge'));
+    expect(panelOut.metadata.knowledge_db_exists).toBe(false);
+    expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
 
     const validate = runCli(['storage', 'validate', '--scope', 'project', '--json'], dir);
     expect(validate.exitCode).toBe(0);
     expect(JSON.parse(new TextDecoder().decode(validate.stdout)).ok).toBe(true);
+    expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
 
     const strictBeforeProtect = runCli(['storage', 'validate', '--strict', '--scope', 'project', '--json'], dir);
     expect(strictBeforeProtect.exitCode).toBe(1);
@@ -370,8 +396,8 @@ describe('knowledge cli', () => {
     expect(protect.exitCode).toBe(0);
     const protectOut = JSON.parse(new TextDecoder().decode(protect.stdout));
     expect(protectOut.protected).toBe(true);
-    expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'write-boundary.json'))).toBe(true);
-    expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'WRITE_BOUNDARY.md'))).toBe(true);
+    expect(existsSync(join(dir, '.hasna', 'knowledge', 'write-boundary.json'))).toBe(true);
+    expect(existsSync(join(dir, '.hasna', 'knowledge', 'WRITE_BOUNDARY.md'))).toBe(true);
 
     const strictAfterProtect = runCli(['storage', 'validate', '--strict', '--scope', 'project', '--json'], dir);
     expect(strictAfterProtect.exitCode).toBe(0);
@@ -382,7 +408,7 @@ describe('knowledge cli', () => {
       'Blocked direct store',
       'Should not write inside artifacts',
       '--store',
-      join(dir, '.hasna', 'apps', 'knowledge', 'artifacts', 'rogue-store.json'),
+      join(dir, '.hasna', 'knowledge', 'artifacts', 'rogue-store.json'),
       '--scope',
       'project',
       '--json',
@@ -390,7 +416,7 @@ describe('knowledge cli', () => {
     expect(blockedStore.exitCode).toBe(1);
     expect(JSON.parse(new TextDecoder().decode(blockedStore.stderr)).error.message).toContain('protected knowledge workspace');
 
-    writeFileSync(join(dir, '.hasna', 'apps', 'knowledge', 'rogue-root.md'), '# direct root write');
+    writeFileSync(join(dir, '.hasna', 'knowledge', 'rogue-root.md'), '# direct root write');
     const strictAfterRootWrite = runCli(['storage', 'validate', '--strict', '--scope', 'project', '--json'], dir);
     expect(strictAfterRootWrite.exitCode).toBe(1);
     const strictAfterRootWriteOut = JSON.parse(new TextDecoder().decode(strictAfterRootWrite.stdout));
@@ -398,14 +424,14 @@ describe('knowledge cli', () => {
     expect(strictAfterRootWriteOut.write_boundary.violations.some((entry: any) => entry.code === 'unexpected_workspace_root_entry')).toBe(true);
 
     const outside = mkdtempSync(join(tmpdir(), 'ok-workspace-outside-'));
-    symlinkSync(outside, join(dir, '.hasna', 'apps', 'knowledge', 'artifacts', 'escape'), 'dir');
+    symlinkSync(outside, join(dir, '.hasna', 'knowledge', 'artifacts', 'escape'), 'dir');
     const strictAfterSymlink = runCli(['storage', 'validate', '--strict', '--scope', 'project', '--json'], dir);
     expect(strictAfterSymlink.exitCode).toBe(1);
     const strictAfterSymlinkOut = JSON.parse(new TextDecoder().decode(strictAfterSymlink.stdout));
     expect(strictAfterSymlinkOut.write_boundary.violations.some((entry: any) => entry.code === 'symlink_workspace_path')).toBe(true);
 
-    mkdirSync(join(dir, '.hasna', 'apps', 'knowledge', 'artifacts', 'wiki'), { recursive: true });
-    writeFileSync(join(dir, '.hasna', 'apps', 'knowledge', 'artifacts', 'wiki', 'rogue.md'), '# direct write');
+    mkdirSync(join(dir, '.hasna', 'knowledge', 'artifacts', 'wiki'), { recursive: true });
+    writeFileSync(join(dir, '.hasna', 'knowledge', 'artifacts', 'wiki', 'rogue.md'), '# direct write');
     const strictAfterDirectWrite = runCli(['storage', 'validate', '--strict', '--scope', 'project', '--json'], dir);
     expect(strictAfterDirectWrite.exitCode).toBe(1);
     const strictAfterDirectWriteOut = JSON.parse(new TextDecoder().decode(strictAfterDirectWrite.stdout));
@@ -414,8 +440,29 @@ describe('knowledge cli', () => {
 
     const add = runCli(['add', 'Project scoped', 'Stored in the Hasna app workspace', '--scope', 'project', '--json'], dir);
     expect(add.exitCode).toBe(0);
-    expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'db.json'))).toBe(true);
+    expect(existsSync(join(dir, '.hasna', 'knowledge', 'db.json'))).toBe(true);
     expect(existsSync(join(dir, '.open-knowledge', 'db.json'))).toBe(false);
+  });
+
+  test('storage migrate-legacy-path explicitly copies old project workspace', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-legacy-project-workspace-'));
+    const legacyHome = join(dir, '.hasna', 'apps', 'knowledge');
+    mkdirSync(legacyHome, { recursive: true });
+    writeFileSync(join(legacyHome, 'db.json'), JSON.stringify({ items: [] }));
+
+    const dryRun = runCli(['storage', 'migrate-legacy-path', '--scope', 'project', '--dry-run', '--json'], dir);
+    expect(dryRun.exitCode).toBe(0);
+    const dryRunOut = JSON.parse(new TextDecoder().decode(dryRun.stdout));
+    expect(dryRunOut.migrated).toBe(false);
+    expect(dryRunOut.source).toBe(legacyHome);
+    expect(dryRunOut.target).toBe(join(dir, '.hasna', 'knowledge'));
+    expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
+
+    const migrate = runCli(['storage', 'migrate-legacy-path', '--scope', 'project', '--json'], dir);
+    expect(migrate.exitCode).toBe(0);
+    const migrateOut = JSON.parse(new TextDecoder().decode(migrate.stdout));
+    expect(migrateOut.migrated).toBe(true);
+    expect(existsSync(join(dir, '.hasna', 'knowledge', 'db.json'))).toBe(true);
   });
 
   test('machines topology command exposes adapter-aware topology shape', () => {
@@ -428,8 +475,8 @@ describe('knowledge cli', () => {
     expect(['local', 'open-machines']).toContain(out.source);
     expect(out.adapter.package).toBe('@hasna/machines');
     expect(typeof out.adapter.available).toBe('boolean');
-    expect(out.knowledge.app_path).toBe(join('.hasna', 'apps', 'knowledge'));
-    expect(out.knowledge.workspace_home).toBe(join(dir, '.hasna', 'apps', 'knowledge'));
+    expect(out.knowledge.app_path).toBe(join('.hasna', 'knowledge'));
+    expect(out.knowledge.workspace_home).toBe(join(dir, '.hasna', 'knowledge'));
     expect(out.machines.length).toBeGreaterThanOrEqual(1);
     expect(out.machines.some((machine: any) => machine.local)).toBe(true);
   });
@@ -759,7 +806,7 @@ describe('knowledge cli', () => {
     expect(doctorOut.storage.artifact_manifest.warnings).not.toContain('artifact_manifest_s3_key_contains_storage_prefix:1');
   });
 
-  test('global store migrates legacy .open-knowledge data into the Hasna app path', () => {
+  test('global list does not migrate legacy .open-knowledge data on read', () => {
     const home = mkdtempSync(join(tmpdir(), 'ok-legacy-home-'));
     const legacyDir = join(home, '.open-knowledge');
     mkdirSync(legacyDir, { recursive: true });
@@ -780,9 +827,9 @@ describe('knowledge cli', () => {
     const list = runCli(['list', '--json'], undefined, { HOME: home });
     expect(list.exitCode).toBe(0);
     const listOut = JSON.parse(new TextDecoder().decode(list.stdout));
-    expect(listOut.total).toBe(1);
-    expect(listOut.items[0].title).toBe('Legacy global item');
-    expect(existsSync(join(home, '.hasna', 'apps', 'knowledge', 'db.json'))).toBe(true);
+    expect(listOut.total).toBe(0);
+    expect(listOut.store_exists).toBe(false);
+    expect(existsSync(join(home, '.hasna', 'knowledge', 'db.json'))).toBe(false);
   });
 
   test('setup, auth, and remote commands expose hosted-aware JSON contracts', () => {
@@ -839,7 +886,7 @@ describe('knowledge cli', () => {
     expect(setup.exitCode).toBe(0);
     const setupOut = JSON.parse(new TextDecoder().decode(setup.stdout));
     expect(setupOut.storage_type).toBe('s3');
-    expect(setupOut.artifact_uri_prefix).toBe('s3://hasna-xyz-opensource-knowledge-prod/.hasna/apps/knowledge/');
+    expect(setupOut.artifact_uri_prefix).toBe('s3://hasna-xyz-opensource-knowledge-prod/.hasna/knowledge/');
     expect(setupOut.canonical_hasna_xyz.active).toBe(true);
 
     const storage = runCli(['storage', 'status', '--scope', 'project', '--json'], dir);
@@ -847,7 +894,7 @@ describe('knowledge cli', () => {
     const storageOut = JSON.parse(new TextDecoder().decode(storage.stdout));
     expect(storageOut.artifact_store.s3).toMatchObject({
       bucket: 'hasna-xyz-opensource-knowledge-prod',
-      prefix: '.hasna/apps/knowledge',
+      prefix: '.hasna/knowledge',
       region: 'us-east-1',
       profile: 'hasna-xyz-infra',
     });
@@ -866,7 +913,7 @@ describe('knowledge cli', () => {
     expect(init.exitCode).toBe(0);
     const initOut = JSON.parse(new TextDecoder().decode(init.stdout));
     expect(initOut.schema_version).toBe(8);
-    expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'knowledge.db'))).toBe(true);
+    expect(existsSync(join(dir, '.hasna', 'knowledge', 'knowledge.db'))).toBe(true);
 
     const stats = runCli(['db', 'stats', '--scope', 'project', '--json'], dir);
     expect(stats.exitCode).toBe(0);
@@ -890,9 +937,10 @@ describe('knowledge cli', () => {
     const status = runCli(['sync', 'status', '--scope', 'project', '--json'], dir);
     expect(status.exitCode).toBe(0);
     const statusOut = JSON.parse(new TextDecoder().decode(status.stdout));
-    expect(statusOut.sqlite_schema_version).toBe(8);
+    expect(statusOut.sqlite_schema_version).toBe(0);
     expect(statusOut.machines.total).toBe(0);
     expect(statusOut.conflicts.open).toBe(0);
+    expect(existsSync(join(dir, '.hasna', 'knowledge', 'knowledge.db'))).toBe(false);
 
     const snapshot = runCli(['sync', 'snapshot', '--scope', 'project', '--no-tailscale', '--json'], dir);
     expect(snapshot.exitCode).toBe(0);
@@ -900,6 +948,7 @@ describe('knowledge cli', () => {
     expect(snapshotOut.ok).toBe(true);
     expect(snapshotOut.snapshot.content_hash).toStartWith('sha256:');
     expect(snapshotOut.machines_upserted).toBeGreaterThanOrEqual(1);
+    expect(existsSync(join(dir, '.hasna', 'knowledge', 'knowledge.db'))).toBe(true);
 
     const machines = runCli(['sync', 'machines', '--scope', 'project', '--json'], dir);
     expect(machines.exitCode).toBe(0);
@@ -992,14 +1041,14 @@ describe('knowledge cli', () => {
     const dryRunOut = JSON.parse(new TextDecoder().decode(dryRun.stdout));
     expect(dryRunOut.dry_run).toBe(true);
     expect(dryRunOut.push.tables.find((table: any) => table.table === 'sources').inserted).toBe(1);
-    expect(existsSync(join(peerDir, '.hasna', 'apps', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(false);
+    expect(existsSync(join(peerDir, '.hasna', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(false);
 
     const push = runCli(['sync', 'push', '--peer-workspace', peerDir, '--scope', 'project', '--json'], sourceDir);
     expect(push.exitCode).toBe(0);
     const pushOut = JSON.parse(new TextDecoder().decode(push.stdout));
     expect(pushOut.ok).toBe(true);
     expect(pushOut.push.artifacts.copied).toBeGreaterThanOrEqual(1);
-    expect(existsSync(join(peerDir, '.hasna', 'apps', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(true);
+    expect(existsSync(join(peerDir, '.hasna', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(true);
 
     const peerStats = runCli(['db', 'stats', '--scope', 'project', '--json'], peerDir);
     expect(peerStats.exitCode).toBe(0);
@@ -1070,7 +1119,7 @@ describe('knowledge cli', () => {
     expect(importedOut.protocol_version).toBe(2);
     expect(importedOut.min_protocol_version).toBe(1);
     expect(importedOut.artifacts.copied).toBe(4);
-    expect(existsSync(join(peerDir, '.hasna', 'apps', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(true);
+    expect(existsSync(join(peerDir, '.hasna', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(true);
   });
 
   test('ssh sync rejects remote export without protocol handshake', () => {
@@ -1083,10 +1132,10 @@ describe('knowledge cli', () => {
       generated_at: '2026-06-09T00:00:00.000Z',
       source: {
         scope: 'project',
-        workspace_home: '/remote/.hasna/apps/knowledge',
+        workspace_home: '/remote/.hasna/knowledge',
         sqlite_schema_version: 6,
         machine_id: 'spark01',
-        artifact_root_uri: 'file:///remote/.hasna/apps/knowledge/artifacts/',
+        artifact_root_uri: 'file:///remote/.hasna/knowledge/artifacts/',
       },
       tables: [],
       artifacts: [],
@@ -1117,10 +1166,10 @@ describe('knowledge cli', () => {
       generated_at: '2026-06-09T00:00:00.000Z',
       source: {
         scope: 'project',
-        workspace_home: '/remote/.hasna/apps/knowledge',
+        workspace_home: '/remote/.hasna/knowledge',
         sqlite_schema_version: 6,
         machine_id: 'spark01',
-        artifact_root_uri: 'file:///remote/.hasna/apps/knowledge/artifacts/',
+        artifact_root_uri: 'file:///remote/.hasna/knowledge/artifacts/',
       },
       tables: [],
       artifacts: [],
@@ -1174,10 +1223,10 @@ describe('knowledge cli', () => {
       generated_at: '2026-06-09T00:00:00.000Z',
       source: {
         scope: 'project',
-        workspace_home: '/mapped/open-knowledge/.hasna/apps/knowledge',
+        workspace_home: '/mapped/open-knowledge/.hasna/knowledge',
         sqlite_schema_version: 6,
         machine_id: 'spark01',
-        artifact_root_uri: 'file:///mapped/open-knowledge/.hasna/apps/knowledge/artifacts/',
+        artifact_root_uri: 'file:///mapped/open-knowledge/.hasna/knowledge/artifacts/',
       },
       tables: [],
       artifacts: [],
@@ -1218,16 +1267,16 @@ describe('knowledge cli', () => {
       direction: 'import',
       source: {
         scope: 'project',
-        workspace_home: `${dir}/.hasna/apps/knowledge`,
+        workspace_home: `${dir}/.hasna/knowledge`,
         sqlite_schema_version: 6,
         machine_id: 'spark02',
-        artifact_root_uri: `file://${dir}/.hasna/apps/knowledge/artifacts/`,
+        artifact_root_uri: `file://${dir}/.hasna/knowledge/artifacts/`,
       },
       target: {
         scope: 'project',
-        workspace_home: '/remote/.hasna/apps/knowledge',
+        workspace_home: '/remote/.hasna/knowledge',
         sqlite_schema_version: 6,
-        artifact_root_uri: 'file:///remote/.hasna/apps/knowledge/artifacts/',
+        artifact_root_uri: 'file:///remote/.hasna/knowledge/artifacts/',
       },
       tables: [],
       artifacts: { source_artifacts: 0, target_artifacts: 0, copied: 0, skipped: 0, conflicts: 0, missing_content: 0 },
@@ -1672,9 +1721,9 @@ describe('knowledge cli', () => {
     expect(initOut.written).toContain('wiki/README.md');
     expect(initOut.artifacts).toHaveLength(4);
     expect(initOut.artifacts.every((entry: any) => entry.hash.startsWith('sha256:'))).toBe(true);
-    expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'artifacts', 'schemas', 'v1.md'))).toBe(true);
-    expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'artifacts', 'indexes', 'root.md'))).toBe(true);
-    expect(existsSync(join(dir, '.hasna', 'apps', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(true);
+    expect(existsSync(join(dir, '.hasna', 'knowledge', 'artifacts', 'schemas', 'v1.md'))).toBe(true);
+    expect(existsSync(join(dir, '.hasna', 'knowledge', 'artifacts', 'indexes', 'root.md'))).toBe(true);
+    expect(existsSync(join(dir, '.hasna', 'knowledge', 'artifacts', 'wiki', 'README.md'))).toBe(true);
 
     const stats = runCli(['db', 'stats', '--scope', 'project', '--json'], dir);
     expect(stats.exitCode).toBe(0);
@@ -1689,7 +1738,7 @@ describe('knowledge cli', () => {
     expect(strictBeforeTamper.exitCode).toBe(0);
     expect(JSON.parse(new TextDecoder().decode(strictBeforeTamper.stdout)).ok).toBe(true);
 
-    writeFileSync(join(dir, '.hasna', 'apps', 'knowledge', 'artifacts', 'wiki', 'README.md'), '# direct artifact edit');
+    writeFileSync(join(dir, '.hasna', 'knowledge', 'artifacts', 'wiki', 'README.md'), '# direct artifact edit');
     const strictAfterTamper = runCli(['storage', 'validate', '--strict', '--scope', 'project', '--json'], dir);
     expect(strictAfterTamper.exitCode).toBe(1);
     const strictAfterTamperOut = JSON.parse(new TextDecoder().decode(strictAfterTamper.stdout));

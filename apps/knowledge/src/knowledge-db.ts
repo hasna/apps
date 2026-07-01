@@ -28,6 +28,33 @@ export interface KnowledgeDbStats {
   sync_imports: number;
 }
 
+export function emptyKnowledgeDbStats(): KnowledgeDbStats {
+  return {
+    schema_version: 0,
+    sources: 0,
+    source_revisions: 0,
+    chunks: 0,
+    wiki_pages: 0,
+    citations: 0,
+    indexes: 0,
+    runs: 0,
+    run_events: 0,
+    redaction_findings: 0,
+    audit_events: 0,
+    approval_gates: 0,
+    storage_objects: 0,
+    embeddings: 0,
+    vector_entries: 0,
+    reindex_queue: 0,
+    knowledge_machines: 0,
+    sync_snapshots: 0,
+    sync_changes: 0,
+    sync_conflicts: 0,
+    sync_table_clocks: 0,
+    sync_imports: 0,
+  };
+}
+
 const MIGRATION_1 = `
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;

@@ -39,6 +39,16 @@ export function ensureStore(path: string): void {
   }
 }
 
+export function loadStoreIfExists(path: string): Store & { exists: boolean } {
+  if (!existsSync(path)) return { exists: false, items: [] };
+  const raw = readFileSync(path, 'utf8');
+  const parsed = JSON.parse(raw) as Store;
+  if (!parsed || !Array.isArray(parsed.items)) {
+    return { exists: true, items: [] };
+  }
+  return { exists: true, items: parsed.items };
+}
+
 function lockPath(path: string): string {
   return `${path}.lock`;
 }

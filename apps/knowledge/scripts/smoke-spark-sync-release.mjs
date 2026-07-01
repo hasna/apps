@@ -372,7 +372,7 @@ function assertArtifactDoctor(doctor, label) {
 function forceRemoteWikiConflict(remote, cwd) {
   const code = [
     'import { Database } from "bun:sqlite";',
-    'const db = new Database(".hasna/apps/knowledge/knowledge.db");',
+    'const db = new Database(".hasna/knowledge/knowledge.db");',
     'db.run("UPDATE wiki_pages SET title = ?, updated_at = ? WHERE path = ?", ["Spark01 edited Wiki", "2026-06-09T16:00:00.000Z", "wiki/README.md"]);',
     'db.close();',
   ].join(' ');

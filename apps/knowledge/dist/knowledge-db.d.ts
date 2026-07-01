@@ -24,6 +24,7 @@ export interface KnowledgeDbStats {
     sync_table_clocks: number;
     sync_imports: number;
 }
+export declare function emptyKnowledgeDbStats(): KnowledgeDbStats;
 export declare function openKnowledgeDb(path: string): Database;
 export declare function migrateKnowledgeDb(path: string): {
     path: string;

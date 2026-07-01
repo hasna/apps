@@ -9,7 +9,7 @@ machines such as `spark02` and `spark01`, plus future hosted/SaaS operation.
 state, wiki pages, run ledgers, and sync metadata under:
 
 ```text
-.hasna/apps/knowledge/
+.hasna/knowledge/
 ```
 
 `open-files` remains the source of truth for raw files, raw bytes, file
@@ -193,20 +193,20 @@ locally or in S3.
 Local mode stores generated artifacts under:
 
 ```text
-.hasna/apps/knowledge/artifacts/
+.hasna/knowledge/artifacts/
 ```
 
 Cloud mode may store generated artifacts under an S3-compatible prefix:
 
 ```text
-s3://<bucket>/<prefix>/.hasna/apps/knowledge/
+s3://<bucket>/<prefix>/.hasna/knowledge/
 ```
 
 For Hasna XYZ open-source knowledge, the canonical generated-artifact location
 is:
 
 ```text
-s3://hasna-xyz-opensource-knowledge-prod/.hasna/apps/knowledge/
+s3://hasna-xyz-opensource-knowledge-prod/.hasna/knowledge/
 ```
 
 Artifacts include wiki pages, index shards, schema docs, logs, run outputs, and

@@ -4,7 +4,7 @@
 Hasna app workspace and a versioned SQLite catalog:
 
 ```text
-.hasna/apps/knowledge/
+.hasna/knowledge/
   db.json
   knowledge.db
   artifacts/
@@ -31,7 +31,7 @@ Global legacy notes are migrated on first use:
 to:
 
 ```text
-~/.hasna/apps/knowledge/db.json
+~/.hasna/knowledge/db.json
 ```
 
 This happens only when the new Hasna JSON store does not already exist. The
@@ -40,7 +40,7 @@ legacy file is not deleted.
 Project mode writes directly to:
 
 ```text
-<project>/.hasna/apps/knowledge/db.json
+<project>/.hasna/knowledge/db.json
 ```
 
 when compatibility note commands are used with `--scope project`.
@@ -86,7 +86,7 @@ knowledge source resolve open-files://file/file_123/revision/rev_456 \
 
 1. Keep the legacy JSON note store as an exportable compatibility layer.
 2. Run `knowledge paths --scope project --json` and confirm the project
-   workspace is `.hasna/apps/knowledge`.
+   workspace is `.hasna/knowledge`.
 3. Initialize `knowledge.db` with `knowledge db init --scope project`.
 4. Ingest source manifests from `open-files` rather than copying raw files into
    `knowledge`.

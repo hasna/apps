@@ -10,7 +10,7 @@ package.
 The OSS package owns:
 
 - Local CLI and MCP behavior.
-- `.hasna/apps/knowledge` workspaces.
+- `.hasna/knowledge` workspaces.
 - Local SQLite schema, local artifact catalog, generated wiki artifacts, local
   vector rows, run ledgers, and BYOK provider calls.
 - Source refs, derived chunks, citations, provenance, and read-only resolver
@@ -88,7 +88,7 @@ passwords, hosted KMS key material, or privileged AWS role assumptions.
 
 For Hasna XYZ production, the OSS contract names
 `hasna-xyz-opensource-knowledge-prod` and prefix
-`.hasna/apps/knowledge/`, plus metadata-only secret paths under
+`.hasna/knowledge/`, plus metadata-only secret paths under
 `hasna/xyz/opensource/knowledge/prod/{env,aws,s3}`. Hosted code is responsible
 for resolving those secrets, assuming AWS roles, enforcing tenant prefixes, and
 provisioning `hasna/xyz/opensource/knowledge/prod/rds` only if a hosted runtime

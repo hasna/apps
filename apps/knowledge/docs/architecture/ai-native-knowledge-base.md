@@ -14,7 +14,7 @@ The open source package owns:
   current `KnowledgeService` facade centralizes workspace/config/safety,
   artifact storage, DB/wiki setup, source ingestion, source resolution, and
   outbox consumption.
-- Local project workspace under `.hasna/apps/knowledge`.
+- Local project workspace under `.hasna/knowledge`.
 - Source references, citations, extracted metadata, chunks, generated wiki
   artifacts, schemas, indexes, run ledgers, and search state.
 - Hybrid retrieval over keyword search, semantic vectors, wiki pages, citations,
@@ -68,7 +68,7 @@ and local artifact generation do not require this remote API.
 Project-local state lives at:
 
 ```text
-.hasna/apps/knowledge/
+.hasna/knowledge/
   config.json
   knowledge.db
   artifacts/
@@ -83,7 +83,7 @@ Project-local state lives at:
 
 The legacy JSON store at `~/.open-knowledge/db.json` remains readable for
 migration and compatibility. New project mode should prefer
-`.hasna/apps/knowledge/knowledge.db` and generated artifacts under the same app
+`.hasna/knowledge/knowledge.db` and generated artifacts under the same app
 home.
 
 Global/user state may use a Hasna data directory, but project mode is the
@@ -151,7 +151,7 @@ logic.
 
 ## Remote And S3 Mode
 
-Local mode writes artifacts to `.hasna/apps/knowledge`.
+Local mode writes artifacts to `.hasna/knowledge`.
 
 Remote/cloud mode can store generated knowledge artifacts in S3:
 
@@ -169,7 +169,7 @@ Hasna XYZ production uses the canonical open-source knowledge bucket and app
 path-compatible prefix:
 
 ```text
-s3://hasna-xyz-opensource-knowledge-prod/.hasna/apps/knowledge/
+s3://hasna-xyz-opensource-knowledge-prod/.hasna/knowledge/
 ```
 
 The app config can be materialized with:
@@ -208,7 +208,7 @@ generated artifacts by URI, kind, hash, size, and metadata so local mode and
 remote/S3 mode share the same DB-facing shape.
 
 The write boundary is intentionally simple: agents can inspect
-`.hasna/apps/knowledge`, but durable writes must go through `knowledge`, MCP, or
+`.hasna/knowledge`, but durable writes must go through `knowledge`, MCP, or
 the SDK. `storage protect` records the policy in the workspace, while
 `storage validate --strict` adversarially checks the local artifact tree against
 `storage_objects` hashes, root workspace entries, symlink/hardlink escapes, and

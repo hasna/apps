@@ -14,7 +14,7 @@ the existing `knowledge` CLI and hosted API contracts.
   `HASNA_KNOWLEDGE_API_KEY`, or the existing auth file reported by
   `knowledge auth whoami --json`.
 - Durable local writes still go through `knowledge` commands. The app never
-  writes directly to `.hasna/apps/knowledge`.
+  writes directly to `.hasna/knowledge`.
 - The visual system follows the available open-codewith source cues: native
   split-view navigation, compact status affordances, settings/account sections,
   and the Codewith emerald accent `rgb(5,150,105)`.

@@ -14,7 +14,7 @@ knowledge wiki init --scope project --json
 Project state is created under:
 
 ```text
-.hasna/apps/knowledge/
+.hasna/knowledge/
   config.json
   knowledge.db
   artifacts/
@@ -140,7 +140,7 @@ knowledge storage protect --scope project --json
 knowledge storage validate --strict --scope project --json
 ```
 
-Agents should read `.hasna/apps/knowledge` as generated state and write durable
+Agents should read `.hasna/knowledge` as generated state and write durable
 knowledge only through the CLI, MCP tools, or SDK. Strict validation catches
 untracked artifact files and direct edits to cataloged artifacts.
 
