@@ -18,6 +18,24 @@ const SENSITIVE_VALUE_PATTERNS = [
   /\bsk-[A-Za-z0-9_-]{20,}\b/,
 ];
 
+const ADDITIONAL_SENSITIVE_VALUE_PATTERNS = [
+  new RegExp(String.raw`\bgh${"o"}_[A-Za-z0-9_]{20,}\b`),
+  new RegExp(String.raw`\bgh${"s"}_[A-Za-z0-9_]{20,}\b`),
+  new RegExp(String.raw`\bgh${"u"}_[A-Za-z0-9_]{20,}\b`),
+  /\bnpm_[A-Za-z0-9_]{8,}\b/,
+  new RegExp(String.raw`\b${"ctx7sk"}-[A-Za-z0-9_-]{8,}\b`),
+  new RegExp(String.raw`\b${"xai"}-[A-Za-z0-9_-]{8,}\b`),
+  /\bAIza[A-Za-z0-9_-]{20,}\b/,
+  new RegExp(String.raw`\b${"secret"}-token:[^\s"'<>]+`, "i"),
+  /\bBearer\s+[A-Za-z0-9._~+/-]+=*/i,
+  /\bBasic\s+[A-Za-z0-9+/]+=*/i,
+];
+
+const ALL_SENSITIVE_VALUE_PATTERNS = [
+  ...SENSITIVE_VALUE_PATTERNS,
+  ...ADDITIONAL_SENSITIVE_VALUE_PATTERNS,
+];
+
 const IPV4_PATTERN = /\b(?:10|127|169\.254|172\.(?:1[6-9]|2\d|3[0-1])|192\.168|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7]))(?:\.\d{1,3}){2}\b/g;
 const IPV6_PATTERN = /\b(?:fc|fd|fe80)[0-9a-f:]*:[0-9a-f:]+\b/gi;
 const DATABASE_URL_PATTERN = /\b(?:postgres(?:ql)?|mysql|mariadb|redis|mongodb|s3):\/\/[^\s"'<>]+/gi;
@@ -42,7 +60,11 @@ function isSecretReferenceKey(key: string): boolean {
 }
 
 function looksSensitiveString(value: string): boolean {
-  return SENSITIVE_VALUE_PATTERNS.some((pattern) => pattern.test(value));
+  return ALL_SENSITIVE_VALUE_PATTERNS.some((pattern) => pattern.test(value));
+}
+
+function redactSensitiveStringPatterns(value: string): string {
+  return ALL_SENSITIVE_VALUE_PATTERNS.reduce((current, pattern) => current.replace(pattern, REDACTED_VALUE), value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -62,7 +84,7 @@ export function redactNetworkValue(value: string): string {
 }
 
 export function redactErrorMessage(value: string): string {
-  return redactPath(value)
+  return redactSensitiveStringPatterns(redactPath(value))
     .replace(/\b(password|passwd|token|secret|api[_-]?key|credential)=([^\s"'<>]+)/gi, (_match, key) => `${key}=${REDACTED_VALUE}`)
     .replace(DATABASE_URL_PATTERN, (match) => {
       const scheme = match.match(/^([a-z][a-z0-9+.-]*:\/\/)/i)?.[1] ?? "";

@@ -52,6 +52,7 @@ import {
   getFleetMachineHealth,
   getFleetRouting,
 } from "../agent-abstractions.js";
+import { getDispatchFleetSmoke } from "../dispatch-smoke.js";
 import { getStorageStatus, resolveTables, storagePull, storagePush, storageSync } from "../storage.js";
 import { assertMutationApproved, createTrustedSdkMutationApproval, mutationPlanDigest } from "../commands/mutation-approval.js";
 
@@ -88,6 +89,7 @@ export const MACHINE_MCP_TOOL_NAMES = [
   "machines_routing",
   "machines_command_matrix",
   "machines_loop_preflight",
+  "machines_dispatch_fleet_smoke",
   "machines_compatibility",
   "machines_diff",
   "machines_install_tailscale_preview",
@@ -769,6 +771,50 @@ export function createMcpServer(version: string, options: McpServerOptions = {})
         workspaces,
         command,
         commandLabel: command_label,
+        privateMetadata,
+      });
+      return { content: [{ type: "text", text: JSON.stringify(appendWarnings(result, warnings)) }] };
+    }
+  );
+
+  server.tool(
+    "machines_dispatch_fleet_smoke",
+    "Run a bounded dry-run @hasna/dispatch fleet package, route, and daemon-readiness smoke.",
+    {
+      ...agentSelectorSchema,
+      ssh_machine_ids: z.array(z.string()).optional().describe("Machine ids to probe through a direct SSH alias"),
+      include_apple01: z.boolean().optional().describe("Include optional apple01 instead of ignoring it by default"),
+      package_name: z.string().optional().describe("Package name to report"),
+      command: z.string().optional().describe("Package CLI command to probe"),
+      expected_version: z.string().optional().describe("Expected package version"),
+      timeout_ms: z.number().int().min(1).optional().describe("Per-machine command timeout"),
+      max_output_chars: z.number().int().min(1).optional().describe("Maximum redacted stdout/stderr chars per command"),
+      private_metadata: z.boolean().optional().describe("Include private route targets where allowed"),
+    },
+    async ({
+      machine_ids,
+      include_tailscale,
+      ssh_machine_ids,
+      include_apple01,
+      package_name,
+      command,
+      expected_version,
+      timeout_ms,
+      max_output_chars,
+      private_metadata,
+    }) => {
+      const privateMetadata = privateMetadataAllowed(private_metadata);
+      const warnings = privateOutputWarnings(private_metadata, privateMetadata);
+      const result = getDispatchFleetSmoke({
+        machineIds: machine_ids,
+        sshMachineIds: ssh_machine_ids,
+        includeApple01: include_apple01,
+        packageName: package_name,
+        command,
+        expectedVersion: expected_version,
+        includeTailscale: include_tailscale !== false,
+        timeoutMs: timeout_ms,
+        maxOutputChars: max_output_chars,
         privateMetadata,
       });
       return { content: [{ type: "text", text: JSON.stringify(appendWarnings(result, warnings)) }] };

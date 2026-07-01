@@ -158,17 +158,27 @@ machines loop-preflight --machine control,worker --cmd 'bun test' --no-tailscale
 machines machine-health --project open-machines --repo open-machines
 machines routing --machine worker
 machines command-matrix --machine worker --cmd 'bun run build'
+machines dispatch-smoke --json
 machines ops check --all --expect-machine spark01,spark02,apple03 --text
 ```
 
 The matching SDK exports are `getFleetLoopPreflight()`,
-`getFleetMachineHealth()`, `getFleetRouting()`, and `getCommandMatrix()`.
+`getFleetMachineHealth()`, `getFleetRouting()`, `getCommandMatrix()`, and
+`getDispatchFleetSmoke()`.
 The matching MCP tools are `machines_loop_preflight`,
-`machines_machine_health`, `machines_routing`, and
-`machines_command_matrix`. All four return dry-run planning/status envelopes
-with `schema_version`, `kind`, `pagination`, compact per-machine rows,
-`artifacts`/detail refs for raw inspection, and `warnings`; they do not execute
-the planned loop command.
+`machines_machine_health`, `machines_routing`, `machines_command_matrix`, and
+`machines_dispatch_fleet_smoke`. The loop/health/routing/matrix reports include
+`pagination`, `artifacts`/detail refs, compact per-machine rows, and warnings;
+the dispatch smoke report uses a fixed bounded target set and includes
+per-machine package, route, and daemon-readiness rows.
+
+`machines dispatch-smoke` is a no-mutation diagnostic for open-dispatch
+self-healing. It checks the default affected fleet (`local`, `spark01`,
+`spark02` through a direct SSH alias when applicable, and `apple03`) while
+ignoring `apple01` unless explicitly requested. The JSON envelope includes
+`dryRun=true`, `mutates=false`, redaction metadata, per-machine route health,
+installed `@hasna/dispatch` command/version status, daemon status output, and
+daemon restart readiness without running the mutating restart command.
 
 For `loop_preflight`, top-level `ok` means every machine in the current
 selection/page is ready. Candidate schedulers that only need one usable target

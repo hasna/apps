@@ -115,6 +115,7 @@ export interface MachinesConsumerCapabilities {
   fleet_routing?: true;
   command_matrix?: true;
   loop_preflight?: true;
+  dispatch_fleet_smoke?: true;
 }
 
 export type MachinesConsumerEnvelope =
@@ -211,6 +212,13 @@ export interface MachinesConsumerFieldCapabilities {
     machine_health: true;
     fleet_routing: true;
   };
+  dispatch_fleet_smoke?: {
+    dry_run: true;
+    redacted_output: true;
+    package_version: true;
+    route_health: true;
+    daemon_restart_readiness: true;
+  };
 }
 
 export interface MachinesConsumerContract {
@@ -251,6 +259,7 @@ export const MACHINES_CONSUMER_CAPABILITIES: MachinesConsumerCapabilities = {
   fleet_routing: true,
   command_matrix: true,
   loop_preflight: true,
+  dispatch_fleet_smoke: true,
 };
 
 export const MACHINES_CONSUMER_FIELD_CAPABILITIES: MachinesConsumerFieldCapabilities = {
@@ -331,6 +340,13 @@ export const MACHINES_CONSUMER_FIELD_CAPABILITIES: MachinesConsumerFieldCapabili
     machine_health: true,
     fleet_routing: true,
   },
+  dispatch_fleet_smoke: {
+    dry_run: true,
+    redacted_output: true,
+    package_version: true,
+    route_health: true,
+    daemon_restart_readiness: true,
+  },
 };
 
 export const MACHINES_CONSUMER_CONTRACT: MachinesConsumerContract = {
@@ -370,6 +386,7 @@ export const MACHINES_CONSUMER_CONTRACT: MachinesConsumerContract = {
     "getFleetRouting",
     "getCommandMatrix",
     "getFleetLoopPreflight",
+    "getDispatchFleetSmoke",
     "normalizeBrowserPlanMachineId",
     "getMachinesConsumerSchemaBundle",
     "validateMachinesConsumerEnvelope",

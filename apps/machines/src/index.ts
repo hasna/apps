@@ -3,6 +3,7 @@ export * from "./cross-project-types.js";
 export * from "./redaction.js";
 export * from "./topology.js";
 export * from "./agent-abstractions.js";
+export * from "./dispatch-smoke.js";
 export * from "./ops-check.js";
 export * from "./ops-data.js";
 export * from "./notes.js";
