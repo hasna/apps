@@ -413,6 +413,8 @@ function runSshAliasCommand(machineId: string, command: string, options: Machine
 function packageProbeCommand(command: string): string {
   const quoted = shellQuote(command);
   return [
+    'PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"',
+    "export PATH",
     `cmd=${quoted}`,
     'path="$(command -v "$cmd" 2>/dev/null || true)"',
     'printf "path=%s\\n" "$path"',
@@ -421,11 +423,11 @@ function packageProbeCommand(command: string): string {
 }
 
 function daemonStatusCommand(command: string): string {
-  return `${shellQuote(command)} daemon status --json`;
+  return `PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"; export PATH; ${shellQuote(command)} daemon status --json`;
 }
 
 function daemonRestartCommand(command: string): string {
-  return `${command} daemon restart --json`;
+  return `PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"; export PATH; ${shellQuote(command)} daemon restart --json`;
 }
 
 function buildRouteHealth(target: DispatchFleetSmokeResolvedTarget, topology: MachineTopology, privateMetadata: boolean): DispatchFleetSmokeRouteHealth {

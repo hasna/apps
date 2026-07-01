@@ -244,7 +244,7 @@ exit 2
         summary: { total: 1, fail: 0, package_ok: 1, daemon_restart_ready: 1 },
       });
       expect(payload.machines[0].daemon.restart_readiness).toMatchObject({
-        planned_command_ref: "dispatch daemon restart --json",
+        planned_command_ref: "PATH=\"$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH\"; export PATH; 'dispatch' daemon restart --json",
         planned_mutates: true,
         executed: false,
       });
