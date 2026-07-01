@@ -797,8 +797,9 @@ The stable agent-facing MCP tools are:
 - `knowledge_resolve_source`: resolve indexed source chunks through the
   read-only source boundary.
 - `knowledge_app_wiki_init`, `knowledge_app_wiki_note_add`,
-  `knowledge_app_wiki_source_add`, `knowledge_app_wiki_search`: manage scoped
-  app/project wiki stores through the same service contract as CLI and SDK.
+  `knowledge_app_wiki_source_add`, `knowledge_app_wiki_search`,
+  `knowledge_app_wiki_query`: manage and query scoped app/project wiki stores
+  through the same service contract as CLI and SDK.
 - `knowledge_machines_topology`: inspect optional machine topology and route
   hints for future knowledge sync planning.
 - `knowledge_machines_preflight`: check command, package, workspace, and

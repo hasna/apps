@@ -301,6 +301,7 @@ describe('knowledge MCP', () => {
       expect(tools.tools.some((tool) => tool.name === 'knowledge_app_wiki_note_add')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_app_wiki_source_add')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_app_wiki_search')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_app_wiki_query')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_machines_topology')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_machines_preflight')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_sync_status')).toBe(true);
@@ -793,6 +794,17 @@ describe('knowledge MCP', () => {
         },
       }));
       expect(appWikiSearch.results.some((entry: any) => entry.artifact?.path === 'wiki/notes/mcp-app-wiki.md')).toBe(true);
+
+      const appWikiQuery = parseToolJson(await client.callTool({
+        name: 'knowledge_app_wiki_query',
+        arguments: {
+          scope: 'project',
+          query: 'scoped Knowledge service path',
+          limit: 5,
+        },
+      }));
+      expect(appWikiQuery.excerpts.some((entry: any) => entry.text.includes('scoped Knowledge service path'))).toBe(true);
+      expect(appWikiQuery.citations.some((entry: any) => entry.artifact_path === 'wiki/notes/mcp-app-wiki.md')).toBe(true);
 
       const batch = parseToolJson(await client.callTool({
         name: 'ok_batch',

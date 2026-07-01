@@ -853,6 +853,30 @@ export function buildServer() {
     }
   });
 
+  registerTool(server, 'knowledge_app_wiki_query', 'Query app wiki scope', 'Return a reranked citation context pack from scoped app/project wiki notes, source refs, and catalog evidence', {
+    scope: scopeField,
+    query: z.string().describe('Search query or prompt'),
+    limit: z.number().optional().describe('Maximum context results'),
+    semantic: z.boolean().optional().describe('Include vector semantic results'),
+    model: z.string().optional().describe('Embedding model ref'),
+    dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
+    fake: z.boolean().optional().describe('Use deterministic fake embeddings'),
+  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
+    const service = createKnowledgeService({ scope: scope ?? 'project' });
+    try {
+      return jsonText({ ok: true, ...await service.queryAppWiki({
+        query,
+        limit,
+        semantic,
+        modelRef: model,
+        dimensions,
+        fake,
+      }) });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
   registerTool(server, 'knowledge_machines_topology', 'Knowledge machine topology', 'Inspect optional open-machines topology and local fallback routes for knowledge sync', {
     scope: scopeField,
     include_tailscale: z.boolean().optional().describe('Include local Tailscale status probing when available'),

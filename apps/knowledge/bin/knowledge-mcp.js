@@ -29602,6 +29602,29 @@ function buildServer() {
       return errorText(error51 instanceof Error ? error51.message : String(error51));
     }
   });
+  registerTool(server, "knowledge_app_wiki_query", "Query app wiki scope", "Return a reranked citation context pack from scoped app/project wiki notes, source refs, and catalog evidence", {
+    scope: scopeField,
+    query: exports_external.string().describe("Search query or prompt"),
+    limit: exports_external.number().optional().describe("Maximum context results"),
+    semantic: exports_external.boolean().optional().describe("Include vector semantic results"),
+    model: exports_external.string().optional().describe("Embedding model ref"),
+    dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
+    fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings")
+  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
+    const service = createKnowledgeService({ scope: scope ?? "project" });
+    try {
+      return jsonText({ ok: true, ...await service.queryAppWiki({
+        query,
+        limit,
+        semantic,
+        modelRef: model,
+        dimensions,
+        fake
+      }) });
+    } catch (error51) {
+      return errorText(error51 instanceof Error ? error51.message : String(error51));
+    }
+  });
   registerTool(server, "knowledge_machines_topology", "Knowledge machine topology", "Inspect optional open-machines topology and local fallback routes for knowledge sync", {
     scope: scopeField,
     include_tailscale: exports_external.boolean().optional().describe("Include local Tailscale status probing when available")
