@@ -248,24 +248,52 @@ function workflowTimeoutMigrationName(workflow: WorkflowSpec, timeoutMs: number 
   return `${workflow.name}-${policy}-${suffix}`;
 }
 
-function workflowWithoutGoalWrapper(
-  workflow: WorkflowSpec,
-  opts: { name?: string } = {},
-): { body: CreateWorkflowInput; changed: boolean } {
-  return {
-    body: {
-      name: opts.name ?? workflow.name,
-      description: workflow.description,
-      version: workflow.version,
-      steps: workflow.steps,
-    },
-    changed: workflow.goal !== undefined,
-  };
-}
-
 function workflowGoalWrapperMigrationName(workflow: WorkflowSpec): string {
   const suffix = randomUUID().replace(/-/g, "").slice(0, 8);
   return `${workflow.name}-no-workflow-goal-${suffix}`;
+}
+
+function publicMigrationGoalSummary(goal: WorkflowSpec["goal"]): Record<string, unknown> | undefined {
+  if (!goal) return undefined;
+  return {
+    objective: redact(goal.objective),
+    model: goal.model,
+    tokenBudget: goal.tokenBudget,
+    maxTurns: goal.maxTurns,
+  };
+}
+
+function publicMigrationWorkflowSummary(workflow: WorkflowSpec): Record<string, unknown> {
+  return {
+    id: workflow.id,
+    name: workflow.name,
+    version: workflow.version,
+    status: workflow.status,
+    stepCount: workflow.steps.length,
+    hasGoal: Boolean(workflow.goal),
+    goal: publicMigrationGoalSummary(workflow.goal),
+  };
+}
+
+function publicMigrationLoopSummary(loop: Loop): Record<string, unknown> {
+  return {
+    id: loop.id,
+    name: loop.name,
+    status: loop.status,
+    archivedAt: loop.archivedAt,
+    nextRunAt: loop.nextRunAt,
+    hasGoal: Boolean(loop.goal),
+    goal: publicMigrationGoalSummary(loop.goal),
+    target:
+      loop.target.type === "workflow"
+        ? { type: "workflow", workflowId: loop.target.workflowId, timeoutMs: loop.target.timeoutMs }
+        : { type: loop.target.type },
+  };
+}
+
+function migrationErrorReason(error: unknown): string | undefined {
+  const message = error instanceof Error ? error.message : String(error);
+  return redact(message, 240);
 }
 
 function printTextOutput(value: { stdout?: string; stderr?: string }): void {
@@ -3626,19 +3654,30 @@ workflows
           continue;
         }
 
-        const migrated = store.createAndRetargetWorkflowLoop(loop.id, migration.body, {
-          workflowTimeoutMs: timeoutMs,
-          archiveOld: Boolean(opts.archiveOld),
-        });
-        rows.push({
-          loop: publicLoop(migrated.loop),
-          previousWorkflow: publicWorkflow(migrated.previousWorkflow),
-          workflow: publicWorkflow(migrated.workflow),
-          archivedOld: migrated.archivedOld ? publicWorkflow(migrated.archivedOld) : undefined,
-          status: "migrated",
-          agentStepIds: migration.agentStepIds,
-          timeoutMs,
-        });
+        try {
+          const migrated = store.createAndRetargetWorkflowLoop(loop.id, migration.body, {
+            workflowTimeoutMs: timeoutMs,
+            archiveOld: Boolean(opts.archiveOld),
+          });
+          rows.push({
+            loop: publicLoop(migrated.loop),
+            previousWorkflow: publicWorkflow(migrated.previousWorkflow),
+            workflow: publicWorkflow(migrated.workflow),
+            archivedOld: migrated.archivedOld ? publicWorkflow(migrated.archivedOld) : undefined,
+            status: "migrated",
+            agentStepIds: migration.agentStepIds,
+            timeoutMs,
+          });
+        } catch (error) {
+          rows.push({
+            loop: publicLoop(loop),
+            workflow: publicWorkflow(workflow),
+            status: "blocked",
+            reason: migrationErrorReason(error),
+            agentStepIds: migration.agentStepIds,
+            timeoutMs,
+          });
+        }
       }
 
       const summary = {
@@ -3672,47 +3711,75 @@ workflows
 
       for (const loop of candidateLoops) {
         if (loop.archivedAt) {
-          rows.push({ loop: publicLoop(loop), status: "skipped", reason: "loop is archived" });
+          rows.push({ loop: publicMigrationLoopSummary(loop), status: "skipped", reason: "loop is archived" });
           continue;
         }
         if (loop.target.type !== "workflow") {
-          rows.push({ loop: publicLoop(loop), status: "skipped", reason: "loop is not a workflow loop" });
+          rows.push({ loop: publicMigrationLoopSummary(loop), status: "skipped", reason: "loop is not a workflow loop" });
           continue;
         }
         const workflow = store.requireWorkflow(loop.target.workflowId);
-        const nextWorkflowName = workflowGoalWrapperMigrationName(workflow);
-        const migration = workflowWithoutGoalWrapper(workflow, { name: nextWorkflowName });
-        if (!migration.changed) {
-          rows.push({ loop: publicLoop(loop), workflow: publicWorkflow(workflow), status: "skipped", reason: "workflow has no top-level goal wrapper" });
+        if (!loop.goal) {
+          rows.push({
+            loop: publicMigrationLoopSummary(loop),
+            workflow: publicMigrationWorkflowSummary(workflow),
+            status: "skipped",
+            reason: "loop has no loop-level goal wrapper",
+          });
           continue;
         }
+        if (!workflow.goal) {
+          rows.push({
+            loop: publicMigrationLoopSummary(loop),
+            workflow: publicMigrationWorkflowSummary(workflow),
+            status: "skipped",
+            reason: "workflow has no top-level goal wrapper",
+          });
+          continue;
+        }
+        const nextWorkflowName = workflowGoalWrapperMigrationName(workflow);
         if (store.hasRunningRun(loop.id)) {
-          rows.push({ loop: publicLoop(loop), workflow: publicWorkflow(workflow), status: "blocked", reason: "loop has a running run; retry after it finishes" });
+          rows.push({
+            loop: publicMigrationLoopSummary(loop),
+            workflow: publicMigrationWorkflowSummary(workflow),
+            status: "blocked",
+            reason: "loop has a running run; retry after it finishes",
+          });
           continue;
         }
 
         if (!opts.apply) {
           rows.push({
-            loop: publicLoop(loop),
-            workflow: publicWorkflow(workflow),
+            loop: publicMigrationLoopSummary(loop),
+            workflow: publicMigrationWorkflowSummary(workflow),
             status: "would_migrate",
             nextWorkflowName,
-            removedGoal: workflow.goal,
+            removedGoal: publicMigrationGoalSummary(workflow.goal),
           });
           continue;
         }
 
-        const migrated = store.createAndRetargetWorkflowLoop(loop.id, migration.body, {
-          workflowTimeoutMs: loop.target.timeoutMs,
-          archiveOld: Boolean(opts.archiveOld),
-        });
-        rows.push({
-          loop: publicLoop(migrated.loop),
-          previousWorkflow: publicWorkflow(migrated.previousWorkflow),
-          workflow: publicWorkflow(migrated.workflow),
-          archivedOld: migrated.archivedOld ? publicWorkflow(migrated.archivedOld) : undefined,
-          status: "migrated",
-        });
+        try {
+          const migrated = store.cloneWorkflowWithoutGoalAndRetargetLoop(loop.id, {
+            workflowName: nextWorkflowName,
+            workflowTimeoutMs: loop.target.timeoutMs,
+            archiveOld: Boolean(opts.archiveOld),
+          });
+          rows.push({
+            loop: publicMigrationLoopSummary(migrated.loop),
+            previousWorkflow: publicMigrationWorkflowSummary(migrated.previousWorkflow),
+            workflow: publicMigrationWorkflowSummary(migrated.workflow),
+            archivedOld: migrated.archivedOld ? publicMigrationWorkflowSummary(migrated.archivedOld) : undefined,
+            status: "migrated",
+          });
+        } catch (error) {
+          rows.push({
+            loop: publicMigrationLoopSummary(loop),
+            workflow: publicMigrationWorkflowSummary(workflow),
+            status: "blocked",
+            reason: migrationErrorReason(error),
+          });
+        }
       }
 
       const summary = {

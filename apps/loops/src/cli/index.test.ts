@@ -849,10 +849,15 @@ describe("loops CLI", () => {
 
   test("workflows migrate-goal-wrappers removes redundant workflow goals append-only", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-migrate-goal-wrappers-"));
+    const promptFile = join(dataDir, "worker-prompt.md");
+    writeFileSync(promptFile, "SECRET_PROMPT_FILE_VALUE\nDo the work.\n");
     const file = workflowFile(dataDir, {
       name: "double-goal-workflow",
-      goal: { objective: "Workflow-level goal that should be removed" },
-      steps: [{ id: "worker", target: { type: "command", command: "printf ok", shell: true } }],
+      goal: { objective: "SECRET_WORKFLOW_GOAL that should be removed" },
+      steps: [
+        { id: "worker", target: { type: "command", command: "printf ok", shell: true } },
+        { id: "reviewer", target: { type: "agent", provider: "codewith", promptFile } },
+      ],
     });
     const created = runCli(dataDir, ["--json", "workflows", "create", file]);
     expect(created.status).toBe(0);
@@ -882,9 +887,11 @@ describe("loops CLI", () => {
 
     const dryRun = runCli(dataDir, ["--json", "workflows", "migrate-goal-wrappers", "--loop", loopValue.id]);
     expect(dryRun.status).toBe(0);
+    expect(dryRun.stdout).not.toContain("SECRET_WORKFLOW_GOAL");
+    expect(dryRun.stdout).not.toContain("SECRET_PROMPT_FILE_VALUE");
     const dryRunValue = JSON.parse(dryRun.stdout);
     expect(dryRunValue.summary.wouldMigrate).toBe(1);
-    expect(dryRunValue.rows[0].removedGoal.objective).toBe("Workflow-level goal that should be removed");
+    expect(dryRunValue.rows[0].removedGoal.objective).toContain("[redacted");
 
     const applied = runCli(dataDir, [
       "--json",
@@ -896,9 +903,13 @@ describe("loops CLI", () => {
       "--archive-old",
     ]);
     expect(applied.status).toBe(0);
+    expect(applied.stdout).not.toContain("SECRET_WORKFLOW_GOAL");
+    expect(applied.stdout).not.toContain("SECRET_PROMPT_FILE_VALUE");
     const appliedValue = JSON.parse(applied.stdout);
     expect(appliedValue.summary.migrated).toBe(1);
     expect(appliedValue.rows[0].previousWorkflow.id).toBe(workflow.id);
+    expect(appliedValue.rows[0].previousWorkflow.goal.objective).toContain("[redacted");
+    expect(appliedValue.rows[0].workflow.hasGoal).toBe(false);
     expect(appliedValue.rows[0].workflow.goal).toBeUndefined();
     expect(appliedValue.rows[0].archivedOld.status).toBe("archived");
 
@@ -910,7 +921,46 @@ describe("loops CLI", () => {
 
     const shownWorkflow = runCli(dataDir, ["--json", "workflows", "show", appliedValue.rows[0].workflow.id]);
     expect(shownWorkflow.status).toBe(0);
-    expect(JSON.parse(shownWorkflow.stdout).goal).toBeUndefined();
+    const shownWorkflowValue = JSON.parse(shownWorkflow.stdout);
+    expect(shownWorkflowValue.goal).toBeUndefined();
+    expect(shownWorkflowValue.steps[1].target.promptSource).toEqual({ type: "file", path: promptFile });
+  });
+
+  test("workflows migrate-goal-wrappers skips workflow-goal-only loops", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-migrate-workflow-goal-only-"));
+    const file = workflowFile(dataDir, {
+      name: "workflow-goal-only",
+      goal: { objective: "SECRET_WORKFLOW_ONLY_GOAL" },
+      steps: [{ id: "worker", target: { type: "command", command: "printf ok", shell: true } }],
+    });
+    const created = runCli(dataDir, ["--json", "workflows", "create", file]);
+    expect(created.status).toBe(0);
+    const workflow = JSON.parse(created.stdout);
+    const loop = runCli(dataDir, [
+      "--json",
+      "create",
+      "workflow",
+      "workflow-goal-only-loop",
+      "--workflow",
+      workflow.id,
+      "--at",
+      futureAt(),
+    ]);
+    expect(loop.status).toBe(0);
+    const loopValue = JSON.parse(loop.stdout);
+
+    const migrated = runCli(dataDir, ["--json", "workflows", "migrate-goal-wrappers", "--loop", loopValue.id, "--apply"]);
+
+    expect(migrated.status).toBe(0);
+    expect(migrated.stdout).not.toContain("SECRET_WORKFLOW_ONLY_GOAL");
+    const migratedValue = JSON.parse(migrated.stdout);
+    expect(migratedValue.summary.migrated).toBe(0);
+    expect(migratedValue.summary.skipped).toBe(1);
+    expect(migratedValue.rows[0].reason).toBe("loop has no loop-level goal wrapper");
+    expect(migratedValue.rows[0].workflow.goal.objective).toContain("[redacted");
+
+    const shownLoop = runCli(dataDir, ["--json", "show", loopValue.id]);
+    expect(JSON.parse(shownLoop.stdout).target.workflowId).toBe(workflow.id);
   });
 
   test("workflows migrate-agent-timeouts rejects ambiguous loop names", () => {
