@@ -63,6 +63,8 @@ export interface TodosTaskWorkflowTemplateInput {
   worktreeRoot?: string;
   worktreeBranchPrefix?: string;
   timeoutMs?: TimeoutMs;
+  verifierIdleTimeoutMs?: number;
+  prHandoff?: boolean;
   eventId?: string;
   eventType?: string;
 }
@@ -101,6 +103,7 @@ export interface EventWorkflowTemplateInput {
   worktreeRoot?: string;
   worktreeBranchPrefix?: string;
   timeoutMs?: TimeoutMs;
+  verifierIdleTimeoutMs?: number;
 }
 
 export interface BoundedAgentWorkflowTemplateInput {
@@ -134,6 +137,7 @@ export interface BoundedAgentWorkflowTemplateInput {
   worktreeRoot?: string;
   worktreeBranchPrefix?: string;
   timeoutMs?: TimeoutMs;
+  verifierIdleTimeoutMs?: number;
 }
 
 const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
@@ -166,6 +170,7 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "worktreeRoot", default: "~/.hasna/loops/worktrees", description: "Base directory for OpenLoops-managed git worktrees." },
       { name: "worktreeBranchPrefix", default: "openloops", description: "Branch prefix for generated task/event worktree branches." },
       { name: "timeoutMs", default: "unlimited", description: "Agent step timeout in milliseconds, or unlimited/none/null for no timeout. Deterministic helper steps remain bounded." },
+      { name: "verifierIdleTimeoutMs", default: "900000", description: "Verifier idle watchdog in milliseconds; use none/off to disable when an external heartbeat exists." },
     ],
   },
   {
@@ -198,6 +203,7 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "worktreeRoot", default: "~/.hasna/loops/worktrees", description: "Base directory for OpenLoops-managed git worktrees." },
       { name: "worktreeBranchPrefix", default: "openloops", description: "Branch prefix for generated event worktree branches." },
       { name: "timeoutMs", default: "unlimited", description: "Agent step timeout in milliseconds, or unlimited/none/null for no timeout. Deterministic helper steps remain bounded." },
+      { name: "verifierIdleTimeoutMs", default: "900000", description: "Verifier idle watchdog in milliseconds; use none/off to disable when an external heartbeat exists." },
     ],
   },
   {
@@ -227,6 +233,7 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "worktreeRoot", default: "~/.hasna/loops/worktrees", description: "Base directory for OpenLoops-managed git worktrees." },
       { name: "worktreeBranchPrefix", default: "openloops", description: "Branch prefix for generated bounded-agent worktree branches." },
       { name: "timeoutMs", default: "unlimited", description: "Agent step timeout in milliseconds, or unlimited/none/null for no timeout. Deterministic helper steps remain bounded." },
+      { name: "verifierIdleTimeoutMs", default: "900000", description: "Verifier idle watchdog in milliseconds; use none/off to disable when an external heartbeat exists." },
     ],
   },
   {
@@ -246,8 +253,10 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "accountPool", description: "Comma-separated OpenAccounts profiles for non-Codewith providers." },
       { name: "provider", default: "codewith", description: "Agent provider." },
       { name: "sandbox", default: "workspace-write", description: "Provider sandbox mode." },
+      { name: "prHandoff", default: "false", description: "Add a bounded network-enabled PR handoff task step after the worker." },
       { name: "worktreeMode", default: "required", description: "Worktree isolation mode." },
       { name: "timeoutMs", default: "unlimited", description: "Agent step timeout in milliseconds, or unlimited/none/null for no timeout. Deterministic helper steps remain bounded." },
+      { name: "verifierIdleTimeoutMs", default: "900000", description: "Verifier idle watchdog in milliseconds; use none/off to disable when an external heartbeat exists." },
     ],
   },
   {
@@ -264,6 +273,7 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "provider", default: "codewith", description: "Agent provider." },
       { name: "sandbox", default: "workspace-write", description: "Provider sandbox mode." },
       { name: "worktreeMode", default: "required", description: "Worktree isolation mode." },
+      { name: "verifierIdleTimeoutMs", default: "900000", description: "Verifier idle watchdog in milliseconds; use none/off to disable when an external heartbeat exists." },
     ],
   },
   {
@@ -279,6 +289,7 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "provider", default: "codewith", description: "Agent provider." },
       { name: "sandbox", default: "workspace-write", description: "Provider sandbox mode." },
       { name: "worktreeMode", default: "required", description: "Worktree isolation mode." },
+      { name: "verifierIdleTimeoutMs", default: "900000", description: "Verifier idle watchdog in milliseconds; use none/off to disable when an external heartbeat exists." },
     ],
   },
   {
@@ -294,6 +305,7 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "provider", default: "codewith", description: "Agent provider." },
       { name: "sandbox", default: "workspace-write", description: "Provider sandbox mode." },
       { name: "worktreeMode", default: "required", description: "Worktree isolation mode." },
+      { name: "verifierIdleTimeoutMs", default: "900000", description: "Verifier idle watchdog in milliseconds; use none/off to disable when an external heartbeat exists." },
     ],
   },
   {
@@ -309,6 +321,7 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "provider", default: "codewith", description: "Agent provider." },
       { name: "sandbox", default: "read-only", description: "Provider sandbox mode." },
       { name: "worktreeMode", default: "main", description: "Report-only workflows normally inspect the main checkout read-only." },
+      { name: "verifierIdleTimeoutMs", default: "900000", description: "Verifier idle watchdog in milliseconds; use none/off to disable when an external heartbeat exists." },
     ],
   },
   {
@@ -325,6 +338,7 @@ const TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "provider", default: "codewith", description: "Agent provider." },
       { name: "sandbox", default: "workspace-write", description: "Provider sandbox mode." },
       { name: "worktreeMode", default: "required", description: "Worktree isolation mode." },
+      { name: "verifierIdleTimeoutMs", default: "900000", description: "Verifier idle watchdog in milliseconds; use none/off to disable when an external heartbeat exists." },
     ],
   },
   {
@@ -394,9 +408,27 @@ function taskLabel(input: TodosTaskWorkflowTemplateInput): string {
 }
 
 const UNLIMITED_AGENT_TIMEOUT_MS: TimeoutMs = null;
+const DEFAULT_VERIFIER_IDLE_TIMEOUT_MS = 15 * 60_000;
 
 function agentTimeoutMs(input: { timeoutMs?: TimeoutMs }): TimeoutMs {
   return input.timeoutMs === undefined ? UNLIMITED_AGENT_TIMEOUT_MS : input.timeoutMs;
+}
+
+function verifierIdleTimeoutMs(input: { verifierIdleTimeoutMs?: number }): number | undefined {
+  if (input.verifierIdleTimeoutMs === undefined) return DEFAULT_VERIFIER_IDLE_TIMEOUT_MS;
+  return input.verifierIdleTimeoutMs > 0 ? input.verifierIdleTimeoutMs : undefined;
+}
+
+function verifierRuntimeGuidance(input: { verifierIdleTimeoutMs?: number }): string {
+  const idleTimeout = verifierIdleTimeoutMs(input);
+  return [
+    "Verifier runtime contract:",
+    idleTimeout
+      ? `- OpenLoops will mark this verifier timed_out after ${idleTimeout}ms without stdout/stderr. Emit a concise heartbeat/progress line before long checks.`
+      : "- The verifier idle watchdog is disabled for this workflow; still emit concise progress before long checks.",
+    "- Keep final evidence compact: summarize changed files, validation commands/results, findings, and the task decision instead of pasting bulky logs.",
+    "- If validation cannot finish, record a clear blocked/failed task comment with the last completed check and the next concrete action.",
+  ].join("\n");
 }
 
 function parseTemplateTimeoutMs(raw: string | undefined): TimeoutMs | undefined {
@@ -406,6 +438,17 @@ function parseTemplateTimeoutMs(raw: string | undefined): TimeoutMs | undefined 
   const value = Number(raw);
   if (!Number.isInteger(value) || value <= 0) {
     throw new Error("timeoutMs must be a positive integer number of milliseconds, or unlimited/none/null");
+  }
+  return value;
+}
+
+function parseTemplateIdleTimeoutMs(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const normalized = raw.trim().toLowerCase();
+  if (["unlimited", "none", "null", "never", "off", "false"].includes(normalized)) return 0;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error("verifierIdleTimeoutMs must be a positive integer number of milliseconds, or none/off");
   }
   return value;
 }
@@ -446,6 +489,7 @@ type AgentWorkflowTemplateInput = Pick<
   | "worktreeRoot"
   | "worktreeBranchPrefix"
   | "timeoutMs"
+  | "verifierIdleTimeoutMs"
 >;
 
 type AgentWorkflowRole = "triage" | "planner" | "worker" | "verifier";
@@ -504,6 +548,180 @@ function stableHex(seed: string): string {
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function prHandoffArtifactPath(plan: WorktreePlan, taskId: string): string {
+  return join(plan.cwd, ".openloops", "pr-handoff", `${slugSegment(taskId, "task")}.json`);
+}
+
+function prHandoffCommand(input: TodosTaskWorkflowTemplateInput, plan: WorktreePlan, todosProjectPath: string): string {
+  const artifactPath = prHandoffArtifactPath(plan, input.taskId);
+  return [
+    "set -euo pipefail",
+    `export OPENLOOPS_PR_HANDOFF_ARTIFACT=${shellQuote(artifactPath)}`,
+    `export OPENLOOPS_PR_HANDOFF_TASK_ID=${shellQuote(input.taskId)}`,
+    `export OPENLOOPS_PR_HANDOFF_TODOS_PROJECT=${shellQuote(todosProjectPath)}`,
+    `export OPENLOOPS_PR_HANDOFF_WORKTREE=${shellQuote(plan.cwd)}`,
+    `export OPENLOOPS_PR_HANDOFF_WORKTREE_ROOT=${shellQuote(plan.path ?? plan.cwd)}`,
+    `export OPENLOOPS_PR_HANDOFF_EXPECTED_BRANCH=${shellQuote(plan.branch ?? "")}`,
+    "if [ ! -s \"$OPENLOOPS_PR_HANDOFF_ARTIFACT\" ]; then",
+    "  printf 'no PR handoff artifact at %s\\n' \"$OPENLOOPS_PR_HANDOFF_ARTIFACT\"",
+    "  exit 0",
+    "fi",
+    "bun - <<'BUN'",
+    "const { readFileSync, realpathSync } = await import('node:fs');",
+    "const { spawnSync } = await import('node:child_process');",
+    "const artifactPath = process.env.OPENLOOPS_PR_HANDOFF_ARTIFACT || '';",
+    "const taskId = process.env.OPENLOOPS_PR_HANDOFF_TASK_ID || '';",
+    "const todosProject = process.env.OPENLOOPS_PR_HANDOFF_TODOS_PROJECT || '';",
+    "const fallbackWorktree = process.env.OPENLOOPS_PR_HANDOFF_WORKTREE || process.cwd();",
+    "const expectedRoot = process.env.OPENLOOPS_PR_HANDOFF_WORKTREE_ROOT || fallbackWorktree;",
+    "const expectedBranch = process.env.OPENLOOPS_PR_HANDOFF_EXPECTED_BRANCH || '';",
+    "const todosBin = process.env.OPENLOOPS_PR_HANDOFF_TODOS_BIN || 'todos';",
+    "const gitBin = process.env.OPENLOOPS_PR_HANDOFF_GIT_BIN || 'git';",
+    "const ghBin = process.env.OPENLOOPS_PR_HANDOFF_GH_BIN || 'gh';",
+    "const raw = readFileSync(artifactPath, 'utf8');",
+    "const artifact = JSON.parse(raw);",
+    "const stringField = (...keys) => {",
+    "  for (const key of keys) {",
+    "    const value = artifact[key];",
+    "    if (typeof value === 'string' && value.trim()) return value.trim();",
+    "  }",
+    "  return undefined;",
+    "};",
+    "const run = (command, args, options = {}) => spawnSync(command, args, { encoding: 'utf8', ...options });",
+    "const todosArgs = (...args) => todosProject ? ['--project', todosProject, ...args] : args;",
+    "const todos = (...args) => run(todosBin, todosArgs(...args));",
+    "const comment = (text) => {",
+    "  const result = todos('comment', taskId, text);",
+    "  if (result.status !== 0) console.error(`failed to comment original task: ${result.stderr || result.stdout || result.status}`);",
+    "};",
+    "const repoPath = stringField('worktreePath', 'localRepoPath', 'repoPath', 'cwd') || fallbackWorktree;",
+    "const artifactTaskId = stringField('taskId', 'sourceTaskId', 'originalTaskId');",
+    "const branch = stringField('branch', 'headBranch');",
+    "const base = stringField('base', 'baseBranch') || 'main';",
+    "const remote = stringField('remote') || 'origin';",
+    "let commit = stringField('commit', 'commitSha', 'sha');",
+    "const repo = stringField('githubRepo', 'repoSlug', 'repository');",
+    "const prUrl = stringField('prUrl', 'pullRequestUrl');",
+    "const title = stringField('title', 'prTitle') || `PR handoff for ${taskId}`;",
+    "const body = stringField('body', 'prBody') || [",
+    "  `OpenLoops PR handoff for task ${taskId}.`,",
+    "  `Commit: ${commit || 'unknown'}`,",
+    "  `Branch: ${branch || 'unknown'}`,",
+    "  artifact.validation ? `Validation: ${artifact.validation}` : undefined,",
+    "  artifact.error ? `Worker network error: ${artifact.error}` : undefined,",
+    "].filter(Boolean).join('\\n\\n');",
+    "const fingerprint = stringField('fingerprint') || `openloops:pr-handoff:${taskId}:${branch || 'missing-branch'}:${commit || 'missing-commit'}`;",
+    "const repoTagSource = (repo || stringField('repo', 'remoteUrl') || repoPath).split(/[/:]/).filter(Boolean).at(-1) || 'unknown';",
+    "const repoTag = `repo:${repoTagSource.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'unknown'}`;",
+    "const metadata = {",
+    "  route_enabled: true,",
+    "  source: 'openloops.pr-handoff',",
+    "  original_task_id: taskId,",
+    "  repo: repo || stringField('repo', 'remoteUrl') || '',",
+    "  branch: branch || '',",
+    "  base,",
+    "  commit: commit || '',",
+    "  artifact_path: artifactPath,",
+    "  fingerprint,",
+    "  automation: { allowed: true, mode: 'auto' },",
+    "  no_tmux_dispatch: true,",
+    "};",
+    "const upsertTask = (why) => {",
+    "  const description = [",
+    "    `OpenLoops could not complete network PR handoff for original task ${taskId}.`,",
+    "    `Reason: ${why}`,",
+    "    `Fingerprint: ${fingerprint}`,",
+    "    `Repository: ${repo || stringField('repo', 'remoteUrl') || 'unknown'}`,",
+    "    `Worktree: ${repoPath}`,",
+    "    `Branch: ${branch || 'unknown'}`,",
+    "    `Base: ${base}`,",
+    "    `Commit: ${commit || 'unknown'}`,",
+    "    `Artifact: ${artifactPath}`,",
+    "    artifact.validation ? `Validation: ${artifact.validation}` : undefined,",
+    "    artifact.error ? `Worker error: ${artifact.error}` : undefined,",
+    "    'Do not rerun implementation work. Push the recorded commit/branch, open or update the PR, then comment the original task with the PR URL and validation evidence.',",
+    "  ].filter(Boolean).join('\\n\\n');",
+    "  const result = todos(",
+    "    'task',",
+    "    'upsert',",
+    "    '--fingerprint', fingerprint,",
+    "    '--title', `PR handoff for ${taskId}`,",
+    "    '-d', description,",
+    "    '-p', 'high',",
+    "    '-t', ['auto:route', 'pr-handoff', 'github', 'network', repoTag].join(','),",
+    "    '--metadata-json', JSON.stringify(metadata),",
+    "    '--working-dir', repoPath,",
+    "  );",
+    "  if (result.status !== 0) throw new Error(`todos task upsert failed: ${result.stderr || result.stdout || result.status}`);",
+    "  comment(`openloops:pr-handoff=pending task=${taskId} artifact=${artifactPath} fingerprint=${fingerprint} reason=${why}`);",
+    "  console.log(`queued PR handoff task fingerprint=${fingerprint}`);",
+    "};",
+    "const queueNetworkHandoff = (why) => { upsertTask(why); process.exit(0); };",
+    "const invalidArtifact = (why) => {",
+    "  comment(`openloops:pr-handoff=invalid task=${taskId} artifact=${artifactPath} reason=${why}`);",
+    "  console.error(`invalid PR handoff artifact: ${why}`);",
+    "  process.exit(0);",
+    "};",
+    "const canonicalPath = (path) => {",
+    "  try { return realpathSync(path); } catch { return path; }",
+    "};",
+    "if (artifactTaskId && artifactTaskId !== taskId) invalidArtifact(`artifact task id ${artifactTaskId} does not match expected ${taskId}`);",
+    "if (!branch || !commit) invalidArtifact('artifact missing branch or commit');",
+    "const topLevel = run(gitBin, ['-C', repoPath, 'rev-parse', '--show-toplevel']);",
+    "if (topLevel.status !== 0) invalidArtifact(`artifact repoPath is not a git worktree: ${String(topLevel.stderr || topLevel.stdout || topLevel.status).slice(0, 300)}`);",
+    "const actualRoot = canonicalPath(String(topLevel.stdout || '').trim());",
+    "const wantedRoot = canonicalPath(expectedRoot);",
+    "if (actualRoot !== wantedRoot) invalidArtifact(`artifact repo root mismatch: expected ${wantedRoot}, got ${actualRoot}`);",
+    "const currentBranch = run(gitBin, ['-C', repoPath, 'branch', '--show-current']);",
+    "const actualBranch = String(currentBranch.stdout || '').trim();",
+    "if (currentBranch.status !== 0 || !actualBranch) invalidArtifact(`could not resolve current branch for artifact repo: ${String(currentBranch.stderr || currentBranch.stdout || currentBranch.status).slice(0, 300)}`);",
+    "if (expectedBranch && branch !== expectedBranch) invalidArtifact(`artifact branch ${branch} does not match expected ${expectedBranch}`);",
+    "if (branch !== actualBranch) invalidArtifact(`artifact branch ${branch} does not match current worktree branch ${actualBranch}`);",
+    "const resolvedCommit = run(gitBin, ['-C', repoPath, 'rev-parse', '--verify', `${commit}^{commit}`]);",
+    "if (resolvedCommit.status !== 0) invalidArtifact(`artifact commit is not present in repo: ${String(resolvedCommit.stderr || resolvedCommit.stdout || resolvedCommit.status).slice(0, 300)}`);",
+    "commit = String(resolvedCommit.stdout || commit).trim();",
+    "const reachable = run(gitBin, ['-C', repoPath, 'merge-base', '--is-ancestor', commit, 'HEAD']);",
+    "if (reachable.status !== 0) invalidArtifact(`artifact commit ${commit} is not reachable from HEAD`);",
+    "if (prUrl) {",
+    "  const viewed = run(ghBin, ['pr', 'view', prUrl, '--json', 'url,headRefName', '--jq', '.url + \"\\\\n\" + .headRefName']);",
+    "  if (viewed.status !== 0) queueNetworkHandoff(`could not verify existing PR URL: ${String(viewed.stderr || viewed.stdout || viewed.status).slice(0, 300)}`);",
+    "  const [verifiedUrl, verifiedHead] = String(viewed.stdout || '').trim().split(/\\r?\\n/);",
+    "  if (!verifiedUrl || !/^https?:\\/\\//.test(verifiedUrl)) invalidArtifact('verified PR URL was missing or invalid');",
+    "  if (verifiedHead && verifiedHead !== branch) invalidArtifact(`verified PR head ${verifiedHead} does not match artifact branch ${branch}`);",
+    "  comment(`openloops:pr-handoff=done task=${taskId} pr=${verifiedUrl} commit=${commit} branch=${branch}`);",
+    "  console.log(`PR handoff already complete: ${verifiedUrl}`);",
+    "  process.exit(0);",
+    "}",
+    "const push = run(gitBin, ['-C', repoPath, 'push', remote, `${commit}:refs/heads/${branch}`]);",
+    "if (push.status !== 0) {",
+    "  upsertTask(`git push failed: ${String(push.stderr || push.stdout || push.status).slice(0, 300)}`);",
+    "  process.exit(0);",
+    "}",
+    "const ghRepoArgs = repo ? ['--repo', repo] : [];",
+    "const existing = run(ghBin, ['pr', 'list', ...ghRepoArgs, '--head', branch, '--state', 'all', '--json', 'url', '--jq', '.[0].url']);",
+    "let finalPrUrl = existing.status === 0 ? String(existing.stdout || '').trim() : '';",
+    "if (!finalPrUrl) {",
+    "  const created = run(ghBin, ['pr', 'create', ...ghRepoArgs, '--base', base, '--head', branch, '--title', title, '--body', body], { cwd: repoPath });",
+    "  if (created.status !== 0) {",
+    "    upsertTask(`gh pr create failed: ${String(created.stderr || created.stdout || created.status).slice(0, 300)}`);",
+    "    process.exit(0);",
+    "  }",
+    "  finalPrUrl = String(created.stdout || '').trim().split(/\\r?\\n/).find((line) => /^https?:\\/\\//.test(line)) || String(created.stdout || '').trim();",
+    "}",
+    "comment(`openloops:pr-handoff=done task=${taskId} pr=${finalPrUrl} commit=${commit} branch=${branch}`);",
+    "console.log(`PR handoff complete: ${finalPrUrl}`);",
+    "BUN",
+  ].join("\n");
+}
+
+function sourceTaskGateCommand(todosProjectPath: string, taskId: string): string {
+  return [
+    "set -euo pipefail",
+    `todos --project ${shellQuote(todosProjectPath)} --json inspect ${shellQuote(taskId)} >/dev/null`,
+    `printf "source task %s resolved in todos project %s\\n" ${shellQuote(taskId)} ${shellQuote(todosProjectPath)}`,
+  ].join("\n");
 }
 
 function normalizeWorktreeMode(mode: AgentWorktreeMode | undefined): AgentWorktreeMode {
@@ -776,6 +994,7 @@ function agentTarget(
     },
     account: accountForRole(input, role, seed),
     timeoutMs: agentTimeoutMs(input),
+    idleTimeoutMs: role === "verifier" ? verifierIdleTimeoutMs(input) : undefined,
   };
 }
 
@@ -1213,6 +1432,7 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
     `- Record verification: todos --project ${todosProjectPath} comment ${input.taskId} "<verification evidence or blocker>"`,
     `- If valid and complete: todos --project ${todosProjectPath} done ${input.taskId}`,
     "Use fresh context. Inspect the task, repository state, commits, tests, and worker evidence. Act as an adversarial reviewer focused on correctness, regressions, missing tests, security, and incomplete requirements.",
+    verifierRuntimeGuidance(input),
     "If the work is valid, record verification evidence in todos and mark/leave the task in the correct completed state according to the todos CLI. If it is not valid, add precise follow-up tasks or comments and leave the original task open or blocked with clear evidence.",
     "Do not dispatch or paste prompts into tmux panes. If additional work is required, create or update deduped todos tasks so task-created routing can start a fresh headless workflow.",
     "Do not make broad unrelated changes. Only apply tiny verification fixes when they are necessary and low risk; otherwise create follow-up tasks.",
@@ -1226,9 +1446,23 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
     version: 1,
     steps: workflowStepsWithWorktree(plan, [
       {
+        id: "source-task-gate",
+        name: "Source Task Gate",
+        description: "Fail before worker execution when the source todos task is not resolvable.",
+        target: {
+          type: "command",
+          command: "bash",
+          args: ["-lc", sourceTaskGateCommand(todosProjectPath, input.taskId)],
+          cwd: plan.cwd,
+          timeoutMs: 60_000,
+        },
+        timeoutMs: 60_000,
+      },
+      {
         id: "worker",
         name: "Worker",
         description: "Implement the todos task and record evidence.",
+        dependsOn: ["source-task-gate"],
         target: agentTarget(input, workerPrompt, "worker", input.taskId, plan),
         timeoutMs: agentTimeoutMs(input),
       },
@@ -1268,6 +1502,15 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
       reason: plan.reason,
     },
   };
+  const handoffArtifactPath = prHandoffArtifactPath(plan, input.taskId);
+  const prHandoffGuidance = input.prHandoff
+    ? [
+        "PR handoff mode is enabled for this lifecycle.",
+        `If implementation and validation pass but git push or gh PR creation fails because DNS, network, or sandbox policy blocks GitHub access, write a JSON artifact to: ${handoffArtifactPath}`,
+        "The artifact must include taskId, worktreePath or repoPath, branch, base, commit, remote, validation, and error. Include githubRepo, title, and body when known.",
+        "After writing the artifact, comment the source task with the artifact path and exit without marking the task done. The bounded PR handoff step will push/open the PR or queue a network-enabled handoff task without rerunning implementation.",
+      ].join("\n")
+    : "";
   const shared = [
     worktreePrompt(plan),
     `Todos project path: ${todosProjectPath}`,
@@ -1278,6 +1521,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     "Preserve unrelated user changes and keep scope tied to the task acceptance criteria.",
     "",
     `Task context JSON: ${compactJson(taskContext)}`,
+    prHandoffGuidance,
   ].join("\n");
   const gateMarker = (stage: "triage" | "planner", state: "go" | "blocked"): string =>
     `openloops:${stage}=${state} task=${input.taskId}${input.eventId ? ` event=${input.eventId}` : ""}`;
@@ -1321,7 +1565,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     "const latestMarker = markers.at(-1)?.state;",
     "const blockers = [];",
     "if (blockedStatuses.has(status)) blockers.push(`task status is ${status}`);",
-    "for (const tag of ['no-auto', 'manual', 'manual-required', 'approval-required']) {",
+    "for (const tag of ['no-auto', 'manual', 'manual-required', 'approval-required', 'blocked', 'completed', 'done', 'cancelled', 'canceled', 'failed', 'archived']) {",
     "  if (tags.has(tag)) blockers.push(`task has disallowed tag ${tag}`);",
     "}",
     "for (const [key, source] of records.entries()) {",
@@ -1349,7 +1593,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     "Include the triage decision, duplicates/dependencies found, and any follow-up tasks created in that same comment.",
     `If the task should not proceed automatically, run: todos --project ${todosProjectPath} update ${input.taskId} --status blocked`,
     `Then add a task comment whose first line is exactly: ${gateMarker("triage", "blocked")}`,
-    "The deterministic triage gate will stop later steps unless the latest triage marker is the exact go marker and the task has no blocked/no-auto/manual/approval-required state.",
+    "The deterministic triage gate will stop later steps unless the latest triage marker is the exact go marker and the task has no blocked/completed/done/cancelled/failed/archived/no-auto/manual/approval-required state.",
   ].join("\n");
   const plannerPrompt = [
     `/goal Plan todos task ${input.taskId} before implementation.`,
@@ -1361,7 +1605,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     "In that same comment, include a concise implementation plan: files/areas to inspect, validation commands, risk checks, expected commit/PR behavior, and any cross-repo tasks that should be created separately.",
     `Do not implement repo changes in this step. If the task is too broad or unsafe for automation, run: todos --project ${todosProjectPath} update ${input.taskId} --status blocked`,
     `Then add a task comment whose first line is exactly: ${gateMarker("planner", "blocked")}`,
-    "Create smaller deduped tasks and record evidence. The deterministic planner gate will stop the worker unless the latest planner marker is the exact go marker and the task has no blocked/no-auto/manual/approval-required state.",
+    "Create smaller deduped tasks and record evidence. The deterministic planner gate will stop the worker unless the latest planner marker is the exact go marker and the task has no blocked/completed/done/cancelled/failed/archived/no-auto/manual/approval-required state.",
   ].join("\n");
   const workerPrompt = [
     `/goal Complete todos task ${input.taskId} according to the planner evidence.`,
@@ -1370,8 +1614,9 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     shared,
     `- Claim/start if appropriate: todos --project ${todosProjectPath} start ${input.taskId}`,
     "Read the triage and planner comments first. Implement only the scoped task, run focused validation, and record changed files, commits, evidence, blockers, and residual risks.",
+    input.prHandoff ? `When only GitHub network access is blocked after a successful commit/validation, record the handoff artifact at ${handoffArtifactPath} instead of repeatedly retrying push/PR creation.` : undefined,
     "Do not mark the task complete in the worker step; the verifier step owns completion after independent validation.",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
   const verifierPrompt = [
     `/goal Verify todos task ${input.taskId} after the full lifecycle worker step.`,
     "",
@@ -1380,75 +1625,108 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     `- Record verification: todos --project ${todosProjectPath} comment ${input.taskId} "<verification evidence or blocker>"`,
     `- If valid and complete: todos --project ${todosProjectPath} done ${input.taskId}`,
     "Use fresh context. Inspect triage, plan, worker evidence, repo state, commits, tests, and acceptance criteria. Act as an adversarial reviewer focused on correctness, regressions, missing tests, security, and incomplete requirements.",
+    verifierRuntimeGuidance(input),
+    input.prHandoff ? `If ${handoffArtifactPath} exists and there is no PR URL evidence, verify that the PR handoff step queued or completed a bounded handoff; leave the original task open or blocked until PR evidence is recorded.` : undefined,
     "If the work is valid, record verification evidence in todos and mark/leave the task completed according to the todos CLI. If not valid, add precise follow-up tasks or comments and leave the original task open or blocked with clear evidence.",
     "Do not make broad unrelated changes. Only apply tiny verification fixes when they are necessary and low risk; otherwise create follow-up tasks.",
-  ].join("\n");
+  ].filter(Boolean).join("\n");
+  const steps: WorkflowStep[] = [
+    {
+      id: "source-task-gate",
+      name: "Source Task Gate",
+      description: "Fail before lifecycle agents execute when the source todos task is not resolvable.",
+      target: {
+        type: "command",
+        command: "bash",
+        args: ["-lc", sourceTaskGateCommand(todosProjectPath, input.taskId)],
+        cwd: plan.cwd,
+        timeoutMs: 60_000,
+      },
+      timeoutMs: 60_000,
+    },
+    {
+      id: "triage",
+      name: "Triage",
+      description: "Check task eligibility, duplicates, dependencies, and automation gates.",
+      dependsOn: ["source-task-gate"],
+      target: agentTarget(input, triagePrompt, "triage", input.taskId, plan),
+      timeoutMs: agentTimeoutMs(input),
+    },
+    {
+      id: "triage-gate",
+      name: "Triage Gate",
+      description: "Stop the lifecycle before planning when triage blocked or disallowed automation.",
+      dependsOn: ["triage"],
+      target: {
+        type: "command",
+        command: "bash",
+        args: ["-lc", gateCommand("triage")],
+        cwd: plan.cwd,
+        timeoutMs: 2 * 60_000,
+      },
+      timeoutMs: 2 * 60_000,
+    },
+    {
+      id: "planner",
+      name: "Planner",
+      description: "Create a concise implementation plan and split unsafe scope before work starts.",
+      dependsOn: ["triage-gate"],
+      target: agentTarget(input, plannerPrompt, "planner", input.taskId, plan),
+      timeoutMs: agentTimeoutMs(input),
+    },
+    {
+      id: "planner-gate",
+      name: "Planner Gate",
+      description: "Stop the lifecycle before implementation when planning blocked or disallowed automation.",
+      dependsOn: ["planner"],
+      target: {
+        type: "command",
+        command: "bash",
+        args: ["-lc", gateCommand("planner")],
+        cwd: plan.cwd,
+        timeoutMs: 2 * 60_000,
+      },
+      timeoutMs: 2 * 60_000,
+    },
+    {
+      id: "worker",
+      name: "Worker",
+      description: "Implement the todos task according to triage and planner evidence.",
+      dependsOn: ["planner-gate"],
+      target: agentTarget(input, workerPrompt, "worker", input.taskId, plan),
+      timeoutMs: agentTimeoutMs(input),
+    },
+  ];
+  if (input.prHandoff) {
+    steps.push({
+      id: "pr-handoff",
+      name: "PR Handoff",
+      description: "Push/open a PR from a worker handoff artifact or queue a bounded network handoff task.",
+      dependsOn: ["worker"],
+      target: {
+        type: "command",
+        command: "bash",
+        args: ["-lc", prHandoffCommand(input, plan, todosProjectPath)],
+        cwd: plan.cwd,
+        timeoutMs: 2 * 60_000,
+      },
+      timeoutMs: 2 * 60_000,
+    });
+  }
+  steps.push({
+    id: "verifier",
+    name: "Verifier",
+    description: "Adversarially verify worker output and update todos.",
+    dependsOn: [input.prHandoff ? "pr-handoff" : "worker"],
+    target: agentTarget(input, verifierPrompt, "verifier", input.taskId, plan),
+    timeoutMs: agentTimeoutMs(input),
+  });
 
   return {
     name: `task-lifecycle-${input.taskId.slice(0, 8)}-triage-plan-worker-verifier`,
     description: `Full task lifecycle workflow for ${taskLabel(input)}`,
     version: 1,
-    steps: workflowStepsWithWorktree(plan, [
-      {
-        id: "triage",
-        name: "Triage",
-        description: "Check task eligibility, duplicates, dependencies, and automation gates.",
-        target: agentTarget(input, triagePrompt, "triage", input.taskId, plan),
-        timeoutMs: agentTimeoutMs(input),
-      },
-      {
-        id: "triage-gate",
-        name: "Triage Gate",
-        description: "Stop the lifecycle before planning when triage blocked or disallowed automation.",
-        dependsOn: ["triage"],
-        target: {
-          type: "command",
-          command: "bash",
-          args: ["-lc", gateCommand("triage")],
-          cwd: plan.cwd,
-          timeoutMs: 2 * 60_000,
-        },
-        timeoutMs: 2 * 60_000,
-      },
-      {
-        id: "planner",
-        name: "Planner",
-        description: "Create a concise implementation plan and split unsafe scope before work starts.",
-        dependsOn: ["triage-gate"],
-        target: agentTarget(input, plannerPrompt, "planner", input.taskId, plan),
-        timeoutMs: agentTimeoutMs(input),
-      },
-      {
-        id: "planner-gate",
-        name: "Planner Gate",
-        description: "Stop the lifecycle before implementation when planning blocked or disallowed automation.",
-        dependsOn: ["planner"],
-        target: {
-          type: "command",
-          command: "bash",
-          args: ["-lc", gateCommand("planner")],
-          cwd: plan.cwd,
-          timeoutMs: 2 * 60_000,
-        },
-        timeoutMs: 2 * 60_000,
-      },
-      {
-        id: "worker",
-        name: "Worker",
-        description: "Implement the todos task according to triage and planner evidence.",
-        dependsOn: ["planner-gate"],
-        target: agentTarget(input, workerPrompt, "worker", input.taskId, plan),
-        timeoutMs: agentTimeoutMs(input),
-      },
-      {
-        id: "verifier",
-        name: "Verifier",
-        description: "Adversarially verify worker output and update todos.",
-        dependsOn: ["worker"],
-        target: agentTarget(input, verifierPrompt, "verifier", input.taskId, plan),
-        timeoutMs: agentTimeoutMs(input),
-      },
-    ]),
+    steps: workflowStepsWithWorktree(plan, steps),
   };
 }
 
@@ -1495,6 +1773,7 @@ export function renderEventWorkerVerifierWorkflow(input: EventWorkflowTemplateIn
     "You are the verifier agent for an event-triggered OpenLoops workflow.",
     worktreePrompt(plan),
     "Use fresh context. Inspect the event, repository/project state, worker evidence, tests, and any created tasks or notes. Act as an adversarial reviewer focused on correctness, regressions, security, missing evidence, and incomplete requirements.",
+    verifierRuntimeGuidance(input),
     "If the work is valid, record verification evidence in the relevant local system. If it is not valid, add precise follow-up tasks/comments and leave the event handling state open or blocked with clear evidence.",
     "",
     `Event context JSON: ${compactJson(eventContext)}`,
@@ -1547,6 +1826,7 @@ export function renderBoundedAgentWorkerVerifierWorkflow(input: BoundedAgentWork
     "You are the verifier step for a bounded OpenLoops agent workflow.",
     worktreePrompt(plan),
     "Use fresh context. Review the worker result for correctness, regressions, missing tests, safety, runaway-agent risk, output bounds, and incomplete evidence.",
+    verifierRuntimeGuidance(input),
     "If valid, record verification evidence. If invalid, create precise follow-up tasks or comments and leave the original work open. Do not make broad unrelated changes.",
   ].join("\n");
 
@@ -1599,6 +1879,7 @@ function renderLifecycleBoundedTemplate(id: string, values: Record<string, strin
     worktreeRoot: values.worktreeRoot,
     worktreeBranchPrefix: values.worktreeBranchPrefix,
     timeoutMs: parseTemplateTimeoutMs(values.timeoutMs),
+    verifierIdleTimeoutMs: parseTemplateIdleTimeoutMs(values.verifierIdleTimeoutMs ?? values.verifierIdleTimeout),
   };
   if (id === TASK_LIFECYCLE_TEMPLATE_ID) {
     const taskId = values.taskId ?? "";
@@ -1631,10 +1912,12 @@ function renderLifecycleBoundedTemplate(id: string, values: Record<string, strin
       permissionMode: values.permissionMode as AgentPermissionMode | undefined,
       sandbox: values.sandbox as AgentSandbox | undefined,
       manualBreakGlass: booleanVar(values.manualBreakGlass),
+      prHandoff: booleanVar(values.prHandoff),
       worktreeMode: (values.worktreeMode as AgentWorktreeMode | undefined) ?? "required",
       worktreeRoot: values.worktreeRoot,
       worktreeBranchPrefix: values.worktreeBranchPrefix,
       timeoutMs: parseTemplateTimeoutMs(values.timeoutMs),
+      verifierIdleTimeoutMs: parseTemplateIdleTimeoutMs(values.verifierIdleTimeoutMs ?? values.verifierIdleTimeout),
       eventId: values.eventId,
       eventType: values.eventType,
     });
@@ -1767,6 +2050,7 @@ function renderBuiltinLoopTemplate(id: string, values: Record<string, string | u
       worktreeRoot: values.worktreeRoot,
       worktreeBranchPrefix: values.worktreeBranchPrefix,
       timeoutMs: parseTemplateTimeoutMs(values.timeoutMs),
+      verifierIdleTimeoutMs: parseTemplateIdleTimeoutMs(values.verifierIdleTimeoutMs ?? values.verifierIdleTimeout),
       eventId: values.eventId,
       eventType: values.eventType,
     });
@@ -1800,6 +2084,7 @@ function renderBuiltinLoopTemplate(id: string, values: Record<string, string | u
       worktreeRoot: values.worktreeRoot,
       worktreeBranchPrefix: values.worktreeBranchPrefix,
       timeoutMs: parseTemplateTimeoutMs(values.timeoutMs),
+      verifierIdleTimeoutMs: parseTemplateIdleTimeoutMs(values.verifierIdleTimeoutMs ?? values.verifierIdleTimeout),
     });
   }
   if (id === BOUNDED_AGENT_WORKER_VERIFIER_TEMPLATE_ID) {
@@ -1828,6 +2113,7 @@ function renderBuiltinLoopTemplate(id: string, values: Record<string, string | u
       worktreeRoot: values.worktreeRoot,
       worktreeBranchPrefix: values.worktreeBranchPrefix,
       timeoutMs: parseTemplateTimeoutMs(values.timeoutMs),
+      verifierIdleTimeoutMs: parseTemplateIdleTimeoutMs(values.verifierIdleTimeoutMs ?? values.verifierIdleTimeout),
     });
   }
   throw new Error(`unknown template: ${id}`);

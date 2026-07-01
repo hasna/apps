@@ -231,4 +231,76 @@ describe("runGoal", () => {
       store.close();
     }
   });
+
+  test("reports an actionable owner when an existing plan has no runnable nodes", async () => {
+    const store = new Store(":memory:");
+    try {
+      const objective = "resume existing exhausted plan";
+      const goal = store.createGoal({ objective, sourceType: "manual", sourceId: objective });
+      store.createGoalPlanNodes(goal.goalId, [
+        { key: "exhausted", objective: "continue work after using the node budget", tokenBudget: 1 },
+      ]);
+      store.updateGoalPlanNode(goal.goalId, "exhausted", { tokensUsed: 1 });
+
+      const calls: string[] = [];
+      const result = await runGoal(store, { objective, maxTurns: 3 }, {
+        model: mockObjects([]),
+        executeNode: async (node) => {
+          calls.push(node.key);
+          return ok("should not run");
+        },
+      });
+
+      expect(calls).toEqual([]);
+      expect(result.status).toBe("failed");
+      expect(result.error).toContain("all pending nodes are budget-exhausted");
+      expect(result.error).toContain("owner=goal-plan-node");
+      expect(store.getGoal(goal.goalId)?.status).toBe("blocked");
+
+      const output = JSON.parse(result.stdout) as {
+        diagnostics?: { owner?: string; blocker?: string; pendingNodes?: Array<{ key: string; budgetExhausted: boolean }> };
+      };
+      expect(output.diagnostics?.owner).toBe("goal-plan-node");
+      expect(output.diagnostics?.blocker).toContain("budget-exhausted");
+      expect(output.diagnostics?.pendingNodes).toEqual([
+        expect.objectContaining({ key: "exhausted", budgetExhausted: true }),
+      ]);
+
+      const statusEvents = store.listGoalRuns({ goalId: goal.goalId }).filter((entry) => entry.phase === "status");
+      expect(statusEvents).toHaveLength(3);
+      expect(statusEvents.at(-1)?.evidence).toEqual(expect.objectContaining({
+        owner: "goal-plan-node",
+        blocker: expect.stringContaining("budget-exhausted"),
+      }));
+    } finally {
+      store.close();
+    }
+  });
+
+  test("keeps no-ready diagnostics when max turns is lower than the blocker threshold", async () => {
+    const store = new Store(":memory:");
+    try {
+      const objective = "single turn exhausted plan";
+      const goal = store.createGoal({ objective, sourceType: "manual", sourceId: objective });
+      store.createGoalPlanNodes(goal.goalId, [
+        { key: "one", objective: "cannot run again", tokenBudget: 1 },
+      ]);
+      store.updateGoalPlanNode(goal.goalId, "one", { tokensUsed: 1 });
+
+      const result = await runGoal(store, { objective, maxTurns: 1 }, {
+        model: mockObjects([]),
+        executeNode: async () => ok("should not run"),
+      });
+
+      expect(result.status).toBe("failed");
+      expect(result.error).toContain("all pending nodes are budget-exhausted");
+      expect(result.error).toContain("owner=goal-plan-node");
+      expect(store.getGoal(goal.goalId)?.status).toBe("usageLimited");
+      const output = JSON.parse(result.stdout) as { diagnostics?: { owner?: string; blocker?: string } };
+      expect(output.diagnostics?.owner).toBe("goal-plan-node");
+      expect(output.diagnostics?.blocker).toContain("budget-exhausted");
+    } finally {
+      store.close();
+    }
+  });
 });

@@ -22,6 +22,7 @@ describe("agent adapters", () => {
           provider: "opencode",
           prompt: "say ok",
           cwd: ".",
+          model: "openrouter/google/gemini-2.5-flash",
           configIsolation: "safe",
         },
       });
@@ -35,6 +36,8 @@ describe("agent adapters", () => {
       expect(result.stdout).toContain("--format");
       expect(result.stdout).toContain("json");
       expect(result.stdout).toContain("--pure");
+      expect(result.stdout).toContain("--model");
+      expect(result.stdout).toContain("openrouter/google/gemini-2.5-flash");
       expect(result.stdout).toContain("stdin:say ok");
       expect(result.stdout.trim().split(/\r?\n/)).not.toContain("say ok");
     } finally {

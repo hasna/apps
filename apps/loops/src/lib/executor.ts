@@ -215,6 +215,9 @@ function assertSupportedAgentOptions(target: AgentTarget): void {
   assertStringOption(target.agent, `${target.provider}.agent`);
   assertStringOption(target.authProfile, `${target.provider}.authProfile`);
   assertStringOption(target.configIsolation, `${target.provider}.configIsolation`);
+  if (target.provider === "opencode" && (target.model === undefined || target.model.trim() === "")) {
+    throw new Error("opencode.model is required; pass a provider/model id such as openrouter/google/gemini-2.5-flash");
+  }
   if (target.configIsolation !== undefined && target.configIsolation !== "safe" && target.configIsolation !== "none") {
     throw new Error(`${target.provider}.configIsolation must be safe or none`);
   }

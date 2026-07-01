@@ -41,6 +41,41 @@ bun link
 
 The CLI stores state in `~/.hasna/loops` by default. Set `LOOPS_DATA_DIR` to isolate state for tests or another profile.
 
+## MCP Server
+
+OpenLoops ships a stdio MCP server for safe loop and workflow inspection from
+MCP-capable agents:
+
+```bash
+loops-mcp list-tools
+loops-mcp
+```
+
+The package also exports the server factory for embedded hosts:
+
+```ts
+import { createLoopsMcpServer } from "@hasna/loops/mcp";
+```
+
+Available read tools include `loops_list`, `loops_show`, `loop_runs`,
+`loops_doctor`, `workflows_list`, `workflow_read`, and `workflow_validate`.
+Resources are available at `loops://runtime` and `loops://tools`.
+Those tools use the same `Store`, public redaction helpers, and workflow parser
+as the CLI and SDK, so read output and validation behavior stay aligned across
+surfaces.
+
+Mutation tools are disabled by default. Start the server with
+`LOOPS_MCP_ALLOW_MUTATIONS=true` only for a trusted local MCP host that should be
+allowed to change loop state. Even then, mutation tools require exact
+confirmation strings: `loop_pause`, `loop_resume`, `loop_run_now`,
+`loop_create_command`, and `loop_create_workflow`. MCP `loop_run_now` schedules
+the loop for immediate daemon pickup; inline execution remains CLI-only.
+
+Keep host-affecting or long-running operations on the CLI: daemon
+start/stop/install/logs, inline `run-now`, `tick`, loop removal/archive
+maintenance, workflow create/migrate/cancel/recover, agent loop creation,
+template materialization, and event-route drains.
+
 ## Create Loops
 
 Run a deterministic command every minute:
@@ -122,6 +157,20 @@ loops create agent supply-chain-watch \
   --cwd /path/to/repo \
   --sandbox workspace-write \
   --prompt "Check for suspicious dependency or supply-chain changes. Report only concrete findings."
+```
+
+Run an OpenCode loop with an explicit provider/model. OpenCode reads
+`~/.config/opencode/config.json` when no model is supplied, so OpenLoops rejects
+OpenCode agent targets without `--model` instead of inheriting a stale or
+machine-specific default.
+
+```bash
+loops create agent opencode-smoke \
+  --provider opencode \
+  --model openrouter/google/gemini-2.5-flash \
+  --at "$(date -u -d '+1 minute' +%Y-%m-%dT%H:%M:%SZ)" \
+  --cwd /path/to/repo \
+  --prompt "Reply with exactly OK."
 ```
 
 Agent loops can also carry advisory per-session allowlist metadata:
@@ -247,8 +296,8 @@ loops create workflow repo-morning-loop --workflow repo-morning --cron "0 8 * * 
 
 Use `recover` only for interrupted `running` workflow runs whose recorded child
 process is gone. Terminal `timed_out` task/event workflow runs are audit
-history; requeue them through the original task/event route after fixing the
-cause.
+history; use `loops routes requeue <work-item-id> --reason "<cause fixed>"`
+after fixing the cause, then redeliver or drain the original task/event route.
 
 Workflow specs are stored separately from loops. A loop can schedule a workflow, but workflow runs and step runs have their own durable rows and events. Steps run in dependency order and a scheduled workflow run is idempotent per loop slot.
 
@@ -317,11 +366,14 @@ registry.
 
 Timeout policy is explicit. Deterministic command/check steps should normally
 keep finite `timeoutMs`/`idleTimeoutMs` guards so broken shell work cannot run
-forever. Agentic work steps default to no timeout in built-in worker/verifier
-and task-lifecycle templates; use `timeoutMs: null` in workflow JSON, or
-`--timeout none` / `--timeout unlimited` for CLI-created targets, when a step
-may need hours or days. Use a positive numeric `timeoutMs` only when an agentic
-step is intentionally bounded.
+forever. Agentic work steps default to no wall-clock timeout in built-in
+worker/verifier and task-lifecycle templates; use `timeoutMs: null` in workflow
+JSON, or `--timeout none` / `--timeout unlimited` for CLI-created targets, when
+a step may need hours or days. Verifier/evaluator steps add a 15 minute
+`idleTimeoutMs` watchdog by default so a verifier cannot hang silently after the
+worker finishes; pass `--verifier-idle-timeout none` or template variable
+`verifierIdleTimeoutMs=none` only when another heartbeat is guaranteed. Use a
+positive numeric `timeoutMs` only when an agentic step is intentionally bounded.
 
 To migrate existing workflow loops, do not edit `workflow_specs.steps_json`
 directly because historical workflow runs must keep pointing at their original
@@ -337,7 +389,8 @@ with the requested agent timeout policy, retargets only future executions of
 eligible non-running workflow loops, and leaves terminal timed-out workflow runs
 as audit history. Use `loops workflows recover` only for interrupted `running`
 workflow runs whose recorded child process is gone; terminal `timed_out` runs
-must be requeued by re-delivering or draining the original task/event route.
+must be requeued with `loops routes requeue <work-item-id> --reason "<cause fixed>"` before
+re-delivering or draining the original task/event route.
 
 ```json
 {
@@ -402,6 +455,12 @@ The generated agent target includes worktree metadata (`mode`, `cwd`, `path`,
 `branch`, `originalCwd`) so dry-runs and workflow inspection expose the exact
 checkout.
 
+Before a worker starts, `prepare-worktree` verifies that any existing managed
+path is a real git worktree with the same top-level checkout, the same git
+common directory as the source repo, and the expected generated branch. A
+detached HEAD or unexpected branch fails closed with evidence instead of
+silently running a mutating workflow in the wrong state.
+
 Use explicit main/default checkout mode only when the task truly requires it:
 
 ```bash
@@ -415,6 +474,10 @@ Use `worktreeMode=auto` only for compatibility or mixed routes where a
 non-git/non-mutating project is expected and the fallback is recorded. Use
 `worktreeMode=off` for non-git projects. `worktreeRoot` and
 `worktreeBranchPrefix` can override the storage root and branch prefix.
+
+PR review and merge route workers may fetch, rebase, or merge base branches
+inside the isolated worktree when the task requires it, but they must not
+mutate the primary main checkout.
 
 For event-driven task automation, `loops events handle todos-task` reads a
 Hasna event envelope from stdin or `HASNA_EVENT_JSON`, records a
@@ -441,16 +504,50 @@ approval-required, or `no-auto` tasks. This guard exists even when the upstream
 `@hasna/events` webhook filter is misconfigured, so task existence alone is not
 permission to execute agent work.
 
+Task route drains can select providers from task metadata instead of running one
+fixed provider/account pool for the whole drain. Add one or more
+`--provider-rule field=value:provider[:profile1,profile2]` flags; the first
+matching rule wins. Rule profiles become a Codewith auth-profile pool for
+`provider=codewith` and an OpenAccounts account pool for other providers. Tasks
+can also carry `provider_hint`/`route_provider`, `auth_profile_pool`, or
+`account_pool` metadata. Dry-run, drain evidence, and route invocation scope
+include `providerRouting` so operators can see why a provider/account was
+selected.
+
+```bash
+loops routes drain todos-task \
+  --dry-run \
+  --provider-rule area=frontend:claude:claude-ui-a,claude-ui-b \
+  --provider-rule area=backend:codewith:account004,account005 \
+  --worktree-mode required
+```
+
+PR approval or merge tasks that need a branch-protection review must carry
+explicit non-author GitHub reviewer evidence before a worker is created. When a
+task has a PR reference plus `reviewDecision=REVIEW_REQUIRED`,
+`mergeStateStatus=BLOCKED`, branch-protection review language, or similar
+approval/merge intent, routing is skipped unless `--github-reviewer`,
+`--github-reviewer-pool`, or task metadata such as `github_reviewer` /
+`github_reviewer_pool` names at least one GitHub login different from the PR
+author. This blocks self-review routes before they can spawn an impossible
+worker, and dry-run/admission JSON includes `prReviewRouting` evidence.
+
 By default, `todos-task` routes use `todos-task-worker-verifier` for backwards
 compatibility. Use `--template task-lifecycle` when the task should run the full
 triage -> planner -> worker -> verifier lifecycle. The route rejects unrelated
 workflow templates such as `pr-review` so a todos task cannot accidentally use a
 template with the wrong contract.
+The default worker/verifier template starts with a deterministic
+`source-task-gate` command that runs `todos --project <source-store> --json
+inspect <task-id>` before the worker. If the routed source task cannot be
+resolved in the intended Todos store, the workflow fails before repo-mutating
+agent work starts.
 The lifecycle template inserts deterministic gate steps after triage and after
 planning. If either agent marks the task blocked, omits its contextual
 `openloops:triage=go task=<id> event=<event-id>` /
 `openloops:planner=go task=<id> event=<event-id>` marker comment, or the task
-is marked no-auto/manual/approval-required, the next agent step is not started.
+is marked blocked/completed/done/cancelled/failed/archived/no-auto/manual/
+approval-required, the next agent step is not started.
 Use `--triage-auth-profile`, `--planner-auth-profile`,
 `--worker-auth-profile`, and `--verifier-auth-profile` for exact Codewith role
 profiles, or use `--auth-profile-pool` for deterministic role rotation.
@@ -479,6 +576,12 @@ Re-delivering the event later is safe because handlers dedupe by the work-item
 idempotency key before rendering worktree plans or checking route limits. In
 dry-run mode, throttle counts are not evaluated because opening the live loop
 store can create or migrate the local database.
+Terminal routed work items such as failed, dead-letter, cancelled, or succeeded
+history remain deduped until an operator runs `loops routes requeue
+<work-item-id> --reason "<cause fixed>"`; a later drain should not create
+another worker just because the previous workflow ended. The next route-created
+output records `requeue` evidence with the previous work item id, previous
+attempts, operator reason, new attempt, workflow id, and loop id.
 
 When a sandboxed Codewith/Codex worker must update app stores outside the repo
 worktree, pass those stores explicitly with `--add-dir` or template `addDirs`.
@@ -498,6 +601,7 @@ loops routes drain todos-task --task-list oss --max-dispatch 2 --compact
 loops routes schedule todos-task route-drain-oss-5m --every 5m --task-list oss --max-dispatch 1 --compact
 loops routes list --route-key todos-task
 loops routes show <work-item-id>
+loops routes requeue <work-item-id> --reason "fixed upstream blocker"
 loops routes invocations
 ```
 
@@ -698,11 +802,15 @@ loops hygiene route-tasks --checks names,duplicates,scripts --dry-run --json
 ```
 
 `hygiene names` reports canonical `machine-*` or `repo-<name>-*` loop names and
-only renames when `--apply` is present. Apply mode writes a SQLite backup under
-`<LOOPS_DATA_DIR>/backups` before changing loop names. `hygiene duplicates`
-groups loops with the same normalized name, cwd, and schedule. `hygiene scripts`
-inventories loops whose command still references `~/.hasna/loops/scripts`; use
-it as a migration gate before deleting local scripts. `hygiene route-tasks`
+only renames when `--apply` is present. Cadence/timer suffixes such as `-5m`,
+`-15m`, `-6h`, `-hourly`, and `-daily` are removed from canonical names; cadence
+belongs in schedule metadata and the human `loops list` `cadence=` column. Apply
+mode writes a SQLite backup under `<LOOPS_DATA_DIR>/backups` before changing loop
+names. New loops get a compact default description with Why/How/Outcome text
+unless the operator supplies `--description`. `hygiene duplicates` groups loops
+with the same normalized name, cwd, and schedule. `hygiene scripts` inventories
+loops whose command still references `~/.hasna/loops/scripts`; use it as a
+migration gate before deleting local scripts. `hygiene route-tasks`
 upserts deduped Todos tasks for hygiene findings with stable fingerprints and
 `no_tmux_dispatch=true` metadata; use `--dry-run --json` before enabling it as a
 production loop. Route commands store a small cursor in
@@ -786,7 +894,7 @@ The adapters intentionally use provider command surfaces instead of pretending e
 
 - Claude uses `claude -p --output-format json` and safe-mode/local setting sources by default.
 - Codewith uses `codewith --ask-for-approval never exec --json --ephemeral --skip-git-repo-check`, with `--add-dir` for explicit extra writable directories.
-- AI Copilot and OpenCode use `run --format json --pure`.
+- AI Copilot and OpenCode use `run --format json --pure`. OpenCode requires an explicit provider/model id because ambient OpenCode config is machine-specific.
 - Cursor is CLI-first for now via the standalone `agent -p` binary. OpenLoops no longer falls back to `cursor agent`; install the standalone Cursor Agent CLI so preflight and scheduled runs use the same executable.
 - Codex uses `codex --ask-for-approval never exec --json --ephemeral --skip-git-repo-check`, with `--add-dir` for explicit extra writable directories where supported.
 - Agent prompts are sent through child stdin instead of argv so prompt bodies do not appear in process listings.

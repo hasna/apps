@@ -66,6 +66,8 @@ const PROVIDER_TOKENS = new Set([
   "agent",
 ]);
 const REPO_GENERIC_TOKENS = new Set(["repo", "repoops"]);
+const CADENCE_SUFFIX_TOKENS = new Set(["hourly", "daily", "weekly", "monthly"]);
+const CADENCE_SUFFIX_PATTERN = /^(?:every-?)?\d+(?:s|m|h|d|w)$/;
 
 function slugify(value: string): string {
   return value
@@ -120,6 +122,15 @@ function taskSlug(loop: Loop, scope: ReturnType<typeof scopeForLoop>): string {
   const deduped: string[] = [];
   for (const token of parts.join("-").split("-").filter(Boolean)) {
     if (deduped[deduped.length - 1] !== token) deduped.push(token);
+  }
+  while (deduped.length) {
+    const last = deduped[deduped.length - 1];
+    if (CADENCE_SUFFIX_TOKENS.has(last) || CADENCE_SUFFIX_PATTERN.test(last)) {
+      deduped.pop();
+      if (deduped[deduped.length - 1] === "every") deduped.pop();
+      continue;
+    }
+    break;
   }
   return deduped.join("-") || "loop";
 }

@@ -336,7 +336,7 @@ describe("Store", () => {
     }
   });
 
-  test("terminal admission work items can be explicitly replayed without preserving stale loop links", () => {
+  test("terminal admission work items require explicit requeue before replaying stale loop links", () => {
     const store = new Store(":memory:");
     try {
       const firstInvocation = store.createWorkflowInvocation({
@@ -384,6 +384,31 @@ describe("Store", () => {
         intent: "route",
         scope: { projectPath: "/tmp/open-loops" },
       });
+      const directReplay = store.upsertWorkflowWorkItem({
+        routeKey: "todos-task",
+        idempotencyKey: "todos-task:terminal:task.created",
+        invocationId: secondInvocation.id,
+        sourceType: "task.created",
+        sourceRef: "evt-terminal-b",
+        subjectRef: "terminal",
+        projectKey: "/tmp/open-loops",
+      });
+
+      expect(directReplay.id).toBe(workItem.id);
+      expect(directReplay.status).toBe("failed");
+      expect(directReplay.loopId).toBe(loop.id);
+      expect(() => store.refreshWorkflowInvocationForWorkItem(directReplay.id, {
+        sourceRef: { kind: "event", id: "evt-terminal-b", dedupeKey: "todos-task:terminal:task.created" },
+        subjectRef: { kind: "task", id: "terminal", path: "/tmp/open-loops" },
+        intent: "route",
+        scope: { projectPath: "/tmp/open-loops" },
+      })).toThrow("not refreshable");
+
+      const requeued = store.requeueWorkflowWorkItem(workItem.id, { reason: "fixed failing route" });
+      expect(requeued.status).toBe("queued");
+      expect(requeued.loopId).toBeUndefined();
+      expect(requeued.lastReason).toBe("fixed failing route");
+
       const replayed = store.upsertWorkflowWorkItem({
         routeKey: "todos-task",
         idempotencyKey: "todos-task:terminal:task.created",
@@ -399,12 +424,25 @@ describe("Store", () => {
       expect(replayed.loopId).toBeUndefined();
       expect(replayed.workflowId).toBeUndefined();
       expect(replayed.workflowRunId).toBeUndefined();
+      store.refreshWorkflowInvocationForWorkItem(replayed.id, {
+        sourceRef: { kind: "event", id: "evt-terminal-b", dedupeKey: "todos-task:terminal:task.created" },
+        subjectRef: { kind: "task", id: "terminal", path: "/tmp/open-loops" },
+        intent: "route",
+        scope: { projectPath: "/tmp/open-loops" },
+      });
       const nextLoop = store.createLoop({
         name: "terminal-replay-loop-b",
         schedule: { type: "once", at: "2026-01-01T00:01:00Z" },
         target: { type: "workflow", workflowId: workflow.id },
       });
-      expect(store.admitWorkflowWorkItem(replayed.id, { workflowId: workflow.id, loopId: nextLoop.id }).status).toBe("admitted");
+      const readmitted = store.admitWorkflowWorkItem(replayed.id, {
+        workflowId: workflow.id,
+        loopId: nextLoop.id,
+        reason: "admitted by terminal replay",
+      });
+      expect(readmitted.status).toBe("admitted");
+      expect(readmitted.attempts).toBe(2);
+      expect(readmitted.lastReason).toBe("fixed failing route; admitted by terminal replay");
     } finally {
       store.close();
     }

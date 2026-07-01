@@ -182,11 +182,23 @@ describe("workflow goal spec validation", () => {
   test("rejects provider-incompatible permission and sandbox fields", () => {
     expect(() =>
       workflowBodyFromJson({
+        name: "bad-opencode-model",
+        steps: [
+          {
+            id: "worker",
+            target: { type: "agent", provider: "opencode", prompt: "do it" },
+          },
+        ],
+      }),
+    ).toThrow("model is required for provider opencode");
+
+    expect(() =>
+      workflowBodyFromJson({
         name: "bad-permission-mode",
         steps: [
           {
             id: "worker",
-            target: { type: "agent", provider: "opencode", prompt: "do it", permissionMode: "plan" },
+            target: { type: "agent", provider: "opencode", prompt: "do it", model: "openrouter/google/gemini-2.5-flash", permissionMode: "plan" },
           },
         ],
       }),

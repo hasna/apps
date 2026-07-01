@@ -1547,7 +1547,7 @@ export class Store {
     const sourceDedupeKey = input.sourceRef.dedupeKey ?? undefined;
     if (!sourceDedupeKey) throw new Error("cannot refresh workflow invocation without sourceRef.dedupeKey");
     const now = nowIso();
-    const claimableStatuses: WorkflowWorkItemStatus[] = ["queued", "deferred", "failed", "dead_letter", "cancelled"];
+    const claimableStatuses: WorkflowWorkItemStatus[] = ["queued", "deferred"];
     const statusBindings = Object.fromEntries(claimableStatuses.map((status, index) => [`$status${index}`, status]));
     const placeholders = claimableStatuses.map((_, index) => `$status${index}`).join(",");
     const result = this.db
@@ -1641,28 +1641,35 @@ export class Store {
           project_group=excluded.project_group,
           priority=excluded.priority,
           status=CASE
-            WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running')
+            WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running', 'failed', 'dead_letter', 'cancelled')
               THEN workflow_work_items.status
             ELSE excluded.status
           END,
           workflow_id=CASE
-            WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running') THEN workflow_work_items.workflow_id
+            WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running', 'failed', 'dead_letter', 'cancelled') THEN workflow_work_items.workflow_id
             ELSE NULL
           END,
           loop_id=CASE
-            WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running') THEN workflow_work_items.loop_id
+            WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running', 'failed', 'dead_letter', 'cancelled') THEN workflow_work_items.loop_id
             ELSE NULL
           END,
           workflow_run_id=CASE
-            WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running') THEN workflow_work_items.workflow_run_id
+            WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running', 'failed', 'dead_letter', 'cancelled') THEN workflow_work_items.workflow_run_id
             ELSE NULL
           END,
           lease_expires_at=CASE
-            WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running') THEN workflow_work_items.lease_expires_at
+            WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running', 'failed', 'dead_letter', 'cancelled') THEN workflow_work_items.lease_expires_at
             ELSE NULL
           END,
           next_attempt_at=excluded.next_attempt_at,
-          last_reason=COALESCE(excluded.last_reason, workflow_work_items.last_reason),
+          last_reason=CASE
+            WHEN workflow_work_items.attempts > 0
+              AND workflow_work_items.status IN ('queued', 'deferred')
+              AND workflow_work_items.last_reason IS NOT NULL
+              AND excluded.last_reason IS NOT NULL
+              THEN workflow_work_items.last_reason || '; ' || excluded.last_reason
+            ELSE COALESCE(excluded.last_reason, workflow_work_items.last_reason)
+          END,
           updated_at=excluded.updated_at`,
       )
       .run({
@@ -1759,13 +1766,43 @@ export class Store {
     return { global, project, ...(projectGroup !== undefined ? { projectGroup } : {}) };
   }
 
+  requeueWorkflowWorkItem(id: string, patch: { reason?: string } = {}): WorkflowWorkItem {
+    const current = this.getWorkflowWorkItem(id);
+    if (!current) throw new Error(`workflow work item not found: ${id}`);
+    const requeueableStatuses: WorkflowWorkItemStatus[] = ["succeeded", "failed", "dead_letter", "cancelled"];
+    if (!requeueableStatuses.includes(current.status)) {
+      throw new Error(`workflow work item is not requeueable: ${id} status=${current.status}`);
+    }
+    const now = nowIso();
+    const reason = patch.reason?.trim() || `requeued from ${current.status}`;
+    const placeholders = requeueableStatuses.map(() => "?").join(",");
+    const res = this.db
+      .query(
+        `UPDATE workflow_work_items
+         SET status='queued', workflow_id=NULL, loop_id=NULL, workflow_run_id=NULL,
+          next_attempt_at=NULL, lease_expires_at=NULL, last_reason=?, updated_at=?
+         WHERE id=? AND status IN (${placeholders})`,
+      )
+      .run(reason, now, id, ...requeueableStatuses);
+    const item = this.getWorkflowWorkItem(id);
+    if (!item) throw new Error(`workflow work item not found after requeue: ${id}`);
+    if (res.changes !== 1) throw new Error(`workflow work item was not requeued: ${id} status=${item.status}`);
+    return item;
+  }
+
   admitWorkflowWorkItem(id: string, patch: { workflowId: string; loopId: string; reason?: string }): WorkflowWorkItem {
     const now = nowIso();
     const res = this.db
       .query(
         `UPDATE workflow_work_items
          SET status='admitted', attempts=attempts + 1, workflow_id=$workflowId, loop_id=$loopId,
-          next_attempt_at=NULL, lease_expires_at=NULL, last_reason=$reason, updated_at=$updated
+          next_attempt_at=NULL,
+          lease_expires_at=NULL,
+          last_reason=CASE
+            WHEN last_reason IS NOT NULL AND $reason IS NOT NULL THEN last_reason || '; ' || $reason
+            ELSE COALESCE($reason, last_reason)
+          END,
+          updated_at=$updated
          WHERE id=$id AND status IN ('queued', 'deferred')`,
       )
       .run({

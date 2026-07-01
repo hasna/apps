@@ -146,6 +146,9 @@ function validateTarget(value: unknown, label: string, opts: WorkflowNormalizeOp
       if (!["safe", "none"].includes(value.configIsolation)) throw new Error(`${label}.configIsolation must be safe or none`);
     }
     if (value.model !== undefined) assertString(value.model, `${label}.model`);
+    if (value.provider === "opencode" && (typeof value.model !== "string" || value.model.trim() === "")) {
+      throw new Error(`${label}.model is required for provider opencode; pass a provider/model id such as openrouter/google/gemini-2.5-flash`);
+    }
     if (value.variant !== undefined) assertString(value.variant, `${label}.variant`);
     if (value.agent !== undefined) assertString(value.agent, `${label}.agent`);
     if (value.provider === "cursor" && value.variant !== undefined) throw new Error(`${label}.variant is not supported for provider cursor`);

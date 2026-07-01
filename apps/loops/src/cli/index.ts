@@ -22,6 +22,7 @@ import type {
   OverlapPolicy,
   ScheduleSpec,
   WorkflowSpec,
+  WorkflowWorkItemStatus,
 } from "../types.js";
 import { dataDir, daemonLogPath, dbPath } from "../lib/paths.js";
 import {
@@ -290,6 +291,11 @@ function timeoutDuration(raw: string | undefined, label: string): number | null 
   return value;
 }
 
+function idleTimeoutDuration(raw: string | undefined, label: string): number | undefined {
+  const value = timeoutDuration(raw, label);
+  return value === null ? undefined : value;
+}
+
 function parsePolicy(opts: {
   catchUp?: string;
   catchUpLimit?: string;
@@ -312,6 +318,42 @@ function parsePolicy(opts: {
   };
 }
 
+function durationLabel(ms: number | undefined): string {
+  if (!ms || !Number.isFinite(ms)) return "";
+  const units: Array<[number, string]> = [
+    [7 * 24 * 60 * 60 * 1000, "w"],
+    [24 * 60 * 60 * 1000, "d"],
+    [60 * 60 * 1000, "h"],
+    [60 * 1000, "m"],
+    [1_000, "s"],
+  ];
+  for (const [unitMs, label] of units) {
+    if (ms % unitMs === 0) return `${ms / unitMs}${label}`;
+  }
+  return `${ms}ms`;
+}
+
+function scheduleLabel(schedule: ScheduleSpec): string {
+  if (schedule.type === "once") return `once:${schedule.at}`;
+  if (schedule.type === "interval") return `every:${durationLabel(schedule.everyMs) || `${schedule.everyMs}ms`}`;
+  if (schedule.type === "cron") return `cron:${schedule.expression}`;
+  return schedule.minIntervalMs ? `dynamic:min-${durationLabel(schedule.minIntervalMs) || `${schedule.minIntervalMs}ms`}` : "dynamic";
+}
+
+function targetLabel(target: LoopTarget): string {
+  if (target.type === "command") return `runs command ${target.command}`;
+  if (target.type === "agent") return `runs ${target.provider} agent${target.cwd ? ` in ${target.cwd}` : ""}`;
+  return `runs workflow ${target.workflowId}`;
+}
+
+function defaultLoopDescription(name: string, schedule: ScheduleSpec, target: LoopTarget): string {
+  return [
+    `Why: keep ${name} running as an OpenLoops scheduled automation.`,
+    `How: ${targetLabel(target)} on cadence ${scheduleLabel(schedule)}.`,
+    "Outcome: record each run, status, retries, and evidence in OpenLoops for operator review.",
+  ].join(" ");
+}
+
 function baseCreateInput(name: string, opts: Record<string, string | boolean | undefined>, target: LoopTarget): CreateLoopInput {
   const schedule = parseSchedule({
     at: typeof opts.at === "string" ? opts.at : undefined,
@@ -327,9 +369,10 @@ function baseCreateInput(name: string, opts: Record<string, string | boolean | u
     retryDelay: typeof opts.retryDelay === "string" ? opts.retryDelay : undefined,
     lease: typeof opts.lease === "string" ? opts.lease : undefined,
   });
+  const explicitDescription = typeof opts.description === "string" && opts.description.trim() ? opts.description : undefined;
   return {
     name,
-    description: typeof opts.description === "string" ? opts.description : undefined,
+    description: explicitDescription ?? defaultLoopDescription(name, schedule, target),
     schedule,
     target,
     goal: goalFromOpts(opts),
@@ -758,18 +801,32 @@ function nestedObject(input: Record<string, unknown>, key: string): Record<strin
 function taskEventRecords(data: Record<string, unknown>, metadata: Record<string, unknown>): Record<string, unknown>[] {
   const records: Record<string, unknown>[] = [data];
   const dataTask = nestedObject(data, "task");
-  if (dataTask) records.push(dataTask);
+  if (dataTask) {
+    records.push(dataTask);
+    const dataTaskMetadata = nestedObject(dataTask, "metadata");
+    if (dataTaskMetadata) records.push(dataTaskMetadata);
+  }
   const dataPayload = nestedObject(data, "payload");
   if (dataPayload) {
     records.push(dataPayload);
+    const payloadMetadata = nestedObject(dataPayload, "metadata");
+    if (payloadMetadata) records.push(payloadMetadata);
     const payloadTask = nestedObject(dataPayload, "task");
-    if (payloadTask) records.push(payloadTask);
+    if (payloadTask) {
+      records.push(payloadTask);
+      const payloadTaskMetadata = nestedObject(payloadTask, "metadata");
+      if (payloadTaskMetadata) records.push(payloadTaskMetadata);
+    }
   }
   const dataMetadata = nestedObject(data, "metadata");
   if (dataMetadata) records.push(dataMetadata);
   records.push(metadata);
   const metadataTask = nestedObject(metadata, "task");
-  if (metadataTask) records.push(metadataTask);
+  if (metadataTask) {
+    records.push(metadataTask);
+    const metadataTaskMetadata = nestedObject(metadataTask, "metadata");
+    if (metadataTaskMetadata) records.push(metadataTaskMetadata);
+  }
   const metadataAutomation = nestedObject(metadata, "automation");
   if (metadataAutomation) records.push(metadataAutomation);
   return records;
@@ -783,6 +840,15 @@ function hasTruthyField(records: Record<string, unknown>[], keys: string[]): boo
   return records.some((record) => keys.some((key) => booleanLike(record[key])));
 }
 
+function firstTruthyField(records: Record<string, unknown>[], keys: string[]): string | undefined {
+  for (const record of records) {
+    for (const key of keys) {
+      if (booleanLike(record[key])) return key;
+    }
+  }
+  return undefined;
+}
+
 function automationRecords(data: Record<string, unknown>, metadata: Record<string, unknown>): Record<string, unknown>[] {
   const records: Record<string, unknown>[] = [];
   const dataAutomation = nestedObject(data, "automation");
@@ -790,12 +856,21 @@ function automationRecords(data: Record<string, unknown>, metadata: Record<strin
   const dataTask = nestedObject(data, "task");
   const dataTaskAutomation = dataTask ? nestedObject(dataTask, "automation") : undefined;
   if (dataTaskAutomation) records.push(dataTaskAutomation);
+  const dataTaskMetadata = dataTask ? nestedObject(dataTask, "metadata") : undefined;
+  const dataTaskMetadataAutomation = dataTaskMetadata ? nestedObject(dataTaskMetadata, "automation") : undefined;
+  if (dataTaskMetadataAutomation) records.push(dataTaskMetadataAutomation);
   const dataPayload = nestedObject(data, "payload");
   const payloadAutomation = dataPayload ? nestedObject(dataPayload, "automation") : undefined;
   if (payloadAutomation) records.push(payloadAutomation);
+  const payloadMetadata = dataPayload ? nestedObject(dataPayload, "metadata") : undefined;
+  const payloadMetadataAutomation = payloadMetadata ? nestedObject(payloadMetadata, "automation") : undefined;
+  if (payloadMetadataAutomation) records.push(payloadMetadataAutomation);
   const payloadTask = dataPayload ? nestedObject(dataPayload, "task") : undefined;
   const payloadTaskAutomation = payloadTask ? nestedObject(payloadTask, "automation") : undefined;
   if (payloadTaskAutomation) records.push(payloadTaskAutomation);
+  const payloadTaskMetadata = payloadTask ? nestedObject(payloadTask, "metadata") : undefined;
+  const payloadTaskMetadataAutomation = payloadTaskMetadata ? nestedObject(payloadTaskMetadata, "automation") : undefined;
+  if (payloadTaskMetadataAutomation) records.push(payloadTaskMetadataAutomation);
   const dataMetadata = nestedObject(data, "metadata");
   const dataMetadataAutomation = dataMetadata ? nestedObject(dataMetadata, "automation") : undefined;
   if (dataMetadataAutomation) records.push(dataMetadataAutomation);
@@ -804,6 +879,9 @@ function automationRecords(data: Record<string, unknown>, metadata: Record<strin
   const metadataTask = nestedObject(metadata, "task");
   const metadataTaskAutomation = metadataTask ? nestedObject(metadataTask, "automation") : undefined;
   if (metadataTaskAutomation) records.push(metadataTaskAutomation);
+  const metadataTaskMetadata = metadataTask ? nestedObject(metadataTask, "metadata") : undefined;
+  const metadataTaskMetadataAutomation = metadataTaskMetadata ? nestedObject(metadataTaskMetadata, "automation") : undefined;
+  if (metadataTaskMetadataAutomation) records.push(metadataTaskMetadataAutomation);
   return records;
 }
 
@@ -821,13 +899,40 @@ function taskEventTags(records: Record<string, unknown>[]): string[] {
   return [...tags];
 }
 
+const ROUTE_DISALLOWED_TASK_TAGS = new Set([
+  "no-auto",
+  "manual",
+  "manual-required",
+  "approval-required",
+  "blocked",
+  "completed",
+  "done",
+  "cancelled",
+  "canceled",
+  "failed",
+  "archived",
+]);
+
+const ROUTE_MANUAL_GATE_FIELDS = [
+  "no_auto",
+  "noAuto",
+  "manual",
+  "manual_required",
+  "manualRequired",
+  "requires_approval",
+  "requiresApproval",
+  "approval_required",
+  "approvalRequired",
+];
+
 function taskRouteEligibility(data: Record<string, unknown>, metadata: Record<string, unknown>): { eligible: boolean; reason?: string; tags: string[] } {
   const records = taskEventRecords(data, metadata);
+  const automation = automationRecords(data, metadata);
   const tags = taskEventTags(records);
   const hasRouteOptIn =
     tags.includes("auto:route") ||
     hasTruthyField(records, ["route_enabled", "routeEnabled", "automation_allowed", "automationAllowed"]) ||
-    hasTruthyField(automationRecords(data, metadata), ["allowed"]);
+    hasTruthyField(automation, ["allowed"]);
   if (!hasRouteOptIn) return { eligible: false, reason: "missing explicit route opt-in", tags };
 
   const status = taskEventField(data, ["status", "task_status", "taskStatus"])?.toLowerCase();
@@ -835,24 +940,215 @@ function taskRouteEligibility(data: Record<string, unknown>, metadata: Record<st
     return { eligible: false, reason: `task status is not routable: ${status}`, tags };
   }
 
-  const disallowedTags = tags.filter((tag) => ["no-auto", "manual", "manual-required", "approval-required"].includes(tag));
+  const disallowedTags = tags.filter((tag) => ROUTE_DISALLOWED_TASK_TAGS.has(tag.toLowerCase()));
   if (disallowedTags.length) return { eligible: false, reason: `task has disallowed tag: ${disallowedTags[0]}`, tags };
 
-  if (hasTruthyField(records, [
-    "no_auto",
-    "noAuto",
-    "manual",
-    "manual_required",
-    "manualRequired",
-    "requires_approval",
-    "requiresApproval",
-    "approval_required",
-    "approvalRequired",
-  ])) {
-    return { eligible: false, reason: "task metadata requires manual or approval-gated handling", tags };
+  const manualGateField = firstTruthyField([...records, ...automation], ROUTE_MANUAL_GATE_FIELDS);
+  if (manualGateField) {
+    return { eligible: false, reason: `task metadata requires manual or approval-gated handling: ${manualGateField}`, tags };
   }
 
   return { eligible: true, tags };
+}
+
+const PR_AUTHOR_FIELDS = [
+  "github_author",
+  "githubAuthor",
+  "github_pr_author",
+  "githubPrAuthor",
+  "pr_author",
+  "prAuthor",
+  "pull_request_author",
+  "pullRequestAuthor",
+  "author_login",
+  "authorLogin",
+];
+
+const PR_REVIEWER_FIELDS = [
+  "github_reviewer",
+  "githubReviewer",
+  "github_review_actor",
+  "githubReviewActor",
+  "github_review_login",
+  "githubReviewLogin",
+  "github_actor",
+  "githubActor",
+  "reviewer_login",
+  "reviewerLogin",
+  "review_actor",
+  "reviewActor",
+  "merge_actor",
+  "mergeActor",
+];
+
+const PR_REVIEWER_POOL_FIELDS = [
+  "github_reviewer_pool",
+  "githubReviewerPool",
+  "github_review_pool",
+  "githubReviewPool",
+  "github_reviewers",
+  "githubReviewers",
+  "reviewer_pool",
+  "reviewerPool",
+  "reviewers",
+];
+
+const PR_REVIEW_REQUIRED_FIELDS = [
+  "github_review_required",
+  "githubReviewRequired",
+  "pr_review_required",
+  "prReviewRequired",
+  "review_required",
+  "reviewRequired",
+  "requires_non_author_review",
+  "requiresNonAuthorReview",
+  "branch_protection_review_required",
+  "branchProtectionReviewRequired",
+];
+
+interface PrReviewRoutingDecision {
+  required: boolean;
+  allowed: boolean;
+  reason?: string;
+  author?: string;
+  reviewers: string[];
+  selectedReviewer?: string;
+  signals: string[];
+}
+
+function githubLogin(value: string | undefined): string | undefined {
+  if (!value?.trim()) return undefined;
+  const login = value.trim().replace(/^@/, "");
+  return /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(login) ? login : undefined;
+}
+
+function githubLogins(values: Array<string | undefined>): string[] {
+  const seen = new Set<string>();
+  const logins: string[] = [];
+  for (const value of values) {
+    const login = githubLogin(value);
+    if (!login) continue;
+    const key = login.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    logins.push(login);
+  }
+  return logins;
+}
+
+function routeEvidenceText(records: Record<string, unknown>[]): string {
+  const fields = [
+    "title",
+    "task_title",
+    "taskTitle",
+    "description",
+    "body",
+    "reason",
+    "message",
+    "fingerprint",
+    "reviewDecision",
+    "review_decision",
+    "mergeStateStatus",
+    "merge_state_status",
+  ];
+  const values: string[] = [];
+  for (const record of records) {
+    for (const field of fields) values.push(...recordFieldValues(record, field));
+    values.push(...tagsFromValue(record.tags ?? record.task_tags ?? record.taskTags));
+  }
+  return values.join("\n");
+}
+
+function authorFromPrText(text: string): string | undefined {
+  const patterns = [
+    /\bauthor\s+(?:is\s+also|is|=|:)\s+@?([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/i,
+    /\bPR\s*#?\d+\s+author\s+(?:is\s+also|is|=|:)\s+@?([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/i,
+    /\bgithub\s+author\s+(?:is\s+also|is|=|:)\s+@?([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/i,
+  ];
+  for (const pattern of patterns) {
+    const match = pattern.exec(text);
+    const login = githubLogin(match?.[1]);
+    if (login) return login;
+  }
+  return undefined;
+}
+
+function prReviewRoutingDecision(
+  data: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+  opts: TodosTaskRouteOptions,
+): PrReviewRoutingDecision {
+  const records = [...taskEventRecords(data, metadata), ...automationRecords(data, metadata)];
+  const text = routeEvidenceText(records);
+  const signals: string[] = [];
+  const hasPrReference = /github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/i.test(text) ||
+    /\bgithub-pr:[^\s]+#\d+/i.test(text) ||
+    /\bpull request\b/i.test(text) ||
+    /\bpr\s*#?\d+\b/i.test(text);
+  const reviewRequiredByField = hasTruthyField(records, PR_REVIEW_REQUIRED_FIELDS);
+  const reviewRequiredByText = /reviewdecision\s*[:=]\s*review_required/i.test(text) ||
+    /\breview_required\b/i.test(text) ||
+    /\breview required\b/i.test(text) ||
+    /\brequires?\s+\d+\s+approving review/i.test(text) ||
+    /\bbranch protection\b[\s\S]{0,160}\bapproving review/i.test(text);
+  const mergeBlockedByText = /mergestatestatus\s*[:=]\s*blocked/i.test(text) ||
+    /\bmerge state status\b[\s:=]+blocked/i.test(text);
+  const approvalIntent = /\b(approve|approval|merge|review)\b/i.test(text);
+  if (reviewRequiredByField) signals.push("review-required-field");
+  if (reviewRequiredByText) signals.push("review-required-text");
+  if (mergeBlockedByText) signals.push("merge-blocked-text");
+  if (approvalIntent && hasPrReference) signals.push("pr-approval-intent");
+
+  const required = hasPrReference && (reviewRequiredByField || reviewRequiredByText || mergeBlockedByText || approvalIntent);
+  if (!required) return { required: false, allowed: true, reviewers: [], signals };
+
+  const author = githubLogin(firstRouteField(records, PR_AUTHOR_FIELDS)) ?? authorFromPrText(text);
+  const reviewers = githubLogins([
+    opts.githubReviewer,
+    ...(splitList(opts.githubReviewerPool) ?? []),
+    ...PR_REVIEWER_FIELDS.flatMap((field) => routeFieldValues(records, field)),
+    ...PR_REVIEWER_POOL_FIELDS.flatMap((field) => routeFieldValues(records, field)),
+  ]);
+  const selectedReviewer = author
+    ? reviewers.find((reviewer) => reviewer.toLowerCase() !== author.toLowerCase())
+    : undefined;
+  if (!author) {
+    return {
+      required: true,
+      allowed: false,
+      reason: "PR approval/merge route requires PR author evidence before selecting a non-author GitHub reviewer",
+      reviewers,
+      signals,
+    };
+  }
+  if (!reviewers.length) {
+    return {
+      required: true,
+      allowed: false,
+      reason: "PR approval/merge route requires --github-reviewer, --github-reviewer-pool, or task metadata github_reviewer/github_reviewer_pool with a login different from the PR author",
+      author,
+      reviewers,
+      signals,
+    };
+  }
+  if (!selectedReviewer) {
+    return {
+      required: true,
+      allowed: false,
+      reason: `PR approval/merge route reviewer candidates match PR author ${author}; self-review is not routable`,
+      author,
+      reviewers,
+      signals,
+    };
+  }
+  return {
+    required: true,
+    allowed: true,
+    author,
+    reviewers,
+    selectedReviewer,
+    signals,
+  };
 }
 
 interface RouteThrottleLimits {
@@ -874,9 +1170,31 @@ interface RouteThrottleDecision {
   };
 }
 
+type ProviderRoutingSource = "default" | "option" | "rule" | "metadata";
+
+interface ProviderRoutingRule {
+  raw: string;
+  field: string;
+  value: string;
+  provider: AgentProvider;
+  profiles?: string[];
+}
+
+interface ProviderRoutingDecision {
+  provider: AgentProvider;
+  source: ProviderRoutingSource;
+  reason: string;
+  rule?: Pick<ProviderRoutingRule, "raw" | "field" | "value" | "provider" | "profiles">;
+  authProfile?: string;
+  authProfilePool?: string[];
+  account?: AccountRef;
+  accountPool?: AccountRef[];
+}
+
 interface TodosTaskRouteOptions {
   template?: string;
   provider?: string;
+  providerRule?: string[];
   authProfile?: string;
   authProfilePool?: string;
   triageAuthProfile?: string;
@@ -895,6 +1213,7 @@ interface TodosTaskRouteOptions {
   agent?: string;
   addDir?: string[];
   timeout?: string;
+  verifierIdleTimeout?: string;
   permissionMode?: string;
   sandbox?: string;
   manualBreakGlass?: boolean;
@@ -906,6 +1225,9 @@ interface TodosTaskRouteOptions {
   worktreeMode?: string;
   worktreeRoot?: string;
   worktreeBranchPrefix?: string;
+  prHandoff?: boolean;
+  githubReviewer?: string;
+  githubReviewerPool?: string;
   namePrefix?: string;
   preflight?: boolean;
   dryRun?: boolean;
@@ -948,13 +1270,213 @@ interface TodosDrainOptions extends TodosTaskRouteOptions {
   compact?: boolean;
 }
 
+const SUPPORTED_AGENT_PROVIDERS = new Set<AgentProvider>(["claude", "cursor", "codewith", "aicopilot", "opencode", "codex"]);
+
+const PROVIDER_HINT_FIELDS = ["provider_hint", "providerHint", "route_provider", "routeProvider", "agent_provider", "agentProvider"];
+const AUTH_PROFILE_HINT_FIELDS = ["auth_profile", "authProfile", "codewith_profile", "codewithProfile", "profile"];
+const AUTH_PROFILE_POOL_HINT_FIELDS = ["auth_profile_pool", "authProfilePool", "codewith_profile_pool", "codewithProfilePool", "profile_pool", "profilePool"];
+const ACCOUNT_HINT_FIELDS = ["account", "account_profile", "accountProfile", "openaccounts_profile", "openaccountsProfile"];
+const ACCOUNT_POOL_HINT_FIELDS = ["account_pool", "accountPool", "openaccounts_pool", "openaccountsPool"];
+const ACCOUNT_TOOL_HINT_FIELDS = ["account_tool", "accountTool", "openaccounts_tool", "openaccountsTool"];
+
+function canonicalRouteField(value: string): string {
+  return value.replace(/[^a-z0-9]/gi, "").toLowerCase();
+}
+
+function normalizeAgentProvider(value: string | undefined, source: string): AgentProvider {
+  const provider = value?.trim().toLowerCase();
+  if (provider && SUPPORTED_AGENT_PROVIDERS.has(provider as AgentProvider)) return provider as AgentProvider;
+  const expected = [...SUPPORTED_AGENT_PROVIDERS].join(", ");
+  throw new Error(`unsupported provider${provider ? ` "${provider}"` : ""} from ${source}; expected one of: ${expected}`);
+}
+
+function stringValuesFromUnknown(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap((entry) => stringValuesFromUnknown(entry));
+  if (typeof value === "string") return value.split(",").map((entry) => entry.trim()).filter(Boolean);
+  if (typeof value === "number" || typeof value === "boolean") return [String(value)];
+  return [];
+}
+
+function recordFieldValues(record: Record<string, unknown>, field: string): string[] {
+  const expected = canonicalRouteField(field);
+  const values: string[] = [];
+  for (const [key, value] of Object.entries(record)) {
+    if (canonicalRouteField(key) === expected) values.push(...stringValuesFromUnknown(value));
+  }
+  return values;
+}
+
+function routeFieldValues(records: Record<string, unknown>[], field: string): string[] {
+  if (canonicalRouteField(field) === "tags") return taskEventTags(records);
+  return records.flatMap((record) => recordFieldValues(record, field));
+}
+
+function firstRouteField(records: Record<string, unknown>[], fields: string[]): string | undefined {
+  for (const field of fields) {
+    const value = routeFieldValues(records, field).find(Boolean);
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function routeFieldList(records: Record<string, unknown>[], fields: string[]): string[] | undefined {
+  for (const field of fields) {
+    const values = routeFieldValues(records, field);
+    if (values.length) return values;
+  }
+  return undefined;
+}
+
+function parseProviderRoutingRule(raw: string): ProviderRoutingRule {
+  const rule = raw.trim();
+  const selectorIndex = rule.indexOf(":");
+  if (selectorIndex <= 0) throw new Error(`invalid --provider-rule "${raw}", expected field=value:provider[:profile1,profile2]`);
+  const selector = rule.slice(0, selectorIndex).trim();
+  const route = rule.slice(selectorIndex + 1).trim();
+  const equalsIndex = selector.indexOf("=");
+  if (equalsIndex <= 0) throw new Error(`invalid --provider-rule "${raw}", expected field=value:provider[:profile1,profile2]`);
+  const field = selector.slice(0, equalsIndex).trim();
+  const value = selector.slice(equalsIndex + 1).trim();
+  const providerIndex = route.indexOf(":");
+  const providerRaw = providerIndex >= 0 ? route.slice(0, providerIndex).trim() : route;
+  const profilesRaw = providerIndex >= 0 ? route.slice(providerIndex + 1).trim() : undefined;
+  if (!field || !value || !providerRaw) throw new Error(`invalid --provider-rule "${raw}", expected field=value:provider[:profile1,profile2]`);
+  return {
+    raw,
+    field,
+    value,
+    provider: normalizeAgentProvider(providerRaw, `provider rule ${field}=${value}`),
+    profiles: splitList(profilesRaw),
+  };
+}
+
+function parseProviderRoutingRules(values: string[] | undefined): ProviderRoutingRule[] {
+  return (values ?? []).map(parseProviderRoutingRule);
+}
+
+function providerRuleMatches(rule: ProviderRoutingRule, records: Record<string, unknown>[]): boolean {
+  const expected = rule.value.trim().toLowerCase();
+  return routeFieldValues(records, rule.field).some((value) => value.trim().toLowerCase() === expected);
+}
+
+function accountRef(profile: string | undefined, tool: string | undefined): AccountRef | undefined {
+  return profile ? { profile, tool } : undefined;
+}
+
+function accountRefs(profiles: string[] | undefined, tool: string | undefined): AccountRef[] | undefined {
+  return profiles?.length ? profiles.map((profile) => ({ profile, tool })) : undefined;
+}
+
+function providerRoutingPublic(decision: ProviderRoutingDecision): Record<string, unknown> {
+  return {
+    provider: decision.provider,
+    source: decision.source,
+    reason: decision.reason,
+    rule: decision.rule,
+    authProfile: decision.authProfile,
+    authProfilePool: decision.authProfilePool,
+    account: decision.account,
+    accountPool: decision.accountPool,
+  };
+}
+
+function resolveProviderRouting(
+  data: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+  opts: TodosTaskRouteOptions,
+): ProviderRoutingDecision {
+  const records = [...taskEventRecords(data, metadata), ...automationRecords(data, metadata)];
+  const matchedRule = parseProviderRoutingRules(opts.providerRule).find((rule) => providerRuleMatches(rule, records));
+  const metadataProvider = matchedRule || opts.provider ? undefined : firstRouteField(records, PROVIDER_HINT_FIELDS);
+  const provider = matchedRule
+    ? matchedRule.provider
+    : opts.provider
+      ? normalizeAgentProvider(opts.provider, "--provider")
+      : metadataProvider
+        ? normalizeAgentProvider(metadataProvider, "task metadata provider hint")
+        : "codewith";
+  const source: ProviderRoutingSource = matchedRule
+    ? "rule"
+    : opts.provider
+      ? "option"
+      : metadataProvider
+        ? "metadata"
+        : "default";
+  const metadataProfilePool = routeFieldList(records, provider === "codewith" ? AUTH_PROFILE_POOL_HINT_FIELDS : [...ACCOUNT_POOL_HINT_FIELDS, ...AUTH_PROFILE_POOL_HINT_FIELDS]);
+  const metadataProfile = firstRouteField(records, provider === "codewith" ? AUTH_PROFILE_HINT_FIELDS : [...ACCOUNT_HINT_FIELDS, ...AUTH_PROFILE_HINT_FIELDS]);
+  const profilePool = matchedRule?.profiles ?? metadataProfilePool;
+  const profile = metadataProfile;
+  const metadataAccountTool = firstRouteField(records, ACCOUNT_TOOL_HINT_FIELDS);
+  const accountTool = opts.accountTool ??
+    (matchedRule?.profiles ? undefined : metadataAccountTool) ??
+    (provider === "codewith" ? undefined : provider);
+  const hasResolvedAccountPool = provider !== "codewith" && Boolean((profilePool?.length ?? 0) || profile);
+  if (
+    opts.accountTool &&
+    !opts.account &&
+    !opts.accountPool &&
+    !opts.triageAccount &&
+    !opts.plannerAccount &&
+    !opts.workerAccount &&
+    !opts.verifierAccount &&
+    !hasResolvedAccountPool
+  ) {
+    throw new Error("--account-tool requires --account, --account-pool, --triage-account, --planner-account, --worker-account, --verifier-account, metadata account hints, or provider-rule profiles");
+  }
+  if (provider === "codewith") {
+    const cliAuthProfilePool = splitList(opts.authProfilePool);
+    return {
+      provider,
+      source,
+      reason: matchedRule
+        ? `matched provider rule ${matchedRule.field}=${matchedRule.value}`
+        : metadataProvider
+          ? "selected provider from task metadata"
+          : opts.provider
+            ? "selected provider from --provider"
+            : "selected default provider",
+      rule: matchedRule,
+      authProfile: opts.authProfile ?? profile,
+      authProfilePool: matchedRule?.profiles ?? cliAuthProfilePool ?? (opts.authProfile ? undefined : metadataProfilePool),
+      account: accountRef(opts.account, opts.accountTool),
+      accountPool: accountPoolFromOpts(opts),
+    };
+  }
+  if (opts.authProfile || opts.authProfilePool) {
+    throw new Error(`--auth-profile and --auth-profile-pool are supported only for --provider codewith; use OpenAccounts account profiles for ${provider}`);
+  }
+  const cliAccountPool = accountPoolFromOpts(opts);
+  const account = opts.account
+    ? accountRef(opts.account, opts.accountTool ?? provider)
+    : accountRef(profile, accountTool);
+  return {
+    provider,
+    source,
+    reason: matchedRule
+      ? `matched provider rule ${matchedRule.field}=${matchedRule.value}`
+      : metadataProvider
+        ? "selected provider from task metadata"
+        : opts.provider
+          ? "selected provider from --provider"
+          : "selected default provider",
+    rule: matchedRule,
+    account,
+    accountPool: matchedRule?.profiles ? accountRefs(matchedRule.profiles, accountTool) : cliAccountPool ?? (opts.account ? undefined : accountRefs(metadataProfilePool, accountTool)),
+  };
+}
+
 interface TodosTaskRoutePrint {
   kind: "skipped" | "deduped" | "throttled" | "created";
   value: Record<string, unknown>;
   human: string;
 }
 
-function skippedDrainTask(task: TodosReadyTask, event: EventEnvelope | undefined, reason: string): TodosTaskRoutePrint {
+function skippedDrainTask(
+  task: TodosReadyTask,
+  event: EventEnvelope | undefined,
+  reason: string,
+  extra: Record<string, unknown> = {},
+): TodosTaskRoutePrint {
   const taskId = taskField(task, ["id", "task_id", "taskId"]) ?? event?.subject ?? "unknown";
   return {
     kind: "skipped",
@@ -964,6 +1486,7 @@ function skippedDrainTask(task: TodosReadyTask, event: EventEnvelope | undefined
       taskId,
       event,
       routeError: true,
+      ...extra,
     },
     human: `skipped task ${taskId}: ${reason}`,
   };
@@ -971,6 +1494,33 @@ function skippedDrainTask(task: TodosReadyTask, event: EventEnvelope | undefined
 
 function isSkippableDrainRouteError(message: string): boolean {
   return message.startsWith("worktreeMode=required but projectPath is not an existing git repository:");
+}
+
+function todosMutationSummary(result: ReturnType<typeof runLocalCommand>): Record<string, unknown> {
+  return {
+    ok: result.ok,
+    status: result.status,
+    error: result.ok ? undefined : redact(result.stderr || result.error || "todos mutation failed", 320),
+  };
+}
+
+function markInvalidDrainTaskNonRouteable(todosProject: string, task: TodosReadyTask, reason: string): Record<string, unknown> {
+  const taskId = taskField(task, ["id", "task_id", "taskId"]);
+  if (!taskId) return { attempted: false, reason: "task id missing" };
+  const comment = `OpenLoops route blocked for task ${taskId}: ${reason}. Added no-auto and removed auto:route so route drains do not repeatedly route this task until its project path is fixed.`;
+  const commentResult = runLocalCommand("todos", ["--project", todosProject, "comment", taskId, comment], { timeoutMs: 30_000 });
+  const tagResult = runLocalCommand("todos", ["--project", todosProject, "tag", taskId, "no-auto"], { timeoutMs: 30_000 });
+  const untagResult = runLocalCommand("todos", ["--project", todosProject, "untag", taskId, "auto:route"], { timeoutMs: 30_000 });
+  const ok = commentResult.ok && tagResult.ok && untagResult.ok;
+  return {
+    ok,
+    attempted: true,
+    taskId,
+    error: ok ? undefined : "one or more source task updates failed; inspect per-command results",
+    comment: todosMutationSummary(commentResult),
+    tagNoAuto: todosMutationSummary(tagResult),
+    untagAutoRoute: todosMutationSummary(untagResult),
+  };
 }
 
 interface RouteSandboxPreflight {
@@ -1131,6 +1681,31 @@ const TODOS_TASK_ROUTE_TEMPLATE_IDS = new Set([
   TASK_LIFECYCLE_TEMPLATE_ID,
 ]);
 
+const UNCLEARED_ROUTE_WORK_ITEM_STATUSES = new Set<WorkflowWorkItemStatus>([
+  "admitted",
+  "running",
+  "succeeded",
+  "failed",
+  "dead_letter",
+  "cancelled",
+]);
+
+function isUnclearedRouteWorkItem(item: { loopId?: string; status: WorkflowWorkItemStatus }): boolean {
+  return UNCLEARED_ROUTE_WORK_ITEM_STATUSES.has(item.status);
+}
+
+function isExistingGitProjectPath(path: string): boolean {
+  const result = spawnSync("git", ["-C", path, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" });
+  return result.status === 0;
+}
+
+function validateRequiredRouteWorktreeProjectPath(opts: { worktreeMode?: string }, projectPath: string): void {
+  if ((opts.worktreeMode ?? "auto") !== "required") return;
+  if (!isExistingGitProjectPath(projectPath)) {
+    throw new Error(`worktreeMode=required but projectPath is not an existing git repository: ${projectPath}`);
+  }
+}
+
 function todosTaskRouteTemplateId(opts: { template?: string }): string {
   const id = (opts.template ?? TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID).trim();
   if (!TODOS_TASK_ROUTE_TEMPLATE_IDS.has(id)) {
@@ -1196,8 +1771,8 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
     const store = new Store();
     try {
       const existingItem = store.findWorkflowWorkItem("todos-task", idempotencyKey);
-      if (existingItem?.loopId && ["admitted", "running", "succeeded"].includes(existingItem.status)) {
-        const existingLoop = store.getLoop(existingItem.loopId);
+      if (existingItem && isUnclearedRouteWorkItem(existingItem)) {
+        const existingLoop = existingItem.loopId ? store.getLoop(existingItem.loopId) : undefined;
         const existingWorkflow = existingItem.workflowId ? store.getWorkflow(existingItem.workflowId) : undefined;
         const existingInvocation = store.getWorkflowInvocation(existingItem.invocationId);
         return {
@@ -1219,11 +1794,27 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
       store.close();
     }
   }
-  const provider = (opts.provider ?? "codewith") as AgentProvider;
-  if (!["claude", "cursor", "codewith", "aicopilot", "opencode", "codex"].includes(provider)) throw new Error("unsupported provider");
+  validateRequiredRouteWorktreeProjectPath(opts, projectPath);
+  const prReviewRouting = prReviewRoutingDecision(data, metadata, opts);
+  if (prReviewRouting.required && !prReviewRouting.allowed) {
+    return {
+      kind: "skipped",
+      value: {
+        skipped: true,
+        reason: prReviewRouting.reason,
+        event,
+        taskId,
+        routeError: true,
+        prReviewRouting,
+      },
+      human: `skipped task ${taskId}: ${prReviewRouting.reason}`,
+    };
+  }
+  const providerRouting = resolveProviderRouting(data, metadata, opts);
+  const provider = providerRouting.provider;
   const permissionMode = permissionModeFromOpts({ permissionMode: opts.permissionMode ?? "bypass" }, provider);
   const sandbox = sandboxFromOpts({ sandbox: opts.sandbox }, provider);
-  const authProfile = providerAuthProfileFromOpts({ authProfile: opts.authProfile }, provider);
+  const authProfile = providerAuthProfileFromOpts({ authProfile: providerRouting.authProfile }, provider);
   const templateId = todosTaskRouteTemplateId(opts);
   const workflowInput = {
     taskId,
@@ -1234,13 +1825,13 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
     projectGroup,
     provider,
     authProfile,
-    authProfilePool: splitList(opts.authProfilePool),
+    authProfilePool: providerRouting.authProfilePool,
     triageAuthProfile: opts.triageAuthProfile,
     plannerAuthProfile: opts.plannerAuthProfile,
     workerAuthProfile: opts.workerAuthProfile,
     verifierAuthProfile: opts.verifierAuthProfile,
-    account: accountFromOpts(opts),
-    accountPool: accountPoolFromOpts(opts),
+    account: providerRouting.account,
+    accountPool: providerRouting.accountPool,
     triageAccount: roleAccountFromOpts(opts, opts.triageAccount),
     plannerAccount: roleAccountFromOpts(opts, opts.plannerAccount),
     workerAccount: roleAccountFromOpts(opts, opts.workerAccount),
@@ -1250,12 +1841,14 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
     agent: opts.agent,
     addDirs: listFromRepeatedOpts(opts.addDir),
     timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
+    verifierIdleTimeoutMs: idleTimeoutDuration(opts.verifierIdleTimeout, "--verifier-idle-timeout"),
     permissionMode,
     sandbox,
     manualBreakGlass: Boolean(opts.manualBreakGlass),
     worktreeMode: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
     worktreeRoot: opts.worktreeRoot,
     worktreeBranchPrefix: opts.worktreeBranchPrefix ?? "openloops",
+    prHandoff: templateId === TASK_LIFECYCLE_TEMPLATE_ID ? Boolean(opts.prHandoff) : false,
     eventId: event.id,
     eventType: event.type,
     todosProjectPath: opts.todosProject,
@@ -1297,7 +1890,10 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
       worktreePolicy: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
       permissions: permissionMode,
       manualBreakGlass: Boolean(opts.manualBreakGlass),
-      accountPolicy: opts.authProfilePool || opts.accountPool ? "pool" : hasExplicitRoleAccount ? "role-explicit" : "single",
+      prHandoff: templateId === TASK_LIFECYCLE_TEMPLATE_ID ? Boolean(opts.prHandoff) : false,
+      accountPolicy: providerRouting.authProfilePool?.length || providerRouting.accountPool?.length ? "pool" : hasExplicitRoleAccount ? "role-explicit" : "single",
+      providerRouting: providerRoutingPublic(providerRouting),
+      prReviewRouting: prReviewRouting.required ? prReviewRouting : undefined,
       concurrencyGroup: projectGroup ?? routeProjectPath,
     },
     outputPolicy: {
@@ -1340,7 +1936,7 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
       : undefined;
     return {
       kind: "created",
-      value: { deduped: false, idempotencyKey, event, invocation: invocationInput, workItem: workItemInput, workflow: workflowBody, loop: loopInput, throttle, sandboxPreflight, preflight },
+      value: { deduped: false, idempotencyKey, event, providerRouting: providerRoutingPublic(providerRouting), prReviewRouting: prReviewRouting.required ? prReviewRouting : undefined, invocation: invocationInput, workItem: workItemInput, workflow: workflowBody, loop: loopInput, throttle, sandboxPreflight, preflight },
       human: `dry-run ${loopName}`,
     };
   }
@@ -1358,8 +1954,8 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
     const outcome = store.writeTransaction(() => {
       const invocation = store.createWorkflowInvocation(invocationInput);
       const existingItem = store.findWorkflowWorkItem("todos-task", idempotencyKey);
-      if (existingItem?.loopId && ["admitted", "running", "succeeded"].includes(existingItem.status)) {
-        const existingLoop = store.getLoop(existingItem.loopId);
+      if (existingItem && isUnclearedRouteWorkItem(existingItem)) {
+        const existingLoop = existingItem.loopId ? store.getLoop(existingItem.loopId) : undefined;
         const existingWorkflow = existingItem.workflowId ? store.getWorkflow(existingItem.workflowId) : undefined;
         return { kind: "deduped" as const, existingItem, existingLoop, existingWorkflow, invocation };
       }
@@ -1372,6 +1968,13 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
         status: throttle && !throttle.allowed ? "deferred" : "queued",
         lastReason: throttle && !throttle.allowed ? throttle.reason : undefined,
       });
+      const requeue = workItem.attempts > 0 && workItem.status === "queued"
+        ? {
+            previousWorkItemId: workItem.id,
+            previousAttempts: workItem.attempts,
+            reason: workItem.lastReason,
+          }
+        : undefined;
       const refreshedInvocation = store.refreshWorkflowInvocationForWorkItem(workItem.id, invocationInput);
       if (throttle && !throttle.allowed) return { kind: "throttled" as const, invocation: refreshedInvocation, workItem, throttle };
       const workflow = routeWorkflowForStorage(store, workflowBody);
@@ -1387,7 +1990,17 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
         },
       });
       const admitted = store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id, reason: "admitted by todos-task route" });
-      return { kind: "created" as const, invocation: refreshedInvocation, workItem: admitted, workflow, loop, throttle };
+      return {
+        kind: "created" as const,
+        invocation: refreshedInvocation,
+        workItem: admitted,
+        workflow,
+        loop,
+        throttle,
+        requeue: requeue
+          ? { ...requeue, attempt: admitted.attempts, newWorkflowId: workflow.id, newLoopId: loop.id }
+          : undefined,
+      };
     });
     if (outcome.kind === "deduped") {
       return {
@@ -1416,6 +2029,8 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
           event,
           invocation: publicWorkflowInvocation(outcome.invocation),
           workItem: publicWorkflowWorkItem(outcome.workItem),
+          providerRouting: providerRoutingPublic(providerRouting),
+          prReviewRouting: prReviewRouting.required ? prReviewRouting : undefined,
           throttle: outcome.throttle,
           workflow: workflowBody,
           loop: loopInput,
@@ -1431,8 +2046,11 @@ function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions):
         event,
         invocation: publicWorkflowInvocation(outcome.invocation),
         workItem: publicWorkflowWorkItem(outcome.workItem),
+        providerRouting: providerRoutingPublic(providerRouting),
+        prReviewRouting: prReviewRouting.required ? prReviewRouting : undefined,
         workflow: publicWorkflow(outcome.workflow),
         loop: publicLoop(outcome.loop),
+        requeue: outcome.requeue,
         throttle: outcome.throttle,
         sandboxPreflight,
         preflight,
@@ -1461,11 +2079,11 @@ function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOptions): T
   const workflowName = `${opts.namePrefix ?? "event:generic"}:${source}:${type}:${eventSuffix}:workflow`;
   const loopName = `${opts.namePrefix ?? "event:generic"}:${source}:${type}:${eventSuffix}:run`;
   const idempotencyKey = `generic-event:${event.source}:${event.type}:${event.id}`;
-  const provider = (opts.provider ?? "codewith") as AgentProvider;
-  if (!["claude", "cursor", "codewith", "aicopilot", "opencode", "codex"].includes(provider)) throw new Error("unsupported provider");
+  const providerRouting = resolveProviderRouting(data, metadata, opts);
+  const provider = providerRouting.provider;
   const permissionMode = permissionModeFromOpts({ permissionMode: opts.permissionMode ?? "bypass" }, provider);
   const sandbox = sandboxFromOpts({ sandbox: opts.sandbox }, provider);
-  const authProfile = providerAuthProfileFromOpts({ authProfile: opts.authProfile }, provider);
+  const authProfile = providerAuthProfileFromOpts({ authProfile: providerRouting.authProfile }, provider);
   let workflowBody = renderEventWorkerVerifierWorkflow({
     eventId: event.id,
     eventType: event.type,
@@ -1478,11 +2096,11 @@ function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOptions): T
     projectGroup,
     provider,
     authProfile,
-    authProfilePool: splitList(opts.authProfilePool),
+    authProfilePool: providerRouting.authProfilePool,
     workerAuthProfile: opts.workerAuthProfile,
     verifierAuthProfile: opts.verifierAuthProfile,
-    account: accountFromOpts(opts),
-    accountPool: accountPoolFromOpts(opts),
+    account: providerRouting.account,
+    accountPool: providerRouting.accountPool,
     workerAccount: roleAccountFromOpts(opts, opts.workerAccount),
     verifierAccount: roleAccountFromOpts(opts, opts.verifierAccount),
     model: opts.model,
@@ -1490,6 +2108,7 @@ function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOptions): T
     agent: opts.agent,
     addDirs: listFromRepeatedOpts(opts.addDir),
     timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
+    verifierIdleTimeoutMs: idleTimeoutDuration(opts.verifierIdleTimeout, "--verifier-idle-timeout"),
     permissionMode,
     sandbox,
     manualBreakGlass: Boolean(opts.manualBreakGlass),
@@ -1505,6 +2124,7 @@ function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOptions): T
     event: event.id,
   });
   const sandboxPreflight = generatedRouteSandboxPreflight(workflowBody);
+  const hasExplicitRoleAccount = Boolean(opts.workerAuthProfile || opts.verifierAuthProfile || opts.workerAccount || opts.verifierAccount);
   const invocationInput = {
     templateId: "event-worker-verifier",
     sourceRef: {
@@ -1526,7 +2146,8 @@ function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOptions): T
       worktreePolicy: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
       permissions: permissionMode,
       manualBreakGlass: Boolean(opts.manualBreakGlass),
-      accountPolicy: opts.authProfilePool || opts.accountPool ? "pool" : "single",
+      accountPolicy: providerRouting.authProfilePool?.length || providerRouting.accountPool?.length ? "pool" : hasExplicitRoleAccount ? "role-explicit" : "single",
+      providerRouting: providerRoutingPublic(providerRouting),
       concurrencyGroup: projectGroup ?? routeProjectPath,
     },
     outputPolicy: {
@@ -1569,7 +2190,7 @@ function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOptions): T
       : undefined;
     return {
       kind: "created",
-      value: { event, idempotencyKey, invocation: invocationInput, workItem: workItemInput, workflow: workflowBody, loop: loopInput, throttle, sandboxPreflight, preflight },
+      value: { event, idempotencyKey, providerRouting: providerRoutingPublic(providerRouting), invocation: invocationInput, workItem: workItemInput, workflow: workflowBody, loop: loopInput, throttle, sandboxPreflight, preflight },
       human: `dry-run ${loopName}`,
     };
   }
@@ -1587,8 +2208,8 @@ function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOptions): T
     const outcome = store.writeTransaction(() => {
       const invocation = store.createWorkflowInvocation(invocationInput);
       const existingItem = store.findWorkflowWorkItem("generic-event", idempotencyKey);
-      if (existingItem?.loopId && ["admitted", "running", "succeeded"].includes(existingItem.status)) {
-        const existingLoop = store.getLoop(existingItem.loopId);
+      if (existingItem && isUnclearedRouteWorkItem(existingItem)) {
+        const existingLoop = existingItem.loopId ? store.getLoop(existingItem.loopId) : undefined;
         const existingWorkflow = existingItem.workflowId ? store.getWorkflow(existingItem.workflowId) : undefined;
         return { kind: "deduped" as const, existingItem, existingLoop, existingWorkflow, invocation };
       }
@@ -1601,6 +2222,13 @@ function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOptions): T
         status: throttle && !throttle.allowed ? "deferred" : "queued",
         lastReason: throttle && !throttle.allowed ? throttle.reason : undefined,
       });
+      const requeue = workItem.attempts > 0 && workItem.status === "queued"
+        ? {
+            previousWorkItemId: workItem.id,
+            previousAttempts: workItem.attempts,
+            reason: workItem.lastReason,
+          }
+        : undefined;
       const refreshedInvocation = store.refreshWorkflowInvocationForWorkItem(workItem.id, invocationInput);
       if (throttle && !throttle.allowed) return { kind: "throttled" as const, invocation: refreshedInvocation, workItem, throttle };
       const workflow = routeWorkflowForStorage(store, workflowBody);
@@ -1616,7 +2244,17 @@ function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOptions): T
         },
       });
       const admitted = store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id, reason: "admitted by generic-event route" });
-      return { kind: "created" as const, invocation: refreshedInvocation, workItem: admitted, workflow, loop, throttle };
+      return {
+        kind: "created" as const,
+        invocation: refreshedInvocation,
+        workItem: admitted,
+        workflow,
+        loop,
+        throttle,
+        requeue: requeue
+          ? { ...requeue, attempt: admitted.attempts, newWorkflowId: workflow.id, newLoopId: loop.id }
+          : undefined,
+      };
     });
     if (outcome.kind === "deduped") {
       return {
@@ -1626,6 +2264,7 @@ function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOptions): T
           idempotencyKey,
           dedupedBy: "work-item",
           event,
+          providerRouting: providerRoutingPublic(providerRouting),
           invocation: publicWorkflowInvocation(outcome.invocation),
           workItem: publicWorkflowWorkItem(outcome.existingItem),
           workflow: outcome.existingWorkflow ? publicWorkflow(outcome.existingWorkflow) : undefined,
@@ -1643,6 +2282,7 @@ function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOptions): T
           reason: outcome.throttle.reason,
           idempotencyKey,
           event,
+          providerRouting: providerRoutingPublic(providerRouting),
           invocation: publicWorkflowInvocation(outcome.invocation),
           workItem: publicWorkflowWorkItem(outcome.workItem),
           throttle: outcome.throttle,
@@ -1658,10 +2298,12 @@ function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOptions): T
         deduped: false,
         idempotencyKey,
         event,
+        providerRouting: providerRoutingPublic(providerRouting),
         invocation: publicWorkflowInvocation(outcome.invocation),
         workItem: publicWorkflowWorkItem(outcome.workItem),
         workflow: publicWorkflow(outcome.workflow),
         loop: publicLoop(outcome.loop),
+        requeue: outcome.requeue,
         throttle: outcome.throttle,
         sandboxPreflight,
         preflight,
@@ -1748,6 +2390,8 @@ function compactDrainResult(result: TodosTaskRoutePrint): Record<string, unknown
   const loop = objectField(value.loop) as Partial<Loop> | undefined;
   const workflow = objectField(value.workflow) as Partial<WorkflowSpec> | undefined;
   const throttle = objectField(value.throttle) as { reason?: string; allowed?: boolean } | undefined;
+  const requeue = objectField(value.requeue);
+  const providerRouting = objectField(value.providerRouting);
   return {
     kind: result.kind,
     taskId: event?.subject,
@@ -1758,6 +2402,8 @@ function compactDrainResult(result: TodosTaskRoutePrint): Record<string, unknown
     loopName: stringField(loop?.name),
     workflowId: stringField(workflow?.id),
     workflowName: stringField(workflow?.name),
+    providerRouting,
+    requeue,
     queuedAtSource: value.queuedAtSource,
   };
 }
@@ -2006,7 +2652,8 @@ function addRouteEventOptions(command: Command): Command {
     .option("--event-json <json>", "read event envelope JSON from this string instead of stdin/HASNA_EVENT_JSON")
     .option("--todos-project <path>", "todos storage project path for generated task commands", defaultLoopsProject())
     .option("--template <id>", "todos-task route workflow template: todos-task-worker-verifier or task-lifecycle", TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID)
-    .option("--provider <provider>", "agent provider", "codewith")
+    .option("--provider <provider>", "agent provider; defaults to codewith")
+    .option("--provider-rule <rule>", "task metadata provider routing rule field=value:provider[:profile1,profile2]; may be repeated", collectValues, [] as string[])
     .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
     .option("--auth-profile-pool <profiles>", "comma-separated provider-native auth profile pool")
     .option("--triage-auth-profile <profile>", "provider-native auth profile for triage step")
@@ -2025,6 +2672,7 @@ function addRouteEventOptions(command: Command): Command {
     .option("--agent <agent>", "provider-specific agent")
     .option("--add-dir <dir>", "additional writable directory for provider sandboxes; may be repeated or comma-separated", collectValues, [] as string[])
     .option("--timeout <duration>", "agent step timeout; use none/unlimited for no timeout")
+    .option("--verifier-idle-timeout <duration>", "verifier idle watchdog; use none/off to disable when an external heartbeat exists", "15m")
     .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
     .option("--sandbox <mode>", "provider sandbox")
     .option("--manual-break-glass", "allow danger-full-access in generated worker/verifier workflow metadata; for explicit operator emergency use only")
@@ -2036,6 +2684,9 @@ function addRouteEventOptions(command: Command): Command {
     .option("--worktree-mode <mode>", "worktree isolation mode: auto, required, off, or main", "auto")
     .option("--worktree-root <path>", "base directory for OpenLoops-managed git worktrees")
     .option("--worktree-branch-prefix <prefix>", "branch prefix for generated worktrees", "openloops")
+    .option("--pr-handoff", "for task-lifecycle routes, add a bounded PR handoff step after the worker")
+    .option("--github-reviewer <login>", "GitHub login expected to review/merge review-required PR routes; must differ from PR author")
+    .option("--github-reviewer-pool <logins>", "comma-separated GitHub logins eligible to review/merge review-required PR routes")
     .option("--name-prefix <prefix>", "workflow/loop name prefix")
     .option("--preflight", "check generated workflow steps before storing the workflow loop");
 }
@@ -2054,7 +2705,8 @@ function addTodosDrainOptions(command: Command, opts: { includeDryRun?: boolean;
     .option("--evidence-dir <path>", "write a JSON drain report to this directory")
     .option("--compact", "print compact JSON to stdout while preserving the full evidence file")
     .option("--template <id>", "todos-task route workflow template: todos-task-worker-verifier or task-lifecycle", TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID)
-    .option("--provider <provider>", "agent provider", "codewith")
+    .option("--provider <provider>", "agent provider; defaults to codewith")
+    .option("--provider-rule <rule>", "task metadata provider routing rule field=value:provider[:profile1,profile2]; may be repeated", collectValues, [] as string[])
     .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
     .option("--auth-profile-pool <profiles>", "comma-separated provider-native auth profile pool")
     .option("--triage-auth-profile <profile>", "provider-native auth profile for triage step")
@@ -2073,6 +2725,7 @@ function addTodosDrainOptions(command: Command, opts: { includeDryRun?: boolean;
     .option("--agent <agent>", "provider-specific agent")
     .option("--add-dir <dir>", "additional writable directory for provider sandboxes; may be repeated or comma-separated", collectValues, [] as string[])
     .option("--timeout <duration>", "agent step timeout; use none/unlimited for no timeout")
+    .option("--verifier-idle-timeout <duration>", "verifier idle watchdog; use none/off to disable when an external heartbeat exists", "15m")
     .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
     .option("--sandbox <mode>", "provider sandbox")
     .option("--manual-break-glass", "allow danger-full-access in generated worker/verifier workflow metadata; for explicit operator emergency use only")
@@ -2084,6 +2737,9 @@ function addTodosDrainOptions(command: Command, opts: { includeDryRun?: boolean;
     .option("--worktree-mode <mode>", "worktree isolation mode: auto, required, off, or main", "auto")
     .option("--worktree-root <path>", "base directory for OpenLoops-managed git worktrees")
     .option("--worktree-branch-prefix <prefix>", "branch prefix for generated task worktrees", "openloops")
+    .option("--pr-handoff", "for task-lifecycle routes, add a bounded PR handoff step after the worker")
+    .option("--github-reviewer <login>", "GitHub login expected to review/merge review-required PR routes; must differ from PR author")
+    .option("--github-reviewer-pool <logins>", "comma-separated GitHub logins eligible to review/merge review-required PR routes")
     .option("--name-prefix <prefix>", "workflow/loop name prefix", "event:todos-task")
     .option("--preflight", opts.preflightDescription ?? "check generated workflow steps before storing workflow loops");
   if (opts.includeDryRun ?? true) {
@@ -2118,6 +2774,7 @@ function routeDrainArgs(opts: TodosDrainOptions & { tag?: string }): string[] {
   addBool("--compact", opts.compact);
   add("--template", opts.template);
   add("--provider", opts.provider);
+  for (const rule of opts.providerRule ?? []) add("--provider-rule", rule);
   add("--auth-profile", opts.authProfile);
   add("--auth-profile-pool", opts.authProfilePool);
   add("--triage-auth-profile", opts.triageAuthProfile);
@@ -2136,6 +2793,7 @@ function routeDrainArgs(opts: TodosDrainOptions & { tag?: string }): string[] {
   add("--agent", opts.agent);
   for (const dir of listFromRepeatedOpts(opts.addDir) ?? []) add("--add-dir", dir);
   add("--timeout", opts.timeout);
+  add("--verifier-idle-timeout", opts.verifierIdleTimeout);
   add("--permission-mode", opts.permissionMode);
   add("--sandbox", opts.sandbox);
   addBool("--manual-break-glass", opts.manualBreakGlass);
@@ -2147,6 +2805,9 @@ function routeDrainArgs(opts: TodosDrainOptions & { tag?: string }): string[] {
   add("--worktree-mode", opts.worktreeMode);
   add("--worktree-root", opts.worktreeRoot);
   add("--worktree-branch-prefix", opts.worktreeBranchPrefix);
+  addBool("--pr-handoff", opts.prHandoff);
+  add("--github-reviewer", opts.githubReviewer);
+  add("--github-reviewer-pool", opts.githubReviewerPool);
   add("--name-prefix", opts.namePrefix);
   addBool("--preflight", opts.preflight);
   return args;
@@ -2181,7 +2842,10 @@ function drainTodosTaskRoutes(opts: TodosDrainOptions & { tag?: string }): void 
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (!isSkippableDrainRouteError(message)) throw error;
-      result = skippedDrainTask(task, event, redact(message, 640) ?? "route task failed");
+      const sourceTaskUpdate = opts.dryRun
+        ? { attempted: false, reason: "dry-run" }
+        : markInvalidDrainTaskNonRouteable(todosProject, task, message);
+      result = skippedDrainTask(task, event, redact(message, 640) ?? "route task failed", { sourceTaskUpdate });
     }
     results.push(result);
     if (result.kind === "created" && !opts.dryRun) created += 1;
@@ -2435,6 +3099,22 @@ routes
   });
 
 routes
+  .command("requeue <id>")
+  .description("requeue a terminal admission work item for the next task/event delivery")
+  .option("--reason <text>", "operator reason recorded on the work item")
+  .action((id, opts) => {
+    const store = new Store();
+    try {
+      const reason = stringField(opts.reason);
+      if (!reason) throw new Error("routes requeue requires --reason <text>");
+      const item = store.requeueWorkflowWorkItem(id, { reason });
+      print(publicWorkflowWorkItem(item), `requeued route work item ${item.id} (${item.routeKey})`);
+    } finally {
+      store.close();
+    }
+  });
+
+routes
   .command("invocations")
   .description("list workflow invocations")
   .option("--limit <n>", "maximum rows", "50")
@@ -2523,7 +3203,8 @@ eventsHandle
   .description("create a one-shot worker/verifier workflow loop for a todos task event")
   .option("--todos-project <path>", "todos storage project path for generated task commands", defaultLoopsProject())
   .option("--template <id>", "todos-task route workflow template: todos-task-worker-verifier or task-lifecycle", TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID)
-  .option("--provider <provider>", "agent provider", "codewith")
+  .option("--provider <provider>", "agent provider; defaults to codewith")
+  .option("--provider-rule <rule>", "task metadata provider routing rule field=value:provider[:profile1,profile2]; may be repeated", collectValues, [] as string[])
   .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
   .option("--auth-profile-pool <profiles>", "comma-separated provider-native auth profile pool")
   .option("--triage-auth-profile <profile>", "provider-native auth profile for triage step")
@@ -2542,6 +3223,7 @@ eventsHandle
   .option("--agent <agent>", "provider-specific agent")
   .option("--add-dir <dir>", "additional writable directory for provider sandboxes; may be repeated or comma-separated", collectValues, [] as string[])
   .option("--timeout <duration>", "agent step timeout; use none/unlimited for no timeout")
+  .option("--verifier-idle-timeout <duration>", "verifier idle watchdog; use none/off to disable when an external heartbeat exists", "15m")
   .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
   .option("--sandbox <mode>", "provider sandbox")
   .option("--manual-break-glass", "allow danger-full-access in generated worker/verifier workflow metadata; for explicit operator emergency use only")
@@ -2553,6 +3235,8 @@ eventsHandle
   .option("--worktree-mode <mode>", "worktree isolation mode: auto, required, off, or main", "auto")
   .option("--worktree-root <path>", "base directory for OpenLoops-managed git worktrees")
   .option("--worktree-branch-prefix <prefix>", "branch prefix for generated task worktrees", "openloops")
+  .option("--github-reviewer <login>", "GitHub login expected to review/merge review-required PR routes; must differ from PR author")
+  .option("--github-reviewer-pool <logins>", "comma-separated GitHub logins eligible to review/merge review-required PR routes")
   .option("--name-prefix <prefix>", "workflow/loop name prefix", "event:todos-task")
   .option("--preflight", "check generated workflow steps before storing the workflow loop")
   .option("--dry-run", "print the workflow and loop input without storing anything")
@@ -2576,6 +3260,7 @@ eventsHandle
   .command("generic")
   .description("create a one-shot worker/verifier workflow loop for any Hasna event")
   .option("--provider <provider>", "agent provider", "codewith")
+  .option("--provider-rule <rule>", "event metadata provider routing rule field=value:provider[:profile1,profile2]; may be repeated", collectValues, [] as string[])
   .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
   .option("--auth-profile-pool <profiles>", "comma-separated provider-native auth profile pool")
   .option("--worker-auth-profile <profile>", "provider-native auth profile for worker step")
@@ -2590,6 +3275,7 @@ eventsHandle
   .option("--agent <agent>", "provider-specific agent")
   .option("--add-dir <dir>", "additional writable directory for provider sandboxes; may be repeated or comma-separated", collectValues, [] as string[])
   .option("--timeout <duration>", "agent step timeout; use none/unlimited for no timeout")
+  .option("--verifier-idle-timeout <duration>", "verifier idle watchdog; use none/off to disable when an external heartbeat exists", "15m")
   .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
   .option("--sandbox <mode>", "provider sandbox")
   .option("--manual-break-glass", "allow danger-full-access in generated worker/verifier workflow metadata; for explicit operator emergency use only")
@@ -2976,7 +3662,7 @@ program
         for (const loop of loops) {
           const machine = loop.machine ? `  machine=${loop.machine.id}` : "";
           const archive = loop.archivedAt ? `  archived=${loop.archivedAt} from=${loop.archivedFromStatus ?? "-"}` : "";
-          console.log(`${loop.id}  ${loop.status.padEnd(7)}  next=${loop.nextRunAt ?? "-"}  ${loop.name}${machine}${archive}`);
+          console.log(`${loop.id}  ${loop.status.padEnd(7)}  cadence=${scheduleLabel(loop.schedule)}  next=${loop.nextRunAt ?? "-"}  ${loop.name}${machine}${archive}`);
         }
       }
     } finally {

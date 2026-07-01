@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { Store } from "../lib/store.js";
 
@@ -41,6 +42,18 @@ function createGitRepo(prefix: string): string {
   git(repo, ["add", "README.md"]);
   git(repo, ["commit", "-m", "init"]);
   return repo;
+}
+
+type TestWorkflowStep = { id?: string; target: Record<string, any>; [key: string]: any };
+
+function agentStepsOf(workflow: { steps: TestWorkflowStep[] }): TestWorkflowStep[] {
+  return workflow.steps.filter((step) => step.target.type === "agent");
+}
+
+function authProfilesOf(workflow: { steps: TestWorkflowStep[] }): string[] {
+  return agentStepsOf(workflow)
+    .map((step) => step.target.authProfile as string | undefined)
+    .filter((profile: string | undefined): profile is string => Boolean(profile));
 }
 
 describe("loops CLI", () => {
@@ -309,6 +322,46 @@ describe("loops CLI", () => {
     expect(show.status).toBe(0);
   });
 
+  test("hygiene names removes cadence suffixes from canonical loop names", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-hygiene-names-cadence-"));
+    const createInterval = runCli(dataDir, [
+      "create",
+      "command",
+      "machine-loop-health-slo-5m",
+      "--every",
+      "5m",
+      "--cmd",
+      "true",
+    ]);
+    expect(createInterval.status).toBe(0);
+
+    const createDaily = runCli(dataDir, [
+      "create",
+      "command",
+      "ops:codewith:account001:repo-health-daily",
+      "--every",
+      "1d",
+      "--cmd",
+      "true",
+    ]);
+    expect(createDaily.status).toBe(0);
+
+    const report = runCli(dataDir, ["--json", "hygiene", "names"]);
+
+    expect(report.status).toBe(1);
+    const value = JSON.parse(report.stdout);
+    expect(value.changes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        oldName: "machine-loop-health-slo-5m",
+        newName: "machine-loop-health-slo",
+      }),
+      expect.objectContaining({
+        oldName: "ops:codewith:account001:repo-health-daily",
+        newName: "machine-ops-repo-health",
+      }),
+    ]));
+  });
+
   test("hygiene names apply backs up the database before renaming loops", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-hygiene-names-apply-"));
     const create = runCli(dataDir, [
@@ -359,6 +412,46 @@ describe("loops CLI", () => {
     expect(value.applied).toBe(true);
     expect(value.changed).toBe(0);
     expect(value.backupPath).toBeUndefined();
+  });
+
+  test("created loops get default descriptions and human list cadence", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-description-cadence-"));
+    const created = runCli(dataDir, [
+      "--json",
+      "create",
+      "command",
+      "machine-report",
+      "--every",
+      "5m",
+      "--cmd",
+      "true",
+    ]);
+    expect(created.status).toBe(0);
+    const value = JSON.parse(created.stdout);
+    expect(value.description).toContain("Why:");
+    expect(value.description).toContain("How:");
+    expect(value.description).toContain("Outcome:");
+    expect(value.description).toContain("cadence every:5m");
+
+    const explicit = runCli(dataDir, [
+      "--json",
+      "create",
+      "command",
+      "machine-explicit",
+      "--every",
+      "1h",
+      "--cmd",
+      "true",
+      "--description",
+      "Custom operator description.",
+    ]);
+    expect(explicit.status).toBe(0);
+    expect(JSON.parse(explicit.stdout).description).toBe("Custom operator description.");
+
+    const list = runCli(dataDir, ["list"]);
+    expect(list.status).toBe(0);
+    expect(list.stdout).toContain("cadence=every:5m");
+    expect(list.stdout).toContain("cadence=every:1h");
   });
 
   test("rename changes only the loop name and writes a backup", () => {
@@ -1333,6 +1426,197 @@ describe("loops CLI", () => {
     );
   });
 
+  test("health JSON reports functional route blockers even when latest drain run succeeded", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-health-route-functional-"));
+    const evidenceDir = join(dataDir, "evidence");
+    mkdirSync(evidenceDir, { recursive: true });
+    const evidencePath = join(evidenceDir, "route-drain.json");
+    writeFileSync(evidencePath, JSON.stringify({
+      results: [
+        {
+          kind: "created",
+          event: {
+            subject: "task-route-blocked",
+            data: {
+              id: "task-route-blocked",
+              status: "pending",
+              tags: ["auto:route", "blocked"],
+            },
+          },
+          loop: { id: "child-loop-route-blocked" },
+          idempotencyKey: "todos-task:task-route-blocked",
+        },
+      ],
+    }));
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      const loop = store.createLoop({
+        name: "machine-oss-task-lifecycle-router",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "loops", args: ["events", "drain", "todos-task", "--json", "--compact"] },
+      });
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "seed", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      store.finalizeRun(
+        claim!.run.id,
+        {
+          status: "succeeded",
+          finishedAt: "2026-01-01T00:00:01.000Z",
+          durationMs: 1_000,
+          stdout: JSON.stringify({ created: 1, skipped: 0, evidencePath }),
+          stderr: "",
+          exitCode: 0,
+        },
+        { claimedBy: "seed", now: new Date("2026-01-01T00:00:00.500Z") },
+      );
+    } finally {
+      store.close();
+    }
+
+    const health = runCli(dataDir, ["health", "--json"]);
+    expect(health.status).toBe(1);
+    const value = JSON.parse(health.stdout);
+    expect(value.ok).toBe(false);
+    expect(value.summary.unhealthy).toBe(1);
+    expect(value.classifications.route_functional).toBe(1);
+    expect(value.expectations[0].check.id).toBe("route-functional-health");
+    expect(value.expectations[0].failure.classification).toBe("route_functional");
+    expect(value.expectations[0].failure.evidence.error).toContain("disallowed tag blocked");
+    expect(value.expectations[0].recommendedTask.tags).toContain("route_functional");
+    const firstDedupeKey = value.expectations[0].recommendedTask.dedupeKey;
+
+    const laterStore = new Store(join(dataDir, "loops.db"));
+    try {
+      const loop = laterStore.requireLoop("machine-oss-task-lifecycle-router");
+      const claim = laterStore.claimRun(loop, "2026-01-01T00:01:00.000Z", "seed", new Date("2026-01-01T00:01:00Z"));
+      expect(claim).toBeDefined();
+      laterStore.finalizeRun(
+        claim!.run.id,
+        {
+          status: "succeeded",
+          finishedAt: "2026-01-01T00:01:01.000Z",
+          durationMs: 1_000,
+          stdout: JSON.stringify({ created: 1, skipped: 0, evidencePath }),
+          stderr: "",
+          exitCode: 0,
+        },
+        { claimedBy: "seed", now: new Date("2026-01-01T00:01:00.500Z") },
+      );
+    } finally {
+      laterStore.close();
+    }
+
+    const laterHealth = runCli(dataDir, ["health", "--json"]);
+    expect(laterHealth.status).toBe(1);
+    const laterValue = JSON.parse(laterHealth.stdout);
+    expect(laterValue.expectations[0].latestRun.id).not.toBe(value.expectations[0].latestRun.id);
+    expect(laterValue.expectations[0].recommendedTask.dedupeKey).toBe(firstDedupeKey);
+  });
+
+  test("health JSON flags skipped route source task update failures", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-health-route-source-update-"));
+    const evidenceDir = join(dataDir, "evidence");
+    mkdirSync(evidenceDir, { recursive: true });
+    const evidencePath = join(evidenceDir, "route-drain.json");
+    writeFileSync(evidencePath, JSON.stringify({
+      results: [
+        {
+          kind: "skipped",
+          reason: "invalid project path /tmp/missing",
+          event: {
+            subject: "task-route-invalid-path",
+            data: {
+              id: "task-route-invalid-path",
+              status: "pending",
+              tags: ["auto:route"],
+            },
+          },
+          sourceTaskUpdate: {
+            ok: false,
+            error: "source task updates failed: tagNoAuto failed",
+            tagNoAuto: { ok: false },
+            untagAutoRoute: { ok: true },
+          },
+        },
+      ],
+    }));
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      const loop = store.createLoop({
+        name: "machine-oss-task-lifecycle-router",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "loops", args: ["events", "drain", "todos-task", "--json", "--compact"] },
+      });
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "seed", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      store.finalizeRun(
+        claim!.run.id,
+        {
+          status: "succeeded",
+          finishedAt: "2026-01-01T00:00:01.000Z",
+          durationMs: 1_000,
+          stdout: JSON.stringify({ created: 0, skipped: 1, evidencePath }),
+          stderr: "",
+          exitCode: 0,
+        },
+        { claimedBy: "seed", now: new Date("2026-01-01T00:00:00.500Z") },
+      );
+    } finally {
+      store.close();
+    }
+
+    const health = runCli(dataDir, ["health", "--json"]);
+    expect(health.status).toBe(1);
+    const value = JSON.parse(health.stdout);
+    expect(value.expectations[0].failure.classification).toBe("route_functional");
+    expect(value.expectations[0].failure.evidence.error).toContain("failed to update source task");
+  });
+
+  test("health JSON does not treat unrelated successful result arrays as route blockers", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-health-route-functional-scope-"));
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      const loop = store.createLoop({
+        name: "successful-json-report",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "reporter", args: ["--json"] },
+      });
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "seed", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      store.finalizeRun(
+        claim!.run.id,
+        {
+          status: "succeeded",
+          finishedAt: "2026-01-01T00:00:01.000Z",
+          durationMs: 1_000,
+          stdout: JSON.stringify({
+            results: [
+              {
+                kind: "created",
+                event: {
+                  subject: "unrelated-blocked-record",
+                  data: { tags: ["blocked"], status: "blocked" },
+                },
+              },
+            ],
+          }),
+          stderr: "",
+          exitCode: 0,
+        },
+        { claimedBy: "seed", now: new Date("2026-01-01T00:00:00.500Z") },
+      );
+    } finally {
+      store.close();
+    }
+
+    const health = runCli(dataDir, ["health", "--json"]);
+    expect(health.status).toBe(0);
+    const value = JSON.parse(health.stdout);
+    expect(value.ok).toBe(true);
+    expect(value.classifications.route_functional).toBe(0);
+    expect(value.expectations[0].check.id).toBe("latest-run-succeeded");
+  });
+
   test("health route-tasks dry-run reports deduped task upserts without mutating todos", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-health-route-dry-run-"));
     const evidenceDir = join(dataDir, "evidence");
@@ -1699,8 +1983,15 @@ describe("loops CLI", () => {
     expect(render.status).toBe(0);
     const workflow = JSON.parse(render.stdout);
     expect(workflow.name).toContain("task-123");
-    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["worker", "verifier"]);
+    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
     expect(workflow.steps[0].target).toMatchObject({
+      type: "command",
+      command: "bash",
+      cwd: "/tmp/repo",
+    });
+    expect(workflow.steps[0].target.args.join("\n")).toContain("todos --project '/tmp/todos-store' --json inspect 'task-12345678'");
+    expect(workflow.steps[1].dependsOn).toEqual(["source-task-gate"]);
+    expect(workflow.steps[1].target).toMatchObject({
       type: "agent",
       provider: "codewith",
       cwd: "/tmp/repo",
@@ -1709,17 +2000,32 @@ describe("loops CLI", () => {
       sandbox: "workspace-write",
       addDirs: ["/tmp/todos-store", "/tmp/loops-store"],
     });
-    expect(workflow.steps[0].target.prompt).toContain("[redacted");
     expect(workflow.steps[1].target.prompt).toContain("[redacted");
+    expect(workflow.steps[2].target.prompt).toContain("[redacted");
     expect(render.stdout).not.toContain("Do not dispatch or paste prompts into tmux panes");
-    expect(render.stdout).not.toContain("todos --project /tmp/todos-store inspect task-12345678");
-    expect(workflow.steps[1].target.addDirs).toEqual(["/tmp/todos-store", "/tmp/loops-store"]);
-    expect(workflow.steps[0].target.timeoutMs).toBeNull();
-    expect(workflow.steps[0].timeoutMs).toBeNull();
+    expect(workflow.steps[2].target.addDirs).toEqual(["/tmp/todos-store", "/tmp/loops-store"]);
     expect(workflow.steps[1].target.timeoutMs).toBeNull();
     expect(workflow.steps[1].timeoutMs).toBeNull();
-    expect(workflow.steps[1].target.idleTimeoutMs).toBeUndefined();
-    expect(workflow.steps[1].dependsOn).toEqual(["worker"]);
+    expect(workflow.steps[2].target.timeoutMs).toBeNull();
+    expect(workflow.steps[2].timeoutMs).toBeNull();
+    expect(workflow.steps[2].target.idleTimeoutMs).toBe(900_000);
+    expect(workflow.steps[2].dependsOn).toEqual(["worker"]);
+
+    const noIdleRender = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "todos-task-worker-verifier",
+      "--var",
+      "taskId=task-no-idle-12345678",
+      "--var",
+      "projectPath=/tmp/repo",
+      "--var",
+      "verifierIdleTimeoutMs=none",
+    ]);
+    expect(noIdleRender.status).toBe(0);
+    const noIdleWorkflow = JSON.parse(noIdleRender.stdout);
+    expect(noIdleWorkflow.steps.find((step: { id: string }) => step.id === "verifier").target.idleTimeoutMs).toBeUndefined();
 
     const finiteRender = runCli(dataDir, [
       "--json",
@@ -1737,8 +2043,8 @@ describe("loops CLI", () => {
     ]);
     expect(finiteRender.status).toBe(0);
     const finiteWorkflow = JSON.parse(finiteRender.stdout);
-    expect(finiteWorkflow.steps[0].timeoutMs).toBe(600_000);
     expect(finiteWorkflow.steps[1].timeoutMs).toBe(600_000);
+    expect(finiteWorkflow.steps[2].timeoutMs).toBe(600_000);
   });
 
   test("templates fail closed for danger-full-access unless manual break-glass is explicit", () => {
@@ -1778,8 +2084,8 @@ describe("loops CLI", () => {
     ]);
     expect(allowed.status).toBe(0);
     const workflow = JSON.parse(allowed.stdout);
-    expect(workflow.steps[0].target.sandbox).toBe("danger-full-access");
-    expect(workflow.steps[0].target.allowlist.commands).toContain("manual-break-glass");
+    expect(workflow.steps[1].target.sandbox).toBe("danger-full-access");
+    expect(workflow.steps[1].target.allowlist.commands).toContain("manual-break-glass");
   });
 
   test("templates render lifecycle and deterministic producer workflows", () => {
@@ -1815,7 +2121,7 @@ describe("loops CLI", () => {
     expect(prWorkflow.steps[1].target.worktree.mode).toBe("required");
     expect(prWorkflow.steps[1].timeoutMs).toBeNull();
     expect(prWorkflow.steps[2].timeoutMs).toBeNull();
-    expect(prWorkflow.steps[2].target.idleTimeoutMs).toBeUndefined();
+    expect(prWorkflow.steps[2].target.idleTimeoutMs).toBe(900_000);
 
     const lifecycle = runCli(dataDir, [
       "--json",
@@ -2251,7 +2557,7 @@ describe("loops CLI", () => {
     expect(render.status).toBe(0);
     const workflow = JSON.parse(render.stdout);
     expect(workflow.name).toContain("todos-task-task-col");
-    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["worker", "verifier"]);
+    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
   });
 
   test("templates select different worker and verifier auth profiles from a pool", () => {
@@ -2273,7 +2579,9 @@ describe("loops CLI", () => {
 
     expect(render.status).toBe(0);
     const workflow = JSON.parse(render.stdout);
-    const profiles = workflow.steps.map((step: { target: { authProfile?: string } }) => step.target.authProfile);
+    const profiles = workflow.steps
+      .map((step: { target: { authProfile?: string } }) => step.target.authProfile)
+      .filter((profile: string | undefined): profile is string => Boolean(profile));
     expect(profiles).toHaveLength(2);
     expect(new Set(profiles).size).toBe(2);
     expect(profiles.every((profile: string) => ["account004", "account005", "account006"].includes(profile))).toBe(true);
@@ -2304,22 +2612,22 @@ describe("loops CLI", () => {
 
     expect(render.status).toBe(0);
     const workflow = JSON.parse(render.stdout);
-    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["prepare-worktree", "worker", "verifier"]);
+    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["prepare-worktree", "source-task-gate", "worker", "verifier"]);
     expect(workflow.steps[0].target).toMatchObject({ type: "command", command: "bash", cwd: repo });
     expect(workflow.steps[1].dependsOn).toEqual(["prepare-worktree"]);
-    expect(workflow.steps[1].target.cwd).toContain(worktreeRoot);
-    expect(workflow.steps[1].target.worktree).toMatchObject({
+    expect(workflow.steps[2].dependsOn).toEqual(["source-task-gate"]);
+    expect(workflow.steps[2].target.cwd).toContain(worktreeRoot);
+    expect(workflow.steps[2].target.worktree).toMatchObject({
       mode: "auto",
       enabled: true,
       originalCwd: repo,
       repoRoot: repo,
       root: worktreeRoot,
     });
-    expect(workflow.steps[1].target.addDirs).toEqual([join(dataDir, "todos-store"), join(repo, ".git")]);
     expect(workflow.steps[2].target.addDirs).toEqual([join(dataDir, "todos-store"), join(repo, ".git")]);
-    expect(workflow.steps[1].target.worktree.branch).toContain("openloops/");
-    expect(workflow.steps[2].target.cwd).toBe(workflow.steps[1].target.cwd);
-    expect(workflow.steps[1].target.prompt).toContain("[redacted");
+    expect(workflow.steps[2].target.worktree.branch).toContain("openloops/");
+    expect(workflow.steps[3].target.cwd).toBe(workflow.steps[2].target.cwd);
+    expect(workflow.steps[2].target.prompt).toContain("[redacted");
     expect(render.stdout).not.toContain("Use the isolated git worktree");
     expect(render.stdout).not.toContain("Do not mutate the original checkout/main branch");
   });
@@ -2343,7 +2651,7 @@ describe("loops CLI", () => {
 
     expect(render.status).toBe(0);
     const workflow = JSON.parse(render.stdout);
-    const stalePath = workflow.steps[1].target.worktree.path;
+    const stalePath = workflow.steps[2].target.worktree.path;
     mkdirSync(stalePath, { recursive: true });
     git(stalePath, ["init"]);
     git(stalePath, ["config", "user.email", "loops-test@example.com"]);
@@ -2359,6 +2667,128 @@ describe("loops CLI", () => {
 
     expect(prepare.status).not.toBe(0);
     expect(prepare.stderr).toContain("different git common dir");
+  });
+
+  test("prepare-worktree reuses an existing worktree only on the expected branch", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-existing-worktree-"));
+    const repo = createGitRepo("loops-cli-template-existing-worktree-repo-");
+    const worktreeRoot = join(dataDir, "worktrees");
+    const render = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "todos-task-worker-verifier",
+      "--var",
+      "taskId=task-existing-worktree",
+      "--var",
+      `projectPath=${repo}`,
+      "--var",
+      `worktreeRoot=${worktreeRoot}`,
+    ]);
+
+    expect(render.status).toBe(0);
+    const workflow = JSON.parse(render.stdout);
+    const prepareScript = workflow.steps[0].target.args[1];
+    const worktree = workflow.steps[2].target.worktree;
+
+    const first = spawnSync("bash", ["-lc", prepareScript], {
+      cwd: workflow.steps[0].target.cwd,
+      encoding: "utf8",
+    });
+    expect(first.status).toBe(0);
+    expect(first.stdout).toContain("prepared worktree");
+    const markerPath = join(worktree.path, "untracked-marker.txt");
+    writeFileSync(markerPath, "preserve me\n");
+
+    const branch = spawnSync("git", ["-C", worktree.path, "branch", "--show-current"], { encoding: "utf8" });
+    expect(branch.status).toBe(0);
+    expect(branch.stdout.trim()).toBe(worktree.branch);
+
+    const second = spawnSync("bash", ["-lc", prepareScript], {
+      cwd: workflow.steps[0].target.cwd,
+      encoding: "utf8",
+    });
+    expect(second.status).toBe(0);
+    expect(second.stdout).toContain(`existing worktree ${worktree.path} branch ${worktree.branch}`);
+    expect(readFileSync(markerPath, "utf8")).toBe("preserve me\n");
+  });
+
+  test("prepare-worktree refuses a detached existing worktree", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-detached-worktree-"));
+    const repo = createGitRepo("loops-cli-template-detached-worktree-repo-");
+    const worktreeRoot = join(dataDir, "worktrees");
+    const render = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "todos-task-worker-verifier",
+      "--var",
+      "taskId=task-detached-worktree",
+      "--var",
+      `projectPath=${repo}`,
+      "--var",
+      `worktreeRoot=${worktreeRoot}`,
+    ]);
+
+    expect(render.status).toBe(0);
+    const workflow = JSON.parse(render.stdout);
+    const prepareScript = workflow.steps[0].target.args[1];
+    const worktree = workflow.steps[2].target.worktree;
+
+    const first = spawnSync("bash", ["-lc", prepareScript], {
+      cwd: workflow.steps[0].target.cwd,
+      encoding: "utf8",
+    });
+    expect(first.status).toBe(0);
+    const head = spawnSync("git", ["-C", worktree.path, "rev-parse", "HEAD"], { encoding: "utf8" });
+    expect(head.status).toBe(0);
+    git(worktree.path, ["checkout", "--detach", head.stdout.trim()]);
+
+    const second = spawnSync("bash", ["-lc", prepareScript], {
+      cwd: workflow.steps[0].target.cwd,
+      encoding: "utf8",
+    });
+    expect(second.status).not.toBe(0);
+    expect(second.stderr).toContain(`existing worktree ${worktree.path} is on branch`);
+    expect(second.stderr).toContain(`expected ${worktree.branch}`);
+  });
+
+  test("prepare-worktree refuses an existing worktree on an unexpected branch", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-unexpected-branch-worktree-"));
+    const repo = createGitRepo("loops-cli-template-unexpected-branch-worktree-repo-");
+    const worktreeRoot = join(dataDir, "worktrees");
+    const render = runCli(dataDir, [
+      "--json",
+      "templates",
+      "render",
+      "todos-task-worker-verifier",
+      "--var",
+      "taskId=task-unexpected-branch-worktree",
+      "--var",
+      `projectPath=${repo}`,
+      "--var",
+      `worktreeRoot=${worktreeRoot}`,
+    ]);
+
+    expect(render.status).toBe(0);
+    const workflow = JSON.parse(render.stdout);
+    const prepareScript = workflow.steps[0].target.args[1];
+    const worktree = workflow.steps[2].target.worktree;
+
+    const first = spawnSync("bash", ["-lc", prepareScript], {
+      cwd: workflow.steps[0].target.cwd,
+      encoding: "utf8",
+    });
+    expect(first.status).toBe(0);
+    git(worktree.path, ["checkout", "-b", "unexpected-openloops-branch"]);
+
+    const second = spawnSync("bash", ["-lc", prepareScript], {
+      cwd: workflow.steps[0].target.cwd,
+      encoding: "utf8",
+    });
+    expect(second.status).not.toBe(0);
+    expect(second.stderr).toContain("unexpected-openloops-branch");
+    expect(second.stderr).toContain(`expected ${worktree.branch}`);
   });
 
   test("templates allow explicit main checkout mode instead of worktrees", () => {
@@ -2379,9 +2809,9 @@ describe("loops CLI", () => {
 
     expect(render.status).toBe(0);
     const workflow = JSON.parse(render.stdout);
-    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["worker", "verifier"]);
-    expect(workflow.steps[0].target.cwd).toBe(repo);
-    expect(workflow.steps[0].target.worktree).toMatchObject({
+    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
+    expect(workflow.steps[1].target.cwd).toBe(repo);
+    expect(workflow.steps[1].target.worktree).toMatchObject({
       mode: "main",
       enabled: false,
       cwd: repo,
@@ -2594,6 +3024,8 @@ describe("loops CLI", () => {
       "bypass",
       "--timeout",
       "10m",
+      "--verifier-idle-timeout",
+      "2m",
     ];
 
     const first = runCli(dataDir, args, JSON.stringify(event));
@@ -2601,13 +3033,16 @@ describe("loops CLI", () => {
     const firstValue = JSON.parse(first.stdout);
     expect(firstValue.deduped).toBe(false);
     expect(firstValue.idempotencyKey).toBe("todos-task:task-created-0001");
-    expect(firstValue.workflow.steps).toHaveLength(2);
+    expect(firstValue.workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
     expect(firstValue.loop.name).toContain("event:todos-task:task-cre:");
     expect(firstValue.loop.name).not.toContain("evt-task");
     expect(firstValue.loop.target.workflowId).toBe(firstValue.workflow.id);
-    const routedProfiles = firstValue.workflow.steps.map((step: { target: { authProfile?: string } }) => step.target.authProfile);
+    const routedProfiles = firstValue.workflow.steps
+      .map((step: { target: { authProfile?: string } }) => step.target.authProfile)
+      .filter((profile: string | undefined): profile is string => Boolean(profile));
     expect(new Set(routedProfiles).size).toBe(2);
-    for (const step of firstValue.workflow.steps) {
+    const agentSteps = firstValue.workflow.steps.filter((step: { target: { type?: string } }) => step.target.type === "agent");
+    for (const step of agentSteps) {
       expect(step.target).toMatchObject({
         type: "agent",
         provider: "codewith",
@@ -2620,6 +3055,8 @@ describe("loops CLI", () => {
       expect(step.target.timeoutMs).toBe(600_000);
       expect(["account004", "account005", "account006"]).toContain(step.target.authProfile);
     }
+    const verifierStep = firstValue.workflow.steps.find((step: { id: string }) => step.id === "verifier");
+    expect(verifierStep.target.idleTimeoutMs).toBe(120_000);
 
     const second = runCli(dataDir, args, JSON.stringify(replayedEvent));
     expect(second.status).toBe(0);
@@ -2627,6 +3064,433 @@ describe("loops CLI", () => {
     expect(secondValue.deduped).toBe(true);
     expect(secondValue.idempotencyKey).toBe(firstValue.idempotencyKey);
     expect(secondValue.loop.id).toBe(firstValue.loop.id);
+  });
+
+  test("todos task event handler selects provider and account pools from metadata hints", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-provider-metadata-"));
+    const repo = createGitRepo("loops-cli-event-provider-metadata-repo-");
+    const event = {
+      id: "evt-task-created-provider-metadata",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-provider-metadata",
+        title: "Route frontend task with metadata",
+        working_dir: repo,
+      },
+      metadata: {
+        route_enabled: true,
+        provider_hint: "claude",
+        auth_profile_pool: "claude-ui-a,claude-ui-b",
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const result = runCli(dataDir, [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--dry-run",
+      "--worktree-mode",
+      "required",
+      "--worktree-root",
+      join(dataDir, "worktrees"),
+    ], JSON.stringify(event));
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.providerRouting).toMatchObject({
+      provider: "claude",
+      source: "metadata",
+      reason: "selected provider from task metadata",
+    });
+    expect(value.invocation.scope.providerRouting.provider).toBe("claude");
+    expect(value.invocation.scope.accountPolicy).toBe("pool");
+    const worker = value.workflow.steps.find((step: { id: string }) => step.id === "worker");
+    const verifier = value.workflow.steps.find((step: { id: string }) => step.id === "verifier");
+    expect(worker.target.provider).toBe("claude");
+    expect(verifier.target.provider).toBe("claude");
+    expect(worker.target.account.tool).toBe("claude");
+    expect(verifier.target.account.tool).toBe("claude");
+    expect(["claude-ui-a", "claude-ui-b"]).toContain(worker.target.account.profile);
+    expect(["claude-ui-a", "claude-ui-b"]).toContain(verifier.target.account.profile);
+    expect(worker.target.account.profile).not.toBe(verifier.target.account.profile);
+  });
+
+  test("todos task provider rules fall back to fixed Codewith pools and reject invalid hints", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-provider-fallback-"));
+    const event = {
+      id: "evt-task-created-provider-fallback",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-provider-fallback",
+        title: "Route backend task with fallback",
+        working_dir: "/tmp/open-loops",
+        tags: ["auto:route"],
+      },
+      metadata: {
+        area: "backend",
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const fallback = runCli(dataDir, [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--dry-run",
+      "--provider-rule",
+      "area=frontend:claude:claude-ui-a,claude-ui-b",
+      "--auth-profile-pool",
+      "account004,account005",
+      "--sandbox",
+      "workspace-write",
+      "--worktree-mode",
+      "off",
+    ], JSON.stringify(event));
+
+    expect(fallback.status).toBe(0);
+    const fallbackValue = JSON.parse(fallback.stdout);
+    expect(fallbackValue.providerRouting.provider).toBe("codewith");
+    expect(fallbackValue.providerRouting.authProfilePool).toEqual(["account004", "account005"]);
+    expect(agentStepsOf(fallbackValue.workflow)[0].target.provider).toBe("codewith");
+    expect(new Set(authProfilesOf(fallbackValue.workflow)).size).toBe(2);
+
+    const explicitProvider = runCli(dataDir, [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--dry-run",
+      "--provider",
+      "codewith",
+      "--auth-profile-pool",
+      "account004,account005",
+      "--sandbox",
+      "workspace-write",
+      "--worktree-mode",
+      "off",
+    ], JSON.stringify({
+      ...event,
+      id: "evt-task-created-provider-explicit",
+      metadata: { ...event.metadata, provider_hint: "claude", account_pool: "claude-ui-a,claude-ui-b" },
+    }));
+
+    expect(explicitProvider.status).toBe(0);
+    const explicitValue = JSON.parse(explicitProvider.stdout);
+    expect(explicitValue.providerRouting.provider).toBe("codewith");
+    expect(explicitValue.providerRouting.source).toBe("option");
+    expect(agentStepsOf(explicitValue.workflow)[0].target.provider).toBe("codewith");
+    expect(agentStepsOf(explicitValue.workflow)[0].target.account).toBeUndefined();
+    expect(agentStepsOf(explicitValue.workflow)[1].target.account).toBeUndefined();
+
+    const explicitMetadataAuth = runCli(dataDir, [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--dry-run",
+      "--provider",
+      "codewith",
+      "--sandbox",
+      "workspace-write",
+      "--worktree-mode",
+      "off",
+    ], JSON.stringify({
+      ...event,
+      id: "evt-task-created-provider-explicit-metadata-auth",
+      metadata: {
+        ...event.metadata,
+        provider_hint: "claude",
+        auth_profile_pool: "account004,account005",
+        account_pool: "claude-ui-a,claude-ui-b",
+      },
+    }));
+
+    expect(explicitMetadataAuth.status).toBe(0);
+    const explicitMetadataAuthValue = JSON.parse(explicitMetadataAuth.stdout);
+    expect(explicitMetadataAuthValue.providerRouting.provider).toBe("codewith");
+    expect(explicitMetadataAuthValue.providerRouting.authProfilePool).toEqual(["account004", "account005"]);
+    expect(agentStepsOf(explicitMetadataAuthValue.workflow)[0].target.authProfile).toBeDefined();
+    expect(agentStepsOf(explicitMetadataAuthValue.workflow)[0].target.account).toBeUndefined();
+    expect(agentStepsOf(explicitMetadataAuthValue.workflow)[1].target.account).toBeUndefined();
+
+    const explicitSingleAuth = runCli(dataDir, [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--dry-run",
+      "--provider",
+      "codewith",
+      "--auth-profile",
+      "account009",
+      "--sandbox",
+      "workspace-write",
+      "--worktree-mode",
+      "off",
+    ], JSON.stringify({
+      ...event,
+      id: "evt-task-created-provider-explicit-single-auth",
+      metadata: {
+        ...event.metadata,
+        auth_profile_pool: "account004,account005",
+      },
+    }));
+
+    expect(explicitSingleAuth.status).toBe(0);
+    const explicitSingleAuthValue = JSON.parse(explicitSingleAuth.stdout);
+    expect(agentStepsOf(explicitSingleAuthValue.workflow)[0].target.authProfile).toBe("account009");
+    expect(agentStepsOf(explicitSingleAuthValue.workflow)[1].target.authProfile).toBe("account009");
+
+    const ruleCodewith = runCli(dataDir, [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--dry-run",
+      "--provider-rule",
+      "area=backend:codewith:account004,account005",
+      "--sandbox",
+      "workspace-write",
+      "--worktree-mode",
+      "off",
+    ], JSON.stringify({
+      ...event,
+      id: "evt-task-created-provider-rule-codewith",
+      metadata: { ...event.metadata, account_pool: "claude-ui-a,claude-ui-b", account_tool: "claude" },
+    }));
+
+    expect(ruleCodewith.status).toBe(0);
+    const ruleCodewithValue = JSON.parse(ruleCodewith.stdout);
+    expect(ruleCodewithValue.providerRouting.provider).toBe("codewith");
+    expect(ruleCodewithValue.providerRouting.source).toBe("rule");
+    expect(ruleCodewithValue.providerRouting.authProfilePool).toEqual(["account004", "account005"]);
+    expect(agentStepsOf(ruleCodewithValue.workflow)[0].target.account).toBeUndefined();
+    expect(agentStepsOf(ruleCodewithValue.workflow)[1].target.account).toBeUndefined();
+
+    const ruleCodewithWithFallbackAuth = runCli(dataDir, [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--dry-run",
+      "--provider-rule",
+      "area=backend:codewith:account004,account005",
+      "--auth-profile",
+      "account009",
+      "--sandbox",
+      "workspace-write",
+      "--worktree-mode",
+      "off",
+    ], JSON.stringify({
+      ...event,
+      id: "evt-task-created-provider-rule-codewith-fallback-auth",
+    }));
+
+    expect(ruleCodewithWithFallbackAuth.status).toBe(0);
+    const ruleCodewithWithFallbackAuthValue = JSON.parse(ruleCodewithWithFallbackAuth.stdout);
+    expect(ruleCodewithWithFallbackAuthValue.providerRouting.authProfile).toBe("account009");
+    expect(ruleCodewithWithFallbackAuthValue.providerRouting.authProfilePool).toEqual(["account004", "account005"]);
+    expect(new Set(authProfilesOf(ruleCodewithWithFallbackAuthValue.workflow))).toEqual(new Set(["account004", "account005"]));
+
+    const defaultCodewith = runCli(dataDir, [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--dry-run",
+      "--sandbox",
+      "workspace-write",
+      "--worktree-mode",
+      "off",
+    ], JSON.stringify({
+      ...event,
+      id: "evt-task-created-provider-default-codewith",
+      metadata: {
+        ...event.metadata,
+        auth_profile_pool: "account004,account005",
+        account_pool: "claude-ui-a,claude-ui-b",
+        account_tool: "claude",
+      },
+    }));
+
+    expect(defaultCodewith.status).toBe(0);
+    const defaultCodewithValue = JSON.parse(defaultCodewith.stdout);
+    expect(defaultCodewithValue.providerRouting.provider).toBe("codewith");
+    expect(defaultCodewithValue.providerRouting.authProfilePool).toEqual(["account004", "account005"]);
+    expect(agentStepsOf(defaultCodewithValue.workflow)[0].target.account).toBeUndefined();
+    expect(agentStepsOf(defaultCodewithValue.workflow)[1].target.account).toBeUndefined();
+
+    const genericProviderField = runCli(dataDir, [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--dry-run",
+      "--sandbox",
+      "workspace-write",
+      "--worktree-mode",
+      "off",
+    ], JSON.stringify({
+      ...event,
+      id: "evt-task-created-provider-field",
+      data: { ...event.data, provider: "github" },
+    }));
+
+    expect(genericProviderField.status).toBe(0);
+    const genericProviderValue = JSON.parse(genericProviderField.stdout);
+    expect(genericProviderValue.providerRouting.provider).toBe("codewith");
+    expect(agentStepsOf(genericProviderValue.workflow)[0].target.provider).toBe("codewith");
+
+    const claudeRepo = createGitRepo("loops-cli-event-provider-explicit-account-repo-");
+    const explicitAccount = runCli(dataDir, [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--dry-run",
+      "--provider",
+      "claude",
+      "--account",
+      "claude-main",
+      "--account-tool",
+      "claude",
+      "--worktree-mode",
+      "required",
+      "--worktree-root",
+      join(dataDir, "worktrees"),
+    ], JSON.stringify({
+      ...event,
+      id: "evt-task-created-provider-explicit-account",
+      data: { ...event.data, working_dir: claudeRepo },
+      metadata: { ...event.metadata, account_pool: "claude-ui-a,claude-ui-b" },
+    }));
+
+    expect(explicitAccount.status).toBe(0);
+    const explicitAccountValue = JSON.parse(explicitAccount.stdout);
+    const explicitAccountWorker = explicitAccountValue.workflow.steps.find((step: { id: string }) => step.id === "worker");
+    const explicitAccountVerifier = explicitAccountValue.workflow.steps.find((step: { id: string }) => step.id === "verifier");
+    expect(explicitAccountWorker.target.account).toEqual({ profile: "claude-main", tool: "claude" });
+    expect(explicitAccountVerifier.target.account).toEqual({ profile: "claude-main", tool: "claude" });
+
+    const explicitProviderMetadataTool = runCli(dataDir, [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--dry-run",
+      "--provider",
+      "claude",
+      "--worktree-mode",
+      "required",
+      "--worktree-root",
+      join(dataDir, "worktrees"),
+    ], JSON.stringify({
+      ...event,
+      id: "evt-task-created-provider-metadata-account-tool",
+      data: { ...event.data, working_dir: claudeRepo },
+      metadata: {
+        ...event.metadata,
+        account_pool: "cursor-a,cursor-b",
+        account_tool: "cursor",
+      },
+    }));
+
+    expect(explicitProviderMetadataTool.status).toBe(0);
+    const explicitProviderMetadataToolValue = JSON.parse(explicitProviderMetadataTool.stdout);
+    const metadataToolWorker = explicitProviderMetadataToolValue.workflow.steps.find((step: { id: string }) => step.id === "worker");
+    const metadataToolVerifier = explicitProviderMetadataToolValue.workflow.steps.find((step: { id: string }) => step.id === "verifier");
+    expect(metadataToolWorker.target.provider).toBe("claude");
+    expect(metadataToolWorker.target.account.tool).toBe("cursor");
+    expect(metadataToolVerifier.target.account.tool).toBe("cursor");
+
+    const invalid = runCli(dataDir, [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--dry-run",
+      "--worktree-mode",
+      "off",
+    ], JSON.stringify({
+      ...event,
+      id: "evt-task-created-provider-invalid",
+      metadata: { ...event.metadata, provider_hint: "unsupported-provider" },
+    }));
+
+    expect(invalid.status).not.toBe(0);
+    expect(invalid.stderr).toContain("unsupported provider");
+    expect(invalid.stderr).toContain("unsupported-provider");
+  });
+
+  test("todos task PR approval routes require non-author GitHub reviewer evidence", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-pr-review-routing-"));
+    const event = {
+      id: "evt-task-created-pr-review",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-pr-review-required",
+        title: "Approve blocked PR",
+        working_dir: "/tmp/open-loops",
+        tags: ["auto:route"],
+        description: [
+          "GitHub PR #1 author is also andrei-hasna.",
+          "reviewDecision=REVIEW_REQUIRED",
+          "mergeStateStatus=BLOCKED",
+          "PR: https://github.com/hasna/example/pull/1",
+        ].join("\n"),
+      },
+      timestamp: new Date().toISOString(),
+    };
+    const baseArgs = [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--dry-run",
+      "--sandbox",
+      "workspace-write",
+      "--worktree-mode",
+      "off",
+    ];
+
+    const missingReviewer = runCli(dataDir, baseArgs, JSON.stringify(event));
+    expect(missingReviewer.status).toBe(0);
+    const missingValue = JSON.parse(missingReviewer.stdout);
+    expect(missingValue.skipped).toBe(true);
+    expect(missingValue.reason).toContain("--github-reviewer");
+    expect(missingValue.workflow).toBeUndefined();
+    expect(missingValue.prReviewRouting).toMatchObject({
+      required: true,
+      allowed: false,
+      author: "andrei-hasna",
+      reviewers: [],
+    });
+
+    const selfReviewer = runCli(dataDir, [...baseArgs, "--github-reviewer", "andrei-hasna"], JSON.stringify(event));
+    expect(selfReviewer.status).toBe(0);
+    const selfValue = JSON.parse(selfReviewer.stdout);
+    expect(selfValue.skipped).toBe(true);
+    expect(selfValue.reason).toContain("self-review");
+    expect(selfValue.prReviewRouting.reviewers).toEqual(["andrei-hasna"]);
+
+    const nonAuthorReviewer = runCli(dataDir, [...baseArgs, "--github-reviewer", "reviewer-hasna"], JSON.stringify(event));
+    expect(nonAuthorReviewer.status).toBe(0);
+    const nonAuthorValue = JSON.parse(nonAuthorReviewer.stdout);
+    expect(nonAuthorValue.skipped).toBeUndefined();
+    expect(nonAuthorValue.workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
+    expect(nonAuthorValue.prReviewRouting).toMatchObject({
+      required: true,
+      allowed: true,
+      author: "andrei-hasna",
+      selectedReviewer: "reviewer-hasna",
+    });
+    expect(nonAuthorValue.invocation.scope.prReviewRouting.selectedReviewer).toBe("reviewer-hasna");
   });
 
   test("todos task event handler replaces stale generated workflow policy metadata", () => {
@@ -2680,7 +3544,7 @@ describe("loops CLI", () => {
     expect(routed.status).toBe(0);
     const routedValue = JSON.parse(routed.stdout);
     expect(routedValue.workflow.id).not.toBe(staleValue.id);
-    expect(routedValue.workflow.steps[0].target.allowlist.commands).toContain("manual-break-glass");
+    expect(agentStepsOf(routedValue.workflow)[0].target.allowlist.commands).toContain("manual-break-glass");
 
     const staleAfter = runCli(dataDir, ["--json", "workflows", "show", staleValue.id]);
     expect(staleAfter.status).toBe(0);
@@ -2720,6 +3584,10 @@ describe("loops CLI", () => {
     expect(shownValue.item.id).toBe(createdValue.workItem.id);
     expect(shownValue.invocation.id).toBe(createdValue.invocation.id);
     expect(shownValue.loop.id).toBe(createdValue.loop.id);
+
+    const activeRequeue = runCli(dataDir, ["--json", "routes", "requeue", createdValue.workItem.id, "--reason", "still active"]);
+    expect(activeRequeue.status).not.toBe(0);
+    expect(activeRequeue.stderr).toContain("not requeueable");
   });
 
   test("routes preview, create, and schedule expose first-class route lifecycle commands", () => {
@@ -2818,6 +3686,8 @@ describe("loops CLI", () => {
       JSON.stringify(event),
       "--template",
       "task-lifecycle",
+      "--provider-rule",
+      "area=backend:codewith:account004,account005",
       "--triage-auth-profile",
       "account004",
       "--planner-auth-profile",
@@ -2834,6 +3704,7 @@ describe("loops CLI", () => {
     expect(previewValue.invocation.templateId).toBe("task-lifecycle");
     expect(previewValue.invocation.scope.accountPolicy).toBe("role-explicit");
     expect(previewValue.workflow.steps.map((step: { id: string }) => step.id)).toEqual([
+      "source-task-gate",
       "triage",
       "triage-gate",
       "planner",
@@ -2842,6 +3713,7 @@ describe("loops CLI", () => {
       "verifier",
     ]);
     const stepsById = Object.fromEntries(previewValue.workflow.steps.map((step: { id: string }) => [step.id, step])) as Record<string, any>;
+    expect(stepsById.triage.dependsOn).toEqual(["source-task-gate"]);
     expect(stepsById.triage.target.authProfile).toBe("account004");
     expect(stepsById.planner.target.authProfile).toBe("account005");
     expect(stepsById.worker.target.authProfile).toBe("account006");
@@ -2890,6 +3762,10 @@ describe("loops CLI", () => {
     }).status).not.toBe(0);
     expect(runGate("triage-gate", {
       ...baseTask,
+      tags: ["auto:route", "blocked"],
+    }).status).not.toBe(0);
+    expect(runGate("triage-gate", {
+      ...baseTask,
       manual_required: true,
     }).status).not.toBe(0);
     expect(runGate("triage-gate", {
@@ -2918,6 +3794,195 @@ describe("loops CLI", () => {
     expect(invalid.stderr).toContain("--template must be todos-task-worker-verifier or task-lifecycle");
   });
 
+  test("task lifecycle routes can queue bounded PR handoff from worker artifacts", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-routes-pr-handoff-"));
+    const repo = createGitRepo("loops-cli-routes-pr-handoff-repo-");
+    const event = {
+      id: "evt-routes-pr-handoff-0001",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-routes-pr-handoff-0001",
+        title: "Route with PR handoff",
+        description: "Exercise worker-network-failure handoff.",
+        working_dir: repo,
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const preview = runCli(dataDir, [
+      "--json",
+      "routes",
+      "preview",
+      "todos-task",
+      "--event-json",
+      JSON.stringify(event),
+      "--template",
+      "task-lifecycle",
+      "--worktree-mode",
+      "main",
+      "--pr-handoff",
+      "--sandbox",
+      "workspace-write",
+    ]);
+    expect(preview.status).toBe(0);
+    const value = JSON.parse(preview.stdout);
+    expect(value.invocation.scope.prHandoff).toBe(true);
+    expect(value.workflow.steps.map((step: { id: string }) => step.id)).toEqual([
+      "source-task-gate",
+      "triage",
+      "triage-gate",
+      "planner",
+      "planner-gate",
+      "worker",
+      "pr-handoff",
+      "verifier",
+    ]);
+    const stepsById = Object.fromEntries(value.workflow.steps.map((step: { id: string }) => [step.id, step])) as Record<string, any>;
+    expect(stepsById["pr-handoff"].dependsOn).toEqual(["worker"]);
+    expect(stepsById.verifier.dependsOn).toEqual(["pr-handoff"]);
+    expect(stepsById.worker.target.prompt).toContain(".openloops/pr-handoff/task-routes-pr-handoff-0001.json");
+    const command = stepsById["pr-handoff"].target.args[1];
+    expect(command).toContain("openloops:pr-handoff:");
+    expect(command).toContain("const result = todos(");
+    expect(command).toContain("'task'");
+
+    const artifactDir = join(repo, ".openloops", "pr-handoff");
+    mkdirSync(artifactDir, { recursive: true });
+    writeFileSync(join(artifactDir, "task-routes-pr-handoff-0001.json"), JSON.stringify({
+      taskId: "task-routes-pr-handoff-0001",
+      worktreePath: repo,
+      githubRepo: "hasna/open-loops",
+      branch: "openloops/pr-handoff-test",
+      base: "main",
+      remote: "origin",
+      commit: "0123456789abcdef0123456789abcdef01234567",
+      validation: "bun test passed",
+      error: "getaddrinfo ENOTFOUND github.com",
+    }));
+    const fakeBin = join(dataDir, "fake-bin");
+    const calls = join(dataDir, "calls.log");
+    mkdirSync(fakeBin, { recursive: true });
+    writeFileSync(
+      join(fakeBin, "git"),
+      [
+        "#!/usr/bin/env bash",
+        "printf 'git %s\\n' \"$*\" >> \"$OPENLOOPS_TEST_CALLS\"",
+        "if [[ \"$1\" == \"-C\" && \"$3\" == \"rev-parse\" && \"$4\" == \"--show-toplevel\" ]]; then printf '%s\\n' \"$2\"; exit 0; fi",
+        "if [[ \"$1\" == \"-C\" && \"$3\" == \"branch\" && \"$4\" == \"--show-current\" ]]; then printf 'openloops/pr-handoff-test\\n'; exit 0; fi",
+        "if [[ \"$1\" == \"-C\" && \"$3\" == \"rev-parse\" && \"$4\" == \"--verify\" ]]; then printf '0123456789abcdef0123456789abcdef01234567\\n'; exit 0; fi",
+        "if [[ \"$1\" == \"-C\" && \"$3\" == \"merge-base\" ]]; then exit 0; fi",
+        "if [[ \"$3\" == \"push\" ]]; then printf 'network blocked' >&2; exit 128; fi",
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(fakeBin, "todos"),
+      [
+        "#!/usr/bin/env bash",
+        "printf 'todos %s\\n' \"$*\" >> \"$OPENLOOPS_TEST_CALLS\"",
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(fakeBin, "gh"),
+      [
+        "#!/usr/bin/env bash",
+        "printf 'gh %s\\n' \"$*\" >> \"$OPENLOOPS_TEST_CALLS\"",
+        "if [[ \"$1\" == \"pr\" && \"$2\" == \"view\" ]]; then printf 'https://github.com/hasna/open-loops/pull/9\\nopenloops/pr-handoff-test\\n'; exit 0; fi",
+        "exit 1",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(join(fakeBin, "git"), 0o755);
+    chmodSync(join(fakeBin, "todos"), 0o755);
+    chmodSync(join(fakeBin, "gh"), 0o755);
+
+    const handoff = spawnSync("bash", ["-lc", command], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        OPENLOOPS_TEST_CALLS: calls,
+        OPENLOOPS_PR_HANDOFF_GIT_BIN: join(fakeBin, "git"),
+        OPENLOOPS_PR_HANDOFF_TODOS_BIN: join(fakeBin, "todos"),
+      },
+      encoding: "utf8",
+    });
+    expect(handoff.status).toBe(0);
+    expect(handoff.stdout).toContain("queued PR handoff task");
+    const callLog = readFileSync(calls, "utf8");
+    expect(callLog).toContain("git -C");
+    expect(callLog).toContain("push origin 0123456789abcdef0123456789abcdef01234567:refs/heads/openloops/pr-handoff-test");
+    expect(callLog).toContain("todos --project");
+    expect(callLog).toContain("task upsert --fingerprint openloops:pr-handoff:task-routes-pr-handoff-0001:openloops/pr-handoff-test:0123456789abcdef0123456789abcdef01234567");
+    expect(callLog).toContain("auto:route,pr-handoff,github,network,repo:open-loops");
+    expect(callLog).toContain("comment task-routes-pr-handoff-0001 openloops:pr-handoff=pending");
+
+    writeFileSync(calls, "");
+    writeFileSync(join(artifactDir, "task-routes-pr-handoff-0001.json"), JSON.stringify({
+      taskId: "task-routes-pr-handoff-0001",
+      worktreePath: repo,
+      githubRepo: "hasna/open-loops",
+      branch: "untrusted/branch",
+      base: "main",
+      remote: "origin",
+      commit: "0123456789abcdef0123456789abcdef01234567",
+      validation: "bun test passed",
+    }));
+    const invalidHandoff = spawnSync("bash", ["-lc", command], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        OPENLOOPS_TEST_CALLS: calls,
+        OPENLOOPS_PR_HANDOFF_GIT_BIN: join(fakeBin, "git"),
+        OPENLOOPS_PR_HANDOFF_TODOS_BIN: join(fakeBin, "todos"),
+      },
+      encoding: "utf8",
+    });
+    expect(invalidHandoff.status).toBe(0);
+    expect(invalidHandoff.stderr).toContain("invalid PR handoff artifact");
+    const invalidCallLog = readFileSync(calls, "utf8");
+    expect(invalidCallLog).toContain("comment task-routes-pr-handoff-0001 openloops:pr-handoff=invalid");
+    expect(invalidCallLog).not.toContain("task upsert");
+    expect(invalidCallLog).not.toContain("auto:route");
+
+    writeFileSync(calls, "");
+    writeFileSync(join(artifactDir, "task-routes-pr-handoff-0001.json"), JSON.stringify({
+      taskId: "task-routes-pr-handoff-0001",
+      worktreePath: repo,
+      githubRepo: "hasna/open-loops",
+      branch: "openloops/pr-handoff-test",
+      base: "main",
+      remote: "origin",
+      commit: "0123456789abcdef0123456789abcdef01234567",
+      prUrl: "https://github.com/hasna/open-loops/pull/9",
+      validation: "bun test passed",
+    }));
+    const verifiedHandoff = spawnSync("bash", ["-lc", command], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+        OPENLOOPS_TEST_CALLS: calls,
+        OPENLOOPS_PR_HANDOFF_GIT_BIN: join(fakeBin, "git"),
+        OPENLOOPS_PR_HANDOFF_GH_BIN: join(fakeBin, "gh"),
+        OPENLOOPS_PR_HANDOFF_TODOS_BIN: join(fakeBin, "todos"),
+      },
+      encoding: "utf8",
+    });
+    expect(verifiedHandoff.status).toBe(0);
+    expect(verifiedHandoff.stdout).toContain("PR handoff already complete");
+    const verifiedCallLog = readFileSync(calls, "utf8");
+    expect(verifiedCallLog).toContain("gh pr view https://github.com/hasna/open-loops/pull/9");
+    expect(verifiedCallLog).toContain("comment task-routes-pr-handoff-0001 openloops:pr-handoff=done");
+    expect(verifiedCallLog).not.toContain("push origin");
+  });
+
   test("routes schedule preserves selected todos task template in the drain loop", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-routes-template-schedule-"));
 
@@ -2931,6 +3996,8 @@ describe("loops CLI", () => {
       "5m",
       "--template",
       "task-lifecycle",
+      "--provider-rule",
+      "area=backend:codewith:account004,account005",
       "--triage-auth-profile",
       "account004",
       "--planner-auth-profile",
@@ -2945,6 +4012,7 @@ describe("loops CLI", () => {
     expect(scheduled.status).toBe(0);
     const loop = JSON.parse(scheduled.stdout);
     expect(loop.target.args).toEqual(expect.arrayContaining(["--template", "task-lifecycle"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--provider-rule", "area=backend:codewith:account004,account005"]));
     expect(loop.target.args).toEqual(expect.arrayContaining(["--triage-auth-profile", "account004", "--planner-auth-profile", "account005"]));
     expect(loop.target.args).toEqual(expect.arrayContaining(["--max-dispatch", "2"]));
   });
@@ -2998,7 +4066,8 @@ describe("loops CLI", () => {
     expect(stepsById.planner.target.account).toEqual({ profile: "planner-profile", tool: "claude" });
     expect(stepsById.worker.target.account).toEqual({ profile: "worker-profile", tool: "claude" });
     expect(stepsById.verifier.target.account).toEqual({ profile: "verifier-profile", tool: "claude" });
-    expect(stepsById.triage.dependsOn).toEqual(["prepare-worktree"]);
+    expect(stepsById["source-task-gate"].dependsOn).toEqual(["prepare-worktree"]);
+    expect(stepsById.triage.dependsOn).toEqual(["source-task-gate"]);
     expect(stepsById.worker.dependsOn).toEqual(["planner-gate"]);
   });
 
@@ -3085,7 +4154,7 @@ describe("loops CLI", () => {
     expect(result.status).toBe(0);
     const value = JSON.parse(result.stdout);
     expect(value.workflow.id).not.toBe(staleWorkflowId);
-    expect(value.workflow.steps[0].target.sandbox).toBe("workspace-write");
+    expect(agentStepsOf(value.workflow)[0].target.sandbox).toBe("workspace-write");
 
     const staleAfter = runCli(dataDir, ["--json", "workflows", "show", staleWorkflowId]);
     expect(staleAfter.status).toBe(0);
@@ -3121,12 +4190,12 @@ describe("loops CLI", () => {
 
     expect(result.status).toBe(0);
     const value = JSON.parse(result.stdout);
-    expect(value.workflow.steps.map((step: { id: string }) => step.id)).toEqual(["prepare-worktree", "worker", "verifier"]);
-    expect(value.workflow.steps[1].target.cwd).toContain(worktreeRoot);
-    expect(value.workflow.steps[1].target.worktree.enabled).toBe(true);
-    expect(value.workflow.steps[1].target.worktree.originalCwd).toBe(repo);
-    expect(value.workflow.steps[1].target.addDirs).toContain(join(repo, ".git"));
+    expect(value.workflow.steps.map((step: { id: string }) => step.id)).toEqual(["prepare-worktree", "source-task-gate", "worker", "verifier"]);
+    expect(value.workflow.steps[2].target.cwd).toContain(worktreeRoot);
+    expect(value.workflow.steps[2].target.worktree.enabled).toBe(true);
+    expect(value.workflow.steps[2].target.worktree.originalCwd).toBe(repo);
     expect(value.workflow.steps[2].target.addDirs).toContain(join(repo, ".git"));
+    expect(value.workflow.steps[3].target.addDirs).toContain(join(repo, ".git"));
   });
 
   test("todos task event handler throttles active workflows per project", () => {
@@ -3531,6 +4600,85 @@ describe("loops CLI", () => {
     expect(worker.target.addDirs).toEqual([join(dataDir, "todos-store")]);
   });
 
+  test("todos task drain applies metadata provider rules with account separation evidence", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-provider-rule-"));
+    const binDir = join(dataDir, "bin");
+    const repo = createGitRepo("loops-cli-event-drain-provider-rule-repo-");
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"task-lists\" ]]; then printf '[]\\n'; exit 0; fi",
+        "done",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"ready\" ]]; then printf '%s\\n' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "done",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const ready = [
+      {
+        id: "task-drain-provider-rule",
+        title: "Route frontend task",
+        status: "pending",
+        working_dir: repo,
+        tags: ["auto:route"],
+        metadata: {
+          area: "frontend",
+          account_tool: "cursor",
+        },
+      },
+    ];
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        join(dataDir, "todos-store"),
+        "--limit",
+        "10",
+        "--max-dispatch",
+        "1",
+        "--dry-run",
+        "--provider-rule",
+        "area=frontend:claude:claude-ui-a,claude-ui-b",
+        "--worktree-mode",
+        "required",
+        "--worktree-root",
+        join(dataDir, "worktrees"),
+      ],
+      undefined,
+      { PATH: `${binDir}:/usr/bin:/bin`, TODOS_READY_JSON: JSON.stringify(ready) },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.created).toBe(1);
+    expect(value.results[0].providerRouting).toMatchObject({
+      provider: "claude",
+      source: "rule",
+      reason: "matched provider rule area=frontend",
+    });
+    expect(value.results[0].invocation.scope.providerRouting.rule.raw).toBe("area=frontend:claude:claude-ui-a,claude-ui-b");
+    const worker = value.results[0].workflow.steps.find((step: { id: string }) => step.id === "worker");
+    const verifier = value.results[0].workflow.steps.find((step: { id: string }) => step.id === "verifier");
+    expect(worker.target.provider).toBe("claude");
+    expect(verifier.target.provider).toBe("claude");
+    expect(worker.target.account.tool).toBe("claude");
+    expect(verifier.target.account.tool).toBe("claude");
+    expect(worker.target.account.profile).not.toBe(verifier.target.account.profile);
+    expect([worker.target.account.profile, verifier.target.account.profile].sort()).toEqual(["claude-ui-a", "claude-ui-b"]);
+  });
+
   test("todos task drain skips non-routeable tasks and continues dispatching", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-skip-non-git-"));
     const binDir = join(dataDir, "bin");
@@ -3548,6 +4696,9 @@ describe("loops CLI", () => {
         "done",
         "for arg in \"$@\"; do",
         "  if [[ \"$arg\" == \"ready\" ]]; then printf '%s\\n' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "done",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"comment\" || \"$arg\" == \"tag\" || \"$arg\" == \"untag\" ]]; then printf 'ok\\n'; exit 0; fi",
         "done",
         "exit 2",
         "",
@@ -3602,11 +4753,234 @@ describe("loops CLI", () => {
       routeError: true,
     });
     expect(value.results[0].reason).toContain("worktreeMode=required");
+    expect(value.results[0].sourceTaskUpdate).toMatchObject({
+      ok: true,
+      attempted: true,
+      taskId: "task-drain-non-git",
+    });
+    expect(value.results[0].sourceTaskUpdate.tagNoAuto.ok).toBe(true);
+    expect(value.results[0].sourceTaskUpdate.untagAutoRoute.ok).toBe(true);
     expect(value.results[1].kind).toBe("created");
     expect(value.results[1].event.subject).toBe("task-drain-good-repo");
 
     const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
     expect(loops).toHaveLength(1);
+  });
+
+  test("todos task drain reports failed source task cleanup for invalid project paths", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-cleanup-fail-"));
+    const binDir = join(dataDir, "bin");
+    const nonGit = join(dataDir, "not-a-repo");
+    mkdirSync(nonGit, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "args=\" $* \"",
+        "if [[ \"$args\" == *\" task-lists \"* ]]; then printf '[]\\n'; exit 0; fi",
+        "if [[ \"$args\" == *\" ready \"* ]]; then printf '%s\\n' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "if [[ \"$args\" == *\" comment \"* ]]; then printf 'commented\\n'; exit 0; fi",
+        "if [[ \"$args\" == *\" untag \"* ]]; then printf 'untagged\\n'; exit 0; fi",
+        "if [[ \"$args\" == *\" tag \"* ]]; then printf 'lock unavailable\\n' >&2; exit 9; fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const ready = [
+      {
+        id: "task-drain-cleanup-fail",
+        title: "Bad route task cleanup failure",
+        status: "pending",
+        working_dir: nonGit,
+        tags: ["auto:route"],
+      },
+    ];
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        join(dataDir, "todos-store"),
+        "--limit",
+        "10",
+        "--max-dispatch",
+        "5",
+        "--worktree-mode",
+        "required",
+      ],
+      undefined,
+      { PATH: `${binDir}:/usr/bin:/bin`, TODOS_READY_JSON: JSON.stringify(ready) },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.skipped).toBe(1);
+    expect(value.results[0].sourceTaskUpdate).toMatchObject({
+      ok: false,
+      attempted: true,
+      taskId: "task-drain-cleanup-fail",
+    });
+    expect(value.results[0].sourceTaskUpdate.error).toContain("source task updates failed");
+    expect(value.results[0].sourceTaskUpdate.comment.ok).toBe(true);
+    expect(value.results[0].sourceTaskUpdate.tagNoAuto.ok).toBe(false);
+    expect(value.results[0].sourceTaskUpdate.untagAutoRoute.ok).toBe(true);
+  });
+
+  test("todos task drain quarantines invalid PR project paths before reviewer gating", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-invalid-pr-path-"));
+    const binDir = join(dataDir, "bin");
+    const nonGit = join(dataDir, "not-a-repo");
+    mkdirSync(nonGit, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"task-lists\" ]]; then printf '[]\\n'; exit 0; fi",
+        "done",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"ready\" ]]; then printf '%s\\n' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "done",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"comment\" || \"$arg\" == \"tag\" || \"$arg\" == \"untag\" ]]; then printf 'ok\\n'; exit 0; fi",
+        "done",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const ready = [
+      {
+        id: "task-drain-invalid-pr-path",
+        title: "Review and safely merge hasna/secrets#5",
+        description: [
+          "Fingerprint: github-pr:hasna/secrets#5",
+          `Repository: ${nonGit}`,
+          "PR: https://github.com/hasna/secrets/pull/5",
+          "",
+          "Merge only when validation and policy allow it.",
+        ].join("\n"),
+        status: "pending",
+        working_dir: dataDir,
+        tags: ["auto:route", "github-pr", "pr-merge-queue"],
+      },
+    ];
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        join(dataDir, "todos-store"),
+        "--limit",
+        "10",
+        "--max-dispatch",
+        "5",
+        "--worktree-mode",
+        "required",
+      ],
+      undefined,
+      { PATH: `${binDir}:/usr/bin:/bin`, TODOS_READY_JSON: JSON.stringify(ready) },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.skipped).toBe(1);
+    expect(value.created).toBe(0);
+    expect(value.results[0]).toMatchObject({
+      kind: "skipped",
+      taskId: "task-drain-invalid-pr-path",
+      routeError: true,
+    });
+    expect(value.results[0].reason).toContain("worktreeMode=required");
+    expect(value.results[0].reason).not.toContain("PR approval/merge");
+    expect(value.results[0].sourceTaskUpdate).toMatchObject({
+      ok: true,
+      attempted: true,
+      taskId: "task-drain-invalid-pr-path",
+    });
+  });
+
+  test("todos task drain skips no-auto and blocked tags before workflow creation", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-disallowed-tags-"));
+    const binDir = join(dataDir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"task-lists\" ]]; then printf '[]\\n'; exit 0; fi",
+        "done",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"ready\" ]]; then printf '%s\\n' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "done",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const ready = [
+      {
+        id: "task-drain-no-auto",
+        title: "No auto task",
+        status: "pending",
+        working_dir: "/tmp/not-a-real-openloops-required-repo",
+        tags: ["auto:route", "no-auto"],
+      },
+      {
+        id: "task-drain-blocked-tag",
+        title: "Blocked tag task",
+        status: "pending",
+        working_dir: "/tmp/not-a-real-openloops-required-repo",
+        tags: ["auto:route", "blocked"],
+      },
+    ];
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        join(dataDir, "todos-store"),
+        "--limit",
+        "10",
+        "--max-dispatch",
+        "5",
+        "--worktree-mode",
+        "required",
+      ],
+      undefined,
+      { PATH: `${binDir}:/usr/bin:/bin`, TODOS_READY_JSON: JSON.stringify(ready) },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.considered).toBe(2);
+    expect(value.created).toBe(0);
+    expect(value.skipped).toBe(2);
+    expect(value.results.map((entry: { reason: string }) => entry.reason)).toEqual([
+      "task has disallowed tag: no-auto",
+      "task has disallowed tag: blocked",
+    ]);
+    const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loops).toHaveLength(0);
   });
 
   test("todos task drain filters by task list and limits new dispatches", () => {
@@ -4193,6 +5567,244 @@ describe("loops CLI", () => {
     expect(loops).toHaveLength(1);
   });
 
+  test("todos task event handler dedupes failed routed work items until explicit requeue", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-failed-dedupe-"));
+    const event = {
+      id: "evt-task-created-failed-dedupe-a",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-created-failed-dedupe",
+        title: "Do not retry failed task without requeue",
+        working_dir: "/tmp/open-todos",
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const first = runCli(dataDir, ["--json", "events", "handle", "todos-task"], JSON.stringify(event));
+    expect(first.status).toBe(0);
+    const created = JSON.parse(first.stdout);
+
+    const db = new Database(join(dataDir, "loops.db"));
+    try {
+      db.query("UPDATE workflow_work_items SET status='failed', loop_id=NULL, last_reason='triage gate failed' WHERE id=?").run(created.workItem.id);
+    } finally {
+      db.close();
+    }
+
+    const replay = runCli(
+      dataDir,
+      ["--json", "events", "handle", "todos-task"],
+      JSON.stringify({ ...event, id: "evt-task-created-failed-dedupe-b" }),
+    );
+
+    expect(replay.status).toBe(0);
+    const value = JSON.parse(replay.stdout);
+    expect(value.deduped).toBe(true);
+    expect(value.dedupedBy).toBe("work-item");
+    expect(value.workItem.id).toBe(created.workItem.id);
+    expect(value.workItem.status).toBe("failed");
+    expect(value.loop).toBeUndefined();
+    const loopsBeforeRequeue = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loopsBeforeRequeue).toHaveLength(1);
+
+    const requeue = runCli(dataDir, ["--json", "routes", "requeue", created.workItem.id, "--reason", "fixed project path"]);
+    expect(requeue.status).toBe(0);
+    const requeued = JSON.parse(requeue.stdout);
+    expect(requeued.id).toBe(created.workItem.id);
+    expect(requeued.status).toBe("queued");
+    expect(requeued.loopId).toBeUndefined();
+    expect(requeued.lastReason).toBe("fixed project path");
+
+    const afterRequeueReplay = runCli(
+      dataDir,
+      ["--json", "events", "handle", "todos-task"],
+      JSON.stringify({ ...event, id: "evt-task-created-failed-dedupe-c" }),
+    );
+    expect(afterRequeueReplay.status).toBe(0);
+    const recreated = JSON.parse(afterRequeueReplay.stdout);
+    expect(recreated.deduped).toBe(false);
+    expect(recreated.workItem.id).toBe(created.workItem.id);
+    expect(recreated.workItem.status).toBe("admitted");
+    expect(recreated.loop.id).not.toBe(created.loop.id);
+    const loopsAfterRequeue = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loopsAfterRequeue).toHaveLength(2);
+  });
+
+  test("todos task event handler requeues succeeded work items with operator evidence", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-succeeded-requeue-"));
+    const event = {
+      id: "evt-task-created-succeeded-requeue-a",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-created-succeeded-requeue",
+        title: "Requeue after dependency is resolved",
+        working_dir: "/tmp/open-todos",
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const first = runCli(dataDir, ["--json", "events", "handle", "todos-task"], JSON.stringify(event));
+    expect(first.status).toBe(0);
+    const created = JSON.parse(first.stdout);
+    const db = new Database(join(dataDir, "loops.db"));
+    try {
+      db.query("UPDATE workflow_work_items SET status='succeeded', last_reason='first route completed' WHERE id=?").run(created.workItem.id);
+    } finally {
+      db.close();
+    }
+
+    const replay = runCli(
+      dataDir,
+      ["--json", "events", "handle", "todos-task"],
+      JSON.stringify({ ...event, id: "evt-task-created-succeeded-requeue-b" }),
+    );
+    expect(replay.status).toBe(0);
+    const deduped = JSON.parse(replay.stdout);
+    expect(deduped.deduped).toBe(true);
+    expect(deduped.workItem.status).toBe("succeeded");
+    expect(deduped.loop.id).toBe(created.loop.id);
+
+    const refusedActive = runCli(dataDir, ["--json", "routes", "requeue", created.workItem.id]);
+    expect(refusedActive.status).not.toBe(0);
+    expect(refusedActive.stderr).toContain("--reason");
+
+    const requeue = runCli(dataDir, [
+      "--json",
+      "routes",
+      "requeue",
+      created.workItem.id,
+      "--reason",
+      "dependency resolved",
+    ]);
+    expect(requeue.status).toBe(0);
+    const requeued = JSON.parse(requeue.stdout);
+    expect(requeued.id).toBe(created.workItem.id);
+    expect(requeued.status).toBe("queued");
+    expect(requeued.lastReason).toBe("dependency resolved");
+
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      const activeInvocation = store.createWorkflowInvocation({
+        sourceRef: { kind: "event", id: "evt-active-route", dedupeKey: "todos-task:active-route" },
+        subjectRef: { kind: "task", id: "active-route", path: "/tmp/open-todos" },
+        intent: "route",
+        scope: { projectPath: "/tmp/open-todos" },
+      });
+      const activeItem = store.upsertWorkflowWorkItem({
+        routeKey: "todos-task",
+        idempotencyKey: "todos-task:active-route",
+        invocationId: activeInvocation.id,
+        sourceType: "task.created",
+        sourceRef: "evt-active-route",
+        subjectRef: "active-route",
+        projectKey: "/tmp/open-todos",
+      });
+      const activeWorkflow = store.createWorkflow({
+        name: "active-route-workflow",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const activeLoop = store.createLoop({
+        name: "active-route-loop",
+        schedule: { type: "once", at: futureAt() },
+        target: { type: "workflow", workflowId: activeWorkflow.id },
+      });
+      store.admitWorkflowWorkItem(activeItem.id, {
+        workflowId: activeWorkflow.id,
+        loopId: activeLoop.id,
+        reason: "active capacity seed",
+      });
+    } finally {
+      store.close();
+    }
+
+    const throttledReplay = runCli(
+      dataDir,
+      ["--json", "events", "handle", "todos-task", "--max-active-per-project", "1"],
+      JSON.stringify({ ...event, id: "evt-task-created-succeeded-requeue-throttled" }),
+    );
+    expect(throttledReplay.status).toBe(0);
+    const throttled = JSON.parse(throttledReplay.stdout);
+    expect(throttled.queuedAtSource).toBe(true);
+    expect(throttled.workItem.id).toBe(created.workItem.id);
+    expect(throttled.workItem.status).toBe("deferred");
+    expect(throttled.workItem.lastReason).toContain("dependency resolved");
+
+    const throttleDb = new Database(join(dataDir, "loops.db"));
+    try {
+      throttleDb.query("UPDATE workflow_work_items SET status='succeeded' WHERE id <> ?").run(created.workItem.id);
+    } finally {
+      throttleDb.close();
+    }
+
+    const afterRequeueReplay = runCli(
+      dataDir,
+      ["--json", "events", "handle", "todos-task"],
+      JSON.stringify({ ...event, id: "evt-task-created-succeeded-requeue-c" }),
+    );
+    expect(afterRequeueReplay.status).toBe(0);
+    const recreated = JSON.parse(afterRequeueReplay.stdout);
+    expect(recreated.deduped).toBe(false);
+    expect(recreated.workItem.id).toBe(created.workItem.id);
+    expect(recreated.workItem.attempts).toBe(created.workItem.attempts + 1);
+    expect(recreated.workItem.lastReason).toContain("dependency resolved");
+    expect(recreated.workItem.lastReason).toContain("admitted by todos-task route");
+    expect(recreated.loop.id).not.toBe(created.loop.id);
+    expect(recreated.workflow.id).not.toBe(created.workflow.id);
+    expect(recreated.requeue).toMatchObject({
+      previousWorkItemId: created.workItem.id,
+      previousAttempts: created.workItem.attempts,
+      attempt: created.workItem.attempts + 1,
+      newWorkflowId: recreated.workflow.id,
+      newLoopId: recreated.loop.id,
+    });
+    expect(recreated.requeue.reason).toContain("dependency resolved");
+  });
+
+  test("todos task event handler dedupes cancelled routed work items instead of crashing", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-cancelled-dedupe-"));
+    const event = {
+      id: "evt-task-created-cancelled-dedupe-a",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-created-cancelled-dedupe",
+        title: "Do not crash on cancelled task route history",
+        working_dir: "/tmp/open-todos",
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const first = runCli(dataDir, ["--json", "events", "handle", "todos-task"], JSON.stringify(event));
+    expect(first.status).toBe(0);
+    const created = JSON.parse(first.stdout);
+
+    const db = new Database(join(dataDir, "loops.db"));
+    try {
+      db.query("UPDATE workflow_work_items SET status='cancelled', last_reason='loop deleted' WHERE id=?").run(created.workItem.id);
+    } finally {
+      db.close();
+    }
+
+    const replay = runCli(
+      dataDir,
+      ["--json", "events", "handle", "todos-task"],
+      JSON.stringify({ ...event, id: "evt-task-created-cancelled-dedupe-b" }),
+    );
+
+    expect(replay.status).toBe(0);
+    const value = JSON.parse(replay.stdout);
+    expect(value.deduped).toBe(true);
+    expect(value.dedupedBy).toBe("work-item");
+    expect(value.workItem.id).toBe(created.workItem.id);
+    expect(value.workItem.status).toBe("cancelled");
+    expect(value.loop.id).toBe(created.loop.id);
+  });
+
   test("todos task event handler uses metadata project path when task data has no cwd", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-metadata-cwd-"));
     const event = {
@@ -4238,8 +5850,9 @@ describe("loops CLI", () => {
     expect(value.deduped).toBe(false);
     expect(value.workflow.steps[0].target.cwd).toBe("/tmp/from-metadata");
     expect(value.workflow.steps[1].target.cwd).toBe("/tmp/from-metadata");
-    expect(value.workflow.steps[0].target.authProfile).toBe("account004");
-    expect(value.workflow.steps[1].target.authProfile).toBe("account006");
+    expect(value.workflow.steps[2].target.cwd).toBe("/tmp/from-metadata");
+    expect(value.workflow.steps[1].target.authProfile).toBe("account004");
+    expect(value.workflow.steps[2].target.authProfile).toBe("account006");
   });
 
   test("todos task event handler does not let metadata override task cwd", () => {
@@ -4265,6 +5878,7 @@ describe("loops CLI", () => {
     const value = JSON.parse(result.stdout);
     expect(value.workflow.steps[0].target.cwd).toBe("/tmp/from-data");
     expect(value.workflow.steps[1].target.cwd).toBe("/tmp/from-data");
+    expect(value.workflow.steps[2].target.cwd).toBe("/tmp/from-data");
   });
 
   test("todos task event handler skips tasks without explicit route opt-in", () => {
@@ -4321,7 +5935,11 @@ describe("loops CLI", () => {
   test.each([
     ["approval-required", { data: { requires_approval: true, tags: ["auto:route"] } }],
     ["manual-required", { metadata: { automation: { allowed: true, manual_required: true } } }],
+    ["nested-data-automation-manual-required", { data: { automation: { allowed: true, manual_required: true } } }],
+    ["nested-data-task-metadata-automation-manual-required", { data: { task: { metadata: { automation: { allowed: true, manual_required: true } } } } }],
+    ["nested-payload-task-metadata-automation-manual-required", { data: { payload: { task: { metadata: { automation: { allowed: true, manual_required: true } } } } } }],
     ["no-auto", { data: { tags: ["auto:route", "no-auto"] } }],
+    ["blocked-tag", { data: { tags: ["auto:route", "blocked"] } }],
     ["completed", { data: { status: "completed", tags: ["auto:route"] } }],
     ["blocked", { data: { status: "blocked", tags: ["auto:route"] } }],
   ])("todos task event handler skips %s tasks", (_, overrides) => {
@@ -4415,6 +6033,112 @@ describe("loops CLI", () => {
     expect(secondValue.dedupedBy).toBe("work-item");
     expect(secondValue.workItem.id).toBe(firstValue.workItem.id);
     expect(secondValue.loop.id).toBe(firstValue.loop.id);
+  });
+
+  test("generic event handler applies provider routing rules", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-generic-provider-rule-"));
+    const repo = createGitRepo("loops-cli-generic-provider-rule-repo-");
+    const event = {
+      id: "evt-generic-provider-rule",
+      type: "knowledge.record.created",
+      source: "knowledge",
+      subject: "record-provider-rule",
+      data: {
+        id: "record-provider-rule",
+        area: "backend",
+        project_path: repo,
+      },
+      metadata: {},
+      timestamp: new Date().toISOString(),
+    };
+
+    const result = runCli(dataDir, [
+      "--json",
+      "events",
+      "handle",
+      "generic",
+      "--dry-run",
+      "--provider-rule",
+      "area=backend:claude:claude-net-a,claude-net-b",
+      "--account-tool",
+      "claude",
+      "--worktree-mode",
+      "required",
+      "--worktree-root",
+      join(dataDir, "worktrees"),
+    ], JSON.stringify(event));
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.providerRouting).toMatchObject({
+      provider: "claude",
+      source: "rule",
+    });
+    expect(value.invocation.scope.providerRouting.provider).toBe("claude");
+    expect(value.invocation.scope.accountPolicy).toBe("pool");
+    const worker = value.workflow.steps.find((step: { id: string }) => step.id === "worker");
+    const verifier = value.workflow.steps.find((step: { id: string }) => step.id === "verifier");
+    expect(worker.target.provider).toBe("claude");
+    expect(verifier.target.provider).toBe("claude");
+    expect(worker.target.account.tool).toBe("claude");
+    expect(verifier.target.account.tool).toBe("claude");
+    expect(new Set([worker.target.account.profile, verifier.target.account.profile])).toEqual(new Set(["claude-net-a", "claude-net-b"]));
+  });
+
+  test("generic event handler returns requeue evidence after explicit route requeue", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-generic-event-requeue-"));
+    const event = {
+      id: "evt-generic-requeue-a",
+      type: "knowledge.record.created",
+      source: "knowledge",
+      subject: "record-requeue",
+      data: {
+        id: "record-requeue",
+        project_path: "/tmp/open-knowledge",
+      },
+      time: new Date().toISOString(),
+      schemaVersion: "1.0",
+      metadata: {},
+    };
+    const args = ["--json", "events", "handle", "generic"];
+
+    const first = runCli(dataDir, args, JSON.stringify(event));
+    expect(first.status).toBe(0);
+    const created = JSON.parse(first.stdout);
+    const db = new Database(join(dataDir, "loops.db"));
+    try {
+      db.query("UPDATE workflow_work_items SET status='succeeded', last_reason='first generic route completed' WHERE id=?").run(created.workItem.id);
+    } finally {
+      db.close();
+    }
+
+    const requeue = runCli(dataDir, [
+      "--json",
+      "routes",
+      "requeue",
+      created.workItem.id,
+      "--reason",
+      "generic dependency resolved",
+    ]);
+    expect(requeue.status).toBe(0);
+
+    const replay = runCli(dataDir, args, JSON.stringify(event));
+    expect(replay.status).toBe(0);
+    const value = JSON.parse(replay.stdout);
+    expect(value.deduped).toBe(false);
+    expect(value.workItem.id).toBe(created.workItem.id);
+    expect(value.workItem.lastReason).toContain("generic dependency resolved");
+    expect(value.workItem.lastReason).toContain("admitted by generic-event route");
+    expect(value.loop.id).not.toBe(created.loop.id);
+    expect(value.workflow.id).toBeDefined();
+    expect(value.requeue).toMatchObject({
+      previousWorkItemId: created.workItem.id,
+      previousAttempts: created.workItem.attempts,
+      attempt: created.workItem.attempts + 1,
+      reason: "generic dependency resolved",
+      newWorkflowId: value.workflow.id,
+      newLoopId: value.loop.id,
+    });
   });
 
   test("generic event dry-run rejects unsupported provider add dirs", () => {

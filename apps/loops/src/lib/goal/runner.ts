@@ -4,10 +4,10 @@ import type { ExecutableTarget, ExecutorResult } from "../../types.js";
 import { executeTarget } from "../executor.js";
 import { nowIso } from "../ids.js";
 import type { Store } from "../store.js";
-import { assertAcyclicNodes, readyNodeKeys, rollupSummary } from "./status.js";
+import { assertAcyclicNodes, nodeBudgetExhausted, readyNodeKeys, rollupSummary, updateReadyFlags } from "./status.js";
 import { resolveGoalModel } from "./model-factory.js";
 import { achievementPrompt, iterationPrompt, planPrompt } from "./prompts.js";
-import type { Goal, GoalExecutorResult, GoalPlanNode, GoalSpec, RunGoalOptions } from "./types.js";
+import type { Goal, GoalExecutorResult, GoalPlan, GoalPlanNode, GoalSpec, RunGoalOptions } from "./types.js";
 import { GOAL_OBJECTIVE_MAX_CHARS } from "./types.js";
 
 const DEFAULT_MAX_TURNS = 10;
@@ -81,6 +81,113 @@ function sameBlockerKey(values: string[]): string {
   return values.map((value) => value.trim()).filter(Boolean).join("\n") || "goal completion remains unproven";
 }
 
+function planStatusForGoal(goal: Goal): GoalPlan["status"] {
+  if (goal.status === "usageLimited") return "blocked";
+  return goal.status;
+}
+
+function syncReadyFlags(store: Store, goal: Goal, nodes: GoalPlanNode[], opts: RunGoalOptions): GoalPlanNode[] {
+  const withReady = updateReadyFlags(nodes, planStatusForGoal(goal));
+  for (const node of withReady) {
+    const current = nodes.find((entry) => entry.key === node.key);
+    if (current && current.ready !== node.ready) {
+      store.updateGoalPlanNode(goal.goalId, node.key, { ready: node.ready }, { daemonLeaseId: opts.daemonLeaseId });
+    }
+  }
+  return withReady;
+}
+
+type NoReadyDiagnostic = {
+  owner: "goal" | "goal-plan" | "goal-plan-node";
+  blocker: string;
+  planStatus: GoalPlan["status"];
+  rollup: ReturnType<typeof rollupSummary>;
+  pendingNodes: Array<{
+    key: string;
+    status: GoalPlanNode["status"];
+    ready: boolean;
+    tokenBudget?: number;
+    tokensUsed: number;
+    budgetExhausted: boolean;
+    unmetDependencies: Array<{ key: string; status: GoalPlanNode["status"] | "missing" }>;
+  }>;
+  incompleteNodes: Array<{ key: string; status: GoalPlanNode["status"]; ready: boolean }>;
+};
+
+function summarizeLabels(values: string[], limit = 5): string {
+  if (values.length <= limit) return values.join(", ");
+  return `${values.slice(0, limit).join(", ")} and ${values.length - limit} more`;
+}
+
+function noReadyDiagnostic(goal: Goal, nodes: GoalPlanNode[]): NoReadyDiagnostic {
+  const planStatus = planStatusForGoal(goal);
+  const byKey = new Map(nodes.map((node) => [node.key, node]));
+  const pendingNodes = nodes.filter((node) => node.status === "pending");
+  const incompleteNodes = nodes.filter((node) => node.status !== "complete");
+  const pendingDetails = pendingNodes.map((node) => ({
+    key: node.key,
+    status: node.status,
+    ready: node.ready,
+    tokenBudget: node.tokenBudget,
+    tokensUsed: node.tokensUsed,
+    budgetExhausted: nodeBudgetExhausted(node),
+    unmetDependencies: node.dependsOn
+      .map((dependency) => ({ key: dependency, status: byKey.get(dependency)?.status ?? "missing" as const }))
+      .filter((dependency) => dependency.status !== "complete"),
+  }));
+  const incompleteDetails = incompleteNodes.map((node) => ({
+    key: node.key,
+    status: node.status,
+    ready: node.ready,
+  }));
+
+  let owner: NoReadyDiagnostic["owner"] = "goal-plan";
+  let cause = "goal plan has no ready nodes";
+  if (planStatus !== "active") {
+    owner = "goal";
+    cause = `goal status is ${goal.status}`;
+  } else if (pendingNodes.length === 0) {
+    owner = "goal-plan";
+    cause = `goal plan has no pending runnable nodes; incomplete nodes: ${
+      summarizeLabels(incompleteDetails.map((node) => `${node.key}:${node.status}`))
+    }`;
+  } else if (pendingDetails.every((node) => node.budgetExhausted)) {
+    owner = "goal-plan-node";
+    cause = `all pending nodes are budget-exhausted: ${summarizeLabels(pendingDetails.map((node) => node.key))}`;
+  } else {
+    const missingDependencies = pendingDetails.flatMap((node) =>
+      node.unmetDependencies
+        .filter((dependency) => dependency.status === "missing")
+        .map((dependency) => `${node.key}->${dependency.key}`),
+    );
+    if (missingDependencies.length > 0) {
+      owner = "goal-plan";
+      cause = `pending nodes reference missing dependencies: ${summarizeLabels(missingDependencies)}`;
+    } else if (pendingDetails.every((node) => node.unmetDependencies.length > 0 || node.budgetExhausted)) {
+      owner = "goal-plan-node";
+      const waiting = pendingDetails
+        .filter((node) => node.unmetDependencies.length > 0)
+        .map((node) => `${node.key} waits on ${
+          node.unmetDependencies.map((dependency) => `${dependency.key}:${dependency.status}`).join(",")
+        }`);
+      const exhausted = pendingDetails
+        .filter((node) => node.budgetExhausted)
+        .map((node) => `${node.key} budget exhausted`);
+      cause = `pending nodes are blocked by prerequisites: ${summarizeLabels([...waiting, ...exhausted])}`;
+    }
+  }
+
+  const blocker = `${cause}; owner=${owner}`;
+  return {
+    owner,
+    blocker,
+    planStatus,
+    rollup: rollupSummary(nodes),
+    pendingNodes: pendingDetails,
+    incompleteNodes: incompleteDetails,
+  };
+}
+
 function metadataFor(goal: Goal, node: GoalPlanNode, context: RunGoalOptions["context"]): Record<string, string | undefined> {
   return {
     loopId: context?.loopId,
@@ -149,7 +256,13 @@ async function planGoal(store: Store, goal: Goal, spec: GoalSpec, model: Languag
   return store.createGoalPlanNodes(goal.goalId, rawNodes, { daemonLeaseId: opts.daemonLeaseId });
 }
 
-function stdoutFor(goal: Goal, nodes: GoalPlanNode[], evidence: string[], validation?: unknown): string {
+function stdoutFor(
+  goal: Goal,
+  nodes: GoalPlanNode[],
+  evidence: string[],
+  validation?: unknown,
+  diagnostics?: unknown,
+): string {
   return JSON.stringify(
     {
       goal,
@@ -157,6 +270,7 @@ function stdoutFor(goal: Goal, nodes: GoalPlanNode[], evidence: string[], valida
       nodes,
       evidence,
       validation,
+      diagnostics,
     },
     null,
     2,
@@ -196,6 +310,7 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
   let validation: unknown;
   let lastBlocker = "";
   let repeatedBlockerCount = 0;
+  let lastDiagnostic: NoReadyDiagnostic | undefined;
 
   if (budgetExhausted(goal)) {
     goal = store.updateGoalStatus(goal.goalId, "budgetLimited", { daemonLeaseId: opts.daemonLeaseId });
@@ -208,14 +323,14 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
       return resultFromGoal(goal, "failed", stdoutFor(goal, nodes, evidence), "goal cancelled", startedAt);
     }
     goal = store.requireGoal(goal.goalId);
-    nodes = store.listGoalPlanNodes(goal.goalId);
+    nodes = syncReadyFlags(store, goal, store.listGoalPlanNodes(goal.goalId), opts);
     if (budgetExhausted(goal)) {
       goal = store.updateGoalStatus(goal.goalId, "budgetLimited", { daemonLeaseId: opts.daemonLeaseId });
       return resultFromGoal(goal, "failed", stdoutFor(goal, nodes, evidence), "goal token budget exhausted", startedAt);
     }
 
     const readyKeys = readyNodeKeys({
-      status: goal.status === "active" ? "active" : goal.status === "budgetLimited" ? "budgetLimited" : "blocked",
+      status: planStatusForGoal(goal),
       nodes,
     });
     if (readyKeys.length > 0) {
@@ -317,7 +432,9 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
       continue;
     }
 
-    const blocker = "no ready goal nodes and goal plan is incomplete";
+    const diagnostic = noReadyDiagnostic(goal, nodes);
+    lastDiagnostic = diagnostic;
+    const blocker = diagnostic.blocker;
     if (blocker === lastBlocker) repeatedBlockerCount += 1;
     else {
       lastBlocker = blocker;
@@ -329,16 +446,23 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
         turn,
         phase: "status",
         status: repeatedBlockerCount >= 3 ? "blocked" : "active",
-        evidence: { blocker },
+        evidence: diagnostic,
       },
       { daemonLeaseId: opts.daemonLeaseId },
     );
     if (repeatedBlockerCount >= 3) {
       goal = store.updateGoalStatus(goal.goalId, "blocked", { daemonLeaseId: opts.daemonLeaseId });
-      return resultFromGoal(goal, "failed", stdoutFor(goal, nodes, evidence, validation), blocker, startedAt);
+      return resultFromGoal(goal, "failed", stdoutFor(goal, nodes, evidence, validation, diagnostic), blocker, startedAt);
     }
   }
 
   goal = store.updateGoalStatus(goal.goalId, "usageLimited", { daemonLeaseId: opts.daemonLeaseId });
-  return resultFromGoal(goal, "failed", stdoutFor(goal, store.listGoalPlanNodes(goal.goalId), evidence, validation), "goal max turns exhausted", startedAt);
+  const exhaustedError = lastDiagnostic?.blocker ?? (lastBlocker ? `${lastBlocker}; max turns exhausted` : "goal max turns exhausted");
+  return resultFromGoal(
+    goal,
+    "failed",
+    stdoutFor(goal, store.listGoalPlanNodes(goal.goalId), evidence, validation, lastDiagnostic),
+    exhaustedError,
+    startedAt,
+  );
 }

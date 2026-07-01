@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import type { Loop, LoopRun } from "../types.js";
 import { redact } from "./format.js";
 import type { Store } from "./store.js";
@@ -11,6 +12,7 @@ export type RunFailureClassification =
   | "schema_response_format"
   | "node_init"
   | "preflight"
+  | "route_functional"
   | "timeout"
   | "sigsegv"
   | "skipped_previous_active"
@@ -49,7 +51,7 @@ export interface LoopExpectationResult {
   loop: Pick<Loop, "id" | "name" | "status" | "nextRunAt">;
   ok: boolean;
   check: {
-    id: "latest-run-succeeded";
+    id: "latest-run-succeeded" | "route-functional-health";
     status: "pass" | "fail" | "warn";
     message: string;
   };
@@ -89,6 +91,7 @@ const CLASSIFICATIONS: RunFailureClassification[] = [
   "schema_response_format",
   "node_init",
   "preflight",
+  "route_functional",
   "timeout",
   "sigsegv",
   "skipped_previous_active",
@@ -109,6 +112,26 @@ function searchableText(run: LoopRun): string {
   return [run.error, run.stderr, run.stdout].filter(Boolean).join("\n").toLowerCase();
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function objectField(value: Record<string, unknown> | undefined, key: string): Record<string, unknown> | undefined {
+  if (!value) return undefined;
+  const field = value[key];
+  return isRecord(field) ? field : undefined;
+}
+
+function tagsFromValue(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((entry) => String(entry).trim()).filter(Boolean);
+  if (typeof value === "string") return value.split(",").map((entry) => entry.trim()).filter(Boolean);
+  return [];
+}
+
 function stableFingerprint(parts: string[]): string {
   return createHash("sha256").update(parts.join("\n")).digest("hex").slice(0, 16);
 }
@@ -120,6 +143,14 @@ function stableFailureFingerprint(run: LoopRun, classification: RunFailureClassi
     String(run.status),
     String(run.exitCode ?? ""),
     (run.error ?? run.stderr ?? run.stdout ?? "").replace(/\d{4}-\d{2}-\d{2}T\S+/g, "<timestamp>").slice(0, FINGERPRINT_EVIDENCE_CHARS),
+  ]);
+}
+
+function stableRouteFunctionalFingerprint(loop: Loop, reason: string): string {
+  return stableFingerprint([
+    loop.id,
+    "route_functional",
+    reason.replace(/\d{4}-\d{2}-\d{2}T\S+/g, "<timestamp>").slice(0, FINGERPRINT_EVIDENCE_CHARS),
   ]);
 }
 
@@ -157,6 +188,157 @@ export function classifyRunFailure(run: LoopRun): RunFailureSignal | undefined {
       exitCode: run.exitCode,
     },
   };
+}
+
+const ROUTE_FUNCTIONAL_DISALLOWED_TAGS = new Set([
+  "no-auto",
+  "manual",
+  "manual-required",
+  "approval-required",
+  "blocked",
+  "completed",
+  "done",
+  "cancelled",
+  "canceled",
+  "failed",
+  "archived",
+]);
+
+const ROUTE_FUNCTIONAL_DISALLOWED_STATUSES = new Set([
+  "blocked",
+  "completed",
+  "done",
+  "cancelled",
+  "canceled",
+  "failed",
+  "archived",
+]);
+
+function parseJsonObject(raw: string | undefined): Record<string, unknown> | undefined {
+  if (!raw?.trim()) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function routeEvidenceReport(run: LoopRun): Record<string, unknown> | undefined {
+  const stdoutReport = parseJsonObject(run.stdout);
+  const evidencePath = stringValue(stdoutReport?.evidencePath);
+  if (evidencePath && existsSync(evidencePath)) {
+    try {
+      return parseJsonObject(readFileSync(evidencePath, "utf8")) ?? stdoutReport;
+    } catch {
+      return stdoutReport;
+    }
+  }
+  return stdoutReport;
+}
+
+function commandName(command: string): string {
+  return command.split(/[\\/]/).at(-1) ?? command;
+}
+
+function argsContainSequence(args: string[], sequence: string[]): boolean {
+  for (let index = 0; index <= args.length - sequence.length; index += 1) {
+    if (sequence.every((part, offset) => args[index + offset] === part)) return true;
+  }
+  return false;
+}
+
+function isRouteDrainLoop(loop: Loop): boolean {
+  if (loop.target.type !== "command") return false;
+  if (commandName(loop.target.command) !== "loops") return false;
+  const args = loop.target.args ?? [];
+  return (
+    argsContainSequence(args, ["events", "drain", "todos-task"]) ||
+    argsContainSequence(args, ["routes", "drain", "todos-task"]) ||
+    argsContainSequence(args, ["route", "drain", "todos-task"])
+  );
+}
+
+function routeResultTaskState(result: Record<string, unknown>): { taskId?: string; tags: string[]; status?: string } {
+  const event = objectField(result, "event");
+  const data = objectField(event, "data");
+  const task = objectField(data, "task");
+  const payload = objectField(data, "payload");
+  const payloadTask = objectField(payload, "task");
+  const metadata = objectField(data, "metadata");
+  const records = [data, task, payload, payloadTask, metadata].filter(isRecord);
+  const tags = new Set<string>();
+  for (const record of records) {
+    for (const tag of tagsFromValue(record.tags ?? record.task_tags ?? record.taskTags)) {
+      tags.add(tag.toLowerCase());
+    }
+  }
+  const status = records
+    .map((record) => stringValue(record.status ?? record.task_status ?? record.taskStatus)?.toLowerCase())
+    .find(Boolean);
+  return {
+    taskId: stringValue(event?.subject) ?? stringValue(data?.id) ?? stringValue(task?.id) ?? stringValue(payloadTask?.id),
+    tags: [...tags],
+    status,
+  };
+}
+
+function detectRouteFunctionalFailure(store: Store, loop: Loop, run: LoopRun): RunFailureSignal | undefined {
+  if (run.status !== "succeeded") return undefined;
+  if (!isRouteDrainLoop(loop)) return undefined;
+  const report = routeEvidenceReport(run);
+  const rawResults = Array.isArray(report?.results) ? report.results.filter(isRecord) : [];
+  for (const result of rawResults) {
+    const kind = stringValue(result.kind);
+    const task = routeResultTaskState(result);
+    const disallowedTag = task.tags.find((tag) => ROUTE_FUNCTIONAL_DISALLOWED_TAGS.has(tag));
+    if (kind && kind !== "skipped" && disallowedTag) {
+      const reason = `route drain ${kind} task ${task.taskId ?? "unknown"} with disallowed tag ${disallowedTag}`;
+      return {
+        classification: "route_functional",
+        fingerprint: stableRouteFunctionalFingerprint(loop, reason),
+        evidence: { error: reason, stdout: redactedEvidence(run.stdout), exitCode: run.exitCode },
+      };
+    }
+    if (kind && kind !== "skipped" && task.status && ROUTE_FUNCTIONAL_DISALLOWED_STATUSES.has(task.status)) {
+      const reason = `route drain ${kind} task ${task.taskId ?? "unknown"} with non-routable status ${task.status}`;
+      return {
+        classification: "route_functional",
+        fingerprint: stableRouteFunctionalFingerprint(loop, reason),
+        evidence: { error: reason, stdout: redactedEvidence(run.stdout), exitCode: run.exitCode },
+      };
+    }
+    const reason = stringValue(result.reason);
+    if (kind === "skipped" && reason === "task metadata requires manual or approval-gated handling") {
+      const message = `route drain skipped task ${task.taskId ?? "unknown"} with ambiguous manual-gate reason`;
+      return {
+        classification: "route_functional",
+        fingerprint: stableRouteFunctionalFingerprint(loop, message),
+        evidence: { error: message, stdout: redactedEvidence(run.stdout), exitCode: run.exitCode },
+      };
+    }
+    const sourceTaskUpdate = objectField(result, "sourceTaskUpdate");
+    if (kind === "skipped" && sourceTaskUpdate && sourceTaskUpdate.ok === false) {
+      const updateError = stringValue(sourceTaskUpdate.error);
+      const message = `route drain skipped task ${task.taskId ?? "unknown"} but failed to update source task${updateError ? `: ${updateError}` : ""}`;
+      return {
+        classification: "route_functional",
+        fingerprint: stableRouteFunctionalFingerprint(loop, message),
+        evidence: { error: message, stdout: redactedEvidence(run.stdout), exitCode: run.exitCode },
+      };
+    }
+    const childLoopId = stringValue(objectField(result, "loop")?.id) ?? stringValue(result.loopId);
+    const childRun = childLoopId ? store.listRuns({ loopId: childLoopId, limit: 1 })[0] : undefined;
+    if (childRun && !["succeeded", "running"].includes(childRun.status)) {
+      const message = `route drain ${kind ?? "handled"} task ${task.taskId ?? "unknown"} but child loop ${childLoopId} latest run is ${childRun.status}`;
+      return {
+        classification: "route_functional",
+        fingerprint: stableRouteFunctionalFingerprint(loop, message),
+        evidence: { error: message, stdout: redactedEvidence(run.stdout), stderr: redactedEvidence(childRun.stderr), exitCode: childRun.exitCode },
+      };
+    }
+  }
+  return undefined;
 }
 
 function targetRoute(loop: Loop): LoopExpectationResult["route"] {
@@ -242,6 +424,18 @@ export function expectationForLoop(store: Store, loop: Loop): LoopExpectationRes
       ok: true,
       check: { id: "latest-run-succeeded", status: "warn", message: "loop has no recorded runs yet" },
       route,
+    };
+  }
+  const routeFailure = detectRouteFunctionalFailure(store, loop, latestRun);
+  if (routeFailure) {
+    return {
+      loop: { id: loop.id, name: loop.name, status: loop.status, nextRunAt: loop.nextRunAt },
+      ok: false,
+      check: { id: "route-functional-health", status: "fail", message: routeFailure.evidence.error ?? "route functional blocker detected" },
+      latestRun: healthRun(latestRun),
+      failure: routeFailure,
+      route,
+      recommendedTask: recommendedTask(loop, latestRun, routeFailure, route),
     };
   }
   if (latestRun.status === "succeeded") {

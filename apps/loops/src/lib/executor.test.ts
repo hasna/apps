@@ -519,6 +519,7 @@ describe("executeLoop", () => {
             type: "agent",
             provider,
             prompt: secret,
+            model: provider === "opencode" ? "openrouter/google/gemini-2.5-flash" : undefined,
             configIsolation: "safe",
           },
         });
@@ -542,5 +543,20 @@ describe("executeLoop", () => {
         store.close();
       }
     }
+  });
+
+  test("requires explicit opencode model before spawning provider", () => {
+    expect(() =>
+      preflightTarget(
+        {
+          type: "agent",
+          provider: "opencode",
+          prompt: "say ok",
+          configIsolation: "safe",
+        } as any,
+        {},
+        { env: { PATH: "/usr/bin:/bin" } },
+      ),
+    ).toThrow("opencode.model is required");
   });
 });
