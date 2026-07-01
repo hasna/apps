@@ -39,6 +39,16 @@ export function ensureStore(path: string): void {
   }
 }
 
+export function loadStoreIfExists(path: string): Store & { exists: boolean } {
+  if (!existsSync(path)) return { exists: false, items: [] };
+  const raw = readFileSync(path, 'utf8');
+  const parsed = JSON.parse(raw) as Store;
+  if (!parsed || !Array.isArray(parsed.items)) {
+    return { exists: true, items: [] };
+  }
+  return { exists: true, items: parsed.items };
+}
+
 function lockPath(path: string): string {
   return `${path}.lock`;
 }
@@ -93,9 +103,10 @@ export function saveStore(path: string, store: Store): void {
   renameSync(tmp, path);
 }
 
-export function withLock<T>(path: string, fn: () => T): T {
+export function withLock<T>(path: string, fn: () => T, options: { createParent?: boolean } = {}): T {
   const owner = randomUUID();
   const lpath = lockPath(path);
+  if (options.createParent) ensureParentDir(lpath);
   acquireLock(lpath, owner);
   try {
     return fn();

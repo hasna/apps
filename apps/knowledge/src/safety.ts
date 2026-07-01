@@ -164,9 +164,32 @@ export function auditId(input: SafetyAuditInput): string {
     .slice(0, 24)}`;
 }
 
+function truncateAuditMetadata(value: unknown, depth = 0): unknown {
+  if (depth > 6) return '[Truncated:depth]';
+  if (typeof value === 'string') {
+    return value.length > 1000 ? `${value.slice(0, 1000)}...[Truncated:${value.length - 1000} chars]` : value;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean' || value === null || value === undefined) return value;
+  if (Array.isArray(value)) {
+    const entries = value.slice(0, 25).map((entry) => truncateAuditMetadata(entry, depth + 1));
+    if (value.length > 25) entries.push(`[Truncated:${value.length - 25} items]`);
+    return entries;
+  }
+  if (typeof value === 'object') {
+    const output: Record<string, unknown> = {};
+    const entries = Object.entries(value as Record<string, unknown>).slice(0, 50);
+    for (const [key, entry] of entries) output[key] = truncateAuditMetadata(entry, depth + 1);
+    const total = Object.keys(value as Record<string, unknown>).length;
+    if (total > entries.length) output.__truncated_keys = total - entries.length;
+    return output;
+  }
+  return String(value);
+}
+
 export function recordAuditEvent(db: Database, input: SafetyAuditInput): string {
   const createdAt = input.created_at ?? new Date().toISOString();
-  const id = auditId({ ...input, created_at: createdAt });
+  const metadata = truncateAuditMetadata(input.metadata ?? {});
+  const id = auditId({ ...input, metadata: metadata as Record<string, unknown>, created_at: createdAt });
   db.run(
     `INSERT INTO audit_events (id, event_type, action, target_uri, decision, metadata_json, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -176,7 +199,7 @@ export function recordAuditEvent(db: Database, input: SafetyAuditInput): string 
       input.action,
       input.target_uri ?? null,
       input.decision,
-      JSON.stringify(input.metadata ?? {}),
+      JSON.stringify(metadata),
       createdAt,
     ],
   );

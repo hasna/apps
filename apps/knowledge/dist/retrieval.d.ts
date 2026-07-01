@@ -68,4 +68,8 @@ export interface KnowledgeContextPack {
         freshness: string[];
     };
 }
+export declare function retrieveKnowledgeContextFromSearch(search: HybridSearchResult, options?: {
+    dbPath?: string;
+    contextChars?: number;
+}): KnowledgeContextPack;
 export declare function retrieveKnowledgeContext(options: RetrievalOptions): Promise<KnowledgeContextPack>;

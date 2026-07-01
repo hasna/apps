@@ -23,6 +23,8 @@ export interface ManifestIngestOptions {
   now?: Date;
   maxChunkChars?: number;
   chunkOverlapChars?: number;
+  maxInputBytes?: number;
+  maxItems?: number;
 }
 
 export interface ManifestItemsIngestOptions {
@@ -34,6 +36,7 @@ export interface ManifestItemsIngestOptions {
   now?: Date;
   maxChunkChars?: number;
   chunkOverlapChars?: number;
+  maxItems?: number;
 }
 
 export interface ManifestIngestResult {
@@ -46,9 +49,19 @@ export interface ManifestIngestResult {
   chunks_deleted: number;
   redactions: number;
   skipped: number;
+  items_preview: Array<{
+    source_ref: string;
+    title: string | null;
+    status: string;
+    has_text: boolean;
+  }>;
 }
 
 export type ManifestObject = Record<string, unknown>;
+
+const DEFAULT_MAX_MANIFEST_INPUT_BYTES = 20 * 1024 * 1024;
+const DEFAULT_MAX_MANIFEST_ITEMS = 10_000;
+const DEFAULT_MANIFEST_PREVIEW_ITEMS = 10;
 
 interface NormalizedManifestItem {
   raw: ManifestObject;
@@ -302,10 +315,23 @@ async function readS3Text(uri: string, config?: KnowledgeConfig, safetyPolicy?: 
   return await response.Body.transformToString();
 }
 
-async function readManifestInput(input: string, config?: KnowledgeConfig, safetyPolicy?: SafetyPolicy): Promise<string> {
-  if (input.startsWith('s3://')) return readS3Text(input, config, safetyPolicy);
-  if (!existsSync(input)) throw new Error(`Manifest not found: ${input}`);
-  return readFileSync(input, 'utf8');
+async function readManifestInput(
+  input: string,
+  config?: KnowledgeConfig,
+  safetyPolicy?: SafetyPolicy,
+  maxInputBytes = DEFAULT_MAX_MANIFEST_INPUT_BYTES,
+): Promise<string> {
+  const text = input.startsWith('s3://')
+    ? await readS3Text(input, config, safetyPolicy)
+    : (() => {
+        if (!existsSync(input)) throw new Error(`Manifest not found: ${input}`);
+        return readFileSync(input, 'utf8');
+      })();
+  const bytes = Buffer.byteLength(text);
+  if (bytes > maxInputBytes) {
+    throw new Error(`Manifest input is too large: ${bytes} bytes exceeds ${maxInputBytes} byte limit.`);
+  }
+  return text;
 }
 
 interface TextChunk {
@@ -486,8 +512,12 @@ export async function ingestOpenFilesManifest(options: ManifestIngestOptions): P
   const now = options.now ?? new Date();
   if (options.safetyPolicy) assertWriteAllowed(options.dbPath, options.safetyPolicy);
   migrateKnowledgeDb(options.dbPath);
-  const text = await readManifestInput(options.input, options.config, options.safetyPolicy);
+  const text = await readManifestInput(options.input, options.config, options.safetyPolicy, options.maxInputBytes);
   const items = parseManifestText(text);
+  const maxItems = options.maxItems ?? DEFAULT_MAX_MANIFEST_ITEMS;
+  if (items.length > maxItems) {
+    throw new Error(`Manifest contains too many items: ${items.length} exceeds ${maxItems} item limit.`);
+  }
   return ingestOpenFilesManifestItems({
     dbPath: options.dbPath,
     items,
@@ -496,6 +526,7 @@ export async function ingestOpenFilesManifest(options: ManifestIngestOptions): P
     now,
     maxChunkChars: options.maxChunkChars,
     chunkOverlapChars: options.chunkOverlapChars,
+    maxItems: options.maxItems,
   });
 }
 
@@ -503,8 +534,12 @@ export async function ingestOpenFilesManifestItems(options: ManifestItemsIngestO
   const now = (options.now ?? new Date()).toISOString();
   const maxChunkChars = options.maxChunkChars ?? 4000;
   const chunkOverlapChars = options.chunkOverlapChars ?? 200;
+  const maxItems = options.maxItems ?? DEFAULT_MAX_MANIFEST_ITEMS;
   if (maxChunkChars < 500) throw new Error('maxChunkChars must be at least 500.');
   if (chunkOverlapChars < 0 || chunkOverlapChars >= maxChunkChars) throw new Error('chunkOverlapChars must be less than maxChunkChars.');
+  if (options.items.length > maxItems) {
+    throw new Error(`Manifest contains too many items: ${options.items.length} exceeds ${maxItems} item limit.`);
+  }
 
   if (options.safetyPolicy) assertWriteAllowed(options.dbPath, options.safetyPolicy);
   migrateKnowledgeDb(options.dbPath);
@@ -517,6 +552,7 @@ export async function ingestOpenFilesManifestItems(options: ManifestItemsIngestO
       let chunksDeleted = 0;
       let redactions = 0;
       let skipped = 0;
+      const preview: ManifestIngestResult['items_preview'] = [];
       recordAuditEvent(db, {
         event_type: 'source_read',
         action: options.readAction ?? (options.sourceLabel.startsWith('s3://') ? 's3_manifest_read' : 'local_manifest_read'),
@@ -527,6 +563,14 @@ export async function ingestOpenFilesManifestItems(options: ManifestItemsIngestO
       });
       for (const raw of options.items) {
         const item = normalizeManifestItem(raw, now);
+        if (preview.length < DEFAULT_MANIFEST_PREVIEW_ITEMS) {
+          preview.push({
+            source_ref: item.sourceRef,
+            title: item.title,
+            status: item.status,
+            has_text: Boolean(item.text),
+          });
+        }
         const sourceId = upsertSource(db, item, now);
         const revisionId = upsertRevision(db, sourceId, item, now);
         seenSources.add(sourceId);
@@ -556,6 +600,7 @@ export async function ingestOpenFilesManifestItems(options: ManifestItemsIngestO
         chunks_deleted: chunksDeleted,
         redactions,
         skipped,
+        items_preview: preview,
       };
     })();
     return result;

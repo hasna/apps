@@ -52,7 +52,7 @@ function writeStoreLocked(storePath, fn) {
     const result = fn(db);
     saveStore(storePath, db);
     return result;
-  });
+  }, { createParent: true });
 }
 
 function findItem(db, id) {

@@ -267,9 +267,11 @@ function loadGraphEvidence(dbPath: string, results: RerankedSearchEntry[]): Retr
   return { citations, backlinks };
 }
 
-export async function retrieveKnowledgeContext(options: RetrievalOptions): Promise<KnowledgeContextPack> {
+export function retrieveKnowledgeContextFromSearch(
+  search: HybridSearchResult,
+  options: { dbPath?: string; contextChars?: number } = {},
+): KnowledgeContextPack {
   const contextChars = Math.max(200, Math.min(options.contextChars ?? 1200, 4000));
-  const search = await hybridSearch(options);
   const terms = queryTerms(search.query);
   const warnings = [...search.warnings];
   const permissionNotes = new Set<string>();
@@ -318,10 +320,18 @@ export async function retrieveKnowledgeContext(options: RetrievalOptions): Promi
     results,
     citations,
     excerpts,
-    graph: loadGraphEvidence(options.dbPath, results),
+    graph: options.dbPath ? loadGraphEvidence(options.dbPath, results) : { citations: [], backlinks: [] },
     notes: {
       permissions: Array.from(permissionNotes),
       freshness: Array.from(freshnessNotes),
     },
   };
+}
+
+export async function retrieveKnowledgeContext(options: RetrievalOptions): Promise<KnowledgeContextPack> {
+  const search = await hybridSearch(options);
+  return retrieveKnowledgeContextFromSearch(search, {
+    dbPath: options.dbPath,
+    contextChars: options.contextChars,
+  });
 }

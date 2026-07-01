@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import {
@@ -262,6 +262,35 @@ function emptyImportResult(dryRun = true) {
 }
 
 describe('public knowledge sdk', () => {
+  test('project-scoped SDK reads stay no-create when workspace is absent', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-sdk-readonly-'));
+    const client = createKnowledgeClient({ scope: 'project', cwd: dir });
+
+    const paths = client.paths();
+    expect(paths.home).toBe(join(dir, '.hasna', 'knowledge'));
+    expect(paths.exists).toBe(false);
+    expect(paths.knowledge_db_exists).toBe(false);
+    expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
+
+    expect(client.inventory().paths.knowledge_db_exists).toBe(false);
+    expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
+
+    const search = await client.search({ query: 'missing sdk scope' });
+    expect(search.results).toEqual([]);
+    expect(search.warnings).toContain('knowledge_db_missing');
+    expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
+
+    const context = await client.retrieveContext({ query: 'missing sdk scope' });
+    expect(context.excerpts).toEqual([]);
+    expect(context.warnings).toContain('knowledge_db_missing');
+    expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
+
+    expect(client.sync.machines()).toEqual([]);
+    expect(client.sync.conflicts()).toEqual([]);
+    expect(client.sync.status().sqlite_schema_version).toBe(0);
+    expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
+  });
+
   test('exposes a stable client facade for installed apps', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-sdk-'));
     const client: KnowledgeClient = createKnowledgeClient({ scope: 'project', cwd: dir });

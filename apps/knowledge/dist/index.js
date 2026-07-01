@@ -17514,6 +17514,41 @@ async function hybridSearch(options) {
     results
   };
 }
+async function hybridSearchLegacyStore(options) {
+  const query = options.query.trim();
+  if (!query)
+    throw new Error("Search query is required.");
+  const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
+  const terms = queryTerms(query);
+  const semanticEnabled = options.semantic === true || options.fake === true || Boolean(options.modelRef);
+  const merged = new Map;
+  const legacyRows = selectLegacyItems(options.legacyStorePath, terms, Math.max(limit, 10));
+  legacyRows.forEach(({ item, score }) => mergeResult(merged, legacyItemResult(item, score)));
+  const warnings = ["knowledge_db_missing"];
+  if (semanticEnabled)
+    warnings.push("semantic_search_skipped_knowledge_db_missing");
+  const results = sortResults(Array.from(merged.values())).slice(0, limit);
+  return {
+    query,
+    limit,
+    mode: {
+      keyword: true,
+      catalog: true,
+      semantic: semanticEnabled
+    },
+    semantic_provider: null,
+    semantic_model: null,
+    semantic_dimensions: null,
+    counts: {
+      keyword_results: legacyRows.length,
+      catalog_results: 0,
+      semantic_results: 0,
+      merged_results: results.length
+    },
+    warnings,
+    results
+  };
+}
 
 // src/retrieval.ts
 function stableId2(prefix, value) {
@@ -17684,9 +17719,8 @@ function loadGraphEvidence(dbPath, results) {
   }
   return { citations, backlinks };
 }
-async function retrieveKnowledgeContext(options) {
+function retrieveKnowledgeContextFromSearch(search, options = {}) {
   const contextChars = Math.max(200, Math.min(options.contextChars ?? 1200, 4000));
-  const search = await hybridSearch(options);
   const terms = queryTerms2(search.query);
   const warnings = [...search.warnings];
   const permissionNotes = new Set;
@@ -17725,12 +17759,19 @@ async function retrieveKnowledgeContext(options) {
     results,
     citations,
     excerpts,
-    graph: loadGraphEvidence(options.dbPath, results),
+    graph: options.dbPath ? loadGraphEvidence(options.dbPath, results) : { citations: [], backlinks: [] },
     notes: {
       permissions: Array.from(permissionNotes),
       freshness: Array.from(freshnessNotes)
     }
   };
+}
+async function retrieveKnowledgeContext(options) {
+  const search = await hybridSearch(options);
+  return retrieveKnowledgeContextFromSearch(search, {
+    dbPath: options.dbPath,
+    contextChars: options.contextChars
+  });
 }
 
 // src/agent.ts
@@ -18123,9 +18164,36 @@ function redactSecrets(text, policy) {
 function auditId(input) {
   return `audit_${createHash3("sha256").update(`${input.event_type}\x00${input.action}\x00${input.target_uri ?? ""}\x00${input.created_at ?? ""}\x00${JSON.stringify(input.metadata ?? {})}\x00${randomUUID3()}`).digest("hex").slice(0, 24)}`;
 }
+function truncateAuditMetadata(value, depth = 0) {
+  if (depth > 6)
+    return "[Truncated:depth]";
+  if (typeof value === "string") {
+    return value.length > 1000 ? `${value.slice(0, 1000)}...[Truncated:${value.length - 1000} chars]` : value;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || value === null || value === undefined)
+    return value;
+  if (Array.isArray(value)) {
+    const entries = value.slice(0, 25).map((entry) => truncateAuditMetadata(entry, depth + 1));
+    if (value.length > 25)
+      entries.push(`[Truncated:${value.length - 25} items]`);
+    return entries;
+  }
+  if (typeof value === "object") {
+    const output = {};
+    const entries = Object.entries(value).slice(0, 50);
+    for (const [key, entry] of entries)
+      output[key] = truncateAuditMetadata(entry, depth + 1);
+    const total = Object.keys(value).length;
+    if (total > entries.length)
+      output.__truncated_keys = total - entries.length;
+    return output;
+  }
+  return String(value);
+}
 function recordAuditEvent(db, input) {
   const createdAt = input.created_at ?? new Date().toISOString();
-  const id = auditId({ ...input, created_at: createdAt });
+  const metadata = truncateAuditMetadata(input.metadata ?? {});
+  const id = auditId({ ...input, metadata, created_at: createdAt });
   db.run(`INSERT INTO audit_events (id, event_type, action, target_uri, decision, metadata_json, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`, [
     id,
@@ -18133,7 +18201,7 @@ function recordAuditEvent(db, input) {
     input.action,
     input.target_uri ?? null,
     input.decision,
-    JSON.stringify(input.metadata ?? {}),
+    JSON.stringify(metadata),
     createdAt
   ]);
   return id;
@@ -21716,6 +21784,9 @@ async function consumeOpenFilesOutbox(options) {
 import { createHash as createHash8 } from "crypto";
 import { existsSync as existsSync7, readFileSync as readFileSync7 } from "fs";
 import { basename as basename2 } from "path";
+var DEFAULT_MAX_MANIFEST_INPUT_BYTES = 20 * 1024 * 1024;
+var DEFAULT_MAX_MANIFEST_ITEMS = 1e4;
+var DEFAULT_MANIFEST_PREVIEW_ITEMS = 10;
 function stableId5(prefix, value) {
   return `${prefix}_${createHash8("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
@@ -21933,12 +22004,17 @@ async function readS3Text2(uri, config2, safetyPolicy) {
     return "";
   return await response.Body.transformToString();
 }
-async function readManifestInput(input, config2, safetyPolicy) {
-  if (input.startsWith("s3://"))
-    return readS3Text2(input, config2, safetyPolicy);
-  if (!existsSync7(input))
-    throw new Error(`Manifest not found: ${input}`);
-  return readFileSync7(input, "utf8");
+async function readManifestInput(input, config2, safetyPolicy, maxInputBytes = DEFAULT_MAX_MANIFEST_INPUT_BYTES) {
+  const text = input.startsWith("s3://") ? await readS3Text2(input, config2, safetyPolicy) : (() => {
+    if (!existsSync7(input))
+      throw new Error(`Manifest not found: ${input}`);
+    return readFileSync7(input, "utf8");
+  })();
+  const bytes = Buffer.byteLength(text);
+  if (bytes > maxInputBytes) {
+    throw new Error(`Manifest input is too large: ${bytes} bytes exceeds ${maxInputBytes} byte limit.`);
+  }
+  return text;
 }
 function chunkText(text, maxChars, overlapChars) {
   const normalized = text.replace(/\r\n/g, `
@@ -22101,8 +22177,12 @@ async function ingestOpenFilesManifest(options) {
   if (options.safetyPolicy)
     assertWriteAllowed(options.dbPath, options.safetyPolicy);
   migrateKnowledgeDb(options.dbPath);
-  const text = await readManifestInput(options.input, options.config, options.safetyPolicy);
+  const text = await readManifestInput(options.input, options.config, options.safetyPolicy, options.maxInputBytes);
   const items = parseManifestText(text);
+  const maxItems = options.maxItems ?? DEFAULT_MAX_MANIFEST_ITEMS;
+  if (items.length > maxItems) {
+    throw new Error(`Manifest contains too many items: ${items.length} exceeds ${maxItems} item limit.`);
+  }
   return ingestOpenFilesManifestItems({
     dbPath: options.dbPath,
     items,
@@ -22110,17 +22190,22 @@ async function ingestOpenFilesManifest(options) {
     safetyPolicy: options.safetyPolicy,
     now,
     maxChunkChars: options.maxChunkChars,
-    chunkOverlapChars: options.chunkOverlapChars
+    chunkOverlapChars: options.chunkOverlapChars,
+    maxItems: options.maxItems
   });
 }
 async function ingestOpenFilesManifestItems(options) {
   const now = (options.now ?? new Date).toISOString();
   const maxChunkChars = options.maxChunkChars ?? 4000;
   const chunkOverlapChars = options.chunkOverlapChars ?? 200;
+  const maxItems = options.maxItems ?? DEFAULT_MAX_MANIFEST_ITEMS;
   if (maxChunkChars < 500)
     throw new Error("maxChunkChars must be at least 500.");
   if (chunkOverlapChars < 0 || chunkOverlapChars >= maxChunkChars)
     throw new Error("chunkOverlapChars must be less than maxChunkChars.");
+  if (options.items.length > maxItems) {
+    throw new Error(`Manifest contains too many items: ${options.items.length} exceeds ${maxItems} item limit.`);
+  }
   if (options.safetyPolicy)
     assertWriteAllowed(options.dbPath, options.safetyPolicy);
   migrateKnowledgeDb(options.dbPath);
@@ -22133,6 +22218,7 @@ async function ingestOpenFilesManifestItems(options) {
       let chunksDeleted = 0;
       let redactions = 0;
       let skipped = 0;
+      const preview = [];
       recordAuditEvent(db, {
         event_type: "source_read",
         action: options.readAction ?? (options.sourceLabel.startsWith("s3://") ? "s3_manifest_read" : "local_manifest_read"),
@@ -22143,6 +22229,14 @@ async function ingestOpenFilesManifestItems(options) {
       });
       for (const raw of options.items) {
         const item = normalizeManifestItem(raw, now);
+        if (preview.length < DEFAULT_MANIFEST_PREVIEW_ITEMS) {
+          preview.push({
+            source_ref: item.sourceRef,
+            title: item.title,
+            status: item.status,
+            has_text: Boolean(item.text)
+          });
+        }
         const sourceId = upsertSource(db, item, now);
         const revisionId = upsertRevision(db, sourceId, item, now);
         seenSources.add(sourceId);
@@ -22171,7 +22265,8 @@ async function ingestOpenFilesManifestItems(options) {
         chunks_inserted: chunksInserted,
         chunks_deleted: chunksDeleted,
         redactions,
-        skipped
+        skipped,
+        items_preview: preview
       };
     })();
     return result;
@@ -25724,6 +25819,319 @@ function legacyInventoryItem(item) {
     updated_at: item.updated_at
   };
 }
+function emptyKnowledgeDbStats() {
+  return {
+    schema_version: 0,
+    sources: 0,
+    source_revisions: 0,
+    chunks: 0,
+    wiki_pages: 0,
+    citations: 0,
+    indexes: 0,
+    runs: 0,
+    run_events: 0,
+    redaction_findings: 0,
+    audit_events: 0,
+    approval_gates: 0,
+    storage_objects: 0,
+    embeddings: 0,
+    vector_entries: 0,
+    reindex_queue: 0,
+    knowledge_machines: 0,
+    sync_snapshots: 0,
+    sync_changes: 0,
+    sync_conflicts: 0,
+    sync_table_clocks: 0,
+    sync_imports: 0
+  };
+}
+function emptySearchResult(query, limit, semantic = false) {
+  return {
+    query,
+    limit,
+    mode: {
+      keyword: true,
+      catalog: true,
+      semantic
+    },
+    semantic_provider: null,
+    semantic_model: null,
+    semantic_dimensions: null,
+    counts: {
+      keyword_results: 0,
+      catalog_results: 0,
+      semantic_results: 0,
+      merged_results: 0
+    },
+    warnings: ["knowledge_db_missing"],
+    results: []
+  };
+}
+function normalizeContextQuery(query) {
+  return query.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+}
+function emptyContextPack(query, limit, semantic = false) {
+  const search = emptySearchResult(query, limit, semantic);
+  return {
+    query,
+    normalized_query: normalizeContextQuery(query),
+    created_at: new Date().toISOString(),
+    mode: search.mode,
+    warnings: search.warnings,
+    search_counts: search.counts,
+    results: [],
+    citations: [],
+    excerpts: [],
+    graph: {
+      citations: [],
+      backlinks: []
+    },
+    notes: {
+      permissions: [],
+      freshness: []
+    }
+  };
+}
+function legacyStorePathForRead(scope, workspace, preferred) {
+  const current = preferred ?? workspace.jsonStorePath;
+  if (existsSync11(current))
+    return current;
+  if (scope === "global") {
+    const legacy = legacyGlobalStorePath();
+    if (existsSync11(legacy))
+      return legacy;
+  }
+  return current;
+}
+function estimateTokensForValue2(value) {
+  const text = JSON.stringify(value);
+  return Math.max(1, Math.ceil(text.length / 4));
+}
+function compactText(value, maxChars) {
+  const normalized = (value ?? "").normalize("NFKC").trim().replace(/\s+/g, " ");
+  if (normalized.length <= maxChars)
+    return normalized;
+  return `${normalized.slice(0, Math.max(0, maxChars - 1)).trim()}...`;
+}
+function redactPreviewForPack(value, policy, maxChars) {
+  const redacted = redactSecrets(compactText(value, maxChars), policy);
+  return { text: redacted.text, redactions: redacted.findings.length };
+}
+function legacyAgentContextPack(options, context, policy) {
+  const now = options.now ?? new Date;
+  const source = options.source ?? "search";
+  const purpose = options.purpose ?? (source === "loops" || source === "runs" ? "proposal" : "agent_context");
+  const query = (options.query ?? options.topic ?? context.query).normalize("NFKC").trim().replace(/\s+/g, " ");
+  const maxItems = Math.max(1, Math.min(options.maxItems ?? options.limit ?? 8, 50));
+  const maxTokens = Math.max(500, Math.min(options.maxTokens ?? 6000, 1e5));
+  let redactions = 0;
+  const citations = context.citations.slice(0, Math.max(maxItems * 2, maxItems)).map((citation, index) => {
+    const quote = redactPreviewForPack(citation.quote, policy, index < 3 ? 220 : 140);
+    redactions += quote.redactions;
+    const ref = citation.source_ref ?? citation.source_uri ?? citation.artifact_path ?? citation.artifact_uri ?? citation.id;
+    return {
+      id: `cite_${createHash15("sha256").update(`${citation.id}\x00${ref}`).digest("hex").slice(0, 12)}`,
+      kind: citation.artifact_uri || citation.artifact_path ? "artifact" : "source",
+      ref,
+      source_ref: citation.source_ref,
+      source_uri: citation.source_uri,
+      artifact_uri: citation.artifact_uri,
+      artifact_path: citation.artifact_path,
+      run_id: null,
+      run_event_id: null,
+      revision: citation.revision,
+      hash: citation.hash,
+      chunk_id: citation.chunk_id,
+      offsets: {
+        start: citation.start_offset,
+        end: citation.end_offset
+      },
+      quote_preview: quote.text
+    };
+  });
+  const citationByRetrievalId = new Map(context.citations.map((citation, index) => [citation.id, citations[index]]));
+  const evidence = context.excerpts.slice(0, Math.max(maxItems * 2, maxItems)).map((excerpt2) => {
+    const result = context.results.find((entry) => entry.id === excerpt2.result_id);
+    const citation = excerpt2.citation_id ? citationByRetrievalId.get(excerpt2.citation_id) : undefined;
+    const preview = redactPreviewForPack(excerpt2.text, policy, 520);
+    redactions += preview.redactions;
+    return {
+      id: `ev_${createHash15("sha256").update(`${excerpt2.kind}\x00${excerpt2.result_id}\x00${excerpt2.citation_id ?? ""}`).digest("hex").slice(0, 14)}`,
+      kind: excerpt2.kind,
+      title: compactText(result?.title ?? citation?.ref ?? excerpt2.kind, 100),
+      text_preview: preview.text,
+      score: Number(excerpt2.score.toFixed(6)),
+      citation_ids: citation ? [citation.id] : [],
+      provenance: {
+        source,
+        record_ref: `${excerpt2.kind}:${excerpt2.result_id}`,
+        created_at: context.created_at,
+        updated_at: null,
+        metadata_keys: []
+      }
+    };
+  }).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, maxItems);
+  const usedCitationIds = new Set(evidence.flatMap((entry) => entry.citation_ids));
+  const usedCitations = citations.filter((citation) => usedCitationIds.has(citation.id));
+  const warnings = Array.from(new Set(context.warnings));
+  const idempotencyKey = `ctx_${createHash15("sha256").update([source, purpose, query, warnings.join(","), evidence.map((entry) => entry.id).join(",")].join("\x00")).digest("hex").slice(0, 20)}`;
+  const pack = {
+    ok: true,
+    format: "knowledge-agent-context-pack",
+    version: 1,
+    created_at: now.toISOString(),
+    source,
+    purpose,
+    query,
+    topic: options.topic ?? null,
+    since: options.since ?? null,
+    dry_run: true,
+    idempotency_key: idempotencyKey,
+    budgets: {
+      max_tokens: maxTokens,
+      estimated_tokens: 0,
+      max_items: maxItems,
+      items_included: evidence.length,
+      items_available: context.excerpts.length,
+      items_truncated: Math.max(0, context.excerpts.length - evidence.length),
+      token_budget_exceeded: false
+    },
+    safety: {
+      raw_artifact_content_included: false,
+      durable_writes_performed: false,
+      redactions,
+      reminders: [
+        "This pack is read-only and performs no durable writes.",
+        "Legacy JSON note evidence is bounded and redacted before inclusion."
+      ]
+    },
+    citations: usedCitations,
+    evidence,
+    duplicate_candidates: [],
+    outline: {
+      title: query ? `Knowledge context: ${compactText(query, 80)}` : "Knowledge context",
+      bullets: evidence.length > 0 ? evidence.slice(0, 5).map((entry) => `${entry.id}: ${entry.title}`) : ["No matching bounded evidence was found."],
+      evidence_ids: evidence.slice(0, 8).map((entry) => entry.id),
+      duplicate_candidate_ids: [],
+      next_actions: [
+        "Use evidence_ids and citation_ids in prompts instead of raw excerpts when possible.",
+        "Inspect cited refs only if the bounded preview is insufficient.",
+        "Use knowledge build/file-answer only with explicit approval for durable writes."
+      ]
+    },
+    warnings,
+    message: `${evidence.length} bounded evidence item(s), estimated under ${maxTokens} token(s)`
+  };
+  pack.budgets.estimated_tokens = estimateTokensForValue2(pack);
+  pack.budgets.token_budget_exceeded = pack.budgets.estimated_tokens > maxTokens;
+  pack.message = `${pack.evidence.length} bounded evidence item(s), estimated ${pack.budgets.estimated_tokens}/${maxTokens} token(s)`;
+  return pack;
+}
+function emptyReindexHealth() {
+  return {
+    schema_version: 0,
+    chunks: 0,
+    vector_entries: 0,
+    missing_embeddings: 0,
+    queued: {},
+    stale_revisions: 0
+  };
+}
+function emptyEmbeddingStatus() {
+  return {
+    total_embeddings: 0,
+    total_vector_entries: 0,
+    indexes: []
+  };
+}
+function emptySyncStatus(input) {
+  return {
+    ok: true,
+    scope: input.scope,
+    workspace_home: input.workspaceHome,
+    sqlite_schema_version: 0,
+    local_machine_id: input.localMachineId ?? null,
+    machines: {
+      total: 0,
+      rows: []
+    },
+    snapshots: {
+      total: 0,
+      latest: null
+    },
+    changes: {
+      total: 0,
+      by_operation: []
+    },
+    clocks: {
+      total: 0,
+      rows: []
+    },
+    imports: {
+      total: 0,
+      latest: null
+    },
+    conflicts: {
+      total: 0,
+      by_status: [],
+      open: 0
+    },
+    table_counts: {},
+    message: "0 machine(s), 0 open sync conflict(s)"
+  };
+}
+function emptyAgentContextPack(options) {
+  const now = options.now ?? new Date;
+  const source = options.source ?? "search";
+  const purpose = options.purpose ?? (source === "loops" || source === "runs" ? "proposal" : "agent_context");
+  const query = (options.query ?? options.topic ?? "").normalize("NFKC").trim().replace(/\s+/g, " ");
+  const maxItems = Math.max(1, Math.min(options.maxItems ?? options.limit ?? 8, 50));
+  const maxTokens = Math.max(500, Math.min(options.maxTokens ?? 6000, 1e5));
+  const idempotencyKey = `ctx_${createHash15("sha256").update(["empty", source, purpose, query, options.topic ?? "", options.since ?? ""].join("\x00")).digest("hex").slice(0, 20)}`;
+  return {
+    ok: true,
+    format: "knowledge-agent-context-pack",
+    version: 1,
+    created_at: now.toISOString(),
+    source,
+    purpose,
+    query,
+    topic: options.topic ?? null,
+    since: options.since ?? null,
+    dry_run: true,
+    idempotency_key: idempotencyKey,
+    budgets: {
+      max_tokens: maxTokens,
+      estimated_tokens: 0,
+      max_items: maxItems,
+      items_included: 0,
+      items_available: 0,
+      items_truncated: 0,
+      token_budget_exceeded: false
+    },
+    safety: {
+      raw_artifact_content_included: false,
+      durable_writes_performed: false,
+      redactions: 0,
+      reminders: [
+        "This pack is read-only and performs no durable writes.",
+        "No knowledge.db exists for this scope yet."
+      ]
+    },
+    citations: [],
+    evidence: [],
+    duplicate_candidates: [],
+    outline: {
+      title: query ? `Context for ${query}` : "Knowledge context",
+      bullets: [],
+      evidence_ids: [],
+      duplicate_candidate_ids: [],
+      next_actions: []
+    },
+    warnings: ["knowledge_db_missing"],
+    message: `0 bounded evidence item(s), estimated 0/${maxTokens} token(s)`
+  };
+}
 function storagePrefixKey(storage) {
   const prefix = storage.artifact_store.s3?.prefix?.replace(/^\/+|\/+$/g, "");
   return prefix ? `${prefix}/` : null;
@@ -26056,24 +26464,24 @@ class KnowledgeService {
   jsonStorePath() {
     return this.ensureWorkspace().jsonStorePath;
   }
-  config() {
-    if (!this.cachedConfig) {
-      const workspace = this.ensureWorkspace();
-      this.cachedConfig = readKnowledgeConfig(workspace.configPath);
+  config(options = {}) {
+    const workspace = options.ensure ? this.ensureWorkspace() : this.workspace;
+    if (!this.cachedConfig || options.ensure || existsSync11(workspace.configPath)) {
+      this.cachedConfig = existsSync11(workspace.configPath) ? readKnowledgeConfig(workspace.configPath) : defaultKnowledgeConfig();
     }
     return this.cachedConfig;
   }
   safetyPolicy() {
-    return resolveSafetyPolicy(this.config(), this.ensureWorkspace());
+    return resolveSafetyPolicy(this.config(), this.workspace);
   }
   artifactStore() {
     return createArtifactStore(this.config(), this.ensureWorkspace());
   }
   storageContract() {
-    return resolveStorageContract(this.config(), this.ensureWorkspace(), this.scope);
+    return resolveStorageContract(this.config(), this.workspace, this.scope);
   }
   validateStorage() {
-    return validateStorageConfig(this.config(), this.ensureWorkspace());
+    return validateStorageConfig(this.config(), this.workspace);
   }
   migrateLegacyPath(options = {}) {
     const current = this.workspace;
@@ -26093,7 +26501,7 @@ class KnowledgeService {
   }
   setup(options = {}) {
     const workspace = this.ensureWorkspace();
-    const current = this.config();
+    const current = this.config({ ensure: true });
     const mode = normalizeMode(options.mode) ?? current.mode;
     const apiUrl = options.apiUrl ? normalizeKnowledgeApiOrigin(options.apiUrl) : current.hosted?.api_url ? normalizeKnowledgeApiOrigin(current.hosted.api_url) : null;
     const nextConfig = {
@@ -26150,14 +26558,18 @@ class KnowledgeService {
     return RemoteKnowledgeClient.fromConfig(this.config(), env);
   }
   paths() {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
     return {
       ok: true,
       scope: this.scope,
       home: workspace.home,
+      exists: existsSync11(workspace.home),
       config_path: workspace.configPath,
+      config_exists: existsSync11(workspace.configPath),
       json_store_path: workspace.jsonStorePath,
+      json_store_exists: existsSync11(workspace.jsonStorePath),
       knowledge_db_path: workspace.knowledgeDbPath,
+      knowledge_db_exists: existsSync11(workspace.knowledgeDbPath),
       artifacts_dir: workspace.artifactsDir,
       indexes_dir: workspace.indexesDir,
       logs_dir: workspace.logsDir,
@@ -26172,18 +26584,91 @@ class KnowledgeService {
     return migrateKnowledgeDb(this.ensureWorkspace().knowledgeDbPath);
   }
   dbStats() {
-    const workspace = this.ensureWorkspace();
-    migrateKnowledgeDb(workspace.knowledgeDbPath);
+    const workspace = this.workspace;
+    if (!existsSync11(workspace.knowledgeDbPath))
+      return emptyKnowledgeDbStats();
     return getKnowledgeDbStats(workspace.knowledgeDbPath);
   }
   inventory(options = {}) {
-    const workspace = this.ensureWorkspace();
-    migrateKnowledgeDb(workspace.knowledgeDbPath);
+    const workspace = this.workspace;
     const limit = inventoryLimit(options.limit);
     const storePath = options.storePath ?? workspace.jsonStorePath;
     const legacyStore = readLegacyInventoryStore(storePath);
     const activeItems = legacyStore.items.filter((item) => item.archived !== true);
     const visibleItems = options.includeArchived ? legacyStore.items : activeItems;
+    const dbExists = existsSync11(workspace.knowledgeDbPath);
+    if (!dbExists) {
+      const stats2 = emptyKnowledgeDbStats();
+      const summary = {
+        legacy_items: legacyStore.items.length,
+        active_items: activeItems.length,
+        archived_items: legacyStore.items.length - activeItems.length,
+        schema_version: stats2.schema_version,
+        sources: stats2.sources,
+        source_revisions: stats2.source_revisions,
+        chunks: stats2.chunks,
+        wiki_pages: stats2.wiki_pages,
+        citations: stats2.citations,
+        indexes: stats2.indexes,
+        runs: stats2.runs,
+        run_events: stats2.run_events,
+        storage_objects: stats2.storage_objects,
+        embeddings: stats2.embeddings,
+        vector_entries: stats2.vector_entries,
+        reindex_queue: stats2.reindex_queue,
+        redaction_findings: stats2.redaction_findings,
+        audit_events: stats2.audit_events,
+        approval_gates: stats2.approval_gates,
+        knowledge_machines: stats2.knowledge_machines,
+        sync_snapshots: stats2.sync_snapshots,
+        sync_changes: stats2.sync_changes,
+        sync_conflicts: stats2.sync_conflicts,
+        sync_table_clocks: stats2.sync_table_clocks,
+        sync_imports: stats2.sync_imports
+      };
+      return {
+        ok: true,
+        scope: this.scope,
+        home: workspace.home,
+        limit,
+        paths: {
+          json_store_path: storePath,
+          json_store_exists: legacyStore.exists,
+          knowledge_db_path: workspace.knowledgeDbPath,
+          knowledge_db_exists: false,
+          artifacts_dir: workspace.artifactsDir,
+          indexes_dir: workspace.indexesDir,
+          logs_dir: workspace.logsDir,
+          wiki_dir: workspace.wikiDir
+        },
+        summary,
+        legacy_store: {
+          path: storePath,
+          exists: legacyStore.exists,
+          read_error: legacyStore.read_error,
+          total_items: legacyStore.items.length,
+          active_items: activeItems.length,
+          archived_items: legacyStore.items.length - activeItems.length,
+          items_returned: Math.min(visibleItems.length, limit)
+        },
+        items: visibleItems.slice(0, limit).map(legacyInventoryItem),
+        sources: [],
+        source_revisions: [],
+        chunks: [],
+        wiki_pages: [],
+        indexes: [],
+        storage_objects: [],
+        runs: [],
+        vector_indexes: [],
+        reindex_queue: [],
+        machines: [],
+        sync_conflicts: [],
+        approval_gates: [],
+        audit_events: [],
+        message: `${legacyStore.items.length} item(s), 0 source(s), 0 chunk(s), 0 wiki page(s), 0 artifact(s)`
+      };
+    }
+    migrateKnowledgeDb(workspace.knowledgeDbPath);
     const stats = getKnowledgeDbStats(workspace.knowledgeDbPath);
     const db = openKnowledgeDb(workspace.knowledgeDbPath);
     try {
@@ -26375,6 +26860,7 @@ class KnowledgeService {
           json_store_path: storePath,
           json_store_exists: legacyStore.exists,
           knowledge_db_path: workspace.knowledgeDbPath,
+          knowledge_db_exists: true,
           artifacts_dir: workspace.artifactsDir,
           indexes_dir: workspace.indexesDir,
           logs_dir: workspace.logsDir,
@@ -26493,7 +26979,9 @@ class KnowledgeService {
     });
   }
   reindexHealth(options = {}) {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
+    if (!existsSync11(workspace.knowledgeDbPath))
+      return emptyReindexHealth();
     return reindexHealth({
       ...options,
       dbPath: workspace.knowledgeDbPath,
@@ -26523,7 +27011,9 @@ class KnowledgeService {
     return listModelRegistry(this.config());
   }
   embeddingStatus() {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
+    if (!existsSync11(workspace.knowledgeDbPath))
+      return emptyEmbeddingStatus();
     return embeddingIndexStatus(workspace.knowledgeDbPath);
   }
   async indexEmbeddings(options = {}) {
@@ -26535,7 +27025,16 @@ class KnowledgeService {
     });
   }
   async semanticSearch(options) {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
+    if (!existsSync11(workspace.knowledgeDbPath)) {
+      return {
+        provider: "openai",
+        model: "text-embedding-3-small",
+        dimensions: options.dimensions ?? 1536,
+        query: options.query,
+        results: []
+      };
+    }
     return searchVectorIndex({
       ...options,
       dbPath: workspace.knowledgeDbPath,
@@ -26543,10 +27042,18 @@ class KnowledgeService {
     });
   }
   async search(options) {
-    const workspace = this.ensureWorkspace();
-    const legacyStorePath = options.legacyStorePath ?? workspace.jsonStorePath;
-    if (!options.legacyStorePath)
-      ensureStore(legacyStorePath);
+    const workspace = this.workspace;
+    const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
+    if (!existsSync11(workspace.knowledgeDbPath)) {
+      if (existsSync11(legacyStorePath)) {
+        return hybridSearchLegacyStore({
+          ...options,
+          legacyStorePath,
+          config: this.config()
+        });
+      }
+      return emptySearchResult(options.query, Math.max(1, Math.min(options.limit ?? 10, 100)), options.semantic === true || options.fake === true || Boolean(options.modelRef));
+    }
     return hybridSearch({
       ...options,
       dbPath: workspace.knowledgeDbPath,
@@ -26555,10 +27062,21 @@ class KnowledgeService {
     });
   }
   async retrieveContext(options) {
-    const workspace = this.ensureWorkspace();
-    const legacyStorePath = options.legacyStorePath ?? workspace.jsonStorePath;
-    if (!options.legacyStorePath)
-      ensureStore(legacyStorePath);
+    const workspace = this.workspace;
+    const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
+    if (!existsSync11(workspace.knowledgeDbPath)) {
+      if (existsSync11(legacyStorePath)) {
+        const search = await hybridSearchLegacyStore({
+          ...options,
+          legacyStorePath,
+          config: this.config()
+        });
+        return retrieveKnowledgeContextFromSearch(search, {
+          contextChars: options.contextChars
+        });
+      }
+      return emptyContextPack(options.query, Math.max(1, Math.min(options.limit ?? 10, 100)), options.semantic === true || options.fake === true || Boolean(options.modelRef));
+    }
     return retrieveKnowledgeContext({
       ...options,
       dbPath: workspace.knowledgeDbPath,
@@ -26567,10 +27085,24 @@ class KnowledgeService {
     });
   }
   async contextPack(options) {
-    const workspace = this.ensureWorkspace();
-    const legacyStorePath = options.legacyStorePath ?? workspace.jsonStorePath;
-    if (!options.legacyStorePath)
-      ensureStore(legacyStorePath);
+    const workspace = this.workspace;
+    const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
+    if (!existsSync11(workspace.knowledgeDbPath)) {
+      const query = (options.query ?? options.topic ?? "").trim();
+      if (query && options.source !== "loops" && options.source !== "runs" && existsSync11(legacyStorePath)) {
+        const search = await hybridSearchLegacyStore({
+          ...options,
+          query,
+          legacyStorePath,
+          config: this.config()
+        });
+        const context = retrieveKnowledgeContextFromSearch(search, {
+          contextChars: options.contextChars
+        });
+        return legacyAgentContextPack(options, context, this.safetyPolicy());
+      }
+      return emptyAgentContextPack(options);
+    }
     return buildKnowledgeAgentContextPack({
       ...options,
       dbPath: workspace.knowledgeDbPath,
@@ -26601,7 +27133,7 @@ class KnowledgeService {
     });
   }
   async machineTopology(options = {}) {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
     return discoverKnowledgeMachineTopology({
       ...options,
       knowledge: {
@@ -26611,7 +27143,7 @@ class KnowledgeService {
     });
   }
   async machinePreflight(options = {}) {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
     return preflightKnowledgeMachine({
       ...options,
       knowledge: {
@@ -26621,7 +27153,13 @@ class KnowledgeService {
     });
   }
   syncStatus() {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
+    if (!existsSync11(workspace.knowledgeDbPath)) {
+      return emptySyncStatus({
+        scope: this.scope,
+        workspaceHome: workspace.home
+      });
+    }
     return getKnowledgeSyncStatus({
       dbPath: workspace.knowledgeDbPath,
       scope: this.scope,
@@ -26836,7 +27374,9 @@ class KnowledgeService {
     });
   }
   syncConflicts(options = {}) {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
+    if (!existsSync11(workspace.knowledgeDbPath))
+      return [];
     return listKnowledgeSyncConflicts(workspace.knowledgeDbPath, options);
   }
   syncConflict(id) {
@@ -26907,7 +27447,9 @@ class KnowledgeService {
     }
   }
   syncMachines() {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
+    if (!existsSync11(workspace.knowledgeDbPath))
+      return [];
     return listKnowledgeMachines(workspace.knowledgeDbPath);
   }
   exportSyncBundle(options = {}) {

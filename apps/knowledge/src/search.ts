@@ -584,3 +584,37 @@ export async function hybridSearch(options: HybridSearchOptions): Promise<Hybrid
     results,
   };
 }
+
+export async function hybridSearchLegacyStore(options: Omit<HybridSearchOptions, 'dbPath'>): Promise<HybridSearchResult> {
+  const query = options.query.trim();
+  if (!query) throw new Error('Search query is required.');
+  const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
+  const terms = queryTerms(query);
+  const semanticEnabled = options.semantic === true || options.fake === true || Boolean(options.modelRef);
+  const merged = new Map<string, HybridSearchEntry>();
+  const legacyRows = selectLegacyItems(options.legacyStorePath, terms, Math.max(limit, 10));
+  legacyRows.forEach(({ item, score }) => mergeResult(merged, legacyItemResult(item, score)));
+  const warnings = ['knowledge_db_missing'];
+  if (semanticEnabled) warnings.push('semantic_search_skipped_knowledge_db_missing');
+  const results = sortResults(Array.from(merged.values())).slice(0, limit);
+  return {
+    query,
+    limit,
+    mode: {
+      keyword: true,
+      catalog: true,
+      semantic: semanticEnabled,
+    },
+    semantic_provider: null,
+    semantic_model: null,
+    semantic_dimensions: null,
+    counts: {
+      keyword_results: legacyRows.length,
+      catalog_results: 0,
+      semantic_results: 0,
+      merged_results: results.length,
+    },
+    warnings,
+    results,
+  };
+}

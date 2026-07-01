@@ -4,7 +4,7 @@
  * Copyright 2026 Hasna Inc.
  * Licensed under the Apache License, Version 2.0
  */
-import { defaultStorePath, loadStore, saveStore, withLock, makeId, makeShortId, ensureStore, type KnowledgeItem } from './store';
+import { defaultStorePath, loadStore, loadStoreIfExists, saveStore, withLock, makeId, makeShortId, ensureStore, type KnowledgeItem } from './store';
 import { openKnowledgeDb } from './knowledge-db';
 import { createKnowledgeService } from './service';
 import { createKnowledgeProjectPanel, formatKnowledgeProjectPanel } from './project-panel';
@@ -548,12 +548,12 @@ async function run(argv: string[]): Promise<void> {
   let storePath = flags.store;
   if (!storePath) {
     if (serviceScope === 'project' || serviceScope === 'local') {
-      storePath = service.jsonStorePath();
+      storePath = service.workspace.jsonStorePath;
     } else {
       storePath = defaultStorePath();
     }
   }
-  if (!storePathOverridden && (command === 'search' || command === 'context' || command === 'ask' || command === 'build')) {
+  if (!storePathOverridden && (command === 'ask' || command === 'build')) {
     ensureStore(storePath);
   }
 
@@ -1351,8 +1351,6 @@ async function run(argv: string[]): Promise<void> {
     throw new Error("Invalid providers action. Use 'status', 'models', or 'check'.");
   }
 
-  ensureStore(storePath);
-
   if (command === 'add') {
     const title = positional[1];
     const content = positional[2];
@@ -1372,7 +1370,7 @@ async function run(argv: string[]): Promise<void> {
       saveStore(storePath, db);
       log('info', 'Item added', { id: item.id, title: item.title });
       output({ ok: true, item, message: `Added ${item.id}` }, flags.json);
-    });
+    }, { createParent: true });
     return;
   }
 
@@ -1380,54 +1378,50 @@ async function run(argv: string[]): Promise<void> {
     if (flags.format !== undefined && flags.format !== 'table' && flags.format !== 'json') {
       throw new Error("Invalid --format value for list. Use 'table' or 'json'.");
     }
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      const page = Number.isFinite(flags.page) && (flags.page as number) > 0 ? flags.page as number : 1;
-      const limit = Number.isFinite(flags.limit) && (flags.limit as number) > 0 ? flags.limit as number : 20;
-      const search = flags.search ? String(flags.search).toLowerCase() : '';
-      const tag = flags.tag ? String(flags.tag).toLowerCase() : '';
-      const useTable = flags.format === 'table' || (!flags.json && !flags.format && useColor(flags));
-      const useJson = flags.json || flags.format === 'json';
+    const db = loadStoreIfExists(storePath);
+    const page = Number.isFinite(flags.page) && (flags.page as number) > 0 ? flags.page as number : 1;
+    const limit = Number.isFinite(flags.limit) && (flags.limit as number) > 0 ? flags.limit as number : 20;
+    const search = flags.search ? String(flags.search).toLowerCase() : '';
+    const tag = flags.tag ? String(flags.tag).toLowerCase() : '';
+    const useTable = flags.format === 'table' || (!flags.json && !flags.format && useColor(flags));
+    const useJson = flags.json || flags.format === 'json';
 
-      let filtered = db.items;
-      if (flags.archived) filtered = filtered.filter((x) => x.archived === true);
-      else if (!flags.includeArchived) filtered = filtered.filter((x) => !x.archived);
-      if (search) filtered = filtered.filter((x) => x.title.toLowerCase().includes(search) || x.content.toLowerCase().includes(search));
-      if (tag) filtered = filtered.filter((x) => x.tags && x.tags.map((t) => t.toLowerCase()).includes(tag));
+    let filtered = db.items;
+    if (flags.archived) filtered = filtered.filter((x) => x.archived === true);
+    else if (!flags.includeArchived) filtered = filtered.filter((x) => !x.archived);
+    if (search) filtered = filtered.filter((x) => x.title.toLowerCase().includes(search) || x.content.toLowerCase().includes(search));
+    if (tag) filtered = filtered.filter((x) => x.tags && x.tags.map((t) => t.toLowerCase()).includes(tag));
 
-      const { sorted, sort, direction } = sortItems(filtered, flags);
-      const start = (page - 1) * limit;
-      const rows = sorted.slice(start, start + limit);
-      const totalPages = Math.max(1, Math.ceil(sorted.length / limit));
+    const { sorted, sort, direction } = sortItems(filtered, flags);
+    const start = (page - 1) * limit;
+    const rows = sorted.slice(start, start + limit);
+    const totalPages = Math.max(1, Math.ceil(sorted.length / limit));
 
-      if (useJson) { output({ ok: true, page, limit, total: sorted.length, total_pages: totalPages, sort, direction, items: rows }, true); return; }
-      if (rows.length === 0) { output(`No items found (search=${search || 'none'}, tag=${tag || 'none'})`, false); return; }
-      if (useTable) {
-        const col = (v: string) => v;
-        const header = `${col('ID')}\t${col('TITLE')}\t${col('CREATED')}\t${col('URL')}\t${col('TAGS')}`;
-        console.log(header);
-        for (const row of rows) {
-          console.log(`${row.id}\t${col(row.title)}\t${row.created_at}\t${row.url ? col(row.url) : ''}\t${row.tags?.length ? col(`[${row.tags.join(', ')}]`) : ''}`);
-        }
-        console.log(`Page ${page}/${totalPages} | showing ${rows.length} of ${sorted.length} | sort=${sort} ${direction} | search=${search || 'none'} | tag=${tag || 'none'}`);
-      } else {
-        for (const row of rows) {
-          console.log(`${row.id}\t${row.title}\t${row.created_at}${row.url ? `\t${row.url}` : ''}${row.tags?.length ? `\t[${row.tags.join(', ')}]` : ''}`);
-        }
-        console.log(`Page ${page}/${totalPages} | showing ${rows.length} of ${sorted.length} | sort=${sort} ${direction} | search=${search || 'none'} | tag=${tag || 'none'}`);
+    if (useJson) { output({ ok: true, page, limit, total: sorted.length, total_pages: totalPages, sort, direction, items: rows, store_exists: db.exists }, true); return; }
+    if (rows.length === 0) { output(`No items found (search=${search || 'none'}, tag=${tag || 'none'})`, false); return; }
+    if (useTable) {
+      const col = (v: string) => v;
+      const header = `${col('ID')}\t${col('TITLE')}\t${col('CREATED')}\t${col('URL')}\t${col('TAGS')}`;
+      console.log(header);
+      for (const row of rows) {
+        console.log(`${row.id}\t${col(row.title)}\t${row.created_at}\t${row.url ? col(row.url) : ''}\t${row.tags?.length ? col(`[${row.tags.join(', ')}]`) : ''}`);
       }
-    });
+      console.log(`Page ${page}/${totalPages} | showing ${rows.length} of ${sorted.length} | sort=${sort} ${direction} | search=${search || 'none'} | tag=${tag || 'none'}`);
+    } else {
+      for (const row of rows) {
+        console.log(`${row.id}\t${row.title}\t${row.created_at}${row.url ? `\t${row.url}` : ''}${row.tags?.length ? `\t[${row.tags.join(', ')}]` : ''}`);
+      }
+      console.log(`Page ${page}/${totalPages} | showing ${rows.length} of ${sorted.length} | sort=${sort} ${direction} | search=${search || 'none'} | tag=${tag || 'none'}`);
+    }
     return;
   }
 
   if (command === 'get') {
     requireId(flags);
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      const item = db.items.find((x) => x.id === flags.id || x.short_id === flags.id);
-      if (!item) throw new Error(`Item not found: ${flags.id}`);
-      output({ ok: true, item, message: `${item.id}: ${item.title}` }, flags.json);
-    });
+    const db = loadStoreIfExists(storePath);
+    const item = db.items.find((x) => x.id === flags.id || x.short_id === flags.id);
+    if (!item) throw new Error(`Item not found: ${flags.id}`);
+    output({ ok: true, item, store_exists: db.exists, message: `${item.id}: ${item.title}` }, flags.json);
     return;
   }
 
@@ -1451,7 +1445,7 @@ async function run(argv: string[]): Promise<void> {
       db.items[idx] = item;
       saveStore(storePath, db);
       output({ ok: true, item, message: `Updated ${item.id}` }, flags.json);
-    });
+    }, { createParent: true });
     return;
   }
 
@@ -1467,7 +1461,7 @@ async function run(argv: string[]): Promise<void> {
       db.items[idx] = item;
       saveStore(storePath, db);
       output({ ok: true, item, message: `${command === 'archive' ? 'Archived' : 'Restored'} ${item.id}` }, flags.json);
-    });
+    }, { createParent: true });
     return;
   }
 
@@ -1485,7 +1479,7 @@ async function run(argv: string[]): Promise<void> {
       db.items[idx] = item;
       saveStore(storePath, db);
       output({ ok: true, item, removed: before - item.tags.length, message: `Removed tag from ${item.id}` }, flags.json);
-    });
+    }, { createParent: true });
     return;
   }
 
@@ -1528,7 +1522,7 @@ async function run(argv: string[]): Promise<void> {
       db.items[idx] = item;
       saveStore(storePath, db);
       output({ ok: true, created: false, item, message: `Upserted ${item.id}` }, flags.json);
-    });
+    }, { createParent: true });
     return;
   }
 
@@ -1544,21 +1538,19 @@ async function run(argv: string[]): Promise<void> {
       if (!deleted) throw new Error(`Item not found: ${flags.id}`);
       log('info', 'Item deleted', { id: flags.id });
       output({ ok: true, deleted_id: flags.id, message: `Deleted ${flags.id}` }, flags.json);
-    });
+    }, { createParent: true });
     return;
   }
 
   if (command === 'export') {
     const format = flags.format ?? 'json';
     if (format !== 'json' && format !== 'jsonl') throw new Error("Invalid --format. Use 'json' or 'jsonl'.");
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      if (format === 'jsonl') {
-        for (const item of db.items) console.log(JSON.stringify(item));
-      } else {
-        output({ ok: true, items: db.items }, flags.json);
-      }
-    });
+    const db = loadStoreIfExists(storePath);
+    if (format === 'jsonl') {
+      for (const item of db.items) console.log(JSON.stringify(item));
+    } else {
+      output({ ok: true, items: db.items, store_exists: db.exists }, flags.json);
+    }
     return;
   }
 
@@ -1579,7 +1571,7 @@ async function run(argv: string[]): Promise<void> {
       saveStore(storePath, db);
       log('info', 'Prune completed', { pruned, remaining: db.items.length });
       output({ ok: true, pruned, remaining: db.items.length, message: `Pruned ${pruned} item(s)` }, flags.json);
-    });
+    }, { createParent: true });
     return;
   }
 
@@ -1599,39 +1591,38 @@ async function run(argv: string[]): Promise<void> {
       saveStore(storePath, db);
       log('info', 'Dedupe completed', { removed, remaining: db.items.length });
       output({ ok: true, removed, remaining: db.items.length, message: `Dedupe removed ${removed} duplicate(s)` }, flags.json);
-    });
+    }, { createParent: true });
     return;
   }
 
   if (command === 'stats') {
-    withLock(storePath, () => {
-      const db = loadStore(storePath);
-      const activeItems = db.items.filter((x) => !x.archived);
-      const total = activeItems.length;
-      const archived = db.items.length - total;
-      const withUrl = activeItems.filter((x) => x.url).length;
-      const withTags = activeItems.filter((x) => x.tags && x.tags.length > 0).length;
-      const oldest = total > 0 ? activeItems.map((x) => x.created_at).sort()[0] : null;
-      const newest = total > 0 ? activeItems.map((x) => x.created_at).sort()[total - 1] : null;
-      const tagCounts: Record<string, number> = {};
-      for (const item of activeItems) {
-        for (const tag of item.tags || []) {
-          tagCounts[tag] = (tagCounts[tag] || 0) + 1;
-        }
+    const db = loadStoreIfExists(storePath);
+    const activeItems = db.items.filter((x) => !x.archived);
+    const total = activeItems.length;
+    const archived = db.items.length - total;
+    const withUrl = activeItems.filter((x) => x.url).length;
+    const withTags = activeItems.filter((x) => x.tags && x.tags.length > 0).length;
+    const oldest = total > 0 ? activeItems.map((x) => x.created_at).sort()[0] : null;
+    const newest = total > 0 ? activeItems.map((x) => x.created_at).sort()[total - 1] : null;
+    const tagCounts: Record<string, number> = {};
+    for (const item of activeItems) {
+      for (const tag of item.tags || []) {
+        tagCounts[tag] = (tagCounts[tag] || 0) + 1;
       }
-      const topTags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([tag, count]) => ({ tag, count }));
-      output({
-        ok: true,
-        total,
-        archived,
-        with_url: withUrl,
-        with_tags: withTags,
-        oldest,
-        newest,
-        top_tags: topTags,
-        message: `${total} items | ${withUrl} with URL | ${withTags} with tags`,
-      }, flags.json);
-    });
+    }
+    const topTags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([tag, count]) => ({ tag, count }));
+    output({
+      ok: true,
+      total,
+      archived,
+      with_url: withUrl,
+      with_tags: withTags,
+      oldest,
+      newest,
+      top_tags: topTags,
+      store_exists: db.exists,
+      message: `${total} items | ${withUrl} with URL | ${withTags} with tags`,
+    }, flags.json);
     return;
   }
 

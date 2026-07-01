@@ -15,8 +15,13 @@ export interface Store {
 }
 export declare function defaultStorePath(): string;
 export declare function ensureStore(path: string): void;
+export declare function loadStoreIfExists(path: string): Store & {
+    exists: boolean;
+};
 export declare function loadStore(path: string): Store;
 export declare function saveStore(path: string, store: Store): void;
-export declare function withLock<T>(path: string, fn: () => T): T;
+export declare function withLock<T>(path: string, fn: () => T, options?: {
+    createParent?: boolean;
+}): T;
 export declare function makeId(): string;
 export declare function makeShortId(id: string): string;

@@ -1,14 +1,15 @@
 import { type KnowledgeAuthStatus } from './auth';
 import { type KnowledgePromptOptions } from './agent';
-import { type KnowledgeAgentContextPackOptions } from './context-pack';
+import { type KnowledgeAgentContextPack, type KnowledgeAgentContextPackOptions } from './context-pack';
 import { type KnowledgeSyncConflictAiProposalOptions } from './conflict-agent';
 import { type EmbeddingIndexOptions, type EmbeddingSearchOptions } from './embeddings';
 import { type KnowledgeMachinePreflightOptions, type KnowledgeMachineRouteResolution, type KnowledgeMachineWorkspaceResolution, type KnowledgeMachineTopologyOptions } from './machines';
 import { type ProviderStatusResult, type ModelRegistryEntry } from './providers';
 import { type ReindexRuntimeOptions } from './reindex';
 import { RemoteKnowledgeClient, type RemoteKnowledgeRegistryContract } from './remote-client';
-import { type RetrievalOptions } from './retrieval';
-import { type HybridSearchOptions } from './search';
+import { type KnowledgeContextPack, type RetrievalOptions } from './retrieval';
+import { type HybridSearchOptions, type HybridSearchResult } from './search';
+import { type SafetyPolicy } from './safety';
 import { type WebSearchOptions } from './web-search';
 import { type KnowledgeSyncConflict, type KnowledgeSyncConflictResolutionProposal, type KnowledgePeerSyncResult, type KnowledgeSyncApplyResult, type KnowledgeSyncBundle, type KnowledgeSyncMachineRow, type KnowledgeSyncSnapshotResult, type KnowledgeSyncStatus } from './sync';
 import { type WikiCompileOptions } from './wiki-compiler';
@@ -23,9 +24,13 @@ export interface KnowledgePathsResult {
     ok: true;
     scope: string;
     home: string;
+    exists: boolean;
     config_path: string;
+    config_exists: boolean;
     json_store_path: string;
+    json_store_exists: boolean;
     knowledge_db_path: string;
+    knowledge_db_exists: boolean;
     artifacts_dir: string;
     indexes_dir: string;
     logs_dir: string;
@@ -61,6 +66,7 @@ export interface KnowledgeInventoryResult {
         json_store_path: string;
         json_store_exists: boolean;
         knowledge_db_path: string;
+        knowledge_db_exists: boolean;
         artifacts_dir: string;
         indexes_dir: string;
         logs_dir: string;
@@ -321,8 +327,10 @@ export declare class KnowledgeService {
     get workspace(): KnowledgeWorkspace;
     ensureWorkspace(): KnowledgeWorkspace;
     jsonStorePath(): string;
-    config(): KnowledgeConfig;
-    safetyPolicy(): import("./safety").SafetyPolicy;
+    config(options?: {
+        ensure?: boolean;
+    }): KnowledgeConfig;
+    safetyPolicy(): SafetyPolicy;
     artifactStore(): import("./artifact-store").ArtifactStore;
     storageContract(): StorageContract;
     validateStorage(): StorageValidationResult;
@@ -385,9 +393,9 @@ export declare class KnowledgeService {
     embeddingStatus(): import("./embeddings").EmbeddingStatusResult;
     indexEmbeddings(options?: Omit<EmbeddingIndexOptions, 'dbPath' | 'config'>): Promise<import("./embeddings").EmbeddingIndexResult>;
     semanticSearch(options: Omit<EmbeddingSearchOptions, 'dbPath' | 'config'>): Promise<import("./embeddings").SemanticSearchResult>;
-    search(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>): Promise<import("./search").HybridSearchResult>;
-    retrieveContext(options: Omit<RetrievalOptions, 'dbPath' | 'config'>): Promise<import("./retrieval").KnowledgeContextPack>;
-    contextPack(options: Omit<KnowledgeAgentContextPackOptions, 'dbPath' | 'config' | 'safetyPolicy'>): Promise<import("./context-pack").KnowledgeAgentContextPack>;
+    search(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>): Promise<HybridSearchResult>;
+    retrieveContext(options: Omit<RetrievalOptions, 'dbPath' | 'config'>): Promise<KnowledgeContextPack>;
+    contextPack(options: Omit<KnowledgeAgentContextPackOptions, 'dbPath' | 'config' | 'safetyPolicy'>): Promise<KnowledgeAgentContextPack>;
     runPrompt(options: Omit<KnowledgePromptOptions, 'dbPath' | 'config'>): Promise<import("./agent").KnowledgePromptResult>;
     webSearch(options: Omit<WebSearchOptions, 'dbPath' | 'config' | 'safetyPolicy'>): Promise<import("./web-search").WebSearchResult>;
     machineTopology(options?: Omit<KnowledgeMachineTopologyOptions, 'knowledge'>): Promise<import("./machines").KnowledgeMachineTopology>;

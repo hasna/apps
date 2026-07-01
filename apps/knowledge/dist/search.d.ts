@@ -64,3 +64,4 @@ export interface HybridSearchEntry {
     reasons: string[];
 }
 export declare function hybridSearch(options: HybridSearchOptions): Promise<HybridSearchResult>;
+export declare function hybridSearchLegacyStore(options: Omit<HybridSearchOptions, 'dbPath'>): Promise<HybridSearchResult>;
