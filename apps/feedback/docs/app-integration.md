@@ -18,7 +18,7 @@ Optional fields include `userId`, `email`, `url`, `rating`, `severity`, `tags`, 
 ## Browser Apps
 
 ```ts
-import { createFeedbackClient } from "@hasna/feedback";
+import { createFeedbackClient, collectBrowserFeedbackContext } from "@hasna/feedback";
 
 const feedback = createFeedbackClient({
   baseUrl: import.meta.env.VITE_FEEDBACK_API_URL,
@@ -29,13 +29,7 @@ export async function sendFeedback(message: string) {
     appId: "my-browser-app",
     message,
     kind: "other",
-    context: {
-      route: window.location.pathname,
-      url: window.location.href,
-      userAgent: navigator.userAgent,
-      locale: navigator.language,
-      viewport: `${window.innerWidth}x${window.innerHeight}`,
-    },
+    context: collectBrowserFeedbackContext(),
   });
 }
 ```
@@ -48,7 +42,7 @@ Apps should expose feedback from the active workflow, usually as a small button 
 
 ```tsx
 import { useState } from "react";
-import { createFeedbackClient } from "@hasna/feedback";
+import { createFeedbackClient, collectBrowserFeedbackContext } from "@hasna/feedback";
 
 const feedback = createFeedbackClient({
   baseUrl: "/api/feedback",
@@ -63,12 +57,7 @@ export function FeedbackButton() {
       appId: "my-browser-app",
       message,
       kind: "other",
-      context: {
-        route: window.location.pathname,
-        url: window.location.href,
-        userAgent: navigator.userAgent,
-        viewport: `${window.innerWidth}x${window.innerHeight}`,
-      },
+      context: collectBrowserFeedbackContext(),
     });
     setMessage("");
     setOpen(false);
@@ -135,8 +124,10 @@ Authorization: Bearer <token>
 
 ```bash
 feedback submit "Search results need date filters" --app my-app --kind idea --tag search
-feedback list --app my-app
-feedback export --format jsonl > feedback.jsonl
+feedback submit "Export failed" --app my-app --kind bug --route /reports --app-version 1.2.3 --context browser=chrome --meta plan=pro
+feedback list --app my-app --search filters --since 2026-01-01
+feedback export --format jsonl --until 2026-12-31 > feedback.jsonl
+feedback doctor
 ```
 
 Terminal slash-command wrappers can delegate directly to the same CLI:

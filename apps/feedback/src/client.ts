@@ -91,6 +91,9 @@ export class FeedbackClient {
     if (filter.appId) params.set("appId", filter.appId);
     if (filter.status) params.set("status", filter.status);
     if (filter.tag) params.set("tag", filter.tag);
+    if (filter.search) params.set("search", filter.search);
+    if (filter.since) params.set("since", filter.since);
+    if (filter.until) params.set("until", filter.until);
     if (filter.limit) params.set("limit", String(filter.limit));
 
     if (hasUrlScheme(this.baseUrl)) {

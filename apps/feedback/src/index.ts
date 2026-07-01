@@ -2,6 +2,8 @@ export { createFeedbackHandler } from "./api.js";
 export type { FeedbackApiOptions } from "./api.js";
 export { FeedbackClient, createFeedbackClient } from "./client.js";
 export type { FeedbackClientOptions, FetchLike } from "./client.js";
+export { collectBrowserFeedbackContext } from "./browser.js";
+export type { BrowserFeedbackContextOptions } from "./browser.js";
 export {
   DEFAULT_DATA_DIR,
   DEFAULT_FEEDBACK_FILE,
@@ -40,4 +42,3 @@ export type {
   JsonValue,
 } from "./types.js";
 export { VERSION } from "./version.js";
-

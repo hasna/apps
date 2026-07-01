@@ -23,5 +23,5 @@ bun run build
 1. Run `bun run typecheck`.
 2. Run `bun test`.
 3. Run `bun run build`.
-4. Run the required staged secrets scan before committing or pushing.
-
+4. Run `npm pack --dry-run`.
+5. Run the required staged secrets scan before committing or pushing.

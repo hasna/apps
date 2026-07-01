@@ -50,7 +50,7 @@ describe("Feedback HTTP API and SDK", () => {
     expect(created.id).toBeString();
     expect(created.source).toBe("api");
 
-    const list = await client.list({ appId: "sdk-app" });
+    const list = await client.list({ appId: "sdk-app", search: "issue", since: "2026-01-01" });
     expect(list).toHaveLength(1);
     expect(list[0]?.message).toBe("SDK issue");
     expect(await client.stats()).toMatchObject({ total: 1 });

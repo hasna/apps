@@ -55,6 +55,9 @@ function listFilterFromUrl(url: URL): FeedbackListFilter {
   return {
     appId: url.searchParams.get("appId") ?? undefined,
     tag: url.searchParams.get("tag") ?? undefined,
+    search: url.searchParams.get("search") ?? undefined,
+    since: url.searchParams.get("since") ?? undefined,
+    until: url.searchParams.get("until") ?? undefined,
     limit: parseLimit(url.searchParams.get("limit")),
     status: status ? parseFeedbackStatus(status) : undefined,
   };
@@ -117,4 +120,3 @@ export function createFeedbackHandler(options: FeedbackApiOptions = {}): (reques
     }
   };
 }
-

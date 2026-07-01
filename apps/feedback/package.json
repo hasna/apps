@@ -1,6 +1,6 @@
 {
   "name": "@hasna/feedback",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Reusable feedback collection API, SDK, CLI, and MCP server for Hasna-coded apps",
   "type": "module",
   "main": "dist/index.js",
@@ -18,6 +18,10 @@
     "./api": {
       "types": "./dist/api.d.ts",
       "import": "./dist/api.js"
+    },
+    "./browser": {
+      "types": "./dist/browser.d.ts",
+      "import": "./dist/browser.js"
     },
     "./server": {
       "types": "./dist/server/index.d.ts",
@@ -42,12 +46,12 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun build src/index.ts src/api.ts src/storage.ts --outdir dist --target bun && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts src/mcp/cli.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts src/server/cli.ts --outdir dist/server --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "bun run clean && bun build src/index.ts src/api.ts src/browser.ts src/storage.ts --outdir dist --target bun && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts src/mcp/cli.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts src/server/cli.ts --outdir dist/server --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.ts",
-    "dev:mcp": "bun run src/mcp/index.ts",
-    "dev:serve": "bun run src/server/index.ts",
+    "dev:mcp": "bun run src/mcp/cli.ts",
+    "dev:serve": "bun run src/server/cli.ts",
     "prepack": "bun run build",
     "prepublishOnly": "bun run typecheck && bun test",
     "postinstall": "mkdir -p $HOME/.hasna/feedback 2>/dev/null || true"

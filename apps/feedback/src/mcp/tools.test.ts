@@ -31,7 +31,7 @@ describe("feedback MCP tools", () => {
 
     const exportTool = tools.find((tool) => tool.name === "export_feedback");
     expect(exportTool).toBeDefined();
-    const exported = await exportTool!.run({ app_id: "mcp-app", format: "jsonl" });
+    const exported = await exportTool!.run({ app_id: "mcp-app", search: "Agent", format: "jsonl" });
     expect(textFromResult(exported)).toContain("Agent feedback");
   });
 });

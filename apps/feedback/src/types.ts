@@ -49,6 +49,9 @@ export interface FeedbackListFilter {
   appId?: string;
   status?: FeedbackStatus;
   tag?: string;
+  search?: string;
+  since?: string;
+  until?: string;
   limit?: number;
 }
 
@@ -73,4 +76,3 @@ export interface FeedbackStore {
   stats(): Promise<FeedbackStats>;
   exportJsonl(filter?: FeedbackListFilter): Promise<string>;
 }
-

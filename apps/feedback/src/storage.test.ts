@@ -36,5 +36,43 @@ describe("LocalFeedbackStore", () => {
     expect(stats.byStatus.triaged).toBe(1);
     expect(stats.bySeverity.high).toBe(1);
   });
-});
 
+  test("filters by date range and search text", async () => {
+    const store = await tempStore();
+    await store.createFeedback(
+      {
+        appId: "app-a",
+        message: "billing export needs CSV",
+        tags: ["reports"],
+        context: { route: "/billing" },
+      },
+      { now: new Date("2026-01-01T00:00:00.000Z") },
+    );
+    await store.createFeedback(
+      {
+        appId: "app-a",
+        message: "profile avatar upload fails",
+        tags: ["account"],
+      },
+      { now: new Date("2026-02-01T00:00:00.000Z") },
+    );
+
+    expect(await store.listFeedback({ since: "2026-01-15", search: "avatar" })).toHaveLength(1);
+    expect(await store.listFeedback({ until: "2026-01-15", search: "billing" })).toHaveLength(1);
+    expect(await store.listFeedback({ tag: "reports", search: "/billing" })).toHaveLength(1);
+  });
+
+  test("serializes concurrent status updates", async () => {
+    const store = await tempStore();
+    const first = await store.createFeedback({ appId: "app-a", message: "first" });
+    const second = await store.createFeedback({ appId: "app-a", message: "second" });
+
+    await Promise.all([
+      store.updateFeedbackStatus(first.id, "triaged"),
+      store.updateFeedbackStatus(second.id, "closed"),
+    ]);
+
+    expect(await store.getFeedback(first.id)).toMatchObject({ status: "triaged" });
+    expect(await store.getFeedback(second.id)).toMatchObject({ status: "closed" });
+  });
+});

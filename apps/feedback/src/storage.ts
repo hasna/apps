@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync } from "node:fs";
-import { appendFile, readFile, rename, writeFile } from "node:fs/promises";
+import { appendFile, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type {
@@ -43,14 +43,75 @@ function emptyStats(): FeedbackStats {
   };
 }
 
+function parseDateFilter(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
+function searchHaystack(item: FeedbackItem): string {
+  return [
+    item.appId,
+    item.message,
+    item.kind,
+    item.severity,
+    item.status,
+    item.userId,
+    item.email,
+    item.url,
+    item.tags.join(" "),
+    item.context ? JSON.stringify(item.context) : "",
+    item.metadata ? JSON.stringify(item.metadata) : "",
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
 function applyFilter(items: FeedbackItem[], filter: FeedbackListFilter = {}): FeedbackItem[] {
   const limit = Math.max(1, Math.min(filter.limit ?? 50, 500));
+  const since = parseDateFilter(filter.since);
+  const until = parseDateFilter(filter.until);
+  const search = filter.search?.trim().toLowerCase();
   return items
     .filter((item) => !filter.appId || item.appId === filter.appId)
     .filter((item) => !filter.status || item.status === filter.status)
     .filter((item) => !filter.tag || item.tags.includes(filter.tag.toLowerCase()))
+    .filter((item) => !since || item.createdAt >= since)
+    .filter((item) => !until || item.createdAt <= until)
+    .filter((item) => !search || searchHaystack(item).includes(search))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(0, limit);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function withFileLock<T>(filePath: string, run: () => Promise<T>): Promise<T> {
+  const lockPath = `${filePath}.lock`;
+  const deadline = Date.now() + 2_000;
+  while (true) {
+    try {
+      const handle = await open(lockPath, "wx");
+      await handle.close();
+      try {
+        return await run();
+      } finally {
+        await rm(lockPath, { force: true });
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      try {
+        const lock = await stat(lockPath);
+        if (Date.now() - lock.mtimeMs > 30_000) await rm(lockPath, { force: true });
+      } catch {
+        // Lock disappeared between attempts.
+      }
+      if (Date.now() > deadline) throw new Error(`Timed out waiting for feedback data lock: ${lockPath}`);
+      await delay(50);
+    }
+  }
 }
 
 export class LocalFeedbackStore implements FeedbackStore {
@@ -74,7 +135,9 @@ export class LocalFeedbackStore implements FeedbackStore {
       kind: parsed.kind ?? "other",
       tags: parsed.tags ?? [],
     };
-    await appendFile(this.filePath, `${JSON.stringify(item)}\n`, "utf8");
+    await withFileLock(this.filePath, async () => {
+      await appendFile(this.filePath, `${JSON.stringify(item)}\n`, "utf8");
+    });
     return item;
   }
 
@@ -87,18 +150,20 @@ export class LocalFeedbackStore implements FeedbackStore {
   }
 
   async updateFeedbackStatus(id: string, status: FeedbackStatus): Promise<FeedbackItem | null> {
-    const items = await this.readAll();
-    const index = items.findIndex((item) => item.id === id);
-    if (index === -1) return null;
-    const current = items[index]!;
-    const updated: FeedbackItem = {
-      ...current,
-      status,
-      updatedAt: new Date().toISOString(),
-    };
-    items[index] = updated;
-    await this.writeAll(items);
-    return updated;
+    return withFileLock(this.filePath, async () => {
+      const items = await this.readAll();
+      const index = items.findIndex((item) => item.id === id);
+      if (index === -1) return null;
+      const current = items[index]!;
+      const updated: FeedbackItem = {
+        ...current,
+        status,
+        updatedAt: new Date().toISOString(),
+      };
+      items[index] = updated;
+      await this.writeAll(items);
+      return updated;
+    });
   }
 
   async stats(): Promise<FeedbackStats> {
@@ -130,9 +195,8 @@ export class LocalFeedbackStore implements FeedbackStore {
 
   private async writeAll(items: FeedbackItem[]): Promise<void> {
     ensureParentDir(this.filePath);
-    const tmpPath = `${this.filePath}.tmp`;
+    const tmpPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
     await writeFile(tmpPath, items.map((item) => JSON.stringify(item)).join("\n") + (items.length ? "\n" : ""), "utf8");
     await rename(tmpPath, this.filePath);
   }
 }
-

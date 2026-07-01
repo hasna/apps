@@ -77,6 +77,17 @@ await feedback.submit({
 });
 ```
 
+Browser apps can collect standard route/device context without a UI dependency:
+
+```ts
+import { collectBrowserFeedbackContext } from "@hasna/feedback/browser";
+
+const context = collectBrowserFeedbackContext({
+  version: import.meta.env.VITE_APP_VERSION,
+  environment: import.meta.env.MODE,
+});
+```
+
 For in-process server apps, use local storage directly:
 
 ```ts
@@ -93,15 +104,18 @@ await store.createFeedback({
 
 ```bash
 feedback init
-feedback submit "Add export history" --app my-app --kind idea --tag reports
-feedback list --app my-app --limit 20
+feedback doctor
+feedback submit "Add export history" --app my-app --kind idea --tag reports --route /reports --app-version 1.2.3 --env production
+feedback list --app my-app --search export --since 2026-01-01 --limit 20
 feedback show <id>
 feedback status <id> triaged
 feedback stats
-feedback export --format jsonl
+feedback export --format jsonl --until 2026-12-31
 ```
 
 Use `--api-url` and `--token` to target a remote Open Feedback API instead of local JSONL storage.
+
+`feedback doctor` checks the package version, local data file path, basic storage permissions, token configuration, and whether the expected binaries are on `PATH`.
 
 ### Terminal Slash Commands
 

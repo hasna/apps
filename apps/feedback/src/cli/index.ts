@@ -1,11 +1,13 @@
 #!/usr/bin/env bun
 import { Command } from "commander";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { constants, existsSync, mkdirSync, statSync } from "node:fs";
+import { access, rm, writeFile } from "node:fs/promises";
+import { delimiter } from "node:path";
+import { dirname, join } from "node:path";
 import { FeedbackClient } from "../client.js";
 import { startFeedbackServer } from "../server/index.js";
 import { LocalFeedbackStore, resolveFeedbackFilePath } from "../storage.js";
-import type { FeedbackInput, FeedbackKind, FeedbackListFilter, FeedbackStatus, JsonObject } from "../types.js";
+import type { FeedbackContext, FeedbackInput, FeedbackKind, FeedbackListFilter, FeedbackStatus, JsonObject } from "../types.js";
 import { parseFeedbackStatus } from "../validation.js";
 import { VERSION } from "../version.js";
 
@@ -24,6 +26,21 @@ function parseMetadata(value: string | undefined): JsonObject | undefined {
   return parsed as JsonObject;
 }
 
+function parseKeyValue(values: string[] | undefined): JsonObject | undefined {
+  if (!values?.length) return undefined;
+  return Object.fromEntries(values.map((value) => {
+    const index = value.indexOf("=");
+    if (index <= 0) throw new Error(`Expected key=value, got: ${value}`);
+    return [value.slice(0, index), value.slice(index + 1)];
+  }));
+}
+
+function mergeJsonObjects(first: JsonObject | undefined, second: JsonObject | undefined): JsonObject | undefined {
+  if (!first) return second;
+  if (!second) return first;
+  return { ...first, ...second };
+}
+
 function maybeClient(options: { apiUrl?: string; token?: string }): FeedbackClient | null {
   if (!options.apiUrl) return null;
   return new FeedbackClient({
@@ -36,13 +53,82 @@ function localStore(): LocalFeedbackStore {
   return new LocalFeedbackStore();
 }
 
-function commonFilter(options: { app?: string; status?: FeedbackStatus; tag?: string; limit?: string }): FeedbackListFilter {
+function commonFilter(options: { app?: string; status?: FeedbackStatus; tag?: string; search?: string; since?: string; until?: string; limit?: string }): FeedbackListFilter {
   return {
     appId: options.app,
     status: options.status,
     tag: options.tag,
+    search: options.search,
+    since: options.since,
+    until: options.until,
     limit: options.limit ? Number.parseInt(options.limit, 10) : undefined,
   };
+}
+
+function buildContext(options: Record<string, string | string[] | undefined>): FeedbackContext | undefined {
+  const extra = parseKeyValue(options.context as string[] | undefined) as FeedbackContext | undefined;
+  const context: FeedbackContext = {
+    ...extra,
+    route: options.route as string | undefined ?? extra?.route,
+    screen: options.screen as string | undefined ?? extra?.screen,
+    version: options.appVersion as string | undefined ?? extra?.version,
+    environment: options.env as string | undefined ?? extra?.environment,
+  };
+  return Object.values(context).some((value) => value !== undefined) ? context : undefined;
+}
+
+function findOnPath(command: string): string | null {
+  for (const dir of (process.env["PATH"] ?? "").split(delimiter).filter(Boolean)) {
+    const filePath = join(dir, command);
+    if (!existsSync(filePath)) continue;
+    try {
+      statSync(filePath);
+      return filePath;
+    } catch {
+      // Keep looking.
+    }
+  }
+  return null;
+}
+
+async function runDoctor(): Promise<void> {
+  const filePath = resolveFeedbackFilePath();
+  const dataDir = dirname(filePath);
+  mkdirSync(dataDir, { recursive: true });
+  const tmpPath = join(dataDir, `.feedback-doctor-${process.pid}.tmp`);
+  let dataDirWritable = false;
+  let dataFileReadable = false;
+  try {
+    await writeFile(tmpPath, "", "utf8");
+    await rm(tmpPath, { force: true });
+    dataDirWritable = true;
+  } catch {
+    dataDirWritable = false;
+  }
+  try {
+    if (!existsSync(filePath)) {
+      dataFileReadable = true;
+    } else {
+      await access(filePath, constants.R_OK);
+      dataFileReadable = true;
+    }
+  } catch {
+    dataFileReadable = false;
+  }
+  const bins = {
+    feedback: findOnPath("feedback"),
+    "feedback-mcp": findOnPath("feedback-mcp"),
+    "feedback-serve": findOnPath("feedback-serve"),
+  };
+  printJson({
+    ok: dataDirWritable && dataFileReadable,
+    version: VERSION,
+    dataFile: filePath,
+    dataDirWritable,
+    dataFileReadable,
+    apiTokenConfigured: Boolean(process.env["FEEDBACK_API_TOKEN"]),
+    bins,
+  });
 }
 
 export async function main(argv: string[] = process.argv): Promise<void> {
@@ -59,6 +145,13 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       const filePath = resolveFeedbackFilePath();
       mkdirSync(dirname(filePath), { recursive: true });
       printJson({ dataFile: filePath });
+    });
+
+  program
+    .command("doctor")
+    .description("Check local Open Feedback installation and storage")
+    .action(async () => {
+      await runDoctor();
     });
 
   program
@@ -87,9 +180,16 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--rating <rating>", "Rating from 1 to 5")
     .option("--tag <tag...>", "Tag; can be repeated or comma-separated")
     .option("--metadata <json>", "JSON object metadata")
+    .option("--meta <key=value...>", "Metadata key/value; can be repeated")
+    .option("--route <route>", "Current app route")
+    .option("--screen <screen>", "Current app screen")
+    .option("--app-version <version>", "App version or build id")
+    .option("--env <environment>", "App environment")
+    .option("--context <key=value...>", "Context key/value; can be repeated")
     .option("--api-url <url>", "Remote Open Feedback API URL")
     .option("--token <token>", "API bearer token")
     .action(async (message: string, options: Record<string, string | string[] | undefined>) => {
+      const metadata = mergeJsonObjects(parseMetadata(options.metadata as string | undefined), parseKeyValue(options.meta as string[] | undefined));
       const input: FeedbackInput = {
         appId: String(options.app),
         message,
@@ -100,7 +200,8 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         url: options.url as string | undefined,
         rating: options.rating ? Number.parseInt(String(options.rating), 10) : undefined,
         tags: parseTags(options.tag as string[] | undefined),
-        metadata: parseMetadata(options.metadata as string | undefined),
+        metadata,
+        context: buildContext(options),
       };
       const client = maybeClient({ apiUrl: options.apiUrl as string | undefined, token: options.token as string | undefined });
       printJson(client ? await client.submit(input) : await localStore().createFeedback(input, { source: "cli" }));
@@ -112,10 +213,13 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--app <appId>", "Filter by app id")
     .option("--status <status>", "Filter by status")
     .option("--tag <tag>", "Filter by tag")
+    .option("--search <text>", "Search message, metadata, context, and tags")
+    .option("--since <date>", "Only entries created at or after this date")
+    .option("--until <date>", "Only entries created at or before this date")
     .option("--limit <n>", "Limit results", "50")
     .option("--api-url <url>", "Remote Open Feedback API URL")
     .option("--token <token>", "API bearer token")
-    .action(async (options: { app?: string; status?: FeedbackStatus; tag?: string; limit?: string; apiUrl?: string; token?: string }) => {
+    .action(async (options: { app?: string; status?: FeedbackStatus; tag?: string; search?: string; since?: string; until?: string; limit?: string; apiUrl?: string; token?: string }) => {
       const filter = commonFilter({ ...options, status: options.status ? parseFeedbackStatus(options.status) : undefined });
       const client = maybeClient(options);
       printJson(client ? await client.list(filter) : await localStore().listFeedback(filter));
@@ -173,11 +277,14 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--app <appId>", "Filter by app id")
     .option("--status <status>", "Filter by status")
     .option("--tag <tag>", "Filter by tag")
+    .option("--search <text>", "Search message, metadata, context, and tags")
+    .option("--since <date>", "Only entries created at or after this date")
+    .option("--until <date>", "Only entries created at or before this date")
     .option("--limit <n>", "Limit results", "500")
     .option("--format <format>", "json or jsonl", "jsonl")
     .option("--api-url <url>", "Remote Open Feedback API URL")
     .option("--token <token>", "API bearer token")
-    .action(async (options: { app?: string; status?: FeedbackStatus; tag?: string; limit?: string; format: string; apiUrl?: string; token?: string }) => {
+    .action(async (options: { app?: string; status?: FeedbackStatus; tag?: string; search?: string; since?: string; until?: string; limit?: string; format: string; apiUrl?: string; token?: string }) => {
       const filter = commonFilter({ ...options, status: options.status ? parseFeedbackStatus(options.status) : undefined });
       const client = maybeClient(options);
       if (options.format === "json") {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { parseFeedbackInput } from "./validation.js";
+import { parseFeedbackInput, redactSecretsInText } from "./validation.js";
 
 describe("feedback validation", () => {
   test("normalizes tags and defaults kind", () => {
@@ -30,5 +30,21 @@ describe("feedback validation", () => {
     expect(parsed.url).toBe("https://example.com/path?token=[redacted]&ok=1");
     expect(parsed.metadata?.apiToken).toBe("[redacted]");
     expect((parsed.metadata?.nested as { value: string }).value).toBe("[redacted]");
+  });
+
+  test("redacts compact credential fixture table", () => {
+    const samples = [
+      `Authorization: Bearer synthetic-value`,
+      `cookie=sessionid=synthetic-value`,
+      `access_token=synthetic-value`,
+      `secret-${"token"}: synthetic-value`,
+      `key sk-${"ant"}-abcdefghijklmnopqrstuvwxyz123456`,
+      `key x${"ai"}-abcdefghijklmnopqrstuvwxyz123456`,
+    ];
+
+    for (const sample of samples) {
+      expect(redactSecretsInText(sample)).not.toContain("synthetic-value");
+      expect(redactSecretsInText(sample)).toContain("[redacted]");
+    }
   });
 });
