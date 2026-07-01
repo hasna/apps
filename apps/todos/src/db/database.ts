@@ -145,6 +145,10 @@ export function clearExpiredLocks(db: Database): void {
 
 const ALLOWED_TABLES = new Set(["tasks", "projects", "agents", "plans", "task_lists", "task_templates", "project_knowledge_records", "project_risks", "local_retrospectives"]);
 
+function slugifyRef(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
 export function resolvePartialId(db: Database, table: string, partialId: string): string | null {
   if (!ALLOWED_TABLES.has(table)) {
     throw new Error(`Invalid table name: ${table}`);
@@ -177,6 +181,17 @@ export function resolvePartialId(db: Database, table: string, partialId: string)
   if (table === "task_lists") {
     const slugRow = db.query("SELECT id FROM task_lists WHERE slug = ?").get(partialId) as { id: string } | null;
     if (slugRow) return slugRow.id;
+  }
+
+  // For plans table, also try matching on readable slug. Ambiguous slugs return
+  // null so callers can fail loudly or retry with project scope.
+  if (table === "plans") {
+    const slug = slugifyRef(partialId);
+    if (slug) {
+      const slugRows = db.query("SELECT id FROM plans WHERE slug = ?").all(slug) as { id: string }[];
+      if (slugRows.length === 1) return slugRows[0]!.id;
+      if (slugRows.length > 1) return null;
+    }
   }
 
   // For projects table, also try matching on name (case-insensitive)

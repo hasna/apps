@@ -709,14 +709,18 @@ describe("CLI integration", () => {
       "plans",
       "--add",
       "CLI artifact plan",
+      "--slug",
+      "readable-artifact-plan",
       "--description",
       "Persist this plan locally",
     ], dbPath);
     expect(created.exitCode).toBe(0);
     const plan = JSON.parse(created.stdout);
-    const artifactPath = join(projectRoot, ".hasna", "todos", "plans", project.id, `${plan.id}.md`);
+    expect(plan.slug).toBe("readable-artifact-plan");
+    const artifactPath = join(projectRoot, ".hasna", "todos", "plans", project.id, `readable-artifact-plan--${plan.id.slice(0, 8)}.md`);
     expect(existsSync(artifactPath)).toBe(true);
     expect(readFileSync(artifactPath, "utf8")).toContain("# CLI artifact plan");
+    expect(readFileSync(artifactPath, "utf8")).toContain('plan_slug: "readable-artifact-plan"');
 
     const shown = await runCli([
       "--project",
@@ -724,7 +728,7 @@ describe("CLI integration", () => {
       "--json",
       "plans",
       "--show",
-      plan.id.slice(0, 8),
+      "readable-artifact-plan",
     ], dbPath);
     expect(shown.exitCode).toBe(0);
     const details = JSON.parse(shown.stdout);
@@ -739,7 +743,7 @@ describe("CLI integration", () => {
       "--json",
       "plans",
       "--artifact",
-      plan.id.slice(0, 8),
+      "readable-artifact-plan",
     ], dbPath);
     expect(artifact.exitCode).toBe(0);
     const artifactDetails = JSON.parse(artifact.stdout);
@@ -761,6 +765,19 @@ describe("CLI integration", () => {
       artifacts: [{ plan_id: plan.id, path: artifactPath }],
     });
     expect(existsSync(artifactPath)).toBe(true);
+
+    const duplicate = await runCli([
+      "--project",
+      projectRoot,
+      "--json",
+      "plans",
+      "--add",
+      "Duplicate artifact plan",
+      "--slug",
+      "readable-artifact-plan",
+    ], dbPath);
+    expect(duplicate.exitCode).toBe(1);
+    expect(duplicate.stderr).toContain("Plan slug already exists in this scope: readable-artifact-plan");
   });
 
   it("should create and export local retrospectives from the CLI", async () => {

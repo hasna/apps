@@ -107,7 +107,7 @@ function runtimeSourceFiles(dir: string): string[] {
 
 function packageSurfaceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
-    if ([".git", ".claude", ".codewith", ".takumi", ".venv", "node_modules", "dist", "coverage", "dashboard"].includes(entry)) {
+    if ([".git", ".claude", ".codewith", ".hasna", ".takumi", ".venv", "node_modules", "dist", "coverage", "dashboard"].includes(entry)) {
       return [];
     }
     const path = join(dir, entry);

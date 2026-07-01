@@ -115,7 +115,7 @@ const dataKeys = [
 const insertColumns: Record<keyof TodosLocalBridgeData, readonly string[]> = {
   projects: ["id", "name", "path", "description", "task_list_id", "task_prefix", "task_counter", "created_at", "updated_at", "machine_id", "synced_at"],
   task_lists: ["id", "project_id", "slug", "name", "description", "metadata", "created_at", "updated_at", "machine_id", "synced_at"],
-  plans: ["id", "project_id", "task_list_id", "agent_id", "name", "description", "status", "created_at", "updated_at", "machine_id", "synced_at"],
+  plans: ["id", "slug", "project_id", "task_list_id", "agent_id", "name", "description", "status", "created_at", "updated_at", "machine_id", "synced_at"],
   tasks: [
     "id", "short_id", "project_id", "parent_id", "plan_id", "task_list_id", "title", "description", "status", "priority",
     "agent_id", "assigned_to", "session_id", "working_dir", "tags", "metadata", "version", "locked_by", "locked_at",

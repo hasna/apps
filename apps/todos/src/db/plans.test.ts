@@ -5,11 +5,14 @@ import {
   createPlan,
   getPlan,
   listPlans,
+  resolvePlanRef,
+  resolvePlanRefDetailed,
   updatePlan,
   deletePlan,
 } from "./plans.js";
 import { createProject } from "./projects.js";
 import { createTask } from "./tasks.js";
+import { runMigrations } from "./schema.js";
 import { PlanNotFoundError } from "../types/index.js";
 
 let db: Database;
@@ -30,6 +33,7 @@ describe("createPlan", () => {
     const plan = createPlan({ name: "Sprint 1" }, db);
     expect(plan.id).toBeTruthy();
     expect(plan.name).toBe("Sprint 1");
+    expect(plan.slug).toBe("sprint-1");
     expect(plan.description).toBeNull();
     expect(plan.status).toBe("active");
     expect(plan.project_id).toBeNull();
@@ -49,6 +53,7 @@ describe("createPlan", () => {
       db,
     );
     expect(plan.name).toBe("Release Plan");
+    expect(plan.slug).toBe("release-plan");
     expect(plan.description).toBe("Plan for v2.0 release");
     expect(plan.project_id).toBe(project.id);
     expect(plan.status).toBe("completed");
@@ -58,6 +63,56 @@ describe("createPlan", () => {
     const project = createProject({ name: "Proj", path: "/tmp/p" }, db);
     const plan = createPlan({ name: "Plan A", project_id: project.id }, db);
     expect(plan.project_id).toBe(project.id);
+  });
+
+  it("should create plans with explicit readable slugs", () => {
+    const plan = createPlan({ name: "Launch Plan", slug: "global-agent-rules" }, db);
+    expect(plan.slug).toBe("global-agent-rules");
+    expect(resolvePlanRef("global-agent-rules", db)).toBe(plan.id);
+  });
+
+  it("should suffix generated duplicate slugs in the same scope", () => {
+    const first = createPlan({ name: "Launch Plan" }, db);
+    const second = createPlan({ name: "Launch Plan" }, db);
+
+    expect(first.slug).toBe("launch-plan");
+    expect(second.slug).toBe("launch-plan-2");
+  });
+
+  it("should reject duplicate explicit slugs in the same scope", () => {
+    createPlan({ name: "Launch Plan", slug: "launch-plan" }, db);
+
+    expect(() => createPlan({ name: "Other Plan", slug: "launch-plan" }, db)).toThrow(
+      "Plan slug already exists in this scope: launch-plan",
+    );
+  });
+
+  it("should resolve duplicate slugs with project scope and report unscoped ambiguity", () => {
+    const projectA = createProject({ name: "Project A", path: "/tmp/project-a" }, db);
+    const projectB = createProject({ name: "Project B", path: "/tmp/project-b" }, db);
+    const planA = createPlan({ name: "Launch Plan", slug: "launch-plan", project_id: projectA.id }, db);
+    const planB = createPlan({ name: "Launch Plan", slug: "launch-plan", project_id: projectB.id }, db);
+
+    expect(resolvePlanRef("launch-plan", db, projectA.id)).toBe(planA.id);
+    expect(resolvePlanRef("launch-plan", db, projectB.id)).toBe(planB.id);
+
+    const unscoped = resolvePlanRefDetailed("launch-plan", db);
+    expect(unscoped.id).toBeNull();
+    expect(unscoped.reason).toBe("ambiguous");
+    expect(unscoped.matches.map((plan) => plan.id).sort()).toEqual([planA.id, planB.id].sort());
+  });
+
+  it("should backfill missing plan slugs during schema repair", () => {
+    const first = createPlan({ name: "Legacy Plan" }, db);
+    const second = createPlan({ name: "Legacy Plan" }, db);
+    db.run("UPDATE plans SET slug = NULL WHERE id IN (?, ?)", [first.id, second.id]);
+
+    runMigrations(db);
+
+    expect([getPlan(first.id, db)!.slug, getPlan(second.id, db)!.slug].sort()).toEqual([
+      "legacy-plan",
+      "legacy-plan-2",
+    ]);
   });
 });
 

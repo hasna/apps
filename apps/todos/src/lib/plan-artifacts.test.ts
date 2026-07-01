@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,9 +9,11 @@ import { createProject } from "../db/projects.js";
 import { createTask } from "../db/tasks.js";
 import {
   PLAN_MARKDOWN_SCHEMA,
+  buildPlanArtifactSnapshot,
   inspectPlanArtifact,
   readPlanArtifact,
   resolvePlanArtifactPaths,
+  renderPlanArtifactMarkdown,
   writePlanArtifact,
 } from "./plan-artifacts.js";
 
@@ -37,11 +39,14 @@ describe("plan Markdown artifacts", () => {
     const projectRoot = join(root, "project");
     const project = createProject({ name: "Local Plan Project", path: projectRoot }, db);
 
-    const byId = resolvePlanArtifactPaths({ project_id: project.id, plan_id: "plan-1", db });
+    const byId = resolvePlanArtifactPaths({ project_id: project.id, plan_id: "plan-1", plan_slug: "Readable Plan", db });
     expect(byId.directory).toBe(join(projectRoot, ".hasna", "todos", "plans", project.id));
-    expect(byId.file_path).toBe(join(projectRoot, ".hasna", "todos", "plans", project.id, "plan-1.md"));
+    expect(byId.file_path).toBe(join(projectRoot, ".hasna", "todos", "plans", project.id, "readable-plan--plan-1.md"));
 
-    const bySlug = resolvePlanArtifactPaths({ project_ref: "local-plan-project", plan_id: "plan-2", db });
+    const legacy = resolvePlanArtifactPaths({ project_id: project.id, plan_id: "plan-1", db });
+    expect(legacy.file_path).toBe(join(projectRoot, ".hasna", "todos", "plans", project.id, "plan-1.md"));
+
+    const bySlug = resolvePlanArtifactPaths({ project_ref: "local-plan-project", plan_id: "plan-2", plan_slug: "Plan Two", db });
     expect(bySlug.directory).toBe(join(projectRoot, ".hasna", "todos", "plans", project.id));
     expect(() => resolvePlanArtifactPaths({ project_id: project.id, plan_id: "../escape", db })).toThrow("Invalid plan id");
     expect(() => resolvePlanArtifactPaths({ project_ref: "missing-project", db })).toThrow("Project not found");
@@ -64,12 +69,13 @@ describe("plan Markdown artifacts", () => {
     }, db);
 
     const written = writePlanArtifact(plan, db)!;
-    expect(written.path).toBe(join(projectRoot, ".hasna", "todos", "plans", project.id, `${plan.id}.md`));
+    expect(written.path).toBe(join(projectRoot, ".hasna", "todos", "plans", project.id, `${plan.slug}--${plan.id.slice(0, 8)}.md`));
     expect(existsSync(written.path)).toBe(true);
 
     const markdown = readFileSync(written.path, "utf8");
     expect(markdown).toContain(`schema: "${PLAN_MARKDOWN_SCHEMA}"`);
     expect(markdown).toContain(`plan_id: "${plan.id}"`);
+    expect(markdown).toContain(`plan_slug: "${plan.slug}"`);
     expect(markdown).toContain("# Launch Plan");
     expect(markdown).toContain("Ship the local plan persistence slice.");
     expect(markdown).toContain(`task_id=${task.id} status=pending priority=critical`);
@@ -79,6 +85,7 @@ describe("plan Markdown artifacts", () => {
     expect(read.metadata).toMatchObject({
       schema: PLAN_MARKDOWN_SCHEMA,
       plan_id: plan.id,
+      plan_slug: plan.slug,
       project_id: project.id,
       stable_id: plan.id,
       name: "Launch Plan",
@@ -108,6 +115,31 @@ describe("plan Markdown artifacts", () => {
     const read = readPlanArtifact(completed, db)!;
     expect(read.metadata.status).toBe("completed");
     expect(read.markdown).toContain('status: "completed"');
+  });
+
+  test("reads legacy UUID artifacts and migrates future writes to slugged filenames", () => {
+    const db = getDatabase();
+    const projectRoot = join(root, "repo");
+    const project = createProject({ name: "Legacy Repo", path: projectRoot }, db);
+    const plan = createPlan({ name: "Legacy Plan", project_id: project.id }, db);
+    const legacy = resolvePlanArtifactPaths({ project_id: project.id, plan_id: plan.id, db });
+    const primary = join(projectRoot, ".hasna", "todos", "plans", project.id, `${plan.slug}--${plan.id.slice(0, 8)}.md`);
+    mkdirSync(legacy.directory, { recursive: true });
+    const legacyMarkdown = renderPlanArtifactMarkdown(buildPlanArtifactSnapshot(plan, []))
+      .replace(`plan_slug: "${plan.slug}"\n`, "");
+    writeFileSync(legacy.file_path, legacyMarkdown, "utf8");
+
+    const readLegacy = readPlanArtifact(plan, db)!;
+    expect(readLegacy.path).toBe(legacy.file_path);
+    const legacyInspection = inspectPlanArtifact(plan, db)!;
+    expect(legacyInspection.path).toBe(legacy.file_path);
+    expect(legacyInspection.exists).toBe(true);
+    expect(legacyInspection.conflicts).toEqual([]);
+
+    const written = writePlanArtifact(plan, db)!;
+    expect(written.path).toBe(primary);
+    expect(existsSync(primary)).toBe(true);
+    expect(readPlanArtifact(plan, db)!.path).toBe(primary);
   });
 
   test("reports deterministic conflicts between SQLite plan state and Markdown artifacts", () => {

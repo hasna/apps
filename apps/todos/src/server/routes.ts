@@ -747,10 +747,11 @@ export function handleListPlans(url: URL, _ctx: RouteContext, json: (data: unkno
 
 export async function handleCreatePlan(req: Request, _ctx: RouteContext, json: (data: unknown, status?: number) => Response): Promise<Response> {
   try {
-    const body = await req.json() as { name: string; description?: string; project_id?: string; task_list_id?: string; agent_id?: string; status?: string };
+    const body = await req.json() as { name: string; slug?: string; description?: string; project_id?: string; task_list_id?: string; agent_id?: string; status?: string };
     if (!body.name) return json({ error: "Missing 'name'" }, 400);
     const plan = createPlan({
       name: body.name,
+      slug: body.slug,
       description: body.description,
       project_id: body.project_id,
       task_list_id: body.task_list_id,

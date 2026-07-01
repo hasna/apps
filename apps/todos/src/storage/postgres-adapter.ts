@@ -608,6 +608,7 @@ async function createPlan(input: CreatePlanInput, store: PostgresJsonRecordStore
   const timestamp = new Date().toISOString();
   return store.upsert("plans", {
     id: randomUUID(),
+    slug: input.slug ?? slugify(input.name),
     project_id: input.project_id ?? context?.projectId ?? null,
     task_list_id: input.task_list_id ?? context?.taskListId ?? null,
     agent_id: input.agent_id ?? context?.agentId ?? null,

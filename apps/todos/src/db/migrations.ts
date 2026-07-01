@@ -1221,4 +1221,10 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_storage_tombstones_updated ON storage_tombstones(updated_at);
   INSERT OR IGNORE INTO _migrations (id) VALUES (63);
   `,
+  // Migration 64: Readable plan slugs for plan refs and local artifacts
+  `
+  ALTER TABLE plans ADD COLUMN slug TEXT;
+  CREATE INDEX IF NOT EXISTS idx_plans_slug ON plans(slug);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (64);
+  `,
 ];

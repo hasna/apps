@@ -98,6 +98,7 @@ export interface CreateOrgInput {
 // Plan
 export interface Plan {
   id: string;
+  slug: string | null;
   project_id: string | null;
   task_list_id: string | null;
   agent_id: string | null;
@@ -112,6 +113,7 @@ export interface Plan {
 
 export interface CreatePlanInput {
   name: string;
+  slug?: string;
   project_id?: string;
   task_list_id?: string;
   agent_id?: string;
@@ -121,6 +123,7 @@ export interface CreatePlanInput {
 
 export interface UpdatePlanInput {
   name?: string;
+  slug?: string;
   description?: string;
   status?: PlanStatus;
   task_list_id?: string;

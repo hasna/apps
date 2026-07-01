@@ -1714,6 +1714,7 @@ export function registerTaskProjectTools(server: McpServer, ctx: TaskProjectCont
       "Create a new plan (sprint/milestone).",
       {
         name: z.string().describe("Plan name"),
+        slug: z.string().optional().describe("Readable plan slug"),
         project_id: z.string().optional().describe("Project ID"),
         description: z.string().optional(),
         start_date: z.string().optional().describe("ISO date"),

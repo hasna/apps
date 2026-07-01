@@ -193,6 +193,7 @@ function createAgentProjectDemoBundle(): TodosLocalBridgeBundle {
   });
   data.plans.push({
     id: ids.plan,
+    slug: "ship-local-demo-workflow",
     project_id: ids.project,
     task_list_id: ids.list,
     agent_id: "demo-agent",

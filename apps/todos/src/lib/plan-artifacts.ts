@@ -19,6 +19,7 @@ export interface ResolvePlanArtifactPathInput {
   project_id?: string | null;
   project_ref?: string | null;
   plan_id?: string | null;
+  plan_slug?: string | null;
   db?: Database;
 }
 
@@ -32,6 +33,7 @@ export interface PlanArtifactTaskReference {
 export interface PlanArtifactMetadata {
   schema: typeof PLAN_MARKDOWN_SCHEMA;
   plan_id: string;
+  plan_slug: string | null;
   project_id: string;
   task_list_id: string | null;
   agent_id: string | null;
@@ -112,6 +114,15 @@ function projectSlugMatches(project: Project, ref: string): boolean {
   return Boolean(normalized) && (project.task_list_id === normalized || slugify(project.name) === normalized);
 }
 
+function planArtifactSlug(plan: Pick<Plan, "name" | "slug">): string {
+  return slugify(plan.slug || plan.name) || "plan";
+}
+
+export function planArtifactFileName(plan: Pick<Plan, "id" | "name" | "slug">): string {
+  const id8 = assertSafePathSegment(plan.id.slice(0, 8), "plan id");
+  return `${planArtifactSlug(plan)}--${id8}.md`;
+}
+
 export function resolvePlanArtifactProject(input: ResolvePlanArtifactPathInput): Project {
   const db = input.db || getDatabase();
   const ref = input.project_id || input.project_ref;
@@ -138,11 +149,25 @@ export function resolvePlanArtifactPaths(input: ResolvePlanArtifactPathInput): P
   const projectRoot = resolve(project.path);
   const directory = join(projectRoot, ".hasna", "todos", "plans", projectId);
   const planId = input.plan_id ? assertSafePathSegment(input.plan_id, "plan id") : null;
+  const planSlug = input.plan_slug ? assertSafePathSegment(slugify(input.plan_slug), "plan slug") : null;
+  const fileName = planId ? (planSlug ? `${planSlug}--${planId.slice(0, 8)}.md` : `${planId}.md`) : null;
   return {
     project_id: project.id,
     project_root: projectRoot,
     directory,
-    file_path: planId ? join(directory, `${planId}.md`) : directory,
+    file_path: fileName ? join(directory, fileName) : directory,
+  };
+}
+
+function resolvePlanArtifactCandidatePaths(plan: Plan, db: Database): { primary: PlanArtifactPaths; legacy: PlanArtifactPaths } {
+  return {
+    primary: resolvePlanArtifactPaths({
+      project_id: plan.project_id,
+      plan_id: plan.id,
+      plan_slug: planArtifactSlug(plan),
+      db,
+    }),
+    legacy: resolvePlanArtifactPaths({ project_id: plan.project_id, plan_id: plan.id, db }),
   };
 }
 
@@ -163,6 +188,7 @@ export function buildPlanArtifactSnapshot(
     metadata: {
       schema: PLAN_MARKDOWN_SCHEMA,
       plan_id: plan.id,
+      plan_slug: plan.slug ?? null,
       project_id: plan.project_id,
       task_list_id: plan.task_list_id ?? null,
       agent_id: plan.agent_id ?? null,
@@ -203,6 +229,7 @@ export function renderPlanArtifactMarkdown(snapshot: PlanArtifactSnapshot): stri
     "---",
     `schema: ${frontmatterScalar(metadata.schema)}`,
     `plan_id: ${frontmatterScalar(metadata.plan_id)}`,
+    `plan_slug: ${frontmatterScalar(metadata.plan_slug)}`,
     `project_id: ${frontmatterScalar(metadata.project_id)}`,
     `task_list_id: ${frontmatterScalar(metadata.task_list_id)}`,
     `agent_id: ${frontmatterScalar(metadata.agent_id)}`,
@@ -242,6 +269,7 @@ export function parsePlanArtifactMarkdown(markdown: string): PlanArtifactSnapsho
     metadata: {
       schema: PLAN_MARKDOWN_SCHEMA,
       plan_id: rawMetadata.plan_id!,
+      plan_slug: rawMetadata.plan_slug ?? null,
       project_id: rawMetadata.project_id!,
       task_list_id: rawMetadata.task_list_id ?? null,
       agent_id: rawMetadata.agent_id ?? null,
@@ -281,7 +309,7 @@ export function writePlanArtifact(plan: Plan, db?: Database): WritePlanArtifactR
   if (!plan.project_id) return null;
   const d = db || getDatabase();
   const tasks = listTasks({ plan_id: plan.id, include_archived: true }, d);
-  const paths = resolvePlanArtifactPaths({ project_id: plan.project_id, plan_id: plan.id, db: d });
+  const paths = resolvePlanArtifactCandidatePaths(plan, d).primary;
   const snapshot = buildPlanArtifactSnapshot(plan, tasks);
   mkdirSync(paths.directory, { recursive: true });
   writeFileSync(paths.file_path, renderPlanArtifactMarkdown(snapshot), "utf8");
@@ -291,11 +319,16 @@ export function writePlanArtifact(plan: Plan, db?: Database): WritePlanArtifactR
 export function readPlanArtifact(plan: Plan, db?: Database): PlanArtifactReadResult | null {
   if (!plan.project_id) return null;
   const d = db || getDatabase();
-  const paths = resolvePlanArtifactPaths({ project_id: plan.project_id, plan_id: plan.id, db: d });
-  if (!existsSync(paths.file_path)) return null;
-  const markdown = readFileSync(paths.file_path, "utf8");
+  const paths = resolvePlanArtifactCandidatePaths(plan, d);
+  const path = existsSync(paths.primary.file_path)
+    ? paths.primary.file_path
+    : existsSync(paths.legacy.file_path)
+      ? paths.legacy.file_path
+      : null;
+  if (!path) return null;
+  const markdown = readFileSync(path, "utf8");
   return {
-    path: paths.file_path,
+    path,
     markdown,
     ...parsePlanArtifactMarkdown(markdown),
   };
@@ -304,10 +337,15 @@ export function readPlanArtifact(plan: Plan, db?: Database): PlanArtifactReadRes
 export function inspectPlanArtifact(plan: Plan, db?: Database): PlanArtifactInspection | null {
   if (!plan.project_id) return null;
   const d = db || getDatabase();
-  const paths = resolvePlanArtifactPaths({ project_id: plan.project_id, plan_id: plan.id, db: d });
-  if (!existsSync(paths.file_path)) {
+  const paths = resolvePlanArtifactCandidatePaths(plan, d);
+  const path = existsSync(paths.primary.file_path)
+    ? paths.primary.file_path
+    : existsSync(paths.legacy.file_path)
+      ? paths.legacy.file_path
+      : null;
+  if (!path) {
     return {
-      path: paths.file_path,
+      path: paths.primary.file_path,
       exists: false,
       parse_error: null,
       metadata: null,
@@ -317,9 +355,9 @@ export function inspectPlanArtifact(plan: Plan, db?: Database): PlanArtifactInsp
   }
 
   try {
-    const artifact = parsePlanArtifactMarkdown(readFileSync(paths.file_path, "utf8"));
+    const artifact = parsePlanArtifactMarkdown(readFileSync(path, "utf8"));
     return {
-      path: paths.file_path,
+      path,
       exists: true,
       parse_error: null,
       metadata: artifact.metadata,
@@ -328,7 +366,7 @@ export function inspectPlanArtifact(plan: Plan, db?: Database): PlanArtifactInsp
     };
   } catch (error) {
     return {
-      path: paths.file_path,
+      path,
       exists: true,
       parse_error: error instanceof Error ? error.message : String(error),
       metadata: null,
@@ -341,6 +379,9 @@ export function inspectPlanArtifact(plan: Plan, db?: Database): PlanArtifactInsp
 function comparePlanArtifact(plan: Plan, artifact: PlanArtifactSnapshot, tasks: Task[]): PlanArtifactConflict[] {
   const conflicts: PlanArtifactConflict[] = [];
   compare("plan_id", plan.id, artifact.metadata.plan_id, conflicts);
+  if (artifact.metadata.plan_slug !== null) {
+    compare("plan_slug", plan.slug ?? null, artifact.metadata.plan_slug, conflicts);
+  }
   compare("project_id", plan.project_id ?? null, artifact.metadata.project_id, conflicts);
   compare("name", plan.name, artifact.metadata.name, conflicts);
   compare("status", plan.status, artifact.metadata.status, conflicts);
