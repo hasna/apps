@@ -322,7 +322,7 @@ describe('public knowledge sdk', () => {
     expect(parsed.kind).toBe('file');
 
     const migration = client.db.init();
-    expect(migration.schema_version).toBe(7);
+    expect(migration.schema_version).toBe(8);
 
     const ingest = await client.ingest.source(`file://${source}`, 'knowledge_index');
     expect(ingest.sources_upserted).toBe(1);

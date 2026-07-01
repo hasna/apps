@@ -81,6 +81,39 @@ function expectSameExistingPath(actual: string, expected: string): void {
   expect(realpathSync(actual)).toBe(realpathSync(expected));
 }
 
+function createSchema7KnowledgeDb(dbPath: string): void {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  try {
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      DROP TABLE IF EXISTS wiki_pages_v7;
+      CREATE TABLE wiki_pages_v7 (
+        id TEXT PRIMARY KEY,
+        path TEXT NOT NULL UNIQUE,
+        title TEXT NOT NULL,
+        artifact_uri TEXT,
+        content_hash TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO wiki_pages_v7 (
+        id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at
+      )
+      SELECT id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at
+      FROM wiki_pages;
+      DROP TABLE wiki_pages;
+      ALTER TABLE wiki_pages_v7 RENAME TO wiki_pages;
+      DELETE FROM schema_versions WHERE version = 8;
+      PRAGMA foreign_keys = ON;
+    `);
+  } finally {
+    db.close();
+  }
+}
+
 function pathWithBin(bin: string): string {
   return `${bin}${delimiter}${process.env.PATH ?? ''}`;
 }
@@ -1237,13 +1270,13 @@ describe('knowledge cli', () => {
     const init = runCli(['db', 'init', '--scope', 'project', '--json'], dir);
     expect(init.exitCode).toBe(0);
     const initOut = JSON.parse(new TextDecoder().decode(init.stdout));
-    expect(initOut.schema_version).toBe(7);
+    expect(initOut.schema_version).toBe(8);
     expect(existsSync(join(dir, '.hasna', 'knowledge', 'knowledge.db'))).toBe(true);
 
     const stats = runCli(['db', 'stats', '--scope', 'project', '--json'], dir);
     expect(stats.exitCode).toBe(0);
     const statsOut = JSON.parse(new TextDecoder().decode(stats.stdout));
-    expect(statsOut.schema_version).toBe(7);
+    expect(statsOut.schema_version).toBe(8);
     expect(statsOut.sources).toBe(0);
     expect(statsOut.runs).toBe(0);
 
@@ -1254,6 +1287,40 @@ describe('knowledge cli', () => {
     expect(storageOut.mode).toBe('local');
     expect(storageOut.tables).toContain('sources');
     expect(storageOut.tables).not.toContain('chunks_fts');
+  });
+
+  test('db init migrates an existing global schema v7 database to schema v8', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-db-cli-v7-to-v8-'));
+    const home = join(dir, 'home');
+    const dbPath = join(home, '.hasna', 'knowledge', 'knowledge.db');
+    createSchema7KnowledgeDb(dbPath);
+
+    const init = runCli(['db', 'init', '--scope', 'global', '--json'], dir, {
+      HOME: home,
+      USERPROFILE: home,
+    });
+    expect(init.exitCode).toBe(0);
+    const initOut = JSON.parse(new TextDecoder().decode(init.stdout));
+    expect(initOut.ok).toBe(true);
+    expect(initOut.schema_version).toBe(8);
+
+    const stats = runCli(['db', 'stats', '--scope', 'global', '--json'], dir, {
+      HOME: home,
+      USERPROFILE: home,
+    });
+    expect(stats.exitCode).toBe(0);
+    const statsOut = JSON.parse(new TextDecoder().decode(stats.stdout));
+    expect(statsOut.schema_version).toBe(8);
+
+    const db = openKnowledgeDb(dbPath);
+    try {
+      const columns = db.query<{ name: string }, []>('PRAGMA table_info(wiki_pages)').all()
+        .map((row) => row.name);
+      expect(columns).toContain('valid_from');
+      expect(columns).toContain('last_verified_at');
+    } finally {
+      db.close();
+    }
   });
 
   test('sync status, snapshot, machines, and conflicts use the project catalog', () => {
@@ -1277,7 +1344,7 @@ describe('knowledge cli', () => {
     const statusAfterSnapshot = runCli(['sync', 'status', '--scope', 'project', '--json'], dir);
     expect(statusAfterSnapshot.exitCode).toBe(0);
     const statusAfterSnapshotOut = JSON.parse(new TextDecoder().decode(statusAfterSnapshot.stdout));
-    expect(statusAfterSnapshotOut.sqlite_schema_version).toBe(7);
+    expect(statusAfterSnapshotOut.sqlite_schema_version).toBe(8);
 
     const machines = runCli(['sync', 'machines', '--scope', 'project', '--json'], dir);
     expect(machines.exitCode).toBe(0);

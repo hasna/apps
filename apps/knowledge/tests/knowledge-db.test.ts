@@ -10,13 +10,45 @@ import { resolveOpenFilesSource } from '../src/source-resolver';
 import { createApprovalGate, hasApproval, redactSecrets, resolveSafetyPolicy } from '../src/safety';
 import { defaultKnowledgeConfig, workspaceForHome } from '../src/workspace';
 
+function rewriteWikiPagesAsSchema7(dbPath: string): void {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    db.exec(`
+      PRAGMA foreign_keys = OFF;
+      DROP TABLE IF EXISTS wiki_pages_v7;
+      CREATE TABLE wiki_pages_v7 (
+        id TEXT PRIMARY KEY,
+        path TEXT NOT NULL UNIQUE,
+        title TEXT NOT NULL,
+        artifact_uri TEXT,
+        content_hash TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO wiki_pages_v7 (
+        id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at
+      )
+      SELECT id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at
+      FROM wiki_pages;
+      DROP TABLE wiki_pages;
+      ALTER TABLE wiki_pages_v7 RENAME TO wiki_pages;
+      DELETE FROM schema_versions WHERE version = 8;
+      PRAGMA foreign_keys = ON;
+    `);
+  } finally {
+    db.close();
+  }
+}
+
 describe('knowledge sqlite store', () => {
   test('migrates versioned schema and creates core catalog tables', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-db-'));
     const dbPath = join(dir, 'knowledge.db');
 
     const migration = migrateKnowledgeDb(dbPath);
-    expect(migration.schema_version).toBe(7);
+    expect(migration.schema_version).toBe(8);
 
     const db = openKnowledgeDb(dbPath);
     try {
@@ -43,12 +75,20 @@ describe('knowledge sqlite store', () => {
       expect(tables).toContain('knowledge_sync_conflicts');
       expect(tables).toContain('knowledge_sync_table_clocks');
       expect(tables).toContain('knowledge_sync_imports');
+      const wikiColumns = db.query<{ name: string }, []>('PRAGMA table_info(wiki_pages)').all()
+        .map((row) => row.name);
+      expect(wikiColumns).toContain('valid_from');
+      expect(wikiColumns).toContain('valid_to');
+      expect(wikiColumns).toContain('supersedes');
+      expect(wikiColumns).toContain('superseded_by');
+      expect(wikiColumns).toContain('confidence');
+      expect(wikiColumns).toContain('last_verified_at');
     } finally {
       db.close();
     }
 
     const stats = getKnowledgeDbStats(dbPath);
-    expect(stats.schema_version).toBe(7);
+    expect(stats.schema_version).toBe(8);
     expect(stats.sources).toBe(0);
     expect(stats.runs).toBe(0);
     expect(stats.redaction_findings).toBe(0);
@@ -63,7 +103,77 @@ describe('knowledge sqlite store', () => {
     expect(stats.sync_imports).toBe(0);
   });
 
-  test('recovers schema v7 when the migration marker is missing after v7 artifacts exist', () => {
+  test('migrates existing schema v7 wiki catalog to schema v8 lifecycle metadata', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-db-v7-to-v8-'));
+    const dbPath = join(dir, 'knowledge.db');
+    migrateKnowledgeDb(dbPath);
+    rewriteWikiPagesAsSchema7(dbPath);
+
+    const before = openKnowledgeDb(dbPath);
+    try {
+      before.run(`
+        INSERT INTO wiki_pages (
+          id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+        'wiki_legacy',
+        'wiki/legacy.md',
+        'Legacy Wiki Page',
+        'file:///tmp/wiki/legacy.md',
+        'sha256:legacy',
+        'active',
+        '{}',
+        '2026-06-30T10:00:00.000Z',
+        '2026-06-30T11:00:00.000Z',
+      );
+      const version = before.query<{ version: number }, []>('SELECT MAX(version) AS version FROM schema_versions').get();
+      expect(version?.version).toBe(7);
+      const columns = before.query<{ name: string }, []>('PRAGMA table_info(wiki_pages)').all()
+        .map((row) => row.name);
+      expect(columns).not.toContain('valid_from');
+    } finally {
+      before.close();
+    }
+
+    const migration = migrateKnowledgeDb(dbPath);
+    expect(migration.schema_version).toBe(8);
+
+    const migrated = openKnowledgeDb(dbPath);
+    try {
+      const columns = migrated.query<{ name: string }, []>('PRAGMA table_info(wiki_pages)').all()
+        .map((row) => row.name);
+      expect(columns).toContain('valid_from');
+      expect(columns).toContain('valid_to');
+      expect(columns).toContain('supersedes');
+      expect(columns).toContain('superseded_by');
+      expect(columns).toContain('confidence');
+      expect(columns).toContain('last_verified_at');
+
+      const page = migrated.query<{
+        valid_from: string;
+        valid_to: string | null;
+        confidence: number;
+        last_verified_at: string;
+      }, [string]>('SELECT valid_from, valid_to, confidence, last_verified_at FROM wiki_pages WHERE id = ?').get('wiki_legacy');
+      expect(page).toMatchObject({
+        valid_from: '2026-06-30T10:00:00.000Z',
+        valid_to: null,
+        confidence: 0.8,
+        last_verified_at: '2026-06-30T11:00:00.000Z',
+      });
+
+      const indexes = migrated.query<{ name: string }, []>(
+        "SELECT name FROM sqlite_master WHERE type = 'index'",
+      ).all().map((row) => row.name);
+      expect(indexes).toContain('idx_wiki_pages_lifecycle_status');
+      expect(indexes).toContain('idx_wiki_pages_last_verified');
+    } finally {
+      migrated.close();
+    }
+  });
+
+  test('recovers v7 artifacts and advances to schema v8 when the v7 marker is missing', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-db-v7-replay-'));
     const dbPath = join(dir, 'knowledge.db');
     migrateKnowledgeDb(dbPath);
@@ -158,7 +268,7 @@ describe('knowledge sqlite store', () => {
     }
 
     const migration = migrateKnowledgeDb(dbPath);
-    expect(migration.schema_version).toBe(7);
+    expect(migration.schema_version).toBe(8);
 
     const recovered = openKnowledgeDb(dbPath);
     try {
@@ -181,7 +291,7 @@ describe('knowledge sqlite store', () => {
     }
   });
 
-  test('recovers schema v7 when sync columns exist but v7 tables are missing', () => {
+  test('recovers partial v7 sync artifacts and advances to schema v8', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-db-v7-tables-'));
     const dbPath = join(dir, 'knowledge.db');
     migrateKnowledgeDb(dbPath);
@@ -196,7 +306,7 @@ describe('knowledge sqlite store', () => {
     }
 
     const migration = migrateKnowledgeDb(dbPath);
-    expect(migration.schema_version).toBe(7);
+    expect(migration.schema_version).toBe(8);
 
     const stats = getKnowledgeDbStats(dbPath);
     expect(stats.sync_table_clocks).toBe(0);
@@ -260,7 +370,7 @@ describe('knowledge sqlite store', () => {
     });
 
     const stats = getKnowledgeDbStats(dbPath);
-    expect(stats.schema_version).toBe(7);
+    expect(stats.schema_version).toBe(8);
     expect(stats.sources).toBe(2);
     expect(stats.source_revisions).toBe(2);
     expect(stats.chunks).toBe(1);
