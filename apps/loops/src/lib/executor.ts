@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
 import { resolveMachineCommand } from "@hasna/machines/consumer";
+import type { LanguageModel } from "ai";
 import type {
   AccountRef,
   AgentProvider,
@@ -25,6 +26,7 @@ const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024;
 export interface ExecuteOptions extends PersistGuardOptions {
   maxOutputBytes?: number;
   env?: NodeJS.ProcessEnv;
+  goalModel?: LanguageModel;
   log?: (message: string) => void;
   signal?: AbortSignal;
   onSpawn?: (pid: number) => void;

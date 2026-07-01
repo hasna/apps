@@ -274,6 +274,48 @@ describe("Store", () => {
     }
   });
 
+  test("rejects new workflow loops that define nested top-level goals", () => {
+    const store = new Store(":memory:");
+    try {
+      const workflowWithGoal = store.createWorkflow({
+        name: "workflow-with-goal",
+        goal: { objective: "Complete the workflow" },
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+
+      expect(() =>
+        store.createLoop({
+          name: "nested-goal-loop",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "workflow", workflowId: workflowWithGoal.id },
+          goal: { objective: "Complete the loop" },
+        }),
+      ).toThrow("remove one goal wrapper");
+
+      const workflowWithoutGoal = store.createWorkflow({
+        name: "workflow-without-goal",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const loop = store.createLoop({
+        name: "loop-goal-only",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "workflow", workflowId: workflowWithoutGoal.id },
+        goal: { objective: "Complete the loop" },
+      });
+
+      expect(() => store.retargetWorkflowLoop(loop.id, workflowWithGoal.id)).toThrow("both define top-level goals");
+      expect(() =>
+        store.createAndRetargetWorkflowLoop(loop.id, {
+          name: "replacement-with-goal",
+          goal: { objective: "Complete the replacement workflow" },
+          steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+        }),
+      ).toThrow("also defines a top-level goal");
+    } finally {
+      store.close();
+    }
+  });
+
   test("clears active admission work items when a workflow loop fails before a workflow run exists", () => {
     const store = new Store(":memory:");
     try {

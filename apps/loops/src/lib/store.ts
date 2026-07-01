@@ -12,10 +12,12 @@ import type {
   GoalPlanNode,
   GoalPlanNodeStatus,
   GoalRun,
+  GoalSpec,
   GoalStatus,
   Loop,
   LoopRun,
   LoopStatus,
+  LoopTarget,
   RunStatus,
   TimeoutMs,
   WorkflowEvent,
@@ -952,6 +954,16 @@ export class Store {
     if (!row) throw new Error("daemon lease lost");
   }
 
+  private assertNoNestedWorkflowGoal(target: LoopTarget, goal: GoalSpec | undefined): void {
+    if (!goal || target.type !== "workflow") return;
+    const workflow = this.getWorkflow(target.workflowId);
+    if (workflow?.goal) {
+      throw new Error(
+        `workflow loop cannot define a loop-level goal when workflow ${workflow.name} already has a top-level goal; remove one goal wrapper`,
+      );
+    }
+  }
+
   createLoop(input: CreateLoopInput, from: Date = new Date()): Loop {
     const now = nowIso();
     const target =
@@ -961,6 +973,7 @@ export class Store {
             name: "loop-target-validation",
             steps: [{ id: "target", target: input.target }],
           }).steps[0]!.target;
+    this.assertNoNestedWorkflowGoal(target, input.goal);
     const loop: Loop = {
       id: genId(),
       name: input.name,
@@ -1164,6 +1177,11 @@ export class Store {
       if (current.target.type !== "workflow") throw new Error(`loop is not a workflow loop: ${idOrName}`);
       if (this.hasRunningRun(current.id)) throw new Error(`refusing to retarget running loop: ${current.id}`);
       const workflow = this.requireWorkflow(workflowId);
+      if (current.goal && workflow.goal) {
+        throw new Error(
+          `workflow loop cannot retarget ${current.name} to workflow ${workflow.name} because both define top-level goals`,
+        );
+      }
       const target = { ...current.target, workflowId: workflow.id };
       if (opts.workflowTimeoutMs !== undefined) target.timeoutMs = opts.workflowTimeoutMs;
       const res = this.db
@@ -1208,6 +1226,11 @@ export class Store {
       const current = this.requireUniqueLoop(idOrName);
       if (current.target.type !== "workflow") throw new Error(`loop is not a workflow loop: ${idOrName}`);
       if (this.hasRunningRun(current.id)) throw new Error(`refusing to retarget running loop: ${current.id}`);
+      if (current.goal && normalized.goal) {
+        throw new Error(
+          `workflow loop cannot retarget ${current.name} to a workflow that also defines a top-level goal`,
+        );
+      }
       const previousWorkflow = this.requireWorkflow(current.target.workflowId);
       const workflow: WorkflowSpec = {
         id: genId(),

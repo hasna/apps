@@ -847,6 +847,72 @@ describe("loops CLI", () => {
     expect(JSON.parse(oldWorkflow.stdout).status).toBe("active");
   });
 
+  test("workflows migrate-goal-wrappers removes redundant workflow goals append-only", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-migrate-goal-wrappers-"));
+    const file = workflowFile(dataDir, {
+      name: "double-goal-workflow",
+      goal: { objective: "Workflow-level goal that should be removed" },
+      steps: [{ id: "worker", target: { type: "command", command: "printf ok", shell: true } }],
+    });
+    const created = runCli(dataDir, ["--json", "workflows", "create", file]);
+    expect(created.status).toBe(0);
+    const workflow = JSON.parse(created.stdout);
+    const loop = runCli(dataDir, [
+      "--json",
+      "create",
+      "workflow",
+      "double-goal-workflow-loop",
+      "--workflow",
+      workflow.id,
+      "--at",
+      futureAt(),
+    ]);
+    expect(loop.status).toBe(0);
+    const loopValue = JSON.parse(loop.stdout);
+
+    const db = new Database(join(dataDir, "loops.db"));
+    try {
+      db.query("UPDATE loops SET goal_json = ? WHERE id = ?").run(
+        JSON.stringify({ objective: "Outer loop goal" }),
+        loopValue.id,
+      );
+    } finally {
+      db.close();
+    }
+
+    const dryRun = runCli(dataDir, ["--json", "workflows", "migrate-goal-wrappers", "--loop", loopValue.id]);
+    expect(dryRun.status).toBe(0);
+    const dryRunValue = JSON.parse(dryRun.stdout);
+    expect(dryRunValue.summary.wouldMigrate).toBe(1);
+    expect(dryRunValue.rows[0].removedGoal.objective).toBe("Workflow-level goal that should be removed");
+
+    const applied = runCli(dataDir, [
+      "--json",
+      "workflows",
+      "migrate-goal-wrappers",
+      "--loop",
+      loopValue.id,
+      "--apply",
+      "--archive-old",
+    ]);
+    expect(applied.status).toBe(0);
+    const appliedValue = JSON.parse(applied.stdout);
+    expect(appliedValue.summary.migrated).toBe(1);
+    expect(appliedValue.rows[0].previousWorkflow.id).toBe(workflow.id);
+    expect(appliedValue.rows[0].workflow.goal).toBeUndefined();
+    expect(appliedValue.rows[0].archivedOld.status).toBe("archived");
+
+    const shownLoop = runCli(dataDir, ["--json", "show", loopValue.id]);
+    expect(shownLoop.status).toBe(0);
+    const shownLoopValue = JSON.parse(shownLoop.stdout);
+    expect(shownLoopValue.goal.objective).toBe("Outer loop goal");
+    expect(shownLoopValue.target.workflowId).toBe(appliedValue.rows[0].workflow.id);
+
+    const shownWorkflow = runCli(dataDir, ["--json", "workflows", "show", appliedValue.rows[0].workflow.id]);
+    expect(shownWorkflow.status).toBe(0);
+    expect(JSON.parse(shownWorkflow.stdout).goal).toBeUndefined();
+  });
+
   test("workflows migrate-agent-timeouts rejects ambiguous loop names", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-migrate-ambiguous-loop-"));
     const file = workflowFile(dataDir, {

@@ -248,6 +248,26 @@ function workflowTimeoutMigrationName(workflow: WorkflowSpec, timeoutMs: number 
   return `${workflow.name}-${policy}-${suffix}`;
 }
 
+function workflowWithoutGoalWrapper(
+  workflow: WorkflowSpec,
+  opts: { name?: string } = {},
+): { body: CreateWorkflowInput; changed: boolean } {
+  return {
+    body: {
+      name: opts.name ?? workflow.name,
+      description: workflow.description,
+      version: workflow.version,
+      steps: workflow.steps,
+    },
+    changed: workflow.goal !== undefined,
+  };
+}
+
+function workflowGoalWrapperMigrationName(workflow: WorkflowSpec): string {
+  const suffix = randomUUID().replace(/-/g, "").slice(0, 8);
+  return `${workflow.name}-no-workflow-goal-${suffix}`;
+}
+
 function printTextOutput(value: { stdout?: string; stderr?: string }): void {
   for (const line of textOutputBlocks(value, { indent: "  " })) console.log(line);
 }
@@ -3624,6 +3644,79 @@ workflows
       const summary = {
         apply: Boolean(opts.apply),
         timeoutMs,
+        total: rows.length,
+        migrated: rows.filter((row) => row.status === "migrated").length,
+        wouldMigrate: rows.filter((row) => row.status === "would_migrate").length,
+        blocked: rows.filter((row) => row.status === "blocked").length,
+        skipped: rows.filter((row) => row.status === "skipped").length,
+      };
+      print({ summary, rows }, opts.apply ? `migrated=${summary.migrated} blocked=${summary.blocked} skipped=${summary.skipped}` : `would_migrate=${summary.wouldMigrate} blocked=${summary.blocked} skipped=${summary.skipped}`);
+    } finally {
+      store.close();
+    }
+  });
+
+workflows
+  .command("migrate-goal-wrappers")
+  .description("append-only migrate active workflow loops away from workflow-level goal wrappers")
+  .option("--loop <idOrName>", "migrate only one loop instead of all active workflow loops")
+  .option("--apply", "create new workflow specs and retarget eligible loops")
+  .option("--archive-old", "archive old workflow specs after retargeting when no active loops still reference them")
+  .action((opts) => {
+    const store = new Store();
+    try {
+      const candidateLoops = opts.loop
+        ? [store.requireUniqueLoop(opts.loop)]
+        : store.listLoops({ status: "active", limit: 10_000 }).filter((loop) => loop.target.type === "workflow");
+      const rows: Array<Record<string, unknown>> = [];
+
+      for (const loop of candidateLoops) {
+        if (loop.archivedAt) {
+          rows.push({ loop: publicLoop(loop), status: "skipped", reason: "loop is archived" });
+          continue;
+        }
+        if (loop.target.type !== "workflow") {
+          rows.push({ loop: publicLoop(loop), status: "skipped", reason: "loop is not a workflow loop" });
+          continue;
+        }
+        const workflow = store.requireWorkflow(loop.target.workflowId);
+        const nextWorkflowName = workflowGoalWrapperMigrationName(workflow);
+        const migration = workflowWithoutGoalWrapper(workflow, { name: nextWorkflowName });
+        if (!migration.changed) {
+          rows.push({ loop: publicLoop(loop), workflow: publicWorkflow(workflow), status: "skipped", reason: "workflow has no top-level goal wrapper" });
+          continue;
+        }
+        if (store.hasRunningRun(loop.id)) {
+          rows.push({ loop: publicLoop(loop), workflow: publicWorkflow(workflow), status: "blocked", reason: "loop has a running run; retry after it finishes" });
+          continue;
+        }
+
+        if (!opts.apply) {
+          rows.push({
+            loop: publicLoop(loop),
+            workflow: publicWorkflow(workflow),
+            status: "would_migrate",
+            nextWorkflowName,
+            removedGoal: workflow.goal,
+          });
+          continue;
+        }
+
+        const migrated = store.createAndRetargetWorkflowLoop(loop.id, migration.body, {
+          workflowTimeoutMs: loop.target.timeoutMs,
+          archiveOld: Boolean(opts.archiveOld),
+        });
+        rows.push({
+          loop: publicLoop(migrated.loop),
+          previousWorkflow: publicWorkflow(migrated.previousWorkflow),
+          workflow: publicWorkflow(migrated.workflow),
+          archivedOld: migrated.archivedOld ? publicWorkflow(migrated.archivedOld) : undefined,
+          status: "migrated",
+        });
+      }
+
+      const summary = {
+        apply: Boolean(opts.apply),
         total: rows.length,
         migrated: rows.filter((row) => row.status === "migrated").length,
         wouldMigrate: rows.filter((row) => row.status === "would_migrate").length,

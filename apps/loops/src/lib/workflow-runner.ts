@@ -52,6 +52,7 @@ export async function executeWorkflow(
     const workflowWithoutGoal: WorkflowSpec = { ...workflow, goal: undefined };
     return runGoal(store, workflow.goal, {
       ...opts,
+      model: opts.goalModel,
       context: {
         loopId: opts.loop?.id,
         loopName: opts.loop?.name,
@@ -151,6 +152,7 @@ export async function executeWorkflow(
       if (step.goal) {
         result = await runGoal(store, step.goal, {
           ...opts,
+          model: opts.goalModel,
           target: targetWithStepAccount(step),
           signal: controller.signal,
           context: {
@@ -324,6 +326,7 @@ export async function executeLoopTarget(
     if (loop.goal) {
       return runGoal(store, loop.goal, {
         ...opts,
+        model: opts.goalModel,
         target: loop.target,
         context: {
           loopId: loop.id,
@@ -345,8 +348,10 @@ export async function executeLoopTarget(
     }
   }
   if (loop.goal) {
+    const workflowForLoopGoal: WorkflowSpec = workflow.goal ? { ...workflow, goal: undefined } : workflow;
     return runGoal(store, loop.goal, {
       ...opts,
+      model: opts.goalModel,
       context: {
         loopId: loop.id,
         loopName: loop.name,
@@ -356,7 +361,7 @@ export async function executeLoopTarget(
         workflowName: workflow.name,
       },
       executeNode: async (node) =>
-        executeWorkflow(store, workflow, {
+        executeWorkflow(store, workflowForLoopGoal, {
           ...opts,
           loop,
           loopRun: run,

@@ -2,10 +2,30 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
+import { MockLanguageModelV3 } from "ai/test";
 import { tick } from "./scheduler.js";
 import { Store } from "./store.js";
 import { executeLoopTarget, executeWorkflow } from "./workflow-runner.js";
 import { workflowBodyFromJson } from "./workflow-spec.js";
+
+function generated(object: unknown, totalTokens = 10) {
+  return {
+    content: [{ type: "text" as const, text: JSON.stringify(object) }],
+    finishReason: { unified: "stop" as const, raw: undefined },
+    usage: {
+      inputTokens: { total: totalTokens, noCache: totalTokens, cacheRead: undefined, cacheWrite: undefined },
+      outputTokens: { total: totalTokens, text: totalTokens, reasoning: undefined },
+    },
+    warnings: [],
+  };
+}
+
+function mockObjects(objects: unknown[], totalTokens = 10) {
+  let index = 0;
+  return new MockLanguageModelV3({
+    doGenerate: async () => generated(objects[Math.min(index++, objects.length - 1)], totalTokens),
+  });
+}
 
 describe("workflow runner", () => {
   test("runs dependent command steps and records step runs and events", async () => {
@@ -71,6 +91,56 @@ describe("workflow runner", () => {
       expect(workflowRuns).toHaveLength(1);
       expect(workflowRuns[0]?.loopId).toBe(loop.id);
       expect(store.listWorkflowStepRuns(workflowRuns[0]!.id)[0]?.stdout).toContain("scheduled");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("legacy workflow loops with both loop and workflow goals execute the workflow once", async () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "double-goal-workflow",
+        goal: { objective: "Direct workflow goal should be ignored by loop-goal execution", maxTurns: 3 },
+        steps: [{ id: "step", target: { type: "command", command: "printf double-goal-ok", shell: true } }],
+      });
+      const loop = store.createLoop(
+        {
+          name: "double-goal-loop",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "workflow", workflowId: workflow.id },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      (store as unknown as { db: { query: (sql: string) => { run: (...params: unknown[]) => unknown } } }).db
+        .query("UPDATE loops SET goal_json = ? WHERE id = ?")
+        .run(JSON.stringify({ objective: "Outer loop goal", maxTurns: 3 }), loop.id);
+
+      const model = mockObjects([
+        { nodes: [{ key: "run", objective: "Run the workflow", dependsOn: [], priority: 0, tokenBudget: null }] },
+        {
+          achieved: true,
+          status: "complete",
+          evidence: ["workflow command completed"],
+          unmetRequirements: [],
+          adversarialReview: "Verified that the nested workflow produced one successful workflow run.",
+        },
+      ]);
+      const result = await tick({
+        store,
+        runnerId: "test",
+        now: () => new Date("2026-01-01T00:00:00Z"),
+        execute: (claimedLoop, run) => executeLoopTarget(store, claimedLoop, run, { goalModel: model }),
+      });
+
+      expect(result.completed).toHaveLength(1);
+      expect(result.completed[0]?.status).toBe("succeeded");
+      const workflowRuns = store.listWorkflowRuns({ workflowId: workflow.id });
+      expect(workflowRuns).toHaveLength(1);
+      expect(workflowRuns[0]?.status).toBe("succeeded");
+      expect(store.listWorkflowStepRuns(workflowRuns[0]!.id)[0]?.stdout).toContain("double-goal-ok");
+      const runtimeGoal = store.findGoalByRunId(result.completed[0]!.id);
+      expect(runtimeGoal?.status).toBe("complete");
     } finally {
       store.close();
     }
