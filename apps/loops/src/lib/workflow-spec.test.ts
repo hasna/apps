@@ -345,6 +345,18 @@ describe("workflow goal spec validation", () => {
         ],
       }),
     ).toThrow("model");
+
+    expect(() =>
+      workflowBodyFromJson({
+        name: "bad-codewith-ephemeral",
+        steps: [
+          {
+            id: "worker",
+            target: { type: "agent", provider: "codewith", prompt: "do it", extraArgs: ["exec", "--ephemeral"] },
+          },
+        ],
+      }),
+    ).toThrow("extraArgs");
   });
 
   test("accepts the transcript feedback workflow fixture", () => {

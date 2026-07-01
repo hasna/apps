@@ -75,6 +75,9 @@ interface CommandSpec {
     tools?: string[];
     commands?: string[];
   };
+  codewithDurableAgent?: {
+    target: AgentTarget;
+  };
 }
 
 interface MachineCommandPlan {
@@ -127,6 +130,10 @@ function appendBounded(current: string, chunk: Buffer, maxBytes: number): string
   return `[truncated ${overflow} bytes]\n${next.slice(-maxBytes)}`;
 }
 
+function appendBoundedText(current: string, chunk: string, maxBytes: number): string {
+  return appendBounded(current, Buffer.from(chunk, "utf8"), maxBytes);
+}
+
 function killProcessGroup(pid: number): void {
   try {
     process.kill(-pid, "SIGTERM");
@@ -170,6 +177,21 @@ function metadataEnv(metadata: ExecutionMetadata): Record<string, string> {
   return env;
 }
 
+function codewithAgentIdempotencyKey(metadata: ExecutionMetadata): string {
+  const parts = [
+    "openloops",
+    metadata.workflowRunId ? `workflow-run:${metadata.workflowRunId}` : undefined,
+    metadata.workflowStepId ? `step:${metadata.workflowStepId}` : undefined,
+    metadata.runId ? `loop-run:${metadata.runId}` : undefined,
+    metadata.loopId ? `loop:${metadata.loopId}` : undefined,
+    metadata.scheduledFor ? `scheduled:${metadata.scheduledFor}` : undefined,
+    metadata.goalId ? `goal:${metadata.goalId}` : undefined,
+    metadata.goalNodeKey ? `node:${metadata.goalNodeKey}` : undefined,
+  ].filter(Boolean);
+  if (parts.length > 1) return parts.join(":");
+  return `openloops:adhoc:${randomBytes(16).toString("hex")}`;
+}
+
 function allowlistEnv(allowlist: CommandSpec["allowlist"]): Record<string, string> {
   const env: Record<string, string> = {};
   if (allowlist?.tools?.length) env.LOOPS_AGENT_ALLOWED_TOOLS = allowlist.tools.join(",");
@@ -207,6 +229,21 @@ function configStringValue(value: string): string {
   return JSON.stringify(value);
 }
 
+const UNSAFE_CODEWITH_DURABLE_EXTRA_ARGS = new Set([
+  "e",
+  "exec",
+  "agent",
+  "start",
+  "--ephemeral",
+  "--ignore-rules",
+  "--skip-git-repo-check",
+  "--json",
+  "--output-last-message",
+  "-o",
+  "--output-schema",
+  "--dangerously-bypass-approvals-and-sandbox",
+]);
+
 function assertStringOption(value: unknown, label: string): void {
   if (value !== undefined && typeof value !== "string") throw new Error(`${label} must be a string`);
 }
@@ -236,6 +273,13 @@ function assertSupportedAgentOptions(target: AgentTarget): void {
     throw new Error(`${target.provider}.sandbox is not supported: ${target.sandbox}`);
   }
   if (target.provider === "codex" && target.agent !== undefined) throw new Error("codex.agent is not supported");
+  if (target.provider === "codewith" && target.agent !== undefined) {
+    throw new Error("codewith.agent is not supported by the durable background-agent adapter");
+  }
+  if (target.provider === "codewith") {
+    const unsafe = target.extraArgs?.find((arg) => UNSAFE_CODEWITH_DURABLE_EXTRA_ARGS.has(arg));
+    if (unsafe) throw new Error(`codewith.extraArgs cannot include ${unsafe}; durable agent steps use codewith agent start, not exec/ephemeral flags`);
+  }
   if (["codewith", "codex"].includes(target.provider)) {
     if (target.permissionMode && !["default", "bypass"].includes(target.permissionMode)) {
       throw new Error(`${target.provider}.permissionMode supports only default or bypass`);
@@ -313,22 +357,14 @@ function agentArgs(target: AgentTarget): string[] {
     case "codewith":
       args.push(...(target.authProfile ? ["--auth-profile", target.authProfile] : []));
       if (target.variant) args.push("-c", `model_reasoning_effort=${configStringValue(target.variant)}`);
-      args.push(
-        "--ask-for-approval",
-        "never",
-        "exec",
-        "--json",
-        "--ephemeral",
-        "--sandbox",
-        codewithLikeSandbox(target),
-        "--skip-git-repo-check",
-      );
-      if (isolation === "safe") args.push("--ignore-rules");
+      args.push("--ask-for-approval", "never", "--sandbox", codewithLikeSandbox(target));
       if (target.cwd) args.push("--cd", target.cwd);
       for (const dir of target.addDirs ?? []) args.push("--add-dir", dir);
       if (target.model) args.push("--model", target.model);
-      if (target.agent) args.push("--agent", target.agent);
       args.push(...(target.extraArgs ?? []));
+      args.push("agent", "start");
+      if (target.cwd) args.push("--cwd", target.cwd);
+      args.push(target.prompt);
       return args;
     case "codex":
       if (target.variant) args.push("-c", `model_reasoning_effort=${configStringValue(target.variant)}`);
@@ -390,8 +426,9 @@ function commandSpec(target: ExecutableTarget): CommandSpec {
       ? { provider: agentTarget.provider, profile: agentTarget.authProfile }
       : undefined,
     preflightAnyOf: agentTarget.provider === "cursor" ? ["agent"] : undefined,
-    stdin: agentTarget.prompt,
+    stdin: agentTarget.provider === "codewith" ? undefined : agentTarget.prompt,
     allowlist: agentTarget.allowlist,
+    codewithDurableAgent: agentTarget.provider === "codewith" ? { target: agentTarget } : undefined,
   };
 }
 
@@ -539,6 +576,264 @@ function preflightNativeAuthProfile(spec: CommandSpec, env: NodeJS.ProcessEnv): 
   );
   if (!profiles.has(spec.nativeAuthProfile.profile)) {
     throw new Error(`codewith auth profile not found: ${spec.nativeAuthProfile.profile}`);
+  }
+}
+
+function codewithAgentStartArgs(target: AgentTarget, idempotencyKey: string): string[] {
+  const args = agentArgs(target);
+  const startIndex = args.findIndex((arg, index) => arg === "start" && args[index - 1] === "agent");
+  if (startIndex === -1) throw new Error("internal error: codewith durable agent args missing agent start");
+  args.splice(startIndex + 1, 0, "--idempotency-key", idempotencyKey);
+  return args;
+}
+
+function codewithAgentControlArgs(target: AgentTarget, command: "read" | "logs" | "stop", agentId: string): string[] {
+  return [
+    ...(target.authProfile ? ["--auth-profile", target.authProfile] : []),
+    "agent",
+    command,
+    ...(command === "logs" ? ["--limit", "20"] : []),
+    agentId,
+  ];
+}
+
+function parseJsonOutput(stdout: string, label: string): Record<string, unknown> {
+  try {
+    const value = JSON.parse(stdout || "{}");
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("not an object");
+    return value as Record<string, unknown>;
+  } catch (error) {
+    throw new Error(`${label} did not return JSON${error instanceof Error ? `: ${error.message}` : ""}`);
+  }
+}
+
+function recordField(value: unknown, key: string): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const field = (value as Record<string, unknown>)[key];
+  return field && typeof field === "object" && !Array.isArray(field) ? field as Record<string, unknown> : undefined;
+}
+
+function stringField(value: Record<string, unknown> | undefined, key: string): string | undefined {
+  const field = value?.[key];
+  return typeof field === "string" ? field : undefined;
+}
+
+function numberField(value: Record<string, unknown> | undefined, key: string): number | undefined {
+  const field = value?.[key];
+  return typeof field === "number" && Number.isFinite(field) ? field : undefined;
+}
+
+function codewithAgentStatus(readJson: Record<string, unknown>): string | undefined {
+  return stringField(recordField(readJson, "agent"), "status") ?? stringField(recordField(readJson, "statusSnapshot"), "status");
+}
+
+function codewithAgentEvidence(startJson: Record<string, unknown>, readJson: Record<string, unknown>, logsJson?: Record<string, unknown>): string {
+  const agent = recordField(readJson, "agent") ?? recordField(startJson, "agent");
+  const statusSnapshot = recordField(readJson, "statusSnapshot");
+  const events = Array.isArray(logsJson?.data)
+    ? logsJson.data
+        .filter((event): event is Record<string, unknown> => Boolean(event) && typeof event === "object" && !Array.isArray(event))
+        .map((event) => ({
+          seq: numberField(event, "seq"),
+          eventType: stringField(event, "eventType"),
+          createdAt: numberField(event, "createdAt"),
+        }))
+    : undefined;
+  return JSON.stringify(
+    {
+      codewithAgent: {
+        agentId: stringField(agent, "agentId"),
+        status: stringField(agent, "status"),
+        desiredState: stringField(agent, "desiredState"),
+        statusReason: stringField(agent, "statusReason"),
+        threadId: stringField(agent, "threadId"),
+        rolloutPath: stringField(agent, "rolloutPath"),
+        pid: numberField(agent, "pid"),
+        exitCode: numberField(agent, "exitCode"),
+        created: typeof startJson.created === "boolean" ? startJson.created : undefined,
+      },
+      statusSnapshot: statusSnapshot
+        ? {
+            seq: numberField(statusSnapshot, "seq"),
+            status: stringField(statusSnapshot, "status"),
+            summary: stringField(statusSnapshot, "summary"),
+            pendingInteractionCount: numberField(statusSnapshot, "pendingInteractionCount"),
+            lastEventSeq: numberField(statusSnapshot, "lastEventSeq"),
+          }
+        : undefined,
+      events,
+    },
+    null,
+    2,
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function executeCodewithDurableAgent(
+  spec: CommandSpec,
+  metadata: ExecutionMetadata,
+  opts: ExecuteOptions,
+  env: NodeJS.ProcessEnv,
+  startedAt: string,
+): Promise<ExecutorResult> {
+  const target = spec.codewithDurableAgent?.target;
+  if (!target) throw new Error("internal error: missing codewith durable target");
+  const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
+  const idempotencyKey = codewithAgentIdempotencyKey(metadata);
+  const start = spawnSync(spec.command, codewithAgentStartArgs(target, idempotencyKey), {
+    cwd: spec.cwd,
+    env,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 30_000,
+  });
+  let stderr = start.stderr || "";
+  if (start.error || (start.status ?? 1) !== 0) {
+    const finishedAt = nowIso();
+    return {
+      status: "failed",
+      exitCode: start.status ?? undefined,
+      stdout: start.stdout || "",
+      stderr,
+      error: start.error?.message ?? `codewith agent start exited with code ${start.status ?? "unknown"}`,
+      startedAt,
+      finishedAt,
+      durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
+    };
+  }
+  let startJson: Record<string, unknown>;
+  try {
+    startJson = parseJsonOutput(start.stdout || "{}", "codewith agent start");
+  } catch (error) {
+    const finishedAt = nowIso();
+    return {
+      status: "failed",
+      stdout: start.stdout || "",
+      stderr,
+      error: error instanceof Error ? error.message : String(error),
+      startedAt,
+      finishedAt,
+      durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
+    };
+  }
+  const agentId = stringField(recordField(startJson, "agent"), "agentId");
+  if (!agentId) {
+    const finishedAt = nowIso();
+    return {
+      status: "failed",
+      stdout: start.stdout || "",
+      stderr,
+      error: "codewith agent start did not return agent.agentId",
+      startedAt,
+      finishedAt,
+      durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
+    };
+  }
+
+  const pollMs = Math.max(100, Number(opts.env?.LOOPS_CODEWITH_AGENT_POLL_MS ?? process.env.LOOPS_CODEWITH_AGENT_POLL_MS ?? 2_000) || 2_000);
+  let lastReadJson = startJson;
+  let lastLogsJson: Record<string, unknown> | undefined;
+  let stdout = "";
+  while (true) {
+    if (opts.signal?.aborted) {
+      spawnSync(spec.command, codewithAgentControlArgs(target, "stop", agentId), { cwd: spec.cwd, env, stdio: "ignore", timeout: 15_000 });
+      const finishedAt = nowIso();
+      return {
+        status: "failed",
+        stdout: appendBoundedText(stdout, codewithAgentEvidence(startJson, lastReadJson, lastLogsJson), maxOutputBytes),
+        stderr,
+        error: "cancelled",
+        startedAt,
+        finishedAt,
+        durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
+      };
+    }
+
+    const read = spawnSync(spec.command, codewithAgentControlArgs(target, "read", agentId), {
+      cwd: spec.cwd,
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 30_000,
+    });
+    stderr = appendBoundedText(stderr, read.stderr || "", maxOutputBytes);
+    if (read.error || (read.status ?? 1) !== 0) {
+      const finishedAt = nowIso();
+      return {
+        status: "failed",
+        exitCode: read.status ?? undefined,
+        stdout: appendBoundedText(stdout, codewithAgentEvidence(startJson, lastReadJson, lastLogsJson), maxOutputBytes),
+        stderr,
+        error: read.error?.message ?? `codewith agent read exited with code ${read.status ?? "unknown"}`,
+        startedAt,
+        finishedAt,
+        durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
+      };
+    }
+    try {
+      lastReadJson = parseJsonOutput(read.stdout || "{}", "codewith agent read");
+    } catch (error) {
+      const finishedAt = nowIso();
+      return {
+        status: "failed",
+        stdout: appendBoundedText(stdout, read.stdout || "", maxOutputBytes),
+        stderr,
+        error: error instanceof Error ? error.message : String(error),
+        startedAt,
+        finishedAt,
+        durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
+      };
+    }
+
+    const status = codewithAgentStatus(lastReadJson);
+    if (status === "completed" || status === "failed" || status === "cancelled") {
+      const logs = spawnSync(spec.command, codewithAgentControlArgs(target, "logs", agentId), {
+        cwd: spec.cwd,
+        env,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 30_000,
+      });
+      if (!logs.error && (logs.status ?? 1) === 0) {
+        try {
+          lastLogsJson = parseJsonOutput(logs.stdout || "{}", "codewith agent logs");
+        } catch {
+          lastLogsJson = undefined;
+        }
+      } else {
+        stderr = appendBoundedText(stderr, logs.stderr || logs.error?.message || "", maxOutputBytes);
+      }
+      const finishedAt = nowIso();
+      const resultStatus = status === "completed" ? "succeeded" : "failed";
+      return {
+        status: resultStatus,
+        exitCode: resultStatus === "succeeded" ? 0 : 1,
+        stdout: appendBoundedText(stdout, codewithAgentEvidence(startJson, lastReadJson, lastLogsJson), maxOutputBytes),
+        stderr,
+        error: resultStatus === "succeeded" ? undefined : stringField(recordField(lastReadJson, "agent"), "statusReason") ?? `codewith agent ${status}`,
+        startedAt,
+        finishedAt,
+        durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
+      };
+    }
+
+    if (typeof spec.timeoutMs === "number" && new Date(nowIso()).getTime() - new Date(startedAt).getTime() >= spec.timeoutMs) {
+      spawnSync(spec.command, codewithAgentControlArgs(target, "stop", agentId), { cwd: spec.cwd, env, stdio: "ignore", timeout: 15_000 });
+      const finishedAt = nowIso();
+      return {
+        status: "timed_out",
+        stdout: appendBoundedText(stdout, codewithAgentEvidence(startJson, lastReadJson, lastLogsJson), maxOutputBytes),
+        stderr,
+        error: `timed out after ${spec.timeoutMs}ms`,
+        startedAt,
+        finishedAt,
+        durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
+      };
+    }
+    await sleep(pollMs);
   }
 }
 
@@ -732,6 +1027,19 @@ export async function executeTarget(
 ): Promise<ExecutorResult> {
   const spec = commandSpec(target);
   const machine = resolvedMachine(opts);
+  if (machine && !machine.local && spec.codewithDurableAgent) {
+    const startedAt = nowIso();
+    const finishedAt = nowIso();
+    return {
+      status: "failed",
+      stdout: "",
+      stderr: "",
+      error: "remote Codewith durable background-agent steps require remote status polling support; run this Codewith step locally or add remote durable readback before dispatch",
+      startedAt,
+      finishedAt,
+      durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
+    };
+  }
   if (machine && !machine.local) return executeRemoteSpec(spec, machine, metadata, opts);
   const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
   const startedAt = nowIso();
@@ -777,6 +1085,9 @@ export async function executeTarget(
       finishedAt: nowIso(),
       durationMs: 0,
     };
+  }
+  if (spec.codewithDurableAgent) {
+    return executeCodewithDurableAgent(spec, metadata, opts, env, startedAt);
   }
 
   const child = spawn(spec.command, spec.args, {

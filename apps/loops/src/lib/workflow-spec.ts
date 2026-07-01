@@ -49,6 +49,21 @@ function optionalStringArray(value: unknown, label: string): string[] | undefine
   return values.length ? values : undefined;
 }
 
+const UNSAFE_CODEWITH_DURABLE_EXTRA_ARGS = new Set([
+  "e",
+  "exec",
+  "agent",
+  "start",
+  "--ephemeral",
+  "--ignore-rules",
+  "--skip-git-repo-check",
+  "--json",
+  "--output-last-message",
+  "-o",
+  "--output-schema",
+  "--dangerously-bypass-approvals-and-sandbox",
+]);
+
 function optionalAccountRef(value: unknown, label: string) {
   if (value === undefined) return undefined;
   assertObject(value, label);
@@ -153,6 +168,14 @@ function validateTarget(value: unknown, label: string, opts: WorkflowNormalizeOp
     if (value.agent !== undefined) assertString(value.agent, `${label}.agent`);
     if (value.provider === "cursor" && value.variant !== undefined) throw new Error(`${label}.variant is not supported for provider cursor`);
     if (value.provider === "codex" && value.agent !== undefined) throw new Error(`${label}.agent is not supported for provider codex`);
+    if (value.provider === "codewith" && value.agent !== undefined) {
+      throw new Error(`${label}.agent is not supported for provider codewith durable background-agent execution`);
+    }
+    const extraArgs = optionalStringArray(value.extraArgs, `${label}.extraArgs`);
+    if (value.provider === "codewith") {
+      const unsafe = extraArgs?.find((arg) => UNSAFE_CODEWITH_DURABLE_EXTRA_ARGS.has(arg));
+      if (unsafe) throw new Error(`${label}.extraArgs cannot include ${unsafe}; codewith agent steps use durable agent start, not exec/ephemeral flags`);
+    }
     optionalStringArray(value.addDirs, `${label}.addDirs`);
     if (Array.isArray(value.addDirs) && value.addDirs.length > 0 && !["codewith", "codex"].includes(value.provider)) {
       throw new Error(`${label}.addDirs is currently supported only for provider codewith or codex`);
@@ -213,7 +236,8 @@ function validateTarget(value: unknown, label: string, opts: WorkflowNormalizeOp
       if (value.routing.eventType !== undefined) assertString(value.routing.eventType, `${label}.routing.eventType`);
       if (value.routing.eventSource !== undefined) assertString(value.routing.eventSource, `${label}.routing.eventSource`);
     }
-    const target = { ...value };
+    const target: Record<string, unknown> = { ...value, extraArgs };
+    if (!extraArgs) delete target.extraArgs;
     delete target.promptFile;
     delete target.promptSource;
     return { ...target, ...promptFields } as unknown as ExecutableTarget;

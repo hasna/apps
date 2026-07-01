@@ -1,9 +1,50 @@
-import { chmodSync, mkdtempSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 import { executeLoop } from "./executor.js";
 import { Store } from "./store.js";
+
+async function fakeCodewith(binDir: string, invocationsFile: string, opts: { profiles?: string } = {}): Promise<string> {
+  const fake = join(binDir, "codewith");
+  await Bun.write(
+    fake,
+    [
+      "#!/usr/bin/env bash",
+      "printf '%s\\0' \"$@\" >> \"$OPENLOOPS_FAKE_CODEWITH_INVOCATIONS\"",
+      "printf '\\n' >> \"$OPENLOOPS_FAKE_CODEWITH_INVOCATIONS\"",
+      "if [[ \"${1:-}\" == \"profile\" && \"${2:-}\" == \"list\" ]]; then",
+      `  printf ${JSON.stringify(opts.profiles ?? "NAME ACCOUNT PROVIDER MODE PLAN\\naccount001 - ChatGPT chatgpt Pro\\n")}`,
+      "  exit 0",
+      "fi",
+      "if [[ \" $* \" == *\" agent start \"* ]]; then",
+      "  printf '{\"agent\":{\"agentId\":\"agent-1\",\"status\":\"queued\",\"desiredState\":\"running\"},\"created\":true}\\n'",
+      "  exit 0",
+      "fi",
+      "if [[ \" $* \" == *\" agent read \"* ]]; then",
+      "  printf '{\"agent\":{\"agentId\":\"agent-1\",\"status\":\"completed\",\"desiredState\":\"running\",\"threadId\":\"thread-1\",\"rolloutPath\":\"/tmp/rollout.jsonl\",\"pid\":123},\"statusSnapshot\":{\"seq\":2,\"status\":\"completed\",\"summary\":\"Done\",\"pendingInteractionCount\":0,\"lastEventSeq\":2}}\\n'",
+      "  exit 0",
+      "fi",
+      "if [[ \" $* \" == *\" agent logs \"* ]]; then",
+      "  printf '{\"data\":[{\"agentId\":\"agent-1\",\"seq\":1,\"eventType\":\"agent.started\",\"payload\":{\"prompt\":\"say ok\"},\"createdAt\":1},{\"agentId\":\"agent-1\",\"seq\":2,\"eventType\":\"agent.completed\",\"payload\":{\"result\":\"ok\"},\"createdAt\":2}]}\\n'",
+      "  exit 0",
+      "fi",
+      "printf 'unexpected codewith invocation: %s\\n' \"$*\" >&2",
+      "exit 64",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(fake, 0o755);
+  return fake;
+}
+
+function codewithInvocations(file: string): string[][] {
+  return readFileSync(file, "utf8")
+    .trim()
+    .split(/\n/)
+    .filter(Boolean)
+    .map((line) => line.split("\0").filter(Boolean));
+}
 
 describe("agent adapters", () => {
   test("runs opencode through a machine-readable fake binary contract", async () => {
@@ -85,11 +126,10 @@ describe("agent adapters", () => {
     }
   });
 
-  test("runs codewith with global approval policy before exec", async () => {
+  test("runs codewith through durable background-agent adapter", async () => {
     const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-"));
-    const fake = join(binDir, "codewith");
-    await Bun.write(fake, "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\"\nprintf 'stdin:'\ncat\n");
-    chmodSync(fake, 0o755);
+    const invocationsFile = join(binDir, "invocations");
+    await fakeCodewith(binDir, invocationsFile);
 
     const store = new Store(":memory:");
     try {
@@ -107,40 +147,33 @@ describe("agent adapters", () => {
       const claim = store.claimRun(loop, new Date().toISOString(), "test");
       expect(claim).toBeDefined();
       const result = await executeLoop(loop, claim!.run, {
-        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, OPENLOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile },
       });
       expect(result.status).toBe("succeeded");
-      const args = result.stdout.trim().split(/\r?\n/);
-      expect(args.slice(0, 3)).toEqual(["--ask-for-approval", "never", "exec"]);
-      expect(args).toContain("--json");
-      expect(args).toContain("--ephemeral");
-      expect(args).toContain("--skip-git-repo-check");
-      expect(args.indexOf("--ask-for-approval")).toBeLessThan(args.indexOf("exec"));
-      expect(args).toContain("stdin:say ok");
-      expect(args).not.toContain("say ok");
+      const invocations = codewithInvocations(invocationsFile);
+      const startArgs = invocations.find((args) => args.includes("start"));
+      expect(startArgs).toBeDefined();
+      expect(startArgs?.slice(0, 2)).toEqual(["--ask-for-approval", "never"]);
+      expect(startArgs).toContain("agent");
+      expect(startArgs).toContain("start");
+      expect(startArgs).toContain("--idempotency-key");
+      expect(startArgs).toContain("--cwd");
+      expect(startArgs).not.toContain("exec");
+      expect(startArgs).not.toContain("--ephemeral");
+      expect(invocations.some((args) => args.includes("read"))).toBe(true);
+      expect(invocations.some((args) => args.includes("logs"))).toBe(true);
+      expect(result.stdout).toContain("\"agentId\": \"agent-1\"");
+      expect(result.stdout).toContain("agent.completed");
+      expect(result.stdout).not.toContain("say ok");
     } finally {
       store.close();
     }
   });
 
-  test("runs codewith with provider-native auth profile before exec", async () => {
+  test("runs codewith with provider-native auth profile before durable start/read/logs", async () => {
     const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-auth-"));
-    const fake = join(binDir, "codewith");
-    await Bun.write(
-      fake,
-      [
-        "#!/usr/bin/env bash",
-        "if [[ \"${1:-}\" == \"profile\" && \"${2:-}\" == \"list\" ]]; then",
-        "  printf 'NAME ACCOUNT PROVIDER MODE PLAN\\naccount001 - ChatGPT chatgpt Pro\\n'",
-        "  exit 0",
-        "fi",
-        "printf '%s\\n' \"$@\"",
-        "printf 'stdin:'",
-        "cat",
-        "",
-      ].join("\n"),
-    );
-    chmodSync(fake, 0o755);
+    const invocationsFile = join(binDir, "invocations");
+    await fakeCodewith(binDir, invocationsFile);
 
     const store = new Store(":memory:");
     try {
@@ -159,15 +192,15 @@ describe("agent adapters", () => {
       const claim = store.claimRun(loop, new Date().toISOString(), "test");
       expect(claim).toBeDefined();
       const result = await executeLoop(loop, claim!.run, {
-        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, OPENLOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile },
       });
       expect(result.status).toBe("succeeded");
-      const args = result.stdout.trim().split(/\r?\n/);
-      expect(args.slice(0, 5)).toEqual(["--auth-profile", "account001", "--ask-for-approval", "never", "exec"]);
-      expect(args.indexOf("--auth-profile")).toBeLessThan(args.indexOf("exec"));
-      expect(args).toContain("--skip-git-repo-check");
-      expect(args).toContain("stdin:say ok");
-      expect(args).not.toContain("say ok");
+      const invocations = codewithInvocations(invocationsFile);
+      const startArgs = invocations.find((args) => args.includes("start"));
+      expect(invocations.some((args) => args[0] === "profile" && args[1] === "list")).toBe(true);
+      expect(startArgs?.slice(0, 4)).toEqual(["--auth-profile", "account001", "--ask-for-approval", "never"]);
+      expect(startArgs).not.toContain("exec");
+      expect(startArgs).not.toContain("--ephemeral");
     } finally {
       store.close();
     }
@@ -175,9 +208,8 @@ describe("agent adapters", () => {
 
   test("runs codewith with an explicit sandbox", async () => {
     const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-sandbox-"));
-    const fake = join(binDir, "codewith");
-    await Bun.write(fake, "#!/usr/bin/env bash\nprintf '%s\\n' \"$@\"\nprintf 'stdin:'\ncat\n");
-    chmodSync(fake, 0o755);
+    const invocationsFile = join(binDir, "invocations");
+    await fakeCodewith(binDir, invocationsFile);
 
     const store = new Store(":memory:");
     try {
@@ -196,15 +228,14 @@ describe("agent adapters", () => {
       const claim = store.claimRun(loop, new Date().toISOString(), "test");
       expect(claim).toBeDefined();
       const result = await executeLoop(loop, claim!.run, {
-        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, OPENLOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile },
       });
       expect(result.status).toBe("succeeded");
-      const args = result.stdout.trim().split(/\r?\n/);
+      const args = codewithInvocations(invocationsFile).find((entry) => entry.includes("start"))!;
       expect(args[args.indexOf("--sandbox") + 1]).toBe("danger-full-access");
       expect(args).toContain("--add-dir");
       expect(args[args.indexOf("--add-dir") + 1]).toBe("/tmp/hasna-todos");
       expect(args).toContain("/tmp/hasna-loops");
-      expect(args).toContain("stdin:say ok");
     } finally {
       store.close();
     }

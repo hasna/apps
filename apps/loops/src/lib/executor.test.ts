@@ -84,14 +84,14 @@ describe("executeLoop", () => {
     const root = mkdtempSync(join(tmpdir(), "loops-agent-timeout-"));
     const bin = join(root, "bin");
     mkdirSync(bin, { recursive: true });
-    const codewith = join(bin, "codewith");
-    writeFileSync(codewith, "#!/usr/bin/env bash\nsleep 0.1\nprintf agent-done\n");
-    chmodSync(codewith, 0o755);
+    const claude = join(bin, "claude");
+    writeFileSync(claude, "#!/usr/bin/env bash\nsleep 0.1\nprintf agent-done\ncat >/dev/null\n");
+    chmodSync(claude, 0o755);
     try {
       const loop = store.createLoop({
         name: "agent-default-unlimited",
         schedule: { type: "once", at: new Date().toISOString() },
-        target: { type: "agent", provider: "codewith", prompt: "work" },
+        target: { type: "agent", provider: "claude", prompt: "work" },
       });
       const claim = store.claimRun(loop, new Date().toISOString(), "test");
       expect(claim).toBeDefined();
@@ -136,6 +136,25 @@ describe("executeLoop", () => {
     } finally {
       store.close();
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("fails remote codewith durable agents before enqueue without remote polling", async () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "remote-codewith-agent",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: { type: "agent", provider: "codewith", prompt: "do remote work", configIsolation: "safe" },
+        machine: { id: "remote-test", local: false, route: "ssh" },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, remoteHooks);
+      expect(result.status).toBe("failed");
+      expect(result.error).toContain("remote Codewith durable background-agent steps require remote status polling support");
+    } finally {
+      store.close();
     }
   });
 
@@ -484,7 +503,7 @@ describe("executeLoop", () => {
     }
   });
 
-  test("sends agent prompts on stdin instead of process argv for every provider adapter", async () => {
+  test("sends agent prompts on stdin instead of process argv for stdin provider adapters", async () => {
     if (!existsSync("/proc/self/cmdline")) return;
     const secret = "SECRET_ARGV_PROMPT_VALUE";
     const home = mkdtempSync(join(tmpdir(), "loops-home-argv-"));
@@ -492,7 +511,6 @@ describe("executeLoop", () => {
     mkdirSync(binDir, { recursive: true });
     const providers = [
       ["claude", "claude"],
-      ["codewith", "codewith"],
       ["codex", "codex"],
       ["opencode", "opencode"],
       ["cursor", "agent"],
