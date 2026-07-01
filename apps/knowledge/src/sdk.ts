@@ -19,6 +19,7 @@ export type KnowledgeSyncBundleOptions = Parameters<KnowledgeService['exportSync
 export type KnowledgeSyncImportOptions = Parameters<KnowledgeService['importSyncBundle']>[0];
 export type KnowledgePeerSyncOptions = Parameters<KnowledgeService['syncPeer']>[0];
 export type KnowledgeRemotePeerSyncOptions = Parameters<KnowledgeService['syncRemotePeer']>[0];
+export type KnowledgeRulesProvenanceOptions = Parameters<KnowledgeService['importRulesProvenance']>[0];
 
 export interface KnowledgeClient {
   /**
@@ -75,6 +76,7 @@ export interface KnowledgeClient {
   readonly ingest: {
     readonly manifest: (input: string) => ReturnType<KnowledgeService['ingestManifest']>;
     readonly source: (sourceRef: string, purpose?: string) => ReturnType<KnowledgeService['ingestSource']>;
+    readonly rules: (options?: KnowledgeRulesProvenanceOptions) => ReturnType<KnowledgeService['importRulesProvenance']>;
   };
   readonly sources: {
     readonly resolve: (
@@ -163,6 +165,7 @@ export function createKnowledgeClient(options: KnowledgeClientOptions = {}): Kno
     ingest: {
       manifest: (input) => service.ingestManifest(input),
       source: (sourceRef, purpose) => service.ingestSource(sourceRef, purpose),
+      rules: (input = {}) => service.importRulesProvenance(input),
     },
     sources: {
       resolve: (sourceRef, input = {}) => service.resolveSource(sourceRef, input),

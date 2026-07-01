@@ -8,6 +8,7 @@ import { type ProviderStatusResult, type ModelRegistryEntry } from './providers'
 import { type ReindexRuntimeOptions } from './reindex';
 import { RemoteKnowledgeClient, type RemoteKnowledgeRegistryContract } from './remote-client';
 import { type KnowledgeContextPack, type RetrievalOptions } from './retrieval';
+import { type RulesProvenanceImportResult } from './rules-provenance';
 import { type HybridSearchOptions, type HybridSearchResult } from './search';
 import { type SafetyPolicy } from './safety';
 import { type WebSearchOptions } from './web-search';
@@ -305,6 +306,16 @@ export interface KnowledgeSyncConflictAiProposalServiceOptions {
     fake?: boolean;
     env?: KnowledgeSyncConflictAiProposalOptions['env'];
 }
+export interface KnowledgeRulesProvenanceImportOptions {
+    root?: string;
+    owner?: string;
+    dryRun?: boolean;
+    deprecateLegacy?: boolean;
+    includeLegacy?: boolean;
+    maxItems?: number;
+    limit?: number;
+}
+export type KnowledgeRulesProvenanceImportResult = RulesProvenanceImportResult;
 export type KnowledgeSyncConflictResolveResult = {
     ok: false;
     approval_required: true;
@@ -377,6 +388,7 @@ export declare class KnowledgeService {
     lintWiki(): import("./wiki-compiler").WikiLintResult;
     ingestManifest(input: string): Promise<import("./manifest-ingest").ManifestIngestResult>;
     ingestSource(sourceRef: string, purpose?: string): Promise<import("./source-ingest").SourceIngestResult>;
+    importRulesProvenance(options?: KnowledgeRulesProvenanceImportOptions): Promise<KnowledgeRulesProvenanceImportResult>;
     resolveSource(sourceRef: string, options?: {
         purpose?: string;
         limit?: number;

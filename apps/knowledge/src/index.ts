@@ -8,6 +8,7 @@ export {
   type KnowledgeClientOptions,
   type KnowledgeContextOptions,
   type KnowledgeInventoryOptions,
+  type KnowledgeRulesProvenanceOptions,
   type KnowledgeSearchOptions,
   type KnowledgeSetupOptions,
   type KnowledgeSyncDoctorOptions,
@@ -35,6 +36,8 @@ export {
   type KnowledgeOpenFilesBoundaryStatus,
   type KnowledgePathsResult,
   type KnowledgePeerSyncOptions,
+  type KnowledgeRulesProvenanceImportOptions,
+  type KnowledgeRulesProvenanceImportResult,
   type KnowledgeSyncConflictAiProposalServiceOptions,
   type KnowledgeSyncDoctorResult,
   type KnowledgeSyncRecommendedCommand,
@@ -300,6 +303,17 @@ export {
   type SourceIngestOptions,
   type SourceIngestResult,
 } from './source-ingest.js';
+export {
+  importRulesProvenance,
+  type RulesProvenanceCitation,
+  type RulesProvenanceImportOptions,
+  type RulesProvenanceImportResult,
+  type RulesProvenancePrecedence,
+  type RulesProvenanceRecord,
+  type RulesProvenanceRedactionStatus,
+  type RulesProvenanceSkippedSource,
+  type RulesProvenanceSourceFamily,
+} from './rules-provenance.js';
 export {
   resolveOpenFilesSource,
   type ResolvedSourceChunk,

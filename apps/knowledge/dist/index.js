@@ -16404,11 +16404,11 @@ function createArtifactStore(config, workspace) {
 }
 
 // src/service.ts
-import { createHash as createHash15 } from "crypto";
+import { createHash as createHash16 } from "crypto";
 import { spawnSync as spawnSync2 } from "child_process";
-import { existsSync as existsSync11, readFileSync as readFileSync11 } from "fs";
+import { existsSync as existsSync12, readFileSync as readFileSync12 } from "fs";
 import { hostname as hostname5 } from "os";
-import { join as join5, resolve as resolve4 } from "path";
+import { join as join6, resolve as resolve5 } from "path";
 
 // src/auth.ts
 import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync3, unlinkSync, writeFileSync as writeFileSync3 } from "fs";
@@ -24194,10 +24194,640 @@ async function refreshEmbeddingIndex(options) {
   };
 }
 
+// src/rules-provenance.ts
+import { createHash as createHash11 } from "crypto";
+import { existsSync as existsSync10, lstatSync, readdirSync, readFileSync as readFileSync10, statSync as statSync2 } from "fs";
+import { basename as basename4, extname, join as join4, relative as relative4, resolve as resolve4, sep as sep4 } from "path";
+import { pathToFileURL as pathToFileURL3 } from "url";
+
+// src/store.ts
+import { readFileSync as readFileSync9, writeFileSync as writeFileSync4, existsSync as existsSync9, renameSync, unlinkSync as unlinkSync2 } from "fs";
+import { randomUUID as randomUUID9 } from "crypto";
+function defaultStorePath() {
+  return workspaceForHome(globalKnowledgeHome()).jsonStorePath;
+}
+function ensureStore(path) {
+  if (!existsSync9(path)) {
+    ensureParentDir(path);
+    if (path === defaultStorePath() && existsSync9(legacyGlobalStorePath())) {
+      writeFileSync4(path, readFileSync9(legacyGlobalStorePath(), "utf8"));
+    } else {
+      writeFileSync4(path, JSON.stringify({ items: [] }, null, 2));
+    }
+  }
+}
+function loadStoreIfExists(path) {
+  if (!existsSync9(path))
+    return { exists: false, items: [] };
+  const raw = readFileSync9(path, "utf8");
+  const parsed = JSON.parse(raw);
+  if (!parsed || !Array.isArray(parsed.items)) {
+    return { exists: true, items: [] };
+  }
+  return { exists: true, items: parsed.items };
+}
+function lockPath(path) {
+  return `${path}.lock`;
+}
+function acquireLock(lockPath2, ownerId) {
+  const maxWait = 5000;
+  const interval = 50;
+  const start = Date.now();
+  while (Date.now() - start < maxWait) {
+    try {
+      if (!existsSync9(lockPath2)) {
+        writeFileSync4(lockPath2, JSON.stringify({ owner: ownerId, ts: Date.now() }));
+        return;
+      }
+      const lock = JSON.parse(readFileSync9(lockPath2, "utf8"));
+      if (Date.now() - lock.ts > 1e4) {
+        unlinkSync2(lockPath2);
+      }
+    } catch {}
+    const start2 = Date.now();
+    while (Date.now() - start2 < interval) {}
+  }
+  throw new Error(`Could not acquire lock on ${lockPath2} after ${maxWait}ms`);
+}
+function releaseLock(lockPath2, ownerId) {
+  try {
+    if (existsSync9(lockPath2)) {
+      const lock = JSON.parse(readFileSync9(lockPath2, "utf8"));
+      if (lock.owner === ownerId) {
+        unlinkSync2(lockPath2);
+      }
+    }
+  } catch {}
+}
+function saveStore(path, store) {
+  const tmp = `${path}.tmp.${randomUUID9()}`;
+  writeFileSync4(tmp, JSON.stringify(store, null, 2));
+  renameSync(tmp, path);
+}
+function withLock(path, fn, options = {}) {
+  const owner = randomUUID9();
+  const lpath = lockPath(path);
+  if (options.createParent)
+    ensureParentDir(lpath);
+  acquireLock(lpath, owner);
+  try {
+    return fn();
+  } finally {
+    releaseLock(lpath, owner);
+  }
+}
+
+// src/rules-provenance.ts
+var DEFAULT_MAX_ITEMS2 = 100;
+var DEFAULT_EVIDENCE_LIMIT = 25;
+var DEFAULT_MAX_BYTES_PER_FILE = 256 * 1024;
+var WALK_MAX_DEPTH = 5;
+var TEXT_EXTENSIONS = new Set([".md", ".mdx", ".txt", ".json", ".jsonc", ".toml", ".yaml", ".yml"]);
+var ROOT_RULE_DOCS = new Set(["CODEWITH.md", "AGENTS.md", "CLAUDE.md", "RULES.md", "INSTRUCTIONS.md"]);
+var SKIP_DIRECTORIES = new Set([
+  ".git",
+  "node_modules",
+  "dist",
+  "build",
+  ".codewith-worktrees",
+  ".connect",
+  ".secrets",
+  ".tmp",
+  "tmp",
+  "auth_profiles",
+  "profiles",
+  "preserved",
+  "backup",
+  "backups",
+  "cache",
+  "logs",
+  "runs"
+]);
+var SENSITIVE_PATH_RE = /(^|[._-])(secret|secrets|token|tokens|credential|credentials|password|passwd|private[_-]?key|id_rsa)([._-]|$)/i;
+var SELECTED_PROMPT_OR_PLAN_RE = /(agent|rule|rules|instruction|instructions|global|operating|standard|knowledge)/i;
+function sha256Text2(text) {
+  return `sha256:${createHash11("sha256").update(text).digest("hex")}`;
+}
+function sha256Bytes(bytes) {
+  return `sha256:${createHash11("sha256").update(bytes).digest("hex")}`;
+}
+function normalizePath(value) {
+  return value.split(sep4).join("/");
+}
+function relativePath(root, absPath) {
+  const rel = relative4(root, absPath);
+  return rel ? normalizePath(rel) : basename4(absPath);
+}
+function isTextSource(path) {
+  return TEXT_EXTENSIONS.has(extname(path).toLowerCase());
+}
+function hasSensitivePathPart(path) {
+  return normalizePath(path).split("/").some((part) => SENSITIVE_PATH_RE.test(part));
+}
+function boundedPreview(text, max = 220) {
+  const normalized = text.normalize("NFKC").trim().replace(/\s+/g, " ");
+  if (normalized.length <= max)
+    return normalized;
+  return `${normalized.slice(0, Math.max(0, max - 1)).trim()}...`;
+}
+function lineCount(text) {
+  if (!text)
+    return 0;
+  return text.split(/\r\n|\n|\r/).length;
+}
+function citationFor2(input) {
+  return {
+    source_ref: input.sourceRef,
+    source_path: input.sourcePath,
+    line_start: input.lineCount > 0 ? 1 : 0,
+    line_end: input.lineCount,
+    content_hash: input.contentHash
+  };
+}
+function ruleSpecs() {
+  return [
+    {
+      base: ".",
+      maxDepth: 0,
+      spec: {
+        family: "rule_doc",
+        owner: "repository",
+        scope: "global",
+        precedence: { rank: 10, label: "root-rule-doc" },
+        tags: ["global-rules", "rule-doc"],
+        include: (path) => ROOT_RULE_DOCS.has(path)
+      }
+    },
+    {
+      base: ".codewith",
+      spec: {
+        family: "codewith",
+        owner: "codewith",
+        scope: "global",
+        precedence: { rank: 20, label: "codewith" },
+        tags: ["global-rules", "codewith", "agent-instructions"],
+        include: (path) => {
+          const normalized = normalizePath(path);
+          const name = basename4(normalized);
+          if (ROOT_RULE_DOCS.has(name) || normalized === "config.toml")
+            return true;
+          if (normalized.endsWith("/SKILL.md"))
+            return true;
+          if (/^(rules|instructions|prompts|plans)\//.test(normalized) && isTextSource(normalized))
+            return true;
+          return false;
+        }
+      }
+    },
+    {
+      base: ".claude",
+      spec: {
+        family: "claude",
+        owner: "claude",
+        scope: "global",
+        precedence: { rank: 30, label: "claude-rules" },
+        tags: ["global-rules", "claude", "agent-instructions"],
+        include: (path) => {
+          const normalized = normalizePath(path);
+          return normalized === "CLAUDE.md" || /^rules\//.test(normalized) && isTextSource(normalized);
+        }
+      }
+    },
+    {
+      base: ".codex",
+      spec: {
+        family: "codex",
+        owner: "codex",
+        scope: "global",
+        precedence: { rank: 40, label: "codex" },
+        tags: ["global-rules", "codex", "agent-instructions"],
+        include: (path) => {
+          const normalized = normalizePath(path);
+          const name = basename4(normalized);
+          if (ROOT_RULE_DOCS.has(name) || name === "config.toml")
+            return true;
+          return /^(rules|instructions|prompts)\//.test(normalized) && isTextSource(normalized);
+        }
+      }
+    },
+    {
+      base: ".opencode",
+      spec: {
+        family: "opencode",
+        owner: "opencode",
+        scope: "global",
+        precedence: { rank: 50, label: "opencode" },
+        tags: ["global-rules", "opencode", "agent-instructions"],
+        include: (path) => SELECTED_PROMPT_OR_PLAN_RE.test(path) && isTextSource(path)
+      }
+    },
+    {
+      base: ".",
+      maxDepth: 0,
+      spec: {
+        family: "opencode",
+        owner: "opencode",
+        scope: "global",
+        precedence: { rank: 50, label: "opencode-config" },
+        tags: ["global-rules", "opencode", "config"],
+        include: (path) => ["opencode.json", "opencode.jsonc", "opencode.toml", "opencode.yaml", "opencode.yml"].includes(path)
+      }
+    },
+    {
+      base: ".hasna/prompts",
+      spec: {
+        family: "prompt",
+        owner: "hasna",
+        scope: "global",
+        precedence: { rank: 60, label: "selected-prompts" },
+        tags: ["global-rules", "prompt"],
+        include: (path) => SELECTED_PROMPT_OR_PLAN_RE.test(path) && isTextSource(path)
+      }
+    },
+    {
+      base: ".hasna/plans",
+      spec: {
+        family: "plan",
+        owner: "hasna",
+        scope: "global",
+        precedence: { rank: 65, label: "selected-plans" },
+        tags: ["global-rules", "plan"],
+        include: (path) => SELECTED_PROMPT_OR_PLAN_RE.test(path) && isTextSource(path)
+      }
+    },
+    {
+      base: "docs",
+      spec: {
+        family: "rule_doc",
+        owner: "repository",
+        scope: "global",
+        precedence: { rank: 70, label: "rule-docs" },
+        tags: ["global-rules", "rule-doc"],
+        include: (path) => SELECTED_PROMPT_OR_PLAN_RE.test(path) && isTextSource(path)
+      }
+    }
+  ];
+}
+function collectFiles(root, skipped) {
+  const candidates = new Map;
+  for (const entry of ruleSpecs()) {
+    const basePath = resolve4(root, entry.base);
+    if (!existsSync10(basePath))
+      continue;
+    const rootStats = statSync2(basePath);
+    if (rootStats.isFile()) {
+      const rel = basename4(basePath);
+      if (entry.spec.include(rel)) {
+        candidates.set(basePath, {
+          ...entry.spec,
+          absPath: basePath
+        });
+      }
+      continue;
+    }
+    walkRuleDirectory({
+      basePath,
+      depth: 0,
+      maxDepth: entry.maxDepth ?? WALK_MAX_DEPTH,
+      spec: entry.spec,
+      candidates,
+      skipped
+    });
+  }
+  return [...candidates.values()].sort((a, b) => {
+    if (a.precedence.rank !== b.precedence.rank)
+      return a.precedence.rank - b.precedence.rank;
+    return a.absPath.localeCompare(b.absPath);
+  });
+}
+function walkRuleDirectory(input) {
+  const rootBasePath = input.rootBasePath ?? input.basePath;
+  if (input.depth > input.maxDepth)
+    return;
+  for (const dirent of readdirSync(input.basePath, { withFileTypes: true })) {
+    const absPath = join4(input.basePath, dirent.name);
+    const rel = relativePath(rootBasePath, absPath);
+    if (dirent.isSymbolicLink())
+      continue;
+    if (dirent.isDirectory()) {
+      if (SKIP_DIRECTORIES.has(dirent.name)) {
+        continue;
+      }
+      if (hasSensitivePathPart(rel)) {
+        input.skipped.push({ source_family: input.spec.family, source_path: absPath, reason: "sensitive_path" });
+        continue;
+      }
+      walkRuleDirectory({
+        ...input,
+        rootBasePath,
+        basePath: absPath,
+        depth: input.depth + 1
+      });
+      continue;
+    }
+    if (!dirent.isFile())
+      continue;
+    const sourceRelativePath = relativePath(resolve4(rootBasePath), absPath);
+    if (hasSensitivePathPart(sourceRelativePath)) {
+      input.skipped.push({ source_family: input.spec.family, source_path: absPath, reason: "sensitive_path" });
+      continue;
+    }
+    if (!input.spec.include(sourceRelativePath))
+      continue;
+    if (!isTextSource(absPath))
+      continue;
+    input.candidates.set(absPath, {
+      ...input.spec,
+      absPath
+    });
+  }
+}
+function legacyRuleLike(item) {
+  const tags = (item.tags ?? []).map((tag) => tag.toLowerCase());
+  if (tags.some((tag) => ["rule", "rules", "agent", "instructions", "global-rules", "global-agent-rules"].includes(tag))) {
+    return true;
+  }
+  const haystack = `${item.title}
+${item.content.slice(0, 500)}`.toLowerCase();
+  return /\b(agent|rule|rules|instruction|instructions|codewith|claude|codex|opencode)\b/.test(haystack);
+}
+function manifestItemForRecord(record2, text) {
+  const ruleProvenance = {
+    source_path: record2.source_path,
+    source_path_ref: record2.source_path_ref,
+    source_ref: record2.source_ref,
+    owner: record2.owner,
+    scope: record2.scope,
+    precedence: record2.precedence,
+    source_hash: record2.source_hash,
+    content_hash: record2.content_hash,
+    discovered_at: record2.discovered_at,
+    tags: record2.tags,
+    redaction_status: record2.redaction_status,
+    citations: record2.citations
+  };
+  return {
+    source_ref: record2.source_ref,
+    name: record2.title,
+    mime: "text/markdown",
+    size: Buffer.byteLength(text),
+    hash: record2.content_hash,
+    revision: record2.content_hash,
+    status: "active",
+    updated_at: record2.discovered_at,
+    permissions: {
+      mode: "read_only",
+      allowed_purposes: ["knowledge_index", "knowledge_answer", "agent_context"]
+    },
+    rule_provenance: ruleProvenance,
+    source_family: record2.source_family,
+    source_path_ref: record2.source_path_ref,
+    owner: record2.owner,
+    scope: record2.scope,
+    precedence: record2.precedence,
+    tags: record2.tags,
+    redaction_status: record2.redaction_status,
+    legacy_json_id: record2.legacy_json_id ?? null,
+    extracted_text: text
+  };
+}
+function prepareFileRecord(input) {
+  const stats = lstatSync(input.candidate.absPath);
+  const sourcePath = input.candidate.absPath;
+  const sourcePathRef = relativePath(input.root, sourcePath);
+  if (stats.size > input.maxBytesPerFile) {
+    const sourceRef2 = pathToFileURL3(sourcePath).href;
+    const evidence2 = {
+      source_family: input.candidate.family,
+      title: basename4(sourcePath),
+      source_path: sourcePath,
+      source_path_ref: sourcePathRef,
+      source_ref: sourceRef2,
+      owner: input.candidate.owner,
+      scope: input.candidate.scope,
+      precedence: input.candidate.precedence,
+      source_hash: "sha256:skipped-too-large",
+      content_hash: "sha256:skipped-too-large",
+      discovered_at: input.discoveredAt,
+      tags: [...input.candidate.tags, "skipped"],
+      redaction_status: "refused",
+      redactions: [],
+      citations: [],
+      bytes: stats.size,
+      line_count: 0,
+      importable: false,
+      skipped_reason: "max_bytes_exceeded",
+      preview: null
+    };
+    return { evidence: evidence2, text: "", manifest: null };
+  }
+  const bytes = readFileSync10(sourcePath);
+  const rawText = bytes.toString("utf8");
+  const redacted = redactSecrets(rawText, input.safetyPolicy);
+  const highSeverity = redacted.findings.some((finding) => finding.severity === "high");
+  const redactionStatus = highSeverity ? "refused" : redacted.findings.length > 0 ? "redacted" : "clean";
+  const contentHash = sha256Text2(redacted.text);
+  const sourceRef = pathToFileURL3(sourcePath).href;
+  const lines = lineCount(redacted.text);
+  const evidence = {
+    source_family: input.candidate.family,
+    title: basename4(sourcePath),
+    source_path: sourcePath,
+    source_path_ref: sourcePathRef,
+    source_ref: sourceRef,
+    owner: input.candidate.owner,
+    scope: input.candidate.scope,
+    precedence: input.candidate.precedence,
+    source_hash: sha256Bytes(bytes),
+    content_hash: contentHash,
+    discovered_at: input.discoveredAt,
+    tags: [...input.candidate.tags],
+    redaction_status: redactionStatus,
+    redactions: redacted.findings.map((finding) => ({ type: finding.type, severity: finding.severity })),
+    citations: [citationFor2({ sourceRef, sourcePath, lineCount: lines, contentHash })],
+    bytes: bytes.byteLength,
+    line_count: lines,
+    importable: redactionStatus !== "refused",
+    skipped_reason: redactionStatus === "refused" ? "secret_refused" : null,
+    preview: redactionStatus === "refused" ? null : boundedPreview(redacted.text)
+  };
+  return {
+    evidence,
+    text: redacted.text,
+    manifest: evidence.importable ? manifestItemForRecord(evidence, redacted.text) : null
+  };
+}
+function prepareLegacyRecord(input) {
+  const redacted = redactSecrets(input.item.content, input.safetyPolicy);
+  const highSeverity = redacted.findings.some((finding) => finding.severity === "high");
+  const redactionStatus = highSeverity ? "refused" : redacted.findings.length > 0 ? "redacted" : "clean";
+  const sourceRef = `open-files://source/legacy-json/path/${encodeURIComponent(input.item.id)}`;
+  const contentHash = sha256Text2(redacted.text);
+  const sourceHash = sha256Text2(input.item.content);
+  const lines = lineCount(redacted.text);
+  const evidence = {
+    source_family: "legacy_json",
+    title: input.item.title,
+    source_path: input.legacyStorePath,
+    source_path_ref: `legacy-json:${input.item.id}`,
+    source_ref: sourceRef,
+    owner: "legacy-json",
+    scope: input.scope,
+    precedence: { rank: 90, label: "legacy-json-note" },
+    source_hash: sourceHash,
+    content_hash: contentHash,
+    discovered_at: input.discoveredAt,
+    tags: [...new Set(["global-rules", "legacy-json", ...input.item.tags ?? []])],
+    redaction_status: redactionStatus,
+    redactions: redacted.findings.map((finding) => ({ type: finding.type, severity: finding.severity })),
+    citations: [citationFor2({ sourceRef, sourcePath: input.legacyStorePath, lineCount: lines, contentHash })],
+    bytes: Buffer.byteLength(input.item.content),
+    line_count: lines,
+    importable: redactionStatus !== "refused",
+    skipped_reason: redactionStatus === "refused" ? "secret_refused" : null,
+    preview: redactionStatus === "refused" ? null : boundedPreview(redacted.text),
+    legacy_json_id: input.item.id
+  };
+  return {
+    evidence,
+    text: redacted.text,
+    manifest: evidence.importable ? manifestItemForRecord(evidence, redacted.text) : null
+  };
+}
+function deprecateLegacyNotes(input) {
+  if (!input.legacyStorePath || !existsSync10(input.legacyStorePath))
+    return 0;
+  const byId = new Map(input.records.filter((record2) => record2.legacy_json_id && record2.importable).map((record2) => [record2.legacy_json_id, record2]));
+  if (byId.size === 0)
+    return 0;
+  return withLock(input.legacyStorePath, () => {
+    const store = loadStoreIfExists(input.legacyStorePath);
+    if (!store.exists)
+      return 0;
+    let deprecated = 0;
+    for (const item of store.items) {
+      const record2 = byId.get(item.id);
+      if (!record2)
+        continue;
+      const metadata = item.metadata ?? {};
+      item.archived = true;
+      item.metadata = {
+        ...metadata,
+        knowledge_rules_import: {
+          status: "deprecated_after_source_backed_promotion",
+          deprecated_at: input.now,
+          source_ref: record2.source_ref,
+          source_hash: record2.source_hash,
+          content_hash: record2.content_hash,
+          data_loss: false
+        }
+      };
+      item.tags = [...new Set([...item.tags ?? [], "deprecated:knowledge-rules-import"])];
+      item.updated_at = input.now;
+      deprecated += 1;
+    }
+    if (deprecated > 0)
+      saveStore(input.legacyStorePath, { items: store.items });
+    return deprecated;
+  });
+}
+async function importRulesProvenance(options = {}) {
+  const root = resolve4(options.root ?? process.cwd());
+  const scope = options.scope ?? "global";
+  const owner = options.owner ?? "global-agent-rules-standard";
+  const dryRun = options.dryRun !== false;
+  const discoveredAt = (options.now ?? new Date).toISOString();
+  const maxItems = Math.max(1, Math.min(options.maxItems ?? DEFAULT_MAX_ITEMS2, 1000));
+  const evidenceLimit = Math.max(1, Math.min(options.limit ?? DEFAULT_EVIDENCE_LIMIT, 100));
+  const maxBytesPerFile = Math.max(1024, Math.min(options.maxBytesPerFile ?? DEFAULT_MAX_BYTES_PER_FILE, 2 * 1024 * 1024));
+  const skipped = [];
+  const files = collectFiles(root, skipped).slice(0, maxItems);
+  const fileRecords = files.map((candidate) => prepareFileRecord({
+    root,
+    candidate: {
+      ...candidate,
+      owner: candidate.owner === "repository" ? owner : candidate.owner,
+      scope
+    },
+    discoveredAt,
+    maxBytesPerFile,
+    safetyPolicy: options.safetyPolicy
+  }));
+  const legacyStore = options.includeLegacy === false || !options.legacyStorePath ? { exists: false, items: [] } : loadStoreIfExists(options.legacyStorePath);
+  const legacyItems = legacyStore.items.filter((item) => item.archived !== true && legacyRuleLike(item)).slice(0, maxItems);
+  const legacyRecords = legacyItems.map((item) => prepareLegacyRecord({
+    item,
+    legacyStorePath: options.legacyStorePath,
+    discoveredAt,
+    scope,
+    safetyPolicy: options.safetyPolicy
+  }));
+  const prepared = [...fileRecords, ...legacyRecords].slice(0, maxItems);
+  const allEvidence = prepared.map((record2) => record2.evidence);
+  const importableRecords = prepared.filter((record2) => record2.manifest);
+  const manifests = importableRecords.map((record2) => record2.manifest);
+  const refused = allEvidence.filter((record2) => record2.redaction_status === "refused").length;
+  const evidence = allEvidence.slice(0, evidenceLimit);
+  const boundedSkipped = skipped.slice(0, evidenceLimit);
+  let importResult = null;
+  let deprecated = 0;
+  if (!dryRun) {
+    if (!options.dbPath)
+      throw new Error("rules provenance apply mode requires dbPath.");
+    if (manifests.length > 0) {
+      importResult = await ingestOpenFilesManifestItems({
+        dbPath: options.dbPath,
+        items: manifests,
+        sourceLabel: "knowledge://rules-provenance/global-agent-rules",
+        readAction: "rules_provenance_import",
+        safetyPolicy: options.safetyPolicy,
+        now: options.now,
+        maxItems
+      });
+    }
+    if (options.deprecateLegacy !== false) {
+      deprecated = deprecateLegacyNotes({
+        legacyStorePath: options.legacyStorePath,
+        records: allEvidence,
+        now: discoveredAt
+      });
+    }
+  }
+  return {
+    ok: refused === 0 || manifests.length > 0 || dryRun,
+    workflow: "global-rules-provenance-import",
+    dry_run: dryRun,
+    writes_performed: !dryRun,
+    root,
+    scope,
+    owner,
+    discovered_at: discoveredAt,
+    max_items: maxItems,
+    evidence_limit: evidenceLimit,
+    records_seen: allEvidence.length,
+    records_importable: manifests.length,
+    records_refused: refused,
+    records_skipped: skipped.length,
+    evidence_truncated: allEvidence.length > evidence.length,
+    skipped_truncated: skipped.length > boundedSkipped.length,
+    evidence,
+    skipped: boundedSkipped,
+    import_result: importResult,
+    legacy: {
+      store_path: options.legacyStorePath ?? null,
+      candidates: legacyItems.length,
+      promoted: legacyRecords.filter((record2) => record2.manifest).length,
+      deprecated,
+      data_loss: false
+    },
+    message: dryRun ? `Discovered ${allEvidence.length} rule source(s); ${manifests.length} importable, ${refused} refused` : `Imported ${importResult?.items_seen ?? 0} rule source(s); ${deprecated} legacy note(s) deprecated`
+  };
+}
+
 // src/web-search.ts
-import { createHash as createHash11, randomUUID as randomUUID9 } from "crypto";
+import { createHash as createHash12, randomUUID as randomUUID10 } from "crypto";
 function stableHash(value) {
-  return `sha256:${createHash11("sha256").update(value).digest("hex")}`;
+  return `sha256:${createHash12("sha256").update(value).digest("hex")}`;
 }
 function estimateTokens3(text) {
   const words = text.trim().split(/\s+/).filter(Boolean).length;
@@ -24338,7 +24968,7 @@ async function runProviderWebSearch(options) {
   const parsed = parseModelRef(modelRef);
   const provider = options.provider ?? parsed.provider;
   const model = parsed.provider === provider ? parsed.model : providerSettings(options.config, provider).default_model;
-  const runId = `run_${randomUUID9()}`;
+  const runId = `run_${randomUUID10()}`;
   if (!options.fake && options.safetyPolicy)
     assertWebSearchAllowed(options.safetyPolicy);
   if (!options.fake && provider !== "openai" && provider !== "anthropic") {
@@ -24410,7 +25040,7 @@ async function runProviderWebSearch(options) {
     ]);
     writeDb.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`, [
-      `evt_${randomUUID9()}`,
+      `evt_${randomUUID10()}`,
       runId,
       "info",
       "provider_web_search_completed",
@@ -24446,9 +25076,9 @@ async function runProviderWebSearch(options) {
 }
 
 // src/wiki-compiler.ts
-import { createHash as createHash12, randomUUID as randomUUID10 } from "crypto";
+import { createHash as createHash13, randomUUID as randomUUID11 } from "crypto";
 function stableId7(prefix, value) {
-  return `${prefix}_${createHash12("sha256").update(value).digest("hex").slice(0, 20)}`;
+  return `${prefix}_${createHash13("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
 function slugify2(value) {
   const slug = value.normalize("NFKC").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
@@ -24652,7 +25282,7 @@ function replacePageCitations(db, pageId, citations, now) {
   for (const citation of citations) {
     db.run(`INSERT INTO citations (id, wiki_page_id, chunk_id, source_uri, quote, start_offset, end_offset, metadata_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-      stableId7("cit", `${pageId}\x00${citation.source_uri}\x00${citation.chunk_id ?? randomUUID10()}`),
+      stableId7("cit", `${pageId}\x00${citation.source_uri}\x00${citation.chunk_id ?? randomUUID11()}`),
       pageId,
       citation.chunk_id,
       citation.source_uri,
@@ -24991,24 +25621,8 @@ function lintWiki(options) {
   }
 }
 
-// src/store.ts
-import { readFileSync as readFileSync9, writeFileSync as writeFileSync4, existsSync as existsSync9, renameSync, unlinkSync as unlinkSync2 } from "fs";
-function defaultStorePath() {
-  return workspaceForHome(globalKnowledgeHome()).jsonStorePath;
-}
-function ensureStore(path) {
-  if (!existsSync9(path)) {
-    ensureParentDir(path);
-    if (path === defaultStorePath() && existsSync9(legacyGlobalStorePath())) {
-      writeFileSync4(path, readFileSync9(legacyGlobalStorePath(), "utf8"));
-    } else {
-      writeFileSync4(path, JSON.stringify({ items: [] }, null, 2));
-    }
-  }
-}
-
 // src/wiki-layout.ts
-import { createHash as createHash13 } from "crypto";
+import { createHash as createHash14 } from "crypto";
 function todayParts2(now) {
   const year = String(now.getUTCFullYear());
   const month = String(now.getUTCMonth() + 1).padStart(2, "0");
@@ -25016,7 +25630,7 @@ function todayParts2(now) {
   return { year, month, day };
 }
 function stableId8(prefix, value) {
-  return `${prefix}_${createHash13("sha256").update(value).digest("hex").slice(0, 20)}`;
+  return `${prefix}_${createHash14("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
 function estimateTokenCount3(text) {
   const words = text.trim().split(/\s+/).filter(Boolean).length;
@@ -25214,39 +25828,39 @@ function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
 }
 
 // src/workspace-migration.ts
-import { createHash as createHash14 } from "crypto";
+import { createHash as createHash15 } from "crypto";
 import { Database as Database2 } from "bun:sqlite";
 import {
   cpSync,
-  existsSync as existsSync10,
-  lstatSync,
+  existsSync as existsSync11,
+  lstatSync as lstatSync2,
   mkdirSync as mkdirSync4,
-  readdirSync,
-  readFileSync as readFileSync10,
+  readdirSync as readdirSync2,
+  readFileSync as readFileSync11,
   renameSync as renameSync2,
   rmSync,
   writeFileSync as writeFileSync5
 } from "fs";
-import { dirname as dirname4, join as join4, relative as relative4 } from "path";
+import { dirname as dirname4, join as join5, relative as relative5 } from "path";
 function walkFiles(root, base = root) {
-  if (!existsSync10(root))
+  if (!existsSync11(root))
     return [];
-  const stat = lstatSync(root);
+  const stat = lstatSync2(root);
   if (stat.isFile())
-    return [relative4(base, root) || "."];
+    return [relative5(base, root) || "."];
   if (!stat.isDirectory())
     return [];
-  return readdirSync(root).flatMap((entry) => walkFiles(join4(root, entry), base)).sort();
+  return readdirSync2(root).flatMap((entry) => walkFiles(join5(root, entry), base)).sort();
 }
 function hashFiles(root, files) {
   if (files.length === 0)
     return { sha256: null, bytes: 0 };
-  const tree = createHash14("sha256");
+  const tree = createHash15("sha256");
   let bytes = 0;
   for (const file2 of files) {
-    const path = join4(root, file2);
-    const body = readFileSync10(path);
-    const fileHash = createHash14("sha256").update(body).digest("hex");
+    const path = join5(root, file2);
+    const body = readFileSync11(path);
+    const fileHash = createHash15("sha256").update(body).digest("hex");
     bytes += body.byteLength;
     tree.update(file2);
     tree.update("\x00");
@@ -25256,13 +25870,13 @@ function hashFiles(root, files) {
   return { sha256: tree.digest("hex"), bytes };
 }
 function jsonItemCount(path) {
-  if (!existsSync10(path))
+  if (!existsSync11(path))
     return null;
-  const parsed = JSON.parse(readFileSync10(path, "utf8"));
+  const parsed = JSON.parse(readFileSync11(path, "utf8"));
   return Array.isArray(parsed.items) ? parsed.items.length : null;
 }
 function sqliteSummary(path) {
-  if (!existsSync10(path)) {
+  if (!existsSync11(path)) {
     return { exists: false, integrity_check: null, table_counts: {} };
   }
   const db = new Database2(path, { readonly: true });
@@ -25288,14 +25902,14 @@ function summarizeWorkspaceTree(workspace) {
   const artifactHash = hashFiles(workspace.artifactsDir, artifactFiles);
   return {
     path: workspace.home,
-    exists: existsSync10(workspace.home),
+    exists: existsSync11(workspace.home),
     file_count: files.length,
     total_bytes: treeHash.bytes,
     tree_sha256: treeHash.sha256,
     json_items: jsonItemCount(workspace.jsonStorePath),
     sqlite: sqliteSummary(workspace.knowledgeDbPath),
     artifacts: {
-      exists: existsSync10(workspace.artifactsDir),
+      exists: existsSync11(workspace.artifactsDir),
       file_count: artifactFiles.length,
       total_bytes: artifactHash.bytes,
       tree_sha256: artifactHash.sha256
@@ -25312,7 +25926,7 @@ function isDefaultScaffold(workspace, summary) {
   if (!summary.files.includes("config.json"))
     return true;
   try {
-    return JSON.stringify(JSON.parse(readFileSync10(workspace.configPath, "utf8"))) === JSON.stringify(defaultKnowledgeConfig());
+    return JSON.stringify(JSON.parse(readFileSync11(workspace.configPath, "utf8"))) === JSON.stringify(defaultKnowledgeConfig());
   } catch {
     return false;
   }
@@ -25331,7 +25945,7 @@ function isMigrationTombstone(workspace, summary, currentHome) {
   if (summary.files.some((file2) => file2 !== "TOMBSTONE.md" && file2 !== "migration.json"))
     return false;
   try {
-    const metadata = JSON.parse(readFileSync10(join4(workspace.home, "migration.json"), "utf8"));
+    const metadata = JSON.parse(readFileSync11(join5(workspace.home, "migration.json"), "utf8"));
     return metadata.new_path === currentHome && typeof metadata.backup_path === "string";
   } catch {
     return false;
@@ -25382,7 +25996,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
       current_home: options.current.home,
       legacy_home: options.legacy.home,
       backup_home: null,
-      tombstone_path: join4(options.legacy.home, "TOMBSTONE.md"),
+      tombstone_path: join5(options.legacy.home, "TOMBSTONE.md"),
       legacy_before: legacyBefore,
       current_before: currentBefore,
       backup_after: null,
@@ -25410,7 +26024,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
       current_home: options.current.home,
       legacy_home: options.legacy.home,
       backup_home: `${options.legacy.home}.backup-${migrationTimestamp(now)}`,
-      tombstone_path: join4(options.legacy.home, "TOMBSTONE.md"),
+      tombstone_path: join5(options.legacy.home, "TOMBSTONE.md"),
       legacy_before: legacyBefore,
       current_before: currentBefore,
       backup_after: null,
@@ -25442,7 +26056,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
   const currentAfter = summarizeWorkspaceTree(options.current);
   checks3.migrated_matches_backup = summariesMatch(backupAfter, currentAfter);
   mkdirSync4(options.legacy.home, { recursive: true });
-  const tombstonePath = join4(options.legacy.home, "TOMBSTONE.md");
+  const tombstonePath = join5(options.legacy.home, "TOMBSTONE.md");
   writeFileSync5(tombstonePath, [
     "# Migrated OpenKnowledge Workspace",
     "",
@@ -25455,7 +26069,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
     ""
   ].join(`
 `));
-  writeFileSync5(join4(options.legacy.home, "migration.json"), `${JSON.stringify({
+  writeFileSync5(join5(options.legacy.home, "migration.json"), `${JSON.stringify({
     migrated_at: now.toISOString(),
     approved_by: options.approvedBy,
     new_path: options.current.home,
@@ -25465,7 +26079,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
     current_after: currentAfter
   }, null, 2)}
 `);
-  checks3.tombstone_written = existsSync10(tombstonePath);
+  checks3.tombstone_written = existsSync11(tombstonePath);
   const ok = checks3.backup_matches_legacy && checks3.migrated_matches_backup && checks3.tombstone_written;
   return {
     ok,
@@ -25488,14 +26102,14 @@ function migrateLegacyKnowledgeWorkspace(options) {
 
 // src/service.ts
 function resolvePeerWorkspace(input) {
-  const target = resolve4(input);
-  if (existsSync11(join5(target, "knowledge.db")) || existsSync11(join5(target, "config.json"))) {
+  const target = resolve5(input);
+  if (existsSync12(join6(target, "knowledge.db")) || existsSync12(join6(target, "config.json"))) {
     return ensureKnowledgeWorkspace(target);
   }
   return ensureKnowledgeWorkspace(workspaceForHome(projectKnowledgeHome(target)).home);
 }
 function workspaceMachineId(workspace) {
-  return `${hostname5()}:${createHash15("sha256").update(workspace.home).digest("hex").slice(0, 12)}`;
+  return `${hostname5()}:${createHash16("sha256").update(workspace.home).digest("hex").slice(0, 12)}`;
 }
 function shellQuote2(value) {
   return `'${value.replace(/'/g, "'\\''")}'`;
@@ -25789,10 +26403,10 @@ function selectInventoryRows(db, sql, params = []) {
   return db.query(sql).all(...params);
 }
 function readLegacyInventoryStore(path) {
-  if (!existsSync11(path))
+  if (!existsSync12(path))
     return { exists: false, read_error: null, items: [] };
   try {
-    const parsed = JSON.parse(readFileSync11(path, "utf8"));
+    const parsed = JSON.parse(readFileSync12(path, "utf8"));
     if (!parsed || !Array.isArray(parsed.items)) {
       return { exists: true, read_error: "invalid_store_shape", items: [] };
     }
@@ -25894,11 +26508,11 @@ function emptyContextPack(query, limit, semantic = false) {
 }
 function legacyStorePathForRead(scope, workspace, preferred) {
   const current = preferred ?? workspace.jsonStorePath;
-  if (existsSync11(current))
+  if (existsSync12(current))
     return current;
   if (scope === "global") {
     const legacy = legacyGlobalStorePath();
-    if (existsSync11(legacy))
+    if (existsSync12(legacy))
       return legacy;
   }
   return current;
@@ -25930,7 +26544,7 @@ function legacyAgentContextPack(options, context, policy) {
     redactions += quote.redactions;
     const ref = citation.source_ref ?? citation.source_uri ?? citation.artifact_path ?? citation.artifact_uri ?? citation.id;
     return {
-      id: `cite_${createHash15("sha256").update(`${citation.id}\x00${ref}`).digest("hex").slice(0, 12)}`,
+      id: `cite_${createHash16("sha256").update(`${citation.id}\x00${ref}`).digest("hex").slice(0, 12)}`,
       kind: citation.artifact_uri || citation.artifact_path ? "artifact" : "source",
       ref,
       source_ref: citation.source_ref,
@@ -25956,7 +26570,7 @@ function legacyAgentContextPack(options, context, policy) {
     const preview = redactPreviewForPack(excerpt2.text, policy, 520);
     redactions += preview.redactions;
     return {
-      id: `ev_${createHash15("sha256").update(`${excerpt2.kind}\x00${excerpt2.result_id}\x00${excerpt2.citation_id ?? ""}`).digest("hex").slice(0, 14)}`,
+      id: `ev_${createHash16("sha256").update(`${excerpt2.kind}\x00${excerpt2.result_id}\x00${excerpt2.citation_id ?? ""}`).digest("hex").slice(0, 14)}`,
       kind: excerpt2.kind,
       title: compactText(result?.title ?? citation?.ref ?? excerpt2.kind, 100),
       text_preview: preview.text,
@@ -25974,7 +26588,7 @@ function legacyAgentContextPack(options, context, policy) {
   const usedCitationIds = new Set(evidence.flatMap((entry) => entry.citation_ids));
   const usedCitations = citations.filter((citation) => usedCitationIds.has(citation.id));
   const warnings = Array.from(new Set(context.warnings));
-  const idempotencyKey = `ctx_${createHash15("sha256").update([source, purpose, query, warnings.join(","), evidence.map((entry) => entry.id).join(",")].join("\x00")).digest("hex").slice(0, 20)}`;
+  const idempotencyKey = `ctx_${createHash16("sha256").update([source, purpose, query, warnings.join(","), evidence.map((entry) => entry.id).join(",")].join("\x00")).digest("hex").slice(0, 20)}`;
   const pack = {
     ok: true,
     format: "knowledge-agent-context-pack",
@@ -26087,7 +26701,7 @@ function emptyAgentContextPack(options) {
   const query = (options.query ?? options.topic ?? "").normalize("NFKC").trim().replace(/\s+/g, " ");
   const maxItems = Math.max(1, Math.min(options.maxItems ?? options.limit ?? 8, 50));
   const maxTokens = Math.max(500, Math.min(options.maxTokens ?? 6000, 1e5));
-  const idempotencyKey = `ctx_${createHash15("sha256").update(["empty", source, purpose, query, options.topic ?? "", options.since ?? ""].join("\x00")).digest("hex").slice(0, 20)}`;
+  const idempotencyKey = `ctx_${createHash16("sha256").update(["empty", source, purpose, query, options.topic ?? "", options.since ?? ""].join("\x00")).digest("hex").slice(0, 20)}`;
   return {
     ok: true,
     format: "knowledge-agent-context-pack",
@@ -26466,8 +27080,8 @@ class KnowledgeService {
   }
   config(options = {}) {
     const workspace = options.ensure ? this.ensureWorkspace() : this.workspace;
-    if (!this.cachedConfig || options.ensure || existsSync11(workspace.configPath)) {
-      this.cachedConfig = existsSync11(workspace.configPath) ? readKnowledgeConfig(workspace.configPath) : defaultKnowledgeConfig();
+    if (!this.cachedConfig || options.ensure || existsSync12(workspace.configPath)) {
+      this.cachedConfig = existsSync12(workspace.configPath) ? readKnowledgeConfig(workspace.configPath) : defaultKnowledgeConfig();
     }
     return this.cachedConfig;
   }
@@ -26563,13 +27177,13 @@ class KnowledgeService {
       ok: true,
       scope: this.scope,
       home: workspace.home,
-      exists: existsSync11(workspace.home),
+      exists: existsSync12(workspace.home),
       config_path: workspace.configPath,
-      config_exists: existsSync11(workspace.configPath),
+      config_exists: existsSync12(workspace.configPath),
       json_store_path: workspace.jsonStorePath,
-      json_store_exists: existsSync11(workspace.jsonStorePath),
+      json_store_exists: existsSync12(workspace.jsonStorePath),
       knowledge_db_path: workspace.knowledgeDbPath,
-      knowledge_db_exists: existsSync11(workspace.knowledgeDbPath),
+      knowledge_db_exists: existsSync12(workspace.knowledgeDbPath),
       artifacts_dir: workspace.artifactsDir,
       indexes_dir: workspace.indexesDir,
       logs_dir: workspace.logsDir,
@@ -26585,7 +27199,7 @@ class KnowledgeService {
   }
   dbStats() {
     const workspace = this.workspace;
-    if (!existsSync11(workspace.knowledgeDbPath))
+    if (!existsSync12(workspace.knowledgeDbPath))
       return emptyKnowledgeDbStats();
     return getKnowledgeDbStats(workspace.knowledgeDbPath);
   }
@@ -26596,7 +27210,7 @@ class KnowledgeService {
     const legacyStore = readLegacyInventoryStore(storePath);
     const activeItems = legacyStore.items.filter((item) => item.archived !== true);
     const visibleItems = options.includeArchived ? legacyStore.items : activeItems;
-    const dbExists = existsSync11(workspace.knowledgeDbPath);
+    const dbExists = existsSync12(workspace.knowledgeDbPath);
     if (!dbExists) {
       const stats2 = emptyKnowledgeDbStats();
       const summary = {
@@ -26959,6 +27573,23 @@ class KnowledgeService {
       safetyPolicy: this.safetyPolicy()
     });
   }
+  async importRulesProvenance(options = {}) {
+    const dryRun = options.dryRun !== false;
+    const workspace = dryRun ? this.workspace : this.ensureWorkspace();
+    return importRulesProvenance({
+      root: options.root ?? this.options.cwd ?? process.cwd(),
+      scope: this.scope,
+      owner: options.owner,
+      dryRun,
+      deprecateLegacy: options.deprecateLegacy,
+      includeLegacy: options.includeLegacy,
+      legacyStorePath: workspace.jsonStorePath,
+      dbPath: workspace.knowledgeDbPath,
+      safetyPolicy: this.safetyPolicy(),
+      maxItems: options.maxItems,
+      limit: options.limit
+    });
+  }
   async resolveSource(sourceRef, options = {}) {
     const workspace = this.ensureWorkspace();
     return resolveOpenFilesSource({
@@ -26980,7 +27611,7 @@ class KnowledgeService {
   }
   reindexHealth(options = {}) {
     const workspace = this.workspace;
-    if (!existsSync11(workspace.knowledgeDbPath))
+    if (!existsSync12(workspace.knowledgeDbPath))
       return emptyReindexHealth();
     return reindexHealth({
       ...options,
@@ -27012,7 +27643,7 @@ class KnowledgeService {
   }
   embeddingStatus() {
     const workspace = this.workspace;
-    if (!existsSync11(workspace.knowledgeDbPath))
+    if (!existsSync12(workspace.knowledgeDbPath))
       return emptyEmbeddingStatus();
     return embeddingIndexStatus(workspace.knowledgeDbPath);
   }
@@ -27026,7 +27657,7 @@ class KnowledgeService {
   }
   async semanticSearch(options) {
     const workspace = this.workspace;
-    if (!existsSync11(workspace.knowledgeDbPath)) {
+    if (!existsSync12(workspace.knowledgeDbPath)) {
       return {
         provider: "openai",
         model: "text-embedding-3-small",
@@ -27044,8 +27675,8 @@ class KnowledgeService {
   async search(options) {
     const workspace = this.workspace;
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
-    if (!existsSync11(workspace.knowledgeDbPath)) {
-      if (existsSync11(legacyStorePath)) {
+    if (!existsSync12(workspace.knowledgeDbPath)) {
+      if (existsSync12(legacyStorePath)) {
         return hybridSearchLegacyStore({
           ...options,
           legacyStorePath,
@@ -27064,8 +27695,8 @@ class KnowledgeService {
   async retrieveContext(options) {
     const workspace = this.workspace;
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
-    if (!existsSync11(workspace.knowledgeDbPath)) {
-      if (existsSync11(legacyStorePath)) {
+    if (!existsSync12(workspace.knowledgeDbPath)) {
+      if (existsSync12(legacyStorePath)) {
         const search = await hybridSearchLegacyStore({
           ...options,
           legacyStorePath,
@@ -27087,9 +27718,9 @@ class KnowledgeService {
   async contextPack(options) {
     const workspace = this.workspace;
     const legacyStorePath = legacyStorePathForRead(this.scope, workspace, options.legacyStorePath);
-    if (!existsSync11(workspace.knowledgeDbPath)) {
+    if (!existsSync12(workspace.knowledgeDbPath)) {
       const query = (options.query ?? options.topic ?? "").trim();
-      if (query && options.source !== "loops" && options.source !== "runs" && existsSync11(legacyStorePath)) {
+      if (query && options.source !== "loops" && options.source !== "runs" && existsSync12(legacyStorePath)) {
         const search = await hybridSearchLegacyStore({
           ...options,
           query,
@@ -27154,7 +27785,7 @@ class KnowledgeService {
   }
   syncStatus() {
     const workspace = this.workspace;
-    if (!existsSync11(workspace.knowledgeDbPath)) {
+    if (!existsSync12(workspace.knowledgeDbPath)) {
       return emptySyncStatus({
         scope: this.scope,
         workspaceHome: workspace.home
@@ -27375,7 +28006,7 @@ class KnowledgeService {
   }
   syncConflicts(options = {}) {
     const workspace = this.workspace;
-    if (!existsSync11(workspace.knowledgeDbPath))
+    if (!existsSync12(workspace.knowledgeDbPath))
       return [];
     return listKnowledgeSyncConflicts(workspace.knowledgeDbPath, options);
   }
@@ -27448,7 +28079,7 @@ class KnowledgeService {
   }
   syncMachines() {
     const workspace = this.workspace;
-    if (!existsSync11(workspace.knowledgeDbPath))
+    if (!existsSync12(workspace.knowledgeDbPath))
       return [];
     return listKnowledgeMachines(workspace.knowledgeDbPath);
   }
@@ -27591,7 +28222,7 @@ class KnowledgeService {
     const direction = options.direction ?? "both";
     const localWorkspace = this.ensureWorkspace();
     migrateKnowledgeDb(localWorkspace.knowledgeDbPath);
-    const peerWorkspaceInput = resolve4(options.peerWorkspace);
+    const peerWorkspaceInput = resolve5(options.peerWorkspace);
     const peerWorkspace = resolvePeerWorkspace(peerWorkspaceInput);
     migrateKnowledgeDb(peerWorkspace.knowledgeDbPath);
     const peerConfig = readKnowledgeConfig(peerWorkspace.configPath);
@@ -27722,7 +28353,8 @@ function createKnowledgeClient(options = {}) {
     },
     ingest: {
       manifest: (input) => service.ingestManifest(input),
-      source: (sourceRef, purpose) => service.ingestSource(sourceRef, purpose)
+      source: (sourceRef, purpose) => service.ingestSource(sourceRef, purpose),
+      rules: (input = {}) => service.importRulesProvenance(input)
     },
     sources: {
       resolve: (sourceRef, input = {}) => service.resolveSource(sourceRef, input),
@@ -33326,6 +33958,7 @@ export {
   ingestOpenFilesManifestItems,
   ingestOpenFilesManifest,
   indexKnowledgeEmbeddings,
+  importRulesProvenance,
   hybridSearch,
   hashArtifactBody,
   globalKnowledgeHome,

@@ -43,6 +43,10 @@ import { providerStatus, listModelRegistry, type ProviderStatusResult, type Mode
 import { enqueueMissingEmbeddings, refreshEmbeddingIndex, reindexHealth, type ReindexRuntimeOptions } from './reindex';
 import { knowledgeRegistryContract, RemoteKnowledgeClient, type RemoteKnowledgeRegistryContract } from './remote-client';
 import { retrieveKnowledgeContext, retrieveKnowledgeContextFromSearch, type KnowledgeContextPack, type RetrievalOptions } from './retrieval';
+import {
+  importRulesProvenance,
+  type RulesProvenanceImportResult,
+} from './rules-provenance';
 import { hybridSearch, hybridSearchLegacyStore, type HybridSearchOptions, type HybridSearchResult } from './search';
 import { recordAuditEvent, redactSecrets, resolveSafetyPolicy, type SafetyPolicy } from './safety';
 import { runProviderWebSearch, type WebSearchOptions } from './web-search';
@@ -401,6 +405,18 @@ export interface KnowledgeSyncConflictAiProposalServiceOptions {
   fake?: boolean;
   env?: KnowledgeSyncConflictAiProposalOptions['env'];
 }
+
+export interface KnowledgeRulesProvenanceImportOptions {
+  root?: string;
+  owner?: string;
+  dryRun?: boolean;
+  deprecateLegacy?: boolean;
+  includeLegacy?: boolean;
+  maxItems?: number;
+  limit?: number;
+}
+
+export type KnowledgeRulesProvenanceImportResult = RulesProvenanceImportResult;
 
 export type KnowledgeSyncConflictResolveResult = {
   ok: false;
@@ -2081,6 +2097,24 @@ export class KnowledgeService {
       purpose,
       config: this.config(),
       safetyPolicy: this.safetyPolicy(),
+    });
+  }
+
+  async importRulesProvenance(options: KnowledgeRulesProvenanceImportOptions = {}): Promise<KnowledgeRulesProvenanceImportResult> {
+    const dryRun = options.dryRun !== false;
+    const workspace = dryRun ? this.workspace : this.ensureWorkspace();
+    return importRulesProvenance({
+      root: options.root ?? this.options.cwd ?? process.cwd(),
+      scope: this.scope,
+      owner: options.owner,
+      dryRun,
+      deprecateLegacy: options.deprecateLegacy,
+      includeLegacy: options.includeLegacy,
+      legacyStorePath: workspace.jsonStorePath,
+      dbPath: workspace.knowledgeDbPath,
+      safetyPolicy: this.safetyPolicy(),
+      maxItems: options.maxItems,
+      limit: options.limit,
     });
   }
 

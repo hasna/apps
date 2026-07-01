@@ -14,6 +14,7 @@ export type KnowledgeSyncBundleOptions = Parameters<KnowledgeService['exportSync
 export type KnowledgeSyncImportOptions = Parameters<KnowledgeService['importSyncBundle']>[0];
 export type KnowledgePeerSyncOptions = Parameters<KnowledgeService['syncPeer']>[0];
 export type KnowledgeRemotePeerSyncOptions = Parameters<KnowledgeService['syncRemotePeer']>[0];
+export type KnowledgeRulesProvenanceOptions = Parameters<KnowledgeService['importRulesProvenance']>[0];
 export interface KnowledgeClient {
     /**
      * Escape hatch for advanced integrations. Prefer the grouped SDK methods for
@@ -66,6 +67,7 @@ export interface KnowledgeClient {
     readonly ingest: {
         readonly manifest: (input: string) => ReturnType<KnowledgeService['ingestManifest']>;
         readonly source: (sourceRef: string, purpose?: string) => ReturnType<KnowledgeService['ingestSource']>;
+        readonly rules: (options?: KnowledgeRulesProvenanceOptions) => ReturnType<KnowledgeService['importRulesProvenance']>;
     };
     readonly sources: {
         readonly resolve: (sourceRef: string, options?: Parameters<KnowledgeService['resolveSource']>[1]) => ReturnType<KnowledgeService['resolveSource']>;
