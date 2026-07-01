@@ -363,6 +363,13 @@ describe('knowledge cli', () => {
     expect(JSON.parse(new TextDecoder().decode(emptyDbStats.stdout)).schema_version).toBe(0);
     expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
 
+    const inventory = runCli(['inventory', '--scope', 'project', '--json'], dir);
+    expect(inventory.exitCode).toBe(0);
+    const inventoryOut = JSON.parse(new TextDecoder().decode(inventory.stdout));
+    expect(inventoryOut.paths.knowledge_db_exists).toBe(false);
+    expect(inventoryOut.summary.sources).toBe(0);
+    expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
+
     const emptySearch = runCli(['search', 'anything', '--scope', 'project', '--json'], dir);
     expect(emptySearch.exitCode).toBe(0);
     expect(JSON.parse(new TextDecoder().decode(emptySearch.stdout)).results).toEqual([]);
@@ -374,6 +381,27 @@ describe('knowledge cli', () => {
     expect(emptyContextSearchOut.excerpts).toEqual([]);
     expect(emptyContextSearchOut.citations).toEqual([]);
     expect(emptyContextSearchOut.warnings).toContain('knowledge_db_missing');
+    expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
+
+    const syncStatus = runCli(['sync', 'status', '--scope', 'project', '--json'], dir);
+    expect(syncStatus.exitCode).toBe(0);
+    const syncStatusOut = JSON.parse(new TextDecoder().decode(syncStatus.stdout));
+    expect(syncStatusOut.machines.total).toBe(0);
+    expect(syncStatusOut.conflicts.open).toBe(0);
+    expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
+
+    const syncMachines = runCli(['sync', 'machines', '--scope', 'project', '--json'], dir);
+    expect(syncMachines.exitCode).toBe(0);
+    const syncMachinesOut = JSON.parse(new TextDecoder().decode(syncMachines.stdout));
+    expect(syncMachinesOut.machines).toEqual([]);
+    expect(syncMachinesOut.message).toBe('0 registered sync machine(s)');
+    expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
+
+    const syncConflicts = runCli(['sync', 'conflicts', '--scope', 'project', '--json'], dir);
+    expect(syncConflicts.exitCode).toBe(0);
+    const syncConflictsOut = JSON.parse(new TextDecoder().decode(syncConflicts.stdout));
+    expect(syncConflictsOut.conflicts).toEqual([]);
+    expect(syncConflictsOut.message).toBe('0 sync conflict(s)');
     expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
 
     const emptyStats = runCli(['stats', '--scope', 'project', '--json'], dir);
@@ -471,6 +499,56 @@ describe('knowledge cli', () => {
     const migrateOut = JSON.parse(new TextDecoder().decode(migrate.stdout));
     expect(migrateOut.migrated).toBe(true);
     expect(existsSync(join(dir, '.hasna', 'knowledge', 'db.json'))).toBe(true);
+  });
+
+  test('source and built sync listing commands stay read only without workspaces', () => {
+    const sourceDir = mkdtempSync(join(tmpdir(), 'ok-sync-readonly-source-'));
+    const sourceHome = mkdtempSync(join(tmpdir(), 'ok-sync-readonly-source-home-'));
+
+    const sourceProjectMachines = runCli(['sync', 'machines', '--scope', 'project', '--json'], sourceDir, { HOME: sourceHome });
+    expect(sourceProjectMachines.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(sourceProjectMachines.stdout)).machines).toEqual([]);
+    expect(existsSync(join(sourceDir, '.hasna', 'knowledge'))).toBe(false);
+    expect(existsSync(join(sourceHome, '.hasna', 'knowledge'))).toBe(false);
+
+    const sourceProjectConflicts = runCli(['sync', 'conflicts', '--scope', 'project', '--json'], sourceDir, { HOME: sourceHome });
+    expect(sourceProjectConflicts.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(sourceProjectConflicts.stdout)).conflicts).toEqual([]);
+    expect(existsSync(join(sourceDir, '.hasna', 'knowledge'))).toBe(false);
+    expect(existsSync(join(sourceHome, '.hasna', 'knowledge'))).toBe(false);
+
+    const sourceGlobalMachines = runCli(['sync', 'machines', '--scope', 'global', '--json'], sourceDir, { HOME: sourceHome });
+    expect(sourceGlobalMachines.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(sourceGlobalMachines.stdout)).machines).toEqual([]);
+    expect(existsSync(join(sourceHome, '.hasna', 'knowledge'))).toBe(false);
+
+    const builtDir = mkdtempSync(join(tmpdir(), 'ok-sync-readonly-built-'));
+    const builtHome = mkdtempSync(join(tmpdir(), 'ok-sync-readonly-built-home-'));
+
+    const builtProjectMachines = runBuiltKnowledgeBin(['sync', 'machines', '--scope', 'project', '--json'], builtDir, { HOME: builtHome });
+    expect(builtProjectMachines.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(builtProjectMachines.stdout)).machines).toEqual([]);
+    expect(existsSync(join(builtDir, '.hasna', 'knowledge'))).toBe(false);
+    expect(existsSync(join(builtHome, '.hasna', 'knowledge'))).toBe(false);
+
+    const builtProjectConflicts = runBuiltKnowledgeBin(['sync', 'conflicts', '--scope', 'project', '--json'], builtDir, { HOME: builtHome });
+    expect(builtProjectConflicts.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(builtProjectConflicts.stdout)).conflicts).toEqual([]);
+    expect(existsSync(join(builtDir, '.hasna', 'knowledge'))).toBe(false);
+    expect(existsSync(join(builtHome, '.hasna', 'knowledge'))).toBe(false);
+
+    const builtGlobalMachines = runBuiltKnowledgeBin(['sync', 'machines', '--scope', 'global', '--json'], builtDir, { HOME: builtHome });
+    expect(builtGlobalMachines.exitCode).toBe(0);
+    expect(JSON.parse(new TextDecoder().decode(builtGlobalMachines.stdout)).machines).toEqual([]);
+    expect(existsSync(join(builtHome, '.hasna', 'knowledge'))).toBe(false);
+
+    const builtContextSearch = runBuiltKnowledgeBin(['search', 'anything', '--context', '--scope', 'project', '--json'], builtDir, { HOME: builtHome });
+    expect(builtContextSearch.exitCode).toBe(0);
+    const builtContextSearchOut = JSON.parse(new TextDecoder().decode(builtContextSearch.stdout));
+    expect(builtContextSearchOut.excerpts).toEqual([]);
+    expect(builtContextSearchOut.warnings).toContain('knowledge_db_missing');
+    expect(existsSync(join(builtDir, '.hasna', 'knowledge'))).toBe(false);
+    expect(existsSync(join(builtHome, '.hasna', 'knowledge'))).toBe(false);
   });
 
   test('machines topology command exposes adapter-aware topology shape', () => {

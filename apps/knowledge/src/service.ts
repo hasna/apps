@@ -2397,7 +2397,8 @@ export class KnowledgeService {
   }
 
   syncConflicts(options: { status?: string; limit?: number } = {}) {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
+    if (!existsSync(workspace.knowledgeDbPath)) return [];
     return listKnowledgeSyncConflicts(workspace.knowledgeDbPath, options);
   }
 
@@ -2472,7 +2473,8 @@ export class KnowledgeService {
   }
 
   syncMachines() {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
+    if (!existsSync(workspace.knowledgeDbPath)) return [];
     return listKnowledgeMachines(workspace.knowledgeDbPath);
   }
 

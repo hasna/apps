@@ -27309,7 +27309,9 @@ class KnowledgeService {
     });
   }
   syncConflicts(options = {}) {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
+    if (!existsSync11(workspace.knowledgeDbPath))
+      return [];
     return listKnowledgeSyncConflicts(workspace.knowledgeDbPath, options);
   }
   syncConflict(id) {
@@ -27380,7 +27382,9 @@ class KnowledgeService {
     }
   }
   syncMachines() {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
+    if (!existsSync11(workspace.knowledgeDbPath))
+      return [];
     return listKnowledgeMachines(workspace.knowledgeDbPath);
   }
   exportSyncBundle(options = {}) {
