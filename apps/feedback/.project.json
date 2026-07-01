@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "wks_58gi6pfsqf3z",
+  "slug": "open-feedback",
+  "name": "Open Feedback",
+  "kind": "open-source",
+  "root_id": null,
+  "recipe_id": null,
+  "primary_path": "/home/hasna/workspace/hasna/opensource/open-feedback",
+  "git_remote": "https://github.com/hasna/feedback.git",
+  "tags": [
+    "open-source",
+    "feedback",
+    "sdk",
+    "cli",
+    "mcp",
+    "api",
+    "typescript"
+  ],
+  "integrations": {
+    "github_repo": "hasna/feedback",
+    "github_url": "https://github.com/hasna/feedback"
+  },
+  "generated_at": "2026-07-01T07:08:44.279Z"
+}
