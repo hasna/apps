@@ -175,13 +175,16 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--tag <tag>", "Filter by tag")
     .option("--limit <n>", "Limit results", "500")
     .option("--format <format>", "json or jsonl", "jsonl")
-    .action(async (options: { app?: string; status?: FeedbackStatus; tag?: string; limit?: string; format: string }) => {
+    .option("--api-url <url>", "Remote Open Feedback API URL")
+    .option("--token <token>", "API bearer token")
+    .action(async (options: { app?: string; status?: FeedbackStatus; tag?: string; limit?: string; format: string; apiUrl?: string; token?: string }) => {
       const filter = commonFilter({ ...options, status: options.status ? parseFeedbackStatus(options.status) : undefined });
+      const client = maybeClient(options);
       if (options.format === "json") {
-        printJson(await localStore().listFeedback(filter));
+        printJson(client ? await client.list(filter) : await localStore().listFeedback(filter));
         return;
       }
-      process.stdout.write(await localStore().exportJsonl(filter));
+      process.stdout.write(client ? await client.exportJsonl(filter) : await localStore().exportJsonl(filter));
     });
 
   await program.parseAsync(argv);
@@ -198,4 +201,3 @@ if (isDirectRun) {
     process.exit(1);
   });
 }
-

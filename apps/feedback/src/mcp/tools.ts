@@ -41,6 +41,15 @@ function readInput(input: Record<string, unknown>): FeedbackInput {
   };
 }
 
+function listFilterFromInput(input: Record<string, unknown>) {
+  return {
+    appId: typeof input.app_id === "string" ? input.app_id : undefined,
+    status: typeof input.status === "string" ? parseFeedbackStatus(input.status) : undefined,
+    tag: typeof input.tag === "string" ? input.tag : undefined,
+    limit: typeof input.limit === "number" ? input.limit : undefined,
+  };
+}
+
 export function buildFeedbackMcpTools(store: FeedbackStore = new LocalFeedbackStore()): FeedbackMcpToolDefinition[] {
   const tools: Omit<FeedbackMcpToolDefinition, "inputSchema">[] = [
     {
@@ -76,12 +85,7 @@ export function buildFeedbackMcpTools(store: FeedbackStore = new LocalFeedbackSt
         tag: z.string().optional(),
         limit: z.number().int().min(1).max(500).optional(),
       },
-      run: async (input) => jsonContent(await store.listFeedback({
-        appId: typeof input.app_id === "string" ? input.app_id : undefined,
-        status: typeof input.status === "string" ? parseFeedbackStatus(input.status) : undefined,
-        tag: typeof input.tag === "string" ? input.tag : undefined,
-        limit: typeof input.limit === "number" ? input.limit : undefined,
-      })),
+      run: async (input) => jsonContent(await store.listFeedback(listFilterFromInput(input))),
     },
     {
       name: "get_feedback",
@@ -111,6 +115,23 @@ export function buildFeedbackMcpTools(store: FeedbackStore = new LocalFeedbackSt
       description: "Return aggregate feedback counts.",
       paramsSchema: {},
       run: async () => jsonContent(await store.stats()),
+    },
+    {
+      name: "export_feedback",
+      description: "Export collected feedback as JSONL or JSON.",
+      paramsSchema: {
+        app_id: z.string().optional(),
+        status: z.enum(["new", "triaged", "closed"]).optional(),
+        tag: z.string().optional(),
+        limit: z.number().int().min(1).max(500).optional(),
+        format: z.enum(["jsonl", "json"]).optional(),
+      },
+      run: async (input) => {
+        const filter = listFilterFromInput(input);
+        return input.format === "json"
+          ? jsonContent(await store.listFeedback(filter))
+          : textContent(await store.exportJsonl(filter));
+      },
     },
   ];
 
@@ -174,4 +195,3 @@ function zodSchemaToJsonSchema(schema: z.ZodTypeAny): Record<string, unknown> | 
 function asJsonSchemaObject(schema: Record<string, unknown> | boolean): Record<string, unknown> {
   return typeof schema === "boolean" ? {} : schema;
 }
-

@@ -15,6 +15,7 @@ For local CLI usage:
 ```bash
 bunx @hasna/feedback init
 feedback serve --port 8787
+feedback-serve --port 8787
 ```
 
 ## HTTP API
@@ -102,6 +103,20 @@ feedback export --format jsonl
 
 Use `--api-url` and `--token` to target a remote Open Feedback API instead of local JSONL storage.
 
+### Terminal Slash Commands
+
+For terminal or agent slash-command style workflows, wire the command body to `feedback submit` and pass the current app slug:
+
+```bash
+# /feedback Add an activity filter to the inbox view
+feedback submit "Add an activity filter to the inbox view" --app my-app --kind idea --tag slash-command
+
+# /bug Export fails after picking a date range
+feedback submit "Export fails after picking a date range" --app my-app --kind bug --severity high
+```
+
+The slash-command wrapper should provide `--api-url` and `--token` when feedback belongs in a shared deployment.
+
 ## MCP
 
 Run the MCP server:
@@ -117,6 +132,7 @@ Available tools:
 - `get_feedback`
 - `update_feedback_status`
 - `feedback_stats`
+- `export_feedback`
 
 ## Storage
 
@@ -144,4 +160,3 @@ bun run build
 ## Security
 
 Open Feedback redacts common credential patterns and sensitive metadata keys before storing feedback. Treat feedback exports as potentially sensitive product data. Do not commit feedback JSONL files or API tokens.
-

@@ -16,7 +16,8 @@ describe("feedback validation", () => {
   test("redacts common secrets in text and metadata", () => {
     const parsed = parseFeedbackInput({
       appId: "app",
-      message: `token sk-${"proj"}-abcdefghijklmnopqrstuvwxyz123456 leaked`,
+      message: `token sk-${"proj"}-abcdefghijklmnopqrstuvwxyz123456 leaked. Authorization: Bearer synthetic-value and secret-${"token"}: synthetic-value`,
+      url: "https://example.com/path?token=plain-value&ok=1",
       metadata: {
         apiToken: "do-not-store",
         nested: {
@@ -25,6 +26,8 @@ describe("feedback validation", () => {
       },
     });
     expect(parsed.message).toContain("[redacted]");
+    expect(parsed.message).not.toContain("synthetic-value");
+    expect(parsed.url).toBe("https://example.com/path?token=[redacted]&ok=1");
     expect(parsed.metadata?.apiToken).toBe("[redacted]");
     expect((parsed.metadata?.nested as { value: string }).value).toBe("[redacted]");
   });

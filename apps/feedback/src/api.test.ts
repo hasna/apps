@@ -21,6 +21,25 @@ async function createTestClient() {
 }
 
 describe("Feedback HTTP API and SDK", () => {
+  test("supports browser-relative base URLs", async () => {
+    const seen: string[] = [];
+    const client = new FeedbackClient({
+      baseUrl: "/api/feedback",
+      fetch: async (input) => {
+        seen.push(String(input));
+        return new Response(JSON.stringify({ id: "fb_1", appId: "browser-app", message: "Browser feedback" }), { status: 201 });
+      },
+    });
+    expect(await client.submit({ appId: "browser-app", message: "Browser feedback" })).toMatchObject({
+      appId: "browser-app",
+    });
+    await client.list({ appId: "browser-app", limit: 2 });
+    expect(seen).toEqual([
+      "/api/feedback/v1/feedback",
+      "/api/feedback/v1/feedback?appId=browser-app&limit=2",
+    ]);
+  });
+
   test("submits and lists feedback through SDK", async () => {
     const client = await createTestClient();
     const created = await client.submit({
@@ -35,6 +54,7 @@ describe("Feedback HTTP API and SDK", () => {
     expect(list).toHaveLength(1);
     expect(list[0]?.message).toBe("SDK issue");
     expect(await client.stats()).toMatchObject({ total: 1 });
+    expect(await client.exportJsonl({ appId: "sdk-app" })).toContain("SDK issue");
   });
 
   test("rejects requests with missing token when configured", async () => {
@@ -44,4 +64,3 @@ describe("Feedback HTTP API and SDK", () => {
     expect(response.status).toBe(401);
   });
 });
-

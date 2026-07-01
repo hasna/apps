@@ -54,6 +54,11 @@ export const feedbackItemSchema = feedbackInputSchema.extend({
 });
 
 const sensitiveKeyPattern = /(?:api[_-]?key|authorization|cookie|password|secret|token|refresh[_-]?token|access[_-]?token|private[_-]?key)/i;
+const sensitiveAssignmentPattern =
+  /\b(api[_-]?key|authorization|cookie|password|secret|token|refresh[_-]?token|access[_-]?token|private[_-]?key)=([^&\s]+)/gi;
+const sensitiveHeaderPattern =
+  /\b(api[_-]?key|authorization|cookie|password|secret|secret[_-]?token|token|refresh[_-]?token|access[_-]?token|private[_-]?key)\s*:\s*([^\n\r,;]+)/gi;
+const bearerPattern = /\bbearer\s+[A-Za-z0-9._~+/=-]{8,}/gi;
 
 const secretPatterns: RegExp[] = [
   new RegExp(`sk-${"ant"}-[A-Za-z0-9_-]{12,}`, "g"),
@@ -67,7 +72,11 @@ const secretPatterns: RegExp[] = [
 ];
 
 export function redactSecretsInText(value: string): string {
-  return secretPatterns.reduce((next, pattern) => next.replace(pattern, "[redacted]"), value);
+  const withoutKnownSecrets = secretPatterns.reduce((next, pattern) => next.replace(pattern, "[redacted]"), value);
+  return withoutKnownSecrets
+    .replace(sensitiveAssignmentPattern, (_match, key: string) => `${key}=[redacted]`)
+    .replace(sensitiveHeaderPattern, (_match, key: string) => `${key}: [redacted]`)
+    .replace(bearerPattern, "Bearer [redacted]");
 }
 
 export function redactSensitiveJson(value: JsonValue, keyPath: string[] = []): JsonValue {
@@ -96,6 +105,7 @@ export function parseFeedbackInput(input: unknown): FeedbackInput {
     appId: parsed.appId.trim(),
     message: redactSecretsInText(parsed.message.trim()),
     userId: parsed.userId?.trim(),
+    url: parsed.url ? redactSecretsInText(parsed.url) : undefined,
     tags: normalizeTags(parsed.tags),
     metadata,
     context,

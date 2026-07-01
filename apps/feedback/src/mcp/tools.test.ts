@@ -28,6 +28,10 @@ describe("feedback MCP tools", () => {
       source: "mcp",
     });
     expect(await store.listFeedback({ appId: "mcp-app" })).toHaveLength(1);
+
+    const exportTool = tools.find((tool) => tool.name === "export_feedback");
+    expect(exportTool).toBeDefined();
+    const exported = await exportTool!.run({ app_id: "mcp-app", format: "jsonl" });
+    expect(textFromResult(exported)).toContain("Agent feedback");
   });
 });
-

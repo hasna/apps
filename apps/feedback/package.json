@@ -7,8 +7,8 @@
   "types": "dist/index.d.ts",
   "bin": {
     "feedback": "dist/cli/index.js",
-    "feedback-mcp": "dist/mcp/index.js",
-    "feedback-serve": "dist/server/index.js"
+    "feedback-mcp": "dist/mcp/cli.js",
+    "feedback-serve": "dist/server/cli.js"
   },
   "exports": {
     ".": {
@@ -42,7 +42,7 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun build src/index.ts src/api.ts src/storage.ts --outdir dist --target bun && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "bun run clean && bun build src/index.ts src/api.ts src/storage.ts --outdir dist --target bun && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts src/mcp/cli.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts src/server/cli.ts --outdir dist/server --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.ts",

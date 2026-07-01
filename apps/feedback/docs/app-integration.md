@@ -22,7 +22,6 @@ import { createFeedbackClient } from "@hasna/feedback";
 
 const feedback = createFeedbackClient({
   baseUrl: import.meta.env.VITE_FEEDBACK_API_URL,
-  token: import.meta.env.VITE_FEEDBACK_TOKEN,
 });
 
 export async function sendFeedback(message: string) {
@@ -42,6 +41,61 @@ export async function sendFeedback(message: string) {
 ```
 
 For public browser clients, prefer a short-lived app backend endpoint that adds the Open Feedback API token server-side.
+
+## Feedback Button and Popover
+
+Apps should expose feedback from the active workflow, usually as a small button in the app toolbar, account menu, or page footer. Keep the popover focused on the report itself and collect enough context automatically so users do not need to describe where they are.
+
+```tsx
+import { useState } from "react";
+import { createFeedbackClient } from "@hasna/feedback";
+
+const feedback = createFeedbackClient({
+  baseUrl: "/api/feedback",
+});
+
+export function FeedbackButton() {
+  const [open, setOpen] = useState(false);
+  const [message, setMessage] = useState("");
+
+  async function submitFeedback() {
+    await feedback.submit({
+      appId: "my-browser-app",
+      message,
+      kind: "other",
+      context: {
+        route: window.location.pathname,
+        url: window.location.href,
+        userAgent: navigator.userAgent,
+        viewport: `${window.innerWidth}x${window.innerHeight}`,
+      },
+    });
+    setMessage("");
+    setOpen(false);
+  }
+
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)}>Feedback</button>
+      {open ? (
+        <form
+          role="dialog"
+          aria-label="Send feedback"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submitFeedback();
+          }}
+        >
+          <textarea value={message} onChange={(event) => setMessage(event.currentTarget.value)} />
+          <button type="submit">Send</button>
+        </form>
+      ) : null}
+    </>
+  );
+}
+```
+
+If the deployed API uses `FEEDBACK_API_TOKEN`, route browser submissions through your app backend and add the token server-side instead of shipping it to the browser.
 
 ## Server Apps
 
@@ -85,6 +139,16 @@ feedback list --app my-app
 feedback export --format jsonl > feedback.jsonl
 ```
 
+Terminal slash-command wrappers can delegate directly to the same CLI:
+
+```bash
+# /feedback Search results need date filters
+feedback submit "Search results need date filters" --app my-app --kind idea --tag slash-command
+
+# /bug Billing export fails on custom ranges
+feedback submit "Billing export fails on custom ranges" --app my-app --kind bug --severity high
+```
+
 ## MCP Collection
 
 Agents can run `feedback-mcp` and call `submit_feedback` with the same shape as the HTTP API. This gives coding agents a standard place to file product feedback discovered during implementation or verification.
@@ -92,4 +156,3 @@ Agents can run `feedback-mcp` and call `submit_feedback` with the same shape as 
 ## Data Handling
 
 Open Feedback stores newline-delimited JSON in `~/.hasna/feedback/feedback.jsonl` by default. The JSONL format is intentionally portable: teams can archive it, load it into a database later, or pipe it into analysis workflows.
-
