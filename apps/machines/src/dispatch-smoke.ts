@@ -416,9 +416,9 @@ function packageProbeCommand(command: string): string {
     'PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"',
     "export PATH",
     `cmd=${quoted}`,
-    'path="$(command -v "$cmd" 2>/dev/null || true)"',
-    'printf "path=%s\\n" "$path"',
-    'if [ -n "$path" ]; then version="$("$path" --version 2>&1 || true)"; printf "version=%s\\n" "$version"; fi',
+    'cmd_path="$(command -v "$cmd" 2>/dev/null || true)"',
+    'printf "path=%s\\n" "$cmd_path"',
+    'if [ -n "$cmd_path" ]; then version="$("$cmd_path" --version 2>&1 || true)"; printf "version=%s\\n" "$version"; fi',
   ].join("; ");
 }
 
