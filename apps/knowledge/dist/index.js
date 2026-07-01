@@ -25970,6 +25970,32 @@ function emptySearchResult(query, limit, semantic = false) {
     results: []
   };
 }
+function normalizeContextQuery(query) {
+  return query.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+}
+function emptyContextPack(query, limit, semantic = false) {
+  const search = emptySearchResult(query, limit, semantic);
+  return {
+    query,
+    normalized_query: normalizeContextQuery(query),
+    created_at: new Date().toISOString(),
+    mode: search.mode,
+    warnings: search.warnings,
+    search_counts: search.counts,
+    results: [],
+    citations: [],
+    excerpts: [],
+    graph: {
+      citations: [],
+      backlinks: []
+    },
+    notes: {
+      permissions: [],
+      freshness: [],
+      stability: ["Context evidence order is deterministic by final score and stable result id."]
+    }
+  };
+}
 function emptyReindexHealth() {
   return {
     schema_version: 0,
@@ -27014,7 +27040,10 @@ class KnowledgeService {
     });
   }
   async retrieveContext(options) {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
+    if (!existsSync11(workspace.knowledgeDbPath)) {
+      return emptyContextPack(options.query, Math.max(1, Math.min(options.limit ?? 10, 100)), options.semantic === true || options.fake === true || Boolean(options.modelRef));
+    }
     return retrieveKnowledgeContext({
       ...options,
       dbPath: workspace.knowledgeDbPath,

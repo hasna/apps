@@ -42,7 +42,7 @@ import { providerStatus, listModelRegistry, type ProviderStatusResult, type Mode
 import { provenanceStatusFor, type KnowledgeProvenanceStatus } from './provenance-validate';
 import { enqueueMissingEmbeddings, refreshEmbeddingIndex, reindexHealth, type ReindexRuntimeOptions } from './reindex';
 import { knowledgeRegistryContract, RemoteKnowledgeClient, type RemoteKnowledgeRegistryContract } from './remote-client';
-import { retrieveKnowledgeContext, type RetrievalOptions } from './retrieval';
+import { retrieveKnowledgeContext, type KnowledgeContextPack, type RetrievalOptions } from './retrieval';
 import { hybridSearch, type HybridSearchOptions, type HybridSearchResult } from './search';
 import { recordAuditEvent, resolveSafetyPolicy } from './safety';
 import { runProviderWebSearch, type WebSearchOptions } from './web-search';
@@ -871,6 +871,34 @@ function emptySearchResult(query: string, limit: number, semantic = false): Hybr
     },
     warnings: ['knowledge_db_missing'],
     results: [],
+  };
+}
+
+function normalizeContextQuery(query: string): string {
+  return query.normalize('NFKC').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function emptyContextPack(query: string, limit: number, semantic = false): KnowledgeContextPack {
+  const search = emptySearchResult(query, limit, semantic);
+  return {
+    query,
+    normalized_query: normalizeContextQuery(query),
+    created_at: new Date().toISOString(),
+    mode: search.mode,
+    warnings: search.warnings,
+    search_counts: search.counts,
+    results: [],
+    citations: [],
+    excerpts: [],
+    graph: {
+      citations: [],
+      backlinks: [],
+    },
+    notes: {
+      permissions: [],
+      freshness: [],
+      stability: ['Context evidence order is deterministic by final score and stable result id.'],
+    },
   };
 }
 
@@ -2075,7 +2103,14 @@ export class KnowledgeService {
   }
 
   async retrieveContext(options: Omit<RetrievalOptions, 'dbPath' | 'config'>) {
-    const workspace = this.ensureWorkspace();
+    const workspace = this.workspace;
+    if (!existsSync(workspace.knowledgeDbPath)) {
+      return emptyContextPack(
+        options.query,
+        Math.max(1, Math.min(options.limit ?? 10, 100)),
+        options.semantic === true || options.fake === true || Boolean(options.modelRef),
+      );
+    }
     return retrieveKnowledgeContext({
       ...options,
       dbPath: workspace.knowledgeDbPath,

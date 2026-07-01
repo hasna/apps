@@ -368,6 +368,14 @@ describe('knowledge cli', () => {
     expect(JSON.parse(new TextDecoder().decode(emptySearch.stdout)).results).toEqual([]);
     expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
 
+    const emptyContextSearch = runCli(['search', 'anything', '--context', '--scope', 'project', '--json'], dir);
+    expect(emptyContextSearch.exitCode).toBe(0);
+    const emptyContextSearchOut = JSON.parse(new TextDecoder().decode(emptyContextSearch.stdout));
+    expect(emptyContextSearchOut.excerpts).toEqual([]);
+    expect(emptyContextSearchOut.citations).toEqual([]);
+    expect(emptyContextSearchOut.warnings).toContain('knowledge_db_missing');
+    expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
+
     const emptyStats = runCli(['stats', '--scope', 'project', '--json'], dir);
     expect(emptyStats.exitCode).toBe(0);
     expect(JSON.parse(new TextDecoder().decode(emptyStats.stdout)).store_exists).toBe(false);
