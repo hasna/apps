@@ -561,6 +561,39 @@ describe("storage adapter contracts", () => {
     expect(postgres.calls.some((call) => call.values?.includes("spark01"))).toBe(true);
   });
 
+  test("matches SQLite plan slug semantics in the direct Postgres adapter", async () => {
+    const postgres = createMemoryPostgresClient();
+    const adapter = createPostgresTodosStorageAdapter({
+      client: postgres.client,
+      sourceMachineId: "spark01",
+    });
+    const project = await adapter.projects.create({ name: "Remote Slugs", path: "/tmp/remote-slugs" });
+    const otherProject = await adapter.projects.create({ name: "Other Remote Slugs", path: "/tmp/other-remote-slugs" });
+
+    const explicit = await adapter.plans.create({
+      name: "Remote Explicit",
+      slug: "Remote Explicit!",
+      project_id: project.id,
+    });
+    const firstDuplicate = await adapter.plans.create({ name: "Remote Duplicate", project_id: project.id });
+    const secondDuplicate = await adapter.plans.create({ name: "Remote Duplicate", project_id: project.id });
+    const crossProject = await adapter.plans.create({
+      name: "Remote Explicit",
+      slug: "remote-explicit",
+      project_id: otherProject.id,
+    });
+
+    expect(explicit.slug).toBe("remote-explicit");
+    expect(firstDuplicate.slug).toBe("remote-duplicate");
+    expect(secondDuplicate.slug).toBe("remote-duplicate-2");
+    expect(crossProject.slug).toBe("remote-explicit");
+    await expect(adapter.plans.create({
+      name: "Conflicting Explicit",
+      slug: "remote explicit",
+      project_id: project.id,
+    })).rejects.toThrow("Plan slug already exists in this scope: remote-explicit");
+  });
+
   test("preserves direct Postgres tombstone clocks and rejects stale import records", async () => {
     const postgres = createMemoryPostgresClient();
     const adapter = createPostgresTodosStorageAdapter({

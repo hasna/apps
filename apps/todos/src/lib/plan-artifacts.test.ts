@@ -34,6 +34,15 @@ afterEach(() => {
 });
 
 describe("plan Markdown artifacts", () => {
+  test("native storage docs describe slugged plan artifact schema", () => {
+    const docs = readFileSync(new URL("../../docs/native-storage.md", import.meta.url), "utf8");
+
+    expect(docs).toContain("<plan-slug>--<id8>.md");
+    expect(docs).toContain('plan_slug: "launch-plan"');
+    expect(docs).toContain("legacy UUID path");
+    expect(docs).toContain("todos plans --artifact <id-or-slug> --json");
+  });
+
   test("resolves project-scoped artifact paths by id and slug", () => {
     const db = getDatabase();
     const projectRoot = join(root, "project");

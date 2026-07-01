@@ -606,10 +606,17 @@ async function updateProject(
 
 async function createPlan(input: CreatePlanInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<Plan> {
   const timestamp = new Date().toISOString();
+  const projectId = input.project_id ?? context?.projectId ?? null;
+  const slug = await resolvePostgresPlanSlug({
+    name: input.name,
+    slug: input.slug,
+    projectId,
+    store,
+  });
   return store.upsert("plans", {
     id: randomUUID(),
-    slug: input.slug ?? slugify(input.name),
-    project_id: input.project_id ?? context?.projectId ?? null,
+    slug,
+    project_id: projectId,
     task_list_id: input.task_list_id ?? context?.taskListId ?? null,
     agent_id: input.agent_id ?? context?.agentId ?? null,
     name: input.name,
@@ -624,7 +631,17 @@ async function createPlan(input: CreatePlanInput, store: PostgresJsonRecordStore
 
 async function updatePlan(id: string, input: UpdatePlanInput, store: PostgresJsonRecordStore): Promise<Plan> {
   const plan = await requireRecord<Plan>("plans", id, store);
-  return store.upsert("plans", { ...plan, ...definedPatch(input), updated_at: new Date().toISOString() });
+  const patch = definedPatch(input);
+  if (input.slug !== undefined) {
+    patch.slug = await resolvePostgresPlanSlug({
+      name: plan.name,
+      slug: input.slug,
+      projectId: plan.project_id,
+      store,
+      excludeId: id,
+    });
+  }
+  return store.upsert("plans", { ...plan, ...patch, updated_at: new Date().toISOString() });
 }
 
 async function registerAgent(
@@ -892,8 +909,50 @@ function priorityRank(priority: TaskPriority): number {
   return ({ critical: 0, high: 1, medium: 2, low: 3 } satisfies Record<TaskPriority, number>)[priority];
 }
 
+function slugifyRaw(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
 function slugify(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "todos";
+  return slugifyRaw(value) || "todos";
+}
+
+function normalizePlanSlug(value: string): string {
+  const slug = slugifyRaw(value);
+  if (!slug) throw new Error("Invalid plan slug");
+  return slug;
+}
+
+function planSlugBase(value: string): string {
+  return slugifyRaw(value) || "plan";
+}
+
+async function resolvePostgresPlanSlug(options: {
+  name: string;
+  slug?: string;
+  projectId: string | null;
+  store: PostgresJsonRecordStore;
+  excludeId?: string;
+}): Promise<string> {
+  const plans = await options.store.list<Plan>("plans");
+  const used = new Set(plans
+    .filter((plan) => plan.project_id === options.projectId && plan.id !== options.excludeId && plan.slug)
+    .map((plan) => plan.slug!));
+
+  if (options.slug !== undefined) {
+    const slug = normalizePlanSlug(options.slug);
+    if (used.has(slug)) throw new Error(`Plan slug already exists in this scope: ${slug}`);
+    return slug;
+  }
+
+  const base = planSlugBase(options.name);
+  let candidate = base;
+  let suffix = 2;
+  while (used.has(candidate)) {
+    candidate = `${base}-${suffix}`;
+    suffix += 1;
+  }
+  return candidate;
 }
 
 function definedPatch<T extends object>(value: T): Partial<T> {

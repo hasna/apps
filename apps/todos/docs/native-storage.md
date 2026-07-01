@@ -89,7 +89,7 @@ Project-scoped plans now have a local Markdown companion file. When the CLI
 creates or completes a plan with a project scope, it writes:
 
 ```text
-<project-root>/.hasna/todos/plans/<project-id>/<plan-id>.md
+<project-root>/.hasna/todos/plans/<project-id>/<plan-slug>--<id8>.md
 ```
 
 The SQLite plan row remains the registry source of truth. The Markdown file is
@@ -102,6 +102,7 @@ Each file uses the `hasna.todos.plan/v1` schema in frontmatter:
 ---
 schema: "hasna.todos.plan/v1"
 plan_id: "<stable plan UUID>"
+plan_slug: "launch-plan"
 project_id: "<stable project UUID>"
 task_list_id: null
 agent_id: null
@@ -126,24 +127,35 @@ projects from local SQLite by project ID, registered path, task-list slug, or
 project-name slug. Unscoped plans keep the previous DB-only behavior because
 the artifact layout is explicitly under `<project-id>`.
 
-`todos plans --show <plan>` reads the companion file when present and includes
-the parsed artifact metadata and body in JSON output. The text view prints the
-artifact path. If a file is missing, the command still shows the SQLite plan so
-older local databases remain compatible.
+`todos plans --show <id-or-slug>` reads the companion file when present and
+includes the parsed artifact metadata and body in JSON output. The text view
+prints the artifact path. If a file is missing, the command still shows the
+SQLite plan so older local databases remain compatible.
+
+For backwards compatibility, artifact readers also check the legacy UUID path:
+
+```text
+<project-root>/.hasna/todos/plans/<project-id>/<plan-id>.md
+```
+
+When both files exist, the slugged `<plan-slug>--<id8>.md` artifact wins. A
+future write or `--write-artifacts` run materializes the slugged artifact while
+leaving legacy files untouched for operator review.
 
 For migration and diagnostics:
 
 ```bash
 todos plans --write-artifacts
-todos plans --artifact <plan-id> --json
+todos plans --artifact <id-or-slug> --json
 ```
 
 `--write-artifacts` materializes Markdown files for every project-scoped plan in
-the current project scope. `--artifact` reports the resolved file path, whether
-the file exists, parse errors, task references, and deterministic conflicts
-between the SQLite row and Markdown frontmatter/task comments. The CLI does not
-silently treat the Markdown file as authoritative when conflicts exist; agents
-should resolve the conflict through the CLI or an explicit migration task.
+the current project scope using readable slug filenames. `--artifact` reports
+the resolved file path, whether the file exists, parse errors, task references,
+and deterministic conflicts between the SQLite row and Markdown
+frontmatter/task comments. The CLI does not silently treat the Markdown file as
+authoritative when conflicts exist; agents should resolve the conflict through
+the CLI or an explicit migration task.
 
 ## Hybrid Sync Shape
 

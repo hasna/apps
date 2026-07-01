@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { addComment } from "../db/comments.js";
 import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
-import { createPlan } from "../db/plans.js";
+import { createPlan, resolvePlanRef } from "../db/plans.js";
 import { createProject } from "../db/projects.js";
 import { createTaskList } from "../db/task-lists.js";
 import { linkTaskGitRef, linkTaskToCommit } from "../db/task-commits.js";
@@ -207,6 +207,33 @@ describe("local bridge import/export", () => {
       id: task.id,
       reason: "already_exists",
     });
+  });
+
+  test("backfills readable plan slugs when importing legacy bridge bundles", () => {
+    const sourceDb = getDatabase();
+    const project = createProject({ name: "Bridge legacy plans", path: "/tmp/bridge-legacy-plans" }, sourceDb);
+    const first = createPlan({ name: "Legacy Bridge Plan", project_id: project.id }, sourceDb);
+    const second = createPlan({ name: "Legacy Bridge Plan", project_id: project.id }, sourceDb);
+    const bundle = createLocalBridgeBundle({ project_id: project.id }, sourceDb);
+    for (const plan of bundle.data.plans as unknown as Array<Record<string, unknown>>) {
+      delete plan.slug;
+    }
+
+    closeDatabase();
+    process.env["TODOS_DB_PATH"] = ":memory:";
+    resetDatabase();
+    const targetDb = getDatabase();
+
+    const applied = importLocalBridgeBundle(bundle, { dryRun: false }, targetDb);
+    expect(applied.ok).toBe(true);
+    expect(applied.inserted.plans).toBe(2);
+
+    const rows = targetDb.query("SELECT id, slug FROM plans ORDER BY slug").all() as Array<{ id: string; slug: string | null }>;
+    expect(rows.map((row) => row.slug)).toEqual(["legacy-bridge-plan", "legacy-bridge-plan-2"]);
+    expect([resolvePlanRef("legacy-bridge-plan", targetDb, project.id), resolvePlanRef("legacy-bridge-plan-2", targetDb, project.id)].sort()).toEqual([
+      first.id,
+      second.id,
+    ].sort());
   });
 
   test("exports and imports local saved search views", () => {
