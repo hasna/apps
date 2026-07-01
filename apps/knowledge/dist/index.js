@@ -18222,6 +18222,15 @@ function recordRedactionFindings(db, input) {
   }
   return input.findings.length;
 }
+var COMMON_BARE_TOKEN_PATTERNS = [
+  { type: "github_token", severity: "high", regex: /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, replacement: "[REDACTED:github_token]" },
+  { type: "github_pat_token", severity: "high", regex: /\bgithub[_]pat[_][A-Za-z0-9_]{20,}\b/g, replacement: "[REDACTED:github_pat_token]" },
+  { type: "package_registry_token", severity: "high", regex: /\bnpm_[A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:package_registry_token]" },
+  { type: "context7_token", severity: "high", regex: /\bctx7sk[-][A-Za-z0-9_-]{10,}\b/g, replacement: "[REDACTED:context7_token]" },
+  { type: "xai_api_key", severity: "high", regex: /\bxai[-][A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:xai_api_key]" },
+  { type: "google_api_key", severity: "high", regex: /\bAIza[A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:google_api_key]" }
+];
+REDACTION_PATTERNS.push(...COMMON_BARE_TOKEN_PATTERNS);
 
 // src/context-pack.ts
 var DEFAULT_MAX_TOKENS = 1200;

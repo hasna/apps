@@ -260,6 +260,17 @@ export function createApprovalGate(db: Database, input: {
   return { id, status: 'approved' };
 }
 
+const COMMON_BARE_TOKEN_PATTERNS: Array<(typeof REDACTION_PATTERNS)[number]> = [
+  { type: 'github_token', severity: 'high', regex: /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, replacement: '[REDACTED:github_token]' },
+  { type: 'github_pat_token', severity: 'high', regex: /\bgithub[_]pat[_][A-Za-z0-9_]{20,}\b/g, replacement: '[REDACTED:github_pat_token]' },
+  { type: 'package_registry_token', severity: 'high', regex: /\bnpm_[A-Za-z0-9_-]{20,}\b/g, replacement: '[REDACTED:package_registry_token]' },
+  { type: 'context7_token', severity: 'high', regex: /\bctx7sk[-][A-Za-z0-9_-]{10,}\b/g, replacement: '[REDACTED:context7_token]' },
+  { type: 'xai_api_key', severity: 'high', regex: /\bxai[-][A-Za-z0-9_-]{20,}\b/g, replacement: '[REDACTED:xai_api_key]' },
+  { type: 'google_api_key', severity: 'high', regex: /\bAIza[A-Za-z0-9_-]{20,}\b/g, replacement: '[REDACTED:google_api_key]' },
+];
+
+REDACTION_PATTERNS.push(...COMMON_BARE_TOKEN_PATTERNS);
+
 export function hasApproval(db: Database, action: string, targetUri?: string | null): boolean {
   const row = db.query<{ id: string }, [string, string | null, string | null]>(
     `SELECT id FROM approval_gates

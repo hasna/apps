@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getKnowledgeDbStats, openKnowledgeDb } from '../src/knowledge-db';
 import { importRulesProvenance } from '../src/rules-provenance';
+import { redactSecrets } from '../src/safety';
 import { createKnowledgeService } from '../src/service';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -24,7 +25,50 @@ function runCli(args: string[], cwd: string) {
   };
 }
 
+function syntheticBareTokens(): string[] {
+  return [
+    ['ghp', '_', 'A'.repeat(36)].join(''),
+    ['gho', '_', 'B'.repeat(36)].join(''),
+    ['github', '_pat_', 'C'.repeat(36)].join(''),
+    ['npm', '_', 'D'.repeat(36)].join(''),
+    ['ctx7sk', '-', 'E'.repeat(24)].join(''),
+    ['xai', '-', 'F'.repeat(24)].join(''),
+    ['AI', 'za', 'G'.repeat(35)].join(''),
+    ['AK', 'IA', 'H'.repeat(16)].join(''),
+    ['sk', '-proj-', 'I'.repeat(32)].join(''),
+    ['sk', '-ant-', 'J'.repeat(32)].join(''),
+  ];
+}
+
+function syntheticBareTokenText(): string {
+  return syntheticBareTokens().map((value, index) => `case-${index}: ${value}`).join('\n');
+}
+
+function expectNoSyntheticBareTokens(value: unknown) {
+  const serialized = typeof value === 'string' ? value : JSON.stringify(value);
+  for (const token of syntheticBareTokens()) {
+    expect(serialized).not.toContain(token);
+  }
+}
+
+function expectNoSyntheticBareTokenBytes(paths: string[]) {
+  for (const path of paths.filter((candidate) => existsSync(candidate))) {
+    const bytes = readFileSync(path);
+    for (const token of syntheticBareTokens()) {
+      expect(bytes.includes(Buffer.from(token))).toBe(false);
+    }
+  }
+}
+
 describe('global rules provenance import', () => {
+  test('shared safety redactor covers bare token-shaped values', () => {
+    const result = redactSecrets(syntheticBareTokenText());
+
+    expect(result.findings.length).toBeGreaterThanOrEqual(syntheticBareTokens().length);
+    expectNoSyntheticBareTokens(result.text);
+    expect(result.findings.every((finding) => finding.severity === 'high')).toBe(true);
+  });
+
   test('dry-run discovers sources, refuses secret-like content, and writes nothing', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-rules-dry-run-'));
     mkdirSync(join(dir, '.claude', 'rules'), { recursive: true });
@@ -70,6 +114,40 @@ describe('global rules provenance import', () => {
       preview: null,
     });
     expect(JSON.stringify(result)).not.toContain('EXAMPLE_ONLY_REDACTION_SENTINEL');
+  });
+
+  test('dry-run refuses bare token-shaped content without echoing values', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-rules-bare-dry-run-'));
+    mkdirSync(join(dir, '.codewith', 'rules'), { recursive: true });
+    writeFileSync(join(dir, 'CODEWITH.md'), '# Global Rules\n\nUse source-backed records.');
+    writeFileSync(join(dir, '.codewith', 'rules', 'global.md'), `# Neutral Rule\n\n${syntheticBareTokenText()}`);
+
+    const result = await importRulesProvenance({
+      root: dir,
+      scope: 'project',
+      dryRun: true,
+      dbPath: join(dir, '.hasna', 'knowledge', 'knowledge.db'),
+      legacyStorePath: join(dir, '.hasna', 'knowledge', 'db.json'),
+      now: new Date('2026-07-01T10:00:00.000Z'),
+      limit: 10,
+    });
+
+    expect(result.dry_run).toBe(true);
+    expect(result.writes_performed).toBe(false);
+    expect(result.records_seen).toBe(2);
+    expect(result.records_importable).toBe(1);
+    expect(result.records_refused).toBe(1);
+    expect(existsSync(join(dir, '.hasna', 'knowledge', 'knowledge.db'))).toBe(false);
+
+    const refused = result.evidence.find((record) => record.source_path_ref === '.codewith/rules/global.md');
+    expect(refused).toMatchObject({
+      redaction_status: 'refused',
+      importable: false,
+      skipped_reason: 'secret_refused',
+      preview: null,
+    });
+    expect(refused?.redactions.length).toBeGreaterThanOrEqual(syntheticBareTokens().length);
+    expectNoSyntheticBareTokens(result);
   });
 
   test('apply imports through Knowledge storage and deprecates promoted legacy JSON notes', async () => {
@@ -135,6 +213,48 @@ describe('global rules provenance import', () => {
       source_ref: 'open-files://source/legacy-json/path/k_legacy_rules',
       data_loss: false,
     });
+  });
+
+  test('apply refuses bare token-shaped content before manifest ingestion and DB storage', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-rules-bare-apply-'));
+    mkdirSync(join(dir, '.codewith', 'rules'), { recursive: true });
+    writeFileSync(join(dir, 'CODEWITH.md'), '# Global Rules\n\nUse source-backed records.');
+    writeFileSync(join(dir, '.codewith', 'rules', 'global.md'), `# Neutral Rule\n\n${syntheticBareTokenText()}`);
+    const dbPath = join(dir, '.hasna', 'knowledge', 'knowledge.db');
+
+    const result = await importRulesProvenance({
+      root: dir,
+      scope: 'project',
+      dryRun: false,
+      dbPath,
+      legacyStorePath: join(dir, '.hasna', 'knowledge', 'db.json'),
+      now: new Date('2026-07-01T10:00:00.000Z'),
+      limit: 10,
+    });
+
+    expect(result.dry_run).toBe(false);
+    expect(result.writes_performed).toBe(true);
+    expect(result.records_seen).toBe(2);
+    expect(result.records_importable).toBe(1);
+    expect(result.records_refused).toBe(1);
+    expect(result.import_result?.items_seen).toBe(1);
+    expectNoSyntheticBareTokens(result);
+
+    const stats = getKnowledgeDbStats(dbPath);
+    expect(stats.sources).toBe(1);
+    expect(stats.chunks).toBe(1);
+
+    const db = openKnowledgeDb(dbPath);
+    try {
+      const rows = db.query<{ text: string; metadata_json: string }, []>(
+        'SELECT text, metadata_json FROM chunks',
+      ).all();
+      expect(rows).toHaveLength(1);
+      expectNoSyntheticBareTokens(rows);
+    } finally {
+      db.close();
+    }
+    expectNoSyntheticBareTokenBytes([dbPath, `${dbPath}-wal`, `${dbPath}-shm`]);
   });
 
   test('CLI dry-run emits bounded JSON and does not create a project workspace', () => {
