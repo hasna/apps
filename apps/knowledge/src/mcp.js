@@ -777,6 +777,82 @@ export function buildServer() {
     });
   });
 
+  registerTool(server, 'knowledge_app_wiki_init', 'Initialize app wiki scope', 'Create the scoped Hasna app/project wiki workspace and SQLite catalog through the Knowledge service', {
+    scope: scopeField,
+    allow_global: z.boolean().optional().describe('Required for global-scope app wiki writes'),
+  }, async ({ scope, allow_global }) => {
+    const service = createKnowledgeService({ scope: scope ?? 'project' });
+    try {
+      return jsonText(await service.initAppWiki({ allowGlobal: allow_global }));
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'knowledge_app_wiki_note_add', 'Add app wiki note', 'Write a scoped app/project wiki note through Knowledge artifacts and catalog rows', {
+    scope: scopeField,
+    title: z.string().describe('Note title'),
+    content: z.string().describe('Note content'),
+    tags: z.array(z.string()).optional().describe('Optional note tags'),
+    source_refs: z.array(z.string()).optional().describe('Optional source refs to cite'),
+    allow_global: z.boolean().optional().describe('Required for global-scope app wiki writes'),
+  }, async ({ scope, title, content, tags, source_refs, allow_global }) => {
+    const service = createKnowledgeService({ scope: scope ?? 'project' });
+    try {
+      return jsonText(await service.addAppWikiNote({
+        title,
+        content,
+        tags,
+        sourceRefs: source_refs,
+        allowGlobal: allow_global,
+      }));
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'knowledge_app_wiki_source_add', 'Add app wiki source ref', 'Ingest a read-only source ref into the scoped app/project wiki catalog', {
+    scope: scopeField,
+    source_ref: z.string().describe('Source reference URI, e.g. file://... or open-files://...'),
+    purpose: z.string().optional().describe('Purpose label, default knowledge_index'),
+    allow_global: z.boolean().optional().describe('Required for global-scope app wiki writes'),
+  }, async ({ scope, source_ref, purpose, allow_global }) => {
+    const service = createKnowledgeService({ scope: scope ?? 'project' });
+    try {
+      return jsonText({ ok: true, ...await service.addAppWikiSourceRef({
+        sourceRef: source_ref,
+        purpose,
+        allowGlobal: allow_global,
+      }) });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  registerTool(server, 'knowledge_app_wiki_search', 'Search app wiki scope', 'Search scoped app/project wiki notes, source refs, and catalog evidence', {
+    scope: scopeField,
+    query: z.string().describe('Search query'),
+    limit: z.number().optional().describe('Maximum results'),
+    semantic: z.boolean().optional().describe('Include vector semantic results'),
+    model: z.string().optional().describe('Embedding model ref'),
+    dimensions: z.number().optional().describe('Embedding dimensions for deterministic fake mode'),
+    fake: z.boolean().optional().describe('Use deterministic fake embeddings'),
+  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
+    const service = createKnowledgeService({ scope: scope ?? 'project' });
+    try {
+      return jsonText({ ok: true, ...await service.searchAppWiki({
+        query,
+        limit,
+        semantic,
+        modelRef: model,
+        dimensions,
+        fake,
+      }) });
+    } catch (error) {
+      return errorText(error instanceof Error ? error.message : String(error));
+    }
+  });
+
   registerTool(server, 'knowledge_machines_topology', 'Knowledge machine topology', 'Inspect optional open-machines topology and local fallback routes for knowledge sync', {
     scope: scopeField,
     include_tailscale: z.boolean().optional().describe('Include local Tailscale status probing when available'),

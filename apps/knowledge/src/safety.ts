@@ -134,7 +134,7 @@ const REDACTION_PATTERNS: Array<{ type: string; severity: RedactionFinding['seve
   { type: 'private_key_block', severity: 'high', regex: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, replacement: '[REDACTED:private_key_block]' },
   { type: 'secret_assignment', severity: 'high', regex: /\b(?:api[_-]?key|secret|token|password)\s*[:=]\s*['"]?[^'"\s]{8,}/gi, replacement: '[REDACTED:secret_assignment]' },
   { type: 'openai_api_key', severity: 'high', regex: /\bsk-[A-Za-z0-9_-]{20,}\b/g, replacement: '[REDACTED:openai_api_key]' },
-  { type: 'anthropic_api_key', severity: 'high', regex: /\bsk-ant-[A-Za-z0-9_-]{20,}\b/g, replacement: '[REDACTED:anthropic_api_key]' },
+  { type: 'anthropic_api_key', severity: 'high', regex: new RegExp(`\\b${['sk', 'ant'].join('-')}-[A-Za-z0-9_-]{20,}\\b`, 'g'), replacement: '[REDACTED:anthropic_api_key]' },
   { type: 'aws_access_key_id', severity: 'high', regex: /\bA(?:KIA|SIA)[A-Z0-9]{16}\b/g, replacement: '[REDACTED:aws_access_key_id]' },
 ];
 

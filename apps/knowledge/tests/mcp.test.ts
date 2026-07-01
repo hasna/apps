@@ -297,6 +297,10 @@ describe('knowledge MCP', () => {
       expect(tools.tools.some((tool) => tool.name === 'knowledge_lint')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_run_status')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_storage')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_app_wiki_init')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_app_wiki_note_add')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_app_wiki_source_add')).toBe(true);
+      expect(tools.tools.some((tool) => tool.name === 'knowledge_app_wiki_search')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_machines_topology')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_machines_preflight')).toBe(true);
       expect(tools.tools.some((tool) => tool.name === 'knowledge_sync_status')).toBe(true);
@@ -760,6 +764,35 @@ describe('knowledge MCP', () => {
       const openFilesResource = parseResourceJson(await client.readResource({ uri: 'knowledge://project/open-files' }));
       expect(openFilesResource.raw_source_bytes_exposed).toBe(false);
       expect(openFilesResource.refs.some((ref: any) => ref.uri === 'open-files://file/file_mcp')).toBe(true);
+
+      const appWikiInit = parseToolJson(await client.callTool({
+        name: 'knowledge_app_wiki_init',
+        arguments: { scope: 'project' },
+      }));
+      expect(appWikiInit.scope).toBe('project');
+      expect(appWikiInit.workspace_home).toBe(join(dir, '.hasna', 'knowledge'));
+
+      const appWikiNote = parseToolJson(await client.callTool({
+        name: 'knowledge_app_wiki_note_add',
+        arguments: {
+          scope: 'project',
+          title: 'MCP App Wiki',
+          content: 'MCP app wiki notes use the same scoped Knowledge service path.',
+          source_refs: ['open-files://file/file_mcp'],
+        },
+      }));
+      expect(appWikiNote.note.path).toBe('wiki/notes/mcp-app-wiki.md');
+      expect(appWikiNote.citations_written).toBe(1);
+
+      const appWikiSearch = parseToolJson(await client.callTool({
+        name: 'knowledge_app_wiki_search',
+        arguments: {
+          scope: 'project',
+          query: 'scoped Knowledge service path',
+          limit: 5,
+        },
+      }));
+      expect(appWikiSearch.results.some((entry: any) => entry.artifact?.path === 'wiki/notes/mcp-app-wiki.md')).toBe(true);
 
       const batch = parseToolJson(await client.callTool({
         name: 'ok_batch',

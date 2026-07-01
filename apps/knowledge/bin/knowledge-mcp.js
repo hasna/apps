@@ -16092,11 +16092,18 @@ function createArtifactStore(config2, workspace) {
 }
 
 // src/service.ts
-import { createHash as createHash16 } from "crypto";
+import { createHash as createHash17 } from "crypto";
 import { spawnSync as spawnSync2 } from "child_process";
 import { existsSync as existsSync12, readFileSync as readFileSync12 } from "fs";
 import { hostname as hostname5 } from "os";
 import { join as join6, resolve as resolve5 } from "path";
+
+// src/app-wiki.ts
+import { createHash as createHash5, randomUUID as randomUUID4 } from "crypto";
+
+// src/storage-contract.ts
+import { createHash, randomUUID as randomUUID2 } from "crypto";
+import { pathToFileURL as pathToFileURL2 } from "url";
 
 // src/auth.ts
 import { existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync4, unlinkSync as unlinkSync2, writeFileSync as writeFileSync4 } from "fs";
@@ -16182,2330 +16189,6 @@ function knowledgeAuthStatus(config2, env = process.env) {
     api_key_present: Boolean(key.apiKey)
   };
 }
-
-// src/agent.ts
-import { randomUUID as randomUUID3 } from "crypto";
-
-// src/providers.ts
-import { randomUUID as randomUUID2 } from "crypto";
-var DEFAULT_PROVIDER_SETTINGS = {
-  openai: {
-    api_key_env: "OPENAI_API_KEY",
-    default_model: "gpt-5.2"
-  },
-  anthropic: {
-    api_key_env: "ANTHROPIC_API_KEY",
-    default_model: "claude-sonnet-4-6"
-  },
-  deepseek: {
-    api_key_env: "DEEPSEEK_API_KEY",
-    default_model: "deepseek-chat"
-  }
-};
-var PROVIDER_CAPABILITIES = {
-  openai: {
-    text_generation: true,
-    structured_output: true,
-    tool_usage: true,
-    tool_streaming: true,
-    image_input: true,
-    native_web_search: true,
-    reasoning: true,
-    embeddings: true
-  },
-  anthropic: {
-    text_generation: true,
-    structured_output: true,
-    tool_usage: true,
-    tool_streaming: true,
-    image_input: true,
-    native_web_search: false,
-    reasoning: true,
-    embeddings: false
-  },
-  deepseek: {
-    text_generation: true,
-    structured_output: true,
-    tool_usage: true,
-    tool_streaming: true,
-    image_input: false,
-    native_web_search: false,
-    reasoning: true,
-    embeddings: false
-  }
-};
-var BUILTIN_ALIASES = {
-  default: "openai:gpt-5.2",
-  fast: "openai:gpt-5-mini",
-  reasoning: "anthropic:claude-opus-4-6",
-  sonnet: "anthropic:claude-sonnet-4-6",
-  deepseek: "deepseek:deepseek-chat",
-  "deepseek-reasoning": "deepseek:deepseek-reasoner"
-};
-function providerConfig(config2) {
-  return config2?.providers ?? {};
-}
-function providerSettings(config2, provider) {
-  const configured = providerConfig(config2)[provider] ?? {};
-  return {
-    ...DEFAULT_PROVIDER_SETTINGS[provider],
-    ...configured
-  };
-}
-function modelAliases(config2) {
-  const configured = providerConfig(config2);
-  return {
-    ...BUILTIN_ALIASES,
-    ...configured.default_model ? { default: configured.default_model } : {},
-    ...configured.aliases ?? {}
-  };
-}
-function parseModelRef(modelRef) {
-  const [provider, ...rest] = modelRef.split(":");
-  const model = rest.join(":");
-  if (provider !== "openai" && provider !== "anthropic" && provider !== "deepseek") {
-    throw new Error(`Unsupported AI provider: ${provider}`);
-  }
-  if (!model)
-    throw new Error(`Invalid model ref: ${modelRef}. Expected provider:model.`);
-  return { provider, model };
-}
-function resolveModelRef(aliasOrRef, config2) {
-  const aliases = modelAliases(config2);
-  return aliases[aliasOrRef] ?? aliasOrRef;
-}
-function listModelRegistry(config2) {
-  const aliases = modelAliases(config2);
-  return Object.entries(aliases).map(([alias, modelRef]) => {
-    const parsed = parseModelRef(modelRef);
-    return {
-      alias,
-      model_ref: modelRef,
-      provider: parsed.provider,
-      model: parsed.model,
-      default: alias === "default",
-      capabilities: PROVIDER_CAPABILITIES[parsed.provider]
-    };
-  });
-}
-function providerCredentialStatus(config2, env = process.env) {
-  return Object.keys(DEFAULT_PROVIDER_SETTINGS).map((provider) => {
-    const settings = providerSettings(config2, provider);
-    const configured = Boolean(env[settings.api_key_env]);
-    return {
-      provider,
-      api_key_env: settings.api_key_env,
-      configured,
-      source: configured ? "env" : "missing",
-      base_url: settings.base_url ?? null,
-      default_model: settings.default_model
-    };
-  });
-}
-function providerStatus(config2, env = process.env) {
-  return {
-    default_model: resolveModelRef("default", config2),
-    providers: providerCredentialStatus(config2, env),
-    models: listModelRegistry(config2)
-  };
-}
-function assertProviderCredentials(provider, config2, env = process.env) {
-  const status = providerCredentialStatus(config2, env).find((entry) => entry.provider === provider);
-  if (!status)
-    throw new Error(`Unsupported AI provider: ${provider}`);
-  if (!status.configured)
-    throw new Error(`Missing ${status.api_key_env} for ${provider}. Set the env var to use this provider.`);
-  return status;
-}
-async function defaultFactory(provider) {
-  if (provider === "openai") {
-    const { createOpenAI } = await import("@ai-sdk/openai");
-    return createOpenAI;
-  }
-  if (provider === "anthropic") {
-    const { createAnthropic } = await import("@ai-sdk/anthropic");
-    return createAnthropic;
-  }
-  const { createDeepSeek } = await import("@ai-sdk/deepseek");
-  return createDeepSeek;
-}
-async function createAiSdkProviderRegistry(options = {}) {
-  const { createProviderRegistry } = await import("ai");
-  const env = options.env ?? process.env;
-  const providers = {};
-  for (const provider of Object.keys(DEFAULT_PROVIDER_SETTINGS)) {
-    const settings = providerSettings(options.config, provider);
-    const apiKey = env[settings.api_key_env];
-    if (!apiKey)
-      continue;
-    const factory = options.factories?.[provider] ?? await defaultFactory(provider);
-    providers[provider] = factory({ apiKey, baseURL: settings.base_url });
-  }
-  return createProviderRegistry(providers);
-}
-async function languageModelFor(aliasOrRef, options = {}) {
-  const modelRef = resolveModelRef(aliasOrRef, options.config);
-  const parsed = parseModelRef(modelRef);
-  assertProviderCredentials(parsed.provider, options.config, options.env);
-  const registry2 = await createAiSdkProviderRegistry(options);
-  return registry2.languageModel(modelRef);
-}
-function usageNumber(usage, keys) {
-  for (const key of keys) {
-    const value = usage[key];
-    if (typeof value === "number" && Number.isFinite(value))
-      return value;
-  }
-  return 0;
-}
-function normalizeAiSdkUsage(input) {
-  const usage = input.usage ?? {};
-  return {
-    provider: input.provider,
-    model: input.model,
-    input_tokens: usageNumber(usage, ["inputTokens", "promptTokens", "input_tokens", "prompt_tokens"]),
-    output_tokens: usageNumber(usage, ["outputTokens", "completionTokens", "output_tokens", "completion_tokens"]),
-    cost_usd: input.costUsd ?? 0,
-    metadata: {
-      usage,
-      provider_metadata: input.providerMetadata ?? {}
-    }
-  };
-}
-function recordProviderUsage(db, input) {
-  const id = `usage_${randomUUID2()}`;
-  db.run(`INSERT INTO provider_usage (id, run_id, provider, model, input_tokens, output_tokens, cost_usd, metadata_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-    id,
-    input.run_id ?? null,
-    input.provider,
-    input.model,
-    input.input_tokens,
-    input.output_tokens,
-    input.cost_usd,
-    JSON.stringify(input.metadata),
-    input.created_at ?? new Date().toISOString()
-  ]);
-  return id;
-}
-
-// src/retrieval.ts
-import { createHash as createHash2 } from "crypto";
-
-// src/provenance.ts
-function isStaleStatus(status) {
-  return ["deleted", "stale", "invalidated", "reindex_required"].includes((status ?? "").toLowerCase());
-}
-function sourceProvenance(input) {
-  const status = input.status ?? null;
-  return {
-    source_owner: "open-files",
-    source_ref: input.source_ref ?? null,
-    source_uri: input.source_uri ?? null,
-    source_kind: input.source_kind ?? null,
-    source_revision_id: input.source_revision_id ?? null,
-    revision: input.revision ?? null,
-    hash: input.hash ?? null,
-    chunk_id: input.chunk_id ?? null,
-    start_offset: input.start_offset ?? null,
-    end_offset: input.end_offset ?? null,
-    status,
-    read_only: true,
-    citation_required: true,
-    resolver: input.resolver ?? null,
-    stale: isStaleStatus(status)
-  };
-}
-function generatedArtifactProvenance(input) {
-  return {
-    source_owner: "open-files",
-    generated_from: input.generated_from,
-    artifact_key: input.artifact_key,
-    source_refs: input.source_refs ?? [],
-    read_only_sources: true,
-    citation_required: input.citation_required ?? true,
-    raw_source_bytes_stored_in_open_knowledge: false
-  };
-}
-function withProvenance(metadata, provenance) {
-  return {
-    ...metadata,
-    provenance
-  };
-}
-
-// src/search.ts
-import { existsSync as existsSync5, readFileSync as readFileSync5 } from "fs";
-
-// src/embeddings.ts
-import { createHash } from "crypto";
-var DEFAULT_EMBEDDING_MODEL_REF = "openai:text-embedding-3-small";
-var DEFAULT_EMBEDDING_DIMENSIONS = 1536;
-function embeddingConfig(config2) {
-  return config2?.embeddings ?? {};
-}
-function stableId(prefix, value) {
-  return `${prefix}_${createHash("sha256").update(value).digest("hex").slice(0, 20)}`;
-}
-function parseJsonObject(value) {
-  if (!value)
-    return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-function metadataString(metadata, keys) {
-  for (const key of keys) {
-    const value = metadata[key];
-    if (typeof value === "string" && value.length > 0)
-      return value;
-  }
-  return null;
-}
-function metadataNumber(metadata, keys) {
-  for (const key of keys) {
-    const value = metadata[key];
-    if (typeof value === "number" && Number.isFinite(value))
-      return value;
-  }
-  return null;
-}
-function vectorNorm(vector) {
-  return Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
-}
-function cosineSimilarity(a, b, bNorm = vectorNorm(b)) {
-  const aNorm = vectorNorm(a);
-  if (aNorm === 0 || bNorm === 0)
-    return 0;
-  const length = Math.min(a.length, b.length);
-  let dot = 0;
-  for (let i = 0;i < length; i += 1)
-    dot += a[i] * b[i];
-  return dot / (aNorm * bNorm);
-}
-function deterministicVector(text, dimensions) {
-  const bytes = createHash("sha256").update(text).digest();
-  return Array.from({ length: dimensions }, (_, index) => {
-    const value = bytes[index % bytes.length] / 255;
-    return Number((value * 2 - 1).toFixed(6));
-  });
-}
-async function openAiEmbeddingModel(model, config2, env = process.env) {
-  assertProviderCredentials("openai", config2, env);
-  const settings = providerSettings(config2, "openai");
-  const { createOpenAI } = await import("@ai-sdk/openai");
-  const openai = createOpenAI({
-    apiKey: env[settings.api_key_env],
-    baseURL: settings.base_url
-  });
-  if (openai.embeddingModel)
-    return openai.embeddingModel(model);
-  if (openai.textEmbedding)
-    return openai.textEmbedding(model);
-  if (openai.textEmbeddingModel)
-    return openai.textEmbeddingModel(model);
-  throw new Error("OpenAI provider does not expose an embedding model factory.");
-}
-function resolveEmbeddingModelRef(modelRef, config2) {
-  if (!modelRef || modelRef === "default" || modelRef === "embedding") {
-    return embeddingConfig(config2).default_model ?? DEFAULT_EMBEDDING_MODEL_REF;
-  }
-  return modelRef;
-}
-async function embedTexts(texts, options = {}) {
-  const modelRef = resolveEmbeddingModelRef(options.modelRef, options.config);
-  const parsed = parseModelRef(modelRef);
-  if (parsed.provider !== "openai") {
-    throw new Error(`Embedding provider ${parsed.provider} is not supported yet. Use openai:text-embedding-3-small.`);
-  }
-  const dimensions = options.dimensions ?? embeddingConfig(options.config).dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
-  if (options.fake) {
-    return {
-      provider: parsed.provider,
-      model: parsed.model,
-      dimensions,
-      vectors: texts.map((text) => deterministicVector(text, dimensions)),
-      usage: { input_tokens: texts.reduce((sum, text) => sum + Math.max(1, Math.ceil(text.split(/\s+/).filter(Boolean).length * 1.25)), 0) }
-    };
-  }
-  const { embedMany } = await import("ai");
-  const model = await openAiEmbeddingModel(parsed.model, options.config, options.env);
-  const result = await embedMany({
-    model,
-    values: texts,
-    maxParallelCalls: options.maxParallelCalls ?? embeddingConfig(options.config).max_parallel_calls,
-    providerOptions: {
-      openai: {
-        dimensions
-      }
-    }
-  });
-  const vectors = result.embeddings;
-  return {
-    provider: parsed.provider,
-    model: parsed.model,
-    dimensions: vectors[0]?.length ?? dimensions,
-    vectors,
-    usage: { input_tokens: result.usage?.tokens ?? 0 }
-  };
-}
-function selectCandidateChunks(db, options) {
-  const baseQuery = `SELECT
-       c.id,
-       c.text,
-       c.token_count,
-       c.start_offset,
-       c.end_offset,
-       c.metadata_json,
-       c.source_revision_id,
-       sr.revision,
-       sr.hash,
-       s.uri AS source_uri,
-       s.kind AS source_kind
-     FROM chunks c
-     LEFT JOIN source_revisions sr ON sr.id = c.source_revision_id
-     LEFT JOIN sources s ON s.id = sr.source_id
-     LEFT JOIN vector_index_entries v
-       ON v.chunk_id = c.id AND v.provider = ? AND v.model = ?
-     WHERE v.id IS NULL`;
-  const suffix = `
-     ORDER BY c.created_at ASC, c.ordinal ASC
-     LIMIT ?`;
-  if (options.sourceRevisionId) {
-    return db.query(`${baseQuery} AND c.source_revision_id = ?${suffix}`).all(options.provider, options.model, options.sourceRevisionId, options.limit);
-  }
-  return db.query(`${baseQuery}${suffix}`).all(options.provider, options.model, options.limit);
-}
-function provenanceForChunk(row) {
-  const metadata = parseJsonObject(row.metadata_json);
-  const existing = metadata.provenance;
-  if (existing && typeof existing === "object" && !Array.isArray(existing))
-    return existing;
-  return sourceProvenance({
-    source_ref: metadataString(metadata, ["source_ref"]),
-    source_uri: row.source_uri ?? metadataString(metadata, ["source_uri"]),
-    source_kind: row.source_kind ?? metadataString(metadata, ["source_kind"]),
-    source_revision_id: row.source_revision_id,
-    revision: row.revision ?? metadataString(metadata, ["revision"]),
-    hash: row.hash ?? metadataString(metadata, ["hash"]),
-    chunk_id: row.id,
-    start_offset: row.start_offset ?? metadataNumber(metadata, ["start_offset"]),
-    end_offset: row.end_offset ?? metadataNumber(metadata, ["end_offset"]),
-    status: metadataString(metadata, ["status"]),
-    resolver: "open-files-read-only"
-  });
-}
-function upsertVectors(db, rows, embedding, now) {
-  const insertEmbedding = db.prepare(`
-    INSERT INTO chunk_embeddings (id, chunk_id, provider, model, dimensions, vector_json, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(chunk_id, provider, model) DO UPDATE SET
-      dimensions = excluded.dimensions,
-      vector_json = excluded.vector_json,
-      created_at = excluded.created_at
-  `);
-  const insertVector = db.prepare(`
-    INSERT INTO vector_index_entries (
-      id, chunk_id, source_revision_id, provider, model, dimensions, vector_json, vector_norm,
-      source_uri, source_ref, revision, hash, start_offset, end_offset, token_count, status,
-      metadata_json, created_at, updated_at
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(chunk_id, provider, model) DO UPDATE SET
-      source_revision_id = excluded.source_revision_id,
-      dimensions = excluded.dimensions,
-      vector_json = excluded.vector_json,
-      vector_norm = excluded.vector_norm,
-      source_uri = excluded.source_uri,
-      source_ref = excluded.source_ref,
-      revision = excluded.revision,
-      hash = excluded.hash,
-      start_offset = excluded.start_offset,
-      end_offset = excluded.end_offset,
-      token_count = excluded.token_count,
-      status = excluded.status,
-      metadata_json = excluded.metadata_json,
-      updated_at = excluded.updated_at
-  `);
-  const write = db.transaction(() => {
-    for (let index = 0;index < rows.length; index += 1) {
-      const row = rows[index];
-      const vector = embedding.vectors[index];
-      if (!vector)
-        continue;
-      const metadata = parseJsonObject(row.metadata_json);
-      const provenance = provenanceForChunk(row);
-      const sourceRef = provenance.source_ref ?? metadataString(metadata, ["source_ref"]);
-      const sourceUri = provenance.source_uri ?? row.source_uri ?? metadataString(metadata, ["source_uri"]);
-      const revision = provenance.revision ?? row.revision ?? metadataString(metadata, ["revision"]);
-      const hash2 = provenance.hash ?? row.hash ?? metadataString(metadata, ["hash"]);
-      const status = provenance.status ?? metadataString(metadata, ["status"]) ?? "active";
-      const vectorJson = JSON.stringify(vector);
-      insertEmbedding.run(stableId("emb", `${row.id}\x00${embedding.provider}\x00${embedding.model}`), row.id, embedding.provider, embedding.model, embedding.dimensions, vectorJson, now);
-      insertVector.run(stableId("vec", `${row.id}\x00${embedding.provider}\x00${embedding.model}`), row.id, row.source_revision_id, embedding.provider, embedding.model, embedding.dimensions, vectorJson, vectorNorm(vector), sourceUri, sourceRef, revision, hash2, provenance.start_offset, provenance.end_offset, row.token_count, status, JSON.stringify({
-        ...metadata,
-        provenance,
-        embedded_at: now
-      }), now, now);
-    }
-  });
-  write();
-  return rows.length;
-}
-async function indexKnowledgeEmbeddings(options) {
-  const modelRef = resolveEmbeddingModelRef(options.modelRef, options.config);
-  const parsed = parseModelRef(modelRef);
-  if (parsed.provider !== "openai")
-    throw new Error(`Embedding provider ${parsed.provider} is not supported yet.`);
-  const now = (options.now ?? new Date).toISOString();
-  const limit = Math.max(1, Math.min(options.limit ?? 100, 1000));
-  migrateKnowledgeDb(options.dbPath);
-  const readDb = openKnowledgeDb(options.dbPath);
-  let rows;
-  try {
-    rows = selectCandidateChunks(readDb, {
-      provider: parsed.provider,
-      model: parsed.model,
-      limit,
-      sourceRevisionId: options.sourceRevisionId
-    });
-  } finally {
-    readDb.close();
-  }
-  if (rows.length === 0) {
-    return {
-      provider: parsed.provider,
-      model: parsed.model,
-      dimensions: options.dimensions ?? embeddingConfig(options.config).dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS,
-      chunks_seen: 0,
-      chunks_embedded: 0,
-      embeddings_upserted: 0,
-      vector_entries_upserted: 0,
-      usage: { input_tokens: 0 }
-    };
-  }
-  const embedding = await embedTexts(rows.map((row) => row.text), options);
-  const writeDb = openKnowledgeDb(options.dbPath);
-  try {
-    const upserted = upsertVectors(writeDb, rows, embedding, now);
-    return {
-      provider: embedding.provider,
-      model: embedding.model,
-      dimensions: embedding.dimensions,
-      chunks_seen: rows.length,
-      chunks_embedded: rows.length,
-      embeddings_upserted: upserted,
-      vector_entries_upserted: upserted,
-      usage: embedding.usage
-    };
-  } finally {
-    writeDb.close();
-  }
-}
-function embeddingIndexStatus(dbPath) {
-  migrateKnowledgeDb(dbPath);
-  const db = openKnowledgeDb(dbPath);
-  try {
-    const totalEmbeddings = db.query("SELECT COUNT(*) AS n FROM chunk_embeddings").get()?.n ?? 0;
-    const totalVectorEntries = db.query("SELECT COUNT(*) AS n FROM vector_index_entries").get()?.n ?? 0;
-    const indexes = db.query(`SELECT provider, model, dimensions, COUNT(*) AS entries, MAX(updated_at) AS updated_at
-       FROM vector_index_entries
-       GROUP BY provider, model, dimensions
-       ORDER BY provider, model`).all();
-    return {
-      total_embeddings: totalEmbeddings,
-      total_vector_entries: totalVectorEntries,
-      indexes
-    };
-  } finally {
-    db.close();
-  }
-}
-async function searchVectorIndex(options) {
-  const modelRef = resolveEmbeddingModelRef(options.modelRef, options.config);
-  const parsed = parseModelRef(modelRef);
-  const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
-  const embedded = await embedTexts([options.query], options);
-  const queryVector = embedded.vectors[0] ?? [];
-  migrateKnowledgeDb(options.dbPath);
-  const db = openKnowledgeDb(options.dbPath);
-  try {
-    const rows = db.query(`SELECT
-         v.chunk_id,
-         c.text,
-         v.vector_json,
-         v.vector_norm,
-         v.source_uri,
-         v.source_ref,
-         v.revision,
-         v.hash,
-         v.metadata_json
-       FROM vector_index_entries v
-       JOIN chunks c ON c.id = v.chunk_id
-       WHERE v.provider = ? AND v.model = ? AND v.status = 'active'`).all(parsed.provider, parsed.model);
-    const scored = rows.map((row) => {
-      const vector = JSON.parse(row.vector_json);
-      const metadata = parseJsonObject(row.metadata_json);
-      const provenance = metadata.provenance && typeof metadata.provenance === "object" && !Array.isArray(metadata.provenance) ? metadata.provenance : null;
-      return {
-        chunk_id: row.chunk_id,
-        score: cosineSimilarity(queryVector, vector, row.vector_norm),
-        text: row.text,
-        source_uri: row.source_uri,
-        source_ref: row.source_ref,
-        revision: row.revision,
-        hash: row.hash,
-        provenance
-      };
-    }).sort((a, b) => b.score - a.score).slice(0, limit);
-    return {
-      provider: parsed.provider,
-      model: parsed.model,
-      dimensions: embedded.dimensions,
-      query: options.query,
-      results: scored
-    };
-  } finally {
-    db.close();
-  }
-}
-
-// src/search.ts
-function parseJsonObject2(value) {
-  if (!value)
-    return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-function metadataString2(metadata, keys) {
-  for (const key of keys) {
-    const value = metadata[key];
-    if (typeof value === "string" && value.length > 0)
-      return value;
-  }
-  return null;
-}
-function metadataNumber2(metadata, keys) {
-  for (const key of keys) {
-    const value = metadata[key];
-    if (typeof value === "number" && Number.isFinite(value))
-      return value;
-  }
-  return null;
-}
-function unique(values) {
-  return Array.from(new Set(values));
-}
-function queryTerms(query) {
-  const terms = query.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [];
-  return unique(terms.filter((term) => term.length > 0)).slice(0, 16);
-}
-function ftsQueryForTerms(terms) {
-  if (terms.length === 0)
-    return null;
-  return terms.map((term) => `${term}*`).join(" OR ");
-}
-function escapeLikeTerm(term) {
-  return term.replace(/[\\%_]/g, (char) => `\\${char}`);
-}
-function likeParams(terms, fieldsPerTerm) {
-  return terms.flatMap((term) => Array.from({ length: fieldsPerTerm }, () => `%${escapeLikeTerm(term)}%`));
-}
-function scoreFromRank(rank, index) {
-  const rankScore = Number.isFinite(rank) ? 1 / (1 + Math.abs(rank)) : 0;
-  const orderScore = 1 / (1 + index);
-  return roundScore(Math.max(rankScore, orderScore));
-}
-function catalogScore(haystack, terms) {
-  if (terms.length === 0)
-    return 0;
-  const matched = terms.filter((term) => haystack.includes(term)).length;
-  if (matched === 0)
-    return 0;
-  return roundScore(Math.min(0.85, 0.35 + matched / terms.length * 0.5));
-}
-function semanticScore(score) {
-  return roundScore(Math.max(0, Math.min(1, (score + 1) / 2)));
-}
-function roundScore(score) {
-  return Number(score.toFixed(6));
-}
-function combinedScore(scores, citation) {
-  const keyword = scores.keyword ?? 0;
-  const semantic = scores.semantic ?? 0;
-  const catalog = scores.catalog ?? 0;
-  const citationBoost = citation?.chunk_id ? 0.05 : 0;
-  return roundScore(Math.min(1, keyword * 0.55 + semantic * 0.4 + catalog * 0.35 + citationBoost));
-}
-function existingProvenance(metadata) {
-  const provenance = metadata.provenance;
-  return provenance && typeof provenance === "object" && !Array.isArray(provenance) ? provenance : null;
-}
-function provenanceForChunk2(row) {
-  const metadata = parseJsonObject2(row.chunk_metadata_json);
-  const existing = existingProvenance(metadata);
-  if (existing)
-    return existing;
-  if (!row.source_revision_id && !row.source_uri)
-    return null;
-  return sourceProvenance({
-    source_ref: metadataString2(metadata, ["source_ref"]),
-    source_uri: row.source_uri ?? metadataString2(metadata, ["source_uri"]),
-    source_kind: row.source_kind ?? metadataString2(metadata, ["source_kind"]),
-    source_revision_id: row.source_revision_id,
-    revision: row.revision ?? metadataString2(metadata, ["revision"]),
-    hash: row.hash ?? metadataString2(metadata, ["hash"]),
-    chunk_id: row.chunk_id,
-    start_offset: row.start_offset ?? metadataNumber2(metadata, ["start_offset"]),
-    end_offset: row.end_offset ?? metadataNumber2(metadata, ["end_offset"]),
-    status: metadataString2(metadata, ["status"]),
-    resolver: "open-files-read-only"
-  });
-}
-function selectFtsChunks(db, ftsQuery, limit) {
-  if (!ftsQuery)
-    return [];
-  return db.query(`SELECT
-       chunks_fts.chunk_id,
-       c.kind AS chunk_kind,
-       c.wiki_page_id,
-       c.text,
-       c.token_count,
-       c.start_offset,
-       c.end_offset,
-       c.metadata_json AS chunk_metadata_json,
-       c.source_revision_id,
-       sr.revision,
-       sr.hash,
-       s.uri AS source_uri,
-       s.kind AS source_kind,
-       s.title AS source_title,
-       wp.path AS wiki_path,
-       wp.title AS wiki_title,
-       wp.artifact_uri AS wiki_artifact_uri,
-       wp.content_hash AS wiki_content_hash,
-       wp.status AS wiki_status,
-       wp.metadata_json AS wiki_metadata_json,
-       bm25(chunks_fts) AS rank
-     FROM chunks_fts
-     JOIN chunks c ON c.id = chunks_fts.chunk_id
-     LEFT JOIN source_revisions sr ON sr.id = c.source_revision_id
-     LEFT JOIN sources s ON s.id = sr.source_id
-     LEFT JOIN wiki_pages wp ON wp.id = c.wiki_page_id
-     WHERE chunks_fts MATCH ?
-     ORDER BY rank ASC
-     LIMIT ?`).all(ftsQuery, limit);
-}
-function catalogWhere(fields, terms) {
-  if (terms.length === 0)
-    return "1 = 0";
-  const clauses = terms.map(() => `(${fields.map((field) => `lower(COALESCE(${field}, '')) LIKE ? ESCAPE '\\'`).join(" OR ")})`);
-  return clauses.join(" OR ");
-}
-function selectWikiPages(db, terms, limit) {
-  const fields = ["path", "title", "artifact_uri", "metadata_json"];
-  return db.query(`SELECT id, path, title, artifact_uri, content_hash, status, metadata_json
-     FROM wiki_pages
-     WHERE status = 'active' AND (${catalogWhere(fields, terms)})
-     ORDER BY updated_at DESC
-     LIMIT ?`).all(...likeParams(terms, fields.length), limit);
-}
-function selectKnowledgeIndexes(db, terms, limit) {
-  const fields = ["kind", "name", "shard_key", "artifact_uri", "metadata_json"];
-  return db.query(`SELECT id, kind, name, artifact_uri, shard_key, metadata_json
-     FROM knowledge_indexes
-     WHERE ${catalogWhere(fields, terms)}
-     ORDER BY updated_at DESC
-     LIMIT ?`).all(...likeParams(terms, fields.length), limit);
-}
-function readLegacyItems(path) {
-  if (!path || !existsSync5(path))
-    return [];
-  try {
-    const parsed = JSON.parse(readFileSync5(path, "utf8"));
-    if (!parsed || !Array.isArray(parsed.items))
-      return [];
-    return parsed.items.filter((item) => {
-      return Boolean(item && typeof item === "object" && typeof item.id === "string" && typeof item.title === "string" && typeof item.content === "string");
-    });
-  } catch {
-    return [];
-  }
-}
-function legacyItemHaystack(item) {
-  return [
-    item.id,
-    item.short_id,
-    item.title,
-    item.content,
-    item.url,
-    ...item.tags ?? []
-  ].filter((value) => typeof value === "string" && value.length > 0).join(" ").toLowerCase();
-}
-function selectLegacyItems(path, terms, limit) {
-  if (terms.length === 0)
-    return [];
-  return readLegacyItems(path).filter((item) => item.archived !== true).map((item) => ({ item, haystack: legacyItemHaystack(item) })).filter(({ haystack }) => terms.some((term) => haystack.includes(term))).map(({ item, haystack }) => ({ item, score: catalogScore(haystack, terms) })).sort((a, b) => b.score - a.score || a.item.id.localeCompare(b.item.id)).slice(0, limit);
-}
-function chunkResult(row, keywordScore) {
-  const metadata = parseJsonObject2(row.chunk_metadata_json);
-  const provenance = provenanceForChunk2(row);
-  const sourceRef = metadataString2(metadata, ["source_ref"]);
-  const sourceUri = row.source_uri ?? metadataString2(metadata, ["source_uri"]);
-  const isWiki = Boolean(row.wiki_page_id);
-  const result = {
-    kind: isWiki ? "wiki_chunk" : "source_chunk",
-    id: row.chunk_id,
-    title: isWiki ? row.wiki_title : row.source_title,
-    text: row.text,
-    score: 0,
-    scores: { keyword: keywordScore },
-    source: sourceUri || sourceRef ? {
-      uri: sourceUri,
-      ref: sourceRef,
-      kind: row.source_kind ?? metadataString2(metadata, ["source_kind"]),
-      revision: row.revision ?? metadataString2(metadata, ["revision"]),
-      hash: row.hash ?? metadataString2(metadata, ["hash"])
-    } : null,
-    citation: {
-      chunk_id: row.chunk_id,
-      start_offset: row.start_offset,
-      end_offset: row.end_offset
-    },
-    artifact: isWiki ? {
-      uri: row.wiki_artifact_uri,
-      path: row.wiki_path,
-      hash: row.wiki_content_hash,
-      shard_key: row.wiki_path
-    } : null,
-    provenance,
-    reasons: ["keyword_match"]
-  };
-  result.score = combinedScore(result.scores, result.citation);
-  return result;
-}
-function legacyItemResult(item, keywordScore) {
-  const uri = `knowledge://item/${encodeURIComponent(item.id)}`;
-  const result = {
-    kind: "legacy_item",
-    id: item.id,
-    title: item.title,
-    text: item.content,
-    score: 0,
-    scores: { keyword: keywordScore },
-    source: {
-      uri,
-      ref: uri,
-      kind: "legacy_item",
-      revision: null,
-      hash: null
-    },
-    citation: null,
-    artifact: null,
-    provenance: null,
-    reasons: ["legacy_note_match", "keyword_match"]
-  };
-  result.score = combinedScore(result.scores, result.citation);
-  return result;
-}
-function wikiPageResult(row, terms) {
-  const metadata = parseJsonObject2(row.metadata_json);
-  const score = catalogScore(`${row.path} ${row.title} ${row.artifact_uri ?? ""} ${row.metadata_json}`.toLowerCase(), terms);
-  const result = {
-    kind: "wiki_page",
-    id: row.id,
-    title: row.title,
-    text: null,
-    score: 0,
-    scores: { catalog: score },
-    source: null,
-    citation: null,
-    artifact: {
-      uri: row.artifact_uri,
-      path: row.path,
-      hash: row.content_hash,
-      shard_key: row.path
-    },
-    provenance: existingProvenance(metadata),
-    reasons: ["wiki_catalog_match"]
-  };
-  result.score = combinedScore(result.scores, result.citation);
-  return result;
-}
-function indexResult(row, terms) {
-  const metadata = parseJsonObject2(row.metadata_json);
-  const score = catalogScore(`${row.kind} ${row.name} ${row.shard_key ?? ""} ${row.artifact_uri ?? ""} ${row.metadata_json}`.toLowerCase(), terms);
-  const result = {
-    kind: "knowledge_index",
-    id: row.id,
-    title: row.name,
-    text: null,
-    score: 0,
-    scores: { catalog: score },
-    source: null,
-    citation: null,
-    artifact: {
-      uri: row.artifact_uri,
-      path: metadataString2(metadata, ["artifact_key"]),
-      hash: metadataString2(metadata, ["content_hash"]),
-      shard_key: row.shard_key
-    },
-    provenance: existingProvenance(metadata),
-    reasons: ["index_catalog_match"]
-  };
-  result.score = combinedScore(result.scores, result.citation);
-  return result;
-}
-function mergeResult(results, entry) {
-  const key = `${entry.kind}:${entry.id}`;
-  const existing = results.get(key);
-  if (!existing) {
-    results.set(key, entry);
-    return;
-  }
-  existing.scores = {
-    keyword: Math.max(existing.scores.keyword ?? 0, entry.scores.keyword ?? 0) || undefined,
-    semantic: Math.max(existing.scores.semantic ?? 0, entry.scores.semantic ?? 0) || undefined,
-    catalog: Math.max(existing.scores.catalog ?? 0, entry.scores.catalog ?? 0) || undefined
-  };
-  existing.reasons = unique([...existing.reasons, ...entry.reasons]);
-  existing.text = existing.text ?? entry.text;
-  existing.title = existing.title ?? entry.title;
-  existing.source = existing.source ?? entry.source;
-  existing.citation = existing.citation ?? entry.citation;
-  existing.artifact = existing.artifact ?? entry.artifact;
-  existing.provenance = existing.provenance ?? entry.provenance;
-  existing.score = combinedScore(existing.scores, existing.citation);
-}
-function sortResults(results) {
-  const kindOrder = {
-    source_chunk: 0,
-    wiki_chunk: 1,
-    legacy_item: 2,
-    wiki_page: 3,
-    knowledge_index: 4
-  };
-  return results.sort((a, b) => {
-    if (b.score !== a.score)
-      return b.score - a.score;
-    return kindOrder[a.kind] - kindOrder[b.kind] || a.id.localeCompare(b.id);
-  });
-}
-async function hybridSearch(options) {
-  const query = options.query.trim();
-  if (!query)
-    throw new Error("Search query is required.");
-  const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
-  const terms = queryTerms(query);
-  const ftsQuery = ftsQueryForTerms(terms);
-  const semanticEnabled = options.semantic === true || options.fake === true || Boolean(options.modelRef);
-  const warnings = [];
-  let semanticProvider = null;
-  let semanticModel = null;
-  let semanticDimensions = null;
-  let keywordCount = 0;
-  let catalogCount = 0;
-  let semanticCount = 0;
-  const merged = new Map;
-  migrateKnowledgeDb(options.dbPath);
-  const db = openKnowledgeDb(options.dbPath);
-  try {
-    const ftsRows = selectFtsChunks(db, ftsQuery, Math.max(limit * 3, 20));
-    keywordCount = ftsRows.length;
-    ftsRows.forEach((row, index) => mergeResult(merged, chunkResult(row, scoreFromRank(row.rank, index))));
-    const wikiRows = selectWikiPages(db, terms, Math.max(limit, 10));
-    const indexRows = selectKnowledgeIndexes(db, terms, Math.max(limit, 10));
-    const legacyRows = selectLegacyItems(options.legacyStorePath, terms, Math.max(limit, 10));
-    catalogCount = wikiRows.length + indexRows.length;
-    keywordCount += legacyRows.length;
-    legacyRows.forEach(({ item, score }) => mergeResult(merged, legacyItemResult(item, score)));
-    wikiRows.forEach((row) => mergeResult(merged, wikiPageResult(row, terms)));
-    indexRows.forEach((row) => mergeResult(merged, indexResult(row, terms)));
-  } finally {
-    db.close();
-  }
-  if (semanticEnabled) {
-    try {
-      const semantic = await searchVectorIndex({
-        dbPath: options.dbPath,
-        query,
-        limit: Math.max(limit * 3, 20),
-        config: options.config,
-        env: options.env,
-        modelRef: options.modelRef,
-        dimensions: options.dimensions,
-        fake: options.fake,
-        batchSize: options.batchSize,
-        maxParallelCalls: options.maxParallelCalls
-      });
-      semanticProvider = semantic.provider;
-      semanticModel = semantic.model;
-      semanticDimensions = semantic.dimensions;
-      semanticCount = semantic.results.length;
-      for (const row of semantic.results) {
-        const result = {
-          kind: "source_chunk",
-          id: row.chunk_id,
-          title: null,
-          text: row.text,
-          score: 0,
-          scores: { semantic: semanticScore(row.score) },
-          source: {
-            uri: row.source_uri,
-            ref: row.source_ref,
-            kind: row.provenance?.source_kind ?? null,
-            revision: row.revision,
-            hash: row.hash
-          },
-          citation: {
-            chunk_id: row.chunk_id,
-            start_offset: row.provenance?.start_offset ?? null,
-            end_offset: row.provenance?.end_offset ?? null
-          },
-          artifact: null,
-          provenance: row.provenance,
-          reasons: ["semantic_match"]
-        };
-        result.score = combinedScore(result.scores, result.citation);
-        mergeResult(merged, result);
-      }
-    } catch (error51) {
-      warnings.push(`semantic_search_failed: ${error51 instanceof Error ? error51.message : String(error51)}`);
-    }
-  }
-  const results = sortResults(Array.from(merged.values())).slice(0, limit);
-  return {
-    query,
-    limit,
-    mode: {
-      keyword: true,
-      catalog: true,
-      semantic: semanticEnabled
-    },
-    semantic_provider: semanticProvider,
-    semantic_model: semanticModel,
-    semantic_dimensions: semanticDimensions,
-    counts: {
-      keyword_results: keywordCount,
-      catalog_results: catalogCount,
-      semantic_results: semanticCount,
-      merged_results: results.length
-    },
-    warnings,
-    results
-  };
-}
-async function hybridSearchLegacyStore(options) {
-  const query = options.query.trim();
-  if (!query)
-    throw new Error("Search query is required.");
-  const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
-  const terms = queryTerms(query);
-  const semanticEnabled = options.semantic === true || options.fake === true || Boolean(options.modelRef);
-  const merged = new Map;
-  const legacyRows = selectLegacyItems(options.legacyStorePath, terms, Math.max(limit, 10));
-  legacyRows.forEach(({ item, score }) => mergeResult(merged, legacyItemResult(item, score)));
-  const warnings = ["knowledge_db_missing"];
-  if (semanticEnabled)
-    warnings.push("semantic_search_skipped_knowledge_db_missing");
-  const results = sortResults(Array.from(merged.values())).slice(0, limit);
-  return {
-    query,
-    limit,
-    mode: {
-      keyword: true,
-      catalog: true,
-      semantic: semanticEnabled
-    },
-    semantic_provider: null,
-    semantic_model: null,
-    semantic_dimensions: null,
-    counts: {
-      keyword_results: legacyRows.length,
-      catalog_results: 0,
-      semantic_results: 0,
-      merged_results: results.length
-    },
-    warnings,
-    results
-  };
-}
-
-// src/retrieval.ts
-function stableId2(prefix, value) {
-  return `${prefix}_${createHash2("sha256").update(value).digest("hex").slice(0, 20)}`;
-}
-function normalizeQuery(query) {
-  return query.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
-}
-function queryTerms2(query) {
-  return Array.from(new Set(normalizeQuery(query).match(/[\p{L}\p{N}_]+/gu) ?? [])).slice(0, 16);
-}
-function textForResult(result) {
-  return [result.title, result.text].filter(Boolean).join(" ").toLowerCase();
-}
-function exactScore(result, terms) {
-  if (terms.length === 0)
-    return 0;
-  const text = textForResult(result);
-  const matched = terms.filter((term) => text.includes(term)).length;
-  return Number((matched / terms.length).toFixed(6));
-}
-function hasReadOnlyProvenance(provenance) {
-  if (!provenance)
-    return true;
-  if ("read_only" in provenance)
-    return provenance.read_only === true;
-  if ("read_only_sources" in provenance)
-    return provenance.read_only_sources === true;
-  return true;
-}
-function isStale(provenance) {
-  if (!provenance)
-    return false;
-  if ("stale" in provenance && provenance.stale)
-    return true;
-  if ("status" in provenance)
-    return isStaleStatus(provenance.status);
-  return false;
-}
-function freshnessScore(result) {
-  if (isStale(result.provenance))
-    return 0;
-  if (result.source?.hash || result.source?.revision)
-    return 1;
-  if (result.artifact?.hash)
-    return 0.85;
-  if (result.provenance && "source_refs" in result.provenance && result.provenance.source_refs.length > 0)
-    return 0.75;
-  return 0.55;
-}
-function citationScore(result) {
-  if (result.citation?.chunk_id && (result.source?.uri || result.artifact?.uri))
-    return 1;
-  if (result.provenance && "citation_required" in result.provenance && result.provenance.citation_required)
-    return 0.75;
-  if (result.artifact?.uri)
-    return 0.65;
-  return 0.35;
-}
-function authorityScore(result) {
-  if (result.kind === "wiki_chunk")
-    return 0.85;
-  if (result.kind === "source_chunk")
-    return 0.8;
-  if (result.kind === "legacy_item")
-    return 0.6;
-  if (result.kind === "wiki_page")
-    return 0.65;
-  return 0.55;
-}
-function rerank(result, terms) {
-  const scores = {
-    base_score: result.score,
-    exact_score: exactScore(result, terms),
-    citation_score: citationScore(result),
-    freshness_score: freshnessScore(result),
-    authority_score: authorityScore(result)
-  };
-  const final = Math.min(1, scores.base_score * 0.65 + scores.exact_score * 0.1 + scores.citation_score * 0.1 + scores.freshness_score * 0.1 + scores.authority_score * 0.05);
-  const reasons = new Set(result.reasons);
-  if (scores.exact_score > 0.5)
-    reasons.add("exact_term");
-  if (scores.citation_score >= 0.75)
-    reasons.add("cited_source");
-  if (scores.freshness_score >= 0.85)
-    reasons.add("fresh_source");
-  return {
-    ...result,
-    score: Number(final.toFixed(6)),
-    reasons: Array.from(reasons),
-    rerank: {
-      ...scores,
-      final_score: Number(final.toFixed(6))
-    }
-  };
-}
-function quoteFor(result, maxChars) {
-  const source = result.text ?? result.title;
-  if (!source)
-    return null;
-  const normalized = source.replace(/\s+/g, " ").trim();
-  return normalized.length <= maxChars ? normalized : `${normalized.slice(0, Math.max(0, maxChars - 1)).trim()}...`;
-}
-function citationFor(result) {
-  const id = stableId2("cite", `${result.kind}\x00${result.id}\x00${result.source?.uri ?? ""}\x00${result.artifact?.uri ?? ""}`);
-  return {
-    id,
-    result_id: result.id,
-    kind: result.kind,
-    source_uri: result.source?.uri ?? null,
-    source_ref: result.source?.ref ?? null,
-    artifact_uri: result.artifact?.uri ?? null,
-    artifact_path: result.artifact?.path ?? null,
-    revision: result.source?.revision ?? null,
-    hash: result.source?.hash ?? result.artifact?.hash ?? null,
-    chunk_id: result.citation?.chunk_id ?? null,
-    start_offset: result.citation?.start_offset ?? null,
-    end_offset: result.citation?.end_offset ?? null,
-    quote: quoteFor(result, 500),
-    provenance: result.provenance
-  };
-}
-function excerptFor(result, citation, contextChars) {
-  const text = quoteFor(result, contextChars);
-  if (!text)
-    return null;
-  return {
-    id: stableId2("excerpt", `${result.kind}\x00${result.id}`),
-    result_id: result.id,
-    citation_id: citation.id,
-    kind: result.kind,
-    text,
-    score: result.score
-  };
-}
-function placeholders(values) {
-  return values.map(() => "?").join(", ");
-}
-function loadGraphEvidence(dbPath, results) {
-  const chunkIds = results.map((result) => result.citation?.chunk_id).filter((id) => Boolean(id));
-  const wikiPageIds = results.filter((result) => result.kind === "wiki_page").map((result) => result.id);
-  const citations = [];
-  const backlinks = [];
-  if (chunkIds.length === 0 && wikiPageIds.length === 0)
-    return { citations, backlinks };
-  const db = openKnowledgeDb(dbPath);
-  try {
-    if (chunkIds.length > 0) {
-      citations.push(...db.query(`SELECT id, wiki_page_id, chunk_id, source_uri, quote, start_offset, end_offset
-         FROM citations
-         WHERE chunk_id IN (${placeholders(chunkIds)})
-         ORDER BY created_at DESC
-         LIMIT 50`).all(...chunkIds));
-    }
-    if (wikiPageIds.length > 0) {
-      citations.push(...db.query(`SELECT id, wiki_page_id, chunk_id, source_uri, quote, start_offset, end_offset
-         FROM citations
-         WHERE wiki_page_id IN (${placeholders(wikiPageIds)})
-         ORDER BY created_at DESC
-         LIMIT 50`).all(...wikiPageIds));
-      backlinks.push(...db.query(`SELECT from_page_id, to_page_id, label
-         FROM wiki_backlinks
-         WHERE from_page_id IN (${placeholders(wikiPageIds)}) OR to_page_id IN (${placeholders(wikiPageIds)})
-         LIMIT 50`).all(...wikiPageIds, ...wikiPageIds));
-    }
-  } finally {
-    db.close();
-  }
-  return { citations, backlinks };
-}
-function retrieveKnowledgeContextFromSearch(search, options = {}) {
-  const contextChars = Math.max(200, Math.min(options.contextChars ?? 1200, 4000));
-  const terms = queryTerms2(search.query);
-  const warnings = [...search.warnings];
-  const permissionNotes = new Set;
-  const freshnessNotes = new Set;
-  const filtered = search.results.filter((result) => {
-    if (!hasReadOnlyProvenance(result.provenance)) {
-      warnings.push(`permission_filtered: ${result.kind}:${result.id}`);
-      permissionNotes.add("Dropped a result because provenance was not read-only.");
-      return false;
-    }
-    if (isStale(result.provenance)) {
-      warnings.push(`stale_filtered: ${result.kind}:${result.id}`);
-      freshnessNotes.add("Dropped a stale result whose source status requires reindexing.");
-      return false;
-    }
-    return true;
-  });
-  const results = filtered.map((result) => rerank(result, terms)).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, search.limit);
-  const citations = results.map(citationFor);
-  const excerpts = results.map((result, index) => excerptFor(result, citations[index], contextChars)).filter((entry) => Boolean(entry));
-  for (const result of results) {
-    if (result.provenance && "read_only" in result.provenance && result.provenance.read_only) {
-      permissionNotes.add("All source-backed excerpts are read-only and citation-required.");
-    }
-    if (result.rerank.freshness_score >= 0.85) {
-      freshnessNotes.add("Fresh source revision/hash or artifact hash is present for top context.");
-    }
-  }
-  return {
-    query: search.query,
-    normalized_query: normalizeQuery(search.query),
-    created_at: new Date().toISOString(),
-    mode: search.mode,
-    warnings,
-    search_counts: search.counts,
-    results,
-    citations,
-    excerpts,
-    graph: options.dbPath ? loadGraphEvidence(options.dbPath, results) : { citations: [], backlinks: [] },
-    notes: {
-      permissions: Array.from(permissionNotes),
-      freshness: Array.from(freshnessNotes)
-    }
-  };
-}
-async function retrieveKnowledgeContext(options) {
-  const search = await hybridSearch(options);
-  return retrieveKnowledgeContextFromSearch(search, {
-    dbPath: options.dbPath,
-    contextChars: options.contextChars
-  });
-}
-
-// src/agent.ts
-function estimateTokens(text) {
-  const words = text.trim().split(/\s+/).filter(Boolean).length;
-  return Math.max(1, Math.ceil(words * 1.25));
-}
-function citationLabel(index) {
-  return `C${index + 1}`;
-}
-function localAnswer(prompt, context) {
-  if (context.excerpts.length === 0) {
-    return `No indexed knowledge matched the prompt: ${prompt}`;
-  }
-  const lines = [
-    `Found ${context.excerpts.length} relevant knowledge excerpt(s) for: ${prompt}`,
-    "",
-    ...context.excerpts.slice(0, 5).map((excerpt, index) => {
-      const citation = context.citations.find((entry) => entry.id === excerpt.citation_id);
-      const ref = citation?.source_ref ?? citation?.source_uri ?? citation?.artifact_path ?? citation?.artifact_uri ?? "unknown source";
-      return `[${citationLabel(index)}] ${excerpt.text} (${ref})`;
-    })
-  ];
-  return lines.join(`
-`);
-}
-function promptForModel(prompt, context) {
-  const citations = context.citations.map((citation, index) => ({
-    id: citationLabel(index),
-    source_ref: citation.source_ref,
-    source_uri: citation.source_uri,
-    artifact_path: citation.artifact_path,
-    revision: citation.revision,
-    hash: citation.hash,
-    quote: citation.quote
-  }));
-  const excerpts = context.excerpts.map((excerpt, index) => ({
-    id: citationLabel(index),
-    kind: excerpt.kind,
-    text: excerpt.text,
-    score: excerpt.score
-  }));
-  return [
-    `Prompt: ${prompt}`,
-    "",
-    "Use only the provided context. Cite claims with citation ids like [C1]. If context is insufficient, say what is missing.",
-    "",
-    `Context excerpts:
-${JSON.stringify(excerpts, null, 2)}`,
-    "",
-    `Citations:
-${JSON.stringify(citations, null, 2)}`
-  ].join(`
-`);
-}
-function proposedUpdates(prompt, context) {
-  if (context.citations.length === 0)
-    return [];
-  return [{
-    kind: "answer_note",
-    title: prompt.length > 80 ? `${prompt.slice(0, 77)}...` : prompt,
-    citations: context.citations.map((citation) => citation.id),
-    requires_approval: true
-  }];
-}
-function insertRun(dbPath, input) {
-  const db = openKnowledgeDb(dbPath);
-  try {
-    db.run(`INSERT INTO runs (id, type, prompt, status, provider, model, metadata_json, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-      input.runId,
-      "knowledge-prompt",
-      input.prompt,
-      input.status,
-      input.provider,
-      input.model,
-      JSON.stringify(input.metadata),
-      input.now,
-      input.now
-    ]);
-  } finally {
-    db.close();
-  }
-}
-function addRunEvent(dbPath, input) {
-  const db = openKnowledgeDb(dbPath);
-  try {
-    db.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`, [
-      `evt_${randomUUID3()}`,
-      input.runId,
-      input.level,
-      input.event,
-      JSON.stringify(input.metadata),
-      input.now
-    ]);
-  } finally {
-    db.close();
-  }
-}
-function updateRun(dbPath, input) {
-  const db = openKnowledgeDb(dbPath);
-  try {
-    db.run(`UPDATE runs
-       SET status = ?, provider = ?, model = ?, metadata_json = ?, updated_at = ?
-       WHERE id = ?`, [
-      input.status,
-      input.provider,
-      input.model,
-      JSON.stringify(input.metadata),
-      input.now,
-      input.runId
-    ]);
-  } finally {
-    db.close();
-  }
-}
-function recordUsage(dbPath, runId, usage, provider, model, now, metadata = {}) {
-  const db = openKnowledgeDb(dbPath);
-  try {
-    recordProviderUsage(db, {
-      run_id: runId,
-      provider,
-      model,
-      input_tokens: usage.input_tokens,
-      output_tokens: usage.output_tokens,
-      cost_usd: usage.cost_usd,
-      metadata,
-      created_at: now
-    });
-  } finally {
-    db.close();
-  }
-}
-async function runKnowledgePrompt(options) {
-  const prompt = options.prompt.trim();
-  if (!prompt)
-    throw new Error("Knowledge prompt is required.");
-  const now = (options.now ?? new Date).toISOString();
-  const runId = `run_${randomUUID3()}`;
-  const modelRef = resolveModelRef(options.modelRef ?? "default", options.config);
-  const parsed = parseModelRef(modelRef);
-  migrateKnowledgeDb(options.dbPath);
-  insertRun(options.dbPath, {
-    runId,
-    prompt,
-    status: options.generate ? "running" : "dry_run",
-    provider: options.generate ? parsed.provider : "local",
-    model: options.generate ? parsed.model : "context-draft",
-    metadata: {
-      semantic: options.semantic === true || options.fake === true || Boolean(options.modelRef),
-      approve_write: options.approveWrite === true,
-      generated: options.generate === true
-    },
-    now
-  });
-  const { prompt: _prompt, generate: _generate, approveWrite: _approveWrite, now: _now, ...retrievalOptions } = options;
-  const context = await retrieveKnowledgeContext({
-    ...retrievalOptions,
-    query: prompt
-  });
-  addRunEvent(options.dbPath, {
-    runId,
-    level: "info",
-    event: "context_retrieved",
-    metadata: {
-      results: context.results.length,
-      citations: context.citations.length,
-      warnings: context.warnings
-    },
-    now
-  });
-  let answer = localAnswer(prompt, context);
-  let generated = false;
-  let provider = "local";
-  let model = "context-draft";
-  let usage = {
-    input_tokens: estimateTokens(prompt) + context.excerpts.reduce((sum, excerpt) => sum + estimateTokens(excerpt.text), 0),
-    output_tokens: estimateTokens(answer),
-    cost_usd: 0
-  };
-  const warnings = [...context.warnings];
-  if (options.generate) {
-    try {
-      if (options.fake) {
-        generated = true;
-        provider = parsed.provider;
-        model = parsed.model;
-        answer = `Fake generated answer for: ${prompt}
-
-${answer}`;
-      } else {
-        const { generateText } = await import("ai");
-        const languageModel = await languageModelFor(modelRef, {
-          config: options.config,
-          env: options.env
-        });
-        const result = await generateText({
-          model: languageModel,
-          system: "You answer company knowledge-base prompts using only provided context and citation ids.",
-          prompt: promptForModel(prompt, context)
-        });
-        generated = true;
-        provider = parsed.provider;
-        model = parsed.model;
-        answer = result.text;
-        const normalized = normalizeAiSdkUsage({
-          provider,
-          model,
-          usage: result.usage,
-          providerMetadata: result.providerMetadata
-        });
-        usage = {
-          input_tokens: normalized.input_tokens,
-          output_tokens: normalized.output_tokens,
-          cost_usd: normalized.cost_usd
-        };
-      }
-    } catch (error51) {
-      addRunEvent(options.dbPath, {
-        runId,
-        level: "error",
-        event: "answer_generation_failed",
-        metadata: { message: error51 instanceof Error ? error51.message : String(error51) },
-        now
-      });
-      updateRun(options.dbPath, {
-        runId,
-        status: "failed",
-        provider: parsed.provider,
-        model: parsed.model,
-        metadata: {
-          generated: false,
-          error: error51 instanceof Error ? error51.message : String(error51)
-        },
-        now
-      });
-      throw error51;
-    }
-  }
-  const updates = proposedUpdates(prompt, context);
-  const writePolicy = {
-    approved: options.approveWrite === true,
-    durable_writes_performed: false,
-    reason: options.approveWrite ? "Approval flag recorded; durable wiki writing is deferred to the wiki compile task." : "Dry-run mode: proposed wiki updates require approval before durable writes."
-  };
-  addRunEvent(options.dbPath, {
-    runId,
-    level: "info",
-    event: generated ? "answer_generated" : "answer_drafted",
-    metadata: {
-      provider,
-      model,
-      proposed_updates: updates.length,
-      durable_writes_performed: false
-    },
-    now
-  });
-  recordUsage(options.dbPath, runId, usage, provider, model, now, {
-    generated,
-    citations: context.citations.length
-  });
-  updateRun(options.dbPath, {
-    runId,
-    status: generated ? "completed" : "dry_run",
-    provider,
-    model,
-    metadata: {
-      generated,
-      citations: context.citations.length,
-      proposed_updates: updates.length,
-      approve_write: options.approveWrite === true
-    },
-    now
-  });
-  return {
-    run_id: runId,
-    prompt,
-    generated,
-    provider,
-    model,
-    answer,
-    context,
-    citations: context.citations,
-    proposed_wiki_updates: updates,
-    write_policy: writePolicy,
-    usage,
-    warnings
-  };
-}
-
-// src/context-pack.ts
-import { createHash as createHash4 } from "crypto";
-
-// src/safety.ts
-import { createHash as createHash3, randomUUID as randomUUID4 } from "crypto";
-import { relative as relative2, resolve as resolve2, sep as sep2 } from "path";
-function envEnabled(name) {
-  const value = process.env[name];
-  return value === "1" || value === "true" || value === "yes";
-}
-function resolveSafetyPolicy(config2, workspace) {
-  const extended = config2;
-  const configuredBuckets = new Set(extended.safety?.network?.allowed_s3_buckets ?? []);
-  if (config2.storage.type === "s3" && config2.storage.s3?.bucket)
-    configuredBuckets.add(config2.storage.s3.bucket);
-  if (process.env.HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS) {
-    for (const bucket of process.env.HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS.split(",").map((entry) => entry.trim()).filter(Boolean)) {
-      configuredBuckets.add(bucket);
-    }
-  }
-  return {
-    mode: config2.mode,
-    allowWriteRoots: [
-      workspace.home,
-      workspace.artifactsDir,
-      workspace.cacheDir,
-      workspace.exportsDir,
-      workspace.indexesDir,
-      workspace.logsDir,
-      workspace.runsDir,
-      workspace.schemasDir,
-      workspace.wikiDir
-    ].map((entry) => resolve2(entry)),
-    readOnlySourceAccess: true,
-    network: {
-      webSearchEnabled: extended.safety?.network?.web_search_enabled ?? envEnabled("HASNA_KNOWLEDGE_WEB_SEARCH"),
-      s3ReadsEnabled: extended.safety?.network?.s3_reads_enabled ?? envEnabled("HASNA_KNOWLEDGE_ALLOW_S3_READS"),
-      allowedS3Buckets: [...configuredBuckets].sort()
-    },
-    redaction: {
-      enabled: extended.safety?.redaction?.enabled ?? true
-    },
-    approvals: {
-      generatedWritesRequireApproval: extended.safety?.approvals?.generated_writes_require_approval ?? true
-    }
-  };
-}
-function isInside(root, target) {
-  const rel = relative2(root, target);
-  return rel === "" || !rel.startsWith("..") && rel !== ".." && !rel.startsWith(`..${sep2}`);
-}
-function assertWriteAllowed(targetPath, policy) {
-  const resolved = resolve2(targetPath);
-  if (!policy.allowWriteRoots.some((root) => isInside(root, resolved))) {
-    throw new Error(`Safety policy denied write outside .hasna/knowledge: ${targetPath}`);
-  }
-}
-function assertS3ReadAllowed(uri, policy) {
-  const parsed = new URL(uri);
-  const bucket = parsed.hostname;
-  if (!policy.network.s3ReadsEnabled) {
-    throw new Error("Safety policy denied S3 read. Set safety.network.s3_reads_enabled=true or HASNA_KNOWLEDGE_ALLOW_S3_READS=1.");
-  }
-  if (!policy.network.allowedS3Buckets.includes(bucket)) {
-    throw new Error(`Safety policy denied S3 bucket "${bucket}". Add it to safety.network.allowed_s3_buckets or HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS.`);
-  }
-}
-function assertWebSearchAllowed(policy) {
-  if (!policy.network.webSearchEnabled) {
-    throw new Error("Safety policy denied web search. Set safety.network.web_search_enabled=true or HASNA_KNOWLEDGE_WEB_SEARCH=1.");
-  }
-}
-var REDACTION_PATTERNS = [
-  { type: "private_key_block", severity: "high", regex: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, replacement: "[REDACTED:private_key_block]" },
-  { type: "secret_assignment", severity: "high", regex: /\b(?:api[_-]?key|secret|token|password)\s*[:=]\s*['"]?[^'"\s]{8,}/gi, replacement: "[REDACTED:secret_assignment]" },
-  { type: "openai_api_key", severity: "high", regex: /\bsk-[A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:openai_api_key]" },
-  { type: "anthropic_api_key", severity: "high", regex: /\bsk-ant-[A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:anthropic_api_key]" },
-  { type: "aws_access_key_id", severity: "high", regex: /\bA(?:KIA|SIA)[A-Z0-9]{16}\b/g, replacement: "[REDACTED:aws_access_key_id]" }
-];
-function redactSecrets(text, policy) {
-  if (policy && !policy.redaction.enabled)
-    return { text, findings: [] };
-  let output = text;
-  const findings = [];
-  for (const pattern of REDACTION_PATTERNS) {
-    output = output.replace(pattern.regex, (match, ...args) => {
-      const offset = typeof args.at(-2) === "number" ? args.at(-2) : output.indexOf(match);
-      findings.push({
-        type: pattern.type,
-        severity: pattern.severity,
-        start: Math.max(0, offset),
-        end: Math.max(0, offset + match.length)
-      });
-      return pattern.replacement;
-    });
-  }
-  return { text: output, findings };
-}
-function auditId(input) {
-  return `audit_${createHash3("sha256").update(`${input.event_type}\x00${input.action}\x00${input.target_uri ?? ""}\x00${input.created_at ?? ""}\x00${JSON.stringify(input.metadata ?? {})}\x00${randomUUID4()}`).digest("hex").slice(0, 24)}`;
-}
-function truncateAuditMetadata(value, depth = 0) {
-  if (depth > 6)
-    return "[Truncated:depth]";
-  if (typeof value === "string") {
-    return value.length > 1000 ? `${value.slice(0, 1000)}...[Truncated:${value.length - 1000} chars]` : value;
-  }
-  if (typeof value === "number" || typeof value === "boolean" || value === null || value === undefined)
-    return value;
-  if (Array.isArray(value)) {
-    const entries = value.slice(0, 25).map((entry) => truncateAuditMetadata(entry, depth + 1));
-    if (value.length > 25)
-      entries.push(`[Truncated:${value.length - 25} items]`);
-    return entries;
-  }
-  if (typeof value === "object") {
-    const output = {};
-    const entries = Object.entries(value).slice(0, 50);
-    for (const [key, entry] of entries)
-      output[key] = truncateAuditMetadata(entry, depth + 1);
-    const total = Object.keys(value).length;
-    if (total > entries.length)
-      output.__truncated_keys = total - entries.length;
-    return output;
-  }
-  return String(value);
-}
-function recordAuditEvent(db, input) {
-  const createdAt = input.created_at ?? new Date().toISOString();
-  const metadata = truncateAuditMetadata(input.metadata ?? {});
-  const id = auditId({ ...input, metadata, created_at: createdAt });
-  db.run(`INSERT INTO audit_events (id, event_type, action, target_uri, decision, metadata_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`, [
-    id,
-    input.event_type,
-    input.action,
-    input.target_uri ?? null,
-    input.decision,
-    JSON.stringify(metadata),
-    createdAt
-  ]);
-  return id;
-}
-function recordRedactionFindings(db, input) {
-  const createdAt = input.created_at ?? new Date().toISOString();
-  for (const finding of input.findings) {
-    db.run(`INSERT INTO redaction_findings (id, source_uri, run_id, severity, finding_type, metadata_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`, [
-      `redact_${randomUUID4()}`,
-      input.source_uri ?? null,
-      input.run_id ?? null,
-      finding.severity,
-      finding.type,
-      JSON.stringify({ ...input.metadata ?? {}, start: finding.start, end: finding.end }),
-      createdAt
-    ]);
-  }
-  return input.findings.length;
-}
-var COMMON_BARE_TOKEN_PATTERNS = [
-  { type: "github_token", severity: "high", regex: /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, replacement: "[REDACTED:github_token]" },
-  { type: "github_pat_token", severity: "high", regex: /\bgithub[_]pat[_][A-Za-z0-9_]{20,}\b/g, replacement: "[REDACTED:github_pat_token]" },
-  { type: "package_registry_token", severity: "high", regex: /\bnpm_[A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:package_registry_token]" },
-  { type: "context7_token", severity: "high", regex: /\bctx7sk[-][A-Za-z0-9_-]{10,}\b/g, replacement: "[REDACTED:context7_token]" },
-  { type: "xai_api_key", severity: "high", regex: /\bxai[-][A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:xai_api_key]" },
-  { type: "google_api_key", severity: "high", regex: /\bAIza[A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:google_api_key]" }
-];
-REDACTION_PATTERNS.push(...COMMON_BARE_TOKEN_PATTERNS);
-
-// src/context-pack.ts
-var DEFAULT_MAX_TOKENS = 1200;
-var DEFAULT_MAX_ITEMS = 6;
-var MAX_MAX_TOKENS = 12000;
-var MAX_MAX_ITEMS = 50;
-var MIN_MAX_TOKENS = 800;
-function stableId3(prefix, value, size = 16) {
-  return `${prefix}_${createHash4("sha256").update(value).digest("hex").slice(0, size)}`;
-}
-function normalizeText(value) {
-  return value.normalize("NFKC").trim().replace(/\s+/g, " ");
-}
-function normalizedSearchText(value) {
-  return normalizeText(value).toLowerCase();
-}
-function termsFor(value) {
-  return Array.from(new Set(normalizedSearchText(value).match(/[\p{L}\p{N}_]+/gu) ?? [])).slice(0, 24);
-}
-function truncateText(value, maxChars) {
-  const normalized = normalizeText(value);
-  if (normalized.length <= maxChars)
-    return normalized;
-  return `${normalized.slice(0, Math.max(0, maxChars - 1)).trim()}...`;
-}
-function parseJsonObject3(value) {
-  if (!value)
-    return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-function isSecretishKey(key) {
-  return /(?:api[_-]?key|secret|token|password|private[_-]?key|credential)/i.test(key);
-}
-function metadataKeys(metadata) {
-  return Object.keys(metadata).filter((key) => !isSecretishKey(key)).sort().slice(0, 12);
-}
-function rawMetadataRef(metadata, keys) {
-  for (const key of keys) {
-    if (isSecretishKey(key))
-      continue;
-    const value = metadata[key];
-    if (typeof value === "string" && value.trim())
-      return value.trim();
-  }
-  return null;
-}
-function safeRef(value, policy) {
-  if (!value)
-    return null;
-  const redacted = redactSecrets(value, policy).text;
-  try {
-    const parsed = new URL(redacted);
-    const secretParams = ["token", "access_token", "api_key", "apikey", "key", "secret", "password", "signature", "sig"];
-    for (const param of secretParams)
-      parsed.searchParams.delete(param);
-    for (const [key] of parsed.searchParams) {
-      if (isSecretishKey(key))
-        parsed.searchParams.delete(key);
-    }
-    return parsed.toString();
-  } catch {
-    return redacted;
-  }
-}
-function metadataRef(metadata, keys, policy) {
-  return safeRef(rawMetadataRef(metadata, keys), policy);
-}
-function summarizeMetadata(metadata) {
-  const parts = [];
-  for (const key of metadataKeys(metadata).slice(0, 6)) {
-    const value = metadata[key];
-    if (typeof value === "string" && value.trim())
-      parts.push(`${key}=${truncateText(value, 80)}`);
-    else if (typeof value === "number" || typeof value === "boolean")
-      parts.push(`${key}=${String(value)}`);
-    else if (value && typeof value === "object")
-      parts.push(`${key}={...}`);
-  }
-  return parts.join("; ");
-}
-function estimateTokensForText(text) {
-  if (!text.trim())
-    return 0;
-  return Math.max(1, Math.ceil(text.length / 4));
-}
-function estimateTokensForValue(value) {
-  return estimateTokensForText(JSON.stringify(value));
-}
-function coerceMaxTokens(value) {
-  if (!Number.isFinite(value ?? NaN))
-    return DEFAULT_MAX_TOKENS;
-  const floor = Math.floor(value);
-  if (floor < MIN_MAX_TOKENS)
-    throw new Error(`--max-tokens must be at least ${MIN_MAX_TOKENS} for the stable context-pack schema.`);
-  return Math.min(floor, MAX_MAX_TOKENS);
-}
-function coerceMaxItems(value, limit) {
-  const raw = Number.isFinite(value ?? NaN) ? value : limit;
-  if (!Number.isFinite(raw ?? NaN))
-    return DEFAULT_MAX_ITEMS;
-  return Math.max(1, Math.min(Math.floor(raw), MAX_MAX_ITEMS));
-}
-function parseSince(value, now) {
-  if (!value)
-    return { cutoff: null, warning: null };
-  const trimmed = value.trim();
-  const duration3 = /^(\d+)\s*([mhdw])$/i.exec(trimmed);
-  if (duration3) {
-    const amount = Number(duration3[1]);
-    const unit = duration3[2].toLowerCase();
-    const multiplier = unit === "m" ? 60000 : unit === "h" ? 3600000 : unit === "d" ? 86400000 : 604800000;
-    return { cutoff: new Date(now.getTime() - amount * multiplier).toISOString(), warning: null };
-  }
-  const parsed = new Date(trimmed);
-  if (!Number.isNaN(parsed.getTime()))
-    return { cutoff: parsed.toISOString(), warning: null };
-  return { cutoff: null, warning: `invalid_since_ignored: ${trimmed}` };
-}
-function redactPreview(text, policy, maxChars) {
-  const redacted = redactSecrets(text, policy);
-  return {
-    text: truncateText(redacted.text, maxChars),
-    redactions: redacted.findings.length
-  };
-}
-function scoreAgainstTopic(text, terms) {
-  if (terms.length === 0)
-    return 0.5;
-  const haystack = normalizedSearchText(text);
-  const matched = terms.filter((term) => haystack.includes(term)).length;
-  return Number((matched / terms.length).toFixed(6));
-}
-function baseSafetyReminders(source) {
-  return [
-    "This pack is read-only and performs no durable writes.",
-    "Use citation ids and refs instead of pasting raw artifacts into prompts.",
-    "Resolve source or artifact refs explicitly only when raw content is needed and allowed.",
-    "Run generated knowledge writes through approval-gated commands before applying.",
-    source === "loops" || source === "runs" ? "Run evidence is summarized from knowledge run ledgers; raw run artifacts remain referenced, not embedded." : "Search evidence is derived from indexed chunks/wiki catalog rows with citation metadata."
-  ];
-}
-function citationFromRetrieval(index, citation, policy) {
-  const sourceRef = safeRef(citation.source_ref, policy);
-  const sourceUri = safeRef(citation.source_uri, policy);
-  const artifactUri = safeRef(citation.artifact_uri, policy);
-  const artifactPath = safeRef(citation.artifact_path, policy);
-  const ref = sourceRef ?? sourceUri ?? artifactPath ?? artifactUri ?? citation.id;
-  const quote = citation.quote ? redactPreview(citation.quote, policy, index < 3 ? 220 : 140) : null;
-  return {
-    citation: {
-      id: stableId3("cite", `${citation.id}\x00${ref}`, 12),
-      kind: citation.artifact_uri || citation.artifact_path ? "artifact" : "source",
-      ref,
-      source_ref: sourceRef,
-      source_uri: sourceUri,
-      artifact_uri: artifactUri,
-      artifact_path: artifactPath,
-      run_id: null,
-      run_event_id: null,
-      revision: citation.revision ?? null,
-      hash: citation.hash ?? null,
-      chunk_id: citation.chunk_id ?? null,
-      offsets: {
-        start: citation.start_offset ?? null,
-        end: citation.end_offset ?? null
-      },
-      quote_preview: quote?.text ?? null
-    },
-    redactions: quote?.redactions ?? 0
-  };
-}
-async function buildSearchDraft(options, maxItems) {
-  const query = (options.query ?? options.topic ?? "").trim();
-  if (!query)
-    throw new Error("Context pack query is required for search source.");
-  const {
-    config: config2,
-    dbPath,
-    limit,
-    semantic,
-    modelRef,
-    dimensions,
-    fake,
-    env,
-    batchSize,
-    maxParallelCalls,
-    legacyStorePath
-  } = options;
-  const context = await retrieveKnowledgeContext({
-    dbPath,
-    config: config2,
-    legacyStorePath,
-    query,
-    limit: Math.max(maxItems, limit ?? maxItems),
-    semantic,
-    modelRef,
-    dimensions,
-    fake,
-    env,
-    batchSize,
-    maxParallelCalls,
-    contextChars: Math.min(options.contextChars ?? 700, 1200)
-  });
-  const citationMap = new Map;
-  let redactions = 0;
-  context.citations.forEach((citation, index) => {
-    const item = citationFromRetrieval(index, citation, options.safetyPolicy);
-    redactions += item.redactions;
-    citationMap.set(citation.id, item.citation);
-  });
-  const evidence = context.excerpts.slice(0, Math.max(maxItems * 2, maxItems)).map((excerpt) => {
-    const result = context.results.find((entry) => entry.id === excerpt.result_id);
-    const citation = excerpt.citation_id ? citationMap.get(excerpt.citation_id) : null;
-    const redacted = redactPreview(excerpt.text, options.safetyPolicy, 520);
-    redactions += redacted.redactions;
-    const title = result?.title ?? citation?.ref ?? excerpt.kind;
-    return {
-      id: stableId3("ev", `${excerpt.kind}\x00${excerpt.result_id}\x00${excerpt.citation_id ?? ""}`, 14),
-      kind: excerpt.kind,
-      title: truncateText(title, 100),
-      text_preview: redacted.text,
-      score: Number(excerpt.score.toFixed(6)),
-      citation_ids: citation ? [citation.id] : [],
-      provenance: {
-        source: "search",
-        record_ref: `${excerpt.kind}:${excerpt.result_id}`,
-        created_at: context.created_at,
-        updated_at: null,
-        metadata_keys: []
-      }
-    };
-  });
-  const usedCitationIds = new Set(evidence.flatMap((entry) => entry.citation_ids));
-  const citations = Array.from(citationMap.values()).filter((citation) => usedCitationIds.has(citation.id));
-  return {
-    citations,
-    evidence,
-    duplicateCandidates: [],
-    redactions,
-    warnings: context.warnings,
-    available: context.excerpts.length
-  };
-}
-function loadRunRows(db, cutoff, limit) {
-  if (cutoff) {
-    return db.query(`SELECT id, type, prompt, status, provider, model, cost_tokens, cost_usd, metadata_json, created_at, updated_at
-       FROM runs
-       WHERE updated_at >= ? OR created_at >= ?
-       ORDER BY updated_at DESC, created_at DESC
-       LIMIT ?`).all(cutoff, cutoff, limit);
-  }
-  return db.query(`SELECT id, type, prompt, status, provider, model, cost_tokens, cost_usd, metadata_json, created_at, updated_at
-     FROM runs
-     ORDER BY updated_at DESC, created_at DESC
-     LIMIT ?`).all(limit);
-}
-function loadRunEvents(db, runIds, limit) {
-  if (runIds.length === 0)
-    return [];
-  const placeholders2 = runIds.map(() => "?").join(", ");
-  return db.query(`SELECT id, run_id, level, event, metadata_json, created_at
-     FROM run_events
-     WHERE run_id IN (${placeholders2})
-     ORDER BY created_at DESC
-     LIMIT ?`).all(...runIds, limit);
-}
-function rowMentionsLoop(row, events) {
-  const text = `${row.type} ${row.metadata_json} ${events.map((event) => `${event.event} ${event.metadata_json}`).join(" ")}`.toLowerCase();
-  return text.includes("loop");
-}
-function citationForRun(row, metadata, policy) {
-  const sourceRef = metadataRef(metadata, ["source_ref", "source_uri", "evidence_uri", "receipt_uri"], policy);
-  const artifactUri = metadataRef(metadata, ["artifact_uri"], policy);
-  const artifactPath = metadataRef(metadata, ["artifact_path", "artifact_key"], policy);
-  const ref = sourceRef ?? artifactUri ?? artifactPath ?? `knowledge://project/runs/${row.id}`;
-  const quote = row.prompt ? redactPreview(row.prompt, policy, 180).text : null;
-  return {
-    id: stableId3("cite", `run\x00${row.id}\x00${ref}`, 12),
-    kind: artifactUri || artifactPath ? "artifact" : "run",
-    ref,
-    source_ref: sourceRef?.startsWith("open-files://") ? sourceRef : null,
-    source_uri: sourceRef && !sourceRef.startsWith("open-files://") ? sourceRef : null,
-    artifact_uri: artifactUri,
-    artifact_path: artifactPath,
-    run_id: row.id,
-    run_event_id: null,
-    revision: metadataRef(metadata, ["revision"], policy),
-    hash: metadataRef(metadata, ["hash", "content_hash"], policy),
-    chunk_id: null,
-    offsets: { start: null, end: null },
-    quote_preview: quote
-  };
-}
-function citationForEvent(row, metadata, policy) {
-  const sourceRef = metadataRef(metadata, ["source_ref", "source_uri", "evidence_uri", "receipt_uri"], policy);
-  const artifactUri = metadataRef(metadata, ["artifact_uri"], policy);
-  const artifactPath = metadataRef(metadata, ["artifact_path", "artifact_key"], policy);
-  const ref = sourceRef ?? artifactUri ?? artifactPath ?? `knowledge://project/runs/${row.run_id}`;
-  const quote = redactPreview(row.event, policy, 160).text;
-  return {
-    id: stableId3("cite", `event\x00${row.id}\x00${ref}`, 12),
-    kind: artifactUri || artifactPath ? "artifact" : "run_event",
-    ref,
-    source_ref: sourceRef?.startsWith("open-files://") ? sourceRef : null,
-    source_uri: sourceRef && !sourceRef.startsWith("open-files://") ? sourceRef : null,
-    artifact_uri: artifactUri,
-    artifact_path: artifactPath,
-    run_id: row.run_id,
-    run_event_id: row.id,
-    revision: metadataRef(metadata, ["revision"], policy),
-    hash: metadataRef(metadata, ["hash", "content_hash"], policy),
-    chunk_id: null,
-    offsets: { start: null, end: null },
-    quote_preview: quote
-  };
-}
-function duplicateCandidatesFor(evidence) {
-  const groups = new Map;
-  for (const entry of evidence) {
-    const key = normalizedSearchText(`${entry.title} ${entry.text_preview}`).replace(/\b(?:file|https?|s3):\/\/\S+/g, "").replace(/\b(?:run|evt|task|loop)_[a-z0-9_]+\b/g, "").replace(/[^a-z0-9 ]+/g, "").replace(/\b(?:run|event|completed|dry_run|pending)\b/g, "").replace(/\s+/g, " ").trim().slice(0, 220);
-    if (!key)
-      continue;
-    groups.set(key, [...groups.get(key) ?? [], entry.id]);
-  }
-  return Array.from(groups.entries()).filter(([, ids]) => ids.length > 1).map(([key, ids]) => ({
-    id: stableId3("dup", key, 12),
-    reason: "normalized_text_match",
-    evidence_ids: ids,
-    confidence: ids.length > 2 ? "high" : "medium"
-  }));
-}
-async function buildRunDraft(options, maxItems, now) {
-  const source = options.source === "loops" ? "loops" : "runs";
-  const topic = (options.topic ?? options.query ?? "").trim();
-  const topicTerms = termsFor(topic);
-  const since = parseSince(options.since, now);
-  const warnings = since.warning ? [since.warning] : [];
-  migrateKnowledgeDb(options.dbPath);
-  const db = openKnowledgeDb(options.dbPath);
-  try {
-    const runRows = loadRunRows(db, since.cutoff, Math.max(maxItems * 8, 40));
-    const allEvents = loadRunEvents(db, runRows.map((row) => row.id), Math.max(maxItems * 12, 80));
-    const eventsByRun = new Map;
-    for (const event of allEvents)
-      eventsByRun.set(event.run_id, [...eventsByRun.get(event.run_id) ?? [], event]);
-    const filteredRuns = source === "loops" ? runRows.filter((row) => rowMentionsLoop(row, eventsByRun.get(row.id) ?? [])) : runRows;
-    const scoredRuns = filteredRuns.map((row) => {
-      const metadata = parseJsonObject3(row.metadata_json);
-      const text = `${row.type} ${row.status} ${row.prompt ?? ""} ${summarizeMetadata(metadata)} ${(eventsByRun.get(row.id) ?? []).map((event) => `${event.event} ${event.metadata_json}`).join(" ")}`;
-      return { row, metadata, score: scoreAgainstTopic(text, topicTerms), text };
-    }).filter((entry) => topicTerms.length === 0 || entry.score > 0).sort((a, b) => b.score - a.score || b.row.updated_at.localeCompare(a.row.updated_at) || a.row.id.localeCompare(b.row.id));
-    const citations = [];
-    const evidence = [];
-    let redactions = 0;
-    for (const entry of scoredRuns.slice(0, Math.max(maxItems * 2, maxItems))) {
-      const citation = citationForRun(entry.row, entry.metadata, options.safetyPolicy);
-      citations.push(citation);
-      const metadataSummary = summarizeMetadata(entry.metadata);
-      const previewInput = [entry.row.prompt, metadataSummary].filter(Boolean).join(" | ") || `${entry.row.type} ${entry.row.status}`;
-      const preview = redactPreview(previewInput, options.safetyPolicy, 420);
-      redactions += preview.redactions;
-      evidence.push({
-        id: `run:${entry.row.id}`,
-        kind: entry.row.type,
-        title: truncateText(`${entry.row.type}: ${entry.row.status}`, 100),
-        text_preview: preview.text,
-        score: entry.score,
-        citation_ids: [citation.id],
-        provenance: {
-          source,
-          record_ref: `knowledge://project/runs/${entry.row.id}`,
-          created_at: entry.row.created_at,
-          updated_at: entry.row.updated_at,
-          metadata_keys: metadataKeys(entry.metadata)
-        }
-      });
-      const eventRows = (eventsByRun.get(entry.row.id) ?? []).map((event) => {
-        const metadata = parseJsonObject3(event.metadata_json);
-        const text = `${event.event} ${summarizeMetadata(metadata)} ${event.metadata_json}`;
-        return { event, metadata, score: scoreAgainstTopic(text, topicTerms), text };
-      }).filter((eventEntry) => topicTerms.length === 0 || eventEntry.score > 0).sort((a, b) => b.score - a.score || b.event.created_at.localeCompare(a.event.created_at) || a.event.id.localeCompare(b.event.id)).slice(0, 2);
-      for (const eventEntry of eventRows) {
-        const eventCitation = citationForEvent(eventEntry.event, eventEntry.metadata, options.safetyPolicy);
-        citations.push(eventCitation);
-        const preview2 = redactPreview(`${eventEntry.event}: ${summarizeMetadata(eventEntry.metadata)}`, options.safetyPolicy, 320);
-        redactions += preview2.redactions;
-        evidence.push({
-          id: `event:${eventEntry.event.id}`,
-          kind: `run_event:${eventEntry.event.level}`,
-          title: truncateText(eventEntry.event.event, 100),
-          text_preview: preview2.text,
-          score: eventEntry.score,
-          citation_ids: [eventCitation.id],
-          provenance: {
-            source,
-            record_ref: `knowledge://project/runs/${eventEntry.event.run_id}`,
-            created_at: eventEntry.event.created_at,
-            updated_at: null,
-            metadata_keys: metadataKeys(eventEntry.metadata)
-          }
-        });
-      }
-    }
-    return {
-      citations,
-      evidence,
-      duplicateCandidates: options.dedupe ? duplicateCandidatesFor(evidence) : [],
-      redactions,
-      warnings,
-      available: scoredRuns.length
-    };
-  } finally {
-    db.close();
-  }
-}
-function outlineFor(input) {
-  const title = input.purpose === "proposal" ? `Proposal context: ${truncateText(input.query || "loop evidence", 80)}` : `Knowledge context: ${truncateText(input.query, 80)}`;
-  const evidenceIds = input.evidence.slice(0, 8).map((entry) => entry.id);
-  const duplicateIds = input.duplicates.slice(0, 5).map((entry) => entry.id);
-  const bullets = input.evidence.slice(0, 5).map((entry) => `${entry.id}: ${entry.title}`);
-  if (input.evidence.length === 0)
-    bullets.push("No matching bounded evidence was found.");
-  return {
-    title,
-    bullets,
-    evidence_ids: evidenceIds,
-    duplicate_candidate_ids: duplicateIds,
-    next_actions: input.source === "loops" ? [
-      "Review duplicate_candidates before drafting a new proposal.",
-      "Use cited run refs for provenance; inspect a run only when more detail is needed.",
-      "Keep proposal writes approval-gated and idempotent."
-    ] : [
-      "Use evidence_ids and citation_ids in prompts instead of raw excerpts when possible.",
-      "Inspect cited refs only if the bounded preview is insufficient.",
-      "Use knowledge build/file-answer only with explicit approval for durable writes."
-    ]
-  };
-}
-function pruneCitations(pack) {
-  const used = new Set(pack.evidence.flatMap((entry) => entry.citation_ids));
-  pack.citations = pack.citations.filter((citation) => used.has(citation.id));
-}
-function syncOutline(pack) {
-  pack.outline.evidence_ids = pack.evidence.slice(0, 8).map((entry) => entry.id);
-  pack.outline.bullets = pack.evidence.length > 0 ? pack.evidence.slice(0, 5).map((entry) => `${entry.id}: ${entry.title}`) : ["No matching bounded evidence was found."];
-  pack.outline.duplicate_candidate_ids = pack.duplicate_candidates.slice(0, 5).map((entry) => entry.id);
-}
-function fitPackToBudget(pack) {
-  const maxTokens = pack.budgets.max_tokens;
-  const warnings = new Set(pack.warnings);
-  while (estimateTokensForValue(pack) > maxTokens) {
-    const longest = pack.evidence.map((entry, index) => ({ entry, index })).filter(({ entry }) => entry.text_preview.length > 180).sort((a, b) => b.entry.text_preview.length - a.entry.text_preview.length)[0];
-    if (longest) {
-      longest.entry.text_preview = truncateText(longest.entry.text_preview, 180);
-      warnings.add("text_preview_truncated_for_token_budget");
-      continue;
-    }
-    const longCitation = pack.citations.filter((citation) => (citation.quote_preview?.length ?? 0) > 120).sort((a, b) => (b.quote_preview?.length ?? 0) - (a.quote_preview?.length ?? 0))[0];
-    if (longCitation?.quote_preview) {
-      longCitation.quote_preview = truncateText(longCitation.quote_preview, 120);
-      warnings.add("citation_quote_truncated_for_token_budget");
-      continue;
-    }
-    if (pack.evidence.length > 0) {
-      pack.evidence.pop();
-      pack.budgets.items_truncated += 1;
-      pack.duplicate_candidates = pack.duplicate_candidates.map((candidate) => ({
-        ...candidate,
-        evidence_ids: candidate.evidence_ids.filter((id) => pack.evidence.some((entry) => entry.id === id))
-      })).filter((candidate) => candidate.evidence_ids.length > 1);
-      syncOutline(pack);
-      warnings.add("evidence_truncated_for_token_budget");
-      pruneCitations(pack);
-      continue;
-    }
-    if (pack.outline.next_actions.length > 1) {
-      pack.outline.next_actions.pop();
-      warnings.add("outline_truncated_for_token_budget");
-      continue;
-    }
-    warnings.add("token_budget_floor_exceeded");
-    break;
-  }
-  pack.warnings = Array.from(warnings).sort();
-  pack.budgets.items_included = pack.evidence.length;
-  syncOutline(pack);
-  pack.budgets.estimated_tokens = estimateTokensForValue(pack);
-  pack.budgets.token_budget_exceeded = pack.budgets.estimated_tokens > maxTokens;
-  if (pack.budgets.token_budget_exceeded) {
-    throw new Error(`Unable to build context pack within ${maxTokens} token budget; increase --max-tokens.`);
-  }
-  pack.message = `${pack.evidence.length} bounded evidence item(s), estimated ${pack.budgets.estimated_tokens}/${maxTokens} token(s)`;
-  return pack;
-}
-async function buildKnowledgeAgentContextPack(options) {
-  const now = options.now ?? new Date;
-  const source = options.source ?? "search";
-  const purpose = options.purpose ?? (source === "loops" || source === "runs" ? "proposal" : "agent_context");
-  const maxTokens = coerceMaxTokens(options.maxTokens);
-  const maxItems = coerceMaxItems(options.maxItems, options.limit);
-  const query = normalizeText(options.query ?? options.topic ?? "");
-  if (purpose === "proposal" && source !== "search" && !query) {
-    throw new Error("Proposal context requires --topic <text> or a positional topic.");
-  }
-  if (source !== "search")
-    migrateKnowledgeDb(options.dbPath);
-  const sinceForKey = parseSince(options.since, now).cutoff ?? options.since ?? "";
-  const draft = source === "search" ? await buildSearchDraft(options, maxItems) : await buildRunDraft(options, maxItems, now);
-  const sortedEvidence = draft.evidence.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, maxItems);
-  const sortedCitations = draft.citations.filter((citation, index, rows) => rows.findIndex((entry) => entry.id === citation.id) === index).sort((a, b) => a.id.localeCompare(b.id));
-  const duplicateCandidates = options.dedupe ? duplicateCandidatesFor(sortedEvidence) : draft.duplicateCandidates.filter((candidate) => candidate.evidence_ids.every((id) => sortedEvidence.some((entry) => entry.id === id)));
-  const outline = outlineFor({
-    source,
-    purpose,
-    query,
-    evidence: sortedEvidence,
-    duplicates: duplicateCandidates
-  });
-  const pack = {
-    ok: true,
-    format: "knowledge-agent-context-pack",
-    version: 1,
-    created_at: now.toISOString(),
-    source,
-    purpose,
-    query,
-    topic: options.topic ?? null,
-    since: options.since ?? null,
-    dry_run: true,
-    idempotency_key: stableId3("ctx", [
-      source,
-      purpose,
-      query,
-      sinceForKey,
-      options.dedupe === true ? "dedupe" : "no-dedupe",
-      options.semantic === true ? "semantic" : "keyword",
-      options.modelRef ?? "",
-      options.limit ?? "",
-      maxTokens,
-      maxItems,
-      sortedEvidence.map((entry) => entry.id).join(","),
-      sortedCitations.map((entry) => entry.id).join(",")
-    ].join("\x00"), 20),
-    budgets: {
-      max_tokens: maxTokens,
-      estimated_tokens: 0,
-      max_items: maxItems,
-      items_included: sortedEvidence.length,
-      items_available: draft.available,
-      items_truncated: Math.max(0, draft.available - sortedEvidence.length),
-      token_budget_exceeded: false
-    },
-    safety: {
-      raw_artifact_content_included: false,
-      durable_writes_performed: false,
-      redactions: draft.redactions,
-      reminders: baseSafetyReminders(source)
-    },
-    citations: sortedCitations,
-    evidence: sortedEvidence,
-    duplicate_candidates: duplicateCandidates,
-    outline,
-    warnings: draft.warnings,
-    message: `${sortedEvidence.length} bounded evidence item(s), estimated under ${maxTokens} token(s)`
-  };
-  pruneCitations(pack);
-  return fitPackToBudget(pack);
-}
-
-// src/conflict-agent.ts
-import { randomUUID as randomUUID7 } from "crypto";
-
-// src/sync.ts
-import { createHash as createHash6, randomUUID as randomUUID6 } from "crypto";
-import { existsSync as existsSync6, readFileSync as readFileSync6 } from "fs";
-import { hostname as hostname3 } from "os";
-import { fileURLToPath as fileURLToPath2 } from "url";
-import { relative as relative3, resolve as resolve3, sep as sep3 } from "path";
-
-// src/storage-contract.ts
-import { createHash as createHash5, randomUUID as randomUUID5 } from "crypto";
-import { pathToFileURL as pathToFileURL2 } from "url";
 
 // src/remote-client.ts
 var REMOTE_KNOWLEDGE_CONTRACT_VERSION = 1;
@@ -18701,7 +16384,7 @@ var GENERATED_ARTIFACTS = [
 function hashArtifactBody(body) {
   const bytes = typeof body === "string" ? Buffer.from(body) : Buffer.from(body);
   return {
-    hash: `sha256:${createHash5("sha256").update(bytes).digest("hex")}`,
+    hash: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
     size_bytes: bytes.byteLength
   };
 }
@@ -18899,13 +16582,3796 @@ function recordStorageObjects(db, objects, now = new Date) {
         ...entry.modified_at ? { artifact_modified_at: entry.modified_at } : {},
         ...entry.metadata ?? {}
       };
-      statement.run(randomUUID5(), entry.uri, entry.kind, entry.content_type ?? null, entry.hash ?? null, entry.size_bytes ?? null, JSON.stringify(metadata), timestamp, timestamp);
+      statement.run(randomUUID2(), entry.uri, entry.kind, entry.content_type ?? null, entry.hash ?? null, entry.size_bytes ?? null, JSON.stringify(metadata), timestamp, timestamp);
     }
   });
   insert(objects);
 }
 
+// src/provenance.ts
+function isStaleStatus(status) {
+  return ["deleted", "stale", "invalidated", "reindex_required"].includes((status ?? "").toLowerCase());
+}
+function sourceProvenance(input) {
+  const status = input.status ?? null;
+  return {
+    source_owner: "open-files",
+    source_ref: input.source_ref ?? null,
+    source_uri: input.source_uri ?? null,
+    source_kind: input.source_kind ?? null,
+    source_revision_id: input.source_revision_id ?? null,
+    revision: input.revision ?? null,
+    hash: input.hash ?? null,
+    chunk_id: input.chunk_id ?? null,
+    start_offset: input.start_offset ?? null,
+    end_offset: input.end_offset ?? null,
+    status,
+    read_only: true,
+    citation_required: true,
+    resolver: input.resolver ?? null,
+    stale: isStaleStatus(status)
+  };
+}
+function generatedArtifactProvenance(input) {
+  return {
+    source_owner: "open-files",
+    generated_from: input.generated_from,
+    artifact_key: input.artifact_key,
+    source_refs: input.source_refs ?? [],
+    read_only_sources: true,
+    citation_required: input.citation_required ?? true,
+    raw_source_bytes_stored_in_open_knowledge: false
+  };
+}
+function withProvenance(metadata, provenance) {
+  return {
+    ...metadata,
+    provenance
+  };
+}
+
+// src/source-ingest.ts
+import { createHash as createHash4 } from "crypto";
+import { existsSync as existsSync6, readFileSync as readFileSync6 } from "fs";
+import { basename as basename2 } from "path";
+
+// src/manifest-ingest.ts
+import { createHash as createHash3 } from "crypto";
+import { existsSync as existsSync5, readFileSync as readFileSync5 } from "fs";
+import { basename } from "path";
+
+// src/safety.ts
+import { createHash as createHash2, randomUUID as randomUUID3 } from "crypto";
+import { relative as relative2, resolve as resolve2, sep as sep2 } from "path";
+function envEnabled(name) {
+  const value = process.env[name];
+  return value === "1" || value === "true" || value === "yes";
+}
+function resolveSafetyPolicy(config2, workspace) {
+  const extended = config2;
+  const configuredBuckets = new Set(extended.safety?.network?.allowed_s3_buckets ?? []);
+  if (config2.storage.type === "s3" && config2.storage.s3?.bucket)
+    configuredBuckets.add(config2.storage.s3.bucket);
+  if (process.env.HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS) {
+    for (const bucket of process.env.HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS.split(",").map((entry) => entry.trim()).filter(Boolean)) {
+      configuredBuckets.add(bucket);
+    }
+  }
+  return {
+    mode: config2.mode,
+    allowWriteRoots: [
+      workspace.home,
+      workspace.artifactsDir,
+      workspace.cacheDir,
+      workspace.exportsDir,
+      workspace.indexesDir,
+      workspace.logsDir,
+      workspace.runsDir,
+      workspace.schemasDir,
+      workspace.wikiDir
+    ].map((entry) => resolve2(entry)),
+    readOnlySourceAccess: true,
+    network: {
+      webSearchEnabled: extended.safety?.network?.web_search_enabled ?? envEnabled("HASNA_KNOWLEDGE_WEB_SEARCH"),
+      s3ReadsEnabled: extended.safety?.network?.s3_reads_enabled ?? envEnabled("HASNA_KNOWLEDGE_ALLOW_S3_READS"),
+      allowedS3Buckets: [...configuredBuckets].sort()
+    },
+    redaction: {
+      enabled: extended.safety?.redaction?.enabled ?? true
+    },
+    approvals: {
+      generatedWritesRequireApproval: extended.safety?.approvals?.generated_writes_require_approval ?? true
+    }
+  };
+}
+function isInside(root, target) {
+  const rel = relative2(root, target);
+  return rel === "" || !rel.startsWith("..") && rel !== ".." && !rel.startsWith(`..${sep2}`);
+}
+function assertWriteAllowed(targetPath, policy) {
+  const resolved = resolve2(targetPath);
+  if (!policy.allowWriteRoots.some((root) => isInside(root, resolved))) {
+    throw new Error(`Safety policy denied write outside .hasna/knowledge: ${targetPath}`);
+  }
+}
+function assertS3ReadAllowed(uri, policy) {
+  const parsed = new URL(uri);
+  const bucket = parsed.hostname;
+  if (!policy.network.s3ReadsEnabled) {
+    throw new Error("Safety policy denied S3 read. Set safety.network.s3_reads_enabled=true or HASNA_KNOWLEDGE_ALLOW_S3_READS=1.");
+  }
+  if (!policy.network.allowedS3Buckets.includes(bucket)) {
+    throw new Error(`Safety policy denied S3 bucket "${bucket}". Add it to safety.network.allowed_s3_buckets or HASNA_KNOWLEDGE_ALLOWED_S3_BUCKETS.`);
+  }
+}
+function assertWebSearchAllowed(policy) {
+  if (!policy.network.webSearchEnabled) {
+    throw new Error("Safety policy denied web search. Set safety.network.web_search_enabled=true or HASNA_KNOWLEDGE_WEB_SEARCH=1.");
+  }
+}
+var REDACTION_PATTERNS = [
+  { type: "private_key_block", severity: "high", regex: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, replacement: "[REDACTED:private_key_block]" },
+  { type: "secret_assignment", severity: "high", regex: /\b(?:api[_-]?key|secret|token|password)\s*[:=]\s*['"]?[^'"\s]{8,}/gi, replacement: "[REDACTED:secret_assignment]" },
+  { type: "openai_api_key", severity: "high", regex: /\bsk-[A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:openai_api_key]" },
+  { type: "anthropic_api_key", severity: "high", regex: new RegExp(`\\b${["sk", "ant"].join("-")}-[A-Za-z0-9_-]{20,}\\b`, "g"), replacement: "[REDACTED:anthropic_api_key]" },
+  { type: "aws_access_key_id", severity: "high", regex: /\bA(?:KIA|SIA)[A-Z0-9]{16}\b/g, replacement: "[REDACTED:aws_access_key_id]" }
+];
+function redactSecrets(text, policy) {
+  if (policy && !policy.redaction.enabled)
+    return { text, findings: [] };
+  let output = text;
+  const findings = [];
+  for (const pattern of REDACTION_PATTERNS) {
+    output = output.replace(pattern.regex, (match, ...args) => {
+      const offset = typeof args.at(-2) === "number" ? args.at(-2) : output.indexOf(match);
+      findings.push({
+        type: pattern.type,
+        severity: pattern.severity,
+        start: Math.max(0, offset),
+        end: Math.max(0, offset + match.length)
+      });
+      return pattern.replacement;
+    });
+  }
+  return { text: output, findings };
+}
+function auditId(input) {
+  return `audit_${createHash2("sha256").update(`${input.event_type}\x00${input.action}\x00${input.target_uri ?? ""}\x00${input.created_at ?? ""}\x00${JSON.stringify(input.metadata ?? {})}\x00${randomUUID3()}`).digest("hex").slice(0, 24)}`;
+}
+function truncateAuditMetadata(value, depth = 0) {
+  if (depth > 6)
+    return "[Truncated:depth]";
+  if (typeof value === "string") {
+    return value.length > 1000 ? `${value.slice(0, 1000)}...[Truncated:${value.length - 1000} chars]` : value;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || value === null || value === undefined)
+    return value;
+  if (Array.isArray(value)) {
+    const entries = value.slice(0, 25).map((entry) => truncateAuditMetadata(entry, depth + 1));
+    if (value.length > 25)
+      entries.push(`[Truncated:${value.length - 25} items]`);
+    return entries;
+  }
+  if (typeof value === "object") {
+    const output = {};
+    const entries = Object.entries(value).slice(0, 50);
+    for (const [key, entry] of entries)
+      output[key] = truncateAuditMetadata(entry, depth + 1);
+    const total = Object.keys(value).length;
+    if (total > entries.length)
+      output.__truncated_keys = total - entries.length;
+    return output;
+  }
+  return String(value);
+}
+function recordAuditEvent(db, input) {
+  const createdAt = input.created_at ?? new Date().toISOString();
+  const metadata = truncateAuditMetadata(input.metadata ?? {});
+  const id = auditId({ ...input, metadata, created_at: createdAt });
+  db.run(`INSERT INTO audit_events (id, event_type, action, target_uri, decision, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`, [
+    id,
+    input.event_type,
+    input.action,
+    input.target_uri ?? null,
+    input.decision,
+    JSON.stringify(metadata),
+    createdAt
+  ]);
+  return id;
+}
+function recordRedactionFindings(db, input) {
+  const createdAt = input.created_at ?? new Date().toISOString();
+  for (const finding of input.findings) {
+    db.run(`INSERT INTO redaction_findings (id, source_uri, run_id, severity, finding_type, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`, [
+      `redact_${randomUUID3()}`,
+      input.source_uri ?? null,
+      input.run_id ?? null,
+      finding.severity,
+      finding.type,
+      JSON.stringify({ ...input.metadata ?? {}, start: finding.start, end: finding.end }),
+      createdAt
+    ]);
+  }
+  return input.findings.length;
+}
+var COMMON_BARE_TOKEN_PATTERNS = [
+  { type: "github_token", severity: "high", regex: /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, replacement: "[REDACTED:github_token]" },
+  { type: "github_pat_token", severity: "high", regex: /\bgithub[_]pat[_][A-Za-z0-9_]{20,}\b/g, replacement: "[REDACTED:github_pat_token]" },
+  { type: "package_registry_token", severity: "high", regex: /\bnpm_[A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:package_registry_token]" },
+  { type: "context7_token", severity: "high", regex: /\bctx7sk[-][A-Za-z0-9_-]{10,}\b/g, replacement: "[REDACTED:context7_token]" },
+  { type: "xai_api_key", severity: "high", regex: /\bxai[-][A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:xai_api_key]" },
+  { type: "google_api_key", severity: "high", regex: /\bAIza[A-Za-z0-9_-]{20,}\b/g, replacement: "[REDACTED:google_api_key]" }
+];
+REDACTION_PATTERNS.push(...COMMON_BARE_TOKEN_PATTERNS);
+
+// src/manifest-ingest.ts
+var DEFAULT_MAX_MANIFEST_INPUT_BYTES = 20 * 1024 * 1024;
+var DEFAULT_MAX_MANIFEST_ITEMS = 1e4;
+var DEFAULT_MANIFEST_PREVIEW_ITEMS = 10;
+function stableId(prefix, value) {
+  return `${prefix}_${createHash3("sha256").update(value).digest("hex").slice(0, 20)}`;
+}
+function asObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
+}
+function asString(value) {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+function asNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+function buildSourceRefFromItem(item) {
+  const explicit = asString(item.source_ref) ?? asString(item.source_uri) ?? asString(item.uri);
+  if (explicit)
+    return explicit;
+  const fileId = asString(item.file_id);
+  if (fileId) {
+    const revision = asString(item.revision_id) ?? asString(item.revision);
+    const fileRef = `open-files://file/${encodeURIComponent(fileId)}`;
+    return revision ? `${fileRef}/revision/${encodeURIComponent(revision)}` : fileRef;
+  }
+  const sourceId = asString(item.source_id);
+  const path = asString(item.path);
+  if (sourceId && path) {
+    return `open-files://source/${encodeURIComponent(sourceId)}/path/${encodeURIComponent(path)}`;
+  }
+  throw new Error("Manifest item is missing source_ref, file_id, or source_id/path.");
+}
+function baseSourceUri(sourceRef, parsed) {
+  if (parsed.kind === "open-files" && parsed.entity === "file" && parsed.revision_id) {
+    return sourceRef.replace(/\/revision\/[^/]+$/, "");
+  }
+  return sourceRef;
+}
+function textFromItem(item) {
+  const direct = asString(item.extracted_text) ?? asString(item.text) ?? asString(item.content_text) ?? asString(item.markdown);
+  if (direct !== undefined)
+    return direct;
+  const content = item.content;
+  return typeof content === "string" ? content : null;
+}
+function extractedTextUriFromItem(item) {
+  const direct = asString(item.extracted_text_ref) ?? asString(item.extracted_text_uri) ?? asString(item.text_ref);
+  if (direct)
+    return direct;
+  const content = asObject(item.content);
+  return asString(content?.extracted_text_ref) ?? asString(content?.extracted_text_uri) ?? null;
+}
+function titleFromItem(item) {
+  const path = asString(item.path);
+  return asString(item.title) ?? asString(item.name) ?? (path ? basename(path) : null);
+}
+function hashFromItem(item) {
+  return asString(item.hash) ?? asString(item.checksum) ?? asString(item.sha256) ?? null;
+}
+var OMIT_MANIFEST_METADATA_KEYS = new Set([
+  "text",
+  "content",
+  "content_text",
+  "extracted_text",
+  "markdown",
+  "raw",
+  "raw_text",
+  "raw_bytes",
+  "raw_content",
+  "raw_body",
+  "raw_file",
+  "source_raw",
+  "source_raw_bytes",
+  "source_bytes",
+  "source_content",
+  "source_body",
+  "file_bytes",
+  "file_content",
+  "content_bytes",
+  "content_base64",
+  "document_bytes",
+  "document_content",
+  "document_base64",
+  "binary",
+  "binary_content",
+  "binary_base64",
+  "bytes",
+  "body",
+  "blob",
+  "data",
+  "payload"
+]);
+function normalizeMetadataKey(key) {
+  return key.toLowerCase().replace(/[\s-]+/g, "_");
+}
+function sanitizeManifestMetadataValue(value) {
+  if (Array.isArray(value))
+    return value.map((entry) => sanitizeManifestMetadataValue(entry));
+  const object2 = asObject(value);
+  if (!object2)
+    return value;
+  const sanitized = {};
+  for (const [key, nestedValue] of Object.entries(object2)) {
+    if (OMIT_MANIFEST_METADATA_KEYS.has(normalizeMetadataKey(key)))
+      continue;
+    sanitized[key] = sanitizeManifestMetadataValue(nestedValue);
+  }
+  return sanitized;
+}
+function revisionFromItem(item, parsed, hash2) {
+  const revision = asString(item.revision_id) ?? asString(item.revision) ?? asString(item.version_id) ?? (parsed.kind === "open-files" ? parsed.revision_id : undefined) ?? hash2 ?? asString(item.updated_at);
+  return revision ?? "current";
+}
+function metadataFromItem(item, normalized) {
+  const metadata = {};
+  for (const [key, value] of Object.entries(item)) {
+    if (OMIT_MANIFEST_METADATA_KEYS.has(normalizeMetadataKey(key)))
+      continue;
+    metadata[key] = sanitizeManifestMetadataValue(value);
+  }
+  metadata.source_ref = normalized.sourceRef;
+  metadata.source_uri = normalized.sourceUri;
+  metadata.status = normalized.status;
+  return metadata;
+}
+function normalizeManifestItem(item, now) {
+  const sourceRef = buildSourceRefFromItem(item);
+  const parsed = parseSourceRef(sourceRef);
+  const sourceUri = baseSourceUri(sourceRef, parsed);
+  const hash2 = hashFromItem(item);
+  const status = asString(item.status) ?? "active";
+  return {
+    raw: item,
+    sourceRef,
+    sourceUri,
+    kind: parsed.kind,
+    title: titleFromItem(item),
+    revision: revisionFromItem(item, parsed, hash2),
+    hash: hash2,
+    extractedTextUri: extractedTextUriFromItem(item),
+    text: textFromItem(item),
+    metadata: metadataFromItem(item, { sourceRef, sourceUri, status }),
+    acl: item.permissions ?? item.acl ?? {},
+    status,
+    updatedAt: asString(item.updated_at) ?? now
+  };
+}
+function parseManifestText(text) {
+  const trimmed = text.trim();
+  if (!trimmed)
+    return [];
+  if (trimmed.startsWith("[")) {
+    const parsed = JSON.parse(trimmed);
+    if (!Array.isArray(parsed))
+      throw new Error("Manifest array parse failed.");
+    return parsed.map((entry) => {
+      const item = asObject(entry);
+      if (!item)
+        throw new Error("Manifest array entries must be objects.");
+      return item;
+    });
+  }
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const object2 = asObject(parsed);
+      if (!object2)
+        throw new Error("Manifest object parse failed.");
+      if (Array.isArray(object2.items)) {
+        return object2.items.map((entry) => {
+          const item = asObject(entry);
+          if (!item)
+            throw new Error("Manifest items entries must be objects.");
+          return item;
+        });
+      }
+      if ("source_ref" in object2 || "source_uri" in object2 || "file_id" in object2)
+        return [object2];
+    } catch (error51) {
+      const lines = trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0);
+      if (lines.length <= 1)
+        throw error51;
+      return lines.map((line) => {
+        const item = asObject(JSON.parse(line));
+        if (!item)
+          throw new Error("Manifest JSONL entries must be objects.");
+        return item;
+      });
+    }
+  }
+  return trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0).map((line) => {
+    const item = asObject(JSON.parse(line));
+    if (!item)
+      throw new Error("Manifest JSONL entries must be objects.");
+    return item;
+  });
+}
+async function readS3Text(uri, config2, safetyPolicy) {
+  const parsed = new URL(uri);
+  const bucket = parsed.hostname;
+  const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
+  if (!bucket || !key)
+    throw new Error(`Invalid S3 manifest URI: ${uri}`);
+  if (safetyPolicy)
+    assertS3ReadAllowed(uri, safetyPolicy);
+  const [{ S3Client, GetObjectCommand }, { fromIni }] = await Promise.all([
+    import("@aws-sdk/client-s3"),
+    import("@aws-sdk/credential-providers")
+  ]);
+  const s3Config = config2?.storage.type === "s3" && config2.storage.s3?.bucket === bucket ? config2.storage.s3 : undefined;
+  const client = new S3Client({
+    region: s3Config?.region,
+    credentials: s3Config?.profile ? fromIni({ profile: s3Config.profile }) : undefined,
+    maxAttempts: s3Config?.max_attempts
+  });
+  const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  if (!response.Body)
+    return "";
+  return await response.Body.transformToString();
+}
+async function readManifestInput(input, config2, safetyPolicy, maxInputBytes = DEFAULT_MAX_MANIFEST_INPUT_BYTES) {
+  const text = input.startsWith("s3://") ? await readS3Text(input, config2, safetyPolicy) : (() => {
+    if (!existsSync5(input))
+      throw new Error(`Manifest not found: ${input}`);
+    return readFileSync5(input, "utf8");
+  })();
+  const bytes = Buffer.byteLength(text);
+  if (bytes > maxInputBytes) {
+    throw new Error(`Manifest input is too large: ${bytes} bytes exceeds ${maxInputBytes} byte limit.`);
+  }
+  return text;
+}
+function chunkText(text, maxChars, overlapChars) {
+  const normalized = text.replace(/\r\n/g, `
+`);
+  if (!normalized.trim())
+    return [];
+  const chunks = [];
+  let start = 0;
+  while (start < normalized.length) {
+    const hardEnd = Math.min(normalized.length, start + maxChars);
+    let end = hardEnd;
+    if (hardEnd < normalized.length) {
+      const paragraphBreak = normalized.lastIndexOf(`
+
+`, hardEnd);
+      const sentenceBreak = normalized.lastIndexOf(". ", hardEnd);
+      const candidate = Math.max(paragraphBreak, sentenceBreak);
+      if (candidate > start + Math.floor(maxChars * 0.5))
+        end = candidate + (candidate === paragraphBreak ? 2 : 1);
+    }
+    const chunk = normalized.slice(start, end).trim();
+    if (chunk) {
+      chunks.push({
+        ordinal: chunks.length,
+        text: chunk,
+        startOffset: start,
+        endOffset: end
+      });
+    }
+    if (end >= normalized.length)
+      break;
+    start = Math.max(0, end - overlapChars);
+  }
+  return chunks;
+}
+function estimateTokenCount(text) {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.ceil(words * 1.25));
+}
+function deleteChunksForRevision(db, sourceRevisionId) {
+  const rows = db.query("SELECT id FROM chunks WHERE source_revision_id = ?").all(sourceRevisionId);
+  for (const row of rows) {
+    db.run("DELETE FROM chunks_fts WHERE chunk_id = ?", [row.id]);
+  }
+  db.run("DELETE FROM chunks WHERE source_revision_id = ?", [sourceRevisionId]);
+  return rows.length;
+}
+function upsertSource(db, item, now) {
+  const sourceId = stableId("src", item.sourceUri);
+  db.run(`INSERT INTO sources (id, uri, kind, title, metadata_json, acl_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(uri) DO UPDATE SET
+       kind = excluded.kind,
+       title = excluded.title,
+       metadata_json = excluded.metadata_json,
+       acl_json = excluded.acl_json,
+       updated_at = excluded.updated_at`, [
+    sourceId,
+    item.sourceUri,
+    item.kind,
+    item.title,
+    JSON.stringify(item.metadata),
+    JSON.stringify(item.acl ?? {}),
+    now,
+    item.updatedAt
+  ]);
+  const row = db.query("SELECT id FROM sources WHERE uri = ?").get(item.sourceUri);
+  if (!row)
+    throw new Error(`Failed to upsert source: ${item.sourceUri}`);
+  return row.id;
+}
+function upsertRevision(db, sourceId, item, now) {
+  const revisionId = stableId("rev", `${sourceId}\x00${item.revision}`);
+  db.run(`INSERT INTO source_revisions (id, source_id, revision, hash, extracted_text_uri, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(source_id, revision) DO UPDATE SET
+       hash = excluded.hash,
+       extracted_text_uri = excluded.extracted_text_uri,
+       metadata_json = excluded.metadata_json`, [
+    revisionId,
+    sourceId,
+    item.revision,
+    item.hash,
+    item.extractedTextUri,
+    JSON.stringify(item.metadata),
+    now
+  ]);
+  const row = db.query("SELECT id FROM source_revisions WHERE source_id = ? AND revision = ?").get(sourceId, item.revision);
+  if (!row)
+    throw new Error(`Failed to upsert source revision: ${item.sourceRef}`);
+  return row.id;
+}
+function insertChunks(db, sourceRevisionId, item, now, maxChars, overlapChars, safetyPolicy) {
+  if (!item.text || item.status.toLowerCase() === "deleted")
+    return { chunksInserted: 0, redactions: 0 };
+  const redacted = redactSecrets(item.text, safetyPolicy);
+  if (redacted.findings.length > 0) {
+    recordRedactionFindings(db, {
+      source_uri: item.sourceUri,
+      findings: redacted.findings,
+      metadata: { source_ref: item.sourceRef, revision: item.revision },
+      created_at: now
+    });
+    recordAuditEvent(db, {
+      event_type: "redaction",
+      action: "source_text_redact",
+      target_uri: item.sourceUri,
+      decision: "redacted",
+      metadata: { findings: redacted.findings.length, source_ref: item.sourceRef, revision: item.revision },
+      created_at: now
+    });
+  }
+  const chunks = chunkText(redacted.text, maxChars, overlapChars);
+  for (const chunk of chunks) {
+    const chunkId = stableId("chk", `${sourceRevisionId}\x00${chunk.ordinal}\x00${chunk.text}`);
+    const provenance = sourceProvenance({
+      source_ref: item.sourceRef,
+      source_uri: item.sourceUri,
+      source_kind: item.kind,
+      source_revision_id: sourceRevisionId,
+      revision: item.revision,
+      hash: item.hash,
+      chunk_id: chunkId,
+      start_offset: chunk.startOffset,
+      end_offset: chunk.endOffset,
+      status: item.status,
+      resolver: "open-files-read-only"
+    });
+    const metadata = withProvenance({
+      source_ref: item.sourceRef,
+      source_uri: item.sourceUri,
+      source_kind: item.kind,
+      source_revision_id: sourceRevisionId,
+      revision: item.revision,
+      hash: item.hash,
+      status: item.status,
+      path: asString(item.raw.path) ?? null,
+      mime: asString(item.raw.mime) ?? asString(item.raw.content_type) ?? null,
+      size: asNumber(item.raw.size) ?? null
+    }, provenance);
+    db.run(`INSERT INTO chunks (id, source_revision_id, kind, ordinal, text, token_count, start_offset, end_offset, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      chunkId,
+      sourceRevisionId,
+      "source",
+      chunk.ordinal,
+      chunk.text,
+      estimateTokenCount(chunk.text),
+      chunk.startOffset,
+      chunk.endOffset,
+      JSON.stringify(metadata),
+      now
+    ]);
+    db.run("INSERT INTO chunks_fts (chunk_id, text, title, source_uri) VALUES (?, ?, ?, ?)", [chunkId, chunk.text, item.title ?? "", item.sourceUri]);
+  }
+  return { chunksInserted: chunks.length, redactions: redacted.findings.length };
+}
+async function ingestOpenFilesManifest(options) {
+  const now = options.now ?? new Date;
+  if (options.safetyPolicy)
+    assertWriteAllowed(options.dbPath, options.safetyPolicy);
+  migrateKnowledgeDb(options.dbPath);
+  const text = await readManifestInput(options.input, options.config, options.safetyPolicy, options.maxInputBytes);
+  const items = parseManifestText(text);
+  const maxItems = options.maxItems ?? DEFAULT_MAX_MANIFEST_ITEMS;
+  if (items.length > maxItems) {
+    throw new Error(`Manifest contains too many items: ${items.length} exceeds ${maxItems} item limit.`);
+  }
+  return ingestOpenFilesManifestItems({
+    dbPath: options.dbPath,
+    items,
+    sourceLabel: options.input,
+    safetyPolicy: options.safetyPolicy,
+    now,
+    maxChunkChars: options.maxChunkChars,
+    chunkOverlapChars: options.chunkOverlapChars,
+    maxItems: options.maxItems
+  });
+}
+async function ingestOpenFilesManifestItems(options) {
+  const now = (options.now ?? new Date).toISOString();
+  const maxChunkChars = options.maxChunkChars ?? 4000;
+  const chunkOverlapChars = options.chunkOverlapChars ?? 200;
+  const maxItems = options.maxItems ?? DEFAULT_MAX_MANIFEST_ITEMS;
+  if (maxChunkChars < 500)
+    throw new Error("maxChunkChars must be at least 500.");
+  if (chunkOverlapChars < 0 || chunkOverlapChars >= maxChunkChars)
+    throw new Error("chunkOverlapChars must be less than maxChunkChars.");
+  if (options.items.length > maxItems) {
+    throw new Error(`Manifest contains too many items: ${options.items.length} exceeds ${maxItems} item limit.`);
+  }
+  if (options.safetyPolicy)
+    assertWriteAllowed(options.dbPath, options.safetyPolicy);
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    const result = db.transaction(() => {
+      const seenSources = new Set;
+      const seenRevisions = new Set;
+      let chunksInserted = 0;
+      let chunksDeleted = 0;
+      let redactions = 0;
+      let skipped = 0;
+      const preview = [];
+      recordAuditEvent(db, {
+        event_type: "source_read",
+        action: options.readAction ?? (options.sourceLabel.startsWith("s3://") ? "s3_manifest_read" : "local_manifest_read"),
+        target_uri: options.sourceLabel,
+        decision: "allow",
+        metadata: { items: options.items.length, read_only: true },
+        created_at: now
+      });
+      for (const raw of options.items) {
+        const item = normalizeManifestItem(raw, now);
+        if (preview.length < DEFAULT_MANIFEST_PREVIEW_ITEMS) {
+          preview.push({
+            source_ref: item.sourceRef,
+            title: item.title,
+            status: item.status,
+            has_text: Boolean(item.text)
+          });
+        }
+        const sourceId = upsertSource(db, item, now);
+        const revisionId = upsertRevision(db, sourceId, item, now);
+        seenSources.add(sourceId);
+        seenRevisions.add(revisionId);
+        if (item.text || item.status.toLowerCase() === "deleted") {
+          chunksDeleted += deleteChunksForRevision(db, revisionId);
+        }
+        const inserted = insertChunks(db, revisionId, item, now, maxChunkChars, chunkOverlapChars, options.safetyPolicy);
+        chunksInserted += inserted.chunksInserted;
+        redactions += inserted.redactions;
+      }
+      recordAuditEvent(db, {
+        event_type: "write",
+        action: "knowledge_manifest_ingest",
+        target_uri: options.dbPath,
+        decision: "allow",
+        metadata: { items: options.items.length, sources: seenSources.size, revisions: seenRevisions.size, chunks_inserted: chunksInserted, redactions },
+        created_at: now
+      });
+      return {
+        path: options.sourceLabel,
+        db_path: options.dbPath,
+        items_seen: options.items.length,
+        sources_upserted: seenSources.size,
+        revisions_upserted: seenRevisions.size,
+        chunks_inserted: chunksInserted,
+        chunks_deleted: chunksDeleted,
+        redactions,
+        skipped,
+        items_preview: preview
+      };
+    })();
+    return result;
+  } finally {
+    db.close();
+  }
+}
+
+// src/source-resolver.ts
+function parseJsonObject(value) {
+  if (!value)
+    return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function metadataString(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "string" && value.length > 0)
+      return value;
+  }
+  return null;
+}
+function metadataNumber(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "number" && Number.isFinite(value))
+      return value;
+  }
+  return null;
+}
+function assertPurposeAllowed(permissions, purpose) {
+  const mode = permissions.mode;
+  if (typeof mode === "string" && mode !== "read_only") {
+    throw new Error(`Source resolver denied ${purpose}. Permission mode is ${mode}, expected read_only.`);
+  }
+  const denied = permissions.denied_purposes;
+  if (Array.isArray(denied) && denied.includes(purpose)) {
+    throw new Error(`Source resolver denied ${purpose}. Purpose is explicitly denied.`);
+  }
+  const allowed = permissions.allowed_purposes;
+  if (Array.isArray(allowed) && allowed.length > 0 && !allowed.includes(purpose)) {
+    throw new Error(`Source resolver denied ${purpose}. Allowed purposes: ${allowed.join(", ")}`);
+  }
+}
+function sourceRevisionRef(sourceUri, revision, fallback) {
+  if (!revision)
+    return fallback;
+  try {
+    const parsed = parseSourceRef(sourceUri);
+    if (parsed.kind === "open-files" && parsed.entity === "file") {
+      return `${sourceUri}/revision/${encodeURIComponent(revision.revision)}`;
+    }
+  } catch {
+    return fallback;
+  }
+  return fallback;
+}
+function selectSource(db, sourceUri, requestedRef) {
+  return db.query(`SELECT id, uri, kind, title, metadata_json, acl_json, updated_at
+     FROM sources
+     WHERE uri = ? OR uri = ?
+     ORDER BY CASE WHEN uri = ? THEN 0 ELSE 1 END
+     LIMIT 1`).get(sourceUri, requestedRef, sourceUri) ?? null;
+}
+function selectRevision(db, sourceId, revisionId) {
+  if (revisionId) {
+    return db.query(`SELECT id, revision, hash, extracted_text_uri, metadata_json, created_at
+       FROM source_revisions
+       WHERE source_id = ? AND revision = ?
+       LIMIT 1`).get(sourceId, revisionId) ?? null;
+  }
+  return db.query(`SELECT id, revision, hash, extracted_text_uri, metadata_json, created_at
+     FROM source_revisions
+     WHERE source_id = ?
+     ORDER BY created_at DESC, revision DESC
+     LIMIT 1`).get(sourceId) ?? null;
+}
+function countChunks(db, revisionId) {
+  if (!revisionId)
+    return 0;
+  const row = db.query("SELECT COUNT(*) AS n FROM chunks WHERE source_revision_id = ?").get(revisionId);
+  return row?.n ?? 0;
+}
+function selectChunks(db, revisionId, limit) {
+  if (!revisionId || limit <= 0)
+    return [];
+  return db.query(`SELECT id, kind, ordinal, text, token_count, start_offset, end_offset, metadata_json
+     FROM chunks
+     WHERE source_revision_id = ?
+     ORDER BY ordinal ASC
+     LIMIT ?`).all(revisionId, limit);
+}
+async function resolveOpenFilesSource(options) {
+  const purpose = options.purpose ?? "knowledge_answer";
+  const limit = Math.max(0, Math.min(options.limit ?? 10, 100));
+  const resolvedAt = (options.now ?? new Date).toISOString();
+  const parsed = parseSourceRef(options.sourceRef);
+  const sourceUri = catalogSourceUriForRef(options.sourceRef, parsed);
+  const requestedRevision = revisionIdForSourceRef(options.sourceRef);
+  if (options.safetyPolicy) {
+    if (!options.safetyPolicy.readOnlySourceAccess)
+      throw new Error("Safety policy denied source resolution.");
+    assertWriteAllowed(options.dbPath, options.safetyPolicy);
+  }
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    return db.transaction(() => {
+      const source = selectSource(db, sourceUri, options.sourceRef);
+      if (!source) {
+        recordAuditEvent(db, {
+          event_type: "source_read",
+          action: "open_files_resolve_missing",
+          target_uri: options.sourceRef,
+          decision: "allow",
+          metadata: { purpose, read_only: true, source_uri: sourceUri },
+          created_at: resolvedAt
+        });
+        return {
+          source_ref: options.sourceRef,
+          source_uri: sourceUri,
+          purpose,
+          read_only: true,
+          resolved: false,
+          resolver: {
+            name: "open-files-read-only",
+            mode: "local_catalog",
+            contract: "open-files-knowledge-source-v1"
+          },
+          source: null,
+          revision: null,
+          content: {
+            mime: null,
+            size: null,
+            hash: null,
+            text_available: false,
+            chunks_total: 0,
+            chunks_returned: 0,
+            char_count_returned: 0,
+            extracted_text_ref: null,
+            bytes_available: false,
+            bytes_exposed: false
+          },
+          chunks: [],
+          citations: []
+        };
+      }
+      const sourceMetadata = parseJsonObject(source.metadata_json);
+      const permissions = parseJsonObject(source.acl_json);
+      try {
+        assertPurposeAllowed(permissions, purpose);
+      } catch (error51) {
+        recordAuditEvent(db, {
+          event_type: "source_read",
+          action: "open_files_resolve",
+          target_uri: options.sourceRef,
+          decision: "deny",
+          metadata: {
+            purpose,
+            read_only: true,
+            source_uri: source.uri,
+            error: error51 instanceof Error ? error51.message : String(error51)
+          },
+          created_at: resolvedAt
+        });
+        throw error51;
+      }
+      const revision = selectRevision(db, source.id, requestedRevision);
+      const revisionMetadata = parseJsonObject(revision?.metadata_json);
+      const totalChunks = countChunks(db, revision?.id ?? null);
+      const rows = selectChunks(db, revision?.id ?? null, limit);
+      const effectiveSourceRef = sourceRevisionRef(source.uri, revision, options.sourceRef);
+      const chunks = rows.map((row) => {
+        const metadata = parseJsonObject(row.metadata_json);
+        const evidence = {
+          resolver: "open-files-read-only",
+          mode: "local_catalog",
+          purpose,
+          read_only: true,
+          source_ref: metadataString(metadata, ["source_ref"]) ?? effectiveSourceRef,
+          source_uri: source.uri,
+          source_revision_id: revision?.id ?? null,
+          revision: revision?.revision ?? null,
+          hash: revision?.hash ?? metadataString(metadata, ["hash"]),
+          chunk_id: row.id,
+          start_offset: row.start_offset,
+          end_offset: row.end_offset,
+          resolved_at: resolvedAt
+        };
+        const provenance = sourceProvenance({
+          source_ref: evidence.source_ref,
+          source_uri: evidence.source_uri,
+          source_kind: source.kind,
+          source_revision_id: evidence.source_revision_id,
+          revision: evidence.revision,
+          hash: evidence.hash,
+          chunk_id: row.id,
+          start_offset: row.start_offset,
+          end_offset: row.end_offset,
+          status: metadataString(metadata, ["status"]),
+          resolver: evidence.resolver
+        });
+        return {
+          id: row.id,
+          kind: row.kind,
+          ordinal: row.ordinal,
+          text: row.text,
+          token_count: row.token_count,
+          start_offset: row.start_offset,
+          end_offset: row.end_offset,
+          metadata,
+          evidence,
+          provenance
+        };
+      });
+      const citations = chunks.map((chunk) => ({
+        source_ref: chunk.evidence.source_ref,
+        source_uri: source.uri,
+        chunk_id: chunk.id,
+        quote: chunk.text.slice(0, 500),
+        start_offset: chunk.start_offset,
+        end_offset: chunk.end_offset,
+        evidence: chunk.evidence,
+        provenance: chunk.provenance
+      }));
+      recordAuditEvent(db, {
+        event_type: "source_read",
+        action: "open_files_resolve",
+        target_uri: options.sourceRef,
+        decision: "allow",
+        metadata: {
+          purpose,
+          read_only: true,
+          source_uri: source.uri,
+          revision: revision?.revision ?? null,
+          chunks_returned: chunks.length,
+          chunks_total: totalChunks
+        },
+        created_at: resolvedAt
+      });
+      const mime = metadataString(sourceMetadata, ["mime", "content_type"]) ?? metadataString(revisionMetadata, ["mime", "content_type"]);
+      const size = metadataNumber(sourceMetadata, ["size", "size_bytes"]) ?? metadataNumber(revisionMetadata, ["size", "size_bytes"]);
+      return {
+        source_ref: effectiveSourceRef,
+        source_uri: source.uri,
+        purpose,
+        read_only: true,
+        resolved: true,
+        resolver: {
+          name: "open-files-read-only",
+          mode: "local_catalog",
+          contract: "open-files-knowledge-source-v1"
+        },
+        source: {
+          id: source.id,
+          uri: source.uri,
+          kind: source.kind,
+          title: source.title,
+          metadata: sourceMetadata,
+          permissions,
+          updated_at: source.updated_at
+        },
+        revision: revision ? {
+          id: revision.id,
+          revision: revision.revision,
+          hash: revision.hash,
+          extracted_text_uri: revision.extracted_text_uri,
+          metadata: revisionMetadata,
+          created_at: revision.created_at,
+          reindex_required: revisionMetadata.reindex_required === true
+        } : null,
+        content: {
+          mime,
+          size,
+          hash: revision?.hash ?? metadataString(sourceMetadata, ["hash", "checksum", "sha256"]),
+          text_available: totalChunks > 0,
+          chunks_total: totalChunks,
+          chunks_returned: chunks.length,
+          char_count_returned: chunks.reduce((sum, chunk) => sum + chunk.text.length, 0),
+          extracted_text_ref: revision?.extracted_text_uri ?? metadataString(revisionMetadata, ["extracted_text_ref", "extracted_text_uri"]),
+          bytes_available: false,
+          bytes_exposed: false
+        },
+        chunks,
+        citations
+      };
+    })();
+  } finally {
+    db.close();
+  }
+}
+
+// src/source-ingest.ts
+function sha256Text(text) {
+  return `sha256:${createHash4("sha256").update(text).digest("hex")}`;
+}
+function stripHtml(html) {
+  return html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+\n/g, `
+`).replace(/\n\s+/g, `
+`).replace(/[ \t]{2,}/g, " ").trim();
+}
+async function readS3Text2(uri, config2, safetyPolicy) {
+  const parsed = new URL(uri);
+  const bucket = parsed.hostname;
+  const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
+  if (!bucket || !key)
+    throw new Error(`Invalid S3 source URI: ${uri}`);
+  if (safetyPolicy)
+    assertS3ReadAllowed(uri, safetyPolicy);
+  const [{ S3Client, GetObjectCommand }, { fromIni }] = await Promise.all([
+    import("@aws-sdk/client-s3"),
+    import("@aws-sdk/credential-providers")
+  ]);
+  const s3Config = config2?.storage.type === "s3" && config2.storage.s3?.bucket === bucket ? config2.storage.s3 : undefined;
+  const client = new S3Client({
+    region: s3Config?.region,
+    credentials: s3Config?.profile ? fromIni({ profile: s3Config.profile }) : undefined,
+    maxAttempts: s3Config?.max_attempts
+  });
+  const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  if (!response.Body)
+    return "";
+  return await response.Body.transformToString();
+}
+async function readWebText(uri, safetyPolicy) {
+  if (safetyPolicy)
+    assertWebSearchAllowed(safetyPolicy);
+  const response = await fetch(uri, {
+    headers: {
+      accept: "text/markdown,text/plain,text/html,application/json;q=0.8,*/*;q=0.5",
+      "user-agent": "@hasna/knowledge source-ingest"
+    }
+  });
+  if (!response.ok)
+    throw new Error(`Web source read failed ${response.status}: ${uri}`);
+  const mime = response.headers.get("content-type");
+  const body = await response.text();
+  return { text: mime?.includes("html") ? stripHtml(body) : body, mime };
+}
+function titleForRef(parsed) {
+  if (parsed.kind === "file")
+    return basename2(parsed.path);
+  if (parsed.kind === "s3")
+    return basename2(parsed.key);
+  if (parsed.kind === "web")
+    return basename2(new URL(parsed.url).pathname) || parsed.url;
+  return parsed.path ? basename2(parsed.path) : parsed.id;
+}
+async function readDirectSourceText(parsed, config2, safetyPolicy) {
+  if (parsed.kind === "file") {
+    if (!existsSync6(parsed.path))
+      throw new Error(`Source file not found: ${parsed.path}`);
+    const text = readFileSync6(parsed.path, "utf8");
+    return {
+      text,
+      contentSource: "file",
+      title: titleForRef(parsed),
+      mime: "text/plain",
+      size: text.length,
+      hash: sha256Text(text),
+      revision: null,
+      extractedTextRef: null,
+      metadata: { path: parsed.path },
+      permissions: { mode: "read_only" }
+    };
+  }
+  if (parsed.kind === "s3") {
+    const text = await readS3Text2(parsed.uri, config2, safetyPolicy);
+    return {
+      text,
+      contentSource: "s3",
+      title: titleForRef(parsed),
+      mime: "text/plain",
+      size: text.length,
+      hash: sha256Text(text),
+      revision: null,
+      extractedTextRef: null,
+      metadata: { bucket: parsed.bucket, key: parsed.key },
+      permissions: { mode: "read_only" }
+    };
+  }
+  if (parsed.kind === "web") {
+    const web = await readWebText(parsed.url, safetyPolicy);
+    return {
+      text: web.text,
+      contentSource: "web",
+      title: titleForRef(parsed),
+      mime: web.mime,
+      size: web.text.length,
+      hash: sha256Text(web.text),
+      revision: null,
+      extractedTextRef: null,
+      metadata: { url: parsed.url },
+      permissions: { mode: "read_only" }
+    };
+  }
+  throw new Error(`Direct source reading is not available for ${parsed.uri}`);
+}
+async function readTextRef(uri, config2, safetyPolicy) {
+  if (uri.startsWith("open-files://")) {
+    throw new Error("Open-files extracted text refs require an open-files resolver API. Ingest an open-files manifest with extracted_text or an extracted_text_ref using file://, s3://, or https://.");
+  }
+  const parsed = parseSourceRef(uri);
+  const direct = await readDirectSourceText(parsed, config2, safetyPolicy);
+  return { text: direct.text, contentSource: "extracted_text_ref" };
+}
+async function readOpenFilesSourceText(options) {
+  const resolved = await resolveOpenFilesSource({
+    dbPath: options.dbPath,
+    sourceRef: options.sourceRef,
+    purpose: options.purpose ?? "knowledge_index",
+    limit: 100,
+    safetyPolicy: options.safetyPolicy,
+    now: options.now
+  });
+  if (!resolved.resolved) {
+    throw new Error("Open-files source is not in the local knowledge catalog. Ingest an open-files manifest first or use the open-files resolver API.");
+  }
+  if (resolved.revision?.extracted_text_uri && !resolved.content.text_available) {
+    const textRef = await readTextRef(resolved.revision.extracted_text_uri, options.config, options.safetyPolicy);
+    return {
+      text: textRef.text,
+      contentSource: textRef.contentSource,
+      title: resolved.source?.title ?? null,
+      mime: resolved.content.mime,
+      size: textRef.text.length,
+      hash: resolved.revision.hash ?? sha256Text(textRef.text),
+      revision: resolved.revision.revision,
+      extractedTextRef: resolved.revision.extracted_text_uri,
+      metadata: resolved.source?.metadata ?? {},
+      permissions: resolved.source?.permissions ?? { mode: "read_only" }
+    };
+  }
+  if (resolved.chunks.length === 0) {
+    throw new Error("Open-files source has no extracted text chunks yet. Ingest an open-files manifest with extracted_text or extracted_text_ref first.");
+  }
+  const text = resolved.chunks.map((chunk) => chunk.text).join(`
+
+`);
+  return {
+    text,
+    contentSource: "catalog_chunks",
+    title: resolved.source?.title ?? null,
+    mime: resolved.content.mime,
+    size: text.length,
+    hash: resolved.revision?.hash ?? sha256Text(text),
+    revision: resolved.revision?.revision ?? null,
+    extractedTextRef: resolved.revision?.extracted_text_uri ?? null,
+    metadata: resolved.source?.metadata ?? {},
+    permissions: resolved.source?.permissions ?? { mode: "read_only" }
+  };
+}
+function manifestItemForSource(sourceRef, parsed, resolved, purpose) {
+  const hash2 = resolved.hash ?? sha256Text(resolved.text);
+  const metadata = {
+    ...resolved.metadata,
+    source_ref: sourceRef,
+    content_source: resolved.contentSource,
+    read_only: true
+  };
+  const item = {
+    source_ref: sourceRef,
+    name: resolved.title ?? titleForRef(parsed),
+    mime: resolved.mime ?? "text/plain",
+    size: resolved.size ?? resolved.text.length,
+    hash: hash2,
+    revision: resolved.revision ?? hash2,
+    status: "active",
+    updated_at: new Date().toISOString(),
+    permissions: {
+      mode: "read_only",
+      allowed_purposes: [purpose],
+      ...resolved.permissions
+    },
+    metadata,
+    extracted_text_ref: resolved.extractedTextRef,
+    extracted_text: resolved.text
+  };
+  if (parsed.kind === "open-files") {
+    if (parsed.entity === "file")
+      item.file_id = parsed.id;
+    if (parsed.entity === "source") {
+      item.source_id = parsed.id;
+      item.path = parsed.path;
+    }
+  }
+  if (parsed.kind === "file")
+    item.path = parsed.path;
+  if (parsed.kind === "s3")
+    item.path = parsed.key;
+  if (parsed.kind === "web")
+    item.url = parsed.url;
+  return item;
+}
+async function ingestSourceRef(options) {
+  const purpose = options.purpose ?? "knowledge_index";
+  const parsed = parseSourceRef(options.sourceRef);
+  const resolved = parsed.kind === "open-files" ? await readOpenFilesSourceText(options) : await readDirectSourceText(parsed, options.config, options.safetyPolicy);
+  const item = manifestItemForSource(options.sourceRef, parsed, resolved, purpose);
+  const result = await ingestOpenFilesManifestItems({
+    dbPath: options.dbPath,
+    items: [item],
+    sourceLabel: options.sourceRef,
+    readAction: "source_ref_ingest_read",
+    safetyPolicy: options.safetyPolicy,
+    now: options.now
+  });
+  return {
+    ...result,
+    source_ref: options.sourceRef,
+    content_source: resolved.contentSource,
+    read_only: true,
+    hash: String(item.hash)
+  };
+}
+
+// src/app-wiki.ts
+function stableId2(prefix, value) {
+  return `${prefix}_${createHash5("sha256").update(value).digest("hex").slice(0, 20)}`;
+}
+function slugify2(value) {
+  const slug = value.normalize("NFKC").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
+  return slug || "note";
+}
+function parseJsonObject2(value) {
+  if (!value)
+    return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function estimateTokenCount2(text) {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.ceil(words * 1.25));
+}
+function uniqueStrings(values) {
+  return Array.from(new Set((values ?? []).map((value) => value.trim()).filter(Boolean)));
+}
+function normalizeNotePath(input) {
+  const raw = input.path?.trim() || `wiki/notes/${slugify2(input.title)}.md`;
+  const normalized = raw.replace(/\\/g, "/");
+  if (!normalized.startsWith("wiki/notes/") || !normalized.endsWith(".md")) {
+    throw new Error("App wiki note paths must be relative wiki/notes/*.md artifact keys.");
+  }
+  if (normalized.startsWith("/") || normalized.split("/").some((segment) => segment === ".." || segment === ".")) {
+    throw new Error(`Invalid app wiki note path: ${raw}`);
+  }
+  return normalized;
+}
+function noteBody(input) {
+  const sections = [
+    `# ${input.title}`,
+    "",
+    input.content.trim(),
+    "",
+    `Updated: ${input.now}`
+  ];
+  if (input.tags.length > 0) {
+    sections.push("", "Tags:", ...input.tags.map((tag) => `- ${tag}`));
+  }
+  if (input.sourceRefs.length > 0) {
+    sections.push("", "Source refs:", ...input.sourceRefs.map((ref) => `- ${ref}`));
+  }
+  sections.push("");
+  return sections.join(`
+`);
+}
+async function writeArtifact(store, entry) {
+  const written = await store.put(entry);
+  return {
+    key: written.key,
+    uri: written.uri,
+    kind: entry.key.startsWith("logs/") ? "log" : "wiki_page",
+    content_type: entry.content_type,
+    modified_at: written.modified_at,
+    ...hashArtifactBody(entry.body),
+    metadata: {
+      ...entry.metadata ?? {}
+    }
+  };
+}
+async function appendLog(store, event, now) {
+  const year = String(now.getUTCFullYear());
+  const month = String(now.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(now.getUTCDate()).padStart(2, "0");
+  const key = `logs/${year}/${month}/${day}.jsonl`;
+  let existing = "";
+  try {
+    existing = await store.getText(key);
+  } catch {
+    existing = "";
+  }
+  return writeArtifact(store, {
+    key,
+    body: `${existing}${JSON.stringify(event)}
+`,
+    content_type: "application/x-ndjson",
+    metadata: {
+      provenance: generatedArtifactProvenance({
+        generated_from: String(event.event ?? "app_wiki_log"),
+        artifact_key: key
+      })
+    }
+  });
+}
+function noteMetadata(input) {
+  return {
+    ...input.metadata ?? {},
+    app_wiki: true,
+    note: true,
+    artifact_key: input.path,
+    tags: input.tags,
+    source_refs: input.sourceRefs,
+    provenance: input.provenance
+  };
+}
+function noteRecord(row) {
+  const metadata = parseJsonObject2(row.metadata_json);
+  return {
+    id: row.id,
+    path: row.path,
+    title: row.title,
+    artifact_uri: row.artifact_uri,
+    content_hash: row.content_hash,
+    tags: Array.isArray(metadata.tags) ? metadata.tags.filter((tag) => typeof tag === "string") : [],
+    source_refs: Array.isArray(metadata.source_refs) ? metadata.source_refs.filter((ref) => typeof ref === "string") : [],
+    created_at: row.created_at,
+    updated_at: row.updated_at
+  };
+}
+function sourceCitationRows(db, sourceRefs) {
+  return sourceRefs.map((sourceRef) => {
+    const row = db.query(`SELECT
+         s.uri AS source_uri,
+         c.id AS chunk_id,
+         c.text,
+         c.start_offset,
+         c.end_offset,
+         sr.revision,
+         sr.hash,
+         c.metadata_json
+       FROM sources s
+       LEFT JOIN source_revisions sr ON sr.source_id = s.id
+       LEFT JOIN chunks c ON c.source_revision_id = sr.id
+       WHERE s.uri = ? OR s.metadata_json LIKE ?
+       ORDER BY sr.created_at DESC, c.ordinal ASC
+       LIMIT 1`).get(sourceRef, `%${sourceRef}%`);
+    const metadata = parseJsonObject2(row?.metadata_json);
+    return {
+      source_ref: sourceRef,
+      source_uri: row?.source_uri ?? sourceRef,
+      chunk_id: row?.chunk_id ?? null,
+      quote: row?.text ? row.text.replace(/\s+/g, " ").slice(0, 240) : null,
+      start_offset: row?.start_offset ?? null,
+      end_offset: row?.end_offset ?? null,
+      metadata: {
+        source_ref: sourceRef,
+        revision: row?.revision ?? metadata.revision,
+        hash: row?.hash ?? metadata.hash
+      }
+    };
+  });
+}
+function replaceNoteCitations(db, pageId, sourceRefs, now) {
+  db.run("DELETE FROM citations WHERE wiki_page_id = ?", [pageId]);
+  const citations = sourceCitationRows(db, sourceRefs);
+  for (const citation of citations) {
+    db.run(`INSERT INTO citations (id, wiki_page_id, chunk_id, source_uri, quote, start_offset, end_offset, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      stableId2("cit", `${pageId}\x00${citation.source_uri}\x00${citation.chunk_id ?? randomUUID4()}`),
+      pageId,
+      citation.chunk_id,
+      citation.source_uri,
+      citation.quote,
+      citation.start_offset,
+      citation.end_offset,
+      JSON.stringify(citation.metadata),
+      now
+    ]);
+  }
+  return citations.length;
+}
+function upsertNoteIndex(db, input) {
+  db.run(`INSERT INTO knowledge_indexes (id, kind, name, artifact_uri, shard_key, metadata_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(kind, name, shard_key) DO UPDATE SET
+       artifact_uri = excluded.artifact_uri,
+       metadata_json = excluded.metadata_json,
+       updated_at = excluded.updated_at`, [
+    stableId2("idx", `app-wiki-note\x00${input.path}`),
+    "app_wiki_note",
+    input.title,
+    input.artifactUri,
+    input.path,
+    JSON.stringify({
+      artifact_key: input.path,
+      content_hash: input.contentHash,
+      tags: input.tags,
+      source_refs: input.sourceRefs
+    }),
+    input.now,
+    input.now
+  ]);
+}
+function upsertNotePage(db, input) {
+  db.run(`INSERT INTO wiki_pages (id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(path) DO UPDATE SET
+       title = excluded.title,
+       artifact_uri = excluded.artifact_uri,
+       content_hash = excluded.content_hash,
+       status = excluded.status,
+       metadata_json = excluded.metadata_json,
+       updated_at = excluded.updated_at`, [
+    input.pageId,
+    input.path,
+    input.title,
+    input.artifactUri,
+    input.contentHash,
+    "active",
+    JSON.stringify(input.metadata),
+    input.now,
+    input.now
+  ]);
+  const existing = db.query("SELECT id FROM chunks WHERE wiki_page_id = ?").all(input.pageId);
+  for (const row of existing)
+    db.run("DELETE FROM chunks_fts WHERE chunk_id = ?", [row.id]);
+  db.run("DELETE FROM chunks WHERE wiki_page_id = ?", [input.pageId]);
+  const chunkId = stableId2("chk", `${input.pageId}\x00${input.contentHash}`);
+  db.run(`INSERT INTO chunks (id, wiki_page_id, kind, ordinal, text, token_count, start_offset, end_offset, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+    chunkId,
+    input.pageId,
+    "wiki",
+    0,
+    input.body,
+    estimateTokenCount2(input.body),
+    0,
+    input.body.length,
+    JSON.stringify({
+      ...input.metadata,
+      artifact_uri: input.artifactUri,
+      content_hash: input.contentHash
+    }),
+    input.now
+  ]);
+  db.run("INSERT INTO chunks_fts (chunk_id, text, title, source_uri) VALUES (?, ?, ?, ?)", [
+    chunkId,
+    input.body,
+    input.title,
+    input.artifactUri
+  ]);
+}
+function assertAppWikiWriteAllowed(options) {
+  if (options.scope === "global" && options.allowGlobal !== true) {
+    throw new Error("Global app-wiki writes require allowGlobal=true or CLI --allow-global.");
+  }
+  if (options.workspace.home.includes("/.husna/") || options.workspace.home.endsWith("/.husna")) {
+    throw new Error(`Refusing app-wiki writes to legacy .husna path: ${options.workspace.home}`);
+  }
+  if (options.workspace.home.includes("/.hasna/apps/knowledge")) {
+    throw new Error(`Refusing app-wiki writes to legacy .hasna/apps/knowledge path: ${options.workspace.home}`);
+  }
+  if (options.safetyPolicy)
+    assertWriteAllowed(options.workspace.knowledgeDbPath, options.safetyPolicy);
+}
+async function initAppWikiScope(options) {
+  assertAppWikiWriteAllowed(options);
+  const migration = migrateKnowledgeDb(options.workspace.knowledgeDbPath);
+  const db = openKnowledgeDb(options.workspace.knowledgeDbPath);
+  try {
+    recordAuditEvent(db, {
+      event_type: "write",
+      action: "app_wiki_init",
+      target_uri: options.workspace.home,
+      decision: "allow",
+      metadata: {
+        scope: options.scope,
+        store_type: options.store.type,
+        app_path: ".hasna/knowledge"
+      },
+      created_at: (options.now ?? new Date).toISOString()
+    });
+  } finally {
+    db.close();
+  }
+  return {
+    ok: true,
+    scope: options.scope,
+    workspace_home: options.workspace.home,
+    knowledge_db_path: options.workspace.knowledgeDbPath,
+    schema_version: migration.schema_version,
+    store_type: options.store.type,
+    global_write_allowed: options.scope === "global" && options.allowGlobal === true,
+    message: `Initialized app wiki scope at ${options.workspace.home}`
+  };
+}
+async function writeAppWikiNote(options) {
+  assertAppWikiWriteAllowed(options);
+  const nowDate = options.now ?? new Date;
+  const now = nowDate.toISOString();
+  const tags = uniqueStrings(options.tags);
+  const sourceRefs = uniqueStrings(options.sourceRefs);
+  const path = normalizeNotePath(options);
+  const body = noteBody({
+    title: options.title,
+    content: options.content,
+    tags,
+    sourceRefs,
+    now
+  });
+  const provenance = generatedArtifactProvenance({
+    generated_from: "app_wiki_note",
+    artifact_key: path,
+    source_refs: sourceRefs
+  });
+  const artifact = await writeArtifact(options.store, {
+    key: path,
+    body,
+    content_type: "text/markdown",
+    metadata: {
+      generated_from: "app_wiki_note",
+      provenance,
+      scope: options.scope,
+      tags: tags.join(","),
+      source_refs: sourceRefs.join(",")
+    }
+  });
+  const log = await appendLog(options.store, {
+    ts: now,
+    event: "app_wiki_note_written",
+    page_key: path,
+    source_refs: sourceRefs,
+    tags
+  }, nowDate);
+  migrateKnowledgeDb(options.workspace.knowledgeDbPath);
+  const db = openKnowledgeDb(options.workspace.knowledgeDbPath);
+  try {
+    const pageId = stableId2("wiki", path);
+    const metadata = noteMetadata({
+      path,
+      tags,
+      sourceRefs,
+      provenance,
+      metadata: options.metadata
+    });
+    recordStorageObjects(db, [artifact, log], nowDate);
+    upsertNotePage(db, {
+      pageId,
+      path,
+      title: options.title,
+      artifactUri: artifact.uri,
+      contentHash: artifact.hash ?? "",
+      body,
+      metadata,
+      now
+    });
+    const citationsWritten = replaceNoteCitations(db, pageId, sourceRefs, now);
+    upsertNoteIndex(db, {
+      title: options.title,
+      path,
+      artifactUri: artifact.uri,
+      contentHash: artifact.hash ?? "",
+      tags,
+      sourceRefs,
+      now
+    });
+    recordAuditEvent(db, {
+      event_type: "write",
+      action: "app_wiki_note_write",
+      target_uri: artifact.uri,
+      decision: "allow",
+      metadata: {
+        scope: options.scope,
+        path,
+        source_refs: sourceRefs,
+        tags
+      },
+      created_at: now
+    });
+    const row = db.query("SELECT id, path, title, artifact_uri, content_hash, metadata_json, created_at, updated_at FROM wiki_pages WHERE id = ?").get(pageId);
+    if (!row)
+      throw new Error(`Failed to write app wiki note: ${path}`);
+    return {
+      ok: true,
+      scope: options.scope,
+      workspace_home: options.workspace.home,
+      note: noteRecord(row),
+      artifact_uri: artifact.uri,
+      content_hash: artifact.hash ?? "",
+      citations_written: citationsWritten,
+      chunks_written: 1,
+      storage_objects_written: 2,
+      message: `Wrote app wiki note ${path}`
+    };
+  } finally {
+    db.close();
+  }
+}
+function listAppWikiNotes(options) {
+  const limit = Math.max(1, Math.min(options.limit ?? 50, 200));
+  if (!options.dbPath)
+    return [];
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    return db.query(`SELECT id, path, title, artifact_uri, content_hash, metadata_json, created_at, updated_at
+       FROM wiki_pages
+       WHERE status = 'active'
+         AND path LIKE 'wiki/notes/%'
+         AND metadata_json LIKE '%"app_wiki":true%'
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT ?`).all(limit).map(noteRecord);
+  } finally {
+    db.close();
+  }
+}
+async function getAppWikiNote(options) {
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    const row = db.query(`SELECT id, path, title, artifact_uri, content_hash, metadata_json, created_at, updated_at
+       FROM wiki_pages
+       WHERE (id = ? OR path = ?)
+         AND path LIKE 'wiki/notes/%'
+         AND metadata_json LIKE '%"app_wiki":true%'`).get(options.id, options.id);
+    if (!row)
+      return null;
+    const citations = db.query(`SELECT id, chunk_id, source_uri, quote, start_offset, end_offset, metadata_json, created_at
+       FROM citations
+       WHERE wiki_page_id = ?
+       ORDER BY created_at ASC`).all(row.id).map((citation) => ({
+      ...citation,
+      metadata: parseJsonObject2(citation.metadata_json),
+      metadata_json: undefined
+    }));
+    let content = null;
+    if (options.includeContent !== false) {
+      try {
+        content = await options.store.getText(row.path);
+      } catch {
+        content = null;
+      }
+    }
+    return {
+      ok: true,
+      note: noteRecord(row),
+      citations,
+      content
+    };
+  } finally {
+    db.close();
+  }
+}
+async function ingestAppWikiSourceRef(options) {
+  assertAppWikiWriteAllowed(options);
+  return ingestSourceRef({
+    dbPath: options.workspace.knowledgeDbPath,
+    sourceRef: options.sourceRef,
+    purpose: options.purpose ?? "knowledge_index",
+    config: options.config,
+    safetyPolicy: options.safetyPolicy
+  });
+}
+
+// src/agent.ts
+import { randomUUID as randomUUID6 } from "crypto";
+
+// src/providers.ts
+import { randomUUID as randomUUID5 } from "crypto";
+var DEFAULT_PROVIDER_SETTINGS = {
+  openai: {
+    api_key_env: "OPENAI_API_KEY",
+    default_model: "gpt-5.2"
+  },
+  anthropic: {
+    api_key_env: "ANTHROPIC_API_KEY",
+    default_model: "claude-sonnet-4-6"
+  },
+  deepseek: {
+    api_key_env: "DEEPSEEK_API_KEY",
+    default_model: "deepseek-chat"
+  }
+};
+var PROVIDER_CAPABILITIES = {
+  openai: {
+    text_generation: true,
+    structured_output: true,
+    tool_usage: true,
+    tool_streaming: true,
+    image_input: true,
+    native_web_search: true,
+    reasoning: true,
+    embeddings: true
+  },
+  anthropic: {
+    text_generation: true,
+    structured_output: true,
+    tool_usage: true,
+    tool_streaming: true,
+    image_input: true,
+    native_web_search: false,
+    reasoning: true,
+    embeddings: false
+  },
+  deepseek: {
+    text_generation: true,
+    structured_output: true,
+    tool_usage: true,
+    tool_streaming: true,
+    image_input: false,
+    native_web_search: false,
+    reasoning: true,
+    embeddings: false
+  }
+};
+var BUILTIN_ALIASES = {
+  default: "openai:gpt-5.2",
+  fast: "openai:gpt-5-mini",
+  reasoning: "anthropic:claude-opus-4-6",
+  sonnet: "anthropic:claude-sonnet-4-6",
+  deepseek: "deepseek:deepseek-chat",
+  "deepseek-reasoning": "deepseek:deepseek-reasoner"
+};
+function providerConfig(config2) {
+  return config2?.providers ?? {};
+}
+function providerSettings(config2, provider) {
+  const configured = providerConfig(config2)[provider] ?? {};
+  return {
+    ...DEFAULT_PROVIDER_SETTINGS[provider],
+    ...configured
+  };
+}
+function modelAliases(config2) {
+  const configured = providerConfig(config2);
+  return {
+    ...BUILTIN_ALIASES,
+    ...configured.default_model ? { default: configured.default_model } : {},
+    ...configured.aliases ?? {}
+  };
+}
+function parseModelRef(modelRef) {
+  const [provider, ...rest] = modelRef.split(":");
+  const model = rest.join(":");
+  if (provider !== "openai" && provider !== "anthropic" && provider !== "deepseek") {
+    throw new Error(`Unsupported AI provider: ${provider}`);
+  }
+  if (!model)
+    throw new Error(`Invalid model ref: ${modelRef}. Expected provider:model.`);
+  return { provider, model };
+}
+function resolveModelRef(aliasOrRef, config2) {
+  const aliases = modelAliases(config2);
+  return aliases[aliasOrRef] ?? aliasOrRef;
+}
+function listModelRegistry(config2) {
+  const aliases = modelAliases(config2);
+  return Object.entries(aliases).map(([alias, modelRef]) => {
+    const parsed = parseModelRef(modelRef);
+    return {
+      alias,
+      model_ref: modelRef,
+      provider: parsed.provider,
+      model: parsed.model,
+      default: alias === "default",
+      capabilities: PROVIDER_CAPABILITIES[parsed.provider]
+    };
+  });
+}
+function providerCredentialStatus(config2, env = process.env) {
+  return Object.keys(DEFAULT_PROVIDER_SETTINGS).map((provider) => {
+    const settings = providerSettings(config2, provider);
+    const configured = Boolean(env[settings.api_key_env]);
+    return {
+      provider,
+      api_key_env: settings.api_key_env,
+      configured,
+      source: configured ? "env" : "missing",
+      base_url: settings.base_url ?? null,
+      default_model: settings.default_model
+    };
+  });
+}
+function providerStatus(config2, env = process.env) {
+  return {
+    default_model: resolveModelRef("default", config2),
+    providers: providerCredentialStatus(config2, env),
+    models: listModelRegistry(config2)
+  };
+}
+function assertProviderCredentials(provider, config2, env = process.env) {
+  const status = providerCredentialStatus(config2, env).find((entry) => entry.provider === provider);
+  if (!status)
+    throw new Error(`Unsupported AI provider: ${provider}`);
+  if (!status.configured)
+    throw new Error(`Missing ${status.api_key_env} for ${provider}. Set the env var to use this provider.`);
+  return status;
+}
+async function defaultFactory(provider) {
+  if (provider === "openai") {
+    const { createOpenAI } = await import("@ai-sdk/openai");
+    return createOpenAI;
+  }
+  if (provider === "anthropic") {
+    const { createAnthropic } = await import("@ai-sdk/anthropic");
+    return createAnthropic;
+  }
+  const { createDeepSeek } = await import("@ai-sdk/deepseek");
+  return createDeepSeek;
+}
+async function createAiSdkProviderRegistry(options = {}) {
+  const { createProviderRegistry } = await import("ai");
+  const env = options.env ?? process.env;
+  const providers = {};
+  for (const provider of Object.keys(DEFAULT_PROVIDER_SETTINGS)) {
+    const settings = providerSettings(options.config, provider);
+    const apiKey = env[settings.api_key_env];
+    if (!apiKey)
+      continue;
+    const factory = options.factories?.[provider] ?? await defaultFactory(provider);
+    providers[provider] = factory({ apiKey, baseURL: settings.base_url });
+  }
+  return createProviderRegistry(providers);
+}
+async function languageModelFor(aliasOrRef, options = {}) {
+  const modelRef = resolveModelRef(aliasOrRef, options.config);
+  const parsed = parseModelRef(modelRef);
+  assertProviderCredentials(parsed.provider, options.config, options.env);
+  const registry2 = await createAiSdkProviderRegistry(options);
+  return registry2.languageModel(modelRef);
+}
+function usageNumber(usage, keys) {
+  for (const key of keys) {
+    const value = usage[key];
+    if (typeof value === "number" && Number.isFinite(value))
+      return value;
+  }
+  return 0;
+}
+function normalizeAiSdkUsage(input) {
+  const usage = input.usage ?? {};
+  return {
+    provider: input.provider,
+    model: input.model,
+    input_tokens: usageNumber(usage, ["inputTokens", "promptTokens", "input_tokens", "prompt_tokens"]),
+    output_tokens: usageNumber(usage, ["outputTokens", "completionTokens", "output_tokens", "completion_tokens"]),
+    cost_usd: input.costUsd ?? 0,
+    metadata: {
+      usage,
+      provider_metadata: input.providerMetadata ?? {}
+    }
+  };
+}
+function recordProviderUsage(db, input) {
+  const id = `usage_${randomUUID5()}`;
+  db.run(`INSERT INTO provider_usage (id, run_id, provider, model, input_tokens, output_tokens, cost_usd, metadata_json, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+    id,
+    input.run_id ?? null,
+    input.provider,
+    input.model,
+    input.input_tokens,
+    input.output_tokens,
+    input.cost_usd,
+    JSON.stringify(input.metadata),
+    input.created_at ?? new Date().toISOString()
+  ]);
+  return id;
+}
+
+// src/retrieval.ts
+import { createHash as createHash7 } from "crypto";
+
+// src/search.ts
+import { existsSync as existsSync7, readFileSync as readFileSync7 } from "fs";
+
+// src/embeddings.ts
+import { createHash as createHash6 } from "crypto";
+var DEFAULT_EMBEDDING_MODEL_REF = "openai:text-embedding-3-small";
+var DEFAULT_EMBEDDING_DIMENSIONS = 1536;
+function embeddingConfig(config2) {
+  return config2?.embeddings ?? {};
+}
+function stableId3(prefix, value) {
+  return `${prefix}_${createHash6("sha256").update(value).digest("hex").slice(0, 20)}`;
+}
+function parseJsonObject3(value) {
+  if (!value)
+    return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function metadataString2(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "string" && value.length > 0)
+      return value;
+  }
+  return null;
+}
+function metadataNumber2(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "number" && Number.isFinite(value))
+      return value;
+  }
+  return null;
+}
+function vectorNorm(vector) {
+  return Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
+}
+function cosineSimilarity(a, b, bNorm = vectorNorm(b)) {
+  const aNorm = vectorNorm(a);
+  if (aNorm === 0 || bNorm === 0)
+    return 0;
+  const length = Math.min(a.length, b.length);
+  let dot = 0;
+  for (let i = 0;i < length; i += 1)
+    dot += a[i] * b[i];
+  return dot / (aNorm * bNorm);
+}
+function deterministicVector(text, dimensions) {
+  const bytes = createHash6("sha256").update(text).digest();
+  return Array.from({ length: dimensions }, (_, index) => {
+    const value = bytes[index % bytes.length] / 255;
+    return Number((value * 2 - 1).toFixed(6));
+  });
+}
+async function openAiEmbeddingModel(model, config2, env = process.env) {
+  assertProviderCredentials("openai", config2, env);
+  const settings = providerSettings(config2, "openai");
+  const { createOpenAI } = await import("@ai-sdk/openai");
+  const openai = createOpenAI({
+    apiKey: env[settings.api_key_env],
+    baseURL: settings.base_url
+  });
+  if (openai.embeddingModel)
+    return openai.embeddingModel(model);
+  if (openai.textEmbedding)
+    return openai.textEmbedding(model);
+  if (openai.textEmbeddingModel)
+    return openai.textEmbeddingModel(model);
+  throw new Error("OpenAI provider does not expose an embedding model factory.");
+}
+function resolveEmbeddingModelRef(modelRef, config2) {
+  if (!modelRef || modelRef === "default" || modelRef === "embedding") {
+    return embeddingConfig(config2).default_model ?? DEFAULT_EMBEDDING_MODEL_REF;
+  }
+  return modelRef;
+}
+async function embedTexts(texts, options = {}) {
+  const modelRef = resolveEmbeddingModelRef(options.modelRef, options.config);
+  const parsed = parseModelRef(modelRef);
+  if (parsed.provider !== "openai") {
+    throw new Error(`Embedding provider ${parsed.provider} is not supported yet. Use openai:text-embedding-3-small.`);
+  }
+  const dimensions = options.dimensions ?? embeddingConfig(options.config).dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS;
+  if (options.fake) {
+    return {
+      provider: parsed.provider,
+      model: parsed.model,
+      dimensions,
+      vectors: texts.map((text) => deterministicVector(text, dimensions)),
+      usage: { input_tokens: texts.reduce((sum, text) => sum + Math.max(1, Math.ceil(text.split(/\s+/).filter(Boolean).length * 1.25)), 0) }
+    };
+  }
+  const { embedMany } = await import("ai");
+  const model = await openAiEmbeddingModel(parsed.model, options.config, options.env);
+  const result = await embedMany({
+    model,
+    values: texts,
+    maxParallelCalls: options.maxParallelCalls ?? embeddingConfig(options.config).max_parallel_calls,
+    providerOptions: {
+      openai: {
+        dimensions
+      }
+    }
+  });
+  const vectors = result.embeddings;
+  return {
+    provider: parsed.provider,
+    model: parsed.model,
+    dimensions: vectors[0]?.length ?? dimensions,
+    vectors,
+    usage: { input_tokens: result.usage?.tokens ?? 0 }
+  };
+}
+function selectCandidateChunks(db, options) {
+  const baseQuery = `SELECT
+       c.id,
+       c.text,
+       c.token_count,
+       c.start_offset,
+       c.end_offset,
+       c.metadata_json,
+       c.source_revision_id,
+       sr.revision,
+       sr.hash,
+       s.uri AS source_uri,
+       s.kind AS source_kind
+     FROM chunks c
+     LEFT JOIN source_revisions sr ON sr.id = c.source_revision_id
+     LEFT JOIN sources s ON s.id = sr.source_id
+     LEFT JOIN vector_index_entries v
+       ON v.chunk_id = c.id AND v.provider = ? AND v.model = ?
+     WHERE v.id IS NULL`;
+  const suffix = `
+     ORDER BY c.created_at ASC, c.ordinal ASC
+     LIMIT ?`;
+  if (options.sourceRevisionId) {
+    return db.query(`${baseQuery} AND c.source_revision_id = ?${suffix}`).all(options.provider, options.model, options.sourceRevisionId, options.limit);
+  }
+  return db.query(`${baseQuery}${suffix}`).all(options.provider, options.model, options.limit);
+}
+function provenanceForChunk(row) {
+  const metadata = parseJsonObject3(row.metadata_json);
+  const existing = metadata.provenance;
+  if (existing && typeof existing === "object" && !Array.isArray(existing))
+    return existing;
+  return sourceProvenance({
+    source_ref: metadataString2(metadata, ["source_ref"]),
+    source_uri: row.source_uri ?? metadataString2(metadata, ["source_uri"]),
+    source_kind: row.source_kind ?? metadataString2(metadata, ["source_kind"]),
+    source_revision_id: row.source_revision_id,
+    revision: row.revision ?? metadataString2(metadata, ["revision"]),
+    hash: row.hash ?? metadataString2(metadata, ["hash"]),
+    chunk_id: row.id,
+    start_offset: row.start_offset ?? metadataNumber2(metadata, ["start_offset"]),
+    end_offset: row.end_offset ?? metadataNumber2(metadata, ["end_offset"]),
+    status: metadataString2(metadata, ["status"]),
+    resolver: "open-files-read-only"
+  });
+}
+function upsertVectors(db, rows, embedding, now) {
+  const insertEmbedding = db.prepare(`
+    INSERT INTO chunk_embeddings (id, chunk_id, provider, model, dimensions, vector_json, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(chunk_id, provider, model) DO UPDATE SET
+      dimensions = excluded.dimensions,
+      vector_json = excluded.vector_json,
+      created_at = excluded.created_at
+  `);
+  const insertVector = db.prepare(`
+    INSERT INTO vector_index_entries (
+      id, chunk_id, source_revision_id, provider, model, dimensions, vector_json, vector_norm,
+      source_uri, source_ref, revision, hash, start_offset, end_offset, token_count, status,
+      metadata_json, created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(chunk_id, provider, model) DO UPDATE SET
+      source_revision_id = excluded.source_revision_id,
+      dimensions = excluded.dimensions,
+      vector_json = excluded.vector_json,
+      vector_norm = excluded.vector_norm,
+      source_uri = excluded.source_uri,
+      source_ref = excluded.source_ref,
+      revision = excluded.revision,
+      hash = excluded.hash,
+      start_offset = excluded.start_offset,
+      end_offset = excluded.end_offset,
+      token_count = excluded.token_count,
+      status = excluded.status,
+      metadata_json = excluded.metadata_json,
+      updated_at = excluded.updated_at
+  `);
+  const write = db.transaction(() => {
+    for (let index = 0;index < rows.length; index += 1) {
+      const row = rows[index];
+      const vector = embedding.vectors[index];
+      if (!vector)
+        continue;
+      const metadata = parseJsonObject3(row.metadata_json);
+      const provenance = provenanceForChunk(row);
+      const sourceRef = provenance.source_ref ?? metadataString2(metadata, ["source_ref"]);
+      const sourceUri = provenance.source_uri ?? row.source_uri ?? metadataString2(metadata, ["source_uri"]);
+      const revision = provenance.revision ?? row.revision ?? metadataString2(metadata, ["revision"]);
+      const hash2 = provenance.hash ?? row.hash ?? metadataString2(metadata, ["hash"]);
+      const status = provenance.status ?? metadataString2(metadata, ["status"]) ?? "active";
+      const vectorJson = JSON.stringify(vector);
+      insertEmbedding.run(stableId3("emb", `${row.id}\x00${embedding.provider}\x00${embedding.model}`), row.id, embedding.provider, embedding.model, embedding.dimensions, vectorJson, now);
+      insertVector.run(stableId3("vec", `${row.id}\x00${embedding.provider}\x00${embedding.model}`), row.id, row.source_revision_id, embedding.provider, embedding.model, embedding.dimensions, vectorJson, vectorNorm(vector), sourceUri, sourceRef, revision, hash2, provenance.start_offset, provenance.end_offset, row.token_count, status, JSON.stringify({
+        ...metadata,
+        provenance,
+        embedded_at: now
+      }), now, now);
+    }
+  });
+  write();
+  return rows.length;
+}
+async function indexKnowledgeEmbeddings(options) {
+  const modelRef = resolveEmbeddingModelRef(options.modelRef, options.config);
+  const parsed = parseModelRef(modelRef);
+  if (parsed.provider !== "openai")
+    throw new Error(`Embedding provider ${parsed.provider} is not supported yet.`);
+  const now = (options.now ?? new Date).toISOString();
+  const limit = Math.max(1, Math.min(options.limit ?? 100, 1000));
+  migrateKnowledgeDb(options.dbPath);
+  const readDb = openKnowledgeDb(options.dbPath);
+  let rows;
+  try {
+    rows = selectCandidateChunks(readDb, {
+      provider: parsed.provider,
+      model: parsed.model,
+      limit,
+      sourceRevisionId: options.sourceRevisionId
+    });
+  } finally {
+    readDb.close();
+  }
+  if (rows.length === 0) {
+    return {
+      provider: parsed.provider,
+      model: parsed.model,
+      dimensions: options.dimensions ?? embeddingConfig(options.config).dimensions ?? DEFAULT_EMBEDDING_DIMENSIONS,
+      chunks_seen: 0,
+      chunks_embedded: 0,
+      embeddings_upserted: 0,
+      vector_entries_upserted: 0,
+      usage: { input_tokens: 0 }
+    };
+  }
+  const embedding = await embedTexts(rows.map((row) => row.text), options);
+  const writeDb = openKnowledgeDb(options.dbPath);
+  try {
+    const upserted = upsertVectors(writeDb, rows, embedding, now);
+    return {
+      provider: embedding.provider,
+      model: embedding.model,
+      dimensions: embedding.dimensions,
+      chunks_seen: rows.length,
+      chunks_embedded: rows.length,
+      embeddings_upserted: upserted,
+      vector_entries_upserted: upserted,
+      usage: embedding.usage
+    };
+  } finally {
+    writeDb.close();
+  }
+}
+function embeddingIndexStatus(dbPath) {
+  migrateKnowledgeDb(dbPath);
+  const db = openKnowledgeDb(dbPath);
+  try {
+    const totalEmbeddings = db.query("SELECT COUNT(*) AS n FROM chunk_embeddings").get()?.n ?? 0;
+    const totalVectorEntries = db.query("SELECT COUNT(*) AS n FROM vector_index_entries").get()?.n ?? 0;
+    const indexes = db.query(`SELECT provider, model, dimensions, COUNT(*) AS entries, MAX(updated_at) AS updated_at
+       FROM vector_index_entries
+       GROUP BY provider, model, dimensions
+       ORDER BY provider, model`).all();
+    return {
+      total_embeddings: totalEmbeddings,
+      total_vector_entries: totalVectorEntries,
+      indexes
+    };
+  } finally {
+    db.close();
+  }
+}
+async function searchVectorIndex(options) {
+  const modelRef = resolveEmbeddingModelRef(options.modelRef, options.config);
+  const parsed = parseModelRef(modelRef);
+  const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
+  const embedded = await embedTexts([options.query], options);
+  const queryVector = embedded.vectors[0] ?? [];
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    const rows = db.query(`SELECT
+         v.chunk_id,
+         c.text,
+         v.vector_json,
+         v.vector_norm,
+         v.source_uri,
+         v.source_ref,
+         v.revision,
+         v.hash,
+         v.metadata_json
+       FROM vector_index_entries v
+       JOIN chunks c ON c.id = v.chunk_id
+       WHERE v.provider = ? AND v.model = ? AND v.status = 'active'`).all(parsed.provider, parsed.model);
+    const scored = rows.map((row) => {
+      const vector = JSON.parse(row.vector_json);
+      const metadata = parseJsonObject3(row.metadata_json);
+      const provenance = metadata.provenance && typeof metadata.provenance === "object" && !Array.isArray(metadata.provenance) ? metadata.provenance : null;
+      return {
+        chunk_id: row.chunk_id,
+        score: cosineSimilarity(queryVector, vector, row.vector_norm),
+        text: row.text,
+        source_uri: row.source_uri,
+        source_ref: row.source_ref,
+        revision: row.revision,
+        hash: row.hash,
+        provenance
+      };
+    }).sort((a, b) => b.score - a.score).slice(0, limit);
+    return {
+      provider: parsed.provider,
+      model: parsed.model,
+      dimensions: embedded.dimensions,
+      query: options.query,
+      results: scored
+    };
+  } finally {
+    db.close();
+  }
+}
+
+// src/search.ts
+function parseJsonObject4(value) {
+  if (!value)
+    return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function metadataString3(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "string" && value.length > 0)
+      return value;
+  }
+  return null;
+}
+function metadataNumber3(metadata, keys) {
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === "number" && Number.isFinite(value))
+      return value;
+  }
+  return null;
+}
+function unique(values) {
+  return Array.from(new Set(values));
+}
+function queryTerms(query) {
+  const terms = query.normalize("NFKC").toLowerCase().match(/[\p{L}\p{N}_]+/gu) ?? [];
+  return unique(terms.filter((term) => term.length > 0)).slice(0, 16);
+}
+function ftsQueryForTerms(terms) {
+  if (terms.length === 0)
+    return null;
+  return terms.map((term) => `${term}*`).join(" OR ");
+}
+function escapeLikeTerm(term) {
+  return term.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
+function likeParams(terms, fieldsPerTerm) {
+  return terms.flatMap((term) => Array.from({ length: fieldsPerTerm }, () => `%${escapeLikeTerm(term)}%`));
+}
+function scoreFromRank(rank, index) {
+  const rankScore = Number.isFinite(rank) ? 1 / (1 + Math.abs(rank)) : 0;
+  const orderScore = 1 / (1 + index);
+  return roundScore(Math.max(rankScore, orderScore));
+}
+function catalogScore(haystack, terms) {
+  if (terms.length === 0)
+    return 0;
+  const matched = terms.filter((term) => haystack.includes(term)).length;
+  if (matched === 0)
+    return 0;
+  return roundScore(Math.min(0.85, 0.35 + matched / terms.length * 0.5));
+}
+function semanticScore(score) {
+  return roundScore(Math.max(0, Math.min(1, (score + 1) / 2)));
+}
+function roundScore(score) {
+  return Number(score.toFixed(6));
+}
+function combinedScore(scores, citation) {
+  const keyword = scores.keyword ?? 0;
+  const semantic = scores.semantic ?? 0;
+  const catalog = scores.catalog ?? 0;
+  const citationBoost = citation?.chunk_id ? 0.05 : 0;
+  return roundScore(Math.min(1, keyword * 0.55 + semantic * 0.4 + catalog * 0.35 + citationBoost));
+}
+function existingProvenance(metadata) {
+  const provenance = metadata.provenance;
+  return provenance && typeof provenance === "object" && !Array.isArray(provenance) ? provenance : null;
+}
+function provenanceForChunk2(row) {
+  const metadata = parseJsonObject4(row.chunk_metadata_json);
+  const existing = existingProvenance(metadata);
+  if (existing)
+    return existing;
+  if (!row.source_revision_id && !row.source_uri)
+    return null;
+  return sourceProvenance({
+    source_ref: metadataString3(metadata, ["source_ref"]),
+    source_uri: row.source_uri ?? metadataString3(metadata, ["source_uri"]),
+    source_kind: row.source_kind ?? metadataString3(metadata, ["source_kind"]),
+    source_revision_id: row.source_revision_id,
+    revision: row.revision ?? metadataString3(metadata, ["revision"]),
+    hash: row.hash ?? metadataString3(metadata, ["hash"]),
+    chunk_id: row.chunk_id,
+    start_offset: row.start_offset ?? metadataNumber3(metadata, ["start_offset"]),
+    end_offset: row.end_offset ?? metadataNumber3(metadata, ["end_offset"]),
+    status: metadataString3(metadata, ["status"]),
+    resolver: "open-files-read-only"
+  });
+}
+function selectFtsChunks(db, ftsQuery, limit) {
+  if (!ftsQuery)
+    return [];
+  return db.query(`SELECT
+       chunks_fts.chunk_id,
+       c.kind AS chunk_kind,
+       c.wiki_page_id,
+       c.text,
+       c.token_count,
+       c.start_offset,
+       c.end_offset,
+       c.metadata_json AS chunk_metadata_json,
+       c.source_revision_id,
+       sr.revision,
+       sr.hash,
+       s.uri AS source_uri,
+       s.kind AS source_kind,
+       s.title AS source_title,
+       wp.path AS wiki_path,
+       wp.title AS wiki_title,
+       wp.artifact_uri AS wiki_artifact_uri,
+       wp.content_hash AS wiki_content_hash,
+       wp.status AS wiki_status,
+       wp.metadata_json AS wiki_metadata_json,
+       bm25(chunks_fts) AS rank
+     FROM chunks_fts
+     JOIN chunks c ON c.id = chunks_fts.chunk_id
+     LEFT JOIN source_revisions sr ON sr.id = c.source_revision_id
+     LEFT JOIN sources s ON s.id = sr.source_id
+     LEFT JOIN wiki_pages wp ON wp.id = c.wiki_page_id
+     WHERE chunks_fts MATCH ?
+     ORDER BY rank ASC
+     LIMIT ?`).all(ftsQuery, limit);
+}
+function catalogWhere(fields, terms) {
+  if (terms.length === 0)
+    return "1 = 0";
+  const clauses = terms.map(() => `(${fields.map((field) => `lower(COALESCE(${field}, '')) LIKE ? ESCAPE '\\'`).join(" OR ")})`);
+  return clauses.join(" OR ");
+}
+function selectWikiPages(db, terms, limit) {
+  const fields = ["path", "title", "artifact_uri", "metadata_json"];
+  return db.query(`SELECT id, path, title, artifact_uri, content_hash, status, metadata_json
+     FROM wiki_pages
+     WHERE status = 'active' AND (${catalogWhere(fields, terms)})
+     ORDER BY updated_at DESC
+     LIMIT ?`).all(...likeParams(terms, fields.length), limit);
+}
+function selectKnowledgeIndexes(db, terms, limit) {
+  const fields = ["kind", "name", "shard_key", "artifact_uri", "metadata_json"];
+  return db.query(`SELECT id, kind, name, artifact_uri, shard_key, metadata_json
+     FROM knowledge_indexes
+     WHERE ${catalogWhere(fields, terms)}
+     ORDER BY updated_at DESC
+     LIMIT ?`).all(...likeParams(terms, fields.length), limit);
+}
+function readLegacyItems(path) {
+  if (!path || !existsSync7(path))
+    return [];
+  try {
+    const parsed = JSON.parse(readFileSync7(path, "utf8"));
+    if (!parsed || !Array.isArray(parsed.items))
+      return [];
+    return parsed.items.filter((item) => {
+      return Boolean(item && typeof item === "object" && typeof item.id === "string" && typeof item.title === "string" && typeof item.content === "string");
+    });
+  } catch {
+    return [];
+  }
+}
+function legacyItemHaystack(item) {
+  return [
+    item.id,
+    item.short_id,
+    item.title,
+    item.content,
+    item.url,
+    ...item.tags ?? []
+  ].filter((value) => typeof value === "string" && value.length > 0).join(" ").toLowerCase();
+}
+function selectLegacyItems(path, terms, limit) {
+  if (terms.length === 0)
+    return [];
+  return readLegacyItems(path).filter((item) => item.archived !== true).map((item) => ({ item, haystack: legacyItemHaystack(item) })).filter(({ haystack }) => terms.some((term) => haystack.includes(term))).map(({ item, haystack }) => ({ item, score: catalogScore(haystack, terms) })).sort((a, b) => b.score - a.score || a.item.id.localeCompare(b.item.id)).slice(0, limit);
+}
+function chunkResult(row, keywordScore) {
+  const metadata = parseJsonObject4(row.chunk_metadata_json);
+  const provenance = provenanceForChunk2(row);
+  const sourceRef = metadataString3(metadata, ["source_ref"]);
+  const sourceUri = row.source_uri ?? metadataString3(metadata, ["source_uri"]);
+  const isWiki = Boolean(row.wiki_page_id);
+  const result = {
+    kind: isWiki ? "wiki_chunk" : "source_chunk",
+    id: row.chunk_id,
+    title: isWiki ? row.wiki_title : row.source_title,
+    text: row.text,
+    score: 0,
+    scores: { keyword: keywordScore },
+    source: sourceUri || sourceRef ? {
+      uri: sourceUri,
+      ref: sourceRef,
+      kind: row.source_kind ?? metadataString3(metadata, ["source_kind"]),
+      revision: row.revision ?? metadataString3(metadata, ["revision"]),
+      hash: row.hash ?? metadataString3(metadata, ["hash"])
+    } : null,
+    citation: {
+      chunk_id: row.chunk_id,
+      start_offset: row.start_offset,
+      end_offset: row.end_offset
+    },
+    artifact: isWiki ? {
+      uri: row.wiki_artifact_uri,
+      path: row.wiki_path,
+      hash: row.wiki_content_hash,
+      shard_key: row.wiki_path
+    } : null,
+    provenance,
+    reasons: ["keyword_match"]
+  };
+  result.score = combinedScore(result.scores, result.citation);
+  return result;
+}
+function legacyItemResult(item, keywordScore) {
+  const uri = `knowledge://item/${encodeURIComponent(item.id)}`;
+  const result = {
+    kind: "legacy_item",
+    id: item.id,
+    title: item.title,
+    text: item.content,
+    score: 0,
+    scores: { keyword: keywordScore },
+    source: {
+      uri,
+      ref: uri,
+      kind: "legacy_item",
+      revision: null,
+      hash: null
+    },
+    citation: null,
+    artifact: null,
+    provenance: null,
+    reasons: ["legacy_note_match", "keyword_match"]
+  };
+  result.score = combinedScore(result.scores, result.citation);
+  return result;
+}
+function wikiPageResult(row, terms) {
+  const metadata = parseJsonObject4(row.metadata_json);
+  const score = catalogScore(`${row.path} ${row.title} ${row.artifact_uri ?? ""} ${row.metadata_json}`.toLowerCase(), terms);
+  const result = {
+    kind: "wiki_page",
+    id: row.id,
+    title: row.title,
+    text: null,
+    score: 0,
+    scores: { catalog: score },
+    source: null,
+    citation: null,
+    artifact: {
+      uri: row.artifact_uri,
+      path: row.path,
+      hash: row.content_hash,
+      shard_key: row.path
+    },
+    provenance: existingProvenance(metadata),
+    reasons: ["wiki_catalog_match"]
+  };
+  result.score = combinedScore(result.scores, result.citation);
+  return result;
+}
+function indexResult(row, terms) {
+  const metadata = parseJsonObject4(row.metadata_json);
+  const score = catalogScore(`${row.kind} ${row.name} ${row.shard_key ?? ""} ${row.artifact_uri ?? ""} ${row.metadata_json}`.toLowerCase(), terms);
+  const result = {
+    kind: "knowledge_index",
+    id: row.id,
+    title: row.name,
+    text: null,
+    score: 0,
+    scores: { catalog: score },
+    source: null,
+    citation: null,
+    artifact: {
+      uri: row.artifact_uri,
+      path: metadataString3(metadata, ["artifact_key"]),
+      hash: metadataString3(metadata, ["content_hash"]),
+      shard_key: row.shard_key
+    },
+    provenance: existingProvenance(metadata),
+    reasons: ["index_catalog_match"]
+  };
+  result.score = combinedScore(result.scores, result.citation);
+  return result;
+}
+function mergeResult(results, entry) {
+  const key = `${entry.kind}:${entry.id}`;
+  const existing = results.get(key);
+  if (!existing) {
+    results.set(key, entry);
+    return;
+  }
+  existing.scores = {
+    keyword: Math.max(existing.scores.keyword ?? 0, entry.scores.keyword ?? 0) || undefined,
+    semantic: Math.max(existing.scores.semantic ?? 0, entry.scores.semantic ?? 0) || undefined,
+    catalog: Math.max(existing.scores.catalog ?? 0, entry.scores.catalog ?? 0) || undefined
+  };
+  existing.reasons = unique([...existing.reasons, ...entry.reasons]);
+  existing.text = existing.text ?? entry.text;
+  existing.title = existing.title ?? entry.title;
+  existing.source = existing.source ?? entry.source;
+  existing.citation = existing.citation ?? entry.citation;
+  existing.artifact = existing.artifact ?? entry.artifact;
+  existing.provenance = existing.provenance ?? entry.provenance;
+  existing.score = combinedScore(existing.scores, existing.citation);
+}
+function sortResults(results) {
+  const kindOrder = {
+    source_chunk: 0,
+    wiki_chunk: 1,
+    legacy_item: 2,
+    wiki_page: 3,
+    knowledge_index: 4
+  };
+  return results.sort((a, b) => {
+    if (b.score !== a.score)
+      return b.score - a.score;
+    return kindOrder[a.kind] - kindOrder[b.kind] || a.id.localeCompare(b.id);
+  });
+}
+async function hybridSearch(options) {
+  const query = options.query.trim();
+  if (!query)
+    throw new Error("Search query is required.");
+  const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
+  const terms = queryTerms(query);
+  const ftsQuery = ftsQueryForTerms(terms);
+  const semanticEnabled = options.semantic === true || options.fake === true || Boolean(options.modelRef);
+  const warnings = [];
+  let semanticProvider = null;
+  let semanticModel = null;
+  let semanticDimensions = null;
+  let keywordCount = 0;
+  let catalogCount = 0;
+  let semanticCount = 0;
+  const merged = new Map;
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    const ftsRows = selectFtsChunks(db, ftsQuery, Math.max(limit * 3, 20));
+    keywordCount = ftsRows.length;
+    ftsRows.forEach((row, index) => mergeResult(merged, chunkResult(row, scoreFromRank(row.rank, index))));
+    const wikiRows = selectWikiPages(db, terms, Math.max(limit, 10));
+    const indexRows = selectKnowledgeIndexes(db, terms, Math.max(limit, 10));
+    const legacyRows = selectLegacyItems(options.legacyStorePath, terms, Math.max(limit, 10));
+    catalogCount = wikiRows.length + indexRows.length;
+    keywordCount += legacyRows.length;
+    legacyRows.forEach(({ item, score }) => mergeResult(merged, legacyItemResult(item, score)));
+    wikiRows.forEach((row) => mergeResult(merged, wikiPageResult(row, terms)));
+    indexRows.forEach((row) => mergeResult(merged, indexResult(row, terms)));
+  } finally {
+    db.close();
+  }
+  if (semanticEnabled) {
+    try {
+      const semantic = await searchVectorIndex({
+        dbPath: options.dbPath,
+        query,
+        limit: Math.max(limit * 3, 20),
+        config: options.config,
+        env: options.env,
+        modelRef: options.modelRef,
+        dimensions: options.dimensions,
+        fake: options.fake,
+        batchSize: options.batchSize,
+        maxParallelCalls: options.maxParallelCalls
+      });
+      semanticProvider = semantic.provider;
+      semanticModel = semantic.model;
+      semanticDimensions = semantic.dimensions;
+      semanticCount = semantic.results.length;
+      for (const row of semantic.results) {
+        const result = {
+          kind: "source_chunk",
+          id: row.chunk_id,
+          title: null,
+          text: row.text,
+          score: 0,
+          scores: { semantic: semanticScore(row.score) },
+          source: {
+            uri: row.source_uri,
+            ref: row.source_ref,
+            kind: row.provenance?.source_kind ?? null,
+            revision: row.revision,
+            hash: row.hash
+          },
+          citation: {
+            chunk_id: row.chunk_id,
+            start_offset: row.provenance?.start_offset ?? null,
+            end_offset: row.provenance?.end_offset ?? null
+          },
+          artifact: null,
+          provenance: row.provenance,
+          reasons: ["semantic_match"]
+        };
+        result.score = combinedScore(result.scores, result.citation);
+        mergeResult(merged, result);
+      }
+    } catch (error51) {
+      warnings.push(`semantic_search_failed: ${error51 instanceof Error ? error51.message : String(error51)}`);
+    }
+  }
+  const results = sortResults(Array.from(merged.values())).slice(0, limit);
+  return {
+    query,
+    limit,
+    mode: {
+      keyword: true,
+      catalog: true,
+      semantic: semanticEnabled
+    },
+    semantic_provider: semanticProvider,
+    semantic_model: semanticModel,
+    semantic_dimensions: semanticDimensions,
+    counts: {
+      keyword_results: keywordCount,
+      catalog_results: catalogCount,
+      semantic_results: semanticCount,
+      merged_results: results.length
+    },
+    warnings,
+    results
+  };
+}
+async function hybridSearchLegacyStore(options) {
+  const query = options.query.trim();
+  if (!query)
+    throw new Error("Search query is required.");
+  const limit = Math.max(1, Math.min(options.limit ?? 10, 100));
+  const terms = queryTerms(query);
+  const semanticEnabled = options.semantic === true || options.fake === true || Boolean(options.modelRef);
+  const merged = new Map;
+  const legacyRows = selectLegacyItems(options.legacyStorePath, terms, Math.max(limit, 10));
+  legacyRows.forEach(({ item, score }) => mergeResult(merged, legacyItemResult(item, score)));
+  const warnings = ["knowledge_db_missing"];
+  if (semanticEnabled)
+    warnings.push("semantic_search_skipped_knowledge_db_missing");
+  const results = sortResults(Array.from(merged.values())).slice(0, limit);
+  return {
+    query,
+    limit,
+    mode: {
+      keyword: true,
+      catalog: true,
+      semantic: semanticEnabled
+    },
+    semantic_provider: null,
+    semantic_model: null,
+    semantic_dimensions: null,
+    counts: {
+      keyword_results: legacyRows.length,
+      catalog_results: 0,
+      semantic_results: 0,
+      merged_results: results.length
+    },
+    warnings,
+    results
+  };
+}
+
+// src/retrieval.ts
+function stableId4(prefix, value) {
+  return `${prefix}_${createHash7("sha256").update(value).digest("hex").slice(0, 20)}`;
+}
+function normalizeQuery(query) {
+  return query.normalize("NFKC").trim().replace(/\s+/g, " ").toLowerCase();
+}
+function queryTerms2(query) {
+  return Array.from(new Set(normalizeQuery(query).match(/[\p{L}\p{N}_]+/gu) ?? [])).slice(0, 16);
+}
+function textForResult(result) {
+  return [result.title, result.text].filter(Boolean).join(" ").toLowerCase();
+}
+function exactScore(result, terms) {
+  if (terms.length === 0)
+    return 0;
+  const text = textForResult(result);
+  const matched = terms.filter((term) => text.includes(term)).length;
+  return Number((matched / terms.length).toFixed(6));
+}
+function hasReadOnlyProvenance(provenance) {
+  if (!provenance)
+    return true;
+  if ("read_only" in provenance)
+    return provenance.read_only === true;
+  if ("read_only_sources" in provenance)
+    return provenance.read_only_sources === true;
+  return true;
+}
+function isStale(provenance) {
+  if (!provenance)
+    return false;
+  if ("stale" in provenance && provenance.stale)
+    return true;
+  if ("status" in provenance)
+    return isStaleStatus(provenance.status);
+  return false;
+}
+function freshnessScore(result) {
+  if (isStale(result.provenance))
+    return 0;
+  if (result.source?.hash || result.source?.revision)
+    return 1;
+  if (result.artifact?.hash)
+    return 0.85;
+  if (result.provenance && "source_refs" in result.provenance && result.provenance.source_refs.length > 0)
+    return 0.75;
+  return 0.55;
+}
+function citationScore(result) {
+  if (result.citation?.chunk_id && (result.source?.uri || result.artifact?.uri))
+    return 1;
+  if (result.provenance && "citation_required" in result.provenance && result.provenance.citation_required)
+    return 0.75;
+  if (result.artifact?.uri)
+    return 0.65;
+  return 0.35;
+}
+function authorityScore(result) {
+  if (result.kind === "wiki_chunk")
+    return 0.85;
+  if (result.kind === "source_chunk")
+    return 0.8;
+  if (result.kind === "legacy_item")
+    return 0.6;
+  if (result.kind === "wiki_page")
+    return 0.65;
+  return 0.55;
+}
+function rerank(result, terms) {
+  const scores = {
+    base_score: result.score,
+    exact_score: exactScore(result, terms),
+    citation_score: citationScore(result),
+    freshness_score: freshnessScore(result),
+    authority_score: authorityScore(result)
+  };
+  const final = Math.min(1, scores.base_score * 0.65 + scores.exact_score * 0.1 + scores.citation_score * 0.1 + scores.freshness_score * 0.1 + scores.authority_score * 0.05);
+  const reasons = new Set(result.reasons);
+  if (scores.exact_score > 0.5)
+    reasons.add("exact_term");
+  if (scores.citation_score >= 0.75)
+    reasons.add("cited_source");
+  if (scores.freshness_score >= 0.85)
+    reasons.add("fresh_source");
+  return {
+    ...result,
+    score: Number(final.toFixed(6)),
+    reasons: Array.from(reasons),
+    rerank: {
+      ...scores,
+      final_score: Number(final.toFixed(6))
+    }
+  };
+}
+function quoteFor(result, maxChars) {
+  const source = result.text ?? result.title;
+  if (!source)
+    return null;
+  const normalized = source.replace(/\s+/g, " ").trim();
+  return normalized.length <= maxChars ? normalized : `${normalized.slice(0, Math.max(0, maxChars - 1)).trim()}...`;
+}
+function citationFor(result) {
+  const id = stableId4("cite", `${result.kind}\x00${result.id}\x00${result.source?.uri ?? ""}\x00${result.artifact?.uri ?? ""}`);
+  return {
+    id,
+    result_id: result.id,
+    kind: result.kind,
+    source_uri: result.source?.uri ?? null,
+    source_ref: result.source?.ref ?? null,
+    artifact_uri: result.artifact?.uri ?? null,
+    artifact_path: result.artifact?.path ?? null,
+    revision: result.source?.revision ?? null,
+    hash: result.source?.hash ?? result.artifact?.hash ?? null,
+    chunk_id: result.citation?.chunk_id ?? null,
+    start_offset: result.citation?.start_offset ?? null,
+    end_offset: result.citation?.end_offset ?? null,
+    quote: quoteFor(result, 500),
+    provenance: result.provenance
+  };
+}
+function excerptFor(result, citation, contextChars) {
+  const text = quoteFor(result, contextChars);
+  if (!text)
+    return null;
+  return {
+    id: stableId4("excerpt", `${result.kind}\x00${result.id}`),
+    result_id: result.id,
+    citation_id: citation.id,
+    kind: result.kind,
+    text,
+    score: result.score
+  };
+}
+function placeholders(values) {
+  return values.map(() => "?").join(", ");
+}
+function loadGraphEvidence(dbPath, results) {
+  const chunkIds = results.map((result) => result.citation?.chunk_id).filter((id) => Boolean(id));
+  const wikiPageIds = results.filter((result) => result.kind === "wiki_page").map((result) => result.id);
+  const citations = [];
+  const backlinks = [];
+  if (chunkIds.length === 0 && wikiPageIds.length === 0)
+    return { citations, backlinks };
+  const db = openKnowledgeDb(dbPath);
+  try {
+    if (chunkIds.length > 0) {
+      citations.push(...db.query(`SELECT id, wiki_page_id, chunk_id, source_uri, quote, start_offset, end_offset
+         FROM citations
+         WHERE chunk_id IN (${placeholders(chunkIds)})
+         ORDER BY created_at DESC
+         LIMIT 50`).all(...chunkIds));
+    }
+    if (wikiPageIds.length > 0) {
+      citations.push(...db.query(`SELECT id, wiki_page_id, chunk_id, source_uri, quote, start_offset, end_offset
+         FROM citations
+         WHERE wiki_page_id IN (${placeholders(wikiPageIds)})
+         ORDER BY created_at DESC
+         LIMIT 50`).all(...wikiPageIds));
+      backlinks.push(...db.query(`SELECT from_page_id, to_page_id, label
+         FROM wiki_backlinks
+         WHERE from_page_id IN (${placeholders(wikiPageIds)}) OR to_page_id IN (${placeholders(wikiPageIds)})
+         LIMIT 50`).all(...wikiPageIds, ...wikiPageIds));
+    }
+  } finally {
+    db.close();
+  }
+  return { citations, backlinks };
+}
+function retrieveKnowledgeContextFromSearch(search, options = {}) {
+  const contextChars = Math.max(200, Math.min(options.contextChars ?? 1200, 4000));
+  const terms = queryTerms2(search.query);
+  const warnings = [...search.warnings];
+  const permissionNotes = new Set;
+  const freshnessNotes = new Set;
+  const filtered = search.results.filter((result) => {
+    if (!hasReadOnlyProvenance(result.provenance)) {
+      warnings.push(`permission_filtered: ${result.kind}:${result.id}`);
+      permissionNotes.add("Dropped a result because provenance was not read-only.");
+      return false;
+    }
+    if (isStale(result.provenance)) {
+      warnings.push(`stale_filtered: ${result.kind}:${result.id}`);
+      freshnessNotes.add("Dropped a stale result whose source status requires reindexing.");
+      return false;
+    }
+    return true;
+  });
+  const results = filtered.map((result) => rerank(result, terms)).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, search.limit);
+  const citations = results.map(citationFor);
+  const excerpts = results.map((result, index) => excerptFor(result, citations[index], contextChars)).filter((entry) => Boolean(entry));
+  for (const result of results) {
+    if (result.provenance && "read_only" in result.provenance && result.provenance.read_only) {
+      permissionNotes.add("All source-backed excerpts are read-only and citation-required.");
+    }
+    if (result.rerank.freshness_score >= 0.85) {
+      freshnessNotes.add("Fresh source revision/hash or artifact hash is present for top context.");
+    }
+  }
+  return {
+    query: search.query,
+    normalized_query: normalizeQuery(search.query),
+    created_at: new Date().toISOString(),
+    mode: search.mode,
+    warnings,
+    search_counts: search.counts,
+    results,
+    citations,
+    excerpts,
+    graph: options.dbPath ? loadGraphEvidence(options.dbPath, results) : { citations: [], backlinks: [] },
+    notes: {
+      permissions: Array.from(permissionNotes),
+      freshness: Array.from(freshnessNotes)
+    }
+  };
+}
+async function retrieveKnowledgeContext(options) {
+  const search = await hybridSearch(options);
+  return retrieveKnowledgeContextFromSearch(search, {
+    dbPath: options.dbPath,
+    contextChars: options.contextChars
+  });
+}
+
+// src/agent.ts
+function estimateTokens(text) {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.ceil(words * 1.25));
+}
+function citationLabel(index) {
+  return `C${index + 1}`;
+}
+function localAnswer(prompt, context) {
+  if (context.excerpts.length === 0) {
+    return `No indexed knowledge matched the prompt: ${prompt}`;
+  }
+  const lines = [
+    `Found ${context.excerpts.length} relevant knowledge excerpt(s) for: ${prompt}`,
+    "",
+    ...context.excerpts.slice(0, 5).map((excerpt, index) => {
+      const citation = context.citations.find((entry) => entry.id === excerpt.citation_id);
+      const ref = citation?.source_ref ?? citation?.source_uri ?? citation?.artifact_path ?? citation?.artifact_uri ?? "unknown source";
+      return `[${citationLabel(index)}] ${excerpt.text} (${ref})`;
+    })
+  ];
+  return lines.join(`
+`);
+}
+function promptForModel(prompt, context) {
+  const citations = context.citations.map((citation, index) => ({
+    id: citationLabel(index),
+    source_ref: citation.source_ref,
+    source_uri: citation.source_uri,
+    artifact_path: citation.artifact_path,
+    revision: citation.revision,
+    hash: citation.hash,
+    quote: citation.quote
+  }));
+  const excerpts = context.excerpts.map((excerpt, index) => ({
+    id: citationLabel(index),
+    kind: excerpt.kind,
+    text: excerpt.text,
+    score: excerpt.score
+  }));
+  return [
+    `Prompt: ${prompt}`,
+    "",
+    "Use only the provided context. Cite claims with citation ids like [C1]. If context is insufficient, say what is missing.",
+    "",
+    `Context excerpts:
+${JSON.stringify(excerpts, null, 2)}`,
+    "",
+    `Citations:
+${JSON.stringify(citations, null, 2)}`
+  ].join(`
+`);
+}
+function proposedUpdates(prompt, context) {
+  if (context.citations.length === 0)
+    return [];
+  return [{
+    kind: "answer_note",
+    title: prompt.length > 80 ? `${prompt.slice(0, 77)}...` : prompt,
+    citations: context.citations.map((citation) => citation.id),
+    requires_approval: true
+  }];
+}
+function insertRun(dbPath, input) {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    db.run(`INSERT INTO runs (id, type, prompt, status, provider, model, metadata_json, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
+      input.runId,
+      "knowledge-prompt",
+      input.prompt,
+      input.status,
+      input.provider,
+      input.model,
+      JSON.stringify(input.metadata),
+      input.now,
+      input.now
+    ]);
+  } finally {
+    db.close();
+  }
+}
+function addRunEvent(dbPath, input) {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    db.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`, [
+      `evt_${randomUUID6()}`,
+      input.runId,
+      input.level,
+      input.event,
+      JSON.stringify(input.metadata),
+      input.now
+    ]);
+  } finally {
+    db.close();
+  }
+}
+function updateRun(dbPath, input) {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    db.run(`UPDATE runs
+       SET status = ?, provider = ?, model = ?, metadata_json = ?, updated_at = ?
+       WHERE id = ?`, [
+      input.status,
+      input.provider,
+      input.model,
+      JSON.stringify(input.metadata),
+      input.now,
+      input.runId
+    ]);
+  } finally {
+    db.close();
+  }
+}
+function recordUsage(dbPath, runId, usage, provider, model, now, metadata = {}) {
+  const db = openKnowledgeDb(dbPath);
+  try {
+    recordProviderUsage(db, {
+      run_id: runId,
+      provider,
+      model,
+      input_tokens: usage.input_tokens,
+      output_tokens: usage.output_tokens,
+      cost_usd: usage.cost_usd,
+      metadata,
+      created_at: now
+    });
+  } finally {
+    db.close();
+  }
+}
+async function runKnowledgePrompt(options) {
+  const prompt = options.prompt.trim();
+  if (!prompt)
+    throw new Error("Knowledge prompt is required.");
+  const now = (options.now ?? new Date).toISOString();
+  const runId = `run_${randomUUID6()}`;
+  const modelRef = resolveModelRef(options.modelRef ?? "default", options.config);
+  const parsed = parseModelRef(modelRef);
+  migrateKnowledgeDb(options.dbPath);
+  insertRun(options.dbPath, {
+    runId,
+    prompt,
+    status: options.generate ? "running" : "dry_run",
+    provider: options.generate ? parsed.provider : "local",
+    model: options.generate ? parsed.model : "context-draft",
+    metadata: {
+      semantic: options.semantic === true || options.fake === true || Boolean(options.modelRef),
+      approve_write: options.approveWrite === true,
+      generated: options.generate === true
+    },
+    now
+  });
+  const { prompt: _prompt, generate: _generate, approveWrite: _approveWrite, now: _now, ...retrievalOptions } = options;
+  const context = await retrieveKnowledgeContext({
+    ...retrievalOptions,
+    query: prompt
+  });
+  addRunEvent(options.dbPath, {
+    runId,
+    level: "info",
+    event: "context_retrieved",
+    metadata: {
+      results: context.results.length,
+      citations: context.citations.length,
+      warnings: context.warnings
+    },
+    now
+  });
+  let answer = localAnswer(prompt, context);
+  let generated = false;
+  let provider = "local";
+  let model = "context-draft";
+  let usage = {
+    input_tokens: estimateTokens(prompt) + context.excerpts.reduce((sum, excerpt) => sum + estimateTokens(excerpt.text), 0),
+    output_tokens: estimateTokens(answer),
+    cost_usd: 0
+  };
+  const warnings = [...context.warnings];
+  if (options.generate) {
+    try {
+      if (options.fake) {
+        generated = true;
+        provider = parsed.provider;
+        model = parsed.model;
+        answer = `Fake generated answer for: ${prompt}
+
+${answer}`;
+      } else {
+        const { generateText } = await import("ai");
+        const languageModel = await languageModelFor(modelRef, {
+          config: options.config,
+          env: options.env
+        });
+        const result = await generateText({
+          model: languageModel,
+          system: "You answer company knowledge-base prompts using only provided context and citation ids.",
+          prompt: promptForModel(prompt, context)
+        });
+        generated = true;
+        provider = parsed.provider;
+        model = parsed.model;
+        answer = result.text;
+        const normalized = normalizeAiSdkUsage({
+          provider,
+          model,
+          usage: result.usage,
+          providerMetadata: result.providerMetadata
+        });
+        usage = {
+          input_tokens: normalized.input_tokens,
+          output_tokens: normalized.output_tokens,
+          cost_usd: normalized.cost_usd
+        };
+      }
+    } catch (error51) {
+      addRunEvent(options.dbPath, {
+        runId,
+        level: "error",
+        event: "answer_generation_failed",
+        metadata: { message: error51 instanceof Error ? error51.message : String(error51) },
+        now
+      });
+      updateRun(options.dbPath, {
+        runId,
+        status: "failed",
+        provider: parsed.provider,
+        model: parsed.model,
+        metadata: {
+          generated: false,
+          error: error51 instanceof Error ? error51.message : String(error51)
+        },
+        now
+      });
+      throw error51;
+    }
+  }
+  const updates = proposedUpdates(prompt, context);
+  const writePolicy = {
+    approved: options.approveWrite === true,
+    durable_writes_performed: false,
+    reason: options.approveWrite ? "Approval flag recorded; durable wiki writing is deferred to the wiki compile task." : "Dry-run mode: proposed wiki updates require approval before durable writes."
+  };
+  addRunEvent(options.dbPath, {
+    runId,
+    level: "info",
+    event: generated ? "answer_generated" : "answer_drafted",
+    metadata: {
+      provider,
+      model,
+      proposed_updates: updates.length,
+      durable_writes_performed: false
+    },
+    now
+  });
+  recordUsage(options.dbPath, runId, usage, provider, model, now, {
+    generated,
+    citations: context.citations.length
+  });
+  updateRun(options.dbPath, {
+    runId,
+    status: generated ? "completed" : "dry_run",
+    provider,
+    model,
+    metadata: {
+      generated,
+      citations: context.citations.length,
+      proposed_updates: updates.length,
+      approve_write: options.approveWrite === true
+    },
+    now
+  });
+  return {
+    run_id: runId,
+    prompt,
+    generated,
+    provider,
+    model,
+    answer,
+    context,
+    citations: context.citations,
+    proposed_wiki_updates: updates,
+    write_policy: writePolicy,
+    usage,
+    warnings
+  };
+}
+
+// src/context-pack.ts
+import { createHash as createHash8 } from "crypto";
+var DEFAULT_MAX_TOKENS = 1200;
+var DEFAULT_MAX_ITEMS = 6;
+var MAX_MAX_TOKENS = 12000;
+var MAX_MAX_ITEMS = 50;
+var MIN_MAX_TOKENS = 800;
+function stableId5(prefix, value, size = 16) {
+  return `${prefix}_${createHash8("sha256").update(value).digest("hex").slice(0, size)}`;
+}
+function normalizeText(value) {
+  return value.normalize("NFKC").trim().replace(/\s+/g, " ");
+}
+function normalizedSearchText(value) {
+  return normalizeText(value).toLowerCase();
+}
+function termsFor(value) {
+  return Array.from(new Set(normalizedSearchText(value).match(/[\p{L}\p{N}_]+/gu) ?? [])).slice(0, 24);
+}
+function truncateText(value, maxChars) {
+  const normalized = normalizeText(value);
+  if (normalized.length <= maxChars)
+    return normalized;
+  return `${normalized.slice(0, Math.max(0, maxChars - 1)).trim()}...`;
+}
+function parseJsonObject5(value) {
+  if (!value)
+    return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+function isSecretishKey(key) {
+  return /(?:api[_-]?key|secret|token|password|private[_-]?key|credential)/i.test(key);
+}
+function metadataKeys(metadata) {
+  return Object.keys(metadata).filter((key) => !isSecretishKey(key)).sort().slice(0, 12);
+}
+function rawMetadataRef(metadata, keys) {
+  for (const key of keys) {
+    if (isSecretishKey(key))
+      continue;
+    const value = metadata[key];
+    if (typeof value === "string" && value.trim())
+      return value.trim();
+  }
+  return null;
+}
+function safeRef(value, policy) {
+  if (!value)
+    return null;
+  const redacted = redactSecrets(value, policy).text;
+  try {
+    const parsed = new URL(redacted);
+    const secretParams = ["token", "access_token", "api_key", "apikey", "key", "secret", "password", "signature", "sig"];
+    for (const param of secretParams)
+      parsed.searchParams.delete(param);
+    for (const [key] of parsed.searchParams) {
+      if (isSecretishKey(key))
+        parsed.searchParams.delete(key);
+    }
+    return parsed.toString();
+  } catch {
+    return redacted;
+  }
+}
+function metadataRef(metadata, keys, policy) {
+  return safeRef(rawMetadataRef(metadata, keys), policy);
+}
+function summarizeMetadata(metadata) {
+  const parts = [];
+  for (const key of metadataKeys(metadata).slice(0, 6)) {
+    const value = metadata[key];
+    if (typeof value === "string" && value.trim())
+      parts.push(`${key}=${truncateText(value, 80)}`);
+    else if (typeof value === "number" || typeof value === "boolean")
+      parts.push(`${key}=${String(value)}`);
+    else if (value && typeof value === "object")
+      parts.push(`${key}={...}`);
+  }
+  return parts.join("; ");
+}
+function estimateTokensForText(text) {
+  if (!text.trim())
+    return 0;
+  return Math.max(1, Math.ceil(text.length / 4));
+}
+function estimateTokensForValue(value) {
+  return estimateTokensForText(JSON.stringify(value));
+}
+function coerceMaxTokens(value) {
+  if (!Number.isFinite(value ?? NaN))
+    return DEFAULT_MAX_TOKENS;
+  const floor = Math.floor(value);
+  if (floor < MIN_MAX_TOKENS)
+    throw new Error(`--max-tokens must be at least ${MIN_MAX_TOKENS} for the stable context-pack schema.`);
+  return Math.min(floor, MAX_MAX_TOKENS);
+}
+function coerceMaxItems(value, limit) {
+  const raw = Number.isFinite(value ?? NaN) ? value : limit;
+  if (!Number.isFinite(raw ?? NaN))
+    return DEFAULT_MAX_ITEMS;
+  return Math.max(1, Math.min(Math.floor(raw), MAX_MAX_ITEMS));
+}
+function parseSince(value, now) {
+  if (!value)
+    return { cutoff: null, warning: null };
+  const trimmed = value.trim();
+  const duration3 = /^(\d+)\s*([mhdw])$/i.exec(trimmed);
+  if (duration3) {
+    const amount = Number(duration3[1]);
+    const unit = duration3[2].toLowerCase();
+    const multiplier = unit === "m" ? 60000 : unit === "h" ? 3600000 : unit === "d" ? 86400000 : 604800000;
+    return { cutoff: new Date(now.getTime() - amount * multiplier).toISOString(), warning: null };
+  }
+  const parsed = new Date(trimmed);
+  if (!Number.isNaN(parsed.getTime()))
+    return { cutoff: parsed.toISOString(), warning: null };
+  return { cutoff: null, warning: `invalid_since_ignored: ${trimmed}` };
+}
+function redactPreview(text, policy, maxChars) {
+  const redacted = redactSecrets(text, policy);
+  return {
+    text: truncateText(redacted.text, maxChars),
+    redactions: redacted.findings.length
+  };
+}
+function scoreAgainstTopic(text, terms) {
+  if (terms.length === 0)
+    return 0.5;
+  const haystack = normalizedSearchText(text);
+  const matched = terms.filter((term) => haystack.includes(term)).length;
+  return Number((matched / terms.length).toFixed(6));
+}
+function baseSafetyReminders(source) {
+  return [
+    "This pack is read-only and performs no durable writes.",
+    "Use citation ids and refs instead of pasting raw artifacts into prompts.",
+    "Resolve source or artifact refs explicitly only when raw content is needed and allowed.",
+    "Run generated knowledge writes through approval-gated commands before applying.",
+    source === "loops" || source === "runs" ? "Run evidence is summarized from knowledge run ledgers; raw run artifacts remain referenced, not embedded." : "Search evidence is derived from indexed chunks/wiki catalog rows with citation metadata."
+  ];
+}
+function citationFromRetrieval(index, citation, policy) {
+  const sourceRef = safeRef(citation.source_ref, policy);
+  const sourceUri = safeRef(citation.source_uri, policy);
+  const artifactUri = safeRef(citation.artifact_uri, policy);
+  const artifactPath = safeRef(citation.artifact_path, policy);
+  const ref = sourceRef ?? sourceUri ?? artifactPath ?? artifactUri ?? citation.id;
+  const quote = citation.quote ? redactPreview(citation.quote, policy, index < 3 ? 220 : 140) : null;
+  return {
+    citation: {
+      id: stableId5("cite", `${citation.id}\x00${ref}`, 12),
+      kind: citation.artifact_uri || citation.artifact_path ? "artifact" : "source",
+      ref,
+      source_ref: sourceRef,
+      source_uri: sourceUri,
+      artifact_uri: artifactUri,
+      artifact_path: artifactPath,
+      run_id: null,
+      run_event_id: null,
+      revision: citation.revision ?? null,
+      hash: citation.hash ?? null,
+      chunk_id: citation.chunk_id ?? null,
+      offsets: {
+        start: citation.start_offset ?? null,
+        end: citation.end_offset ?? null
+      },
+      quote_preview: quote?.text ?? null
+    },
+    redactions: quote?.redactions ?? 0
+  };
+}
+async function buildSearchDraft(options, maxItems) {
+  const query = (options.query ?? options.topic ?? "").trim();
+  if (!query)
+    throw new Error("Context pack query is required for search source.");
+  const {
+    config: config2,
+    dbPath,
+    limit,
+    semantic,
+    modelRef,
+    dimensions,
+    fake,
+    env,
+    batchSize,
+    maxParallelCalls,
+    legacyStorePath
+  } = options;
+  const context = await retrieveKnowledgeContext({
+    dbPath,
+    config: config2,
+    legacyStorePath,
+    query,
+    limit: Math.max(maxItems, limit ?? maxItems),
+    semantic,
+    modelRef,
+    dimensions,
+    fake,
+    env,
+    batchSize,
+    maxParallelCalls,
+    contextChars: Math.min(options.contextChars ?? 700, 1200)
+  });
+  const citationMap = new Map;
+  let redactions = 0;
+  context.citations.forEach((citation, index) => {
+    const item = citationFromRetrieval(index, citation, options.safetyPolicy);
+    redactions += item.redactions;
+    citationMap.set(citation.id, item.citation);
+  });
+  const evidence = context.excerpts.slice(0, Math.max(maxItems * 2, maxItems)).map((excerpt) => {
+    const result = context.results.find((entry) => entry.id === excerpt.result_id);
+    const citation = excerpt.citation_id ? citationMap.get(excerpt.citation_id) : null;
+    const redacted = redactPreview(excerpt.text, options.safetyPolicy, 520);
+    redactions += redacted.redactions;
+    const title = result?.title ?? citation?.ref ?? excerpt.kind;
+    return {
+      id: stableId5("ev", `${excerpt.kind}\x00${excerpt.result_id}\x00${excerpt.citation_id ?? ""}`, 14),
+      kind: excerpt.kind,
+      title: truncateText(title, 100),
+      text_preview: redacted.text,
+      score: Number(excerpt.score.toFixed(6)),
+      citation_ids: citation ? [citation.id] : [],
+      provenance: {
+        source: "search",
+        record_ref: `${excerpt.kind}:${excerpt.result_id}`,
+        created_at: context.created_at,
+        updated_at: null,
+        metadata_keys: []
+      }
+    };
+  });
+  const usedCitationIds = new Set(evidence.flatMap((entry) => entry.citation_ids));
+  const citations = Array.from(citationMap.values()).filter((citation) => usedCitationIds.has(citation.id));
+  return {
+    citations,
+    evidence,
+    duplicateCandidates: [],
+    redactions,
+    warnings: context.warnings,
+    available: context.excerpts.length
+  };
+}
+function loadRunRows(db, cutoff, limit) {
+  if (cutoff) {
+    return db.query(`SELECT id, type, prompt, status, provider, model, cost_tokens, cost_usd, metadata_json, created_at, updated_at
+       FROM runs
+       WHERE updated_at >= ? OR created_at >= ?
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT ?`).all(cutoff, cutoff, limit);
+  }
+  return db.query(`SELECT id, type, prompt, status, provider, model, cost_tokens, cost_usd, metadata_json, created_at, updated_at
+     FROM runs
+     ORDER BY updated_at DESC, created_at DESC
+     LIMIT ?`).all(limit);
+}
+function loadRunEvents(db, runIds, limit) {
+  if (runIds.length === 0)
+    return [];
+  const placeholders2 = runIds.map(() => "?").join(", ");
+  return db.query(`SELECT id, run_id, level, event, metadata_json, created_at
+     FROM run_events
+     WHERE run_id IN (${placeholders2})
+     ORDER BY created_at DESC
+     LIMIT ?`).all(...runIds, limit);
+}
+function rowMentionsLoop(row, events) {
+  const text = `${row.type} ${row.metadata_json} ${events.map((event) => `${event.event} ${event.metadata_json}`).join(" ")}`.toLowerCase();
+  return text.includes("loop");
+}
+function citationForRun(row, metadata, policy) {
+  const sourceRef = metadataRef(metadata, ["source_ref", "source_uri", "evidence_uri", "receipt_uri"], policy);
+  const artifactUri = metadataRef(metadata, ["artifact_uri"], policy);
+  const artifactPath = metadataRef(metadata, ["artifact_path", "artifact_key"], policy);
+  const ref = sourceRef ?? artifactUri ?? artifactPath ?? `knowledge://project/runs/${row.id}`;
+  const quote = row.prompt ? redactPreview(row.prompt, policy, 180).text : null;
+  return {
+    id: stableId5("cite", `run\x00${row.id}\x00${ref}`, 12),
+    kind: artifactUri || artifactPath ? "artifact" : "run",
+    ref,
+    source_ref: sourceRef?.startsWith("open-files://") ? sourceRef : null,
+    source_uri: sourceRef && !sourceRef.startsWith("open-files://") ? sourceRef : null,
+    artifact_uri: artifactUri,
+    artifact_path: artifactPath,
+    run_id: row.id,
+    run_event_id: null,
+    revision: metadataRef(metadata, ["revision"], policy),
+    hash: metadataRef(metadata, ["hash", "content_hash"], policy),
+    chunk_id: null,
+    offsets: { start: null, end: null },
+    quote_preview: quote
+  };
+}
+function citationForEvent(row, metadata, policy) {
+  const sourceRef = metadataRef(metadata, ["source_ref", "source_uri", "evidence_uri", "receipt_uri"], policy);
+  const artifactUri = metadataRef(metadata, ["artifact_uri"], policy);
+  const artifactPath = metadataRef(metadata, ["artifact_path", "artifact_key"], policy);
+  const ref = sourceRef ?? artifactUri ?? artifactPath ?? `knowledge://project/runs/${row.run_id}`;
+  const quote = redactPreview(row.event, policy, 160).text;
+  return {
+    id: stableId5("cite", `event\x00${row.id}\x00${ref}`, 12),
+    kind: artifactUri || artifactPath ? "artifact" : "run_event",
+    ref,
+    source_ref: sourceRef?.startsWith("open-files://") ? sourceRef : null,
+    source_uri: sourceRef && !sourceRef.startsWith("open-files://") ? sourceRef : null,
+    artifact_uri: artifactUri,
+    artifact_path: artifactPath,
+    run_id: row.run_id,
+    run_event_id: row.id,
+    revision: metadataRef(metadata, ["revision"], policy),
+    hash: metadataRef(metadata, ["hash", "content_hash"], policy),
+    chunk_id: null,
+    offsets: { start: null, end: null },
+    quote_preview: quote
+  };
+}
+function duplicateCandidatesFor(evidence) {
+  const groups = new Map;
+  for (const entry of evidence) {
+    const key = normalizedSearchText(`${entry.title} ${entry.text_preview}`).replace(/\b(?:file|https?|s3):\/\/\S+/g, "").replace(/\b(?:run|evt|task|loop)_[a-z0-9_]+\b/g, "").replace(/[^a-z0-9 ]+/g, "").replace(/\b(?:run|event|completed|dry_run|pending)\b/g, "").replace(/\s+/g, " ").trim().slice(0, 220);
+    if (!key)
+      continue;
+    groups.set(key, [...groups.get(key) ?? [], entry.id]);
+  }
+  return Array.from(groups.entries()).filter(([, ids]) => ids.length > 1).map(([key, ids]) => ({
+    id: stableId5("dup", key, 12),
+    reason: "normalized_text_match",
+    evidence_ids: ids,
+    confidence: ids.length > 2 ? "high" : "medium"
+  }));
+}
+async function buildRunDraft(options, maxItems, now) {
+  const source = options.source === "loops" ? "loops" : "runs";
+  const topic = (options.topic ?? options.query ?? "").trim();
+  const topicTerms = termsFor(topic);
+  const since = parseSince(options.since, now);
+  const warnings = since.warning ? [since.warning] : [];
+  migrateKnowledgeDb(options.dbPath);
+  const db = openKnowledgeDb(options.dbPath);
+  try {
+    const runRows = loadRunRows(db, since.cutoff, Math.max(maxItems * 8, 40));
+    const allEvents = loadRunEvents(db, runRows.map((row) => row.id), Math.max(maxItems * 12, 80));
+    const eventsByRun = new Map;
+    for (const event of allEvents)
+      eventsByRun.set(event.run_id, [...eventsByRun.get(event.run_id) ?? [], event]);
+    const filteredRuns = source === "loops" ? runRows.filter((row) => rowMentionsLoop(row, eventsByRun.get(row.id) ?? [])) : runRows;
+    const scoredRuns = filteredRuns.map((row) => {
+      const metadata = parseJsonObject5(row.metadata_json);
+      const text = `${row.type} ${row.status} ${row.prompt ?? ""} ${summarizeMetadata(metadata)} ${(eventsByRun.get(row.id) ?? []).map((event) => `${event.event} ${event.metadata_json}`).join(" ")}`;
+      return { row, metadata, score: scoreAgainstTopic(text, topicTerms), text };
+    }).filter((entry) => topicTerms.length === 0 || entry.score > 0).sort((a, b) => b.score - a.score || b.row.updated_at.localeCompare(a.row.updated_at) || a.row.id.localeCompare(b.row.id));
+    const citations = [];
+    const evidence = [];
+    let redactions = 0;
+    for (const entry of scoredRuns.slice(0, Math.max(maxItems * 2, maxItems))) {
+      const citation = citationForRun(entry.row, entry.metadata, options.safetyPolicy);
+      citations.push(citation);
+      const metadataSummary = summarizeMetadata(entry.metadata);
+      const previewInput = [entry.row.prompt, metadataSummary].filter(Boolean).join(" | ") || `${entry.row.type} ${entry.row.status}`;
+      const preview = redactPreview(previewInput, options.safetyPolicy, 420);
+      redactions += preview.redactions;
+      evidence.push({
+        id: `run:${entry.row.id}`,
+        kind: entry.row.type,
+        title: truncateText(`${entry.row.type}: ${entry.row.status}`, 100),
+        text_preview: preview.text,
+        score: entry.score,
+        citation_ids: [citation.id],
+        provenance: {
+          source,
+          record_ref: `knowledge://project/runs/${entry.row.id}`,
+          created_at: entry.row.created_at,
+          updated_at: entry.row.updated_at,
+          metadata_keys: metadataKeys(entry.metadata)
+        }
+      });
+      const eventRows = (eventsByRun.get(entry.row.id) ?? []).map((event) => {
+        const metadata = parseJsonObject5(event.metadata_json);
+        const text = `${event.event} ${summarizeMetadata(metadata)} ${event.metadata_json}`;
+        return { event, metadata, score: scoreAgainstTopic(text, topicTerms), text };
+      }).filter((eventEntry) => topicTerms.length === 0 || eventEntry.score > 0).sort((a, b) => b.score - a.score || b.event.created_at.localeCompare(a.event.created_at) || a.event.id.localeCompare(b.event.id)).slice(0, 2);
+      for (const eventEntry of eventRows) {
+        const eventCitation = citationForEvent(eventEntry.event, eventEntry.metadata, options.safetyPolicy);
+        citations.push(eventCitation);
+        const preview2 = redactPreview(`${eventEntry.event}: ${summarizeMetadata(eventEntry.metadata)}`, options.safetyPolicy, 320);
+        redactions += preview2.redactions;
+        evidence.push({
+          id: `event:${eventEntry.event.id}`,
+          kind: `run_event:${eventEntry.event.level}`,
+          title: truncateText(eventEntry.event.event, 100),
+          text_preview: preview2.text,
+          score: eventEntry.score,
+          citation_ids: [eventCitation.id],
+          provenance: {
+            source,
+            record_ref: `knowledge://project/runs/${eventEntry.event.run_id}`,
+            created_at: eventEntry.event.created_at,
+            updated_at: null,
+            metadata_keys: metadataKeys(eventEntry.metadata)
+          }
+        });
+      }
+    }
+    return {
+      citations,
+      evidence,
+      duplicateCandidates: options.dedupe ? duplicateCandidatesFor(evidence) : [],
+      redactions,
+      warnings,
+      available: scoredRuns.length
+    };
+  } finally {
+    db.close();
+  }
+}
+function outlineFor(input) {
+  const title = input.purpose === "proposal" ? `Proposal context: ${truncateText(input.query || "loop evidence", 80)}` : `Knowledge context: ${truncateText(input.query, 80)}`;
+  const evidenceIds = input.evidence.slice(0, 8).map((entry) => entry.id);
+  const duplicateIds = input.duplicates.slice(0, 5).map((entry) => entry.id);
+  const bullets = input.evidence.slice(0, 5).map((entry) => `${entry.id}: ${entry.title}`);
+  if (input.evidence.length === 0)
+    bullets.push("No matching bounded evidence was found.");
+  return {
+    title,
+    bullets,
+    evidence_ids: evidenceIds,
+    duplicate_candidate_ids: duplicateIds,
+    next_actions: input.source === "loops" ? [
+      "Review duplicate_candidates before drafting a new proposal.",
+      "Use cited run refs for provenance; inspect a run only when more detail is needed.",
+      "Keep proposal writes approval-gated and idempotent."
+    ] : [
+      "Use evidence_ids and citation_ids in prompts instead of raw excerpts when possible.",
+      "Inspect cited refs only if the bounded preview is insufficient.",
+      "Use knowledge build/file-answer only with explicit approval for durable writes."
+    ]
+  };
+}
+function pruneCitations(pack) {
+  const used = new Set(pack.evidence.flatMap((entry) => entry.citation_ids));
+  pack.citations = pack.citations.filter((citation) => used.has(citation.id));
+}
+function syncOutline(pack) {
+  pack.outline.evidence_ids = pack.evidence.slice(0, 8).map((entry) => entry.id);
+  pack.outline.bullets = pack.evidence.length > 0 ? pack.evidence.slice(0, 5).map((entry) => `${entry.id}: ${entry.title}`) : ["No matching bounded evidence was found."];
+  pack.outline.duplicate_candidate_ids = pack.duplicate_candidates.slice(0, 5).map((entry) => entry.id);
+}
+function fitPackToBudget(pack) {
+  const maxTokens = pack.budgets.max_tokens;
+  const warnings = new Set(pack.warnings);
+  while (estimateTokensForValue(pack) > maxTokens) {
+    const longest = pack.evidence.map((entry, index) => ({ entry, index })).filter(({ entry }) => entry.text_preview.length > 180).sort((a, b) => b.entry.text_preview.length - a.entry.text_preview.length)[0];
+    if (longest) {
+      longest.entry.text_preview = truncateText(longest.entry.text_preview, 180);
+      warnings.add("text_preview_truncated_for_token_budget");
+      continue;
+    }
+    const longCitation = pack.citations.filter((citation) => (citation.quote_preview?.length ?? 0) > 120).sort((a, b) => (b.quote_preview?.length ?? 0) - (a.quote_preview?.length ?? 0))[0];
+    if (longCitation?.quote_preview) {
+      longCitation.quote_preview = truncateText(longCitation.quote_preview, 120);
+      warnings.add("citation_quote_truncated_for_token_budget");
+      continue;
+    }
+    if (pack.evidence.length > 0) {
+      pack.evidence.pop();
+      pack.budgets.items_truncated += 1;
+      pack.duplicate_candidates = pack.duplicate_candidates.map((candidate) => ({
+        ...candidate,
+        evidence_ids: candidate.evidence_ids.filter((id) => pack.evidence.some((entry) => entry.id === id))
+      })).filter((candidate) => candidate.evidence_ids.length > 1);
+      syncOutline(pack);
+      warnings.add("evidence_truncated_for_token_budget");
+      pruneCitations(pack);
+      continue;
+    }
+    if (pack.outline.next_actions.length > 1) {
+      pack.outline.next_actions.pop();
+      warnings.add("outline_truncated_for_token_budget");
+      continue;
+    }
+    warnings.add("token_budget_floor_exceeded");
+    break;
+  }
+  pack.warnings = Array.from(warnings).sort();
+  pack.budgets.items_included = pack.evidence.length;
+  syncOutline(pack);
+  pack.budgets.estimated_tokens = estimateTokensForValue(pack);
+  pack.budgets.token_budget_exceeded = pack.budgets.estimated_tokens > maxTokens;
+  if (pack.budgets.token_budget_exceeded) {
+    throw new Error(`Unable to build context pack within ${maxTokens} token budget; increase --max-tokens.`);
+  }
+  pack.message = `${pack.evidence.length} bounded evidence item(s), estimated ${pack.budgets.estimated_tokens}/${maxTokens} token(s)`;
+  return pack;
+}
+async function buildKnowledgeAgentContextPack(options) {
+  const now = options.now ?? new Date;
+  const source = options.source ?? "search";
+  const purpose = options.purpose ?? (source === "loops" || source === "runs" ? "proposal" : "agent_context");
+  const maxTokens = coerceMaxTokens(options.maxTokens);
+  const maxItems = coerceMaxItems(options.maxItems, options.limit);
+  const query = normalizeText(options.query ?? options.topic ?? "");
+  if (purpose === "proposal" && source !== "search" && !query) {
+    throw new Error("Proposal context requires --topic <text> or a positional topic.");
+  }
+  if (source !== "search")
+    migrateKnowledgeDb(options.dbPath);
+  const sinceForKey = parseSince(options.since, now).cutoff ?? options.since ?? "";
+  const draft = source === "search" ? await buildSearchDraft(options, maxItems) : await buildRunDraft(options, maxItems, now);
+  const sortedEvidence = draft.evidence.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, maxItems);
+  const sortedCitations = draft.citations.filter((citation, index, rows) => rows.findIndex((entry) => entry.id === citation.id) === index).sort((a, b) => a.id.localeCompare(b.id));
+  const duplicateCandidates = options.dedupe ? duplicateCandidatesFor(sortedEvidence) : draft.duplicateCandidates.filter((candidate) => candidate.evidence_ids.every((id) => sortedEvidence.some((entry) => entry.id === id)));
+  const outline = outlineFor({
+    source,
+    purpose,
+    query,
+    evidence: sortedEvidence,
+    duplicates: duplicateCandidates
+  });
+  const pack = {
+    ok: true,
+    format: "knowledge-agent-context-pack",
+    version: 1,
+    created_at: now.toISOString(),
+    source,
+    purpose,
+    query,
+    topic: options.topic ?? null,
+    since: options.since ?? null,
+    dry_run: true,
+    idempotency_key: stableId5("ctx", [
+      source,
+      purpose,
+      query,
+      sinceForKey,
+      options.dedupe === true ? "dedupe" : "no-dedupe",
+      options.semantic === true ? "semantic" : "keyword",
+      options.modelRef ?? "",
+      options.limit ?? "",
+      maxTokens,
+      maxItems,
+      sortedEvidence.map((entry) => entry.id).join(","),
+      sortedCitations.map((entry) => entry.id).join(",")
+    ].join("\x00"), 20),
+    budgets: {
+      max_tokens: maxTokens,
+      estimated_tokens: 0,
+      max_items: maxItems,
+      items_included: sortedEvidence.length,
+      items_available: draft.available,
+      items_truncated: Math.max(0, draft.available - sortedEvidence.length),
+      token_budget_exceeded: false
+    },
+    safety: {
+      raw_artifact_content_included: false,
+      durable_writes_performed: false,
+      redactions: draft.redactions,
+      reminders: baseSafetyReminders(source)
+    },
+    citations: sortedCitations,
+    evidence: sortedEvidence,
+    duplicate_candidates: duplicateCandidates,
+    outline,
+    warnings: draft.warnings,
+    message: `${sortedEvidence.length} bounded evidence item(s), estimated under ${maxTokens} token(s)`
+  };
+  pruneCitations(pack);
+  return fitPackToBudget(pack);
+}
+
+// src/conflict-agent.ts
+import { randomUUID as randomUUID8 } from "crypto";
+
 // src/sync.ts
+import { createHash as createHash9, randomUUID as randomUUID7 } from "crypto";
+import { existsSync as existsSync8, readFileSync as readFileSync8 } from "fs";
+import { hostname as hostname3 } from "os";
+import { fileURLToPath as fileURLToPath2 } from "url";
+import { relative as relative3, resolve as resolve3, sep as sep3 } from "path";
 var KNOWLEDGE_SYNC_TABLES = [
   "sources",
   "wiki_pages",
@@ -18968,7 +20434,7 @@ function nowIso(now = new Date) {
   return now.toISOString();
 }
 function makeSyncId(prefix) {
-  return `${prefix}_${Date.now().toString(36)}_${randomUUID6().slice(0, 8)}`;
+  return `${prefix}_${Date.now().toString(36)}_${randomUUID7().slice(0, 8)}`;
 }
 function defaultSyncMachineId(input) {
   const explicit = input?.trim();
@@ -18986,7 +20452,7 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 function sha256(value) {
-  return `sha256:${createHash6("sha256").update(value).digest("hex")}`;
+  return `sha256:${createHash9("sha256").update(value).digest("hex")}`;
 }
 function count2(db, table) {
   const row = db.query(`SELECT COUNT(*) AS n FROM ${table}`).get();
@@ -19694,8 +21160,8 @@ function createKnowledgeSyncBundle(options) {
       if (options.includeArtifactContent !== false && key && row.artifact_uri.startsWith("file://")) {
         try {
           const path = fileURLToPath2(row.artifact_uri);
-          if (existsSync6(path))
-            artifact.content_base64 = readFileSync6(path).toString("base64");
+          if (existsSync8(path))
+            artifact.content_base64 = readFileSync8(path).toString("base64");
           else
             warnings.push(`artifact_missing:${row.artifact_uri}`);
         } catch (error51) {
@@ -20730,7 +22196,7 @@ function addConflictRunEvent(options) {
   try {
     db.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`, [
-      `event_${randomUUID7()}`,
+      `event_${randomUUID8()}`,
       options.runId,
       options.level,
       options.event,
@@ -20816,7 +22282,7 @@ async function proposeKnowledgeSyncConflictResolutionWithAi(options) {
   const evidence = getKnowledgeSyncConflictEvidence(options.dbPath, options.id);
   const resolvedModelRef = resolveModelRef(options.modelRef ?? "default", options.config);
   const parsed = parseModelRef(resolvedModelRef);
-  const runId = `run_${randomUUID7()}`;
+  const runId = `run_${randomUUID8()}`;
   const prompt = promptForConflict({ deterministic, evidence });
   insertConflictRun({
     dbPath: options.dbPath,
@@ -20978,56 +22444,56 @@ async function proposeKnowledgeSyncConflictResolutionWithAi(options) {
 }
 
 // src/outbox-consume.ts
-import { createHash as createHash7, randomUUID as randomUUID8 } from "crypto";
-import { existsSync as existsSync7, readFileSync as readFileSync7 } from "fs";
-import { basename } from "path";
-function stableId4(prefix, value) {
-  return `${prefix}_${createHash7("sha256").update(value).digest("hex").slice(0, 20)}`;
+import { createHash as createHash10, randomUUID as randomUUID9 } from "crypto";
+import { existsSync as existsSync9, readFileSync as readFileSync9 } from "fs";
+import { basename as basename3 } from "path";
+function stableId6(prefix, value) {
+  return `${prefix}_${createHash10("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
-function asObject(value) {
+function asObject2(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
 }
-function asString(value) {
+function asString2(value) {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 function buildSourceRef(event) {
-  const explicit = asString(event.source_ref) ?? asString(event.source_uri) ?? asString(event.uri);
+  const explicit = asString2(event.source_ref) ?? asString2(event.source_uri) ?? asString2(event.uri);
   if (explicit)
     return explicit;
-  const fileId = asString(event.file_id);
+  const fileId = asString2(event.file_id);
   if (fileId) {
-    const revision = asString(event.revision_id) ?? asString(event.revision);
+    const revision = asString2(event.revision_id) ?? asString2(event.revision);
     const fileRef = `open-files://file/${encodeURIComponent(fileId)}`;
     return revision ? `${fileRef}/revision/${encodeURIComponent(revision)}` : fileRef;
   }
-  const sourceId = asString(event.source_id);
-  const path = asString(event.path);
+  const sourceId = asString2(event.source_id);
+  const path = asString2(event.path);
   if (sourceId && path) {
     return `open-files://source/${encodeURIComponent(sourceId)}/path/${encodeURIComponent(path)}`;
   }
   throw new Error("Outbox event is missing source_ref, file_id, or source_id/path.");
 }
-function baseSourceUri(sourceRef, parsed) {
+function baseSourceUri2(sourceRef, parsed) {
   if (parsed.kind === "open-files" && parsed.entity === "file" && parsed.revision_id) {
     return sourceRef.replace(/\/revision\/[^/]+$/, "");
   }
   return sourceRef;
 }
 function hashFromEvent(event) {
-  return asString(event.hash) ?? asString(event.checksum) ?? asString(event.sha256) ?? null;
+  return asString2(event.hash) ?? asString2(event.checksum) ?? asString2(event.sha256) ?? null;
 }
 function revisionFromEvent(event, parsed, hash2) {
-  return asString(event.revision_id) ?? asString(event.revision) ?? asString(event.version_id) ?? (parsed.kind === "open-files" ? parsed.revision_id : undefined) ?? hash2 ?? null;
+  return asString2(event.revision_id) ?? asString2(event.revision) ?? asString2(event.version_id) ?? (parsed.kind === "open-files" ? parsed.revision_id : undefined) ?? hash2 ?? null;
 }
 function previousRevisionFromEvent(event) {
-  return asString(event.previous_revision_id) ?? asString(event.previous_revision) ?? asString(event.previous_version_id) ?? null;
+  return asString2(event.previous_revision_id) ?? asString2(event.previous_revision) ?? asString2(event.previous_version_id) ?? null;
 }
 function eventType(event) {
-  return (asString(event.event_type) ?? asString(event.event) ?? asString(event.type) ?? asString(event.action) ?? asString(event.change_type) ?? "changed").toLowerCase();
+  return (asString2(event.event_type) ?? asString2(event.event) ?? asString2(event.type) ?? asString2(event.action) ?? asString2(event.change_type) ?? "changed").toLowerCase();
 }
 function titleFromEvent(event) {
-  const path = asString(event.path);
-  return asString(event.title) ?? asString(event.name) ?? (path ? basename(path) : null);
+  const path = asString2(event.path);
+  return asString2(event.title) ?? asString2(event.name) ?? (path ? basename3(path) : null);
 }
 function normalizeEvent(event, now) {
   const sourceRef = buildSourceRef(event);
@@ -21037,14 +22503,14 @@ function normalizeEvent(event, now) {
     raw: event,
     eventType: eventType(event),
     sourceRef,
-    sourceUri: baseSourceUri(sourceRef, parsed),
+    sourceUri: baseSourceUri2(sourceRef, parsed),
     kind: parsed.kind,
     title: titleFromEvent(event),
     revision: revisionFromEvent(event, parsed, hash2),
     previousRevision: previousRevisionFromEvent(event),
     hash: hash2,
-    status: asString(event.status)?.toLowerCase() ?? null,
-    updatedAt: asString(event.updated_at) ?? now,
+    status: asString2(event.status)?.toLowerCase() ?? null,
+    updatedAt: asString2(event.updated_at) ?? now,
     acl: event.permissions ?? event.acl ?? undefined
   };
 }
@@ -21057,7 +22523,7 @@ function parseOutboxText(text) {
     if (!Array.isArray(parsed))
       throw new Error("Outbox array parse failed.");
     return parsed.map((entry) => {
-      const event = asObject(entry);
+      const event = asObject2(entry);
       if (!event)
         throw new Error("Outbox array entries must be objects.");
       return event;
@@ -21066,12 +22532,12 @@ function parseOutboxText(text) {
   if (trimmed.startsWith("{")) {
     try {
       const parsed = JSON.parse(trimmed);
-      const object2 = asObject(parsed);
+      const object2 = asObject2(parsed);
       if (!object2)
         throw new Error("Outbox object parse failed.");
       if (Array.isArray(object2.events)) {
         return object2.events.map((entry) => {
-          const event = asObject(entry);
+          const event = asObject2(entry);
           if (!event)
             throw new Error("Outbox events entries must be objects.");
           return event;
@@ -21084,7 +22550,7 @@ function parseOutboxText(text) {
       if (lines.length <= 1)
         throw error51;
       return lines.map((line) => {
-        const event = asObject(JSON.parse(line));
+        const event = asObject2(JSON.parse(line));
         if (!event)
           throw new Error("Outbox JSONL entries must be objects.");
         return event;
@@ -21092,13 +22558,13 @@ function parseOutboxText(text) {
     }
   }
   return trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0).map((line) => {
-    const event = asObject(JSON.parse(line));
+    const event = asObject2(JSON.parse(line));
     if (!event)
       throw new Error("Outbox JSONL entries must be objects.");
     return event;
   });
 }
-async function readS3Text(uri, config2, safetyPolicy) {
+async function readS3Text3(uri, config2, safetyPolicy) {
   const parsed = new URL(uri);
   const bucket = parsed.hostname;
   const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
@@ -21123,16 +22589,16 @@ async function readS3Text(uri, config2, safetyPolicy) {
 }
 async function readOutboxInput(input, config2, safetyPolicy) {
   if (input.startsWith("s3://"))
-    return readS3Text(input, config2, safetyPolicy);
-  if (!existsSync7(input))
+    return readS3Text3(input, config2, safetyPolicy);
+  if (!existsSync9(input))
     throw new Error(`Outbox not found: ${input}`);
-  return readFileSync7(input, "utf8");
+  return readFileSync9(input, "utf8");
 }
 function mergeJson(existing, patch) {
   let base = {};
   if (existing) {
     try {
-      base = asObject(JSON.parse(existing)) ?? {};
+      base = asObject2(JSON.parse(existing)) ?? {};
     } catch {
       base = {};
     }
@@ -21140,7 +22606,7 @@ function mergeJson(existing, patch) {
   return JSON.stringify({ ...base, ...patch });
 }
 function ensureSource(db, event, now) {
-  const id = stableId4("src", event.sourceUri);
+  const id = stableId6("src", event.sourceUri);
   db.run(`INSERT INTO sources (id, uri, kind, title, metadata_json, acl_json, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(uri) DO UPDATE SET
@@ -21167,7 +22633,7 @@ function ensureSource(db, event, now) {
   };
   if (event.status)
     patch.status = event.status;
-  if (asString(event.raw.path))
+  if (asString2(event.raw.path))
     patch.path = event.raw.path;
   db.run("UPDATE sources SET metadata_json = ?, acl_json = CASE WHEN ? IS NULL THEN acl_json ELSE ? END, updated_at = ? WHERE id = ?", [
     mergeJson(row.metadata_json, patch),
@@ -21181,7 +22647,7 @@ function ensureSource(db, event, now) {
 function ensureRevision(db, sourceId, event, now) {
   if (!event.revision)
     return null;
-  const id = stableId4("rev", `${sourceId}\x00${event.revision}`);
+  const id = stableId6("rev", `${sourceId}\x00${event.revision}`);
   const metadata = {
     source_ref: event.sourceRef,
     source_uri: event.sourceUri,
@@ -21193,7 +22659,7 @@ function ensureRevision(db, sourceId, event, now) {
      VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(source_id, revision) DO UPDATE SET
        hash = COALESCE(excluded.hash, source_revisions.hash),
-       metadata_json = excluded.metadata_json`, [id, sourceId, event.revision, event.hash, asString(event.raw.extracted_text_ref) ?? null, JSON.stringify(metadata), now]);
+       metadata_json = excluded.metadata_json`, [id, sourceId, event.revision, event.hash, asString2(event.raw.extracted_text_ref) ?? null, JSON.stringify(metadata), now]);
   const row = db.query("SELECT id FROM source_revisions WHERE source_id = ? AND revision = ?").get(sourceId, event.revision);
   return row?.id ?? null;
 }
@@ -21246,7 +22712,7 @@ async function consumeOpenFilesOutbox(options) {
   const text = await readOutboxInput(options.input, options.config, options.safetyPolicy);
   const events = parseOutboxText(text);
   const db = openKnowledgeDb(options.dbPath);
-  const runId = `run_${randomUUID8()}`;
+  const runId = `run_${randomUUID9()}`;
   try {
     return db.transaction(() => {
       db.run(`INSERT INTO runs (id, type, prompt, status, provider, model, metadata_json, created_at, updated_at)
@@ -21302,7 +22768,7 @@ async function consumeOpenFilesOutbox(options) {
           permissionUpdates += 1;
         db.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
            VALUES (?, ?, ?, ?, ?, ?)`, [
-          stableId4("evt", `${runId}\x00${index}\x00${event.sourceRef}\x00${event.eventType}`),
+          stableId6("evt", `${runId}\x00${index}\x00${event.sourceRef}\x00${event.eventType}`),
           runId,
           "info",
           event.eventType,
@@ -21319,7 +22785,7 @@ async function consumeOpenFilesOutbox(options) {
       });
       db.run(`INSERT INTO provider_usage (id, run_id, provider, model, input_tokens, output_tokens, cost_usd, metadata_json, created_at)
          VALUES (?, ?, ?, ?, 0, 0, 0, ?, ?)`, [
-        stableId4("usage", runId),
+        stableId6("usage", runId),
         runId,
         "local",
         "open-files-outbox",
@@ -21358,501 +22824,6 @@ async function consumeOpenFilesOutbox(options) {
         permission_updates: permissionUpdates
       };
     })();
-  } finally {
-    db.close();
-  }
-}
-
-// src/manifest-ingest.ts
-import { createHash as createHash8 } from "crypto";
-import { existsSync as existsSync8, readFileSync as readFileSync8 } from "fs";
-import { basename as basename2 } from "path";
-var DEFAULT_MAX_MANIFEST_INPUT_BYTES = 20 * 1024 * 1024;
-var DEFAULT_MAX_MANIFEST_ITEMS = 1e4;
-var DEFAULT_MANIFEST_PREVIEW_ITEMS = 10;
-function stableId5(prefix, value) {
-  return `${prefix}_${createHash8("sha256").update(value).digest("hex").slice(0, 20)}`;
-}
-function asObject2(value) {
-  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
-}
-function asString2(value) {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-function asNumber(value) {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-function buildSourceRefFromItem(item) {
-  const explicit = asString2(item.source_ref) ?? asString2(item.source_uri) ?? asString2(item.uri);
-  if (explicit)
-    return explicit;
-  const fileId = asString2(item.file_id);
-  if (fileId) {
-    const revision = asString2(item.revision_id) ?? asString2(item.revision);
-    const fileRef = `open-files://file/${encodeURIComponent(fileId)}`;
-    return revision ? `${fileRef}/revision/${encodeURIComponent(revision)}` : fileRef;
-  }
-  const sourceId = asString2(item.source_id);
-  const path = asString2(item.path);
-  if (sourceId && path) {
-    return `open-files://source/${encodeURIComponent(sourceId)}/path/${encodeURIComponent(path)}`;
-  }
-  throw new Error("Manifest item is missing source_ref, file_id, or source_id/path.");
-}
-function baseSourceUri2(sourceRef, parsed) {
-  if (parsed.kind === "open-files" && parsed.entity === "file" && parsed.revision_id) {
-    return sourceRef.replace(/\/revision\/[^/]+$/, "");
-  }
-  return sourceRef;
-}
-function textFromItem(item) {
-  const direct = asString2(item.extracted_text) ?? asString2(item.text) ?? asString2(item.content_text) ?? asString2(item.markdown);
-  if (direct !== undefined)
-    return direct;
-  const content = item.content;
-  return typeof content === "string" ? content : null;
-}
-function extractedTextUriFromItem(item) {
-  const direct = asString2(item.extracted_text_ref) ?? asString2(item.extracted_text_uri) ?? asString2(item.text_ref);
-  if (direct)
-    return direct;
-  const content = asObject2(item.content);
-  return asString2(content?.extracted_text_ref) ?? asString2(content?.extracted_text_uri) ?? null;
-}
-function titleFromItem(item) {
-  const path = asString2(item.path);
-  return asString2(item.title) ?? asString2(item.name) ?? (path ? basename2(path) : null);
-}
-function hashFromItem(item) {
-  return asString2(item.hash) ?? asString2(item.checksum) ?? asString2(item.sha256) ?? null;
-}
-var OMIT_MANIFEST_METADATA_KEYS = new Set([
-  "text",
-  "content",
-  "content_text",
-  "extracted_text",
-  "markdown",
-  "raw",
-  "raw_text",
-  "raw_bytes",
-  "raw_content",
-  "raw_body",
-  "raw_file",
-  "source_raw",
-  "source_raw_bytes",
-  "source_bytes",
-  "source_content",
-  "source_body",
-  "file_bytes",
-  "file_content",
-  "content_bytes",
-  "content_base64",
-  "document_bytes",
-  "document_content",
-  "document_base64",
-  "binary",
-  "binary_content",
-  "binary_base64",
-  "bytes",
-  "body",
-  "blob",
-  "data",
-  "payload"
-]);
-function normalizeMetadataKey(key) {
-  return key.toLowerCase().replace(/[\s-]+/g, "_");
-}
-function sanitizeManifestMetadataValue(value) {
-  if (Array.isArray(value))
-    return value.map((entry) => sanitizeManifestMetadataValue(entry));
-  const object2 = asObject2(value);
-  if (!object2)
-    return value;
-  const sanitized = {};
-  for (const [key, nestedValue] of Object.entries(object2)) {
-    if (OMIT_MANIFEST_METADATA_KEYS.has(normalizeMetadataKey(key)))
-      continue;
-    sanitized[key] = sanitizeManifestMetadataValue(nestedValue);
-  }
-  return sanitized;
-}
-function revisionFromItem(item, parsed, hash2) {
-  const revision = asString2(item.revision_id) ?? asString2(item.revision) ?? asString2(item.version_id) ?? (parsed.kind === "open-files" ? parsed.revision_id : undefined) ?? hash2 ?? asString2(item.updated_at);
-  return revision ?? "current";
-}
-function metadataFromItem(item, normalized) {
-  const metadata = {};
-  for (const [key, value] of Object.entries(item)) {
-    if (OMIT_MANIFEST_METADATA_KEYS.has(normalizeMetadataKey(key)))
-      continue;
-    metadata[key] = sanitizeManifestMetadataValue(value);
-  }
-  metadata.source_ref = normalized.sourceRef;
-  metadata.source_uri = normalized.sourceUri;
-  metadata.status = normalized.status;
-  return metadata;
-}
-function normalizeManifestItem(item, now) {
-  const sourceRef = buildSourceRefFromItem(item);
-  const parsed = parseSourceRef(sourceRef);
-  const sourceUri = baseSourceUri2(sourceRef, parsed);
-  const hash2 = hashFromItem(item);
-  const status = asString2(item.status) ?? "active";
-  return {
-    raw: item,
-    sourceRef,
-    sourceUri,
-    kind: parsed.kind,
-    title: titleFromItem(item),
-    revision: revisionFromItem(item, parsed, hash2),
-    hash: hash2,
-    extractedTextUri: extractedTextUriFromItem(item),
-    text: textFromItem(item),
-    metadata: metadataFromItem(item, { sourceRef, sourceUri, status }),
-    acl: item.permissions ?? item.acl ?? {},
-    status,
-    updatedAt: asString2(item.updated_at) ?? now
-  };
-}
-function parseManifestText(text) {
-  const trimmed = text.trim();
-  if (!trimmed)
-    return [];
-  if (trimmed.startsWith("[")) {
-    const parsed = JSON.parse(trimmed);
-    if (!Array.isArray(parsed))
-      throw new Error("Manifest array parse failed.");
-    return parsed.map((entry) => {
-      const item = asObject2(entry);
-      if (!item)
-        throw new Error("Manifest array entries must be objects.");
-      return item;
-    });
-  }
-  if (trimmed.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      const object2 = asObject2(parsed);
-      if (!object2)
-        throw new Error("Manifest object parse failed.");
-      if (Array.isArray(object2.items)) {
-        return object2.items.map((entry) => {
-          const item = asObject2(entry);
-          if (!item)
-            throw new Error("Manifest items entries must be objects.");
-          return item;
-        });
-      }
-      if ("source_ref" in object2 || "source_uri" in object2 || "file_id" in object2)
-        return [object2];
-    } catch (error51) {
-      const lines = trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0);
-      if (lines.length <= 1)
-        throw error51;
-      return lines.map((line) => {
-        const item = asObject2(JSON.parse(line));
-        if (!item)
-          throw new Error("Manifest JSONL entries must be objects.");
-        return item;
-      });
-    }
-  }
-  return trimmed.split(/\r?\n/).filter((line) => line.trim().length > 0).map((line) => {
-    const item = asObject2(JSON.parse(line));
-    if (!item)
-      throw new Error("Manifest JSONL entries must be objects.");
-    return item;
-  });
-}
-async function readS3Text2(uri, config2, safetyPolicy) {
-  const parsed = new URL(uri);
-  const bucket = parsed.hostname;
-  const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
-  if (!bucket || !key)
-    throw new Error(`Invalid S3 manifest URI: ${uri}`);
-  if (safetyPolicy)
-    assertS3ReadAllowed(uri, safetyPolicy);
-  const [{ S3Client, GetObjectCommand }, { fromIni }] = await Promise.all([
-    import("@aws-sdk/client-s3"),
-    import("@aws-sdk/credential-providers")
-  ]);
-  const s3Config = config2?.storage.type === "s3" && config2.storage.s3?.bucket === bucket ? config2.storage.s3 : undefined;
-  const client = new S3Client({
-    region: s3Config?.region,
-    credentials: s3Config?.profile ? fromIni({ profile: s3Config.profile }) : undefined,
-    maxAttempts: s3Config?.max_attempts
-  });
-  const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-  if (!response.Body)
-    return "";
-  return await response.Body.transformToString();
-}
-async function readManifestInput(input, config2, safetyPolicy, maxInputBytes = DEFAULT_MAX_MANIFEST_INPUT_BYTES) {
-  const text = input.startsWith("s3://") ? await readS3Text2(input, config2, safetyPolicy) : (() => {
-    if (!existsSync8(input))
-      throw new Error(`Manifest not found: ${input}`);
-    return readFileSync8(input, "utf8");
-  })();
-  const bytes = Buffer.byteLength(text);
-  if (bytes > maxInputBytes) {
-    throw new Error(`Manifest input is too large: ${bytes} bytes exceeds ${maxInputBytes} byte limit.`);
-  }
-  return text;
-}
-function chunkText(text, maxChars, overlapChars) {
-  const normalized = text.replace(/\r\n/g, `
-`);
-  if (!normalized.trim())
-    return [];
-  const chunks = [];
-  let start = 0;
-  while (start < normalized.length) {
-    const hardEnd = Math.min(normalized.length, start + maxChars);
-    let end = hardEnd;
-    if (hardEnd < normalized.length) {
-      const paragraphBreak = normalized.lastIndexOf(`
-
-`, hardEnd);
-      const sentenceBreak = normalized.lastIndexOf(". ", hardEnd);
-      const candidate = Math.max(paragraphBreak, sentenceBreak);
-      if (candidate > start + Math.floor(maxChars * 0.5))
-        end = candidate + (candidate === paragraphBreak ? 2 : 1);
-    }
-    const chunk = normalized.slice(start, end).trim();
-    if (chunk) {
-      chunks.push({
-        ordinal: chunks.length,
-        text: chunk,
-        startOffset: start,
-        endOffset: end
-      });
-    }
-    if (end >= normalized.length)
-      break;
-    start = Math.max(0, end - overlapChars);
-  }
-  return chunks;
-}
-function estimateTokenCount(text) {
-  const words = text.trim().split(/\s+/).filter(Boolean).length;
-  return Math.max(1, Math.ceil(words * 1.25));
-}
-function deleteChunksForRevision(db, sourceRevisionId) {
-  const rows = db.query("SELECT id FROM chunks WHERE source_revision_id = ?").all(sourceRevisionId);
-  for (const row of rows) {
-    db.run("DELETE FROM chunks_fts WHERE chunk_id = ?", [row.id]);
-  }
-  db.run("DELETE FROM chunks WHERE source_revision_id = ?", [sourceRevisionId]);
-  return rows.length;
-}
-function upsertSource(db, item, now) {
-  const sourceId = stableId5("src", item.sourceUri);
-  db.run(`INSERT INTO sources (id, uri, kind, title, metadata_json, acl_json, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(uri) DO UPDATE SET
-       kind = excluded.kind,
-       title = excluded.title,
-       metadata_json = excluded.metadata_json,
-       acl_json = excluded.acl_json,
-       updated_at = excluded.updated_at`, [
-    sourceId,
-    item.sourceUri,
-    item.kind,
-    item.title,
-    JSON.stringify(item.metadata),
-    JSON.stringify(item.acl ?? {}),
-    now,
-    item.updatedAt
-  ]);
-  const row = db.query("SELECT id FROM sources WHERE uri = ?").get(item.sourceUri);
-  if (!row)
-    throw new Error(`Failed to upsert source: ${item.sourceUri}`);
-  return row.id;
-}
-function upsertRevision(db, sourceId, item, now) {
-  const revisionId = stableId5("rev", `${sourceId}\x00${item.revision}`);
-  db.run(`INSERT INTO source_revisions (id, source_id, revision, hash, extracted_text_uri, metadata_json, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(source_id, revision) DO UPDATE SET
-       hash = excluded.hash,
-       extracted_text_uri = excluded.extracted_text_uri,
-       metadata_json = excluded.metadata_json`, [
-    revisionId,
-    sourceId,
-    item.revision,
-    item.hash,
-    item.extractedTextUri,
-    JSON.stringify(item.metadata),
-    now
-  ]);
-  const row = db.query("SELECT id FROM source_revisions WHERE source_id = ? AND revision = ?").get(sourceId, item.revision);
-  if (!row)
-    throw new Error(`Failed to upsert source revision: ${item.sourceRef}`);
-  return row.id;
-}
-function insertChunks(db, sourceRevisionId, item, now, maxChars, overlapChars, safetyPolicy) {
-  if (!item.text || item.status.toLowerCase() === "deleted")
-    return { chunksInserted: 0, redactions: 0 };
-  const redacted = redactSecrets(item.text, safetyPolicy);
-  if (redacted.findings.length > 0) {
-    recordRedactionFindings(db, {
-      source_uri: item.sourceUri,
-      findings: redacted.findings,
-      metadata: { source_ref: item.sourceRef, revision: item.revision },
-      created_at: now
-    });
-    recordAuditEvent(db, {
-      event_type: "redaction",
-      action: "source_text_redact",
-      target_uri: item.sourceUri,
-      decision: "redacted",
-      metadata: { findings: redacted.findings.length, source_ref: item.sourceRef, revision: item.revision },
-      created_at: now
-    });
-  }
-  const chunks = chunkText(redacted.text, maxChars, overlapChars);
-  for (const chunk of chunks) {
-    const chunkId = stableId5("chk", `${sourceRevisionId}\x00${chunk.ordinal}\x00${chunk.text}`);
-    const provenance = sourceProvenance({
-      source_ref: item.sourceRef,
-      source_uri: item.sourceUri,
-      source_kind: item.kind,
-      source_revision_id: sourceRevisionId,
-      revision: item.revision,
-      hash: item.hash,
-      chunk_id: chunkId,
-      start_offset: chunk.startOffset,
-      end_offset: chunk.endOffset,
-      status: item.status,
-      resolver: "open-files-read-only"
-    });
-    const metadata = withProvenance({
-      source_ref: item.sourceRef,
-      source_uri: item.sourceUri,
-      source_kind: item.kind,
-      source_revision_id: sourceRevisionId,
-      revision: item.revision,
-      hash: item.hash,
-      status: item.status,
-      path: asString2(item.raw.path) ?? null,
-      mime: asString2(item.raw.mime) ?? asString2(item.raw.content_type) ?? null,
-      size: asNumber(item.raw.size) ?? null
-    }, provenance);
-    db.run(`INSERT INTO chunks (id, source_revision_id, kind, ordinal, text, token_count, start_offset, end_offset, metadata_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-      chunkId,
-      sourceRevisionId,
-      "source",
-      chunk.ordinal,
-      chunk.text,
-      estimateTokenCount(chunk.text),
-      chunk.startOffset,
-      chunk.endOffset,
-      JSON.stringify(metadata),
-      now
-    ]);
-    db.run("INSERT INTO chunks_fts (chunk_id, text, title, source_uri) VALUES (?, ?, ?, ?)", [chunkId, chunk.text, item.title ?? "", item.sourceUri]);
-  }
-  return { chunksInserted: chunks.length, redactions: redacted.findings.length };
-}
-async function ingestOpenFilesManifest(options) {
-  const now = options.now ?? new Date;
-  if (options.safetyPolicy)
-    assertWriteAllowed(options.dbPath, options.safetyPolicy);
-  migrateKnowledgeDb(options.dbPath);
-  const text = await readManifestInput(options.input, options.config, options.safetyPolicy, options.maxInputBytes);
-  const items = parseManifestText(text);
-  const maxItems = options.maxItems ?? DEFAULT_MAX_MANIFEST_ITEMS;
-  if (items.length > maxItems) {
-    throw new Error(`Manifest contains too many items: ${items.length} exceeds ${maxItems} item limit.`);
-  }
-  return ingestOpenFilesManifestItems({
-    dbPath: options.dbPath,
-    items,
-    sourceLabel: options.input,
-    safetyPolicy: options.safetyPolicy,
-    now,
-    maxChunkChars: options.maxChunkChars,
-    chunkOverlapChars: options.chunkOverlapChars,
-    maxItems: options.maxItems
-  });
-}
-async function ingestOpenFilesManifestItems(options) {
-  const now = (options.now ?? new Date).toISOString();
-  const maxChunkChars = options.maxChunkChars ?? 4000;
-  const chunkOverlapChars = options.chunkOverlapChars ?? 200;
-  const maxItems = options.maxItems ?? DEFAULT_MAX_MANIFEST_ITEMS;
-  if (maxChunkChars < 500)
-    throw new Error("maxChunkChars must be at least 500.");
-  if (chunkOverlapChars < 0 || chunkOverlapChars >= maxChunkChars)
-    throw new Error("chunkOverlapChars must be less than maxChunkChars.");
-  if (options.items.length > maxItems) {
-    throw new Error(`Manifest contains too many items: ${options.items.length} exceeds ${maxItems} item limit.`);
-  }
-  if (options.safetyPolicy)
-    assertWriteAllowed(options.dbPath, options.safetyPolicy);
-  migrateKnowledgeDb(options.dbPath);
-  const db = openKnowledgeDb(options.dbPath);
-  try {
-    const result = db.transaction(() => {
-      const seenSources = new Set;
-      const seenRevisions = new Set;
-      let chunksInserted = 0;
-      let chunksDeleted = 0;
-      let redactions = 0;
-      let skipped = 0;
-      const preview = [];
-      recordAuditEvent(db, {
-        event_type: "source_read",
-        action: options.readAction ?? (options.sourceLabel.startsWith("s3://") ? "s3_manifest_read" : "local_manifest_read"),
-        target_uri: options.sourceLabel,
-        decision: "allow",
-        metadata: { items: options.items.length, read_only: true },
-        created_at: now
-      });
-      for (const raw of options.items) {
-        const item = normalizeManifestItem(raw, now);
-        if (preview.length < DEFAULT_MANIFEST_PREVIEW_ITEMS) {
-          preview.push({
-            source_ref: item.sourceRef,
-            title: item.title,
-            status: item.status,
-            has_text: Boolean(item.text)
-          });
-        }
-        const sourceId = upsertSource(db, item, now);
-        const revisionId = upsertRevision(db, sourceId, item, now);
-        seenSources.add(sourceId);
-        seenRevisions.add(revisionId);
-        if (item.text || item.status.toLowerCase() === "deleted") {
-          chunksDeleted += deleteChunksForRevision(db, revisionId);
-        }
-        const inserted = insertChunks(db, revisionId, item, now, maxChunkChars, chunkOverlapChars, options.safetyPolicy);
-        chunksInserted += inserted.chunksInserted;
-        redactions += inserted.redactions;
-      }
-      recordAuditEvent(db, {
-        event_type: "write",
-        action: "knowledge_manifest_ingest",
-        target_uri: options.dbPath,
-        decision: "allow",
-        metadata: { items: options.items.length, sources: seenSources.size, revisions: seenRevisions.size, chunks_inserted: chunksInserted, redactions },
-        created_at: now
-      });
-      return {
-        path: options.sourceLabel,
-        db_path: options.dbPath,
-        items_seen: options.items.length,
-        sources_upserted: seenSources.size,
-        revisions_upserted: seenRevisions.size,
-        chunks_inserted: chunksInserted,
-        chunks_deleted: chunksDeleted,
-        redactions,
-        skipped,
-        items_preview: preview
-      };
-    })();
-    return result;
   } finally {
     db.close();
   }
@@ -22992,528 +23963,10 @@ async function preflightKnowledgeMachine(options = {}) {
   }
 }
 
-// src/source-ingest.ts
-import { createHash as createHash9 } from "crypto";
-import { existsSync as existsSync9, readFileSync as readFileSync9 } from "fs";
-import { basename as basename3 } from "path";
-
-// src/source-resolver.ts
-function parseJsonObject4(value) {
-  if (!value)
-    return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-function metadataString3(metadata, keys) {
-  for (const key of keys) {
-    const value = metadata[key];
-    if (typeof value === "string" && value.length > 0)
-      return value;
-  }
-  return null;
-}
-function metadataNumber3(metadata, keys) {
-  for (const key of keys) {
-    const value = metadata[key];
-    if (typeof value === "number" && Number.isFinite(value))
-      return value;
-  }
-  return null;
-}
-function assertPurposeAllowed(permissions, purpose) {
-  const mode = permissions.mode;
-  if (typeof mode === "string" && mode !== "read_only") {
-    throw new Error(`Source resolver denied ${purpose}. Permission mode is ${mode}, expected read_only.`);
-  }
-  const denied = permissions.denied_purposes;
-  if (Array.isArray(denied) && denied.includes(purpose)) {
-    throw new Error(`Source resolver denied ${purpose}. Purpose is explicitly denied.`);
-  }
-  const allowed = permissions.allowed_purposes;
-  if (Array.isArray(allowed) && allowed.length > 0 && !allowed.includes(purpose)) {
-    throw new Error(`Source resolver denied ${purpose}. Allowed purposes: ${allowed.join(", ")}`);
-  }
-}
-function sourceRevisionRef(sourceUri, revision, fallback) {
-  if (!revision)
-    return fallback;
-  try {
-    const parsed = parseSourceRef(sourceUri);
-    if (parsed.kind === "open-files" && parsed.entity === "file") {
-      return `${sourceUri}/revision/${encodeURIComponent(revision.revision)}`;
-    }
-  } catch {
-    return fallback;
-  }
-  return fallback;
-}
-function selectSource(db, sourceUri, requestedRef) {
-  return db.query(`SELECT id, uri, kind, title, metadata_json, acl_json, updated_at
-     FROM sources
-     WHERE uri = ? OR uri = ?
-     ORDER BY CASE WHEN uri = ? THEN 0 ELSE 1 END
-     LIMIT 1`).get(sourceUri, requestedRef, sourceUri) ?? null;
-}
-function selectRevision(db, sourceId, revisionId) {
-  if (revisionId) {
-    return db.query(`SELECT id, revision, hash, extracted_text_uri, metadata_json, created_at
-       FROM source_revisions
-       WHERE source_id = ? AND revision = ?
-       LIMIT 1`).get(sourceId, revisionId) ?? null;
-  }
-  return db.query(`SELECT id, revision, hash, extracted_text_uri, metadata_json, created_at
-     FROM source_revisions
-     WHERE source_id = ?
-     ORDER BY created_at DESC, revision DESC
-     LIMIT 1`).get(sourceId) ?? null;
-}
-function countChunks(db, revisionId) {
-  if (!revisionId)
-    return 0;
-  const row = db.query("SELECT COUNT(*) AS n FROM chunks WHERE source_revision_id = ?").get(revisionId);
-  return row?.n ?? 0;
-}
-function selectChunks(db, revisionId, limit) {
-  if (!revisionId || limit <= 0)
-    return [];
-  return db.query(`SELECT id, kind, ordinal, text, token_count, start_offset, end_offset, metadata_json
-     FROM chunks
-     WHERE source_revision_id = ?
-     ORDER BY ordinal ASC
-     LIMIT ?`).all(revisionId, limit);
-}
-async function resolveOpenFilesSource(options) {
-  const purpose = options.purpose ?? "knowledge_answer";
-  const limit = Math.max(0, Math.min(options.limit ?? 10, 100));
-  const resolvedAt = (options.now ?? new Date).toISOString();
-  const parsed = parseSourceRef(options.sourceRef);
-  const sourceUri = catalogSourceUriForRef(options.sourceRef, parsed);
-  const requestedRevision = revisionIdForSourceRef(options.sourceRef);
-  if (options.safetyPolicy) {
-    if (!options.safetyPolicy.readOnlySourceAccess)
-      throw new Error("Safety policy denied source resolution.");
-    assertWriteAllowed(options.dbPath, options.safetyPolicy);
-  }
-  migrateKnowledgeDb(options.dbPath);
-  const db = openKnowledgeDb(options.dbPath);
-  try {
-    return db.transaction(() => {
-      const source = selectSource(db, sourceUri, options.sourceRef);
-      if (!source) {
-        recordAuditEvent(db, {
-          event_type: "source_read",
-          action: "open_files_resolve_missing",
-          target_uri: options.sourceRef,
-          decision: "allow",
-          metadata: { purpose, read_only: true, source_uri: sourceUri },
-          created_at: resolvedAt
-        });
-        return {
-          source_ref: options.sourceRef,
-          source_uri: sourceUri,
-          purpose,
-          read_only: true,
-          resolved: false,
-          resolver: {
-            name: "open-files-read-only",
-            mode: "local_catalog",
-            contract: "open-files-knowledge-source-v1"
-          },
-          source: null,
-          revision: null,
-          content: {
-            mime: null,
-            size: null,
-            hash: null,
-            text_available: false,
-            chunks_total: 0,
-            chunks_returned: 0,
-            char_count_returned: 0,
-            extracted_text_ref: null,
-            bytes_available: false,
-            bytes_exposed: false
-          },
-          chunks: [],
-          citations: []
-        };
-      }
-      const sourceMetadata = parseJsonObject4(source.metadata_json);
-      const permissions = parseJsonObject4(source.acl_json);
-      try {
-        assertPurposeAllowed(permissions, purpose);
-      } catch (error51) {
-        recordAuditEvent(db, {
-          event_type: "source_read",
-          action: "open_files_resolve",
-          target_uri: options.sourceRef,
-          decision: "deny",
-          metadata: {
-            purpose,
-            read_only: true,
-            source_uri: source.uri,
-            error: error51 instanceof Error ? error51.message : String(error51)
-          },
-          created_at: resolvedAt
-        });
-        throw error51;
-      }
-      const revision = selectRevision(db, source.id, requestedRevision);
-      const revisionMetadata = parseJsonObject4(revision?.metadata_json);
-      const totalChunks = countChunks(db, revision?.id ?? null);
-      const rows = selectChunks(db, revision?.id ?? null, limit);
-      const effectiveSourceRef = sourceRevisionRef(source.uri, revision, options.sourceRef);
-      const chunks = rows.map((row) => {
-        const metadata = parseJsonObject4(row.metadata_json);
-        const evidence = {
-          resolver: "open-files-read-only",
-          mode: "local_catalog",
-          purpose,
-          read_only: true,
-          source_ref: metadataString3(metadata, ["source_ref"]) ?? effectiveSourceRef,
-          source_uri: source.uri,
-          source_revision_id: revision?.id ?? null,
-          revision: revision?.revision ?? null,
-          hash: revision?.hash ?? metadataString3(metadata, ["hash"]),
-          chunk_id: row.id,
-          start_offset: row.start_offset,
-          end_offset: row.end_offset,
-          resolved_at: resolvedAt
-        };
-        const provenance = sourceProvenance({
-          source_ref: evidence.source_ref,
-          source_uri: evidence.source_uri,
-          source_kind: source.kind,
-          source_revision_id: evidence.source_revision_id,
-          revision: evidence.revision,
-          hash: evidence.hash,
-          chunk_id: row.id,
-          start_offset: row.start_offset,
-          end_offset: row.end_offset,
-          status: metadataString3(metadata, ["status"]),
-          resolver: evidence.resolver
-        });
-        return {
-          id: row.id,
-          kind: row.kind,
-          ordinal: row.ordinal,
-          text: row.text,
-          token_count: row.token_count,
-          start_offset: row.start_offset,
-          end_offset: row.end_offset,
-          metadata,
-          evidence,
-          provenance
-        };
-      });
-      const citations = chunks.map((chunk) => ({
-        source_ref: chunk.evidence.source_ref,
-        source_uri: source.uri,
-        chunk_id: chunk.id,
-        quote: chunk.text.slice(0, 500),
-        start_offset: chunk.start_offset,
-        end_offset: chunk.end_offset,
-        evidence: chunk.evidence,
-        provenance: chunk.provenance
-      }));
-      recordAuditEvent(db, {
-        event_type: "source_read",
-        action: "open_files_resolve",
-        target_uri: options.sourceRef,
-        decision: "allow",
-        metadata: {
-          purpose,
-          read_only: true,
-          source_uri: source.uri,
-          revision: revision?.revision ?? null,
-          chunks_returned: chunks.length,
-          chunks_total: totalChunks
-        },
-        created_at: resolvedAt
-      });
-      const mime = metadataString3(sourceMetadata, ["mime", "content_type"]) ?? metadataString3(revisionMetadata, ["mime", "content_type"]);
-      const size = metadataNumber3(sourceMetadata, ["size", "size_bytes"]) ?? metadataNumber3(revisionMetadata, ["size", "size_bytes"]);
-      return {
-        source_ref: effectiveSourceRef,
-        source_uri: source.uri,
-        purpose,
-        read_only: true,
-        resolved: true,
-        resolver: {
-          name: "open-files-read-only",
-          mode: "local_catalog",
-          contract: "open-files-knowledge-source-v1"
-        },
-        source: {
-          id: source.id,
-          uri: source.uri,
-          kind: source.kind,
-          title: source.title,
-          metadata: sourceMetadata,
-          permissions,
-          updated_at: source.updated_at
-        },
-        revision: revision ? {
-          id: revision.id,
-          revision: revision.revision,
-          hash: revision.hash,
-          extracted_text_uri: revision.extracted_text_uri,
-          metadata: revisionMetadata,
-          created_at: revision.created_at,
-          reindex_required: revisionMetadata.reindex_required === true
-        } : null,
-        content: {
-          mime,
-          size,
-          hash: revision?.hash ?? metadataString3(sourceMetadata, ["hash", "checksum", "sha256"]),
-          text_available: totalChunks > 0,
-          chunks_total: totalChunks,
-          chunks_returned: chunks.length,
-          char_count_returned: chunks.reduce((sum, chunk) => sum + chunk.text.length, 0),
-          extracted_text_ref: revision?.extracted_text_uri ?? metadataString3(revisionMetadata, ["extracted_text_ref", "extracted_text_uri"]),
-          bytes_available: false,
-          bytes_exposed: false
-        },
-        chunks,
-        citations
-      };
-    })();
-  } finally {
-    db.close();
-  }
-}
-
-// src/source-ingest.ts
-function sha256Text(text) {
-  return `sha256:${createHash9("sha256").update(text).digest("hex")}`;
-}
-function stripHtml(html) {
-  return html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/\s+\n/g, `
-`).replace(/\n\s+/g, `
-`).replace(/[ \t]{2,}/g, " ").trim();
-}
-async function readS3Text3(uri, config2, safetyPolicy) {
-  const parsed = new URL(uri);
-  const bucket = parsed.hostname;
-  const key = decodeURIComponent(parsed.pathname.replace(/^\/+/, ""));
-  if (!bucket || !key)
-    throw new Error(`Invalid S3 source URI: ${uri}`);
-  if (safetyPolicy)
-    assertS3ReadAllowed(uri, safetyPolicy);
-  const [{ S3Client, GetObjectCommand }, { fromIni }] = await Promise.all([
-    import("@aws-sdk/client-s3"),
-    import("@aws-sdk/credential-providers")
-  ]);
-  const s3Config = config2?.storage.type === "s3" && config2.storage.s3?.bucket === bucket ? config2.storage.s3 : undefined;
-  const client = new S3Client({
-    region: s3Config?.region,
-    credentials: s3Config?.profile ? fromIni({ profile: s3Config.profile }) : undefined,
-    maxAttempts: s3Config?.max_attempts
-  });
-  const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
-  if (!response.Body)
-    return "";
-  return await response.Body.transformToString();
-}
-async function readWebText(uri, safetyPolicy) {
-  if (safetyPolicy)
-    assertWebSearchAllowed(safetyPolicy);
-  const response = await fetch(uri, {
-    headers: {
-      accept: "text/markdown,text/plain,text/html,application/json;q=0.8,*/*;q=0.5",
-      "user-agent": "@hasna/knowledge source-ingest"
-    }
-  });
-  if (!response.ok)
-    throw new Error(`Web source read failed ${response.status}: ${uri}`);
-  const mime = response.headers.get("content-type");
-  const body = await response.text();
-  return { text: mime?.includes("html") ? stripHtml(body) : body, mime };
-}
-function titleForRef(parsed) {
-  if (parsed.kind === "file")
-    return basename3(parsed.path);
-  if (parsed.kind === "s3")
-    return basename3(parsed.key);
-  if (parsed.kind === "web")
-    return basename3(new URL(parsed.url).pathname) || parsed.url;
-  return parsed.path ? basename3(parsed.path) : parsed.id;
-}
-async function readDirectSourceText(parsed, config2, safetyPolicy) {
-  if (parsed.kind === "file") {
-    if (!existsSync9(parsed.path))
-      throw new Error(`Source file not found: ${parsed.path}`);
-    const text = readFileSync9(parsed.path, "utf8");
-    return {
-      text,
-      contentSource: "file",
-      title: titleForRef(parsed),
-      mime: "text/plain",
-      size: text.length,
-      hash: sha256Text(text),
-      revision: null,
-      extractedTextRef: null,
-      metadata: { path: parsed.path },
-      permissions: { mode: "read_only" }
-    };
-  }
-  if (parsed.kind === "s3") {
-    const text = await readS3Text3(parsed.uri, config2, safetyPolicy);
-    return {
-      text,
-      contentSource: "s3",
-      title: titleForRef(parsed),
-      mime: "text/plain",
-      size: text.length,
-      hash: sha256Text(text),
-      revision: null,
-      extractedTextRef: null,
-      metadata: { bucket: parsed.bucket, key: parsed.key },
-      permissions: { mode: "read_only" }
-    };
-  }
-  if (parsed.kind === "web") {
-    const web = await readWebText(parsed.url, safetyPolicy);
-    return {
-      text: web.text,
-      contentSource: "web",
-      title: titleForRef(parsed),
-      mime: web.mime,
-      size: web.text.length,
-      hash: sha256Text(web.text),
-      revision: null,
-      extractedTextRef: null,
-      metadata: { url: parsed.url },
-      permissions: { mode: "read_only" }
-    };
-  }
-  throw new Error(`Direct source reading is not available for ${parsed.uri}`);
-}
-async function readTextRef(uri, config2, safetyPolicy) {
-  if (uri.startsWith("open-files://")) {
-    throw new Error("Open-files extracted text refs require an open-files resolver API. Ingest an open-files manifest with extracted_text or an extracted_text_ref using file://, s3://, or https://.");
-  }
-  const parsed = parseSourceRef(uri);
-  const direct = await readDirectSourceText(parsed, config2, safetyPolicy);
-  return { text: direct.text, contentSource: "extracted_text_ref" };
-}
-async function readOpenFilesSourceText(options) {
-  const resolved = await resolveOpenFilesSource({
-    dbPath: options.dbPath,
-    sourceRef: options.sourceRef,
-    purpose: options.purpose ?? "knowledge_index",
-    limit: 100,
-    safetyPolicy: options.safetyPolicy,
-    now: options.now
-  });
-  if (!resolved.resolved) {
-    throw new Error("Open-files source is not in the local knowledge catalog. Ingest an open-files manifest first or use the open-files resolver API.");
-  }
-  if (resolved.revision?.extracted_text_uri && !resolved.content.text_available) {
-    const textRef = await readTextRef(resolved.revision.extracted_text_uri, options.config, options.safetyPolicy);
-    return {
-      text: textRef.text,
-      contentSource: textRef.contentSource,
-      title: resolved.source?.title ?? null,
-      mime: resolved.content.mime,
-      size: textRef.text.length,
-      hash: resolved.revision.hash ?? sha256Text(textRef.text),
-      revision: resolved.revision.revision,
-      extractedTextRef: resolved.revision.extracted_text_uri,
-      metadata: resolved.source?.metadata ?? {},
-      permissions: resolved.source?.permissions ?? { mode: "read_only" }
-    };
-  }
-  if (resolved.chunks.length === 0) {
-    throw new Error("Open-files source has no extracted text chunks yet. Ingest an open-files manifest with extracted_text or extracted_text_ref first.");
-  }
-  const text = resolved.chunks.map((chunk) => chunk.text).join(`
-
-`);
-  return {
-    text,
-    contentSource: "catalog_chunks",
-    title: resolved.source?.title ?? null,
-    mime: resolved.content.mime,
-    size: text.length,
-    hash: resolved.revision?.hash ?? sha256Text(text),
-    revision: resolved.revision?.revision ?? null,
-    extractedTextRef: resolved.revision?.extracted_text_uri ?? null,
-    metadata: resolved.source?.metadata ?? {},
-    permissions: resolved.source?.permissions ?? { mode: "read_only" }
-  };
-}
-function manifestItemForSource(sourceRef, parsed, resolved, purpose) {
-  const hash2 = resolved.hash ?? sha256Text(resolved.text);
-  const metadata = {
-    ...resolved.metadata,
-    source_ref: sourceRef,
-    content_source: resolved.contentSource,
-    read_only: true
-  };
-  const item = {
-    source_ref: sourceRef,
-    name: resolved.title ?? titleForRef(parsed),
-    mime: resolved.mime ?? "text/plain",
-    size: resolved.size ?? resolved.text.length,
-    hash: hash2,
-    revision: resolved.revision ?? hash2,
-    status: "active",
-    updated_at: new Date().toISOString(),
-    permissions: {
-      mode: "read_only",
-      allowed_purposes: [purpose],
-      ...resolved.permissions
-    },
-    metadata,
-    extracted_text_ref: resolved.extractedTextRef,
-    extracted_text: resolved.text
-  };
-  if (parsed.kind === "open-files") {
-    if (parsed.entity === "file")
-      item.file_id = parsed.id;
-    if (parsed.entity === "source") {
-      item.source_id = parsed.id;
-      item.path = parsed.path;
-    }
-  }
-  if (parsed.kind === "file")
-    item.path = parsed.path;
-  if (parsed.kind === "s3")
-    item.path = parsed.key;
-  if (parsed.kind === "web")
-    item.url = parsed.url;
-  return item;
-}
-async function ingestSourceRef(options) {
-  const purpose = options.purpose ?? "knowledge_index";
-  const parsed = parseSourceRef(options.sourceRef);
-  const resolved = parsed.kind === "open-files" ? await readOpenFilesSourceText(options) : await readDirectSourceText(parsed, options.config, options.safetyPolicy);
-  const item = manifestItemForSource(options.sourceRef, parsed, resolved, purpose);
-  const result = await ingestOpenFilesManifestItems({
-    dbPath: options.dbPath,
-    items: [item],
-    sourceLabel: options.sourceRef,
-    readAction: "source_ref_ingest_read",
-    safetyPolicy: options.safetyPolicy,
-    now: options.now
-  });
-  return {
-    ...result,
-    source_ref: options.sourceRef,
-    content_source: resolved.contentSource,
-    read_only: true,
-    hash: String(item.hash)
-  };
-}
-
 // src/reindex.ts
-import { createHash as createHash10, randomUUID as randomUUID9 } from "crypto";
-function stableId6(prefix, value) {
-  return `${prefix}_${createHash10("sha256").update(value).digest("hex").slice(0, 20)}`;
+import { createHash as createHash11, randomUUID as randomUUID10 } from "crypto";
+function stableId7(prefix, value) {
+  return `${prefix}_${createHash11("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
 function queueCounts(dbPath) {
   const db = openKnowledgeDb(dbPath);
@@ -23573,7 +24026,7 @@ function enqueueMissingEmbeddings(options) {
   try {
     const write = db.transaction(() => {
       for (const row of rows) {
-        const id = stableId6("rq", `embedding\x00${row.chunk_id}\x00${reason}`);
+        const id = stableId7("rq", `embedding\x00${row.chunk_id}\x00${reason}`);
         const before = db.query("SELECT id FROM reindex_queue WHERE kind = ? AND target_id = ? AND reason = ?").get("embedding", row.chunk_id, reason);
         if (before) {
           alreadyQueued += 1;
@@ -23635,7 +24088,7 @@ function completeIndexedQueueItems(dbPath, options, now) {
 async function refreshEmbeddingIndex(options) {
   migrateKnowledgeDb(options.dbPath);
   const now = (options.now ?? new Date).toISOString();
-  const runId = `run_${randomUUID9()}`;
+  const runId = `run_${randomUUID10()}`;
   const deleted = options.full ? clearEmbeddingIndex(options.dbPath) : { embeddings: 0, vectorEntries: 0 };
   const queued = enqueueMissingEmbeddings({ ...options, reason: options.full ? "full_embedding_rebuild" : "missing_embedding" });
   const db = openKnowledgeDb(options.dbPath);
@@ -23676,7 +24129,7 @@ async function refreshEmbeddingIndex(options) {
     ]);
     doneDb.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`, [
-      `evt_${randomUUID9()}`,
+      `evt_${randomUUID10()}`,
       runId,
       "info",
       "embedding_refresh_completed",
@@ -23698,7 +24151,7 @@ async function refreshEmbeddingIndex(options) {
 }
 
 // src/rules-provenance.ts
-import { createHash as createHash11 } from "crypto";
+import { createHash as createHash12 } from "crypto";
 import { existsSync as existsSync10, lstatSync, readdirSync, readFileSync as readFileSync10, statSync as statSync2 } from "fs";
 import { basename as basename4, extname, join as join4, relative as relative4, resolve as resolve4, sep as sep4 } from "path";
 import { pathToFileURL as pathToFileURL3 } from "url";
@@ -23730,10 +24183,10 @@ var SKIP_DIRECTORIES = new Set([
 var SENSITIVE_PATH_RE = /(^|[._-])(secret|secrets|token|tokens|credential|credentials|password|passwd|private[_-]?key|id_rsa)([._-]|$)/i;
 var SELECTED_PROMPT_OR_PLAN_RE = /(agent|rule|rules|instruction|instructions|global|operating|standard|knowledge)/i;
 function sha256Text2(text) {
-  return `sha256:${createHash11("sha256").update(text).digest("hex")}`;
+  return `sha256:${createHash12("sha256").update(text).digest("hex")}`;
 }
 function sha256Bytes(bytes) {
-  return `sha256:${createHash11("sha256").update(bytes).digest("hex")}`;
+  return `sha256:${createHash12("sha256").update(bytes).digest("hex")}`;
 }
 function normalizePath(value) {
   return value.split(sep4).join("/");
@@ -24249,9 +24702,9 @@ async function importRulesProvenance(options = {}) {
 }
 
 // src/web-search.ts
-import { createHash as createHash12, randomUUID as randomUUID10 } from "crypto";
+import { createHash as createHash13, randomUUID as randomUUID11 } from "crypto";
 function stableHash(value) {
-  return `sha256:${createHash12("sha256").update(value).digest("hex")}`;
+  return `sha256:${createHash13("sha256").update(value).digest("hex")}`;
 }
 function estimateTokens3(text) {
   const words = text.trim().split(/\s+/).filter(Boolean).length;
@@ -24392,7 +24845,7 @@ async function runProviderWebSearch(options) {
   const parsed = parseModelRef(modelRef);
   const provider = options.provider ?? parsed.provider;
   const model = parsed.provider === provider ? parsed.model : providerSettings(options.config, provider).default_model;
-  const runId = `run_${randomUUID10()}`;
+  const runId = `run_${randomUUID11()}`;
   if (!options.fake && options.safetyPolicy)
     assertWebSearchAllowed(options.safetyPolicy);
   if (!options.fake && provider !== "openai" && provider !== "anthropic") {
@@ -24464,7 +24917,7 @@ async function runProviderWebSearch(options) {
     ]);
     writeDb.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`, [
-      `evt_${randomUUID10()}`,
+      `evt_${randomUUID11()}`,
       runId,
       "info",
       "provider_web_search_completed",
@@ -24500,11 +24953,11 @@ async function runProviderWebSearch(options) {
 }
 
 // src/wiki-compiler.ts
-import { createHash as createHash13, randomUUID as randomUUID11 } from "crypto";
-function stableId7(prefix, value) {
-  return `${prefix}_${createHash13("sha256").update(value).digest("hex").slice(0, 20)}`;
+import { createHash as createHash14, randomUUID as randomUUID12 } from "crypto";
+function stableId8(prefix, value) {
+  return `${prefix}_${createHash14("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
-function slugify2(value) {
+function slugify3(value) {
   const slug = value.normalize("NFKC").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
   return slug || "knowledge-page";
 }
@@ -24515,11 +24968,11 @@ function todayParts(now) {
     day: String(now.getUTCDate()).padStart(2, "0")
   };
 }
-function estimateTokenCount2(text) {
+function estimateTokenCount3(text) {
   const words = text.trim().split(/\s+/).filter(Boolean).length;
   return Math.max(1, Math.ceil(words * 1.25));
 }
-function parseJsonObject5(value) {
+function parseJsonObject6(value) {
   if (!value)
     return {};
   try {
@@ -24612,7 +25065,7 @@ function compileBody(title, rows, now) {
   ].join(`
 `);
 }
-async function writeArtifact(store, entry) {
+async function writeArtifact2(store, entry) {
   const written = await store.put(entry);
   return {
     key: written.key,
@@ -24626,7 +25079,7 @@ async function writeArtifact(store, entry) {
     }
   };
 }
-async function appendLog(store, event, now) {
+async function appendLog2(store, event, now) {
   const { year, month, day } = todayParts(now);
   const key = `logs/${year}/${month}/${day}.jsonl`;
   let existing = "";
@@ -24635,7 +25088,7 @@ async function appendLog(store, event, now) {
   } catch {
     existing = "";
   }
-  return writeArtifact(store, {
+  return writeArtifact2(store, {
     key,
     body: `${existing}${JSON.stringify(event)}
 `,
@@ -24675,7 +25128,7 @@ function upsertWikiPage(db, input) {
   for (const row of existing)
     db.run("DELETE FROM chunks_fts WHERE chunk_id = ?", [row.id]);
   db.run("DELETE FROM chunks WHERE wiki_page_id = ?", [input.pageId]);
-  const chunkId = stableId7("chk", `${input.pageId}\x00${input.contentHash}`);
+  const chunkId = stableId8("chk", `${input.pageId}\x00${input.contentHash}`);
   db.run(`INSERT INTO chunks (id, wiki_page_id, kind, ordinal, text, token_count, start_offset, end_offset, metadata_json, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
     chunkId,
@@ -24683,7 +25136,7 @@ function upsertWikiPage(db, input) {
     "wiki",
     0,
     input.body,
-    estimateTokenCount2(input.body),
+    estimateTokenCount3(input.body),
     0,
     input.body.length,
     JSON.stringify({
@@ -24706,7 +25159,7 @@ function replacePageCitations(db, pageId, citations, now) {
   for (const citation of citations) {
     db.run(`INSERT INTO citations (id, wiki_page_id, chunk_id, source_uri, quote, start_offset, end_offset, metadata_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-      stableId7("cit", `${pageId}\x00${citation.source_uri}\x00${citation.chunk_id ?? randomUUID11()}`),
+      stableId8("cit", `${pageId}\x00${citation.source_uri}\x00${citation.chunk_id ?? randomUUID12()}`),
       pageId,
       citation.chunk_id,
       citation.source_uri,
@@ -24726,7 +25179,7 @@ function upsertIndex(db, input) {
        artifact_uri = excluded.artifact_uri,
        metadata_json = excluded.metadata_json,
        updated_at = excluded.updated_at`, [
-    stableId7("idx", `wiki-topic\x00${input.path}`),
+    stableId8("idx", `wiki-topic\x00${input.path}`),
     "wiki_topic",
     input.title,
     input.artifactUri,
@@ -24757,11 +25210,11 @@ async function compileWikiPage(options) {
   if (rows.length === 0)
     throw new Error("No source chunks matched wiki compile input.");
   const title = titleFor(options, rows);
-  const slug = slugify2(title);
+  const slug = slugify3(title);
   const path = `wiki/generated/${slug}.md`;
   const body = compileBody(title, rows, now);
   const sourceRefs = rows.map((row) => {
-    const metadata = parseJsonObject5(row.metadata_json);
+    const metadata = parseJsonObject6(row.metadata_json);
     return typeof metadata.source_ref === "string" ? metadata.source_ref : row.source_uri;
   }).filter((ref) => Boolean(ref));
   const provenance = generatedArtifactProvenance({
@@ -24769,13 +25222,13 @@ async function compileWikiPage(options) {
     artifact_key: path,
     source_refs: sourceRefs
   });
-  const pageArtifact = await writeArtifact(options.store, {
+  const pageArtifact = await writeArtifact2(options.store, {
     key: path,
     body,
     content_type: "text/markdown",
     metadata: { generated_from: "wiki_compile" }
   });
-  const pageId = stableId7("wiki", path);
+  const pageId = stableId8("wiki", path);
   const citations = rows.map((row) => ({
     chunk_id: row.chunk_id,
     source_uri: row.source_uri ?? "unknown",
@@ -24786,11 +25239,11 @@ async function compileWikiPage(options) {
       source_revision_id: row.source_revision_id,
       revision: row.revision,
       hash: row.hash,
-      source_ref: parseJsonObject5(row.metadata_json).source_ref ?? row.source_uri
+      source_ref: parseJsonObject6(row.metadata_json).source_ref ?? row.source_uri
     }
   }));
   const concept = firstConcept(title);
-  const conceptPath = `wiki/concepts/${slugify2(concept)}.md`;
+  const conceptPath = `wiki/concepts/${slugify3(concept)}.md`;
   const conceptBody = [`# ${concept}`, "", `Related page: [[${path}]]`, ""].join(`
 `);
   const conceptProvenance = generatedArtifactProvenance({
@@ -24798,14 +25251,14 @@ async function compileWikiPage(options) {
     artifact_key: conceptPath,
     source_refs: sourceRefs
   });
-  const conceptArtifact = await writeArtifact(options.store, {
+  const conceptArtifact = await writeArtifact2(options.store, {
     key: conceptPath,
     body: conceptBody,
     content_type: "text/markdown",
     metadata: { generated_from: "wiki_compile_concept" }
   });
-  const conceptPageId = stableId7("wiki", conceptPath);
-  const log = await appendLog(options.store, {
+  const conceptPageId = stableId8("wiki", conceptPath);
+  const log = await appendLog2(options.store, {
     ts: now,
     event: "wiki_compile_completed",
     page_key: path,
@@ -24877,7 +25330,7 @@ async function fileAnswerToWiki(options) {
   const nowDate = options.now ?? new Date;
   const now = nowDate.toISOString();
   const title = options.prompt.length > 80 ? `${options.prompt.slice(0, 77)}...` : options.prompt;
-  const slug = slugify2(title);
+  const slug = slugify3(title);
   const path = `wiki/answers/${slug}.md`;
   const citations = options.context.citations;
   const body = [
@@ -24897,20 +25350,20 @@ async function fileAnswerToWiki(options) {
     artifact_key: path,
     source_refs: sourceRefs
   });
-  const artifact = await writeArtifact(options.store, {
+  const artifact = await writeArtifact2(options.store, {
     key: path,
     body,
     content_type: "text/markdown",
     metadata: { generated_from: "knowledge_answer" }
   });
-  const log = await appendLog(options.store, {
+  const log = await appendLog2(options.store, {
     ts: now,
     event: "wiki_answer_filed",
     page_key: path,
     prompt: options.prompt,
     citations: citations.length
   }, nowDate);
-  const pageId = stableId7("wiki", path);
+  const pageId = stableId8("wiki", path);
   const db = openKnowledgeDb(options.dbPath);
   try {
     recordStorageObjects(db, [artifact, log], nowDate);
@@ -25046,17 +25499,17 @@ function lintWiki(options) {
 }
 
 // src/wiki-layout.ts
-import { createHash as createHash14 } from "crypto";
+import { createHash as createHash15 } from "crypto";
 function todayParts2(now) {
   const year = String(now.getUTCFullYear());
   const month = String(now.getUTCMonth() + 1).padStart(2, "0");
   const day = String(now.getUTCDate()).padStart(2, "0");
   return { year, month, day };
 }
-function stableId8(prefix, value) {
-  return `${prefix}_${createHash14("sha256").update(value).digest("hex").slice(0, 20)}`;
+function stableId9(prefix, value) {
+  return `${prefix}_${createHash15("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
-function estimateTokenCount3(text) {
+function estimateTokenCount4(text) {
   const words = text.trim().split(/\s+/).filter(Boolean).length;
   return Math.max(1, Math.ceil(words * 1.25));
 }
@@ -25173,7 +25626,7 @@ function provenanceFor(artifact) {
 }
 function recordWikiChunk(db, pageId, title, artifact, body, now) {
   const provenance = provenanceFor(artifact);
-  const chunkId = stableId8("chk", `${pageId}\x00${artifact.hash ?? artifact.uri}`);
+  const chunkId = stableId9("chk", `${pageId}\x00${artifact.hash ?? artifact.uri}`);
   const existing = db.query("SELECT id FROM chunks WHERE wiki_page_id = ?").all(pageId);
   for (const row of existing)
     db.run("DELETE FROM chunks_fts WHERE chunk_id = ?", [row.id]);
@@ -25185,7 +25638,7 @@ function recordWikiChunk(db, pageId, title, artifact, body, now) {
     "wiki",
     0,
     body,
-    estimateTokenCount3(body),
+    estimateTokenCount4(body),
     0,
     body.length,
     JSON.stringify({
@@ -25209,7 +25662,7 @@ function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
          artifact_uri = excluded.artifact_uri,
          metadata_json = excluded.metadata_json,
          updated_at = excluded.updated_at`, [
-      stableId8("idx", "root:indexes/root.md"),
+      stableId9("idx", "root:indexes/root.md"),
       "root",
       "root",
       rootIndex.uri,
@@ -25224,7 +25677,7 @@ function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
     ]);
   }
   if (wikiReadme) {
-    const wikiPageId = stableId8("wiki", "wiki/README.md");
+    const wikiPageId = stableId9("wiki", "wiki/README.md");
     db.run(`INSERT INTO wiki_pages (id, path, title, artifact_uri, content_hash, status, metadata_json, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(path) DO UPDATE SET
@@ -25252,7 +25705,7 @@ function recordWikiLayoutCatalog(db, artifacts, now = new Date) {
 }
 
 // src/workspace-migration.ts
-import { createHash as createHash15 } from "crypto";
+import { createHash as createHash16 } from "crypto";
 import { Database as Database2 } from "bun:sqlite";
 import {
   cpSync,
@@ -25279,12 +25732,12 @@ function walkFiles(root, base = root) {
 function hashFiles(root, files) {
   if (files.length === 0)
     return { sha256: null, bytes: 0 };
-  const tree = createHash15("sha256");
+  const tree = createHash16("sha256");
   let bytes = 0;
   for (const file2 of files) {
     const path = join5(root, file2);
     const body = readFileSync11(path);
-    const fileHash = createHash15("sha256").update(body).digest("hex");
+    const fileHash = createHash16("sha256").update(body).digest("hex");
     bytes += body.byteLength;
     tree.update(file2);
     tree.update("\x00");
@@ -25533,7 +25986,7 @@ function resolvePeerWorkspace(input) {
   return ensureKnowledgeWorkspace(workspaceForHome(projectKnowledgeHome(target)).home);
 }
 function workspaceMachineId(workspace) {
-  return `${hostname5()}:${createHash16("sha256").update(workspace.home).digest("hex").slice(0, 12)}`;
+  return `${hostname5()}:${createHash17("sha256").update(workspace.home).digest("hex").slice(0, 12)}`;
 }
 function shellQuote2(value) {
   return `'${value.replace(/'/g, "'\\''")}'`;
@@ -25968,7 +26421,7 @@ function legacyAgentContextPack(options, context, policy) {
     redactions += quote.redactions;
     const ref = citation.source_ref ?? citation.source_uri ?? citation.artifact_path ?? citation.artifact_uri ?? citation.id;
     return {
-      id: `cite_${createHash16("sha256").update(`${citation.id}\x00${ref}`).digest("hex").slice(0, 12)}`,
+      id: `cite_${createHash17("sha256").update(`${citation.id}\x00${ref}`).digest("hex").slice(0, 12)}`,
       kind: citation.artifact_uri || citation.artifact_path ? "artifact" : "source",
       ref,
       source_ref: citation.source_ref,
@@ -25994,7 +26447,7 @@ function legacyAgentContextPack(options, context, policy) {
     const preview = redactPreviewForPack(excerpt2.text, policy, 520);
     redactions += preview.redactions;
     return {
-      id: `ev_${createHash16("sha256").update(`${excerpt2.kind}\x00${excerpt2.result_id}\x00${excerpt2.citation_id ?? ""}`).digest("hex").slice(0, 14)}`,
+      id: `ev_${createHash17("sha256").update(`${excerpt2.kind}\x00${excerpt2.result_id}\x00${excerpt2.citation_id ?? ""}`).digest("hex").slice(0, 14)}`,
       kind: excerpt2.kind,
       title: compactText(result?.title ?? citation?.ref ?? excerpt2.kind, 100),
       text_preview: preview.text,
@@ -26012,7 +26465,7 @@ function legacyAgentContextPack(options, context, policy) {
   const usedCitationIds = new Set(evidence.flatMap((entry) => entry.citation_ids));
   const usedCitations = citations.filter((citation) => usedCitationIds.has(citation.id));
   const warnings = Array.from(new Set(context.warnings));
-  const idempotencyKey = `ctx_${createHash16("sha256").update([source, purpose, query, warnings.join(","), evidence.map((entry) => entry.id).join(",")].join("\x00")).digest("hex").slice(0, 20)}`;
+  const idempotencyKey = `ctx_${createHash17("sha256").update([source, purpose, query, warnings.join(","), evidence.map((entry) => entry.id).join(",")].join("\x00")).digest("hex").slice(0, 20)}`;
   const pack = {
     ok: true,
     format: "knowledge-agent-context-pack",
@@ -26125,7 +26578,7 @@ function emptyAgentContextPack(options) {
   const query = (options.query ?? options.topic ?? "").normalize("NFKC").trim().replace(/\s+/g, " ");
   const maxItems = Math.max(1, Math.min(options.maxItems ?? options.limit ?? 8, 50));
   const maxTokens = Math.max(500, Math.min(options.maxTokens ?? 6000, 1e5));
-  const idempotencyKey = `ctx_${createHash16("sha256").update(["empty", source, purpose, query, options.topic ?? "", options.since ?? ""].join("\x00")).digest("hex").slice(0, 20)}`;
+  const idempotencyKey = `ctx_${createHash17("sha256").update(["empty", source, purpose, query, options.topic ?? "", options.since ?? ""].join("\x00")).digest("hex").slice(0, 20)}`;
   return {
     ok: true,
     format: "knowledge-agent-context-pack",
@@ -26933,6 +27386,81 @@ class KnowledgeService {
     } finally {
       db.close();
     }
+  }
+  assertAppWikiWrite(allowGlobal) {
+    assertAppWikiWriteAllowed({
+      scope: this.scope,
+      workspace: this.workspace,
+      safetyPolicy: this.safetyPolicy(),
+      allowGlobal
+    });
+  }
+  async initAppWiki(options = {}) {
+    this.assertAppWikiWrite(options.allowGlobal);
+    const workspace = this.ensureWorkspace();
+    return initAppWikiScope({
+      scope: this.scope,
+      workspace,
+      store: this.artifactStore(),
+      safetyPolicy: this.safetyPolicy(),
+      allowGlobal: options.allowGlobal
+    });
+  }
+  async addAppWikiNote(options) {
+    this.assertAppWikiWrite(options.allowGlobal);
+    const workspace = this.ensureWorkspace();
+    return writeAppWikiNote({
+      scope: this.scope,
+      workspace,
+      store: this.artifactStore(),
+      safetyPolicy: this.safetyPolicy(),
+      allowGlobal: options.allowGlobal,
+      title: options.title,
+      content: options.content,
+      tags: options.tags,
+      sourceRefs: options.sourceRefs,
+      path: options.path,
+      metadata: options.metadata
+    });
+  }
+  listAppWikiNotes(options = {}) {
+    const workspace = this.workspace;
+    if (!existsSync12(workspace.knowledgeDbPath))
+      return [];
+    return listAppWikiNotes({
+      dbPath: workspace.knowledgeDbPath,
+      limit: options.limit
+    });
+  }
+  async getAppWikiNote(id, options = {}) {
+    const workspace = this.workspace;
+    if (!existsSync12(workspace.knowledgeDbPath))
+      return null;
+    return getAppWikiNote({
+      dbPath: workspace.knowledgeDbPath,
+      store: this.artifactStore(),
+      id,
+      includeContent: options.includeContent
+    });
+  }
+  async addAppWikiSourceRef(options) {
+    this.assertAppWikiWrite(options.allowGlobal);
+    const workspace = this.ensureWorkspace();
+    return ingestAppWikiSourceRef({
+      scope: this.scope,
+      workspace,
+      sourceRef: options.sourceRef,
+      purpose: options.purpose,
+      config: this.config(),
+      safetyPolicy: this.safetyPolicy(),
+      allowGlobal: options.allowGlobal
+    });
+  }
+  async searchAppWiki(options) {
+    return this.search(options);
+  }
+  async queryAppWiki(options) {
+    return this.retrieveContext(options);
   }
   async initWiki() {
     const workspace = this.ensureWorkspace();
@@ -28457,7 +28985,7 @@ function limitNumber(value, fallback = 20, max = 100) {
     return fallback;
   return Math.min(Math.floor(value), max);
 }
-function parseJsonObject6(value) {
+function parseJsonObject7(value) {
   if (!value)
     return {};
   try {
@@ -28519,7 +29047,7 @@ function rowWithJson(row, fields = ["metadata_json", "acl_json"]) {
   for (const field of fields) {
     if (field in next) {
       const name = field.endsWith("_json") ? field.slice(0, -5) : field;
-      next[name] = parseJsonObject6(next[field]);
+      next[name] = parseJsonObject7(next[field]);
       delete next[field];
     }
   }
@@ -28647,7 +29175,7 @@ function openFilesSnapshot(service = projectService()) {
       source_ownership: "open-files",
       raw_source_bytes_exposed: false,
       refs: rows.map((row) => {
-        const metadata = parseJsonObject6(row.metadata_json);
+        const metadata = parseJsonObject7(row.metadata_json);
         return {
           id: row.id,
           uri: row.uri,
@@ -29001,6 +29529,78 @@ function buildServer() {
       ...service.storageContract(),
       validation
     });
+  });
+  registerTool(server, "knowledge_app_wiki_init", "Initialize app wiki scope", "Create the scoped Hasna app/project wiki workspace and SQLite catalog through the Knowledge service", {
+    scope: scopeField,
+    allow_global: exports_external.boolean().optional().describe("Required for global-scope app wiki writes")
+  }, async ({ scope, allow_global }) => {
+    const service = createKnowledgeService({ scope: scope ?? "project" });
+    try {
+      return jsonText(await service.initAppWiki({ allowGlobal: allow_global }));
+    } catch (error51) {
+      return errorText(error51 instanceof Error ? error51.message : String(error51));
+    }
+  });
+  registerTool(server, "knowledge_app_wiki_note_add", "Add app wiki note", "Write a scoped app/project wiki note through Knowledge artifacts and catalog rows", {
+    scope: scopeField,
+    title: exports_external.string().describe("Note title"),
+    content: exports_external.string().describe("Note content"),
+    tags: exports_external.array(exports_external.string()).optional().describe("Optional note tags"),
+    source_refs: exports_external.array(exports_external.string()).optional().describe("Optional source refs to cite"),
+    allow_global: exports_external.boolean().optional().describe("Required for global-scope app wiki writes")
+  }, async ({ scope, title, content, tags, source_refs, allow_global }) => {
+    const service = createKnowledgeService({ scope: scope ?? "project" });
+    try {
+      return jsonText(await service.addAppWikiNote({
+        title,
+        content,
+        tags,
+        sourceRefs: source_refs,
+        allowGlobal: allow_global
+      }));
+    } catch (error51) {
+      return errorText(error51 instanceof Error ? error51.message : String(error51));
+    }
+  });
+  registerTool(server, "knowledge_app_wiki_source_add", "Add app wiki source ref", "Ingest a read-only source ref into the scoped app/project wiki catalog", {
+    scope: scopeField,
+    source_ref: exports_external.string().describe("Source reference URI, e.g. file://... or open-files://..."),
+    purpose: exports_external.string().optional().describe("Purpose label, default knowledge_index"),
+    allow_global: exports_external.boolean().optional().describe("Required for global-scope app wiki writes")
+  }, async ({ scope, source_ref, purpose, allow_global }) => {
+    const service = createKnowledgeService({ scope: scope ?? "project" });
+    try {
+      return jsonText({ ok: true, ...await service.addAppWikiSourceRef({
+        sourceRef: source_ref,
+        purpose,
+        allowGlobal: allow_global
+      }) });
+    } catch (error51) {
+      return errorText(error51 instanceof Error ? error51.message : String(error51));
+    }
+  });
+  registerTool(server, "knowledge_app_wiki_search", "Search app wiki scope", "Search scoped app/project wiki notes, source refs, and catalog evidence", {
+    scope: scopeField,
+    query: exports_external.string().describe("Search query"),
+    limit: exports_external.number().optional().describe("Maximum results"),
+    semantic: exports_external.boolean().optional().describe("Include vector semantic results"),
+    model: exports_external.string().optional().describe("Embedding model ref"),
+    dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
+    fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings")
+  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
+    const service = createKnowledgeService({ scope: scope ?? "project" });
+    try {
+      return jsonText({ ok: true, ...await service.searchAppWiki({
+        query,
+        limit,
+        semantic,
+        modelRef: model,
+        dimensions,
+        fake
+      }) });
+    } catch (error51) {
+      return errorText(error51 instanceof Error ? error51.message : String(error51));
+    }
   });
   registerTool(server, "knowledge_machines_topology", "Knowledge machine topology", "Inspect optional open-machines topology and local fallback routes for knowledge sync", {
     scope: scopeField,

@@ -15,6 +15,28 @@ export type KnowledgeSyncImportOptions = Parameters<KnowledgeService['importSync
 export type KnowledgePeerSyncOptions = Parameters<KnowledgeService['syncPeer']>[0];
 export type KnowledgeRemotePeerSyncOptions = Parameters<KnowledgeService['syncRemotePeer']>[0];
 export type KnowledgeRulesProvenanceOptions = Parameters<KnowledgeService['importRulesProvenance']>[0];
+export type KnowledgeAppWikiInitOptions = Parameters<KnowledgeService['initAppWiki']>[0];
+export type KnowledgeAppWikiNoteInput = Parameters<KnowledgeService['addAppWikiNote']>[0];
+export type KnowledgeAppWikiSourceInput = Parameters<KnowledgeService['addAppWikiSourceRef']>[0];
+export type KnowledgeAppWikiSearchOptions = Parameters<KnowledgeService['searchAppWiki']>[0];
+export type KnowledgeAppWikiQueryOptions = Parameters<KnowledgeService['queryAppWiki']>[0];
+export interface KnowledgeAppWikiScopeOptions extends KnowledgeClientOptions {
+    allowGlobal?: boolean;
+}
+export interface KnowledgeAppWikiSdk {
+    readonly paths: () => ReturnType<KnowledgeService['paths']>;
+    readonly init: (options?: KnowledgeAppWikiInitOptions) => ReturnType<KnowledgeService['initAppWiki']>;
+    readonly notes: {
+        readonly add: (input: KnowledgeAppWikiNoteInput) => ReturnType<KnowledgeService['addAppWikiNote']>;
+        readonly list: (options?: Parameters<KnowledgeService['listAppWikiNotes']>[0]) => ReturnType<KnowledgeService['listAppWikiNotes']>;
+        readonly get: (id: string, options?: Parameters<KnowledgeService['getAppWikiNote']>[1]) => ReturnType<KnowledgeService['getAppWikiNote']>;
+    };
+    readonly sources: {
+        readonly add: (input: KnowledgeAppWikiSourceInput) => ReturnType<KnowledgeService['addAppWikiSourceRef']>;
+    };
+    readonly search: (options: KnowledgeAppWikiSearchOptions) => ReturnType<KnowledgeService['searchAppWiki']>;
+    readonly query: (options: KnowledgeAppWikiQueryOptions) => ReturnType<KnowledgeService['queryAppWiki']>;
+}
 export interface KnowledgeClient {
     /**
      * Escape hatch for advanced integrations. Prefer the grouped SDK methods for
@@ -64,6 +86,7 @@ export interface KnowledgeClient {
         readonly fileAnswer: (options: Parameters<KnowledgeService['fileAnswer']>[0]) => ReturnType<KnowledgeService['fileAnswer']>;
         readonly lint: () => ReturnType<KnowledgeService['lintWiki']>;
     };
+    readonly appWiki: KnowledgeAppWikiSdk;
     readonly ingest: {
         readonly manifest: (input: string) => ReturnType<KnowledgeService['ingestManifest']>;
         readonly source: (sourceRef: string, purpose?: string) => ReturnType<KnowledgeService['ingestSource']>;
@@ -101,3 +124,8 @@ export interface KnowledgeClient {
 }
 export declare function createKnowledgeClient(options?: KnowledgeClientOptions): KnowledgeClient;
 export declare const createKnowledgeSdk: typeof createKnowledgeClient;
+export declare function createAppWikiScope(options?: KnowledgeAppWikiScopeOptions): KnowledgeAppWikiSdk;
+export declare function openProjectWiki(options?: Omit<KnowledgeAppWikiScopeOptions, 'scope' | 'allowGlobal'>): KnowledgeAppWikiSdk;
+export declare function openGlobalWiki(options: Omit<KnowledgeAppWikiScopeOptions, 'scope'> & {
+    allowGlobal: true;
+}): KnowledgeAppWikiSdk;

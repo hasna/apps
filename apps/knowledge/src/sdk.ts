@@ -20,6 +20,33 @@ export type KnowledgeSyncImportOptions = Parameters<KnowledgeService['importSync
 export type KnowledgePeerSyncOptions = Parameters<KnowledgeService['syncPeer']>[0];
 export type KnowledgeRemotePeerSyncOptions = Parameters<KnowledgeService['syncRemotePeer']>[0];
 export type KnowledgeRulesProvenanceOptions = Parameters<KnowledgeService['importRulesProvenance']>[0];
+export type KnowledgeAppWikiInitOptions = Parameters<KnowledgeService['initAppWiki']>[0];
+export type KnowledgeAppWikiNoteInput = Parameters<KnowledgeService['addAppWikiNote']>[0];
+export type KnowledgeAppWikiSourceInput = Parameters<KnowledgeService['addAppWikiSourceRef']>[0];
+export type KnowledgeAppWikiSearchOptions = Parameters<KnowledgeService['searchAppWiki']>[0];
+export type KnowledgeAppWikiQueryOptions = Parameters<KnowledgeService['queryAppWiki']>[0];
+
+export interface KnowledgeAppWikiScopeOptions extends KnowledgeClientOptions {
+  allowGlobal?: boolean;
+}
+
+export interface KnowledgeAppWikiSdk {
+  readonly paths: () => ReturnType<KnowledgeService['paths']>;
+  readonly init: (options?: KnowledgeAppWikiInitOptions) => ReturnType<KnowledgeService['initAppWiki']>;
+  readonly notes: {
+    readonly add: (input: KnowledgeAppWikiNoteInput) => ReturnType<KnowledgeService['addAppWikiNote']>;
+    readonly list: (options?: Parameters<KnowledgeService['listAppWikiNotes']>[0]) => ReturnType<KnowledgeService['listAppWikiNotes']>;
+    readonly get: (
+      id: string,
+      options?: Parameters<KnowledgeService['getAppWikiNote']>[1],
+    ) => ReturnType<KnowledgeService['getAppWikiNote']>;
+  };
+  readonly sources: {
+    readonly add: (input: KnowledgeAppWikiSourceInput) => ReturnType<KnowledgeService['addAppWikiSourceRef']>;
+  };
+  readonly search: (options: KnowledgeAppWikiSearchOptions) => ReturnType<KnowledgeService['searchAppWiki']>;
+  readonly query: (options: KnowledgeAppWikiQueryOptions) => ReturnType<KnowledgeService['queryAppWiki']>;
+}
 
 export interface KnowledgeClient {
   /**
@@ -73,6 +100,7 @@ export interface KnowledgeClient {
     readonly fileAnswer: (options: Parameters<KnowledgeService['fileAnswer']>[0]) => ReturnType<KnowledgeService['fileAnswer']>;
     readonly lint: () => ReturnType<KnowledgeService['lintWiki']>;
   };
+  readonly appWiki: KnowledgeAppWikiSdk;
   readonly ingest: {
     readonly manifest: (input: string) => ReturnType<KnowledgeService['ingestManifest']>;
     readonly source: (sourceRef: string, purpose?: string) => ReturnType<KnowledgeService['ingestSource']>;
@@ -162,6 +190,20 @@ export function createKnowledgeClient(options: KnowledgeClientOptions = {}): Kno
       fileAnswer: (input) => service.fileAnswer(input),
       lint: () => service.lintWiki(),
     },
+    appWiki: {
+      paths: () => service.paths(),
+      init: (input = {}) => service.initAppWiki(input),
+      notes: {
+        add: (input) => service.addAppWikiNote(input),
+        list: (input = {}) => service.listAppWikiNotes(input),
+        get: (id, input = {}) => service.getAppWikiNote(id, input),
+      },
+      sources: {
+        add: (input) => service.addAppWikiSourceRef(input),
+      },
+      search: (input) => service.searchAppWiki(input),
+      query: (input) => service.queryAppWiki(input),
+    },
     ingest: {
       manifest: (input) => service.ingestManifest(input),
       source: (sourceRef, purpose) => service.ingestSource(sourceRef, purpose),
@@ -200,3 +242,41 @@ export function createKnowledgeClient(options: KnowledgeClientOptions = {}): Kno
 }
 
 export const createKnowledgeSdk = createKnowledgeClient;
+
+function withDefaultAllowGlobal<T extends { allowGlobal?: boolean } | undefined>(
+  input: T,
+  allowGlobal: boolean | undefined,
+): T {
+  if (allowGlobal !== true) return input;
+  return { ...(input ?? {}), allowGlobal: input?.allowGlobal ?? true } as T;
+}
+
+export function createAppWikiScope(options: KnowledgeAppWikiScopeOptions = {}): KnowledgeAppWikiSdk {
+  const { allowGlobal, ...clientOptions } = options;
+  const client = createKnowledgeClient({
+    ...clientOptions,
+    scope: clientOptions.scope ?? 'project',
+  });
+  return {
+    paths: () => client.appWiki.paths(),
+    init: (input = {}) => client.appWiki.init(withDefaultAllowGlobal(input, allowGlobal)),
+    notes: {
+      add: (input) => client.appWiki.notes.add(withDefaultAllowGlobal(input, allowGlobal)),
+      list: (input = {}) => client.appWiki.notes.list(input),
+      get: (id, input = {}) => client.appWiki.notes.get(id, input),
+    },
+    sources: {
+      add: (input) => client.appWiki.sources.add(withDefaultAllowGlobal(input, allowGlobal)),
+    },
+    search: (input) => client.appWiki.search(input),
+    query: (input) => client.appWiki.query(input),
+  };
+}
+
+export function openProjectWiki(options: Omit<KnowledgeAppWikiScopeOptions, 'scope' | 'allowGlobal'> = {}): KnowledgeAppWikiSdk {
+  return createAppWikiScope({ ...options, scope: 'project' });
+}
+
+export function openGlobalWiki(options: Omit<KnowledgeAppWikiScopeOptions, 'scope'> & { allowGlobal: true }): KnowledgeAppWikiSdk {
+  return createAppWikiScope({ ...options, scope: 'global', allowGlobal: true });
+}

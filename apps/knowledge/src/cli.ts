@@ -103,6 +103,8 @@ interface Flags {
   includeArchived?: boolean;
   project?: string;
   contract?: boolean;
+  sourceRef?: string[];
+  allowGlobal?: boolean;
 }
 
 interface ParseResult {
@@ -111,7 +113,7 @@ interface ParseResult {
 }
 
 const EVENTS_COMMANDS = ['events', 'webhooks'];
-const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'export', 'prune', 'dedupe', 'stats', 'inventory', 'project-panel', 'paths', 'setup', 'auth', 'remote', 'storage', 'machines', 'sync', 'db', 'wiki', 'source', 'ingest', 'reindex', 'search', 'context', 'proposals', 'web', 'ask', 'build', 'embeddings', 'providers', 'safety', 'help', ...EVENTS_COMMANDS];
+const COMMANDS = ['add', 'list', 'get', 'delete', 'update', 'archive', 'restore', 'upsert', 'untag', 'export', 'prune', 'dedupe', 'stats', 'inventory', 'project-panel', 'paths', 'setup', 'auth', 'remote', 'storage', 'machines', 'sync', 'db', 'wiki', 'app-wiki', 'source', 'ingest', 'reindex', 'search', 'context', 'proposals', 'web', 'ask', 'build', 'embeddings', 'providers', 'safety', 'help', ...EVENTS_COMMANDS];
 const COMMAND_ALIASES: Record<string, string> = {
   ls: 'list',
   rm: 'delete',
@@ -191,6 +193,8 @@ function parseArgs(argv: string[]): ParseResult {
       case '--include-archived': flags.includeArchived = true; break;
       case '--project': flags.project = argv[i + 1]; i += 1; break;
       case '--contract': flags.contract = true; break;
+      case '--source-ref': flags.sourceRef = [...(flags.sourceRef ?? []), argv[i + 1]]; i += 1; break;
+      case '--allow-global': flags.allowGlobal = true; break;
       default: throw new Error(`Unknown flag: ${token}. Run 'knowledge --help' for valid options.`);
     }
   }
@@ -279,6 +283,8 @@ Commands:
   db init|stats|storage        Initialize, inspect, or sync local knowledge.db
   wiki init|compile|file-answer|lint
                                Initialize, compile, file, or lint wiki artifacts
+  app-wiki init|note|source|search|query
+                               Create scoped app/project wiki notes and source refs
   source resolve <source-ref>  Resolve read-only source content and citation evidence
   ingest manifest <file|s3://> Ingest an open-files manifest into knowledge.db
   ingest source <source-ref>   Ingest a read-only source ref into knowledge.db
@@ -338,6 +344,8 @@ Global Options:
   --peer-workspace <path>      Peer repo root or .hasna/knowledge path for local sync or remote override
   --project <id>               Project id/name/slug for project-panel output
   --contract                   Emit contract JSON for project-panel output
+  --source-ref <uri>           Attach a source ref to an app-wiki note
+  --allow-global               Explicitly allow app-wiki writes to global scope
   --no-color                  Disable color output
   --completions <shell>       Output completions for bash|zsh|fish
   -v, --version               Show version
@@ -401,6 +409,7 @@ function printCommandHelp(command: string): void {
   if (command === 'sync') { console.log('Usage: knowledge sync status|doctor|readiness|snapshot|machines|conflicts [show|propose|resolve] [id] | dry-run|pull|push|sync|export|import [--peer-workspace <path>] [--machine <ssh-alias>] [--tables <names>] [--dry-run] [--limit <n>] [--approve-write] [--approved-by <name>] [--strategy <name>] [--mode deterministic|ai] [--model <alias|provider:model>] [--fake] [--no-tailscale] [--scope local|global|project] [--json]\n\nRemote machine sync resolves peer paths through @hasna/machines when --peer-workspace is omitted.'); return; }
   if (command === 'db') { console.log('Usage: knowledge db init|stats|storage status|push|pull|sync [--tables sources,chunks] [--scope local|global|project] [--json]'); return; }
   if (command === 'wiki') { console.log('Usage: knowledge wiki init|compile|file-answer|lint [query|prompt] [--title <title>] [--content <answer>] [--approve-write] [--limit <n>] [--scope local|global|project] [--json]'); return; }
+  if (command === 'app-wiki') { console.log('Usage: knowledge app-wiki init | note add|get|list | source add <source-ref> | search <query> | query <query> [--title <title>] [--content <text>] [--tag <tag>] [--source-ref <uri>] [--scope project|local|global] [--allow-global] [--json]'); return; }
   if (command === 'source') { console.log('Usage: knowledge source resolve <source-ref> [--purpose knowledge_answer|knowledge_index] [--limit <n>] [--scope local|global|project] [--json]'); return; }
   if (command === 'ingest') { console.log('Usage: knowledge ingest manifest <file|s3://bucket/key> | source <source-ref> | rules [--workspace <path>] [--owner <name>] [--dry-run] [--max-items <n>] [--limit <n>] [--purpose knowledge_index] [--scope local|global|project] [--json]'); return; }
   if (command === 'reindex') { console.log('Usage: knowledge reindex status|enqueue|embeddings|outbox [file|s3://bucket/key] [--full] [--fake] [--scope local|global|project] [--json]'); return; }
@@ -514,11 +523,11 @@ async function run(argv: string[]): Promise<void> {
   if (flags.completions) {
     const shell = flags.completions;
     if (shell === 'bash') {
-      console.log(`_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats inventory project-panel paths setup auth remote storage machines sync db wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --purpose --model --dimensions --semantic --context --max-tokens --max-items --from --since --topic --dedupe --generate --approve-write --provider --mode --machine --workspace --peer-workspace --api-url --canonical-example --api-key --email --org --org-id --user-id --owner --domain --file-results --full --dry-run --fake --no-tailscale --no-artifact-content --no-color --scope --tables --archived --include-archived --project --contract" -- "$cur")); }; complete -F _knowledge knowledge`);
+    console.log(`_knowledge() { local cur; cur="${"$"}{COMP_WORDS[COMP_CWORD]}"; COMPREPLY=($(compgen -W "add list get update archive restore upsert untag delete export prune dedupe stats inventory project-panel paths setup auth remote storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive --json --yes --help --version --desc --page --limit --search --sort --id --store --title --content --url --tag --format --completions --purpose --model --dimensions --semantic --context --max-tokens --max-items --from --since --topic --dedupe --generate --approve-write --provider --mode --machine --workspace --peer-workspace --api-url --canonical-example --api-key --email --org --org-id --user-id --owner --domain --file-results --full --dry-run --fake --no-tailscale --no-artifact-content --no-color --scope --tables --archived --include-archived --project --contract --source-ref --allow-global" -- "$cur")); }; complete -F _knowledge knowledge`);
     } else if (shell === 'zsh') {
-      console.log(`#compdef knowledge\n_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats inventory project-panel paths setup auth remote storage machines sync db wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--dedupe)--dedupe" "(--generate)--generate" "(--approve-write)--approve-write" "(--canonical-example)--canonical-example" "(--file-results)--file-results" "(--full)--full" "(--dry-run)--dry-run" "(--fake)--fake" "(--no-tailscale)--no-tailscale" "(--no-artifact-content)--no-artifact-content" "(--contract)--contract" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--max-tokens)--max-tokens[token budget]:number:" "(--max-items)--max-items[item budget]:number:" "(--from)--from"\{search,loops,runs\}:" "(--since)--since[duration or ISO time]:" "(--topic)--topic[topic text]:" "(--provider)--provider[provider]:" "(--mode)--mode"\{local,hosted\}:" "(--machine)--machine[machine id or SSH alias]:" "(--workspace)--workspace[repo workspace path]:path:" "(--peer-workspace)--peer-workspace[peer repo or knowledge home path]:path:" "(--api-url)--api-url[hosted API URL]:" "(--api-key)--api-key[hosted API key]:" "(--email)--email[email]:" "(--org)--org[org slug]:" "(--org-id)--org-id[org id]:" "(--user-id)--user-id[user id]:" "(--owner)--owner[provenance owner]:" "(--domain)--domain[domain]:" "(--project)--project[project id/name/slug]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" "(--tables)--tables[comma-separated DB sync tables]:" }; _knowledge`);
+      console.log(`#compdef knowledge\n_knowledge() { _arguments -C "1: :(add list get update archive restore upsert untag delete export prune dedupe stats inventory project-panel paths setup auth remote storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive)" "(--json)--json" "(--yes)-y" "(--help)--help" "(--version)--version" "(--desc)--desc" "(--archived)--archived" "(--include-archived)--include-archived" "(--semantic)--semantic" "(--context)--context" "(--dedupe)--dedupe" "(--generate)--generate" "(--approve-write)--approve-write" "(--canonical-example)--canonical-example" "(--file-results)--file-results" "(--full)--full" "(--dry-run)--dry-run" "(--fake)--fake" "(--no-tailscale)--no-tailscale" "(--no-artifact-content)--no-artifact-content" "(--contract)--contract" "(--allow-global)--allow-global" "(-p --page)"{-p,--page}"[page number]:number:" "(-l --limit)"{-l,--limit}"[items per page]:number:" "(-s --search)"{-s,--search}"[search text]:text:" "(--sort)--sort"\{created,title\}:" "(--id)--id[item id]:id:" "(--store)--store[store path]:path:" "(--title)--title[new title]:" "(--content)--content[new content]:" "(--url)--url[source url]:" "(-t --tag)"{-t,--tag}"[tag]:tag:" "(--format)--format[json|jsonl]:" "(--completions)--completions[output completions]:shell:(bash zsh fish):" "(--purpose)--purpose[purpose]:" "(--model)--model[model ref]:" "(--dimensions)--dimensions[embedding dimensions]:number:" "(--max-tokens)--max-tokens[token budget]:number:" "(--max-items)--max-items[item budget]:number:" "(--from)--from"\{search,loops,runs\}:" "(--since)--since[duration or ISO time]:" "(--topic)--topic[topic text]:" "(--provider)--provider[provider]:" "(--mode)--mode"\{local,hosted\}:" "(--machine)--machine[machine id or SSH alias]:" "(--workspace)--workspace[repo workspace path]:path:" "(--peer-workspace)--peer-workspace[peer repo or knowledge home path]:path:" "(--api-url)--api-url[hosted API URL]:" "(--api-key)--api-key[hosted API key]:" "(--email)--email[email]:" "(--org)--org[org slug]:" "(--org-id)--org-id[org id]:" "(--user-id)--user-id[user id]:" "(--owner)--owner[provenance owner]:" "(--domain)--domain[domain]:" "(--project)--project[project id/name/slug]:" "(--source-ref)--source-ref[source ref]:" "(--no-color)--no-color[disable color]" "(--scope)--scope"\{local,global,project\}:" "(--tables)--tables[comma-separated DB sync tables]:" }; _knowledge`);
     } else if (shell === 'fish') {
-      console.log(`complete -c knowledge -f; complete -c knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats inventory project-panel paths setup auth remote storage machines sync db wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive"; complete -c knowledge -l json; complete -c knowledge -l yes -s y; complete -c knowledge -l help -s h; complete -c knowledge -l version -s v; complete -c knowledge -l desc; complete -c knowledge -l archived; complete -c knowledge -l include-archived; complete -c knowledge -l semantic; complete -c knowledge -l context; complete -c knowledge -l max-tokens; complete -c knowledge -l max-items; complete -c knowledge -l from -a "search loops runs"; complete -c knowledge -l since; complete -c knowledge -l topic; complete -c knowledge -l dedupe; complete -c knowledge -l generate; complete -c knowledge -l approve-write; complete -c knowledge -l canonical-example; complete -c knowledge -l provider; complete -c knowledge -l mode; complete -c knowledge -l machine; complete -c knowledge -l workspace; complete -c knowledge -l peer-workspace; complete -c knowledge -l api-url; complete -c knowledge -l api-key; complete -c knowledge -l email; complete -c knowledge -l org; complete -c knowledge -l org-id; complete -c knowledge -l user-id; complete -c knowledge -l owner; complete -c knowledge -l domain; complete -c knowledge -l project; complete -c knowledge -l contract; complete -c knowledge -l file-results; complete -c knowledge -l full; complete -c knowledge -l dry-run; complete -c knowledge -l fake; complete -c knowledge -l no-tailscale; complete -c knowledge -l no-artifact-content; complete -c knowledge -s p -l page; complete -c knowledge -s l -l limit; complete -c knowledge -s s -l search; complete -c knowledge -l sort; complete -c knowledge -l id; complete -c knowledge -l store; complete -c knowledge -l title; complete -c knowledge -l content; complete -c knowledge -l url; complete -c knowledge -s t -l tag; complete -c knowledge -l format; complete -c knowledge -l completions; complete -c knowledge -l purpose; complete -c knowledge -l model; complete -c knowledge -l dimensions; complete -c knowledge -l no-color; complete -c knowledge -l scope -a "local global project"; complete -c knowledge -l tables`);
+      console.log(`complete -c knowledge -f; complete -c knowledge -a "add list get update archive restore upsert untag delete export prune dedupe stats inventory project-panel paths setup auth remote storage machines sync db wiki app-wiki source ingest reindex search context proposals web ask build embeddings providers safety events webhooks help ls rm edit unarchive"; complete -c knowledge -l json; complete -c knowledge -l yes -s y; complete -c knowledge -l help -s h; complete -c knowledge -l version -s v; complete -c knowledge -l desc; complete -c knowledge -l archived; complete -c knowledge -l include-archived; complete -c knowledge -l semantic; complete -c knowledge -l context; complete -c knowledge -l max-tokens; complete -c knowledge -l max-items; complete -c knowledge -l from -a "search loops runs"; complete -c knowledge -l since; complete -c knowledge -l topic; complete -c knowledge -l dedupe; complete -c knowledge -l generate; complete -c knowledge -l approve-write; complete -c knowledge -l allow-global; complete -c knowledge -l canonical-example; complete -c knowledge -l provider; complete -c knowledge -l mode; complete -c knowledge -l machine; complete -c knowledge -l workspace; complete -c knowledge -l peer-workspace; complete -c knowledge -l api-url; complete -c knowledge -l api-key; complete -c knowledge -l email; complete -c knowledge -l org; complete -c knowledge -l org-id; complete -c knowledge -l user-id; complete -c knowledge -l owner; complete -c knowledge -l domain; complete -c knowledge -l project; complete -c knowledge -l contract; complete -c knowledge -l source-ref; complete -c knowledge -l file-results; complete -c knowledge -l full; complete -c knowledge -l dry-run; complete -c knowledge -l fake; complete -c knowledge -l no-tailscale; complete -c knowledge -l no-artifact-content; complete -c knowledge -s p -l page; complete -c knowledge -s l -l limit; complete -c knowledge -s s -l search; complete -c knowledge -l sort; complete -c knowledge -l id; complete -c knowledge -l store; complete -c knowledge -l title; complete -c knowledge -l content; complete -c knowledge -l url; complete -c knowledge -s t -l tag; complete -c knowledge -l format; complete -c knowledge -l completions; complete -c knowledge -l purpose; complete -c knowledge -l model; complete -c knowledge -l dimensions; complete -c knowledge -l no-color; complete -c knowledge -l scope -a "local global project"; complete -c knowledge -l tables`);
     } else {
       throw new Error("Invalid --completions value. Use 'bash', 'zsh', or 'fish'.");
     }
@@ -534,7 +543,7 @@ async function run(argv: string[]): Promise<void> {
 
   if (!command || flags.help || command === 'help') { printCommandHelp(positional[1]); return; }
 
-  const serviceScope = command === 'project-panel' ? (flags.scope ?? 'project') : flags.scope;
+  const serviceScope = command === 'project-panel' || command === 'app-wiki' ? (flags.scope ?? 'project') : flags.scope;
   const service = createKnowledgeService({ scope: serviceScope });
   if (command === 'storage') {
     const storageAction = positional[1] ?? 'status';
@@ -934,6 +943,108 @@ async function run(argv: string[]): Promise<void> {
       throw new Error("Invalid db storage action. Use 'status', 'push', 'pull', or 'sync'.");
     }
     throw new Error("Invalid db action. Use 'init', 'stats', or 'storage'.");
+  }
+
+  if (command === 'app-wiki') {
+    const action = positional[1] ?? 'init';
+    if (action === 'paths' || action === 'status') {
+      output({
+        ok: true,
+        standard: 'hasna-app-wiki.v1',
+        default_scope: 'project',
+        global_writes_require: '--allow-global',
+        ...service.paths(),
+      }, flags.json);
+      return;
+    }
+    if (action === 'init' || action === 'open') {
+      const result = await service.initAppWiki({
+        allowGlobal: flags.allowGlobal,
+      });
+      output(result, flags.json);
+      return;
+    }
+    if (action === 'note' || action === 'notes') {
+      const noteAction = positional[2] ?? 'list';
+      if (noteAction === 'add' || noteAction === 'create') {
+        const title = flags.title ?? positional[3];
+        const content = flags.content ?? positional.slice(4).join(' ');
+        if (!title || !content) throw new Error('Usage: knowledge app-wiki note add --title <title> --content <text> [--source-ref <uri>]');
+        const result = await service.addAppWikiNote({
+          title,
+          content,
+          tags: flags.tag ? [flags.tag] : undefined,
+          sourceRefs: flags.sourceRef,
+          allowGlobal: flags.allowGlobal,
+        });
+        output(result, flags.json);
+        return;
+      }
+      if (noteAction === 'list' || noteAction === 'ls') {
+        const notes = service.listAppWikiNotes({ limit: flags.limit });
+        output({
+          ok: true,
+          scope: service.scope,
+          home: service.workspace.home,
+          notes,
+          message: `${notes.length} app wiki note(s)`,
+        }, flags.json);
+        return;
+      }
+      if (noteAction === 'get' || noteAction === 'show') {
+        const id = positional[3] ?? flags.id;
+        if (!id) throw new Error('Usage: knowledge app-wiki note get <id-or-path>');
+        const note = await service.getAppWikiNote(id, { includeContent: true });
+        if (!note) throw new Error(`App wiki note not found: ${id}`);
+        output(note, flags.json);
+        return;
+      }
+      throw new Error("Invalid app-wiki note action. Use 'add', 'list', or 'get'.");
+    }
+    if (action === 'source' || action === 'sources') {
+      const sourceAction = positional[2] ?? 'add';
+      if (sourceAction !== 'add' && sourceAction !== 'ingest') {
+        throw new Error("Invalid app-wiki source action. Use 'add'.");
+      }
+      const sourceRef = positional[3] ?? flags.sourceRef?.[0];
+      if (!sourceRef) throw new Error('Usage: knowledge app-wiki source add <source-ref>');
+      const result = await service.addAppWikiSourceRef({
+        sourceRef,
+        purpose: flags.purpose,
+        allowGlobal: flags.allowGlobal,
+      });
+      output({ ok: true, ...result, message: `Added app wiki source ${result.source_ref}` }, flags.json);
+      return;
+    }
+    if (action === 'search') {
+      const query = positional.slice(2).join(' ');
+      if (!query) throw new Error('Usage: knowledge app-wiki search <query>');
+      const result = await service.searchAppWiki({
+        query,
+        limit: flags.limit,
+        semantic: flags.semantic,
+        modelRef: flags.model,
+        dimensions: flags.dimensions,
+        fake: flags.fake,
+      });
+      output({ ok: true, ...result, message: `${result.results.length} app wiki result(s)` }, flags.json);
+      return;
+    }
+    if (action === 'query' || action === 'context') {
+      const query = positional.slice(2).join(' ');
+      if (!query) throw new Error('Usage: knowledge app-wiki query <query>');
+      const result = await service.queryAppWiki({
+        query,
+        limit: flags.limit,
+        semantic: flags.semantic,
+        modelRef: flags.model,
+        dimensions: flags.dimensions,
+        fake: flags.fake,
+      });
+      output({ ok: true, ...result, message: `${result.excerpts.length} app wiki excerpt(s)` }, flags.json);
+      return;
+    }
+    throw new Error("Invalid app-wiki action. Use 'init', 'paths', 'note', 'source', 'search', or 'query'.");
   }
 
   if (command === 'wiki') {

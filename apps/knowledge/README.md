@@ -235,6 +235,8 @@ HASNA_KNOWLEDGE_WEB_SEARCH=1 knowledge web search "latest AI SDK web search" --p
 - [Company wiki workflow](docs/examples/company-wiki-workflow.md): an end-to-end
   local workflow for open-files manifests, search, prompt runs, cited wiki
   pages, linting, reindexing, MCP, and optional hosted/S3 mode.
+- [App project wiki standard](docs/examples/app-project-wiki-standard.md):
+  SDK/CLI workflow for scoped app notes, source refs, and guarded global writes.
 - [JSON to SQLite migration](docs/migration/json-to-sqlite.md): how legacy
   JSON notes coexist with the `.hasna/knowledge` workspace and the
   versioned SQLite catalog.
@@ -575,6 +577,20 @@ answer note under `wiki/answers/`. `wiki lint` checks generated pages for
 missing citations, stale citations, duplicate titles, orphan pages, unresolved
 source refs, contradiction markers, and new article candidates.
 
+### app-wiki
+```bash
+knowledge app-wiki init [--scope project] [--json]
+knowledge app-wiki source add <source-ref> [--purpose knowledge_index] [--scope project] [--json]
+knowledge app-wiki note add --title <title> --content <text> [--source-ref <uri>] [--tag <tag>] [--scope project] [--json]
+knowledge app-wiki search <query> [--scope project] [--json]
+knowledge app-wiki query <query> [--scope project] [--json]
+```
+Use `app-wiki` for app/project wiki notes that must be created through the
+Knowledge CLI/SDK/MCP path. Project scope writes only under
+`.hasna/knowledge`; global app-wiki writes require `--scope global
+--allow-global`. Do not create loose Markdown under home, `.hasna`, or
+`.husna`.
+
 ### source
 ```bash
 knowledge source resolve <source-ref> [--purpose knowledge_answer|knowledge_index] [--limit <n>] [--scope project] [--json]
@@ -780,6 +796,9 @@ The stable agent-facing MCP tools are:
 - `knowledge_storage`: inspect the local/S3/hosted storage contract.
 - `knowledge_resolve_source`: resolve indexed source chunks through the
   read-only source boundary.
+- `knowledge_app_wiki_init`, `knowledge_app_wiki_note_add`,
+  `knowledge_app_wiki_source_add`, `knowledge_app_wiki_search`: manage scoped
+  app/project wiki stores through the same service contract as CLI and SDK.
 - `knowledge_machines_topology`: inspect optional machine topology and route
   hints for future knowledge sync planning.
 - `knowledge_machines_preflight`: check command, package, workspace, and

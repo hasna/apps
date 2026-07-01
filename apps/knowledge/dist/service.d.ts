@@ -1,3 +1,4 @@
+import { type AppWikiInitResult, type AppWikiNoteGetResult, type AppWikiNoteRecord, type AppWikiNoteWriteResult } from './app-wiki';
 import { type KnowledgeAuthStatus } from './auth';
 import { type KnowledgePromptOptions } from './agent';
 import { type KnowledgeAgentContextPack, type KnowledgeAgentContextPackOptions } from './context-pack';
@@ -316,6 +317,25 @@ export interface KnowledgeRulesProvenanceImportOptions {
     limit?: number;
 }
 export type KnowledgeRulesProvenanceImportResult = RulesProvenanceImportResult;
+export interface KnowledgeAppWikiWriteOptions {
+    allowGlobal?: boolean;
+}
+export interface KnowledgeAppWikiNoteInput extends KnowledgeAppWikiWriteOptions {
+    title: string;
+    content: string;
+    tags?: string[];
+    sourceRefs?: string[];
+    path?: string;
+    metadata?: Record<string, unknown>;
+}
+export interface KnowledgeAppWikiSourceInput extends KnowledgeAppWikiWriteOptions {
+    sourceRef: string;
+    purpose?: string;
+}
+export type KnowledgeAppWikiInitResult = AppWikiInitResult;
+export type KnowledgeAppWikiNoteResult = AppWikiNoteWriteResult;
+export type KnowledgeAppWikiNote = AppWikiNoteRecord;
+export type KnowledgeAppWikiNoteReadResult = AppWikiNoteGetResult;
 export type KnowledgeSyncConflictResolveResult = {
     ok: false;
     approval_required: true;
@@ -373,6 +393,18 @@ export declare class KnowledgeService {
     };
     dbStats(): import("./knowledge-db").KnowledgeDbStats;
     inventory(options?: KnowledgeInventoryOptions): KnowledgeInventoryResult;
+    private assertAppWikiWrite;
+    initAppWiki(options?: KnowledgeAppWikiWriteOptions): Promise<KnowledgeAppWikiInitResult>;
+    addAppWikiNote(options: KnowledgeAppWikiNoteInput): Promise<KnowledgeAppWikiNoteResult>;
+    listAppWikiNotes(options?: {
+        limit?: number;
+    }): KnowledgeAppWikiNote[];
+    getAppWikiNote(id: string, options?: {
+        includeContent?: boolean;
+    }): Promise<KnowledgeAppWikiNoteReadResult | null>;
+    addAppWikiSourceRef(options: KnowledgeAppWikiSourceInput): Promise<import("./source-ingest").SourceIngestResult>;
+    searchAppWiki(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>): Promise<HybridSearchResult>;
+    queryAppWiki(options: Omit<RetrievalOptions, 'dbPath' | 'config'>): Promise<KnowledgeContextPack>;
     initWiki(): Promise<import("./wiki-layout").WikiLayoutInitResult>;
     compileWiki(options?: Omit<WikiCompileOptions, 'dbPath' | 'store'>): Promise<import("./wiki-compiler").WikiCompileResult>;
     fileAnswer(options: {

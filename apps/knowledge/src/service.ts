@@ -5,6 +5,18 @@ import { existsSync, readFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
+  assertAppWikiWriteAllowed,
+  getAppWikiNote,
+  ingestAppWikiSourceRef,
+  initAppWikiScope,
+  listAppWikiNotes,
+  writeAppWikiNote,
+  type AppWikiInitResult,
+  type AppWikiNoteGetResult,
+  type AppWikiNoteRecord,
+  type AppWikiNoteWriteResult,
+} from './app-wiki';
+import {
   clearKnowledgeAuth,
   knowledgeAuthStatus,
   normalizeKnowledgeApiOrigin,
@@ -417,6 +429,29 @@ export interface KnowledgeRulesProvenanceImportOptions {
 }
 
 export type KnowledgeRulesProvenanceImportResult = RulesProvenanceImportResult;
+
+export interface KnowledgeAppWikiWriteOptions {
+  allowGlobal?: boolean;
+}
+
+export interface KnowledgeAppWikiNoteInput extends KnowledgeAppWikiWriteOptions {
+  title: string;
+  content: string;
+  tags?: string[];
+  sourceRefs?: string[];
+  path?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface KnowledgeAppWikiSourceInput extends KnowledgeAppWikiWriteOptions {
+  sourceRef: string;
+  purpose?: string;
+}
+
+export type KnowledgeAppWikiInitResult = AppWikiInitResult;
+export type KnowledgeAppWikiNoteResult = AppWikiNoteWriteResult;
+export type KnowledgeAppWikiNote = AppWikiNoteRecord;
+export type KnowledgeAppWikiNoteReadResult = AppWikiNoteGetResult;
 
 export type KnowledgeSyncConflictResolveResult = {
   ok: false;
@@ -2020,6 +2055,87 @@ export class KnowledgeService {
     } finally {
       db.close();
     }
+  }
+
+  private assertAppWikiWrite(allowGlobal?: boolean): void {
+    assertAppWikiWriteAllowed({
+      scope: this.scope,
+      workspace: this.workspace,
+      safetyPolicy: this.safetyPolicy(),
+      allowGlobal,
+    });
+  }
+
+  async initAppWiki(options: KnowledgeAppWikiWriteOptions = {}): Promise<KnowledgeAppWikiInitResult> {
+    this.assertAppWikiWrite(options.allowGlobal);
+    const workspace = this.ensureWorkspace();
+    return initAppWikiScope({
+      scope: this.scope,
+      workspace,
+      store: this.artifactStore(),
+      safetyPolicy: this.safetyPolicy(),
+      allowGlobal: options.allowGlobal,
+    });
+  }
+
+  async addAppWikiNote(options: KnowledgeAppWikiNoteInput): Promise<KnowledgeAppWikiNoteResult> {
+    this.assertAppWikiWrite(options.allowGlobal);
+    const workspace = this.ensureWorkspace();
+    return writeAppWikiNote({
+      scope: this.scope,
+      workspace,
+      store: this.artifactStore(),
+      safetyPolicy: this.safetyPolicy(),
+      allowGlobal: options.allowGlobal,
+      title: options.title,
+      content: options.content,
+      tags: options.tags,
+      sourceRefs: options.sourceRefs,
+      path: options.path,
+      metadata: options.metadata,
+    });
+  }
+
+  listAppWikiNotes(options: { limit?: number } = {}): KnowledgeAppWikiNote[] {
+    const workspace = this.workspace;
+    if (!existsSync(workspace.knowledgeDbPath)) return [];
+    return listAppWikiNotes({
+      dbPath: workspace.knowledgeDbPath,
+      limit: options.limit,
+    });
+  }
+
+  async getAppWikiNote(id: string, options: { includeContent?: boolean } = {}): Promise<KnowledgeAppWikiNoteReadResult | null> {
+    const workspace = this.workspace;
+    if (!existsSync(workspace.knowledgeDbPath)) return null;
+    return getAppWikiNote({
+      dbPath: workspace.knowledgeDbPath,
+      store: this.artifactStore(),
+      id,
+      includeContent: options.includeContent,
+    });
+  }
+
+  async addAppWikiSourceRef(options: KnowledgeAppWikiSourceInput) {
+    this.assertAppWikiWrite(options.allowGlobal);
+    const workspace = this.ensureWorkspace();
+    return ingestAppWikiSourceRef({
+      scope: this.scope,
+      workspace,
+      sourceRef: options.sourceRef,
+      purpose: options.purpose,
+      config: this.config(),
+      safetyPolicy: this.safetyPolicy(),
+      allowGlobal: options.allowGlobal,
+    });
+  }
+
+  async searchAppWiki(options: Omit<HybridSearchOptions, 'dbPath' | 'config'>) {
+    return this.search(options);
+  }
+
+  async queryAppWiki(options: Omit<RetrievalOptions, 'dbPath' | 'config'>) {
+    return this.retrieveContext(options);
   }
 
   async initWiki() {
