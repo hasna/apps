@@ -84,6 +84,7 @@ export const changelogEntrySchema = changelogEntryInputSchema.extend({
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   source: z.enum(["api", "cli", "sdk", "mcp", "server"]),
+  fingerprint: z.string().min(1).optional(),
 });
 
 const sensitiveKeyPattern = /(?:api[_-]?key|authorization|cookie|credential|password|secret|token|refresh[_-]?token|access[_-]?token|private[_-]?key)/i;
@@ -126,6 +127,10 @@ export function normalizeRefs(values: string[] = []): string[] {
 
 function dateFromNow(now = new Date()): string {
   return now.toISOString().slice(0, 10);
+}
+
+export function parseChangelogDate(date: unknown, now = new Date()): string {
+  return date === undefined ? dateFromNow(now) : changelogDateSchema.parse(date);
 }
 
 function redactOptionalText(value: string | undefined): string | undefined {

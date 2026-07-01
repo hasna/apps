@@ -5,6 +5,7 @@ import { dirname } from "node:path";
 import { ChangelogClient } from "../client.js";
 import { generateChangelogMarkdown } from "../markdown.js";
 import { publishChangelog } from "../publisher.js";
+import { readProjectInfo } from "../project.js";
 import { LocalChangelogStore, resolveChangelogFilePath } from "../storage.js";
 import type {
   ChangelogEntryInput,
@@ -65,6 +66,20 @@ function commonFilter(options: { app?: string; version?: string; kind?: string; 
   };
 }
 
+async function inferredAppId(app: string | undefined): Promise<string | undefined> {
+  return app ?? (await readProjectInfo()).appId;
+}
+
+async function requiredAppId(app: string | undefined): Promise<string> {
+  const resolved = await inferredAppId(app);
+  if (!resolved) throw new Error("--app is required when package.json name cannot be inferred");
+  return resolved;
+}
+
+async function inferredRepositoryUrl(): Promise<string | undefined> {
+  return (await readProjectInfo()).repositoryUrl;
+}
+
 function updateFromOptions(options: Record<string, string | string[] | undefined>): ChangelogEntryUpdate {
   return {
     appId: options.app as string | undefined,
@@ -103,7 +118,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .command("add")
     .description("Add a changelog entry locally or through an API")
     .argument("<title>", "Entry title")
-    .requiredOption("--app <appId>", "Application id or slug")
+    .option("--app <appId>", "Application id or slug; inferred from package.json when omitted")
     .option("--version <version>", "Application version", "Unreleased")
     .option("--kind <kind>", "Entry kind: added, changed, deprecated, removed, fixed, security, or other", "changed")
     .option("--message <message>", "Short message")
@@ -115,10 +130,11 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--commit <commit...>", "Commit sha/ref; can be repeated")
     .option("--task <task...>", "Task id/ref; can be repeated")
     .option("--metadata <json>", "JSON object metadata")
+    .option("--allow-duplicate", "Allow an entry with the same app/version/kind/title/tasks/commits")
     .option("--api-url <url>", "Remote Open Changelog API URL")
-    .action(async (title: string, options: Record<string, string | string[] | undefined>) => {
+    .action(async (title: string, options: Record<string, string | string[] | boolean | undefined>) => {
       const input: ChangelogEntryInput = {
-        appId: String(options.app),
+        appId: await requiredAppId(options.app as string | undefined),
         version: options.version as string | undefined,
         kind: options.kind as ChangelogKind | undefined,
         title,
@@ -133,7 +149,11 @@ export async function main(argv: string[] = process.argv): Promise<void> {
         metadata: parseMetadata(options.metadata as string | undefined),
       };
       const client = maybeClient({ apiUrl: options.apiUrl as string | undefined });
-      printJson(client ? await client.add(input) : await localStore().createEntry(input, { source: "cli" }));
+      const allowDuplicate = options.allowDuplicate === true;
+      printJson(client ? await client.add(input, { allowDuplicate }) : await localStore().createEntry(input, {
+        source: "cli",
+        allowDuplicate,
+      }));
     });
 
   program
@@ -209,14 +229,35 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--api-url <url>", "Remote Open Changelog API URL")
     .action(async (options: { app?: string; version?: string; kind?: string; tag?: string; limit?: string; title?: string; apiUrl?: string }) => {
       const client = maybeClient(options);
-      const filter = commonFilter(options);
+      const filter = commonFilter({ ...options, app: await inferredAppId(options.app) });
+      const repositoryUrl = await inferredRepositoryUrl();
       const markdown = client
-        ? await client.generate({ ...filter, title: options.title })
+        ? await client.generate({ ...filter, title: options.title, repositoryUrl })
         : generateChangelogMarkdown(await localStore().listEntries({ ...filter, limit: filter.limit ?? 500 }), {
           ...filter,
           title: options.title,
+          repositoryUrl,
         });
       process.stdout.write(markdown.endsWith("\n") ? markdown : `${markdown}\n`);
+    });
+
+  program
+    .command("release")
+    .description("Promote Unreleased entries for an app to a version")
+    .requiredOption("--version <version>", "Release version")
+    .option("--app <appId>", "Application id or slug; inferred from package.json when omitted")
+    .option("--from-version <version>", "Source version bucket", "Unreleased")
+    .option("--date <date>", "Release date as YYYY-MM-DD")
+    .option("--api-url <url>", "Remote Open Changelog API URL")
+    .action(async (options: { app?: string; version: string; fromVersion?: string; date?: string; apiUrl?: string }) => {
+      const input = {
+        appId: await requiredAppId(options.app),
+        version: options.version,
+        fromVersion: options.fromVersion,
+        date: options.date,
+      };
+      const client = maybeClient(options);
+      printJson(client ? await client.release(input) : await localStore().releaseEntries(input));
     });
 
   program
@@ -231,21 +272,37 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--target <path>", "Target changelog file", "CHANGELOG.md")
     .option("--dry-run", "Preview without writing", true)
     .option("--write", "Write the target file")
+    .option("--diff", "Print a line diff during dry-run or include it in JSON")
+    .option("--no-backup", "Do not write a backup before overwriting an existing file")
     .option("--json", "Print JSON result instead of Markdown preview")
     .option("--api-url <url>", "Remote Open Changelog API URL")
-    .action(async (options: { app?: string; version?: string; kind?: string; tag?: string; limit?: string; title?: string; target: string; dryRun?: boolean; write?: boolean; json?: boolean; apiUrl?: string }) => {
+    .action(async (options: { app?: string; version?: string; kind?: string; tag?: string; limit?: string; title?: string; target: string; dryRun?: boolean; write?: boolean; diff?: boolean; backup?: boolean; json?: boolean; apiUrl?: string }) => {
       const client = maybeClient(options);
-      const filter = commonFilter(options);
+      const filter = commonFilter({ ...options, app: await inferredAppId(options.app) });
+      const repositoryUrl = await inferredRepositoryUrl();
       const result = client
-        ? await client.publish({ ...filter, title: options.title, targetPath: options.target, write: options.write === true })
+        ? await client.publish({
+          ...filter,
+          title: options.title,
+          repositoryUrl,
+          targetPath: options.target,
+          write: options.write === true,
+          diff: options.diff === true,
+          backup: options.backup !== false,
+        })
         : await publishChangelog({
           ...filter,
           title: options.title,
+          repositoryUrl,
           targetPath: options.target,
           write: options.write === true,
+          diff: options.diff === true,
+          backup: options.backup !== false,
         });
       if (options.json || result.mode === "write") {
         printJson(result);
+      } else if (options.diff) {
+        process.stdout.write(result.diff || "No changes.\n");
       } else {
         process.stdout.write(result.markdown.endsWith("\n") ? result.markdown : `${result.markdown}\n`);
       }

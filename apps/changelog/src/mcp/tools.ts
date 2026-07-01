@@ -110,10 +110,14 @@ export function buildChangelogMcpTools(store: ChangelogStore = new LocalChangelo
         commits: z.array(z.string()).optional(),
         tasks: z.array(z.string()).optional(),
         metadata: z.record(z.unknown()).optional(),
+        allow_duplicate: z.boolean().optional(),
       },
       run: async (input) => {
         try {
-          return jsonContent(await store.createEntry(readInput(input), { source: "mcp" }));
+          return jsonContent(await store.createEntry(readInput(input), {
+            source: "mcp",
+            allowDuplicate: input.allow_duplicate === true,
+          }));
         } catch (error) {
           return errorContent(error);
         }
@@ -177,6 +181,28 @@ export function buildChangelogMcpTools(store: ChangelogStore = new LocalChangelo
       },
     },
     {
+      name: "release_changelog",
+      description: "Promote Unreleased entries for an application to a version.",
+      paramsSchema: {
+        app_id: z.string(),
+        version: z.string(),
+        from_version: z.string().optional(),
+        date: z.string().optional(),
+      },
+      run: async (input) => {
+        try {
+          return jsonContent(await store.releaseEntries({
+            appId: String(input.app_id ?? ""),
+            version: String(input.version ?? ""),
+            fromVersion: typeof input.from_version === "string" ? input.from_version : undefined,
+            date: typeof input.date === "string" ? input.date : undefined,
+          }));
+        } catch (error) {
+          return errorContent(error);
+        }
+      },
+    },
+    {
       name: "generate_changelog",
       description: "Generate Keep a Changelog style Markdown.",
       paramsSchema: {
@@ -186,6 +212,7 @@ export function buildChangelogMcpTools(store: ChangelogStore = new LocalChangelo
         tag: z.string().optional(),
         limit: z.number().int().min(1).max(500).optional(),
         title: z.string().optional(),
+        repository_url: z.string().optional(),
       },
       run: async (input) => {
         const appId = typeof input.app_id === "string" ? input.app_id : undefined;
@@ -194,7 +221,16 @@ export function buildChangelogMcpTools(store: ChangelogStore = new LocalChangelo
         const tag = typeof input.tag === "string" ? input.tag : undefined;
         const limit = typeof input.limit === "number" ? input.limit : undefined;
         const title = typeof input.title === "string" ? input.title : undefined;
-        return textContent(generateChangelogMarkdown(await store.listEntries({ appId, version, kind, tag, limit: limit ?? 500 }), { appId, version, kind, tag, limit, title }));
+        const repositoryUrl = typeof input.repository_url === "string" ? input.repository_url : undefined;
+        return textContent(generateChangelogMarkdown(await store.listEntries({ appId, version, kind, tag, limit: limit ?? 500 }), {
+          appId,
+          version,
+          kind,
+          tag,
+          limit,
+          title,
+          repositoryUrl,
+        }));
       },
     },
     {
@@ -207,7 +243,10 @@ export function buildChangelogMcpTools(store: ChangelogStore = new LocalChangelo
         tag: z.string().optional(),
         limit: z.number().int().min(1).max(500).optional(),
         title: z.string().optional(),
+        repository_url: z.string().optional(),
         target_path: z.string().optional(),
+        diff: z.boolean().optional(),
+        backup: z.boolean().optional(),
         write: z.boolean().optional().describe("Must be true to write; omitted or false is a dry run"),
       },
       run: async (input) => jsonContent(await publishChangelog({
@@ -218,7 +257,10 @@ export function buildChangelogMcpTools(store: ChangelogStore = new LocalChangelo
         tag: typeof input.tag === "string" ? input.tag : undefined,
         limit: typeof input.limit === "number" ? input.limit : undefined,
         title: typeof input.title === "string" ? input.title : undefined,
+        repositoryUrl: typeof input.repository_url === "string" ? input.repository_url : undefined,
         targetPath: typeof input.target_path === "string" ? input.target_path : undefined,
+        diff: input.diff === true,
+        backup: input.backup !== false,
         write: input.write === true,
       })),
     },

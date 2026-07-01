@@ -1,6 +1,6 @@
 {
   "name": "@hasna/changelog",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Reusable changelog collection, generation, publishing, CLI, API, SDK, and MCP server for Hasna-coded apps",
   "type": "module",
   "main": "dist/index.js",
@@ -31,6 +31,10 @@
       "types": "./dist/publisher.d.ts",
       "import": "./dist/publisher.js"
     },
+    "./project": {
+      "types": "./dist/project.d.ts",
+      "import": "./dist/project.js"
+    },
     "./storage": {
       "types": "./dist/storage.d.ts",
       "import": "./dist/storage.js"
@@ -59,7 +63,7 @@
   ],
   "scripts": {
     "clean": "rm -rf dist",
-    "build": "bun run clean && bun build src/index.ts src/api.ts src/client.ts src/markdown.ts src/publisher.ts src/storage.ts src/validation.ts --outdir dist --target bun && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "bun run clean && bun build src/index.ts src/api.ts src/client.ts src/markdown.ts src/publisher.ts src/project.ts src/storage.ts src/validation.ts --outdir dist --target bun && bun build src/cli/index.ts --outdir dist/cli --target bun --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.ts",
@@ -105,4 +109,3 @@
     "typescript": "^5.7.3"
   }
 }
-

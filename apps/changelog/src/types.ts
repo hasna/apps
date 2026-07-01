@@ -47,6 +47,7 @@ export interface ChangelogEntry extends ParsedChangelogEntryInput {
   createdAt: string;
   updatedAt: string;
   source: ChangelogSource;
+  fingerprint?: string;
 }
 
 export interface ChangelogEntryUpdate {
@@ -86,6 +87,7 @@ export interface ChangelogStats {
 export interface ChangelogCreateOptions {
   source?: ChangelogSource;
   now?: Date;
+  allowDuplicate?: boolean;
 }
 
 export interface ChangelogStore {
@@ -93,8 +95,26 @@ export interface ChangelogStore {
   listEntries(filter?: ChangelogEntryListFilter): Promise<ChangelogEntry[]>;
   getEntry(id: string): Promise<ChangelogEntry | null>;
   updateEntry(id: string, update: ChangelogEntryUpdate): Promise<ChangelogEntry | null>;
+  releaseEntries(options: ChangelogReleaseOptions): Promise<ChangelogReleaseResult>;
   stats(): Promise<ChangelogStats>;
   exportJsonl(filter?: ChangelogEntryListFilter): Promise<string>;
+}
+
+export interface ChangelogReleaseOptions {
+  appId: string;
+  version: string;
+  fromVersion?: string;
+  date?: string;
+  now?: Date;
+}
+
+export interface ChangelogReleaseResult {
+  appId: string;
+  fromVersion: string;
+  version: string;
+  date: string;
+  updated: number;
+  entries: ChangelogEntry[];
 }
 
 export interface GenerateChangelogOptions {
@@ -106,6 +126,7 @@ export interface GenerateChangelogOptions {
   limit?: number;
   title?: string;
   includeIntro?: boolean;
+  repositoryUrl?: string;
 }
 
 export interface PublishChangelogOptions extends GenerateChangelogOptions {
@@ -114,12 +135,16 @@ export interface PublishChangelogOptions extends GenerateChangelogOptions {
   targetPath?: string;
   cwd?: string;
   write?: boolean;
+  diff?: boolean;
+  backup?: boolean;
 }
 
 export interface PublishChangelogResult {
   mode: "dry-run" | "write";
   targetPath: string;
   markdown: string;
+  diff?: string;
+  backupPath?: string;
   changed: boolean;
   bytes: number;
 }

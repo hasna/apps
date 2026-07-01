@@ -3,6 +3,8 @@ import type {
   ChangelogEntryInput,
   ChangelogEntryListFilter,
   ChangelogEntryUpdate,
+  ChangelogReleaseOptions,
+  ChangelogReleaseResult,
   ChangelogStats,
   PublishChangelogResult,
 } from "./types.js";
@@ -17,6 +19,7 @@ export interface ChangelogClientOptions {
 
 export interface ChangelogGenerateRequest extends ChangelogEntryListFilter {
   title?: string;
+  repositoryUrl?: string;
 }
 
 export interface ChangelogPublishRequest {
@@ -27,8 +30,15 @@ export interface ChangelogPublishRequest {
   tag?: string;
   limit?: number;
   title?: string;
+  repositoryUrl?: string;
   targetPath?: string;
   write?: boolean;
+  diff?: boolean;
+  backup?: boolean;
+}
+
+export interface ChangelogAddRequestOptions {
+  allowDuplicate?: boolean;
 }
 
 async function readJson<T>(response: Response): Promise<T> {
@@ -73,11 +83,11 @@ export class ChangelogClient {
     return readJson(await this.request("health"));
   }
 
-  async add(input: ChangelogEntryInput): Promise<ChangelogEntry> {
+  async add(input: ChangelogEntryInput, options: ChangelogAddRequestOptions = {}): Promise<ChangelogEntry> {
     return readJson<ChangelogEntry>(
       await this.request("v1/entries", {
         method: "POST",
-        body: JSON.stringify(input),
+        body: JSON.stringify({ ...input, allowDuplicate: options.allowDuplicate }),
       }),
     );
   }
@@ -102,7 +112,7 @@ export class ChangelogClient {
   }
 
   async generate(filter: ChangelogGenerateRequest = {}): Promise<string> {
-    if (filter.title) {
+    if (filter.title || filter.repositoryUrl) {
       const response = await this.request("v1/generate", {
         method: "POST",
         body: JSON.stringify({
@@ -113,6 +123,7 @@ export class ChangelogClient {
           tag: filter.tag,
           limit: filter.limit,
           title: filter.title,
+          repositoryUrl: filter.repositoryUrl,
         }),
       });
       const value = await readJson<{ markdown: string }>(response);
@@ -126,6 +137,15 @@ export class ChangelogClient {
   async publish(options: ChangelogPublishRequest = {}): Promise<PublishChangelogResult> {
     return readJson<PublishChangelogResult>(
       await this.request("v1/publish", {
+        method: "POST",
+        body: JSON.stringify(options),
+      }),
+    );
+  }
+
+  async release(options: ChangelogReleaseOptions): Promise<ChangelogReleaseResult> {
+    return readJson<ChangelogReleaseResult>(
+      await this.request("v1/release", {
         method: "POST",
         body: JSON.stringify(options),
       }),

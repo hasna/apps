@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { generateChangelogMarkdown } from "./markdown.js";
@@ -26,6 +26,51 @@ describe("markdown generation and publishing", () => {
     expect(markdown).toContain("Refs: task 731aace9");
   });
 
+  test("sorts semver versions and links repository refs", async () => {
+    const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "open-changelog-semver-")) });
+    await store.createEntry({
+      appId: "app",
+      version: "1.9.0",
+      kind: "fixed",
+      title: "Older fix",
+    }, { now: new Date("2026-07-01T00:00:00.000Z") });
+    await store.createEntry({
+      appId: "app",
+      version: "1.10.0",
+      kind: "added",
+      title: "Newer feature",
+      commits: ["abcdef1"],
+      tasks: ["42"],
+    }, { now: new Date("2026-07-02T00:00:00.000Z") });
+
+    const markdown = generateChangelogMarkdown(await store.listEntries({ appId: "app" }), {
+      appId: "app",
+      repositoryUrl: "https://github.com/hasna/changelog",
+    });
+    expect(markdown.indexOf("## [1.10.0]")).toBeLessThan(markdown.indexOf("## [1.9.0]"));
+    expect(markdown).toContain("[commit abcdef1](https://github.com/hasna/changelog/commit/abcdef1)");
+    expect(markdown).toContain("[task 42](https://github.com/hasna/changelog/issues/42)");
+  });
+
+  test("sorts semver prerelease numeric identifiers correctly", async () => {
+    const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "open-changelog-prerelease-")) });
+    await store.createEntry({
+      appId: "app",
+      version: "1.0.0-beta.2",
+      kind: "changed",
+      title: "Beta 2",
+    });
+    await store.createEntry({
+      appId: "app",
+      version: "1.0.0-beta.10",
+      kind: "changed",
+      title: "Beta 10",
+    });
+
+    const markdown = generateChangelogMarkdown(await store.listEntries({ appId: "app" }), { appId: "app" });
+    expect(markdown.indexOf("## [1.0.0-beta.10]")).toBeLessThan(markdown.indexOf("## [1.0.0-beta.2]"));
+  });
+
   test("dry-runs by default and writes only with explicit write mode", async () => {
     const cwd = await mkdtemp(join(tmpdir(), "open-changelog-publish-"));
     const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "open-changelog-data-")) });
@@ -43,5 +88,25 @@ describe("markdown generation and publishing", () => {
     const write = await publishChangelog({ store, appId: "app", cwd, write: true });
     expect(write.mode).toBe("write");
     expect(await readFile(join(cwd, "CHANGELOG.md"), "utf8")).toContain("Fix publish safety");
+  });
+
+  test("can preview diffs and backs up existing files before write", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "open-changelog-diff-"));
+    const store = new LocalChangelogStore({ dataDir: await mkdtemp(join(tmpdir(), "open-changelog-diff-data-")) });
+    await store.createEntry({
+      appId: "app",
+      version: "1.0.0",
+      kind: "changed",
+      title: "Generated entry",
+    }, { now: new Date("2026-07-01T00:00:00.000Z") });
+    await writeFile(join(cwd, "CHANGELOG.md"), "# Old\n", "utf8");
+
+    const dryRun = await publishChangelog({ store, appId: "app", cwd, diff: true });
+    expect(dryRun.diff).toContain("-# Old");
+    expect(dryRun.diff).toContain("+# app Changelog");
+
+    const write = await publishChangelog({ store, appId: "app", cwd, write: true });
+    expect(write.backupPath).toBeString();
+    expect(await readFile(write.backupPath!, "utf8")).toBe("# Old\n");
   });
 });

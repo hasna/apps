@@ -4,10 +4,13 @@ export { ChangelogClient, createChangelogClient } from "./client.js";
 export type { ChangelogClientOptions, ChangelogGenerateRequest, ChangelogPublishRequest, FetchLike } from "./client.js";
 export { generateChangelogMarkdown } from "./markdown.js";
 export { publishChangelog } from "./publisher.js";
+export { normalizeRepositoryUrl, readProjectInfo } from "./project.js";
+export type { ChangelogProjectInfo } from "./project.js";
 export {
   DEFAULT_CHANGELOG_FILE,
   DEFAULT_DATA_DIR,
   LocalChangelogStore,
+  fingerprintChangelogEntry,
   resolveChangelogDataDir,
   resolveChangelogFilePath,
 } from "./storage.js";
@@ -23,6 +26,7 @@ export {
   normalizeTags,
   parseChangelogEntryInput,
   parseChangelogEntryUpdate,
+  parseChangelogDate,
   parseChangelogKind,
   parseStoredChangelogEntry,
   redactSecretsInText,
@@ -37,6 +41,8 @@ export type {
   ChangelogEntryUpdate,
   ChangelogKind,
   ChangelogLink,
+  ChangelogReleaseOptions,
+  ChangelogReleaseResult,
   ChangelogSource,
   ChangelogStats,
   ChangelogStore,

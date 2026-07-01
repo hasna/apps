@@ -25,25 +25,25 @@ Local data defaults to `~/.hasna/changelog`. Override it with `CHANGELOG_DATA_DI
 ```bash
 changelog init
 
-changelog add "Initial changelog scaffold" \
-  --app open-changelog \
-  --version 0.1.0 \
-  --kind added \
-  --task 731aace9
+changelog add "Initial changelog scaffold" --kind added --task 731aace9
 
 changelog list --app open-changelog
 changelog show <entry-id>
 changelog update <entry-id> --kind fixed --message "Tighten publish safety"
+changelog release --version 0.1.0
 changelog generate --app open-changelog --version 0.1.0 --kind added --title "Open Changelog Notes"
 changelog export --app open-changelog --format jsonl
 
-changelog publish --app open-changelog --dry-run
+changelog publish --app open-changelog --dry-run --diff
 changelog publish --app open-changelog --write --target CHANGELOG.md --title "Open Changelog Notes"
 ```
 
 `publish` prints a Markdown preview by default. It writes only with `--write`.
+When writing over an existing file, the previous file is backed up under `~/.hasna/changelog/backups` unless `--no-backup` is supplied.
 
 Remote CLI commands use `CHANGELOG_API_TOKEN` from the environment when `--api-url` is supplied.
+
+When `--app` is omitted for `add`, `generate`, `release`, or `publish`, the CLI infers an app id from the local `package.json` name.
 
 ## SDK
 
@@ -54,16 +54,17 @@ const store = new LocalChangelogStore();
 
 await store.createEntry({
   appId: "my-app",
-  version: "1.2.0",
   kind: "fixed",
   title: "Fix duplicate release notes",
   tasks: ["APP-123"],
 });
 
+await store.releaseEntries({ appId: "my-app", version: "1.2.0" });
+
 const entries = await store.listEntries({ appId: "my-app", version: "1.2.0" });
 const markdown = generateChangelogMarkdown(entries, { appId: "my-app" });
 
-await publishChangelog({ store, appId: "my-app" }); // dry run
+await publishChangelog({ store, appId: "my-app", diff: true }); // dry run
 await publishChangelog({ store, appId: "my-app", write: true });
 ```
 
@@ -104,6 +105,7 @@ Endpoints:
 - `GET /v1/entries?appId=my-app&version=1.2.0&kind=added`
 - `GET /v1/entries/:id`
 - `PATCH /v1/entries/:id`
+- `POST /v1/release`
 - `GET /v1/generate?appId=my-app`
 - `POST /v1/generate`
 - `POST /v1/publish`
@@ -149,6 +151,7 @@ Tools:
 - `list_changelog_entries`
 - `get_changelog_entry`
 - `update_changelog_entry`
+- `release_changelog`
 - `generate_changelog`
 - `publish_changelog`
 - `changelog_stats`
@@ -171,6 +174,7 @@ Each stored JSONL entry includes:
 - `id`, `createdAt`, and `updatedAt`
 
 Text fields and metadata are redacted for obvious secret-shaped values before storage.
+Duplicate entries are rejected by default using a stable fingerprint derived from app, version, kind, title, tasks, and commits. Pass the explicit duplicate override when a repeated entry is intentional.
 
 ## Environment
 

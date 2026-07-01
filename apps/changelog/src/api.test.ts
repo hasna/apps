@@ -42,16 +42,67 @@ describe("Changelog HTTP API and SDK", () => {
       version: "0.1.0",
       kind: "added",
       title: "Added-only entry",
+      commits: ["abcdef1"],
     });
     const generatedAdded = await client.generate({ appId: "sdk-app", kind: "added", title: "SDK App Notes" });
     expect(generatedAdded).toContain("# SDK App Notes");
     expect(generatedAdded).toContain("Added-only entry");
     expect(generatedAdded).not.toContain("SDK issue");
+    const generatedWithRefs = await client.generate({
+      appId: "sdk-app",
+      kind: "added",
+      repositoryUrl: "https://github.com/hasna/changelog",
+    });
+    expect(generatedWithRefs).toContain("[commit abcdef1](https://github.com/hasna/changelog/commit/abcdef1)");
     const publish = await client.publish({ appId: "sdk-app", kind: "added", title: "SDK Publish Notes" });
     expect(publish.mode).toBe("dry-run");
     expect(publish.markdown).toContain("# SDK Publish Notes");
     expect(await client.exportJsonl({ appId: "sdk-app" })).toContain("SDK issue");
     expect(await client.stats()).toMatchObject({ total: 2 });
+  });
+
+  test("prevents duplicate SDK submissions unless explicitly allowed and releases entries", async () => {
+    const client = await createTestClient();
+    await client.add({
+      appId: "release-app",
+      kind: "added",
+      title: "Release helper",
+      tasks: ["17"],
+    });
+    await expect(client.add({
+      appId: "release-app",
+      kind: "added",
+      title: "Release helper",
+      tasks: ["17"],
+    })).rejects.toThrow("Duplicate changelog entry");
+
+    await client.add({
+      appId: "release-app",
+      kind: "added",
+      title: "Release helper",
+      tasks: ["17"],
+    }, { allowDuplicate: true });
+    expect(await client.list({ appId: "release-app" })).toHaveLength(2);
+
+    await client.add({
+      appId: "release-ok",
+      kind: "added",
+      title: "Release helper",
+      tasks: ["17"],
+    });
+    await client.add({
+      appId: "release-ok",
+      kind: "fixed",
+      title: "Release fix",
+      tasks: ["18"],
+    });
+    const release = await client.release({
+      appId: "release-ok",
+      version: "1.0.0",
+      date: "2026-07-01",
+    });
+    expect(release.updated).toBe(2);
+    expect(await client.generate({ appId: "release-ok", version: "1.0.0" })).toContain("## [1.0.0] - 2026-07-01");
   });
 
   test("rejects requests with missing token when configured", async () => {

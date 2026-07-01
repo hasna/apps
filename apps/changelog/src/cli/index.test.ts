@@ -37,5 +37,11 @@ describe("changelog CLI", () => {
     expect(markdown).toContain("## [0.1.0]");
     expect(markdown).toContain("Initial changelog scaffold");
     expect(markdown).not.toContain("Fixed changelog bug");
+
+    const inferred = runCli(["add", "Inferred app entry", "--kind", "added"], env);
+    expect(inferred).toContain("\"appId\": \"changelog\"");
+    expect(runCli(["release", "--version", "1.0.0", "--date", "2026-07-01"], env)).toContain("\"updated\": 1");
+    expect(runCli(["generate", "--version", "1.0.0"], env)).toContain("Inferred app entry");
+    expect(runCli(["publish", "--version", "1.0.0", "--diff"], env)).toContain("+++ generated");
   });
 });

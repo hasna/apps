@@ -22,6 +22,7 @@ Tools:
   list_changelog_entries
   get_changelog_entry
   update_changelog_entry
+  release_changelog
   generate_changelog
   publish_changelog
   changelog_stats

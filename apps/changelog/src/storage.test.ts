@@ -39,5 +39,70 @@ describe("LocalChangelogStore", () => {
     expect(stats.byVersion["0.1.0"]).toBe(1);
     expect(stats.byKind.changed).toBe(1);
   });
-});
 
+  test("rejects duplicate entries by default and can promote unreleased entries", async () => {
+    const store = await tempStore();
+    await store.createEntry({
+      appId: "app-a",
+      kind: "added",
+      title: "Release command",
+      tasks: ["123"],
+    }, { now: new Date("2026-07-01T00:00:00.000Z") });
+
+    await expect(store.createEntry({
+      appId: "app-a",
+      kind: "added",
+      title: "Release command",
+      tasks: ["123"],
+    })).rejects.toThrow("Duplicate changelog entry");
+
+    await store.createEntry({
+      appId: "app-a",
+      kind: "added",
+      title: "Release command",
+      tasks: ["123"],
+    }, { allowDuplicate: true });
+    expect(await store.listEntries({ appId: "app-a" })).toHaveLength(2);
+
+    await store.createEntry({
+      appId: "app-b",
+      kind: "added",
+      title: "Release command",
+      tasks: ["123"],
+    });
+    await store.createEntry({
+      appId: "app-b",
+      kind: "fixed",
+      title: "Release fix",
+      tasks: ["124"],
+    });
+    const release = await store.releaseEntries({
+      appId: "app-b",
+      version: "1.0.0",
+      date: "2026-07-02",
+    });
+    expect(release.updated).toBe(2);
+    expect(await store.listEntries({ appId: "app-b", version: "1.0.0" })).toHaveLength(2);
+  });
+
+  test("does not release entries into duplicate target fingerprints", async () => {
+    const store = await tempStore();
+    await store.createEntry({
+      appId: "app-a",
+      version: "1.0.0",
+      kind: "fixed",
+      title: "Same fix",
+    });
+    await store.createEntry({
+      appId: "app-a",
+      kind: "fixed",
+      title: "Same fix",
+    });
+
+    await expect(store.releaseEntries({
+      appId: "app-a",
+      version: "1.0.0",
+    })).rejects.toThrow("Duplicate released changelog entry");
+    expect(await store.listEntries({ appId: "app-a", version: "1.0.0" })).toHaveLength(1);
+  });
+});

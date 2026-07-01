@@ -19,6 +19,7 @@ describe("changelog MCP tools", () => {
       "list_changelog_entries",
       "get_changelog_entry",
       "update_changelog_entry",
+      "release_changelog",
       "generate_changelog",
       "publish_changelog",
       "changelog_stats",
@@ -48,6 +49,18 @@ describe("changelog MCP tools", () => {
     const update = tools.find((tool) => tool.name === "update_changelog_entry");
     expect(JSON.parse(textFromResult(await update!.run({ id: created.id, kind: "fixed" })))).toMatchObject({ kind: "fixed" });
 
+    await add!.run({
+      app_id: "mcp-app",
+      title: "Unreleased agent changelog",
+      kind: "added",
+    });
+    const release = tools.find((tool) => tool.name === "release_changelog");
+    expect(JSON.parse(textFromResult(await release!.run({
+      app_id: "mcp-app",
+      version: "0.2.0",
+      date: "2026-07-01",
+    })))).toMatchObject({ updated: 1 });
+
     const generate = tools.find((tool) => tool.name === "generate_changelog");
     expect(textFromResult(await generate!.run({ app_id: "mcp-app" }))).toContain("### Fixed");
 
@@ -57,7 +70,7 @@ describe("changelog MCP tools", () => {
     expect(publishResult.markdown).toContain("# MCP Notes");
 
     const stats = tools.find((tool) => tool.name === "changelog_stats");
-    expect(JSON.parse(textFromResult(await stats!.run({})))).toMatchObject({ total: 1 });
+    expect(JSON.parse(textFromResult(await stats!.run({})))).toMatchObject({ total: 2 });
 
     const exportJsonl = tools.find((tool) => tool.name === "export_changelog_jsonl");
     expect(textFromResult(await exportJsonl!.run({ app_id: "mcp-app" }))).toContain("Agent changelog");

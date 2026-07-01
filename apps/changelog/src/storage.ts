@@ -2,18 +2,22 @@ import { existsSync, mkdirSync } from "node:fs";
 import { appendFile, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type {
   ChangelogCreateOptions,
   ChangelogEntry,
   ChangelogEntryInput,
   ChangelogEntryListFilter,
+  ChangelogReleaseOptions,
+  ChangelogReleaseResult,
   ChangelogEntryUpdate,
   ChangelogStats,
   ChangelogStore,
+  ParsedChangelogEntryInput,
 } from "./types.js";
 import {
   changelogKinds,
+  parseChangelogDate,
   parseChangelogEntryInput,
   parseChangelogEntryUpdate,
   parseStoredChangelogEntry,
@@ -60,6 +64,18 @@ function applyFilter(items: ChangelogEntry[], filter: ChangelogEntryListFilter =
     .slice(0, limit);
 }
 
+export function fingerprintChangelogEntry(input: ParsedChangelogEntryInput | ChangelogEntry): string {
+  const payload = {
+    appId: input.appId,
+    version: input.version,
+    kind: input.kind,
+    title: input.title,
+    commits: input.commits,
+    tasks: input.tasks,
+  };
+  return createHash("sha256").update(JSON.stringify(payload)).digest("hex").slice(0, 24);
+}
+
 export class LocalChangelogStore implements ChangelogStore {
   readonly filePath: string;
 
@@ -72,12 +88,20 @@ export class LocalChangelogStore implements ChangelogStore {
     const now = options.now ?? new Date();
     const timestamp = now.toISOString();
     const parsed = parseChangelogEntryInput(input, now);
+    const fingerprint = fingerprintChangelogEntry(parsed);
+    if (!options.allowDuplicate) {
+      const duplicate = (await this.readAll()).find((item) =>
+        item.appId === parsed.appId && (item.fingerprint ?? fingerprintChangelogEntry(item)) === fingerprint
+      );
+      if (duplicate) throw new Error(`Duplicate changelog entry: ${duplicate.id}`);
+    }
     const item: ChangelogEntry = {
       ...parsed,
       id: randomUUID(),
       createdAt: timestamp,
       updatedAt: timestamp,
       source: options.source ?? "server",
+      fingerprint,
     };
     await appendFile(this.filePath, `${JSON.stringify(item)}\n`, "utf8");
     return item;
@@ -119,10 +143,67 @@ export class LocalChangelogStore implements ChangelogStore {
       createdAt: current.createdAt,
       updatedAt: new Date().toISOString(),
       source: current.source,
+      fingerprint: fingerprintChangelogEntry(parsed),
     };
     items[index] = updated;
     await this.writeAll(items);
     return updated;
+  }
+
+  async releaseEntries(options: ChangelogReleaseOptions): Promise<ChangelogReleaseResult> {
+    const now = options.now ?? new Date();
+    const date = parseChangelogDate(options.date, now);
+    const fromVersion = options.fromVersion ?? "Unreleased";
+    const parsedVersion = options.version.trim();
+    if (!parsedVersion) throw new Error("version is required");
+    if (!options.appId.trim()) throw new Error("appId is required");
+
+    const items = await this.readAll();
+    const sourceEntries = items.filter((item) => item.appId === options.appId && item.version === fromVersion);
+    const candidateFingerprints = new Set<string>();
+    for (const item of sourceEntries) {
+      const candidate: ChangelogEntry = {
+        ...item,
+        version: parsedVersion,
+        date,
+      };
+      const candidateFingerprint = fingerprintChangelogEntry(candidate);
+      if (candidateFingerprints.has(candidateFingerprint)) {
+        throw new Error(`Duplicate changelog entry would be released: ${item.id}`);
+      }
+      candidateFingerprints.add(candidateFingerprint);
+      const existing = items.find((existingItem) =>
+        existingItem.appId === options.appId &&
+        existingItem.version === parsedVersion &&
+        existingItem.id !== item.id &&
+        (existingItem.fingerprint ?? fingerprintChangelogEntry(existingItem)) === candidateFingerprint
+      );
+      if (existing) throw new Error(`Duplicate released changelog entry: ${existing.id}`);
+    }
+
+    const released: ChangelogEntry[] = [];
+    const timestamp = now.toISOString();
+    const updatedItems = items.map((item) => {
+      if (item.appId !== options.appId || item.version !== fromVersion) return item;
+      const updated: ChangelogEntry = {
+        ...item,
+        version: parsedVersion,
+        date,
+        updatedAt: timestamp,
+      };
+      updated.fingerprint = fingerprintChangelogEntry(updated);
+      released.push(updated);
+      return updated;
+    });
+    if (released.length > 0) await this.writeAll(updatedItems);
+    return {
+      appId: options.appId,
+      fromVersion,
+      version: parsedVersion,
+      date,
+      updated: released.length,
+      entries: released,
+    };
   }
 
   async stats(): Promise<ChangelogStats> {
@@ -158,4 +239,3 @@ export class LocalChangelogStore implements ChangelogStore {
     await rename(tmpPath, this.filePath);
   }
 }
-

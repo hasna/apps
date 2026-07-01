@@ -8,4 +8,6 @@ If `CHANGELOG_API_TOKEN` is configured, the HTTP API requires a bearer token or 
 
 Publishing is dry-run by default. A target file is written only when `write: true` is supplied through the SDK/API/MCP tool or `--write` is supplied through the CLI.
 
+When publishing overwrites an existing file, Open Changelog stores a local backup under `~/.hasna/changelog/backups` by default. Treat backups as local artifacts and do not commit them.
+
 Report security issues privately to Hasna maintainers before opening public issues.

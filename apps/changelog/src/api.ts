@@ -2,9 +2,8 @@ import { generateChangelogMarkdown } from "./markdown.js";
 import { publishChangelog } from "./publisher.js";
 import { LocalChangelogStore } from "./storage.js";
 import { isAbsolute, resolve, sep } from "node:path";
-import type { ChangelogEntryListFilter, ChangelogStore, ChangelogEntryUpdate } from "./types.js";
+import type { ChangelogEntryInput, ChangelogEntryListFilter, ChangelogStore, ChangelogEntryUpdate } from "./types.js";
 import {
-  parseChangelogEntryInput,
   parseChangelogKind,
   validationErrorMessage,
 } from "./validation.js";
@@ -117,8 +116,11 @@ export function createChangelogHandler(options: ChangelogApiOptions = {}): (requ
       }
 
       if (request.method === "POST" && pathname === "/v1/entries") {
-        const input = parseChangelogEntryInput(await request.json());
-        const item = await store.createEntry(input, { source: "api" });
+        const body = await readJsonObject(request);
+        const item = await store.createEntry(body as unknown as ChangelogEntryInput, {
+          source: "api",
+          allowDuplicate: body.allowDuplicate === true,
+        });
         return withCors(jsonResponse(item, { status: 201 }), corsOrigin);
       }
 
@@ -143,6 +145,7 @@ export function createChangelogHandler(options: ChangelogApiOptions = {}): (requ
         const markdown = generateChangelogMarkdown(await store.listEntries({ ...filter, limit: filter.limit ?? 500 }), {
           ...filter,
           title: url.searchParams.get("title") ?? undefined,
+          repositoryUrl: url.searchParams.get("repositoryUrl") ?? undefined,
         });
         return withCors(textResponse(markdown), corsOrigin);
       }
@@ -151,8 +154,24 @@ export function createChangelogHandler(options: ChangelogApiOptions = {}): (requ
         const body = await readJsonObject(request);
         const filter = listFilterFromBody(body);
         const title = typeof body.title === "string" ? body.title : undefined;
-        const markdown = generateChangelogMarkdown(await store.listEntries({ ...filter, limit: filter.limit ?? 500 }), { ...filter, title });
+        const repositoryUrl = typeof body.repositoryUrl === "string" ? body.repositoryUrl : undefined;
+        const markdown = generateChangelogMarkdown(await store.listEntries({ ...filter, limit: filter.limit ?? 500 }), {
+          ...filter,
+          title,
+          repositoryUrl,
+        });
         return withCors(jsonResponse({ markdown }), corsOrigin);
+      }
+
+      if (request.method === "POST" && pathname === "/v1/release") {
+        const body = await readJsonObject(request);
+        const result = await store.releaseEntries({
+          appId: String(body.appId ?? body.app ?? ""),
+          version: String(body.version ?? ""),
+          fromVersion: typeof body.fromVersion === "string" ? body.fromVersion : undefined,
+          date: typeof body.date === "string" ? body.date : undefined,
+        });
+        return withCors(jsonResponse(result), corsOrigin);
       }
 
       if (request.method === "POST" && pathname === "/v1/publish") {
@@ -165,8 +184,11 @@ export function createChangelogHandler(options: ChangelogApiOptions = {}): (requ
           store,
           ...filter,
           title: typeof body.title === "string" ? body.title : undefined,
+          repositoryUrl: typeof body.repositoryUrl === "string" ? body.repositoryUrl : undefined,
           targetPath: apiTargetPath(body.targetPath),
           write: body.write === true,
+          diff: body.diff === true,
+          backup: body.backup !== false,
         });
         return withCors(jsonResponse(result), corsOrigin);
       }
