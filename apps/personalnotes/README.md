@@ -235,6 +235,20 @@ personalnotes sync status               # last run, server, cursor, errors
 personalnotes sync --uninstall-service  # stop + remove
 ```
 
+**macOS gotcha — LAN addresses and Local Network Privacy.** macOS silently
+blocks background launchd agents from LAN (RFC1918/link-local) addresses:
+connections fail with `EHOSTUNREACH` and *no permission prompt ever appears*.
+A self-hosted server reached by a bare hostname or `192.168.x.x` address will
+therefore sync fine when you run `personalnotes sync` by hand — and fail
+under the installed daemon. `sync --install-service` detects this on macOS:
+it resolves the configured API URL and, when the host lands on a LAN address,
+prefers the machine's Tailscale MagicDNS FQDN (e.g.
+`http://my-server.example.ts.net:8788` — mesh-VPN traffic is not LNP-gated)
+and saves it to the config; without Tailscale it prints what to change.
+`sync --install-service --dry-run` previews the check and the service file
+without writing anything. Sync failures also surface the underlying network
+code (`fetch failed (EHOSTUNREACH ...)`) with this explanation attached.
+
 Daemon logs go to `~/Library/Logs/PersonalNotes/sync.log` (macOS) or
 `~/.local/state/personalnotes/sync.log` (Linux). Every attempt — including
 failures — is recorded in `<data-root>/sync-status.json`; the macOS app shows

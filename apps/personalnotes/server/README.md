@@ -63,6 +63,18 @@ The server binds loopback by default. If you expose it (`--host`), put a TLS
 reverse proxy (Caddy, nginx, or your mesh VPN's proxy) in front — bearer keys must
 not travel over plain HTTP outside your machine.
 
+**macOS clients: do not point the sync daemon at a LAN address.** macOS Local
+Network Privacy silently blocks background launchd agents from
+RFC1918/link-local addresses — `EHOSTUNREACH`, and no permission prompt ever
+appears for a background agent — so a client configured with
+`http://192.168.x.x:8788` (or a bare hostname that resolves there) syncs fine
+when run manually and fails under the installed daemon. Give macOS clients a
+non-LAN address: a Tailscale MagicDNS FQDN (`http://<host>.<tailnet>.ts.net:8788`
+— mesh-VPN traffic rides utun and is not LNP-gated) or a public hostname behind
+your proxy. `personalnotes sync --install-service` detects this on macOS and
+rewrites the URL to the tailnet FQDN when one is available (`--dry-run` to
+preview).
+
 ## API surface (personalnotes/v1 dialect)
 
 ```

@@ -62,10 +62,17 @@ async function fakeRecording(page, { paused = false, transcript = null } = {}) {
     // Reach into the module via the exposed surface where possible; fall back to DOM.
     const timerIn = document.getElementById('rec-timer-in')
     if (timerIn) timerIn.textContent = '0:42'
-    // Persistent pill — fixed, on every screen.
+    // Persistent pill — every screen EXCEPT the Home composer, mirroring the app's
+    // renderRecPill() rule exactly (05007066: the composer is the single recording
+    // surface on Home — forcing the pill there faked an app-impossible duplicate).
     const pill = document.getElementById('rec-pill')
     if (pill) {
-      pill.hidden = false
+      const view = (window.PersonalNotes && window.PersonalNotes.view && window.PersonalNotes.view.state)
+        ? window.PersonalNotes.view.state() : { screen: 'home' }
+      const winEl = document.getElementById('window')
+      const onHomeComposer = view.screen === 'home' &&
+        (!winEl || winEl.getAttribute('data-active-shell') === 'app')
+      pill.hidden = onHomeComposer
       pill.classList.toggle('paused', !!opts.paused)
       const t = document.getElementById('rec-pill-timer'); if (t) t.textContent = '0:42'
       const pp = document.getElementById('rec-pill-pause'); if (pp) pp.title = opts.paused ? 'Resume' : 'Pause'

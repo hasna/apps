@@ -11,6 +11,14 @@ APP_NAME="PersonalNotes"
 EXEC_NAME="PersonalNotes"
 BUNDLE_ID="com.hasna.notes"
 DIST="$REPO_ROOT/dist"
+
+# Real version stamping (About screen + freshness proof): CFBundleShortVersionString
+# tracks package.json's "version" (single source of truth) and CFBundleVersion is a
+# UTC build stamp, so every install can prove when it was built. The shell injects
+# both into the web UI as window.__VERSION__ (docs/ui-contracts.md "Version Bridge").
+APP_VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$REPO_ROOT/package.json" | head -n1)"
+APP_VERSION="${APP_VERSION:-1.0}"
+BUILD_STAMP="${PN_BUILD_STAMP:-$(date -u +%Y%m%d.%H%M%S)}"
 APP="$DIST/$APP_NAME.app"
 CONTENTS="$APP/Contents"
 MACOS_DIR="$CONTENTS/MacOS"
@@ -118,8 +126,8 @@ cat > "$CONTENTS/Info.plist" <<PLIST
     <key>CFBundleIdentifier</key><string>$BUNDLE_ID</string>
     <key>CFBundleExecutable</key><string>$EXEC_NAME</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleVersion</key><string>1</string>
-    <key>CFBundleShortVersionString</key><string>1.0</string>
+    <key>CFBundleVersion</key><string>$BUILD_STAMP</string>
+    <key>CFBundleShortVersionString</key><string>$APP_VERSION</string>
     <key>LSMinimumSystemVersion</key><string>26.0</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
@@ -139,4 +147,4 @@ codesign --force --deep --sign - "$APP"
 codesign --verify --deep --strict "$APP" && echo "   signature OK"
 
 echo "BUILT: $APP"
-echo "       (CFBundleName=\"$APP_NAME\", bundle id=$BUNDLE_ID, exec=$EXEC_NAME)"
+echo "       (CFBundleName=\"$APP_NAME\", bundle id=$BUNDLE_ID, exec=$EXEC_NAME, version=$APP_VERSION, build=$BUILD_STAMP)"

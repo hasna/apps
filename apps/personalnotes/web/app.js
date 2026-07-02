@@ -295,7 +295,11 @@
       }
       return out;
     };
-    let out = String(text || '').replace(/\\([\\`*_{}\[\]()#+\-.!>|])/g, (_, ch) => hold(escapeHTML(ch)));
+    // Strip NUL bytes first: they are the placeholder token delimiter, so pasted
+    // content containing NUL<digit>NUL could otherwise spoof a token and render
+    // another span's (already-sanitized) HTML in its place. NUL is never meaningful
+    // text content — dropping it keeps the token space collision-free.
+    let out = String(text || '').replace(/\u0000/g, '').replace(/\\([\\`*_{}\[\]()#+\-.!>|])/g, (_, ch) => hold(escapeHTML(ch)));
     out = out.replace(/`([^`]+)`/g, (_, code) => hold('<code>' + escapeHTML(code) + '</code>'));
     out = out.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, label) => hold(escapeHTML(label)));
     out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => {
@@ -573,7 +577,10 @@
       const existing = machineById(n.machine);
       ids.add(existing ? existing.id : n.machine);
     });
-    if (state.thisMachine) ids.add(machineDetails(state.thisMachine).id);
+    // THIS machine joins the list only when it has a real identity: the browser/dev
+    // fallback 'unknown' would otherwise fabricate a bogus "unknown" machine row on an
+    // empty boot (native hosts always inject a real id, so this guard is web-only).
+    if (state.thisMachine && state.thisMachine !== 'unknown') ids.add(machineDetails(state.thisMachine).id);
     return [...ids].map(machineDetails).sort((a, b) => {
       const d = Date.parse(b.recentActivityAt || b.updatedAt || 0) - Date.parse(a.recentActivityAt || a.updatedAt || 0);
       if (d) return d;
@@ -649,6 +656,7 @@
 	  function selectMachine(machineId, opts) {
 	    const options = opts || {};
 	    commitEdit();
+	    closeMachinePop();
 	    const isAll = machineId === ALL;
 	    const detail = isAll ? null : machineDetails(machineId);
 	    const target = isAll ? ALL : (detail.id || String(machineId || '').trim());
@@ -1354,10 +1362,14 @@
       machinesMenuOpen = false;
       selectMachine(id, { reason: 'sidebar' });
     });
-    row.addEventListener('contextmenu', () => {
+    row.addEventListener('contextmenu', (e) => {
       if (id === ALL) return;
+      if (e && e.preventDefault) e.preventDefault();
       const detail = machineDetails(id);
       window.dispatchEvent(new CustomEvent('hasna:machine-context', { detail: { machineId: id, machine: detail } }));
+      // Vision f8659e18: right-click a machine SHOWS its details (the event above is
+      // the contracted API; this popover is the user-visible rendering of it).
+      openMachinePop(e, detail);
     });
     return row;
   }
@@ -1386,10 +1398,18 @@
       // Truly zero notes anywhere.
       empty.hidden = false; nomatch.hidden = true;
     } else if (list.length === 0) {
-      // There are notes, but the current filter/search hides them all.
+      // There are notes, but the current filter/search hides them all. Name the
+      // filter that actually caused the miss — a label/status miss must not claim
+      // "no notes on this machine" (the machine may well own hidden notes).
       empty.hidden = true; nomatch.hidden = false;
       const desc = $('nomatch-desc');
-      if (desc) desc.textContent = 'No notes on this machine yet.';
+      if (desc) {
+        if (state.statusFilter === 'archived') desc.textContent = 'No archived notes here yet.';
+        else if (state.statusFilter === 'trash') desc.textContent = 'Trash is empty.';
+        else if (state.labelFilter !== ALL) desc.textContent = 'No notes with the label “' + state.labelFilter + '” here.';
+        else if (state.machineFilter !== ALL) desc.textContent = 'No active notes on this machine.';
+        else desc.textContent = 'No notes match the current filters.';
+      }
     } else {
       // There ARE visible notes but none selected — select the newest and show it.
       state.selectedId = list[0].id;
@@ -1819,7 +1839,71 @@
   function renderSettingsMeta() {
     const m = $('about-machine'); if (m) m.textContent = state.thisMachine || '—';
     const c = $('about-count'); if (c) c.textContent = String(state.notes.length);
+    // Real version from the native host (window.__VERSION__ = Info.plist values,
+    // see docs/ui-contracts.md "Version Bridge"). Without it (plain browser,
+    // unbundled dev binary) the static #about-version markup is left untouched.
+    const v = $('about-version');
+    const ver = window.__VERSION__ || {};
+    if (v && ver.version) v.textContent = 'Version ' + ver.version + (ver.build ? ' (' + ver.build + ')' : '');
     renderRetentionRow(); // keep the 7/30/90 picker in sync with boot/API settings
+  }
+
+  // ------------------------------------------------------------- machine details popover
+  // Vision MUST f8659e18: right-clicking a machine row shows its details. Renders
+  // synchronously from the cached machineDetails(id), then refreshes in place when the
+  // async requestMachineDetails(...) bridge answers (native hosts may hold fresher rows).
+  let machinePopId = null;
+
+  function openMachinePop(e, detail) {
+    const pop = $('machine-pop');
+    if (!pop || !detail || !detail.id) return;
+    machinePopId = detail.id;
+    fillMachinePop(pop, detail);
+    pop.hidden = false;
+    // Position at the cursor, clamped to the viewport (same rule as #ctx-menu).
+    const mw = pop.offsetWidth || 260, mh = pop.offsetHeight || 190;
+    let x = (e && e.clientX) || 0, y = (e && e.clientY) || 0;
+    if (x + mw > window.innerWidth - 8) x = Math.max(8, window.innerWidth - mw - 8);
+    if (y + mh > window.innerHeight - 8) y = Math.max(8, window.innerHeight - mh - 8);
+    pop.style.left = x + 'px';
+    pop.style.top = y + 'px';
+    const shownFor = machinePopId;
+    requestMachineDetails(detail.id).then(fresh => {
+      if (pop.hidden || machinePopId !== shownFor || !fresh || fresh.id !== shownFor) return;
+      fillMachinePop(pop, fresh);
+    });
+  }
+
+  function fillMachinePop(pop, m) {
+    pop.innerHTML = '';
+    const head = el('div', 'mp-head');
+    head.appendChild(el('span', 'mp-name', m.displayName || m.id));
+    if (state.thisMachine && machineAliases(m).has(state.thisMachine)) {
+      head.appendChild(el('span', 'mp-badge', 'This machine'));
+    }
+    pop.appendChild(head);
+    const extraCounts = (m.archivedNoteCount || 0) + (m.trashNoteCount || 0);
+    const rows = [
+      ['ID', m.id + (m.slug && m.slug !== m.id ? ' · ' + m.slug : '')],
+      ['Platform', m.platform || '—'],
+      ['Status', m.status || 'unknown'],
+      ['Notes', String(m.noteCount || 0) + ' active' + (extraCounts
+        ? ' · ' + (m.archivedNoteCount || 0) + ' archived · ' + (m.trashNoteCount || 0) + ' in trash' : '')],
+      ['Last activity', m.recentActivityAt ? relTime(m.recentActivityAt) : '—'],
+      ['Last sync', m.syncedAt ? relTime(m.syncedAt) : '—'],
+    ];
+    rows.forEach(pair => {
+      const row = el('div', 'mp-row');
+      row.appendChild(el('span', 'mp-key', pair[0]));
+      row.appendChild(el('span', 'mp-val', pair[1]));
+      pop.appendChild(row);
+    });
+  }
+
+  function closeMachinePop() {
+    const pop = $('machine-pop');
+    if (pop && !pop.hidden) pop.hidden = true;
+    machinePopId = null;
   }
 
   // ------------------------------------------------------------------ context menu (Feature 3)
@@ -3137,6 +3221,7 @@
     }
     if (e.key === 'Escape') {
       closeContextMenu();
+      closeMachinePop();
       closeSearchPop();
       closeMdPop();
       if (machinesMenuOpen) setMachinesMenu(false);
@@ -3145,6 +3230,8 @@
   function onGlobalPointerDown(e) {
     const menu = $('ctx-menu');
     if (menu && !menu.hidden && !menu.contains(e.target)) closeContextMenu();
+    const mpop = $('machine-pop');
+    if (mpop && !mpop.hidden && !mpop.contains(e.target)) closeMachinePop();
     const dd = $('machines-dd');
     if (machinesMenuOpen && dd && !dd.contains(e.target)) setMachinesMenu(false);
     const pop = $('search-pop');
@@ -3184,7 +3271,7 @@
     content.classList.toggle('scrolled', !!el && (el.scrollTop || 0) > 0);
   }
   function onWindowScroll(e) {
-    closeContextMenu(); closeMdPop(); closeSlashMenu();
+    closeContextMenu(); closeMachinePop(); closeMdPop(); closeSlashMenu();
     const node = (e && e.target && e.target.nodeType === 1) ? e.target : null;
     markScrolling(node);
     if (node && node.matches(PAGE_SCROLLERS)) syncHeaderScrollEdge(node);
@@ -3485,6 +3572,7 @@
     stopStream();
     try { if (rec.ws && rec.ws.readyState === WebSocket.OPEN) rec.ws.close(); } catch (e) {}
     closeContextMenu();
+    closeMachinePop();
     started = false;
   }
 

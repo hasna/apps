@@ -1,1 +1,0 @@
-hasna-notes is deprecated; use personalnotes instead (this alias will be removed in the next release).

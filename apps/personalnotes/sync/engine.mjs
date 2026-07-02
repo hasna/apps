@@ -183,8 +183,10 @@ export function rowToNote(row, localId) {
   };
 }
 
+// UUID-SHAPED, not strict RFC-4122 — kept in lockstep with notes-lib.isUUID so a
+// non-v4 (but UUID-shaped) local note id maps back to the same local file on pull.
 function isUUID(value) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''));
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || ''));
 }
 
 function localIdForRow(state, row) {

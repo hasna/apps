@@ -302,6 +302,13 @@ const tools = [
 
 let buffer = Buffer.alloc(0);
 
+// Stdio framing. The MCP spec's stdio transport is NEWLINE-DELIMITED JSON —
+// that is what standard clients (official SDK, Claude Code, MCP Inspector)
+// speak. Legacy LSP-style `Content-Length` framing is kept for old clients.
+// The first bytes the client sends pick the mode ('{' ⇒ ndjson), and replies
+// use the same framing the client used. Defaults to the spec framing.
+let framing = '';
+
 process.stdin.on('data', (chunk) => {
   buffer = Buffer.concat([buffer, chunk]);
   readMessages().catch((err) => {
@@ -311,6 +318,29 @@ process.stdin.on('data', (chunk) => {
 
 async function readMessages() {
   while (true) {
+    // Drop blank leading lines (both framings tolerate them between messages).
+    let skip = 0;
+    while (skip < buffer.length && (buffer[skip] === 0x0d || buffer[skip] === 0x0a)) skip += 1;
+    if (skip) buffer = buffer.subarray(skip);
+    if (!buffer.length) return;
+    if (!framing) framing = buffer[0] === 0x7b /* '{' */ ? 'ndjson' : 'headers';
+
+    if (framing === 'ndjson') {
+      const nl = buffer.indexOf('\n');
+      if (nl < 0) return;
+      const line = buffer.subarray(0, nl).toString('utf8').trim();
+      buffer = buffer.subarray(nl + 1);
+      if (!line) continue;
+      let msg;
+      try { msg = JSON.parse(line); }
+      catch (err) {
+        send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: err.message || 'parse_error' } });
+        continue;
+      }
+      await handle(msg);
+      continue;
+    }
+
     const headerEnd = buffer.indexOf('\r\n\r\n');
     if (headerEnd < 0) return;
     const header = buffer.subarray(0, headerEnd).toString('utf8');
@@ -336,6 +366,11 @@ async function readMessages() {
 
 function send(msg) {
   const body = Buffer.from(JSON.stringify(msg), 'utf8');
+  if (framing !== 'headers') {
+    process.stdout.write(body);
+    process.stdout.write('\n');
+    return;
+  }
   process.stdout.write(`Content-Length: ${body.length}\r\n\r\n`);
   process.stdout.write(body);
 }

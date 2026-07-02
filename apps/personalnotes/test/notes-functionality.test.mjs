@@ -468,6 +468,26 @@ test('frontmatter scalars round-trip in lockstep with the Swift parser', async (
   assert.match(rawQuoted, /^title: "'hello'"$/m);
 });
 
+test('UUID-shaped non-RFC-4122 note ids keep a stable identity across reads', async (t) => {
+  const root = await tempRoot(t);
+  // Not a valid RFC-4122 UUID (version 3--3, variant 4---): a foreign/synthetic id
+  // the migrator accepts verbatim. parseNote used to reject it and mint a fresh
+  // random fallback id on EVERY read — a different id per list call.
+  const foreign = '11111111-2222-3333-4444-555555555555';
+  await mkdir(join(root, 'notes'), { recursive: true });
+  await writeFile(join(root, 'notes', `${foreign}.md`),
+    `---\nid: ${foreign}\ntitle: Foreign Id\nrev: 1\n---\nbody\n`, 'utf8');
+  const first = await getNote(foreign, root);
+  assert.ok(first, 'note resolvable by its on-disk id');
+  assert.equal(first.id, foreign);
+  const second = await getNote(foreign, root);
+  assert.equal(second.id, foreign, 'identity stable across reads');
+  // Truly malformed ids still fall back to a generated UUID (never crash).
+  const parsed = parseNote('---\nid: not-a-uuid\ntitle: Bad\n---\nbody\n');
+  assert.notEqual(parsed.id, 'not-a-uuid');
+  assert.match(parsed.id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+});
+
 test('non-markdown contentFormat survives load→save and empty actor provenance is preserved', async (t) => {
   const root = await tempRoot(t);
   const id = uuidFor(91);
@@ -1149,6 +1169,31 @@ test('web enforces trash retention on boot and hydrate, once per session', async
   assert.deepEqual(accepted.windowTarget.PersonalNotes.view.state().visibleNoteIds, []);
 });
 
+test('web about screen renders the injected real version (Version Bridge contract)', async () => {
+  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
+  const boot = { thisMachine: 'studio-mac', notes: [], machines: [] };
+
+  // Native host: window.__VERSION__ (bundle Info.plist values) drives #about-version.
+  const native = loadWebAppWithFakeDOM(app, {
+    __BOOT__: boot,
+    __VERSION__: { version: '0.1.0', build: '20260702.120000' },
+  });
+  assert.equal(native.document.getElementById('about-version').textContent, 'Version 0.1.0 (20260702.120000)');
+
+  // No build stamp: version only, no dangling parentheses.
+  const noBuild = loadWebAppWithFakeDOM(app, {
+    __BOOT__: boot,
+    __VERSION__: { version: '0.1.0', build: '' },
+  });
+  assert.equal(noBuild.document.getElementById('about-version').textContent, 'Version 0.1.0');
+
+  // Plain browser / unbundled dev binary (no version): static markup left untouched.
+  const browser = loadWebAppWithFakeDOM(app, { __BOOT__: boot });
+  assert.equal(browser.document.getElementById('about-version').textContent, '');
+  const emptyVersion = loadWebAppWithFakeDOM(app, { __BOOT__: boot, __VERSION__: { version: '', build: 'x' } });
+  assert.equal(emptyVersion.document.getElementById('about-version').textContent, '');
+});
+
 test('web surfaces sync status honestly in Settings and via PersonalNotes.sync.status()', async () => {
   const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
 
@@ -1188,6 +1233,106 @@ test('web surfaces sync status honestly in Settings and via PersonalNotes.sync.s
   assert.match(okRow.textContent, /Last success/);
   assert.match(okRow.className, /sync-error/);
   assert.doesNotMatch(okRow.className, /sync-ok/);
+});
+
+test('web machine right-click renders the details popover (vision f8659e18)', async () => {
+  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
+  const { windowTarget, document } = loadWebAppWithFakeDOM(app, {
+    __BOOT__: {
+      thisMachine: 'studio-mac',
+      notes: [
+        { id: 'mp-1', title: 'Active note', body: 'a', labels: [], status: 'active', machine: 'studio-mac', updatedAt: '2026-06-23T10:00:00Z', createdAt: '2026-06-23T09:00:00Z' },
+        { id: 'mp-2', title: 'Archived note', body: 'b', labels: [], status: 'archived', machine: 'studio-mac', archivedAt: '2026-06-22T10:00:00Z', updatedAt: '2026-06-22T10:00:00Z', createdAt: '2026-06-22T09:00:00Z' },
+      ],
+      machines: [{ id: 'studio-mac', friendlyName: 'Apple Studio', platform: 'macos', status: 'online', syncedAt: '2026-06-23T10:00:00Z' }],
+    },
+  });
+  const contexts = [];
+  windowTarget.addEventListener('hasna:machine-context', event => contexts.push(event.detail));
+
+  const pop = document.getElementById('machine-pop');
+  pop.hidden = true; // markup default (the fake DOM fabricates elements un-hidden)
+
+  const row = document.getElementById('machines-list').children
+    .find(c => c.className.includes('machine-row') && c.dataset.machine === 'studio-mac');
+  assert.ok(row, 'machine row rendered');
+  let prevented = false;
+  row.dispatchEvent({ type: 'contextmenu', clientX: 24, clientY: 30, preventDefault() { prevented = true; } });
+
+  // The contracted event still fires AND something visible renders (the old defect:
+  // event dispatched, nothing listened, user saw the default nothing).
+  assert.equal(contexts.length, 1);
+  assert.equal(contexts[0].machineId, 'studio-mac');
+  assert.equal(prevented, true);
+  assert.equal(pop.hidden, false);
+  const head = pop.children[0];
+  assert.equal(head.children[0].textContent, 'Apple Studio');
+  assert.equal(head.children[1].textContent, 'This machine');
+  const fields = Object.fromEntries(pop.children.slice(1).map(r => [r.children[0].textContent, r.children[1].textContent]));
+  assert.equal(fields.ID, 'studio-mac');
+  assert.equal(fields.Platform, 'macos');
+  assert.equal(fields.Status, 'online');
+  assert.equal(fields.Notes, '1 active · 1 archived · 0 in trash');
+  assert.ok(fields['Last activity'] && fields['Last activity'] !== '—');
+  assert.ok(fields['Last sync'] && fields['Last sync'] !== '—');
+
+  // The async details refresh must not blank the popover.
+  await delay(20);
+  assert.equal(pop.hidden, false);
+  assert.equal(pop.children[0].children[0].textContent, 'Apple Studio');
+
+  // Selecting a machine closes the popover.
+  windowTarget.PersonalNotes.machines.select('studio-mac');
+  assert.equal(pop.hidden, true);
+
+  // The "All Machines" row never opens details.
+  const allRow = document.getElementById('machines-list').children[0];
+  allRow.dispatchEvent({ type: 'contextmenu', clientX: 5, clientY: 5, preventDefault() {} });
+  assert.equal(pop.hidden, true);
+  assert.equal(contexts.length, 1);
+});
+
+test('web browser-mode empty boot does not fabricate an "unknown" machine row', async () => {
+  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
+  // Plain browser, no boot payload: no real machine identity — the list stays empty.
+  const bare = loadWebAppWithFakeDOM(app);
+  assert.deepEqual(bare.windowTarget.PersonalNotes.machines.list(), []);
+  // A real identity (native boot) still produces this machine's row.
+  const native = loadWebAppWithFakeDOM(app, { __BOOT__: { thisMachine: 'studio-mac', notes: [], machines: [] } });
+  assert.deepEqual(native.windowTarget.PersonalNotes.machines.list().map(m => m.id), ['studio-mac']);
+});
+
+test('web inline markdown placeholder tokens cannot be spoofed by NUL bytes', async () => {
+  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
+  const { windowTarget } = loadWebAppWithFakeDOM(app);
+  const NUL = String.fromCharCode(0);
+  const html = windowTarget.PersonalNotes.markdown.render('`safe` ' + NUL + '0' + NUL + ' [link](https://example.com/a) ' + NUL + '1' + NUL);
+  // Exactly one code span and one anchor — NUL tokens must not duplicate them.
+  assert.equal((html.match(/<code>/g) || []).length, 1);
+  assert.equal((html.match(/<a /g) || []).length, 1);
+  assert.ok(!html.includes(NUL));
+});
+
+test('web filtered-empty editor copy names the filter that caused the miss', async () => {
+  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
+  const { windowTarget, document } = loadWebAppWithFakeDOM(app, {
+    __BOOT__: {
+      thisMachine: 'studio-mac',
+      notes: [{ id: 'nm-1', title: 'Only note', body: 'x', labels: [], status: 'active', machine: 'studio-mac', updatedAt: '2026-06-23T10:00:00Z', createdAt: '2026-06-23T09:00:00Z' }],
+      machines: [{ id: 'studio-mac' }],
+    },
+  });
+  const desc = document.getElementById('nomatch-desc');
+
+  // Machine selected, its only note archived: active-filter miss — must not claim
+  // the machine has no notes (it owns the archived one).
+  windowTarget.PersonalNotes.machines.select('studio-mac');
+  windowTarget.PersonalNotes.notes.archive('nm-1');
+  assert.equal(desc.textContent, 'No active notes on this machine.');
+
+  // Trash view with nothing trashed.
+  windowTarget.PersonalNotes.notes.setStatusFilter('trash');
+  assert.equal(desc.textContent, 'Trash is empty.');
 });
 
 test('web markdown selection popover and slash menu route through editor.command', async () => {
@@ -1914,8 +2059,10 @@ test('CLI creates, lists, and assigns labels with JSON output', async (t) => {
   assert.equal(archived.code, 0, archived.stderr);
   assert.equal(JSON.parse(archived.stdout).status, 'archived');
 
+  // Plain (non-JSON) non-interactive refusal: nothing written AND a detectable
+  // nonzero exit, so scripts can tell the destructive op did not happen.
   const nonInteractiveDelete = await runNode(cliPath, ['delete', note.id], env);
-  assert.equal(nonInteractiveDelete.code, 0, nonInteractiveDelete.stderr);
+  assert.equal(nonInteractiveDelete.code, 2, nonInteractiveDelete.stderr);
   assert.match(nonInteractiveDelete.stdout, /Re-run with --yes or --force/);
   assert.equal((await getNote(note.id, root)).status, 'archived');
 
@@ -1936,6 +2083,11 @@ test('CLI creates, lists, and assigns labels with JSON output', async (t) => {
   const purgePreview = await runNode(cliPath, ['purge', note.id, '--json'], env);
   assert.equal(purgePreview.code, 0, purgePreview.stderr);
   assert.equal(JSON.parse(purgePreview.stdout).requiresConfirmation, true);
+  assert.ok(await getNote(note.id, root));
+
+  // Plain purge refusal (no --yes, no --json, non-TTY): file kept, exit code 2.
+  const purgeRefused = await runNode(cliPath, ['purge', note.id], env);
+  assert.equal(purgeRefused.code, 2, purgeRefused.stderr);
   assert.ok(await getNote(note.id, root));
 
   const purged = await runNode(cliPath, ['purge', note.id, '--force', '--json'], env);
@@ -1967,7 +2119,10 @@ test('CLI creates, lists, and assigns labels with JSON output', async (t) => {
 });
 
 class McpClient {
-  constructor(env) {
+  // framing: 'headers' (legacy LSP-style Content-Length) or 'ndjson' (the MCP
+  // spec's stdio transport — what standard clients actually speak).
+  constructor(env, framing = 'headers') {
+    this.framing = framing;
     this.child = spawn(process.execPath, [mcpPath], {
       cwd: repoRoot,
       env: { ...process.env, ...env },
@@ -1987,13 +2142,27 @@ class McpClient {
 
   send(id, method, params) {
     const body = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id, method, params }), 'utf8');
-    this.child.stdin.write(`Content-Length: ${body.length}\r\n\r\n`);
-    this.child.stdin.write(body);
+    if (this.framing === 'ndjson') {
+      this.child.stdin.write(body);
+      this.child.stdin.write('\n');
+    } else {
+      this.child.stdin.write(`Content-Length: ${body.length}\r\n\r\n`);
+      this.child.stdin.write(body);
+    }
     return new Promise(resolve => { this.waiters.push(resolve); this.drain(); });
   }
 
   drain() {
     while (this.waiters.length) {
+      if (this.framing === 'ndjson') {
+        const nl = this.buffer.indexOf('\n');
+        if (nl < 0) return;
+        const line = this.buffer.subarray(0, nl).toString('utf8').trim();
+        this.buffer = this.buffer.subarray(nl + 1);
+        if (!line) continue;
+        this.waiters.shift()(JSON.parse(line));
+        continue;
+      }
       const headerEnd = this.buffer.indexOf('\r\n\r\n');
       if (headerEnd < 0) return;
       const header = this.buffer.subarray(0, headerEnd).toString('utf8');
@@ -2010,6 +2179,29 @@ class McpClient {
 function parseToolText(response) {
   return JSON.parse(response.result.content[0].text);
 }
+
+test('MCP server speaks spec newline-delimited stdio framing (standard clients)', async (t) => {
+  const root = await tempRoot(t);
+  const client = new McpClient({ HASNA_NOTES_ROOT: root }, 'ndjson');
+  t.after(() => client.close());
+
+  // A standard MCP client's first message is newline-delimited JSON — the server
+  // must answer in the same framing (this used to time out with no response).
+  const init = await client.send(1, 'initialize', { protocolVersion: '2024-11-05' });
+  assert.equal(init.result.serverInfo.name, 'personalnotes');
+
+  const listTools = await client.send(2, 'tools/list', {});
+  assert.ok(listTools.result.tools.some(tool => tool.name === 'notes_create'));
+
+  const created = await client.send(3, 'tools/call', {
+    name: 'notes_create',
+    arguments: { title: 'NDJSON Note', body: 'ndjson body', targetMachine: 'studio-mac' },
+  });
+  assert.equal(parseToolText(created).title, 'NDJSON Note');
+
+  const listed = await client.send(4, 'tools/call', { name: 'notes_list', arguments: {} });
+  assert.equal(parseToolText(listed).items.length, 1);
+});
 
 test('MCP server exposes notes and labels tools over stdio framing', async (t) => {
   const root = await tempRoot(t);

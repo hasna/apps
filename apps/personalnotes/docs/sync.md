@@ -12,7 +12,7 @@ implements the same `/api/v1` protocol. The base URL is the only switch:
 personalnotes sync [--dry-run] [--json] [--api-url https://...]
 personalnotes sync --watch [--interval 5m] [--log-file path]
 personalnotes sync status [--json]
-personalnotes sync --install-service | --uninstall-service
+personalnotes sync --install-service [--dry-run] | --uninstall-service
 ```
 
 A run prints one line: `Pushed N (a new, b updated, c purged) · Pulled M (...)
@@ -173,6 +173,25 @@ user-level service that keeps the daemon alive and prints the enable command:
   sync citizen: CLI + daemon + service run identically there.
 
 `--uninstall-service` removes the file and prints the disable command.
+
+**macOS Local Network Privacy (LNP) check** — macOS silently blocks
+background launchd agents from LAN (RFC1918/link-local) addresses:
+`EHOSTUNREACH`, no permission prompt, while the same command works in a
+manual/ssh session (found during the first real cutover). On macOS,
+`--install-service` therefore resolves the configured API URL first
+(`sync/lnp.mjs`): a LAN-resolving host triggers a loud warning, and when the
+host is a node on a Tailscale tailnet (parsed from `tailscale status --json`
+when the binary exists) the installer rewrites the URL to the MagicDNS FQDN
+(`http://<host>.<tailnet>.ts.net:<port>` — utun traffic is not LNP-gated) and
+persists it to the client config so daemon and manual runs agree. Without a
+tailnet match it prints instructions instead. Loopback, mesh (100.64/10 /
+Tailscale ULA), and public addresses install unchanged; changing the apiUrl
+resets sync bookkeeping by design (the markdown store is canonical, notes
+re-converge). `--dry-run` previews the check and the service file without
+writing anything. Fetch-level failures everywhere in the client surface the
+underlying code (`err.cause.code`) — an `EHOSTUNREACH` against a LAN address
+carries the LNP explanation in the error message, so `sync status` and the
+Settings row show the actual cause instead of a bare `fetch failed`.
 
 **GUI** — the macOS shell app additionally runs a background timer
 (`SyncScheduler` in `PersonalNotesApp/main.swift`, its own serial queue,

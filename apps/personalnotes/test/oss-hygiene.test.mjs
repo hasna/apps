@@ -18,7 +18,12 @@ const DENYLIST = [
   { name: 'internal mac hostnames', re: new RegExp('apple' + '0\\d', 'i') },
   { name: 'internal linux hostnames', re: new RegExp('spark' + '0\\d', 'i') },
   { name: 'fleet fallback machine ids', re: new RegExp('machine' + '00\\d', 'i') },
-  { name: 'tailnet references', re: new RegExp('tail' + 'scale|tail' + 'net|\\.ts\\.' + 'net', 'i') },
+  // Product references to the Tailscale mesh VPN (docs, the LNP-safe install
+  // check in sync/lnp.mjs, placeholder FQDNs like example.ts.net) are fine —
+  // what must never appear is a REAL tailnet identifier. Auto-generated
+  // MagicDNS tailnet names are `tail` + hex (tailxxxxxx.ts.net); internal
+  // machine FQDNs are additionally caught by the hostname patterns above.
+  { name: 'real tailnet identifiers', re: new RegExp('tail' + '[0-9a-f]{6}', 'i') },
   { name: 'internal ssh/user addresses', re: new RegExp('hasna' + '@') },
   { name: 'internal shortlink domain', re: new RegExp('has\\.' + 'na/') },
   { name: 'maintainer home paths', re: new RegExp('/(?:home|Users)/' + 'hasna\\b') },

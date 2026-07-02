@@ -142,8 +142,14 @@ function normalizeCapabilities(value) {
   return [String(value)];
 }
 
+// Any UUID-SHAPED id is accepted as a stable identity (8-4-4-4-12 hex), not just
+// strict RFC-4122 v1-v5: requiring the version/variant nibbles made parseNote
+// reject foreign ids like 11111111-2222-3333-4444-555555555555 and mint a fresh
+// random fallback id on EVERY read (a different id per list call), while the
+// v1→v2 migrator and Swift's Foundation UUID(uuidString:) both accept them.
+// New notes still always get RFC-4122 v4 ids from randomUUID().
 function isUUID(value) {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || ''));
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || ''));
 }
 
 function splitTopLevelCommas(s) {
@@ -1061,8 +1067,10 @@ export async function getNote(id, root = dataRoot()) {
 /// - Files without frontmatter are returned unchanged (readable as-is).
 /// - v1 files keep every v2 key verbatim (legacy `tags`/`contentType` fold into
 ///   `labels`/`contentFormat`), gain `rev: 1`, derive `machineFriendlyName` from
-///   the legacy source/origin friendly names, and drop everything else. Dropped
-///   keys are reported so the migrator can log them.
+///   the legacy `sourceMachineFriendlyName`/`originMachineFriendlyName` keys
+///   (when they described the note's own machine — machineFriendlyNameFromFields),
+///   and drop everything else. Dropped keys are reported so the migrator can log
+///   them; keys whose value was folded in are consumed, not reported dropped.
 export function migrateNoteTextToV2(raw) {
   const text = String(raw || '');
   const open = /^---\r?\n/.exec(text);
@@ -1122,6 +1130,12 @@ export function migrateNoteTextToV2(raw) {
     if (key === 'machineFriendlyName') {
       const friendly = machineFriendlyNameFromFields(fields);
       consumed.add('machineFriendlyName');
+      // A legacy key whose value was folded in is consumed, not dropped — keep
+      // the "dropped v1 keys" report honest (same as the tags/contentType folds).
+      if (friendly) {
+        if (unquote(fields.sourceMachineFriendlyName || '') === friendly) consumed.add('sourceMachineFriendlyName');
+        if (unquote(fields.originMachineFriendlyName || '') === friendly) consumed.add('originMachineFriendlyName');
+      }
       lines.push(`machineFriendlyName: ${yamlScalar(friendly)}`);
       continue;
     }

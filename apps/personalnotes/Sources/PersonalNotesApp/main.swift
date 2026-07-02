@@ -997,12 +997,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     private var recordingResumeItem: NSMenuItem?
     private var recordingStopItem: NSMenuItem?
 
-    // Menu-bar status item (NSStatusItem) — created lazily when recording starts and shown
-    // only while recording is active. Its menu carries the elapsed timer (disabled title),
-    // Pause/Resume, Stop, and Open PersonalNotes. The title timer ticks from a lightweight
-    // local NSTimer kept in sync by the web's periodic `recording` tick messages.
+    // Menu-bar status item (NSStatusItem) — ALWAYS present while the app runs (vision
+    // c10b7cf2/a4eff7ef: a menu-bar quick-capture app must offer "record from anywhere",
+    // so the idle menu carries Start Recording + Open). While recording is active the
+    // menu swaps to the elapsed timer (disabled title), Pause/Resume, and Stop. The
+    // title timer ticks from a lightweight local NSTimer kept in sync by the web's
+    // periodic `recording` tick messages.
     private var statusItem: NSStatusItem?
     private var statusTimerItem: NSMenuItem?
+    private var statusStartItem: NSMenuItem?
+    private var statusControlsSeparator: NSMenuItem?
     private var statusPauseItem: NSMenuItem?
     private var statusResumeItem: NSMenuItem?
     private var statusStopItem: NSMenuItem?
@@ -1129,6 +1133,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         web.loadFileURL(index, allowingReadAccessTo: webDir)
 
         buildMenu()
+        // Idle menu-bar presence from launch: the quick-capture entry point exists
+        // BEFORE any recording starts (previously the item only appeared mid-recording,
+        // so there was no way to start a capture from the menu bar).
+        showStatusItem()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -1168,6 +1176,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         ]
         controller.addUserScript(
             WKUserScript(source: "window.__AI__ = \(jsonString(aiPayload));", injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        )
+        // Real bundle version for the About screen (`window.__VERSION__`, see
+        // docs/ui-contracts.md "Version Bridge"): CFBundleShortVersionString is the
+        // package.json version and CFBundleVersion the UTC build stamp, both written
+        // by scripts/build_personalnotes.sh. Empty when running the bare dev binary,
+        // in which case the web UI keeps its static fallback text.
+        let info = Bundle.main.infoDictionary ?? [:]
+        let versionPayload: [String: Any] = [
+            "version": (info["CFBundleShortVersionString"] as? String) ?? "",
+            "build": (info["CFBundleVersion"] as? String) ?? "",
+        ]
+        controller.addUserScript(
+            WKUserScript(source: "window.__VERSION__ = \(jsonString(versionPayload));", injectionTime: .atDocumentStart, forMainFrameOnly: true)
         )
     }
 
@@ -1646,7 +1667,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             refreshStatusTitle()
         case "complete", "error", "stopped":
             recordingPaused = false
-            hideStatusItem()
+            // Back to the IDLE menu-bar presence (never torn down while the app runs):
+            // the quick-capture entry must survive the end of a recording.
+            stopStatusTicker()
+            refreshStatusTitle()
             // A deferred quit (applicationShouldTerminate) waits for this terminal
             // state: the recording is stopped and its note saved (or errored) — finish.
             if quitPendingRecordingStop {
@@ -1681,7 +1705,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     /// Apply glyph + title + tint to the status button. With a bundled template glyph
     /// the title drops its "●"/"❚❚" symbol prefix (the glyph + tint carry the state);
     /// without one (bare `swift run`) the legacy text-only presentation stays.
-    private func setStatusButton(glyph: NSImage?, title: String, fallbackTitle: String, tint: NSColor) {
+    /// A nil tint leaves the template image to macOS (the quiet idle presentation).
+    private func setStatusButton(glyph: NSImage?, title: String, fallbackTitle: String, tint: NSColor?) {
         guard let button = statusItem?.button else { return }
         button.image = glyph
         button.imagePosition = glyph == nil ? .noImage : .imageLeading
@@ -1690,6 +1715,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
 
     /// Create (once) and reveal the menu-bar status item, building its menu lazily.
+    /// One menu serves both modes; refreshStatusMenuEnabled() toggles item visibility:
+    ///   idle      → Start Recording · Open PersonalNotes
+    ///   recording → elapsed timer · Pause/Resume · Stop · Open PersonalNotes
     private func showStatusItem() {
         if statusItem == nil {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -1698,11 +1726,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                 // Image/title/tint are state-driven — refreshStatusTitle() below sets them.
             }
             let menu = NSMenu()
+            // Visibility is managed manually per recording state — don't let AppKit
+            // re-enable items whose target implements their selector.
+            menu.autoenablesItems = false
             let timer = NSMenuItem(title: "Recording 0:00", action: nil, keyEquivalent: "")
             timer.isEnabled = false
             menu.addItem(timer)
             statusTimerItem = timer
-            menu.addItem(NSMenuItem.separator())
+            statusStartItem = menu.addItem(withTitle: "Start Recording", action: #selector(recordingStart(_:)), keyEquivalent: "")
+            statusStartItem?.target = self
+            let controlsSep = NSMenuItem.separator()
+            menu.addItem(controlsSep)
+            statusControlsSeparator = controlsSep
             statusPauseItem = menu.addItem(withTitle: "Pause", action: #selector(recordingPause(_:)), keyEquivalent: "")
             statusPauseItem?.target = self
             statusResumeItem = menu.addItem(withTitle: "Resume", action: #selector(recordingResume(_:)), keyEquivalent: "")
@@ -1712,14 +1747,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             menu.addItem(NSMenuItem.separator())
             let open = menu.addItem(withTitle: "Open PersonalNotes", action: #selector(openMainWindow(_:)), keyEquivalent: "")
             open.target = self
+            open.isEnabled = true
             item.menu = menu
             statusItem = item
         }
         statusItem?.isVisible = true
         refreshStatusTitle()
+        refreshStatusMenuEnabled()
     }
 
-    /// Hide and tear down the status item when recording stops (or the app terminates).
+    /// Tear down the status item — app termination only (the item is otherwise a
+    /// permanent fixture: recording stop returns it to the idle presentation).
     private func hideStatusItem() {
         stopStatusTicker()
         if let item = statusItem {
@@ -1727,6 +1765,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         }
         statusItem = nil
         statusTimerItem = nil
+        statusStartItem = nil
+        statusControlsSeparator = nil
         statusPauseItem = nil
         statusResumeItem = nil
         statusStopItem = nil
@@ -1751,6 +1791,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     /// Compute the current elapsed (last web-reported value + wall-clock drift while running)
     /// and format it as m:ss for the status-item title.
     private func refreshStatusTitle() {
+        let active = recordingLifecycleStatus == "recording" || recordingLifecycleStatus == "paused"
+            || recordingLifecycleStatus == "stopping" || recordingLifecycleStatus == "transcribing"
+        if !active {
+            // Idle: the quiet untinted template glyph — presence without alarm.
+            statusTimerItem?.title = "Not recording"
+            setStatusButton(glyph: statusGlyphIdle, title: "", fallbackTitle: "PN", tint: nil)
+            return
+        }
         if recordingLifecycleStatus == "transcribing" {
             statusTimerItem?.title = "Transcribing"
             setStatusButton(glyph: statusGlyphIdle, title: "TRANS", fallbackTitle: "TRANS", tint: BrandColor.accent)
@@ -1778,6 +1826,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
 
     private func refreshStatusMenuEnabled() {
+        let active = recordingStatus == "recording" || recordingStatus == "paused"
+            || recordingStatus == "stopping" || recordingStatus == "transcribing"
+        // Idle: Start Recording + Open only. Active: timer + transport controls.
+        statusStartItem?.isHidden = active
+        statusStartItem?.isEnabled = !active
+        statusTimerItem?.isHidden = !active
+        statusControlsSeparator?.isHidden = !active
+        if !active {
+            statusPauseItem?.isHidden = true
+            statusResumeItem?.isHidden = true
+            statusStopItem?.isHidden = true
+            return
+        }
+        statusStopItem?.isHidden = false
         statusPauseItem?.isHidden = recordingPaused
         statusResumeItem?.isHidden = !recordingPaused
         if recordingLifecycleStatus == "stopping" || recordingLifecycleStatus == "transcribing" {

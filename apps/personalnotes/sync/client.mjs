@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { describeFetchError, fetchErrorCode } from './lnp.mjs';
 
 // PersonalNotes sync API client. One dialect, two backends: the hosted service
 // (https://personalnotes.ai) and any self-hosted server speaking the same
@@ -70,11 +71,23 @@ export class PersonalNotesClient {
   }
 
   async request(method, path, { body, headers: headerOverrides } = {}) {
-    const res = await fetch(`${this.config.apiUrl}${path}`, {
-      method,
-      headers: headers(this.config, headerOverrides),
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
+    let res;
+    try {
+      res = await fetch(`${this.config.apiUrl}${path}`, {
+        method,
+        headers: headers(this.config, headerOverrides),
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    } catch (err) {
+      // A bare `fetch failed` is undiagnosable — the syscall code (e.g.
+      // EHOSTUNREACH) lives in err.cause. Surface it, plus the macOS Local
+      // Network Privacy explanation when the signature matches (launchd
+      // agents are silently blocked from LAN addresses; see sync/lnp.mjs).
+      throw new PersonalNotesApiError(describeFetchError(err, this.config.apiUrl), {
+        code: fetchErrorCode(err) || 'fetch_failed',
+        details: { cause: String(err?.cause?.message || err?.cause || '') },
+      });
+    }
     const text = await res.text();
     const json = text ? JSON.parse(text) : null;
     if (!res.ok) {

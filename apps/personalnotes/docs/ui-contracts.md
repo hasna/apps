@@ -103,6 +103,24 @@ incremental-load affordance. `listDefaults` applies on the initial boot only —
 the host hydrates after every write, and hydrate must NOT reset the user's
 pagination state.
 
+## Version Bridge
+
+The native host injects `window.__VERSION__` at document start alongside
+`window.__BOOT__`, straight from the bundle's Info.plist (both values are
+stamped by `scripts/build_personalnotes.sh`):
+
+```js
+{
+  version: "0.1.0",        // CFBundleShortVersionString — package.json "version"
+  build: "20260702.201530" // CFBundleVersion — UTC build stamp (proves install freshness)
+}
+```
+
+The About screen renders `Version {version} ({build})` from it (`({build})` is
+omitted when `build` is empty). When the global is absent or `version` is empty
+(plain browser, unbundled dev binary), app.js leaves the static
+`#about-version` markup untouched.
+
 ## App Layout And Navigation
 
 Vision 05007066 ("very simple, like Google Keep") defines the shell:
@@ -247,10 +265,14 @@ explicitly NO formatting toolbar:
   text first), Escape closes. The `divider` command inserts `---` AFTER the
   selection — it never replaces selected text.
 
-Recording and transcription text should be inserted with
-`window.PersonalNotes.markdown.safeText(text)` before appending it to a Markdown note
-body. AI title generation uses `markdown.plainText(note.body)`, not raw Markdown
-syntax.
+Recording and transcription text is stored VERBATIM (CRLF-normalized and
+end-trimmed only — `window.PersonalNotes.recording.transcriptBody(text)`).
+Spoken transcripts are prose, not Markdown the user typed: escaping them with
+`markdown.safeText(text)` inserted stray backslashes before ordinary
+punctuation ("3.5" → "3\.5"), the transcription-backslash bug. `safeText`
+remains available for text that must render literally inside Markdown the app
+generates. AI title generation uses `markdown.plainText(note.body)`, not raw
+Markdown syntax.
 
 ## Chat And Agent API
 
@@ -488,6 +510,15 @@ Selecting a note that belongs to a different machine than the active filter
 (search, Home recent cards, chat source chips) jumps the machine filter to the
 note's own machine and shows the note (vision 9f8fba61) — selection + render
 MUST work across machine filter switches.
+
+Right-clicking a machine row (vision f8659e18) BOTH dispatches
+`hasna:machine-context` (the integration hook, detail
+`{ machineId, machine }`) AND renders the `#machine-pop` details popover:
+display name, a "This machine" badge when the row is this machine, id/slug,
+platform, status, note counts, last activity, and last sync. It fills from the
+cached `machines.details(id)` synchronously, refreshes in place when
+`machines.requestDetails(id)` resolves, and closes on Escape, outside
+pointer-down, scroll, or selecting a machine.
 
 The web layer dispatches:
 

@@ -182,8 +182,14 @@ async function promptYesNo(message) {
 async function requireDestructiveConfirmation(preview, opts, message) {
   if (hasConfirmationFlag(opts)) return true;
   if (shouldAvoidPrompt(opts)) {
+    // --json is the contracted dry-run PREVIEW (exit 0, requiresConfirmation
+    // payload). The plain non-interactive path is a REFUSAL — scripts must be
+    // able to detect from the exit code that nothing was written (exit 2).
     if (opts.json) jsonOut(preview);
-    else lineOut(`${message} Re-run with --yes or --force to confirm.`);
+    else {
+      lineOut(`${message} Re-run with --yes or --force to confirm.`);
+      process.exitCode = 2;
+    }
     return false;
   }
   const ok = await promptYesNo(message);

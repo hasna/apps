@@ -5,6 +5,7 @@ import {
   clearClientConfig,
   createClient,
   loadClientConfig,
+  resolveClientConfig,
   saveClientConfig,
 } from '../sync/client.mjs';
 import { summaryLine } from '../sync/engine.mjs';
@@ -12,9 +13,11 @@ import {
   installService,
   readSyncStatus,
   runSyncGuarded,
+  serviceDefinition,
   uninstallService,
   watchSync,
 } from '../sync/daemon.mjs';
+import { checkInstallApiUrl, lnpWarningLines } from '../sync/lnp.mjs';
 import { dataRoot } from '../tools/notes-lib.mjs';
 
 function parseArgs(argv) {
@@ -56,7 +59,7 @@ Usage:
   personalnotes sync [--dry-run] [--json] [--api-url https://...]
   personalnotes sync --watch [--interval 5m] [--log-file path]
   personalnotes sync status [--json]
-  personalnotes sync --install-service [--json]     (launchd on macOS, systemd --user on Linux)
+  personalnotes sync --install-service [--dry-run] [--json]     (launchd on macOS, systemd --user on Linux)
   personalnotes sync --uninstall-service [--json]
   personalnotes cloud status [--json]
   personalnotes cloud list [--limit 10] [--json]
@@ -75,6 +78,11 @@ default 5, floor 1, jittered) plus a debounced watch on the notes folder, one
 instance per data root, honest status in <data-root>/sync-status.json, logs in
 ~/Library/Logs/PersonalNotes (macOS) or ~/.local/state/personalnotes (Linux).
 --install-service writes the user service file that keeps the daemon running.
+On macOS it first checks the API URL: a host that resolves to a LAN address is
+silently unreachable for launchd agents (Local Network Privacy, EHOSTUNREACH,
+no prompt), so the installer prefers a Tailscale MagicDNS FQDN when one is
+detectable and saves it to the config. --dry-run previews the check and the
+service file without writing anything.
 
 Local note commands (list, create, labels, markdown, agent, ...) are also handled by this binary.
 The legacy hasna-notes / hasna-notes-mcp aliases are deprecated and will be removed in the next release.`;
@@ -106,9 +114,42 @@ async function commandSyncStatus(opts) {
 }
 
 async function commandSyncService(opts, uninstall) {
+  const dryRun = !!opts['dry-run'];
+  let lnp = null;
+  let env = process.env;
+  if (!uninstall) {
+    // macOS Local Network Privacy check (sync/lnp.mjs): a LAN-resolving API
+    // URL silently breaks the launchd daemon (EHOSTUNREACH, no prompt) while
+    // manual runs work. Prefer a Tailscale MagicDNS FQDN when detectable and
+    // persist it so daemon and manual runs use the same safe URL.
+    const resolved = await resolveClientConfig({ apiUrl: opts['api-url'] });
+    lnp = await checkInstallApiUrl({ apiUrl: resolved.apiUrl });
+    if (lnp.blocked) {
+      if (!opts.json) for (const warning of lnpWarningLines(lnp)) process.stderr.write(warning + '\n');
+      if (lnp.safeApiUrl) {
+        if (!dryRun) {
+          const existing = await loadClientConfig();
+          await saveClientConfig({ ...existing, apiUrl: lnp.safeApiUrl });
+          if (!opts.json) process.stderr.write(`Saved apiUrl to ${CONFIG_PATH}\n`);
+        }
+        // The service file embeds PERSONALNOTES_API_URL when set — make sure
+        // it embeds the safe URL, not the LAN one the config no longer uses.
+        if (process.env.PERSONALNOTES_API_URL) env = { ...process.env, PERSONALNOTES_API_URL: lnp.safeApiUrl };
+      }
+    }
+  }
+  if (dryRun) {
+    const def = serviceDefinition({ scriptPath: cliScriptPath(), env });
+    // def.instructions are the ENABLE steps — only meaningful for install.
+    const payload = { ok: true, dryRun: true, uninstall, platform: def.platform, path: def.path, ...(uninstall ? {} : { instructions: def.instructions }), ...(lnp ? { lnp } : {}) };
+    if (opts.json) return jsonOut(payload);
+    line(`[dry-run] Would ${uninstall ? 'remove' : 'write'} ${def.path}`);
+    if (lnp?.blocked && lnp.safeApiUrl) line(`[dry-run] Would save apiUrl ${lnp.safeApiUrl} to ${CONFIG_PATH}`);
+    return;
+  }
   const action = uninstall ? uninstallService : installService;
-  const result = await action({ scriptPath: cliScriptPath() });
-  if (opts.json) return jsonOut({ ok: true, removed: !!result.removed, platform: result.platform, path: result.path, instructions: result.instructions });
+  const result = await action({ scriptPath: cliScriptPath(), env });
+  if (opts.json) return jsonOut({ ok: true, removed: !!result.removed, platform: result.platform, path: result.path, instructions: result.instructions, ...(lnp ? { lnp } : {}) });
   line(uninstall
     ? (result.removed ? `Removed ${result.path}` : `No service file at ${result.path}`)
     : `Wrote ${result.path}`);

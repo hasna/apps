@@ -697,8 +697,9 @@ body.native .content-header{padding-top:0;height:var(--native-inset);margin-bott
 .np-title{font-size:21px;font-weight:600;margin:0;}
 .np-count{font-size:12px;color:var(--grey);}
 .np-list{display:flex;flex-direction:column;}
-.np-row{position:relative;padding:12px 10px;border-radius:var(--r-control);cursor:pointer;border-bottom:1px solid var(--hair);}
-.np-row:last-child{border-bottom:none;}
+/* Flat list — no hairlines between notes (user rule 05007066 §7: the whole app
+   keeps note lists borderless; hover carries the row affordance instead). */
+.np-row{position:relative;padding:12px 10px;border-radius:var(--r-control);cursor:pointer;}
 .np-row:hover{background:var(--bg-row-hover);}
 /* Hover actions (top-right): copy on every row; Restore / permanent Delete appear on
    archived and trashed rows. Icon-only checkmark feedback on copy — no "Copied" text. */
@@ -903,6 +904,24 @@ body.native .compact-inner{padding-top:calc(14px + var(--native-inset));}
 .ctx-item.ctx-danger{color:var(--danger);}
 .ctx-item.ctx-danger:hover{background:var(--danger);color:#fff;}
 .ctx-sep{height:1px;background:var(--hair);margin:4px 6px;}
+
+/* ====================== MACHINE DETAILS POPOVER ====================== */
+/* Right-click a machine row (vision f8659e18). Same glass chrome as .ctx-menu. */
+.machine-pop{
+  position:fixed;z-index:80;min-width:236px;max-width:320px;
+  border:0.5px solid rgba(0,0,0,.10);border-radius:var(--r-panel);
+  background:var(--glass-canvas-bg);
+  -webkit-backdrop-filter:var(--glass-filter);
+  backdrop-filter:var(--glass-filter);
+  box-shadow:var(--glass-canvas-ring),0 10px 30px rgba(0,0,0,.18),0 2px 8px rgba(0,0,0,.08);
+  padding:10px 12px;display:flex;flex-direction:column;gap:4px;
+}
+.mp-head{display:flex;align-items:center;gap:8px;margin-bottom:4px;}
+.mp-name{font-size:13px;font-weight:600;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.mp-badge{font-size:10px;font-weight:600;color:var(--accent);border:1px solid var(--accent);border-radius:999px;padding:1px 7px;white-space:nowrap;}
+.mp-row{display:flex;align-items:baseline;gap:10px;font-size:12px;}
+.mp-key{flex:0 0 76px;color:var(--grey);}
+.mp-val{color:var(--fg);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 
 /* ====================== MARKDOWN POPOVER + SLASH MENU ====================== */
 /* The ONLY formatting UI (no toolbar): a small popover over selected editor text and a
