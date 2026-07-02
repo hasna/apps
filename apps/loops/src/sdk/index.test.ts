@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { tick } from "../lib/scheduler.js";
 import { Store } from "../lib/store.js";
+import { gatedWriteCommand, openGate, waitUntil } from "../test-helpers.js";
 import { LoopsClient, openAutomationsRuntimeBinding } from "./index.js";
 
 describe("loops sdk", () => {
@@ -27,6 +28,59 @@ describe("loops sdk", () => {
     expect(binding.guarantees.join(" ")).toContain("exported event envelopes");
     expect(binding.nonGoals.join(" ")).toContain("must not become the OpenAutomations product surface");
     expect(binding.eventHandoff.boundary).toContain("OpenLoops owns workflow invocation");
+  });
+
+  test("lists loops and runs with filters and exposes doctor/health reports", async () => {
+    const store = new Store(":memory:");
+    const client = new LoopsClient({ store, runnerId: "manual" });
+    try {
+      const active = client.create({
+        name: "sdk-filter-active",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "true" },
+      });
+      const archived = client.create({
+        name: "sdk-filter-archived",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "true" },
+      });
+      client.archive(archived.id);
+
+      expect(client.list().map((loop) => loop.id)).toEqual([active.id]);
+      expect(client.list({ status: "active" }).map((loop) => loop.id)).toEqual([active.id]);
+      expect(client.list({ status: "stopped" })).toHaveLength(0);
+      expect(client.list({ archivedOnly: true }).map((loop) => loop.id)).toEqual([archived.id]);
+      expect(client.list({ includeArchived: true })).toHaveLength(2);
+      expect(client.list({ includeArchived: true, limit: 1 })).toHaveLength(1);
+
+      const succeeded = await client.runNow(active.id);
+      expect(succeeded.status).toBe("succeeded");
+      expect(client.runs("sdk-filter-active", { status: "succeeded" }).map((run) => run.id)).toEqual([succeeded.id]);
+      expect(client.runs(active.id, { status: "failed" })).toHaveLength(0);
+      expect(client.runs()).toHaveLength(1);
+      // v0.3.x compat: polling runs for an unknown or just-deleted loop id
+      // returns [] instead of throwing LoopNotFoundError.
+      expect(client.runs("no-such-loop")).toEqual([]);
+      const deleted = client.create({
+        name: "sdk-filter-deleted",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "true" },
+      });
+      client.delete(deleted.id);
+      expect(client.runs(deleted.id)).toEqual([]);
+      // Other loop lookups stay strict.
+      expect(() => client.get("no-such-loop")).toThrow("loop not found");
+
+      const doctor = client.doctor();
+      expect(doctor.checks.map((check) => check.id)).toContain("data-dir");
+
+      const health = client.health();
+      expect(health.summary.loops).toBe(1);
+      expect(health.expectations[0]?.loop.id).toBe(active.id);
+      expect(client.health({ includeArchived: true }).summary.loops).toBe(2);
+    } finally {
+      client.close();
+    }
   });
 
   test("archives and unarchives loops through the client", async () => {
@@ -92,23 +146,22 @@ describe("loops sdk", () => {
     const client = new LoopsClient({ store, runnerId: "manual" });
     const root = mkdtempSync(join(tmpdir(), "loops-sdk-runnow-"));
     const marker = join(root, "marker");
+    const gate = join(root, "gate");
     try {
       const loop = client.create({
         name: "manual-due-loop",
         schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
-        target: { type: "command", command: `sleep 1; printf x >> ${JSON.stringify(marker)}`, shell: true },
+        target: { type: "command", command: gatedWriteCommand(gate, marker, { text: "x", append: true }), shell: true },
         leaseMs: 50,
         maxAttempts: 2,
         retryDelayMs: 1,
         overlap: "allow",
       });
       const running = client.runNow(loop.id);
-      for (let i = 0; i < 100; i++) {
+      const active = await waitUntil(() => {
         const run = store.listRuns({ loopId: loop.id, status: "running", limit: 1 })[0];
-        if (run?.pid !== undefined) break;
-        await Bun.sleep(10);
-      }
-      const active = store.listRuns({ loopId: loop.id, status: "running", limit: 1 })[0];
+        return run?.pid !== undefined ? run : undefined;
+      }, { label: "running run with pid" });
       expect(loop.nextRunAt).toBeDefined();
       expect(active?.scheduledFor).toBe(loop.nextRunAt!);
       expect(active?.pid).toBeDefined();
@@ -120,6 +173,7 @@ describe("loops sdk", () => {
       });
       expect(tickResult.completed).toHaveLength(0);
       expect(store.listRuns({ loopId: loop.id })).toHaveLength(1);
+      openGate(gate);
       const run = await running;
       expect(run.status).toBe("succeeded");
       expect(store.getLoop(loop.id)?.status).toBe("stopped");

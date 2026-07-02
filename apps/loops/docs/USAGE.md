@@ -313,6 +313,15 @@ Use `shell: true` only when you intentionally want shell parsing:
 { "type": "command", "command": "git status --short", "shell": true }
 ```
 
+Gate steps can end a workflow early without failing it. A step opts into
+blocked-exit semantics either explicitly via `"blockedExitCodes": [12]` on the
+step, or by naming convention: a step whose `id` or `name` contains "gate" as a
+standalone word (for example `gate`, `triage-gate`, `gate_check`) treats exit
+code 12 as "blocked" — the step and its dependents are recorded as skipped and
+the workflow still succeeds. Substring matches such as `gateway`, `aggregate`,
+or `delegate` do NOT inherit gate behavior; use `blockedExitCodes` explicitly
+for those. Set `"blockedExitCodes": []` on a gate-named step to opt out.
+
 ## Templates And Task Events
 
 Built-in templates turn common orchestration flows into reusable workflow JSON.
@@ -448,18 +457,21 @@ explicit break-glass handling for emergency workflows that need full access.
 
 Repo-mutating task/event routes should set `worktreeMode=required` so the
 workflow fails fast instead of falling back to the main checkout. When
-`projectPath` is an existing git repository, OpenLoops inserts a
-`prepare-worktree` command step before the worker and runs the worker/verifier
-from a deterministic worktree under `~/.hasna/loops/worktrees/<repo>/<run>`.
-The generated agent target includes worktree metadata (`mode`, `cwd`, `path`,
-`branch`, `originalCwd`) so dry-runs and workflow inspection expose the exact
-checkout.
+`projectPath` is an existing git repository, the executor prepares and enters
+a deterministic worktree under `~/.hasna/loops/worktrees/<repo>/<run>` before
+spawning the worker/verifier — locally and on machine-assigned (remote) loops,
+where the dispatch script runs the equivalent `git worktree add`/reuse checks
+on the remote machine. The generated agent target includes worktree metadata
+(`mode`, `cwd`, `path`, `branch`, `originalCwd`) so dry-runs and workflow
+inspection expose the exact checkout.
 
-Before a worker starts, `prepare-worktree` verifies that any existing managed
-path is a real git worktree with the same top-level checkout, the same git
-common directory as the source repo, and the expected generated branch. A
-detached HEAD or unexpected branch fails closed with evidence instead of
-silently running a mutating workflow in the wrong state.
+Before a worker starts, worktree preparation verifies that any existing
+managed path is a real git worktree with the same top-level checkout, the same
+git common directory as the source repo, and the expected generated branch. A
+detached HEAD or unexpected branch fails closed with evidence
+(`worktreeMode=required`) instead of silently running a mutating workflow in
+the wrong state; `worktreeMode=auto` falls back to the original checkout and
+records the fallback.
 
 Use explicit main/default checkout mode only when the task truly requires it:
 
@@ -785,8 +797,9 @@ record an `auto_route_skipped_reason`. Without `--auto-route`, route commands
 only upsert deduped tasks and do not launch agents.
 
 Failure classifications are: `rate_limit`, `auth`, `model_not_found`,
-`context_length`, `schema_response_format`, `node_init`, `timeout`, `sigsegv`,
-`skipped_previous_active`, and `unknown`.
+`context_length`, `schema_response_format`, `node_init`, `preflight`,
+`route_functional`, `timeout`, `sigsegv`, `skipped_previous_active`,
+`circuit_breaker`, and `unknown`.
 
 ## Hygiene
 
@@ -904,6 +917,15 @@ The adapters intentionally use provider command surfaces instead of pretending e
 - `--permission-mode` maps `plan`, `auto`, and `bypass` where the provider supports it. Claude uses native permission modes, Cursor maps bypass to `--force`, and OpenCode/AICopilot map bypass to `--dangerously-skip-permissions`.
 - `--variant` is provider-specific reasoning/model effort. Claude maps it to `--effort`, Codewith/Codex map it to `model_reasoning_effort`, and OpenCode/AICopilot pass `--variant`.
 - Daemon and scheduled runs prepend common user executable directories such as `~/.local/bin` and `~/.bun/bin` before resolving provider CLIs.
+- Agent targets that set neither `timeoutMs` nor `idleTimeoutMs` get a default
+  idle watchdog: 30 minutes without stdout/stderr for streaming providers
+  (codex, cursor), and 4 hours for providers whose CLIs buffer all output until
+  completion (claude, opencode, aicopilot) or whose durable progress
+  fingerprint can stay flat during long work (codewith). Override the default
+  with `LOOPS_AGENT_IDLE_TIMEOUT_MS=<ms>`, disable it with
+  `LOOPS_AGENT_IDLE_TIMEOUT_MS=0` (or `none`/`off`), or set explicit
+  `timeoutMs`/`idleTimeoutMs` per target — `"timeoutMs": null` opts a target
+  out of both the wall-clock default and the idle watchdog.
 
 For production loops that can mutate repos, prefer the built-in
 `worktreeMode=auto`/`required` path and explicit prompts that name allowed write

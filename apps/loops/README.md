@@ -2,6 +2,11 @@
 
 OpenLoops is a local CLI and daemon for persistent loops and workflows: scheduled or recurring work that survives process restarts and records every run.
 
+Naming: the product is **OpenLoops**, published on npm as
+[`@hasna/loops`](https://www.npmjs.com/package/@hasna/loops) and developed in the
+[`hasna/loops`](https://github.com/hasna/loops) repository. The installed
+binaries are `loops`, `loops-daemon`, and `loops-mcp`.
+
 It supports deterministic command loops, JSON-defined workflows, and guarded CLI adapters for headless coding agents:
 
 - `claude`
@@ -13,7 +18,12 @@ It supports deterministic command loops, JSON-defined workflows, and guarded CLI
 
 ## Install
 
-From npm:
+**OpenLoops requires the [Bun](https://bun.sh) runtime (`bun >= 1.0`).** The
+`loops`, `loops-daemon`, and `loops-mcp` binaries run with a `#!/usr/bin/env bun`
+shebang, so Bun must be on `PATH` even when the package is installed with npm.
+Node.js is not a supported runtime.
+
+From npm (with Bun installed):
 
 ```bash
 npm install -g @hasna/loops
@@ -197,7 +207,9 @@ non-secret routing/configuration data.
 
 ## Goals
 
-Add `--goal` to wrap a command, agent, or workflow loop in an AI-SDK orchestration layer. OpenLoops asks the configured model to create a flat DAG plan, executes ready nodes by calling the underlying target, then runs an adversarial achievement audit before marking the goal complete.
+Add `--goal` to wrap a command, agent, or workflow loop in an AI-SDK orchestration layer. OpenLoops asks the configured model to create a flat DAG plan, then executes ready plan nodes by re-running the underlying target once per node. Each node run is parameterized with that node's objective: agent prompts get the goal and node objective appended, and every wrapped process receives `LOOPS_GOAL_NODE_KEY` and `LOOPS_GOAL_NODE_OBJECTIVE` in its environment. An adversarial achievement audit runs before the goal is marked complete.
+
+The goal `autoExecute` mode is honored: `off` plans and persists the DAG without executing any nodes (the run reports the persisted plan), while `readyOnly` (the default) and `aiDirected` run the dependency-driven execution loop over ready nodes.
 
 ```bash
 export OPENROUTER_API_KEY=...
@@ -213,7 +225,7 @@ loops create agent repo-fixer \
   --goal-max-turns 5
 ```
 
-Goal planning and validation use the Vercel AI SDK with `@openrouter/ai-sdk-provider`. Set `OPENROUTER_API_KEY`; optionally set `LOOPS_GOAL_BASE_URL` to point at a local gateway compatible with OpenRouter. Goal context is passed to wrapped commands and agents as `LOOPS_GOAL_ID`, `LOOPS_GOAL_OBJECTIVE`, and `LOOPS_GOAL_NODE_KEY`.
+Goal planning and validation use the Vercel AI SDK with `@openrouter/ai-sdk-provider`. Set `OPENROUTER_API_KEY`; optionally set `LOOPS_GOAL_BASE_URL` to point at a local gateway compatible with OpenRouter. Goal context is passed to wrapped commands and agents as `LOOPS_GOAL_ID`, `LOOPS_GOAL_OBJECTIVE`, `LOOPS_GOAL_NODE_KEY`, and `LOOPS_GOAL_NODE_OBJECTIVE`.
 
 If a resumed goal plan has no runnable nodes, failed run output includes a
 structured `diagnostics` object with the concrete blocker and `owner`
@@ -660,59 +672,15 @@ write OpenLoops SQLite rows directly. The stable contract should be an
 idempotent CLI/SDK upsert that accepts a fully rendered one-shot workflow loop
 request and returns durable refs.
 
-Proposed SDK shape:
+The canonical `WorkflowUpsertRequest` / `WorkflowUpsertResult` shapes and their
+required semantics (dry-run/preflight/commit modes, `idempotencyKey` +
+`specHash` idempotency, dispatch behavior, and redaction-before-persistence)
+are specified in `docs/AUTOMATION_RUNTIME_DESIGN.md`; this README intentionally
+does not duplicate that spec.
 
-```ts
-type WorkflowUpsertRequest = {
-  idempotencyKey: string;
-  source: { kind: "action" | "automation" | "event"; id: string; dedupeKey?: string };
-  subject: { kind: "repo" | "task" | "pr" | "run"; id?: string; path?: string; url?: string };
-  workflow: { name: string; description?: string; steps: WorkflowStepInput[] };
-  loop: { name: string; schedule: { type: "once"; at: string }; machine?: LoopMachineRef };
-  route?: { projectPath?: string; projectGroup?: string; concurrencyGroup?: string };
-  execution?: AutomationExecutionPolicy;
-  mode?: "dry-run" | "preflight" | "commit";
-  dispatch?: "schedule" | "run-now" | "none";
-};
-
-type WorkflowUpsertResult = {
-  ok: boolean;
-  dryRun: boolean;
-  idempotencyKey: string;
-  specHash: string;
-  refs: {
-    workflowId?: string;
-    loopId?: string;
-    invocationId?: string;
-    workItemId?: string;
-    runId?: string;
-    manifestPath?: string;
-  };
-  action: "created" | "updated" | "reused" | "rejected";
-  preflight?: { ok: boolean; checks: unknown[]; error?: string };
-};
-```
-
-Required semantics:
-
-- `mode="dry-run"` validates, canonicalizes, hashes, and returns the same JSON
-  shape without mutating OpenLoops state.
-- `mode="preflight"` additionally checks provider binaries, machine routing,
-  accounts/auth profiles, prompt files, and workflow target compatibility before
-  commit.
-- `mode="commit"` is idempotent on `idempotencyKey` plus `specHash`: identical
-  requests return existing refs; changed specs create a new workflow version or
-  one-shot loop while preserving previous run history.
-- `dispatch="schedule"` stores a one-shot loop for the daemon; `run-now` claims
-  an immediate manual slot; `none` only materializes refs for another owner to
-  trigger later.
-- All persisted output is redacted before storage, and returned refs are enough
-  for the caller to inspect, cancel, replay, or resolve the run without querying
-  SQLite directly.
-
-See `docs/AUTOMATION_RUNTIME_DESIGN.md` for the planned DLQ/dead-letter
-lifecycle, including `loops dlq list/show/replay/resolve`, idempotent replay
-keys, and compatibility rules for `@hasna/actions`.
+The same design doc covers the planned DLQ/dead-letter lifecycle, including
+`loops dlq list/show/replay/resolve`, idempotent replay keys, and compatibility
+rules for `@hasna/actions`.
 
 The same design doc also defines the planned strict automation execution mode:
 minimal env inheritance, scoped secret refs, enforced allowlists,
@@ -879,4 +847,4 @@ The adapters intentionally use provider command surfaces instead of pretending e
 - `--variant` is provider-specific reasoning/model effort. Claude maps it to `--effort`, Codewith/Codex map it to `model_reasoning_effort`, and OpenCode/AICopilot pass `--variant`.
 - Daemon and scheduled runs prepend common user executable directories such as `~/.local/bin` and `~/.bun/bin` before resolving provider CLIs.
 
-For production loops that can mutate repos, prefer disposable worktrees and explicit prompts that name allowed write scope.
+For production loops that can mutate repos, use disposable worktrees (`--worktree-mode required` / `worktreeMode=required`) and explicit prompts that name allowed write scope. Worktrees are executor-enforced: when a target carries worktree metadata, the executor prepares and enters the git worktree before spawning the child process, records the worktree it entered, and with `mode=required` fails the run closed instead of falling back to the original checkout when preparation fails. Remote machine runs with a required worktree are verified fail-closed on the remote side before the target executes.

@@ -1,11 +1,15 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { Store } from "../lib/store.js";
-import { runDaemon } from "./daemon.js";
+import { daemonLogLine, rotateDaemonLog, runDaemon } from "./daemon.js";
+import { isAlive, processStartTimeMs } from "./control.js";
 import { tick } from "../lib/scheduler.js";
-import type { ExecutorResult } from "../types.js";
+import { expectMarkerNeverWritten, gatedWriteCommand, waitUntil } from "../test-helpers.js";
+import type { ExecutorResult, LoopRun } from "../types.js";
 
 function executorResult(status: ExecutorResult["status"], at: string): ExecutorResult {
   return {
@@ -100,10 +104,10 @@ describe("daemon", () => {
         },
       });
 
-      for (let i = 0; i < 100 && started < 2; i++) await Bun.sleep(10);
+      await waitUntil(() => started >= 2, { label: "two runs started" });
       expect(started).toBe(2);
       expect(maxActive).toBe(2);
-      for (let i = 0; i < 100 && store.listRuns({ status: "succeeded" }).length < 2; i++) await Bun.sleep(10);
+      await waitUntil(() => store.listRuns({ status: "succeeded" }).length >= 2, { label: "two runs succeeded" });
       stop = true;
       await daemon;
 
@@ -121,6 +125,7 @@ describe("daemon", () => {
   test("aborts active workflow children on daemon stop", async () => {
     const root = mkdtempSync(join(tmpdir(), "loops-daemon-stop-"));
     const marker = join(root, "late-write");
+    const gate = join(root, "gate");
     const store = new Store(":memory:");
     const controller = new AbortController();
     try {
@@ -129,7 +134,7 @@ describe("daemon", () => {
         steps: [
           {
             id: "slow",
-            target: { type: "command", command: `sleep 1; printf late > ${JSON.stringify(marker)}`, shell: true },
+            target: { type: "command", command: gatedWriteCommand(gate, marker), shell: true },
           },
         ],
       });
@@ -148,19 +153,14 @@ describe("daemon", () => {
         shouldStop: () => controller.signal.aborted,
         log: () => undefined,
       });
-      let runId: string | undefined;
-      for (let i = 0; i < 100; i++) {
+      const runId = await waitUntil(() => {
         const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0];
-        if (run && store.getWorkflowStepRun(run.id, "slow")?.status === "running") {
-          runId = run.id;
-          break;
-        }
-        await Bun.sleep(10);
-      }
+        return run && store.getWorkflowStepRun(run.id, "slow")?.status === "running" ? run.id : undefined;
+      }, { label: "workflow step running" });
       expect(runId).toBeDefined();
       controller.abort();
       await daemon;
-      await Bun.sleep(1_100);
+      await expectMarkerNeverWritten(gate, marker);
       expect(store.requireWorkflowRun(runId!).status).toBe("failed");
       expect(existsSync(marker)).toBe(false);
     } finally {
@@ -170,15 +170,16 @@ describe("daemon", () => {
     }
   });
 
-  test("aborts active child work when the daemon lease is lost", async () => {
+  test("aborts active child work when another daemon takes the lease", async () => {
     const root = mkdtempSync(join(tmpdir(), "loops-daemon-lease-"));
     const marker = join(root, "late-write");
+    const gate = join(root, "gate");
     const store = new Store(":memory:");
     try {
       store.createLoop({
         name: "daemon-lease-loss",
         schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
-        target: { type: "command", command: `sleep 1; printf late > ${JSON.stringify(marker)}`, shell: true },
+        target: { type: "command", command: gatedWriteCommand(gate, marker), shell: true },
         leaseMs: 100,
       });
 
@@ -190,23 +191,20 @@ describe("daemon", () => {
         log: () => undefined,
       });
 
-      let leaseDeleted = false;
-      for (let i = 0; i < 100; i++) {
-        const run = store.listRuns({ limit: 1 })[0];
+      const leaseDeleted = await waitUntil(() => {
+        const running = store.listRuns({ limit: 1 })[0];
         const lease = store.getDaemonLease();
-        if (run?.status === "running" && lease) {
-          store.releaseDaemonLease(lease.id);
-          leaseDeleted = true;
-          break;
-        }
-        await Bun.sleep(10);
-      }
+        if (running?.status !== "running" || !lease) return false;
+        store.releaseDaemonLease(lease.id);
+        store.acquireDaemonLease({ id: "other-daemon", pid: 999_999, hostname: "elsewhere", ttlMs: 60_000 });
+        return true;
+      }, { label: "run started and lease stolen" });
       await daemon;
 
       const run = store.listRuns({ limit: 1 })[0];
       expect(leaseDeleted).toBe(true);
       expect(run?.status).toBe("running");
-      await Bun.sleep(1_100);
+      await expectMarkerNeverWritten(gate, marker);
       expect(existsSync(marker)).toBe(false);
 
       const recovered = await tick({
@@ -221,6 +219,215 @@ describe("daemon", () => {
       expect(store.getRun(run!.id)?.status).toBe("abandoned");
     } finally {
       store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("re-acquires the daemon lease after transient loss and aborts in-flight work", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-daemon-reacquire-"));
+    const marker = join(root, "late-write");
+    const gate = join(root, "gate");
+    const store = new Store(":memory:");
+    let stop = false;
+    try {
+      store.createLoop({
+        name: "daemon-lease-reacquire",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "command", command: gatedWriteCommand(gate, marker), shell: true },
+      });
+
+      const daemon = runDaemon({
+        store,
+        pidPath: join(root, "loops-daemon.pid"),
+        intervalMs: 5,
+        sleep: async (ms) => Bun.sleep(ms),
+        shouldStop: () => stop,
+        log: () => undefined,
+      });
+
+      const released = await waitUntil(() => {
+        const running = store.listRuns({ limit: 1 })[0];
+        const lease = store.getDaemonLease();
+        if (running?.status !== "running" || !lease) return false;
+        store.releaseDaemonLease(lease.id);
+        return true;
+      }, { label: "run started and lease released" });
+      expect(released).toBe(true);
+
+      const lease = await waitUntil(() => store.getDaemonLease(), { label: "lease re-acquired" });
+      expect(lease).toBeDefined();
+      expect(lease?.pid).toBe(process.pid);
+
+      const run = await waitUntil(() => {
+        const latest = store.listRuns({ limit: 1 })[0];
+        return latest?.status !== "running" ? latest : undefined;
+      }, { label: "run left running state" });
+      expect(run?.status).toBe("failed");
+
+      stop = true;
+      await daemon;
+      await expectMarkerNeverWritten(gate, marker);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      stop = true;
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("reaps orphan process groups returned by lease recovery", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-daemon-reap-"));
+    const store = new Store(":memory:");
+    let stop = false;
+    const orphan = spawn("sleep", ["30"], { detached: true, stdio: "ignore" });
+    orphan.unref();
+    try {
+      await once(orphan, "spawn");
+      const orphanPid = orphan.pid!;
+      const loop = store.createLoop({
+        name: "orphan-loop",
+        schedule: { type: "once", at: "2099-01-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+      });
+      const fakeRun: LoopRun = {
+        id: "orphan-run",
+        loopId: loop.id,
+        loopName: loop.name,
+        scheduledFor: new Date().toISOString(),
+        attempt: 1,
+        status: "abandoned",
+        pid: orphanPid,
+        pgid: orphanPid,
+        processStartedAt: new Date(processStartTimeMs(orphanPid) ?? Date.now()).toISOString(),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      const original = store.recoverExpiredRunLeases.bind(store);
+      let injected = false;
+      store.recoverExpiredRunLeases = (now?: Date, opts?: Parameters<Store["recoverExpiredRunLeases"]>[1]) => {
+        const recovered = original(now, opts);
+        if (!injected) {
+          injected = true;
+          recovered.push(fakeRun);
+        }
+        return recovered;
+      };
+
+      const daemon = runDaemon({
+        store,
+        pidPath: join(root, "loops-daemon.pid"),
+        intervalMs: 5,
+        reapGraceMs: 200,
+        sleep: async (ms) => Bun.sleep(ms),
+        shouldStop: () => stop,
+        log: () => undefined,
+      });
+
+      const dead = await waitUntil(() => !isAlive(orphanPid), { label: "orphan process reaped" });
+      expect(injected).toBe(true);
+      expect(dead).toBe(true);
+
+      stop = true;
+      await daemon;
+    } finally {
+      stop = true;
+      try {
+        process.kill(-orphan.pid!, "SIGKILL");
+      } catch {
+        /* already dead */
+      }
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("startup recovery does not reap deferred runs owned by live inline owners", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-daemon-inline-owner-"));
+    const store = new Store(":memory:");
+    let stop = false;
+    // Every inline surface claims runs as `<surface>:<pid>` and must be
+    // spared: CLI run-now, CLI tick, and the SDK's inline client.
+    const owners = ["manual", "manual-tick", "sdk"] as const;
+    const children = owners.map(() => spawn("sleep", ["30"], { detached: true, stdio: "ignore" }));
+    for (const child of children) child.unref();
+    try {
+      await Promise.all(children.map((child) => once(child, "spawn")));
+      const claims = owners.map((owner, index) => {
+        const loop = store.createLoop(
+          {
+            name: `${owner}-owner-loop`,
+            schedule: { type: "once", at: `2099-01-01T00:0${index}:00Z` },
+            target: { type: "command", command: "true" },
+            leaseMs: 10,
+          },
+          new Date(),
+        );
+        // Inline run in another process: live owner, live child, lease
+        // briefly lapsed (e.g. suspend/resume) before the daemon started.
+        const runnerId = `${owner}:${process.pid}`;
+        const claim = store.claimRun(loop, new Date().toISOString(), runnerId);
+        expect(claim).toBeDefined();
+        store.markRunPid(claim!.run.id, children[index]!.pid!, runnerId);
+        return claim!;
+      });
+      await Bun.sleep(30);
+
+      const daemon = runDaemon({
+        store,
+        pidPath: join(root, "loops-daemon.pid"),
+        intervalMs: 5,
+        reapGraceMs: 100,
+        sleep: async (ms) => Bun.sleep(ms),
+        shouldStop: () => stop,
+        log: () => undefined,
+      });
+      await Bun.sleep(400);
+      for (const [index, claim] of claims.entries()) {
+        expect(isAlive(children[index]!.pid!)).toBe(true);
+        expect(store.getRun(claim.run.id)?.status).toBe("running");
+      }
+
+      stop = true;
+      await daemon;
+    } finally {
+      stop = true;
+      for (const child of children) {
+        try {
+          process.kill(-child.pid!, "SIGKILL");
+        } catch {
+          /* already dead */
+        }
+      }
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("timestamps daemon log lines and rotates the log at the size limit", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-daemon-log-"));
+    const path = join(root, "daemon.log");
+    try {
+      expect(daemonLogLine("hello")).toMatch(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\] \[loops-daemon\] hello$/);
+
+      writeFileSync(path, "old\n");
+      expect(rotateDaemonLog(path, 1_024, 2)).toBe(false);
+
+      writeFileSync(path, "a".repeat(2_048));
+      expect(rotateDaemonLog(path, 1_024, 2)).toBe(true);
+      expect(readFileSync(path, "utf8")).toBe("");
+      expect(readFileSync(`${path}.1`, "utf8")).toBe("a".repeat(2_048));
+
+      writeFileSync(path, "b".repeat(2_048));
+      expect(rotateDaemonLog(path, 1_024, 2)).toBe(true);
+      expect(readFileSync(`${path}.1`, "utf8")).toBe("b".repeat(2_048));
+      expect(readFileSync(`${path}.2`, "utf8")).toBe("a".repeat(2_048));
+
+      writeFileSync(path, "c".repeat(2_048));
+      expect(rotateDaemonLog(path, 1_024, 2)).toBe(true);
+      expect(readFileSync(`${path}.1`, "utf8")).toBe("c".repeat(2_048));
+      expect(readFileSync(`${path}.2`, "utf8")).toBe("b".repeat(2_048));
+      expect(existsSync(`${path}.3`)).toBe(false);
+    } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
@@ -252,18 +459,15 @@ describe("daemon", () => {
         log: () => undefined,
       });
 
-      let leaseDeleted = false;
-      for (let i = 0; i < 100; i++) {
-        const run = store.listRuns({ limit: 1 })[0];
+      const leaseDeleted = await waitUntil(() => {
+        const running = store.listRuns({ limit: 1 })[0];
         const lease = store.getDaemonLease();
-        if (run?.status === "running" && lease) {
-          store.releaseDaemonLease(lease.id);
-          writeFileSync(gate, "go");
-          leaseDeleted = true;
-          break;
-        }
-        await Bun.sleep(10);
-      }
+        if (running?.status !== "running" || !lease) return false;
+        store.releaseDaemonLease(lease.id);
+        store.acquireDaemonLease({ id: "other-daemon", pid: 999_999, hostname: "elsewhere", ttlMs: 60_000 });
+        writeFileSync(gate, "go");
+        return true;
+      }, { label: "run started and lease stolen" });
       await daemon;
 
       const run = store.listRuns({ limit: 1 })[0];
@@ -326,20 +530,17 @@ describe("daemon", () => {
       });
 
       let leaseDeleted = false;
-      let workflowRunId: string | undefined;
-      for (let i = 0; i < 100; i++) {
+      const workflowRunId = await waitUntil(() => {
         const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0];
         const step = run ? store.getWorkflowStepRun(run.id, "fast") : undefined;
         const lease = store.getDaemonLease();
-        if (run && step?.status === "running" && lease) {
-          workflowRunId = run.id;
-          store.releaseDaemonLease(lease.id);
-          writeFileSync(gate, "go");
-          leaseDeleted = true;
-          break;
-        }
-        await Bun.sleep(10);
-      }
+        if (!run || step?.status !== "running" || !lease) return undefined;
+        store.releaseDaemonLease(lease.id);
+        store.acquireDaemonLease({ id: "other-daemon", pid: 999_999, hostname: "elsewhere", ttlMs: 60_000 });
+        writeFileSync(gate, "go");
+        leaseDeleted = true;
+        return run.id;
+      }, { label: "workflow step running and lease stolen" });
       await daemon;
 
       expect(leaseDeleted).toBe(true);

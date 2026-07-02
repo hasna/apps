@@ -1,0 +1,247 @@
+# Changelog
+
+All notable changes to OpenLoops (npm `@hasna/loops`, repo `hasna/loops`) are
+documented in this file. Version entries are generated from the
+conventional-commit git history; one commit maps to one released patch version
+unless noted.
+
+## 0.4.0 (2026-07-02)
+
+Audit-hardening release: write-path secret scrubbing, process-group reaping,
+gated schema migrations, storage garbage collection, and a consolidated
+CLI/MCP/SDK surface with deprecation aliases.
+
+### Security
+
+- Write-path secret scrubbing (`src/lib/redact.ts`): persisted run/step
+  errors, goal evidence, raw model responses, and run envelopes pass through
+  `scrubSecrets`/`scrubSecretsDeep` before storage. Recognized credential
+  shapes — Anthropic `sk-ant-*`, OpenAI `sk-proj-*`, AWS `AKIA*`, GitHub
+  `ghp_*`/`github_pat_*`, Slack `xox?-*`, PEM private key blocks, and generic
+  `KEY="..."` assignments with high-entropy values — are replaced with
+  `[SCRUBBED]`. Scrubbing is idempotent and bounded for large (256KB+)
+  payloads.
+- MCP shell removal: `loops_create_command` now takes a structured
+  `command` + `args` argv only. The former `shell` boolean is rejected
+  (schema `z.never()`) instead of being silently stripped — shell loops
+  remain a human decision via the CLI. Mutation tools stay double-gated
+  behind `LOOPS_MCP_ALLOW_MUTATIONS=true` plus per-call confirmation.
+- Archived-loop guards centralized in the store: `updateLoop` throws a coded
+  `LoopArchivedError` for archived loops (except the explicit unarchive
+  path), so CLI, MCP, SDK, daemon, and scheduler all share one enforcement
+  point instead of per-surface checks.
+- Executor-enforced git worktrees: when a target carries worktree metadata,
+  the executor prepares/verifies and enters the worktree before spawning the
+  child (locally and on remote machine dispatch), records the entered
+  worktree, and `worktreeMode=required` fails closed instead of falling back
+  to the original checkout.
+- Coded error classes (`src/lib/errors.ts`): `LoopNotFoundError`,
+  `LoopArchivedError`, `AmbiguousNameError`, `ValidationError`, each with a
+  stable `.code` so callers branch on codes instead of message text.
+
+### Reliability
+
+- Run lease re-acquisition: runners heartbeat their lease
+  (`heartbeatRunLease`, every `leaseMs/3` capped at 60s) and the store
+  records the child process identity (`recordRunProcess` with pid/pgid/
+  process start fingerprint) so recovery can tell live runs from dead ones.
+- Orphan reaping: after startup and periodic lease recovery, the daemon
+  signals the process groups of abandoned runs (SIGTERM, then SIGKILL after
+  a grace period) using the pid/pgid + start-time fingerprints returned by
+  `recoverExpiredRunLeases`; unfingerprinted pids are never trusted or
+  signaled.
+- Retry backoff with jitter: exponential
+  `retryDelayMs * 2^(attempt-1) * (0.5 + random)`, capped at 6h;
+  rate-limit/auth failures back off 4x harder.
+- Circuit breaker: after 5 consecutive final failures (default,
+  configurable/disableable) the loop auto-pauses with a health-visible
+  skipped marker run explaining the trip; `loops resume` re-arms it and
+  requires a fresh failure streak before tripping again.
+- Default idle watchdog for agent targets: agent runs that set neither
+  `timeoutMs` nor `idleTimeoutMs` now time out after 30 minutes without
+  observable progress (4 hours for buffered agents); override with
+  `idleTimeoutMs` or `LOOPS_AGENT_IDLE_TIMEOUT_MS`. Timeouts kill the
+  child's entire process group, not just the direct child.
+- Daemon logging: every line is timestamped `[ISO8601] [loops-daemon] ...`,
+  and `daemon.log` rotates at 50MB.
+
+### Storage
+
+- Gated schema migrations: migrations are tracked in `schema_migrations` and
+  the database stamps `PRAGMA user_version` (now 6). Older 0.4.x+ binaries
+  refuse to open a newer database instead of silently misreading it;
+  baseline 0.3.x migrations are re-applied idempotently to converge drifted
+  databases (including the known live fork with orphan
+  `loops.metadata_json`/`loop_runs.source` columns).
+- `Store.pruneHistory({ maxAgeDays?, keepPerLoop?, dryRun? })` deletes old
+  terminal run history in bounded batches and returns a deletion summary;
+  exposed as the new `loops gc` command (dry-run by default, `--apply` to
+  execute) which also rotates database backups, checkpoints the WAL, and
+  removes stray temp files.
+- Online backups via `VACUUM INTO` (`src/lib/backup.ts`):
+  `backupDatabase({ reason, keep = 3 })` with a per-reason 1h debounce and
+  retention pruning; destructive CLI operations (rename, name-hygiene apply)
+  snapshot the database first.
+- Bounded run envelopes (`src/lib/run-envelope.ts`): persisted stdout/stderr
+  excerpts are capped (2048 chars per excerpt) and scrubbed, keeping run
+  rows small and secret-free.
+- Time-sortable ids: `genId()` now returns a 128-bit ULID-like id — 48-bit
+  millisecond timestamp prefix + 80 random bits, 32 lowercase hex chars —
+  so primary keys sort by creation time while staying compatible with
+  existing TEXT keys.
+
+### CLI / MCP / SDK
+
+- CLI: new `loops gc`; `routes` is the canonical event-routing surface.
+  Deprecated aliases retained for one release cycle: `loops events
+  handle|drain ...` (use `loops routes create|drain`), `loops templates
+  create` (use `loops workflows create --template <id>`), and `loops goal
+  status` (merged into `loops goal show`). Internal debloat consolidated
+  ~1,900 lines of template code and moved route/template plumbing into
+  `src/lib/route/` and `src/lib/template-kit.ts` without removing any
+  non-deprecated command.
+- MCP: tools renamed to a canonical `loops_*` namespace (e.g. `loop_runs` →
+  `loops_runs`, `workflow_read` → `loops_workflow_read`); every legacy name
+  is still registered as a deprecated alias. New read-only tools:
+  `loops_health`, `loops_diagnose`, `loops_daemon_status`,
+  `loops_workflow_run_inspect`; new guarded mutations: `loops_stop`,
+  `loops_archive`, `loops_unarchive`. A golden-schema test
+  (`src/mcp/golden-schema.test.ts`) pins the exported tool schemas.
+- SDK: `LoopsClient.list()` accepts status/limit/archived filters;
+  `runs(idOrName?, { status?, limit? })` resolves names and returns `[]` for
+  unknown loops (v0.3.x-compatible polling); new `doctor()` and `health()`
+  reports; `pause`/`resume`/`stop` surface the store's coded
+  `LoopArchivedError`.
+- Root export (`@hasna/loops`) is now a curated, documented API surface
+  (SDK client, MCP factory, coded errors, domain types, doctor/health
+  helpers) instead of `export *` of internals.
+- Packaging: `@hasna/machines` moved to `optionalDependencies`; `prepare`
+  only builds when `dist/` is missing; `CHANGELOG.md` ships in the npm
+  package; full Apache-2.0 license text restored in `LICENSE`; CI workflow
+  added (`.github/workflows/ci.yml`).
+
+### BREAKING / UPGRADE NOTES
+
+- **Database version stamp — plan downgrades before upgrading.** The first
+  0.4.0 process to open a loops database applies migration 0006 and stamps
+  `PRAGMA user_version = 6`. Migrations are additive (no columns dropped),
+  and 0.3.x binaries do not check `user_version`, so rollback generally
+  works — but downgrading after 0.4.0 has written process-identity data is
+  unsupported and untested. Take a copy of `loops.db` (or rely on the
+  automatic `VACUUM INTO` backups) before upgrading shared machines.
+- **Root import surface narrowed.** `@hasna/loops` no longer re-exports
+  every internal symbol. If you imported undocumented internals from the
+  package root, switch to the curated exports or the `./sdk`, `./mcp`, or
+  `./storage` subpaths. `./storage` (raw `Store`) remains internal plumbing
+  and may change without notice.
+- **Coded errors replace message-matching.** SDK/store mutations on
+  archived or missing loops now throw `LoopArchivedError` /
+  `LoopNotFoundError` (with `.code`) instead of plain `Error`s with ad-hoc
+  messages. Update any `error.message.includes(...)` checks.
+- **`LoopsClient.runs()` signature changed** from `runs(loopId?)` to
+  `runs(idOrName?, filters?)`; it now resolves loop names and returns `[]`
+  when the loop does not exist.
+- **`genId()` no longer takes a length argument** and always returns 32
+  chars. Existing shorter ids remain valid; code that assumed 12-char ids
+  must not.
+- **MCP `loop_create_command` requests that include `shell` are rejected**
+  with a validation error instead of the flag being ignored. Remove the
+  field and pass argv-style `command` + `args`.
+- **MCP tool names changed** to `loops_*`; legacy names (`loop_runs`,
+  `loop_pause`, `workflow_read`, ...) still work as deprecated aliases but
+  will be removed in a future minor. Re-list tools and migrate callers.
+- **CLI deprecations** (aliases still work, removal planned): `loops events
+  handle|drain` → `loops routes create|drain`; `loops templates create` →
+  `loops workflows create --template <id>`; `loops goal status` → `loops
+  goal show`.
+- **Agent loops can now time out by default.** Previously an agent target
+  with no `timeoutMs` could hang forever; it now idle-times-out after 30
+  minutes without progress (4h for buffered agents). Long-running agents
+  must set `timeoutMs`/`idleTimeoutMs` explicitly or export
+  `LOOPS_AGENT_IDLE_TIMEOUT_MS`.
+- **The daemon reaps abandoned process groups.** Inline/external runners
+  must keep the `<surface>:<pid>` runner-id shape and record process
+  identity through the scheduler so a starting daemon can see the owner is
+  alive; runs claimed without fingerprints are re-queued on lease expiry
+  (their processes are never signaled without a verified fingerprint).
+- **Failing loops auto-pause.** After 5 consecutive final failures the
+  circuit breaker pauses the loop with a `circuit breaker open` marker run;
+  fix the cause and `loops resume` the loop. Monitoring that expects
+  endless retries should watch for these markers.
+- **Bun is the only supported runtime** (`bun >= 1.0` on PATH even under
+  npm installs), and `@hasna/machines` is now an optional dependency —
+  installs without it simply disable remote-machine assignment.
+
+## 0.3.x
+
+Compact history for the 0.3 line, newest first (`version (date) commit subject`).
+
+- 0.3.60 (2026-07-01) fix: run Codewith loops as durable agents
+- 0.3.59 (2026-07-01) fix: harden workflow goal migration
+- 0.3.58 (2026-07-01) fix: avoid nested workflow goal deadlocks
+- 0.3.57 (2026-07-01) feat: harden loop routing and add MCP server
+- 0.3.56 (2026-06-30) fix: allow worktree agents to write git metadata
+- 0.3.55 (2026-06-30) fix: agent workflow timeout policy
+- 0.3.54 (2026-06-29) feat: add prompt-file support for agent loops
+- 0.3.53 (2026-06-29) fix: refresh route invocation metadata safely
+- 0.3.52 (2026-06-29) feat: add full task lifecycle route template
+- 0.3.51 (2026-06-29) fix: harden custom template registry
+- 0.3.50 (2026-06-29) feat: add custom templates and loop rename
+- 0.3.49 (2026-06-29) fix: harden workflow route lifecycle
+- 0.3.48 (2026-06-29) fix: harden loop routing and recovery
+- 0.3.47 (2026-06-29) fix: validate agent loop options before storing
+- 0.3.46 (2026-06-29) fix: harden generic and cursor agent routes
+- 0.3.45 (2026-06-29) fix: allow routed task workflows to update app stores
+- 0.3.44 (2026-06-29) fix: harden loop readiness adapters
+- 0.3.43 (2026-06-28) fix: refresh stale generated route workflows
+- 0.3.42 (2026-06-28) chore: refresh loops cli release
+- 0.3.41 (2026-06-28) fix: give routed task agents exact todos project commands
+- 0.3.40 (2026-06-28) fix: migrate workflow run invocation indexes safely
+- 0.3.39 (2026-06-28) chore: release loops 0.3.39
+- 0.3.38 (2026-06-28) docs: require worktrees for routed repo tasks
+- 0.3.37 (2026-06-28) docs: require worktrees in routed examples
+- 0.3.36 (2026-06-28) fix: treat configured project path as fallback
+- 0.3.35 (2026-06-28) fix: prefer task repository paths for routing
+- 0.3.34 (2026-06-28) fix: infer task repo paths during drain
+- 0.3.33 (2026-06-28) feat: compact todos drain output
+- 0.3.32 (2026-06-28) fix: read todos drain queues from file
+- 0.3.31 (2026-06-28) fix: handle large todos drain queues
+- 0.3.30 (2026-06-28) fix: dedupe task routes across prefixes
+- 0.3.29 (2026-06-28) feat: filter drained tasks by project path
+- 0.3.28 (2026-06-28) feat: drain ready todos task workflows
+- 0.3.27 (2026-06-28) feat: throttle task event workflows
+- 0.3.26 (2026-06-27) feat: add safe auto routing for loop tasks (includes Cursor Agent CLI adapter fix, PR #10)
+- 0.3.25 (2026-06-27) fix: redact routed health evidence
+- 0.3.24 (2026-06-27) feat: add runtime loop preflight
+- 0.3.23 (2026-06-27) feat: preflight event workflows
+- 0.3.22 (2026-06-27) feat: preflight loop creation
+- 0.3.21 (2026-06-27) fix: rotate routed loop findings and tighten task routing
+- 0.3.20 (2026-06-27) feat: route loop hygiene findings to todos
+- 0.3.19 (2026-06-27) fix: back up loop database before name hygiene apply
+- 0.3.18 (2026-06-27) fix: harden loop hygiene routing gates
+- 0.3.17 (2026-06-27) feat: add loop health and hygiene abstractions
+- 0.3.16 (2026-06-27) chore: release loops 0.3.16 (includes gated todos task routing eligibility and loop health expectations)
+- 0.3.15 (2026-06-27) feat: archive loops and route task events through account pools
+- 0.3.14 (2026-06-26) chore: release loops 0.3.14 (includes deduped todos task event routing)
+- 0.3.13 (2026-06-26) feat: event-driven workflow templates
+- 0.3.12 (2026-06-25) fix: invoke Cursor agent subcommand
+- 0.3.11 (2026-06-25) chore: release 0.3.11 (includes fix(store): make additive column migrations idempotent)
+- 0.3.10 (2026-06-24) feat: run daemon loop jobs concurrently
+- 0.3.9 (2026-06-24) fix: strict goal response schemas
+- 0.3.8 (2026-06-22) feat: derive CLI version from package metadata
+- 0.3.7 (2026-06-22) feat: add transcript-driven loop workflow
+- 0.3.6 (2026-06-21) feat: add AI SDK goal orchestration
+- 0.3.5 (2026-06-20) fix: avoid login shell for remote machine loops
+- 0.3.4 (2026-06-20) feat: add OpenMachines loop assignment
+- 0.3.3 (2026-06-20) fix: harden OpenLoops daemon ownership and redaction
+- 0.3.2 (2026-06-19) feat: add codewith auth profiles and run-now exit codes
+- 0.3.1 (2026-06-19) fix: loops daemon path and output bugs
+- 0.3.0 (2026-06-19) release: loops workflow hardening
+
+## 0.2.0 (2026-06-19)
+
+- feat: add workflows and account-routed execution
+
+## 0.1.0 (2026-06-19)
+
+- feat: build OpenLoops CLI daemon

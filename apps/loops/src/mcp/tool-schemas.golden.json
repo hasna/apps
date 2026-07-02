@@ -1,0 +1,1381 @@
+[
+  {
+    "name": "daemon_status",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loop_create_command",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique loop name."
+        },
+        "description": {
+          "type": "string",
+          "description": "Why/how/outcome description; a default is generated when omitted."
+        },
+        "schedule": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "once"
+                },
+                "at": {
+                  "type": "string",
+                  "description": "Absolute date/time parseable by JavaScript Date (ISO 8601 recommended)."
+                }
+              },
+              "required": [
+                "type",
+                "at"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "interval"
+                },
+                "everyMs": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "description": "Interval between runs in milliseconds."
+                },
+                "anchor": {
+                  "type": "string",
+                  "enum": [
+                    "fixed_rate",
+                    "fixed_delay"
+                  ],
+                  "description": "fixed_rate anchors slots to the original cadence; fixed_delay measures from the previous finish."
+                }
+              },
+              "required": [
+                "type",
+                "everyMs"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "cron"
+                },
+                "expression": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "5-field cron expression evaluated in local time."
+                }
+              },
+              "required": [
+                "type",
+                "expression"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "dynamic"
+                },
+                "minIntervalMs": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "description": "Minimum spacing between runs in milliseconds."
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "When the loop runs."
+        },
+        "timeoutMs": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Per-run timeout in milliseconds; null disables the timeout."
+        },
+        "catchUp": {
+          "type": "string",
+          "enum": [
+            "none",
+            "latest",
+            "all"
+          ],
+          "description": "Missed-slot policy after downtime: none skips them, latest replays the newest slot, all replays every slot."
+        },
+        "catchUpLimit": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Maximum missed slots replayed when catching up."
+        },
+        "overlap": {
+          "type": "string",
+          "enum": [
+            "skip",
+            "allow"
+          ],
+          "description": "Behavior when a slot comes due while a previous run is active: skip records a skipped run, allow runs concurrently."
+        },
+        "maxAttempts": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Attempts per slot before a failed run is final (default 1)."
+        },
+        "retryDelayMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Base retry delay in milliseconds (exponential backoff with jitter)."
+        },
+        "leaseMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Run lease in milliseconds before an unresponsive runner is considered dead."
+        },
+        "expiresAt": {
+          "type": "string",
+          "description": "Date/time after which the loop expires and stops scheduling."
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Executable to run (resolved via PATH); not a shell string."
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Argv-style arguments passed to the command."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Working directory for the command."
+        },
+        "shell": {
+          "not": {},
+          "description": "Not supported over MCP: shell execution is rejected. Use 'command' plus 'args' instead."
+        }
+      },
+      "required": [
+        "name",
+        "schedule",
+        "command"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loop_create_workflow",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique loop name."
+        },
+        "description": {
+          "type": "string",
+          "description": "Why/how/outcome description; a default is generated when omitted."
+        },
+        "schedule": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "once"
+                },
+                "at": {
+                  "type": "string",
+                  "description": "Absolute date/time parseable by JavaScript Date (ISO 8601 recommended)."
+                }
+              },
+              "required": [
+                "type",
+                "at"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "interval"
+                },
+                "everyMs": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "description": "Interval between runs in milliseconds."
+                },
+                "anchor": {
+                  "type": "string",
+                  "enum": [
+                    "fixed_rate",
+                    "fixed_delay"
+                  ],
+                  "description": "fixed_rate anchors slots to the original cadence; fixed_delay measures from the previous finish."
+                }
+              },
+              "required": [
+                "type",
+                "everyMs"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "cron"
+                },
+                "expression": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "5-field cron expression evaluated in local time."
+                }
+              },
+              "required": [
+                "type",
+                "expression"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "dynamic"
+                },
+                "minIntervalMs": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "description": "Minimum spacing between runs in milliseconds."
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "When the loop runs."
+        },
+        "timeoutMs": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Per-run timeout in milliseconds; null disables the timeout."
+        },
+        "catchUp": {
+          "type": "string",
+          "enum": [
+            "none",
+            "latest",
+            "all"
+          ],
+          "description": "Missed-slot policy after downtime: none skips them, latest replays the newest slot, all replays every slot."
+        },
+        "catchUpLimit": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Maximum missed slots replayed when catching up."
+        },
+        "overlap": {
+          "type": "string",
+          "enum": [
+            "skip",
+            "allow"
+          ],
+          "description": "Behavior when a slot comes due while a previous run is active: skip records a skipped run, allow runs concurrently."
+        },
+        "maxAttempts": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Attempts per slot before a failed run is final (default 1)."
+        },
+        "retryDelayMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Base retry delay in milliseconds (exponential backoff with jitter)."
+        },
+        "leaseMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Run lease in milliseconds before an unresponsive runner is considered dead."
+        },
+        "expiresAt": {
+          "type": "string",
+          "description": "Date/time after which the loop expires and stops scheduling."
+        },
+        "workflow": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Workflow id or exact workflow name."
+        },
+        "workflowInput": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "String key/value input passed to the workflow on each run."
+        }
+      },
+      "required": [
+        "name",
+        "schedule",
+        "workflow"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loop_diagnose",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "idOrName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
+        },
+        "runLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "description": "How many recent runs to classify (1-50, default 5)."
+        },
+        "showOutput": {
+          "type": "boolean",
+          "description": "Include raw stdout/stderr (default false: only redacted lengths are returned)."
+        }
+      },
+      "required": [
+        "idOrName"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loop_pause",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "idOrName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
+        }
+      },
+      "required": [
+        "idOrName"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loop_resume",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "idOrName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
+        }
+      },
+      "required": [
+        "idOrName"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loop_run_now",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "idOrName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
+        }
+      },
+      "required": [
+        "idOrName"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loop_runs",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "idOrName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "running",
+            "succeeded",
+            "failed",
+            "timed_out",
+            "abandoned",
+            "skipped"
+          ],
+          "description": "Filter by run status."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Maximum entries to return (1-500)."
+        },
+        "showOutput": {
+          "type": "boolean",
+          "description": "Include raw stdout/stderr (default false: only redacted lengths are returned)."
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loop_stop",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "idOrName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
+        }
+      },
+      "required": [
+        "idOrName"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_archive",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "idOrName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
+        }
+      },
+      "required": [
+        "idOrName"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_create_command",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique loop name."
+        },
+        "description": {
+          "type": "string",
+          "description": "Why/how/outcome description; a default is generated when omitted."
+        },
+        "schedule": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "once"
+                },
+                "at": {
+                  "type": "string",
+                  "description": "Absolute date/time parseable by JavaScript Date (ISO 8601 recommended)."
+                }
+              },
+              "required": [
+                "type",
+                "at"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "interval"
+                },
+                "everyMs": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "description": "Interval between runs in milliseconds."
+                },
+                "anchor": {
+                  "type": "string",
+                  "enum": [
+                    "fixed_rate",
+                    "fixed_delay"
+                  ],
+                  "description": "fixed_rate anchors slots to the original cadence; fixed_delay measures from the previous finish."
+                }
+              },
+              "required": [
+                "type",
+                "everyMs"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "cron"
+                },
+                "expression": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "5-field cron expression evaluated in local time."
+                }
+              },
+              "required": [
+                "type",
+                "expression"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "dynamic"
+                },
+                "minIntervalMs": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "description": "Minimum spacing between runs in milliseconds."
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "When the loop runs."
+        },
+        "timeoutMs": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Per-run timeout in milliseconds; null disables the timeout."
+        },
+        "catchUp": {
+          "type": "string",
+          "enum": [
+            "none",
+            "latest",
+            "all"
+          ],
+          "description": "Missed-slot policy after downtime: none skips them, latest replays the newest slot, all replays every slot."
+        },
+        "catchUpLimit": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Maximum missed slots replayed when catching up."
+        },
+        "overlap": {
+          "type": "string",
+          "enum": [
+            "skip",
+            "allow"
+          ],
+          "description": "Behavior when a slot comes due while a previous run is active: skip records a skipped run, allow runs concurrently."
+        },
+        "maxAttempts": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Attempts per slot before a failed run is final (default 1)."
+        },
+        "retryDelayMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Base retry delay in milliseconds (exponential backoff with jitter)."
+        },
+        "leaseMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Run lease in milliseconds before an unresponsive runner is considered dead."
+        },
+        "expiresAt": {
+          "type": "string",
+          "description": "Date/time after which the loop expires and stops scheduling."
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Executable to run (resolved via PATH); not a shell string."
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Argv-style arguments passed to the command."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Working directory for the command."
+        },
+        "shell": {
+          "not": {},
+          "description": "Not supported over MCP: shell execution is rejected. Use 'command' plus 'args' instead."
+        }
+      },
+      "required": [
+        "name",
+        "schedule",
+        "command"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_create_workflow",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique loop name."
+        },
+        "description": {
+          "type": "string",
+          "description": "Why/how/outcome description; a default is generated when omitted."
+        },
+        "schedule": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "once"
+                },
+                "at": {
+                  "type": "string",
+                  "description": "Absolute date/time parseable by JavaScript Date (ISO 8601 recommended)."
+                }
+              },
+              "required": [
+                "type",
+                "at"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "interval"
+                },
+                "everyMs": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "description": "Interval between runs in milliseconds."
+                },
+                "anchor": {
+                  "type": "string",
+                  "enum": [
+                    "fixed_rate",
+                    "fixed_delay"
+                  ],
+                  "description": "fixed_rate anchors slots to the original cadence; fixed_delay measures from the previous finish."
+                }
+              },
+              "required": [
+                "type",
+                "everyMs"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "cron"
+                },
+                "expression": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "5-field cron expression evaluated in local time."
+                }
+              },
+              "required": [
+                "type",
+                "expression"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "dynamic"
+                },
+                "minIntervalMs": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "description": "Minimum spacing between runs in milliseconds."
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "additionalProperties": false
+            }
+          ],
+          "description": "When the loop runs."
+        },
+        "timeoutMs": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Per-run timeout in milliseconds; null disables the timeout."
+        },
+        "catchUp": {
+          "type": "string",
+          "enum": [
+            "none",
+            "latest",
+            "all"
+          ],
+          "description": "Missed-slot policy after downtime: none skips them, latest replays the newest slot, all replays every slot."
+        },
+        "catchUpLimit": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Maximum missed slots replayed when catching up."
+        },
+        "overlap": {
+          "type": "string",
+          "enum": [
+            "skip",
+            "allow"
+          ],
+          "description": "Behavior when a slot comes due while a previous run is active: skip records a skipped run, allow runs concurrently."
+        },
+        "maxAttempts": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Attempts per slot before a failed run is final (default 1)."
+        },
+        "retryDelayMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Base retry delay in milliseconds (exponential backoff with jitter)."
+        },
+        "leaseMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Run lease in milliseconds before an unresponsive runner is considered dead."
+        },
+        "expiresAt": {
+          "type": "string",
+          "description": "Date/time after which the loop expires and stops scheduling."
+        },
+        "workflow": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Workflow id or exact workflow name."
+        },
+        "workflowInput": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "String key/value input passed to the workflow on each run."
+        }
+      },
+      "required": [
+        "name",
+        "schedule",
+        "workflow"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_daemon_status",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_diagnose",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "idOrName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
+        },
+        "runLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "description": "How many recent runs to classify (1-50, default 5)."
+        },
+        "showOutput": {
+          "type": "boolean",
+          "description": "Include raw stdout/stderr (default false: only redacted lengths are returned)."
+        }
+      },
+      "required": [
+        "idOrName"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_doctor",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_health",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "includeArchived": {
+          "type": "boolean",
+          "description": "Include archived loops in the report (default false)."
+        },
+        "includeInactive": {
+          "type": "boolean",
+          "description": "Include stopped/expired loops (default false: active and paused only)."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Maximum entries to return (1-500)."
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_list",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "paused",
+            "stopped",
+            "expired",
+            "all"
+          ],
+          "description": "Filter by loop status; 'all' disables the filter."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Maximum entries to return (1-500)."
+        },
+        "includeArchived": {
+          "type": "boolean",
+          "description": "Include archived loops alongside live ones (default false)."
+        },
+        "archivedOnly": {
+          "type": "boolean",
+          "description": "Return only archived loops (default false)."
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_pause",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "idOrName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
+        }
+      },
+      "required": [
+        "idOrName"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_resume",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "idOrName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
+        }
+      },
+      "required": [
+        "idOrName"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_run_now",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "idOrName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
+        }
+      },
+      "required": [
+        "idOrName"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_runs",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "idOrName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "running",
+            "succeeded",
+            "failed",
+            "timed_out",
+            "abandoned",
+            "skipped"
+          ],
+          "description": "Filter by run status."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Maximum entries to return (1-500)."
+        },
+        "showOutput": {
+          "type": "boolean",
+          "description": "Include raw stdout/stderr (default false: only redacted lengths are returned)."
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_show",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "idOrName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
+        },
+        "includeLatestRun": {
+          "type": "boolean",
+          "description": "Include the most recent run record (default false)."
+        },
+        "showOutput": {
+          "type": "boolean",
+          "description": "Include raw stdout/stderr (default false: only redacted lengths are returned)."
+        }
+      },
+      "required": [
+        "idOrName"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_stop",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "idOrName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
+        }
+      },
+      "required": [
+        "idOrName"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_unarchive",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "idOrName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Loop id or exact loop name. Names resolve on exact match only; ambiguous names require the id."
+        }
+      },
+      "required": [
+        "idOrName"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_workflow_read",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "idOrName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Workflow id or exact workflow name."
+        },
+        "includeRuns": {
+          "type": "boolean",
+          "description": "Include recent workflow runs with their step runs (default false)."
+        },
+        "includeEvents": {
+          "type": "boolean",
+          "description": "Include the event log for each returned run (default false)."
+        },
+        "runLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Maximum entries to return (1-500)."
+        },
+        "showOutput": {
+          "type": "boolean",
+          "description": "Include raw stdout/stderr (default false: only redacted lengths are returned)."
+        }
+      },
+      "required": [
+        "idOrName"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_workflow_run_inspect",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Workflow run id (from loops_workflow_read runs or loop run records)."
+        },
+        "includeEvents": {
+          "type": "boolean",
+          "description": "Include the workflow event log (default true)."
+        },
+        "showOutput": {
+          "type": "boolean",
+          "description": "Include raw stdout/stderr (default false: only redacted lengths are returned)."
+        }
+      },
+      "required": [
+        "runId"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_workflow_validate",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workflow": {
+          "type": "object",
+          "additionalProperties": {},
+          "description": "Workflow body as a JSON object (mutually exclusive with workflowJson)."
+        },
+        "workflowJson": {
+          "type": "string",
+          "description": "Workflow body as a JSON string (mutually exclusive with workflow)."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Workflow name override when the body omits one."
+        },
+        "preflight": {
+          "type": "boolean",
+          "description": "Also run executable/agent preflight checks for each step (default false). Requires LOOPS_MCP_ALLOW_MUTATIONS=true because preflight resolves account/auth profiles via local subprocesses."
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "loops_workflows_list",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "archived",
+            "all"
+          ],
+          "description": "Filter by workflow status; 'all' disables the filter."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Maximum entries to return (1-500)."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Entries to skip before returning results (pagination)."
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "workflow_read",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "idOrName": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Workflow id or exact workflow name."
+        },
+        "includeRuns": {
+          "type": "boolean",
+          "description": "Include recent workflow runs with their step runs (default false)."
+        },
+        "includeEvents": {
+          "type": "boolean",
+          "description": "Include the event log for each returned run (default false)."
+        },
+        "runLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Maximum entries to return (1-500)."
+        },
+        "showOutput": {
+          "type": "boolean",
+          "description": "Include raw stdout/stderr (default false: only redacted lengths are returned)."
+        }
+      },
+      "required": [
+        "idOrName"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "workflow_run_inspect",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "runId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Workflow run id (from loops_workflow_read runs or loop run records)."
+        },
+        "includeEvents": {
+          "type": "boolean",
+          "description": "Include the workflow event log (default true)."
+        },
+        "showOutput": {
+          "type": "boolean",
+          "description": "Include raw stdout/stderr (default false: only redacted lengths are returned)."
+        }
+      },
+      "required": [
+        "runId"
+      ],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "workflow_validate",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workflow": {
+          "type": "object",
+          "additionalProperties": {},
+          "description": "Workflow body as a JSON object (mutually exclusive with workflowJson)."
+        },
+        "workflowJson": {
+          "type": "string",
+          "description": "Workflow body as a JSON string (mutually exclusive with workflow)."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Workflow name override when the body omits one."
+        },
+        "preflight": {
+          "type": "boolean",
+          "description": "Also run executable/agent preflight checks for each step (default false). Requires LOOPS_MCP_ALLOW_MUTATIONS=true because preflight resolves account/auth profiles via local subprocesses."
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
+    "name": "workflows_list",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "archived",
+            "all"
+          ],
+          "description": "Filter by workflow status; 'all' disables the filter."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Maximum entries to return (1-500)."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Entries to skip before returning results (pagination)."
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  }
+]

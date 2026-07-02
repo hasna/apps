@@ -1,0 +1,131 @@
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Store } from "./store.js";
+import { runDoctor, type DoctorReport } from "./doctor.js";
+
+function check(report: DoctorReport, id: string) {
+  return report.checks.find((entry) => entry.id === id);
+}
+
+describe("doctor", () => {
+  let dataDir: string;
+  let machinesDir: string;
+  let home: string;
+  const savedEnv: Record<string, string | undefined> = {};
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), "loops-doctor-data-"));
+    machinesDir = mkdtempSync(join(tmpdir(), "loops-doctor-machines-"));
+    home = mkdtempSync(join(tmpdir(), "loops-doctor-home-"));
+    for (const key of ["LOOPS_DATA_DIR", "HASNA_MACHINES_DIR"]) savedEnv[key] = process.env[key];
+    process.env.LOOPS_DATA_DIR = dataDir;
+    process.env.HASNA_MACHINES_DIR = machinesDir;
+  });
+
+  afterEach(() => {
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    // Isolation guard: doctor runs must never create a home-level .hasna dir.
+    expect(existsSync(join(home, ".hasna"))).toBe(false);
+    rmSync(dataDir, { recursive: true, force: true });
+    rmSync(machinesDir, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  test("reports healthy environment checks for an empty store", () => {
+    const store = new Store(":memory:");
+    try {
+      const report = runDoctor(store);
+      expect(check(report, "data-dir")?.status).toBe("ok");
+      expect(check(report, "data-dir")?.detail).toBe(dataDir);
+      expect(check(report, "bun")?.status).toBe("ok");
+      expect(check(report, "machines")?.status).toBe("ok");
+      expect(check(report, "daemon")?.status).toBe("ok");
+      expect(check(report, "daemon")?.message).toBe("daemon is not running");
+      expect(check(report, "loop-runs")?.status).toBe("ok");
+      for (const provider of ["claude", "agent", "codewith", "aicopilot", "opencode", "codex"]) {
+        expect(["ok", "warn"]).toContain(check(report, `provider:${provider}`)?.status ?? "missing");
+      }
+      expect(report.ok).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("warns on recorded failed runs without failing the report", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "doctor-failed-run",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "command", command: "printf ok", shell: true },
+      });
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00Z", "test", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      store.finalizeRun(
+        claim!.run.id,
+        { status: "failed", finishedAt: "2026-01-01T00:00:01.000Z", durationMs: 1_000, stdout: "", stderr: "boom" },
+        { claimedBy: "test", now: new Date("2026-01-01T00:00:01Z") },
+      );
+      const report = runDoctor(store);
+      expect(check(report, "loop-runs")?.status).toBe("warn");
+      expect(check(report, "loop-runs")?.message).toContain("1 failed loop run(s)");
+      expect(report.ok).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("fails preflight checks for active loops whose binaries are missing", () => {
+    const store = new Store(":memory:");
+    try {
+      const broken = store.createLoop({
+        name: "doctor-missing-binary",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "openloops-definitely-missing-binary" },
+      });
+      const healthy = store.createLoop({
+        name: "doctor-healthy",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "printf ok", shell: true },
+      });
+      const report = runDoctor(store);
+      const failed = check(report, `loop:${broken.id}:preflight`);
+      expect(failed?.status).toBe("fail");
+      expect(failed?.message).toContain("doctor-missing-binary");
+      expect(check(report, `loop:${healthy.id}:preflight`)?.status).toBe("ok");
+      expect(report.ok).toBe(false);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("preflights every step of active workflow loops", () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "doctor-workflow",
+        steps: [
+          { id: "fine", target: { type: "command", command: "printf ok", shell: true } },
+          { id: "broken", dependsOn: ["fine"], target: { type: "command", command: "openloops-definitely-missing-binary" } },
+        ],
+      });
+      const loop = store.createLoop({
+        name: "doctor-workflow-loop",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "workflow", workflowId: workflow.id },
+      });
+      const report = runDoctor(store);
+      const preflight = check(report, `loop:${loop.id}:preflight`);
+      expect(preflight?.status).toBe("fail");
+      expect(preflight?.detail).toContain("openloops-definitely-missing-binary");
+      expect(report.ok).toBe(false);
+    } finally {
+      store.close();
+    }
+  });
+});

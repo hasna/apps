@@ -1,7 +1,10 @@
-import type { ExecutableTarget, ExecutorResult, Loop, LoopRun, WorkflowRun, WorkflowRunStatus, WorkflowSpec, WorkflowStep } from "../types.js";
+import type { ExecutableTarget, ExecutorResult, Loop, LoopRun, WorkflowRun, WorkflowRunStatus, WorkflowSpec, WorkflowStep, WorkflowStepRun } from "../types.js";
 import { executeLoop, executeTarget, preflightTarget, type ExecuteOptions } from "./executor.js";
+import { executionMetadata, goalExecutionContext, withGoalNodeEnv } from "./goal/metadata.js";
+import { iterationPrompt } from "./goal/prompts.js";
 import { runGoal } from "./goal/runner.js";
 import { nowIso } from "./ids.js";
+import { BLOCKED_STEP_ERROR_PREFIX, isBlockedStepRun, workflowRunEnvelope } from "./run-envelope.js";
 import type { Store } from "./store.js";
 import { workflowExecutionOrder } from "./workflow-spec.js";
 
@@ -12,13 +15,38 @@ export interface ExecuteWorkflowOptions extends ExecuteOptions {
   idempotencyKey?: string;
   cancelPollMs?: number;
   signalTimeoutMessage?: () => string | undefined;
+  /** Per-node goal prompt appended to agent step prompts when a goal executes this workflow. */
+  goalNodePrompt?: string;
 }
 
-function targetWithStepAccount(step: WorkflowStep): ExecutableTarget {
+/** Exit codes that mark a step as blocked (policy control flow) instead of failed. */
+const DEFAULT_BLOCKED_EXIT_CODES = [12];
+/**
+ * Only steps named "gate" as a standalone word (e.g. "gate", "triage-gate",
+ * "gate_check") opt into blocked-exit semantics by convention. Substring hits
+ * such as "gateway", "aggregate", or "delegate" must never inherit gate
+ * behavior; those steps need an explicit `blockedExitCodes` override.
+ */
+const GATE_STEP_PATTERN = /(^|[^a-z])gate([^a-z]|$)/i;
+
+// blockedExitCodes lives on step JSON; the WorkflowStep type addition belongs to types.ts owners.
+type BlockAwareWorkflowStep = WorkflowStep & { blockedExitCodes?: number[] };
+
+function blockedExitCodesForStep(step: WorkflowStep): number[] {
+  const explicit = (step as BlockAwareWorkflowStep).blockedExitCodes;
+  if (explicit !== undefined) return explicit.filter((code) => Number.isInteger(code));
+  return GATE_STEP_PATTERN.test(step.name ? `${step.id} ${step.name}` : step.id) ? DEFAULT_BLOCKED_EXIT_CODES : [];
+}
+
+function targetWithStepAccount(step: WorkflowStep, goalNodePrompt?: string): ExecutableTarget {
   const account = step.account ?? step.target.account;
   const timeoutMs = step.timeoutMs !== undefined ? step.timeoutMs : step.target.timeoutMs;
-  if (!account && timeoutMs === step.target.timeoutMs) return step.target;
-  return { ...step.target, account, timeoutMs } as ExecutableTarget;
+  const target =
+    !account && timeoutMs === step.target.timeoutMs ? step.target : ({ ...step.target, account, timeoutMs } as ExecutableTarget);
+  if (goalNodePrompt && target.type === "agent") {
+    return { ...target, prompt: `${target.prompt}\n\n${goalNodePrompt}` };
+  }
+  return target;
 }
 
 function workflowResult(
@@ -26,7 +54,7 @@ function workflowResult(
   status: WorkflowRunStatus,
   startedAt: string,
   finishedAt: string,
-  stdout: string,
+  steps: WorkflowStepRun[],
   error?: string,
 ): ExecutorResult {
   const executorStatus: ExecutorResult["status"] =
@@ -34,7 +62,7 @@ function workflowResult(
   return {
     status: executorStatus,
     exitCode: executorStatus === "succeeded" ? 0 : 1,
-    stdout,
+    stdout: workflowRunEnvelope(workflowRun, steps),
     stderr: "",
     error,
     startedAt,
@@ -49,21 +77,17 @@ export async function executeWorkflow(
   opts: ExecuteWorkflowOptions = {},
 ): Promise<ExecutorResult> {
   if (workflow.goal) {
+    const goalSpec = workflow.goal;
     const workflowWithoutGoal: WorkflowSpec = { ...workflow, goal: undefined };
-    return runGoal(store, workflow.goal, {
+    return runGoal(store, goalSpec, {
       ...opts,
       model: opts.goalModel,
-      context: {
-        loopId: opts.loop?.id,
-        loopName: opts.loop?.name,
-        loopRunId: opts.loopRun?.id,
-        scheduledFor: opts.loopRun?.scheduledFor ?? opts.scheduledFor,
-        workflowId: workflow.id,
-        workflowName: workflow.name,
-      },
+      context: goalExecutionContext({ loop: opts.loop, loopRun: opts.loopRun, scheduledFor: opts.scheduledFor, workflow }),
       executeNode: async (node) =>
         executeWorkflow(store, workflowWithoutGoal, {
           ...opts,
+          env: withGoalNodeEnv(opts.env, node),
+          goalNodePrompt: iterationPrompt(goalSpec, node),
           idempotencyKey: `${opts.idempotencyKey ?? workflow.id}:goal:${node.key}`,
         }),
     });
@@ -78,15 +102,7 @@ export async function executeWorkflow(
   });
   const startedAt = run.startedAt ?? nowIso();
   if (run.status === "succeeded" || run.status === "failed" || run.status === "timed_out" || run.status === "cancelled") {
-    const steps = store.listWorkflowStepRuns(run.id);
-    return workflowResult(
-      run,
-      run.status,
-      startedAt,
-      run.finishedAt ?? nowIso(),
-      JSON.stringify({ workflowRun: run, steps }, null, 2),
-      run.error,
-    );
+    return workflowResult(run, run.status, startedAt, run.finishedAt ?? nowIso(), store.listWorkflowStepRuns(run.id), run.error);
   }
   const ordered = workflowExecutionOrder(workflow);
   const byId = new Map(workflow.steps.map((step) => [step.id, step]));
@@ -116,6 +132,13 @@ export async function executeWorkflow(
     });
     if (blockedBy) {
       opts.beforePersist?.();
+      if (isBlockedStepRun(store.getWorkflowStepRun(run.id, blockedBy))) {
+        // Upstream gate blocked by policy: skip dependents without failing the workflow.
+        store.skipWorkflowStepRun(run.id, step.id, `${BLOCKED_STEP_ERROR_PREFIX} upstream step ${blockedBy} was blocked`, {
+          daemonLeaseId: opts.daemonLeaseId,
+        });
+        continue;
+      }
       store.skipWorkflowStepRun(run.id, step.id, `dependency did not succeed: ${blockedBy}`, { daemonLeaseId: opts.daemonLeaseId });
       blockingError ??= `step ${step.id} blocked by dependency ${blockedBy}`;
       terminalStatus = "failed";
@@ -129,16 +152,14 @@ export async function executeWorkflow(
       blockingError = `step ${step.id} could not start because workflow is no longer running`;
       break;
     }
-    const metadata = {
-      loopId: opts.loop?.id,
-      loopName: opts.loop?.name,
-      runId: opts.loopRun?.id,
-      scheduledFor: opts.loopRun?.scheduledFor ?? opts.scheduledFor,
-      workflowId: workflow.id,
-      workflowName: workflow.name,
+    const stepContext = goalExecutionContext({
+      loop: opts.loop,
+      loopRun: opts.loopRun,
+      scheduledFor: opts.scheduledFor,
+      workflow,
       workflowRunId: run.id,
       workflowStepId: step.id,
-    };
+    });
     let result: ExecutorResult;
     const controller = new AbortController();
     const externalAbort = (): void => controller.abort();
@@ -155,19 +176,10 @@ export async function executeWorkflow(
           model: opts.goalModel,
           target: targetWithStepAccount(step),
           signal: controller.signal,
-          context: {
-            loopId: opts.loop?.id,
-            loopName: opts.loop?.name,
-            loopRunId: opts.loopRun?.id,
-            scheduledFor: opts.loopRun?.scheduledFor ?? opts.scheduledFor,
-            workflowId: workflow.id,
-            workflowName: workflow.name,
-            workflowRunId: run.id,
-            workflowStepId: step.id,
-          },
+          context: stepContext,
         });
       } else {
-        result = await executeTarget(targetWithStepAccount(step), metadata, {
+        result = await executeTarget(targetWithStepAccount(step, opts.goalNodePrompt), executionMetadata(stepContext), {
           ...opts,
           machine: opts.machine ?? opts.loop?.machine,
           signal: controller.signal,
@@ -203,6 +215,23 @@ export async function executeWorkflow(
       break;
     }
     opts.beforePersist?.();
+    const blockedExit =
+      result.status === "failed" && result.exitCode !== undefined && blockedExitCodesForStep(step).includes(result.exitCode);
+    if (blockedExit) {
+      // Intentional gate control flow: record as skipped/blocked, never as failure.
+      store.finalizeWorkflowStepRun(run.id, step.id, {
+        status: "skipped",
+        finishedAt: result.finishedAt,
+        durationMs: result.durationMs,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+        error: `${BLOCKED_STEP_ERROR_PREFIX} step ${step.id} exited with blocked exit code ${result.exitCode}`,
+      }, {
+        daemonLeaseId: opts.daemonLeaseId,
+      });
+      continue;
+    }
     store.finalizeWorkflowStepRun(run.id, step.id, {
       status: result.status,
       finishedAt: result.finishedAt,
@@ -235,13 +264,12 @@ export async function executeWorkflow(
   const finishedAt = nowIso();
   if (store.isWorkflowRunTerminal(run.id)) {
     const terminalRun = store.requireWorkflowRun(run.id);
-    const steps = store.listWorkflowStepRuns(run.id);
     return workflowResult(
       terminalRun,
       terminalRun.status,
       startedAt,
       terminalRun.finishedAt ?? finishedAt,
-      JSON.stringify({ workflowRun: terminalRun, steps }, null, 2),
+      store.listWorkflowStepRuns(run.id),
       terminalRun.error ?? blockingError,
     );
   }
@@ -253,15 +281,7 @@ export async function executeWorkflow(
   }, {
     daemonLeaseId: opts.daemonLeaseId,
   });
-  const steps = store.listWorkflowStepRuns(run.id);
-  return workflowResult(
-    finalRun,
-    terminalStatus,
-    startedAt,
-    finishedAt,
-    JSON.stringify({ workflowRun: finalRun, steps }, null, 2),
-    blockingError,
-  );
+  return workflowResult(finalRun, terminalStatus, startedAt, finishedAt, store.listWorkflowStepRuns(run.id), blockingError);
 }
 
 export function preflightWorkflow(workflow: WorkflowSpec, opts: ExecuteOptions = {}): ReturnType<typeof preflightTarget>[] {
@@ -328,12 +348,7 @@ export async function executeLoopTarget(
         ...opts,
         model: opts.goalModel,
         target: loop.target,
-        context: {
-          loopId: loop.id,
-          loopName: loop.name,
-          loopRunId: run.id,
-          scheduledFor: run.scheduledFor,
-        },
+        context: goalExecutionContext({ loop, loopRun: run }),
       });
     }
     return executeLoop(loop, run, opts);
@@ -348,24 +363,20 @@ export async function executeLoopTarget(
     }
   }
   if (loop.goal) {
+    const loopGoal = loop.goal;
     const workflowForLoopGoal: WorkflowSpec = workflow.goal ? { ...workflow, goal: undefined } : workflow;
-    return runGoal(store, loop.goal, {
+    return runGoal(store, loopGoal, {
       ...opts,
       model: opts.goalModel,
-      context: {
-        loopId: loop.id,
-        loopName: loop.name,
-        loopRunId: run.id,
-        scheduledFor: run.scheduledFor,
-        workflowId: workflow.id,
-        workflowName: workflow.name,
-      },
+      context: goalExecutionContext({ loop, loopRun: run, workflow }),
       executeNode: async (node) =>
         executeWorkflow(store, workflowForLoopGoal, {
           ...opts,
           loop,
           loopRun: run,
           scheduledFor: run.scheduledFor,
+          env: withGoalNodeEnv(opts.env, node),
+          goalNodePrompt: iterationPrompt(loopGoal, node),
           idempotencyKey: `${loop.id}:${run.scheduledFor}:attempt:${run.attempt}:goal:${node.key}`,
         }),
     });

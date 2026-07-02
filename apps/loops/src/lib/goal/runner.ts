@@ -3,10 +3,13 @@ import { z } from "zod";
 import type { ExecutableTarget, ExecutorResult } from "../../types.js";
 import { executeTarget } from "../executor.js";
 import { nowIso } from "../ids.js";
+import { scrubSecrets, scrubSecretsDeep } from "../redact.js";
+import { summarizeExecutorResult } from "../run-envelope.js";
 import type { Store } from "../store.js";
 import { assertAcyclicNodes, nodeBudgetExhausted, readyNodeKeys, rollupSummary, updateReadyFlags } from "./status.js";
-import { resolveGoalModel } from "./model-factory.js";
-import { achievementPrompt, iterationPrompt, planPrompt } from "./prompts.js";
+import { executionMetadata, withGoalNodeEnv } from "./metadata.js";
+import { resolveGoalModel, resolveGoalVerifierModel } from "./model-factory.js";
+import { achievementPrompt, goalNodeTarget, planPrompt } from "./prompts.js";
 import type { Goal, GoalExecutorResult, GoalPlan, GoalPlanNode, GoalSpec, RunGoalOptions } from "./types.js";
 import { GOAL_OBJECTIVE_MAX_CHARS } from "./types.js";
 
@@ -188,37 +191,39 @@ function noReadyDiagnostic(goal: Goal, nodes: GoalPlanNode[]): NoReadyDiagnostic
   };
 }
 
-function metadataFor(goal: Goal, node: GoalPlanNode, context: RunGoalOptions["context"]): Record<string, string | undefined> {
-  return {
-    loopId: context?.loopId,
-    loopName: context?.loopName,
-    runId: context?.loopRunId,
-    scheduledFor: context?.scheduledFor,
-    workflowId: context?.workflowId,
-    workflowName: context?.workflowName,
-    workflowRunId: context?.workflowRunId,
-    workflowStepId: context?.workflowStepId,
-    goalId: goal.goalId,
-    goalObjective: goal.objective,
-    goalNodeKey: node.key,
-  };
-}
-
 async function executeUnderlyingTarget(
   target: ExecutableTarget | undefined,
   goal: Goal,
   node: GoalPlanNode,
   opts: RunGoalOptions,
 ): Promise<ExecutorResult> {
-  const metadata = metadataFor(goal, node, opts.context);
+  const metadata = executionMetadata(opts.context, goal, node);
   if (opts.executeNode) return opts.executeNode(node, metadata);
   if (!target) throw new Error("runGoal requires either target or executeNode");
-  return executeTarget(target, metadata, {
-    env: opts.env,
+  return executeTarget(goalNodeTarget(target, goal, node), metadata, {
+    env: withGoalNodeEnv(opts.env, node),
     daemonLeaseId: opts.daemonLeaseId,
     beforePersist: opts.beforePersist,
     signal: opts.signal,
   });
+}
+
+function verifierModelFor(spec: GoalSpec, opts: RunGoalOptions, planner: LanguageModel): LanguageModel {
+  if (opts.verifierModel) return opts.verifierModel;
+  const env = opts.env ?? process.env;
+  const configured = spec.verifierModel ?? env.LOOPS_GOAL_VERIFIER_MODEL;
+  if (!configured) return planner;
+  return resolveGoalVerifierModel({ model: configured, env: opts.env });
+}
+
+function nodeEvidence(node: GoalPlanNode, result: ExecutorResult): string {
+  const summary = summarizeExecutorResult(result);
+  return [
+    `node ${node.key} ${summary.status} (exit ${summary.exitCode ?? "unknown"}, ${summary.durationMs}ms, ` +
+      `stdout ${summary.stdoutBytes}B, stderr ${summary.stderrBytes}B)`,
+    summary.stdoutExcerpt ? `stdout excerpt:\n${summary.stdoutExcerpt}` : undefined,
+    summary.stderrExcerpt ? `stderr excerpt:\n${summary.stderrExcerpt}` : undefined,
+  ].filter(Boolean).join("\n");
 }
 
 async function planGoal(store: Store, goal: Goal, spec: GoalSpec, model: LanguageModel, opts: RunGoalOptions): Promise<GoalPlanNode[]> {
@@ -263,23 +268,31 @@ function stdoutFor(
   validation?: unknown,
   diagnostics?: unknown,
 ): string {
-  return JSON.stringify(
-    {
-      goal,
-      rollup: rollupSummary(nodes),
-      nodes,
-      evidence,
-      validation,
-      diagnostics,
-    },
-    null,
-    2,
+  // Scrub string leaves BEFORE stringify (which escapes quotes and would hide
+  // quoted secrets from the flat patterns), then scrub the encoded document
+  // too for token shapes that survive escaping — the same two-pass idiom as
+  // store.recordGoalEvent. The store's flat scrub at persist time cannot match
+  // assignment/Authorization secrets once they are double JSON-escaped.
+  return scrubSecrets(
+    JSON.stringify(
+      scrubSecretsDeep({
+        goal,
+        rollup: rollupSummary(nodes),
+        nodes,
+        evidence,
+        validation,
+        diagnostics,
+      }),
+      null,
+      2,
+    ),
   );
 }
 
 export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOptions = {}): Promise<GoalExecutorResult> {
   const spec = normalizeGoalSpec(input);
   const model = opts.model ?? resolveGoalModel({ model: spec.model, env: opts.env });
+  const verifier = verifierModelFor(spec, opts, model);
   const startedAt = nowIso();
   const existing = store.findGoalByContext({
     loopRunId: opts.context?.loopRunId,
@@ -315,6 +328,22 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
   if (budgetExhausted(goal)) {
     goal = store.updateGoalStatus(goal.goalId, "budgetLimited", { daemonLeaseId: opts.daemonLeaseId });
     return resultFromGoal(goal, "failed", stdoutFor(goal, nodes, evidence), "goal token budget exhausted after planning", startedAt);
+  }
+
+  // autoExecute off: plan and persist only; readyOnly and aiDirected both run the
+  // dependency-driven execution loop below (aiDirected keeps current behavior).
+  if ((goal.autoExecute ?? spec.autoExecute) === "off") {
+    nodes = syncReadyFlags(store, goal, nodes, opts);
+    return resultFromGoal(
+      goal,
+      "succeeded",
+      stdoutFor(goal, nodes, evidence, undefined, {
+        autoExecute: "off",
+        note: "autoExecute is off: goal plan persisted without executing any nodes",
+      }),
+      undefined,
+      startedAt,
+    );
   }
 
   for (let turn = 1; turn <= (spec.maxTurns ?? DEFAULT_MAX_TURNS); turn++) {
@@ -358,7 +387,7 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
           { daemonLeaseId: opts.daemonLeaseId },
         );
         if (result.status === "succeeded") {
-          evidence.push(`node ${node.key} succeeded\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+          evidence.push(nodeEvidence(node, result));
           store.updateGoalPlanNode(goal.goalId, node.key, {
             status: "complete",
             timeUsedSeconds: Math.round(result.durationMs / 1000),
@@ -385,7 +414,7 @@ export async function runGoal(store: Store, input: GoalSpec, opts: RunGoalOption
 
     if (nodes.every((node) => node.status === "complete")) {
       const judged = await generateObject({
-        model,
+        model: verifier,
         schema: AchievementSchema,
         temperature: 0,
         prompt: achievementPrompt(goal, nodes, evidence),

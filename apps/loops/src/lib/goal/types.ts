@@ -14,6 +14,8 @@ export interface GoalSpec {
   objective: string;
   tokenBudget?: number;
   model?: string;
+  /** Independent model for the achievement audit; defaults to LOOPS_GOAL_VERIFIER_MODEL, then the planner model. */
+  verifierModel?: string;
   maxTurns?: number;
   maxTokens?: number;
   autoExecute?: GoalAutoExecute;
@@ -115,6 +117,7 @@ export interface GoalExecutionContext {
 export interface RunGoalOptions {
   store?: Store;
   model?: LanguageModel;
+  verifierModel?: LanguageModel;
   target?: ExecutableTarget;
   executeNode?: (node: GoalPlanNode, metadata: Record<string, string | undefined>) => Promise<ExecutorResult>;
   env?: NodeJS.ProcessEnv;

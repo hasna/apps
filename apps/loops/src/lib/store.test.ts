@@ -3,7 +3,20 @@ import { Database } from "bun:sqlite";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AmbiguousNameError, LoopArchivedError, LoopNotFoundError } from "./errors.js";
 import { Store } from "./store.js";
+
+// Credential fixtures assembled at runtime so the literal token shapes never
+// appear contiguously in source (avoids tripping source secret scanners such as
+// GitHub push protection); the scrubber still sees the full string at runtime.
+const j = (...parts: string[]): string => parts.join("");
+const ANT_KEY = j("sk-", "ant-api03-abcDEF123456789_-suffix");
+const AWS_KEY = j("AKIA", "IOSFODNN7EXAMPLE");
+const GH_PAT = j("ghp", "_AbCdEf0123456789AbCdEf0123456789");
+const SLACK_TOKEN = j("xoxb", "-1234567890-abcdefghijklmn");
+const OPENAI_KEY = j("sk-", "proj-AbCd1234EfGh5678IjKl9012");
+
+const DEAD_PID = 0x3fffffff;
 
 describe("Store", () => {
   test("hardens existing store directory and sqlite files to owner-only permissions", () => {
@@ -1257,6 +1270,497 @@ describe("Store", () => {
       const indexes = store["db"].query("PRAGMA index_list(workflow_runs)").all() as Array<{ name: string }>;
       expect(indexes.map((index) => index.name)).toContain("idx_workflow_runs_invocation");
       expect(indexes.map((index) => index.name)).toContain("idx_workflow_runs_work_item");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("throws coded errors for missing and ambiguous loops", () => {
+    const store = new Store(":memory:");
+    try {
+      expect(() => store.requireLoop("missing-loop")).toThrow(LoopNotFoundError);
+      expect(() => store.requireUniqueLoop("missing-loop")).toThrow(LoopNotFoundError);
+      const input = {
+        name: "same-name",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" } as const,
+        target: { type: "command", command: "true" } as const,
+      };
+      store.createLoop(input, new Date("2025-12-31T00:00:00Z"));
+      store.createLoop(input, new Date("2025-12-31T00:00:01Z"));
+      expect(() => store.requireUniqueLoop("same-name")).toThrow(AmbiguousNameError);
+      try {
+        store.requireUniqueLoop("same-name");
+      } catch (error) {
+        expect((error as AmbiguousNameError).code).toBe("AMBIGUOUS_NAME");
+      }
+      try {
+        store.requireLoop("missing-loop");
+      } catch (error) {
+        expect((error as LoopNotFoundError).code).toBe("LOOP_NOT_FOUND");
+      }
+    } finally {
+      store.close();
+    }
+  });
+
+  test("rejects mutations of archived loops until they are unarchived", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "archive-guard",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      store.archiveLoop(loop.id);
+      expect(() => store.updateLoop(loop.id, { status: "active" })).toThrow(LoopArchivedError);
+      try {
+        store.updateLoop(loop.id, { status: "active" });
+      } catch (error) {
+        expect((error as LoopArchivedError).code).toBe("LOOP_ARCHIVED");
+      }
+      store.unarchiveLoop(loop.id);
+      expect(store.updateLoop(loop.id, { status: "paused" }).status).toBe("paused");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("stamps gated migrations once and records the schema user_version", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-migration-ledger-"));
+    const dbFile = join(root, "loops.db");
+    const store = new Store(dbFile);
+    let ids: string[];
+    try {
+      ids = (store["db"].query("SELECT id FROM schema_migrations ORDER BY id").all() as Array<{ id: string }>).map(
+        (row) => row.id,
+      );
+      expect(ids).toEqual([
+        "0001_initial_and_workflows",
+        "0002_loop_machines",
+        "0003_goals",
+        "0004_loop_archive_metadata",
+        "0005_workflow_invocations_and_admission",
+        "0006_run_process_tracking",
+      ]);
+      const version = store["db"].query("PRAGMA user_version").get() as { user_version: number };
+      expect(version.user_version).toBeGreaterThanOrEqual(6);
+    } finally {
+      store.close();
+    }
+    const reopened = new Store(dbFile);
+    try {
+      const again = (reopened["db"].query("SELECT id FROM schema_migrations ORDER BY id").all() as Array<{ id: string }>).map(
+        (row) => row.id,
+      );
+      expect(again).toEqual(ids);
+    } finally {
+      reopened.close();
+    }
+  });
+
+  test("refuses to open databases written by a newer schema version", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-newer-schema-"));
+    const dbFile = join(root, "loops.db");
+    new Store(dbFile).close();
+    const raw = new Database(dbFile);
+    try {
+      raw.exec("PRAGMA user_version = 99");
+    } finally {
+      raw.close();
+    }
+    expect(() => new Store(dbFile)).toThrow(/newer than this binary supports/);
+  });
+
+  test("reconciles the live fork with a second 0004_* row and orphan columns", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-fork-reconcile-"));
+    const dbFile = join(root, "loops.db");
+    new Store(dbFile).close();
+    const raw = new Database(dbFile);
+    try {
+      raw.exec("ALTER TABLE loops ADD COLUMN metadata_json TEXT");
+      raw.exec("ALTER TABLE loop_runs ADD COLUMN source TEXT");
+      raw
+        .query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)")
+        .run("0004_loop_metadata", new Date().toISOString());
+    } finally {
+      raw.close();
+    }
+    const store = new Store(dbFile);
+    try {
+      const ids = (store["db"].query("SELECT id FROM schema_migrations WHERE id LIKE '0004%' ORDER BY id").all() as Array<{
+        id: string;
+      }>).map((row) => row.id);
+      expect(ids).toEqual(["0004_loop_archive_metadata", "0004_loop_metadata"]);
+      // Orphan columns are tolerated and never dropped; the store stays usable.
+      const columns = (store["db"].query("PRAGMA table_info(loops)").all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      );
+      expect(columns).toContain("metadata_json");
+      const loop = store.createLoop(
+        {
+          name: "fork-survivor",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      expect(store.claimRun(loop, "2026-01-01T00:00:00.000Z", "test")?.run.status).toBe("running");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("scrubs credentials from loop run output on finalize", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "scrub-run",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "test");
+      const final = store.finalizeRun(claim!.run.id, {
+        status: "failed",
+        finishedAt: "2026-01-01T00:00:01.000Z",
+        durationMs: 1_000,
+        stdout: `api key ${ANT_KEY} used`,
+        stderr: 'export MY_API_KEY="q7Rt2xVz9LpW4mKe8s"',
+        error: `auth failed with ${GH_PAT}`,
+      });
+      expect(final.stdout).toBe("api key [SCRUBBED] used");
+      expect(final.stderr).toBe('export MY_API_KEY="[SCRUBBED]"');
+      expect(final.error).toBe("auth failed with [SCRUBBED]");
+      expect(store.getRun(claim!.run.id)?.stdout).not.toContain("sk-ant-");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("scrubs credentials from workflow step output and goal evidence", () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "scrub-workflow",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const run = store.createWorkflowRun({ workflow });
+      store.startWorkflowStepRun(run.id, "worker");
+      const step = store.finalizeWorkflowStepRun(run.id, "worker", {
+        status: "failed",
+        finishedAt: "2026-01-01T00:00:01.000Z",
+        durationMs: 1_000,
+        stdout: `using ${AWS_KEY} for aws`,
+        stderr: `slack ${SLACK_TOKEN} rejected`,
+        error: `token ${OPENAI_KEY} expired`,
+      });
+      expect(step.stdout).toBe("using [SCRUBBED] for aws");
+      expect(step.stderr).toBe("slack [SCRUBBED] rejected");
+      expect(step.error).toBe("token [SCRUBBED] expired");
+
+      const goal = store.createGoal({ objective: "scrub evidence" });
+      store.recordGoalEvent({
+        goalId: goal.goalId,
+        phase: "execute",
+        status: "active",
+        evidence: { note: `found ${ANT_KEY} in logs` },
+        rawResponse: { text: `use ${GH_PAT}` },
+      });
+      const event = store.listGoalRuns({ goalId: goal.goalId })[0]!;
+      expect(JSON.stringify(event.evidence)).not.toContain("sk-ant-");
+      expect(JSON.stringify(event.evidence)).toContain("[SCRUBBED]");
+      expect(JSON.stringify(event.rawResponse)).not.toContain("ghp_");
+
+      // Quoted secrets inside evidence strings must be scrubbed BEFORE
+      // JSON.stringify escapes the quotes and hides them from the patterns.
+      const quoted = store.createGoal({ objective: "scrub quoted evidence" });
+      store.recordGoalEvent({
+        goalId: quoted.goalId,
+        phase: "execute",
+        status: "active",
+        evidence: { note: 'saw export DB_PASSWORD="x9Kd2mQz7Lp4Rv8t" in output' },
+        rawResponse: { result: 'export DB_PASSWORD="x9Kd2mQz7Lp4Rv8t"' },
+      });
+      const quotedEvent = store.listGoalRuns({ goalId: quoted.goalId })[0]!;
+      expect(JSON.stringify(quotedEvent.evidence)).not.toContain("x9Kd2mQz7Lp4Rv8t");
+      expect((quotedEvent.evidence as { note: string }).note).toBe('saw export DB_PASSWORD="[SCRUBBED]" in output');
+      expect(JSON.stringify(quotedEvent.rawResponse)).not.toContain("x9Kd2mQz7Lp4Rv8t");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("records process identity and reports abandoned vs deferred lease recovery", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "process-tracking",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          leaseMs: 10,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const dead = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      const recordedDead = store.recordRunProcess(dead!.run.id, {
+        pid: DEAD_PID,
+        pgid: DEAD_PID,
+        processStartedAt: "2026-01-01T00:00:00.000Z",
+      });
+      expect(recordedDead?.pid).toBe(DEAD_PID);
+      expect(recordedDead?.pgid).toBe(DEAD_PID);
+      expect(recordedDead?.processStartedAt).toBe("2026-01-01T00:00:00.000Z");
+
+      const alive = store.claimRun(loop, "2026-01-01T00:01:00.000Z", "runner", new Date("2026-01-01T00:01:00Z"));
+      store.recordRunProcess(alive!.run.id, { pid: process.pid, pgid: process.pid });
+
+      const result = store.recoverExpiredRunLeasesDetailed(new Date("2026-01-01T00:02:00Z"));
+      expect(result.abandoned.map((run) => run.id)).toEqual([dead!.run.id]);
+      expect(result.abandoned[0]?.pgid).toBe(DEAD_PID);
+      expect(result.deferred.map((run) => run.id)).toEqual([alive!.run.id]);
+      expect(result.deferred[0]?.pgid).toBe(process.pid);
+      expect(store.getRun(dead!.run.id)?.status).toBe("abandoned");
+      expect(store.getRun(alive!.run.id)?.status).toBe("running");
+      // recoverExpiredRunLeases keeps returning the abandoned entries only.
+      expect(store.recoverExpiredRunLeases(new Date("2026-01-01T00:02:00Z"))).toEqual([]);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("lease recovery abandons runs whose live pid fails the start-time fingerprint", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "recycled-pid",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          leaseMs: 10,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      // The recorded pid is alive (it is this test process) but the recorded
+      // start-time fingerprint is a day off: a recycled pid. Recovery must
+      // abandon the run instead of deferring it forever.
+      const recycled = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      store.recordRunProcess(recycled!.run.id, {
+        pid: process.pid,
+        pgid: process.pid,
+        processStartedAt: new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString(),
+      });
+      const result = store.recoverExpiredRunLeasesDetailed(new Date("2026-01-01T00:02:00Z"));
+      expect(result.abandoned.map((run) => run.id)).toEqual([recycled!.run.id]);
+      expect(result.deferred).toEqual([]);
+      expect(store.getRun(recycled!.run.id)?.status).toBe("abandoned");
+
+      // Same guard on the claim path: an expired lease whose pid fingerprint
+      // mismatches must not block a takeover of the slot.
+      const stale = store.claimRun(loop, "2026-01-01T00:10:00.000Z", "runner-a", new Date("2026-01-01T00:10:00Z"));
+      store.recordRunProcess(stale!.run.id, {
+        pid: process.pid,
+        pgid: process.pid,
+        processStartedAt: new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString(),
+      });
+      const takeover = store.claimRun(loop, "2026-01-01T00:10:00.000Z", "runner-b", new Date("2026-01-01T00:11:00Z"));
+      expect(takeover).toBeDefined();
+      expect(takeover?.run.claimedBy).toBe("runner-b");
+
+      // A matching fingerprint keeps blocking the takeover while deferring.
+      const genuine = store.claimRun(loop, "2026-01-01T00:20:00.000Z", "runner-c", new Date("2026-01-01T00:20:00Z"));
+      store.recordRunProcess(genuine!.run.id, { pid: process.pid, pgid: process.pid });
+      expect(store.claimRun(loop, "2026-01-01T00:20:00.000Z", "runner-d", new Date("2026-01-01T00:21:00Z"))).toBeUndefined();
+      const deferredResult = store.recoverExpiredRunLeasesDetailed(new Date("2026-01-01T00:22:00Z"));
+      expect(deferredResult.deferred.map((run) => run.id)).toEqual([genuine!.run.id]);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("markRunPid records the pid start-time fingerprint", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "mark-pid-fingerprint",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      const marked = store.markRunPid(claim!.run.id, process.pid, "runner");
+      expect(marked?.pid).toBe(process.pid);
+      // The fingerprint is required so recovery and the daemon reaper can
+      // verify pid identity later (fail-closed against pid recycling).
+      expect(marked?.processStartedAt).toBeDefined();
+    } finally {
+      store.close();
+    }
+  });
+
+  test("prunes terminal run history by age with a per-loop retention floor", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "prune-history",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2025-01-01T00:00:00Z"),
+      );
+      const slots = [
+        "2025-01-01T00:00:00.000Z",
+        "2025-01-02T00:00:00.000Z",
+        "2025-01-03T00:00:00.000Z",
+        "2025-06-01T00:00:00.000Z",
+        "2025-06-02T00:00:00.000Z",
+      ];
+      for (const slot of slots) {
+        const claim = store.claimRun(loop, slot, "runner", new Date(slot));
+        store.finalizeRun(claim!.run.id, {
+          status: "succeeded",
+          finishedAt: slot,
+          durationMs: 1_000,
+          stdout: "",
+          stderr: "",
+        });
+      }
+      const now = new Date("2025-06-10T00:00:00Z");
+
+      const dry = store.pruneHistory({ maxAgeDays: 30, dryRun: true, now });
+      expect(dry.dryRun).toBe(true);
+      expect(dry.loopRuns).toBe(3);
+      expect(store.countRuns()).toBe(5);
+
+      const floored = store.pruneHistory({ maxAgeDays: 30, keepPerLoop: 4, now });
+      expect(floored.loopRuns).toBe(1);
+      expect(store.countRuns()).toBe(4);
+
+      const pruned = store.pruneHistory({ maxAgeDays: 30, now });
+      expect(pruned.loopRuns).toBe(2);
+      expect(store.countRuns()).toBe(2);
+
+      const keepOnly = store.pruneHistory({ keepPerLoop: 1, now });
+      expect(keepOnly.loopRuns).toBe(1);
+      expect(store.countRuns()).toBe(1);
+      expect(store.listRuns({ loopId: loop.id })[0]?.scheduledFor).toBe("2025-06-02T00:00:00.000Z");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("pruneHistory skips candidates reclaimed to running before the delete batch commits", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "prune-reclaim-race",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          maxAttempts: 3,
+        },
+        new Date("2025-01-01T00:00:00Z"),
+      );
+      const slot = "2025-01-01T00:00:00.000Z";
+      const claim = store.claimRun(loop, slot, "runner", new Date(slot));
+      store.finalizeRun(claim!.run.id, {
+        status: "failed",
+        finishedAt: slot,
+        durationMs: 1_000,
+        stdout: "",
+        stderr: "",
+        error: "boom",
+      });
+
+      // Simulate a daemon retry reclaiming the run in the window between
+      // candidate selection and the batched delete transaction.
+      const internals = store as unknown as { transact<T>(fn: () => T): T };
+      const originalTransact = internals.transact.bind(store);
+      let reclaimed = false;
+      internals.transact = <T,>(fn: () => T): T => {
+        if (!reclaimed) {
+          reclaimed = true;
+          expect(store.claimRun(loop, slot, "retry-runner", new Date("2025-06-10T00:00:00Z"))).toBeDefined();
+        }
+        return originalTransact(fn);
+      };
+
+      const summary = store.pruneHistory({ maxAgeDays: 0, now: new Date("2025-06-10T00:00:00Z") });
+      expect(reclaimed).toBe(true);
+      expect(summary.loopRuns).toBe(0);
+      const survivor = store.getRun(claim!.run.id);
+      expect(survivor?.status).toBe("running");
+      expect(survivor?.attempt).toBe(2);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("writes manifests for plain loop workflow runs via tmp-then-rename", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-plain-manifest-"));
+    const store = new Store(join(root, "loops.db"));
+    try {
+      const workflow = store.createWorkflow({
+        name: "plain-manifest-workflow",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const loop = store.createLoop({
+        name: "plain-manifest-loop",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "workflow", workflowId: workflow.id },
+      });
+      const run = store.createWorkflowRun({ workflow, loop, scheduledFor: "2026-01-01T00:00:00.000Z" });
+      expect(run.manifestPath).toBeDefined();
+      expect(existsSync(run.manifestPath!)).toBe(true);
+      expect(existsSync(`${run.manifestPath!}.tmp`)).toBe(false);
+      const manifest = JSON.parse(readFileSync(run.manifestPath!, "utf8"));
+      expect(manifest.workflowRunId).toBe(run.id);
+      expect(manifest.loopId).toBe(loop.id);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("appends workflow events with contiguous sequences outside transactions", () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "event-sequence-workflow",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const run = store.createWorkflowRun({ workflow });
+      const second = store.appendWorkflowEvent(run.id, "custom_one");
+      const third = store.appendWorkflowEvent(run.id, "custom_two");
+      expect(second.sequence).toBe(2);
+      expect(third.sequence).toBe(3);
+      expect(store.listWorkflowEvents(run.id).map((event) => event.sequence)).toEqual([1, 2, 3]);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("re-planning goal nodes keeps existing keys and adds new ones", () => {
+    const store = new Store(":memory:");
+    try {
+      const goal = store.createGoal({ objective: "replan" });
+      store.createGoalPlanNodes(goal.goalId, [
+        { key: "plan", objective: "write a plan" },
+        { key: "verify", objective: "verify", dependsOn: ["plan"] },
+      ]);
+      const replanned = store.createGoalPlanNodes(goal.goalId, [
+        { key: "plan", objective: "changed objective is ignored" },
+        { key: "ship", objective: "ship it", dependsOn: ["verify"] },
+      ]);
+      expect(replanned.map((node) => node.key).sort()).toEqual(["plan", "ship", "verify"]);
+      expect(replanned.find((node) => node.key === "plan")?.objective).toBe("write a plan");
     } finally {
       store.close();
     }

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import type { AgentPromptSource, CreateWorkflowInput, ExecutableTarget, GoalSpec, WorkflowSpec, WorkflowStep } from "../types.js";
+import type { AgentPromptSource, AgentTarget, CreateWorkflowInput, ExecutableTarget, GoalSpec, WorkflowSpec, WorkflowStep } from "../types.js";
+import { AGENT_PROVIDERS, providerAdapter } from "./agent-adapter.js";
 import { GOAL_OBJECTIVE_MAX_CHARS } from "./goal/types.js";
 
 export type WorkflowSpecBody = Pick<WorkflowSpec, "name" | "description" | "version" | "steps">;
@@ -48,21 +49,6 @@ function optionalStringArray(value: unknown, label: string): string[] | undefine
     .filter(Boolean);
   return values.length ? values : undefined;
 }
-
-const UNSAFE_CODEWITH_DURABLE_EXTRA_ARGS = new Set([
-  "e",
-  "exec",
-  "agent",
-  "start",
-  "--ephemeral",
-  "--ignore-rules",
-  "--skip-git-repo-check",
-  "--json",
-  "--output-last-message",
-  "-o",
-  "--output-schema",
-  "--dangerously-bypass-approvals-and-sandbox",
-]);
 
 function optionalAccountRef(value: unknown, label: string) {
   if (value === undefined) return undefined;
@@ -148,63 +134,19 @@ function validateTarget(value: unknown, label: string, opts: WorkflowNormalizeOp
     const promptFields = hasPrompt
       ? { prompt: value.prompt as string, promptSource: matchingPromptSource(value.promptSource, value.prompt as string, opts) }
       : readPromptFile(value.promptFile, label, opts);
-    const providers = ["claude", "cursor", "codewith", "aicopilot", "opencode", "codex"];
-    if (!providers.includes(value.provider)) throw new Error(`${label}.provider must be one of ${providers.join(", ")}`);
+    if (!AGENT_PROVIDERS.includes(value.provider as AgentTarget["provider"])) {
+      throw new Error(`${label}.provider must be one of ${AGENT_PROVIDERS.join(", ")}`);
+    }
     optionalTimeoutMs(value.timeoutMs, `${label}.timeoutMs`);
     optionalPositiveInteger(value.idleTimeoutMs, `${label}.idleTimeoutMs`);
-    if (value.authProfile !== undefined) {
-      assertString(value.authProfile, `${label}.authProfile`);
-      if (value.provider !== "codewith") throw new Error(`${label}.authProfile is currently supported only for provider codewith`);
-    }
-    if (value.configIsolation !== undefined) {
-      assertString(value.configIsolation, `${label}.configIsolation`);
-      if (!["safe", "none"].includes(value.configIsolation)) throw new Error(`${label}.configIsolation must be safe or none`);
-    }
-    if (value.model !== undefined) assertString(value.model, `${label}.model`);
-    if (value.provider === "opencode" && (typeof value.model !== "string" || value.model.trim() === "")) {
-      throw new Error(`${label}.model is required for provider opencode; pass a provider/model id such as openrouter/google/gemini-2.5-flash`);
-    }
-    if (value.variant !== undefined) assertString(value.variant, `${label}.variant`);
-    if (value.agent !== undefined) assertString(value.agent, `${label}.agent`);
-    if (value.provider === "cursor" && value.variant !== undefined) throw new Error(`${label}.variant is not supported for provider cursor`);
-    if (value.provider === "codex" && value.agent !== undefined) throw new Error(`${label}.agent is not supported for provider codex`);
-    if (value.provider === "codewith" && value.agent !== undefined) {
-      throw new Error(`${label}.agent is not supported for provider codewith durable background-agent execution`);
-    }
     const extraArgs = optionalStringArray(value.extraArgs, `${label}.extraArgs`);
-    if (value.provider === "codewith") {
-      const unsafe = extraArgs?.find((arg) => UNSAFE_CODEWITH_DURABLE_EXTRA_ARGS.has(arg));
-      if (unsafe) throw new Error(`${label}.extraArgs cannot include ${unsafe}; codewith agent steps use durable agent start, not exec/ephemeral flags`);
-    }
     optionalStringArray(value.addDirs, `${label}.addDirs`);
-    if (Array.isArray(value.addDirs) && value.addDirs.length > 0 && !["codewith", "codex"].includes(value.provider)) {
-      throw new Error(`${label}.addDirs is currently supported only for provider codewith or codex`);
-    }
-    if (value.permissionMode !== undefined) {
-      assertString(value.permissionMode, `${label}.permissionMode`);
-      const permissionModes = ["default", "plan", "auto", "bypass"];
-      if (!permissionModes.includes(value.permissionMode)) {
-        throw new Error(`${label}.permissionMode must be one of ${permissionModes.join(", ")}`);
-      }
-      if (value.permissionMode === "plan" && !["claude", "cursor"].includes(value.provider)) {
-        throw new Error(`${label}.permissionMode plan is currently supported only for provider claude or cursor`);
-      }
-      if (value.permissionMode === "auto" && value.provider !== "claude") {
-        throw new Error(`${label}.permissionMode auto is currently supported only for provider claude`);
-      }
-    }
-    if (value.sandbox !== undefined) {
-      assertString(value.sandbox, `${label}.sandbox`);
-      const codexLike = ["read-only", "workspace-write", "danger-full-access"];
-      const cursorLike = ["enabled", "disabled"];
-      if (["codewith", "codex"].includes(value.provider)) {
-        if (!codexLike.includes(value.sandbox)) throw new Error(`${label}.sandbox must be one of ${codexLike.join(", ")}`);
-      } else if (value.provider === "cursor") {
-        if (!cursorLike.includes(value.sandbox)) throw new Error(`${label}.sandbox must be one of ${cursorLike.join(", ")}`);
-      } else {
-        throw new Error(`${label}.sandbox is currently supported only for provider codewith, codex, or cursor`);
-      }
-    }
+    // Provider-specific option rules live in the shared provider adapters so the
+    // creation-time and execution-time error strings cannot drift apart.
+    providerAdapter(value.provider as AgentTarget["provider"]).validate(
+      { ...value, extraArgs, ...promptFields } as unknown as AgentTarget,
+      label,
+    );
     if (value.allowlist !== undefined) {
       assertObject(value.allowlist, `${label}.allowlist`);
       optionalStringArray(value.allowlist.tools, `${label}.allowlist.tools`);

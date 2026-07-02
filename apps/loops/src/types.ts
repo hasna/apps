@@ -455,6 +455,8 @@ export interface LoopRun {
   claimedBy?: string;
   leaseExpiresAt?: string;
   pid?: number;
+  pgid?: number;
+  processStartedAt?: string;
   exitCode?: number;
   durationMs?: number;
   stdout?: string;

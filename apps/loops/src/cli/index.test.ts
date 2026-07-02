@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -16,6 +16,28 @@ function runCli(dataDir: string, args: string[], input?: string, env: Record<str
     input,
     encoding: "utf8",
   });
+}
+
+let templateDb: string | undefined;
+
+/**
+ * mkdtemp a CLI data dir pre-seeded with an already-migrated loops.db so each
+ * test skips the fresh-database migration cost inside its first CLI spawn.
+ * The template database is built once per suite run by a real CLI invocation,
+ * so seeded dirs are byte-identical to what that first spawn would create.
+ */
+function freshDataDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  if (!templateDb) {
+    const templateDir = mkdtempSync(join(tmpdir(), "loops-cli-template-db-"));
+    const init = runCli(templateDir, ["--json", "list"]);
+    if (init.status !== 0) throw new Error(`failed to initialize template loops.db: ${init.stderr}`);
+    templateDb = join(templateDir, "loops.db");
+  }
+  const db = join(dir, "loops.db");
+  copyFileSync(templateDb, db);
+  chmodSync(db, 0o600);
+  return dir;
 }
 
 function workflowFile(dataDir: string, body: unknown): string {
@@ -58,7 +80,7 @@ function authProfilesOf(workflow: { steps: TestWorkflowStep[] }): string[] {
 
 describe("loops CLI", () => {
   test("reports the package version", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-version-"));
+    const dataDir = freshDataDir("loops-cli-version-");
     const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string };
     const version = runCli(dataDir, ["--version"]);
 
@@ -86,7 +108,7 @@ describe("loops CLI", () => {
   });
 
   test("run-now exits zero for succeeded runs", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-ok-"));
+    const dataDir = freshDataDir("loops-cli-ok-");
     const create = runCli(dataDir, ["create", "command", "ok", "--at", futureAt(), "--cmd", "printf ok"]);
     expect(create.status).toBe(0);
 
@@ -99,7 +121,7 @@ describe("loops CLI", () => {
   });
 
   test("run-now exits non-zero for failed runs while preserving JSON output", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-fail-"));
+    const dataDir = freshDataDir("loops-cli-fail-");
     const create = runCli(dataDir, ["create", "command", "fail", "--at", futureAt(), "--cmd", "exit 23"]);
     expect(create.status).toBe(0);
 
@@ -113,7 +135,7 @@ describe("loops CLI", () => {
   });
 
   test("create agent rejects unsupported provider add dirs before storing", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-create-agent-adddirs-"));
+    const dataDir = freshDataDir("loops-cli-create-agent-adddirs-");
 
     const create = runCli(dataDir, [
       "--json",
@@ -141,7 +163,7 @@ describe("loops CLI", () => {
   });
 
   test("create agent supports prompt files without printing prompt contents", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-create-agent-prompt-file-"));
+    const dataDir = freshDataDir("loops-cli-create-agent-prompt-file-");
     const promptFile = join(dataDir, "prompt.md");
     writeFileSync(promptFile, "SECRET_PROMPT_FILE_VALUE\nRun the check.\n");
 
@@ -180,7 +202,7 @@ describe("loops CLI", () => {
   });
 
   test("create agent requires exactly one prompt source", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-create-agent-prompt-source-"));
+    const dataDir = freshDataDir("loops-cli-create-agent-prompt-source-");
     const promptFile = join(dataDir, "prompt.md");
     writeFileSync(promptFile, "hello\n");
 
@@ -219,7 +241,7 @@ describe("loops CLI", () => {
   });
 
   test("run-now falls back to an ad hoc slot when the due slot is already terminal", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-terminal-due-"));
+    const dataDir = freshDataDir("loops-cli-terminal-due-");
     const store = new Store(join(dataDir, "loops.db"));
     let dueSlot = "";
     try {
@@ -259,7 +281,7 @@ describe("loops CLI", () => {
   });
 
   test("archives loops without deleting them and blocks run-now until unarchived", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-archive-"));
+    const dataDir = freshDataDir("loops-cli-archive-");
     const create = runCli(dataDir, ["create", "command", "archivable", "--at", futureAt(), "--cmd", "true"]);
     expect(create.status).toBe(0);
 
@@ -294,7 +316,7 @@ describe("loops CLI", () => {
   });
 
   test("hygiene names reports canonical machine/repo loop names without applying by default", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-hygiene-names-"));
+    const dataDir = freshDataDir("loops-cli-hygiene-names-");
     const create = runCli(dataDir, [
       "create",
       "command",
@@ -323,7 +345,7 @@ describe("loops CLI", () => {
   });
 
   test("hygiene names removes cadence suffixes from canonical loop names", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-hygiene-names-cadence-"));
+    const dataDir = freshDataDir("loops-cli-hygiene-names-cadence-");
     const createInterval = runCli(dataDir, [
       "create",
       "command",
@@ -363,7 +385,7 @@ describe("loops CLI", () => {
   });
 
   test("hygiene names apply backs up the database before renaming loops", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-hygiene-names-apply-"));
+    const dataDir = freshDataDir("loops-cli-hygiene-names-apply-");
     const create = runCli(dataDir, [
       "create",
       "command",
@@ -393,7 +415,7 @@ describe("loops CLI", () => {
   });
 
   test("hygiene names apply skips database backup when there are no renames", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-hygiene-names-apply-noop-"));
+    const dataDir = freshDataDir("loops-cli-hygiene-names-apply-noop-");
     const create = runCli(dataDir, [
       "create",
       "command",
@@ -415,7 +437,7 @@ describe("loops CLI", () => {
   });
 
   test("created loops get default descriptions and human list cadence", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-description-cadence-"));
+    const dataDir = freshDataDir("loops-cli-description-cadence-");
     const created = runCli(dataDir, [
       "--json",
       "create",
@@ -455,7 +477,7 @@ describe("loops CLI", () => {
   });
 
   test("rename changes only the loop name and writes a backup", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-rename-"));
+    const dataDir = freshDataDir("loops-cli-rename-");
     const create = runCli(dataDir, ["--json", "create", "command", "old-loop-name", "--at", futureAt(), "--cmd", "true"]);
     expect(create.status).toBe(0);
     const created = JSON.parse(create.stdout);
@@ -485,7 +507,7 @@ describe("loops CLI", () => {
   });
 
   test("rename reports no-op without writing a backup", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-rename-noop-"));
+    const dataDir = freshDataDir("loops-cli-rename-noop-");
     const create = runCli(dataDir, ["create", "command", "stable-name", "--at", futureAt(), "--cmd", "true"]);
     expect(create.status).toBe(0);
 
@@ -499,7 +521,7 @@ describe("loops CLI", () => {
   });
 
   test("rename rejects duplicate and empty names", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-rename-invalid-"));
+    const dataDir = freshDataDir("loops-cli-rename-invalid-");
     expect(runCli(dataDir, ["create", "command", "first-loop", "--at", futureAt(), "--cmd", "true"]).status).toBe(0);
     expect(runCli(dataDir, ["create", "command", "second-loop", "--at", futureAt(), "--cmd", "true"]).status).toBe(0);
 
@@ -513,7 +535,7 @@ describe("loops CLI", () => {
   });
 
   test("rename preserves archived loop state", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-rename-archived-"));
+    const dataDir = freshDataDir("loops-cli-rename-archived-");
     const create = runCli(dataDir, ["--json", "create", "command", "archived-rename-source", "--at", futureAt(), "--cmd", "true"]);
     expect(create.status).toBe(0);
     const created = JSON.parse(create.stdout);
@@ -535,7 +557,7 @@ describe("loops CLI", () => {
   });
 
   test("hygiene duplicates groups overlapping loops by normalized name, cwd, and schedule", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-hygiene-duplicates-"));
+    const dataDir = freshDataDir("loops-cli-hygiene-duplicates-");
     expect(runCli(dataDir, ["create", "command", "machine-foo", "--every", "1h", "--cmd", "true", "--cwd", "/tmp/repo"]).status).toBe(0);
     expect(runCli(dataDir, ["create", "command", "machine-foo-compact", "--every", "1h", "--cmd", "true", "--cwd", "/tmp/repo"]).status).toBe(0);
 
@@ -549,7 +571,7 @@ describe("loops CLI", () => {
   });
 
   test("hygiene scripts inventories local script-backed command loops", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-hygiene-scripts-"));
+    const dataDir = freshDataDir("loops-cli-hygiene-scripts-");
     const scriptsDir = join(dataDir, "scripts");
     expect(runCli(dataDir, ["create", "command", "script-backed", "--at", futureAt(), "--cmd", `${scriptsDir}/check.sh`]).status).toBe(0);
     expect(runCli(dataDir, ["create", "command", "script-backed-tilde", "--at", futureAt(), "--cmd", "~/.hasna/loops/scripts/check.sh"]).status).toBe(0);
@@ -569,7 +591,7 @@ describe("loops CLI", () => {
   });
 
   test("hygiene route-tasks dry-run produces deduped task upserts without mutating todos", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-hygiene-route-tasks-"));
+    const dataDir = freshDataDir("loops-cli-hygiene-route-tasks-");
     const scriptsDir = join(dataDir, "scripts");
     const evidenceDir = join(dataDir, "evidence");
     expect(runCli(dataDir, ["create", "command", "machine-foo", "--every", "1h", "--cmd", "true", "--cwd", "/tmp/repo"]).status).toBe(0);
@@ -646,7 +668,7 @@ describe("loops CLI", () => {
   });
 
   test("hygiene route-tasks skips auto-route metadata for findings without cwd or explicit route project", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-hygiene-route-no-cwd-"));
+    const dataDir = freshDataDir("loops-cli-hygiene-route-no-cwd-");
     expect(runCli(dataDir, [
       "create",
       "command",
@@ -690,7 +712,7 @@ describe("loops CLI", () => {
   });
 
   test("create command stores an OpenMachines assignment", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-machine-"));
+    const dataDir = freshDataDir("loops-cli-machine-");
     const create = runCli(dataDir, ["--json", "create", "command", "machine-local", "--at", futureAt(), "--cmd", "true", "--machine", "local"]);
     expect(create.status).toBe(0);
     const value = JSON.parse(create.stdout);
@@ -704,7 +726,7 @@ describe("loops CLI", () => {
   });
 
   test("create agent stores advisory allowlist metadata", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-agent-allowlist-"));
+    const dataDir = freshDataDir("loops-cli-agent-allowlist-");
     const create = runCli(dataDir, [
       "--json",
       "create",
@@ -732,7 +754,7 @@ describe("loops CLI", () => {
   });
 
   test("create command, agent, and workflow accept explicit unlimited timeouts", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-timeout-none-"));
+    const dataDir = freshDataDir("loops-cli-timeout-none-");
     const command = runCli(dataDir, [
       "--json",
       "create",
@@ -789,7 +811,7 @@ describe("loops CLI", () => {
   });
 
   test("workflows migrate-agent-timeouts clones specs and retargets loops append-only", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-migrate-agent-timeouts-"));
+    const dataDir = freshDataDir("loops-cli-migrate-agent-timeouts-");
     const file = workflowFile(dataDir, {
       name: "finite-agent-workflow",
       steps: [
@@ -848,7 +870,7 @@ describe("loops CLI", () => {
   });
 
   test("workflows migrate-goal-wrappers removes redundant workflow goals append-only", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-migrate-goal-wrappers-"));
+    const dataDir = freshDataDir("loops-cli-migrate-goal-wrappers-");
     const promptFile = join(dataDir, "worker-prompt.md");
     writeFileSync(promptFile, "SECRET_PROMPT_FILE_VALUE\nDo the work.\n");
     const file = workflowFile(dataDir, {
@@ -927,7 +949,7 @@ describe("loops CLI", () => {
   });
 
   test("workflows migrate-goal-wrappers skips workflow-goal-only loops", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-migrate-workflow-goal-only-"));
+    const dataDir = freshDataDir("loops-cli-migrate-workflow-goal-only-");
     const file = workflowFile(dataDir, {
       name: "workflow-goal-only",
       goal: { objective: "SECRET_WORKFLOW_ONLY_GOAL" },
@@ -964,7 +986,7 @@ describe("loops CLI", () => {
   });
 
   test("workflows migrate-agent-timeouts rejects ambiguous loop names", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-migrate-ambiguous-loop-"));
+    const dataDir = freshDataDir("loops-cli-migrate-ambiguous-loop-");
     const file = workflowFile(dataDir, {
       name: "ambiguous-agent-workflow",
       steps: [{ id: "worker", target: { type: "agent", provider: "codewith", prompt: "work", timeoutMs: 2_700_000 } }],
@@ -992,7 +1014,7 @@ describe("loops CLI", () => {
   });
 
   test("create stores runtime preflight policy on command, agent, and workflow loops", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-runtime-preflight-"));
+    const dataDir = freshDataDir("loops-cli-runtime-preflight-");
     const command = runCli(dataDir, [
       "--json",
       "create",
@@ -1045,7 +1067,7 @@ describe("loops CLI", () => {
   });
 
   test("machines commands expose OpenMachines topology", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-machines-"));
+    const dataDir = freshDataDir("loops-cli-machines-");
     const list = runCli(dataDir, ["--json", "machines", "list"]);
     expect(list.status).toBe(0);
     const machines = JSON.parse(list.stdout);
@@ -1060,7 +1082,7 @@ describe("loops CLI", () => {
   });
 
   test("doctor exits non-zero when an active loop cannot preflight", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-doctor-preflight-"));
+    const dataDir = freshDataDir("loops-cli-doctor-preflight-");
     const create = runCli(dataDir, [
       "create",
       "command",
@@ -1081,7 +1103,7 @@ describe("loops CLI", () => {
   });
 
   test("create command --preflight fails before storing a broken loop", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-create-preflight-fail-"));
+    const dataDir = freshDataDir("loops-cli-create-preflight-fail-");
     const create = runCli(dataDir, [
       "create",
       "command",
@@ -1103,7 +1125,7 @@ describe("loops CLI", () => {
   });
 
   test("create command --preflight includes stable JSON evidence on success", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-create-preflight-ok-"));
+    const dataDir = freshDataDir("loops-cli-create-preflight-ok-");
     const create = runCli(dataDir, [
       "--json",
       "create",
@@ -1124,7 +1146,7 @@ describe("loops CLI", () => {
   });
 
   test("create command --preflight reports bounded JSON without storing on failure", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-create-preflight-json-fail-"));
+    const dataDir = freshDataDir("loops-cli-create-preflight-json-fail-");
     const create = runCli(dataDir, [
       "--json",
       "create",
@@ -1156,7 +1178,7 @@ describe("loops CLI", () => {
   });
 
   test("create command --preflight fails before storing when OpenAccounts env fails", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-create-account-preflight-fail-"));
+    const dataDir = freshDataDir("loops-cli-create-account-preflight-fail-");
     const home = mkdtempSync(join(tmpdir(), "loops-cli-create-account-home-"));
     const binDir = join(dataDir, "bin");
     mkdirSync(binDir, { recursive: true });
@@ -1199,7 +1221,7 @@ describe("loops CLI", () => {
   });
 
   test("create agent --preflight fails before storing when provider binary is missing", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-create-agent-preflight-fail-"));
+    const dataDir = freshDataDir("loops-cli-create-agent-preflight-fail-");
     const home = mkdtempSync(join(tmpdir(), "loops-cli-create-agent-home-"));
     const create = runCli(
       dataDir,
@@ -1238,7 +1260,7 @@ describe("loops CLI", () => {
   });
 
   test("create agent --preflight validates provider-native Codewith auth profiles", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-create-agent-auth-preflight-"));
+    const dataDir = freshDataDir("loops-cli-create-agent-auth-preflight-");
     const home = mkdtempSync(join(tmpdir(), "loops-cli-create-agent-auth-home-"));
     const binDir = join(dataDir, "bin");
     mkdirSync(binDir, { recursive: true });
@@ -1288,7 +1310,7 @@ describe("loops CLI", () => {
   });
 
   test("create workflow --preflight fails before storing the scheduling loop", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-create-workflow-preflight-fail-"));
+    const dataDir = freshDataDir("loops-cli-create-workflow-preflight-fail-");
     const file = workflowFile(dataDir, {
       name: "workflow-preflight-fails",
       steps: [
@@ -1322,7 +1344,7 @@ describe("loops CLI", () => {
   });
 
   test("workflows create resolves relative promptFile and redacts output", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-workflow-prompt-file-"));
+    const dataDir = freshDataDir("loops-cli-workflow-prompt-file-");
     writeFileSync(join(dataDir, "agent-prompt.md"), "SECRET_WORKFLOW_PROMPT_FILE\nReview only.\n");
     const file = workflowFile(dataDir, {
       name: "workflow-prompt-file",
@@ -1361,7 +1383,7 @@ describe("loops CLI", () => {
   });
 
   test("workflows validate and create report promptFile failures as structured redacted JSON", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-workflow-prompt-file-error-"));
+    const dataDir = freshDataDir("loops-cli-workflow-prompt-file-error-");
     const file = workflowFile(dataDir, {
       name: "workflow-missing-prompt-file",
       steps: [
@@ -1393,7 +1415,7 @@ describe("loops CLI", () => {
   });
 
   test("create workflow --preflight includes step-mapped JSON evidence on success", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-create-workflow-preflight-ok-"));
+    const dataDir = freshDataDir("loops-cli-create-workflow-preflight-ok-");
     const file = workflowFile(dataDir, {
       name: "workflow-preflight-ok",
       steps: [
@@ -1431,7 +1453,7 @@ describe("loops CLI", () => {
   });
 
   test("workflows create --preflight fails before storing a broken workflow", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-workflows-create-preflight-fail-"));
+    const dataDir = freshDataDir("loops-cli-workflows-create-preflight-fail-");
     const file = workflowFile(dataDir, {
       name: "stored-workflow-preflight-fails",
       steps: [
@@ -1462,7 +1484,7 @@ describe("loops CLI", () => {
   });
 
   test("workflows list is complete by default and warns for explicit pages", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-workflows-list-complete-"));
+    const dataDir = freshDataDir("loops-cli-workflows-list-complete-");
     const store = new Store(join(dataDir, "loops.db"));
     try {
       for (let index = 0; index < 205; index += 1) {
@@ -1494,7 +1516,7 @@ describe("loops CLI", () => {
   });
 
   test("health JSON reports failed expectations with classification and task upsert fields", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-health-json-"));
+    const dataDir = freshDataDir("loops-cli-health-json-");
     const store = new Store(join(dataDir, "loops.db"));
     try {
       const loop = store.createLoop({
@@ -1543,7 +1565,7 @@ describe("loops CLI", () => {
   });
 
   test("health JSON reports functional route blockers even when latest drain run succeeded", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-health-route-functional-"));
+    const dataDir = freshDataDir("loops-cli-health-route-functional-");
     const evidenceDir = join(dataDir, "evidence");
     mkdirSync(evidenceDir, { recursive: true });
     const evidencePath = join(evidenceDir, "route-drain.json");
@@ -1630,7 +1652,7 @@ describe("loops CLI", () => {
   });
 
   test("health JSON flags skipped route source task update failures", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-health-route-source-update-"));
+    const dataDir = freshDataDir("loops-cli-health-route-source-update-");
     const evidenceDir = join(dataDir, "evidence");
     mkdirSync(evidenceDir, { recursive: true });
     const evidencePath = join(evidenceDir, "route-drain.json");
@@ -1689,7 +1711,7 @@ describe("loops CLI", () => {
   });
 
   test("health JSON does not treat unrelated successful result arrays as route blockers", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-health-route-functional-scope-"));
+    const dataDir = freshDataDir("loops-cli-health-route-functional-scope-");
     const store = new Store(join(dataDir, "loops.db"));
     try {
       const loop = store.createLoop({
@@ -1734,7 +1756,7 @@ describe("loops CLI", () => {
   });
 
   test("health route-tasks dry-run reports deduped task upserts without mutating todos", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-health-route-dry-run-"));
+    const dataDir = freshDataDir("loops-cli-health-route-dry-run-");
     const evidenceDir = join(dataDir, "evidence");
     const store = new Store(join(dataDir, "loops.db"));
     try {
@@ -1821,7 +1843,7 @@ describe("loops CLI", () => {
   });
 
   test("health route-tasks passes working-dir to todos upsert for auto-routed tasks", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-health-route-working-dir-"));
+    const dataDir = freshDataDir("loops-cli-health-route-working-dir-");
     const binDir = join(dataDir, "bin");
     const argLog = join(dataDir, "todos-args.log");
     mkdirSync(binDir, { recursive: true });
@@ -1888,7 +1910,7 @@ describe("loops CLI", () => {
   });
 
   test("runtime preflight failures are finalized and routed as preflight health tasks", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-runtime-preflight-health-"));
+    const dataDir = freshDataDir("loops-cli-runtime-preflight-health-");
     const create = runCli(dataDir, [
       "--json",
       "create",
@@ -1924,7 +1946,7 @@ describe("loops CLI", () => {
   });
 
   test("health route-tasks ignores stopped loops unless include-inactive is set and dedupe survives renames", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-health-route-active-only-"));
+    const dataDir = freshDataDir("loops-cli-health-route-active-only-");
     const store = new Store(join(dataDir, "loops.db"));
     let firstFingerprint = "";
     try {
@@ -1981,6 +2003,8 @@ describe("loops CLI", () => {
   });
 
   test("expectations JSON is read-only and honors temp LOOPS_DATA_DIR", () => {
+    // Deliberately unseeded: this test proves the CLI creates loops.db inside
+    // LOOPS_DATA_DIR (and never under $HOME/.hasna), so the db must not exist yet.
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-expectations-temp-data-"));
     const home = mkdtempSync(join(tmpdir(), "loops-cli-expectations-home-"));
     const create = runCli(dataDir, ["create", "command", "isolated", "--at", futureAt(), "--cmd", "true"], undefined, { HOME: home });
@@ -1996,7 +2020,7 @@ describe("loops CLI", () => {
   });
 
   test("workflow JSON run and inspect redact step output without show-output", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-workflow-redact-"));
+    const dataDir = freshDataDir("loops-cli-workflow-redact-");
     const secret = "SECRET_WORKFLOW_JSON_OUTPUT";
     const file = workflowFile(dataDir, {
       name: "workflow-redact",
@@ -2029,7 +2053,7 @@ describe("loops CLI", () => {
   });
 
   test("create --goal persists goal config and goal show renders it", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-goal-"));
+    const dataDir = freshDataDir("loops-cli-goal-");
     const create = runCli(dataDir, [
       "--json",
       "create",
@@ -2061,14 +2085,14 @@ describe("loops CLI", () => {
   });
 
   test("--goal requires a non-empty objective", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-empty-goal-"));
+    const dataDir = freshDataDir("loops-cli-empty-goal-");
     const create = runCli(dataDir, ["create", "command", "bad-goal", "--at", futureAt(), "--cmd", "true", "--goal", " "]);
     expect(create.status).not.toBe(0);
     expect(create.stderr).toContain("goal.objective");
   });
 
   test("templates render task worker/verifier workflow JSON", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-render-"));
+    const dataDir = freshDataDir("loops-cli-template-render-");
     const list = runCli(dataDir, ["--json", "templates", "list"]);
     expect(list.status).toBe(0);
     expect(JSON.parse(list.stdout).map((template: { id: string }) => template.id)).toEqual(expect.arrayContaining(["todos-task-worker-verifier", "event-worker-verifier"]));
@@ -2164,7 +2188,7 @@ describe("loops CLI", () => {
   });
 
   test("templates fail closed for danger-full-access unless manual break-glass is explicit", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-danger-sandbox-"));
+    const dataDir = freshDataDir("loops-cli-template-danger-sandbox-");
     const rejected = runCli(dataDir, [
       "--json",
       "templates",
@@ -2205,7 +2229,7 @@ describe("loops CLI", () => {
   });
 
   test("templates render lifecycle and deterministic producer workflows", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-lifecycle-"));
+    const dataDir = freshDataDir("loops-cli-template-lifecycle-");
     const repo = createGitRepo("loops-cli-template-lifecycle-repo-");
     const list = runCli(dataDir, ["--json", "templates", "list"]);
     expect(list.status).toBe(0);
@@ -2233,11 +2257,11 @@ describe("loops CLI", () => {
     expect(prReview.status).toBe(0);
     const prWorkflow = JSON.parse(prReview.stdout);
     expect(prWorkflow.name).toContain("pr-review");
-    expect(prWorkflow.steps.map((step: { id: string }) => step.id)).toEqual(["prepare-worktree", "worker", "verifier"]);
-    expect(prWorkflow.steps[1].target.worktree.mode).toBe("required");
+    expect(prWorkflow.steps.map((step: { id: string }) => step.id)).toEqual(["worker", "verifier"]);
+    expect(prWorkflow.steps[0].target.worktree.mode).toBe("required");
+    expect(prWorkflow.steps[0].timeoutMs).toBeNull();
     expect(prWorkflow.steps[1].timeoutMs).toBeNull();
-    expect(prWorkflow.steps[2].timeoutMs).toBeNull();
-    expect(prWorkflow.steps[2].target.idleTimeoutMs).toBe(900_000);
+    expect(prWorkflow.steps[1].target.idleTimeoutMs).toBe(900_000);
 
     const lifecycle = runCli(dataDir, [
       "--json",
@@ -2313,7 +2337,7 @@ describe("loops CLI", () => {
   });
 
   test("templates show explains task-lifecycle variables and usage", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-show-"));
+    const dataDir = freshDataDir("loops-cli-template-show-");
 
     const show = runCli(dataDir, ["templates", "show", "task-lifecycle"]);
 
@@ -2326,11 +2350,11 @@ describe("loops CLI", () => {
     expect(show.stdout).toContain("worktreeMode");
     expect(show.stdout).toContain("default=required");
     expect(show.stdout).toContain("loops templates render task-lifecycle");
-    expect(show.stdout).toContain("loops templates create-workflow task-lifecycle");
+    expect(show.stdout).toContain("loops workflows create --template task-lifecycle");
   });
 
   test("custom templates import, list, show, render, and create workflow", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-custom-template-"));
+    const dataDir = freshDataDir("loops-cli-custom-template-");
     const sourceFile = join(dataDir, "custom-report-template.json");
     writeFileSync(sourceFile, JSON.stringify({
       id: "custom-report",
@@ -2436,7 +2460,7 @@ describe("loops CLI", () => {
   });
 
   test("custom templates fail closed for invalid and dangerous definitions", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-custom-template-invalid-"));
+    const dataDir = freshDataDir("loops-cli-custom-template-invalid-");
     const registryDir = join(dataDir, "templates");
     mkdirSync(registryDir, { recursive: true });
     const dangerous = join(registryDir, "danger.json");
@@ -2465,7 +2489,7 @@ describe("loops CLI", () => {
     expect(list.status).not.toBe(0);
     expect(list.stderr).toContain("danger-full-access");
 
-    const invalidDataDir = mkdtempSync(join(tmpdir(), "loops-cli-custom-template-invalid-shape-"));
+    const invalidDataDir = freshDataDir("loops-cli-custom-template-invalid-shape-");
     const invalidFile = join(invalidDataDir, "invalid-template.json");
     writeFileSync(invalidFile, JSON.stringify({ id: "invalid", name: "Invalid", kind: "workflow" }));
     const imported = runCli(invalidDataDir, ["--json", "templates", "import", invalidFile]);
@@ -2488,7 +2512,7 @@ describe("loops CLI", () => {
     expect(invalidRequired.status).not.toBe(0);
     expect(invalidRequired.stderr).toContain("required");
 
-    const implicitDangerDataDir = mkdtempSync(join(tmpdir(), "loops-cli-custom-template-implicit-danger-"));
+    const implicitDangerDataDir = freshDataDir("loops-cli-custom-template-implicit-danger-");
     const implicitDangerFile = join(implicitDangerDataDir, "implicit-danger-template.json");
     writeFileSync(implicitDangerFile, JSON.stringify({
       id: "implicit-danger",
@@ -2514,7 +2538,7 @@ describe("loops CLI", () => {
     expect(implicitDanger.status).not.toBe(0);
     expect(implicitDanger.stderr).toContain("explicit sandbox");
 
-    const extraArgsDangerDataDir = mkdtempSync(join(tmpdir(), "loops-cli-custom-template-extra-args-danger-"));
+    const extraArgsDangerDataDir = freshDataDir("loops-cli-custom-template-extra-args-danger-");
     const extraArgsDangerFile = join(extraArgsDangerDataDir, "extra-args-danger-template.json");
     writeFileSync(extraArgsDangerFile, JSON.stringify({
       id: "extra-args-danger",
@@ -2541,7 +2565,7 @@ describe("loops CLI", () => {
     expect(extraArgsDanger.status).not.toBe(0);
     expect(extraArgsDanger.stderr).toContain("dangerous sandbox");
 
-    const promptFileDataDir = mkdtempSync(join(tmpdir(), "loops-cli-custom-template-prompt-file-"));
+    const promptFileDataDir = freshDataDir("loops-cli-custom-template-prompt-file-");
     const promptFileTemplate = join(promptFileDataDir, "prompt-file-template.json");
     writeFileSync(promptFileTemplate, JSON.stringify({
       id: "prompt-file-template",
@@ -2567,7 +2591,7 @@ describe("loops CLI", () => {
     expect(promptFileImport.status).not.toBe(0);
     expect(promptFileImport.stderr).toContain("promptFile is not allowed in custom templates");
 
-    const safeDataDir = mkdtempSync(join(tmpdir(), "loops-cli-custom-template-safe-render-"));
+    const safeDataDir = freshDataDir("loops-cli-custom-template-safe-render-");
     const safeFile = join(safeDataDir, "safe-template.json");
     writeFileSync(safeFile, JSON.stringify({
       id: "safe-custom",
@@ -2607,7 +2631,7 @@ describe("loops CLI", () => {
   });
 
   test("custom templates cannot override built-in template ids", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-custom-template-collision-"));
+    const dataDir = freshDataDir("loops-cli-custom-template-collision-");
     const collisionFile = join(dataDir, "collision-template.json");
     writeFileSync(collisionFile, JSON.stringify({
       id: "todos-task-worker-verifier",
@@ -2677,7 +2701,7 @@ describe("loops CLI", () => {
   });
 
   test("templates select different worker and verifier auth profiles from a pool", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-pool-"));
+    const dataDir = freshDataDir("loops-cli-template-pool-");
     const render = runCli(dataDir, [
       "--json",
       "templates",
@@ -2704,7 +2728,7 @@ describe("loops CLI", () => {
   });
 
   test("templates default git projects to isolated worktrees", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-worktree-"));
+    const dataDir = freshDataDir("loops-cli-template-worktree-");
     const repo = createGitRepo("loops-cli-template-worktree-repo-");
     const worktreeRoot = join(dataDir, "worktrees");
     const render = runCli(dataDir, [
@@ -2728,187 +2752,131 @@ describe("loops CLI", () => {
 
     expect(render.status).toBe(0);
     const workflow = JSON.parse(render.stdout);
-    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["prepare-worktree", "source-task-gate", "worker", "verifier"]);
-    expect(workflow.steps[0].target).toMatchObject({ type: "command", command: "bash", cwd: repo });
-    expect(workflow.steps[1].dependsOn).toEqual(["prepare-worktree"]);
-    expect(workflow.steps[2].dependsOn).toEqual(["source-task-gate"]);
-    expect(workflow.steps[2].target.cwd).toContain(worktreeRoot);
-    expect(workflow.steps[2].target.worktree).toMatchObject({
+    expect(workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
+    expect(workflow.steps[1].dependsOn).toEqual(["source-task-gate"]);
+    expect(workflow.steps[1].target.cwd).toContain(worktreeRoot);
+    expect(workflow.steps[1].target.worktree).toMatchObject({
       mode: "auto",
       enabled: true,
       originalCwd: repo,
       repoRoot: repo,
       root: worktreeRoot,
     });
-    expect(workflow.steps[2].target.addDirs).toEqual([join(dataDir, "todos-store"), join(repo, ".git")]);
-    expect(workflow.steps[2].target.worktree.branch).toContain("openloops/");
-    expect(workflow.steps[3].target.cwd).toBe(workflow.steps[2].target.cwd);
-    expect(workflow.steps[2].target.prompt).toContain("[redacted");
+    expect(workflow.steps[1].target.addDirs).toEqual([join(dataDir, "todos-store"), join(repo, ".git")]);
+    expect(workflow.steps[1].target.worktree.branch).toContain("openloops/");
+    expect(workflow.steps[2].target.cwd).toBe(workflow.steps[1].target.cwd);
+    expect(workflow.steps[1].target.prompt).toContain("[redacted");
     expect(render.stdout).not.toContain("Use the isolated git worktree");
     expect(render.stdout).not.toContain("Do not mutate the original checkout/main branch");
   });
 
-  test("prepare-worktree refuses a stale checkout from a different git repo", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-stale-worktree-"));
-    const repo = createGitRepo("loops-cli-template-stale-worktree-repo-");
-    const worktreeRoot = join(dataDir, "worktrees");
-    const render = runCli(dataDir, [
-      "--json",
-      "templates",
-      "render",
-      "todos-task-worker-verifier",
-      "--var",
-      "taskId=task-stale-worktree",
-      "--var",
-      `projectPath=${repo}`,
-      "--var",
-      `worktreeRoot=${worktreeRoot}`,
-    ]);
+  function stubPwdAgentBin(dataDir: string): string {
+    const bin = join(dataDir, "stub-bin");
+    mkdirSync(bin, { recursive: true });
+    const claude = join(bin, "claude");
+    writeFileSync(claude, "#!/usr/bin/env bash\npwd\ncat >/dev/null\n");
+    chmodSync(claude, 0o755);
+    return bin;
+  }
 
-    expect(render.status).toBe(0);
-    const workflow = JSON.parse(render.stdout);
-    const stalePath = workflow.steps[2].target.worktree.path;
-    mkdirSync(stalePath, { recursive: true });
-    git(stalePath, ["init"]);
-    git(stalePath, ["config", "user.email", "loops-test@example.com"]);
-    git(stalePath, ["config", "user.name", "Loops Test"]);
-    writeFileSync(join(stalePath, "README.md"), "# stale\n");
-    git(stalePath, ["add", "README.md"]);
-    git(stalePath, ["commit", "-m", "stale"]);
-
-    const prepare = spawnSync("bash", ["-lc", workflow.steps[0].target.args[1]], {
-      cwd: workflow.steps[0].target.cwd,
-      encoding: "utf8",
+  function worktreeWorkflowFile(dataDir: string, repo: string, worktree: Record<string, unknown>): string {
+    return workflowFile(dataDir, {
+      name: "cli-worktree-exec",
+      steps: [
+        {
+          id: "worker",
+          target: {
+            type: "agent",
+            provider: "claude",
+            prompt: "print working directory",
+            cwd: worktree.cwd,
+            timeoutMs: 60_000,
+            worktree,
+          },
+        },
+      ],
     });
+  }
 
-    expect(prepare.status).not.toBe(0);
-    expect(prepare.stderr).toContain("different git common dir");
-  });
-
-  test("prepare-worktree reuses an existing worktree only on the expected branch", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-existing-worktree-"));
-    const repo = createGitRepo("loops-cli-template-existing-worktree-repo-");
+  test("workflows run prepares and reuses executor-managed worktrees", () => {
+    const dataDir = freshDataDir("loops-cli-executor-worktree-");
+    const repo = createGitRepo("loops-cli-executor-worktree-repo-");
+    const bin = stubPwdAgentBin(dataDir);
+    const env = { PATH: `${bin}:${process.env.PATH ?? ""}` };
     const worktreeRoot = join(dataDir, "worktrees");
-    const render = runCli(dataDir, [
-      "--json",
-      "templates",
-      "render",
-      "todos-task-worker-verifier",
-      "--var",
-      "taskId=task-existing-worktree",
-      "--var",
-      `projectPath=${repo}`,
-      "--var",
-      `worktreeRoot=${worktreeRoot}`,
-    ]);
-
-    expect(render.status).toBe(0);
-    const workflow = JSON.parse(render.stdout);
-    const prepareScript = workflow.steps[0].target.args[1];
-    const worktree = workflow.steps[2].target.worktree;
-
-    const first = spawnSync("bash", ["-lc", prepareScript], {
-      cwd: workflow.steps[0].target.cwd,
-      encoding: "utf8",
+    const wtPath = join(worktreeRoot, "repo", "cli-worktree-test");
+    const branch = "openloops/cli-worktree-test";
+    const file = worktreeWorkflowFile(dataDir, repo, {
+      mode: "required",
+      enabled: true,
+      originalCwd: repo,
+      cwd: wtPath,
+      repoRoot: repo,
+      root: worktreeRoot,
+      path: wtPath,
+      branch,
     });
+    expect(runCli(dataDir, ["workflows", "create", file], undefined, env).status).toBe(0);
+
+    const first = runCli(dataDir, ["--json", "workflows", "run", "cli-worktree-exec", "--show-output"], undefined, env);
     expect(first.status).toBe(0);
-    expect(first.stdout).toContain("prepared worktree");
-    const markerPath = join(worktree.path, "untracked-marker.txt");
+    const firstValue = JSON.parse(first.stdout);
+    expect(firstValue.result.status).toBe("succeeded");
+    expect(firstValue.steps[0].stdout.trim().endsWith("cli-worktree-test")).toBe(true);
+    const shown = spawnSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" });
+    expect(shown.status).toBe(0);
+    expect(shown.stdout.trim()).toBe(branch);
+
+    const markerPath = join(wtPath, "untracked-marker.txt");
     writeFileSync(markerPath, "preserve me\n");
-
-    const branch = spawnSync("git", ["-C", worktree.path, "branch", "--show-current"], { encoding: "utf8" });
-    expect(branch.status).toBe(0);
-    expect(branch.stdout.trim()).toBe(worktree.branch);
-
-    const second = spawnSync("bash", ["-lc", prepareScript], {
-      cwd: workflow.steps[0].target.cwd,
-      encoding: "utf8",
-    });
+    const second = runCli(dataDir, ["--json", "workflows", "run", "cli-worktree-exec"], undefined, env);
     expect(second.status).toBe(0);
-    expect(second.stdout).toContain(`existing worktree ${worktree.path} branch ${worktree.branch}`);
+    expect(JSON.parse(second.stdout).result.status).toBe("succeeded");
     expect(readFileSync(markerPath, "utf8")).toBe("preserve me\n");
   });
 
-  test("prepare-worktree refuses a detached existing worktree", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-detached-worktree-"));
-    const repo = createGitRepo("loops-cli-template-detached-worktree-repo-");
+  test("workflows run fails closed when a required worktree is on an unexpected branch", () => {
+    const dataDir = freshDataDir("loops-cli-executor-worktree-branch-");
+    const repo = createGitRepo("loops-cli-executor-worktree-branch-repo-");
+    const bin = stubPwdAgentBin(dataDir);
+    const env = { PATH: `${bin}:${process.env.PATH ?? ""}` };
     const worktreeRoot = join(dataDir, "worktrees");
-    const render = runCli(dataDir, [
-      "--json",
-      "templates",
-      "render",
-      "todos-task-worker-verifier",
-      "--var",
-      "taskId=task-detached-worktree",
-      "--var",
-      `projectPath=${repo}`,
-      "--var",
-      `worktreeRoot=${worktreeRoot}`,
-    ]);
-
-    expect(render.status).toBe(0);
-    const workflow = JSON.parse(render.stdout);
-    const prepareScript = workflow.steps[0].target.args[1];
-    const worktree = workflow.steps[2].target.worktree;
-
-    const first = spawnSync("bash", ["-lc", prepareScript], {
-      cwd: workflow.steps[0].target.cwd,
-      encoding: "utf8",
+    const wtPath = join(worktreeRoot, "repo", "cli-worktree-branch");
+    const branch = "openloops/cli-worktree-branch";
+    const file = worktreeWorkflowFile(dataDir, repo, {
+      mode: "required",
+      enabled: true,
+      originalCwd: repo,
+      cwd: wtPath,
+      repoRoot: repo,
+      root: worktreeRoot,
+      path: wtPath,
+      branch,
     });
+    expect(runCli(dataDir, ["workflows", "create", file], undefined, env).status).toBe(0);
+
+    const first = runCli(dataDir, ["--json", "workflows", "run", "cli-worktree-exec"], undefined, env);
     expect(first.status).toBe(0);
-    const head = spawnSync("git", ["-C", worktree.path, "rev-parse", "HEAD"], { encoding: "utf8" });
-    expect(head.status).toBe(0);
-    git(worktree.path, ["checkout", "--detach", head.stdout.trim()]);
+    git(wtPath, ["checkout", "-b", "unexpected-openloops-branch"]);
 
-    const second = spawnSync("bash", ["-lc", prepareScript], {
-      cwd: workflow.steps[0].target.cwd,
-      encoding: "utf8",
-    });
-    expect(second.status).not.toBe(0);
-    expect(second.stderr).toContain(`existing worktree ${worktree.path} is on branch`);
-    expect(second.stderr).toContain(`expected ${worktree.branch}`);
-  });
-
-  test("prepare-worktree refuses an existing worktree on an unexpected branch", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-unexpected-branch-worktree-"));
-    const repo = createGitRepo("loops-cli-template-unexpected-branch-worktree-repo-");
-    const worktreeRoot = join(dataDir, "worktrees");
-    const render = runCli(dataDir, [
-      "--json",
-      "templates",
-      "render",
-      "todos-task-worker-verifier",
-      "--var",
-      "taskId=task-unexpected-branch-worktree",
-      "--var",
-      `projectPath=${repo}`,
-      "--var",
-      `worktreeRoot=${worktreeRoot}`,
-    ]);
-
-    expect(render.status).toBe(0);
-    const workflow = JSON.parse(render.stdout);
-    const prepareScript = workflow.steps[0].target.args[1];
-    const worktree = workflow.steps[2].target.worktree;
-
-    const first = spawnSync("bash", ["-lc", prepareScript], {
-      cwd: workflow.steps[0].target.cwd,
-      encoding: "utf8",
-    });
-    expect(first.status).toBe(0);
-    git(worktree.path, ["checkout", "-b", "unexpected-openloops-branch"]);
-
-    const second = spawnSync("bash", ["-lc", prepareScript], {
-      cwd: workflow.steps[0].target.cwd,
-      encoding: "utf8",
-    });
-    expect(second.status).not.toBe(0);
-    expect(second.stderr).toContain("unexpected-openloops-branch");
-    expect(second.stderr).toContain(`expected ${worktree.branch}`);
+    const second = runCli(dataDir, ["--json", "workflows", "run", "cli-worktree-exec", "--show-output"], undefined, env);
+    expect(second.status).toBe(1);
+    const value = JSON.parse(second.stdout);
+    expect(value.result.status).toBe("failed");
+    expect(value.steps[0].status).toBe("failed");
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      const stepError = store.listWorkflowStepRuns(value.workflowRun.id)[0]?.error ?? "";
+      expect(stepError).toContain("worktree preparation failed (mode=required)");
+      expect(stepError).toContain("unexpected-openloops-branch");
+      expect(stepError).toContain(`expected ${branch}`);
+    } finally {
+      store.close();
+    }
   });
 
   test("templates allow explicit main checkout mode instead of worktrees", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-worktree-main-"));
+    const dataDir = freshDataDir("loops-cli-template-worktree-main-");
     const repo = createGitRepo("loops-cli-template-worktree-main-repo-");
     const render = runCli(dataDir, [
       "--json",
@@ -2936,7 +2904,7 @@ describe("loops CLI", () => {
   });
 
   test("templates fail required worktree mode for non-git project paths", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-worktree-required-"));
+    const dataDir = freshDataDir("loops-cli-template-worktree-required-");
     const render = runCli(dataDir, [
       "--json",
       "templates",
@@ -2955,7 +2923,7 @@ describe("loops CLI", () => {
   });
 
   test("templates render generic event worker/verifier workflow JSON", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-template-render-"));
+    const dataDir = freshDataDir("loops-cli-event-template-render-");
     const render = runCli(dataDir, [
       "--json",
       "templates",
@@ -3013,7 +2981,7 @@ describe("loops CLI", () => {
   });
 
   test("templates render bounded agent worker/verifier workflow JSON", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-bounded-template-render-"));
+    const dataDir = freshDataDir("loops-cli-bounded-template-render-");
     const render = runCli(dataDir, [
       "--json",
       "templates",
@@ -3048,7 +3016,7 @@ describe("loops CLI", () => {
   });
 
   test("templates select different OpenAccounts profiles from a pool", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-template-pool-"));
+    const dataDir = freshDataDir("loops-cli-event-template-pool-");
     const render = runCli(dataDir, [
       "--json",
       "templates",
@@ -3080,7 +3048,7 @@ describe("loops CLI", () => {
   });
 
   test("templates reject provider-native auth profile pools for non-Codewith providers", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-template-native-auth-provider-"));
+    const dataDir = freshDataDir("loops-cli-template-native-auth-provider-");
     const render = runCli(dataDir, [
       "--json",
       "templates",
@@ -3102,7 +3070,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task event handler creates a deduped one-shot workflow loop", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-"));
+    const dataDir = freshDataDir("loops-cli-event-handler-");
     const event = {
       id: "evt-task-created-0001",
       type: "task.created",
@@ -3183,7 +3151,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task event handler selects provider and account pools from metadata hints", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-provider-metadata-"));
+    const dataDir = freshDataDir("loops-cli-event-provider-metadata-");
     const repo = createGitRepo("loops-cli-event-provider-metadata-repo-");
     const event = {
       id: "evt-task-created-provider-metadata",
@@ -3235,7 +3203,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task provider rules fall back to fixed Codewith pools and reject invalid hints", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-provider-fallback-"));
+    const dataDir = freshDataDir("loops-cli-event-provider-fallback-");
     const event = {
       id: "evt-task-created-provider-fallback",
       type: "task.created",
@@ -3544,7 +3512,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task PR approval routes require non-author GitHub reviewer evidence", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-pr-review-routing-"));
+    const dataDir = freshDataDir("loops-cli-event-pr-review-routing-");
     const event = {
       id: "evt-task-created-pr-review",
       type: "task.created",
@@ -3610,7 +3578,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task event handler replaces stale generated workflow policy metadata", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-stale-workflow-"));
+    const dataDir = freshDataDir("loops-cli-event-stale-workflow-");
     const event = {
       id: "evt-task-stale-policy-0001",
       type: "task.created",
@@ -3668,7 +3636,7 @@ describe("loops CLI", () => {
   });
 
   test("routes commands expose workflow invocation admission state", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-routes-list-"));
+    const dataDir = freshDataDir("loops-cli-routes-list-");
     const event = {
       id: "evt-routes-list-0001",
       type: "task.created",
@@ -3707,7 +3675,7 @@ describe("loops CLI", () => {
   });
 
   test("routes preview, create, and schedule expose first-class route lifecycle commands", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-routes-lifecycle-"));
+    const dataDir = freshDataDir("loops-cli-routes-lifecycle-");
     const event = {
       id: "evt-routes-lifecycle-0001",
       type: "task.created",
@@ -3774,11 +3742,11 @@ describe("loops CLI", () => {
     const loop = JSON.parse(scheduled.stdout);
     expect(loop.name).toBe("route-drain-test");
     expect(loop.target.command).toBe("loops");
-    expect(loop.target.args).toEqual(expect.arrayContaining(["events", "drain", "todos-task", "--task-list", "oss", "--max-dispatch", "2", "--timeout", "10m"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["routes", "drain", "todos-task", "--task-list", "oss", "--max-dispatch", "2", "--timeout", "10m"]));
   });
 
   test("todos task routes can select the full task-lifecycle template", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-routes-task-lifecycle-"));
+    const dataDir = freshDataDir("loops-cli-routes-task-lifecycle-");
     const event = {
       id: "evt-routes-task-lifecycle-0001",
       type: "task.created",
@@ -3911,7 +3879,7 @@ describe("loops CLI", () => {
   });
 
   test("task lifecycle routes can queue bounded PR handoff from worker artifacts", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-routes-pr-handoff-"));
+    const dataDir = freshDataDir("loops-cli-routes-pr-handoff-");
     const repo = createGitRepo("loops-cli-routes-pr-handoff-repo-");
     const event = {
       id: "evt-routes-pr-handoff-0001",
@@ -4100,7 +4068,7 @@ describe("loops CLI", () => {
   });
 
   test("routes schedule preserves selected todos task template in the drain loop", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-routes-template-schedule-"));
+    const dataDir = freshDataDir("loops-cli-routes-template-schedule-");
 
     const scheduled = runCli(dataDir, [
       "--json",
@@ -4134,7 +4102,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task lifecycle routes preserve explicit OpenAccounts role accounts", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-routes-task-lifecycle-accounts-"));
+    const dataDir = freshDataDir("loops-cli-routes-task-lifecycle-accounts-");
     const repo = createGitRepo("loops-cli-routes-task-lifecycle-accounts-repo-");
     const event = {
       id: "evt-routes-task-lifecycle-accounts-0001",
@@ -4182,13 +4150,13 @@ describe("loops CLI", () => {
     expect(stepsById.planner.target.account).toEqual({ profile: "planner-profile", tool: "claude" });
     expect(stepsById.worker.target.account).toEqual({ profile: "worker-profile", tool: "claude" });
     expect(stepsById.verifier.target.account).toEqual({ profile: "verifier-profile", tool: "claude" });
-    expect(stepsById["source-task-gate"].dependsOn).toEqual(["prepare-worktree"]);
+    expect(stepsById["source-task-gate"].dependsOn ?? []).toEqual([]);
     expect(stepsById.triage.dependsOn).toEqual(["source-task-gate"]);
     expect(stepsById.worker.dependsOn).toEqual(["planner-gate"]);
   });
 
   test("routes schedule rejects drain dry-run instead of storing a surprising loop", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-routes-schedule-dry-run-"));
+    const dataDir = freshDataDir("loops-cli-routes-schedule-dry-run-");
 
     const scheduled = runCli(dataDir, [
       "routes",
@@ -4220,7 +4188,7 @@ describe("loops CLI", () => {
   });
 
   test("routes create replaces a stale persisted unsafe workflow with the same generated name", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-routes-unsafe-existing-"));
+    const dataDir = freshDataDir("loops-cli-routes-unsafe-existing-");
     const event = {
       id: "evt-routes-unsafe-existing-0001",
       type: "task.created",
@@ -4278,7 +4246,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task event handler dry-run exposes default worktree routing for git repos", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-worktree-"));
+    const dataDir = freshDataDir("loops-cli-event-handler-worktree-");
     const repo = createGitRepo("loops-cli-event-handler-worktree-repo-");
     const worktreeRoot = join(dataDir, "worktrees");
     const event = {
@@ -4306,16 +4274,16 @@ describe("loops CLI", () => {
 
     expect(result.status).toBe(0);
     const value = JSON.parse(result.stdout);
-    expect(value.workflow.steps.map((step: { id: string }) => step.id)).toEqual(["prepare-worktree", "source-task-gate", "worker", "verifier"]);
-    expect(value.workflow.steps[2].target.cwd).toContain(worktreeRoot);
-    expect(value.workflow.steps[2].target.worktree.enabled).toBe(true);
-    expect(value.workflow.steps[2].target.worktree.originalCwd).toBe(repo);
+    expect(value.workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
+    expect(value.workflow.steps[1].target.cwd).toContain(worktreeRoot);
+    expect(value.workflow.steps[1].target.worktree.enabled).toBe(true);
+    expect(value.workflow.steps[1].target.worktree.originalCwd).toBe(repo);
+    expect(value.workflow.steps[1].target.addDirs).toContain(join(repo, ".git"));
     expect(value.workflow.steps[2].target.addDirs).toContain(join(repo, ".git"));
-    expect(value.workflow.steps[3].target.addDirs).toContain(join(repo, ".git"));
   });
 
   test("todos task event handler throttles active workflows per project", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-project-throttle-"));
+    const dataDir = freshDataDir("loops-cli-event-handler-project-throttle-");
     const repo = createGitRepo("loops-cli-event-handler-project-throttle-repo-");
     const baseEvent = {
       type: "task.created",
@@ -4361,7 +4329,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task event handler refreshes invocation metadata when admitting a deferred task with a new template", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-reroute-template-"));
+    const dataDir = freshDataDir("loops-cli-event-handler-reroute-template-");
     const repo = createGitRepo("loops-cli-event-handler-reroute-template-repo-");
     const baseEvent = {
       type: "task.created",
@@ -4458,7 +4426,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task event handler canonicalizes repo subdirectories for per-project throttles", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-canonical-throttle-"));
+    const dataDir = freshDataDir("loops-cli-event-handler-canonical-throttle-");
     const repo = createGitRepo("loops-cli-event-handler-canonical-throttle-repo-");
     const subdir = join(repo, "packages", "sdk");
     mkdirSync(subdir, { recursive: true });
@@ -4506,7 +4474,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task event handler throttles active workflows per project group", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-group-throttle-"));
+    const dataDir = freshDataDir("loops-cli-event-handler-group-throttle-");
     const repoA = createGitRepo("loops-cli-event-handler-group-throttle-a-");
     const repoB = createGitRepo("loops-cli-event-handler-group-throttle-b-");
     const args = [
@@ -4559,6 +4527,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task event handler dry-run with throttle options does not create a loop database", () => {
+    // Deliberately unseeded: this test asserts the dry-run never creates loops.db.
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-dry-throttle-"));
     const repo = createGitRepo("loops-cli-event-handler-dry-throttle-repo-");
     const event = {
@@ -4591,7 +4560,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task event handler dedupes before required worktree validation", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-dedupe-before-render-"));
+    const dataDir = freshDataDir("loops-cli-event-handler-dedupe-before-render-");
     const repo = createGitRepo("loops-cli-event-handler-dedupe-before-render-repo-");
     const event = {
       id: "evt-dedupe-before-render-0001",
@@ -4635,7 +4604,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task drain uses todos ready and throttles active workflows per project", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-throttle-"));
+    const dataDir = freshDataDir("loops-cli-event-drain-throttle-");
     const binDir = join(dataDir, "bin");
     const callsFile = join(dataDir, "todos-calls.txt");
     const repo = createGitRepo("loops-cli-event-drain-throttle-repo-");
@@ -4717,7 +4686,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task drain applies metadata provider rules with account separation evidence", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-provider-rule-"));
+    const dataDir = freshDataDir("loops-cli-event-drain-provider-rule-");
     const binDir = join(dataDir, "bin");
     const repo = createGitRepo("loops-cli-event-drain-provider-rule-repo-");
     mkdirSync(binDir, { recursive: true });
@@ -4796,7 +4765,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task drain skips non-routeable tasks and continues dispatching", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-skip-non-git-"));
+    const dataDir = freshDataDir("loops-cli-event-drain-skip-non-git-");
     const binDir = join(dataDir, "bin");
     const repo = createGitRepo("loops-cli-event-drain-skip-non-git-repo-");
     const nonGit = join(dataDir, "not-a-repo");
@@ -4884,7 +4853,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task drain reports failed source task cleanup for invalid project paths", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-cleanup-fail-"));
+    const dataDir = freshDataDir("loops-cli-event-drain-cleanup-fail-");
     const binDir = join(dataDir, "bin");
     const nonGit = join(dataDir, "not-a-repo");
     mkdirSync(nonGit, { recursive: true });
@@ -4950,7 +4919,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task drain quarantines invalid PR project paths before reviewer gating", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-invalid-pr-path-"));
+    const dataDir = freshDataDir("loops-cli-event-drain-invalid-pr-path-");
     const binDir = join(dataDir, "bin");
     const nonGit = join(dataDir, "not-a-repo");
     mkdirSync(nonGit, { recursive: true });
@@ -5030,7 +4999,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task drain skips no-auto and blocked tags before workflow creation", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-disallowed-tags-"));
+    const dataDir = freshDataDir("loops-cli-event-drain-disallowed-tags-");
     const binDir = join(dataDir, "bin");
     mkdirSync(binDir, { recursive: true });
     const todosBin = join(binDir, "todos");
@@ -5100,7 +5069,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task drain filters by task list and limits new dispatches", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-filter-"));
+    const dataDir = freshDataDir("loops-cli-event-drain-filter-");
     const binDir = join(dataDir, "bin");
     const callsFile = join(dataDir, "todos-calls.txt");
     const repo = createGitRepo("loops-cli-event-drain-filter-repo-");
@@ -5204,7 +5173,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task drain compact output omits bulky task and workflow details", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-compact-"));
+    const dataDir = freshDataDir("loops-cli-event-drain-compact-");
     const binDir = join(dataDir, "bin");
     const evidenceDir = join(dataDir, "evidence");
     mkdirSync(binDir, { recursive: true });
@@ -5277,7 +5246,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task drain derives project path from repository line in task descriptions", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-repo-line-"));
+    const dataDir = freshDataDir("loops-cli-event-drain-repo-line-");
     const repo = createGitRepo("loops-cli-event-drain-repo-line-repo-");
     const binDir = join(dataDir, "bin");
     mkdirSync(binDir, { recursive: true });
@@ -5345,7 +5314,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task drain parses large ready payloads without truncating JSON", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-large-ready-"));
+    const dataDir = freshDataDir("loops-cli-event-drain-large-ready-");
     const binDir = join(dataDir, "bin");
     const readyFile = join(dataDir, "ready.json");
     mkdirSync(binDir, { recursive: true });
@@ -5401,7 +5370,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task event handler --preflight fails before storing generated workflow loops", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-preflight-fail-"));
+    const dataDir = freshDataDir("loops-cli-event-handler-preflight-fail-");
     const home = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-preflight-home-"));
     const binDir = join(dataDir, "bin");
     mkdirSync(binDir, { recursive: true });
@@ -5463,7 +5432,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task event handler --preflight dedupes existing loops before provider checks", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-preflight-dedupe-"));
+    const dataDir = freshDataDir("loops-cli-event-handler-preflight-dedupe-");
     const home = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-preflight-dedupe-home-"));
     const binDir = join(dataDir, "bin");
     mkdirSync(binDir, { recursive: true });
@@ -5521,7 +5490,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task event handler --preflight replaces stale generated workflows before storing loop", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-handler-preflight-existing-workflow-"));
+    const dataDir = freshDataDir("loops-cli-event-handler-preflight-existing-workflow-");
     const event = {
       id: "evt-existing-workflow-preflight",
       type: "task.created",
@@ -5564,7 +5533,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task event handler ignores legacy event-id loop names and dedupes through work items", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-no-legacy-dedupe-"));
+    const dataDir = freshDataDir("loops-cli-event-no-legacy-dedupe-");
     const event = {
       id: "evt-task-created-legacy",
       type: "task.created",
@@ -5611,7 +5580,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task event handler dedupes by task idempotency across route prefixes", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-idempotency-dedupe-"));
+    const dataDir = freshDataDir("loops-cli-event-idempotency-dedupe-");
     const event = {
       id: "evt-task-created-cross-prefix-a",
       type: "task.created",
@@ -5650,7 +5619,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task event handler dedupes task updates against the same task route", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-task-update-dedupe-"));
+    const dataDir = freshDataDir("loops-cli-event-task-update-dedupe-");
     const event = {
       id: "evt-task-created-update-dedupe-a",
       type: "task.created",
@@ -5684,7 +5653,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task event handler dedupes failed routed work items until explicit requeue", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-failed-dedupe-"));
+    const dataDir = freshDataDir("loops-cli-event-failed-dedupe-");
     const event = {
       id: "evt-task-created-failed-dedupe-a",
       type: "task.created",
@@ -5749,7 +5718,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task event handler requeues succeeded work items with operator evidence", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-succeeded-requeue-"));
+    const dataDir = freshDataDir("loops-cli-event-succeeded-requeue-");
     const event = {
       id: "evt-task-created-succeeded-requeue-a",
       type: "task.created",
@@ -5881,7 +5850,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task event handler dedupes cancelled routed work items instead of crashing", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-cancelled-dedupe-"));
+    const dataDir = freshDataDir("loops-cli-event-cancelled-dedupe-");
     const event = {
       id: "evt-task-created-cancelled-dedupe-a",
       type: "task.created",
@@ -5922,7 +5891,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task event handler uses metadata project path when task data has no cwd", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-metadata-cwd-"));
+    const dataDir = freshDataDir("loops-cli-event-metadata-cwd-");
     const event = {
       id: "evt-task-created-metadata",
       type: "task.created",
@@ -5972,7 +5941,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task event handler does not let metadata override task cwd", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-data-cwd-"));
+    const dataDir = freshDataDir("loops-cli-event-data-cwd-");
     const event = {
       id: "evt-task-created-data-cwd",
       type: "task.created",
@@ -5998,7 +5967,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task event handler skips tasks without explicit route opt-in", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-no-route-"));
+    const dataDir = freshDataDir("loops-cli-event-no-route-");
     const event = {
       id: "evt-task-created-no-route",
       type: "task.created",
@@ -6026,7 +5995,7 @@ describe("loops CLI", () => {
   });
 
   test("todos task event handler ignores bare allowed=true without documented route opt-in", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-bare-allowed-"));
+    const dataDir = freshDataDir("loops-cli-event-bare-allowed-");
     const event = {
       id: "evt-task-created-bare-allowed",
       type: "task.created",
@@ -6059,7 +6028,7 @@ describe("loops CLI", () => {
     ["completed", { data: { status: "completed", tags: ["auto:route"] } }],
     ["blocked", { data: { status: "blocked", tags: ["auto:route"] } }],
   ])("todos task event handler skips %s tasks", (_, overrides) => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-event-ineligible-"));
+    const dataDir = freshDataDir("loops-cli-event-ineligible-");
     const event = {
       id: "evt-task-created-ineligible",
       type: "task.created",
@@ -6090,7 +6059,7 @@ describe("loops CLI", () => {
   });
 
   test("generic event handler creates a deduped one-shot workflow loop", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-generic-event-handler-"));
+    const dataDir = freshDataDir("loops-cli-generic-event-handler-");
     const event = {
       id: "evt-knowledge-created-0001",
       type: "knowledge.record.created",
@@ -6152,7 +6121,7 @@ describe("loops CLI", () => {
   });
 
   test("generic event handler applies provider routing rules", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-generic-provider-rule-"));
+    const dataDir = freshDataDir("loops-cli-generic-provider-rule-");
     const repo = createGitRepo("loops-cli-generic-provider-rule-repo-");
     const event = {
       id: "evt-generic-provider-rule",
@@ -6202,7 +6171,7 @@ describe("loops CLI", () => {
   });
 
   test("generic event handler returns requeue evidence after explicit route requeue", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-generic-event-requeue-"));
+    const dataDir = freshDataDir("loops-cli-generic-event-requeue-");
     const event = {
       id: "evt-generic-requeue-a",
       type: "knowledge.record.created",
@@ -6258,7 +6227,7 @@ describe("loops CLI", () => {
   });
 
   test("generic event dry-run rejects unsupported provider add dirs", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-generic-event-invalid-adddirs-"));
+    const dataDir = freshDataDir("loops-cli-generic-event-invalid-adddirs-");
     const event = {
       id: "evt-generic-invalid-adddirs",
       type: "knowledge.record.created",
@@ -6296,7 +6265,7 @@ describe("loops CLI", () => {
   });
 
   test("generic event handler throttles through admission work items", () => {
-    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-generic-event-throttle-"));
+    const dataDir = freshDataDir("loops-cli-generic-event-throttle-");
     const repo = createGitRepo("loops-cli-generic-event-throttle-repo-");
     const baseEvent = {
       type: "knowledge.record.created",
@@ -6352,5 +6321,199 @@ describe("loops CLI", () => {
     expect(loops).toHaveLength(1);
     const routes = JSON.parse(runCli(dataDir, ["--json", "routes", "list", "--route-key", "generic-event"]).stdout);
     expect(routes.map((item: { status: string }) => item.status).sort()).toEqual(["admitted", "deferred"]);
+  });
+
+  test("errors print structured JSON envelopes with stable codes", () => {
+    const dataDir = freshDataDir("loops-cli-error-envelope-");
+
+    const missing = runCli(dataDir, ["--json", "show", "no-such-loop"]);
+    expect(missing.status).toBe(1);
+    const value = JSON.parse(missing.stdout);
+    expect(value.ok).toBe(false);
+    expect(value.error.code).toBe("LOOP_NOT_FOUND");
+    expect(value.error.message).toContain("loop not found: no-such-loop");
+    expect(missing.stdout).not.toContain("    at ");
+    expect(missing.stderr).toContain("loop not found: no-such-loop");
+
+    const human = runCli(dataDir, ["show", "no-such-loop"]);
+    expect(human.status).toBe(1);
+    expect(human.stderr).toContain("loop not found: no-such-loop");
+    expect(human.stderr).not.toContain("    at ");
+  });
+
+  test("goal status is merged into goal show", () => {
+    const dataDir = freshDataDir("loops-cli-goal-status-merged-");
+    const create = runCli(dataDir, [
+      "--json",
+      "create",
+      "command",
+      "goal-status-merged",
+      "--at",
+      futureAt(),
+      "--cmd",
+      "true",
+      "--goal",
+      "Keep the check green",
+    ]);
+    expect(create.status).toBe(0);
+
+    const shown = runCli(dataDir, ["--json", "goal", "show", "goal-status-merged"]);
+    expect(shown.status).toBe(0);
+    expect(JSON.parse(shown.stdout).config.objective).toBe("Keep the check green");
+
+    const status = runCli(dataDir, ["--json", "goal", "status", "goal-status-merged"]);
+    expect(status.status).toBe(0);
+    expect(JSON.parse(status.stdout).config.objective).toBe("Keep the check green");
+
+    const missing = runCli(dataDir, ["--json", "goal", "status", "missing-goal-run"]);
+    expect(missing.status).toBe(1);
+    expect(JSON.parse(missing.stdout).error.message).toContain("goal not found");
+  });
+
+  test("routes create --dry-run previews without storing anything", () => {
+    const dataDir = freshDataDir("loops-cli-routes-create-dry-run-");
+    const event = {
+      id: "evt-routes-create-dry-0001",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-routes-create-dry-0001",
+        title: "Preview via routes create --dry-run",
+        working_dir: "/tmp/open-loops",
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const preview = runCli(dataDir, [
+      "--json",
+      "routes",
+      "create",
+      "todos-task",
+      "--dry-run",
+      "--event-json",
+      JSON.stringify(event),
+      "--sandbox",
+      "workspace-write",
+    ]);
+    expect(preview.status).toBe(0);
+    const value = JSON.parse(preview.stdout);
+    expect(value.deduped).toBe(false);
+    expect(value.loop.target.workflowId).toBe("<created-workflow-id>");
+    expect(value.sandboxPreflight[0].method).toBe("provider-native-sandbox");
+
+    const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loops).toEqual([]);
+    const items = JSON.parse(runCli(dataDir, ["--json", "routes", "list"]).stdout);
+    expect(items).toEqual([]);
+  });
+
+  test("events handle todos-task accepts --pr-handoff for task-lifecycle routes", () => {
+    const dataDir = freshDataDir("loops-cli-events-pr-handoff-");
+    const event = {
+      id: "evt-pr-handoff-flag-0001",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-pr-handoff-flag-0001",
+        title: "Route with PR handoff",
+        working_dir: "/tmp/open-loops",
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const result = runCli(dataDir, [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--dry-run",
+      "--template",
+      "task-lifecycle",
+      "--pr-handoff",
+      "--sandbox",
+      "workspace-write",
+    ], JSON.stringify(event));
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.invocation.scope.prHandoff).toBe(true);
+    expect(value.workflow.steps.some((step: { id: string }) => step.id === "pr-handoff")).toBe(true);
+  });
+
+  test("workflows create --template renders and stores a workflow template", () => {
+    const dataDir = freshDataDir("loops-cli-workflows-create-template-");
+
+    const created = runCli(dataDir, [
+      "--json",
+      "workflows",
+      "create",
+      "--template",
+      "todos-task-worker-verifier",
+      "--var",
+      "taskId=task-create-template-1",
+      "--var",
+      "projectPath=/tmp/open-loops",
+      "--var",
+      "sandbox=workspace-write",
+    ]);
+    expect(created.status).toBe(0);
+    const workflow = JSON.parse(created.stdout);
+    expect(workflow.name).toContain("worker-verifier");
+    expect(workflow.steps.length).toBeGreaterThan(0);
+
+    const shown = runCli(dataDir, ["--json", "workflows", "show", workflow.id]);
+    expect(shown.status).toBe(0);
+
+    const conflicting = runCli(dataDir, ["--json", "workflows", "create", "somefile.json", "--template", "todos-task-worker-verifier"]);
+    expect(conflicting.status).toBe(1);
+    expect(conflicting.stderr).toContain("not both");
+
+    const neither = runCli(dataDir, ["--json", "workflows", "create"]);
+    expect(neither.status).toBe(1);
+    expect(neither.stderr).toContain("requires a workflow JSON file or --template");
+  });
+
+  test("gc prunes run history, backups, and stray temp files with dry-run default", () => {
+    const dataDir = freshDataDir("loops-cli-gc-");
+    expect(runCli(dataDir, ["create", "command", "gc-target", "--at", futureAt(), "--cmd", "true"]).status).toBe(0);
+    expect(runCli(dataDir, ["run-now", "gc-target"]).status).toBe(0);
+
+    const backupsDir = join(dataDir, "backups");
+    mkdirSync(backupsDir, { recursive: true });
+    const backupNames = [1, 2, 3, 4, 5].map((n) => `loops-rename-2020-01-0${n}T00-00-00-000Z.db`);
+    backupNames.forEach((name, index) => {
+      const path = join(backupsDir, name);
+      writeFileSync(path, "backup");
+      const mtime = new Date(Date.UTC(2020, 0, index + 1));
+      utimesSync(path, mtime, mtime);
+    });
+    writeFileSync(join(dataDir, "leftover.tmp"), "stray");
+
+    const dry = runCli(dataDir, ["--json", "gc", "--max-age-days", "0", "--keep-per-loop", "0"]);
+    expect(dry.status).toBe(0);
+    const dryValue = JSON.parse(dry.stdout);
+    expect(dryValue.dryRun).toBe(true);
+    expect(dryValue.history.dryRun).toBe(true);
+    expect(dryValue.history.loopRuns).toBe(1);
+    expect(dryValue.backups.pruned).toHaveLength(2);
+    expect(dryValue.strayFiles).toEqual([join(dataDir, "leftover.tmp")]);
+    expect(existsSync(join(dataDir, "leftover.tmp"))).toBe(true);
+    expect(JSON.parse(runCli(dataDir, ["--json", "runs", "gc-target"]).stdout)).toHaveLength(1);
+
+    const both = runCli(dataDir, ["--json", "gc", "--dry-run", "--apply"]);
+    expect(both.status).toBe(1);
+
+    const apply = runCli(dataDir, ["--json", "gc", "--max-age-days", "0", "--keep-per-loop", "0", "--apply"]);
+    expect(apply.status).toBe(0);
+    const applyValue = JSON.parse(apply.stdout);
+    expect(applyValue.dryRun).toBe(false);
+    expect(applyValue.history.loopRuns).toBe(1);
+    expect(applyValue.walCheckpoint.ran).toBe(true);
+    expect(existsSync(join(dataDir, "leftover.tmp"))).toBe(false);
+    const remaining = backupNames.filter((name) => existsSync(join(backupsDir, name)));
+    expect(remaining).toEqual(backupNames.slice(2));
+    expect(JSON.parse(runCli(dataDir, ["--json", "runs", "gc-target"]).stdout)).toEqual([]);
+    expect(JSON.parse(runCli(dataDir, ["--json", "list"]).stdout)).toHaveLength(1);
   });
 });

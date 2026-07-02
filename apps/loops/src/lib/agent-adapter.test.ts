@@ -2,11 +2,16 @@ import { chmodSync, mkdtempSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
+import type { AgentTarget } from "../types.js";
+import { BoundedOutputBuffer, PROVIDER_ADAPTERS, providerAdapter, spawnCapture } from "./agent-adapter.js";
 import { executeLoop } from "./executor.js";
 import { Store } from "./store.js";
 
-async function fakeCodewith(binDir: string, invocationsFile: string, opts: { profiles?: string } = {}): Promise<string> {
+async function fakeCodewith(binDir: string, invocationsFile: string, opts: { profiles?: string; readResponse?: string } = {}): Promise<string> {
   const fake = join(binDir, "codewith");
+  const readResponse =
+    opts.readResponse ??
+    '{"agent":{"agentId":"agent-1","status":"completed","desiredState":"running","threadId":"thread-1","rolloutPath":"/tmp/rollout.jsonl","pid":123},"statusSnapshot":{"seq":2,"status":"completed","summary":"Done","pendingInteractionCount":0,"lastEventSeq":2}}';
   await Bun.write(
     fake,
     [
@@ -22,7 +27,11 @@ async function fakeCodewith(binDir: string, invocationsFile: string, opts: { pro
       "  exit 0",
       "fi",
       "if [[ \" $* \" == *\" agent read \"* ]]; then",
-      "  printf '{\"agent\":{\"agentId\":\"agent-1\",\"status\":\"completed\",\"desiredState\":\"running\",\"threadId\":\"thread-1\",\"rolloutPath\":\"/tmp/rollout.jsonl\",\"pid\":123},\"statusSnapshot\":{\"seq\":2,\"status\":\"completed\",\"summary\":\"Done\",\"pendingInteractionCount\":0,\"lastEventSeq\":2}}\\n'",
+      `  printf '%s\\n' ${JSON.stringify(readResponse)}`,
+      "  exit 0",
+      "fi",
+      "if [[ \" $* \" == *\" agent stop \"* ]]; then",
+      "  printf '{\"stopped\":true}\\n'",
       "  exit 0",
       "fi",
       "if [[ \" $* \" == *\" agent logs \"* ]]; then",
@@ -450,6 +459,47 @@ describe("agent adapters", () => {
     }
   });
 
+  test("stops idle codewith durable agents that report no progress", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-idle-"));
+    const invocationsFile = join(binDir, "invocations");
+    await fakeCodewith(binDir, invocationsFile, {
+      readResponse:
+        '{"agent":{"agentId":"agent-1","status":"running","desiredState":"running"},"statusSnapshot":{"seq":1,"status":"running","summary":"working","pendingInteractionCount":0,"lastEventSeq":1}}',
+    });
+
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "codewith-idle-agent",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "codewith",
+          prompt: "say ok",
+          cwd: ".",
+          idleTimeoutMs: 150,
+          configIsolation: "safe",
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: {
+          ...process.env,
+          PATH: `${binDir}:${process.env.PATH}`,
+          OPENLOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile,
+          LOOPS_CODEWITH_AGENT_POLL_MS: "100",
+        },
+      });
+      expect(result.status).toBe("timed_out");
+      expect(result.error).toContain("idle timed out after 150ms without agent progress");
+      const invocations = codewithInvocations(invocationsFile);
+      expect(invocations.some((args) => args.includes("stop"))).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
+
   test("maps aicopilot bypass mode and variant to native flags", async () => {
     const binDir = mkdtempSync(join(tmpdir(), "loops-aicopilot-mode-"));
     const fake = join(binDir, "aicopilot");
@@ -486,5 +536,120 @@ describe("agent adapters", () => {
     } finally {
       store.close();
     }
+  });
+});
+
+describe("provider adapter contracts", () => {
+  const baseTarget = (overrides: Partial<AgentTarget> & Pick<AgentTarget, "provider">): AgentTarget =>
+    ({ type: "agent", prompt: "say ok", ...overrides }) as AgentTarget;
+
+  test("declares provider capabilities including prompt channel", () => {
+    expect(providerAdapter("codewith").capabilities).toEqual({
+      sandbox: ["read-only", "workspace-write", "danger-full-access"],
+      durable: true,
+      remote: false,
+      promptChannel: "argv",
+    });
+    expect(providerAdapter("claude").capabilities.promptChannel).toBe("stdin");
+    expect(providerAdapter("claude").capabilities.durable).toBe(false);
+    expect(providerAdapter("cursor").capabilities.sandbox).toEqual(["enabled", "disabled"]);
+    for (const adapter of Object.values(PROVIDER_ADAPTERS)) {
+      if (adapter.provider === "codewith") continue;
+      expect(adapter.capabilities.promptChannel).toBe("stdin");
+      expect(adapter.capabilities.remote).toBe(true);
+    }
+  });
+
+  test("keeps prompts off argv for stdin-channel providers", () => {
+    const invocation = providerAdapter("claude").buildInvocation(baseTarget({ provider: "claude", prompt: "secret-prompt" }));
+    expect(invocation.command).toBe("claude");
+    expect(invocation.stdin).toBe("secret-prompt");
+    expect(invocation.args).not.toContain("secret-prompt");
+  });
+
+  test("documents the codewith argv prompt fallback", () => {
+    // codewith agent start has no stdin/prompt-file channel; prompt must be the
+    // trailing positional argument.
+    const invocation = providerAdapter("codewith").buildInvocation(baseTarget({ provider: "codewith", prompt: "durable-prompt" }));
+    expect(invocation.command).toBe("codewith");
+    expect(invocation.stdin).toBeUndefined();
+    expect(invocation.args[invocation.args.length - 1]).toBe("durable-prompt");
+  });
+
+  test("throws aligned creation/execution validation errors", () => {
+    expect(() => providerAdapter("claude").validate(baseTarget({ provider: "claude", sandbox: "read-only" }))).toThrow(
+      "claude.sandbox is currently supported only for provider codewith, codex, or cursor",
+    );
+    expect(() => providerAdapter("cursor").validate(baseTarget({ provider: "cursor", variant: "max" }))).toThrow(
+      "cursor.variant is not supported for provider cursor",
+    );
+    expect(() => providerAdapter("codex").validate(baseTarget({ provider: "codex", agent: "reviewer" }))).toThrow(
+      "codex.agent is not supported for provider codex",
+    );
+    expect(() => providerAdapter("codewith").validate(baseTarget({ provider: "codewith", extraArgs: ["exec"] }))).toThrow(
+      "codewith.extraArgs cannot include exec; codewith agent steps use durable agent start, not exec/ephemeral flags",
+    );
+    expect(() => providerAdapter("opencode").validate(baseTarget({ provider: "opencode" }))).toThrow(
+      "opencode.model is required for provider opencode",
+    );
+    expect(() => providerAdapter("aicopilot").validate(baseTarget({ provider: "aicopilot", permissionMode: "plan" }))).toThrow(
+      "aicopilot.permissionMode plan is currently supported only for provider claude or cursor",
+    );
+    expect(() => providerAdapter("claude").validate(baseTarget({ provider: "claude", authProfile: "work" }), "step.target")).toThrow(
+      "step.target.authProfile is currently supported only for provider codewith",
+    );
+  });
+
+  test("spawnCapture enforces explicit timeouts without blocking", async () => {
+    const started = Date.now();
+    const result = await spawnCapture("bash", ["-c", "sleep 5"], { timeoutMs: 100 });
+    expect(result.timedOut).toBe(true);
+    expect(result.error).toContain("timed out after 100ms");
+    expect(Date.now() - started).toBeLessThan(4_000);
+  });
+
+  test("spawnCapture reports missing executables as errors", async () => {
+    const result = await spawnCapture("openloops-definitely-missing-binary", [], { timeoutMs: 1_000 });
+    expect(result.status).toBe(null);
+    expect(result.error).toBeDefined();
+  });
+
+  test("spawnCapture decodes multi-byte output split across pipe chunks without corruption", async () => {
+    // >64KiB of 3-byte CJK guarantees a UTF-8 sequence straddles a pipe-chunk boundary.
+    const expected = "好".repeat(40_000);
+    const result = await spawnCapture(process.execPath, ["-e", 'process.stdout.write("好".repeat(40000))'], {
+      timeoutMs: 30_000,
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain("�");
+    expect(result.stdout).toBe(expected);
+  });
+
+  test("spawnCapture truncates multi-byte output by bytes at a UTF-8 boundary", async () => {
+    const maxOutputBytes = 64 * 1024;
+    const result = await spawnCapture(process.execPath, ["-e", 'process.stdout.write("好".repeat(100000))'], {
+      timeoutMs: 30_000,
+      maxOutputBytes,
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain("�");
+    const marker = /^\[truncated (\d+) bytes\]\n/.exec(result.stdout);
+    expect(marker).not.toBeNull();
+    const retained = result.stdout.slice(marker![0].length);
+    expect(Buffer.byteLength(retained, "utf8")).toBeLessThanOrEqual(maxOutputBytes);
+    expect(retained).toMatch(/^好+$/);
+    // The marker reports the cumulative dropped byte count, not the last call's.
+    expect(Number(marker![1])).toBe(300_000 - Buffer.byteLength(retained, "utf8"));
+  });
+
+  test("BoundedOutputBuffer scrubs credentials before a cut can bisect them", () => {
+    const key = `sk-ant-${"a1b2C3d4".repeat(10)}`; // 87 chars
+    const buffer = new BoundedOutputBuffer(64);
+    // Overflow lands the byte cut inside `key` (127 - 64 = byte 63): cutting
+    // first would retain a prefix-less key fragment no scrub pattern matches.
+    buffer.append(key + "y".repeat(40));
+    const value = buffer.value();
+    expect(value).not.toContain(key.slice(63));
+    expect(value).toContain("[SCRUBBED]");
   });
 });

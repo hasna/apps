@@ -44,7 +44,21 @@ interface ParsedCron {
   dowRestricted: boolean;
 }
 
+const MINUTE_MS = 60_000;
+const PARSED_CRON_CACHE_LIMIT = 256;
+const parsedCronCache = new Map<string, ParsedCron>();
+
+const emittedScheduleWarnings = new Set<string>();
+
+function warnOnce(key: string, message: string): void {
+  if (emittedScheduleWarnings.has(key)) return;
+  emittedScheduleWarnings.add(key);
+  console.warn(`[open-loops] WARN ${message}`);
+}
+
 export function parseCron(expr: string): ParsedCron {
+  const cached = parsedCronCache.get(expr);
+  if (cached) return cached;
   const fields = expr.trim().split(/\s+/);
   if (fields.length !== 5) throw new Error(`cron must have 5 fields, got ${fields.length}: "${expr}"`);
   const [minute, hour, dom, month, dow] = fields as [string, string, string, string, string];
@@ -53,7 +67,7 @@ export function parseCron(expr: string): ParsedCron {
     dowSet.delete(7);
     dowSet.add(0);
   }
-  return {
+  const parsed: ParsedCron = {
     minute: parseField(minute, 0, 59),
     hour: parseField(hour, 0, 23),
     dom: parseField(dom, 1, 31),
@@ -62,6 +76,12 @@ export function parseCron(expr: string): ParsedCron {
     domRestricted: dom !== "*",
     dowRestricted: dow !== "*",
   };
+  if (parsedCronCache.size >= PARSED_CRON_CACHE_LIMIT) {
+    const oldest = parsedCronCache.keys().next().value;
+    if (oldest !== undefined) parsedCronCache.delete(oldest);
+  }
+  parsedCronCache.set(expr, parsed);
+  return parsed;
 }
 
 function cronMatches(cron: ParsedCron, date: Date): boolean {
@@ -130,18 +150,83 @@ function latestIntervalSlot(first: Date, now: Date, everyMs: number): Date {
   return new Date(first.getTime() + steps * everyMs);
 }
 
-function latestCronSlot(first: Date, now: Date, expression: string): Date {
-  let current = first;
-  while (true) {
-    const next = nextCronRun(expression, current);
-    if (next.getTime() > now.getTime()) return current;
-    current = next;
+function floorToMinute(date: Date): Date {
+  const floored = new Date(date.getTime());
+  floored.setSeconds(0, 0);
+  return floored;
+}
+
+// nextCronRun guarantees a match within 366 days, so scanning further back can
+// never succeed; this bounds the backward scan for restricted patterns.
+const LATEST_CRON_SCAN_LIMIT_MINUTES = 366 * 24 * 60;
+
+/**
+ * Latest matching slot <= now for crons restricted only by minute/hour
+ * (dom/dow/month unrestricted). Such patterns match every day, so the latest
+ * slot is computed arithmetically instead of walking the gap minute by minute.
+ */
+function latestDailyCronSlot(cron: ParsedCron, now: Date): Date {
+  const hoursDesc = [...cron.hour].sort((a, b) => b - a);
+  const minutesDesc = [...cron.minute].sort((a, b) => b - a);
+  const candidate = floorToMinute(now);
+  for (let dayOffset = 0; dayOffset < 2; dayOffset += 1) {
+    const isToday = dayOffset === 0;
+    for (const hour of hoursDesc) {
+      if (isToday && hour > now.getHours()) continue;
+      const minuteCap = isToday && hour === now.getHours() ? now.getMinutes() : 59;
+      const minute = minutesDesc.find((value) => value <= minuteCap);
+      if (minute === undefined) continue;
+      candidate.setHours(hour, minute, 0, 0);
+      return candidate;
+    }
+    candidate.setDate(candidate.getDate() - 1);
   }
+  throw new Error("unreachable: daily cron pattern must match within two days");
+}
+
+function latestCronSlot(first: Date, now: Date, expression: string): Date {
+  if (first.getTime() > now.getTime()) return first;
+  const cron = parseCron(expression);
+  if (!cron.domRestricted && !cron.dowRestricted && cron.month.size === 12) {
+    const latest = latestDailyCronSlot(cron, now);
+    return latest.getTime() >= first.getTime() ? latest : first;
+  }
+  // Restricted patterns: bounded backward scan from now instead of chaining
+  // nextCronRun forward from first, so a year-long gap cannot spin the event
+  // loop proportionally to the number of missed slots.
+  const scanFloorMs = Math.max(first.getTime(), now.getTime() - LATEST_CRON_SCAN_LIMIT_MINUTES * MINUTE_MS);
+  const cursor = floorToMinute(now);
+  while (cursor.getTime() >= scanFloorMs) {
+    if (cronMatches(cron, cursor)) return cursor;
+    cursor.setMinutes(cursor.getMinutes() - 1);
+  }
+  if (first.getTime() < scanFloorMs) {
+    warnOnce(
+      `latest-cron:${expression}`,
+      `latestCronSlot: no match for "${expression}" within the ${LATEST_CRON_SCAN_LIMIT_MINUTES}-minute scan window; using the stored next run as the latest slot`,
+    );
+  }
+  return first;
 }
 
 export interface DuePlan {
   slots: string[];
   skippedToNextRunAt?: string;
+}
+
+// Hard cap on catch-up slots materialized per plan, so a huge catchUpLimit
+// combined with a long gap cannot spin the event loop in a single tick.
+export const MAX_CATCH_UP_SLOTS = 1_000;
+
+function catchUpSlotLimit(loop: Loop): number {
+  if (loop.catchUpLimit > MAX_CATCH_UP_SLOTS) {
+    warnOnce(
+      `catch-up-limit:${loop.id}`,
+      `dueSlots: loop ${loop.id} catchUpLimit ${loop.catchUpLimit} exceeds the per-plan cap; using ${MAX_CATCH_UP_SLOTS}`,
+    );
+    return MAX_CATCH_UP_SLOTS;
+  }
+  return loop.catchUpLimit;
 }
 
 export function dueSlots(loop: Loop, now: Date): DuePlan {
@@ -158,9 +243,10 @@ export function dueSlots(loop: Loop, now: Date): DuePlan {
       return { slots: [next.toISOString()] };
     case "interval": {
       if (catchUp === "all") {
+        const limit = catchUpSlotLimit(loop);
         const slots: string[] = [];
         let cursor = next;
-        while (cursor.getTime() <= now.getTime() && slots.length < loop.catchUpLimit) {
+        while (cursor.getTime() <= now.getTime() && slots.length < limit) {
           slots.push(cursor.toISOString());
           cursor = new Date(cursor.getTime() + loop.schedule.everyMs);
         }
@@ -171,9 +257,10 @@ export function dueSlots(loop: Loop, now: Date): DuePlan {
     }
     case "cron": {
       if (catchUp === "all") {
+        const limit = catchUpSlotLimit(loop);
         const slots: string[] = [];
         let cursor = next;
-        while (cursor.getTime() <= now.getTime() && slots.length < loop.catchUpLimit) {
+        while (cursor.getTime() <= now.getTime() && slots.length < limit) {
           slots.push(cursor.toISOString());
           cursor = nextCronRun(loop.schedule.expression, cursor);
         }

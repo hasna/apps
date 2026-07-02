@@ -22,3 +22,8 @@ export function resolveGoalModel(opts: ResolveGoalModelOptions = {}): LanguageMo
   });
   return provider.chat(opts.model ?? env.LOOPS_GOAL_MODEL ?? DEFAULT_GOAL_MODEL);
 }
+
+export function resolveGoalVerifierModel(opts: ResolveGoalModelOptions = {}): LanguageModel {
+  const env = opts.env ?? process.env;
+  return resolveGoalModel({ ...opts, model: opts.model ?? env.LOOPS_GOAL_VERIFIER_MODEL });
+}
