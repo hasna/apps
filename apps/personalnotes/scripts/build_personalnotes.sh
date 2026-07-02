@@ -39,7 +39,7 @@ cp -R "$REPO_ROOT/web/." "$RESOURCES/web/"
 # The host spawns Resources/ai-sidecar/server.mjs at launch. node_modules MUST be present
 # (the Vercel AI SDK + provider). Install deps DIRECTLY INTO THE BUNDLE so the result is
 # deterministic regardless of the source tree's node_modules state (it is gitignored and
-# may be absent after an rsync --delete). Requires network access at build time.
+# may be absent on a fresh checkout or mirror). Requires network access at build time.
 echo "==> Bundling AI sidecar -> Resources/ai-sidecar"
 SIDECAR_SRC="$REPO_ROOT/ai-sidecar"
 rm -rf "$RESOURCES/ai-sidecar"
@@ -52,6 +52,17 @@ fi
 rm -rf "$RESOURCES/tools"
 mkdir -p "$RESOURCES/tools"
 cp "$REPO_ROOT/tools/notes-agent.mjs" "$REPO_ROOT/tools/notes-lib.mjs" "$RESOURCES/tools/"
+
+# Bundle the CLI + sync engine (zero runtime deps) so the shell app's background
+# sync timer can spawn `Resources/bin/personalnotes.mjs sync --json` — the SAME
+# engine the `personalnotes sync --watch` daemon uses. Relative imports
+# (../sync, ../cli, ../tools) keep working because the layout mirrors the repo.
+echo "==> Bundling CLI + sync engine -> Resources/{bin,cli,sync}"
+rm -rf "$RESOURCES/bin" "$RESOURCES/cli" "$RESOURCES/sync"
+mkdir -p "$RESOURCES/bin" "$RESOURCES/cli" "$RESOURCES/sync"
+cp "$REPO_ROOT/bin/personalnotes.mjs" "$RESOURCES/bin/"
+cp "$REPO_ROOT/cli/personalnotes.mjs" "$RESOURCES/cli/"
+cp "$REPO_ROOT"/sync/*.mjs "$RESOURCES/sync/"
 SOURCE_NODE_MODULES_OK=0
 if [[ -d "$SIDECAR_SRC/node_modules" \
   && -f "$SIDECAR_SRC/node_modules/ai/dist/index.mjs" \

@@ -68,7 +68,8 @@ final class AISidecar {
     }
 
     /// Candidate absolute node paths, then a PATH lookup via `/usr/bin/env`.
-    private static func findNode() -> String? {
+    /// Internal (not private) because SyncScheduler reuses the same resolution.
+    static func findNode() -> String? {
         let candidates = ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"]
         for p in candidates where FileManager.default.isExecutableFile(atPath: p) {
             return p
@@ -246,6 +247,211 @@ final class AISidecar {
     }
 }
 
+// MARK: - Sync scheduler
+
+/// Thread-safe byte sink: collects a child's stderr from the FileHandle
+/// readability callback (which runs on its own queue) while the owning thread
+/// drains stdout to EOF — the two pipes must never be read sequentially from
+/// one thread (see SyncScheduler.runTick).
+private final class PipeBuffer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data = Data()
+
+    func append(_ chunk: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        data.append(chunk)
+    }
+
+    var bytes: Data {
+        lock.lock()
+        defer { lock.unlock() }
+        return data
+    }
+}
+
+/// Background timer that keeps the local store fresh while the GUI is open by
+/// running the bundled CLI (`Resources/bin/personalnotes.mjs sync --json`) —
+/// the SAME sync engine the `personalnotes sync --watch` daemon and manual CLI
+/// runs use. Sync never REQUIRES the GUI: the installed daemon/service is the
+/// primary scheduler; the pid-based run lock in the data root keeps the two
+/// from double-running (a colliding run reports `skipped`, not an error).
+///
+/// `@unchecked Sendable`: `timer` is created/cancelled on the main thread only
+/// (start/stop from app lifecycle); `child` is touched only on the private
+/// serial `queue` where ticks run; `onDidSync` is an immutable @Sendable value.
+final class SyncScheduler: @unchecked Sendable {
+    /// Serial background queue (the notesQueue pattern): each tick spawns the
+    /// CLI and waits for it HERE — never on the main thread.
+    private let queue = DispatchQueue(label: "PersonalNotes.sync-scheduler", qos: .utility)
+    private var timer: DispatchSourceTimer?
+    private var child: Process?
+    /// Called on `queue` after every completed (non-skipped) run so the host
+    /// can rebuild the boot payload and hydrate the web UI.
+    private let onDidSync: @Sendable () -> Void
+
+    init(onDidSync: @escaping @Sendable () -> Void) {
+        self.onDidSync = onDidSync
+    }
+
+    /// `~/.config/personalnotes/config.json` (or $PERSONALNOTES_CONFIG) — the
+    /// sync client config written by `personalnotes auth ...`. Read-only here.
+    private static func clientConfig() -> [String: Any] {
+        let env = ProcessInfo.processInfo.environment
+        let url: URL
+        if let override = env["PERSONALNOTES_CONFIG"], !override.isEmpty {
+            url = URL(fileURLWithPath: override)
+        } else {
+            url = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".config/personalnotes/config.json")
+        }
+        guard let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return [:]
+        }
+        return obj
+    }
+
+    private static func isSignedIn(_ config: [String: Any]) -> Bool {
+        let env = ProcessInfo.processInfo.environment
+        let candidates = [config["apiKey"] as? String, config["token"] as? String,
+                          env["PERSONALNOTES_API_KEY"], env["PERSONALNOTES_TOKEN"]]
+        return candidates.contains { !($0 ?? "").isEmpty }
+    }
+
+    /// Interval in minutes from config `syncIntervalMinutes` — default 5,
+    /// floor 1 — mirroring `resolveSyncInterval` in sync/daemon.mjs.
+    static func intervalMinutes(_ config: [String: Any]) -> Double {
+        var minutes = 5.0
+        if let n = config["syncIntervalMinutes"] as? NSNumber {
+            minutes = n.doubleValue
+        } else if let s = config["syncIntervalMinutes"] as? String, let n = Double(s) {
+            minutes = n
+        }
+        if !minutes.isFinite || minutes <= 0 { minutes = 5.0 }
+        return max(1.0, minutes)
+    }
+
+    /// Locate the bundled CLI entry (`Resources/bin/personalnotes.mjs`).
+    private static func cliScript() -> URL? {
+        guard let res = Bundle.main.resourceURL else { return nil }
+        let script = res.appendingPathComponent("bin/personalnotes.mjs")
+        return FileManager.default.fileExists(atPath: script.path) ? script : nil
+    }
+
+    /// Start the timer (called once at launch, main thread). No-ops — with an
+    /// NSLog explaining why — when the user is not signed in, the bundled CLI
+    /// is missing, or node cannot be found; the app works fine without sync.
+    func start() {
+        let config = SyncScheduler.clientConfig()
+        guard SyncScheduler.isSignedIn(config) else {
+            NSLog("PersonalNotes sync: not signed in (run: personalnotes auth device) — GUI sync timer off")
+            return
+        }
+        guard let script = SyncScheduler.cliScript() else {
+            NSLog("PersonalNotes sync: bundled CLI missing — GUI sync timer off")
+            return
+        }
+        guard let node = AISidecar.findNode() else {
+            NSLog("PersonalNotes sync: no node binary found — GUI sync timer off")
+            return
+        }
+        let interval = SyncScheduler.intervalMinutes(config) * 60.0
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        // First run shortly after launch, then every interval. The leeway is
+        // the scheduler-level jitter (≤10% of the interval), mirroring the
+        // daemon's jittered ticks.
+        t.schedule(deadline: .now() + 20,
+                   repeating: interval,
+                   leeway: .seconds(max(1, Int(interval * 0.1))))
+        t.setEventHandler { [weak self] in
+            self?.runTick(node: node, script: script)
+        }
+        timer = t
+        t.resume()
+        NSLog("PersonalNotes sync: GUI timer on (every \(Int(interval))s via bundled CLI)")
+    }
+
+    /// Cancel the timer (app terminate, main thread). An in-flight CLI run is
+    /// deliberately left to finish on its own: it holds the run lock, persists
+    /// its pending batch, and exits — killing it mid-run would only exercise
+    /// the crash-resume path for no benefit.
+    func stop() {
+        timer?.cancel()
+        timer = nil
+    }
+
+    /// Runs ON `queue` (timer handler). Spawns one CLI sync run and waits for
+    /// it; a tick that fires while a run is still active is skipped.
+    private func runTick(node: String, script: URL) {
+        guard child == nil else { return }
+        let proc = Process()
+        if node == "/usr/bin/env" {
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            proc.arguments = ["node", script.path, "sync", "--json"]
+        } else {
+            proc.executableURL = URL(fileURLWithPath: node)
+            proc.arguments = [script.path, "sync", "--json"]
+        }
+        let out = Pipe(), err = Pipe()
+        proc.standardOutput = out
+        proc.standardError = err
+        do {
+            try proc.run()
+        } catch {
+            NSLog("PersonalNotes sync: failed to launch CLI: \(error.localizedDescription)")
+            return
+        }
+        child = proc
+        // Two pipes, one thread: reading them SEQUENTIALLY can deadlock — if
+        // the child fills the ~64 KB stderr pipe buffer (a Node stack trace,
+        // deprecation spew) while we are still blocked draining stdout, the
+        // child stalls on its stderr write and never closes stdout, wedging
+        // this serial queue (and every future tick) forever. Collect stderr
+        // concurrently on the pipe's callback queue; drain stdout here.
+        let errBuffer = PipeBuffer()
+        let errDone = DispatchSemaphore(value: 0)
+        err.fileHandleForReading.readabilityHandler = { @Sendable handle in
+            let chunk = handle.availableData
+            if chunk.isEmpty { // EOF
+                handle.readabilityHandler = nil
+                errDone.signal()
+                return
+            }
+            errBuffer.append(chunk)
+        }
+        let outData = out.fileHandleForReading.readDataToEndOfFile()
+        proc.waitUntilExit()
+        // Bounded wait for the stderr EOF callback (imminent once the child
+        // exited — Process closed our copy of the write end at launch); a
+        // timeout can only truncate an error message, never wedge the queue.
+        _ = errDone.wait(timeout: .now() + 10)
+        err.fileHandleForReading.readabilityHandler = nil
+        let errData = errBuffer.bytes
+        child = nil
+
+        let summary = (try? JSONSerialization.jsonObject(with: outData)) as? [String: Any]
+        if let summary, (summary["skipped"] as? Bool) == true {
+            return // another runner (the daemon) is already syncing this store
+        }
+        if proc.terminationStatus != 0 {
+            let message = String(data: errData, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            NSLog("PersonalNotes sync: CLI exited \(proc.terminationStatus) \(message)")
+        } else if let summary {
+            let pulled = summary["pulled"] as? [String: Any]
+            let total = ["created", "updated", "purged"]
+                .compactMap { (pulled?[$0] as? NSNumber)?.intValue }
+                .reduce(0, +)
+            NSLog("PersonalNotes sync: ok (pulled \(total) change(s))")
+        }
+        // Refresh the UI after success AND failure: pulled rows must appear,
+        // and the Settings sync row must reflect what sync-status.json now
+        // records (an auth failure must surface, never stay a stale green).
+        onDidSync()
+    }
+}
+
 // MARK: - JSON helpers
 
 /// Encode a Swift value graph (dictionaries/arrays/strings/numbers) into a compact
@@ -285,33 +491,21 @@ private func noteJSON(_ note: Note) -> [String: Any] {
         "status": note.status.rawValue,
         "folder": note.folder,
         "machine": note.machine,
+        "machineFriendlyName": note.machineFriendlyName,
+        "rev": note.rev,
         "createdByActorType": note.createdByActorType,
         "createdByName": note.createdByName,
-        "sourceMachine": note.sourceMachine,
-        "sourceMachineFriendlyName": note.sourceMachineFriendlyName,
-        "originMachine": note.originMachine,
-        "originMachineFriendlyName": note.originMachineFriendlyName,
-        "targetMachineFriendlyName": note.targetMachineFriendlyName,
-        "previousMachine": note.previousMachine,
-        "openedFrom": note.openedFrom,
-        "sourceContext": note.sourceContext,
         "archivedAt": note.archivedAt.map(MarkdownStore.iso8601) ?? "",
         "trashedAt": note.trashedAt.map(MarkdownStore.iso8601) ?? "",
-        "trashMachine": note.trashMachine,
         "trashExpiresAt": note.trashExpiresAt.map(MarkdownStore.iso8601) ?? "",
         "restoredAt": note.restoredAt.map(MarkdownStore.iso8601) ?? "",
-        "movedAt": note.movedAt.map(MarkdownStore.iso8601) ?? "",
         "info": [
             "createdBy": note.createdByName.isEmpty ? note.author : note.createdByName,
             "createdByActorType": note.createdByActorType,
             "createdAt": MarkdownStore.iso8601(note.createdAt),
-            "sourceMachine": note.sourceMachine.isEmpty ? note.machine : note.sourceMachine,
-            "sourceMachineFriendlyName": note.sourceMachineFriendlyName,
-            "originMachine": note.originMachine.isEmpty ? note.machine : note.originMachine,
-            "originMachineFriendlyName": note.originMachineFriendlyName,
+            "machine": note.machine,
+            "machineFriendlyName": note.machineFriendlyName,
             "currentMachine": note.machine,
-            "openedFrom": note.openedFrom,
-            "sourceContext": note.sourceContext,
         ],
         "titleLocked": note.titleLocked,
         "titleSource": note.titleSource.rawValue,
@@ -417,18 +611,12 @@ final class NotesBridge: @unchecked Sendable {
     init() {
         self.labelStore = LabelStore(root: store.rootURL)
         self.settingsStore = SettingsStore(root: store.rootURL)
-        // The note's own `machine` field uses the cosmetic Computer Name; the BOOT
-        // payload's `thisMachine` must match that so new notes land under the right
-        // machine row. Prefer the manifest-style short hostname, fall back to Note's.
-        self.thisMachine = NotesBridge.resolveThisMachine()
-    }
-
-    /// Short hostname (pre-first-dot), matching how notes record `machine:`.
-    static func resolveThisMachine() -> String {
-        let raw = Host.current().localizedName
-            ?? ProcessInfo.processInfo.hostName
-        let short = raw.split(separator: ".", maxSplits: 1).first.map(String.init) ?? raw
-        return short.isEmpty ? Note.currentMachine : short
+        // The BOOT payload's `thisMachine` and every new note's `machine:` field
+        // share ONE stable identity — `Note.currentMachine` ($PERSONALNOTES_MACHINE
+        // → sync client config `machine` → short hostname). The old cosmetic
+        // Computer Name fabricated phantom machine rows that never matched
+        // manifest slugs.
+        self.thisMachine = Note.currentMachine
     }
 
     /// Load all notes from disk (newest first). Never throws to the caller — a broken
@@ -448,12 +636,16 @@ final class NotesBridge: @unchecked Sendable {
             machinesByID[m.id] = m
             aliases.formUnion(machineAliases(m))
         }
+        // Machines fabricated from note frontmatter (not in the manifest) carry
+        // platform "unknown" — hardcoding "macos" invented facts for rows the
+        // manifest never described (synced Linux notes included).
         for n in notes where !n.machine.isEmpty && !aliases.contains(n.machine) && machinesByID[n.machine] == nil {
-            machinesByID[n.machine] = FleetMachine(id: n.machine)
+            machinesByID[n.machine] = FleetMachine(id: n.machine, platform: "unknown")
             aliases.insert(n.machine)
         }
+        // This machine's own row IS known to be macOS (the shell only runs there).
         if !thisMachine.isEmpty && !aliases.contains(thisMachine) && machinesByID[thisMachine] == nil {
-            machinesByID[thisMachine] = FleetMachine(id: thisMachine)
+            machinesByID[thisMachine] = FleetMachine(id: thisMachine, platform: "macos")
         }
         return machinesByID.values
             .sorted { a, b in
@@ -477,6 +669,19 @@ final class NotesBridge: @unchecked Sendable {
         return machineJSON(FleetMachine(id: id, platform: "unknown"), notes: notes)
     }
 
+    /// Last sync outcome, written by the CLI/daemon/GUI timer to
+    /// `<root>/sync-status.json` (see sync/daemon.mjs). Missing or unreadable
+    /// means never synced. Passed through verbatim so the web Settings row can
+    /// render it honestly — an `error` status must never display as synced.
+    func syncStatusJSON() -> [String: Any] {
+        let url = store.rootURL.appendingPathComponent("sync-status.json")
+        guard let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return ["status": "never"]
+        }
+        return obj
+    }
+
     /// The `{notes, machines, thisMachine}` boot payload as a JSON string.
     func bootJSON() -> String {
         let notes = loadNotes()
@@ -486,6 +691,7 @@ final class NotesBridge: @unchecked Sendable {
             "labels": labelStore.load(),
             "thisMachine": thisMachine,
             "settings": ["trashRetentionDays": settingsStore.load().trashRetentionDays],
+            "sync": syncStatusJSON(),
             "listDefaults": ["limit": 10],
         ]
         return jsonString(payload)
@@ -524,24 +730,19 @@ final class NotesBridge: @unchecked Sendable {
         let machine = allowMachineChange
             ? ((dict["machine"] as? String) ?? existing?.machine ?? thisMachine)
             : (existing?.machine ?? (dict["machine"] as? String) ?? thisMachine)
+        let machineFriendlyName = allowMachineChange
+            ? ((dict["machineFriendlyName"] as? String) ?? existing?.machineFriendlyName ?? "")
+            : (existing?.machineFriendlyName ?? (dict["machineFriendlyName"] as? String) ?? "")
         let author = (dict["author"] as? String) ?? existing?.author ?? Note.currentAuthor
         let agent = (dict["agent"] as? String) ?? existing?.agent ?? Note.appAgent
+        // `rev` is advisory here: MarkdownStore.save bumps past the on-disk value.
+        let rev = (dict["rev"] as? Int) ?? existing?.rev ?? 1
         let createdByActorType = (dict["createdByActorType"] as? String) ?? existing?.createdByActorType ?? "human"
         let createdByName = (dict["createdByName"] as? String) ?? existing?.createdByName ?? author
-        let sourceMachine = (dict["sourceMachine"] as? String) ?? existing?.sourceMachine ?? thisMachine
-        let sourceMachineFriendlyName = (dict["sourceMachineFriendlyName"] as? String) ?? existing?.sourceMachineFriendlyName ?? ""
-        let originMachine = (dict["originMachine"] as? String) ?? existing?.originMachine ?? machine
-        let originMachineFriendlyName = (dict["originMachineFriendlyName"] as? String) ?? existing?.originMachineFriendlyName ?? sourceMachineFriendlyName
-        let targetMachineFriendlyName = (dict["targetMachineFriendlyName"] as? String) ?? existing?.targetMachineFriendlyName ?? ""
-        let previousMachine = (dict["previousMachine"] as? String) ?? existing?.previousMachine ?? ""
-        let openedFrom = (dict["openedFrom"] as? String) ?? existing?.openedFrom ?? ""
-        let sourceContext = (dict["sourceContext"] as? String) ?? existing?.sourceContext ?? ""
         let archivedAt = (dict["archivedAt"] as? String).flatMap(MarkdownStore.parseDate) ?? existing?.archivedAt
         let trashedAt = (dict["trashedAt"] as? String).flatMap(MarkdownStore.parseDate) ?? existing?.trashedAt
-        let trashMachine = (dict["trashMachine"] as? String) ?? existing?.trashMachine ?? ""
         let trashExpiresAt = (dict["trashExpiresAt"] as? String).flatMap(MarkdownStore.parseDate) ?? existing?.trashExpiresAt
         let restoredAt = (dict["restoredAt"] as? String).flatMap(MarkdownStore.parseDate) ?? existing?.restoredAt
-        let movedAt = (dict["movedAt"] as? String).flatMap(MarkdownStore.parseDate) ?? existing?.movedAt
 
         return Note(
             id: id,
@@ -553,27 +754,19 @@ final class NotesBridge: @unchecked Sendable {
             titleLocked: titleLocked,
             titleSource: titleSource,
             titleContentFingerprint: titleContentFingerprint,
+            rev: rev,
             createdAt: createdAt,
             updatedAt: updatedAt,
             author: author,
             agent: agent,
             machine: machine,
+            machineFriendlyName: machineFriendlyName,
             createdByActorType: createdByActorType,
             createdByName: createdByName,
-            sourceMachine: sourceMachine,
-            sourceMachineFriendlyName: sourceMachineFriendlyName,
-            originMachine: originMachine,
-            originMachineFriendlyName: originMachineFriendlyName,
-            targetMachineFriendlyName: targetMachineFriendlyName,
-            previousMachine: previousMachine,
-            openedFrom: openedFrom,
-            sourceContext: sourceContext,
             archivedAt: archivedAt,
             trashedAt: trashedAt,
-            trashMachine: trashMachine,
             trashExpiresAt: trashExpiresAt,
             restoredAt: restoredAt,
-            movedAt: movedAt,
             body: body
         )
     }
@@ -593,11 +786,15 @@ final class NotesBridge: @unchecked Sendable {
               var existing = loadNotes().first(where: { $0.id == id }) else { return false }
         let target = (dict["machine"] as? String) ?? (dict["targetMachine"] as? String) ?? ""
         guard !target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
-        if existing.originMachine.isEmpty { existing.originMachine = existing.machine }
-        existing.previousMachine = existing.machine
+        let changed = existing.machine != target
         existing.machine = target
-        existing.targetMachineFriendlyName = (dict["targetMachineFriendlyName"] as? String) ?? ""
-        existing.movedAt = Date()
+        // Attribution only (schema v2): a stale friendly name must not describe the
+        // old machine, so it is replaced or cleared alongside `machine`.
+        let friendlyName = (dict["machineFriendlyName"] as? String)
+            ?? (dict["targetMachineFriendlyName"] as? String) ?? ""
+        existing.machineFriendlyName = friendlyName.isEmpty
+            ? (changed ? "" : existing.machineFriendlyName)
+            : friendlyName
         existing.updatedAt = Date()
         do { try store.save(existing); return true }
         catch { NSLog("PersonalNotes: move failed: \(error.localizedDescription)"); return false }
@@ -611,7 +808,6 @@ final class NotesBridge: @unchecked Sendable {
         existing.status = .archived
         existing.archivedAt = Date()
         existing.trashedAt = nil
-        existing.trashMachine = ""
         existing.trashExpiresAt = nil
         existing.updatedAt = Date()
         do { try store.save(existing); return true }
@@ -627,7 +823,6 @@ final class NotesBridge: @unchecked Sendable {
         let retention = settingsStore.load().trashRetentionDays
         existing.status = .trash
         existing.trashedAt = now
-        existing.trashMachine = (dict["trashMachine"] as? String) ?? existing.machine
         existing.trashExpiresAt = Calendar.current.date(byAdding: .day, value: retention, to: now)
         existing.updatedAt = now
         do { try store.save(existing); return true }
@@ -642,7 +837,6 @@ final class NotesBridge: @unchecked Sendable {
         existing.status = .active
         existing.archivedAt = nil
         existing.trashedAt = nil
-        existing.trashMachine = ""
         existing.trashExpiresAt = nil
         existing.restoredAt = Date()
         existing.updatedAt = Date()
@@ -755,6 +949,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     private var dragStrip: WindowDragStrip?
     let bridge = NotesBridge()
     let sidecar = AISidecar()
+    /// Background sync timer (bundled CLI, same engine as the daemon). Created
+    /// at launch; nil until then.
+    private var syncScheduler: SyncScheduler?
     /// Serial queue for note mutations + the follow-up bootJSON rebuild. Script messages
     /// arrive on the main thread; running the disk-heavy save/boot work there froze
     /// typing (2 full store scans + manifest per autosave). The queue keeps saves ordered
@@ -798,6 +995,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         // Spawn the AI sidecar first so we know its port + availability before injecting
         // the `__AI__` boot flag below. Never blocks UI; failure just disables AI features.
         sidecar.start()
+
+        // Background sync: keeps the store fresh while the app is open by
+        // running the bundled CLI sync on a timer (never on the main thread).
+        // Sync does not require the GUI — the `personalnotes sync --watch`
+        // service is the primary scheduler; the store-level run lock keeps the
+        // two from double-running. No-ops when the CLI is not signed in.
+        //
+        // After each run: rebuild the boot payload off-main and push it into
+        // the page — the exact hydrate path every note mutation uses — so
+        // pulled notes appear and the Settings sync row reflects the recorded
+        // sync-status.json (success AND failure; errors must stay visible).
+        // `bridge`/`notesQueue` are bound locally so the scheduler's closure
+        // touches `self` only inside the main-thread hop, mirroring the
+        // mutation path above.
+        let syncBridge = bridge
+        let syncNotesQueue = notesQueue
+        let scheduler = SyncScheduler { [weak self] in
+            syncNotesQueue.async { [weak self] in
+                let fresh = syncBridge.bootJSON()
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, let web = self.web else { return }
+                    self.installUserScripts(into: web.configuration.userContentController, boot: fresh)
+                    web.evaluateJavaScript("window.PersonalNotes && window.PersonalNotes.hydrate(\(fresh))", completionHandler: nil)
+                }
+            }
+        }
+        syncScheduler = scheduler
+        scheduler.start()
 
         let frame = NSRect(x: 0, y: 0, width: 1280, height: 820)
         window = NSWindow(
@@ -1201,7 +1426,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         notesQueue.sync { }
         // Remove the menu-bar status item (and its ticker) so it never outlives the app.
         hideStatusItem()
-        // Stop the AI sidecar child so it doesn't outlive the app.
+        // Stop the sync timer (an in-flight CLI run finishes on its own — see
+        // SyncScheduler.stop) and the AI sidecar child.
+        syncScheduler?.stop()
         sidecar.stop()
         // Remove the message handlers so the proxies (and thus the controller→delegate
         // edge) are released cleanly. Belt-and-suspenders alongside the weak proxy.

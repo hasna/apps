@@ -34,20 +34,13 @@ do {
         titleLocked: false,
         titleSource: .generated,
         titleContentFingerprint: "abc123",
+        machine: "studio-mac",
+        machineFriendlyName: "Studio",
         createdByActorType: "agent",
         createdByName: "Codewith",
-        sourceMachine: "linux-box",
-        sourceMachineFriendlyName: "Linux Box",
-        originMachine: "studio-mac",
-        originMachineFriendlyName: "Studio",
-        previousMachine: "laptop",
-        openedFrom: "mcp",
-        sourceContext: "ticket-123",
         archivedAt: MarkdownStore.parseDate("2026-06-20T09:00:00Z"),
         trashedAt: MarkdownStore.parseDate("2026-06-21T09:00:00Z"),
-        trashMachine: "studio-mac",
         trashExpiresAt: MarkdownStore.parseDate("2026-07-21T09:00:00Z"),
-        movedAt: MarkdownStore.parseDate("2026-06-22T09:00:00Z"),
         body: "# Hello\n\nThis is the body with **markdown**.\n"
     )
     try store.save(note)
@@ -72,10 +65,17 @@ do {
     check(raw.contains("titleContentFingerprint: abc123"), "frontmatter has title fingerprint metadata")
     check(raw.contains("createdByActorType: agent"), "frontmatter has actor provenance")
     check(raw.contains("createdByName: Codewith"), "frontmatter has friendly actor name")
-    check(raw.contains("sourceMachine: linux-box"), "frontmatter has source machine")
-    check(raw.contains("originMachine: studio-mac"), "frontmatter has origin machine")
+    check(raw.contains("rev: 1"), "frontmatter has schema-v2 monotonic rev")
+    check(raw.contains("machine: studio-mac"), "frontmatter has machine attribution")
+    check(raw.contains("machineFriendlyName: Studio"), "frontmatter has machine friendly name")
     check(raw.contains(#"trashExpiresAt: "2026-07-21T09:00:00Z""#), "frontmatter has trash retention expiry")
     check(raw.contains("agent: personalnotes-app"), "frontmatter has new agent default")
+    // Schema v2 drops the FleetSync/move provenance keys.
+    for dropped in ["sourceMachine:", "originMachine:", "previousMachine:",
+                    "targetMachineFriendlyName:", "openedFrom:", "sourceContext:",
+                    "trashMachine:", "movedAt:"] {
+        check(!raw.contains(dropped), "v2 frontmatter drops \(dropped)")
+    }
     // Key order: id, title, labels, status, folder, content format, title metadata,
     // createdAt, updatedAt, author, agent, machine.
     if let labelsIdx = raw.range(of: "labels:"), let statusIdx = raw.range(of: "status:"),
@@ -107,15 +107,13 @@ do {
     check(reloaded.titleContentFingerprint == note.titleContentFingerprint, "title fingerprint round-trips")
     check(reloaded.createdByActorType == "agent", "actor type round-trips")
     check(reloaded.createdByName == "Codewith", "actor name round-trips")
-    check(reloaded.sourceMachine == "linux-box", "source machine round-trips")
-    check(reloaded.originMachine == "studio-mac", "origin machine round-trips")
-    check(reloaded.previousMachine == "laptop", "previous machine round-trips")
-    check(reloaded.openedFrom == "mcp", "opened-from context round-trips")
-    check(reloaded.trashMachine == "studio-mac", "trash machine round-trips")
+    check(reloaded.rev == 1, "initial rev round-trips as 1")
+    check(reloaded.machine == "studio-mac", "machine attribution round-trips")
+    check(reloaded.machineFriendlyName == "Studio", "machine friendly name round-trips")
     check(reloaded.trashExpiresAt.map(MarkdownStore.iso8601) == "2026-07-21T09:00:00Z", "trash expiry round-trips")
     check(reloaded.body == note.body, "body round-trips identically")
 
-    print("== update overwrites file ==")
+    print("== update overwrites file and bumps monotonic rev ==")
     var edited = reloaded
     edited.title = "Edited Title"
     edited.body = "v2 body"
@@ -123,6 +121,21 @@ do {
     let afterEdit = try store.loadAll()
     check(afterEdit.count == 1, "still one note after edit")
     check(afterEdit.first?.title == "Edited Title", "edited title persisted")
+    check(afterEdit.first?.rev == 2, "save over existing file bumps rev to 2")
+    if let secondEdit = afterEdit.first {
+        try store.save(secondEdit)
+        check(try store.loadAll().first?.rev == 3, "every local mutation bumps rev again")
+        // A stale in-memory copy (rev 1) must still move rev FORWARD past disk.
+        var stale = secondEdit
+        stale.rev = 1
+        try store.save(stale)
+        check(try store.loadAll().first?.rev == 4, "stale rev still bumps past on-disk rev")
+        // Sync-applied writes preserve the server-assigned rev.
+        var synced = secondEdit
+        synced.rev = 9
+        try store.save(synced, preserveRev: true)
+        check(try store.loadAll().first?.rev == 9, "preserveRev writes the given rev verbatim")
+    }
 
     print("== bare file without frontmatter ==")
     let bare = MarkdownStore.parse("# Plain Heading\n\nNo frontmatter here.")
@@ -256,6 +269,58 @@ do {
         check(parsed?.contentFormat == "markdown", "missing contentFormat defaults to markdown")
         check(parsed?.labels == ["old"], "legacy tags parse as labels")
         check(parsed?.machine == "OldMac", "machine parsed from legacy note")
+        check(parsed?.rev == 1, "v1 note without rev auto-detects as rev 1")
+    }
+
+    print("== back-compat: v1 machine-provenance frontmatter reads without migration ==")
+    do {
+        let id = UUID()
+        let v1 = """
+        ---
+        id: \(id.uuidString.lowercased())
+        title: V1 Note
+        labels: [sync]
+        status: active
+        folder: ""
+        contentFormat: markdown
+        createdAt: 2026-06-22T09:00:00Z
+        updatedAt: 2026-06-22T09:00:00Z
+        author: someone
+        agent: personalnotes-app
+        machine: studio-mac
+        createdByActorType: human
+        createdByName: someone
+        sourceMachine: studio-mac
+        sourceMachineFriendlyName: Apple Studio
+        originMachine: linux-box
+        originMachineFriendlyName: Spark
+        targetMachineFriendlyName: ""
+        previousMachine: ""
+        openedFrom: mcp
+        sourceContext: ticket-123
+        archivedAt: ""
+        trashedAt: ""
+        trashMachine: ""
+        trashExpiresAt: ""
+        restoredAt: ""
+        movedAt: ""
+        ---
+        v1 body
+        """
+        let parsed = MarkdownStore.parse(v1, fallbackID: id)
+        check(parsed?.rev == 1, "v1 file reads as rev 1 (auto-detect, no migration)")
+        check(parsed?.machine == "studio-mac", "v1 machine attribution preserved")
+        check(parsed?.machineFriendlyName == "Apple Studio",
+              "legacy sourceMachineFriendlyName maps to machineFriendlyName when it names the note's machine")
+        check(parsed?.body == "v1 body", "v1 body preserved")
+        // Origin fallback applies only when originMachine matches the note's machine.
+        let originOnly = v1
+            .replacingOccurrences(of: "sourceMachine: studio-mac", with: "sourceMachine: linux-box")
+            .replacingOccurrences(of: "sourceMachineFriendlyName: Apple Studio", with: "sourceMachineFriendlyName: Spark")
+            .replacingOccurrences(of: "originMachine: linux-box", with: "originMachine: studio-mac")
+            .replacingOccurrences(of: "originMachineFriendlyName: Spark", with: "originMachineFriendlyName: Apple Studio")
+        check(MarkdownStore.parse(originOnly, fallbackID: id)?.machineFriendlyName == "Apple Studio",
+              "legacy originMachineFriendlyName maps when originMachine matches")
     }
 
     print("== back-compat: legacy contentType aliases contentFormat ==")

@@ -61,9 +61,20 @@ public struct MarkdownStore {
 
     /// Serialize and write a note atomically: write to a temp file in the same
     /// directory, then `rename` into place so readers never see a partial file.
-    public func save(_ note: Note) throws {
+    ///
+    /// Unless `preserveRev` is true, an overwrite bumps the per-note monotonic
+    /// `rev` past whatever is currently on disk (every local mutation is a new
+    /// revision; sync orders versions by `rev`, not wall clocks). New files keep
+    /// their initial rev. Sync-applied writes pass `preserveRev: true`.
+    public func save(_ note: Note, preserveRev: Bool = false) throws {
         try ensureDirectory()
+        var note = note
         let target = fileURL(for: note.id)
+        if !preserveRev,
+           let raw = try? String(contentsOf: target, encoding: .utf8),
+           let existing = MarkdownStore.parse(raw, fallbackID: note.id) {
+            note.rev = max(note.rev, existing.rev) + 1
+        }
         let serialized = MarkdownStore.serialize(note)
         let data = Data(serialized.utf8)
 
@@ -139,6 +150,8 @@ public struct MarkdownStore {
         let titleLocked = fields["titleLocked"].flatMap(parseBool)
             ?? (titleSource == .manual && !Note.isDefaultTitle(title))
         let titleContentFingerprint = fields["titleContentFingerprint"].flatMap(unquote) ?? ""
+        // v2 auto-detect: v1 files (no `rev` key) read as rev 1 without migration.
+        let rev = fields["rev"].flatMap { Int($0.trimmingCharacters(in: .whitespaces)) }.map { max(1, $0) } ?? 1
         let createdAt = fields["createdAt"].flatMap(parseDate) ?? Date()
         let updatedAt = fields["updatedAt"].flatMap(parseDate) ?? createdAt
         let author = fields["author"].flatMap(unquote) ?? Note.currentAuthor
@@ -146,39 +159,42 @@ public struct MarkdownStore {
         // that value verbatim. Notes with no `agent` key fall back to the current name.
         let agent = fields["agent"].flatMap(unquote) ?? Note.appAgent
         let machine = fields["machine"].flatMap(unquote) ?? Note.currentMachine
+        let machineFriendlyName = fields["machineFriendlyName"].flatMap(unquote)
+            ?? legacyMachineFriendlyName(fields: fields, machine: machine)
         let createdByActorType = fields["createdByActorType"].flatMap(unquote) ?? "human"
         let createdByName = fields["createdByName"].flatMap(unquote) ?? author
-        let sourceMachine = fields["sourceMachine"].flatMap(unquote) ?? machine
-        let sourceMachineFriendlyName = fields["sourceMachineFriendlyName"].flatMap(unquote) ?? ""
-        let originMachine = fields["originMachine"].flatMap(unquote) ?? machine
-        let originMachineFriendlyName = fields["originMachineFriendlyName"].flatMap(unquote) ?? sourceMachineFriendlyName
-        let targetMachineFriendlyName = fields["targetMachineFriendlyName"].flatMap(unquote) ?? ""
-        let previousMachine = fields["previousMachine"].flatMap(unquote) ?? ""
-        let openedFrom = fields["openedFrom"].flatMap(unquote) ?? ""
-        let sourceContext = fields["sourceContext"].flatMap(unquote) ?? ""
         let archivedAt = fields["archivedAt"].flatMap(unquote).flatMap(optionalDate)
         let trashedAt = fields["trashedAt"].flatMap(unquote).flatMap(optionalDate)
-        let trashMachine = fields["trashMachine"].flatMap(unquote) ?? ""
         let trashExpiresAt = fields["trashExpiresAt"].flatMap(unquote).flatMap(optionalDate)
         let restoredAt = fields["restoredAt"].flatMap(unquote).flatMap(optionalDate)
-        let movedAt = fields["movedAt"].flatMap(unquote).flatMap(optionalDate)
 
         return Note(
             id: id, title: title, labels: labels, status: status, folder: folder,
             contentFormat: contentFormat,
             titleLocked: titleLocked, titleSource: titleSource,
             titleContentFingerprint: titleContentFingerprint,
+            rev: rev,
             createdAt: createdAt, updatedAt: updatedAt,
-            author: author, agent: agent, machine: machine,
+            author: author, agent: agent,
+            machine: machine, machineFriendlyName: machineFriendlyName,
             createdByActorType: createdByActorType, createdByName: createdByName,
-            sourceMachine: sourceMachine, sourceMachineFriendlyName: sourceMachineFriendlyName,
-            originMachine: originMachine, originMachineFriendlyName: originMachineFriendlyName,
-            targetMachineFriendlyName: targetMachineFriendlyName, previousMachine: previousMachine,
-            openedFrom: openedFrom, sourceContext: sourceContext,
-            archivedAt: archivedAt, trashedAt: trashedAt, trashMachine: trashMachine,
-            trashExpiresAt: trashExpiresAt, restoredAt: restoredAt, movedAt: movedAt,
+            archivedAt: archivedAt, trashedAt: trashedAt,
+            trashExpiresAt: trashExpiresAt, restoredAt: restoredAt,
             body: body
         )
+    }
+
+    /// v1 back-compat: derive `machineFriendlyName` from the retired
+    /// source/origin friendly-name keys when they described the note's own machine.
+    /// Kept in lockstep with `machineFriendlyNameFromFields` in tools/notes-lib.mjs.
+    private static func legacyMachineFriendlyName(fields: [String: String], machine: String) -> String {
+        let sourceMachine = fields["sourceMachine"].flatMap(unquote) ?? ""
+        let sourceName = fields["sourceMachineFriendlyName"].flatMap(unquote) ?? ""
+        if !sourceName.isEmpty && (sourceMachine.isEmpty || sourceMachine == machine) { return sourceName }
+        let originMachine = fields["originMachine"].flatMap(unquote) ?? ""
+        let originName = fields["originMachineFriendlyName"].flatMap(unquote) ?? ""
+        if !originName.isEmpty && originMachine == machine { return originName }
+        return ""
     }
 
     private static func noteFromBareBody(_ text: String, fallbackID: UUID?) -> Note {
@@ -310,34 +326,28 @@ public struct MarkdownStore {
         lines.append("title: \(yamlScalar(note.title))")
         lines.append("labels: [\(note.labels.map(yamlScalar).joined(separator: ", "))]")
         lines.append("status: \(note.status.rawValue)")
-        // Key order is fixed: id, title, labels, status, folder, content format, title metadata,
-        // createdAt, updatedAt, author, agent, machine. `folder` is always emitted.
+        // Schema v2 — key order is fixed: id, title, labels, status, folder, content
+        // format, title metadata, rev, createdAt, updatedAt, author, agent, machine
+        // (+friendly name), actor provenance, archive/trash timestamps. Kept in
+        // lockstep with FRONTMATTER_V2_KEYS in tools/notes-lib.mjs.
         lines.append("folder: \(yamlScalar(note.folder))")
         lines.append("contentFormat: \(yamlScalar(note.contentFormat))")
         lines.append("titleLocked: \(note.titleLocked ? "true" : "false")")
         lines.append("titleSource: \(note.titleSource.rawValue)")
         lines.append("titleContentFingerprint: \(yamlScalar(note.titleContentFingerprint))")
+        lines.append("rev: \(max(1, note.rev))")
         lines.append("createdAt: \(iso8601(note.createdAt))")
         lines.append("updatedAt: \(iso8601(note.updatedAt))")
         lines.append("author: \(yamlScalar(note.author))")
         lines.append("agent: \(yamlScalar(note.agent))")
         lines.append("machine: \(yamlScalar(note.machine))")
+        lines.append("machineFriendlyName: \(yamlScalar(note.machineFriendlyName))")
         lines.append("createdByActorType: \(yamlScalar(note.createdByActorType))")
         lines.append("createdByName: \(yamlScalar(note.createdByName))")
-        lines.append("sourceMachine: \(yamlScalar(note.sourceMachine))")
-        lines.append("sourceMachineFriendlyName: \(yamlScalar(note.sourceMachineFriendlyName))")
-        lines.append("originMachine: \(yamlScalar(note.originMachine))")
-        lines.append("originMachineFriendlyName: \(yamlScalar(note.originMachineFriendlyName))")
-        lines.append("targetMachineFriendlyName: \(yamlScalar(note.targetMachineFriendlyName))")
-        lines.append("previousMachine: \(yamlScalar(note.previousMachine))")
-        lines.append("openedFrom: \(yamlScalar(note.openedFrom))")
-        lines.append("sourceContext: \(yamlScalar(note.sourceContext))")
         lines.append("archivedAt: \(yamlScalar(note.archivedAt.map(iso8601) ?? ""))")
         lines.append("trashedAt: \(yamlScalar(note.trashedAt.map(iso8601) ?? ""))")
-        lines.append("trashMachine: \(yamlScalar(note.trashMachine))")
         lines.append("trashExpiresAt: \(yamlScalar(note.trashExpiresAt.map(iso8601) ?? ""))")
         lines.append("restoredAt: \(yamlScalar(note.restoredAt.map(iso8601) ?? ""))")
-        lines.append("movedAt: \(yamlScalar(note.movedAt.map(iso8601) ?? ""))")
         lines.append("---")
         // Closing delimiter followed by a single newline, then the body verbatim.
         // Do NOT append a trailing terminator: the body must round-trip byte-for-byte
@@ -354,12 +364,17 @@ public struct MarkdownStore {
     /// A value already wrapped in single quotes (e.g. a title typed as `'hello'`) must
     /// also be double-quoted, or `unquote` would strip the user's quotes on read.
     private static func yamlScalar(_ value: String) -> String {
+        // Leading/trailing whitespace of ANY kind (tab included) must force a
+        // quote — the parser trims unquoted scalars, so an unquoted padded
+        // value would lose its padding on read. Kept in lockstep with the JS
+        // serializer's /^\s|\s$/ check in tools/notes-lib.mjs yamlScalar.
         let needsQuote = value.contains(":") || value.contains("#") ||
             value.contains("[") || value.contains("]") ||
             value.contains(",") || value.contains("\"") ||
             value.contains("\\") || value.contains("\n") ||
             (value.count >= 2 && value.hasPrefix("'") && value.hasSuffix("'")) ||
-            value.hasPrefix(" ") || value.hasSuffix(" ") || value.isEmpty
+            (value.first?.isWhitespace ?? false) || (value.last?.isWhitespace ?? false) ||
+            value.isEmpty
         if !needsQuote { return value }
         let escaped = value
             .replacingOccurrences(of: "\\", with: "\\\\")

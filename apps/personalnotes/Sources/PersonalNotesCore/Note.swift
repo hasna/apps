@@ -65,27 +65,24 @@ public struct Note: Identifiable, Equatable {
     public var titleSource: NoteTitleSource
     /// Stable fingerprint of the body/transcript prefix used for the last generated title.
     public var titleContentFingerprint: String
+    /// Per-note monotonic revision (schema v2). Bumped past the on-disk value on every
+    /// local mutation by `MarkdownStore.save`; sync orders note versions by `rev`,
+    /// never by `updatedAt` wall clocks. v1 files (no `rev` key) read as 1.
+    public var rev: Int
     public var createdAt: Date
     public var updatedAt: Date
     public var author: String
     public var agent: String
+    /// Informational machine attribution ("which note belongs to what machine").
     public var machine: String
+    /// Optional friendly display name for `machine` (vision: attribution visible).
+    public var machineFriendlyName: String
     public var createdByActorType: String
     public var createdByName: String
-    public var sourceMachine: String
-    public var sourceMachineFriendlyName: String
-    public var originMachine: String
-    public var originMachineFriendlyName: String
-    public var targetMachineFriendlyName: String
-    public var previousMachine: String
-    public var openedFrom: String
-    public var sourceContext: String
     public var archivedAt: Date?
     public var trashedAt: Date?
-    public var trashMachine: String
     public var trashExpiresAt: Date?
     public var restoredAt: Date?
-    public var movedAt: Date?
     public var body: String
 
     public init(
@@ -98,27 +95,19 @@ public struct Note: Identifiable, Equatable {
         titleLocked: Bool = false,
         titleSource: NoteTitleSource? = nil,
         titleContentFingerprint: String = "",
+        rev: Int = 1,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         author: String = Note.currentAuthor,
         agent: String = Note.appAgent,
         machine: String = Note.currentMachine,
+        machineFriendlyName: String = "",
         createdByActorType: String = "human",
         createdByName: String = Note.currentAuthor,
-        sourceMachine: String = Note.currentMachine,
-        sourceMachineFriendlyName: String = "",
-        originMachine: String? = nil,
-        originMachineFriendlyName: String = "",
-        targetMachineFriendlyName: String = "",
-        previousMachine: String = "",
-        openedFrom: String = "",
-        sourceContext: String = "",
         archivedAt: Date? = nil,
         trashedAt: Date? = nil,
-        trashMachine: String = "",
         trashExpiresAt: Date? = nil,
         restoredAt: Date? = nil,
-        movedAt: Date? = nil,
         body: String = ""
     ) {
         self.id = id
@@ -132,27 +121,19 @@ public struct Note: Identifiable, Equatable {
         self.titleLocked = titleLocked
         self.titleSource = titleSource ?? (Note.isDefaultTitle(title) ? .defaultTitle : .manual)
         self.titleContentFingerprint = titleContentFingerprint
+        self.rev = max(1, rev)
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.author = author
         self.agent = agent
         self.machine = machine
+        self.machineFriendlyName = machineFriendlyName
         self.createdByActorType = createdByActorType
         self.createdByName = createdByName
-        self.sourceMachine = sourceMachine
-        self.sourceMachineFriendlyName = sourceMachineFriendlyName
-        self.originMachine = originMachine ?? machine
-        self.originMachineFriendlyName = originMachineFriendlyName
-        self.targetMachineFriendlyName = targetMachineFriendlyName
-        self.previousMachine = previousMachine
-        self.openedFrom = openedFrom
-        self.sourceContext = sourceContext
         self.archivedAt = archivedAt
         self.trashedAt = trashedAt
-        self.trashMachine = trashMachine
         self.trashExpiresAt = trashExpiresAt
         self.restoredAt = restoredAt
-        self.movedAt = movedAt
         self.body = body
     }
 
@@ -166,27 +147,19 @@ public struct Note: Identifiable, Equatable {
         titleLocked: Bool = false,
         titleSource: NoteTitleSource? = nil,
         titleContentFingerprint: String = "",
+        rev: Int = 1,
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
         author: String = Note.currentAuthor,
         agent: String = Note.appAgent,
         machine: String = Note.currentMachine,
+        machineFriendlyName: String = "",
         createdByActorType: String = "human",
         createdByName: String = Note.currentAuthor,
-        sourceMachine: String = Note.currentMachine,
-        sourceMachineFriendlyName: String = "",
-        originMachine: String? = nil,
-        originMachineFriendlyName: String = "",
-        targetMachineFriendlyName: String = "",
-        previousMachine: String = "",
-        openedFrom: String = "",
-        sourceContext: String = "",
         archivedAt: Date? = nil,
         trashedAt: Date? = nil,
-        trashMachine: String = "",
         trashExpiresAt: Date? = nil,
         restoredAt: Date? = nil,
-        movedAt: Date? = nil,
         body: String = ""
     ) {
         self.init(
@@ -199,27 +172,19 @@ public struct Note: Identifiable, Equatable {
             titleLocked: titleLocked,
             titleSource: titleSource,
             titleContentFingerprint: titleContentFingerprint,
+            rev: rev,
             createdAt: createdAt,
             updatedAt: updatedAt,
             author: author,
             agent: agent,
             machine: machine,
+            machineFriendlyName: machineFriendlyName,
             createdByActorType: createdByActorType,
             createdByName: createdByName,
-            sourceMachine: sourceMachine,
-            sourceMachineFriendlyName: sourceMachineFriendlyName,
-            originMachine: originMachine,
-            originMachineFriendlyName: originMachineFriendlyName,
-            targetMachineFriendlyName: targetMachineFriendlyName,
-            previousMachine: previousMachine,
-            openedFrom: openedFrom,
-            sourceContext: sourceContext,
             archivedAt: archivedAt,
             trashedAt: trashedAt,
-            trashMachine: trashMachine,
             trashExpiresAt: trashExpiresAt,
             restoredAt: restoredAt,
-            movedAt: movedAt,
             body: body
         )
     }
@@ -243,10 +208,41 @@ public struct Note: Identifiable, Equatable {
         NSUserName().isEmpty ? "unknown" : NSUserName()
     }
 
-    public static var currentMachine: String {
-        let name = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
-        return name.isEmpty ? "unknown" : name
-    }
+    /// Stable machine identity for note attribution (vision: which note belongs
+    /// to which machine). Never the cosmetic Computer Name — the old
+    /// `Host.current().localizedName` value drifted from manifest slugs and
+    /// fabricated phantom machine rows. Resolution order (same as the JS lane's
+    /// `machineIdentity()` in tools/notes-lib.mjs):
+    ///   1. $PERSONALNOTES_MACHINE (explicit override),
+    ///   2. `machine` in the sync client config (~/.config/personalnotes/config.json
+    ///      or $PERSONALNOTES_CONFIG) — the configured identity,
+    ///   3. short hostname (pre-first-dot), else "unknown".
+    /// Resolved once per process: the identity must stay stable for the app's
+    /// lifetime so every note written in a session carries the same attribution.
+    public static let currentMachine: String = {
+        let env = ProcessInfo.processInfo.environment
+        if let override = env["PERSONALNOTES_MACHINE"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !override.isEmpty {
+            return override
+        }
+        let configURL: URL
+        if let path = env["PERSONALNOTES_CONFIG"], !path.isEmpty {
+            configURL = URL(fileURLWithPath: path)
+        } else {
+            configURL = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".config/personalnotes/config.json")
+        }
+        if let data = try? Data(contentsOf: configURL),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let configured = (obj["machine"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !configured.isEmpty {
+            return configured
+        }
+        let raw = ProcessInfo.processInfo.hostName
+        let short = (raw.split(separator: ".", maxSplits: 1).first.map(String.init) ?? raw)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return short.isEmpty ? "unknown" : short
+    }()
 
     public static let defaultTitles: Set<String> = ["", "New Note", "Untitled Note"]
 

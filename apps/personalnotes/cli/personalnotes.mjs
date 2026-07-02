@@ -19,6 +19,7 @@ import {
   loadNotes,
   loadSettings,
   markdownPlainText,
+  migrateStoreToV2,
   moveNoteToMachine,
   normalizeLabels,
   purgeExpiredTrash,
@@ -44,13 +45,14 @@ function usage() {
 Usage:
   personalnotes list [--json] [--limit 10] [--offset 0] [--label name] [--machine id] [--query text]
   personalnotes get <id> [--json]
-  personalnotes create [--title text] [--body text | --body-file path] [--label name ...] [--actor-type agent] [--actor-name name] [--target-machine id] [--opened-from text] [--json]
+  personalnotes create [--title text] [--body text | --body-file path] [--label name ...] [--actor-type agent] [--actor-name name] [--target-machine id] [--machine-name friendly] [--json]
   personalnotes delete <id> [--permanent] [--yes|--force]
   personalnotes archive <id>
   personalnotes trash <id> [--retention-days 30] [--yes|--force]
   personalnotes restore <id>
   personalnotes purge <id> [--yes|--force]
   personalnotes cleanup-trash [--yes|--force]
+  personalnotes migrate --to-v2 [--dry-run] [--json]   (alias: migrate-frontmatter)
   personalnotes move <id> <machine>
   personalnotes machines list [--json]
   personalnotes machines details <machine> [--json]
@@ -84,7 +86,7 @@ function parseArgs(argv) {
     }
     const eq = arg.indexOf('=');
     const key = arg.slice(2, eq > 0 ? eq : undefined);
-    const takesValue = !['json', 'apply', 'force', 'permanent', 'include-trash', 'include-archived', 'help', 'yes', 'dry-run'].includes(key);
+    const takesValue = !['json', 'apply', 'force', 'permanent', 'include-trash', 'include-archived', 'help', 'yes', 'dry-run', 'to-v2'].includes(key);
     const value = eq > 0 ? arg.slice(eq + 1) : (takesValue ? argv[++i] : true);
     if (key === 'label') opts.label = [...(opts.label || []), value];
     else opts[key] = value;
@@ -237,14 +239,9 @@ async function commandCreate(opts) {
     labels: normalizeLabels(opts.label || []),
     status: 'active',
     machine: opts['target-machine'] || opts.machine,
+    machineFriendlyName: opts['machine-name'] || '',
     createdByActorType: opts['actor-type'] || process.env.HASNA_NOTES_ACTOR_TYPE || 'agent',
     createdByName: opts['actor-name'] || process.env.HASNA_NOTES_ACTOR_NAME || process.env.USER || 'agent',
-    sourceMachine: opts['source-machine'] || process.env.HASNA_NOTES_SOURCE_MACHINE,
-    sourceMachineFriendlyName: opts['source-machine-friendly-name'] || process.env.HASNA_NOTES_SOURCE_MACHINE_NAME,
-    originMachine: opts['origin-machine'] || opts['target-machine'] || opts.machine,
-    originMachineFriendlyName: opts['origin-machine-friendly-name'] || opts['source-machine-friendly-name'],
-    openedFrom: opts['opened-from'] || '',
-    sourceContext: opts['source-context'] || '',
     titleLocked: !!title,
     titleSource: title ? 'manual' : 'default',
     titleContentFingerprint: '',
@@ -294,7 +291,7 @@ async function commandTrash(id, opts) {
   const preview = moveToTrashPreview(note, 'trash');
   const message = `Move note to Trash? "${preview.preview.title}" can be restored from Trash.`;
   if (!(await requireDestructiveConfirmation(preview, opts, message))) return;
-  const trashed = await trashNote(note.id, { retentionDays: opts['retention-days'], trashMachine: opts.machine });
+  const trashed = await trashNote(note.id, { retentionDays: opts['retention-days'] });
   if (opts.json) return jsonOut(trashed);
   lineOut(noteSummary(trashed));
 }
@@ -333,9 +330,25 @@ async function commandCleanupTrash(opts) {
   lineOut(`Purged ${result.count} expired note(s)`);
 }
 
+// One-shot frontmatter migration to schema v2 (idempotent, backup-first,
+// atomic per file, body preserved byte-for-byte). v1 files stay readable
+// without it — this exists to retire the v1 keys from disk in one pass.
+async function commandMigrate(opts) {
+  if (!opts['to-v2']) throw new Error('migrate_target_required (use --to-v2)');
+  const result = await migrateStoreToV2(dataRoot(), { dryRun: !!opts['dry-run'] });
+  if (opts.json) return jsonOut(result);
+  const prefix = result.dryRun ? '[dry-run] ' : '';
+  lineOut(`${prefix}scanned ${result.scanned} note file(s): ${result.migrated} migrated, ${result.alreadyV2} already v2, ${result.skipped} skipped`);
+  const dropped = Object.keys(result.droppedKeys).sort();
+  if (dropped.length) {
+    lineOut(`dropped v1 keys: ${dropped.map(key => `${key} (${result.droppedKeys[key]})`).join(', ')}`);
+  }
+  if (!result.dryRun && result.migrated) lineOut(`originals backed up once to ${result.backupDir}`);
+}
+
 async function commandMove(id, machine, opts) {
   const note = await moveNoteToMachine(requireArg(id, 'id'), requireArg(machine, 'machine'), {
-    targetMachineFriendlyName: opts['machine-name'],
+    machineFriendlyName: opts['machine-name'],
   });
   if (opts.json) return jsonOut(note);
   lineOut(noteSummary(note));
@@ -506,8 +519,6 @@ async function commandAgent(args, opts) {
     dryRun: !!opts['dry-run'],
     actorName: opts['actor-name'] || process.env.HASNA_NOTES_ACTOR_NAME || 'PersonalNotes CLI Agent',
     actorType: opts['actor-type'] || 'agent',
-    openedFrom: opts['opened-from'] || 'cli-agent',
-    sourceContext: opts['source-context'] || prompt.slice(0, 200),
     title: opts.title,
     body: opts.body,
     text: opts.text,
@@ -544,6 +555,8 @@ async function main() {
   if (cmd === 'restore') return commandRestore(opts._[0], opts);
   if (cmd === 'purge') return commandPurge(opts._[0], opts);
   if (cmd === 'cleanup-trash') return commandCleanupTrash(opts);
+  if (cmd === 'migrate') return commandMigrate(opts);
+  if (cmd === 'migrate-frontmatter') return commandMigrate({ ...opts, 'to-v2': true });
   if (cmd === 'move') return commandMove(opts._[0], opts._[1], opts);
   if (cmd === 'machines') return commandMachines(opts._[0], opts._.slice(1), opts);
   if (cmd === 'markdown') return commandMarkdown(opts._[0], opts._.slice(1), opts);

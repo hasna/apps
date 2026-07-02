@@ -11,11 +11,13 @@
   },
   "exports": {
     ".": "./tools/notes-lib.mjs",
+    "./sync": "./sync/index.mjs",
     "./cloud": "./cloud/index.mjs"
   },
   "files": [
     "bin",
     "cli/personalnotes.mjs",
+    "sync",
     "cloud/index.mjs",
     "mcp/personalnotes-mcp.mjs",
     "tools/notes-agent.mjs",

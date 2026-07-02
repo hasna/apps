@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -21,12 +22,17 @@ import {
   listMachineDetails,
   listNotes,
   loadLabelList,
+  machineIdentity,
   parseMachineManifestJSON,
   loadNotes,
   loadSettings,
   markdownPlainText,
   markdownSafeText,
+  migrateNoteTextToV2,
+  migrateStoreToV2,
   moveNoteToMachine,
+  parseNote,
+  serializeNote,
   purgeExpiredTrash,
   renameLabel,
   restoreNote,
@@ -443,6 +449,57 @@ test('shared library enforces UUID note ids for native Swift compatibility', asy
   assert.equal((await loadNotes(root))[0].id, note.id);
 });
 
+test('frontmatter scalars round-trip in lockstep with the Swift parser', async (t) => {
+  const root = await tempRoot(t);
+  // Backslash-then-n titles: sequential unescaping regexes corrupted
+  // "C:\notes" into "C:\" + a real newline (P3 adversarial finding #3); the
+  // single-pass decoder must round-trip them byte-exact — exactly like
+  // MarkdownStore.unescapeDoubleQuoted does for the same file bytes.
+  for (const title of ['C:\\notes', 'back\\nslash', 'tail\\', 'a\\\\nb', 'quote " and \\ mix']) {
+    const id = randomUUID();
+    await saveNote({ id, title, body: 'b' }, root);
+    assert.equal((await getNote(id, root)).title, title, `title survives: ${JSON.stringify(title)}`);
+  }
+  // A value the user wrapped in single quotes must be double-quoted on write
+  // (MarkdownStore.yamlScalar parity), or the parser strips the quotes.
+  const quoted = await saveNote({ id: uuidFor(90), title: "'hello'", body: 'b' }, root);
+  assert.equal((await getNote(quoted.id, root)).title, "'hello'");
+  const rawQuoted = await readFile(join(root, 'notes', `${quoted.id}.md`), 'utf8');
+  assert.match(rawQuoted, /^title: "'hello'"$/m);
+});
+
+test('non-markdown contentFormat survives load→save and empty actor provenance is preserved', async (t) => {
+  const root = await tempRoot(t);
+  const id = uuidFor(91);
+  await saveNote({ id, title: 'Legacy Plain', body: 'plain text' }, root);
+  // Rewrite the stored file to the legacy format + explicitly empty provenance
+  // (what a pre-provenance origin machine serializes).
+  const raw = (await readFile(join(root, 'notes', `${id}.md`), 'utf8'))
+    .replace(/^contentFormat: markdown$/m, 'contentFormat: plaintext')
+    .replace(/^createdByActorType: .*$/m, 'createdByActorType: ""')
+    .replace(/^createdByName: .*$/m, 'createdByName: ""');
+  await writeFile(join(root, 'notes', `${id}.md`), raw, 'utf8');
+
+  const loaded = await getNote(id, root);
+  assert.equal(loaded.contentFormat, 'plaintext', 'parser must not coerce contentFormat (Note.swift parity)');
+  assert.equal(loaded.createdByActorType, '', 'explicit empty provenance stays empty (no replica drift)');
+  assert.equal(loaded.createdByName, '');
+
+  // ...and a save cycle keeps all three (previously rewritten to markdown/human/user).
+  const saved = await saveNote(loaded, root);
+  assert.equal(saved.contentFormat, 'plaintext');
+  const rewritten = await readFile(join(root, 'notes', `${id}.md`), 'utf8');
+  assert.match(rewritten, /^contentFormat: plaintext$/m);
+  assert.match(rewritten, /^createdByActorType: ""$/m);
+  assert.match(rewritten, /^createdByName: ""$/m);
+
+  // New local notes without provenance still get the defaults.
+  const fresh = await saveNote({ id: uuidFor(92), title: 'Fresh', body: 'b' }, root);
+  assert.equal(fresh.createdByActorType, 'human');
+  assert.ok(fresh.createdByName);
+  assert.equal(fresh.contentFormat, 'markdown');
+});
+
 test('markdown persists as canonical body with safe rendering and plain text extraction', async (t) => {
   const root = await tempRoot(t);
   const id = uuidFor(88);
@@ -677,11 +734,9 @@ test('agent write tools preview unsafe changes and apply confirmed create append
   const created = await executeNotesAgentTool('create_note', { title: 'Agent Created', body: 'Created from chat.', labels: ['agent'] }, {
     root,
     actorName: 'Test Agent',
-    openedFrom: 'test-agent',
   });
   assert.equal(created.note.createdByActorType, 'agent');
   assert.equal(created.note.createdByName, 'Test Agent');
-  assert.equal(created.note.openedFrom, 'test-agent');
   assert.deepEqual(created.note.labels, ['agent']);
 
   const dryEvents = [];
@@ -1094,6 +1149,47 @@ test('web enforces trash retention on boot and hydrate, once per session', async
   assert.deepEqual(accepted.windowTarget.PersonalNotes.view.state().visibleNoteIds, []);
 });
 
+test('web surfaces sync status honestly in Settings and via PersonalNotes.sync.status()', async () => {
+  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
+
+  // No sync payload: off state, no fake success.
+  const off = loadWebAppWithFakeDOM(app, { __BOOT__: { thisMachine: 'studio-mac', notes: [], machines: [] } });
+  assert.equal(off.windowTarget.PersonalNotes.sync.status(), null);
+  assert.match(off.document.getElementById('sync-status-row').textContent, /Not syncing yet/);
+  assert.match(off.document.getElementById('sync-status-row').className, /sync-off/);
+
+  // Successful sync: green state with server + relative time.
+  const okBoot = {
+    thisMachine: 'studio-mac',
+    notes: [],
+    machines: [],
+    sync: {
+      status: 'ok',
+      lastSyncAt: new Date(Date.now() - 60_000).toISOString(),
+      lastSuccessAt: new Date(Date.now() - 60_000).toISOString(),
+      apiUrl: 'http://linux-box.local:8788',
+      error: '',
+    },
+  };
+  const ok = loadWebAppWithFakeDOM(app, { __BOOT__: okBoot });
+  assert.equal(ok.windowTarget.PersonalNotes.sync.status().status, 'ok');
+  const okRow = ok.document.getElementById('sync-status-row');
+  assert.match(okRow.textContent, /^Synced /);
+  assert.match(okRow.className, /sync-ok/);
+
+  // Auth failure via hydrate: MUST become the error state, never stay green
+  // (FleetSync failure mode 6: ssh auth failure shown as a green checkmark).
+  ok.windowTarget.PersonalNotes.hydrate({
+    ...okBoot,
+    sync: { ...okBoot.sync, status: 'error', error: 'unauthorized: key revoked', lastSyncAt: new Date().toISOString() },
+  });
+  assert.equal(ok.windowTarget.PersonalNotes.sync.status().status, 'error');
+  assert.match(okRow.textContent, /Sync failing — unauthorized: key revoked/);
+  assert.match(okRow.textContent, /Last success/);
+  assert.match(okRow.className, /sync-error/);
+  assert.doesNotMatch(okRow.className, /sync-ok/);
+});
+
 test('web markdown selection popover and slash menu route through editor.command', async () => {
   const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
   const copied = [];
@@ -1304,20 +1400,19 @@ test('archive trash restore purge retention and move-to-machine preserve metadat
     title: 'Agent Added Note',
     body: 'body',
     machine: 'studio-mac',
+    machineFriendlyName: 'Apple Studio',
     createdByActorType: 'agent',
     createdByName: 'Codewith',
-    sourceMachine: 'linux-box',
-    sourceMachineFriendlyName: 'Linux Box',
-    openedFrom: 'mcp',
-    sourceContext: 'ticket-123',
   }, root);
   assert.equal(created.createdByActorType, 'agent');
-  assert.equal(created.originMachine, 'studio-mac');
+  assert.equal(created.machine, 'studio-mac');
+  assert.equal(created.machineFriendlyName, 'Apple Studio');
+  assert.equal(created.rev, 1);
 
-  const moved = await moveNoteToMachine(id, 'laptop', { targetMachineFriendlyName: 'Laptop' }, root);
+  const moved = await moveNoteToMachine(id, 'laptop', { machineFriendlyName: 'Laptop' }, root);
   assert.equal(moved.machine, 'laptop');
-  assert.equal(moved.previousMachine, 'studio-mac');
-  assert.equal(moved.originMachine, 'studio-mac');
+  assert.equal(moved.machineFriendlyName, 'Laptop');
+  assert.equal(moved.rev, 2, 'move is a local mutation and bumps rev');
 
   const archived = await archiveNote(id, root);
   assert.equal(archived.status, 'archived');
@@ -1331,7 +1426,7 @@ test('archive trash restore purge retention and move-to-machine preserve metadat
 
   const trashed = await trashNote(id, {}, root);
   assert.equal(trashed.status, 'trash');
-  assert.equal(trashed.trashMachine, 'laptop');
+  assert.equal(trashed.machine, 'laptop', 'trash stays attributed to the note machine');
   assert.ok(trashed.trashExpiresAt);
   assert.equal((await listNotes({}, root)).total, 0);
   assert.equal((await listNotes({ status: 'trash' }, root)).total, 1);
@@ -1353,6 +1448,270 @@ test('archive trash restore purge retention and move-to-machine preserve metadat
   assert.equal(await getNote(legacyId, root), null);
 
   assert.equal((await loadSettings(root)).trashRetentionDays, 7);
+});
+
+test('frontmatter schema v2: monotonic rev, machine friendly name, v1 auto-detect on read', async (t) => {
+  const root = await tempRoot(t);
+  const id = uuidFor(130);
+
+  // Create: initial rev is 1 and the serialized file carries only v2 keys.
+  const created = await saveNote({
+    id, title: 'Rev Note', body: 'body\n',
+    machine: 'studio-mac', machineFriendlyName: 'Apple Studio',
+  }, root);
+  assert.equal(created.rev, 1);
+  const raw = await readFile(join(root, 'notes', `${id}.md`), 'utf8');
+  assert.match(raw, /\nrev: 1\n/);
+  assert.match(raw, /\nmachine: studio-mac\n/);
+  assert.match(raw, /\nmachineFriendlyName: Apple Studio\n/);
+  for (const dropped of [
+    'sourceMachine:', 'originMachine:', 'previousMachine:', 'targetMachineFriendlyName:',
+    'openedFrom:', 'sourceContext:', 'trashMachine:', 'movedAt:',
+  ]) {
+    assert.ok(!raw.includes(dropped), `v2 frontmatter must not carry ${dropped}`);
+  }
+
+  // Every local mutation bumps rev past the on-disk value — even from a stale copy.
+  const edited = await saveNote({ ...created, body: 'edited\n' }, root);
+  assert.equal(edited.rev, 2);
+  const staleWrite = await saveNote({ ...created, rev: 1, body: 'stale copy\n' }, root);
+  assert.equal(staleWrite.rev, 3, 'stale in-memory rev still moves forward past disk');
+
+  // Sync-applied writes preserve the given rev verbatim.
+  const synced = await saveNote({ ...staleWrite, rev: 9 }, root, { preserveRev: true });
+  assert.equal(synced.rev, 9);
+  assert.equal((await getNote(id, root)).rev, 9);
+
+  // v1 files read WITHOUT migration: no rev -> 1; legacy friendly names map to
+  // machineFriendlyName when they described the note's own machine.
+  const v1 = [
+    '---',
+    `id: ${uuidFor(131)}`,
+    'title: V1 Note',
+    'labels: [sync]',
+    'status: active',
+    'createdAt: 2026-06-22T09:00:00Z',
+    'updatedAt: 2026-06-22T09:00:00Z',
+    'author: someone',
+    'agent: personalnotes-app',
+    'machine: studio-mac',
+    'sourceMachine: studio-mac',
+    'sourceMachineFriendlyName: Apple Studio',
+    'originMachine: linux-box',
+    'originMachineFriendlyName: Spark',
+    'previousMachine: laptop',
+    'openedFrom: mcp',
+    'sourceContext: ticket-123',
+    'trashMachine: ""',
+    'movedAt: ""',
+    '---',
+    'v1 body',
+  ].join('\n');
+  const parsed = parseNote(v1, uuidFor(131));
+  assert.equal(parsed.rev, 1, 'v1 file auto-detects as rev 1');
+  assert.equal(parsed.machine, 'studio-mac');
+  assert.equal(parsed.machineFriendlyName, 'Apple Studio');
+  assert.equal(parsed.body, 'v1 body');
+  assert.equal(parsed.sourceMachine, undefined, 'dropped keys do not survive parsing');
+  assert.equal(parsed.openedFrom, undefined);
+  // Round-trip through the v2 serializer keeps the body and rewrites the schema.
+  const reserialized = serializeNote(parsed);
+  assert.ok(reserialized.endsWith('---\nv1 body'));
+  assert.ok(!reserialized.includes('previousMachine:'));
+});
+
+test('one-shot migrator upgrades v1 stores in place: idempotent, backup-first, body byte-for-byte', async (t) => {
+  const root = await tempRoot(t);
+  const dir = join(root, 'notes');
+  await mkdir(dir, { recursive: true });
+
+  // (a) Full v1 file with a tricky body: a `---` line, trailing spaces, NO final newline.
+  const fullId = uuidFor(140);
+  const trickyBody = 'line one\n---\nline "two"  \nno trailing newline';
+  const fullV1 = [
+    '---',
+    `id: ${fullId}`,
+    'title: "Full: v1 note"',
+    'labels: [alpha, beta]',
+    'status: active',
+    'folder: ""',
+    'contentFormat: markdown',
+    'titleLocked: true',
+    'titleSource: manual',
+    'titleContentFingerprint: abc',
+    'createdAt: 2026-06-22T09:00:00Z',
+    'updatedAt: 2026-06-30T09:00:00Z',
+    'author: someone',
+    'agent: personalnotes-app',
+    'machine: studio-mac',
+    'createdByActorType: human',
+    'createdByName: someone',
+    'sourceMachine: studio-mac',
+    'sourceMachineFriendlyName: Apple Studio',
+    'originMachine: studio-mac',
+    'originMachineFriendlyName: Apple Studio',
+    'targetMachineFriendlyName: ""',
+    'previousMachine: linux-box',
+    'openedFrom: mcp',
+    'sourceContext: ticket-123',
+    'archivedAt: ""',
+    'trashedAt: ""',
+    'trashMachine: ""',
+    'trashExpiresAt: ""',
+    'restoredAt: ""',
+    'movedAt: "2026-06-29T09:00:00Z"',
+    '---',
+    trickyBody,
+  ].join('\n');
+  await writeFile(join(dir, `${fullId}.md`), fullV1, 'utf8');
+
+  // (b) Old-schema file — the real-store forensics case: dozens of files WITHOUT
+  // sourceMachine (and most provenance keys), plus legacy `tags`.
+  const oldId = uuidFor(141);
+  const oldSchema = [
+    '---',
+    `id: ${oldId}`,
+    'title: Old Schema Note',
+    'tags: [voice]',
+    'status: active',
+    'createdAt: 2026-06-22T09:43:00Z',
+    'updatedAt: 2026-06-22T09:43:00Z',
+    'author: someone',
+    'agent: open-notes-app',
+    'machine: studio-mac',
+    'customUnknownKey: keep-me-logged',
+    '---',
+    'old body\n',
+  ].join('\n');
+  await writeFile(join(dir, `${oldId}.md`), oldSchema, 'utf8');
+
+  // (c) Already-v2 file. (d) Bare markdown without frontmatter.
+  const v2Id = uuidFor(142);
+  await saveNote({ id: v2Id, title: 'Already V2', body: 'v2 body\n' }, root);
+  const bareId = uuidFor(143);
+  await writeFile(join(dir, `${bareId}.md`), '# Bare note\n\nno frontmatter\n', 'utf8');
+
+  // Dry run mutates nothing.
+  const dry = await migrateStoreToV2(root, { dryRun: true });
+  assert.equal(dry.migrated, 2);
+  assert.equal(dry.alreadyV2, 1);
+  assert.equal(dry.skipped, 1);
+  assert.equal(await readFile(join(dir, `${fullId}.md`), 'utf8'), fullV1);
+
+  const run = await migrateStoreToV2(root);
+  assert.equal(run.scanned, 4);
+  assert.equal(run.migrated, 2);
+  assert.equal(run.alreadyV2, 1);
+  assert.equal(run.skipped, 1, 'bare files are left untouched (readable as-is)');
+  // Dropped v1 keys are logged with counts.
+  assert.equal(run.droppedKeys.sourceMachine, 1);
+  assert.equal(run.droppedKeys.movedAt, 1);
+  assert.equal(run.droppedKeys.customUnknownKey, 1, 'unknown keys are dropped AND logged');
+
+  // Migrated file: v2 keys, rev 1, derived machineFriendlyName, body byte-for-byte.
+  const migrated = await readFile(join(dir, `${fullId}.md`), 'utf8');
+  assert.match(migrated, /\nrev: 1\n/);
+  assert.match(migrated, /\nmachineFriendlyName: Apple Studio\n/);
+  assert.ok(migrated.endsWith(`---\n${trickyBody}`), 'body preserved byte-for-byte');
+  assert.ok(!migrated.includes('previousMachine:'));
+  assert.ok(!migrated.includes('openedFrom:'));
+  const reparsed = parseNote(migrated, fullId);
+  assert.equal(reparsed.title, 'Full: v1 note');
+  assert.deepEqual(reparsed.labels, ['alpha', 'beta']);
+  assert.equal(reparsed.updatedAt, '2026-06-30T09:00:00Z', 'migration does not touch updatedAt');
+
+  // Old-schema file: legacy tags fold into labels, unknown keys dropped.
+  const migratedOld = await readFile(join(dir, `${oldId}.md`), 'utf8');
+  assert.match(migratedOld, /\nlabels: \[voice\]\n/);
+  assert.match(migratedOld, /\nrev: 1\n/);
+  assert.ok(!migratedOld.includes('customUnknownKey'));
+  assert.equal(parseNote(migratedOld, oldId).agent, 'open-notes-app', 'legacy agent value preserved verbatim');
+  // Keys absent in the v1 source are emitted with the serializer's own
+  // deterministic defaults, so a migrated file carries the same key set a
+  // sync replica writes on another machine (missing keys were permanent
+  // cosmetic cross-device diffs — P3 integrate finding). Non-deterministic
+  // keys are never fabricated.
+  for (const line of [
+    'folder: ""', 'contentFormat: markdown', 'titleLocked: true',
+    'titleSource: manual', 'titleContentFingerprint: ""',
+    'machineFriendlyName: ""', 'createdByActorType: ""', 'createdByName: ""',
+    'archivedAt: ""', 'trashedAt: ""', 'trashExpiresAt: ""', 'restoredAt: ""',
+  ]) {
+    assert.ok(migratedOld.includes(`\n${line}\n`), `migrated old-schema file carries default: ${line}`);
+  }
+  // A replica writing the same note serializes the identical frontmatter:
+  // migrated origin file == serializeNote of its parsed form, byte for byte.
+  assert.equal(serializeNote(parseNote(migratedOld, oldId)), migratedOld,
+    'migrated file is byte-identical to a replica serialization');
+
+  // Backup-first: originals live under <root>/backup-frontmatter-v1, byte-identical.
+  assert.equal(await readFile(join(root, 'backup-frontmatter-v1', `${fullId}.md`), 'utf8'), fullV1);
+  assert.equal(await readFile(join(root, 'backup-frontmatter-v1', `${oldId}.md`), 'utf8'), oldSchema);
+
+  // Idempotent: a second run changes nothing and keeps the original backups.
+  const again = await migrateStoreToV2(root);
+  assert.equal(again.migrated, 0);
+  assert.equal(again.alreadyV2, 3);
+  assert.equal(again.skipped, 1);
+  assert.equal(await readFile(join(dir, `${fullId}.md`), 'utf8'), migrated);
+  assert.equal(await readFile(join(root, 'backup-frontmatter-v1', `${fullId}.md`), 'utf8'), fullV1);
+
+  // The store still loads every note (backup dir is outside notes/).
+  const notes = await loadNotes(root);
+  assert.equal(notes.length, 4);
+
+  // Single-document migration API: v2 text is reported as already migrated.
+  assert.equal(migrateNoteTextToV2(migrated).version, 'v2');
+  assert.equal(migrateNoteTextToV2(migrated).changed, false);
+});
+
+test('CLI migrate --to-v2 runs the one-shot migrator with dry-run support', async (t) => {
+  const root = await tempRoot(t);
+  const dir = join(root, 'notes');
+  await mkdir(dir, { recursive: true });
+  const id = uuidFor(150);
+  const v1 = [
+    '---',
+    `id: ${id}`,
+    'title: CLI Migrate Note',
+    'labels: []',
+    'status: active',
+    'createdAt: 2026-06-22T09:00:00Z',
+    'updatedAt: 2026-06-22T09:00:00Z',
+    'author: someone',
+    'agent: personalnotes-app',
+    'machine: linux-box',
+    'sourceMachine: linux-box',
+    'sourceMachineFriendlyName: Linux Box',
+    '---',
+    'cli body\n',
+  ].join('\n');
+  await writeFile(join(dir, `${id}.md`), v1, 'utf8');
+  const env = { PERSONALNOTES_ROOT: root };
+
+  // Without --to-v2 the command refuses (one-shot target must be explicit).
+  const missing = await runNode(cliPath, ['migrate'], env);
+  assert.notEqual(missing.code, 0);
+
+  const dry = await runNode(cliPath, ['migrate', '--to-v2', '--dry-run', '--json'], env);
+  assert.equal(dry.code, 0, dry.stderr);
+  assert.equal(JSON.parse(dry.stdout).migrated, 1);
+  assert.equal(await readFile(join(dir, `${id}.md`), 'utf8'), v1);
+
+  const run = await runNode(cliPath, ['migrate', '--to-v2', '--json'], env);
+  assert.equal(run.code, 0, run.stderr);
+  const summary = JSON.parse(run.stdout);
+  assert.equal(summary.migrated, 1);
+  assert.equal(summary.droppedKeys.sourceMachine, 1);
+  const migrated = await readFile(join(dir, `${id}.md`), 'utf8');
+  assert.match(migrated, /\nrev: 1\n/);
+  assert.match(migrated, /\nmachineFriendlyName: Linux Box\n/);
+
+  // Alias + idempotency: migrate-frontmatter reruns cleanly with nothing to do.
+  const alias = await runNode(cliPath, ['migrate-frontmatter', '--json'], env);
+  assert.equal(alias.code, 0, alias.stderr);
+  assert.equal(JSON.parse(alias.stdout).migrated, 0);
+  assert.equal(JSON.parse(alias.stdout).alreadyV2, 1);
 });
 
 test('machine details combine open-machines fields with notes fallback metadata', async (t) => {
@@ -1411,10 +1770,12 @@ test('machine details combine open-machines fields with notes fallback metadata'
   }, root);
 
   assert.equal(parseMachineManifestJSON(await readFile(manifest, 'utf8'))[0].friendlyName, 'Studio Mac');
-  const page = await listMachineDetails({ manifestPath: manifest, runCLI: false, thisMachine: '' }, root);
+  const page = await listMachineDetails({ manifestPath: manifest, thisMachine: '' }, root);
   const studio = page.items.find(m => m.id === 'studio-mac');
   assert.equal(studio.displayName, 'Studio Mac');
   assert.equal(studio.online, true);
+  // ssh residue stays retired: machine details never expose ssh addressing.
+  assert.equal(studio.sshAddress, undefined);
   assert.deepEqual(studio.capabilities, ['notes-sync', 'menu-bar']);
   assert.deepEqual(studio.metadata.nested, { rack: 'A' });
   assert.deepEqual(studio.provenance, { importedBy: 'test' });
@@ -1424,9 +1785,9 @@ test('machine details combine open-machines fields with notes fallback metadata'
   assert.equal(studio.totalNoteCount, 3);
   assert.equal(studio.latestNoteUpdatedAt, '2026-06-23T10:00:00.000Z');
   assert.equal(page.items.filter(m => m.id === 'studio').length, 0);
-  assert.equal((await getMachineDetails('studio', { manifestPath: manifest, runCLI: false }, root)).id, 'studio-mac');
+  assert.equal((await getMachineDetails('studio', { manifestPath: manifest }, root)).id, 'studio-mac');
 
-  const fallback = await getMachineDetails('linux-box', { manifestPath: manifest, runCLI: false }, root);
+  const fallback = await getMachineDetails('linux-box', { manifestPath: manifest }, root);
   assert.equal(fallback.source, 'notes');
   assert.equal(fallback.noteCount, 1);
 });
@@ -1450,7 +1811,7 @@ test('title generation is capped to four words for heuristic and sidecar paths',
 
 test('CLI creates, lists, and assigns labels with JSON output', async (t) => {
   const root = await tempRoot(t);
-  const env = { HASNA_NOTES_ROOT: root };
+  const env = { HASNA_NOTES_ROOT: root, PERSONALNOTES_MACHINE: 'studio-mac' };
   const created = await runNode(cliPath, [
     'create', '--title', 'CLI Note', '--body', 'body text', '--label', 'cli', '--json',
   ], env);
@@ -1459,6 +1820,9 @@ test('CLI creates, lists, and assigns labels with JSON output', async (t) => {
   assert.equal(note.title, 'CLI Note');
   assert.deepEqual(note.labels, ['cli']);
   assert.equal(note.contentFormat, 'markdown');
+  // Default attribution = the stable configured machine identity (never a
+  // cosmetic display name).
+  assert.equal(note.machine, 'studio-mac');
 
   const page = await runNode(cliPath, ['list', '--json', '--limit', '1'], env);
   assert.equal(page.code, 0, page.stderr);
@@ -2090,14 +2454,16 @@ test('Cmd+K search opens the picked note even when sidebar filters hide it', asy
   assert.equal(view.statusFilter, 'active');
   assert.ok(view.visibleNoteIds.includes('active-1'));
 
-  // Same for a stale machine filter: the filter resets so the picked note shows.
+  // Same for a stale machine filter — and the reconciliation must JUMP to the
+  // picked note's own machine (vision 9f8fba61), not drop to All Machines.
   windowTarget.PersonalNotes.machines.select('laptop');
   assert.equal(windowTarget.PersonalNotes.view.state().selectedId, null);
   spInput.value = 'Remote plan';
   enter();
   view = windowTarget.PersonalNotes.view.state();
   assert.equal(view.selectedId, 'active-1');
-  assert.equal(view.machineFilter, '__all__');
+  assert.equal(view.machineFilter, 'linux-box');
+  assert.equal(view.selectedMachine.id, 'linux-box');
   assert.ok(view.visibleNoteIds.includes('active-1'));
 });
 
@@ -2106,6 +2472,10 @@ test('web machines dropdown filters notes and canonicalizes machine aliases', as
   const { windowTarget, document } = loadWebAppWithFakeDOM(app);
   const machineSelections = [];
   windowTarget.addEventListener('hasna:machine-select', event => machineSelections.push(event.detail));
+  // Selecting a machine filters the LOCAL synced store only — it must never
+  // trigger a machineDetails round-trip (that bridge is for details flows).
+  const detailRequests = [];
+  windowTarget.addEventListener('hasna:machine-details-request', event => detailRequests.push(event.detail));
 
   windowTarget.PersonalNotes.hydrate({
     thisMachine: 'studio-mac',
@@ -2163,21 +2533,22 @@ test('web machines dropdown filters notes and canonicalizes machine aliases', as
   assert.equal(view.selectedMachine.id, 'laptop');
   assert.equal(machineSelections.at(-1).reason, 'sidebar');
   assert.equal(machineSelections.at(-1).view.screen, 'notes');
+  assert.equal(detailRequests.length, 0, 'dropdown select must not round-trip machineDetails');
   assert.equal(document.getElementById('window').getAttribute('data-active-shell'), 'app');
   // The dropdown button label reflects the active filter (friendly name shown).
   assert.equal(document.getElementById('machines-dd-label').textContent, 'Travel Laptop');
 
-  // Move-to-machine parity (CLI/MCP ship the same mutation): re-attributes the note,
-  // preserves origin/previous provenance, and follows it to the destination filter.
+  // Move-to-machine parity (CLI/MCP ship the same mutation): re-attributes the note
+  // (schema v2: plain `machine` + friendly name, no move provenance trail) and
+  // follows it to the destination filter.
   const moveEvents = [];
   windowTarget.addEventListener('hasna:note-move', event => moveEvents.push(event.detail));
   const movedNote = windowTarget.PersonalNotes.notes.moveToMachine('apple-note', 'travel-laptop');
   assert.equal(movedNote.machine, 'laptop');
-  assert.equal(movedNote.previousMachine, 'studio-mac');
-  assert.equal(movedNote.originMachine, 'studio-mac');
-  assert.ok(movedNote.movedAt);
+  assert.equal(movedNote.machineFriendlyName, 'Travel Laptop');
   assert.equal(moveEvents.length, 1);
   assert.equal(moveEvents[0].targetMachine, 'laptop');
+  assert.equal(moveEvents[0].targetMachineFriendlyName, 'Travel Laptop');
   assert.equal(machineSelections.at(-1).reason, 'move');
   view = windowTarget.PersonalNotes.view.state();
   assert.equal(view.machineFilter, 'laptop');
@@ -2218,6 +2589,146 @@ test('web machines dropdown filters notes and canonicalizes machine aliases', as
     document.getElementById('machines-list').children.filter(row => row.dataset.machine === 'field-slug').length,
     0,
   );
+});
+
+test('clicking another machine\'s note jumps to that machine and shows it (vision 9f8fba61)', async () => {
+  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
+  const { windowTarget, document } = loadWebAppWithFakeDOM(app);
+  windowTarget.PersonalNotes.hydrate({
+    thisMachine: 'studio-mac',
+    machines: [
+      { id: 'studio-mac', friendlyName: 'Apple Studio' },
+      { id: 'linux-box', friendlyName: 'Spark Box' },
+    ],
+    notes: [
+      {
+        id: 'local-1', title: 'Local Note', body: 'local body', labels: [],
+        status: 'active', machine: 'studio-mac',
+        updatedAt: '2026-06-24T10:00:00Z', createdAt: '2026-06-24T09:00:00Z',
+      },
+      {
+        id: 'remote-1', title: 'Remote Note', body: 'remote body', labels: [],
+        status: 'active', machine: 'linux-box',
+        updatedAt: '2026-06-23T10:00:00Z', createdAt: '2026-06-23T09:00:00Z',
+      },
+    ],
+  });
+
+  // The bug scenario: filtered to this machine, then a DIFFERENT machine's
+  // note is picked from a surface that ignores the machine filter (Home
+  // recent cards / search / chat chips). All notes are local after sync, so
+  // this must be a pure local filter+select that navigates and renders.
+  windowTarget.PersonalNotes.machines.select('studio-mac');
+  let view = windowTarget.PersonalNotes.view.state();
+  assert.equal(view.machineFilter, 'studio-mac');
+  assert.deepEqual(view.visibleNoteIds, ['local-1']);
+
+  const remoteCard = document.getElementById('home-cards').children
+    .find(card => card.dataset.noteId === 'remote-1');
+  assert.ok(remoteCard, 'expected a Home recent card for the other machine\'s note');
+  remoteCard.click();
+
+  view = windowTarget.PersonalNotes.view.state();
+  assert.equal(view.screen, 'notes');
+  assert.equal(view.selectedId, 'remote-1');
+  assert.equal(view.machineFilter, 'linux-box', 'filter jumps TO the note\'s machine');
+  assert.equal(view.selectedMachine.id, 'linux-box');
+  assert.deepEqual(view.visibleNoteIds, ['remote-1']);
+  // The editor really shows the picked note — never a substitute.
+  assert.equal(document.getElementById('editor').hidden, false);
+  assert.equal(document.getElementById('editor-title').value, 'Remote Note');
+  // Attribution is visible: the note's frontmatter has no friendly name, so the
+  // machines list resolves the slug to its friendly name.
+  assert.equal(document.getElementById('em-machine').textContent, 'Spark Box');
+  assert.equal(document.getElementById('machines-dd-label').textContent, 'Spark Box');
+
+  // And back across the switch: selecting THIS machine's note from the same
+  // surface jumps home again — select + render survive repeated filter hops.
+  const localCard = document.getElementById('home-cards').children
+    .find(card => card.dataset.noteId === 'local-1');
+  localCard.click();
+  view = windowTarget.PersonalNotes.view.state();
+  assert.equal(view.selectedId, 'local-1');
+  assert.equal(view.machineFilter, 'studio-mac');
+  assert.deepEqual(view.visibleNoteIds, ['local-1']);
+  assert.equal(document.getElementById('editor-title').value, 'Local Note');
+  assert.equal(document.getElementById('em-machine').textContent, 'Apple Studio');
+});
+
+test('machine rows carry honest sync facts: syncedAt/capabilities from manifest and S1 client state', async () => {
+  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
+  const { windowTarget } = loadWebAppWithFakeDOM(app);
+  windowTarget.PersonalNotes.hydrate({
+    thisMachine: 'studio-mac',
+    machines: [
+      { id: 'studio-mac', friendlyName: 'Apple Studio' },
+      { id: 'linux-box', syncedAt: '2026-07-01T08:00:00Z', capabilities: ['notes-sync'] },
+      { id: 'shelf-box' },
+    ],
+    notes: [],
+    sync: {
+      status: 'ok',
+      lastSyncAt: '2026-07-02T09:00:00.000Z',
+      lastSuccessAt: '2026-07-02T09:00:00.000Z',
+      apiUrl: 'https://personalnotes.ai',
+    },
+  });
+  const details = windowTarget.PersonalNotes.machines.details;
+  // (Array.from: the arrays are built inside the vm realm — normalize before
+  // deepEqual so the assertion holds under node's strict cross-realm compare.)
+  // THIS machine's row is overlaid from the boot `sync` object (S1 client
+  // state): last good run + the notes-sync capability of a configured client.
+  const mine = details('studio-mac');
+  assert.equal(mine.syncedAt, '2026-07-02T09:00:00.000Z');
+  assert.deepEqual(Array.from(mine.capabilities), ['notes-sync']);
+  // Host/manifest-declared sync facts pass through for other machines…
+  const linux = details('linux-box');
+  assert.equal(linux.syncedAt, '2026-07-01T08:00:00Z');
+  assert.deepEqual(Array.from(linux.capabilities), ['notes-sync']);
+  // …and are NEVER fabricated for machines whose sync state is unknown.
+  const shelf = details('shelf-box');
+  assert.equal(shelf.syncedAt, '');
+  assert.deepEqual(Array.from(shelf.capabilities), []);
+
+  // No configured sync client (status "never") ⇒ no capability is invented.
+  const fresh = loadWebAppWithFakeDOM(app);
+  fresh.windowTarget.PersonalNotes.hydrate({
+    thisMachine: 'studio-mac',
+    machines: [{ id: 'studio-mac' }],
+    notes: [],
+    sync: { status: 'never' },
+  });
+  const unsynced = fresh.windowTarget.PersonalNotes.machines.details('studio-mac');
+  assert.equal(unsynced.syncedAt, '');
+  assert.deepEqual(Array.from(unsynced.capabilities), []);
+});
+
+test('machineIdentity: env override, configured identity, stable short-hostname fallback', async (t) => {
+  const prevMachine = process.env.PERSONALNOTES_MACHINE;
+  const prevConfig = process.env.PERSONALNOTES_CONFIG;
+  t.after(() => {
+    if (prevMachine == null) delete process.env.PERSONALNOTES_MACHINE;
+    else process.env.PERSONALNOTES_MACHINE = prevMachine;
+    if (prevConfig == null) delete process.env.PERSONALNOTES_CONFIG;
+    else process.env.PERSONALNOTES_CONFIG = prevConfig;
+  });
+
+  process.env.PERSONALNOTES_MACHINE = '  studio-mac  ';
+  assert.equal(machineIdentity(), 'studio-mac');
+
+  delete process.env.PERSONALNOTES_MACHINE;
+  const root = await tempRoot(t);
+  const configPath = join(root, 'config.json');
+  await writeFile(configPath, JSON.stringify({ apiKey: 'pn_test_key', machine: 'linux-box' }) + '\n');
+  process.env.PERSONALNOTES_CONFIG = configPath;
+  assert.equal(machineIdentity(), 'linux-box');
+
+  // Unconfigured: the stable short hostname (pre-first-dot) — never empty,
+  // never a cosmetic display name with dots/domains.
+  await writeFile(configPath, JSON.stringify({ apiKey: 'pn_test_key' }) + '\n');
+  const fallback = machineIdentity();
+  assert.ok(fallback.length > 0);
+  assert.ok(!fallback.includes('.'));
 });
 
 test('bounded recording emits error instead of complete when transcription request fails', async () => {

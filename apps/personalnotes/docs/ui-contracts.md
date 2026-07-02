@@ -31,34 +31,22 @@ The native host injects `window.__BOOT__` before `web/app.js` runs and later cal
     tags: ["research"], // compatibility alias only
     status: "active",
     folder: "",
-    machine: "studio-mac",
-    createdByActorType: "agent", // human | agent | system
-    createdByName: "Codewith",
-    sourceMachine: "linux-box",
-    sourceMachineFriendlyName: "Spark",
-    originMachine: "studio-mac",
-    originMachineFriendlyName: "Apple Studio",
-    targetMachineFriendlyName: "",
-    previousMachine: "",
-    openedFrom: "mcp",
-    sourceContext: "ticket-123",
+    machine: "studio-mac",            // informational attribution only
+    machineFriendlyName: "Apple Studio",
+    rev: 1,                           // per-note monotonic revision (schema v2)
+    createdByActorType: "agent", // human | agent | system — or "" (origin recorded no provenance; preserved, never default-filled)
+    createdByName: "Codewith",   // "" allowed for the same reason; UIs fall back to author for display
     archivedAt: "",
     trashedAt: "",
-    trashMachine: "",
     trashExpiresAt: "",
     restoredAt: "",
-    movedAt: "",
     info: {
       createdBy: "Codewith",
       createdByActorType: "agent",
       createdAt: "2026-06-22T09:00:00Z",
-      sourceMachine: "linux-box",
-      sourceMachineFriendlyName: "Spark",
-      originMachine: "studio-mac",
-      originMachineFriendlyName: "Apple Studio",
-      currentMachine: "studio-mac",
-      openedFrom: "mcp",
-      sourceContext: "ticket-123"
+      machine: "studio-mac",
+      machineFriendlyName: "Apple Studio",
+      currentMachine: "studio-mac"
     },
     createdAt: "2026-06-22T09:00:00Z",
     updatedAt: "2026-06-22T09:00:00Z",
@@ -82,10 +70,30 @@ The native host injects `window.__BOOT__` before `web/app.js` runs and later cal
 	    latestNoteUpdatedAt: "2026-06-22T09:00:00Z",
 	    lastSeenAt: "2026-06-22T09:00:00Z",
 	    recentActivityAt: "2026-06-22T09:00:00Z",
-	    updatedAt: "2026-06-22T09:00:00Z"
+	    updatedAt: "2026-06-22T09:00:00Z",
+	    // Sync facts are OPTIONAL and never fabricated: hosts/manifests may send
+	    // them; machines.details(...) additionally overlays THIS machine's row
+	    // from the boot `sync` object (syncedAt = lastSuccessAt, capability
+	    // "notes-sync" once a sync client is configured — status ok OR error).
+	    // Rows for machines whose sync state is unknown simply omit/empty them.
+	    syncedAt: "2026-07-02T09:00:00.000Z",
+	    capabilities: ["notes-sync"]
 	  }],
   settings: {
     trashRetentionDays: 30
+  },
+  sync: {
+    // Pass-through of <data-root>/sync-status.json (written by the CLI/daemon
+    // after EVERY sync attempt). Hosts send { status: "never" } when the file
+    // is missing. On "error", `error` holds the failure message and
+    // lastSuccessAt keeps the previous good run.
+    status: "ok", // "never" | "ok" | "error"
+    lastSyncAt: "2026-07-02T09:00:00.000Z",
+    lastSuccessAt: "2026-07-02T09:00:00.000Z",
+    error: "",
+    apiUrl: "https://personalnotes.ai",
+    cursor: "2026-07-02T09:00:00.000Z",
+    runner: "daemon" // "cli" | "daemon"
   }
 }
 ```
@@ -119,6 +127,10 @@ Vision 05007066 ("very simple, like Google Keep") defines the shell:
   Search ignores the sidebar machine/label/status filters, so opening a match
   (Enter or row click) reconciles those filters to whatever the chosen note
   needs — the editor MUST show the note the user picked, never a substitute.
+  A machine-filter mismatch reconciles by JUMPING the machine filter to the
+  picked note's own machine (vision 9f8fba61: selecting another machine's note
+  navigates to that machine and shows it); label/status filters reset as
+  needed. Notes without machine attribution fall back to All Machines.
 - Home: the quick-note composer is the hero, vertically centered. Below it the
   Recent notes render as a FLAT list (no card borders/backgrounds/shadows, no
   border-bottom between rows) with hover copy whose feedback is a checkmark
@@ -168,9 +180,9 @@ window.PersonalNotes.notes.purge(noteId)
 ```
 
 Normal Delete should call the Trash path unless `note.status === "trash"`, in
-which case Delete is a permanent purge. Trash is machine-scoped through
-`note.trashMachine`, and retention is controlled by `settings.trashRetentionDays`
-(default `30`).
+which case Delete is a permanent purge. Trash stays attributed to the note's
+own `machine` field (there is no separate trash-machine key in schema v2), and
+retention is controlled by `settings.trashRetentionDays` (default `30`).
 
 ## Markdown And Editor API
 
@@ -339,9 +351,9 @@ Reading, searching, summarizing, note metadata, and related-note discovery run
 directly. Broad or destructive writes expose a preview/approval first. The UI
 should render `hasna:chat-confirmation` from the `approval.preview` as
 human-readable text — never raw JSON payload dumps — and call
-`chat.approve(approval.id, true | false)`. Agent-created notes use provenance:
-`createdByActorType: "agent"`, a friendly agent name, `openedFrom: "chat"`, and
-a source context.
+`chat.approve(approval.id, true | false)`. Agent-created notes use actor
+provenance: `createdByActorType: "agent"` plus a friendly agent name in
+`createdByName`.
 
 Approvals include `toolCallId`; approving or rejecting updates the matching
 `state.chat.toolCalls[]` item to `result` or `cancelled`. Approving posts the
@@ -397,9 +409,9 @@ window.PersonalNotes.notes.setTrashRetentionDays(days)
 ```
 
 `notes.moveToMachine(...)` re-attributes a note to another machine ("Move to
-machine" in the row context menu, shown on active notes). It preserves
-provenance (`originMachine` set once, `previousMachine` updated, `movedAt`
-stamped), persists through the native `move` bridge action
+machine" in the row context menu, shown on active notes). In schema v2 this is
+a plain update of `note.machine` + `note.machineFriendlyName` (no move
+provenance trail is kept). It persists through the native `move` bridge action
 (`window.webkit.messageHandlers.notes.postMessage({ action: "move", note })`),
 switches the machine filter to the destination via `machines.select(...,
 { reason: "move" })`, and dispatches `hasna:note-move` with `{ targetMachine,
@@ -466,7 +478,16 @@ window.PersonalNotes.view.state()
 `friendlyName`, `displayName`), switches the main view to Notes, clears the
 sidebar label filter, resets note pagination to the latest 10, selects the
 requested note when supplied, and otherwise selects the newest visible note for
-that machine. It also requests fresh machine details without blocking rendering.
+that machine. Selecting a machine filters purely over the LOCAL synced store —
+every machine's notes are local files after sync, so `machines.select(...)`
+never round-trips the native bridge. The `machineDetails` bridge remains for
+explicit details flows only (`machines.requestDetails(...)`, Settings machine
+rows, right-click "View details").
+
+Selecting a note that belongs to a different machine than the active filter
+(search, Home recent cards, chat source chips) jumps the machine filter to the
+note's own machine and shows the note (vision 9f8fba61) — selection + render
+MUST work across machine filter switches.
 
 The web layer dispatches:
 
@@ -508,11 +529,45 @@ window.PersonalNotes.machines.receiveDetails({
 ```
 
 Details include manifest fields when present (`friendlyName`, `slug`/`id`,
-`online`, `status`, `platform`, activity timestamps) and notes-derived fallbacks
-(`noteCount`, archive/trash counts, `latestNoteUpdatedAt`). Machine attribution
-is informational: rows come from the optional `~/.hasna/machines/machines.json`
-manifest (friendly names/slugs) plus the `machine` frontmatter seen in notes —
-there is no fleet sync engine behind them.
+`online`, `status`, `platform`, activity timestamps, `syncedAt`,
+`capabilities`) and notes-derived fallbacks (`noteCount`, archive/trash counts,
+`latestNoteUpdatedAt`). Machine attribution is informational: rows come from
+the optional `~/.hasna/machines/machines.json` manifest (friendly names/slugs)
+plus the `machine` frontmatter seen in notes — the manifest FILE is the only
+discovery source (no external CLI fallback), and there is no fleet sync engine
+behind the rows; notes travel via server sync only (see Sync Status).
+
+A note's `machine` frontmatter records a STABLE identity, never a cosmetic
+display name: `$PERSONALNOTES_MACHINE` override → `machine` in the sync client
+config (`~/.config/personalnotes/config.json`) → short hostname. The Swift
+shell (`Note.currentMachine`, also the boot `thisMachine`) and the JS lane
+(`machineIdentity()` in tools/notes-lib.mjs) resolve identically. Friendly
+names are display-layer: note rows and the editor meta line show the note's
+own `machineFriendlyName`, else the machines list's friendly name for the
+slug, else the raw slug.
+
+## Sync Status
+
+Server sync is owned by the `personalnotes` CLI (`personalnotes sync`, the
+`sync --watch` daemon, and the shell app's background timer, which spawns the
+same bundled CLI). The web layer only DISPLAYS the outcome — it never runs
+sync itself.
+
+- The boot/hydrate payload carries the `sync` object above; the host reads it
+  from `<data-root>/sync-status.json` and hydrates after every scheduled run,
+  so pulled notes appear without user action.
+- Settings → Machines renders it in the `#sync-status-row` element:
+  - `never` / missing → the off state with a pointer to
+    `personalnotes auth device` + `personalnotes sync --install-service`.
+  - `ok` → "Synced <relative time> · <server host>" (green dot).
+  - `error` → "Sync failing — <error>. Last success <relative time>." (red
+    dot). An error status MUST NEVER render as the green synced state — auth
+    failures stay visible until a run succeeds.
+- The web runtime exposes the raw snapshot:
+
+```js
+window.PersonalNotes.sync.status() // last boot/hydrate `sync` object, or null
+```
 
 Generated titles must set:
 

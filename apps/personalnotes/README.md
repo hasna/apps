@@ -51,22 +51,45 @@ contentFormat: markdown # canonical body format; legacy plain text is Markdown-c
 titleLocked: false      # true means the user manually named the note
 titleSource: generated  # default | generated | manual
 titleContentFingerprint: 7a9f2d
+rev: 3                  # per-note monotonic revision; bumped on every local mutation
 createdAt: 2026-06-22T09:00:00Z
 updatedAt: 2026-06-22T09:00:00Z
 author: hasna
 agent: personalnotes-app  # legacy `hasna-notes-app` / `open-notes-app` still parse
-machine: Mac
+machine: studio-mac       # informational attribution: which machine owns the note.
+                          # Stable identity: $PERSONALNOTES_MACHINE -> `machine` in
+                          # ~/.config/personalnotes/config.json -> short hostname.
+machineFriendlyName: ""   # optional display name for `machine`
+createdByActorType: human # human | agent | system
+createdByName: hasna
+archivedAt: ""
+trashedAt: ""
+trashExpiresAt: ""
+restoredAt: ""
 ---
 The markdown body goes here.
 ```
 
-Frontmatter key order is fixed: `id, title, labels, status, folder,
-contentFormat, title metadata, createdAt, updatedAt, author, agent, machine`,
-followed by provenance and lifecycle fields. Notes written by older versions
-(`tags`, no `folder` key, no `contentFormat` key, `agent: open-notes-app`) still
-parse — unknown/missing keys are tolerated. The user's folder list is persisted separately in
-`~/.hasna/apps/notes/folders.json`; labels can also be persisted in
-`~/.hasna/apps/notes/labels.json` so empty labels survive.
+This is frontmatter **schema v2**. Key order is fixed: `id, title, labels,
+status, folder, contentFormat, title metadata, rev, createdAt, updatedAt,
+author, agent, machine, machineFriendlyName, actor provenance, archive/trash
+timestamps`. `rev` is the sync ordering signal — a per-note monotonic integer
+bumped past the on-disk value on every local mutation; `updatedAt` wall clocks
+are a display hint only and never decide conflicts.
+
+Notes written by older versions still parse without migration (v2 auto-detects
+on read): `tags`, `contentType`, missing `folder`/`contentFormat`/`rev` keys,
+`agent: open-notes-app`, and the retired v1 machine-provenance keys
+(`sourceMachine`, `originMachine`, `previousMachine`, `targetMachineFriendlyName`,
+`openedFrom`, `sourceContext`, `trashMachine`, `movedAt`) are all tolerated —
+legacy source/origin friendly names map onto `machineFriendlyName` when they
+describe the note's own machine. To rewrite a store to v2 in one pass, run
+`personalnotes migrate --to-v2` (alias `migrate-frontmatter`, `--dry-run`
+supported): it is idempotent, backs originals up once to
+`<root>/backup-frontmatter-v1/`, rewrites atomically per file, preserves the
+body byte-for-byte, and logs every dropped v1/unknown key. The user's folder
+list is persisted separately in `~/.hasna/apps/notes/folders.json`; labels can
+also be persisted in `~/.hasna/apps/notes/labels.json` so empty labels survive.
 
 AI-generated titles are concise, capped to 3-4 words, and use the local sidecar's
 cheap OpenAI title model by default (`HASNA_NOTES_TITLE_MODEL`, default
@@ -169,21 +192,61 @@ removed in the next release. `hasna-notes-mcp` always serves the local notes
 store, as it always has — hosted mode is only reachable through
 `personalnotes-mcp`.
 
-Hosted PersonalNotes.ai mode is optional. Local mode never calls the hosted API
-unless explicitly configured.
+Server sync is optional. Local mode never calls any API unless explicitly
+configured. The same client speaks to the hosted service
+(https://personalnotes.ai, the default) or a self-hosted server — set
+`PERSONALNOTES_API_URL` (or config `apiUrl`) to switch backends.
 
 ```bash
+personalnotes auth device                      # device-code sign-in (either backend)
 personalnotes auth login --email you@example.com
 personalnotes auth verify --email you@example.com --code 123456
+personalnotes sync                             # push local notes, pull all machines' notes
+personalnotes sync --dry-run --json            # preview without writing
 personalnotes cloud status
 personalnotes cloud list --json
 PERSONALNOTES_MODE=hosted PERSONALNOTES_API_KEY=pn_... personalnotes-mcp
 ```
 
+`personalnotes sync` maps the local markdown store to `/api/v1/sync` batches:
+notes from every machine converge on every machine with per-machine attribution
+preserved, purges propagate as tombstones (deletions never resurrect), and
+concurrent edits keep both versions. Design and the conflict policy:
+[docs/sync.md](docs/sync.md).
+
+### Automatic sync (macOS and Linux)
+
+Sync does not need the app open. `personalnotes sync --watch` runs a daemon
+that polls on an interval (config `syncIntervalMinutes`, default 5 minutes,
+floor 1, jittered) AND watches the notes folder, so local edits sync within
+seconds. One daemon per store; every run takes a stale-safe lock so manual
+runs, the daemon, and the macOS app never double-sync.
+
+Install it as a user service — the same two commands on both platforms:
+
+```bash
+personalnotes auth device               # once per machine
+personalnotes sync --install-service    # writes the service file + prints the enable command
+
+# macOS  -> ~/Library/LaunchAgents/com.personalnotes.sync.plist   (launchctl load ...)
+# Linux  -> ~/.config/systemd/user/personalnotes-sync.service     (systemctl --user enable --now personalnotes-sync)
+
+personalnotes sync status               # last run, server, cursor, errors
+personalnotes sync --uninstall-service  # stop + remove
+```
+
+Daemon logs go to `~/Library/Logs/PersonalNotes/sync.log` (macOS) or
+`~/.local/state/personalnotes/sync.log` (Linux). Every attempt — including
+failures — is recorded in `<data-root>/sync-status.json`; the macOS app shows
+it under Settings → Machines, and a failing sync is always shown as failing,
+never as a green checkmark. The macOS app additionally runs the same CLI sync
+on a background timer while it is open and hydrates the UI after each pull, so
+other machines' notes appear without restarting the app.
+
 The CLI and MCP both default lists to the latest 10 notes and return pagination
-metadata in JSON/MCP responses. CLI/MCP creation supports agent provenance fields
-such as `actorType`, `actorName`, `sourceMachine`, `targetMachine`, `openedFrom`,
-and `sourceContext`. Machine details are available through `personalnotes machines
+metadata in JSON/MCP responses. CLI/MCP creation supports actor provenance
+(`actorType`, `actorName`) and machine attribution (`targetMachine`, plus a
+friendly display name). Machine details are available through `personalnotes machines
 list`, `personalnotes machines details <id>`, and MCP `machines_list` /
 `machines_details`; details combine open-machines fields with notes-derived
 fallback counts and activity timestamps.

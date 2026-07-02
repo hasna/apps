@@ -37,6 +37,7 @@
     noteListLimit: 10,    // sidebar Notes list (contract: latest 10); "View more" opens the full Notes page
     recentLimit: 3,       // Home recent rows — kept deliberately light (no inline expand)
     settings: { trashRetentionDays: 30 },
+    sync: null,           // last sync outcome from the host boot payload (sync-status.json)
     chat: {
       id: 'chat-local',
       status: 'ready',
@@ -144,23 +145,16 @@
 
   function defaultProvenance(machine) {
     const m = machine || state.thisMachine || 'unknown';
+    const row = machineById(m);
     return {
+      rev: 1,
+      machineFriendlyName: (row && row.friendlyName) || '',
       createdByActorType: 'human',
       createdByName: '',
-      sourceMachine: m,
-      sourceMachineFriendlyName: '',
-      originMachine: m,
-      originMachineFriendlyName: '',
-      targetMachineFriendlyName: '',
-      previousMachine: '',
-      openedFrom: '',
-      sourceContext: '',
       archivedAt: '',
       trashedAt: '',
-      trashMachine: '',
       trashExpiresAt: '',
       restoredAt: '',
-      movedAt: '',
     };
   }
 
@@ -484,6 +478,18 @@
 	    ].filter(Boolean).map(String));
 	  }
 
+  // The user-facing machine attribution for a note (vision MUST: every note
+  // shows which machine it belongs to). The note's own frontmatter friendly
+  // name wins; otherwise the machines list (manifest/host-supplied friendly
+  // names) resolves the slug; the raw slug is the last resort.
+  function machineLabelFor(note) {
+    if (!note) return '';
+    if (note.machineFriendlyName) return note.machineFriendlyName;
+    const row = machineById(note.machine);
+    if (row && (row.friendlyName || row.displayName)) return row.friendlyName || row.displayName;
+    return note.machine || '';
+  }
+
   function machineNoteCounts(machineOrId) {
     const aliases = machineAliases(machineOrId);
     const notes = state.notes.filter(n => aliases.has(n.machine));
@@ -512,8 +518,20 @@
     const machineId = String(id || '').trim();
     const source = machineById(machineId) || { id: machineId, slug: machineId, displayName: machineId };
     const counts = machineNoteCounts(source);
+    // Sync facts are never fabricated: `syncedAt`/`capabilities` pass through
+    // from the host/manifest row, and THIS machine's row is overlaid from the
+    // boot `sync` object (the S1 client state) — a configured sync client is
+    // the "notes-sync" capability, its last good run is `syncedAt`.
+    let syncedAt = source.syncedAt || '';
+    let capabilities = Array.isArray(source.capabilities) ? source.capabilities.map(String).filter(Boolean) : [];
+    if (state.sync && state.sync.status && state.sync.status !== 'never'
+        && state.thisMachine && machineAliases(source).has(state.thisMachine)) {
+      syncedAt = latestISO([syncedAt, state.sync.lastSuccessAt]);
+      if (capabilities.indexOf('notes-sync') < 0) capabilities = capabilities.concat('notes-sync');
+    }
     const recentActivityAt = latestISO([
       source.recentActivityAt,
+      syncedAt,
       source.lastSeenAt,
       source.updatedAt,
       counts.latestNoteUpdatedAt,
@@ -525,6 +543,8 @@
       friendlyName: source.friendlyName || '',
       status: source.status || (source.online === true ? 'online' : (source.online === false ? 'offline' : 'unknown')),
       online: source.online == null ? null : !!source.online,
+      syncedAt,
+      capabilities,
       recentActivityAt,
     });
   }
@@ -642,7 +662,10 @@
 	        view: viewSnapshot(),
 	      },
 	    }));
-	    if (!isAll) requestMachineDetails(target);
+	    // Filtering is purely local: after sync every machine's notes are local
+	    // files, so selecting a machine never round-trips the native bridge. The
+	    // machineDetails bridge remains for explicit details flows
+	    // (machines.requestDetails / Settings machine rows).
 	    render();
 	    return selectedMachine;
 	  }
@@ -719,6 +742,7 @@
     renderHome();
     renderNavActive();
     renderLabelsPage(); // Settings → Labels management list stays in sync
+    renderSyncStatus(); // Settings → Machines sync row follows every hydrate
     renderRecPill();    // recording indicator follows the active screen (hidden on Home)
   }
 
@@ -967,7 +991,7 @@
       // Third row: machine + friendly relative time, kept compact and muted. Trash rows
       // add the retention countdown from trashExpiresAt.
       const meta = el('div', 'np-row-meta');
-      const machine = (n.sourceMachineFriendlyName || n.machine || '').trim();
+      const machine = machineLabelFor(n).trim();
       if (machine && machine !== 'unknown') meta.appendChild(el('span', 'np-row-machine', machine));
       const age = relTime(n.updatedAt);
       if (age) meta.appendChild(el('span', 'np-row-age', age));
@@ -1061,6 +1085,37 @@
       card.addEventListener('click', () => { selectMachine(m.id, { reason: 'settings' }); showApp(); });
       host.appendChild(card);
     });
+  }
+
+  // ------------------------------------------------------------------ Sync status row
+  // Settings → Machines shows the last sync outcome (host boot payload `sync`,
+  // read from <data-root>/sync-status.json). Contract: an error status must
+  // NEVER render as the green synced state — auth failures stay visible.
+  function syncStatusLine(sync) {
+    if (!sync || sync.status === 'never' || (!sync.lastSyncAt && sync.status !== 'error')) {
+      return {
+        status: 'off',
+        text: 'Not syncing yet — sign in with "personalnotes auth device", then "personalnotes sync --install-service".',
+      };
+    }
+    let server = String(sync.apiUrl || '');
+    try { server = new URL(sync.apiUrl).host || server; } catch (err) { /* show raw value */ }
+    if (sync.status === 'error') {
+      const last = sync.lastSuccessAt ? ' Last success ' + relTime(sync.lastSuccessAt) + '.' : '';
+      return { status: 'error', text: 'Sync failing — ' + (sync.error || 'unknown error') + '.' + last };
+    }
+    return {
+      status: 'ok',
+      text: 'Synced ' + relTime(sync.lastSyncAt) + (server ? ' · ' + server : ''),
+    };
+  }
+
+  function renderSyncStatus() {
+    const row = $('sync-status-row');
+    if (!row) return;
+    const line = syncStatusLine(state.sync);
+    row.textContent = line.text;
+    row.className = 'sync-status sync-' + line.status;
   }
 
   // ------------------------------------------------------------------ Labels page
@@ -1343,7 +1398,7 @@
       if (bodyEl.value !== note.body) bodyEl.value = note.body || '';
     }
 
-    $('em-machine').textContent = note.machine || state.thisMachine;
+    $('em-machine').textContent = machineLabelFor(note) || state.thisMachine;
     $('em-updated').textContent = 'updated ' + relTime(note.updatedAt);
 
     const tags = $('em-tags');
@@ -1510,22 +1565,14 @@
 	      labels: n.labels || [], tags: n.labels || [],
       status: n.status || 'active', folder: n.folder || '',
       machine: n.machine, updatedAt: n.updatedAt, createdAt: n.createdAt,
+      machineFriendlyName: n.machineFriendlyName || '',
+      rev: Number(n.rev) >= 1 ? Math.floor(Number(n.rev)) : 1,
       createdByActorType: n.createdByActorType || 'human',
       createdByName: n.createdByName || '',
-      sourceMachine: n.sourceMachine || n.machine || state.thisMachine,
-      sourceMachineFriendlyName: n.sourceMachineFriendlyName || '',
-      originMachine: n.originMachine || n.machine || state.thisMachine,
-      originMachineFriendlyName: n.originMachineFriendlyName || '',
-      targetMachineFriendlyName: n.targetMachineFriendlyName || '',
-      previousMachine: n.previousMachine || '',
-      openedFrom: n.openedFrom || '',
-      sourceContext: n.sourceContext || '',
       archivedAt: n.archivedAt || '',
       trashedAt: n.trashedAt || '',
-      trashMachine: n.trashMachine || '',
       trashExpiresAt: n.trashExpiresAt || '',
       restoredAt: n.restoredAt || '',
-      movedAt: n.movedAt || '',
       titleLocked: !!n.titleLocked,
       titleSource: n.titleSource || (isDefaultTitle(n.title) ? 'default' : 'manual'),
       titleContentFingerprint: n.titleContentFingerprint || '',
@@ -1603,7 +1650,15 @@
     // renderEditor() silently swaps the selection to the newest visible note.
     const note = noteById(id);
     if (note) {
-      if (state.machineFilter !== ALL && !noteMatchesMachine(note, state.machineFilter)) state.machineFilter = ALL;
+      if (state.machineFilter !== ALL && !noteMatchesMachine(note, state.machineFilter)) {
+        // Vision bug 9f8fba61: selecting another machine's note must navigate —
+        // jump the machine filter TO the note's own machine (canonical id) and
+        // show it. All machines' notes are local files after sync, so this is a
+        // pure local filter+select. Unattributed notes fall back to All Machines.
+        state.machineFilter = (note.machine && note.machine !== 'unknown')
+          ? machineDetails(note.machine).id
+          : ALL;
+      }
       if (state.labelFilter !== ALL && noteLabels(note).indexOf(state.labelFilter) < 0) state.labelFilter = ALL;
       const status = note.status === 'archived' ? 'archived' : (note.status === 'trash' ? 'trash' : 'active');
       if (state.statusFilter !== 'all' && state.statusFilter !== status) state.statusFilter = status;
@@ -1856,7 +1911,6 @@
     note.status = 'archived';
     note.archivedAt = new Date().toISOString();
     note.trashedAt = '';
-    note.trashMachine = '';
     note.trashExpiresAt = '';
     note.updatedAt = new Date().toISOString();
     postNative('archive', serializeNote(note));
@@ -1870,7 +1924,6 @@
     note.status = 'active';
     note.archivedAt = '';
     note.trashedAt = '';
-    note.trashMachine = '';
     note.trashExpiresAt = '';
     note.restoredAt = new Date().toISOString();
     note.updatedAt = note.restoredAt;
@@ -1884,7 +1937,6 @@
     const now = new Date().toISOString();
     note.status = 'trash';
     note.trashedAt = now;
-    note.trashMachine = note.machine || state.thisMachine;
     note.trashExpiresAt = addDaysISO(now, state.settings.trashRetentionDays);
     note.updatedAt = now;
     postNative('trash', serializeNote(note), { confirmed: !!(options && options.confirmed) });
@@ -1906,8 +1958,9 @@
   }
 
   // Quick action "move to a machine" (vision 4d696e4b): re-attribute a note to another
-  // machine, preserving origin/previous provenance. The same mutation ships in the CLI
-  // ("notes move") and MCP (notes_move_to_machine) — app parity is a vision MUST.
+  // machine — a plain informational update of `machine` (+ friendly name) in schema v2.
+  // The same mutation ships in the CLI ("notes move") and MCP (notes_move_to_machine) —
+  // app parity is a vision MUST.
   function moveNoteToMachine(id, machine, friendlyName) {
     const note = noteById(id);
     const requested = String(machine || '').trim();
@@ -1919,12 +1972,9 @@
       selectMachine(target, { noteId: id, reason: 'move' });
       return note;
     }
-    if (!note.originMachine) note.originMachine = note.machine || state.thisMachine;
-    note.previousMachine = note.machine || '';
     note.machine = target;
-    note.targetMachineFriendlyName = targetMachineFriendlyName;
-    note.movedAt = new Date().toISOString();
-    note.updatedAt = note.movedAt;
+    note.machineFriendlyName = targetMachineFriendlyName;
+    note.updatedAt = new Date().toISOString();
     postNative('move', serializeNote(note));
     const selectedMachine = selectMachine(target, { noteId: note.id, reason: 'move' });
     dispatchNoteEvent('hasna:note-move', note, {
@@ -1958,13 +2008,10 @@
       createdBy: note.createdByName || note.author || 'Unknown',
       createdByActorType: note.createdByActorType || 'human',
       createdAt: note.createdAt,
-      sourceMachine: note.sourceMachine || note.machine,
-      sourceMachineFriendlyName: note.sourceMachineFriendlyName || bootInfo.sourceMachineFriendlyName || '',
-      originMachine: note.originMachine || note.machine,
-      originMachineFriendlyName: note.originMachineFriendlyName || bootInfo.originMachineFriendlyName || '',
+      machine: note.machine,
+      machineFriendlyName: note.machineFriendlyName || bootInfo.machineFriendlyName || '',
       currentMachine: note.machine,
-      openedFrom: note.openedFrom || '',
-      sourceContext: note.sourceContext || '',
+      rev: Number(note.rev) >= 1 ? Math.floor(Number(note.rev)) : 1,
     };
   }
 
@@ -3244,6 +3291,7 @@
     if (b.settings && Number(b.settings.trashRetentionDays) > 0) {
       state.settings.trashRetentionDays = Number(b.settings.trashRetentionDays);
     }
+    if (b.sync && typeof b.sync === 'object') state.sync = b.sync;
     // List defaults apply on the initial boot only (contract: latest 10). The host
     // hydrates after EVERY write — re-applying here would reset the user's pagination.
     if (!adopt.booted) {
@@ -3273,7 +3321,9 @@
       online: m.online == null ? null : !!m.online,
       updatedAt: m.updatedAt || '',
       lastSeenAt: m.lastSeenAt || '',
+      syncedAt: m.syncedAt || '',
       recentActivityAt: m.recentActivityAt || '',
+      capabilities: Array.isArray(m.capabilities) ? m.capabilities.map(String).filter(Boolean) : [],
       noteCount: Number(m.noteCount || 0),
       activeNoteCount: Number(m.activeNoteCount || m.noteCount || 0),
       archivedNoteCount: Number(m.archivedNoteCount || 0),
@@ -3295,24 +3345,16 @@
       status: n.status || 'active',
       folder: n.folder || '',
       machine: n.machine || 'unknown',
+      machineFriendlyName: n.machineFriendlyName || '',
+      rev: Number(n.rev) >= 1 ? Math.floor(Number(n.rev)) : 1,
       updatedAt: n.updatedAt || new Date().toISOString(),
       createdAt: n.createdAt || n.updatedAt || new Date().toISOString(),
       createdByActorType: n.createdByActorType || 'human',
       createdByName: n.createdByName || '',
-      sourceMachine: n.sourceMachine || n.machine || 'unknown',
-      sourceMachineFriendlyName: n.sourceMachineFriendlyName || '',
-      originMachine: n.originMachine || n.machine || 'unknown',
-      originMachineFriendlyName: n.originMachineFriendlyName || '',
-      targetMachineFriendlyName: n.targetMachineFriendlyName || '',
-      previousMachine: n.previousMachine || '',
-      openedFrom: n.openedFrom || '',
-      sourceContext: n.sourceContext || '',
       archivedAt: n.archivedAt || '',
       trashedAt: n.trashedAt || '',
-      trashMachine: n.trashMachine || '',
       trashExpiresAt: n.trashExpiresAt || '',
       restoredAt: n.restoredAt || '',
-      movedAt: n.movedAt || '',
       info: n.info || null,
       titleLocked: !!n.titleLocked,
       titleSource: n.titleSource || (isDefaultTitle(n.title) ? 'default' : 'manual'),
@@ -3777,8 +3819,6 @@
         confirm: true,
         approvalId: approval.id,
         actorName: 'PersonalNotes Chat',
-        openedFrom: 'chat-approval',
-        sourceContext: approval.id,
       }),
     });
     if (!response.ok) throw new Error('approval_failed');
@@ -3905,6 +3945,10 @@
 	      requestDetails: requestMachineDetails,
 	      receiveDetails: receiveMachineDetails,
 	    },
+    sync: {
+      // Last sync outcome from the boot payload (null = host never reported).
+      status: function () { return state.sync ? Object.assign({}, state.sync) : null; },
+    },
     labels: {
       list: function () { return allLabels(); },
       create: createLabelLocal,

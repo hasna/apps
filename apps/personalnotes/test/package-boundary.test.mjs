@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { CONFIG_PATH, DEFAULT_API_URL } from '../cloud/index.mjs';
+import { CONFIG_PATH, DEFAULT_API_URL } from '../sync/client.mjs';
+import { createCloudClient, PersonalNotesCloudClient } from '../cloud/index.mjs';
+import { createClient, PersonalNotesClient } from '../sync/index.mjs';
 
 async function readTree(dir, files = []) {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
@@ -19,10 +21,14 @@ describe('package boundary', () => {
     expect(pkg.name).toBe('@hasna/personalnotes');
     expect(pkg.bin.personalnotes).toBe('bin/personalnotes.mjs');
     expect(pkg.bin['personalnotes-mcp']).toBe('bin/personalnotes-mcp.mjs');
+    expect(pkg.exports['./sync']).toBe('./sync/index.mjs');
+    // Deprecated shim kept one release for existing importers.
     expect(pkg.exports['./cloud']).toBe('./cloud/index.mjs');
+    expect(PersonalNotesCloudClient).toBe(PersonalNotesClient);
+    expect(createCloudClient).toBe(createClient);
   });
 
-  test('cloud client defaults to hosted API and user config path', () => {
+  test('sync client defaults to hosted API and user config path', () => {
     expect(DEFAULT_API_URL).toBe('https://personalnotes.ai');
     expect(CONFIG_PATH).toContain('.config/personalnotes/config.json');
   });

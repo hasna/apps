@@ -239,8 +239,6 @@ function noteAgentTools(context = {}) {
           ...context,
           actorType: 'agent',
           actorName: context.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'PersonalNotes Chat',
-          openedFrom: context.openedFrom || 'sidecar-chat',
-          sourceContext: context.sourceContext || 'ai-sdk-chat',
           confirmWrites: false,
         });
         rememberApproval(result);
@@ -508,8 +506,6 @@ async function handleChat(req, res) {
       instructions,
       tools: body.snapshotOnly ? snapshotTools(notes) : noteAgentTools({
         actorName: body.actorName,
-        openedFrom: goal ? 'sidecar-goal' : 'sidecar-chat',
-        sourceContext: goal ? goalObjective : rawPrompt.slice(0, 300),
       }),
       stopWhen: stepCountIs(maxSteps),
       temperature: 0.2,
@@ -581,8 +577,6 @@ async function handleTool(req, res) {
     const result = await executeNotesAgentTool(name, input, {
       actorType: 'agent',
       actorName: body.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'PersonalNotes Chat',
-      openedFrom: body.openedFrom || 'sidecar-chat-approval',
-      sourceContext: body.sourceContext || name,
       dryRun: !!body.dryRun,
       confirmWrites: !!body.confirm,
     });

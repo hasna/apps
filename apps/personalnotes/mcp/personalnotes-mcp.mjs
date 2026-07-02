@@ -70,10 +70,7 @@ const tools = [
         actorType: { type: 'string', enum: ['human', 'agent', 'system'] },
         actorName: { type: 'string' },
         targetMachine: { type: 'string' },
-        sourceMachine: { type: 'string' },
-        sourceMachineFriendlyName: { type: 'string' },
-        openedFrom: { type: 'string' },
-        sourceContext: { type: 'string' },
+        machineFriendlyName: { type: 'string' },
       },
     },
   },
@@ -86,7 +83,6 @@ const tools = [
         id: { type: 'string' },
         permanent: { type: 'boolean' },
         retentionDays: { type: 'number' },
-        trashMachine: { type: 'string' },
         confirm: { type: 'boolean' },
         dryRun: { type: 'boolean' },
       },
@@ -95,7 +91,7 @@ const tools = [
   },
   {
     name: 'notes_move_to_machine',
-    description: 'Move a note to another owning machine while preserving origin metadata.',
+    description: 'Re-attribute a note to another machine (informational machine + friendly name).',
     inputSchema: {
       type: 'object',
       properties: { id: { type: 'string' }, machine: { type: 'string' }, machineName: { type: 'string' } },
@@ -115,7 +111,6 @@ const tools = [
       properties: {
         id: { type: 'string' },
         retentionDays: { type: 'number' },
-        trashMachine: { type: 'string' },
         confirm: { type: 'boolean' },
         dryRun: { type: 'boolean' },
       },
@@ -268,8 +263,6 @@ const tools = [
         confirm: { type: 'boolean' },
         dryRun: { type: 'boolean' },
         actorName: { type: 'string' },
-        openedFrom: { type: 'string' },
-        sourceContext: { type: 'string' },
         limit: { type: 'number' },
       },
       required: ['prompt'],
@@ -285,8 +278,6 @@ const tools = [
         confirm: { type: 'boolean' },
         dryRun: { type: 'boolean' },
         actorName: { type: 'string' },
-        openedFrom: { type: 'string' },
-        sourceContext: { type: 'string' },
         maxSteps: { type: 'number' },
       },
       required: ['objective'],
@@ -303,8 +294,6 @@ const tools = [
         confirm: { type: 'boolean' },
         dryRun: { type: 'boolean' },
         actorName: { type: 'string' },
-        openedFrom: { type: 'string' },
-        sourceContext: { type: 'string' },
       },
       required: ['name'],
     },
@@ -436,13 +425,9 @@ async function callTool(name, args) {
       body: String(args.body || ''),
       labels: normalizeLabels(args.labels || []),
       machine: args.targetMachine,
+      machineFriendlyName: args.machineFriendlyName || '',
       createdByActorType: args.actorType || 'agent',
       createdByName: args.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'agent',
-      sourceMachine: args.sourceMachine,
-      sourceMachineFriendlyName: args.sourceMachineFriendlyName,
-      originMachine: args.originMachine || args.targetMachine,
-      openedFrom: args.openedFrom || '',
-      sourceContext: args.sourceContext || '',
       titleLocked: !!title,
       titleSource: title ? 'manual' : 'default',
       createdAt: now,
@@ -461,13 +446,13 @@ async function callTool(name, args) {
     } else {
       const preview = { id: note.id, title: note.title, fromStatus: note.status, toStatus: 'trash', permanent: false };
       if (args.dryRun || !args.confirm) return textResult(destructivePreview('notes_delete', args, preview));
-      return textResult(await trashNote(note.id, { retentionDays: args.retentionDays, trashMachine: args.trashMachine }));
+      return textResult(await trashNote(note.id, { retentionDays: args.retentionDays }));
     }
     return textResult({ ok: true });
   }
   if (name === 'notes_move_to_machine') {
     return textResult(await moveNoteToMachine(requireArg(args, 'id'), requireArg(args, 'machine'), {
-      targetMachineFriendlyName: args.machineName,
+      machineFriendlyName: args.machineName,
     }));
   }
   if (name === 'notes_archive') return textResult(await archiveNote(requireArg(args, 'id')));
@@ -479,7 +464,6 @@ async function callTool(name, args) {
     if (args.dryRun || !args.confirm) return textResult(destructivePreview('notes_trash', args, preview));
     return textResult(await trashNote(note.id, {
       retentionDays: args.retentionDays,
-      trashMachine: args.trashMachine,
     }));
   }
   if (name === 'notes_restore') return textResult(await restoreNote(requireArg(args, 'id')));
@@ -561,8 +545,6 @@ async function callTool(name, args) {
       dryRun: !!args.dryRun,
       actorName: args.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'MCP Agent',
       actorType: 'agent',
-      openedFrom: args.openedFrom || 'mcp-agent',
-      sourceContext: args.sourceContext || String(args.prompt).slice(0, 200),
       limit: args.limit,
       onEvent: event => events.push(event),
     });
@@ -576,8 +558,6 @@ async function callTool(name, args) {
       dryRun: !!args.dryRun,
       actorName: args.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'MCP Agent',
       actorType: 'agent',
-      openedFrom: args.openedFrom || 'mcp-agent-goal',
-      sourceContext: args.sourceContext || String(args.objective).slice(0, 200),
       maxSteps: args.maxSteps,
       onEvent: event => events.push(event),
     });
@@ -589,8 +569,6 @@ async function callTool(name, args) {
       dryRun: !!args.dryRun,
       actorName: args.actorName || process.env.HASNA_NOTES_ACTOR_NAME || 'MCP Agent',
       actorType: 'agent',
-      openedFrom: args.openedFrom || 'mcp-agent',
-      sourceContext: args.sourceContext || args.name,
     });
     return textResult(result);
   }
