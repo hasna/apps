@@ -670,6 +670,27 @@ window.webkit.messageHandlers.window.postMessage({
 });
 ```
 
+## Theme Bridge
+
+The web layer owns the persisted appearance preference (Settings → Appearance,
+localStorage `personalnotes-theme`). On boot and on every change it reports the
+preference to the native host so the window backing and the WKWebView color
+scheme match the app theme, not just the OS appearance:
+
+```js
+window.webkit.messageHandlers.window.postMessage({
+  action: "theme",
+  theme: "system" | "light" | "dark",   // the user's preference
+  effective: "light" | "dark"           // informational: what is rendered now
+});
+```
+
+The shell pins the window `NSAppearance` for explicit `light`/`dark` (releasing
+it for `system`), re-resolves the appearance-dynamic canvas backing color, and
+persists the preference (UserDefaults `PersonalNotesThemePref`) so the next
+launch paints the correct backing before the web layer boots. Browsers without
+`window.webkit` skip the post — theme handling stays fully functional.
+
 The native menu/status item controls the same recorder by evaluating:
 
 ```js

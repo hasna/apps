@@ -35,6 +35,27 @@ rm -rf "$RESOURCES/web"
 mkdir -p "$RESOURCES/web"
 cp -R "$REPO_ROOT/web/." "$RESOURCES/web/"
 
+# Brand assets: the menu-bar TEMPLATE glyphs (idle + recording) consumed by the
+# status item (main.swift showStatusItem loads Resources/brand/*.svg with
+# isTemplate=true so macOS tints them for light/dark menu bars).
+echo "==> Bundling brand glyphs -> Resources/brand"
+rm -rf "$RESOURCES/brand"
+mkdir -p "$RESOURCES/brand"
+cp "$REPO_ROOT/assets/brand/personalnotes-menubar.svg" \
+   "$REPO_ROOT/assets/brand/personalnotes-menubar-rec.svg" "$RESOURCES/brand/"
+
+# App icon: assemble AppIcon.icns from the pre-rendered iconset (generated from
+# assets/brand/personalnotes-icon.svg by tools/render-appicon.mjs and checked in).
+# iconutil ships with macOS; skip gracefully if the iconset or tool is missing.
+ICONSET="$REPO_ROOT/assets/brand/AppIcon.iconset"
+if [[ -d "$ICONSET" ]] && command -v iconutil >/dev/null 2>&1; then
+  echo "==> Assembling AppIcon.icns (iconutil)"
+  iconutil -c icns "$ICONSET" -o "$RESOURCES/AppIcon.icns" \
+    || echo "   (iconutil failed; continuing without app icon)"
+else
+  echo "==> AppIcon.iconset or iconutil unavailable; skipping app icon"
+fi
+
 # Bundle the AI sidecar (Node server + its node_modules) into Resources/ai-sidecar.
 # The host spawns Resources/ai-sidecar/server.mjs at launch. node_modules MUST be present
 # (the Vercel AI SDK + provider). Install deps DIRECTLY INTO THE BUNDLE so the result is
@@ -106,6 +127,12 @@ cat > "$CONTENTS/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+# Wire the icon key only when the icns actually made it into the bundle.
+if [[ -f "$RESOURCES/AppIcon.icns" ]]; then
+  /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon" "$CONTENTS/Info.plist" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile AppIcon" "$CONTENTS/Info.plist" 2>/dev/null || true
+fi
 
 echo "==> Ad-hoc codesign"
 codesign --force --deep --sign - "$APP"

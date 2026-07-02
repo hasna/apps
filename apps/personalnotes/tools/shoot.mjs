@@ -44,7 +44,9 @@ const SCREENS = [
 const want = process.argv.slice(2)
 const screens = want.length ? want : SCREENS
 
-const browser = await chromium.launch()
+// Headless Chromium passes --hide-scrollbars by default, which would blank the overlay
+// scrollbar evidence shots (spec §3.6) — drop that one default arg.
+const browser = await chromium.launch({ ignoreDefaultArgs: ['--hide-scrollbars'] })
 
 // Inject a fake recording-active state into the running app so the timer-in-circle, the
 // pause control, the persistent pill and (optionally) the transcript surface can be
@@ -179,7 +181,7 @@ for (const s of screens) {
     await manyNotesBoot(page)
     await page.goto(indexURL, { waitUntil: 'networkidle' })
     await page.waitForTimeout(200)
-    await page.locator('#home-all-notes').click()
+    await page.locator('#home-view-all').click()
     await page.waitForTimeout(200)
     await shoot(page, 'noteslist')
     await ctx.close()
@@ -248,14 +250,15 @@ for (const s of screens) {
     await shoot(page, 'home-noai')
     await ctx.close()
   } else if (s === 'ctxmenu') {
-    // Open the right-click context menu on a note row.
-    const { ctx, page } = await freshPage(false, true)
-    // Switch to the notes screen first by clicking a note, then right-click a row.
+    // Open the right-click context menu on a note row (seed notes so rows exist).
+    const ctx = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: SCALE })
+    const page = await ctx.newPage()
+    await manyNotesBoot(page)
+    await page.goto(indexURL, { waitUntil: 'networkidle' })
+    await page.waitForTimeout(200)
     const rows = page.locator('.note-row')
     if (await rows.count()) {
-      const row = rows.nth(1)
-      const box = await row.boundingBox()
-      await row.click({ button: 'right' })
+      await rows.nth(1).click({ button: 'right' })
       await page.waitForTimeout(150)
     }
     await shoot(page, 'ctxmenu')

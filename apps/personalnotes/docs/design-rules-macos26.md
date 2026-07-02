@@ -299,8 +299,16 @@ One brand purple across native and web. Canonical accent: **`#7C3AED`**
 | `--sb-grad-1` | `#4D2EB8` | `#381A6B` |
 | `--sb-grad-2` | `#85299E` | `#571A66` |
 | `--sb-text` | `rgba(255,255,255,.92)` | `rgba(255,255,255,.90)` |
-| `--sb-text-dim` | `rgba(255,255,255,.62)` | `rgba(255,255,255,.60)` |
+| `--sb-text-dim` | `rgba(255,255,255,.75)`¹ | `rgba(255,255,255,.60)` |
 | `--sb-row-active` | `rgba(255,255,255,.22)` | `rgba(255,255,255,.18)` |
+
+¹ The light value was lifted from the original `.62` draft: over the LIGHT
+gradient's lower stops (`#4D2EB8`→`#85299E`) white at `.62` computes 3.8–4.3:1
+— below the 4.5:1 floor Rules 12/20 require by default (not only under
+Increase Contrast, which still bumps it to `.78`). `.75` holds ≥4.5:1 on every
+stop. The dark gradient is deep enough that `.60` already passes (5.3–6.4:1).
+Dim text inside a glass-selected row additionally promotes to `--sb-text`
+(see `.note-row.active .note-age` in `web/styles.css`).
 | `--danger` | `#C0392B` | `#FF7B72` |
 | `--green` | `#1A7F37` | `#4CC38A` |
 

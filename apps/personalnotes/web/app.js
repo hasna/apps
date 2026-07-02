@@ -106,6 +106,23 @@
     if (text != null) n.textContent = text;
     return n;
   }
+  // Rule 14 / WCAG 2.1.1 — content rows are DIVs (they host nested controls and the
+  // inline rename input, which a <button> could not contain), so each clickable row is
+  // made keyboard-reachable here: Tab focuses it (tabindex=0 + role=button, drawing the
+  // standard :focus-visible ring), Enter/Space activates its click action. Keys arriving
+  // from nested controls (row action buttons, the rename field) are left alone.
+  function keyboardRow(row, label) {
+    row.tabIndex = 0;
+    row.setAttribute('role', 'button');
+    if (label) row.setAttribute('aria-label', label);
+    row.addEventListener('keydown', (e) => {
+      if (e.target !== row) return;                  // a nested control owns its keys
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      row.click();
+    });
+    return row;
+  }
   // The one relative-time formatter. Default: "just now", "8m ago", "3h ago",
   // "yesterday", "Jun 3". Short (note rows): "now", "8m", "3h", "Yesterday", "Jun 3".
   function relTime(iso, short) {
@@ -744,6 +761,7 @@
     renderLabelsPage(); // Settings → Labels management list stays in sync
     renderSyncStatus(); // Settings → Machines sync row follows every hydrate
     renderRecPill();    // recording indicator follows the active screen (hidden on Home)
+    syncHeaderScrollEdge(); // header scroll-edge fade tracks the now-visible scroller
   }
 
   // Labels filter section in the sidebar: "All" + one row per distinct label
@@ -776,6 +794,7 @@
   function labelRow(id, label, count) {
     const row = el('div', 'label-row');
     row.dataset.label = id;
+    keyboardRow(row, 'Filter notes by label: ' + label);
     if (state.labelFilter === id) row.classList.add('active');
     const left = el('div', 'lr-left');
     const ico = document.createElement('span');
@@ -898,6 +917,7 @@
       const body = n.body || n.content || '';
       card.dataset.noteId = n.id;
       card.dataset.copyText = body;
+      keyboardRow(card, 'Open note: ' + ((n.title && n.title.trim()) || 'Untitled Note'));
       card.appendChild(el('div', 'home-card-title', (n.title && n.title.trim()) || 'Untitled Note'));
       const sub = body.replace(/\s+/g, ' ').trim().slice(0, 72) || 'No content';
       card.appendChild(el('div', 'home-card-sub', sub));
@@ -985,6 +1005,7 @@
     list.forEach(n => {
       const row = el('div', 'np-row');
       row.dataset.id = n.id;
+      keyboardRow(row, 'Open note: ' + ((n.title && n.title.trim()) || 'Untitled Note'));
       const body = (n.body || n.content || '').replace(/\s+/g, ' ').trim();
       row.appendChild(el('div', 'np-row-title', (n.title && n.title.trim()) || 'Untitled Note'));
       row.appendChild(el('div', 'np-row-sub', body.slice(0, 120) || 'No content'));
@@ -1072,6 +1093,7 @@
       const card = el('div', 'mp-row');
       const left = el('div', 'mp-left');
       const name = (m.displayName || m.id || 'Unknown machine').trim();
+      keyboardRow(card, 'Filter notes by machine: ' + name);
       left.appendChild(el('div', 'mp-name', name));
       const sub = [];
       if (m.platform) sub.push(m.platform);
@@ -1253,6 +1275,7 @@
     list.forEach(n => {
       const row = el('div', 'note-row');
       row.dataset.id = n.id;
+      keyboardRow(row, 'Open note: ' + ((n.title && n.title.trim()) || 'Untitled Note'));
       if (n.id === state.selectedId && state.screen === 'notes') row.classList.add('active');
       const title = el('span', 'note-title', (n.title && n.title.trim()) ? n.title : 'Untitled Note');
       if (!(n.title && n.title.trim())) title.classList.add('untitled');
@@ -1308,6 +1331,7 @@
   function machineRow(id, label, count, isAll, machine) {
     const row = el('div', 'machine-row');
     row.dataset.machine = id;
+    keyboardRow(row, 'Filter notes by machine: ' + label);
     if (machine && machine.updatedAt) row.dataset.updatedAt = machine.updatedAt;
     if (machine && machine.status) row.dataset.status = machine.status;
     if (machine && machine.online != null) row.dataset.online = String(!!machine.online);
@@ -1756,6 +1780,16 @@
     document.querySelectorAll('.theme-card').forEach(c => {
       c.classList.toggle('theme-selected', c.getAttribute('data-theme') === theme);
     });
+    // Keep the native window backing in sync with the app's own theme preference
+    // (Rule 11 / spec §3.8): the shell pins the window NSAppearance for explicit
+    // 'light'/'dark' (so BrandColor.canvas AND the WKWebView's prefers-color-scheme
+    // resolve to the app theme, not the OS one) and returns to system for 'system'.
+    // No-op in plain browsers.
+    try {
+      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.window) {
+        window.webkit.messageHandlers.window.postMessage({ action: 'theme', theme: theme, effective: effective });
+      }
+    } catch (err) { /* browser mode */ }
   }
   function setTheme(theme) {
     try { localStorage.setItem(THEME_KEY, theme); } catch (e) {}
@@ -3070,6 +3104,7 @@
     list.forEach(n => {
       const row = el('div', 'sp-row');
       row.dataset.id = n.id;
+      keyboardRow(row, 'Open note: ' + ((n.title && n.title.trim()) || 'Untitled Note'));
       row.appendChild(el('div', 'sp-title', (n.title && n.title.trim()) || 'Untitled Note'));
       const body = (n.body || n.content || '').replace(/\s+/g, ' ').trim();
       row.appendChild(el('div', 'sp-sub', body.slice(0, 90) || 'No content'));
@@ -3119,7 +3154,47 @@
     const slash = $('slash-menu');
     if (slash && !slash.hidden && !slash.contains(e.target)) closeSlashMenu();
   }
-  function onWindowScroll() { closeContextMenu(); closeMdPop(); closeSlashMenu(); }
+  // ---- scroll chrome (design spec §3.6/§3.7 — purely presentational) ----
+  // Overlay scrollbars: the thin thumb is invisible at rest and appears while the
+  // scroller is hovered OR actively scrolling — tag the scrolled element with
+  // .scrolling and clear it shortly after the last scroll event (Rule 15).
+  const scrollingTimers = new Map();
+  function markScrolling(node) {
+    if (!node || node.nodeType !== 1) return;
+    node.classList.add('scrolling');
+    clearTimeout(scrollingTimers.get(node));
+    scrollingTimers.set(node, setTimeout(() => {
+      node.classList.remove('scrolling');
+      scrollingTimers.delete(node);
+    }, 700));
+  }
+  // Scroll-edge fade under the content header (Rule 6): .scrolled on #content shows the
+  // soft gradient once page content actually sits beneath the header — never a border.
+  // Only the page-level scrollers drive it; inner scrollers (chat log, transcript) don't.
+  const PAGE_SCROLLERS = '.home,.np-inner,.chat-inner,.editor-scroll';
+  function syncHeaderScrollEdge(fromNode) {
+    const content = $('content');
+    if (!content) return;
+    let el = (fromNode && fromNode.nodeType === 1 && content.contains(fromNode)) ? fromNode : null;
+    if (!el) {
+      for (const s of content.querySelectorAll(PAGE_SCROLLERS)) {
+        if (s.offsetParent !== null) { el = s; break; }   // the visible page scroller
+      }
+    }
+    content.classList.toggle('scrolled', !!el && (el.scrollTop || 0) > 0);
+  }
+  function onWindowScroll(e) {
+    closeContextMenu(); closeMdPop(); closeSlashMenu();
+    const node = (e && e.target && e.target.nodeType === 1) ? e.target : null;
+    markScrolling(node);
+    if (node && node.matches(PAGE_SCROLLERS)) syncHeaderScrollEdge(node);
+    // Sidebar nav scroll-edge fade (Rule 6): rows scrolling under the machines-dropdown
+    // chrome fade out via .nav-scrolled on the sidebar (styles.css .sidebar-top::after).
+    if (node && node.matches('.sidebar-nav')) {
+      const sb = node.closest('.sidebar');
+      if (sb) sb.classList.toggle('nav-scrolled', (node.scrollTop || 0) > 0);
+    }
+  }
   function onOpenSettings(e) { if (e) e.preventDefault(); showSettings('appearance'); }
   function onSettingsBack(e) {
     if (e) e.preventDefault();
@@ -3138,6 +3213,12 @@
   function onThemeCard(e) {
     const card = e.currentTarget;
     setTheme(card.getAttribute('data-theme'));
+  }
+  // Keyboard path for the DIV theme cards (Rule 14): Enter/Space selects like a click.
+  function onThemeCardKey(e) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    onThemeCard(e);
   }
   // Pause/resume toggles (home record control + the persistent pill share the logic).
   function onRecPauseToggle(e) {
@@ -3213,7 +3294,12 @@
     const openSet = $('open-settings'); if (openSet) openSet.addEventListener('click', onOpenSettings);
     const back = $('settings-back'); if (back) back.addEventListener('click', onSettingsBack);
     document.querySelectorAll('.set-item[data-tab]').forEach(s => s.addEventListener('click', onSettingsTab));
-    document.querySelectorAll('.theme-card[data-theme]').forEach(c => c.addEventListener('click', onThemeCard));
+    document.querySelectorAll('.theme-card[data-theme]').forEach(c => {
+      c.addEventListener('click', onThemeCard);
+      c.tabIndex = 0;                       // DIV cards: keyboard-reachable (Rule 14)
+      c.setAttribute('role', 'button');
+      c.addEventListener('keydown', onThemeCardKey);
+    });
     document.querySelectorAll('.retention-opt[data-days]').forEach(b => b.addEventListener('click', onRetentionOpt));
 
     initRecButton();
@@ -3273,7 +3359,10 @@
     const openSet = $('open-settings'); if (openSet) openSet.removeEventListener('click', onOpenSettings);
     const back = $('settings-back'); if (back) back.removeEventListener('click', onSettingsBack);
     document.querySelectorAll('.set-item[data-tab]').forEach(s => s.removeEventListener('click', onSettingsTab));
-    document.querySelectorAll('.theme-card[data-theme]').forEach(c => c.removeEventListener('click', onThemeCard));
+    document.querySelectorAll('.theme-card[data-theme]').forEach(c => {
+      c.removeEventListener('click', onThemeCard);
+      c.removeEventListener('keydown', onThemeCardKey);
+    });
     document.querySelectorAll('.retention-opt[data-days]').forEach(b => b.removeEventListener('click', onRetentionOpt));
   }
 

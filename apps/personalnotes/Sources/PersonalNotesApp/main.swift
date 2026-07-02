@@ -880,6 +880,36 @@ final class NotesBridge: @unchecked Sendable {
     }
 }
 
+// MARK: - Brand palette (design tokens)
+
+/// The native side of the shared design tokens (docs/design-rules-macos26.md §3.2).
+/// MUST stay in sync with `web/styles.css` `:root` / `html[data-theme="dark"]`:
+///   accent  #7C3AED light / #9D6BFF dark   (the ONE brand purple)
+///   canvas  #FFFFFF light / #1B1D21 dark   (--bg, the continuous canvas)
+/// Colors are appearance-dynamic so window backing and tints follow the effective
+/// appearance instead of flashing a fixed light color in dark mode (spec §3.8, Rule 11).
+enum BrandColor {
+    // Computed (not stored) so the type stays trivially concurrency-safe under Swift 6.
+    static var accent: NSColor {
+        dynamic(
+            light: NSColor(srgbRed: 0x7C / 255.0, green: 0x3A / 255.0, blue: 0xED / 255.0, alpha: 1),
+            dark: NSColor(srgbRed: 0x9D / 255.0, green: 0x6B / 255.0, blue: 0xFF / 255.0, alpha: 1)
+        )
+    }
+    static var canvas: NSColor {
+        dynamic(
+            light: .white,
+            dark: NSColor(srgbRed: 0x1B / 255.0, green: 0x1D / 255.0, blue: 0x21 / 255.0, alpha: 1)
+        )
+    }
+
+    private static func dynamic(light: NSColor, dark: NSColor) -> NSColor {
+        NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
+        }
+    }
+}
+
 // MARK: - Weak message-handler proxy (leak-safety)
 
 /// `WKUserContentController` RETAINS its script message handlers. If the AppDelegate
@@ -1035,7 +1065,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
-        window.backgroundColor = .white
+        // Token canvas color (light #FFFFFF / dark #1B1D21) — follows the effective
+        // appearance so dark mode never flashes a white backing on launch/resize.
+        window.backgroundColor = BrandColor.canvas
+        // An explicit web theme preference ('light'/'dark' in Settings → Appearance)
+        // overrides the OS appearance for the whole window: re-apply the preference the
+        // web layer last reported (persisted below) BEFORE first paint, so a light-theme
+        // user on a dark Mac never sees a dark backing flash (Rule 11 / spec §3.8).
+        applyThemePreference(UserDefaults.standard.string(forKey: Self.themePrefKey) ?? "system", persist: false)
         window.minSize = NSSize(width: 920, height: 640)
         window.center()
 
@@ -1067,12 +1104,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         web.frame = container.bounds
         container.addSubview(web)
         // The native drag band spans the FULL visible header in `body.native` mode: the
-        // 30px traffic-light inset PLUS the 30px control row beneath it (see `--native-inset`
-        // and `.content-header` in web/styles.css). The lower half lives inside the WKWebView,
-        // which swallows drags — so the strip must cover it too. The web layer reports the
-        // rects of the interactive controls in this band (minimize / compact), which the
-        // strip's hitTest lets through; everywhere else drags the window.
-        let headerDragHeight: CGFloat = 60
+        // 38px traffic-light inset (`--native-inset`, sized for Tahoe's larger buttons)
+        // PLUS the 30px control row beneath it (see `.content-header` in web/styles.css —
+        // inset + row = this height; the three change TOGETHER, spec §3.8). The lower part
+        // lives inside the WKWebView, which swallows drags — so the strip must cover it
+        // too. The web layer reports the rects of the interactive controls in this band
+        // (minimize / compact), which the strip's hitTest lets through; everywhere else
+        // drags the window. The top-left 78×40 traffic-light keep-out stays drag-only.
+        let headerDragHeight: CGFloat = 68
         let dragStrip = WindowDragStrip(frame: NSRect(x: 0, y: frame.height - headerDragHeight, width: frame.width, height: headerDragHeight))
         dragStrip.identifier = NSUserInterfaceItemIdentifier("window-drag-strip")
         dragStrip.autoresizingMask = [.width, .minYMargin]
@@ -1181,6 +1220,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                 DispatchQueue.main.async { [weak self] in
                     self?.handleRecordingLifecycle(state: state, elapsedMs: elapsedMs)
                 }
+            } else if action == "theme" {
+                // Contract: { action:"theme", theme:"system"|"light"|"dark" } — the web
+                // layer reports its persisted appearance preference (on boot and on every
+                // change) so the window backing matches the UI theme, not just the OS
+                // appearance (Rule 11 / spec §3.8). Persisted natively too, so the NEXT
+                // launch paints the right backing before the web layer boots.
+                let pref = (payload["theme"] as? String) ?? "system"
+                DispatchQueue.main.async { [weak self] in self?.applyThemePreference(pref, persist: true) }
             }
             return
         }
@@ -1292,17 +1339,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         strip.passthroughRects = rects
     }
 
-    /// Resize the top drag band. The full window uses the 60 px header band (30 px
+    /// Resize the top drag band. The full window uses the 68 px header band (38 px
     /// traffic-light inset + 30 px control row); the 220 px-tall compact quick-note
-    /// window keeps only the 30 px inset so the band never covers the composer.
+    /// window keeps only the 38 px inset so the band never covers the composer.
     private func setDragStripHeight(_ height: CGFloat) {
         guard let strip = dragStrip, let container = strip.superview else { return }
         strip.frame = NSRect(x: 0, y: container.bounds.height - height,
                              width: container.bounds.width, height: height)
     }
 
+    /// The web layer's persisted appearance preference (Settings → Appearance), reported
+    /// through the `window` bridge `theme` action and mirrored into UserDefaults so the
+    /// next launch paints the right backing before the web layer boots.
+    static let themePrefKey = "PersonalNotesThemePref"
+
+    /// Pin (or release) the window's appearance to match the web theme preference.
+    /// An explicit 'light'/'dark' pref forces the whole window's effective appearance,
+    /// which (a) resolves the appearance-dynamic `BrandColor.canvas` backing to the SAME
+    /// theme the web canvas shows — no wrong-theme flash behind launch/live-resize/
+    /// overscroll — and (b) makes the WKWebView's `prefers-color-scheme` / initial
+    /// `<meta name="color-scheme">` paint agree with the app theme (Rule 11, spec §3.8).
+    /// 'system' (default) inherits the OS appearance again.
+    private func applyThemePreference(_ pref: String, persist: Bool) {
+        switch pref {
+        case "light": window?.appearance = NSAppearance(named: .aqua)
+        case "dark":  window?.appearance = NSAppearance(named: .darkAqua)
+        default:      window?.appearance = nil   // follow the system appearance
+        }
+        // Re-assign so AppKit re-resolves the dynamic color under the new appearance now.
+        window?.backgroundColor = BrandColor.canvas
+        if persist { UserDefaults.standard.set(pref, forKey: Self.themePrefKey) }
+    }
+
     private func setCompact(_ on: Bool) {
         guard let window = window else { return }
+        // Rule 12 (docs/design-rules-macos26.md): the compact-window frame morph is a
+        // spatial animation — honor the system Reduce Motion setting and snap instead.
+        let animateFrame = !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         if on {
             guard !isCompact else { return }
             // Remember where we were so we can restore exactly.
@@ -1324,8 +1397,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             }
             window.level = .floating
             window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-            window.setFrame(NSRect(origin: origin, size: size), display: true, animate: true)
-            setDragStripHeight(30)
+            window.setFrame(NSRect(origin: origin, size: size), display: true, animate: animateFrame)
+            setDragStripHeight(38)
             window.makeKeyAndOrderFront(nil)
         } else {
             guard isCompact else { return }
@@ -1334,9 +1407,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             window.collectionBehavior = savedCollectionBehavior
             window.minSize = savedMinSize
             if let f = savedFrame {
-                window.setFrame(f, display: true, animate: true)
+                window.setFrame(f, display: true, animate: animateFrame)
             }
-            setDragStripHeight(60)
+            setDragStripHeight(68)
             window.makeKeyAndOrderFront(nil)
         }
     }
@@ -1586,14 +1659,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         refreshStatusMenuEnabled()
     }
 
+    // Menu-bar TEMPLATE glyphs (assets/brand/personalnotes-menubar{,-rec}.svg, bundled
+    // into Resources/brand by scripts/build_personalnotes.sh). Template images are
+    // monochrome — macOS tints them for light/dark menu bars, and contentTintColor
+    // carries the recording state (docs/brand-visual-system.md → "Menu bar"). Nil when
+    // running the bare binary outside the .app bundle; the title-only presentation
+    // below then keeps its legacy symbol prefixes.
+    private lazy var statusGlyphIdle: NSImage? = loadStatusGlyph("personalnotes-menubar")
+    private lazy var statusGlyphRec: NSImage? = loadStatusGlyph("personalnotes-menubar-rec")
+
+    private func loadStatusGlyph(_ name: String) -> NSImage? {
+        guard let url = Bundle.main.resourceURL?
+            .appendingPathComponent("brand", isDirectory: true)
+            .appendingPathComponent("\(name).svg"),
+            let img = NSImage(contentsOf: url) else { return nil }
+        img.isTemplate = true                       // macOS tints template images itself
+        img.size = NSSize(width: 18, height: 18)    // authored on the 18pt menu-bar grid
+        return img
+    }
+
+    /// Apply glyph + title + tint to the status button. With a bundled template glyph
+    /// the title drops its "●"/"❚❚" symbol prefix (the glyph + tint carry the state);
+    /// without one (bare `swift run`) the legacy text-only presentation stays.
+    private func setStatusButton(glyph: NSImage?, title: String, fallbackTitle: String, tint: NSColor) {
+        guard let button = statusItem?.button else { return }
+        button.image = glyph
+        button.imagePosition = glyph == nil ? .noImage : .imageLeading
+        button.title = glyph == nil ? fallbackTitle : title
+        button.contentTintColor = tint
+    }
+
     /// Create (once) and reveal the menu-bar status item, building its menu lazily.
     private func showStatusItem() {
         if statusItem == nil {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
             if let button = item.button {
-                button.title = "● REC"
                 button.font = NSFont.menuBarFont(ofSize: 0)
-                button.contentTintColor = NSColor.systemRed
+                // Image/title/tint are state-driven — refreshStatusTitle() below sets them.
             }
             let menu = NSMenu()
             let timer = NSMenuItem(title: "Recording 0:00", action: nil, keyEquivalent: "")
@@ -1651,14 +1753,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     private func refreshStatusTitle() {
         if recordingLifecycleStatus == "transcribing" {
             statusTimerItem?.title = "Transcribing"
-            statusItem?.button?.title = "TRANS"
-            statusItem?.button?.contentTintColor = NSColor.systemPurple
+            setStatusButton(glyph: statusGlyphIdle, title: "TRANS", fallbackTitle: "TRANS", tint: BrandColor.accent)
             return
         }
         if recordingLifecycleStatus == "stopping" {
             statusTimerItem?.title = "Stopping"
-            statusItem?.button?.title = "STOP"
-            statusItem?.button?.contentTintColor = NSColor.systemPurple
+            setStatusButton(glyph: statusGlyphIdle, title: "STOP", fallbackTitle: "STOP", tint: BrandColor.accent)
             return
         }
         var ms = recordingElapsedMs
@@ -1668,8 +1768,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let total = Int(max(0, ms) / 1000.0)
         let label = String(format: "%d:%02d", total / 60, total % 60)
         statusTimerItem?.title = "Recording \(label)"
-        statusItem?.button?.title = recordingPaused ? "❚❚ REC" : "● REC"
-        statusItem?.button?.contentTintColor = recordingPaused ? NSColor.secondaryLabelColor : NSColor.systemRed
+        if recordingPaused {
+            // Paused: the dot-less card glyph + secondary tint (state without the red).
+            setStatusButton(glyph: statusGlyphIdle, title: "REC", fallbackTitle: "❚❚ REC", tint: NSColor.secondaryLabelColor)
+        } else {
+            // Recording: the dotted card glyph tinted red (mirrors the legacy "● REC").
+            setStatusButton(glyph: statusGlyphRec, title: "REC", fallbackTitle: "● REC", tint: NSColor.systemRed)
+        }
     }
 
     private func refreshStatusMenuEnabled() {

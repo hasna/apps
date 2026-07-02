@@ -2222,8 +2222,9 @@ test('native window drag strip spans full header band and honors web-reported co
   // hit testing stays in local coordinates — no re-conversion (the prior double-convert bug).
   assert.doesNotMatch(dragClass, /convert\(point,\s*from:/);
   assert.match(dragClass, /window\?\.performDrag\(with: event\)/);
-  // The strip now covers the FULL native header band: 30px traffic-light inset + 30px control row.
-  assert.match(swift, /let headerDragHeight: CGFloat = 60/);
+  // The strip covers the FULL native header band: 38px traffic-light inset (Tahoe
+  // buttons; --native-inset in web/styles.css) + 30px control row (spec §3.8 contract).
+  assert.match(swift, /let headerDragHeight: CGFloat = 68/);
   assert.match(swift, /WindowDragStrip\(frame: NSRect\(x: 0, y: frame\.height - headerDragHeight, width: frame\.width, height: headerDragHeight\)\)/);
   assert.match(swift, /dragStrip\.identifier = NSUserInterfaceItemIdentifier\("window-drag-strip"\)/);
   assert.match(swift, /dragStrip\.autoresizingMask = \[\.width, \.minYMargin\]/);
