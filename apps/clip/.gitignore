@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+*.tmp
+coverage/
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+.hasna/
+dist-*/
