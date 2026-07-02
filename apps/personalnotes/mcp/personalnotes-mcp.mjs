@@ -38,7 +38,7 @@ import {
 const tools = [
   {
     name: 'notes_list',
-    description: 'List latest Hasna Notes with optional pagination and filters.',
+    description: 'List latest PersonalNotes with optional pagination and filters.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -55,12 +55,12 @@ const tools = [
   },
   {
     name: 'notes_get',
-    description: 'Read one Hasna Note by id.',
+    description: 'Read one PersonalNotes note by id.',
     inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
   },
   {
     name: 'notes_create',
-    description: 'Create a Hasna Note.',
+    description: 'Create a PersonalNotes note.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -143,7 +143,7 @@ const tools = [
   },
   {
     name: 'settings_get',
-    description: 'Read Hasna Notes settings.',
+    description: 'Read PersonalNotes settings.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -172,7 +172,7 @@ const tools = [
   },
   {
     name: 'markdown_render',
-    description: 'Render Markdown to sanitized safe HTML using the Hasna Notes restricted subset.',
+    description: 'Render Markdown to sanitized safe HTML using the PersonalNotes restricted subset.',
     inputSchema: { type: 'object', properties: { markdown: { type: 'string' }, id: { type: 'string' } } },
   },
   {
@@ -199,7 +199,7 @@ const tools = [
   },
   {
     name: 'labels_list',
-    description: 'List all labels known to Hasna Notes.',
+    description: 'List all labels known to PersonalNotes.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -255,12 +255,12 @@ const tools = [
   },
   {
     name: 'agent_tools',
-    description: 'List Hasna Notes chat/agent tool schemas, safety flags, and confirmation requirements.',
+    description: 'List PersonalNotes chat/agent tool schemas, safety flags, and confirmation requirements.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'agent_run',
-    description: 'Run the Hasna Notes tool-capable agent headlessly over notes. Broad/destructive writes preview unless confirm is true.',
+    description: 'Run the PersonalNotes tool-capable agent headlessly over notes. Broad/destructive writes preview unless confirm is true.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -277,7 +277,7 @@ const tools = [
   },
   {
     name: 'agent_goal',
-    description: 'Run a simple Hasna Notes goal loop until done, user input/approval is needed, blocked, or maxSteps is reached.',
+    description: 'Run a simple PersonalNotes goal loop until done, user input/approval is needed, blocked, or maxSteps is reached.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -294,7 +294,7 @@ const tools = [
   },
   {
     name: 'agent_tool_call',
-    description: 'Execute one Hasna Notes agent tool directly. Confirmation-gated tools return a preview unless confirm is true.',
+    description: 'Execute one PersonalNotes agent tool directly. Confirmation-gated tools return a preview unless confirm is true.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -406,7 +406,7 @@ async function handle(msg) {
         result: {
           protocolVersion: params?.protocolVersion || '2024-11-05',
           capabilities: { tools: {} },
-          serverInfo: { name: 'hasna-notes', version: '1.0.0' },
+          serverInfo: { name: 'personalnotes', version: '1.0.0' },
         },
       });
     }

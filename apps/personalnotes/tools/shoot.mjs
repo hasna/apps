@@ -1,4 +1,4 @@
-// Screenshot harness for the Hasna Notes web UI.
+// Screenshot harness for the PersonalNotes web UI.
 // Renders each screen at retina scale and writes PNGs for visual review.
 //
 // The notes app is data-driven and (mostly) hash-free: selection, machine-filter and
@@ -7,13 +7,17 @@
 // the result. It uses the in-browser SAMPLE data (no native __BOOT__).
 //
 // Usage:
-//   PLAYWRIGHT_BROWSERS_PATH=/home/hasna/.cache/ms-playwright \
+//   PLAYWRIGHT_BROWSERS_PATH=~/.cache/ms-playwright \
 //   node tools/shoot.mjs [screen ...]
 //
 // Screens: notes, machines, settings, native (body.native top-inset check).
 // With no args it shoots them all. Output: tools/shots/<screen>.png
-import playwright from '/home/hasna/.bun/install/global/node_modules/playwright/index.js'
-const { chromium } = playwright
+//
+// Playwright is not a dependency of this repo. Install it locally (`npm i -D playwright`)
+// or point PLAYWRIGHT_MODULE at an existing install, e.g.:
+//   PLAYWRIGHT_MODULE=/path/to/node_modules/playwright/index.js
+const playwrightModule = await import(process.env.PLAYWRIGHT_MODULE || 'playwright')
+const { chromium } = playwrightModule.default ?? playwrightModule
 import { fileURLToPath } from 'url'
 import { dirname, resolve } from 'path'
 import { mkdirSync } from 'fs'
@@ -83,13 +87,13 @@ async function manyNotesBoot(page) {
     const iso = (ms) => new Date(ms).toISOString()
     const labels = ['welcome', 'docs', 'release', 'meeting', 'sync', 'ideas', 'todo']
     const machines = []
-    for (let i = 0; i < 14; i++) machines.push({ id: 'machine' + String(i).padStart(3, '0') })
+    for (let i = 0; i < 14; i++) machines.push({ id: 'device-' + String(i).padStart(2, '0') })
     const notes = []
     for (let i = 0; i < 22; i++) {
       notes.push({
         id: 'n-' + i,
         title: ['Release checklist', 'Meeting notes — fleet sync', 'Ideas for the roadmap',
-          'Welcome to Hasna Notes', 'Quarterly planning thoughts', 'Bug triage list'][i % 6] + ' ' + (i + 1),
+          'Welcome to PersonalNotes', 'Quarterly planning thoughts', 'Bug triage list'][i % 6] + ' ' + (i + 1),
         body: 'Some note body content number ' + i + ' with a few words to preview.',
         labels: [labels[i % labels.length]],
         status: 'active', folder: '',
@@ -98,7 +102,7 @@ async function manyNotesBoot(page) {
         createdAt: iso(now - i * 1000 * 60 * 60),
       })
     }
-    window.__BOOT__ = { thisMachine: 'machine000', machines, notes }
+    window.__BOOT__ = { thisMachine: 'device-00', machines, notes }
     window.__AI__ = { port: 8765, available: true }
   })
 }
@@ -131,7 +135,7 @@ async function darkPage(aiAvailable = true) {
   const ctx = await browser.newContext({ viewport: VIEWPORT, deviceScaleFactor: SCALE, colorScheme: 'dark' })
   const page = await ctx.newPage()
   await page.addInitScript((available) => {
-    try { localStorage.setItem('hasna-notes-theme', 'dark') } catch (e) {}
+    try { localStorage.setItem('personalnotes-theme', 'dark') } catch (e) {}
     window.__AI__ = { port: 8765, available: available }
   }, aiAvailable)
   await page.goto(indexURL, { waitUntil: 'networkidle' })
@@ -156,8 +160,8 @@ for (const s of screens) {
     await ctx.close()
   } else if (s === 'machines') {
     const { ctx, page } = await freshPage()
-    // Click a specific machine row (machine001) to filter the notes list.
-    const m = page.locator('.machine-row[data-machine="machine001"]')
+    // Click a specific machine row (device-01) to filter the notes list.
+    const m = page.locator('.machine-row[data-machine="device-01"]')
     if (await m.count()) await m.click()
     await page.waitForTimeout(150)
     await shoot(page, 'machines')

@@ -7,7 +7,7 @@ import Foundation
 ///
 /// This intentionally supports only the handful of constructs an Apple-Notes-style
 /// editor needs — it is NOT a general Markdown engine. It is pure (no UI / AppKit)
-/// so it can be unit-tested in `OpenNotesSmoke`.
+/// so it can be unit-tested in `PersonalNotesSmoke`.
 public enum RichTextMarkdown {
 
     /// Block-level kind of a line in the document.

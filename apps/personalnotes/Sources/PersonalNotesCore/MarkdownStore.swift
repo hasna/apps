@@ -4,7 +4,7 @@ import Foundation
 /// `~/.hasna/apps/notes/notes/<id>.md`. The markdown files are the source of truth.
 ///
 /// This type is pure (no UI, no Combine) so it can be unit-tested in isolation and is
-/// forward-compatible with the planned `@hasna/notes` catalog/CLI that will index the
+/// forward-compatible with the `@hasna/personalnotes` catalog/CLI that indexes the
 /// same directory.
 public struct MarkdownStore {
     public let rootURL: URL

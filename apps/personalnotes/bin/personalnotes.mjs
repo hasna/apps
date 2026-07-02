@@ -51,7 +51,8 @@ Usage:
   personalnotes billing status [--json]
   personalnotes billing checkout [--json]
 
-Local note commands are still available through this binary and the legacy hasna-notes alias.`;
+Local note commands (list, create, labels, markdown, agent, ...) are also handled by this binary.
+The legacy hasna-notes / hasna-notes-mcp aliases are deprecated and will be removed in the next release.`;
 }
 
 async function print(value, opts, fallback) {
@@ -134,7 +135,7 @@ async function main() {
   if (cmd === 'auth' || cmd === 'cloud' || cmd === 'billing') {
     return handleHosted(cmd, opts._, opts);
   }
-  await import('../cli/hasna-notes.mjs');
+  await import('../cli/personalnotes.mjs');
 }
 
 main().catch((err) => {

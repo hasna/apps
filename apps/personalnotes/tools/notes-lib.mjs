@@ -479,7 +479,7 @@ export function parseNote(raw, fallbackID = randomUUID()) {
     createdAt: fields.createdAt || new Date().toISOString(),
     updatedAt: fields.updatedAt || fields.createdAt || new Date().toISOString(),
     author: unquote(fields.author || process.env.USER || 'unknown'),
-    agent: unquote(fields.agent || 'hasna-notes-app'),
+    agent: unquote(fields.agent || 'personalnotes-app'),
     machine: unquote(fields.machine || hostnameFallback()),
     createdByActorType: unquote(fields.createdByActorType || ''),
     createdByName: unquote(fields.createdByName || ''),
@@ -521,7 +521,7 @@ function noteFromFields(fields) {
     createdAt: fields.createdAt || new Date().toISOString(),
     updatedAt: fields.updatedAt || new Date().toISOString(),
     author: fields.author || process.env.USER || 'unknown',
-    agent: fields.agent || 'hasna-notes-app',
+    agent: fields.agent || 'personalnotes-app',
     machine,
     createdByActorType: actorType,
     createdByName: actorName,
@@ -990,7 +990,10 @@ export async function generateTitle(text, opts = {}) {
   if (opts.sidecar) {
     const token = opts.sidecarToken || process.env.HASNA_NOTES_SIDECAR_TOKEN || '';
     const headers = { 'Content-Type': 'application/json' };
-    if (token) headers['X-Hasna-Notes-Token'] = token;
+    if (token) {
+      headers['X-PersonalNotes-Token'] = token;
+      headers['X-Hasna-Notes-Token'] = token; // legacy header; removed next release
+    }
     const res = await fetch(String(opts.sidecar).replace(/\/$/, '') + '/title', {
       method: 'POST',
       headers,

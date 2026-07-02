@@ -1,11 +1,20 @@
-# Hasna Notes Integration Contracts
+# PersonalNotes Integration Contracts
 
 This document is the functionality contract for the web/native UI lane.
+
+## Bridge Global Rename (Deprecation Notice)
+
+The JS bridge global is `window.PersonalNotes` (renamed from `window.HasnaNotes`).
+For ONE release `web/app.js` also assigns the deprecated back-compat alias
+`window.HasnaNotes = window.PersonalNotes` so old hosts and integrations keep
+working; it will be removed next release. New code must use
+`window.PersonalNotes` only. The `hasna:*` CustomEvent names are an internal
+wire contract and are intentionally unchanged.
 
 ## Boot And Hydrate Payload
 
 The native host injects `window.__BOOT__` before `web/app.js` runs and later calls
-`window.HasnaNotes.hydrate(boot)` after note mutations.
+`window.PersonalNotes.hydrate(boot)` after note mutations.
 
 ```js
 {
@@ -146,16 +155,16 @@ note.titleSource = "manual";
 ```
 
 Archive and restore are explicit bridge actions. Destructive Trash,
-Delete, and purge UI should call `window.HasnaNotes.notes.trash(noteId)` /
-`window.HasnaNotes.notes.purge(noteId)` so the app confirmation is shown first;
+Delete, and purge UI should call `window.PersonalNotes.notes.trash(noteId)` /
+`window.PersonalNotes.notes.purge(noteId)` so the app confirmation is shown first;
 raw WebKit destructive posts are internal persistence traffic and are ignored by
 the native host unless the app layer already confirmed the action.
 
 ```js
 window.webkit.messageHandlers.notes.postMessage({ action: "archive", note })
 window.webkit.messageHandlers.notes.postMessage({ action: "restore", note })
-window.HasnaNotes.notes.trash(noteId)
-window.HasnaNotes.notes.purge(noteId)
+window.PersonalNotes.notes.trash(noteId)
+window.PersonalNotes.notes.purge(noteId)
 ```
 
 Normal Delete should call the Trash path unless `note.status === "trash"`, in
@@ -176,14 +185,14 @@ is ignored for plain-text extraction, and links are kept only for `http`,
 The web runtime exposes stable command and slash-menu contracts:
 
 ```js
-window.HasnaNotes.markdown.commands()
-window.HasnaNotes.markdown.slashCommands()
-window.HasnaNotes.markdown.render(markdown)
-window.HasnaNotes.markdown.plainText(markdown)
-window.HasnaNotes.markdown.safeText(text)
-window.HasnaNotes.markdown.applyCommand(markdown, options)
-window.HasnaNotes.editor.commands()
-window.HasnaNotes.editor.command(commandId, options)
+window.PersonalNotes.markdown.commands()
+window.PersonalNotes.markdown.slashCommands()
+window.PersonalNotes.markdown.render(markdown)
+window.PersonalNotes.markdown.plainText(markdown)
+window.PersonalNotes.markdown.safeText(text)
+window.PersonalNotes.markdown.applyCommand(markdown, options)
+window.PersonalNotes.editor.commands()
+window.PersonalNotes.editor.command(commandId, options)
 ```
 
 Command IDs are:
@@ -227,7 +236,7 @@ explicitly NO formatting toolbar:
   selection — it never replaces selected text.
 
 Recording and transcription text should be inserted with
-`window.HasnaNotes.markdown.safeText(text)` before appending it to a Markdown note
+`window.PersonalNotes.markdown.safeText(text)` before appending it to a Markdown note
 body. AI title generation uses `markdown.plainText(note.body)`, not raw Markdown
 syntax.
 
@@ -242,11 +251,11 @@ agent tools.
 The web runtime exposes:
 
 ```js
-window.HasnaNotes.chat.state()
-window.HasnaNotes.chat.tools()
-window.HasnaNotes.chat.send(prompt, options)
-window.HasnaNotes.chat.approve(approvalId, approved)
-window.HasnaNotes.chat.clear()
+window.PersonalNotes.chat.state()
+window.PersonalNotes.chat.tools()
+window.PersonalNotes.chat.send(prompt, options)
+window.PersonalNotes.chat.approve(approvalId, approved)
+window.PersonalNotes.chat.clear()
 ```
 
 Chat is backed exclusively by the AI sidecar. There is no local fallback model:
@@ -300,7 +309,7 @@ hasna:chat-finish
 hasna:chat-error
 ```
 
-Event `detail` always includes `{ chat: window.HasnaNotes.chat.state() }` plus
+Event `detail` always includes `{ chat: window.PersonalNotes.chat.state() }` plus
 event-specific fields such as `{ message }`, `{ text }`, `{ toolCall }`,
 `{ sources }`, `{ approval }`, or `{ error }`.
 
@@ -312,7 +321,7 @@ append_note, label_note, unlabel_note, archive_note, trash_note, restore_note,
 summarize_notes, find_related_notes, consolidate_notes
 ```
 
-`window.HasnaNotes.chat.tools()` returns the same IDs with safety flags:
+`window.PersonalNotes.chat.tools()` returns the same IDs with safety flags:
 
 ```js
 {
@@ -359,9 +368,9 @@ same registry as CLI/MCP), so confirmation and provenance stay consistent.
 CLI and MCP use the same tool registry:
 
 ```bash
-hasna-notes agent "summarize renewal notes" --json
-hasna-notes agent "consolidate renewal notes" --json      # preview
-hasna-notes agent "consolidate renewal notes" --yes --json
+personalnotes agent "summarize renewal notes" --json
+personalnotes agent "consolidate renewal notes" --json      # preview
+personalnotes agent "consolidate renewal notes" --yes --json
 ```
 
 MCP tools: `agent_tools`, `agent_run`, and `agent_tool_call`.
@@ -375,16 +384,16 @@ preview unless confirmed; permanent `purge` / `notes_purge` require `--yes` /
 The web runtime exposes note actions for native controls and the visual/UI lane:
 
 ```js
-window.HasnaNotes.notes.archive(noteId)
-window.HasnaNotes.notes.trash(noteId)
-window.HasnaNotes.notes.restore(noteId)
-window.HasnaNotes.notes.purge(noteId)
-window.HasnaNotes.notes.moveToMachine(noteId, machine, friendlyName?)
-window.HasnaNotes.notes.info(noteId)
-window.HasnaNotes.notes.setStatusFilter("active" | "archived" | "trash" | "all")
-window.HasnaNotes.notes.cleanupExpiredTrash()
-window.HasnaNotes.notes.settings()
-window.HasnaNotes.notes.setTrashRetentionDays(days)
+window.PersonalNotes.notes.archive(noteId)
+window.PersonalNotes.notes.trash(noteId)
+window.PersonalNotes.notes.restore(noteId)
+window.PersonalNotes.notes.purge(noteId)
+window.PersonalNotes.notes.moveToMachine(noteId, machine, friendlyName?)
+window.PersonalNotes.notes.info(noteId)
+window.PersonalNotes.notes.setStatusFilter("active" | "archived" | "trash" | "all")
+window.PersonalNotes.notes.cleanupExpiredTrash()
+window.PersonalNotes.notes.settings()
+window.PersonalNotes.notes.setTrashRetentionDays(days)
 ```
 
 `notes.moveToMachine(...)` re-attributes a note to another machine ("Move to
@@ -446,11 +455,11 @@ immediately. For a right-click "View details" flow, use the cached API first and
 optionally request a native refresh:
 
 ```js
-window.HasnaNotes.machines.list()
-window.HasnaNotes.machines.details(machineId)
-window.HasnaNotes.machines.select(machineId, { reason, noteId, statusFilter })
-window.HasnaNotes.machines.requestDetails(machineId).then(detail => ...)
-window.HasnaNotes.view.state()
+window.PersonalNotes.machines.list()
+window.PersonalNotes.machines.details(machineId)
+window.PersonalNotes.machines.select(machineId, { reason, noteId, statusFilter })
+window.PersonalNotes.machines.requestDetails(machineId).then(detail => ...)
+window.PersonalNotes.view.state()
 ```
 
 `machines.select(...)` canonicalizes machine aliases (`id`, `slug`,
@@ -476,11 +485,11 @@ window.addEventListener("hasna:machine-details", (event) => event.detail)
   machine: machineDetail,
   selectedNoteId: "note-id-or-null",
   reason: "sidebar" | "settings" | "details" | "native" | "api" | "move",
-  view: window.HasnaNotes.view.state()
+  view: window.PersonalNotes.view.state()
 }
 ```
 
-`window.HasnaNotes.view.state()` returns `{ screen, machineFilter, labelFilter,
+`window.PersonalNotes.view.state()` returns `{ screen, machineFilter, labelFilter,
 statusFilter, selectedId, visibleNoteIds, selectedMachine }`.
 
 Native refresh bridge:
@@ -492,7 +501,7 @@ window.webkit.messageHandlers.notes.postMessage({
   requestId: "machine-..."
 });
 
-window.HasnaNotes.machines.receiveDetails({
+window.PersonalNotes.machines.receiveDetails({
   requestId: "machine-...",
   machine: machineDetail
 });
@@ -529,11 +538,11 @@ duplicate popover or second timer ever exists.
 The public web API is:
 
 ```js
-window.HasnaNotes.recording.state()
-window.HasnaNotes.recording.start()
-window.HasnaNotes.recording.pause()
-window.HasnaNotes.recording.resume()
-window.HasnaNotes.recording.stop()
+window.PersonalNotes.recording.state()
+window.PersonalNotes.recording.start()
+window.PersonalNotes.recording.pause()
+window.PersonalNotes.recording.resume()
+window.PersonalNotes.recording.stop()
 ```
 
 State snapshots have this shape:
@@ -609,10 +618,10 @@ window.webkit.messageHandlers.window.postMessage({
 The native menu/status item controls the same recorder by evaluating:
 
 ```js
-window.HasnaNotes.recording.start()
-window.HasnaNotes.recording.pause()
-window.HasnaNotes.recording.resume()
-window.HasnaNotes.recording.stop()
+window.PersonalNotes.recording.start()
+window.PersonalNotes.recording.pause()
+window.PersonalNotes.recording.resume()
+window.PersonalNotes.recording.stop()
 ```
 
 ## Realtime Providers

@@ -15,9 +15,9 @@
   },
   "files": [
     "bin",
-    "cli/hasna-notes.mjs",
+    "cli/personalnotes.mjs",
     "cloud/index.mjs",
-    "mcp/hasna-notes-mcp.mjs",
+    "mcp/personalnotes-mcp.mjs",
     "tools/notes-agent.mjs",
     "tools/notes-lib.mjs",
     "README.md",
@@ -40,8 +40,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/hasna/notes.git"
+    "url": "https://github.com/hasna/open-personalnotes.git"
   },
+  "bugs": {
+    "url": "https://github.com/hasna/open-personalnotes/issues"
+  },
+  "homepage": "https://github.com/hasna/open-personalnotes#readme",
   "license": "MIT",
   "engines": {
     "node": ">=20"

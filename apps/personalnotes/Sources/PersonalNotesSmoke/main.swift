@@ -1,5 +1,5 @@
 import Foundation
-import OpenNotesCore
+import PersonalNotesCore
 
 // CLI smoke test for the markdown store. Exits 0 on success, 1 on failure.
 // Used as the verification harness because XCTest / swift-testing are unavailable
@@ -19,7 +19,7 @@ func check(_ condition: Bool, _ message: String) {
 }
 
 let tempRoot = FileManager.default.temporaryDirectory
-    .appendingPathComponent("opennotes-smoke-\(UUID().uuidString)")
+    .appendingPathComponent("personalnotes-smoke-\(UUID().uuidString)")
 defer { try? FileManager.default.removeItem(at: tempRoot) }
 
 let store = MarkdownStore(root: tempRoot)
@@ -36,16 +36,16 @@ do {
         titleContentFingerprint: "abc123",
         createdByActorType: "agent",
         createdByName: "Codewith",
-        sourceMachine: "spark02",
-        sourceMachineFriendlyName: "Spark",
-        originMachine: "apple03",
-        originMachineFriendlyName: "Apple",
-        previousMachine: "apple02",
+        sourceMachine: "linux-box",
+        sourceMachineFriendlyName: "Linux Box",
+        originMachine: "studio-mac",
+        originMachineFriendlyName: "Studio",
+        previousMachine: "laptop",
         openedFrom: "mcp",
         sourceContext: "ticket-123",
         archivedAt: MarkdownStore.parseDate("2026-06-20T09:00:00Z"),
         trashedAt: MarkdownStore.parseDate("2026-06-21T09:00:00Z"),
-        trashMachine: "apple03",
+        trashMachine: "studio-mac",
         trashExpiresAt: MarkdownStore.parseDate("2026-07-21T09:00:00Z"),
         movedAt: MarkdownStore.parseDate("2026-06-22T09:00:00Z"),
         body: "# Hello\n\nThis is the body with **markdown**.\n"
@@ -72,10 +72,10 @@ do {
     check(raw.contains("titleContentFingerprint: abc123"), "frontmatter has title fingerprint metadata")
     check(raw.contains("createdByActorType: agent"), "frontmatter has actor provenance")
     check(raw.contains("createdByName: Codewith"), "frontmatter has friendly actor name")
-    check(raw.contains("sourceMachine: spark02"), "frontmatter has source machine")
-    check(raw.contains("originMachine: apple03"), "frontmatter has origin machine")
+    check(raw.contains("sourceMachine: linux-box"), "frontmatter has source machine")
+    check(raw.contains("originMachine: studio-mac"), "frontmatter has origin machine")
     check(raw.contains(#"trashExpiresAt: "2026-07-21T09:00:00Z""#), "frontmatter has trash retention expiry")
-    check(raw.contains("agent: hasna-notes-app"), "frontmatter has new agent default")
+    check(raw.contains("agent: personalnotes-app"), "frontmatter has new agent default")
     // Key order: id, title, labels, status, folder, content format, title metadata,
     // createdAt, updatedAt, author, agent, machine.
     if let labelsIdx = raw.range(of: "labels:"), let statusIdx = raw.range(of: "status:"),
@@ -107,11 +107,11 @@ do {
     check(reloaded.titleContentFingerprint == note.titleContentFingerprint, "title fingerprint round-trips")
     check(reloaded.createdByActorType == "agent", "actor type round-trips")
     check(reloaded.createdByName == "Codewith", "actor name round-trips")
-    check(reloaded.sourceMachine == "spark02", "source machine round-trips")
-    check(reloaded.originMachine == "apple03", "origin machine round-trips")
-    check(reloaded.previousMachine == "apple02", "previous machine round-trips")
+    check(reloaded.sourceMachine == "linux-box", "source machine round-trips")
+    check(reloaded.originMachine == "studio-mac", "origin machine round-trips")
+    check(reloaded.previousMachine == "laptop", "previous machine round-trips")
     check(reloaded.openedFrom == "mcp", "opened-from context round-trips")
-    check(reloaded.trashMachine == "apple03", "trash machine round-trips")
+    check(reloaded.trashMachine == "studio-mac", "trash machine round-trips")
     check(reloaded.trashExpiresAt.map(MarkdownStore.iso8601) == "2026-07-21T09:00:00Z", "trash expiry round-trips")
     check(reloaded.body == note.body, "body round-trips identically")
 

@@ -4,7 +4,7 @@ import { createCloudClient } from '../cloud/index.mjs';
 const hosted = process.env.PERSONALNOTES_MODE === 'hosted' || !!process.env.PERSONALNOTES_API_KEY || !!process.env.PERSONALNOTES_TOKEN;
 
 if (!hosted) {
-  await import('../mcp/hasna-notes-mcp.mjs');
+  await import('../mcp/personalnotes-mcp.mjs');
 } else {
   const client = await createCloudClient();
   const tools = [

@@ -1,11 +1,11 @@
-// ===================== Hasna Notes desktop UI — real notes app =====================
+// ===================== PersonalNotes desktop UI — real notes app =====================
 //
 // This is a REAL notes app rendered from data, in the approved visual
 // style. Data arrives one of two ways:
 //
 //   1. Native macOS host (WKWebView): the Swift shell injects `window.__BOOT__` at
 //      document-start (notes + machines + this machine's id) read from the on-disk
-//      Markdown store, and later calls `window.HasnaNotes.hydrate(boot)` after any
+//      Markdown store, and later calls `window.PersonalNotes.hydrate(boot)` after any
 //      save/create/delete so the UI re-renders from fresh data. Writes are sent back
 //      to Swift via `window.webkit.messageHandlers.notes.postMessage({action,note})`.
 //
@@ -90,7 +90,10 @@
   function aiHeaders(extra) {
     const headers = Object.assign({ 'Content-Type': 'application/json' }, extra || {});
     const token = ai().token;
-    if (token) headers['X-Hasna-Notes-Token'] = token;
+    if (token) {
+      headers['X-PersonalNotes-Token'] = token;
+      headers['X-Hasna-Notes-Token'] = token; // legacy header; removed next release
+    }
     return headers;
   }
 
@@ -1679,7 +1682,11 @@
 
   // Theme: persisted in localStorage, applied as data-theme on <html>. "system"
   // follows the OS via prefers-color-scheme.
-  const THEME_KEY = 'hasna-notes-theme';
+  const THEME_KEY = 'personalnotes-theme';
+  const LEGACY_THEME_KEY = 'hasna-notes-theme'; // pre-rename key; read-only fallback
+  function storedThemePref() {
+    try { return localStorage.getItem(THEME_KEY) || localStorage.getItem(LEGACY_THEME_KEY); } catch (e) { return null; }
+  }
   let mq = null;
   function applyTheme(theme) {
     const root = document.documentElement;
@@ -1706,7 +1713,7 @@
     // Re-apply when the OS theme flips, but only while the pref is "system".
     if (!bindSystemWatch._bound) {
       const onChange = () => {
-        const pref = (function () { try { return localStorage.getItem(THEME_KEY); } catch (e) { return null; } })() || 'system';
+        const pref = storedThemePref() || 'system';
         if (pref === 'system') applyTheme('system');
       };
       if (mq.addEventListener) mq.addEventListener('change', onChange);
@@ -1715,8 +1722,7 @@
     }
   }
   function initTheme() {
-    let pref = 'system';
-    try { pref = localStorage.getItem(THEME_KEY) || 'system'; } catch (e) {}
+    const pref = storedThemePref() || 'system';
     bindSystemWatch(pref);
     applyTheme(pref);
   }
@@ -2656,7 +2662,7 @@
   // The ONLY formatting surfaces (vision 8f9b4bb9): a minimal selection popover
   // (bold / italic / code / link) over selected editor text, and a "/" slash menu
   // rendered from markdown.slashCommands(). Both route through editorCommand(...)
-  // (= window.HasnaNotes.editor.command). Explicitly NO toolbar.
+  // (= window.PersonalNotes.editor.command). Explicitly NO toolbar.
 
   // Approximate the viewport point of a caret index inside the editor textarea by
   // mirroring its text into a hidden div (textareas expose no selection rects).
@@ -3352,7 +3358,7 @@
   }
 
   // Host → web: control the live recorder from the macOS menu-bar status item.
-  // Contract: window.HasnaNotes.recCommand('stop'|'pause'|'resume').
+  // Contract: window.PersonalNotes.recCommand('stop'|'pause'|'resume').
 	  function recCommand(cmd) {
 	    if (cmd === 'stop') stopRecording();
 	    else if (cmd === 'pause') pauseRecording();
@@ -3462,7 +3468,7 @@
     }
     state.chat.messages.forEach(message => {
       const row = el('div', 'chat-msg chat-' + (message.role || 'assistant'));
-      row.appendChild(el('div', 'chat-role', message.role === 'user' ? 'You' : 'Hasna'));
+      row.appendChild(el('div', 'chat-role', message.role === 'user' ? 'You' : 'PersonalNotes'));
       row.appendChild(el('div', 'chat-text', chatMessageText(message)));
       host.appendChild(row);
     });
@@ -3700,7 +3706,7 @@
         selectedNoteId: opts.noteId || opts.selectedNoteId || state.selectedId || '',
         labels: allLabels().map(item => item.name),
         maxSteps: opts.maxSteps || (goalObjective ? 10 : 8),
-        actorName: opts.actorName || 'Hasna Notes Chat',
+        actorName: opts.actorName || 'PersonalNotes Chat',
         goal: goalObjective ? { objective: goalObjective } : undefined,
       }),
     });
@@ -3770,7 +3776,7 @@
         input: Object.assign({}, approval.input || {}, { confirm: true }),
         confirm: true,
         approvalId: approval.id,
-        actorName: 'Hasna Notes Chat',
+        actorName: 'PersonalNotes Chat',
         openedFrom: 'chat-approval',
         sourceContext: approval.id,
       }),
@@ -3873,7 +3879,7 @@
   }
 
   // Public surface for the native host.
-  window.HasnaNotes = {
+  window.PersonalNotes = {
     hydrate: hydrate,
     destroy: destroy,
     recCommand: recCommand,
@@ -3938,6 +3944,11 @@
       transcriptBody: transcriptToNoteBody,
     },
   };
+
+  // DEPRECATED (kept for one release): the bridge global was renamed from
+  // window.HasnaNotes to window.PersonalNotes. This alias keeps old hosts and
+  // integrations working; remove it next release. See docs/ui-contracts.md.
+  window.HasnaNotes = window.PersonalNotes;
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init, { once: true });

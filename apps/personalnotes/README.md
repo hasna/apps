@@ -54,7 +54,7 @@ titleContentFingerprint: 7a9f2d
 createdAt: 2026-06-22T09:00:00Z
 updatedAt: 2026-06-22T09:00:00Z
 author: hasna
-agent: hasna-notes-app  # legacy `open-notes-app` still parses
+agent: personalnotes-app  # legacy `hasna-notes-app` / `open-notes-app` still parse
 machine: Mac
 ---
 The markdown body goes here.
@@ -79,10 +79,10 @@ escape raw HTML, drop unsafe links, and expose plain-text extraction for titles
 and search:
 
 ```bash
-node cli/hasna-notes.mjs markdown commands
-node cli/hasna-notes.mjs markdown render <note-id>
-node cli/hasna-notes.mjs markdown plain-text <note-id>
-node cli/hasna-notes.mjs markdown apply-command bold --text hello --selection-start 0 --selection-end 5
+node cli/personalnotes.mjs markdown commands
+node cli/personalnotes.mjs markdown render <note-id>
+node cli/personalnotes.mjs markdown plain-text <note-id>
+node cli/personalnotes.mjs markdown apply-command bold --text hello --selection-start 0 --selection-end 5
 ```
 
 Archive and Trash are first-class note states. Normal Delete moves a note to
@@ -96,7 +96,7 @@ machine, previous machine, opened-from/source context, and lifecycle timestamps.
 
 ```
 Package.swift                       SwiftPM manifest (platform .macOS("26.0"))
-Sources/OpenNotesCore/              Pure, UI-free logic (a library product)
+Sources/PersonalNotesCore/              Pure, UI-free logic (a library product)
   Note.swift                        Note model + NoteStatus enum (+ folder field)
   MarkdownStore.swift               Markdown + YAML-frontmatter read/write (atomic)
   RichTextMarkdown.swift            Pure Markdown ↔ rich-text document bridge (tested)
@@ -104,12 +104,12 @@ Sources/OpenNotesCore/              Pure, UI-free logic (a library product)
   LabelStore.swift                  labels.json persistence + normalization
   SettingsStore.swift               settings.json persistence (trash retention)
   MachineManifest.swift             machines.json manifest read (machine attribution)
-Sources/HasnaNotesApp/              Native WKWebView shell (recording, bridges, sidecar)
-Sources/OpenNotesSmoke/             CLI smoke test for the store + bridges (no Xcode needed)
+Sources/PersonalNotesApp/              Native WKWebView shell (recording, bridges, sidecar)
+Sources/PersonalNotesSmoke/             CLI smoke test for the store + bridges (no Xcode needed)
 web/                                The app UI (index.html, app.js, styles.css)
-scripts/build_hasnanotes.sh         WKWebView app build with bundled web UI + sidecar
-cli/hasna-notes.mjs                 CLI for notes, labels, pagination, and titles
-mcp/hasna-notes-mcp.mjs             MCP stdio server exposing the same functionality
+scripts/build_personalnotes.sh         WKWebView app build with bundled web UI + sidecar
+cli/personalnotes.mjs               CLI for notes, labels, pagination, and titles
+mcp/personalnotes-mcp.mjs           MCP stdio server exposing the same functionality
 ```
 
 ## Build & run
@@ -120,14 +120,14 @@ This project builds with **SwiftPM only** — no Xcode required. It targets macO
 ### On the Mac (macOS 26)
 
 ```bash
-bash scripts/build_hasnanotes.sh   # swift build -c release + bundle web UI/sidecar + codesign
-open "dist/Hasna Notes.app"
+bash scripts/build_personalnotes.sh   # swift build -c release + bundle web UI/sidecar + codesign
+open "dist/PersonalNotes.app"
 ```
 
 ### Verify the store logic
 
 ```bash
-swift run -c release OpenNotesSmoke   # round-trips a note through the markdown store
+swift run -c release PersonalNotesSmoke   # round-trips a note through the markdown store
 node --test test/notes-functionality.test.mjs
 ```
 
@@ -137,20 +137,20 @@ node --test test/notes-functionality.test.mjs
 personalnotes list --limit 10
 personalnotes-mcp
 
-# legacy aliases remain available
-node cli/hasna-notes.mjs list --limit 10
-node cli/hasna-notes.mjs labels assign <note-id> research
-node cli/hasna-notes.mjs move <note-id> <machine>
-node cli/hasna-notes.mjs archive <note-id>
-node cli/hasna-notes.mjs delete <note-id>          # moves to Trash
-node cli/hasna-notes.mjs purge <note-id>           # permanent delete
-node cli/hasna-notes.mjs settings set-trash-retention 30
-node cli/hasna-notes.mjs title <note-id> --apply
-node cli/hasna-notes.mjs markdown commands
-node cli/hasna-notes.mjs agent "summarize notes" --json
-node cli/hasna-notes.mjs agent "consolidate notes" --json       # preview
-node cli/hasna-notes.mjs agent "consolidate notes" --yes --json # write
-node mcp/hasna-notes-mcp.mjs
+# running straight from the repo
+node cli/personalnotes.mjs list --limit 10
+node cli/personalnotes.mjs labels assign <note-id> research
+node cli/personalnotes.mjs move <note-id> <machine>
+node cli/personalnotes.mjs archive <note-id>
+node cli/personalnotes.mjs delete <note-id>          # moves to Trash
+node cli/personalnotes.mjs purge <note-id>           # permanent delete
+node cli/personalnotes.mjs settings set-trash-retention 30
+node cli/personalnotes.mjs title <note-id> --apply
+node cli/personalnotes.mjs markdown commands
+node cli/personalnotes.mjs agent "summarize notes" --json
+node cli/personalnotes.mjs agent "consolidate notes" --json       # preview
+node cli/personalnotes.mjs agent "consolidate notes" --yes --json # write
+node mcp/personalnotes-mcp.mjs
 ```
 
 Installable package:
@@ -160,6 +160,14 @@ bun install -g @hasna/personalnotes
 personalnotes --help
 personalnotes-mcp
 ```
+
+`personalnotes` and `personalnotes-mcp` are the documented binaries. The
+`hasna-notes` and `hasna-notes-mcp` binaries are deprecated aliases kept for one
+release: they print a one-line deprecation warning to stderr, then delegate to
+the primary binaries (same arguments, stdio, and exit codes). They will be
+removed in the next release. `hasna-notes-mcp` always serves the local notes
+store, as it always has — hosted mode is only reachable through
+`personalnotes-mcp`.
 
 Hosted PersonalNotes.ai mode is optional. Local mode never calls the hosted API
 unless explicitly configured.
@@ -175,14 +183,14 @@ PERSONALNOTES_MODE=hosted PERSONALNOTES_API_KEY=pn_... personalnotes-mcp
 The CLI and MCP both default lists to the latest 10 notes and return pagination
 metadata in JSON/MCP responses. CLI/MCP creation supports agent provenance fields
 such as `actorType`, `actorName`, `sourceMachine`, `targetMachine`, `openedFrom`,
-and `sourceContext`. Machine details are available through `hasna-notes machines
-list`, `hasna-notes machines details <id>`, and MCP `machines_list` /
+and `sourceContext`. Machine details are available through `personalnotes machines
+list`, `personalnotes machines details <id>`, and MCP `machines_list` /
 `machines_details`; details combine open-machines fields with notes-derived
 fallback counts and activity timestamps.
 Markdown helpers are available in MCP as `markdown_commands`, `markdown_render`,
 `markdown_plain_text`, and `markdown_apply_command`.
 
-Agentic note operations are available through `hasna-notes agent ...` and MCP
+Agentic note operations are available through `personalnotes agent ...` and MCP
 `agent_tools`, `agent_run`, and `agent_tool_call`. The shared tool registry
 supports list/search/read, friendly provenance metadata, create/update/append,
 label/unlabel, archive/trash/restore, summarize, related-note discovery, and
@@ -195,7 +203,7 @@ Direct CLI/MCP deletion paths are also gated: `delete`, `trash`,
 unless confirmed, while permanent `purge` / `notes_purge` require `--yes` /
 `--force` or `confirm: true`.
 
-The web bridge exposes `window.HasnaNotes.chat.state/tools/send/approve/clear`
+The web bridge exposes `window.PersonalNotes.chat.state/tools/send/approve/clear`
 and dispatches `hasna:chat-*` events for state, messages, deltas, tool calls,
 tool results, source references, confirmations, finish, and errors. The local
 sidecar also exposes `POST /chat` as an optional AI SDK streaming endpoint over a
@@ -204,7 +212,7 @@ provided note snapshot; disk writes remain in the app/CLI/MCP tool layer.
 ### Recording and transcription
 
 The native app keeps recording as app-level state. The web bridge exposes
-`window.HasnaNotes.recording.state/start/pause/resume/stop` and dispatches
+`window.PersonalNotes.recording.state/start/pause/resume/stop` and dispatches
 `hasna:recording-state`, `hasna:recording-progress`,
 `hasna:transcript-delta`, and `hasna:transcript-complete` events. Exposed
 states are `idle`, `recording`, `paused`, `stopping`, `transcribing`,

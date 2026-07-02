@@ -1,4 +1,4 @@
-// Hasna Notes — native macOS shell hosting the bundled web UI in a WKWebView.
+// PersonalNotes — native macOS shell hosting the bundled web UI in a WKWebView.
 //
 // The UI itself lives in `web/` (copied into the app bundle at
 // Contents/Resources/web). This shell:
@@ -6,16 +6,16 @@
 //   2. tags the document with the `native` body class so the web UI drops its
 //      desktop-frame chrome and fills the OS window edge-to-edge, and
 //   3. bridges REAL notes data between the on-disk Markdown store
-//      (`OpenNotesCore.MarkdownStore`) and the web UI:
+//      (`PersonalNotesCore.MarkdownStore`) and the web UI:
 //        - reads the store + the fleet manifest at launch and injects
 //          `window.__BOOT__ = { notes, machines, thisMachine }` as a
 //          document-start user script (available before the page's JS runs),
 //        - receives `{action, note}` messages on the `notes` message handler
 //          (save / create / delete), writes them to disk, then pushes fresh
-//          data back into the page via `window.HasnaNotes.hydrate(...)`.
+//          data back into the page via `window.PersonalNotes.hydrate(...)`.
 import AppKit
 import WebKit
-import OpenNotesCore
+import PersonalNotesCore
 import Foundation
 
 // MARK: - AI sidecar
@@ -26,7 +26,7 @@ import Foundation
 /// (`/transcribe`) via the Vercel AI SDK + OpenAI. The host:
 ///   - finds a `node` binary,
 ///   - picks a free loopback TCP port,
-///   - reads the OpenAI key from `~/.secrets/hasnaxyz/openai/live.env` (or `OPENAI_API_KEY`),
+///   - reads the OpenAI key from `OPENAI_API_KEY` (or `~/.hasna/apps/notes/secrets/openai.env`),
 ///   - launches the child with `OPENAI_API_KEY`, `PORT`, and a per-run sidecar token,
 ///   - pipes child stdout/stderr to `NSLog` (prefix `Sidecar:`).
 ///
@@ -43,10 +43,10 @@ final class AISidecar {
 
     /// Durable log file for sidecar output (port, request errors). NSLog visibility in the
     /// unified log is inconsistent across macOS releases, so we ALSO append here so the
-    /// port and health are always recoverable: `~/Library/Logs/HasnaNotes/sidecar.log`.
+    /// port and health are always recoverable: `~/Library/Logs/PersonalNotes/sidecar.log`.
     private static let logFileURL: URL = {
         let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Logs/HasnaNotes", isDirectory: true)
+            .appendingPathComponent("Library/Logs/PersonalNotes", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("sidecar.log")
     }()
@@ -87,19 +87,24 @@ final class AISidecar {
         return nil
     }
 
-    /// Read the OpenAI `sk-...` key from the canonical secrets env file, else the process env.
+    /// Optional per-app secrets file: `~/.hasna/apps/notes/secrets/<name>.env`.
+    /// Lets users hand the shell app a key without exporting env vars globally.
+    private static func secretsFile(_ name: String) -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".hasna/apps/notes/secrets/\(name).env")
+    }
+
+    /// Read the OpenAI `sk-...` key from the process env, else the optional secrets file.
     private static func readKey() -> String? {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let envFile = home.appendingPathComponent(".secrets/hasnaxyz/openai/live.env")
-        if let text = try? String(contentsOf: envFile, encoding: .utf8) {
+        if let env = ProcessInfo.processInfo.environment["OPENAI_API_KEY"], env.hasPrefix("sk-") {
+            return env
+        }
+        if let text = try? String(contentsOf: secretsFile("openai"), encoding: .utf8) {
             // Match an sk-... token anywhere (handles KEY=value, quotes, export prefixes).
             if let range = text.range(of: "sk-[A-Za-z0-9_-]+", options: .regularExpression) {
                 let key = String(text[range])
                 if key.count > 20 { return key }
             }
-        }
-        if let env = ProcessInfo.processInfo.environment["OPENAI_API_KEY"], env.hasPrefix("sk-") {
-            return env
         }
         return nil
     }
@@ -108,9 +113,7 @@ final class AISidecar {
         if let env = ProcessInfo.processInfo.environment["ELEVENLABS_API_KEY"], !env.isEmpty {
             return env
         }
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let envFile = home.appendingPathComponent(".secrets/hasnaxyz/elevenlabs/live.env")
-        if let text = try? String(contentsOf: envFile, encoding: .utf8) {
+        if let text = try? String(contentsOf: secretsFile("elevenlabs"), encoding: .utf8) {
             if let range = text.range(of: "[A-Za-z0-9_-]{20,}", options: .regularExpression) {
                 return String(text[range])
             }
@@ -580,7 +583,7 @@ final class NotesBridge: @unchecked Sendable {
     func save(_ dict: [String: Any], isCreate: Bool) -> Bool {
         let n = note(from: dict, isCreate: isCreate)
         do { try store.save(n); return true }
-        catch { NSLog("HasnaNotes: save failed: \(error.localizedDescription)"); return false }
+        catch { NSLog("PersonalNotes: save failed: \(error.localizedDescription)"); return false }
     }
 
     @discardableResult
@@ -597,7 +600,7 @@ final class NotesBridge: @unchecked Sendable {
         existing.movedAt = Date()
         existing.updatedAt = Date()
         do { try store.save(existing); return true }
-        catch { NSLog("HasnaNotes: move failed: \(error.localizedDescription)"); return false }
+        catch { NSLog("PersonalNotes: move failed: \(error.localizedDescription)"); return false }
     }
 
     @discardableResult
@@ -612,7 +615,7 @@ final class NotesBridge: @unchecked Sendable {
         existing.trashExpiresAt = nil
         existing.updatedAt = Date()
         do { try store.save(existing); return true }
-        catch { NSLog("HasnaNotes: archive failed: \(error.localizedDescription)"); return false }
+        catch { NSLog("PersonalNotes: archive failed: \(error.localizedDescription)"); return false }
     }
 
     @discardableResult
@@ -628,7 +631,7 @@ final class NotesBridge: @unchecked Sendable {
         existing.trashExpiresAt = Calendar.current.date(byAdding: .day, value: retention, to: now)
         existing.updatedAt = now
         do { try store.save(existing); return true }
-        catch { NSLog("HasnaNotes: trash failed: \(error.localizedDescription)"); return false }
+        catch { NSLog("PersonalNotes: trash failed: \(error.localizedDescription)"); return false }
     }
 
     @discardableResult
@@ -644,7 +647,7 @@ final class NotesBridge: @unchecked Sendable {
         existing.restoredAt = Date()
         existing.updatedAt = Date()
         do { try store.save(existing); return true }
-        catch { NSLog("HasnaNotes: restore failed: \(error.localizedDescription)"); return false }
+        catch { NSLog("PersonalNotes: restore failed: \(error.localizedDescription)"); return false }
     }
 
     /// Delete the note identified by the payload's id.
@@ -663,7 +666,7 @@ final class NotesBridge: @unchecked Sendable {
         // delete only needs the id; build a minimal Note for the path.
         let n = Note(id: id)
         do { try store.delete(n); return true }
-        catch { NSLog("HasnaNotes: delete failed: \(error.localizedDescription)"); return false }
+        catch { NSLog("PersonalNotes: delete failed: \(error.localizedDescription)"); return false }
     }
 
     @discardableResult
@@ -672,14 +675,14 @@ final class NotesBridge: @unchecked Sendable {
             ?? (dict["trashRetentionDays"] as? NSNumber)?.intValue
             ?? NotesSettings.defaultTrashRetentionDays
         do { try settingsStore.save(NotesSettings(trashRetentionDays: days)); return true }
-        catch { NSLog("HasnaNotes: settings save failed: \(error.localizedDescription)"); return false }
+        catch { NSLog("PersonalNotes: settings save failed: \(error.localizedDescription)"); return false }
     }
 
     @discardableResult
     func updateLabels(_ dict: [String: Any]) -> Bool {
         let labels = (dict["labels"] as? [String]) ?? (dict["tags"] as? [String]) ?? []
         do { try labelStore.save(labels); return true }
-        catch { NSLog("HasnaNotes: labels save failed: \(error.localizedDescription)"); return false }
+        catch { NSLog("PersonalNotes: labels save failed: \(error.localizedDescription)"); return false }
     }
 }
 
@@ -756,7 +759,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     /// arrive on the main thread; running the disk-heavy save/boot work there froze
     /// typing (2 full store scans + manifest per autosave). The queue keeps saves ordered
     /// while the UI thread only hops back in to evaluate the hydrate JavaScript.
-    private let notesQueue = DispatchQueue(label: "HasnaNotes.notes-bridge", qos: .userInitiated)
+    private let notesQueue = DispatchQueue(label: "PersonalNotes.notes-bridge", qos: .userInitiated)
     private let notesHandlerName = "notes"
     private let windowHandlerName = "window"
     private let recordingHandlerName = "recording"
@@ -769,7 +772,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
     // Menu-bar status item (NSStatusItem) — created lazily when recording starts and shown
     // only while recording is active. Its menu carries the elapsed timer (disabled title),
-    // Pause/Resume, Stop, and Open Hasna Notes. The title timer ticks from a lightweight
+    // Pause/Resume, Stop, and Open PersonalNotes. The title timer ticks from a lightweight
     // local NSTimer kept in sync by the web's periodic `recording` tick messages.
     private var statusItem: NSStatusItem?
     private var statusTimerItem: NSMenuItem?
@@ -803,7 +806,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             backing: .buffered,
             defer: false
         )
-        window.title = "Hasna Notes"
+        window.title = "PersonalNotes"
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
@@ -853,12 +856,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         window.contentView = container
 
         guard let webDir = Bundle.main.resourceURL?.appendingPathComponent("web", isDirectory: true) else {
-            NSLog("HasnaNotes: resourceURL is nil — cannot locate bundled web UI")
+            NSLog("PersonalNotes: resourceURL is nil — cannot locate bundled web UI")
             return
         }
         let index = webDir.appendingPathComponent("index.html")
-        NSLog("HasnaNotes: loading \(index.path) exists=\(FileManager.default.fileExists(atPath: index.path))")
-        NSLog("HasnaNotes: boot payload bytes=\(boot.utf8.count) thisMachine=\(bridge.thisMachine)")
+        NSLog("PersonalNotes: loading \(index.path) exists=\(FileManager.default.fileExists(atPath: index.path))")
+        NSLog("PersonalNotes: boot payload bytes=\(boot.utf8.count) thisMachine=\(bridge.thisMachine)")
         web.loadFileURL(index, allowingReadAccessTo: webDir)
 
         buildMenu()
@@ -907,23 +910,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     // MARK: navigation
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        NSLog("HasnaNotes: didFinish navigation")
+        NSLog("PersonalNotes: didFinish navigation")
         webView.evaluateJavaScript("document.body && document.body.classList.add('native')", completionHandler: nil)
 
         // Diagnostic: count how many note rows the page actually rendered. Proves REAL
         // notes (not the browser sample) reached the DOM. The class is `.note-row`.
         webView.evaluateJavaScript("document.querySelectorAll('.note-row').length") { result, _ in
             let count = (result as? Int) ?? (result as? NSNumber)?.intValue ?? -1
-            NSLog("HasnaNotes: rendered \(count) note rows")
+            NSLog("PersonalNotes: rendered \(count) note rows")
         }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        NSLog("HasnaNotes: didFail navigation: \(error.localizedDescription)")
+        NSLog("PersonalNotes: didFail navigation: \(error.localizedDescription)")
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        NSLog("HasnaNotes: didFailProvisionalNavigation: \(error.localizedDescription)")
+        NSLog("PersonalNotes: didFailProvisionalNavigation: \(error.localizedDescription)")
     }
 
     // MARK: notes bridge (JS → Swift)
@@ -978,7 +981,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                     "machine": bridge.machineDetails(id: machineID),
                 ])
                 DispatchQueue.main.async { [weak self] in
-                    self?.web.evaluateJavaScript("window.HasnaNotes && window.HasnaNotes.machines && window.HasnaNotes.machines.receiveDetails(\(details))", completionHandler: nil)
+                    self?.web.evaluateJavaScript("window.PersonalNotes && window.PersonalNotes.machines && window.PersonalNotes.machines.receiveDetails(\(details))", completionHandler: nil)
                 }
             }
             return
@@ -996,7 +999,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         notesQueue.async { [weak self] in
             func allowDestructive(_ action: String) -> Bool {
                 if destructiveConfirmed { return true }
-                NSLog("HasnaNotes: ignored unconfirmed destructive notes action '\(action)'")
+                NSLog("PersonalNotes: ignored unconfirmed destructive notes action '\(action)'")
                 return false
             }
 
@@ -1019,7 +1022,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
                 guard allowDestructive(action) else { return }
                 changed = bridge.delete(note.dict)
             default:
-                NSLog("HasnaNotes: unknown notes action '\(action)'")
+                NSLog("PersonalNotes: unknown notes action '\(action)'")
             }
 
             guard changed else { return }
@@ -1030,7 +1033,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             DispatchQueue.main.async { [weak self] in
                 guard let self, let web = self.web else { return }
                 self.installUserScripts(into: web.configuration.userContentController, boot: fresh)
-                web.evaluateJavaScript("window.HasnaNotes && window.HasnaNotes.hydrate(\(fresh))", completionHandler: nil)
+                web.evaluateJavaScript("window.PersonalNotes && window.PersonalNotes.hydrate(\(fresh))", completionHandler: nil)
             }
         }
     }
@@ -1138,7 +1141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     /// Shared NSAlert shell for the three JS dialogs.
     private func jsDialogAlert(message: String) -> NSAlert {
         let alert = NSAlert()
-        alert.messageText = "Hasna Notes"
+        alert.messageText = "PersonalNotes"
         alert.informativeText = message
         return alert
     }
@@ -1205,7 +1208,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         web?.configuration.userContentController.removeScriptMessageHandler(forName: notesHandlerName)
         web?.configuration.userContentController.removeScriptMessageHandler(forName: windowHandlerName)
         web?.configuration.userContentController.removeScriptMessageHandler(forName: recordingHandlerName)
-        web?.evaluateJavaScript("window.HasnaNotes && window.HasnaNotes.destroy()", completionHandler: nil)
+        web?.evaluateJavaScript("window.PersonalNotes && window.PersonalNotes.destroy()", completionHandler: nil)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { true }
@@ -1240,9 +1243,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         let appItem = NSMenuItem()
         main.addItem(appItem)
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "Hide Hasna Notes", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(withTitle: "Hide PersonalNotes", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         appMenu.addItem(NSMenuItem.separator())
-        appMenu.addItem(withTitle: "Quit Hasna Notes", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(withTitle: "Quit PersonalNotes", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
 
         // Standard Edit menu: without these responder-chain items the key equivalents
@@ -1288,7 +1291,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
 
     private func callRecordingJS(_ action: String) {
-        let js = "window.HasnaNotes && window.HasnaNotes.recording && window.HasnaNotes.recording.\(action) && window.HasnaNotes.recording.\(action)()"
+        let js = "window.PersonalNotes && window.PersonalNotes.recording && window.PersonalNotes.recording.\(action) && window.PersonalNotes.recording.\(action)()"
         web?.evaluateJavaScript(js, completionHandler: nil)
     }
 
@@ -1378,7 +1381,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             statusStopItem = menu.addItem(withTitle: "Stop", action: #selector(recordingStop(_:)), keyEquivalent: "")
             statusStopItem?.target = self
             menu.addItem(NSMenuItem.separator())
-            let open = menu.addItem(withTitle: "Open Hasna Notes", action: #selector(openMainWindow(_:)), keyEquivalent: "")
+            let open = menu.addItem(withTitle: "Open PersonalNotes", action: #selector(openMainWindow(_:)), keyEquivalent: "")
             open.target = self
             item.menu = menu
             statusItem = item
@@ -1454,7 +1457,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         }
     }
 
-    /// Bring the main app window forward (status-item "Open Hasna Notes").
+    /// Bring the main app window forward (status-item "Open PersonalNotes").
     @objc private func openMainWindow(_ sender: Any?) {
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)

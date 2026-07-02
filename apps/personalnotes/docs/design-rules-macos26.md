@@ -1,10 +1,11 @@
 # Design Rules — macOS 26 "Tahoe" Liquid Glass
 
-Authoritative design spec for Hasna Notes / PersonalNotes. Covers both surfaces:
+Authoritative design spec for PersonalNotes. Covers both surfaces:
 
-- the SwiftUI app (`Sources/OpenNotes/`), and
+- the SwiftUI app (`Sources/OpenNotes/` — removed in the P1 de-bloat; sections
+  kept for historical reference), and
 - the web UI (`web/`) hosted full-bleed in the borderless WKWebView shell
-  (`Sources/HasnaNotesApp/main.swift`).
+  (`Sources/PersonalNotesApp/main.swift`).
 
 The product identity is fixed by `README.md` and must be preserved: a narrow
 **infinity-purple Liquid-Glass sidebar** beside **ONE continuous white canvas**
@@ -451,7 +452,7 @@ border:
 (WebKit renders true half-pixel strokes); keep dividers, never boxes, on the
 canvas (Rule 16).
 
-### 3.8 Shell (`Sources/HasnaNotesApp/main.swift`)
+### 3.8 Shell (`Sources/PersonalNotesApp/main.swift`)
 
 - `window.backgroundColor` must follow the effective appearance
   (`.windowBackgroundColor`), not fixed `.white` (`main.swift:781`) — dark
@@ -554,7 +555,7 @@ break, ★★ native-feel break, ★ polish.
 ### Change discipline
 
 - Design changes must not alter DOM ids/classes consumed by
-  `docs/ui-contracts.md` flows (`window.HasnaNotes.*`, `hasna:*` events,
+  `docs/ui-contracts.md` flows (`window.PersonalNotes.*`, `hasna:*` events,
   drag exclusions, recording pill states).
 - Any change to the native inset touches three places at once:
   `styles.css --native-inset`, `main.swift` drag-strip height, and the

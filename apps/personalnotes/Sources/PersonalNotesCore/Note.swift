@@ -1,6 +1,6 @@
 import Foundation
 
-/// Lifecycle status of a note. Mirrors the open-notes / @hasna/notes catalog vocabulary.
+/// Lifecycle status of a note. Mirrors the open-personalnotes / @hasna/personalnotes catalog vocabulary.
 public enum NoteStatus: String, CaseIterable, Identifiable, Codable {
     case inbox
     case active
@@ -50,7 +50,7 @@ public struct Note: Identifiable, Equatable {
     /// Provenance marker written into every note's `agent` frontmatter field for notes
     /// created/edited by this app. Old files carrying the legacy `open-notes-app` value
     /// still parse — see `MarkdownStore.parse`.
-    public static let appAgent = "hasna-notes-app"
+    public static let appAgent = "personalnotes-app"
 
     public var id: UUID
     public var title: String
