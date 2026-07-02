@@ -386,12 +386,61 @@ private func machineJSON(_ machine: FleetMachine, notes: [Note], fallbackID: Str
     return obj
 }
 
+// MARK: - Fleet manifest cache
+
+/// Process-wide cache in front of `FleetManifest.load`. Loading the manifest stats and
+/// parses `~/.hasna/machines/machines.json` and — when that file is missing — spawns the
+/// `machines` CLI with a 2.5 s termination timer. `bootJSON()` runs after EVERY autosave,
+/// so an uncached load meant two full manifest reads (and possibly a CLI subprocess) per
+/// keystroke burst. Rules here: results are cached with a short TTL, the on-disk file is
+/// re-read cheaply when the cache is stale, and the CLI fallback fires at most ONCE per
+/// app session — never on the autosave path with `allowCLI: false` callers.
+/// `@unchecked Sendable`: all state is guarded by `lock`.
+final class ManifestCache: @unchecked Sendable {
+    static let shared = ManifestCache()
+    private let lock = NSLock()
+    private var machines: [FleetMachine]?
+    private var loadedAt = Date.distantPast
+    private var cliAttempted = false
+    private let ttl: TimeInterval = 60
+
+    func fleet(allowCLI: Bool) -> [FleetMachine] {
+        lock.lock()
+        defer { lock.unlock() }
+        if let machines, Date().timeIntervalSince(loadedAt) < ttl { return machines }
+        // Fast path: machines.json on disk (cheap enough to re-read after the TTL).
+        if let data = try? Data(contentsOf: FleetManifest.defaultManifestURL()) {
+            let parsed = FleetManifest.parse(jsonData: data)
+            if !parsed.isEmpty {
+                machines = parsed
+                loadedAt = Date()
+                return parsed
+            }
+        }
+        // Slow path: the `machines` CLI (2.5 s timeout) — at most once per app session,
+        // and only for callers that opted in (launch boot / background refresh).
+        if allowCLI, !cliAttempted {
+            cliAttempted = true
+            let loaded = FleetManifest.load(fallback: FleetManifest.builtInFallback)
+            machines = loaded
+            loadedAt = Date()
+            return loaded
+        }
+        // No manifest anywhere: CLI-eligible callers keep the built-in fallback (matches
+        // FleetManifest.load), fast callers keep the previous empty-manifest behavior.
+        return machines ?? (allowCLI ? FleetManifest.builtInFallback : [])
+    }
+}
+
 // MARK: - Notes bridge
 
 /// Owns the on-disk store and the boot/hydrate/save/delete round-trip. Kept separate
 /// from the message-handler object so the WKWebView retain graph (see WeakScriptProxy)
 /// stays clean.
-final class NotesBridge {
+/// `@unchecked Sendable`: every stored property is an immutable value (the stores are
+/// stateless wrappers over the on-disk files); mutations are serialized by the app
+/// delegate's `notesQueue`, and the manifest cache carries its own lock.
+final class NotesBridge: @unchecked Sendable {
     let store = MarkdownStore()
     let labelStore: LabelStore
     let settingsStore: SettingsStore
@@ -426,12 +475,7 @@ final class NotesBridge {
     func machinePayloads(notes: [Note], includeManifestCLI: Bool = true) -> [[String: Any]] {
         var machinesByID: [String: FleetMachine] = [:]
         var aliases = Set<String>()
-        let manifestCLI: (() -> Data?)? = includeManifestCLI ? nil : { nil }
-        let fallback = includeManifestCLI ? FleetManifest.builtInFallback : []
-        let manifest = FleetManifest.load(
-            runCLI: manifestCLI,
-            fallback: fallback
-        )
+        let manifest = ManifestCache.shared.fleet(allowCLI: includeManifestCLI)
         for m in manifest {
             machinesByID[m.id] = m
             aliases.formUnion(machineAliases(m))
@@ -503,6 +547,12 @@ final class NotesBridge {
         let createdAt = existing?.createdAt
             ?? (dict["createdAt"] as? String).flatMap(MarkdownStore.parseDate)
             ?? Date()
+        // Respect the client's updatedAt stamp (the web layer sets it at commit time).
+        // Re-stamping with Date() here made the hydrate echo of every save compare
+        // "newer" than the edit that produced it, so the web editor adopted its own
+        // echo — including stale echoes of earlier queued saves — and stomped
+        // keystrokes still in flight. Callers that send no stamp keep the old behavior.
+        let updatedAt = (dict["updatedAt"] as? String).flatMap(MarkdownStore.parseDate) ?? Date()
         let machine = allowMachineChange
             ? ((dict["machine"] as? String) ?? existing?.machine ?? thisMachine)
             : (existing?.machine ?? (dict["machine"] as? String) ?? thisMachine)
@@ -536,7 +586,7 @@ final class NotesBridge {
             titleSource: titleSource,
             titleContentFingerprint: titleContentFingerprint,
             createdAt: createdAt,
-            updatedAt: Date(),
+            updatedAt: updatedAt,
             author: author,
             agent: agent,
             machine: machine,
@@ -722,6 +772,13 @@ final class WindowDragStrip: NSView {
 
 // MARK: - App delegate
 
+/// Carries a JS notes-mutation payload across the bridge-queue hop. `@unchecked` because
+/// the dictionary comes straight from `WKScriptMessage.body` (plist value types) and is
+/// never mutated after capture.
+private struct NotesMutationPayload: @unchecked Sendable {
+    let dict: [String: Any]
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler, WKUIDelegate {
     var window: NSWindow!
     var web: WKWebView!
@@ -730,6 +787,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     private var dragStrip: WindowDragStrip?
     let bridge = NotesBridge()
     let sidecar = AISidecar()
+    /// Serial queue for note mutations + the follow-up bootJSON rebuild. Script messages
+    /// arrive on the main thread; running the disk-heavy save/boot work there froze
+    /// typing (2 full store scans + manifest per autosave). The queue keeps saves ordered
+    /// while the UI thread only hops back in to evaluate the hydrate JavaScript.
+    private let notesQueue = DispatchQueue(label: "HasnaNotes.notes-bridge", qos: .userInitiated)
     private let notesHandlerName = "notes"
     private let windowHandlerName = "window"
     private let recordingHandlerName = "recording"
@@ -953,39 +1015,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         }
         let noteDict = (payload["note"] as? [String: Any]) ?? [:]
         let destructiveConfirmed = (payload["confirmed"] as? Bool) == true || (noteDict["confirmed"] as? Bool) == true
-        func allowDestructive(_ action: String) -> Bool {
-            if destructiveConfirmed { return true }
-            NSLog("HasnaNotes: ignored unconfirmed destructive notes action '\(action)'")
-            return false
-        }
 
-        var changed = false
-        switch action {
-        case "create": changed = bridge.save(noteDict, isCreate: true)
-        case "save":   changed = bridge.save(noteDict, isCreate: false)
-        case "move":   changed = bridge.move(noteDict)
-        case "archive": changed = bridge.archive(noteDict)
-        case "trash":
-            guard allowDestructive(action) else { return }
-            changed = bridge.trash(noteDict)
-        case "restore": changed = bridge.restore(noteDict)
-        case "purge":
-            guard allowDestructive(action) else { return }
-            changed = bridge.purge(noteDict)
-        case "settings": changed = bridge.updateSettings(noteDict)
-        case "labels": changed = bridge.updateLabels(noteDict)
-        case "delete":
-            guard allowDestructive(action) else { return }
-            changed = bridge.delete(noteDict)
-        default:
-            NSLog("HasnaNotes: unknown notes action '\(action)'")
-        }
+        // Mutations are disk-heavy: `note(from:)` re-loads the whole store, and the
+        // follow-up `bootJSON()` loads it again plus the fleet manifest. Script messages
+        // arrive on the main thread, so doing that work here froze typing (every 600 ms
+        // autosave). Hop to the serial notes queue — order-preserving, so rapid saves
+        // land in sequence — and touch the main thread again only for the hydrate push.
+        let note = NotesMutationPayload(dict: noteDict)
+        let bridge = self.bridge
+        notesQueue.async { [weak self] in
+            func allowDestructive(_ action: String) -> Bool {
+                if destructiveConfirmed { return true }
+                NSLog("HasnaNotes: ignored unconfirmed destructive notes action '\(action)'")
+                return false
+            }
 
-        guard changed else { return }
-        // After any mutation, reload from disk and push fresh data back into the page.
-        let fresh = bridge.bootJSON()
-        DispatchQueue.main.async { [weak self] in
-            self?.web.evaluateJavaScript("window.HasnaNotes && window.HasnaNotes.hydrate(\(fresh))", completionHandler: nil)
+            var changed = false
+            switch action {
+            case "create": changed = bridge.save(note.dict, isCreate: true)
+            case "save":   changed = bridge.save(note.dict, isCreate: false)
+            case "move":   changed = bridge.move(note.dict)
+            case "archive": changed = bridge.archive(note.dict)
+            case "trash":
+                guard allowDestructive(action) else { return }
+                changed = bridge.trash(note.dict)
+            case "restore": changed = bridge.restore(note.dict)
+            case "purge":
+                guard allowDestructive(action) else { return }
+                changed = bridge.purge(note.dict)
+            case "settings": changed = bridge.updateSettings(note.dict)
+            case "labels": changed = bridge.updateLabels(note.dict)
+            case "delete":
+                guard allowDestructive(action) else { return }
+                changed = bridge.delete(note.dict)
+            default:
+                NSLog("HasnaNotes: unknown notes action '\(action)'")
+            }
+
+            guard changed else { return }
+            // After any mutation, reload from disk and push fresh data back into the page.
+            let fresh = bridge.bootJSON()
+            DispatchQueue.main.async { [weak self] in
+                self?.web.evaluateJavaScript("window.HasnaNotes && window.HasnaNotes.hydrate(\(fresh))", completionHandler: nil)
+            }
         }
     }
 
@@ -1069,9 +1141,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         decisionHandler(.grant)
     }
 
+    // MARK: WKUIDelegate — JS dialogs (alert / confirm / prompt)
+
+    // WKWebView renders NO UI for window.alert/confirm/prompt — without these handlers
+    // confirm() silently resolves false and prompt() returns null, so every
+    // confirm-gated destructive action in the web layer (note delete, label delete,
+    // expired-trash cleanup) and the prompt-driven machine move would no-op.
+    // Each dialog runs as a sheet on the web view's window, never app-modal. The same
+    // web view serves compact/quick-note mode, so both modes are covered.
+
+    /// Shared NSAlert shell for the three JS dialogs.
+    private func jsDialogAlert(message: String) -> NSAlert {
+        let alert = NSAlert()
+        alert.messageText = "Hasna Notes"
+        alert.informativeText = message
+        return alert
+    }
+
+    func webView(_ webView: WKWebView,
+                 runJavaScriptAlertPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping @MainActor @Sendable () -> Void) {
+        guard let host = webView.window ?? window else { completionHandler(); return }
+        let alert = jsDialogAlert(message: message)
+        alert.addButton(withTitle: "OK")
+        // Sheet completions run on the main thread, but not every SDK annotates them
+        // @MainActor — assumeIsolated keeps the hop explicit for the strict checker.
+        alert.beginSheetModal(for: host) { _ in
+            MainActor.assumeIsolated { completionHandler() }
+        }
+    }
+
+    func webView(_ webView: WKWebView,
+                 runJavaScriptConfirmPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping @MainActor @Sendable (Bool) -> Void) {
+        guard let host = webView.window ?? window else { completionHandler(false); return }
+        let alert = jsDialogAlert(message: message)
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: host) { response in
+            MainActor.assumeIsolated { completionHandler(response == .alertFirstButtonReturn) }
+        }
+    }
+
+    func webView(_ webView: WKWebView,
+                 runJavaScriptTextInputPanelWithPrompt prompt: String,
+                 defaultText: String?,
+                 initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping @MainActor @Sendable (String?) -> Void) {
+        guard let host = webView.window ?? window else { completionHandler(nil); return }
+        let alert = jsDialogAlert(message: prompt)
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.stringValue = defaultText ?? ""
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        alert.beginSheetModal(for: host) { response in
+            MainActor.assumeIsolated {
+                completionHandler(response == .alertFirstButtonReturn ? field.stringValue : nil)
+            }
+        }
+    }
+
     // MARK: teardown
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Drain pending note mutations (they run on the serial notes queue) so quitting
+        // right after a keystroke can't drop the final debounced autosave.
+        notesQueue.sync { }
         // Remove the menu-bar status item (and its ticker) so it never outlives the app.
         hideStatusItem()
         // Stop the AI sidecar child so it doesn't outlive the app.
@@ -1095,6 +1234,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "Quit Hasna Notes", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
+
+        // Standard Edit menu: without these responder-chain items the key equivalents
+        // (Cmd+A/C/V/X/Z) never reach the WKWebView, so select-all/copy/paste/cut/undo
+        // are dead in the editor and note lists.
+        let editItem = NSMenuItem()
+        main.addItem(editItem)
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        editMenu.addItem(NSMenuItem.separator())
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(NSMenuItem.separator())
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = editMenu
 
         let winItem = NSMenuItem()
         main.addItem(winItem)

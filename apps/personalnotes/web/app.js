@@ -84,6 +84,7 @@
     labelFilter: ALL,     // ALL or a label name (UI-only forward-compatible filter)
     query: '',            // search text
     screen: 'home',       // 'home' | 'chat' | 'labels' | 'notes' | 'noteslist' | 'settings' | 'compact'
+    settingsReturnScreen: 'home', // screen to restore when leaving Settings via "Back to app"
     statusFilter: 'active', // active | archived | trash | all
     noteListLimit: 6,     // sidebar Notes list; "View more" opens the full Notes page
     machineListLimit: 4,  // sidebar Machines list; "View more" opens Settings → Machines
@@ -1002,8 +1003,21 @@
     const emptyEl = $('np-empty');
     if (!host) return;
     host.innerHTML = '';
-    const list = sortNotes(state.notes.filter(n => n.status !== 'trash' && n.status !== 'archived'));
-    if (countEl) countEl.textContent = list.length === 1 ? '1 note' : list.length + ' notes';
+    // Single source of truth: the same machine/label/status/search selector as the
+    // sidebar list (visibleNotes), so the Labels-page "Filter notes" flow and the
+    // sidebar search constrain this page too — just without the sidebar's limit.
+    const list = visibleNotes();
+    if (countEl) {
+      const bits = [list.length === 1 ? '1 note' : list.length + ' notes'];
+      if (state.machineFilter !== ALL) {
+        const m = machineById(state.machineFilter);
+        bits.push((m && m.displayName) || state.machineFilter);
+      }
+      if (state.labelFilter !== ALL) bits.push(state.labelFilter);
+      if (state.statusFilter !== 'active') bits.push(state.statusFilter);
+      if (state.query.trim()) bits.push('“' + state.query.trim() + '”');
+      countEl.textContent = bits.join(' · ');
+    }
     if (emptyEl) emptyEl.hidden = list.length !== 0;
     list.forEach(n => {
       const row = el('div', 'np-row');
@@ -1324,10 +1338,27 @@
   function fillEditor(note) {
     const titleEl = $('editor-title');
     const bodyEl = $('editor-body');
-    // Only overwrite the field value when it differs, so we don't disturb the caret
-    // while the user is typing (render() can be called from machine-filter clicks etc).
-    if (titleEl.value !== note.title) titleEl.value = note.title || '';
-    if (bodyEl.value !== note.body) bodyEl.value = note.body || '';
+    // A different note is taking the editor — any in-flight edit baseline is stale.
+    if (editBase && editBase.id !== note.id) editBase = null;
+    if (editBase) {
+      // In-flight local edits (the host hydrates after EVERY write, including our own
+      // save round-trip): never stomp keystrokes typed inside the save debounce. Only
+      // adopt a field whose content genuinely changed from ANOTHER source — it differs
+      // from what we last committed AND carries a newer updatedAt than our last edit.
+      const externalTitle = note.title !== editBase.title;
+      const externalBody = note.body !== editBase.body;
+      const newer = (Date.parse(note.updatedAt) || 0) > (Date.parse(editBase.updatedAt) || 0);
+      if ((externalTitle || externalBody) && newer) {
+        if (externalTitle && titleEl.value !== note.title) titleEl.value = note.title || '';
+        if (externalBody && bodyEl.value !== note.body) bodyEl.value = note.body || '';
+        editBase = { id: note.id, title: note.title, body: note.body, updatedAt: note.updatedAt };
+      }
+    } else {
+      // Only overwrite the field value when it differs, so we don't disturb the caret
+      // while the user is typing (render() can be called from machine-filter clicks etc).
+      if (titleEl.value !== note.title) titleEl.value = note.title || '';
+      if (bodyEl.value !== note.body) bodyEl.value = note.body || '';
+    }
 
     $('em-machine').textContent = note.machine || state.thisMachine;
     $('em-updated').textContent = 'updated ' + relTime(note.updatedAt);
@@ -1343,6 +1374,16 @@
 
   // ------------------------------------------------------------------ editor actions
   let saveTimer = null;
+  // Baseline for the note being edited: the content we last committed (or the model
+  // content when typing started) + its updatedAt. fillEditor uses it to tell our own
+  // save echoes apart from genuine external writes, so hydrate() can't wipe keystrokes
+  // still inside the debounce window. Cleared when another note takes the editor.
+  let editBase = null; // { id, title, body, updatedAt }
+  function markEditBase(n) {
+    if (!editBase || editBase.id !== n.id) {
+      editBase = { id: n.id, title: n.title, body: n.body, updatedAt: n.updatedAt };
+    }
+  }
   function scheduleSave() {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(commitEdit, 600);
@@ -1469,6 +1510,9 @@
       note.titleContentFingerprint = '';
     }
     note.updatedAt = new Date().toISOString();
+    // The committed content is the new baseline: the host's hydrate echo for this save
+    // matches it, so fillEditor won't treat our own write as an external change.
+    editBase = { id: note.id, title: newTitle, body: newBody, updatedAt: note.updatedAt };
     postNative('save', serializeNote(note));
     // Re-render the sidebar (title/order may have changed) but keep editor fields intact.
     renderNotesList();
@@ -1581,6 +1625,13 @@
   const win = $('window');
 
   function showSettings(tab) {
+    // Flush any pending edit BEFORE the screen flips (commitEdit only writes while
+    // 'notes' is active) — otherwise opening Settings mid-debounce drops the keystrokes.
+    commitEdit();
+    // Remember where the user came from so "Back to app" can restore it — leaving
+    // state.screen stuck on 'settings' made the next render() force the editor over
+    // whatever screen was showing (the flaky-settings symptom).
+    if (state.screen !== 'settings') state.settingsReturnScreen = state.screen;
     state.screen = 'settings';
     win.setAttribute('data-active-shell', 'settings');
     const t = SETTINGS_TABS.indexOf(tab) >= 0 ? tab : 'appearance';
@@ -1591,10 +1642,15 @@
     const page = document.querySelector('.set-page[data-tab="' + t + '"]');
     if (page) page.classList.add('active');
     if (t === 'machines') renderMachinesPage();
+    // The visible header controls differ per shell — refresh the native drag holes.
+    scheduleDragExclusions();
   }
 
   function showApp() {
     win.setAttribute('data-active-shell', 'app');
+    // The visible header controls differ per shell — refresh the native drag holes
+    // (a resize while Settings was open clears the app-shell holes; re-punch them).
+    scheduleDragExclusions();
   }
 
   // Navigate to the Home landing screen (stays in the app shell, shows #home-state).
@@ -2532,6 +2588,7 @@
   function onTitleInput() {
     const n = noteById(state.selectedId);
     if (!n) return;
+    markEditBase(n); // in-flight edit: protect these keystrokes from hydrate
     // If the user typed a non-default title, mark it manual so we never auto-title it.
     const v = $('editor-title').value;
     if (!isDefaultTitle(v)) {
@@ -2546,6 +2603,7 @@
   function onBodyInput() {
     const n = noteById(state.selectedId);
     if (!n) return;
+    markEditBase(n); // in-flight edit: protect these keystrokes from hydrate
     scheduleSave();
     maybeAutoTitle();
   }
@@ -2553,9 +2611,13 @@
   function onSearchInput(e) {
     state.query = e.target.value || '';
     state.noteListLimit = 10;
-    // If the selected note is filtered out, fall through to newest visible in renderEditor.
+    // The sidebar list always reflects the query, but only the surface the active
+    // screen owns re-renders: renderEditor un-hides the editor panel, which must
+    // never appear over Home/Chat/Labels. The screen state stays authoritative.
     renderNotesList();
-    renderEditor();
+    // If the selected note is filtered out, fall through to newest visible in renderEditor.
+    if (state.screen === 'notes') renderEditor();
+    else if (state.screen === 'noteslist') renderNotesPage();
   }
   function onNewNote(e) { if (e) e.preventDefault(); newNote(); }
   function onDelete(e) { if (e) e.preventDefault(); deleteCurrent(); }
@@ -2633,7 +2695,14 @@
   }
   function onWindowScroll() { closeContextMenu(); }
   function onOpenSettings(e) { if (e) e.preventDefault(); showSettings('appearance'); }
-  function onSettingsBack(e) { if (e) e.preventDefault(); showApp(); }
+  function onSettingsBack(e) {
+    if (e) e.preventDefault();
+    // Restore the screen the user was on before Settings — screen state stays
+    // authoritative, so the next render() shows the right surface again.
+    state.screen = state.settingsReturnScreen || 'home';
+    showApp();
+    render();
+  }
   function onSettingsTab(e) {
     const item = e.currentTarget;
     const tab = item.getAttribute('data-tab');
@@ -2848,7 +2917,8 @@
   function destroy() {
     if (!started) return;
     unbind();
-    if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+    if (saveTimer) commitEdit(); // flush — don't drop — a pending debounced autosave
+    editBase = null;
     if (autoTitleTimer) { clearTimeout(autoTitleTimer); autoTitleTimer = null; }
     if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
     if (rec.timer) { clearInterval(rec.timer); rec.timer = null; }
@@ -3739,6 +3809,8 @@
     note.body = result.markdown;
     note.contentFormat = 'markdown';
     note.updatedAt = new Date().toISOString();
+    // Baseline like commitEdit: the hydrate echo of this save must not read as external.
+    editBase = { id: note.id, title: note.title, body: note.body, updatedAt: note.updatedAt };
     postNative('save', serializeNote(note));
     renderNotesList();
     renderHome();
