@@ -179,6 +179,10 @@ class FakeElement {
     this.listeners.get(type).push(fn);
   }
 
+  removeEventListener(type, fn) {
+    this.listeners.set(type, (this.listeners.get(type) || []).filter(item => item !== fn));
+  }
+
   dispatchEvent(event) {
     event.target ||= this;
     event.currentTarget = this;
@@ -203,6 +207,10 @@ class FakeElement {
     return this.attributes.get(name) ?? null;
   }
 
+  removeAttribute(name) {
+    this.attributes.delete(name);
+  }
+
   querySelector() { return null; }
   querySelectorAll() { return []; }
   focus() {}
@@ -220,7 +228,9 @@ function createFakeDocument() {
     return elements.get(id);
   };
   const document = {
-    readyState: 'loading',
+    // 'complete' so app.js runs init() (bind + first render) exactly like the real app —
+    // static controls (sidebar nav, header buttons, editor fields) become clickable.
+    readyState: 'complete',
     documentElement: new FakeElement('html'),
     body: new FakeElement('body'),
     elements,
@@ -236,7 +246,7 @@ function createFakeDocument() {
   return document;
 }
 
-function loadWebAppWithFakeDOM(app) {
+function loadWebAppWithFakeDOM(app, extraWindow = {}, extraContext = {}) {
   const listeners = new Map();
   const windowTarget = {
     addEventListener(type, fn) {
@@ -252,6 +262,7 @@ function loadWebAppWithFakeDOM(app) {
     },
     confirm() { return false; },
     prompt() { return ''; },
+    ...extraWindow,
   };
   const document = createFakeDocument();
   const context = {
@@ -265,14 +276,33 @@ function loadWebAppWithFakeDOM(app) {
       }
     },
     TextEncoder,
+    TextDecoder,
+    fetch: windowTarget.fetch,
     setTimeout,
     clearTimeout,
     setInterval,
     clearInterval,
     console,
+    ...extraContext,
   };
   vm.runInNewContext(app, context, { filename: 'web/app.js' });
   return { windowTarget, document };
+}
+
+// Fake sidecar /chat response: newline-delimited stream events, one chunk.
+function ndjsonResponse(events) {
+  const bytes = new TextEncoder().encode(events.map(event => JSON.stringify(event)).join('\n') + '\n');
+  let done = false;
+  return {
+    ok: true,
+    body: {
+      getReader() {
+        return {
+          read: async () => (done ? { done: true, value: undefined } : (done = true, { done: false, value: bytes })),
+        };
+      },
+    },
+  };
 }
 
 function openFakeTitleServer(title, seen = []) {
@@ -719,59 +749,121 @@ test('agent label move and goal flows use shared safe tools', async (t) => {
   assert.equal(slashGoal.goal.status, 'done');
 });
 
-test('web chat bridge emits tool source and confirmation events', async () => {
+test('web chat streams sidecar events and applies approvals through the sidecar', async () => {
   const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
-  const { windowTarget } = loadWebAppWithFakeDOM(app);
+  const approval = {
+    id: 'approval-trash-1',
+    toolCallId: 'tool-1',
+    toolName: 'trash_note',
+    input: { id: 'chat-1' },
+    preview: { id: 'chat-1', title: 'Alpha Plan', fromStatus: 'active', toStatus: 'trash' },
+  };
+  const fetchCalls = [];
+  const fetchStub = async (url, init) => {
+    fetchCalls.push({ url: String(url), init });
+    if (String(url).endsWith('/chat')) {
+      return ndjsonResponse([
+        { type: 'text-delta', text: 'Reviewing the note.' },
+        { type: 'tool-call', toolCallId: 'tool-1', toolName: 'trash_note', input: { id: 'chat-1' } },
+        { type: 'tool-result', toolCallId: 'tool-1', output: { requiresConfirmation: true, approval } },
+        { type: 'confirmation', approval },
+        { type: 'finish', text: 'Reviewing the note.', pendingConfirmations: [approval] },
+      ]);
+    }
+    if (String(url).endsWith('/tool')) {
+      return { ok: true, json: async () => ({ note: { id: 'chat-1', title: 'Alpha Plan', status: 'trash' } }) };
+    }
+    throw new Error(`unexpected sidecar url ${url}`);
+  };
+  const { windowTarget } = loadWebAppWithFakeDOM(app, {
+    __AI__: { port: 4222, available: true },
+    fetch: fetchStub,
+    TextDecoder,
+  });
   const events = [];
-  for (const name of ['hasna:chat-state', 'hasna:chat-tool-call', 'hasna:chat-tool-result', 'hasna:chat-sources', 'hasna:chat-confirmation', 'hasna:chat-finish']) {
+  for (const name of ['hasna:chat-state', 'hasna:chat-tool-call', 'hasna:chat-tool-result', 'hasna:chat-confirmation', 'hasna:chat-finish']) {
     windowTarget.addEventListener(name, event => events.push({ name, detail: event.detail }));
   }
   windowTarget.HasnaNotes.hydrate({
     thisMachine: 'apple03',
     notes: [
       { id: 'chat-1', title: 'Alpha Plan', body: 'Alpha launch plan and budget.', labels: ['alpha'], status: 'active', machine: 'apple03', updatedAt: '2026-06-23T10:00:00Z', createdAt: '2026-06-23T09:00:00Z' },
-      { id: 'chat-2', title: 'Alpha Followup', body: 'Alpha follow-up checklist.', labels: ['alpha'], status: 'active', machine: 'apple03', updatedAt: '2026-06-22T10:00:00Z', createdAt: '2026-06-22T09:00:00Z' },
     ],
     machines: [{ id: 'apple03' }],
   });
 
-  const summary = await windowTarget.HasnaNotes.chat.send('summarize alpha notes');
-  assert.match(summary.text, /Summary of 2 notes/);
-  assert.equal(summary.sources.length, 2);
-  assert.ok(events.some(event => event.name === 'hasna:chat-tool-call' && event.detail.toolCall.name === 'summarize_notes'));
-  assert.ok(events.some(event => event.name === 'hasna:chat-sources' && event.detail.sources.length === 2));
-
-  const labeled = await windowTarget.HasnaNotes.chat.send('label focus', { noteId: 'chat-1' });
-  assert.equal(labeled.toolCalls[0].name, 'label_note');
-  const labelSearch = await windowTarget.HasnaNotes.chat.send('search focus');
-  assert.equal(labelSearch.sources[0].id, 'chat-1');
-
-  const update = await windowTarget.HasnaNotes.chat.send('update body: Rewritten alpha plan', { noteId: 'chat-1' });
-  assert.equal(update.pendingConfirmations.length, 1);
-  assert.equal(windowTarget.HasnaNotes.chat.state().toolCalls[0].state, 'approval-requested');
-  const updated = windowTarget.HasnaNotes.chat.approve(update.pendingConfirmations[0].id, true);
-  assert.equal(updated.note.id, 'chat-1');
-  assert.equal(windowTarget.HasnaNotes.chat.state().toolCalls[0].state, 'result');
-  const readUpdated = await windowTarget.HasnaNotes.chat.send('read note', { noteId: 'chat-1' });
-  assert.match(readUpdated.text, /Rewritten alpha plan/);
-
-  const consolidation = await windowTarget.HasnaNotes.chat.send('consolidate alpha notes');
-  assert.equal(consolidation.pendingConfirmations.length, 1);
-  const approval = consolidation.pendingConfirmations[0];
+  const result = await windowTarget.HasnaNotes.chat.send('trash the alpha plan note');
+  assert.equal(result.text, 'Reviewing the note.');
+  assert.equal(result.pendingConfirmations.length, 1);
+  assert.equal(windowTarget.HasnaNotes.chat.state().status, 'awaiting_confirmation');
+  assert.ok(events.some(event => event.name === 'hasna:chat-tool-call' && event.detail.toolCall.name === 'trash_note'));
   assert.ok(events.some(event => event.name === 'hasna:chat-confirmation' && event.detail.approval.id === approval.id));
-  const approved = windowTarget.HasnaNotes.chat.approve(approval.id, true);
-  assert.equal(approved.note.title, 'Consolidated Notes');
+
+  const approved = await windowTarget.HasnaNotes.chat.approve(approval.id, true);
+  assert.equal(approved.approved, true);
+  assert.equal(approved.note.id, 'chat-1');
+  const toolCall = fetchCalls.find(call => call.url.endsWith('/tool'));
+  assert.ok(toolCall, 'approval must be applied via the sidecar /tool endpoint');
+  assert.equal(JSON.parse(toolCall.init.body).confirm, true);
   assert.equal(windowTarget.HasnaNotes.chat.state().status, 'ready');
   assert.equal(windowTarget.HasnaNotes.chat.state().toolCalls[0].state, 'result');
+  assert.equal(windowTarget.HasnaNotes.chat.state().pendingConfirmations.length, 0);
 });
 
-test('web navigation exposes Chat below New Note and Labels page operations', async () => {
+test('web chat is honest when the AI sidecar is unavailable — no fake local answers', async () => {
+  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
+  assert.doesNotMatch(app, /sendLocalChat|sendLocalGoalChat/, 'fake local chat must stay deleted');
+  const { windowTarget } = loadWebAppWithFakeDOM(app);
+  const errors = [];
+  windowTarget.addEventListener('hasna:chat-error', event => errors.push(event.detail));
+  windowTarget.HasnaNotes.hydrate({
+    thisMachine: 'apple03',
+    notes: [
+      { id: 'chat-1', title: 'Alpha Plan', body: 'Alpha launch plan and budget.', labels: ['alpha'], status: 'active', machine: 'apple03', updatedAt: '2026-06-23T10:00:00Z', createdAt: '2026-06-23T09:00:00Z' },
+    ],
+    machines: [{ id: 'apple03' }],
+  });
+
+  await assert.rejects(() => windowTarget.HasnaNotes.chat.send('summarize alpha notes'), /AI unavailable/);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].error, /AI unavailable/);
+  const chatState = windowTarget.HasnaNotes.chat.state();
+  assert.equal(chatState.status, 'error');
+  assert.match(chatState.error, /AI unavailable/);
+  assert.equal(chatState.messages.length, 0, 'no fabricated messages');
+  assert.equal(chatState.toolCalls.length, 0, 'no fabricated tool calls');
+});
+
+test('web navigation: chat is a header button, labels manage in Settings, machines dropdown on top', async () => {
   const html = await readFile(join(repoRoot, 'web', 'index.html'), 'utf8');
   const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
-  assert.ok(html.indexOf('id="new-note"') < html.indexOf('id="nav-chat"'));
-  assert.ok(html.indexOf('id="nav-chat"') < html.indexOf('id="nav-labels"'));
+  // No app name and no chat/labels entries in the sidebar (vision 05007066).
+  assert.doesNotMatch(html, /class="wordmark"|id="nav-chat"|id="nav-labels"/);
+  // Machines are a compact dropdown at the TOP of the sidebar.
+  assert.ok(html.indexOf('id="machines-dd-btn"') < html.indexOf('id="nav-home"'));
+  assert.match(html, /id="machines-list"/);
+  // Section order: Notes then Labels (collapsible), then Archive, then Trash.
+  assert.ok(html.indexOf('id="sec-notes"') < html.indexOf('id="labels-section"'));
+  assert.ok(html.indexOf('id="labels-section"') < html.indexOf('id="nav-archive"'));
+  assert.ok(html.indexOf('id="nav-archive"') < html.indexOf('id="nav-trash"'));
+  // Copy-note-as-Markdown + Chat relocate to header buttons next to minimize.
+  assert.ok(html.indexOf('id="note-copy"') < html.indexOf('id="note-delete"'));
+  assert.ok(html.indexOf('id="open-chat"') < html.indexOf('id="win-min"'));
+  // The markdown UI is a selection popover + slash menu — explicitly NO toolbar.
+  assert.match(html, /id="md-pop"/);
+  assert.match(html, /id="slash-menu"/);
+  assert.doesNotMatch(html, /id="md-toolbar"|class="toolbar"/);
   assert.match(html, /id="chat-page"/);
-  assert.match(html, /id="labels-page-main"/);
+  // Labels MANAGEMENT page lives inside Settings; the sidebar keeps filter rows only.
+  assert.match(html, /data-tab="labels"[^>]*id="labels-page-main"/);
+  // Search is a Cmd+K popover, not a page or sidebar field.
+  assert.match(html, /id="search-pop"/);
+  assert.doesNotMatch(html, /id="search-input"/);
+  assert.match(app, /metaKey \|\| e\.ctrlKey/);
+  // Recording has exactly ONE surface per screen: the persistent pill exists and is
+  // suppressed on Home, where the composer itself is the recording surface.
+  assert.match(html, /id="rec-pill"/);
+  assert.match(app, /pill\.hidden = !active \|\| onHomeComposer/);
 
   const { windowTarget } = loadWebAppWithFakeDOM(app);
   windowTarget.HasnaNotes.hydrate({
@@ -791,24 +883,6 @@ test('web navigation exposes Chat below New Note and Labels page operations', as
   assert.ok(windowTarget.HasnaNotes.labels.list().some(item => item.name === 'project' && item.count === 1));
   windowTarget.HasnaNotes.labels.delete('project', true);
   assert.equal(windowTarget.HasnaNotes.labels.list().some(item => item.name === 'project'), false);
-});
-
-test('web chat slash goal keeps visible goal state in local fallback', async () => {
-  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
-  const { windowTarget } = loadWebAppWithFakeDOM(app);
-  windowTarget.HasnaNotes.hydrate({
-    thisMachine: 'apple03',
-    notes: [
-      { id: 'goal-1', title: 'Alpha Goal', body: 'Alpha goal body.', labels: ['alpha'], status: 'active', machine: 'apple03', updatedAt: '2026-06-23T10:00:00Z', createdAt: '2026-06-23T09:00:00Z' },
-    ],
-    machines: [{ id: 'apple03' }],
-  });
-
-  const result = await windowTarget.HasnaNotes.chat.send('/goal summarize alpha notes');
-  assert.equal(result.mode, 'goal');
-  assert.equal(result.goal.status, 'done');
-  assert.equal(windowTarget.HasnaNotes.chat.state().goal.objective, 'summarize alpha notes');
-  assert.ok(windowTarget.HasnaNotes.chat.state().goal.steps.length >= 1);
 });
 
 test('web note action bridge confirms trash and permanent purge', async () => {
@@ -917,6 +991,288 @@ test('web expired Trash cleanup is observable and confirmation-gated', async () 
   assert.equal(windowTarget.HasnaNotes.view.state().visibleNoteIds.includes('expired-trash'), false);
 });
 
+test('web trash and archive views: restore, permanent delete, retention countdown', async () => {
+  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
+  const { windowTarget, document } = loadWebAppWithFakeDOM(app);
+  const prompts = [];
+  windowTarget.confirm = message => { prompts.push(message); return true; };
+  const future = new Date(Date.now() + 4.5 * 86400000).toISOString();
+  windowTarget.HasnaNotes.hydrate({
+    thisMachine: 'apple03',
+    notes: [
+      { id: 'live-1', title: 'Live', body: 'Live body', labels: [], status: 'active', machine: 'apple03', updatedAt: '2026-06-23T10:00:00Z', createdAt: '2026-06-23T09:00:00Z' },
+      { id: 'arch-1', title: 'Archived', body: 'Archived body', labels: [], status: 'archived', machine: 'apple03', archivedAt: '2026-06-22T10:00:00Z', updatedAt: '2026-06-22T10:00:00Z', createdAt: '2026-06-22T09:00:00Z' },
+      { id: 'trash-1', title: 'Trashed', body: 'Trashed body', labels: [], status: 'trash', machine: 'apple03', trashedAt: '2026-06-21T10:00:00Z', trashExpiresAt: future, updatedAt: '2026-06-21T10:00:00Z', createdAt: '2026-06-21T09:00:00Z' },
+    ],
+    machines: [{ id: 'apple03' }],
+  });
+
+  // Archive view: sidebar entry filters to archived notes; hover Restore works.
+  document.getElementById('nav-archive').click();
+  let view = windowTarget.HasnaNotes.view.state();
+  assert.equal(view.screen, 'noteslist');
+  assert.equal(view.statusFilter, 'archived');
+  assert.deepEqual(view.visibleNoteIds, ['arch-1']);
+  assert.equal(document.getElementById('np-title').textContent, 'Archived');
+  const npList = document.getElementById('np-list');
+  const archActions = npList.children[0].children.find(c => c.className.includes('np-row-actions'));
+  assert.ok(archActions, 'archived rows expose hover actions');
+  assert.ok(archActions.children.some(b => b.title === 'Copy note'), 'hover copy on list rows');
+  const restoreBtn = archActions.children.find(b => b.title === 'Restore');
+  assert.ok(restoreBtn, 'archived rows expose Restore');
+  assert.ok(!archActions.children.some(b => b.title === 'Delete permanently'), 'permanent delete is Trash-only');
+  restoreBtn.click();
+  assert.deepEqual(windowTarget.HasnaNotes.view.state().visibleNoteIds, [], 'restored note leaves the Archive view');
+
+  // Trash view: retention countdown + Restore + confirmation-gated permanent Delete.
+  document.getElementById('nav-trash').click();
+  view = windowTarget.HasnaNotes.view.state();
+  assert.equal(view.statusFilter, 'trash');
+  assert.deepEqual(view.visibleNoteIds, ['trash-1']);
+  assert.equal(document.getElementById('np-title').textContent, 'Trash');
+  const trashRow = document.getElementById('np-list').children[0];
+  const meta = trashRow.children.find(c => c.className.includes('np-row-meta'));
+  const expiry = meta.children.find(c => c.className.includes('np-row-expiry'));
+  assert.ok(expiry, 'trash rows show the retention countdown');
+  assert.match(expiry.textContent, /^Deleted forever in 5 days$/);
+  const trashActions = trashRow.children.find(c => c.className.includes('np-row-actions'));
+  assert.ok(trashActions.children.some(b => b.title === 'Restore'));
+  const deleteBtn = trashActions.children.find(b => b.title === 'Delete permanently');
+  assert.ok(deleteBtn, 'trash rows expose permanent delete');
+  deleteBtn.click();
+  assert.match(prompts.at(-1), /^Delete permanently\?/);
+  assert.match(prompts.at(-1), /cannot be undone/);
+  assert.deepEqual(windowTarget.HasnaNotes.view.state().visibleNoteIds, []);
+  assert.equal(document.getElementById('np-empty').hidden, false);
+  assert.equal(document.getElementById('np-empty').textContent, 'Trash is empty');
+
+  // Retention setting: 0 clamps to 1 (never silently disables retention), 90 sticks,
+  // and junk input keeps the 30-day default.
+  assert.equal(windowTarget.HasnaNotes.notes.setTrashRetentionDays(0).trashRetentionDays, 1);
+  assert.equal(windowTarget.HasnaNotes.notes.setTrashRetentionDays(90).trashRetentionDays, 90);
+  assert.equal(windowTarget.HasnaNotes.notes.setTrashRetentionDays('junk').trashRetentionDays, 30);
+});
+
+test('web enforces trash retention on boot and hydrate, once per session', async () => {
+  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
+  const expiredBoot = {
+    thisMachine: 'apple03',
+    notes: [{
+      id: 'expired-1', title: 'Expired', body: 'Old', labels: [], status: 'trash', machine: 'apple03',
+      trashedAt: '2025-01-01T00:00:00Z', trashExpiresAt: '2025-02-01T00:00:00Z',
+      updatedAt: '2025-01-01T00:00:00Z', createdAt: '2025-01-01T00:00:00Z',
+    }],
+    machines: [{ id: 'apple03' }],
+  };
+
+  // Declining the boot prompt keeps the note and must NOT re-prompt on later hydrates.
+  const declinedPrompts = [];
+  const declined = loadWebAppWithFakeDOM(app, {
+    __BOOT__: expiredBoot,
+    confirm(message) { declinedPrompts.push(message); return false; },
+  });
+  assert.equal(declinedPrompts.length, 1, 'boot cleanup asks exactly once');
+  assert.match(declinedPrompts[0], /^Delete expired Trash notes permanently\?/);
+  declined.windowTarget.HasnaNotes.notes.setStatusFilter('trash');
+  assert.deepEqual(declined.windowTarget.HasnaNotes.view.state().visibleNoteIds, ['expired-1']);
+  declined.windowTarget.HasnaNotes.hydrate(expiredBoot);
+  declined.windowTarget.HasnaNotes.hydrate(expiredBoot);
+  assert.equal(declinedPrompts.length, 1, 'declining must not re-prompt every hydrate');
+
+  // Accepting the boot prompt purges the expired note (confirmation-gated enforcement).
+  const acceptedPrompts = [];
+  const accepted = loadWebAppWithFakeDOM(app, {
+    __BOOT__: expiredBoot,
+    confirm(message) { acceptedPrompts.push(message); return true; },
+  });
+  assert.equal(acceptedPrompts.length, 1);
+  accepted.windowTarget.HasnaNotes.notes.setStatusFilter('trash');
+  assert.deepEqual(accepted.windowTarget.HasnaNotes.view.state().visibleNoteIds, []);
+});
+
+test('web markdown selection popover and slash menu route through editor.command', async () => {
+  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
+  const copied = [];
+  const { windowTarget, document } = loadWebAppWithFakeDOM(app, {}, {
+    navigator: { clipboard: { writeText: async text => { copied.push(text); } } },
+  });
+  const commands = [];
+  windowTarget.addEventListener('hasna:editor-command', event => commands.push(event.detail));
+  windowTarget.HasnaNotes.hydrate({
+    thisMachine: 'apple03',
+    notes: [{ id: 'md-1', title: 'Markdown Note', body: 'hello world', labels: [], status: 'active', machine: 'apple03', updatedAt: '2026-06-23T10:00:00Z', createdAt: '2026-06-23T09:00:00Z' }],
+    machines: [{ id: 'apple03' }],
+  });
+  // Open the note in the editor (sidebar row click), like a user would.
+  document.getElementById('notes-list').children[0].click();
+  assert.equal(windowTarget.HasnaNotes.view.state().screen, 'notes');
+  const body = document.getElementById('editor-body');
+  assert.equal(body.value, 'hello world');
+
+  // Copy-note-as-Markdown lives top-right in the content header (editor only): the
+  // title becomes an H1 above the Markdown body.
+  const copyBtn = document.getElementById('note-copy');
+  assert.equal(copyBtn.hidden, false, 'copy control shows with the editor');
+  copyBtn.click();
+  assert.equal(copied.at(-1), '# Markdown Note\n\nhello world');
+
+  // Selecting text shows the popover; collapsing the selection hides it.
+  const pop = document.getElementById('md-pop');
+  body.setSelectionRange(0, 5);
+  body.dispatchEvent({ type: 'select' });
+  assert.equal(pop.hidden, false, 'selection shows the popover');
+  windowTarget.HasnaNotes.editor.command('bold');
+  assert.equal(body.value, '**hello** world');
+  assert.equal(commands.at(-1).commandId, 'bold');
+  body.setSelectionRange(3, 3);
+  body.dispatchEvent({ type: 'select' });
+  assert.equal(pop.hidden, true, 'collapsed selection hides the popover');
+
+  // "/" at the start of a line opens the slash menu filtered by the query.
+  const menu = document.getElementById('slash-menu');
+  body.value = '/h2';
+  body.setSelectionRange(3, 3);
+  body.dispatchEvent({ type: 'input' });
+  assert.equal(menu.hidden, false, 'slash trigger opens the menu');
+  assert.ok(menu.children.length >= 1);
+  assert.equal(menu.children[0].dataset.command, 'h2');
+  // Enter applies the highlighted command and removes the "/query" trigger text.
+  body.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} });
+  assert.equal(menu.hidden, true, 'menu closes after applying');
+  assert.equal(body.value, '## ');
+  assert.equal(commands.at(-1).commandId, 'h2');
+  // Escape closes a re-opened menu without applying.
+  body.value = '## \n/';
+  body.setSelectionRange(5, 5);
+  body.dispatchEvent({ type: 'input' });
+  assert.equal(menu.hidden, false);
+  assert.ok(menu.children.length >= 10, 'bare slash lists the whole command set');
+  body.dispatchEvent({ type: 'keydown', key: 'Escape', preventDefault() {} });
+  assert.equal(menu.hidden, true);
+
+  // Defect fixes: divider inserts AFTER the selection (never replaces it), and the
+  // code-block metadata carries real newlines (no literal backslash-n in previews).
+  const divided = windowTarget.HasnaNotes.markdown.applyCommand('hello', { commandId: 'divider', selectionStart: 0, selectionEnd: 5 });
+  assert.equal(divided.markdown, 'hello\n---');
+  const codeBlock = windowTarget.HasnaNotes.markdown.commands().find(cmd => cmd.id === 'code-block');
+  assert.equal(codeBlock.markdown, '```\ntext\n```');
+  const libDivided = applyMarkdownCommand('hello', { commandId: 'divider', selectionStart: 0, selectionEnd: 5 });
+  assert.equal(libDivided.markdown, 'hello\n---');
+  assert.equal(MARKDOWN_COMMANDS.find(cmd => cmd.id === 'code-block').markdown, '```\ntext\n```');
+});
+
+test('web recording pause excludes paused time from elapsed', async () => {
+  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
+  let now = Date.parse('2026-07-02T10:00:00Z');
+  class TestDate extends Date {
+    constructor(...args) { args.length ? super(...args) : super(now); }
+    static now() { return now; }
+  }
+  class FakeMediaRecorder {
+    constructor() { this.state = 'inactive'; }
+    start() { this.state = 'recording'; }
+    pause() { this.state = 'paused'; }
+    resume() { this.state = 'recording'; }
+    stop() { this.state = 'inactive'; }
+    static isTypeSupported() { return true; }
+  }
+  const { windowTarget } = loadWebAppWithFakeDOM(app, {
+    __AI__: { available: true, realtime: false, port: 12345 },
+  }, {
+    Date: TestDate,
+    MediaRecorder: FakeMediaRecorder,
+    navigator: {
+      clipboard: { writeText: async () => undefined },
+      mediaDevices: { getUserMedia: async () => ({ getTracks: () => [] }) },
+    },
+  });
+
+  // Initial provider is a contract value even before any recording starts.
+  assert.equal(windowTarget.HasnaNotes.recording.state().provider, 'openai-bounded');
+
+  windowTarget.HasnaNotes.recording.start();
+  await delay(20); // getUserMedia microtask
+  assert.equal(windowTarget.HasnaNotes.recording.state().status, 'recording');
+
+  now += 5000;
+  windowTarget.HasnaNotes.recording.pause();
+  now += 60000; // a full minute paused must not count
+  const paused = windowTarget.HasnaNotes.recording.state();
+  assert.equal(paused.status, 'paused');
+  assert.equal(paused.elapsed, '0:05', 'timer holds while paused');
+
+  windowTarget.HasnaNotes.recording.resume();
+  now += 2000;
+  const resumed = windowTarget.HasnaNotes.recording.state();
+  assert.equal(resumed.status, 'recording');
+  assert.equal(resumed.elapsed, '0:07', 'timer resumes where it left off');
+  windowTarget.HasnaNotes.destroy(); // clear the 500ms tick interval
+});
+
+test('web sidebar defaults to the latest 10 notes and keeps pagination across hydrates', async () => {
+  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
+  const { windowTarget, document } = loadWebAppWithFakeDOM(app);
+  const notes = Array.from({ length: 12 }, (_, i) => ({
+    id: `page-${i}`,
+    title: `Note ${i}`,
+    body: `Body ${i}`,
+    labels: [],
+    status: 'active',
+    machine: 'apple03',
+    updatedAt: new Date(Date.parse('2026-06-01T00:00:00Z') + i * 60000).toISOString(),
+    createdAt: '2026-06-01T00:00:00Z',
+  }));
+  // No listDefaults in the payload: the browser default is the contract's latest 10.
+  windowTarget.HasnaNotes.hydrate({ thisMachine: 'apple03', notes, machines: [{ id: 'apple03' }] });
+  const rows = document.getElementById('notes-list').children;
+  const noteRows = rows.filter(r => r.className.includes('note-row'));
+  assert.equal(noteRows.length, 10);
+  assert.ok(rows.some(r => r.className.includes('view-more')), 'View more renders for the remainder');
+  // A later hydrate (the host sends one after EVERY write) keeps the pagination.
+  windowTarget.HasnaNotes.hydrate({ thisMachine: 'apple03', notes, machines: [{ id: 'apple03' }], listDefaults: { limit: 6 } });
+  const rowsAfter = document.getElementById('notes-list').children.filter(r => r.className.includes('note-row'));
+  assert.equal(rowsAfter.length, 10, 'hydrate must not reset the list limit');
+});
+
+test('personalnotes bin exposes the non-interactive agent mode with preview gating', async (t) => {
+  const root = await tempRoot(t);
+  const binPath = join(repoRoot, 'bin', 'personalnotes.mjs');
+  const env = { PERSONALNOTES_ROOT: root };
+
+  const created = await runNode(binPath, ['create', '--title', 'Renewal alpha', '--body', 'Renewal pricing draft', '--label', 'renewal', '--json'], env);
+  assert.equal(created.code, 0, created.stderr);
+
+  // Read-only prompts run directly and return the structured JSON result.
+  const summary = await runNode(binPath, ['agent', 'summarize renewal notes', '--json'], env);
+  assert.equal(summary.code, 0, summary.stderr);
+  const summaryOut = JSON.parse(summary.stdout);
+  assert.equal(summaryOut.status, 'complete');
+  assert.match(summaryOut.text, /Summary of/);
+  assert.ok(summaryOut.sources.length >= 1);
+
+  // Broad writes preview first (awaiting_confirmation, nothing written)…
+  const preview = await runNode(binPath, ['agent', 'consolidate renewal notes', '--json'], env);
+  assert.equal(preview.code, 0, preview.stderr);
+  const previewOut = JSON.parse(preview.stdout);
+  assert.equal(previewOut.status, 'awaiting_confirmation');
+  assert.equal(previewOut.pendingConfirmations.length, 1);
+  assert.equal((await loadNotes(root)).length, 1, 'preview must not write');
+
+  // …and --yes applies the previewed write.
+  const applied = await runNode(binPath, ['agent', 'consolidate renewal notes', '--yes', '--json'], env);
+  assert.equal(applied.code, 0, applied.stderr);
+  assert.equal(JSON.parse(applied.stdout).status, 'complete');
+  assert.ok((await loadNotes(root)).some(note => note.title === 'Consolidated Notes'));
+
+  // agent tools lists the shared registry; a missing prompt is a non-zero exit.
+  const tools = await runNode(binPath, ['agent', 'tools', '--json'], env);
+  assert.equal(tools.code, 0, tools.stderr);
+  assert.ok(JSON.parse(tools.stdout).tools.some(tool => tool.name === 'consolidate_notes'));
+  const missingPrompt = await runNode(binPath, ['agent'], env);
+  assert.equal(missingPrompt.code, 1);
+  assert.match(missingPrompt.stderr, /prompt_required/);
+});
+
 test('labels can be assigned, renamed, listed, and deleted', async (t) => {
   const root = await tempRoot(t);
   const id = uuidFor(99);
@@ -980,6 +1336,17 @@ test('archive trash restore purge retention and move-to-machine preserve metadat
   const purged = await purgeExpiredTrash(root, new Date('2026-02-01T00:00:00Z'));
   assert.deepEqual(purged.purged, [id]);
   assert.equal(await getNote(id, root), null);
+
+  // Legacy trash (stamped before retention existed — no trashExpiresAt) still
+  // expires via trashedAt + the retention setting instead of living forever.
+  const legacyId = uuidFor(121);
+  await saveNote({
+    id: legacyId, title: 'Legacy Trash', body: 'old', status: 'trash',
+    trashedAt: '2026-01-01T00:00:00Z', trashExpiresAt: '',
+  }, root);
+  const legacyPurge = await purgeExpiredTrash(root, new Date('2026-02-01T00:00:00Z'));
+  assert.deepEqual(legacyPurge.purged, [legacyId]);
+  assert.equal(await getNote(legacyId, root), null);
 
   assert.equal((await loadSettings(root)).trashRetentionDays, 7);
 });
@@ -1557,13 +1924,15 @@ test('recording and realtime transcription contracts are exposed to UI/native ho
   assert.match(sidecar, /scribe_v2_realtime/);
   assert.match(app, /finalizeTimer/);
   assert.match(app, /startToken/);
-  assert.match(app, /hasna:note-move/);
   assert.match(app, /hasna:note-archive/);
   assert.match(app, /hasna:note-trash/);
+  // Move-to-machine ships in the app too (parity with CLI "move" and MCP
+  // notes_move_to_machine — vision MUST c10b7cf2, quick action 4d696e4b).
   assert.match(app, /moveToMachine/);
+  assert.match(app, /hasna:note-move/);
   assert.match(app, /setTrashRetentionDays/);
   assert.match(app, /postNative\('settings'/);
-  assert.match(app, /id="nav-chat"|nav-chat/);
+  assert.match(app, /open-chat/);
   assert.match(app, /sendSidecarChat/);
   assert.match(app, /X-Hasna-Notes-Token/);
   assert.match(swift, /HASNA_NOTES_SIDECAR_TOKEN/);
@@ -1677,13 +2046,56 @@ test('sidecar approval tool endpoint executes shared note tools without model ac
   assert.equal((await getNote(createdBody.note.id, root)).status, 'trash');
 });
 
-test('web machine selection and move-to-machine jump to destination context', async () => {
+test('Cmd+K search opens the picked note even when sidebar filters hide it', async () => {
+  const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
+  const { windowTarget, document } = loadWebAppWithFakeDOM(app);
+  windowTarget.HasnaNotes.hydrate({
+    thisMachine: 'machine001',
+    machines: [{ id: 'machine001' }, { id: 'machine002' }],
+    notes: [
+      {
+        id: 'active-1', title: 'Remote plan', body: 'quarterly plan', labels: [],
+        status: 'active', machine: 'machine002',
+        updatedAt: '2026-06-25T10:00:00Z', createdAt: '2026-06-25T09:00:00Z',
+      },
+      {
+        id: 'trash-1', title: 'Old junk', body: 'junk', labels: [],
+        status: 'trash', machine: 'machine001',
+        trashedAt: '2026-06-30T10:00:00Z', trashExpiresAt: '2099-01-01T00:00:00Z',
+        updatedAt: '2026-06-30T10:00:00Z', createdAt: '2026-06-20T09:00:00Z',
+      },
+    ],
+  });
+  const spInput = document.getElementById('search-pop-input');
+  const enter = () => spInput.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} });
+
+  // From the Trash view, searching an ACTIVE note and pressing Enter MUST open that
+  // note — the stale status filter may not swap in the newest trashed note instead.
+  windowTarget.HasnaNotes.notes.setStatusFilter('trash');
+  spInput.value = 'Remote plan';
+  enter();
+  let view = windowTarget.HasnaNotes.view.state();
+  assert.equal(view.screen, 'notes');
+  assert.equal(view.selectedId, 'active-1');
+  assert.equal(view.statusFilter, 'active');
+  assert.ok(view.visibleNoteIds.includes('active-1'));
+
+  // Same for a stale machine filter: the filter resets so the picked note shows.
+  windowTarget.HasnaNotes.machines.select('machine001');
+  assert.equal(windowTarget.HasnaNotes.view.state().selectedId, null);
+  spInput.value = 'Remote plan';
+  enter();
+  view = windowTarget.HasnaNotes.view.state();
+  assert.equal(view.selectedId, 'active-1');
+  assert.equal(view.machineFilter, '__all__');
+  assert.ok(view.visibleNoteIds.includes('active-1'));
+});
+
+test('web machines dropdown filters notes and canonicalizes machine aliases', async () => {
   const app = await readFile(join(repoRoot, 'web', 'app.js'), 'utf8');
   const { windowTarget, document } = loadWebAppWithFakeDOM(app);
   const machineSelections = [];
-  const moves = [];
   windowTarget.addEventListener('hasna:machine-select', event => machineSelections.push(event.detail));
-  windowTarget.addEventListener('hasna:note-move', event => moves.push(event.detail));
 
   windowTarget.HasnaNotes.hydrate({
     thisMachine: 'apple03',
@@ -1726,9 +2138,11 @@ test('web machine selection and move-to-machine jump to destination context', as
     listDefaults: { limit: 10 },
   });
 
+  // Dropdown menu rows render into #machines-list (friendly names + counts); clicking a
+  // row filters the notes list to that machine and jumps to its newest note.
   const machinesList = document.getElementById('machines-list');
   const machineRow = machinesList.children.find(row => row.dataset.machine === 'machine001');
-  assert.ok(machineRow, 'expected machine001 sidebar row to render');
+  assert.ok(machineRow, 'expected machine001 dropdown row to render');
   machineRow.click();
 
   let view = windowTarget.HasnaNotes.view.state();
@@ -1740,25 +2154,24 @@ test('web machine selection and move-to-machine jump to destination context', as
   assert.equal(machineSelections.at(-1).reason, 'sidebar');
   assert.equal(machineSelections.at(-1).view.screen, 'notes');
   assert.equal(document.getElementById('window').getAttribute('data-active-shell'), 'app');
+  // The dropdown button label reflects the active filter (friendly name shown).
+  assert.equal(document.getElementById('machines-dd-label').textContent, 'Machine One');
 
-  const moved = windowTarget.HasnaNotes.notes.moveToMachine('apple-note', 'machine-one');
-  assert.equal(moved.machine, 'machine001');
+  // Move-to-machine parity (CLI/MCP ship the same mutation): re-attributes the note,
+  // preserves origin/previous provenance, and follows it to the destination filter.
+  const moveEvents = [];
+  windowTarget.addEventListener('hasna:note-move', event => moveEvents.push(event.detail));
+  const movedNote = windowTarget.HasnaNotes.notes.moveToMachine('apple-note', 'machine-one');
+  assert.equal(movedNote.machine, 'machine001');
+  assert.equal(movedNote.previousMachine, 'apple03');
+  assert.equal(movedNote.originMachine, 'apple03');
+  assert.ok(movedNote.movedAt);
+  assert.equal(moveEvents.length, 1);
+  assert.equal(moveEvents[0].targetMachine, 'machine001');
+  assert.equal(machineSelections.at(-1).reason, 'move');
   view = windowTarget.HasnaNotes.view.state();
-  assert.equal(view.screen, 'notes');
   assert.equal(view.machineFilter, 'machine001');
   assert.equal(view.selectedId, 'apple-note');
-  assert.ok(view.visibleNoteIds.includes('apple-note'));
-  assert.equal(machineSelections.at(-1).reason, 'move');
-  assert.equal(moves.at(-1).targetMachine, 'machine001');
-  assert.equal(moves.at(-1).selectedMachine.id, 'machine001');
-  assert.equal(moves.at(-1).selectedNoteId, 'apple-note');
-  assert.equal(moves.at(-1).view.selectedId, 'apple-note');
-
-  const canonicalizedMove = windowTarget.HasnaNotes.notes.moveToMachine('machine-slug', 'machine001');
-  assert.equal(canonicalizedMove.machine, 'machine001');
-  assert.equal(moves.at(-1).targetMachine, 'machine001');
-  assert.equal(moves.at(-1).selectedNoteId, 'machine-slug');
-  assert.equal(windowTarget.HasnaNotes.view.state().selectedId, 'machine-slug');
 
   machineSelections.length = 0;
   windowTarget.HasnaNotes.hydrate({

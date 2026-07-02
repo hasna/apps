@@ -126,7 +126,9 @@ public struct Note: Identifiable, Equatable {
         self.labels = labels
         self.status = status
         self.folder = folder
-        self.contentFormat = "markdown"
+        // Preserve the caller's value (legacy/non-markdown formats must survive a
+        // load→save cycle); empty means "unspecified" and defaults to markdown.
+        self.contentFormat = contentFormat.isEmpty ? "markdown" : contentFormat
         self.titleLocked = titleLocked
         self.titleSource = titleSource ?? (Note.isDefaultTitle(title) ? .defaultTitle : .manual)
         self.titleContentFingerprint = titleContentFingerprint

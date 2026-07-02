@@ -190,7 +190,7 @@ export const MARKDOWN_COMMANDS = [
   { id: 'bullet-list', label: 'Bullet list', type: 'block', markdown: '- text' },
   { id: 'numbered-list', label: 'Numbered list', type: 'block', markdown: '1. text' },
   { id: 'quote', label: 'Quote', type: 'block', markdown: '> text' },
-  { id: 'code-block', label: 'Code block', type: 'block', markdown: '```\\ntext\\n```' },
+  { id: 'code-block', label: 'Code block', type: 'block', markdown: '```\ntext\n```' },
   { id: 'checklist', label: 'Checklist', type: 'block', markdown: '- [ ] text' },
   { id: 'divider', label: 'Divider', type: 'insert', markdown: '---' },
 ];
@@ -430,10 +430,11 @@ export function applyMarkdownCommand(markdown, input = {}) {
     return replaceRange(text, start, end, next, start + 4 + language.length, start + 4 + language.length + body.length);
   }
   if (commandId === 'divider') {
-    const prefix = start > 0 && text[start - 1] !== '\n' ? '\n' : '';
+    // Insert AFTER the selection end — a divider must never replace selected text.
+    const prefix = end > 0 && text[end - 1] !== '\n' ? '\n' : '';
     const suffix = end < text.length && text[end] !== '\n' ? '\n' : '';
     const next = `${prefix}---${suffix}`;
-    return replaceRange(text, start, end, next, start + next.length, start + next.length);
+    return replaceRange(text, end, end, next, end + next.length, end + next.length);
   }
 
   const [lineStart, lineEnd] = lineRangeForSelection(text, start, end);
@@ -890,10 +891,15 @@ export async function restoreNote(id, root = dataRoot()) {
 }
 
 export async function purgeExpiredTrash(root = dataRoot(), now = new Date()) {
+  const settings = await loadSettings(root);
   const purged = [];
   for (const note of await loadNotes(root)) {
-    if (note.status !== 'trash' || !note.trashExpiresAt) continue;
-    if (Date.parse(note.trashExpiresAt) <= now.getTime()) {
+    if (note.status !== 'trash') continue;
+    // Legacy trash (no trashExpiresAt stamp) falls back to trashedAt + retention.
+    const expires = note.trashExpiresAt
+      || (note.trashedAt ? addDays(note.trashedAt, settings.trashRetentionDays) : '');
+    if (!expires) continue;
+    if (Date.parse(expires) <= now.getTime()) {
       await deleteNote(note.id, root);
       purged.push(note.id);
     }

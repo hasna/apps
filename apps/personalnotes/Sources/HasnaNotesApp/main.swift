@@ -336,14 +336,13 @@ private func machineJSON(_ machine: FleetMachine, notes: [Note], fallbackID: Str
         .map(\.updatedAt)
         .max()
     let updatedAt = machine.updatedAt ?? latestNoteDate
-    let recentActivityAt = [machine.recentActivityAt, machine.syncedAt, machine.lastSeenAt, updatedAt, latestNoteDate]
+    let recentActivityAt = [machine.recentActivityAt, machine.lastSeenAt, updatedAt, latestNoteDate]
         .compactMap { $0 }
         .max()
     var obj: [String: Any] = [
         "id": id,
         "slug": machine.slug ?? id,
         "displayName": machine.displayName,
-        "sshAddress": machine.sshAddress,
         "platform": machine.platform,
         "status": machine.status ?? (machine.online == true ? "online" : (machine.online == false ? "offline" : "unknown")),
         "noteCount": activeNotes.count,
@@ -351,22 +350,12 @@ private func machineJSON(_ machine: FleetMachine, notes: [Note], fallbackID: Str
         "archivedNoteCount": machineNotes.filter { $0.status == .archived }.count,
         "trashNoteCount": machineNotes.filter { $0.status == .trash }.count,
         "totalNoteCount": machineNotes.count,
-        "capabilities": machine.capabilities,
-        "metadata": machine.metadata,
-        "provenance": machine.provenance,
-        "sync": machine.sync,
     ]
     if let friendlyName = machine.friendlyName, !friendlyName.isEmpty {
         obj["friendlyName"] = friendlyName
     }
     if let online = machine.online {
         obj["online"] = online
-    }
-    if let source = machine.source, !source.isEmpty {
-        obj["source"] = source
-    }
-    if let origin = machine.origin, !origin.isEmpty {
-        obj["origin"] = origin
     }
     if let updatedAt {
         obj["updatedAt"] = MarkdownStore.iso8601(updatedAt)
@@ -377,58 +366,34 @@ private func machineJSON(_ machine: FleetMachine, notes: [Note], fallbackID: Str
     if let lastSeenAt = machine.lastSeenAt {
         obj["lastSeenAt"] = MarkdownStore.iso8601(lastSeenAt)
     }
-    if let syncedAt = machine.syncedAt {
-        obj["syncedAt"] = MarkdownStore.iso8601(syncedAt)
-    }
     if let recentActivityAt {
         obj["recentActivityAt"] = MarkdownStore.iso8601(recentActivityAt)
     }
     return obj
 }
 
-// MARK: - Fleet manifest cache
+// MARK: - Machine manifest cache
 
-/// Process-wide cache in front of `FleetManifest.load`. Loading the manifest stats and
-/// parses `~/.hasna/machines/machines.json` and — when that file is missing — spawns the
-/// `machines` CLI with a 2.5 s termination timer. `bootJSON()` runs after EVERY autosave,
-/// so an uncached load meant two full manifest reads (and possibly a CLI subprocess) per
-/// keystroke burst. Rules here: results are cached with a short TTL, the on-disk file is
-/// re-read cheaply when the cache is stale, and the CLI fallback fires at most ONCE per
-/// app session — never on the autosave path with `allowCLI: false` callers.
+/// Process-wide cache in front of `FleetManifest.load` (a plain read of
+/// `~/.hasna/machines/machines.json` — friendly names/slugs for machine rows).
+/// `bootJSON()` runs after EVERY autosave, so the file is re-read at most once per TTL.
+/// No manifest file just means machine rows come purely from note frontmatter.
 /// `@unchecked Sendable`: all state is guarded by `lock`.
 final class ManifestCache: @unchecked Sendable {
     static let shared = ManifestCache()
     private let lock = NSLock()
     private var machines: [FleetMachine]?
     private var loadedAt = Date.distantPast
-    private var cliAttempted = false
     private let ttl: TimeInterval = 60
 
-    func fleet(allowCLI: Bool) -> [FleetMachine] {
+    func fleet() -> [FleetMachine] {
         lock.lock()
         defer { lock.unlock() }
         if let machines, Date().timeIntervalSince(loadedAt) < ttl { return machines }
-        // Fast path: machines.json on disk (cheap enough to re-read after the TTL).
-        if let data = try? Data(contentsOf: FleetManifest.defaultManifestURL()) {
-            let parsed = FleetManifest.parse(jsonData: data)
-            if !parsed.isEmpty {
-                machines = parsed
-                loadedAt = Date()
-                return parsed
-            }
-        }
-        // Slow path: the `machines` CLI (2.5 s timeout) — at most once per app session,
-        // and only for callers that opted in (launch boot / background refresh).
-        if allowCLI, !cliAttempted {
-            cliAttempted = true
-            let loaded = FleetManifest.load(fallback: FleetManifest.builtInFallback)
-            machines = loaded
-            loadedAt = Date()
-            return loaded
-        }
-        // No manifest anywhere: CLI-eligible callers keep the built-in fallback (matches
-        // FleetManifest.load), fast callers keep the previous empty-manifest behavior.
-        return machines ?? (allowCLI ? FleetManifest.builtInFallback : [])
+        let parsed = FleetManifest.load()
+        machines = parsed
+        loadedAt = Date()
+        return parsed
     }
 }
 
@@ -472,41 +437,41 @@ final class NotesBridge: @unchecked Sendable {
     /// Build the machine list: manifest first, then any machine ids seen in notes
     /// (so a note from a machine missing from the manifest still gets a row), then
     /// guarantee `thisMachine` is present.
-    func machinePayloads(notes: [Note], includeManifestCLI: Bool = true) -> [[String: Any]] {
+    func machinePayloads(notes: [Note]) -> [[String: Any]] {
         var machinesByID: [String: FleetMachine] = [:]
         var aliases = Set<String>()
-        let manifest = ManifestCache.shared.fleet(allowCLI: includeManifestCLI)
+        let manifest = ManifestCache.shared.fleet()
         for m in manifest {
             machinesByID[m.id] = m
             aliases.formUnion(machineAliases(m))
         }
         for n in notes where !n.machine.isEmpty && !aliases.contains(n.machine) && machinesByID[n.machine] == nil {
-            machinesByID[n.machine] = FleetMachine(id: n.machine, sshAddress: n.machine, platform: "macos")
+            machinesByID[n.machine] = FleetMachine(id: n.machine)
             aliases.insert(n.machine)
         }
         if !thisMachine.isEmpty && !aliases.contains(thisMachine) && machinesByID[thisMachine] == nil {
-            machinesByID[thisMachine] = FleetMachine(id: thisMachine, sshAddress: thisMachine, platform: "macos")
+            machinesByID[thisMachine] = FleetMachine(id: thisMachine)
         }
         return machinesByID.values
             .sorted { a, b in
                 let lhsAliases = machineAliases(a)
                 let rhsAliases = machineAliases(b)
-                let lhs = (a.recentActivityAt ?? a.syncedAt ?? a.lastSeenAt ?? a.updatedAt ?? notes.filter { note in lhsAliases.contains(note.machine) }.map(\.updatedAt).max()) ?? .distantPast
-                let rhs = (b.recentActivityAt ?? b.syncedAt ?? b.lastSeenAt ?? b.updatedAt ?? notes.filter { note in rhsAliases.contains(note.machine) }.map(\.updatedAt).max()) ?? .distantPast
+                let lhs = (a.recentActivityAt ?? a.lastSeenAt ?? a.updatedAt ?? notes.filter { note in lhsAliases.contains(note.machine) }.map(\.updatedAt).max()) ?? .distantPast
+                let rhs = (b.recentActivityAt ?? b.lastSeenAt ?? b.updatedAt ?? notes.filter { note in rhsAliases.contains(note.machine) }.map(\.updatedAt).max()) ?? .distantPast
                 if lhs != rhs { return lhs > rhs }
                 return a.displayName.localizedCaseInsensitiveCompare(b.displayName) == .orderedAscending
             }
             .map { machineJSON($0, notes: notes) }
     }
 
-    func machineDetails(id rawID: String, includeManifestCLI: Bool = true) -> [String: Any] {
+    func machineDetails(id rawID: String) -> [String: Any] {
         let id = rawID.trimmingCharacters(in: .whitespacesAndNewlines)
         let notes = loadNotes()
-        let machines = machinePayloads(notes: notes, includeManifestCLI: includeManifestCLI)
+        let machines = machinePayloads(notes: notes)
         if let match = machines.first(where: { ($0["id"] as? String) == id || ($0["slug"] as? String) == id }) {
             return match
         }
-        return machineJSON(FleetMachine(id: id, sshAddress: id, platform: "unknown"), notes: notes)
+        return machineJSON(FleetMachine(id: id, platform: "unknown"), notes: notes)
     }
 
     /// The `{notes, machines, thisMachine}` boot payload as a JSON string.
@@ -816,6 +781,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     private var recordingElapsedSyncedAt: Date = Date()
     private var recordingPaused: Bool = false
     private var recordingLifecycleStatus: String = "idle"
+    /// True while quit is deferred so an in-flight recording can stop + save first.
+    private var quitPendingRecordingStop = false
 
     // Compact / quick-note window mode state.
     private var savedFrame: NSRect?
@@ -846,40 +813,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
         let cfg = WKWebViewConfiguration()
 
-        // 1. Inject the `native` class as early as possible (avoid a flash of the
-        //    desktop-frame layout), and again on DOMContentLoaded for certainty.
-        let nativeJS = """
-        document.documentElement.classList.add('native');
-        document.addEventListener('DOMContentLoaded', function () {
-          document.body.classList.add('native');
-        }, { once: true });
-        """
-        cfg.userContentController.addUserScript(
-            WKUserScript(source: nativeJS, injectionTime: .atDocumentStart, forMainFrameOnly: true)
-        )
-
-        // 2. Inject REAL notes data as `window.__BOOT__` BEFORE the page's JS runs, so
-        //    app.js renders from disk on first paint (no sample fallback in the app).
+        // 1.+2. Install the document-start user scripts (native class, `window.__BOOT__`
+        //    real notes data, `window.__AI__` sidecar flag). Reinstalled with fresh boot
+        //    data after every mutation — see installUserScripts.
         let boot = bridge.bootJSON()
-        let bootJS = "window.__BOOT__ = \(boot);"
-        cfg.userContentController.addUserScript(
-            WKUserScript(source: bootJS, injectionTime: .atDocumentStart, forMainFrameOnly: true)
-        )
-
-        // 2b. Inject the AI sidecar boot flag so the renderer knows the port + whether AI
-        //     features (auto-title, voice transcription) are available.
-        let aiPayload: [String: Any] = [
-            "port": sidecar.port,
-            "available": sidecar.available,
-            "running": sidecar.running,
-            "realtime": sidecar.realtimeAvailable,
-            "realtimeProvider": sidecar.realtimeProvider,
-            "token": sidecar.token,
-        ]
-        let aiJS = "window.__AI__ = \(jsonString(aiPayload));"
-        cfg.userContentController.addUserScript(
-            WKUserScript(source: aiJS, injectionTime: .atDocumentStart, forMainFrameOnly: true)
-        )
+        installUserScripts(into: cfg.userContentController, boot: boot)
 
         // 3. Register the `notes` + `window` + `recording` message handlers via a WEAK proxy (see
         //    WeakScriptProxy) so the controller→handler retain does not leak the web view.
@@ -926,6 +864,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         buildMenu()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // MARK: user scripts
+
+    /// (Re)install the document-start user scripts: the `native` body class (injected as
+    /// early as possible to avoid a flash of the desktop-frame layout), REAL notes data as
+    /// `window.__BOOT__` (available before app.js runs, so first paint renders from disk),
+    /// and the `window.__AI__` sidecar flag (port + AI feature availability).
+    ///
+    /// User scripts are snapshots baked in at add time, so the launch-time `__BOOT__`
+    /// would be re-injected STALE on any page reload. Callers therefore reinstall the
+    /// scripts with fresh boot JSON after every mutation; a reload then always boots from
+    /// the current on-disk state. Must run on the main thread.
+    private func installUserScripts(into controller: WKUserContentController, boot: String) {
+        controller.removeAllUserScripts()
+        let nativeJS = """
+        document.documentElement.classList.add('native');
+        document.addEventListener('DOMContentLoaded', function () {
+          document.body.classList.add('native');
+        }, { once: true });
+        """
+        controller.addUserScript(
+            WKUserScript(source: nativeJS, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        )
+        controller.addUserScript(
+            WKUserScript(source: "window.__BOOT__ = \(boot);", injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        )
+        let aiPayload: [String: Any] = [
+            "port": sidecar.port,
+            "available": sidecar.available,
+            "running": sidecar.running,
+            "realtime": sidecar.realtimeAvailable,
+            "realtimeProvider": sidecar.realtimeProvider,
+            "token": sidecar.token,
+        ]
+        controller.addUserScript(
+            WKUserScript(source: "window.__AI__ = \(jsonString(aiPayload));", injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        )
     }
 
     // MARK: navigation
@@ -993,22 +969,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         if action == "machineDetails" {
             let machineID = (payload["machine"] as? String) ?? (payload["id"] as? String) ?? bridge.thisMachine
             let requestID = (payload["requestId"] as? String) ?? ""
-            let immediate = jsonString([
-                "requestId": requestID,
-                "machine": bridge.machineDetails(id: machineID, includeManifestCLI: false),
-            ])
-            DispatchQueue.main.async { [weak self] in
-                self?.web.evaluateJavaScript("window.HasnaNotes && window.HasnaNotes.machines && window.HasnaNotes.machines.receiveDetails(\(immediate))", completionHandler: nil)
-            }
-            DispatchQueue.global(qos: .utility).async { [weak self] in
-                guard self != nil else { return }
-                let backgroundBridge = NotesBridge()
-                let refreshed = jsonString([
+            let bridge = self.bridge
+            // machineDetails re-scans the whole store; compute off-main on the serial
+            // notes queue (keeps ordering with mutations), hop back only to deliver.
+            notesQueue.async { [weak self] in
+                let details = jsonString([
                     "requestId": requestID,
-                    "machine": backgroundBridge.machineDetails(id: machineID, includeManifestCLI: true),
+                    "machine": bridge.machineDetails(id: machineID),
                 ])
                 DispatchQueue.main.async { [weak self] in
-                    self?.web.evaluateJavaScript("window.HasnaNotes && window.HasnaNotes.machines && window.HasnaNotes.machines.receiveDetails(\(refreshed))", completionHandler: nil)
+                    self?.web.evaluateJavaScript("window.HasnaNotes && window.HasnaNotes.machines && window.HasnaNotes.machines.receiveDetails(\(details))", completionHandler: nil)
                 }
             }
             return
@@ -1054,9 +1024,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
 
             guard changed else { return }
             // After any mutation, reload from disk and push fresh data back into the page.
+            // Also reinstall the document-start user scripts so a page reload re-injects
+            // the CURRENT notes, not the launch-time `__BOOT__` snapshot.
             let fresh = bridge.bootJSON()
             DispatchQueue.main.async { [weak self] in
-                self?.web.evaluateJavaScript("window.HasnaNotes && window.HasnaNotes.hydrate(\(fresh))", completionHandler: nil)
+                guard let self, let web = self.web else { return }
+                self.installUserScripts(into: web.configuration.userContentController, boot: fresh)
+                web.evaluateJavaScript("window.HasnaNotes && window.HasnaNotes.hydrate(\(fresh))", completionHandler: nil)
             }
         }
     }
@@ -1090,6 +1064,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         strip.passthroughRects = rects
     }
 
+    /// Resize the top drag band. The full window uses the 60 px header band (30 px
+    /// traffic-light inset + 30 px control row); the 220 px-tall compact quick-note
+    /// window keeps only the 30 px inset so the band never covers the composer.
+    private func setDragStripHeight(_ height: CGFloat) {
+        guard let strip = dragStrip, let container = strip.superview else { return }
+        strip.frame = NSRect(x: 0, y: container.bounds.height - height,
+                             width: container.bounds.width, height: height)
+    }
+
     private func setCompact(_ on: Bool) {
         guard let window = window else { return }
         if on {
@@ -1114,6 +1097,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             window.level = .floating
             window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             window.setFrame(NSRect(origin: origin, size: size), display: true, animate: true)
+            setDragStripHeight(30)
             window.makeKeyAndOrderFront(nil)
         } else {
             guard isCompact else { return }
@@ -1124,6 +1108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
             if let f = savedFrame {
                 window.setFrame(f, display: true, animate: true)
             }
+            setDragStripHeight(60)
             window.makeKeyAndOrderFront(nil)
         }
     }
@@ -1224,6 +1209,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { true }
+
+    /// Upper bound on how long quit may wait for the stop→transcribe→save round-trip.
+    private static let quitFailsafeSeconds: TimeInterval = 15
+
+    /// Closing the last window (or Cmd+Q) mid-recording used to quit immediately and
+    /// silently discard the take. Instead: auto-stop the recording (the web layer then
+    /// transcribes and saves it as a note) and finish quitting when the lifecycle reports
+    /// complete/stopped/error — with a failsafe so quit can never hang.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let active = recordingStatus == "recording" || recordingStatus == "paused"
+            || recordingStatus == "stopping" || recordingStatus == "transcribing"
+        guard active else { return .terminateNow }
+        if !quitPendingRecordingStop {
+            quitPendingRecordingStop = true
+            if recordingStatus == "recording" || recordingStatus == "paused" {
+                callRecordingJS("stop")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + AppDelegate.quitFailsafeSeconds) { [weak self] in
+                guard let self, self.quitPendingRecordingStop else { return }
+                self.quitPendingRecordingStop = false
+                NSApp.reply(toApplicationShouldTerminate: true)
+            }
+        }
+        return .terminateLater
+    }
 
     private func buildMenu() {
         let main = NSMenu()
@@ -1334,6 +1344,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate, 
         case "complete", "error", "stopped":
             recordingPaused = false
             hideStatusItem()
+            // A deferred quit (applicationShouldTerminate) waits for this terminal
+            // state: the recording is stopped and its note saved (or errored) — finish.
+            if quitPendingRecordingStop {
+                quitPendingRecordingStop = false
+                NSApp.reply(toApplicationShouldTerminate: true)
+            }
         default:
             break
         }

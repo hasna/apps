@@ -1,32 +1,24 @@
 # PersonalNotes
 
-A simple, beautiful native macOS notes app built with **SwiftUI** and Apple's **2026
-Liquid Glass** design language (macOS 26). Notes are stored as plain Markdown files
-with YAML frontmatter, so they stay forward-compatible with the installable
-`@hasna/personalnotes` CLI/MCP package.
-
-![narrow purple sidebar · continuous white canvas · rich-text editor]
+A dead-simple, voice-first macOS notes app (a native WKWebView shell around a small
+web UI). Notes are stored as plain Markdown files with YAML frontmatter, so they stay
+forward-compatible with the installable `@hasna/personalnotes` CLI/MCP package.
 
 ## What it is
 
-- A clean, Apple-Notes-style UI: a narrow **purple Liquid-Glass sidebar**
-  (Library / Folders / Labels / Machines) beside ONE continuous **white canvas** —
-  a compact header line ("12 notes · Updated 3m ago"), a searchable **note list**,
-  and a **rich-text editor** — separated only by subtle hairline dividers, no boxed
-  panels.
-- **Markdown editing** with stable commands for bold, italic, code, links, headings,
-  lists, quotes, code blocks, checklists, and dividers. Markdown on disk is the
-  contract.
-- **Agentic Chat contracts** for tool-capable note search, summarization,
-  organization, consolidation, and safe write previews. Claude owns the visual
-  Chat UI; this repo exposes the state/events/tools.
-- Per-note **status / labels / folder** live behind a subtle settings popover, keeping
-  the editor surface clean.
-- **Folders** (persisted to `folders.json`, empty folders survive) and **fleet sync**:
-  bidirectional, newest-wins `rsync`/`ssh` synchronization of the notes directory across
-  the macOS fleet, surfaced in the Machines section.
-- Liquid Glass on the sidebar (`.glassEffect`, interactive) over an "infinity purple"
-  gradient, with light/dark and reduce-transparency support.
+- A minimal, Google-Keep-simple UI: a slim sidebar (machines dropdown, Home,
+  collapsible Notes/Labels, Archive, Trash) beside one clean content area — a
+  centered quick-note composer on Home, a flat notes list, and a plain
+  title + body editor.
+- **Voice capture is the core loop**: press record, watch the transcript stream in
+  real time, and the note writes itself. Recording survives in-app navigation.
+- **Markdown editing** with a selection popover (bold/italic) and slash commands for
+  headings, lists, quotes, code, checklists, and dividers — no toolbar. Markdown on
+  disk is the contract.
+- **Agentic tools** shared by the app's sidecar chat, CLI, and MCP: note search,
+  summarization, organization, consolidation, and confirmation-gated writes.
+- Per-note **status / labels / machine attribution** with Archive and per-machine
+  Trash (configurable retention), searchable via a Cmd+K popover.
 
 ## Data format — the contract
 
@@ -110,21 +102,12 @@ Sources/OpenNotesCore/              Pure, UI-free logic (a library product)
   RichTextMarkdown.swift            Pure Markdown ↔ rich-text document bridge (tested)
   FolderStore.swift                 folders.json persistence (empty folders survive)
   LabelStore.swift                  labels.json persistence + normalization
-  FleetSync.swift                   Fleet manifest + bidirectional rsync/ssh sync engine
-Sources/OpenNotes/                  SwiftUI app (executable target name kept as OpenNotes)
-  OpenNotesApp.swift                @main App entry (hidden title bar, "Hasna Notes")
-  NotesStore.swift                  @MainActor ObservableObject store (+ folders/sync)
-  ContentView.swift                 Purple sidebar + continuous white canvas + header
-  SidebarView.swift                 Library / Folders / Labels / Machines + add-folder + Sync
-  NoteListView.swift                Continuous list, hairline dividers, context menus
-  EditorView.swift                  Title + formatting toolbar + settings popover
-  RichTextEditor.swift              NSTextView rich editor bridged to Markdown
-  MarkdownStyling.swift             Markdown ↔ NSAttributedString styling bridge
-  Theme.swift                       Design tokens + Liquid Glass helpers (with fallbacks)
+  SettingsStore.swift               settings.json persistence (trash retention)
+  MachineManifest.swift             machines.json manifest read (machine attribution)
+Sources/HasnaNotesApp/              Native WKWebView shell (recording, bridges, sidecar)
 Sources/OpenNotesSmoke/             CLI smoke test for the store + bridges (no Xcode needed)
-scripts/build_app.sh                SwiftPM build + assembled "Hasna Notes.app" + codesign
+web/                                The app UI (index.html, app.js, styles.css)
 scripts/build_hasnanotes.sh         WKWebView app build with bundled web UI + sidecar
-scripts/run_on_apple03.sh           rsync to a Mac and build there
 cli/hasna-notes.mjs                 CLI for notes, labels, pagination, and titles
 mcp/hasna-notes-mcp.mjs             MCP stdio server exposing the same functionality
 ```
@@ -140,14 +123,6 @@ This project builds with **SwiftPM only** — no Xcode required. It targets macO
 bash scripts/build_hasnanotes.sh   # swift build -c release + bundle web UI/sidecar + codesign
 open "dist/Hasna Notes.app"
 ```
-
-### From a Linux box (writes here, builds on the Mac)
-
-```bash
-bash scripts/run_on_apple03.sh     # rsync to the Mac and run build_hasnanotes.sh there
-```
-
-Override the host/path with `REMOTE_HOST` / `REMOTE_PATH` env vars.
 
 ### Verify the store logic
 
@@ -165,7 +140,7 @@ personalnotes-mcp
 # legacy aliases remain available
 node cli/hasna-notes.mjs list --limit 10
 node cli/hasna-notes.mjs labels assign <note-id> research
-node cli/hasna-notes.mjs move <note-id> apple04
+node cli/hasna-notes.mjs move <note-id> <machine>
 node cli/hasna-notes.mjs archive <note-id>
 node cli/hasna-notes.mjs delete <note-id>          # moves to Trash
 node cli/hasna-notes.mjs purge <note-id>           # permanent delete

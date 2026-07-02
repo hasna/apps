@@ -12,11 +12,6 @@ let package = Package(
             name: "OpenNotesCore",
             path: "Sources/OpenNotesCore"
         ),
-        .executableTarget(
-            name: "OpenNotes",
-            dependencies: ["OpenNotesCore"],
-            path: "Sources/OpenNotes"
-        ),
         // CLI smoke test for the markdown store. Used as the verification harness
         // because XCTest / swift-testing are unavailable under Command Line Tools.
         .executableTarget(

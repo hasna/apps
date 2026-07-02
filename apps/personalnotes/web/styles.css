@@ -33,7 +33,6 @@ body{
 }
 button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit;padding:0;}
 a{color:inherit;text-decoration:none;}
-.lnk{color:var(--accent);cursor:pointer;}
 
 /* desktop backdrop + floating window card (browser/screenshot default).
    The macOS WKWebView host adds class "native" to <body> to go full-bleed. */
@@ -55,13 +54,15 @@ body.native .window{
 }
 
 /* Native top inset (FIX #1): the macOS traffic-light close/min/max buttons sit at
-   the very top-left of the window. Reserve a ~30px safe strip at the top of both
-   the sidebar and the content header in native mode so the badge + nav chevrons +
-   editor header start BELOW/right of the OS buttons and never overlap them.
+   the very top-left of the window. Reserve a ~30px safe strip at the top of the
+   sidebar in native mode so the machines dropdown starts BELOW the OS buttons; the
+   content-header controls share the traffic-light row on the right side instead.
    In browser/screenshot mode (no .native) the original framing is untouched. */
 :root{--native-inset:0px;}
 body.native{--native-inset:30px;}
-body.native .sidebar-top{padding-top:calc(4px + var(--native-inset));}
+/* The sidebar top hosts the machines dropdown — keep it clear of the 78x40 logical px
+   traffic-light keep-out (docs/design-rules-macos26.md §3.4). */
+body.native .sidebar-top{padding-top:calc(10px + var(--native-inset));}
 body.native .set-top{padding-top:calc(4px + var(--native-inset));}
 /* The content header alone owns the native top inset (the traffic-light band). Do NOT
    also pad .content / .set-content — that double-counted the inset and pushed the whole
@@ -81,19 +82,25 @@ body.native .set-top{padding-top:calc(4px + var(--native-inset));}
   display:flex;flex-direction:column;
   padding:10px 8px 8px;
 }
-.sidebar-top{display:flex;align-items:center;gap:8px;padding:4px 6px 10px;}
-.badge{
-  width:48px;height:25px;border-radius:13px;
-  background:#5F55EC;
-  display:flex;align-items:center;justify-content:center;
-  box-shadow:0 1px 2px rgba(80,50,200,.30);
-  flex:none;
+.sidebar-top{padding:4px 2px 8px;}
+
+/* Machines dropdown — the compact filter at the top of the sidebar (no app name). */
+.machines-dd{position:relative;}
+.machines-dd-btn{
+  display:flex;align-items:center;gap:8px;width:100%;
+  padding:6px 8px;border:1px solid var(--hair2);border-radius:8px;
+  background:var(--bg);font-size:12.5px;font-weight:500;color:var(--fg);cursor:pointer;
 }
-.badge-glyph{display:block;}
-/* small sidebar wordmark — keeps the product name off the Home hero */
-.wordmark{
-  font-size:13px;font-weight:600;letter-spacing:-.006em;color:var(--fg);
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;
+.machines-dd-btn:hover{background:#EFEFF1;}
+.machines-dd-btn .ico{width:15px;height:15px;color:#54575E;flex:none;}
+.machines-dd-label{flex:1;min-width:0;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.machines-dd-chev{width:12px;height:12px;color:var(--grey);flex:none;transition:transform .14s;}
+.machines-dd-btn.open .machines-dd-chev{transform:rotate(180deg);}
+.machines-dd-menu{
+  position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:70;
+  background:var(--bg);border:1px solid var(--hair2);border-radius:10px;
+  box-shadow:0 10px 30px rgba(0,0,0,.14),0 2px 8px rgba(0,0,0,.06);
+  padding:4px;max-height:320px;overflow-y:auto;
 }
 .sidebar-nav{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:1px;}
 /* The sidebar scrollbar sits almost flush to the sidebar's right edge: the nav bleeds
@@ -101,83 +108,16 @@ body.native .set-top{padding-top:calc(4px + var(--native-inset));}
    the edge, while the re-added right padding keeps the rows themselves inset as before. */
 .sidebar-nav{margin-right:-6px;padding-right:6px;}
 
-/* ===== One thin, subtle, translucent scrollbar everywhere (matches the sidebar) ===== */
-.sidebar-nav,
-.set-sidebar,
-.editor-scroll,
-.home,
-.set-content,
-.np-inner,
-.np-list,
-.chat-inner,
-.chat-log,
-.chat-tools,
-.labels-inner,
-.labels-page-list,
-.machines-page,
-.transcript-body{
-  scrollbar-width:thin;
-  scrollbar-color:rgba(120,124,132,.30) transparent;
-}
-.sidebar-nav::-webkit-scrollbar,
-.set-sidebar::-webkit-scrollbar,
-.editor-scroll::-webkit-scrollbar,
-.home::-webkit-scrollbar,
-.set-content::-webkit-scrollbar,
-.np-inner::-webkit-scrollbar,
-.np-list::-webkit-scrollbar,
-.chat-inner::-webkit-scrollbar,
-.chat-log::-webkit-scrollbar,
-.chat-tools::-webkit-scrollbar,
-.labels-inner::-webkit-scrollbar,
-.labels-page-list::-webkit-scrollbar,
-.machines-page::-webkit-scrollbar,
-.transcript-body::-webkit-scrollbar{width:6px;height:6px;}
-.sidebar-nav::-webkit-scrollbar-track,
-.set-sidebar::-webkit-scrollbar-track,
-.editor-scroll::-webkit-scrollbar-track,
-.home::-webkit-scrollbar-track,
-.set-content::-webkit-scrollbar-track,
-.np-inner::-webkit-scrollbar-track,
-.np-list::-webkit-scrollbar-track,
-.chat-inner::-webkit-scrollbar-track,
-.chat-log::-webkit-scrollbar-track,
-.chat-tools::-webkit-scrollbar-track,
-.labels-inner::-webkit-scrollbar-track,
-.labels-page-list::-webkit-scrollbar-track,
-.machines-page::-webkit-scrollbar-track,
-.transcript-body::-webkit-scrollbar-track{background:transparent;}
-.sidebar-nav::-webkit-scrollbar-thumb,
-.set-sidebar::-webkit-scrollbar-thumb,
-.editor-scroll::-webkit-scrollbar-thumb,
-.home::-webkit-scrollbar-thumb,
-.set-content::-webkit-scrollbar-thumb,
-.np-inner::-webkit-scrollbar-thumb,
-.np-list::-webkit-scrollbar-thumb,
-.chat-inner::-webkit-scrollbar-thumb,
-.chat-log::-webkit-scrollbar-thumb,
-.chat-tools::-webkit-scrollbar-thumb,
-.labels-inner::-webkit-scrollbar-thumb,
-.labels-page-list::-webkit-scrollbar-thumb,
-.machines-page::-webkit-scrollbar-thumb,
-.transcript-body::-webkit-scrollbar-thumb{
+/* ===== One thin, subtle, translucent scrollbar everywhere (single shared block;
+   final overlay-style values land with the design-token pass) ===== */
+*{scrollbar-width:thin;scrollbar-color:rgba(120,124,132,.30) transparent;}
+::-webkit-scrollbar{width:6px;height:6px;}
+::-webkit-scrollbar-track{background:transparent;}
+::-webkit-scrollbar-thumb{
   background:rgba(120,124,132,.30);border-radius:3px;
   border:1px solid transparent;background-clip:padding-box;
 }
-.sidebar-nav::-webkit-scrollbar-thumb:hover,
-.set-sidebar::-webkit-scrollbar-thumb:hover,
-.editor-scroll::-webkit-scrollbar-thumb:hover,
-.home::-webkit-scrollbar-thumb:hover,
-.set-content::-webkit-scrollbar-thumb:hover,
-.np-inner::-webkit-scrollbar-thumb:hover,
-.np-list::-webkit-scrollbar-thumb:hover,
-.chat-inner::-webkit-scrollbar-thumb:hover,
-.chat-log::-webkit-scrollbar-thumb:hover,
-.chat-tools::-webkit-scrollbar-thumb:hover,
-.labels-inner::-webkit-scrollbar-thumb:hover,
-.labels-page-list::-webkit-scrollbar-thumb:hover,
-.machines-page::-webkit-scrollbar-thumb:hover,
-.transcript-body::-webkit-scrollbar-thumb:hover{background:rgba(120,124,132,.50);}
+::-webkit-scrollbar-thumb:hover{background:rgba(120,124,132,.50);}
 .nav-item{
   display:flex;align-items:center;gap:10px;
   padding:6px 8px;border-radius:7px;color:var(--fg);font-size:13px;font-weight:450;
@@ -185,23 +125,16 @@ body.native .set-top{padding-top:calc(4px + var(--native-inset));}
 }
 .nav-item:hover{background:#EFEFF1;}
 .nav-item .ico{width:17px;height:17px;color:#54575E;flex:none;}
+/* Collapsible section headers (Notes / Labels) — click toggles the list below. */
 .nav-section{
+  display:flex;align-items:center;gap:6px;width:100%;text-align:left;
   font-size:11px;font-weight:600;color:var(--grey);text-transform:none;
-  letter-spacing:.01em;padding:14px 8px 5px;
+  letter-spacing:.01em;padding:14px 8px 5px;cursor:pointer;
 }
-
-/* Search input — styled like a sidebar nav row */
-.nav-search{
-  display:flex;align-items:center;gap:10px;margin:2px 0;
-  padding:6px 8px;border-radius:7px;cursor:text;
-}
-.nav-search:focus-within{background:#EFEFF1;}
-.nav-search svg{width:17px;height:17px;color:#54575E;flex:none;}
-.nav-search input{
-  flex:1;border:none;background:transparent;outline:none;
-  font-family:var(--font);font-size:13px;color:var(--fg);padding:0;min-width:0;
-}
-.nav-search input::placeholder{color:var(--grey);}
+.nav-section:hover{color:var(--grey2);}
+.sec-chev{width:11px;height:11px;color:#B0B4BB;flex:none;transition:transform .14s;}
+.nav-section.collapsed .sec-chev{transform:rotate(-90deg);}
+.sec-body{display:flex;flex-direction:column;}
 
 /* Labels filter list (UI-only) */
 .labels-list{display:flex;flex-direction:column;}
@@ -236,10 +169,8 @@ body.native .set-top{padding-top:calc(4px + var(--native-inset));}
   font-size:12px;font-weight:500;color:var(--accent);background:none;cursor:pointer;
 }
 .view-more:hover{text-decoration:underline;}
-.view-more-side{font-size:12px;}
 
-/* Machines list */
-.machines-list{display:flex;flex-direction:column;}
+/* Machine rows inside the machines dropdown menu */
 .machine-row{
   display:flex;align-items:center;justify-content:space-between;gap:6px;
   padding:6px 8px;border-radius:7px;font-size:13px;color:#2A2D33;cursor:pointer;
@@ -263,16 +194,17 @@ body.native .set-top{padding-top:calc(4px + var(--native-inset));}
 
 /* ====================== CONTENT (app) ====================== */
 .content{flex:1;height:100%;overflow:hidden;background:var(--bg);position:relative;display:flex;flex-direction:column;}
-/* Aligned top header: small wordmark (left) + minimize/compact control (right). */
+/* Aligned top header: chat + minimize (and the editor delete action) on the right. */
 .content-header{
-  flex:none;display:flex;align-items:center;gap:8px;
+  flex:none;display:flex;align-items:center;gap:6px;
   height:38px;padding:0 12px 0 18px;
 }
 .ch-spacer{flex:1;}
-/* Native: reserve the traffic-light band as top padding (it overlaps the drag strip and
-   stays non-interactive), and center the minimize control in the ~30px row just BELOW it
-   — on the traffic-light row's height, clickable, with no dead whitespace above. */
-body.native .content-header{padding-top:var(--native-inset);height:calc(30px + var(--native-inset));}
+/* Native: the header controls sit ON the traffic-light row itself (same 30px band the
+   macOS close/min/zoom buttons occupy — every control here is data-no-drag so the shell
+   drag strip passes clicks through). The 30px margin below keeps the rest of the 60px
+   shell drag band free of interactive content (main.swift headerDragHeight contract). */
+body.native .content-header{padding-top:0;height:var(--native-inset);margin-bottom:30px;}
 
 /* ====================== NOTE EDITOR ====================== */
 .editor{flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden;}
@@ -287,13 +219,6 @@ body.native .content-header{padding-top:var(--native-inset);height:calc(30px + v
 .em-tag{
   font-size:11px;color:#54575E;background:#F1F1F3;border-radius:6px;padding:2px 7px;
 }
-.em-spacer{flex:1;}
-.em-dots{
-  width:28px;height:28px;display:flex;align-items:center;justify-content:center;
-  color:#9AA0A8;border-radius:6px;flex:none;
-}
-.em-dots:hover{background:#F2F2F4;color:#C0392B;}
-.em-dots svg{width:17px;height:17px;}
 .editor-scroll{
   flex:1;overflow-y:auto;display:flex;flex-direction:column;
   max-width:720px;width:100%;margin:0 auto;padding:6px 40px 48px;
@@ -334,11 +259,6 @@ body.native .content-header{padding-top:var(--native-inset);height:calc(30px + v
 .set-back{display:flex;align-items:center;gap:9px;padding:6px 8px;font-size:13px;color:#54575E;border-radius:7px;cursor:pointer;}
 .set-back:hover{background:#EFEFF1;}
 .set-back svg{width:16px;height:16px;}
-.set-search{
-  display:flex;align-items:center;gap:8px;margin:8px 6px 12px;padding:7px 10px;
-  background:#EEEEF0;border-radius:8px;color:#9AA0A8;font-size:12.5px;
-}
-.set-search svg{width:14px;height:14px;}
 .set-group{font-size:11px;font-weight:600;color:var(--grey);padding:12px 8px 5px;}
 .set-item{display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:7px;font-size:13px;color:#2A2D33;cursor:pointer;}
 .set-item:hover{background:#EFEFF1;}
@@ -361,51 +281,24 @@ body.native .content-header{padding-top:var(--native-inset);height:calc(30px + v
 .set-row-text{flex:1;}
 .srt-name{font-size:13px;font-weight:500;}
 .srt-desc{font-size:12px;color:var(--grey);margin-top:4px;line-height:1.55;}
-.set-row-top{border:1px solid var(--hair2);border-radius:12px;align-items:center;}
-.toggle{width:34px;height:20px;border-radius:11px;background:#D7D8DC;flex:none;position:relative;margin-top:1px;}
-.toggle::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2);transition:.15s;}
-.toggle-on{background:var(--accent);}
-.toggle-on::after{left:16px;}
-.set-dd{display:flex;align-items:center;gap:7px;font-size:12.5px;color:#1A1C1F;border:1px solid var(--hair2);border-radius:8px;padding:6px 9px;background:#fff;white-space:nowrap;}
-.set-dd svg:first-child{width:15px;height:15px;}
-.set-dd .caret{width:11px;height:11px;color:var(--grey);}
 .set-version{font-family:var(--mono);font-size:12px;color:#54575E;}
-.set-btn{display:flex;align-items:center;gap:6px;font-size:12.5px;color:#1A1C1F;border:1px solid var(--hair2);border-radius:8px;padding:6px 11px;background:#fff;}
-.set-btn svg{width:14px;height:14px;}
-.set-btn-danger{color:#C0392B;border-color:#F2C7C2;}
 
-/* appearance — nested window mockups */
+/* appearance — plain theme swatches (no window mockups) */
 .theme-row{display:flex;gap:14px;margin-bottom:18px;}
+/* Trash retention picker: three small pills (7/30/90 days). */
+.retention-row{display:flex;gap:8px;}
+.retention-opt{
+  font-size:12.5px;color:var(--grey2);padding:6px 13px;border-radius:8px;
+  border:1px solid var(--hair2);background:transparent;
+}
+.retention-opt:hover{background:#F2F2F4;}
+.retention-opt.active{color:var(--accent);border-color:var(--accent);background:rgba(124,58,237,.06);font-weight:550;}
 .theme-card{flex:1;cursor:pointer;}
 .theme-prev{height:104px;border-radius:11px;overflow:hidden;position:relative;}
 .theme-selected .theme-prev{box-shadow:0 0 0 2px var(--accent);}
-/* inner app card sits offset-down inside the tinted backdrop */
-.tp-card{position:absolute;left:18%;right:0;top:26%;bottom:0;border-radius:9px 0 0 0;overflow:hidden;display:flex;flex-direction:column;}
-.tp-bar{padding:10px 12px 6px;display:flex;flex-direction:column;gap:5px;}
-.tp-bl{height:5px;width:62%;border-radius:3px;}
-.tp-bl.short{width:42%;}
-.tp-body{flex:1;padding:8px 12px;display:flex;flex-direction:column;gap:6px;}
-.tp-rl{height:5px;border-radius:3px;}
-.tp-rl.short{width:55%;}
-.tp-mini{margin-top:auto;align-self:flex-start;width:60%;border-radius:6px 0 0 0;padding:8px 8px 0;display:flex;flex-direction:column;gap:5px;}
-.tp-ml{height:5px;border-radius:3px;}
-/* System: split backdrop (light left / dark right), split inner card */
-.theme-prev-system{background:linear-gradient(90deg,#A9ADB4 0 50%,#3A3D44 50% 100%);}
-.theme-prev-system .tp-card{background:linear-gradient(90deg,#EDEEF0 0 50%,#2A2D33 50% 100%);}
-.theme-prev-system .tp-bl{background:#9CA0A8;}
-.theme-prev-system .tp-rl{background:#C9CBCF;}
-.theme-prev-system .tp-mini{background:#3A3D44;}
-.theme-prev-system .tp-ml{background:#6A6E76;}
-/* Light: light backdrop, white card */
+.theme-prev-system{background:linear-gradient(90deg,#ECECEE 0 50%,#2A2D33 50% 100%);}
 .theme-prev-light{background:#ECECEE;}
-.theme-prev-light .tp-card{background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.04);}
-.theme-prev-light .tp-bl{background:#C9CBCF;}
-.theme-prev-light .tp-rl{background:#DDDEE1;}
-/* Dark: dark backdrop, darker card */
-.theme-prev-dark{background:#4A4D54;}
-.theme-prev-dark .tp-card{background:#2A2D33;}
-.theme-prev-dark .tp-bl{background:#6A6E76;}
-.theme-prev-dark .tp-rl{background:#44474E;}
+.theme-prev-dark{background:#2A2D33;}
 .theme-name{text-align:center;font-size:12.5px;color:#54575E;margin-top:8px;}
 /* selected theme highlight is wired by app.js via .theme-selected */
 
@@ -421,26 +314,36 @@ body.native .content-header{padding-top:var(--native-inset);height:calc(30px + v
 .about-foot{font-size:12.5px;color:var(--grey);line-height:1.6;margin-top:20px;text-align:center;}
 
 /* ====================== HOME ====================== */
+/* The quick-note composer is the hero, vertically centered in the content area
+   (auto margins center when content fits and degrade to normal scroll when not). */
 .home{flex:1;min-height:0;overflow-y:auto;display:flex;justify-content:center;}
-.home-inner{width:100%;max-width:560px;padding:18px 32px 72px;display:flex;flex-direction:column;align-items:center;}
+.home-inner{width:100%;max-width:560px;padding:24px 32px;display:flex;flex-direction:column;align-items:center;margin:auto;}
 
-/* Quick-note composer — a single rounded pill: input + embedded Add button */
+/* Quick-note composer — a single rounded pill: growing textarea + embedded controls.
+   While recording it contracts into the ONE recording surface (input hidden). */
 .qn-composer{
-  position:relative;display:flex;align-items:center;width:100%;max-width:460px;margin-bottom:34px;
+  position:relative;display:flex;align-items:flex-end;width:100%;max-width:460px;
   border:1px solid var(--hair2);border-radius:22px;background:var(--bg);
   transition:border-color .12s,box-shadow .12s;
 }
 .qn-composer:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px rgba(124,58,237,.16);}
 .qn-input{
-  flex:1;min-width:0;border:none;border-radius:22px;
-  background:transparent;font-family:var(--font);font-size:14px;color:var(--fg);
-  padding:11px 6px 11px 16px;outline:none;
+  flex:1;min-width:0;border:none;border-radius:22px;resize:none;overflow-y:auto;
+  background:transparent;font-family:var(--font);font-size:14px;line-height:1.45;color:var(--fg);
+  height:42px;max-height:120px;padding:11px 6px 11px 16px;outline:none;
 }
 .qn-input::placeholder{color:var(--grey);}
+/* Recording mode: the input bar disappears — the pill becomes the recording surface. */
+.qn-composer.recording .qn-input,
+.qn-composer.stopping .qn-input,
+.qn-composer.transcribing .qn-input{display:none;}
+.qn-composer.recording,
+.qn-composer.stopping,
+.qn-composer.transcribing{justify-content:flex-end;align-items:center;min-height:42px;}
 
 /* Add (submit a typed note) — small round arrow button, shown only when typing. */
 .qn-send{
-  flex:none;width:30px;height:30px;margin-right:5px;border-radius:50%;
+  flex:none;width:30px;height:30px;margin:6px 5px 6px 0;border-radius:50%;
   background:var(--accent);color:#fff;
   display:flex;align-items:center;justify-content:center;
   transition:transform .18s cubic-bezier(.34,1.56,.64,1),filter .12s;
@@ -449,11 +352,23 @@ body.native .content-header{padding-top:var(--native-inset);height:calc(30px + v
 .qn-send:hover{filter:brightness(.96);}
 .qn-send:active{transform:scale(.9);}
 
+/* Pause / resume — inline in the pill while recording (no second surface). */
+.qn-pause{
+  display:none;flex:none;width:30px;height:30px;margin:6px 5px 6px 0;border-radius:50%;
+  align-items:center;justify-content:center;color:#54575E;background:#EFEFF1;
+}
+.qn-pause:hover{background:#E5E5E8;color:var(--fg);}
+.qn-pause svg{width:13px;height:13px;}
+.qn-pause .qn-resume-ico{display:none;}
+.qn-composer.recording .qn-pause{display:flex;}
+.qn-composer.paused .qn-pause .qn-pause-ico{display:none;}
+.qn-composer.paused .qn-pause .qn-resume-ico{display:block;}
+
 /* Record — the primary voice control, living inside the pill. Purple "Record" pill;
-   becomes a compact timer+stop while recording. Subtle spring on press. */
+   while recording: ONE timer inside the circle, hover reveals the stop square. */
 .qn-rec{
-  flex:none;display:inline-flex;align-items:center;gap:6px;
-  height:30px;margin-right:5px;padding:0 14px;border-radius:16px;
+  flex:none;display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  height:30px;margin:6px 5px 6px 0;padding:0 14px;border-radius:16px;
   background:var(--accent);color:#fff;font-size:12.5px;font-weight:600;letter-spacing:-.005em;
   transition:transform .18s cubic-bezier(.34,1.56,.64,1),background .14s,filter .12s;
 }
@@ -463,22 +378,35 @@ body.native .content-header{padding-top:var(--native-inset);height:calc(30px + v
 .qn-rec-label{white-space:nowrap;}
 .qn-rec-stop{display:none;width:11px;height:11px;border-radius:2.5px;background:#fff;flex:none;}
 .qn-rec-timer{display:none;font-variant-numeric:tabular-nums;letter-spacing:.01em;min-width:30px;text-align:center;}
+/* Distinct icon while transcribing: a small spinner replaces timer/stop/mic. */
+.qn-rec-busy{display:none;width:14px;height:14px;flex:none;}
+@keyframes qnBusySpin{to{transform:rotate(360deg);}}
 
-/* Recording: red, gentle contract/expand pulse; mic+label swap for stop-square + timer. */
+/* Recording: red, gentle contract/expand pulse. The timer replaces the stop square;
+   hovering the circle reveals stop. */
 .qn-composer.recording .qn-rec{background:#E5484D;animation:qnRecPulse 1.7s ease-in-out infinite;}
 .qn-composer.recording .qn-rec-mic,
 .qn-composer.recording .qn-rec-label{display:none;}
-.qn-composer.recording .qn-rec-stop{display:block;}
 .qn-composer.recording .qn-rec-timer{display:block;}
+.qn-composer.recording .qn-rec:hover .qn-rec-timer{display:none;}
+.qn-composer.recording .qn-rec:hover .qn-rec-stop{display:block;}
 @keyframes qnRecPulse{0%,100%{transform:scale(1);}50%{transform:scale(1.045);}}
 
-/* Paused: steady (no pulse), dimmed. */
-.qn-composer.paused .qn-rec{background:#B43B3F;animation:none;}
-/* Stopping / transcribing: neutral, no pulse. */
-.qn-composer.stopping .qn-rec{background:var(--accent);animation:none;}
+/* Paused: gray (not red) with the same gentle pulse. */
+.qn-composer.paused .qn-rec{background:#8A8F98;}
+/* Stopping / transcribing: neutral gray, spinner icon, no pulse. */
+.qn-composer.stopping .qn-rec,
 .qn-composer.transcribing .qn-rec{background:#8A8F98;animation:none;}
-.qn-composer.transcribing .qn-rec-timer{display:none;}
+.qn-composer.stopping .qn-rec-mic,
+.qn-composer.stopping .qn-rec-label,
+.qn-composer.stopping .qn-rec-timer,
+.qn-composer.stopping .qn-rec-stop,
+.qn-composer.transcribing .qn-rec-mic,
+.qn-composer.transcribing .qn-rec-label,
+.qn-composer.transcribing .qn-rec-timer,
 .qn-composer.transcribing .qn-rec-stop{display:none;}
+.qn-composer.stopping .qn-rec-busy,
+.qn-composer.transcribing .qn-rec-busy{display:block;animation:qnBusySpin 1s linear infinite;}
 .qn-composer.complete .qn-rec{background:var(--green);animation:none;}
 .qn-composer.error .qn-rec{background:#C0392B;animation:none;}
 /* Disabled (no AI key): muted, still clickable to surface the hint toast. */
@@ -487,37 +415,29 @@ body.native .content-header{padding-top:var(--native-inset);height:calc(30px + v
 .qn-composer.paused:focus-within{border-color:var(--hair2);box-shadow:none;}
 
 /* ====================== TRANSCRIPT SURFACE ====================== */
-/* Fixed-height, internally scrolling — partial replaces the trailing line, never janks. */
-.transcript{
-  width:100%;max-width:460px;margin:2px 0 30px;
-  border:1px solid var(--hair2);border-radius:10px;background:#FAFAFB;
-  padding:10px 12px;
-}
-.transcript-label{font-size:10.5px;font-weight:600;color:var(--grey);text-transform:uppercase;letter-spacing:.04em;margin-bottom:5px;}
+/* Flat, heading-free: the transcript just streams below the composer. Internally
+   scrolling — partial replaces the trailing line, never janks the page. */
+.transcript{width:100%;max-width:460px;margin:14px 0 4px;padding:0 6px;}
 .transcript-body{
-  height:72px;overflow-y:auto;font-size:12.5px;line-height:1.55;color:#3A3D43;
+  max-height:120px;overflow-y:auto;font-size:13px;line-height:1.6;color:#3A3D43;
   white-space:pre-wrap;word-break:break-word;
 }
 .transcript-final{color:#2A2D33;}
 .transcript-partial{color:#8A8F98;}
 
-/* Recent note cards (copy button appears on hover; no layout shift) */
-.home-recent{width:100%;max-width:460px;margin-top:8px;display:flex;flex-direction:column;}
-.home-recent-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding-left:2px;}
+/* Recent notes — a FLAT list: no card borders, backgrounds, or shadows. Hover shows a
+   subtle row highlight + the copy control (checkmark-only feedback, no text). */
+.home-recent{width:100%;max-width:460px;margin-top:34px;display:flex;flex-direction:column;}
+.home-recent-head{display:flex;align-items:center;margin-bottom:4px;padding-left:12px;}
 .home-recent-label{font-size:11px;font-weight:600;color:var(--grey);}
-.home-all-notes{font-size:12px;font-weight:500;color:var(--accent);}
-.home-all-notes:hover{text-decoration:underline;}
-.home-cards{display:flex;flex-direction:column;gap:8px;}
+.home-cards{display:flex;flex-direction:column;}
 /* Third row: relative time on its own line so it never crowds the preview. */
-.home-card-meta{font-size:11px;color:#A4A8B0;margin-top:5px;font-variant-numeric:tabular-nums;}
-.home-card{
-  position:relative;border:1px solid var(--hair2);border-radius:10px;padding:11px 14px;cursor:pointer;
-  background:var(--bg);transition:border-color .12s,background .12s;
-}
-.home-card:hover{border-color:#D6D7DB;background:#FAFAFB;}
+.home-card-meta{font-size:11px;color:#A4A8B0;margin-top:4px;font-variant-numeric:tabular-nums;}
+.home-card{position:relative;border-radius:9px;padding:9px 12px;cursor:pointer;}
+.home-card:hover{background:#F7F7F8;}
 .home-card-title{font-size:13.5px;font-weight:550;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:26px;}
 .home-card-sub{font-size:12px;color:var(--grey);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-/* copy button — absolutely positioned so it never shifts card layout on hover */
+/* copy button — absolutely positioned so it never shifts row layout on hover */
 .home-card-copy{
   position:absolute;top:8px;right:8px;width:24px;height:24px;border-radius:6px;
   display:flex;align-items:center;justify-content:center;color:#9AA0A8;
@@ -527,11 +447,13 @@ body.native .content-header{padding-top:var(--native-inset);height:calc(30px + v
 .home-card-copy:hover{background:#EFEFF1;color:#54575E;}
 .home-card-copy svg{width:14px;height:14px;}
 .home-card-copy.copied{opacity:1;color:var(--green);}
-.home-card-copied{
-  position:absolute;top:8px;right:38px;font-size:10.5px;font-weight:600;color:var(--green);
-  opacity:0;transition:opacity .12s;pointer-events:none;
+
+/* The ONE view-all path from Recent — subtle light gray, never purple. */
+.home-view-all{
+  align-self:flex-start;margin-top:6px;padding:4px 12px;
+  font-size:12px;font-weight:500;color:var(--grey);
 }
-.home-card-copied.show{opacity:1;}
+.home-view-all:hover{color:var(--grey2);}
 
 /* ====================== NOTES PAGE (full list) ====================== */
 .notes-page{flex:1;min-height:0;overflow:hidden;display:flex;justify-content:center;}
@@ -540,9 +462,26 @@ body.native .content-header{padding-top:var(--native-inset);height:calc(30px + v
 .np-title{font-size:21px;font-weight:600;margin:0;}
 .np-count{font-size:12.5px;color:var(--grey);}
 .np-list{display:flex;flex-direction:column;}
-.np-row{padding:11px 10px;border-radius:9px;cursor:pointer;border-bottom:1px solid var(--hair);}
+.np-row{position:relative;padding:11px 10px;border-radius:9px;cursor:pointer;border-bottom:1px solid var(--hair);}
 .np-row:last-child{border-bottom:none;}
 .np-row:hover{background:#F7F7F8;}
+/* Hover actions (top-right): copy on every row; Restore / permanent Delete appear on
+   archived and trashed rows. Icon-only checkmark feedback on copy — no "Copied" text. */
+.np-row-actions{
+  position:absolute;top:9px;right:9px;display:flex;gap:2px;opacity:0;transition:opacity .12s ease;
+}
+.np-row:hover .np-row-actions{opacity:1;}
+.np-act{
+  width:24px;height:24px;display:flex;align-items:center;justify-content:center;
+  color:#9AA0A8;border-radius:6px;background:transparent;
+}
+.np-act:hover{background:#EFEFF1;color:#54575E;}
+.np-act svg{width:14px;height:14px;}
+.np-act.copied{opacity:1;color:var(--green);}
+.np-act-danger:hover{background:#FBECEA;color:#C0392B;}
+.np-row-expiry{color:var(--orange);}
+.np-row-age + .np-row-expiry::before,
+.np-row-machine + .np-row-expiry::before{content:"·";margin-right:8px;color:#C4C8CF;}
 .np-row-title{font-size:14px;font-weight:550;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .np-row-sub{font-size:12.5px;color:var(--grey2);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .np-row-meta{display:flex;align-items:center;gap:8px;margin-top:5px;font-size:11px;color:#A4A8B0;}
@@ -583,8 +522,6 @@ body.native .content-header{padding-top:var(--native-inset);height:calc(30px + v
 .ct-row:last-child{border-bottom:0;padding-bottom:0;}
 .ct-name{font-size:12px;font-weight:600;}
 .ct-state{font-size:11px;color:var(--grey);text-align:right;}
-.ct-json{grid-column:1/-1;margin:0;background:#F7F7F8;border-radius:7px;padding:7px;max-height:120px;overflow:auto;font-family:var(--mono);font-size:11px;line-height:1.35;color:#54575E;white-space:pre-wrap;overflow-wrap:anywhere;}
-.ct-result{color:#3F4A3F;}
 .chat-sources{padding:8px;display:flex;flex-wrap:wrap;gap:6px;}
 .cs-item{border:1px solid var(--hair2);border-radius:14px;padding:4px 9px;font-size:11.5px;color:var(--fg);background:#F7F7F8;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .chat-approvals{padding:9px;display:flex;flex-direction:column;gap:8px;}
@@ -595,11 +532,7 @@ body.native .content-header{padding-top:var(--native-inset);height:calc(30px + v
 .ca-btn{height:26px;border:1px solid var(--hair2);border-radius:14px;padding:0 10px;font-size:12px;color:var(--fg);background:var(--bg);}
 .ca-primary{background:var(--accent);border-color:var(--accent);color:#fff;}
 
-/* ====================== LABELS PAGE ====================== */
-.labels-page{flex:1;min-height:0;overflow:hidden;display:flex;justify-content:center;}
-.labels-inner{width:100%;max-width:640px;height:100%;overflow-y:auto;padding:8px 32px 64px;}
-.labels-head{display:flex;align-items:baseline;gap:10px;margin:6px 0 16px;}
-.labels-title{font-size:21px;font-weight:600;margin:0;}
+/* ====================== LABELS (Settings → Labels management) ====================== */
 .labels-count{font-size:12.5px;color:var(--grey);}
 .label-create{display:flex;align-items:center;gap:8px;border:1px solid var(--hair2);border-radius:20px;background:var(--bg);padding:4px 5px 4px 14px;margin-bottom:14px;}
 .label-create:focus-within{border-color:#C9C4F7;box-shadow:0 0 0 3px rgba(124,58,237,.10);}
@@ -631,23 +564,31 @@ body.native .content-header{padding-top:var(--native-inset);height:calc(30px + v
 .mp-sub{font-size:12px;color:var(--grey);margin-top:3px;}
 .mp-count{font-size:12px;color:#54575E;flex:none;font-variant-numeric:tabular-nums;}
 
-/* win-min control — now a real, aligned header control inside .content-header */
-.win-min{
+/* Header window controls: chat + minimize (+ editor copy/delete) on the traffic-light row. */
+.win-min,.win-chat,.win-del,.win-copy{
   flex:none;width:26px;height:26px;display:flex;align-items:center;justify-content:center;
   color:#B7BBC2;border-radius:6px;
 }
-.win-min svg{width:16px;height:16px;}
-.win-min:hover{background:#F2F2F4;color:#7C8088;}
+.win-min svg,.win-chat svg,.win-del svg,.win-copy svg{width:16px;height:16px;}
+.win-min:hover,.win-chat:hover,.win-copy:hover{background:#F2F2F4;color:#7C8088;}
+.win-chat.active{color:var(--accent);}
+.win-copy.copied{color:var(--green);}
+.win-del:hover{background:#F2F2F4;color:#C0392B;}
 
-/* ====================== PERSISTENT RECORDING PILL ====================== */
-/* Fixed control, visible on every screen whenever rec.active (independent of shell). */
+/* ====================== MINIMAL RECORDING INDICATOR ====================== */
+/* Tiny top-right popover shown while recording on every screen EXCEPT Home (there the
+   composer is the single surface). Follows the system theme — never hardcoded dark. */
 .rec-pill{
-  position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:85;
-  display:flex;align-items:center;gap:9px;
-  background:#1A1C1F;color:#fff;border-radius:22px;padding:6px 8px 6px 14px;
-  box-shadow:0 8px 24px rgba(0,0,0,.24);
+  position:absolute;top:44px;right:14px;z-index:85;
+  display:flex;align-items:center;gap:8px;
+  background:var(--bg);color:var(--fg);border:1px solid var(--hair2);
+  border-radius:18px;padding:4px 6px 4px 12px;
+  box-shadow:0 6px 18px rgba(0,0,0,.10);
 }
-body.native .rec-pill{bottom:18px;}
+/* Native: sit just below the 60px shell drag band so the buttons stay clickable. */
+body.native .rec-pill{top:66px;}
+/* Compact window: bottom-center (the top row belongs to the Expand control). */
+.window[data-active-shell="compact"] .rec-pill{top:auto;bottom:14px;left:50%;right:auto;transform:translateX(-50%);}
 .rec-pill-dot{
   width:9px;height:9px;border-radius:50%;background:#FF5A5F;flex:none;
   animation:recDot 1.3s ease-in-out infinite;
@@ -657,13 +598,13 @@ body.native .rec-pill{bottom:18px;}
 .rec-pill-timer{font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:.01em;min-width:34px;}
 .rec-pill-btn{
   width:26px;height:26px;border-radius:50%;flex:none;
-  display:flex;align-items:center;justify-content:center;color:#D6D7DB;
-  background:rgba(255,255,255,.08);
+  display:flex;align-items:center;justify-content:center;color:#6E7178;
+  background:rgba(120,124,132,.12);
 }
-.rec-pill-btn:hover{background:rgba(255,255,255,.18);color:#fff;}
+.rec-pill-btn:hover{background:rgba(120,124,132,.24);color:var(--fg);}
 .rec-pill-btn svg{width:13px;height:13px;}
-.rec-pill-stop{color:#FF8488;}
-.rec-pill-stop:hover{background:rgba(255,90,95,.22);color:#FF5A5F;}
+.rec-pill-stop{color:#E5484D;}
+.rec-pill-stop:hover{background:rgba(229,72,77,.16);color:#E5484D;}
 .rec-pill .rec-resume-ico{display:none;}
 .rec-pill.paused #rec-pill-pause .rec-pause-ico{display:none;}
 .rec-pill.paused #rec-pill-pause .rec-resume-ico{display:block;}
@@ -709,6 +650,36 @@ body.native .compact-inner{padding-top:calc(14px + var(--native-inset));}
 .ctx-item.ctx-danger:hover{background:#FBECEA;}
 .ctx-sep{height:1px;background:var(--hair);margin:4px 6px;}
 
+/* ====================== MARKDOWN POPOVER + SLASH MENU ====================== */
+/* The ONLY formatting UI (no toolbar): a small popover over selected editor text and a
+   slash-command menu under a "/" line. Both follow the system theme via tokens. */
+.md-pop{
+  position:fixed;z-index:82;display:flex;gap:2px;padding:3px;
+  background:var(--bg);border:1px solid var(--hair2);border-radius:9px;
+  box-shadow:0 8px 24px rgba(0,0,0,.16),0 2px 6px rgba(0,0,0,.08);
+}
+.md-btn{
+  width:26px;height:26px;display:flex;align-items:center;justify-content:center;
+  font-size:13px;color:var(--fg);border-radius:6px;
+}
+.md-btn:hover{background:#EFEFF1;}
+.md-btn.md-bold{font-weight:700;}
+.md-btn.md-italic{font-style:italic;font-family:Georgia,serif;}
+.md-btn svg{width:14px;height:14px;}
+.slash-menu{
+  position:fixed;z-index:82;min-width:200px;max-height:248px;overflow-y:auto;
+  background:var(--bg);border:1px solid var(--hair2);border-radius:10px;
+  box-shadow:0 10px 30px rgba(0,0,0,.18),0 2px 8px rgba(0,0,0,.08);
+  padding:5px;display:flex;flex-direction:column;
+}
+.slash-item{
+  display:flex;align-items:center;justify-content:space-between;gap:14px;text-align:left;
+  font-size:13px;color:var(--fg);padding:6px 9px;border-radius:6px;width:100%;
+}
+.slash-item:hover,.slash-item.active{background:#EFEFF1;}
+.slash-label{white-space:nowrap;}
+.slash-hint{font-family:var(--mono);font-size:11px;color:var(--grey);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:110px;}
+
 /* Inline rename field inside a note row */
 .note-row .note-rename{
   flex:1;min-width:0;border:1px solid var(--accent);border-radius:5px;
@@ -716,18 +687,43 @@ body.native .compact-inner{padding-top:calc(14px + var(--native-inset));}
   padding:1px 5px;outline:none;box-shadow:0 0 0 2px rgba(124,58,237,.18);
 }
 
+/* ====================== SEARCH POPOVER (Cmd+K) ====================== */
+.search-pop{
+  position:absolute;inset:0;z-index:95;background:rgba(24,26,30,.18);
+  display:flex;align-items:flex-start;justify-content:center;padding-top:11vh;
+}
+.search-panel{
+  width:min(520px,calc(100% - 72px));background:var(--bg);
+  border:1px solid var(--hair2);border-radius:14px;overflow:hidden;
+  box-shadow:0 24px 60px rgba(0,0,0,.22),0 4px 14px rgba(0,0,0,.10);
+}
+.search-panel-bar{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--hair);}
+.search-panel-bar svg{width:16px;height:16px;color:var(--grey);flex:none;}
+.search-panel-input{
+  flex:1;min-width:0;border:0;outline:none;background:transparent;
+  font-family:var(--font);font-size:14px;color:var(--fg);
+}
+.search-panel-input::placeholder{color:var(--grey);}
+.search-panel-hint{font-size:10.5px;color:var(--grey);border:1px solid var(--hair2);border-radius:5px;padding:1px 5px;flex:none;}
+.search-results{max-height:44vh;overflow-y:auto;padding:6px;}
+.sp-row{padding:8px 10px;border-radius:8px;cursor:pointer;}
+.sp-row:hover{background:#F7F7F8;}
+.sp-title{font-size:13px;font-weight:550;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sp-sub{font-size:12px;color:var(--grey);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sp-empty{padding:18px;text-align:center;font-size:12.5px;color:var(--grey);}
+
 /* ====================== TOAST ====================== */
+/* Content-scoped: center-bottom of the CONTENT area (offset by the sidebar width in the
+   app + settings shells), not app-level center. */
 .toast{
-  position:fixed;left:50%;bottom:30px;transform:translateX(-50%) translateY(8px);
+  position:absolute;left:50%;bottom:26px;transform:translateX(-50%) translateY(8px);
   z-index:90;background:#1A1C1F;color:#fff;font-size:12.5px;font-weight:500;
   padding:9px 16px;border-radius:9px;box-shadow:0 8px 24px rgba(0,0,0,.22);
   opacity:0;transition:opacity .18s ease,transform .18s ease;pointer-events:none;
 }
+.window[data-active-shell="app"] .toast,
+.window[data-active-shell="settings"] .toast{left:calc(50% + 124px);}
 .toast.toast-show{opacity:1;transform:translateX(-50%) translateY(0);}
-/* When the persistent recording pill is visible, lift the toast above it so a
-   "Note added" toast fired mid-recording doesn't overlap the pill (CSS-only:
-   #rec-pill precedes #toast as a sibling). */
-.rec-pill:not([hidden]) ~ #toast{bottom:76px;}
 
 /* ====================== DARK THEME ======================
    The theme switcher sets data-theme="dark" on <html> (real, persisted). Only the
@@ -757,48 +753,60 @@ html[data-theme="dark"] .nav-item:hover,
 html[data-theme="dark"] .note-row:hover,
 html[data-theme="dark"] .machine-row:hover,
 html[data-theme="dark"] .set-item:hover,
-html[data-theme="dark"] .nav-search:focus-within,
 html[data-theme="dark"] .sidebar-settings:hover,
 html[data-theme="dark"] .set-back:hover{background:#2A2D33;}
 html[data-theme="dark"] .note-row.active,
 html[data-theme="dark"] .machine-row.active,
 html[data-theme="dark"] .set-item.active{background:#33373E;}
 html[data-theme="dark"] .nav-item .ico,
-html[data-theme="dark"] .nav-search svg,
+html[data-theme="dark"] .machines-dd-btn .ico,
 html[data-theme="dark"] .set-item .ico,
 html[data-theme="dark"] .sidebar-settings .ico,
 html[data-theme="dark"] .set-back{color:#B7BBC2;}
-html[data-theme="dark"] .nav-search input,
 html[data-theme="dark"] .editor-title,
 html[data-theme="dark"] .editor-body,
 html[data-theme="dark"] .note-row,
 html[data-theme="dark"] .em-machine{color:var(--fg);}
 html[data-theme="dark"] .editor-body{color:#C7C9CD;}
 html[data-theme="dark"] .em-tag{background:#2C2F35;color:#C7C9CD;}
-html[data-theme="dark"] .win-min:hover,
-html[data-theme="dark"] .em-dots:hover{background:#2A2D33;}
 html[data-theme="dark"] .es-btn{background:#E7E8EA;color:#1B1D21;}
 html[data-theme="dark"] .set-card{border-color:var(--hair2);}
 
 /* new components — dark theme */
 html[data-theme="dark"] .compact-input,
-html[data-theme="dark"] .home-card,
 html[data-theme="dark"] .compact-expand{background:var(--bg);border-color:var(--hair2);color:var(--fg);}
 html[data-theme="dark"] .qn-composer{background:var(--bg);border-color:var(--hair2);}
 html[data-theme="dark"] .qn-input{color:var(--fg);}
-html[data-theme="dark"] .home-card:hover{background:#24272C;border-color:#3A3D44;}
+html[data-theme="dark"] .qn-pause{background:#2C2F35;color:#C7C9CD;}
+html[data-theme="dark"] .qn-pause:hover{background:#33373E;color:var(--fg);}
+html[data-theme="dark"] .home-card:hover{background:#24272C;}
 html[data-theme="dark"] .home-card-title{color:var(--fg);}
 html[data-theme="dark"] .home-card-copy:hover{background:#33373E;color:#C7C9CD;}
+html[data-theme="dark"] .machines-dd-btn{background:var(--bg);border-color:var(--hair2);color:var(--fg);}
+html[data-theme="dark"] .machines-dd-btn:hover{background:#2A2D33;}
+html[data-theme="dark"] .machines-dd-menu{background:#26292E;border-color:var(--hair2);}
+html[data-theme="dark"] .search-pop{background:rgba(0,0,0,.38);}
+html[data-theme="dark"] .search-panel{background:#26292E;border-color:var(--hair2);}
+html[data-theme="dark"] .sp-row:hover{background:#2E3138;}
 html[data-theme="dark"] .compact-expand:hover,
-html[data-theme="dark"] .win-min:hover{background:#2A2D33;color:var(--fg);}
-html[data-theme="dark"] .wordmark,
-html[data-theme="dark"] .ch-wordmark{color:var(--fg);}
-html[data-theme="dark"] .ch-wordmark{color:#8A8F98;}
+html[data-theme="dark"] .win-min:hover,
+html[data-theme="dark"] .win-chat:hover{background:#2A2D33;color:var(--fg);}
+html[data-theme="dark"] .win-copy:hover{background:#2A2D33;color:var(--fg);}
+html[data-theme="dark"] .win-del:hover{background:#2A2D33;color:#FF7B72;}
+html[data-theme="dark"] .np-act:hover{background:#33373E;color:#C7C9CD;}
+html[data-theme="dark"] .np-act-danger:hover{background:#3A2A2C;color:#FF7B72;}
+html[data-theme="dark"] .md-pop{background:#26292E;border-color:var(--hair2);}
+html[data-theme="dark"] .md-btn:hover{background:#33373E;}
+html[data-theme="dark"] .slash-menu{background:#26292E;border-color:var(--hair2);}
+html[data-theme="dark"] .slash-item:hover,
+html[data-theme="dark"] .slash-item.active{background:#33373E;}
+html[data-theme="dark"] .retention-opt:hover{background:#2A2D33;}
+html[data-theme="dark"] .retention-opt.active{background:rgba(124,58,237,.16);}
+html[data-theme="dark"] .rec-pill{background:#26292E;border-color:var(--hair2);}
 html[data-theme="dark"] .label-row,
 html[data-theme="dark"] .label-row .lr-name{color:var(--fg);}
 html[data-theme="dark"] .label-row:hover{background:#2A2D33;}
 html[data-theme="dark"] .label-row.active{background:#33373E;}
-html[data-theme="dark"] .transcript{background:#202327;border-color:var(--hair2);}
 html[data-theme="dark"] .transcript-final{color:#C7C9CD;}
 html[data-theme="dark"] .note-age{color:#6E7178;}
 html[data-theme="dark"] .ctx-menu{background:#26292E;border-color:var(--hair2);}
@@ -821,8 +829,7 @@ html[data-theme="dark"] .mp-name{color:var(--fg);}
 html[data-theme="dark"] .mp-count{color:#C7C9CD;}
 html[data-theme="dark"] .home-card-meta,
 html[data-theme="dark"] .np-row-age{color:#6E7178;}
-html[data-theme="dark"] .chat-title,
-html[data-theme="dark"] .labels-title{color:var(--fg);}
+html[data-theme="dark"] .chat-title{color:var(--fg);}
 html[data-theme="dark"] .chat-log,
 html[data-theme="dark"] .chat-form,
 html[data-theme="dark"] .goal-card,
@@ -831,10 +838,8 @@ html[data-theme="dark"] .chat-sources,
 html[data-theme="dark"] .chat-approvals,
 html[data-theme="dark"] .label-create,
 html[data-theme="dark"] .labels-page-list{border-color:var(--hair2);background:var(--bg);}
-html[data-theme="dark"] .ct-json,
 html[data-theme="dark"] .ca-preview,
 html[data-theme="dark"] .cs-item{background:#24272C;color:#C7C9CD;border-color:var(--hair2);}
-html[data-theme="dark"] .ct-result{color:#B7D7B7;}
 html[data-theme="dark"] .lp-row{border-color:var(--hair);}
 html[data-theme="dark"] .lp-row:hover{background:#24272C;}
 html[data-theme="dark"] .lp-name,

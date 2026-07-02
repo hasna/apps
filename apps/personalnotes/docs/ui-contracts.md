@@ -9,7 +9,7 @@ The native host injects `window.__BOOT__` before `web/app.js` runs and later cal
 
 ```js
 {
-  thisMachine: "apple03",
+  thisMachine: "studio-mac",
   listDefaults: { limit: 10 },
   notes: [{
     id: "uuid-or-file-id",
@@ -22,12 +22,12 @@ The native host injects `window.__BOOT__` before `web/app.js` runs and later cal
     tags: ["research"], // compatibility alias only
     status: "active",
     folder: "",
-    machine: "apple03",
+    machine: "studio-mac",
     createdByActorType: "agent", // human | agent | system
     createdByName: "Codewith",
-    sourceMachine: "spark02",
+    sourceMachine: "linux-box",
     sourceMachineFriendlyName: "Spark",
-    originMachine: "apple03",
+    originMachine: "studio-mac",
     originMachineFriendlyName: "Apple Studio",
     targetMachineFriendlyName: "",
     previousMachine: "",
@@ -43,11 +43,11 @@ The native host injects `window.__BOOT__` before `web/app.js` runs and later cal
       createdBy: "Codewith",
       createdByActorType: "agent",
       createdAt: "2026-06-22T09:00:00Z",
-      sourceMachine: "spark02",
+      sourceMachine: "linux-box",
       sourceMachineFriendlyName: "Spark",
-      originMachine: "apple03",
+      originMachine: "studio-mac",
       originMachineFriendlyName: "Apple Studio",
-      currentMachine: "apple03",
+      currentMachine: "studio-mac",
       openedFrom: "mcp",
       sourceContext: "ticket-123"
     },
@@ -58,16 +58,13 @@ The native host injects `window.__BOOT__` before `web/app.js` runs and later cal
     titleContentFingerprint: ""
   }],
 	  machines: [{
-	    id: "apple03",
-	    slug: "apple03",
+	    id: "studio-mac",
+	    slug: "studio-mac",
 	    displayName: "Apple Studio",
 	    friendlyName: "Apple Studio",
-	    sshAddress: "apple03.local",
 	    platform: "macos",
 	    status: "online",
 	    online: true,
-	    source: "open-machines",
-	    origin: "fleet",
 	    noteCount: 14,
 	    activeNoteCount: 14,
 	    archivedNoteCount: 1,
@@ -75,12 +72,7 @@ The native host injects `window.__BOOT__` before `web/app.js` runs and later cal
 	    totalNoteCount: 15,
 	    latestNoteUpdatedAt: "2026-06-22T09:00:00Z",
 	    lastSeenAt: "2026-06-22T09:00:00Z",
-	    syncedAt: "2026-06-22T09:00:00Z",
 	    recentActivityAt: "2026-06-22T09:00:00Z",
-	    capabilities: ["notes-sync"],
-	    metadata: {},
-	    provenance: {},
-	    sync: {},
 	    updatedAt: "2026-06-22T09:00:00Z"
 	  }],
   settings: {
@@ -90,7 +82,43 @@ The native host injects `window.__BOOT__` before `web/app.js` runs and later cal
 ```
 
 Lists should render the latest 10 items by default and expose a "View more" or
-incremental-load affordance by increasing the local limit.
+incremental-load affordance. `listDefaults` applies on the initial boot only —
+the host hydrates after every write, and hydrate must NOT reset the user's
+pagination state.
+
+## App Layout And Navigation
+
+Vision 05007066 ("very simple, like Google Keep") defines the shell:
+
+- Sidebar: NO app name. The machines filter dropdown sits at the top
+  (`#machines-dd-btn` + `#machines-list`), then Home, New Note, the collapsible
+  Notes section (`#sec-notes` + `#notes-list`), the collapsible Labels filter
+  section (`#labels-section` + `#labels-list`), an Archive entry
+  (`#nav-archive`), a Trash entry (`#nav-trash`), and Settings at the bottom.
+  Label MANAGEMENT (create/rename/delete) lives in Settings → Labels
+  (`#labels-page-main`); sidebar label rows only filter.
+- Header (content area, right side): the copy-note-as-Markdown action
+  (`#note-copy`) and the editor delete action (`#note-delete`) — both visible
+  only while the editor shows — then the Chat button (`#open-chat`) and
+  minimize (`#win-min`). In native mode these sit ON the macOS traffic-light
+  row; every header control carries `data-no-drag` so the shell drag strip
+  passes clicks through (dragExclusions channel). `#note-copy` copies the
+  title as an `# H1` (when the note has a real title) plus the Markdown body;
+  copy feedback is a checkmark icon swap only — never "Copied" text.
+- Search is a Cmd+K-style popover (`#search-pop`), not a page: Cmd+K (Ctrl+K)
+  toggles it, typing filters notes, Enter opens the first match, Esc closes.
+  Search ignores the sidebar machine/label/status filters, so opening a match
+  (Enter or row click) reconciles those filters to whatever the chosen note
+  needs — the editor MUST show the note the user picked, never a substitute.
+- Home: the quick-note composer is the hero, vertically centered. Below it the
+  Recent notes render as a FLAT list (no card borders/backgrounds/shadows, no
+  border-bottom between rows) with hover copy whose feedback is a checkmark
+  icon only, then one subtle light-gray "View all notes" path (`#home-view-all`).
+- Quick capture has ONE create path: the Home composer, the compact window, and
+  finished voice recordings all create through the same helper, store the text
+  as the note BODY (title left for AI auto-title), and show the same
+  content-scoped toast (center-bottom of the content area).
+- Compact mode is a window state: leaving it restores the pre-compact screen.
 
 ## Note Mutations
 
@@ -117,7 +145,7 @@ note.titleLocked = true;
 note.titleSource = "manual";
 ```
 
-Archive, restore, and move are explicit bridge actions. Destructive Trash,
+Archive and restore are explicit bridge actions. Destructive Trash,
 Delete, and purge UI should call `window.HasnaNotes.notes.trash(noteId)` /
 `window.HasnaNotes.notes.purge(noteId)` so the app confirmation is shown first;
 raw WebKit destructive posts are internal persistence traffic and are ignored by
@@ -126,7 +154,6 @@ the native host unless the app layer already confirmed the action.
 ```js
 window.webkit.messageHandlers.notes.postMessage({ action: "archive", note })
 window.webkit.messageHandlers.notes.postMessage({ action: "restore", note })
-window.webkit.messageHandlers.notes.postMessage({ action: "move", note })
 window.HasnaNotes.notes.trash(noteId)
 window.HasnaNotes.notes.purge(noteId)
 ```
@@ -187,6 +214,18 @@ Event detail includes `{ commandId, noteId, result }`. Slash menus should render
 the command list from `markdown.slashCommands()` and pass the selected `id` to
 `editor.command(...)`.
 
+The editor exposes the engine through exactly two minimal surfaces — there is
+explicitly NO formatting toolbar:
+
+- Selection popover (`#md-pop`): appears over selected editor-body text with
+  bold, italic, inline code, and link, each routed through
+  `editor.command(...)`.
+- Slash menu (`#slash-menu`): typing `/` at the start of a line opens a menu
+  rendered from `markdown.slashCommands()`, filtered by the text after the
+  slash. Arrow keys move, Enter/Tab applies (removing the `/query` trigger
+  text first), Escape closes. The `divider` command inserts `---` AFTER the
+  selection — it never replaces selected text.
+
 Recording and transcription text should be inserted with
 `window.HasnaNotes.markdown.safeText(text)` before appending it to a Markdown note
 body. AI title generation uses `markdown.plainText(note.body)`, not raw Markdown
@@ -209,6 +248,12 @@ window.HasnaNotes.chat.send(prompt, options)
 window.HasnaNotes.chat.approve(approvalId, approved)
 window.HasnaNotes.chat.clear()
 ```
+
+Chat is backed exclusively by the AI sidecar. There is no local fallback model:
+when the sidecar is unavailable, `chat.send(...)` rejects with "AI unavailable",
+chat state moves to `status: "error"` with that error, `hasna:chat-error` is
+dispatched, and the chat page shows an honest unavailable state instead of
+fabricated answers.
 
 Chat state shape:
 
@@ -283,17 +328,21 @@ summarize_notes, find_related_notes, consolidate_notes
 
 Reading, searching, summarizing, note metadata, and related-note discovery run
 directly. Broad or destructive writes expose a preview/approval first. The UI
-should render `hasna:chat-confirmation` using the `approval.preview` and call
+should render `hasna:chat-confirmation` from the `approval.preview` as
+human-readable text — never raw JSON payload dumps — and call
 `chat.approve(approval.id, true | false)`. Agent-created notes use provenance:
 `createdByActorType: "agent"`, a friendly agent name, `openedFrom: "chat"`, and
 a source context.
 
 Approvals include `toolCallId`; approving or rejecting updates the matching
-`state.chat.toolCalls[]` item to `result` or `cancelled`. The web bridge accepts
-explicit `options.noteId`/`selectedNoteId` for selected-note operations such as
-read, note info, update, append, label/unlabel, archive, trash, and restore.
+`state.chat.toolCalls[]` item to `result` or `cancelled`. Approving posts the
+approved tool call back to the sidecar `POST /tool` endpoint with
+`confirm: true`; the web layer never re-implements the apply logic. The web
+bridge accepts explicit `options.noteId`/`selectedNoteId` for selected-note
+operations such as read, note info, update, append, label/unlabel, archive,
+trash, and restore.
 
-The sidecar exposes an optional AI SDK-style endpoint:
+Chat streams from the sidecar AI SDK-style endpoint:
 
 ```txt
 POST /chat
@@ -304,9 +353,8 @@ Accept: application/x-ndjson
 Request body may include `{ prompt, messages, notes, maxSteps }`. Responses are
 newline-delimited stream events such as `{ type: "text-delta" }`,
 `{ type: "tool-call" }`, `{ type: "tool-result" }`, and `{ type: "finish" }`.
-The sidecar operates over the supplied note snapshot and never writes to disk;
-actual writes go through the web/CLI/MCP tools so confirmation and provenance
-stay consistent.
+Chat writes are applied only by the sidecar's shared safe-tool registry (the
+same registry as CLI/MCP), so confirmation and provenance stay consistent.
 
 CLI and MCP use the same tool registry:
 
@@ -327,11 +375,11 @@ preview unless confirmed; permanent `purge` / `notes_purge` require `--yes` /
 The web runtime exposes note actions for native controls and the visual/UI lane:
 
 ```js
-window.HasnaNotes.notes.moveToMachine(noteId, machineId, friendlyName)
 window.HasnaNotes.notes.archive(noteId)
 window.HasnaNotes.notes.trash(noteId)
 window.HasnaNotes.notes.restore(noteId)
 window.HasnaNotes.notes.purge(noteId)
+window.HasnaNotes.notes.moveToMachine(noteId, machine, friendlyName?)
 window.HasnaNotes.notes.info(noteId)
 window.HasnaNotes.notes.setStatusFilter("active" | "archived" | "trash" | "all")
 window.HasnaNotes.notes.cleanupExpiredTrash()
@@ -339,40 +387,63 @@ window.HasnaNotes.notes.settings()
 window.HasnaNotes.notes.setTrashRetentionDays(days)
 ```
 
+`notes.moveToMachine(...)` re-attributes a note to another machine ("Move to
+machine" in the row context menu, shown on active notes). It preserves
+provenance (`originMachine` set once, `previousMachine` updated, `movedAt`
+stamped), persists through the native `move` bridge action
+(`window.webkit.messageHandlers.notes.postMessage({ action: "move", note })`),
+switches the machine filter to the destination via `machines.select(...,
+{ reason: "move" })`, and dispatches `hasna:note-move` with `{ targetMachine,
+targetMachineFriendlyName, selectedMachine, selectedNoteId, view }` on top of
+the standard note detail. The fleet rsync engine stays cut — a note's `machine`
+frontmatter is attribution ("which note belongs to what machine"), visible on
+note rows, the editor meta line, and `notes.info(noteId)`.
+
 `notes.trash(noteId)` and `notes.purge(noteId)` show the app confirmation before
 mutating state. Normal delete copy should read "Move note to Trash?", while
 permanent purge copy should read "Delete permanently?" and mention that the
 action cannot be undone. `notes.cleanupExpiredTrash()` also requires a strong
 confirmation before it permanently purges expired Trash items.
 
+The sidebar Trash entry (`#nav-trash`) opens the Notes page filtered to
+`status: "trash"`; the Archive entry (`#nav-archive`) does the same for
+`status: "archived"`. Trash rows show a retention countdown derived from
+`note.trashExpiresAt` (legacy trash without that stamp falls back to
+`trashedAt` + the retention setting, so pre-retention notes still expire)
+plus hover Restore and permanent-Delete actions
+(permanent Delete goes through the "Delete permanently?" confirmation).
+Archived rows get hover Restore; every list row gets hover copy with the
+checkmark-icon-only feedback.
+
+Retention is ENFORCED on boot and hydrate: when expired Trash items exist, the
+app runs the `cleanupExpiredTrash()` path — including its strong confirmation —
+at most once per session, so declining does not re-prompt on the hydrate that
+follows every save. Settings → Appearance exposes the retention picker
+(`#retention-row`, options 7/30/90 days, default 30);
+`notes.setTrashRetentionDays(days)` clamps to a minimum of 1 day (0 or negative
+input becomes 1, matching the Swift store) and keeps 30 for non-numeric input.
+
 The web layer dispatches:
 
 ```js
-hasna:note-move
 hasna:note-archive
 hasna:note-trash
 hasna:note-restore
 hasna:note-purge
+hasna:note-move
 hasna:trash-cleanup-ready
 ```
 
-All note action event details include `{ noteId, note }`; move events also include
-`targetMachine`, `targetMachineFriendlyName`, `selectedMachine`, `selectedNoteId`,
-and `view`. After a successful move, the web state switches to the destination
-machine and keeps the moved note selected.
-
-Drag/drop contract:
-
-```txt
-note rows: draggable, dataTransfer application/x-hasna-note-id=<note id>
-machine rows: accept note ids and call moveToMachine(noteId, machineId)
-```
+All note action event details include `{ noteId, note }`.
 
 ## Machine Details API
 
-Machine rows can render from the boot payload immediately. For a right-click
-"View details" flow, use the cached API first and optionally request a native
-refresh:
+Machines render as a compact dropdown at the TOP of the sidebar
+(`#machines-dd-btn` opens the `#machines-list` menu; the button shows the active
+filter's friendly name). Selecting a machine filters the notes list via
+`machines.select(...)`. Machine rows can render from the boot payload
+immediately. For a right-click "View details" flow, use the cached API first and
+optionally request a native refresh:
 
 ```js
 window.HasnaNotes.machines.list()
@@ -383,8 +454,8 @@ window.HasnaNotes.view.state()
 ```
 
 `machines.select(...)` canonicalizes machine aliases (`id`, `slug`,
-`friendlyName`, `displayName`), switches the main view to Notes, clears sidebar
-label/search filters, resets note pagination to the latest 10, selects the
+`friendlyName`, `displayName`), switches the main view to Notes, clears the
+sidebar label filter, resets note pagination to the latest 10, selects the
 requested note when supplied, and otherwise selects the newest visible note for
 that machine. It also requests fresh machine details without blocking rendering.
 
@@ -401,10 +472,10 @@ window.addEventListener("hasna:machine-details", (event) => event.detail)
 
 ```js
 {
-  machineId: "apple03",
+  machineId: "studio-mac",
   machine: machineDetail,
   selectedNoteId: "note-id-or-null",
-  reason: "sidebar" | "move" | "native" | "api",
+  reason: "sidebar" | "settings" | "details" | "native" | "api" | "move",
   view: window.HasnaNotes.view.state()
 }
 ```
@@ -417,7 +488,7 @@ Native refresh bridge:
 ```js
 window.webkit.messageHandlers.notes.postMessage({
   action: "machineDetails",
-  machine: "apple03",
+  machine: "studio-mac",
   requestId: "machine-..."
 });
 
@@ -427,10 +498,12 @@ window.HasnaNotes.machines.receiveDetails({
 });
 ```
 
-Details include open-machines fields when present (`friendlyName`, `slug`/`id`,
-`online`, `status`, `source`, `origin`, sync/recent activity timestamps,
-`capabilities`, `metadata`, `provenance`, `sync`) and notes-derived fallbacks
-(`noteCount`, archive/trash counts, `latestNoteUpdatedAt`).
+Details include manifest fields when present (`friendlyName`, `slug`/`id`,
+`online`, `status`, `platform`, activity timestamps) and notes-derived fallbacks
+(`noteCount`, archive/trash counts, `latestNoteUpdatedAt`). Machine attribution
+is informational: rows come from the optional `~/.hasna/machines/machines.json`
+manifest (friendly names/slugs) plus the `machine` frontmatter seen in notes —
+there is no fleet sync engine behind them.
 
 Generated titles must set:
 
@@ -444,6 +517,14 @@ note.titleContentFingerprint = "<source fingerprint>";
 
 Recording is app-level state. It must continue while navigating between Home, Notes,
 Settings, and compact mode.
+
+Recording has exactly ONE surface per screen. On Home the quick-note composer
+itself becomes the recording surface: the input bar hides, one timer renders
+inside the record circle (hover reveals stop), pause/resume sits inline, and the
+transcript streams below with no heading. On every other screen a minimal
+indicator (`#rec-pill`) shows top-right with the same timer + pause/stop
+controls; it follows the system light/dark theme and is hidden on Home so no
+duplicate popover or second timer ever exists.
 
 The public web API is:
 
@@ -480,6 +561,10 @@ The stop lifecycle is observable as `recording|paused -> stopping ->
 transcribing -> complete -> idle` for successful recordings. Realtime providers
 may continue sending `hasna:transcript-delta` and `hasna:transcript-complete`
 while status is `transcribing`.
+
+`elapsed` (and the `elapsedMs` posted to the native `window` handler) EXCLUDES
+paused time: the timer holds while status is `paused` and resumes where it left
+off, matching the native menu-bar status item.
 
 ## Recording Events
 

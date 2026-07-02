@@ -18,29 +18,6 @@ func check(_ condition: Bool, _ message: String) {
     }
 }
 
-// Optional live-engine mode: drive the real FleetSync engine (spawns rsync/ssh) against
-// a fleet supplied via env, to verify process spawning + skip/sync classification on a
-// real machine. Triggered with FLEETSYNC_LIVE=1; not part of the default smoke run.
-if ProcessInfo.processInfo.environment["FLEETSYNC_LIVE"] == "1" {
-    let env = ProcessInfo.processInfo.environment
-    let dir = URL(fileURLWithPath: env["FLEETSYNC_LOCAL"] ?? "/tmp/synctest/local/notes")
-    let localID = env["FLEETSYNC_SELF"] ?? "machine001"
-    // FLEETSYNC_FLEET = "id:ssh:platform,id:ssh:platform"
-    let spec = env["FLEETSYNC_FLEET"] ?? ""
-    let fleet = spec.split(separator: ",").compactMap { part -> FleetMachine? in
-        let f = part.split(separator: ":", maxSplits: 2).map(String.init)
-        guard f.count == 3 else { return nil }
-        return FleetMachine(id: f[0], sshAddress: f[1], platform: f[2])
-    }
-    let sync = FleetSync(localNotesDir: dir, localMachineID: localID)
-    print("FLEETSYNC targets:", sync.syncTargets(from: fleet).map { $0.id })
-    let result = sync.sync(fleet: fleet)
-    print("FLEETSYNC synced:", result.syncedMachines)
-    print("FLEETSYNC skipped:", result.skipped)
-    print("FLEETSYNC errors:", result.errors)
-    exit(0)
-}
-
 let tempRoot = FileManager.default.temporaryDirectory
     .appendingPathComponent("opennotes-smoke-\(UUID().uuidString)")
 defer { try? FileManager.default.removeItem(at: tempRoot) }
@@ -304,6 +281,44 @@ do {
         check(parsed?.contentFormat == "markdown", "legacy contentType parses as markdown contentFormat")
     }
 
+    print("== #D32 non-markdown contentFormat survives save/reload ==")
+    do {
+        let n = Note(title: "format test", contentFormat: "plaintext", body: "b\n")
+        check(n.contentFormat == "plaintext", "init preserves the contentFormat parameter")
+        try store.save(n)
+        let raw = try String(contentsOf: store.fileURL(for: n.id), encoding: .utf8)
+        check(raw.contains("contentFormat: plaintext"), "non-markdown contentFormat written to disk")
+        let back = try store.loadAll().first { $0.id == n.id }
+        check(back?.contentFormat == "plaintext", "legacy contentFormat value round-trips")
+        try store.delete(n)
+        // Default/empty still normalizes to markdown.
+        check(Note(title: "d").contentFormat == "markdown", "default contentFormat is markdown")
+        check(Note(title: "e", contentFormat: "").contentFormat == "markdown", "empty contentFormat normalizes to markdown")
+    }
+
+    print("== #D33 single-quoted scalars round-trip ==")
+    do {
+        var n = Note(title: "'hello'", body: "b\n")
+        n.machine = "'m'"
+        n.labels = ["'q'", "plain"]
+        // Save + reload 3 times; the user's single quotes must never be stripped.
+        for cycle in 1...3 {
+            try store.save(n)
+            let back = try store.loadAll().first { $0.id == n.id }
+            check(back?.title == "'hello'", "single-quoted title unchanged after cycle \(cycle)")
+            check(back?.machine == "'m'", "single-quoted machine unchanged after cycle \(cycle)")
+            check(back?.labels == ["'q'", "plain"], "single-quoted label unchanged after cycle \(cycle)")
+            if let back { n = back }
+        }
+        try store.delete(n)
+        // A lone apostrophe (count < 2) is not wrapped and stays literal.
+        let lone = Note(title: "'", body: "b\n")
+        try store.save(lone)
+        let loneBack = try store.loadAll().first { $0.id == lone.id }
+        check(loneBack?.title == "'", "lone apostrophe title round-trips")
+        try store.delete(lone)
+    }
+
     print("== rich text ↔ markdown round-trip ==")
     do {
         let samples = [
@@ -330,79 +345,27 @@ do {
         check(runs.contains(where: { $0.text == "d" && $0.italic }), "italic run detected")
     }
 
-    print("== fleet manifest parsing ==")
+    print("== machine manifest parsing ==")
     do {
         let json = """
         {"machines":[
-          {"id":"m1","slug":"studio","sshAddress":"m1.local","platform":"macos","friendlyName":"Studio","online":true,"status":"online","source":"open-machines","origin":"fleet","lastSeenAt":"2026-06-20T10:00:00Z","syncedAt":"2026-06-20T10:05:00Z","capabilities":["notes-sync"],"metadata":{"location":"desk","nested":{"rack":"A"}},"provenance":{"importedBy":"test"},"sync":{"notes":"ok"}},
+          {"id":"m1","slug":"studio","platform":"macos","friendlyName":"Studio","online":true,"status":"online","lastSeenAt":"2026-06-20T10:00:00Z"},
           {"id":"m2","platform":"linux"},
-          {"name":"m3","host":"10.0.0.3"}
+          {"name":"m3"}
         ]}
         """
         let machines = FleetManifest.parse(jsonData: Data(json.utf8))
         check(machines.count == 3, "three machines parsed")
-        check(machines[0].sshAddress == "m1.local", "explicit sshAddress used")
         check(machines[0].slug == "studio", "slug parsed")
         check(machines[0].friendlyName == "Studio", "friendlyName parsed")
+        check(machines[0].displayName == "Studio", "displayName prefers friendlyName")
         check(machines[0].online == true && machines[0].status == "online", "online/status parsed")
-        check(machines[0].source == "open-machines" && machines[0].origin == "fleet", "source/origin parsed")
-        check(machines[0].capabilities == ["notes-sync"], "capabilities parsed")
-        check(machines[0].metadata["location"] as? String == "desk", "metadata parsed")
-        check((machines[0].metadata["nested"] as? [String: Any])?["rack"] as? String == "A", "nested metadata parsed")
-        check(machines[0].provenance["importedBy"] as? String == "test", "provenance parsed")
-        check(machines[0].sync["notes"] as? String == "ok", "sync parsed")
-        check(machines[0].lastSeenAt != nil && machines[0].syncedAt != nil, "activity timestamps parsed")
-        check(machines[1].sshAddress == "m2", "missing sshAddress defaults to id")
-        check(machines[1].isMac == false, "linux machine flagged non-mac")
-        check(machines[1].isLinux == true, "linux machine flagged linux")
-        check(machines[1].isSyncEligible == true, "linux machine is sync-eligible")
-        check(machines[0].isSyncEligible == true, "mac machine is sync-eligible")
-        check(machines[2].id == "m3" && machines[2].sshAddress == "10.0.0.3", "name/host aliases honored")
+        check(machines[0].lastSeenAt != nil, "activity timestamp parsed")
+        check(machines[1].platform == "linux", "platform parsed")
+        check(machines[2].id == "m3", "name alias honored")
         check(FleetManifest.parse(jsonData: Data("{}".utf8)).isEmpty, "empty manifest parses to []")
-    }
-
-    print("== FleetSync target selection + rsync argv ==")
-    do {
-        let fleet = [
-            FleetMachine(id: "self", sshAddress: "self", platform: "macos"),
-            FleetMachine(id: "macA", sshAddress: "macA.local", platform: "macos"),
-            FleetMachine(id: "linuxB", sshAddress: "linuxB", platform: "linux"),
-        ]
-        let sync = FleetSync(localNotesDir: URL(fileURLWithPath: "/tmp/n"), localMachineID: "self")
-        let targets = sync.syncTargets(from: fleet)
-        check(targets.count == 1, "only one eligible target (mac, not self)")
-        check(targets.first?.id == "macA", "macA selected; self and linux excluded")
-        let pull = sync.pullArguments(remote: targets[0])
-        check(pull.contains("-au"), "pull uses -au newest-wins")
-        check(pull.contains("macA.local:.hasna/apps/notes/notes/"), "pull pulls remote notes dir")
-        check(pull.last == "/tmp/n/", "pull target is local notes dir with trailing slash")
-        let push = sync.pushArguments(remote: targets[0])
-        check(push.contains("macA.local:.hasna/apps/notes/notes/"), "push pushes to remote notes dir")
-        check(push.contains("/tmp/n/"), "push source is local notes dir")
-    }
-
-    print("== #4 FleetSync self-exclusion is robust to id/ssh aliasing ==")
-    do {
-        // The manifest lists THIS box under an id/ssh that differs from the cosmetic
-        // Computer Name (localMachineID). Self must STILL be excluded so we never rsync
-        // to ourselves. We inject the manifest's alias as a known local alias.
-        let fleet = [
-            // self listed under a tailscale-style id + fqdn ssh, with user@ + port.
-            FleetMachine(id: "selfbox-ts", sshAddress: "andrei@selfbox.tail.ts.net:22", platform: "macos"),
-            FleetMachine(id: "macA", sshAddress: "macA.local", platform: "macos"),
-        ]
-        var sync = FleetSync(localNotesDir: URL(fileURLWithPath: "/tmp/n"), localMachineID: "Cosmetic Name")
-        // The robust resolver must recognize this box's real aliases; inject them as the OS
-        // would supply (hostname + tailscale short name).
-        sync.extraLocalAliases = ["selfbox-ts", "selfbox"]
-        let targets = sync.syncTargets(from: fleet)
-        check(targets.map(\.id) == ["macA"],
-              "self excluded via id/ssh alias; only macA targeted (got: \(targets.map(\.id)))")
-
-        // Sanity: ssh host extraction strips user@ and :port and the domain.
-        check(FleetSync.normalizeHost("andrei@machine001.local:22") == "machine001",
-              "normalizeHost strips user@, :port, domain")
-        check(FleetSync.normalizeHost("MACHINE001") == "machine001", "normalizeHost lowercases")
+        check(FleetManifest.load(manifestURL: tempRoot.appendingPathComponent("missing-machines.json")).isEmpty,
+              "missing manifest file loads as []")
     }
 
     print("== FolderStore persists folder list ==")

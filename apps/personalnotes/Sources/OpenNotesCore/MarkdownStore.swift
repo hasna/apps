@@ -313,7 +313,7 @@ public struct MarkdownStore {
         // Key order is fixed: id, title, labels, status, folder, content format, title metadata,
         // createdAt, updatedAt, author, agent, machine. `folder` is always emitted.
         lines.append("folder: \(yamlScalar(note.folder))")
-        lines.append("contentFormat: markdown")
+        lines.append("contentFormat: \(yamlScalar(note.contentFormat))")
         lines.append("titleLocked: \(note.titleLocked ? "true" : "false")")
         lines.append("titleSource: \(note.titleSource.rawValue)")
         lines.append("titleContentFingerprint: \(yamlScalar(note.titleContentFingerprint))")
@@ -351,11 +351,14 @@ public struct MarkdownStore {
     /// Quote a scalar only when it contains characters that would confuse the flat parser.
     /// When quoting, escape backslash FIRST, then quote and newline, so the sequence is
     /// reversible by `unescapeDoubleQuoted`. A raw newline must never be emitted.
+    /// A value already wrapped in single quotes (e.g. a title typed as `'hello'`) must
+    /// also be double-quoted, or `unquote` would strip the user's quotes on read.
     private static func yamlScalar(_ value: String) -> String {
         let needsQuote = value.contains(":") || value.contains("#") ||
             value.contains("[") || value.contains("]") ||
             value.contains(",") || value.contains("\"") ||
             value.contains("\\") || value.contains("\n") ||
+            (value.count >= 2 && value.hasPrefix("'") && value.hasSuffix("'")) ||
             value.hasPrefix(" ") || value.hasSuffix(" ") || value.isEmpty
         if !needsQuote { return value }
         let escaped = value
