@@ -58,6 +58,20 @@ function safeEqualHex(a: string, b: string): boolean {
   return timingSafeEqual(Buffer.from(a, "hex"), Buffer.from(b, "hex"));
 }
 
+/**
+ * Constant-time comparison of two arbitrary (non-hex) strings.
+ *
+ * Both operands are hashed to a fixed 32-byte digest before comparison so that
+ * neither the length nor the content of the secret leaks through timing, and so
+ * that `timingSafeEqual` never throws on length mismatch. Use this for the
+ * static env/CLI API key, whose value is not stored as a hex digest.
+ */
+export function safeEqualStrings(a: string, b: string): boolean {
+  const ah = createHash("sha256").update(a, "utf8").digest();
+  const bh = createHash("sha256").update(b, "utf8").digest();
+  return timingSafeEqual(ah, bh);
+}
+
 function generatePlaintextKey(): string {
   return `tdos_${randomBytes(32).toString("base64url")}`;
 }
