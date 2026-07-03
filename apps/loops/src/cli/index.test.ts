@@ -163,6 +163,161 @@ describe("loops CLI", () => {
     expect(cloud.stdout).not.toContain("dbPath");
   });
 
+  test("exports and imports id-preserving migration bundles idempotently", () => {
+    const sourceDir = freshDataDir("loops-cli-export-source-");
+    const targetDir = freshDataDir("loops-cli-export-target-");
+    const bundleFile = join(sourceDir, "loops-export.json");
+    let workflowId = "";
+    let loopId = "";
+    let runId = "";
+    const store = new Store(join(sourceDir, "loops.db"));
+    try {
+      const workflow = store.createWorkflow({
+        name: "migration-workflow",
+        steps: [{ id: "one", target: { type: "command", command: "true" } }],
+      });
+      const loop = store.createLoop({
+        name: "migration-loop",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "command", command: "printf", args: ["migrated"] },
+      });
+      const claim = store.claimRun(loop, loop.nextRunAt!, "seed", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      const run = store.finalizeRun(
+        claim!.run.id,
+        {
+          status: "succeeded",
+          finishedAt: "2026-01-01T00:00:01.000Z",
+          durationMs: 1_000,
+          stdout: "migrated",
+          stderr: "",
+        },
+        { claimedBy: "seed", now: new Date("2026-01-01T00:00:01Z") },
+      );
+      workflowId = workflow.id;
+      loopId = loop.id;
+      runId = run.id;
+    } finally {
+      store.close();
+    }
+
+    const dryRunFile = join(sourceDir, "dry-run-export.json");
+    const exportDryRun = runCli(sourceDir, ["--json", "export", "--file", dryRunFile, "--dry-run"]);
+    expect(exportDryRun.status).toBe(0);
+    expect(JSON.parse(exportDryRun.stdout)).toMatchObject({ ok: true, dryRun: true, file: dryRunFile });
+    expect(existsSync(dryRunFile)).toBe(false);
+
+    const exported = runCli(sourceDir, ["--json", "export", "--file", bundleFile]);
+    expect(exported.status).toBe(0);
+    const exportedValue = JSON.parse(exported.stdout);
+    expect(exportedValue.bundle.importable).toBe(true);
+    expect(existsSync(bundleFile)).toBe(true);
+
+    const dryRun = runCli(targetDir, ["--json", "import", bundleFile]);
+    expect(dryRun.status).toBe(0);
+    const plan = JSON.parse(dryRun.stdout);
+    expect(plan.summary).toMatchObject({ insert: 3, conflict: 0, blocked: 0, workflows: 1, loops: 1, runs: 1 });
+
+    const applied = runCli(targetDir, ["--json", "import", bundleFile, "--apply"]);
+    expect(applied.status).toBe(0);
+    const appliedValue = JSON.parse(applied.stdout);
+    expect(appliedValue.applied).toEqual({ workflows: 1, loops: 1, runs: 1 });
+    expect(appliedValue.backupPath).toBeString();
+
+    const secondDryRun = runCli(targetDir, ["--json", "import", bundleFile]);
+    expect(secondDryRun.status).toBe(0);
+    expect(JSON.parse(secondDryRun.stdout).summary).toMatchObject({ insert: 0, skip: 3, conflict: 0, blocked: 0 });
+
+    const imported = new Store(join(targetDir, "loops.db"));
+    try {
+      expect(imported.getWorkflow(workflowId)?.name).toBe("migration-workflow");
+      expect(imported.getLoop(loopId)?.name).toBe("migration-loop");
+      expect(imported.getRun(runId)?.status).toBe("succeeded");
+    } finally {
+      imported.close();
+    }
+  });
+
+  test("export refuses redacted env bundles unless explicitly allowed", () => {
+    const dataDir = freshDataDir("loops-cli-export-redacted-");
+    const bundleFile = join(dataDir, "redacted-export.json");
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      store.createLoop({
+        name: "env-loop",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "command", command: "env", env: { PRIVATE_TOKEN: "very-secret-value" } },
+      });
+    } finally {
+      store.close();
+    }
+
+    const refused = runCli(dataDir, ["--json", "export", "--file", bundleFile]);
+    expect(refused.status).not.toBe(0);
+    expect(refused.stderr).toContain("not no-loss");
+    expect(existsSync(bundleFile)).toBe(false);
+
+    const allowed = runCli(dataDir, ["--json", "export", "--file", bundleFile, "--allow-redacted"]);
+    expect(allowed.status).toBe(0);
+    const bundle = JSON.parse(readFileSync(bundleFile, "utf8"));
+    expect(bundle.importable).toBe(false);
+    expect(JSON.stringify(bundle)).toContain("[redacted]");
+    expect(JSON.stringify(bundle)).not.toContain("very-secret-value");
+  });
+
+  test("self-hosted migrate preview reports blocked unsupported rows without tokens", () => {
+    const dataDir = freshDataDir("loops-cli-self-hosted-migrate-");
+    const create = runCli(dataDir, ["create", "command", "remote-loop", "--at", futureAt(), "--cmd", "true"]);
+    expect(create.status).toBe(0);
+
+    const preview = runCli(dataDir, ["--json", "self-hosted", "migrate", "--dry-run"], undefined, {
+      LOOPS_API_TOKEN: "do-not-print-this-token",
+      HASNA_LOOPS_API_TOKEN: "",
+    });
+    expect(preview.status).toBe(0);
+    expect(preview.stdout).not.toContain("do-not-print-this-token");
+    const plan = JSON.parse(preview.stdout);
+    expect(plan.operation).toBe("self-hosted-migrate");
+    expect(plan.dryRun).toBe(true);
+    expect(plan.importable).toBe(false);
+    expect(plan.summary.blocked).toBeGreaterThan(0);
+    expect(plan.warnings.join(" ")).toContain("LOOPS_API_URL");
+
+    for (const command of ["push", "pull"]) {
+      const documented = runCli(dataDir, ["--json", "self-hosted", command, "--dry-run"]);
+      expect(documented.status).toBe(0);
+      expect(JSON.parse(documented.stdout).operation).toBe(`self-hosted-${command}`);
+    }
+  });
+
+  test("self-hosted runner-register previews by default", () => {
+    const dataDir = freshDataDir("loops-cli-runner-register-dry-run-");
+    const registered = runCli(dataDir, [
+      "--json",
+      "self-hosted",
+      "runner-register",
+      "--runner-id",
+      "runner-cli-test",
+      "--machine-id",
+      "machine-cli-test",
+      "--label",
+      "role=worker",
+      "--capability",
+      "concurrency=1",
+    ]);
+    expect(registered.status).toBe(0);
+    expect(JSON.parse(registered.stdout)).toMatchObject({
+      ok: true,
+      dryRun: true,
+      runner: {
+        runnerId: "runner-cli-test",
+        machineId: "machine-cli-test",
+        labels: { role: "worker" },
+        capabilities: { concurrency: 1 },
+      },
+    });
+  });
+
   test("compiled CLI reports the package version", () => {
     const root = mkdtempSync(join(tmpdir(), "loops-cli-compiled-version-"));
     const outfile = join(root, "loops");

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { Command } from "commander";
@@ -44,6 +44,16 @@ import { enableStartup, installStartup } from "../daemon/install.js";
 import { normalizeGoalSpec } from "../lib/workflow-spec.js";
 import { runDoctor } from "../lib/doctor.js";
 import { buildHealthReport, expectationForLoop } from "../lib/health.js";
+import {
+  applyImportMigrationBundle,
+  buildImportMigrationPlan,
+  buildSelfHostedMigrationPlan,
+  exportLoopsMigrationBundle,
+  publicMigrationBundle,
+  registerSelfHostedRunner,
+  validateLoopsMigrationBundle,
+  type LoopsMigrationPlan,
+} from "../lib/migration.js";
 import { buildDeploymentStatus, deploymentStatusLine, type LoopDeploymentMode, type LoopDeploymentStatus } from "../lib/mode.js";
 import {
   buildDuplicateOverlapReport,
@@ -455,6 +465,56 @@ function parseVars(values: string[] | undefined): Record<string, string> {
   return vars;
 }
 
+function parseJsonFile(file: string): unknown {
+  try {
+    return JSON.parse(readFileSync(file, "utf8"));
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new ValidationError(`failed to read JSON file ${file}: ${reason}`);
+  }
+}
+
+function parseStringMap(values: string[] | undefined, flag: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const value of values ?? []) {
+    const index = value.indexOf("=");
+    if (index <= 0) throw new ValidationError(`invalid ${flag} value, expected key=value: ${value}`);
+    result[value.slice(0, index)] = value.slice(index + 1);
+  }
+  return result;
+}
+
+function parseJsonMap(values: string[] | undefined, flag: string): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const value of values ?? []) {
+    const index = value.indexOf("=");
+    if (index <= 0) throw new ValidationError(`invalid ${flag} value, expected key=json-or-string: ${value}`);
+    const raw = value.slice(index + 1);
+    try {
+      result[value.slice(0, index)] = JSON.parse(raw);
+    } catch {
+      result[value.slice(0, index)] = raw;
+    }
+  }
+  return result;
+}
+
+function printMigrationPlan(plan: LoopsMigrationPlan, opts: { json?: boolean } = {}): void {
+  if (isJson() || opts.json) {
+    console.log(JSON.stringify(plan, null, 2));
+    return;
+  }
+  console.log(
+    `${plan.operation} dryRun=${plan.dryRun} workflows=${plan.summary.workflows} loops=${plan.summary.loops} runs=${plan.summary.runs} ` +
+      `insert=${plan.summary.insert} update=${plan.summary.update} skip=${plan.summary.skip} conflict=${plan.summary.conflict} blocked=${plan.summary.blocked}`,
+  );
+  for (const warning of plan.warnings) console.log(`warn ${warning}`);
+  for (const row of plan.rows) {
+    if (row.action !== "blocked" && row.action !== "conflict") continue;
+    console.log(`${row.action} ${row.resource}:${row.name ?? row.id} ${row.reason ?? ""}`.trim());
+  }
+}
+
 /** Snapshot the database through lib/backup (VACUUM INTO, 1h per-reason debounce, keep 3). */
 function backupLoopsDatabase(reason: string): string | undefined {
   return backupDatabase({ reason, keep: 3 }).path;
@@ -624,6 +684,152 @@ selfHosted
   .command("status")
   .option("--json", "print JSON")
   .action(runAction(deploymentStatusCommand("self_hosted")));
+
+program
+  .command("export")
+  .description("export a local OpenLoops migration bundle")
+  .requiredOption("--file <path>", "write bundle JSON to this path")
+  .option("--dry-run", "preview the bundle without writing the file")
+  .option("--no-runs", "omit loop run history from the bundle")
+  .option("--allow-redacted", "write a redacted non-importable bundle when env/secrets must be removed")
+  .option("--json", "print JSON")
+  .action(runAction((opts) => {
+    const store = new Store();
+    try {
+      const bundle = exportLoopsMigrationBundle(store, { includeRuns: opts.runs });
+      if (!opts.dryRun && !bundle.importable && !opts.allowRedacted) {
+        throw new ValidationError("export is not no-loss because redactions/blockers are present; rerun with --allow-redacted to write a redacted bundle");
+      }
+      if (!opts.dryRun) writeFileSync(opts.file, `${JSON.stringify(bundle, null, 2)}\n`, { mode: 0o600 });
+      const output = {
+        ok: true,
+        dryRun: Boolean(opts.dryRun),
+        file: opts.file,
+        bundle: publicMigrationBundle(bundle),
+      };
+      if (isJson() || opts.json) console.log(JSON.stringify(output, null, 2));
+      else {
+        console.log(`${opts.dryRun ? "would export" : "exported"} ${opts.file} workflows=${bundle.counts.workflows} loops=${bundle.counts.loops} runs=${bundle.counts.runs}`);
+        for (const warning of bundle.warnings) console.log(`warn ${warning}`);
+      }
+    } finally {
+      store.close();
+    }
+  }));
+
+program
+  .command("import <file>")
+  .description("preview or apply a local OpenLoops migration bundle")
+  .option("--apply", "apply the import; default is a dry-run preview")
+  .option("--replace", "update existing rows whose ids match but hashes differ")
+  .option("--no-runs", "ignore loop run history in the bundle")
+  .option("--json", "print JSON")
+  .action(runAction((file, opts) => {
+    const bundle = validateLoopsMigrationBundle(parseJsonFile(file));
+    const store = new Store();
+    try {
+      if (!opts.apply) {
+        printMigrationPlan(buildImportMigrationPlan(store, bundle, {
+          includeRuns: opts.runs,
+          replace: opts.replace,
+          dryRun: true,
+        }), opts);
+        return;
+      }
+      const plan = buildImportMigrationPlan(store, bundle, {
+        includeRuns: opts.runs,
+        replace: opts.replace,
+        dryRun: false,
+      });
+      if (plan.summary.blocked > 0 || plan.summary.conflict > 0 || !plan.importable) {
+        printMigrationPlan(plan, opts);
+        throw new ValidationError(`refusing to import unsafe bundle: blocked=${plan.summary.blocked} conflict=${plan.summary.conflict}`);
+      }
+      const backupPath = backupLoopsDatabase("migration-import");
+      const result = applyImportMigrationBundle(store, bundle, {
+        includeRuns: opts.runs,
+        replace: opts.replace,
+        dryRun: false,
+      });
+      const output = { ok: true, backupPath, ...result };
+      if (isJson() || opts.json) console.log(JSON.stringify(output, null, 2));
+      else {
+        console.log(`imported workflows=${result.applied.workflows} loops=${result.applied.loops} runs=${result.applied.runs}${backupPath ? ` backup=${backupPath}` : ""}`);
+      }
+    } finally {
+      store.close();
+    }
+  }));
+
+function selfHostedMigrationCommand(operation: "self-hosted-push" | "self-hosted-pull" | "self-hosted-migrate") {
+  return runAction(async (opts: { apiUrl?: string; runs?: boolean; json?: boolean }) => {
+    const store = new Store();
+    try {
+      const plan = await buildSelfHostedMigrationPlan(store, {
+        operation,
+        apiUrl: opts.apiUrl,
+        includeRuns: opts.runs,
+      });
+      printMigrationPlan(plan, opts);
+    } finally {
+      store.close();
+    }
+  });
+}
+
+selfHosted
+  .command("migrate")
+  .description("preview local-to-self-hosted migration actions")
+  .option("--api-url <url>", "self-hosted control-plane API URL")
+  .option("--dry-run", "preview only; self-hosted migrate does not apply remote changes yet")
+  .option("--no-runs", "omit loop run history from the preview")
+  .option("--json", "print JSON")
+  .action(selfHostedMigrationCommand("self-hosted-migrate"));
+
+selfHosted
+  .command("push")
+  .description("preview local rows that would be pushed to self-hosted")
+  .option("--api-url <url>", "self-hosted control-plane API URL")
+  .option("--dry-run", "preview only; self-hosted push does not apply remote changes yet")
+  .option("--no-runs", "omit loop run history from the preview")
+  .option("--json", "print JSON")
+  .action(selfHostedMigrationCommand("self-hosted-push"));
+
+selfHosted
+  .command("pull")
+  .description("preview self-hosted rows that would be pulled locally")
+  .option("--api-url <url>", "self-hosted control-plane API URL")
+  .option("--dry-run", "preview only; self-hosted pull does not apply local changes yet")
+  .option("--no-runs", "omit loop run history from the preview")
+  .option("--json", "print JSON")
+  .action(selfHostedMigrationCommand("self-hosted-pull"));
+
+selfHosted
+  .command("runner-register")
+  .description("register this machine as a self-hosted runner")
+  .requiredOption("--runner-id <id>", "stable runner id")
+  .option("--api-url <url>", "self-hosted control-plane API URL")
+  .option("--machine-id <id>", "OpenMachines machine id")
+  .option("--label <key=value>", "runner label; may be repeated or comma-separated", collectValues, [] as string[])
+  .option("--capability <key=json>", "runner capability; may be repeated or comma-separated", collectValues, [] as string[])
+  .option("--dry-run", "preview registration without posting")
+  .option("--apply", "post the registration to the control plane")
+  .option("--json", "print JSON")
+  .action(runAction(async (opts) => {
+    if (opts.apply && opts.dryRun) throw new ValidationError("use either --apply or --dry-run, not both");
+    const request = {
+      apiUrl: opts.apiUrl,
+      runnerId: opts.runnerId,
+      machineId: opts.machineId,
+      labels: parseStringMap(listFromRepeatedOpts(opts.label), "--label"),
+      capabilities: parseJsonMap(listFromRepeatedOpts(opts.capability), "--capability"),
+    };
+    const result = opts.apply
+      ? await registerSelfHostedRunner(request)
+      : { ok: true, dryRun: true, runner: request };
+    if (isJson() || opts.json) console.log(JSON.stringify(result, null, 2));
+    else console.log(`${opts.apply ? "registered" : "would register"} runner ${String(opts.runnerId)}`);
+  }));
 
 const cloud = program.command("cloud").description("inspect the hosted OpenLoops contract");
 cloud

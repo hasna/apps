@@ -654,6 +654,47 @@ export interface PruneHistorySummary {
   goalRuns: number;
 }
 
+export interface StoreMigrationRows {
+  schemaVersion: number;
+  workflows: WorkflowSpec[];
+  loops: Loop[];
+  runs: LoopRun[];
+  checks: StoreMigrationChecks;
+}
+
+export interface StoreMigrationUnsupportedCounts {
+  workflowInvocations: number;
+  workflowWorkItems: number;
+  workflowRuns: number;
+  workflowStepRuns: number;
+  workflowEvents: number;
+  goals: number;
+  goalPlanNodes: number;
+  goalRuns: number;
+}
+
+export interface StoreMigrationVolatileCounts {
+  daemonLeases: number;
+  activeDaemonLeases: number;
+  runningLoopRuns: number;
+  runningWorkflowRuns: number;
+  runningWorkflowStepRuns: number;
+  leasedWorkflowWorkItems: number;
+}
+
+export interface StoreMigrationChecks {
+  unsupportedCounts: StoreMigrationUnsupportedCounts;
+  volatileCounts: StoreMigrationVolatileCounts;
+}
+
+export interface StoreMigrationRowsOptions {
+  includeRuns?: boolean;
+}
+
+export interface StoreMigrationUpsertOptions {
+  replace?: boolean;
+}
+
 export interface RecordGoalEventInput {
   goalId: string;
   turn?: number;
@@ -3663,6 +3704,222 @@ export class Store {
       ? this.db.query<{ count: number }, [string]>("SELECT COUNT(*) AS count FROM loop_runs WHERE status = ?").get(status)
       : this.db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM loop_runs").get();
     return row?.count ?? 0;
+  }
+
+  exportMigrationRows(opts: StoreMigrationRowsOptions = {}): StoreMigrationRows {
+    const includeRuns = opts.includeRuns ?? true;
+    const workflows = this.db
+      .query<WorkflowRow, []>("SELECT * FROM workflow_specs ORDER BY created_at ASC, id ASC")
+      .all()
+      .map(rowToWorkflow);
+    const loops = this.db
+      .query<LoopRow, []>("SELECT * FROM loops ORDER BY created_at ASC, id ASC")
+      .all()
+      .map(rowToLoop);
+    const runs = includeRuns
+      ? this.db
+          .query<RunRow, []>("SELECT * FROM loop_runs ORDER BY created_at ASC, id ASC")
+          .all()
+          .map(rowToRun)
+      : [];
+    return { schemaVersion: SCHEMA_USER_VERSION, workflows, loops, runs, checks: this.migrationChecks() };
+  }
+
+  private countTable(table: string): number {
+    const row = this.db.query<{ count: number }, []>(`SELECT COUNT(*) AS count FROM ${table}`).get();
+    return row?.count ?? 0;
+  }
+
+  private migrationChecks(): StoreMigrationChecks {
+    const now = nowIso();
+    return {
+      unsupportedCounts: {
+        workflowInvocations: this.countTable("workflow_invocations"),
+        workflowWorkItems: this.countTable("workflow_work_items"),
+        workflowRuns: this.countTable("workflow_runs"),
+        workflowStepRuns: this.countTable("workflow_step_runs"),
+        workflowEvents: this.countTable("workflow_events"),
+        goals: this.countTable("goals"),
+        goalPlanNodes: this.countTable("goal_plan_nodes"),
+        goalRuns: this.countTable("goal_runs"),
+      },
+      volatileCounts: {
+        daemonLeases: this.countTable("daemon_lease"),
+        activeDaemonLeases: this.db
+          .query<{ count: number }, [string]>("SELECT COUNT(*) AS count FROM daemon_lease WHERE expires_at > ?")
+          .get(now)?.count ?? 0,
+        runningLoopRuns: this.db
+          .query<{ count: number }, []>("SELECT COUNT(*) AS count FROM loop_runs WHERE status = 'running'")
+          .get()?.count ?? 0,
+        runningWorkflowRuns: this.db
+          .query<{ count: number }, []>("SELECT COUNT(*) AS count FROM workflow_runs WHERE status = 'running'")
+          .get()?.count ?? 0,
+        runningWorkflowStepRuns: this.db
+          .query<{ count: number }, []>("SELECT COUNT(*) AS count FROM workflow_step_runs WHERE status = 'running'")
+          .get()?.count ?? 0,
+        leasedWorkflowWorkItems: this.db
+          .query<{ count: number }, []>("SELECT COUNT(*) AS count FROM workflow_work_items WHERE lease_expires_at IS NOT NULL OR status IN ('admitted', 'running')")
+          .get()?.count ?? 0,
+      },
+    };
+  }
+
+  upsertMigrationWorkflow(workflow: WorkflowSpec, opts: StoreMigrationUpsertOptions = {}): WorkflowSpec {
+    const existing = this.getWorkflow(workflow.id);
+    if (existing && !opts.replace) return existing;
+    this.db
+      .query(
+        `INSERT INTO workflow_specs (id, name, description, version, status, goal_json, steps_json, created_at, updated_at)
+         VALUES ($id, $name, $description, $version, $status, $goal, $steps, $created, $updated)
+         ON CONFLICT(id) DO UPDATE SET
+           name=$name,
+           description=$description,
+           version=$version,
+           status=$status,
+           goal_json=$goal,
+           steps_json=$steps,
+           created_at=$created,
+           updated_at=$updated`,
+      )
+      .run({
+        $id: workflow.id,
+        $name: workflow.name,
+        $description: workflow.description ?? null,
+        $version: workflow.version,
+        $status: workflow.status,
+        $goal: workflow.goal ? JSON.stringify(workflow.goal) : null,
+        $steps: JSON.stringify(workflow.steps),
+        $created: workflow.createdAt,
+        $updated: workflow.updatedAt,
+      });
+    const imported = this.getWorkflow(workflow.id);
+    if (!imported) throw new Error(`workflow not found after migration import: ${workflow.id}`);
+    return imported;
+  }
+
+  upsertMigrationLoop(loop: Loop, opts: StoreMigrationUpsertOptions = {}): Loop {
+    const existing = this.getLoop(loop.id);
+    if (existing && !opts.replace) return existing;
+    this.assertNoNestedWorkflowGoal(loop.target, loop.goal);
+    this.db
+      .query(
+        `INSERT INTO loops (id, name, description, status, archived_at, archived_from_status, schedule_json, target_json,
+          goal_json, machine_json, next_run_at, retry_scheduled_for, catch_up, catch_up_limit, overlap, max_attempts,
+          retry_delay_ms, lease_ms, expires_at, created_at, updated_at)
+         VALUES ($id, $name, $description, $status, $archivedAt, $archivedFromStatus, $schedule, $target,
+          $goal, $machine, $nextRun, $retrySlot, $catchUp, $catchUpLimit, $overlap, $maxAttempts,
+          $retryDelay, $leaseMs, $expiresAt, $created, $updated)
+         ON CONFLICT(id) DO UPDATE SET
+           name=$name,
+           description=$description,
+           status=$status,
+           archived_at=$archivedAt,
+           archived_from_status=$archivedFromStatus,
+           schedule_json=$schedule,
+           target_json=$target,
+           goal_json=$goal,
+           machine_json=$machine,
+           next_run_at=$nextRun,
+           retry_scheduled_for=$retrySlot,
+           catch_up=$catchUp,
+           catch_up_limit=$catchUpLimit,
+           overlap=$overlap,
+           max_attempts=$maxAttempts,
+           retry_delay_ms=$retryDelay,
+           lease_ms=$leaseMs,
+           expires_at=$expiresAt,
+           created_at=$created,
+           updated_at=$updated`,
+      )
+      .run({
+        $id: loop.id,
+        $name: loop.name,
+        $description: loop.description ?? null,
+        $status: loop.status,
+        $archivedAt: loop.archivedAt ?? null,
+        $archivedFromStatus: loop.archivedFromStatus ?? null,
+        $schedule: JSON.stringify(loop.schedule),
+        $target: JSON.stringify(loop.target),
+        $goal: loop.goal ? JSON.stringify(loop.goal) : null,
+        $machine: loop.machine ? JSON.stringify(loop.machine) : null,
+        $nextRun: loop.nextRunAt ?? null,
+        $retrySlot: loop.retryScheduledFor ?? null,
+        $catchUp: loop.catchUp,
+        $catchUpLimit: loop.catchUpLimit,
+        $overlap: loop.overlap,
+        $maxAttempts: loop.maxAttempts,
+        $retryDelay: loop.retryDelayMs,
+        $leaseMs: loop.leaseMs,
+        $expiresAt: loop.expiresAt ?? null,
+        $created: loop.createdAt,
+        $updated: loop.updatedAt,
+      });
+    const imported = this.getLoop(loop.id);
+    if (!imported) throw new Error(`loop not found after migration import: ${loop.id}`);
+    return imported;
+  }
+
+  upsertMigrationRun(run: LoopRun, opts: StoreMigrationUpsertOptions = {}): LoopRun {
+    if (run.status === "running") throw new ValidationError(`cannot import running run ${run.id}`);
+    const existing = this.getRun(run.id);
+    if (existing && !opts.replace) return existing;
+    this.db
+      .query(
+        `INSERT INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at,
+          claimed_by, claim_token, lease_expires_at, pid, pgid, process_started_at, exit_code, duration_ms,
+          stdout, stderr, error, goal_run_id, created_at, updated_at)
+         VALUES ($id, $loopId, $loopName, $scheduledFor, $attempt, $status, $startedAt, $finishedAt,
+          $claimedBy, NULL, $leaseExpiresAt, $pid, $pgid, $processStartedAt, $exitCode, $durationMs,
+          $stdout, $stderr, $error, $goalRunId, $created, $updated)
+         ON CONFLICT(id) DO UPDATE SET
+           loop_id=$loopId,
+           loop_name=$loopName,
+           scheduled_for=$scheduledFor,
+           attempt=$attempt,
+           status=$status,
+           started_at=$startedAt,
+           finished_at=$finishedAt,
+           claimed_by=$claimedBy,
+           claim_token=NULL,
+           lease_expires_at=$leaseExpiresAt,
+           pid=$pid,
+           pgid=$pgid,
+           process_started_at=$processStartedAt,
+           exit_code=$exitCode,
+           duration_ms=$durationMs,
+           stdout=$stdout,
+           stderr=$stderr,
+           error=$error,
+           goal_run_id=$goalRunId,
+           created_at=$created,
+           updated_at=$updated`,
+      )
+      .run({
+        $id: run.id,
+        $loopId: run.loopId,
+        $loopName: run.loopName,
+        $scheduledFor: run.scheduledFor,
+        $attempt: run.attempt,
+        $status: run.status,
+        $startedAt: run.startedAt ?? null,
+        $finishedAt: run.finishedAt ?? null,
+        $claimedBy: run.claimedBy ?? null,
+        $leaseExpiresAt: run.leaseExpiresAt ?? null,
+        $pid: run.pid ?? null,
+        $pgid: run.pgid ?? null,
+        $processStartedAt: run.processStartedAt ?? null,
+        $exitCode: run.exitCode ?? null,
+        $durationMs: run.durationMs ?? null,
+        $stdout: scrubbedOrNull(run.stdout),
+        $stderr: scrubbedOrNull(run.stderr),
+        $error: scrubbedOrNull(run.error),
+        $goalRunId: run.goalRunId ?? null,
+        $created: run.createdAt,
+        $updated: run.updatedAt,
+      });
+    const imported = this.getRun(run.id);
+    if (!imported) throw new Error(`run not found after migration import: ${run.id}`);
+    return imported;
   }
 
   /**

@@ -2,9 +2,45 @@ import type { CreateLoopInput, Goal, GoalRun, Loop, LoopRun, LoopStatus, OpenAut
 import { runDoctor, type DoctorReport } from "../lib/doctor.js";
 import { LoopNotFoundError } from "../lib/errors.js";
 import { buildHealthReport, type LoopsHealthReport } from "../lib/health.js";
+import {
+  applyImportMigrationBundle,
+  buildImportMigrationPlan,
+  buildSelfHostedMigrationPlan,
+  exportLoopsMigrationBundle,
+  type ApplyLoopsMigrationResult,
+  type ExportLoopsMigrationOptions,
+  type ImportLoopsMigrationOptions,
+  type LoopsMigrationBundle,
+  type LoopsMigrationPlan,
+  type SelfHostedPlanOptions,
+} from "../lib/migration.js";
 import { runLoopNow, tick } from "../lib/scheduler.js";
 import { Store } from "../lib/store.js";
 export { runGoal } from "../lib/goal/runner.js";
+export {
+  LOOPS_MIGRATION_SCHEMA,
+  applyImportMigrationBundle,
+  buildImportMigrationPlan,
+  buildSelfHostedMigrationPlan,
+  exportLoopsMigrationBundle,
+  migrationHash,
+  registerSelfHostedRunner,
+  validateLoopsMigrationBundle,
+} from "../lib/migration.js";
+export type {
+  ApplyLoopsMigrationResult,
+  ExportLoopsMigrationOptions,
+  ImportLoopsMigrationOptions,
+  LoopsMigrationAction,
+  LoopsMigrationBundle,
+  LoopsMigrationPlan,
+  LoopsMigrationPlanRow,
+  LoopsMigrationPlanSummary,
+  LoopsMigrationResource,
+  RunnerRegistrationOptions,
+  RunnerRegistrationResult,
+  SelfHostedPlanOptions,
+} from "../lib/migration.js";
 
 export interface LoopsClientOptions {
   store?: Store;
@@ -124,6 +160,22 @@ export class LoopsClient {
   async runNow(idOrName: string): Promise<LoopRun> {
     const result = await runLoopNow({ store: this.store, idOrName, runnerId: this.runnerId });
     return result.run;
+  }
+
+  exportBundle(opts: ExportLoopsMigrationOptions = {}): LoopsMigrationBundle {
+    return exportLoopsMigrationBundle(this.store, opts);
+  }
+
+  planImport(bundle: LoopsMigrationBundle, opts: ImportLoopsMigrationOptions = {}): LoopsMigrationPlan {
+    return buildImportMigrationPlan(this.store, bundle, opts);
+  }
+
+  importBundle(bundle: LoopsMigrationBundle, opts: ImportLoopsMigrationOptions = {}): ApplyLoopsMigrationResult {
+    return applyImportMigrationBundle(this.store, bundle, opts);
+  }
+
+  planSelfHostedMigration(opts: Omit<SelfHostedPlanOptions, "operation"> & { operation?: SelfHostedPlanOptions["operation"] } = {}): Promise<LoopsMigrationPlan> {
+    return buildSelfHostedMigrationPlan(this.store, { ...opts, operation: opts.operation ?? "self-hosted-migrate" });
   }
 
   close(): void {

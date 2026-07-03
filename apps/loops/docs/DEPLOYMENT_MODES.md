@@ -23,7 +23,7 @@ tokens, Postgres, or hosted infrastructure.
 client and runner contract, but tenant auth, account administration, and hosted
 infrastructure stay outside this package. The public package must not depend on
 private hosted packages or resource names. This release exposes status
-surfaces only; non-local claim/lease execution is follow-up work.
+surfaces only.
 
 ## Mode Resolution
 
@@ -51,9 +51,18 @@ strings, and fragments are not returned in status output.
 loops mode
 loops --json mode
 loops self-hosted status
+loops self-hosted migrate --dry-run
+loops self-hosted push --dry-run
+loops self-hosted pull --dry-run
+loops self-hosted runner-register --runner-id <id> --machine-id <machine>
+loops self-hosted runner-register --runner-id <id> --machine-id <machine> --apply
 loops cloud status
 loops-api status
 loops-runner status
+loops export --file ./loops-export.json --dry-run
+loops export --file ./loops-export.json
+loops import ./loops-export.json
+loops import ./loops-export.json --apply
 ```
 
 Human status output is intentionally compact:
@@ -89,9 +98,67 @@ platform host.
 plane. The current public package supports a bounded one-shot protocol:
 registration, claim polling, claim-token fenced heartbeat/finalization, and
 `loops-runner run-once` execution for non-workflow targets. Full fleet daemon
-mode, workflow target execution over the remote protocol, and import/export
-migration still need follow-up releases before `loops-runner` is advertised as
-a complete always-on worker.
+mode and workflow target execution over the remote protocol still need
+follow-up releases before `loops-runner` is advertised as a complete always-on
+worker.
+
+## Migration And Sync
+
+Local migration commands are available now:
+
+```bash
+loops export --file ./loops-export.json
+loops export --file ./loops-export.json --dry-run
+loops import ./loops-export.json
+loops import ./loops-export.json --apply
+```
+
+`loops export` writes an id-preserving JSON bundle for the supported local
+state: workflow specs, loop definitions, and terminal loop run history. The
+bundle includes schema version, package version, row counts, row hashes, and
+no-loss checks. Use `--dry-run` to preview the bundle without writing a file.
+Inline command `env` values are treated as unsafe for export; the command
+refuses to write a no-loss bundle unless the operator explicitly uses
+`--allow-redacted`, which produces a non-importable redacted bundle.
+
+`loops import` is a dry-run by default. It reports exact per-row actions:
+`insert`, `update`, `skip`, `conflict`, and `blocked`. Applying an import
+requires `--apply`; existing rows with the same id are updated only with
+`--replace`. The CLI creates a local SQLite backup before a safe apply.
+
+No-loss validation blocks unsupported or live state instead of silently
+dropping it. The current Stage 4 bundle does not preserve workflow invocation
+rows, workflow work items, workflow run/step/event history, or goal run history.
+If those tables contain rows, the export/import plan is non-importable until a
+later release adds full table-preserving migration. Active daemon leases,
+running loop runs, running workflow runs/steps, and leased work items also
+block migration; finish or stop that work first.
+
+Self-hosted sync commands are preview-only today:
+
+```bash
+loops self-hosted migrate --dry-run
+loops self-hosted push --dry-run
+loops self-hosted pull --dry-run
+```
+
+They inspect local state, optionally inspect `LOOPS_API_URL`, and report the
+rows that would need to move. Remote apply is intentionally blocked because the
+current self-hosted API exposes normal loop CRUD and run listing, not
+id-preserving workflow/loop/run import endpoints. A normal remote loop create
+would generate new ids, so it is not a no-loss migration. Local SQLite remains
+authoritative until a safe import is applied; in non-local modes it may remain
+a cache, offline spool, and audit copy.
+
+`loops self-hosted runner-register` is also preview-only unless `--apply` is
+present. The dry run prints the runner id, machine id, labels, and
+capabilities that would be posted, without exposing tokens.
+
+Cross-machine rollout evidence should record: machine id/hostname, package
+version, git/build version, command run, dry-run or apply mode, redacted API
+URL, source and target store ids, backup path, bundle hash, schema version,
+row counts, conflicts, blocked rows, runner registration id, daemon/runner
+status, and timestamp.
 
 ## Machine Placement
 
@@ -120,7 +187,8 @@ Non-local execution needs these follow-up releases before it is live:
 - Long-running runner daemon mode with backoff, fleet observability, and
   durable machine registration records.
 - Workflow target execution over the remote protocol.
-- Import/export migration between local SQLite state and a control plane.
+- Id-preserving self-hosted import endpoints for workflow specs, loop
+  definitions, run history, workflow history, work items, goals, and audit rows.
 - Hosted product integration outside the public package.
 
 ## Public Package Boundary

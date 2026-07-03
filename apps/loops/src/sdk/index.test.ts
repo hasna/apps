@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { tick } from "../lib/scheduler.js";
 import { Store } from "../lib/store.js";
 import { gatedWriteCommand, openGate, waitUntil } from "../test-helpers.js";
-import { LoopsClient, openAutomationsRuntimeBinding } from "./index.js";
+import { LoopsClient, migrationHash, openAutomationsRuntimeBinding, registerSelfHostedRunner } from "./index.js";
 
 describe("loops sdk", () => {
   test("describes the OpenAutomations runtime handoff without claiming product ownership", () => {
@@ -105,6 +105,225 @@ describe("loops sdk", () => {
       expect(client.list().map((entry) => entry.id)).toEqual([loop.id]);
     } finally {
       client.close();
+    }
+  });
+
+  test("exports, plans, and imports migration bundles through the client", () => {
+    const sourceStore = new Store(":memory:");
+    const targetStore = new Store(":memory:");
+    const source = new LoopsClient({ store: sourceStore, runnerId: "source" });
+    const target = new LoopsClient({ store: targetStore, runnerId: "target" });
+    try {
+      const loop = source.create({
+        name: "sdk-migration-loop",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+      });
+      const bundle = source.exportBundle();
+      expect(bundle.importable).toBe(true);
+      expect(bundle.counts).toMatchObject({ loops: 1, runs: 0 });
+
+      const plan = target.planImport(bundle);
+      expect(plan.summary).toMatchObject({ insert: 1, blocked: 0, conflict: 0 });
+
+      const applied = target.importBundle(bundle);
+      expect(applied.applied).toEqual({ workflows: 0, loops: 1, runs: 0 });
+      expect(target.get(loop.id).name).toBe("sdk-migration-loop");
+
+      const idempotent = target.planImport(bundle);
+      expect(idempotent.summary).toMatchObject({ insert: 0, skip: 1, blocked: 0, conflict: 0 });
+    } finally {
+      source.close();
+      target.close();
+    }
+  });
+
+  test("registers a self-hosted runner through the migration API helper", async () => {
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const fetchImpl = async (input: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
+      requests.push({ url: String(input), body });
+      return Response.json({
+        ok: true,
+        runner: {
+          id: body.runnerId,
+          machineId: body.machineId,
+          labels: body.labels,
+          capabilities: body.capabilities,
+        },
+      });
+    };
+
+    const registered = await registerSelfHostedRunner({
+      apiUrl: "http://127.0.0.1:8787",
+      runnerId: "runner-sdk-test",
+      machineId: "machine-sdk-test",
+      labels: { role: "worker" },
+      capabilities: { concurrency: 1 },
+      fetchImpl: fetchImpl as typeof fetch,
+    });
+
+    expect(registered).toMatchObject({
+      ok: true,
+      runner: {
+        id: "runner-sdk-test",
+        machineId: "machine-sdk-test",
+        labels: { role: "worker" },
+        capabilities: { concurrency: 1 },
+      },
+    });
+    expect(requests).toEqual([
+      {
+        url: "http://127.0.0.1:8787/v1/runners/register",
+        body: {
+          runnerId: "runner-sdk-test",
+          machineId: "machine-sdk-test",
+          labels: { role: "worker" },
+          capabilities: { concurrency: 1 },
+        },
+      },
+    ]);
+  });
+
+  test("migration plans block destination live state and tampered bundles", async () => {
+    const sourceStore = new Store(":memory:");
+    const targetStore = new Store(":memory:");
+    const source = new LoopsClient({ store: sourceStore, runnerId: "source" });
+    const target = new LoopsClient({ store: targetStore, runnerId: "target" });
+    try {
+      source.create({
+        name: "sdk-live-destination-source",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+      });
+      const bundle = source.exportBundle();
+      targetStore.acquireDaemonLease({
+        id: "daemon-live",
+        pid: process.pid,
+        hostname: "test-host",
+        ttlMs: 60_000,
+      });
+      const blocked = target.planImport(bundle);
+      expect(blocked.importable).toBe(false);
+      expect(blocked.rows.some((row) => row.id === "destination:volatile:activeDaemonLeases" && row.action === "blocked")).toBe(true);
+
+      const tampered = structuredClone(bundle);
+      tampered.packageVersion = "tampered";
+      expect(() => target.planImport(tampered)).toThrow("hash mismatch");
+    } finally {
+      source.close();
+      target.close();
+    }
+
+    const redactedSourceStore = new Store(":memory:");
+    const redactedTargetStore = new Store(":memory:");
+    const redactedSource = new LoopsClient({ store: redactedSourceStore, runnerId: "source" });
+    const redactedTarget = new LoopsClient({ store: redactedTargetStore, runnerId: "target" });
+    try {
+      redactedSource.create({
+        name: "sdk-redacted-source",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "command", command: "env", env: { PRIVATE_TOKEN: "very-secret-value" } },
+      });
+      const redactedBundle = redactedSource.exportBundle();
+      const forged = structuredClone(redactedBundle);
+      forged.importable = true;
+      forged.blockers = [];
+      const { hash: _hash, ...body } = forged;
+      forged.hash = migrationHash(body);
+      const plan = redactedTarget.planImport(forged);
+      expect(plan.importable).toBe(false);
+      expect(plan.rows.some((row) => row.resource === "loop" && row.action === "blocked" && row.reason?.includes("redacted command env"))).toBe(true);
+    } finally {
+      redactedSource.close();
+      redactedTarget.close();
+    }
+
+    const raceSourceStore = new Store(":memory:");
+    const raceTargetStore = new Store(":memory:");
+    const raceSource = new LoopsClient({ store: raceSourceStore, runnerId: "source" });
+    const raceTarget = new LoopsClient({ store: raceTargetStore, runnerId: "target" });
+    try {
+      raceSource.create({
+        name: "sdk-race-source",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+      });
+      const raceBundle = raceSource.exportBundle();
+      const originalWriteTransaction = raceTargetStore.writeTransaction.bind(raceTargetStore);
+      let injected = false;
+      raceTargetStore.writeTransaction = ((fn: () => unknown) => {
+        if (!injected) {
+          injected = true;
+          raceTargetStore.acquireDaemonLease({
+            id: "daemon-race",
+            pid: process.pid,
+            hostname: "test-host",
+            ttlMs: 60_000,
+          });
+        }
+        return originalWriteTransaction(fn);
+      }) as Store["writeTransaction"];
+      expect(() => raceTarget.importBundle(raceBundle)).toThrow("destination store changed before import apply");
+    } finally {
+      raceSource.close();
+      raceTarget.close();
+    }
+
+    const conflictSourceStore = new Store(":memory:");
+    const conflictTargetStore = new Store(":memory:");
+    const conflictSource = new LoopsClient({ store: conflictSourceStore, runnerId: "source" });
+    const conflictTarget = new LoopsClient({ store: conflictTargetStore, runnerId: "target" });
+    try {
+      conflictSource.create({
+        name: "sdk-conflict-source",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+      });
+      const conflictBundle = conflictSource.exportBundle();
+      const incomingLoop = conflictBundle.data.loops[0]!;
+      const originalWriteTransaction = conflictTargetStore.writeTransaction.bind(conflictTargetStore);
+      let injected = false;
+      conflictTargetStore.writeTransaction = ((fn: () => unknown) => {
+        if (!injected) {
+          injected = true;
+          conflictTargetStore.upsertMigrationLoop({
+            ...incomingLoop,
+            name: "conflicting-loop",
+            updatedAt: "2026-01-01T00:00:02.000Z",
+          }, { replace: true });
+        }
+        return originalWriteTransaction(fn);
+      }) as Store["writeTransaction"];
+      expect(() => conflictTarget.importBundle(conflictBundle)).toThrow("destination store changed before import apply");
+      expect(conflictTargetStore.getLoop(incomingLoop.id)?.name).toBe("conflicting-loop");
+    } finally {
+      conflictSource.close();
+      conflictTarget.close();
+    }
+
+    const pullStore = new Store(":memory:");
+    const pullClient = new LoopsClient({ store: pullStore, runnerId: "pull" });
+    try {
+      const fetchImpl = async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.includes("/v1/runs")) {
+          return Response.json({ ok: true, runs: [{ id: "remote-run-1", loopName: "remote-loop", status: "succeeded" }] });
+        }
+        return Response.json({ ok: true, loops: [{ id: "remote-loop-1", name: "remote-loop" }] });
+      };
+      const pull = await pullClient.planSelfHostedMigration({
+        operation: "self-hosted-pull",
+        apiUrl: "http://127.0.0.1:8787",
+        fetchImpl: fetchImpl as typeof fetch,
+      });
+      expect(pull.importable).toBe(false);
+      expect(pull.rows).toEqual(expect.arrayContaining([
+        expect.objectContaining({ resource: "loop", id: "remote-loop-1", action: "blocked" }),
+        expect.objectContaining({ resource: "run", id: "remote-run-1", action: "blocked" }),
+      ]));
+    } finally {
+      pullClient.close();
     }
   });
 

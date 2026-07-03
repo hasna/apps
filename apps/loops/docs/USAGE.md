@@ -19,7 +19,8 @@ defines `self_hosted` and `cloud` contracts for future non-local control
 planes:
 
 - `self_hosted`: user-operated `loops-api` control-plane contract; this
-  release exposes API/runner status foundations only.
+  release exposes storage-backed API/runner foundations plus local migration
+  previews.
 - `cloud`: hosted control-plane contract; this release exposes client/runner
   status only, and requires `LOOPS_CLOUD_API_URL` plus `LOOPS_CLOUD_TOKEN` or
   `HASNA_LOOPS_CLOUD_TOKEN` before status can report ready.
@@ -30,10 +31,60 @@ Useful status commands:
 loops mode
 loops --json mode
 loops self-hosted status
+loops self-hosted migrate --dry-run
+loops self-hosted push --dry-run
+loops self-hosted pull --dry-run
+loops self-hosted runner-register --runner-id <id> --machine-id <machine>
+loops self-hosted runner-register --runner-id <id> --machine-id <machine> --apply
 loops cloud status
 loops-api status
 loops-runner status
 ```
+
+## Migration And Sync
+
+Export a supported local bundle:
+
+```bash
+loops export --file ./loops-export.json
+loops export --file ./loops-export.json --dry-run
+```
+
+Preview and apply it into another local store:
+
+```bash
+loops import ./loops-export.json
+loops import ./loops-export.json --apply
+```
+
+`loops import` is dry-run by default and prints row actions (`insert`,
+`update`, `skip`, `conflict`, `blocked`) with hashes and reasons. `--apply`
+creates a SQLite backup first. Existing ids are not overwritten unless
+`--replace` is used and the dry-run has no conflicts or blockers.
+
+No-loss export/import currently preserves workflow specs, loop definitions, and
+terminal loop run history. It intentionally blocks when unsupported durable
+tables contain rows (workflow invocations/work items, workflow run/step/event
+history, goal history) or when active runtime ownership exists (active daemon
+leases, running runs, leased work items). Inline command env values are not
+exported as secrets; bundles with redacted env values require
+`--allow-redacted` and are marked non-importable.
+
+Self-hosted sync commands are preview-only until the control-plane API exposes
+id-preserving import endpoints:
+
+```bash
+loops self-hosted migrate --dry-run
+loops self-hosted push --dry-run
+loops self-hosted pull --dry-run
+```
+
+The preview may inspect `LOOPS_API_URL`/`HASNA_LOOPS_API_URL`, but it refuses
+remote apply because normal loop CRUD would generate new ids. Use
+`loops self-hosted runner-register` to verify runner registration against an
+API, then use `loops-runner run-once` for the current bounded non-workflow
+claim/execute/finalize protocol.
+Runner registration is preview-only unless `--apply` is present.
 
 ## Install
 
