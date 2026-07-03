@@ -36,6 +36,10 @@ async function readClipboardText(): Promise<string | null> {
 }
 
 async function readClipboardImage(): Promise<{ bytes: Uint8Array; mimeType: string; source: string } | null> {
+  if (commandExists("pngpaste")) {
+    const { result, bytes } = await runCommandBytes("pngpaste", ["-"]);
+    if (result.ok && bytes.byteLength > 0) return { bytes, mimeType: "image/png", source: "clipboard:pngpaste" };
+  }
   if (commandExists("wl-paste")) {
     const { result, bytes } = await runCommandBytes("wl-paste", ["--type", "image/png"]);
     if (result.ok && bytes.byteLength > 0) return { bytes, mimeType: "image/png", source: "clipboard:wl-paste" };

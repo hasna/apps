@@ -11,14 +11,19 @@ export interface CommandResult {
   ok: boolean;
 }
 
-export function commandExists(command: string): boolean {
-  if (command.includes("/") && existsSync(command)) return true;
+function resolveCommandPath(command: string): string | null {
+  if (command.includes("/") && existsSync(command)) return command;
   const path = process.env["PATH"] ?? "";
   for (const dir of path.split(":")) {
     if (!dir) continue;
-    if (existsSync(join(dir, command))) return true;
+    const candidate = join(dir, command);
+    if (existsSync(candidate)) return candidate;
   }
-  return false;
+  return null;
+}
+
+export function commandExists(command: string): boolean {
+  return resolveCommandPath(command) !== null;
 }
 
 async function streamText(stream: ReadableStream<Uint8Array> | null): Promise<string> {
@@ -32,10 +37,11 @@ async function streamBytes(stream: ReadableStream<Uint8Array> | null): Promise<U
 }
 
 export async function runCommand(command: string, args: string[] = [], input?: string | Uint8Array): Promise<CommandResult> {
-  if (!commandExists(command)) {
+  const executable = resolveCommandPath(command);
+  if (!executable) {
     return { command, args, exitCode: 127, stdout: "", stderr: `${command} not found`, ok: false };
   }
-  const proc = Bun.spawn([command, ...args], {
+  const proc = Bun.spawn([executable, ...args], {
     stdin: input === undefined ? "ignore" : "pipe",
     stdout: "pipe",
     stderr: "pipe",
@@ -53,13 +59,14 @@ export async function runCommand(command: string, args: string[] = [], input?: s
 }
 
 export async function runCommandBytes(command: string, args: string[] = []): Promise<{ result: CommandResult; bytes: Uint8Array }> {
-  if (!commandExists(command)) {
+  const executable = resolveCommandPath(command);
+  if (!executable) {
     return {
       result: { command, args, exitCode: 127, stdout: "", stderr: `${command} not found`, ok: false },
       bytes: new Uint8Array(),
     };
   }
-  const proc = Bun.spawn([command, ...args], {
+  const proc = Bun.spawn([executable, ...args], {
     stdout: "pipe",
     stderr: "pipe",
   });
