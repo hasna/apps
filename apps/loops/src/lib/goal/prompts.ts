@@ -1,3 +1,4 @@
+import type { ExecutableTarget } from "../../types.js";
 import type { Goal, GoalPlanNode, GoalSpec } from "./types.js";
 
 export function planPrompt(spec: GoalSpec): string {
@@ -12,12 +13,23 @@ export function planPrompt(spec: GoalSpec): string {
   ].join("\n");
 }
 
-export function iterationPrompt(goal: Goal, readyNodes: GoalPlanNode[]): string {
+export function iterationPrompt(goal: Pick<Goal, "objective">, node: Pick<GoalPlanNode, "key" | "objective">): string {
   return [
     "Continue executing the goal plan without losing budget discipline.",
     `Goal: ${goal.objective}`,
-    `Ready nodes: ${readyNodes.map((node) => `${node.key}: ${node.objective}`).join("; ") || "none"}`,
+    `Plan node: ${node.key}`,
+    `Node objective: ${node.objective}`,
+    "Work only on this node's objective in this run; other plan nodes run in their own iterations.",
   ].join("\n");
+}
+
+export function goalNodeTarget(
+  target: ExecutableTarget,
+  goal: Pick<Goal, "objective">,
+  node: Pick<GoalPlanNode, "key" | "objective">,
+): ExecutableTarget {
+  if (target.type !== "agent") return target;
+  return { ...target, prompt: `${target.prompt}\n\n${iterationPrompt(goal, node)}` };
 }
 
 export function achievementPrompt(goal: Goal, nodes: GoalPlanNode[], evidence: string[]): string {

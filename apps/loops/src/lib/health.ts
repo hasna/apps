@@ -16,6 +16,7 @@ export type RunFailureClassification =
   | "timeout"
   | "sigsegv"
   | "skipped_previous_active"
+  | "circuit_breaker"
   | "unknown";
 
 export interface RunFailureSignal {
@@ -95,6 +96,7 @@ const CLASSIFICATIONS: RunFailureClassification[] = [
   "timeout",
   "sigsegv",
   "skipped_previous_active",
+  "circuit_breaker",
   "unknown",
 ];
 
@@ -168,6 +170,7 @@ export function classifyRunFailure(run: LoopRun): RunFailureSignal | undefined {
   const text = searchableText(run);
   let classification: RunFailureClassification = "unknown";
   if (run.status === "timed_out") classification = "timeout";
+  else if (run.status === "skipped" && /circuit breaker open/.test(text)) classification = "circuit_breaker";
   else if (run.status === "skipped" && /previous run still active/.test(text)) classification = "skipped_previous_active";
   else if (/runtime preflight failed|preflight failed|executable not found in path|none of required executables found|auth profile preflight failed|profile not found/.test(text)) classification = "preflight";
   else if (/rate limit|too many requests|429\b|quota exceeded/.test(text)) classification = "rate_limit";
@@ -384,7 +387,9 @@ function recommendedTask(loop: Loop, run: LoopRun, failure: RunFailureSignal, ro
     failure.evidence.stderr ? `Stderr:\n${failure.evidence.stderr}` : undefined,
   ].filter(Boolean).join("\n\n");
   const dedupeKey = `openloops:${loop.id}:${failure.fingerprint}`;
-  const tags = ["bug", "openloops", "loop-health", failure.classification];
+  // "loops" is the tag control-room consumers query on; without it the
+  // auto-filed failure tasks had no consumer. Keep the legacy tags too.
+  const tags = ["bug", "openloops", "loops", "loop-health", failure.classification];
   const priority = failure.classification === "auth" || failure.classification === "rate_limit" ? "high" : "medium";
   return {
     title,
@@ -399,7 +404,7 @@ function recommendedTask(loop: Loop, run: LoopRun, failure: RunFailureSignal, ro
       comment: ["todos", "comment", "<task-id>", description],
     },
     futureNativeUpsert: {
-      command: "todos upsert",
+      command: "todos task upsert",
       fields: {
         title,
         description,
@@ -448,6 +453,28 @@ export function expectationForLoop(store: Store, loop: Loop): LoopExpectationRes
     };
   }
   const failure = classifyRunFailure(latestRun);
+  if (failure?.classification === "circuit_breaker") {
+    // Scheduler circuit-breaker marker: surface it while the loop is paused;
+    // a manual resume clears the pause, so the stale marker stops flagging.
+    if (loop.status !== "paused") {
+      return {
+        loop: { id: loop.id, name: loop.name, status: loop.status, nextRunAt: loop.nextRunAt },
+        ok: true,
+        check: { id: "latest-run-succeeded", status: "warn", message: "circuit breaker cleared by resume; awaiting next run" },
+        latestRun: healthRun(latestRun),
+        route,
+      };
+    }
+    return {
+      loop: { id: loop.id, name: loop.name, status: loop.status, nextRunAt: loop.nextRunAt },
+      ok: false,
+      check: { id: "latest-run-succeeded", status: "fail", message: latestRun.error ?? "circuit breaker open; loop auto-paused" },
+      latestRun: healthRun(latestRun),
+      failure,
+      route,
+      recommendedTask: recommendedTask(loop, latestRun, failure, route),
+    };
+  }
   return {
     loop: { id: loop.id, name: loop.name, status: loop.status, nextRunAt: loop.nextRunAt },
     ok: false,

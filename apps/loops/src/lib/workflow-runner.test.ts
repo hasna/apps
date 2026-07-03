@@ -1,12 +1,28 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { MockLanguageModelV3 } from "ai/test";
+import type { WorkflowStepInput } from "../types.js";
 import { tick } from "./scheduler.js";
 import { Store } from "./store.js";
 import { executeLoopTarget, executeWorkflow } from "./workflow-runner.js";
 import { workflowBodyFromJson } from "./workflow-spec.js";
+import { expectMarkerNeverWritten, gatedWriteCommand, openGate, waitUntil } from "../test-helpers.js";
+
+interface EnvelopeStepSummary {
+  stepId: string;
+  status: string;
+  exitCode?: number;
+  stdoutBytes: number;
+  stderrBytes: number;
+  stdoutExcerpt?: string;
+  blocked: boolean;
+}
+
+function parseEnvelope(stdout: string): { workflowRun: { status: string }; steps: EnvelopeStepSummary[] } {
+  return JSON.parse(stdout) as { workflowRun: { status: string }; steps: EnvelopeStepSummary[] };
+}
 
 function generated(object: unknown, totalTokens = 10) {
   return {
@@ -238,30 +254,26 @@ describe("workflow runner", () => {
     const store = new Store(":memory:");
     const root = mkdtempSync(join(tmpdir(), "loops-cancel-"));
     const marker = join(root, "late-write");
+    const gate = join(root, "gate");
     try {
       const workflow = store.createWorkflow({
         name: "cancel-child",
         steps: [
           {
             id: "slow",
-            target: { type: "command", command: `sleep 1; printf late > ${JSON.stringify(marker)}`, shell: true },
+            target: { type: "command", command: gatedWriteCommand(gate, marker), shell: true },
           },
         ],
       });
       const executing = executeWorkflow(store, workflow, { cancelPollMs: 25 });
-      let runId: string | undefined;
-      for (let i = 0; i < 50; i++) {
+      const runId = await waitUntil(() => {
         const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0];
-        if (run && store.getWorkflowStepRun(run.id, "slow")?.status === "running") {
-          runId = run.id;
-          break;
-        }
-        await Bun.sleep(10);
-      }
+        return run && store.getWorkflowStepRun(run.id, "slow")?.status === "running" ? run.id : undefined;
+      }, { label: "workflow step running" });
       expect(runId).toBeDefined();
       store.cancelWorkflowRun(runId!, "test cancellation");
       const result = await executing;
-      await Bun.sleep(1_100);
+      await expectMarkerNeverWritten(gate, marker);
       expect(result.status).toBe("failed");
       expect(store.requireWorkflowRun(runId!).status).toBe("cancelled");
       expect(store.getWorkflowStepRun(runId!, "slow")?.status).toBe("cancelled");
@@ -276,6 +288,7 @@ describe("workflow runner", () => {
     const store = new Store(":memory:");
     const root = mkdtempSync(join(tmpdir(), "loops-timeout-"));
     const marker = join(root, "late-write");
+    const gate = join(root, "gate");
     try {
       const workflow = store.createWorkflow({
         name: "timeout-step",
@@ -283,14 +296,14 @@ describe("workflow runner", () => {
           {
             id: "slow",
             timeoutMs: 50,
-            target: { type: "command", command: `sleep 1; printf late > ${JSON.stringify(marker)}`, shell: true },
+            target: { type: "command", command: gatedWriteCommand(gate, marker), shell: true },
           },
         ],
       });
       const result = await executeWorkflow(store, workflow);
       const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0]!;
       const step = store.getWorkflowStepRun(run.id, "slow")!;
-      await Bun.sleep(1_100);
+      await expectMarkerNeverWritten(gate, marker);
       expect(result.status).toBe("timed_out");
       expect(run.status).toBe("timed_out");
       expect(step.status).toBe("timed_out");
@@ -323,6 +336,71 @@ describe("workflow runner", () => {
       expect(run.status).toBe("succeeded");
       expect(step.status).toBe("succeeded");
       expect(readFileSync(marker, "utf8")).toBe("done");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("records Codewith durable agent progress while workflow step is still running", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-codewith-progress-"));
+    const bin = join(root, "bin");
+    const gate = join(root, "complete");
+    const reads = join(root, "reads");
+    try {
+      mkdirSync(bin, { recursive: true });
+      const fake = join(bin, "codewith");
+      writeFileSync(
+        fake,
+        [
+          "#!/usr/bin/env bash",
+          "set -euo pipefail",
+          'case " $* " in',
+          '  *" agent start "*) echo \'{"agent":{"agentId":"agent-progress","status":"queued","statusReason":"queued","threadId":null,"rolloutPath":null,"lastEventSeq":0}}\' ;;',
+          `  *" agent read "*) reads="$(cat ${JSON.stringify(reads)} 2>/dev/null || echo 0)"; reads=$((reads + 1)); echo "$reads" > ${JSON.stringify(reads)}; seq=$((2 + reads)); if [ -f ${JSON.stringify(gate)} ]; then echo '{"agent":{"agentId":"agent-progress","status":"completed","statusReason":"turn completed","threadId":"thread-1","rolloutPath":"/tmp/rollout.jsonl","pid":123,"lastEventSeq":4},"statusSnapshot":{"status":"completed","summary":"Done","lastEventSeq":4}}'; else printf '{"agent":{"agentId":"agent-progress","status":"running","statusReason":"turn running","threadId":"thread-1","rolloutPath":"/tmp/rollout.jsonl","pid":123,"lastEventSeq":%s},"statusSnapshot":{"status":"running","summary":"Inspecting task","lastEventSeq":2}}\\n' "$seq"; fi ;;`,
+          '  *" agent logs "*) echo \'{"data":[]}\' ;;',
+          "  *) echo '{}' ;;",
+          "esac",
+        ].join("\n"),
+      );
+      chmodSync(fake, 0o755);
+      const workflow = store.createWorkflow({
+        name: "codewith-progress",
+        steps: [
+          {
+            id: "triage",
+            target: {
+              type: "agent",
+              provider: "codewith",
+              prompt: "triage only",
+              cwd: root,
+              timeoutMs: 10_000,
+            },
+          },
+        ],
+      });
+      const executing = executeWorkflow(store, workflow, {
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, LOOPS_CODEWITH_AGENT_POLL_MS: "50" },
+      });
+      const runId = await waitUntil(() => {
+        const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0];
+        const step = run ? store.getWorkflowStepRun(run.id, "triage") : undefined;
+        return step?.status === "running" && step.stdout?.includes('"status": "running"') ? run.id : undefined;
+      }, { label: "codewith progress recorded" });
+      const runningStep = store.getWorkflowStepRun(runId, "triage")!;
+      expect(runningStep.status).toBe("running");
+      expect(runningStep.stdout).toContain('"status": "running"');
+      expect(runningStep.stdout).toContain('"lastEventSeq": 3');
+      const progressEvents = store.listWorkflowEvents(runId).filter((event) => event.eventType === "step_progress");
+      expect(progressEvents.length).toBeGreaterThan(0);
+      expect(progressEvents.at(-1)?.payload?.agentId).toBe("agent-progress");
+      expect(progressEvents.at(-1)?.payload?.lastEventSeq).toBe(3);
+
+      openGate(gate);
+      const result = await executing;
+      expect(result.status).toBe("succeeded");
+      expect(store.getWorkflowStepRun(runId, "triage")?.status).toBe("succeeded");
     } finally {
       store.close();
       rmSync(root, { recursive: true, force: true });
@@ -412,20 +490,22 @@ describe("workflow runner", () => {
     const store = new Store(":memory:");
     const root = mkdtempSync(join(tmpdir(), "loops-idempotent-active-"));
     const marker = join(root, "marker");
+    const gate = join(root, "gate");
     try {
       const workflow = store.createWorkflow({
         name: "active-idempotency",
         steps: [
           {
             id: "slow",
-            target: { type: "command", command: `sleep 1; printf x >> ${JSON.stringify(marker)}`, shell: true },
+            target: { type: "command", command: gatedWriteCommand(gate, marker, { text: "x", append: true }), shell: true },
           },
         ],
       });
       const first = executeWorkflow(store, workflow, { idempotencyKey: "same-active-run" });
       const second = executeWorkflow(store, workflow, { idempotencyKey: "same-active-run" }).catch((error) => error);
-      const firstResult = await first;
       const secondResult = await second;
+      openGate(gate);
+      const firstResult = await first;
       expect(firstResult.status).toBe("succeeded");
       expect(secondResult).toBeInstanceOf(Error);
       expect(String(secondResult.message)).toContain("not claimable");
@@ -441,13 +521,14 @@ describe("workflow runner", () => {
     const store = new Store(":memory:");
     const root = mkdtempSync(join(tmpdir(), "loops-workflow-timeout-"));
     const marker = join(root, "late-write");
+    const gate = join(root, "gate");
     try {
       const workflow = store.createWorkflow({
         name: "workflow-target-timeout",
         steps: [
           {
             id: "slow",
-            target: { type: "command", command: `sleep 1; printf late > ${JSON.stringify(marker)}`, shell: true },
+            target: { type: "command", command: gatedWriteCommand(gate, marker), shell: true },
           },
         ],
       });
@@ -463,7 +544,7 @@ describe("workflow runner", () => {
       });
       const workflowRun = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0]!;
       const step = store.getWorkflowStepRun(workflowRun.id, "slow")!;
-      await Bun.sleep(1_100);
+      await expectMarkerNeverWritten(gate, marker);
       expect(result.completed[0]?.status).toBe("timed_out");
       expect(workflowRun.status).toBe("timed_out");
       expect(step.status).toBe("timed_out");
@@ -479,13 +560,14 @@ describe("workflow runner", () => {
     const store = new Store(":memory:");
     const root = mkdtempSync(join(tmpdir(), "loops-live-lease-"));
     const marker = join(root, "marker");
+    const gate = join(root, "gate");
     try {
       const workflow = store.createWorkflow({
         name: "live-lease",
         steps: [
           {
             id: "slow",
-            target: { type: "command", command: `sleep 1; printf x >> ${JSON.stringify(marker)}`, shell: true },
+            target: { type: "command", command: gatedWriteCommand(gate, marker, { text: "x", append: true }), shell: true },
           },
         ],
       });
@@ -505,16 +587,11 @@ describe("workflow runner", () => {
         scheduledFor: claim!.run.scheduledFor,
         idempotencyKey: `${loop.id}:${claim!.run.scheduledFor}:attempt:${claim!.run.attempt}`,
       });
-      let runId: string | undefined;
-      for (let i = 0; i < 100; i++) {
+      const runId = await waitUntil(() => {
         const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0];
         const step = run ? store.getWorkflowStepRun(run.id, "slow") : undefined;
-        if (run && step?.status === "running" && step.pid !== undefined) {
-          runId = run.id;
-          break;
-        }
-        await Bun.sleep(10);
-      }
+        return run && step?.status === "running" && step.pid !== undefined ? run.id : undefined;
+      }, { label: "workflow step running with pid" });
       expect(runId).toBeDefined();
       const recovered = store.recoverExpiredRunLeases(new Date("2026-01-01T00:00:01Z"));
       expect(recovered).toHaveLength(0);
@@ -527,6 +604,7 @@ describe("workflow runner", () => {
       });
       expect(tickResult.completed).toHaveLength(0);
       expect(store.listWorkflowRuns({ workflowId: workflow.id })).toHaveLength(1);
+      openGate(gate);
       const result = await executing;
       expect(result.status).toBe("succeeded");
       expect(readFileSync(marker, "utf8")).toBe("x");
@@ -540,13 +618,14 @@ describe("workflow runner", () => {
     const store = new Store(":memory:");
     const root = mkdtempSync(join(tmpdir(), "loops-live-overlap-"));
     const marker = join(root, "marker");
+    const gate = join(root, "gate");
     try {
       const workflow = store.createWorkflow({
         name: "live-overlap",
         steps: [
           {
             id: "slow",
-            target: { type: "command", command: `sleep 1; printf x >> ${JSON.stringify(marker)}`, shell: true },
+            target: { type: "command", command: gatedWriteCommand(gate, marker, { text: "x", append: true }), shell: true },
           },
         ],
       });
@@ -567,16 +646,11 @@ describe("workflow runner", () => {
         scheduledFor: claim!.run.scheduledFor,
         idempotencyKey: `${loop.id}:${claim!.run.scheduledFor}:attempt:${claim!.run.attempt}`,
       });
-      let runId: string | undefined;
-      for (let i = 0; i < 100; i++) {
+      const runId = await waitUntil(() => {
         const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0];
         const step = run ? store.getWorkflowStepRun(run.id, "slow") : undefined;
-        if (run && step?.status === "running" && step.pid !== undefined) {
-          runId = run.id;
-          break;
-        }
-        await Bun.sleep(10);
-      }
+        return run && step?.status === "running" && step.pid !== undefined ? run.id : undefined;
+      }, { label: "workflow step running with pid" });
       expect(runId).toBeDefined();
       const tickResult = await tick({
         store,
@@ -587,6 +661,7 @@ describe("workflow runner", () => {
       expect(tickResult.recovered).toHaveLength(0);
       expect(store.getRun(claim!.run.id)?.status).toBe("running");
       expect(store.listWorkflowRuns({ workflowId: workflow.id })).toHaveLength(1);
+      openGate(gate);
       const result = await executing;
       expect(result.status).toBe("succeeded");
       expect(readFileSync(marker, "utf8")).toBe("x");
@@ -600,11 +675,12 @@ describe("workflow runner", () => {
     const store = new Store(":memory:");
     const root = mkdtempSync(join(tmpdir(), "loops-live-command-"));
     const marker = join(root, "marker");
+    const gate = join(root, "gate");
     try {
       const loop = store.createLoop({
         name: "live-command-loop",
         schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
-        target: { type: "command", command: `sleep 1; printf x >> ${JSON.stringify(marker)}`, shell: true },
+        target: { type: "command", command: gatedWriteCommand(gate, marker, { text: "x", append: true }), shell: true },
         leaseMs: 50,
         maxAttempts: 2,
         retryDelayMs: 1,
@@ -615,10 +691,7 @@ describe("workflow runner", () => {
       const executing = executeLoopTarget(store, loop, claim!.run, {
         onSpawn: (pid) => store.markRunPid(claim!.run.id, pid, "crashed"),
       });
-      for (let i = 0; i < 100; i++) {
-        if (store.getRun(claim!.run.id)?.pid !== undefined) break;
-        await Bun.sleep(10);
-      }
+      await waitUntil(() => store.getRun(claim!.run.id)?.pid !== undefined, { label: "run pid recorded" });
       expect(store.getRun(claim!.run.id)?.pid).toBeDefined();
       const recovered = store.recoverExpiredRunLeases(new Date("2026-01-01T00:00:01Z"));
       expect(recovered).toHaveLength(0);
@@ -630,6 +703,7 @@ describe("workflow runner", () => {
       expect(tickResult.completed).toHaveLength(0);
       expect(tickResult.recovered).toHaveLength(0);
       expect(store.getRun(claim!.run.id)?.status).toBe("running");
+      openGate(gate);
       const result = await executing;
       expect(result.status).toBe("succeeded");
       expect(readFileSync(marker, "utf8")).toBe("x");
@@ -657,40 +731,286 @@ describe("workflow runner", () => {
     }
   });
 
+  test("bounds parent run envelopes to per-step summaries", async () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "big-output",
+        steps: [
+          { id: "noisy", target: { type: "command", command: "printf 'x%.0s' $(seq 1 20000)", shell: true } },
+        ],
+      });
+      const result = await executeWorkflow(store, workflow);
+      expect(result.status).toBe("succeeded");
+      const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0]!;
+      const step = store.getWorkflowStepRun(run.id, "noisy")!;
+      expect(step.stdout).toHaveLength(20_000);
+      const envelope = parseEnvelope(result.stdout);
+      expect(envelope.steps[0]?.stdoutBytes).toBe(20_000);
+      expect(envelope.steps[0]?.stdoutExcerpt).toContain("chars omitted");
+      expect(result.stdout).not.toContain("x".repeat(5_000));
+      expect(result.stdout.length).toBeLessThan(10_000);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("maps gate blocked exit codes to skipped without failing the loop run", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-gate-blocked-"));
+    const marker = join(root, "marker");
+    try {
+      const workflow = store.createWorkflow({
+        name: "gate-blocked",
+        steps: [
+          { id: "triage-gate", target: { type: "command", command: "printf policy-blocked; exit 12", shell: true } },
+          {
+            id: "work",
+            dependsOn: ["triage-gate"],
+            target: { type: "command", command: `printf ran > ${JSON.stringify(marker)}`, shell: true },
+          },
+        ],
+      });
+      store.createLoop({
+        name: "gate-blocked-loop",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "workflow", workflowId: workflow.id },
+      });
+      const result = await tick({
+        store,
+        runnerId: "test",
+        now: () => new Date("2026-01-01T00:00:00Z"),
+      });
+
+      expect(result.completed).toHaveLength(1);
+      expect(result.completed[0]?.status).toBe("succeeded");
+      const workflowRun = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0]!;
+      expect(workflowRun.status).toBe("succeeded");
+      const gate = store.getWorkflowStepRun(workflowRun.id, "triage-gate")!;
+      expect(gate.status).toBe("skipped");
+      expect(gate.exitCode).toBe(12);
+      expect(gate.error).toStartWith("blocked:");
+      expect(gate.stdout).toContain("policy-blocked");
+      const work = store.getWorkflowStepRun(workflowRun.id, "work")!;
+      expect(work.status).toBe("skipped");
+      expect(work.error).toStartWith("blocked:");
+      expect(existsSync(marker)).toBe(false);
+      const envelope = parseEnvelope(store.getRun(result.completed[0]!.id)?.stdout ?? "");
+      expect(envelope.steps.map((step) => step.blocked)).toEqual([true, true]);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("gate steps still fail on non-blocked exit codes", async () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "gate-failed",
+        steps: [{ id: "triage-gate", target: { type: "command", command: "exit 1", shell: true } }],
+      });
+      const result = await executeWorkflow(store, workflow);
+      expect(result.status).toBe("failed");
+      const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0]!;
+      expect(run.status).toBe("failed");
+      expect(store.getWorkflowStepRun(run.id, "triage-gate")?.status).toBe("failed");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("steps merely containing 'gate' as a substring never inherit blocked-exit semantics", async () => {
+    const store = new Store(":memory:");
+    try {
+      const steps: Array<{ id: string; name?: string }> = [
+        { id: "sync-gateway" },
+        { id: "aggregate-results" },
+        { id: "delegate", name: "investigate results" },
+      ];
+      for (const step of steps) {
+        const workflow = store.createWorkflow({
+          name: `gate-substring-${step.id}`,
+          steps: [{ ...step, target: { type: "command", command: "exit 12", shell: true } }],
+        });
+        const result = await executeWorkflow(store, workflow);
+        expect(result.status).toBe("failed");
+        const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0]!;
+        expect(run.status).toBe("failed");
+        const stepRun = store.getWorkflowStepRun(run.id, step.id)!;
+        expect(stepRun.status).toBe("failed");
+        expect(stepRun.error ?? "").not.toStartWith("blocked:");
+      }
+    } finally {
+      store.close();
+    }
+  });
+
+  test("honors explicit blockedExitCodes overrides on any step", async () => {
+    const store = new Store(":memory:");
+    try {
+      const blockingStep: WorkflowStepInput & { blockedExitCodes: number[] } = {
+        id: "check",
+        blockedExitCodes: [3],
+        target: { type: "command", command: "exit 3", shell: true },
+      };
+      const optedOutGate: WorkflowStepInput & { blockedExitCodes: number[] } = {
+        id: "strict-gate",
+        blockedExitCodes: [],
+        target: { type: "command", command: "exit 12", shell: true },
+      };
+      const blocking = store.createWorkflow({ name: "custom-blocked", steps: [blockingStep] });
+      const optedOut = store.createWorkflow({ name: "gate-opt-out", steps: [optedOutGate] });
+
+      const blockedResult = await executeWorkflow(store, blocking);
+      expect(blockedResult.status).toBe("succeeded");
+      const blockedRun = store.listWorkflowRuns({ workflowId: blocking.id, limit: 1 })[0]!;
+      expect(store.getWorkflowStepRun(blockedRun.id, "check")?.status).toBe("skipped");
+      expect(store.getWorkflowStepRun(blockedRun.id, "check")?.error).toStartWith("blocked:");
+
+      const failedResult = await executeWorkflow(store, optedOut);
+      expect(failedResult.status).toBe("failed");
+      const failedRun = store.listWorkflowRuns({ workflowId: optedOut.id, limit: 1 })[0]!;
+      expect(store.getWorkflowStepRun(failedRun.id, "strict-gate")?.status).toBe("failed");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("goal workflow runs execute each plan node with its own objective", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-goal-objectives-"));
+    const marker = join(root, "objectives");
+    try {
+      const workflow = store.createWorkflow({
+        name: "goal-objectives",
+        goal: { objective: "run every node objective", maxTurns: 5 },
+        steps: [
+          {
+            id: "echo",
+            target: { type: "command", command: `printf '%s\\n' "$LOOPS_GOAL_NODE_OBJECTIVE" >> ${JSON.stringify(marker)}`, shell: true },
+          },
+        ],
+      });
+      const model = mockObjects([
+        {
+          nodes: [
+            { key: "alpha", objective: "alpha objective", dependsOn: [], priority: 0, tokenBudget: null },
+            { key: "beta", objective: "beta objective", dependsOn: ["alpha"], priority: 0, tokenBudget: null },
+          ],
+        },
+        {
+          achieved: true,
+          status: "complete",
+          evidence: ["both node objectives were rendered"],
+          unmetRequirements: [],
+          adversarialReview: "Verified each node execution received its own objective.",
+        },
+      ]);
+      const result = await executeWorkflow(store, workflow, { goalModel: model });
+      expect(result.status).toBe("succeeded");
+      expect(store.listWorkflowRuns({ workflowId: workflow.id })).toHaveLength(2);
+      expect(readFileSync(marker, "utf8")).toBe("alpha objective\nbeta objective\n");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("refuses recovery while a recorded step process is still alive", async () => {
     const store = new Store(":memory:");
     const root = mkdtempSync(join(tmpdir(), "loops-live-recover-"));
     const marker = join(root, "marker");
+    const gate = join(root, "gate");
     try {
       const workflow = store.createWorkflow({
         name: "live-recover",
         steps: [
           {
             id: "slow",
-            target: { type: "command", command: `sleep 1; printf x >> ${JSON.stringify(marker)}`, shell: true },
+            target: { type: "command", command: gatedWriteCommand(gate, marker, { text: "x", append: true }), shell: true },
           },
         ],
       });
       const executing = executeWorkflow(store, workflow, { idempotencyKey: "live-recover" });
-      let runId: string | undefined;
-      for (let i = 0; i < 100; i++) {
+      const runId = await waitUntil(() => {
         const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0];
         const step = run ? store.getWorkflowStepRun(run.id, "slow") : undefined;
-        if (run && step?.status === "running" && step.pid !== undefined) {
-          runId = run.id;
-          break;
-        }
-        await Bun.sleep(10);
-      }
+        return run && step?.status === "running" && step.pid !== undefined ? run.id : undefined;
+      }, { label: "workflow step running with pid" });
       expect(runId).toBeDefined();
       expect(() => store.recoverWorkflowRun(runId!, "must not duplicate live work")).toThrow("still alive");
       expect(store.getWorkflowStepRun(runId!, "slow")?.status).toBe("running");
+      openGate(gate);
       const result = await executing;
       expect(result.status).toBe("succeeded");
       expect(readFileSync(marker, "utf8")).toBe("x");
     } finally {
       store.close();
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Regression (MEDIUM 2): a resumed idempotent workflow run (e.g. its loop run's
+  // lease was stolen and re-claimed at the same attempt) may carry steps left
+  // "running" by the interrupted, now-dead executor. Those steps are not
+  // claimable and would strand the workflow. On resume the dead steps are
+  // recovered to pending and re-run instead of orphaning the workflow forever.
+  test("resumed idempotent workflow run recovers steps left running with a dead pid", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-resume-recover-"));
+    const marker = join(root, "marker");
+    const DEAD_PID = 0x3fffffff;
+    try {
+      const workflow = store.createWorkflow({
+        name: "resume-recover",
+        steps: [{ id: "write", target: { type: "command", command: `printf done > ${marker}`, shell: true } }],
+      });
+      // Simulate an interrupted executor: the step is "running" with a dead pid.
+      const stranded = store.createWorkflowRun({ workflow, idempotencyKey: "resume-key" });
+      store.startWorkflowStepRun(stranded.id, "write");
+      store.markWorkflowStepPid(stranded.id, "write", DEAD_PID);
+      expect(store.getWorkflowStepRun(stranded.id, "write")?.status).toBe("running");
+
+      // Re-run with the same idempotency key: createWorkflowRun returns the
+      // stranded run, recovery resets the dead step, and it re-executes.
+      const result = await executeWorkflow(store, workflow, { idempotencyKey: "resume-key" });
+
+      expect(result.status).toBe("succeeded");
+      expect(store.listWorkflowRuns({ workflowId: workflow.id })).toHaveLength(1);
+      expect(store.getWorkflowStepRun(stranded.id, "write")?.status).toBe("succeeded");
+      expect(readFileSync(marker, "utf8").trim()).toBe("done");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Regression (MEDIUM 3): an unexpected throw inside the step loop (e.g. a store
+  // error like SQLITE_BUSY past busy_timeout) must not leave the workflow_run
+  // stuck "running" forever — it is finalized failed and a failed result returned.
+  test("executeWorkflow finalizes the workflow run failed when the step loop throws unexpectedly", async () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "loop-throws",
+        steps: [{ id: "only", target: { type: "command", command: "true" } }],
+      });
+      // beforePersist runs inside the step loop; throwing an unexpected error
+      // there stands in for any mid-loop store failure.
+      const result = await executeWorkflow(store, workflow, {
+        beforePersist: () => {
+          throw new Error("disk on fire");
+        },
+      });
+
+      expect(result.status).toBe("failed");
+      expect(result.error).toContain("disk on fire");
+      const runs = store.listWorkflowRuns({ workflowId: workflow.id });
+      expect(runs).toHaveLength(1);
+      expect(runs[0]?.status).toBe("failed");
+    } finally {
+      store.close();
     }
   });
 });

@@ -1,15 +1,165 @@
-export * from "./types.js";
+/**
+ * Curated public API for @hasna/loops.
+ *
+ * Stable exports are safe to build on and follow semver. Experimental exports
+ * may change shape between minor versions; import them knowingly. The
+ * `@hasna/loops/storage` subpath (the raw Store) is internal plumbing kept
+ * only for advanced integrations and may change without notice.
+ */
+
+// ---------------------------------------------------------------------------
+// Stable: SDK client
+// ---------------------------------------------------------------------------
 export { LoopsClient, loops, openAutomationsRuntimeBinding } from "./sdk/index.js";
-export type { LoopsClientOptions } from "./sdk/index.js";
+export type { ListLoopsFilters, ListRunsFilters, LoopsClientOptions } from "./sdk/index.js";
+
+// ---------------------------------------------------------------------------
+// Stable: MCP server factory and tool metadata
+// ---------------------------------------------------------------------------
 export { createLoopsMcpServer, listToolsForCli, LOOPS_MCP_TOOLS } from "./mcp/index.js";
 export type { LoopsMcpToolMetadata } from "./mcp/index.js";
+
+// ---------------------------------------------------------------------------
+// Stable: coded errors (branch on `.code` instead of message text)
+// ---------------------------------------------------------------------------
+export { AmbiguousNameError, CodedError, LoopArchivedError, LoopNotFoundError, ValidationError } from "./lib/errors.js";
+
+// ---------------------------------------------------------------------------
+// Stable: core domain types
+// ---------------------------------------------------------------------------
+export type {
+  // loops and runs
+  CatchUpPolicy,
+  CreateLoopInput,
+  ExecutorResult,
+  IntervalAnchor,
+  Loop,
+  LoopRun,
+  LoopStatus,
+  OverlapPolicy,
+  RunStatus,
+  TimeoutMs,
+  // schedules
+  CronSchedule,
+  DynamicSchedule,
+  IntervalSchedule,
+  OnceSchedule,
+  ScheduleSpec,
+  // targets
+  AccountRef,
+  AgentAllowlistSpec,
+  AgentConfigIsolation,
+  AgentPermissionMode,
+  AgentPromptSource,
+  AgentProvider,
+  AgentRoutingSpec,
+  AgentSandbox,
+  AgentTarget,
+  AgentTargetBase,
+  AgentWorktreeMode,
+  AgentWorktreeSpec,
+  CommandTarget,
+  ExecutableTarget,
+  ExecutableTargetInput,
+  LoopTarget,
+  LoopTargetInput,
+  PromptFileAgentTarget,
+  RuntimePreflightPolicy,
+  WorkflowTarget,
+  // workflows
+  CreateWorkflowInput,
+  WorkflowEvent,
+  WorkflowRun,
+  WorkflowRunStatus,
+  WorkflowSpec,
+  WorkflowStatus,
+  WorkflowStep,
+  WorkflowStepInput,
+  WorkflowStepRun,
+  WorkflowStepRunStatus,
+} from "./types.js";
+
+// ---------------------------------------------------------------------------
+// Stable: diagnostics and schedule helpers
+// ---------------------------------------------------------------------------
+export { runDoctor } from "./lib/doctor.js";
+export type { DoctorCheck, DoctorReport, DoctorSeverity } from "./lib/doctor.js";
+export { buildHealthReport, classifyRunFailure, expectationForLoop } from "./lib/health.js";
+export type {
+  LoopExpectationResult,
+  LoopsHealthReport,
+  RunFailureClassification,
+  RunFailureSignal,
+} from "./lib/health.js";
+export { computeNextAfter, initialNextRun, nextCronRun, parseCron, parseDuration } from "./lib/recurrence.js";
+
+// ---------------------------------------------------------------------------
+// Experimental: scheduler internals shared by CLI/SDK/MCP
+// ---------------------------------------------------------------------------
+export { runLoopNow, tick } from "./lib/scheduler.js";
+export type {
+  ManualRunSource,
+  RunLoopNowDeps,
+  RunLoopNowExecuted,
+  RunLoopNowMode,
+  RunLoopNowResult,
+  RunLoopNowScheduled,
+} from "./lib/scheduler.js";
+
+// ---------------------------------------------------------------------------
+// Experimental: storage contracts (prefer LoopsClient; kept for advanced consumers)
+// ---------------------------------------------------------------------------
 export { Store } from "./lib/store.js";
-export { parseDuration, parseCron, nextCronRun, initialNextRun, computeNextAfter } from "./lib/schedule.js";
+export {
+  POSTGRES_MIGRATION_LEDGER_TABLE,
+  POSTGRES_STORAGE_MIGRATIONS,
+  PostgresStorage,
+  SqliteLoopStorage,
+  checksumStorageSql,
+  createPostgresStorage,
+  createSqliteLoopStorage,
+} from "./lib/storage/index.js";
+export type {
+  AppliedStorageMigration,
+  AuditEventRecord,
+  LoopStorageBackend,
+  LoopStorageContract,
+  LoopStorageMethodName,
+  PostgresQueryExecutor,
+  RunnerLeaseRecord,
+  RunnerLeaseStatus,
+  RunnerMachineRecord,
+  RunnerMachineStatus,
+  SchemaMigrationStorage,
+  StorageMigration,
+  StorageMigrationPlanItem,
+  StorageMigrationResult,
+} from "./lib/storage/index.js";
+
+// ---------------------------------------------------------------------------
+// Experimental: deployment mode contract
+// ---------------------------------------------------------------------------
+export {
+  LOOP_DEPLOYMENT_MODES,
+  buildDeploymentStatus,
+  deploymentStatusLine,
+  loopControlPlaneConfig,
+  normalizeLoopDeploymentMode,
+  resolveLoopDeploymentMode,
+} from "./lib/mode.js";
+export type { LoopControlPlaneConfig, LoopDeploymentMode, LoopDeploymentStatus, LoopModeResolution, LoopSourceOfTruth } from "./lib/mode.js";
+
+// ---------------------------------------------------------------------------
+// Experimental: execution and workflow engines
+// ---------------------------------------------------------------------------
 export { executeLoop, executeTarget, preflightTarget } from "./lib/executor.js";
+export { executeLoopTarget, executeWorkflow, preflightWorkflow } from "./lib/workflow-runner.js";
+export { workflowBodyFromJson, workflowExecutionOrder } from "./lib/workflow-spec.js";
+
+// ---------------------------------------------------------------------------
+// Experimental: machines, templates, hygiene, goals
+// ---------------------------------------------------------------------------
 export { listOpenMachines, refreshLoopMachine, resolveLoopMachine } from "./lib/machines.js";
-export { tick } from "./lib/scheduler.js";
-export { executeWorkflow, executeLoopTarget, preflightWorkflow } from "./lib/workflow-runner.js";
-export { workflowExecutionOrder, workflowBodyFromJson } from "./lib/workflow-spec.js";
 export {
   BOUNDED_AGENT_WORKER_VERIFIER_TEMPLATE_ID,
   EVENT_WORKER_VERIFIER_TEMPLATE_ID,
@@ -21,9 +171,71 @@ export {
   renderLoopTemplate,
   renderTodosTaskWorkerVerifierWorkflow,
 } from "./lib/templates.js";
-export { runDoctor } from "./lib/doctor.js";
-export { buildHealthReport, classifyRunFailure, expectationForLoop } from "./lib/health.js";
 export { buildDuplicateOverlapReport, buildNameHygieneReport, buildScriptInventoryReport } from "./lib/hygiene.js";
+export {
+  LOOPS_MIGRATION_SCHEMA,
+  applyImportMigrationBundle,
+  buildImportMigrationPlan,
+  buildSelfHostedMigrationPlan,
+  exportLoopsMigrationBundle,
+  migrationHash,
+  publicMigrationBundle,
+  registerSelfHostedRunner,
+  selfHostedControlPlaneSummary,
+  validateLoopsMigrationBundle,
+} from "./lib/migration.js";
 export { runGoal } from "./lib/goal/runner.js";
 export { resolveGoalModel } from "./lib/goal/model-factory.js";
 export { isTerminal as isGoalTerminal, readyNodeKeys, rollupSummary } from "./lib/goal/status.js";
+
+// ---------------------------------------------------------------------------
+// Experimental: integration and template types
+// ---------------------------------------------------------------------------
+export type {
+  CreateWorkflowInvocationInput,
+  Goal,
+  GoalAutoExecute,
+  GoalExecutorResult,
+  GoalPlan,
+  GoalPlanNode,
+  GoalPlanNodeStatus,
+  GoalPlanStatus,
+  GoalRollup,
+  GoalRun,
+  GoalSpec,
+  GoalStatus,
+  LoopMachineConfidence,
+  LoopMachineRef,
+  LoopMachineRoute,
+  LoopTemplateKind,
+  LoopTemplateSource,
+  LoopTemplateSummary,
+  LoopTemplateVariable,
+  LoopTemplateVariableType,
+  OpenAutomationsRuntimeBinding,
+  PersistGuardOptions,
+  UpsertWorkflowWorkItemInput,
+  WorkflowInvocation,
+  WorkflowInvocationIntent,
+  WorkflowInvocationOutputPolicy,
+  WorkflowInvocationRef,
+  WorkflowInvocationScope,
+  WorkflowInvocationSourceKind,
+  WorkflowInvocationSubjectKind,
+  WorkflowWorkItem,
+  WorkflowWorkItemStatus,
+} from "./types.js";
+export type {
+  ApplyLoopsMigrationResult,
+  ExportLoopsMigrationOptions,
+  ImportLoopsMigrationOptions,
+  LoopsMigrationAction,
+  LoopsMigrationBundle,
+  LoopsMigrationPlan,
+  LoopsMigrationPlanRow,
+  LoopsMigrationPlanSummary,
+  LoopsMigrationResource,
+  RunnerRegistrationOptions,
+  RunnerRegistrationResult,
+  SelfHostedPlanOptions,
+} from "./lib/migration.js";

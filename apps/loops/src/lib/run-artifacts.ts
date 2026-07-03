@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { mkdirSync, renameSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 function shortHash(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 12);
@@ -28,7 +28,7 @@ export function workflowRunProjectSlug(projectKey: string | undefined): string {
   return safeRunPathSlug(projectKey.startsWith("/") ? basename(projectKey) : projectKey, "project");
 }
 
-export function writeWorkflowRunManifest(args: {
+export interface WorkflowRunManifestArgs {
   loopsDataDir: string;
   workflowRunId: string;
   workflowId: string;
@@ -39,14 +39,29 @@ export function writeWorkflowRunManifest(args: {
   subjectKind?: string;
   rawSubjectRef?: string;
   payload: Record<string, unknown>;
-}): string {
+}
+
+export interface StagedWorkflowRunManifest {
+  /** Final manifest.json location, valid only after {@link commitWorkflowRunManifest}. */
+  manifestPath: string;
+  /** Temp file holding the staged manifest content. */
+  tmpPath: string;
+}
+
+/**
+ * Write the manifest to `manifest.json.tmp` so callers can stage the
+ * filesystem side effect before opening a database transaction and promote it
+ * with {@link commitWorkflowRunManifest} only after COMMIT succeeds.
+ */
+export function stageWorkflowRunManifest(args: WorkflowRunManifestArgs): StagedWorkflowRunManifest {
   const projectSlug = workflowRunProjectSlug(args.projectKey);
   const subjectKey = workflowRunSubjectKey(args.subjectKind, args.rawSubjectRef);
   const dir = join(args.loopsDataDir, "runs", projectSlug, subjectKey, args.workflowRunId);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const manifestPath = join(dir, "manifest.json");
+  const tmpPath = `${manifestPath}.tmp`;
   writeFileSync(
-    manifestPath,
+    tmpPath,
     JSON.stringify(
       {
         version: 1,
@@ -66,5 +81,29 @@ export function writeWorkflowRunManifest(args: {
     ),
     { mode: 0o600 },
   );
-  return manifestPath;
+  return { manifestPath, tmpPath };
+}
+
+export function commitWorkflowRunManifest(staged: StagedWorkflowRunManifest): string {
+  renameSync(staged.tmpPath, staged.manifestPath);
+  return staged.manifestPath;
+}
+
+export function discardWorkflowRunManifest(staged: StagedWorkflowRunManifest): void {
+  rmSync(staged.tmpPath, { force: true });
+  // stageWorkflowRunManifest already created runs/<project>/<subject>/<runId>/
+  // for a run id that never got a DB row (idempotency race loser, rollback),
+  // so remove the now-empty per-run directory too. Plain rmdir only succeeds
+  // on empty directories, so any artifacts already written there survive. The
+  // shared subject/project parents are left alone: removing them would race a
+  // concurrent stage for the same subject between its mkdir and write.
+  try {
+    rmdirSync(dirname(staged.manifestPath));
+  } catch {
+    /* not empty or already gone */
+  }
+}
+
+export function writeWorkflowRunManifest(args: WorkflowRunManifestArgs): string {
+  return commitWorkflowRunManifest(stageWorkflowRunManifest(args));
 }

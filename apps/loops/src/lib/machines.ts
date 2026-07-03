@@ -1,11 +1,42 @@
-import {
-  discoverMachineTopology,
-  resolveMachineRoute,
-  type MachineRouteResolution,
-  type MachineTopology,
-  type MachineTopologyEntry,
+import { createRequire } from "node:module";
+import type {
+  MachineRouteResolution,
+  MachineTopology,
+  MachineTopologyEntry,
 } from "@hasna/machines/consumer";
 import type { LoopMachineRef } from "../types.js";
+
+type MachinesConsumer = typeof import("@hasna/machines/consumer");
+
+let consumerModule: MachinesConsumer | undefined;
+
+/**
+ * `@hasna/machines` is an optional dependency: loops without machine
+ * assignment must keep working when it is not installed. Loading is deferred
+ * to first machine-routing use so module import never fails. The package's
+ * exports map only declares the `import` condition, so resolve with Bun's
+ * import resolver and require the resolved file synchronously.
+ */
+function machinesConsumer(): MachinesConsumer {
+  if (!consumerModule) {
+    try {
+      const resolved = Bun.resolveSync("@hasna/machines/consumer", import.meta.dir);
+      consumerModule = createRequire(import.meta.url)(resolved) as MachinesConsumer;
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `@hasna/machines is not available; install the optional dependency to use machine-assigned loops: ${detail}`,
+      );
+    }
+  }
+  return consumerModule;
+}
+
+export interface MachineCommandPlan {
+  command: string;
+  args: string[];
+  source: string;
+}
 
 export interface OpenMachineSummary {
   id: string;
@@ -59,14 +90,19 @@ function machineFromRoute(route: MachineRouteResolution, topology: MachineTopolo
 }
 
 export function listOpenMachines(): OpenMachineSummary[] {
-  const topology = discoverMachineTopology();
+  const topology = machinesConsumer().discoverMachineTopology();
   return topology.machines.map((entry) => entryToSummary(entry, topology));
 }
 
 export function resolveLoopMachine(machineId: string): LoopMachineRef {
-  const topology = discoverMachineTopology();
-  const route = resolveMachineRoute(machineId, { topology });
+  const consumer = machinesConsumer();
+  const topology = consumer.discoverMachineTopology();
+  const route = consumer.resolveMachineRoute(machineId, { topology });
   return machineFromRoute(route, topology);
+}
+
+export function resolveMachineCommand(machineId: string, command: string): MachineCommandPlan {
+  return machinesConsumer().resolveMachineCommand(machineId, command);
 }
 
 export function refreshLoopMachine(machine: LoopMachineRef): LoopMachineRef {

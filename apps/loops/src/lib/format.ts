@@ -73,11 +73,12 @@ export function publicLoop(loop: Loop): Record<string, unknown> {
   };
 }
 
-export function publicRun(run: LoopRun, showOutput = false): Record<string, unknown> {
+export function publicRun(run: LoopRun, showOutput = false, opts: { redactError?: boolean } = {}): Record<string, unknown> {
   return {
     ...run,
     stdout: showOutput ? run.stdout : run.stdout ? `[redacted ${run.stdout.length} chars]` : undefined,
     stderr: showOutput ? run.stderr : run.stderr ? `[redacted ${run.stderr.length} chars]` : undefined,
+    error: opts.redactError ? redact(run.error) : run.error,
   };
 }
 

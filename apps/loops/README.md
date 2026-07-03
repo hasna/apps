@@ -2,6 +2,12 @@
 
 OpenLoops is a local CLI and daemon for persistent loops and workflows: scheduled or recurring work that survives process restarts and records every run.
 
+Naming: the product is **OpenLoops**, published on npm as
+[`@hasna/loops`](https://www.npmjs.com/package/@hasna/loops) and developed in the
+[`hasna/loops`](https://github.com/hasna/loops) repository. The installed
+binaries are `loops`, `loops-daemon`, `loops-api`, `loops-runner`, and
+`loops-mcp`.
+
 It supports deterministic command loops, JSON-defined workflows, and guarded CLI adapters for headless coding agents:
 
 - `claude`
@@ -11,9 +17,54 @@ It supports deterministic command loops, JSON-defined workflows, and guarded CLI
 - `opencode run`
 - `codex exec`
 
+## Deployment Modes
+
+OpenLoops has three deployment modes:
+
+- `local`: SQLite in `LOOPS_DATA_DIR` is authoritative and `loops-daemon` executes scheduled work.
+- `self_hosted`: a user-operated `loops-api` control plane contract. This release exposes status, storage-backed `/v1` loop CRUD and run listing, runner claim/heartbeat/finalize protocol endpoints, a one-shot `loops-runner run-once` execution path for embedded control-plane hosts, id-preserving local export/import, and preview-only self-hosted migration/sync commands; full fleet rollout and remote apply are follow-up work.
+- `cloud`: a hosted control-plane contract. This release exposes client/runner status only; hosted tenant auth and infrastructure live outside this package.
+
+`local` is the default and requires no network, token, Postgres, or hosted
+service. Set `LOOPS_MODE` or `HASNA_LOOPS_MODE` to `local`, `self_hosted`, or
+`cloud` to choose explicitly. Without an explicit mode, `LOOPS_CLOUD_API_URL`
+selects `cloud`, while `LOOPS_API_URL` or `LOOPS_DATABASE_URL` selects
+`self_hosted`.
+
+The public `@hasna/loops` package owns the local runtime, mode resolver,
+self-hosted API contract, runner contract, SDK, MCP server, and CLI. Hosted
+tenant auth, account administration, and infrastructure live outside this
+package. Cloud mode is a public contract until a cloud-specific hosted URL and
+cloud token are configured through `LOOPS_CLOUD_API_URL` plus
+`LOOPS_CLOUD_TOKEN` or `HASNA_LOOPS_CLOUD_TOKEN`.
+
+Useful status commands:
+
+```bash
+loops mode
+loops --json mode
+loops self-hosted status
+loops self-hosted migrate --dry-run
+loops self-hosted runner-register --runner-id <id> --machine-id <machine> --apply
+loops export --file ./loops-export.json --dry-run
+loops export --file ./loops-export.json
+loops import ./loops-export.json
+loops cloud status
+loops-api status
+loops-runner status
+```
+
+See [Deployment Modes](docs/DEPLOYMENT_MODES.md) for the full package boundary
+and machine-placement contract.
+
 ## Install
 
-From npm:
+**OpenLoops requires the [Bun](https://bun.sh) runtime (`bun >= 1.0`).** The
+`loops`, `loops-daemon`, `loops-api`, `loops-runner`, and `loops-mcp` binaries
+run with a `#!/usr/bin/env bun` shebang, so Bun must be on `PATH` even when the
+package is installed with npm. Node.js is not a supported runtime.
+
+From npm (with Bun installed):
 
 ```bash
 npm install -g @hasna/loops
@@ -57,8 +108,9 @@ The package also exports the server factory for embedded hosts:
 import { createLoopsMcpServer } from "@hasna/loops/mcp";
 ```
 
-Available read tools include `loops_list`, `loops_show`, `loop_runs`,
-`loops_doctor`, `workflows_list`, `workflow_read`, and `workflow_validate`.
+Available read tools include `loops_list`, `loops_show`, `loops_runs`,
+`loops_doctor`, `loops_workflows_list`, `loops_workflow_read`, and
+`loops_workflow_validate`.
 Resources are available at `loops://runtime` and `loops://tools`.
 Those tools use the same `Store`, public redaction helpers, and workflow parser
 as the CLI and SDK, so read output and validation behavior stay aligned across
@@ -66,15 +118,19 @@ surfaces.
 
 Mutation tools are disabled by default. Start the server with
 `LOOPS_MCP_ALLOW_MUTATIONS=true` only for a trusted local MCP host that should be
-allowed to change loop state. Even then, mutation tools require exact
-confirmation strings: `loop_pause`, `loop_resume`, `loop_run_now`,
-`loop_create_command`, and `loop_create_workflow`. MCP `loop_run_now` schedules
-the loop for immediate daemon pickup; inline execution remains CLI-only.
+allowed to change loop state. The guarded mutation tools use canonical names:
+`loops_pause`, `loops_resume`, `loops_stop`, `loops_run_now`, `loops_archive`,
+`loops_unarchive`, `loops_create_command`, and `loops_create_workflow`.
+Deprecated `loop_*` aliases are still registered where compatibility needs them,
+but callers should use the `loops_*` names. Mutation tools do not require or
+accept confirmation-string parameters; the server-side environment opt-in is the
+gate. MCP `loops_run_now` schedules the loop for immediate daemon pickup; inline
+execution remains CLI-only.
 
 Keep host-affecting or long-running operations on the CLI: daemon
-start/stop/install/logs, inline `run-now`, `tick`, loop removal/archive
-maintenance, workflow create/migrate/cancel/recover, agent loop creation,
-template materialization, and event-route drains.
+start/stop/install/logs, inline `run-now`, `tick`, loop deletion, workflow
+create/migrate/cancel/recover, agent loop creation, template materialization,
+and event-route drains.
 
 ## Create Loops
 
@@ -197,7 +253,9 @@ non-secret routing/configuration data.
 
 ## Goals
 
-Add `--goal` to wrap a command, agent, or workflow loop in an AI-SDK orchestration layer. OpenLoops asks the configured model to create a flat DAG plan, executes ready nodes by calling the underlying target, then runs an adversarial achievement audit before marking the goal complete.
+Add `--goal` to wrap a command, agent, or workflow loop in an AI-SDK orchestration layer. OpenLoops asks the configured model to create a flat DAG plan, then executes ready plan nodes by re-running the underlying target once per node. Each node run is parameterized with that node's objective: agent prompts get the goal and node objective appended, and every wrapped process receives `LOOPS_GOAL_NODE_KEY` and `LOOPS_GOAL_NODE_OBJECTIVE` in its environment. An adversarial achievement audit runs before the goal is marked complete.
+
+The goal `autoExecute` mode is honored: `off` plans and persists the DAG without executing any nodes (the run reports the persisted plan), while `readyOnly` (the default) and `aiDirected` run the dependency-driven execution loop over ready nodes.
 
 ```bash
 export OPENROUTER_API_KEY=...
@@ -213,7 +271,7 @@ loops create agent repo-fixer \
   --goal-max-turns 5
 ```
 
-Goal planning and validation use the Vercel AI SDK with `@openrouter/ai-sdk-provider`. Set `OPENROUTER_API_KEY`; optionally set `LOOPS_GOAL_BASE_URL` to point at a local gateway compatible with OpenRouter. Goal context is passed to wrapped commands and agents as `LOOPS_GOAL_ID`, `LOOPS_GOAL_OBJECTIVE`, and `LOOPS_GOAL_NODE_KEY`.
+Goal planning and validation use the Vercel AI SDK with `@openrouter/ai-sdk-provider`. Set `OPENROUTER_API_KEY`; optionally set `LOOPS_GOAL_BASE_URL` to point at a local gateway compatible with OpenRouter. Goal context is passed to wrapped commands and agents as `LOOPS_GOAL_ID`, `LOOPS_GOAL_OBJECTIVE`, `LOOPS_GOAL_NODE_KEY`, and `LOOPS_GOAL_NODE_OBJECTIVE`.
 
 If a resumed goal plan has no runnable nodes, failed run output includes a
 structured `diagnostics` object with the concrete blocker and `owner`
@@ -224,7 +282,7 @@ Inspect configured and runtime goal state:
 
 ```bash
 loops goal show <loop-or-goal-id>
-loops goal status <goal-run-id-or-loop-run-id>
+loops goal show <goal-run-id-or-loop-run-id>
 ```
 
 Workflow JSON can also embed goals at the workflow or step level:
@@ -327,11 +385,11 @@ loops templates render todos-task-worker-verifier \
   --var taskTitle="Fix parser" \
   --var projectPath=/path/to/repo \
   --var provider=codewith \
-  --var authProfilePool=account004,account005,account006 \
+  --var authProfilePool=account001,account002,account003 \
   --var sandbox=workspace-write \
   --var todosProjectPath=$HOME/.hasna/loops \
   --var addDirs=$HOME/.hasna/todos,$HOME/.hasna/loops
-loops templates create-workflow todos-task-worker-verifier \
+loops workflows create --template todos-task-worker-verifier \
   --var taskId=<task-id> \
   --var projectPath=/path/to/repo
 loops templates render event-worker-verifier \
@@ -344,7 +402,7 @@ loops templates render bounded-agent-worker-verifier \
   --var objective="Check docs drift and queue tasks for gaps" \
   --var projectPath=/path/to/repo \
   --var provider=codewith \
-  --var authProfilePool=account004,account005 \
+  --var authProfilePool=account001,account002 \
   --var sandbox=workspace-write \
   --var worktreeMode=required
 loops templates render pr-review \
@@ -429,30 +487,31 @@ loops templates show custom-report
 loops templates render custom-report \
   --var objective="Check docs drift" \
   --var projectPath=/path/to/repo
-loops templates create-workflow custom-report \
+loops workflows create --template custom-report \
   --var objective="Check docs drift" \
   --var projectPath=/path/to/repo
 ```
 
 Use `--source builtin`, `--source custom`, or `--source all` on
-`list`, `show`, `render`, and `create-workflow` when automation needs an
-explicit source. Custom template ids and names cannot override built-ins.
+`templates list`, `templates show`, `templates render`, and
+`workflows create --template` when automation needs an explicit source. Custom
+template ids and names cannot override built-ins.
 Custom templates fail closed for `danger-full-access`, dangerous passthrough
 arguments, and implicit Codewith/Codex full-access defaults. If a custom
 Codewith/Codex template uses `permissionMode: "bypass"`, it must also set
 `sandbox` to `workspace-write` or `read-only`. Use built-in templates with
 explicit break-glass handling for emergency workflows that need full access.
 
-For event-driven task automation, `loops events handle todos-task` reads a
+For event-driven task automation, `loops routes create todos-task` reads a
 Hasna event envelope from stdin or `HASNA_EVENT_JSON`, records a
 `WorkflowInvocation`, upserts an admission work item, and admits that work item
 into a deduped one-shot workflow loop when route capacity allows:
 
 ```bash
-cat task-created-event.json | loops events handle todos-task \
+cat task-created-event.json | loops routes create todos-task \
   --template task-lifecycle \
   --provider codewith \
-  --auth-profile-pool account004,account005,account006 \
+  --auth-profile-pool account001,account002,account003 \
   --permission-mode bypass \
   --sandbox workspace-write \
   --todos-project "$HOME/.hasna/loops" \
@@ -485,7 +544,7 @@ selected.
 loops routes drain todos-task \
   --dry-run \
   --provider-rule area=frontend:claude:claude-ui-a,claude-ui-b \
-  --provider-rule area=backend:codewith:account004,account005 \
+  --provider-rule area=backend:codewith:account001,account002 \
   --worktree-mode required
 ```
 
@@ -522,9 +581,9 @@ For other Hasna apps that expose `@hasna/events` webhooks, use the generic
 handler:
 
 ```bash
-cat event.json | loops events handle generic \
+cat event.json | loops routes create generic \
   --provider codewith \
-  --auth-profile-pool account004,account005,account006 \
+  --auth-profile-pool account001,account002,account003 \
   --permission-mode bypass \
   --sandbox workspace-write \
   --project-path /path/to/repo \
@@ -567,7 +626,7 @@ loops routes requeue <work-item-id> --reason "fixed upstream blocker"
 loops routes invocations
 ```
 
-For Hasna OSS task-created routing, use a deterministic drain instead of tmux
+For OSS task-created routing, use a deterministic drain instead of tmux
 dispatch:
 
 ```bash
@@ -575,10 +634,10 @@ loops routes schedule todos-task oss-task-route-drain \
   --every 5m \
   --todos-project "$HOME/.hasna/loops" \
   --template task-lifecycle \
-  --project-path-prefix /home/hasna/workspace/hasna/opensource \
+  --project-path-prefix "$HOME/workspace/example/opensource" \
   --tags auto:route \
   --provider codewith \
-  --auth-profile-pool account004,account005,account006 \
+  --auth-profile-pool account001,account002,account003 \
   --add-dir "$HOME/.hasna/todos,$HOME/.hasna/loops" \
   --project-group oss \
   --max-dispatch 2 \
@@ -621,7 +680,7 @@ import { openAutomationsRuntimeBinding } from "@hasna/loops";
 
 const binding = openAutomationsRuntimeBinding();
 console.log(binding.handoff); // "claim-queue"
-console.log(binding.eventHandoff.handlerCommand); // "loops events handle generic"
+console.log(binding.eventHandoff.handlerCommand); // "loops routes create generic"
 ```
 
 The claim-queue handoff uses the OpenAutomations CLI or SDK:
@@ -634,18 +693,18 @@ automations queue fail <action-id> --runner open-loops:<worker-id> --code <code>
 
 For explicit event workflow routing, OpenAutomations can export the normalized
 event envelope and OpenLoops can consume it through the existing generic event
-handler:
+route:
 
 ```bash
 automations --json webhooks event <route> --body-json '<json>' \
-  | loops --json events handle generic
+  | loops --json routes create generic
 ```
 
 This is not automation materialization in OpenLoops. It is an explicit
 event-envelope workflow handoff: OpenAutomations owns deterministic automation
 specs, webhook normalization, queue state, approvals, DLQ, and replay; OpenLoops
 owns agent workflow invocation after the operator routes the envelope to
-`loops events handle generic`.
+`loops routes create generic`.
 
 Do not store automation specs in OpenLoops, infer automation triggers from event
 transport alone, or replace the OpenAutomations queue with loop/workflow rows.
@@ -660,59 +719,15 @@ write OpenLoops SQLite rows directly. The stable contract should be an
 idempotent CLI/SDK upsert that accepts a fully rendered one-shot workflow loop
 request and returns durable refs.
 
-Proposed SDK shape:
+The canonical `WorkflowUpsertRequest` / `WorkflowUpsertResult` shapes and their
+required semantics (dry-run/preflight/commit modes, `idempotencyKey` +
+`specHash` idempotency, dispatch behavior, and redaction-before-persistence)
+are specified in `docs/AUTOMATION_RUNTIME_DESIGN.md`; this README intentionally
+does not duplicate that spec.
 
-```ts
-type WorkflowUpsertRequest = {
-  idempotencyKey: string;
-  source: { kind: "action" | "automation" | "event"; id: string; dedupeKey?: string };
-  subject: { kind: "repo" | "task" | "pr" | "run"; id?: string; path?: string; url?: string };
-  workflow: { name: string; description?: string; steps: WorkflowStepInput[] };
-  loop: { name: string; schedule: { type: "once"; at: string }; machine?: LoopMachineRef };
-  route?: { projectPath?: string; projectGroup?: string; concurrencyGroup?: string };
-  execution?: AutomationExecutionPolicy;
-  mode?: "dry-run" | "preflight" | "commit";
-  dispatch?: "schedule" | "run-now" | "none";
-};
-
-type WorkflowUpsertResult = {
-  ok: boolean;
-  dryRun: boolean;
-  idempotencyKey: string;
-  specHash: string;
-  refs: {
-    workflowId?: string;
-    loopId?: string;
-    invocationId?: string;
-    workItemId?: string;
-    runId?: string;
-    manifestPath?: string;
-  };
-  action: "created" | "updated" | "reused" | "rejected";
-  preflight?: { ok: boolean; checks: unknown[]; error?: string };
-};
-```
-
-Required semantics:
-
-- `mode="dry-run"` validates, canonicalizes, hashes, and returns the same JSON
-  shape without mutating OpenLoops state.
-- `mode="preflight"` additionally checks provider binaries, machine routing,
-  accounts/auth profiles, prompt files, and workflow target compatibility before
-  commit.
-- `mode="commit"` is idempotent on `idempotencyKey` plus `specHash`: identical
-  requests return existing refs; changed specs create a new workflow version or
-  one-shot loop while preserving previous run history.
-- `dispatch="schedule"` stores a one-shot loop for the daemon; `run-now` claims
-  an immediate manual slot; `none` only materializes refs for another owner to
-  trigger later.
-- All persisted output is redacted before storage, and returned refs are enough
-  for the caller to inspect, cancel, replay, or resolve the run without querying
-  SQLite directly.
-
-See `docs/AUTOMATION_RUNTIME_DESIGN.md` for the planned DLQ/dead-letter
-lifecycle, including `loops dlq list/show/replay/resolve`, idempotent replay
-keys, and compatibility rules for `@hasna/actions`.
+The same design doc covers the planned DLQ/dead-letter lifecycle, including
+`loops dlq list/show/replay/resolve`, idempotent replay keys, and compatibility
+rules for `@hasna/actions`.
 
 The same design doc also defines the planned strict automation execution mode:
 minimal env inheritance, scoped secret refs, enforced allowlists,
@@ -867,11 +882,11 @@ On Linux this writes a user systemd service. On macOS it writes a LaunchAgent pl
 The adapters intentionally use provider command surfaces instead of pretending every agent has one SDK:
 
 - Claude uses `claude -p --output-format json` and safe-mode/local setting sources by default.
-- Codewith uses durable `codewith --ask-for-approval never agent start` background-agent runs by default, then polls `codewith agent read` until the run is terminal and records compact status/event evidence. Remote Codewith agent steps fail closed until remote durable readback is implemented, so workflows do not advance immediately after enqueue. OpenLoops rejects Codewith `extraArgs` that try to force `exec`, `--ephemeral`, or other non-durable exec-only flags for task-lifecycle, planner, worker, verifier, reviewer, release, or other long-running agentic work.
+- Codewith uses durable `codewith --ask-for-approval never agent start` background-agent runs by default, then polls `codewith agent read` until the run is terminal. While the step is running, OpenLoops records bounded agent id/status updates as `step_progress` workflow events and as the running step's compact stdout; on terminal completion it records compact status/event evidence. Remote Codewith agent steps fail closed until remote durable readback is implemented, so workflows do not advance immediately after enqueue. OpenLoops rejects Codewith `extraArgs` that try to force `exec`, `--ephemeral`, or other non-durable exec-only flags for task-lifecycle, planner, worker, verifier, reviewer, release, or other long-running agentic work.
 - AI Copilot and OpenCode use `run --format json --pure`. OpenCode requires an explicit provider/model id because ambient OpenCode config is machine-specific.
 - Cursor is CLI-first for now via the standalone `agent -p` binary. OpenLoops no longer falls back to `cursor agent`; install the standalone Cursor Agent CLI so preflight and scheduled runs use the same executable.
 - Codex uses `codex --ask-for-approval never exec --json --ephemeral --skip-git-repo-check`, with `--add-dir` for explicit extra writable directories where supported.
-- Agent prompts are sent through child stdin instead of argv where the provider supports stdin. Codewith durable background agents currently accept prompts as native `agent start` arguments, so OpenLoops stores only bounded status/event evidence and omits raw Codewith event payloads from workflow stdout.
+- Agent prompts are sent through child stdin instead of argv where the provider supports stdin. Codewith durable background agents currently accept prompts as native `agent start` arguments, so OpenLoops stores only bounded status/event evidence and omits raw Codewith prompt text and raw event payloads from workflow stdout.
 - When `--account` or a step `account` is set, OpenLoops resolves `accounts env <profile> --tool <tool>` before spawning the target, strips inherited tool home/API-key variables, and applies the selected profile only to that process. Missing account profiles fail before the provider binary receives the prompt.
 - `--auth-profile` and step `authProfile` are provider-native auth selectors. They currently apply to Codewith and are passed to Codewith as `--auth-profile <name>` before `agent start/read/logs`; they do not call OpenAccounts.
 - `--sandbox` maps to provider-native sandbox flags. Codewith/Codex accept `read-only`, `workspace-write`, or `danger-full-access`; Cursor accepts `enabled` or `disabled`.
@@ -879,4 +894,4 @@ The adapters intentionally use provider command surfaces instead of pretending e
 - `--variant` is provider-specific reasoning/model effort. Claude maps it to `--effort`, Codewith/Codex map it to `model_reasoning_effort`, and OpenCode/AICopilot pass `--variant`.
 - Daemon and scheduled runs prepend common user executable directories such as `~/.local/bin` and `~/.bun/bin` before resolving provider CLIs.
 
-For production loops that can mutate repos, prefer disposable worktrees and explicit prompts that name allowed write scope.
+For production loops that can mutate repos, use disposable worktrees (`--worktree-mode required` / `worktreeMode=required`) and explicit prompts that name allowed write scope. Worktrees are executor-enforced: when a target carries worktree metadata, the executor prepares and enters the git worktree before spawning the child process, records the worktree it entered, and with `mode=required` fails the run closed instead of falling back to the original checkout when preparation fails. Remote machine runs with a required worktree are verified fail-closed on the remote side before the target executes.

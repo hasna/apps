@@ -1,11 +1,71 @@
-import type { CreateLoopInput, Goal, GoalRun, Loop, LoopRun, OpenAutomationsRuntimeBinding } from "../types.js";
-import { advanceLoop, executeClaimedRun, manualRunScheduledFor, shouldAdvanceManualRun, tick } from "../lib/scheduler.js";
+import type { CreateLoopInput, Goal, GoalRun, Loop, LoopRun, LoopStatus, OpenAutomationsRuntimeBinding, RunStatus } from "../types.js";
+import { runDoctor, type DoctorReport } from "../lib/doctor.js";
+import { LoopNotFoundError } from "../lib/errors.js";
+import { buildHealthReport, type LoopsHealthReport } from "../lib/health.js";
+import {
+  applyImportMigrationBundle,
+  buildImportMigrationPlan,
+  buildSelfHostedMigrationPlan,
+  exportLoopsMigrationBundle,
+  type ApplyLoopsMigrationResult,
+  type ExportLoopsMigrationOptions,
+  type ImportLoopsMigrationOptions,
+  type LoopsMigrationBundle,
+  type LoopsMigrationPlan,
+  type SelfHostedPlanOptions,
+} from "../lib/migration.js";
+import { computeNextAfter } from "../lib/recurrence.js";
+import { runLoopNow, tick } from "../lib/scheduler.js";
 import { Store } from "../lib/store.js";
 export { runGoal } from "../lib/goal/runner.js";
+export {
+  LOOPS_MIGRATION_SCHEMA,
+  applyImportMigrationBundle,
+  buildImportMigrationPlan,
+  buildSelfHostedMigrationPlan,
+  exportLoopsMigrationBundle,
+  migrationHash,
+  registerSelfHostedRunner,
+  validateLoopsMigrationBundle,
+} from "../lib/migration.js";
+export type {
+  ApplyLoopsMigrationResult,
+  ExportLoopsMigrationOptions,
+  ImportLoopsMigrationOptions,
+  LoopsMigrationAction,
+  LoopsMigrationBundle,
+  LoopsMigrationPlan,
+  LoopsMigrationPlanRow,
+  LoopsMigrationPlanSummary,
+  LoopsMigrationResource,
+  RunnerRegistrationOptions,
+  RunnerRegistrationResult,
+  SelfHostedPlanOptions,
+} from "../lib/migration.js";
 
 export interface LoopsClientOptions {
   store?: Store;
+  /**
+   * Claim owner id for inline runs. Keep the `<surface>:<pid>` shape (see
+   * INLINE_RUNNER_ID_PATTERN in lib/scheduler.ts; default `sdk:<pid>`) so a
+   * starting daemon can see the owner process is still alive and will not
+   * reap the run's process group out from under it.
+   */
   runnerId?: string;
+}
+
+export interface ListLoopsFilters {
+  status?: LoopStatus;
+  limit?: number;
+  /** include archived loops alongside live ones */
+  includeArchived?: boolean;
+  /** return only archived loops */
+  archivedOnly?: boolean;
+}
+
+export interface ListRunsFilters {
+  status?: RunStatus;
+  limit?: number;
 }
 
 export class LoopsClient {
@@ -23,30 +83,42 @@ export class LoopsClient {
     return this.store.createLoop(input);
   }
 
-  list(): Loop[] {
-    return this.store.listLoops();
+  list(filters: ListLoopsFilters = {}): Loop[] {
+    return this.store.listLoops({
+      status: filters.status,
+      limit: filters.limit,
+      includeArchived: filters.includeArchived,
+      archived: filters.archivedOnly,
+    });
   }
 
   get(idOrName: string): Loop {
     return this.store.requireLoop(idOrName);
   }
 
+  // pause/resume/stop rely on the store's archived-loop guard: updateLoop
+  // throws a coded LoopArchivedError, so all surfaces share one behavior.
+  // These mutation paths use requireUniqueLoop so an ambiguous name errors
+  // instead of silently mutating the newest same-named loop.
   pause(idOrName: string): Loop {
-    const loop = this.get(idOrName);
-    if (loop.archivedAt) throw new Error(`loop is archived; unarchive it before pausing: ${idOrName}`);
-    return this.store.updateLoop(loop.id, { status: "paused" });
+    return this.store.updateLoop(this.store.requireUniqueLoop(idOrName).id, { status: "paused" });
   }
 
   resume(idOrName: string): Loop {
-    const loop = this.get(idOrName);
-    if (loop.archivedAt) throw new Error(`loop is archived; unarchive it before resuming: ${idOrName}`);
-    return this.store.updateLoop(loop.id, { status: "active" });
+    const loop = this.store.requireUniqueLoop(idOrName);
+    // A stopped loop has next_run_at NULL; dueLoops requires it IS NOT NULL, so
+    // resuming without recomputing leaves the loop active but permanently
+    // dormant. Recompute the next slot from now when it is missing.
+    let nextRunAt = loop.nextRunAt;
+    if (!nextRunAt) {
+      const now = new Date();
+      nextRunAt = computeNextAfter(loop.schedule, now, now);
+    }
+    return this.store.updateLoop(loop.id, { status: "active", nextRunAt });
   }
 
   stop(idOrName: string): Loop {
-    const loop = this.get(idOrName);
-    if (loop.archivedAt) throw new Error(`loop is archived; unarchive it before stopping: ${idOrName}`);
-    return this.store.updateLoop(loop.id, { status: "stopped", nextRunAt: undefined });
+    return this.store.updateLoop(this.store.requireUniqueLoop(idOrName).id, { status: "stopped", nextRunAt: undefined });
   }
 
   archive(idOrName: string): Loop {
@@ -58,11 +130,31 @@ export class LoopsClient {
   }
 
   delete(idOrName: string): boolean {
-    return this.store.deleteLoop(idOrName);
+    return this.store.deleteLoop(this.store.requireUniqueLoop(idOrName).id);
   }
 
-  runs(loopId?: string): LoopRun[] {
-    return this.store.listRuns({ loopId });
+  runs(idOrName?: string, filters: ListRunsFilters = {}): LoopRun[] {
+    // Lenient by design (v0.3.x compat): consumers poll runs for loops that
+    // another process may have deleted, so an unknown/stale id returns []
+    // instead of throwing LoopNotFoundError like get()/pause()/resume() do.
+    let loopId: string | undefined;
+    if (idOrName) {
+      try {
+        loopId = this.get(idOrName).id;
+      } catch (error) {
+        if (error instanceof LoopNotFoundError) return [];
+        throw error;
+      }
+    }
+    return this.store.listRuns({ loopId, status: filters.status, limit: filters.limit });
+  }
+
+  doctor(): DoctorReport {
+    return runDoctor(this.store);
+  }
+
+  health(opts: { includeArchived?: boolean; includeInactive?: boolean; limit?: number } = {}): LoopsHealthReport {
+    return buildHealthReport(this.store, opts);
   }
 
   goal(idOrName: string): { goal?: Goal; runs: GoalRun[] } {
@@ -78,26 +170,24 @@ export class LoopsClient {
   }
 
   async runNow(idOrName: string): Promise<LoopRun> {
-    const loop = this.get(idOrName);
-    if (loop.archivedAt) throw new Error(`loop is archived; unarchive it before running: ${idOrName}`);
-    const now = new Date();
-    let scheduledFor = manualRunScheduledFor(loop, now);
-    let shouldAdvance = shouldAdvanceManualRun(loop, scheduledFor, now);
-    let claim = this.store.claimRun(loop, scheduledFor, this.runnerId, now);
-    if (!claim && shouldAdvance) {
-      const existing = this.store.getRunBySlot(loop.id, scheduledFor);
-      if (existing && existing.status !== "running") {
-        scheduledFor = now.toISOString();
-        shouldAdvance = false;
-        claim = this.store.claimRun(loop, scheduledFor, this.runnerId, now);
-      }
-    }
-    if (!claim) throw new Error(`could not claim manual run for ${idOrName}`);
-    const run = await executeClaimedRun({ store: this.store, runnerId: this.runnerId, loop: claim.loop, run: claim.run });
-    if (shouldAdvance) {
-      advanceLoop(this.store, claim.loop, run, new Date(run.finishedAt ?? new Date()), run.status === "succeeded");
-    }
-    return run;
+    const result = await runLoopNow({ store: this.store, idOrName: this.store.requireUniqueLoop(idOrName).id, runnerId: this.runnerId });
+    return result.run;
+  }
+
+  exportBundle(opts: ExportLoopsMigrationOptions = {}): LoopsMigrationBundle {
+    return exportLoopsMigrationBundle(this.store, opts);
+  }
+
+  planImport(bundle: LoopsMigrationBundle, opts: ImportLoopsMigrationOptions = {}): LoopsMigrationPlan {
+    return buildImportMigrationPlan(this.store, bundle, opts);
+  }
+
+  importBundle(bundle: LoopsMigrationBundle, opts: ImportLoopsMigrationOptions = {}): ApplyLoopsMigrationResult {
+    return applyImportMigrationBundle(this.store, bundle, opts);
+  }
+
+  planSelfHostedMigration(opts: Omit<SelfHostedPlanOptions, "operation"> & { operation?: SelfHostedPlanOptions["operation"] } = {}): Promise<LoopsMigrationPlan> {
+    return buildSelfHostedMigrationPlan(this.store, { ...opts, operation: opts.operation ?? "self-hosted-migrate" });
   }
 
   close(): void {
@@ -124,15 +214,15 @@ export function openAutomationsRuntimeBinding(
     failCommand: "automations queue fail",
     eventHandoff: {
       envelopeCommand: "automations webhooks event",
-      handlerCommand: "loops events handle generic",
-      pipeExample: "automations --json webhooks event <route> --body-json '<json>' | loops --json events handle generic",
+      handlerCommand: "loops routes create generic",
+      pipeExample: "automations --json webhooks event <route> --body-json '<json>' | loops --json routes create generic",
       boundary: "Use only for explicit event-envelope workflow handoff. OpenAutomations still owns deterministic automation materialization and queue state; OpenLoops owns workflow invocation.",
     },
     requiredEnvironment: ["HASNA_AUTOMATIONS_DIR"],
     guarantees: [
       "OpenAutomations owns automation specs, run materialization, queue state, DLQ, replay, idempotency, and approvals.",
       "OpenLoops may execute claimed actions through explicit command or SDK handoff only.",
-      "OpenLoops may consume exported event envelopes only through explicit events handle commands.",
+      "OpenLoops may consume exported event envelopes only through explicit routes create commands.",
       "Workers must complete or fail actions by action id and runner id so OpenAutomations can enforce queue leases.",
     ],
     nonGoals: [

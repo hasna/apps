@@ -1,12 +1,14 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
-import { resolveMachineCommand } from "@hasna/machines/consumer";
+import { lstatSync, mkdirSync, realpathSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import type { LanguageModel } from "ai";
 import type {
   AccountRef,
   AgentProvider,
   AgentTarget,
+  AgentWorktreeSpec,
   CommandTarget,
   ExecutableTarget,
   ExecutorResult,
@@ -15,13 +17,45 @@ import type {
   LoopRun,
   PersistGuardOptions,
 } from "../types.js";
-import { accountToolForProvider, resolveAccountEnv } from "./accounts.js";
+import { accountToolForProvider, resolveAccountEnv, resolveAccountEnvSync } from "./accounts.js";
+import { BoundedOutputBuffer, killProcessGroup, providerAdapter, spawnCapture } from "./agent-adapter.js";
 import { commandNotFoundMessage, executableExists, normalizeExecutionPath } from "./env.js";
 import { nowIso } from "./ids.js";
-import { refreshLoopMachine } from "./machines.js";
+import { refreshLoopMachine, resolveMachineCommand } from "./machines.js";
+import { processStartTimeMs } from "./process-identity.js";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024;
+/** Default idle watchdog for agent targets that set neither timeoutMs nor idleTimeoutMs. */
+const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 30 * 60_000;
+/**
+ * Providers whose CLIs emit no incremental output (claude/opencode/aicopilot
+ * print a single JSON document on completion) or whose progress fingerprint
+ * can legitimately stay constant during long work (codewith durable agents).
+ * Output-idle is a weak progress signal there, so the default watchdog gets a
+ * much larger budget; it still reaps genuinely hung processes eventually.
+ */
+const BUFFERED_OUTPUT_PROVIDERS: ReadonlySet<AgentProvider> = new Set(["claude", "codewith", "opencode", "aicopilot"]);
+const DEFAULT_BUFFERED_AGENT_IDLE_TIMEOUT_MS = 4 * 60 * 60_000;
+const WORKTREE_GIT_TIMEOUT_MS = 5 * 60_000;
+
+export interface SpawnedProcessInfo {
+  pid: number;
+  pgid: number;
+  processStartedAt: string;
+}
+
+export interface AgentProgressInfo {
+  provider: AgentProvider;
+  agentId?: string;
+  status?: string;
+  summary?: string;
+  statusReason?: string;
+  threadId?: string;
+  rolloutPath?: string;
+  pid?: number;
+  lastEventSeq?: number;
+}
 
 export interface ExecuteOptions extends PersistGuardOptions {
   maxOutputBytes?: number;
@@ -30,6 +64,10 @@ export interface ExecuteOptions extends PersistGuardOptions {
   log?: (message: string) => void;
   signal?: AbortSignal;
   onSpawn?: (pid: number) => void;
+  /** Children are spawned detached in their own process group, so pgid === pid. */
+  onSpawnProcess?: (info: SpawnedProcessInfo) => void;
+  /** Progress from durable provider controllers, for example Codewith background agents. */
+  onAgentProgress?: (info: AgentProgressInfo) => void;
   machine?: LoopMachineRef;
   machineResolver?: (machine: LoopMachineRef) => LoopMachineRef;
   machineCommandResolver?: (machineId: string, command: string) => MachineCommandPlan;
@@ -75,6 +113,7 @@ interface CommandSpec {
     tools?: string[];
     commands?: string[];
   };
+  worktree?: AgentWorktreeSpec;
   codewithDurableAgent?: {
     target: AgentTarget;
   };
@@ -123,38 +162,56 @@ const TRANSPORT_ENV_KEYS = new Set([
   "XDG_RUNTIME_DIR",
 ]);
 
-function appendBounded(current: string, chunk: Buffer, maxBytes: number): string {
-  const next = current + chunk.toString("utf8");
-  if (Buffer.byteLength(next, "utf8") <= maxBytes) return next;
-  const overflow = Buffer.byteLength(next, "utf8") - maxBytes;
-  return `[truncated ${overflow} bytes]\n${next.slice(-maxBytes)}`;
+function boundedText(text: string, maxBytes: number): string {
+  const buffer = new BoundedOutputBuffer(maxBytes);
+  buffer.append(text);
+  return buffer.value();
 }
 
-function appendBoundedText(current: string, chunk: string, maxBytes: number): string {
-  return appendBounded(current, Buffer.from(chunk, "utf8"), maxBytes);
+type ResultFields = Partial<Omit<ExecutorResult, "status" | "startedAt" | "durationMs">>;
+
+function buildResult(status: ExecutorResult["status"], startedAt: string, fields: ResultFields = {}): ExecutorResult {
+  const finishedAt = fields.finishedAt ?? nowIso();
+  return {
+    status,
+    exitCode: fields.exitCode,
+    stdout: fields.stdout ?? "",
+    stderr: fields.stderr ?? "",
+    error: fields.error,
+    pid: fields.pid,
+    startedAt,
+    finishedAt,
+    durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
+  };
 }
 
-function killProcessGroup(pid: number): void {
-  try {
-    process.kill(-pid, "SIGTERM");
-  } catch {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      /* ignore */
-    }
-  }
-  setTimeout(() => {
-    try {
-      process.kill(-pid, "SIGKILL");
-    } catch {
-      try {
-        process.kill(pid, "SIGKILL");
-      } catch {
-        /* ignore */
-      }
-    }
-  }, 2_000).unref();
+function failureResult(startedAt: string, error: string, fields: ResultFields = {}): ExecutorResult {
+  return buildResult("failed", startedAt, { ...fields, error });
+}
+
+function timeoutResult(startedAt: string, error: string, fields: ResultFields = {}): ExecutorResult {
+  return buildResult("timed_out", startedAt, { ...fields, error });
+}
+
+function successResult(startedAt: string, fields: ResultFields = {}): ExecutorResult {
+  return buildResult("succeeded", startedAt, fields);
+}
+
+function notifySpawn(pid: number | undefined, opts: ExecuteOptions): void {
+  if (!pid) return;
+  opts.onSpawn?.(pid);
+  // Children are spawned detached, so they lead their own process group: pgid === pid.
+  // Record the kernel's start time for the pid as the authoritative fingerprint,
+  // not wall-clock now: a slow fork->record stall (>5s) would otherwise leave a
+  // fingerprint that disagrees with what the kernel reports later, so recovery
+  // would misjudge a live process as dead — abandoning the run and spawning a
+  // duplicate. Fall back to now only when the start time is unresolvable.
+  const startedMs = processStartTimeMs(pid);
+  opts.onSpawnProcess?.({
+    pid,
+    pgid: pid,
+    processStartedAt: startedMs !== undefined ? new Date(startedMs).toISOString() : nowIso(),
+  });
 }
 
 function shellQuote(value: string): string {
@@ -200,205 +257,22 @@ function allowlistEnv(allowlist: CommandSpec["allowlist"]): Record<string, strin
   return env;
 }
 
-function providerCommand(provider: AgentProvider): string {
-  switch (provider) {
-    case "claude":
-      return "claude";
-    case "cursor":
-      return "sh";
-    case "codewith":
-      return "codewith";
-    case "aicopilot":
-      return "aicopilot";
-    case "opencode":
-      return "opencode";
-    case "codex":
-      return "codex";
+/** Exported for tests: resolves the default idle watchdog for agent targets. */
+export function defaultAgentIdleTimeoutMs(target: AgentTarget, opts: ExecuteOptions): number | undefined {
+  if (target.timeoutMs !== undefined || target.idleTimeoutMs !== undefined) return undefined;
+  const raw = opts.env?.LOOPS_AGENT_IDLE_TIMEOUT_MS ?? process.env.LOOPS_AGENT_IDLE_TIMEOUT_MS;
+  if (raw !== undefined && raw !== "") {
+    const normalized = raw.trim().toLowerCase();
+    if (normalized === "0" || normalized === "none" || normalized === "off") return undefined;
+    const parsed = Number(normalized);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
   }
+  return BUFFERED_OUTPUT_PROVIDERS.has(target.provider)
+    ? DEFAULT_BUFFERED_AGENT_IDLE_TIMEOUT_MS
+    : DEFAULT_AGENT_IDLE_TIMEOUT_MS;
 }
 
-function codewithLikeSandbox(target: AgentTarget): "read-only" | "workspace-write" | "danger-full-access" {
-  const sandbox = target.sandbox ?? (target.permissionMode === "bypass" ? "danger-full-access" : "workspace-write");
-  if (sandbox !== "read-only" && sandbox !== "workspace-write" && sandbox !== "danger-full-access") {
-    throw new Error(`${target.provider} sandbox must be read-only, workspace-write, or danger-full-access`);
-  }
-  return sandbox;
-}
-
-function configStringValue(value: string): string {
-  return JSON.stringify(value);
-}
-
-const UNSAFE_CODEWITH_DURABLE_EXTRA_ARGS = new Set([
-  "e",
-  "exec",
-  "agent",
-  "start",
-  "--ephemeral",
-  "--ignore-rules",
-  "--skip-git-repo-check",
-  "--json",
-  "--output-last-message",
-  "-o",
-  "--output-schema",
-  "--dangerously-bypass-approvals-and-sandbox",
-]);
-
-function assertStringOption(value: unknown, label: string): void {
-  if (value !== undefined && typeof value !== "string") throw new Error(`${label} must be a string`);
-}
-
-function assertSupportedAgentOptions(target: AgentTarget): void {
-  assertStringOption(target.variant, `${target.provider}.variant`);
-  assertStringOption(target.model, `${target.provider}.model`);
-  assertStringOption(target.agent, `${target.provider}.agent`);
-  assertStringOption(target.authProfile, `${target.provider}.authProfile`);
-  assertStringOption(target.configIsolation, `${target.provider}.configIsolation`);
-  if (target.provider === "opencode" && (target.model === undefined || target.model.trim() === "")) {
-    throw new Error("opencode.model is required; pass a provider/model id such as openrouter/google/gemini-2.5-flash");
-  }
-  if (target.configIsolation !== undefined && target.configIsolation !== "safe" && target.configIsolation !== "none") {
-    throw new Error(`${target.provider}.configIsolation must be safe or none`);
-  }
-  if (target.authProfile !== undefined && target.provider !== "codewith") {
-    throw new Error(`${target.provider}.authProfile is supported only for codewith`);
-  }
-  if (target.addDirs?.length && !["codewith", "codex"].includes(target.provider)) {
-    throw new Error(`${target.provider}.addDirs is currently supported only for codewith or codex`);
-  }
-  if (target.permissionMode && !["default", "plan", "auto", "bypass"].includes(target.permissionMode)) {
-    throw new Error(`${target.provider}.permissionMode must be default, plan, auto, or bypass`);
-  }
-  if (target.sandbox && !["read-only", "workspace-write", "danger-full-access", "enabled", "disabled"].includes(target.sandbox)) {
-    throw new Error(`${target.provider}.sandbox is not supported: ${target.sandbox}`);
-  }
-  if (target.provider === "codex" && target.agent !== undefined) throw new Error("codex.agent is not supported");
-  if (target.provider === "codewith" && target.agent !== undefined) {
-    throw new Error("codewith.agent is not supported by the durable background-agent adapter");
-  }
-  if (target.provider === "codewith") {
-    const unsafe = target.extraArgs?.find((arg) => UNSAFE_CODEWITH_DURABLE_EXTRA_ARGS.has(arg));
-    if (unsafe) throw new Error(`codewith.extraArgs cannot include ${unsafe}; durable agent steps use codewith agent start, not exec/ephemeral flags`);
-  }
-  if (["codewith", "codex"].includes(target.provider)) {
-    if (target.permissionMode && !["default", "bypass"].includes(target.permissionMode)) {
-      throw new Error(`${target.provider}.permissionMode supports only default or bypass`);
-    }
-    if (target.sandbox) codewithLikeSandbox(target);
-    return;
-  }
-  if (target.provider === "claude") {
-    if (target.sandbox !== undefined) throw new Error("claude.sandbox is not supported");
-    return;
-  }
-  if (target.provider === "cursor") {
-    if (target.variant !== undefined) throw new Error("cursor.variant is not supported");
-    if (target.permissionMode === "auto") throw new Error("cursor.permissionMode auto is not supported; use provider-specific extraArgs for Cursor auto-review");
-    if (target.sandbox !== undefined && target.sandbox !== "enabled" && target.sandbox !== "disabled") {
-      throw new Error("cursor.sandbox must be enabled or disabled");
-    }
-    return;
-  }
-  if (target.permissionMode && !["default", "bypass"].includes(target.permissionMode)) {
-    throw new Error(`${target.provider}.permissionMode supports only default or bypass`);
-  }
-  if (target.sandbox !== undefined) throw new Error(`${target.provider}.sandbox is not supported`);
-}
-
-function agentArgs(target: AgentTarget): string[] {
-  assertSupportedAgentOptions(target);
-  const isolation = target.configIsolation ?? "safe";
-  const permissionMode = target.permissionMode ?? "default";
-  const args: string[] = [];
-  switch (target.provider) {
-    case "claude":
-      if (isolation === "safe") args.push("--safe-mode", "--setting-sources", "local", "--no-session-persistence");
-      if (permissionMode !== "default") {
-        const mode =
-          permissionMode === "bypass"
-            ? "bypassPermissions"
-            : permissionMode === "plan" || permissionMode === "auto"
-              ? permissionMode
-              : undefined;
-        if (mode) args.push("--permission-mode", mode);
-      }
-      args.push("-p", "--output-format", "json");
-      if (target.model) args.push("--model", target.model);
-      if (target.variant) args.push("--effort", target.variant);
-      if (target.agent) args.push("--agent", target.agent);
-      args.push(...(target.extraArgs ?? []));
-      return args;
-    case "cursor":
-      args.push(
-        "-c",
-        [
-          "set -eu",
-          "if command -v agent >/dev/null 2>&1; then",
-          "  exec agent \"$@\"",
-          "else",
-          "  echo 'Executable not found in PATH: agent' >&2",
-          "  exit 127",
-          "fi",
-        ].join("\n"),
-        "openloops-cursor",
-        "-p",
-      );
-      if (permissionMode === "plan") args.push("--mode", "plan");
-      if (permissionMode === "bypass") args.push("--force");
-      const cursorSandbox = target.sandbox ?? (isolation === "safe" ? "enabled" : undefined);
-      if (cursorSandbox) {
-        if (cursorSandbox !== "enabled" && cursorSandbox !== "disabled") throw new Error("cursor sandbox must be enabled or disabled");
-        args.push("--sandbox", cursorSandbox);
-      }
-      if (target.model) args.push("--model", target.model);
-      if (target.agent) args.push("--agent", target.agent);
-      args.push(...(target.extraArgs ?? []));
-      return args;
-    case "codewith":
-      args.push(...(target.authProfile ? ["--auth-profile", target.authProfile] : []));
-      if (target.variant) args.push("-c", `model_reasoning_effort=${configStringValue(target.variant)}`);
-      args.push("--ask-for-approval", "never", "--sandbox", codewithLikeSandbox(target));
-      if (target.cwd) args.push("--cd", target.cwd);
-      for (const dir of target.addDirs ?? []) args.push("--add-dir", dir);
-      if (target.model) args.push("--model", target.model);
-      args.push(...(target.extraArgs ?? []));
-      args.push("agent", "start");
-      if (target.cwd) args.push("--cwd", target.cwd);
-      args.push(target.prompt);
-      return args;
-    case "codex":
-      if (target.variant) args.push("-c", `model_reasoning_effort=${configStringValue(target.variant)}`);
-      args.push("--ask-for-approval", "never", "exec", "--json", "--ephemeral", "--sandbox", codewithLikeSandbox(target), "--skip-git-repo-check");
-      if (isolation === "safe") args.push("--ignore-rules");
-      if (target.cwd) args.push("--cd", target.cwd);
-      for (const dir of target.addDirs ?? []) args.push("--add-dir", dir);
-      if (target.model) args.push("--model", target.model);
-      args.push(...(target.extraArgs ?? []));
-      return args;
-    case "aicopilot":
-      args.push("run", "--format", "json");
-      if (isolation === "safe") args.push("--pure");
-      if (permissionMode === "bypass") args.push("--dangerously-skip-permissions");
-      if (target.cwd) args.push("--dir", target.cwd);
-      if (target.model) args.push("--model", target.model);
-      if (target.variant) args.push("--variant", target.variant);
-      if (target.agent) args.push("--agent", target.agent);
-      args.push(...(target.extraArgs ?? []));
-      return args;
-    case "opencode":
-      args.push("run", "--format", "json");
-      if (isolation === "safe") args.push("--pure");
-      if (permissionMode === "bypass") args.push("--dangerously-skip-permissions");
-      if (target.cwd) args.push("--dir", target.cwd);
-      if (target.model) args.push("--model", target.model);
-      if (target.variant) args.push("--variant", target.variant);
-      if (target.agent) args.push("--agent", target.agent);
-      args.push(...(target.extraArgs ?? []));
-      return args;
-  }
-}
-
-function commandSpec(target: ExecutableTarget): CommandSpec {
+function commandSpec(target: ExecutableTarget, opts: ExecuteOptions): CommandSpec {
   if (target.type === "command") {
     const commandTarget = target as CommandTarget;
     return {
@@ -414,32 +288,35 @@ function commandSpec(target: ExecutableTarget): CommandSpec {
     };
   }
   const agentTarget = target as AgentTarget;
+  const adapter = providerAdapter(agentTarget.provider);
+  const invocation = adapter.buildInvocation(agentTarget);
   return {
-    command: providerCommand(agentTarget.provider),
-    args: agentArgs(agentTarget),
+    command: invocation.command,
+    args: invocation.args,
     cwd: agentTarget.cwd,
     timeoutMs: agentTarget.timeoutMs ?? null,
-    idleTimeoutMs: agentTarget.idleTimeoutMs,
+    idleTimeoutMs: agentTarget.idleTimeoutMs ?? defaultAgentIdleTimeoutMs(agentTarget, opts),
     account: agentTarget.account,
     accountTool: agentTarget.account?.tool ?? accountToolForProvider(agentTarget.provider),
     nativeAuthProfile: agentTarget.authProfile
       ? { provider: agentTarget.provider, profile: agentTarget.authProfile }
       : undefined,
-    preflightAnyOf: agentTarget.provider === "cursor" ? ["agent"] : undefined,
-    stdin: agentTarget.provider === "codewith" ? undefined : agentTarget.prompt,
+    preflightAnyOf: invocation.preflightAnyOf,
+    stdin: invocation.stdin,
     allowlist: agentTarget.allowlist,
-    codewithDurableAgent: agentTarget.provider === "codewith" ? { target: agentTarget } : undefined,
+    worktree: agentTarget.worktree,
+    codewithDurableAgent: adapter.capabilities.durable ? { target: agentTarget } : undefined,
   };
 }
 
-function executionEnv(
+function composeExecutionEnv(
   spec: CommandSpec,
   metadata: ExecutionMetadata,
   opts: ExecuteOptions,
+  accountEnv: Record<string, string> | undefined,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...(opts.env ?? process.env) };
-  if (spec.account) {
-    const accountEnv = resolveAccountEnv(spec.account, spec.accountTool, env);
+  if (accountEnv) {
     for (const key of AUTH_ENV_KEYS) delete env[key];
     Object.assign(env, accountEnv);
   }
@@ -448,6 +325,28 @@ function executionEnv(
   env.PATH = normalizeExecutionPath(env);
   Object.assign(env, metadataEnv(metadata));
   return env;
+}
+
+async function executionEnv(
+  spec: CommandSpec,
+  metadata: ExecutionMetadata,
+  opts: ExecuteOptions,
+): Promise<NodeJS.ProcessEnv> {
+  const accountEnv = spec.account
+    ? await resolveAccountEnv(spec.account, spec.accountTool, { ...(opts.env ?? process.env) })
+    : undefined;
+  return composeExecutionEnv(spec, metadata, opts, accountEnv);
+}
+
+function executionEnvSync(
+  spec: CommandSpec,
+  metadata: ExecutionMetadata,
+  opts: ExecuteOptions,
+): NodeJS.ProcessEnv {
+  const accountEnv = spec.account
+    ? resolveAccountEnvSync(spec.account, spec.accountTool, { ...(opts.env ?? process.env) })
+    : undefined;
+  return composeExecutionEnv(spec, metadata, opts, accountEnv);
 }
 
 function resolvedMachine(opts: ExecuteOptions): LoopMachineRef | undefined {
@@ -468,12 +367,31 @@ function hereDoc(value: string): string[] {
   return [`cat > "$__OPENLOOPS_STDIN" <<'${delimiter}'`, value, delimiter];
 }
 
-function remoteBootstrapLines(spec: CommandSpec, metadata: ExecutionMetadata): string[] {
+function remoteBootstrapLines(
+  spec: CommandSpec,
+  metadata: ExecutionMetadata,
+  opts: { worktree?: boolean } = {},
+): string[] {
   const lines: string[] = [
     "set -e",
     'export PATH="$HOME/.local/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.npm-global/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin${PATH:+:$PATH}"',
   ];
-  if (spec.cwd) lines.push(`cd ${shellQuote(spec.cwd)}`);
+  // Worktree preparation must run before cd so a missing worktree fails
+  // closed (mode=required) or falls back (mode=auto) with a clear message
+  // instead of a generic cd error. It is skipped for preflight, which may
+  // legitimately run before the worktree exists on the remote machine.
+  const worktree = spec.worktree;
+  const worktreeManaged = worktree?.enabled && (worktree.mode === "auto" || worktree.mode === "required");
+  if (opts.worktree && worktree && worktreeManaged) {
+    lines.push(...remoteWorktreePrepareLines(worktree));
+    lines.push(...remoteWorktreeEnterLines(worktree, spec.cwd));
+  } else if (worktree && worktreeManaged) {
+    // Preflight: the managed worktree may not exist yet, so probe tooling
+    // from the original checkout instead of cd-ing into an absent directory.
+    lines.push(`cd ${shellQuote(worktree.originalCwd)}`);
+  } else if (spec.cwd) {
+    lines.push(`cd ${shellQuote(spec.cwd)}`);
+  }
   if (spec.account) {
     if (!spec.accountTool) throw new Error("account.tool is required when no provider tool can be inferred");
     lines.push(
@@ -494,8 +412,87 @@ function remoteBootstrapLines(spec: CommandSpec, metadata: ExecutionMetadata): s
   return lines;
 }
 
-function remoteScript(spec: CommandSpec, metadata: ExecutionMetadata): string {
-  const lines = remoteBootstrapLines(spec, metadata);
+/**
+ * Bash equivalent of {@link ensureLocalWorktree}, emitted into the remote
+ * script so worktree-enabled targets work on machine-assigned loops without a
+ * separate prepare step: reuse an existing worktree only when its top-level,
+ * git common dir, and branch all match; otherwise `git worktree add` it. The
+ * function uses explicit `|| return 1` chains because bash disables `set -e`
+ * inside functions invoked from `if` conditions.
+ */
+function remoteWorktreePrepareLines(worktree: AgentWorktreeSpec): string[] {
+  const { repoRoot, path, branch } = worktree;
+  if (!repoRoot || !path || !branch) {
+    return [
+      "__openloops_prepare_worktree() {",
+      `  echo ${shellQuote("worktree preparation requires repoRoot, path, and branch metadata")} >&2`,
+      "  return 1",
+      "}",
+    ];
+  }
+  return [
+    "__openloops_prepare_worktree() {",
+    `  local repo=${shellQuote(repoRoot)} path=${shellQuote(path)} branch=${shellQuote(branch)}`,
+    "  local top expected_common actual_common current",
+    '  if [ -L "$path" ]; then echo "refusing symlinked worktree path $path" >&2; return 1; fi',
+    '  if [ -e "$path" ]; then',
+    '    top="$(git -C "$path" rev-parse --show-toplevel 2>/dev/null)" || { echo "refusing to reuse non-worktree path: $path" >&2; return 1; }',
+    '    if [ "$(cd "$top" 2>/dev/null && pwd -P)" != "$(cd "$path" 2>/dev/null && pwd -P)" ]; then echo "existing worktree top-level mismatch for $path: $top" >&2; return 1; fi',
+    '    expected_common="$(cd "$repo" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)"',
+    '    actual_common="$(cd "$path" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P)"',
+    '    if [ -z "$expected_common" ] || [ "$expected_common" != "$actual_common" ]; then echo "existing worktree $path belongs to a different git common dir" >&2; return 1; fi',
+    '    current="$(git -C "$path" branch --show-current 2>/dev/null)"',
+    '    if [ "$current" != "$branch" ]; then echo "existing worktree $path is on branch ${current:-unknown}, expected $branch" >&2; return 1; fi',
+    "    return 0",
+    "  fi",
+    '  git -C "$repo" rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "worktree repoRoot is not a git repository: $repo" >&2; return 1; }',
+    '  mkdir -p "$(dirname "$path")" || return 1',
+    "  # Preparation chatter goes to stderr so run stdout stays the agent's.",
+    '  if git -C "$repo" show-ref --verify --quiet "refs/heads/$branch"; then',
+    '    git -C "$repo" worktree add "$path" "$branch" 1>&2 || return 1',
+    "  else",
+    '    git -C "$repo" worktree add -b "$branch" "$path" HEAD 1>&2 || return 1',
+    "  fi",
+    "}",
+  ];
+}
+
+/**
+ * Enters the prepared worktree, mirroring {@link enterWorktree}: required mode
+ * fails closed, auto mode falls back to the original checkout and records the
+ * outcome in __OPENLOOPS_WORKTREE_OK so {@link remoteScript} can run the
+ * fallback invocation (providers bake cwd into argv via --cd/--cwd/--dir).
+ */
+function remoteWorktreeEnterLines(worktree: AgentWorktreeSpec, cwd: string | undefined): string[] {
+  const workdir = cwd ?? worktree.cwd;
+  if (worktree.mode === "required") {
+    return [
+      "if ! __openloops_prepare_worktree; then",
+      `  echo ${shellQuote("worktree preparation failed (mode=required)")} >&2`,
+      "  exit 1",
+      "fi",
+      "__OPENLOOPS_WORKTREE_OK=1",
+      `cd ${shellQuote(workdir)}`,
+    ];
+  }
+  return [
+    "if __openloops_prepare_worktree; then",
+    "  __OPENLOOPS_WORKTREE_OK=1",
+    `  cd ${shellQuote(workdir)}`,
+    "else",
+    `  echo ${shellQuote(`worktree preparation failed (mode=${worktree.mode}); falling back to ${worktree.originalCwd}`)} >&2`,
+    "  __OPENLOOPS_WORKTREE_OK=0",
+    `  cd ${shellQuote(worktree.originalCwd)}`,
+    "fi",
+  ];
+}
+
+function remoteScript(spec: CommandSpec, metadata: ExecutionMetadata, fallbackSpec?: CommandSpec): string {
+  // Remote worktree preparation is executor-native (mirrors the local
+  // enterWorktree path): mode=required prepares the worktree on the remote
+  // machine and fails closed when preparation fails; mode=auto falls back to
+  // the original checkout using the rebuilt fallback invocation.
+  const lines = remoteBootstrapLines(spec, metadata, { worktree: true });
 
   let stdinRedirect = "";
   if (spec.stdin !== undefined) {
@@ -504,10 +501,21 @@ function remoteScript(spec: CommandSpec, metadata: ExecutionMetadata): string {
     stdinRedirect = ' < "$__OPENLOOPS_STDIN"';
   }
 
-  const invocation = spec.shell
-    ? `sh -c ${shellQuote(commandForShell(spec))}${stdinRedirect}`
-    : `${[spec.command, ...spec.args].map(shellQuote).join(" ")}${stdinRedirect}`;
-  lines.push(invocation);
+  const invocationFor = (invocationSpec: CommandSpec): string =>
+    invocationSpec.shell
+      ? `sh -c ${shellQuote(commandForShell(invocationSpec))}${stdinRedirect}`
+      : `${[invocationSpec.command, ...invocationSpec.args].map(shellQuote).join(" ")}${stdinRedirect}`;
+  if (spec.worktree?.enabled && spec.worktree.mode === "auto" && fallbackSpec) {
+    lines.push(
+      'if [ "${__OPENLOOPS_WORKTREE_OK:-0}" = 1 ]; then',
+      `  ${invocationFor(spec)}`,
+      "else",
+      `  ${invocationFor(fallbackSpec)}`,
+      "fi",
+    );
+  } else {
+    lines.push(invocationFor(spec));
+  }
   return `${lines.join("\n")}\n`;
 }
 
@@ -551,17 +559,12 @@ function transportEnv(opts: ExecuteOptions): NodeJS.ProcessEnv {
   return env;
 }
 
-function preflightNativeAuthProfile(spec: CommandSpec, env: NodeJS.ProcessEnv): void {
-  if (!spec.nativeAuthProfile) return;
-  if (spec.nativeAuthProfile.provider !== "codewith") return;
-  const result = spawnSync(spec.command, ["profile", "list"], {
-    encoding: "utf8",
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: 15_000,
-  });
+function assertCodewithProfileListed(
+  profile: string,
+  result: { status: number | null; stdout: string; stderr: string; error?: string },
+): void {
   if (result.error) {
-    throw new Error(`codewith auth profile preflight failed: ${result.error.message}`);
+    throw new Error(`codewith auth profile preflight failed: ${result.error}`);
   }
   if ((result.status ?? 1) !== 0) {
     const detail = (result.stderr || result.stdout || `exit ${result.status ?? "unknown"}`).trim();
@@ -574,13 +577,35 @@ function preflightNativeAuthProfile(spec: CommandSpec, env: NodeJS.ProcessEnv): 
       .map((line) => line.trim().split(/\s+/)[0])
       .filter(Boolean),
   );
-  if (!profiles.has(spec.nativeAuthProfile.profile)) {
-    throw new Error(`codewith auth profile not found: ${spec.nativeAuthProfile.profile}`);
+  if (!profiles.has(profile)) {
+    throw new Error(`codewith auth profile not found: ${profile}`);
   }
 }
 
+function preflightNativeAuthProfileSync(spec: CommandSpec, env: NodeJS.ProcessEnv): void {
+  if (spec.nativeAuthProfile?.provider !== "codewith") return;
+  const result = spawnSync(spec.command, ["profile", "list"], {
+    encoding: "utf8",
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 15_000,
+  });
+  assertCodewithProfileListed(spec.nativeAuthProfile.profile, {
+    status: result.status,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+    error: result.error?.message,
+  });
+}
+
+async function preflightNativeAuthProfile(spec: CommandSpec, env: NodeJS.ProcessEnv): Promise<void> {
+  if (spec.nativeAuthProfile?.provider !== "codewith") return;
+  const result = await spawnCapture(spec.command, ["profile", "list"], { env, timeoutMs: 15_000 });
+  assertCodewithProfileListed(spec.nativeAuthProfile.profile, result);
+}
+
 function codewithAgentStartArgs(target: AgentTarget, idempotencyKey: string): string[] {
-  const args = agentArgs(target);
+  const args = providerAdapter(target.provider).buildInvocation(target).args;
   const startIndex = args.findIndex((arg, index) => arg === "start" && args[index - 1] === "agent");
   if (startIndex === -1) throw new Error("internal error: codewith durable agent args missing agent start");
   args.splice(startIndex + 1, 0, "--idempotency-key", idempotencyKey);
@@ -627,6 +652,13 @@ function codewithAgentStatus(readJson: Record<string, unknown>): string | undefi
   return stringField(recordField(readJson, "agent"), "status") ?? stringField(recordField(readJson, "statusSnapshot"), "status");
 }
 
+function codewithAgentLastEventSeq(readJson: Record<string, unknown>): number | undefined {
+  const agentSeq = numberField(recordField(readJson, "agent"), "lastEventSeq");
+  const snapshotSeq = numberField(recordField(readJson, "statusSnapshot"), "lastEventSeq");
+  if (agentSeq !== undefined && snapshotSeq !== undefined) return Math.max(agentSeq, snapshotSeq);
+  return agentSeq ?? snapshotSeq;
+}
+
 function codewithAgentEvidence(startJson: Record<string, unknown>, readJson: Record<string, unknown>, logsJson?: Record<string, unknown>): string {
   const agent = recordField(readJson, "agent") ?? recordField(startJson, "agent");
   const statusSnapshot = recordField(readJson, "statusSnapshot");
@@ -668,6 +700,22 @@ function codewithAgentEvidence(startJson: Record<string, unknown>, readJson: Rec
   );
 }
 
+function codewithAgentProgress(readJson: Record<string, unknown>): AgentProgressInfo {
+  const agent = recordField(readJson, "agent");
+  const statusSnapshot = recordField(readJson, "statusSnapshot");
+  return {
+    provider: "codewith",
+    agentId: stringField(agent, "agentId"),
+    status: stringField(agent, "status") ?? stringField(statusSnapshot, "status"),
+    summary: stringField(statusSnapshot, "summary"),
+    statusReason: stringField(agent, "statusReason"),
+    threadId: stringField(agent, "threadId"),
+    rolloutPath: stringField(agent, "rolloutPath"),
+    pid: numberField(agent, "pid"),
+    lastEventSeq: codewithAgentLastEventSeq(readJson),
+  };
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -683,119 +731,94 @@ async function executeCodewithDurableAgent(
   if (!target) throw new Error("internal error: missing codewith durable target");
   const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
   const idempotencyKey = codewithAgentIdempotencyKey(metadata);
-  const start = spawnSync(spec.command, codewithAgentStartArgs(target, idempotencyKey), {
+  const start = await spawnCapture(spec.command, codewithAgentStartArgs(target, idempotencyKey), {
     cwd: spec.cwd,
     env,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: 30_000,
+    timeoutMs: 30_000,
+    maxOutputBytes,
   });
-  let stderr = start.stderr || "";
+  const stderr = new BoundedOutputBuffer(maxOutputBytes);
+  stderr.append(start.stderr);
   if (start.error || (start.status ?? 1) !== 0) {
-    const finishedAt = nowIso();
-    return {
-      status: "failed",
+    return failureResult(startedAt, start.error ?? `codewith agent start exited with code ${start.status ?? "unknown"}`, {
       exitCode: start.status ?? undefined,
-      stdout: start.stdout || "",
-      stderr,
-      error: start.error?.message ?? `codewith agent start exited with code ${start.status ?? "unknown"}`,
-      startedAt,
-      finishedAt,
-      durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
-    };
+      stdout: start.stdout,
+      stderr: stderr.value(),
+    });
   }
   let startJson: Record<string, unknown>;
   try {
     startJson = parseJsonOutput(start.stdout || "{}", "codewith agent start");
   } catch (error) {
-    const finishedAt = nowIso();
-    return {
-      status: "failed",
-      stdout: start.stdout || "",
-      stderr,
-      error: error instanceof Error ? error.message : String(error),
-      startedAt,
-      finishedAt,
-      durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
-    };
+    return failureResult(startedAt, error instanceof Error ? error.message : String(error), { stdout: start.stdout, stderr: stderr.value() });
   }
   const agentId = stringField(recordField(startJson, "agent"), "agentId");
   if (!agentId) {
-    const finishedAt = nowIso();
-    return {
-      status: "failed",
-      stdout: start.stdout || "",
-      stderr,
-      error: "codewith agent start did not return agent.agentId",
-      startedAt,
-      finishedAt,
-      durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
-    };
+    return failureResult(startedAt, "codewith agent start did not return agent.agentId", { stdout: start.stdout, stderr: stderr.value() });
   }
+  opts.onAgentProgress?.(codewithAgentProgress(startJson));
+
+  const stopAgent = async (): Promise<void> => {
+    await spawnCapture(spec.command, codewithAgentControlArgs(target, "stop", agentId), {
+      cwd: spec.cwd,
+      env,
+      timeoutMs: 15_000,
+      maxOutputBytes,
+    });
+  };
 
   const pollMs = Math.max(100, Number(opts.env?.LOOPS_CODEWITH_AGENT_POLL_MS ?? process.env.LOOPS_CODEWITH_AGENT_POLL_MS ?? 2_000) || 2_000);
   let lastReadJson = startJson;
   let lastLogsJson: Record<string, unknown> | undefined;
-  let stdout = "";
+  let lastFingerprint: string | undefined;
+  let lastProgressAt = Date.now();
+  const evidence = (): string => boundedText(codewithAgentEvidence(startJson, lastReadJson, lastLogsJson), maxOutputBytes);
   while (true) {
     if (opts.signal?.aborted) {
-      spawnSync(spec.command, codewithAgentControlArgs(target, "stop", agentId), { cwd: spec.cwd, env, stdio: "ignore", timeout: 15_000 });
-      const finishedAt = nowIso();
-      return {
-        status: "failed",
-        stdout: appendBoundedText(stdout, codewithAgentEvidence(startJson, lastReadJson, lastLogsJson), maxOutputBytes),
-        stderr,
-        error: "cancelled",
-        startedAt,
-        finishedAt,
-        durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
-      };
+      await stopAgent();
+      return failureResult(startedAt, "cancelled", { stdout: evidence(), stderr: stderr.value() });
     }
 
-    const read = spawnSync(spec.command, codewithAgentControlArgs(target, "read", agentId), {
+    const read = await spawnCapture(spec.command, codewithAgentControlArgs(target, "read", agentId), {
       cwd: spec.cwd,
       env,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 30_000,
+      timeoutMs: 30_000,
+      maxOutputBytes,
     });
-    stderr = appendBoundedText(stderr, read.stderr || "", maxOutputBytes);
+    stderr.append(read.stderr);
     if (read.error || (read.status ?? 1) !== 0) {
-      const finishedAt = nowIso();
-      return {
-        status: "failed",
+      return failureResult(startedAt, read.error ?? `codewith agent read exited with code ${read.status ?? "unknown"}`, {
         exitCode: read.status ?? undefined,
-        stdout: appendBoundedText(stdout, codewithAgentEvidence(startJson, lastReadJson, lastLogsJson), maxOutputBytes),
-        stderr,
-        error: read.error?.message ?? `codewith agent read exited with code ${read.status ?? "unknown"}`,
-        startedAt,
-        finishedAt,
-        durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
-      };
+        stdout: evidence(),
+        stderr: stderr.value(),
+      });
     }
     try {
       lastReadJson = parseJsonOutput(read.stdout || "{}", "codewith agent read");
     } catch (error) {
-      const finishedAt = nowIso();
-      return {
-        status: "failed",
-        stdout: appendBoundedText(stdout, read.stdout || "", maxOutputBytes),
-        stderr,
-        error: error instanceof Error ? error.message : String(error),
-        startedAt,
-        finishedAt,
-        durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
-      };
+      return failureResult(startedAt, error instanceof Error ? error.message : String(error), {
+        stdout: boundedText(read.stdout, maxOutputBytes),
+        stderr: stderr.value(),
+      });
     }
 
     const status = codewithAgentStatus(lastReadJson);
+    const fingerprint = JSON.stringify({
+      status,
+      agentLastEventSeq: numberField(recordField(lastReadJson, "agent"), "lastEventSeq"),
+      snapshot: recordField(lastReadJson, "statusSnapshot") ?? null,
+    });
+    if (fingerprint !== lastFingerprint) {
+      lastFingerprint = fingerprint;
+      lastProgressAt = Date.now();
+      opts.onAgentProgress?.(codewithAgentProgress(lastReadJson));
+    }
     if (status === "completed" || status === "failed" || status === "cancelled") {
-      const logs = spawnSync(spec.command, codewithAgentControlArgs(target, "logs", agentId), {
+      const logs = await spawnCapture(spec.command, codewithAgentControlArgs(target, "logs", agentId), {
         cwd: spec.cwd,
         env,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: 30_000,
+        timeoutMs: 30_000,
+        maxOutputBytes,
       });
       if (!logs.error && (logs.status ?? 1) === 0) {
         try {
@@ -804,37 +827,170 @@ async function executeCodewithDurableAgent(
           lastLogsJson = undefined;
         }
       } else {
-        stderr = appendBoundedText(stderr, logs.stderr || logs.error?.message || "", maxOutputBytes);
+        stderr.append(logs.stderr || logs.error || "");
       }
-      const finishedAt = nowIso();
-      const resultStatus = status === "completed" ? "succeeded" : "failed";
-      return {
-        status: resultStatus,
-        exitCode: resultStatus === "succeeded" ? 0 : 1,
-        stdout: appendBoundedText(stdout, codewithAgentEvidence(startJson, lastReadJson, lastLogsJson), maxOutputBytes),
-        stderr,
-        error: resultStatus === "succeeded" ? undefined : stringField(recordField(lastReadJson, "agent"), "statusReason") ?? `codewith agent ${status}`,
+      if (status === "completed") {
+        return successResult(startedAt, { exitCode: 0, stdout: evidence(), stderr: stderr.value() });
+      }
+      return failureResult(
         startedAt,
-        finishedAt,
-        durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
-      };
+        stringField(recordField(lastReadJson, "agent"), "statusReason") ?? `codewith agent ${status}`,
+        { exitCode: 1, stdout: evidence(), stderr: stderr.value() },
+      );
     }
 
     if (typeof spec.timeoutMs === "number" && new Date(nowIso()).getTime() - new Date(startedAt).getTime() >= spec.timeoutMs) {
-      spawnSync(spec.command, codewithAgentControlArgs(target, "stop", agentId), { cwd: spec.cwd, env, stdio: "ignore", timeout: 15_000 });
-      const finishedAt = nowIso();
-      return {
-        status: "timed_out",
-        stdout: appendBoundedText(stdout, codewithAgentEvidence(startJson, lastReadJson, lastLogsJson), maxOutputBytes),
-        stderr,
-        error: `timed out after ${spec.timeoutMs}ms`,
-        startedAt,
-        finishedAt,
-        durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
-      };
+      await stopAgent();
+      return timeoutResult(startedAt, `timed out after ${spec.timeoutMs}ms`, { stdout: evidence(), stderr: stderr.value() });
+    }
+    if (typeof spec.idleTimeoutMs === "number" && Date.now() - lastProgressAt >= spec.idleTimeoutMs) {
+      await stopAgent();
+      return timeoutResult(startedAt, `idle timed out after ${spec.idleTimeoutMs}ms without agent progress`, {
+        stdout: evidence(),
+        stderr: stderr.value(),
+      });
     }
     await sleep(pollMs);
   }
+}
+
+interface WorktreePreparation {
+  cwd?: string;
+  error?: string;
+}
+
+function resolvedDirEquals(left: string, right: string): boolean {
+  try {
+    return realpathSync(left) === realpathSync(right);
+  } catch {
+    return false;
+  }
+}
+
+async function ensureLocalWorktree(
+  worktree: AgentWorktreeSpec,
+  env: NodeJS.ProcessEnv,
+): Promise<WorktreePreparation> {
+  const { repoRoot, path, branch } = worktree;
+  if (!repoRoot || !path || !branch) {
+    return { error: "worktree preparation requires repoRoot, path, and branch metadata" };
+  }
+  const git = (args: string[]): Promise<Awaited<ReturnType<typeof spawnCapture>>> =>
+    spawnCapture("git", args, { env, timeoutMs: WORKTREE_GIT_TIMEOUT_MS });
+
+  let stats: ReturnType<typeof lstatSync> | undefined;
+  try {
+    stats = lstatSync(path);
+  } catch {
+    stats = undefined;
+  }
+  if (stats?.isSymbolicLink()) return { error: `refusing symlinked worktree path ${path}` };
+
+  const commonDir = async (base: string): Promise<string | undefined> => {
+    const result = await git(["-C", base, "rev-parse", "--git-common-dir"]);
+    if (result.error || (result.status ?? 1) !== 0) return undefined;
+    const raw = result.stdout.trim();
+    if (!raw) return undefined;
+    try {
+      return realpathSync(resolve(base, raw));
+    } catch {
+      return resolve(base, raw);
+    }
+  };
+
+  if (stats) {
+    const top = await git(["-C", path, "rev-parse", "--show-toplevel"]);
+    if (top.error || (top.status ?? 1) !== 0) {
+      return { error: `refusing to reuse non-worktree path: ${path}` };
+    }
+    if (!resolvedDirEquals(top.stdout.trim(), path)) {
+      return { error: `existing worktree top-level mismatch for ${path}: ${top.stdout.trim()}` };
+    }
+    const expectedCommon = await commonDir(repoRoot);
+    const actualCommon = await commonDir(path);
+    if (!expectedCommon || expectedCommon !== actualCommon) {
+      return { error: `existing worktree ${path} belongs to a different git common dir` };
+    }
+    const current = await git(["-C", path, "branch", "--show-current"]);
+    const actualBranch = current.stdout.trim();
+    if (current.error || (current.status ?? 1) !== 0 || actualBranch !== branch) {
+      return { error: `existing worktree ${path} is on branch ${actualBranch || "unknown"}, expected ${branch}` };
+    }
+    return { cwd: worktree.cwd };
+  }
+
+  const inside = await git(["-C", repoRoot, "rev-parse", "--is-inside-work-tree"]);
+  if (inside.error || (inside.status ?? 1) !== 0) {
+    return { error: `worktree repoRoot is not a git repository: ${repoRoot}` };
+  }
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+  } catch (error) {
+    return { error: `could not create worktree parent directory: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  const hasBranch = await git(["-C", repoRoot, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
+  const add = hasBranch.status === 0
+    ? await git(["-C", repoRoot, "worktree", "add", path, branch])
+    : await git(["-C", repoRoot, "worktree", "add", "-b", branch, path, "HEAD"]);
+  if (add.error || (add.status ?? 1) !== 0) {
+    const detail = (add.stderr || add.stdout || add.error || "").toString().trim();
+    return { error: `git worktree add failed for ${path}${detail ? `: ${detail}` : ""}` };
+  }
+  return { cwd: worktree.cwd };
+}
+
+interface WorktreeEntry {
+  failure?: ExecutorResult;
+  /** Set when auto mode fell back to the original checkout; callers must rebuild provider argv against this cwd. */
+  fallbackCwd?: string;
+}
+
+/**
+ * Prepares/enters the target's git worktree before spawn. Returns a failure
+ * result when mode=required preparation fails (fail closed); auto mode falls
+ * back to the original checkout by reporting `fallbackCwd` so the caller can
+ * rebuild the invocation (providers bake cwd into argv via --cd/--cwd/--dir).
+ */
+async function enterWorktree(
+  spec: CommandSpec,
+  opts: ExecuteOptions,
+  env: NodeJS.ProcessEnv,
+  startedAt: string,
+): Promise<WorktreeEntry | undefined> {
+  const worktree = spec.worktree;
+  if (!worktree?.enabled || worktree.mode === "off" || worktree.mode === "main") return undefined;
+  const prepared = await ensureLocalWorktree(worktree, env);
+  if (prepared.error) {
+    if (worktree.mode === "required") {
+      return { failure: failureResult(startedAt, `worktree preparation failed (mode=required): ${prepared.error}`) };
+    }
+    opts.log?.(`worktree preparation failed (mode=${worktree.mode}); falling back to ${worktree.originalCwd}: ${prepared.error}`);
+    spec.cwd = worktree.originalCwd;
+    return { fallbackCwd: worktree.originalCwd };
+  }
+  spec.cwd = prepared.cwd ?? spec.cwd;
+  opts.log?.(`entered worktree ${worktree.path ?? spec.cwd}${worktree.branch ? ` branch ${worktree.branch}` : ""}`);
+  return undefined;
+}
+
+/**
+ * Rebuilds an agent command spec against the original checkout after an
+ * auto-mode worktree fallback. Mutating `spec.cwd` alone is not enough:
+ * codewith/codex/opencode/aicopilot bake the worktree cwd into argv
+ * (`--cd`/`--cwd`/`--dir`), and codewith durable agents rebuild their
+ * start/control args from the recorded target.
+ */
+function worktreeFallbackSpec(target: ExecutableTarget, opts: ExecuteOptions, fallbackCwd: string): CommandSpec | undefined {
+  if (target.type !== "agent") return undefined;
+  const agentTarget = target as AgentTarget;
+  const fallbackTarget: AgentTarget = {
+    ...agentTarget,
+    cwd: fallbackCwd,
+    worktree: agentTarget.worktree
+      ? { ...agentTarget.worktree, enabled: false, cwd: fallbackCwd, reason: "auto worktree preparation failed" }
+      : undefined,
+  };
+  return commandSpec(fallbackTarget, opts);
 }
 
 function preflightRemoteSpec(
@@ -863,11 +1019,12 @@ async function executeRemoteSpec(
   machine: LoopMachineRef,
   metadata: ExecutionMetadata,
   opts: ExecuteOptions,
+  fallbackSpec?: CommandSpec,
 ): Promise<ExecutorResult> {
   const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
   const startedAt = nowIso();
-  let stdout = "";
-  let stderr = "";
+  const stdout = new BoundedOutputBuffer(maxOutputBytes);
+  const stderr = new BoundedOutputBuffer(maxOutputBytes);
   let timedOut = false;
   let idleTimedOut = false;
   let exitCode: number | undefined;
@@ -877,17 +1034,9 @@ async function executeRemoteSpec(
 
   try {
     plan = (opts.machineCommandResolver ?? resolveMachineCommand)(machine.id, "bash -s");
-    script = remoteScript(spec, metadata);
+    script = remoteScript(spec, metadata, fallbackSpec);
   } catch (err) {
-    return {
-      status: "failed",
-      stdout: "",
-      stderr: "",
-      error: err instanceof Error ? err.message : String(err),
-      startedAt,
-      finishedAt: nowIso(),
-      durationMs: 0,
-    };
+    return failureResult(startedAt, err instanceof Error ? err.message : String(err));
   }
 
   const child = spawn(plan.command, plan.args, {
@@ -895,7 +1044,7 @@ async function executeRemoteSpec(
     detached: true,
     stdio: ["pipe", "pipe", "pipe"],
   });
-  if (child.pid) opts.onSpawn?.(child.pid);
+  notifySpawn(child.pid, opts);
 
   child.stdin?.on("error", (err: NodeJS.ErrnoException) => {
     if (err.code !== "EPIPE") error = err.message;
@@ -929,12 +1078,16 @@ async function executeRemoteSpec(
   };
   resetIdleTimer();
 
-  child.stdout?.on("data", (chunk: Buffer) => {
-    stdout = appendBounded(stdout, chunk, maxOutputBytes);
+  // Persistent-decoder encoding keeps multi-byte UTF-8 sequences split across
+  // pipe chunks intact (see BoundedOutputBuffer).
+  child.stdout?.setEncoding("utf8");
+  child.stderr?.setEncoding("utf8");
+  child.stdout?.on("data", (chunk: string) => {
+    stdout.append(chunk);
     resetIdleTimer();
   });
-  child.stderr?.on("data", (chunk: Buffer) => {
-    stderr = appendBounded(stderr, chunk, maxOutputBytes);
+  child.stderr?.on("data", (chunk: string) => {
+    stderr.append(chunk);
     resetIdleTimer();
   });
 
@@ -950,44 +1103,18 @@ async function executeRemoteSpec(
     opts.signal?.removeEventListener("abort", abortHandler);
   }
 
-  const finishedAt = nowIso();
-  const durationMs = new Date(finishedAt).getTime() - new Date(startedAt).getTime();
+  const fields: ResultFields = { exitCode, stdout: stdout.value(), stderr: stderr.value(), pid: child.pid };
   if (timedOut || idleTimedOut) {
-    return {
-      status: "timed_out",
-      exitCode,
-      stdout,
-      stderr,
-      error: idleTimedOut ? `idle timed out after ${spec.idleTimeoutMs}ms without stdout/stderr` : `timed out after ${spec.timeoutMs}ms`,
-      pid: child.pid,
+    return timeoutResult(
       startedAt,
-      finishedAt,
-      durationMs,
-    };
+      idleTimedOut ? `idle timed out after ${spec.idleTimeoutMs}ms without stdout/stderr` : `timed out after ${spec.timeoutMs}ms`,
+      fields,
+    );
   }
   if (error || exitCode !== 0) {
-    return {
-      status: "failed",
-      exitCode,
-      stdout,
-      stderr,
-      error: error ?? `remote process on ${machine.id} exited with code ${exitCode ?? "unknown"}`,
-      pid: child.pid,
-      startedAt,
-      finishedAt,
-      durationMs,
-    };
+    return failureResult(startedAt, error ?? `remote process on ${machine.id} exited with code ${exitCode ?? "unknown"}`, fields);
   }
-  return {
-    status: "succeeded",
-    exitCode,
-    stdout,
-    stderr,
-    pid: child.pid,
-    startedAt,
-    finishedAt,
-    durationMs,
-  };
+  return successResult(startedAt, fields);
 }
 
 export function preflightTarget(
@@ -995,7 +1122,7 @@ export function preflightTarget(
   metadata: ExecutionMetadata = {},
   opts: ExecuteOptions = {},
 ): PreflightResult {
-  const spec = commandSpec(target);
+  const spec = commandSpec(target, opts);
   const machine = resolvedMachine(opts);
   if (machine && !machine.local) {
     preflightRemoteSpec(spec, machine, metadata, opts);
@@ -1005,14 +1132,14 @@ export function preflightTarget(
       accountTool: spec.accountTool,
     };
   }
-  const env = executionEnv(spec, metadata, opts);
+  const env = executionEnvSync(spec, metadata, opts);
   if (!spec.shell && !executableExists(spec.command, env)) {
     throw new Error(commandNotFoundMessage(spec.command, env));
   }
   if (spec.preflightAnyOf?.length && !spec.preflightAnyOf.some((command) => executableExists(command, env))) {
     throw new Error(`none of required executables found: ${spec.preflightAnyOf.join(", ")}`);
   }
-  preflightNativeAuthProfile(spec, env);
+  preflightNativeAuthProfileSync(spec, env);
   return {
     command: spec.command,
     accountProfile: spec.account?.profile,
@@ -1025,66 +1152,48 @@ export async function executeTarget(
   metadata: ExecutionMetadata = {},
   opts: ExecuteOptions = {},
 ): Promise<ExecutorResult> {
-  const spec = commandSpec(target);
+  let spec = commandSpec(target, opts);
   const machine = resolvedMachine(opts);
   if (machine && !machine.local && spec.codewithDurableAgent) {
-    const startedAt = nowIso();
-    const finishedAt = nowIso();
-    return {
-      status: "failed",
-      stdout: "",
-      stderr: "",
-      error: "remote Codewith durable background-agent steps require remote status polling support; run this Codewith step locally or add remote durable readback before dispatch",
-      startedAt,
-      finishedAt,
-      durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
-    };
+    return failureResult(
+      nowIso(),
+      "remote Codewith durable background-agent steps require remote status polling support; run this Codewith step locally or add remote durable readback before dispatch",
+    );
   }
-  if (machine && !machine.local) return executeRemoteSpec(spec, machine, metadata, opts);
+  if (machine && !machine.local) {
+    // Auto-mode worktree fallback needs a rebuilt invocation (providers bake
+    // cwd into argv), so the remote script carries both and picks at runtime.
+    const remoteFallbackSpec =
+      spec.worktree?.enabled && spec.worktree.mode === "auto"
+        ? worktreeFallbackSpec(target, opts, spec.worktree.originalCwd)
+        : undefined;
+    return executeRemoteSpec(spec, machine, metadata, opts, remoteFallbackSpec);
+  }
   const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
   const startedAt = nowIso();
-  let stdout = "";
-  let stderr = "";
+  const stdout = new BoundedOutputBuffer(maxOutputBytes);
+  const stderr = new BoundedOutputBuffer(maxOutputBytes);
   let timedOut = false;
   let idleTimedOut = false;
   let exitCode: number | undefined;
   let error: string | undefined;
 
-  const env = executionEnv(spec, metadata, opts);
+  const env = await executionEnv(spec, metadata, opts);
   if (!spec.shell && !executableExists(spec.command, env)) {
-    return {
-      status: "failed",
-      stdout: "",
-      stderr: "",
-      error: commandNotFoundMessage(spec.command, env),
-      startedAt,
-      finishedAt: nowIso(),
-      durationMs: 0,
-    };
+    return failureResult(startedAt, commandNotFoundMessage(spec.command, env));
   }
   if (spec.preflightAnyOf?.length && !spec.preflightAnyOf.some((command) => executableExists(command, env))) {
-    return {
-      status: "failed",
-      stdout,
-      stderr,
-      error: `none of required executables found: ${spec.preflightAnyOf.join(", ")}`,
-      startedAt,
-      finishedAt: nowIso(),
-      durationMs: 0,
-    };
+    return failureResult(startedAt, `none of required executables found: ${spec.preflightAnyOf.join(", ")}`);
   }
   try {
-    preflightNativeAuthProfile(spec, env);
+    await preflightNativeAuthProfile(spec, env);
   } catch (err) {
-    return {
-      status: "failed",
-      stdout: "",
-      stderr: "",
-      error: err instanceof Error ? err.message : String(err),
-      startedAt,
-      finishedAt: nowIso(),
-      durationMs: 0,
-    };
+    return failureResult(startedAt, err instanceof Error ? err.message : String(err));
+  }
+  const worktreeEntry = await enterWorktree(spec, opts, env, startedAt);
+  if (worktreeEntry?.failure) return worktreeEntry.failure;
+  if (worktreeEntry?.fallbackCwd) {
+    spec = worktreeFallbackSpec(target, opts, worktreeEntry.fallbackCwd) ?? spec;
   }
   if (spec.codewithDurableAgent) {
     return executeCodewithDurableAgent(spec, metadata, opts, env, startedAt);
@@ -1097,7 +1206,7 @@ export async function executeTarget(
     detached: true,
     stdio: spec.stdin === undefined ? ["ignore", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
   });
-  if (child.pid) opts.onSpawn?.(child.pid);
+  notifySpawn(child.pid, opts);
 
   if (spec.stdin !== undefined && child.stdin) {
     child.stdin.on("error", (err: NodeJS.ErrnoException) => {
@@ -1133,12 +1242,16 @@ export async function executeTarget(
   };
   resetIdleTimer();
 
-  child.stdout?.on("data", (chunk: Buffer) => {
-    stdout = appendBounded(stdout, chunk, maxOutputBytes);
+  // Persistent-decoder encoding keeps multi-byte UTF-8 sequences split across
+  // pipe chunks intact (see BoundedOutputBuffer).
+  child.stdout?.setEncoding("utf8");
+  child.stderr?.setEncoding("utf8");
+  child.stdout?.on("data", (chunk: string) => {
+    stdout.append(chunk);
     resetIdleTimer();
   });
-  child.stderr?.on("data", (chunk: Buffer) => {
-    stderr = appendBounded(stderr, chunk, maxOutputBytes);
+  child.stderr?.on("data", (chunk: string) => {
+    stderr.append(chunk);
     resetIdleTimer();
   });
 
@@ -1154,44 +1267,18 @@ export async function executeTarget(
     opts.signal?.removeEventListener("abort", abortHandler);
   }
 
-  const finishedAt = nowIso();
-  const durationMs = new Date(finishedAt).getTime() - new Date(startedAt).getTime();
+  const fields: ResultFields = { exitCode, stdout: stdout.value(), stderr: stderr.value(), pid: child.pid };
   if (timedOut || idleTimedOut) {
-    return {
-      status: "timed_out",
-      exitCode,
-      stdout,
-      stderr,
-      error: idleTimedOut ? `idle timed out after ${spec.idleTimeoutMs}ms without stdout/stderr` : `timed out after ${spec.timeoutMs}ms`,
-      pid: child.pid,
+    return timeoutResult(
       startedAt,
-      finishedAt,
-      durationMs,
-    };
+      idleTimedOut ? `idle timed out after ${spec.idleTimeoutMs}ms without stdout/stderr` : `timed out after ${spec.timeoutMs}ms`,
+      fields,
+    );
   }
   if (error || exitCode !== 0) {
-    return {
-      status: "failed",
-      exitCode,
-      stdout,
-      stderr,
-      error: error ?? `process exited with code ${exitCode ?? "unknown"}`,
-      pid: child.pid,
-      startedAt,
-      finishedAt,
-      durationMs,
-    };
+    return failureResult(startedAt, error ?? `process exited with code ${exitCode ?? "unknown"}`, fields);
   }
-  return {
-    status: "succeeded",
-    exitCode,
-    stdout,
-    stderr,
-    pid: child.pid,
-    startedAt,
-    finishedAt,
-    durationMs,
-  };
+  return successResult(startedAt, fields);
 }
 
 export async function executeLoop(loop: Loop, run: LoopRun, opts: ExecuteOptions = {}): Promise<ExecutorResult> {
@@ -1212,16 +1299,7 @@ export async function executeLoop(loop: Loop, run: LoopRun, opts: ExecuteOptions
         { ...opts, machine: opts.machine ?? loop.machine },
       );
     } catch (error) {
-      const finishedAt = nowIso();
-      return {
-        status: "failed",
-        stdout: "",
-        stderr: "",
-        error: `runtime preflight failed: ${error instanceof Error ? error.message : String(error)}`,
-        startedAt,
-        finishedAt,
-        durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
-      };
+      return failureResult(startedAt, `runtime preflight failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
   return executeTarget(

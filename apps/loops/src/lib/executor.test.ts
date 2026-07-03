@@ -1,9 +1,15 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 import { Store } from "./store.js";
-import { executeLoop, preflightTarget } from "./executor.js";
+import { defaultAgentIdleTimeoutMs, executeLoop, preflightTarget, type SpawnedProcessInfo } from "./executor.js";
+import { openGate, waitUntil } from "../test-helpers.js";
+
+function gateWaitScript(gate: string): string {
+  return `while [ ! -f ${JSON.stringify(gate)} ]; do sleep 0.02; done\n`;
+}
 
 describe("executeLoop", () => {
   const remoteHooks = {
@@ -79,7 +85,7 @@ describe("executeLoop", () => {
     }
   });
 
-  test("agent targets default to unlimited timeout", async () => {
+  test("agent targets default to unlimited hard timeout", async () => {
     const store = new Store(":memory:");
     const root = mkdtempSync(join(tmpdir(), "loops-agent-timeout-"));
     const bin = join(root, "bin");
@@ -104,6 +110,541 @@ describe("executeLoop", () => {
       store.close();
       rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  test("applies a default idle watchdog to agent targets without explicit timeouts", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-agent-watchdog-"));
+    const bin = join(root, "bin");
+    mkdirSync(bin, { recursive: true });
+    const claude = join(bin, "claude");
+    writeFileSync(claude, "#!/usr/bin/env bash\nsleep 5\n");
+    chmodSync(claude, 0o755);
+    try {
+      const loop = store.createLoop({
+        name: "agent-default-watchdog",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: { type: "agent", provider: "claude", prompt: "work" },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, LOOPS_AGENT_IDLE_TIMEOUT_MS: "75" },
+      });
+      expect(result.status).toBe("timed_out");
+      expect(result.error).toContain("idle timed out after 75ms");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("explicit unlimited agent timeout disables the default idle watchdog", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-agent-null-timeout-"));
+    const bin = join(root, "bin");
+    mkdirSync(bin, { recursive: true });
+    const claude = join(bin, "claude");
+    writeFileSync(claude, "#!/usr/bin/env bash\nsleep 0.3\nprintf late-output\ncat >/dev/null\n");
+    chmodSync(claude, 0o755);
+    try {
+      const loop = store.createLoop({
+        name: "agent-null-timeout",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: { type: "agent", provider: "claude", prompt: "work", timeoutMs: null },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, LOOPS_AGENT_IDLE_TIMEOUT_MS: "50" },
+      });
+      expect(result.status).toBe("succeeded");
+      expect(result.stdout).toContain("late-output");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("default idle watchdog can be disabled and scales for buffered-output providers", () => {
+    const claudeTarget = { type: "agent", provider: "claude", prompt: "work" } as const;
+    const codexTarget = { type: "agent", provider: "codex", prompt: "work" } as const;
+    // Buffered-output providers (claude prints nothing until completion) get a larger budget.
+    expect(defaultAgentIdleTimeoutMs(claudeTarget, { env: {} as NodeJS.ProcessEnv })).toBe(4 * 60 * 60_000);
+    expect(defaultAgentIdleTimeoutMs(codexTarget, { env: {} as NodeJS.ProcessEnv })).toBe(30 * 60_000);
+    // Explicit env override still wins.
+    expect(defaultAgentIdleTimeoutMs(claudeTarget, { env: { LOOPS_AGENT_IDLE_TIMEOUT_MS: "75" } as NodeJS.ProcessEnv })).toBe(75);
+    // 0/none/off disable the default watchdog entirely.
+    for (const raw of ["0", "none", "off", "NONE"]) {
+      expect(defaultAgentIdleTimeoutMs(claudeTarget, { env: { LOOPS_AGENT_IDLE_TIMEOUT_MS: raw } as NodeJS.ProcessEnv })).toBeUndefined();
+      expect(defaultAgentIdleTimeoutMs(codexTarget, { env: { LOOPS_AGENT_IDLE_TIMEOUT_MS: raw } as NodeJS.ProcessEnv })).toBeUndefined();
+    }
+    // Explicit per-target timeouts opt out of the default watchdog.
+    expect(defaultAgentIdleTimeoutMs({ ...claudeTarget, timeoutMs: null }, { env: {} as NodeJS.ProcessEnv })).toBeUndefined();
+    expect(defaultAgentIdleTimeoutMs({ ...claudeTarget, idleTimeoutMs: 1_000 }, { env: {} as NodeJS.ProcessEnv })).toBeUndefined();
+  });
+
+  test("reports pid, pgid, and processStartedAt for spawned children", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-pgid-report-"));
+    const gate = join(root, "gate");
+    try {
+      const loop = store.createLoop({
+        name: "pgid-report",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: { type: "command", command: gateWaitScript(gate).trim(), shell: true, timeoutMs: 5_000 },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      let info: SpawnedProcessInfo | undefined;
+      let statPgid: number | undefined;
+      const result = await executeLoop(loop, claim!.run, {
+        onSpawnProcess: (spawned) => {
+          info = spawned;
+          if (existsSync(`/proc/${spawned.pid}/stat`)) {
+            const stat = readFileSync(`/proc/${spawned.pid}/stat`, "utf8");
+            const rest = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+            statPgid = Number(rest[2]);
+          }
+          openGate(gate);
+        },
+      });
+      expect(result.status).toBe("succeeded");
+      expect(info).toBeDefined();
+      expect(info!.pgid).toBe(info!.pid);
+      expect(Number.isNaN(new Date(info!.processStartedAt).getTime())).toBe(false);
+      if (statPgid !== undefined) expect(statPgid).toBe(info!.pid);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  describe("worktree enforcement", () => {
+    function initRepo(root: string): string {
+      const repo = join(root, "repo");
+      mkdirSync(repo, { recursive: true });
+      execFileSync("git", ["init", "-q", repo]);
+      execFileSync("git", ["-C", repo, "-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "--allow-empty", "-m", "init"], {
+        stdio: "ignore",
+      });
+      return repo;
+    }
+
+    function fakePwdBinary(root: string): string {
+      const bin = join(root, "bin");
+      mkdirSync(bin, { recursive: true });
+      const claude = join(bin, "claude");
+      writeFileSync(claude, "#!/usr/bin/env bash\npwd\ncat >/dev/null\n");
+      chmodSync(claude, 0o755);
+      return bin;
+    }
+
+    test("prepares and enters a required git worktree before spawning", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-worktree-required-"));
+      const repo = initRepo(root);
+      const bin = fakePwdBinary(root);
+      const wtPath = join(root, "worktrees", "repo", "run-1");
+      const store = new Store(":memory:");
+      try {
+        const loop = store.createLoop({
+          name: "worktree-required",
+          schedule: { type: "once", at: new Date().toISOString() },
+          target: {
+            type: "agent",
+            provider: "claude",
+            prompt: "work",
+            configIsolation: "safe",
+            cwd: wtPath,
+            timeoutMs: 30_000,
+            worktree: {
+              mode: "required",
+              enabled: true,
+              originalCwd: repo,
+              cwd: wtPath,
+              repoRoot: repo,
+              root: join(root, "worktrees"),
+              path: wtPath,
+              branch: "openloops/exec-test",
+            },
+          },
+        });
+        const claim = store.claimRun(loop, new Date().toISOString(), "test");
+        expect(claim).toBeDefined();
+        const result = await executeLoop(loop, claim!.run, {
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        });
+        expect(result.status).toBe("succeeded");
+        expect(result.stdout.trim()).toBe(realpathSync(wtPath));
+        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
+
+        const again = await executeLoop(loop, claim!.run, {
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        });
+        expect(again.status).toBe("succeeded");
+        expect(again.stdout.trim()).toBe(realpathSync(wtPath));
+      } finally {
+        store.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("fails closed when required worktree preparation fails", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-worktree-fail-"));
+      const notRepo = join(root, "not-a-repo");
+      mkdirSync(notRepo, { recursive: true });
+      const bin = fakePwdBinary(root);
+      const wtPath = join(root, "worktrees", "repo", "run-1");
+      const store = new Store(":memory:");
+      try {
+        const loop = store.createLoop({
+          name: "worktree-fail-closed",
+          schedule: { type: "once", at: new Date().toISOString() },
+          target: {
+            type: "agent",
+            provider: "claude",
+            prompt: "work",
+            configIsolation: "safe",
+            cwd: notRepo,
+            timeoutMs: 30_000,
+            worktree: {
+              mode: "required",
+              enabled: true,
+              originalCwd: notRepo,
+              cwd: wtPath,
+              repoRoot: notRepo,
+              path: wtPath,
+              branch: "openloops/exec-test",
+            },
+          },
+        });
+        const claim = store.claimRun(loop, new Date().toISOString(), "test");
+        expect(claim).toBeDefined();
+        const result = await executeLoop(loop, claim!.run, {
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        });
+        expect(result.status).toBe("failed");
+        expect(result.error).toContain("worktree preparation failed (mode=required)");
+        expect(result.stdout).toBe("");
+      } finally {
+        store.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("remote execution fails closed when required worktree preparation fails", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-worktree-remote-"));
+      const home = join(root, "home");
+      const binDir = join(home, ".local", "bin");
+      mkdirSync(binDir, { recursive: true });
+      const fake = join(binDir, "claude");
+      writeFileSync(fake, "#!/usr/bin/env bash\nprintf remote-agent-ran\ncat >/dev/null\n");
+      chmodSync(fake, 0o755);
+      const wtPath = join(root, "worktrees", "repo", "run-1");
+      const store = new Store(":memory:");
+      try {
+        const loop = store.createLoop({
+          name: "worktree-remote-required",
+          schedule: { type: "once", at: new Date().toISOString() },
+          target: {
+            type: "agent",
+            provider: "claude",
+            prompt: "work",
+            configIsolation: "safe",
+            cwd: wtPath,
+            timeoutMs: 30_000,
+            worktree: {
+              mode: "required",
+              enabled: true,
+              originalCwd: root,
+              cwd: wtPath,
+              // Not a git repository: native preparation must fail closed.
+              repoRoot: root,
+              path: wtPath,
+              branch: "openloops/exec-test",
+            },
+          },
+          machine: { id: "remote-test", local: false, route: "ssh" },
+        });
+        const claim = store.claimRun(loop, new Date().toISOString(), "test");
+        expect(claim).toBeDefined();
+        const result = await executeLoop(loop, claim!.run, {
+          ...remoteHooks,
+          env: { HOME: home, PATH: "/usr/bin:/bin" },
+        });
+        expect(result.status).toBe("failed");
+        expect(result.stderr).toContain("worktree repoRoot is not a git repository");
+        expect(result.stderr).toContain("worktree preparation failed (mode=required)");
+        expect(result.stdout).not.toContain("remote-agent-ran");
+      } finally {
+        store.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("remote execution natively prepares and enters a required worktree", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-worktree-remote-prepare-"));
+      const repo = initRepo(root);
+      const home = join(root, "home");
+      const binDir = join(home, ".local", "bin");
+      mkdirSync(binDir, { recursive: true });
+      const fake = join(binDir, "claude");
+      writeFileSync(fake, "#!/usr/bin/env bash\npwd\ncat >/dev/null\n");
+      chmodSync(fake, 0o755);
+      const wtPath = join(root, "worktrees", "repo", "run-1");
+      const store = new Store(":memory:");
+      try {
+        const loop = store.createLoop({
+          name: "worktree-remote-prepare",
+          schedule: { type: "once", at: new Date().toISOString() },
+          target: {
+            type: "agent",
+            provider: "claude",
+            prompt: "work",
+            configIsolation: "safe",
+            cwd: wtPath,
+            timeoutMs: 30_000,
+            worktree: {
+              mode: "required",
+              enabled: true,
+              originalCwd: repo,
+              cwd: wtPath,
+              repoRoot: repo,
+              root: join(root, "worktrees"),
+              path: wtPath,
+              branch: "openloops/exec-test",
+            },
+          },
+          machine: { id: "remote-test", local: false, route: "ssh" },
+        });
+        const claim = store.claimRun(loop, new Date().toISOString(), "test");
+        expect(claim).toBeDefined();
+        const result = await executeLoop(loop, claim!.run, {
+          ...remoteHooks,
+          env: { HOME: home, PATH: "/usr/bin:/bin" },
+        });
+        expect(result.status).toBe("succeeded");
+        expect(result.stdout.trim()).toBe(wtPath);
+        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
+
+        // Second run reuses the existing worktree.
+        const again = await executeLoop(loop, claim!.run, {
+          ...remoteHooks,
+          env: { HOME: home, PATH: "/usr/bin:/bin" },
+        });
+        expect(again.status).toBe("succeeded");
+        expect(again.stdout.trim()).toBe(wtPath);
+      } finally {
+        store.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("remote auto worktree fallback runs the rebuilt invocation against the original checkout", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-worktree-remote-auto-"));
+      const notRepo = join(root, "not-a-repo");
+      mkdirSync(notRepo, { recursive: true });
+      const home = join(root, "home");
+      const binDir = join(home, ".local", "bin");
+      mkdirSync(binDir, { recursive: true });
+      const fake = join(binDir, "codex");
+      writeFileSync(fake, '#!/usr/bin/env bash\nprintf \'%s\\n\' "$@"\ncat >/dev/null\n');
+      chmodSync(fake, 0o755);
+      const wtPath = join(root, "worktrees", "repo", "run-1");
+      const store = new Store(":memory:");
+      try {
+        const loop = store.createLoop({
+          name: "worktree-remote-auto",
+          schedule: { type: "once", at: new Date().toISOString() },
+          target: {
+            type: "agent",
+            provider: "codex",
+            prompt: "work",
+            configIsolation: "safe",
+            cwd: wtPath,
+            timeoutMs: 30_000,
+            worktree: {
+              mode: "auto",
+              enabled: true,
+              originalCwd: notRepo,
+              cwd: wtPath,
+              repoRoot: notRepo,
+              path: wtPath,
+              branch: "openloops/exec-test",
+            },
+          },
+          machine: { id: "remote-test", local: false, route: "ssh" },
+        });
+        const claim = store.claimRun(loop, new Date().toISOString(), "test");
+        expect(claim).toBeDefined();
+        const result = await executeLoop(loop, claim!.run, {
+          ...remoteHooks,
+          env: { HOME: home, PATH: "/usr/bin:/bin" },
+        });
+        expect(result.status).toBe("succeeded");
+        expect(result.stderr).toContain("worktree preparation failed (mode=auto)");
+        expect(result.stdout).toContain(`--cd\n${notRepo}`);
+        expect(result.stdout).not.toContain(wtPath);
+      } finally {
+        store.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("falls back to the original cwd when auto worktree preparation fails", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-worktree-auto-"));
+      const notRepo = join(root, "not-a-repo");
+      mkdirSync(notRepo, { recursive: true });
+      const bin = fakePwdBinary(root);
+      const wtPath = join(root, "worktrees", "repo", "run-1");
+      const store = new Store(":memory:");
+      const logs: string[] = [];
+      try {
+        const loop = store.createLoop({
+          name: "worktree-auto-fallback",
+          schedule: { type: "once", at: new Date().toISOString() },
+          target: {
+            type: "agent",
+            provider: "claude",
+            prompt: "work",
+            configIsolation: "safe",
+            cwd: wtPath,
+            timeoutMs: 30_000,
+            worktree: {
+              mode: "auto",
+              enabled: true,
+              originalCwd: notRepo,
+              cwd: wtPath,
+              repoRoot: notRepo,
+              path: wtPath,
+              branch: "openloops/exec-test",
+            },
+          },
+        });
+        const claim = store.claimRun(loop, new Date().toISOString(), "test");
+        expect(claim).toBeDefined();
+        const result = await executeLoop(loop, claim!.run, {
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+          log: (message) => logs.push(message),
+        });
+        expect(result.status).toBe("succeeded");
+        expect(result.stdout.trim()).toBe(realpathSync(notRepo));
+        expect(logs.some((line) => line.includes("worktree preparation failed (mode=auto)"))).toBe(true);
+      } finally {
+        store.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("auto worktree fallback rebuilds codex argv against the original checkout", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-worktree-auto-codex-"));
+      const notRepo = join(root, "not-a-repo");
+      mkdirSync(notRepo, { recursive: true });
+      const bin = join(root, "bin");
+      mkdirSync(bin, { recursive: true });
+      const codex = join(bin, "codex");
+      writeFileSync(codex, '#!/usr/bin/env bash\nprintf \'%s\\n\' "$@"\ncat >/dev/null\n');
+      chmodSync(codex, 0o755);
+      const wtPath = join(root, "worktrees", "repo", "run-1");
+      const store = new Store(":memory:");
+      try {
+        const loop = store.createLoop({
+          name: "worktree-auto-codex",
+          schedule: { type: "once", at: new Date().toISOString() },
+          target: {
+            type: "agent",
+            provider: "codex",
+            prompt: "work",
+            configIsolation: "safe",
+            cwd: wtPath,
+            timeoutMs: 30_000,
+            worktree: {
+              mode: "auto",
+              enabled: true,
+              originalCwd: notRepo,
+              cwd: wtPath,
+              repoRoot: notRepo,
+              path: wtPath,
+              branch: "openloops/exec-test",
+            },
+          },
+        });
+        const claim = store.claimRun(loop, new Date().toISOString(), "test");
+        expect(claim).toBeDefined();
+        const result = await executeLoop(loop, claim!.run, {
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        });
+        expect(result.status).toBe("succeeded");
+        expect(result.stdout).toContain(`--cd\n${notRepo}`);
+        expect(result.stdout).not.toContain(wtPath);
+      } finally {
+        store.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test("auto worktree fallback rebuilds codewith durable agent args against the original checkout", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-worktree-auto-codewith-"));
+      const notRepo = join(root, "not-a-repo");
+      mkdirSync(notRepo, { recursive: true });
+      const bin = join(root, "bin");
+      mkdirSync(bin, { recursive: true });
+      const argsFile = join(root, "codewith-args");
+      const codewith = join(bin, "codewith");
+      writeFileSync(
+        codewith,
+        [
+          "#!/usr/bin/env bash",
+          `printf '%s\\n' "$@" >> ${JSON.stringify(argsFile)}`,
+          `printf -- '--\\n' >> ${JSON.stringify(argsFile)}`,
+          'case " $* " in',
+          '  *" agent start "*) echo \'{"agent":{"agentId":"a1","status":"running"}}\' ;;',
+          '  *" agent read "*) echo \'{"agent":{"agentId":"a1","status":"completed"}}\' ;;',
+          '  *" agent logs "*) echo \'{"data":[]}\' ;;',
+          "  *) echo '{}' ;;",
+          "esac",
+        ].join("\n"),
+      );
+      chmodSync(codewith, 0o755);
+      const wtPath = join(root, "worktrees", "repo", "run-1");
+      const store = new Store(":memory:");
+      try {
+        const loop = store.createLoop({
+          name: "worktree-auto-codewith",
+          schedule: { type: "once", at: new Date().toISOString() },
+          target: {
+            type: "agent",
+            provider: "codewith",
+            prompt: "work",
+            configIsolation: "safe",
+            cwd: wtPath,
+            timeoutMs: 30_000,
+            worktree: {
+              mode: "auto",
+              enabled: true,
+              originalCwd: notRepo,
+              cwd: wtPath,
+              repoRoot: notRepo,
+              path: wtPath,
+              branch: "openloops/exec-test",
+            },
+          },
+        });
+        const claim = store.claimRun(loop, new Date().toISOString(), "test");
+        expect(claim).toBeDefined();
+        const result = await executeLoop(loop, claim!.run, {
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, LOOPS_CODEWITH_AGENT_POLL_MS: "100" },
+        });
+        expect(result.status).toBe("succeeded");
+        const recorded = readFileSync(argsFile, "utf8");
+        expect(recorded).toContain(`--cd\n${notRepo}`);
+        expect(recorded).toContain(`--cwd\n${notRepo}`);
+        expect(recorded).not.toContain(wtPath);
+      } finally {
+        store.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
   });
 
   test("routes machine-assigned command loops through remote transport", async () => {
@@ -278,8 +819,9 @@ describe("executeLoop", () => {
     const home = mkdtempSync(join(tmpdir(), "loops-remote-home-"));
     const binDir = join(home, ".local", "bin");
     mkdirSync(binDir, { recursive: true });
+    const gate = join(home, "gate");
     const fake = join(binDir, "claude");
-    await Bun.write(fake, "#!/usr/bin/env bash\nsleep 0.3\nprintf 'stdin:'\ncat\n");
+    await Bun.write(fake, `#!/usr/bin/env bash\n${gateWaitScript(gate)}printf 'stdin:'\ncat\n`);
     chmodSync(fake, 0o755);
 
     const store = new Store(":memory:");
@@ -305,10 +847,11 @@ describe("executeLoop", () => {
           pid = spawnedPid;
         },
       });
-      for (let i = 0; i < 50 && !pid; i++) await Bun.sleep(10);
+      await waitUntil(() => pid !== undefined, { label: "spawned pid reported" });
       expect(pid).toBeDefined();
       const cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf8").replace(/\0/g, " ");
       expect(cmdline).not.toContain(secret);
+      openGate(gate);
       const result = await pending;
       expect(result.status).toBe("succeeded");
       expect(result.stdout).toContain(`stdin:${secret}`);
@@ -324,8 +867,9 @@ describe("executeLoop", () => {
     const home = mkdtempSync(join(tmpdir(), "loops-remote-env-home-"));
     const binDir = join(home, ".local", "bin");
     mkdirSync(binDir, { recursive: true });
+    const gate = join(home, "gate");
     const fake = join(binDir, "claude");
-    await Bun.write(fake, "#!/usr/bin/env bash\nsleep 0.3\ncat >/dev/null\n");
+    await Bun.write(fake, `#!/usr/bin/env bash\n${gateWaitScript(gate)}cat >/dev/null\n`);
     chmodSync(fake, 0o755);
 
     const store = new Store(":memory:");
@@ -359,13 +903,14 @@ describe("executeLoop", () => {
           pid = spawnedPid;
         },
       });
-      for (let i = 0; i < 50 && !pid; i++) await Bun.sleep(10);
+      await waitUntil(() => pid !== undefined, { label: "spawned pid reported" });
       expect(pid).toBeDefined();
       const environ = readFileSync(`/proc/${pid}/environ`, "utf8").replace(/\0/g, "\n");
       expect(environ).not.toContain(secret);
       expect(environ).not.toContain("AWS_SECRET_ACCESS_KEY=");
       expect(environ).not.toContain("NPM_TOKEN=");
       expect(environ).not.toContain("CODEWITH_HOME=");
+      openGate(gate);
       const result = await pending;
       expect(result.status).toBe("succeeded");
     } finally {
@@ -518,11 +1063,12 @@ describe("executeLoop", () => {
     ] as const;
     for (const [provider, binary] of providers) {
       const fake = join(binDir, binary);
+      const gate = join(home, `${provider}.gate`);
       await Bun.write(
         fake,
         provider === "cursor"
-          ? "#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${1:-}\" != \"-p\" ]]; then echo 'missing cursor print flag' >&2; exit 64; fi\nsleep 0.3\nprintf 'stdin:'\ncat\n"
-          : "#!/usr/bin/env bash\nsleep 0.3\nprintf 'stdin:'\ncat\n",
+          ? `#!/usr/bin/env bash\nset -euo pipefail\nif [[ "\${1:-}" != "-p" ]]; then echo 'missing cursor print flag' >&2; exit 64; fi\n${gateWaitScript(gate)}printf 'stdin:'\ncat\n`
+          : `#!/usr/bin/env bash\n${gateWaitScript(gate)}printf 'stdin:'\ncat\n`,
       );
       chmodSync(fake, 0o755);
     }
@@ -550,10 +1096,11 @@ describe("executeLoop", () => {
             pid = spawnedPid;
           },
         });
-        for (let i = 0; i < 50 && !pid; i++) await Bun.sleep(10);
+        await waitUntil(() => pid !== undefined, { label: `${provider} spawned pid reported` });
         expect(pid).toBeDefined();
         const cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf8").replace(/\0/g, " ");
         expect(cmdline).not.toContain(secret);
+        openGate(join(home, `${provider}.gate`));
         const result = await pending;
         expect(result.status).toBe("succeeded");
         expect(result.stdout).toContain(`stdin:${secret}`);

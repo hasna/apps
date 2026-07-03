@@ -1,18 +1,13 @@
 #!/usr/bin/env bun
-import { createHash, randomUUID } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
-import { dirname, join, resolve } from "node:path";
-import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { Command } from "commander";
 import type {
   AccountRef,
   AgentAllowlistSpec,
-  AgentPermissionMode,
   AgentProvider,
-  AgentSandbox,
-  AgentWorktreeMode,
   CatchUpPolicy,
   CreateLoopInput,
   CreateWorkflowInput,
@@ -22,7 +17,6 @@ import type {
   OverlapPolicy,
   ScheduleSpec,
   WorkflowSpec,
-  WorkflowWorkItemStatus,
 } from "../types.js";
 import { dataDir, daemonLogPath, dbPath } from "../lib/paths.js";
 import {
@@ -40,18 +34,27 @@ import {
   redact,
   textOutputBlocks,
 } from "../lib/format.js";
-import { parseDuration } from "../lib/schedule.js";
+import { computeNextAfter, parseDuration } from "../lib/recurrence.js";
 import { Store } from "../lib/store.js";
 import { executeWorkflow, preflightWorkflow } from "../lib/workflow-runner.js";
-import { preflightTarget } from "../lib/executor.js";
 import { advanceLoop, executeClaimedRun, manualRunScheduledFor, manualRunSource, shouldAdvanceManualRun, tick } from "../lib/scheduler.js";
 import { daemonStatus, stopDaemon } from "../daemon/control.js";
 import { runDaemon, startDaemon } from "../daemon/daemon.js";
 import { enableStartup, installStartup } from "../daemon/install.js";
-import { workflowBodyFromJson } from "../lib/workflow-spec.js";
 import { normalizeGoalSpec } from "../lib/workflow-spec.js";
 import { runDoctor } from "../lib/doctor.js";
 import { buildHealthReport, expectationForLoop } from "../lib/health.js";
+import {
+  applyImportMigrationBundle,
+  buildImportMigrationPlan,
+  buildSelfHostedMigrationPlan,
+  exportLoopsMigrationBundle,
+  publicMigrationBundle,
+  registerSelfHostedRunner,
+  validateLoopsMigrationBundle,
+  type LoopsMigrationPlan,
+} from "../lib/migration.js";
+import { buildDeploymentStatus, deploymentStatusLine, type LoopDeploymentMode, type LoopDeploymentStatus } from "../lib/mode.js";
 import {
   buildDuplicateOverlapReport,
   buildNameHygieneReport,
@@ -64,16 +67,46 @@ import {
   importCustomLoopTemplate,
   listLoopTemplates,
   loopTemplatesDir,
-  renderEventWorkerVerifierWorkflow,
-  renderTaskLifecycleWorkflow,
   renderLoopTemplate,
-  renderTodosTaskWorkerVerifierWorkflow,
-  TASK_LIFECYCLE_TEMPLATE_ID,
-  TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID,
   validateCustomLoopTemplateFile,
   validateLoopTemplateRegistry,
 } from "../lib/templates.js";
-import type { EventEnvelope } from "@hasna/events";
+import { backupDatabase } from "../lib/backup.js";
+import { CodedError, ValidationError } from "../lib/errors.js";
+import {
+  addAgentRoutingOptions,
+  addRouteEventOptions,
+  addTodosDrainOptions,
+  buildHygieneRouteTasks,
+  collectValues,
+  defaultLoopsProject,
+  drainTodosTaskRoutes,
+  GateError,
+  idleTimeoutDuration,
+  listFromRepeatedOpts,
+  nonNegativeInteger,
+  normalizeLoopTargetForStorage,
+  parseHygieneChecks,
+  permissionModeFromOpts,
+  positiveDuration,
+  positiveInteger,
+  preflightLoopTarget,
+  preflightStoredWorkflow,
+  providerAuthProfileFromOpts,
+  readEventEnvelopeInput,
+  routeCursorKey,
+  routeDrainArgs,
+  routeEventByKind,
+  sandboxFromOpts,
+  splitList,
+  stringField,
+  timeoutDuration,
+  upsertRouteTasks,
+  workflowBodyFromFile,
+  workflowSpecForPreflight,
+  type TodosDrainOptions,
+  type TodosTaskRouteOptions,
+} from "../lib/route/index.js";
 
 const program = new Command();
 
@@ -89,116 +122,63 @@ function print(value: unknown, human?: string): void {
   else console.log(human);
 }
 
+/**
+ * Uniform error reporting for every command action: gate failures keep their
+ * stable structured JSON shape, everything else becomes
+ * `{ok:false, error:{code, message}}` in JSON mode. No stack traces.
+ */
+function reportCliError(error: unknown): void {
+  const message = error instanceof Error ? error.message : String(error);
+  process.exitCode = 1;
+  if (error instanceof GateError) {
+    if (isJson()) {
+      print({
+        ok: false,
+        created: false,
+        [error.gate]: {
+          ok: false,
+          error: redact(message, 320),
+        },
+        ...error.context,
+      });
+      return;
+    }
+    console.error(`error: ${message}`);
+    return;
+  }
+  if (isJson()) {
+    print({ ok: false, error: { code: error instanceof CodedError ? error.code : "ERROR", message: redact(message, 640) } });
+  }
+  console.error(`error: ${message}`);
+}
+
+function runAction<Args extends unknown[]>(fn: (...args: Args) => void | Promise<void>): (...args: Args) => Promise<void> {
+  return async (...args: Args) => {
+    try {
+      await fn(...args);
+    } catch (error) {
+      reportCliError(error);
+    }
+  };
+}
+
+function printDeploymentStatus(status: LoopDeploymentStatus, opts: { json?: boolean } = {}): void {
+  if (isJson() || opts.json) console.log(JSON.stringify(status, null, 2));
+  else {
+    console.log(deploymentStatusLine(status));
+    for (const warning of status.warnings) console.log(`warn ${warning}`);
+  }
+}
+
+function deploymentStatusCommand(mode?: LoopDeploymentMode) {
+  return (opts: { json?: boolean } = {}) => {
+    printDeploymentStatus(buildDeploymentStatus({ perspective: mode }), opts);
+  };
+}
+
 function printCreatedLoop(loop: ReturnType<Store["createLoop"]>, human: string, preflight?: unknown): void {
   if (preflight !== undefined) print({ loop: publicLoop(loop), preflight }, human);
   else print(publicLoop(loop), human);
-}
-
-function preflightFailed(error: unknown, context: Record<string, unknown>): never {
-  if (!isJson()) throw error;
-  const message = error instanceof Error ? error.message : String(error);
-  print({
-    ok: false,
-    created: false,
-    preflight: {
-      ok: false,
-      error: redact(message, 320),
-    },
-    ...context,
-  });
-  process.exit(1);
-}
-
-function validationFailed(error: unknown, context: Record<string, unknown>): never {
-  if (!isJson()) throw error;
-  const message = error instanceof Error ? error.message : String(error);
-  print({
-    ok: false,
-    created: false,
-    validation: {
-      ok: false,
-      error: redact(message, 320),
-    },
-    ...context,
-  });
-  process.exit(1);
-}
-
-function normalizeLoopTargetForStorage(
-  target: unknown,
-  context: Record<string, unknown>,
-  opts: { baseDir?: string } = {},
-): Exclude<LoopTarget, { type: "workflow" }> {
-  try {
-    const workflow = workflowBodyFromJson({
-      name: "loop-target-validation",
-      steps: [{ id: "target", target }],
-    }, undefined, opts);
-    return workflow.steps[0]!.target as Exclude<LoopTarget, { type: "workflow" }>;
-  } catch (error) {
-    validationFailed(error, context);
-  }
-}
-
-function validateLoopTargetForStorage(target: Exclude<LoopTarget, { type: "workflow" }>, context: Record<string, unknown>): void {
-  normalizeLoopTargetForStorage(target, context);
-}
-
-function normalizeWorkflowForStorage(body: CreateWorkflowInput, context: Record<string, unknown>): CreateWorkflowInput {
-  try {
-    return workflowBodyFromJson(body);
-  } catch (error) {
-    validationFailed(error, context);
-  }
-}
-
-function workflowBodyFromFile(file: string, fallbackName: string | undefined, context: Record<string, unknown>): CreateWorkflowInput {
-  try {
-    const resolved = resolve(file);
-    return workflowBodyFromJson(JSON.parse(readFileSync(resolved, "utf8")), fallbackName, { baseDir: dirname(resolved) });
-  } catch (error) {
-    validationFailed(error, context);
-  }
-}
-
-function preflightLoopTarget(
-  target: Exclude<LoopTarget, { type: "workflow" }>,
-  context: Record<string, unknown>,
-  metadata: Parameters<typeof preflightTarget>[1],
-  opts: Parameters<typeof preflightTarget>[2],
-): ReturnType<typeof preflightTarget> {
-  try {
-    return preflightTarget(target, metadata, opts);
-  } catch (error) {
-    preflightFailed(error, context);
-  }
-}
-
-function preflightStoredWorkflow(
-  workflow: Parameters<typeof preflightWorkflow>[0],
-  context: Record<string, unknown>,
-  opts: Parameters<typeof preflightWorkflow>[1],
-): ReturnType<typeof preflightWorkflow> {
-  try {
-    return preflightWorkflow(workflow, opts);
-  } catch (error) {
-    preflightFailed(error, context);
-  }
-}
-
-function workflowSpecForPreflight(body: CreateWorkflowInput, id = "validation"): WorkflowSpec {
-  const now = new Date().toISOString();
-  return {
-    id,
-    name: body.name,
-    description: body.description,
-    version: body.version ?? 1,
-    status: "active",
-    goal: body.goal,
-    steps: body.steps as WorkflowSpec["steps"],
-    createdAt: now,
-    updatedAt: now,
-  };
 }
 
 function publicWorkflowBody(body: CreateWorkflowInput): Record<string, unknown> {
@@ -302,46 +282,11 @@ function printTextOutput(value: { stdout?: string; stderr?: string }): void {
 
 function parseSchedule(opts: { at?: string; every?: string; cron?: string; dynamic?: boolean }): ScheduleSpec {
   const count = [opts.at, opts.every, opts.cron, opts.dynamic ? "dynamic" : undefined].filter(Boolean).length;
-  if (count !== 1) throw new Error("choose exactly one schedule: --at, --every, --cron, or --dynamic");
+  if (count !== 1) throw new ValidationError("choose exactly one schedule: --at, --every, --cron, or --dynamic");
   if (opts.at) return { type: "once", at: new Date(opts.at).toISOString() };
   if (opts.every) return { type: "interval", everyMs: parseDuration(opts.every), anchor: "fixed_rate" };
   if (opts.cron) return { type: "cron", expression: opts.cron };
   return { type: "dynamic", minIntervalMs: 60_000 };
-}
-
-function positiveInteger(raw: string | undefined, label: string): number | undefined {
-  if (raw === undefined) return undefined;
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value <= 0) throw new Error(`${label} must be a positive integer`);
-  return value;
-}
-
-function nonNegativeInteger(raw: string | undefined, label: string): number | undefined {
-  if (raw === undefined) return undefined;
-  const value = Number(raw);
-  if (!Number.isInteger(value) || value < 0) throw new Error(`${label} must be a non-negative integer`);
-  return value;
-}
-
-function positiveDuration(raw: string | undefined, label: string): number | undefined {
-  if (raw === undefined) return undefined;
-  const value = parseDuration(raw);
-  if (!Number.isFinite(value) || value <= 0) throw new Error(`${label} must be greater than zero`);
-  return value;
-}
-
-function timeoutDuration(raw: string | undefined, label: string): number | null | undefined {
-  if (raw === undefined) return undefined;
-  const normalized = raw.trim().toLowerCase();
-  if (["none", "unlimited", "null", "never", "off", "false"].includes(normalized)) return null;
-  const value = parseDuration(raw);
-  if (!Number.isFinite(value) || value <= 0) throw new Error(`${label} must be a duration greater than zero, or none/unlimited`);
-  return value;
-}
-
-function idleTimeoutDuration(raw: string | undefined, label: string): number | undefined {
-  const value = timeoutDuration(raw, label);
-  return value === null ? undefined : value;
 }
 
 function parsePolicy(opts: {
@@ -353,9 +298,9 @@ function parsePolicy(opts: {
   lease?: string;
 }) {
   const catchUp = (opts.catchUp ?? "latest") as CatchUpPolicy;
-  if (!["none", "latest", "all"].includes(catchUp)) throw new Error("--catch-up must be none, latest, or all");
+  if (!["none", "latest", "all"].includes(catchUp)) throw new ValidationError("--catch-up must be none, latest, or all");
   const overlap = (opts.overlap ?? "skip") as OverlapPolicy;
-  if (!["skip", "allow"].includes(overlap)) throw new Error("--overlap must be skip or allow");
+  if (!["skip", "allow"].includes(overlap)) throw new ValidationError("--overlap must be skip or allow");
   return {
     catchUp,
     catchUpLimit: positiveInteger(opts.catchUpLimit, "--catch-up-limit"),
@@ -467,7 +412,7 @@ function addGoalOptions(command: Command): Command {
 function goalFromOpts(opts: Record<string, string | boolean | undefined>) {
   const hasGoalOption = opts.goal !== undefined || opts.goalBudget !== undefined || opts.goalModel !== undefined || opts.goalMaxTurns !== undefined;
   if (!hasGoalOption) return undefined;
-  if (typeof opts.goal !== "string") throw new Error("--goal is required when using goal options");
+  if (typeof opts.goal !== "string") throw new ValidationError("--goal is required when using goal options");
   return normalizeGoalSpec(
     {
       objective: opts.goal,
@@ -490,17 +435,9 @@ function accountFromOpts(opts: {
   verifierAccount?: string;
 }): AccountRef | undefined {
   if (!opts.account && opts.accountTool && !opts.accountPool && !opts.triageAccount && !opts.plannerAccount && !opts.workerAccount && !opts.verifierAccount) {
-    throw new Error("--account-tool requires --account, --account-pool, --triage-account, --planner-account, --worker-account, or --verifier-account");
+    throw new ValidationError("--account-tool requires --account, --account-pool, --triage-account, --planner-account, --worker-account, or --verifier-account");
   }
   return opts.account ? { profile: opts.account, tool: opts.accountTool } : undefined;
-}
-
-function splitList(value: string | undefined): string[] | undefined {
-  const values = value
-    ?.split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  return values?.length ? values : undefined;
 }
 
 function allowlistFromOpts(opts: { allowTool?: string[]; allowCommand?: string[] }): AgentAllowlistSpec | undefined {
@@ -514,19 +451,6 @@ function allowlistFromOpts(opts: { allowTool?: string[]; allowCommand?: string[]
   };
 }
 
-function listFromRepeatedOpts(value: string[] | undefined): string[] | undefined {
-  const values = (value ?? []).flatMap((entry) => splitList(entry) ?? []);
-  return values.length ? values : undefined;
-}
-
-function accountPoolFromOpts(opts: { accountPool?: string; accountTool?: string }): AccountRef[] | undefined {
-  return splitList(opts.accountPool)?.map((profile) => ({ profile, tool: opts.accountTool }));
-}
-
-function roleAccountFromOpts(opts: { accountTool?: string }, profile: string | undefined): AccountRef | undefined {
-  return profile ? { profile, tool: opts.accountTool } : undefined;
-}
-
 function runtimePreflightFromOpts(opts: { preflightEachRun?: boolean }): { beforeRun: true } | undefined {
   return opts.preflightEachRun ? { beforeRun: true } : undefined;
 }
@@ -535,2010 +459,65 @@ function parseVars(values: string[] | undefined): Record<string, string> {
   const vars: Record<string, string> = {};
   for (const value of values ?? []) {
     const index = value.indexOf("=");
-    if (index <= 0) throw new Error(`invalid --var value, expected key=value: ${value}`);
+    if (index <= 0) throw new ValidationError(`invalid --var value, expected key=value: ${value}`);
     vars[value.slice(0, index)] = value.slice(index + 1);
   }
   return vars;
 }
 
-function collectValues(value: string, previous: string[] = []): string[] {
-  previous.push(value);
-  return previous;
-}
-
-function defaultLoopsProject(): string {
-  return process.env.LOOPS_TASK_PROJECT || process.env.LOOPS_DATA_DIR || `${process.env.HOME ?? "/home/hasna"}/.hasna/loops`;
-}
-
-function runLocalCommand(command: string, args: string[], opts: { input?: string; timeoutMs?: number; maxBuffer?: number } = {}) {
-  const result = spawnSync(command, args, {
-    input: opts.input,
-    encoding: "utf8",
-    timeout: opts.timeoutMs ?? 30_000,
-    maxBuffer: opts.maxBuffer ?? 8 * 1024 * 1024,
-    env: process.env,
-  });
-  return {
-    ok: result.status === 0,
-    status: result.status,
-    stdout: result.stdout || "",
-    stderr: result.stderr || "",
-    error: result.error ? String(result.error.message || result.error) : "",
-  };
-}
-
-function runLocalCommandWithStdoutFile(
-  command: string,
-  args: string[],
-  opts: { input?: string; timeoutMs?: number; maxBuffer?: number } = {},
-) {
-  const tempDir = mkdtempSync(join(tmpdir(), "loops-command-output-"));
-  const stdoutPath = join(tempDir, "stdout");
-  const stdoutFd = openSync(stdoutPath, "w");
-  let result: ReturnType<typeof spawnSync>;
+function parseJsonFile(file: string): unknown {
   try {
-    result = spawnSync(command, args, {
-      input: opts.input,
-      encoding: "utf8",
-      timeout: opts.timeoutMs ?? 30_000,
-      maxBuffer: opts.maxBuffer ?? 8 * 1024 * 1024,
-      env: process.env,
-      stdio: ["pipe", stdoutFd, "pipe"],
-    });
-  } finally {
-    closeSync(stdoutFd);
-  }
-  try {
-    return {
-      ok: result.status === 0,
-      status: result.status,
-      stdout: readFileSync(stdoutPath, "utf8"),
-      stderr: typeof result.stderr === "string" ? result.stderr : result.stderr?.toString() || "",
-      error: result.error ? String(result.error.message || result.error) : "",
-    };
-  } finally {
-    rmSync(tempDir, { recursive: true, force: true });
-  }
-}
-
-function ensureTodosTaskList(project: string, slug: string, name: string, description: string): string {
-  runLocalCommand("todos", ["--project", project, "task-lists", "--add", name, "--slug", slug, "-d", description]);
-  const list = runLocalCommand("todos", ["--project", project, "--json", "task-lists"]);
-  if (!list.ok) throw new Error(list.stderr || list.error || "failed to list todos task lists");
-  const values = JSON.parse(list.stdout || "[]") as Array<{ id: string; slug: string }>;
-  const found = values.find((entry) => entry.slug === slug);
-  if (!found) throw new Error(`todos task list not found after ensure: ${slug}`);
-  return found.id;
-}
-
-function backupLoopsDatabase(reason: string): string {
-  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "Z");
-  const backupDir = join(dataDir(), "backups");
-  mkdirSync(backupDir, { recursive: true, mode: 0o700 });
-  const backupPath = join(backupDir, `loops.db.bak-${reason}-${stamp}`);
-  const db = new Database(dbPath(), { readonly: true });
-  try {
-    writeFileSync(backupPath, db.serialize(), { mode: 0o600 });
-  } finally {
-    db.close();
-  }
-  return backupPath;
-}
-
-function stableHash(parts: unknown[]): string {
-  return createHash("sha256").update(parts.map((part) => JSON.stringify(part)).join("\n")).digest("hex").slice(0, 16);
-}
-
-interface RouteCursor {
-  lastFingerprint?: string;
-  updatedAt?: string;
-}
-
-interface RouteSelection<T> {
-  selected: T[];
-  cursor: {
-    key: string;
-    total: number;
-    maxActions: number;
-    previousFingerprint?: string;
-    startIndex: number;
-    lastFingerprint?: string;
-  };
-}
-
-function routeCursorsPath(): string {
-  return join(dataDir(), "route-cursors.json");
-}
-
-function readRouteCursors(): Record<string, RouteCursor> {
-  const path = routeCursorsPath();
-  if (!existsSync(path)) return {};
-  try {
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeRouteCursor(key: string, lastFingerprint: string | undefined): void {
-  if (!lastFingerprint) return;
-  const cursors = readRouteCursors();
-  cursors[key] = { lastFingerprint, updatedAt: new Date().toISOString() };
-  writeFileSync(routeCursorsPath(), JSON.stringify(cursors, null, 2), { mode: 0o600 });
-}
-
-function writeRouteEvidence(kind: string, value: unknown, evidenceDir: string | undefined): string | undefined {
-  if (!evidenceDir) return undefined;
-  mkdirSync(evidenceDir, { recursive: true, mode: 0o700 });
-  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\./g, "");
-  const evidencePath = join(evidenceDir, `${kind}-${stamp}-${randomUUID().slice(0, 8)}.json`);
-  writeFileSync(evidencePath, JSON.stringify(value, null, 2), { mode: 0o600, flag: "wx" });
-  return evidencePath;
-}
-
-function selectRouteItems<T>(items: T[], maxActions: number, cursorKey: string, fingerprintOf: (item: T) => string): RouteSelection<T> {
-  const total = items.length;
-  const boundedMax = Math.max(0, Math.floor(Number.isFinite(maxActions) ? maxActions : 0));
-  if (total === 0 || boundedMax === 0) {
-    return { selected: [], cursor: { key: cursorKey, total, maxActions: boundedMax, startIndex: 0 } };
-  }
-  const cursors = readRouteCursors();
-  const previousFingerprint = cursors[cursorKey]?.lastFingerprint;
-  const previousIndex = previousFingerprint ? items.findIndex((item) => fingerprintOf(item) === previousFingerprint) : -1;
-  const startIndex = previousIndex >= 0 ? (previousIndex + 1) % total : 0;
-  const selected: T[] = [];
-  const count = Math.min(boundedMax, total);
-  for (let index = 0; index < count; index += 1) selected.push(items[(startIndex + index) % total]);
-  return {
-    selected,
-    cursor: {
-      key: cursorKey,
-      total,
-      maxActions: boundedMax,
-      previousFingerprint,
-      startIndex,
-      lastFingerprint: selected.length ? fingerprintOf(selected[selected.length - 1]) : undefined,
-    },
-  };
-}
-
-interface TaskRouteOptions {
-  autoRoute?: boolean;
-  routeProjectPath?: string;
-  source: string;
-}
-
-function taskAutoRoute(
-  tags: string[],
-  base: Record<string, unknown>,
-  opts: TaskRouteOptions,
-): { tags: string[]; metadata: Record<string, unknown>; autoRoute: { requested: boolean; enabled: boolean; skippedReason?: string } } {
-  if (!opts.autoRoute) {
-    return {
-      tags,
-      metadata: {
-        ...base,
-        route_enabled: false,
-        project_path: null,
-        working_dir: null,
-        auto_route_requested: false,
-        auto_route_enabled: false,
-        automation: {
-          allowed: false,
-          source: opts.source,
-          kind: "task-created-worker-verifier",
-        },
-      },
-      autoRoute: { requested: false, enabled: false },
-    };
-  }
-  const projectPath =
-    (typeof base.cwd === "string" && base.cwd.trim()) ||
-    (typeof opts.routeProjectPath === "string" && opts.routeProjectPath.trim()) ||
-    undefined;
-  if (!projectPath) {
-    return {
-      tags,
-      metadata: {
-        ...base,
-        route_enabled: false,
-        project_path: null,
-        working_dir: null,
-        auto_route_requested: true,
-        auto_route_enabled: false,
-        auto_route_skipped_reason: "missing cwd or --route-project-path",
-        automation: {
-          allowed: false,
-          source: opts.source,
-          kind: "task-created-worker-verifier",
-        },
-      },
-      autoRoute: {
-        requested: true,
-        enabled: false,
-        skippedReason: "missing cwd or --route-project-path",
-      },
-    };
-  }
-  return {
-    tags: [...new Set([...tags, "auto:route"])],
-    metadata: {
-      ...base,
-      route_enabled: true,
-      project_path: projectPath,
-      working_dir: projectPath,
-      auto_route_requested: true,
-      auto_route_enabled: true,
-      automation: {
-        allowed: true,
-        source: opts.source,
-        kind: "task-created-worker-verifier",
-      },
-    },
-    autoRoute: { requested: true, enabled: true },
-  };
-}
-
-function routeTaskWorkingDirArgs(routeTask: ReturnType<typeof taskAutoRoute>): string[] {
-  const workingDir = routeTask.autoRoute.enabled && typeof routeTask.metadata.working_dir === "string"
-    ? routeTask.metadata.working_dir
-    : undefined;
-  return workingDir ? ["--working-dir", workingDir] : [];
-}
-
-function routeCursorKey(kind: "health" | "hygiene", parts: unknown[], opts: { autoRoute?: boolean; routeProjectPath?: string }): string {
-  const routeMode = opts.autoRoute ? ["auto-route", opts.routeProjectPath ?? "cwd"] : [];
-  return `${kind}:${stableHash([...parts, ...routeMode])}`;
-}
-
-function eventData(event: EventEnvelope): Record<string, unknown> {
-  const data = event.data;
-  if (data && typeof data === "object" && !Array.isArray(data)) return data;
-  return {};
-}
-
-function eventMetadata(event: EventEnvelope): Record<string, unknown> {
-  const metadata = (event as { metadata?: unknown }).metadata;
-  if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) return metadata as Record<string, unknown>;
-  return {};
-}
-
-function stringField(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function slugSegment(value: string, fallback = "event"): string {
-  return value.toLowerCase().replace(/[^a-z0-9._:-]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || fallback;
-}
-
-function stableSuffix(value: string): string {
-  return createHash("sha256").update(value).digest("hex").slice(0, 12);
-}
-
-function taskEventField(data: Record<string, unknown>, keys: string[]): string | undefined {
-  for (const key of keys) {
-    const direct = stringField(data[key]);
-    if (direct) return direct;
-  }
-  const task = data.task;
-  if (task && typeof task === "object" && !Array.isArray(task)) {
-    for (const key of keys) {
-      const direct = stringField((task as Record<string, unknown>)[key]);
-      if (direct) return direct;
-    }
-  }
-  const payload = data.payload;
-  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    for (const key of keys) {
-      const direct = stringField((payload as Record<string, unknown>)[key]);
-      if (direct) return direct;
-    }
-  }
-  return undefined;
-}
-
-function objectField(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
-}
-
-function nestedObject(input: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
-  return objectField(input[key]);
-}
-
-function taskEventRecords(data: Record<string, unknown>, metadata: Record<string, unknown>): Record<string, unknown>[] {
-  const records: Record<string, unknown>[] = [data];
-  const dataTask = nestedObject(data, "task");
-  if (dataTask) {
-    records.push(dataTask);
-    const dataTaskMetadata = nestedObject(dataTask, "metadata");
-    if (dataTaskMetadata) records.push(dataTaskMetadata);
-  }
-  const dataPayload = nestedObject(data, "payload");
-  if (dataPayload) {
-    records.push(dataPayload);
-    const payloadMetadata = nestedObject(dataPayload, "metadata");
-    if (payloadMetadata) records.push(payloadMetadata);
-    const payloadTask = nestedObject(dataPayload, "task");
-    if (payloadTask) {
-      records.push(payloadTask);
-      const payloadTaskMetadata = nestedObject(payloadTask, "metadata");
-      if (payloadTaskMetadata) records.push(payloadTaskMetadata);
-    }
-  }
-  const dataMetadata = nestedObject(data, "metadata");
-  if (dataMetadata) records.push(dataMetadata);
-  records.push(metadata);
-  const metadataTask = nestedObject(metadata, "task");
-  if (metadataTask) {
-    records.push(metadataTask);
-    const metadataTaskMetadata = nestedObject(metadataTask, "metadata");
-    if (metadataTaskMetadata) records.push(metadataTaskMetadata);
-  }
-  const metadataAutomation = nestedObject(metadata, "automation");
-  if (metadataAutomation) records.push(metadataAutomation);
-  return records;
-}
-
-function booleanLike(value: unknown): boolean {
-  return value === true || value === "true" || value === "1" || value === 1;
-}
-
-function hasTruthyField(records: Record<string, unknown>[], keys: string[]): boolean {
-  return records.some((record) => keys.some((key) => booleanLike(record[key])));
-}
-
-function firstTruthyField(records: Record<string, unknown>[], keys: string[]): string | undefined {
-  for (const record of records) {
-    for (const key of keys) {
-      if (booleanLike(record[key])) return key;
-    }
-  }
-  return undefined;
-}
-
-function automationRecords(data: Record<string, unknown>, metadata: Record<string, unknown>): Record<string, unknown>[] {
-  const records: Record<string, unknown>[] = [];
-  const dataAutomation = nestedObject(data, "automation");
-  if (dataAutomation) records.push(dataAutomation);
-  const dataTask = nestedObject(data, "task");
-  const dataTaskAutomation = dataTask ? nestedObject(dataTask, "automation") : undefined;
-  if (dataTaskAutomation) records.push(dataTaskAutomation);
-  const dataTaskMetadata = dataTask ? nestedObject(dataTask, "metadata") : undefined;
-  const dataTaskMetadataAutomation = dataTaskMetadata ? nestedObject(dataTaskMetadata, "automation") : undefined;
-  if (dataTaskMetadataAutomation) records.push(dataTaskMetadataAutomation);
-  const dataPayload = nestedObject(data, "payload");
-  const payloadAutomation = dataPayload ? nestedObject(dataPayload, "automation") : undefined;
-  if (payloadAutomation) records.push(payloadAutomation);
-  const payloadMetadata = dataPayload ? nestedObject(dataPayload, "metadata") : undefined;
-  const payloadMetadataAutomation = payloadMetadata ? nestedObject(payloadMetadata, "automation") : undefined;
-  if (payloadMetadataAutomation) records.push(payloadMetadataAutomation);
-  const payloadTask = dataPayload ? nestedObject(dataPayload, "task") : undefined;
-  const payloadTaskAutomation = payloadTask ? nestedObject(payloadTask, "automation") : undefined;
-  if (payloadTaskAutomation) records.push(payloadTaskAutomation);
-  const payloadTaskMetadata = payloadTask ? nestedObject(payloadTask, "metadata") : undefined;
-  const payloadTaskMetadataAutomation = payloadTaskMetadata ? nestedObject(payloadTaskMetadata, "automation") : undefined;
-  if (payloadTaskMetadataAutomation) records.push(payloadTaskMetadataAutomation);
-  const dataMetadata = nestedObject(data, "metadata");
-  const dataMetadataAutomation = dataMetadata ? nestedObject(dataMetadata, "automation") : undefined;
-  if (dataMetadataAutomation) records.push(dataMetadataAutomation);
-  const metadataAutomation = nestedObject(metadata, "automation");
-  if (metadataAutomation) records.push(metadataAutomation);
-  const metadataTask = nestedObject(metadata, "task");
-  const metadataTaskAutomation = metadataTask ? nestedObject(metadataTask, "automation") : undefined;
-  if (metadataTaskAutomation) records.push(metadataTaskAutomation);
-  const metadataTaskMetadata = metadataTask ? nestedObject(metadataTask, "metadata") : undefined;
-  const metadataTaskMetadataAutomation = metadataTaskMetadata ? nestedObject(metadataTaskMetadata, "automation") : undefined;
-  if (metadataTaskMetadataAutomation) records.push(metadataTaskMetadataAutomation);
-  return records;
-}
-
-function tagsFromValue(value: unknown): string[] {
-  if (Array.isArray(value)) return value.map((entry) => String(entry).trim()).filter(Boolean);
-  if (typeof value === "string") return value.split(",").map((entry) => entry.trim()).filter(Boolean);
-  return [];
-}
-
-function taskEventTags(records: Record<string, unknown>[]): string[] {
-  const tags = new Set<string>();
-  for (const record of records) {
-    for (const tag of tagsFromValue(record.tags ?? record.task_tags ?? record.taskTags)) tags.add(tag);
-  }
-  return [...tags];
-}
-
-const ROUTE_DISALLOWED_TASK_TAGS = new Set([
-  "no-auto",
-  "manual",
-  "manual-required",
-  "approval-required",
-  "blocked",
-  "completed",
-  "done",
-  "cancelled",
-  "canceled",
-  "failed",
-  "archived",
-]);
-
-const ROUTE_MANUAL_GATE_FIELDS = [
-  "no_auto",
-  "noAuto",
-  "manual",
-  "manual_required",
-  "manualRequired",
-  "requires_approval",
-  "requiresApproval",
-  "approval_required",
-  "approvalRequired",
-];
-
-function taskRouteEligibility(data: Record<string, unknown>, metadata: Record<string, unknown>): { eligible: boolean; reason?: string; tags: string[] } {
-  const records = taskEventRecords(data, metadata);
-  const automation = automationRecords(data, metadata);
-  const tags = taskEventTags(records);
-  const hasRouteOptIn =
-    tags.includes("auto:route") ||
-    hasTruthyField(records, ["route_enabled", "routeEnabled", "automation_allowed", "automationAllowed"]) ||
-    hasTruthyField(automation, ["allowed"]);
-  if (!hasRouteOptIn) return { eligible: false, reason: "missing explicit route opt-in", tags };
-
-  const status = taskEventField(data, ["status", "task_status", "taskStatus"])?.toLowerCase();
-  if (status && ["blocked", "completed", "done", "cancelled", "canceled", "failed", "archived"].includes(status)) {
-    return { eligible: false, reason: `task status is not routable: ${status}`, tags };
-  }
-
-  const disallowedTags = tags.filter((tag) => ROUTE_DISALLOWED_TASK_TAGS.has(tag.toLowerCase()));
-  if (disallowedTags.length) return { eligible: false, reason: `task has disallowed tag: ${disallowedTags[0]}`, tags };
-
-  const manualGateField = firstTruthyField([...records, ...automation], ROUTE_MANUAL_GATE_FIELDS);
-  if (manualGateField) {
-    return { eligible: false, reason: `task metadata requires manual or approval-gated handling: ${manualGateField}`, tags };
-  }
-
-  return { eligible: true, tags };
-}
-
-const PR_AUTHOR_FIELDS = [
-  "github_author",
-  "githubAuthor",
-  "github_pr_author",
-  "githubPrAuthor",
-  "pr_author",
-  "prAuthor",
-  "pull_request_author",
-  "pullRequestAuthor",
-  "author_login",
-  "authorLogin",
-];
-
-const PR_REVIEWER_FIELDS = [
-  "github_reviewer",
-  "githubReviewer",
-  "github_review_actor",
-  "githubReviewActor",
-  "github_review_login",
-  "githubReviewLogin",
-  "github_actor",
-  "githubActor",
-  "reviewer_login",
-  "reviewerLogin",
-  "review_actor",
-  "reviewActor",
-  "merge_actor",
-  "mergeActor",
-];
-
-const PR_REVIEWER_POOL_FIELDS = [
-  "github_reviewer_pool",
-  "githubReviewerPool",
-  "github_review_pool",
-  "githubReviewPool",
-  "github_reviewers",
-  "githubReviewers",
-  "reviewer_pool",
-  "reviewerPool",
-  "reviewers",
-];
-
-const PR_REVIEW_REQUIRED_FIELDS = [
-  "github_review_required",
-  "githubReviewRequired",
-  "pr_review_required",
-  "prReviewRequired",
-  "review_required",
-  "reviewRequired",
-  "requires_non_author_review",
-  "requiresNonAuthorReview",
-  "branch_protection_review_required",
-  "branchProtectionReviewRequired",
-];
-
-interface PrReviewRoutingDecision {
-  required: boolean;
-  allowed: boolean;
-  reason?: string;
-  author?: string;
-  reviewers: string[];
-  selectedReviewer?: string;
-  signals: string[];
-}
-
-function githubLogin(value: string | undefined): string | undefined {
-  if (!value?.trim()) return undefined;
-  const login = value.trim().replace(/^@/, "");
-  return /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(login) ? login : undefined;
-}
-
-function githubLogins(values: Array<string | undefined>): string[] {
-  const seen = new Set<string>();
-  const logins: string[] = [];
-  for (const value of values) {
-    const login = githubLogin(value);
-    if (!login) continue;
-    const key = login.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    logins.push(login);
-  }
-  return logins;
-}
-
-function routeEvidenceText(records: Record<string, unknown>[]): string {
-  const fields = [
-    "title",
-    "task_title",
-    "taskTitle",
-    "description",
-    "body",
-    "reason",
-    "message",
-    "fingerprint",
-    "reviewDecision",
-    "review_decision",
-    "mergeStateStatus",
-    "merge_state_status",
-  ];
-  const values: string[] = [];
-  for (const record of records) {
-    for (const field of fields) values.push(...recordFieldValues(record, field));
-    values.push(...tagsFromValue(record.tags ?? record.task_tags ?? record.taskTags));
-  }
-  return values.join("\n");
-}
-
-function authorFromPrText(text: string): string | undefined {
-  const patterns = [
-    /\bauthor\s+(?:is\s+also|is|=|:)\s+@?([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/i,
-    /\bPR\s*#?\d+\s+author\s+(?:is\s+also|is|=|:)\s+@?([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/i,
-    /\bgithub\s+author\s+(?:is\s+also|is|=|:)\s+@?([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/i,
-  ];
-  for (const pattern of patterns) {
-    const match = pattern.exec(text);
-    const login = githubLogin(match?.[1]);
-    if (login) return login;
-  }
-  return undefined;
-}
-
-function prReviewRoutingDecision(
-  data: Record<string, unknown>,
-  metadata: Record<string, unknown>,
-  opts: TodosTaskRouteOptions,
-): PrReviewRoutingDecision {
-  const records = [...taskEventRecords(data, metadata), ...automationRecords(data, metadata)];
-  const text = routeEvidenceText(records);
-  const signals: string[] = [];
-  const hasPrReference = /github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/i.test(text) ||
-    /\bgithub-pr:[^\s]+#\d+/i.test(text) ||
-    /\bpull request\b/i.test(text) ||
-    /\bpr\s*#?\d+\b/i.test(text);
-  const reviewRequiredByField = hasTruthyField(records, PR_REVIEW_REQUIRED_FIELDS);
-  const reviewRequiredByText = /reviewdecision\s*[:=]\s*review_required/i.test(text) ||
-    /\breview_required\b/i.test(text) ||
-    /\breview required\b/i.test(text) ||
-    /\brequires?\s+\d+\s+approving review/i.test(text) ||
-    /\bbranch protection\b[\s\S]{0,160}\bapproving review/i.test(text);
-  const mergeBlockedByText = /mergestatestatus\s*[:=]\s*blocked/i.test(text) ||
-    /\bmerge state status\b[\s:=]+blocked/i.test(text);
-  const approvalIntent = /\b(approve|approval|merge|review)\b/i.test(text);
-  if (reviewRequiredByField) signals.push("review-required-field");
-  if (reviewRequiredByText) signals.push("review-required-text");
-  if (mergeBlockedByText) signals.push("merge-blocked-text");
-  if (approvalIntent && hasPrReference) signals.push("pr-approval-intent");
-
-  const required = hasPrReference && (reviewRequiredByField || reviewRequiredByText || mergeBlockedByText || approvalIntent);
-  if (!required) return { required: false, allowed: true, reviewers: [], signals };
-
-  const author = githubLogin(firstRouteField(records, PR_AUTHOR_FIELDS)) ?? authorFromPrText(text);
-  const reviewers = githubLogins([
-    opts.githubReviewer,
-    ...(splitList(opts.githubReviewerPool) ?? []),
-    ...PR_REVIEWER_FIELDS.flatMap((field) => routeFieldValues(records, field)),
-    ...PR_REVIEWER_POOL_FIELDS.flatMap((field) => routeFieldValues(records, field)),
-  ]);
-  const selectedReviewer = author
-    ? reviewers.find((reviewer) => reviewer.toLowerCase() !== author.toLowerCase())
-    : undefined;
-  if (!author) {
-    return {
-      required: true,
-      allowed: false,
-      reason: "PR approval/merge route requires PR author evidence before selecting a non-author GitHub reviewer",
-      reviewers,
-      signals,
-    };
-  }
-  if (!reviewers.length) {
-    return {
-      required: true,
-      allowed: false,
-      reason: "PR approval/merge route requires --github-reviewer, --github-reviewer-pool, or task metadata github_reviewer/github_reviewer_pool with a login different from the PR author",
-      author,
-      reviewers,
-      signals,
-    };
-  }
-  if (!selectedReviewer) {
-    return {
-      required: true,
-      allowed: false,
-      reason: `PR approval/merge route reviewer candidates match PR author ${author}; self-review is not routable`,
-      author,
-      reviewers,
-      signals,
-    };
-  }
-  return {
-    required: true,
-    allowed: true,
-    author,
-    reviewers,
-    selectedReviewer,
-    signals,
-  };
-}
-
-interface RouteThrottleLimits {
-  maxActive?: number;
-  maxActivePerProject?: number;
-  maxActivePerProjectGroup?: number;
-}
-
-interface RouteThrottleDecision {
-  allowed: boolean;
-  reason?: string;
-  projectPath: string;
-  projectGroup?: string;
-  limits: RouteThrottleLimits;
-  counts: {
-    global: number;
-    project: number;
-    projectGroup?: number;
-  };
-}
-
-type ProviderRoutingSource = "default" | "option" | "rule" | "metadata";
-
-interface ProviderRoutingRule {
-  raw: string;
-  field: string;
-  value: string;
-  provider: AgentProvider;
-  profiles?: string[];
-}
-
-interface ProviderRoutingDecision {
-  provider: AgentProvider;
-  source: ProviderRoutingSource;
-  reason: string;
-  rule?: Pick<ProviderRoutingRule, "raw" | "field" | "value" | "provider" | "profiles">;
-  authProfile?: string;
-  authProfilePool?: string[];
-  account?: AccountRef;
-  accountPool?: AccountRef[];
-}
-
-interface TodosTaskRouteOptions {
-  template?: string;
-  provider?: string;
-  providerRule?: string[];
-  authProfile?: string;
-  authProfilePool?: string;
-  triageAuthProfile?: string;
-  plannerAuthProfile?: string;
-  workerAuthProfile?: string;
-  verifierAuthProfile?: string;
-  account?: string;
-  accountPool?: string;
-  triageAccount?: string;
-  plannerAccount?: string;
-  workerAccount?: string;
-  verifierAccount?: string;
-  accountTool?: string;
-  model?: string;
-  variant?: string;
-  agent?: string;
-  addDir?: string[];
-  timeout?: string;
-  verifierIdleTimeout?: string;
-  permissionMode?: string;
-  sandbox?: string;
-  manualBreakGlass?: boolean;
-  projectPath?: string;
-  projectGroup?: string;
-  maxActive?: string;
-  maxActivePerProject?: string;
-  maxActivePerProjectGroup?: string;
-  worktreeMode?: string;
-  worktreeRoot?: string;
-  worktreeBranchPrefix?: string;
-  prHandoff?: boolean;
-  githubReviewer?: string;
-  githubReviewerPool?: string;
-  namePrefix?: string;
-  preflight?: boolean;
-  dryRun?: boolean;
-  todosProject?: string;
-}
-
-interface TodosReadyTask {
-  id?: string;
-  task_id?: string;
-  taskId?: string;
-  title?: string;
-  description?: string;
-  body?: string;
-  status?: string;
-  working_dir?: string;
-  workingDir?: string;
-  project_path?: string;
-  projectPath?: string;
-  cwd?: string;
-  tags?: string[] | string;
-  metadata?: Record<string, unknown>;
-  project_id?: string;
-  projectId?: string;
-  task_list_id?: string;
-  taskListId?: string;
-  task_list?: { id?: string; slug?: string };
-  [key: string]: unknown;
-}
-
-interface TodosDrainOptions extends TodosTaskRouteOptions {
-  todosProject?: string;
-  todosProjectId?: string;
-  taskList?: string;
-  tags?: string;
-  projectPathPrefix?: string;
-  limit?: string;
-  scanLimit?: string;
-  maxDispatch?: string;
-  evidenceDir?: string;
-  compact?: boolean;
-}
-
-const SUPPORTED_AGENT_PROVIDERS = new Set<AgentProvider>(["claude", "cursor", "codewith", "aicopilot", "opencode", "codex"]);
-
-const PROVIDER_HINT_FIELDS = ["provider_hint", "providerHint", "route_provider", "routeProvider", "agent_provider", "agentProvider"];
-const AUTH_PROFILE_HINT_FIELDS = ["auth_profile", "authProfile", "codewith_profile", "codewithProfile", "profile"];
-const AUTH_PROFILE_POOL_HINT_FIELDS = ["auth_profile_pool", "authProfilePool", "codewith_profile_pool", "codewithProfilePool", "profile_pool", "profilePool"];
-const ACCOUNT_HINT_FIELDS = ["account", "account_profile", "accountProfile", "openaccounts_profile", "openaccountsProfile"];
-const ACCOUNT_POOL_HINT_FIELDS = ["account_pool", "accountPool", "openaccounts_pool", "openaccountsPool"];
-const ACCOUNT_TOOL_HINT_FIELDS = ["account_tool", "accountTool", "openaccounts_tool", "openaccountsTool"];
-
-function canonicalRouteField(value: string): string {
-  return value.replace(/[^a-z0-9]/gi, "").toLowerCase();
-}
-
-function normalizeAgentProvider(value: string | undefined, source: string): AgentProvider {
-  const provider = value?.trim().toLowerCase();
-  if (provider && SUPPORTED_AGENT_PROVIDERS.has(provider as AgentProvider)) return provider as AgentProvider;
-  const expected = [...SUPPORTED_AGENT_PROVIDERS].join(", ");
-  throw new Error(`unsupported provider${provider ? ` "${provider}"` : ""} from ${source}; expected one of: ${expected}`);
-}
-
-function stringValuesFromUnknown(value: unknown): string[] {
-  if (Array.isArray(value)) return value.flatMap((entry) => stringValuesFromUnknown(entry));
-  if (typeof value === "string") return value.split(",").map((entry) => entry.trim()).filter(Boolean);
-  if (typeof value === "number" || typeof value === "boolean") return [String(value)];
-  return [];
-}
-
-function recordFieldValues(record: Record<string, unknown>, field: string): string[] {
-  const expected = canonicalRouteField(field);
-  const values: string[] = [];
-  for (const [key, value] of Object.entries(record)) {
-    if (canonicalRouteField(key) === expected) values.push(...stringValuesFromUnknown(value));
-  }
-  return values;
-}
-
-function routeFieldValues(records: Record<string, unknown>[], field: string): string[] {
-  if (canonicalRouteField(field) === "tags") return taskEventTags(records);
-  return records.flatMap((record) => recordFieldValues(record, field));
-}
-
-function firstRouteField(records: Record<string, unknown>[], fields: string[]): string | undefined {
-  for (const field of fields) {
-    const value = routeFieldValues(records, field).find(Boolean);
-    if (value) return value;
-  }
-  return undefined;
-}
-
-function routeFieldList(records: Record<string, unknown>[], fields: string[]): string[] | undefined {
-  for (const field of fields) {
-    const values = routeFieldValues(records, field);
-    if (values.length) return values;
-  }
-  return undefined;
-}
-
-function parseProviderRoutingRule(raw: string): ProviderRoutingRule {
-  const rule = raw.trim();
-  const selectorIndex = rule.indexOf(":");
-  if (selectorIndex <= 0) throw new Error(`invalid --provider-rule "${raw}", expected field=value:provider[:profile1,profile2]`);
-  const selector = rule.slice(0, selectorIndex).trim();
-  const route = rule.slice(selectorIndex + 1).trim();
-  const equalsIndex = selector.indexOf("=");
-  if (equalsIndex <= 0) throw new Error(`invalid --provider-rule "${raw}", expected field=value:provider[:profile1,profile2]`);
-  const field = selector.slice(0, equalsIndex).trim();
-  const value = selector.slice(equalsIndex + 1).trim();
-  const providerIndex = route.indexOf(":");
-  const providerRaw = providerIndex >= 0 ? route.slice(0, providerIndex).trim() : route;
-  const profilesRaw = providerIndex >= 0 ? route.slice(providerIndex + 1).trim() : undefined;
-  if (!field || !value || !providerRaw) throw new Error(`invalid --provider-rule "${raw}", expected field=value:provider[:profile1,profile2]`);
-  return {
-    raw,
-    field,
-    value,
-    provider: normalizeAgentProvider(providerRaw, `provider rule ${field}=${value}`),
-    profiles: splitList(profilesRaw),
-  };
-}
-
-function parseProviderRoutingRules(values: string[] | undefined): ProviderRoutingRule[] {
-  return (values ?? []).map(parseProviderRoutingRule);
-}
-
-function providerRuleMatches(rule: ProviderRoutingRule, records: Record<string, unknown>[]): boolean {
-  const expected = rule.value.trim().toLowerCase();
-  return routeFieldValues(records, rule.field).some((value) => value.trim().toLowerCase() === expected);
-}
-
-function accountRef(profile: string | undefined, tool: string | undefined): AccountRef | undefined {
-  return profile ? { profile, tool } : undefined;
-}
-
-function accountRefs(profiles: string[] | undefined, tool: string | undefined): AccountRef[] | undefined {
-  return profiles?.length ? profiles.map((profile) => ({ profile, tool })) : undefined;
-}
-
-function providerRoutingPublic(decision: ProviderRoutingDecision): Record<string, unknown> {
-  return {
-    provider: decision.provider,
-    source: decision.source,
-    reason: decision.reason,
-    rule: decision.rule,
-    authProfile: decision.authProfile,
-    authProfilePool: decision.authProfilePool,
-    account: decision.account,
-    accountPool: decision.accountPool,
-  };
-}
-
-function resolveProviderRouting(
-  data: Record<string, unknown>,
-  metadata: Record<string, unknown>,
-  opts: TodosTaskRouteOptions,
-): ProviderRoutingDecision {
-  const records = [...taskEventRecords(data, metadata), ...automationRecords(data, metadata)];
-  const matchedRule = parseProviderRoutingRules(opts.providerRule).find((rule) => providerRuleMatches(rule, records));
-  const metadataProvider = matchedRule || opts.provider ? undefined : firstRouteField(records, PROVIDER_HINT_FIELDS);
-  const provider = matchedRule
-    ? matchedRule.provider
-    : opts.provider
-      ? normalizeAgentProvider(opts.provider, "--provider")
-      : metadataProvider
-        ? normalizeAgentProvider(metadataProvider, "task metadata provider hint")
-        : "codewith";
-  const source: ProviderRoutingSource = matchedRule
-    ? "rule"
-    : opts.provider
-      ? "option"
-      : metadataProvider
-        ? "metadata"
-        : "default";
-  const metadataProfilePool = routeFieldList(records, provider === "codewith" ? AUTH_PROFILE_POOL_HINT_FIELDS : [...ACCOUNT_POOL_HINT_FIELDS, ...AUTH_PROFILE_POOL_HINT_FIELDS]);
-  const metadataProfile = firstRouteField(records, provider === "codewith" ? AUTH_PROFILE_HINT_FIELDS : [...ACCOUNT_HINT_FIELDS, ...AUTH_PROFILE_HINT_FIELDS]);
-  const profilePool = matchedRule?.profiles ?? metadataProfilePool;
-  const profile = metadataProfile;
-  const metadataAccountTool = firstRouteField(records, ACCOUNT_TOOL_HINT_FIELDS);
-  const accountTool = opts.accountTool ??
-    (matchedRule?.profiles ? undefined : metadataAccountTool) ??
-    (provider === "codewith" ? undefined : provider);
-  const hasResolvedAccountPool = provider !== "codewith" && Boolean((profilePool?.length ?? 0) || profile);
-  if (
-    opts.accountTool &&
-    !opts.account &&
-    !opts.accountPool &&
-    !opts.triageAccount &&
-    !opts.plannerAccount &&
-    !opts.workerAccount &&
-    !opts.verifierAccount &&
-    !hasResolvedAccountPool
-  ) {
-    throw new Error("--account-tool requires --account, --account-pool, --triage-account, --planner-account, --worker-account, --verifier-account, metadata account hints, or provider-rule profiles");
-  }
-  if (provider === "codewith") {
-    const cliAuthProfilePool = splitList(opts.authProfilePool);
-    return {
-      provider,
-      source,
-      reason: matchedRule
-        ? `matched provider rule ${matchedRule.field}=${matchedRule.value}`
-        : metadataProvider
-          ? "selected provider from task metadata"
-          : opts.provider
-            ? "selected provider from --provider"
-            : "selected default provider",
-      rule: matchedRule,
-      authProfile: opts.authProfile ?? profile,
-      authProfilePool: matchedRule?.profiles ?? cliAuthProfilePool ?? (opts.authProfile ? undefined : metadataProfilePool),
-      account: accountRef(opts.account, opts.accountTool),
-      accountPool: accountPoolFromOpts(opts),
-    };
-  }
-  if (opts.authProfile || opts.authProfilePool) {
-    throw new Error(`--auth-profile and --auth-profile-pool are supported only for --provider codewith; use OpenAccounts account profiles for ${provider}`);
-  }
-  const cliAccountPool = accountPoolFromOpts(opts);
-  const account = opts.account
-    ? accountRef(opts.account, opts.accountTool ?? provider)
-    : accountRef(profile, accountTool);
-  return {
-    provider,
-    source,
-    reason: matchedRule
-      ? `matched provider rule ${matchedRule.field}=${matchedRule.value}`
-      : metadataProvider
-        ? "selected provider from task metadata"
-        : opts.provider
-          ? "selected provider from --provider"
-          : "selected default provider",
-    rule: matchedRule,
-    account,
-    accountPool: matchedRule?.profiles ? accountRefs(matchedRule.profiles, accountTool) : cliAccountPool ?? (opts.account ? undefined : accountRefs(metadataProfilePool, accountTool)),
-  };
-}
-
-interface TodosTaskRoutePrint {
-  kind: "skipped" | "deduped" | "throttled" | "created";
-  value: Record<string, unknown>;
-  human: string;
-}
-
-function skippedDrainTask(
-  task: TodosReadyTask,
-  event: EventEnvelope | undefined,
-  reason: string,
-  extra: Record<string, unknown> = {},
-): TodosTaskRoutePrint {
-  const taskId = taskField(task, ["id", "task_id", "taskId"]) ?? event?.subject ?? "unknown";
-  return {
-    kind: "skipped",
-    value: {
-      skipped: true,
-      reason,
-      taskId,
-      event,
-      routeError: true,
-      ...extra,
-    },
-    human: `skipped task ${taskId}: ${reason}`,
-  };
-}
-
-function isSkippableDrainRouteError(message: string): boolean {
-  return message.startsWith("worktreeMode=required but projectPath is not an existing git repository:");
-}
-
-function todosMutationSummary(result: ReturnType<typeof runLocalCommand>): Record<string, unknown> {
-  return {
-    ok: result.ok,
-    status: result.status,
-    error: result.ok ? undefined : redact(result.stderr || result.error || "todos mutation failed", 320),
-  };
-}
-
-function markInvalidDrainTaskNonRouteable(todosProject: string, task: TodosReadyTask, reason: string): Record<string, unknown> {
-  const taskId = taskField(task, ["id", "task_id", "taskId"]);
-  if (!taskId) return { attempted: false, reason: "task id missing" };
-  const comment = `OpenLoops route blocked for task ${taskId}: ${reason}. Added no-auto and removed auto:route so route drains do not repeatedly route this task until its project path is fixed.`;
-  const commentResult = runLocalCommand("todos", ["--project", todosProject, "comment", taskId, comment], { timeoutMs: 30_000 });
-  const tagResult = runLocalCommand("todos", ["--project", todosProject, "tag", taskId, "no-auto"], { timeoutMs: 30_000 });
-  const untagResult = runLocalCommand("todos", ["--project", todosProject, "untag", taskId, "auto:route"], { timeoutMs: 30_000 });
-  const ok = commentResult.ok && tagResult.ok && untagResult.ok;
-  return {
-    ok,
-    attempted: true,
-    taskId,
-    error: ok ? undefined : "one or more source task updates failed; inspect per-command results",
-    comment: todosMutationSummary(commentResult),
-    tagNoAuto: todosMutationSummary(tagResult),
-    untagAutoRoute: todosMutationSummary(untagResult),
-  };
-}
-
-interface RouteSandboxPreflight {
-  stepId: string;
-  provider: AgentProvider;
-  sandbox?: AgentSandbox;
-  worktreeEnabled?: boolean;
-  method: "provider-native-sandbox" | "isolated-worktree" | "manual-break-glass";
-}
-
-function generatedRouteSandboxPreflight(workflow: CreateWorkflowInput): RouteSandboxPreflight[] {
-  const checks: RouteSandboxPreflight[] = [];
-  for (const step of workflow.steps) {
-    if (step.target.type !== "agent") continue;
-    const target = step.target;
-    const worktreeEnabled = Boolean(target.worktree?.enabled);
-    if (target.sandbox === "danger-full-access") {
-      const manual = target.allowlist?.commands?.includes("manual-break-glass");
-      if (!manual) {
-        throw new Error(`route step ${step.id} uses danger-full-access without manual break-glass evidence`);
-      }
-      checks.push({ stepId: step.id, provider: target.provider, sandbox: target.sandbox, worktreeEnabled, method: "manual-break-glass" });
-      continue;
-    }
-    if (
-      (["codewith", "codex"].includes(target.provider) && (target.sandbox === "workspace-write" || target.sandbox === "read-only")) ||
-      (target.provider === "cursor" && target.sandbox === "enabled")
-    ) {
-      checks.push({ stepId: step.id, provider: target.provider, sandbox: target.sandbox, worktreeEnabled, method: "provider-native-sandbox" });
-      continue;
-    }
-    if (worktreeEnabled) {
-      checks.push({ stepId: step.id, provider: target.provider, sandbox: target.sandbox, worktreeEnabled, method: "isolated-worktree" });
-      continue;
-    }
-    throw new Error(
-      `route step ${step.id} has no verified unattended isolation; use provider sandbox workspace-write/read-only/enabled, worktreeMode=required, or explicit manual break-glass`,
-    );
-  }
-  return checks;
-}
-
-function generatedRouteWorkflowSignature(workflow: Pick<WorkflowSpec, "version" | "goal" | "steps"> | CreateWorkflowInput): string {
-  return JSON.stringify({
-    version: workflow.version ?? 1,
-    goal: workflow.goal ?? null,
-    steps: workflow.steps,
-  });
-}
-
-function canReuseGeneratedRouteWorkflow(existing: WorkflowSpec, generated: CreateWorkflowInput): boolean {
-  if (generatedRouteWorkflowSignature(existing) !== generatedRouteWorkflowSignature(generated)) return false;
-  try {
-    generatedRouteSandboxPreflight(existing);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function routeWorkflowForStorage(store: Store, workflowBody: CreateWorkflowInput): WorkflowSpec {
-  const existingWorkflow = store.findWorkflowByName(workflowBody.name);
-  if (existingWorkflow && canReuseGeneratedRouteWorkflow(existingWorkflow, workflowBody)) return existingWorkflow;
-  if (existingWorkflow) store.archiveWorkflow(existingWorkflow.id);
-  return store.createWorkflow(workflowBody);
-}
-
-function routeThrottleLimitsFromOpts(opts: {
-  maxActive?: string;
-  maxActivePerProject?: string;
-  maxActivePerProjectGroup?: string;
-}): RouteThrottleLimits {
-  return {
-    maxActive: positiveInteger(opts.maxActive, "--max-active"),
-    maxActivePerProject: positiveInteger(opts.maxActivePerProject, "--max-active-per-project"),
-    maxActivePerProjectGroup: positiveInteger(opts.maxActivePerProjectGroup, "--max-active-per-project-group"),
-  };
-}
-
-function hasThrottleLimits(limits: RouteThrottleLimits): boolean {
-  return limits.maxActive !== undefined || limits.maxActivePerProject !== undefined || limits.maxActivePerProjectGroup !== undefined;
-}
-
-function normalizeRoutePath(value: string | undefined): string | undefined {
-  if (!value?.trim()) return undefined;
-  const resolved = resolve(value.trim());
-  let canonical = resolved;
-  try {
-    canonical = realpathSync(resolved);
-  } catch {
-    return canonical;
-  }
-  const gitRoot = spawnSync("git", ["-C", canonical, "rev-parse", "--show-toplevel"], { encoding: "utf8" });
-  if (gitRoot.status === 0 && gitRoot.stdout.trim()) {
-    try {
-      return realpathSync(gitRoot.stdout.trim());
-    } catch {
-      return resolve(gitRoot.stdout.trim());
-    }
-  }
-  return canonical;
-}
-
-function routeProjectGroup(optsGroup: string | undefined, data: Record<string, unknown>, metadata: Record<string, unknown>): string | undefined {
-  return optsGroup?.trim() ||
-    taskEventField(data, ["project_group", "projectGroup", "repo_group", "repoGroup", "workspace_group", "workspaceGroup"]) ||
-    taskEventField(metadata, ["project_group", "projectGroup", "repo_group", "repoGroup", "workspace_group", "workspaceGroup"]);
-}
-
-function routeThrottleDecision(
-  store: Store,
-  args: { projectPath: string; projectGroup?: string; limits: RouteThrottleLimits },
-): RouteThrottleDecision {
-  const projectPath = normalizeRoutePath(args.projectPath) ?? resolve(args.projectPath);
-  const projectGroup = args.projectGroup?.trim() || undefined;
-  const counts = store.countActiveWorkflowWorkItems({ projectKey: projectPath, projectGroup });
-  const base = {
-    projectPath,
-    ...(projectGroup ? { projectGroup } : {}),
-    limits: args.limits,
-    counts,
-  };
-  if (args.limits.maxActive !== undefined && counts.global >= args.limits.maxActive) {
-    return { ...base, allowed: false, reason: `global active workflow limit reached (${counts.global}/${args.limits.maxActive})` };
-  }
-  if (args.limits.maxActivePerProject !== undefined && counts.project >= args.limits.maxActivePerProject) {
-    return { ...base, allowed: false, reason: `project active workflow limit reached (${counts.project}/${args.limits.maxActivePerProject})` };
-  }
-  if (
-    projectGroup &&
-    args.limits.maxActivePerProjectGroup !== undefined &&
-    counts.projectGroup !== undefined &&
-    counts.projectGroup >= args.limits.maxActivePerProjectGroup
-  ) {
-    return {
-      ...base,
-      allowed: false,
-      reason: `project-group active workflow limit reached (${counts.projectGroup}/${args.limits.maxActivePerProjectGroup})`,
-    };
-  }
-  return { ...base, allowed: true };
-}
-
-function routeThrottleDryRunPreview(args: { projectPath: string; projectGroup?: string; limits: RouteThrottleLimits }) {
-  const projectPath = normalizeRoutePath(args.projectPath) ?? resolve(args.projectPath);
-  const projectGroup = args.projectGroup?.trim() || undefined;
-  return {
-    evaluated: false,
-    reason: "not evaluated in dry-run because opening the live loop store may create or migrate the database",
-    projectPath,
-    ...(projectGroup ? { projectGroup } : {}),
-    limits: args.limits,
-  };
-}
-
-const TODOS_TASK_ROUTE_TEMPLATE_IDS = new Set([
-  TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID,
-  TASK_LIFECYCLE_TEMPLATE_ID,
-]);
-
-const UNCLEARED_ROUTE_WORK_ITEM_STATUSES = new Set<WorkflowWorkItemStatus>([
-  "admitted",
-  "running",
-  "succeeded",
-  "failed",
-  "dead_letter",
-  "cancelled",
-]);
-
-function isUnclearedRouteWorkItem(item: { loopId?: string; status: WorkflowWorkItemStatus }): boolean {
-  return UNCLEARED_ROUTE_WORK_ITEM_STATUSES.has(item.status);
-}
-
-function isExistingGitProjectPath(path: string): boolean {
-  const result = spawnSync("git", ["-C", path, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" });
-  return result.status === 0;
-}
-
-function validateRequiredRouteWorktreeProjectPath(opts: { worktreeMode?: string }, projectPath: string): void {
-  if ((opts.worktreeMode ?? "auto") !== "required") return;
-  if (!isExistingGitProjectPath(projectPath)) {
-    throw new Error(`worktreeMode=required but projectPath is not an existing git repository: ${projectPath}`);
-  }
-}
-
-function todosTaskRouteTemplateId(opts: { template?: string }): string {
-  const id = (opts.template ?? TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID).trim();
-  if (!TODOS_TASK_ROUTE_TEMPLATE_IDS.has(id)) {
-    throw new Error(
-      `--template must be ${[...TODOS_TASK_ROUTE_TEMPLATE_IDS].join(" or ")} for todos-task routes`,
-    );
-  }
-  return id;
-}
-
-async function readEventEnvelopeInput(opts: { eventJson?: string; eventFile?: string } = {}): Promise<EventEnvelope> {
-  const raw = opts.eventJson ?? (opts.eventFile ? readFileSync(opts.eventFile, "utf8") : process.env.HASNA_EVENT_JSON || (await Bun.stdin.text()));
-  const event = JSON.parse(raw);
-  if (!event || typeof event !== "object" || Array.isArray(event)) throw new Error("event JSON must be an object");
-  if (!stringField(event.id)) throw new Error("event.id is required");
-  if (!stringField(event.type)) throw new Error("event.type is required");
-  if (!stringField(event.source)) throw new Error("event.source is required");
-  return event as EventEnvelope;
-}
-
-async function readEventEnvelopeFromStdin(): Promise<EventEnvelope> {
-  return readEventEnvelopeInput();
-}
-
-function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOptions): TodosTaskRoutePrint {
-  const data = eventData(event);
-  const metadata = eventMetadata(event);
-  const taskId = taskEventField(data, ["id", "task_id", "taskId"]);
-  if (!taskId) throw new Error("todos task event is missing task id in data.id, data.task_id, data.task.id, or data.payload.id");
-  const eligibility = taskRouteEligibility(data, metadata);
-  if (!eligibility.eligible) {
-    return {
-      kind: "skipped",
-      value: { skipped: true, reason: eligibility.reason, event, taskId, eligibility },
-      human: `skipped task ${taskId}: ${eligibility.reason}`,
-    };
-  }
-  const taskTitle = taskEventField(data, ["title", "task_title", "taskTitle"]);
-  const taskDescription = taskEventField(data, ["description", "body"]);
-  const dataProjectPath = taskEventField(data, ["working_dir", "workingDir", "project_path", "projectPath", "cwd"]);
-  const metadataProjectPath = taskEventField(metadata, [
-    "working_dir",
-    "workingDir",
-    "project_path",
-    "projectPath",
-    "project_canonical_path",
-    "cwd",
-  ]);
-  const projectPath =
-    dataProjectPath ??
-    metadataProjectPath ??
-    opts.projectPath ??
-    process.cwd();
-  const routeProjectPath = normalizeRoutePath(projectPath) ?? resolve(projectPath);
-  const projectGroup = routeProjectGroup(opts.projectGroup, data, metadata);
-  const throttleLimits = routeThrottleLimitsFromOpts(opts);
-  const idempotencyKey = `todos-task:${taskId}`;
-  const idempotencySuffix = stableSuffix(idempotencyKey);
-  const namePrefix = opts.namePrefix ?? "event:todos-task";
-  const workflowName = `${namePrefix}:${taskId.slice(0, 8)}:${idempotencySuffix}:workflow`;
-  const loopName = `${namePrefix}:${taskId.slice(0, 8)}:${idempotencySuffix}:run`;
-  if (!opts.dryRun) {
-    const store = new Store();
-    try {
-      const existingItem = store.findWorkflowWorkItem("todos-task", idempotencyKey);
-      if (existingItem && isUnclearedRouteWorkItem(existingItem)) {
-        const existingLoop = existingItem.loopId ? store.getLoop(existingItem.loopId) : undefined;
-        const existingWorkflow = existingItem.workflowId ? store.getWorkflow(existingItem.workflowId) : undefined;
-        const existingInvocation = store.getWorkflowInvocation(existingItem.invocationId);
-        return {
-          kind: "deduped",
-          value: {
-            deduped: true,
-            idempotencyKey,
-            dedupedBy: "work-item",
-            event,
-            invocation: existingInvocation ? publicWorkflowInvocation(existingInvocation) : undefined,
-            workItem: publicWorkflowWorkItem(existingItem),
-            workflow: existingWorkflow ? publicWorkflow(existingWorkflow) : undefined,
-            loop: existingLoop ? publicLoop(existingLoop) : undefined,
-          },
-          human: `deduped existing work item ${existingItem.id} for event=${event.id} idempotency=${idempotencyKey}`,
-        };
-      }
-    } finally {
-      store.close();
-    }
-  }
-  validateRequiredRouteWorktreeProjectPath(opts, projectPath);
-  const prReviewRouting = prReviewRoutingDecision(data, metadata, opts);
-  if (prReviewRouting.required && !prReviewRouting.allowed) {
-    return {
-      kind: "skipped",
-      value: {
-        skipped: true,
-        reason: prReviewRouting.reason,
-        event,
-        taskId,
-        routeError: true,
-        prReviewRouting,
-      },
-      human: `skipped task ${taskId}: ${prReviewRouting.reason}`,
-    };
-  }
-  const providerRouting = resolveProviderRouting(data, metadata, opts);
-  const provider = providerRouting.provider;
-  const permissionMode = permissionModeFromOpts({ permissionMode: opts.permissionMode ?? "bypass" }, provider);
-  const sandbox = sandboxFromOpts({ sandbox: opts.sandbox }, provider);
-  const authProfile = providerAuthProfileFromOpts({ authProfile: providerRouting.authProfile }, provider);
-  const templateId = todosTaskRouteTemplateId(opts);
-  const workflowInput = {
-    taskId,
-    taskTitle,
-    taskDescription,
-    projectPath,
-    routeProjectPath,
-    projectGroup,
-    provider,
-    authProfile,
-    authProfilePool: providerRouting.authProfilePool,
-    triageAuthProfile: opts.triageAuthProfile,
-    plannerAuthProfile: opts.plannerAuthProfile,
-    workerAuthProfile: opts.workerAuthProfile,
-    verifierAuthProfile: opts.verifierAuthProfile,
-    account: providerRouting.account,
-    accountPool: providerRouting.accountPool,
-    triageAccount: roleAccountFromOpts(opts, opts.triageAccount),
-    plannerAccount: roleAccountFromOpts(opts, opts.plannerAccount),
-    workerAccount: roleAccountFromOpts(opts, opts.workerAccount),
-    verifierAccount: roleAccountFromOpts(opts, opts.verifierAccount),
-    model: opts.model,
-    variant: opts.variant,
-    agent: opts.agent,
-    addDirs: listFromRepeatedOpts(opts.addDir),
-    timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
-    verifierIdleTimeoutMs: idleTimeoutDuration(opts.verifierIdleTimeout, "--verifier-idle-timeout"),
-    permissionMode,
-    sandbox,
-    manualBreakGlass: Boolean(opts.manualBreakGlass),
-    worktreeMode: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
-    worktreeRoot: opts.worktreeRoot,
-    worktreeBranchPrefix: opts.worktreeBranchPrefix ?? "openloops",
-    prHandoff: templateId === TASK_LIFECYCLE_TEMPLATE_ID ? Boolean(opts.prHandoff) : false,
-    eventId: event.id,
-    eventType: event.type,
-    todosProjectPath: opts.todosProject,
-  };
-  let workflowBody = templateId === TASK_LIFECYCLE_TEMPLATE_ID
-    ? renderTaskLifecycleWorkflow(workflowInput)
-    : renderTodosTaskWorkerVerifierWorkflow(workflowInput);
-  workflowBody.name = workflowName;
-  workflowBody.description =
-    `Task-triggered ${templateId} workflow for ${taskTitle ?? taskId} from ${event.source}/${event.type}; ` +
-    `idempotency=${idempotencyKey}; event=${event.id}; project=${projectPath}; projectGroup=${projectGroup ?? "-"}`;
-  workflowBody = normalizeWorkflowForStorage(workflowBody, {
-    name: workflowName,
-    type: "todos-task-event-workflow",
-    event: event.id,
-  });
-  const sandboxPreflight = generatedRouteSandboxPreflight(workflowBody);
-  const hasExplicitRoleAccount =
-    Boolean(opts.triageAuthProfile || opts.plannerAuthProfile || opts.workerAuthProfile || opts.verifierAuthProfile) ||
-    Boolean(opts.triageAccount || opts.plannerAccount || opts.workerAccount || opts.verifierAccount);
-  const invocationInput = {
-    templateId,
-    sourceRef: {
-      kind: "event",
-      id: event.id,
-      dedupeKey: idempotencyKey,
-      raw: { type: event.type, source: event.source, subject: event.subject },
-    },
-    subjectRef: {
-      kind: "task",
-      id: taskId,
-      path: routeProjectPath,
-      raw: { title: taskTitle, description: taskDescription },
-    },
-    intent: "route" as const,
-    scope: {
-      projectPath: routeProjectPath,
-      projectGroup,
-      worktreePolicy: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
-      permissions: permissionMode,
-      manualBreakGlass: Boolean(opts.manualBreakGlass),
-      prHandoff: templateId === TASK_LIFECYCLE_TEMPLATE_ID ? Boolean(opts.prHandoff) : false,
-      accountPolicy: providerRouting.authProfilePool?.length || providerRouting.accountPool?.length ? "pool" : hasExplicitRoleAccount ? "role-explicit" : "single",
-      providerRouting: providerRoutingPublic(providerRouting),
-      prReviewRouting: prReviewRouting.required ? prReviewRouting : undefined,
-      concurrencyGroup: projectGroup ?? routeProjectPath,
-    },
-    outputPolicy: {
-      report: "always" as const,
-      createTask: "on_failure" as const,
-    },
-  };
-  const workItemInput = {
-    routeKey: "todos-task",
-    idempotencyKey,
-    invocationId: "<created-invocation-id>",
-    sourceType: event.type,
-    sourceRef: event.id,
-    subjectRef: taskId,
-    projectKey: routeProjectPath,
-    projectGroup,
-    priority: 0,
-    status: "queued" as const,
-  };
-  const loopInput = {
-    name: loopName,
-    description: `Run ${workflowBody.name} once for task ${taskId}; idempotency=${idempotencyKey}; event=${event.id}`,
-    schedule: { type: "once" as const, at: new Date(Date.now() + 1_000).toISOString() },
-    target: { type: "workflow" as const, workflowId: "<created-workflow-id>", input: {} },
-    overlap: "skip" as const,
-    maxAttempts: 1,
-    retryDelayMs: 60_000,
-    leaseMs: 90 * 60_000,
-  };
-  if (opts.dryRun) {
-    const throttle = hasThrottleLimits(throttleLimits)
-      ? routeThrottleDryRunPreview({ projectPath: routeProjectPath, projectGroup, limits: throttleLimits })
-      : undefined;
-    const preflight = opts.preflight
-      ? preflightStoredWorkflow(workflowSpecForPreflight(workflowBody, "event-preflight"), {
-          name: workflowBody.name,
-          type: "todos-task-event-workflow",
-          event: event.id,
-        }, {})
-      : undefined;
-    return {
-      kind: "created",
-      value: { deduped: false, idempotencyKey, event, providerRouting: providerRoutingPublic(providerRouting), prReviewRouting: prReviewRouting.required ? prReviewRouting : undefined, invocation: invocationInput, workItem: workItemInput, workflow: workflowBody, loop: loopInput, throttle, sandboxPreflight, preflight },
-      human: `dry-run ${loopName}`,
-    };
-  }
-  const store = new Store();
-  try {
-    const workflowPreflightSpec = workflowSpecForPreflight(workflowBody, "event-preflight");
-    generatedRouteSandboxPreflight(workflowPreflightSpec);
-    const preflight = opts.preflight
-      ? preflightStoredWorkflow(workflowPreflightSpec, {
-          name: workflowBody.name,
-          type: "todos-task-event-workflow",
-          event: event.id,
-        }, {})
-      : undefined;
-    const outcome = store.writeTransaction(() => {
-      const invocation = store.createWorkflowInvocation(invocationInput);
-      const existingItem = store.findWorkflowWorkItem("todos-task", idempotencyKey);
-      if (existingItem && isUnclearedRouteWorkItem(existingItem)) {
-        const existingLoop = existingItem.loopId ? store.getLoop(existingItem.loopId) : undefined;
-        const existingWorkflow = existingItem.workflowId ? store.getWorkflow(existingItem.workflowId) : undefined;
-        return { kind: "deduped" as const, existingItem, existingLoop, existingWorkflow, invocation };
-      }
-      const throttle = hasThrottleLimits(throttleLimits)
-        ? routeThrottleDecision(store, { projectPath: routeProjectPath, projectGroup, limits: throttleLimits })
-        : undefined;
-      const workItem = store.upsertWorkflowWorkItem({
-        ...workItemInput,
-        invocationId: invocation.id,
-        status: throttle && !throttle.allowed ? "deferred" : "queued",
-        lastReason: throttle && !throttle.allowed ? throttle.reason : undefined,
-      });
-      const requeue = workItem.attempts > 0 && workItem.status === "queued"
-        ? {
-            previousWorkItemId: workItem.id,
-            previousAttempts: workItem.attempts,
-            reason: workItem.lastReason,
-          }
-        : undefined;
-      const refreshedInvocation = store.refreshWorkflowInvocationForWorkItem(workItem.id, invocationInput);
-      if (throttle && !throttle.allowed) return { kind: "throttled" as const, invocation: refreshedInvocation, workItem, throttle };
-      const workflow = routeWorkflowForStorage(store, workflowBody);
-      const loop = store.createLoop({
-        ...loopInput,
-        target: {
-          type: "workflow",
-          workflowId: workflow.id,
-          input: {
-            workflowInvocationId: refreshedInvocation.id,
-            workflowWorkItemId: workItem.id,
-          },
-        },
-      });
-      const admitted = store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id, reason: "admitted by todos-task route" });
-      return {
-        kind: "created" as const,
-        invocation: refreshedInvocation,
-        workItem: admitted,
-        workflow,
-        loop,
-        throttle,
-        requeue: requeue
-          ? { ...requeue, attempt: admitted.attempts, newWorkflowId: workflow.id, newLoopId: loop.id }
-          : undefined,
-      };
-    });
-    if (outcome.kind === "deduped") {
-      return {
-        kind: "deduped",
-        value: {
-          deduped: true,
-          idempotencyKey,
-          dedupedBy: "work-item",
-          event,
-          invocation: publicWorkflowInvocation(outcome.invocation),
-          workItem: publicWorkflowWorkItem(outcome.existingItem),
-          workflow: outcome.existingWorkflow ? publicWorkflow(outcome.existingWorkflow) : undefined,
-          loop: outcome.existingLoop ? publicLoop(outcome.existingLoop) : undefined,
-        },
-        human: `deduped existing work item ${outcome.existingItem.id} for event=${event.id} idempotency=${idempotencyKey}`,
-      };
-    }
-    if (outcome.kind === "throttled") {
-      return {
-        kind: "throttled",
-        value: {
-          skipped: true,
-          queuedAtSource: true,
-          reason: outcome.throttle.reason,
-          idempotencyKey,
-          event,
-          invocation: publicWorkflowInvocation(outcome.invocation),
-          workItem: publicWorkflowWorkItem(outcome.workItem),
-          providerRouting: providerRoutingPublic(providerRouting),
-          prReviewRouting: prReviewRouting.required ? prReviewRouting : undefined,
-          throttle: outcome.throttle,
-          workflow: workflowBody,
-          loop: loopInput,
-        },
-        human: `skipped task ${taskId}: ${outcome.throttle.reason}`,
-      };
-    }
-    return {
-      kind: "created",
-      value: {
-        deduped: false,
-        idempotencyKey,
-        event,
-        invocation: publicWorkflowInvocation(outcome.invocation),
-        workItem: publicWorkflowWorkItem(outcome.workItem),
-        providerRouting: providerRoutingPublic(providerRouting),
-        prReviewRouting: prReviewRouting.required ? prReviewRouting : undefined,
-        workflow: publicWorkflow(outcome.workflow),
-        loop: publicLoop(outcome.loop),
-        requeue: outcome.requeue,
-        throttle: outcome.throttle,
-        sandboxPreflight,
-        preflight,
-      },
-      human: `created ${outcome.loop.id} (${outcome.loop.name}) workflow=${outcome.workflow.name} event=${event.id} idempotency=${idempotencyKey}`,
-    };
-  } finally {
-    store.close();
-  }
-}
-
-function routeGenericEvent(event: EventEnvelope, opts: TodosTaskRouteOptions): TodosTaskRoutePrint {
-  const data = eventData(event);
-  const metadata = eventMetadata(event);
-  const projectPath =
-    opts.projectPath ??
-    taskEventField(data, ["working_dir", "workingDir", "project_path", "projectPath", "cwd", "repo_path", "repoPath"]) ??
-    taskEventField(metadata, ["working_dir", "workingDir", "project_path", "projectPath", "project_canonical_path", "cwd", "repo_path", "repoPath"]) ??
-    process.cwd();
-  const routeProjectPath = normalizeRoutePath(projectPath) ?? resolve(projectPath);
-  const projectGroup = routeProjectGroup(opts.projectGroup, data, metadata);
-  const throttleLimits = routeThrottleLimitsFromOpts(opts);
-  const eventSuffix = event.id.slice(0, 8);
-  const source = slugSegment(event.source, "source");
-  const type = slugSegment(event.type, "type");
-  const workflowName = `${opts.namePrefix ?? "event:generic"}:${source}:${type}:${eventSuffix}:workflow`;
-  const loopName = `${opts.namePrefix ?? "event:generic"}:${source}:${type}:${eventSuffix}:run`;
-  const idempotencyKey = `generic-event:${event.source}:${event.type}:${event.id}`;
-  const providerRouting = resolveProviderRouting(data, metadata, opts);
-  const provider = providerRouting.provider;
-  const permissionMode = permissionModeFromOpts({ permissionMode: opts.permissionMode ?? "bypass" }, provider);
-  const sandbox = sandboxFromOpts({ sandbox: opts.sandbox }, provider);
-  const authProfile = providerAuthProfileFromOpts({ authProfile: providerRouting.authProfile }, provider);
-  let workflowBody = renderEventWorkerVerifierWorkflow({
-    eventId: event.id,
-    eventType: event.type,
-    eventSource: event.source,
-    eventSubject: stringField(event.subject),
-    eventMessage: stringField(event.message),
-    eventJson: JSON.stringify(event),
-    projectPath,
-    routeProjectPath,
-    projectGroup,
-    provider,
-    authProfile,
-    authProfilePool: providerRouting.authProfilePool,
-    workerAuthProfile: opts.workerAuthProfile,
-    verifierAuthProfile: opts.verifierAuthProfile,
-    account: providerRouting.account,
-    accountPool: providerRouting.accountPool,
-    workerAccount: roleAccountFromOpts(opts, opts.workerAccount),
-    verifierAccount: roleAccountFromOpts(opts, opts.verifierAccount),
-    model: opts.model,
-    variant: opts.variant,
-    agent: opts.agent,
-    addDirs: listFromRepeatedOpts(opts.addDir),
-    timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
-    verifierIdleTimeoutMs: idleTimeoutDuration(opts.verifierIdleTimeout, "--verifier-idle-timeout"),
-    permissionMode,
-    sandbox,
-    manualBreakGlass: Boolean(opts.manualBreakGlass),
-    worktreeMode: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
-    worktreeRoot: opts.worktreeRoot,
-    worktreeBranchPrefix: opts.worktreeBranchPrefix ?? "openloops",
-  });
-  workflowBody.name = workflowName;
-  workflowBody.description = `Event-triggered worker/verifier workflow for ${event.source}/${event.type}; project=${projectPath}; projectGroup=${projectGroup ?? "-"}`;
-  workflowBody = normalizeWorkflowForStorage(workflowBody, {
-    name: workflowName,
-    type: "generic-event-workflow",
-    event: event.id,
-  });
-  const sandboxPreflight = generatedRouteSandboxPreflight(workflowBody);
-  const hasExplicitRoleAccount = Boolean(opts.workerAuthProfile || opts.verifierAuthProfile || opts.workerAccount || opts.verifierAccount);
-  const invocationInput = {
-    templateId: "event-worker-verifier",
-    sourceRef: {
-      kind: "event",
-      id: event.id,
-      dedupeKey: idempotencyKey,
-      raw: { source: event.source, type: event.type },
-    },
-    subjectRef: {
-      kind: "event",
-      id: stringField(event.subject) ?? event.id,
-      path: routeProjectPath,
-      raw: { message: stringField(event.message) },
-    },
-    intent: "route" as const,
-    scope: {
-      projectPath: routeProjectPath,
-      projectGroup,
-      worktreePolicy: (opts.worktreeMode ?? "auto") as AgentWorktreeMode,
-      permissions: permissionMode,
-      manualBreakGlass: Boolean(opts.manualBreakGlass),
-      accountPolicy: providerRouting.authProfilePool?.length || providerRouting.accountPool?.length ? "pool" : hasExplicitRoleAccount ? "role-explicit" : "single",
-      providerRouting: providerRoutingPublic(providerRouting),
-      concurrencyGroup: projectGroup ?? routeProjectPath,
-    },
-    outputPolicy: {
-      report: "always" as const,
-      createTask: "on_failure" as const,
-    },
-  };
-  const workItemInput = {
-    routeKey: "generic-event",
-    idempotencyKey,
-    invocationId: "<created-invocation-id>",
-    sourceType: event.type,
-    sourceRef: event.id,
-    subjectRef: stringField(event.subject) ?? event.id,
-    projectKey: routeProjectPath,
-    projectGroup,
-    priority: 0,
-    status: "queued" as const,
-  };
-  const loopInput = {
-    name: loopName,
-    description: `Run ${workflowBody.name} once for event ${event.id}; idempotency=${idempotencyKey}`,
-    schedule: { type: "once" as const, at: new Date(Date.now() + 1_000).toISOString() },
-    target: { type: "workflow" as const, workflowId: "<created-workflow-id>", input: {} },
-    overlap: "skip" as const,
-    maxAttempts: 1,
-    retryDelayMs: 60_000,
-    leaseMs: 90 * 60_000,
-  };
-  if (opts.dryRun) {
-    const throttle = hasThrottleLimits(throttleLimits)
-      ? routeThrottleDryRunPreview({ projectPath: routeProjectPath, projectGroup, limits: throttleLimits })
-      : undefined;
-    const preflight = opts.preflight
-      ? preflightStoredWorkflow(workflowSpecForPreflight(workflowBody, "event-preflight"), {
-          name: workflowBody.name,
-          type: "generic-event-workflow",
-          event: event.id,
-        }, {})
-      : undefined;
-    return {
-      kind: "created",
-      value: { event, idempotencyKey, providerRouting: providerRoutingPublic(providerRouting), invocation: invocationInput, workItem: workItemInput, workflow: workflowBody, loop: loopInput, throttle, sandboxPreflight, preflight },
-      human: `dry-run ${loopName}`,
-    };
-  }
-  const store = new Store();
-  try {
-    const workflowPreflightSpec = workflowSpecForPreflight(workflowBody, "event-preflight");
-    generatedRouteSandboxPreflight(workflowPreflightSpec);
-    const preflight = opts.preflight
-      ? preflightStoredWorkflow(workflowPreflightSpec, {
-          name: workflowBody.name,
-          type: "generic-event-workflow",
-          event: event.id,
-        }, {})
-      : undefined;
-    const outcome = store.writeTransaction(() => {
-      const invocation = store.createWorkflowInvocation(invocationInput);
-      const existingItem = store.findWorkflowWorkItem("generic-event", idempotencyKey);
-      if (existingItem && isUnclearedRouteWorkItem(existingItem)) {
-        const existingLoop = existingItem.loopId ? store.getLoop(existingItem.loopId) : undefined;
-        const existingWorkflow = existingItem.workflowId ? store.getWorkflow(existingItem.workflowId) : undefined;
-        return { kind: "deduped" as const, existingItem, existingLoop, existingWorkflow, invocation };
-      }
-      const throttle = hasThrottleLimits(throttleLimits)
-        ? routeThrottleDecision(store, { projectPath: routeProjectPath, projectGroup, limits: throttleLimits })
-        : undefined;
-      const workItem = store.upsertWorkflowWorkItem({
-        ...workItemInput,
-        invocationId: invocation.id,
-        status: throttle && !throttle.allowed ? "deferred" : "queued",
-        lastReason: throttle && !throttle.allowed ? throttle.reason : undefined,
-      });
-      const requeue = workItem.attempts > 0 && workItem.status === "queued"
-        ? {
-            previousWorkItemId: workItem.id,
-            previousAttempts: workItem.attempts,
-            reason: workItem.lastReason,
-          }
-        : undefined;
-      const refreshedInvocation = store.refreshWorkflowInvocationForWorkItem(workItem.id, invocationInput);
-      if (throttle && !throttle.allowed) return { kind: "throttled" as const, invocation: refreshedInvocation, workItem, throttle };
-      const workflow = routeWorkflowForStorage(store, workflowBody);
-      const loop = store.createLoop({
-        ...loopInput,
-        target: {
-          type: "workflow",
-          workflowId: workflow.id,
-          input: {
-            workflowInvocationId: refreshedInvocation.id,
-            workflowWorkItemId: workItem.id,
-          },
-        },
-      });
-      const admitted = store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id, reason: "admitted by generic-event route" });
-      return {
-        kind: "created" as const,
-        invocation: refreshedInvocation,
-        workItem: admitted,
-        workflow,
-        loop,
-        throttle,
-        requeue: requeue
-          ? { ...requeue, attempt: admitted.attempts, newWorkflowId: workflow.id, newLoopId: loop.id }
-          : undefined,
-      };
-    });
-    if (outcome.kind === "deduped") {
-      return {
-        kind: "deduped",
-        value: {
-          deduped: true,
-          idempotencyKey,
-          dedupedBy: "work-item",
-          event,
-          providerRouting: providerRoutingPublic(providerRouting),
-          invocation: publicWorkflowInvocation(outcome.invocation),
-          workItem: publicWorkflowWorkItem(outcome.existingItem),
-          workflow: outcome.existingWorkflow ? publicWorkflow(outcome.existingWorkflow) : undefined,
-          loop: outcome.existingLoop ? publicLoop(outcome.existingLoop) : undefined,
-        },
-        human: `deduped existing work item ${outcome.existingItem.id} for event=${event.id} idempotency=${idempotencyKey}`,
-      };
-    }
-    if (outcome.kind === "throttled") {
-      return {
-        kind: "throttled",
-        value: {
-          skipped: true,
-          queuedAtSource: true,
-          reason: outcome.throttle.reason,
-          idempotencyKey,
-          event,
-          providerRouting: providerRoutingPublic(providerRouting),
-          invocation: publicWorkflowInvocation(outcome.invocation),
-          workItem: publicWorkflowWorkItem(outcome.workItem),
-          throttle: outcome.throttle,
-          workflow: workflowBody,
-          loop: loopInput,
-        },
-        human: `skipped event ${event.id}: ${outcome.throttle.reason}`,
-      };
-    }
-    return {
-      kind: "created",
-      value: {
-        deduped: false,
-        idempotencyKey,
-        event,
-        providerRouting: providerRoutingPublic(providerRouting),
-        invocation: publicWorkflowInvocation(outcome.invocation),
-        workItem: publicWorkflowWorkItem(outcome.workItem),
-        workflow: publicWorkflow(outcome.workflow),
-        loop: publicLoop(outcome.loop),
-        requeue: outcome.requeue,
-        throttle: outcome.throttle,
-        sandboxPreflight,
-        preflight,
-      },
-      human: `created ${outcome.loop.id} (${outcome.loop.name}) workflow=${outcome.workflow.name} event=${event.id} idempotency=${idempotencyKey}`,
-    };
-  } finally {
-    store.close();
-  }
-}
-
-function taskField(task: TodosReadyTask, keys: string[]): string | undefined {
-  for (const key of keys) {
-    const value = stringField(task[key]);
-    if (value) return value;
-  }
-  return undefined;
-}
-
-function taskListId(task: TodosReadyTask): string | undefined {
-  return taskField(task, ["task_list_id", "taskListId"]) ?? stringField(task.task_list?.id);
-}
-
-function taskProjectId(task: TodosReadyTask): string | undefined {
-  return taskField(task, ["project_id", "projectId"]);
-}
-
-function taskDescriptionProjectPath(task: TodosReadyTask): string | undefined {
-  const text = taskField(task, ["description", "body"]);
-  const match = text?.match(/^\s*(?:Repository|Repo|Project path|Project|Working dir|Working directory):\s*(\/[^\r\n]+)/im);
-  return match?.[1]?.trim();
-}
-
-function taskProjectPath(task: TodosReadyTask): string | undefined {
-  const metadata = objectField(task.metadata) ?? {};
-  return taskField(task, ["project_path", "projectPath"]) ??
-    taskEventField(metadata, ["project_path", "projectPath", "project_canonical_path"]) ??
-    taskDescriptionProjectPath(task) ??
-    taskField(task, ["working_dir", "workingDir", "cwd"]) ??
-    taskEventField(metadata, ["working_dir", "workingDir", "cwd"]);
-}
-
-function taskDrainEvent(task: TodosReadyTask): EventEnvelope {
-  const taskId = taskField(task, ["id", "task_id", "taskId"]);
-  if (!taskId) throw new Error("todos ready returned a task without an id");
-  const metadata = objectField(task.metadata) ?? {};
-  const workingDir = taskProjectPath(task);
-  const data: Record<string, unknown> = {
-    ...task,
-    id: taskId,
-    title: taskField(task, ["title"]),
-    description: taskField(task, ["description", "body"]),
-    status: taskField(task, ["status"]),
-    tags: tagsFromValue(task.tags),
-    metadata,
-  };
-  if (workingDir) {
-    data.working_dir = workingDir;
-    data.project_path = taskField(task, ["project_path", "projectPath"]) ?? workingDir;
-    data.cwd = taskField(task, ["cwd"]) ?? workingDir;
-  }
-  const time = new Date().toISOString();
-  return {
-    id: `drain-todos-task-${taskId}`,
-    type: "task.created",
-    source: "@hasna/todos",
-    subject: taskId,
-    severity: "info",
-    data,
-    time,
-    schemaVersion: "1.0",
-    metadata: {
-      ...metadata,
-      ...(workingDir ? { working_dir: workingDir, project_path: data.project_path, cwd: data.cwd } : {}),
-      drained_by: "@hasna/loops",
-      drained_from: "todos ready",
-    },
-  };
-}
-
-function compactDrainResult(result: TodosTaskRoutePrint): Record<string, unknown> {
-  const value = result.value;
-  const event = objectField(value.event) as Partial<EventEnvelope> | undefined;
-  const loop = objectField(value.loop) as Partial<Loop> | undefined;
-  const workflow = objectField(value.workflow) as Partial<WorkflowSpec> | undefined;
-  const throttle = objectField(value.throttle) as { reason?: string; allowed?: boolean } | undefined;
-  const requeue = objectField(value.requeue);
-  const providerRouting = objectField(value.providerRouting);
-  return {
-    kind: result.kind,
-    taskId: event?.subject,
-    eventId: event?.id,
-    idempotencyKey: stringField(value.idempotencyKey),
-    reason: stringField(value.reason) ?? throttle?.reason,
-    loopId: stringField(loop?.id),
-    loopName: stringField(loop?.name),
-    workflowId: stringField(workflow?.id),
-    workflowName: stringField(workflow?.name),
-    providerRouting,
-    requeue,
-    queuedAtSource: value.queuedAtSource,
-  };
-}
-
-function loadReadyTodosTasks(opts: TodosDrainOptions, scanLimit: number): TodosReadyTask[] {
-  const todosProject = opts.todosProject ?? defaultLoopsProject();
-  const args = ["--project", todosProject, "--json", "ready", "--limit", String(scanLimit)];
-  const result = runLocalCommandWithStdoutFile("todos", args, { timeoutMs: 60_000, maxBuffer: 64 * 1024 * 1024 });
-  if (!result.ok) throw new Error(result.stderr || result.error || "todos ready failed");
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(result.stdout || "[]");
+    return JSON.parse(readFileSync(file, "utf8"));
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`failed to parse todos ready --json output (${result.stdout.length} bytes): ${message}`);
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new ValidationError(`failed to read JSON file ${file}: ${reason}`);
   }
-  if (!Array.isArray(parsed)) throw new Error("todos ready --json returned a non-array value");
-  return parsed as TodosReadyTask[];
 }
 
-function resolveTaskListFilter(todosProject: string, filter: string | undefined): string | undefined {
-  const wanted = filter?.trim();
-  if (!wanted) return undefined;
-  const result = runLocalCommand("todos", ["--project", todosProject, "--json", "task-lists"], { timeoutMs: 30_000 });
-  if (!result.ok) throw new Error(result.stderr || result.error || "failed to list todos task lists");
-  const values = JSON.parse(result.stdout || "[]") as Array<{ id?: string; slug?: string; name?: string }>;
-  const match = values.find((entry) => entry.id === wanted || entry.slug === wanted || entry.name === wanted);
-  return match?.id ?? wanted;
+function parseStringMap(values: string[] | undefined, flag: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const value of values ?? []) {
+    const index = value.indexOf("=");
+    if (index <= 0) throw new ValidationError(`invalid ${flag} value, expected key=value: ${value}`);
+    result[value.slice(0, index)] = value.slice(index + 1);
+  }
+  return result;
 }
 
-function taskMatchesDrainFilters(task: TodosReadyTask, filters: { projectId?: string; taskListId?: string; projectPathPrefix?: string; tags: string[] }): boolean {
-  if (filters.projectId && taskProjectId(task) !== filters.projectId) return false;
-  if (filters.taskListId && taskListId(task) !== filters.taskListId) return false;
-  if (filters.projectPathPrefix) {
-    const path = taskProjectPath(task);
-    if (!path) return false;
-    const normalizedPath = normalizeRoutePath(path) ?? resolve(path);
-    const normalizedPrefix = normalizeRoutePath(filters.projectPathPrefix) ?? resolve(filters.projectPathPrefix);
-    if (normalizedPath !== normalizedPrefix && !normalizedPath.startsWith(`${normalizedPrefix}/`)) return false;
-  }
-  if (filters.tags.length) {
-    const taskTags = new Set(tagsFromValue(task.tags));
-    for (const tag of filters.tags) {
-      if (!taskTags.has(tag)) return false;
+function parseJsonMap(values: string[] | undefined, flag: string): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const value of values ?? []) {
+    const index = value.indexOf("=");
+    if (index <= 0) throw new ValidationError(`invalid ${flag} value, expected key=json-or-string: ${value}`);
+    const raw = value.slice(index + 1);
+    try {
+      result[value.slice(0, index)] = JSON.parse(raw);
+    } catch {
+      result[value.slice(0, index)] = raw;
     }
   }
-  return true;
+  return result;
 }
 
-function providerAuthProfileFromOpts(opts: { authProfile?: string }, provider: AgentProvider): string | undefined {
-  if (!opts.authProfile) return undefined;
-  if (provider !== "codewith") throw new Error("--auth-profile is currently supported only for --provider codewith");
-  return opts.authProfile;
+function printMigrationPlan(plan: LoopsMigrationPlan, opts: { json?: boolean } = {}): void {
+  if (isJson() || opts.json) {
+    console.log(JSON.stringify(plan, null, 2));
+    return;
+  }
+  console.log(
+    `${plan.operation} dryRun=${plan.dryRun} workflows=${plan.summary.workflows} loops=${plan.summary.loops} runs=${plan.summary.runs} ` +
+      `insert=${plan.summary.insert} update=${plan.summary.update} skip=${plan.summary.skip} conflict=${plan.summary.conflict} blocked=${plan.summary.blocked}`,
+  );
+  for (const warning of plan.warnings) console.log(`warn ${warning}`);
+  for (const row of plan.rows) {
+    if (row.action !== "blocked" && row.action !== "conflict") continue;
+    console.log(`${row.action} ${row.resource}:${row.name ?? row.id} ${row.reason ?? ""}`.trim());
+  }
 }
 
-function sandboxFromOpts(opts: { sandbox?: string }, provider: AgentProvider): AgentSandbox | undefined {
-  if (!opts.sandbox) return undefined;
-  const codexLike = ["read-only", "workspace-write", "danger-full-access"];
-  const cursorLike = ["enabled", "disabled"];
-  if (["codewith", "codex"].includes(provider)) {
-    if (!codexLike.includes(opts.sandbox)) {
-      throw new Error("--sandbox must be read-only, workspace-write, or danger-full-access for codewith/codex");
-    }
-    return opts.sandbox as AgentSandbox;
-  }
-  if (provider === "cursor") {
-    if (!cursorLike.includes(opts.sandbox)) {
-      throw new Error("--sandbox must be enabled or disabled for cursor");
-    }
-    return opts.sandbox as AgentSandbox;
-  }
-  throw new Error("--sandbox is currently supported only for --provider codewith, codex, or cursor");
-}
-
-function permissionModeFromOpts(opts: { permissionMode?: string }, provider: AgentProvider): AgentPermissionMode | undefined {
-  if (!opts.permissionMode) return undefined;
-  const mode = opts.permissionMode;
-  if (!["default", "plan", "auto", "bypass"].includes(mode)) {
-    throw new Error("--permission-mode must be default, plan, auto, or bypass");
-  }
-  if (mode === "plan" && !["claude", "cursor"].includes(provider)) {
-    throw new Error("--permission-mode plan is currently supported only for claude or cursor");
-  }
-  if (mode === "auto" && provider !== "claude") {
-    throw new Error("--permission-mode auto is currently supported only for claude");
-  }
-  return mode as AgentPermissionMode;
+/** Snapshot the database through lib/backup (VACUUM INTO, 1h per-reason debounce, keep 3). */
+function backupLoopsDatabase(reason: string): string | undefined {
+  return backupDatabase({ reason, keep: 3 }).path;
 }
 
 const create = program.command("create").description("create loops");
@@ -2559,7 +538,7 @@ addGoalOptions(
       ),
     ),
   ),
-).action((name, opts) => {
+).action(runAction((name, opts) => {
   const store = new Store();
   try {
     const target: LoopTarget = {
@@ -2580,7 +559,7 @@ addGoalOptions(
   } finally {
     store.close();
   }
-});
+}));
 
 addGoalOptions(
   addAccountOptions(
@@ -2609,13 +588,13 @@ addGoalOptions(
       ),
     ),
   ),
-).action((name, opts) => {
+).action(runAction((name, opts) => {
   const provider = opts.provider as AgentProvider;
   if (!["claude", "cursor", "codewith", "aicopilot", "opencode", "codex"].includes(provider)) {
-    throw new Error("unsupported provider");
+    throw new ValidationError("unsupported provider");
   }
   if (!["safe", "none"].includes(opts.configIsolation)) {
-    throw new Error("--config-isolation must be safe or none");
+    throw new ValidationError("--config-isolation must be safe or none");
   }
   const store = new Store();
   try {
@@ -2647,7 +626,7 @@ addGoalOptions(
   } finally {
     store.close();
   }
-});
+}));
 
 addGoalOptions(
   addMachineOptions(
@@ -2661,7 +640,7 @@ addGoalOptions(
       .option("--preflight", "check workflow step executables/accounts before storing the loop"),
     ),
   ),
-).action((name, opts) => {
+).action(runAction((name, opts) => {
   const store = new Store();
   try {
     const workflow = store.requireWorkflow(opts.workflow);
@@ -2680,286 +659,183 @@ addGoalOptions(
   } finally {
     store.close();
   }
-});
+}));
 
 const workflows = program.command("workflows").alias("workflow").description("manage workflow specs and runs");
 
 const templates = program.command("templates").alias("template").description("render and store reusable loop/workflow templates");
 
-const routes = program.command("routes").alias("route").description("inspect workflow invocation/admission routes");
+const routes = program.command("routes").alias("route").description("create, inspect, and drain workflow invocation/admission routes");
 
-const events = program.command("events").description("handle Hasna event envelopes from stdin or command transport");
+const events = program.command("events").description("(deprecated) Hasna event envelope aliases for 'routes create' and 'routes drain'");
 
 const machines = program.command("machines").description("inspect OpenMachines topology for loop assignment");
 
 const goal = program.command("goal").description("inspect goal runs");
 
-function addRouteEventOptions(command: Command): Command {
-  return command
-    .option("--event-file <file>", "read event envelope JSON from a file instead of stdin/HASNA_EVENT_JSON")
-    .option("--event-json <json>", "read event envelope JSON from this string instead of stdin/HASNA_EVENT_JSON")
-    .option("--todos-project <path>", "todos storage project path for generated task commands", defaultLoopsProject())
-    .option("--template <id>", "todos-task route workflow template: todos-task-worker-verifier or task-lifecycle", TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID)
-    .option("--provider <provider>", "agent provider; defaults to codewith")
-    .option("--provider-rule <rule>", "task metadata provider routing rule field=value:provider[:profile1,profile2]; may be repeated", collectValues, [] as string[])
-    .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
-    .option("--auth-profile-pool <profiles>", "comma-separated provider-native auth profile pool")
-    .option("--triage-auth-profile <profile>", "provider-native auth profile for triage step")
-    .option("--planner-auth-profile <profile>", "provider-native auth profile for planner step")
-    .option("--worker-auth-profile <profile>", "provider-native auth profile for worker step")
-    .option("--verifier-auth-profile <profile>", "provider-native auth profile for verifier step")
-    .option("--account <profile>", "OpenAccounts profile name")
-    .option("--account-pool <profiles>", "comma-separated OpenAccounts profile pool")
-    .option("--triage-account <profile>", "OpenAccounts profile for triage step")
-    .option("--planner-account <profile>", "OpenAccounts profile for planner step")
-    .option("--worker-account <profile>", "OpenAccounts profile for worker step")
-    .option("--verifier-account <profile>", "OpenAccounts profile for verifier step")
-    .option("--account-tool <tool>", "OpenAccounts tool id")
-    .option("--model <model>", "provider model")
-    .option("--variant <variant>", "provider-specific model variant or reasoning effort")
-    .option("--agent <agent>", "provider-specific agent")
-    .option("--add-dir <dir>", "additional writable directory for provider sandboxes; may be repeated or comma-separated", collectValues, [] as string[])
-    .option("--timeout <duration>", "agent step timeout; use none/unlimited for no timeout")
-    .option("--verifier-idle-timeout <duration>", "verifier idle watchdog; use none/off to disable when an external heartbeat exists", "15m")
-    .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
-    .option("--sandbox <mode>", "provider sandbox")
-    .option("--manual-break-glass", "allow danger-full-access in generated worker/verifier workflow metadata; for explicit operator emergency use only")
-    .option("--project-path <path>", "fallback project/repo working directory")
-    .option("--project-group <name>", "optional project group for concurrency limits")
-    .option("--max-active <n>", "skip creating a workflow when this many active routed workflows already exist globally")
-    .option("--max-active-per-project <n>", "skip creating a workflow when this many active routed workflows already exist for the project")
-    .option("--max-active-per-project-group <n>", "skip creating a workflow when this many active routed workflows already exist for the project group")
-    .option("--worktree-mode <mode>", "worktree isolation mode: auto, required, off, or main", "auto")
-    .option("--worktree-root <path>", "base directory for OpenLoops-managed git worktrees")
-    .option("--worktree-branch-prefix <prefix>", "branch prefix for generated worktrees", "openloops")
-    .option("--pr-handoff", "for task-lifecycle routes, add a bounded PR handoff step after the worker")
-    .option("--github-reviewer <login>", "GitHub login expected to review/merge review-required PR routes; must differ from PR author")
-    .option("--github-reviewer-pool <logins>", "comma-separated GitHub logins eligible to review/merge review-required PR routes")
-    .option("--name-prefix <prefix>", "workflow/loop name prefix")
-    .option("--preflight", "check generated workflow steps before storing the workflow loop");
-}
+program
+  .command("mode")
+  .description("show the active OpenLoops deployment mode")
+  .option("--json", "print JSON")
+  .action(runAction(deploymentStatusCommand()));
 
-function addTodosDrainOptions(command: Command, opts: { includeDryRun?: boolean; preflightDescription?: string } = {}): Command {
-  let configured = command
-    .option("--todos-project <path>", "todos storage project path", defaultLoopsProject())
-    .option("--todos-project-id <id>", "filter todos ready output to one todos project id")
-    .option("--task-list <id-or-slug>", "filter ready tasks to one task-list id, slug, or name")
-    .option("--project-path-prefix <path>", "filter ready tasks to a project/repo path prefix")
-    .option("--tags <tags>", "require all comma-separated tags before routing")
-    .option("--tag <tags>", "alias for --tags")
-    .option("--limit <n>", "maximum filtered ready-task candidates to consider", "50")
-    .option("--scan-limit <n>", "maximum raw todos ready rows to fetch before filters; defaults to 500 when filters are used")
-    .option("--max-dispatch <n>", "maximum new workflow loops to create in this drain run", "1")
-    .option("--evidence-dir <path>", "write a JSON drain report to this directory")
-    .option("--compact", "print compact JSON to stdout while preserving the full evidence file")
-    .option("--template <id>", "todos-task route workflow template: todos-task-worker-verifier or task-lifecycle", TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID)
-    .option("--provider <provider>", "agent provider; defaults to codewith")
-    .option("--provider-rule <rule>", "task metadata provider routing rule field=value:provider[:profile1,profile2]; may be repeated", collectValues, [] as string[])
-    .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
-    .option("--auth-profile-pool <profiles>", "comma-separated provider-native auth profile pool")
-    .option("--triage-auth-profile <profile>", "provider-native auth profile for triage step")
-    .option("--planner-auth-profile <profile>", "provider-native auth profile for planner step")
-    .option("--worker-auth-profile <profile>", "provider-native auth profile for worker step")
-    .option("--verifier-auth-profile <profile>", "provider-native auth profile for verifier step")
-    .option("--account <profile>", "OpenAccounts profile name")
-    .option("--account-pool <profiles>", "comma-separated OpenAccounts profile pool")
-    .option("--triage-account <profile>", "OpenAccounts profile for triage step")
-    .option("--planner-account <profile>", "OpenAccounts profile for planner step")
-    .option("--worker-account <profile>", "OpenAccounts profile for worker step")
-    .option("--verifier-account <profile>", "OpenAccounts profile for verifier step")
-    .option("--account-tool <tool>", "OpenAccounts tool id")
-    .option("--model <model>", "provider model")
-    .option("--variant <variant>", "provider-specific model variant or reasoning effort")
-    .option("--agent <agent>", "provider-specific agent")
-    .option("--add-dir <dir>", "additional writable directory for provider sandboxes; may be repeated or comma-separated", collectValues, [] as string[])
-    .option("--timeout <duration>", "agent step timeout; use none/unlimited for no timeout")
-    .option("--verifier-idle-timeout <duration>", "verifier idle watchdog; use none/off to disable when an external heartbeat exists", "15m")
-    .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
-    .option("--sandbox <mode>", "provider sandbox")
-    .option("--manual-break-glass", "allow danger-full-access in generated worker/verifier workflow metadata; for explicit operator emergency use only")
-    .option("--project-path <path>", "fallback project/repo working directory")
-    .option("--project-group <name>", "optional project group for concurrency limits")
-    .option("--max-active <n>", "skip creating a workflow when this many active routed workflows already exist globally")
-    .option("--max-active-per-project <n>", "skip creating a workflow when this many active routed workflows already exist for the project")
-    .option("--max-active-per-project-group <n>", "skip creating a workflow when this many active routed workflows already exist for the project group")
-    .option("--worktree-mode <mode>", "worktree isolation mode: auto, required, off, or main", "auto")
-    .option("--worktree-root <path>", "base directory for OpenLoops-managed git worktrees")
-    .option("--worktree-branch-prefix <prefix>", "branch prefix for generated task worktrees", "openloops")
-    .option("--pr-handoff", "for task-lifecycle routes, add a bounded PR handoff step after the worker")
-    .option("--github-reviewer <login>", "GitHub login expected to review/merge review-required PR routes; must differ from PR author")
-    .option("--github-reviewer-pool <logins>", "comma-separated GitHub logins eligible to review/merge review-required PR routes")
-    .option("--name-prefix <prefix>", "workflow/loop name prefix", "event:todos-task")
-    .option("--preflight", opts.preflightDescription ?? "check generated workflow steps before storing workflow loops");
-  if (opts.includeDryRun ?? true) {
-    configured = configured.option("--dry-run", "preview selected tasks and generated workflow loops without storing anything");
-  }
-  return configured;
-}
+const selfHosted = program.command("self-hosted").alias("selfhosted").description("inspect the self-hosted OpenLoops contract");
+selfHosted
+  .command("status")
+  .option("--json", "print JSON")
+  .action(runAction(deploymentStatusCommand("self_hosted")));
 
-function routeEventByKind(kind: string, event: EventEnvelope, opts: TodosTaskRouteOptions): TodosTaskRoutePrint {
-  if (kind === "todos-task") return routeTodosTaskEvent(event, opts);
-  if (kind === "generic") return routeGenericEvent(event, opts);
-  throw new Error("route kind must be todos-task or generic");
-}
-
-function routeDrainArgs(opts: TodosDrainOptions & { tag?: string }): string[] {
-  const args = ["events", "drain", "todos-task"];
-  const add = (flag: string, value: unknown): void => {
-    if (value !== undefined && value !== false && value !== "") args.push(flag, String(value));
-  };
-  const addBool = (flag: string, value: unknown): void => {
-    if (value === true) args.push(flag);
-  };
-  add("--todos-project", opts.todosProject);
-  add("--todos-project-id", opts.todosProjectId);
-  add("--task-list", opts.taskList);
-  add("--project-path-prefix", opts.projectPathPrefix);
-  add("--tags", opts.tags ?? opts.tag);
-  add("--limit", opts.limit);
-  add("--scan-limit", opts.scanLimit);
-  add("--max-dispatch", opts.maxDispatch);
-  add("--evidence-dir", opts.evidenceDir);
-  addBool("--compact", opts.compact);
-  add("--template", opts.template);
-  add("--provider", opts.provider);
-  for (const rule of opts.providerRule ?? []) add("--provider-rule", rule);
-  add("--auth-profile", opts.authProfile);
-  add("--auth-profile-pool", opts.authProfilePool);
-  add("--triage-auth-profile", opts.triageAuthProfile);
-  add("--planner-auth-profile", opts.plannerAuthProfile);
-  add("--worker-auth-profile", opts.workerAuthProfile);
-  add("--verifier-auth-profile", opts.verifierAuthProfile);
-  add("--account", opts.account);
-  add("--account-pool", opts.accountPool);
-  add("--triage-account", opts.triageAccount);
-  add("--planner-account", opts.plannerAccount);
-  add("--worker-account", opts.workerAccount);
-  add("--verifier-account", opts.verifierAccount);
-  add("--account-tool", opts.accountTool);
-  add("--model", opts.model);
-  add("--variant", opts.variant);
-  add("--agent", opts.agent);
-  for (const dir of listFromRepeatedOpts(opts.addDir) ?? []) add("--add-dir", dir);
-  add("--timeout", opts.timeout);
-  add("--verifier-idle-timeout", opts.verifierIdleTimeout);
-  add("--permission-mode", opts.permissionMode);
-  add("--sandbox", opts.sandbox);
-  addBool("--manual-break-glass", opts.manualBreakGlass);
-  add("--project-path", opts.projectPath);
-  add("--project-group", opts.projectGroup);
-  add("--max-active", opts.maxActive);
-  add("--max-active-per-project", opts.maxActivePerProject);
-  add("--max-active-per-project-group", opts.maxActivePerProjectGroup);
-  add("--worktree-mode", opts.worktreeMode);
-  add("--worktree-root", opts.worktreeRoot);
-  add("--worktree-branch-prefix", opts.worktreeBranchPrefix);
-  addBool("--pr-handoff", opts.prHandoff);
-  add("--github-reviewer", opts.githubReviewer);
-  add("--github-reviewer-pool", opts.githubReviewerPool);
-  add("--name-prefix", opts.namePrefix);
-  addBool("--preflight", opts.preflight);
-  return args;
-}
-
-function drainTodosTaskRoutes(opts: TodosDrainOptions & { tag?: string }): void {
-  const maxDispatch = positiveInteger(opts.maxDispatch ?? "1", "--max-dispatch") ?? 1;
-  const todosProject = opts.todosProject ?? defaultLoopsProject();
-  const requiredTags = splitList(opts.tags ?? opts.tag) ?? [];
-  const taskListFilter = resolveTaskListFilter(todosProject, opts.taskList);
-  const candidateLimit = positiveInteger(opts.limit ?? "50", "--limit") ?? 50;
-  const hasPostFilters = Boolean(opts.todosProjectId || taskListFilter || opts.projectPathPrefix || requiredTags.length);
-  const defaultScanLimit = hasPostFilters ? Math.max(candidateLimit, 500) : candidateLimit;
-  const scanLimit = positiveInteger(opts.scanLimit ?? String(defaultScanLimit), "--scan-limit") ?? defaultScanLimit;
-  const ready = loadReadyTodosTasks(opts, scanLimit);
-  const filteredCandidates = ready.filter((task) => taskMatchesDrainFilters(task, {
-    projectId: opts.todosProjectId,
-    taskListId: taskListFilter,
-    projectPathPrefix: opts.projectPathPrefix,
-    tags: requiredTags,
-  }));
-  const candidates = filteredCandidates.slice(0, candidateLimit);
-  const results: TodosTaskRoutePrint[] = [];
-  let created = 0;
-  for (const task of candidates) {
-    if (created >= maxDispatch) break;
-    let event: EventEnvelope | undefined;
-    let result: TodosTaskRoutePrint;
+program
+  .command("export")
+  .description("export a local OpenLoops migration bundle")
+  .requiredOption("--file <path>", "write bundle JSON to this path")
+  .option("--dry-run", "preview the bundle without writing the file")
+  .option("--no-runs", "omit loop run history from the bundle")
+  .option("--allow-redacted", "write a redacted non-importable bundle when env/secrets must be removed")
+  .option("--json", "print JSON")
+  .action(runAction((opts) => {
+    const store = new Store();
     try {
-      event = taskDrainEvent(task);
-      result = routeTodosTaskEvent(event, opts);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!isSkippableDrainRouteError(message)) throw error;
-      const sourceTaskUpdate = opts.dryRun
-        ? { attempted: false, reason: "dry-run" }
-        : markInvalidDrainTaskNonRouteable(todosProject, task, message);
-      result = skippedDrainTask(task, event, redact(message, 640) ?? "route task failed", { sourceTaskUpdate });
-    }
-    results.push(result);
-    if (result.kind === "created" && !opts.dryRun) created += 1;
-    if (result.kind === "created" && opts.dryRun) created += 1;
-  }
-  const report = {
-    drainedAt: new Date().toISOString(),
-    todosProject,
-    templateId: todosTaskRouteTemplateId(opts),
-    todosProjectId: opts.todosProjectId,
-    taskList: opts.taskList,
-    taskListId: taskListFilter,
-    projectPathPrefix: opts.projectPathPrefix,
-    tags: requiredTags,
-    limit: candidateLimit,
-    scanLimit,
-    filtersApplied: hasPostFilters,
-    scanned: ready.length,
-    candidates: candidates.length,
-    filteredCandidates: filteredCandidates.length,
-    scanExhausted: ready.length >= scanLimit && filteredCandidates.length < candidateLimit,
-    considered: results.length,
-    created: results.filter((result) => result.kind === "created" && !result.value.deduped).length,
-    deduped: results.filter((result) => result.kind === "deduped").length,
-    throttled: results.filter((result) => result.kind === "throttled").length,
-    skipped: results.filter((result) => result.kind === "skipped").length,
-    maxDispatch,
-    source: "todos ready",
-    dryRun: Boolean(opts.dryRun),
-    results: results.map((result) => ({ kind: result.kind, ...result.value })),
-  };
-  const evidencePath = writeRouteEvidence("todos-task-drain", report, opts.evidenceDir);
-  const output = opts.compact
-    ? {
-        drainedAt: report.drainedAt,
-        todosProject: report.todosProject,
-        templateId: report.templateId,
-        todosProjectId: report.todosProjectId,
-        taskList: report.taskList,
-        taskListId: report.taskListId,
-        projectPathPrefix: report.projectPathPrefix,
-        tags: report.tags,
-        limit: report.limit,
-        scanLimit: report.scanLimit,
-        filtersApplied: report.filtersApplied,
-        scanned: report.scanned,
-        candidates: report.candidates,
-        filteredCandidates: report.filteredCandidates,
-        scanExhausted: report.scanExhausted,
-        considered: report.considered,
-        created: report.created,
-        deduped: report.deduped,
-        throttled: report.throttled,
-        skipped: report.skipped,
-        maxDispatch: report.maxDispatch,
-        source: report.source,
-        dryRun: report.dryRun,
-        evidencePath,
-        results: results.map(compactDrainResult),
+      const bundle = exportLoopsMigrationBundle(store, { includeRuns: opts.runs });
+      if (!opts.dryRun && !bundle.importable && !opts.allowRedacted) {
+        throw new ValidationError("export is not no-loss because redactions/blockers are present; rerun with --allow-redacted to write a redacted bundle");
       }
-    : { ...report, evidencePath };
-  print(
-    output,
-    `drained todos ready queue: considered=${report.considered} created=${report.created} deduped=${report.deduped} throttled=${report.throttled} skipped=${report.skipped}`,
-  );
+      if (!opts.dryRun) writeFileSync(opts.file, `${JSON.stringify(bundle, null, 2)}\n`, { mode: 0o600 });
+      const output = {
+        ok: true,
+        dryRun: Boolean(opts.dryRun),
+        file: opts.file,
+        bundle: publicMigrationBundle(bundle),
+      };
+      if (isJson() || opts.json) console.log(JSON.stringify(output, null, 2));
+      else {
+        console.log(`${opts.dryRun ? "would export" : "exported"} ${opts.file} workflows=${bundle.counts.workflows} loops=${bundle.counts.loops} runs=${bundle.counts.runs}`);
+        for (const warning of bundle.warnings) console.log(`warn ${warning}`);
+      }
+    } finally {
+      store.close();
+    }
+  }));
+
+program
+  .command("import <file>")
+  .description("preview or apply a local OpenLoops migration bundle")
+  .option("--apply", "apply the import; default is a dry-run preview")
+  .option("--replace", "update existing rows whose ids match but hashes differ")
+  .option("--no-runs", "ignore loop run history in the bundle")
+  .option("--json", "print JSON")
+  .action(runAction((file, opts) => {
+    const bundle = validateLoopsMigrationBundle(parseJsonFile(file));
+    const store = new Store();
+    try {
+      if (!opts.apply) {
+        printMigrationPlan(buildImportMigrationPlan(store, bundle, {
+          includeRuns: opts.runs,
+          replace: opts.replace,
+          dryRun: true,
+        }), opts);
+        return;
+      }
+      const plan = buildImportMigrationPlan(store, bundle, {
+        includeRuns: opts.runs,
+        replace: opts.replace,
+        dryRun: false,
+      });
+      if (plan.summary.blocked > 0 || plan.summary.conflict > 0 || !plan.importable) {
+        printMigrationPlan(plan, opts);
+        throw new ValidationError(`refusing to import unsafe bundle: blocked=${plan.summary.blocked} conflict=${plan.summary.conflict}`);
+      }
+      const backupPath = backupLoopsDatabase("migration-import");
+      const result = applyImportMigrationBundle(store, bundle, {
+        includeRuns: opts.runs,
+        replace: opts.replace,
+        dryRun: false,
+      });
+      const output = { ok: true, backupPath, ...result };
+      if (isJson() || opts.json) console.log(JSON.stringify(output, null, 2));
+      else {
+        console.log(`imported workflows=${result.applied.workflows} loops=${result.applied.loops} runs=${result.applied.runs}${backupPath ? ` backup=${backupPath}` : ""}`);
+      }
+    } finally {
+      store.close();
+    }
+  }));
+
+function selfHostedMigrationCommand(operation: "self-hosted-push" | "self-hosted-pull" | "self-hosted-migrate") {
+  return runAction(async (opts: { apiUrl?: string; runs?: boolean; json?: boolean }) => {
+    const store = new Store();
+    try {
+      const plan = await buildSelfHostedMigrationPlan(store, {
+        operation,
+        apiUrl: opts.apiUrl,
+        includeRuns: opts.runs,
+      });
+      printMigrationPlan(plan, opts);
+    } finally {
+      store.close();
+    }
+  });
 }
+
+selfHosted
+  .command("migrate")
+  .description("preview local-to-self-hosted migration actions")
+  .option("--api-url <url>", "self-hosted control-plane API URL")
+  .option("--dry-run", "preview only; self-hosted migrate does not apply remote changes yet")
+  .option("--no-runs", "omit loop run history from the preview")
+  .option("--json", "print JSON")
+  .action(selfHostedMigrationCommand("self-hosted-migrate"));
+
+selfHosted
+  .command("push")
+  .description("preview local rows that would be pushed to self-hosted")
+  .option("--api-url <url>", "self-hosted control-plane API URL")
+  .option("--dry-run", "preview only; self-hosted push does not apply remote changes yet")
+  .option("--no-runs", "omit loop run history from the preview")
+  .option("--json", "print JSON")
+  .action(selfHostedMigrationCommand("self-hosted-push"));
+
+selfHosted
+  .command("pull")
+  .description("preview self-hosted rows that would be pulled locally")
+  .option("--api-url <url>", "self-hosted control-plane API URL")
+  .option("--dry-run", "preview only; self-hosted pull does not apply local changes yet")
+  .option("--no-runs", "omit loop run history from the preview")
+  .option("--json", "print JSON")
+  .action(selfHostedMigrationCommand("self-hosted-pull"));
+
+selfHosted
+  .command("runner-register")
+  .description("register this machine as a self-hosted runner")
+  .requiredOption("--runner-id <id>", "stable runner id")
+  .option("--api-url <url>", "self-hosted control-plane API URL")
+  .option("--machine-id <id>", "OpenMachines machine id")
+  .option("--label <key=value>", "runner label; may be repeated or comma-separated", collectValues, [] as string[])
+  .option("--capability <key=json>", "runner capability; may be repeated or comma-separated", collectValues, [] as string[])
+  .option("--dry-run", "preview registration without posting")
+  .option("--apply", "post the registration to the control plane")
+  .option("--json", "print JSON")
+  .action(runAction(async (opts) => {
+    if (opts.apply && opts.dryRun) throw new ValidationError("use either --apply or --dry-run, not both");
+    const request = {
+      apiUrl: opts.apiUrl,
+      runnerId: opts.runnerId,
+      machineId: opts.machineId,
+      labels: parseStringMap(listFromRepeatedOpts(opts.label), "--label"),
+      capabilities: parseJsonMap(listFromRepeatedOpts(opts.capability), "--capability"),
+    };
+    const result = opts.apply
+      ? await registerSelfHostedRunner(request)
+      : { ok: true, dryRun: true, runner: request };
+    if (isJson() || opts.json) console.log(JSON.stringify(result, null, 2));
+    else console.log(`${opts.apply ? "registered" : "would register"} runner ${String(opts.runnerId)}`);
+  }));
+
+const cloud = program.command("cloud").description("inspect the hosted OpenLoops contract");
+cloud
+  .command("status")
+  .option("--json", "print JSON")
+  .action(runAction(deploymentStatusCommand("cloud")));
 
 function formatTemplateVariable(template: LoopTemplateSummary, name: string): string {
   const variable = template.variables.find((entry) => entry.name === name);
@@ -2970,7 +846,7 @@ function formatTemplateVariable(template: LoopTemplateSummary, name: string): st
 function templateSource(value: string | undefined): "all" | "builtin" | "custom" {
   const source = value ?? "all";
   if (source === "all" || source === "builtin" || source === "custom") return source;
-  throw new Error("--source must be all, builtin, or custom");
+  throw new ValidationError("--source must be all, builtin, or custom");
 }
 
 function addTemplateSourceOption(command: Command, defaultValue = "all"): Command {
@@ -2999,18 +875,18 @@ function printTemplateDetails(template: LoopTemplateSummary): void {
   console.log("");
   console.log("Usage:");
   console.log(`  loops templates render ${template.id}${renderHint}`);
-  if (template.kind === "workflow") console.log(`  loops templates create-workflow ${template.id}${renderHint}`);
+  if (template.kind === "workflow") console.log(`  loops workflows create --template ${template.id}${renderHint}`);
 }
 
 function workflowStatusFromOpts(status: string | undefined, all: boolean | undefined): WorkflowSpec["status"] | undefined {
   if (all) {
-    if (status && status !== "active") throw new Error("use either --all or --status, not both");
+    if (status && status !== "active") throw new ValidationError("use either --all or --status, not both");
     return undefined;
   }
   const value = status ?? "active";
   if (value === "all") return undefined;
   if (value === "active" || value === "archived") return value;
-  throw new Error("--status must be active, archived, or all");
+  throw new ValidationError("--status must be active, archived, or all");
 }
 
 function printWorkflowListWarning(args: { shown: number; total: number; status?: WorkflowSpec["status"]; offset: number; limit?: number }): void {
@@ -3026,7 +902,7 @@ templates
   .alias("ls")
   .description("list OpenLoops templates")
   .option("--source <source>", "template source: all, builtin, or custom", "all")
-  .action((opts) => {
+  .action(runAction((opts) => {
     const values = listLoopTemplates({ source: templateSource(opts.source) });
     if (isJson()) print(values);
     else {
@@ -3034,23 +910,23 @@ templates
         console.log(`${template.id}\t${template.source ?? "builtin"}\t${template.kind}\t${template.description}`);
       }
     }
-  });
+  }));
 
 templates
   .command("import <file>")
   .alias("add")
   .description("import a custom workflow template JSON file into the local registry")
   .option("--replace", "replace an existing custom template with the same id")
-  .action((file, opts) => {
+  .action(runAction((file, opts) => {
     const result = importCustomLoopTemplate(file, { replace: Boolean(opts.replace) });
     print(result, `${result.replaced ? "replaced" : "imported"} custom template ${result.template.id} -> ${result.path}`);
-  });
+  }));
 
 templates
   .command("validate [file]")
   .description("validate a custom template JSON file or the local template registry")
   .option("--source <source>", "template source to validate when no file is given: all, builtin, or custom", "all")
-  .action((file, opts) => {
+  .action(runAction((file, opts) => {
     if (file) {
       const template = validateCustomLoopTemplateFile(file);
       print({ ok: true, template, customDir: loopTemplatesDir() }, `valid custom template ${template.id}`);
@@ -3058,14 +934,14 @@ templates
     }
     const result = validateLoopTemplateRegistry({ source: templateSource(opts.source) });
     print(result, `valid template registry (${result.templates.length} templates) customDir=${result.customDir}`);
-  });
+  }));
 
-addTemplateSourceOption(templates.command("show <id>").description("show a template")).action((id, opts) => {
+addTemplateSourceOption(templates.command("show <id>").description("show a template")).action(runAction((id, opts) => {
   const template = getLoopTemplate(id, { source: templateSource(opts.source) });
   if (!template) throw new Error(`template not found: ${id}`);
   if (isJson()) print(template);
   else printTemplateDetails(template);
-});
+}));
 
 addTemplateSourceOption(
   templates
@@ -3073,28 +949,35 @@ addTemplateSourceOption(
     .description("render a template as workflow JSON")
     .option("--var <key=value>", "template variable; may be repeated", collectValues, [] as string[]),
 )
-  .action((id, opts) => {
+  .action(runAction((id, opts) => {
     const workflow = renderLoopTemplate(id, parseVars(opts.var), { source: templateSource(opts.source) });
     const value = publicWorkflowBody(workflow);
     print(value, JSON.stringify(value, null, 2));
-  });
+  }));
+
+function createWorkflowFromTemplate(id: string, opts: { var?: string[]; source?: string; name?: string; preflight?: boolean }): void {
+  const store = new Store();
+  try {
+    let body = renderLoopTemplate(id, parseVars(opts.var), { source: templateSource(opts.source) });
+    if (opts.name) body = { ...body, name: opts.name };
+    const preflight = opts.preflight
+      ? preflightStoredWorkflow(workflowSpecForPreflight(body, "creation-preflight"), { name: body.name, type: "workflow", template: id }, {})
+      : undefined;
+    const workflow = store.createWorkflow(body);
+    if (preflight !== undefined) print({ workflow: publicWorkflow(workflow), preflight }, `created workflow ${workflow.id} (${workflow.name}) steps=${workflow.steps.length}`);
+    else print(publicWorkflow(workflow), `created workflow ${workflow.id} (${workflow.name}) steps=${workflow.steps.length}`);
+  } finally {
+    store.close();
+  }
+}
 
 addTemplateSourceOption(
   templates
     .command("create-workflow <id>")
-    .description("render and store a template as a workflow")
+    .description("(deprecated: use 'workflows create --template <id>') render and store a template as a workflow")
     .option("--var <key=value>", "template variable; may be repeated", collectValues, [] as string[]),
 )
-  .action((id, opts) => {
-    const store = new Store();
-    try {
-      const body = renderLoopTemplate(id, parseVars(opts.var), { source: templateSource(opts.source) });
-      const workflow = store.createWorkflow(body);
-      print(publicWorkflow(workflow), `created workflow ${workflow.id} (${workflow.name}) steps=${workflow.steps.length}`);
-    } finally {
-      store.close();
-    }
-  });
+  .action(runAction((id, opts) => createWorkflowFromTemplate(id, opts)));
 
 routes
   .command("list")
@@ -3102,7 +985,7 @@ routes
   .option("--status <status>", "filter by work item status")
   .option("--route-key <key>", "filter by route key")
   .option("--limit <n>", "maximum rows", "50")
-  .action((opts) => {
+  .action(runAction((opts) => {
     const store = new Store();
     try {
       const items = store.listWorkflowWorkItems({
@@ -3119,12 +1002,12 @@ routes
     } finally {
       store.close();
     }
-  });
+  }));
 
 routes
   .command("show <id>")
   .description("show one admission work item")
-  .action((id) => {
+  .action(runAction((id) => {
     const store = new Store();
     try {
       const item = store.getWorkflowWorkItem(id);
@@ -3144,29 +1027,29 @@ routes
     } finally {
       store.close();
     }
-  });
+  }));
 
 routes
   .command("requeue <id>")
   .description("requeue a terminal admission work item for the next task/event delivery")
   .option("--reason <text>", "operator reason recorded on the work item")
-  .action((id, opts) => {
+  .action(runAction((id, opts) => {
     const store = new Store();
     try {
       const reason = stringField(opts.reason);
-      if (!reason) throw new Error("routes requeue requires --reason <text>");
+      if (!reason) throw new ValidationError("routes requeue requires --reason <text>");
       const item = store.requeueWorkflowWorkItem(id, { reason });
       print(publicWorkflowWorkItem(item), `requeued route work item ${item.id} (${item.routeKey})`);
     } finally {
       store.close();
     }
-  });
+  }));
 
 routes
   .command("invocations")
   .description("list workflow invocations")
   .option("--limit <n>", "maximum rows", "50")
-  .action((opts) => {
+  .action(runAction((opts) => {
     const store = new Store();
     try {
       const invocations = store.listWorkflowInvocations({ limit: positiveInteger(opts.limit, "--limit") ?? 50 });
@@ -3181,36 +1064,47 @@ routes
     } finally {
       store.close();
     }
-  });
+  }));
+
+async function handleRouteEvent(kind: string, opts: TodosTaskRouteOptions): Promise<void> {
+  const event = await readEventEnvelopeInput(opts);
+  const result = routeEventByKind(kind, event, opts);
+  print(result.value, result.human);
+}
+
+function handleRouteDrain(kind: string, opts: TodosDrainOptions): void {
+  if (kind !== "todos-task") throw new ValidationError("route drain currently supports kind todos-task");
+  const result = drainTodosTaskRoutes(opts);
+  print(result.value, result.human);
+  // Non-skippable route errors are captured per-task so the batch completes, but
+  // the run must not report success: a systemic misconfig where every candidate
+  // is fatal would otherwise exit 0 and a daemon-scheduled drain loop would mark
+  // a route-nothing run "succeeded", hiding the failure from monitoring.
+  const fatal = Number(result.value.fatal ?? 0);
+  if (fatal > 0) {
+    console.error(`route drain hit ${fatal} non-skippable task error(s); see evidence file`);
+    process.exitCode = 1;
+  }
+}
 
 addRouteEventOptions(
   routes
     .command("preview <kind>")
-    .description("preview a route-created workflow invocation without storing it"),
-).action(async (kind, opts) => {
-  const event = await readEventEnvelopeInput(opts);
-  const result = routeEventByKind(kind, event, { ...opts, dryRun: true });
-  print(result.value, result.human);
-});
+    .description("(deprecated: use 'routes create <kind> --dry-run') preview a route-created workflow invocation without storing it"),
+).action(runAction(async (kind, opts) => handleRouteEvent(kind, { ...opts, dryRun: true })));
 
 addRouteEventOptions(
   routes
     .command("create <kind>")
     .description("create a route workflow invocation and admit it when capacity allows"),
-).action(async (kind, opts) => {
-  const event = await readEventEnvelopeInput(opts);
-  const result = routeEventByKind(kind, event, { ...opts, dryRun: false });
-  print(result.value, result.human);
-});
+  { dryRunDescription: "preview the generated workflow invocation and loop without storing anything" },
+).action(runAction(async (kind, opts) => handleRouteEvent(kind, opts)));
 
 addTodosDrainOptions(
   routes
     .command("drain <kind>")
     .description("drain a durable source queue into bounded route workflow loops"),
-).action((kind, opts) => {
-  if (kind !== "todos-task") throw new Error("route drain currently supports kind todos-task");
-  drainTodosTaskRoutes(opts);
-});
+).action(runAction((kind, opts) => handleRouteDrain(kind, opts)));
 
 addScheduleOptions(
   addTodosDrainOptions(
@@ -3222,8 +1116,8 @@ addScheduleOptions(
       preflightDescription: "forward generated workflow preflight checks into each future drain run",
     },
   ),
-).action((kind, name, opts) => {
-  if (kind !== "todos-task") throw new Error("route schedule currently supports kind todos-task");
+).action(runAction((kind, name, opts) => {
+  if (kind !== "todos-task") throw new ValidationError("route schedule currently supports kind todos-task");
   const store = new Store();
   try {
     const target: LoopTarget = {
@@ -3242,112 +1136,46 @@ addScheduleOptions(
   } finally {
     store.close();
   }
-});
+}));
 
-const eventsHandle = events.command("handle").description("handle a Hasna event envelope");
+const eventsHandle = events.command("handle").description("(deprecated) handle a Hasna event envelope; alias of 'routes create'");
 
-eventsHandle
-  .command("todos-task")
-  .description("create a one-shot worker/verifier workflow loop for a todos task event")
-  .option("--todos-project <path>", "todos storage project path for generated task commands", defaultLoopsProject())
-  .option("--template <id>", "todos-task route workflow template: todos-task-worker-verifier or task-lifecycle", TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID)
-  .option("--provider <provider>", "agent provider; defaults to codewith")
-  .option("--provider-rule <rule>", "task metadata provider routing rule field=value:provider[:profile1,profile2]; may be repeated", collectValues, [] as string[])
-  .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
-  .option("--auth-profile-pool <profiles>", "comma-separated provider-native auth profile pool")
-  .option("--triage-auth-profile <profile>", "provider-native auth profile for triage step")
-  .option("--planner-auth-profile <profile>", "provider-native auth profile for planner step")
-  .option("--worker-auth-profile <profile>", "provider-native auth profile for worker step")
-  .option("--verifier-auth-profile <profile>", "provider-native auth profile for verifier step")
-  .option("--account <profile>", "OpenAccounts profile name")
-  .option("--account-pool <profiles>", "comma-separated OpenAccounts profile pool")
-  .option("--triage-account <profile>", "OpenAccounts profile for triage step")
-  .option("--planner-account <profile>", "OpenAccounts profile for planner step")
-  .option("--worker-account <profile>", "OpenAccounts profile for worker step")
-  .option("--verifier-account <profile>", "OpenAccounts profile for verifier step")
-  .option("--account-tool <tool>", "OpenAccounts tool id")
-  .option("--model <model>", "provider model")
-  .option("--variant <variant>", "provider-specific model variant or reasoning effort")
-  .option("--agent <agent>", "provider-specific agent")
-  .option("--add-dir <dir>", "additional writable directory for provider sandboxes; may be repeated or comma-separated", collectValues, [] as string[])
-  .option("--timeout <duration>", "agent step timeout; use none/unlimited for no timeout")
-  .option("--verifier-idle-timeout <duration>", "verifier idle watchdog; use none/off to disable when an external heartbeat exists", "15m")
-  .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
-  .option("--sandbox <mode>", "provider sandbox")
-  .option("--manual-break-glass", "allow danger-full-access in generated worker/verifier workflow metadata; for explicit operator emergency use only")
-  .option("--project-path <path>", "fallback project/repo working directory")
-  .option("--project-group <name>", "optional project group for concurrency limits")
-  .option("--max-active <n>", "skip creating a workflow when this many active routed workflows already exist globally")
-  .option("--max-active-per-project <n>", "skip creating a workflow when this many active routed workflows already exist for the project")
-  .option("--max-active-per-project-group <n>", "skip creating a workflow when this many active routed workflows already exist for the project group")
-  .option("--worktree-mode <mode>", "worktree isolation mode: auto, required, off, or main", "auto")
-  .option("--worktree-root <path>", "base directory for OpenLoops-managed git worktrees")
-  .option("--worktree-branch-prefix <prefix>", "branch prefix for generated task worktrees", "openloops")
-  .option("--github-reviewer <login>", "GitHub login expected to review/merge review-required PR routes; must differ from PR author")
-  .option("--github-reviewer-pool <logins>", "comma-separated GitHub logins eligible to review/merge review-required PR routes")
-  .option("--name-prefix <prefix>", "workflow/loop name prefix", "event:todos-task")
-  .option("--preflight", "check generated workflow steps before storing the workflow loop")
-  .option("--dry-run", "print the workflow and loop input without storing anything")
-  .action(async (opts) => {
-    const event = await readEventEnvelopeFromStdin();
-    const result = routeTodosTaskEvent(event, opts);
-    print(result.value, result.human);
-  });
+addRouteEventOptions(
+  eventsHandle
+    .command("todos-task")
+    .description("(deprecated: use 'routes create todos-task') create a one-shot worker/verifier workflow loop for a todos task event"),
+  {
+    namePrefixDefault: "event:todos-task",
+    preflightDescription: "check generated workflow steps before storing the workflow loop",
+    dryRunDescription: "print the workflow and loop input without storing anything",
+  },
+).action(runAction(async (opts) => handleRouteEvent("todos-task", opts)));
 
-const eventsDrain = events.command("drain").description("drain durable source queues into bounded OpenLoops workflows");
+addAgentRoutingOptions(
+  eventsHandle
+    .command("generic")
+    .description("(deprecated: use 'routes create generic') create a one-shot worker/verifier workflow loop for any Hasna event"),
+  {
+    eventInput: true,
+    providerDefault: "codewith",
+    namePrefixDefault: "event:generic",
+    preflightDescription: "check generated workflow steps before storing the workflow loop",
+    dryRunDescription: "print the workflow and loop input without storing anything",
+  },
+).action(runAction(async (opts) => handleRouteEvent("generic", opts)));
+
+const eventsDrain = events.command("drain").description("(deprecated) drain durable source queues; alias of 'routes drain'");
 
 addTodosDrainOptions(
   eventsDrain
     .command("todos-task")
-    .description("drain ready todos tasks into bounded worker/verifier workflow loops"),
-).action((opts: TodosDrainOptions & { tag?: string }) => {
-  drainTodosTaskRoutes(opts);
-});
+    .description("(deprecated: use 'routes drain todos-task') drain ready todos tasks into bounded worker/verifier workflow loops"),
+).action(runAction((opts) => handleRouteDrain("todos-task", opts)));
 
-eventsHandle
-  .command("generic")
-  .description("create a one-shot worker/verifier workflow loop for any Hasna event")
-  .option("--provider <provider>", "agent provider", "codewith")
-  .option("--provider-rule <rule>", "event metadata provider routing rule field=value:provider[:profile1,profile2]; may be repeated", collectValues, [] as string[])
-  .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
-  .option("--auth-profile-pool <profiles>", "comma-separated provider-native auth profile pool")
-  .option("--worker-auth-profile <profile>", "provider-native auth profile for worker step")
-  .option("--verifier-auth-profile <profile>", "provider-native auth profile for verifier step")
-  .option("--account <profile>", "OpenAccounts profile name")
-  .option("--account-pool <profiles>", "comma-separated OpenAccounts profile pool")
-  .option("--worker-account <profile>", "OpenAccounts profile for worker step")
-  .option("--verifier-account <profile>", "OpenAccounts profile for verifier step")
-  .option("--account-tool <tool>", "OpenAccounts tool id")
-  .option("--model <model>", "provider model")
-  .option("--variant <variant>", "provider-specific model variant or reasoning effort")
-  .option("--agent <agent>", "provider-specific agent")
-  .option("--add-dir <dir>", "additional writable directory for provider sandboxes; may be repeated or comma-separated", collectValues, [] as string[])
-  .option("--timeout <duration>", "agent step timeout; use none/unlimited for no timeout")
-  .option("--verifier-idle-timeout <duration>", "verifier idle watchdog; use none/off to disable when an external heartbeat exists", "15m")
-  .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass", "bypass")
-  .option("--sandbox <mode>", "provider sandbox")
-  .option("--manual-break-glass", "allow danger-full-access in generated worker/verifier workflow metadata; for explicit operator emergency use only")
-  .option("--project-path <path>", "fallback project/repo working directory")
-  .option("--project-group <name>", "optional project group for concurrency limits")
-  .option("--max-active <n>", "skip creating a workflow when this many active routed workflows already exist globally")
-  .option("--max-active-per-project <n>", "skip creating a workflow when this many active routed workflows already exist for the project")
-  .option("--max-active-per-project-group <n>", "skip creating a workflow when this many active routed workflows already exist for the project group")
-  .option("--worktree-mode <mode>", "worktree isolation mode: auto, required, off, or main", "auto")
-  .option("--worktree-root <path>", "base directory for OpenLoops-managed git worktrees")
-  .option("--worktree-branch-prefix <prefix>", "branch prefix for generated event worktrees", "openloops")
-  .option("--name-prefix <prefix>", "workflow/loop name prefix", "event:generic")
-  .option("--preflight", "check generated workflow steps before storing the workflow loop")
-  .option("--dry-run", "print the workflow and loop input without storing anything")
-  .action(async (opts) => {
-    const event = await readEventEnvelopeFromStdin();
-    const result = routeGenericEvent(event, opts);
-    print(result.value, result.human);
-  });
-
-goal.command("show <idOrName>").description("show a goal or configured loop/workflow goal").action((idOrName) => {
+function showGoal(idOrName: string): void {
   const store = new Store();
   try {
-    const runtimeGoal = store.getGoal(idOrName) ?? store.findGoalByLoop(idOrName);
+    const runtimeGoal = store.getGoal(idOrName) ?? store.findGoalByLoop(idOrName) ?? store.findGoalByRunId(idOrName);
     if (runtimeGoal) {
       const value = {
         goal: publicGoal(runtimeGoal),
@@ -3371,29 +1199,23 @@ goal.command("show <idOrName>").description("show a goal or configured loop/work
   } finally {
     store.close();
   }
-});
+}
 
-goal.command("status <runId>").description("show goal status for a goal, goal event, loop run, or workflow run").action((runId) => {
-  const store = new Store();
-  try {
-    const runtimeGoal = store.findGoalByRunId(runId);
-    if (!runtimeGoal) throw new Error(`goal run not found: ${runId}`);
-    const value = {
-      goal: publicGoal(runtimeGoal),
-      nodes: store.listGoalPlanNodes(runtimeGoal.goalId),
-      runs: store.listGoalRuns({ goalId: runtimeGoal.goalId }).map(publicGoalRun),
-    };
-    print(value, `${runtimeGoal.goalId} ${runtimeGoal.status} tokens=${runtimeGoal.tokensUsed}`);
-  } finally {
-    store.close();
-  }
-});
+goal
+  .command("show <idOrName>")
+  .description("show a goal by id, loop, workflow, run id, or configured goal wrapper")
+  .action(runAction(showGoal));
+
+goal
+  .command("status <runId>")
+  .description("(deprecated: merged into 'goal show') show goal status for a goal, goal event, loop run, or workflow run")
+  .action(runAction(showGoal));
 
 machines
   .command("list")
   .alias("ls")
   .description("list known machines")
-  .action(() => {
+  .action(runAction(() => {
     const values = listOpenMachines();
     if (isJson()) print(values);
     else {
@@ -3402,30 +1224,39 @@ machines
         console.log(`${machine.id.padEnd(12)}  ${route.padEnd(10)}  workspace=${machine.workspacePath ?? "-"}  host=${machine.hostname ?? "-"}`);
       }
     }
-  });
+  }));
 
-machines.command("show <id>").description("resolve a machine assignment").action((id) => {
+machines.command("show <id>").description("resolve a machine assignment").action(runAction((id) => {
   print(resolveLoopMachine(id));
-});
+}));
 
 workflows
   .command("validate <file>")
   .description("validate a workflow JSON file without storing or running it")
   .option("--name <name>", "override workflow name from the file")
   .option("--preflight", "also check account env and target executables")
-  .action((file, opts) => {
+  .action(runAction((file, opts) => {
     const body = workflowBodyFromFile(file, opts.name, { file, type: "workflow" });
     const workflow = workflowSpecForPreflight(body);
     const preflight = opts.preflight ? preflightWorkflow(workflow) : undefined;
     print({ valid: true, workflow: publicWorkflow(workflow), preflight }, `valid workflow ${workflow.name} steps=${workflow.steps.length}`);
-  });
+  }));
 
 workflows
-  .command("create <file>")
-  .description("validate and store a workflow JSON file")
-  .option("--name <name>", "override workflow name from the file")
+  .command("create [file]")
+  .description("validate and store a workflow JSON file, or render a template with --template")
+  .option("--name <name>", "override workflow name from the file or template")
+  .option("--template <id>", "render and store a workflow template instead of reading a file")
+  .option("--var <key=value>", "template variable for --template; may be repeated", collectValues, [] as string[])
+  .option("--source <source>", "template source for --template: all, builtin, or custom", "all")
   .option("--preflight", "also check account env and target executables before storing")
-  .action((file, opts) => {
+  .action(runAction((file, opts) => {
+    if (opts.template && file) throw new ValidationError("choose either a workflow JSON file or --template <id>, not both");
+    if (opts.template) {
+      createWorkflowFromTemplate(opts.template, opts);
+      return;
+    }
+    if (!file) throw new ValidationError("workflows create requires a workflow JSON file or --template <id>");
     const store = new Store();
     try {
       const body = workflowBodyFromFile(file, opts.name, { file, type: "workflow" });
@@ -3438,16 +1269,17 @@ workflows
     } finally {
       store.close();
     }
-  });
+  }));
 
 workflows
   .command("list")
   .alias("ls")
+  .description("list stored workflows")
   .option("--status <status>", "active, archived, or all", "active")
   .option("--all", "include active and archived workflows")
   .option("--limit <n>", "maximum rows to print; omitted means all matching workflows")
   .option("--offset <n>", "number of matching rows to skip before printing", "0")
-  .action((opts) => {
+  .action(runAction((opts) => {
     const store = new Store();
     try {
       const status = workflowStatusFromOpts(opts.status, opts.all);
@@ -3465,27 +1297,27 @@ workflows
     } finally {
       store.close();
     }
-  });
+  }));
 
-workflows.command("show <idOrName>").action((idOrName) => {
+workflows.command("show <idOrName>").description("show one stored workflow spec").action(runAction((idOrName) => {
   const store = new Store();
   try {
     print(publicWorkflow(store.requireWorkflow(idOrName)));
   } finally {
     store.close();
   }
-});
+}));
 
-workflows.command("inspect <runId>").description("show a workflow run with steps and events").action((runId) => {
+workflows.command("inspect <runId>").description("show a workflow run with steps and events").action(runAction((runId) => {
   const store = new Store();
   try {
     const run = store.requireWorkflowRun(runId);
     const steps = store.listWorkflowStepRuns(run.id);
-    const events = store.listWorkflowEvents(run.id);
+    const runEvents = store.listWorkflowEvents(run.id);
     const value = {
       workflowRun: publicWorkflowRun(run),
       steps: steps.map((step) => publicWorkflowStepRun(step)),
-      events: events.map(publicWorkflowEvent),
+      events: runEvents.map(publicWorkflowEvent),
     };
     if (isJson()) print(value);
     else {
@@ -3494,17 +1326,18 @@ workflows.command("inspect <runId>").description("show a workflow run with steps
         const publicStep = publicWorkflowStepRun(step);
         console.log(`  ${String(step.sequence).padStart(2, "0")}  ${step.status.padEnd(10)}  ${step.stepId}  ${publicStep.error ?? ""}`);
       }
-      console.log(`  events=${events.length}`);
+      console.log(`  events=${runEvents.length}`);
     }
   } finally {
     store.close();
   }
-});
+}));
 
 workflows
   .command("run <idOrName>")
+  .description("execute a stored workflow once now")
   .option("--show-output", "show step stdout/stderr")
-  .action(async (idOrName, opts) => {
+  .action(runAction(async (idOrName, opts) => {
     const store = new Store();
     try {
       const workflow = store.requireWorkflow(idOrName);
@@ -3525,19 +1358,21 @@ workflows
           if (opts.showOutput) printTextOutput(step);
         }
       }
+      if (result.status !== "succeeded") process.exitCode = 1;
     } finally {
       store.close();
     }
-  });
+  }));
 
 workflows
   .command("runs [idOrName]")
+  .description("list workflow runs, optionally for one workflow")
   .option("--limit <n>", "limit", "50")
-  .action((idOrName, opts) => {
+  .action(runAction((idOrName, opts) => {
     const store = new Store();
     try {
       const workflow = idOrName ? store.requireWorkflow(idOrName) : undefined;
-      const runs = store.listWorkflowRuns({ workflowId: workflow?.id, limit: Number(opts.limit) });
+      const runs = store.listWorkflowRuns({ workflowId: workflow?.id, limit: positiveInteger(opts.limit, "--limit") ?? 50 });
       if (isJson()) print(runs.map(publicWorkflowRun));
       else {
         for (const run of runs) {
@@ -3547,31 +1382,32 @@ workflows
     } finally {
       store.close();
     }
-  });
+  }));
 
 workflows
   .command("events <runId>")
+  .description("list step/lifecycle events for a workflow run")
   .option("--limit <n>", "limit", "200")
-  .action((runId, opts) => {
+  .action(runAction((runId, opts) => {
     const store = new Store();
     try {
-      const events = store.listWorkflowEvents(runId, Number(opts.limit));
-      if (isJson()) print(events.map(publicWorkflowEvent));
+      const runEvents = store.listWorkflowEvents(runId, positiveInteger(opts.limit, "--limit") ?? 200);
+      if (isJson()) print(runEvents.map(publicWorkflowEvent));
       else {
-        for (const event of events) {
+        for (const event of runEvents) {
           console.log(`${String(event.sequence).padStart(3, "0")}  ${event.eventType.padEnd(14)}  ${event.stepId ?? "-"}  ${event.createdAt}`);
         }
       }
     } finally {
       store.close();
     }
-  });
+  }));
 
 workflows
   .command("cancel <runId>")
   .description("mark a workflow run cancelled and cancel pending/running steps")
   .option("--reason <reason>", "cancellation reason", "cancelled by user")
-  .action((runId, opts) => {
+  .action(runAction((runId, opts) => {
     const store = new Store();
     try {
       const run = store.cancelWorkflowRun(runId, opts.reason);
@@ -3579,13 +1415,13 @@ workflows
     } finally {
       store.close();
     }
-  });
+  }));
 
 workflows
   .command("recover <runId>")
   .description("reset interrupted running workflow steps to pending")
   .option("--reason <reason>", "recovery reason", "manual recovery")
-  .action((runId, opts) => {
+  .action(runAction((runId, opts) => {
     const store = new Store();
     try {
       const result = store.recoverWorkflowRun(runId, opts.reason);
@@ -3599,7 +1435,7 @@ workflows
     } finally {
       store.close();
     }
-  });
+  }));
 
 workflows
   .command("migrate-agent-timeouts")
@@ -3608,7 +1444,7 @@ workflows
   .option("--timeout <duration>", "agent timeout policy; use none/unlimited for no timeout", "none")
   .option("--apply", "create new workflow specs and retarget eligible loops")
   .option("--archive-old", "archive old workflow specs after retargeting when no active loops still reference them")
-  .action((opts) => {
+  .action(runAction((opts) => {
     const store = new Store();
     try {
       const timeoutMs = timeoutDuration(opts.timeout, "--timeout") ?? null;
@@ -3693,7 +1529,7 @@ workflows
     } finally {
       store.close();
     }
-  });
+  }));
 
 workflows
   .command("migrate-goal-wrappers")
@@ -3701,7 +1537,7 @@ workflows
   .option("--loop <idOrName>", "migrate only one loop instead of all active workflow loops")
   .option("--apply", "create new workflow specs and retarget eligible loops")
   .option("--archive-old", "archive old workflow specs after retargeting when no active loops still reference them")
-  .action((opts) => {
+  .action(runAction((opts) => {
     const store = new Store();
     try {
       const candidateLoops = opts.loop
@@ -3794,9 +1630,9 @@ workflows
     } finally {
       store.close();
     }
-  });
+  }));
 
-workflows.command("archive <idOrName>").action((idOrName) => {
+workflows.command("archive <idOrName>").description("archive a workflow spec without deleting runs").action(runAction((idOrName) => {
   const store = new Store();
   try {
     const workflow = store.archiveWorkflow(idOrName);
@@ -3804,16 +1640,17 @@ workflows.command("archive <idOrName>").action((idOrName) => {
   } finally {
     store.close();
   }
-});
+}));
 
 program
   .command("list")
   .alias("ls")
+  .description("list loops with schedule and next-run summaries")
   .option("--status <status>", "filter by status")
   .option("--archived", "show only archived loops")
   .option("--all", "include archived loops")
-  .action((opts) => {
-    if (opts.archived && opts.all) throw new Error("use either --archived or --all, not both");
+  .action(runAction((opts) => {
+    if (opts.archived && opts.all) throw new ValidationError("use either --archived or --all, not both");
     const store = new Store();
     try {
       const loops = store.listLoops({ status: opts.status, archived: opts.archived, includeArchived: opts.all });
@@ -3828,26 +1665,27 @@ program
     } finally {
       store.close();
     }
-  });
+  }));
 
-program.command("show <idOrName>").action((idOrName) => {
+program.command("show <idOrName>").description("show one loop by id or name").action(runAction((idOrName) => {
   const store = new Store();
   try {
     print(publicLoop(store.requireLoop(idOrName)));
   } finally {
     store.close();
   }
-});
+}));
 
 program
   .command("runs [idOrName]")
+  .description("list recent runs, optionally for one loop")
   .option("--limit <n>", "limit", "50")
   .option("--show-output", "show stdout/stderr")
-  .action((idOrName, opts) => {
+  .action(runAction((idOrName, opts) => {
     const store = new Store();
     try {
       const loop = idOrName ? store.requireLoop(idOrName) : undefined;
-      const runs = store.listRuns({ loopId: loop?.id, limit: Number(opts.limit) });
+      const runs = store.listRuns({ loopId: loop?.id, limit: positiveInteger(opts.limit, "--limit") ?? 50 });
       if (isJson()) print(runs.map((run) => publicRun(run, opts.showOutput)));
       else {
         for (const run of runs) {
@@ -3860,19 +1698,18 @@ program
     } finally {
       store.close();
     }
-  });
+  }));
 
 program
   .command("expectations [idOrName]")
   .description("evaluate deterministic loop expectations without mutating external task systems")
   .option("--limit <n>", "maximum loops to inspect when no loop is specified", "200")
-  .option("--json", "print JSON")
-  .action((idOrName, opts) => {
+  .action(runAction((idOrName, opts) => {
     const store = new Store();
     try {
-      const loops = idOrName ? [store.requireLoop(idOrName)] : store.listLoops({ limit: Number(opts.limit) });
+      const loops = idOrName ? [store.requireLoop(idOrName)] : store.listLoops({ limit: positiveInteger(opts.limit, "--limit") ?? 200 });
       const values = loops.map((loop) => expectationForLoop(store, loop));
-      if (isJson() || opts.json) console.log(JSON.stringify(idOrName ? values[0] : values, null, 2));
+      if (isJson()) console.log(JSON.stringify(idOrName ? values[0] : values, null, 2));
       else {
         for (const value of values) {
           console.log(`${value.ok ? "ok" : "fail"}  ${value.loop.name}  ${value.check.message}`);
@@ -3883,17 +1720,16 @@ program
     } finally {
       store.close();
     }
-  });
+  }));
 
 const health = program
   .command("health")
   .description("summarize loop health and latest-run expectation status")
-  .option("--json", "print JSON")
-  .action((opts) => {
+  .action(runAction(() => {
     const store = new Store();
     try {
       const report = buildHealthReport(store);
-      if (isJson() || opts.json) console.log(JSON.stringify(report, null, 2));
+      if (isJson()) console.log(JSON.stringify(report, null, 2));
       else {
         console.log(
           `loops=${report.summary.loops} healthy=${report.summary.healthy} unhealthy=${report.summary.unhealthy} warnings=${report.summary.warnings}`,
@@ -3908,7 +1744,7 @@ const health = program
     } finally {
       store.close();
     }
-  });
+  }));
 
 health
   .command("route-tasks")
@@ -3922,265 +1758,66 @@ health
   .option("--route-project-path <path>", "fallback project path for --auto-route when the failed loop has no cwd")
   .option("--evidence-dir <path>", "write the route result JSON to this directory")
   .option("--dry-run", "print intended task upserts without mutating todos")
-  .option("--json", "print JSON")
-  .action((opts) => {
+  .action(runAction((opts) => {
     const store = new Store();
     try {
-      const report = buildHealthReport(store, { limit: Number(opts.limit), includeInactive: Boolean(opts.includeInactive) });
+      const report = buildHealthReport(store, { limit: positiveInteger(opts.limit, "--limit") ?? 200, includeInactive: Boolean(opts.includeInactive) });
       const failures = report.expectations.filter((entry) => !entry.ok && entry.recommendedTask);
-      const selection = selectRouteItems(
-        failures,
-        Number(opts.maxActions),
-        routeCursorKey("health", [opts.project, opts.taskList, opts.limit, Boolean(opts.includeInactive)], {
+      const result = upsertRouteTasks({
+        project: opts.project,
+        taskList: {
+          slug: opts.taskList,
+          name: "Loop Error Self Heal",
+          description: "Deduped OpenLoops health expectation failures routed by loops health route-tasks.",
+        },
+        cursorKey: routeCursorKey("health", [opts.project, opts.taskList, opts.limit, Boolean(opts.includeInactive)], {
           autoRoute: Boolean(opts.autoRoute),
           routeProjectPath: opts.routeProjectPath,
         }),
-        (expectation) => expectation.recommendedTask!.dedupeKey,
-      );
-      const listId = opts.dryRun
-        ? undefined
-        : ensureTodosTaskList(
-            opts.project,
-            opts.taskList,
-            "Loop Error Self Heal",
-            "Deduped OpenLoops health expectation failures routed by loops health route-tasks.",
-          );
-      const actions = selection.selected.map((expectation) => {
-        const task = expectation.recommendedTask!;
-        const routeTask = taskAutoRoute(
-          task.tags,
-          {
-            source: "openloops.health.route-tasks",
-            loop_id: expectation.loop.id,
-            loop_name: expectation.loop.name,
-            run_id: expectation.latestRun?.id,
-            classification: expectation.failure?.classification,
-            fingerprint: task.dedupeKey,
-            cwd: expectation.route.cwd,
-            provider: expectation.route.provider,
-            no_tmux_dispatch: true,
-          },
-          {
-            autoRoute: Boolean(opts.autoRoute),
-            routeProjectPath: opts.routeProjectPath,
-            source: "openloops.health.route-tasks",
-          },
-        );
-        if (opts.dryRun) {
+        maxActions: positiveInteger(opts.maxActions, "--max-actions") ?? 5,
+        dryRun: Boolean(opts.dryRun),
+        autoRoute: Boolean(opts.autoRoute),
+        routeProjectPath: opts.routeProjectPath,
+        source: "openloops.health.route-tasks",
+        evidence: { kind: "health-route-tasks", dir: opts.evidenceDir },
+        summary: { inspected: report.summary.loops, failures: failures.length },
+        tasks: failures.map((expectation) => {
+          const task = expectation.recommendedTask!;
           return {
-            action: "would-upsert",
             title: task.title,
-            fingerprint: task.dedupeKey,
+            description: task.description,
             priority: task.priority,
-            tags: routeTask.tags,
-            metadata: routeTask.metadata,
-            autoRoute: routeTask.autoRoute,
+            tags: task.tags,
+            fingerprint: task.dedupeKey,
+            metadata: {
+              source: "openloops.health.route-tasks",
+              loop_id: expectation.loop.id,
+              loop_name: expectation.loop.name,
+              run_id: expectation.latestRun?.id,
+              classification: expectation.failure?.classification,
+              fingerprint: task.dedupeKey,
+              cwd: expectation.route.cwd,
+              provider: expectation.route.provider,
+              no_tmux_dispatch: true,
+            },
           };
-        }
-        const result = runLocalCommand("todos", [
-          "--project",
-          opts.project,
-          "--json",
-          "task",
-          "upsert",
-          "--fingerprint",
-          task.dedupeKey,
-          "--title",
-          task.title,
-          "-d",
-          task.description,
-          "--priority",
-          task.priority,
-          "--status",
-          "pending",
-          "--list",
-          listId!,
-          "--tags",
-          routeTask.tags.join(","),
-          ...routeTaskWorkingDirArgs(routeTask),
-          "--metadata-json",
-          JSON.stringify(routeTask.metadata),
-        ]);
-        if (!result.ok) {
-          return { action: "upsert-failed", fingerprint: task.dedupeKey, error: result.stderr || result.error || result.stdout };
-        }
-        return { action: "upserted", fingerprint: task.dedupeKey, task: JSON.parse(result.stdout || "{}") };
+        }),
       });
-      const routed = {
-        ok: actions.every((action) => action.action !== "upsert-failed"),
-        inspected: report.summary.loops,
-        failures: failures.length,
-        routing: selection.cursor,
-        actions,
-      };
-      const evidencePath = writeRouteEvidence("health-route-tasks", routed, opts.evidenceDir);
-      const output = evidencePath ? { ...routed, evidencePath } : routed;
-      if (!opts.dryRun && routed.ok) writeRouteCursor(selection.cursor.key, selection.cursor.lastFingerprint);
-      if (isJson() || opts.json) console.log(JSON.stringify(output, null, 2));
+      const output = result.output;
+      const actions = output.actions as Array<Record<string, unknown>>;
+      if (isJson()) console.log(JSON.stringify(output, null, 2));
       else {
         console.log(`health_route_tasks inspected=${output.inspected} failures=${output.failures} actions=${actions.length}`);
-        if (evidencePath) console.log(`evidence=${evidencePath}`);
+        if (result.evidencePath) console.log(`evidence=${result.evidencePath}`);
         for (const action of actions) console.log(`${action.action} ${action.fingerprint}`);
       }
-      if (!routed.ok) process.exitCode = 1;
+      if (!result.ok) process.exitCode = 1;
     } finally {
       store.close();
     }
-  });
+  }));
 
 const hygiene = program.command("hygiene").description("deterministic OpenLoops hygiene checks and safe repairs");
-
-type HygieneCheckKind = "names" | "duplicates" | "scripts";
-
-interface HygieneRouteTask {
-  check: HygieneCheckKind;
-  title: string;
-  description: string;
-  priority: "critical" | "high" | "medium" | "low";
-  tags: string[];
-  fingerprint: string;
-  metadata: Record<string, unknown>;
-}
-
-const HYGIENE_CHECKS: HygieneCheckKind[] = ["names", "duplicates", "scripts"];
-
-function parseHygieneChecks(value: string | undefined): HygieneCheckKind[] {
-  if (!value || value === "all") return HYGIENE_CHECKS;
-  const checks = value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-  const invalid = checks.filter((entry) => !HYGIENE_CHECKS.includes(entry as HygieneCheckKind));
-  if (invalid.length > 0) throw new Error(`invalid hygiene check(s): ${invalid.join(", ")}`);
-  return [...new Set(checks)] as HygieneCheckKind[];
-}
-
-function buildHygieneRouteTasks(
-  store: Store,
-  opts: { checks: HygieneCheckKind[]; includeInactive?: boolean; limit?: number; scriptsDir?: string },
-): { checked: Record<HygieneCheckKind, number>; findings: number; tasks: HygieneRouteTask[] } {
-  const checked: Record<HygieneCheckKind, number> = { names: 0, duplicates: 0, scripts: 0 };
-  const tasks: HygieneRouteTask[] = [];
-  const limit = opts.limit ?? 1_000;
-
-  if (opts.checks.includes("names")) {
-    const report = buildNameHygieneReport(store, { includeInactive: opts.includeInactive, limit });
-    checked.names = report.checked;
-    for (const change of report.changes.filter((entry) => entry.changed)) {
-      const fingerprint = `openloops:hygiene:names:${change.id}:${stableHash([change.oldName, change.newName])}`;
-      tasks.push({
-        check: "names",
-        title: `OpenLoops hygiene: rename loop ${change.oldName}`,
-        description: [
-          `OpenLoops name hygiene found a non-canonical loop name.`,
-          `Loop: ${change.oldName} (${change.id})`,
-          `Expected name: ${change.newName}`,
-          `Scope: ${change.scope} / ${change.scopeSlug}`,
-          `Fingerprint: ${fingerprint}`,
-          "",
-          "Acceptance:",
-          "- Confirm the canonical name is correct for the loop scope.",
-          "- Rename through OpenLoops CLI/API so ids, schedules, run history, and metadata are preserved.",
-          "- Do not dispatch work by tmux.",
-        ].join("\n"),
-        priority: "low",
-        tags: ["openloops", "hygiene", "name-hygiene"],
-        fingerprint,
-        metadata: {
-          source: "openloops.hygiene.route-tasks",
-          check: "names",
-          loop_id: change.id,
-          old_name: change.oldName,
-          new_name: change.newName,
-          scope: change.scope,
-          scope_slug: change.scopeSlug,
-          no_tmux_dispatch: true,
-        },
-      });
-    }
-  }
-
-  if (opts.checks.includes("duplicates")) {
-    const report = buildDuplicateOverlapReport(store, { includeInactive: opts.includeInactive, limit });
-    checked.duplicates = report.checked;
-    for (const group of report.groups) {
-      const loopIds = group.loops.map((loop) => loop.id).sort();
-      const fingerprint = `openloops:hygiene:duplicates:${stableHash([group.key, loopIds])}`;
-      tasks.push({
-        check: "duplicates",
-        title: `OpenLoops hygiene: duplicate/overlapping loops - ${group.baseName}`,
-        description: [
-          `OpenLoops duplicate/overlap hygiene found multiple loops with the same normalized name, cwd, and schedule.`,
-          `Base name: ${group.baseName}`,
-          group.cwd ? `Cwd: ${group.cwd}` : undefined,
-          `Schedule: ${group.schedule}`,
-          `Fingerprint: ${fingerprint}`,
-          "",
-          "Loops:",
-          ...group.loops.map((loop) => `- ${loop.id} ${loop.status} ${loop.name}`),
-          "",
-          "Acceptance:",
-          "- Decide the authoritative active loop.",
-          "- Archive or retarget superseded loops through OpenLoops CLI/API while preserving history.",
-          "- Do not dispatch work by tmux.",
-        ].filter(Boolean).join("\n"),
-        priority: group.loops.some((loop) => loop.status === "active") ? "medium" : "low",
-        tags: ["openloops", "hygiene", "duplicate-overlap"],
-        fingerprint,
-        metadata: {
-          source: "openloops.hygiene.route-tasks",
-          check: "duplicates",
-          base_name: group.baseName,
-          cwd: group.cwd,
-          schedule: group.schedule,
-          loop_ids: loopIds,
-          no_tmux_dispatch: true,
-        },
-      });
-    }
-  }
-
-  if (opts.checks.includes("scripts")) {
-    const report = buildScriptInventoryReport(store, { includeInactive: opts.includeInactive, limit, scriptsDir: opts.scriptsDir });
-    checked.scripts = report.checked;
-    for (const loop of report.loops) {
-      const fingerprint = `openloops:hygiene:scripts:${loop.id}:${stableHash([loop.command])}`;
-      tasks.push({
-        check: "scripts",
-        title: `OpenLoops hygiene: replace script-backed loop ${loop.name}`,
-        description: [
-          `OpenLoops script inventory found a loop still backed by a local script command.`,
-          `Loop: ${loop.name} (${loop.id})`,
-          `Status: ${loop.status}`,
-          loop.cwd ? `Cwd: ${loop.cwd}` : undefined,
-          `Command: ${loop.command}`,
-          `Fingerprint: ${fingerprint}`,
-          "",
-          "Acceptance:",
-          "- Replace this loop with a package-level CLI/API/template abstraction when one exists.",
-          "- If no abstraction exists, create/update the owning repo task instead of adding another local script.",
-          "- Archive superseded loops through OpenLoops CLI/API and preserve history.",
-          "- Do not dispatch work by tmux.",
-        ].filter(Boolean).join("\n"),
-        priority: loop.status === "active" ? "medium" : "low",
-        tags: ["openloops", "hygiene", "script-backed-loop"],
-        fingerprint,
-        metadata: {
-          source: "openloops.hygiene.route-tasks",
-          check: "scripts",
-          loop_id: loop.id,
-          loop_name: loop.name,
-          loop_status: loop.status,
-          cwd: loop.cwd,
-          script_matches: loop.scriptMatches,
-          no_tmux_dispatch: true,
-        },
-      });
-    }
-  }
-
-  return { checked, findings: tasks.length, tasks };
-}
 
 hygiene
   .command("names")
@@ -4189,15 +1826,14 @@ hygiene
   .option("--include-stopped", "include stopped loops")
   .option("--include-inactive", "include stopped, expired, and archived loops")
   .option("--limit <n>", "maximum loops to inspect", "1000")
-  .option("--json", "print JSON")
-  .action((opts) => {
+  .action(runAction((opts) => {
     const store = new Store();
     try {
       const report = buildNameHygieneReport(store, {
         apply: false,
         includeStopped: Boolean(opts.includeStopped),
         includeInactive: Boolean(opts.includeInactive),
-        limit: Number(opts.limit),
+        limit: positiveInteger(opts.limit, "--limit") ?? 1000,
       });
       let outputReport = report;
       const backupPath = opts.apply && report.changed > 0 ? backupLoopsDatabase("name-hygiene") : undefined;
@@ -4206,13 +1842,13 @@ hygiene
           apply: true,
           includeStopped: Boolean(opts.includeStopped),
           includeInactive: Boolean(opts.includeInactive),
-          limit: Number(opts.limit),
+          limit: positiveInteger(opts.limit, "--limit") ?? 1000,
         });
       } else if (opts.apply) {
         outputReport = { ...report, applied: true };
       }
       const output = backupPath ? { ...outputReport, backupPath } : outputReport;
-      if (isJson() || opts.json) console.log(JSON.stringify(output, null, 2));
+      if (isJson()) console.log(JSON.stringify(output, null, 2));
       else {
         console.log(`hygiene_names checked=${outputReport.checked} changed=${outputReport.changed} applied=${outputReport.applied}`);
         if (backupPath) console.log(`backup=${backupPath}`);
@@ -4224,22 +1860,21 @@ hygiene
     } finally {
       store.close();
     }
-  });
+  }));
 
 hygiene
   .command("duplicates")
   .description("detect duplicate/overlapping loops with the same canonical name, cwd, and schedule")
   .option("--include-inactive", "include stopped, expired, and archived loops")
   .option("--limit <n>", "maximum loops to inspect", "1000")
-  .option("--json", "print JSON")
-  .action((opts) => {
+  .action(runAction((opts) => {
     const store = new Store();
     try {
       const report = buildDuplicateOverlapReport(store, {
         includeInactive: Boolean(opts.includeInactive),
-        limit: Number(opts.limit),
+        limit: positiveInteger(opts.limit, "--limit") ?? 1000,
       });
-      if (isJson() || opts.json) console.log(JSON.stringify(report, null, 2));
+      if (isJson()) console.log(JSON.stringify(report, null, 2));
       else {
         console.log(`hygiene_duplicates checked=${report.checked} groups=${report.groups.length}`);
         for (const group of report.groups) {
@@ -4250,7 +1885,7 @@ hygiene
     } finally {
       store.close();
     }
-  });
+  }));
 
 hygiene
   .command("scripts")
@@ -4258,16 +1893,15 @@ hygiene
   .option("--scripts-dir <path>", "script directory to detect")
   .option("--include-inactive", "include stopped, expired, and archived loops")
   .option("--limit <n>", "maximum loops to inspect", "1000")
-  .option("--json", "print JSON")
-  .action((opts) => {
+  .action(runAction((opts) => {
     const store = new Store();
     try {
       const report = buildScriptInventoryReport(store, {
         scriptsDir: opts.scriptsDir,
         includeInactive: Boolean(opts.includeInactive),
-        limit: Number(opts.limit),
+        limit: positiveInteger(opts.limit, "--limit") ?? 1000,
       });
-      if (isJson() || opts.json) console.log(JSON.stringify(report, null, 2));
+      if (isJson()) console.log(JSON.stringify(report, null, 2));
       else {
         console.log(`hygiene_scripts checked=${report.checked} script_backed=${report.scriptBacked}`);
         for (const loop of report.loops) console.log(`${loop.id}\t${loop.status}\t${loop.name}\t${loop.command}`);
@@ -4276,7 +1910,7 @@ hygiene
     } finally {
       store.close();
     }
-  });
+  }));
 
 hygiene
   .command("route-tasks")
@@ -4292,122 +1926,76 @@ hygiene
   .option("--route-project-path <path>", "fallback project path for --auto-route when the hygiene finding has no cwd")
   .option("--evidence-dir <path>", "write the route result JSON to this directory")
   .option("--dry-run", "print intended task upserts without mutating todos")
-  .option("--json", "print JSON")
-  .action((opts) => {
+  .action(runAction((opts) => {
     const store = new Store();
     try {
       const checks = parseHygieneChecks(opts.checks);
       const route = buildHygieneRouteTasks(store, {
         checks,
         includeInactive: Boolean(opts.includeInactive),
-        limit: Number(opts.limit),
+        limit: positiveInteger(opts.limit, "--limit") ?? 1000,
         scriptsDir: opts.scriptsDir,
       });
-      const selection = selectRouteItems(
-        route.tasks,
-        Number(opts.maxActions),
-        routeCursorKey("hygiene", [opts.project, opts.taskList, checks, opts.limit, Boolean(opts.includeInactive), opts.scriptsDir ?? ""], {
+      const result = upsertRouteTasks({
+        project: opts.project,
+        taskList: {
+          slug: opts.taskList,
+          name: "OpenLoops Hygiene",
+          description: "Deduped OpenLoops hygiene findings routed by loops hygiene route-tasks.",
+        },
+        cursorKey: routeCursorKey("hygiene", [opts.project, opts.taskList, checks, opts.limit, Boolean(opts.includeInactive), opts.scriptsDir ?? ""], {
           autoRoute: Boolean(opts.autoRoute),
           routeProjectPath: opts.routeProjectPath,
         }),
-        (task) => task.fingerprint,
-      );
-      const listId = opts.dryRun
-        ? undefined
-        : ensureTodosTaskList(
-            opts.project,
-            opts.taskList,
-            "OpenLoops Hygiene",
-            "Deduped OpenLoops hygiene findings routed by loops hygiene route-tasks.",
-          );
-      const actions = selection.selected.map((task) => {
-        const routeTask = taskAutoRoute(task.tags, task.metadata, {
-          autoRoute: Boolean(opts.autoRoute),
-          routeProjectPath: opts.routeProjectPath,
-          source: "openloops.hygiene.route-tasks",
-        });
-        if (opts.dryRun) {
-          return {
-            action: "would-upsert",
-            check: task.check,
-            title: task.title,
-            fingerprint: task.fingerprint,
-            priority: task.priority,
-            tags: routeTask.tags,
-            metadata: routeTask.metadata,
-            autoRoute: routeTask.autoRoute,
-          };
-        }
-        const result = runLocalCommand("todos", [
-          "--project",
-          opts.project,
-          "--json",
-          "task",
-          "upsert",
-          "--fingerprint",
-          task.fingerprint,
-          "--title",
-          task.title,
-          "-d",
-          task.description,
-          "--priority",
-          task.priority,
-          "--status",
-          "pending",
-          "--list",
-          listId!,
-          "--tags",
-          routeTask.tags.join(","),
-          ...routeTaskWorkingDirArgs(routeTask),
-          "--metadata-json",
-          JSON.stringify(routeTask.metadata),
-        ]);
-        if (!result.ok) {
-          return { action: "upsert-failed", check: task.check, fingerprint: task.fingerprint, error: result.stderr || result.error || result.stdout };
-        }
-        return { action: "upserted", check: task.check, fingerprint: task.fingerprint, task: JSON.parse(result.stdout || "{}") };
+        maxActions: positiveInteger(opts.maxActions, "--max-actions") ?? 10,
+        dryRun: Boolean(opts.dryRun),
+        autoRoute: Boolean(opts.autoRoute),
+        routeProjectPath: opts.routeProjectPath,
+        source: "openloops.hygiene.route-tasks",
+        evidence: { kind: "hygiene-route-tasks", dir: opts.evidenceDir },
+        summary: { checks, checked: route.checked, findings: route.findings },
+        tasks: route.tasks.map((task) => ({
+          title: task.title,
+          description: task.description,
+          priority: task.priority,
+          tags: task.tags,
+          fingerprint: task.fingerprint,
+          metadata: task.metadata,
+          extra: { check: task.check },
+        })),
       });
-      const routed = {
-        ok: actions.every((action) => action.action !== "upsert-failed"),
-        checks,
-        checked: route.checked,
-        findings: route.findings,
-        routing: selection.cursor,
-        actions,
-      };
-      const evidencePath = writeRouteEvidence("hygiene-route-tasks", routed, opts.evidenceDir);
-      const output = evidencePath ? { ...routed, evidencePath } : routed;
-      if (!opts.dryRun && routed.ok) writeRouteCursor(selection.cursor.key, selection.cursor.lastFingerprint);
-      if (isJson() || opts.json) console.log(JSON.stringify(output, null, 2));
+      const output = result.output;
+      const actions = output.actions as Array<Record<string, unknown>>;
+      if (isJson()) console.log(JSON.stringify(output, null, 2));
       else {
         console.log(`hygiene_route_tasks checks=${checks.join(",")} findings=${output.findings} actions=${actions.length}`);
-        if (evidencePath) console.log(`evidence=${evidencePath}`);
+        if (result.evidencePath) console.log(`evidence=${result.evidencePath}`);
         for (const action of actions) console.log(`${action.action} ${action.fingerprint}`);
       }
-      if (!routed.ok) process.exitCode = 1;
+      if (!result.ok) process.exitCode = 1;
     } finally {
       store.close();
     }
-  });
+  }));
 
-program.command("pause <idOrName>").action((idOrName) => updateStatus(idOrName, "paused"));
-program.command("resume <idOrName>").action((idOrName) => updateStatus(idOrName, "active"));
-program.command("stop <idOrName>").action((idOrName) => updateStatus(idOrName, "stopped"));
+program.command("pause <idOrName>").description("pause an active loop without losing its schedule").action(runAction((idOrName) => updateStatus(idOrName, "paused")));
+program.command("resume <idOrName>").description("resume a paused or stopped loop").action(runAction((idOrName) => updateStatus(idOrName, "active")));
+program.command("stop <idOrName>").description("stop a loop and clear its next scheduled run").action(runAction((idOrName) => updateStatus(idOrName, "stopped")));
 
 program
   .command("rename <idOrName> <newName>")
   .description("rename a loop without changing its id, schedule, runs, or history")
-  .action((idOrName, newName) => {
+  .action(runAction((idOrName, newName) => {
     const store = new Store();
     try {
-      const loop = store.requireLoop(idOrName);
+      const loop = store.requireUniqueLoop(idOrName);
       const oldName = loop.name;
       const trimmed = String(newName).trim();
-      if (!trimmed) throw new Error("loop name must not be empty");
+      if (!trimmed) throw new ValidationError("loop name must not be empty");
 
       const existing = store.findLoopByName(trimmed);
       if (existing && existing.id !== loop.id) {
-        throw new Error(`loop name already exists: ${trimmed} (${existing.id})`);
+        throw new ValidationError(`loop name already exists: ${trimmed} (${existing.id})`);
       }
 
       if (trimmed === oldName) {
@@ -4435,19 +2023,31 @@ program
           backupPath,
           loop: publicLoop(renamed),
         },
-        `${renamed.id} renamed ${oldName} -> ${renamed.name}\nbackup=${backupPath}`,
+        `${renamed.id} renamed ${oldName} -> ${renamed.name}\nbackup=${backupPath ?? "skipped (recent rename backup exists)"}`,
       );
     } finally {
       store.close();
     }
-  });
+  }));
 
 function updateStatus(idOrName: string, status: "paused" | "active" | "stopped"): void {
   const store = new Store();
   try {
-    const loop = store.requireLoop(idOrName);
+    // requireUniqueLoop so an ambiguous name errors instead of mutating the
+    // newest same-named loop.
+    const loop = store.requireUniqueLoop(idOrName);
     if (loop.archivedAt) throw new Error(`loop is archived; run 'loops unarchive ${idOrName}' first`);
-    const updated = store.updateLoop(loop.id, { status, nextRunAt: status === "stopped" ? undefined : loop.nextRunAt });
+    let nextRunAt = loop.nextRunAt;
+    if (status === "stopped") {
+      nextRunAt = undefined;
+    } else if (status === "active" && !loop.nextRunAt) {
+      // Resuming a stopped loop leaves next_run_at NULL, so dueLoops (which
+      // requires next_run_at IS NOT NULL) would never pick it up: the loop is
+      // "active" but permanently dormant. Recompute the next slot from now.
+      const now = new Date();
+      nextRunAt = computeNextAfter(loop.schedule, now, now);
+    }
+    const updated = store.updateLoop(loop.id, { status, nextRunAt });
     print(publicLoop(updated), `${updated.id} ${updated.status}`);
   } finally {
     store.close();
@@ -4457,17 +2057,20 @@ function updateStatus(idOrName: string, status: "paused" | "active" | "stopped")
 program
   .command("remove <idOrName>")
   .alias("rm")
-  .action((idOrName) => {
+  .description("delete a loop and its run history")
+  .action(runAction((idOrName) => {
     const store = new Store();
     try {
-      const removed = store.deleteLoop(idOrName);
+      // requireUniqueLoop so an ambiguous name errors instead of deleting the
+      // newest same-named loop.
+      const removed = store.deleteLoop(store.requireUniqueLoop(idOrName).id);
       print({ removed }, removed ? "removed" : "not removed");
     } finally {
       store.close();
     }
-  });
+  }));
 
-program.command("archive <idOrName>").description("archive a loop without deleting history").action((idOrName) => {
+program.command("archive <idOrName>").description("archive a loop without deleting history").action(runAction((idOrName) => {
   const store = new Store();
   try {
     const loop = store.archiveLoop(idOrName);
@@ -4475,9 +2078,9 @@ program.command("archive <idOrName>").description("archive a loop without deleti
   } finally {
     store.close();
   }
-});
+}));
 
-program.command("unarchive <idOrName>").alias("restore").description("restore an archived loop").action((idOrName) => {
+program.command("unarchive <idOrName>").alias("restore").description("restore an archived loop").action(runAction((idOrName) => {
   const store = new Store();
   try {
     const loop = store.unarchiveLoop(idOrName);
@@ -4485,15 +2088,16 @@ program.command("unarchive <idOrName>").alias("restore").description("restore an
   } finally {
     store.close();
   }
-});
+}));
 
 program
   .command("run-now <idOrName>")
+  .description("claim and execute one loop run immediately")
   .option("--show-output", "show stdout/stderr")
-  .action(async (idOrName, opts) => {
+  .action(runAction(async (idOrName, opts) => {
     const store = new Store();
     try {
-      const loop = store.requireLoop(idOrName);
+      const loop = store.requireUniqueLoop(idOrName);
       if (loop.archivedAt) throw new Error(`loop is archived; run 'loops unarchive ${idOrName}' before running it`);
       const runnerId = `manual:${process.pid}`;
       const now = new Date();
@@ -4521,10 +2125,10 @@ program
       if (run.status !== "succeeded") process.exitCode = 1;
     } finally {
       store.close();
-  }
-});
+    }
+  }));
 
-program.command("tick").description("run one scheduler tick").action(async () => {
+program.command("tick").description("run one scheduler tick").action(runAction(async () => {
   const store = new Store();
   try {
     const result = await tick({ store, runnerId: `manual-tick:${process.pid}` });
@@ -4532,9 +2136,9 @@ program.command("tick").description("run one scheduler tick").action(async () =>
   } finally {
     store.close();
   }
-});
+}));
 
-program.command("doctor").description("check local OpenLoops runtime dependencies and state").action(() => {
+program.command("doctor").description("check local OpenLoops runtime dependencies and state").action(runAction(() => {
   const store = new Store();
   try {
     const report = runDoctor(store);
@@ -4549,58 +2153,171 @@ program.command("doctor").description("check local OpenLoops runtime dependencie
   } finally {
     store.close();
   }
-});
+}));
+
+/** Managed backup files: `loops-<slug>-<iso stamp>.db` (lib/backup) and legacy `loops.db.bak-<reason>-<stamp>`. */
+function listManagedBackups(dir: string): Array<{ path: string; group: string; timeMs: number }> {
+  if (!existsSync(dir)) return [];
+  const entries: Array<{ path: string; group: string; timeMs: number }> = [];
+  for (const name of readdirSync(dir)) {
+    const modern = /^loops-(.+)-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.db$/.exec(name);
+    const legacy = /^loops\.db\.bak-(.+)-\d{8}T\d{6}Z$/.exec(name);
+    const group = modern ? `reason:${modern[1]}` : legacy ? `legacy:${legacy[1]}` : undefined;
+    if (!group) continue;
+    const path = join(dir, name);
+    try {
+      entries.push({ path, group, timeMs: statSync(path).mtimeMs });
+    } catch {
+      /* file disappeared mid-scan */
+    }
+  }
+  return entries;
+}
+
+function listStrayTempFiles(dirs: string[]): string[] {
+  const stray: string[] = [];
+  for (const dir of dirs) {
+    if (!existsSync(dir)) continue;
+    for (const name of readdirSync(dir)) {
+      if (!name.endsWith(".tmp")) continue;
+      const path = join(dir, name);
+      try {
+        if (statSync(path).isFile()) stray.push(path);
+      } catch {
+        /* file disappeared mid-scan */
+      }
+    }
+  }
+  return stray;
+}
+
+program
+  .command("gc")
+  .description("prune old run history, rotate database backups, checkpoint the WAL, and remove stray temp files in the data dir")
+  .option("--max-age-days <n>", "delete terminal runs older than this many days", "30")
+  .option("--keep-per-loop <n>", "always retain this many most recent runs per loop", "20")
+  .option("--backup-keep <n>", "database backups to retain per backup reason", "3")
+  .option("--dry-run", "preview deletions without changing anything (default)")
+  .option("--apply", "actually delete history, prune backups, checkpoint, and remove stray files")
+  .action(runAction((opts) => {
+    if (opts.dryRun && opts.apply) throw new ValidationError("choose either --dry-run or --apply, not both");
+    const dryRun = !opts.apply;
+    const maxAgeDays = nonNegativeInteger(opts.maxAgeDays, "--max-age-days");
+    const keepPerLoop = nonNegativeInteger(opts.keepPerLoop, "--keep-per-loop");
+    const backupKeep = positiveInteger(opts.backupKeep, "--backup-keep") ?? 3;
+
+    const store = new Store();
+    let history;
+    try {
+      history = store.pruneHistory({ maxAgeDays, keepPerLoop, dryRun });
+    } finally {
+      store.close();
+    }
+
+    const backupsDir = join(dataDir(), "backups");
+    const grouped = new Map<string, Array<{ path: string; timeMs: number }>>();
+    for (const entry of listManagedBackups(backupsDir)) {
+      const group = grouped.get(entry.group) ?? [];
+      group.push(entry);
+      grouped.set(entry.group, group);
+    }
+    const prunedBackups: string[] = [];
+    let keptBackups = 0;
+    for (const group of grouped.values()) {
+      group.sort((a, b) => b.timeMs - a.timeMs);
+      keptBackups += Math.min(group.length, backupKeep);
+      for (const entry of group.slice(backupKeep)) prunedBackups.push(entry.path);
+    }
+    const strayFiles = listStrayTempFiles([dataDir(), backupsDir]);
+    if (!dryRun) {
+      for (const path of [...prunedBackups, ...strayFiles]) rmSync(path, { force: true });
+    }
+
+    let walCheckpoint: Record<string, unknown> = { ran: false };
+    if (!dryRun && existsSync(dbPath())) {
+      const db = new Database(dbPath());
+      try {
+        const result = db.query("PRAGMA wal_checkpoint(TRUNCATE)").get() as Record<string, unknown> | null;
+        walCheckpoint = { ran: true, ...(result ?? {}) };
+      } catch (error) {
+        walCheckpoint = { ran: false, error: redact(error instanceof Error ? error.message : String(error), 240) };
+      } finally {
+        db.close();
+      }
+    }
+
+    const value = {
+      dryRun,
+      dataDir: dataDir(),
+      history,
+      backups: { keep: backupKeep, kept: keptBackups, pruned: prunedBackups },
+      strayFiles,
+      walCheckpoint,
+    };
+    print(
+      value,
+      `gc ${dryRun ? "dry-run" : "applied"}: loopRuns=${history.loopRuns} workflowRuns=${history.workflowRuns} goalRuns=${history.goalRuns} backupsPruned=${prunedBackups.length} strayFiles=${strayFiles.length}${dryRun ? " (use --apply to execute)" : ""}`,
+    );
+  }));
 
 const daemon = program.command("daemon").description("manage the local daemon");
 
 daemon
   .command("run")
+  .description("run the scheduler daemon in the foreground")
   .option("--interval-ms <ms>", "tick interval", (value) => Number(value))
-  .action(async (opts) => runDaemon({ intervalMs: opts.intervalMs }));
+  .action(runAction(async (opts) => runDaemon({ intervalMs: opts.intervalMs })));
 
-daemon.command("start").action(async () => {
+daemon.command("start").description("start the daemon in the background").action(runAction(async () => {
   const result = await startDaemon({ cliEntry: process.argv[1] ?? "loops" });
   print(result, result.alreadyRunning ? `already running pid=${result.pid}` : result.started ? `started pid=${result.pid}` : "failed to start");
-});
+}));
 
-daemon.command("stop").action(async () => {
+daemon.command("stop").description("stop the background daemon").action(runAction(async () => {
   const result = await stopDaemon();
   print(result, result.stopped ? `stopped pid=${result.pid}` : "not running");
-});
+}));
 
-daemon.command("status").action(() => {
+daemon.command("status").description("show daemon lease/heartbeat status").action(runAction(() => {
   const store = new Store();
   try {
     print(daemonStatus(store));
   } finally {
     store.close();
   }
-});
+}));
 
 daemon
   .command("install")
   .description("write a systemd user service or launchd plist")
   .option("--enable", "also enable/start the user service when supported")
-  .action((opts) => {
+  .action(runAction((opts) => {
     const result = installStartup(process.argv[1] ?? "loops");
     if (opts.enable) result.enableResults = enableStartup(result);
     const enableText = result.enableResults
       ? `\n${result.enableResults.map((item) => `${item.command} -> ${item.status === 0 ? "ok" : `exit ${item.status}`}`).join("\n")}`
       : "";
     print(result, `wrote ${result.path}\n${result.instructions.join("\n")}${enableText}`);
-  });
+  }));
 
 daemon
   .command("logs")
+  .description("print the tail of the daemon log")
   .option("-n, --lines <n>", "lines", "80")
-  .action((opts) => {
+  // --tail is a documented alias the control room and docs use; commander would
+  // otherwise reject it as an unknown option.
+  .option("--tail <n>", "alias for --lines")
+  .action(runAction((opts) => {
     const path = daemonLogPath();
     if (!existsSync(path)) {
       console.log("");
       return;
     }
+    // Validate n so a bad value ('abc') errors instead of NaN -> slice(0) dumping
+    // the whole log. --tail wins when both are supplied.
+    const count = positiveInteger(opts.tail ?? opts.lines, opts.tail !== undefined ? "--tail" : "--lines") ?? 80;
     const lines = readFileSync(path, "utf8").trimEnd().split("\n");
-    console.log(lines.slice(-Number(opts.lines)).join("\n"));
-  });
+    console.log(lines.slice(-count).join("\n"));
+  }));
 
 await program.parseAsync(process.argv);

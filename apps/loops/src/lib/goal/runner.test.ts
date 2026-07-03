@@ -171,7 +171,7 @@ describe("runGoal", () => {
     const fake = join(binDir, "goal-env");
     await Bun.write(
       fake,
-      "#!/usr/bin/env bash\nprintf 'goal=%s\\nobjective=%s\\nnode=%s\\n' \"$LOOPS_GOAL_ID\" \"$LOOPS_GOAL_OBJECTIVE\" \"$LOOPS_GOAL_NODE_KEY\"\n",
+      "#!/usr/bin/env bash\nprintf 'goal=%s\\nobjective=%s\\nnode=%s\\nnodeObjective=%s\\n' \"$LOOPS_GOAL_ID\" \"$LOOPS_GOAL_OBJECTIVE\" \"$LOOPS_GOAL_NODE_KEY\" \"$LOOPS_GOAL_NODE_OBJECTIVE\"\n",
     );
     chmodSync(fake, 0o755);
     const store = new Store(":memory:");
@@ -195,6 +195,7 @@ describe("runGoal", () => {
       expect(result.status).toBe("succeeded");
       expect(result.stdout).toContain("node=env");
       expect(result.stdout).toContain("objective=inspect env");
+      expect(result.stdout).toContain("nodeObjective=inspect metadata");
       expect(result.stdout).toContain("goal=");
     } finally {
       store.close();
@@ -299,6 +300,123 @@ describe("runGoal", () => {
       const output = JSON.parse(result.stdout) as { diagnostics?: { owner?: string; blocker?: string } };
       expect(output.diagnostics?.owner).toBe("goal-plan-node");
       expect(output.diagnostics?.blocker).toContain("budget-exhausted");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("autoExecute off plans and persists without executing nodes", async () => {
+    const store = new Store(":memory:");
+    try {
+      const model = mockObjects([{ nodes: [plannedNode({ key: "only", objective: "planned but not executed" })] }]);
+      const calls: string[] = [];
+      const result = await runGoal(store, { objective: "plan only", autoExecute: "off", maxTurns: 3 }, {
+        model,
+        executeNode: async (node) => {
+          calls.push(node.key);
+          return ok();
+        },
+      });
+
+      expect(result.status).toBe("succeeded");
+      expect(calls).toEqual([]);
+      expect(model.doGenerateCalls).toHaveLength(1);
+      const goal = store.getGoal(result.goalId!)!;
+      expect(goal.status).toBe("active");
+      expect(store.listGoalPlanNodes(goal.goalId).map((node) => node.status)).toEqual(["pending"]);
+      const output = JSON.parse(result.stdout) as { diagnostics?: { autoExecute?: string } };
+      expect(output.diagnostics?.autoExecute).toBe("off");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("runs the achievement audit on an independent verifier model", async () => {
+    const store = new Store(":memory:");
+    try {
+      const planner = mockObjects([{ nodes: [plannedNode({ key: "a", objective: "do a" })] }]);
+      const verifier = mockObjects([
+        {
+          achieved: true,
+          status: "complete",
+          evidence: ["a ran"],
+          unmetRequirements: [],
+          adversarialReview: "Audited on a model independent from the planner.",
+        },
+      ]);
+      const result = await runGoal(store, { objective: "verify independently", maxTurns: 3 }, {
+        model: planner,
+        verifierModel: verifier,
+        executeNode: async () => ok("ran a"),
+      });
+
+      expect(result.status).toBe("succeeded");
+      expect(planner.doGenerateCalls).toHaveLength(1);
+      expect(verifier.doGenerateCalls).toHaveLength(1);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("bounds node output evidence in the goal envelope", async () => {
+    const store = new Store(":memory:");
+    try {
+      const big = "s".repeat(30_000);
+      const model = mockObjects([
+        { nodes: [plannedNode({ key: "noisy", objective: "produce a lot of output" })] },
+        {
+          achieved: true,
+          status: "complete",
+          evidence: ["noisy ran"],
+          unmetRequirements: [],
+          adversarialReview: "Verified against bounded excerpts.",
+        },
+      ]);
+      const result = await runGoal(store, { objective: "bound evidence", maxTurns: 3 }, {
+        model,
+        executeNode: async () => ok(big),
+      });
+
+      expect(result.status).toBe("succeeded");
+      expect(result.stdout.length).toBeLessThan(20_000);
+      const output = JSON.parse(result.stdout) as { evidence: string[] };
+      expect(output.evidence[0]).toContain("stdout 30000B");
+      expect(output.evidence[0]).toContain("chars omitted");
+      const executeEvents = store.listGoalRuns({ goalId: result.goalId! }).filter((entry) => entry.phase === "execute");
+      expect((executeEvents[0]?.evidence as { stdout?: string }).stdout).toHaveLength(30_000);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("scrubs assignment secrets from the goal stdout envelope before persistence", async () => {
+    const store = new Store(":memory:");
+    try {
+      const nodeSecret = "hunter2SEcretValu3XkQ92mzP";
+      const validationSecret = "z8Wq4RtY71LmXe2KNope9SdfB3";
+      // A JSON agent's stdout carries the assignment once-escaped; copying it
+      // into evidence and stringifying the envelope escapes it again, which
+      // the store's flat scrub at persist time can no longer match.
+      const agentStdout = JSON.stringify({ result: `export api_key="${nodeSecret}"` });
+      const model = mockObjects([
+        { nodes: [plannedNode({ key: "leaky", objective: "handle credentials" })] },
+        {
+          achieved: true,
+          status: "complete",
+          evidence: [`saw token="${validationSecret}" while verifying`],
+          unmetRequirements: [],
+          adversarialReview: "Verified with credential-bearing evidence.",
+        },
+      ]);
+      const result = await runGoal(store, { objective: "scrub envelope", maxTurns: 3 }, {
+        model,
+        executeNode: async () => ok(agentStdout),
+      });
+
+      expect(result.status).toBe("succeeded");
+      expect(result.stdout).not.toContain(nodeSecret);
+      expect(result.stdout).not.toContain(validationSecret);
+      expect(result.stdout).toContain("[SCRUBBED]");
     } finally {
       store.close();
     }
