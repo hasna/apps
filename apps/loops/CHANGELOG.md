@@ -5,6 +5,33 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.4.6 (2026-07-03)
+
+Reliability hardening from a full audit of the runtime, control surfaces, and
+todos routing integration.
+
+### Fixed
+
+- **Runtime:** repair a due slot that holds a terminal run (idempotent
+  `advanceLoop`) so a daemon death between `finalizeRun` and `advanceLoop` can no
+  longer wedge a loop into never running again.
+- **Workflow runs:** recover dead-pid steps on resumed idempotent runs and wrap
+  the step loop so an unexpected error finalizes the run `failed` instead of
+  leaving it `running` forever.
+- **Runner:** abort execution after repeated heartbeat failures on a lost lease.
+- **Daemon:** `stopDaemon` terminates a live pidfile process even when its lease
+  is expired/mismatched; startup inline-owner check verifies kernel start time.
+- **Store:** `deleteLoop` removes child run history; `finalizeRun` guards
+  `status='running'`; ambiguous-name resolution ignores archived namesakes;
+  rerunning a terminal manual goal creates a fresh goal.
+- **CLI/API/SDK/MCP:** add `daemon logs --tail`; `PATCH /v1/loops/:id` no longer
+  wipes schedule fields or 500s; resume-from-stopped recomputes `nextRunAt` so the
+  loop is actually due; mutation paths reject ambiguous names; numeric flags are
+  validated.
+- **Routing:** honor the `route:enabled` opt-in tag; surface fatal drain errors
+  (non-zero exit, `fatal` count) instead of a green route-nothing run; tag routed
+  failure tasks `loops` and emit the correct `todos task upsert` command.
+
 ## 0.4.5 (2026-07-03)
 
 Upgrade-path fix for existing `0.4.1`-era local stores.
