@@ -1,6 +1,27 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { extname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "bun:test";
+
+const sourceRoot = fileURLToPath(new URL(".", import.meta.url));
+
+function sourceFilesUnder(relativeDir: string): string[] {
+  const root = join(sourceRoot, relativeDir);
+  const files: string[] = [];
+
+  function walk(dir: string): void {
+    for (const entry of readdirSync(dir)) {
+      const path = join(dir, entry);
+      const stat = statSync(path);
+      if (stat.isDirectory()) walk(path);
+      else if (stat.isFile() && extname(path) === ".ts" && !path.endsWith(".test.ts")) files.push(path);
+    }
+  }
+
+  walk(root);
+  return files;
+}
 
 describe("public package cloud boundary", () => {
   test("does not ship private hosted implementation details or obvious secrets", () => {
@@ -13,12 +34,15 @@ describe("public package cloud boundary", () => {
   });
 
   test("control-plane foundation does not import local execution authority", () => {
-    const api = readFileSync(new URL("./api/index.ts", import.meta.url), "utf8");
-    const runner = readFileSync(new URL("./runner/index.ts", import.meta.url), "utf8");
-    const combined = `${api}\n${runner}`;
+    const combined = [...sourceFilesUnder("api"), ...sourceFilesUnder("runner")]
+      .map((path) => readFileSync(path, "utf8"))
+      .join("\n");
 
     expect(combined).not.toContain("new Store");
+    expect(combined).not.toContain("bun:sqlite");
     expect(combined).not.toContain("../lib/store");
+    expect(combined).not.toContain("../lib/storage/index");
+    expect(combined).not.toContain("../lib/storage/sqlite");
     expect(combined).not.toContain("../lib/scheduler");
     expect(combined).not.toContain("../daemon/");
     expect(combined).not.toContain("executeClaimedRun");

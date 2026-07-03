@@ -79,7 +79,11 @@ JSON uses these field names:
 
 `loops-api` is a separate process in the same public package. It is not a
 separate package at this stage because self-hosted users and the hosted service
-must share the same public contract.
+must share the same public contract. The API server can expose storage-backed
+`/v1` loop CRUD and run listing when an embedding host injects the public
+storage contract. The standalone `loops-api serve` binary still fails closed
+for those routes until a self-hosted storage adapter is wired by the operator or
+platform host.
 
 `loops-runner` is the process that connects a machine to a non-local control
 plane. The initial foundation exposes status only. The Postgres schema, claim
@@ -109,9 +113,9 @@ mode.
 
 Non-local execution needs these follow-up releases before it is live:
 
-- Postgres/control-plane persistence for loops, schedules, runners, claims, and
-  evidence.
-- Runner placement, capability labels, leases, heartbeat, and finalization.
+- A full Postgres control-plane adapter behind the public storage contract.
+- Runner placement, capability labels, leases, heartbeat, claim/finalize, and
+  evidence upload.
 - Import/export migration between local SQLite state and a control plane.
 - Hosted product integration outside the public package.
 
