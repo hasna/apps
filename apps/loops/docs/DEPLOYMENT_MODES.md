@@ -86,9 +86,12 @@ for those routes until a self-hosted storage adapter is wired by the operator or
 platform host.
 
 `loops-runner` is the process that connects a machine to a non-local control
-plane. The initial foundation exposes status only. The Postgres schema, claim
-protocol, runner heartbeat/finalization protocol, and import/export migration
-must land before `loops-runner` is advertised as an executing worker.
+plane. The current public package supports a bounded one-shot protocol:
+registration, claim polling, claim-token fenced heartbeat/finalization, and
+`loops-runner run-once` execution for non-workflow targets. Full fleet daemon
+mode, workflow target execution over the remote protocol, and import/export
+migration still need follow-up releases before `loops-runner` is advertised as
+a complete always-on worker.
 
 ## Machine Placement
 
@@ -114,8 +117,9 @@ mode.
 Non-local execution needs these follow-up releases before it is live:
 
 - A full Postgres control-plane adapter behind the public storage contract.
-- Runner placement, capability labels, leases, heartbeat, claim/finalize, and
-  evidence upload.
+- Long-running runner daemon mode with backoff, fleet observability, and
+  durable machine registration records.
+- Workflow target execution over the remote protocol.
 - Import/export migration between local SQLite state and a control plane.
 - Hosted product integration outside the public package.
 

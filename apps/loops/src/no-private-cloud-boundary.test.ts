@@ -33,8 +33,26 @@ describe("public package cloud boundary", () => {
     expect(result.stdout).toContain("boundary scan passed");
   });
 
-  test("control-plane foundation does not import local execution authority", () => {
-    const combined = [...sourceFilesUnder("api"), ...sourceFilesUnder("runner")]
+  test("loops-api does not import local execution authority", () => {
+    const combined = sourceFilesUnder("api")
+      .map((path) => readFileSync(path, "utf8"))
+      .join("\n");
+
+    expect(combined).not.toContain("new Store");
+    expect(combined).not.toContain("bun:sqlite");
+    expect(combined).not.toContain("../lib/store");
+    expect(combined).not.toContain("../lib/storage/index");
+    expect(combined).not.toContain("../lib/storage/sqlite");
+    expect(combined).not.toContain("../lib/scheduler");
+    expect(combined).not.toContain("../lib/executor");
+    expect(combined).not.toContain("../lib/workflow-runner");
+    expect(combined).not.toContain("../daemon/");
+    expect(combined).not.toContain("executeClaimedRun");
+    expect(combined).not.toContain("runNow");
+  });
+
+  test("loops-runner does not import local storage or scheduler authority", () => {
+    const combined = sourceFilesUnder("runner")
       .map((path) => readFileSync(path, "utf8"))
       .join("\n");
 
@@ -45,7 +63,6 @@ describe("public package cloud boundary", () => {
     expect(combined).not.toContain("../lib/storage/sqlite");
     expect(combined).not.toContain("../lib/scheduler");
     expect(combined).not.toContain("../daemon/");
-    expect(combined).not.toContain("executeClaimedRun");
     expect(combined).not.toContain("runNow");
   });
 });

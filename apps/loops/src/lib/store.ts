@@ -48,6 +48,7 @@ import {
 interface DaemonLeaseFence {
   daemonLeaseId?: string;
   now?: Date;
+  claimToken?: string;
 }
 
 const DEFAULT_RECOVERY_BATCH_LIMIT = 100;
@@ -58,7 +59,7 @@ const LIVE_EXPIRED_RUN_GRACE_MS = 60_000;
  * numbered migration so older binaries refuse to open newer databases instead
  * of silently misreading them (checked against PRAGMA user_version).
  */
-const SCHEMA_USER_VERSION = 6;
+const SCHEMA_USER_VERSION = 7;
 const TERMINAL_RUN_STATUSES = ["succeeded", "failed", "timed_out", "abandoned", "skipped"] as const;
 const PRUNE_BATCH_SIZE = 400;
 const GENERATED_ROUTE_TEMPLATE_IDS = new Set(["todos-task-worker-verifier", "task-lifecycle", "event-worker-verifier"]);
@@ -98,6 +99,7 @@ interface RunRow {
   started_at: string | null;
   finished_at: string | null;
   claimed_by: string | null;
+  claim_token: string | null;
   lease_expires_at: string | null;
   pid: number | null;
   pgid: number | null;
@@ -583,6 +585,7 @@ function rowToLease(row: LeaseRow): DaemonLease {
 export interface ClaimRunResult {
   run: LoopRun;
   loop: Loop;
+  claimToken?: string;
 }
 
 export interface CreateWorkflowRunInput {
@@ -790,6 +793,13 @@ export class Store {
           this.addColumnIfMissing("loop_runs", "process_started_at", "TEXT");
         },
       },
+      {
+        id: "0007_run_claim_tokens",
+        apply: () => {
+          this.addColumnIfMissing("loop_runs", "claim_token", "TEXT");
+          this.db.exec("CREATE INDEX IF NOT EXISTS idx_runs_claim_token ON loop_runs(claim_token) WHERE claim_token IS NOT NULL");
+        },
+      },
     ];
   }
 
@@ -831,6 +841,7 @@ export class Store {
         started_at TEXT,
         finished_at TEXT,
         claimed_by TEXT,
+        claim_token TEXT,
         lease_expires_at TEXT,
         pid INTEGER,
         pgid INTEGER,
@@ -849,6 +860,7 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_runs_status ON loop_runs(status);
       CREATE INDEX IF NOT EXISTS idx_runs_status_lease ON loop_runs(status, lease_expires_at);
       CREATE INDEX IF NOT EXISTS idx_runs_scheduled ON loop_runs(scheduled_for);
+      CREATE INDEX IF NOT EXISTS idx_runs_claim_token ON loop_runs(claim_token) WHERE claim_token IS NOT NULL;
 
       CREATE TABLE IF NOT EXISTS daemon_lease (
         id TEXT PRIMARY KEY,
@@ -3223,6 +3235,7 @@ export class Store {
     opts: DaemonLeaseFence = {},
   ): ClaimRunResult | undefined {
     const startedAt = now.toISOString();
+    const claimToken = opts.claimToken ?? genId();
 
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -3249,7 +3262,7 @@ export class Store {
           const res = this.db
             .query(
               `UPDATE loop_runs SET status='running', started_at=$started, finished_at=NULL,
-               claimed_by=$claimedBy, lease_expires_at=$lease, pid=NULL, pgid=NULL, process_started_at=NULL, exit_code=NULL,
+               claimed_by=$claimedBy, claim_token=$claimToken, lease_expires_at=$lease, pid=NULL, pgid=NULL, process_started_at=NULL, exit_code=NULL,
                duration_ms=NULL, stdout=NULL, stderr=NULL, error=NULL, updated_at=$updated
                WHERE id=$id AND status='running' AND lease_expires_at <= $now`,
             )
@@ -3257,6 +3270,7 @@ export class Store {
               $id: existing.id,
               $started: startedAt,
               $claimedBy: runnerId,
+              $claimToken: claimToken,
               $lease: leaseExpiresAt,
               $updated: startedAt,
               $now: startedAt,
@@ -3264,7 +3278,7 @@ export class Store {
           this.db.exec("COMMIT");
           if (res.changes !== 1) return undefined;
           const run = this.getRun(existing.id);
-          return run ? { run, loop } : undefined;
+          return run ? { run, loop, claimToken } : undefined;
         }
 
         if (existing.status === "succeeded" || existing.status === "skipped") {
@@ -3276,7 +3290,7 @@ export class Store {
         const res = this.db
           .query(
             `UPDATE loop_runs SET attempt=$attempt, status='running', started_at=$started, finished_at=NULL,
-             claimed_by=$claimedBy, lease_expires_at=$lease, pid=NULL, pgid=NULL, process_started_at=NULL, exit_code=NULL,
+             claimed_by=$claimedBy, claim_token=$claimToken, lease_expires_at=$lease, pid=NULL, pgid=NULL, process_started_at=NULL, exit_code=NULL,
              duration_ms=NULL, stdout=NULL, stderr=NULL, error=NULL, updated_at=$updated
              WHERE id=$id
                AND status IN ('failed', 'timed_out', 'abandoned')
@@ -3287,6 +3301,7 @@ export class Store {
             $attempt: attempt,
             $started: startedAt,
             $claimedBy: runnerId,
+            $claimToken: claimToken,
             $lease: leaseExpiresAt,
             $updated: startedAt,
             $maxAttempts: loop.maxAttempts,
@@ -3294,15 +3309,15 @@ export class Store {
         this.db.exec("COMMIT");
         if (res.changes !== 1) return undefined;
         const run = this.getRun(existing.id);
-        return run ? { run, loop } : undefined;
+        return run ? { run, loop, claimToken } : undefined;
       }
 
       const id = genId();
       const res = this.db
         .query(
           `INSERT OR IGNORE INTO loop_runs (id, loop_id, loop_name, scheduled_for, attempt, status, started_at, finished_at,
-            claimed_by, lease_expires_at, pid, exit_code, duration_ms, stdout, stderr, error, created_at, updated_at)
-           VALUES ($id, $loopId, $loopName, $scheduledFor, 1, 'running', $started, NULL, $claimedBy, $lease,
+            claimed_by, claim_token, lease_expires_at, pid, exit_code, duration_ms, stdout, stderr, error, created_at, updated_at)
+           VALUES ($id, $loopId, $loopName, $scheduledFor, 1, 'running', $started, NULL, $claimedBy, $claimToken, $lease,
             NULL, NULL, NULL, NULL, NULL, NULL, $created, $updated)`,
         )
         .run({
@@ -3312,6 +3327,7 @@ export class Store {
           $scheduledFor: scheduledFor,
           $started: startedAt,
           $claimedBy: runnerId,
+          $claimToken: claimToken,
           $lease: leaseExpiresAt,
           $created: startedAt,
           $updated: startedAt,
@@ -3319,7 +3335,7 @@ export class Store {
       this.db.exec("COMMIT");
       if (res.changes !== 1) return undefined;
       const run = this.getRun(id);
-      return run ? { run, loop } : undefined;
+      return run ? { run, loop, claimToken } : undefined;
     } catch (error) {
       try {
         this.db.exec("ROLLBACK");
@@ -3334,7 +3350,7 @@ export class Store {
     id: string,
     patch: Pick<LoopRun, "status" | "finishedAt" | "durationMs" | "stdout" | "stderr"> &
       Partial<Pick<LoopRun, "exitCode" | "error" | "pid">>,
-    opts: { claimedBy?: string; now?: Date; daemonLeaseId?: string } = {},
+    opts: { claimedBy?: string; now?: Date; daemonLeaseId?: string; claimToken?: string } = {},
   ): LoopRun {
     const finishedAt = patch.finishedAt ?? nowIso();
     const error = patch.error === undefined ? undefined : scrubSecrets(patch.error);
@@ -3350,6 +3366,7 @@ export class Store {
       $error: error ?? null,
       $updated: finishedAt,
       $claimedBy: opts.claimedBy ?? null,
+      $claimToken: opts.claimToken ?? null,
       $now: (opts.now ?? new Date()).toISOString(),
       $daemonLeaseId: opts.daemonLeaseId ?? null,
     };
@@ -3358,9 +3375,10 @@ export class Store {
       const res = opts.claimedBy
         ? this.db
             .query(
-              `UPDATE loop_runs SET status=$status, finished_at=$finished, lease_expires_at=NULL, pid=$pid, exit_code=$exitCode,
+              `UPDATE loop_runs SET status=$status, finished_at=$finished, claim_token=NULL, lease_expires_at=NULL, pid=$pid, exit_code=$exitCode,
                duration_ms=$durationMs, stdout=$stdout, stderr=$stderr, error=$error, updated_at=$updated
                WHERE id=$id AND status='running' AND claimed_by=$claimedBy AND lease_expires_at > $now
+                 AND ($claimToken IS NULL OR claim_token=$claimToken)
                  AND ($daemonLeaseId IS NULL OR EXISTS (
                    SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
                  ))`,
@@ -3368,7 +3386,7 @@ export class Store {
             .run(params)
         : this.db
             .query(
-              `UPDATE loop_runs SET status=$status, finished_at=$finished, lease_expires_at=NULL, pid=$pid, exit_code=$exitCode,
+              `UPDATE loop_runs SET status=$status, finished_at=$finished, claim_token=NULL, lease_expires_at=NULL, pid=$pid, exit_code=$exitCode,
                duration_ms=$durationMs, stdout=$stdout, stderr=$stderr, error=$error, updated_at=$updated WHERE id=$id`,
             )
             .run(params);
@@ -3405,6 +3423,7 @@ export class Store {
       .query(
         `UPDATE loop_runs SET lease_expires_at=$expires, updated_at=$updated
          WHERE id=$id AND status='running' AND claimed_by=$claimedBy AND lease_expires_at > $now
+           AND ($claimToken IS NULL OR claim_token=$claimToken)
            AND ($daemonLeaseId IS NULL OR EXISTS (
              SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
            ))`,
@@ -3412,6 +3431,7 @@ export class Store {
       .run({
         $id: id,
         $claimedBy: claimedBy,
+        $claimToken: opts.claimToken ?? null,
         $expires: expiresAt,
         $updated: now.toISOString(),
         $now: now.toISOString(),

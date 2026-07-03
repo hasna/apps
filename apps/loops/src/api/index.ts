@@ -5,12 +5,15 @@ import type { CreateLoopInput, LoopStatus, RunStatus } from "../types.js";
 import { LoopArchivedError, LoopNotFoundError, ValidationError } from "../lib/errors.js";
 import { publicLoop, publicRun, redact } from "../lib/format.js";
 import { buildDeploymentStatus, deploymentStatusLine } from "../lib/mode.js";
+import { computeNextAfter, dueSlots } from "../lib/recurrence.js";
+import { scrubSecretsDeep } from "../lib/redact.js";
 import type { LoopStorageContract } from "../lib/storage/contract.js";
 import { packageVersion } from "../lib/version.js";
 
 const program = new Command();
 const DEFAULT_BODY_LIMIT_BYTES = 64 * 1024;
 const DEFAULT_EVIDENCE_LIMIT_BYTES = 256 * 1024;
+const MIN_RUNNER_LEASE_MS = 1_000;
 
 program
   .name("loops-api")
@@ -75,6 +78,7 @@ export interface LoopsApiServerOptions {
   storage?: LoopStorageContract;
   bodyLimitBytes?: number;
   evidenceLimitBytes?: number;
+  now?: () => Date;
 }
 
 export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
@@ -99,6 +103,7 @@ export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
         storage: opts.storage,
         bodyLimitBytes: opts.bodyLimitBytes ?? DEFAULT_BODY_LIMIT_BYTES,
         evidenceLimitBytes: opts.evidenceLimitBytes ?? DEFAULT_EVIDENCE_LIMIT_BYTES,
+        now: opts.now ?? (() => new Date()),
       });
     },
   });
@@ -110,6 +115,7 @@ interface V1RequestContext {
   storage?: LoopStorageContract;
   bodyLimitBytes: number;
   evidenceLimitBytes: number;
+  now: () => Date;
 }
 
 async function handleV1Request(ctx: V1RequestContext): Promise<Response> {
@@ -181,11 +187,25 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
 async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
   const id = segments[0];
   if (segments.length === 2 && id && ["heartbeat", "finalize", "evidence"].includes(segments[1] ?? "") && ctx.request.method === "POST") {
-    await readJsonBody<Record<string, unknown>>(ctx.request, segments[1] === "evidence" ? ctx.evidenceLimitBytes : ctx.bodyLimitBytes);
-    return runnerProtocolPending(`run ${segments[1]} is implemented in the runner protocol stage`);
+    const storage = requireStorage(ctx.storage);
+    const action = segments[1];
+    const now = ctx.now();
+    if (action === "heartbeat") return heartbeatRun(storage, id, await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes), now);
+    if (action === "finalize") return finalizeRun(storage, id, await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes), now);
+    return acceptRunEvidence(storage, id, await readJsonBody<Record<string, unknown>>(ctx.request, ctx.evidenceLimitBytes), now);
   }
   if (segments.length === 2 && id && segments[1] === "recover" && ctx.request.method === "POST") {
-    return runnerProtocolPending("run recovery is implemented in the runner protocol stage");
+    const storage = requireStorage(ctx.storage);
+    const now = ctx.now();
+    const recovered = await storage.recoverExpiredRunLeasesDetailed(now);
+    for (const run of recovered.abandoned) {
+      const loop = await storage.getLoop(run.loopId);
+      if (loop) await advanceLoopAfterRun(storage, loop, run, new Date(run.finishedAt ?? now), false);
+    }
+    return ok({
+      abandoned: recovered.abandoned.map((run) => publicRun(run, false, { redactError: true })),
+      deferred: recovered.deferred.map((run) => publicRun(run, false, { redactError: true })),
+    });
   }
 
   const storage = requireStorage(ctx.storage);
@@ -210,11 +230,178 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
 async function handleRunnerRequest(ctx: V1RequestContext, segments: string[]): Promise<Response> {
   if (ctx.request.method !== "POST") return fail("not_found", 404);
   const action = segments.length === 1 ? segments[0] : segments[1];
-  if (action && ["register", "heartbeat", "poll", "claim"].includes(action)) {
-    await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes);
-    return runnerProtocolPending(`runner ${action} is implemented in the runner protocol stage`);
+  if (action === "register" || action === "heartbeat") {
+    const body = await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes);
+    return ok({ runner: runnerRecord(body) });
+  }
+  if (action === "poll" || action === "claim") {
+    const storage = requireStorage(ctx.storage);
+    const body = await readJsonBody<Record<string, unknown>>(ctx.request, ctx.bodyLimitBytes);
+    const runner = runnerRecord(body);
+    const claims = await claimRuns(storage, runner, {
+      now: ctx.now(),
+      maxClaims: optionalPositiveInteger(body.maxClaims, 1, 100) ?? 1,
+    });
+    return ok({ runner, claims });
   }
   return fail("not_found", 404);
+}
+
+interface RunnerRecord {
+  id: string;
+  machineId?: string;
+  hostname?: string;
+  labels: Record<string, string>;
+  capabilities: Record<string, unknown>;
+  lastSeenAt: string;
+}
+
+function runnerRecord(body: Record<string, unknown>): RunnerRecord {
+  const machineId = optionalString(body.machineId);
+  const hostname = optionalString(body.hostname);
+  const id = optionalString(body.runnerId) ?? machineId ?? hostname;
+  if (!id) throw Object.assign(new Error("runner_id_required"), { status: 422 });
+  return {
+    id,
+    machineId,
+    hostname,
+    labels: stringRecord(body.labels),
+    capabilities: objectRecord(body.capabilities),
+    lastSeenAt: new Date().toISOString(),
+  };
+}
+
+async function claimRuns(
+  storage: LoopStorageContract,
+  runner: RunnerRecord,
+  opts: { now: Date; maxClaims: number },
+): Promise<Array<Record<string, unknown>>> {
+  const claims: Array<Record<string, unknown>> = [];
+  for (const loop of await storage.dueLoops(opts.now)) {
+    if (claims.length >= opts.maxClaims) break;
+    if (!runnerMatchesLoop(loop.machine, runner)) continue;
+    if (loop.target.type === "workflow") continue;
+    if (loop.overlap === "skip" && (await storage.listRuns({ loopId: loop.id, status: "running", limit: 1 })).length > 0) continue;
+    for (const slot of dueSlots(loop, opts.now).slots) {
+      if (claims.length >= opts.maxClaims) break;
+      const claim = await storage.claimRun(loop, slot, runner.id, opts.now);
+      if (!claim) continue;
+      const run = await storage.heartbeatRunLease(
+        claim.run.id,
+        runner.id,
+        runnerLeaseMs(claim.loop.leaseMs),
+        opts.now,
+        { claimToken: claim.claimToken },
+      ) ?? claim.run;
+      claims.push({
+        loop: publicLoop(claim.loop),
+        run: publicRun(run, false, { redactError: true }),
+        claimToken: claim.claimToken,
+      });
+      if (loop.overlap === "skip") break;
+    }
+  }
+  return claims;
+}
+
+function runnerMatchesLoop(machine: { id?: string; requestedId?: string } | undefined, runner: RunnerRecord): boolean {
+  if (!machine) return true;
+  const candidates = new Set([runner.id, runner.machineId, runner.hostname].filter(Boolean));
+  return candidates.has(machine.id) || (machine.requestedId ? candidates.has(machine.requestedId) : false);
+}
+
+async function heartbeatRun(storage: LoopStorageContract, runId: string, body: Record<string, unknown>, now: Date): Promise<Response> {
+  const claimToken = requiredString(body.claimToken, "claimToken");
+  const run = await storage.getRun(runId);
+  if (!run) return fail("run_not_found", 404);
+  if (run.status !== "running" || !run.claimedBy) return fail("run_not_running", 409);
+  const loop = await storage.getLoop(run.loopId);
+  if (!loop) return fail("loop_not_found", 404);
+  const heartbeat = await storage.heartbeatRunLease(
+    run.id,
+    run.claimedBy,
+    runnerLeaseMs(optionalPositiveInteger(body.leaseMs, 1, 24 * 60 * 60_000) ?? loop.leaseMs),
+    now,
+    { claimToken },
+  );
+  if (!heartbeat) return fail("stale_claim", 409);
+  return ok({ run: publicRun(heartbeat, false, { redactError: true }) });
+}
+
+async function finalizeRun(storage: LoopStorageContract, runId: string, body: Record<string, unknown>, now: Date): Promise<Response> {
+  const claimToken = requiredString(body.claimToken, "claimToken");
+  const status = optionalEnum<"succeeded" | "failed" | "timed_out">(
+    optionalString(body.status) ?? null,
+    ["succeeded", "failed", "timed_out"],
+  );
+  if (!status) throw Object.assign(new Error("status_required"), { status: 422 });
+  const existing = await storage.getRun(runId);
+  if (!existing) return fail("run_not_found", 404);
+  if (existing.status !== "running" || !existing.claimedBy) return fail("run_not_running", 409);
+  const loop = await storage.getLoop(existing.loopId);
+  if (!loop) return fail("loop_not_found", 404);
+  const finishedAt = optionalIsoString(body.finishedAt) ?? new Date().toISOString();
+  const durationMs = optionalPositiveInteger(body.durationMs, 0, Number.MAX_SAFE_INTEGER)
+    ?? Math.max(0, new Date(finishedAt).getTime() - new Date(existing.startedAt ?? existing.createdAt).getTime());
+  const finalized = await storage.finalizeRun(
+    runId,
+    {
+      status,
+      finishedAt,
+      durationMs,
+      stdout: optionalText(body.stdout) ?? "",
+      stderr: optionalText(body.stderr) ?? "",
+      error: optionalText(body.error),
+      exitCode: optionalInteger(body.exitCode),
+      pid: optionalInteger(body.pid),
+    },
+    { claimedBy: existing.claimedBy, claimToken, now },
+  );
+  if (finalized.status === "running") return fail("stale_claim", 409);
+  await advanceLoopAfterRun(storage, loop, finalized, new Date(finalized.finishedAt ?? finishedAt), finalized.status === "succeeded");
+  return ok({ run: publicRun(finalized, false, { redactError: true }) });
+}
+
+async function acceptRunEvidence(storage: LoopStorageContract, runId: string, body: Record<string, unknown>, now: Date): Promise<Response> {
+  const heartbeat = await heartbeatRun(storage, runId, body, now);
+  if (!heartbeat.ok) return heartbeat;
+  return ok({ accepted: true, evidence: scrubSecretsDeep(body.evidence ?? body) });
+}
+
+async function advanceLoopAfterRun(
+  storage: LoopStorageContract,
+  loop: Awaited<ReturnType<LoopStorageContract["getLoop"]>> & {},
+  run: Awaited<ReturnType<LoopStorageContract["getRun"]>> & {},
+  finishedAt: Date,
+  succeeded: boolean,
+): Promise<void> {
+  if (run.status === "running") return;
+  const current = await storage.getLoop(loop.id);
+  if (!current || current.status !== "active" || current.archivedAt) return;
+  if (current.retryScheduledFor && current.retryScheduledFor !== run.scheduledFor) return;
+  if (!succeeded && run.attempt < current.maxAttempts) {
+    await storage.updateLoop(current.id, {
+      status: "active",
+      nextRunAt: new Date(finishedAt.getTime() + retryDelayMs(current, run)).toISOString(),
+      retryScheduledFor: run.scheduledFor,
+    });
+    return;
+  }
+  const nextRunAt = computeNextAfter(current.schedule, new Date(run.scheduledFor), finishedAt);
+  await storage.updateLoop(current.id, {
+    status: nextRunAt ? "active" : "stopped",
+    nextRunAt,
+    retryScheduledFor: undefined,
+  });
+}
+
+function retryDelayMs(loop: Awaited<ReturnType<LoopStorageContract["getLoop"]>> & {}, run: Awaited<ReturnType<LoopStorageContract["getRun"]>> & {}): number {
+  const growth = 2 ** Math.min(Math.max(1, run.attempt) - 1, 20);
+  return Math.min(6 * 60 * 60_000, loop.retryDelayMs * growth);
+}
+
+function runnerLeaseMs(leaseMs: number): number {
+  return Math.max(MIN_RUNNER_LEASE_MS, leaseMs);
 }
 
 function requireStorage(storage: LoopStorageContract | undefined): LoopStorageContract {
@@ -281,6 +468,68 @@ function optionalLimit(value: string | null): number | undefined {
   const limit = Number(value);
   if (!Number.isInteger(limit) || limit < 1 || limit > 1000) throw Object.assign(new Error("invalid_limit"), { status: 422 });
   return limit;
+}
+
+function optionalString(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string" || value.trim() === "") throw Object.assign(new Error("invalid_string"), { status: 422 });
+  return value.trim();
+}
+
+function requiredString(value: unknown, name: string): string {
+  const result = optionalString(value);
+  if (!result) throw Object.assign(new Error(`${name}_required`), { status: 422 });
+  return result;
+}
+
+function optionalText(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "string") throw Object.assign(new Error("invalid_string"), { status: 422 });
+  return value;
+}
+
+function optionalInteger(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  const result = Number(value);
+  if (!Number.isInteger(result)) throw Object.assign(new Error("invalid_integer"), { status: 422 });
+  return result;
+}
+
+function optionalPositiveInteger(value: unknown, min: number, max: number): number | undefined {
+  const result = optionalInteger(value);
+  if (result === undefined) return undefined;
+  if (result < min || result > max) throw Object.assign(new Error("invalid_integer_range"), { status: 422 });
+  return result;
+}
+
+function optionalIsoString(value: unknown): string | undefined {
+  const text = optionalString(value);
+  if (!text) return undefined;
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) throw Object.assign(new Error("invalid_datetime"), { status: 422 });
+  return parsed.toISOString();
+}
+
+function optionalIsoDate(value: unknown): Date | undefined {
+  const text = optionalIsoString(value);
+  return text ? new Date(text) : undefined;
+}
+
+function stringRecord(value: unknown): Record<string, string> {
+  if (value === undefined || value === null) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw Object.assign(new Error("invalid_string_record"), { status: 422 });
+  const result: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== "string") throw Object.assign(new Error("invalid_string_record"), { status: 422 });
+    result[key] = entry;
+  }
+  return result;
+}
+
+function objectRecord(value: unknown): Record<string, unknown> {
+  if (value === undefined || value === null) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw Object.assign(new Error("invalid_object"), { status: 422 });
+  return value as Record<string, unknown>;
 }
 
 function optionalBoolean(value: string | null): boolean | undefined {

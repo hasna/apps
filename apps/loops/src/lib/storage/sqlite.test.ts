@@ -22,7 +22,27 @@ describe("SqliteLoopStorage", () => {
 
       expect(first?.run.status).toBe("running");
       expect(first?.run.claimedBy).toBe("runner-a");
+      expect(first?.claimToken).toBeString();
       expect(duplicate).toBeUndefined();
+      expect(await storage.heartbeatRunLease(first!.run.id, "runner-a", 1_000, new Date("2026-01-01T00:00:00.100Z"), { claimToken: "wrong" })).toBeUndefined();
+      expect(
+        await storage.heartbeatRunLease(first!.run.id, "runner-a", 1_000, new Date("2026-01-01T00:00:00.100Z"), {
+          claimToken: first!.claimToken,
+        }),
+      ).toMatchObject({ id: first!.run.id, status: "running" });
+      expect(
+        await storage.finalizeRun(
+          first!.run.id,
+          {
+            status: "failed",
+            finishedAt: "2026-01-01T00:00:00.500Z",
+            durationMs: 500,
+            stdout: "",
+            stderr: "",
+          },
+          { claimedBy: "runner-a", claimToken: "wrong", now: new Date("2026-01-01T00:00:00.200Z") },
+        ),
+      ).toMatchObject({ id: first!.run.id, status: "running" });
 
       const finalized = await storage.finalizeRun(first!.run.id, {
         status: "succeeded",
@@ -31,7 +51,7 @@ describe("SqliteLoopStorage", () => {
         stdout: "",
         stderr: "",
         exitCode: 0,
-      });
+      }, { claimedBy: "runner-a", claimToken: first!.claimToken, now: new Date("2026-01-01T00:00:00.200Z") });
       expect(finalized?.status).toBe("succeeded");
       expect(await storage.countRuns("succeeded")).toBe(1);
     } finally {

@@ -1344,9 +1344,10 @@ describe("Store", () => {
         "0004_loop_archive_metadata",
         "0005_workflow_invocations_and_admission",
         "0006_run_process_tracking",
+        "0007_run_claim_tokens",
       ]);
       const version = store["db"].query("PRAGMA user_version").get() as { user_version: number };
-      expect(version.user_version).toBeGreaterThanOrEqual(6);
+      expect(version.user_version).toBeGreaterThanOrEqual(7);
     } finally {
       store.close();
     }

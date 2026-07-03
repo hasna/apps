@@ -22,7 +22,7 @@ It supports deterministic command loops, JSON-defined workflows, and guarded CLI
 OpenLoops has three deployment modes:
 
 - `local`: SQLite in `LOOPS_DATA_DIR` is authoritative and `loops-daemon` executes scheduled work.
-- `self_hosted`: a user-operated `loops-api` control plane contract. This release exposes status plus storage-backed `/v1` loop CRUD and run listing for embedded control-plane hosts; runner claim protocol and non-local execution are follow-up work.
+- `self_hosted`: a user-operated `loops-api` control plane contract. This release exposes status, storage-backed `/v1` loop CRUD and run listing, runner claim/heartbeat/finalize protocol endpoints, and a one-shot `loops-runner run-once` execution path for embedded control-plane hosts; full fleet rollout and migration tooling are follow-up work.
 - `cloud`: a hosted control-plane contract. This release exposes client/runner status only; hosted tenant auth and infrastructure live outside this package.
 
 `local` is the default and requires no network, token, Postgres, or hosted
