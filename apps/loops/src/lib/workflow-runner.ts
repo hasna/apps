@@ -183,6 +183,17 @@ export async function executeWorkflow(
           ...opts,
           machine: opts.machine ?? opts.loop?.machine,
           signal: controller.signal,
+          onAgentProgress: (progress) => {
+            const stdout = JSON.stringify({ agentProgress: progress }, null, 2);
+            opts.beforePersist?.();
+            store.recordWorkflowStepProgress(run.id, step.id, {
+              stdout,
+              payload: progress as unknown as Record<string, unknown>,
+            }, {
+              daemonLeaseId: opts.daemonLeaseId,
+            });
+            opts.onAgentProgress?.(progress);
+          },
           onSpawn: (pid) => {
             opts.beforePersist?.();
             store.markWorkflowStepPid(run.id, step.id, pid, { daemonLeaseId: opts.daemonLeaseId });

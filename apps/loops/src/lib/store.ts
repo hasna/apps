@@ -2825,6 +2825,52 @@ export class Store {
     return run;
   }
 
+  recordWorkflowStepProgress(
+    workflowRunId: string,
+    stepId: string,
+    progress: { stdout?: string; stderr?: string; payload?: Record<string, unknown> },
+    opts: DaemonLeaseFence = {},
+  ): WorkflowStepRun {
+    const now = (opts.now ?? new Date()).toISOString();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const res = this.db
+        .query(
+          `UPDATE workflow_step_runs
+           SET stdout=COALESCE($stdout, stdout),
+               stderr=COALESCE($stderr, stderr),
+               updated_at=$updated
+           WHERE workflow_run_id=$workflowRunId AND step_id=$stepId AND status='running'
+             AND ($daemonLeaseId IS NULL OR EXISTS (
+               SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+             ))`,
+        )
+        .run({
+          $workflowRunId: workflowRunId,
+          $stepId: stepId,
+          $stdout: progress.stdout === undefined ? null : scrubbedOrNull(progress.stdout),
+          $stderr: progress.stderr === undefined ? null : scrubbedOrNull(progress.stderr),
+          $updated: now,
+          $daemonLeaseId: opts.daemonLeaseId ?? null,
+          $now: now,
+        });
+      if (res.changes === 1) {
+        this.appendWorkflowEvent(workflowRunId, "step_progress", stepId, progress.payload);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
+    }
+    const run = this.getWorkflowStepRun(workflowRunId, stepId);
+    if (!run) throw new Error(`workflow step run not found after progress update: ${workflowRunId}/${stepId}`);
+    return run;
+  }
+
   recoverWorkflowRun(workflowRunId: string, reason = "workflow run recovered for retry"): {
     run: WorkflowRun;
     recoveredSteps: WorkflowStepRun[];

@@ -149,16 +149,23 @@ describe("prompt fragment composition", () => {
     expect(prompt).toContain("- Branch: openloops/repo/task-1200-");
   });
 
-  test("lifecycle prompts drop the blank line after /goal (filter(Boolean) contract)", () => {
+  test("lifecycle prompts use bounded step headers instead of native goals", () => {
     const lifecycle = renderTaskLifecycleWorkflow({
       taskId: "task-1200",
       projectPath: repoPath,
       worktreeRoot,
     });
+    const triage = agentTargetOf(stepById(lifecycle, "triage")).prompt;
+    const planner = agentTargetOf(stepById(lifecycle, "planner")).prompt;
     const worker = agentTargetOf(stepById(lifecycle, "worker")).prompt;
     const verifier = agentTargetOf(stepById(lifecycle, "verifier")).prompt;
-    expect(worker.startsWith("/goal Complete todos task task-1200 according to the planner evidence.\nYou are the worker step for a full task-triggered OpenLoops lifecycle.")).toBe(true);
-    expect(verifier.startsWith("/goal Verify todos task task-1200 after the full lifecycle worker step.\nYou are the verifier step for a full task-triggered OpenLoops lifecycle.")).toBe(true);
+    for (const prompt of [triage, planner, worker, verifier]) {
+      expect(prompt).not.toContain("/goal ");
+      expect(prompt).toContain("You are the ");
+      expect(prompt).toContain("step for a full task-triggered OpenLoops lifecycle.");
+    }
+    expect(worker.startsWith("Objective: Complete todos task task-1200 according to the planner evidence.\nYou are the worker step for a full task-triggered OpenLoops lifecycle.")).toBe(true);
+    expect(verifier.startsWith("Objective: Verify todos task task-1200 after the full lifecycle worker step.\nYou are the verifier step for a full task-triggered OpenLoops lifecycle.")).toBe(true);
   });
 
   test("lifecycle gate-stop fragment carries per-stage deltas", () => {

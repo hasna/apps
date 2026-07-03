@@ -301,6 +301,15 @@ export function goalHeaderFragment(goal: string, role: string, flow: BuiltinFlow
   return [`/goal ${goal}`, "", roleFragment(role, flow)];
 }
 
+/**
+ * Bounded lifecycle steps must not open native Codewith `/goal` state. The
+ * workflow itself already owns durability and sequencing; each agent step only
+ * needs a finite role/objective header plus exact task evidence instructions.
+ */
+export function boundedStepHeaderFragment(objective: string, role: string, flow: BuiltinFlow): string[] {
+  return [`Objective: ${objective}`, "", roleFragment(role, flow)];
+}
+
 export function adversarialReviewFragment(inspect: string, focus: string): string {
   return `Use fresh context. Inspect ${inspect}. Act as an adversarial reviewer focused on ${focus}.`;
 }

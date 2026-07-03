@@ -44,6 +44,18 @@ export interface SpawnedProcessInfo {
   processStartedAt: string;
 }
 
+export interface AgentProgressInfo {
+  provider: AgentProvider;
+  agentId?: string;
+  status?: string;
+  summary?: string;
+  statusReason?: string;
+  threadId?: string;
+  rolloutPath?: string;
+  pid?: number;
+  lastEventSeq?: number;
+}
+
 export interface ExecuteOptions extends PersistGuardOptions {
   maxOutputBytes?: number;
   env?: NodeJS.ProcessEnv;
@@ -53,6 +65,8 @@ export interface ExecuteOptions extends PersistGuardOptions {
   onSpawn?: (pid: number) => void;
   /** Children are spawned detached in their own process group, so pgid === pid. */
   onSpawnProcess?: (info: SpawnedProcessInfo) => void;
+  /** Progress from durable provider controllers, for example Codewith background agents. */
+  onAgentProgress?: (info: AgentProgressInfo) => void;
   machine?: LoopMachineRef;
   machineResolver?: (machine: LoopMachineRef) => LoopMachineRef;
   machineCommandResolver?: (machineId: string, command: string) => MachineCommandPlan;
@@ -668,6 +682,22 @@ function codewithAgentEvidence(startJson: Record<string, unknown>, readJson: Rec
   );
 }
 
+function codewithAgentProgress(readJson: Record<string, unknown>): AgentProgressInfo {
+  const agent = recordField(readJson, "agent");
+  const statusSnapshot = recordField(readJson, "statusSnapshot");
+  return {
+    provider: "codewith",
+    agentId: stringField(agent, "agentId"),
+    status: stringField(agent, "status") ?? stringField(statusSnapshot, "status"),
+    summary: stringField(statusSnapshot, "summary"),
+    statusReason: stringField(agent, "statusReason"),
+    threadId: stringField(agent, "threadId"),
+    rolloutPath: stringField(agent, "rolloutPath"),
+    pid: numberField(agent, "pid"),
+    lastEventSeq: numberField(statusSnapshot, "lastEventSeq") ?? numberField(agent, "lastEventSeq"),
+  };
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -708,6 +738,7 @@ async function executeCodewithDurableAgent(
   if (!agentId) {
     return failureResult(startedAt, "codewith agent start did not return agent.agentId", { stdout: start.stdout, stderr: stderr.value() });
   }
+  opts.onAgentProgress?.(codewithAgentProgress(startJson));
 
   const stopAgent = async (): Promise<void> => {
     await spawnCapture(spec.command, codewithAgentControlArgs(target, "stop", agentId), {
@@ -758,6 +789,7 @@ async function executeCodewithDurableAgent(
     if (fingerprint !== lastFingerprint) {
       lastFingerprint = fingerprint;
       lastProgressAt = Date.now();
+      opts.onAgentProgress?.(codewithAgentProgress(lastReadJson));
     }
     if (status === "completed" || status === "failed" || status === "cancelled") {
       const logs = await spawnCapture(spec.command, codewithAgentControlArgs(target, "logs", agentId), {

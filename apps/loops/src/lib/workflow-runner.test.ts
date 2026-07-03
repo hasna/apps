@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
@@ -336,6 +336,68 @@ describe("workflow runner", () => {
       expect(run.status).toBe("succeeded");
       expect(step.status).toBe("succeeded");
       expect(readFileSync(marker, "utf8")).toBe("done");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("records Codewith durable agent progress while workflow step is still running", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-codewith-progress-"));
+    const bin = join(root, "bin");
+    const gate = join(root, "complete");
+    try {
+      mkdirSync(bin, { recursive: true });
+      const fake = join(bin, "codewith");
+      writeFileSync(
+        fake,
+        [
+          "#!/usr/bin/env bash",
+          "set -euo pipefail",
+          'case " $* " in',
+          '  *" agent start "*) echo \'{"agent":{"agentId":"agent-progress","status":"queued","statusReason":"queued","threadId":null,"rolloutPath":null,"lastEventSeq":0}}\' ;;',
+          `  *" agent read "*) if [ -f ${JSON.stringify(gate)} ]; then echo '{"agent":{"agentId":"agent-progress","status":"completed","statusReason":"turn completed","threadId":"thread-1","rolloutPath":"/tmp/rollout.jsonl","pid":123,"lastEventSeq":4},"statusSnapshot":{"status":"completed","summary":"Done","lastEventSeq":4}}'; else echo '{"agent":{"agentId":"agent-progress","status":"running","statusReason":"turn running","threadId":"thread-1","rolloutPath":"/tmp/rollout.jsonl","pid":123,"lastEventSeq":2},"statusSnapshot":{"status":"running","summary":"Inspecting task","lastEventSeq":2}}'; fi ;;`,
+          '  *" agent logs "*) echo \'{"data":[]}\' ;;',
+          "  *) echo '{}' ;;",
+          "esac",
+        ].join("\n"),
+      );
+      chmodSync(fake, 0o755);
+      const workflow = store.createWorkflow({
+        name: "codewith-progress",
+        steps: [
+          {
+            id: "triage",
+            target: {
+              type: "agent",
+              provider: "codewith",
+              prompt: "triage only",
+              cwd: root,
+              timeoutMs: 10_000,
+            },
+          },
+        ],
+      });
+      const executing = executeWorkflow(store, workflow, {
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, LOOPS_CODEWITH_AGENT_POLL_MS: "50" },
+      });
+      const runId = await waitUntil(() => {
+        const run = store.listWorkflowRuns({ workflowId: workflow.id, limit: 1 })[0];
+        const step = run ? store.getWorkflowStepRun(run.id, "triage") : undefined;
+        return step?.status === "running" && step.stdout?.includes('"status": "running"') ? run.id : undefined;
+      }, { label: "codewith progress recorded" });
+      const runningStep = store.getWorkflowStepRun(runId, "triage")!;
+      expect(runningStep.status).toBe("running");
+      expect(runningStep.stdout).toContain('"status": "running"');
+      const progressEvents = store.listWorkflowEvents(runId).filter((event) => event.eventType === "step_progress");
+      expect(progressEvents.length).toBeGreaterThan(0);
+      expect(progressEvents.at(-1)?.payload?.agentId).toBe("agent-progress");
+
+      openGate(gate);
+      const result = await executing;
+      expect(result.status).toBe("succeeded");
+      expect(store.getWorkflowStepRun(runId, "triage")?.status).toBe("succeeded");
     } finally {
       store.close();
       rmSync(root, { recursive: true, force: true });

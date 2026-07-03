@@ -17,6 +17,7 @@ import type {
 } from "../types.js";
 import {
   adversarialReviewFragment,
+  boundedStepHeaderFragment,
   BOUNDED_AGENT_WORKER_VERIFIER_TEMPLATE_ID,
   BOUNDED_VERIFIER_DECISION_FRAGMENT,
   BOUNDED_VERIFIER_REVIEW_FRAGMENT,
@@ -744,7 +745,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
   const gateStopFragment = (stage: LifecycleGateStage, stops: string): string =>
     `The deterministic ${stage} gate will stop ${stops} unless the latest ${stage} marker is the exact go marker and the task has no blocked/completed/done/cancelled/failed/archived/no-auto/manual/approval-required state.`;
   const triagePrompt = [
-    ...goalHeaderFragment(`Triage todos task ${input.taskId} for safe automated execution.`, "triage", "lifecycle"),
+    ...boundedStepHeaderFragment(`Triage todos task ${input.taskId} for safe automated execution.`, "triage", "lifecycle"),
     shared,
     "Decide whether the task is eligible for loop execution. Check status, dependencies, duplicate tasks, no-auto/manual/approval metadata, project path, acceptance criteria, and whether the requested work should be split before implementation.",
     "Do not implement repo changes in this step.",
@@ -755,7 +756,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     gateStopFragment("triage", "later steps"),
   ].join("\n");
   const plannerPrompt = [
-    ...goalHeaderFragment(`Plan todos task ${input.taskId} before implementation.`, "planner", "lifecycle"),
+    ...boundedStepHeaderFragment(`Plan todos task ${input.taskId} before implementation.`, "planner", "lifecycle"),
     shared,
     "Read the triage comment and current task details.",
     `If the task is ready for implementation, add a task comment whose first line is exactly: ${gateMarker("planner", "go")}`,
@@ -765,7 +766,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     `Create smaller deduped tasks and record evidence. ${gateStopFragment("planner", "the worker")}`,
   ].join("\n");
   const workerPrompt = [
-    ...goalHeaderFragment(`Complete todos task ${input.taskId} according to the planner evidence.`, "worker", "lifecycle"),
+    ...boundedStepHeaderFragment(`Complete todos task ${input.taskId} according to the planner evidence.`, "worker", "lifecycle"),
     shared,
     todosStartLine(todosProjectPath, input.taskId),
     "Read the triage and planner comments first. Implement only the scoped task, run focused validation, and record changed files, commits, evidence, blockers, and residual risks.",
@@ -773,7 +774,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     WORKER_LEAVES_COMPLETION_FRAGMENT,
   ].filter(Boolean).join("\n");
   const verifierPrompt = [
-    ...goalHeaderFragment(`Verify todos task ${input.taskId} after the full lifecycle worker step.`, "verifier", "lifecycle"),
+    ...boundedStepHeaderFragment(`Verify todos task ${input.taskId} after the full lifecycle worker step.`, "verifier", "lifecycle"),
     shared,
     todosVerificationLine(todosProjectPath, input.taskId),
     todosDoneLine(todosProjectPath, input.taskId),
