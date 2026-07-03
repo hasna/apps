@@ -13,17 +13,17 @@ program
 
 export function runnerStatus(machineId = process.env.LOOPS_RUNNER_MACHINE_ID || process.env.HASNA_MACHINE_ID) {
   const deployment = buildDeploymentStatus();
+  const local = deployment.deploymentMode === "local";
   return {
-    ok: deployment.deploymentMode === "local" || deployment.controlPlane.configured,
+    ok: local,
     service: "loops-runner",
     machineId,
     deployment,
-    state:
-      deployment.deploymentMode === "local"
-        ? "local_daemon_authoritative"
-        : deployment.controlPlane.configured
-          ? "ready_for_control_plane"
-          : "missing_control_plane_configuration",
+    state: local
+      ? "local_daemon_authoritative"
+      : deployment.controlPlane.configured
+        ? "control_plane_protocol_pending"
+        : "missing_control_plane_configuration",
   };
 }
 
