@@ -127,7 +127,7 @@ requires `--apply`; existing rows with the same id are updated only with
 `--replace`. The CLI creates a local SQLite backup before a safe apply.
 
 No-loss validation blocks unsupported or live state instead of silently
-dropping it. The current Stage 4 bundle does not preserve workflow invocation
+dropping it. The current migration bundle does not preserve workflow invocation
 rows, workflow work items, workflow run/step/event history, or goal run history.
 If those tables contain rows, the export/import plan is non-importable until a
 later release adds full table-preserving migration. Active daemon leases,

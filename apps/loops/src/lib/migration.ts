@@ -143,7 +143,7 @@ function checksToBlockers(checks: StoreMigrationChecks, prefix: "source" | "dest
   const rows: LoopsMigrationPlanRow[] = [];
   for (const [name, count] of Object.entries(checks.unsupportedCounts)) {
     if (count > 0) {
-      pushBlocker(rows, "remote", `${prefix}:unsupported:${name}`, `${prefix} ${name} has ${count} rows; this Stage 4 bundle does not preserve that table yet`);
+      pushBlocker(rows, "remote", `${prefix}:unsupported:${name}`, `${prefix} ${name} has ${count} rows; this migration bundle does not preserve that table yet`);
     }
   }
   for (const [name, count] of Object.entries(checks.volatileCounts)) {

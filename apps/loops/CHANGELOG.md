@@ -5,6 +5,82 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.4.4 (2026-07-03)
+
+Self-hosted runtime MVP release for operator-owned OpenLoops control planes.
+
+### Added
+
+- Postgres storage contract with checksum-ledgered migrations for loops, runs,
+  workflows, goals, runner machines, runner leases, and audit events.
+- Storage-backed `loops-api` `/v1` foundation for loop CRUD, run reads, runner
+  registration, claim, heartbeat, finalize, and bounded evidence upload.
+- `loops-runner` foundation with self-hosted status checks and one-shot
+  claim/execute/finalize support for non-workflow loop targets.
+- Operator-safe migration bundle helpers and CLI/SDK previews:
+  `loops export`, `loops import`, `loops self-hosted migrate --dry-run`,
+  `loops self-hosted push --dry-run`, `loops self-hosted pull --dry-run`, and
+  preview-first `loops self-hosted runner-register`.
+- Documentation for self-hosted API/runner boundaries, local cache/spool
+  semantics, id-preserving import blockers, rollback evidence, and
+  cross-machine rollout evidence.
+
+### Safety
+
+- Remote self-hosted push/pull/migrate remain preview-only until the control
+  plane exposes table-preserving import/sync coverage for every supported
+  durable table, or a reviewed restricted rollout proves unsupported rows are
+  absent.
+- Non-local API and runner paths fail closed without bearer tokens, run output
+  remains redacted by default, and migration/import planning blocks live
+  destination state, tampered bundles, and redacted environment imports unless
+  explicitly allowed.
+- The npm `prepublishOnly` gate now runs build, typecheck, full tests, and the
+  private-boundary scan before publishing.
+
+## 0.4.3 (2026-07-03)
+
+Registry-visible self-hosted API and runner protocol patch. The local Git tag
+set currently has no `v0.4.3` tag, so this entry backfills the release evidence
+from the branch history and npm registry.
+
+### Added
+
+- Storage-backed `loops-api` routes for loop CRUD and run listing using the
+  public storage contract, with storage-backed routes failing closed when no
+  storage adapter is injected.
+- Runner registration, claim, heartbeat, finalize, and bounded evidence upload
+  protocol endpoints for self-hosted control planes.
+- `loops-runner run-once` execution path for claimed non-workflow loop runs,
+  including claim-token fencing and heartbeat coverage while a run executes.
+
+### Safety
+
+- Non-local API serving requires a bearer token.
+- Runner claims skip workflow loops until remote workflow execution is fully
+  supported.
+- Run listing redacts stdout/stderr unless explicitly requested.
+
+## 0.4.2 (2026-07-03)
+
+Registry-visible self-hosted storage contract patch. The local Git tag set
+currently has no `v0.4.2` tag, so this entry backfills the release evidence
+from the branch history and npm registry.
+
+### Added
+
+- Async storage contract for local and self-hosted runtime adapters.
+- SQLite storage wrapper over the existing local `Store`.
+- Postgres storage migration contract with checksum ledger, core loop/run
+  tables, workflow/goal tables, runner machine/lease tables, and audit events.
+- Public package exports for storage contract, SQLite adapter, Postgres adapter,
+  and Postgres schema helpers.
+
+### Safety
+
+- `loops-runner` self-hosted status fails closed when a remote runner is
+  configured without the required API URL and token.
+
 ## 0.4.1 (2026-07-03)
 
 Contract-foundation release for the Mailery-style local/self-hosted/cloud
