@@ -224,7 +224,12 @@ describe("daemon control", () => {
     }
   });
 
-  test("stopDaemon treats a live pid without a matching lease as not running", async () => {
+  test("stopDaemon terminates a live pidfile daemon even when its lease is expired/mismatched", async () => {
+    // Regression: a suspend/resume can lapse or mismatch the lease while the
+    // daemon process is still alive. stopDaemon must terminate the live process
+    // rather than remove the pidfile and report "not running", which would leave
+    // an untracked live daemon that a later `daemon start` races. Run reaping is
+    // still skipped without a verified lease, so only the daemon is killed.
     const root = mkdtempSync(join(tmpdir(), "loops-control-stop-nolease-"));
     const victim = await spawnVictim();
     try {
@@ -232,11 +237,12 @@ describe("daemon control", () => {
       writePid(victim.pid, path);
       const store = new Store(join(root, "loops.db"));
       store.close();
-      const result = await stopDaemon({ path });
-      expect(result.wasRunning).toBe(false);
-      expect(result.stopped).toBe(false);
+      const result = await stopDaemon({ path, timeoutMs: 2_000 });
+      expect(result.wasRunning).toBe(true);
+      expect(result.stopped).toBe(true);
+      expect(result.reapedPgids ?? []).toEqual([]);
       expect(existsSync(path)).toBe(false);
-      expect(isAlive(victim.pid)).toBe(true);
+      expect(await waitForDeath(victim.pid)).toBe(true);
     } finally {
       victim.kill();
       rmSync(root, { recursive: true, force: true });

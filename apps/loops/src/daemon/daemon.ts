@@ -6,7 +6,16 @@ import { daemonLogPath, ensureDataDir, pidFilePath } from "../lib/paths.js";
 import { advanceLoop, claimDueRuns, executeClaimedRun, inlineRunnerOwnerPid, type ClaimedLoopRun } from "../lib/scheduler.js";
 import { executeLoopTarget } from "../lib/workflow-runner.js";
 import { Store } from "../lib/store.js";
-import { isAlive, isDaemonRunning, reapProcessGroups, removePid, toReapableProcess, writePid } from "./control.js";
+import {
+  isAlive,
+  isDaemonRunning,
+  processStartTimeMs,
+  reapProcessGroups,
+  removePid,
+  START_TIME_TOLERANCE_MS,
+  toReapableProcess,
+  writePid,
+} from "./control.js";
 import { realSleep, runLoop } from "./loop.js";
 import type { ExecutorResult, Loop, LoopRun } from "../types.js";
 
@@ -227,7 +236,20 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
       try {
         const liveInlineOwner = (run: LoopRun): boolean => {
           const ownerPid = inlineRunnerOwnerPid(run.claimedBy);
-          return ownerPid !== undefined && isAlive(ownerPid);
+          if (ownerPid === undefined || !isAlive(ownerPid)) return false;
+          // Guard against pid recycling: a bare isAlive() would treat a reused
+          // pid (now an unrelated process) as the still-live inline owner and
+          // wrongly suppress reaping of a genuinely orphaned run. The inline
+          // owner must have existed when it claimed the run, so a pid whose
+          // kernel start time is after the run started is a recycled impostor —
+          // treat it as dead so the orphan gets reaped. Unresolvable start
+          // times stay lenient (possibly-live owner is the safe answer).
+          const ownerStartMs = processStartTimeMs(ownerPid);
+          const runStartMs = run.startedAt ? Date.parse(run.startedAt) : Number.NaN;
+          if (ownerStartMs !== undefined && Number.isFinite(runStartMs) && ownerStartMs > runStartMs + START_TIME_TOLERANCE_MS) {
+            return false;
+          }
+          return true;
         };
         const staleCandidates = store
           .listRuns({ status: "running", limit: 1_000 })

@@ -1285,7 +1285,7 @@ describe("Store", () => {
         schedule: { type: "once", at: "2026-01-01T00:00:00Z" } as const,
         target: { type: "command", command: "true" } as const,
       };
-      store.createLoop(input, new Date("2025-12-31T00:00:00Z"));
+      const first = store.createLoop(input, new Date("2025-12-31T00:00:00Z"));
       store.createLoop(input, new Date("2025-12-31T00:00:01Z"));
       expect(() => store.requireUniqueLoop("same-name")).toThrow(AmbiguousNameError);
       try {
@@ -1293,6 +1293,26 @@ describe("Store", () => {
       } catch (error) {
         expect((error as AmbiguousNameError).code).toBe("AMBIGUOUS_NAME");
       }
+      // An archived same-named loop must not count toward ambiguity: archiving
+      // one of the two duplicates leaves a single active loop that resolves.
+      store.archiveLoop(first.id);
+      expect(store.requireUniqueLoop("same-name").id).not.toBe(first.id);
+      // Even a single active loop plus an archived namesake resolves cleanly.
+      const solo = store.createLoop(
+        { ...input, name: "solo-name" },
+        new Date("2025-12-31T00:00:02Z"),
+      );
+      const archivedNamesake = store.createLoop(
+        { ...input, name: "solo-name" },
+        new Date("2025-12-31T00:00:03Z"),
+      );
+      store.archiveLoop(archivedNamesake.id);
+      expect(store.requireUniqueLoop("solo-name").id).toBe(solo.id);
+      // A uniquely-named loop still resolves after it is archived (so the caller
+      // can report "loop is archived" rather than "loop not found").
+      const lone = store.createLoop({ ...input, name: "lone-name" }, new Date("2025-12-31T00:00:04Z"));
+      store.archiveLoop(lone.id);
+      expect(store.requireUniqueLoop("lone-name").id).toBe(lone.id);
       try {
         store.requireLoop("missing-loop");
       } catch (error) {
@@ -1834,5 +1854,110 @@ describe("Store", () => {
     } finally {
       store.close();
     }
+  });
+
+  // Regression (MEDIUM 6): sqlite loop_runs has no FK to loops (postgres declares
+  // ON DELETE CASCADE), so deleteLoop must delete run history itself — otherwise
+  // running rows orphan and keep inflating daemonStatus.runs.running forever.
+  test("deleteLoop removes child run history so orphaned running rows do not linger", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "delete-with-runs",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      expect(store.countRuns("running")).toBe(1);
+      expect(store.listRuns({ loopId: loop.id })).toHaveLength(1);
+
+      expect(store.deleteLoop(loop.id)).toBe(true);
+
+      expect(store.listRuns({ loopId: loop.id })).toHaveLength(0);
+      expect(store.countRuns()).toBe(0);
+      expect(store.countRuns("running")).toBe(0);
+    } finally {
+      store.close();
+    }
+  });
+
+  // Regression (MEDIUM 7): a manual goal rerun after a terminal outcome must not
+  // reuse the terminal goal (which throws in assertGoalTransition) — the context
+  // lookup skips terminal manual goals so runGoal creates a fresh one.
+  test("findGoalByContext skips terminal manual goals so a rerun starts fresh", () => {
+    const store = new Store(":memory:");
+    try {
+      const goal = store.createGoal({ objective: "tidy inbox", sourceType: "manual", sourceId: "tidy inbox" });
+      // A non-terminal manual goal is resumed in place.
+      expect(store.findGoalByContext({ sourceType: "manual", sourceId: "tidy inbox" })?.goalId).toBe(goal.goalId);
+      // Once terminal it is skipped, so the caller creates a new goal instead of
+      // reusing one that cannot transition.
+      store.updateGoalStatus(goal.goalId, "cancelled");
+      expect(store.findGoalByContext({ sourceType: "manual", sourceId: "tidy inbox" })).toBeUndefined();
+    } finally {
+      store.close();
+    }
+  });
+
+  // Regression (LOW 9): a claimedBy-less finalize is unfenced; it must still not
+  // resurrect or clobber a run that is no longer running.
+  test("finalizeRun without claimedBy cannot clobber a terminal run", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "no-clobber",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      store.finalizeRun(
+        claim!.run.id,
+        { status: "succeeded", finishedAt: "2026-01-01T00:00:01.000Z", durationMs: 1_000, stdout: "real", stderr: "" },
+        { claimedBy: "runner", now: new Date("2026-01-01T00:00:01Z") },
+      );
+      expect(store.getRun(claim!.run.id)?.status).toBe("succeeded");
+
+      const after = store.finalizeRun(claim!.run.id, {
+        status: "failed",
+        finishedAt: "2026-01-01T00:00:02.000Z",
+        durationMs: 2_000,
+        stdout: "clobber",
+        stderr: "",
+      });
+
+      expect(after.status).toBe("succeeded");
+      expect(after.stdout).toBe("real");
+    } finally {
+      store.close();
+    }
+  });
+
+  // Regression (LOW 10): a :memory: store still mkdtempSync's a scratch root for
+  // manifests; close() must remove it so short-lived instances don't leak temp dirs.
+  test("closing a :memory: store removes its scratch temp dir", () => {
+    const store = new Store(":memory:");
+    const workflow = store.createWorkflow({
+      name: "mem-temp-cleanup",
+      steps: [{ id: "only", target: { type: "command", command: "true" } }],
+    });
+    const run = store.createWorkflowRun({ workflow });
+    const manifestPath = run.manifestPath!;
+    expect(manifestPath).toContain("open-loops-store-");
+    // Derive the mkdtemp root (…/open-loops-store-XXXXXX) from the manifest path.
+    const marker = manifestPath.indexOf("open-loops-store-");
+    const tempRoot = manifestPath.slice(0, manifestPath.indexOf("/", marker));
+    expect(existsSync(tempRoot)).toBe(true);
+
+    store.close();
+
+    expect(existsSync(tempRoot)).toBe(false);
   });
 });

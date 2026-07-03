@@ -407,6 +407,46 @@ function advanceOptions(deps: SchedulerDeps): AdvanceLoopOptions {
   };
 }
 
+const TERMINAL_RUN_STATUSES: ReadonlySet<LoopRun["status"]> = new Set([
+  "succeeded",
+  "failed",
+  "timed_out",
+  "abandoned",
+  "skipped",
+]);
+
+/**
+ * Wedge repair: if a due slot already holds a *terminal* run but claimRun
+ * returned nothing, the loop never advanced past it (e.g. the daemon died /
+ * lost its lease / was SIGKILLed between finalizeRun and advanceLoop). Left
+ * alone, every future tick re-computes the same due slot, claims nothing, and
+ * nextRunAt never moves — the loop is wedged forever. This hits once/dynamic
+ * schedules and catchUp:"none" interval/cron loops, whose due slot IS
+ * nextRunAt. advanceLoop is idempotent (it recomputes nextRunAt from the run's
+ * scheduledFor and no-ops when the loop already moved on), so this is safe to
+ * call on the terminal run to unstick the loop. A *running* run is never
+ * terminal, so a live in-flight run is left untouched.
+ */
+function repairWedgedTerminalSlot(deps: SchedulerDeps, loop: Loop, scheduledFor: string, now: Date): void {
+  const existing = deps.store.getRunBySlot(loop.id, scheduledFor);
+  if (!existing || !TERMINAL_RUN_STATUSES.has(existing.status)) return;
+  try {
+    advanceLoop(
+      deps.store,
+      loop,
+      existing,
+      new Date(existing.finishedAt ?? now),
+      existing.status === "succeeded",
+      advanceOptions(deps),
+    );
+  } catch (error) {
+    // A lost daemon lease during repair is not fatal to the rest of the tick;
+    // skip like the claim paths do and let the lease heartbeat stop the daemon.
+    if (deps.daemonLeaseId && isDaemonLeaseLost(error)) return;
+    throw error;
+  }
+}
+
 async function runSlot(deps: SchedulerDeps, loop: Loop, scheduledFor: string): Promise<LoopRun | undefined> {
   const now = deps.now?.() ?? new Date();
   deps.beforeRun?.(loop, scheduledFor);
@@ -432,7 +472,10 @@ async function runSlot(deps: SchedulerDeps, loop: Loop, scheduledFor: string): P
     if (deps.daemonLeaseId && isDaemonLeaseLost(error)) return undefined;
     throw error;
   }
-  if (!claim) return undefined;
+  if (!claim) {
+    repairWedgedTerminalSlot(deps, loop, scheduledFor, now);
+    return undefined;
+  }
   deps.beforeRun?.(claim.loop, claim.run.scheduledFor);
   deps.onRun?.(claim.run);
 
@@ -485,7 +528,10 @@ function claimSlot(deps: SchedulerDeps, loop: Loop, scheduledFor: string): Claim
     if (deps.daemonLeaseId && isDaemonLeaseLost(error)) return undefined;
     throw error;
   }
-  if (!claim) return undefined;
+  if (!claim) {
+    repairWedgedTerminalSlot(deps, loop, scheduledFor, now);
+    return undefined;
+  }
   deps.beforeRun?.(claim.loop, claim.run.scheduledFor);
   deps.onRun?.(claim.run);
   return claim;

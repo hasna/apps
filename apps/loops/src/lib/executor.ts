@@ -22,6 +22,7 @@ import { BoundedOutputBuffer, killProcessGroup, providerAdapter, spawnCapture } 
 import { commandNotFoundMessage, executableExists, normalizeExecutionPath } from "./env.js";
 import { nowIso } from "./ids.js";
 import { refreshLoopMachine, resolveMachineCommand } from "./machines.js";
+import { processStartTimeMs } from "./process-identity.js";
 
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 256 * 1024;
@@ -200,7 +201,17 @@ function notifySpawn(pid: number | undefined, opts: ExecuteOptions): void {
   if (!pid) return;
   opts.onSpawn?.(pid);
   // Children are spawned detached, so they lead their own process group: pgid === pid.
-  opts.onSpawnProcess?.({ pid, pgid: pid, processStartedAt: nowIso() });
+  // Record the kernel's start time for the pid as the authoritative fingerprint,
+  // not wall-clock now: a slow fork->record stall (>5s) would otherwise leave a
+  // fingerprint that disagrees with what the kernel reports later, so recovery
+  // would misjudge a live process as dead — abandoning the run and spawning a
+  // duplicate. Fall back to now only when the start time is unresolvable.
+  const startedMs = processStartTimeMs(pid);
+  opts.onSpawnProcess?.({
+    pid,
+    pgid: pid,
+    processStartedAt: startedMs !== undefined ? new Date(startedMs).toISOString() : nowIso(),
+  });
 }
 
 function shellQuote(value: string): string {

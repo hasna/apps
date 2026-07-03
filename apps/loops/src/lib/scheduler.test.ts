@@ -782,4 +782,83 @@ describe("scheduler", () => {
       store.close();
     }
   });
+
+  // Regression (HIGH 1): if a daemon finalizes a run terminal but dies/loses its
+  // lease before advanceLoop, the terminal run stays in the due slot and every
+  // future tick claims nothing — nextRunAt never moves, wedging the loop forever.
+  // claimDueRuns/tick must idempotently advance past a terminal run left in the
+  // due slot. Affects once/dynamic schedules and catchUp:"none".
+  test("claimDueRuns repairs a once loop wedged by a terminal run left in the due slot", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "wedge-once",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const slot = loop.nextRunAt!;
+      // Simulate the daemon: claim + finalize succeeded, but never advanceLoop.
+      const claim = store.claimRun(loop, slot, "host:1:lease", new Date(slot));
+      expect(claim).toBeDefined();
+      store.finalizeRun(
+        claim!.run.id,
+        { status: "succeeded", finishedAt: "2026-01-01T00:00:01.000Z", durationMs: 1_000, stdout: "ok", stderr: "" },
+        { claimedBy: "host:1:lease", now: new Date("2026-01-01T00:00:01Z") },
+      );
+      // Wedged: loop still active with nextRunAt pinned to the terminal slot, and
+      // a fresh claim on that slot yields nothing.
+      expect(store.getLoop(loop.id)?.status).toBe("active");
+      expect(store.getLoop(loop.id)?.nextRunAt).toBe(slot);
+      expect(
+        store.claimRun(store.getLoop(loop.id)!, slot, "host:1:lease", new Date("2026-01-01T00:00:05Z")),
+      ).toBeUndefined();
+
+      const out = claimDueRuns({ store, runnerId: "host:1:lease", now: () => new Date("2026-01-01T00:00:05Z") });
+
+      expect(out.claims).toHaveLength(0);
+      const repaired = store.getLoop(loop.id);
+      expect(repaired?.status).toBe("stopped");
+      expect(repaired?.nextRunAt).toBeUndefined();
+    } finally {
+      store.close();
+    }
+  });
+
+  test("tick repairs a catchUp:none interval loop wedged by a terminal run in the due slot", async () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "wedge-interval",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          catchUp: "none",
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+      const slot = loop.nextRunAt!;
+      const claim = store.claimRun(loop, slot, "host:1:lease", new Date(slot));
+      expect(claim).toBeDefined();
+      const finishedAt = new Date(new Date(slot).getTime() + 1_000).toISOString();
+      store.finalizeRun(
+        claim!.run.id,
+        { status: "succeeded", finishedAt, durationMs: 1_000, stdout: "ok", stderr: "" },
+        { claimedBy: "host:1:lease", now: new Date(finishedAt) },
+      );
+      expect(store.getLoop(loop.id)?.nextRunAt).toBe(slot);
+
+      const now = new Date(new Date(slot).getTime() + 5_000);
+      const out = await tick({ store, runnerId: "host:1:lease", now: () => now });
+
+      expect(out.claimed).toHaveLength(0);
+      const repaired = store.getLoop(loop.id);
+      expect(repaired?.status).toBe("active");
+      expect(new Date(repaired!.nextRunAt!).getTime()).toBe(new Date(slot).getTime() + 60_000);
+    } finally {
+      store.close();
+    }
+  });
 });

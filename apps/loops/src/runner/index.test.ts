@@ -171,4 +171,70 @@ describe("loops-runner foundation", () => {
   test("runRunnerOnce rejects non-local API URLs without a token", async () => {
     await expect(runRunnerOnce({ apiUrl: "https://loops.example.test", runnerId: "runner" })).rejects.toThrow("non-local loops-runner requires");
   });
+
+  // Regression (MEDIUM 4): if control-plane heartbeats keep failing, the lease is
+  // (almost certainly) lost and the run may be reassigned. The runner must abort
+  // execution after N consecutive heartbeat failures instead of running blind on
+  // a lost lease and racing a second executor.
+  test("runRunnerOnce aborts execution after consecutive heartbeat failures", async () => {
+    const claim = {
+      loop: { id: "l1", name: "l1", leaseMs: 10_000 },
+      run: { id: "r1", loopId: "l1", scheduledFor: "2026-01-01T00:00:00.000Z", startedAt: "2026-01-01T00:00:00.000Z" },
+      claimToken: "tok",
+    };
+    const jsonResponse = (body: unknown, status = 200): Response =>
+      ({ ok: status >= 200 && status < 300, status, json: async () => body }) as Response;
+    let heartbeatCalls = 0;
+    // First heartbeat succeeds (it is awaited before execution starts); every
+    // subsequent one fails to simulate a lost lease.
+    const fetchImpl = (async (url: string | URL) => {
+      const u = String(url);
+      if (u.endsWith("/v1/runners/register")) return jsonResponse({ ok: true });
+      if (u.endsWith("/v1/runners/claim")) return jsonResponse({ ok: true, claims: [claim] });
+      if (u.includes("/heartbeat")) {
+        heartbeatCalls += 1;
+        return heartbeatCalls === 1 ? jsonResponse({ ok: true }) : jsonResponse({ error: "lease lost" }, 409);
+      }
+      if (u.includes("/finalize")) return jsonResponse({ run: { ...claim.run, status: "timed_out" } });
+      return jsonResponse({}, 404);
+    }) as unknown as typeof fetch;
+
+    let sawAbort = false;
+    await runRunnerOnce({
+      apiUrl: "http://127.0.0.1:1/",
+      runnerId: "runner-hb",
+      heartbeatIntervalMs: 5,
+      fetchImpl,
+      execute: async (_loop, _run, opts) => {
+        await new Promise<void>((resolve) => {
+          if (opts?.signal?.aborted) {
+            sawAbort = true;
+            resolve();
+            return;
+          }
+          opts?.signal?.addEventListener(
+            "abort",
+            () => {
+              sawAbort = true;
+              resolve();
+            },
+            { once: true },
+          );
+        });
+        return {
+          status: "timed_out",
+          startedAt: "2026-01-01T00:00:00.000Z",
+          finishedAt: "2026-01-01T00:00:00.100Z",
+          durationMs: 100,
+          stdout: "",
+          stderr: "",
+          error: "aborted after heartbeat failures",
+        };
+      },
+    });
+
+    expect(sawAbort).toBe(true);
+    // One success plus three consecutive failures trips the abort.
+    expect(heartbeatCalls).toBeGreaterThanOrEqual(4);
+  });
 });

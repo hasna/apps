@@ -38,6 +38,7 @@ import { processStartTimeMs, sameProcessStart, START_TIME_TOLERANCE_MS } from ".
 import { scrubSecrets, scrubSecretsDeep } from "./redact.js";
 import { initialNextRun } from "./recurrence.js";
 import { assertGoalTransition, rollupSummary, updateReadyFlags } from "./goal/status.js";
+import { GOAL_TERMINAL } from "./goal/types.js";
 import { normalizeCreateWorkflowInput } from "./workflow-spec.js";
 import {
   commitWorkflowRunManifest,
@@ -742,11 +743,14 @@ function ensurePrivateStorePath(file: string): void {
 export class Store {
   private db: Database;
   private rootDir: string;
+  /** Temp dir created for a `:memory:` store, removed in close() so tests/short-lived instances don't leak it. */
+  private memoryRootDir?: string;
 
   constructor(path?: string) {
     const file = path ?? dbPath();
     if (file !== ":memory:") ensurePrivateStorePath(file);
     this.rootDir = file === ":memory:" ? mkdtempSync(join(tmpdir(), "open-loops-store-")) : dirname(file);
+    if (file === ":memory:") this.memoryRootDir = this.rootDir;
     this.db = new Database(file);
     this.db.exec("PRAGMA foreign_keys = ON;");
     this.db.exec("PRAGMA busy_timeout = 5000;");
@@ -1229,12 +1233,22 @@ export class Store {
   requireUniqueLoop(idOrName: string): Loop {
     const byId = this.getLoop(idOrName);
     if (byId) return byId;
+    // Resolve by name WITHOUT filtering archived loops, so a uniquely-named
+    // archived loop still resolves (downstream reports "loop is archived" rather
+    // than "loop not found").
     const rows = this.db
       .query<LoopRow, [string]>("SELECT * FROM loops WHERE name = ? ORDER BY created_at DESC LIMIT 2")
       .all(idOrName);
     if (rows.length === 0) throw new LoopNotFoundError(idOrName);
-    if (rows.length > 1) throw new AmbiguousNameError(idOrName);
-    return rowToLoop(rows[0]!);
+    if (rows.length === 1) return rowToLoop(rows[0]!);
+    // Multiple namesakes: archived loops must not count toward ambiguity, so
+    // prefer the sole active one (a rename on archive is not enforced). Ambiguity
+    // only holds when 2+ ACTIVE loops share the name.
+    const active = this.db
+      .query<LoopRow, [string]>("SELECT * FROM loops WHERE name = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 2")
+      .all(idOrName);
+    if (active.length !== 1) throw new AmbiguousNameError(idOrName);
+    return rowToLoop(active[0]!);
   }
 
   requireLoop(idOrName: string): Loop {
@@ -1635,6 +1649,13 @@ export class Store {
     return this.transact(() => {
       const loop = this.requireLoop(idOrName);
       this.setWorkflowWorkItemsForLoop(loop.id, "cancelled", "loop deleted", nowIso());
+      // Unlike postgres (loop_runs.loop_id REFERENCES loops ON DELETE CASCADE),
+      // the sqlite loop_runs table declares no FK to loops, so deleting the loop
+      // alone orphans its run history — including still-"running" rows that keep
+      // inflating daemonStatus.runs.running forever. Delete children explicitly
+      // (a table rebuild to add the FK to existing data is riskier). The FK
+      // workflow_runs.loop_run_id ON DELETE SET NULL then nulls dangling refs.
+      this.db.query("DELETE FROM loop_runs WHERE loop_id = ?").run(loop.id);
       const res = this.db.query("DELETE FROM loops WHERE id = ?").run(loop.id);
       return res.changes > 0;
     });
@@ -2264,11 +2285,18 @@ export class Store {
       if (row) return rowToGoal(row);
     }
     if (context.sourceType && context.sourceId) {
+      // Skip terminal goals: a manual re-run after cancelled/budgetLimited/complete
+      // must start a fresh goal, not reuse the terminal one (reuse hits
+      // assertGoalTransition and throws "cannot transition terminal goal status").
+      // Only non-terminal manual goals are resumable in place.
+      const terminalPlaceholders = GOAL_TERMINAL.map(() => "?").join(", ");
       const row = this.db
-        .query<GoalRow, [string, string]>(
-          "SELECT * FROM goals WHERE source_type = ? AND source_id = ? ORDER BY created_at DESC LIMIT 1",
+        .query<GoalRow, [string, string, ...string[]]>(
+          `SELECT * FROM goals
+           WHERE source_type = ? AND source_id = ? AND status NOT IN (${terminalPlaceholders})
+           ORDER BY created_at DESC LIMIT 1`,
         )
-        .get(context.sourceType, context.sourceId);
+        .get(context.sourceType, context.sourceId, ...GOAL_TERMINAL);
       if (row) return rowToGoal(row);
     }
     return undefined;
@@ -3472,8 +3500,13 @@ export class Store {
             .run(params)
         : this.db
             .query(
+              // Status-guarded even without a claimedBy fence: an unconditional
+              // WHERE id=$id could resurrect an already-terminal run or clobber a
+              // run another owner has since re-claimed to 'running'. Only finalize
+              // a run that is still running.
               `UPDATE loop_runs SET status=$status, finished_at=$finished, claim_token=NULL, lease_expires_at=NULL, pid=$pid, exit_code=$exitCode,
-               duration_ms=$durationMs, stdout=$stdout, stderr=$stderr, error=$error, updated_at=$updated WHERE id=$id`,
+               duration_ms=$durationMs, stdout=$stdout, stderr=$stderr, error=$error, updated_at=$updated
+               WHERE id=$id AND status='running'`,
             )
             .run(params);
       const run = this.getRun(id);
@@ -4166,5 +4199,15 @@ export class Store {
 
   close(): void {
     this.db.close();
+    // A `:memory:` store still mkdtempSync's a scratch root for manifests; remove
+    // it on close so repeated in-memory instances (tests) don't leak temp dirs.
+    if (this.memoryRootDir) {
+      try {
+        rmSync(this.memoryRootDir, { recursive: true, force: true });
+      } catch {
+        /* best-effort cleanup */
+      }
+      this.memoryRootDir = undefined;
+    }
   }
 }

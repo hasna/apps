@@ -950,4 +950,67 @@ describe("workflow runner", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  // Regression (MEDIUM 2): a resumed idempotent workflow run (e.g. its loop run's
+  // lease was stolen and re-claimed at the same attempt) may carry steps left
+  // "running" by the interrupted, now-dead executor. Those steps are not
+  // claimable and would strand the workflow. On resume the dead steps are
+  // recovered to pending and re-run instead of orphaning the workflow forever.
+  test("resumed idempotent workflow run recovers steps left running with a dead pid", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-resume-recover-"));
+    const marker = join(root, "marker");
+    const DEAD_PID = 0x3fffffff;
+    try {
+      const workflow = store.createWorkflow({
+        name: "resume-recover",
+        steps: [{ id: "write", target: { type: "command", command: `printf done > ${marker}`, shell: true } }],
+      });
+      // Simulate an interrupted executor: the step is "running" with a dead pid.
+      const stranded = store.createWorkflowRun({ workflow, idempotencyKey: "resume-key" });
+      store.startWorkflowStepRun(stranded.id, "write");
+      store.markWorkflowStepPid(stranded.id, "write", DEAD_PID);
+      expect(store.getWorkflowStepRun(stranded.id, "write")?.status).toBe("running");
+
+      // Re-run with the same idempotency key: createWorkflowRun returns the
+      // stranded run, recovery resets the dead step, and it re-executes.
+      const result = await executeWorkflow(store, workflow, { idempotencyKey: "resume-key" });
+
+      expect(result.status).toBe("succeeded");
+      expect(store.listWorkflowRuns({ workflowId: workflow.id })).toHaveLength(1);
+      expect(store.getWorkflowStepRun(stranded.id, "write")?.status).toBe("succeeded");
+      expect(readFileSync(marker, "utf8").trim()).toBe("done");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Regression (MEDIUM 3): an unexpected throw inside the step loop (e.g. a store
+  // error like SQLITE_BUSY past busy_timeout) must not leave the workflow_run
+  // stuck "running" forever — it is finalized failed and a failed result returned.
+  test("executeWorkflow finalizes the workflow run failed when the step loop throws unexpectedly", async () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "loop-throws",
+        steps: [{ id: "only", target: { type: "command", command: "true" } }],
+      });
+      // beforePersist runs inside the step loop; throwing an unexpected error
+      // there stands in for any mid-loop store failure.
+      const result = await executeWorkflow(store, workflow, {
+        beforePersist: () => {
+          throw new Error("disk on fire");
+        },
+      });
+
+      expect(result.status).toBe("failed");
+      expect(result.error).toContain("disk on fire");
+      const runs = store.listWorkflowRuns({ workflowId: workflow.id });
+      expect(runs).toHaveLength(1);
+      expect(runs[0]?.status).toBe("failed");
+    } finally {
+      store.close();
+    }
+  });
 });

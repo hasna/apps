@@ -8,6 +8,10 @@ import { packageVersion } from "../lib/version.js";
 const program = new Command();
 const DEFAULT_RUNNER_ID = `runner:${process.pid}`;
 const MIN_RUNNER_LEASE_MS = 1_000;
+// After this many consecutive heartbeat failures the control plane has almost
+// certainly expired our lease (and may have handed the run to another runner),
+// so we abort execution instead of racing a second executor.
+const MAX_CONSECUTIVE_HEARTBEAT_FAILURES = 3;
 
 program
   .name("loops-runner")
@@ -73,7 +77,7 @@ export interface RunRunnerOnceOptions {
   now?: Date;
   heartbeatIntervalMs?: number;
   fetchImpl?: typeof fetch;
-  execute?: (loop: Loop, run: LoopRun) => Promise<ExecutorResult>;
+  execute?: (loop: Loop, run: LoopRun, opts?: { signal?: AbortSignal }) => Promise<ExecutorResult>;
   env?: NodeJS.ProcessEnv;
 }
 
@@ -157,18 +161,29 @@ async function executeClaimWithHeartbeat(
     });
   };
   await heartbeat();
-  let lastHeartbeatError: unknown;
+  // Lost-lease safety: if heartbeats stop landing, the control plane will expire
+  // our lease and may reassign the run. Abort execution after N consecutive
+  // failures so we do not keep running (and later try to finalize) a run another
+  // runner now owns. A successful heartbeat resets the streak.
+  const controller = new AbortController();
+  let consecutiveFailures = 0;
   const timer = setInterval(() => {
-    void heartbeat().catch((error) => {
-      lastHeartbeatError = error;
-    });
+    void heartbeat().then(
+      () => {
+        consecutiveFailures = 0;
+      },
+      () => {
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= MAX_CONSECUTIVE_HEARTBEAT_FAILURES && !controller.signal.aborted) {
+          controller.abort();
+        }
+      },
+    );
   }, heartbeatIntervalMs);
   try {
-    const result = await execute(claim.loop, claim.run);
-    return result;
+    return await execute(claim.loop, claim.run, { signal: controller.signal });
   } finally {
     clearInterval(timer);
-    void lastHeartbeatError;
   }
 }
 

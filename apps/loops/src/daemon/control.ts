@@ -239,10 +239,13 @@ export async function stopDaemon(
   const store = new LiveStore(join(dirname(path), "loops.db"));
   try {
     const lease = store.getDaemonLease();
-    if (!lease || lease.pid !== state.pid || new Date(lease.expiresAt).getTime() <= Date.now()) {
-      removePid(path);
-      return { wasRunning: false, stopped: false, forced: false, pid: state.pid };
-    }
+    // The pidfile process is verified alive above (state.running). Terminate it
+    // regardless of lease state: a suspend/resume (or clock jump) can lapse or
+    // mismatch the lease while the daemon is still live, and bailing out here
+    // would leave an untracked live daemon that a later `daemon start` races.
+    // Run reaping still requires a verified lease — without it we cannot tell
+    // which running runs this daemon owned, so we terminate only the daemon.
+    const leaseVerified = Boolean(lease && lease.pid === state.pid && new Date(lease.expiresAt).getTime() > Date.now());
     try {
       process.kill(state.pid, "SIGTERM");
     } catch {
@@ -266,20 +269,24 @@ export async function stopDaemon(
     removePid(path);
     // Only reap runs the dead daemon actually owned. The daemon claims runs
     // with runnerId `${hostname}:${pid}:${leaseId}`, so ownership is keyed on
-    // the lease id we just verified above. Running runs claimed by other
-    // owners (e.g. an inline `manual:<pid>` run-now in another terminal) have
-    // live processes that must not be killed by a daemon stop. The explicit
-    // limit matches the daemon's startup recovery pass: listRuns defaults to
-    // 100 rows, which would silently skip owned runs when more than 100 are
-    // concurrently running (high LOOPS_DAEMON_CONCURRENCY, inline runs mixed
-    // into the newest-first window).
-    const ownedRuns = store
-      .listRuns({ status: "running", limit: 1_000 })
-      .filter((run) => run.claimedBy !== undefined && run.claimedBy.endsWith(`:${lease.id}`));
-    const reapedPgids = await reapProcessGroups(ownedRuns.map(toReapableProcess), {
-      sleep,
-      graceMs: opts.reapGraceMs,
-    });
+    // the lease id. Running runs claimed by other owners (e.g. an inline
+    // `manual:<pid>` run-now in another terminal) have live processes that must
+    // not be killed by a daemon stop. When the lease is unverified we cannot
+    // attribute runs safely, so we skip reaping entirely. The explicit limit
+    // matches the daemon's startup recovery pass: listRuns defaults to 100 rows,
+    // which would silently skip owned runs when more than 100 are concurrently
+    // running (high LOOPS_DAEMON_CONCURRENCY, inline runs mixed into the
+    // newest-first window).
+    let reapedPgids: number[] = [];
+    if (leaseVerified && lease) {
+      const ownedRuns = store
+        .listRuns({ status: "running", limit: 1_000 })
+        .filter((run) => run.claimedBy !== undefined && run.claimedBy.endsWith(`:${lease.id}`));
+      reapedPgids = await reapProcessGroups(ownedRuns.map(toReapableProcess), {
+        sleep,
+        graceMs: opts.reapGraceMs,
+      });
+    }
     return { wasRunning: true, stopped: !isAlive(state.pid, record?.startedAt), forced: true, pid: state.pid, reapedPgids };
   } finally {
     store.close();
