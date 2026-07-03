@@ -660,6 +660,14 @@ export function ensureSchema(db: Database): void {
   ensureColumn("tasks", "priority_score", "INTEGER");
   ensureColumn("tasks", "priority_reason", "TEXT");
   ensureColumn("tasks", "archived_at", "TEXT");
+  // H5: runner/step columns added only in migration 48 — without these
+  // ensureColumn calls, a partially-failed migration would leave them missing
+  // permanently (the migration runner swallows errors).
+  ensureColumn("tasks", "runner_id", "TEXT");
+  ensureColumn("tasks", "runner_started_at", "TEXT");
+  ensureColumn("tasks", "runner_completed_at", "TEXT");
+  ensureColumn("tasks", "current_step", "TEXT");
+  ensureColumn("tasks", "total_steps", "INTEGER");
 
   // Agents
   ensureColumn("agents", "role", "TEXT DEFAULT 'agent'");
@@ -669,6 +677,11 @@ export function ensureSchema(db: Database): void {
   ensureColumn("agents", "level", "TEXT");
   ensureColumn("agents", "org_id", "TEXT");
   ensureColumn("agents", "capabilities", "TEXT DEFAULT '[]'");
+  // H5: agent session/status columns added only via migrations 17/23/(status).
+  ensureColumn("agents", "session_id", "TEXT");
+  ensureColumn("agents", "working_dir", "TEXT");
+  ensureColumn("agents", "active_project_id", "TEXT");
+  ensureColumn("agents", "status", "TEXT NOT NULL DEFAULT 'active'");
 
   // Projects
   ensureColumn("projects", "org_id", "TEXT");

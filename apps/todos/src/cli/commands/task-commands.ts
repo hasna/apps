@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { basename, resolve } from "node:path";
 import { getDatabase, resolvePartialId } from "../../db/database.js";
-import { ensureProject, getProject, getProjectByPath } from "../../db/projects.js";
+import { ensureProject, getProject, getProjectByPath, slugify } from "../../db/projects.js";
 import {
   createTask,
   getTask,
@@ -27,24 +27,69 @@ import {
   statusColors,
   priorityColors,
 } from "../helpers.js";
-import { TASK_PRIORITIES } from "../../types/index.js";
+import { TASK_PRIORITIES, TASK_STATUSES } from "../../types/index.js";
 
-/** Resolve a project by ID or name substring. */
+/**
+ * Resolve a project by path, exact/partial ID, exact name, task list ID, slug,
+ * and only then a name substring. Exact matches must win over substring matches
+ * (mirrors helpers.resolveExplicitProject) so a query like "web" never resolves
+ * to an unrelated project such as "web-admin" when a project literally named
+ * "web" exists. A path-like reference is auto-created when unregistered.
+ */
 function resolveProjectIdOrSlug(input: string): string {
   const db = getDatabase();
-  // Try exact ID match first
-  const byId = getProject(input, db);
-  if (byId) return byId.id;
-  // Fall back to name substring match
-  const row = db.query("SELECT id FROM projects WHERE name LIKE ? LIMIT 1").get(`%${input}%`) as { id: string } | undefined;
-  if (row) return row.id;
+  // Registered path (create it when path-like but unregistered)
   if (isPathLike(input)) {
     const projectPath = resolve(input);
     const byPath = getProjectByPath(projectPath, db);
     return (byPath ?? ensureProject(basename(projectPath), projectPath, db)).id;
   }
+  const byPath = getProjectByPath(resolve(input), db);
+  if (byPath) return byPath.id;
+  // Exact or partial ID
+  const byId = getProject(input, db);
+  if (byId) return byId.id;
+  const partial = resolvePartialId(db, "projects", input);
+  if (partial) return partial;
+  // Exact name or task list ID
+  const exact = db.query(
+    "SELECT id FROM projects WHERE lower(name) = lower(?) OR task_list_id = ? ORDER BY name LIMIT 1",
+  ).get(input, input) as { id: string } | undefined;
+  if (exact) return exact.id;
+  // Slug match
+  const inputSlug = slugify(input);
+  if (inputSlug) {
+    const all = db.query("SELECT id, name FROM projects ORDER BY name").all() as { id: string; name: string }[];
+    const bySlug = all.find((p) => slugify(p.name) === inputSlug);
+    if (bySlug) return bySlug.id;
+  }
+  // Name substring last
+  const row = db.query("SELECT id FROM projects WHERE name LIKE ? ORDER BY name LIMIT 1").get(`%${input}%`) as { id: string } | undefined;
+  if (row) return row.id;
   console.error(chalk.red(`Project not found: ${input}`));
   process.exit(1);
+}
+
+/** Validate and normalize a status value, rejecting unknowns before the DB does. */
+function parseStatus(value: string | undefined): TaskStatus | undefined {
+  if (!value) return undefined;
+  const normalized = normalizeStatus(value);
+  if (!(TASK_STATUSES as readonly string[]).includes(normalized)) {
+    console.error(chalk.red(`--status must be one of: ${TASK_STATUSES.join(", ")}`));
+    process.exit(1);
+  }
+  return normalized as TaskStatus;
+}
+
+/** Parse an integer option, rejecting non-numeric input instead of storing NaN. */
+function parseIntOption(value: string | undefined, flag: string): number | undefined {
+  if (value === undefined) return undefined;
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n)) {
+    console.error(chalk.red(`${flag} must be a number`));
+    process.exit(1);
+  }
+  return n;
 }
 
 function isPathLike(input: string): boolean {
@@ -169,27 +214,32 @@ export function registerTaskCommands(program: Command) {
         }
         return id;
       })() : undefined;
-      const task = createTask({
-        title,
-        description: opts.description,
-        priority: parsePriority(opts.priority),
-        parent_id: opts.parent ? resolveTaskId(opts.parent) : undefined,
-        tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
-        plan_id: opts.plan ? resolvePlanId(opts.plan) : undefined,
-        assigned_to: opts.assign,
-        status: opts.status ? normalizeStatus(opts.status) as TaskStatus : undefined,
-        task_list_id: taskListId,
-        agent_id: globalOpts.agent,
-        session_id: globalOpts.session,
-        project_id: projectId,
-        working_dir: process.cwd(),
-        estimated_minutes: opts.estimated ? parseInt(opts.estimated, 10) : undefined,
-        sla_minutes: opts.slaMinutes !== undefined || opts.sla !== undefined ? parseInt(opts.slaMinutes ?? opts.sla, 10) : undefined,
-        requires_approval: opts.approval || false,
-        recurrence_rule: opts.recurrence,
-        due_at: opts.due ? (opts.due.length === 10 ? opts.due + "T00:00:00.000Z" : opts.due) : undefined,
-        reason: opts.reason,
-      });
+      let task;
+      try {
+        task = createTask({
+          title,
+          description: opts.description,
+          priority: parsePriority(opts.priority),
+          parent_id: opts.parent ? resolveTaskId(opts.parent) : undefined,
+          tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
+          plan_id: opts.plan ? resolvePlanId(opts.plan) : undefined,
+          assigned_to: opts.assign,
+          status: parseStatus(opts.status),
+          task_list_id: taskListId,
+          agent_id: globalOpts.agent,
+          session_id: globalOpts.session,
+          project_id: projectId,
+          working_dir: process.cwd(),
+          estimated_minutes: parseIntOption(opts.estimated, "--estimated"),
+          sla_minutes: opts.slaMinutes !== undefined || opts.sla !== undefined ? parseIntOption(opts.slaMinutes ?? opts.sla, "--sla-minutes") : undefined,
+          requires_approval: opts.approval || false,
+          recurrence_rule: opts.recurrence,
+          due_at: opts.due ? (opts.due.length === 10 ? opts.due + "T00:00:00.000Z" : opts.due) : undefined,
+          reason: opts.reason,
+        });
+      } catch (e) {
+        handleError(e);
+      }
 
       if (globalOpts.json) {
         output(task, true);
@@ -251,7 +301,7 @@ export function registerTaskCommands(program: Command) {
           title: opts.title,
           description: opts.description,
           priority: parsePriority(opts.priority),
-          status: opts.status ? normalizeStatus(opts.status) as TaskStatus : undefined,
+          status: parseStatus(opts.status),
           task_list_id: taskListId,
           tags: parseTags(opts.tags),
           metadata: buildExpectationMetadata(opts),
@@ -774,6 +824,7 @@ export function registerTaskCommands(program: Command) {
     .option("--due <date>", "Due date (ISO string or YYYY-MM-DD), empty to clear")
     .option("--recurrence <rule>", "Recurrence rule, empty to clear")
     .option("--approval", "Require approval before completion")
+    .option("--clear-approval", "Remove the approval requirement")
     .action((id: string, opts) => {
       const globalOpts = program.opts();
       opts.tags = opts.tags || opts.tag;
@@ -786,6 +837,10 @@ export function registerTaskCommands(program: Command) {
       }
       if (opts.plan && opts.clearPlan) {
         console.error(chalk.red("Use either --plan or --clear-plan, not both."));
+        process.exit(1);
+      }
+      if (opts.approval && opts.clearApproval) {
+        console.error(chalk.red("Use either --approval or --clear-approval, not both."));
         process.exit(1);
       }
 
@@ -806,17 +861,17 @@ export function registerTaskCommands(program: Command) {
           version: current.version,
           title: opts.title,
           description: opts.description,
-          status: opts.status ? normalizeStatus(opts.status) as TaskStatus : undefined,
-          priority: opts.priority as TaskPriority | undefined,
+          status: parseStatus(opts.status),
+          priority: parsePriority(opts.priority),
           assigned_to: opts.assign,
           tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
           plan_id: planId,
           task_list_id: taskListId,
-          estimated_minutes: opts.estimated !== undefined ? parseInt(opts.estimated, 10) : undefined,
-          sla_minutes: opts.slaMinutes !== undefined || opts.sla !== undefined ? parseInt(opts.slaMinutes ?? opts.sla, 10) : undefined,
+          estimated_minutes: opts.estimated !== undefined ? parseIntOption(opts.estimated, "--estimated") : undefined,
+          sla_minutes: opts.slaMinutes !== undefined || opts.sla !== undefined ? parseIntOption(opts.slaMinutes ?? opts.sla, "--sla-minutes") : undefined,
           due_at: opts.due !== undefined ? (opts.due === "" ? null : opts.due.length === 10 ? opts.due + "T00:00:00.000Z" : opts.due) : undefined,
           recurrence_rule: opts.recurrence !== undefined ? (opts.recurrence === "" ? null : opts.recurrence) : undefined,
-          requires_approval: opts.approval !== undefined ? true : undefined,
+          requires_approval: opts.clearApproval ? false : (opts.approval !== undefined ? true : undefined),
         });
       } catch (e) {
         handleError(e);
@@ -845,7 +900,14 @@ export function registerTaskCommands(program: Command) {
       const resolvedId = resolveTaskId(id);
       const attachmentIds = opts.attachIds ? opts.attachIds.split(",").map((s) => s.trim()) : undefined;
       const filesChanged = opts.filesChanged ? opts.filesChanged.split(",").map((s) => s.trim()) : undefined;
-      const confidence = opts.confidence !== undefined ? parseFloat(opts.confidence) : undefined;
+      let confidence: number | undefined;
+      if (opts.confidence !== undefined) {
+        confidence = parseFloat(opts.confidence);
+        if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+          console.error(chalk.red("--confidence must be a number between 0.0 and 1.0"));
+          process.exit(1);
+        }
+      }
       const evidence = (attachmentIds || filesChanged || opts.testResults || opts.commitHash || opts.notes)
         ? { attachment_ids: attachmentIds, files_changed: filesChanged, test_results: opts.testResults, commit_hash: opts.commitHash, notes: opts.notes }
         : undefined;

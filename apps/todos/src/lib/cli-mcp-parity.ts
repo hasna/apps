@@ -94,7 +94,7 @@ export const CLI_MCP_PARITY_MANIFEST: ParityEntry[] = [
   // Search & status
   { domain: "search", operation: "search", cli: "search", mcp: "search_tasks" },
   { domain: "search", operation: "status", cli: "status", mcp: "get_status" },
-  { domain: "search", operation: "active", cli: "active", mcp: "get_active_work" },
+  { domain: "search", operation: "active", cli: "active", mcp: "list_tasks", notes: "MCP: list_tasks with status=in_progress" },
   { domain: "search", operation: "stale", cli: "stale", mcp: "get_stale_tasks" },
 
   // Import / export

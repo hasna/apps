@@ -164,7 +164,14 @@ function upsertById(
   const placeholders = presentColumns.map(() => "?").join(", ");
   const values = presentColumns.map((column) => valueForColumn(column, row[column]));
   const updateColumns = presentColumns.filter((column) => column !== "id");
-  const updateSet = updateColumns.map((column) => `${column} = excluded.${column}`).join(", ");
+  // L8: never let an imported (remote) row lower the local optimistic-lock
+  // version — take the max so concurrent local writers don't regress. On insert
+  // the incoming value is used as-is (MAX(NULL, x) short-circuits via COALESCE).
+  const updateSet = updateColumns
+    .map((column) => (column === "version"
+      ? `version = MAX(COALESCE(${table}.version, 0), excluded.version)`
+      : `${column} = excluded.${column}`))
+    .join(", ");
   const clockGuard = updateClockColumn && presentColumns.includes(updateClockColumn)
     ? ` WHERE ${table}.${updateClockColumn} IS NULL OR ${table}.${updateClockColumn} <= excluded.${updateClockColumn}`
     : "";

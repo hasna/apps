@@ -78,42 +78,53 @@ function ensureDir(filePath: string): void {
 let _db: Database | null = null;
 let _dbPath: string | null = null;
 
+function openDatabase(path: string): Database {
+  ensureDir(path);
+
+  const db = new Database(path);
+
+  // Enable WAL mode for concurrent access
+  db.run("PRAGMA journal_mode = WAL");
+  db.run("PRAGMA busy_timeout = 5000");
+  db.run("PRAGMA foreign_keys = ON");
+
+  // Run migrations
+  runMigrations(db);
+  backfillTaskTags(db);
+  backfillMachineId(db);
+
+  return db;
+}
+
 export function getDatabase(dbPath?: string): Database {
   const path = dbPath || getDbPath();
   if (_db && _dbPath === path) return _db;
-  if (_db && _dbPath !== path) {
-    _db.close();
-    _db = null;
-    _dbPath = null;
-  }
 
-  ensureDir(path);
-
-  _db = new Database(path);
+  // M11: The resolved path changed (e.g. the process cwd moved to a different
+  // project). Do NOT close the previous handle here — other code may still hold
+  // a reference to it, and closing it out from under them surfaces "database is
+  // closed" errors mid-operation. Open the new handle and repoint the
+  // singleton; the previous handle is released via resetDatabase()/
+  // closeDatabase() or on process exit.
+  _db = openDatabase(path);
   _dbPath = path;
-
-  // Enable WAL mode for concurrent access
-  _db.run("PRAGMA journal_mode = WAL");
-  _db.run("PRAGMA busy_timeout = 5000");
-  _db.run("PRAGMA foreign_keys = ON");
-
-  // Run migrations
-  runMigrations(_db);
-  backfillTaskTags(_db);
-  backfillMachineId(_db);
-
   return _db;
 }
 
 export function closeDatabase(): void {
   if (_db) {
-    _db.close();
+    try { _db.close(); } catch { /* already closed */ }
     _db = null;
     _dbPath = null;
   }
 }
 
 export function resetDatabase(): void {
+  // M11: close the live handle on reset instead of leaking it. Guarded because
+  // callers sometimes close the handle explicitly before calling resetDatabase.
+  if (_db) {
+    try { _db.close(); } catch { /* already closed */ }
+  }
   _db = null;
   _dbPath = null;
 }

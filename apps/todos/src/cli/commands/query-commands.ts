@@ -265,6 +265,7 @@ export function registerQueryCommands(program: Command) {
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
       const globalOpts = program.opts();
+      const json = opts.json || globalOpts.json;
       const db = getDatabase();
       const filters: Record<string, string> = {};
       const projectInput = opts.project || globalOpts.project;
@@ -276,10 +277,11 @@ export function registerQueryCommands(program: Command) {
       }
       const task = getNextTask(opts.agent, Object.keys(filters).length ? filters : undefined, db);
       if (!task) {
+        if (json) { console.log(JSON.stringify(null)); return; }
         console.log(chalk.dim("No tasks available."));
         return;
       }
-      if (opts.json) { console.log(JSON.stringify(task, null, 2)); return; }
+      if (json) { console.log(JSON.stringify(task, null, 2)); return; }
       console.log(chalk.bold("Next task:"));
       console.log(`  ${chalk.cyan(task.short_id || task.id.slice(0, 8))} ${chalk.yellow(task.priority)} ${task.title}`);
       if (task.description) console.log(chalk.dim(`  ${task.description.slice(0, 100)}`));
@@ -294,17 +296,28 @@ export function registerQueryCommands(program: Command) {
     .option("--stale-minutes <n>", "How long a task must be stale before stealing (default: 30)", "30")
     .option("-j, --json", "Output as JSON")
     .action(async (agent, opts) => {
+      const globalOpts = program.opts();
+      const json = opts.json || globalOpts.json;
       const db = getDatabase();
       const filters: Record<string, string> = {};
-      if (opts.project) filters.project_id = opts.project;
+      const projectInput = opts.project || globalOpts.project;
+      if (projectInput) {
+        // Resolve slugs/partial IDs/paths/names the same way `next` does, instead
+        // of using the raw value verbatim (which only matched full IDs).
+        const pid = autoProject({ project: projectInput })
+          || resolvePartialId(db, "projects", projectInput)
+          || (db.query("SELECT id FROM projects WHERE path = ? OR name = ? OR task_list_id = ?").get(projectInput, projectInput, projectInput) as any)?.id;
+        if (pid) filters.project_id = pid;
+      }
       const task = opts.stealStale
         ? (await import("../../db/tasks.js")).claimOrSteal(agent, { ...filters, stale_minutes: parseInt(opts.staleMinutes, 10) }, db)?.task ?? null
         : claimNextTask(agent, Object.keys(filters).length ? filters : undefined, db);
       if (!task) {
+        if (json) { console.log(JSON.stringify(null)); return; }
         console.log(chalk.dim("No tasks available to claim."));
         return;
       }
-      if (opts.json) { console.log(JSON.stringify(task, null, 2)); return; }
+      if (json) { console.log(JSON.stringify(task, null, 2)); return; }
       console.log(chalk.green(`Claimed: ${task.short_id || task.id.slice(0, 8)} | ${task.priority} | ${task.title}`));
     });
 
@@ -331,11 +344,13 @@ export function registerQueryCommands(program: Command) {
     .option("--project <id>", "Filter to project")
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
+      const globalOpts = program.opts();
+      const json = opts.json || globalOpts.json;
       const db = getDatabase();
       const filters: Record<string, string> = {};
       if (opts.project) filters.project_id = opts.project;
       const s = getStatus(Object.keys(filters).length ? filters : undefined, opts.agent, undefined, db);
-      if (opts.json) { console.log(JSON.stringify(s, null, 2)); return; }
+      if (json) { console.log(JSON.stringify(s, null, 2)); return; }
       console.log(`Tasks: ${chalk.yellow(String(s.pending))} pending | ${chalk.blue(String(s.in_progress))} active | ${chalk.green(String(s.completed))} done | ${s.total} total`);
       if (s.stale_count > 0) console.log(chalk.red(`${s.stale_count} stale tasks (stuck in_progress)`));
       if (s.overdue_recurring > 0) console.log(chalk.yellow(`${s.overdue_recurring} overdue recurring`));
@@ -485,11 +500,13 @@ export function registerQueryCommands(program: Command) {
     .option("--retry", "Auto-create a retry copy")
     .option("-j, --json", "Output as JSON")
     .action(async (id, opts) => {
+      const globalOpts = program.opts();
+      const json = opts.json || globalOpts.json;
       const db = getDatabase();
       const resolvedId = resolvePartialId(db, "tasks", id);
       if (!resolvedId) { console.error(chalk.red(`Task not found: ${id}`)); process.exit(1); }
       const result = failTask(resolvedId, opts.agent, opts.reason, { retry: opts.retry }, db);
-      if (opts.json) { console.log(JSON.stringify(result, null, 2)); return; }
+      if (json) { console.log(JSON.stringify(result, null, 2)); return; }
       console.log(chalk.red(`Failed: ${result.task.short_id || result.task.id.slice(0, 8)} | ${result.task.title}`));
       if (opts.reason) console.log(chalk.dim(`Reason: ${opts.reason}`));
       if (result.retryTask) console.log(chalk.yellow(`Retry created: ${result.retryTask.short_id || result.retryTask.id.slice(0, 8)} | ${result.retryTask.title}`));
@@ -502,11 +519,13 @@ export function registerQueryCommands(program: Command) {
     .option("--project <id>", "Filter to project")
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
+      const globalOpts = program.opts();
+      const json = opts.json || globalOpts.json;
       const db = getDatabase();
       const filters: Record<string, string> = {};
       if (opts.project) filters.project_id = opts.project;
       const work = getActiveWork(Object.keys(filters).length ? filters : undefined, db);
-      if (opts.json) { console.log(JSON.stringify(work, null, 2)); return; }
+      if (json) { console.log(JSON.stringify(work, null, 2)); return; }
       if (work.length === 0) { console.log(chalk.dim("No active work.")); return; }
       console.log(chalk.bold(`Active work (${work.length}):`));
       for (const w of work) {
@@ -524,11 +543,13 @@ export function registerQueryCommands(program: Command) {
     .option("--project <id>", "Filter to project")
     .option("-j, --json", "Output as JSON")
     .action(async (opts) => {
+      const globalOpts = program.opts();
+      const json = opts.json || globalOpts.json;
       const db = getDatabase();
       const filters: Record<string, string> = {};
       if (opts.project) filters.project_id = opts.project;
       const tasks = getStaleTasks(parseInt(opts.minutes, 10), Object.keys(filters).length ? filters : undefined, db);
-      if (opts.json) { console.log(JSON.stringify(tasks, null, 2)); return; }
+      if (json) { console.log(JSON.stringify(tasks, null, 2)); return; }
       if (tasks.length === 0) { console.log(chalk.dim("No stale tasks.")); return; }
       console.log(chalk.bold(`Stale tasks (${tasks.length}):`));
       for (const t of tasks) {
@@ -555,7 +576,7 @@ export function registerQueryCommands(program: Command) {
         project_id: projectId,
         limit: opts.limit ? parseInt(opts.limit, 10) : undefined,
       }, db);
-      if (opts.json) { console.log(JSON.stringify(result, null, 2)); return; }
+      if (opts.json || globalOpts.json) { console.log(JSON.stringify(result, null, 2)); return; }
       console.log(chalk.bold(`Released ${result.released.length} stale task(s).`));
       for (const t of result.released) {
         const id = t.short_id || t.id.slice(0, 8);
