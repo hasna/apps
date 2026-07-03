@@ -342,7 +342,7 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
 
   const rows = d
     .query(
-      `SELECT * FROM tasks ${where} ORDER BY ${PRIORITY_RANK}, created_at DESC${limitClause}`,
+      `SELECT * FROM tasks ${where} ORDER BY ${PRIORITY_RANK}, created_at DESC, id ASC${limitClause}`,
     )
     .all(...params) as TaskRow[];
 
@@ -353,7 +353,9 @@ export function getTaskByFingerprint(
   fingerprint: string,
   db?: Database,
 ): Task | null {
-  const tasks = listTasks({ metadata: { fingerprint }, limit: 1 }, db);
+  // M9: include archived tasks so a fingerprint match on an archived task is
+  // found — otherwise upsert would create a duplicate.
+  const tasks = listTasks({ metadata: { fingerprint }, limit: 1, include_archived: true }, db);
   return tasks[0] ?? null;
 }
 
@@ -377,6 +379,13 @@ export function upsertTaskByFingerprint(
   const fingerprint = input.fingerprint.trim();
   if (!fingerprint) throw new Error("fingerprint is required");
 
+  // M9: wrap the check-then-create/update in a transaction so two concurrent
+  // upserts on the same fingerprint can't both pass the existence check and
+  // create duplicates. SQLite serializes writers, so the transaction provides
+  // the needed exclusivity on a single database. (A partial unique index on
+  // json_extract(metadata,'$.fingerprint') would be the belt-and-braces fix but
+  // is unsafe to add retroactively while duplicates may already exist.)
+  const tx = d.transaction((): UpsertTaskByFingerprintResult => {
   const existing = getTaskByFingerprint(fingerprint, d);
   const metadata = mergeTaskMetadata(existing?.metadata ?? {}, input.metadata, fingerprint);
 
@@ -414,6 +423,8 @@ export function upsertTaskByFingerprint(
     d,
   );
   return { task, created: false };
+  });
+  return tx();
 }
 
 export function countTasks(filter: Omit<TaskFilter, 'limit' | 'offset'> = {}, db?: Database): number {
@@ -493,6 +504,23 @@ export function countTasks(filter: Omit<TaskFilter, 'limit' | 'offset'> = {}, db
     params.push(filter.task_list_id);
   }
 
+  // M10: mirror listTasks so counts match the filtered list.
+  if (filter.has_recurrence === true) {
+    conditions.push("recurrence_rule IS NOT NULL");
+  } else if (filter.has_recurrence === false) {
+    conditions.push("recurrence_rule IS NULL");
+  }
+
+  if (filter.task_type) {
+    if (Array.isArray(filter.task_type)) {
+      conditions.push(`task_type IN (${filter.task_type.map(() => "?").join(",")})`);
+      params.push(...filter.task_type);
+    } else {
+      conditions.push("task_type = ?");
+      params.push(filter.task_type);
+    }
+  }
+
   addMetadataConditions(filter.metadata, conditions, params);
 
   // Exclude archived tasks by default (consistent with listTasks)
@@ -542,6 +570,13 @@ export function updateTask(
     if (input.status === "completed") {
       sets.push("completed_at = ?");
       params.push(completionTimestamp);
+      // M1: mirror completeTask — completing a task releases its lock so a
+      // recurring/handoff chain isn't left holding a stale lock.
+      sets.push("locked_by = NULL");
+      sets.push("locked_at = NULL");
+    } else if (task.status === "completed" && input.completed_at === undefined) {
+      // M3: reopening a completed task clears the stale completed_at.
+      sets.push("completed_at = NULL");
     }
   }
   if (input.priority !== undefined) {
@@ -651,6 +686,33 @@ export function updateTask(
     replaceTaskTags(id, input.tags, d);
   }
 
+  // M1: the generic update path is what the dashboard PATCH (routes.ts) and the
+  // CLI `update --status completed` actually call — completeTask is NOT involved
+  // here. Without this, completing a recurring task via update stamped
+  // completed_at but never continued the chain, so recurring tasks silently died.
+  //
+  // Single-spawn reasoning: this fires ONLY on a transition INTO "completed"
+  // from a non-completed status, so re-saving an already-completed task does not
+  // re-spawn (idempotent). completeTask spawns for its own callers and never
+  // routes through updateTask; setTaskStatus routes the completed case to
+  // completeTask (bypassing updateTask). Therefore each completion path has
+  // exactly one spawner and no path runs both.
+  const transitionedToCompleted = input.status === "completed" && task.status !== "completed";
+  if (transitionedToCompleted && task.recurrence_rule) {
+    try {
+      // Inline require avoids a static circular import (task-lifecycle imports
+      // createTask/getTask from this module); matches the existing house style
+      // used for database.js in listTasks.
+      const { spawnNextRecurrence } = require("./task-lifecycle.js") as typeof import("./task-lifecycle.js");
+      spawnNextRecurrence(task, d, completionTimestamp);
+    } catch (e) {
+      // Defensive: a malformed recurrence_rule makes nextOccurrence throw AFTER
+      // the status is already committed. Log and skip rather than surfacing a
+      // post-commit error to the caller.
+      console.warn(`[tasks] failed to spawn next recurrence for ${id}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   // Audit log — record each changed field
   const agentId = task.assigned_to || task.agent_id || null;
   if (input.status !== undefined && input.status !== task.status) logTaskChange(id, "update", "status", task.status, input.status, agentId, d);
@@ -660,6 +722,9 @@ export function updateTask(
   if (input.working_dir !== undefined && input.working_dir !== task.working_dir) logTaskChange(id, "update", "working_dir", task.working_dir, input.working_dir, agentId, d);
   if (input.approved_by !== undefined) logTaskChange(id, "approve", "approved_by", null, input.approved_by, agentId, d);
 
+  // Determine the post-write completion timestamp / lock state to mirror the SQL above.
+  const reopened = input.status !== undefined && input.status !== "completed" && task.status === "completed" && input.completed_at === undefined;
+  const completedNow = input.status === "completed";
   const updatedTask: Task = {
     ...task,
     ...Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)),
@@ -667,7 +732,9 @@ export function updateTask(
     metadata: input.metadata ?? task.metadata,
     version: task.version + 1,
     updated_at: timestamp,
-    completed_at: input.status === "completed" ? completionTimestamp : input.completed_at !== undefined ? input.completed_at : task.completed_at,
+    locked_by: completedNow ? null : task.locked_by,
+    locked_at: completedNow ? null : task.locked_at,
+    completed_at: completedNow ? completionTimestamp : reopened ? null : input.completed_at !== undefined ? input.completed_at : task.completed_at,
     sla_minutes: input.sla_minutes !== undefined ? input.sla_minutes : task.sla_minutes,
     actual_minutes: input.actual_minutes ?? task.actual_minutes,
     confidence: input.confidence !== undefined ? input.confidence : task.confidence,

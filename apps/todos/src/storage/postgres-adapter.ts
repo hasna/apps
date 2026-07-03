@@ -262,7 +262,12 @@ class PostgresJsonRecordStore {
   ): Promise<T> {
     await this.ensureSchema();
     const updatedAt = stringValue(value.updated_at) ?? stringValue(value.created_at) ?? new Date().toISOString();
-    await this.options.client.query(
+    // M8: resolve conflicts by (updated_at, version) rather than wall-clock only.
+    // A row with an equal timestamp but a higher version still wins, and a
+    // stale-clock write can no longer silently overwrite a newer version.
+    // RETURNING lets us detect when the guard rejected the write so we can
+    // surface the record that actually won instead of a phantom success.
+    const result = await this.options.client.query<{ object_id: string }>(
       `INSERT INTO ${this.tableName} (
         service, object_type, object_id, payload, updated_at,
         deleted_at, source_machine_id, version
@@ -273,7 +278,11 @@ class PostgresJsonRecordStore {
         deleted_at = NULL,
         source_machine_id = EXCLUDED.source_machine_id,
         version = EXCLUDED.version
-      WHERE ${this.tableName}.updated_at IS NULL OR ${this.tableName}.updated_at <= EXCLUDED.updated_at`,
+      WHERE ${this.tableName}.updated_at IS NULL
+         OR ${this.tableName}.updated_at < EXCLUDED.updated_at
+         OR (${this.tableName}.updated_at = EXCLUDED.updated_at
+             AND COALESCE(${this.tableName}.version, 0) <= COALESCE(EXCLUDED.version, 0))
+      RETURNING object_id`,
       [
         this.service,
         type,
@@ -284,7 +293,36 @@ class PostgresJsonRecordStore {
         numberValue(value.version),
       ],
     );
+    if (result.rows.length === 0) {
+      // The write was rejected as stale by the conflict guard. Return the row
+      // that actually won so the caller isn't misled into thinking it persisted.
+      const current = await this.get<T>(type, value.id);
+      if (current) return current;
+    }
     return value;
+  }
+
+  async incrementProjectTaskCounter(
+    projectId: string,
+    _context: TodosStorageContext = {},
+  ): Promise<number | null> {
+    await this.ensureSchema();
+    // M8: atomic counter increment inside the jsonb payload — replaces the
+    // read-modify-write in nextTaskShortId that could hand two concurrent
+    // callers the same short id.
+    const result = await this.options.client.query<{ counter: string | number | null }>(
+      `UPDATE ${this.tableName}
+         SET payload = jsonb_set(payload, '{task_counter}',
+               to_jsonb(COALESCE((payload->>'task_counter')::bigint, 0) + 1)),
+             updated_at = $3::timestamptz,
+             version = COALESCE(version, 0) + 1
+       WHERE service = $1 AND object_type = 'projects' AND object_id = $2 AND deleted_at IS NULL
+       RETURNING payload->>'task_counter' AS counter`,
+      [this.service, projectId, new Date().toISOString()],
+    );
+    const row = result.rows[0];
+    if (!row || row.counter === null || row.counter === undefined) return null;
+    return Number(row.counter);
   }
 
   async delete(type: RemoteObjectType, id: string, context: TodosStorageContext = {}): Promise<boolean> {
@@ -469,6 +507,10 @@ async function updateTask(id: string, input: UpdateTaskInput, store: PostgresJso
 
 async function startTask(id: string, agentId: string, store: PostgresJsonRecordStore): Promise<Task> {
   const task = await requireRecord<Task>("tasks", id, store);
+  // M8: reject starting a task that is not pending/in_progress (mirror sqlite).
+  if (task.status !== "pending" && task.status !== "in_progress") {
+    throw new Error(`Task is ${task.status} and cannot be started by ${agentId}`);
+  }
   return patchTask(task, {
     status: "in_progress",
     assigned_to: task.assigned_to ?? agentId,
@@ -554,8 +596,25 @@ async function getNextTask(filters: TodosTaskClaimFilter | undefined, store: Pos
 }
 
 async function claimNextTask(agentId: string, filters: TodosTaskClaimFilter | undefined, store: PostgresJsonRecordStore): Promise<Task | null> {
-  const task = await getNextTask(filters, store);
-  return task ? startTask(task.id, agentId, store) : null;
+  // M8: if another worker wins a candidate between getNextTask and startTask,
+  // move on to the next pending task instead of failing the whole claim. NOTE:
+  // the Postgres adapter has no transactions (capabilities.transactions=false),
+  // so this remains best-effort last-writer-wins rather than a hard atomic
+  // claim. Unverified without a live Postgres.
+  const MAX_ATTEMPTS = 25;
+  const tried = new Set<string>();
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const task = await getNextTask(filters, store);
+    if (!task) return null;
+    if (tried.has(task.id)) return null;
+    tried.add(task.id);
+    try {
+      return await startTask(task.id, agentId, store);
+    } catch {
+      // Candidate no longer startable — try the next pending task.
+    }
+  }
+  return null;
 }
 
 async function getActiveWork(filters: TodosActiveWorkFilter | undefined, store: PostgresJsonRecordStore): Promise<ActiveWorkItem[]> {
@@ -862,12 +921,10 @@ async function requireRecord<T>(type: RemoteObjectType, id: string, store: Postg
 async function nextTaskShortId(projectId: string, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<string | null> {
   const project = await store.get<Project>("projects", projectId);
   if (!project?.task_prefix) return null;
-  const counter = project.task_counter + 1;
-  await store.upsert("projects", {
-    ...project,
-    task_counter: counter,
-    updated_at: new Date().toISOString(),
-  }, context);
+  // M8: atomic increment (no read-modify-write race) — two concurrent callers
+  // now get distinct counters.
+  const counter = await store.incrementProjectTaskCounter(projectId, context);
+  if (counter === null) return null;
   return `${project.task_prefix}-${String(counter).padStart(5, "0")}`;
 }
 

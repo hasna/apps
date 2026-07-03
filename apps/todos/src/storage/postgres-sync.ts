@@ -126,7 +126,9 @@ export class PostgresTodosSyncStore {
           deleted_at = EXCLUDED.deleted_at,
           source_machine_id = EXCLUDED.source_machine_id,
           version = EXCLUDED.version
-        WHERE ${this.tableName}.updated_at <= EXCLUDED.updated_at`,
+        WHERE ${this.tableName}.updated_at < EXCLUDED.updated_at
+           OR (${this.tableName}.updated_at = EXCLUDED.updated_at
+               AND COALESCE(${this.tableName}.version, 0) <= COALESCE(EXCLUDED.version, 0))`,
         [
           this.service,
           entry.type,

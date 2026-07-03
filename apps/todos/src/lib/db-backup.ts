@@ -2,7 +2,7 @@
  * Local SQLite backup, restore, integrity, compact, and migration dry-run.
  */
 
-import { existsSync, copyFileSync, mkdirSync, readFileSync, statSync, writeFileSync, unlinkSync } from "node:fs";
+import { existsSync, copyFileSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import { getDatabase, closeDatabase } from "../db/database.js";
@@ -90,12 +90,24 @@ export function restoreDatabase(backupPath: string, targetPath?: string): Backup
   const target = targetPath ? resolve(targetPath) : resolveDbPath();
   mkdirSync(dirname(target), { recursive: true });
 
-  const staging = `${target}.restore.tmp`;
-  copyFileSync(backupPath, staging);
-  copyFileSync(staging, target);
-  try { unlinkSync(staging); } catch { /* ignore */ }
-
+  // H4: close the live handle BEFORE overwriting the file. Copying over a
+  // WAL-mode database while it is still open (and while stale -wal/-shm
+  // sidecars remain) corrupts the result. Close, stage, drop sidecars, then
+  // atomically rename the restored image into place.
   closeDatabase();
+
+  const staging = `${target}.restore.tmp`;
+  try { unlinkSync(staging); } catch { /* no stale staging file */ }
+  copyFileSync(backupPath, staging);
+
+  // Remove the previous DB's WAL/SHM sidecars — the restored image is a
+  // complete database and leftover sidecars would be replayed against it.
+  for (const sidecar of [`${target}-wal`, `${target}-shm`]) {
+    try { if (existsSync(sidecar)) unlinkSync(sidecar); } catch { /* ignore */ }
+  }
+
+  // Atomic replace within the same directory/filesystem.
+  renameSync(staging, target);
 
   return {
     schema_version: DB_BACKUP_SCHEMA,

@@ -1083,9 +1083,18 @@ function createMemoryPostgresClient(): {
         const key = recordKey(service, objectType, objectId);
         const existing = rows.get(key);
         const nextUpdatedAt = String(updatedAt);
-        const guarded = sql.includes("updated_at <= EXCLUDED.updated_at") || sql.includes("updated_at IS NULL OR");
-        if (existing && guarded && compareIsoClock(existing.updatedAt, nextUpdatedAt) > 0) {
-          return { rows: [] as T[] };
+        const nextVersion = nullableNumber(syncStoreInsert ? values[7] : values[6]);
+        // Conflict guard now resolves by (updated_at, version); detect it by the
+        // EXCLUDED.updated_at reference which both the adapter upsert and the
+        // sync push share.
+        const guarded = sql.includes("EXCLUDED.updated_at");
+        const versionAware = guarded && sql.includes("version");
+        const returning = sql.includes("RETURNING");
+        if (existing && guarded) {
+          const clockCmp = compareIsoClock(existing.updatedAt, nextUpdatedAt);
+          const rejected = clockCmp > 0
+            || (clockCmp === 0 && versionAware && (existing.version ?? 0) > (nextVersion ?? 0));
+          if (rejected) return { rows: [] as T[] };
         }
         rows.set(key, {
           service: String(service),
@@ -1094,9 +1103,23 @@ function createMemoryPostgresClient(): {
           payload: parseJsonb(payload),
           updatedAt: nextUpdatedAt,
           deletedAt: nullableString(syncStoreInsert ? values[5] : null),
-          version: nullableNumber(syncStoreInsert ? values[7] : values[6]),
+          version: nextVersion,
         });
-        return { rows: [] as T[] };
+        // Emulate RETURNING object_id so the adapter can detect a written row.
+        return { rows: (returning ? [{ object_id: String(objectId) }] : []) as T[] };
+      }
+
+      if (sql.includes("jsonb_set(payload, '{task_counter}'")) {
+        // Atomic short-id counter increment (nextTaskShortId).
+        const [service, projectId, updatedAt] = values;
+        const row = rows.get(recordKey(service, "projects", projectId));
+        if (!row) return { rows: [] as T[] };
+        const payload = row.payload as Record<string, unknown>;
+        const next = Number(payload["task_counter"] ?? 0) + 1;
+        payload["task_counter"] = next;
+        row.updatedAt = String(updatedAt);
+        row.version = (row.version ?? 0) + 1;
+        return { rows: [{ counter: String(next) }] as T[] };
       }
 
       if (sql.includes("UPDATE todos_sync_records")) {
