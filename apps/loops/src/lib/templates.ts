@@ -765,9 +765,8 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     : "";
   const shared = [
     worktreePrompt(plan),
-    ...todosExactCommandsFragment(todosProjectPath, input.taskId, [
-      todosEvidenceLine(todosProjectPath, input.taskId, "concise evidence, decision, or blocker"),
-    ]),
+    ...todosExactCommandsFragment(todosProjectPath, input.taskId, []),
+    "Use concrete task-specific text in lifecycle comments. Do not copy placeholder text into lifecycle comments; triage and planner comments must start with the exact stage marker when advancing or blocking the workflow.",
     NO_TMUX_DISPATCH_FRAGMENT,
     "Preserve unrelated user changes and keep scope tied to the task acceptance criteria.",
     prReviewFollowUpFragment(input),
@@ -778,6 +777,8 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
   const gateMarker = (stage: LifecycleGateStage, state: "go" | "blocked"): string =>
     `openloops:${stage}=${state} task=${input.taskId}${input.eventId ? ` event=${input.eventId}` : ""}`;
   const blockTaskCommand = `todos --project ${todosProjectPath} update ${input.taskId} --status blocked`;
+  const markerCommentCommand = (stage: LifecycleGateStage, state: "go" | "blocked", evidencePlaceholder: string): string =>
+    `todos --project ${todosProjectPath} comment ${input.taskId} "${gateMarker(stage, state)}\n<${evidencePlaceholder}>"`;
   const gateStopFragment = (stage: LifecycleGateStage, stops: string): string =>
     `The deterministic ${stage} gate will stop ${stops} unless the latest ${stage} marker is the exact go marker and the task has no blocked/completed/done/cancelled/failed/archived/no-auto/manual/approval-required state.`;
   const triagePrompt = [
@@ -786,9 +787,12 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     "Decide whether the task is eligible for loop execution. Check status, dependencies, duplicate tasks, no-auto/manual/approval metadata, project path, acceptance criteria, and whether the requested work should be split before implementation.",
     "Do not implement repo changes in this step.",
     `If the task is eligible for automated planning, add a task comment whose first line is exactly: ${gateMarker("triage", "go")}`,
-    "Include the triage decision, duplicates/dependencies found, and any follow-up tasks created in that same comment.",
+    `Use this copy-safe marker comment command for triage go: ${markerCommentCommand("triage", "go", "task-specific triage evidence")}`,
+    "Do not run a separate generic evidence comment before the marker; include the triage decision, duplicates/dependencies found, and any follow-up tasks created in that same marker comment.",
     `If the task should not proceed automatically, run: ${blockTaskCommand}`,
     `Then add a task comment whose first line is exactly: ${gateMarker("triage", "blocked")}`,
+    `Use this copy-safe marker comment command for triage blocked: ${markerCommentCommand("triage", "blocked", "task-specific triage evidence")}`,
+    "Do not run a separate generic blocker comment before the marker; include the blocker evidence in that same marker comment.",
     gateStopFragment("triage", "later steps"),
   ].join("\n");
   const plannerPrompt = [
@@ -796,23 +800,25 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     shared,
     "Read the triage comment and current task details.",
     `If the task is ready for implementation, add a task comment whose first line is exactly: ${gateMarker("planner", "go")}`,
-    "In that same comment, include a concise implementation plan: files/areas to inspect, validation commands, risk checks, expected commit/PR behavior, and any cross-repo tasks that should be created separately.",
+    `Use this copy-safe marker comment command for planner go: ${markerCommentCommand("planner", "go", "task-specific plan/evidence")}`,
+    "Do not run a separate generic evidence comment before the marker; in that same marker comment, include a concise implementation plan: files/areas to inspect, validation commands, risk checks, expected commit/PR behavior, and any cross-repo tasks that should be created separately.",
     `Do not implement repo changes in this step. If the task is too broad or unsafe for automation, run: ${blockTaskCommand}`,
     `Then add a task comment whose first line is exactly: ${gateMarker("planner", "blocked")}`,
-    `Create smaller deduped tasks and record evidence. ${gateStopFragment("planner", "the worker")}`,
+    `Use this copy-safe marker comment command for planner blocked: ${markerCommentCommand("planner", "blocked", "task-specific plan/evidence")}`,
+    `Do not run a separate generic blocker comment before the marker; create smaller deduped tasks and record blocker evidence in that same marker comment. ${gateStopFragment("planner", "the worker")}`,
   ].join("\n");
   const workerPrompt = [
     ...boundedStepHeaderFragment(`Complete todos task ${input.taskId} according to the planner evidence.`, "worker", "lifecycle"),
     shared,
     todosStartLine(todosProjectPath, input.taskId),
-    "Read the triage and planner comments first. Implement only the scoped task, run focused validation, and record changed files, commits, evidence, blockers, and residual risks.",
+    "Read the triage and planner comments first. Implement only the scoped task, run focused validation, and record concrete worker evidence in todos: changed files, commits, validation results, blockers, and residual risks.",
     input.prHandoff ? `When only GitHub network access is blocked after a successful commit/validation, record the handoff artifact at ${handoffArtifactPath} instead of repeatedly retrying push/PR creation.` : undefined,
     WORKER_LEAVES_COMPLETION_FRAGMENT,
   ].filter(Boolean).join("\n");
   const verifierPrompt = [
     ...boundedStepHeaderFragment(`Verify todos task ${input.taskId} after the full lifecycle worker step.`, "verifier", "lifecycle"),
     shared,
-    todosVerificationLine(todosProjectPath, input.taskId),
+    "Before completion, record concrete verification evidence in todos with changed files, validation results, findings, and the task decision.",
     todosDoneLine(todosProjectPath, input.taskId),
     adversarialReviewFragment("triage, plan, worker evidence, repo state, commits, tests, and acceptance criteria", TASK_REVIEW_FOCUS),
     verifierRuntimeGuidance(input),
