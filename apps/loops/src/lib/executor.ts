@@ -641,6 +641,13 @@ function codewithAgentStatus(readJson: Record<string, unknown>): string | undefi
   return stringField(recordField(readJson, "agent"), "status") ?? stringField(recordField(readJson, "statusSnapshot"), "status");
 }
 
+function codewithAgentLastEventSeq(readJson: Record<string, unknown>): number | undefined {
+  const agentSeq = numberField(recordField(readJson, "agent"), "lastEventSeq");
+  const snapshotSeq = numberField(recordField(readJson, "statusSnapshot"), "lastEventSeq");
+  if (agentSeq !== undefined && snapshotSeq !== undefined) return Math.max(agentSeq, snapshotSeq);
+  return agentSeq ?? snapshotSeq;
+}
+
 function codewithAgentEvidence(startJson: Record<string, unknown>, readJson: Record<string, unknown>, logsJson?: Record<string, unknown>): string {
   const agent = recordField(readJson, "agent") ?? recordField(startJson, "agent");
   const statusSnapshot = recordField(readJson, "statusSnapshot");
@@ -694,7 +701,7 @@ function codewithAgentProgress(readJson: Record<string, unknown>): AgentProgress
     threadId: stringField(agent, "threadId"),
     rolloutPath: stringField(agent, "rolloutPath"),
     pid: numberField(agent, "pid"),
-    lastEventSeq: numberField(statusSnapshot, "lastEventSeq") ?? numberField(agent, "lastEventSeq"),
+    lastEventSeq: codewithAgentLastEventSeq(readJson),
   };
 }
 
@@ -785,7 +792,11 @@ async function executeCodewithDurableAgent(
     }
 
     const status = codewithAgentStatus(lastReadJson);
-    const fingerprint = JSON.stringify({ status, snapshot: recordField(lastReadJson, "statusSnapshot") ?? null });
+    const fingerprint = JSON.stringify({
+      status,
+      agentLastEventSeq: numberField(recordField(lastReadJson, "agent"), "lastEventSeq"),
+      snapshot: recordField(lastReadJson, "statusSnapshot") ?? null,
+    });
     if (fingerprint !== lastFingerprint) {
       lastFingerprint = fingerprint;
       lastProgressAt = Date.now();

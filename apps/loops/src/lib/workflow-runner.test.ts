@@ -347,6 +347,7 @@ describe("workflow runner", () => {
     const root = mkdtempSync(join(tmpdir(), "loops-codewith-progress-"));
     const bin = join(root, "bin");
     const gate = join(root, "complete");
+    const reads = join(root, "reads");
     try {
       mkdirSync(bin, { recursive: true });
       const fake = join(bin, "codewith");
@@ -357,7 +358,7 @@ describe("workflow runner", () => {
           "set -euo pipefail",
           'case " $* " in',
           '  *" agent start "*) echo \'{"agent":{"agentId":"agent-progress","status":"queued","statusReason":"queued","threadId":null,"rolloutPath":null,"lastEventSeq":0}}\' ;;',
-          `  *" agent read "*) if [ -f ${JSON.stringify(gate)} ]; then echo '{"agent":{"agentId":"agent-progress","status":"completed","statusReason":"turn completed","threadId":"thread-1","rolloutPath":"/tmp/rollout.jsonl","pid":123,"lastEventSeq":4},"statusSnapshot":{"status":"completed","summary":"Done","lastEventSeq":4}}'; else echo '{"agent":{"agentId":"agent-progress","status":"running","statusReason":"turn running","threadId":"thread-1","rolloutPath":"/tmp/rollout.jsonl","pid":123,"lastEventSeq":2},"statusSnapshot":{"status":"running","summary":"Inspecting task","lastEventSeq":2}}'; fi ;;`,
+          `  *" agent read "*) reads="$(cat ${JSON.stringify(reads)} 2>/dev/null || echo 0)"; reads=$((reads + 1)); echo "$reads" > ${JSON.stringify(reads)}; seq=$((2 + reads)); if [ -f ${JSON.stringify(gate)} ]; then echo '{"agent":{"agentId":"agent-progress","status":"completed","statusReason":"turn completed","threadId":"thread-1","rolloutPath":"/tmp/rollout.jsonl","pid":123,"lastEventSeq":4},"statusSnapshot":{"status":"completed","summary":"Done","lastEventSeq":4}}'; else printf '{"agent":{"agentId":"agent-progress","status":"running","statusReason":"turn running","threadId":"thread-1","rolloutPath":"/tmp/rollout.jsonl","pid":123,"lastEventSeq":%s},"statusSnapshot":{"status":"running","summary":"Inspecting task","lastEventSeq":2}}\\n' "$seq"; fi ;;`,
           '  *" agent logs "*) echo \'{"data":[]}\' ;;',
           "  *) echo '{}' ;;",
           "esac",
@@ -390,9 +391,11 @@ describe("workflow runner", () => {
       const runningStep = store.getWorkflowStepRun(runId, "triage")!;
       expect(runningStep.status).toBe("running");
       expect(runningStep.stdout).toContain('"status": "running"');
+      expect(runningStep.stdout).toContain('"lastEventSeq": 3');
       const progressEvents = store.listWorkflowEvents(runId).filter((event) => event.eventType === "step_progress");
       expect(progressEvents.length).toBeGreaterThan(0);
       expect(progressEvents.at(-1)?.payload?.agentId).toBe("agent-progress");
+      expect(progressEvents.at(-1)?.payload?.lastEventSeq).toBe(3);
 
       openGate(gate);
       const result = await executing;
