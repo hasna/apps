@@ -22,6 +22,17 @@ const MIME_TYPES: Record<string, string> = {
   ".webp": "image/webp",
 };
 
+const LOCAL_PATH_METADATA_KEYS = new Set([
+  "artifactDir",
+  "artifactPath",
+  "dbPath",
+  "filePath",
+  "homeDir",
+  "localPath",
+  "outputPath",
+  "path",
+]);
+
 export interface ClipServerOptions {
   host?: string;
   port?: number;
@@ -40,17 +51,34 @@ function jsonResponse(value: unknown, status = 200): Response {
   });
 }
 
+function looksLikeLocalPath(value: string): boolean {
+  return value.startsWith("/") || value.startsWith("file://") || /^[A-Za-z]:[\\/]/.test(value);
+}
+
+function redactPublicMetadataValue(value: unknown): unknown {
+  if (typeof value === "string") return looksLikeLocalPath(value) ? "[redacted]" : value;
+  if (Array.isArray(value)) return value.map(redactPublicMetadataValue);
+  if (!value || typeof value !== "object") return value;
+
+  const redacted: Record<string, unknown> = {};
+  for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+    if (LOCAL_PATH_METADATA_KEYS.has(key)) continue;
+    redacted[key] = redactPublicMetadataValue(nestedValue);
+  }
+  return redacted;
+}
+
+function publicMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
+  return redactPublicMetadataValue(metadata) as Record<string, unknown>;
+}
+
 function publicClipRecord(record: ClipRecord): Record<string, unknown> {
   const { artifactPath: _artifactPath, metadata, ...rest } = record;
-  const publicMetadata = { ...metadata };
-  delete publicMetadata["path"];
-  delete publicMetadata["filePath"];
-  delete publicMetadata["localPath"];
   return {
     ...rest,
     hasArtifact: Boolean(record.artifactPath),
     rawUrl: `/s/${encodeURIComponent(record.slug)}/raw`,
-    metadata: publicMetadata,
+    metadata: publicMetadata(metadata),
   };
 }
 
@@ -269,7 +297,8 @@ export async function handleClipHttpRequest(req: Request, options: ClipServerOpt
     return jsonResponse({ error: "Not found" }, 404);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return jsonResponse({ error: message }, 500);
+    options.log?.(`clip server request failed: ${message}`);
+    return jsonResponse({ error: "Internal server error" }, 500);
   }
 }
 

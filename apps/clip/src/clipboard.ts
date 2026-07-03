@@ -14,7 +14,7 @@ export function detectClipboardCapabilities(): ClipboardCapabilities {
     supports: {
       text: Boolean((process.platform === "darwin" && tools["pbpaste"]) || tools["wl-paste"] || tools["xclip"]),
       image: Boolean(tools["pngpaste"] || tools["wl-paste"] || tools["xclip"]),
-      file: Boolean(tools["wl-paste"] || tools["pbpaste"]),
+      file: Boolean(tools["wl-paste"]),
     },
   };
 }

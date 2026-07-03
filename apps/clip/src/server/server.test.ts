@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ClipStore } from "../storage.js";
 import { handleClipHttpRequest } from "./server.js";
 
 describe("HTTP server routes", () => {
@@ -104,6 +105,59 @@ describe("HTTP server routes", () => {
       expect(payload.storage.dbPath).toBeUndefined();
       expect(payload.storage.artifactDir).toBeUndefined();
       expect(payloadText).not.toContain(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("redacts nested local metadata paths from public records", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clip-server-metadata-"));
+    try {
+      const store = new ClipStore({ homeDir: dir, baseUrl: "http://test.local" });
+      const record = store.createTextClip({
+        text: "metadata smoke",
+        source: "test",
+        metadata: {
+          path: join(dir, "source.txt"),
+          args: ["-f", join(dir, "capture.png")],
+          activeWindow: {
+            title: "Window",
+            outputPath: join(dir, "window.png"),
+          },
+          safe: "visible",
+        },
+      });
+      store.close();
+
+      const response = await handleClipHttpRequest(new Request(`http://x/api/shares/${record.slug}`), {
+        clientOptions: { homeDir: dir },
+        baseUrl: "http://test.local",
+      });
+      expect(response.status).toBe(200);
+      const payloadText = await response.text();
+      const payload = JSON.parse(payloadText) as { metadata: Record<string, unknown> };
+      expect(payload.metadata.safe).toBe("visible");
+      expect("path" in payload.metadata).toBe(false);
+      expect(payloadText).not.toContain(dir);
+      expect(payloadText).not.toContain("/capture.png");
+      expect(payloadText).toContain("[redacted]");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not expose raw exception messages in public 500 responses", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clip-server-error-"));
+    const dbPath = dir;
+    try {
+      const response = await handleClipHttpRequest(new Request("http://x/api/status"), {
+        clientOptions: { homeDir: dir, dbPath },
+      });
+      expect(response.status).toBe(500);
+      const payloadText = await response.text();
+      expect(payloadText).toContain("Internal server error");
+      expect(payloadText).not.toContain(dir);
+      expect(payloadText).not.toContain(dbPath);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
