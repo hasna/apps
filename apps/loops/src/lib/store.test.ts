@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AmbiguousNameError, LoopArchivedError, LoopNotFoundError } from "./errors.js";
@@ -1411,6 +1411,81 @@ describe("Store", () => {
       expect(store.claimRun(loop, "2026-01-01T00:00:00.000Z", "test")?.run.status).toBe("running");
     } finally {
       store.close();
+    }
+  });
+
+  test("repairs stamped run claim-token migration when the legacy table is missing additive columns", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-claim-token-drift-"));
+    const dbFile = join(root, "loops.db");
+    const raw = new Database(dbFile);
+    try {
+      raw.exec(`
+        CREATE TABLE schema_migrations (
+          id TEXT PRIMARY KEY,
+          applied_at TEXT NOT NULL
+        );
+        CREATE TABLE loop_runs (
+          id TEXT PRIMARY KEY,
+          loop_id TEXT NOT NULL,
+          loop_name TEXT NOT NULL,
+          scheduled_for TEXT NOT NULL,
+          attempt INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          started_at TEXT,
+          finished_at TEXT,
+          claimed_by TEXT,
+          lease_expires_at TEXT,
+          pid INTEGER,
+          exit_code INTEGER,
+          duration_ms INTEGER,
+          stdout TEXT,
+          stderr TEXT,
+          error TEXT,
+          goal_run_id TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(loop_id, scheduled_for)
+        );
+      `);
+      for (const id of [
+        "0001_initial_and_workflows",
+        "0002_loop_machines",
+        "0003_goals",
+        "0004_loop_archive_metadata",
+        "0005_workflow_invocations_and_admission",
+        "0006_run_process_tracking",
+        "0007_run_claim_tokens",
+      ]) {
+        raw.query("INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)").run(id, new Date().toISOString());
+      }
+    } finally {
+      raw.close();
+    }
+
+    const store = new Store(dbFile);
+    try {
+      const columns = (store["db"].query("PRAGMA table_info(loop_runs)").all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      );
+      expect(columns).toContain("pgid");
+      expect(columns).toContain("process_started_at");
+      expect(columns).toContain("claim_token");
+      const indexes = (store["db"].query("PRAGMA index_list(loop_runs)").all() as Array<{ name: string }>).map(
+        (index) => index.name,
+      );
+      expect(indexes).toContain("idx_runs_claim_token");
+
+      const loop = store.createLoop({
+        name: "claim-token-drift",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+      });
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "test");
+      expect(claim?.claimToken).toBeString();
+      expect(claim?.run.status).toBe("running");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

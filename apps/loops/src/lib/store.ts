@@ -776,15 +776,15 @@ export class Store {
     }
     const applied = new Set(this.db.query<{ id: string }, []>("SELECT id FROM schema_migrations").all().map((row) => row.id));
     for (const migration of this.migrations()) {
-      // Numbered migrations run only when absent from schema_migrations.
-      // Baseline migrations (0001-0005) are the exception: historical binaries
-      // stamped those rows unconditionally regardless of what their DDL
-      // actually contained, so their idempotent DDL is always re-applied to
-      // converge drifted databases. This also reconciles the live fork that
-      // recorded a second 0004_* migration row and added the orphan columns
-      // loops.metadata_json / loop_runs.source — unknown migration ids are
-      // tolerated and orphan columns are additive, never dropped.
-      if (!migration.baseline && applied.has(migration.id)) continue;
+      // Most numbered migrations run only when absent from schema_migrations.
+      // Some additive migrations are safe to replay and must converge drifted
+      // databases where a historical or interrupted binary stamped the row but
+      // did not leave the expected columns/indexes behind. This also reconciles
+      // the live fork that recorded a second 0004_* migration row and added the
+      // orphan columns loops.metadata_json / loop_runs.source — unknown
+      // migration ids are tolerated and orphan columns are additive, never
+      // dropped.
+      if (!migration.alwaysApply && applied.has(migration.id)) continue;
       migration.apply();
       if (!applied.has(migration.id)) {
         this.db.query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)").run(migration.id, nowIso());
@@ -793,13 +793,13 @@ export class Store {
     if (userVersion !== SCHEMA_USER_VERSION) this.db.exec(`PRAGMA user_version = ${SCHEMA_USER_VERSION}`);
   }
 
-  private migrations(): Array<{ id: string; baseline?: boolean; apply: () => void }> {
+  private migrations(): Array<{ id: string; alwaysApply?: boolean; apply: () => void }> {
     return [
-      { id: "0001_initial_and_workflows", baseline: true, apply: () => this.createBaseSchema() },
-      { id: "0002_loop_machines", baseline: true, apply: () => this.addColumnIfMissing("loops", "machine_json", "TEXT") },
+      { id: "0001_initial_and_workflows", alwaysApply: true, apply: () => this.createBaseSchema() },
+      { id: "0002_loop_machines", alwaysApply: true, apply: () => this.addColumnIfMissing("loops", "machine_json", "TEXT") },
       {
         id: "0003_goals",
-        baseline: true,
+        alwaysApply: true,
         apply: () => {
           this.addColumnIfMissing("loops", "goal_json", "TEXT");
           this.addColumnIfMissing("loop_runs", "goal_run_id", "TEXT");
@@ -810,7 +810,7 @@ export class Store {
       },
       {
         id: "0004_loop_archive_metadata",
-        baseline: true,
+        alwaysApply: true,
         apply: () => {
           this.addColumnIfMissing("loops", "archived_at", "TEXT");
           this.addColumnIfMissing("loops", "archived_from_status", "TEXT");
@@ -818,7 +818,7 @@ export class Store {
       },
       {
         id: "0005_workflow_invocations_and_admission",
-        baseline: true,
+        alwaysApply: true,
         apply: () => {
           this.addColumnIfMissing("workflow_runs", "invocation_id", "TEXT");
           this.addColumnIfMissing("workflow_runs", "work_item_id", "TEXT");
@@ -829,6 +829,7 @@ export class Store {
       },
       {
         id: "0006_run_process_tracking",
+        alwaysApply: true,
         apply: () => {
           this.addColumnIfMissing("loop_runs", "pgid", "INTEGER");
           this.addColumnIfMissing("loop_runs", "process_started_at", "TEXT");
@@ -836,6 +837,7 @@ export class Store {
       },
       {
         id: "0007_run_claim_tokens",
+        alwaysApply: true,
         apply: () => {
           this.addColumnIfMissing("loop_runs", "claim_token", "TEXT");
           this.db.exec("CREATE INDEX IF NOT EXISTS idx_runs_claim_token ON loop_runs(claim_token) WHERE claim_token IS NOT NULL");
@@ -901,7 +903,6 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_runs_status ON loop_runs(status);
       CREATE INDEX IF NOT EXISTS idx_runs_status_lease ON loop_runs(status, lease_expires_at);
       CREATE INDEX IF NOT EXISTS idx_runs_scheduled ON loop_runs(scheduled_for);
-      CREATE INDEX IF NOT EXISTS idx_runs_claim_token ON loop_runs(claim_token) WHERE claim_token IS NOT NULL;
 
       CREATE TABLE IF NOT EXISTS daemon_lease (
         id TEXT PRIMARY KEY,
