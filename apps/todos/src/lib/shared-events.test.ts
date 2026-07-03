@@ -93,7 +93,7 @@ describe("shared task events", () => {
     const db = getDatabase();
     const project = createProject({
       name: "open-events",
-      path: "/home/hasna/workspace/hasna/opensource/open-events",
+      path: join(tempDir, "open-events"),
       task_list_id: "todos-open-events",
     }, db);
     const taskList = createTaskList({
@@ -106,7 +106,7 @@ describe("shared task events", () => {
       task_list_id: taskList.id,
       working_dir: null,
       short_id: "OEV-1",
-      metadata: { route_enabled: true, automation: { no_auto: false } },
+      metadata: { route_enabled: true, project_kind: "repository", automation: { no_auto: false } },
     });
 
     await emitSharedTaskEvent({ type: "task.created", task });
@@ -121,14 +121,14 @@ describe("shared task events", () => {
       task_short_id: "OEV-1",
       project_id: project.id,
       project_name: "open-events",
-      project_path: "/home/hasna/workspace/hasna/opensource/open-events",
-      project_canonical_path: "/home/hasna/workspace/hasna/opensource/open-events",
+      project_path: join(tempDir, "open-events"),
+      project_canonical_path: join(tempDir, "open-events"),
       project_default_task_list_slug: "todos-open-events",
-      project_kind: "open-source",
+      project_kind: "repository",
       route_enabled: true,
       automation: { no_auto: false },
       route_blocked_by_no_auto: false,
-      working_dir: "/home/hasna/workspace/hasna/opensource/open-events",
+      working_dir: join(tempDir, "open-events"),
       root_project_id: project.id,
       task_list_id: taskList.id,
       task_list_slug: "todos-open-events",
@@ -182,7 +182,7 @@ describe("shared task events", () => {
     expect(event.metadata.latest_manifest_path).toBe("/home/hasna/.hasna/loops/runs/open-codewith/task/run_456/manifest.json");
   });
 
-  test("metadata can drive positive and negative open-source route delivery", async () => {
+  test("explicit metadata can drive positive and negative route delivery", async () => {
     const db = getDatabase();
     const outputPath = join(tempDir, "captured-events.jsonl");
     const receiverPath = join(tempDir, "receiver.js");
@@ -207,12 +207,12 @@ describe("shared task events", () => {
       }],
     });
 
-    const openProject = createProject({ name: "open-loops", path: "/home/hasna/workspace/hasna/opensource/open-loops" }, db);
-    const privateProject = createProject({ name: "private-app", path: "/home/hasna/workspace/hasna/private/private-app" }, db);
+    const openProject = createProject({ name: "open-loops", path: join(tempDir, "open-loops") }, db);
+    const privateProject = createProject({ name: "private-app", path: join(tempDir, "private-app") }, db);
 
     await emitSharedTaskEvent({
       type: "task.created",
-      task: makeTask({ project_id: openProject.id, working_dir: openProject.path, title: "Open-source routed task", metadata: { route_enabled: true } }),
+      task: makeTask({ project_id: openProject.id, working_dir: openProject.path, title: "Open-source routed task", metadata: { project_kind: "open-source", route_enabled: true } }),
     });
     await emitSharedTaskEvent({
       type: "task.created",
@@ -220,6 +220,7 @@ describe("shared task events", () => {
         project_id: openProject.id,
         working_dir: openProject.path,
         title: "Open-source task without route opt-in",
+        metadata: { project_kind: "open-source" },
       }),
     });
     await emitSharedTaskEvent({
@@ -228,7 +229,7 @@ describe("shared task events", () => {
         project_id: openProject.id,
         working_dir: openProject.path,
         title: "Open-source task with no-auto metadata",
-        metadata: { route_enabled: true, automation: { no_auto: true } },
+        metadata: { project_kind: "open-source", route_enabled: true, automation: { no_auto: true } },
       }),
     });
     await emitSharedTaskEvent({
@@ -237,7 +238,7 @@ describe("shared task events", () => {
         project_id: openProject.id,
         working_dir: openProject.path,
         title: "Open-source task requiring approval",
-        metadata: { route_enabled: true },
+        metadata: { project_kind: "open-source", route_enabled: true },
         requires_approval: true,
       }),
     });
@@ -258,7 +259,7 @@ describe("shared task events", () => {
 
   test("omits route_enabled by default so broad routes fail closed", async () => {
     const db = getDatabase();
-    const generic = createProject({ name: "open-events", path: "/home/hasna/workspace/hasna/opensource/open-events" }, db);
+    const generic = createProject({ name: "open-events", path: join(tempDir, "open-events-default") }, db);
 
     await emitSharedTaskEvent({ type: "task.created", task: makeTask({ project_id: generic.id }) });
 
@@ -270,7 +271,7 @@ describe("shared task events", () => {
     const db = getDatabase();
     const project = createProject({
       name: "open-events",
-      path: "/home/hasna/workspace/hasna/opensource/open-events",
+      path: join(tempDir, "open-events-legacy-slug"),
       task_list_id: "todos-open-events",
     }, db);
     const taskList = createTaskList({ name: "open-events", slug: "todos-open-events", project_id: project.id }, db);
@@ -289,7 +290,7 @@ describe("shared task events", () => {
     const db = getDatabase();
     const project = createProject({
       name: "macos-worktree",
-      path: "/home/hasna/workspace/hasna/opensource/open-codewith/.codewith/worktrees/macos",
+      path: join(tempDir, "open-codewith", ".codewith", "worktrees", "macos"),
     }, db);
 
     await emitSharedTaskEvent({ type: "task.created", task: makeTask({ project_id: project.id }) });

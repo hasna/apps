@@ -93,7 +93,6 @@ export function routingAutomationMetadata(
 export function routeEnabledForTask(task: Pick<Task, "metadata" | "tags">, taskList?: Pick<TaskList, "metadata"> | null): boolean | undefined {
   const explicit = booleanField(task.metadata.route_enabled);
   if (explicit !== undefined) return explicit;
-  if (task.tags.includes("auto:route") || task.tags.includes("route:enabled")) return true;
   const taskListDefault = taskList ? booleanField(taskList.metadata.route_enabled) : undefined;
   if (taskListDefault !== undefined) return taskListDefault;
   return undefined;
@@ -125,8 +124,25 @@ export function compactWorkflowPointers(pointers: TaskWorkflowPointers): TaskWor
   ) as TaskWorkflowPointers;
 }
 
-export function classifyProjectKind(path: string): string {
-  return path.includes("/hasna/opensource/") ? "open-source" : "unknown";
+function metadataStringField(record: Record<string, unknown> | undefined, keys: string[]): string | undefined {
+  if (!record) return undefined;
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+export function projectKindFromMetadata(...records: Array<Record<string, unknown> | undefined | null>): string | null {
+  for (const record of records) {
+    const value = metadataStringField(record ?? undefined, ["project_kind", "projectKind", "source_kind", "sourceKind"]);
+    if (value) return value;
+  }
+  return null;
+}
+
+export function classifyProjectKind(_path: string, metadata?: Record<string, unknown> | null): string | null {
+  return projectKindFromMetadata(metadata);
 }
 
 export function isWorktreePath(path: string): boolean {

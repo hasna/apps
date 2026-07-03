@@ -9,6 +9,7 @@ import {
   classifyProjectKind,
   inferRootProjectId,
   isWorktreePath,
+  projectKindFromMetadata,
   routeEnabledForTask,
   routingAutomationMetadata,
   TODOS_TASK_ROUTE_STATE_SCHEMA_VERSION,
@@ -92,7 +93,6 @@ function taskEventMetadata(task: Task): Record<string, unknown> {
       metadata.project_canonical_path = projectPath;
     }
     if (projectPath) {
-      metadata.project_kind = classifyProjectKind(projectPath);
       metadata.project_is_worktree = isWorktreePath(projectPath);
       metadata.working_dir = task.working_dir ?? projectPath;
     }
@@ -108,6 +108,11 @@ function taskEventMetadata(task: Task): Record<string, unknown> {
       metadata.task_list_name = taskList.name;
       metadata.task_list_project_id = taskList.project_id;
       metadata.task_list_is_project_default = Boolean(project?.task_list_id && taskList.slug === project.task_list_id);
+    }
+
+    const projectKind = projectKindFromMetadata(task.metadata, taskList?.metadata);
+    if (projectKind) {
+      metadata.project_kind = classifyProjectKind(projectPath ?? "", { project_kind: projectKind });
     }
 
     const routeEnabled = routeEnabledForTask(task, taskList);

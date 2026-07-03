@@ -40,11 +40,11 @@ describe("task route state", () => {
     expect(state.route.concurrency_key).toBe(`task:${task.id}`);
   });
 
-  test("treats auto route tags as explicit opt-in before task-list defaults", () => {
-    const project = createProject({ name: "open-events", path: "/home/hasna/workspace/hasna/opensource/open-events" });
+  test("records auto route tags as task intent without standalone authorization", () => {
+    const project = createProject({ name: "events", path: "/workspace/events" });
     const taskList = createTaskList({
-      name: "open-events",
-      slug: "todos-open-events",
+      name: "events",
+      slug: "todos-events",
       project_id: project.id,
       metadata: { route_enabled: false },
     });
@@ -52,18 +52,19 @@ describe("task route state", () => {
 
     const state = getTaskRouteState(task.id);
 
-    expect(state.eligible).toBe(true);
+    expect(state.eligible).toBe(false);
+    expect(state.reasons).toContain("route_not_enabled");
     expect(state.gates.tag_opt_in).toBe(true);
-    expect(state.gates.route_enabled).toBe(true);
+    expect(state.gates.route_enabled).toBe(false);
   });
 
   test("inherits route-enabled defaults from the task list", () => {
-    const project = createProject({ name: "open-loops", path: "/home/hasna/workspace/hasna/opensource/open-loops" });
+    const project = createProject({ name: "loops", path: "/workspace/loops" });
     const taskList = createTaskList({
-      name: "open-loops",
-      slug: "todos-open-loops",
+      name: "loops",
+      slug: "todos-loops",
       project_id: project.id,
-      metadata: { route_enabled: true, automation: { no_auto: false } },
+      metadata: { route_enabled: true, project_kind: "repository", automation: { no_auto: false } },
     });
     const task = createTask({ title: "Inherited route", project_id: project.id, task_list_id: taskList.id });
 
@@ -71,8 +72,8 @@ describe("task route state", () => {
 
     expect(state.eligible).toBe(true);
     expect(state.gates.route_enabled).toBe(true);
-    expect(state.route.project_kind).toBe("open-source");
-    expect(state.route.task_list_slug).toBe("todos-open-loops");
+    expect(state.route.project_kind).toBe("repository");
+    expect(state.route.task_list_slug).toBe("todos-loops");
     expect(state.route.concurrency_key).toBe(`project:${project.id}`);
   });
 
@@ -92,7 +93,7 @@ describe("task route state", () => {
   });
 
   test("does not let task metadata bypass task-list denial gates", () => {
-    const project = createProject({ name: "open-hooks", path: "/home/hasna/workspace/hasna/opensource/open-hooks" });
+    const project = createProject({ name: "hooks", path: "/workspace/hooks" });
     const taskList = createTaskList({
       name: "open-hooks",
       slug: "todos-open-hooks",

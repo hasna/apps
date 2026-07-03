@@ -9,6 +9,7 @@ import {
   compactWorkflowPointers,
   routeEnabledForTask,
   routingAutomationMetadata,
+  projectKindFromMetadata,
   TASK_WORKFLOW_POINTER_SCHEMA_VERSION,
   TODOS_TASK_ROUTE_STATE_SCHEMA_VERSION,
   workflowPointersFromMetadata,
@@ -64,11 +65,6 @@ export interface SetTaskWorkflowPointersInput {
   actor?: string;
 }
 
-function classifyProjectKind(path: string | null): string | null {
-  if (!path) return null;
-  return path.includes("/hasna/opensource/") ? "open-source" : "unknown";
-}
-
 function machineLocalPath(project: Project, db: Database): string | null {
   const machineId = process.env["TODOS_MACHINE_ID"];
   if (!machineId) return null;
@@ -119,6 +115,7 @@ export function getTaskRouteState(taskOrId: Task | string, db?: Database): TaskR
   const automation = routingAutomationMetadata(task, taskList) ?? {};
   const routeEnabled = routeEnabledForTask(task, taskList) === true;
   const tagOptIn = task.tags.includes("auto:route") || task.tags.includes("route:enabled");
+  const projectKind = projectKindFromMetadata(task.metadata, taskList?.metadata);
   const locked = Boolean(task.locked_by && !isLockExpired(task.locked_at));
   const blockers = getBlockingDeps(task.id, d);
   const blocked = blockers.length > 0;
@@ -173,7 +170,7 @@ export function getTaskRouteState(taskOrId: Task | string, db?: Database): TaskR
       project_id: project?.id ?? task.project_id,
       project_path: projectPath,
       working_dir: task.working_dir ?? projectPath,
-      project_kind: classifyProjectKind(projectPath),
+      project_kind: projectKind,
       task_list_id: taskList?.id ?? task.task_list_id,
       task_list_slug: taskList?.slug ?? null,
       task_list_name: taskList?.name ?? null,

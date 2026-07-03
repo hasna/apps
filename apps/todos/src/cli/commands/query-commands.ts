@@ -78,6 +78,16 @@ function parseCsvOption(value: string | undefined): string[] | undefined {
   return values.length > 0 ? values : undefined;
 }
 
+function collectOption(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
+
+function expandRepeatedCsvOption(value: string[] | undefined): string[] | undefined {
+  if (!value || value.length === 0) return undefined;
+  const values = value.flatMap((item) => item.split(",").map((part) => part.trim()).filter(Boolean));
+  return values.length > 0 ? values : undefined;
+}
+
 function resolveOptionalId(table: "plans" | "task_runs", value: string | undefined): string | undefined {
   if (!value) return undefined;
   if (table === "task_runs") {
@@ -1329,8 +1339,44 @@ export function registerQueryCommands(program: Command) {
     .option("-j, --json", "Output as JSON")
     .option("--project <id>", "Filter to project")
     .option("--limit <n>", "Max tasks to show", "20")
+    .option("--source-root <path>", "Read-only source root to scan for .hasna/todos/todos.db (repeatable)", collectOption, [])
+    .option("--source-store <path>", "Read-only todos SQLite store path to scan (repeatable)", collectOption, [])
+    .option("--include <pattern>", "Include source repo/store paths matching substring or glob (repeatable or comma-separated)", collectOption, [])
+    .option("--exclude <pattern>", "Exclude source repo/store paths matching substring or glob (repeatable or comma-separated)", collectOption, [])
     .action(async (opts) => {
       const globalOpts = program.opts();
+      const sourceRoots = expandRepeatedCsvOption(opts.sourceRoot);
+      const sourceStores = expandRepeatedCsvOption(opts.sourceStore);
+      const include = expandRepeatedCsvOption(opts.include);
+      const exclude = expandRepeatedCsvOption(opts.exclude);
+      if (sourceRoots || sourceStores || include || exclude) {
+        const { discoverTaskRouteSources } = await import("../../lib/task-route-sources.js");
+        const result = discoverTaskRouteSources({
+          sourceRoots,
+          sourceStores,
+          include,
+          exclude,
+          limit: parseInt(opts.limit, 10),
+        });
+        if (opts.json || globalOpts.json) {
+          console.log(JSON.stringify(result));
+          return;
+        }
+        if (result.candidates.length === 0) {
+          console.log(chalk.dim("  No source tasks ready to claim."));
+        } else {
+          console.log(chalk.bold(`Ready source tasks (${result.candidates.length}):\n`));
+          for (const candidate of result.candidates) {
+            const source = candidate.source_repo_path ?? candidate.source_db_path;
+            const pri = candidate.priority === "critical" ? chalk.bgRed.white(" CRIT ") : candidate.priority === "high" ? chalk.red("[high]") : candidate.priority === "medium" ? chalk.yellow("[med]") : "";
+            console.log(`  ${chalk.cyan(candidate.task_short_id || candidate.task_id.slice(0, 8))} ${candidate.title} ${pri}${chalk.dim(` ${source}`)}`);
+          }
+        }
+        if (result.errors.length > 0) {
+          console.log(chalk.yellow(`\n  ${result.errors.length} source error${result.errors.length === 1 ? "" : "s"} isolated; rerun with --json for details.`));
+        }
+        return;
+      }
       const db = getDatabase();
       const { getBlockingDeps } = await import("../../db/tasks.js");
       const { isLockExpired } = await import("../../db/database.js");

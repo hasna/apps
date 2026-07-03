@@ -175,6 +175,20 @@ export type {
   NativeStorageSyncPlanOptions,
 } from "./lib/native-storage-status.js";
 
+// Read-only task route source discovery
+export {
+  TASK_ROUTE_SOURCE_DISCOVERY_SCHEMA_VERSION,
+  discoverTaskRouteSources,
+} from "./lib/task-route-sources.js";
+export type {
+  DiscoverTaskRouteSourcesInput,
+  TaskRouteSourceCandidate,
+  TaskRouteSourceDiscoveryResult,
+  TaskRouteSourceError,
+  TaskRouteSourceStoreResult,
+  TaskRouteSourceStoreStatus,
+} from "./lib/task-route-sources.js";
+
 // Core database
 export { getDatabase, closeDatabase, resetDatabase, resolvePartialId, now, uuid } from "./db/database.js";
 

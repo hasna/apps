@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { getDatabase, closeDatabase, resetDatabase } from "../db/database.js";
 import { createTask } from "../db/tasks.js";
 import { createTaskList } from "../db/task-lists.js";
@@ -27,6 +28,88 @@ async function runCli(args: string[], dbPath: string, extraEnv: Record<string, s
   const stderr = await new Response(proc.stderr).text();
   const exitCode = await proc.exited;
   return { stdout, stderr, exitCode };
+}
+
+function createMinimalSourceStore(dbPath: string): void {
+  mkdirSync(dirname(dbPath), { recursive: true });
+  const db = new Database(dbPath);
+  try {
+    db.run(`
+      CREATE TABLE tasks (
+        id TEXT PRIMARY KEY,
+        short_id TEXT,
+        project_id TEXT,
+        parent_id TEXT,
+        plan_id TEXT,
+        task_list_id TEXT,
+        title TEXT NOT NULL,
+        description TEXT,
+        status TEXT NOT NULL,
+        priority TEXT NOT NULL,
+        agent_id TEXT,
+        assigned_to TEXT,
+        session_id TEXT,
+        working_dir TEXT,
+        tags TEXT DEFAULT '[]',
+        metadata TEXT DEFAULT '{}',
+        version INTEGER NOT NULL DEFAULT 1,
+        locked_by TEXT,
+        locked_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_at TEXT,
+        completed_at TEXT,
+        due_at TEXT,
+        estimated_minutes INTEGER,
+        actual_minutes INTEGER,
+        requires_approval INTEGER NOT NULL DEFAULT 0,
+        approved_by TEXT,
+        approved_at TEXT,
+        recurrence_rule TEXT,
+        recurrence_parent_id TEXT,
+        spawns_template_id TEXT,
+        confidence REAL,
+        reason TEXT,
+        spawned_from_session TEXT,
+        assigned_by TEXT,
+        assigned_from_project TEXT,
+        task_type TEXT,
+        cost_tokens INTEGER NOT NULL DEFAULT 0,
+        cost_usd REAL NOT NULL DEFAULT 0,
+        delegated_from TEXT,
+        delegation_depth INTEGER NOT NULL DEFAULT 0,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        max_retries INTEGER NOT NULL DEFAULT 3,
+        retry_after TEXT,
+        sla_minutes INTEGER,
+        machine_id TEXT,
+        synced_at TEXT,
+        archived_at TEXT,
+        runner_id TEXT,
+        runner_started_at TEXT,
+        runner_completed_at TEXT,
+        current_step TEXT,
+        total_steps INTEGER
+      )
+    `);
+    db.run("CREATE TABLE task_dependencies (task_id TEXT NOT NULL, depends_on TEXT NOT NULL)");
+    const timestamp = new Date().toISOString();
+    db.run(
+      `INSERT INTO tasks (
+        id, title, status, priority, working_dir, tags, metadata, version, created_at, updated_at, requires_approval
+      ) VALUES (?, ?, 'pending', 'medium', ?, '[]', ?, 1, ?, ?, 0)`,
+      [
+        "00000000-0000-4000-8000-000000000101",
+        "CLI source contract",
+        dirname(dirname(dirname(dbPath))),
+        JSON.stringify({ route_enabled: true }),
+        timestamp,
+        timestamp,
+      ],
+    );
+  } finally {
+    db.close();
+  }
 }
 
 beforeEach(() => {
@@ -1279,6 +1362,40 @@ describe("CLI integration", () => {
 
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync("/tmp/test-cli-ready.db"); } catch {}
+  });
+
+  it("should expose source discovery JSON for ready --source-store while preserving legacy ready array JSON", async () => {
+    const sourceDbPath = join(testRoot, "source-repo", ".hasna", "todos", "todos.db");
+    createMinimalSourceStore(sourceDbPath);
+
+    const source = await runCli(["ready", "--source-store", sourceDbPath, "--json"], ":memory:");
+    expect(source.exitCode).toBe(0);
+    const sourcePayload = JSON.parse(source.stdout);
+    expect(sourcePayload.schema_version).toBe("todos.task_route_sources.v1");
+    expect(Array.isArray(sourcePayload.stores)).toBe(true);
+    expect(Array.isArray(sourcePayload.candidates)).toBe(true);
+    expect(Array.isArray(sourcePayload.errors)).toBe(true);
+    expect(sourcePayload.total_candidate_count).toBe(1);
+    expect(sourcePayload.returned_candidate_count).toBe(1);
+    expect(sourcePayload.truncated).toBe(false);
+    expect(sourcePayload.errors).toEqual([]);
+    expect(sourcePayload.stores[0]).toMatchObject({
+      source_db_path: sourceDbPath,
+      status: "ok",
+      candidate_count: 1,
+    });
+    expect(sourcePayload.candidates[0]).toMatchObject({
+      title: "CLI source contract",
+      source_db_path: sourceDbPath,
+      source_selected_by_input: true,
+      route_state: { eligible: true },
+    });
+    expect("source_allowed" in sourcePayload.candidates[0]).toBe(false);
+
+    const legacy = await runCli(["ready", "--json"], ":memory:");
+    expect(legacy.exitCode).toBe(0);
+    const legacyPayload = JSON.parse(legacy.stdout);
+    expect(Array.isArray(legacyPayload)).toBe(true);
   });
 
   it("should expose a dependency graph through deps --graph --json", async () => {
