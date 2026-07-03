@@ -40,6 +40,22 @@
     "./storage": {
       "types": "./dist/lib/store.d.ts",
       "import": "./dist/lib/store.js"
+    },
+    "./storage/contract": {
+      "types": "./dist/lib/storage/contract.d.ts",
+      "import": "./dist/lib/storage/contract.js"
+    },
+    "./storage/sqlite": {
+      "types": "./dist/lib/storage/sqlite.d.ts",
+      "import": "./dist/lib/storage/sqlite.js"
+    },
+    "./storage/postgres": {
+      "types": "./dist/lib/storage/postgres.d.ts",
+      "import": "./dist/lib/storage/postgres.js"
+    },
+    "./storage/postgres-schema": {
+      "types": "./dist/lib/storage/postgres-schema.d.ts",
+      "import": "./dist/lib/storage/postgres-schema.js"
     }
   },
   "files": [
@@ -50,7 +66,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts src/daemon/index.ts src/api/index.ts src/runner/index.ts src/mcp/index.ts src/index.ts src/sdk/index.ts src/lib/store.ts src/lib/mode.ts --root src --outdir dist --target bun --packages external && chmod +x dist/cli/index.js dist/daemon/index.js dist/api/index.js dist/runner/index.js dist/mcp/index.js && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist && bun build src/cli/index.ts src/daemon/index.ts src/api/index.ts src/runner/index.ts src/mcp/index.ts src/index.ts src/sdk/index.ts src/lib/store.ts src/lib/mode.ts src/lib/storage/index.ts src/lib/storage/contract.ts src/lib/storage/sqlite.ts src/lib/storage/postgres.ts src/lib/storage/postgres-schema.ts --root src --outdir dist --target bun --packages external && chmod +x dist/cli/index.js dist/daemon/index.js dist/api/index.js dist/runner/index.js dist/mcp/index.js && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "build:bin": "bun build src/cli/index.ts --compile --outfile dist/loops",
     "typecheck": "tsc --noEmit",
     "test": "bun test",

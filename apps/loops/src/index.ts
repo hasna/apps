@@ -107,9 +107,34 @@ export type {
 } from "./lib/scheduler.js";
 
 // ---------------------------------------------------------------------------
-// Experimental: raw storage (prefer LoopsClient; kept for advanced consumers)
+// Experimental: storage contracts (prefer LoopsClient; kept for advanced consumers)
 // ---------------------------------------------------------------------------
 export { Store } from "./lib/store.js";
+export {
+  POSTGRES_MIGRATION_LEDGER_TABLE,
+  POSTGRES_STORAGE_MIGRATIONS,
+  PostgresStorage,
+  SqliteLoopStorage,
+  checksumStorageSql,
+  createPostgresStorage,
+  createSqliteLoopStorage,
+} from "./lib/storage/index.js";
+export type {
+  AppliedStorageMigration,
+  AuditEventRecord,
+  LoopStorageBackend,
+  LoopStorageContract,
+  LoopStorageMethodName,
+  PostgresQueryExecutor,
+  RunnerLeaseRecord,
+  RunnerLeaseStatus,
+  RunnerMachineRecord,
+  RunnerMachineStatus,
+  SchemaMigrationStorage,
+  StorageMigration,
+  StorageMigrationPlanItem,
+  StorageMigrationResult,
+} from "./lib/storage/index.js";
 
 // ---------------------------------------------------------------------------
 // Experimental: deployment mode contract
