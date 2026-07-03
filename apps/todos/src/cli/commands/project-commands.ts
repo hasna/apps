@@ -173,16 +173,27 @@ export function registerProjectCommands(program: Command) {
       }
     });
 
-  // comment
+  // comment (aliased as log-progress so documented progress commands work)
   program
     .command("comment <id> <text>")
-    .description("Add a comment to a task")
-    .action((id: string, text: string) => {
+    .alias("log-progress")
+    .description("Add a comment to a task (alias: log-progress, for recording intermediate progress)")
+    .option("--pct <percent>", "Progress percentage (0-100) to record alongside the note")
+    .action((id: string, text: string, opts: { pct?: string }) => {
       const globalOpts = program.opts();
       const resolvedId = resolveTaskId(id);
+      let content = text;
+      if (opts.pct !== undefined) {
+        const pct = parseInt(opts.pct, 10);
+        if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+          console.error(chalk.red("--pct must be a number between 0 and 100"));
+          process.exit(1);
+        }
+        content = `[progress ${pct}%] ${text}`;
+      }
       const comment = addComment({
         task_id: resolvedId,
-        content: text,
+        content,
         agent_id: globalOpts.agent,
         session_id: globalOpts.session,
       });

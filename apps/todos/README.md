@@ -1371,7 +1371,7 @@ Shared Streamable HTTP transport for long-lived local MCP (stdio remains the def
 
 ```bash
 todos-mcp --http              # starts todos-serve with MCP mounted; or MCP_HTTP=1
-todos serve --port 8842       # default MCP HTTP port 8842
+todos-mcp --port 8881         # explicit HTTP port (default MCP HTTP port is 8881)
 ```
 
 - Bind: `127.0.0.1` only

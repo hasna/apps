@@ -53,14 +53,16 @@ function printHelp(): void {
 Start the @hasna/todos MCP server.
 
 Options:
-  --stdio          Use stdio transport
-  --port <port>    Use Streamable HTTP on the given port
+  --stdio          Use stdio transport (default)
+  --http           Use Streamable HTTP transport
+  --port <port>    Use Streamable HTTP on the given port (implies --http)
   -V, --version    output the version number
   -h, --help       display help for command
 
 Environment:
-  TODOS_MCP_STDIO=true       Force stdio transport
-  TODOS_MCP_PORT=<port>      HTTP port when not using stdio
+  MCP_STDIO=1                Force stdio transport
+  MCP_HTTP=1                 Use Streamable HTTP transport
+  MCP_HTTP_PORT=<port>       HTTP port when using HTTP transport
   TODOS_PROFILE=<profile>    Tool profile filter
   TODOS_TOOL_GROUPS=<list>   Comma-separated tool group filter`);
 }
@@ -177,7 +179,19 @@ function formatError(error: unknown): string {
 function resolveId(partialId: string, table = "tasks"): string {
   const db = getDatabase();
   const id = resolvePartialId(db, table, partialId);
-  if (!id) throw new Error(`Could not resolve ID: ${partialId}`);
+  if (!id) {
+    // Throw a typed, table-appropriate not-found error so agents can tell a bad
+    // ID apart from a genuine server failure (formatError maps these to
+    // specific codes; a plain Error would be sanitized to UNKNOWN_ERROR).
+    switch (table) {
+      case "tasks": throw new TaskNotFoundError(partialId);
+      case "projects": throw new ProjectNotFoundError(partialId);
+      case "plans": throw new PlanNotFoundError(partialId);
+      case "task_lists": throw new TaskListNotFoundError(partialId);
+      case "agents": throw new AgentNotFoundError(partialId);
+      default: throw new TaskNotFoundError(partialId);
+    }
+  }
   return id;
 }
 
@@ -281,15 +295,19 @@ registerDispatchTools(server, { shouldRegisterTool: shouldRegisterToolOnce, reso
 // === START SERVER ===
 
 async function main() {
-  const { isStdioMode, resolveHttpPort } = await import("./http.js");
-  if (isStdioMode()) {
+  const { isHttpMode, resolveHttpPort } = await import("./http.js");
+  // HTTP is opt-in via --http, MCP_HTTP=1, or an explicit --port flag. Everything
+  // else defaults to stdio — that is what MCP clients (Claude/Codex/Gemini) speak
+  // when they spawn the bare `todos-mcp` binary, so stdio must be the default.
+  const portRequested = process.argv.some((arg) => arg === "--port" || arg.startsWith("--port="));
+  if (!isHttpMode() && !portRequested) {
     const server = buildServer();
     const transport = new StdioServerTransport();
     await server.connect(transport);
     return;
   }
 
-  // Default: shared Streamable HTTP server (one process per MCP, many agents).
+  // Opt-in shared Streamable HTTP server (one process per MCP, many agents).
   const { startServer } = await import("../server/serve.js");
   const port = resolveHttpPort();
   await startServer(port, { open: false, host: "127.0.0.1" });
