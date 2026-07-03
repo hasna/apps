@@ -390,4 +390,37 @@ describe("open-loops MCP server", () => {
       await transport.close();
     }
   });
+
+  test("resume recomputes nextRunAt for a stopped loop so it can become due again", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-mcp-resume-stopped-"));
+    roots.push(root);
+    const loopId = withLoopDataDir(root, () => {
+      const store = new Store();
+      try {
+        const loop = store.createLoop({
+          name: "mcp-resume-stopped",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+        });
+        // Stop it: next_run_at is cleared, mirroring the reported bug's setup.
+        store.updateLoop(loop.id, { status: "stopped", nextRunAt: undefined });
+        return loop.id;
+      } finally {
+        store.close();
+      }
+    });
+
+    const { client, transport } = await connectMcp(root, { LOOPS_MCP_ALLOW_MUTATIONS: "true" });
+    try {
+      const resumed = textPayload(
+        await client.callTool({ name: "loops_resume", arguments: { idOrName: loopId } }),
+      ) as { loop: { status: string; nextRunAt?: string } };
+      expect(resumed.loop.status).toBe("active");
+      // Regression: resume left nextRunAt null, so dueLoops never picked it up.
+      expect(resumed.loop.nextRunAt).toBeString();
+    } finally {
+      await client.close();
+      await transport.close();
+    }
+  });
 });

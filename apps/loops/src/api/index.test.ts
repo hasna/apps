@@ -172,6 +172,60 @@ describe("loops-api foundation", () => {
     }
   });
 
+  test("PATCH only touches fields present in the body and never wipes omitted schedule state", async () => {
+    const mod = await import("./index.js");
+    const storage = createSqliteLoopStorage(":memory:");
+    const server = mod.createLoopsApiServer({ host: "127.0.0.1", port: 0, storage });
+
+    try {
+      const loop = await storage.createLoop({
+        name: "api-patch-preserve-loop",
+        schedule: { type: "once", at: "2027-01-01T00:00:00Z" },
+        target: { type: "command", command: "true" },
+      });
+      expect(loop.nextRunAt).toBeString();
+      const originalNextRunAt = loop.nextRunAt;
+
+      // PATCH with only status must NOT clear nextRunAt (regression: the route
+      // used to emit every key, so an omitted nextRunAt overrode to undefined).
+      const pauseResponse = await fetch(apiUrl(server, `/v1/loops/${loop.id}`), {
+        method: "PATCH",
+        headers: jsonHeaders,
+        body: JSON.stringify({ status: "paused" }),
+      });
+      expect(pauseResponse.status).toBe(200);
+      const paused = (await pauseResponse.json()) as { loop: { status: string; nextRunAt?: string } };
+      expect(paused.loop.status).toBe("paused");
+      expect(paused.loop.nextRunAt).toBe(originalNextRunAt);
+
+      // PATCH with only nextRunAt (no status) must succeed and keep status
+      // (regression: an omitted status became NULL -> NOT NULL 500).
+      const rescheduleResponse = await fetch(apiUrl(server, `/v1/loops/${loop.id}`), {
+        method: "PATCH",
+        headers: jsonHeaders,
+        body: JSON.stringify({ nextRunAt: "2027-02-02T00:00:00.000Z" }),
+      });
+      expect(rescheduleResponse.status).toBe(200);
+      const rescheduled = (await rescheduleResponse.json()) as { loop: { status: string; nextRunAt?: string } };
+      expect(rescheduled.loop.status).toBe("paused");
+      expect(rescheduled.loop.nextRunAt).toBe("2027-02-02T00:00:00.000Z");
+
+      // Explicit JSON null is a deliberate clear.
+      const clearResponse = await fetch(apiUrl(server, `/v1/loops/${loop.id}`), {
+        method: "PATCH",
+        headers: jsonHeaders,
+        body: JSON.stringify({ nextRunAt: null }),
+      });
+      expect(clearResponse.status).toBe(200);
+      const cleared = (await clearResponse.json()) as { loop: { status: string; nextRunAt?: string } };
+      expect(cleared.loop.status).toBe("paused");
+      expect(cleared.loop.nextRunAt).toBeUndefined();
+    } finally {
+      server.stop(true);
+      await storage.close();
+    }
+  });
+
   test("run listing redacts output unless explicitly requested", async () => {
     const mod = await import("./index.js");
     const storage = createSqliteLoopStorage(":memory:");

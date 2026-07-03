@@ -14,6 +14,7 @@ import {
   type LoopsMigrationPlan,
   type SelfHostedPlanOptions,
 } from "../lib/migration.js";
+import { computeNextAfter } from "../lib/recurrence.js";
 import { runLoopNow, tick } from "../lib/scheduler.js";
 import { Store } from "../lib/store.js";
 export { runGoal } from "../lib/goal/runner.js";
@@ -97,16 +98,27 @@ export class LoopsClient {
 
   // pause/resume/stop rely on the store's archived-loop guard: updateLoop
   // throws a coded LoopArchivedError, so all surfaces share one behavior.
+  // These mutation paths use requireUniqueLoop so an ambiguous name errors
+  // instead of silently mutating the newest same-named loop.
   pause(idOrName: string): Loop {
-    return this.store.updateLoop(this.get(idOrName).id, { status: "paused" });
+    return this.store.updateLoop(this.store.requireUniqueLoop(idOrName).id, { status: "paused" });
   }
 
   resume(idOrName: string): Loop {
-    return this.store.updateLoop(this.get(idOrName).id, { status: "active" });
+    const loop = this.store.requireUniqueLoop(idOrName);
+    // A stopped loop has next_run_at NULL; dueLoops requires it IS NOT NULL, so
+    // resuming without recomputing leaves the loop active but permanently
+    // dormant. Recompute the next slot from now when it is missing.
+    let nextRunAt = loop.nextRunAt;
+    if (!nextRunAt) {
+      const now = new Date();
+      nextRunAt = computeNextAfter(loop.schedule, now, now);
+    }
+    return this.store.updateLoop(loop.id, { status: "active", nextRunAt });
   }
 
   stop(idOrName: string): Loop {
-    return this.store.updateLoop(this.get(idOrName).id, { status: "stopped", nextRunAt: undefined });
+    return this.store.updateLoop(this.store.requireUniqueLoop(idOrName).id, { status: "stopped", nextRunAt: undefined });
   }
 
   archive(idOrName: string): Loop {
@@ -118,7 +130,7 @@ export class LoopsClient {
   }
 
   delete(idOrName: string): boolean {
-    return this.store.deleteLoop(idOrName);
+    return this.store.deleteLoop(this.store.requireUniqueLoop(idOrName).id);
   }
 
   runs(idOrName?: string, filters: ListRunsFilters = {}): LoopRun[] {
@@ -158,7 +170,7 @@ export class LoopsClient {
   }
 
   async runNow(idOrName: string): Promise<LoopRun> {
-    const result = await runLoopNow({ store: this.store, idOrName, runnerId: this.runnerId });
+    const result = await runLoopNow({ store: this.store, idOrName: this.store.requireUniqueLoop(idOrName).id, runnerId: this.runnerId });
     return result.run;
   }
 

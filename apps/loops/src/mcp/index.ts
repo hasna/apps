@@ -16,6 +16,7 @@ import {
 import { buildHealthReport, classifyRunFailure, expectationForLoop } from "../lib/health.js";
 import { nowIso } from "../lib/ids.js";
 import { dataDir } from "../lib/paths.js";
+import { computeNextAfter } from "../lib/recurrence.js";
 import { runLoopNow } from "../lib/scheduler.js";
 import { Store } from "../lib/store.js";
 import { packageVersion } from "../lib/version.js";
@@ -312,8 +313,8 @@ function parseWorkflowInput(input: { workflow?: Record<string, unknown>; workflo
 
 /**
  * Single source of truth for the MCP tool surface: registrations, the
- * loops://tools resource, `loops mcp list-tools`, and the golden schema test
- * all derive from this array, so metadata cannot drift from behavior.
+ * loops://tools resource, the loops-mcp bin's `list-tools` argv, and the golden
+ * schema test all derive from this array, so metadata cannot drift from behavior.
  */
 const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
   {
@@ -557,7 +558,7 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
     annotations: mutationAnnotations({ idempotent: true }),
     inputSchema: { idOrName: loopIdOrNameSchema },
     handler: ({ idOrName }) =>
-      withStore((store) => ({ loop: publicLoop(store.updateLoop(store.requireLoop(idOrName).id, { status: "paused" })) })),
+      withStore((store) => ({ loop: publicLoop(store.updateLoop(store.requireUniqueLoop(idOrName).id, { status: "paused" })) })),
   },
   {
     name: "loops_resume",
@@ -568,7 +569,18 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
     annotations: mutationAnnotations({ idempotent: true }),
     inputSchema: { idOrName: loopIdOrNameSchema },
     handler: ({ idOrName }) =>
-      withStore((store) => ({ loop: publicLoop(store.updateLoop(store.requireLoop(idOrName).id, { status: "active" })) })),
+      withStore((store) => {
+        const loop = store.requireUniqueLoop(idOrName);
+        // A stopped loop has next_run_at NULL; dueLoops requires it IS NOT NULL,
+        // so resuming without recomputing leaves the loop active but permanently
+        // dormant. Recompute the next slot from now when it is missing.
+        let nextRunAt = loop.nextRunAt;
+        if (!nextRunAt) {
+          const now = new Date();
+          nextRunAt = computeNextAfter(loop.schedule, now, now);
+        }
+        return { loop: publicLoop(store.updateLoop(loop.id, { status: "active", nextRunAt })) };
+      }),
   },
   {
     name: "loops_stop",
@@ -580,7 +592,7 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
     inputSchema: { idOrName: loopIdOrNameSchema },
     handler: ({ idOrName }) =>
       withStore((store) => ({
-        loop: publicLoop(store.updateLoop(store.requireLoop(idOrName).id, { status: "stopped", nextRunAt: undefined })),
+        loop: publicLoop(store.updateLoop(store.requireUniqueLoop(idOrName).id, { status: "stopped", nextRunAt: undefined })),
       })),
   },
   {
@@ -595,7 +607,9 @@ const TOOL_REGISTRATIONS: LoopsMcpToolRegistration[] = [
     handler: ({ idOrName }) =>
       withStore(async (store) => {
         const daemon = daemonStatus(store);
-        const result = await runLoopNow({ store, idOrName, runnerId: `mcp:${process.pid}`, mode: "schedule" });
+        // requireUniqueLoop so an ambiguous name errors instead of scheduling the
+        // newest same-named loop.
+        const result = await runLoopNow({ store, idOrName: store.requireUniqueLoop(idOrName).id, runnerId: `mcp:${process.pid}`, mode: "schedule" });
         return {
           scheduledFor: result.scheduledFor,
           loop: publicLoop(result.loop),
@@ -699,7 +713,7 @@ function toolDescription(tool: LoopsMcpToolRegistration): string {
   return tool.guarded ? `${tool.description} Requires ${MUTATION_ENV}=true on the MCP server process.` : tool.description;
 }
 
-/** Tool metadata derived from TOOL_REGISTRATIONS; served via loops://tools and `loops mcp list-tools`. */
+/** Tool metadata derived from TOOL_REGISTRATIONS; served via loops://tools and the loops-mcp bin's `list-tools` argv. */
 export const LOOPS_MCP_TOOLS: LoopsMcpToolMetadata[] = TOOL_REGISTRATIONS.map((tool) => ({
   name: tool.name,
   aliases: tool.aliases?.length ? [...tool.aliases] : undefined,

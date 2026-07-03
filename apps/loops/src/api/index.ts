@@ -164,12 +164,17 @@ async function handleLoopsRequest(ctx: V1RequestContext, segments: string[]): Pr
       ctx.request,
       ctx.bodyLimitBytes,
     );
-    const loop = await storage.updateLoop(id, {
-      status: body.status,
-      nextRunAt: body.nextRunAt === null ? undefined : body.nextRunAt,
-      retryScheduledFor: body.retryScheduledFor === null ? undefined : body.retryScheduledFor,
-      expiresAt: body.expiresAt === null ? undefined : body.expiresAt,
-    });
+    // Only forward keys the caller actually sent. Store.updateLoop merges
+    // {...current, ...patch}, so a present-but-undefined key overrides the
+    // current value: emitting all four keys unconditionally wiped omitted
+    // schedule fields (and set status=NULL -> NOT NULL 500). A key set to
+    // JSON null is an explicit clear (mapped to undefined -> merged to null).
+    const patch: Partial<{ status: LoopStatus; nextRunAt: string; retryScheduledFor: string; expiresAt: string }> = {};
+    if ("status" in body && body.status !== undefined) patch.status = body.status;
+    if ("nextRunAt" in body) patch.nextRunAt = body.nextRunAt === null ? undefined : body.nextRunAt;
+    if ("retryScheduledFor" in body) patch.retryScheduledFor = body.retryScheduledFor === null ? undefined : body.retryScheduledFor;
+    if ("expiresAt" in body) patch.expiresAt = body.expiresAt === null ? undefined : body.expiresAt;
+    const loop = await storage.updateLoop(id, patch);
     return ok({ loop: publicLoop(loop) });
   }
   if (segments.length === 1 && ctx.request.method === "DELETE") {
@@ -197,14 +202,22 @@ async function handleRunsRequest(ctx: V1RequestContext, segments: string[]): Pro
   if (segments.length === 2 && id && segments[1] === "recover" && ctx.request.method === "POST") {
     const storage = requireStorage(ctx.storage);
     const now = ctx.now();
+    // Scope to the requested run: the route is POST /v1/runs/:id/recover, so the
+    // response and loop advancement must reflect only that run, not every
+    // lease-expired run in the store. (The underlying store only exposes a
+    // global lease sweep; we filter its result to :id.)
+    const target = await storage.getRun(id);
+    if (!target) return fail("run_not_found", 404);
     const recovered = await storage.recoverExpiredRunLeasesDetailed(now);
-    for (const run of recovered.abandoned) {
+    const abandoned = recovered.abandoned.filter((run) => run.id === id);
+    const deferred = recovered.deferred.filter((run) => run.id === id);
+    for (const run of abandoned) {
       const loop = await storage.getLoop(run.loopId);
       if (loop) await advanceLoopAfterRun(storage, loop, run, new Date(run.finishedAt ?? now), false);
     }
     return ok({
-      abandoned: recovered.abandoned.map((run) => publicRun(run, false, { redactError: true })),
-      deferred: recovered.deferred.map((run) => publicRun(run, false, { redactError: true })),
+      abandoned: abandoned.map((run) => publicRun(run, false, { redactError: true })),
+      deferred: deferred.map((run) => publicRun(run, false, { redactError: true })),
     });
   }
 
@@ -508,11 +521,6 @@ function optionalIsoString(value: unknown): string | undefined {
   const parsed = new Date(text);
   if (Number.isNaN(parsed.getTime())) throw Object.assign(new Error("invalid_datetime"), { status: 422 });
   return parsed.toISOString();
-}
-
-function optionalIsoDate(value: unknown): Date | undefined {
-  const text = optionalIsoString(value);
-  return text ? new Date(text) : undefined;
 }
 
 function stringRecord(value: unknown): Record<string, string> {

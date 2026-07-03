@@ -538,6 +538,74 @@ describe("loops CLI", () => {
     expect(restored.archivedAt).toBeUndefined();
   });
 
+  test("resume from stopped recomputes the next slot so the loop becomes due again", () => {
+    const dataDir = freshDataDir("loops-cli-resume-stopped-");
+    const create = runCli(dataDir, ["create", "command", "resumable", "--every", "60s", "--cmd", "true"]);
+    expect(create.status).toBe(0);
+
+    const stopped = runCli(dataDir, ["--json", "stop", "resumable"]);
+    expect(stopped.status).toBe(0);
+    expect(JSON.parse(stopped.stdout).status).toBe("stopped");
+    expect(JSON.parse(stopped.stdout).nextRunAt).toBeUndefined();
+
+    const resumed = runCli(dataDir, ["--json", "resume", "resumable"]);
+    expect(resumed.status).toBe(0);
+    const value = JSON.parse(resumed.stdout);
+    expect(value.status).toBe("active");
+    // Regression: resume left nextRunAt null, so dueLoops never picked it up and
+    // the "active" loop was permanently dormant.
+    expect(value.nextRunAt).toBeString();
+  });
+
+  test("daemon logs honors --tail and rejects a non-numeric count", () => {
+    const dataDir = freshDataDir("loops-cli-daemon-logs-tail-");
+    writeFileSync(join(dataDir, "daemon.log"), ["l1", "l2", "l3", "l4", "l5"].join("\n"));
+
+    const tail = runCli(dataDir, ["daemon", "logs", "--tail", "2"]);
+    expect(tail.status).toBe(0);
+    expect(tail.stdout.trim().split("\n")).toEqual(["l4", "l5"]);
+
+    // -n stays supported and must agree with --tail.
+    const lines = runCli(dataDir, ["daemon", "logs", "-n", "3"]);
+    expect(lines.status).toBe(0);
+    expect(lines.stdout.trim().split("\n")).toEqual(["l3", "l4", "l5"]);
+
+    // Non-numeric count must error, not dump the whole log via slice(NaN).
+    const bad = runCli(dataDir, ["daemon", "logs", "-n", "abc"]);
+    expect(bad.status).not.toBe(0);
+    expect(bad.stderr).toContain("positive integer");
+  });
+
+  test("mutation commands reject ambiguous loop names instead of touching the newest match", () => {
+    const dataDir = freshDataDir("loops-cli-ambiguous-name-");
+    let firstId = "";
+    let secondId = "";
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      const spec = { schedule: { type: "interval" as const, everyMs: 60_000 }, target: { type: "command" as const, command: "true" } };
+      firstId = store.createLoop({ name: "dupe-name", ...spec }).id;
+      secondId = store.createLoop({ name: "dupe-name", ...spec }).id;
+    } finally {
+      store.close();
+    }
+    expect(firstId).not.toBe(secondId);
+
+    for (const command of ["pause", "resume", "stop", "remove", "run-now"]) {
+      const result = runCli(dataDir, [command, "dupe-name"]);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("ambiguous loop name");
+    }
+    // Both loops are untouched: still active.
+    const showFirst = runCli(dataDir, ["--json", "show", firstId]);
+    const showSecond = runCli(dataDir, ["--json", "show", secondId]);
+    expect(JSON.parse(showFirst.stdout).status).toBe("active");
+    expect(JSON.parse(showSecond.stdout).status).toBe("active");
+    // The id path still resolves precisely.
+    const pausedById = runCli(dataDir, ["--json", "pause", secondId]);
+    expect(pausedById.status).toBe(0);
+    expect(JSON.parse(pausedById.stdout).status).toBe("paused");
+  });
+
   test("hygiene names reports canonical machine/repo loop names without applying by default", () => {
     const dataDir = freshDataDir("loops-cli-hygiene-names-");
     const create = runCli(dataDir, [
@@ -1779,7 +1847,7 @@ describe("loops CLI", () => {
     expect(value.expectations[0].failure.evidence.stderr).toMatch(/^\[redacted \d+ chars\]$/);
     expect(value.expectations[0].recommendedTask).toMatchObject({
       priority: "high",
-      futureNativeUpsert: { command: "todos upsert" },
+      futureNativeUpsert: { command: "todos task upsert" },
     });
     expect(value.expectations[0].recommendedTask.description).toContain("Do not dispatch or paste prompts into tmux panes");
     expect(value.expectations[0].recommendedTask.compatibilityFallback.search).toEqual(
@@ -2129,7 +2197,7 @@ describe("loops CLI", () => {
     expect(result.status).toBe(0);
     const log = readFileSync(argLog, "utf8");
     expect(log).toContain("WORKING_DIR=/tmp/repo");
-    expect(log).toContain("TAGS=bug,openloops,loop-health,rate_limit,auto:route");
+    expect(log).toContain("TAGS=bug,openloops,loops,loop-health,rate_limit,auto:route");
   });
 
   test("runtime preflight failures are finalized and routed as preflight health tasks", () => {
@@ -4906,6 +4974,64 @@ describe("loops CLI", () => {
     expect(loops).toHaveLength(1);
     const worker = value.results[0].workflow.steps.find((step: { id: string }) => step.id === "worker");
     expect(worker.target.addDirs).toEqual([join(dataDir, "todos-store")]);
+  });
+
+  test("todos task drain counts non-skippable per-task errors as fatal and exits non-zero", () => {
+    const dataDir = freshDataDir("loops-cli-event-drain-fatal-");
+    const binDir = join(dataDir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"task-lists\" ]]; then printf '[]\\n'; exit 0; fi",
+        "done",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"ready\" ]]; then printf '%s\\n' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "done",
+        "printf 'unexpected todos command: %s\\n' \"$*\" >&2",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    // Ready tasks missing an id hit a non-skippable route error in taskDrainEvent
+    // for every candidate: a systemic failure that used to abort the batch.
+    const ready = [
+      { title: "no id one", status: "pending", tags: ["auto:route"] },
+      { title: "no id two", status: "pending", tags: ["auto:route"] },
+    ];
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "routes",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        join(dataDir, "todos-store"),
+        "--limit",
+        "10",
+        "--max-dispatch",
+        "5",
+      ],
+      undefined,
+      { PATH: `${binDir}:/usr/bin:/bin`, TODOS_READY_JSON: JSON.stringify(ready) },
+    );
+
+    // Regression: a fully-fatal drain must NOT exit 0 (a scheduled loop would
+    // otherwise mark a route-nothing run "succeeded").
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("non-skippable");
+    const value = JSON.parse(result.stdout);
+    expect(value.considered).toBe(2);
+    expect(value.created).toBe(0);
+    expect(value.fatal).toBe(2);
+    // Every fatal result is individually flagged so compact/cron output keeps it.
+    expect(value.results.filter((entry: { fatal?: boolean }) => entry.fatal === true)).toHaveLength(2);
   });
 
   test("todos task drain applies metadata provider rules with account separation evidence", () => {

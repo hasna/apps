@@ -34,7 +34,7 @@ import {
   redact,
   textOutputBlocks,
 } from "../lib/format.js";
-import { parseDuration } from "../lib/recurrence.js";
+import { computeNextAfter, parseDuration } from "../lib/recurrence.js";
 import { Store } from "../lib/store.js";
 import { executeWorkflow, preflightWorkflow } from "../lib/workflow-runner.js";
 import { advanceLoop, executeClaimedRun, manualRunScheduledFor, manualRunSource, shouldAdvanceManualRun, tick } from "../lib/scheduler.js";
@@ -1076,6 +1076,15 @@ function handleRouteDrain(kind: string, opts: TodosDrainOptions): void {
   if (kind !== "todos-task") throw new ValidationError("route drain currently supports kind todos-task");
   const result = drainTodosTaskRoutes(opts);
   print(result.value, result.human);
+  // Non-skippable route errors are captured per-task so the batch completes, but
+  // the run must not report success: a systemic misconfig where every candidate
+  // is fatal would otherwise exit 0 and a daemon-scheduled drain loop would mark
+  // a route-nothing run "succeeded", hiding the failure from monitoring.
+  const fatal = Number(result.value.fatal ?? 0);
+  if (fatal > 0) {
+    console.error(`route drain hit ${fatal} non-skippable task error(s); see evidence file`);
+    process.exitCode = 1;
+  }
 }
 
 addRouteEventOptions(
@@ -1363,7 +1372,7 @@ workflows
     const store = new Store();
     try {
       const workflow = idOrName ? store.requireWorkflow(idOrName) : undefined;
-      const runs = store.listWorkflowRuns({ workflowId: workflow?.id, limit: Number(opts.limit) });
+      const runs = store.listWorkflowRuns({ workflowId: workflow?.id, limit: positiveInteger(opts.limit, "--limit") ?? 50 });
       if (isJson()) print(runs.map(publicWorkflowRun));
       else {
         for (const run of runs) {
@@ -1382,7 +1391,7 @@ workflows
   .action(runAction((runId, opts) => {
     const store = new Store();
     try {
-      const runEvents = store.listWorkflowEvents(runId, Number(opts.limit));
+      const runEvents = store.listWorkflowEvents(runId, positiveInteger(opts.limit, "--limit") ?? 200);
       if (isJson()) print(runEvents.map(publicWorkflowEvent));
       else {
         for (const event of runEvents) {
@@ -1676,7 +1685,7 @@ program
     const store = new Store();
     try {
       const loop = idOrName ? store.requireLoop(idOrName) : undefined;
-      const runs = store.listRuns({ loopId: loop?.id, limit: Number(opts.limit) });
+      const runs = store.listRuns({ loopId: loop?.id, limit: positiveInteger(opts.limit, "--limit") ?? 50 });
       if (isJson()) print(runs.map((run) => publicRun(run, opts.showOutput)));
       else {
         for (const run of runs) {
@@ -1698,7 +1707,7 @@ program
   .action(runAction((idOrName, opts) => {
     const store = new Store();
     try {
-      const loops = idOrName ? [store.requireLoop(idOrName)] : store.listLoops({ limit: Number(opts.limit) });
+      const loops = idOrName ? [store.requireLoop(idOrName)] : store.listLoops({ limit: positiveInteger(opts.limit, "--limit") ?? 200 });
       const values = loops.map((loop) => expectationForLoop(store, loop));
       if (isJson()) console.log(JSON.stringify(idOrName ? values[0] : values, null, 2));
       else {
@@ -1752,7 +1761,7 @@ health
   .action(runAction((opts) => {
     const store = new Store();
     try {
-      const report = buildHealthReport(store, { limit: Number(opts.limit), includeInactive: Boolean(opts.includeInactive) });
+      const report = buildHealthReport(store, { limit: positiveInteger(opts.limit, "--limit") ?? 200, includeInactive: Boolean(opts.includeInactive) });
       const failures = report.expectations.filter((entry) => !entry.ok && entry.recommendedTask);
       const result = upsertRouteTasks({
         project: opts.project,
@@ -1765,7 +1774,7 @@ health
           autoRoute: Boolean(opts.autoRoute),
           routeProjectPath: opts.routeProjectPath,
         }),
-        maxActions: Number(opts.maxActions),
+        maxActions: positiveInteger(opts.maxActions, "--max-actions") ?? 5,
         dryRun: Boolean(opts.dryRun),
         autoRoute: Boolean(opts.autoRoute),
         routeProjectPath: opts.routeProjectPath,
@@ -1824,7 +1833,7 @@ hygiene
         apply: false,
         includeStopped: Boolean(opts.includeStopped),
         includeInactive: Boolean(opts.includeInactive),
-        limit: Number(opts.limit),
+        limit: positiveInteger(opts.limit, "--limit") ?? 1000,
       });
       let outputReport = report;
       const backupPath = opts.apply && report.changed > 0 ? backupLoopsDatabase("name-hygiene") : undefined;
@@ -1833,7 +1842,7 @@ hygiene
           apply: true,
           includeStopped: Boolean(opts.includeStopped),
           includeInactive: Boolean(opts.includeInactive),
-          limit: Number(opts.limit),
+          limit: positiveInteger(opts.limit, "--limit") ?? 1000,
         });
       } else if (opts.apply) {
         outputReport = { ...report, applied: true };
@@ -1863,7 +1872,7 @@ hygiene
     try {
       const report = buildDuplicateOverlapReport(store, {
         includeInactive: Boolean(opts.includeInactive),
-        limit: Number(opts.limit),
+        limit: positiveInteger(opts.limit, "--limit") ?? 1000,
       });
       if (isJson()) console.log(JSON.stringify(report, null, 2));
       else {
@@ -1890,7 +1899,7 @@ hygiene
       const report = buildScriptInventoryReport(store, {
         scriptsDir: opts.scriptsDir,
         includeInactive: Boolean(opts.includeInactive),
-        limit: Number(opts.limit),
+        limit: positiveInteger(opts.limit, "--limit") ?? 1000,
       });
       if (isJson()) console.log(JSON.stringify(report, null, 2));
       else {
@@ -1924,7 +1933,7 @@ hygiene
       const route = buildHygieneRouteTasks(store, {
         checks,
         includeInactive: Boolean(opts.includeInactive),
-        limit: Number(opts.limit),
+        limit: positiveInteger(opts.limit, "--limit") ?? 1000,
         scriptsDir: opts.scriptsDir,
       });
       const result = upsertRouteTasks({
@@ -1938,7 +1947,7 @@ hygiene
           autoRoute: Boolean(opts.autoRoute),
           routeProjectPath: opts.routeProjectPath,
         }),
-        maxActions: Number(opts.maxActions),
+        maxActions: positiveInteger(opts.maxActions, "--max-actions") ?? 10,
         dryRun: Boolean(opts.dryRun),
         autoRoute: Boolean(opts.autoRoute),
         routeProjectPath: opts.routeProjectPath,
@@ -1979,7 +1988,7 @@ program
   .action(runAction((idOrName, newName) => {
     const store = new Store();
     try {
-      const loop = store.requireLoop(idOrName);
+      const loop = store.requireUniqueLoop(idOrName);
       const oldName = loop.name;
       const trimmed = String(newName).trim();
       if (!trimmed) throw new ValidationError("loop name must not be empty");
@@ -2024,9 +2033,21 @@ program
 function updateStatus(idOrName: string, status: "paused" | "active" | "stopped"): void {
   const store = new Store();
   try {
-    const loop = store.requireLoop(idOrName);
+    // requireUniqueLoop so an ambiguous name errors instead of mutating the
+    // newest same-named loop.
+    const loop = store.requireUniqueLoop(idOrName);
     if (loop.archivedAt) throw new Error(`loop is archived; run 'loops unarchive ${idOrName}' first`);
-    const updated = store.updateLoop(loop.id, { status, nextRunAt: status === "stopped" ? undefined : loop.nextRunAt });
+    let nextRunAt = loop.nextRunAt;
+    if (status === "stopped") {
+      nextRunAt = undefined;
+    } else if (status === "active" && !loop.nextRunAt) {
+      // Resuming a stopped loop leaves next_run_at NULL, so dueLoops (which
+      // requires next_run_at IS NOT NULL) would never pick it up: the loop is
+      // "active" but permanently dormant. Recompute the next slot from now.
+      const now = new Date();
+      nextRunAt = computeNextAfter(loop.schedule, now, now);
+    }
+    const updated = store.updateLoop(loop.id, { status, nextRunAt });
     print(publicLoop(updated), `${updated.id} ${updated.status}`);
   } finally {
     store.close();
@@ -2040,7 +2061,9 @@ program
   .action(runAction((idOrName) => {
     const store = new Store();
     try {
-      const removed = store.deleteLoop(idOrName);
+      // requireUniqueLoop so an ambiguous name errors instead of deleting the
+      // newest same-named loop.
+      const removed = store.deleteLoop(store.requireUniqueLoop(idOrName).id);
       print({ removed }, removed ? "removed" : "not removed");
     } finally {
       store.close();
@@ -2074,7 +2097,7 @@ program
   .action(runAction(async (idOrName, opts) => {
     const store = new Store();
     try {
-      const loop = store.requireLoop(idOrName);
+      const loop = store.requireUniqueLoop(idOrName);
       if (loop.archivedAt) throw new Error(`loop is archived; run 'loops unarchive ${idOrName}' before running it`);
       const runnerId = `manual:${process.pid}`;
       const now = new Date();
@@ -2281,14 +2304,20 @@ daemon
   .command("logs")
   .description("print the tail of the daemon log")
   .option("-n, --lines <n>", "lines", "80")
+  // --tail is a documented alias the control room and docs use; commander would
+  // otherwise reject it as an unknown option.
+  .option("--tail <n>", "alias for --lines")
   .action(runAction((opts) => {
     const path = daemonLogPath();
     if (!existsSync(path)) {
       console.log("");
       return;
     }
+    // Validate n so a bad value ('abc') errors instead of NaN -> slice(0) dumping
+    // the whole log. --tail wins when both are supplied.
+    const count = positiveInteger(opts.tail ?? opts.lines, opts.tail !== undefined ? "--tail" : "--lines") ?? 80;
     const lines = readFileSync(path, "utf8").trimEnd().split("\n");
-    console.log(lines.slice(-Number(opts.lines)).join("\n"));
+    console.log(lines.slice(-count).join("\n"));
   }));
 
 await program.parseAsync(process.argv);

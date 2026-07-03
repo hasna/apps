@@ -108,6 +108,50 @@ describe("loops sdk", () => {
     }
   });
 
+  test("resume from stopped recomputes nextRunAt so the loop becomes due again", async () => {
+    const store = new Store(":memory:");
+    const client = new LoopsClient({ store, runnerId: "manual" });
+    try {
+      const loop = client.create({
+        name: "sdk-resume-stopped",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "true" },
+      });
+      const stopped = client.stop(loop.id);
+      expect(stopped.status).toBe("stopped");
+      expect(stopped.nextRunAt).toBeUndefined();
+
+      const resumed = client.resume(loop.id);
+      expect(resumed.status).toBe("active");
+      // Regression: resume used to leave nextRunAt null, so dueLoops (next_run_at
+      // IS NOT NULL) never picked it up -> active but permanently dormant.
+      expect(resumed.nextRunAt).toBeString();
+      expect(store.dueLoops(new Date(Date.now() + 120_000)).map((entry) => entry.id)).toContain(loop.id);
+    } finally {
+      client.close();
+    }
+  });
+
+  test("mutation paths reject ambiguous loop names instead of touching the newest match", () => {
+    const store = new Store(":memory:");
+    const client = new LoopsClient({ store, runnerId: "manual" });
+    try {
+      const spec = { schedule: { type: "interval" as const, everyMs: 60_000 }, target: { type: "command" as const, command: "true" } };
+      const first = client.create({ name: "sdk-dupe", ...spec });
+      const second = client.create({ name: "sdk-dupe", ...spec });
+      expect(first.id).not.toBe(second.id);
+
+      expect(() => client.pause("sdk-dupe")).toThrow("ambiguous loop name");
+      expect(() => client.resume("sdk-dupe")).toThrow("ambiguous loop name");
+      expect(() => client.stop("sdk-dupe")).toThrow("ambiguous loop name");
+      expect(() => client.delete("sdk-dupe")).toThrow("ambiguous loop name");
+      // The id path still works precisely.
+      expect(client.pause(second.id).status).toBe("paused");
+    } finally {
+      client.close();
+    }
+  });
+
   test("exports, plans, and imports migration bundles through the client", () => {
     const sourceStore = new Store(":memory:");
     const targetStore = new Store(":memory:");
