@@ -193,7 +193,11 @@ export function taskRouteEligibility(data: Record<string, unknown>, metadata: Re
   const automation = automationRecords(data, metadata);
   const tags = taskEventTags(records);
   const hasRouteOptIn =
+    // todos hands out `route:enabled` as its opt-in tag; loops historically only
+    // honored `auto:route`, so tasks tagged the todos way were silently dropped.
+    // Treat the two as equivalent.
     tags.includes("auto:route") ||
+    tags.includes("route:enabled") ||
     hasTruthyField(records, ["route_enabled", "routeEnabled", "automation_allowed", "automationAllowed"]) ||
     hasTruthyField(automation, ["allowed"]);
   if (!hasRouteOptIn) return { eligible: false, reason: "missing explicit route opt-in", tags };

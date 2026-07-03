@@ -387,7 +387,9 @@ function recommendedTask(loop: Loop, run: LoopRun, failure: RunFailureSignal, ro
     failure.evidence.stderr ? `Stderr:\n${failure.evidence.stderr}` : undefined,
   ].filter(Boolean).join("\n\n");
   const dedupeKey = `openloops:${loop.id}:${failure.fingerprint}`;
-  const tags = ["bug", "openloops", "loop-health", failure.classification];
+  // "loops" is the tag control-room consumers query on; without it the
+  // auto-filed failure tasks had no consumer. Keep the legacy tags too.
+  const tags = ["bug", "openloops", "loops", "loop-health", failure.classification];
   const priority = failure.classification === "auth" || failure.classification === "rate_limit" ? "high" : "medium";
   return {
     title,
@@ -402,7 +404,7 @@ function recommendedTask(loop: Loop, run: LoopRun, failure: RunFailureSignal, ro
       comment: ["todos", "comment", "<task-id>", description],
     },
     futureNativeUpsert: {
-      command: "todos upsert",
+      command: "todos task upsert",
       fields: {
         title,
         description,

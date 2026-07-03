@@ -102,6 +102,9 @@ function compactDrainResult(result: TodosTaskRoutePrint): Record<string, unknown
     providerRouting,
     requeue,
     queuedAtSource: value.queuedAtSource,
+    // Preserve the non-skippable-error marker so compact/cron output still
+    // exposes it; otherwise a fully-fatal drain looks identical to a no-op.
+    fatal: value.fatal === true ? true : undefined,
   };
 }
 
@@ -227,11 +230,19 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
       result = routeTodosTaskEvent(event, opts);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (!isSkippableDrainRouteError(message)) throw error;
-      const sourceTaskUpdate = opts.dryRun
-        ? { attempted: false, reason: "dry-run" }
-        : markInvalidDrainTaskNonRouteable(todosProject, task, message);
-      result = skippedDrainTask(task, event, redact(message, 640) ?? "route task failed", { sourceTaskUpdate });
+      if (isSkippableDrainRouteError(message)) {
+        const sourceTaskUpdate = opts.dryRun
+          ? { attempted: false, reason: "dry-run" }
+          : markInvalidDrainTaskNonRouteable(todosProject, task, message);
+        result = skippedDrainTask(task, event, redact(message, 640) ?? "route task failed", { sourceTaskUpdate });
+      } else {
+        // Previously any non-skippable route error threw and aborted the whole
+        // drain mid-batch: already-created loops were kept, the remaining
+        // candidates went unprocessed, and no evidence file was written. Capture
+        // the error per-task and continue so the batch completes and the
+        // evidence report records the failure (flagged fatal for visibility).
+        result = skippedDrainTask(task, event, redact(message, 640) ?? "route task failed", { fatal: true });
+      }
     }
     results.push(result);
     if (result.kind === "created") created += 1;
@@ -257,6 +268,10 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
     deduped: results.filter((result) => result.kind === "deduped").length,
     throttled: results.filter((result) => result.kind === "throttled").length,
     skipped: results.filter((result) => result.kind === "skipped").length,
+    // Non-skippable route errors captured per-task (batch continued). A drain
+    // where every candidate is fatal would otherwise report created=0 skipped=N
+    // and exit 0; callers use this count to fail the run instead.
+    fatal: results.filter((result) => result.value.fatal === true).length,
     maxDispatch,
     source: "todos ready",
     dryRun: Boolean(opts.dryRun),
@@ -285,6 +300,7 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
         deduped: report.deduped,
         throttled: report.throttled,
         skipped: report.skipped,
+        fatal: report.fatal,
         maxDispatch: report.maxDispatch,
         source: report.source,
         dryRun: report.dryRun,
@@ -294,6 +310,6 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
     : { ...report, evidencePath };
   return {
     value,
-    human: `drained todos ready queue: considered=${report.considered} created=${report.created} deduped=${report.deduped} throttled=${report.throttled} skipped=${report.skipped}`,
+    human: `drained todos ready queue: considered=${report.considered} created=${report.created} deduped=${report.deduped} throttled=${report.throttled} skipped=${report.skipped} fatal=${report.fatal}`,
   };
 }
