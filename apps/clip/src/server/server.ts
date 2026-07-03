@@ -4,7 +4,7 @@ import { Buffer } from "node:buffer";
 import { captureScreenshot } from "../capture/index.js";
 import { shareClipboard } from "../clipboard.js";
 import { ClipStore } from "../storage.js";
-import type { CaptureMode, ClipboardKind, ClipClientOptions, ClipRecord } from "../types.js";
+import type { CaptureMode, ClipboardKind, ClipClientOptions, ClipRecord, ClipStorageStatus } from "../types.js";
 import { extensionForMime, htmlEscape, isTextMime, normalizeLimit } from "../util.js";
 import { DEFAULT_PORT } from "../paths.js";
 import { resolveBaseUrl } from "../share.js";
@@ -56,6 +56,16 @@ function publicClipRecord(record: ClipRecord): Record<string, unknown> {
 
 function publicClipRecords(records: ClipRecord[]): Record<string, unknown>[] {
   return records.map(publicClipRecord);
+}
+
+function publicStorageStatus(status: ClipStorageStatus): Record<string, unknown> {
+  return {
+    totalActive: status.totalActive,
+    deleted: status.deleted,
+    database: "sqlite",
+    artifacts: "local",
+    localPathsRedacted: true,
+  };
 }
 
 async function requestJson(req: Request): Promise<Record<string, unknown>> {
@@ -156,7 +166,7 @@ export async function handleClipHttpRequest(req: Request, options: ClipServerOpt
     if (req.method === "GET" && path === "/api/status") {
       const store = new ClipStore(storeOptions(options));
       try {
-        return jsonResponse({ storage: store.status(), baseUrl: resolveBaseUrl(storeOptions(options)) });
+        return jsonResponse({ storage: publicStorageStatus(store.status()), baseUrl: resolveBaseUrl(storeOptions(options)) });
       } finally {
         store.close();
       }

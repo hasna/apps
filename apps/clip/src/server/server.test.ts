@@ -77,4 +77,35 @@ describe("HTTP server routes", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("redacts local filesystem paths from public status", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clip-server-status-"));
+    try {
+      const response = await handleClipHttpRequest(new Request("http://x/api/status"), {
+        clientOptions: { homeDir: dir },
+        baseUrl: "http://test.local",
+      });
+      expect(response.status).toBe(200);
+      const payloadText = await response.text();
+      const payload = JSON.parse(payloadText) as {
+        storage: {
+          totalActive: number;
+          deleted: number;
+          localPathsRedacted: boolean;
+          homeDir?: string;
+          dbPath?: string;
+          artifactDir?: string;
+        };
+      };
+      expect(payload.storage.totalActive).toBe(0);
+      expect(payload.storage.deleted).toBe(0);
+      expect(payload.storage.localPathsRedacted).toBe(true);
+      expect(payload.storage.homeDir).toBeUndefined();
+      expect(payload.storage.dbPath).toBeUndefined();
+      expect(payload.storage.artifactDir).toBeUndefined();
+      expect(payloadText).not.toContain(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

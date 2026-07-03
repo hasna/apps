@@ -5,10 +5,21 @@ import { join, relative } from "node:path";
 const root = join(import.meta.dir, "..");
 const PRIVATE_SERVICE_PATTERNS = [
   new RegExp("@hasna/" + "cloud\\b"),
+  new RegExp("@hasna/" + "platform\\b"),
+  new RegExp("@hasna/" + "tools\\b"),
   new RegExp("@hasna/" + "wallets\\b"),
   new RegExp("\\bopen-" + "cloud\\b"),
   new RegExp("clip-" + "cloud\\b"),
-  new RegExp("command\\([\"']" + "cloud"),
+  new RegExp("clip-" + "hosted\\b"),
+  new RegExp("\\.command\\([\"'](" + ["cloud", "hosted", "saas", "billing", "signup", "login"].join("|") + ")\\b"),
+  new RegExp("\\b" + ["STRIPE", "SECRET", "KEY"].join("_") + "\\b"),
+  new RegExp("\\b" + ["STRIPE", "WEBHOOK", "SECRET"].join("_") + "\\b"),
+  new RegExp("\\b" + ["HASNA", "CLOUD"].join("_") + "\\b"),
+  new RegExp("\\b" + ["HASNA", "RDS"].join("_") + "\\b"),
+  new RegExp("\\b" + ["rds", "cluster"].join("_") + "\\b", "i"),
+  new RegExp(["hasna", "xyz"].join("-"), "i"),
+  new RegExp(["hasna", "studio"].join("-"), "i"),
+  new RegExp(["hasna", "studio"].join(""), "i"),
 ] as const;
 
 const SOURCE_ROOTS = [
