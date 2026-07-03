@@ -112,6 +112,19 @@ export type {
 export { Store } from "./lib/store.js";
 
 // ---------------------------------------------------------------------------
+// Experimental: deployment mode contract
+// ---------------------------------------------------------------------------
+export {
+  LOOP_DEPLOYMENT_MODES,
+  buildDeploymentStatus,
+  deploymentStatusLine,
+  loopControlPlaneConfig,
+  normalizeLoopDeploymentMode,
+  resolveLoopDeploymentMode,
+} from "./lib/mode.js";
+export type { LoopControlPlaneConfig, LoopDeploymentMode, LoopDeploymentStatus, LoopModeResolution, LoopSourceOfTruth } from "./lib/mode.js";
+
+// ---------------------------------------------------------------------------
 // Experimental: execution and workflow engines
 // ---------------------------------------------------------------------------
 export { executeLoop, executeTarget, preflightTarget } from "./lib/executor.js";

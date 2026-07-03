@@ -5,6 +5,24 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.4.1 (2026-07-03)
+
+Contract-foundation release for the Mailery-style local/self-hosted/cloud
+deployment split.
+
+### Added
+
+- Deployment-mode contract docs covering `local`, `self_hosted`, and `cloud`
+  authority, cache/spool, API, runner, and hosted-boundary semantics.
+- Public mode resolver and status helpers exported from `@hasna/loops` and the
+  `@hasna/loops/mode` subpath.
+- CLI status surfaces: `loops mode`, `loops self-hosted status`, and
+  `loops cloud status`.
+- Foundation binaries and package subpaths for `loops-api` / `@hasna/loops/api`
+  and `loops-runner` / `@hasna/loops/runner`.
+- Private-hosted-boundary test coverage to keep hosted implementation details
+  and obvious credential patterns out of the public package.
+
 ## 0.4.0 (2026-07-02)
 
 Audit-hardening release: write-path secret scrubbing, process-group reaping,

@@ -5,7 +5,8 @@ OpenLoops is a local CLI and daemon for persistent loops and workflows: schedule
 Naming: the product is **OpenLoops**, published on npm as
 [`@hasna/loops`](https://www.npmjs.com/package/@hasna/loops) and developed in the
 [`hasna/loops`](https://github.com/hasna/loops) repository. The installed
-binaries are `loops`, `loops-daemon`, and `loops-mcp`.
+binaries are `loops`, `loops-daemon`, `loops-api`, `loops-runner`, and
+`loops-mcp`.
 
 It supports deterministic command loops, JSON-defined workflows, and guarded CLI adapters for headless coding agents:
 
@@ -15,6 +16,40 @@ It supports deterministic command loops, JSON-defined workflows, and guarded CLI
 - `aicopilot run`
 - `opencode run`
 - `codex exec`
+
+## Deployment Modes
+
+OpenLoops has three deployment modes:
+
+- `local`: SQLite in `LOOPS_DATA_DIR` is authoritative and `loops-daemon` executes scheduled work.
+- `self_hosted`: a user-operated `loops-api` control plane is authoritative and `loops-runner` executes work on registered machines.
+- `cloud`: a hosted control-plane contract; when a hosted API URL is configured, that service is authoritative and `loops-runner` executes work on registered machines.
+
+`local` is the default and requires no network, token, Postgres, or hosted
+service. Set `LOOPS_MODE` or `HASNA_LOOPS_MODE` to `local`, `self_hosted`, or
+`cloud` to choose explicitly. Without an explicit mode, `LOOPS_CLOUD_API_URL`
+selects `cloud`, while `LOOPS_API_URL` or `LOOPS_DATABASE_URL` selects
+`self_hosted`.
+
+The public `@hasna/loops` package owns the local runtime, mode resolver,
+self-hosted API contract, runner contract, SDK, MCP server, and CLI. Hosted
+tenant auth, account administration, and infrastructure live outside this
+package. Cloud mode is a public contract until a hosted API URL and token are
+configured.
+
+Useful status commands:
+
+```bash
+loops mode
+loops --json mode
+loops self-hosted status
+loops cloud status
+loops-api status
+loops-runner status
+```
+
+See [Deployment Modes](docs/DEPLOYMENT_MODES.md) for the full package boundary
+and machine-placement contract.
 
 ## Install
 
@@ -587,7 +622,7 @@ loops routes schedule todos-task oss-task-route-drain \
   --every 5m \
   --todos-project "$HOME/.hasna/loops" \
   --template task-lifecycle \
-  --project-path-prefix /home/hasna/workspace/hasna/opensource \
+  --project-path-prefix "$HOME/workspace/hasna/opensource" \
   --tags auto:route \
   --provider codewith \
   --auth-profile-pool account004,account005,account006 \

@@ -1,6 +1,6 @@
 {
   "name": "@hasna/loops",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Persistent local loop and workflow runner for deterministic commands and headless AI coding agents",
   "type": "module",
   "main": "dist/index.js",
@@ -8,6 +8,8 @@
   "bin": {
     "loops": "dist/cli/index.js",
     "loops-daemon": "dist/daemon/index.js",
+    "loops-api": "dist/api/index.js",
+    "loops-runner": "dist/runner/index.js",
     "loops-mcp": "dist/mcp/index.js"
   },
   "exports": {
@@ -23,6 +25,18 @@
       "types": "./dist/mcp/index.d.ts",
       "import": "./dist/mcp/index.js"
     },
+    "./api": {
+      "types": "./dist/api/index.d.ts",
+      "import": "./dist/api/index.js"
+    },
+    "./runner": {
+      "types": "./dist/runner/index.d.ts",
+      "import": "./dist/runner/index.js"
+    },
+    "./mode": {
+      "types": "./dist/lib/mode.d.ts",
+      "import": "./dist/lib/mode.js"
+    },
     "./storage": {
       "types": "./dist/lib/store.d.ts",
       "import": "./dist/lib/store.js"
@@ -36,10 +50,11 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts src/daemon/index.ts src/mcp/index.ts src/index.ts src/sdk/index.ts src/lib/store.ts --outdir dist --target bun --packages external && chmod +x dist/cli/index.js dist/daemon/index.js dist/mcp/index.js && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist && bun build src/cli/index.ts src/daemon/index.ts src/api/index.ts src/runner/index.ts src/mcp/index.ts src/index.ts src/sdk/index.ts src/lib/store.ts src/lib/mode.ts --root src --outdir dist --target bun --packages external && chmod +x dist/cli/index.js dist/daemon/index.js dist/api/index.js dist/runner/index.js dist/mcp/index.js && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "build:bin": "bun build src/cli/index.ts --compile --outfile dist/loops",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "test:boundary": "bun run scripts/no-private-cloud-boundary.mjs",
     "prepare": "test -d dist || bun run build",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:daemon": "bun run src/daemon/index.ts",

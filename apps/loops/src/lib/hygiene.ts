@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+import { homedir } from "node:os";
 import type { Loop, ScheduleSpec } from "../types.js";
 import type { Store } from "./store.js";
 
@@ -69,6 +70,10 @@ const REPO_GENERIC_TOKENS = new Set(["repo", "repoops"]);
 const CADENCE_SUFFIX_TOKENS = new Set(["hourly", "daily", "weekly", "monthly"]);
 const CADENCE_SUFFIX_PATTERN = /^(?:every-?)?\d+(?:s|m|h|d|w)$/;
 
+function userHome(): string {
+  return process.env.HOME || homedir();
+}
+
 function slugify(value: string): string {
   return value
     .normalize("NFKD")
@@ -81,7 +86,7 @@ function slugify(value: string): string {
 }
 
 function repoSlugFromCwd(cwd: string | undefined): string {
-  if (!cwd || cwd === process.env.HOME || cwd === "/home/hasna") return "";
+  if (!cwd || cwd === userHome()) return "";
   if (cwd.includes("/.hasna/loops/")) return "";
   return slugify(basename(cwd));
 }
@@ -270,7 +275,7 @@ function commandText(loop: Loop): string {
 }
 
 function scriptNeedles(scriptsDir: string): string[] {
-  const home = process.env.HOME ?? "/home/hasna";
+  const home = userHome();
   const normalized = scriptsDir.replace(/\/+$/g, "");
   const values = [
     normalized,
@@ -292,7 +297,7 @@ export function buildScriptInventoryReport(
   store: Store,
   opts: { scriptsDir?: string; includeInactive?: boolean; limit?: number } = {},
 ): ScriptInventoryReport {
-  const scriptsDir = opts.scriptsDir ?? `${process.env.HOME ?? "/home/hasna"}/.hasna/loops/scripts`;
+  const scriptsDir = opts.scriptsDir ?? `${userHome()}/.hasna/loops/scripts`;
   const needles = scriptNeedles(scriptsDir);
   const loops = managedLoops(store, { includeInactive: opts.includeInactive, includeStopped: true, limit: opts.limit });
   const scriptBacked = loops

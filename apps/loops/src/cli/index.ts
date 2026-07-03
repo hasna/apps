@@ -44,6 +44,7 @@ import { enableStartup, installStartup } from "../daemon/install.js";
 import { normalizeGoalSpec } from "../lib/workflow-spec.js";
 import { runDoctor } from "../lib/doctor.js";
 import { buildHealthReport, expectationForLoop } from "../lib/health.js";
+import { buildDeploymentStatus, deploymentStatusLine, type LoopDeploymentMode, type LoopDeploymentStatus } from "../lib/mode.js";
 import {
   buildDuplicateOverlapReport,
   buildNameHygieneReport,
@@ -148,6 +149,20 @@ function runAction<Args extends unknown[]>(fn: (...args: Args) => void | Promise
     } catch (error) {
       reportCliError(error);
     }
+  };
+}
+
+function printDeploymentStatus(status: LoopDeploymentStatus, opts: { json?: boolean } = {}): void {
+  if (isJson() || opts.json) console.log(JSON.stringify(status, null, 2));
+  else {
+    console.log(deploymentStatusLine(status));
+    for (const warning of status.warnings) console.log(`warn ${warning}`);
+  }
+}
+
+function deploymentStatusCommand(mode?: LoopDeploymentMode) {
+  return (opts: { json?: boolean } = {}) => {
+    printDeploymentStatus(buildDeploymentStatus({ perspective: mode }), opts);
   };
 }
 
@@ -597,6 +612,24 @@ const events = program.command("events").description("(deprecated) Hasna event e
 const machines = program.command("machines").description("inspect OpenMachines topology for loop assignment");
 
 const goal = program.command("goal").description("inspect goal runs");
+
+program
+  .command("mode")
+  .description("show the active OpenLoops deployment mode")
+  .option("--json", "print JSON")
+  .action(runAction(deploymentStatusCommand()));
+
+const selfHosted = program.command("self-hosted").alias("selfhosted").description("inspect the self-hosted OpenLoops contract");
+selfHosted
+  .command("status")
+  .option("--json", "print JSON")
+  .action(runAction(deploymentStatusCommand("self_hosted")));
+
+const cloud = program.command("cloud").description("inspect the hosted OpenLoops contract");
+cloud
+  .command("status")
+  .option("--json", "print JSON")
+  .action(runAction(deploymentStatusCommand("cloud")));
 
 function formatTemplateVariable(template: LoopTemplateSummary, name: string): string {
   const variable = template.variables.find((entry) => entry.name === name);

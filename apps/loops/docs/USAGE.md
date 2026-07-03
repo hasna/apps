@@ -638,7 +638,7 @@ loops events drain todos-task \
   --template task-lifecycle \
   --task-list repoops-pr-queue \
   --tags auto:route \
-  --project-path-prefix /home/hasna/workspace/hasna/opensource \
+  --project-path-prefix "$HOME/workspace/hasna/opensource" \
   --provider codewith \
   --auth-profile-pool account004,account005,account006 \
   --add-dir "$HOME/.hasna/todos,$HOME/.hasna/loops" \
@@ -672,7 +672,7 @@ loops routes schedule todos-task oss-task-route-drain \
   --every 5m \
   --todos-project "$HOME/.hasna/loops" \
   --template task-lifecycle \
-  --project-path-prefix /home/hasna/workspace/hasna/opensource \
+  --project-path-prefix "$HOME/workspace/hasna/opensource" \
   --tags auto:route \
   --provider codewith \
   --auth-profile-pool account004,account005,account006 \
@@ -688,7 +688,7 @@ loops routes schedule todos-task oss-task-route-drain \
   --compact
 ```
 
-Only tasks under `/home/hasna/workspace/hasna/opensource` that explicitly opt
+Only tasks under `$HOME/workspace/hasna/opensource` that explicitly opt
 in with the `auto:route` tag, `route_enabled=true`, or
 `automation.allowed=true` should be routed. Keep repo-mutating worker/verifier
 runs on a Codewith account pool with `--worktree-mode required`. Do not dispatch

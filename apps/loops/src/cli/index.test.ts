@@ -95,6 +95,74 @@ describe("loops CLI", () => {
     expect(daemonVersion.stdout.trim()).toBe(pkg.version);
   });
 
+  test("reports local deployment mode by default", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-mode-local-"));
+    const mode = runCli(dataDir, ["--json", "mode"], undefined, {
+      LOOPS_MODE: "",
+      HASNA_LOOPS_MODE: "",
+      LOOPS_API_URL: "",
+      HASNA_LOOPS_API_URL: "",
+      LOOPS_CLOUD_API_URL: "",
+      HASNA_LOOPS_CLOUD_API_URL: "",
+      LOOPS_DATABASE_URL: "",
+      HASNA_LOOPS_DATABASE_URL: "",
+    });
+
+    expect(mode.status).toBe(0);
+    const value = JSON.parse(mode.stdout);
+    expect(value.deploymentMode).toBe("local");
+    expect(value.sourceOfTruth).toBe("local_sqlite");
+    expect(value.localStore.role).toBe("authoritative");
+    expect(mode.stdout).not.toContain("dataDir");
+    expect(mode.stdout).not.toContain("dbPath");
+  });
+
+  test("reports self-hosted and cloud contract perspectives without exposing tokens", () => {
+    const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-mode-cloud-"));
+    const selfHosted = runCli(dataDir, ["--json", "self-hosted", "status"], undefined, {
+      LOOPS_MODE: "self-hosted",
+      LOOPS_API_URL: "http://127.0.0.1:8787",
+      LOOPS_API_TOKEN: "do-not-print-this-token",
+    });
+    expect(selfHosted.status).toBe(0);
+    expect(selfHosted.stdout).not.toContain("do-not-print-this-token");
+    expect(JSON.parse(selfHosted.stdout)).toMatchObject({
+      deploymentMode: "self_hosted",
+      activeDeploymentMode: "self_hosted",
+      sourceOfTruth: "self_hosted_control_plane",
+      controlPlane: {
+        kind: "self_hosted",
+        configured: true,
+        apiUrl: "http://127.0.0.1:8787",
+        authTokenPresent: true,
+      },
+    });
+
+    const cloud = runCli(dataDir, ["--json", "cloud", "status"], undefined, {
+      LOOPS_MODE: "local",
+      LOOPS_CLOUD_API_URL: "https://loops.example.test",
+      LOOPS_CLOUD_TOKEN: "do-not-print-this-cloud-token",
+    });
+    expect(cloud.status).toBe(0);
+    expect(cloud.stdout).not.toContain("do-not-print-this-cloud-token");
+    const cloudValue = JSON.parse(cloud.stdout);
+    expect(cloudValue).toMatchObject({
+      deploymentMode: "cloud",
+      activeDeploymentMode: "local",
+      active: false,
+      sourceOfTruth: "cloud_control_plane",
+      controlPlane: {
+        kind: "cloud",
+        configured: true,
+        apiUrl: "https://loops.example.test",
+        authTokenPresent: true,
+      },
+    });
+    expect(cloudValue.warnings.join(" ")).toContain("active deployment mode is local");
+    expect(cloud.stdout).not.toContain("dataDir");
+    expect(cloud.stdout).not.toContain("dbPath");
+  });
+
   test("compiled CLI reports the package version", () => {
     const root = mkdtempSync(join(tmpdir(), "loops-cli-compiled-version-"));
     const outfile = join(root, "loops");
@@ -4178,7 +4246,7 @@ describe("loops CLI", () => {
   test("docs include the OSS task route drain safety recipe", () => {
     const usage = readFileSync(new URL("../../docs/USAGE.md", import.meta.url), "utf8");
 
-    expect(usage).toContain("/home/hasna/workspace/hasna/opensource");
+    expect(usage).toContain("$HOME/workspace/hasna/opensource");
     expect(usage).toContain("--tags auto:route");
     expect(usage).toContain("--auth-profile-pool account004,account005,account006");
     expect(usage).toContain("--worktree-mode required");

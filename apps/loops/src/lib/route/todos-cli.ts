@@ -1,13 +1,13 @@
 import { closeSync, mkdtempSync, openSync, readFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { redact } from "../format.js";
 
 /** Local `todos` CLI transport used by route drains and route-tasks commands. */
 
 export function defaultLoopsProject(): string {
-  return process.env.LOOPS_TASK_PROJECT || process.env.LOOPS_DATA_DIR || `${process.env.HOME ?? "/home/hasna"}/.hasna/loops`;
+  return process.env.LOOPS_TASK_PROJECT || process.env.LOOPS_DATA_DIR || `${process.env.HOME || homedir()}/.hasna/loops`;
 }
 
 export interface LocalCommandResult {
