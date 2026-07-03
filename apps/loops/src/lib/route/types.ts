@@ -49,6 +49,11 @@ export interface TodosReadyTask {
   id?: string;
   task_id?: string;
   taskId?: string;
+  source_store_id?: string;
+  source_repo_path?: string;
+  source_db_path?: string;
+  source_task_key?: string;
+  source_selected_by_input?: boolean;
   title?: string;
   description?: string;
   body?: string;
@@ -64,12 +69,16 @@ export interface TodosReadyTask {
   projectId?: string;
   task_list_id?: string;
   taskListId?: string;
-  task_list?: { id?: string; slug?: string };
+  task_list?: { id?: string; slug?: string; name?: string };
   [key: string]: unknown;
 }
 
 export interface TodosDrainOptions extends TodosTaskRouteOptions {
   todosProject?: string;
+  todosSourceRoot?: string[];
+  todosSourceStore?: string[];
+  todosSourceInclude?: string[];
+  todosSourceExclude?: string[];
   todosProjectId?: string;
   taskList?: string;
   tags?: string;

@@ -42,6 +42,7 @@ import {
   TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID,
   todosDoneLine,
   todosEvidenceLine,
+  todosEnvPrefix,
   todosExactCommandsFragment,
   todosStartLine,
   todosVerificationLine,
@@ -115,6 +116,7 @@ export interface TodosTaskWorkflowTemplateInput extends AgentWorkflowTemplateBas
   taskTitle?: string;
   taskDescription?: string;
   todosProjectPath?: string;
+  todosDbPath?: string;
   prHandoff?: boolean;
   eventId?: string;
   eventType?: string;
@@ -473,12 +475,12 @@ function commandStep(opts: CommandStepOptions): GateWorkflowStep {
   };
 }
 
-function sourceTaskGateStep(todosProjectPath: string, taskId: string, plan: WorktreePlan, description: string): GateWorkflowStep {
+function sourceTaskGateStep(todosProjectPath: string, taskId: string, plan: WorktreePlan, description: string, todosDbPath?: string): GateWorkflowStep {
   return commandStep({
     id: "source-task-gate",
     name: "Source Task Gate",
     description,
-    command: sourceTaskGateCommand(todosProjectPath, taskId),
+    command: sourceTaskGateCommand(todosProjectPath, taskId, todosDbPath),
     cwd: plan.originalCwd,
     timeoutMs: 60_000,
     blockedExitCodes: GATE_BLOCKED_EXIT_CODES,
@@ -490,6 +492,7 @@ interface LifecycleGateStepOptions {
   description: string;
   dependsOn: string[];
   todosProjectPath: string;
+  todosDbPath?: string;
   taskId: string;
   goMarker: string;
   blockedMarker: string;
@@ -502,7 +505,7 @@ function lifecycleGateStep(opts: LifecycleGateStepOptions): GateWorkflowStep {
     name: opts.stage === "triage" ? "Triage Gate" : "Planner Gate",
     description: opts.description,
     dependsOn: opts.dependsOn,
-    command: lifecycleGateCommand(opts.todosProjectPath, opts.taskId, opts.stage, opts.goMarker, opts.blockedMarker),
+    command: lifecycleGateCommand(opts.todosProjectPath, opts.taskId, opts.stage, opts.goMarker, opts.blockedMarker, opts.todosDbPath),
     cwd: opts.plan.originalCwd,
     timeoutMs: 2 * 60_000,
     blockedExitCodes: GATE_BLOCKED_EXIT_CODES,
@@ -513,7 +516,7 @@ function prHandoffArtifactPath(plan: WorktreePlan, taskId: string): string {
   return join(plan.cwd, ".openloops", "pr-handoff", `${slugSegment(taskId, "task")}.json`);
 }
 
-function prHandoffStep(input: TodosTaskWorkflowTemplateInput, plan: WorktreePlan, todosProjectPath: string): WorkflowStep {
+function prHandoffStep(input: TodosTaskWorkflowTemplateInput, plan: WorktreePlan, todosProjectPath: string, todosDbPath?: string): WorkflowStep {
   return commandStep({
     id: "pr-handoff",
     name: "PR Handoff",
@@ -523,6 +526,7 @@ function prHandoffStep(input: TodosTaskWorkflowTemplateInput, plan: WorktreePlan
       artifactPath: prHandoffArtifactPath(plan, input.taskId),
       taskId: input.taskId,
       todosProjectPath,
+      todosDbPath,
       worktreeCwd: plan.cwd,
       worktreeRoot: plan.path ?? plan.cwd,
       expectedBranch: plan.branch ?? "",
@@ -634,6 +638,7 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
   if (!input.taskId?.trim()) throw new Error("taskId is required");
   if (!input.projectPath?.trim()) throw new Error("projectPath is required");
   const todosProjectPath = input.todosProjectPath ?? input.routeProjectPath ?? input.projectPath;
+  const todosDbPath = input.todosDbPath;
   const plan = worktreePlan(input, input.taskId);
   const taskContext = {
     taskId: input.taskId,
@@ -644,15 +649,17 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
     projectPath: input.projectPath,
     routeProjectPath: input.routeProjectPath,
     projectGroup: input.projectGroup,
+    todosProjectPath: input.todosProjectPath ?? (input.todosDbPath ? todosProjectPath : undefined),
+    todosDbPath,
     worktree: worktreeContextFragment(plan),
   };
   const workerPrompt = [
     ...goalHeaderFragment(`Complete todos task ${input.taskId} in ${input.projectPath}.`, "worker", "task"),
     worktreePrompt(plan),
     ...todosExactCommandsFragment(todosProjectPath, input.taskId, [
-      todosStartLine(todosProjectPath, input.taskId),
-      todosEvidenceLine(todosProjectPath, input.taskId, "concise evidence and blockers"),
-    ]),
+      todosStartLine(todosProjectPath, input.taskId, todosDbPath),
+      todosEvidenceLine(todosProjectPath, input.taskId, "concise evidence and blockers", todosDbPath),
+    ], todosDbPath),
     "Investigate first before changing files. Use the todos CLI as the source of truth for the task.",
     "Inspect the repository/project state, implement only the task scope, run focused validation, preserve unrelated user changes, and update the task with comments, evidence, changed files, commits, and blockers.",
     NO_TMUX_DISPATCH_FRAGMENT,
@@ -664,9 +671,9 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
     ...goalHeaderFragment(`Verify todos task ${input.taskId} after the worker step.`, "verifier", "task"),
     worktreePrompt(plan),
     ...todosExactCommandsFragment(todosProjectPath, input.taskId, [
-      todosVerificationLine(todosProjectPath, input.taskId),
-      todosDoneLine(todosProjectPath, input.taskId),
-    ]),
+      todosVerificationLine(todosProjectPath, input.taskId, todosDbPath),
+      todosDoneLine(todosProjectPath, input.taskId, todosDbPath),
+    ], todosDbPath),
     adversarialReviewFragment("the task, repository state, commits, tests, and worker evidence", TASK_REVIEW_FOCUS),
     verifierRuntimeGuidance(input),
     TASK_VERIFIER_DECISION_FRAGMENT,
@@ -686,6 +693,7 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
         input.taskId,
         plan,
         "Fail before worker execution when the source todos task is not resolvable.",
+        todosDbPath,
       ),
       ...workerVerifierSteps({
         input,
@@ -705,6 +713,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
   if (!input.taskId?.trim()) throw new Error("taskId is required");
   if (!input.projectPath?.trim()) throw new Error("projectPath is required");
   const todosProjectPath = input.todosProjectPath ?? input.routeProjectPath ?? input.projectPath;
+  const todosDbPath = input.todosDbPath;
   const plan = worktreePlan(input, input.taskId);
   const taskContext = {
     taskId: input.taskId,
@@ -716,6 +725,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     routeProjectPath: input.routeProjectPath,
     projectGroup: input.projectGroup,
     todosProjectPath,
+    todosDbPath,
     worktree: worktreeContextFragment(plan),
   };
   const handoffArtifactPath = prHandoffArtifactPath(plan, input.taskId);
@@ -730,8 +740,8 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
   const shared = [
     worktreePrompt(plan),
     ...todosExactCommandsFragment(todosProjectPath, input.taskId, [
-      todosEvidenceLine(todosProjectPath, input.taskId, "concise evidence, decision, or blocker"),
-    ]),
+      todosEvidenceLine(todosProjectPath, input.taskId, "concise evidence, decision, or blocker", todosDbPath),
+    ], todosDbPath),
     NO_TMUX_DISPATCH_FRAGMENT,
     "Preserve unrelated user changes and keep scope tied to the task acceptance criteria.",
     "",
@@ -740,7 +750,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
   ].join("\n");
   const gateMarker = (stage: LifecycleGateStage, state: "go" | "blocked"): string =>
     `openloops:${stage}=${state} task=${input.taskId}${input.eventId ? ` event=${input.eventId}` : ""}`;
-  const blockTaskCommand = `todos --project ${todosProjectPath} update ${input.taskId} --status blocked`;
+  const blockTaskCommand = `${todosEnvPrefix(todosDbPath)}todos --project ${todosProjectPath} update ${input.taskId} --status blocked`;
   const gateStopFragment = (stage: LifecycleGateStage, stops: string): string =>
     `The deterministic ${stage} gate will stop ${stops} unless the latest ${stage} marker is the exact go marker and the task has no blocked/completed/done/cancelled/failed/archived/no-auto/manual/approval-required state.`;
   const triagePrompt = [
@@ -767,7 +777,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
   const workerPrompt = [
     ...goalHeaderFragment(`Complete todos task ${input.taskId} according to the planner evidence.`, "worker", "lifecycle"),
     shared,
-    todosStartLine(todosProjectPath, input.taskId),
+    todosStartLine(todosProjectPath, input.taskId, todosDbPath),
     "Read the triage and planner comments first. Implement only the scoped task, run focused validation, and record changed files, commits, evidence, blockers, and residual risks.",
     input.prHandoff ? `When only GitHub network access is blocked after a successful commit/validation, record the handoff artifact at ${handoffArtifactPath} instead of repeatedly retrying push/PR creation.` : undefined,
     WORKER_LEAVES_COMPLETION_FRAGMENT,
@@ -775,8 +785,8 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
   const verifierPrompt = [
     ...goalHeaderFragment(`Verify todos task ${input.taskId} after the full lifecycle worker step.`, "verifier", "lifecycle"),
     shared,
-    todosVerificationLine(todosProjectPath, input.taskId),
-    todosDoneLine(todosProjectPath, input.taskId),
+    todosVerificationLine(todosProjectPath, input.taskId, todosDbPath),
+    todosDoneLine(todosProjectPath, input.taskId, todosDbPath),
     adversarialReviewFragment("triage, plan, worker evidence, repo state, commits, tests, and acceptance criteria", TASK_REVIEW_FOCUS),
     verifierRuntimeGuidance(input),
     input.prHandoff ? `If ${handoffArtifactPath} exists and there is no PR URL evidence, verify that the PR handoff step queued or completed a bounded handoff; leave the original task open or blocked until PR evidence is recorded.` : undefined,
@@ -789,6 +799,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
       input.taskId,
       plan,
       "Fail before lifecycle agents execute when the source todos task is not resolvable.",
+      todosDbPath,
     ),
     {
       id: "triage",
@@ -803,6 +814,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
       description: "Stop the lifecycle before planning when triage blocked or disallowed automation.",
       dependsOn: ["triage"],
       todosProjectPath,
+      todosDbPath,
       taskId: input.taskId,
       goMarker: gateMarker("triage", "go"),
       blockedMarker: gateMarker("triage", "blocked"),
@@ -821,6 +833,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
       description: "Stop the lifecycle before implementation when planning blocked or disallowed automation.",
       dependsOn: ["planner"],
       todosProjectPath,
+      todosDbPath,
       taskId: input.taskId,
       goMarker: gateMarker("planner", "go"),
       blockedMarker: gateMarker("planner", "blocked"),
@@ -836,7 +849,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     },
   ];
   if (input.prHandoff) {
-    steps.push(prHandoffStep(input, plan, todosProjectPath));
+    steps.push(prHandoffStep(input, plan, todosProjectPath, todosDbPath));
   }
   steps.push({
     id: "verifier",
@@ -1088,6 +1101,7 @@ function renderLifecycleBoundedTemplate(id: string, values: Record<string, strin
       taskTitle: values.taskTitle,
       taskDescription: values.taskDescription,
       todosProjectPath: values.todosProjectPath ?? values.todosProject,
+      todosDbPath: values.todosDbPath,
       triageAuthProfile: values.triageAuthProfile,
       plannerAuthProfile: values.plannerAuthProfile,
       triageAccount: accountVar(values.triageAccount, values.accountTool),
@@ -1153,6 +1167,7 @@ function renderBuiltinLoopTemplate(id: string, values: Record<string, string | u
       taskTitle: values.taskTitle,
       taskDescription: values.taskDescription,
       todosProjectPath: values.todosProjectPath ?? values.todosProject,
+      todosDbPath: values.todosDbPath,
       eventId: values.eventId,
       eventType: values.eventType,
     });

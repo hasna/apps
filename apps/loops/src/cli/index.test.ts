@@ -3799,6 +3799,14 @@ describe("loops CLI", () => {
       "5m",
       "--task-list",
       "oss",
+      "--todos-source-root",
+      "/tmp/route-sources",
+      "--todos-source-store",
+      "/tmp/route-store.db",
+      "--todos-source-include",
+      "open-*",
+      "--todos-source-exclude",
+      "archive-*",
       "--max-dispatch",
       "2",
       "--sandbox",
@@ -3811,6 +3819,16 @@ describe("loops CLI", () => {
     expect(loop.name).toBe("route-drain-test");
     expect(loop.target.command).toBe("loops");
     expect(loop.target.args).toEqual(expect.arrayContaining(["routes", "drain", "todos-task", "--task-list", "oss", "--max-dispatch", "2", "--timeout", "10m"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining([
+      "--todos-source-root",
+      "/tmp/route-sources",
+      "--todos-source-store",
+      "/tmp/route-store.db",
+      "--todos-source-include",
+      "open-*",
+      "--todos-source-exclude",
+      "archive-*",
+    ]));
   });
 
   test("todos task routes can select the full task-lifecycle template", () => {
@@ -5238,6 +5256,654 @@ describe("loops CLI", () => {
     const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
     expect(loops).toHaveLength(1);
     expect(loops[0].name).toContain("task-dra");
+  });
+
+  test("todos task drain parses source discovery and dedupes same task id per source store", () => {
+    const dataDir = freshDataDir("loops-cli-event-drain-source-discovery-");
+    const binDir = join(dataDir, "bin");
+    const callsFile = join(dataDir, "todos-calls.txt");
+    const repo = createGitRepo("loops-cli-event-drain-source-discovery-repo-");
+    const sourceRoot = join(dataDir, "sources");
+    const sourceStore = join(dataDir, "selected-store.db");
+    const sourceDbA = join(dataDir, "store-a.db");
+    const sourceDbB = join(dataDir, "store-b.db");
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "printf '%s\\n' \"$*\" >> \"$CALLS_FILE\"",
+        "if [[ \"$*\" == *\"--project\"* ]]; then printf 'source discovery should not use --project\\n' >&2; exit 7; fi",
+        "if [[ \"$*\" == *\"task-lists\"* ]]; then printf 'source discovery should not list task-lists\\n' >&2; exit 8; fi",
+        "if [[ \"$*\" == *\" ready \"* || \"$*\" == \"ready\"* ]]; then printf '%s\\n' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "printf 'unexpected todos command: %s\\n' \"$*\" >&2",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const ready = {
+      schema_version: "todos.task_route_sources.v1",
+      stores: [
+        { id: "store-a", repo_path: repo, db_path: sourceDbA },
+        { id: "store-b", repo_path: repo, db_path: sourceDbB },
+      ],
+      candidates: [
+        {
+          id: "task-source-same-id",
+          source_store_id: "store-a",
+          source_task_key: "store-a/task-source-same-id",
+          source_repo_path: repo,
+          source_db_path: sourceDbA,
+          source_selected_by_input: true,
+          title: "Route source task from store A",
+          status: "pending",
+          working_dir: repo,
+          tags: ["auto:route"],
+          metadata: {},
+          route_state: { eligible: true },
+        },
+        {
+          id: "task-source-same-id",
+          source_store_id: "store-b",
+          source_repo_path: repo,
+          source_db_path: sourceDbB,
+          source_selected_by_input: true,
+          title: "Route source task from store B",
+          status: "pending",
+          working_dir: repo,
+          tags: ["auto:route"],
+          metadata: {},
+          route_state: { eligible: true },
+        },
+      ],
+      errors: [{ store_id: "store-c", message: "skipped unreadable store" }],
+      total_candidate_count: 2,
+      returned_candidate_count: 2,
+      truncated: false,
+    };
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-source-root",
+        sourceRoot,
+        "--todos-source-store",
+        sourceStore,
+        "--todos-source-include",
+        "open-*",
+        "--todos-source-exclude",
+        "archive-*",
+        "--limit",
+        "10",
+        "--max-dispatch",
+        "5",
+        "--worktree-mode",
+        "off",
+      ],
+      undefined,
+      { PATH: `${binDir}:/usr/bin:/bin`, CALLS_FILE: callsFile, TODOS_READY_JSON: JSON.stringify(ready) },
+    );
+
+    expect(result.status).toBe(0);
+    const calls = readFileSync(callsFile, "utf8");
+    expect(calls).toContain(`--source-root ${sourceRoot}`);
+    expect(calls).toContain(`--source-store ${sourceStore}`);
+    expect(calls).toContain("--include open-*");
+    expect(calls).toContain("--exclude archive-*");
+    expect(calls).toContain("ready --source-root");
+    expect(calls).not.toContain("--project");
+    expect(calls).not.toContain("task-lists");
+    const value = JSON.parse(result.stdout);
+    expect(value.sourceMode).toBe(true);
+    expect(value.source).toBe("todos ready source discovery");
+    expect(value.sourceDiscovery).toMatchObject({
+      schemaVersion: "todos.task_route_sources.v1",
+      totalCandidateCount: 2,
+      returnedCandidateCount: 2,
+      truncated: false,
+    });
+    expect(value.created).toBe(2);
+    expect(value.results.map((entry: { idempotencyKey: string }) => entry.idempotencyKey).sort()).toEqual([
+      "todos-task:store-a/task-source-same-id",
+      "todos-task:store-b:task-source-same-id",
+    ]);
+    expect(value.results[0].event.metadata.source_task.source_store_id).toBe("store-a");
+    expect(value.results[0].invocation.scope.sourceTask.source_store_id).toBe("store-a");
+    expect(value.results[0].invocation.scope.sourceTask.source_db_path).toBe(sourceDbA);
+    expect(value.results[1].event.metadata.source_task.source_store_id).toBe("store-b");
+    expect(value.results[1].invocation.scope.sourceTask.source_store_id).toBe("store-b");
+    expect(value.results[1].invocation.scope.sourceTask.source_db_path).toBe(sourceDbB);
+    expect(value.results[0].workflow.steps[0].target.args[1]).toContain(`TODOS_DB_PATH='${sourceDbA}' HASNA_TODOS_DB_PATH='${sourceDbA}' todos --project '${repo}' --json inspect 'task-source-same-id'`);
+    expect(value.results[1].workflow.steps[0].target.args[1]).toContain(`TODOS_DB_PATH='${sourceDbB}' HASNA_TODOS_DB_PATH='${sourceDbB}' todos --project '${repo}' --json inspect 'task-source-same-id'`);
+
+    const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loops).toHaveLength(2);
+  });
+
+  test("todos task drain requires source route_state eligibility before auto-route tags can route", () => {
+    const dataDir = freshDataDir("loops-cli-event-drain-source-route-state-");
+    const binDir = join(dataDir, "bin");
+    const repo = createGitRepo("loops-cli-event-drain-source-route-state-repo-");
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"$*\" == *\"ready\"* ]]; then printf '%s\\n' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const ready = {
+      schema_version: "todos.task_route_sources.v1",
+      stores: [{ id: "store-blocked", repo_path: repo }],
+      candidates: [
+        {
+          id: "task-source-route-state-blocked",
+          source_store_id: "store-blocked",
+          source_repo_path: repo,
+          title: "Must not route on tag alone",
+          status: "pending",
+          working_dir: repo,
+          tags: ["auto:route"],
+          metadata: {},
+          route_state: { eligible: false, reasons: ["source contract rejected route"] },
+        },
+      ],
+      total_candidate_count: 1,
+      returned_candidate_count: 1,
+      truncated: false,
+    };
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-source-root",
+        join(dataDir, "sources"),
+        "--limit",
+        "10",
+        "--max-dispatch",
+        "5",
+        "--worktree-mode",
+        "off",
+      ],
+      undefined,
+      { PATH: `${binDir}:/usr/bin:/bin`, TODOS_READY_JSON: JSON.stringify(ready) },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.considered).toBe(1);
+    expect(value.created).toBe(0);
+    expect(value.skipped).toBe(1);
+    expect(value.results[0]).toMatchObject({
+      kind: "skipped",
+      taskId: "task-source-route-state-blocked",
+      reason: "source contract rejected route",
+      sourceRouteState: { eligible: false },
+      sourceTask: { source_store_id: "store-blocked" },
+    });
+    expect(JSON.parse(runCli(dataDir, ["--json", "list"]).stdout)).toHaveLength(0);
+  });
+
+  test("todos task drain admits source route_state eligible tasks without legacy route opt-in fields", () => {
+    const dataDir = freshDataDir("loops-cli-event-drain-source-route-state-optin-");
+    const binDir = join(dataDir, "bin");
+    const repo = createGitRepo("loops-cli-event-drain-source-route-state-optin-repo-");
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"$*\" == *\"ready\"* ]]; then printf '%s\\n' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const ready = {
+      schema_version: "todos.task_route_sources.v1",
+      stores: [{ id: "store-policy", repo_path: repo }],
+      candidates: [
+        {
+          id: "task-source-policy-optin",
+          source_store_id: "store-policy",
+          source_repo_path: repo,
+          title: "Route from source policy",
+          status: "pending",
+          working_dir: repo,
+          tags: [],
+          metadata: {},
+          route_state: { eligible: true },
+        },
+      ],
+      total_candidate_count: 1,
+      returned_candidate_count: 1,
+      truncated: false,
+    };
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-source-root",
+        join(dataDir, "sources"),
+        "--limit",
+        "10",
+        "--max-dispatch",
+        "5",
+        "--worktree-mode",
+        "off",
+      ],
+      undefined,
+      { PATH: `${binDir}:/usr/bin:/bin`, TODOS_READY_JSON: JSON.stringify(ready) },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.created).toBe(1);
+    expect(value.skipped).toBe(0);
+    expect(value.results[0]).toMatchObject({
+      kind: "created",
+      idempotencyKey: "todos-task:store-policy:task-source-policy-optin",
+      event: {
+        subject: "task-source-policy-optin",
+        data: {
+          route_enabled: true,
+          route_enabled_by: "source_route_state",
+          tags: [],
+        },
+      },
+      sourceTask: { source_store_id: "store-policy" },
+    });
+    expect(JSON.parse(runCli(dataDir, ["--json", "list"]).stdout)).toHaveLength(1);
+  });
+
+  test("todos task drain preserves no-auto, manual, and status disallow gates for source route_state eligible tasks", () => {
+    const dataDir = freshDataDir("loops-cli-event-drain-source-route-state-disallow-");
+    const binDir = join(dataDir, "bin");
+    const repo = createGitRepo("loops-cli-event-drain-source-route-state-disallow-repo-");
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"$*\" == *\"ready\"* ]]; then printf '%s\\n' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const ready = {
+      schema_version: "todos.task_route_sources.v1",
+      stores: [{ id: "store-disallow", repo_path: repo }],
+      candidates: [
+        {
+          id: "task-source-no-auto",
+          source_store_id: "store-disallow",
+          source_repo_path: repo,
+          title: "No auto source task",
+          status: "pending",
+          working_dir: repo,
+          tags: ["no-auto"],
+          metadata: {},
+          route_state: { eligible: true },
+        },
+        {
+          id: "task-source-manual",
+          source_store_id: "store-disallow",
+          source_repo_path: repo,
+          title: "Manual source task",
+          status: "pending",
+          working_dir: repo,
+          tags: [],
+          metadata: { manual: true },
+          route_state: { eligible: true },
+        },
+        {
+          id: "task-source-blocked-status",
+          source_store_id: "store-disallow",
+          source_repo_path: repo,
+          title: "Blocked source task",
+          status: "blocked",
+          working_dir: repo,
+          tags: [],
+          metadata: {},
+          route_state: { eligible: true },
+        },
+      ],
+      total_candidate_count: 3,
+      returned_candidate_count: 3,
+      truncated: false,
+    };
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-source-root",
+        join(dataDir, "sources"),
+        "--limit",
+        "10",
+        "--max-dispatch",
+        "5",
+        "--worktree-mode",
+        "off",
+      ],
+      undefined,
+      { PATH: `${binDir}:/usr/bin:/bin`, TODOS_READY_JSON: JSON.stringify(ready) },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.considered).toBe(3);
+    expect(value.created).toBe(0);
+    expect(value.skipped).toBe(3);
+    expect(value.results.map((entry: { taskId: string; reason: string }) => [entry.taskId, entry.reason])).toEqual([
+      ["task-source-no-auto", "task has disallowed tag: no-auto"],
+      ["task-source-manual", "task metadata requires manual or approval-gated handling: manual"],
+      ["task-source-blocked-status", "task status is not routable: blocked"],
+    ]);
+    expect(JSON.parse(runCli(dataDir, ["--json", "list"]).stdout)).toHaveLength(0);
+  });
+
+  test("todos task drain rejects source include/exclude filters without selected roots or stores", () => {
+    const dataDir = freshDataDir("loops-cli-event-drain-source-empty-selector-");
+    const result = runCli(dataDir, [
+      "--json",
+      "events",
+      "drain",
+      "todos-task",
+      "--todos-source-include",
+      "open-*",
+      "--dry-run",
+    ]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("--todos-source-root or --todos-source-store");
+    expect(JSON.parse(result.stdout).error.message).toContain("--todos-source-root or --todos-source-store");
+  });
+
+  test("todos task drain targets source DB path when quarantining invalid source tasks", () => {
+    const dataDir = freshDataDir("loops-cli-event-drain-source-mutation-");
+    const binDir = join(dataDir, "bin");
+    const callsFile = join(dataDir, "todos-calls.txt");
+    const sourceRepo = createGitRepo("loops-cli-event-drain-source-mutation-repo-");
+    const nonGit = join(dataDir, "not-a-repo");
+    const sourceDb = join(dataDir, "source-store.db");
+    const routerProject = join(dataDir, "router-store");
+    mkdirSync(nonGit, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "printf 'db=%s hasna_db=%s args=%s\\n' \"${TODOS_DB_PATH:-}\" \"${HASNA_TODOS_DB_PATH:-}\" \"$*\" >> \"$CALLS_FILE\"",
+        "if [[ \"$*\" == *\"ready\"* ]]; then printf '%s\\n' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "if [[ \"$*\" == *\"comment\"* || \"$*\" == *\" tag \"* || \"$*\" == *\"untag\"* ]]; then printf 'ok\\n'; exit 0; fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const ready = {
+      schema_version: "todos.task_route_sources.v1",
+      stores: [{ id: "source-store", repo_path: sourceRepo, db_path: sourceDb }],
+      candidates: [
+        {
+          id: "task-source-invalid-worktree",
+          source_store_id: "source-store",
+          source_repo_path: sourceRepo,
+          source_db_path: sourceDb,
+          title: "Invalid worktree source task",
+          status: "pending",
+          working_dir: nonGit,
+          tags: ["auto:route"],
+          metadata: {},
+          route_state: { eligible: true },
+        },
+      ],
+      total_candidate_count: 1,
+      returned_candidate_count: 1,
+      truncated: false,
+    };
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        routerProject,
+        "--todos-source-root",
+        join(dataDir, "sources"),
+        "--limit",
+        "10",
+        "--max-dispatch",
+        "5",
+        "--worktree-mode",
+        "required",
+      ],
+      undefined,
+      { PATH: `${binDir}:/usr/bin:/bin`, CALLS_FILE: callsFile, TODOS_READY_JSON: JSON.stringify(ready) },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.skipped).toBe(1);
+    expect(value.results[0].sourceTaskUpdate.target).toMatchObject({
+      source_db_path: sourceDb,
+      source_repo_path: sourceRepo,
+      source_store_id: "source-store",
+      used_db_env: true,
+    });
+    const calls = readFileSync(callsFile, "utf8");
+    expect(calls).toContain(`db=${sourceDb}`);
+    expect(calls).toContain(`hasna_db=${sourceDb}`);
+    expect(calls).toContain(`--project ${sourceRepo}`);
+    expect(calls).not.toContain(`--project ${routerProject} comment`);
+    expect(calls).not.toContain(`--project ${routerProject} tag`);
+    expect(calls).not.toContain(`--project ${routerProject} untag`);
+  });
+
+  test("todos task drain refuses malformed source cleanup without mutating router project", () => {
+    const dataDir = freshDataDir("loops-cli-event-drain-source-malformed-cleanup-");
+    const binDir = join(dataDir, "bin");
+    const callsFile = join(dataDir, "todos-calls.txt");
+    const nonGit = join(dataDir, "not-a-repo");
+    const routerProject = join(dataDir, "router-store");
+    mkdirSync(nonGit, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "printf 'args=%s\\n' \"$*\" >> \"$CALLS_FILE\"",
+        "if [[ \"$*\" == *\"ready\"* ]]; then printf '%s\\n' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "if [[ \"$*\" == *\"comment\"* || \"$*\" == *\" tag \"* || \"$*\" == *\"untag\"* ]]; then printf 'unexpected mutation\\n' >&2; exit 7; fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const ready = {
+      schema_version: "todos.task_route_sources.v1",
+      stores: [{ id: "malformed-store" }],
+      candidates: [
+        {
+          id: "task-source-malformed-cleanup",
+          source_store_id: "malformed-store",
+          title: "Malformed source cleanup task",
+          status: "pending",
+          working_dir: nonGit,
+          tags: ["auto:route"],
+          metadata: {},
+          route_state: { eligible: true },
+        },
+      ],
+      total_candidate_count: 1,
+      returned_candidate_count: 1,
+      truncated: false,
+    };
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        routerProject,
+        "--todos-source-root",
+        join(dataDir, "sources"),
+        "--limit",
+        "10",
+        "--max-dispatch",
+        "5",
+        "--worktree-mode",
+        "required",
+      ],
+      undefined,
+      { PATH: `${binDir}:/usr/bin:/bin`, CALLS_FILE: callsFile, TODOS_READY_JSON: JSON.stringify(ready) },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.skipped).toBe(1);
+    expect(value.results[0].sourceTaskUpdate).toMatchObject({
+      attempted: false,
+      taskId: "task-source-malformed-cleanup",
+      reason: "source task missing source_db_path or source_repo_path; refusing to update router/default Todos store",
+    });
+    const calls = readFileSync(callsFile, "utf8");
+    expect(calls).toContain("ready");
+    expect(calls).not.toContain("comment");
+    expect(calls).not.toContain(" tag ");
+    expect(calls).not.toContain("untag");
+    expect(calls).not.toContain(routerProject);
+  });
+
+  test("todos task drain evidence scrubs credential-shaped source task material", () => {
+    const dataDir = freshDataDir("loops-cli-event-drain-source-evidence-scrub-");
+    const binDir = join(dataDir, "bin");
+    const evidenceDir = join(dataDir, "evidence");
+    const repo = createGitRepo("loops-cli-event-drain-source-evidence-repo-");
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"$*\" == *\"ready\"* ]]; then printf '%s\\n' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const projectKey = ["sk", "proj", "evidenceScrubSecretValue123456"].join("-");
+    const assignmentSecret = "x9Kd2mQz7Lp4Rv8t";
+    const ready = {
+      schema_version: "todos.task_route_sources.v1",
+      stores: [{ id: "store-secret", repo_path: repo }],
+      candidates: [
+        {
+          id: "task-source-evidence-scrub",
+          source_store_id: "store-secret",
+          source_repo_path: repo,
+          title: "Scrub source evidence",
+          description: `Do not persist credential ${projectKey}`,
+          status: "pending",
+          working_dir: repo,
+          tags: ["auto:route"],
+          metadata: { note: `DB_PASSWORD="${assignmentSecret}"` },
+          route_state: { eligible: true },
+        },
+      ],
+      total_candidate_count: 1,
+      returned_candidate_count: 1,
+      truncated: false,
+    };
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-source-root",
+        join(dataDir, "sources"),
+        "--evidence-dir",
+        evidenceDir,
+        "--dry-run",
+        "--worktree-mode",
+        "off",
+      ],
+      undefined,
+      { PATH: `${binDir}:/usr/bin:/bin`, TODOS_READY_JSON: JSON.stringify(ready) },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain(projectKey);
+    expect(result.stdout).not.toContain(assignmentSecret);
+    expect(result.stdout).toContain("[SCRUBBED]");
+    const value = JSON.parse(result.stdout);
+    expect(existsSync(value.evidencePath)).toBe(true);
+    expect(value.results[0].event.data.description).toContain("[SCRUBBED]");
+    expect(value.results[0].event.data.metadata.note).toContain("[SCRUBBED]");
+    const evidence = readFileSync(value.evidencePath, "utf8");
+    expect(evidence).not.toContain(projectKey);
+    expect(evidence).not.toContain(assignmentSecret);
+    expect(evidence).toContain("[SCRUBBED]");
+    expect(JSON.parse(evidence).results[0].event.data.description).toContain("[SCRUBBED]");
+
+    const compactResult = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-source-root",
+        join(dataDir, "sources"),
+        "--evidence-dir",
+        evidenceDir,
+        "--dry-run",
+        "--compact",
+        "--worktree-mode",
+        "off",
+      ],
+      undefined,
+      { PATH: `${binDir}:/usr/bin:/bin`, TODOS_READY_JSON: JSON.stringify(ready) },
+    );
+    expect(compactResult.status).toBe(0);
+    expect(compactResult.stdout).not.toContain(projectKey);
+    expect(compactResult.stdout).not.toContain(assignmentSecret);
   });
 
   test("todos task drain compact output omits bulky task and workflow details", () => {

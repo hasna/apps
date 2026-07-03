@@ -23,7 +23,7 @@ import {
   TASK_LIFECYCLE_TEMPLATE_ID,
   TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID,
 } from "../templates.js";
-import { eventData, eventMetadata, slugSegment, stableSuffix, stringField, taskEventField, taskRouteEligibility } from "./fields.js";
+import { eventData, eventMetadata, objectField, slugSegment, stableSuffix, stringField, taskEventField, taskRouteEligibility } from "./fields.js";
 import { normalizeWorkflowForStorage, preflightStoredWorkflow, workflowSpecForPreflight } from "./gates.js";
 import { idleTimeoutDuration, listFromRepeatedOpts, timeoutDuration } from "./parse.js";
 import { prReviewRoutingDecision } from "./pr-review.js";
@@ -140,6 +140,90 @@ export function todosTaskRouteTemplateId(opts: { template?: string }): string {
     );
   }
   return id;
+}
+
+interface TodosTaskSourceRef {
+  sourceTaskKey?: string;
+  sourceStoreId?: string;
+  sourceRepoPath?: string;
+  sourceDbPath?: string;
+  sourceSelectedByInput?: boolean;
+  idempotencyKey: string;
+  idempotencySource: "source_task_key" | "source_store_id" | "legacy_task_id";
+}
+
+function sourceCandidateRecords(data: Record<string, unknown>, metadata: Record<string, unknown>): Record<string, unknown>[] {
+  const records = [data, metadata];
+  for (const record of [data, metadata]) {
+    const sourceTask = objectField(record.source_task) ?? objectField(record.sourceTask);
+    if (sourceTask) records.push(sourceTask);
+  }
+  return records;
+}
+
+function sourceStringField(records: Record<string, unknown>[], keys: string[]): string | undefined {
+  for (const record of records) {
+    for (const key of keys) {
+      const value = stringField(record[key]);
+      if (value) return value;
+    }
+  }
+  return undefined;
+}
+
+function sourceBooleanField(records: Record<string, unknown>[], keys: string[]): boolean | undefined {
+  for (const record of records) {
+    for (const key of keys) {
+      const value = record[key];
+      if (typeof value === "boolean") return value;
+      if (value === "true" || value === "1" || value === 1) return true;
+      if (value === "false" || value === "0" || value === 0) return false;
+    }
+  }
+  return undefined;
+}
+
+function todosTaskSourceRef(data: Record<string, unknown>, metadata: Record<string, unknown>, taskId: string): TodosTaskSourceRef {
+  const records = sourceCandidateRecords(data, metadata);
+  const sourceTaskKey = sourceStringField(records, ["source_task_key", "sourceTaskKey"]);
+  const sourceStoreId = sourceStringField(records, ["source_store_id", "sourceStoreId"]);
+  const sourceRepoPath = sourceStringField(records, ["source_repo_path", "sourceRepoPath"]);
+  const sourceDbPath = sourceStringField(records, ["source_db_path", "sourceDbPath"]);
+  const sourceSelectedByInput = sourceBooleanField(records, ["source_selected_by_input", "sourceSelectedByInput"]);
+  const idempotencySource = sourceTaskKey ? "source_task_key" : sourceStoreId ? "source_store_id" : "legacy_task_id";
+  return {
+    sourceTaskKey,
+    sourceStoreId,
+    sourceRepoPath,
+    sourceDbPath,
+    sourceSelectedByInput,
+    idempotencySource,
+    idempotencyKey: sourceTaskKey
+      ? `todos-task:${sourceTaskKey}`
+      : sourceStoreId
+        ? `todos-task:${sourceStoreId}:${taskId}`
+        : `todos-task:${taskId}`,
+  };
+}
+
+function publicSourceTask(sourceTask: TodosTaskSourceRef): Record<string, unknown> | undefined {
+  if (
+    !sourceTask.sourceTaskKey &&
+    !sourceTask.sourceStoreId &&
+    !sourceTask.sourceRepoPath &&
+    !sourceTask.sourceDbPath &&
+    sourceTask.sourceSelectedByInput === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    source_task_key: sourceTask.sourceTaskKey,
+    source_store_id: sourceTask.sourceStoreId,
+    source_repo_path: sourceTask.sourceRepoPath,
+    source_db_path: sourceTask.sourceDbPath,
+    source_selected_by_input: sourceTask.sourceSelectedByInput,
+    idempotency_source: sourceTask.idempotencySource,
+  };
 }
 
 export async function readEventEnvelopeInput(opts: { eventJson?: string; eventFile?: string } = {}): Promise<EventEnvelope> {
@@ -359,11 +443,13 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
   const metadata = eventMetadata(event);
   const taskId = taskEventField(data, ["id", "task_id", "taskId"]);
   if (!taskId) throw new ValidationError("todos task event is missing task id in data.id, data.task_id, data.task.id, or data.payload.id");
+  const sourceTask = todosTaskSourceRef(data, metadata, taskId);
+  const sourceTaskPublic = publicSourceTask(sourceTask);
   const eligibility = taskRouteEligibility(data, metadata);
   if (!eligibility.eligible) {
     return {
       kind: "skipped",
-      value: { skipped: true, reason: eligibility.reason, event, taskId, eligibility },
+      value: { skipped: true, reason: eligibility.reason, event, taskId, eligibility, sourceTask: sourceTaskPublic },
       human: `skipped task ${taskId}: ${eligibility.reason}`,
     };
   }
@@ -381,12 +467,13 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
   const projectPath =
     dataProjectPath ??
     metadataProjectPath ??
+    sourceTask.sourceRepoPath ??
     opts.projectPath ??
     process.cwd();
   const routeProjectPath = normalizeRoutePath(projectPath) ?? resolve(projectPath);
   const projectGroup = routeProjectGroup(opts.projectGroup, data, metadata);
   const throttleLimits = routeThrottleLimitsFromOpts(opts);
-  const idempotencyKey = `todos-task:${taskId}`;
+  const idempotencyKey = sourceTask.idempotencyKey;
   const idempotencySuffix = stableSuffix(idempotencyKey);
   const namePrefix = opts.namePrefix ?? "event:todos-task";
   const workflowName = `${namePrefix}:${taskId.slice(0, 8)}:${idempotencySuffix}:workflow`;
@@ -402,7 +489,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
         const existingWorkflow = existingItem.workflowId ? store.getWorkflow(existingItem.workflowId) : undefined;
         const existingInvocation = store.getWorkflowInvocation(existingItem.invocationId);
         return dedupedRoutePrint(
-          { event, idempotencyKey, dedupeValueExtras: {} },
+          { event, idempotencyKey, dedupeValueExtras: sourceTaskPublic ? { sourceTask: sourceTaskPublic } : {} },
           { existingItem, existingLoop, existingWorkflow, invocation: existingInvocation },
         );
       }
@@ -467,12 +554,14 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     prHandoff: templateId === TASK_LIFECYCLE_TEMPLATE_ID ? Boolean(opts.prHandoff) : false,
     eventId: event.id,
     eventType: event.type,
-    todosProjectPath: opts.todosProject,
+    todosProjectPath: sourceTask.sourceRepoPath ?? opts.todosProject,
+    todosDbPath: sourceTask.sourceDbPath,
   };
   const workflowContext = {
     name: workflowName,
     type: "todos-task-event-workflow",
     event: event.id,
+    sourceTask: sourceTaskPublic,
   };
   let workflowBody = templateId === TASK_LIFECYCLE_TEMPLATE_ID
     ? renderTaskLifecycleWorkflow(workflowInput)
@@ -491,13 +580,13 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
       kind: "event",
       id: event.id,
       dedupeKey: idempotencyKey,
-      raw: { type: event.type, source: event.source, subject: event.subject },
+      raw: { type: event.type, source: event.source, subject: event.subject, sourceTask: sourceTaskPublic },
     },
     subjectRef: {
       kind: "task",
       id: taskId,
       path: routeProjectPath,
-      raw: { title: taskTitle, description: taskDescription },
+      raw: { title: taskTitle, description: taskDescription, sourceTask: sourceTaskPublic },
     },
     intent: "route" as const,
     scope: {
@@ -511,6 +600,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
       providerRouting: providerRoutingPublic(providerRouting),
       prReviewRouting: prReviewRouting.required ? prReviewRouting : undefined,
       concurrencyGroup: projectGroup ?? routeProjectPath,
+      sourceTask: sourceTaskPublic,
     },
     outputPolicy: {
       report: "always" as const,
@@ -536,8 +626,9 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     valueExtras: {
       providerRouting: providerRoutingPublic(providerRouting),
       prReviewRouting: prReviewRouting.required ? prReviewRouting : undefined,
+      sourceTask: sourceTaskPublic,
     },
-    dedupeValueExtras: {},
+    dedupeValueExtras: sourceTaskPublic ? { sourceTask: sourceTaskPublic } : {},
   });
 }
 

@@ -40,6 +40,34 @@ const EVENT_INPUT_OPTION_SPECS: RouteOptionSpec[] = [
 ];
 
 const DRAIN_FILTER_OPTION_SPECS: RouteOptionSpec[] = [
+  {
+    flags: "--todos-source-root <path>",
+    key: "todosSourceRoot",
+    kind: "repeat",
+    description: "scan todos route candidates discovered under this source root; may be repeated",
+    serializeValue: (opts) => listFromRepeatedOpts(opts.todosSourceRoot as string[] | undefined),
+  },
+  {
+    flags: "--todos-source-store <path>",
+    key: "todosSourceStore",
+    kind: "repeat",
+    description: "scan this explicit todos source store path; may be repeated",
+    serializeValue: (opts) => listFromRepeatedOpts(opts.todosSourceStore as string[] | undefined),
+  },
+  {
+    flags: "--todos-source-include <pattern>",
+    key: "todosSourceInclude",
+    kind: "repeat",
+    description: "include source discovery entries matching this pattern; may be repeated",
+    serializeValue: (opts) => listFromRepeatedOpts(opts.todosSourceInclude as string[] | undefined),
+  },
+  {
+    flags: "--todos-source-exclude <pattern>",
+    key: "todosSourceExclude",
+    kind: "repeat",
+    description: "exclude source discovery entries matching this pattern; may be repeated",
+    serializeValue: (opts) => listFromRepeatedOpts(opts.todosSourceExclude as string[] | undefined),
+  },
   { flags: "--todos-project-id <id>", key: "todosProjectId", kind: "value", description: "filter todos ready output to one todos project id" },
   { flags: "--task-list <id-or-slug>", key: "taskList", kind: "value", description: "filter ready tasks to one task-list id, slug, or name" },
   { flags: "--project-path-prefix <path>", key: "projectPathPrefix", kind: "value", description: "filter ready tasks to a project/repo path prefix" },

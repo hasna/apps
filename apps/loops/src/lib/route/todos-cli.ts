@@ -18,13 +18,17 @@ export interface LocalCommandResult {
   error: string;
 }
 
-export function runLocalCommand(command: string, args: string[], opts: { input?: string; timeoutMs?: number; maxBuffer?: number } = {}): LocalCommandResult {
+export function runLocalCommand(
+  command: string,
+  args: string[],
+  opts: { input?: string; timeoutMs?: number; maxBuffer?: number; env?: Record<string, string | undefined> } = {},
+): LocalCommandResult {
   const result = spawnSync(command, args, {
     input: opts.input,
     encoding: "utf8",
     timeout: opts.timeoutMs ?? 30_000,
     maxBuffer: opts.maxBuffer ?? 8 * 1024 * 1024,
-    env: process.env,
+    env: { ...process.env, ...opts.env },
   });
   return {
     ok: result.status === 0,

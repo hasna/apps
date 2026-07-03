@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { dataDir } from "../paths.js";
+import { scrubSecrets, scrubSecretsDeep } from "../redact.js";
 import { stableHash } from "./fields.js";
 
 /** Round-robin route cursors plus JSON evidence files for route-tasks commands. */
@@ -50,7 +51,8 @@ export function writeRouteEvidence(kind: string, value: unknown, evidenceDir: st
   mkdirSync(evidenceDir, { recursive: true, mode: 0o700 });
   const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\./g, "");
   const evidencePath = join(evidenceDir, `${kind}-${stamp}-${randomUUID().slice(0, 8)}.json`);
-  writeFileSync(evidencePath, JSON.stringify(value, null, 2), { mode: 0o600, flag: "wx" });
+  const encoded = scrubSecrets(JSON.stringify(scrubSecretsDeep(value), null, 2));
+  writeFileSync(evidencePath, encoded, { mode: 0o600, flag: "wx" });
   return evidencePath;
 }
 

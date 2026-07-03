@@ -130,6 +130,27 @@ describe("prompt fragment composition", () => {
     expect(verifierPrompt).toContain("Act as an adversarial reviewer focused on correctness, regressions, missing tests, security, and incomplete requirements.");
   });
 
+  test("todos source DB path pins worker-verifier commands to the exact source store", () => {
+    const sourceDb = join(fixtureRoot, "source-store.db");
+    const sourceWorkflow = renderTodosTaskWorkerVerifierWorkflow({
+      taskId: "task-1200",
+      taskTitle: "Fix login",
+      projectPath: repoPath,
+      todosProjectPath: repoPath,
+      todosDbPath: sourceDb,
+      worktreeMode: "off",
+    });
+    const gate = commandOf(stepById(sourceWorkflow, "source-task-gate"));
+    const worker = agentTargetOf(stepById(sourceWorkflow, "worker")).prompt;
+    const verifier = agentTargetOf(stepById(sourceWorkflow, "verifier")).prompt;
+
+    expect(gate).toContain(`TODOS_DB_PATH='${sourceDb}' HASNA_TODOS_DB_PATH='${sourceDb}' todos --project '${repoPath}' --json inspect 'task-1200'`);
+    expect(worker).toContain(`Todos DB path: ${sourceDb}`);
+    expect(worker).toContain(`TODOS_DB_PATH='${sourceDb}' HASNA_TODOS_DB_PATH='${sourceDb}' todos --project ${repoPath} start task-1200`);
+    expect(worker).toContain(`"todosDbPath":"${sourceDb}"`);
+    expect(verifier).toContain(`TODOS_DB_PATH='${sourceDb}' HASNA_TODOS_DB_PATH='${sourceDb}' todos --project ${repoPath} done task-1200`);
+  });
+
   test("disabled worktree policy prose explains the mode instead of listing worktree paths", () => {
     expect(workerPrompt).toContain("OpenLoops worktree policy:");
     expect(workerPrompt).toContain("- Worktree mode off did not select an isolated worktree: worktree mode disabled.");
@@ -174,6 +195,29 @@ describe("prompt fragment composition", () => {
     expect(planner).toContain("The deterministic planner gate will stop the worker unless the latest planner marker is the exact go marker");
     expect(triage).toContain("openloops:triage=go task=task-1200 event=evt-9");
     expect(planner).toContain("openloops:planner=blocked task=task-1200 event=evt-9");
+  });
+
+  test("todos source DB path pins lifecycle gates and PR handoff todos commands", () => {
+    const sourceDb = join(fixtureRoot, "source-lifecycle.db");
+    const lifecycle = renderTaskLifecycleWorkflow({
+      taskId: "task-1200",
+      projectPath: repoPath,
+      todosProjectPath: repoPath,
+      todosDbPath: sourceDb,
+      worktreeRoot,
+      prHandoff: true,
+    });
+    const sourceGate = commandOf(stepById(lifecycle, "source-task-gate"));
+    const triageGate = commandOf(stepById(lifecycle, "triage-gate"));
+    const prHandoff = commandOf(stepById(lifecycle, "pr-handoff"));
+    const triage = agentTargetOf(stepById(lifecycle, "triage")).prompt;
+
+    expect(sourceGate).toContain(`TODOS_DB_PATH='${sourceDb}' HASNA_TODOS_DB_PATH='${sourceDb}' todos --project '${repoPath}' --json inspect 'task-1200'`);
+    expect(triageGate).toContain(`TODOS_DB_PATH='${sourceDb}' HASNA_TODOS_DB_PATH='${sourceDb}' todos --project '${repoPath}' --json inspect 'task-1200'`);
+    expect(prHandoff).toContain(`export OPENLOOPS_PR_HANDOFF_TODOS_DB_PATH='${sourceDb}'`);
+    expect(prHandoff).toContain("const todosDbPath = process.env.OPENLOOPS_PR_HANDOFF_TODOS_DB_PATH || '';");
+    expect(triage).toContain(`Todos DB path: ${sourceDb}`);
+    expect(triage).toContain(`If the task should not proceed automatically, run: TODOS_DB_PATH='${sourceDb}' HASNA_TODOS_DB_PATH='${sourceDb}' todos --project ${repoPath} update task-1200 --status blocked`);
   });
 
   test("verifier runtime guidance reflects the idle watchdog configuration", () => {

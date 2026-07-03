@@ -109,6 +109,7 @@ export const BUILTIN_TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
       { name: "taskTitle", description: "Human-readable task title." },
       projectPathVariable(),
       { name: "todosProjectPath", description: "Todos storage project path used in worker/verifier commands." },
+      { name: "todosDbPath", description: "Optional exact Todos DB path used via TODOS_DB_PATH/HASNA_TODOS_DB_PATH." },
       ...routeScopeVariables(),
       ...workerVerifierAgentVariables({ addDirs: true, branchNoun: "task/event" }),
     ],
@@ -152,6 +153,8 @@ export const BUILTIN_TEMPLATE_SUMMARIES: LoopTemplateSummary[] = [
     variables: [
       { name: "taskId", required: true, description: "Todos task id." },
       projectPathVariable(),
+      { name: "todosProjectPath", description: "Todos storage project path used in lifecycle commands." },
+      { name: "todosDbPath", description: "Optional exact Todos DB path used via TODOS_DB_PATH/HASNA_TODOS_DB_PATH." },
       { name: "authProfilePool", description: "Comma-separated Codewith profiles for worker/verifier rotation." },
       roleAuthProfileVariable("triage"),
       roleAuthProfileVariable("planner"),
@@ -324,34 +327,35 @@ export function verifierRuntimeGuidance(input: { verifierIdleTimeoutMs?: number 
   ].join("\n");
 }
 
-export function todosInspectLine(todosProjectPath: string, taskId: string): string {
-  return `- Inspect first: todos --project ${todosProjectPath} inspect ${taskId}`;
+export function todosInspectLine(todosProjectPath: string, taskId: string, todosDbPath?: string): string {
+  return `- Inspect first: ${todosCommand(todosProjectPath, todosDbPath)} inspect ${taskId}`;
 }
 
-export function todosStartLine(todosProjectPath: string, taskId: string): string {
-  return `- Claim/start if appropriate: todos --project ${todosProjectPath} start ${taskId}`;
+export function todosStartLine(todosProjectPath: string, taskId: string, todosDbPath?: string): string {
+  return `- Claim/start if appropriate: ${todosCommand(todosProjectPath, todosDbPath)} start ${taskId}`;
 }
 
-export function todosEvidenceLine(todosProjectPath: string, taskId: string, placeholder: string): string {
-  return `- Record evidence: todos --project ${todosProjectPath} comment ${taskId} "<${placeholder}>"`;
+export function todosEvidenceLine(todosProjectPath: string, taskId: string, placeholder: string, todosDbPath?: string): string {
+  return `- Record evidence: ${todosCommand(todosProjectPath, todosDbPath)} comment ${taskId} "<${placeholder}>"`;
 }
 
-export function todosVerificationLine(todosProjectPath: string, taskId: string): string {
-  return `- Record verification: todos --project ${todosProjectPath} comment ${taskId} "<verification evidence or blocker>"`;
+export function todosVerificationLine(todosProjectPath: string, taskId: string, todosDbPath?: string): string {
+  return `- Record verification: ${todosCommand(todosProjectPath, todosDbPath)} comment ${taskId} "<verification evidence or blocker>"`;
 }
 
-export function todosDoneLine(todosProjectPath: string, taskId: string): string {
-  return `- If valid and complete: todos --project ${todosProjectPath} done ${taskId}`;
+export function todosDoneLine(todosProjectPath: string, taskId: string, todosDbPath?: string): string {
+  return `- If valid and complete: ${todosCommand(todosProjectPath, todosDbPath)} done ${taskId}`;
 }
 
 /** Exact-todos-commands stanza: project pin, cwd-inference warning, inspect, then role-specific command lines. */
-export function todosExactCommandsFragment(todosProjectPath: string, taskId: string, commandLines: string[]): string[] {
+export function todosExactCommandsFragment(todosProjectPath: string, taskId: string, commandLines: string[], todosDbPath?: string): string[] {
   return [
     `Todos project path: ${todosProjectPath}`,
+    todosDbPath ? `Todos DB path: ${todosDbPath}` : undefined,
     "Use these exact todos commands so worktree cwd inference cannot attach to the wrong project:",
-    todosInspectLine(todosProjectPath, taskId),
+    todosInspectLine(todosProjectPath, taskId, todosDbPath),
     ...commandLines,
-  ];
+  ].filter((line): line is string => Boolean(line));
 }
 
 /** Worktree policy PROSE for agent guidance; enforcement is executor-native via target.worktree. */
@@ -395,10 +399,22 @@ export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-export function sourceTaskGateCommand(todosProjectPath: string, taskId: string): string {
+export function todosEnvPrefix(todosDbPath?: string): string {
+  return todosDbPath ? `TODOS_DB_PATH=${shellQuote(todosDbPath)} HASNA_TODOS_DB_PATH=${shellQuote(todosDbPath)} ` : "";
+}
+
+function todosCommand(todosProjectPath: string, todosDbPath?: string): string {
+  return `${todosEnvPrefix(todosDbPath)}todos --project ${todosProjectPath}`;
+}
+
+function shellTodosCommand(todosProjectPath: string, todosDbPath?: string): string {
+  return `${todosEnvPrefix(todosDbPath)}todos --project ${shellQuote(todosProjectPath)}`;
+}
+
+export function sourceTaskGateCommand(todosProjectPath: string, taskId: string, todosDbPath?: string): string {
   return [
     "set -euo pipefail",
-    `todos --project ${shellQuote(todosProjectPath)} --json inspect ${shellQuote(taskId)} >/dev/null`,
+    `${shellTodosCommand(todosProjectPath, todosDbPath)} --json inspect ${shellQuote(taskId)} >/dev/null`,
     `printf "source task %s resolved in todos project %s\\n" ${shellQuote(taskId)} ${shellQuote(todosProjectPath)}`,
   ].join("\n");
 }
@@ -467,10 +483,11 @@ export function lifecycleGateCommand(
   stage: LifecycleGateStage,
   goMarker: string,
   blockedMarker: string,
+  todosDbPath?: string,
 ): string {
   return [
     "set -euo pipefail",
-    `task_json="$(todos --project ${shellQuote(todosProjectPath)} --json inspect ${shellQuote(taskId)})"`,
+    `task_json="$(${shellTodosCommand(todosProjectPath, todosDbPath)} --json inspect ${shellQuote(taskId)})"`,
     `TASK_JSON="$task_json" STAGE=${shellQuote(stage)} bun - <<'BUN'`,
     LIFECYCLE_GATE_SCRIPT_HEAD,
     `const goMarker = ${JSON.stringify(goMarker)};`,
@@ -487,6 +504,7 @@ const PR_HANDOFF_SCRIPT = [
   "const artifactPath = process.env.OPENLOOPS_PR_HANDOFF_ARTIFACT || '';",
   "const taskId = process.env.OPENLOOPS_PR_HANDOFF_TASK_ID || '';",
   "const todosProject = process.env.OPENLOOPS_PR_HANDOFF_TODOS_PROJECT || '';",
+  "const todosDbPath = process.env.OPENLOOPS_PR_HANDOFF_TODOS_DB_PATH || '';",
   "const fallbackWorktree = process.env.OPENLOOPS_PR_HANDOFF_WORKTREE || process.cwd();",
   "const expectedRoot = process.env.OPENLOOPS_PR_HANDOFF_WORKTREE_ROOT || fallbackWorktree;",
   "const expectedBranch = process.env.OPENLOOPS_PR_HANDOFF_EXPECTED_BRANCH || '';",
@@ -504,7 +522,8 @@ const PR_HANDOFF_SCRIPT = [
   "};",
   "const run = (command, args, options = {}) => spawnSync(command, args, { encoding: 'utf8', ...options });",
   "const todosArgs = (...args) => todosProject ? ['--project', todosProject, ...args] : args;",
-  "const todos = (...args) => run(todosBin, todosArgs(...args));",
+  "const todosEnv = todosDbPath ? { ...process.env, TODOS_DB_PATH: todosDbPath, HASNA_TODOS_DB_PATH: todosDbPath } : process.env;",
+  "const todos = (...args) => run(todosBin, todosArgs(...args), { env: todosEnv });",
   "const comment = (text) => {",
   "  const result = todos('comment', taskId, text);",
   "  if (result.status !== 0) console.error(`failed to comment original task: ${result.stderr || result.stdout || result.status}`);",
@@ -631,6 +650,7 @@ export interface PrHandoffCommandOptions {
   artifactPath: string;
   taskId: string;
   todosProjectPath: string;
+  todosDbPath?: string;
   worktreeCwd: string;
   worktreeRoot: string;
   expectedBranch: string;
@@ -642,6 +662,7 @@ export function prHandoffCommand(opts: PrHandoffCommandOptions): string {
     `export OPENLOOPS_PR_HANDOFF_ARTIFACT=${shellQuote(opts.artifactPath)}`,
     `export OPENLOOPS_PR_HANDOFF_TASK_ID=${shellQuote(opts.taskId)}`,
     `export OPENLOOPS_PR_HANDOFF_TODOS_PROJECT=${shellQuote(opts.todosProjectPath)}`,
+    opts.todosDbPath ? `export OPENLOOPS_PR_HANDOFF_TODOS_DB_PATH=${shellQuote(opts.todosDbPath)}` : undefined,
     `export OPENLOOPS_PR_HANDOFF_WORKTREE=${shellQuote(opts.worktreeCwd)}`,
     `export OPENLOOPS_PR_HANDOFF_WORKTREE_ROOT=${shellQuote(opts.worktreeRoot)}`,
     `export OPENLOOPS_PR_HANDOFF_EXPECTED_BRANCH=${shellQuote(opts.expectedBranch)}`,
@@ -652,5 +673,5 @@ export function prHandoffCommand(opts: PrHandoffCommandOptions): string {
     "bun - <<'BUN'",
     PR_HANDOFF_SCRIPT,
     "BUN",
-  ].join("\n");
+  ].filter((line): line is string => Boolean(line)).join("\n");
 }
