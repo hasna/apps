@@ -346,16 +346,20 @@ export async function createSession(opts: SessionOptions = {}): Promise<CreateSe
     if (opts.storageState) {
       const { loadStatePath } = await import("./storage-state.js");
       const statePath = loadStatePath(opts.storageState);
-      if (statePath) {
-        const context = await browser.newContext({
-          viewport: opts.viewport ?? { width: 1280, height: 720 },
-          userAgent: opts.userAgent,
-          storageState: statePath,
-        });
-        page = await context.newPage();
-      } else {
-        page = await getPlaywrightPage(browser, { viewport: opts.viewport, userAgent: opts.userAgent });
+      if (!statePath) {
+        // Silently proceeding unauthenticated would make callers believe they
+        // are testing a logged-in page when they are not — fail loudly instead.
+        throw new BrowserError(
+          `Storage state '${opts.storageState}' not found. Save one first (browser login --save-as, or browser session save-state) or check: browser session list-states`,
+          "BROWSER_STORAGE_STATE_NOT_FOUND",
+        );
       }
+      const context = await browser.newContext({
+        viewport: opts.viewport ?? { width: 1280, height: 720 },
+        userAgent: opts.userAgent,
+        storageState: statePath,
+      });
+      page = await context.newPage();
     } else {
       page = await getPlaywrightPage(browser, { viewport: opts.viewport, userAgent: opts.userAgent });
     }

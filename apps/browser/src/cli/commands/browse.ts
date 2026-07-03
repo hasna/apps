@@ -20,10 +20,11 @@ addKernelOptions(program
   .option("--engine <engine>", "Browser engine: playwright|cdp|lightpanda|bun|tui|extension|kernel|auto; auto never selects extension or kernel", "auto")
   .option("--screenshot", "Take a screenshot after navigation")
   .option("--extract", "Extract page text after navigation")
+  .option("--state <name>", "Saved auth state to load (see: browser session list-states)")
   .option("--headed", "Run in headed (visible) mode")
   .option("--json", "Output as JSON"))
-  .action(async (url: string, opts: KernelCliOptions & { engine: string; screenshot?: boolean; extract?: boolean; headed?: boolean; json?: boolean }) => {
-    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed, ...kernelSessionOptionsFromCli(opts) });
+  .action(async (url: string, opts: KernelCliOptions & { engine: string; screenshot?: boolean; extract?: boolean; state?: string; headed?: boolean; json?: boolean }) => {
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed, storageState: opts.state, ...kernelSessionOptionsFromCli(opts) });
     await navigate(page, url);
     const title = await page.title();
     let screenshotPath: string | undefined;
@@ -56,10 +57,11 @@ addKernelOptions(program
   .command("check <url>")
   .description("One-liner page health check: navigate, screenshot, extract info, check errors")
   .option("--engine <engine>", "Browser engine", "auto")
+  .option("--state <name>", "Saved auth state to load (see: browser session list-states)")
   .option("--headed", "Run in headed (visible) mode")
   .option("--json", "Output as JSON"))
-  .action(async (url: string, opts: KernelCliOptions & { engine: string; headed?: boolean; json?: boolean }) => {
-    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed, ...kernelSessionOptionsFromCli(opts) });
+  .action(async (url: string, opts: KernelCliOptions & { engine: string; state?: string; headed?: boolean; json?: boolean }) => {
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed, storageState: opts.state, ...kernelSessionOptionsFromCli(opts) });
     await navigate(page, url);
     const title = await page.title();
     const currentUrl = page.url();
@@ -93,11 +95,12 @@ addKernelOptions(program
   .command("audit <url>")
   .description("Full site audit: env detection, performance, errors, APIs, data extraction, screenshot")
   .option("--engine <engine>", "Browser engine", "auto")
+  .option("--state <name>", "Saved auth state to load (see: browser session list-states)")
   .option("--headed", "Run in headed (visible) mode")
   .option("--json", "Output as JSON"))
-  .action(async (url: string, opts: KernelCliOptions & { engine: string; headed?: boolean; json?: boolean }) => {
+  .action(async (url: string, opts: KernelCliOptions & { engine: string; state?: string; headed?: boolean; json?: boolean }) => {
     const t0 = Date.now();
-    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed, captureNetwork: true, captureConsole: true, ...kernelSessionOptionsFromCli(opts) });
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed, captureNetwork: true, captureConsole: true, storageState: opts.state, ...kernelSessionOptionsFromCli(opts) });
 
     if (!opts.json) console.log(chalk.gray(`Auditing: ${url}\n`));
 
@@ -289,9 +292,10 @@ addKernelOptions(program
   .option("--selector <selector>", "CSS selector for element screenshot")
   .option("--full-page", "Capture full page")
   .option("--format <format>", "Image format: png|jpeg|webp", "png")
+  .option("--state <name>", "Saved auth state to load (see: browser session list-states)")
   .option("--headed", "Run in headed (visible) mode"))
-  .action(async (url: string, opts: KernelCliOptions & { engine: string; selector?: string; fullPage?: boolean; format: string; headed?: boolean }) => {
-    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed, ...kernelSessionOptionsFromCli(opts) });
+  .action(async (url: string, opts: KernelCliOptions & { engine: string; selector?: string; fullPage?: boolean; format: string; state?: string; headed?: boolean }) => {
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed, storageState: opts.state, ...kernelSessionOptionsFromCli(opts) });
     await navigate(page, url);
     const result = await takeScreenshot(page, {
       selector: opts.selector,
@@ -311,10 +315,11 @@ addKernelOptions(program
   .option("--engine <engine>", "Browser engine", "auto")
   .option("--selector <selector>", "CSS selector")
   .option("--format <format>", "Format: text|html|links|table|structured", "text")
+  .option("--state <name>", "Saved auth state to load (see: browser session list-states)")
   .option("--headed", "Run in headed (visible) mode")
   .option("--json", "Output as JSON"))
-  .action(async (url: string, opts: KernelCliOptions & { engine: string; selector?: string; format: string; headed?: boolean; json?: boolean }) => {
-    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed, ...kernelSessionOptionsFromCli(opts) });
+  .action(async (url: string, opts: KernelCliOptions & { engine: string; selector?: string; format: string; state?: string; headed?: boolean; json?: boolean }) => {
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed, storageState: opts.state, ...kernelSessionOptionsFromCli(opts) });
     await navigate(page, url);
     const result = await extract(page, { format: opts.format as "text" | "links" | "html" | "table" | "structured", selector: opts.selector });
     if (opts.json) {
@@ -335,9 +340,10 @@ addKernelOptions(program
   .command("eval <url> <script>")
   .description("Run JavaScript in a page context")
   .option("--engine <engine>", "Browser engine", "auto")
+  .option("--state <name>", "Saved auth state to load (see: browser session list-states)")
   .option("--headed", "Run in headed (visible) mode"))
-  .action(async (url: string, script: string, opts: KernelCliOptions & { engine: string; headed?: boolean }) => {
-    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed, ...kernelSessionOptionsFromCli(opts) });
+  .action(async (url: string, script: string, opts: KernelCliOptions & { engine: string; state?: string; headed?: boolean }) => {
+    const { session, page } = await createSession({ engine: opts.engine as BrowserEngine, headless: !opts.headed, storageState: opts.state, ...kernelSessionOptionsFromCli(opts) });
     await navigate(page, url);
     const result = await page.evaluate(script);
     console.log(JSON.stringify(result, null, 2));
