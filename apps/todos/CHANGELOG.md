@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.73] - 2026-07-03
+
+### Fixed
+- **Security:** authenticate the `/mcp` endpoint and rate-limit it (and `/health`) — previously an unauthenticated write surface even with `--api-key` set. Preserves the 127.0.0.1-no-key default.
+- **Security:** key the HTTP rate limiter on `server.requestIP`; honor `X-Forwarded-For` only under `TODOS_TRUST_PROXY` (was spoofable / shared "unknown" bucket).
+- Task completion lifecycle: `completeTask` returns the correct post-commit version (was stale → follow-up updates conflicted) and is idempotent; completion via `updateTask`/PATCH/CLI now spawns recurrence exactly once and clears the lock; reopening clears `completed_at`; confidence preserved when omitted.
+- `PATCH /api/tasks/:id` accepts a client version and maps conflicts→409 / not-found→404 (was last-write-wins / 500).
+- `todos mcp` now starts a stdio server and bare `todos-mcp` defaults to stdio (register writers pass `--stdio`) — clients were booting HTTP and never speaking stdio.
+- `--json` now works on `next`/`claim`/`status`/`fail`/`active`/`stale`/`redistribute` including empty results; added `log-progress` alias; typed not-found errors; CLI input validation.
+- Removed phantom MCP tools from the registry, CLI/MCP parity manifest, and golden fixture; exposed `upsert_task` and metadata tools in profiles.
+- `ensureSchema` backfills migration-48 columns; WAL-safe `restoreDatabase`; stable cursor ordering; `countTasks` mirrors `listTasks` filters; SDK no longer drops 4-byte bodies and authenticates `subscribe()`.
+
+## [0.11.72] - 2026-07-02
+
+### Added
+- Multi-store route source discovery.
+
+## [0.11.71] - 2026-07-01
+
+### Changed
+- Plan slug compatibility alignment and related maintenance.
+
+## [0.11.70] - 2026-06-30
+
+### Changed
+- Maintenance and internal improvements (backfilled entry).
+
 ## [0.11.69] - 2026-06-29
 
 ### Fixed
