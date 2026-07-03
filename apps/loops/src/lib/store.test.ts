@@ -1275,6 +1275,185 @@ describe("Store", () => {
     }
   });
 
+  test("migrates legacy v6 loop_runs before creating claim token indexes", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-legacy-claim-token-"));
+    const dbFile = join(root, "loops.db");
+    const legacy = new Database(dbFile);
+    try {
+      legacy.exec(`
+        CREATE TABLE loops (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT,
+          status TEXT NOT NULL,
+          archived_at TEXT,
+          archived_from_status TEXT,
+          schedule_json TEXT NOT NULL,
+          target_json TEXT NOT NULL,
+          goal_json TEXT,
+          machine_json TEXT,
+          next_run_at TEXT,
+          retry_scheduled_for TEXT,
+          catch_up TEXT NOT NULL,
+          catch_up_limit INTEGER NOT NULL,
+          overlap TEXT NOT NULL,
+          max_attempts INTEGER NOT NULL,
+          retry_delay_ms INTEGER NOT NULL,
+          lease_ms INTEGER NOT NULL,
+          expires_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE TABLE loop_runs (
+          id TEXT PRIMARY KEY,
+          loop_id TEXT NOT NULL,
+          loop_name TEXT NOT NULL,
+          scheduled_for TEXT NOT NULL,
+          attempt INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          started_at TEXT,
+          finished_at TEXT,
+          claimed_by TEXT,
+          lease_expires_at TEXT,
+          pid INTEGER,
+          pgid INTEGER,
+          process_started_at TEXT,
+          exit_code INTEGER,
+          duration_ms INTEGER,
+          stdout TEXT,
+          stderr TEXT,
+          error TEXT,
+          goal_run_id TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(loop_id, scheduled_for)
+        );
+        CREATE TABLE schema_migrations (
+          id TEXT PRIMARY KEY,
+          applied_at TEXT NOT NULL
+        );
+        INSERT INTO schema_migrations (id, applied_at) VALUES
+          ('0001_initial_and_workflows', '2026-01-01T00:00:00.000Z'),
+          ('0002_loop_machines', '2026-01-01T00:00:00.000Z'),
+          ('0003_goals', '2026-01-01T00:00:00.000Z'),
+          ('0004_loop_archive_metadata', '2026-01-01T00:00:00.000Z'),
+          ('0005_workflow_invocations_and_admission', '2026-01-01T00:00:00.000Z'),
+          ('0006_run_process_tracking', '2026-01-01T00:00:00.000Z');
+        PRAGMA user_version = 6;
+      `);
+    } finally {
+      legacy.close();
+    }
+
+    const store = new Store(dbFile);
+    try {
+      const columns = store["db"].query("PRAGMA table_info(loop_runs)").all() as Array<{ name: string }>;
+      expect(columns.map((column) => column.name)).toContain("claim_token");
+      const indexes = store["db"].query("PRAGMA index_list(loop_runs)").all() as Array<{ name: string }>;
+      expect(indexes.map((index) => index.name)).toContain("idx_runs_claim_token");
+      const migration = store["db"]
+        .query("SELECT id FROM schema_migrations WHERE id = '0007_run_claim_tokens'")
+        .get() as { id: string } | null;
+      expect(migration?.id).toBe("0007_run_claim_tokens");
+      const version = store["db"].query("PRAGMA user_version").get() as { user_version: number };
+      expect(version.user_version).toBeGreaterThanOrEqual(7);
+      const loop = store.createLoop(
+        { name: "legacy-claim-token", schedule: { type: "once", at: "2026-01-01T00:00:00Z" }, target: { type: "command", command: "true" } },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      expect(store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner")?.run.status).toBe("running");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("reconciles partially stamped claim token migrations", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-stamped-claim-token-"));
+    const dbFile = join(root, "loops.db");
+    const legacy = new Database(dbFile);
+    try {
+      legacy.exec(`
+        CREATE TABLE loops (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          description TEXT,
+          status TEXT NOT NULL,
+          archived_at TEXT,
+          archived_from_status TEXT,
+          schedule_json TEXT NOT NULL,
+          target_json TEXT NOT NULL,
+          goal_json TEXT,
+          machine_json TEXT,
+          next_run_at TEXT,
+          retry_scheduled_for TEXT,
+          catch_up TEXT NOT NULL,
+          catch_up_limit INTEGER NOT NULL,
+          overlap TEXT NOT NULL,
+          max_attempts INTEGER NOT NULL,
+          retry_delay_ms INTEGER NOT NULL,
+          lease_ms INTEGER NOT NULL,
+          expires_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE TABLE loop_runs (
+          id TEXT PRIMARY KEY,
+          loop_id TEXT NOT NULL,
+          loop_name TEXT NOT NULL,
+          scheduled_for TEXT NOT NULL,
+          attempt INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          started_at TEXT,
+          finished_at TEXT,
+          claimed_by TEXT,
+          lease_expires_at TEXT,
+          pid INTEGER,
+          pgid INTEGER,
+          process_started_at TEXT,
+          exit_code INTEGER,
+          duration_ms INTEGER,
+          stdout TEXT,
+          stderr TEXT,
+          error TEXT,
+          goal_run_id TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(loop_id, scheduled_for)
+        );
+        CREATE TABLE schema_migrations (
+          id TEXT PRIMARY KEY,
+          applied_at TEXT NOT NULL
+        );
+        INSERT INTO schema_migrations (id, applied_at) VALUES
+          ('0001_initial_and_workflows', '2026-01-01T00:00:00.000Z'),
+          ('0002_loop_machines', '2026-01-01T00:00:00.000Z'),
+          ('0003_goals', '2026-01-01T00:00:00.000Z'),
+          ('0004_loop_archive_metadata', '2026-01-01T00:00:00.000Z'),
+          ('0005_workflow_invocations_and_admission', '2026-01-01T00:00:00.000Z'),
+          ('0006_run_process_tracking', '2026-01-01T00:00:00.000Z'),
+          ('0007_run_claim_tokens', '2026-01-01T00:00:00.000Z');
+        PRAGMA user_version = 7;
+      `);
+    } finally {
+      legacy.close();
+    }
+
+    const store = new Store(dbFile);
+    try {
+      const columns = store["db"].query("PRAGMA table_info(loop_runs)").all() as Array<{ name: string }>;
+      expect(columns.map((column) => column.name)).toContain("claim_token");
+      const indexes = store["db"].query("PRAGMA index_list(loop_runs)").all() as Array<{ name: string }>;
+      expect(indexes.map((index) => index.name)).toContain("idx_runs_claim_token");
+      const loop = store.createLoop(
+        { name: "stamped-claim-token", schedule: { type: "once", at: "2026-01-01T00:00:00Z" }, target: { type: "command", command: "true" } },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      expect(store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner")?.run.status).toBe("running");
+    } finally {
+      store.close();
+    }
+  });
+
   test("throws coded errors for missing and ambiguous loops", () => {
     const store = new Store(":memory:");
     try {

@@ -743,7 +743,10 @@ export class Store {
       // recorded a second 0004_* migration row and added the orphan columns
       // loops.metadata_json / loop_runs.source — unknown migration ids are
       // tolerated and orphan columns are additive, never dropped.
-      if (!migration.baseline && applied.has(migration.id)) continue;
+      // Repairable migrations are also re-applied because they are additive and
+      // protect against partial legacy states where the ledger was stamped but
+      // the schema drifted.
+      if (!migration.baseline && !migration.reapply && applied.has(migration.id)) continue;
       migration.apply();
       if (!applied.has(migration.id)) {
         this.db.query("INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)").run(migration.id, nowIso());
@@ -752,7 +755,7 @@ export class Store {
     if (userVersion !== SCHEMA_USER_VERSION) this.db.exec(`PRAGMA user_version = ${SCHEMA_USER_VERSION}`);
   }
 
-  private migrations(): Array<{ id: string; baseline?: boolean; apply: () => void }> {
+  private migrations(): Array<{ id: string; baseline?: boolean; reapply?: boolean; apply: () => void }> {
     return [
       { id: "0001_initial_and_workflows", baseline: true, apply: () => this.createBaseSchema() },
       { id: "0002_loop_machines", baseline: true, apply: () => this.addColumnIfMissing("loops", "machine_json", "TEXT") },
@@ -795,6 +798,7 @@ export class Store {
       },
       {
         id: "0007_run_claim_tokens",
+        reapply: true,
         apply: () => {
           this.addColumnIfMissing("loop_runs", "claim_token", "TEXT");
           this.db.exec("CREATE INDEX IF NOT EXISTS idx_runs_claim_token ON loop_runs(claim_token) WHERE claim_token IS NOT NULL");
@@ -860,7 +864,6 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_runs_status ON loop_runs(status);
       CREATE INDEX IF NOT EXISTS idx_runs_status_lease ON loop_runs(status, lease_expires_at);
       CREATE INDEX IF NOT EXISTS idx_runs_scheduled ON loop_runs(scheduled_for);
-      CREATE INDEX IF NOT EXISTS idx_runs_claim_token ON loop_runs(claim_token) WHERE claim_token IS NOT NULL;
 
       CREATE TABLE IF NOT EXISTS daemon_lease (
         id TEXT PRIMARY KEY,
