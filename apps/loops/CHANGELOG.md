@@ -5,6 +5,18 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.4.5 (2026-07-03)
+
+Upgrade-path fix for existing `0.4.1`-era local stores.
+
+### Fixed
+
+- Opening a version-6 store now applies the `0007_run_claim_tokens` migration
+  before creating the `claim_token` index. This fixes upgrades where
+  `loops doctor`, `loops daemon status`, or daemon restart failed with
+  `no such column: claim_token` on machines that already had active OpenLoops
+  state.
+
 ## 0.4.4 (2026-07-03)
 
 Self-hosted runtime MVP release for operator-owned OpenLoops control planes.

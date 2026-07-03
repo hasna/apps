@@ -901,7 +901,6 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_runs_status ON loop_runs(status);
       CREATE INDEX IF NOT EXISTS idx_runs_status_lease ON loop_runs(status, lease_expires_at);
       CREATE INDEX IF NOT EXISTS idx_runs_scheduled ON loop_runs(scheduled_for);
-      CREATE INDEX IF NOT EXISTS idx_runs_claim_token ON loop_runs(claim_token) WHERE claim_token IS NOT NULL;
 
       CREATE TABLE IF NOT EXISTS daemon_lease (
         id TEXT PRIMARY KEY,

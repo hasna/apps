@@ -1375,6 +1375,75 @@ describe("Store", () => {
     expect(() => new Store(dbFile)).toThrow(/newer than this binary supports/);
   });
 
+  test("upgrades version 6 stores before creating claim-token indexes", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-v6-claim-token-"));
+    const dbFile = join(root, "loops.db");
+    const raw = new Database(dbFile);
+    try {
+      raw.exec(`
+        CREATE TABLE schema_migrations (
+          id TEXT PRIMARY KEY,
+          applied_at TEXT NOT NULL
+        );
+        CREATE TABLE loop_runs (
+          id TEXT PRIMARY KEY,
+          loop_id TEXT NOT NULL,
+          loop_name TEXT NOT NULL,
+          scheduled_for TEXT NOT NULL,
+          attempt INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          started_at TEXT,
+          finished_at TEXT,
+          claimed_by TEXT,
+          lease_expires_at TEXT,
+          pid INTEGER,
+          exit_code INTEGER,
+          duration_ms INTEGER,
+          stdout TEXT,
+          stderr TEXT,
+          error TEXT,
+          goal_run_id TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          pgid INTEGER,
+          process_started_at TEXT,
+          UNIQUE(loop_id, scheduled_for)
+        );
+        INSERT INTO schema_migrations (id, applied_at) VALUES
+          ('0001_initial_and_workflows', '2026-01-01T00:00:00.000Z'),
+          ('0002_loop_machines', '2026-01-01T00:00:00.000Z'),
+          ('0003_goals', '2026-01-01T00:00:00.000Z'),
+          ('0004_loop_archive_metadata', '2026-01-01T00:00:00.000Z'),
+          ('0005_workflow_invocations_and_admission', '2026-01-01T00:00:00.000Z'),
+          ('0006_run_process_tracking', '2026-01-01T00:00:00.000Z');
+        PRAGMA user_version = 6;
+      `);
+    } finally {
+      raw.close();
+    }
+
+    const store = new Store(dbFile);
+    try {
+      const columns = (store["db"].query("PRAGMA table_info(loop_runs)").all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      );
+      expect(columns).toContain("claim_token");
+      const indexes = (store["db"].query("PRAGMA index_list(loop_runs)").all() as Array<{ name: string }>).map(
+        (index) => index.name,
+      );
+      expect(indexes).toContain("idx_runs_claim_token");
+      const version = store["db"].query("PRAGMA user_version").get() as { user_version: number };
+      expect(version.user_version).toBe(7);
+      const ids = (store["db"].query("SELECT id FROM schema_migrations ORDER BY id").all() as Array<{ id: string }>).map(
+        (row) => row.id,
+      );
+      expect(ids).toContain("0007_run_claim_tokens");
+      expect(store.listRuns()).toEqual([]);
+    } finally {
+      store.close();
+    }
+  });
+
   test("reconciles the live fork with a second 0004_* row and orphan columns", () => {
     const root = mkdtempSync(join(tmpdir(), "loops-fork-reconcile-"));
     const dbFile = join(root, "loops.db");
