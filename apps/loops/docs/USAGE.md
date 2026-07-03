@@ -11,7 +11,35 @@ It supports deterministic command loops, JSON-defined workflows, and guarded CLI
 - `opencode run`
 - `codex exec`
 
+## Deployment Modes
+
+OpenLoops defaults to `local`, where SQLite in `LOOPS_DATA_DIR` is
+authoritative and `loops-daemon` executes scheduled work. The package also
+defines `self_hosted` and `cloud` contracts for future non-local control
+planes:
+
+- `self_hosted`: user-operated `loops-api` control-plane contract; this
+  release exposes API/runner status foundations only.
+- `cloud`: hosted control-plane contract; this release exposes client/runner
+  status only, and requires `LOOPS_CLOUD_API_URL` plus `LOOPS_CLOUD_TOKEN` or
+  `HASNA_LOOPS_CLOUD_TOKEN` before status can report ready.
+
+Useful status commands:
+
+```bash
+loops mode
+loops --json mode
+loops self-hosted status
+loops cloud status
+loops-api status
+loops-runner status
+```
+
 ## Install
+
+**OpenLoops requires the [Bun](https://bun.sh) runtime (`bun >= 1.0`).** The
+installed binaries are `loops`, `loops-daemon`, `loops-api`, `loops-runner`, and
+`loops-mcp`; each uses a `#!/usr/bin/env bun` shebang.
 
 From npm:
 
@@ -57,8 +85,9 @@ The package also exports the server factory for embedded hosts:
 import { createLoopsMcpServer } from "@hasna/loops/mcp";
 ```
 
-Available read tools include `loops_list`, `loops_show`, `loop_runs`,
-`loops_doctor`, `workflows_list`, `workflow_read`, and `workflow_validate`.
+Available read tools include `loops_list`, `loops_show`, `loops_runs`,
+`loops_doctor`, `loops_workflows_list`, `loops_workflow_read`, and
+`loops_workflow_validate`.
 Resources are available at `loops://runtime` and `loops://tools`.
 Those tools use the same `Store`, public redaction helpers, and workflow parser
 as the CLI and SDK, so read output and validation behavior stay aligned across
@@ -66,15 +95,19 @@ surfaces.
 
 Mutation tools are disabled by default. Start the server with
 `LOOPS_MCP_ALLOW_MUTATIONS=true` only for a trusted local MCP host that should be
-allowed to change loop state. Even then, mutation tools require exact
-confirmation strings: `loop_pause`, `loop_resume`, `loop_run_now`,
-`loop_create_command`, and `loop_create_workflow`. MCP `loop_run_now` schedules
-the loop for immediate daemon pickup; inline execution remains CLI-only.
+allowed to change loop state. The guarded mutation tools use canonical names:
+`loops_pause`, `loops_resume`, `loops_stop`, `loops_run_now`, `loops_archive`,
+`loops_unarchive`, `loops_create_command`, and `loops_create_workflow`.
+Deprecated `loop_*` aliases are still registered where compatibility needs them,
+but callers should use the `loops_*` names. Mutation tools do not require or
+accept confirmation-string parameters; the server-side environment opt-in is the
+gate. MCP `loops_run_now` schedules the loop for immediate daemon pickup; inline
+execution remains CLI-only.
 
 Keep host-affecting or long-running operations on the CLI: daemon
-start/stop/install/logs, inline `run-now`, `tick`, loop removal/archive
-maintenance, workflow create/migrate/cancel/recover, agent loop creation,
-template materialization, and event-route drains.
+start/stop/install/logs, inline `run-now`, `tick`, loop deletion, workflow
+create/migrate/cancel/recover, agent loop creation, template materialization,
+and event-route drains.
 
 ## Create Loops
 
@@ -95,8 +128,8 @@ loops create command repo-status \
 ```
 
 `--preflight` is available on `loops create command`, `loops create agent`,
-`loops create workflow`, `loops workflows create`, and event-router commands such
-as `loops events handle todos-task` and `loops events handle generic`. It checks
+`loops create workflow`, `loops workflows create`, and route commands such as
+`loops routes create todos-task` and `loops routes create generic`. It checks
 target executables and configured account profiles before loop or workflow rows
 are stored, so a missing command, provider binary, OpenAccounts profile, native
 Codewith auth profile, or workflow step dependency fails without creating a
@@ -340,11 +373,11 @@ loops templates render todos-task-worker-verifier \
   --var taskTitle="Fix parser" \
   --var projectPath=/path/to/repo \
   --var provider=codewith \
-  --var authProfilePool=account004,account005,account006 \
+  --var authProfilePool=account001,account002,account003 \
   --var sandbox=workspace-write \
   --var todosProjectPath=$HOME/.hasna/loops \
   --var addDirs=$HOME/.hasna/todos,$HOME/.hasna/loops
-loops templates create-workflow todos-task-worker-verifier \
+loops workflows create --template todos-task-worker-verifier \
   --var taskId=<task-id> \
   --var projectPath=/path/to/repo
 loops templates render event-worker-verifier \
@@ -357,7 +390,7 @@ loops templates render bounded-agent-worker-verifier \
   --var objective="Check docs drift and queue tasks for gaps" \
   --var projectPath=/path/to/repo \
   --var provider=codewith \
-  --var authProfilePool=account004,account005 \
+  --var authProfilePool=account001,account002 \
   --var sandbox=workspace-write
 loops templates render pr-review \
   --var prUrl=https://github.com/hasna/loops/pull/123 \
@@ -441,14 +474,15 @@ loops templates show custom-report
 loops templates render custom-report \
   --var objective="Check docs drift" \
   --var projectPath=/path/to/repo
-loops templates create-workflow custom-report \
+loops workflows create --template custom-report \
   --var objective="Check docs drift" \
   --var projectPath=/path/to/repo
 ```
 
 Use `--source builtin`, `--source custom`, or `--source all` on
-`list`, `show`, `render`, and `create-workflow` when automation needs an
-explicit source. Custom template ids and names cannot override built-ins.
+`templates list`, `templates show`, `templates render`, and
+`workflows create --template` when automation needs an explicit source. Custom
+template ids and names cannot override built-ins.
 Custom templates fail closed for `danger-full-access`, dangerous passthrough
 arguments, and implicit Codewith/Codex full-access defaults. If a custom
 Codewith/Codex template uses `permissionMode: "bypass"`, it must also set
@@ -491,16 +525,16 @@ PR review and merge route workers may fetch, rebase, or merge base branches
 inside the isolated worktree when the task requires it, but they must not
 mutate the primary main checkout.
 
-For event-driven task automation, `loops events handle todos-task` reads a
+For event-driven task automation, `loops routes create todos-task` reads a
 Hasna event envelope from stdin or `HASNA_EVENT_JSON`, records a
 `WorkflowInvocation`, upserts an admission work item, and admits that work item
 into a deduped one-shot workflow loop when route capacity allows:
 
 ```bash
-cat task-created-event.json | loops events handle todos-task \
+cat task-created-event.json | loops routes create todos-task \
   --template task-lifecycle \
   --provider codewith \
-  --auth-profile-pool account004,account005,account006 \
+  --auth-profile-pool account001,account002,account003 \
   --permission-mode bypass \
   --sandbox workspace-write \
   --todos-project "$HOME/.hasna/loops" \
@@ -530,7 +564,7 @@ selected.
 loops routes drain todos-task \
   --dry-run \
   --provider-rule area=frontend:claude:claude-ui-a,claude-ui-b \
-  --provider-rule area=backend:codewith:account004,account005 \
+  --provider-rule area=backend:codewith:account001,account002 \
   --worktree-mode required
 ```
 
@@ -568,9 +602,9 @@ Use route throttles to avoid stampeding agents when a producer creates many
 tasks at once:
 
 ```bash
-cat task-created-event.json | loops events handle todos-task \
+cat task-created-event.json | loops routes create todos-task \
   --provider codewith \
-  --auth-profile-pool account004,account005,account006 \
+  --auth-profile-pool account001,account002,account003 \
   --project-group oss \
   --max-active-per-project 1 \
   --max-active-per-project-group 4 \
@@ -633,14 +667,14 @@ hand. It scans `todos ready --json`, so tasks with incomplete dependencies,
 locks, or non-pending states stay queued in todos and are not routed:
 
 ```bash
-loops events drain todos-task \
+loops routes drain todos-task \
   --todos-project "$HOME/.hasna/loops" \
   --template task-lifecycle \
   --task-list repoops-pr-queue \
   --tags auto:route \
-  --project-path-prefix "$HOME/workspace/hasna/opensource" \
+  --project-path-prefix "$HOME/workspace/example/opensource" \
   --provider codewith \
-  --auth-profile-pool account004,account005,account006 \
+  --auth-profile-pool account001,account002,account003 \
   --add-dir "$HOME/.hasna/todos,$HOME/.hasna/loops" \
   --project-group oss \
   --max-dispatch 2 \
@@ -665,17 +699,17 @@ when requested, and leaves excess ready tasks in todos for a later drain pass.
 Use `--dry-run` to preview candidates and rendered workflows without mutating
 OpenLoops state.
 
-For the Hasna OSS task-created route, keep the drain deterministic and narrow:
+For an OSS task-created route, keep the drain deterministic and narrow:
 
 ```bash
 loops routes schedule todos-task oss-task-route-drain \
   --every 5m \
   --todos-project "$HOME/.hasna/loops" \
   --template task-lifecycle \
-  --project-path-prefix "$HOME/workspace/hasna/opensource" \
+  --project-path-prefix "$HOME/workspace/example/opensource" \
   --tags auto:route \
   --provider codewith \
-  --auth-profile-pool account004,account005,account006 \
+  --auth-profile-pool account001,account002,account003 \
   --add-dir "$HOME/.hasna/todos,$HOME/.hasna/loops" \
   --project-group oss \
   --max-dispatch 2 \
@@ -688,7 +722,7 @@ loops routes schedule todos-task oss-task-route-drain \
   --compact
 ```
 
-Only tasks under `$HOME/workspace/hasna/opensource` that explicitly opt
+Only tasks under `$HOME/workspace/example/opensource` that explicitly opt
 in with the `auto:route` tag, `route_enabled=true`, or
 `automation.allowed=true` should be routed. Keep repo-mutating worker/verifier
 runs on a Codewith account pool with `--worktree-mode required`. Do not dispatch
@@ -709,9 +743,9 @@ For other Hasna apps that expose `@hasna/events` webhooks, use the generic
 handler:
 
 ```bash
-cat event.json | loops events handle generic \
+cat event.json | loops routes create generic \
   --provider codewith \
-  --auth-profile-pool account004,account005,account006 \
+  --auth-profile-pool account001,account002,account003 \
   --permission-mode bypass \
   --sandbox workspace-write \
   --project-path /path/to/repo \

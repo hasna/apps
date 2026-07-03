@@ -4246,9 +4246,9 @@ describe("loops CLI", () => {
   test("docs include the OSS task route drain safety recipe", () => {
     const usage = readFileSync(new URL("../../docs/USAGE.md", import.meta.url), "utf8");
 
-    expect(usage).toContain("$HOME/workspace/hasna/opensource");
+    expect(usage).toContain("$HOME/workspace/example/opensource");
     expect(usage).toContain("--tags auto:route");
-    expect(usage).toContain("--auth-profile-pool account004,account005,account006");
+    expect(usage).toContain("--auth-profile-pool account001,account002,account003");
     expect(usage).toContain("--worktree-mode required");
     expect(usage).toContain("--max-active-per-project");
     expect(usage).toContain("--evidence-dir");

@@ -17,6 +17,42 @@ describe("loops-api foundation", () => {
     expect(JSON.stringify(status)).not.toContain("dbPath");
   });
 
+  test("status command JSON uses the service envelope", () => {
+    const result = spawnSync(process.execPath, [apiPath, "--json", "status"], {
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    const body = JSON.parse(result.stdout) as { ok: boolean; service: string; status: { deploymentMode: string } };
+    expect(body).toMatchObject({
+      ok: true,
+      service: "loops-api",
+      status: {
+        deploymentMode: "self_hosted",
+      },
+    });
+  });
+
+  test("status output redacts credentials embedded in API URLs", async () => {
+    const previousUrl = process.env.LOOPS_API_URL;
+    const previousToken = process.env.LOOPS_API_TOKEN;
+    process.env.LOOPS_API_URL = "https://user:fake-password@loops.example.test/api?token=fake-token";
+    process.env.LOOPS_API_TOKEN = "present-but-not-returned";
+    try {
+      const mod = await import("./index.js");
+      const status = JSON.stringify(mod.apiStatus());
+      expect(status).toContain("https://loops.example.test/api");
+      expect(status).not.toContain("fake-password");
+      expect(status).not.toContain("fake-token");
+      expect(status).not.toContain("present-but-not-returned");
+    } finally {
+      if (previousUrl === undefined) delete process.env.LOOPS_API_URL;
+      else process.env.LOOPS_API_URL = previousUrl;
+      if (previousToken === undefined) delete process.env.LOOPS_API_TOKEN;
+      else process.env.LOOPS_API_TOKEN = previousToken;
+    }
+  });
+
   test("non-local serve fails closed without an API token", () => {
     const result = spawnSync(process.execPath, [apiPath, "serve", "--host", "0.0.0.0", "--port", "0"], {
       env: {

@@ -22,8 +22,8 @@ It supports deterministic command loops, JSON-defined workflows, and guarded CLI
 OpenLoops has three deployment modes:
 
 - `local`: SQLite in `LOOPS_DATA_DIR` is authoritative and `loops-daemon` executes scheduled work.
-- `self_hosted`: a user-operated `loops-api` control plane is authoritative and `loops-runner` executes work on registered machines.
-- `cloud`: a hosted control-plane contract; when a hosted API URL is configured, that service is authoritative and `loops-runner` executes work on registered machines.
+- `self_hosted`: a user-operated `loops-api` control plane contract. This release exposes status/API/runner foundations; claim protocol and non-local execution are follow-up work.
+- `cloud`: a hosted control-plane contract. This release exposes client/runner status only; hosted tenant auth and infrastructure live outside this package.
 
 `local` is the default and requires no network, token, Postgres, or hosted
 service. Set `LOOPS_MODE` or `HASNA_LOOPS_MODE` to `local`, `self_hosted`, or
@@ -34,8 +34,9 @@ selects `cloud`, while `LOOPS_API_URL` or `LOOPS_DATABASE_URL` selects
 The public `@hasna/loops` package owns the local runtime, mode resolver,
 self-hosted API contract, runner contract, SDK, MCP server, and CLI. Hosted
 tenant auth, account administration, and infrastructure live outside this
-package. Cloud mode is a public contract until a hosted API URL and token are
-configured.
+package. Cloud mode is a public contract until a cloud-specific hosted URL and
+cloud token are configured through `LOOPS_CLOUD_API_URL` plus
+`LOOPS_CLOUD_TOKEN` or `HASNA_LOOPS_CLOUD_TOKEN`.
 
 Useful status commands:
 
@@ -54,9 +55,9 @@ and machine-placement contract.
 ## Install
 
 **OpenLoops requires the [Bun](https://bun.sh) runtime (`bun >= 1.0`).** The
-`loops`, `loops-daemon`, and `loops-mcp` binaries run with a `#!/usr/bin/env bun`
-shebang, so Bun must be on `PATH` even when the package is installed with npm.
-Node.js is not a supported runtime.
+`loops`, `loops-daemon`, `loops-api`, `loops-runner`, and `loops-mcp` binaries
+run with a `#!/usr/bin/env bun` shebang, so Bun must be on `PATH` even when the
+package is installed with npm. Node.js is not a supported runtime.
 
 From npm (with Bun installed):
 
@@ -102,8 +103,9 @@ The package also exports the server factory for embedded hosts:
 import { createLoopsMcpServer } from "@hasna/loops/mcp";
 ```
 
-Available read tools include `loops_list`, `loops_show`, `loop_runs`,
-`loops_doctor`, `workflows_list`, `workflow_read`, and `workflow_validate`.
+Available read tools include `loops_list`, `loops_show`, `loops_runs`,
+`loops_doctor`, `loops_workflows_list`, `loops_workflow_read`, and
+`loops_workflow_validate`.
 Resources are available at `loops://runtime` and `loops://tools`.
 Those tools use the same `Store`, public redaction helpers, and workflow parser
 as the CLI and SDK, so read output and validation behavior stay aligned across
@@ -111,15 +113,19 @@ surfaces.
 
 Mutation tools are disabled by default. Start the server with
 `LOOPS_MCP_ALLOW_MUTATIONS=true` only for a trusted local MCP host that should be
-allowed to change loop state. Even then, mutation tools require exact
-confirmation strings: `loop_pause`, `loop_resume`, `loop_run_now`,
-`loop_create_command`, and `loop_create_workflow`. MCP `loop_run_now` schedules
-the loop for immediate daemon pickup; inline execution remains CLI-only.
+allowed to change loop state. The guarded mutation tools use canonical names:
+`loops_pause`, `loops_resume`, `loops_stop`, `loops_run_now`, `loops_archive`,
+`loops_unarchive`, `loops_create_command`, and `loops_create_workflow`.
+Deprecated `loop_*` aliases are still registered where compatibility needs them,
+but callers should use the `loops_*` names. Mutation tools do not require or
+accept confirmation-string parameters; the server-side environment opt-in is the
+gate. MCP `loops_run_now` schedules the loop for immediate daemon pickup; inline
+execution remains CLI-only.
 
 Keep host-affecting or long-running operations on the CLI: daemon
-start/stop/install/logs, inline `run-now`, `tick`, loop removal/archive
-maintenance, workflow create/migrate/cancel/recover, agent loop creation,
-template materialization, and event-route drains.
+start/stop/install/logs, inline `run-now`, `tick`, loop deletion, workflow
+create/migrate/cancel/recover, agent loop creation, template materialization,
+and event-route drains.
 
 ## Create Loops
 
@@ -271,7 +277,7 @@ Inspect configured and runtime goal state:
 
 ```bash
 loops goal show <loop-or-goal-id>
-loops goal status <goal-run-id-or-loop-run-id>
+loops goal show <goal-run-id-or-loop-run-id>
 ```
 
 Workflow JSON can also embed goals at the workflow or step level:
@@ -374,11 +380,11 @@ loops templates render todos-task-worker-verifier \
   --var taskTitle="Fix parser" \
   --var projectPath=/path/to/repo \
   --var provider=codewith \
-  --var authProfilePool=account004,account005,account006 \
+  --var authProfilePool=account001,account002,account003 \
   --var sandbox=workspace-write \
   --var todosProjectPath=$HOME/.hasna/loops \
   --var addDirs=$HOME/.hasna/todos,$HOME/.hasna/loops
-loops templates create-workflow todos-task-worker-verifier \
+loops workflows create --template todos-task-worker-verifier \
   --var taskId=<task-id> \
   --var projectPath=/path/to/repo
 loops templates render event-worker-verifier \
@@ -391,7 +397,7 @@ loops templates render bounded-agent-worker-verifier \
   --var objective="Check docs drift and queue tasks for gaps" \
   --var projectPath=/path/to/repo \
   --var provider=codewith \
-  --var authProfilePool=account004,account005 \
+  --var authProfilePool=account001,account002 \
   --var sandbox=workspace-write \
   --var worktreeMode=required
 loops templates render pr-review \
@@ -476,30 +482,31 @@ loops templates show custom-report
 loops templates render custom-report \
   --var objective="Check docs drift" \
   --var projectPath=/path/to/repo
-loops templates create-workflow custom-report \
+loops workflows create --template custom-report \
   --var objective="Check docs drift" \
   --var projectPath=/path/to/repo
 ```
 
 Use `--source builtin`, `--source custom`, or `--source all` on
-`list`, `show`, `render`, and `create-workflow` when automation needs an
-explicit source. Custom template ids and names cannot override built-ins.
+`templates list`, `templates show`, `templates render`, and
+`workflows create --template` when automation needs an explicit source. Custom
+template ids and names cannot override built-ins.
 Custom templates fail closed for `danger-full-access`, dangerous passthrough
 arguments, and implicit Codewith/Codex full-access defaults. If a custom
 Codewith/Codex template uses `permissionMode: "bypass"`, it must also set
 `sandbox` to `workspace-write` or `read-only`. Use built-in templates with
 explicit break-glass handling for emergency workflows that need full access.
 
-For event-driven task automation, `loops events handle todos-task` reads a
+For event-driven task automation, `loops routes create todos-task` reads a
 Hasna event envelope from stdin or `HASNA_EVENT_JSON`, records a
 `WorkflowInvocation`, upserts an admission work item, and admits that work item
 into a deduped one-shot workflow loop when route capacity allows:
 
 ```bash
-cat task-created-event.json | loops events handle todos-task \
+cat task-created-event.json | loops routes create todos-task \
   --template task-lifecycle \
   --provider codewith \
-  --auth-profile-pool account004,account005,account006 \
+  --auth-profile-pool account001,account002,account003 \
   --permission-mode bypass \
   --sandbox workspace-write \
   --todos-project "$HOME/.hasna/loops" \
@@ -532,7 +539,7 @@ selected.
 loops routes drain todos-task \
   --dry-run \
   --provider-rule area=frontend:claude:claude-ui-a,claude-ui-b \
-  --provider-rule area=backend:codewith:account004,account005 \
+  --provider-rule area=backend:codewith:account001,account002 \
   --worktree-mode required
 ```
 
@@ -569,9 +576,9 @@ For other Hasna apps that expose `@hasna/events` webhooks, use the generic
 handler:
 
 ```bash
-cat event.json | loops events handle generic \
+cat event.json | loops routes create generic \
   --provider codewith \
-  --auth-profile-pool account004,account005,account006 \
+  --auth-profile-pool account001,account002,account003 \
   --permission-mode bypass \
   --sandbox workspace-write \
   --project-path /path/to/repo \
@@ -614,7 +621,7 @@ loops routes requeue <work-item-id> --reason "fixed upstream blocker"
 loops routes invocations
 ```
 
-For Hasna OSS task-created routing, use a deterministic drain instead of tmux
+For OSS task-created routing, use a deterministic drain instead of tmux
 dispatch:
 
 ```bash
@@ -622,10 +629,10 @@ loops routes schedule todos-task oss-task-route-drain \
   --every 5m \
   --todos-project "$HOME/.hasna/loops" \
   --template task-lifecycle \
-  --project-path-prefix "$HOME/workspace/hasna/opensource" \
+  --project-path-prefix "$HOME/workspace/example/opensource" \
   --tags auto:route \
   --provider codewith \
-  --auth-profile-pool account004,account005,account006 \
+  --auth-profile-pool account001,account002,account003 \
   --add-dir "$HOME/.hasna/todos,$HOME/.hasna/loops" \
   --project-group oss \
   --max-dispatch 2 \
@@ -668,7 +675,7 @@ import { openAutomationsRuntimeBinding } from "@hasna/loops";
 
 const binding = openAutomationsRuntimeBinding();
 console.log(binding.handoff); // "claim-queue"
-console.log(binding.eventHandoff.handlerCommand); // "loops events handle generic"
+console.log(binding.eventHandoff.handlerCommand); // "loops routes create generic"
 ```
 
 The claim-queue handoff uses the OpenAutomations CLI or SDK:
@@ -681,18 +688,18 @@ automations queue fail <action-id> --runner open-loops:<worker-id> --code <code>
 
 For explicit event workflow routing, OpenAutomations can export the normalized
 event envelope and OpenLoops can consume it through the existing generic event
-handler:
+route:
 
 ```bash
 automations --json webhooks event <route> --body-json '<json>' \
-  | loops --json events handle generic
+  | loops --json routes create generic
 ```
 
 This is not automation materialization in OpenLoops. It is an explicit
 event-envelope workflow handoff: OpenAutomations owns deterministic automation
 specs, webhook normalization, queue state, approvals, DLQ, and replay; OpenLoops
 owns agent workflow invocation after the operator routes the envelope to
-`loops events handle generic`.
+`loops routes create generic`.
 
 Do not store automation specs in OpenLoops, infer automation triggers from event
 transport alone, or replace the OpenAutomations queue with loop/workflow rows.

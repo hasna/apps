@@ -17,7 +17,7 @@ function wantsJson(opts?: { json?: boolean }): boolean {
 
 function printStatus(opts?: { json?: boolean }): void {
   const status = buildDeploymentStatus({ perspective: "self_hosted" });
-  if (wantsJson(opts)) console.log(JSON.stringify(status, null, 2));
+  if (wantsJson(opts)) console.log(JSON.stringify(apiStatus(), null, 2));
   else console.log(deploymentStatusLine(status));
 }
 

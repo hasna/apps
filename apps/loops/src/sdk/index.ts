@@ -150,15 +150,15 @@ export function openAutomationsRuntimeBinding(
     failCommand: "automations queue fail",
     eventHandoff: {
       envelopeCommand: "automations webhooks event",
-      handlerCommand: "loops events handle generic",
-      pipeExample: "automations --json webhooks event <route> --body-json '<json>' | loops --json events handle generic",
+      handlerCommand: "loops routes create generic",
+      pipeExample: "automations --json webhooks event <route> --body-json '<json>' | loops --json routes create generic",
       boundary: "Use only for explicit event-envelope workflow handoff. OpenAutomations still owns deterministic automation materialization and queue state; OpenLoops owns workflow invocation.",
     },
     requiredEnvironment: ["HASNA_AUTOMATIONS_DIR"],
     guarantees: [
       "OpenAutomations owns automation specs, run materialization, queue state, DLQ, replay, idempotency, and approvals.",
       "OpenLoops may execute claimed actions through explicit command or SDK handoff only.",
-      "OpenLoops may consume exported event envelopes only through explicit events handle commands.",
+      "OpenLoops may consume exported event envelopes only through explicit routes create commands.",
       "Workers must complete or fail actions by action id and runner id so OpenAutomations can enforce queue leases.",
     ],
     nonGoals: [

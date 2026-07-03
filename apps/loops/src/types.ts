@@ -89,7 +89,7 @@ export interface OpenAutomationsRuntimeBinding {
   failCommand: "automations queue fail";
   eventHandoff: {
     envelopeCommand: "automations webhooks event";
-    handlerCommand: "loops events handle generic";
+    handlerCommand: "loops routes create generic";
     pipeExample: string;
     boundary: string;
   };
