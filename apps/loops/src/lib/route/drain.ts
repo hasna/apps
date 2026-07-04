@@ -20,10 +20,6 @@ function taskField(task: TodosReadyTask, keys: string[]): string | undefined {
   return undefined;
 }
 
-function sourceProjectFromTask(task: TodosReadyTask, fallbackProjectPath: string): string {
-  return taskField(task, ["source_project_path", "sourceProjectPath"]) ?? fallbackProjectPath;
-}
-
 function taskRegistryRouteCandidatePath(task: TodosReadyTask): string | undefined {
   const metadata = objectField(task.metadata) ?? {};
   return taskField(task, ["project_path", "projectPath"]) ??
@@ -225,9 +221,9 @@ function loadReadyTodosTasks(opts: TodosDrainOptions, scanLimit: number): TodosR
   const projectPaths = loadTodoProjectPathsFromRegistry(opts);
   const ready = projectPaths.flatMap((projectPath) =>
     loadReadyTodosTasksForProject(projectPath, scanLimit).map((task) => {
-      const sourceProject = sourceProjectFromTask(task, projectPath);
+      const sourceProject = projectPath;
       return {
-      ...task,
+        ...task,
         source_project_path: sourceProject,
         project_path: taskRoutePathFromRegistry(task, sourceProject, opts.projectPathPrefix),
       };

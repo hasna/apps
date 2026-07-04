@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -64,6 +64,18 @@ function createGitRepo(prefix: string): string {
   git(repo, ["add", "README.md"]);
   git(repo, ["commit", "-m", "init"]);
   return repo;
+}
+
+function testPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+function testPaths(paths: string[]): string[] {
+  return paths.map(testPath);
 }
 
 type TestWorkflowStep = { id?: string; target: Record<string, any>; [key: string]: any };
@@ -3049,11 +3061,11 @@ describe("loops CLI", () => {
     expect(workflow.steps[1].target.worktree).toMatchObject({
       mode: "auto",
       enabled: true,
-      originalCwd: repo,
-      repoRoot: repo,
       root: worktreeRoot,
     });
-    expect(workflow.steps[1].target.addDirs).toEqual([join(dataDir, "todos-store"), join(repo, ".git")]);
+    expect(testPath(workflow.steps[1].target.worktree.originalCwd)).toBe(testPath(repo));
+    expect(testPath(workflow.steps[1].target.worktree.repoRoot)).toBe(testPath(repo));
+    expect(testPaths(workflow.steps[1].target.addDirs)).toEqual(testPaths([join(dataDir, "todos-store"), join(repo, ".git")]));
     expect(workflow.steps[1].target.worktree.branch).toContain("openloops/");
     expect(workflow.steps[2].target.cwd).toBe(workflow.steps[1].target.cwd);
     expect(workflow.steps[1].target.prompt).toContain("[redacted");
@@ -4599,9 +4611,9 @@ describe("loops CLI", () => {
     expect(value.workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
     expect(value.workflow.steps[1].target.cwd).toContain(worktreeRoot);
     expect(value.workflow.steps[1].target.worktree.enabled).toBe(true);
-    expect(value.workflow.steps[1].target.worktree.originalCwd).toBe(repo);
-    expect(value.workflow.steps[1].target.addDirs).toContain(join(repo, ".git"));
-    expect(value.workflow.steps[2].target.addDirs).toContain(join(repo, ".git"));
+    expect(testPath(value.workflow.steps[1].target.worktree.originalCwd)).toBe(testPath(repo));
+    expect(testPaths(value.workflow.steps[1].target.addDirs)).toContain(testPath(join(repo, ".git")));
+    expect(testPaths(value.workflow.steps[2].target.addDirs)).toContain(testPath(join(repo, ".git")));
   });
 
   test("todos task event handler throttles active workflows per project", () => {
@@ -4792,7 +4804,7 @@ describe("loops CLI", () => {
     const value = JSON.parse(second.stdout);
     expect(value.skipped).toBe(true);
     expect(value.throttle.counts.project).toBe(1);
-    expect(value.throttle.projectPath).toBe(repo);
+    expect(testPath(value.throttle.projectPath)).toBe(testPath(repo));
   });
 
   test("todos task event handler throttles active workflows per project group", () => {
@@ -5116,6 +5128,7 @@ describe("loops CLI", () => {
         id: taskId,
         title: "Registry route with stale working_dir",
         status: "pending",
+        source_project_path: sourceB,
         working_dir: staleWorkingDir,
         tags: ["auto:route"],
       },
@@ -5173,7 +5186,9 @@ describe("loops CLI", () => {
     expect(value.results[0].event.data.project_path).toBe(sourceA);
     expect(value.results[0].event.data.working_dir).toBe(sourceA);
     expect(value.results[0].workflow.steps[0].target.cwd).toBe(sourceA);
-    expect(value.results[0].workflow.steps[0].target.args.join("\n")).toContain(sourceA);
+    const sourceGateArgs = value.results[0].workflow.steps[0].target.args.join("\n");
+    expect(sourceGateArgs).toContain(sourceA);
+    expect(sourceGateArgs).not.toContain(sourceB);
     const calls = readFileSync(callsFile, "utf8").trim().split("\n").filter(Boolean);
     expect(calls.some((entry) => entry.includes("projects --json"))).toBe(true);
     expect(calls.filter((entry) => entry.includes("ready --limit")).length).toBe(2);
@@ -6043,6 +6058,11 @@ describe("loops CLI", () => {
 
   test("todos task event handler --preflight replaces stale generated workflows before storing loop", () => {
     const dataDir = freshDataDir("loops-cli-event-handler-preflight-existing-workflow-");
+    const binDir = join(dataDir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const codewith = join(binDir, "codewith");
+    writeFileSync(codewith, "#!/usr/bin/env bash\nexit 0\n");
+    chmodSync(codewith, 0o755);
     const event = {
       id: "evt-existing-workflow-preflight",
       type: "task.created",
@@ -6070,7 +6090,12 @@ describe("loops CLI", () => {
       store.close();
     }
 
-    const result = runCli(dataDir, ["--json", "events", "handle", "todos-task", "--preflight"], JSON.stringify(event));
+    const result = runCli(
+      dataDir,
+      ["--json", "events", "handle", "todos-task", "--preflight"],
+      JSON.stringify(event),
+      { PATH: `${binDir}:/usr/bin:/bin` },
+    );
 
     expect(result.status).toBe(0);
     const value = JSON.parse(result.stdout);
