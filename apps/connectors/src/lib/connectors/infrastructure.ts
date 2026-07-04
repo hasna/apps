@@ -86,4 +86,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Infrastructure",
     tags: ["monitoring", "uptime", "performance", "alerts", "website"],
   },
+  {
+    name: "zibra-labs",
+    displayName: "Zibra Labs",
+    description: "Quant backtesting HPC",
+    category: "Infrastructure",
+    tags: ["quant", "backtesting", "hpc", "datasets", "finance"],
+  },
 ];
