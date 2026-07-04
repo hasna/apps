@@ -73,6 +73,78 @@ describe("cli command handling", () => {
     }
   });
 
+  test("heartbeat collector-command emits the package-owned OpenLoops command without approval", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-cli-heartbeat-collector-command-"));
+    try {
+      const manifestPath = join(dir, "machines.json");
+      const env = {
+        ...process.env,
+        HASNA_MACHINES_MANIFEST_PATH: manifestPath,
+        HASNA_MACHINES_DB_PATH: join(dir, "machines.db"),
+        HASNA_MACHINES_MACHINE_ID: "spark01",
+        [MUTATION_APPROVAL_FLAG_ENV]: "",
+        [MUTATION_APPROVAL_TOKEN_ENV]: "secret",
+      };
+      writeFileSync(manifestPath, `${JSON.stringify({
+        version: 1,
+        machines: [
+          { id: "spark02", platform: "linux", workspacePath: "/home/hasna/workspace" },
+          { id: "spark01", platform: "linux", workspacePath: "/home/hasna/workspace" },
+        ],
+      })}\n`, "utf8");
+
+      const text = runCli(["heartbeat", "collector-command", "--machine", "spark01", "--machine", "spark02"], env);
+      expect(text.stderr).toBe("");
+      expect(text.status).toBe(0);
+      expect(text.stdout.trim()).toBe("HASNA_MACHINES_ALLOW_MUTATIONS=1 machines heartbeat collect --machine spark01 --machine spark02 --timeout-ms 90000 --fail-on-error --json");
+      expect(text.stdout).not.toContain("topology --all");
+
+      const json = runCli(["heartbeat", "collector-command", "--machine", "spark01", "--machine", "spark02", "--json"], env);
+      expect(json.stderr).toBe("");
+      expect(json.status).toBe(0);
+      expect(JSON.parse(json.stdout)).toMatchObject({
+        kind: "heartbeat_collector_command",
+        loopName: "machine-openmachines-heartbeat-collector",
+        command: "HASNA_MACHINES_ALLOW_MUTATIONS=1 machines heartbeat collect --machine spark01 --machine spark02 --timeout-ms 90000 --fail-on-error --json",
+        machines: ["spark01", "spark02"],
+        timeoutMs: 90000,
+        trustedLocalMutationEnv: "HASNA_MACHINES_ALLOW_MUTATIONS=1",
+        warnings: [],
+      });
+
+      const defaulted = runCli(["heartbeat", "collector-command", "--json"], env);
+      expect(defaulted.stderr).toBe("");
+      expect(defaulted.status).toBe(0);
+      expect(JSON.parse(defaulted.stdout)).toMatchObject({
+        machines: ["spark01"],
+        warnings: ["heartbeat_collector_defaulted_to_local_machine_only"],
+      });
+
+      const denied = runCli(["heartbeat", "collect", "--machine", "spark01", "--json"], env);
+      expect(denied.status).not.toBe(0);
+      expect(denied.stderr).toContain("requires operator approval");
+
+      const collectOptions = { machines: ["unknown"] };
+      const token = createMutationApprovalToken({
+        surface: "cli",
+        operation: HEARTBEAT_COLLECT_MUTATION_OPERATION,
+        transport: "cli",
+        callerId: "cli",
+        runId: "cli",
+        resourceId: heartbeatCollectResourceId(collectOptions),
+        args: heartbeatCollectMutationArgs(collectOptions),
+      }, { env, now: Date.now(), nonce: "cli-heartbeat-collector-fail" });
+      const failed = runCli(["heartbeat", "collect", "--machine", "unknown", "--json", "--fail-on-error", "--approval-token", token], env);
+      expect(failed.status).toBe(1);
+      expect(JSON.parse(failed.stdout)[0]).toMatchObject({
+        machineId: "unknown",
+        status: "failed",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("manifest add --from-stdin bypasses option validation and writes the piped machine", () => {
     const dir = mkdtempSync(join(tmpdir(), "machines-cli-stdin-"));
     try {

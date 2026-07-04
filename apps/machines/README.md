@@ -642,6 +642,7 @@ OpenMachines SQLite database:
 
 ```bash
 machines heartbeat collect --machine spark02 --machine machine001 --json
+machines heartbeat collector-command --machine spark01 --machine spark02
 ```
 
 This runs `machines-agent --once` on each target using the normal route
@@ -652,6 +653,21 @@ instead of its fleet id, declare that hostname in manifest
 `metadata.heartbeatAliases`; route fields such as `hostname`, `tailscaleName`,
 and `sshAddress` are not trusted as heartbeat identity. The collector still
 stores the canonical fleet id.
+
+OpenLoops heartbeat collector loops should install the command emitted by
+`machines heartbeat collector-command`. Pass explicit low-latency collector
+targets for one-minute loops; without `--machine`, the planner defaults to the
+local machine only so a slow all-fleet collection cannot outlive the heartbeat
+freshness window. The emitted command uses a 90000ms per-machine timeout,
+fails the loop run when any selected import fails, and includes the trusted
+local mutation environment for the scheduled collector:
+
+```bash
+HASNA_MACHINES_ALLOW_MUTATIONS=1 machines heartbeat collect --machine spark01 --machine spark02 --timeout-ms 90000 --fail-on-error --json
+```
+
+Do not schedule `machines topology --all --json` as the heartbeat collector; it
+only reads existing topology rows and does not import fresh heartbeat rows.
 
 Service lifecycle commands are dry-run plans by default and support macOS
 `launchd` plus Linux `systemd` user or system services:

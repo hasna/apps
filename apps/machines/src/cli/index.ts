@@ -59,10 +59,12 @@ import { resolveScreenTarget, buildScreenCommand, buildScreenEnableCommand, reso
 import { buildSyncPlan, runSyncPlan } from "../commands/sync.js";
 import { getStatus } from "../commands/status.js";
 import {
+  buildHeartbeatCollectorCommand,
   collectHeartbeats,
   HEARTBEAT_COLLECT_MUTATION_OPERATION,
   heartbeatCollectMutationArgs,
   heartbeatCollectResourceId,
+  type HeartbeatCollectorCommandPlan,
   type HeartbeatCollectResult,
 } from "../commands/heartbeat.js";
 import { repairWorkspaceManifestMappings, type WorkspaceManifestRepairResult } from "../commands/workspace.js";
@@ -666,6 +668,10 @@ function renderHeartbeatCollect(results: HeartbeatCollectResult[]): string {
   }).join("\n");
 }
 
+function renderHeartbeatCollectorCommand(plan: HeartbeatCollectorCommandPlan): string {
+  return plan.command;
+}
+
 function renderShellCommand(command: { program: string; args: string[]; sudo: boolean }): string {
   const parts = command.sudo ? ["sudo", command.program, ...command.args] : [command.program, ...command.args];
   return parts.map((part) => /^[A-Za-z0-9_@%+=:,./$-]+$/.test(part) ? part : JSON.stringify(part)).join(" ");
@@ -1235,14 +1241,31 @@ addDaemonLifecycleCommand("status", "Plan a daemon service status command");
 addDaemonLifecycleCommand("logs", "Plan a daemon service log command");
 
 heartbeatCommand
+  .command("collector-command")
+  .description("Print the canonical trusted OpenLoops command for the heartbeat collector")
+  .option("--machine <id...>", "Machine identifier to include; repeat for low-latency peers; defaults to the local machine", collectOptionValues)
+  .option("--timeout-ms <ms>", "Per-machine command timeout in milliseconds")
+  .option("--machines-command <command>", "machines CLI command or absolute path", "machines")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { machine?: string[]; timeoutMs?: string; machinesCommand?: string; json?: boolean }, command: Command) => {
+    const plan = buildHeartbeatCollectorCommand({
+      machines: options.machine,
+      timeoutMs: options.timeoutMs ? parseIntegerOption(options.timeoutMs, "timeout-ms", { min: 1 }) : undefined,
+      machinesCommand: options.machinesCommand,
+    });
+    printCommandResult(plan, renderHeartbeatCollectorCommand(plan), wantsCommandJson(options, command));
+  });
+
+heartbeatCommand
   .command("collect")
   .description("Run one-shot machines-agent heartbeats over machine routes and import public rows locally")
   .option("--machine <id...>", "Machine identifier to collect; repeat for multiple machines", collectOptionValues, [])
   .option("--timeout-ms <ms>", "Per-machine command timeout in milliseconds")
   .option("--no-doctor-summary", "Skip doctor summary collection even when the remote agent supports it")
+  .option("--fail-on-error", "Exit non-zero when any selected heartbeat import fails", false)
   .option("--approval-token <token>", "Scoped mutation approval token")
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string[]; timeoutMs?: string; doctorSummary?: boolean; approvalToken?: string; json?: boolean }, command: Command) => {
+  .action((options: { machine?: string[]; timeoutMs?: string; doctorSummary?: boolean; failOnError?: boolean; approvalToken?: string; json?: boolean }, command: Command) => {
     const collectOptions = {
       machines: options.machine,
       timeoutMs: options.timeoutMs ? parseIntegerOption(options.timeoutMs, "timeout-ms", { min: 1 }) : undefined,
@@ -1257,6 +1280,9 @@ heartbeatCommand
       trustedLocalMutation: createTrustedSdkMutationApproval(),
     });
     printCommandResult(results, renderHeartbeatCollect(results), wantsCommandJson(options, command));
+    if (options.failOnError && results.some((result) => result.status !== "imported")) {
+      process.exitCode = 1;
+    }
   });
 
 manifestCommand.command("init").description("Create an empty fleet manifest")
