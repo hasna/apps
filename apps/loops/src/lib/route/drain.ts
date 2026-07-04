@@ -5,7 +5,7 @@ import type { Loop, WorkflowSpec } from "../../types.js";
 import { objectField, stringField, tagsFromValue, taskEventField } from "./fields.js";
 import { listFromRepeatedOpts, positiveInteger, splitList } from "./parse.js";
 import { routeTodosTaskEvent, todosTaskRouteTemplateId } from "./route-event.js";
-import { isExistingGitProjectPath, normalizeRoutePath } from "./throttle.js";
+import { normalizeRoutePath } from "./throttle.js";
 import { defaultLoopsProject, runLocalCommand, runLocalCommandWithStdoutFile, todosMutationSummary } from "./todos-cli.js";
 import { writeRouteEvidence } from "./cursors.js";
 import type { TodosDrainOptions, TodosReadyTask, TodosTaskRoutePrint } from "./types.js";
@@ -20,20 +20,9 @@ function taskField(task: TodosReadyTask, keys: string[]): string | undefined {
   return undefined;
 }
 
-function taskRegistryRouteCandidatePath(task: TodosReadyTask): string | undefined {
-  const metadata = objectField(task.metadata) ?? {};
-  return taskField(task, ["project_path", "projectPath"]) ??
-    taskField(task, ["working_dir", "workingDir", "cwd"]) ??
-    taskEventField(metadata, ["project_path", "projectPath", "project_canonical_path", "cwd"]);
-}
-
-function taskRoutePathFromRegistry(task: TodosReadyTask, sourceProjectPath: string, projectPathPrefix?: string): string {
-  const candidatePath = taskRegistryRouteCandidatePath(task);
-  const prefix = projectPathPrefix ? normalizeRoutePath(projectPathPrefix) ?? resolve(projectPathPrefix) : undefined;
-  if (candidatePath) {
-    const candidate = normalizeRoutePath(candidatePath) ?? resolve(candidatePath);
-    if (isExistingGitProjectPath(candidate) && (!prefix || candidate === prefix || candidate.startsWith(`${prefix}/`))) return candidate;
-  }
+function taskRoutePathFromRegistry(sourceProjectPath: string): string {
+  // Registry drains scan a source todos project; task-controlled path fields
+  // must not redirect the resulting route into a different repository.
   return normalizeRoutePath(sourceProjectPath) ?? resolve(sourceProjectPath);
 }
 
@@ -105,6 +94,10 @@ function taskDrainEvent(task: TodosReadyTask, sourceProjectPath?: string): Event
   if (sourceProject) {
     data.source_project_path = sourceProject;
     if (!data.project_path) data.project_path = sourceProject;
+    data.route_project_path = data.project_path;
+    data.routeProjectPath = data.project_path;
+    metadata.route_project_path = data.project_path;
+    metadata.routeProjectPath = data.project_path;
   }
   const time = new Date().toISOString();
   return {
@@ -232,7 +225,7 @@ function loadReadyTodosTasks(opts: TodosDrainOptions, scanLimit: number): TodosR
       return {
         ...task,
         source_project_path: sourceProject,
-        project_path: taskRoutePathFromRegistry(task, sourceProject, opts.projectPathPrefix),
+        project_path: taskRoutePathFromRegistry(sourceProject),
       };
     }),
   );
