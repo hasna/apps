@@ -457,4 +457,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Marketing & Sales",
     tags: ["email", "outreach", "sales"],
   },
+  {
+    name: "yesware",
+    displayName: "Yesware",
+    description: "Sales email tracking, sequences, and outreach analytics platform",
+    category: "Marketing & Sales",
+    tags: ["sales", "sequences", "outreach", "email", "tracking"],
+  },
 ];
