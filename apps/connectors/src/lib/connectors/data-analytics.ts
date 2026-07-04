@@ -562,4 +562,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Data & Analytics",
     tags: ["scraping", "data", "api"],
   },
+  {
+    name: "zenserp",
+    displayName: "Zenserp",
+    description: "Real-time Google SERP and search engine results API",
+    category: "Data & Analytics",
+    tags: ["serp", "search", "seo", "google"],
+  },
 ];

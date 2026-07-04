@@ -230,6 +230,10 @@ export const TEST_ENDPOINTS: Record<string, TestEndpoint> = {
     headers: () => ({}),
     // Key appended as &appid= query param in the test command
   },
+  zenserp: {
+    url: "https://app.zenserp.com/api/v2/search?q=test",
+    headers: (key) => ({ apikey: key }),
+  },
 
   // ── Business Tools ───────────────────────────────────────
   notion: {
