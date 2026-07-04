@@ -3,9 +3,9 @@ import type { EventEnvelope } from "@hasna/events";
 import { redact } from "../format.js";
 import type { Loop, WorkflowSpec } from "../../types.js";
 import { objectField, stringField, tagsFromValue, taskEventField } from "./fields.js";
-import { positiveInteger, splitList } from "./parse.js";
+import { listFromRepeatedOpts, positiveInteger, splitList } from "./parse.js";
 import { routeTodosTaskEvent, todosTaskRouteTemplateId } from "./route-event.js";
-import { normalizeRoutePath } from "./throttle.js";
+import { isExistingGitProjectPath, normalizeRoutePath } from "./throttle.js";
 import { defaultLoopsProject, runLocalCommand, runLocalCommandWithStdoutFile, todosMutationSummary } from "./todos-cli.js";
 import { writeRouteEvidence } from "./cursors.js";
 import type { TodosDrainOptions, TodosReadyTask, TodosTaskRoutePrint } from "./types.js";
@@ -20,8 +20,25 @@ function taskField(task: TodosReadyTask, keys: string[]): string | undefined {
   return undefined;
 }
 
-function taskListId(task: TodosReadyTask): string | undefined {
-  return taskField(task, ["task_list_id", "taskListId"]) ?? stringField(task.task_list?.id);
+function sourceProjectFromTask(task: TodosReadyTask, fallbackProjectPath: string): string {
+  return taskField(task, ["source_project_path", "sourceProjectPath"]) ?? fallbackProjectPath;
+}
+
+function taskRegistryRouteCandidatePath(task: TodosReadyTask): string | undefined {
+  const metadata = objectField(task.metadata) ?? {};
+  return taskField(task, ["project_path", "projectPath"]) ??
+    taskField(task, ["working_dir", "workingDir", "cwd"]) ??
+    taskEventField(metadata, ["project_path", "projectPath", "project_canonical_path", "cwd"]);
+}
+
+function taskRoutePathFromRegistry(task: TodosReadyTask, sourceProjectPath: string, projectPathPrefix?: string): string {
+  const candidatePath = taskRegistryRouteCandidatePath(task);
+  const prefix = projectPathPrefix ? normalizeRoutePath(projectPathPrefix) ?? resolve(projectPathPrefix) : undefined;
+  if (candidatePath) {
+    const candidate = normalizeRoutePath(candidatePath) ?? resolve(candidatePath);
+    if (isExistingGitProjectPath(candidate) && (!prefix || candidate === prefix || candidate.startsWith(`${prefix}/`))) return candidate;
+  }
+  return normalizeRoutePath(sourceProjectPath) ?? resolve(sourceProjectPath);
 }
 
 function taskProjectId(task: TodosReadyTask): string | undefined {
@@ -37,17 +54,37 @@ function taskDescriptionProjectPath(task: TodosReadyTask): string | undefined {
 function taskProjectPath(task: TodosReadyTask): string | undefined {
   const metadata = objectField(task.metadata) ?? {};
   return taskField(task, ["project_path", "projectPath"]) ??
+    taskField(task, ["source_project_path", "sourceProjectPath"]) ??
     taskEventField(metadata, ["project_path", "projectPath", "project_canonical_path"]) ??
     taskDescriptionProjectPath(task) ??
     taskField(task, ["working_dir", "workingDir", "cwd"]) ??
     taskEventField(metadata, ["working_dir", "workingDir", "cwd"]);
 }
 
-function taskDrainEvent(task: TodosReadyTask): EventEnvelope {
+function taskListValues(task: TodosReadyTask): string[] {
+  const taskList = objectField(task.task_list) as
+    | {
+        id?: string;
+        slug?: string;
+        name?: string;
+      }
+    | undefined;
+  return [
+    taskField(task, ["task_list_id", "taskListId"]),
+    stringField(task.task_list?.id),
+    stringField(task.task_list?.slug),
+    stringField(taskList?.name),
+    taskField(task, ["task_list", "taskList"]),
+  ].filter((value): value is string => Boolean(value));
+}
+
+function taskDrainEvent(task: TodosReadyTask, sourceProjectPath?: string): EventEnvelope {
   const taskId = taskField(task, ["id", "task_id", "taskId"]);
   if (!taskId) throw new Error("todos ready returned a task without an id");
   const metadata = objectField(task.metadata) ?? {};
   const workingDir = taskProjectPath(task);
+  const routeWorkingDir = taskField(task, ["project_path", "projectPath"]) ?? workingDir;
+  const sourceProject = sourceProjectPath?.trim();
   const data: Record<string, unknown> = {
     ...task,
     id: taskId,
@@ -58,9 +95,13 @@ function taskDrainEvent(task: TodosReadyTask): EventEnvelope {
     metadata,
   };
   if (workingDir) {
-    data.working_dir = workingDir;
-    data.project_path = taskField(task, ["project_path", "projectPath"]) ?? workingDir;
-    data.cwd = taskField(task, ["cwd"]) ?? workingDir;
+    data.working_dir = routeWorkingDir;
+    data.project_path = routeWorkingDir;
+    data.cwd = taskField(task, ["cwd"]) ?? routeWorkingDir;
+  }
+  if (sourceProject) {
+    data.source_project_path = sourceProject;
+    if (!data.project_path) data.project_path = sourceProject;
   }
   const time = new Date().toISOString();
   return {
@@ -74,6 +115,7 @@ function taskDrainEvent(task: TodosReadyTask): EventEnvelope {
     schemaVersion: "1.0",
     metadata: {
       ...metadata,
+      ...(sourceProject ? { source_project_path: sourceProject } : {}),
       ...(workingDir ? { working_dir: workingDir, project_path: data.project_path, cwd: data.cwd } : {}),
       drained_by: "@hasna/loops",
       drained_from: "todos ready",
@@ -108,20 +150,90 @@ function compactDrainResult(result: TodosTaskRoutePrint): Record<string, unknown
   };
 }
 
-function loadReadyTodosTasks(opts: TodosDrainOptions, scanLimit: number): TodosReadyTask[] {
-  const todosProject = opts.todosProject ?? defaultLoopsProject();
-  const args = ["--project", todosProject, "--json", "ready", "--limit", String(scanLimit)];
-  const result = runLocalCommandWithStdoutFile("todos", args, { timeoutMs: 60_000, maxBuffer: 64 * 1024 * 1024 });
-  if (!result.ok) throw new Error(result.stderr || result.error || "todos ready failed");
-  let parsed: unknown;
+interface TodosProjectDescriptor {
+  path: string;
+}
+
+function parseTodosReadyJson(stdout: string): unknown {
   try {
-    parsed = JSON.parse(result.stdout || "[]");
+    return JSON.parse(stdout || "[]");
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`failed to parse todos ready --json output (${result.stdout.length} bytes): ${message}`);
+    throw new Error(`failed to parse todos ready --json output (${stdout.length} bytes): ${message}`);
   }
+}
+
+function parseTodoProjectsJson(stdout: string): unknown {
+  try {
+    return JSON.parse(stdout || "[]");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`failed to parse todos projects --json output (${stdout.length} bytes): ${message}`);
+  }
+}
+
+function loadTodoProjectPathsFromRegistry(opts: TodosDrainOptions): string[] {
+  const result = runLocalCommand("todos", ["projects", "--json"], { timeoutMs: 60_000 });
+  if (!result.ok) throw new Error(result.stderr || result.error || "todos projects failed");
+  const payload = parseTodoProjectsJson(result.stdout);
+  const projectsPayload = Array.isArray(payload) ? payload : objectField(payload)?.projects;
+  if (!Array.isArray(projectsPayload)) throw new Error("todos projects --json returned a non-array value");
+  const includeFilters = listFromRepeatedOpts(opts.todosProjectInclude)?.map(
+    (entry) => normalizeRoutePath(entry) ?? resolve(entry),
+  ) ?? [];
+  const includesPrefix = normalizeRoutePath(opts.projectPathPrefix) ?? (opts.projectPathPrefix ? resolve(opts.projectPathPrefix) : undefined);
+  const fromProjects: TodosProjectDescriptor[] = projectsPayload
+    .map((entry) => objectField(entry))
+    .filter((project): project is Record<string, unknown> => Boolean(project))
+    .map((project): TodosProjectDescriptor | undefined => {
+      const path = stringField(project.path)
+        ?? stringField(project.projectPath)
+        ?? stringField(project.project_path)
+        ?? stringField(project.dir)
+        ?? stringField(project.root)
+        ?? stringField(project.cwd);
+      if (!path) return undefined;
+      return { path };
+    })
+    .filter((project): project is TodosProjectDescriptor => Boolean(project));
+  const paths = fromProjects
+    .map((project) => project.path)
+    .filter(Boolean)
+    .filter((path) => {
+      const normalizedPath = normalizeRoutePath(path) ?? resolve(path);
+      if (includesPrefix && !(normalizedPath === includesPrefix || normalizedPath.startsWith(`${includesPrefix}/`))) return false;
+      if (includeFilters.length === 0) return true;
+      return includeFilters.some((prefix) => normalizedPath === prefix || normalizedPath.startsWith(`${prefix}/`));
+    });
+  return [...new Set(paths)];
+}
+
+function loadReadyTodosTasksForProject(projectPath: string, scanLimit: number): TodosReadyTask[] {
+  const args = ["--project", projectPath, "--json", "ready", "--limit", String(scanLimit)];
+  const result = runLocalCommandWithStdoutFile("todos", args, { timeoutMs: 60_000, maxBuffer: 64 * 1024 * 1024 });
+  if (!result.ok) throw new Error(result.stderr || result.error || "todos ready failed");
+  const parsed = parseTodosReadyJson(result.stdout);
   if (!Array.isArray(parsed)) throw new Error("todos ready --json returned a non-array value");
   return parsed as TodosReadyTask[];
+}
+
+function loadReadyTodosTasks(opts: TodosDrainOptions, scanLimit: number): TodosReadyTask[] {
+  if (!opts.todosProjectsFromRegistry) {
+    const todosProject = opts.todosProject ?? defaultLoopsProject();
+    return loadReadyTodosTasksForProject(todosProject, scanLimit);
+  }
+  const projectPaths = loadTodoProjectPathsFromRegistry(opts);
+  const ready = projectPaths.flatMap((projectPath) =>
+    loadReadyTodosTasksForProject(projectPath, scanLimit).map((task) => {
+      const sourceProject = sourceProjectFromTask(task, projectPath);
+      return {
+      ...task,
+        source_project_path: sourceProject,
+        project_path: taskRoutePathFromRegistry(task, sourceProject, opts.projectPathPrefix),
+      };
+    }),
+  );
+  return ready;
 }
 
 function resolveTaskListFilter(todosProject: string, filter: string | undefined): string | undefined {
@@ -134,9 +246,9 @@ function resolveTaskListFilter(todosProject: string, filter: string | undefined)
   return match?.id ?? wanted;
 }
 
-function taskMatchesDrainFilters(task: TodosReadyTask, filters: { projectId?: string; taskListId?: string; projectPathPrefix?: string; tags: string[] }): boolean {
+function taskMatchesDrainFilters(task: TodosReadyTask, filters: { projectId?: string; taskList?: string; projectPathPrefix?: string; tags: string[] }): boolean {
   if (filters.projectId && taskProjectId(task) !== filters.projectId) return false;
-  if (filters.taskListId && taskListId(task) !== filters.taskListId) return false;
+  if (filters.taskList && !taskListValues(task).includes(filters.taskList)) return false;
   if (filters.projectPathPrefix) {
     const path = taskProjectPath(task);
     if (!path) return false;
@@ -181,10 +293,11 @@ function isSkippableDrainRouteError(message: string): boolean {
 function markInvalidDrainTaskNonRouteable(todosProject: string, task: TodosReadyTask, reason: string): Record<string, unknown> {
   const taskId = taskField(task, ["id", "task_id", "taskId"]);
   if (!taskId) return { attempted: false, reason: "task id missing" };
+  const targetProject = taskField(task, ["source_project_path", "sourceProjectPath"]) ?? taskField(task, ["project_path", "projectPath"]) ?? todosProject;
   const comment = `OpenLoops route blocked for task ${taskId}: ${reason}. Added no-auto and removed auto:route so route drains do not repeatedly route this task until its project path is fixed.`;
-  const commentResult = runLocalCommand("todos", ["--project", todosProject, "comment", taskId, comment], { timeoutMs: 30_000 });
-  const tagResult = runLocalCommand("todos", ["--project", todosProject, "tag", taskId, "no-auto"], { timeoutMs: 30_000 });
-  const untagResult = runLocalCommand("todos", ["--project", todosProject, "untag", taskId, "auto:route"], { timeoutMs: 30_000 });
+  const commentResult = runLocalCommand("todos", ["--project", targetProject, "comment", taskId, comment], { timeoutMs: 30_000 });
+  const tagResult = runLocalCommand("todos", ["--project", targetProject, "tag", taskId, "no-auto"], { timeoutMs: 30_000 });
+  const untagResult = runLocalCommand("todos", ["--project", targetProject, "untag", taskId, "auto:route"], { timeoutMs: 30_000 });
   const ok = commentResult.ok && tagResult.ok && untagResult.ok;
   return {
     ok,
@@ -206,7 +319,7 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
   const maxDispatch = positiveInteger(opts.maxDispatch ?? "1", "--max-dispatch") ?? 1;
   const todosProject = opts.todosProject ?? defaultLoopsProject();
   const requiredTags = splitList(opts.tags ?? opts.tag) ?? [];
-  const taskListFilter = resolveTaskListFilter(todosProject, opts.taskList);
+  const taskListFilter = opts.todosProjectsFromRegistry ? opts.taskList?.trim() : resolveTaskListFilter(todosProject, opts.taskList);
   const candidateLimit = positiveInteger(opts.limit ?? "50", "--limit") ?? 50;
   const hasPostFilters = Boolean(opts.todosProjectId || taskListFilter || opts.projectPathPrefix || requiredTags.length);
   const defaultScanLimit = hasPostFilters ? Math.max(candidateLimit, 500) : candidateLimit;
@@ -214,7 +327,7 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
   const ready = loadReadyTodosTasks(opts, scanLimit);
   const filteredCandidates = ready.filter((task) => taskMatchesDrainFilters(task, {
     projectId: opts.todosProjectId,
-    taskListId: taskListFilter,
+    taskList: taskListFilter,
     projectPathPrefix: opts.projectPathPrefix,
     tags: requiredTags,
   }));
@@ -226,7 +339,8 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
     let event: EventEnvelope | undefined;
     let result: TodosTaskRoutePrint;
     try {
-      event = taskDrainEvent(task);
+      const sourceProject = taskField(task, ["source_project_path", "sourceProjectPath"]);
+      event = taskDrainEvent(task, sourceProject);
       result = routeTodosTaskEvent(event, opts);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

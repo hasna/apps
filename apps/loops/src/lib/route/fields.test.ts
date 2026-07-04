@@ -25,4 +25,12 @@ describe("taskRouteEligibility route opt-in", () => {
     const doneStatus = taskRouteEligibility({ tags: ["route:enabled"], status: "done" }, {});
     expect(doneStatus.eligible).toBe(false);
   });
+
+  test("auto:route remains sufficient even when route state says ineligible", () => {
+    const routeStateIneligible = taskRouteEligibility({
+      tags: ["auto:route"],
+      route_state: { eligible: false, notes: ["route_not_enabled"] },
+    }, {});
+    expect(routeStateIneligible.eligible).toBe(true);
+  });
 });
