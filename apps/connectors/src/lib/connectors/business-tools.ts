@@ -1032,6 +1032,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["helpdesk", "support", "zoho"],
   },
   {
+    name: "zohoprojects",
+    displayName: "Zoho Projects",
+    description: "Project management, tasks, milestones, and time tracking",
+    category: "Business Tools",
+    tags: ["project-management", "tasks", "zoho"],
+  },
+  {
     name: "zohoworkdrive",
     displayName: "Zoho WorkDrive",
     description: "Team file storage and collaboration",
