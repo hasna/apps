@@ -618,18 +618,59 @@ function codewithAgentControlArgs(target: AgentTarget, command: "read" | "logs" 
     "agent",
     command,
     ...(command === "logs" ? ["--limit", "20"] : []),
+    "--json",
     agentId,
   ];
 }
 
-function parseJsonOutput(stdout: string, label: string): Record<string, unknown> {
-  try {
-    const value = JSON.parse(stdout || "{}");
-    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("not an object");
-    return value as Record<string, unknown>;
-  } catch (error) {
-    throw new Error(`${label} did not return JSON${error instanceof Error ? `: ${error.message}` : ""}`);
+function extractFirstJsonObject(text: string): string | undefined {
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === "{") {
+      if (depth === 0) start = i;
+      depth += 1;
+    } else if (ch === "}") {
+      if (depth > 0) {
+        depth -= 1;
+        if (depth === 0 && start !== -1) return text.slice(start, i + 1);
+      }
+    }
   }
+  return undefined;
+}
+
+function parseJsonOutput(stdout: string, label: string): Record<string, unknown> {
+  const raw = stdout || "{}";
+  // codewith (and other CLIs) may emit human-readable lines on stdout ahead of
+  // the JSON record (e.g. "Started background agent ..."). Prefer a strict parse,
+  // then fall back to scanning for the first balanced JSON object so a leading
+  // banner line does not fail an otherwise successful run.
+  const candidates = [raw.trim()];
+  const scanned = extractFirstJsonObject(raw);
+  if (scanned && scanned !== raw.trim()) candidates.push(scanned);
+  let lastError: unknown;
+  for (const candidate of candidates) {
+    try {
+      const value = JSON.parse(candidate);
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("not an object");
+      return value as Record<string, unknown>;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw new Error(`${label} did not return JSON${lastError instanceof Error ? `: ${lastError.message}` : ""}`);
 }
 
 function recordField(value: unknown, key: string): Record<string, unknown> | undefined {
