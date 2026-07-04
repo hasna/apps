@@ -135,6 +135,73 @@ describe("agent adapters", () => {
     }
   });
 
+  test("runs codewith through the exec worker adapter by default", async () => {
+    const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-exec-"));
+    const fake = join(binDir, "codewith");
+    // Exec workers echo argv + stdin; the durable agent start/read/logs path must
+    // never be reached. `profile list` is answered because the executor preflights
+    // the native auth profile before running the worker.
+    await Bun.write(
+      fake,
+      [
+        "#!/usr/bin/env bash",
+        'if [[ "${1:-}" == "profile" && "${2:-}" == "list" ]]; then',
+        "  printf 'NAME ACCOUNT PROVIDER MODE PLAN\\naccount001 - ChatGPT chatgpt Pro\\n'",
+        "  exit 0",
+        "fi",
+        "printf '%s\\n' \"$@\"",
+        "printf 'stdin:'",
+        "cat",
+      ].join("\n"),
+    );
+    chmodSync(fake, 0o755);
+
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "codewith-exec-agent",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "codewith",
+          authProfile: "account001",
+          prompt: "say ok",
+          cwd: ".",
+          configIsolation: "safe",
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+      });
+      expect(result.status).toBe("succeeded");
+      const args = result.stdout.trim().split(/\r?\n/);
+      // Default path is `codewith exec`, not the durable `agent start` daemon.
+      expect(args).toContain("exec");
+      expect(args).not.toContain("agent");
+      expect(args).not.toContain("start");
+      expect(args).toContain("--json");
+      expect(args).toContain("--ephemeral");
+      expect(args).toContain("--ignore-rules");
+      expect(args).toContain("--skip-git-repo-check");
+      expect(args).toContain("--ask-for-approval");
+      expect(args[args.indexOf("--ask-for-approval") + 1]).toBe("never");
+      // Default workspace-write sandbox must get network egress so gh/git reach GitHub.
+      expect(args).toContain("-c");
+      expect(args).toContain("sandbox_workspace_write.network_access=true");
+      expect(args[args.indexOf("--sandbox") + 1]).toBe("workspace-write");
+      // Native auth profile is honored and preflighted.
+      expect(args[args.indexOf("--auth-profile") + 1]).toBe("account001");
+      expect(args[args.indexOf("--cd") + 1]).toBe(".");
+      // Prompt travels on stdin, never argv/ps.
+      expect(args).toContain("stdin:say ok");
+      expect(args).not.toContain("say ok");
+    } finally {
+      store.close();
+    }
+  });
+
   test("runs codewith through durable background-agent adapter", async () => {
     const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-"));
     const invocationsFile = join(binDir, "invocations");
@@ -148,6 +215,7 @@ describe("agent adapters", () => {
         target: {
           type: "agent",
           provider: "codewith",
+          codewithMode: "agent",
           prompt: "say ok",
           cwd: ".",
           configIsolation: "safe",
@@ -193,6 +261,7 @@ describe("agent adapters", () => {
         target: {
           type: "agent",
           provider: "codewith",
+          codewithMode: "agent",
           authProfile: "account001",
           prompt: "say ok",
           cwd: ".",
@@ -229,6 +298,7 @@ describe("agent adapters", () => {
         target: {
           type: "agent",
           provider: "codewith",
+          codewithMode: "agent",
           prompt: "say ok",
           sandbox: "danger-full-access",
           addDirs: ["/tmp/hasna-todos", "/tmp/hasna-loops"],
@@ -476,6 +546,7 @@ describe("agent adapters", () => {
         target: {
           type: "agent",
           provider: "codewith",
+          codewithMode: "agent",
           prompt: "say ok",
           cwd: ".",
           idleTimeoutMs: 150,
@@ -549,7 +620,8 @@ describe("provider adapter contracts", () => {
       sandbox: ["read-only", "workspace-write", "danger-full-access"],
       durable: true,
       remote: false,
-      promptChannel: "argv",
+      // Default exec worker reads the prompt from stdin (durable agent mode is opt-in).
+      promptChannel: "stdin",
     });
     expect(providerAdapter("claude").capabilities.promptChannel).toBe("stdin");
     expect(providerAdapter("claude").capabilities.durable).toBe(false);
@@ -568,13 +640,22 @@ describe("provider adapter contracts", () => {
     expect(invocation.args).not.toContain("secret-prompt");
   });
 
-  test("documents the codewith argv prompt fallback", () => {
-    // codewith agent start has no stdin/prompt-file channel; prompt must be the
-    // trailing positional argument.
-    const invocation = providerAdapter("codewith").buildInvocation(baseTarget({ provider: "codewith", prompt: "durable-prompt" }));
-    expect(invocation.command).toBe("codewith");
-    expect(invocation.stdin).toBeUndefined();
-    expect(invocation.args[invocation.args.length - 1]).toBe("durable-prompt");
+  test("keeps codewith exec prompts on stdin and durable prompts on argv", () => {
+    // Default exec worker reads the prompt from stdin (kept off argv/ps).
+    const exec = providerAdapter("codewith").buildInvocation(baseTarget({ provider: "codewith", prompt: "exec-prompt" }));
+    expect(exec.command).toBe("codewith");
+    expect(exec.stdin).toBe("exec-prompt");
+    expect(exec.args).not.toContain("exec-prompt");
+    expect(exec.args).toContain("exec");
+    expect(exec.args).not.toContain("start");
+    // Opt-in durable agent start has no stdin/prompt-file channel; the prompt must
+    // be the trailing positional argument.
+    const durable = providerAdapter("codewith").buildInvocation(
+      baseTarget({ provider: "codewith", prompt: "durable-prompt", codewithMode: "agent" }),
+    );
+    expect(durable.stdin).toBeUndefined();
+    expect(durable.args).toContain("start");
+    expect(durable.args[durable.args.length - 1]).toBe("durable-prompt");
   });
 
   test("throws aligned creation/execution validation errors", () => {
@@ -588,7 +669,13 @@ describe("provider adapter contracts", () => {
       "codex.agent is not supported for provider codex",
     );
     expect(() => providerAdapter("codewith").validate(baseTarget({ provider: "codewith", extraArgs: ["exec"] }))).toThrow(
-      "codewith.extraArgs cannot include exec; codewith agent steps use durable agent start, not exec/ephemeral flags",
+      "codewith.extraArgs cannot include exec; the codewith adapter manages exec/agent and output flags itself",
+    );
+    expect(() => providerAdapter("codewith").validate(baseTarget({ provider: "codewith", codewithMode: "durable" as "agent" }))).toThrow(
+      "codewith.codewithMode must be exec or agent",
+    );
+    expect(() => providerAdapter("codex").validate(baseTarget({ provider: "codex", codewithMode: "agent" }))).toThrow(
+      "codex.codewithMode is currently supported only for provider codewith",
     );
     expect(() => providerAdapter("opencode").validate(baseTarget({ provider: "opencode" }))).toThrow(
       "opencode.model is required for provider opencode",

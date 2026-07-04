@@ -373,6 +373,7 @@ describe("workflow runner", () => {
             target: {
               type: "agent",
               provider: "codewith",
+              codewithMode: "agent",
               prompt: "triage only",
               cwd: root,
               timeoutMs: 10_000,

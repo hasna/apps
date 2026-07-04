@@ -163,6 +163,13 @@ export interface AgentTargetBase {
   variant?: string;
   agent?: string;
   authProfile?: string;
+  /**
+   * Codewith execution mode. "exec" (default) runs a one-shot, network-capable
+   * `codewith exec` worker that honors --auth-profile and does real work.
+   * "agent" opts back into the durable `codewith agent start` background-agent
+   * path. Ignored for non-codewith providers.
+   */
+  codewithMode?: "exec" | "agent";
   extraArgs?: string[];
   addDirs?: string[];
   timeoutMs?: TimeoutMs;

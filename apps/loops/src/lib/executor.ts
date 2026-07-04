@@ -18,7 +18,7 @@ import type {
   PersistGuardOptions,
 } from "../types.js";
 import { accountToolForProvider, resolveAccountEnv, resolveAccountEnvSync } from "./accounts.js";
-import { BoundedOutputBuffer, killProcessGroup, providerAdapter, spawnCapture } from "./agent-adapter.js";
+import { BoundedOutputBuffer, codewithUsesDurableAgent, killProcessGroup, providerAdapter, spawnCapture } from "./agent-adapter.js";
 import { commandNotFoundMessage, executableExists, normalizeExecutionPath } from "./env.js";
 import { nowIso } from "./ids.js";
 import { refreshLoopMachine, resolveMachineCommand } from "./machines.js";
@@ -305,7 +305,10 @@ function commandSpec(target: ExecutableTarget, opts: ExecuteOptions): CommandSpe
     stdin: invocation.stdin,
     allowlist: agentTarget.allowlist,
     worktree: agentTarget.worktree,
-    codewithDurableAgent: adapter.capabilities.durable ? { target: agentTarget } : undefined,
+    // Only the opt-in durable path (codewithMode="agent") uses the agent
+    // start/read/logs poller; the default codewith exec worker runs through the
+    // normal one-shot spawn path like codex.
+    codewithDurableAgent: adapter.capabilities.durable && codewithUsesDurableAgent(agentTarget) ? { target: agentTarget } : undefined,
   };
 }
 
@@ -1195,10 +1198,16 @@ export async function executeTarget(
 ): Promise<ExecutorResult> {
   let spec = commandSpec(target, opts);
   const machine = resolvedMachine(opts);
-  if (machine && !machine.local && spec.codewithDurableAgent) {
+  // Codewith is local-only (capabilities.remote=false) in both execution modes:
+  // durable agent steps need remote status polling that does not exist yet, and
+  // the default exec worker's remote path is not verified. Fail closed rather
+  // than silently dispatch a Codewith step to an unverified remote transport.
+  if (machine && !machine.local && target.type === "agent" && target.provider === "codewith") {
     return failureResult(
       nowIso(),
-      "remote Codewith durable background-agent steps require remote status polling support; run this Codewith step locally or add remote durable readback before dispatch",
+      spec.codewithDurableAgent
+        ? "remote Codewith durable background-agent steps require remote status polling support; run this Codewith step locally or add remote durable readback before dispatch"
+        : "remote Codewith exec steps are not supported yet; run this Codewith step locally (machine.local) or use a remote-capable provider such as codex",
     );
   }
   if (machine && !machine.local) {

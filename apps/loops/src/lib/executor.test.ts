@@ -615,6 +615,7 @@ describe("executeLoop", () => {
           target: {
             type: "agent",
             provider: "codewith",
+            codewithMode: "agent",
             prompt: "work",
             configIsolation: "safe",
             cwd: wtPath,
@@ -684,6 +685,7 @@ describe("executeLoop", () => {
           target: {
             type: "agent",
             provider: "codewith",
+            codewithMode: "agent",
             prompt: "work",
             configIsolation: "safe",
             timeoutMs: 30_000,
@@ -749,7 +751,7 @@ describe("executeLoop", () => {
       const loop = store.createLoop({
         name: "remote-codewith-agent",
         schedule: { type: "once", at: new Date().toISOString() },
-        target: { type: "agent", provider: "codewith", prompt: "do remote work", configIsolation: "safe" },
+        target: { type: "agent", provider: "codewith", codewithMode: "agent", prompt: "do remote work", configIsolation: "safe" },
         machine: { id: "remote-test", local: false, route: "ssh" },
       });
       const claim = store.claimRun(loop, new Date().toISOString(), "test");
@@ -757,6 +759,26 @@ describe("executeLoop", () => {
       const result = await executeLoop(loop, claim!.run, remoteHooks);
       expect(result.status).toBe("failed");
       expect(result.error).toContain("remote Codewith durable background-agent steps require remote status polling support");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("fails remote codewith exec workers before enqueue since codewith is local-only", async () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "remote-codewith-exec",
+        schedule: { type: "once", at: new Date().toISOString() },
+        // Default exec mode (no codewithMode) must also fail closed on a remote machine.
+        target: { type: "agent", provider: "codewith", prompt: "do remote work", configIsolation: "safe" },
+        machine: { id: "remote-test", local: false, route: "ssh" },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, remoteHooks);
+      expect(result.status).toBe("failed");
+      expect(result.error).toContain("remote Codewith exec steps are not supported yet");
     } finally {
       store.close();
     }

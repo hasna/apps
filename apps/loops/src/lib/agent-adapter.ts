@@ -31,7 +31,13 @@ export interface ProviderAdapter {
   buildInvocation(target: AgentTarget): AgentInvocation;
 }
 
-export const UNSAFE_CODEWITH_DURABLE_EXTRA_ARGS = new Set([
+/**
+ * Flags the codewith adapter manages itself (mode selection, output format,
+ * sandbox/approval bypass). Passing them via `extraArgs` would duplicate or
+ * fight the adapter's own invocation, so they are rejected up front for both
+ * the default `exec` worker and the opt-in durable `agent start` path.
+ */
+export const RESERVED_CODEWITH_MANAGED_ARGS = new Set([
   "e",
   "exec",
   "agent",
@@ -45,6 +51,22 @@ export const UNSAFE_CODEWITH_DURABLE_EXTRA_ARGS = new Set([
   "--output-schema",
   "--dangerously-bypass-approvals-and-sandbox",
 ]);
+
+export type CodewithMode = "exec" | "agent";
+
+/**
+ * Resolves the codewith execution mode. Defaults to the one-shot, network-capable
+ * `codewith exec` worker; only an explicit `codewithMode: "agent"` selects the
+ * durable `codewith agent start` background-agent path.
+ */
+export function resolveCodewithMode(target: AgentTarget): CodewithMode {
+  return target.provider === "codewith" && target.codewithMode === "agent" ? "agent" : "exec";
+}
+
+/** True when the target runs on the durable `codewith agent start` background-agent path. */
+export function codewithUsesDurableAgent(target: AgentTarget): boolean {
+  return resolveCodewithMode(target) === "agent";
+}
 
 const CODEX_LIKE_SANDBOXES: readonly AgentSandbox[] = ["read-only", "workspace-write", "danger-full-access"];
 const CURSOR_SANDBOXES: readonly AgentSandbox[] = ["enabled", "disabled"];
@@ -81,12 +103,20 @@ function validateAgentOptions(target: AgentTarget, label: string, capabilities: 
     throw new Error(`${label}.agent is not supported for provider codex`);
   }
   if (provider === "codewith" && target.agent !== undefined) {
-    throw new Error(`${label}.agent is not supported for provider codewith durable background-agent execution`);
+    throw new Error(`${label}.agent is not supported for provider codewith`);
+  }
+  if (target.codewithMode !== undefined) {
+    if (provider !== "codewith") {
+      throw new Error(`${label}.codewithMode is currently supported only for provider codewith`);
+    }
+    if (target.codewithMode !== "exec" && target.codewithMode !== "agent") {
+      throw new Error(`${label}.codewithMode must be exec or agent`);
+    }
   }
   if (provider === "codewith") {
-    const unsafe = target.extraArgs?.find((arg) => UNSAFE_CODEWITH_DURABLE_EXTRA_ARGS.has(arg));
-    if (unsafe) {
-      throw new Error(`${label}.extraArgs cannot include ${unsafe}; codewith agent steps use durable agent start, not exec/ephemeral flags`);
+    const reserved = target.extraArgs?.find((arg) => RESERVED_CODEWITH_MANAGED_ARGS.has(arg));
+    if (reserved) {
+      throw new Error(`${label}.extraArgs cannot include ${reserved}; the codewith adapter manages exec/agent and output flags itself`);
     }
   }
   if (target.addDirs?.length && !["codewith", "codex"].includes(provider)) {
@@ -164,21 +194,45 @@ function buildAgentInvocation(target: AgentTarget): AgentInvocation {
       return { command: "sh", args, stdin: target.prompt, preflightAnyOf: ["agent"] };
     }
     case "codewith": {
+      const sandbox = codewithLikeSandbox(target);
+      if (codewithUsesDurableAgent(target)) {
+        // Opt-in durable background agent (codewithMode="agent"). The `codewith
+        // agent start` daemon can load large session history per turn; the
+        // default exec worker below is preferred for routine drains.
+        args.push(...(target.authProfile ? ["--auth-profile", target.authProfile] : []));
+        if (target.variant) args.push("-c", `model_reasoning_effort=${configStringValue(target.variant)}`);
+        args.push("--ask-for-approval", "never", "--sandbox", sandbox);
+        if (target.cwd) args.push("--cd", target.cwd);
+        for (const dir of target.addDirs ?? []) args.push("--add-dir", dir);
+        if (target.model) args.push("--model", target.model);
+        args.push(...(target.extraArgs ?? []));
+        args.push("agent", "start", "--json");
+        if (target.cwd) args.push("--cwd", target.cwd);
+        // Prompt intentionally stays on argv: `codewith agent start` only accepts the
+        // prompt as a positional argument (`Usage: codewith agent start [OPTIONS] <PROMPT>...`)
+        // and has no stdin/prompt-file channel, unlike `codewith exec` which reads `-`.
+        args.push(target.prompt);
+        return { command: "codewith", args };
+      }
+      // Default: one-shot, non-interactive `codewith exec`. Unlike the durable
+      // `agent start` daemon it honors --auth-profile, reaches the network, and
+      // actually does the work. Mirrors the codex exec adapter.
       args.push(...(target.authProfile ? ["--auth-profile", target.authProfile] : []));
       if (target.variant) args.push("-c", `model_reasoning_effort=${configStringValue(target.variant)}`);
-      args.push("--ask-for-approval", "never", "--sandbox", codewithLikeSandbox(target));
+      // workspace-write sandboxes block network egress by default, so model-run
+      // shell commands (gh/git) cannot reach GitHub. Merge/PR and drain workers
+      // need that egress, so enable it explicitly. danger-full-access is already
+      // unrestricted; read-only workers do not write, so egress stays off.
+      if (sandbox === "workspace-write") args.push("-c", "sandbox_workspace_write.network_access=true");
+      args.push("--ask-for-approval", "never", "exec", "--json", "--ephemeral", "--sandbox", sandbox, "--skip-git-repo-check");
+      if (isolation === "safe") args.push("--ignore-rules");
       if (target.cwd) args.push("--cd", target.cwd);
       for (const dir of target.addDirs ?? []) args.push("--add-dir", dir);
       if (target.model) args.push("--model", target.model);
       args.push(...(target.extraArgs ?? []));
-      args.push("agent", "start", "--json");
-      if (target.cwd) args.push("--cwd", target.cwd);
-      // Prompt intentionally stays on argv: `codewith agent start` only accepts the
-      // prompt as a positional argument (`Usage: codewith agent start [OPTIONS] <PROMPT>...`,
-      // verified against `codewith --help` / `codewith agent start --help`) and has no
-      // stdin/prompt-file channel, unlike `codewith exec` which supports `-`.
-      args.push(target.prompt);
-      return { command: "codewith", args };
+      // Prompt travels on stdin (`codewith exec -` reads it), keeping it off argv/ps.
+      args.push("-");
+      return { command: "codewith", args, stdin: target.prompt };
     }
     case "codex": {
       if (target.variant) args.push("-c", `model_reasoning_effort=${configStringValue(target.variant)}`);
@@ -222,7 +276,7 @@ function adapterFor(provider: AgentProvider, capabilities: ProviderCapabilities)
 export const PROVIDER_ADAPTERS: Record<AgentProvider, ProviderAdapter> = {
   claude: adapterFor("claude", { sandbox: [], durable: false, remote: true, promptChannel: "stdin" }),
   cursor: adapterFor("cursor", { sandbox: CURSOR_SANDBOXES, durable: false, remote: true, promptChannel: "stdin" }),
-  codewith: adapterFor("codewith", { sandbox: CODEX_LIKE_SANDBOXES, durable: true, remote: false, promptChannel: "argv" }),
+  codewith: adapterFor("codewith", { sandbox: CODEX_LIKE_SANDBOXES, durable: true, remote: false, promptChannel: "stdin" }),
   codex: adapterFor("codex", { sandbox: CODEX_LIKE_SANDBOXES, durable: false, remote: true, promptChannel: "stdin" }),
   aicopilot: adapterFor("aicopilot", { sandbox: [], durable: false, remote: true, promptChannel: "stdin" }),
   opencode: adapterFor("opencode", { sandbox: [], durable: false, remote: true, promptChannel: "stdin" }),
