@@ -409,6 +409,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["accounting", "invoicing", "finance"],
   },
   {
+    name: "zolvo",
+    displayName: "Zolvo",
+    description: "Commercial lending servicing",
+    category: "Commerce & Finance",
+    tags: ["lending", "factoring", "servicing", "finance"],
+  },
+  {
     name: "zohobooks",
     displayName: "Zoho Books",
     description: "Online accounting and financial management",
