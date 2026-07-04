@@ -402,6 +402,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ecommerce", "wordpress", "orders"],
   },
   {
+    name: "zerosettle",
+    displayName: "ZeroSettle",
+    description: "Direct IAP billing",
+    category: "Commerce & Finance",
+    tags: ["payments", "iap", "billing"],
+  },
+  {
     name: "xero",
     displayName: "Xero",
     description: "Accounting, invoicing, and financial management",
