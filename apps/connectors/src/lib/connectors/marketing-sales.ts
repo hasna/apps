@@ -457,4 +457,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Marketing & Sales",
     tags: ["email", "outreach", "sales"],
   },
+  {
+    name: "zerobounce",
+    displayName: "ZeroBounce",
+    description: "Email validation, verification, and deliverability platform",
+    category: "Marketing & Sales",
+    tags: ["email", "validation", "verification", "deliverability"],
+  },
 ];
