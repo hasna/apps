@@ -415,4 +415,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Commerce & Finance",
     tags: ["accounting", "invoicing", "zoho"],
   },
+  {
+    name: "zoho-subscriptions",
+    displayName: "Zoho Subscriptions",
+    description: "Zoho Billing v1 REST API for subscriptions, plans, invoices, and webhooks",
+    category: "Commerce & Finance",
+    tags: ["subscriptions", "billing", "zoho"],
+  },
 ];
