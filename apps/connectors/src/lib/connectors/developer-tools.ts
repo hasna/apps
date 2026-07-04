@@ -283,6 +283,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["passwords", "security", "vault"],
   },
   {
+    name: "zohovault",
+    displayName: "Zoho Vault",
+    description: "Password and secrets manager with chambers, sharing, and audit",
+    category: "Developer Tools",
+    tags: ["passwords", "security", "vault", "zoho"],
+  },
+  {
     name: "bloock",
     displayName: "Bloock",
     description: "Blockchain-based data integrity and verification",
