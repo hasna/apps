@@ -209,6 +209,43 @@ describe("prompt fragment composition", () => {
     }
   });
 
+  test("lifecycle prompts do not advertise placeholder comment commands before marker comments", () => {
+    const lifecycle = renderTaskLifecycleWorkflow({
+      taskId: "task-1200",
+      projectPath: repoPath,
+      todosProjectPath: "/srv/todos",
+      worktreeRoot,
+      eventId: "evt-9",
+    });
+    const triage = agentTargetOf(stepById(lifecycle, "triage")).prompt;
+    const planner = agentTargetOf(stepById(lifecycle, "planner")).prompt;
+    const worker = agentTargetOf(stepById(lifecycle, "worker")).prompt;
+    const verifier = agentTargetOf(stepById(lifecycle, "verifier")).prompt;
+    const triageGoCommand = 'todos --project /srv/todos comment task-1200 "openloops:triage=go task=task-1200 event=evt-9\n<task-specific triage evidence>"';
+    const triageBlockedCommand = 'todos --project /srv/todos comment task-1200 "openloops:triage=blocked task=task-1200 event=evt-9\n<task-specific triage evidence>"';
+    const plannerGoCommand = 'todos --project /srv/todos comment task-1200 "openloops:planner=go task=task-1200 event=evt-9\n<task-specific plan/evidence>"';
+    const plannerBlockedCommand = 'todos --project /srv/todos comment task-1200 "openloops:planner=blocked task=task-1200 event=evt-9\n<task-specific plan/evidence>"';
+
+    for (const prompt of [triage, planner, worker, verifier]) {
+      expect(prompt).toContain("Use concrete task-specific text in lifecycle comments.");
+      expect(prompt).not.toContain('comment task-1200 "<concise evidence');
+      expect(prompt).not.toContain('comment task-1200 "<verification evidence');
+      expect(prompt).not.toContain("<concise evidence, decision, or blocker>");
+      expect(prompt).not.toContain("<verification evidence or blocker>");
+    }
+
+    expect(triage).toContain("first line is exactly: openloops:triage=go task=task-1200 event=evt-9");
+    expect(triage).toContain("Do not run a separate generic evidence comment before the marker");
+    expect(triage).toContain(triageGoCommand);
+    expect(triage).toContain(triageBlockedCommand);
+    expect(planner).toContain("first line is exactly: openloops:planner=go task=task-1200 event=evt-9");
+    expect(planner).toContain("Do not run a separate generic evidence comment before the marker");
+    expect(planner).toContain(plannerGoCommand);
+    expect(planner).toContain(plannerBlockedCommand);
+    expect(worker).toContain("record concrete worker evidence in todos");
+    expect(verifier).toContain("record concrete verification evidence in todos");
+  });
+
   test("verifier runtime guidance reflects the idle watchdog configuration", () => {
     const defaults = renderTodosTaskWorkerVerifierWorkflow({ taskId: "t", projectPath: plainPath });
     const defaultVerifier = agentTargetOf(stepById(defaults, "verifier"));
