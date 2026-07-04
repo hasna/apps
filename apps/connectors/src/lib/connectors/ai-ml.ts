@@ -968,4 +968,11 @@ export const connectors: ConnectorMeta[] = [
     category: "AI & ML",
     tags: ["ai", "extraction", "documents"],
   },
+  {
+    name: "yousearch",
+    displayName: "You.com Search",
+    description: "You.com web search and research API",
+    category: "AI & ML",
+    tags: ["ai", "search", "research"],
+  },
 ];
