@@ -31,6 +31,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["research", "papers", "academic"],
   },
   {
+    name: "zenodo",
+    displayName: "Zenodo",
+    description: "Open research data repository — search records and manage deposits",
+    category: "Data & Analytics",
+    tags: ["research", "open-access", "datasets"],
+  },
+  {
     name: "brandsight",
     displayName: "Brandsight",
     description: "Brand monitoring",
