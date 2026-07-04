@@ -167,6 +167,7 @@ describe("agent adapters", () => {
       expect(startArgs).toContain("start");
       expect(startArgs).toContain("--idempotency-key");
       expect(startArgs).toContain("--cwd");
+      expect(startArgs).toContain("--json");
       expect(startArgs).not.toContain("exec");
       expect(startArgs).not.toContain("--ephemeral");
       expect(invocations.some((args) => args.includes("read"))).toBe(true);
