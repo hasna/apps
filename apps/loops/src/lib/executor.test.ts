@@ -583,7 +583,7 @@ describe("executeLoop", () => {
       }
     });
 
-    test("auto worktree fallback rebuilds codewith durable agent args against the original checkout", async () => {
+    test("auto worktree fallback rebuilds codewith exec args against the original checkout", async () => {
       const root = mkdtempSync(join(tmpdir(), "loops-worktree-auto-codewith-"));
       const notRepo = join(root, "not-a-repo");
       mkdirSync(notRepo, { recursive: true });
@@ -597,12 +597,8 @@ describe("executeLoop", () => {
           "#!/usr/bin/env bash",
           `printf '%s\\n' "$@" >> ${JSON.stringify(argsFile)}`,
           `printf -- '--\\n' >> ${JSON.stringify(argsFile)}`,
-          'case " $* " in',
-          '  *" agent start "*) echo \'{"agent":{"agentId":"a1","status":"running"}}\' ;;',
-          '  *" agent read "*) echo \'{"agent":{"agentId":"a1","status":"completed"}}\' ;;',
-          '  *" agent logs "*) echo \'{"data":[]}\' ;;',
-          "  *) echo '{}' ;;",
-          "esac",
+          "cat >/dev/null",
+          "echo '{}'",
         ].join("\n"),
       );
       chmodSync(codewith, 0o755);
@@ -633,76 +629,15 @@ describe("executeLoop", () => {
         const claim = store.claimRun(loop, new Date().toISOString(), "test");
         expect(claim).toBeDefined();
         const result = await executeLoop(loop, claim!.run, {
-          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, LOOPS_CODEWITH_AGENT_POLL_MS: "100" },
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
         });
         expect(result.status).toBe("succeeded");
         const recorded = readFileSync(argsFile, "utf8");
+        // exec bakes cwd into a single --cd flag; the fallback rebuilds it against
+        // the original checkout, never the failed worktree path.
         expect(recorded).toContain(`--cd\n${notRepo}`);
-        expect(recorded).toContain(`--cwd\n${notRepo}`);
+        expect(recorded).toContain("exec\n");
         expect(recorded).not.toContain(wtPath);
-      } finally {
-        store.close();
-        rmSync(root, { recursive: true, force: true });
-      }
-    });
-
-    test("passes --json to codewith durable agent commands so human banner lines never break parsing", async () => {
-      const root = mkdtempSync(join(tmpdir(), "loops-codewith-json-"));
-      const bin = join(root, "bin");
-      mkdirSync(bin, { recursive: true });
-      const argsFile = join(root, "codewith-args");
-      const codewith = join(bin, "codewith");
-      // Mimic codewith >=0.1.55: `agent start/read/logs` print a human banner on
-      // stdout unless `--json` is supplied. Without the flag the banner is all
-      // that is emitted, which used to fail with "did not return JSON".
-      writeFileSync(
-        codewith,
-        [
-          "#!/usr/bin/env bash",
-          `printf '%s\\n' "$@" >> ${JSON.stringify(argsFile)}`,
-          `printf -- '--\\n' >> ${JSON.stringify(argsFile)}`,
-          'case " $* " in',
-          "  *' agent start '*)",
-          '    if [[ " $* " == *" --json "* ]]; then echo \'{"agent":{"agentId":"a1","status":"running"},"created":true}\';',
-          "    else echo 'Started background agent a1 (running).'; fi ;;",
-          "  *' agent read '*)",
-          '    if [[ " $* " == *" --json "* ]]; then echo \'{"agent":{"agentId":"a1","status":"completed"}}\';',
-          "    else echo 'Background agent a1 (completed).'; fi ;;",
-          "  *' agent logs '*)",
-          '    if [[ " $* " == *" --json "* ]]; then echo \'{"data":[]}\';',
-          "    else echo 'No new events.'; fi ;;",
-          "  *) echo '{}' ;;",
-          "esac",
-        ].join("\n"),
-      );
-      chmodSync(codewith, 0o755);
-      const store = new Store(":memory:");
-      try {
-        const loop = store.createLoop({
-          name: "codewith-json-contract",
-          schedule: { type: "once", at: new Date().toISOString() },
-          target: {
-            type: "agent",
-            provider: "codewith",
-            prompt: "work",
-            configIsolation: "safe",
-            timeoutMs: 30_000,
-          },
-        });
-        const claim = store.claimRun(loop, new Date().toISOString(), "test");
-        expect(claim).toBeDefined();
-        const result = await executeLoop(loop, claim!.run, {
-          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, LOOPS_CODEWITH_AGENT_POLL_MS: "100" },
-        });
-        expect(result.status).toBe("succeeded");
-        const recorded = readFileSync(argsFile, "utf8");
-        const invocations = recorded.split("--\n").filter((chunk) => chunk.trim().length > 0);
-        const startArgs = invocations.find((chunk) => chunk.includes("start\n"));
-        const readArgs = invocations.find((chunk) => chunk.includes("read\n"));
-        expect(startArgs).toBeDefined();
-        expect(startArgs).toContain("--json");
-        expect(readArgs).toBeDefined();
-        expect(readArgs).toContain("--json");
       } finally {
         store.close();
         rmSync(root, { recursive: true, force: true });
@@ -743,21 +678,34 @@ describe("executeLoop", () => {
     }
   });
 
-  test("fails remote codewith durable agents before enqueue without remote polling", async () => {
+  test("dispatches remote codewith through the exec transport", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-exec-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFileSync(fake, "#!/usr/bin/env bash\nprintf remote-codewith-ran\ncat >/dev/null\n");
+    chmodSync(fake, 0o755);
     const store = new Store(":memory:");
     try {
       const loop = store.createLoop({
         name: "remote-codewith-agent",
         schedule: { type: "once", at: new Date().toISOString() },
-        target: { type: "agent", provider: "codewith", prompt: "do remote work", configIsolation: "safe" },
+        target: { type: "agent", provider: "codewith", prompt: "do remote work", configIsolation: "safe", timeoutMs: 30_000 },
         machine: { id: "remote-test", local: false, route: "ssh" },
       });
       const claim = store.claimRun(loop, new Date().toISOString(), "test");
       expect(claim).toBeDefined();
-      const result = await executeLoop(loop, claim!.run, remoteHooks);
-      expect(result.status).toBe("failed");
-      expect(result.error).toContain("remote Codewith durable background-agent steps require remote status polling support");
+      const result = await executeLoop(loop, claim!.run, {
+        ...remoteHooks,
+        env: { HOME: home, PATH: "/usr/bin:/bin" },
+      });
+      // exec is remote-capable like codex; the old durable-polling block is gone.
+      expect(result.status).toBe("succeeded");
+      expect(result.stdout).toContain("remote-codewith-ran");
+      expect(result.error ?? "").not.toContain("remote Codewith durable background-agent");
     } finally {
+      rmSync(root, { recursive: true, force: true });
       store.close();
     }
   });

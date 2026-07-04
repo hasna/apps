@@ -5,6 +5,30 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.4.9 (2026-07-04)
+
+Unblock the PR-merge pipeline: task-lifecycle/route workers now dispatch real
+work, and the PR-review admission gate can resolve authors it was not handed.
+
+### Fixed
+
+- **Agent adapter / executor:** launch Codewith agent steps with non-interactive
+  `codewith exec --json` instead of the durable `codewith agent start`
+  background-agent controller. `agent start` reloaded the multi-megabyte rollout
+  history on every turn, hitting `context_length_exceeded` and completing
+  silently with no work — stalling task-lifecycle and route workers. exec runs a
+  fresh session per invocation, honors `--auth-profile`, streams JSONL, and keeps
+  network egress for gh/git (the `workspace-write` sandbox opts back into
+  `sandbox_workspace_write.network_access`). Codewith is now a normal one-shot
+  exec provider (remote-capable like codex); the unreachable durable
+  start/read/logs/poll controller was removed.
+- **Route PR review:** when a PR approval/merge route is required and no author is
+  present in task metadata or text, derive the PR author from a concrete
+  `owner/repo#number` reference via `gh pr view ... --json author` before
+  selecting a non-author reviewer. Self-review protection is preserved (a derived
+  author that matches the sole reviewer is still blocked), and the gate fails
+  closed when the reference is unresolvable.
+
 ## 0.4.8 (2026-07-04)
 
 Lifecycle prompt hardening for routed task workflows.

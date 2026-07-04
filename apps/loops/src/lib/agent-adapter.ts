@@ -31,7 +31,7 @@ export interface ProviderAdapter {
   buildInvocation(target: AgentTarget): AgentInvocation;
 }
 
-export const UNSAFE_CODEWITH_DURABLE_EXTRA_ARGS = new Set([
+export const UNSAFE_CODEWITH_EXEC_EXTRA_ARGS = new Set([
   "e",
   "exec",
   "agent",
@@ -81,12 +81,12 @@ function validateAgentOptions(target: AgentTarget, label: string, capabilities: 
     throw new Error(`${label}.agent is not supported for provider codex`);
   }
   if (provider === "codewith" && target.agent !== undefined) {
-    throw new Error(`${label}.agent is not supported for provider codewith durable background-agent execution`);
+    throw new Error(`${label}.agent is not supported for provider codewith`);
   }
   if (provider === "codewith") {
-    const unsafe = target.extraArgs?.find((arg) => UNSAFE_CODEWITH_DURABLE_EXTRA_ARGS.has(arg));
+    const unsafe = target.extraArgs?.find((arg) => UNSAFE_CODEWITH_EXEC_EXTRA_ARGS.has(arg));
     if (unsafe) {
-      throw new Error(`${label}.extraArgs cannot include ${unsafe}; codewith agent steps use durable agent start, not exec/ephemeral flags`);
+      throw new Error(`${label}.extraArgs cannot include ${unsafe}; codewith exec launch flags are managed by the adapter`);
     }
   }
   if (target.addDirs?.length && !["codewith", "codex"].includes(provider)) {
@@ -164,21 +164,25 @@ function buildAgentInvocation(target: AgentTarget): AgentInvocation {
       return { command: "sh", args, stdin: target.prompt, preflightAnyOf: ["agent"] };
     }
     case "codewith": {
+      // Non-interactive `codewith exec` runs a fresh session per invocation, so it
+      // avoids the ~1.9MB rollout history that `codewith agent start` reloaded on
+      // every turn (which drove context_length_exceeded silent no-ops and stalled
+      // the route/task-lifecycle worker launch). exec honors --auth-profile,
+      // streams JSONL via --json, and keeps network egress for gh/git.
       args.push(...(target.authProfile ? ["--auth-profile", target.authProfile] : []));
       if (target.variant) args.push("-c", `model_reasoning_effort=${configStringValue(target.variant)}`);
-      args.push("--ask-for-approval", "never", "--sandbox", codewithLikeSandbox(target));
+      const sandbox = codewithLikeSandbox(target);
+      // workspace-write sandboxes disable outbound network by default; route/PR
+      // workers need gh/git egress, so opt the workspace sandbox back into it.
+      if (sandbox === "workspace-write") args.push("-c", "sandbox_workspace_write.network_access=true");
+      args.push("--ask-for-approval", "never", "exec", "--json", "--ephemeral", "--sandbox", sandbox, "--skip-git-repo-check");
       if (target.cwd) args.push("--cd", target.cwd);
       for (const dir of target.addDirs ?? []) args.push("--add-dir", dir);
       if (target.model) args.push("--model", target.model);
       args.push(...(target.extraArgs ?? []));
-      args.push("agent", "start", "--json");
-      if (target.cwd) args.push("--cwd", target.cwd);
-      // Prompt intentionally stays on argv: `codewith agent start` only accepts the
-      // prompt as a positional argument (`Usage: codewith agent start [OPTIONS] <PROMPT>...`,
-      // verified against `codewith --help` / `codewith agent start --help`) and has no
-      // stdin/prompt-file channel, unlike `codewith exec` which supports `-`.
-      args.push(target.prompt);
-      return { command: "codewith", args };
+      // exec reads instructions from stdin when no positional prompt is given,
+      // keeping the (possibly large) prompt off argv.
+      return { command: "codewith", args, stdin: target.prompt };
     }
     case "codex": {
       if (target.variant) args.push("-c", `model_reasoning_effort=${configStringValue(target.variant)}`);
@@ -222,7 +226,7 @@ function adapterFor(provider: AgentProvider, capabilities: ProviderCapabilities)
 export const PROVIDER_ADAPTERS: Record<AgentProvider, ProviderAdapter> = {
   claude: adapterFor("claude", { sandbox: [], durable: false, remote: true, promptChannel: "stdin" }),
   cursor: adapterFor("cursor", { sandbox: CURSOR_SANDBOXES, durable: false, remote: true, promptChannel: "stdin" }),
-  codewith: adapterFor("codewith", { sandbox: CODEX_LIKE_SANDBOXES, durable: true, remote: false, promptChannel: "argv" }),
+  codewith: adapterFor("codewith", { sandbox: CODEX_LIKE_SANDBOXES, durable: false, remote: true, promptChannel: "stdin" }),
   codex: adapterFor("codex", { sandbox: CODEX_LIKE_SANDBOXES, durable: false, remote: true, promptChannel: "stdin" }),
   aicopilot: adapterFor("aicopilot", { sandbox: [], durable: false, remote: true, promptChannel: "stdin" }),
   opencode: adapterFor("opencode", { sandbox: [], durable: false, remote: true, promptChannel: "stdin" }),

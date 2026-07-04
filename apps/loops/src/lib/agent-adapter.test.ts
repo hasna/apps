@@ -7,11 +7,10 @@ import { BoundedOutputBuffer, PROVIDER_ADAPTERS, providerAdapter, spawnCapture }
 import { executeLoop } from "./executor.js";
 import { Store } from "./store.js";
 
-async function fakeCodewith(binDir: string, invocationsFile: string, opts: { profiles?: string; readResponse?: string } = {}): Promise<string> {
+async function fakeCodewith(binDir: string, invocationsFile: string, opts: { profiles?: string; execStdout?: string } = {}): Promise<string> {
   const fake = join(binDir, "codewith");
-  const readResponse =
-    opts.readResponse ??
-    '{"agent":{"agentId":"agent-1","status":"completed","desiredState":"running","threadId":"thread-1","rolloutPath":"/tmp/rollout.jsonl","pid":123},"statusSnapshot":{"seq":2,"status":"completed","summary":"Done","pendingInteractionCount":0,"lastEventSeq":2}}';
+  // `codewith exec --json` streams JSONL events to stdout and exits 0 on success.
+  const execStdout = opts.execStdout ?? '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}';
   await Bun.write(
     fake,
     [
@@ -22,20 +21,13 @@ async function fakeCodewith(binDir: string, invocationsFile: string, opts: { pro
       `  printf ${JSON.stringify(opts.profiles ?? "NAME ACCOUNT PROVIDER MODE PLAN\\naccount001 - ChatGPT chatgpt Pro\\n")}`,
       "  exit 0",
       "fi",
-      "if [[ \" $* \" == *\" agent start \"* ]]; then",
-      "  printf '{\"agent\":{\"agentId\":\"agent-1\",\"status\":\"queued\",\"desiredState\":\"running\"},\"created\":true}\\n'",
-      "  exit 0",
-      "fi",
-      "if [[ \" $* \" == *\" agent read \"* ]]; then",
-      `  printf '%s\\n' ${JSON.stringify(readResponse)}`,
-      "  exit 0",
-      "fi",
-      "if [[ \" $* \" == *\" agent stop \"* ]]; then",
-      "  printf '{\"stopped\":true}\\n'",
-      "  exit 0",
-      "fi",
-      "if [[ \" $* \" == *\" agent logs \"* ]]; then",
-      "  printf '{\"data\":[{\"agentId\":\"agent-1\",\"seq\":1,\"eventType\":\"agent.started\",\"payload\":{\"prompt\":\"say ok\"},\"createdAt\":1},{\"agentId\":\"agent-1\",\"seq\":2,\"eventType\":\"agent.completed\",\"payload\":{\"result\":\"ok\"},\"createdAt\":2}]}\\n'",
+      "if [[ \" $* \" == *\" exec \"* ]]; then",
+      // Optional stall (no output) so the generic idle watchdog can reap it.
+      "  if [[ -n \"${OPENLOOPS_FAKE_CODEWITH_SLEEP:-}\" ]]; then sleep \"$OPENLOOPS_FAKE_CODEWITH_SLEEP\"; fi",
+      `  printf '%s\\n' ${JSON.stringify(execStdout)}`,
+      // Echo the stdin-delivered prompt so tests can assert prompt-on-stdin.
+      "  printf 'stdin:'",
+      "  cat",
       "  exit 0",
       "fi",
       "printf 'unexpected codewith invocation: %s\\n' \"$*\" >&2",
@@ -135,7 +127,7 @@ describe("agent adapters", () => {
     }
   });
 
-  test("runs codewith through durable background-agent adapter", async () => {
+  test("runs codewith through the non-interactive exec adapter", async () => {
     const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-"));
     const invocationsFile = join(binDir, "invocations");
     await fakeCodewith(binDir, invocationsFile);
@@ -160,27 +152,34 @@ describe("agent adapters", () => {
       });
       expect(result.status).toBe("succeeded");
       const invocations = codewithInvocations(invocationsFile);
-      const startArgs = invocations.find((args) => args.includes("start"));
-      expect(startArgs).toBeDefined();
-      expect(startArgs?.slice(0, 2)).toEqual(["--ask-for-approval", "never"]);
-      expect(startArgs).toContain("agent");
-      expect(startArgs).toContain("start");
-      expect(startArgs).toContain("--idempotency-key");
-      expect(startArgs).toContain("--cwd");
-      expect(startArgs).toContain("--json");
-      expect(startArgs).not.toContain("exec");
-      expect(startArgs).not.toContain("--ephemeral");
-      expect(invocations.some((args) => args.includes("read"))).toBe(true);
-      expect(invocations.some((args) => args.includes("logs"))).toBe(true);
-      expect(result.stdout).toContain("\"agentId\": \"agent-1\"");
-      expect(result.stdout).toContain("agent.completed");
-      expect(result.stdout).not.toContain("say ok");
+      const execArgs = invocations.find((args) => args.includes("exec"));
+      expect(execArgs).toBeDefined();
+      const approvalIdx = execArgs!.indexOf("--ask-for-approval");
+      expect(approvalIdx).toBeGreaterThanOrEqual(0);
+      expect(execArgs![approvalIdx + 1]).toBe("never");
+      expect(execArgs![approvalIdx + 2]).toBe("exec");
+      expect(execArgs).toContain("--json");
+      expect(execArgs).toContain("--ephemeral");
+      expect(execArgs).toContain("--skip-git-repo-check");
+      expect(execArgs).toContain("--cd");
+      // default sandbox is workspace-write, which must opt back into network egress
+      expect(execArgs?.[execArgs.indexOf("--sandbox") + 1]).toBe("workspace-write");
+      expect(execArgs).toContain("sandbox_workspace_write.network_access=true");
+      // no legacy durable agent lifecycle commands
+      expect(execArgs).not.toContain("agent");
+      expect(execArgs).not.toContain("start");
+      expect(invocations.some((args) => args.includes("read"))).toBe(false);
+      expect(invocations.some((args) => args.includes("logs"))).toBe(false);
+      // prompt travels on stdin, never argv
+      expect(execArgs).not.toContain("say ok");
+      expect(result.stdout).toContain("item.completed");
+      expect(result.stdout).toContain("stdin:say ok");
     } finally {
       store.close();
     }
   });
 
-  test("runs codewith with provider-native auth profile before durable start/read/logs", async () => {
+  test("runs codewith with a provider-native auth profile before exec", async () => {
     const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-auth-"));
     const invocationsFile = join(binDir, "invocations");
     await fakeCodewith(binDir, invocationsFile);
@@ -206,11 +205,13 @@ describe("agent adapters", () => {
       });
       expect(result.status).toBe("succeeded");
       const invocations = codewithInvocations(invocationsFile);
-      const startArgs = invocations.find((args) => args.includes("start"));
+      const execArgs = invocations.find((args) => args.includes("exec"));
       expect(invocations.some((args) => args[0] === "profile" && args[1] === "list")).toBe(true);
-      expect(startArgs?.slice(0, 4)).toEqual(["--auth-profile", "account001", "--ask-for-approval", "never"]);
-      expect(startArgs).not.toContain("exec");
-      expect(startArgs).not.toContain("--ephemeral");
+      expect(execArgs?.slice(0, 2)).toEqual(["--auth-profile", "account001"]);
+      const approvalIdx = execArgs!.indexOf("--ask-for-approval");
+      expect(approvalIdx).toBeGreaterThanOrEqual(0);
+      expect(execArgs![approvalIdx + 1]).toBe("never");
+      expect(execArgs![approvalIdx + 2]).toBe("exec");
     } finally {
       store.close();
     }
@@ -241,8 +242,10 @@ describe("agent adapters", () => {
         env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, OPENLOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile },
       });
       expect(result.status).toBe("succeeded");
-      const args = codewithInvocations(invocationsFile).find((entry) => entry.includes("start"))!;
+      const args = codewithInvocations(invocationsFile).find((entry) => entry.includes("exec"))!;
       expect(args[args.indexOf("--sandbox") + 1]).toBe("danger-full-access");
+      // danger-full-access already has network; no workspace-write override needed
+      expect(args).not.toContain("sandbox_workspace_write.network_access=true");
       expect(args).toContain("--add-dir");
       expect(args[args.indexOf("--add-dir") + 1]).toBe("/tmp/hasna-todos");
       expect(args).toContain("/tmp/hasna-loops");
@@ -460,13 +463,10 @@ describe("agent adapters", () => {
     }
   });
 
-  test("stops idle codewith durable agents that report no progress", async () => {
+  test("reaps codewith exec runs that stall without output past the idle timeout", async () => {
     const binDir = mkdtempSync(join(tmpdir(), "loops-codewith-idle-"));
     const invocationsFile = join(binDir, "invocations");
-    await fakeCodewith(binDir, invocationsFile, {
-      readResponse:
-        '{"agent":{"agentId":"agent-1","status":"running","desiredState":"running"},"statusSnapshot":{"seq":1,"status":"running","summary":"working","pendingInteractionCount":0,"lastEventSeq":1}}',
-    });
+    await fakeCodewith(binDir, invocationsFile);
 
     const store = new Store(":memory:");
     try {
@@ -489,13 +489,13 @@ describe("agent adapters", () => {
           ...process.env,
           PATH: `${binDir}:${process.env.PATH}`,
           OPENLOOPS_FAKE_CODEWITH_INVOCATIONS: invocationsFile,
-          LOOPS_CODEWITH_AGENT_POLL_MS: "100",
+          // exec sleeps with no output; the generic watchdog must reap it.
+          OPENLOOPS_FAKE_CODEWITH_SLEEP: "5",
         },
       });
       expect(result.status).toBe("timed_out");
-      expect(result.error).toContain("idle timed out after 150ms without agent progress");
-      const invocations = codewithInvocations(invocationsFile);
-      expect(invocations.some((args) => args.includes("stop"))).toBe(true);
+      expect(result.error).toContain("idle timed out after 150ms without stdout/stderr");
+      expect(codewithInvocations(invocationsFile).some((args) => args.includes("exec"))).toBe(true);
     } finally {
       store.close();
     }
@@ -547,15 +547,14 @@ describe("provider adapter contracts", () => {
   test("declares provider capabilities including prompt channel", () => {
     expect(providerAdapter("codewith").capabilities).toEqual({
       sandbox: ["read-only", "workspace-write", "danger-full-access"],
-      durable: true,
-      remote: false,
-      promptChannel: "argv",
+      durable: false,
+      remote: true,
+      promptChannel: "stdin",
     });
     expect(providerAdapter("claude").capabilities.promptChannel).toBe("stdin");
     expect(providerAdapter("claude").capabilities.durable).toBe(false);
     expect(providerAdapter("cursor").capabilities.sandbox).toEqual(["enabled", "disabled"]);
     for (const adapter of Object.values(PROVIDER_ADAPTERS)) {
-      if (adapter.provider === "codewith") continue;
       expect(adapter.capabilities.promptChannel).toBe("stdin");
       expect(adapter.capabilities.remote).toBe(true);
     }
@@ -568,13 +567,14 @@ describe("provider adapter contracts", () => {
     expect(invocation.args).not.toContain("secret-prompt");
   });
 
-  test("documents the codewith argv prompt fallback", () => {
-    // codewith agent start has no stdin/prompt-file channel; prompt must be the
-    // trailing positional argument.
-    const invocation = providerAdapter("codewith").buildInvocation(baseTarget({ provider: "codewith", prompt: "durable-prompt" }));
+  test("keeps the codewith exec prompt on stdin, off argv", () => {
+    // `codewith exec` reads instructions from stdin when no positional prompt is
+    // given, so the (possibly large) prompt never lands on argv.
+    const invocation = providerAdapter("codewith").buildInvocation(baseTarget({ provider: "codewith", prompt: "exec-prompt" }));
     expect(invocation.command).toBe("codewith");
-    expect(invocation.stdin).toBeUndefined();
-    expect(invocation.args[invocation.args.length - 1]).toBe("durable-prompt");
+    expect(invocation.stdin).toBe("exec-prompt");
+    expect(invocation.args).toContain("exec");
+    expect(invocation.args).not.toContain("exec-prompt");
   });
 
   test("throws aligned creation/execution validation errors", () => {
@@ -588,7 +588,7 @@ describe("provider adapter contracts", () => {
       "codex.agent is not supported for provider codex",
     );
     expect(() => providerAdapter("codewith").validate(baseTarget({ provider: "codewith", extraArgs: ["exec"] }))).toThrow(
-      "codewith.extraArgs cannot include exec; codewith agent steps use durable agent start, not exec/ephemeral flags",
+      "codewith.extraArgs cannot include exec; codewith exec launch flags are managed by the adapter",
     );
     expect(() => providerAdapter("opencode").validate(baseTarget({ provider: "opencode" }))).toThrow(
       "opencode.model is required for provider opencode",

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { automationRecords, canonicalRouteField, firstRouteField, hasTruthyField, routeFieldValues, tagsFromValue, taskEventRecords } from "./fields.js";
 import { splitList } from "./parse.js";
 import type { TodosTaskRouteOptions } from "./types.js";
@@ -128,6 +129,39 @@ function routeTextFieldValues(record: Record<string, unknown>, field: string): s
   return values;
 }
 
+/** A GitHub PR reference resolvable to `owner/repo#number`. */
+export interface PrReference {
+  owner: string;
+  repo: string;
+  number: number;
+}
+
+/** Resolves a PR author login from a concrete `owner/repo#number` reference. */
+export type PrAuthorResolver = (ref: PrReference) => string | undefined;
+
+/** Extracts a concrete owner/repo/number PR reference from route evidence text. */
+export function prReferenceFrom(text: string): PrReference | undefined {
+  // Canonical PR URL: https://github.com/<owner>/<repo>/pull/<n>
+  const url = /github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/(\d+)/i.exec(text);
+  if (url) return { owner: url[1], repo: url[2], number: Number(url[3]) };
+  // Shorthand handle: github-pr:<owner>/<repo>#<n>
+  const short = /github-pr:([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)/i.exec(text);
+  if (short) return { owner: short[1], repo: short[2], number: Number(short[3]) };
+  return undefined;
+}
+
+/** Derives the PR author via `gh pr view`; returns undefined when gh is
+ * unavailable, unauthenticated, or the PR cannot be resolved (fail closed). */
+function ghAuthorResolver(ref: PrReference): string | undefined {
+  const result = spawnSync(
+    "gh",
+    ["pr", "view", String(ref.number), "--repo", `${ref.owner}/${ref.repo}`, "--json", "author", "-q", ".author.login"],
+    { encoding: "utf8", timeout: 20_000 },
+  );
+  if (result.error || result.status !== 0) return undefined;
+  return githubLogin((result.stdout ?? "").trim());
+}
+
 function authorFromPrText(text: string): string | undefined {
   const patterns = [
     /\bauthor\s+(?:is\s+also|is|=|:)\s+@?([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/i,
@@ -158,6 +192,7 @@ export function prReviewRoutingDecision(
   data: Record<string, unknown>,
   metadata: Record<string, unknown>,
   opts: TodosTaskRouteOptions,
+  resolveAuthor: PrAuthorResolver = ghAuthorResolver,
 ): PrReviewRoutingDecision {
   const records = [...taskEventRecords(data, metadata), ...automationRecords(data, metadata)];
   const text = routeEvidenceText(records);
@@ -183,7 +218,6 @@ export function prReviewRoutingDecision(
   const required = hasPrReference && (reviewRequiredByField || reviewRequiredByText || mergeBlockedByText || approvalIntent);
   if (!required) return { required: false, allowed: true, reviewers: [], signals };
 
-  const author = githubLogin(firstRouteField(records, PR_AUTHOR_FIELDS)) ?? authorFromPrText(text);
   const reviewers = githubLogins([
     opts.githubReviewer,
     ...(splitList(opts.githubReviewerPool) ?? []),
@@ -191,6 +225,21 @@ export function prReviewRoutingDecision(
     ...PR_REVIEWER_POOL_FIELDS.flatMap((field) => routeFieldValues(records, field)),
     ...reviewersFromPrText(text),
   ]);
+  let author = githubLogin(firstRouteField(records, PR_AUTHOR_FIELDS)) ?? authorFromPrText(text);
+  // When metadata/text carry no author but the task references a concrete
+  // owner/repo#number PR, derive the author from GitHub so a resolvable PR is
+  // not blocked purely for lack of pre-baked author evidence. Fails closed:
+  // an unresolvable reference leaves author undefined and the route is skipped.
+  if (!author) {
+    const ref = prReferenceFrom(text);
+    if (ref) {
+      const derived = githubLogin(resolveAuthor(ref));
+      if (derived) {
+        author = derived;
+        signals.push("author-derived-gh");
+      }
+    }
+  }
   const selectedReviewer = author
     ? reviewers.find((reviewer) => reviewer.toLowerCase() !== author.toLowerCase())
     : undefined;

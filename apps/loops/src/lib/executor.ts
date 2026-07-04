@@ -114,9 +114,6 @@ interface CommandSpec {
     commands?: string[];
   };
   worktree?: AgentWorktreeSpec;
-  codewithDurableAgent?: {
-    target: AgentTarget;
-  };
 }
 
 interface MachineCommandPlan {
@@ -161,12 +158,6 @@ const TRANSPORT_ENV_KEYS = new Set([
   "USER",
   "XDG_RUNTIME_DIR",
 ]);
-
-function boundedText(text: string, maxBytes: number): string {
-  const buffer = new BoundedOutputBuffer(maxBytes);
-  buffer.append(text);
-  return buffer.value();
-}
 
 type ResultFields = Partial<Omit<ExecutorResult, "status" | "startedAt" | "durationMs">>;
 
@@ -234,21 +225,6 @@ function metadataEnv(metadata: ExecutionMetadata): Record<string, string> {
   return env;
 }
 
-function codewithAgentIdempotencyKey(metadata: ExecutionMetadata): string {
-  const parts = [
-    "openloops",
-    metadata.workflowRunId ? `workflow-run:${metadata.workflowRunId}` : undefined,
-    metadata.workflowStepId ? `step:${metadata.workflowStepId}` : undefined,
-    metadata.runId ? `loop-run:${metadata.runId}` : undefined,
-    metadata.loopId ? `loop:${metadata.loopId}` : undefined,
-    metadata.scheduledFor ? `scheduled:${metadata.scheduledFor}` : undefined,
-    metadata.goalId ? `goal:${metadata.goalId}` : undefined,
-    metadata.goalNodeKey ? `node:${metadata.goalNodeKey}` : undefined,
-  ].filter(Boolean);
-  if (parts.length > 1) return parts.join(":");
-  return `openloops:adhoc:${randomBytes(16).toString("hex")}`;
-}
-
 function allowlistEnv(allowlist: CommandSpec["allowlist"]): Record<string, string> {
   const env: Record<string, string> = {};
   if (allowlist?.tools?.length) env.LOOPS_AGENT_ALLOWED_TOOLS = allowlist.tools.join(",");
@@ -305,7 +281,6 @@ function commandSpec(target: ExecutableTarget, opts: ExecuteOptions): CommandSpe
     stdin: invocation.stdin,
     allowlist: agentTarget.allowlist,
     worktree: agentTarget.worktree,
-    codewithDurableAgent: adapter.capabilities.durable ? { target: agentTarget } : undefined,
   };
 }
 
@@ -602,297 +577,6 @@ async function preflightNativeAuthProfile(spec: CommandSpec, env: NodeJS.Process
   if (spec.nativeAuthProfile?.provider !== "codewith") return;
   const result = await spawnCapture(spec.command, ["profile", "list"], { env, timeoutMs: 15_000 });
   assertCodewithProfileListed(spec.nativeAuthProfile.profile, result);
-}
-
-function codewithAgentStartArgs(target: AgentTarget, idempotencyKey: string): string[] {
-  const args = providerAdapter(target.provider).buildInvocation(target).args;
-  const startIndex = args.findIndex((arg, index) => arg === "start" && args[index - 1] === "agent");
-  if (startIndex === -1) throw new Error("internal error: codewith durable agent args missing agent start");
-  args.splice(startIndex + 1, 0, "--idempotency-key", idempotencyKey);
-  return args;
-}
-
-function codewithAgentControlArgs(target: AgentTarget, command: "read" | "logs" | "stop", agentId: string): string[] {
-  return [
-    ...(target.authProfile ? ["--auth-profile", target.authProfile] : []),
-    "agent",
-    command,
-    ...(command === "logs" ? ["--limit", "20"] : []),
-    "--json",
-    agentId,
-  ];
-}
-
-function extractFirstJsonObject(text: string): string | undefined {
-  let depth = 0;
-  let start = -1;
-  let inString = false;
-  let escaped = false;
-  for (let i = 0; i < text.length; i += 1) {
-    const ch = text[i];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (ch === "\\") escaped = true;
-      else if (ch === '"') inString = false;
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-    } else if (ch === "{") {
-      if (depth === 0) start = i;
-      depth += 1;
-    } else if (ch === "}") {
-      if (depth > 0) {
-        depth -= 1;
-        if (depth === 0 && start !== -1) return text.slice(start, i + 1);
-      }
-    }
-  }
-  return undefined;
-}
-
-function parseJsonOutput(stdout: string, label: string): Record<string, unknown> {
-  const raw = stdout || "{}";
-  // codewith (and other CLIs) may emit human-readable lines on stdout ahead of
-  // the JSON record (e.g. "Started background agent ..."). Prefer a strict parse,
-  // then fall back to scanning for the first balanced JSON object so a leading
-  // banner line does not fail an otherwise successful run.
-  const candidates = [raw.trim()];
-  const scanned = extractFirstJsonObject(raw);
-  if (scanned && scanned !== raw.trim()) candidates.push(scanned);
-  let lastError: unknown;
-  for (const candidate of candidates) {
-    try {
-      const value = JSON.parse(candidate);
-      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("not an object");
-      return value as Record<string, unknown>;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-  throw new Error(`${label} did not return JSON${lastError instanceof Error ? `: ${lastError.message}` : ""}`);
-}
-
-function recordField(value: unknown, key: string): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const field = (value as Record<string, unknown>)[key];
-  return field && typeof field === "object" && !Array.isArray(field) ? field as Record<string, unknown> : undefined;
-}
-
-function stringField(value: Record<string, unknown> | undefined, key: string): string | undefined {
-  const field = value?.[key];
-  return typeof field === "string" ? field : undefined;
-}
-
-function numberField(value: Record<string, unknown> | undefined, key: string): number | undefined {
-  const field = value?.[key];
-  return typeof field === "number" && Number.isFinite(field) ? field : undefined;
-}
-
-function codewithAgentStatus(readJson: Record<string, unknown>): string | undefined {
-  return stringField(recordField(readJson, "agent"), "status") ?? stringField(recordField(readJson, "statusSnapshot"), "status");
-}
-
-function codewithAgentLastEventSeq(readJson: Record<string, unknown>): number | undefined {
-  const agentSeq = numberField(recordField(readJson, "agent"), "lastEventSeq");
-  const snapshotSeq = numberField(recordField(readJson, "statusSnapshot"), "lastEventSeq");
-  if (agentSeq !== undefined && snapshotSeq !== undefined) return Math.max(agentSeq, snapshotSeq);
-  return agentSeq ?? snapshotSeq;
-}
-
-function codewithAgentEvidence(startJson: Record<string, unknown>, readJson: Record<string, unknown>, logsJson?: Record<string, unknown>): string {
-  const agent = recordField(readJson, "agent") ?? recordField(startJson, "agent");
-  const statusSnapshot = recordField(readJson, "statusSnapshot");
-  const events = Array.isArray(logsJson?.data)
-    ? logsJson.data
-        .filter((event): event is Record<string, unknown> => Boolean(event) && typeof event === "object" && !Array.isArray(event))
-        .map((event) => ({
-          seq: numberField(event, "seq"),
-          eventType: stringField(event, "eventType"),
-          createdAt: numberField(event, "createdAt"),
-        }))
-    : undefined;
-  return JSON.stringify(
-    {
-      codewithAgent: {
-        agentId: stringField(agent, "agentId"),
-        status: stringField(agent, "status"),
-        desiredState: stringField(agent, "desiredState"),
-        statusReason: stringField(agent, "statusReason"),
-        threadId: stringField(agent, "threadId"),
-        rolloutPath: stringField(agent, "rolloutPath"),
-        pid: numberField(agent, "pid"),
-        exitCode: numberField(agent, "exitCode"),
-        created: typeof startJson.created === "boolean" ? startJson.created : undefined,
-      },
-      statusSnapshot: statusSnapshot
-        ? {
-            seq: numberField(statusSnapshot, "seq"),
-            status: stringField(statusSnapshot, "status"),
-            summary: stringField(statusSnapshot, "summary"),
-            pendingInteractionCount: numberField(statusSnapshot, "pendingInteractionCount"),
-            lastEventSeq: numberField(statusSnapshot, "lastEventSeq"),
-          }
-        : undefined,
-      events,
-    },
-    null,
-    2,
-  );
-}
-
-function codewithAgentProgress(readJson: Record<string, unknown>): AgentProgressInfo {
-  const agent = recordField(readJson, "agent");
-  const statusSnapshot = recordField(readJson, "statusSnapshot");
-  return {
-    provider: "codewith",
-    agentId: stringField(agent, "agentId"),
-    status: stringField(agent, "status") ?? stringField(statusSnapshot, "status"),
-    summary: stringField(statusSnapshot, "summary"),
-    statusReason: stringField(agent, "statusReason"),
-    threadId: stringField(agent, "threadId"),
-    rolloutPath: stringField(agent, "rolloutPath"),
-    pid: numberField(agent, "pid"),
-    lastEventSeq: codewithAgentLastEventSeq(readJson),
-  };
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function executeCodewithDurableAgent(
-  spec: CommandSpec,
-  metadata: ExecutionMetadata,
-  opts: ExecuteOptions,
-  env: NodeJS.ProcessEnv,
-  startedAt: string,
-): Promise<ExecutorResult> {
-  const target = spec.codewithDurableAgent?.target;
-  if (!target) throw new Error("internal error: missing codewith durable target");
-  const maxOutputBytes = opts.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
-  const idempotencyKey = codewithAgentIdempotencyKey(metadata);
-  const start = await spawnCapture(spec.command, codewithAgentStartArgs(target, idempotencyKey), {
-    cwd: spec.cwd,
-    env,
-    timeoutMs: 30_000,
-    maxOutputBytes,
-  });
-  const stderr = new BoundedOutputBuffer(maxOutputBytes);
-  stderr.append(start.stderr);
-  if (start.error || (start.status ?? 1) !== 0) {
-    return failureResult(startedAt, start.error ?? `codewith agent start exited with code ${start.status ?? "unknown"}`, {
-      exitCode: start.status ?? undefined,
-      stdout: start.stdout,
-      stderr: stderr.value(),
-    });
-  }
-  let startJson: Record<string, unknown>;
-  try {
-    startJson = parseJsonOutput(start.stdout || "{}", "codewith agent start");
-  } catch (error) {
-    return failureResult(startedAt, error instanceof Error ? error.message : String(error), { stdout: start.stdout, stderr: stderr.value() });
-  }
-  const agentId = stringField(recordField(startJson, "agent"), "agentId");
-  if (!agentId) {
-    return failureResult(startedAt, "codewith agent start did not return agent.agentId", { stdout: start.stdout, stderr: stderr.value() });
-  }
-  opts.onAgentProgress?.(codewithAgentProgress(startJson));
-
-  const stopAgent = async (): Promise<void> => {
-    await spawnCapture(spec.command, codewithAgentControlArgs(target, "stop", agentId), {
-      cwd: spec.cwd,
-      env,
-      timeoutMs: 15_000,
-      maxOutputBytes,
-    });
-  };
-
-  const pollMs = Math.max(100, Number(opts.env?.LOOPS_CODEWITH_AGENT_POLL_MS ?? process.env.LOOPS_CODEWITH_AGENT_POLL_MS ?? 2_000) || 2_000);
-  let lastReadJson = startJson;
-  let lastLogsJson: Record<string, unknown> | undefined;
-  let lastFingerprint: string | undefined;
-  let lastProgressAt = Date.now();
-  const evidence = (): string => boundedText(codewithAgentEvidence(startJson, lastReadJson, lastLogsJson), maxOutputBytes);
-  while (true) {
-    if (opts.signal?.aborted) {
-      await stopAgent();
-      return failureResult(startedAt, "cancelled", { stdout: evidence(), stderr: stderr.value() });
-    }
-
-    const read = await spawnCapture(spec.command, codewithAgentControlArgs(target, "read", agentId), {
-      cwd: spec.cwd,
-      env,
-      timeoutMs: 30_000,
-      maxOutputBytes,
-    });
-    stderr.append(read.stderr);
-    if (read.error || (read.status ?? 1) !== 0) {
-      return failureResult(startedAt, read.error ?? `codewith agent read exited with code ${read.status ?? "unknown"}`, {
-        exitCode: read.status ?? undefined,
-        stdout: evidence(),
-        stderr: stderr.value(),
-      });
-    }
-    try {
-      lastReadJson = parseJsonOutput(read.stdout || "{}", "codewith agent read");
-    } catch (error) {
-      return failureResult(startedAt, error instanceof Error ? error.message : String(error), {
-        stdout: boundedText(read.stdout, maxOutputBytes),
-        stderr: stderr.value(),
-      });
-    }
-
-    const status = codewithAgentStatus(lastReadJson);
-    const fingerprint = JSON.stringify({
-      status,
-      agentLastEventSeq: numberField(recordField(lastReadJson, "agent"), "lastEventSeq"),
-      snapshot: recordField(lastReadJson, "statusSnapshot") ?? null,
-    });
-    if (fingerprint !== lastFingerprint) {
-      lastFingerprint = fingerprint;
-      lastProgressAt = Date.now();
-      opts.onAgentProgress?.(codewithAgentProgress(lastReadJson));
-    }
-    if (status === "completed" || status === "failed" || status === "cancelled") {
-      const logs = await spawnCapture(spec.command, codewithAgentControlArgs(target, "logs", agentId), {
-        cwd: spec.cwd,
-        env,
-        timeoutMs: 30_000,
-        maxOutputBytes,
-      });
-      if (!logs.error && (logs.status ?? 1) === 0) {
-        try {
-          lastLogsJson = parseJsonOutput(logs.stdout || "{}", "codewith agent logs");
-        } catch {
-          lastLogsJson = undefined;
-        }
-      } else {
-        stderr.append(logs.stderr || logs.error || "");
-      }
-      if (status === "completed") {
-        return successResult(startedAt, { exitCode: 0, stdout: evidence(), stderr: stderr.value() });
-      }
-      return failureResult(
-        startedAt,
-        stringField(recordField(lastReadJson, "agent"), "statusReason") ?? `codewith agent ${status}`,
-        { exitCode: 1, stdout: evidence(), stderr: stderr.value() },
-      );
-    }
-
-    if (typeof spec.timeoutMs === "number" && new Date(nowIso()).getTime() - new Date(startedAt).getTime() >= spec.timeoutMs) {
-      await stopAgent();
-      return timeoutResult(startedAt, `timed out after ${spec.timeoutMs}ms`, { stdout: evidence(), stderr: stderr.value() });
-    }
-    if (typeof spec.idleTimeoutMs === "number" && Date.now() - lastProgressAt >= spec.idleTimeoutMs) {
-      await stopAgent();
-      return timeoutResult(startedAt, `idle timed out after ${spec.idleTimeoutMs}ms without agent progress`, {
-        stdout: evidence(),
-        stderr: stderr.value(),
-      });
-    }
-    await sleep(pollMs);
-  }
 }
 
 interface WorktreePreparation {
@@ -1195,12 +879,6 @@ export async function executeTarget(
 ): Promise<ExecutorResult> {
   let spec = commandSpec(target, opts);
   const machine = resolvedMachine(opts);
-  if (machine && !machine.local && spec.codewithDurableAgent) {
-    return failureResult(
-      nowIso(),
-      "remote Codewith durable background-agent steps require remote status polling support; run this Codewith step locally or add remote durable readback before dispatch",
-    );
-  }
   if (machine && !machine.local) {
     // Auto-mode worktree fallback needs a rebuilt invocation (providers bake
     // cwd into argv), so the remote script carries both and picks at runtime.
@@ -1235,9 +913,6 @@ export async function executeTarget(
   if (worktreeEntry?.failure) return worktreeEntry.failure;
   if (worktreeEntry?.fallbackCwd) {
     spec = worktreeFallbackSpec(target, opts, worktreeEntry.fallbackCwd) ?? spec;
-  }
-  if (spec.codewithDurableAgent) {
-    return executeCodewithDurableAgent(spec, metadata, opts, env, startedAt);
   }
 
   const child = spawn(spec.command, spec.args, {

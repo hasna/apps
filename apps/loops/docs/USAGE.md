@@ -6,7 +6,7 @@ It supports deterministic command loops, JSON-defined workflows, and guarded CLI
 
 - `claude`
 - `agent` (Cursor Agent CLI)
-- `codewith agent start`
+- `codewith exec`
 - `aicopilot run`
 - `opencode run`
 - `codex exec`
@@ -991,13 +991,13 @@ On Linux this writes a user systemd service. On macOS it writes a LaunchAgent pl
 The adapters intentionally use provider command surfaces instead of pretending every agent has one SDK:
 
 - Claude uses `claude -p --output-format json` and safe-mode/local setting sources by default.
-- Codewith uses durable `codewith --ask-for-approval never agent start` background-agent runs by default, then polls `codewith agent read` until the run is terminal. While the step is running, OpenLoops records bounded agent id/status updates as `step_progress` workflow events and as the running step's compact stdout; on terminal completion it records compact status/event evidence. Remote Codewith agent steps fail closed until remote durable readback is implemented, so workflows do not advance immediately after enqueue. OpenLoops rejects Codewith `extraArgs` that try to force `exec`, `--ephemeral`, or other non-durable exec-only flags for task-lifecycle, planner, worker, verifier, reviewer, release, or other long-running agentic work.
+- Codewith runs non-interactive `codewith --ask-for-approval never exec --json` sessions by default. exec starts a fresh session per invocation, avoiding the multi-megabyte rollout history that `codewith agent start` reloaded every turn (which drove `context_length_exceeded` silent no-ops), and it keeps network egress for gh/git — the `workspace-write` sandbox opts back into `sandbox_workspace_write.network_access`. Codewith exec is remote-capable like codex. OpenLoops rejects Codewith `extraArgs` that try to force `exec`, `--ephemeral`, `--json`, or other exec launch flags that the adapter already manages.
 - AI Copilot and OpenCode use `run --format json --pure`. OpenCode requires an explicit provider/model id because ambient OpenCode config is machine-specific.
 - Cursor is CLI-first for now via the standalone `agent -p` binary. OpenLoops no longer falls back to `cursor agent`; install the standalone Cursor Agent CLI so preflight and scheduled runs use the same executable.
 - Codex uses `codex --ask-for-approval never exec --json --ephemeral --skip-git-repo-check`, with `--add-dir` for explicit extra writable directories where supported.
-- Agent prompts are sent through child stdin instead of argv where the provider supports stdin. Codewith durable background agents currently accept prompts as native `agent start` arguments, so OpenLoops stores only bounded status/event evidence and omits raw Codewith prompt text and raw event payloads from workflow stdout.
+- Agent prompts are sent through child stdin instead of argv where the provider supports stdin, including Codewith `exec` (which reads instructions from stdin when no positional prompt is given), so the prompt never lands on argv.
 - When `--account` or a step `account` is set, OpenLoops resolves `accounts env <profile> --tool <tool>` before spawning the target, strips inherited tool home/API-key variables, and applies the selected profile only to that process. Missing account profiles fail before the provider binary receives the prompt.
-- `--auth-profile` and step `authProfile` are provider-native auth selectors. They currently apply to Codewith and are passed to Codewith as `--auth-profile <name>` before `agent start/read/logs`; they do not call OpenAccounts.
+- `--auth-profile` and step `authProfile` are provider-native auth selectors. They currently apply to Codewith and are passed to Codewith as `--auth-profile <name>` on the `exec` invocation; they do not call OpenAccounts.
 - `--sandbox` maps to provider-native sandbox flags. Codewith/Codex accept `read-only`, `workspace-write`, or `danger-full-access`; Cursor accepts `enabled` or `disabled`.
 - `--permission-mode` maps `plan`, `auto`, and `bypass` where the provider supports it. Claude uses native permission modes, Cursor maps bypass to `--force`, and OpenCode/AICopilot map bypass to `--dangerously-skip-permissions`.
 - `--variant` is provider-specific reasoning/model effort. Claude maps it to `--effort`, Codewith/Codex map it to `model_reasoning_effort`, and OpenCode/AICopilot pass `--variant`.
