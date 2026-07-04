@@ -968,4 +968,11 @@ export const connectors: ConnectorMeta[] = [
     category: "AI & ML",
     tags: ["ai", "extraction", "documents"],
   },
+  {
+    name: "zhipu-ai",
+    displayName: "Zhipu AI",
+    description: "GLM large language models via Zhipu Open Platform",
+    category: "AI & ML",
+    tags: ["ai", "llm", "glm", "zhipu"],
+  },
 ];
