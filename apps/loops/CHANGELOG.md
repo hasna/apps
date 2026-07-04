@@ -5,6 +5,16 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.4.8 (2026-07-04)
+
+Lifecycle prompt hardening for routed task workflows.
+
+### Fixed
+
+- **Task lifecycle routing:** render copy-safe triage and planner marker comment
+  commands so agents can advance or block deterministic lifecycle gates without
+  emitting a separate placeholder evidence comment first.
+
 ## 0.4.7 (2026-07-04)
 
 Routing hardening for PR merge/drain automation.
