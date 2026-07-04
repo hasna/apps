@@ -43,6 +43,8 @@ export interface TodosTaskRouteOptions {
   preflight?: boolean;
   dryRun?: boolean;
   todosProject?: string;
+  /** Internal drain context; never derived from CLI/event fields. */
+  sourceTodosProjectPath?: string;
 }
 
 export interface TodosReadyTask {

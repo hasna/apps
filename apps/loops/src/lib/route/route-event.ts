@@ -369,8 +369,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
   }
   const taskTitle = taskEventField(data, ["title", "task_title", "taskTitle"]);
   const taskDescription = taskEventField(data, ["description", "body"]);
-  const sourceTodosProjectPath = taskEventField(data, ["source_project_path", "sourceProjectPath"])
-    ?? taskEventField(metadata, ["source_project_path", "sourceProjectPath"]);
+  const sourceTodosProjectPath = opts.sourceTodosProjectPath?.trim();
   const dataProjectPath = taskEventField(data, [
     "route_project_path",
     "routeProjectPath",

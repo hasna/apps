@@ -50,7 +50,6 @@ function taskDescriptionProjectPath(task: TodosReadyTask): string | undefined {
 function taskProjectPath(task: TodosReadyTask): string | undefined {
   const metadata = objectField(task.metadata) ?? {};
   return taskField(task, ["project_path", "projectPath"]) ??
-    taskField(task, ["source_project_path", "sourceProjectPath"]) ??
     taskEventField(metadata, ["project_path", "projectPath", "project_canonical_path"]) ??
     taskDescriptionProjectPath(task) ??
     taskField(task, ["working_dir", "workingDir", "cwd"]) ??
@@ -77,10 +76,14 @@ function taskListValues(task: TodosReadyTask): string[] {
 function taskDrainEvent(task: TodosReadyTask, sourceProjectPath?: string): EventEnvelope {
   const taskId = taskField(task, ["id", "task_id", "taskId"]);
   if (!taskId) throw new Error("todos ready returned a task without an id");
-  const metadata = objectField(task.metadata) ?? {};
+  const metadata = { ...(objectField(task.metadata) ?? {}) };
   const workingDir = taskProjectPath(task);
   const routeWorkingDir = taskField(task, ["project_path", "projectPath"]) ?? workingDir;
   const sourceProject = sourceProjectPath?.trim();
+  if (!sourceProject) {
+    delete metadata.source_project_path;
+    delete metadata.sourceProjectPath;
+  }
   const data: Record<string, unknown> = {
     ...task,
     id: taskId,
@@ -90,6 +93,10 @@ function taskDrainEvent(task: TodosReadyTask, sourceProjectPath?: string): Event
     tags: tagsFromValue(task.tags),
     metadata,
   };
+  if (!sourceProject) {
+    delete data.source_project_path;
+    delete data.sourceProjectPath;
+  }
   if (workingDir) {
     data.working_dir = routeWorkingDir;
     data.project_path = routeWorkingDir;
@@ -286,14 +293,13 @@ function isSkippableDrainRouteError(message: string): boolean {
   return message.startsWith("worktreeMode=required but projectPath is not an existing git repository:");
 }
 
-function markInvalidDrainTaskNonRouteable(todosProject: string, task: TodosReadyTask, reason: string): Record<string, unknown> {
+function markInvalidDrainTaskNonRouteable(sourceTodosProject: string, task: TodosReadyTask, reason: string): Record<string, unknown> {
   const taskId = taskField(task, ["id", "task_id", "taskId"]);
   if (!taskId) return { attempted: false, reason: "task id missing" };
-  const targetProject = taskField(task, ["source_project_path", "sourceProjectPath"]) ?? taskField(task, ["project_path", "projectPath"]) ?? todosProject;
   const comment = `OpenLoops route blocked for task ${taskId}: ${reason}. Added no-auto and removed auto:route so route drains do not repeatedly route this task until its project path is fixed.`;
-  const commentResult = runLocalCommand("todos", ["--project", targetProject, "comment", taskId, comment], { timeoutMs: 30_000 });
-  const tagResult = runLocalCommand("todos", ["--project", targetProject, "tag", taskId, "no-auto"], { timeoutMs: 30_000 });
-  const untagResult = runLocalCommand("todos", ["--project", targetProject, "untag", taskId, "auto:route"], { timeoutMs: 30_000 });
+  const commentResult = runLocalCommand("todos", ["--project", sourceTodosProject, "comment", taskId, comment], { timeoutMs: 30_000 });
+  const tagResult = runLocalCommand("todos", ["--project", sourceTodosProject, "tag", taskId, "no-auto"], { timeoutMs: 30_000 });
+  const untagResult = runLocalCommand("todos", ["--project", sourceTodosProject, "untag", taskId, "auto:route"], { timeoutMs: 30_000 });
   const ok = commentResult.ok && tagResult.ok && untagResult.ok;
   return {
     ok,
@@ -335,15 +341,21 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
     let event: EventEnvelope | undefined;
     let result: TodosTaskRoutePrint;
     try {
-      const sourceProject = taskField(task, ["source_project_path", "sourceProjectPath"]);
+      const sourceProject = opts.todosProjectsFromRegistry ? taskField(task, ["source_project_path", "sourceProjectPath"]) : undefined;
       event = taskDrainEvent(task, sourceProject);
-      result = routeTodosTaskEvent(event, opts);
+      result = routeTodosTaskEvent(event, {
+        ...opts,
+        ...(sourceProject ? { sourceTodosProjectPath: sourceProject } : {}),
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (isSkippableDrainRouteError(message)) {
+        const sourceTaskProject = opts.todosProjectsFromRegistry
+          ? (taskField(task, ["source_project_path", "sourceProjectPath"]) ?? todosProject)
+          : todosProject;
         const sourceTaskUpdate = opts.dryRun
           ? { attempted: false, reason: "dry-run" }
-          : markInvalidDrainTaskNonRouteable(todosProject, task, message);
+          : markInvalidDrainTaskNonRouteable(sourceTaskProject, task, message);
         result = skippedDrainTask(task, event, redact(message, 640) ?? "route task failed", { sourceTaskUpdate });
       } else {
         // Previously any non-skippable route error threw and aborted the whole

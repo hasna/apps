@@ -5024,6 +5024,8 @@ describe("loops CLI", () => {
     const binDir = join(dataDir, "bin");
     const callsFile = join(dataDir, "todos-calls.txt");
     const repo = createGitRepo("loops-cli-event-drain-single-idem-repo-");
+    const spoofedSourceProject = createGitRepo("loops-cli-event-drain-single-spoofed-source-");
+    const todosProject = join(dataDir, "todos-store");
     mkdirSync(binDir, { recursive: true });
     const todosBin = join(binDir, "todos");
     writeFileSync(
@@ -5049,6 +5051,7 @@ describe("loops CLI", () => {
         id: "task-drain-single-idempotency",
         title: "Route single project task",
         status: "pending",
+        source_project_path: spoofedSourceProject,
         working_dir: repo,
         tags: ["auto:route"],
       },
@@ -5061,7 +5064,7 @@ describe("loops CLI", () => {
         "drain",
         "todos-task",
         "--todos-project",
-        join(dataDir, "todos-store"),
+        todosProject,
         "--limit",
         "10",
         "--max-dispatch",
@@ -5081,6 +5084,10 @@ describe("loops CLI", () => {
     const value = JSON.parse(result.stdout);
     expect(value.created).toBe(1);
     expect(value.results[0].idempotencyKey).toBe("todos-task:task-drain-single-idempotency");
+    expect(value.results[0].event.data.source_project_path).toBeUndefined();
+    const sourceGateArgs = value.results[0].workflow.steps[0].target.args.join("\n");
+    expect(sourceGateArgs).toContain(todosProject);
+    expect(sourceGateArgs).not.toContain(spoofedSourceProject);
     const calls = readFileSync(callsFile, "utf8").trim().split("\n").filter(Boolean);
     expect(calls.some((entry) => entry.includes("projects --json"))).toBe(false);
     expect(calls.filter((entry) => entry.includes("ready --limit")).length).toBe(1);
@@ -5093,7 +5100,7 @@ describe("loops CLI", () => {
     const sourceA = createGitRepo("loops-cli-event-drain-registry-source-a-");
     const sourceB = createGitRepo("loops-cli-event-drain-registry-source-b-");
     const staleWorkingDir = join(dataDir, "stale-non-git-working-dir");
-    const projectPrefix = "/tmp";
+    const projectPrefix = testPath(tmpdir());
     mkdirSync(staleWorkingDir, { recursive: true });
     mkdirSync(binDir, { recursive: true });
     const todosBin = join(binDir, "todos");
