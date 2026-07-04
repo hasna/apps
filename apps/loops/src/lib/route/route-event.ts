@@ -369,7 +369,16 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
   }
   const taskTitle = taskEventField(data, ["title", "task_title", "taskTitle"]);
   const taskDescription = taskEventField(data, ["description", "body"]);
-  const dataProjectPath = taskEventField(data, ["working_dir", "workingDir", "project_path", "projectPath", "cwd"]);
+  const sourceTodosProjectPath = opts.sourceTodosProjectPath?.trim();
+  const dataProjectPath = taskEventField(data, [
+    "route_project_path",
+    "routeProjectPath",
+    "project_path",
+    "projectPath",
+    "working_dir",
+    "workingDir",
+    "cwd",
+  ]);
   const metadataProjectPath = taskEventField(metadata, [
     "working_dir",
     "workingDir",
@@ -386,7 +395,12 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
   const routeProjectPath = normalizeRoutePath(projectPath) ?? resolve(projectPath);
   const projectGroup = routeProjectGroup(opts.projectGroup, data, metadata);
   const throttleLimits = routeThrottleLimitsFromOpts(opts);
-  const idempotencyKey = `todos-task:${taskId}`;
+  const sourceProjectIdempotencyPrefix = sourceTodosProjectPath
+    ? normalizeRoutePath(sourceTodosProjectPath) ?? resolve(sourceTodosProjectPath)
+    : undefined;
+  const idempotencyKey = sourceProjectIdempotencyPrefix
+    ? `todos-task:${sourceProjectIdempotencyPrefix}:${taskId}`
+    : `todos-task:${taskId}`;
   const idempotencySuffix = stableSuffix(idempotencyKey);
   const namePrefix = opts.namePrefix ?? "event:todos-task";
   const workflowName = `${namePrefix}:${taskId.slice(0, 8)}:${idempotencySuffix}:workflow`;
@@ -467,7 +481,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     prHandoff: templateId === TASK_LIFECYCLE_TEMPLATE_ID ? Boolean(opts.prHandoff) : false,
     eventId: event.id,
     eventType: event.type,
-    todosProjectPath: opts.todosProject,
+    todosProjectPath: sourceTodosProjectPath || opts.todosProject,
   };
   const workflowContext = {
     name: workflowName,

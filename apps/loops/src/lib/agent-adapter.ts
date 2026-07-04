@@ -171,7 +171,7 @@ function buildAgentInvocation(target: AgentTarget): AgentInvocation {
       for (const dir of target.addDirs ?? []) args.push("--add-dir", dir);
       if (target.model) args.push("--model", target.model);
       args.push(...(target.extraArgs ?? []));
-      args.push("agent", "start");
+      args.push("agent", "start", "--json");
       if (target.cwd) args.push("--cwd", target.cwd);
       // Prompt intentionally stays on argv: `codewith agent start` only accepts the
       // prompt as a positional argument (`Usage: codewith agent start [OPTIONS] <PROMPT>...`,

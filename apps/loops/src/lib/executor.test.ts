@@ -645,6 +645,69 @@ describe("executeLoop", () => {
         rmSync(root, { recursive: true, force: true });
       }
     });
+
+    test("passes --json to codewith durable agent commands so human banner lines never break parsing", async () => {
+      const root = mkdtempSync(join(tmpdir(), "loops-codewith-json-"));
+      const bin = join(root, "bin");
+      mkdirSync(bin, { recursive: true });
+      const argsFile = join(root, "codewith-args");
+      const codewith = join(bin, "codewith");
+      // Mimic codewith >=0.1.55: `agent start/read/logs` print a human banner on
+      // stdout unless `--json` is supplied. Without the flag the banner is all
+      // that is emitted, which used to fail with "did not return JSON".
+      writeFileSync(
+        codewith,
+        [
+          "#!/usr/bin/env bash",
+          `printf '%s\\n' "$@" >> ${JSON.stringify(argsFile)}`,
+          `printf -- '--\\n' >> ${JSON.stringify(argsFile)}`,
+          'case " $* " in',
+          "  *' agent start '*)",
+          '    if [[ " $* " == *" --json "* ]]; then echo \'{"agent":{"agentId":"a1","status":"running"},"created":true}\';',
+          "    else echo 'Started background agent a1 (running).'; fi ;;",
+          "  *' agent read '*)",
+          '    if [[ " $* " == *" --json "* ]]; then echo \'{"agent":{"agentId":"a1","status":"completed"}}\';',
+          "    else echo 'Background agent a1 (completed).'; fi ;;",
+          "  *' agent logs '*)",
+          '    if [[ " $* " == *" --json "* ]]; then echo \'{"data":[]}\';',
+          "    else echo 'No new events.'; fi ;;",
+          "  *) echo '{}' ;;",
+          "esac",
+        ].join("\n"),
+      );
+      chmodSync(codewith, 0o755);
+      const store = new Store(":memory:");
+      try {
+        const loop = store.createLoop({
+          name: "codewith-json-contract",
+          schedule: { type: "once", at: new Date().toISOString() },
+          target: {
+            type: "agent",
+            provider: "codewith",
+            prompt: "work",
+            configIsolation: "safe",
+            timeoutMs: 30_000,
+          },
+        });
+        const claim = store.claimRun(loop, new Date().toISOString(), "test");
+        expect(claim).toBeDefined();
+        const result = await executeLoop(loop, claim!.run, {
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}`, LOOPS_CODEWITH_AGENT_POLL_MS: "100" },
+        });
+        expect(result.status).toBe("succeeded");
+        const recorded = readFileSync(argsFile, "utf8");
+        const invocations = recorded.split("--\n").filter((chunk) => chunk.trim().length > 0);
+        const startArgs = invocations.find((chunk) => chunk.includes("start\n"));
+        const readArgs = invocations.find((chunk) => chunk.includes("read\n"));
+        expect(startArgs).toBeDefined();
+        expect(startArgs).toContain("--json");
+        expect(readArgs).toBeDefined();
+        expect(readArgs).toContain("--json");
+      } finally {
+        store.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
   });
 
   test("routes machine-assigned command loops through remote transport", async () => {

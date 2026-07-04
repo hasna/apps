@@ -40,6 +40,19 @@ const EVENT_INPUT_OPTION_SPECS: RouteOptionSpec[] = [
 ];
 
 const DRAIN_FILTER_OPTION_SPECS: RouteOptionSpec[] = [
+  {
+    flags: "--todos-projects-from-registry",
+    key: "todosProjectsFromRegistry",
+    kind: "boolean",
+    description: "scan registered todos projects from `todos projects --json` instead of one --todos-project",
+  },
+  {
+    flags: "--todos-project-include <path>",
+    key: "todosProjectInclude",
+    kind: "repeat",
+    description: "include additional registered project path prefixes when scanning via --todos-projects-from-registry",
+    serializeValue: (opts) => listFromRepeatedOpts(opts.todosProjectInclude as string[] | undefined),
+  },
   { flags: "--todos-project-id <id>", key: "todosProjectId", kind: "value", description: "filter todos ready output to one todos project id" },
   { flags: "--task-list <id-or-slug>", key: "taskList", kind: "value", description: "filter ready tasks to one task-list id, slug, or name" },
   { flags: "--project-path-prefix <path>", key: "projectPathPrefix", kind: "value", description: "filter ready tasks to a project/repo path prefix" },

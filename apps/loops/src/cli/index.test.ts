@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -55,8 +55,8 @@ function git(repo: string, args: string[]): void {
   expect(result.status).toBe(0);
 }
 
-function createGitRepo(prefix: string): string {
-  const repo = mkdtempSync(join(tmpdir(), prefix));
+function createGitRepoIn(parent: string, prefix: string): string {
+  const repo = mkdtempSync(join(parent, prefix));
   git(repo, ["init"]);
   git(repo, ["config", "user.email", "loops-test@example.com"]);
   git(repo, ["config", "user.name", "Loops Test"]);
@@ -64,6 +64,22 @@ function createGitRepo(prefix: string): string {
   git(repo, ["add", "README.md"]);
   git(repo, ["commit", "-m", "init"]);
   return repo;
+}
+
+function createGitRepo(prefix: string): string {
+  return createGitRepoIn(tmpdir(), prefix);
+}
+
+function testPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+}
+
+function testPaths(paths: string[]): string[] {
+  return paths.map(testPath);
 }
 
 type TestWorkflowStep = { id?: string; target: Record<string, any>; [key: string]: any };
@@ -3049,11 +3065,11 @@ describe("loops CLI", () => {
     expect(workflow.steps[1].target.worktree).toMatchObject({
       mode: "auto",
       enabled: true,
-      originalCwd: repo,
-      repoRoot: repo,
       root: worktreeRoot,
     });
-    expect(workflow.steps[1].target.addDirs).toEqual([join(dataDir, "todos-store"), join(repo, ".git")]);
+    expect(testPath(workflow.steps[1].target.worktree.originalCwd)).toBe(testPath(repo));
+    expect(testPath(workflow.steps[1].target.worktree.repoRoot)).toBe(testPath(repo));
+    expect(testPaths(workflow.steps[1].target.addDirs)).toEqual(testPaths([join(dataDir, "todos-store"), join(repo, ".git")]));
     expect(workflow.steps[1].target.worktree.branch).toContain("openloops/");
     expect(workflow.steps[2].target.cwd).toBe(workflow.steps[1].target.cwd);
     expect(workflow.steps[1].target.prompt).toContain("[redacted");
@@ -4392,6 +4408,37 @@ describe("loops CLI", () => {
     expect(loop.target.args).toEqual(expect.arrayContaining(["--max-dispatch", "2"]));
   });
 
+  test("routes schedule preserves registry drain options", () => {
+    const dataDir = freshDataDir("loops-cli-routes-template-schedule-registry-");
+
+    const scheduled = runCli(dataDir, [
+      "--json",
+      "routes",
+      "schedule",
+      "todos-task",
+      "route-drain-registry-test",
+      "--every",
+      "5m",
+      "--todos-projects-from-registry",
+      "--project-path-prefix",
+      "/tmp/todos-registry-prefix",
+      "--todos-project-include",
+      "/tmp/registry/include-one",
+      "--todos-project-include",
+      "/tmp/registry/include-two,/tmp/registry/include-three",
+      "--max-dispatch",
+      "3",
+    ]);
+    expect(scheduled.status).toBe(0);
+    const loop = JSON.parse(scheduled.stdout);
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--todos-projects-from-registry"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--project-path-prefix", "/tmp/todos-registry-prefix"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--todos-project-include", "/tmp/registry/include-one"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--todos-project-include", "/tmp/registry/include-two"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--todos-project-include", "/tmp/registry/include-three"]));
+    expect(loop.target.args).toEqual(expect.arrayContaining(["--max-dispatch", "3"]));
+  });
+
   test("todos task lifecycle routes preserve explicit OpenAccounts role accounts", () => {
     const dataDir = freshDataDir("loops-cli-routes-task-lifecycle-accounts-");
     const repo = createGitRepo("loops-cli-routes-task-lifecycle-accounts-repo-");
@@ -4568,9 +4615,9 @@ describe("loops CLI", () => {
     expect(value.workflow.steps.map((step: { id: string }) => step.id)).toEqual(["source-task-gate", "worker", "verifier"]);
     expect(value.workflow.steps[1].target.cwd).toContain(worktreeRoot);
     expect(value.workflow.steps[1].target.worktree.enabled).toBe(true);
-    expect(value.workflow.steps[1].target.worktree.originalCwd).toBe(repo);
-    expect(value.workflow.steps[1].target.addDirs).toContain(join(repo, ".git"));
-    expect(value.workflow.steps[2].target.addDirs).toContain(join(repo, ".git"));
+    expect(testPath(value.workflow.steps[1].target.worktree.originalCwd)).toBe(testPath(repo));
+    expect(testPaths(value.workflow.steps[1].target.addDirs)).toContain(testPath(join(repo, ".git")));
+    expect(testPaths(value.workflow.steps[2].target.addDirs)).toContain(testPath(join(repo, ".git")));
   });
 
   test("todos task event handler throttles active workflows per project", () => {
@@ -4761,7 +4808,7 @@ describe("loops CLI", () => {
     const value = JSON.parse(second.stdout);
     expect(value.skipped).toBe(true);
     expect(value.throttle.counts.project).toBe(1);
-    expect(value.throttle.projectPath).toBe(repo);
+    expect(testPath(value.throttle.projectPath)).toBe(testPath(repo));
   });
 
   test("todos task event handler throttles active workflows per project group", () => {
@@ -4974,6 +5021,317 @@ describe("loops CLI", () => {
     expect(loops).toHaveLength(1);
     const worker = value.results[0].workflow.steps.find((step: { id: string }) => step.id === "worker");
     expect(worker.target.addDirs).toEqual([join(dataDir, "todos-store")]);
+  });
+
+  test("todos task drain single-project keeps old idempotency and single ready scan", () => {
+    const dataDir = freshDataDir("loops-cli-event-drain-single-idem-");
+    const binDir = join(dataDir, "bin");
+    const callsFile = join(dataDir, "todos-calls.txt");
+    const repo = createGitRepo("loops-cli-event-drain-single-idem-repo-");
+    const spoofedSourceProject = createGitRepo("loops-cli-event-drain-single-spoofed-source-");
+    const todosProject = join(dataDir, "todos-store");
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "printf '%s\\n' \"$*\" >> \"$CALLS_FILE\"",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"task-lists\" ]]; then printf '[]\\n'; exit 0; fi",
+        "done",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$arg\" == \"ready\" ]]; then printf '%s\\n' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "done",
+        "printf 'unexpected todos command: %s\\n' \"$*\" >&2",
+        "exit 2",
+        "",
+      ].join("\n"),
+      { encoding: "utf8" },
+    );
+    chmodSync(todosBin, 0o755);
+    const ready = [
+      {
+        id: "task-drain-single-idempotency",
+        title: "Route single project task",
+        status: "pending",
+        source_project_path: spoofedSourceProject,
+        working_dir: repo,
+        tags: ["auto:route"],
+      },
+    ];
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        todosProject,
+        "--limit",
+        "10",
+        "--max-dispatch",
+        "1",
+        "--worktree-mode",
+        "off",
+      ],
+      undefined,
+      {
+        PATH: `${binDir}:/usr/bin:/bin`,
+        CALLS_FILE: callsFile,
+        TODOS_READY_JSON: JSON.stringify(ready),
+      },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.created).toBe(1);
+    expect(value.results[0].idempotencyKey).toBe("todos-task:task-drain-single-idempotency");
+    expect(value.results[0].event.data.source_project_path).toBeUndefined();
+    const sourceGateArgs = value.results[0].workflow.steps[0].target.args.join("\n");
+    expect(sourceGateArgs).toContain(todosProject);
+    expect(sourceGateArgs).not.toContain(spoofedSourceProject);
+    const calls = readFileSync(callsFile, "utf8").trim().split("\n").filter(Boolean);
+    expect(calls.some((entry) => entry.includes("projects --json"))).toBe(false);
+    expect(calls.filter((entry) => entry.includes("ready --limit")).length).toBe(1);
+  });
+
+  test("todos task drain from registered projects ignores task-controlled cross-repo route paths", () => {
+    const dataDir = freshDataDir("loops-cli-event-drain-registry-source-path-");
+    const binDir = join(dataDir, "bin");
+    const callsFile = join(dataDir, "todos-calls.txt");
+    const sourceA = createGitRepo("loops-cli-event-drain-registry-source-a-");
+    const sourceB = createGitRepo("loops-cli-event-drain-registry-source-b-");
+    const canonicalSourceA = testPath(sourceA);
+    const canonicalSourceB = testPath(sourceB);
+    const projectPrefix = testPath(tmpdir());
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "printf '%s\\n' \"$*\" >> \"$CALLS_FILE\"",
+        "if [[ \"$*\" == *\"projects --json\"* ]]; then printf '%s\\n' \"$TODOS_PROJECTS_JSON\"; exit 0; fi",
+        "project=",
+        "args=\"$*\"",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$prev\" == \"--project\" ]]; then project=\"$arg\"; fi",
+        "  prev=\"$arg\"",
+        "done",
+        "if [[ \"$args\" == *\" ready \"* ]]; then",
+        "  if [[ \"$project\" == \"$PROJECT_A\" ]]; then printf '%s\\n' \"$TODOS_READY_JSON_A\"; exit 0; fi",
+        "  if [[ \"$project\" == \"$PROJECT_B\" ]]; then printf '%s\\n' \"$TODOS_READY_JSON_B\"; exit 0; fi",
+        "  if [[ \"$project\" == * ]]; then printf '%s\\n' \"[]\"; exit 0; fi",
+        "fi",
+        "if [[ \"$*\" == *\"task-lists\"* ]]; then printf '[]\\n'; exit 0; fi",
+        "printf 'unexpected todos command: %s\\n' \"$*\" >&2",
+        "exit 2",
+        "",
+      ].join("\n"),
+      { encoding: "utf8" },
+    );
+    chmodSync(todosBin, 0o755);
+    const taskId = "task-drain-registry-shared-id";
+    const readyA = [
+      {
+        id: taskId,
+        title: "Registry route with malicious project_path",
+        status: "pending",
+        source_project_path: sourceB,
+        route_project_path: sourceB,
+        routeProjectPath: sourceB,
+        project_path: sourceB,
+        working_dir: sourceB,
+        metadata: { route_project_path: sourceB, routeProjectPath: sourceB, project_path: sourceB, working_dir: sourceB },
+        tags: ["auto:route"],
+      },
+    ];
+    const readyB = [
+      {
+        id: taskId,
+        title: "Registry route from second source",
+        status: "pending",
+        working_dir: sourceB,
+        tags: ["auto:route"],
+      },
+    ];
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-projects-from-registry",
+        "--project-path-prefix",
+        projectPrefix,
+        "--max-dispatch",
+        "2",
+        "--max-active",
+        "10",
+        "--worktree-mode",
+        "off",
+      ],
+      undefined,
+      {
+        PATH: `${binDir}:/usr/bin:/bin`,
+        CALLS_FILE: callsFile,
+        PROJECT_A: sourceA,
+        PROJECT_B: sourceB,
+        TODOS_PROJECTS_JSON: JSON.stringify([{ path: sourceA }, { path: sourceB }]),
+        TODOS_READY_JSON_A: JSON.stringify(readyA),
+        TODOS_READY_JSON_B: JSON.stringify(readyB),
+      },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.source).toBe("todos ready");
+    expect(value.scanned).toBe(2);
+    expect(value.results).toHaveLength(2);
+    expect(value.created).toBe(2);
+    expect(value.results[0].idempotencyKey).toBe(`todos-task:${canonicalSourceA}:${taskId}`);
+    expect(value.results[1].idempotencyKey).toBe(`todos-task:${canonicalSourceB}:${taskId}`);
+    expect(value.results[0].idempotencyKey).not.toBe(value.results[1].idempotencyKey);
+    expect(value.results[0].event.data.source_project_path).toBe(sourceA);
+    expect(value.results[1].event.data.source_project_path).toBe(sourceB);
+    expect(value.results[0].event.data.project_path).toBe(canonicalSourceA);
+    expect(value.results[0].event.data.route_project_path).toBe(canonicalSourceA);
+    expect(value.results[0].event.data.routeProjectPath).toBe(canonicalSourceA);
+    expect(value.results[0].event.data.working_dir).toBe(canonicalSourceA);
+    expect(value.results[0].event.metadata.route_project_path).toBe(canonicalSourceA);
+    expect(value.results[0].event.metadata.routeProjectPath).toBe(canonicalSourceA);
+    expect(value.results[0].invocation.subjectRef.path).toBe(canonicalSourceA);
+    expect(value.results[0].invocation.scope.projectPath).toBe(canonicalSourceA);
+    expect(value.results[0].workItem.projectKey).toBe(canonicalSourceA);
+    expect(value.results[0].workflow.steps[0].target.cwd).toBe(canonicalSourceA);
+    const sourceGateArgs = value.results[0].workflow.steps[0].target.args.join("\n");
+    expect(sourceGateArgs).toContain(sourceA);
+    expect(sourceGateArgs).not.toContain(sourceB);
+    const calls = readFileSync(callsFile, "utf8").trim().split("\n").filter(Boolean);
+    expect(calls.some((entry) => entry.includes("projects --json"))).toBe(true);
+    expect(calls.filter((entry) => entry.includes("ready --limit")).length).toBe(2);
+  });
+
+  test("todos task drain filters registered projects by prefix and include before ready scans", () => {
+    const dataDir = freshDataDir("loops-cli-event-drain-registry-filter-");
+    const binDir = join(dataDir, "bin");
+    const callsFile = join(dataDir, "todos-calls.txt");
+    const registryRoot = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-registry-root-"));
+    const outsideRoot = mkdtempSync(join(tmpdir(), "loops-cli-event-drain-registry-outside-root-"));
+    const sourceA = createGitRepoIn(registryRoot, "source-a-");
+    const sourceB = createGitRepoIn(registryRoot, "source-b-");
+    const sourceOutside = createGitRepoIn(outsideRoot, "source-outside-");
+    const canonicalSourceA = testPath(sourceA);
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "printf '%s\\n' \"$*\" >> \"$CALLS_FILE\"",
+        "if [[ \"$*\" == *\"projects --json\"* ]]; then printf '%s\\n' \"$TODOS_PROJECTS_JSON\"; exit 0; fi",
+        "project=",
+        "args=\"$*\"",
+        "prev=",
+        "for arg in \"$@\"; do",
+        "  if [[ \"$prev\" == \"--project\" ]]; then project=\"$arg\"; fi",
+        "  prev=\"$arg\"",
+        "done",
+        "if [[ \"$args\" == *\" ready \"* ]]; then",
+        "  if [[ \"$project\" == \"$PROJECT_A\" ]]; then printf '%s\\n' \"$TODOS_READY_JSON_A\"; exit 0; fi",
+        "  if [[ \"$project\" == \"$PROJECT_B\" ]]; then printf '%s\\n' \"$TODOS_READY_JSON_B\"; exit 0; fi",
+        "  if [[ \"$project\" == \"$PROJECT_OUTSIDE\" ]]; then printf '%s\\n' \"$TODOS_READY_JSON_OUTSIDE\"; exit 0; fi",
+        "  printf '[]\\n'; exit 0",
+        "fi",
+        "if [[ \"$*\" == *\"task-lists\"* ]]; then printf '[]\\n'; exit 0; fi",
+        "printf 'unexpected todos command: %s\\n' \"$*\" >&2",
+        "exit 2",
+        "",
+      ].join("\n"),
+      { encoding: "utf8" },
+    );
+    chmodSync(todosBin, 0o755);
+    const readyA = [
+      {
+        id: "task-drain-registry-filter-a",
+        title: "Registry route included by both filters",
+        status: "pending",
+        working_dir: sourceA,
+        tags: ["auto:route"],
+      },
+    ];
+    const readyB = [
+      {
+        id: "task-drain-registry-filter-b",
+        title: "Registry route excluded by include",
+        status: "pending",
+        working_dir: sourceB,
+        tags: ["auto:route"],
+      },
+    ];
+    const readyOutside = [
+      {
+        id: "task-drain-registry-filter-outside",
+        title: "Registry route excluded by prefix",
+        status: "pending",
+        working_dir: sourceOutside,
+        tags: ["auto:route"],
+      },
+    ];
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-projects-from-registry",
+        "--project-path-prefix",
+        registryRoot,
+        "--todos-project-include",
+        `${sourceA},${sourceOutside}`,
+        "--max-dispatch",
+        "3",
+        "--max-active",
+        "10",
+        "--worktree-mode",
+        "off",
+      ],
+      undefined,
+      {
+        PATH: `${binDir}:/usr/bin:/bin`,
+        CALLS_FILE: callsFile,
+        PROJECT_A: sourceA,
+        PROJECT_B: sourceB,
+        PROJECT_OUTSIDE: sourceOutside,
+        TODOS_PROJECTS_JSON: JSON.stringify([{ path: sourceA }, { path: sourceB }, { path: sourceOutside }]),
+        TODOS_READY_JSON_A: JSON.stringify(readyA),
+        TODOS_READY_JSON_B: JSON.stringify(readyB),
+        TODOS_READY_JSON_OUTSIDE: JSON.stringify(readyOutside),
+      },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.scanned).toBe(1);
+    expect(value.candidates).toBe(1);
+    expect(value.created).toBe(1);
+    expect(value.results).toHaveLength(1);
+    expect(value.results[0].event.subject).toBe("task-drain-registry-filter-a");
+    expect(value.results[0].event.data.source_project_path).toBe(sourceA);
+    expect(value.results[0].event.data.project_path).toBe(canonicalSourceA);
+    const calls = readFileSync(callsFile, "utf8").trim().split("\n").filter(Boolean);
+    expect(calls.some((entry) => entry.includes("projects --json"))).toBe(true);
+    const readyCalls = calls.filter((entry) => entry.includes(" ready "));
+    expect(readyCalls).toHaveLength(1);
+    expect(readyCalls[0]).toContain(sourceA);
+    expect(readyCalls[0]).not.toContain(sourceB);
+    expect(readyCalls[0]).not.toContain(sourceOutside);
   });
 
   test("todos task drain counts non-skippable per-task errors as fatal and exits non-zero", () => {
@@ -5840,6 +6198,11 @@ describe("loops CLI", () => {
 
   test("todos task event handler --preflight replaces stale generated workflows before storing loop", () => {
     const dataDir = freshDataDir("loops-cli-event-handler-preflight-existing-workflow-");
+    const binDir = join(dataDir, "bin");
+    mkdirSync(binDir, { recursive: true });
+    const codewith = join(binDir, "codewith");
+    writeFileSync(codewith, "#!/usr/bin/env bash\nexit 0\n");
+    chmodSync(codewith, 0o755);
     const event = {
       id: "evt-existing-workflow-preflight",
       type: "task.created",
@@ -5867,7 +6230,12 @@ describe("loops CLI", () => {
       store.close();
     }
 
-    const result = runCli(dataDir, ["--json", "events", "handle", "todos-task", "--preflight"], JSON.stringify(event));
+    const result = runCli(
+      dataDir,
+      ["--json", "events", "handle", "todos-task", "--preflight"],
+      JSON.stringify(event),
+      { PATH: `${binDir}:/usr/bin:/bin` },
+    );
 
     expect(result.status).toBe(0);
     const value = JSON.parse(result.stdout);
