@@ -514,7 +514,7 @@ function remotePreflightScript(spec: CommandSpec, metadata: ExecutionMetadata): 
       `  printf '%s\\n' ${shellQuote("codewith auth profile preflight failed")} >&2`,
       "  exit 1",
       "}",
-      `if ! printf '%s\\n' "$__OPENLOOPS_CODEWITH_PROFILES" | awk 'NR > 1 { print $1 }' | grep -Fx ${shellQuote(spec.nativeAuthProfile.profile)} >/dev/null; then`,
+      `if ! printf '%s\\n' "$__OPENLOOPS_CODEWITH_PROFILES" | awk 'NR > 1 { if ($1 == "*") print $2; else print $1 }' | grep -Fx ${shellQuote(spec.nativeAuthProfile.profile)} >/dev/null; then`,
       `  printf '%s\\n' ${shellQuote(`codewith auth profile not found: ${spec.nativeAuthProfile.profile}`)} >&2`,
       "  exit 1",
       "fi",
@@ -549,7 +549,14 @@ function assertCodewithProfileListed(
     (result.stdout || "")
       .split(/\r?\n/)
       .slice(1)
-      .map((line) => line.trim().split(/\s+/)[0])
+      // `codewith profile list` prefixes the active profile row with a "*" marker,
+      // shifting the profile name into column 2. Skip the marker so the active
+      // profile is not misread as "*" (which made every loop pinned to the
+      // currently-active profile fail preflight with "auth profile not found").
+      .map((line) => {
+        const cols = line.trim().split(/\s+/);
+        return cols[0] === "*" ? cols[1] : cols[0];
+      })
       .filter(Boolean),
   );
   if (!profiles.has(profile)) {

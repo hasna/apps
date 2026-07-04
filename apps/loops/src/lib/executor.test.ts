@@ -1019,6 +1019,50 @@ describe("executeLoop", () => {
     }
   });
 
+  test("local codewith auth profile preflight accepts the active (*-marked) profile", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-local-codewith-active-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    // `codewith profile list` marks the active profile row with a leading "*",
+    // shifting the profile name into column 2.
+    writeFileSync(
+      fake,
+      "#!/usr/bin/env bash\nif [[ \"${1:-}\" == \"profile\" && \"${2:-}\" == \"list\" ]]; then printf '  NAME       ACCOUNT   PROVIDER MODE    PLAN\\n  account001 a@x       ChatGPT chatgpt Pro\\n* account002 b@x       ChatGPT chatgpt Pro\\n  account003 c@x       ChatGPT chatgpt Pro\\n'; exit 0; fi\nexit 0\n",
+    );
+    chmodSync(fake, 0o755);
+    const env = { HOME: home, PATH: `${binDir}:/usr/bin:/bin` };
+    try {
+      // the active profile must be found (regression: previously read as "*")
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account002", prompt: "run", configIsolation: "safe" },
+          {},
+          { env },
+        ),
+      ).not.toThrow();
+      // a non-active listed profile still passes
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account003", prompt: "run", configIsolation: "safe" },
+          {},
+          { env },
+        ),
+      ).not.toThrow();
+      // a truly-missing profile still throws
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account999", prompt: "run", configIsolation: "safe" },
+          {},
+          { env },
+        ),
+      ).toThrow("codewith auth profile not found");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("remote codewith auth profile preflight fails when profile list exits nonzero even if stdout matches", () => {
     const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-nonzero-"));
     const home = join(root, "home");
