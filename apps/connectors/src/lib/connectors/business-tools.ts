@@ -1018,6 +1018,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["helpdesk", "tickets", "support", "open-source"],
   },
   {
+    name: "zoho-bigin",
+    displayName: "Zoho Bigin",
+    description: "Lightweight CRM and pipeline management for small teams",
+    category: "Business Tools",
+    tags: ["crm", "pipeline", "sales", "zoho"],
+  },
+  {
     name: "zohocrm",
     displayName: "Zoho CRM",
     description: "CRM for sales, marketing, and customer support",
