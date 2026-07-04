@@ -5,6 +5,19 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.4.7 (2026-07-04)
+
+Routing hardening for PR merge/drain automation.
+
+### Fixed
+
+- **Todos drain:** admit registered repo-project task sources while pinning
+  routed work to the scanned source project, preventing task-controlled nested
+  route paths from moving worker execution into another repository.
+- **PR lifecycle routing:** propagate PR author and reviewer evidence into
+  reviewer and merger lifecycle prompts so merge routing can select a valid
+  non-author reviewer and keep reviewer/merger steps separate.
+
 ## 0.4.6 (2026-07-03)
 
 Reliability hardening from a full audit of the runtime, control surfaces, and
