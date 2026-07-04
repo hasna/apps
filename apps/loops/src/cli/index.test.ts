@@ -5190,14 +5190,14 @@ describe("loops CLI", () => {
     expect(value.results[0].idempotencyKey).toBe(`todos-task:${canonicalSourceA}:${taskId}`);
     expect(value.results[1].idempotencyKey).toBe(`todos-task:${canonicalSourceB}:${taskId}`);
     expect(value.results[0].idempotencyKey).not.toBe(value.results[1].idempotencyKey);
-    expect(value.results[0].event.data.source_project_path).toBe(canonicalSourceA);
-    expect(value.results[1].event.data.source_project_path).toBe(canonicalSourceB);
+    expect(value.results[0].event.data.source_project_path).toBe(sourceA);
+    expect(value.results[1].event.data.source_project_path).toBe(sourceB);
     expect(value.results[0].event.data.project_path).toBe(canonicalSourceA);
     expect(value.results[0].event.data.working_dir).toBe(canonicalSourceA);
     expect(value.results[0].workflow.steps[0].target.cwd).toBe(canonicalSourceA);
     const sourceGateArgs = value.results[0].workflow.steps[0].target.args.join("\n");
-    expect(sourceGateArgs).toContain(canonicalSourceA);
-    expect(sourceGateArgs).not.toContain(canonicalSourceB);
+    expect(sourceGateArgs).toContain(sourceA);
+    expect(sourceGateArgs).not.toContain(sourceB);
     const calls = readFileSync(callsFile, "utf8").trim().split("\n").filter(Boolean);
     expect(calls.some((entry) => entry.includes("projects --json"))).toBe(true);
     expect(calls.filter((entry) => entry.includes("ready --limit")).length).toBe(2);
