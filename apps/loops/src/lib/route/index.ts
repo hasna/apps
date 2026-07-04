@@ -40,7 +40,14 @@ export {
   SUPPORTED_AGENT_PROVIDERS,
   type ProviderRoutingDecision,
 } from "./provider.js";
-export { prReviewRoutingDecision, type PrReviewRoutingDecision } from "./pr-review.js";
+export {
+  prReferenceFromText,
+  prReviewRoutingDecision,
+  type PrAuthorLookup,
+  type PrReference,
+  type PrReviewRoutingDecision,
+  type PrReviewRoutingDeps,
+} from "./pr-review.js";
 export {
   hasThrottleLimits,
   normalizeRoutePath,
