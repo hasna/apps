@@ -11,6 +11,45 @@ function gateWaitScript(gate: string): string {
   return `while [ ! -f ${JSON.stringify(gate)} ]; do sleep 0.02; done\n`;
 }
 
+function writeFakeCodewithProfileList(fake: string, output: string, exitCode = 0): void {
+  const delimiter = "__OPENLOOPS_FAKE_CODEWITH_PROFILE_LIST__";
+  writeFileSync(
+    fake,
+    [
+      "#!/usr/bin/env bash",
+      'if [[ "${1:-}" == "profile" && "${2:-}" == "list" ]]; then',
+      `cat <<'${delimiter}'`,
+      output.endsWith("\n") ? output.slice(0, -1) : output,
+      delimiter,
+      `exit ${exitCode}`,
+      "fi",
+      "exit 0",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(fake, 0o755);
+}
+
+function remoteCodewithPreflightOptions(home: string, scriptFile?: string) {
+  const runner = scriptFile
+    ? `cat > ${JSON.stringify(scriptFile)}; HOME=${JSON.stringify(home)} PATH=/usr/bin:/bin bash ${JSON.stringify(scriptFile)}`
+    : `HOME=${JSON.stringify(home)} PATH=/usr/bin:/bin bash -s`;
+  return {
+    machine: { id: "remote-test", local: false, route: "ssh" as const },
+    machineResolver: (machine: NonNullable<ReturnType<Store["createLoop"]>["machine"]>) => ({
+      ...machine,
+      local: false,
+      route: "ssh" as const,
+    }),
+    env: { HOME: home, PATH: "/usr/bin:/bin" },
+    machineCommandResolver: () => ({
+      command: "bash",
+      args: ["-c", runner],
+      source: "ssh" as const,
+    }),
+  };
+}
+
 describe("executeLoop", () => {
   const remoteHooks = {
     machineResolver: (machine: NonNullable<ReturnType<Store["createLoop"]>["machine"]>) => ({
@@ -1014,6 +1053,190 @@ describe("executeLoop", () => {
       ).toThrow("codewith auth profile not found");
       expect(existsSync(marker)).toBe(false);
       expect(readFileSync(scriptFile, "utf8")).toContain("codewith auth profile not found");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("local codewith auth profile preflight accepts the active (*-marked) profile", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-local-codewith-active-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithProfileList(
+      fake,
+      [
+        "  NAME       ACCOUNT   PROVIDER MODE    PLAN",
+        "  account001 a@x       ChatGPT chatgpt Pro",
+        "* account002 b@x       ChatGPT chatgpt Pro",
+        "  account003 c@x       ChatGPT chatgpt Pro",
+      ].join("\n"),
+    );
+    const env = { HOME: home, PATH: `${binDir}:/usr/bin:/bin` };
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account002", prompt: "run", configIsolation: "safe" },
+          {},
+          { env },
+        ),
+      ).not.toThrow();
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account003", prompt: "run", configIsolation: "safe" },
+          {},
+          { env },
+        ),
+      ).not.toThrow();
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account999", prompt: "run", configIsolation: "safe" },
+          {},
+          { env },
+        ),
+      ).toThrow("codewith auth profile not found");
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account\0abc", prompt: "run", configIsolation: "safe" },
+          {},
+          { env },
+        ),
+      ).toThrow('codewith auth profile contains unsupported NUL byte: "account\\u0000abc"');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("remote codewith auth profile preflight accepts active and non-active listed profiles", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-listed-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithProfileList(
+      fake,
+      [
+        "  NAME       ACCOUNT   PROVIDER MODE    PLAN",
+        "  account001 a@x       ChatGPT chatgpt Pro",
+        "* account002 b@x       ChatGPT chatgpt Pro",
+      ].join("\n"),
+    );
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account002", prompt: "run", configIsolation: "safe" },
+          {},
+          remoteCodewithPreflightOptions(home),
+        ),
+      ).not.toThrow();
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account001", prompt: "run", configIsolation: "safe" },
+          {},
+          remoteCodewithPreflightOptions(home),
+        ),
+      ).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("remote codewith auth profile preflight fails for truly missing profiles", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-missing-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithProfileList(fake, "NAME ACCOUNT PROVIDER MODE PLAN\naccount001 - ChatGPT chatgpt Pro");
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "missing", prompt: "run", configIsolation: "safe" },
+          {},
+          remoteCodewithPreflightOptions(home),
+        ),
+      ).toThrow("codewith auth profile not found: missing");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("remote codewith auth profile preflight treats option-like profiles as exact strings", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-option-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithProfileList(fake, "NAME ACCOUNT PROVIDER MODE PLAN\naccount001 - ChatGPT chatgpt Pro");
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "--help", prompt: "run", configIsolation: "safe" },
+          {},
+          remoteCodewithPreflightOptions(home),
+        ),
+      ).toThrow("codewith auth profile not found: --help");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("remote codewith auth profile preflight treats newline profiles as one exact string", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-newline-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithProfileList(fake, "NAME ACCOUNT PROVIDER MODE PLAN\naccount001 - ChatGPT chatgpt Pro");
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "missing\naccount001", prompt: "run", configIsolation: "safe" },
+          {},
+          remoteCodewithPreflightOptions(home),
+        ),
+      ).toThrow('codewith auth profile not found: "missing\\naccount001"');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("remote codewith auth profile preflight treats awk escape profiles as exact strings", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-escape-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithProfileList(fake, "NAME ACCOUNT PROVIDER MODE PLAN\nA - ChatGPT chatgpt Pro");
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "\\x41", prompt: "run", configIsolation: "safe" },
+          {},
+          remoteCodewithPreflightOptions(home),
+        ),
+      ).toThrow("codewith auth profile not found: \\x41");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("remote codewith auth profile preflight rejects NUL-containing profiles", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-nul-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithProfileList(fake, "NAME ACCOUNT PROVIDER MODE PLAN\naccountabc - ChatGPT chatgpt Pro");
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account\0abc", prompt: "run", configIsolation: "safe" },
+          {},
+          remoteCodewithPreflightOptions(home),
+        ),
+      ).toThrow('codewith auth profile contains unsupported NUL byte: "account\\u0000abc"');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
