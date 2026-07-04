@@ -457,4 +457,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Marketing & Sales",
     tags: ["email", "outreach", "sales"],
   },
+  {
+    name: "yotpo",
+    displayName: "Yotpo",
+    description: "Reviews and user-generated content platform for e-commerce",
+    category: "Marketing & Sales",
+    tags: ["reviews", "ugc", "ecommerce", "marketing"],
+  },
 ];
