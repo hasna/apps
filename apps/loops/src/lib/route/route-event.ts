@@ -479,6 +479,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     worktreeRoot: opts.worktreeRoot,
     worktreeBranchPrefix: opts.worktreeBranchPrefix ?? "openloops",
     prHandoff: templateId === TASK_LIFECYCLE_TEMPLATE_ID ? Boolean(opts.prHandoff) : false,
+    prReviewRouting: prReviewRouting.required ? prReviewRouting : undefined,
     eventId: event.id,
     eventType: event.type,
     todosProjectPath: sourceTodosProjectPath || opts.todosProject,

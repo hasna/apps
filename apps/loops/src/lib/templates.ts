@@ -117,8 +117,19 @@ export interface TodosTaskWorkflowTemplateInput extends AgentWorkflowTemplateBas
   taskDescription?: string;
   todosProjectPath?: string;
   prHandoff?: boolean;
+  prReviewRouting?: PrReviewRoutingTemplateContext;
   eventId?: string;
   eventType?: string;
+}
+
+export interface PrReviewRoutingTemplateContext {
+  required?: boolean;
+  allowed?: boolean;
+  reason?: string;
+  author?: string;
+  reviewers?: string[];
+  selectedReviewer?: string;
+  signals?: string[];
 }
 
 export interface EventWorkflowTemplateInput extends AgentWorkflowTemplateBaseInput {
@@ -148,6 +159,29 @@ export interface ListLoopTemplatesOptions {
 
 function compactJson(value: unknown): string {
   return JSON.stringify(value);
+}
+
+function prReviewRoutingContext(input: TodosTaskWorkflowTemplateInput): PrReviewRoutingTemplateContext | undefined {
+  return input.prReviewRouting?.required ? input.prReviewRouting : undefined;
+}
+
+function prReviewFollowUpFragment(input: TodosTaskWorkflowTemplateInput): string {
+  const routing = prReviewRoutingContext(input);
+  const author = routing?.author?.trim();
+  const reviewers = routing?.reviewers?.map((reviewer) => reviewer.trim()).filter(Boolean) ?? [];
+  const evidenceLines = [
+    author ? `- Source PR author evidence: GitHub author is ${author}` : undefined,
+    reviewers.length ? `- Source PR reviewer evidence: GitHub reviewer pool: ${reviewers.join(", ")}` : undefined,
+    routing?.selectedReviewer ? `- Selected non-author reviewer: ${routing.selectedReviewer}` : undefined,
+  ].filter(Boolean);
+  return [
+    "PR-derived follow-up todos: If any lifecycle step creates a follow-up todo that references a GitHub PR, PR approval, PR review, or PR merge work, the todo description must include parser-compatible routing evidence so downstream drains can select a non-author reviewer.",
+    ...evidenceLines,
+    "Copy these exact evidence lines from the source task when present, or derive them from the referenced PR before creating the follow-up todo:",
+    "GitHub author is <login>",
+    "GitHub reviewer pool: <login>, <login>",
+    "When the source PR author or reviewer pool cannot be determined, do not create an auto-routable PR-derived follow-up todo; comment the source task with the blocker instead.",
+  ].join("\n");
 }
 
 function taskLabel(input: TodosTaskWorkflowTemplateInput): string {
@@ -717,6 +751,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     routeProjectPath: input.routeProjectPath,
     projectGroup: input.projectGroup,
     todosProjectPath,
+    prReviewRouting: prReviewRoutingContext(input),
     worktree: worktreeContextFragment(plan),
   };
   const handoffArtifactPath = prHandoffArtifactPath(plan, input.taskId);
@@ -735,6 +770,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     ]),
     NO_TMUX_DISPATCH_FRAGMENT,
     "Preserve unrelated user changes and keep scope tied to the task acceptance criteria.",
+    prReviewFollowUpFragment(input),
     "",
     `Task context JSON: ${compactJson(taskContext)}`,
     prHandoffGuidance,

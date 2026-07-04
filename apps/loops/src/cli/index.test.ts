@@ -3882,6 +3882,72 @@ describe("loops CLI", () => {
       selectedReviewer: "reviewer-hasna",
     });
     expect(nonAuthorValue.invocation.scope.prReviewRouting.selectedReviewer).toBe("reviewer-hasna");
+
+    const textReviewerPool = runCli(dataDir, baseArgs, JSON.stringify({
+      ...event,
+      id: "evt-task-created-pr-review-text-pool",
+      data: {
+        ...event.data,
+        id: "task-pr-review-text-pool",
+        description: [
+          "GitHub author is andrei-hasna",
+          "GitHub reviewer pool: andrei-hasna, reviewer-hasna",
+          "reviewDecision=REVIEW_REQUIRED",
+          "PR: https://github.com/hasna/example/pull/2",
+        ].join("\n"),
+      },
+    }));
+    expect(textReviewerPool.status).toBe(0);
+    const textReviewerPoolValue = JSON.parse(textReviewerPool.stdout);
+    expect(textReviewerPoolValue.skipped).toBeUndefined();
+    expect(textReviewerPoolValue.prReviewRouting).toMatchObject({
+      required: true,
+      allowed: true,
+      author: "andrei-hasna",
+      selectedReviewer: "reviewer-hasna",
+    });
+    expect(textReviewerPoolValue.prReviewRouting.reviewers).toEqual(["andrei-hasna", "reviewer-hasna"]);
+
+    const selfPoolWithStatusLine = runCli(dataDir, baseArgs, JSON.stringify({
+      ...event,
+      id: "evt-task-created-pr-review-self-pool-status",
+      data: {
+        ...event.data,
+        id: "task-pr-review-self-pool-status",
+        description: [
+          "GitHub author is andrei-hasna",
+          "GitHub reviewer pool: andrei-hasna",
+          "manual",
+          "reviewDecision=REVIEW_REQUIRED",
+          "PR: https://github.com/hasna/example/pull/3",
+        ].join("\n"),
+      },
+    }));
+    expect(selfPoolWithStatusLine.status).toBe(0);
+    const selfPoolWithStatusLineValue = JSON.parse(selfPoolWithStatusLine.stdout);
+    expect(selfPoolWithStatusLineValue.skipped).toBe(true);
+    expect(selfPoolWithStatusLineValue.reason).toContain("self-review");
+    expect(selfPoolWithStatusLineValue.prReviewRouting.reviewers).toEqual(["andrei-hasna"]);
+
+    const unprefixedReviewerPool = runCli(dataDir, baseArgs, JSON.stringify({
+      ...event,
+      id: "evt-task-created-pr-review-unprefixed-pool",
+      data: {
+        ...event.data,
+        id: "task-pr-review-unprefixed-pool",
+        description: [
+          "GitHub author is andrei-hasna",
+          "Reviewer pool: andrei-hasna, reviewer-hasna",
+          "reviewDecision=REVIEW_REQUIRED",
+          "PR: https://github.com/hasna/example/pull/4",
+        ].join("\n"),
+      },
+    }));
+    expect(unprefixedReviewerPool.status).toBe(0);
+    const unprefixedReviewerPoolValue = JSON.parse(unprefixedReviewerPool.stdout);
+    expect(unprefixedReviewerPoolValue.skipped).toBe(true);
+    expect(unprefixedReviewerPoolValue.reason).toContain("--github-reviewer");
+    expect(unprefixedReviewerPoolValue.prReviewRouting.reviewers).toEqual([]);
   });
 
   test("todos task event handler replaces stale generated workflow policy metadata", () => {
@@ -4183,6 +4249,87 @@ describe("loops CLI", () => {
     ]);
     expect(invalid.status).not.toBe(0);
     expect(invalid.stderr).toContain("--template must be todos-task-worker-verifier or task-lifecycle");
+  });
+
+  test("todos task lifecycle routes pass PR review routing evidence into follow-up guidance", () => {
+    const dataDir = freshDataDir("loops-cli-routes-task-lifecycle-pr-routing-");
+    const event = {
+      id: "evt-routes-task-lifecycle-pr-routing-0001",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-routes-task-lifecycle-pr-routing-0001",
+        title: "Route PR follow-up lifecycle",
+        description: [
+          "GitHub author is andrei-hasna",
+          "GitHub reviewer pool: andrei-hasna, kriptoburak",
+          "reviewDecision=REVIEW_REQUIRED",
+          "PR: https://github.com/hasna/example/pull/7",
+        ].join("\n"),
+        working_dir: "/tmp/open-codewith",
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const preview = runCli(dataDir, [
+      "--json",
+      "routes",
+      "preview",
+      "todos-task",
+      "--event-json",
+      JSON.stringify(event),
+      "--template",
+      "task-lifecycle",
+      "--worktree-mode",
+      "off",
+      "--sandbox",
+      "workspace-write",
+    ]);
+    expect(preview.status).toBe(0);
+    const value = JSON.parse(preview.stdout);
+    expect(value.prReviewRouting).toMatchObject({
+      required: true,
+      allowed: true,
+      author: "andrei-hasna",
+      selectedReviewer: "kriptoburak",
+    });
+    expect(value.invocation.scope.prReviewRouting).toMatchObject({
+      author: "andrei-hasna",
+      selectedReviewer: "kriptoburak",
+    });
+    const stepsById = Object.fromEntries(value.workflow.steps.map((step: { id: string }) => [step.id, step])) as Record<string, any>;
+    for (const id of ["triage", "planner", "worker", "verifier"]) {
+      const prompt = stepsById[id].target.prompt;
+      expect(prompt).toContain("PR-derived follow-up todos:");
+      expect(prompt).toContain("Source PR author evidence: GitHub author is andrei-hasna");
+      expect(prompt).toContain("Source PR reviewer evidence: GitHub reviewer pool: andrei-hasna, kriptoburak");
+      expect(prompt).toContain('"prReviewRouting":{"required":true');
+      expect(prompt).toContain('"selectedReviewer":"kriptoburak"');
+    }
+
+    const created = runCli(dataDir, [
+      "--json",
+      "routes",
+      "create",
+      "todos-task",
+      "--event-json",
+      JSON.stringify(event),
+      "--template",
+      "task-lifecycle",
+      "--worktree-mode",
+      "off",
+      "--sandbox",
+      "workspace-write",
+    ]);
+    expect(created.status).toBe(0);
+    const createdValue = JSON.parse(created.stdout);
+    expect(createdValue.invocation.templateId).toBe("task-lifecycle");
+    expect(createdValue.invocation.scope.prReviewRouting).toMatchObject({
+      author: "andrei-hasna",
+      reviewers: ["andrei-hasna", "kriptoburak"],
+      selectedReviewer: "kriptoburak",
+    });
   });
 
   test("task lifecycle routes can queue bounded PR handoff from worker artifacts", () => {
