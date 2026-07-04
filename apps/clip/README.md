@@ -48,11 +48,12 @@ clip list                           list recent shares
 clip show <id-or-slug>              show one share
 clip delete <id-or-slug>            soft-delete a share
 clip open <id-or-slug>              open the artifact or share URL locally
+clip open-recent                    open the most recent non-deleted share
 clip copy-link <id-or-slug>         copy the share URL to the clipboard
 clip serve                          start the self-hosted HTTP server
 clip config get|set|list            manage local config
 clip doctor                         inspect capture and clipboard capabilities
-clip status                         inspect storage and server defaults
+clip status                         show storage and platform status
 ```
 
 Screenshot and active-window support is best-effort. On macOS the CLI uses
@@ -75,7 +76,7 @@ Useful routes:
 - `GET /health`
 - `GET /api/status`
 - `GET /api/shares?limit=25`
-- `POST /api/shares` with JSON `{ "kind": "text", "text": "hello" }`
+- `POST /api/shares` with JSON `{ "text": "hello" }` (optional `title`; or `dataBase64` + `mimeType` for uploads)
 - `POST /api/capture` with JSON `{ "mode": "full" }`
 - `POST /api/clipboard` with JSON `{ "kind": "auto" }`
 - `GET /api/shares/:idOrSlug`
