@@ -1,4 +1,4 @@
-import { automationRecords, firstRouteField, hasTruthyField, recordFieldValues, routeFieldValues, tagsFromValue, taskEventRecords } from "./fields.js";
+import { automationRecords, canonicalRouteField, firstRouteField, hasTruthyField, routeFieldValues, tagsFromValue, taskEventRecords } from "./fields.js";
 import { splitList } from "./parse.js";
 import type { TodosTaskRouteOptions } from "./types.js";
 
@@ -106,10 +106,26 @@ function routeEvidenceText(records: Record<string, unknown>[]): string {
   ];
   const values: string[] = [];
   for (const record of records) {
-    for (const field of fields) values.push(...recordFieldValues(record, field));
+    for (const field of fields) values.push(...routeTextFieldValues(record, field));
     values.push(...tagsFromValue(record.tags ?? record.task_tags ?? record.taskTags));
   }
   return values.join("\n");
+}
+
+function textValuesFromUnknown(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap((entry) => textValuesFromUnknown(entry));
+  if (typeof value === "string" && value.trim()) return [value.trim()];
+  if (typeof value === "number" || typeof value === "boolean") return [String(value)];
+  return [];
+}
+
+function routeTextFieldValues(record: Record<string, unknown>, field: string): string[] {
+  const expected = canonicalRouteField(field);
+  const values: string[] = [];
+  for (const [key, value] of Object.entries(record)) {
+    if (canonicalRouteField(key) === expected) values.push(...textValuesFromUnknown(value));
+  }
+  return values;
 }
 
 function authorFromPrText(text: string): string | undefined {
@@ -124,6 +140,18 @@ function authorFromPrText(text: string): string | undefined {
     if (login) return login;
   }
   return undefined;
+}
+
+function reviewersFromPrText(text: string): string[] {
+  const reviewers: string[] = [];
+  const patterns = [
+    /\bgithub\s+reviewer\s+pool\s*(?:is|=|:)\s*([^\r\n]+)/gi,
+    /\bgithub\s+reviewers?\s*(?:are|is|=|:)\s*([^\r\n]+)/gi,
+  ];
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) reviewers.push(...(splitList(match[1]) ?? []));
+  }
+  return githubLogins(reviewers);
 }
 
 export function prReviewRoutingDecision(
@@ -161,6 +189,7 @@ export function prReviewRoutingDecision(
     ...(splitList(opts.githubReviewerPool) ?? []),
     ...PR_REVIEWER_FIELDS.flatMap((field) => routeFieldValues(records, field)),
     ...PR_REVIEWER_POOL_FIELDS.flatMap((field) => routeFieldValues(records, field)),
+    ...reviewersFromPrText(text),
   ]);
   const selectedReviewer = author
     ? reviewers.find((reviewer) => reviewer.toLowerCase() !== author.toLowerCase())

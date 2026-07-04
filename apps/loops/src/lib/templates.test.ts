@@ -183,6 +183,32 @@ describe("prompt fragment composition", () => {
     expect(planner).toContain("openloops:planner=blocked task=task-1200 event=evt-9");
   });
 
+  test("lifecycle prompts propagate PR review routing evidence to follow-up todos", () => {
+    const lifecycle = renderTaskLifecycleWorkflow({
+      taskId: "task-pr-route",
+      projectPath: repoPath,
+      worktreeRoot,
+      prReviewRouting: {
+        required: true,
+        allowed: true,
+        author: "andrei-hasna",
+        reviewers: ["andrei-hasna", "kriptoburak"],
+        selectedReviewer: "kriptoburak",
+        signals: ["review-required-text"],
+      },
+    });
+    const prompts = ["triage", "planner", "worker", "verifier"].map((id) => agentTargetOf(stepById(lifecycle, id)).prompt);
+    for (const prompt of prompts) {
+      expect(prompt).toContain("PR-derived follow-up todos:");
+      expect(prompt).toContain("Source PR author evidence: GitHub author is andrei-hasna");
+      expect(prompt).toContain("Source PR reviewer evidence: GitHub reviewer pool: andrei-hasna, kriptoburak");
+      expect(prompt).toContain("GitHub author is <login>");
+      expect(prompt).toContain("GitHub reviewer pool: <login>, <login>");
+      expect(prompt).toContain('"prReviewRouting":{"required":true');
+      expect(prompt).toContain('"selectedReviewer":"kriptoburak"');
+    }
+  });
+
   test("verifier runtime guidance reflects the idle watchdog configuration", () => {
     const defaults = renderTodosTaskWorkerVerifierWorkflow({ taskId: "t", projectPath: plainPath });
     const defaultVerifier = agentTargetOf(stepById(defaults, "verifier"));
