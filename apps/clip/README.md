@@ -29,13 +29,13 @@ clip capture full --json
 clip clipboard --json
 clip share text "handoff note" --title "Note" --json
 clip share file ./screenshot.png --json
-clip list
+clip list --json
 clip show <id-or-slug> --json
 clip copy-link <id-or-slug>
 clip serve --host 0.0.0.0 --port 3741 --base-url http://192.168.1.20:3741
 ```
 
-`--json` is compact and parseable for agents.
+`--json` is a global option on every subcommand; output is compact JSON for agents.
 
 ## CLI
 
