@@ -1004,6 +1004,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["okr", "strategy", "goals"],
   },
   {
+    name: "yousign",
+    displayName: "Yousign",
+    description: "Electronic signature and document signing API",
+    category: "Business Tools",
+    tags: ["esign", "documents", "signatures", "contracts"],
+  },
+  {
     name: "yodiz",
     displayName: "Yodiz",
     description: "Agile project management and issue tracking",
