@@ -209,6 +209,22 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
+function codewithProfileCandidateFromLine(line: string): string | undefined {
+  const cols = line.trim().split(/\s+/);
+  if (cols[0] === "*") return cols[1];
+  return cols[0];
+}
+
+function codewithProfileForError(profile: string): string {
+  return /[\u0000-\u001F\u007F]/.test(profile) ? (JSON.stringify(profile) ?? profile) : profile;
+}
+
+function assertCodewithAuthProfileSupported(profile: string): void {
+  if (profile.includes("\0")) {
+    throw new Error(`codewith auth profile contains unsupported NUL byte: ${codewithProfileForError(profile)}`);
+  }
+}
+
 function metadataEnv(metadata: ExecutionMetadata): Record<string, string> {
   const env: Record<string, string> = {};
   if (metadata.loopId) env.LOOPS_LOOP_ID = metadata.loopId;
@@ -264,6 +280,9 @@ function commandSpec(target: ExecutableTarget, opts: ExecuteOptions): CommandSpe
     };
   }
   const agentTarget = target as AgentTarget;
+  if (agentTarget.provider === "codewith" && agentTarget.authProfile) {
+    assertCodewithAuthProfileSupported(agentTarget.authProfile);
+  }
   const adapter = providerAdapter(agentTarget.provider);
   const invocation = adapter.buildInvocation(agentTarget);
   return {
@@ -509,13 +528,16 @@ function remotePreflightScript(spec: CommandSpec, metadata: ExecutionMetadata): 
     );
   }
   if (spec.nativeAuthProfile?.provider === "codewith") {
+    const profileForError = codewithProfileForError(spec.nativeAuthProfile.profile);
     lines.push(
+      `__OPENLOOPS_CODEWITH_PROFILE=${shellQuote(spec.nativeAuthProfile.profile)}`,
+      "export __OPENLOOPS_CODEWITH_PROFILE",
       `__OPENLOOPS_CODEWITH_PROFILES="$(${shellQuote(spec.command)} profile list)" || {`,
       `  printf '%s\\n' ${shellQuote("codewith auth profile preflight failed")} >&2`,
       "  exit 1",
       "}",
-      `if ! printf '%s\\n' "$__OPENLOOPS_CODEWITH_PROFILES" | awk 'NR > 1 { print $1 }' | grep -Fx ${shellQuote(spec.nativeAuthProfile.profile)} >/dev/null; then`,
-      `  printf '%s\\n' ${shellQuote(`codewith auth profile not found: ${spec.nativeAuthProfile.profile}`)} >&2`,
+      `if ! printf '%s\\n' "$__OPENLOOPS_CODEWITH_PROFILES" | awk 'NR > 1 { candidate = ($1 == "*" ? $2 : $1); if (candidate == ENVIRON["__OPENLOOPS_CODEWITH_PROFILE"]) found = 1 } END { exit(found ? 0 : 1) }'; then`,
+      `  printf '%s\\n' ${shellQuote(`codewith auth profile not found: ${profileForError}`)} >&2`,
       "  exit 1",
       "fi",
     );
@@ -549,11 +571,11 @@ function assertCodewithProfileListed(
     (result.stdout || "")
       .split(/\r?\n/)
       .slice(1)
-      .map((line) => line.trim().split(/\s+/)[0])
+      .map(codewithProfileCandidateFromLine)
       .filter(Boolean),
   );
   if (!profiles.has(profile)) {
-    throw new Error(`codewith auth profile not found: ${profile}`);
+    throw new Error(`codewith auth profile not found: ${codewithProfileForError(profile)}`);
   }
 }
 
