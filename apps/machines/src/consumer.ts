@@ -92,6 +92,28 @@ export type {
   RoutingRow,
 } from "./agent-abstractions.js";
 export {
+  DEFAULT_DISPATCH_COMMAND,
+  DEFAULT_DISPATCH_PACKAGE_NAME,
+  DEFAULT_DISPATCH_SMOKE_MAX_OUTPUT_CHARS,
+  DEFAULT_DISPATCH_SMOKE_TIMEOUT_MS,
+  DISPATCH_FLEET_SMOKE_KIND,
+  getDispatchFleetSmoke,
+} from "./dispatch-smoke.js";
+export type {
+  DispatchFleetSmokeCommandEvidence,
+  DispatchFleetSmokeDaemonStatus,
+  DispatchFleetSmokeMachineRow,
+  DispatchFleetSmokeOptions,
+  DispatchFleetSmokePackageStatus,
+  DispatchFleetSmokeReport,
+  DispatchFleetSmokeResolvedTarget,
+  DispatchFleetSmokeRouteHealth,
+  DispatchFleetSmokeRouteMode,
+  DispatchFleetSmokeRunner,
+  DispatchFleetSmokeStatus,
+  DispatchFleetSmokeTargetInput,
+} from "./dispatch-smoke.js";
+export {
   listMachineProjectAssignments,
   projectAssignmentMutationArgs,
   projectAssignmentResourceId,

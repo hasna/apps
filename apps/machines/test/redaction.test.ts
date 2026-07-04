@@ -39,4 +39,22 @@ describe("redaction helpers", () => {
     expect(message).not.toContain("demo-node-01.tailnet.example");
     expect(message).toContain(REDACTED_VALUE);
   });
+
+  test("redacts common API key and bearer token shapes from free-form text", () => {
+    const samples = [
+      `sk-${"proj"}-abcdefghijklmnopqrstuvwxyz`,
+      `npm${"_"}abcdefghijklmnopqrstuvwxyz`,
+      `gh${"o"}_abcdefghijklmnopqrstuvwxyz123456`,
+      `ctx7sk${"-"}abcdefghijklmnopqrstuvwxyz`,
+      `xai${"-"}abcdefghijklmnopqrstuvwxyz`,
+      `AI${"za"}abcdefghijklmnopqrstuvwxyz123456`,
+      `${"secret"}-token:abcdef`,
+      "Bearer abcdefghijklmnopqrstuvwxyz",
+    ];
+    const raw = samples.join(" ");
+    const message = redactErrorMessage(raw);
+    expect(message).toContain(REDACTED_VALUE);
+    for (const sample of samples) expect(message).not.toContain(sample);
+    expect(message).not.toContain("Bearer abcdefghijklmnopqrstuvwxyz");
+  });
 });

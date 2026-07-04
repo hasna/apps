@@ -59,10 +59,12 @@ import { resolveScreenTarget, buildScreenCommand, buildScreenEnableCommand, reso
 import { buildSyncPlan, runSyncPlan } from "../commands/sync.js";
 import { getStatus } from "../commands/status.js";
 import {
+  buildHeartbeatCollectorCommand,
   collectHeartbeats,
   HEARTBEAT_COLLECT_MUTATION_OPERATION,
   heartbeatCollectMutationArgs,
   heartbeatCollectResourceId,
+  type HeartbeatCollectorCommandPlan,
   type HeartbeatCollectResult,
 } from "../commands/heartbeat.js";
 import { repairWorkspaceManifestMappings, type WorkspaceManifestRepairResult } from "../commands/workspace.js";
@@ -104,6 +106,14 @@ import {
   type FleetRoutingReport,
   type MachineHealthReport,
 } from "../agent-abstractions.js";
+import {
+  DEFAULT_DISPATCH_COMMAND,
+  DEFAULT_DISPATCH_PACKAGE_NAME,
+  DEFAULT_DISPATCH_SMOKE_MAX_OUTPUT_CHARS,
+  DEFAULT_DISPATCH_SMOKE_TIMEOUT_MS,
+  getDispatchFleetSmoke,
+  type DispatchFleetSmokeReport,
+} from "../dispatch-smoke.js";
 import {
   getFleetOpsCheck,
   parseFleetOpsTmuxExpectation,
@@ -447,6 +457,25 @@ function renderFleetOpsCheck(result: FleetOpsCheck): string {
   ].filter(Boolean).join("\n");
 }
 
+function renderDispatchFleetSmoke(result: DispatchFleetSmokeReport): string {
+  const lines = result.machines.map((machine) =>
+    `${machine.target.display_name.padEnd(18)} ${machine.status.padEnd(7)} route:${machine.route_health.route}/${machine.route_health.confidence} package:${machine.package_status.version ?? "missing"} daemon-restart:${machine.daemon.restart_readiness.ready ? "ready" : "not-ready"}`
+  );
+  return [
+    renderKeyValueTable([
+      ["ok", String(result.summary.fail === 0)],
+      ["dryRun", String(result.dryRun)],
+      ["mutates", String(result.mutates)],
+      ["redaction", result.redaction.enabled ? result.redaction.marker : "disabled"],
+      ["machines", String(result.summary.total)],
+      ["package ok", String(result.summary.package_ok)],
+      ["daemon restart ready", String(result.summary.daemon_restart_ready)],
+      ["warnings", result.warnings.join(", ") || "none"],
+    ]),
+    ...lines,
+  ].join("\n");
+}
+
 function renderDbIntegrityReport(result: CriticalDbIntegrityReport): string {
   const taskActions = result.task_actions?.length
     ? ` task_upserts created=${result.task_actions.filter((action) => action.action === "created").length} existing=${result.task_actions.filter((action) => action.action === "existing").length} failed=${result.task_actions.filter((action) => action.action === "failed").length} skipped=${result.task_actions.filter((action) => action.action === "skipped").length}`
@@ -637,6 +666,10 @@ function renderHeartbeatCollect(results: HeartbeatCollectResult[]): string {
       : result.error ?? "unknown error";
     return `${result.machineId.padEnd(14)} ${marker} ${String(result.source ?? "unknown").padEnd(9)} ${detail}`;
   }).join("\n");
+}
+
+function renderHeartbeatCollectorCommand(plan: HeartbeatCollectorCommandPlan): string {
+  return plan.command;
 }
 
 function renderShellCommand(command: { program: string; args: string[]; sudo: boolean }): string {
@@ -1208,14 +1241,31 @@ addDaemonLifecycleCommand("status", "Plan a daemon service status command");
 addDaemonLifecycleCommand("logs", "Plan a daemon service log command");
 
 heartbeatCommand
+  .command("collector-command")
+  .description("Print the canonical trusted OpenLoops command for the heartbeat collector")
+  .option("--machine <id...>", "Machine identifier to include; repeat for low-latency peers; defaults to the local machine", collectOptionValues)
+  .option("--timeout-ms <ms>", "Per-machine command timeout in milliseconds")
+  .option("--machines-command <command>", "machines CLI command or absolute path", "machines")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { machine?: string[]; timeoutMs?: string; machinesCommand?: string; json?: boolean }, command: Command) => {
+    const plan = buildHeartbeatCollectorCommand({
+      machines: options.machine,
+      timeoutMs: options.timeoutMs ? parseIntegerOption(options.timeoutMs, "timeout-ms", { min: 1 }) : undefined,
+      machinesCommand: options.machinesCommand,
+    });
+    printCommandResult(plan, renderHeartbeatCollectorCommand(plan), wantsCommandJson(options, command));
+  });
+
+heartbeatCommand
   .command("collect")
   .description("Run one-shot machines-agent heartbeats over machine routes and import public rows locally")
   .option("--machine <id...>", "Machine identifier to collect; repeat for multiple machines", collectOptionValues, [])
   .option("--timeout-ms <ms>", "Per-machine command timeout in milliseconds")
   .option("--no-doctor-summary", "Skip doctor summary collection even when the remote agent supports it")
+  .option("--fail-on-error", "Exit non-zero when any selected heartbeat import fails", false)
   .option("--approval-token <token>", "Scoped mutation approval token")
   .option("-j, --json", "Print JSON output", false)
-  .action((options: { machine?: string[]; timeoutMs?: string; doctorSummary?: boolean; approvalToken?: string; json?: boolean }, command: Command) => {
+  .action((options: { machine?: string[]; timeoutMs?: string; doctorSummary?: boolean; failOnError?: boolean; approvalToken?: string; json?: boolean }, command: Command) => {
     const collectOptions = {
       machines: options.machine,
       timeoutMs: options.timeoutMs ? parseIntegerOption(options.timeoutMs, "timeout-ms", { min: 1 }) : undefined,
@@ -1230,6 +1280,9 @@ heartbeatCommand
       trustedLocalMutation: createTrustedSdkMutationApproval(),
     });
     printCommandResult(results, renderHeartbeatCollect(results), wantsCommandJson(options, command));
+    if (options.failOnError && results.some((result) => result.status !== "imported")) {
+      process.exitCode = 1;
+    }
   });
 
 manifestCommand.command("init").description("Create an empty fleet manifest")
@@ -1857,6 +1910,45 @@ program
   });
 
 const opsCommand = program.command("ops").description("Fleet operations diagnostics");
+
+program
+  .command("dispatch-smoke")
+  .description("Run a bounded dry-run @hasna/dispatch fleet package, route, and daemon-readiness smoke")
+  .option("--machine <id...>", "Limit to machine ids; comma-separated values are accepted")
+  .option("--ssh-machine <id...>", "Force direct SSH alias probing for selected machine ids")
+  .option("--include-apple01", "Include optional apple01 instead of ignoring it by default", false)
+  .option("--package <name>", "Package name to report", DEFAULT_DISPATCH_PACKAGE_NAME)
+  .option("--command <command>", "Package CLI command to probe", DEFAULT_DISPATCH_COMMAND)
+  .option("--expected-version <version>", "Expected package version")
+  .option("--timeout-ms <ms>", `Per-machine command timeout (default ${DEFAULT_DISPATCH_SMOKE_TIMEOUT_MS})`)
+  .option("--max-output-chars <n>", `Maximum redacted stdout/stderr chars per command (default ${DEFAULT_DISPATCH_SMOKE_MAX_OUTPUT_CHARS})`)
+  .option("--no-tailscale", "Skip tailscale status probing")
+  .option("--private-metadata", "Print private route targets where allowed by the API caller", false)
+  .option("-j, --json", "Print JSON output (default)", false)
+  .option("--text", "Print compact text summary instead of JSON", false)
+  .action((options: AgentApiCliOptions & {
+    sshMachine?: string[];
+    includeApple01?: boolean;
+    package?: string;
+    command?: string;
+    expectedVersion?: string;
+    timeoutMs?: string;
+    maxOutputChars?: string;
+  }) => {
+    const result = getDispatchFleetSmoke({
+      machineIds: parseMachineIdList(options.machine),
+      sshMachineIds: parseMachineIdList(options.sshMachine),
+      includeApple01: options.includeApple01,
+      packageName: options.package,
+      command: options.command,
+      expectedVersion: options.expectedVersion,
+      includeTailscale: options.tailscale !== false,
+      timeoutMs: options.timeoutMs ? parseIntegerOption(options.timeoutMs, "timeout-ms", { min: 1 }) : undefined,
+      maxOutputChars: options.maxOutputChars ? parseIntegerOption(options.maxOutputChars, "max-output-chars", { min: 1 }) : undefined,
+      privateMetadata: options.privateMetadata,
+    });
+    printJsonDefault(result, renderDispatchFleetSmoke(result), options);
+  });
 
 opsCommand
   .command("check")

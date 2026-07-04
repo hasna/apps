@@ -6,6 +6,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.0.63] - 2026-07-04
+
+### Added
+
+- Added `machines heartbeat collector-command` to emit the package-owned
+  OpenLoops heartbeat collector command instead of relying on ad hoc scheduled
+  shell snippets.
+- Added `machines heartbeat collect --fail-on-error` so scheduled collector
+  runs fail when any selected heartbeat import fails.
+
+### Changed
+
+- Documented that one-minute OpenLoops heartbeat collectors must use explicit
+  low-latency targets and must not schedule `machines topology --all --json`,
+  which only reads stale topology rows.
+
 ### Added
 
 - Root open-source release policy files: `SECURITY.md`, `CONTRIBUTING.md`, and

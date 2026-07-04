@@ -2,7 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { collectHeartbeats } from "../src/commands/heartbeat.js";
+import {
+  buildHeartbeatCollectorCommand,
+  collectHeartbeats,
+  DEFAULT_HEARTBEAT_COLLECTOR_TIMEOUT_MS,
+  HEARTBEAT_COLLECTOR_LOOP_NAME,
+} from "../src/commands/heartbeat.js";
 import { manifestAdd, manifestInit } from "../src/commands/manifest.js";
 import { createTrustedSdkMutationApproval } from "../src/commands/mutation-approval.js";
 import { closeDb, listHeartbeats } from "../src/db.js";
@@ -33,11 +38,86 @@ function setupTemp(name: string): string {
   return dir;
 }
 
+function setupEmptyTemp(name: string): string {
+  const dir = mkdtempSync(join(tmpdir(), name));
+  process.env.HASNA_MACHINES_DB_PATH = join(dir, "machines.db");
+  process.env.HASNA_MACHINES_MANIFEST_PATH = join(dir, "machines.json");
+  process.env.HASNA_MACHINES_MACHINE_ID = "spark01";
+  manifestInit();
+  return dir;
+}
+
 function approved<T extends Record<string, unknown>>(options: T): T & { trustedLocalMutation: ReturnType<typeof createTrustedSdkMutationApproval> } {
   return { ...options, trustedLocalMutation: createTrustedSdkMutationApproval() };
 }
 
 describe("heartbeat collection", () => {
+  test("builds the canonical trusted OpenLoops collector command from explicit machines", () => {
+    const dir = setupEmptyTemp("machines-heartbeat-collector-command-");
+    try {
+      manifestAdd({
+        id: "spark02",
+        platform: "linux",
+        workspacePath: "/home/hasna/workspace",
+      });
+      manifestAdd({
+        id: "spark01",
+        platform: "linux",
+        workspacePath: "/home/hasna/workspace",
+      });
+
+      const plan = buildHeartbeatCollectorCommand({ machines: ["spark02", "spark01"] });
+
+      expect(plan).toMatchObject({
+        kind: "heartbeat_collector_command",
+        loopName: HEARTBEAT_COLLECTOR_LOOP_NAME,
+        machines: ["spark01", "spark02"],
+        timeoutMs: DEFAULT_HEARTBEAT_COLLECTOR_TIMEOUT_MS,
+        trustedLocalMutationEnv: "HASNA_MACHINES_ALLOW_MUTATIONS=1",
+        warnings: [],
+      });
+      expect(plan.command).toBe("HASNA_MACHINES_ALLOW_MUTATIONS=1 machines heartbeat collect --machine spark01 --machine spark02 --timeout-ms 90000 --fail-on-error --json");
+      expect(plan.command).not.toContain("topology --all");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("defaults collector commands to the local machine to keep one-minute loops bounded", () => {
+    const dir = setupEmptyTemp("machines-heartbeat-collector-local-default-");
+    try {
+      manifestAdd({
+        id: "spark02",
+        platform: "linux",
+        workspacePath: "/home/hasna/workspace",
+      });
+
+      const plan = buildHeartbeatCollectorCommand();
+
+      expect(plan.machines).toEqual(["spark01"]);
+      expect(plan.command).toBe("HASNA_MACHINES_ALLOW_MUTATIONS=1 machines heartbeat collect --machine spark01 --timeout-ms 90000 --fail-on-error --json");
+      expect(plan.warnings).toContain("heartbeat_collector_defaulted_to_local_machine_only");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("builds deterministic collector commands from explicit machine options", () => {
+    const dir = setupEmptyTemp("machines-heartbeat-collector-explicit-");
+    try {
+      const plan = buildHeartbeatCollectorCommand({
+        machines: ["spark02", "spark01", "spark02", "  "],
+        timeoutMs: 12_000,
+        machinesCommand: "/opt/machines/bin/machines",
+      });
+
+      expect(plan.machines).toEqual(["spark01", "spark02"]);
+      expect(plan.command).toBe("HASNA_MACHINES_ALLOW_MUTATIONS=1 /opt/machines/bin/machines heartbeat collect --machine spark01 --machine spark02 --timeout-ms 12000 --fail-on-error --json");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("requires scoped SDK mutation approval before route execution", () => {
     const dir = setupTemp("machines-heartbeat-approval-");
     const calls: string[] = [];

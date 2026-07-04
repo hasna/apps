@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -48,6 +48,7 @@ test("exports expected MCP tool surface", () => {
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_routing");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_command_matrix");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_loop_preflight");
+  expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_dispatch_fleet_smoke");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_route_resolve");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_workspace_resolve");
   expect(MACHINE_MCP_TOOL_NAMES).toContain("machines_friendly_name_get");
@@ -68,6 +69,75 @@ test("exports expected MCP tool surface", () => {
   expect(MACHINE_MCP_TOOL_NAMES).not.toContain("webhooks");
   expect(MACHINE_MCP_TOOL_NAMES.filter((name) => /^(events|hasna_events|webhooks)(_|$)/.test(name))).toEqual([]);
   expect(createMcpServer("0.0.1")).toBeDefined();
+});
+
+test("MCP dispatch fleet smoke is read-only and redacted", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "machines-mcp-dispatch-smoke-"));
+  const binDir = join(dir, "bin");
+  const marker = join(dir, "restart-called");
+  const previousPath = process.env.PATH;
+  const syntheticSecret = `${"secret"}-token:abcdef`;
+  process.env["HASNA_MACHINES_MANIFEST_PATH"] = join(dir, "machines.json");
+  process.env["HASNA_MACHINES_DB_PATH"] = join(dir, "machines.db");
+  process.env["HASNA_MACHINES_MACHINE_ID"] = "spark02";
+  try {
+    const dispatch = join(binDir, "dispatch");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(dispatch, `#!/usr/bin/env bash
+set -euo pipefail
+if [ "$1" = "--version" ]; then
+  echo "@hasna/dispatch 0.0.22 ${syntheticSecret}"
+  exit 0
+fi
+if [ "$1" = "daemon" ] && [ "$2" = "status" ] && [ "$3" = "--json" ]; then
+  echo '{"running":true,"health":"alive","detail":"Bearer abcdefghijklmnopqrstuvwxyz"}'
+  exit 0
+fi
+if [ "$1" = "daemon" ] && [ "$2" = "restart" ]; then
+  touch ${JSON.stringify(marker)}
+  exit 99
+fi
+exit 2
+`);
+    chmodSync(dispatch, 0o755);
+    process.env.PATH = `${binDir}:${previousPath ?? ""}`;
+
+    const server = createMcpServer("0.0.1");
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "dispatch-smoke-test", version: "0.0.1" });
+
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    try {
+      const result = await client.callTool({
+        name: "machines_dispatch_fleet_smoke",
+        arguments: {
+          machine_ids: ["local"],
+          include_tailscale: false,
+          expected_version: "0.0.22",
+        },
+      });
+      const text = (result.content as Array<{ type: string; text: string }>)[0]?.text;
+      const payload = JSON.parse(text);
+      expect(payload).toMatchObject({
+        kind: "dispatch_fleet_smoke",
+        dryRun: true,
+        mutates: false,
+        summary: { total: 1, fail: 0, package_ok: 1, daemon_restart_ready: 1 },
+      });
+      expect(JSON.stringify(payload)).not.toContain(syntheticSecret);
+      expect(JSON.stringify(payload)).not.toContain("Bearer abcdefghijklmnopqrstuvwxyz");
+      expect(JSON.stringify(payload)).toContain("[redacted]");
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  } finally {
+    process.env.PATH = previousPath;
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("MCP BrowserPlan fleet tool exposes target machines and operation hooks", async () => {

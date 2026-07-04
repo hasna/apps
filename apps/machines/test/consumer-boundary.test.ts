@@ -98,6 +98,7 @@ describe("consumer entrypoint boundary", () => {
           getFleetLoopPreflight,
           getFleetMachineHealth,
           getFleetRouting,
+          getDispatchFleetSmoke,
           getMachineDetails,
           listMachineTrashPolicies,
           resolveNoteMachineContext,
@@ -115,6 +116,7 @@ describe("consumer entrypoint boundary", () => {
           has_fleet_routing: typeof getFleetRouting === "function",
           has_command_matrix: typeof getCommandMatrix === "function",
           has_loop_preflight: typeof getFleetLoopPreflight === "function",
+          has_dispatch_fleet_smoke: typeof getDispatchFleetSmoke === "function",
           has_machine_details: typeof getMachineDetails === "function",
           has_note_context: typeof resolveNoteMachineContext === "function",
           has_trash_policies: typeof listMachineTrashPolicies === "function",
@@ -148,6 +150,7 @@ describe("consumer entrypoint boundary", () => {
         has_fleet_routing: true,
         has_command_matrix: true,
         has_loop_preflight: true,
+        has_dispatch_fleet_smoke: true,
         has_machine_details: true,
         has_note_context: true,
         has_trash_policies: true,
@@ -175,6 +178,7 @@ describe("consumer entrypoint boundary", () => {
           fleet_routing: true,
           command_matrix: true,
           loop_preflight: true,
+          dispatch_fleet_smoke: true,
         },
       });
     } finally {

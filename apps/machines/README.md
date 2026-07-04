@@ -158,17 +158,27 @@ machines loop-preflight --machine control,worker --cmd 'bun test' --no-tailscale
 machines machine-health --project open-machines --repo open-machines
 machines routing --machine worker
 machines command-matrix --machine worker --cmd 'bun run build'
+machines dispatch-smoke --json
 machines ops check --all --expect-machine spark01,spark02,apple03 --text
 ```
 
 The matching SDK exports are `getFleetLoopPreflight()`,
-`getFleetMachineHealth()`, `getFleetRouting()`, and `getCommandMatrix()`.
+`getFleetMachineHealth()`, `getFleetRouting()`, `getCommandMatrix()`, and
+`getDispatchFleetSmoke()`.
 The matching MCP tools are `machines_loop_preflight`,
-`machines_machine_health`, `machines_routing`, and
-`machines_command_matrix`. All four return dry-run planning/status envelopes
-with `schema_version`, `kind`, `pagination`, compact per-machine rows,
-`artifacts`/detail refs for raw inspection, and `warnings`; they do not execute
-the planned loop command.
+`machines_machine_health`, `machines_routing`, `machines_command_matrix`, and
+`machines_dispatch_fleet_smoke`. The loop/health/routing/matrix reports include
+`pagination`, `artifacts`/detail refs, compact per-machine rows, and warnings;
+the dispatch smoke report uses a fixed bounded target set and includes
+per-machine package, route, and daemon-readiness rows.
+
+`machines dispatch-smoke` is a no-mutation diagnostic for open-dispatch
+self-healing. It checks the default affected fleet (`local`, `spark01`,
+`spark02` through a direct SSH alias when applicable, and `apple03`) while
+ignoring `apple01` unless explicitly requested. The JSON envelope includes
+`dryRun=true`, `mutates=false`, redaction metadata, per-machine route health,
+installed `@hasna/dispatch` command/version status, daemon status output, and
+daemon restart readiness without running the mutating restart command.
 
 For `loop_preflight`, top-level `ok` means every machine in the current
 selection/page is ready. Candidate schedulers that only need one usable target
@@ -632,6 +642,7 @@ OpenMachines SQLite database:
 
 ```bash
 machines heartbeat collect --machine spark02 --machine machine001 --json
+machines heartbeat collector-command --machine spark01 --machine spark02
 ```
 
 This runs `machines-agent --once` on each target using the normal route
@@ -642,6 +653,21 @@ instead of its fleet id, declare that hostname in manifest
 `metadata.heartbeatAliases`; route fields such as `hostname`, `tailscaleName`,
 and `sshAddress` are not trusted as heartbeat identity. The collector still
 stores the canonical fleet id.
+
+OpenLoops heartbeat collector loops should install the command emitted by
+`machines heartbeat collector-command`. Pass explicit low-latency collector
+targets for one-minute loops; without `--machine`, the planner defaults to the
+local machine only so a slow all-fleet collection cannot outlive the heartbeat
+freshness window. The emitted command uses a 90000ms per-machine timeout,
+fails the loop run when any selected import fails, and includes the trusted
+local mutation environment for the scheduled collector:
+
+```bash
+HASNA_MACHINES_ALLOW_MUTATIONS=1 machines heartbeat collect --machine spark01 --machine spark02 --timeout-ms 90000 --fail-on-error --json
+```
+
+Do not schedule `machines topology --all --json` as the heartbeat collector; it
+only reads existing topology rows and does not import fresh heartbeat rows.
 
 Service lifecycle commands are dry-run plans by default and support macOS
 `launchd` plus Linux `systemd` user or system services:

@@ -3,7 +3,11 @@ import { readManifest } from "../manifests.js";
 import { redactErrorMessage } from "../redaction.js";
 import { runMachineCommand, type MachineCommandRunner } from "../remote.js";
 import type { MachineManifest } from "../types.js";
-import { assertSdkMutationApproved, type SdkMutationApprovalOptions } from "./mutation-approval.js";
+import {
+  assertSdkMutationApproved,
+  MUTATION_APPROVAL_FLAG_ENV,
+  type SdkMutationApprovalOptions,
+} from "./mutation-approval.js";
 
 export interface HeartbeatCollectOptions extends SdkMutationApprovalOptions {
   machines?: string[];
@@ -22,6 +26,24 @@ export interface HeartbeatCollectResult {
 }
 
 export const HEARTBEAT_COLLECT_MUTATION_OPERATION = "machines_heartbeat_collect";
+export const HEARTBEAT_COLLECTOR_LOOP_NAME = "machine-openmachines-heartbeat-collector";
+export const DEFAULT_HEARTBEAT_COLLECTOR_TIMEOUT_MS = 90_000;
+
+export interface HeartbeatCollectorCommandOptions {
+  machines?: string[];
+  timeoutMs?: number;
+  machinesCommand?: string;
+}
+
+export interface HeartbeatCollectorCommandPlan {
+  kind: "heartbeat_collector_command";
+  loopName: string;
+  command: string;
+  machines: string[];
+  timeoutMs: number;
+  trustedLocalMutationEnv: string;
+  warnings: string[];
+}
 
 export function heartbeatCollectMutationArgs(options: Pick<HeartbeatCollectOptions, "machines" | "timeoutMs" | "doctorSummary"> = {}): Record<string, unknown> {
   return {
@@ -40,6 +62,53 @@ function defaultMachineIds(): string[] {
   const ids = new Set<string>([getLocalMachineId()]);
   for (const machine of readManifest().machines) ids.add(machine.id);
   return [...ids].sort();
+}
+
+function uniqueSortedMachineIds(machineIds: string[]): string[] {
+  return [...new Set(machineIds.map((machine) => machine.trim()).filter(Boolean))].sort();
+}
+
+function defaultHeartbeatCollectorMachineIds(): string[] {
+  return uniqueSortedMachineIds([getLocalMachineId()]);
+}
+
+function shellArg(value: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value)
+    ? value
+    : `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+export function buildHeartbeatCollectorCommand(options: HeartbeatCollectorCommandOptions = {}): HeartbeatCollectorCommandPlan {
+  const explicitMachineIds = options.machines ? uniqueSortedMachineIds(options.machines) : [];
+  const machines = explicitMachineIds.length > 0 ? explicitMachineIds : defaultHeartbeatCollectorMachineIds();
+  const timeoutMs = options.timeoutMs ?? DEFAULT_HEARTBEAT_COLLECTOR_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 1) {
+    throw new Error("heartbeat collector timeoutMs must be a positive finite number");
+  }
+  const machinesCommand = options.machinesCommand?.trim() || "machines";
+  const collectArgs = [
+    "heartbeat",
+    "collect",
+    ...machines.flatMap((machine) => ["--machine", machine]),
+    "--timeout-ms",
+    String(Math.floor(timeoutMs)),
+    "--fail-on-error",
+    "--json",
+  ];
+  const collectCommand = [machinesCommand, ...collectArgs].map(shellArg).join(" ");
+  const warnings: string[] = [];
+  if (explicitMachineIds.length === 0) warnings.push("heartbeat_collector_defaulted_to_local_machine_only");
+  if (machines.length > 2) warnings.push("heartbeat_collector_many_machines_may_exceed_freshness_ttl");
+
+  return {
+    kind: "heartbeat_collector_command",
+    loopName: HEARTBEAT_COLLECTOR_LOOP_NAME,
+    command: `${MUTATION_APPROVAL_FLAG_ENV}=1 ${collectCommand}`,
+    machines,
+    timeoutMs: Math.floor(timeoutMs),
+    trustedLocalMutationEnv: `${MUTATION_APPROVAL_FLAG_ENV}=1`,
+    warnings,
+  };
 }
 
 function metadataStrings(metadata: Record<string, unknown> | undefined, key: string): string[] {
