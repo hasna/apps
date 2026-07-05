@@ -1004,6 +1004,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["monitoring", "uptime", "performance"],
   },
   {
+    name: "windmill-api-platform",
+    displayName: "Windmill Api Platform",
+    description: "Windmill Api Platform API integration",
+    category: "Developer Tools",
+    tags: ["api", "integration", "automation"],
+  },
+  {
     name: "xata",
     displayName: "Xata",
     description: "Serverless database with search and analytics",
