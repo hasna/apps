@@ -1514,6 +1514,95 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
       }
     ],
     "source": "builtin"
+  },
+  {
+    "id": "routing-remediation",
+    "name": "Routing Remediation",
+    "description": "Run a bounded routing-doctor remediation workflow: deterministic preflight, safe Todos CLI repair, blocker task filing, and adversarial verification.",
+    "kind": "workflow",
+    "variables": [
+      {
+        "name": "projectPath",
+        "required": true,
+        "description": "Repository/project path used for workflow evidence artifacts."
+      },
+      {
+        "name": "todosProjectPath",
+        "description": "Todos storage project path to inspect and repair; defaults to projectPath."
+      },
+      {
+        "name": "doctorJsonPath",
+        "description": "Optional existing todos doctor routing --json output to consume instead of running a fresh dry-run."
+      },
+      {
+        "name": "doctorProject",
+        "description": "Optional todos doctor routing --project scope (id, slug, or path)."
+      },
+      {
+        "name": "tag",
+        "description": "Optional todos doctor routing --tag scope."
+      },
+      {
+        "name": "status",
+        "default": "pending,in_progress",
+        "description": "Comma-separated task statuses for the doctor."
+      },
+      {
+        "name": "shard",
+        "description": "Optional deterministic shard such as 0/6."
+      },
+      {
+        "name": "limit",
+        "description": "Optional maximum tasks inspected by the doctor."
+      },
+      {
+        "name": "maxRepairs",
+        "default": "25",
+        "description": "Capacity gate: maximum safe_auto findings allowed in one apply run."
+      },
+      {
+        "name": "dryRun",
+        "default": "true",
+        "description": "When true, perform preflight/reporting only and do not apply repairs."
+      },
+      {
+        "name": "idempotencyKey",
+        "description": "Stable key used for evidence paths, undo records, and dedupe fingerprints."
+      },
+      {
+        "name": "evidenceDir",
+        "description": "Directory for doctor, preflight, apply, and recheck JSON artifacts."
+      },
+      {
+        "name": "undoDir",
+        "description": "Directory for todos doctor routing --undo-record output."
+      },
+      {
+        "name": "authProfilePool",
+        "description": "Comma-separated Codewith profiles for worker/verifier rotation."
+      },
+      {
+        "name": "provider",
+        "default": "codewith",
+        "description": "Agent provider."
+      },
+      {
+        "name": "sandbox",
+        "default": "workspace-write",
+        "description": "Provider sandbox mode."
+      },
+      {
+        "name": "worktreeMode",
+        "default": "required",
+        "description": "Worktree isolation mode."
+      },
+      {
+        "name": "verifierIdleTimeoutMs",
+        "default": "900000",
+        "description": "Verifier idle watchdog in milliseconds; use none/off to disable when an external heartbeat exists."
+      }
+    ],
+    "source": "builtin"
   }
 ]"
 `;
