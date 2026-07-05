@@ -521,6 +521,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["fitness", "running", "cycling", "activities", "sports"],
   },
   {
+    name: "typesense",
+    displayName: "Typesense",
+    description: "Open-source search engine for full-text, faceted, and vector search",
+    category: "Data & Analytics",
+    tags: ["search", "indexing", "vector", "full-text"],
+  },
+  {
     name: "uproc",
     displayName: "uProc",
     description: "Data processing and enrichment tools",
