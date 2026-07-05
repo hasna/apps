@@ -955,6 +955,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["testing", "test management", "qa", "reporting", "software quality"],
   },
   {
+    name: "tricentis",
+    displayName: "Tricentis",
+    description: "Test automation platform for continuous testing and quality engineering",
+    category: "Developer Tools",
+    tags: ["testing", "qa", "automation"],
+  },
+  {
     name: "textkit",
     displayName: "TextKit",
     description: "Text processing and manipulation API for formatting and transforming text",
