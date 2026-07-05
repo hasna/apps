@@ -388,6 +388,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["nft", "blockchain", "digital collectibles", "tokens", "web3"],
   },
   {
+    name: "uniswap-api",
+    displayName: "Uniswap API",
+    description: "DeFi token swaps, quotes, approvals, and bridgeable tokens via Uniswap Trade API",
+    category: "Commerce & Finance",
+    tags: ["crypto", "defi", "swap", "dex"],
+  },
+  {
     name: "whal3s",
     displayName: "Whal3s",
     description: "NFT utility and Web3 engagement platform",
