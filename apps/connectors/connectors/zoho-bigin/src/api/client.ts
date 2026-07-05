@@ -34,6 +34,7 @@ export class ZohoBiginClient {
 
   async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
     const { method = 'GET', body, params } = options;
+    const normalizedMethod = method.toUpperCase();
     const url = new URL(`${this.baseUrl}${path.startsWith('/') ? path : `/${path}`}`);
 
     if (params) {
@@ -50,8 +51,8 @@ export class ZohoBiginClient {
       Accept: 'application/json',
     };
 
-    const fetchOptions: RequestInit = { method, headers };
-    if (body !== undefined && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    const fetchOptions: RequestInit = { method: normalizedMethod, headers };
+    if (body !== undefined && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(normalizedMethod)) {
       fetchOptions.body = JSON.stringify(body);
     }
 

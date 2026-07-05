@@ -19,6 +19,7 @@ import {
   profileExists,
   loadProfile,
 } from '../utils/config';
+import { normalizeRecordPayload } from '../utils/records';
 import type { OutputFormat } from '../utils/output';
 import { success, error, info, print } from '../utils/output';
 
@@ -227,8 +228,8 @@ contactsCmd
 contactsCmd
   .command('add')
   .description('Add one or more contacts')
-  .option('--json <payload>', 'JSON array of contact records')
-  .option('--file <path>', 'Path to JSON file with contact records')
+  .option('--json <payload>', 'JSON object or array of contact records')
+  .option('--file <path>', 'Path to JSON file with a contact object or array')
   .option('--last-name <name>', 'Last name (when not using --json/--file)')
   .option('--first-name <name>', 'First name')
   .option('--email <email>', 'Email')
@@ -238,9 +239,9 @@ contactsCmd
       let records: Record<string, unknown>[];
 
       if (opts.json) {
-        records = JSON.parse(opts.json);
+        records = normalizeRecordPayload(JSON.parse(opts.json));
       } else if (opts.file) {
-        records = JSON.parse(readFileSync(opts.file, 'utf-8'));
+        records = normalizeRecordPayload(JSON.parse(readFileSync(opts.file, 'utf-8')));
       } else {
         if (!opts.lastName) {
           error('Provide --last-name or --json/--file with contact records');

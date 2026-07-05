@@ -101,6 +101,18 @@ describe('ZohoBiginClient', () => {
     const client = new ZohoBiginClient({ token: 'bad' });
     await expect(client.request('/Contacts')).rejects.toBeInstanceOf(ZohoBiginApiError);
   });
+
+  test('normalizes lowercase methods before sending a body', async () => {
+    const recorded = installFetch(() => ({ data: [{ id: '1' }] }));
+    const client = new ZohoBiginClient({ token: 'token' });
+    await client.request('/Contacts', {
+      method: 'post',
+      body: { data: [{ Last_Name: 'Doe' }] },
+    });
+
+    expect(recorded[0]!.method).toBe('POST');
+    expect(JSON.parse(recorded[0]!.body!)).toEqual({ data: [{ Last_Name: 'Doe' }] });
+  });
 });
 
 describe('ZohoBigin API methods', () => {
