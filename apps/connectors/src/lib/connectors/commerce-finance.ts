@@ -422,4 +422,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Commerce & Finance",
     tags: ["accounting", "invoicing", "zoho"],
   },
+  {
+    name: "zoho-inventory",
+    displayName: "Zoho Inventory",
+    description: "Inventory management for items, orders, and invoices",
+    category: "Commerce & Finance",
+    tags: ["inventory", "zoho", "orders"],
+  },
 ];
