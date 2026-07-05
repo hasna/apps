@@ -11,6 +11,7 @@ import type { Store } from "./store.js";
 export type RunFailureClassification =
   | "rate_limit"
   | "auth"
+  | "provider_unavailable"
   | "model_not_found"
   | "context_length"
   | "schema_response_format"
@@ -27,6 +28,7 @@ export interface RunFailureSignal {
   classification: RunFailureClassification;
   fingerprint: string;
   evidence: {
+    summary?: string;
     error?: string;
     stdout?: string;
     stderr?: string;
@@ -53,7 +55,7 @@ export interface RecommendedTaskUpsert {
 }
 
 export interface LoopExpectationResult {
-  loop: Pick<Loop, "id" | "name" | "status" | "nextRunAt">;
+  loop: Pick<Loop, "id" | "name" | "status" | "nextRunAt" | "retryScheduledFor">;
   ok: boolean;
   check: {
     id: "latest-run-succeeded" | "route-functional-health";
@@ -173,6 +175,7 @@ const MIN_STALE_RUNNING_MS = 10 * 60_000;
 const CLASSIFICATIONS: RunFailureClassification[] = [
   "rate_limit",
   "auth",
+  "provider_unavailable",
   "model_not_found",
   "context_length",
   "schema_response_format",
@@ -197,7 +200,7 @@ function redactedEvidence(value: string | undefined): string | undefined {
 }
 
 function searchableText(run: LoopRun): string {
-  return [run.error, run.stderr, run.stdout].filter(Boolean).join("\n").toLowerCase();
+  return [run.error, run.stderr, run.stdout].filter(Boolean).join("\n");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -228,13 +231,34 @@ function stableScanFingerprint(parts: string[]): string {
   return `openloops:health-scan:${stableFingerprint(parts)}`;
 }
 
-function stableFailureFingerprint(run: LoopRun, classification: RunFailureClassification): string {
+function safeHost(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  let host = value.trim().replace(/^[a-z]+:\/\//i, "").split(/[/:?#\s)"'\\]+/)[0] ?? "";
+  host = host.replace(/^\[|\]$/g, "");
+  return /^[a-z0-9.-]+$/i.test(host) ? host.toLowerCase() : undefined;
+}
+
+function isCursorHost(host: string | undefined): boolean {
+  return host === "cursor.sh" || Boolean(host?.endsWith(".cursor.sh"));
+}
+
+function providerUnavailableSummary(rawText: string): string | undefined {
+  const dns = /\bgetaddrinfo\s+(EAI_AGAIN|ENOTFOUND)\s+([a-z0-9.-]+)/i.exec(rawText);
+  if (dns) {
+    const host = safeHost(dns[2]);
+    if (isCursorHost(host)) return `provider DNS lookup failed: ${dns[1]} ${host}`;
+  }
+  return undefined;
+}
+
+function stableFailureFingerprint(run: LoopRun, classification: RunFailureClassification, summary?: string): string {
+  const evidence = summary ?? (classification === "provider_unavailable" ? providerUnavailableSummary(searchableText(run)) : undefined) ?? run.error ?? run.stderr ?? run.stdout ?? "";
   return stableFingerprint([
     run.loopId,
     classification,
     String(run.status),
     String(run.exitCode ?? ""),
-    (run.error ?? run.stderr ?? run.stdout ?? "").replace(/\d{4}-\d{2}-\d{2}T\S+/g, "<timestamp>").slice(0, FINGERPRINT_EVIDENCE_CHARS),
+    evidence.replace(/\d{4}-\d{2}-\d{2}T\S+/g, "<timestamp>").slice(0, FINGERPRINT_EVIDENCE_CHARS),
   ]);
 }
 
@@ -522,14 +546,17 @@ function healthScanMarkdown(scan: LoopsHealthScan): string {
 
 export function classifyRunFailure(run: LoopRun): RunFailureSignal | undefined {
   if (run.status === "succeeded" || run.status === "running") return undefined;
-  const text = searchableText(run);
+  const rawText = searchableText(run);
+  const text = rawText.toLowerCase();
   let classification: RunFailureClassification = "unknown";
+  let summary: string | undefined;
   if (run.status === "timed_out") classification = "timeout";
   else if (run.status === "skipped" && /circuit breaker open/.test(text)) classification = "circuit_breaker";
   else if (run.status === "skipped" && /previous run still active/.test(text)) classification = "skipped_previous_active";
   else if (/runtime preflight failed|preflight failed|executable not found in path|none of required executables found|auth profile preflight failed|profile not found/.test(text)) classification = "preflight";
   else if (/rate limit|too many requests|429\b|quota exceeded/.test(text)) classification = "rate_limit";
   else if (/unauthorized|authentication|auth\b|api key|invalid token|permission denied|401\b|403\b/.test(text)) classification = "auth";
+  else if ((summary = providerUnavailableSummary(rawText))) classification = "provider_unavailable";
   else if (/model .*not found|model_not_found|unknown model|invalid model|404.*model/.test(text)) classification = "model_not_found";
   else if (/context length|context_length|context window|maximum context|token limit|too many tokens/.test(text)) classification = "context_length";
   else if (/response_format|json schema|schema validation|invalid schema|structured output/.test(text)) classification = "schema_response_format";
@@ -538,8 +565,9 @@ export function classifyRunFailure(run: LoopRun): RunFailureSignal | undefined {
 
   return {
     classification,
-    fingerprint: stableFailureFingerprint(run, classification),
+    fingerprint: stableFailureFingerprint(run, classification, summary),
     evidence: {
+      summary,
       error: redactedEvidence(run.error),
       stdout: redactedEvidence(run.stdout),
       stderr: redactedEvidence(run.stderr),
@@ -727,6 +755,14 @@ function targetRoute(loop: Loop): LoopExpectationResult["route"] {
   };
 }
 
+function expectationLoop(loop: Loop): LoopExpectationResult["loop"] {
+  return { id: loop.id, name: loop.name, status: loop.status, nextRunAt: loop.nextRunAt, retryScheduledFor: loop.retryScheduledFor };
+}
+
+function hasPendingRetry(loop: Loop, run: LoopRun): boolean {
+  return loop.status === "active" && loop.retryScheduledFor === run.scheduledFor && run.attempt < loop.maxAttempts;
+}
+
 function recommendedTask(loop: Loop, run: LoopRun, failure: RunFailureSignal, route: LoopExpectationResult["route"]): RecommendedTaskUpsert {
   const title = `BUG: open-loops loop failure - ${loop.name}`;
   const description = [
@@ -738,6 +774,7 @@ function recommendedTask(loop: Loop, run: LoopRun, failure: RunFailureSignal, ro
     `No-tmux routing: Do not dispatch or paste prompts into tmux panes; use task-triggered headless worker/verifier workflows only.`,
     route.cwd ? `Route cwd: ${route.cwd}` : undefined,
     route.provider ? `Provider: ${route.provider}` : undefined,
+    failure.evidence.summary ? `Summary: ${failure.evidence.summary}` : undefined,
     failure.evidence.error ? `Error:\n${failure.evidence.error}` : undefined,
     failure.evidence.stderr ? `Stderr:\n${failure.evidence.stderr}` : undefined,
   ].filter(Boolean).join("\n\n");
@@ -745,7 +782,7 @@ function recommendedTask(loop: Loop, run: LoopRun, failure: RunFailureSignal, ro
   // "loops" is the tag control-room consumers query on; without it the
   // auto-filed failure tasks had no consumer. Keep the legacy tags too.
   const tags = ["bug", "openloops", "loops", "loop-health", failure.classification];
-  const priority = failure.classification === "auth" || failure.classification === "rate_limit" ? "high" : "medium";
+  const priority = failure.classification === "auth" || failure.classification === "rate_limit" || failure.classification === "provider_unavailable" ? "high" : "medium";
   return {
     title,
     description,
@@ -780,7 +817,7 @@ export function expectationForLoop(store: Store, loop: Loop): LoopExpectationRes
   const route = targetRoute(loop);
   if (!latestRun) {
     return {
-      loop: { id: loop.id, name: loop.name, status: loop.status, nextRunAt: loop.nextRunAt },
+      loop: expectationLoop(loop),
       ok: true,
       check: { id: "latest-run-succeeded", status: "warn", message: "loop has no recorded runs yet" },
       route,
@@ -789,7 +826,7 @@ export function expectationForLoop(store: Store, loop: Loop): LoopExpectationRes
   const routeFailure = detectRouteFunctionalFailure(store, loop, latestRun);
   if (routeFailure) {
     return {
-      loop: { id: loop.id, name: loop.name, status: loop.status, nextRunAt: loop.nextRunAt },
+      loop: expectationLoop(loop),
       ok: false,
       check: { id: "route-functional-health", status: "fail", message: routeFailure.evidence.error ?? "route functional blocker detected" },
       latestRun: healthRun(latestRun),
@@ -800,7 +837,7 @@ export function expectationForLoop(store: Store, loop: Loop): LoopExpectationRes
   }
   if (latestRun.status === "succeeded") {
     return {
-      loop: { id: loop.id, name: loop.name, status: loop.status, nextRunAt: loop.nextRunAt },
+      loop: expectationLoop(loop),
       ok: true,
       check: { id: "latest-run-succeeded", status: "pass", message: "latest run succeeded" },
       latestRun: healthRun(latestRun),
@@ -813,7 +850,7 @@ export function expectationForLoop(store: Store, loop: Loop): LoopExpectationRes
     // a manual resume clears the pause, so the stale marker stops flagging.
     if (loop.status !== "paused") {
       return {
-        loop: { id: loop.id, name: loop.name, status: loop.status, nextRunAt: loop.nextRunAt },
+        loop: expectationLoop(loop),
         ok: true,
         check: { id: "latest-run-succeeded", status: "warn", message: "circuit breaker cleared by resume; awaiting next run" },
         latestRun: healthRun(latestRun),
@@ -821,7 +858,7 @@ export function expectationForLoop(store: Store, loop: Loop): LoopExpectationRes
       };
     }
     return {
-      loop: { id: loop.id, name: loop.name, status: loop.status, nextRunAt: loop.nextRunAt },
+      loop: expectationLoop(loop),
       ok: false,
       check: { id: "latest-run-succeeded", status: "fail", message: latestRun.error ?? "circuit breaker open; loop auto-paused" },
       latestRun: healthRun(latestRun),
@@ -830,8 +867,23 @@ export function expectationForLoop(store: Store, loop: Loop): LoopExpectationRes
       recommendedTask: recommendedTask(loop, latestRun, failure, route),
     };
   }
+  if (failure?.classification === "provider_unavailable" && hasPendingRetry(loop, latestRun)) {
+    const message = [
+      "provider unavailable/network failure; retry is scheduled",
+      loop.nextRunAt ? `next attempt at ${loop.nextRunAt}` : undefined,
+      failure.evidence.summary,
+    ].filter(Boolean).join("; ");
+    return {
+      loop: expectationLoop(loop),
+      ok: true,
+      check: { id: "latest-run-succeeded", status: "warn", message },
+      latestRun: healthRun(latestRun),
+      failure,
+      route,
+    };
+  }
   return {
-    loop: { id: loop.id, name: loop.name, status: loop.status, nextRunAt: loop.nextRunAt },
+    loop: expectationLoop(loop),
     ok: false,
     check: { id: "latest-run-succeeded", status: "fail", message: `latest run is ${latestRun.status}` },
     latestRun: healthRun(latestRun),

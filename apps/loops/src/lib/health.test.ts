@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { LoopRun } from "../types.js";
 import type { RunFailureClassification } from "./health.js";
+import { buildHealthReport, buildHealthScan, classifyRunFailure } from "./health.js";
 import { Store } from "./store.js";
-import { buildHealthScan, classifyRunFailure } from "./health.js";
 
 function run(patch: Partial<LoopRun>): LoopRun {
   return {
@@ -23,6 +23,7 @@ describe("loop health classification", () => {
     const cases: Array<[RunFailureClassification, Partial<LoopRun>]> = [
       ["rate_limit", { error: "429 too many requests" }],
       ["auth", { stderr: "invalid token" }],
+      ["provider_unavailable", { stderr: "Error: [unavailable] getaddrinfo EAI_AGAIN api2.cursor.sh" }],
       ["model_not_found", { error: "model gpt-x not found" }],
       ["context_length", { stderr: "maximum context length exceeded" }],
       ["schema_response_format", { error: "response_format json schema validation failed" }],
@@ -38,6 +39,45 @@ describe("loop health classification", () => {
       const signal = classifyRunFailure(run(patch));
       expect(signal?.classification).toBe(classification);
       expect(signal?.fingerprint).toMatch(/^[a-f0-9]{16}$/);
+    }
+  });
+
+  test("surfaces safe provider-unavailable evidence for Cursor DNS failures", () => {
+    const signal = classifyRunFailure(run({
+      error: "step cursor-inprogress-audit failed: process exited with code 1",
+      stderr: "Error: [unavailable] getaddrinfo EAI_AGAIN api2.cursor.sh",
+      exitCode: 1,
+    }));
+
+    expect(signal?.classification).toBe("provider_unavailable");
+    expect(signal?.evidence.summary).toBe("provider DNS lookup failed: EAI_AGAIN api2.cursor.sh");
+    expect(signal?.evidence.stderr).toMatch(/^\[redacted \d+ chars\]$/);
+    expect(signal?.fingerprint).toMatch(/^[a-f0-9]{16}$/);
+  });
+
+  test("does not broaden provider-unavailable classification to unrelated failures", () => {
+    const cases: Array<[RunFailureClassification, Partial<LoopRun>]> = [
+      ["auth", { stderr: "Error: unauthorized invalid token" }],
+      ["model_not_found", { error: "404 model not found" }],
+      ["model_not_found", { error: "[unavailable] model gpt-x not found" }],
+      ["model_not_found", { error: "[unavailable] model gpt-x not found api2.cursor.sh" }],
+      ["schema_response_format", { error: "json schema validation failed" }],
+      ["schema_response_format", { error: "[unavailable] json schema validation failed" }],
+      ["schema_response_format", { error: "[unavailable] json schema validation failed https://api2.cursor.sh" }],
+      ["node_init", { stderr: "Error [ERR_MODULE_NOT_FOUND]: Cannot find module" }],
+      ["node_init", { stderr: "[unavailable] Error [ERR_MODULE_NOT_FOUND]: Cannot find module" }],
+      ["node_init", { stderr: "[unavailable] Error [ERR_MODULE_NOT_FOUND]: Cannot find module api2.cursor.sh" }],
+      ["unknown", { error: "process exited with code 1" }],
+      ["unknown", { error: "[unavailable] process exited with code 1" }],
+      ["unknown", { error: "[unavailable] process exited with code 1 api2.cursor.sh" }],
+      ["unknown", { stderr: "network error" }],
+      ["unknown", { stderr: "socket hang up api2.cursor.sh" }],
+      ["unknown", { stderr: "Error: [unavailable] ECONNRESET api2.cursor.sh" }],
+      ["unknown", { stderr: "Error: [unavailable] getaddrinfo EAI_AGAIN github.com" }],
+    ];
+
+    for (const [classification, patch] of cases) {
+      expect(classifyRunFailure(run(patch))?.classification).toBe(classification);
     }
   });
 
@@ -165,6 +205,44 @@ describe("loop health classification", () => {
         loop: { id: loop.id, name: "preflight-loop" },
       });
       expect(scan.findings[0]?.recommendedTask?.futureNativeUpsert.command).toBe("todos task upsert");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("exhausted provider-unavailable failures remain unhealthy and routeable", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "cursor-dns-terminal",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "agent" },
+          maxAttempts: 1,
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "test", new Date("2026-01-01T00:00:00Z"));
+      expect(claim).toBeDefined();
+      store.finalizeRun(claim!.run.id, {
+        status: "failed",
+        finishedAt: "2026-01-01T00:00:01.000Z",
+        durationMs: 1_000,
+        stderr: "Error: [unavailable] getaddrinfo EAI_AGAIN api2.cursor.sh",
+        error: "process exited with code 1",
+        exitCode: 1,
+      }, {
+        claimedBy: "test",
+        now: new Date("2026-01-01T00:00:01Z"),
+      });
+
+      const report = buildHealthReport(store);
+      const expectation = report.expectations[0];
+      expect(report.ok).toBe(false);
+      expect(expectation?.ok).toBe(false);
+      expect(expectation?.failure?.classification).toBe("provider_unavailable");
+      expect(expectation?.recommendedTask?.priority).toBe("high");
+      expect(expectation?.recommendedTask?.description).toContain("Summary: provider DNS lookup failed: EAI_AGAIN api2.cursor.sh");
     } finally {
       store.close();
     }

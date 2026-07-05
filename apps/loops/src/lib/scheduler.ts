@@ -186,13 +186,14 @@ const MAX_RETRY_EXPONENT = 20;
 /**
  * Exponential retry backoff with jitter:
  * delay = retryDelayMs * 2^(attempt-1) * (0.5 + random), capped at 6h.
- * Failures classified as rate_limit/auth back off 4x harder, since hammering
- * a throttled or misconfigured provider only makes things worse.
+ * Failures classified as provider-gated back off 4x harder, since hammering
+ * a throttled, misconfigured, or unavailable provider only makes things worse.
  */
 export function retryBackoffDelayMs(loop: Loop, run: LoopRun, random: () => number = Math.random): number {
   const attempt = Math.max(1, run.attempt);
   const failure = classifyRunFailure(run);
-  const throttled = failure?.classification === "rate_limit" || failure?.classification === "auth";
+  const throttled =
+    failure?.classification === "rate_limit" || failure?.classification === "auth" || failure?.classification === "provider_unavailable";
   const growth = 2 ** Math.min(attempt - 1, MAX_RETRY_EXPONENT);
   const base = loop.retryDelayMs * growth * (throttled ? THROTTLED_RETRY_MULTIPLIER : 1);
   const jitter = 0.5 + random();
