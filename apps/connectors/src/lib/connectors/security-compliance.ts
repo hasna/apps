@@ -164,6 +164,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["security", "malware", "threat-intelligence"],
   },
   {
+    name: "wordfence",
+    displayName: "Wordfence",
+    description: "WordPress security platform for scans, firewall, and threat monitoring",
+    category: "Security & Compliance",
+    tags: ["wordpress", "security", "scans", "firewall"],
+  },
+  {
     name: "zscalerzia",
     displayName: "Zscaler ZIA",
     description: "Cloud-native internet access and security gateway",
