@@ -26,7 +26,7 @@ import {
 import { eventData, eventMetadata, slugSegment, stableSuffix, stringField, taskEventField, taskRouteEligibility } from "./fields.js";
 import { normalizeWorkflowForStorage, preflightStoredWorkflow, workflowSpecForPreflight } from "./gates.js";
 import { idleTimeoutDuration, listFromRepeatedOpts, timeoutDuration } from "./parse.js";
-import { prReviewRoutingDecision } from "./pr-review.js";
+import { prFingerprintFromTask, prReviewRoutingDecision } from "./pr-review.js";
 import {
   permissionModeFromOpts,
   providerAuthProfileFromOpts,
@@ -460,9 +460,16 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
   const sourceProjectIdempotencyPrefix = sourceTodosProjectPath
     ? normalizeRoutePath(sourceTodosProjectPath) ?? resolve(sourceTodosProjectPath)
     : undefined;
-  const idempotencyKey = sourceProjectIdempotencyPrefix
-    ? `todos-task:${sourceProjectIdempotencyPrefix}:${taskId}`
-    : `todos-task:${taskId}`;
+  // PR-subject tasks dedupe by GitHub owner/repo#number so the duplicate tasks
+  // the repos registry mints (one per local checkout of the same repo) collapse
+  // to a single work item instead of spawning a worker per checkout. Non-PR
+  // tasks keep the (source-path, task-id) key so unrelated tasks never collide.
+  const prFingerprint = prFingerprintFromTask(data, metadata);
+  const idempotencyKey = prFingerprint
+    ? `todos-task:pr:${prFingerprint}`
+    : sourceProjectIdempotencyPrefix
+      ? `todos-task:${sourceProjectIdempotencyPrefix}:${taskId}`
+      : `todos-task:${taskId}`;
   const idempotencySuffix = stableSuffix(idempotencyKey);
   const namePrefix = opts.namePrefix ?? "event:todos-task";
   const workflowName = `${namePrefix}:${taskId.slice(0, 8)}:${idempotencySuffix}:workflow`;
@@ -503,6 +510,11 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
         taskId,
         routeError: true,
         prReviewRouting,
+        // Explicit marker: the drain closes the source todos task on a definitive
+        // MERGED/CLOSED freshness skip so it stops re-skipping every tick.
+        ...(prReviewRouting.freshnessSkip
+          ? { freshnessSkip: true, prState: prReviewRouting.prState }
+          : {}),
       },
       human: `skipped task ${taskId}: ${prReviewRouting.reason}`,
     };

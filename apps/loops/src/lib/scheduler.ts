@@ -38,6 +38,23 @@ export interface ClaimDueRunsResult extends TickResult {
   claims: ClaimedLoopRun[];
 }
 
+/**
+ * Scheduler concurrency lanes. Command-target loops are typically fast
+ * (monitors, digests, syncs); agent/workflow-target loops are long-running
+ * headless workers (minutes to over an hour). They draw from separate claim
+ * budgets so a saturated agent lane cannot starve fast command loops (and vice
+ * versa) — the single shared pool let long workers monopolize every slot.
+ */
+export type SchedulerLane = "command" | "agent";
+
+/** The concurrency lane a loop's target belongs to. */
+export function loopLane(loop: Loop): SchedulerLane {
+  return loop.target.type === "command" ? "command" : "agent";
+}
+
+/** Remaining claim budget per lane for a single `claimDueRuns` pass. */
+export type LaneLimits = Partial<Record<SchedulerLane, number>>;
+
 export function manualRunScheduledFor(loop: Loop, now: Date = new Date()): string {
   if (loop.archivedAt) return now.toISOString();
   if (loop.status === "active" && loop.nextRunAt && new Date(loop.nextRunAt).getTime() <= now.getTime()) {
@@ -576,7 +593,7 @@ function recoverAndExpire(deps: SchedulerDeps, now: Date): { recovered: LoopRun[
   return { recovered, expired };
 }
 
-export function claimDueRuns(deps: SchedulerDeps & { maxClaims?: number }): ClaimDueRunsResult {
+export function claimDueRuns(deps: SchedulerDeps & { maxClaims?: number; laneLimits?: LaneLimits }): ClaimDueRunsResult {
   const now = deps.now?.() ?? new Date();
   const { recovered, expired } = recoverAndExpire(deps, now);
   const claims: ClaimedLoopRun[] = [];
@@ -585,12 +602,26 @@ export function claimDueRuns(deps: SchedulerDeps & { maxClaims?: number }): Clai
   const maxClaims = Math.max(0, deps.maxClaims ?? Number.POSITIVE_INFINITY);
   if (maxClaims === 0) return { claims, claimed, completed: [], skipped, recovered, expired };
 
+  // Per-lane claim budgets: fast command loops and long agent/workflow loops
+  // draw from separate pools this pass. Absent laneLimits every lane is
+  // unbounded and only the global maxClaims caps (legacy single-pool behavior).
+  const laneLimits = deps.laneLimits;
+  const laneClaims: Record<SchedulerLane, number> = { command: 0, agent: 0 };
+  const laneCap = (lane: SchedulerLane): number =>
+    laneLimits === undefined ? Number.POSITIVE_INFINITY : Math.max(0, laneLimits[lane] ?? Number.POSITIVE_INFINITY);
+  const laneFull = (lane: SchedulerLane): boolean => laneClaims[lane] >= laneCap(lane);
+
   for (const loop of deps.store.dueLoops(now)) {
     if (claims.length >= maxClaims) break;
+    const lane = loopLane(loop);
+    // A saturated lane skips its loops without consuming another lane's budget,
+    // so due loops in the other lane are still reached in the same pass.
+    if (laneFull(lane)) continue;
     const plan = dueSlots(loop, now);
     let loopSkips = 0;
     for (const slot of plan.slots) {
       if (claims.length >= maxClaims) break;
+      if (laneFull(lane)) break;
       // Fairness: overlap-skip bookkeeping never consumes the claim budget
       // (only executed runs do) and is capped per loop per tick, so one
       // skipping loop cannot starve other due loops of claims.
@@ -600,6 +631,7 @@ export function claimDueRuns(deps: SchedulerDeps & { maxClaims?: number }): Clai
       if ("loop" in run) {
         claims.push(run);
         claimed.push(run.run);
+        laneClaims[lane] += 1;
       } else if (run.status === "skipped") {
         skipped.push(run);
         loopSkips += 1;

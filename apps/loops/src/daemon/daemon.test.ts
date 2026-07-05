@@ -122,6 +122,86 @@ describe("daemon", () => {
     }
   });
 
+  test("separated lanes keep fast command loops running while the agent lane is saturated", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-daemon-lanes-"));
+    const store = new Store(":memory:");
+    let stop = false;
+    let releaseAgents: () => void = () => undefined;
+    const agentGate = new Promise<void>((resolve) => {
+      releaseAgents = resolve;
+    });
+    let commandCompletions = 0;
+    let agentActive = 0;
+    let maxAgentActive = 0;
+    try {
+      const workflow = store.createWorkflow({
+        name: "lane-agent-wf",
+        steps: [{ id: "s", target: { type: "command", command: "true" } }],
+      });
+      // Three long agent/workflow loops (more than the agent lane budget) that
+      // block until released, so the agent lane stays fully saturated.
+      for (const i of [0, 1, 2]) {
+        store.createLoop({
+          name: `agent-hog-${i}`,
+          schedule: { type: "once", at: "2020-01-01T00:00:00Z" },
+          target: { type: "workflow", workflowId: workflow.id },
+          overlap: "skip",
+        });
+      }
+      // A fast command loop that keeps coming due.
+      store.createLoop({
+        name: "fast-command",
+        schedule: { type: "interval", everyMs: 20 },
+        target: { type: "command", command: "true" },
+        overlap: "skip",
+        catchUp: "none",
+      });
+
+      const daemon = runDaemon({
+        store,
+        pidPath: join(root, "loops-daemon.pid"),
+        intervalMs: 5,
+        // concurrency=2 is the legacy shared-pool knob (now the agent lane); the
+        // command lane gets its own reserved budget. Under the old single pool the
+        // three blocking agent runs would fill both slots and starve the command
+        // loop entirely (commandCompletions would stay 0).
+        concurrency: 2,
+        commandConcurrency: 2,
+        sleep: async (ms) => Bun.sleep(ms),
+        shouldStop: () => stop,
+        log: () => undefined,
+        execute: async (loop) => {
+          if (loop.target.type === "command") {
+            commandCompletions += 1;
+            return executorResult("succeeded", new Date().toISOString());
+          }
+          agentActive += 1;
+          maxAgentActive = Math.max(maxAgentActive, agentActive);
+          await agentGate;
+          agentActive -= 1;
+          return executorResult("succeeded", new Date().toISOString());
+        },
+      });
+
+      await waitUntil(() => commandCompletions >= 3 && agentActive >= 2, {
+        label: "command loop keeps running while agent lane saturated",
+      });
+      expect(commandCompletions).toBeGreaterThanOrEqual(3);
+      // Agent lane budget (2) caps concurrent agent runs even though three are due.
+      expect(agentActive).toBe(2);
+      expect(maxAgentActive).toBe(2);
+
+      stop = true;
+      releaseAgents();
+      await daemon;
+    } finally {
+      stop = true;
+      releaseAgents();
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("aborts active workflow children on daemon stop", async () => {
     const root = mkdtempSync(join(tmpdir(), "loops-daemon-stop-"));
     const marker = join(root, "late-write");

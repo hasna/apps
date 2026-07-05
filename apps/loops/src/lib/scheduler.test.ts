@@ -8,6 +8,7 @@ import {
   consecutiveFailureCount,
   executeClaimedRun,
   inlineRunnerOwnerPid,
+  loopLane,
   manualRunScheduledFor,
   manualRunSource,
   MAX_RETRY_DELAY_MS,
@@ -857,6 +858,119 @@ describe("scheduler", () => {
       const repaired = store.getLoop(loop.id);
       expect(repaired?.status).toBe("active");
       expect(new Date(repaired!.nextRunAt!).getTime()).toBe(new Date(slot).getTime() + 60_000);
+    } finally {
+      store.close();
+    }
+  });
+});
+
+describe("claimDueRuns concurrency lanes", () => {
+  const DUE = "2020-01-01T00:00:00Z";
+
+  function laneStore(): { store: Store; workflowId: string } {
+    const store = new Store(":memory:");
+    const workflow = store.createWorkflow({
+      name: "lane-wf",
+      steps: [{ id: "s", target: { type: "command", command: "true" } }],
+    });
+    return { store, workflowId: workflow.id };
+  }
+
+  function makeCommandLoop(store: Store, name: string): Loop {
+    return store.createLoop({
+      name,
+      schedule: { type: "once", at: DUE },
+      target: { type: "command", command: "true" },
+    });
+  }
+
+  function makeAgentLoop(store: Store, name: string, workflowId: string): Loop {
+    return store.createLoop({
+      name,
+      schedule: { type: "once", at: DUE },
+      target: { type: "workflow", workflowId },
+    });
+  }
+
+  test("classifies command targets to the command lane and agent/workflow targets to the agent lane", () => {
+    const { store, workflowId } = laneStore();
+    try {
+      expect(loopLane(makeCommandLoop(store, "cmd"))).toBe("command");
+      expect(loopLane(makeAgentLoop(store, "wf", workflowId))).toBe("agent");
+      expect(
+        loopLane(
+          store.createLoop({
+            name: "agent-target",
+            schedule: { type: "once", at: DUE },
+            target: { type: "agent", provider: "claude", prompt: "hi" },
+          }),
+        ),
+      ).toBe("agent");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("a saturated agent lane does not starve command-lane claims", () => {
+    const { store, workflowId } = laneStore();
+    try {
+      // Two long agent/workflow loops + three fast command loops, all due.
+      makeAgentLoop(store, "agent-0", workflowId);
+      makeAgentLoop(store, "agent-1", workflowId);
+      makeCommandLoop(store, "cmd-0");
+      makeCommandLoop(store, "cmd-1");
+      makeCommandLoop(store, "cmd-2");
+
+      // Agent lane fully saturated (budget 0); command lane has room for two.
+      const result = claimDueRuns({
+        store,
+        runnerId: "host:1:lease",
+        maxClaims: 100,
+        laneLimits: { command: 2, agent: 0 },
+      });
+
+      const lanes = result.claims.map((claim) => loopLane(claim.loop));
+      expect(lanes.filter((lane) => lane === "agent")).toHaveLength(0);
+      // Regression: the single shared pool let agent loops consume every slot,
+      // so command loops were starved. Now the command lane claims independently.
+      expect(lanes.filter((lane) => lane === "command")).toHaveLength(2);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("a saturated command lane does not starve agent-lane claims", () => {
+    const { store, workflowId } = laneStore();
+    try {
+      makeCommandLoop(store, "cmd-0");
+      makeCommandLoop(store, "cmd-1");
+      makeAgentLoop(store, "agent-0", workflowId);
+      makeAgentLoop(store, "agent-1", workflowId);
+
+      const result = claimDueRuns({
+        store,
+        runnerId: "host:1:lease",
+        maxClaims: 100,
+        laneLimits: { command: 0, agent: 2 },
+      });
+
+      const lanes = result.claims.map((claim) => loopLane(claim.loop));
+      expect(lanes.filter((lane) => lane === "command")).toHaveLength(0);
+      expect(lanes.filter((lane) => lane === "agent")).toHaveLength(2);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("absent laneLimits, claims are bounded only by the global maxClaims (legacy single pool)", () => {
+    const { store, workflowId } = laneStore();
+    try {
+      makeAgentLoop(store, "agent-0", workflowId);
+      makeCommandLoop(store, "cmd-0");
+      makeCommandLoop(store, "cmd-1");
+
+      const result = claimDueRuns({ store, runnerId: "host:1:lease", maxClaims: 2 });
+      expect(result.claims).toHaveLength(2);
     } finally {
       store.close();
     }

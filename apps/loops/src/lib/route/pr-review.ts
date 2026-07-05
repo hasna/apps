@@ -68,6 +68,10 @@ export interface PrReviewRoutingDecision {
   reviewers: string[];
   selectedReviewer?: string;
   signals: string[];
+  /** Set when the route was skipped because the PR is definitively MERGED/CLOSED. */
+  freshnessSkip?: boolean;
+  /** Resolved PR lifecycle state (e.g. MERGED/CLOSED) when the freshness gate fired. */
+  prState?: string;
 }
 
 const GITHUB_USER_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
@@ -199,6 +203,49 @@ export function prReferenceFrom(text: string): PrReference | undefined {
   return undefined;
 }
 
+const PR_FINGERPRINT_FIELDS = [
+  "pr_fingerprint",
+  "prFingerprint",
+  "github_pr",
+  "githubPr",
+  "github_pr_fingerprint",
+  "githubPrFingerprint",
+  "pull_request_fingerprint",
+  "pullRequestFingerprint",
+];
+
+/** Canonical `owner/repo#number`, lowercased for case-stable dedupe. */
+export function prFingerprint(ref: PrReference): string {
+  return `${ref.owner.toLowerCase()}/${ref.repo.toLowerCase()}#${ref.number}`;
+}
+
+function prFingerprintFromField(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const match = /([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)#(\d+)/.exec(value);
+  return match ? prFingerprint({ owner: match[1], repo: match[2], number: Number(match[3]) }) : undefined;
+}
+
+/**
+ * Stable GitHub `owner/repo#number` fingerprint for a PR-subject task. The repos
+ * registry maps several local checkouts to one GitHub repo, so a single PR is
+ * minted as 2-3 duplicate todos tasks (distinct ids + distinct checkout paths).
+ * Keying dedupe on this fingerprint collapses them to one work item instead of
+ * burning a full worker cycle per checkout. Prefers an explicit PR fingerprint
+ * field, then a canonical PR URL / `github-pr:` handle in route evidence;
+ * returns undefined for tasks with no concrete PR reference (keep path/id keying).
+ */
+export function prFingerprintFromTask(data: Record<string, unknown>, metadata: Record<string, unknown>): string | undefined {
+  const records = [...taskEventRecords(data, metadata), ...automationRecords(data, metadata)];
+  for (const field of PR_FINGERPRINT_FIELDS) {
+    for (const value of routeFieldValues(records, field)) {
+      const fingerprint = prFingerprintFromField(value);
+      if (fingerprint) return fingerprint;
+    }
+  }
+  const ref = prReferenceFrom(routeEvidenceText(records));
+  return ref ? prFingerprint(ref) : undefined;
+}
+
 /** Derives the PR author via `gh pr view`; returns undefined when gh is
  * unavailable, unauthenticated, or the PR cannot be resolved (fail closed). */
 function ghAuthorResolver(ref: PrReference): string | undefined {
@@ -303,6 +350,8 @@ export function prReviewRoutingDecision(
       reason: `PR is already ${prState.toLowerCase()}; skipping merge/review route (freshness gate)`,
       reviewers: [],
       signals: [...signals, "pr-not-open"],
+      freshnessSkip: true,
+      prState,
     };
   }
 

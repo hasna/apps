@@ -145,3 +145,134 @@ describe("routeTodosTaskEvent dedupe re-admission", () => {
     expect(routeTodosTaskEvent(pendingTaskEvent(), ROUTE_OPTS).kind).toBe("deduped");
   });
 });
+
+// A PR-subject task with a concrete owner/repo#number reference but no
+// approve/merge/review intent: fingerprintable, yet the PR-review gate is not
+// required, so routing creates a worker without touching `gh` (hermetic).
+function prTaskEvent(taskId: string) {
+  return {
+    id: `evt-${taskId}`,
+    type: "task.created",
+    source: "todos",
+    subject: `task:${taskId}`,
+    data: {
+      id: taskId,
+      title: "Investigate dependency bump",
+      status: "pending",
+      tags: ["auto:route"],
+      description: "tracking https://github.com/hasna/example/pull/7 for the rollout",
+      project_path: process.cwd(),
+    },
+  } as never;
+}
+
+function plainTaskEvent(taskId: string) {
+  return {
+    id: `evt-${taskId}`,
+    type: "task.created",
+    source: "todos",
+    subject: `task:${taskId}`,
+    data: {
+      id: taskId,
+      title: "Fix the flaky unit test",
+      status: "pending",
+      tags: ["auto:route"],
+      description: "the retry helper races on slow CI",
+      project_path: process.cwd(),
+    },
+  } as never;
+}
+
+describe("routeTodosTaskEvent PR fingerprint dedupe", () => {
+  let env: RouteEnv;
+  beforeEach(() => {
+    env = withRouteEnv();
+  });
+  afterEach(() => {
+    env.restore();
+  });
+
+  test("PR-subject tasks from different checkouts dedupe by owner/repo#number", () => {
+    // Two distinct todos tasks (distinct ids + distinct source checkout paths)
+    // for the same GitHub PR — exactly what the repos registry mints per checkout.
+    const first = routeTodosTaskEvent(prTaskEvent("task-checkout-a"), {
+      ...ROUTE_OPTS,
+      sourceTodosProjectPath: "/repos/example-checkout-a",
+    });
+    expect(first.kind).toBe("created");
+    expect(first.value.idempotencyKey).toBe("todos-task:pr:hasna/example#7");
+
+    const second = routeTodosTaskEvent(prTaskEvent("task-checkout-b"), {
+      ...ROUTE_OPTS,
+      sourceTodosProjectPath: "/repos/example-checkout-b",
+    });
+    // Regression: the old (source-path, task-id) key kept these distinct and
+    // spawned a full worker per checkout; the fingerprint collapses them to one.
+    expect(second.kind).toBe("deduped");
+    expect(second.value.idempotencyKey).toBe("todos-task:pr:hasna/example#7");
+  });
+
+  test("case differences in the owner/repo do not defeat PR dedupe", () => {
+    const first = routeTodosTaskEvent(
+      {
+        id: "evt-mixed-case",
+        type: "task.created",
+        source: "todos",
+        subject: "task:mixed-case",
+        data: {
+          id: "task-mixed-case",
+          title: "Investigate dependency bump",
+          status: "pending",
+          tags: ["auto:route"],
+          description: "tracking https://github.com/Hasna/Example/pull/7 rollout",
+          project_path: process.cwd(),
+        },
+      } as never,
+      { ...ROUTE_OPTS, sourceTodosProjectPath: "/repos/a" },
+    );
+    expect(first.kind).toBe("created");
+    expect(first.value.idempotencyKey).toBe("todos-task:pr:hasna/example#7");
+  });
+
+  test("non-PR tasks from different checkouts keep independent keys (no false dedupe)", () => {
+    const first = routeTodosTaskEvent(plainTaskEvent("task-x"), { ...ROUTE_OPTS, sourceTodosProjectPath: "/repos/a" });
+    const second = routeTodosTaskEvent(plainTaskEvent("task-y"), { ...ROUTE_OPTS, sourceTodosProjectPath: "/repos/b" });
+    expect(first.kind).toBe("created");
+    // Two genuinely different tasks with no PR reference must NOT collapse.
+    expect(second.kind).toBe("created");
+    expect(first.value.idempotencyKey).not.toBe(second.value.idempotencyKey);
+  });
+});
+
+describe("routeTodosTaskEvent freshness skip marker", () => {
+  let env: RouteEnv;
+  beforeEach(() => {
+    env = withRouteEnv();
+  });
+  afterEach(() => {
+    env.restore();
+  });
+
+  test("a definitively merged PR route is skipped with a freshnessSkip marker for the drain to close", () => {
+    const event = {
+      id: "evt-merged-pr",
+      type: "task.created",
+      source: "todos",
+      subject: "task:merged-pr",
+      data: {
+        id: "task-merged-pr",
+        title: "Merge the release PR",
+        status: "pending",
+        tags: ["auto:route"],
+        // Merge intent + baked-in MERGED state => freshness gate fires from
+        // evidence with no gh probe (hermetic).
+        description: "please merge https://github.com/hasna/example/pull/7 pr_state=MERGED",
+        project_path: process.cwd(),
+      },
+    } as never;
+    const result = routeTodosTaskEvent(event, { ...ROUTE_OPTS, githubReviewer: "reviewer-bob" });
+    expect(result.kind).toBe("skipped");
+    expect(result.value.freshnessSkip).toBe(true);
+    expect(result.value.prState).toBe("MERGED");
+  });
+});

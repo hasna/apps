@@ -5,6 +5,51 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.4.11 (2026-07-05)
+
+Scheduler fairness and PR-route hygiene: fast command loops no longer starve
+behind long agent workers, PR tasks dedupe by GitHub identity, and merged/closed
+PR routes close themselves out of the queue.
+
+### Fixed
+
+- **Daemon scheduler — separated concurrency lanes:** the daemon shared a single
+  concurrency pool, so long agent/workflow workers (minutes to over an hour) could
+  occupy every slot and starve fast command loops (monitors, digests, syncs) —
+  even the merge router starved. Command-target and agent/workflow-target loops
+  now draw from independent claim budgets. New env `LOOPS_DAEMON_COMMAND_CONCURRENCY`
+  (default 4) and `LOOPS_DAEMON_AGENT_CONCURRENCY` (default 8); the legacy
+  `LOOPS_DAEMON_CONCURRENCY` / `--concurrency` still work as the agent-lane knob for
+  back-compat, and new `--command-concurrency` / `--agent-concurrency` daemon flags
+  are added. A saturated lane no longer consumes the other lane's budget.
+- **Todos-task routing — PR fingerprint dedupe:** the repos registry maps several
+  local checkouts to one GitHub repo, so a single PR was minted as 2-3 duplicate
+  todos tasks (distinct ids + checkout paths) that each dispatched a full worker.
+  PR-subject tasks now dedupe by a stable `owner/repo#number` fingerprint (from an
+  explicit PR fingerprint field or a canonical PR URL / `github-pr:` handle,
+  lowercased) instead of the `(source-path, task-id)` key, collapsing the
+  duplicates to one work item. Non-PR tasks keep the path/id key (no false dedupe).
+- **Todos-task routing — freshness skip closes the task:** 0.4.10's freshness gate
+  stopped dispatching a worker for a merged/closed PR but left the task pending +
+  route-opted-in, so every drain tick re-skipped it forever. On a definitive
+  MERGED/CLOSED freshness skip the drain now marks the source task done and strips
+  its `auto:route`/`route:enabled` opt-in so it leaves the queue. Only fires when
+  gh/metadata definitively reports MERGED/CLOSED; never on dry-run.
+
+## 0.4.10 (2026-07-05)
+
+Hotfix bundle for the PR-merge drain pipeline.
+
+### Fixed
+
+- **Todos-task drain:** re-admit a terminal work item whose todos task is still
+  actionable (bounded by a redispatch cap + per-attempt backoff) instead of
+  deduping it away forever, so real task work keeps dispatching.
+- **PR review gate:** freshness gate skips merge/review routes for already
+  merged/closed PRs; normalize `app/<slug>` and `<slug>[bot]` bot logins so
+  bot-authored PRs resolve an author instead of hard-failing the format check.
+- **Runtime/store:** cap persisted run stdout/stderr; project path resolution fix.
+
 ## 0.4.9 (2026-07-04)
 
 Unblock the PR-merge pipeline: task-lifecycle/route workers now dispatch real

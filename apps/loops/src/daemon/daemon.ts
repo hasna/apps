@@ -3,7 +3,7 @@ import { hostname } from "node:os";
 import { spawn } from "node:child_process";
 import { genId } from "../lib/ids.js";
 import { daemonLogPath, ensureDataDir, pidFilePath } from "../lib/paths.js";
-import { advanceLoop, claimDueRuns, executeClaimedRun, inlineRunnerOwnerPid, type ClaimedLoopRun } from "../lib/scheduler.js";
+import { advanceLoop, claimDueRuns, executeClaimedRun, inlineRunnerOwnerPid, loopLane, type ClaimedLoopRun, type SchedulerLane } from "../lib/scheduler.js";
 import { executeLoopTarget } from "../lib/workflow-runner.js";
 import { Store } from "../lib/store.js";
 import {
@@ -22,7 +22,12 @@ import type { ExecutorResult, Loop, LoopRun } from "../types.js";
 export interface RunDaemonOptions {
   intervalMs?: number;
   leaseTtlMs?: number;
+  /** Legacy single-pool knob; back-compat alias for the agent/workflow lane budget. */
   concurrency?: number;
+  /** Claim budget for command-target loops (fast loops). Default 4. */
+  commandConcurrency?: number;
+  /** Claim budget for agent/workflow-target loops (long workers). Default 8; `concurrency`/LOOPS_DAEMON_CONCURRENCY still set it. */
+  agentConcurrency?: number;
   store?: Store;
   pidPath?: string;
   execute?: (loop: Loop, run: LoopRun) => Promise<ExecutorResult>;
@@ -40,11 +45,39 @@ function intervalFromEnv(): number | undefined {
   return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-function concurrencyFromEnv(): number | undefined {
-  const raw = process.env.LOOPS_DAEMON_CONCURRENCY;
+function positiveIntEnv(name: string): number | undefined {
+  const raw = process.env[name];
   if (!raw) return undefined;
   const value = Number(raw);
   return Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function concurrencyFromEnv(): number | undefined {
+  return positiveIntEnv("LOOPS_DAEMON_CONCURRENCY");
+}
+
+export const DEFAULT_COMMAND_CONCURRENCY = 4;
+export const DEFAULT_AGENT_CONCURRENCY = 8;
+
+/**
+ * Resolve the two separated concurrency lanes. Command loops (fast) and
+ * agent/workflow loops (long workers) get independent budgets so a saturated
+ * agent lane cannot starve command loops. Precedence per lane is explicit opt >
+ * lane env > legacy knob > default. The legacy `concurrency` opt and
+ * `LOOPS_DAEMON_CONCURRENCY` env stay wired to the agent lane (the dominant
+ * consumer / historical "total" knob), so existing deployments keep their
+ * heavy-lane capacity and simply gain a reserved command lane on top.
+ */
+export function resolveLaneConcurrency(opts: Pick<RunDaemonOptions, "concurrency" | "commandConcurrency" | "agentConcurrency"> = {}): Record<SchedulerLane, number> {
+  const command = Math.max(
+    1,
+    opts.commandConcurrency ?? positiveIntEnv("LOOPS_DAEMON_COMMAND_CONCURRENCY") ?? DEFAULT_COMMAND_CONCURRENCY,
+  );
+  const agent = Math.max(
+    1,
+    opts.agentConcurrency ?? opts.concurrency ?? positiveIntEnv("LOOPS_DAEMON_AGENT_CONCURRENCY") ?? concurrencyFromEnv() ?? DEFAULT_AGENT_CONCURRENCY,
+  );
+  return { command, agent };
 }
 
 export const DAEMON_LOG_MAX_BYTES = 50 * 1024 * 1024;
@@ -98,7 +131,7 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
   const runnerId = `${hostname()}:${process.pid}:${leaseId}`;
   const intervalMs = opts.intervalMs ?? intervalFromEnv() ?? 1_000;
   const leaseTtlMs = opts.leaseTtlMs ?? Math.max(60_000, intervalMs * 10);
-  const concurrency = Math.max(1, opts.concurrency ?? concurrencyFromEnv() ?? 4);
+  const laneConcurrency = resolveLaneConcurrency(opts);
   const log = opts.log ?? defaultDaemonLog;
   const sleep = opts.sleep ?? realSleep;
 
@@ -111,13 +144,17 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
   if (!lease) throw new Error("another loops daemon holds the database lease");
 
   writePid(process.pid, pidPath);
-  log(`started pid=${process.pid} interval=${intervalMs}ms lease=${leaseId}`);
+  log(
+    `started pid=${process.pid} interval=${intervalMs}ms lease=${leaseId} ` +
+      `command_concurrency=${laneConcurrency.command} agent_concurrency=${laneConcurrency.agent}`,
+  );
 
   let stopFlag = false;
   let leaseLost = false;
   let leaseEpoch = 0;
   let runAbort = new AbortController();
   const activeRuns = new Map<string, Promise<void>>();
+  const activeByLane: Record<SchedulerLane, number> = { command: 0, agent: 0 };
   const requestStop = (message?: string): void => {
     stopFlag = true;
     if (!runAbort.signal.aborted) runAbort.abort();
@@ -218,9 +255,14 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
   };
 
   const startClaim = (claim: ClaimedLoopRun): void => {
+    const lane = loopLane(claim.loop);
+    activeByLane[lane] += 1;
     const task = executeDaemonRun(claim)
       .catch((err) => log(`run ${claim.run.id} error: ${err instanceof Error ? err.message : String(err)}`))
-      .finally(() => activeRuns.delete(claim.run.id));
+      .finally(() => {
+        activeRuns.delete(claim.run.id);
+        activeByLane[lane] -= 1;
+      });
     activeRuns.set(claim.run.id, task);
   };
 
@@ -274,19 +316,25 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<void> {
       onTickError: (err) => log(`tick error: ${err instanceof Error ? err.message : String(err)}`),
       tickFn: async () => {
         ensureLease();
-        const available = Math.max(0, concurrency - activeRuns.size);
+        const laneLimits: Record<SchedulerLane, number> = {
+          command: Math.max(0, laneConcurrency.command - activeByLane.command),
+          agent: Math.max(0, laneConcurrency.agent - activeByLane.agent),
+        };
         const result = claimDueRuns({
           store,
           runnerId,
           daemonLeaseId: leaseId,
           beforeRun: () => ensureLease(),
-          maxClaims: available,
+          // Sum caps total claims this tick and short-circuits recovery-only
+          // ticks (both lanes full => 0); laneLimits gates each lane.
+          maxClaims: laneLimits.command + laneLimits.agent,
+          laneLimits,
         });
         for (const claim of result.claims) startClaim(claim);
         const changed = result.claims.length + result.skipped.length + result.recovered.length + result.expired.length;
         if (changed > 0) {
           log(
-            `tick claimed=${result.claims.length} active=${activeRuns.size} skipped=${result.skipped.length} recovered=${result.recovered.length} expired=${result.expired.length}`,
+            `tick claimed=${result.claims.length} active=${activeRuns.size} (command=${activeByLane.command} agent=${activeByLane.agent}) skipped=${result.skipped.length} recovered=${result.recovered.length} expired=${result.expired.length}`,
           );
         }
         await reapAbandoned(result.recovered);

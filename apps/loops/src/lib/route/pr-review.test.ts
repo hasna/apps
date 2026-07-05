@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { prReferenceFrom, prReviewRoutingDecision, type PrAuthorResolver, type PrReference, type PrStateResolver } from "./pr-review.js";
+import {
+  prFingerprintFromTask,
+  prReferenceFrom,
+  prReviewRoutingDecision,
+  type PrAuthorResolver,
+  type PrReference,
+  type PrStateResolver,
+} from "./pr-review.js";
 import type { TodosTaskRouteOptions } from "./types.js";
 
 function opts(overrides: Partial<TodosTaskRouteOptions> = {}): TodosTaskRouteOptions {
@@ -72,6 +79,9 @@ describe("prReviewRoutingDecision author derivation", () => {
     expect(decision.allowed).toBe(false);
     expect(decision.author).toBe("alice-author");
     expect(decision.reason).toContain("self-review");
+    // A reviewer-selection skip is NOT a freshness skip: the drain must not close
+    // the task (the PR is still open and actionable once a reviewer is supplied).
+    expect(decision.freshnessSkip).toBeFalsy();
   });
 
   test("fails closed when the reference cannot be resolved to an author", () => {
@@ -147,6 +157,9 @@ describe("prReviewRoutingDecision freshness gate", () => {
     expect(decision.allowed).toBe(false);
     expect(decision.reason).toContain("already merged");
     expect(decision.signals).toContain("pr-not-open");
+    // The drain keys its task-closing on these markers, so pin them.
+    expect(decision.freshnessSkip).toBe(true);
+    expect(decision.prState).toBe("MERGED");
   });
 
   test("skips when the live gh state resolver reports CLOSED (no baked-in state)", () => {
@@ -174,5 +187,36 @@ describe("prReviewRoutingDecision freshness gate", () => {
     const data = { description: `this pull request needs review\n${REVIEW_REQUIRED}` };
     prReviewRoutingDecision(data, {}, opts({ githubReviewer: "reviewer-bob" }), () => "alice", state);
     expect(probed).toBe(false);
+  });
+});
+
+describe("prFingerprintFromTask", () => {
+  test("derives owner/repo#number from a canonical PR URL in the description", () => {
+    expect(prFingerprintFromTask({ description: "tracking https://github.com/hasna/example/pull/7" }, {})).toBe(
+      "hasna/example#7",
+    );
+  });
+
+  test("derives from a github-pr shorthand handle", () => {
+    expect(prFingerprintFromTask({ body: "blocked github-pr:hasna/loops#42" }, {})).toBe("hasna/loops#42");
+  });
+
+  test("prefers an explicit PR fingerprint field over free text", () => {
+    const fp = prFingerprintFromTask(
+      { github_pr: "hasna/loops#99", description: "mentions https://github.com/other/repo/pull/1" },
+      {},
+    );
+    expect(fp).toBe("hasna/loops#99");
+  });
+
+  test("lowercases owner/repo so checkouts with different casing collapse", () => {
+    expect(prFingerprintFromTask({ description: "https://github.com/Hasna/Example/pull/7" }, {})).toBe(
+      "hasna/example#7",
+    );
+  });
+
+  test("returns undefined for tasks with no concrete PR reference", () => {
+    expect(prFingerprintFromTask({ description: "fix the flaky retry helper" }, {})).toBeUndefined();
+    expect(prFingerprintFromTask({ description: "this pull request needs review" }, {})).toBeUndefined();
   });
 });

@@ -305,6 +305,49 @@ function markInvalidDrainTaskNonRouteable(sourceTodosProject: string, task: Todo
   };
 }
 
+/** A route skip caused by the definitive MERGED/CLOSED PR freshness gate. */
+function isFreshnessSkip(result: TodosTaskRoutePrint): boolean {
+  return result.kind === "skipped" && result.value.freshnessSkip === true;
+}
+
+/**
+ * Close a todos task whose PR route was freshness-skipped because the PR is
+ * definitively MERGED/CLOSED. 0.4.10's freshness gate stopped dispatching the
+ * merge/review worker but left the task pending + route-opted-in, so every drain
+ * tick re-skipped it forever. Mark it done (the canonical close; `done` sets
+ * status=completed which route eligibility rejects) and strip the auto:route /
+ * route:enabled opt-in tags as belt-and-suspenders so the task leaves the
+ * routable queue even if a todos build does not honor `done`. Best-effort: each
+ * mutation result is recorded for the drain evidence report.
+ */
+function closeFreshnessSkippedTask(sourceTodosProject: string, task: TodosReadyTask, reason: string): Record<string, unknown> {
+  const taskId = taskField(task, ["id", "task_id", "taskId"]);
+  if (!taskId) return { attempted: false, reason: "task id missing" };
+  const comment =
+    `OpenLoops freshness gate closed this task: ${reason}. The referenced PR is already merged/closed, so the ` +
+    `merge/review route will not dispatch a worker. Marked done and removed auto:route/route:enabled so drains stop re-skipping it.`;
+  const commentResult = runLocalCommand("todos", ["--project", sourceTodosProject, "comment", taskId, comment], { timeoutMs: 30_000 });
+  const doneResult = runLocalCommand(
+    "todos",
+    ["--project", sourceTodosProject, "done", taskId, "--notes", "PR already merged/closed; closed by OpenLoops freshness gate"],
+    { timeoutMs: 30_000 },
+  );
+  const untagAutoRoute = runLocalCommand("todos", ["--project", sourceTodosProject, "untag", taskId, "auto:route"], { timeoutMs: 30_000 });
+  const untagRouteEnabled = runLocalCommand("todos", ["--project", sourceTodosProject, "untag", taskId, "route:enabled"], { timeoutMs: 30_000 });
+  const leftQueue = doneResult.ok || untagAutoRoute.ok || untagRouteEnabled.ok;
+  return {
+    ok: leftQueue,
+    attempted: true,
+    taskId,
+    action: "freshness-close",
+    error: leftQueue ? undefined : "task could not be closed or untagged; inspect per-command results",
+    comment: todosMutationSummary(commentResult),
+    done: todosMutationSummary(doneResult),
+    untagAutoRoute: todosMutationSummary(untagAutoRoute),
+    untagRouteEnabled: todosMutationSummary(untagRouteEnabled),
+  };
+}
+
 export interface DrainResult {
   value: Record<string, unknown>;
   human: string;
@@ -359,6 +402,16 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
         result = skippedDrainTask(task, event, redact(message, 640) ?? "route task failed", { fatal: true });
       }
     }
+    // A definitive MERGED/CLOSED freshness skip would otherwise re-skip the same
+    // task every tick; close it out of the source queue (never on dry-run).
+    if (!opts.dryRun && isFreshnessSkip(result)) {
+      const sourceTaskProject = opts.todosProjectsFromRegistry
+        ? (taskField(task, ["source_project_path", "sourceProjectPath"]) ?? todosProject)
+        : todosProject;
+      const reason = stringField(result.value.reason) ?? "PR already merged/closed (freshness gate)";
+      const sourceTaskUpdate = closeFreshnessSkippedTask(sourceTaskProject, task, reason);
+      result = { ...result, value: { ...result.value, sourceTaskUpdate } };
+    }
     results.push(result);
     if (result.kind === "created") created += 1;
   }
@@ -383,6 +436,11 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
     deduped: results.filter((result) => result.kind === "deduped").length,
     throttled: results.filter((result) => result.kind === "throttled").length,
     skipped: results.filter((result) => result.kind === "skipped").length,
+    // Tasks closed out of the queue because their PR is definitively
+    // merged/closed (freshness gate) — evidence that they stop re-skipping.
+    freshnessClosed: results.filter(
+      (result) => isFreshnessSkip(result) && (result.value.sourceTaskUpdate as { attempted?: boolean } | undefined)?.attempted === true,
+    ).length,
     // Non-skippable route errors captured per-task (batch continued). A drain
     // where every candidate is fatal would otherwise report created=0 skipped=N
     // and exit 0; callers use this count to fail the run instead.
@@ -415,6 +473,7 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
         deduped: report.deduped,
         throttled: report.throttled,
         skipped: report.skipped,
+        freshnessClosed: report.freshnessClosed,
         fatal: report.fatal,
         maxDispatch: report.maxDispatch,
         source: report.source,
@@ -425,6 +484,6 @@ export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
     : { ...report, evidencePath };
   return {
     value,
-    human: `drained todos ready queue: considered=${report.considered} created=${report.created} deduped=${report.deduped} throttled=${report.throttled} skipped=${report.skipped} fatal=${report.fatal}`,
+    human: `drained todos ready queue: considered=${report.considered} created=${report.created} deduped=${report.deduped} throttled=${report.throttled} skipped=${report.skipped} freshnessClosed=${report.freshnessClosed} fatal=${report.fatal}`,
   };
 }
