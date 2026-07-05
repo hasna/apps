@@ -35,9 +35,9 @@ export class TasksApi {
     });
   }
 
-  async reportIncorrect(params: ReportParams): Promise<ReportResponse> {
-    const body: Record<string, unknown> = { taskId: params.taskId };
-    if (params.reason !== undefined) body.reason = params.reason;
-    return this.client.post<ReportResponse>('/reportIncorrect', body);
+  async reportIncorrect(params: Pick<ReportParams, 'taskId'>): Promise<ReportResponse> {
+    return this.client.post<ReportResponse>('/reportIncorrect', {
+      taskId: params.taskId,
+    });
   }
 }

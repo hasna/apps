@@ -80,7 +80,7 @@ connect-twocaptcha task create --type ImageToTextTask
 connect-twocaptcha task result <taskId>
 connect-twocaptcha balance get
 connect-twocaptcha report correct <taskId>
-connect-twocaptcha report incorrect <taskId> [--reason <code>]
+connect-twocaptcha report incorrect <taskId>
 connect-twocaptcha config set-key <key>
 connect-twocaptcha config show
 connect-twocaptcha profile list|use|create|delete|show

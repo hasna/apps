@@ -62,7 +62,6 @@ export interface BalanceResponse {
 
 export interface ReportParams {
   taskId: number | string;
-  reason?: number;
 }
 
 export interface ReportResponse {

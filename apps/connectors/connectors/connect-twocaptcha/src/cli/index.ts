@@ -248,14 +248,10 @@ reportCmd.command('correct <taskId>').description('Report a correct solution').a
 reportCmd
   .command('incorrect <taskId>')
   .description('Report an incorrect solution')
-  .option('--reason <code>', 'Reason code for incorrect report')
-  .action(async (taskId: string, opts) => {
+  .action(async (taskId: string) => {
     try {
       const client = getClient();
-      const result = await client.tasks.reportIncorrect({
-        taskId,
-        reason: opts.reason !== undefined ? parseInt(opts.reason, 10) : undefined,
-      });
+      const result = await client.tasks.reportIncorrect({ taskId });
       success(`Reported task ${taskId} as incorrect`);
       print(result, getFormat(reportCmd));
     } catch (err) {
