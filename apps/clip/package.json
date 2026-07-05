@@ -51,12 +51,13 @@
     "build:types": "tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "check": "bun run typecheck && bun test && bun run build && bun run check:macos",
     "dev:cli": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:serve": "bun run src/server/index.ts",
     "check:macos": "bash scripts/check_macos_sources.sh",
     "prepack": "bun run build",
-    "prepublishOnly": "bun test && bun run build",
+    "prepublishOnly": "bun run check",
     "postinstall": "mkdir -p $HOME/.hasna/clip $HOME/.hasna/clip/artifacts 2>/dev/null || true"
   },
   "keywords": [
