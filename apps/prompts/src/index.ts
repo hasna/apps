@@ -3,7 +3,13 @@ export { createPrompt, getPrompt, listPromptsSlim, promptToSaveResult, requirePr
 export { listVersions, getVersion, restoreVersion } from "./db/versions.js"
 export { listCollections, getCollection, ensureCollection, movePrompt } from "./db/collections.js"
 export { registerAgent, listAgents } from "./db/agents.js"
-export { getDatabase, getDbPath } from "./db/database.js"
+export { getDatabase, getDbPath, getPromptRegistryDiagnostics, resolveStorageMode } from "./db/database.js"
+export type {
+  PromptRegistryDiagnostics,
+  PromptsActiveStorage,
+  PromptsRegistryState,
+  PromptsStorageMode,
+} from "./db/database.js"
 export { createProject, getProject, listProjects, deleteProject } from "./db/projects.js"
 
 // Search

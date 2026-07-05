@@ -9,7 +9,7 @@ import { listCollections, ensureCollection, movePrompt } from "../db/collections
 import { registerAgent, listAgents, heartbeatAgent, setAgentFocus } from "../db/agents.js"
 import { createProject, getProject, listProjects, deleteProject } from "../db/projects.js"
 import { resolveProject } from "../db/database.js"
-import { getDatabase } from "../db/database.js"
+import { getDatabase, getPromptRegistryDiagnostics } from "../db/database.js"
 import { searchPrompts, searchPromptsSlim, findSimilar } from "../lib/search.js"
 import { renderTemplate, extractVariableInfo, validateVars } from "../lib/template.js"
 import { importFromJson, exportToJson, scanAndImportSlashCommands } from "../lib/importer.js"
@@ -845,6 +845,16 @@ server.registerTool(
     inputSchema: {},
   },
   async () => ok(getPromptStats())
+)
+
+// ── prompts_storage_diagnostics ──────────────────────────────────────────────
+server.registerTool(
+  "prompts_storage_diagnostics",
+  {
+    description: "Report prompt registry storage mode, local SQLite path, remote Postgres/S3/AWS configuration presence, and local fallback behavior without exposing configured values.",
+    inputSchema: {},
+  },
+  async () => ok(getPromptRegistryDiagnostics())
 )
 
 // ── prompts_project_create ────────────────────────────────────────────────────

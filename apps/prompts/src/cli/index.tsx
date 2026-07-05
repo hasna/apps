@@ -17,6 +17,7 @@ import { registerPromptCommands } from "./commands/prompts.js"
 import { registerVersionCommands } from "./commands/versions.js"
 import { registerQolCommands } from "./commands/qol.js"
 import { registerConfigCommands } from "./commands/config.js"
+import { getPromptRegistryDiagnostics } from "../db/database.js"
 
 const require = createRequire(import.meta.url)
 // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -144,6 +145,37 @@ program
           for (const c of stats.by_collection)
             console.log(`  ${chalk.bold(c.collection)}  ${chalk.gray(`${c.count}`)}`)
         }
+      }
+    } catch (e) {
+      handleError(program, e)
+    }
+  })
+
+// ── storage diagnostics ──────────────────────────────────────────────────────
+program
+  .command("storage")
+  .description("Show prompt registry storage diagnostics")
+  .action(() => {
+    try {
+      const diagnostics = getPromptRegistryDiagnostics()
+      if (isJson(program)) {
+        output(program, diagnostics)
+        return
+      }
+
+      console.log(chalk.bold("Prompt Registry Storage"))
+      console.log(`  Requested mode: ${chalk.cyan(diagnostics.requested_mode)}`)
+      console.log(`  Active storage: ${chalk.green(diagnostics.active_storage)} (${diagnostics.local.storage})`)
+      console.log(`  Local database: ${chalk.gray(diagnostics.local.db_path)}`)
+      console.log(`  Local scope:    ${diagnostics.local.scope}`)
+      console.log(`  Registry state: ${diagnostics.registry_state}`)
+      console.log(`  Remote Postgres: ${diagnostics.remote.postgres.configured ? chalk.yellow("configured") : chalk.gray("not configured")}`)
+      console.log(`  Remote S3 bucket: ${diagnostics.remote.object_storage.bucket_configured ? chalk.yellow("configured") : chalk.gray("not configured")}`)
+      console.log(`  Registry AWS region: ${diagnostics.remote.aws.region_configured ? chalk.yellow("configured") : chalk.gray("not configured")}`)
+      console.log(`  Sync strategy: ${diagnostics.sync.strategy}; reads=${diagnostics.sync.reads}; writes=${diagnostics.sync.writes}; remote mutation=${diagnostics.sync.remote_mutation}`)
+      if (diagnostics.warnings.length > 0) {
+        console.log(chalk.bold("\nWarnings"))
+        for (const warning of diagnostics.warnings) console.log(chalk.yellow(`  - ${warning}`))
       }
     } catch (e) {
       handleError(program, e)

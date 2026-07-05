@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs"
 import { tmpdir } from "os"
 import { join } from "path"
-import { getDbPath, resolveStorageMode } from "./database.js"
+import { getDbPath, getPromptRegistryDiagnostics, resolveStorageMode } from "./database.js"
 
 describe("database path resolution", () => {
   let originalHome: string | undefined
@@ -12,6 +12,9 @@ describe("database path resolution", () => {
   let originalScope: string | undefined
   let originalStorageMode: string | undefined
   let originalLegacyStorageMode: string | undefined
+  let originalRegistryPostgresUrl: string | undefined
+  let originalRegistryS3Bucket: string | undefined
+  let originalRegistryAwsRegion: string | undefined
   let originalCwd: string
   let tempRoot: string
 
@@ -23,6 +26,9 @@ describe("database path resolution", () => {
     originalScope = process.env["PROMPTS_DB_SCOPE"]
     originalStorageMode = process.env["HASNA_PROMPTS_STORAGE_MODE"]
     originalLegacyStorageMode = process.env["PROMPTS_STORAGE_MODE"]
+    originalRegistryPostgresUrl = process.env["PROMPTS_REGISTRY_POSTGRES_URL"]
+    originalRegistryS3Bucket = process.env["PROMPTS_REGISTRY_S3_BUCKET"]
+    originalRegistryAwsRegion = process.env["PROMPTS_REGISTRY_AWS_REGION"]
     originalCwd = process.cwd()
     tempRoot = mkdtempSync(join(tmpdir(), "prompts-db-"))
     delete process.env["PROMPTS_DB_PATH"]
@@ -31,6 +37,9 @@ describe("database path resolution", () => {
     delete process.env["PROMPTS_DB_SCOPE"]
     delete process.env["HASNA_PROMPTS_STORAGE_MODE"]
     delete process.env["PROMPTS_STORAGE_MODE"]
+    delete process.env["PROMPTS_REGISTRY_POSTGRES_URL"]
+    delete process.env["PROMPTS_REGISTRY_S3_BUCKET"]
+    delete process.env["PROMPTS_REGISTRY_AWS_REGION"]
   })
 
   afterEach(() => {
@@ -42,6 +51,9 @@ describe("database path resolution", () => {
     restoreEnv("PROMPTS_DB_SCOPE", originalScope)
     restoreEnv("HASNA_PROMPTS_STORAGE_MODE", originalStorageMode)
     restoreEnv("PROMPTS_STORAGE_MODE", originalLegacyStorageMode)
+    restoreEnv("PROMPTS_REGISTRY_POSTGRES_URL", originalRegistryPostgresUrl)
+    restoreEnv("PROMPTS_REGISTRY_S3_BUCKET", originalRegistryS3Bucket)
+    restoreEnv("PROMPTS_REGISTRY_AWS_REGION", originalRegistryAwsRegion)
     rmSync(tempRoot, { recursive: true, force: true })
   })
 
@@ -84,6 +96,56 @@ describe("database path resolution", () => {
     process.env["HASNA_PROMPTS_STORAGE_MODE"] = "shared"
 
     expect(() => resolveStorageMode()).toThrow("Unsupported prompts storage mode")
+  })
+
+  test("remote mode reports local fallback diagnostics without exposing configured values", () => {
+    const home = join(tempRoot, "home")
+    process.env["HOME"] = home
+    process.env["HASNA_PROMPTS_STORAGE_MODE"] = "remote"
+    process.env["PROMPTS_REGISTRY_POSTGRES_URL"] = "configured-postgres-url"
+    process.env["PROMPTS_REGISTRY_S3_BUCKET"] = "configured-bucket"
+    process.env["PROMPTS_REGISTRY_AWS_REGION"] = "configured-region"
+
+    const diagnostics = getPromptRegistryDiagnostics()
+    const serialized = JSON.stringify(diagnostics)
+
+    expect(diagnostics.requested_mode).toBe("remote")
+    expect(diagnostics.active_storage).toBe("local-sqlite")
+    expect(diagnostics.registry_state).toBe("remote-configured-local-fallback")
+    expect(diagnostics.local).toEqual({
+      db_path: join(home, ".hasna", "prompts", "prompts.db"),
+      scope: "home",
+      storage: "SQLite",
+    })
+    expect(diagnostics.remote.postgres.configured).toBe(true)
+    expect(diagnostics.remote.object_storage).toMatchObject({
+      configured: true,
+      provider: "s3",
+      bucket_configured: true,
+    })
+    expect(diagnostics.remote.aws.region_configured).toBe(true)
+    expect(diagnostics.sync).toMatchObject({
+      strategy: "local-first",
+      reads: "local SQLite",
+      writes: "local SQLite",
+      remote_mutation: false,
+    })
+    expect(serialized).not.toContain("configured-postgres-url")
+    expect(serialized).not.toContain("configured-bucket")
+    expect(serialized).not.toContain("configured-region")
+  })
+
+  test("auto mode stays local when remote registry configuration is absent", () => {
+    process.env["HOME"] = join(tempRoot, "home")
+    process.env["HASNA_PROMPTS_STORAGE_MODE"] = "auto"
+
+    const diagnostics = getPromptRegistryDiagnostics()
+
+    expect(diagnostics.requested_mode).toBe("auto")
+    expect(diagnostics.registry_state).toBe("local-only")
+    expect(diagnostics.remote.requested).toBe(false)
+    expect(diagnostics.remote.configured).toBe(false)
+    expect(diagnostics.warnings).toEqual([])
   })
 })
 
