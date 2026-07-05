@@ -983,6 +983,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["localization", "translation", "i18n", "l10n", "content"],
   },
   {
+    name: "tray-api-platform",
+    displayName: "Tray API Platform",
+    description: "Customer runtime API for items, events, and search",
+    category: "Developer Tools",
+    tags: ["integration", "iPaaS", "tray", "api-platform"],
+  },
+  {
     name: "travisci",
     displayName: "Travis CI",
     description: "Continuous integration and delivery platform for testing and deploying software",
