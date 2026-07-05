@@ -43,8 +43,7 @@ program
   });
 
 function getFormat(cmd: Command): OutputFormat {
-  const parent = cmd.parent;
-  return (parent?.opts().format || 'pretty') as OutputFormat;
+  return (cmd.optsWithGlobals().format || 'pretty') as OutputFormat;
 }
 
 function getClient(): Zatanna {
