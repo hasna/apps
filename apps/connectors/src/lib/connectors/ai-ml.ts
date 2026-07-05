@@ -975,4 +975,11 @@ export const connectors: ConnectorMeta[] = [
     category: "AI & ML",
     tags: ["ai", "llm", "glm", "zhipu"],
   },
+  {
+    name: "youart",
+    displayName: "YouArt",
+    description: "AI originals funding and creator economy",
+    category: "AI & ML",
+    tags: ["ai", "creator-economy", "funding"],
+  },
 ];

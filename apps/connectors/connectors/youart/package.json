@@ -1,10 +1,10 @@
 {
-  "name": "@hasna/connect-zhipu-ai",
-  "version": "0.0.1",
-  "description": "Zhipu AI (GLM) connector CLI - OpenAI-compatible chat and models API",
+  "name": "@hasna/connect-youart",
+  "version": "0.1.0",
+  "description": "YouArt API connector — AI originals, funding, and creator economy",
   "type": "module",
   "bin": {
-    "connect-zhipu-ai": "./bin/index.js"
+    "youart": "./bin/index.js"
   },
   "exports": {
     ".": {
@@ -21,15 +21,15 @@
     "prepublishOnly": "bun run build"
   },
   "keywords": [
-    "zhipu",
-    "glm",
+    "youart",
     "ai",
-    "api",
+    "creator-economy",
+    "funding",
+    "originals",
     "connector",
-    "cli",
     "typescript",
     "bun",
-    "llm"
+    "hasna"
   ],
   "author": "Hasna",
   "license": "Apache-2.0",

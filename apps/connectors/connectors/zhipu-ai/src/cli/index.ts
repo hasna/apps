@@ -33,8 +33,7 @@ program
   });
 
 function getFormat(cmd: Command): OutputFormat {
-  const parent = cmd.parent;
-  return (parent?.opts().format || 'pretty') as OutputFormat;
+  return (cmd.optsWithGlobals().format || 'pretty') as OutputFormat;
 }
 
 function getClient(): ZhipuAi {
@@ -43,7 +42,7 @@ function getClient(): ZhipuAi {
     error(`No API key configured. Run "${CONNECTOR_NAME} config set-key <key>" or set ZHIPU_AI_API_KEY`);
     process.exit(1);
   }
-  return new ZhipuAi({ apiKey });
+  return new ZhipuAi({ apiKey, baseUrl: process.env.ZHIPU_AI_BASE_URL });
 }
 
 // Profile Commands
@@ -110,7 +109,7 @@ configCmd.command('clear').description('Clear config').action(() => {
 // Chat Command
 program.command('chat <message>')
   .description('Send a chat message')
-  .option('-m, --model <model>', 'Model (default: glm-4)', 'glm-4')
+  .option('-m, --model <model>', 'Model (default: glm-5.2)', 'glm-5.2')
   .option('-t, --temperature <temp>', 'Temperature')
   .option('--max-tokens <n>', 'Max tokens')
   .option('-s, --system <prompt>', 'System prompt')
@@ -181,10 +180,19 @@ program.command('model <id>')
 // Search Command
 program.command('search <query>')
   .description('Search via Zhipu AI search API')
-  .action(async (query: string) => {
+  .option('-c, --count <n>', 'Number of results to return')
+  .option('--domain <domain>', 'Limit results to a domain')
+  .option('--recency <recency>', 'Recency filter (oneDay, oneWeek, oneMonth, oneYear, noLimit)')
+  .action(async (query: string, opts) => {
     try {
       const client = getClient();
-      const result = await client.search({ query });
+      const result = await client.search({
+        search_engine: 'search-prime',
+        search_query: query,
+        count: opts.count ? parseInt(opts.count) : undefined,
+        search_domain_filter: opts.domain,
+        search_recency_filter: opts.recency,
+      });
       print(result, getFormat(program));
     } catch (err) {
       error(String(err));

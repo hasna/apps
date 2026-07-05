@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Zhipu AI (GLM) connector — TypeScript CLI and library for the Zhipu Open Platform API. Uses Bearer token authentication against `https://api.zhipu.ai/v1` with OpenAI-compatible `/chat/completions` and `/models` endpoints.
+Zhipu AI (GLM) connector — TypeScript CLI and library for the Z.AI Open Platform API. Uses Bearer token authentication against `https://api.z.ai/api/paas/v4` with chat, models, and web search endpoints.
 
 ## Build & Run Commands
 
@@ -15,7 +15,7 @@ bun run build
 bun run typecheck
 bun run dev profile list
 bun run dev config show
-bun run dev chat "Hello" -m glm-4
+bun run dev chat "Hello" -m glm-5.2
 bun run dev models
 ```
 
@@ -32,8 +32,7 @@ Dashboard auth detection: **apikey** (Bearer token).
 | POST | `/chat/completions` | OpenAI-compatible chat |
 | GET | `/models` | List models |
 | GET | `/models/:id` | Get model details |
-| POST | `/search` | Search API |
-| GET | `/events` | List events |
+| POST | `/web_search` | Web Search API |
 
 ## Project Structure
 

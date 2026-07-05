@@ -1,7 +1,7 @@
 import type { ZhipuAiConfig } from '../types';
 import { ZhipuAiApiError } from '../types';
 
-const DEFAULT_BASE_URL = 'https://api.zhipu.ai/v1';
+const DEFAULT_BASE_URL = 'https://api.z.ai/api/paas/v4';
 
 export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';

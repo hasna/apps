@@ -6,7 +6,6 @@ import type {
   ZhipuAiModel,
   SearchRequest,
   SearchResponse,
-  EventsResponse,
 } from '../types';
 import { ZhipuAiClient } from './client';
 
@@ -43,11 +42,7 @@ export class ZhipuAi {
   }
 
   async search(request: SearchRequest): Promise<SearchResponse> {
-    return this.client.post<SearchResponse>('/search', request);
-  }
-
-  async listEvents(params?: Record<string, string | number | boolean | undefined>): Promise<EventsResponse> {
-    return this.client.get<EventsResponse>('/events', params);
+    return this.client.post<SearchResponse>('/web_search', request);
   }
 
   getClient(): ZhipuAiClient {

@@ -7,8 +7,10 @@ export interface ZhipuAiConfig {
 
 // Chat Types (OpenAI-compatible)
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
+  reasoning_content?: string;
+  tool_calls?: unknown[];
 }
 
 export interface ChatRequest {
@@ -37,10 +39,12 @@ export interface ChatUsage {
 
 export interface ChatResponse {
   id: string;
-  object: string;
+  object?: string;
+  request_id?: string;
   created: number;
   model: string;
   choices: ChatChoice[];
+  web_search?: WebSearchResult[];
   usage?: ChatUsage;
 }
 
@@ -59,18 +63,30 @@ export interface ModelsResponse {
 
 // Search Types
 export interface SearchRequest {
-  query: string;
+  search_query: string;
+  search_engine?: 'search-prime';
+  count?: number;
+  search_domain_filter?: string;
+  search_recency_filter?: 'oneDay' | 'oneWeek' | 'oneMonth' | 'oneYear' | 'noLimit';
+  request_id?: string;
+  user_id?: string;
   [key: string]: unknown;
+}
+
+export interface WebSearchResult {
+  title: string;
+  content: string;
+  link: string;
+  media?: string;
+  icon?: string;
+  refer?: string;
+  publish_date?: string;
 }
 
 export interface SearchResponse {
-  [key: string]: unknown;
-}
-
-// Events Types
-export interface EventsResponse {
-  object?: string;
-  data?: unknown[];
+  id?: string;
+  created?: number;
+  search_result?: WebSearchResult[];
   [key: string]: unknown;
 }
 
