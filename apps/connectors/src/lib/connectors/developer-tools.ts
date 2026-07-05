@@ -1004,6 +1004,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["monitoring", "uptime", "performance"],
   },
   {
+    name: "xray",
+    displayName: "Xray",
+    description: "Test management platform for QA scans, events, and search",
+    category: "Developer Tools",
+    tags: ["testing", "test-management", "qa", "scans"],
+  },
+  {
     name: "xata",
     displayName: "Xata",
     description: "Serverless database with search and analytics",
