@@ -444,6 +444,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["email", "validation", "verification"],
   },
   {
+    name: "voiceflow",
+    displayName: "Voiceflow",
+    description: "Conversational AI platform for building and deploying voice and chat agents",
+    category: "Marketing & Sales",
+    tags: ["chatbot", "conversational-ai", "voice", "automation"],
+  },
+  {
     name: "whatconverts",
     displayName: "WhatConverts",
     description: "Lead tracking and marketing attribution platform",
