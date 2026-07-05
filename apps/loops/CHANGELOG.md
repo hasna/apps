@@ -5,6 +5,38 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.4.13 (2026-07-05)
+
+`--pr-handoff` workflows whose worker pushes its own branch and opens the PR
+directly (no handoff artifact — the cursor pattern) now complete instead of
+failing the pr-handoff step and skipping the verifier.
+
+### Fixed
+
+- **pr-handoff — no-artifact/direct-PR path exited 1 instead of 0:** the step
+  runs as `bash -lc` (a login shell). The no-artifact guard ended with an
+  explicit `exit 0` while `set -e` was active; under systemd (`SHLVL` unset →
+  bash sets 1) an explicit exit sources `~/.bash_logout`, whose `clear_console`
+  fails without a controlling TTY, and errexit handed that failure back as the
+  step's exit code. The workflow failed, the verifier (which depends on
+  pr-handoff) was skipped, and the source task was stranded `in_progress`.
+  Both guard branches now route through bun heredocs and fall through the `if`'s
+  natural end — no top-level shell `exit` — so the intended status is preserved
+  on the local and remote execution paths alike (gate steps already ended
+  naturally, which is why only pr-handoff failed). (#34)
+
+### Added
+
+- **Worker-opened PR detection on the no-artifact path:** when no handoff
+  artifact exists, pr-handoff now looks up the worker's own open PR for the
+  workflow branch (`gh pr list --head <branch> --state open`), records the same
+  `openloops:pr-handoff=done task=… pr=… commit=… branch=…` comment the
+  artifact path records, and exits 0 — so direct-PR (cursor-style) completions
+  carry PR evidence into the verifier and merge lane. Best-effort and
+  fail-open on lookup: a missing PR or a `gh`/`git`/`todos` error is logged,
+  writes no done-evidence, and never fails the step. The artifact (codewith)
+  handoff path is unchanged. (#34)
+
 ## 0.4.12 (2026-07-05)
 
 Drain throughput: `--max-active` is now a per-route ceiling instead of a
