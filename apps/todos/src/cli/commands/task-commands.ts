@@ -326,13 +326,14 @@ export function registerTaskCommands(program: Command) {
   task
     .command("route-state <id>")
     .description("Show deterministic routing eligibility and workflow pointers for a task")
-    .action(async (id: string) => {
+    .option("--verify-project-root", "Filesystem-check the resolved project root and surface missing_project_root before admission")
+    .action(async (id: string, opts) => {
       const globalOpts = program.opts();
       const resolvedId = resolveTaskId(id);
       const { getTaskRouteState } = await import("../../lib/task-routing.js");
       let state;
       try {
-        state = getTaskRouteState(resolvedId);
+        state = getTaskRouteState(resolvedId, undefined, { verifyProjectRoot: Boolean(opts.verifyProjectRoot) });
       } catch (e) {
         handleError(e);
       }
@@ -345,8 +346,12 @@ export function registerTaskCommands(program: Command) {
       console.log(chalk.bold("Task route state"));
       console.log(`  ${chalk.dim("Task:")}       ${state.task_short_id || state.task_id.slice(0, 8)}`);
       console.log(`  ${chalk.dim("Eligible:")}   ${state.eligible ? chalk.green("yes") : chalk.yellow("no")}`);
+      console.log(`  ${chalk.dim("Class:")}      ${state.route_class}`);
       console.log(`  ${chalk.dim("Reasons:")}    ${state.reasons.length > 0 ? state.reasons.join(", ") : "none"}`);
       console.log(`  ${chalk.dim("Route:")}      ${state.route.concurrency_key}`);
+      if (state.evidence.owner) {
+        console.log(`  ${chalk.dim("Owner:")}      ${state.evidence.owner}${state.evidence.stale ? chalk.yellow(" (stale)") : ""}`);
+      }
       if (state.pointers.current_workflow_invocation_id) {
         console.log(`  ${chalk.dim("Invocation:")} ${state.pointers.current_workflow_invocation_id}`);
       }
