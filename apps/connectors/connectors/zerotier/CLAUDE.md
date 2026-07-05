@@ -4,7 +4,7 @@ This file provides guidance to Claude Code when working with the ZeroTier connec
 
 ## Project Overview
 
-`@hasna/connect-zerotier` is a TypeScript connector for the [ZeroTier Central REST API](https://docs.zerotier.com/central/v1/). It manages SDN virtual networks, members, organizations, invites, SSO config, and audit logs via API key authentication.
+`@hasna/connect-zerotier` is a TypeScript connector for the [ZeroTier Central REST API](https://docs.zerotier.com/api/central/legacy/). It manages SDN virtual networks, members, organizations, invites, SSO config, and audit logs via API key authentication.
 
 ## Build & Run Commands
 

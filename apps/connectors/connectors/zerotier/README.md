@@ -1,6 +1,6 @@
 # connect-zerotier
 
-TypeScript connector and CLI for the [ZeroTier Central REST API](https://docs.zerotier.com/central/v1/).
+TypeScript connector and CLI for the [ZeroTier Central REST API](https://docs.zerotier.com/api/central/legacy/).
 
 ## Features
 
