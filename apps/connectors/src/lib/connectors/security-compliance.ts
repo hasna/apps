@@ -157,6 +157,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["security", "scanning", "threat-intelligence"],
   },
   {
+    name: "venafi",
+    displayName: "Venafi",
+    description: "TLS Protect Cloud certificate lifecycle and PKI automation",
+    category: "Security & Compliance",
+    tags: ["certificates", "pki", "tls", "security"],
+  },
+  {
     name: "virustotal",
     displayName: "VirusTotal",
     description: "File and URL malware scanning and threat intelligence",
