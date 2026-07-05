@@ -1,9 +1,13 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { LocalFeedbackStore } from "../storage.js";
+import {
+  createFeedbackStore,
+  describeFeedbackStoreRuntime,
+  type FeedbackStoreRuntimeDiagnostics,
+} from "../storage.js";
 import type { FeedbackInput, FeedbackStore } from "../types.js";
-import { parseFeedbackStatus, validationErrorMessage } from "../validation.js";
+import { parseFeedbackInput, parseFeedbackStatus, validationErrorMessage } from "../validation.js";
 
 export interface FeedbackMcpToolDefinition {
   name: string;
@@ -11,6 +15,11 @@ export interface FeedbackMcpToolDefinition {
   paramsSchema: Record<string, z.ZodTypeAny>;
   inputSchema: Record<string, unknown>;
   run: (input: Record<string, unknown>) => CallToolResult | Promise<CallToolResult>;
+}
+
+export interface FeedbackMcpToolsOptions {
+  store?: FeedbackStore;
+  runtime?: FeedbackStoreRuntimeDiagnostics;
 }
 
 function textContent(text: string): CallToolResult {
@@ -23,6 +32,11 @@ function jsonContent(value: unknown): CallToolResult {
 
 function errorContent(error: unknown): CallToolResult {
   return { ...textContent(validationErrorMessage(error)), isError: true };
+}
+
+function storageUnavailableContent(runtime: FeedbackStoreRuntimeDiagnostics): CallToolResult {
+  const detail = runtime.blockers.length > 0 ? runtime.blockers.join("; ") : "Storage runtime is not ready.";
+  return { ...textContent(`Feedback storage unavailable: ${detail}`), isError: true };
 }
 
 function readInput(input: Record<string, unknown>): FeedbackInput {
@@ -53,8 +67,24 @@ function listFilterFromInput(input: Record<string, unknown>) {
   };
 }
 
-export function buildFeedbackMcpTools(store: FeedbackStore = new LocalFeedbackStore()): FeedbackMcpToolDefinition[] {
+function isFeedbackStore(value: unknown): value is FeedbackStore {
+  return Boolean(value) &&
+    typeof value === "object" &&
+    typeof (value as FeedbackStore).createFeedback === "function" &&
+    typeof (value as FeedbackStore).listFeedback === "function";
+}
+
+export function buildFeedbackMcpTools(options: FeedbackStore | FeedbackMcpToolsOptions = {}): FeedbackMcpToolDefinition[] {
+  const toolOptions = isFeedbackStore(options) ? { store: options } : options;
+  const runtime = toolOptions.runtime ?? describeFeedbackStoreRuntime({ cloudStore: toolOptions.store });
+  const store = toolOptions.store ?? (runtime.mode === "local" && runtime.ok ? createFeedbackStore() : undefined);
   const tools: Omit<FeedbackMcpToolDefinition, "inputSchema">[] = [
+    {
+      name: "feedback_diagnostics",
+      description: "Return redacted Open Feedback storage runtime diagnostics.",
+      paramsSchema: {},
+      run: async () => jsonContent(runtime),
+    },
     {
       name: "submit_feedback",
       description: "Submit product feedback for an application.",
@@ -73,7 +103,8 @@ export function buildFeedbackMcpTools(store: FeedbackStore = new LocalFeedbackSt
       },
       run: async (input) => {
         try {
-          return jsonContent(await store.createFeedback(readInput(input), { source: "mcp" }));
+          if (!store) return storageUnavailableContent(runtime);
+          return jsonContent(await store.createFeedback(parseFeedbackInput(readInput(input)), { source: "mcp" }));
         } catch (error) {
           return errorContent(error);
         }
@@ -91,7 +122,9 @@ export function buildFeedbackMcpTools(store: FeedbackStore = new LocalFeedbackSt
         until: z.string().optional(),
         limit: z.number().int().min(1).max(500).optional(),
       },
-      run: async (input) => jsonContent(await store.listFeedback(listFilterFromInput(input))),
+      run: async (input) => store
+        ? jsonContent(await store.listFeedback(listFilterFromInput(input)))
+        : storageUnavailableContent(runtime),
     },
     {
       name: "get_feedback",
@@ -100,6 +133,7 @@ export function buildFeedbackMcpTools(store: FeedbackStore = new LocalFeedbackSt
         id: z.string(),
       },
       run: async (input) => {
+        if (!store) return storageUnavailableContent(runtime);
         const item = await store.getFeedback(String(input.id));
         return item ? jsonContent(item) : { ...textContent(`Feedback not found: ${String(input.id)}`), isError: true };
       },
@@ -112,6 +146,7 @@ export function buildFeedbackMcpTools(store: FeedbackStore = new LocalFeedbackSt
         status: z.enum(["new", "triaged", "closed"]),
       },
       run: async (input) => {
+        if (!store) return storageUnavailableContent(runtime);
         const item = await store.updateFeedbackStatus(String(input.id), parseFeedbackStatus(input.status));
         return item ? jsonContent(item) : { ...textContent(`Feedback not found: ${String(input.id)}`), isError: true };
       },
@@ -120,7 +155,7 @@ export function buildFeedbackMcpTools(store: FeedbackStore = new LocalFeedbackSt
       name: "feedback_stats",
       description: "Return aggregate feedback counts.",
       paramsSchema: {},
-      run: async () => jsonContent(await store.stats()),
+      run: async () => store ? jsonContent(await store.stats()) : storageUnavailableContent(runtime),
     },
     {
       name: "export_feedback",
@@ -136,6 +171,7 @@ export function buildFeedbackMcpTools(store: FeedbackStore = new LocalFeedbackSt
         format: z.enum(["jsonl", "json"]).optional(),
       },
       run: async (input) => {
+        if (!store) return storageUnavailableContent(runtime);
         const filter = listFilterFromInput(input);
         return input.format === "json"
           ? jsonContent(await store.listFeedback(filter))
@@ -150,8 +186,8 @@ export function buildFeedbackMcpTools(store: FeedbackStore = new LocalFeedbackSt
   }));
 }
 
-export function registerFeedbackMcpTools(server: McpServer, store?: FeedbackStore): FeedbackMcpToolDefinition[] {
-  const tools = buildFeedbackMcpTools(store);
+export function registerFeedbackMcpTools(server: McpServer, options?: FeedbackStore | FeedbackMcpToolsOptions): FeedbackMcpToolDefinition[] {
+  const tools = buildFeedbackMcpTools(options);
   for (const tool of tools) {
     server.tool(tool.name, tool.description, tool.paramsSchema, async (input) => tool.run(readRecord(input)));
   }

@@ -8,10 +8,19 @@ export {
   DEFAULT_DATA_DIR,
   DEFAULT_FEEDBACK_FILE,
   LocalFeedbackStore,
+  createFeedbackStore,
+  describeFeedbackStoreRuntime,
   resolveFeedbackDataDir,
   resolveFeedbackFilePath,
 } from "./storage.js";
-export type { LocalFeedbackStoreOptions } from "./storage.js";
+export type {
+  FeedbackCloudRuntimeDiagnostics,
+  FeedbackStoreRuntimeDiagnosticMode,
+  FeedbackStoreRuntimeDiagnostics,
+  FeedbackStoreRuntimeMode,
+  FeedbackStoreRuntimeOptions,
+  LocalFeedbackStoreOptions,
+} from "./storage.js";
 export {
   feedbackInputSchema,
   feedbackItemSchema,
