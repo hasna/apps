@@ -521,6 +521,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["data", "enrichment", "processing"],
   },
   {
+    name: "userlens",
+    displayName: "Userlens",
+    description: "Customer success analytics",
+    category: "Data & Analytics",
+    tags: ["analytics", "customer-success"],
+  },
+  {
     name: "watchsignals",
     displayName: "WatchSignals",
     description: "Luxury watch market data and price tracking",
