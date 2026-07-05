@@ -934,6 +934,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["extraction", "documents", "parsing"],
   },
   {
+    name: "weaviate-api-platform",
+    displayName: "Weaviate API Platform",
+    description: "Weaviate API Platform vector search and item management",
+    category: "AI & ML",
+    tags: ["vector", "weaviate", "platform", "search"],
+  },
+  {
     name: "wonderchat",
     displayName: "Wonderchat",
     description: "AI chatbot builder from website content",
