@@ -23,8 +23,8 @@ program
   .option('-k, --api-key <key>', 'API key (overrides config)')
   .option('-f, --format <format>', 'Output format (json, pretty)', 'pretty')
   .option('-p, --profile <profile>', 'Use a specific profile')
-  .hook('preAction', (thisCommand) => {
-    const opts = thisCommand.opts();
+  .hook('preAction', () => {
+    const opts = program.opts();
     if (opts.profile) {
       if (!profileExists(opts.profile)) {
         error(`Profile "${opts.profile}" does not exist`);
@@ -79,7 +79,7 @@ profileCmd.command('create <name>').description('Create profile')
   .option('--use', 'Switch to this profile')
   .action((name: string, opts) => {
     if (profileExists(name)) { error(`Profile "${name}" already exists`); process.exit(1); }
-    createProfile(name, { apiKey: opts.apiKey });
+    createProfile(name, { apiKey: opts.apiKey || program.opts().apiKey });
     success(`Profile "${name}" created`);
     if (opts.use) { setCurrentProfile(name); info(`Switched to profile: ${name}`); }
   });
