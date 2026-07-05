@@ -15,6 +15,7 @@ let profileOverride: string | undefined;
 const CONFIG_DIR = join(homedir(), '.hasna', 'connectors', CONNECTOR_NAME);
 const PROFILES_DIR = join(CONFIG_DIR, 'profiles');
 const CURRENT_PROFILE_FILE = join(CONFIG_DIR, 'current_profile');
+const PROFILE_NAME_PATTERN = /^[a-zA-Z0-9_-]+$/;
 
 export function setProfileOverride(profile: string | undefined): void {
   profileOverride = profile;
@@ -29,7 +30,18 @@ export function ensureConfigDir(): void {
   }
 }
 
+export function isValidProfileName(profile: string): boolean {
+  return PROFILE_NAME_PATTERN.test(profile);
+}
+
+function assertValidProfileName(profile: string): void {
+  if (!isValidProfileName(profile)) {
+    throw new Error('Profile name can only contain letters, numbers, hyphens, and underscores');
+  }
+}
+
 function getProfilePath(profile: string): string {
+  assertValidProfileName(profile);
   return join(PROFILES_DIR, `${profile}.json`);
 }
 
@@ -43,7 +55,7 @@ export function getCurrentProfile(): string {
   if (existsSync(CURRENT_PROFILE_FILE)) {
     try {
       const profile = readFileSync(CURRENT_PROFILE_FILE, 'utf-8').trim();
-      if (profile && profileExists(profile)) {
+      if (profile && isValidProfileName(profile) && profileExists(profile)) {
         return profile;
       }
     } catch {
@@ -55,6 +67,7 @@ export function getCurrentProfile(): string {
 }
 
 export function setCurrentProfile(profile: string): void {
+  assertValidProfileName(profile);
   ensureConfigDir();
 
   if (!profileExists(profile) && profile !== DEFAULT_PROFILE) {
@@ -65,6 +78,9 @@ export function setCurrentProfile(profile: string): void {
 }
 
 export function profileExists(profile: string): boolean {
+  if (!isValidProfileName(profile)) {
+    return false;
+  }
   return existsSync(getProfilePath(profile));
 }
 
@@ -82,14 +98,11 @@ export function listProfiles(): string[] {
 }
 
 export function createProfile(profile: string, config: ProfileConfig = {}): boolean {
+  assertValidProfileName(profile);
   ensureConfigDir();
 
   if (profileExists(profile)) {
     return false;
-  }
-
-  if (!/^[a-zA-Z0-9_-]+$/.test(profile)) {
-    throw new Error('Profile name can only contain letters, numbers, hyphens, and underscores');
   }
 
   writeFileSync(getProfilePath(profile), JSON.stringify(config, null, 2));
@@ -114,8 +127,9 @@ export function deleteProfile(profile: string): boolean {
 }
 
 export function loadProfile(profile?: string): ProfileConfig {
-  ensureConfigDir();
   const profileName = profile || getCurrentProfile();
+  assertValidProfileName(profileName);
+  ensureConfigDir();
   const profilePath = getProfilePath(profileName);
 
   if (!existsSync(profilePath)) {
@@ -130,8 +144,9 @@ export function loadProfile(profile?: string): ProfileConfig {
 }
 
 export function saveProfile(config: ProfileConfig, profile?: string): void {
-  ensureConfigDir();
   const profileName = profile || getCurrentProfile();
+  assertValidProfileName(profileName);
+  ensureConfigDir();
   writeFileSync(getProfilePath(profileName), JSON.stringify(config, null, 2));
 }
 

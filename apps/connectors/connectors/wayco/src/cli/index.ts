@@ -48,8 +48,15 @@ program
   });
 
 function getFormat(cmd: Command): OutputFormat {
-  const parent = cmd.parent;
-  return (parent?.opts().format || 'pretty') as OutputFormat;
+  let current: Command | null = cmd;
+  while (current) {
+    const format = current.opts().format;
+    if (format) {
+      return format as OutputFormat;
+    }
+    current = current.parent;
+  }
+  return 'pretty';
 }
 
 function getClient(): Wayco {
