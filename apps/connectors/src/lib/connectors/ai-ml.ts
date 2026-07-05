@@ -927,6 +927,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["transcription", "meetings", "ai"],
   },
   {
+    name: "voltair",
+    displayName: "Voltair",
+    description: "AI project run API",
+    category: "AI & ML",
+    tags: ["ai", "projects", "runs"],
+  },
+  {
     name: "wavelineextract",
     displayName: "Waveline Extract",
     description: "Document data extraction and parsing",
