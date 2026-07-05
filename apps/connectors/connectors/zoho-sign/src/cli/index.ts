@@ -332,10 +332,12 @@ webhookCmd.command('list').description('List webhooks').action(async () => {
   }
 });
 
-program.command('account').description('Get organization account details').action(async () => {
+const accountCmd = program.command('account').description('Get organization account details');
+
+accountCmd.action(async () => {
   try {
     const result = await getClient().getAccount();
-    print(result.account ?? result, getFormat(program));
+    print(result.account ?? result, getFormat(accountCmd));
   } catch (err) {
     error(String(err));
     process.exit(1);
