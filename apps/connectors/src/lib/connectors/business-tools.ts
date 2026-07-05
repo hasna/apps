@@ -262,6 +262,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["hr", "recruiting", "ats"],
   },
   {
+    name: "workable",
+    displayName: "Workable",
+    description: "Recruiting and applicant tracking via SPI v3 API",
+    category: "Business Tools",
+    tags: ["hr", "recruiting", "ats"],
+  },
+  {
     name: "calendarhero",
     displayName: "CalendarHero",
     description: "AI-powered scheduling and meeting automation",
