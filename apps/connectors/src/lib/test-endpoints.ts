@@ -55,6 +55,10 @@ export const TEST_ENDPOINTS: Record<string, TestEndpoint> = {
     url: "https://api.heygen.com/v2/user/remaining_quota",
     headers: (key) => ({ "X-Api-Key": key }),
   },
+  veo: {
+    url: "https://api.veo.co.uk/api/users",
+    headers: (key) => ({ Authorization: `Bearer ${key}` }),
+  },
   elevenlabs: {
     url: "https://api.elevenlabs.io/v1/user",
     headers: (key) => ({ "xi-api-key": key }),

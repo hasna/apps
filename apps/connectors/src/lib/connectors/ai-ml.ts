@@ -920,6 +920,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "music", "generation"],
   },
   {
+    name: "veo",
+    displayName: "Veo",
+    description: "Sports video library platform — browse videos, transcripts, users, and groups (veo.co.uk, not Google Gemini Veo)",
+    category: "AI & ML",
+    tags: ["video", "sports", "library", "transcripts"],
+  },
+  {
     name: "voicit",
     displayName: "Voicit",
     description: "AI meeting transcription and note-taking",
