@@ -934,6 +934,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["extraction", "documents", "parsing"],
   },
   {
+    name: "wayco",
+    displayName: "Wayco",
+    description: "Med-legal case management, lead intake, medical records, provider matching, and voice calls",
+    category: "AI & ML",
+    tags: ["ai", "med-legal", "healthcare"],
+  },
+  {
     name: "wonderchat",
     displayName: "Wonderchat",
     description: "AI chatbot builder from website content",
