@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { ClipStore } from "./storage.js";
-import type { ClipboardCapabilities, ClipboardKind, ClipClientOptions, ClipRecord } from "./types.js";
+import type { ClipboardCapabilities, ClipboardHistoryKind, ClipboardHistoryRecord, ClipboardKind, ClipClientOptions, ClipRecord, JsonObject } from "./types.js";
 import { commandExists, runCommand, runCommandBytes } from "./capture/tools.js";
 
 const CLIPBOARD_TOOLS = ["pbpaste", "pngpaste", "osascript", "wl-paste", "wl-copy", "xclip"] as const;
@@ -17,6 +17,18 @@ export function detectClipboardCapabilities(): ClipboardCapabilities {
       file: Boolean(tools["wl-paste"]),
     },
   };
+}
+
+interface ClipboardPayload {
+  kind: ClipboardHistoryKind;
+  title: string;
+  mimeType?: string;
+  source: string;
+  metadata: JsonObject;
+  text?: string;
+  buffer?: Uint8Array;
+  path?: string;
+  extension?: string;
 }
 
 async function readClipboardText(): Promise<string | null> {
@@ -80,57 +92,117 @@ async function readClipboardFilePath(): Promise<string | null> {
   return text ? uriListToPath(text) : null;
 }
 
+async function readClipboardPayload(kind: ClipboardKind, title?: string): Promise<ClipboardPayload> {
+  if (kind === "auto" || kind === "file") {
+    const path = await readClipboardFilePath();
+    if (path) {
+      return {
+        kind: "clipboard-file",
+        title: title ?? "Clipboard file",
+        path,
+        source: "clipboard:file",
+        metadata: { clipboardKind: "file", bestEffort: true },
+      };
+    }
+    if (kind === "file") throw new Error("Clipboard does not contain a readable file path.");
+  }
+
+  if (kind === "auto" || kind === "image") {
+    const image = await readClipboardImage();
+    if (image) {
+      return {
+        kind: "clipboard-image",
+        title: title ?? "Clipboard image",
+        mimeType: image.mimeType,
+        buffer: image.bytes,
+        source: image.source,
+        metadata: { clipboardKind: "image", bestEffort: true },
+        extension: ".png",
+      };
+    }
+    if (kind === "image") throw new Error("Clipboard image capture is unavailable or empty.");
+  }
+
+  if (kind === "auto" || kind === "text") {
+    const text = await readClipboardText();
+    if (text) {
+      return {
+        kind: "clipboard-text",
+        title: title ?? "Clipboard text",
+        mimeType: "text/plain; charset=utf-8",
+        text,
+        source: "clipboard:text",
+        metadata: { clipboardKind: "text", bestEffort: true },
+      };
+    }
+  }
+
+  throw new Error("Clipboard content could not be read with the available platform tools.");
+}
+
+export async function captureClipboardHistory(
+  kind: ClipboardKind = "auto",
+  options: ClipClientOptions & { title?: string; maxItems?: number } = {},
+): Promise<ClipboardHistoryRecord> {
+  const payload = await readClipboardPayload(kind, options.title);
+  const store = new ClipStore(options);
+  try {
+    return store.addClipboardHistory({
+      kind: payload.kind,
+      title: payload.title,
+      text: payload.text,
+      buffer: payload.buffer,
+      path: payload.path,
+      mimeType: payload.mimeType,
+      source: payload.source,
+      metadata: payload.metadata,
+      extension: payload.extension,
+      maxItems: options.maxItems,
+    });
+  } finally {
+    store.close();
+  }
+}
+
 export async function shareClipboard(
   kind: ClipboardKind = "auto",
   options: ClipClientOptions & { title?: string; baseUrl?: string } = {},
 ): Promise<ClipRecord> {
+  const payload = await readClipboardPayload(kind, options.title);
   const store = new ClipStore(options);
   try {
-    if (kind === "auto" || kind === "file") {
-      const path = await readClipboardFilePath();
-      if (path) {
-        return store.createFileClip({
-          path,
-          title: options.title,
-          kind: "clipboard-file",
-          source: "clipboard:file",
-          metadata: { clipboardKind: "file", bestEffort: true },
-          baseUrl: options.baseUrl,
-        });
-      }
-      if (kind === "file") throw new Error("Clipboard does not contain a readable file path.");
+    if (payload.path) {
+      return store.createFileClip({
+        path: payload.path,
+        title: options.title,
+        kind: "clipboard-file",
+        source: payload.source,
+        metadata: payload.metadata,
+        baseUrl: options.baseUrl,
+      });
     }
-
-    if (kind === "auto" || kind === "image") {
-      const image = await readClipboardImage();
-      if (image) {
-        return store.createBufferClip({
-          buffer: image.bytes,
-          kind: "clipboard-image",
-          title: options.title ?? "Clipboard image",
-          mimeType: image.mimeType,
-          source: image.source,
-          metadata: { clipboardKind: "image", bestEffort: true },
-          extension: ".png",
-          baseUrl: options.baseUrl,
-        });
-      }
-      if (kind === "image") throw new Error("Clipboard image capture is unavailable or empty.");
+    if (payload.buffer) {
+      if (!payload.mimeType) throw new Error("Clipboard buffer content is missing a MIME type.");
+      return store.createBufferClip({
+        buffer: payload.buffer,
+        kind: payload.kind,
+        title: payload.title,
+        mimeType: payload.mimeType,
+        source: payload.source,
+        metadata: payload.metadata,
+        extension: payload.extension,
+        baseUrl: options.baseUrl,
+      });
     }
-
-    if (kind === "auto" || kind === "text") {
-      const text = await readClipboardText();
-      if (text) {
-        return store.createTextClip({
-          text,
-          title: options.title ?? "Clipboard text",
-          source: "clipboard:text",
-          metadata: { clipboardKind: "text", bestEffort: true },
-          baseUrl: options.baseUrl,
-        });
-      }
+    if (payload.text !== undefined) {
+      return store.createTextClip({
+        text: payload.text,
+        title: payload.title,
+        source: payload.source,
+        metadata: payload.metadata,
+        baseUrl: options.baseUrl,
+      });
     }
-
     throw new Error("Clipboard content could not be shared with the available platform tools.");
   } finally {
     store.close();

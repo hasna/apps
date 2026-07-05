@@ -2,7 +2,8 @@ import { describe, expect, it } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { detectClipboardCapabilities, shareClipboard } from "./clipboard.js";
+import { captureClipboardHistory, detectClipboardCapabilities, shareClipboard } from "./clipboard.js";
+import { ClipStore } from "./storage.js";
 
 describe("clipboard sharing", () => {
   it("reads image bytes from pngpaste when that advertised capability is available", async () => {
@@ -51,6 +52,45 @@ describe("clipboard sharing", () => {
       expect(capabilities.tools["pbpaste"]).toBe(true);
       expect(capabilities.tools["wl-paste"]).toBe(false);
       expect(capabilities.supports.file).toBe(false);
+    } finally {
+      if (previousPath === undefined) {
+        delete process.env["PATH"];
+      } else {
+        process.env["PATH"] = previousPath;
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("captures text clipboard content into opt-in history", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "clip-clipboard-history-"));
+    const previousPath = process.env["PATH"];
+    try {
+      const binDir = join(dir, "bin");
+      mkdirSync(binDir);
+      const wlPaste = join(binDir, "wl-paste");
+      writeFileSync(wlPaste, "#!/usr/bin/env bash\nif [ \"$1\" = \"--no-newline\" ]; then printf 'history text'; else exit 2; fi\n");
+      chmodSync(wlPaste, 0o755);
+      process.env["PATH"] = `${binDir}:${previousPath ?? ""}`;
+
+      const homeDir = join(dir, "home");
+      const entry = await captureClipboardHistory("text", {
+        homeDir,
+        title: "Captured text",
+        maxItems: 5,
+      });
+
+      expect(entry.kind).toBe("clipboard-text");
+      expect(entry.text).toBe("history text");
+      expect(entry.title).toBe("Captured text");
+
+      const store = new ClipStore({ homeDir });
+      try {
+        expect(store.listClipboardHistory({ limit: 10 })).toHaveLength(1);
+        expect(store.listClips({ limit: 10 })).toHaveLength(0);
+      } finally {
+        store.close();
+      }
     } finally {
       if (previousPath === undefined) {
         delete process.env["PATH"];

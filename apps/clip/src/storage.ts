@@ -1,10 +1,10 @@
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { basename, extname, join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { basename, extname, join, resolve, sep } from "node:path";
 import { Buffer } from "node:buffer";
 import { ensureClipHome, resolveArtifactDir, resolveDbPath, resolveHomeDir, isInMemoryDb } from "./paths.js";
 import { buildShareUrl } from "./share.js";
-import type { ClipClientOptions, ClipKind, ClipRecord, ClipStorageStatus, CreateClipMetadata, JsonObject } from "./types.js";
+import type { ClipboardHistoryKind, ClipboardHistoryRecord, ClipClientOptions, ClipKind, ClipRecord, ClipStorageStatus, CreateClipMetadata, JsonObject } from "./types.js";
 import { extensionForMime, generateSlug, inferMimeType, normalizeLimit, nowIso, parseJsonObject, sha256, stringifyJsonObject, textMimeType } from "./util.js";
 
 interface ClipRow {
@@ -22,6 +22,21 @@ interface ClipRow {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+}
+
+interface ClipboardHistoryRow {
+  id: string;
+  slug: string;
+  kind: ClipboardHistoryKind;
+  title: string | null;
+  mime_type: string;
+  artifact_path: string | null;
+  text_content: string | null;
+  size_bytes: number;
+  sha256: string;
+  source: string;
+  metadata_json: string;
+  created_at: string;
 }
 
 export interface CreateTextClipInput {
@@ -53,6 +68,19 @@ export interface CreateFileClipInput {
   baseUrl?: string;
 }
 
+export interface AddClipboardHistoryInput {
+  kind: ClipboardHistoryKind;
+  title?: string;
+  text?: string;
+  buffer?: Uint8Array;
+  path?: string;
+  mimeType?: string;
+  source?: string;
+  metadata?: JsonObject;
+  extension?: string;
+  maxItems?: number;
+}
+
 export function ensureSchema(db: Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS clips (
@@ -74,6 +102,23 @@ export function ensureSchema(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_clips_created_at ON clips(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_clips_deleted_at ON clips(deleted_at);
     CREATE INDEX IF NOT EXISTS idx_clips_kind ON clips(kind);
+
+    CREATE TABLE IF NOT EXISTS clipboard_history (
+      id TEXT PRIMARY KEY,
+      slug TEXT NOT NULL UNIQUE,
+      kind TEXT NOT NULL,
+      title TEXT,
+      mime_type TEXT NOT NULL,
+      artifact_path TEXT,
+      text_content TEXT,
+      size_bytes INTEGER NOT NULL DEFAULT 0,
+      sha256 TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'clipboard',
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_clipboard_history_created_at ON clipboard_history(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_clipboard_history_kind ON clipboard_history(kind);
   `);
 }
 
@@ -81,8 +126,22 @@ function openDatabase(path: string): Database {
   const db = new Database(path);
   if (!isInMemoryDb(path)) db.exec("PRAGMA journal_mode = WAL;");
   db.exec("PRAGMA foreign_keys = ON;");
+  secureDatabaseFiles(path);
   ensureSchema(db);
+  secureDatabaseFiles(path);
   return db;
+}
+
+function secureDatabaseFiles(path: string): void {
+  if (isInMemoryDb(path)) return;
+  for (const file of [path, `${path}-wal`, `${path}-shm`]) {
+    if (!existsSync(file)) continue;
+    try {
+      chmodSync(file, 0o600);
+    } catch {
+      continue;
+    }
+  }
 }
 
 function countValue(value: unknown): number {
@@ -207,6 +266,148 @@ export class ClipStore {
     return Number(result.changes ?? 0) > 0;
   }
 
+  addClipboardHistory(input: AddClipboardHistoryInput): ClipboardHistoryRecord {
+    const id = crypto.randomUUID();
+    const now = nowIso();
+    let artifactPath: string | null = null;
+    let text: string | null = null;
+    let data: Buffer;
+    let mimeType = input.mimeType;
+    let title = input.title ?? null;
+
+    if (input.text !== undefined) {
+      text = input.text;
+      data = Buffer.from(input.text, "utf8");
+      mimeType = mimeType ?? textMimeType();
+      title = title ?? "Clipboard text";
+    } else if (input.path) {
+      if (!existsSync(input.path)) throw new Error(`File not found: ${input.path}`);
+      const stat = statSync(input.path);
+      if (!stat.isFile()) throw new Error(`Not a file: ${input.path}`);
+      data = readFileSync(input.path);
+      mimeType = mimeType ?? inferMimeType(input.path);
+      title = title ?? titleFromPath(input.path);
+      const extension = input.extension ?? (extname(input.path) || extensionForMime(mimeType));
+      artifactPath = this.writeHistoryArtifact(id, data, extension);
+    } else if (input.buffer !== undefined) {
+      data = Buffer.from(input.buffer);
+      mimeType = mimeType ?? "application/octet-stream";
+      title = title ?? "Clipboard item";
+      artifactPath = this.writeHistoryArtifact(id, data, input.extension ?? extensionForMime(mimeType));
+    } else {
+      throw new Error("Clipboard history requires text, buffer, or file path content.");
+    }
+
+    let slug = generateSlug();
+    for (let attempts = 0; attempts < 5; attempts += 1) {
+      const existing = this.db.query("SELECT id FROM clipboard_history WHERE slug = ? LIMIT 1").get(slug);
+      if (!existing) break;
+      slug = generateSlug();
+    }
+
+    this.db
+      .query(`
+        INSERT INTO clipboard_history (
+          id, slug, kind, title, mime_type, artifact_path, text_content,
+          size_bytes, sha256, source, metadata_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        id,
+        slug,
+        input.kind,
+        title,
+        mimeType,
+        artifactPath,
+        text,
+        data.byteLength,
+        sha256(data),
+        input.source ?? "clipboard",
+        stringifyJsonObject(input.metadata),
+        now,
+      );
+
+    this.pruneClipboardHistory(input.maxItems);
+    const record = this.getClipboardHistory(id);
+    if (!record) throw new Error("Clipboard history capture failed.");
+    return record;
+  }
+
+  listClipboardHistory(options: { limit?: number } = {}): ClipboardHistoryRecord[] {
+    const limit = normalizeLimit(options.limit);
+    const rows = this.db
+      .query("SELECT * FROM clipboard_history ORDER BY created_at DESC, rowid DESC LIMIT ?")
+      .all(limit) as ClipboardHistoryRow[];
+    return rows.map((row) => this.historyRowToRecord(row));
+  }
+
+  getClipboardHistory(ref: string): ClipboardHistoryRecord | null {
+    const row = this.db
+      .query("SELECT * FROM clipboard_history WHERE id = ? OR slug = ? LIMIT 1")
+      .get(ref, ref) as ClipboardHistoryRow | null;
+    return row ? this.historyRowToRecord(row) : null;
+  }
+
+  shareClipboardHistory(ref: string, options: { title?: string; baseUrl?: string } = {}): ClipRecord {
+    const entry = this.getClipboardHistory(ref);
+    if (!entry) throw new Error(`Clipboard history item not found: ${ref}`);
+    const metadata = {
+      clipboardHistoryId: entry.id,
+      clipboardHistorySlug: entry.slug,
+      clipboardHistoryKind: entry.kind,
+    };
+    if (entry.text !== null) {
+      return this.createTextClip({
+        text: entry.text,
+        title: options.title ?? entry.title ?? "Clipboard text",
+        source: "history:clipboard",
+        metadata,
+        baseUrl: options.baseUrl,
+      });
+    }
+    if (!entry.artifactPath || !existsSync(entry.artifactPath)) {
+      throw new Error(`Clipboard history artifact is missing for ${ref}`);
+    }
+    return this.createBufferClip({
+      buffer: readFileSync(entry.artifactPath),
+      kind: entry.kind,
+      title: options.title ?? entry.title ?? "Clipboard item",
+      mimeType: entry.mimeType,
+      source: "history:clipboard",
+      metadata,
+      extension: extensionForMime(entry.mimeType),
+      baseUrl: options.baseUrl,
+    });
+  }
+
+  pruneClipboardHistory(maxItems = 25): void {
+    const limit = normalizeLimit(maxItems, 25, 100);
+    const rows = this.db
+      .query(`
+        SELECT id, artifact_path FROM clipboard_history
+        WHERE id NOT IN (
+          SELECT id FROM clipboard_history ORDER BY created_at DESC, rowid DESC LIMIT ?
+        )
+      `)
+      .all(limit) as Array<{ id: string; artifact_path: string | null }>;
+    if (rows.length === 0) return;
+
+    const deleteIds: string[] = [];
+    for (const row of rows) {
+      if (row.artifact_path && this.isManagedHistoryArtifact(row.artifact_path)) {
+        try {
+          unlinkSync(row.artifact_path);
+        } catch {
+          continue;
+        }
+      }
+      deleteIds.push(row.id);
+    }
+    if (deleteIds.length === 0) return;
+    const placeholders = deleteIds.map(() => "?").join(", ");
+    this.db.query(`DELETE FROM clipboard_history WHERE id IN (${placeholders})`).run(...deleteIds);
+  }
+
   private insertClip(input: {
     id?: string;
     kind: ClipKind;
@@ -254,6 +455,29 @@ export class ClipStore {
     return record;
   }
 
+  private writeHistoryArtifact(id: string, data: Uint8Array, extension: string): string {
+    const artifactPath = join(this.artifactDir, `history-${id}${extension}`);
+    mkdirSync(this.artifactDir, { recursive: true, mode: 0o700 });
+    try {
+      chmodSync(this.artifactDir, 0o700);
+    } catch {
+      // Best effort for platforms without POSIX file modes.
+    }
+    writeFileSync(artifactPath, data, { mode: 0o600 });
+    try {
+      chmodSync(artifactPath, 0o600);
+    } catch {
+      // Best effort for platforms without POSIX file modes.
+    }
+    return artifactPath;
+  }
+
+  private isManagedHistoryArtifact(path: string): boolean {
+    const artifactDir = resolve(this.artifactDir);
+    const artifactPath = resolve(path);
+    return artifactPath.startsWith(`${artifactDir}${sep}`) && basename(artifactPath).startsWith("history-");
+  }
+
   private rowToRecord(row: ClipRow, baseUrl?: string): ClipRecord {
     const record: ClipRecord = {
       id: row.id,
@@ -272,5 +496,22 @@ export class ClipStore {
       deletedAt: row.deleted_at,
     };
     return { ...record, shareUrl: buildShareUrl(record, { ...this.options, baseUrl: baseUrl ?? this.options.baseUrl }) };
+  }
+
+  private historyRowToRecord(row: ClipboardHistoryRow): ClipboardHistoryRecord {
+    return {
+      id: row.id,
+      slug: row.slug,
+      kind: row.kind,
+      title: row.title,
+      mimeType: row.mime_type,
+      artifactPath: row.artifact_path,
+      text: row.text_content,
+      sizeBytes: row.size_bytes,
+      sha256: row.sha256,
+      source: row.source,
+      metadata: parseJsonObject(row.metadata_json),
+      createdAt: row.created_at,
+    };
   }
 }

@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
 import type { ClipClientOptions } from "./types.js";
 
 export const DEFAULT_PORT = 3741;
@@ -28,8 +28,14 @@ export function resolveConfigPath(options: ClipClientOptions = {}): string {
   return join(resolveHomeDir(options), "config.json");
 }
 
-export function ensureDir(path: string): void {
-  if (!existsSync(path)) mkdirSync(path, { recursive: true });
+export function ensureDir(path: string, options: { private?: boolean } = {}): void {
+  if (!existsSync(path)) mkdirSync(path, { recursive: true, mode: options.private ? 0o700 : undefined });
+  if (!options.private) return;
+  try {
+    chmodSync(path, 0o700);
+  } catch {
+    return;
+  }
 }
 
 export function ensureParentDir(filePath: string): void {
@@ -38,7 +44,14 @@ export function ensureParentDir(filePath: string): void {
 }
 
 export function ensureClipHome(options: ClipClientOptions = {}): void {
-  ensureDir(resolveHomeDir(options));
-  ensureDir(resolveArtifactDir(options));
-  ensureParentDir(resolveDbPath(options));
+  const homeDir = resolveHomeDir(options);
+  const artifactDir = resolveArtifactDir(options);
+  const dbPath = resolveDbPath(options);
+  ensureDir(homeDir, { private: true });
+  ensureDir(artifactDir, { private: true });
+  if (isInMemoryDb(dbPath)) return;
+  const dbParent = dirname(resolve(dbPath));
+  const resolvedHome = resolve(homeDir);
+  const dbParentIsUnderHome = dbParent === resolvedHome || dbParent.startsWith(`${resolvedHome}${sep}`);
+  ensureDir(dbParent, { private: dbParentIsUnderHome });
 }

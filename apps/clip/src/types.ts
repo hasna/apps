@@ -4,6 +4,8 @@ export type CaptureMode = "full" | "window" | "region";
 
 export type ClipboardKind = "auto" | "text" | "image" | "file";
 
+export type ClipboardHistoryKind = "clipboard-text" | "clipboard-image" | "clipboard-file";
+
 export type ClipKind =
   | "screenshot"
   | "clipboard-text"
@@ -37,6 +39,21 @@ export interface ClipRecord {
   updatedAt: string;
   deletedAt: string | null;
   shareUrl?: string;
+}
+
+export interface ClipboardHistoryRecord {
+  id: string;
+  slug: string;
+  kind: ClipboardHistoryKind;
+  title: string | null;
+  mimeType: string;
+  artifactPath: string | null;
+  text: string | null;
+  sizeBytes: number;
+  sha256: string;
+  source: string;
+  metadata: JsonObject;
+  createdAt: string;
 }
 
 export interface CreateClipMetadata {
