@@ -73,6 +73,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["hosting", "deployment", "serverless"],
   },
   {
+    name: "vercel-edge-config-platform",
+    displayName: "Vercel Edge Config Platform",
+    description: "Manage Vercel Edge Configs, items, tokens, backups, and schemas",
+    category: "Developer Tools",
+    tags: ["edge-config", "vercel", "feature-flags"],
+  },
+  {
     name: "netlify",
     displayName: "Netlify",
     description: "Web hosting and deployment",
