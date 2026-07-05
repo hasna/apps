@@ -6142,8 +6142,6 @@ describe("loops CLI", () => {
         "route",
         "--project-path-prefix",
         repo,
-        "--project-path",
-        "/home/hasna",
         "--tags",
         "auto:route",
         "--dry-run",
@@ -6165,6 +6163,171 @@ describe("loops CLI", () => {
     expect(value.results[0].event.data.cwd).toBe(repo);
     expect(value.results[0].event.data.project_path).toBe(repo);
     expect(value.results[0].workflow.steps[0].target.cwd).toBe(repo);
+  });
+
+  test("todos task drain uses explicit project path instead of stale task working_dir for required worktrees", () => {
+    const dataDir = freshDataDir("loops-cli-event-drain-explicit-project-");
+    const routeRepo = createGitRepo("loops-cli-event-drain-explicit-project-repo-");
+    const staleWorkingDir = join(dataDir, "platform-alumia");
+    const binDir = join(dataDir, "bin");
+    const worktreeRoot = join(dataDir, "worktrees");
+    mkdirSync(staleWorkingDir, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"$*\" == *\"ready\"* ]]; then printf '%s' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "if [[ \"$*\" == *\"task-lists\"* ]]; then printf '%s' \"$TODOS_TASK_LISTS_JSON\"; exit 0; fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const ready = [
+      {
+        id: "task-drain-explicit-project",
+        project_id: "project-route",
+        title: "Route task with stale working_dir",
+        description: "Working dir was copied from the wrong project before route creation.",
+        status: "pending",
+        task_list_id: "list-route",
+        working_dir: staleWorkingDir,
+        metadata: { working_dir: staleWorkingDir },
+        tags: ["auto:route"],
+      },
+    ];
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        join(dataDir, "todos-store"),
+        "--task-list",
+        "route",
+        "--project-path",
+        routeRepo,
+        "--template",
+        "task-lifecycle",
+        "--dry-run",
+        "--worktree-mode",
+        "required",
+        "--worktree-root",
+        worktreeRoot,
+      ],
+      undefined,
+      {
+        PATH: `${binDir}:/usr/bin:/bin`,
+        TODOS_TASK_LISTS_JSON: JSON.stringify([{ id: "list-route", slug: "route", name: "Route" }]),
+        TODOS_READY_JSON: JSON.stringify(ready),
+      },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    const canonicalRouteRepo = testPath(routeRepo);
+    const routed = value.results[0];
+    expect(value.created).toBe(1);
+    expect(routed.event.data.routeProjectPath).toBe(canonicalRouteRepo);
+    expect(routed.event.data.project_path).toBe(canonicalRouteRepo);
+    expect(routed.event.data.source_task_working_dir).toBe(staleWorkingDir);
+    expect(routed.invocation.subjectRef.path).toBe(canonicalRouteRepo);
+    expect(routed.invocation.scope.projectPath).toBe(canonicalRouteRepo);
+    expect(routed.workItem.projectKey).toBe(canonicalRouteRepo);
+
+    const sourceGate = routed.workflow.steps.find((step: { id: string }) => step.id === "source-task-gate");
+    expect(sourceGate.target.cwd).toBe(canonicalRouteRepo);
+    expect(sourceGate.target.args.join("\n")).toContain(join(dataDir, "todos-store"));
+    const worker = routed.workflow.steps.find((step: { id: string }) => step.id === "worker");
+    expect(worker.target.worktree.originalCwd).toBe(canonicalRouteRepo);
+    expect(worker.target.worktree.repoRoot).toBe(canonicalRouteRepo);
+    expect(worker.target.worktree.path).toContain(worktreeRoot);
+    expect(worker.target.cwd).toBe(worker.target.worktree.cwd);
+  });
+
+  test("todos task drain reports explicit invalid project path before creating a required-worktree loop", () => {
+    const dataDir = freshDataDir("loops-cli-event-drain-invalid-explicit-project-");
+    const sourceRepo = createGitRepo("loops-cli-event-drain-invalid-explicit-source-");
+    const invalidRoutePath = join(dataDir, "not-a-git-repo");
+    const binDir = join(dataDir, "bin");
+    mkdirSync(invalidRoutePath, { recursive: true });
+    mkdirSync(binDir, { recursive: true });
+    const todosBin = join(binDir, "todos");
+    writeFileSync(
+      todosBin,
+      [
+        "#!/usr/bin/env bash",
+        "if [[ \"$*\" == *\"ready\"* ]]; then printf '%s' \"$TODOS_READY_JSON\"; exit 0; fi",
+        "if [[ \"$*\" == *\"task-lists\"* ]]; then printf '%s' \"$TODOS_TASK_LISTS_JSON\"; exit 0; fi",
+        "if [[ \"$*\" == *\" comment \"* || \"$*\" == *\" tag \"* || \"$*\" == *\" untag \"* ]]; then printf 'ok\\n'; exit 0; fi",
+        "exit 2",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(todosBin, 0o755);
+    const ready = [
+      {
+        id: "task-drain-invalid-explicit-project",
+        project_id: "project-route",
+        title: "Route task with invalid explicit route path",
+        status: "pending",
+        task_list_id: "list-route",
+        working_dir: sourceRepo,
+        tags: ["auto:route"],
+      },
+    ];
+
+    const result = runCli(
+      dataDir,
+      [
+        "--json",
+        "events",
+        "drain",
+        "todos-task",
+        "--todos-project",
+        join(dataDir, "todos-store"),
+        "--task-list",
+        "route",
+        "--project-path",
+        invalidRoutePath,
+        "--max-dispatch",
+        "1",
+        "--worktree-mode",
+        "required",
+      ],
+      undefined,
+      {
+        PATH: `${binDir}:/usr/bin:/bin`,
+        TODOS_TASK_LISTS_JSON: JSON.stringify([{ id: "list-route", slug: "route", name: "Route" }]),
+        TODOS_READY_JSON: JSON.stringify(ready),
+      },
+    );
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.created).toBe(0);
+    expect(value.skipped).toBe(1);
+    expect(value.results[0]).toMatchObject({
+      kind: "skipped",
+      taskId: "task-drain-invalid-explicit-project",
+      routeError: true,
+      routeProjectPath: invalidRoutePath,
+      sourceTaskWorkingDir: sourceRepo,
+    });
+    expect(value.results[0].reason).toContain("worktreeMode=required");
+    expect(value.results[0].reason).toContain(invalidRoutePath);
+    expect(value.results[0].sourceTaskUpdate).toMatchObject({
+      ok: true,
+      attempted: true,
+      taskId: "task-drain-invalid-explicit-project",
+    });
+    const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loops).toHaveLength(0);
   });
 
   test("todos task drain parses large ready payloads without truncating JSON", () => {
