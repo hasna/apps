@@ -120,4 +120,28 @@ Config is stored at `~/.hasna/clip/config.json`.
 
 The macOS app is a thin native shell. It builds menu actions and delegates every
 mutation to the `clip` CLI so the CLI remains the write-path source of truth.
-See `docs/macos-app.md`.
+
+Build prerequisites:
+
+- macOS 13 or newer
+- Swift 5.9 or newer
+- A built or installed `clip` CLI for runtime menu actions
+
+Compile and smoke-check the source on macOS:
+
+```bash
+bun run check:macos
+swift build -c release --product OpenClip
+swift run -c release ClipSmoke
+```
+
+Create an unsigned local app bundle:
+
+```bash
+bash scripts/build_clip_app.sh
+open dist/OpenClip.app
+```
+
+CI runs the same compile-only Swift package check on a GitHub-hosted macOS
+runner. It does not sign, notarize, publish, or upload the app bundle. See
+`docs/macos-app.md` for the app layout and local build notes.
