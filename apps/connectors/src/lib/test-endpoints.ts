@@ -230,6 +230,10 @@ export const TEST_ENDPOINTS: Record<string, TestEndpoint> = {
     headers: () => ({}),
     // Key appended as &appid= query param in the test command
   },
+  "triple-whale": {
+    url: "https://api.triplewhale.com/api/v2/users/api-keys/me",
+    headers: (key) => ({ "x-api-key": key }),
+  },
 
   // ── Business Tools ───────────────────────────────────────
   notion: {

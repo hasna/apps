@@ -514,6 +514,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["fitness", "running", "cycling", "activities", "sports"],
   },
   {
+    name: "triple-whale",
+    displayName: "Triple Whale",
+    description: "Ecommerce analytics — summary, attribution, data-in, SQL, Moby",
+    category: "Data & Analytics",
+    tags: ["ecommerce", "analytics", "attribution", "marketing"],
+  },
+  {
     name: "uproc",
     displayName: "uProc",
     description: "Data processing and enrichment tools",
