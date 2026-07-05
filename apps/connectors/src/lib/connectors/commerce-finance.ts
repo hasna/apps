@@ -374,6 +374,14 @@ export const connectors: ConnectorMeta[] = [
     tags: ["shopping cart", "ecommerce", "affiliate", "digital products", "checkout"],
   },
   {
+    name: "valence",
+    displayName: "Valence",
+    description:
+      "Prediction markets, unified orders, positions, balances, arbitrage, and ticker matching",
+    category: "Commerce & Finance",
+    tags: ["prediction-markets", "trading", "finance"],
+  },
+  {
     name: "tokenmetrics",
     displayName: "Token Metrics",
     description: "AI-powered crypto analytics and investment research platform",
