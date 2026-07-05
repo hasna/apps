@@ -31,6 +31,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["research", "papers", "academic"],
   },
   {
+    name: "unpaywall",
+    displayName: "Unpaywall",
+    description: "Open-access DOI lookup and search",
+    category: "Data & Analytics",
+    tags: ["open-access", "research", "doi"],
+  },
+  {
     name: "brandsight",
     displayName: "Brandsight",
     description: "Brand monitoring",
