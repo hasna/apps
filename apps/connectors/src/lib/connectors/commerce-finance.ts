@@ -388,6 +388,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["nft", "blockchain", "digital collectibles", "tokens", "web3"],
   },
   {
+    name: "usps",
+    displayName: "USPS",
+    description: "USPS shipping API for shipments, tracking events, and search",
+    category: "Commerce & Finance",
+    tags: ["shipping", "logistics", "carrier", "tracking", "postal"],
+  },
+  {
     name: "whal3s",
     displayName: "Whal3s",
     description: "NFT utility and Web3 engagement platform",
