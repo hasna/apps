@@ -7,7 +7,7 @@ import type {
   ZohoCreatorApiResponse,
 } from '../types';
 
-export { ZohoCreatorClient, DC_BASES, appBase, requireString } from './client';
+export { ZohoCreatorClient, DC_BASES, VALID_DATA_CENTERS, VALID_ENVIRONMENTS, appBase, requireString } from './client';
 
 export class ZohoCreator {
   private readonly client: ZohoCreatorClient;

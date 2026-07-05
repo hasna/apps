@@ -100,16 +100,21 @@ profileCmd
   .option('--data-center <dc>', 'Data center (com, eu, in, com.au, jp, ca, sa)')
   .option('--environment <env>', 'Environment (production, stage)')
   .action((name: string, opts) => {
-    if (profileExists(name)) {
-      error(`Profile "${name}" already exists`);
+    try {
+      if (profileExists(name)) {
+        error(`Profile "${name}" already exists`);
+        process.exit(1);
+      }
+      createProfile(name, {
+        accessToken: opts.token,
+        dataCenter: opts.dataCenter,
+        environment: opts.environment,
+      });
+      success(`Profile "${name}" created`);
+    } catch (err) {
+      error(String(err));
       process.exit(1);
     }
-    createProfile(name, {
-      accessToken: opts.token,
-      dataCenter: opts.dataCenter,
-      environment: opts.environment,
-    });
-    success(`Profile "${name}" created`);
   });
 
 profileCmd.command('delete <name>').action((name: string) => {
@@ -138,13 +143,23 @@ configCmd.command('set-token <token>').action((token: string) => {
 });
 
 configCmd.command('set-data-center <dc>').action((dc: string) => {
-  setDataCenter(dc as Parameters<typeof setDataCenter>[0]);
-  success(`Data center set to: ${dc}`);
+  try {
+    setDataCenter(dc as Parameters<typeof setDataCenter>[0]);
+    success(`Data center set to: ${dc}`);
+  } catch (err) {
+    error(String(err));
+    process.exit(1);
+  }
 });
 
 configCmd.command('set-environment <env>').action((env: string) => {
-  setEnvironment(env as Parameters<typeof setEnvironment>[0]);
-  success(`Environment set to: ${env}`);
+  try {
+    setEnvironment(env as Parameters<typeof setEnvironment>[0]);
+    success(`Environment set to: ${env}`);
+  } catch (err) {
+    error(String(err));
+    process.exit(1);
+  }
 });
 
 configCmd.command('show').action(() => {

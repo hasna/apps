@@ -11,6 +11,16 @@ export const DC_BASES: Record<string, string> = {
   sa: 'https://creator.zoho.sa',
 };
 
+export const VALID_DATA_CENTERS = Object.keys(DC_BASES);
+
+const ENV_SEGMENTS = {
+  production: '',
+  stage: '/stage',
+  stage_v2: '/stage',
+} as const;
+
+export const VALID_ENVIRONMENTS = Object.keys(ENV_SEGMENTS);
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
 }
@@ -26,12 +36,16 @@ export class ZohoCreatorClient {
     const dc = (config.dataCenter || 'com').toLowerCase();
     const base = DC_BASES[dc];
     if (!base) {
-      throw new Error(`Zoho Creator data_center must be one of: ${Object.keys(DC_BASES).join(', ')}`);
+      throw new Error(`Zoho Creator data_center must be one of: ${VALID_DATA_CENTERS.join(', ')}`);
     }
     const environment = (config.environment || 'production').toLowerCase();
+    const envSegment = ENV_SEGMENTS[environment as keyof typeof ENV_SEGMENTS];
+    if (envSegment === undefined) {
+      throw new Error(`Zoho Creator environment must be one of: ${VALID_ENVIRONMENTS.join(', ')}`);
+    }
     this.accessToken = token;
     this.baseUrl = base;
-    this.envSegment = environment === 'stage' || environment === 'stage_v2' ? '/stage' : '';
+    this.envSegment = envSegment;
   }
 
   getApiPrefix(): string {

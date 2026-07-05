@@ -4,7 +4,7 @@
  * Zoho Creator API v2.1 connector — low-code business apps, forms, reports,
  * records, custom actions, and Deluge functions. OAuth bearer via Zoho-oauthtoken.
  */
-export { ZohoCreator, ZohoCreatorClient, DC_BASES, appBase, requireString } from './api/index';
+export { ZohoCreator, ZohoCreatorClient, DC_BASES, VALID_DATA_CENTERS, VALID_ENVIRONMENTS, appBase, requireString } from './api/index';
 export {
   ZohoCreatorApiError,
   type ZohoCreatorConfig,

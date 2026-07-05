@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
+import { VALID_DATA_CENTERS, VALID_ENVIRONMENTS } from '../api/client';
 import type { ZohoCreatorConfig, ZohoCreatorDataCenter, ZohoCreatorEnvironment } from '../types';
 
 const CONNECTOR_NAME = 'zoho-creator';
@@ -72,6 +73,7 @@ export function createProfile(profile: string, config: ProfileConfig = {}): bool
   if (!/^[a-zA-Z0-9_-]+$/.test(profile)) {
     throw new Error('Profile name can only contain letters, numbers, hyphens, and underscores');
   }
+  validateProfileConfig(config);
   writeFileSync(getProfilePath(profile), JSON.stringify(config, null, 2));
   return true;
 }
@@ -97,6 +99,7 @@ export function loadProfile(profile?: string): ProfileConfig {
 
 export function saveProfile(config: ProfileConfig, profile?: string): void {
   ensureConfigDir();
+  validateProfileConfig(config);
   const profileName = profile || getCurrentProfile();
   writeFileSync(getProfilePath(profileName), JSON.stringify(config, null, 2));
 }
@@ -117,6 +120,7 @@ export function getDataCenter(): ZohoCreatorDataCenter | undefined {
 }
 
 export function setDataCenter(dataCenter: ZohoCreatorDataCenter): void {
+  validateDataCenter(dataCenter);
   const config = loadProfile();
   config.dataCenter = dataCenter;
   saveProfile(config);
@@ -128,6 +132,7 @@ export function getEnvironment(): ZohoCreatorEnvironment | undefined {
 }
 
 export function setEnvironment(environment: ZohoCreatorEnvironment): void {
+  validateEnvironment(environment);
   const config = loadProfile();
   config.environment = environment;
   saveProfile(config);
@@ -149,4 +154,21 @@ export function clearConfig(): void {
 
 export function getConfigDir(): string {
   return CONFIG_DIR;
+}
+
+function validateProfileConfig(config: ProfileConfig): void {
+  if (config.dataCenter !== undefined) validateDataCenter(config.dataCenter);
+  if (config.environment !== undefined) validateEnvironment(config.environment);
+}
+
+function validateDataCenter(dataCenter: ZohoCreatorDataCenter): void {
+  if (!VALID_DATA_CENTERS.includes(dataCenter)) {
+    throw new Error(`Zoho Creator data_center must be one of: ${VALID_DATA_CENTERS.join(', ')}`);
+  }
+}
+
+function validateEnvironment(environment: ZohoCreatorEnvironment): void {
+  if (!VALID_ENVIRONMENTS.includes(environment)) {
+    throw new Error(`Zoho Creator environment must be one of: ${VALID_ENVIRONMENTS.join(', ')}`);
+  }
 }
