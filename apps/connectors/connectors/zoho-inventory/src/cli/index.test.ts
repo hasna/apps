@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test';
+import { fileURLToPath } from 'node:url';
 
 describe('Zoho Inventory CLI', () => {
   test('raw command honors global json format', async () => {
+    const connectorDir = fileURLToPath(new URL('../..', import.meta.url));
     const server = Bun.serve({
       port: 0,
       fetch(req) {
@@ -17,7 +19,7 @@ describe('Zoho Inventory CLI', () => {
     try {
       const proc = Bun.spawn({
         cmd: [process.execPath, 'run', './src/cli/index.ts', '--format', 'json', 'raw', '/items'],
-        cwd: process.cwd(),
+        cwd: connectorDir,
         env: {
           ...process.env,
           ZOHOINVENTORY_TOKEN: 'test-token',
