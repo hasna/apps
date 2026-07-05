@@ -15,11 +15,13 @@ import {
 } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 import { checkCompletionGuard } from "../lib/completion-guard.js";
+import { databasePathFromDatabase } from "../lib/event-emission-safety.js";
 import { emitLocalEventHooksQuiet } from "../lib/event-hooks.js";
 import { emitSharedTaskEventQuiet, taskEventData } from "../lib/shared-events.js";
 import { logTaskChange } from "./audit.js";
 import { dispatchWebhook } from "./webhooks.js";
 import { getChecklist } from "./checklists.js";
+import { currentStorageMachineId, recordStorageTombstone } from "./storage-tombstones.js";
 
 // Re-export helpers for use by other modules
 export function rowToTask(row: TaskRow): Task {
@@ -65,6 +67,7 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
   const d = db || getDatabase();
   const timestamp = now();
   const tags = input.tags || [];
+  const machineId = currentStorageMachineId(d);
 
   // assigned_by = who created this task (always the calling agent)
   // assigned_from_project = which project they were in when they assigned it
@@ -76,8 +79,8 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       d.run(
-        `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, cycle_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, sla_minutes, confidence, retry_count, max_retries, retry_after, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id, reason, spawned_from_session, assigned_by, assigned_from_project, task_type)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, short_id, project_id, parent_id, plan_id, task_list_id, cycle_id, title, description, status, priority, agent_id, assigned_to, session_id, working_dir, tags, metadata, version, created_at, updated_at, due_at, estimated_minutes, sla_minutes, confidence, retry_count, max_retries, retry_after, requires_approval, approved_by, approved_at, recurrence_rule, recurrence_parent_id, spawns_template_id, reason, spawned_from_session, assigned_by, assigned_from_project, task_type, machine_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           id,
           null,
@@ -116,6 +119,7 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
           assignedBy || null,
           assignedFromProject || null,
           input.task_type || null,
+          machineId,
         ],
       );
       break; // success
@@ -135,9 +139,10 @@ export function createTask(input: CreateTaskInput, db?: Database): Task {
 
   const task = getTask(id, d)!;
   const payload = taskEventData(task);
+  const databasePath = databasePathFromDatabase(d);
   dispatchWebhook("task.created", payload, d).catch(() => {});
-  emitLocalEventHooksQuiet({ type: "task.created", payload });
-  emitSharedTaskEventQuiet({ type: "task.created", task });
+  emitLocalEventHooksQuiet({ type: "task.created", payload, databasePath });
+  emitSharedTaskEventQuiet({ type: "task.created", task, databasePath });
   return task;
 }
 
@@ -337,7 +342,7 @@ export function listTasks(filter: TaskFilter = {}, db?: Database): Task[] {
 
   const rows = d
     .query(
-      `SELECT * FROM tasks ${where} ORDER BY ${PRIORITY_RANK}, created_at DESC${limitClause}`,
+      `SELECT * FROM tasks ${where} ORDER BY ${PRIORITY_RANK}, created_at DESC, id ASC${limitClause}`,
     )
     .all(...params) as TaskRow[];
 
@@ -348,7 +353,9 @@ export function getTaskByFingerprint(
   fingerprint: string,
   db?: Database,
 ): Task | null {
-  const tasks = listTasks({ metadata: { fingerprint }, limit: 1 }, db);
+  // M9: include archived tasks so a fingerprint match on an archived task is
+  // found — otherwise upsert would create a duplicate.
+  const tasks = listTasks({ metadata: { fingerprint }, limit: 1, include_archived: true }, db);
   return tasks[0] ?? null;
 }
 
@@ -372,6 +379,13 @@ export function upsertTaskByFingerprint(
   const fingerprint = input.fingerprint.trim();
   if (!fingerprint) throw new Error("fingerprint is required");
 
+  // M9: wrap the check-then-create/update in a transaction so two concurrent
+  // upserts on the same fingerprint can't both pass the existence check and
+  // create duplicates. SQLite serializes writers, so the transaction provides
+  // the needed exclusivity on a single database. (A partial unique index on
+  // json_extract(metadata,'$.fingerprint') would be the belt-and-braces fix but
+  // is unsafe to add retroactively while duplicates may already exist.)
+  const tx = d.transaction((): UpsertTaskByFingerprintResult => {
   const existing = getTaskByFingerprint(fingerprint, d);
   const metadata = mergeTaskMetadata(existing?.metadata ?? {}, input.metadata, fingerprint);
 
@@ -409,6 +423,8 @@ export function upsertTaskByFingerprint(
     d,
   );
   return { task, created: false };
+  });
+  return tx();
 }
 
 export function countTasks(filter: Omit<TaskFilter, 'limit' | 'offset'> = {}, db?: Database): number {
@@ -488,6 +504,23 @@ export function countTasks(filter: Omit<TaskFilter, 'limit' | 'offset'> = {}, db
     params.push(filter.task_list_id);
   }
 
+  // M10: mirror listTasks so counts match the filtered list.
+  if (filter.has_recurrence === true) {
+    conditions.push("recurrence_rule IS NOT NULL");
+  } else if (filter.has_recurrence === false) {
+    conditions.push("recurrence_rule IS NULL");
+  }
+
+  if (filter.task_type) {
+    if (Array.isArray(filter.task_type)) {
+      conditions.push(`task_type IN (${filter.task_type.map(() => "?").join(",")})`);
+      params.push(...filter.task_type);
+    } else {
+      conditions.push("task_type = ?");
+      params.push(filter.task_type);
+    }
+  }
+
   addMetadataConditions(filter.metadata, conditions, params);
 
   // Exclude archived tasks by default (consistent with listTasks)
@@ -537,6 +570,13 @@ export function updateTask(
     if (input.status === "completed") {
       sets.push("completed_at = ?");
       params.push(completionTimestamp);
+      // M1: mirror completeTask — completing a task releases its lock so a
+      // recurring/handoff chain isn't left holding a stale lock.
+      sets.push("locked_by = NULL");
+      sets.push("locked_at = NULL");
+    } else if (task.status === "completed" && input.completed_at === undefined) {
+      // M3: reopening a completed task clears the stale completed_at.
+      sets.push("completed_at = NULL");
     }
   }
   if (input.priority !== undefined) {
@@ -646,6 +686,33 @@ export function updateTask(
     replaceTaskTags(id, input.tags, d);
   }
 
+  // M1: the generic update path is what the dashboard PATCH (routes.ts) and the
+  // CLI `update --status completed` actually call — completeTask is NOT involved
+  // here. Without this, completing a recurring task via update stamped
+  // completed_at but never continued the chain, so recurring tasks silently died.
+  //
+  // Single-spawn reasoning: this fires ONLY on a transition INTO "completed"
+  // from a non-completed status, so re-saving an already-completed task does not
+  // re-spawn (idempotent). completeTask spawns for its own callers and never
+  // routes through updateTask; setTaskStatus routes the completed case to
+  // completeTask (bypassing updateTask). Therefore each completion path has
+  // exactly one spawner and no path runs both.
+  const transitionedToCompleted = input.status === "completed" && task.status !== "completed";
+  if (transitionedToCompleted && task.recurrence_rule) {
+    try {
+      // Inline require avoids a static circular import (task-lifecycle imports
+      // createTask/getTask from this module); matches the existing house style
+      // used for database.js in listTasks.
+      const { spawnNextRecurrence } = require("./task-lifecycle.js") as typeof import("./task-lifecycle.js");
+      spawnNextRecurrence(task, d, completionTimestamp);
+    } catch (e) {
+      // Defensive: a malformed recurrence_rule makes nextOccurrence throw AFTER
+      // the status is already committed. Log and skip rather than surfacing a
+      // post-commit error to the caller.
+      console.warn(`[tasks] failed to spawn next recurrence for ${id}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   // Audit log — record each changed field
   const agentId = task.assigned_to || task.agent_id || null;
   if (input.status !== undefined && input.status !== task.status) logTaskChange(id, "update", "status", task.status, input.status, agentId, d);
@@ -655,6 +722,9 @@ export function updateTask(
   if (input.working_dir !== undefined && input.working_dir !== task.working_dir) logTaskChange(id, "update", "working_dir", task.working_dir, input.working_dir, agentId, d);
   if (input.approved_by !== undefined) logTaskChange(id, "approve", "approved_by", null, input.approved_by, agentId, d);
 
+  // Determine the post-write completion timestamp / lock state to mirror the SQL above.
+  const reopened = input.status !== undefined && input.status !== "completed" && task.status === "completed" && input.completed_at === undefined;
+  const completedNow = input.status === "completed";
   const updatedTask: Task = {
     ...task,
     ...Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined)),
@@ -662,7 +732,9 @@ export function updateTask(
     metadata: input.metadata ?? task.metadata,
     version: task.version + 1,
     updated_at: timestamp,
-    completed_at: input.status === "completed" ? completionTimestamp : input.completed_at !== undefined ? input.completed_at : task.completed_at,
+    locked_by: completedNow ? null : task.locked_by,
+    locked_at: completedNow ? null : task.locked_at,
+    completed_at: completedNow ? completionTimestamp : reopened ? null : input.completed_at !== undefined ? input.completed_at : task.completed_at,
     sla_minutes: input.sla_minutes !== undefined ? input.sla_minutes : task.sla_minutes,
     actual_minutes: input.actual_minutes ?? task.actual_minutes,
     confidence: input.confidence !== undefined ? input.confidence : task.confidence,
@@ -675,26 +747,27 @@ export function updateTask(
   };
 
   // Webhook dispatch for assignment and status changes
+  const databasePath = databasePathFromDatabase(d);
   if (input.assigned_to !== undefined && input.assigned_to !== task.assigned_to) {
     const payload = taskEventData(updatedTask, { assigned_to: input.assigned_to, old_assigned_to: task.assigned_to });
     dispatchWebhook("task.assigned", payload, d).catch(() => {});
-    emitLocalEventHooksQuiet({ type: "task.assigned", payload });
-    emitSharedTaskEventQuiet({ type: "task.assigned", task: updatedTask, data: { old_assigned_to: task.assigned_to } });
+    emitLocalEventHooksQuiet({ type: "task.assigned", payload, databasePath });
+    emitSharedTaskEventQuiet({ type: "task.assigned", task: updatedTask, data: { old_assigned_to: task.assigned_to }, databasePath });
   }
   if (input.status !== undefined && input.status !== task.status) {
     const payload = taskEventData(updatedTask, { old_status: task.status, new_status: input.status });
     dispatchWebhook("task.status_changed", payload, d).catch(() => {});
-    emitLocalEventHooksQuiet({ type: "task.status_changed", payload });
-    emitSharedTaskEventQuiet({ type: "task.status_changed", task: updatedTask, data: { old_status: task.status, new_status: input.status } });
+    emitLocalEventHooksQuiet({ type: "task.status_changed", payload, databasePath });
+    emitSharedTaskEventQuiet({ type: "task.status_changed", task: updatedTask, data: { old_status: task.status, new_status: input.status }, databasePath });
   }
   if (input.approved_by !== undefined) {
-    emitLocalEventHooksQuiet({ type: "approval.decided", payload: { id, approved_by: input.approved_by, title: task.title } });
+    emitLocalEventHooksQuiet({ type: "approval.decided", payload: { id, approved_by: input.approved_by, title: task.title }, databasePath });
   }
 
   const updatePayload = taskEventData(updatedTask);
   dispatchWebhook("task.updated", updatePayload, d).catch(() => {});
-  emitLocalEventHooksQuiet({ type: "task.updated", payload: updatePayload });
-  emitSharedTaskEventQuiet({ type: "task.updated", task: updatedTask });
+  emitLocalEventHooksQuiet({ type: "task.updated", payload: updatePayload, databasePath });
+  emitSharedTaskEventQuiet({ type: "task.updated", task: updatedTask, databasePath });
 
   // Return updated task without re-fetching from DB
   return updatedTask;
@@ -702,6 +775,14 @@ export function updateTask(
 
 export function deleteTask(id: string, db?: Database): boolean {
   const d = db || getDatabase();
+  const row = d.query("SELECT * FROM tasks WHERE id = ?").get(id) as TaskRow | null;
+  if (!row) return false;
+  recordStorageTombstone({
+    object_type: "tasks",
+    object_id: id,
+    payload: rowToTask(row) as unknown as Record<string, unknown>,
+    version: row.version,
+  }, d);
   const result = d.run("DELETE FROM tasks WHERE id = ?", [id]);
   return result.changes > 0;
 }

@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { basename, resolve } from "node:path";
 import { getDatabase, resolvePartialId } from "../../db/database.js";
-import { ensureProject, getProject, getProjectByPath } from "../../db/projects.js";
+import { ensureProject, getProject, getProjectByPath, slugify } from "../../db/projects.js";
 import {
   createTask,
   getTask,
@@ -27,24 +27,69 @@ import {
   statusColors,
   priorityColors,
 } from "../helpers.js";
-import { TASK_PRIORITIES } from "../../types/index.js";
+import { TASK_PRIORITIES, TASK_STATUSES } from "../../types/index.js";
 
-/** Resolve a project by ID or name substring. */
+/**
+ * Resolve a project by path, exact/partial ID, exact name, task list ID, slug,
+ * and only then a name substring. Exact matches must win over substring matches
+ * (mirrors helpers.resolveExplicitProject) so a query like "web" never resolves
+ * to an unrelated project such as "web-admin" when a project literally named
+ * "web" exists. A path-like reference is auto-created when unregistered.
+ */
 function resolveProjectIdOrSlug(input: string): string {
   const db = getDatabase();
-  // Try exact ID match first
-  const byId = getProject(input, db);
-  if (byId) return byId.id;
-  // Fall back to name substring match
-  const row = db.query("SELECT id FROM projects WHERE name LIKE ? LIMIT 1").get(`%${input}%`) as { id: string } | undefined;
-  if (row) return row.id;
+  // Registered path (create it when path-like but unregistered)
   if (isPathLike(input)) {
     const projectPath = resolve(input);
     const byPath = getProjectByPath(projectPath, db);
     return (byPath ?? ensureProject(basename(projectPath), projectPath, db)).id;
   }
+  const byPath = getProjectByPath(resolve(input), db);
+  if (byPath) return byPath.id;
+  // Exact or partial ID
+  const byId = getProject(input, db);
+  if (byId) return byId.id;
+  const partial = resolvePartialId(db, "projects", input);
+  if (partial) return partial;
+  // Exact name or task list ID
+  const exact = db.query(
+    "SELECT id FROM projects WHERE lower(name) = lower(?) OR task_list_id = ? ORDER BY name LIMIT 1",
+  ).get(input, input) as { id: string } | undefined;
+  if (exact) return exact.id;
+  // Slug match
+  const inputSlug = slugify(input);
+  if (inputSlug) {
+    const all = db.query("SELECT id, name FROM projects ORDER BY name").all() as { id: string; name: string }[];
+    const bySlug = all.find((p) => slugify(p.name) === inputSlug);
+    if (bySlug) return bySlug.id;
+  }
+  // Name substring last
+  const row = db.query("SELECT id FROM projects WHERE name LIKE ? ORDER BY name LIMIT 1").get(`%${input}%`) as { id: string } | undefined;
+  if (row) return row.id;
   console.error(chalk.red(`Project not found: ${input}`));
   process.exit(1);
+}
+
+/** Validate and normalize a status value, rejecting unknowns before the DB does. */
+function parseStatus(value: string | undefined): TaskStatus | undefined {
+  if (!value) return undefined;
+  const normalized = normalizeStatus(value);
+  if (!(TASK_STATUSES as readonly string[]).includes(normalized)) {
+    console.error(chalk.red(`--status must be one of: ${TASK_STATUSES.join(", ")}`));
+    process.exit(1);
+  }
+  return normalized as TaskStatus;
+}
+
+/** Parse an integer option, rejecting non-numeric input instead of storing NaN. */
+function parseIntOption(value: string | undefined, flag: string): number | undefined {
+  if (value === undefined) return undefined;
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n)) {
+    console.error(chalk.red(`${flag} must be a number`));
+    process.exit(1);
+  }
+  return n;
 }
 
 function isPathLike(input: string): boolean {
@@ -93,6 +138,11 @@ function parseJsonValue(value: string | undefined): unknown {
   } catch {
     return value;
   }
+}
+
+function pointerOption(value: string | undefined, clear: boolean): string | null | undefined {
+  if (value !== undefined) return value;
+  return clear ? null : undefined;
 }
 
 function parseTags(value: string | undefined): string[] | undefined {
@@ -164,27 +214,32 @@ export function registerTaskCommands(program: Command) {
         }
         return id;
       })() : undefined;
-      const task = createTask({
-        title,
-        description: opts.description,
-        priority: parsePriority(opts.priority),
-        parent_id: opts.parent ? resolveTaskId(opts.parent) : undefined,
-        tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
-        plan_id: opts.plan ? resolvePlanId(opts.plan) : undefined,
-        assigned_to: opts.assign,
-        status: opts.status ? normalizeStatus(opts.status) as TaskStatus : undefined,
-        task_list_id: taskListId,
-        agent_id: globalOpts.agent,
-        session_id: globalOpts.session,
-        project_id: projectId,
-        working_dir: process.cwd(),
-        estimated_minutes: opts.estimated ? parseInt(opts.estimated, 10) : undefined,
-        sla_minutes: opts.slaMinutes !== undefined || opts.sla !== undefined ? parseInt(opts.slaMinutes ?? opts.sla, 10) : undefined,
-        requires_approval: opts.approval || false,
-        recurrence_rule: opts.recurrence,
-        due_at: opts.due ? (opts.due.length === 10 ? opts.due + "T00:00:00.000Z" : opts.due) : undefined,
-        reason: opts.reason,
-      });
+      let task;
+      try {
+        task = createTask({
+          title,
+          description: opts.description,
+          priority: parsePriority(opts.priority),
+          parent_id: opts.parent ? resolveTaskId(opts.parent) : undefined,
+          tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
+          plan_id: opts.plan ? resolvePlanId(opts.plan) : undefined,
+          assigned_to: opts.assign,
+          status: parseStatus(opts.status),
+          task_list_id: taskListId,
+          agent_id: globalOpts.agent,
+          session_id: globalOpts.session,
+          project_id: projectId,
+          working_dir: process.cwd(),
+          estimated_minutes: parseIntOption(opts.estimated, "--estimated"),
+          sla_minutes: opts.slaMinutes !== undefined || opts.sla !== undefined ? parseIntOption(opts.slaMinutes ?? opts.sla, "--sla-minutes") : undefined,
+          requires_approval: opts.approval || false,
+          recurrence_rule: opts.recurrence,
+          due_at: opts.due ? (opts.due.length === 10 ? opts.due + "T00:00:00.000Z" : opts.due) : undefined,
+          reason: opts.reason,
+        });
+      } catch (e) {
+        handleError(e);
+      }
 
       if (globalOpts.json) {
         output(task, true);
@@ -246,7 +301,7 @@ export function registerTaskCommands(program: Command) {
           title: opts.title,
           description: opts.description,
           priority: parsePriority(opts.priority),
-          status: opts.status ? normalizeStatus(opts.status) as TaskStatus : undefined,
+          status: parseStatus(opts.status),
           task_list_id: taskListId,
           tags: parseTags(opts.tags),
           metadata: buildExpectationMetadata(opts),
@@ -265,6 +320,92 @@ export function registerTaskCommands(program: Command) {
       } else {
         console.log(chalk.green(result.created ? "Task created:" : "Task updated:"));
         console.log(formatTaskLine(result.task));
+      }
+    });
+
+  task
+    .command("route-state <id>")
+    .description("Show deterministic routing eligibility and workflow pointers for a task")
+    .option("--verify-project-root", "Filesystem-check the resolved project root and surface missing_project_root before admission")
+    .action(async (id: string, opts) => {
+      const globalOpts = program.opts();
+      const resolvedId = resolveTaskId(id);
+      const { getTaskRouteState } = await import("../../lib/task-routing.js");
+      let state;
+      try {
+        state = getTaskRouteState(resolvedId, undefined, { verifyProjectRoot: Boolean(opts.verifyProjectRoot) });
+      } catch (e) {
+        handleError(e);
+      }
+
+      if (globalOpts.json) {
+        output(state, true);
+        return;
+      }
+
+      console.log(chalk.bold("Task route state"));
+      console.log(`  ${chalk.dim("Task:")}       ${state.task_short_id || state.task_id.slice(0, 8)}`);
+      console.log(`  ${chalk.dim("Eligible:")}   ${state.eligible ? chalk.green("yes") : chalk.yellow("no")}`);
+      console.log(`  ${chalk.dim("Class:")}      ${state.route_class}`);
+      console.log(`  ${chalk.dim("Reasons:")}    ${state.reasons.length > 0 ? state.reasons.join(", ") : "none"}`);
+      console.log(`  ${chalk.dim("Route:")}      ${state.route.concurrency_key}`);
+      if (state.evidence.owner) {
+        console.log(`  ${chalk.dim("Owner:")}      ${state.evidence.owner}${state.evidence.stale ? chalk.yellow(" (stale)") : ""}`);
+      }
+      if (state.pointers.current_workflow_invocation_id) {
+        console.log(`  ${chalk.dim("Invocation:")} ${state.pointers.current_workflow_invocation_id}`);
+      }
+      if (state.pointers.current_run_id) {
+        console.log(`  ${chalk.dim("Run:")}        ${state.pointers.current_run_id}`);
+      }
+      if (state.pointers.latest_manifest_path) {
+        console.log(`  ${chalk.dim("Manifest:")}   ${state.pointers.latest_manifest_path}`);
+      }
+    });
+
+  task
+    .command("workflow-pointers <id>")
+    .description("Update OpenLoops workflow invocation/run artifact pointers on a task")
+    .option("--invocation <id>", "Current workflow invocation ID")
+    .option("--run <id>", "Current workflow run ID")
+    .option("--manifest <path>", "Latest run manifest path")
+    .option("--evaluation <path>", "Latest evaluator artifact path")
+    .option("--state <state>", "Human-visible workflow state")
+    .option("--actor <agent>", "Agent or workflow updating the pointers")
+    .option("--clear", "Clear all workflow pointers before applying explicit pointer values")
+    .option("--clear-invocation", "Clear current workflow invocation ID")
+    .option("--clear-run", "Clear current workflow run ID")
+    .option("--clear-manifest", "Clear latest run manifest path")
+    .option("--clear-evaluation", "Clear latest evaluator artifact path")
+    .option("--clear-state", "Clear human-visible workflow state")
+    .action(async (id: string, opts) => {
+      const globalOpts = program.opts();
+      const resolvedId = resolveTaskId(id);
+      const { getTaskRouteState, setTaskWorkflowPointers } = await import("../../lib/task-routing.js");
+      let taskResult;
+      try {
+        taskResult = setTaskWorkflowPointers(resolvedId, {
+          current_workflow_invocation_id: pointerOption(opts.invocation, Boolean(opts.clear || opts.clearInvocation)),
+          current_run_id: pointerOption(opts.run, Boolean(opts.clear || opts.clearRun)),
+          latest_manifest_path: pointerOption(opts.manifest, Boolean(opts.clear || opts.clearManifest)),
+          latest_evaluation_path: pointerOption(opts.evaluation, Boolean(opts.clear || opts.clearEvaluation)),
+          workflow_state: pointerOption(opts.state, Boolean(opts.clear || opts.clearState)),
+          actor: opts.actor || globalOpts.agent || "cli",
+        });
+      } catch (e) {
+        handleError(e);
+      }
+      const state = getTaskRouteState(taskResult.id);
+
+      if (globalOpts.json) {
+        output({ task: taskResult, route_state: state }, true);
+        return;
+      }
+
+      console.log(chalk.green("Workflow pointers updated:"));
+      console.log(formatTaskLine(taskResult));
+      if (state.pointers.latest_manifest_path) {
+        console.log(`  ${chalk.dim("Manifest:")} ${state.pointers.latest_manifest_path}`);
       }
     });
 
@@ -688,6 +829,7 @@ export function registerTaskCommands(program: Command) {
     .option("--due <date>", "Due date (ISO string or YYYY-MM-DD), empty to clear")
     .option("--recurrence <rule>", "Recurrence rule, empty to clear")
     .option("--approval", "Require approval before completion")
+    .option("--clear-approval", "Remove the approval requirement")
     .action((id: string, opts) => {
       const globalOpts = program.opts();
       opts.tags = opts.tags || opts.tag;
@@ -700,6 +842,10 @@ export function registerTaskCommands(program: Command) {
       }
       if (opts.plan && opts.clearPlan) {
         console.error(chalk.red("Use either --plan or --clear-plan, not both."));
+        process.exit(1);
+      }
+      if (opts.approval && opts.clearApproval) {
+        console.error(chalk.red("Use either --approval or --clear-approval, not both."));
         process.exit(1);
       }
 
@@ -720,17 +866,17 @@ export function registerTaskCommands(program: Command) {
           version: current.version,
           title: opts.title,
           description: opts.description,
-          status: opts.status ? normalizeStatus(opts.status) as TaskStatus : undefined,
-          priority: opts.priority as TaskPriority | undefined,
+          status: parseStatus(opts.status),
+          priority: parsePriority(opts.priority),
           assigned_to: opts.assign,
           tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
           plan_id: planId,
           task_list_id: taskListId,
-          estimated_minutes: opts.estimated !== undefined ? parseInt(opts.estimated, 10) : undefined,
-          sla_minutes: opts.slaMinutes !== undefined || opts.sla !== undefined ? parseInt(opts.slaMinutes ?? opts.sla, 10) : undefined,
+          estimated_minutes: opts.estimated !== undefined ? parseIntOption(opts.estimated, "--estimated") : undefined,
+          sla_minutes: opts.slaMinutes !== undefined || opts.sla !== undefined ? parseIntOption(opts.slaMinutes ?? opts.sla, "--sla-minutes") : undefined,
           due_at: opts.due !== undefined ? (opts.due === "" ? null : opts.due.length === 10 ? opts.due + "T00:00:00.000Z" : opts.due) : undefined,
           recurrence_rule: opts.recurrence !== undefined ? (opts.recurrence === "" ? null : opts.recurrence) : undefined,
-          requires_approval: opts.approval !== undefined ? true : undefined,
+          requires_approval: opts.clearApproval ? false : (opts.approval !== undefined ? true : undefined),
         });
       } catch (e) {
         handleError(e);
@@ -759,7 +905,14 @@ export function registerTaskCommands(program: Command) {
       const resolvedId = resolveTaskId(id);
       const attachmentIds = opts.attachIds ? opts.attachIds.split(",").map((s) => s.trim()) : undefined;
       const filesChanged = opts.filesChanged ? opts.filesChanged.split(",").map((s) => s.trim()) : undefined;
-      const confidence = opts.confidence !== undefined ? parseFloat(opts.confidence) : undefined;
+      let confidence: number | undefined;
+      if (opts.confidence !== undefined) {
+        confidence = parseFloat(opts.confidence);
+        if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+          console.error(chalk.red("--confidence must be a number between 0.0 and 1.0"));
+          process.exit(1);
+        }
+      }
       const evidence = (attachmentIds || filesChanged || opts.testResults || opts.commitHash || opts.notes)
         ? { attachment_ids: attachmentIds, files_changed: filesChanged, test_results: opts.testResults, commit_hash: opts.commitHash, notes: opts.notes }
         : undefined;

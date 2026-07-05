@@ -70,7 +70,7 @@ export const READ_ONLY_TOOLS = new Set([
   "get_feature_manifest", "get_capability_discovery", "get_feature_manifest_docs",
   "get_cli_mcp_parity", "list_secret_patterns", "list_sandbox_profiles",
   "list_workspace_trust_profiles", "list_verification_providers", "list_verification_records",
-  "get_tasks_changed_since", "get_stale_tasks", "get_active_work", "get_next_task",
+  "get_tasks_changed_since", "get_stale_tasks", "get_next_task",
   "find_duplicate_tasks", "describe_tools", "search_tools", "inspect_git_commit",
   "list_task_findings",
   "scan_text_for_secrets", "check_workspace_permission", "check_sandbox_command",

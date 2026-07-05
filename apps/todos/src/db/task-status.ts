@@ -13,6 +13,7 @@ import { countTasks, createTask, getTask, listTasks, updateTask } from "./task-c
 import { addDependency } from "./task-graph.js";
 import {
   claimNextTask,
+  completeTask,
   getActiveWork,
   getBlockingDeps,
   getNextTask,
@@ -150,6 +151,17 @@ export function setTaskStatus(
     const task = getTask(id, d);
     if (!task) throw new TaskNotFoundError(id);
     if (task.status === status) return task; // already set, no-op
+    // M1: transitioning to "completed" must go through the lifecycle helper so
+    // recurrence chains spawn and the lock is released. updateTask alone only
+    // stamps completed_at and would silently kill recurring chains.
+    if (status === "completed") {
+      try {
+        return completeTask(id, _agentId, d);
+      } catch (e) {
+        if (e instanceof VersionConflictError && attempt < 2) continue;
+        throw e;
+      }
+    }
     try {
       return updateTask(id, { status, version: task.version }, d);
     } catch (e) {

@@ -64,6 +64,15 @@ const FORBIDDEN_DEPENDENCY_PARTS = [
   `platform${"-"}todos`,
 ];
 
+const LEGACY_CLOUD_PACKAGE = `@hasna/${"cloud"}`;
+const LEGACY_OPEN_CLOUD = `${"open"}-${"cloud"}`;
+const LEGACY_CLOUD_MCP = `${"cloud"}-${"mcp"}`;
+const LEGACY_REGISTER_CLOUD_TOOLS = `register${"Cloud"}Tools`;
+const LEGACY_REGISTER_CLOUD_COMMANDS = `register${"Cloud"}Commands`;
+const LEGACY_SHARED_ENV_PREFIX = `HASNA_${"CLOUD"}`;
+const LEGACY_RDS_ENV_NAME = `HASNA_${"RDS"}_PASSWORD`;
+const LEGACY_CLOUD_FLAG = `--${"cloud"}`;
+
 const FORBIDDEN_TEXT_PATTERNS: RegExp[] = [
   new RegExp(`github\\.com/hasna/${"open"}-todos`, "i"),
   wordPattern(`${"open"}-todos`),
@@ -77,6 +86,15 @@ const FORBIDDEN_TEXT_PATTERNS: RegExp[] = [
   /\bAWS_[A-Z0-9_]+\b/,
   /\bCLOUDFLARE_[A-Z0-9_]+\b/,
   /\bSTRIPE_[A-Z0-9_]+\b/,
+  new RegExp(escapeRegExp(LEGACY_CLOUD_PACKAGE), "i"),
+  wordPattern(LEGACY_OPEN_CLOUD),
+  wordPattern(LEGACY_CLOUD_MCP),
+  wordPattern(LEGACY_REGISTER_CLOUD_TOOLS),
+  wordPattern(LEGACY_REGISTER_CLOUD_COMMANDS),
+  new RegExp(`\\b${escapeRegExp(LEGACY_SHARED_ENV_PREFIX)}[_A-Z0-9]*\\b`),
+  wordPattern(LEGACY_RDS_ENV_NAME),
+  new RegExp(`${escapeRegExp(LEGACY_CLOUD_FLAG)}\\b`),
+  /\bcloud[- ]sync\b/i,
   new RegExp(`hasna${"studio"}`, "i"),
   new RegExp(`platform${"-"}todos`, "i"),
 ];

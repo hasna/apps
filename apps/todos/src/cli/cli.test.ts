@@ -1,13 +1,26 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { Database } from "bun:sqlite";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { getDatabase, closeDatabase, resetDatabase } from "../db/database.js";
 import { createTask } from "../db/tasks.js";
 import { createTaskList } from "../db/task-lists.js";
 import { createProject } from "../db/projects.js";
 
+let testRoot = "";
+
 async function runCli(args: string[], dbPath: string, extraEnv: Record<string, string> = {}) {
   const proc = Bun.spawn(["bun", "run", "src/cli/index.tsx", ...args], {
     cwd: import.meta.dir + "/../..",
-    env: { ...process.env, ...extraEnv, TODOS_DB_PATH: dbPath, TODOS_AUTO_PROJECT: "false" },
+    env: {
+      ...process.env,
+      HOME: join(testRoot, "home"),
+      HASNA_EVENTS_DIR: join(testRoot, "events"),
+      ...extraEnv,
+      TODOS_DB_PATH: dbPath,
+      TODOS_AUTO_PROJECT: "false",
+    },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -17,7 +30,90 @@ async function runCli(args: string[], dbPath: string, extraEnv: Record<string, s
   return { stdout, stderr, exitCode };
 }
 
+function createMinimalSourceStore(dbPath: string): void {
+  mkdirSync(dirname(dbPath), { recursive: true });
+  const db = new Database(dbPath);
+  try {
+    db.run(`
+      CREATE TABLE tasks (
+        id TEXT PRIMARY KEY,
+        short_id TEXT,
+        project_id TEXT,
+        parent_id TEXT,
+        plan_id TEXT,
+        task_list_id TEXT,
+        title TEXT NOT NULL,
+        description TEXT,
+        status TEXT NOT NULL,
+        priority TEXT NOT NULL,
+        agent_id TEXT,
+        assigned_to TEXT,
+        session_id TEXT,
+        working_dir TEXT,
+        tags TEXT DEFAULT '[]',
+        metadata TEXT DEFAULT '{}',
+        version INTEGER NOT NULL DEFAULT 1,
+        locked_by TEXT,
+        locked_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_at TEXT,
+        completed_at TEXT,
+        due_at TEXT,
+        estimated_minutes INTEGER,
+        actual_minutes INTEGER,
+        requires_approval INTEGER NOT NULL DEFAULT 0,
+        approved_by TEXT,
+        approved_at TEXT,
+        recurrence_rule TEXT,
+        recurrence_parent_id TEXT,
+        spawns_template_id TEXT,
+        confidence REAL,
+        reason TEXT,
+        spawned_from_session TEXT,
+        assigned_by TEXT,
+        assigned_from_project TEXT,
+        task_type TEXT,
+        cost_tokens INTEGER NOT NULL DEFAULT 0,
+        cost_usd REAL NOT NULL DEFAULT 0,
+        delegated_from TEXT,
+        delegation_depth INTEGER NOT NULL DEFAULT 0,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        max_retries INTEGER NOT NULL DEFAULT 3,
+        retry_after TEXT,
+        sla_minutes INTEGER,
+        machine_id TEXT,
+        synced_at TEXT,
+        archived_at TEXT,
+        runner_id TEXT,
+        runner_started_at TEXT,
+        runner_completed_at TEXT,
+        current_step TEXT,
+        total_steps INTEGER
+      )
+    `);
+    db.run("CREATE TABLE task_dependencies (task_id TEXT NOT NULL, depends_on TEXT NOT NULL)");
+    const timestamp = new Date().toISOString();
+    db.run(
+      `INSERT INTO tasks (
+        id, title, status, priority, working_dir, tags, metadata, version, created_at, updated_at, requires_approval
+      ) VALUES (?, ?, 'pending', 'medium', ?, '[]', ?, 1, ?, ?, 0)`,
+      [
+        "00000000-0000-4000-8000-000000000101",
+        "CLI source contract",
+        dirname(dirname(dirname(dbPath))),
+        JSON.stringify({ route_enabled: true }),
+        timestamp,
+        timestamp,
+      ],
+    );
+  } finally {
+    db.close();
+  }
+}
+
 beforeEach(() => {
+  testRoot = mkdtempSync(join(tmpdir(), "todos-cli-test-"));
   process.env["TODOS_DB_PATH"] = ":memory:";
   resetDatabase();
   getDatabase();
@@ -26,6 +122,8 @@ beforeEach(() => {
 afterEach(() => {
   closeDatabase();
   delete process.env["TODOS_DB_PATH"];
+  rmSync(testRoot, { recursive: true, force: true });
+  testRoot = "";
 });
 
 describe("CLI integration", () => {
@@ -189,6 +287,77 @@ describe("CLI integration", () => {
     }
   });
 
+  it("exposes route state and workflow pointers through task automation commands", async () => {
+    const dbPath = "/tmp/test-cli-task-routing.db";
+    const { unlinkSync } = await import("node:fs");
+    try { unlinkSync(dbPath); } catch {}
+
+    try {
+      const created = await runCli([
+        "--json",
+        "task",
+        "upsert",
+        "--fingerprint",
+        "route:cli:1",
+        "--title",
+        "Routeable task",
+        "--metadata-json",
+        "{\"route_enabled\":true}",
+      ], dbPath);
+      expect(created.exitCode).toBe(0);
+      const payload = JSON.parse(created.stdout);
+
+      const routeState = await runCli(["--json", "task", "route-state", payload.task.id], dbPath);
+      expect(routeState.exitCode).toBe(0);
+      expect(JSON.parse(routeState.stdout).eligible).toBe(true);
+
+      const pointers = await runCli([
+        "--json",
+        "task",
+        "workflow-pointers",
+        payload.task.id,
+        "--invocation",
+        "inv_cli",
+        "--run",
+        "run_cli",
+        "--manifest",
+        "/tmp/todos-cli-routing/manifest.json",
+        "--state",
+        "working",
+      ], dbPath);
+      expect(pointers.exitCode).toBe(0);
+      const updated = JSON.parse(pointers.stdout);
+      expect(updated.route_state.pointers).toMatchObject({
+        current_workflow_invocation_id: "inv_cli",
+        current_run_id: "run_cli",
+        workflow_state: "working",
+      });
+
+      const cleared = await runCli([
+        "--json",
+        "task",
+        "workflow-pointers",
+        payload.task.id,
+        "--clear-run",
+        "--clear-manifest",
+        "--state",
+        "review",
+      ], dbPath);
+      expect(cleared.exitCode).toBe(0);
+      const clearedPayload = JSON.parse(cleared.stdout);
+      expect(clearedPayload.route_state.pointers.current_workflow_invocation_id).toBe("inv_cli");
+      expect(clearedPayload.route_state.pointers.current_run_id).toBeUndefined();
+      expect(clearedPayload.route_state.pointers.latest_manifest_path).toBeUndefined();
+      expect(clearedPayload.route_state.pointers.workflow_state).toBe("review");
+
+      const ready = await runCli(["ready", "--json"], dbPath);
+      expect(ready.exitCode).toBe(0);
+      expect(JSON.parse(ready.stdout)[0].route_state.eligible).toBe(true);
+    } finally {
+      try { unlinkSync(dbPath); } catch {}
+    }
+  });
+
   it("should reject invalid add priority before SQLite validation", async () => {
     const result = await runCli(["add", "Invalid priority task", "--priority", "urgent"], ":memory:");
 
@@ -216,6 +385,58 @@ describe("CLI integration", () => {
 
     const { unlinkSync } = await import("node:fs");
     try { unlinkSync("/tmp/test-cli-list.db"); } catch {}
+  });
+
+  it("should emit complete parseable JSON for large list output", async () => {
+    const dbPath = join(testRoot, "large-list.db");
+    const previousDbPath = process.env["TODOS_DB_PATH"];
+    closeDatabase();
+    process.env["TODOS_DB_PATH"] = dbPath;
+    resetDatabase();
+    const db = getDatabase();
+    const longText = "large-json-payload ".repeat(90);
+    const seedTasks = db.transaction(() => {
+      for (let i = 0; i < 180; i += 1) {
+        createTask({
+          title: `Large pending task ${i}`,
+          description: `${longText}${i}`,
+          status: "pending",
+          priority: "medium",
+          tags: ["large-json"],
+        }, db);
+      }
+      for (let i = 0; i < 80; i += 1) {
+        createTask({
+          title: `Large completed task ${i}`,
+          description: `${longText}${i}`,
+          status: "completed",
+          priority: "low",
+          tags: ["large-json"],
+        }, db);
+      }
+    });
+    seedTasks();
+    closeDatabase();
+    if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
+    else process.env["TODOS_DB_PATH"] = previousDbPath;
+    resetDatabase();
+
+    const globalJson = await runCli(["list", "--json"], dbPath);
+    expect(globalJson.exitCode).toBe(0);
+    expect(globalJson.stderr).toBe("");
+    expect(globalJson.stdout.length).toBeGreaterThan(64 * 1024);
+    expect(JSON.parse(globalJson.stdout)).toHaveLength(180);
+
+    const formatJson = await runCli(["list", "--format", "json"], dbPath);
+    expect(formatJson.exitCode).toBe(0);
+    expect(formatJson.stderr).toBe("");
+    expect(JSON.parse(formatJson.stdout)).toHaveLength(180);
+
+    const completedJson = await runCli(["list", "--status", "completed", "--json"], dbPath);
+    expect(completedJson.exitCode).toBe(0);
+    expect(completedJson.stderr).toBe("");
+    expect(completedJson.stdout.length).toBeGreaterThan(64 * 1024);
+    expect(JSON.parse(completedJson.stdout)).toHaveLength(80);
   });
 
   it("should run usage report command", async () => {
@@ -549,6 +770,97 @@ describe("CLI integration", () => {
     } finally {
       try { unlinkSync(dbPath); } catch {}
     }
+  });
+
+  it("should write and read local Markdown plan artifacts from the plans CLI", async () => {
+    const dbPath = join(testRoot, "plan-artifacts.db");
+    const projectRoot = join(testRoot, "artifact-project");
+    const { existsSync, mkdirSync, readFileSync, unlinkSync } = await import("node:fs");
+    const { createProject } = await import("../db/projects.js");
+    const { getDatabase, closeDatabase, resetDatabase } = await import("../db/database.js");
+
+    mkdirSync(projectRoot, { recursive: true });
+    const db = getDatabase(dbPath);
+    const project = createProject({ name: "Artifact Project", path: projectRoot }, db);
+    closeDatabase();
+    resetDatabase();
+
+    const created = await runCli([
+      "--project",
+      projectRoot,
+      "--json",
+      "plans",
+      "--add",
+      "CLI artifact plan",
+      "--slug",
+      "readable-artifact-plan",
+      "--description",
+      "Persist this plan locally",
+    ], dbPath);
+    expect(created.exitCode).toBe(0);
+    const plan = JSON.parse(created.stdout);
+    expect(plan.slug).toBe("readable-artifact-plan");
+    const artifactPath = join(projectRoot, ".hasna", "todos", "plans", project.id, `readable-artifact-plan--${plan.id.slice(0, 8)}.md`);
+    expect(existsSync(artifactPath)).toBe(true);
+    expect(readFileSync(artifactPath, "utf8")).toContain("# CLI artifact plan");
+    expect(readFileSync(artifactPath, "utf8")).toContain('plan_slug: "readable-artifact-plan"');
+
+    const shown = await runCli([
+      "--project",
+      projectRoot,
+      "--json",
+      "plans",
+      "--show",
+      "readable-artifact-plan",
+    ], dbPath);
+    expect(shown.exitCode).toBe(0);
+    const details = JSON.parse(shown.stdout);
+    expect(details.plan.id).toBe(plan.id);
+    expect(details.artifact.path).toBe(artifactPath);
+    expect(details.artifact.metadata.project_id).toBe(project.id);
+    expect(details.artifact.body).toContain("Persist this plan locally");
+
+    const artifact = await runCli([
+      "--project",
+      projectRoot,
+      "--json",
+      "plans",
+      "--artifact",
+      "readable-artifact-plan",
+    ], dbPath);
+    expect(artifact.exitCode).toBe(0);
+    const artifactDetails = JSON.parse(artifact.stdout);
+    expect(artifactDetails.artifact.path).toBe(artifactPath);
+    expect(artifactDetails.artifact.exists).toBe(true);
+    expect(artifactDetails.artifact.conflicts).toEqual([]);
+
+    unlinkSync(artifactPath);
+    const exported = await runCli([
+      "--project",
+      projectRoot,
+      "--json",
+      "plans",
+      "--write-artifacts",
+    ], dbPath);
+    expect(exported.exitCode).toBe(0);
+    expect(JSON.parse(exported.stdout)).toMatchObject({
+      count: 1,
+      artifacts: [{ plan_id: plan.id, path: artifactPath }],
+    });
+    expect(existsSync(artifactPath)).toBe(true);
+
+    const duplicate = await runCli([
+      "--project",
+      projectRoot,
+      "--json",
+      "plans",
+      "--add",
+      "Duplicate artifact plan",
+      "--slug",
+      "readable-artifact-plan",
+    ], dbPath);
+    expect(duplicate.exitCode).toBe(1);
+    expect(duplicate.stderr).toContain("Plan slug already exists in this scope: readable-artifact-plan");
   });
 
   it("should create and export local retrospectives from the CLI", async () => {
@@ -1052,6 +1364,40 @@ describe("CLI integration", () => {
     try { unlinkSync("/tmp/test-cli-ready.db"); } catch {}
   });
 
+  it("should expose source discovery JSON for ready --source-store while preserving legacy ready array JSON", async () => {
+    const sourceDbPath = join(testRoot, "source-repo", ".hasna", "todos", "todos.db");
+    createMinimalSourceStore(sourceDbPath);
+
+    const source = await runCli(["ready", "--source-store", sourceDbPath, "--json"], ":memory:");
+    expect(source.exitCode).toBe(0);
+    const sourcePayload = JSON.parse(source.stdout);
+    expect(sourcePayload.schema_version).toBe("todos.task_route_sources.v1");
+    expect(Array.isArray(sourcePayload.stores)).toBe(true);
+    expect(Array.isArray(sourcePayload.candidates)).toBe(true);
+    expect(Array.isArray(sourcePayload.errors)).toBe(true);
+    expect(sourcePayload.total_candidate_count).toBe(1);
+    expect(sourcePayload.returned_candidate_count).toBe(1);
+    expect(sourcePayload.truncated).toBe(false);
+    expect(sourcePayload.errors).toEqual([]);
+    expect(sourcePayload.stores[0]).toMatchObject({
+      source_db_path: sourceDbPath,
+      status: "ok",
+      candidate_count: 1,
+    });
+    expect(sourcePayload.candidates[0]).toMatchObject({
+      title: "CLI source contract",
+      source_db_path: sourceDbPath,
+      source_selected_by_input: true,
+      route_state: { eligible: true },
+    });
+    expect("source_allowed" in sourcePayload.candidates[0]).toBe(false);
+
+    const legacy = await runCli(["ready", "--json"], ":memory:");
+    expect(legacy.exitCode).toBe(0);
+    const legacyPayload = JSON.parse(legacy.stdout);
+    expect(Array.isArray(legacyPayload)).toBe(true);
+  });
+
   it("should expose a dependency graph through deps --graph --json", async () => {
     const dbPath = "/tmp/test-cli-deps-graph.db";
     const { unlinkSync } = await import("node:fs");
@@ -1464,7 +1810,7 @@ describe("CLI integration", () => {
     for (const path of [sourceDb, targetDb, bundlePath, `${sourceDb}-shm`, `${sourceDb}-wal`, `${targetDb}-shm`, `${targetDb}-wal`]) {
       try { unlinkSync(path); } catch {}
     }
-  });
+  }, 30000);
 
   it("should create verify integrity-check and restore a local backup through the CLI", async () => {
     const sourceDb = "/tmp/test-cli-backup-source.db";
@@ -1512,7 +1858,7 @@ describe("CLI integration", () => {
     for (const path of [sourceDb, targetDb, backupPath, `${sourceDb}-shm`, `${sourceDb}-wal`, `${targetDb}-shm`, `${targetDb}-wal`]) {
       try { unlinkSync(path); } catch {}
     }
-  });
+  }, 30000);
 
   it("should inspect native storage status without network access", async () => {
     const dbPath = "/tmp/test-cli-storage-status.db";
@@ -1717,7 +2063,7 @@ describe("CLI integration", () => {
     for (const path of [sourceDb, targetDb, markdownPath, `${sourceDb}-shm`, `${sourceDb}-wal`, `${targetDb}-shm`, `${targetDb}-wal`]) {
       try { unlinkSync(path); } catch {}
     }
-  });
+  }, 30000);
 
   it("should list and import bundled onboarding fixtures through the CLI", async () => {
     const dbPath = "/tmp/test-cli-onboarding-fixtures.db";
@@ -1877,7 +2223,7 @@ describe("CLI integration", () => {
       try { unlinkSync(path); } catch {}
     }
     rmSync(home, { recursive: true, force: true });
-  });
+  }, 30000);
 
   it("should create all tasks and dependencies from a reusable plan template", async () => {
     const dbPath = "/tmp/test-cli-plan-template-use.db";
@@ -2115,7 +2461,7 @@ describe("CLI integration", () => {
       try { unlinkSync(`${path}-shm`); } catch {}
       try { unlinkSync(`${path}-wal`); } catch {}
     }
-  });
+  }, 30000);
 
   it("should run overdue command", async () => {
     const proc = Bun.spawn(

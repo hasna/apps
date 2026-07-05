@@ -97,7 +97,9 @@ function envOption(value: string | undefined): Record<string, string> | undefine
 
 function registerClaude(binPath: string, global?: boolean): void {
   const scope = global ? "user" : "project";
-  const cmd = `claude mcp add --transport stdio --scope ${scope} todos -- ${binPath}`;
+  // Pass --stdio so the server always speaks stdio to the client. Without it the
+  // bare binary could fall back to another transport and the client would hang.
+  const cmd = `claude mcp add --transport stdio --scope ${scope} todos -- ${binPath} --stdio`;
   try {
     execSync(cmd, { stdio: "pipe" });
     console.log(chalk.green(`Claude Code (${scope}): registered via 'claude mcp add'`));
@@ -123,7 +125,7 @@ function registerCodex(binPath: string): void {
   const configPath = join(HOME, ".codex", "config.toml");
   let content = readTomlFile(configPath);
   content = removeTomlBlock(content, "mcp_servers.todos");
-  const block = `\n[mcp_servers.todos]\ncommand = "${binPath}"\nargs = []\n`;
+  const block = `\n[mcp_servers.todos]\ncommand = "${binPath}"\nargs = ["--stdio"]\n`;
   content = content.trimEnd() + "\n" + block;
   writeTomlFile(configPath, content);
   console.log(chalk.green(`Codex CLI: registered in ${configPath}`));
@@ -152,7 +154,7 @@ function registerGemini(binPath: string): void {
   const servers = config["mcpServers"] as Record<string, unknown>;
   servers["todos"] = {
     command: binPath,
-    args: [] as string[],
+    args: ["--stdio"] as string[],
   };
   writeJsonFile(configPath, config);
   console.log(chalk.green(`Gemini CLI: registered in ${configPath}`));
@@ -295,7 +297,15 @@ exit 0
         unregisterMcp(opts.unregister, opts.global);
         return;
       }
-      await import("../../mcp/index.js");
+      // Start the stdio MCP server explicitly. Importing mcp/index.js does NOT
+      // start anything here: its startup is gated on isDirectRun, which is false
+      // when the module is imported by the CLI (process.argv[1] is the todos CLI
+      // entrypoint, not mcp/index). Build the server and connect stdio directly.
+      const { buildServer } = await import("../../mcp/index.js");
+      const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
+      const server = buildServer();
+      const transport = new StdioServerTransport();
+      await server.connect(transport);
     });
 
   // import — GitHub issue import

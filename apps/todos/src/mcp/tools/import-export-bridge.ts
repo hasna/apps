@@ -14,7 +14,7 @@ export function registerImportExportBridgeTools(
   if (shouldRegisterTool("export_local_bundle")) {
     server.tool(
       "export_local_bundle",
-      "Export local projects/tasks/plans/deps/templates/comments/evidence as a stable JSON bundle for hosted-bridge sync. No cloud calls.",
+      "Export local projects/tasks/plans/deps/templates/comments/evidence as a stable JSON bundle for local bridge transfer. No cloud calls.",
       {
         project_id: z.string().optional(),
         bundle_type: z.enum(["full_export", "tasks", "partial"]).optional(),

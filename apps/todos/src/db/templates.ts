@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import type { TaskTemplate, CreateTemplateInput, CreateTaskInput, TemplateTask, TemplateTaskInput, TemplateWithTasks, TemplateVariable, TemplateVersion, Task } from "../types/index.js";
 import { getDatabase, now, uuid, resolvePartialId } from "./database.js";
 import { createTask, addDependency } from "./tasks.js";
+import { currentStorageMachineId, recordStorageTombstone } from "./storage-tombstones.js";
 
 export interface UpdateTemplateInput {
   name?: string;
@@ -45,13 +46,14 @@ function resolveTemplateId(id: string, d: Database): string | null {
 export function createTemplate(input: CreateTemplateInput, db?: Database): TaskTemplate {
   const d = db || getDatabase();
   const id = uuid();
+  const machineId = currentStorageMachineId(d);
   d.run(
-    `INSERT INTO task_templates (id, name, title_pattern, description, priority, tags, variables, project_id, plan_id, metadata, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO task_templates (id, name, title_pattern, description, priority, tags, variables, project_id, plan_id, metadata, created_at, machine_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [id, input.name, input.title_pattern, input.description || null, input.priority || "medium",
      JSON.stringify(input.tags || []), JSON.stringify(input.variables || []),
      input.project_id || null, input.plan_id || null,
-     JSON.stringify(input.metadata || {}), now()],
+     JSON.stringify(input.metadata || {}), now(), machineId],
   );
 
   // If tasks array is provided, add them as template tasks
@@ -79,6 +81,14 @@ export function deleteTemplate(id: string, db?: Database): boolean {
   const d = db || getDatabase();
   const resolved = resolveTemplateId(id, d);
   if (!resolved) return false;
+  const template = getTemplate(resolved, d);
+  if (!template) return false;
+  recordStorageTombstone({
+    object_type: "templates",
+    object_id: resolved,
+    payload: template as unknown as Record<string, unknown>,
+    version: template.version,
+  }, d);
   // CASCADE will delete associated template_tasks and template_versions
   return d.run("DELETE FROM task_templates WHERE id = ?", [resolved]).changes > 0;
 }

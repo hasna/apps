@@ -1,5 +1,6 @@
 import { describe, it, expect } from "bun:test";
 import { CORE_MCP_TOOLS, shouldRegisterToolForProfile } from "./token-utils.js";
+import { getMcpToolNames } from "../mcp.js";
 
 /**
  * Tests for the MCP meta tools: describe_tools and search_tools.
@@ -14,19 +15,17 @@ import { CORE_MCP_TOOLS, shouldRegisterToolForProfile } from "./token-utils.js";
 const ALL_TOOLS = [
   "create_task","list_tasks","get_task","update_task","delete_task",
   "start_task","complete_task","fail_task","lock_task","unlock_task","check_task_lock","approve_task",
-  "add_dependency","remove_dependency","add_comment",
+  "add_task_dependency","remove_task_dependency","add_comment",
   "bootstrap_project","create_project","list_projects",
   "create_plan","list_plans","get_plan","update_plan","delete_plan",
   "register_agent","list_agents","get_agent","rename_agent","delete_agent",
   "get_my_tasks","get_org_chart","set_reports_to",
   "create_task_list","list_task_lists","get_task_list","update_task_list","delete_task_list",
-  "search_tasks","save_search_view","list_search_views","run_search_view","delete_search_view","clone_task","move_task","get_next_task","claim_next_task",
+  "search_tasks","save_search_view","list_search_views","run_search_view","delete_search_view","move_task","get_next_task","claim_next_task",
   "get_context","bootstrap","get_health","get_tasks_changed_since","heartbeat","release_agent",
-  "get_task_history","get_recent_activity",
-  "create_webhook","list_webhooks","delete_webhook",
   "create_template","list_templates","create_task_from_template","delete_template","list_template_library","write_template_library",
-  "bulk_update_tasks","bulk_create_tasks","get_task_stats","get_task_graph",
-  "get_active_work","get_stale_tasks","get_status",
+  "bulk_update_tasks","bulk_create_tasks",
+  "get_stale_tasks","get_status",
   "search_tools","describe_tools",
 ];
 
@@ -34,19 +33,17 @@ const ALL_TOOLS = [
 const DESCRIBE_TOOLS_KEYS = [
   "create_task","list_tasks","get_task","update_task","delete_task",
   "start_task","complete_task","fail_task","lock_task","unlock_task","check_task_lock","approve_task",
-  "add_dependency","remove_dependency","add_comment",
+  "add_task_dependency","remove_task_dependency","add_comment",
   "bootstrap_project","create_project","list_projects",
   "create_plan","list_plans","get_plan","update_plan","delete_plan",
   "register_agent","list_agents","get_agent","rename_agent","delete_agent",
   "get_my_tasks","get_org_chart","set_reports_to",
   "create_task_list","list_task_lists","get_task_list","update_task_list","delete_task_list",
-  "search_tasks","save_search_view","list_search_views","run_search_view","delete_search_view","clone_task","move_task","get_next_task","claim_next_task",
+  "search_tasks","save_search_view","list_search_views","run_search_view","delete_search_view","move_task","get_next_task","claim_next_task",
   "get_context","bootstrap","get_health","get_tasks_changed_since","heartbeat","release_agent",
-  "get_task_history","get_recent_activity",
-  "create_webhook","list_webhooks","delete_webhook",
   "create_template","list_templates","create_task_from_template","delete_template","list_template_library","write_template_library",
-  "bulk_update_tasks","bulk_create_tasks","get_task_stats","get_task_graph",
-  "get_active_work","get_stale_tasks","get_status",
+  "bulk_update_tasks","bulk_create_tasks",
+  "get_stale_tasks","get_status",
   "search_tools","describe_tools",
 ];
 
@@ -75,6 +72,15 @@ describe("MCP meta tools", () => {
     for (const name of ALL_TOOLS) {
       expect(name).toMatch(/^[a-z_]+$/);
     }
+  });
+
+  // Real guard (not self-referential): every name in the fixture must be a tool
+  // the MCP server actually knows about. This catches phantom entries — names
+  // that were removed from the registry but left behind in this fixture.
+  it("every fixture tool is a real known MCP tool (no phantoms)", () => {
+    const known = new Set(getMcpToolNames({ profile: "full" }));
+    const phantom = ALL_TOOLS.filter((name) => !known.has(name));
+    expect(phantom).toEqual([]);
   });
 });
 

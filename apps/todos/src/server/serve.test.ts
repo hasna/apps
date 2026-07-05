@@ -327,6 +327,36 @@ describe("PATCH /api/tasks/:id", () => {
     const data = (await res.json()) as Record<string, unknown>;
     expect(data.error).toBe("Task not found");
   });
+
+  // ── M5: optimistic concurrency ──
+  it("should honor a client-supplied matching version", async () => {
+    const created = await createTaskViaApi({ title: "Version match" });
+    const id = created.id as string;
+    const version = created.version as number; // 1
+
+    const res = await api("PATCH", `/api/tasks/${id}`, { title: "v2", version });
+    expect(res.status).toBe(200);
+    const data = (await res.json()) as Record<string, unknown>;
+    expect(data.title).toBe("v2");
+    expect(data.version).toBe(version + 1);
+  });
+
+  it("should return 409 on a stale client-supplied version (real conflict)", async () => {
+    const created = await createTaskViaApi({ title: "Version conflict" });
+    const id = created.id as string;
+    const staleVersion = created.version as number; // 1
+
+    // First writer bumps version to 2.
+    const first = await api("PATCH", `/api/tasks/${id}`, { title: "first", version: staleVersion });
+    expect(first.status).toBe(200);
+
+    // Second writer submits the now-stale version → must be a 409, not 500.
+    const second = await api("PATCH", `/api/tasks/${id}`, { title: "second", version: staleVersion });
+    expect(second.status).toBe(409);
+    const data = (await second.json()) as Record<string, unknown>;
+    expect(data.code).toBe("VERSION_CONFLICT");
+    expect(data.current_version).toBe(staleVersion + 1);
+  });
 });
 
 // ── DELETE /api/tasks/:id ───────────────────────────────────────────────────
@@ -373,14 +403,15 @@ describe("POST /api/tasks/:id/start", () => {
     expect(data.locked_by).toBe("dashboard");
   });
 
-  it("should return 500 for non-existent task", async () => {
+  it("should return 404 for non-existent task", async () => {
     const fakeId = "00000000-0000-0000-0000-000000000000";
     const res = await api("POST", `/api/tasks/${fakeId}/start`);
-    // startTask throws TaskNotFoundError, caught as 500 in the server
-    expect(res.status).toBe(500);
+    // startTask throws TaskNotFoundError, now mapped to a 404 (was a generic 500)
+    expect(res.status).toBe(404);
 
     const data = (await res.json()) as Record<string, unknown>;
     expect(data.error).toBeTruthy();
+    expect(data.code).toBe("TASK_NOT_FOUND");
   });
 });
 
@@ -403,13 +434,15 @@ describe("POST /api/tasks/:id/complete", () => {
     expect(data.locked_by).toBeNull();
   });
 
-  it("should return 500 for non-existent task", async () => {
+  it("should return 404 for non-existent task", async () => {
     const fakeId = "00000000-0000-0000-0000-000000000000";
     const res = await api("POST", `/api/tasks/${fakeId}/complete`);
-    expect(res.status).toBe(500);
+    // completeTask throws TaskNotFoundError, now mapped to a 404 (was a generic 500)
+    expect(res.status).toBe(404);
 
     const data = (await res.json()) as Record<string, unknown>;
     expect(data.error).toBeTruthy();
+    expect(data.code).toBe("TASK_NOT_FOUND");
   });
 });
 
@@ -555,6 +588,20 @@ describe("API - Export", () => {
     const res = await fetch(url("/api/tasks/export?format=csv"));
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/csv");
+  });
+
+  // ── L3: CSV formula-injection guard + security headers ──
+  it("CSV export neutralizes formula-injection payloads and sets security headers", async () => {
+    await createTaskViaApi({ title: "=cmd|' /C calc'!A0" });
+    const res = await fetch(url("/api/tasks/export?format=csv"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    const body = await res.text();
+    // The dangerous leading "=" must be prefixed with a single quote so
+    // spreadsheets treat it as text. The raw formula cell must never appear at
+    // the start of a field (i.e. immediately after a comma or line start).
+    expect(body).toContain(`,'=cmd`);
+    expect(body).not.toMatch(/(^|,)=cmd/m);
   });
 });
 

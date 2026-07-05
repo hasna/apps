@@ -108,4 +108,13 @@ describe("project bootstrap state", () => {
     expect(result.project?.task_list_id).toBe("custom-tasks");
     expect(result.taskList?.slug).toBe("custom-tasks");
   });
+
+  test("can mark the default task list as route-enabled for OpenLoops admission", () => {
+    mkdirSync(join(root, ".git"));
+
+    const result = bootstrapProject({ path: root, routeEnabled: true });
+
+    expect(result.taskList?.metadata.route_enabled).toBe(true);
+    expect(result.taskList?.metadata.automation).toMatchObject({ no_auto: false });
+  });
 });

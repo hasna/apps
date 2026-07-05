@@ -81,4 +81,36 @@ describe("TodosClient local API config", () => {
     expect(client.baseUrl).toBe("http://localhost:19428");
     expect(client.apiKey).toBe("option-token");
   });
+
+  // M8: a 4-byte JSON body (`true`) must parse to the value, not be dropped.
+  test("does not drop a 4-byte `true` response body as null", async () => {
+    globalThis.fetch = (async () =>
+      new Response("true", { status: 200, headers: { "content-length": "4" } })) as typeof fetch;
+    const client = new TodosClient({ baseUrl: "http://localhost:19427", apiKey: "k" });
+    const result = await client._get<boolean>("/api/some-boolean");
+    expect(result).toBe(true);
+  });
+
+  test("still returns null for a genuinely empty body", async () => {
+    globalThis.fetch = (async () =>
+      new Response("", { status: 200, headers: { "content-length": "0" } })) as typeof fetch;
+    const client = new TodosClient({ baseUrl: "http://localhost:19427", apiKey: "k" });
+    const result = await client._get<unknown>("/api/empty");
+    expect(result).toBeNull();
+  });
+
+  // M9: subscribe() must send auth headers (x-api-key), not a bare fetch.
+  test("subscribe() sends the api key header", async () => {
+    let observedHeaders: Record<string, string> = {};
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      observedHeaders = (init?.headers as Record<string, string>) ?? {};
+      // Empty SSE stream that closes immediately.
+      const body = new ReadableStream({ start(controller) { controller.close(); } });
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+    const client = new TodosClient({ baseUrl: "http://localhost:19427", apiKey: "sekret" });
+    // Drain the generator (closes immediately).
+    for await (const _ of client.tasks.subscribe({ agentId: "a" })) { /* no events */ }
+    expect(observedHeaders["x-api-key"]).toBe("sekret");
+  });
 });

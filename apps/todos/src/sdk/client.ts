@@ -253,7 +253,9 @@ class TasksResource {
       events: options.events?.join(","),
     });
     const url = `${this.client.baseUrl}/api/tasks/stream${q}`;
-    const resp = await fetch(url);
+    // Use _fetchRaw so the request carries auth headers (x-api-key). A bare
+    // fetch() has no headers and gets a 401 against an api-key-secured server.
+    const resp = await this.client._fetchRaw(url);
     if (!resp.ok || !resp.body) throw new Error(`SSE connection failed: ${resp.status}`);
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
@@ -572,10 +574,13 @@ export class TodosClient {
         throw new TodosAPIError(message, res.status, res.statusText, body);
       }
 
-      const contentLength = res.headers.get("content-length");
-      if (contentLength === "0" || contentLength === "4") return null as T;
-
-      return res.json() as Promise<T>;
+      // Only treat a genuinely empty body as null. Do NOT key off the byte
+      // length: a valid JSON body of `true` is exactly 4 bytes and must parse to
+      // the boolean, not be dropped as null.
+      if (res.status === 204) return null as T;
+      const text = await res.text();
+      if (text.length === 0) return null as T;
+      return JSON.parse(text) as T;
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") {
         throw new TodosTimeoutError(this.timeout);

@@ -236,6 +236,19 @@ describe("CLI QoL commands", () => {
     }
   });
 
+  it("project-panel --json should emit a project panel contract", () => {
+    const projPath = join(tmpDir, "panel-project");
+    const proj = JSON.parse(run(`--json projects --add ${projPath} --name 'Panel Project'`));
+    run(`add 'Panel project task' --project ${proj.id} --json`);
+
+    const panel = JSON.parse(run(`project-panel --project ${proj.id} --json --contract`));
+
+    expect(panel.schema).toBe("hasna.project_panel.v1");
+    expect(panel.projectId).toBe("panel-project");
+    expect(panel.provider.kind).toBe("todos");
+    expect(panel.metrics.some((metric: any) => metric.id === "total_tasks" && metric.value === 1)).toBe(true);
+  });
+
   // ── list --agent-name ──────────────────────────────────────────
 
   it("list --agent-name should filter by assigned agent name", () => {

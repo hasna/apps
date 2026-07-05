@@ -11,6 +11,7 @@ import {
 } from "../types/index.js";
 import { LOCK_EXPIRY_MINUTES, clearExpiredLocks, getDatabase, isLockExpired, lockExpiryCutoff, now } from "./database.js";
 import { checkCompletionGuard } from "../lib/completion-guard.js";
+import { databasePathFromDatabase } from "../lib/event-emission-safety.js";
 import { emitLocalEventHooksQuiet } from "../lib/event-hooks.js";
 import { emitSharedTaskEventQuiet, taskEventData } from "../lib/shared-events.js";
 import { logTaskChange } from "./audit.js";
@@ -51,6 +52,7 @@ export function startTask(
   db?: Database,
 ): Task {
   const d = db || getDatabase();
+  const databasePath = databasePathFromDatabase(d);
   const task = getTask(id, d);
   if (!task) throw new TaskNotFoundError(id);
   assertStartable(task, agentId);
@@ -67,6 +69,7 @@ export function startTask(
         title: task.title,
         blockers: blocking.map((b) => ({ id: b.id, short_id: b.short_id, title: b.title, status: b.status })),
       },
+      databasePath,
     });
     throw new Error(`Task is blocked by ${blocking.length} unfinished dependency(ies): ${blockerIds}`);
   }
@@ -93,8 +96,8 @@ export function startTask(
   const startedTask = { ...task, status: "in_progress" as const, assigned_to: agentId, locked_by: agentId, locked_at: timestamp, started_at: task.started_at || timestamp, version: task.version + 1, updated_at: timestamp };
   const payload = taskEventData(startedTask, { agent_id: agentId });
   dispatchWebhook("task.started", payload, d).catch(() => {});
-  emitLocalEventHooksQuiet({ type: "task.started", payload });
-  emitSharedTaskEventQuiet({ type: "task.started", task: startedTask, data: { agent_id: agentId } });
+  emitLocalEventHooksQuiet({ type: "task.started", payload, databasePath });
+  emitSharedTaskEventQuiet({ type: "task.started", task: startedTask, data: { agent_id: agentId }, databasePath });
 
   // Return constructed result — no re-fetch
   return startedTask;
@@ -107,8 +110,19 @@ export function completeTask(
   options?: { files_changed?: string[]; test_results?: string; commit_hash?: string; notes?: string; attachment_ids?: string[]; skip_recurrence?: boolean; confidence?: number; completed_at?: string },
 ): Task {
   const d = db || getDatabase();
+  const databasePath = databasePathFromDatabase(d);
   const task = getTask(id, d);
   if (!task) throw new TaskNotFoundError(id);
+
+  // Idempotency (H3): re-completing an already-completed task must NOT re-run
+  // side effects (recurrence spawn, template spawn, unblock events). Return the
+  // task as-is. A cancelled task cannot be completed.
+  if (task.status === "completed") {
+    return task;
+  }
+  if (task.status === "cancelled") {
+    throw new Error(`Task ${id} is cancelled and cannot be completed`);
+  }
 
   // Check lock ownership if agent specified
   if (
@@ -136,7 +150,14 @@ export function completeTask(
   const hasMeta = Object.keys(completionMeta).length > 0;
 
   const timestamp = options?.completed_at || now();
-  const confidence = options?.confidence !== undefined ? options.confidence : null;
+  // M2: don't wipe a previously-stored confidence when the caller doesn't pass one.
+  const confidence = options?.confidence !== undefined ? options.confidence : task.confidence;
+
+  // The transaction bumps version once for the (optional) metadata UPDATE and
+  // once for the status UPDATE. Track the true post-commit version so callers
+  // holding the returned task don't hit spurious VersionConflictError (H2).
+  const versionBeforeStatus = task.version + (hasMeta ? 1 : 0);
+  const finalVersion = versionBeforeStatus + 1;
 
   // Perform both updates atomically in a transaction with optimistic locking
   const tx = d.transaction(() => {
@@ -152,11 +173,17 @@ export function completeTask(
       }
     }
 
-    d.run(
+    // M4: guard the status write with the expected version so a concurrent
+    // mutation between read and write is detected instead of silently clobbered.
+    const statusResult = d.run(
       `UPDATE tasks SET status = 'completed', locked_by = NULL, locked_at = NULL, completed_at = ?, confidence = ?, version = version + 1, updated_at = ?
-       WHERE id = ?`,
-      [timestamp, confidence, timestamp, id],
+       WHERE id = ? AND version = ?`,
+      [timestamp, confidence, timestamp, id, versionBeforeStatus],
     );
+    if (statusResult.changes === 0) {
+      const current = getTask(id, d);
+      throw new VersionConflictError(id, versionBeforeStatus, current?.version ?? -1);
+    }
   });
 
   tx();
@@ -169,19 +196,27 @@ export function completeTask(
     locked_at: null,
     completed_at: timestamp,
     confidence,
-    version: task.version + 1,
+    version: finalVersion,
     updated_at: timestamp,
     metadata: hasMeta ? { ...task.metadata, ...completionMeta } : task.metadata,
   };
   const completionPayload = taskEventData(completedTaskForEvent, { agent_id: agentId, completed_at: timestamp });
   dispatchWebhook("task.completed", completionPayload, d).catch(() => {});
-  emitLocalEventHooksQuiet({ type: "task.completed", payload: completionPayload });
-  emitSharedTaskEventQuiet({ type: "task.completed", task: completedTaskForEvent, data: { agent_id: agentId, completed_at: timestamp } });
+  emitLocalEventHooksQuiet({ type: "task.completed", payload: completionPayload, databasePath });
+  emitSharedTaskEventQuiet({ type: "task.completed", task: completedTaskForEvent, data: { agent_id: agentId, completed_at: timestamp }, databasePath });
 
   // Auto-spawn next recurring task
   let spawnedTask: Task | null = null;
   if (task.recurrence_rule && !options?.skip_recurrence) {
-    spawnedTask = spawnNextRecurrence(task, d, timestamp);
+    try {
+      spawnedTask = spawnNextRecurrence(task, d, timestamp);
+    } catch (e) {
+      // Defensive (#3): a malformed recurrence_rule makes nextOccurrence throw
+      // AFTER the status is already committed. Log and skip rather than throwing
+      // post-commit (which would leave the task completed but surface an error).
+      spawnedTask = null;
+      console.warn(`[tasks] failed to spawn next recurrence for ${id}: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   // Auto-spawn next task from template (pipeline/handoff chains)
@@ -235,12 +270,12 @@ export function completeTask(
       const depTask = getTask(dep.id, d);
       const payload = depTask ? taskEventData(depTask, { unblocked_by: id }) : { id: dep.id, unblocked_by: id, title: dep.title };
       dispatchWebhook("task.unblocked", payload, d).catch(() => {});
-      emitLocalEventHooksQuiet({ type: "task.unblocked", payload });
-      if (depTask) emitSharedTaskEventQuiet({ type: "task.unblocked", task: depTask, data: { unblocked_by: id } });
+      emitLocalEventHooksQuiet({ type: "task.unblocked", payload, databasePath });
+      if (depTask) emitSharedTaskEventQuiet({ type: "task.unblocked", task: depTask, data: { unblocked_by: id }, databasePath });
     }
   }
 
-  return { ...task, status: "completed" as const, locked_by: null, locked_at: null, completed_at: timestamp, confidence, version: task.version + 1, updated_at: timestamp, metadata: meta };
+  return { ...task, status: "completed" as const, locked_by: null, locked_at: null, completed_at: timestamp, confidence, version: finalVersion, updated_at: timestamp, metadata: meta };
 }
 
 export function lockTask(
@@ -361,14 +396,29 @@ export function claimNextTask(
 ): Task | null {
   const d = db || getDatabase();
 
-  // Transaction: find next task + start it atomically
-  const tx = d.transaction(() => {
-    const task = getNextTask(agentId, filters, d);
-    if (!task) return null;
-    return startTask(task.id, agentId, d);
-  });
-
-  return tx();
+  // M7: If another process wins the race between getNextTask and startTask,
+  // startTask throws ("changed during claim" / LockError). Instead of failing
+  // the whole claim, move on to the next candidate. Each attempt is atomic.
+  const MAX_ATTEMPTS = 25;
+  const tried = new Set<string>();
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const outcome = d.transaction((): { done: boolean; task: Task | null } => {
+      const task = getNextTask(agentId, filters, d);
+      if (!task) return { done: true, task: null };
+      // Safety net: if getNextTask keeps returning the same contended task,
+      // stop rather than spin.
+      if (tried.has(task.id)) return { done: true, task: null };
+      tried.add(task.id);
+      try {
+        return { done: true, task: startTask(task.id, agentId, d) };
+      } catch {
+        // Lost the race for this candidate — try the next pending task.
+        return { done: false, task: null };
+      }
+    })();
+    if (outcome.done) return outcome.task;
+  }
+  return null;
 }
 
 export function getNextTask(
@@ -479,6 +529,7 @@ export function failTask(
   db?: Database,
 ): { task: Task; retryTask?: Task } {
   const d = db || getDatabase();
+  const databasePath = databasePathFromDatabase(d);
   const task = getTask(id, d);
   if (!task) throw new TaskNotFoundError(id);
 
@@ -495,11 +546,21 @@ export function failTask(
   };
 
   const timestamp = now();
-  d.run(
-    `UPDATE tasks SET status = 'failed', locked_by = NULL, locked_at = NULL, metadata = ?, version = version + 1, updated_at = ?
-     WHERE id = ?`,
-    [JSON.stringify(meta), timestamp, id],
-  );
+  // M4: guard the write with the expected version (optimistic lock) so a
+  // concurrent mutation is detected rather than silently overwritten. The
+  // metadata read-modify-write and the status write happen atomically.
+  const failTx = d.transaction(() => {
+    const res = d.run(
+      `UPDATE tasks SET status = 'failed', locked_by = NULL, locked_at = NULL, metadata = ?, version = version + 1, updated_at = ?
+       WHERE id = ? AND version = ?`,
+      [JSON.stringify(meta), timestamp, id, task.version],
+    );
+    if (res.changes === 0) {
+      const current = getTask(id, d);
+      throw new VersionConflictError(id, task.version, current?.version ?? -1);
+    }
+  });
+  failTx();
 
   const failedTask: Task = {
     ...task,
@@ -513,8 +574,8 @@ export function failTask(
   logTaskChange(id, "fail", "status", task.status, "failed", agentId || null, d);
   const failurePayload = taskEventData(failedTask, { reason, error_code: options?.error_code, agent_id: agentId });
   dispatchWebhook("task.failed", failurePayload, d).catch(() => {});
-  emitLocalEventHooksQuiet({ type: "task.failed", payload: failurePayload });
-  emitSharedTaskEventQuiet({ type: "task.failed", task: failedTask, data: { reason, error_code: options?.error_code, agent_id: agentId }, severity: "warning" });
+  emitLocalEventHooksQuiet({ type: "task.failed", payload: failurePayload, databasePath });
+  emitSharedTaskEventQuiet({ type: "task.failed", task: failedTask, data: { reason, error_code: options?.error_code, agent_id: agentId }, severity: "warning", databasePath });
 
   // Auto-retry: create a new pending copy with exponential backoff
   let retryTask: Task | undefined;
@@ -611,6 +672,7 @@ export function stealTask(
   db?: Database,
 ): Task | null {
   const d = db || getDatabase();
+  const databasePath = databasePathFromDatabase(d);
   const staleMinutes = opts?.stale_minutes ?? 30;
   const staleTasks = getStaleTasks(staleMinutes, { project_id: opts?.project_id, task_list_id: opts?.task_list_id }, d);
   if (staleTasks.length === 0) return null;
@@ -634,8 +696,8 @@ export function stealTask(
   const stolenTask = { ...target, assigned_to: agentId, locked_by: agentId, locked_at: timestamp, updated_at: timestamp, version: target.version + 1 };
   const payload = taskEventData(stolenTask, { agent_id: agentId, stolen_from: target.assigned_to });
   dispatchWebhook("task.assigned", payload, d).catch(() => {});
-  emitLocalEventHooksQuiet({ type: "task.assigned", payload });
-  emitSharedTaskEventQuiet({ type: "task.assigned", task: stolenTask, data: { agent_id: agentId, stolen_from: target.assigned_to } });
+  emitLocalEventHooksQuiet({ type: "task.assigned", payload, databasePath });
+  emitSharedTaskEventQuiet({ type: "task.assigned", task: stolenTask, data: { agent_id: agentId, stolen_from: target.assigned_to }, databasePath });
 
   return stolenTask;
 }
@@ -664,9 +726,9 @@ export function claimOrSteal(
   return tx();
 }
 
-// Internal helper — spawn next recurring task
-
-function spawnNextRecurrence(completedTask: Task, db: Database, completedAt: string): Task {
+// Spawn next recurring task. Exported so the generic updateTask path
+// (dashboard PATCH / CLI update) can continue a recurring chain too.
+export function spawnNextRecurrence(completedTask: Task, db: Database, completedAt: string): Task {
   const recurrenceBase = completedTask.due_at ? new Date(completedTask.due_at) : new Date(completedAt);
   const dueAt = nextOccurrence(completedTask.recurrence_rule!, recurrenceBase);
 

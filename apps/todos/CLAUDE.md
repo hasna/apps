@@ -14,7 +14,7 @@ todos claim <your-agent-name>              # Atomic: find + lock + start best pe
 todos status                               # See full project health snapshot
 
 # 2. Work on the task
-todos log-progress <id> "Investigating..." # Record intermediate state (if OPE-00031 landed)
+todos log-progress <id> "Investigating..." # Record intermediate progress (alias of `todos comment`)
 
 # 3. Complete with evidence
 todos done <id> \
@@ -44,11 +44,11 @@ bootstrap(agent_id: "your-id")   # Returns: your active task, next claimable, he
 get_tasks_changed_since(since: "<as_of timestamp>")   # Only returns tasks modified since last check
 ```
 
-**MCP profile for minimal token cost:**
+**MCP profile for minimal token cost** (minimal is the default when TODOS_PROFILE is unset):
 ```
-TODOS_PROFILE=minimal todos-mcp  # 11 tools: bootstrap, claim, complete, fail, status, get_context, get_task, start, add_comment, get_next_task, get_tasks_changed_since
-TODOS_PROFILE=standard todos-mcp # ~47 tools (default for most workflows)
-TODOS_PROFILE=full todos-mcp     # All 60+ tools
+TODOS_PROFILE=minimal todos-mcp  # 24 tools (default) — core task/agent workflow + loop run/finding tools
+TODOS_PROFILE=standard todos-mcp # 327 tools — adds task/project/resource/agent/metadata coverage
+TODOS_PROFILE=full todos-mcp     # 360 tools — every registered tool
 ```
 
 ## Commands

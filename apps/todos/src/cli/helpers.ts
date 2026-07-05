@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import { execSync } from "node:child_process";
+import { writeSync } from "node:fs";
 import { resolve } from "node:path";
 import { getDatabase, resolvePartialId } from "../db/database.js";
 import { ensureProject, getProject, getProjectByPath, slugify } from "../db/projects.js";
@@ -7,6 +8,9 @@ import { getPackageVersion } from "../lib/package-version.js";
 import type { Project, Task } from "../types/index.js";
 
 export { getPackageVersion };
+
+const stdoutRetryBuffer = new SharedArrayBuffer(4);
+const stdoutRetrySignal = new Int32Array(stdoutRetryBuffer);
 
 export function handleError(e: unknown): never {
   console.error(chalk.red(e instanceof Error ? e.message : String(e)));
@@ -114,9 +118,37 @@ export function normalizeStatusList(statuses: string | string[]): string | strin
   return normalizeStatus(statuses);
 }
 
+function writeStdoutSync(text: string): void {
+  const buffer = Buffer.from(text);
+  let offset = 0;
+  while (offset < buffer.length) {
+    try {
+      const written = writeSync(1, buffer, offset, buffer.length - offset);
+      if (written <= 0) throw new Error("Unable to write complete stdout payload");
+      offset += written;
+    } catch (error) {
+      const code = typeof error === "object" && error !== null && "code" in error
+        ? error.code
+        : undefined;
+      if (code === "EPIPE") {
+        return;
+      }
+      if (code === "EAGAIN" || code === "EWOULDBLOCK" || code === "EINTR") {
+        Atomics.wait(stdoutRetrySignal, 0, 0, 1);
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+export function printJson(data: unknown): void {
+  writeStdoutSync(`${JSON.stringify(data, null, 2)}\n`);
+}
+
 export function output(data: unknown, jsonMode: boolean): void {
   if (jsonMode) {
-    console.log(JSON.stringify(data, null, 2));
+    printJson(data);
   }
 }
 

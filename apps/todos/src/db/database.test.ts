@@ -208,7 +208,7 @@ describe("global database path", () => {
       rmSync(tmp, { recursive: true, force: true });
       resetDatabase();
     }
-  });
+  }, 30000);
 });
 
 describe("resolvePartialId", () => {

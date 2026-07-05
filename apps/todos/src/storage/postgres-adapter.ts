@@ -30,6 +30,7 @@ import type {
   TodosStorageContext,
   TodosStorageImportResult,
   TodosStorageSnapshot,
+  TodosStorageTombstone,
   TodosTaskClaimFilter,
   TodosTaskCompletionOptions,
   TodosTaskFailureOptions,
@@ -58,8 +59,9 @@ interface RemoteRecordRow {
   object_type: string;
   object_id: string;
   payload: unknown;
-  updated_at?: string;
-  deleted_at?: string | null;
+  updated_at?: string | Date;
+  deleted_at?: string | Date | null;
+  source_machine_id?: string | null;
   version?: number | null;
 }
 
@@ -67,6 +69,11 @@ interface RemoteRecord<T> {
   objectId: string;
   payload: T;
   updatedAt: string;
+}
+
+interface RemoteRecordClock {
+  updatedAt: string;
+  deletedAt: string | null;
 }
 
 export function createPostgresTodosStorageAdapter(
@@ -180,6 +187,10 @@ class PostgresJsonRecordStore {
     this.cursorTableName = options.cursorTableName ?? DEFAULT_TODOS_POSTGRES_CURSOR_TABLE;
   }
 
+  machineId(context?: TodosStorageContext): string | null {
+    return context?.requestId ?? this.sourceMachineId ?? null;
+  }
+
   async ensureSchema(): Promise<void> {
     this.schemaReady ??= (async () => {
       for (const sql of postgresTodosSyncSchemaSql(this.tableName, this.cursorTableName)) {
@@ -221,6 +232,29 @@ class PostgresJsonRecordStore {
     }));
   }
 
+  async listTombstones(): Promise<TodosStorageTombstone[]> {
+    await this.ensureSchema();
+    const result = await this.options.client.query<RemoteRecordRow>(
+      `SELECT object_type, object_id, payload, updated_at, deleted_at, source_machine_id, version
+       FROM ${this.tableName}
+       WHERE service = $1 AND deleted_at IS NOT NULL
+       ORDER BY updated_at ASC, object_type ASC, object_id ASC`,
+      [this.service],
+    );
+    return result.rows.map((row) => {
+      const deletedAt = stringValue(row.deleted_at) ?? stringValue(row.updated_at) ?? new Date().toISOString();
+      return {
+        object_type: row.object_type as TodosStorageTombstone["object_type"],
+        object_id: row.object_id,
+        deleted_at: deletedAt,
+        updated_at: stringValue(row.updated_at) ?? deletedAt,
+        source_machine_id: stringValue(row.source_machine_id),
+        payload: payloadRecord<Record<string, unknown>>(row.payload),
+        version: numberValue(row.version),
+      };
+    });
+  }
+
   async upsert<T extends { id: string; updated_at?: string; created_at?: string; version?: number }>(
     type: RemoteObjectType,
     value: T,
@@ -228,7 +262,12 @@ class PostgresJsonRecordStore {
   ): Promise<T> {
     await this.ensureSchema();
     const updatedAt = stringValue(value.updated_at) ?? stringValue(value.created_at) ?? new Date().toISOString();
-    await this.options.client.query(
+    // M8: resolve conflicts by (updated_at, version) rather than wall-clock only.
+    // A row with an equal timestamp but a higher version still wins, and a
+    // stale-clock write can no longer silently overwrite a newer version.
+    // RETURNING lets us detect when the guard rejected the write so we can
+    // surface the record that actually won instead of a phantom success.
+    const result = await this.options.client.query<{ object_id: string }>(
       `INSERT INTO ${this.tableName} (
         service, object_type, object_id, payload, updated_at,
         deleted_at, source_machine_id, version
@@ -238,7 +277,12 @@ class PostgresJsonRecordStore {
         updated_at = EXCLUDED.updated_at,
         deleted_at = NULL,
         source_machine_id = EXCLUDED.source_machine_id,
-        version = EXCLUDED.version`,
+        version = EXCLUDED.version
+      WHERE ${this.tableName}.updated_at IS NULL
+         OR ${this.tableName}.updated_at < EXCLUDED.updated_at
+         OR (${this.tableName}.updated_at = EXCLUDED.updated_at
+             AND COALESCE(${this.tableName}.version, 0) <= COALESCE(EXCLUDED.version, 0))
+      RETURNING object_id`,
       [
         this.service,
         type,
@@ -249,7 +293,36 @@ class PostgresJsonRecordStore {
         numberValue(value.version),
       ],
     );
+    if (result.rows.length === 0) {
+      // The write was rejected as stale by the conflict guard. Return the row
+      // that actually won so the caller isn't misled into thinking it persisted.
+      const current = await this.get<T>(type, value.id);
+      if (current) return current;
+    }
     return value;
+  }
+
+  async incrementProjectTaskCounter(
+    projectId: string,
+    _context: TodosStorageContext = {},
+  ): Promise<number | null> {
+    await this.ensureSchema();
+    // M8: atomic counter increment inside the jsonb payload — replaces the
+    // read-modify-write in nextTaskShortId that could hand two concurrent
+    // callers the same short id.
+    const result = await this.options.client.query<{ counter: string | number | null }>(
+      `UPDATE ${this.tableName}
+         SET payload = jsonb_set(payload, '{task_counter}',
+               to_jsonb(COALESCE((payload->>'task_counter')::bigint, 0) + 1)),
+             updated_at = $3::timestamptz,
+             version = COALESCE(version, 0) + 1
+       WHERE service = $1 AND object_type = 'projects' AND object_id = $2 AND deleted_at IS NULL
+       RETURNING payload->>'task_counter' AS counter`,
+      [this.service, projectId, new Date().toISOString()],
+    );
+    const row = result.rows[0];
+    if (!row || row.counter === null || row.counter === undefined) return null;
+    return Number(row.counter);
   }
 
   async delete(type: RemoteObjectType, id: string, context: TodosStorageContext = {}): Promise<boolean> {
@@ -257,15 +330,74 @@ class PostgresJsonRecordStore {
     const existing = await this.get<Record<string, unknown>>(type, id);
     if (!existing) return false;
     const timestamp = new Date().toISOString();
+    return this.tombstone({
+      object_type: type,
+      object_id: id,
+      deleted_at: timestamp,
+      updated_at: timestamp,
+      payload: existing,
+      version: numberValue(existing["version"]),
+    }, context);
+  }
+
+  async tombstone(
+    tombstone: {
+      object_type: RemoteObjectType;
+      object_id: string;
+      deleted_at: string;
+      updated_at?: string;
+      source_machine_id?: string | null;
+      payload?: Record<string, unknown> | null;
+      version?: number | null;
+    },
+    context: TodosStorageContext = {},
+  ): Promise<boolean> {
+    await this.ensureSchema();
+    const deletedAt = stringValue(tombstone.deleted_at) ?? new Date().toISOString();
+    const updatedAt = stringValue(tombstone.updated_at) ?? deletedAt;
+    const existing = await this.clock(tombstone.object_type, tombstone.object_id);
+    if (existing && compareClock(existing.updatedAt, updatedAt) > 0) return false;
     await this.options.client.query(
-      `UPDATE ${this.tableName}
-       SET deleted_at = $4::timestamptz,
-           updated_at = $4::timestamptz,
-           source_machine_id = $5
-       WHERE service = $1 AND object_type = $2 AND object_id = $3`,
-      [this.service, type, id, timestamp, context.requestId ?? this.sourceMachineId ?? null],
+      `INSERT INTO ${this.tableName} (
+        service, object_type, object_id, payload, updated_at,
+        deleted_at, source_machine_id, version
+      ) VALUES ($1, $2, $3, $4::jsonb, $5::timestamptz, $6::timestamptz, $7, $8)
+      ON CONFLICT (service, object_type, object_id) DO UPDATE SET
+        payload = EXCLUDED.payload,
+        updated_at = EXCLUDED.updated_at,
+        deleted_at = EXCLUDED.deleted_at,
+        source_machine_id = EXCLUDED.source_machine_id,
+        version = EXCLUDED.version
+      WHERE ${this.tableName}.updated_at IS NULL OR ${this.tableName}.updated_at <= EXCLUDED.updated_at`,
+      [
+        this.service,
+        tombstone.object_type,
+        tombstone.object_id,
+        JSON.stringify(tombstone.payload ?? { id: tombstone.object_id, deleted_at: deletedAt }),
+        updatedAt,
+        deletedAt,
+        tombstone.source_machine_id ?? context.requestId ?? this.sourceMachineId ?? null,
+        tombstone.version ?? null,
+      ],
     );
     return true;
+  }
+
+  async clock(type: RemoteObjectType, id: string): Promise<RemoteRecordClock | null> {
+    await this.ensureSchema();
+    const result = await this.options.client.query<RemoteRecordRow>(
+      `SELECT object_type, object_id, updated_at, deleted_at
+       FROM ${this.tableName}
+       WHERE service = $1 AND object_type = $2 AND object_id = $3
+       LIMIT 1`,
+      [this.service, type, id],
+    );
+    const row = result.rows[0];
+    if (!row) return null;
+    return {
+      updatedAt: stringValue(row.updated_at) ?? new Date().toISOString(),
+      deletedAt: stringValue(row.deleted_at),
+    };
   }
 
   async getCursor(name: string): Promise<string | null> {
@@ -345,6 +477,9 @@ async function createTask(input: CreateTaskInput, store: PostgresJsonRecordStore
     runner_completed_at: null,
     current_step: null,
     total_steps: null,
+    machine_id: store.machineId(context),
+    synced_at: null,
+    archived_at: null,
   };
   await store.upsert("tasks", task, context);
   await logTaskChange(task.id, "created", "status", null, task.status, task.assigned_by ?? task.agent_id, store, context);
@@ -372,6 +507,10 @@ async function updateTask(id: string, input: UpdateTaskInput, store: PostgresJso
 
 async function startTask(id: string, agentId: string, store: PostgresJsonRecordStore): Promise<Task> {
   const task = await requireRecord<Task>("tasks", id, store);
+  // M8: reject starting a task that is not pending/in_progress (mirror sqlite).
+  if (task.status !== "pending" && task.status !== "in_progress") {
+    throw new Error(`Task is ${task.status} and cannot be started by ${agentId}`);
+  }
   return patchTask(task, {
     status: "in_progress",
     assigned_to: task.assigned_to ?? agentId,
@@ -457,8 +596,25 @@ async function getNextTask(filters: TodosTaskClaimFilter | undefined, store: Pos
 }
 
 async function claimNextTask(agentId: string, filters: TodosTaskClaimFilter | undefined, store: PostgresJsonRecordStore): Promise<Task | null> {
-  const task = await getNextTask(filters, store);
-  return task ? startTask(task.id, agentId, store) : null;
+  // M8: if another worker wins a candidate between getNextTask and startTask,
+  // move on to the next pending task instead of failing the whole claim. NOTE:
+  // the Postgres adapter has no transactions (capabilities.transactions=false),
+  // so this remains best-effort last-writer-wins rather than a hard atomic
+  // claim. Unverified without a live Postgres.
+  const MAX_ATTEMPTS = 25;
+  const tried = new Set<string>();
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const task = await getNextTask(filters, store);
+    if (!task) return null;
+    if (tried.has(task.id)) return null;
+    tried.add(task.id);
+    try {
+      return await startTask(task.id, agentId, store);
+    } catch {
+      // Candidate no longer startable — try the next pending task.
+    }
+  }
+  return null;
 }
 
 async function getActiveWork(filters: TodosActiveWorkFilter | undefined, store: PostgresJsonRecordStore): Promise<ActiveWorkItem[]> {
@@ -491,6 +647,8 @@ async function createProject(input: CreateProjectInput, store: PostgresJsonRecor
     task_counter: 0,
     created_at: timestamp,
     updated_at: timestamp,
+    machine_id: store.machineId(context),
+    synced_at: null,
   };
   return store.upsert("projects", project, context);
 }
@@ -507,9 +665,17 @@ async function updateProject(
 
 async function createPlan(input: CreatePlanInput, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<Plan> {
   const timestamp = new Date().toISOString();
+  const projectId = input.project_id ?? context?.projectId ?? null;
+  const slug = await resolvePostgresPlanSlug({
+    name: input.name,
+    slug: input.slug,
+    projectId,
+    store,
+  });
   return store.upsert("plans", {
     id: randomUUID(),
-    project_id: input.project_id ?? context?.projectId ?? null,
+    slug,
+    project_id: projectId,
     task_list_id: input.task_list_id ?? context?.taskListId ?? null,
     agent_id: input.agent_id ?? context?.agentId ?? null,
     name: input.name,
@@ -517,12 +683,24 @@ async function createPlan(input: CreatePlanInput, store: PostgresJsonRecordStore
     status: input.status ?? "active",
     created_at: timestamp,
     updated_at: timestamp,
+    machine_id: store.machineId(context),
+    synced_at: null,
   }, context);
 }
 
 async function updatePlan(id: string, input: UpdatePlanInput, store: PostgresJsonRecordStore): Promise<Plan> {
   const plan = await requireRecord<Plan>("plans", id, store);
-  return store.upsert("plans", { ...plan, ...definedPatch(input), updated_at: new Date().toISOString() });
+  const patch = definedPatch(input);
+  if (input.slug !== undefined) {
+    patch.slug = await resolvePostgresPlanSlug({
+      name: plan.name,
+      slug: input.slug,
+      projectId: plan.project_id,
+      store,
+      excludeId: id,
+    });
+  }
+  return store.upsert("plans", { ...plan, ...patch, updated_at: new Date().toISOString() });
 }
 
 async function registerAgent(
@@ -553,6 +731,8 @@ async function registerAgent(
     session_id: input.session_id ?? context?.sessionId ?? existing?.session_id ?? null,
     working_dir: input.working_dir ?? existing?.working_dir ?? null,
     active_project_id: input.project_id ?? context?.projectId ?? existing?.active_project_id ?? null,
+    machine_id: existing?.machine_id ?? store.machineId(context),
+    synced_at: existing?.synced_at ?? null,
   };
   return store.upsert("agents", agent, context);
 }
@@ -581,6 +761,8 @@ async function createTaskList(input: CreateTaskListInput, store: PostgresJsonRec
     metadata: input.metadata ?? {},
     created_at: timestamp,
     updated_at: timestamp,
+    machine_id: store.machineId(context),
+    synced_at: null,
   }, context);
 }
 
@@ -609,6 +791,8 @@ async function createTemplate(input: CreateTemplateInput, store: PostgresJsonRec
     plan_id: input.plan_id ?? null,
     metadata: input.metadata ?? {},
     created_at: timestamp,
+    machine_id: store.machineId(context),
+    synced_at: null,
   }, context);
 }
 
@@ -644,6 +828,7 @@ async function logTaskChange(
     new_value: newValue ?? null,
     agent_id: agentId ?? context?.agentId ?? null,
     created_at: new Date().toISOString(),
+    machine_id: store.machineId(context),
   };
   return store.upsert("audit_history", entry, context);
 }
@@ -668,11 +853,13 @@ async function exportSnapshot(store: PostgresJsonRecordStore): Promise<TodosStor
     source: "postgres",
     tasks: await store.list<Task>("tasks"),
     projects: await store.list<Project>("projects"),
+    projectMachinePaths: await store.list<NonNullable<TodosStorageSnapshot["projectMachinePaths"]>[number]>("project_machine_paths"),
     plans: await store.list<Plan>("plans"),
     agents: await store.list<Agent>("agents"),
     taskLists: await store.list<TaskList>("task_lists"),
     templates: await store.list<TaskTemplate>("templates"),
     auditHistory: await store.list<TaskHistory>("audit_history"),
+    tombstones: await store.listTombstones(),
   };
 }
 
@@ -681,13 +868,14 @@ async function importSnapshot(
   store: PostgresJsonRecordStore,
   context?: TodosStorageContext,
 ): Promise<TodosStorageImportResult> {
-  const result: TodosStorageImportResult = { inserted: 0, updated: 0, skipped: 0, errors: [] };
+  const result: TodosStorageImportResult = { inserted: 0, updated: 0, deleted: 0, skipped: 0, errors: [] };
   const entries: ReadonlyArray<readonly [
     RemoteObjectType,
     { id: string; updated_at?: string; created_at?: string; version?: number },
   ]> = [
     ...snapshot.tasks.map((row) => ["tasks", row] as const),
     ...snapshot.projects.map((row) => ["projects", row] as const),
+    ...(snapshot.projectMachinePaths ?? []).map((row) => ["project_machine_paths", row] as const),
     ...snapshot.plans.map((row) => ["plans", row] as const),
     ...snapshot.agents.map((row) => ["agents", row] as const),
     ...snapshot.taskLists.map((row) => ["task_lists", row] as const),
@@ -704,6 +892,23 @@ async function importSnapshot(
       result.errors.push(error instanceof Error ? error.message : String(error));
     }
   }
+  for (const tombstone of snapshot.tombstones ?? []) {
+    try {
+      const deleted = await store.tombstone({
+        object_type: tombstone.object_type,
+        object_id: tombstone.object_id,
+        deleted_at: tombstone.deleted_at,
+        updated_at: tombstone.updated_at,
+        source_machine_id: tombstone.source_machine_id ?? null,
+        payload: tombstone.payload ?? null,
+        version: tombstone.version ?? null,
+      }, context);
+      if (deleted) result.deleted = (result.deleted ?? 0) + 1;
+      else result.skipped += 1;
+    } catch (error) {
+      result.errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
   return result;
 }
 
@@ -716,12 +921,10 @@ async function requireRecord<T>(type: RemoteObjectType, id: string, store: Postg
 async function nextTaskShortId(projectId: string, store: PostgresJsonRecordStore, context?: TodosStorageContext): Promise<string | null> {
   const project = await store.get<Project>("projects", projectId);
   if (!project?.task_prefix) return null;
-  const counter = project.task_counter + 1;
-  await store.upsert("projects", {
-    ...project,
-    task_counter: counter,
-    updated_at: new Date().toISOString(),
-  }, context);
+  // M8: atomic increment (no read-modify-write race) — two concurrent callers
+  // now get distinct counters.
+  const counter = await store.incrementProjectTaskCounter(projectId, context);
+  if (counter === null) return null;
   return `${project.task_prefix}-${String(counter).padStart(5, "0")}`;
 }
 
@@ -763,8 +966,50 @@ function priorityRank(priority: TaskPriority): number {
   return ({ critical: 0, high: 1, medium: 2, low: 3 } satisfies Record<TaskPriority, number>)[priority];
 }
 
+function slugifyRaw(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
 function slugify(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "todos";
+  return slugifyRaw(value) || "todos";
+}
+
+function normalizePlanSlug(value: string): string {
+  const slug = slugifyRaw(value);
+  if (!slug) throw new Error("Invalid plan slug");
+  return slug;
+}
+
+function planSlugBase(value: string): string {
+  return slugifyRaw(value) || "plan";
+}
+
+async function resolvePostgresPlanSlug(options: {
+  name: string;
+  slug?: string;
+  projectId: string | null;
+  store: PostgresJsonRecordStore;
+  excludeId?: string;
+}): Promise<string> {
+  const plans = await options.store.list<Plan>("plans");
+  const used = new Set(plans
+    .filter((plan) => plan.project_id === options.projectId && plan.id !== options.excludeId && plan.slug)
+    .map((plan) => plan.slug!));
+
+  if (options.slug !== undefined) {
+    const slug = normalizePlanSlug(options.slug);
+    if (used.has(slug)) throw new Error(`Plan slug already exists in this scope: ${slug}`);
+    return slug;
+  }
+
+  const base = planSlugBase(options.name);
+  let candidate = base;
+  let suffix = 2;
+  while (used.has(candidate)) {
+    candidate = `${base}-${suffix}`;
+    suffix += 1;
+  }
+  return candidate;
 }
 
 function definedPatch<T extends object>(value: T): Partial<T> {
@@ -778,7 +1023,15 @@ function payloadRecord<T>(value: unknown): T {
 }
 
 function stringValue(value: unknown): string | null {
+  if (value instanceof Date) return value.toISOString();
   return typeof value === "string" && value ? value : null;
+}
+
+function compareClock(left: string, right: string): number {
+  const leftClock = Date.parse(left);
+  const rightClock = Date.parse(right);
+  if (Number.isNaN(leftClock) || Number.isNaN(rightClock)) return left.localeCompare(right);
+  return leftClock - rightClock;
 }
 
 function numberValue(value: unknown): number | null {

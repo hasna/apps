@@ -22,7 +22,7 @@ import {
 } from "../../lib/saved-search-views.js";
 import { defaultSyncAgents, syncWithAgent, syncWithAgents } from "../../lib/sync.js";
 import { getAgentTaskListId } from "../../lib/config.js";
-import { autoProject, autoDetectProject, handleError, output, formatTaskLine, normalizeStatus, resolveTaskId } from "../helpers.js";
+import { autoProject, autoDetectProject, handleError, output, formatTaskLine, normalizeStatus, resolveExplicitProject, resolveTaskId } from "../helpers.js";
 
 function collectOption(value: string, previous: string[] = []): string[] {
   return [...previous, value];
@@ -134,6 +134,7 @@ export function registerProjectCommands(program: Command) {
     .description("Discover a local workspace and initialize project task state")
     .option("--name <name>", "Project display name")
     .option("--task-list <slug>", "Default task list slug")
+    .option("--route-enabled", "Mark the default task list as eligible for OpenLoops task-created routing")
     .option("--dry-run", "Show discovery without writing local state")
     .action(async (inputPath: string | undefined, opts) => {
       const globalOpts = program.opts();
@@ -143,6 +144,7 @@ export function registerProjectCommands(program: Command) {
           path: inputPath || globalOpts.project || process.cwd(),
           name: opts.name,
           taskListSlug: opts.taskList,
+          routeEnabled: Boolean(opts.routeEnabled),
           dryRun: opts.dryRun,
         });
 
@@ -162,6 +164,7 @@ export function registerProjectCommands(program: Command) {
         }
         if (result.project) console.log(`  ${chalk.dim("Project:")}    ${result.project.id.slice(0, 8)} ${result.created.project ? "(created)" : "(existing)"}`);
         if (result.taskList) console.log(`  ${chalk.dim("Task list:")}  ${result.taskList.slug} ${result.created.taskList ? "(created)" : "(existing)"}`);
+        if (result.taskList?.metadata.route_enabled === true) console.log(`  ${chalk.dim("Routing:")}    route-enabled`);
         if (result.created.sources.length > 0) {
           console.log(`  ${chalk.dim("Sources:")}    ${result.created.sources.join(", ")}`);
         }
@@ -170,16 +173,27 @@ export function registerProjectCommands(program: Command) {
       }
     });
 
-  // comment
+  // comment (aliased as log-progress so documented progress commands work)
   program
     .command("comment <id> <text>")
-    .description("Add a comment to a task")
-    .action((id: string, text: string) => {
+    .alias("log-progress")
+    .description("Add a comment to a task (alias: log-progress, for recording intermediate progress)")
+    .option("--pct <percent>", "Progress percentage (0-100) to record alongside the note")
+    .action((id: string, text: string, opts: { pct?: string }) => {
       const globalOpts = program.opts();
       const resolvedId = resolveTaskId(id);
+      let content = text;
+      if (opts.pct !== undefined) {
+        const pct = parseInt(opts.pct, 10);
+        if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+          console.error(chalk.red("--pct must be a number between 0 and 100"));
+          process.exit(1);
+        }
+        content = `[progress ${pct}%] ${text}`;
+      }
       const comment = addComment({
         task_id: resolvedId,
-        content: text,
+        content,
         agent_id: globalOpts.agent,
         session_id: globalOpts.session,
       });
@@ -524,6 +538,40 @@ export function registerProjectCommands(program: Command) {
       for (const p of projects) {
         const taskList = p.task_list_id ? chalk.cyan(` [${p.task_list_id}]`) : "";
         console.log(`${chalk.dim(p.id.slice(0, 8))} ${chalk.bold(p.name)} ${chalk.dim(p.path)}${taskList}${p.description ? ` - ${p.description}` : ""}`);
+      }
+    });
+
+  program
+    .command("project-panel")
+    .description("Emit a contract-valid project dashboard panel for todos")
+    .option("--project <project>", "Project path, id, task-list slug, or name. Defaults to the detected project")
+    .option("--limit <n>", "Maximum panel items/resources", "20")
+    .option("--contract", "Emit hasna.project_panel.v1 contract JSON")
+    .option("-j, --json", "Output JSON")
+    .action(async (opts: { project?: string; limit?: string; contract?: boolean; json?: boolean }) => {
+      try {
+        const globalOpts = program.opts();
+        const project = opts.project ? resolveExplicitProject(opts.project) : autoDetectProject(globalOpts);
+        if (!project) {
+          console.error(chalk.red("Project not found: provide --project or run inside a registered project"));
+          process.exit(1);
+        }
+
+        const { createTodosProjectPanel } = await import("../../lib/project-panel.js");
+        const limit = opts.limit ? Number(opts.limit) : 20;
+        const panel = createTodosProjectPanel(project.id, { limit });
+        if (opts.json || opts.contract || globalOpts.json) {
+          output(panel, true);
+          return;
+        }
+
+        console.log(chalk.bold(`${panel.title}: ${project.name}`));
+        console.log(panel.summary ?? chalk.dim("No summary."));
+        for (const metric of panel.metrics) {
+          console.log(`${chalk.dim(metric.id)} ${metric.value}${metric.unit ?? ""}`);
+        }
+      } catch (error) {
+        handleError(error);
       }
     });
 

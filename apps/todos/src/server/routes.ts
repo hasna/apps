@@ -18,9 +18,12 @@ import {
   getActiveWork,
   getTasksChangedSince,
   getTaskStats,
+  getOverdueTasks,
   failTask,
   claimNextTask,
 } from "../db/tasks.js";
+import { getDatabase } from "../db/database.js";
+import { VersionConflictError, CompletionGuardError, LockError, TaskNotFoundError } from "../types/index.js";
 import { listProjects, createProject, deleteProject } from "../db/projects.js";
 import { listAgents, registerAgent, isAgentConflict, getOrgChart, getDirectReports, updateAgent, deleteAgent, InvalidAgentNameError } from "../db/agents.js";
 import { createPlan, getPlan, listPlans, updatePlan, deletePlan } from "../db/plans.js";
@@ -44,14 +47,58 @@ function parseBoundedLimit(value: string | null, fallback: number, max: number):
   return Math.min(parsed, max);
 }
 
-// Re-export utilities from serve.ts
-export {
+/**
+ * Map a known task-lifecycle error to an appropriate HTTP 4xx response.
+ * Returns null for anything unrecognized so the caller can fall back to 500.
+ */
+function mapTaskError(e: unknown, json: (data: unknown, status?: number) => Response): Response | null {
+  if (e instanceof VersionConflictError) {
+    return json({
+      error: e.message,
+      code: VersionConflictError.code,
+      expected_version: e.expectedVersion,
+      current_version: e.actualVersion,
+    }, 409);
+  }
+  if (e instanceof TaskNotFoundError) {
+    return json({ error: e.message, code: TaskNotFoundError.code }, 404);
+  }
+  if (e instanceof LockError) {
+    return json({ error: e.message, code: LockError.code }, 409);
+  }
+  if (e instanceof CompletionGuardError) {
+    return json({
+      error: e.message,
+      code: CompletionGuardError.code,
+      retry_after: e.retryAfterSeconds ?? null,
+    }, 409);
+  }
+  // The lifecycle layer throws a plain Error (no typed class yet) for blocked
+  // dependencies and non-startable transitions. Match the known phrases so these
+  // real precondition failures surface as 409 instead of a generic 500.
+  if (e instanceof Error && (/ is blocked by /.test(e.message) || /cannot be started/.test(e.message))) {
+    return json({ error: e.message, code: "TASK_NOT_STARTABLE" }, 409);
+  }
+  return null;
+}
+
+/** COUNT of tasks carrying a recurrence rule — avoids loading full rows. */
+function countRecurringTasks(): number {
+  const row = getDatabase().query(
+    "SELECT COUNT(*) as count FROM tasks WHERE recurrence_rule IS NOT NULL AND recurrence_rule != '' AND archived_at IS NULL",
+  ).get() as { count: number };
+  return row?.count ?? 0;
+}
+
+// Utilities from serve.ts — imported for local use and re-exported for consumers
+import {
   json,
   taskToSummary,
   SECURITY_HEADERS,
   MIME_TYPES,
   serveStaticFile,
 } from "./serve.js";
+export { json, taskToSummary, SECURITY_HEADERS, MIME_TYPES, serveStaticFile };
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -143,10 +190,17 @@ export function handleTasksStream(_req: Request, url: URL, ctx: RouteContext): R
 }
 
 export function handleHealth(_ctx: RouteContext, json: (data: unknown, status?: number) => Response): Response {
-  const all = listTasks({ limit: 10000 });
-  const stale = all.filter(t => t.status === "in_progress" && new Date(t.updated_at).getTime() < Date.now() - 30 * 60 * 1000);
-  const overdue = all.filter(t => t.recurrence_rule && t.status === "pending" && t.due_at && t.due_at < new Date().toISOString());
-  return json({ status: stale.length === 0 && overdue.length === 0 ? "ok" : "warn", tasks: all.length, stale: stale.length, overdue_recurring: overdue.length, timestamp: new Date().toISOString() });
+  // Aggregate/COUNT queries only — never load full task rows on this hot path.
+  const stats = getTaskStats();
+  const staleCount = getStaleTasks(30).length;
+  const overdueRecurring = getOverdueTasks().filter(t => t.recurrence_rule && t.status === "pending").length;
+  return json({
+    status: staleCount === 0 && overdueRecurring === 0 ? "ok" : "warn",
+    tasks: stats.total,
+    stale: staleCount,
+    overdue_recurring: overdueRecurring,
+    timestamp: new Date().toISOString(),
+  });
 }
 
 export function handleHeadlessBoundary(_ctx: RouteContext, json: (data: unknown, status?: number) => Response): Response {
@@ -155,25 +209,25 @@ export function handleHeadlessBoundary(_ctx: RouteContext, json: (data: unknown,
 }
 
 export function handleStats(_ctx: RouteContext, json: (data: unknown, status?: number) => Response): Response {
-  const all = listTasks({ limit: 10000 });
+  // Aggregate/COUNT queries only — never load full task rows on this hot path.
+  const stats = getTaskStats();
+  const byStatus = stats.by_status;
   const projects = listProjects();
   const agents = listAgents();
-  const staleItems = getStaleTasks(30);
-  const nowStr = new Date().toISOString();
-  const overdueRecurring = all.filter(t => t.recurrence_rule && t.status === "pending" && t.due_at && t.due_at < nowStr).length;
-  const recurringTasks = all.filter(t => t.recurrence_rule).length;
+  const staleCount = getStaleTasks(30).length;
+  const overdueRecurring = getOverdueTasks().filter(t => t.recurrence_rule && t.status === "pending").length;
   return json({
-    total_tasks: all.length,
-    pending: all.filter((t) => t.status === "pending").length,
-    in_progress: all.filter((t) => t.status === "in_progress").length,
-    completed: all.filter((t) => t.status === "completed").length,
-    failed: all.filter((t) => t.status === "failed").length,
-    cancelled: all.filter((t) => t.status === "cancelled").length,
+    total_tasks: stats.total,
+    pending: byStatus["pending"] ?? 0,
+    in_progress: byStatus["in_progress"] ?? 0,
+    completed: byStatus["completed"] ?? 0,
+    failed: byStatus["failed"] ?? 0,
+    cancelled: byStatus["cancelled"] ?? 0,
     projects: projects.length,
     agents: agents.length,
-    stale_count: staleItems.length,
+    stale_count: staleCount,
     overdue_recurring: overdueRecurring,
-    recurring_tasks: recurringTasks,
+    recurring_tasks: countRecurringTasks(),
   });
 }
 
@@ -257,17 +311,25 @@ export function handleTasksExport(_req: Request, url: URL, _ctx: RouteContext, _
 
   if (format === "csv") {
     const headers = ["id","short_id","title","status","priority","project_id","assigned_to","agent_id","created_at","updated_at","completed_at","due_at"];
-    const rows = summaries.map(t => headers.map(h => {
-      const val = (t as any)[h];
+    const csvCell = (val: unknown): string => {
       if (val === null || val === undefined) return "";
-      const str = String(val);
-      return str.includes(",") || str.includes('"') || str.includes("\n") ? `"${str.replace(/"/g, '""')}"` : str;
-    }).join(","));
+      let str = String(val);
+      // CSV formula-injection guard: neutralize cells a spreadsheet would
+      // evaluate as a formula (=, +, -, @) or use to break out of the cell
+      // (leading tab/CR) by prefixing a single quote. See OWASP CSV Injection.
+      if (/^[=+\-@\t\r]/.test(str)) str = `'${str}`;
+      if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
+        str = `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+    const rows = summaries.map(t => headers.map(h => csvCell((t as any)[h])).join(","));
     const csv = [headers.join(","), ...rows].join("\n");
     return new Response(csv, {
       headers: {
         "Content-Type": "text/csv",
         "Content-Disposition": "attachment; filename=tasks.csv",
+        ...SECURITY_HEADERS,
       },
     });
   }
@@ -276,6 +338,7 @@ export function handleTasksExport(_req: Request, url: URL, _ctx: RouteContext, _
     headers: {
       "Content-Type": "application/json",
       "Content-Disposition": "attachment; filename=tasks.json",
+      ...SECURITY_HEADERS,
     },
   });
 }
@@ -448,12 +511,18 @@ export async function handlePatchTask(id: string, req: Request, _ctx: RouteConte
     for (const [key, value] of Object.entries(body)) {
       if (ALLOWED.has(key)) safeBody[key] = value;
     }
+    // Optimistic concurrency: honor a client-supplied `version` so genuine
+    // conflicts are detected and surfaced as 409. Clients that omit it fall back
+    // to the current version (backward-compatible last-write-wins).
+    const clientVersion = typeof body["version"] === "number" ? body["version"] as number : task.version;
     const updated = updateTask(id, {
       ...safeBody,
-      version: task.version,
+      version: clientVersion,
     } as Parameters<typeof updateTask>[1]);
     return json(taskToSummary(updated));
   } catch (e) {
+    const mapped = mapTaskError(e, json);
+    if (mapped) return mapped;
     return json({ error: e instanceof Error ? e.message : "Failed to update task" }, 500);
   }
 }
@@ -470,6 +539,8 @@ export function handleStartTask(id: string, ctx: RouteContext, json: (data: unkn
     ctx.broadcastEvent({ type: "task", task_id: task.id, action: "started", agent_id: "dashboard", project_id: task.project_id });
     return json(taskToSummary(task));
   } catch (e) {
+    const mapped = mapTaskError(e, json);
+    if (mapped) return mapped;
     return json({ error: e instanceof Error ? e.message : "Failed to start task" }, 500);
   }
 }
@@ -491,6 +562,8 @@ export function handleCompleteTask(id: string, ctx: RouteContext, json: (data: u
     ctx.broadcastEvent({ type: "task", task_id: task.id, action: "completed", agent_id: "dashboard", project_id: task.project_id });
     return json(taskToSummary(task));
   } catch (e) {
+    const mapped = mapTaskError(e, json);
+    if (mapped) return mapped;
     return json({ error: e instanceof Error ? e.message : "Failed to complete task" }, 500);
   }
 }
@@ -747,10 +820,11 @@ export function handleListPlans(url: URL, _ctx: RouteContext, json: (data: unkno
 
 export async function handleCreatePlan(req: Request, _ctx: RouteContext, json: (data: unknown, status?: number) => Response): Promise<Response> {
   try {
-    const body = await req.json() as { name: string; description?: string; project_id?: string; task_list_id?: string; agent_id?: string; status?: string };
+    const body = await req.json() as { name: string; slug?: string; description?: string; project_id?: string; task_list_id?: string; agent_id?: string; status?: string };
     if (!body.name) return json({ error: "Missing 'name'" }, 400);
     const plan = createPlan({
       name: body.name,
+      slug: body.slug,
       description: body.description,
       project_id: body.project_id,
       task_list_id: body.task_list_id,

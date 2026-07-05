@@ -1204,4 +1204,27 @@ export const MIGRATIONS = [
   CREATE INDEX IF NOT EXISTS idx_task_findings_fingerprint ON task_findings(fingerprint);
   INSERT OR IGNORE INTO _migrations (id) VALUES (62);
   `,
+  // Migration 63: Durable local storage tombstones for native remote sync
+  `
+  CREATE TABLE IF NOT EXISTS storage_tombstones (
+    id TEXT PRIMARY KEY,
+    object_type TEXT NOT NULL,
+    object_id TEXT NOT NULL,
+    deleted_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    source_machine_id TEXT,
+    payload TEXT,
+    version INTEGER,
+    UNIQUE(object_type, object_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_storage_tombstones_object ON storage_tombstones(object_type, object_id);
+  CREATE INDEX IF NOT EXISTS idx_storage_tombstones_updated ON storage_tombstones(updated_at);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (63);
+  `,
+  // Migration 64: Readable plan slugs for plan refs and local artifacts
+  `
+  ALTER TABLE plans ADD COLUMN slug TEXT;
+  CREATE INDEX IF NOT EXISTS idx_plans_slug ON plans(slug);
+  INSERT OR IGNORE INTO _migrations (id) VALUES (64);
+  `,
 ];

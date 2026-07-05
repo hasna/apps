@@ -115,7 +115,7 @@ const dataKeys = [
 const insertColumns: Record<keyof TodosLocalBridgeData, readonly string[]> = {
   projects: ["id", "name", "path", "description", "task_list_id", "task_prefix", "task_counter", "created_at", "updated_at", "machine_id", "synced_at"],
   task_lists: ["id", "project_id", "slug", "name", "description", "metadata", "created_at", "updated_at", "machine_id", "synced_at"],
-  plans: ["id", "project_id", "task_list_id", "agent_id", "name", "description", "status", "created_at", "updated_at", "machine_id", "synced_at"],
+  plans: ["id", "slug", "project_id", "task_list_id", "agent_id", "name", "description", "status", "created_at", "updated_at", "machine_id", "synced_at"],
   tasks: [
     "id", "short_id", "project_id", "parent_id", "plan_id", "task_list_id", "title", "description", "status", "priority",
     "agent_id", "assigned_to", "session_id", "working_dir", "tags", "metadata", "version", "locked_by", "locked_at",
@@ -456,6 +456,48 @@ function prepareValue(column: string, value: unknown): SQLQueryBindings {
   return value === undefined ? null : value as SQLQueryBindings;
 }
 
+function slugifyPlanValue(value: unknown): string {
+  return typeof value === "string"
+    ? value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")
+    : "";
+}
+
+function planSlugBase(plan: Record<string, unknown>): string {
+  return slugifyPlanValue(plan.slug) || slugifyPlanValue(plan.name) || "plan";
+}
+
+function planSlugScope(projectId: unknown): string {
+  return typeof projectId === "string" && projectId ? projectId : "__global__";
+}
+
+function planSlugKey(projectId: unknown, slug: string): string {
+  return `${planSlugScope(projectId)}:${slug}`;
+}
+
+function normalizeBridgePlanSlugs(plans: Plan[], db: Database): Plan[] {
+  const existingRows = db
+    .query("SELECT id, project_id, slug FROM plans WHERE slug IS NOT NULL")
+    .all() as Array<{ id: string; project_id: string | null; slug: string | null }>;
+  const existingIds = new Set(existingRows.map((row) => row.id));
+  const used = new Set(existingRows
+    .filter((row) => row.slug)
+    .map((row) => planSlugKey(row.project_id, row.slug!)));
+
+  return plans.map((plan) => {
+    if (existingIds.has(plan.id)) return plan;
+
+    const base = planSlugBase(plan as unknown as Record<string, unknown>);
+    let candidate = base;
+    let suffix = 2;
+    while (used.has(planSlugKey(plan.project_id, candidate))) {
+      candidate = `${base}-${suffix}`;
+      suffix += 1;
+    }
+    used.add(planSlugKey(plan.project_id, candidate));
+    return { ...plan, slug: candidate };
+  });
+}
+
 function insertRecord(
   db: Database,
   tableKey: keyof TodosLocalBridgeData,
@@ -615,6 +657,7 @@ export function importLocalBridgeBundle(
   const conflictStrategy = options.conflictStrategy ?? "skip";
   const data: TodosLocalBridgeData = {
     ...bundle.data,
+    plans: normalizeBridgePlanSlugs(bundle.data.plans, d),
     tasks: sortedTasks(bundle.data.tasks),
     saved_views: bundle.data.saved_views ?? [],
     task_boards: bundle.data.task_boards ?? [],

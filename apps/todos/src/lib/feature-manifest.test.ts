@@ -57,7 +57,7 @@ describe("feature manifest", () => {
   it("categorizes tools deterministically", () => {
     expect(categorizeMcpTool("create_task")).toBe("tasks");
     expect(categorizeMcpTool("get_feature_manifest")).toBe("meta");
-    expect(categorizeMcpTool("todos_storage_push")).toBe("storage");
+    expect(categorizeMcpTool("sync_all")).toBe("workflow");
   });
 
   it("normalizes manifest for deterministic snapshots", () => {

@@ -175,6 +175,20 @@ export type {
   NativeStorageSyncPlanOptions,
 } from "./lib/native-storage-status.js";
 
+// Read-only task route source discovery
+export {
+  TASK_ROUTE_SOURCE_DISCOVERY_SCHEMA_VERSION,
+  discoverTaskRouteSources,
+} from "./lib/task-route-sources.js";
+export type {
+  DiscoverTaskRouteSourcesInput,
+  TaskRouteSourceCandidate,
+  TaskRouteSourceDiscoveryResult,
+  TaskRouteSourceError,
+  TaskRouteSourceStoreResult,
+  TaskRouteSourceStoreStatus,
+} from "./lib/task-route-sources.js";
+
 // Core database
 export { getDatabase, closeDatabase, resetDatabase, resolvePartialId, now, uuid } from "./db/database.js";
 
@@ -299,6 +313,28 @@ export {
   updatePlan,
   deletePlan,
 } from "./db/plans.js";
+export {
+  PLAN_MARKDOWN_SCHEMA,
+  buildPlanArtifactSnapshot,
+  inspectPlanArtifact,
+  parsePlanArtifactMarkdown,
+  readPlanArtifact,
+  renderPlanArtifactMarkdown,
+  resolvePlanArtifactPaths,
+  resolvePlanArtifactProject,
+  writePlanArtifact,
+} from "./lib/plan-artifacts.js";
+export type {
+  PlanArtifactConflict,
+  PlanArtifactInspection,
+  PlanArtifactMetadata,
+  PlanArtifactPaths,
+  PlanArtifactReadResult,
+  PlanArtifactSnapshot,
+  PlanArtifactTaskReference,
+  ResolvePlanArtifactPathInput,
+  WritePlanArtifactResult,
+} from "./lib/plan-artifacts.js";
 
 // Local project knowledge records
 export {
@@ -375,6 +411,36 @@ export type {
   ProjectBootstrapResult,
   ProjectWorkspaceDiscovery,
 } from "./lib/project-bootstrap.js";
+
+// Task routing and workflow invocation pointers
+export {
+  getTaskRouteState,
+  setTaskWorkflowPointers,
+} from "./lib/task-routing.js";
+export type {
+  SetTaskWorkflowPointersInput,
+  TaskRouteContext,
+  TaskRouteGates,
+  TaskRouteState,
+} from "./lib/task-routing.js";
+export {
+  TASK_WORKFLOW_POINTER_SCHEMA_VERSION,
+  TODOS_TASK_ROUTE_STATE_SCHEMA_VERSION,
+  booleanField,
+  classifyProjectKind,
+  compactWorkflowPointers,
+  inferRootProjectId,
+  isWorktreePath,
+  objectField,
+  routeEnabledForTask,
+  routingAutomationMetadata,
+  workflowPointersFromMetadata,
+} from "./lib/task-route-contract.js";
+export type {
+  ResolvedTaskRouteContext,
+  TaskRoutingAutomationMetadata,
+  TaskWorkflowPointers,
+} from "./lib/task-route-contract.js";
 
 // Comments
 export {

@@ -120,6 +120,7 @@ export const JSON_SCHEMAS: Record<SchemaEntity, JsonSchemaDefinition> = {
   plan: def("plan", "todos.plan.v1", "Plan", ["schema_version", "id", "name", "status", "created_at", "updated_at"], {
     schema_version: { type: "string", enum: ["todos.plan.v1"] },
     id: { type: "string" },
+    slug: { type: ["string", "null"] },
     project_id: { type: ["string", "null"] },
     name: { type: "string" },
     description: { type: ["string", "null"] },

@@ -1,15 +1,32 @@
 import type { Command } from "commander";
 import chalk from "chalk";
-import { getDatabase, resolvePartialId } from "../../db/database.js";
+import { getDatabase } from "../../db/database.js";
 import {
   createPlan,
   getPlan,
   listPlans,
+  resolvePlanRefDetailed,
   updatePlan,
   deletePlan,
 } from "../../db/plans.js";
 import { createTask } from "../../db/tasks.js";
+import { inspectPlanArtifact, readPlanArtifact, writePlanArtifact } from "../../lib/plan-artifacts.js";
 import { formatTaskLine, autoProject, handleError, output } from "../helpers.js";
+
+function resolvePlanCliRef(ref: string, projectId: string | undefined): string {
+  const db = getDatabase();
+  const resolved = resolvePlanRefDetailed(ref, db, projectId);
+  if (resolved.id) return resolved.id;
+  if (resolved.reason === "ambiguous") {
+    console.error(chalk.red(`Ambiguous plan reference: ${ref}`));
+    if (resolved.matches.length > 0) {
+      console.error(chalk.dim(`Matches: ${resolved.matches.map((plan) => `${plan.slug ?? plan.name} (${plan.id.slice(0, 8)})`).join(", ")}`));
+    }
+  } else {
+    console.error(chalk.red(`Could not resolve plan ID or slug: ${ref}`));
+  }
+  process.exit(1);
+}
 
 export function registerPlanTemplateCommands(program: Command) {
   // plans
@@ -17,8 +34,11 @@ export function registerPlanTemplateCommands(program: Command) {
     .command("plans")
     .description("List and manage plans")
     .option("--add <name>", "Create a plan")
+    .option("--slug <slug>", "Readable plan slug (with --add)")
     .option("-d, --description <text>", "Plan description (with --add)")
-    .option("--show <id>", "Show plan details with its tasks")
+    .option("--show <id-or-slug>", "Show plan details with its tasks")
+    .option("--artifact <id-or-slug>", "Show local Markdown artifact diagnostics for a plan")
+    .option("--write-artifacts", "Write local Markdown artifacts for all project-scoped plans in scope")
     .option("--delete <id>", "Delete a plan")
     .option("--complete <id>", "Mark a plan as completed")
     .action((opts) => {
@@ -26,28 +46,85 @@ export function registerPlanTemplateCommands(program: Command) {
       const projectId = autoProject(globalOpts);
 
       if (opts.add) {
-        const plan = createPlan({
-          name: opts.add,
-          description: opts.description,
-          project_id: projectId,
-        });
+        let plan: ReturnType<typeof createPlan>;
+        try {
+          plan = createPlan({
+            name: opts.add,
+            slug: opts.slug,
+            description: opts.description,
+            project_id: projectId,
+          });
+        } catch (error) {
+          handleError(error);
+        }
+        const artifact = writePlanArtifact(plan);
 
         if (globalOpts.json) {
           output(plan, true);
         } else {
           console.log(chalk.green("Plan created:"));
           console.log(`${chalk.dim(plan.id.slice(0, 8))} ${chalk.bold(plan.name)} ${chalk.cyan(`[${plan.status}]`)}`);
+          console.log(`${chalk.dim("Slug:")} ${plan.slug}`);
+          if (artifact) console.log(`${chalk.dim("Artifact:")} ${artifact.path}`);
+        }
+        return;
+      }
+
+      if (opts.artifact) {
+        const db = getDatabase();
+        const resolvedId = resolvePlanCliRef(opts.artifact, projectId);
+        const plan = getPlan(resolvedId);
+        if (!plan) {
+          console.error(chalk.red(`Plan not found: ${opts.artifact}`));
+          process.exit(1);
+        }
+        const inspection = inspectPlanArtifact(plan, db);
+        if (!inspection) {
+          const result = { plan_id: plan.id, artifact: null, reason: "plan is not project-scoped" };
+          if (globalOpts.json) output(result, true);
+          else console.log(chalk.dim("Plan is not project-scoped; no local Markdown artifact path is available."));
+          return;
+        }
+        if (globalOpts.json) {
+          output({ plan, artifact: inspection }, true);
+          return;
+        }
+        console.log(chalk.bold("Plan Artifact:\n"));
+        console.log(`  ${chalk.dim("Plan:")}      ${plan.id}`);
+        console.log(`  ${chalk.dim("Path:")}      ${inspection.path}`);
+        console.log(`  ${chalk.dim("Exists:")}    ${inspection.exists ? "yes" : "no"}`);
+        if (inspection.parse_error) console.log(`  ${chalk.dim("Parse:")}     ${chalk.red(inspection.parse_error)}`);
+        console.log(`  ${chalk.dim("Conflicts:")} ${inspection.conflicts.length}`);
+        for (const conflict of inspection.conflicts) {
+          console.log(`    ${conflict.field}: db=${conflict.database ?? "null"} artifact=${conflict.artifact ?? "null"}`);
+        }
+        return;
+      }
+
+      if (opts.writeArtifacts) {
+        const plans = listPlans(projectId);
+        const written = plans
+          .map((plan) => ({ plan, artifact: writePlanArtifact(plan) }))
+          .filter((entry) => entry.artifact);
+        const result = {
+          count: written.length,
+          artifacts: written.map((entry) => ({
+            plan_id: entry.plan.id,
+            path: entry.artifact!.path,
+          })),
+        };
+        if (globalOpts.json) {
+          output(result, true);
+        } else {
+          console.log(chalk.green(`Wrote ${written.length} plan artifact(s).`));
+          for (const artifact of result.artifacts) console.log(`${chalk.dim(artifact.plan_id.slice(0, 8))} ${artifact.path}`);
         }
         return;
       }
 
       if (opts.show) {
         const db = getDatabase();
-        const resolvedId = resolvePartialId(db, "plans", opts.show);
-        if (!resolvedId) {
-          console.error(chalk.red(`Could not resolve plan ID: ${opts.show}`));
-          process.exit(1);
-        }
+        const resolvedId = resolvePlanCliRef(opts.show, projectId);
         const plan = getPlan(resolvedId);
         if (!plan) {
           console.error(chalk.red(`Plan not found: ${opts.show}`));
@@ -55,18 +132,32 @@ export function registerPlanTemplateCommands(program: Command) {
         }
         const { listTasks } = require("../../db/tasks.js") as any;
         const tasks = listTasks({ plan_id: resolvedId });
+        const artifact = readPlanArtifact(plan, db);
 
         if (globalOpts.json) {
-          output({ plan, tasks }, true);
+          output({
+            plan,
+            tasks,
+            artifact: artifact
+              ? {
+                  path: artifact.path,
+                  metadata: artifact.metadata,
+                  task_references: artifact.task_references,
+                  body: artifact.body,
+                }
+              : null,
+          }, true);
           return;
         }
 
         console.log(chalk.bold("Plan Details:\n"));
         console.log(`  ${chalk.dim("ID:")}       ${plan.id}`);
+        if (plan.slug) console.log(`  ${chalk.dim("Slug:")}     ${plan.slug}`);
         console.log(`  ${chalk.dim("Name:")}     ${plan.name}`);
         console.log(`  ${chalk.dim("Status:")}   ${chalk.cyan(plan.status)}`);
         if (plan.description) console.log(`  ${chalk.dim("Desc:")}     ${plan.description}`);
         if (plan.project_id) console.log(`  ${chalk.dim("Project:")}  ${plan.project_id}`);
+        if (artifact) console.log(`  ${chalk.dim("Artifact:")} ${artifact.path}`);
         console.log(`  ${chalk.dim("Created:")}  ${plan.created_at}`);
 
         if (tasks.length > 0) {
@@ -81,12 +172,7 @@ export function registerPlanTemplateCommands(program: Command) {
       }
 
       if (opts.delete) {
-        const db = getDatabase();
-        const resolvedId = resolvePartialId(db, "plans", opts.delete);
-        if (!resolvedId) {
-          console.error(chalk.red(`Could not resolve plan ID: ${opts.delete}`));
-          process.exit(1);
-        }
+        const resolvedId = resolvePlanCliRef(opts.delete, projectId);
         const deleted = deletePlan(resolvedId);
         if (globalOpts.json) {
           output({ deleted }, true);
@@ -100,19 +186,16 @@ export function registerPlanTemplateCommands(program: Command) {
       }
 
       if (opts.complete) {
-        const db = getDatabase();
-        const resolvedId = resolvePartialId(db, "plans", opts.complete);
-        if (!resolvedId) {
-          console.error(chalk.red(`Could not resolve plan ID: ${opts.complete}`));
-          process.exit(1);
-        }
+        const resolvedId = resolvePlanCliRef(opts.complete, projectId);
         try {
           const plan = updatePlan(resolvedId, { status: "completed" });
+          const artifact = writePlanArtifact(plan);
           if (globalOpts.json) {
             output(plan, true);
           } else {
             console.log(chalk.green("Plan completed:"));
             console.log(`${chalk.dim(plan.id.slice(0, 8))} ${chalk.bold(plan.name)} ${chalk.cyan(`[${plan.status}]`)}`);
+            if (artifact) console.log(`${chalk.dim("Artifact:")} ${artifact.path}`);
           }
         } catch (e) {
           handleError(e);
@@ -136,7 +219,8 @@ export function registerPlanTemplateCommands(program: Command) {
       console.log(chalk.bold(`${plans.length} plan(s):\n`));
       for (const p of plans) {
         const desc = p.description ? chalk.dim(` - ${p.description}`) : "";
-        console.log(`${chalk.dim(p.id.slice(0, 8))} ${chalk.bold(p.name)} ${chalk.cyan(`[${p.status}]`)}${desc}`);
+        const slug = p.slug ? chalk.dim(` ${p.slug}`) : "";
+        console.log(`${chalk.dim(p.id.slice(0, 8))}${slug} ${chalk.bold(p.name)} ${chalk.cyan(`[${p.status}]`)}${desc}`);
       }
     });
 

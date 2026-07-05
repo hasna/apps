@@ -1,15 +1,23 @@
 import { EventsClient } from "@hasna/events";
 import type { EventSeverity } from "@hasna/events";
-import { tmpdir } from "node:os";
-import { resolve, sep } from "node:path";
 import { getDatabase } from "../db/database.js";
 import { getProject } from "../db/projects.js";
 import { getTaskList, getTaskListBySlug } from "../db/task-lists.js";
 import type { Project } from "../types/index.js";
 import type { Task } from "../types/index.js";
+import {
+  classifyProjectKind,
+  inferRootProjectId,
+  isWorktreePath,
+  projectKindFromMetadata,
+  routeEnabledForTask,
+  routingAutomationMetadata,
+  TODOS_TASK_ROUTE_STATE_SCHEMA_VERSION,
+  workflowPointersFromMetadata,
+} from "./task-route-contract.js";
+import { shouldEmitSharedTaskEvents } from "./event-emission-safety.js";
 
 const SOURCE = "todos";
-const ALLOW_GLOBAL_EVENTS_FROM_TEMP_DB = "HASNA_TODOS_ALLOW_GLOBAL_EVENTS_FROM_TEMP_DB";
 
 export type TodosSharedEventType =
   | "task.created"
@@ -53,88 +61,11 @@ export function taskEventData(task: Task, extra: Record<string, unknown> = {}): 
   };
 }
 
-function booleanField(value: unknown): boolean | undefined {
-  if (typeof value === "boolean") return value;
-  if (typeof value === "number") {
-    if (value === 1) return true;
-    if (value === 0) return false;
-  }
-  if (typeof value === "string") {
-    const normalized = value.trim().toLowerCase();
-    if (["true", "1", "yes", "on"].includes(normalized)) return true;
-    if (["false", "0", "no", "off"].includes(normalized)) return false;
-  }
-  return undefined;
-}
-
-function objectField(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
-}
-
-function explicitTaskDbPath(): string | undefined {
-  return process.env["HASNA_TODOS_DB_PATH"] || process.env["TODOS_DB_PATH"];
-}
-
-function isTruthyEnv(value: string | undefined): boolean {
-  return value ? ["1", "true", "yes", "on"].includes(value.trim().toLowerCase()) : false;
-}
-
-function isInMemoryDbPath(path: string): boolean {
-  return path === ":memory:" || path.startsWith("file::memory:");
-}
-
-function isUnderTmpDir(path: string): boolean {
-  const normalized = resolve(path);
-  const tmp = resolve(tmpdir());
-  return normalized === tmp || normalized.startsWith(`${tmp}${sep}`);
-}
-
-export function shouldEmitSharedTaskEvents(): boolean {
-  const explicitDb = explicitTaskDbPath();
-  if (!explicitDb) return true;
-  if (process.env["HASNA_EVENTS_DIR"] || process.env["HASNA_EVENTS_HOME"]) return true;
-  if (isTruthyEnv(process.env[ALLOW_GLOBAL_EVENTS_FROM_TEMP_DB])) return true;
-  return !(isInMemoryDbPath(explicitDb) || isUnderTmpDir(explicitDb));
-}
-
-function firstBoolean(records: Record<string, unknown>[], keys: string[]): boolean | undefined {
-  for (const record of records) {
-    for (const key of keys) {
-      const value = booleanField(record[key]);
-      if (value !== undefined) return value;
-    }
-  }
-  return undefined;
-}
-
-function routingAutomationMetadata(task: Task): Record<string, boolean> | undefined {
-  const automation = objectField(task.metadata.automation);
-  const records = [task.metadata];
-  if (automation) records.push(automation);
-
-  const result: Record<string, boolean> = {};
-  const aliases: Array<[string, string[]]> = [
-    ["allowed", ["allowed", "automation_allowed", "automationAllowed"]],
-    ["no_auto", ["no_auto", "noAuto"]],
-    ["manual", ["manual"]],
-    ["manual_required", ["manual_required", "manualRequired"]],
-    ["requires_approval", ["requires_approval", "requiresApproval"]],
-    ["approval_required", ["approval_required", "approvalRequired"]],
-  ];
-
-  for (const [canonical, keys] of aliases) {
-    const value = firstBoolean(records, keys);
-    if (value !== undefined) result[canonical] = value;
-  }
-  if (task.requires_approval) result.requires_approval = true;
-
-  return Object.keys(result).length > 0 ? result : undefined;
-}
-
 function taskEventMetadata(task: Task): Record<string, unknown> {
   const metadata: Record<string, unknown> = {
     package: "@hasna/todos",
     todos_event_schema_version: 1,
+    route_state_schema_version: TODOS_TASK_ROUTE_STATE_SCHEMA_VERSION,
     task_id: task.id,
     task_short_id: task.short_id,
     project_id: task.project_id,
@@ -142,13 +73,9 @@ function taskEventMetadata(task: Task): Record<string, unknown> {
     working_dir: task.working_dir,
   };
 
-  const routeEnabled = booleanField(task.metadata.route_enabled);
-  if (routeEnabled !== undefined) {
-    metadata.route_enabled = routeEnabled;
-  }
-  const automation = routingAutomationMetadata(task);
-  if (automation) {
-    metadata.automation = automation;
+  const pointers = workflowPointersFromMetadata(task.metadata);
+  for (const [key, value] of Object.entries(pointers)) {
+    if (value) metadata[key] = value;
   }
 
   try {
@@ -166,7 +93,6 @@ function taskEventMetadata(task: Task): Record<string, unknown> {
       metadata.project_canonical_path = projectPath;
     }
     if (projectPath) {
-      metadata.project_kind = classifyProjectKind(projectPath);
       metadata.project_is_worktree = isWorktreePath(projectPath);
       metadata.working_dir = task.working_dir ?? projectPath;
     }
@@ -183,23 +109,28 @@ function taskEventMetadata(task: Task): Record<string, unknown> {
       metadata.task_list_project_id = taskList.project_id;
       metadata.task_list_is_project_default = Boolean(project?.task_list_id && taskList.slug === project.task_list_id);
     }
+
+    const projectKind = projectKindFromMetadata(task.metadata, taskList?.metadata);
+    if (projectKind) {
+      metadata.project_kind = classifyProjectKind(projectPath ?? "", { project_kind: projectKind });
+    }
+
+    const routeEnabled = routeEnabledForTask(task, taskList);
+    if (routeEnabled !== undefined) {
+      metadata.route_enabled = routeEnabled;
+    }
+    const automation = routingAutomationMetadata(task, taskList);
+    if (automation) {
+      metadata.automation = automation;
+      metadata.route_blocked_by_no_auto = automation.no_auto === true;
+      metadata.route_blocked_by_manual = automation.manual === true || automation.manual_required === true;
+      metadata.route_blocked_by_approval = (automation.requires_approval === true || automation.approval_required === true) && !task.approved_by;
+    }
   } catch {
     // Event enrichment must never block task lifecycle operations.
   }
 
   return metadata;
-}
-
-function classifyProjectKind(path: string): string {
-  return path.includes("/hasna/opensource/") ? "open-source" : "unknown";
-}
-
-function isWorktreePath(path: string): boolean {
-  return path.includes("/.codewith/worktrees/") || path.includes("/.worktrees/");
-}
-
-function inferRootProjectId(project: Project): string | null {
-  return isWorktreePath(project.path) ? null : project.id;
 }
 
 function readMachineLocalPath(project: Project): string | null {
@@ -222,9 +153,9 @@ export async function emitSharedTaskEvent(input: {
   message?: string;
   severity?: EventSeverity;
   dedupeKey?: string;
+  databasePath?: string;
 }): Promise<void> {
-  if (!shouldEmitSharedTaskEvents()) return;
-
+  if (!shouldEmitSharedTaskEvents(input.databasePath)) return;
   const data = taskEventData(input.task, input.data);
   await new EventsClient().emit(
     {

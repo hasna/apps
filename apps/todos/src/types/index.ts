@@ -66,6 +66,8 @@ export interface Project {
   task_counter: number;
   created_at: string;
   updated_at: string;
+  machine_id?: string | null;
+  synced_at?: string | null;
   sources?: ProjectSource[];
 }
 
@@ -96,6 +98,7 @@ export interface CreateOrgInput {
 // Plan
 export interface Plan {
   id: string;
+  slug: string | null;
   project_id: string | null;
   task_list_id: string | null;
   agent_id: string | null;
@@ -104,10 +107,13 @@ export interface Plan {
   status: PlanStatus;
   created_at: string;
   updated_at: string;
+  machine_id?: string | null;
+  synced_at?: string | null;
 }
 
 export interface CreatePlanInput {
   name: string;
+  slug?: string;
   project_id?: string;
   task_list_id?: string;
   agent_id?: string;
@@ -117,6 +123,7 @@ export interface CreatePlanInput {
 
 export interface UpdatePlanInput {
   name?: string;
+  slug?: string;
   description?: string;
   status?: PlanStatus;
   task_list_id?: string;
@@ -216,6 +223,8 @@ export interface Agent {
   session_id: string | null; // bound session — used to detect name conflicts
   working_dir: string | null;
   active_project_id: string | null; // project this agent's session is locked to
+  machine_id?: string | null;
+  synced_at?: string | null;
 }
 
 export interface AgentRow {
@@ -236,6 +245,8 @@ export interface AgentRow {
   session_id: string | null;
   working_dir: string | null;
   active_project_id: string | null;
+  machine_id?: string | null;
+  synced_at?: string | null;
 }
 
 export interface RegisterAgentInput {
@@ -289,6 +300,8 @@ export interface TaskList {
   metadata: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+  machine_id?: string | null;
+  synced_at?: string | null;
 }
 
 export interface TaskListRow {
@@ -300,6 +313,8 @@ export interface TaskListRow {
   metadata: string | null;
   created_at: string;
   updated_at: string;
+  machine_id?: string | null;
+  synced_at?: string | null;
 }
 
 export interface CreateTaskListInput {
@@ -369,6 +384,9 @@ export interface Task {
   runner_completed_at: string | null;
   current_step: string | null;
   total_steps: number | null;
+  machine_id?: string | null;
+  synced_at?: string | null;
+  archived_at?: string | null;
 }
 
 // Checklist item — ordered sub-steps within a task
@@ -816,6 +834,10 @@ export interface TaskRow {
   runner_completed_at: string | null;
   current_step: string | null;
   total_steps: number | null;
+  cycle_id?: string | null;
+  machine_id?: string | null;
+  synced_at?: string | null;
+  archived_at?: string | null;
 }
 
 export interface SessionRow {
@@ -847,6 +869,7 @@ export interface TaskHistory {
   new_value: string | null;
   agent_id: string | null;
   created_at: string;
+  machine_id?: string | null;
 }
 
 // Webhook
@@ -895,6 +918,8 @@ export interface TaskTemplate {
   plan_id: string | null;
   metadata: Record<string, unknown>;
   created_at: string;
+  machine_id?: string | null;
+  synced_at?: string | null;
 }
 
 export interface CreateTemplateInput {

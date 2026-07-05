@@ -8,7 +8,7 @@ import { existsSync } from "fs";
 import { join, dirname, extname } from "path";
 import { fileURLToPath } from "url";
 import { getDatabase } from "../db/database.js";
-import { hasActiveApiKeys, verifyApiKey } from "../db/api-keys.js";
+import { hasActiveApiKeys, verifyApiKey, safeEqualStrings } from "../db/api-keys.js";
 import type { Task } from "../types/index.js";
 import type { RouteContext, FilteredClient } from "./routes.js";
 import * as handlers from "./routes.js";
@@ -75,7 +75,9 @@ function checkAuth(req: Request, apiKey: string | null): Response | null {
   if (!apiKey && !generatedKeysEnabled) return null; // no key configured, skip auth
 
   const provided = getProvidedApiKey(req);
-  const matchesEnvKey = Boolean(apiKey && provided && provided === apiKey);
+  // Constant-time compare for the static env/CLI key — avoids a timing oracle
+  // that a plain `===` short-circuit would expose.
+  const matchesEnvKey = Boolean(apiKey && provided && safeEqualStrings(provided, apiKey));
   const matchesGeneratedKey = Boolean(provided && verifyApiKey(provided));
   if (!matchesEnvKey && !matchesGeneratedKey) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
@@ -90,6 +92,30 @@ function checkAuth(req: Request, apiKey: string | null): Response | null {
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
 const RATE_LIMIT_MAX = Number.parseInt(process.env["TODOS_RATE_LIMIT_MAX"] || "120", 10); // requests per window
+
+/**
+ * Resolve the rate-limit bucket key for a request.
+ *
+ * By default we key on the real transport peer address (`server.requestIP`),
+ * because Bun.serve never populates `x-forwarded-for` / `x-real-ip` for direct
+ * connections — trusting those headers by default lets any client bypass the
+ * limiter by rotating a spoofed XFF, while every genuine direct client collapses
+ * into a single "unknown" bucket (self-DoS). Client headers are only honored
+ * when the operator explicitly opts in via TODOS_TRUST_PROXY (i.e. the server
+ * actually sits behind a trusted reverse proxy that sets them).
+ */
+function resolveClientIp(
+  req: Request,
+  server: { requestIP(req: Request): { address: string } | null },
+): string {
+  const trustProxy = process.env["TODOS_TRUST_PROXY"] === "1" || process.env["TODOS_TRUST_PROXY"] === "true";
+  if (trustProxy) {
+    const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
+      || req.headers.get("x-real-ip")?.trim();
+    if (forwarded) return forwarded;
+  }
+  return server.requestIP(req)?.address || "unknown";
+}
 
 function checkRateLimit(ip: string): { allowed: boolean; retryAfter?: number } {
   const now = Date.now();
@@ -217,7 +243,7 @@ export async function startServer(port: number, options?: { open?: boolean; host
   const server = Bun.serve({
     port,
     hostname,
-    async fetch(req) {
+    async fetch(req, server) {
       const url = new URL(req.url);
       const path = url.pathname;
       const method = req.method;
@@ -233,19 +259,7 @@ export async function startServer(port: number, options?: { open?: boolean; host
 
       const jsonWithCors = (data: unknown, status = 200) => json(data, status, corsHeaders);
 
-      // ── MCP Streamable HTTP (shared long-lived server) ──
-      if (path === "/health" && method === "GET") {
-        const { healthResponse } = await import("../mcp/http.js");
-        return healthResponse("todos");
-      }
-
-      if (path === "/mcp") {
-        const { handleMcpHttpRequest } = await import("../mcp/http.js");
-        const { buildServer } = await import("../mcp/index.js");
-        return handleMcpHttpRequest(req, buildServer);
-      }
-
-      // ── CORS ──
+      // ── CORS preflight (no state change, no auth) ──
       if (method === "OPTIONS") {
         return new Response(null, {
           headers: corsHeaders || {
@@ -254,16 +268,32 @@ export async function startServer(port: number, options?: { open?: boolean; host
         });
       }
 
-      // ── Rate limiting (all requests) ──
-      const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
-        || req.headers.get("x-real-ip")
-        || "unknown";
+      // ── Rate limiting (ALL requests, including /mcp and /health) ──
+      // Keyed on the real socket peer, not spoofable client headers.
+      const ip = resolveClientIp(req, server);
       const rl = checkRateLimit(ip);
       if (!rl.allowed) {
         return new Response(JSON.stringify({ error: "Too many requests", retry_after: rl.retryAfter }), {
           status: 429,
           headers: { "Content-Type": "application/json", "Retry-After": String(rl.retryAfter ?? 60), ...SECURITY_HEADERS },
         });
+      }
+
+      // ── Liveness probe (trivial payload, intentionally unauthenticated) ──
+      if (path === "/health" && method === "GET") {
+        const { healthResponse } = await import("../mcp/http.js");
+        return healthResponse("todos");
+      }
+
+      // ── MCP Streamable HTTP (shared long-lived server) ──
+      // Gated by the SAME auth check as /api/* — otherwise the MCP transport is
+      // an unauthenticated create/update/delete backdoor around the REST auth.
+      if (path === "/mcp") {
+        const authError = checkAuth(req, apiKey);
+        if (authError) return authError;
+        const { handleMcpHttpRequest } = await import("../mcp/http.js");
+        const { buildServer } = await import("../mcp/index.js");
+        return handleMcpHttpRequest(req, buildServer);
       }
 
       // ── API key auth (all /api/* routes) ──

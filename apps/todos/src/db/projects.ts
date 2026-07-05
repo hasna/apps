@@ -3,6 +3,7 @@ import type { CreateProjectInput, CreateProjectSourceInput, Project, ProjectSour
 import { ProjectNotFoundError } from "../types/index.js";
 import { getDatabase, now, uuid } from "./database.js";
 import { getMachineId } from "./machines.js";
+import { currentStorageMachineId, recordStorageTombstone } from "./storage-tombstones.js";
 
 export function slugify(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
@@ -40,11 +41,12 @@ export function createProject(
   const timestamp = now();
   const taskListId = input.task_list_id ?? `todos-${slugify(input.name)}`;
   const taskPrefix = input.task_prefix || generatePrefix(input.name, d);
+  const machineId = currentStorageMachineId(d);
 
   d.run(
-    `INSERT INTO projects (id, name, path, description, task_list_id, task_prefix, task_counter, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
-    [id, input.name, input.path, input.description || null, taskListId, taskPrefix, timestamp, timestamp],
+    `INSERT INTO projects (id, name, path, description, task_list_id, task_prefix, task_counter, created_at, updated_at, machine_id)
+     VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+    [id, input.name, input.path, input.description || null, taskListId, taskPrefix, timestamp, timestamp, machineId],
   );
 
   return getProject(id, d)!;
@@ -166,6 +168,13 @@ export function renameProject(
 
 export function deleteProject(id: string, db?: Database): boolean {
   const d = db || getDatabase();
+  const project = getProject(id, d);
+  if (!project) return false;
+  recordStorageTombstone({
+    object_type: "projects",
+    object_id: id,
+    payload: project as unknown as Record<string, unknown>,
+  }, d);
   const result = d.run("DELETE FROM projects WHERE id = ?", [id]);
   return result.changes > 0;
 }
@@ -320,6 +329,15 @@ export function listMachineLocalPaths(projectId: string, db?: Database): Project
 export function removeMachineLocalPath(projectId: string, machineId?: string, db?: Database): boolean {
   const d = db || getDatabase();
   const mid = machineId ?? getMachineId(d);
+  const existing = d.query(
+    "SELECT * FROM project_machine_paths WHERE project_id = ? AND machine_id = ?",
+  ).get(projectId, mid) as ProjectMachinePath | null;
+  if (!existing) return false;
+  recordStorageTombstone({
+    object_type: "project_machine_paths",
+    object_id: existing.id,
+    payload: existing as unknown as Record<string, unknown>,
+  }, d);
   const result = d.run(
     "DELETE FROM project_machine_paths WHERE project_id = ? AND machine_id = ?",
     [projectId, mid],

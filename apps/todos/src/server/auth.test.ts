@@ -83,3 +83,43 @@ describe("API key authentication", () => {
     expect(res.status).toBe(200);
   });
 });
+
+// ── H1: the /mcp transport must be gated by the same auth as /api/* ──
+describe("MCP HTTP endpoint authentication", () => {
+  const mcpBody = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
+  const mcpHeaders = (extra: Record<string, string> = {}) => ({
+    "Content-Type": "application/json",
+    "Accept": "application/json, text/event-stream",
+    ...extra,
+  });
+
+  it("rejects unauthenticated POST /mcp with 401", async () => {
+    const res = await fetch(url("/mcp"), { method: "POST", headers: mcpHeaders(), body: mcpBody });
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects POST /mcp with a wrong key", async () => {
+    const res = await fetch(url("/mcp"), {
+      method: "POST",
+      headers: mcpHeaders({ "x-api-key": "tdos_wrong" }),
+      body: mcpBody,
+    });
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects unauthenticated GET /mcp with 401", async () => {
+    const res = await fetch(url("/mcp"), { method: "GET", headers: mcpHeaders() });
+    expect(res.status).toBe(401);
+  });
+
+  it("allows POST /mcp past the auth boundary with a valid key", async () => {
+    const res = await fetch(url("/mcp"), {
+      method: "POST",
+      headers: mcpHeaders({ "x-api-key": apiKey }),
+      body: mcpBody,
+    });
+    // Past auth: the MCP transport handles it. Whatever it returns, it must not
+    // be the 401 an unauthenticated caller would get.
+    expect(res.status).not.toBe(401);
+  });
+});

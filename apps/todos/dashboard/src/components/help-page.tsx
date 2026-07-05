@@ -16,7 +16,7 @@ export function HelpPage() {
           </p>
           <p>
             For agent workflows use <code className="font-mono">todos claim</code>, <code className="font-mono">todos-mcp</code>, or{" "}
-            <code className="font-mono">TODOS_PROFILE=minimal</code>. Cloud sync is explicit opt-in from CLI/MCP only.
+            <code className="font-mono">TODOS_PROFILE=minimal</code>. Native remote storage is explicit opt-in through storage configuration.
           </p>
         </CardContent>
       </Card>
