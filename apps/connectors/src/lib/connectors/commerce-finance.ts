@@ -388,6 +388,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["nft", "blockchain", "digital collectibles", "tokens", "web3"],
   },
   {
+    name: "usereframe",
+    displayName: "Reframe",
+    description: "Hardware procurement automation",
+    category: "Commerce & Finance",
+    tags: ["procurement", "bom", "hardware", "suppliers"],
+  },
+  {
     name: "whal3s",
     displayName: "Whal3s",
     description: "NFT utility and Web3 engagement platform",
