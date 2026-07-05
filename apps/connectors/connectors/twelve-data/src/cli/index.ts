@@ -57,8 +57,7 @@ program
   });
 
 function getFormat(cmd: Command): OutputFormat {
-  const parent = cmd.parent;
-  return (parent?.opts().format || 'pretty') as OutputFormat;
+  return (cmd.opts().format || cmd.parent?.opts().format || 'pretty') as OutputFormat;
 }
 
 function getClient(): Connector {
