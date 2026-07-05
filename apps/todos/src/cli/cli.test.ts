@@ -439,6 +439,104 @@ describe("CLI integration", () => {
     expect(JSON.parse(completedJson.stdout)).toHaveLength(80);
   });
 
+  it("should emit complete parseable JSON for a >1MB doctor routing report over a pipe", async () => {
+    // Regression guard: at fleet scale `doctor routing --json` is multi-MB and
+    // a bare console.log intermittently truncated it when stdout was a pipe
+    // (the routing-health loop's exact consumption path).
+    const dbPath = join(testRoot, "large-doctor-routing.db");
+    const projectDir = join(testRoot, "large-doctor-project");
+    mkdirSync(projectDir, { recursive: true });
+    const previousDbPath = process.env["TODOS_DB_PATH"];
+    closeDatabase();
+    process.env["TODOS_DB_PATH"] = dbPath;
+    resetDatabase();
+    const db = getDatabase();
+    const project = createProject({ name: "LargeDoctor", path: projectDir }, db);
+    createTaskList({ name: "LargeDoctor list", slug: project.task_list_id!, project_id: project.id }, db);
+    const longTitle = "routing-drift-payload ".repeat(30);
+    const seed = db.transaction(() => {
+      for (let i = 0; i < 600; i += 1) {
+        // Each task yields two safe_auto findings: wrong working_dir + null task_list_id.
+        createTask({
+          title: `${longTitle}${i}`,
+          project_id: project.id,
+          working_dir: "/somewhere/drifted/away",
+          status: "pending",
+          tags: ["auto:route"],
+        }, db);
+      }
+    });
+    seed();
+    closeDatabase();
+    if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
+    else process.env["TODOS_DB_PATH"] = previousDbPath;
+    resetDatabase();
+
+    const run = await runCli(["doctor", "routing", "--json"], dbPath);
+    expect(run.exitCode).toBe(1); // findings present
+    expect(run.stdout.length).toBeGreaterThan(1024 * 1024);
+    const doctor = JSON.parse(run.stdout); // must never be truncated
+    expect(doctor.schema_version).toBe("todos.routing_doctor.v1");
+    expect(doctor.summary.inspected).toBe(600);
+    expect(doctor.summary.findings_total).toBe(1200);
+    expect(doctor.findings).toHaveLength(1200);
+  });
+
+  it("should apply doctor routing repairs end-to-end through the real binary (--apply must not silently dry-run)", async () => {
+    // Regression guard for Commander parent-option shadowing: the actionable
+    // parent `doctor` declares its own legacy --apply/--fix and, without
+    // positional options, strips them from argv before dispatching — so
+    // `doctor routing --apply` silently dry-ran (repaired 0, no undo record)
+    // while every library-level test stayed green. Drive the REAL binary.
+    const dbPath = join(testRoot, "doctor-routing-apply.db");
+    const projectDir = join(testRoot, "doctor-apply-project");
+    mkdirSync(projectDir, { recursive: true });
+    const previousDbPath = process.env["TODOS_DB_PATH"];
+    closeDatabase();
+    process.env["TODOS_DB_PATH"] = dbPath;
+    resetDatabase();
+    const db = getDatabase();
+    const project = createProject({ name: "DoctorApply", path: projectDir }, db);
+    const list = createTaskList({ name: "DoctorApply list", slug: project.task_list_id!, project_id: project.id }, db);
+    const drifted = createTask({
+      title: "drifted apply task",
+      project_id: project.id,
+      task_list_id: list.id,
+      working_dir: "/somewhere/wrong",
+      status: "pending",
+      tags: ["auto:route"],
+    }, db);
+    closeDatabase();
+    if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
+    else process.env["TODOS_DB_PATH"] = previousDbPath;
+    resetDatabase();
+
+    const undoPath = join(testRoot, "doctor-routing-apply-undo.json");
+    const run = await runCli(["doctor", "routing", "--apply", "--undo-record", undoPath, "--json"], dbPath);
+    const doctor = JSON.parse(run.stdout);
+    expect(doctor.dry_run).toBe(false); // the flag must actually reach the subcommand
+    expect(doctor.summary.repaired).toBeGreaterThan(0);
+    expect(doctor.summary.repair_failed).toBe(0);
+    expect(run.exitCode).toBe(0); // seeded safe_auto drift fully repaired
+
+    // the mutation must be persisted in the scratch db
+    const verify = new Database(dbPath);
+    const row = verify.query("SELECT working_dir FROM tasks WHERE id = ?").get(drifted.id) as { working_dir: string };
+    verify.close();
+    expect(row.working_dir).toBe(projectDir);
+
+    // undo record written with honest undo commands
+    const { readFileSync: readUndo } = await import("node:fs");
+    const undo = JSON.parse(readUndo(undoPath, "utf8"));
+    expect(undo.repairs.length).toBeGreaterThan(0);
+    expect(undo.repairs[0].undo_command).toContain("todos update");
+
+    // legacy parent `doctor --apply` must remain unregressed by the fallback
+    const legacy = await runCli(["doctor", "--apply", "--json"], dbPath);
+    expect(legacy.exitCode).toBe(0);
+    expect(JSON.parse(legacy.stdout).dry_run).toBe(false);
+  });
+
   it("should run usage report command", async () => {
     const dbPath = "/tmp/test-cli-usage.db";
     const { unlinkSync } = await import("node:fs");

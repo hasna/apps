@@ -479,7 +479,7 @@ export interface UpdateTaskInput {
   assigned_to?: string;
   working_dir?: string | null;
   plan_id?: string | null;
-  task_list_id?: string;
+  task_list_id?: string | null;
   cycle_id?: string | null;
   tags?: string[];
   metadata?: Record<string, unknown>;
