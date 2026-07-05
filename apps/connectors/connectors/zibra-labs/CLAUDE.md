@@ -48,7 +48,7 @@ authType: api_key
 | `profile list\|use\|create\|delete\|show` | Multi-profile management |
 | `config set-key\|show\|clear` | Configuration management |
 
-Global flags: `-k/--api-key`, `-p/--profile`, `-f/--format json|pretty`, `-v/--verbose`
+Global flags: `-k/--api-key`, `-P/--profile`, `-f/--format json|pretty`, `-v/--verbose`
 
 ## Data Storage
 

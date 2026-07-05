@@ -93,4 +93,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Infrastructure",
     tags: ["quant", "backtesting", "hpc", "datasets", "finance"],
   },
+  {
+    name: "zerotier",
+    displayName: "ZeroTier",
+    description: "ZeroTier Central SDN networking — virtual networks, members, and organizations",
+    category: "Infrastructure",
+    tags: ["networking", "vpn", "sdn", "zerotier"],
+  },
 ];

@@ -31,7 +31,7 @@ program
   .version(VERSION)
   .option('-k, --api-key <key>', 'API key (overrides config)')
   .option('-f, --format <format>', 'Output format (json, pretty)', 'pretty')
-  .option('-p, --profile <profile>', 'Use a specific profile')
+  .option('-P, --profile <profile>', 'Use a specific profile')
   .option('-v, --verbose', 'Enable verbose output')
   .hook('preAction', (thisCommand) => {
     const opts = thisCommand.opts();
@@ -53,13 +53,14 @@ program
 
 function getFormat(cmd: Command): OutputFormat {
   const parent = cmd.parent;
-  return (parent?.opts().format || 'pretty') as OutputFormat;
+  return ((parent || cmd).opts().format || 'pretty') as OutputFormat;
 }
 
-function parseQueryFlags(opts: Record<string, unknown>): Record<string, string> {
+function parseQueryFlags(opts: Record<string, unknown>, excludeKeys: string[] = []): Record<string, string> {
   const query: Record<string, string> = {};
+  const excluded = new Set(['format', 'profile', 'apiKey', 'verbose', 'body', ...excludeKeys]);
   for (const [key, value] of Object.entries(opts)) {
-    if (value !== undefined && value !== null && value !== '' && !['format', 'profile', 'apiKey', 'verbose', 'body'].includes(key)) {
+    if (value !== undefined && value !== null && value !== '' && !excluded.has(key)) {
       query[key] = String(value);
     }
   }
@@ -220,7 +221,7 @@ datasetsCmd.command('list')
     try {
       const opts = cmd.opts();
       const client = getClient();
-      const query = parseQueryFlags(opts);
+      const query = parseQueryFlags(opts, ['assetClass']);
       if (opts.assetClass) query.asset_class = opts.assetClass;
       const result = await client.listDatasets(query);
       print(result, getFormat(datasetsCmd));
