@@ -927,6 +927,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["transcription", "meetings", "ai"],
   },
   {
+    name: "weights-biases-api-platform",
+    displayName: "Weights & Biases API Platform",
+    description: "W&B API Platform items, events, and search",
+    category: "AI & ML",
+    tags: ["wandb", "ml", "api-platform"],
+  },
+  {
     name: "wavelineextract",
     displayName: "Waveline Extract",
     description: "Document data extraction and parsing",
