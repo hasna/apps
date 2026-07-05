@@ -514,6 +514,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["fitness", "running", "cycling", "activities", "sports"],
   },
   {
+    name: "umami",
+    displayName: "Umami",
+    description: "Privacy-focused website analytics",
+    category: "Data & Analytics",
+    tags: ["analytics", "privacy", "websites"],
+  },
+  {
     name: "uproc",
     displayName: "uProc",
     description: "Data processing and enrichment tools",
