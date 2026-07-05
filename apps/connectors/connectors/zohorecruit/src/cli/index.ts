@@ -7,6 +7,7 @@ import {
   setToken,
   getDataCenter,
   setDataCenter,
+  getBaseUrl,
   clearConfig,
   getConfigDir,
   setProfileOverride,
@@ -52,9 +53,9 @@ program
     }
   });
 
-function getFormat(cmd: Command): OutputFormat {
-  const parent = cmd.parent;
-  return (parent?.opts().format || 'pretty') as OutputFormat;
+export function getFormat(cmd: Command): OutputFormat {
+  const opts = cmd.optsWithGlobals();
+  return (opts.format || cmd.parent?.opts().format || 'pretty') as OutputFormat;
 }
 
 function getClient(): ZohoRecruit {
@@ -66,7 +67,7 @@ function getClient(): ZohoRecruit {
   return new ZohoRecruit({
     token,
     dataCenter: getDataCenter(),
-    baseUrl: process.env.ZOHORECRUIT_BASE_URL,
+    baseUrl: getBaseUrl(),
   });
 }
 
@@ -263,4 +264,6 @@ program.command('org').description('Get organization details').action(async () =
   }
 });
 
-program.parse();
+if (import.meta.main) {
+  program.parse();
+}

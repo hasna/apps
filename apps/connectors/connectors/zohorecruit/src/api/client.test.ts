@@ -143,4 +143,103 @@ describe('ZohoRecruit', () => {
     expect(capturedUrl).toContain('/Candidates/search');
     expect(capturedUrl).toContain('email=test%40example.com');
   });
+
+  test('associateCandidates uses the Candidates associate action endpoint', async () => {
+    let capturedUrl = '';
+    let capturedMethod = '';
+    let capturedBody = '';
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      capturedUrl = typeof input === 'string' ? input : input.toString();
+      capturedMethod = init?.method || '';
+      capturedBody = init?.body as string;
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({ data: [] });
+        },
+      } as Response;
+    }) as typeof fetch;
+
+    const recruit = new ZohoRecruit({ token: 'tok' });
+    await recruit.associateCandidates('job-1', [{ ids: ['cand-1', 'cand-2'], comments: 'screened' }]);
+
+    expect(capturedUrl).toBe('https://recruit.zoho.com/recruit/v2/Candidates/actions/associate');
+    expect(capturedMethod).toBe('PUT');
+    expect(JSON.parse(capturedBody)).toEqual({
+      data: [
+        { Candidate_ID: 'cand-1', Job_Opening_ID: 'job-1', Comments: 'screened' },
+        { Candidate_ID: 'cand-2', Job_Opening_ID: 'job-1', Comments: 'screened' },
+      ],
+    });
+  });
+
+  test('changeCandidateStatus uses the Candidates status endpoint', async () => {
+    let capturedUrl = '';
+    let capturedMethod = '';
+    let capturedBody = '';
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      capturedUrl = typeof input === 'string' ? input : input.toString();
+      capturedMethod = init?.method || '';
+      capturedBody = init?.body as string;
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({ data: [] });
+        },
+      } as Response;
+    }) as typeof fetch;
+
+    const recruit = new ZohoRecruit({ token: 'tok' });
+    await recruit.changeCandidateStatus('job-1', [{ ids: ['cand-1'], status: 'Hired', comments: 'offer accepted' }]);
+
+    expect(capturedUrl).toBe('https://recruit.zoho.com/recruit/v2/Candidates/status');
+    expect(capturedMethod).toBe('PUT');
+    expect(JSON.parse(capturedBody)).toEqual({
+      data: [
+        {
+          id: 'cand-1',
+          Job_Opening_ID: 'job-1',
+          Candidate_Status: 'Hired',
+          Comments: 'offer accepted',
+        },
+      ],
+    });
+  });
+
+  test('createWebhook keeps verification token separate from channel expiry', async () => {
+    let capturedBody = '';
+    globalThis.fetch = (async (_input, init?: RequestInit) => {
+      capturedBody = init?.body as string;
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({ watch: [] });
+        },
+      } as Response;
+    }) as typeof fetch;
+
+    const recruit = new ZohoRecruit({ token: 'tok' });
+    await recruit.createWebhook({
+      channel_id: 'channel-1',
+      events: ['Candidates.create'],
+      notify_url: 'https://example.test/hook',
+      token: 'verify-me',
+      channel_expiry: '2026-08-01T00:00:00+00:00',
+    });
+
+    expect(JSON.parse(capturedBody)).toEqual({
+      watch: [
+        {
+          channel_id: 'channel-1',
+          events: ['Candidates.create'],
+          notify_url: 'https://example.test/hook',
+          token: 'verify-me',
+          channel_expiry: '2026-08-01T00:00:00+00:00',
+        },
+      ],
+    });
+  });
 });

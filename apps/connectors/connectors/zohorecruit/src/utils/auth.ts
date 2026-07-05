@@ -1,14 +1,20 @@
 import { createServer } from 'http';
 import type { OAuth2Tokens, OAuth2Config } from '../types';
-import { saveOAuthTokens, loadOAuthTokens, getOAuthConfig } from './config';
+import { saveOAuthTokens, loadOAuthTokens, getOAuthConfig, getDataCenter } from './config';
 
 // ============================================
 // OAuth2 Authentication Utility
 // ============================================
 
-// Zoho OAuth2 endpoints (data center com; override via authUrl option for eu/in/etc.)
-const DEFAULT_AUTH_URL = 'https://accounts.zoho.com/oauth/v2/auth';
-const DEFAULT_TOKEN_URL = 'https://accounts.zoho.com/oauth/v2/token';
+const ZOHO_ACCOUNTS_BASES: Record<string, string> = {
+  com: 'https://accounts.zoho.com',
+  eu: 'https://accounts.zoho.eu',
+  in: 'https://accounts.zoho.in',
+  'com.au': 'https://accounts.zoho.com.au',
+  jp: 'https://accounts.zoho.jp',
+  ca: 'https://accounts.zohocloud.ca',
+  sa: 'https://accounts.zoho.sa',
+};
 
 // Zoho Recruit scopes — see https://www.zoho.com/recruit/developer-guide/apiv2/scopes.html
 const DEFAULT_SCOPES = [
@@ -28,9 +34,27 @@ export interface AuthResult {
 
 export interface AuthUrlOptions {
   authUrl?: string;
+  dataCenter?: string;
   scopes?: string;
   state?: string;
   extraParams?: Record<string, string>;
+}
+
+export function resolveAccountsBaseUrl(dataCenter?: string): string {
+  const dc = (dataCenter || getDataCenter() || 'com').toLowerCase();
+  const host = ZOHO_ACCOUNTS_BASES[dc];
+  if (!host) {
+    throw new Error(`Zoho accounts data_center must be one of: ${Object.keys(ZOHO_ACCOUNTS_BASES).join(', ')}`);
+  }
+  return host;
+}
+
+function resolveAuthUrl(dataCenter?: string): string {
+  return `${resolveAccountsBaseUrl(dataCenter)}/oauth/v2/auth`;
+}
+
+function resolveTokenUrl(dataCenter?: string): string {
+  return `${resolveAccountsBaseUrl(dataCenter)}/oauth/v2/token`;
 }
 
 /**
@@ -42,7 +66,7 @@ export function getAuthUrl(options: AuthUrlOptions = {}): string {
     throw new Error('OAuth client ID not configured. Run "config set-credentials" first.');
   }
 
-  const authUrl = options.authUrl || DEFAULT_AUTH_URL;
+  const authUrl = options.authUrl || resolveAuthUrl(options.dataCenter);
   const scopes = options.scopes || DEFAULT_SCOPES;
 
   const params = new URLSearchParams({
@@ -64,7 +88,7 @@ export function getAuthUrl(options: AuthUrlOptions = {}): string {
  */
 export async function exchangeCodeForTokens(
   code: string,
-  tokenUrl: string = DEFAULT_TOKEN_URL
+  tokenUrl: string = resolveTokenUrl()
 ): Promise<OAuth2Tokens> {
   const config = getOAuthConfig();
 
@@ -108,7 +132,7 @@ export async function exchangeCodeForTokens(
  * Refresh the access token using the refresh token
  */
 export async function refreshAccessToken(
-  tokenUrl: string = DEFAULT_TOKEN_URL
+  tokenUrl: string = resolveTokenUrl()
 ): Promise<OAuth2Tokens> {
   const config = getOAuthConfig();
   const currentTokens = loadOAuthTokens();
@@ -186,6 +210,7 @@ export function startCallbackServer(): Promise<AuthResult> {
         if (code) {
           try {
             const tokens = await exchangeCodeForTokens(code);
+            saveOAuthTokens(tokens);
             res.writeHead(200, { 'Content-Type': 'text/html' });
             res.end(`
               <html>
@@ -237,7 +262,7 @@ export function startCallbackServer(): Promise<AuthResult> {
  * @param bufferMs - Refresh buffer in ms (default: 5 minutes)
  */
 export async function getValidAccessToken(
-  tokenUrl: string = DEFAULT_TOKEN_URL,
+  tokenUrl: string = resolveTokenUrl(),
   bufferMs: number = 5 * 60 * 1000
 ): Promise<string> {
   const tokens = loadOAuthTokens();

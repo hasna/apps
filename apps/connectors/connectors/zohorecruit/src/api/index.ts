@@ -136,9 +136,17 @@ export class ZohoRecruit {
     jobId: string,
     data: Array<{ ids: string[]; comments?: string }>,
   ): Promise<unknown> {
-    return this.client.request(`/JobOpenings/${jobId}/associate`, {
+    return this.client.request('/Candidates/actions/associate', {
       method: 'PUT',
-      body: { data },
+      body: {
+        data: data.flatMap(item =>
+          item.ids.map(candidateId => ({
+            Candidate_ID: candidateId,
+            Job_Opening_ID: jobId,
+            Comments: item.comments,
+          })),
+        ),
+      },
     });
   }
 
@@ -153,9 +161,18 @@ export class ZohoRecruit {
     jobId: string,
     data: Array<{ ids: string[]; status: string; comments?: string }>,
   ): Promise<unknown> {
-    return this.client.request(`/JobOpenings/${jobId}/changeStatus`, {
+    return this.client.request('/Candidates/status', {
       method: 'PUT',
-      body: { data },
+      body: {
+        data: data.flatMap(item =>
+          item.ids.map(candidateId => ({
+            id: candidateId,
+            Job_Opening_ID: jobId,
+            Candidate_Status: item.status,
+            Comments: item.comments,
+          })),
+        ),
+      },
     });
   }
 
@@ -277,7 +294,8 @@ export class ZohoRecruit {
     notify_url: string;
     channel_id: string;
     events: string[];
-    token_duration?: number;
+    token?: string;
+    channel_expiry?: string;
   }): Promise<unknown> {
     return this.client.request('/actions/watch', {
       method: 'POST',
@@ -287,7 +305,8 @@ export class ZohoRecruit {
             channel_id: options.channel_id,
             events: options.events,
             notify_url: options.notify_url,
-            token: options.token_duration ? String(options.token_duration) : undefined,
+            token: options.token,
+            channel_expiry: options.channel_expiry,
           },
         ],
       },
