@@ -122,6 +122,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "llm", "open-source"],
   },
   {
+    name: "zatanna",
+    displayName: "Zatanna",
+    description: "AI workflow automation and orchestration",
+    category: "AI & ML",
+    tags: ["ai", "workflows", "automation"],
+  },
+  {
     name: "cohere",
     displayName: "Cohere",
     description: "Enterprise NLP and embeddings",
@@ -967,5 +974,19 @@ export const connectors: ConnectorMeta[] = [
     description: "AI document data extraction and automation",
     category: "AI & ML",
     tags: ["ai", "extraction", "documents"],
+  },
+  {
+    name: "zhipu-ai",
+    displayName: "Zhipu AI",
+    description: "GLM large language models via Zhipu Open Platform",
+    category: "AI & ML",
+    tags: ["ai", "llm", "glm", "zhipu"],
+  },
+  {
+    name: "youart",
+    displayName: "YouArt",
+    description: "AI originals funding and creator economy",
+    category: "AI & ML",
+    tags: ["ai", "creator-economy", "funding"],
   },
 ];
