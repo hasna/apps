@@ -164,6 +164,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["feature-flags", "experimentation"],
   },
   {
+    name: "unleash",
+    displayName: "Unleash",
+    description: "Open-source feature flag management",
+    category: "Developer Tools",
+    tags: ["feature-flags"],
+  },
+  {
     name: "abuselpdb",
     displayName: "AbuseIPDB",
     description: "IP abuse checking and threat intelligence",
