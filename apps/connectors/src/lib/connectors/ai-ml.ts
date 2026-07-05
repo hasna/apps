@@ -24,6 +24,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "llm", "grok"],
   },
   {
+    name: "xai-grok",
+    displayName: "xAI Grok",
+    description: "Grok models, Responses API, embeddings, media, files, batches, and collections",
+    category: "AI & ML",
+    tags: ["ai", "llm", "grok", "xai"],
+  },
+  {
     name: "minimax",
     displayName: "Minimax",
     description: "Video, music, image, TTS, and sound effects generation",

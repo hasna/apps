@@ -894,7 +894,7 @@ describe("CLI", () => {
       expect(data.commands).toContain("models");
     });
 
-    test("lists operations for the shipped 63 connector command surfaces", async () => {
+    test("lists operations for the shipped 64 connector command surfaces", async () => {
       const connectors = [
         "anthropic", "aws", "brandsight", "cloudflare", "discord", "docker",
         "e2b", "elevenlabs", "exa", "figma", "firecrawl", "github",
@@ -906,7 +906,7 @@ describe("CLI", () => {
         "reducto", "resend", "revolut", "sedo", "sentry", "shadcn", "shopify",
         "snap", "stabilityai", "stripe", "stripeatlas", "substack", "tiktok",
         "tinker", "twilio", "uspto", "webflow", "wix", "x", "xads", "xai",
-        "youtube", "zoom",
+        "xai-grok", "youtube", "zoom",
       ];
 
       for (const name of connectors) {

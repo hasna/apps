@@ -22,7 +22,7 @@ export const isTTY = process.stdout.isTTY ?? false;
 
 export const PRESETS: Record<string, { description: string; connectors: string[] }> = {
   fullstack: { description: "Full-stack web app essentials", connectors: ["stripe", "github", "resend", "anthropic", "figma"] },
-  ai: { description: "AI and ML models", connectors: ["anthropic", "openai", "xai", "mistral", "googlegemini", "elevenlabs"] },
+  ai: { description: "AI and ML models", connectors: ["anthropic", "openai", "xai", "xai-grok", "mistral", "googlegemini", "elevenlabs"] },
   google: { description: "Google Workspace suite", connectors: ["gmail", "googledrive", "googledocs", "googlesheets", "googlecalendar", "googletasks", "googlecontacts"] },
   social: { description: "Social media platforms", connectors: ["x", "reddit", "youtube", "tiktok", "meta", "discord", "substack"] },
   devtools: { description: "Developer tooling", connectors: ["github", "docker", "sentry", "cloudflare", "e2b", "firecrawl"] },
