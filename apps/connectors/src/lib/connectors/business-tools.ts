@@ -983,6 +983,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["agile", "scrum", "kanban"],
   },
   {
+    name: "wait",
+    displayName: "Wait",
+    description: "Delay workflow platform",
+    category: "Business Tools",
+    tags: ["productivity", "delays", "workflow"],
+  },
+  {
     name: "wekan",
     displayName: "Wekan",
     description: "Open-source Kanban board for task management",
