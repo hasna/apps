@@ -73,6 +73,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["hosting", "deployment", "serverless"],
   },
   {
+    name: "vercel-api-platform",
+    displayName: "Vercel Api Platform",
+    description: "Vercel Api Platform REST API for items, events, and search",
+    category: "Developer Tools",
+    tags: ["hosting", "api-platform", "vercel"],
+  },
+  {
     name: "netlify",
     displayName: "Netlify",
     description: "Web hosting and deployment",
