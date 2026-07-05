@@ -16,6 +16,7 @@ import {
   runtimeMetadataFromConvention,
 } from "../../runtime/runtime-conventions.js";
 import type { Server } from "../../types/index.js";
+import { redactSensitiveFields } from "../../utils/redaction.js";
 
 type Helpers = {
   shouldRegisterTool: (name: string) => boolean;
@@ -32,6 +33,7 @@ const lifecycleShape = {
   cwd: z.string().optional().describe("Override working directory for this run"),
   port: z.number().int().positive().optional(),
   health_url: z.string().url().optional(),
+  readiness_url: z.string().url().optional(),
   env: z.record(z.string()).optional().describe("Additional environment variables for the process"),
   log_file: z.string().optional(),
   wait: z.boolean().optional().default(true),
@@ -66,6 +68,7 @@ function lifecycleOptions(input: z.infer<z.ZodObject<typeof lifecycleShape>>): L
     cwd: input.cwd,
     port: input.port,
     healthUrl: input.health_url,
+    readinessUrl: input.readiness_url,
     env: input.env,
     wait: input.wait,
     waitForLock: input.wait_for_lock,
@@ -78,7 +81,7 @@ function lifecycleOptions(input: z.infer<z.ZodObject<typeof lifecycleShape>>): L
 }
 
 function jsonText(value: unknown) {
-  return { content: [{ type: "text" as const, text: JSON.stringify(value, null, 2) }] };
+  return { content: [{ type: "text" as const, text: JSON.stringify(redactSensitiveFields(value), null, 2) }] };
 }
 
 export function registerLifecycleTools(server: McpServer, { shouldRegisterTool, formatError }: Helpers): void {
@@ -94,11 +97,12 @@ export function registerLifecycleTools(server: McpServer, { shouldRegisterTool, 
         command: z.string().optional(),
         port: z.number().int().positive().optional(),
         health_url: z.string().url().optional(),
+        readiness_url: z.string().url().optional(),
         env: z.record(z.string()).optional(),
         log_file: z.string().optional(),
         force: z.boolean().optional().default(false).describe("Update an existing server with the same slug"),
       },
-      async ({ name, path, project_id, description, command, port, health_url, env, log_file, force }) => {
+      async ({ name, path, project_id, description, command, port, health_url, readiness_url, env, log_file, force }) => {
         try {
           const detected = command
             ? {
@@ -108,11 +112,12 @@ export function registerLifecycleTools(server: McpServer, { shouldRegisterTool, 
                 healthUrl: health_url,
                 metadata: { detected_from: "mcp:command" },
               }
-            : detectProjectServerConfig(path ?? process.cwd(), { port, healthUrl: health_url });
+            : detectProjectServerConfig(path ?? process.cwd(), { port, healthUrl: health_url, readinessUrl: readiness_url });
           const runtime = resolveServerRuntimeConvention({
             mode: "local",
             port: detected.port,
             healthUrl: detected.healthUrl,
+            readinessUrl: readiness_url,
             env: env ?? {},
           });
           const serverName = name ?? displayNameForServerConfig(detected.cwd);
@@ -124,7 +129,8 @@ export function registerLifecycleTools(server: McpServer, { shouldRegisterTool, 
             cwd: detected.cwd,
             port: detected.port,
             tailscale_port: detected.port,
-            health_url: detected.healthUrl,
+            health_url: runtime.healthUrl,
+            readiness_url: runtime.readinessUrl,
             env: env ?? {},
             log_file,
             configured_at: now(),

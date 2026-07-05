@@ -156,7 +156,8 @@ describe("detectProjectServerConfig", () => {
       expect(detected.command).toBe("bun run dev");
       expect(detected.cwd).toBe(dir);
       expect(detected.port).toBe(3007);
-      expect(detected.healthUrl).toBe("http://127.0.0.1:3007");
+      expect(detected.healthUrl).toBe("http://127.0.0.1:3007/health");
+      expect(detected.readinessUrl).toBe("http://127.0.0.1:3007/ready");
       expect(detected.metadata.detected_from).toContain("package.json");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -299,10 +300,71 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
       expect(started.ready).toBe(true);
       expect(started.server.status).toBe("online");
       expect(started.server.metadata.port).toBe(port);
-      expect(started.server.metadata.health_url).toBe(`http://127.0.0.1:${port}`);
+      expect(started.server.metadata.health_url).toBe(`http://127.0.0.1:${port}/health`);
+      expect(started.server.metadata.readiness_url).toBe(`http://127.0.0.1:${port}/ready`);
       expect(started.snapshot.port).toBe(port);
-      expect(started.snapshot.healthUrl).toBe(`http://127.0.0.1:${port}`);
+      expect(started.snapshot.healthUrl).toBe(`http://127.0.0.1:${port}/health`);
+      expect(started.snapshot.readinessUrl).toBe(`http://127.0.0.1:${port}/ready`);
       expect(existsSync(join(dir, "listening.txt"))).toBe(true);
+    } finally {
+      if (pid) {
+        try {
+          process.kill(-pid, "SIGKILL");
+        } catch {
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {}
+        }
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("checks readiness_url separately from health_url", async () => {
+    const dir = makeTempDir();
+    const port = await getFreePort();
+    const db = getDatabase();
+    let pid: number | undefined;
+
+    try {
+      writeFileSync(
+        join(dir, "server.js"),
+        `
+const http = require("node:http");
+const server = http.createServer((req, res) => {
+  if (req.url === "/ready") return res.end("ready");
+  res.statusCode = 503;
+  res.end("not healthy yet");
+});
+server.listen(Number(process.env.PORT), "127.0.0.1");
+process.on("SIGTERM", () => server.close(() => process.exit(0)));
+`,
+      );
+
+      const server = createServer({
+        name: "readiness-app",
+        status: "offline",
+        path: dir,
+        metadata: {
+          start_command: "exec bun run server.js",
+          cwd: dir,
+          port,
+          health_url: `http://127.0.0.1:${port}/health`,
+          readiness_url: `http://127.0.0.1:${port}/ready`,
+          env: { PORT: String(port) },
+        },
+      }, db);
+
+      const started = await startLocalServer(server.id, {
+        agentId: "agent-1",
+        wait: true,
+        readyTimeoutMs: 5000,
+      }, db);
+
+      pid = started.pid;
+      expect(started.ready).toBe(true);
+      expect(started.snapshot.healthUrl).toBe(`http://127.0.0.1:${port}/health`);
+      expect(started.snapshot.readinessUrl).toBe(`http://127.0.0.1:${port}/ready`);
     } finally {
       if (pid) {
         try {

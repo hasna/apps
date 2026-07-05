@@ -70,7 +70,7 @@ For apps that need to be reachable from other machines, make the app command bin
 
 `@hasna/servers` separates local process management from production cloud-backed runtime reporting.
 
-Local runtime records use `runtime_mode: "local"`. In this mode the package may start, stop, restart, inspect, and log a local process. The default bind/probe behavior is local-first: bind host `127.0.0.1`, probe host `127.0.0.1`, `PORT` for the managed port, `/health` for health, and `/ready` for readiness. `servers:init` writes these convention fields into server metadata while preserving the configured `health_url`.
+Local runtime records use `runtime_mode: "local"`. In this mode the package may start, stop, restart, inspect, and log a local process. The default bind/probe behavior is local-first: bind host `127.0.0.1`, probe host `127.0.0.1`, `PORT` for the managed port, `/health` for health, and `/ready` for readiness. `servers:init` writes these convention fields into server metadata and lifecycle readiness checks use `readiness_url` when present, falling back to `health_url` for older health-only records.
 
 Production cloud-backed records use `runtime_mode: "production-cloud"`. In this mode the process is owned by the hosting platform, not by `@hasna/servers`. The package records config and health/readiness metadata, but local lifecycle calls refuse to start, stop, restart, deploy, expose, or mutate production infrastructure. Use platform-owned deployment and approval workflows for live changes.
 

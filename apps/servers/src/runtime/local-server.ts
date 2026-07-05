@@ -52,12 +52,14 @@ export interface DetectedProjectServerConfig {
   cwd: string;
   port?: number;
   healthUrl?: string;
+  readinessUrl?: string;
   metadata: Record<string, unknown>;
 }
 
 export interface DetectProjectServerOptions {
   port?: number;
   healthUrl?: string;
+  readinessUrl?: string;
 }
 
 export interface LocalServerSnapshot {
@@ -69,6 +71,7 @@ export interface LocalServerSnapshot {
   cwd: string | null;
   port: number | null;
   healthUrl: string | null;
+  readinessUrl: string | null;
   logFile: string | null;
   checkedAt: string;
   details: Record<string, unknown>;
@@ -82,6 +85,7 @@ export interface LocalLifecycleOptions {
   cwd?: string;
   port?: number;
   healthUrl?: string;
+  readinessUrl?: string;
   env?: Record<string, string>;
   wait?: boolean;
   waitForLock?: boolean;
@@ -105,6 +109,7 @@ interface ResolvedLifecycleConfig {
   cwd: string;
   port?: number;
   healthUrl?: string;
+  readinessUrl?: string;
   env: Record<string, string>;
   logFile: string;
   readyTimeoutMs: number;
@@ -120,6 +125,7 @@ function serverRuntimeConvention(
     env: { ...envValue(server.metadata.env), ...(opts.env ?? {}) },
     port: opts.port,
     healthUrl: opts.healthUrl,
+    readinessUrl: opts.readinessUrl,
   });
 }
 
@@ -174,7 +180,11 @@ function metadataPort(metadata: Record<string, unknown>, env = envValue(metadata
 }
 
 function defaultHealthUrl(port?: number): string | undefined {
-  return port ? `http://127.0.0.1:${port}` : undefined;
+  return resolveServerRuntimeConvention({ port, env: {} }).healthUrl ?? undefined;
+}
+
+function defaultReadinessUrl(port?: number): string | undefined {
+  return resolveServerRuntimeConvention({ port, env: {} }).readinessUrl ?? undefined;
 }
 
 function packageManagerCommand(cwd: string, script: "dev" | "start"): string {
@@ -191,6 +201,7 @@ export function detectProjectServerConfig(
 ): DetectedProjectServerConfig {
   const cwd = resolve(startDir);
   const healthUrl = options.healthUrl ?? defaultHealthUrl(options.port);
+  const readinessUrl = options.readinessUrl ?? (options.healthUrl ? healthUrl : defaultReadinessUrl(options.port));
 
   const packageJson = join(cwd, "package.json");
   if (existsSync(packageJson)) {
@@ -202,6 +213,7 @@ export function detectProjectServerConfig(
           cwd,
           port: options.port,
           healthUrl,
+          readinessUrl,
           metadata: { detected_from: "package.json:scripts.dev", script: pkg.scripts.dev },
         };
       }
@@ -211,6 +223,7 @@ export function detectProjectServerConfig(
           cwd,
           port: options.port,
           healthUrl,
+          readinessUrl,
           metadata: { detected_from: "package.json:scripts.start", script: pkg.scripts.start },
         };
       }
@@ -224,6 +237,7 @@ export function detectProjectServerConfig(
       cwd,
       port,
       healthUrl: options.healthUrl ?? defaultHealthUrl(port),
+      readinessUrl: options.readinessUrl ?? (options.healthUrl ? options.healthUrl : defaultReadinessUrl(port)),
       metadata: { detected_from: "manage.py" },
     };
   }
@@ -235,6 +249,7 @@ export function detectProjectServerConfig(
       cwd,
       port,
       healthUrl: options.healthUrl ?? defaultHealthUrl(port),
+      readinessUrl: options.readinessUrl ?? (options.healthUrl ? options.healthUrl : defaultReadinessUrl(port)),
       metadata: { detected_from: existsSync(join(cwd, "pyproject.toml")) ? "pyproject.toml" : "requirements.txt" },
     };
   }
@@ -245,6 +260,7 @@ export function detectProjectServerConfig(
       cwd,
       port: options.port,
       healthUrl,
+      readinessUrl,
       metadata: { detected_from: "Cargo.toml" },
     };
   }
@@ -255,6 +271,7 @@ export function detectProjectServerConfig(
       cwd,
       port: options.port,
       healthUrl,
+      readinessUrl,
       metadata: { detected_from: "go.mod" },
     };
   }
@@ -265,6 +282,7 @@ export function detectProjectServerConfig(
       cwd,
       port: options.port,
       healthUrl,
+      readinessUrl,
       metadata: { detected_from: "docker compose" },
     };
   }
@@ -299,7 +317,14 @@ function resolveLifecycleConfig(server: Server, opts: LocalLifecycleOptions = {}
 
   const env = { ...envValue(server.metadata.env), ...(opts.env ?? {}) };
   const port = portValue(opts.port) ?? metadataPort(server.metadata, env);
-  const healthUrl = opts.healthUrl ?? stringValue(server.metadata.health_url) ?? defaultHealthUrl(port);
+  const metadataHealthUrl = stringValue(server.metadata.health_url);
+  const healthUrl = opts.healthUrl ?? metadataHealthUrl ?? runtime.healthUrl ?? defaultHealthUrl(port);
+  const readinessUrl = opts.readinessUrl
+    ?? stringValue(server.metadata.readiness_url)
+    ?? (opts.healthUrl ? opts.healthUrl : undefined)
+    ?? (metadataHealthUrl ? healthUrl : undefined)
+    ?? runtime.readinessUrl
+    ?? healthUrl;
   const logFile = resolve(
     opts.logFile
       ?? stringValue(server.metadata.log_file)
@@ -311,6 +336,7 @@ function resolveLifecycleConfig(server: Server, opts: LocalLifecycleOptions = {}
     cwd,
     port,
     healthUrl,
+    readinessUrl,
     env,
     logFile,
     readyTimeoutMs: opts.readyTimeoutMs ?? numberValue(server.metadata.ready_timeout_ms) ?? DEFAULT_READY_TIMEOUT_MS,
@@ -384,13 +410,21 @@ export async function getLocalServerSnapshot(
 ): Promise<LocalServerSnapshot> {
   const timeoutMs = options.timeoutMs ?? 1000;
   const pid = numberValue(server.metadata.pid) ?? null;
-  const port = metadataPort(server.metadata) ?? null;
-  const healthUrl = stringValue(server.metadata.health_url) ?? defaultHealthUrl(port ?? undefined) ?? null;
-  const running = isProcessRunning(pid);
   const runtime = serverRuntimeConvention(server);
+  const port = runtime.port;
+  const metadataHealthUrl = stringValue(server.metadata.health_url);
+  const healthUrl = metadataHealthUrl ?? runtime.healthUrl ?? defaultHealthUrl(port ?? undefined) ?? null;
+  const readinessUrl = stringValue(server.metadata.readiness_url)
+    ?? (metadataHealthUrl ? healthUrl : undefined)
+    ?? runtime.readinessUrl
+    ?? healthUrl
+    ?? null;
+  const running = isProcessRunning(pid);
   let ready = false;
 
-  if (healthUrl) {
+  if (readinessUrl) {
+    ready = await checkHealthUrl(readinessUrl, timeoutMs);
+  } else if (healthUrl) {
     ready = await checkHealthUrl(healthUrl, timeoutMs);
   } else if (port) {
     ready = await checkTcpPort(port, timeoutMs);
@@ -407,6 +441,7 @@ export async function getLocalServerSnapshot(
     cwd: stringValue(server.metadata.cwd) ?? server.path,
     port,
     healthUrl,
+    readinessUrl,
     logFile: stringValue(server.metadata.log_file) ?? null,
     checkedAt: now(),
     details: { runtime },
@@ -569,6 +604,7 @@ function operationMetadata(
     cwd: config?.cwd,
     port: config?.port,
     health_url: config?.healthUrl,
+    readiness_url: config?.readinessUrl,
     requested_at: now(),
   };
 }
@@ -651,6 +687,7 @@ export async function startLocalServer(
         cwd: config.cwd,
         port: config.port,
         health_url: config.healthUrl,
+        readiness_url: config.readinessUrl,
         env: config.env,
         pid,
         log_file: config.logFile,
@@ -683,7 +720,7 @@ export async function startLocalServer(
       operation_id: operation.id,
       agent_id: agentId,
       event: "server.started",
-      details: { pid, ready: snapshot.ready, health_url: config.healthUrl, log_file: config.logFile },
+      details: { pid, ready: snapshot.ready, health_url: config.healthUrl, readiness_url: config.readinessUrl, log_file: config.logFile },
     }, db);
     const completed = completeOperation(operation.id, db);
     return { server: updated, operation: completed, snapshot, pid, ready: snapshot.ready };
@@ -878,6 +915,7 @@ export async function restartLocalServer(
         cwd: config.cwd,
         port: config.port,
         health_url: config.healthUrl,
+        readiness_url: config.readinessUrl,
         env: config.env,
         pid: newPid,
         log_file: config.logFile,
