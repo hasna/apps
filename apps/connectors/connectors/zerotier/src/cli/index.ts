@@ -38,8 +38,13 @@ program
   });
 
 function getFormat(cmd: Command): OutputFormat {
-  const parent = cmd.parent;
-  return (parent?.opts().format || 'pretty') as OutputFormat;
+  let current: Command | null = cmd;
+  while (current) {
+    const format = current.opts().format;
+    if (format) return format as OutputFormat;
+    current = current.parent;
+  }
+  return 'pretty';
 }
 
 function getClient(): ZeroTier {
@@ -48,7 +53,7 @@ function getClient(): ZeroTier {
     error(`No API key configured. Run "${CONNECTOR_NAME} config set-key <key>" or set ZEROTIER_API_KEY`);
     process.exit(1);
   }
-  return new ZeroTier({ apiKey });
+  return new ZeroTier({ apiKey, baseUrl: process.env.ZEROTIER_BASE_URL });
 }
 
 // Profile Commands
