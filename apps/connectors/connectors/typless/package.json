@@ -6,6 +6,11 @@
   "bin": {
     "connect-typless": "./bin/index.js"
   },
+  "files": [
+    "bin/",
+    "dist/",
+    "README.md"
+  ],
   "exports": {
     ".": {
       "import": "./dist/index.js",

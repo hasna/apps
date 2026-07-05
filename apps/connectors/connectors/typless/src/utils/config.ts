@@ -35,6 +35,22 @@ function writePrivateFile(path: string, content: string): void {
   hardenPath(path, PRIVATE_FILE_MODE);
 }
 
+function hardenExistingConfigFiles(): void {
+  if (existsSync(CURRENT_PROFILE_FILE)) {
+    hardenPath(CURRENT_PROFILE_FILE, PRIVATE_FILE_MODE);
+  }
+
+  try {
+    for (const file of readdirSync(PROFILES_DIR)) {
+      if (file.endsWith('.json')) {
+        hardenPath(join(PROFILES_DIR, file), PRIVATE_FILE_MODE);
+      }
+    }
+  } catch {
+    // Missing or unreadable profile directories are handled by callers.
+  }
+}
+
 // ============================================
 // Profile Management
 // ============================================
@@ -53,6 +69,7 @@ export function ensureConfigDir(): void {
     mkdirSync(PROFILES_DIR, { recursive: true, mode: PRIVATE_DIR_MODE });
   }
   hardenPath(PROFILES_DIR, PRIVATE_DIR_MODE);
+  hardenExistingConfigFiles();
 }
 
 function getProfilePath(profile: string): string {
