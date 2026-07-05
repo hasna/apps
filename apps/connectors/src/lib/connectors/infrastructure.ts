@@ -86,4 +86,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Infrastructure",
     tags: ["monitoring", "uptime", "performance", "alerts", "website"],
   },
+  {
+    name: "updown-io",
+    displayName: "updown.io",
+    description: "Simple and inexpensive website uptime monitoring",
+    category: "Infrastructure",
+    tags: ["monitoring", "uptime", "status", "alerts", "website"],
+  },
 ];
