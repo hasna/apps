@@ -1,9 +1,10 @@
-import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { AgentTarget, CreateWorkflowInput, WorkflowStepInput } from "../types.js";
+import { prHandoffCommand } from "./template-kit.js";
 import {
   BOUNDED_AGENT_WORKER_VERIFIER_TEMPLATE_ID,
   DETERMINISTIC_CHECK_CREATE_TASK_TEMPLATE_ID,
@@ -616,5 +617,151 @@ describe("builtin rendered workflow snapshots", () => {
 
   test("builtin template summaries", () => {
     expect(JSON.stringify(listLoopTemplates({ source: "builtin" }), null, 2)).toMatchSnapshot();
+  });
+});
+
+describe("pr-handoff no-artifact / direct-PR path", () => {
+  // Structural neutralization guard (portable, env-independent): the command
+  // runs under `bash -lc` (a login shell). If it `exit`s explicitly while
+  // `set -e` is active and ~/.bash_logout fails (clear_console with no TTY when
+  // the daemon runs under systemd with SHLVL=1), bash hands back the failing
+  // logout status instead of the intended 0 — the exact production bug that
+  // failed the step and skipped the verifier. Both branches must fall through
+  // to the natural end of the `if` instead. Reverting to `exit 0` reintroduces
+  // a top-level `exit` and fails this assertion.
+  test("generated command never exits the login shell explicitly and detects a worker-opened PR", () => {
+    const command = prHandoffCommand({
+      artifactPath: "/tmp/none.json",
+      taskId: "t-1",
+      todosProjectPath: "/srv/todos",
+      worktreeCwd: "/srv/wt",
+      worktreeRoot: "/srv/wt",
+      expectedBranch: "feat/x",
+    });
+    expect(command).not.toMatch(/^\s*exit\b/m);
+    // No-artifact branch detects the worker-opened PR by head branch...
+    expect(command).toContain("'pr', 'list', '--head', branch, '--state', 'open'");
+    // ...and records the same done marker the artifact path records.
+    expect(command).toContain("openloops:pr-handoff=done task=${taskId} pr=${pr.url}");
+    // Artifact (codewith-style) path is preserved unchanged.
+    expect(command).toContain("bun - <<'BUN'");
+  });
+
+  test("no-artifact path detects the worker PR, records the done comment, and exits 0 under a login shell whose ~/.bash_logout fails", () => {
+    const home = mkdtempSync(join(tmpdir(), "loops-prh-home-"));
+    const bin = mkdtempSync(join(tmpdir(), "loops-prh-bin-"));
+    const wt = mkdtempSync(join(tmpdir(), "loops-prh-wt-"));
+    try {
+      // A login shell sources ~/.bash_logout on exit; a failing command there
+      // reproduces the production corruption for explicit `exit` under `set -e`.
+      writeFileSync(join(home, ".bash_logout"), "false\n");
+      execFileSync("git", ["init", "-q", wt]);
+      execFileSync("git", ["-C", wt, "config", "user.email", "t@t"]);
+      execFileSync("git", ["-C", wt, "config", "user.name", "t"]);
+      execFileSync("git", ["-C", wt, "commit", "-q", "--allow-empty", "-m", "init"]);
+      execFileSync("git", ["-C", wt, "checkout", "-q", "-b", "feat/direct-pr"]);
+      execFileSync("git", ["-C", wt, "commit", "-q", "--allow-empty", "-m", "work"]);
+      const head = execFileSync("git", ["-C", wt, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+      const gh = join(bin, "gh");
+      writeFileSync(
+        gh,
+        [
+          "#!/usr/bin/env bash",
+          'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then',
+          `  printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/7","number":7,"headRefName":"feat/direct-pr","headRefOid":"${head}"}]'`,
+          "  exit 0",
+          "fi",
+          "exit 0",
+        ].join("\n"),
+      );
+      chmodSync(gh, 0o755);
+
+      const cap = join(bin, "todos.cap");
+      const todos = join(bin, "todos");
+      writeFileSync(todos, ["#!/usr/bin/env bash", `printf '%s\\0' "$@" >> ${JSON.stringify(cap)}`, "exit 0"].join("\n"));
+      chmodSync(todos, 0o755);
+
+      const command = prHandoffCommand({
+        artifactPath: join(wt, ".openloops", "pr-handoff", "missing.json"),
+        taskId: "task-direct-pr",
+        todosProjectPath: wt,
+        worktreeCwd: wt,
+        worktreeRoot: wt,
+        expectedBranch: "feat/direct-pr",
+      });
+
+      const env = {
+        HOME: home,
+        PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+        OPENLOOPS_PR_HANDOFF_GH_BIN: gh,
+        OPENLOOPS_PR_HANDOFF_TODOS_BIN: todos,
+        OPENLOOPS_PR_HANDOFF_GIT_BIN: "git",
+      };
+      // Canary: confirm this env reproduces the login-shell exit-code corruption
+      // for an explicit `exit 0` (so the assertions below are neutralization-provable).
+      const canary = spawnSync("bash", ["-lc", "set -e; printf x; exit 0"], { env, encoding: "utf8" });
+
+      const result = spawnSync("bash", ["-lc", command], { env, cwd: wt, encoding: "utf8" });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("no PR handoff artifact at");
+      const captured = existsSync(cap) ? readFileSync(cap, "utf8") : "";
+      expect(captured).toContain("openloops:pr-handoff=done");
+      expect(captured).toContain("pr=https://github.com/acme/repo/pull/7");
+      expect(captured).toContain("branch=feat/direct-pr");
+      // On envs that reproduce the corruption (canary === 1) the pre-fix explicit
+      // `exit 0` would have surfaced here as exit 1; the fix keeps it at 0.
+      if (canary.status === 1) expect(result.status).toBe(0);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(bin, { recursive: true, force: true });
+      rmSync(wt, { recursive: true, force: true });
+    }
+  });
+
+  test("no-artifact path is tolerant: exits 0 and records no done comment when the worker opened no PR", () => {
+    const home = mkdtempSync(join(tmpdir(), "loops-prh-home-"));
+    const bin = mkdtempSync(join(tmpdir(), "loops-prh-bin-"));
+    const wt = mkdtempSync(join(tmpdir(), "loops-prh-wt-"));
+    try {
+      writeFileSync(join(home, ".bash_logout"), "false\n");
+      execFileSync("git", ["init", "-q", wt]);
+      execFileSync("git", ["-C", wt, "config", "user.email", "t@t"]);
+      execFileSync("git", ["-C", wt, "config", "user.name", "t"]);
+      execFileSync("git", ["-C", wt, "commit", "-q", "--allow-empty", "-m", "init"]);
+      execFileSync("git", ["-C", wt, "checkout", "-q", "-b", "feat/direct-pr"]);
+
+      const gh = join(bin, "gh");
+      writeFileSync(gh, ["#!/usr/bin/env bash", 'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then printf %s "[]"; fi', "exit 0"].join("\n"));
+      chmodSync(gh, 0o755);
+      const cap = join(bin, "todos.cap");
+      const todos = join(bin, "todos");
+      writeFileSync(todos, ["#!/usr/bin/env bash", `printf '%s\\0' "$@" >> ${JSON.stringify(cap)}`, "exit 0"].join("\n"));
+      chmodSync(todos, 0o755);
+
+      const command = prHandoffCommand({
+        artifactPath: join(wt, ".openloops", "pr-handoff", "missing.json"),
+        taskId: "task-no-pr",
+        todosProjectPath: wt,
+        worktreeCwd: wt,
+        worktreeRoot: wt,
+        expectedBranch: "feat/direct-pr",
+      });
+      const env = {
+        HOME: home,
+        PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+        OPENLOOPS_PR_HANDOFF_GH_BIN: gh,
+        OPENLOOPS_PR_HANDOFF_TODOS_BIN: todos,
+        OPENLOOPS_PR_HANDOFF_GIT_BIN: "git",
+      };
+      const result = spawnSync("bash", ["-lc", command], { env, cwd: wt, encoding: "utf8" });
+      expect(result.status).toBe(0);
+      const captured = existsSync(cap) ? readFileSync(cap, "utf8") : "";
+      expect(captured).not.toContain("openloops:pr-handoff=done");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(bin, { recursive: true, force: true });
+      rmSync(wt, { recursive: true, force: true });
+    }
   });
 });
