@@ -549,6 +549,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["meetings", "video", "transcription"],
   },
   {
+    name: "waboxapp",
+    displayName: "WaboxApp",
+    description: "WhatsApp chat, image, link, and media messaging",
+    category: "Communication",
+    tags: ["whatsapp", "messaging", "crm", "api"],
+  },
+  {
     name: "webexbycisco",
     displayName: "Webex by Cisco",
     description: "Video conferencing, messaging, and team collaboration",
