@@ -22,6 +22,18 @@ describe("loop health classification", () => {
     const cases: Array<[RunFailureClassification, Partial<LoopRun>]> = [
       ["rate_limit", { error: "429 too many requests" }],
       ["auth", { stderr: "invalid token" }],
+      [
+        "auth",
+        {
+          stdout: JSON.stringify({
+            type: "result",
+            subtype: "success",
+            is_error: true,
+            api_error_status: null,
+            result: "Not logged in \u00b7 Please run /login",
+          }),
+        },
+      ],
       ["model_not_found", { error: "model gpt-x not found" }],
       ["context_length", { stderr: "maximum context length exceeded" }],
       ["schema_response_format", { error: "response_format json schema validation failed" }],
