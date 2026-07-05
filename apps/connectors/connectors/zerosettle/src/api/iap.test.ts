@@ -62,4 +62,18 @@ describe('IapApi', () => {
       body: { enabled: true },
     });
   });
+
+  test('rawRequest forwards DELETE bodies', async () => {
+    await iap.rawRequest({
+      path: '/v1/iap/custom/',
+      method: 'DELETE',
+      body: { reason: 'duplicate' },
+    });
+
+    expect(captured[0]).toEqual({
+      method: 'DELETE',
+      url: 'https://api.zerosettle.io/v1/iap/custom/',
+      body: { reason: 'duplicate' },
+    });
+  });
 });

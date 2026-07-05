@@ -1,21 +1,29 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { DEFAULT_BASE_URL } from '../api/client';
 
 const CONNECTOR_NAME = 'connect-zerosettle';
+const CONFIG_NAME = 'zerosettle';
 const DEFAULT_PROFILE = 'default';
+const CONNECTORS_HOME = process.env.HASNA_CONNECTORS_DIR ?? join(homedir(), '.hasna', 'connectors');
 
 export interface ProfileConfig {
   publishableKey?: string;
+  apiKey?: string;
   baseUrl?: string;
 }
 
 let profileOverride: string | undefined;
 
-const CONFIG_DIR = join(homedir(), '.hasna', 'connectors', CONNECTOR_NAME);
+const CONFIG_DIR = join(CONNECTORS_HOME, CONFIG_NAME);
+const LEGACY_CONFIG_DIR = join(CONNECTORS_HOME, CONNECTOR_NAME);
 const PROFILES_DIR = join(CONFIG_DIR, 'profiles');
 const CURRENT_PROFILE_FILE = join(CONFIG_DIR, 'current_profile');
+
+function getConfigReadDirs(): string[] {
+  return CONFIG_DIR === LEGACY_CONFIG_DIR ? [CONFIG_DIR] : [CONFIG_DIR, LEGACY_CONFIG_DIR];
+}
 
 export function setProfileOverride(profile: string | undefined): void {
   profileOverride = profile;
@@ -34,6 +42,29 @@ function getProfilePath(profile: string): string {
   return join(PROFILES_DIR, `${profile}.json`);
 }
 
+function getProfileReadPaths(profile: string): string[] {
+  return getConfigReadDirs().flatMap((dir) => [
+    join(dir, 'profiles', `${profile}.json`),
+    join(dir, 'profiles', profile, 'config.json'),
+  ]);
+}
+
+function getExistingProfilePath(profile: string): string | undefined {
+  return getProfileReadPaths(profile).find((path) => existsSync(path));
+}
+
+function readProfileNameFrom(dir: string): string | undefined {
+  const currentProfileFile = join(dir, 'current_profile');
+  if (!existsSync(currentProfileFile)) {
+    return undefined;
+  }
+  try {
+    return readFileSync(currentProfileFile, 'utf-8').trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function getCurrentProfile(): string {
   if (profileOverride) {
     return profileOverride;
@@ -41,14 +72,10 @@ export function getCurrentProfile(): string {
 
   ensureConfigDir();
 
-  if (existsSync(CURRENT_PROFILE_FILE)) {
-    try {
-      const profile = readFileSync(CURRENT_PROFILE_FILE, 'utf-8').trim();
-      if (profile && profileExists(profile)) {
-        return profile;
-      }
-    } catch {
-      // fall through
+  for (const dir of getConfigReadDirs()) {
+    const profile = readProfileNameFrom(dir);
+    if (profile && profileExists(profile)) {
+      return profile;
     }
   }
 
@@ -66,20 +93,34 @@ export function setCurrentProfile(profile: string): void {
 }
 
 export function profileExists(profile: string): boolean {
-  return existsSync(getProfilePath(profile));
+  return getProfileReadPaths(profile).some((path) => existsSync(path));
 }
 
 export function listProfiles(): string[] {
   ensureConfigDir();
 
-  if (!existsSync(PROFILES_DIR)) {
-    return [];
+  const profiles = new Set<string>();
+
+  for (const dir of getConfigReadDirs()) {
+    const profilesDir = join(dir, 'profiles');
+    if (!existsSync(profilesDir)) {
+      continue;
+    }
+    for (const entry of readdirSync(profilesDir)) {
+      const fullPath = join(profilesDir, entry);
+      try {
+        if (entry.endsWith('.json')) {
+          profiles.add(entry.replace(/\.json$/, ''));
+        } else if (statSync(fullPath).isDirectory()) {
+          profiles.add(entry);
+        }
+      } catch {
+        // Ignore entries that disappear during listing.
+      }
+    }
   }
 
-  return readdirSync(PROFILES_DIR)
-    .filter((f) => f.endsWith('.json'))
-    .map((f) => f.replace('.json', ''))
-    .sort();
+  return [...profiles].sort();
 }
 
 export function createProfile(profile: string, config: ProfileConfig = {}): boolean {
@@ -102,7 +143,8 @@ export function deleteProfile(profile: string): boolean {
     return false;
   }
 
-  if (!profileExists(profile)) {
+  const profilePath = getExistingProfilePath(profile);
+  if (!profilePath) {
     return false;
   }
 
@@ -110,24 +152,26 @@ export function deleteProfile(profile: string): boolean {
     setCurrentProfile(DEFAULT_PROFILE);
   }
 
-  rmSync(getProfilePath(profile));
+  rmSync(profilePath, { recursive: true, force: true });
   return true;
 }
 
 export function loadProfile(profile?: string): ProfileConfig {
   ensureConfigDir();
   const profileName = profile || getCurrentProfile();
-  const profilePath = getProfilePath(profileName);
 
-  if (!existsSync(profilePath)) {
-    return {};
+  for (const profilePath of getProfileReadPaths(profileName)) {
+    if (!existsSync(profilePath)) {
+      continue;
+    }
+    try {
+      return JSON.parse(readFileSync(profilePath, 'utf-8')) as ProfileConfig;
+    } catch {
+      return {};
+    }
   }
 
-  try {
-    return JSON.parse(readFileSync(profilePath, 'utf-8')) as ProfileConfig;
-  } catch {
-    return {};
-  }
+  return {};
 }
 
 export function saveProfile(config: ProfileConfig, profile?: string): void {
@@ -137,12 +181,14 @@ export function saveProfile(config: ProfileConfig, profile?: string): void {
 }
 
 export function getPublishableKey(): string | undefined {
-  return process.env.ZEROSETTLE_PUBLISHABLE_KEY || loadProfile().publishableKey;
+  const profile = loadProfile();
+  return process.env.ZEROSETTLE_PUBLISHABLE_KEY || process.env.ZEROSETTLE_API_KEY || profile.publishableKey || profile.apiKey;
 }
 
 export function setPublishableKey(publishableKey: string): void {
   const config = loadProfile();
   config.publishableKey = publishableKey;
+  config.apiKey = publishableKey;
   saveProfile(config);
 }
 

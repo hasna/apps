@@ -56,7 +56,7 @@ export class ZeroSettleClient {
       headers: requestHeaders,
     };
 
-    if (body && ['POST', 'PUT', 'PATCH'].includes(method)) {
+    if (body !== undefined && !['GET', 'HEAD'].includes(method)) {
       requestHeaders['Content-Type'] = 'application/json';
       fetchOptions.body = JSON.stringify(body);
     }

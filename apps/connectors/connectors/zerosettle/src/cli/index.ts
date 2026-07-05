@@ -48,8 +48,8 @@ program
   });
 
 function getFormat(cmd: Command): OutputFormat {
-  const parent = cmd.parent;
-  return (parent?.opts().format || 'pretty') as OutputFormat;
+  const root = cmd.parent ?? cmd;
+  return (root.opts().format || 'pretty') as OutputFormat;
 }
 
 function getClient(): ZeroSettle {
@@ -61,6 +61,11 @@ function getClient(): ZeroSettle {
     process.exit(1);
   }
   return new ZeroSettle({ publishableKey, baseUrl: getBaseUrl() });
+}
+
+function getProfileKeyPreview(config: { publishableKey?: string; apiKey?: string }): string | undefined {
+  const key = config.publishableKey || config.apiKey;
+  return key ? `${key.substring(0, 8)}...` : undefined;
 }
 
 function bodyFromOptions(opts: Record<string, unknown>, exclude: string[] = []): Record<string, unknown> {
@@ -149,8 +154,9 @@ profileCmd
     const profileName = name || getCurrentProfile();
     const config = loadProfile(profileName);
     const active = getCurrentProfile();
+    const keyPreview = getProfileKeyPreview(config);
     console.log(chalk.bold(`Profile: ${profileName}${profileName === active ? chalk.green(' (active)') : ''}`));
-    info(`Publishable key: ${config.publishableKey ? `${config.publishableKey.substring(0, 8)}...` : chalk.gray('not set')}`);
+    info(`Publishable key: ${keyPreview || chalk.gray('not set')}`);
     info(`Base URL: ${config.baseUrl || chalk.gray('default')}`);
   });
 

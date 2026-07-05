@@ -100,6 +100,25 @@ describe('ZeroSettleClient', () => {
       expect(options.body).toBe(JSON.stringify(body));
     });
 
+    test('request() sends JSON body with DELETE', async () => {
+      global.fetch = mock(() =>
+        Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' }),
+          text: () => Promise.resolve('{"ok":true}'),
+        } as Response),
+      ) as unknown as typeof fetch;
+
+      const body = { reason: 'duplicate' };
+      await client.request('/v1/iap/custom/', { method: 'DELETE', body });
+
+      const [, options] = (global.fetch as unknown as ReturnType<typeof mock>).mock.calls[0];
+      expect(options.method).toBe('DELETE');
+      expect(options.headers['Content-Type']).toBe('application/json');
+      expect(options.body).toBe(JSON.stringify(body));
+    });
+
     test('throws ZeroSettleApiError on error responses', async () => {
       global.fetch = mock(() =>
         Promise.resolve({
