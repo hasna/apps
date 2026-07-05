@@ -18,6 +18,36 @@ function runCli(dataDir: string, args: string[], input?: string, env: Record<str
   });
 }
 
+function isolatedRouteEnv(dataDir: string, env: Record<string, string> = {}): Record<string, string> {
+  const eventsDir = join(dataDir, "events");
+  const todosDbPath = join(dataDir, "todos", "todos.db");
+  mkdirSync(eventsDir, { recursive: true });
+  mkdirSync(dirname(todosDbPath), { recursive: true });
+  return { HASNA_EVENTS_DIR: eventsDir, TODOS_DB_PATH: todosDbPath, LOOPS_LOOP_NAME: "", ...env };
+}
+
+function fakeTodosReadyBin(dataDir: string): string {
+  const binDir = join(dataDir, "bin");
+  mkdirSync(binDir, { recursive: true });
+  const todosBin = join(binDir, "todos");
+  writeFileSync(
+    todosBin,
+    [
+      "#!/usr/bin/env bash",
+      "for arg in \"$@\"; do",
+      "  if [[ \"$arg\" == \"--version\" ]]; then printf 'fake-todos\\n'; exit 0; fi",
+      "  if [[ \"$arg\" == \"task-lists\" ]]; then printf '[]\\n'; exit 0; fi",
+      "  if [[ \"$arg\" == \"ready\" ]]; then printf '%s\\n' \"$TODOS_READY_JSON\"; exit 0; fi",
+      "done",
+      "printf 'fake todos did not handle: %s\\n' \"$*\" >&2",
+      "exit 2",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(todosBin, 0o755);
+  return binDir;
+}
+
 let templateDb: string | undefined;
 
 /**
@@ -3589,6 +3619,307 @@ describe("loops CLI", () => {
     expect(secondValue.deduped).toBe(true);
     expect(secondValue.idempotencyKey).toBe(firstValue.idempotencyKey);
     expect(secondValue.loop.id).toBe(firstValue.loop.id);
+  });
+
+  test("todos task drain smoke admits one task-lifecycle workflow for a disposable repo and dedupes replay", () => {
+    const dataDir = freshDataDir("loops-cli-task-lifecycle-smoke-");
+    const repo = createGitRepoIn(dataDir, "repo-");
+    const binDir = fakeTodosReadyBin(dataDir);
+    const evidenceDir = join(dataDir, "evidence");
+    const todosProject = join(dataDir, "todos-project");
+    const ready = [
+      {
+        id: "task-lifecycle-smoke-one",
+        title: "Route disposable repo task",
+        description: [
+          "Objective: prove the task lifecycle route is hermetic.",
+          `Repository/project: ${repo}`,
+          "Routing metadata:",
+          "  route_enabled: true",
+          "  automation.allowed: true",
+          "  automation.mode: auto",
+          "  workflow: task-lifecycle",
+          "  worktree_mode: required",
+        ].join("\n"),
+        status: "pending",
+        working_dir: repo,
+        project_path: repo,
+        tags: ["auto:route", "repo:open-loops", "task-lifecycle"],
+        metadata: {
+          route_enabled: true,
+          automation: { allowed: true, mode: "auto" },
+          workflow: "task-lifecycle",
+          worktree_mode: "required",
+          project_group: "oss",
+          auth_profile_pool: "account004,account005",
+        },
+      },
+    ];
+    const env = isolatedRouteEnv(dataDir, {
+      PATH: `${binDir}:/usr/bin:/bin`,
+      TODOS_READY_JSON: JSON.stringify(ready),
+    });
+    const args = [
+      "--json",
+      "events",
+      "drain",
+      "todos-task",
+      "--todos-project",
+      todosProject,
+      "--limit",
+      "10",
+      "--max-dispatch",
+      "5",
+      "--template",
+      "task-lifecycle",
+      "--provider",
+      "codewith",
+      "--auth-profile-pool",
+      "account004,account005",
+      "--sandbox",
+      "workspace-write",
+      "--permission-mode",
+      "bypass",
+      "--worktree-mode",
+      "required",
+      "--worktree-root",
+      join(dataDir, "worktrees"),
+      "--project-group",
+      "oss",
+      "--pr-handoff",
+      "--evidence-dir",
+      evidenceDir,
+      "--compact",
+    ];
+
+    const first = runCli(dataDir, args, undefined, env);
+    expect(first.status).toBe(0);
+    const firstValue = JSON.parse(first.stdout);
+    expect(firstValue).toMatchObject({
+      scanned: 1,
+      considered: 1,
+      created: 1,
+      deduped: 0,
+      skipped: 0,
+      templateId: "task-lifecycle",
+      todosProject,
+    });
+    expect(firstValue.results).toHaveLength(1);
+    expect(firstValue.results[0]).toMatchObject({
+      kind: "created",
+      taskId: "task-lifecycle-smoke-one",
+      providerRouting: { provider: "codewith" },
+      routeScope: "todos-task",
+    });
+    expect(firstValue.evidencePath).toContain(evidenceDir);
+    expect(existsSync(firstValue.evidencePath)).toBe(true);
+    const evidence = JSON.parse(readFileSync(firstValue.evidencePath, "utf8"));
+    expect(evidence.results[0].workflow.steps.map((step: { id: string }) => step.id)).toEqual([
+      "source-task-gate",
+      "triage",
+      "triage-gate",
+      "planner",
+      "planner-gate",
+      "worker",
+      "pr-handoff",
+      "verifier",
+    ]);
+
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      const items = store.listWorkflowWorkItems({ routeKey: "todos-task" });
+      expect(items).toHaveLength(1);
+      expect(items[0]).toMatchObject({
+        status: "admitted",
+        idempotencyKey: "todos-task:task-lifecycle-smoke-one",
+        projectGroup: "oss",
+      });
+      expect(items[0]!.projectKey).toBeDefined();
+      expect(testPath(items[0]!.projectKey!)).toBe(testPath(repo));
+      const loops = store.listLoops({ includeArchived: true });
+      const workflows = store.listWorkflows();
+      expect(loops).toHaveLength(1);
+      expect(workflows).toHaveLength(1);
+      const workflow = workflows[0]!;
+      const agentSteps = agentStepsOf(workflow as { steps: TestWorkflowStep[] });
+      expect(agentSteps.map((step) => step.id)).toEqual(["triage", "planner", "worker", "verifier"]);
+      const worker = agentSteps.find((step) => step.id === "worker")!;
+      const verifier = agentSteps.find((step) => step.id === "verifier")!;
+      expect(worker.target.worktree).toMatchObject({ enabled: true, mode: "required" });
+      expect(testPath(worker.target.worktree.originalCwd)).toBe(testPath(repo));
+      expect(testPath(worker.target.worktree.repoRoot)).toBe(testPath(repo));
+      expect(verifier.target.worktree.path).toBe(worker.target.worktree.path);
+      expect(worker.target.cwd).toBe(worker.target.worktree.cwd);
+      expect(verifier.target.cwd).toBe(worker.target.worktree.cwd);
+      expect(new Set(authProfilesOf(workflow as { steps: TestWorkflowStep[] }))).toEqual(new Set(["account004", "account005"]));
+    } finally {
+      store.close();
+    }
+
+    const second = runCli(dataDir, args, undefined, env);
+    expect(second.status).toBe(0);
+    const secondValue = JSON.parse(second.stdout);
+    expect(secondValue).toMatchObject({ scanned: 1, considered: 1, created: 0, deduped: 1, skipped: 0 });
+    expect(secondValue.results[0]).toMatchObject({
+      kind: "deduped",
+      idempotencyKey: "todos-task:task-lifecycle-smoke-one",
+      loopId: firstValue.results[0].loopId,
+      workflowId: firstValue.results[0].workflowId,
+    });
+    const afterReplay = new Store(join(dataDir, "loops.db"));
+    try {
+      expect(afterReplay.listWorkflowWorkItems({ routeKey: "todos-task" })).toHaveLength(1);
+      expect(afterReplay.listLoops({ includeArchived: true })).toHaveLength(1);
+      expect(afterReplay.listWorkflows()).toHaveLength(1);
+    } finally {
+      afterReplay.close();
+    }
+  });
+
+  test("todos task drain smoke does not admit ineligible or wrong-project tasks", () => {
+    const dataDir = freshDataDir("loops-cli-task-lifecycle-negative-");
+    const repo = createGitRepoIn(dataDir, "repo-");
+    const otherRepo = createGitRepoIn(dataDir, "other-repo-");
+    const binDir = fakeTodosReadyBin(dataDir);
+    const ready = [
+      { id: "task-no-route", title: "Missing route opt-in", status: "pending", working_dir: repo, tags: [] },
+      { id: "task-approval", title: "Needs approval", status: "pending", working_dir: repo, tags: ["auto:route"], metadata: { requires_approval: true } },
+      { id: "task-manual", title: "Manual automation", status: "pending", working_dir: repo, tags: ["auto:route"], metadata: { automation: { allowed: true, manual_required: true } } },
+      { id: "task-no-auto", title: "No auto tag", status: "pending", working_dir: repo, tags: ["auto:route", "no-auto"] },
+      { id: "task-blocked", title: "Blocked status", status: "blocked", working_dir: repo, tags: ["auto:route"] },
+      { id: "task-completed", title: "Completed status", status: "completed", working_dir: repo, tags: ["auto:route"] },
+      { id: "task-wrong-project", title: "Wrong project prefix", status: "pending", working_dir: otherRepo, tags: ["auto:route"] },
+    ];
+    const env = isolatedRouteEnv(dataDir, {
+      PATH: `${binDir}:/usr/bin:/bin`,
+      TODOS_READY_JSON: JSON.stringify(ready),
+    });
+    const result = runCli(dataDir, [
+      "--json",
+      "events",
+      "drain",
+      "todos-task",
+      "--todos-project",
+      join(dataDir, "todos-project"),
+      "--project-path-prefix",
+      repo,
+      "--limit",
+      "20",
+      "--max-dispatch",
+      "10",
+      "--template",
+      "task-lifecycle",
+      "--provider",
+      "codewith",
+      "--sandbox",
+      "workspace-write",
+      "--worktree-mode",
+      "required",
+      "--worktree-root",
+      join(dataDir, "worktrees"),
+      "--evidence-dir",
+      join(dataDir, "evidence"),
+      "--compact",
+    ], undefined, env);
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.scanned).toBe(7);
+    expect(value.filteredCandidates).toBe(6);
+    expect(value.considered).toBe(6);
+    expect(value.created).toBe(0);
+    expect(value.skipped).toBe(6);
+    expect(value.results.map((entry: { taskId?: string }) => entry.taskId).sort()).toEqual([
+      "task-approval",
+      "task-blocked",
+      "task-completed",
+      "task-manual",
+      "task-no-auto",
+      "task-no-route",
+    ]);
+    expect(JSON.stringify(value.results)).not.toContain("task-wrong-project");
+    expect(existsSync(value.evidencePath)).toBe(true);
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      expect(store.listWorkflowWorkItems({ routeKey: "todos-task" })).toHaveLength(0);
+      expect(store.listLoops({ includeArchived: true })).toHaveLength(0);
+      expect(store.listWorkflows()).toHaveLength(0);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("todos task provider smoke dry-runs Cursor GLM account-pool routing without storing state", () => {
+    const dataDir = freshDataDir("loops-cli-event-cursor-provider-smoke-");
+    const repo = createGitRepoIn(dataDir, "repo-");
+    const event = {
+      id: "evt-cursor-provider-smoke",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "todo-cursor-provider-smoke",
+        title: "Route with Cursor GLM account pool",
+        working_dir: repo,
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const result = runCli(dataDir, [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--dry-run",
+      "--template",
+      "task-lifecycle",
+      "--provider",
+      "cursor",
+      "--account-tool",
+      "cursor",
+      "--account-pool",
+      "cursor-glm-a,cursor-glm-b",
+      "--model",
+      "glm-5.2-max",
+      "--sandbox",
+      "enabled",
+      "--permission-mode",
+      "plan",
+      "--worktree-mode",
+      "required",
+      "--worktree-root",
+      join(dataDir, "worktrees"),
+    ], JSON.stringify(event), isolatedRouteEnv(dataDir));
+
+    expect(result.status).toBe(0);
+    const value = JSON.parse(result.stdout);
+    expect(value.deduped).toBe(false);
+    expect(value.providerRouting).toMatchObject({
+      provider: "cursor",
+      source: "option",
+      accountPool: [{ profile: "cursor-glm-a", tool: "cursor" }, { profile: "cursor-glm-b", tool: "cursor" }],
+    });
+    expect(value.invocation.scope.accountPolicy).toBe("pool");
+    const agentSteps = agentStepsOf(value.workflow);
+    expect(agentSteps.map((step) => step.id)).toEqual(["triage", "planner", "worker", "verifier"]);
+    for (const step of agentSteps) {
+      expect(step.target).toMatchObject({
+        provider: "cursor",
+        model: "glm-5.2-max",
+        sandbox: "enabled",
+        permissionMode: "plan",
+      });
+      expect(["cursor-glm-a", "cursor-glm-b"]).toContain(step.target.account.profile);
+      expect(step.target.account.tool).toBe("cursor");
+    }
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      expect(store.listWorkflowWorkItems({ routeKey: "todos-task" })).toHaveLength(0);
+      expect(store.listLoops({ includeArchived: true })).toHaveLength(0);
+      expect(store.listWorkflows()).toHaveLength(0);
+    } finally {
+      store.close();
+    }
   });
 
   test("todos task event handler selects provider and account pools from metadata hints", () => {
