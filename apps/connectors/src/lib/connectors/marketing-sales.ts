@@ -444,6 +444,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["email", "validation", "verification"],
   },
   {
+    name: "vwo",
+    displayName: "VWO",
+    description: "A/B testing, feature flags, surveys, heatmaps, and conversion optimization platform",
+    category: "Marketing & Sales",
+    tags: ["cro", "ab-testing", "feature-flags", "surveys", "heatmaps"],
+  },
+  {
     name: "whatconverts",
     displayName: "WhatConverts",
     description: "Lead tracking and marketing attribution platform",
