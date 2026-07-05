@@ -86,4 +86,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Infrastructure",
     tags: ["monitoring", "uptime", "performance", "alerts", "website"],
   },
+  {
+    name: "uploadcare",
+    displayName: "Uploadcare",
+    description: "CDN and media file storage with upload, delivery, and transformation APIs",
+    category: "Infrastructure",
+    tags: ["cdn", "media", "storage", "files", "upload"],
+  },
 ];
