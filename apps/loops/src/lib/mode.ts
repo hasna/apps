@@ -4,6 +4,21 @@ export const LOOP_DEPLOYMENT_MODES = ["local", "self_hosted", "cloud"] as const;
 
 export type LoopDeploymentMode = (typeof LOOP_DEPLOYMENT_MODES)[number];
 export type LoopSourceOfTruth = "local_sqlite" | "self_hosted_control_plane" | "cloud_control_plane";
+export type LoopRemoteSchedulerBackend =
+  | "none"
+  | "unconfigured"
+  | "api_control_plane_contract"
+  | "postgres_contract"
+  | "hosted_control_plane_contract";
+export type LoopRemoteArtifactStore = "none" | "object_store_contract";
+export type LoopRouteAdmissionStateStore = "local_sqlite" | "control_plane_contract";
+export type LoopRouteAdmissionGate =
+  | "max_dispatch"
+  | "max_active"
+  | "max_active_per_project"
+  | "max_active_per_project_group"
+  | "max_active_scope"
+  | "max_per_profile";
 
 export interface LoopModeResolution {
   deploymentMode: LoopDeploymentMode;
@@ -40,7 +55,31 @@ export interface LoopDeploymentStatus {
     required: boolean;
     role: "daemon" | "control_plane_worker";
   };
+  schedulerState: LoopSchedulerStateStatus;
   warnings: string[];
+}
+
+export interface LoopSchedulerStateStatus {
+  authority: LoopSourceOfTruth;
+  localStore: {
+    backend: "sqlite";
+    role: "authoritative" | "cache_and_spool";
+    runArtifacts: "local_files";
+    routeAdmissionState: "workflow_work_items";
+  };
+  remoteStore: {
+    backend: LoopRemoteSchedulerBackend;
+    configured: boolean;
+    applySupported: boolean;
+    objectArtifacts: LoopRemoteArtifactStore;
+    mutatesAws: false;
+  };
+  routeAdmission: {
+    stateStore: LoopRouteAdmissionStateStore;
+    activeStatuses: readonly ["admitted", "running"];
+    gates: readonly LoopRouteAdmissionGate[];
+    dryRunEvaluatesLiveCounts: false;
+  };
 }
 
 const MODE_ENV_KEYS = ["LOOPS_MODE", "HASNA_LOOPS_MODE"] as const;
@@ -107,6 +146,58 @@ function sourceOfTruthForMode(mode: LoopDeploymentMode): LoopSourceOfTruth {
   return "cloud_control_plane";
 }
 
+const ROUTE_ADMISSION_GATES = [
+  "max_dispatch",
+  "max_active",
+  "max_active_per_project",
+  "max_active_per_project_group",
+  "max_active_scope",
+  "max_per_profile",
+] as const satisfies readonly LoopRouteAdmissionGate[];
+
+function remoteSchedulerBackendForMode(
+  mode: LoopDeploymentMode,
+  config: LoopControlPlaneConfig,
+): LoopRemoteSchedulerBackend {
+  if (mode === "local") return "none";
+  if (mode === "cloud") return config.cloudApiUrl ? "hosted_control_plane_contract" : "unconfigured";
+  if (config.databaseUrlPresent) return "postgres_contract";
+  if (config.apiUrl) return "api_control_plane_contract";
+  return "unconfigured";
+}
+
+function schedulerStateForMode(args: {
+  deploymentMode: LoopDeploymentMode;
+  sourceOfTruth: LoopSourceOfTruth;
+  localRole: LoopSchedulerStateStatus["localStore"]["role"];
+  controlPlaneConfigured: boolean;
+  config: LoopControlPlaneConfig;
+}): LoopSchedulerStateStatus {
+  const nonLocal = args.deploymentMode !== "local";
+  return {
+    authority: args.sourceOfTruth,
+    localStore: {
+      backend: "sqlite",
+      role: args.localRole,
+      runArtifacts: "local_files",
+      routeAdmissionState: "workflow_work_items",
+    },
+    remoteStore: {
+      backend: remoteSchedulerBackendForMode(args.deploymentMode, args.config),
+      configured: nonLocal && args.controlPlaneConfigured,
+      applySupported: false,
+      objectArtifacts: nonLocal ? "object_store_contract" : "none",
+      mutatesAws: false,
+    },
+    routeAdmission: {
+      stateStore: nonLocal ? "control_plane_contract" : "local_sqlite",
+      activeStatuses: ["admitted", "running"],
+      gates: ROUTE_ADMISSION_GATES,
+      dryRunEvaluatesLiveCounts: false,
+    },
+  };
+}
+
 function displayControlPlaneUrl(value: string | undefined): string | undefined {
   if (!value) return undefined;
   try {
@@ -145,6 +236,9 @@ export function buildDeploymentStatus(
   if (deploymentMode === "self_hosted" && !controlPlaneConfigured) {
     warnings.push("self_hosted mode needs LOOPS_API_URL or LOOPS_DATABASE_URL before it can become authoritative");
   }
+  if (deploymentMode === "self_hosted" && config.databaseUrlPresent && !config.apiUrl) {
+    warnings.push("LOOPS_DATABASE_URL selects the self_hosted storage contract; loops-runner still needs LOOPS_API_URL to claim remote work");
+  }
   if (deploymentMode === "cloud" && config.apiUrl && !config.cloudApiUrl) {
     warnings.push("LOOPS_API_URL selects self_hosted; cloud mode uses LOOPS_CLOUD_API_URL");
   }
@@ -179,6 +273,13 @@ export function buildDeploymentStatus(
       required: deploymentMode !== "local",
       role: deploymentMode === "local" ? "daemon" : "control_plane_worker",
     },
+    schedulerState: schedulerStateForMode({
+      deploymentMode,
+      sourceOfTruth: sourceOfTruthForMode(deploymentMode),
+      localRole: deploymentMode === "local" ? "authoritative" : "cache_and_spool",
+      controlPlaneConfigured,
+      config,
+    }),
     warnings,
   };
 }
@@ -192,6 +293,7 @@ export function deploymentStatusLine(status: LoopDeploymentStatus): string {
     `source=${status.deploymentModeSource}`,
     `truth=${status.sourceOfTruth}`,
     `local=${status.localStore.role}`,
+    `scheduler=${status.schedulerState.routeAdmission.stateStore}`,
     `control_plane=${configured}`,
   ].join(" ");
 }

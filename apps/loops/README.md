@@ -38,6 +38,16 @@ package. Cloud mode is a public contract until a cloud-specific hosted URL and
 cloud token are configured through `LOOPS_CLOUD_API_URL` plus
 `LOOPS_CLOUD_TOKEN` or `HASNA_LOOPS_CLOUD_TOKEN`.
 
+Scheduler state is explicit in status JSON. `schedulerState.localStore` is
+SQLite plus local run artifact files: authoritative in `local`, cache/spool in
+non-local modes. `schedulerState.remoteStore` names the non-local contract
+(`api_control_plane_contract`, `postgres_contract`, or
+`hosted_control_plane_contract`) and reports `applySupported=false` because this
+public package does not directly mutate remote Postgres, S3/object storage, AWS
+resources, or hosted credentials. Route admission remains bounded by
+`max_dispatch`, `max_active`, `max_active_per_project`,
+`max_active_per_project_group`, `max_active_scope`, and `max_per_profile`.
+
 Useful status commands:
 
 ```bash
@@ -524,11 +534,12 @@ workflow unless the event data or metadata has `route_enabled=true`,
 `automation.allowed=true`, or a task tag containing `auto:route`. It also skips
 blocked, completed/done, cancelled/canceled, failed, archived, manual,
 approval-required, or `no-auto` tasks. Terminal route work items such as
-failed, dead-letter, cancelled, or succeeded history stay deduped until an
-operator runs `loops routes requeue <work-item-id> --reason "<cause fixed>"`.
-The next route-created output records `requeue` evidence with the previous work
-item id, previous attempts, operator reason, new attempt, workflow id, and loop
-id.
+failed, dead-letter, cancelled, or succeeded history are re-admitted only when
+the todos task is still actionable, the per-attempt backoff has elapsed, and the
+redispatch cap has not been reached. Operators can still force a retry with
+`loops routes requeue <work-item-id> --reason "<cause fixed>"`. The next
+route-created output records `requeue` evidence with the previous work item id,
+previous attempts, reason, new attempt, workflow id, and loop id.
 
 Task route drains can select providers from task metadata instead of running one
 fixed provider/account pool for the whole drain. Add one or more

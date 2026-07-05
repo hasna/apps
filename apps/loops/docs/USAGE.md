@@ -25,6 +25,16 @@ planes:
   status only, and requires `LOOPS_CLOUD_API_URL` plus `LOOPS_CLOUD_TOKEN` or
   `HASNA_LOOPS_CLOUD_TOKEN` before status can report ready.
 
+Scheduler state is explicit in status JSON. `schedulerState.localStore` is
+SQLite plus local run artifact files: authoritative in `local`, cache/spool in
+non-local modes. `schedulerState.remoteStore` names the non-local contract
+(`api_control_plane_contract`, `postgres_contract`, or
+`hosted_control_plane_contract`) and reports `applySupported=false` because this
+public package does not directly mutate remote Postgres, S3/object storage, AWS
+resources, or hosted credentials. Route admission remains bounded by
+`max_dispatch`, `max_active`, `max_active_per_project`,
+`max_active_per_project_group`, `max_active_scope`, and `max_per_profile`.
+
 Useful status commands:
 
 ```bash
@@ -674,11 +684,12 @@ idempotency key before rendering worktree plans or checking route limits. In
 dry-run mode, throttle counts are not evaluated because opening the live loop
 store can create or migrate the local database.
 Terminal routed work items such as failed, dead-letter, cancelled, or succeeded
-history remain deduped until an operator runs `loops routes requeue
-<work-item-id> --reason "<cause fixed>"`; a later drain should not create
-another worker just because the previous workflow ended. The next route-created
-output records `requeue` evidence with the previous work item id, previous
-attempts, operator reason, new attempt, workflow id, and loop id.
+history are re-admitted only when the todos task is still actionable, the
+per-attempt backoff has elapsed, and the redispatch cap has not been reached.
+Operators can still force a retry with `loops routes requeue <work-item-id>
+--reason "<cause fixed>"`. The next route-created output records `requeue`
+evidence with the previous work item id, previous attempts, reason, new attempt,
+workflow id, and loop id.
 
 When a sandboxed Codewith/Codex worker must update app stores outside the repo
 worktree, pass those stores explicitly with `--add-dir` or template `addDirs`.

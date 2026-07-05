@@ -147,7 +147,18 @@ export {
   normalizeLoopDeploymentMode,
   resolveLoopDeploymentMode,
 } from "./lib/mode.js";
-export type { LoopControlPlaneConfig, LoopDeploymentMode, LoopDeploymentStatus, LoopModeResolution, LoopSourceOfTruth } from "./lib/mode.js";
+export type {
+  LoopControlPlaneConfig,
+  LoopDeploymentMode,
+  LoopDeploymentStatus,
+  LoopModeResolution,
+  LoopRemoteArtifactStore,
+  LoopRemoteSchedulerBackend,
+  LoopRouteAdmissionGate,
+  LoopRouteAdmissionStateStore,
+  LoopSchedulerStateStatus,
+  LoopSourceOfTruth,
+} from "./lib/mode.js";
 
 // ---------------------------------------------------------------------------
 // Experimental: execution and workflow engines

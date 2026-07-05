@@ -68,7 +68,7 @@ loops import ./loops-export.json --apply
 Human status output is intentionally compact:
 
 ```text
-deploymentMode=local active source=default truth=local_sqlite local=authoritative control_plane=none
+deploymentMode=local active source=default truth=local_sqlite local=authoritative scheduler=local_sqlite control_plane=none
 ```
 
 JSON uses these field names:
@@ -85,6 +85,22 @@ JSON uses these field names:
   presence signal.
 - `controlPlane.apiUrl`: a display-safe URL without credentials, query string,
   or fragment.
+- `schedulerState.localStore`: always names the local SQLite store and local
+  run artifact files. In `local` mode this store is authoritative; in
+  non-local modes it is a cache, offline spool, and audit copy.
+- `schedulerState.remoteStore`: names the remote scheduler contract:
+  `api_control_plane_contract`, `postgres_contract`,
+  `hosted_control_plane_contract`, `unconfigured`, or `none`. Remote apply is
+  `false` in this public package until a control-plane host wires a full
+  storage adapter.
+- `schedulerState.remoteStore.objectArtifacts`: `object_store_contract` means
+  remote artifact/object storage is a control-plane contract. The public package
+  does not create or mutate S3 buckets, AWS resources, or hosted credentials.
+- `schedulerState.routeAdmission`: names the active route-state store and the
+  bounded gates (`max_dispatch`, `max_active`, `max_active_per_project`,
+  `max_active_per_project_group`, `max_active_scope`, and `max_per_profile`).
+  Live active counts use admitted/running work items; dry-runs do not open or
+  migrate the live store to compute counts.
 
 `loops-api` is a separate process in the same public package. It is not a
 separate package at this stage because self-hosted users and the hosted service
@@ -149,6 +165,12 @@ id-preserving workflow/loop/run import endpoints. A normal remote loop create
 would generate new ids, so it is not a no-loss migration. Local SQLite remains
 authoritative until a safe import is applied; in non-local modes it may remain
 a cache, offline spool, and audit copy.
+
+`LOOPS_DATABASE_URL` selects the self-hosted Postgres scheduler-state contract,
+but it does not make the standalone CLI mutate a remote database by itself.
+Remote execution still flows through a configured control-plane API and runner
+protocol. `loops-runner` needs `LOOPS_API_URL` or `HASNA_LOOPS_API_URL` to claim
+work; a database URL alone is migration/readiness configuration.
 
 `loops self-hosted runner-register` is also preview-only unless `--apply` is
 present. The dry run prints the runner id, machine id, labels, and

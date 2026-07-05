@@ -19,9 +19,28 @@ describe("doctor", () => {
     dataDir = mkdtempSync(join(tmpdir(), "loops-doctor-data-"));
     machinesDir = mkdtempSync(join(tmpdir(), "loops-doctor-machines-"));
     home = mkdtempSync(join(tmpdir(), "loops-doctor-home-"));
-    for (const key of ["LOOPS_DATA_DIR", "HASNA_MACHINES_DIR"]) savedEnv[key] = process.env[key];
+    for (const key of [
+      "LOOPS_DATA_DIR",
+      "HASNA_MACHINES_DIR",
+      "LOOPS_MODE",
+      "HASNA_LOOPS_MODE",
+      "LOOPS_API_URL",
+      "HASNA_LOOPS_API_URL",
+      "LOOPS_CLOUD_API_URL",
+      "HASNA_LOOPS_CLOUD_API_URL",
+      "LOOPS_DATABASE_URL",
+      "HASNA_LOOPS_DATABASE_URL",
+    ]) savedEnv[key] = process.env[key];
     process.env.LOOPS_DATA_DIR = dataDir;
     process.env.HASNA_MACHINES_DIR = machinesDir;
+    process.env.LOOPS_MODE = "";
+    process.env.HASNA_LOOPS_MODE = "";
+    process.env.LOOPS_API_URL = "";
+    process.env.HASNA_LOOPS_API_URL = "";
+    process.env.LOOPS_CLOUD_API_URL = "";
+    process.env.HASNA_LOOPS_CLOUD_API_URL = "";
+    process.env.LOOPS_DATABASE_URL = "";
+    process.env.HASNA_LOOPS_DATABASE_URL = "";
   });
 
   afterEach(() => {
@@ -47,9 +66,29 @@ describe("doctor", () => {
       expect(check(report, "daemon")?.status).toBe("ok");
       expect(check(report, "daemon")?.message).toBe("daemon is not running");
       expect(check(report, "loop-runs")?.status).toBe("ok");
+      expect(check(report, "scheduler-state")).toMatchObject({
+        status: "ok",
+        message: "scheduler state authority=local_sqlite local=authoritative remote=none",
+      });
+      expect(check(report, "scheduler-state")?.detail).toContain("gates=max_dispatch,max_active,max_active_per_project,max_active_per_project_group,max_active_scope,max_per_profile");
       for (const provider of ["claude", "agent", "codewith", "aicopilot", "opencode", "codex"]) {
         expect(["ok", "warn"]).toContain(check(report, `provider:${provider}`)?.status ?? "missing");
       }
+      expect(report.ok).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("warns when non-local scheduler state is selected without control-plane configuration", () => {
+    process.env.LOOPS_MODE = "cloud";
+    const store = new Store(":memory:");
+    try {
+      const report = runDoctor(store);
+      const scheduler = check(report, "scheduler-state");
+      expect(scheduler?.status).toBe("warn");
+      expect(scheduler?.message).toBe("scheduler state authority=cloud_control_plane local=cache_and_spool remote=unconfigured");
+      expect(scheduler?.detail).toContain("remote_apply=false");
       expect(report.ok).toBe(true);
     } finally {
       store.close();

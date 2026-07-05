@@ -6,6 +6,7 @@ import { ensureDataDir } from "./paths.js";
 import { preflightTarget } from "./executor.js";
 import { workflowExecutionOrder } from "./workflow-spec.js";
 import { listOpenMachines } from "./machines.js";
+import { buildDeploymentStatus } from "./mode.js";
 
 export type DoctorSeverity = "ok" | "warn" | "fail";
 
@@ -112,6 +113,22 @@ export function runDoctor(store: Store): DoctorReport {
       ? { id: "loop-runs", status: "ok", message: "no failed loop runs recorded" }
       : { id: "loop-runs", status: "warn", message: `${failedRuns} failed loop run(s) recorded` },
   );
+
+  const deployment = buildDeploymentStatus();
+  const schedulerState = deployment.schedulerState;
+  checks.push({
+    id: "scheduler-state",
+    status: deployment.deploymentMode === "local" || deployment.controlPlane.configured ? "ok" : "warn",
+    message: `scheduler state authority=${schedulerState.authority} local=${schedulerState.localStore.role} remote=${schedulerState.remoteStore.backend}`,
+    detail: [
+      `route_state=${schedulerState.routeAdmission.stateStore}`,
+      `active_statuses=${schedulerState.routeAdmission.activeStatuses.join(",")}`,
+      `gates=${schedulerState.routeAdmission.gates.join(",")}`,
+      `artifacts=${schedulerState.localStore.runArtifacts}`,
+      `remote_artifacts=${schedulerState.remoteStore.objectArtifacts}`,
+      `remote_apply=${String(schedulerState.remoteStore.applySupported)}`,
+    ].join(" "),
+  });
 
   for (const loop of store.listLoops({ status: "active" })) {
     try {

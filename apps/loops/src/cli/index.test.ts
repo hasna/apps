@@ -129,6 +129,12 @@ describe("loops CLI", () => {
     expect(value.deploymentMode).toBe("local");
     expect(value.sourceOfTruth).toBe("local_sqlite");
     expect(value.localStore.role).toBe("authoritative");
+    expect(value.schedulerState).toMatchObject({
+      authority: "local_sqlite",
+      localStore: { backend: "sqlite", role: "authoritative", runArtifacts: "local_files" },
+      remoteStore: { backend: "none", configured: false, applySupported: false, mutatesAws: false },
+      routeAdmission: { stateStore: "local_sqlite", activeStatuses: ["admitted", "running"] },
+    });
     expect(mode.stdout).not.toContain("dataDir");
     expect(mode.stdout).not.toContain("dbPath");
   });
@@ -152,6 +158,12 @@ describe("loops CLI", () => {
         apiUrl: "http://127.0.0.1:8787",
         authTokenPresent: true,
       },
+      schedulerState: {
+        authority: "self_hosted_control_plane",
+        localStore: { backend: "sqlite", role: "cache_and_spool" },
+        remoteStore: { backend: "api_control_plane_contract", configured: true, applySupported: false },
+        routeAdmission: { stateStore: "control_plane_contract" },
+      },
     });
 
     const cloud = runCli(dataDir, ["--json", "cloud", "status"], undefined, {
@@ -172,6 +184,11 @@ describe("loops CLI", () => {
         configured: true,
         apiUrl: "https://loops.example.test",
         authTokenPresent: true,
+      },
+      schedulerState: {
+        authority: "cloud_control_plane",
+        remoteStore: { backend: "hosted_control_plane_contract", configured: true, applySupported: false, mutatesAws: false },
+        routeAdmission: { stateStore: "control_plane_contract" },
       },
     });
     expect(cloudValue.warnings.join(" ")).toContain("active deployment mode is local");
