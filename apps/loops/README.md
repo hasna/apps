@@ -185,6 +185,11 @@ loops create agent supply-chain-watch \
   --prompt "Check for suspicious dependency or supply-chain changes. Report only concrete findings."
 ```
 
+Codewith `--auth-profile` is provider-native, not an OpenAccounts selector.
+When creation or runtime preflight is enabled, OpenLoops verifies it with
+`codewith profile list`, accepting both normal rows and the active `*`-marked
+row by exact profile name.
+
 Run an OpenCode loop with an explicit provider/model. OpenCode reads
 `~/.config/opencode/config.json` when no model is supplied, so OpenLoops rejects
 OpenCode agent targets without `--model` instead of inheriting a stale or
@@ -888,7 +893,7 @@ The adapters intentionally use provider command surfaces instead of pretending e
 - Codex uses `codex --ask-for-approval never exec --json --ephemeral --skip-git-repo-check`, with `--add-dir` for explicit extra writable directories where supported.
 - Agent prompts are sent through child stdin instead of argv where the provider supports stdin, including Codewith `exec` (which reads instructions from stdin when no positional prompt is given), so the prompt never lands on argv.
 - When `--account` or a step `account` is set, OpenLoops resolves `accounts env <profile> --tool <tool>` before spawning the target, strips inherited tool home/API-key variables, and applies the selected profile only to that process. Missing account profiles fail before the provider binary receives the prompt.
-- `--auth-profile` and step `authProfile` are provider-native auth selectors. They currently apply to Codewith and are passed to Codewith as `--auth-profile <name>` on the `exec` invocation; they do not call OpenAccounts.
+- `--auth-profile` and step `authProfile` are provider-native auth selectors. They currently apply to Codewith and are passed to Codewith as `--auth-profile <name>` on the `exec` invocation; they do not call OpenAccounts. Local and remote preflight run `codewith profile list`, accept the active `*`-marked profile row, compare the requested profile as an exact string, and fail closed on unsupported NUL bytes, a nonzero profile-list command, or a missing exact match.
 - `--sandbox` maps to provider-native sandbox flags. Codewith/Codex accept `read-only`, `workspace-write`, or `danger-full-access`; Cursor accepts `enabled` or `disabled`.
 - `--permission-mode` maps `plan`, `auto`, and `bypass` where the provider supports it. Claude uses native permission modes, Cursor maps bypass to `--force`, and OpenCode/AICopilot map bypass to `--dangerously-skip-permissions`.
 - `--variant` is provider-specific reasoning/model effort. Claude maps it to `--effort`, Codewith/Codex map it to `model_reasoning_effort`, and OpenCode/AICopilot pass `--variant`.

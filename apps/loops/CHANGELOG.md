@@ -5,6 +5,16 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## Unreleased
+
+### Fixed
+
+- **Agent adapter / executor:** harden Codewith `authProfile` preflight for
+  local and remote runs. OpenLoops now accepts active `*`-marked
+  `codewith profile list` rows, compares requested profile names exactly,
+  rejects unsupported NUL bytes before shell transport, and continues to fail
+  closed when profile listing fails or the exact profile is missing.
+
 ## 0.4.9 (2026-07-04)
 
 Unblock the PR-merge pipeline: task-lifecycle/route workers now dispatch real
