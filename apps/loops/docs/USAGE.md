@@ -15,15 +15,17 @@ It supports deterministic command loops, JSON-defined workflows, and guarded CLI
 
 OpenLoops defaults to `local`, where SQLite in `LOOPS_DATA_DIR` is
 authoritative and `loops-daemon` executes scheduled work. The package also
-defines `self_hosted` and `cloud` contracts for future non-local control
-planes:
+defines a `cloud` contract for the AWS-backed hosted control plane:
 
-- `self_hosted`: user-operated `loops-api` control-plane contract; this
-  release exposes storage-backed API/runner foundations plus local migration
-  previews.
-- `cloud`: hosted control-plane contract; this release exposes client/runner
-  status only, and requires `LOOPS_CLOUD_API_URL` plus `LOOPS_CLOUD_TOKEN` or
-  `HASNA_LOOPS_CLOUD_TOKEN` before status can report ready.
+- `cloud`: AWS-backed hosted control-plane contract; this release exposes
+  client/runner status only, and requires `LOOPS_CLOUD_API_URL` plus
+  `LOOPS_CLOUD_TOKEN` or `HASNA_LOOPS_CLOUD_TOKEN` before status can report
+  ready.
+
+Set `LOOPS_MODE` or `HASNA_LOOPS_MODE` to `local` or `cloud`. Without an
+explicit mode, `LOOPS_CLOUD_API_URL` or `HASNA_LOOPS_CLOUD_API_URL` selects
+`cloud`; otherwise OpenLoops uses `local`. The shared `@hasna/cloud` runtime
+has been retired fleet-wide.
 
 Scheduler state is explicit in status JSON. `schedulerState.localStore` is
 SQLite plus local run artifact files: authoritative in `local`, cache/spool in
@@ -80,8 +82,9 @@ leases, running runs, leased work items). Inline command env values are not
 exported as secrets; bundles with redacted env values require
 `--allow-redacted` and are marked non-importable.
 
-Self-hosted sync commands are preview-only until the control-plane API exposes
-id-preserving import endpoints:
+Cloud sync commands are preview-only until the AWS-backed control-plane API
+exposes id-preserving import endpoints. The transitional `loops self-hosted *`
+CLI surface still exists for compatibility:
 
 ```bash
 loops self-hosted migrate --dry-run
@@ -89,12 +92,12 @@ loops self-hosted push --dry-run
 loops self-hosted pull --dry-run
 ```
 
-The preview may inspect `LOOPS_API_URL`/`HASNA_LOOPS_API_URL`, but it refuses
-remote apply because normal loop CRUD would generate new ids. Use
-`loops self-hosted runner-register` to verify runner registration against an
-API, then use `loops-runner run-once` for the current bounded non-workflow
-claim/execute/finalize protocol.
-Runner registration is preview-only unless `--apply` is present.
+The preview inspects the configured cloud control-plane URL but refuses remote
+apply because normal loop CRUD would generate new ids. Use
+`loops self-hosted runner-register` to verify runner registration against the
+control plane, then use `loops-runner run-once` for the current bounded
+non-workflow claim/execute/finalize protocol. Runner registration is
+preview-only unless `--apply` is present.
 
 ## Install
 

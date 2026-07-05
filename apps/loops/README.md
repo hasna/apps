@@ -19,24 +19,22 @@ It supports deterministic command loops, JSON-defined workflows, and guarded CLI
 
 ## Deployment Modes
 
-OpenLoops has three deployment modes:
+OpenLoops has two deployment modes:
 
 - `local`: SQLite in `LOOPS_DATA_DIR` is authoritative and `loops-daemon` executes scheduled work.
-- `self_hosted`: a user-operated `loops-api` control plane contract. This release exposes status, storage-backed `/v1` loop CRUD and run listing, runner claim/heartbeat/finalize protocol endpoints, a one-shot `loops-runner run-once` execution path for embedded control-plane hosts, id-preserving local export/import, and preview-only self-hosted migration/sync commands; full fleet rollout and remote apply are follow-up work.
-- `cloud`: a hosted control-plane contract. This release exposes client/runner status only; hosted tenant auth and infrastructure live outside this package.
+- `cloud`: an AWS-backed hosted control plane. This release exposes client/runner status surfaces; hosted tenant auth and AWS infrastructure live outside this package. Configure via `LOOPS_CLOUD_API_URL` plus `LOOPS_CLOUD_TOKEN` or `HASNA_LOOPS_CLOUD_TOKEN`.
 
 `local` is the default and requires no network, token, Postgres, or hosted
-service. Set `LOOPS_MODE` or `HASNA_LOOPS_MODE` to `local`, `self_hosted`, or
-`cloud` to choose explicitly. Without an explicit mode, `LOOPS_CLOUD_API_URL`
-selects `cloud`, while `LOOPS_API_URL` or `LOOPS_DATABASE_URL` selects
-`self_hosted`.
+service. Set `LOOPS_MODE` or `HASNA_LOOPS_MODE` to `local` or `cloud` to choose
+explicitly. Without an explicit mode, `LOOPS_CLOUD_API_URL` or
+`HASNA_LOOPS_CLOUD_API_URL` selects `cloud`; otherwise OpenLoops uses `local`.
 
 The public `@hasna/loops` package owns the local runtime, mode resolver,
-self-hosted API contract, runner contract, SDK, MCP server, and CLI. Hosted
-tenant auth, account administration, and infrastructure live outside this
-package. Cloud mode is a public contract until a cloud-specific hosted URL and
-cloud token are configured through `LOOPS_CLOUD_API_URL` plus
-`LOOPS_CLOUD_TOKEN` or `HASNA_LOOPS_CLOUD_TOKEN`.
+control-plane API contract, runner contract, SDK, MCP server, and CLI. Hosted
+tenant auth, account administration, and AWS infrastructure live outside this
+package. The shared `@hasna/cloud` runtime has been retired fleet-wide; cloud
+mode means the AWS-backed Hasna control plane, not a separate self-operated
+deployment option.
 
 Scheduler state is explicit in status JSON. `schedulerState.localStore` is
 SQLite plus local run artifact files: authoritative in `local`, cache/spool in
@@ -53,9 +51,6 @@ Useful status commands:
 ```bash
 loops mode
 loops --json mode
-loops self-hosted status
-loops self-hosted migrate --dry-run
-loops self-hosted runner-register --runner-id <id> --machine-id <machine> --apply
 loops export --file ./loops-export.json --dry-run
 loops export --file ./loops-export.json
 loops import ./loops-export.json

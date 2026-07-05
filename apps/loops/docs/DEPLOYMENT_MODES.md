@@ -10,39 +10,32 @@ package.
 | Mode | Source of truth | Local storage role | Executor |
 | --- | --- | --- | --- |
 | `local` | SQLite in `LOOPS_DATA_DIR` | Authoritative | `loops-daemon` |
-| `self_hosted` | A user-operated `loops-api` control plane contract | Cache and offline spool | `loops-runner` foundation |
-| `cloud` | A configured hosted control plane contract | Cache and offline spool | `loops-runner` foundation |
+| `cloud` | AWS-backed hosted control plane | Cache and offline spool | `loops-runner` foundation |
 
 `local` remains the default. It must keep working without network access,
 tokens, Postgres, or hosted infrastructure.
 
-`self_hosted` is for users or teams running their own control plane. The public
-`@hasna/loops` package owns the API and runner contract for this mode.
-
-`cloud` is the hosted control-plane contract. The public package exposes the
-client and runner contract, but tenant auth, account administration, and hosted
-infrastructure stay outside this package. The public package must not depend on
-private hosted packages or resource names. This release exposes status
-surfaces only.
+`cloud` is the AWS-backed hosted control-plane contract. The public package
+exposes the client and runner contract, but tenant auth, account administration,
+and AWS infrastructure stay outside this package. The shared `@hasna/cloud`
+runtime has been retired fleet-wide. The public package must not depend on
+private hosted packages or resource names. This release exposes status surfaces
+only.
 
 ## Mode Resolution
 
-`LOOPS_MODE` or `HASNA_LOOPS_MODE` may be set to `local`, `self_hosted`, or
-`cloud`. Hyphenated `self-hosted` is normalized to `self_hosted`.
+`LOOPS_MODE` or `HASNA_LOOPS_MODE` may be set to `local` or `cloud`.
 
 When no explicit mode is set, OpenLoops resolves the mode from configuration:
 
 1. `LOOPS_CLOUD_API_URL` or `HASNA_LOOPS_CLOUD_API_URL` selects `cloud`.
-2. `LOOPS_API_URL`, `HASNA_LOOPS_API_URL`, `LOOPS_DATABASE_URL`, or
-   `HASNA_LOOPS_DATABASE_URL` selects `self_hosted`.
-3. Otherwise OpenLoops uses `local`.
+2. Otherwise OpenLoops uses `local`.
 
-`LOOPS_API_URL` and `HASNA_LOOPS_API_URL` belong to `self_hosted`.
-`cloud` uses only `LOOPS_CLOUD_API_URL` or `HASNA_LOOPS_CLOUD_API_URL`.
+`cloud` uses `LOOPS_CLOUD_API_URL` or `HASNA_LOOPS_CLOUD_API_URL` plus
+`LOOPS_CLOUD_TOKEN` or `HASNA_LOOPS_CLOUD_TOKEN`.
 
-Tokens are represented only as presence signals in status output. Self-hosted
-status uses `LOOPS_API_TOKEN` or `HASNA_LOOPS_API_TOKEN`. Cloud status uses
-`LOOPS_CLOUD_TOKEN` or `HASNA_LOOPS_CLOUD_TOKEN`. URL credentials, query
+Tokens are represented only as presence signals in status output. Cloud status
+uses `LOOPS_CLOUD_TOKEN` or `HASNA_LOOPS_CLOUD_TOKEN`. URL credentials, query
 strings, and fragments are not returned in status output.
 
 ## Commands
@@ -76,8 +69,7 @@ JSON uses these field names:
 - `deploymentMode`: the requested status perspective.
 - `activeDeploymentMode`: the mode selected from the current environment.
 - `deploymentModeSource`: the env var or default that selected the active mode.
-- `sourceOfTruth`: `local_sqlite`, `self_hosted_control_plane`, or
-  `cloud_control_plane`.
+- `sourceOfTruth`: `local_sqlite` or `cloud_control_plane`.
 - `localStore.role`: `authoritative` in local mode, `cache_and_spool` in
   non-local modes.
 - `controlPlane.configured`: true only when the current mode has enough
@@ -103,11 +95,11 @@ JSON uses these field names:
   migrate the live store to compute counts.
 
 `loops-api` is a separate process in the same public package. It is not a
-separate package at this stage because self-hosted users and the hosted service
-must share the same public contract. The API server can expose storage-backed
-`/v1` loop CRUD and run listing when an embedding host injects the public
-storage contract. The standalone `loops-api serve` binary still fails closed
-for those routes until a self-hosted storage adapter is wired by the operator or
+separate package at this stage because local operators and the AWS-hosted
+service must share the same public contract. The API server can expose
+storage-backed `/v1` loop CRUD and run listing when an embedding host injects
+the public storage contract. The standalone `loops-api serve` binary still fails
+closed for those routes until a control-plane storage adapter is wired by the
 platform host.
 
 `loops-runner` is the process that connects a machine to a non-local control
@@ -150,7 +142,9 @@ later release adds full table-preserving migration. Active daemon leases,
 running loop runs, running workflow runs/steps, and leased work items also
 block migration; finish or stop that work first.
 
-Self-hosted sync commands are preview-only today:
+Cloud sync commands are preview-only today. The transitional `loops self-hosted
+*` CLI surface still exists for compatibility while enums and adapters catch up;
+treat it as the cloud control-plane preview path, not a third deployment mode:
 
 ```bash
 loops self-hosted migrate --dry-run
@@ -158,21 +152,18 @@ loops self-hosted push --dry-run
 loops self-hosted pull --dry-run
 ```
 
-They inspect local state, optionally inspect `LOOPS_API_URL`, and report the
-rows that would need to move. Remote apply is intentionally blocked because the
-current self-hosted API exposes normal loop CRUD and run listing, not
-id-preserving workflow/loop/run import endpoints. A normal remote loop create
-would generate new ids, so it is not a no-loss migration. Local SQLite remains
-authoritative until a safe import is applied; in non-local modes it may remain
-a cache, offline spool, and audit copy.
+They inspect local state, optionally inspect the configured cloud control-plane
+URL, and report the rows that would need to move. Remote apply is intentionally
+blocked because the current control-plane API exposes normal loop CRUD and run
+listing, not id-preserving workflow/loop/run import endpoints. A normal remote
+loop create would generate new ids, so it is not a no-loss migration. Local
+SQLite remains authoritative until a safe import is applied; in cloud mode it may
+remain a cache, offline spool, and audit copy.
 
-`LOOPS_DATABASE_URL` selects the self-hosted Postgres scheduler-state contract,
-but it does not make the standalone CLI mutate a remote database by itself.
-Remote execution still flows through a configured control-plane API and runner
-protocol. `loops-runner` needs `LOOPS_API_URL` or `HASNA_LOOPS_API_URL` to claim
-work; a database URL alone is migration/readiness configuration.
+Remote execution flows through the configured AWS-backed control-plane API and
+runner protocol. `loops-runner` needs a configured cloud API URL to claim work.
 
-`loops self-hosted runner-register` is also preview-only unless `--apply` is
+`loops self-hosted runner-register` is preview-only unless `--apply` is
 present. The dry run prints the runner id, machine id, labels, and
 capabilities that would be posted, without exposing tokens.
 
@@ -196,10 +187,9 @@ distinguishable from intentional fan-out.
 
 This is separate from existing local OpenMachines dispatch. In `local` mode,
 `loops-daemon` can still dispatch a loop target to a configured remote machine
-through the existing OpenMachines transport. In `self_hosted` or `cloud`,
-machine execution is runner-pull: a registered `loops-runner` claims work from
-the control plane. Operators should not treat local remote dispatch as cloud
-mode.
+through the existing OpenMachines transport. In `cloud` mode, machine execution
+is runner-pull: a registered `loops-runner` claims work from the AWS-backed
+control plane. Operators should not treat local remote dispatch as cloud mode.
 
 ## Follow-Up Work
 
@@ -209,7 +199,7 @@ Non-local execution needs these follow-up releases before it is live:
 - Long-running runner daemon mode with backoff, fleet observability, and
   durable machine registration records.
 - Workflow target execution over the remote protocol.
-- Id-preserving self-hosted import endpoints for workflow specs, loop
+- Id-preserving cloud control-plane import endpoints for workflow specs, loop
   definitions, run history, workflow history, work items, goals, and audit rows.
 - Hosted product integration outside the public package.
 
@@ -219,7 +209,7 @@ The public package owns:
 
 - local SQLite scheduling and daemon execution,
 - the mode resolver and status surfaces,
-- the self-hosted API contract,
+- the control-plane API contract,
 - the runner contract,
 - local cache/spool semantics,
 - import/export and migration commands,
