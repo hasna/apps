@@ -1004,6 +1004,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["okr", "strategy", "goals"],
   },
   {
+    name: "workflow-trigger",
+    displayName: "WorkflowTrigger",
+    description: "Workflow trigger platform",
+    category: "Business Tools",
+    tags: ["productivity", "workflows", "triggers", "automation"],
+  },
+  {
     name: "yodiz",
     displayName: "Yodiz",
     description: "Agile project management and issue tracking",
