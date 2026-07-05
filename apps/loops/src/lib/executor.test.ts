@@ -11,6 +11,19 @@ function gateWaitScript(gate: string): string {
   return `while [ ! -f ${JSON.stringify(gate)} ]; do sleep 0.02; done\n`;
 }
 
+function guardedLoginExitCommand(missingPath: string): string {
+  const quoted = JSON.stringify(missingPath);
+  return [
+    `if [ ! -s ${quoted} ]; then`,
+    `  printf 'no artifact at %s\\n' ${quoted}`,
+    "  exit 0",
+    "fi",
+    "bun - <<'BUN'",
+    "console.log('unexpected artifact path');",
+    "BUN",
+  ].join("\n");
+}
+
 function writeFakeCodewithProfileList(fake: string, output: string, exitCode = 0): void {
   const delimiter = "__OPENLOOPS_FAKE_CODEWITH_PROFILE_LIST__";
   writeFileSync(
@@ -79,6 +92,34 @@ describe("executeLoop", () => {
       expect(result.stdout).toContain("hello");
     } finally {
       store.close();
+    }
+  });
+
+  test("normalizes SHLVL for bash login command targets with guarded exits", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-login-shell-env-"));
+    try {
+      const loop = store.createLoop({
+        name: "guarded-login-shell",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "command",
+          command: "bash",
+          args: ["-lc", guardedLoginExitCommand(join(root, "missing.json"))],
+          timeoutMs: 5_000,
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { HOME: root, PATH: "/usr/bin:/bin" },
+      });
+      expect(result.status).toBe("succeeded");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("no artifact at");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -711,6 +752,36 @@ describe("executeLoop", () => {
       const script = readFileSync(scriptFile, "utf8");
       expect(script).toContain("sh -c ");
       expect(script).not.toContain("sh -lc ");
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("normalizes SHLVL for remote bash login command targets with guarded exits", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-login-shell-env-"));
+    try {
+      const loop = store.createLoop({
+        name: "remote-guarded-login-shell",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "command",
+          command: "bash",
+          args: ["-lc", guardedLoginExitCommand(join(root, "missing.json"))],
+          timeoutMs: 5_000,
+        },
+        machine: { id: "remote-test", local: false, route: "ssh" },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        ...remoteHooks,
+        env: { HOME: root, PATH: "/usr/bin:/bin" },
+      });
+      expect(result.status).toBe("succeeded");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("no artifact at");
     } finally {
       store.close();
       rmSync(root, { recursive: true, force: true });
