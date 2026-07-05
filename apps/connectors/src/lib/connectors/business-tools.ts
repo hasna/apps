@@ -1004,6 +1004,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["okr", "strategy", "goals"],
   },
   {
+    name: "wufoo",
+    displayName: "Wufoo",
+    description: "Online form builder",
+    category: "Business Tools",
+    tags: ["forms", "surveys", "data-collection"],
+  },
+  {
     name: "yodiz",
     displayName: "Yodiz",
     description: "Agile project management and issue tracking",
