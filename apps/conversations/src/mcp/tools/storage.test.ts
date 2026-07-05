@@ -3,39 +3,44 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { closeDb } from "../../lib/db.js";
-import { STORAGE_CONFIG_PATH } from "../../lib/storage-sync.js";
+import { getStorageConfigPath } from "../../lib/storage-sync.js";
 import { registerStorageSyncTools } from "./storage.js";
 import { existsSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
 
-const STORAGE_CONFIG_DIR = dirname(STORAGE_CONFIG_PATH);
+const TEST_STORAGE_CONFIG = join(tmpdir(), `conversations-test-storage-config-${Date.now()}.json`);
 
 // Save/restore real storage config
 let savedConfig: string | null = null;
 
 function saveStorageConfig(): void {
-  if (existsSync(STORAGE_CONFIG_PATH)) {
-    savedConfig = readFileSync(STORAGE_CONFIG_PATH, "utf-8");
+  const storageConfigPath = getStorageConfigPath();
+  if (existsSync(storageConfigPath)) {
+    savedConfig = readFileSync(storageConfigPath, "utf-8");
   }
 }
 
 function restoreStorageConfig(): void {
+  const storageConfigPath = getStorageConfigPath();
+  const storageConfigDir = dirname(storageConfigPath);
   if (savedConfig !== null) {
-    if (!existsSync(STORAGE_CONFIG_DIR)) {
-      mkdirSync(STORAGE_CONFIG_DIR, { recursive: true });
+    if (!existsSync(storageConfigDir)) {
+      mkdirSync(storageConfigDir, { recursive: true });
     }
-    writeFileSync(STORAGE_CONFIG_PATH, savedConfig, "utf-8");
+    writeFileSync(storageConfigPath, savedConfig, "utf-8");
   } else {
-    try { unlinkSync(STORAGE_CONFIG_PATH); } catch {}
+    try { unlinkSync(storageConfigPath); } catch {}
   }
 }
 
 function writeStorageConfig(config: Record<string, unknown>): void {
-  if (!existsSync(STORAGE_CONFIG_DIR)) {
-    mkdirSync(STORAGE_CONFIG_DIR, { recursive: true });
+  const storageConfigPath = getStorageConfigPath();
+  const storageConfigDir = dirname(storageConfigPath);
+  if (!existsSync(storageConfigDir)) {
+    mkdirSync(storageConfigDir, { recursive: true });
   }
-  writeFileSync(STORAGE_CONFIG_PATH, JSON.stringify(config, null, 2), "utf-8");
+  writeFileSync(storageConfigPath, JSON.stringify(config, null, 2), "utf-8");
 }
 
 const TEST_DB = join(tmpdir(), `conversations-test-storage-${Date.now()}.db`);
@@ -43,6 +48,7 @@ let client: Client;
 let server: McpServer;
 
 beforeAll(async () => {
+  process.env.HASNA_CONVERSATIONS_STORAGE_CONFIG = TEST_STORAGE_CONFIG;
   saveStorageConfig();
   process.env.CONVERSATIONS_DB_PATH = TEST_DB;
   closeDb();
@@ -66,6 +72,8 @@ afterAll(async () => {
   try { unlinkSync(TEST_DB); } catch {}
   try { unlinkSync(TEST_DB + "-wal"); } catch {}
   try { unlinkSync(TEST_DB + "-shm"); } catch {}
+  try { unlinkSync(TEST_STORAGE_CONFIG); } catch {}
+  delete process.env.HASNA_CONVERSATIONS_STORAGE_CONFIG;
 });
 
 beforeEach(() => {
@@ -89,6 +97,10 @@ describe("conversations_storage_status", () => {
     expect(text).toContain("Canonical RDS cluster: hasna-xyz-infra-apps-prod-postgres");
     expect(text).toContain("Runtime secret path: hasna/xyz/opensource/conversations/prod/rds");
     expect(text).toContain("PostgreSQL: skipped in local mode");
+    expect(text).toContain("Default sync group: metadata");
+    expect(text).toContain("Cloud runtime group: cloud-runtime");
+    expect(text).toContain("Attachments: local files only");
+    expect(text).toContain("Message UUID duplicates: 0");
   }, 10000);
 
   test("reports conflict counts", async () => {
@@ -97,6 +109,32 @@ describe("conversations_storage_status", () => {
     const text = getText(result as any);
     expect(text).toContain("Sync conflicts:");
   }, 20000);
+});
+
+// ---- conversations_storage_readiness ----
+
+describe("conversations_storage_readiness", () => {
+  test("reports explicit local, remote, message, read-state, search, and attachment gates", async () => {
+    writeStorageConfig({ mode: "local" });
+    const result = await client.callTool({ name: "conversations_storage_readiness", arguments: {} }) as any;
+    const text = getText(result);
+    const readiness = JSON.parse(text) as {
+      configured: boolean;
+      tableGroups: { cloudRuntime: string[]; localOnly: string[] };
+      runtimePaths: Array<{ surface: string; status: string; remote: string }>;
+      privacyAndMigrationGates: string[];
+    };
+
+    expect(readiness.configured).toBe(false);
+    expect(readiness.tableGroups.cloudRuntime).toContain("messages");
+    expect(readiness.tableGroups.cloudRuntime).toContain("message_read_receipts");
+    expect(readiness.tableGroups.localOnly).toContain("messages_fts");
+    expect(readiness.runtimePaths.map((path) => path.surface)).toContain("attachments");
+    expect(readiness.runtimePaths.find((path) => path.surface === "attachments")?.status).toBe("local_only");
+    expect(readiness.runtimePaths.find((path) => path.surface === "search-and-digests")?.remote).toContain("tsvector");
+    expect(readiness.privacyAndMigrationGates.join(" ")).toContain("Never print database URLs");
+    expect(text).not.toContain("postgres://");
+  }, 10000);
 });
 
 // ---- conversations_storage_push ----

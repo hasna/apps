@@ -17,6 +17,7 @@ describe("conversations storage MCP contract", () => {
     expect(toolsSource).toContain('"conversations_storage_sync"');
     expect(toolsSource).toContain('"conversations_storage_migrate"');
     expect(toolsSource).toContain('"conversations_storage_feedback"');
+    expect(toolsSource).toContain('"conversations_storage_readiness"');
     expect(toolsSource.match(/await runStorageMigrations\(pg\)/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
     expect(toolsSource).not.toContain(retiredTool("status"));
     expect(toolsSource).not.toContain(retiredTool("push"));

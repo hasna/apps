@@ -836,7 +836,27 @@ export function getDb(): Database {
     db.exec("ALTER TABLE messages ADD COLUMN uuid TEXT");
     // Backfill existing rows with unique UUIDs
     db.exec("UPDATE messages SET uuid = lower(hex(randomblob(16))) WHERE uuid IS NULL");
+  }
+  const missingUuidCount = db.get<{ count: number }>(
+    "SELECT COUNT(*) AS count FROM messages WHERE uuid IS NULL OR uuid = ''"
+  )?.count ?? 0;
+  if (missingUuidCount > 0) {
+    db.exec("UPDATE messages SET uuid = lower(hex(randomblob(16))) WHERE uuid IS NULL OR uuid = ''");
+  }
+  const duplicateUuidCount = db.get<{ count: number }>(`
+    SELECT COUNT(*) AS count
+    FROM (
+      SELECT uuid
+      FROM messages
+      WHERE uuid IS NOT NULL AND uuid <> ''
+      GROUP BY uuid
+      HAVING COUNT(*) > 1
+    )
+  `)?.count ?? 0;
+  if (duplicateUuidCount === 0) {
     db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_uuid ON messages(uuid)");
+  } else {
+    db.exec("CREATE INDEX IF NOT EXISTS idx_messages_uuid_preflight ON messages(uuid)");
   }
 
   // Migrate agent_presence: add id, session_id, role, created_at columns

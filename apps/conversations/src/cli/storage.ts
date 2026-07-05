@@ -6,7 +6,9 @@ import {
   getStorageConfig,
   getStorageDatabaseUrl,
   getStoragePg,
+  getStorageReadiness,
   listConflicts,
+  listDuplicateMessageUuids,
   runStorageMigrations,
   storagePull,
   storagePush,
@@ -33,16 +35,22 @@ function installStorageSubcommands(storage: Command): void {
   storage.command("status").description("Show remote storage config and sync state").option("--json", "Output as JSON").action((opts: { json?: boolean }) => {
     const config = getStorageConfig();
     const canonical = getCanonicalConversationsRdsConfig();
+    const readiness = getStorageReadiness();
     const local = getDb();
     const unresolved = listConflicts(local, { resolved: false });
     const resolved = listConflicts(local, { resolved: true });
+    const duplicateMessageUuids = listDuplicateMessageUuids(local);
     const info = {
       mode: config.mode,
       configured: Boolean(getStorageDatabaseUrl()),
       service: "conversations",
       canonical,
       tables: DEFAULT_STORAGE_TABLES,
+      table_groups: readiness.tableGroups,
+      runtime_paths: readiness.runtimePaths,
+      privacy_and_migration_gates: readiness.privacyAndMigrationGates,
       conflicts: { unresolved: unresolved.length, resolved: resolved.length },
+      message_uuid_duplicates: duplicateMessageUuids,
     };
     if (opts.json) { printJson(info); return; }
     console.log(`Mode: ${info.mode}`);
@@ -52,8 +60,31 @@ function installStorageSubcommands(storage: Command): void {
     console.log(`Runtime secret path: ${canonical.runtimeSecretPath}`);
     console.log(`Database env: ${canonical.env} (fallback: ${canonical.fallbackEnv})`);
     console.log(`Remote storage configured: ${info.configured ? "yes" : "no"}`);
-    console.log(`Tables: ${info.tables.join(", ")}`);
+    console.log(`Default sync group: metadata (${info.tables.join(", ")})`);
+    console.log(`Cloud runtime group: cloud-runtime (${readiness.tableGroups.cloudRuntime.join(", ")})`);
+    console.log("Attachments: local files only; S3 object storage is an approval-gated follow-up.");
     console.log(`Sync conflicts: ${info.conflicts.unresolved} unresolved, ${info.conflicts.resolved} resolved`);
+    console.log(`Message UUID duplicates: ${duplicateMessageUuids.length}`);
+  });
+
+  storage.command("readiness").description("Show local/remote storage runtime readiness and migration gates").option("--json", "Output as JSON").action((opts: { json?: boolean }) => {
+    const readiness = getStorageReadiness();
+    if (opts.json) { printJson(readiness); return; }
+    console.log(`Mode: ${readiness.mode}`);
+    console.log(`Remote storage configured: ${readiness.configured ? "yes" : "no"}`);
+    console.log(`Local SQLite: ${readiness.local.sqlite}`);
+    console.log(`Local attachments: ${readiness.local.attachments}`);
+    console.log(`Default sync group: metadata (${readiness.tableGroups.default.join(", ")})`);
+    console.log(`Cloud runtime group: cloud-runtime (${readiness.tableGroups.cloudRuntime.join(", ")})`);
+    for (const path of readiness.runtimePaths) {
+      console.log(`\n${path.surface}: ${path.status}`);
+      console.log(`  local: ${path.local}`);
+      console.log(`  remote: ${path.remote}`);
+      if (path.tables.length > 0) console.log(`  tables: ${path.tables.join(", ")}`);
+      if (path.gates.length > 0) console.log(`  gates: ${path.gates.join("; ")}`);
+    }
+    console.log("\nPrivacy and migration gates:");
+    for (const gate of readiness.privacyAndMigrationGates) console.log(`  - ${gate}`);
   });
 
   storage.command("push").description("Push safe local conversations tables to remote PostgreSQL storage").option("--tables <tables>", "Comma-separated table names").option("--json", "Output as JSON").action(async (opts: { tables?: string; json?: boolean }) => {

@@ -62,8 +62,10 @@ describe("PG_MIGRATIONS", () => {
     const sql = PG_MIGRATIONS[0].toLowerCase();
     const pgcrypto = sql.indexOf("create extension if not exists pgcrypto");
     const uuidDefault = sql.indexOf("gen_random_uuid()");
+    const uuidIndex = sql.indexOf("idx_messages_uuid");
     expect(pgcrypto).toBeGreaterThan(-1);
     expect(uuidDefault).toBeGreaterThan(pgcrypto);
+    expect(uuidIndex).toBeGreaterThan(uuidDefault);
   });
 
   test("legacy PostgreSQL spaces are imported before legacy storage is dropped", () => {

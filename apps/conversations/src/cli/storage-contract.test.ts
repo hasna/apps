@@ -30,6 +30,11 @@ describe("conversations storage CLI contract", () => {
         fallbackEnv: string;
       };
       configured: boolean;
+      table_groups: {
+        cloudRuntime: string[];
+        localOnly: string[];
+      };
+      message_uuid_duplicates: Array<{ uuid: string; count: number }>;
     };
 
     expect(info.canonical).toEqual({
@@ -40,6 +45,35 @@ describe("conversations storage CLI contract", () => {
       fallbackEnv: "CONVERSATIONS_DATABASE_URL",
     });
     expect(info.configured).toBe(false);
+    expect(info.table_groups.cloudRuntime).toContain("messages");
+    expect(info.table_groups.cloudRuntime).toContain("message_read_receipts");
+    expect(info.table_groups.localOnly).toContain("messages_fts");
+    expect(info.message_uuid_duplicates).toEqual([]);
+    expect(stdout).not.toContain("postgres://");
+  });
+
+  it("reports storage readiness without printing a URL", () => {
+    const result = Bun.spawnSync({
+      cmd: ["bun", "src/cli/index.tsx", "storage", "readiness", "--json"],
+      cwd: join(import.meta.dir, "../.."),
+      env: {
+        ...process.env,
+        HASNA_CONVERSATIONS_DB_PATH: ":memory:",
+        CONVERSATIONS_DB_PATH: ":memory:",
+        HASNA_CONVERSATIONS_STORAGE_MODE: "local",
+        NO_COLOR: "1",
+      },
+    });
+
+    expect(result.exitCode).toBe(0);
+    const stdout = new TextDecoder().decode(result.stdout);
+    const info = JSON.parse(stdout) as {
+      runtimePaths: Array<{ surface: string; status: string }>;
+      privacyAndMigrationGates: string[];
+    };
+
+    expect(info.runtimePaths.find((path) => path.surface === "attachments")?.status).toBe("local_only");
+    expect(info.privacyAndMigrationGates.join(" ")).toContain("Never print database URLs");
     expect(stdout).not.toContain("postgres://");
   });
 
@@ -66,6 +100,7 @@ describe("conversations storage CLI contract", () => {
 
     expect(source).toContain("registerStorageCommands");
     expect(source).toContain('program.command("storage")');
+    expect(source).toContain('storage.command("readiness")');
     expect(source).not.toContain(retiredCloudCommand);
     expect(source).not.toContain(retiredCloudExport);
   });

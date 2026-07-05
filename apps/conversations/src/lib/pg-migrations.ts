@@ -86,6 +86,8 @@ export const PG_MIGRATIONS: string[] = [
     read_at TEXT
   );
   ALTER TABLE messages ADD COLUMN IF NOT EXISTS uuid TEXT DEFAULT gen_random_uuid()::text;
+  UPDATE messages SET uuid = gen_random_uuid()::text WHERE uuid IS NULL OR uuid = '';
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_uuid ON messages(uuid);
   ALTER TABLE messages ADD COLUMN IF NOT EXISTS channel TEXT;
   ALTER TABLE messages ADD COLUMN IF NOT EXISTS project_id TEXT;
   ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at TEXT;

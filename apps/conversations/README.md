@@ -162,8 +162,10 @@ This package supports optional remote storage sync to a PostgreSQL database:
 ```bash
 export HASNA_CONVERSATIONS_DATABASE_URL="<value from hasna/xyz/opensource/conversations/prod/rds>"
 conversations storage status
+conversations storage readiness
 conversations storage push
 conversations storage pull
+conversations storage sync --tables cloud-runtime
 ```
 
 Production storage for Hasna XYZ uses the `conversations` database on
@@ -179,6 +181,25 @@ central rollback window closes.
 
 By default, sync only includes
 text-key/global tables to avoid local integer ID collisions across machines.
+The default table group is `metadata`: projects, channels, channel membership,
+channel subscriptions, presence, locks, graph edges, and feedback.
+
+Use `conversations storage readiness --json` to inspect the explicit runtime
+path before any remote operation. CLI and MCP commands use local SQLite as the
+live store by default. `--tables cloud-runtime` is an opt-in sync group that
+adds `messages`, `message_read_receipts`, `channel_notification_reads`,
+`message_mentions`, and `reactions`. Message rows are upserted by UUID, and
+dependent read-state rows are translated through message UUIDs so local SQLite
+integer ids do not become cross-machine identifiers.
+
+Digest cursors and local search continue to use SQLite message ids and FTS5.
+The PostgreSQL migration creates a `tsvector` search index for remote readiness,
+but live query commands do not switch to remote search unless a remote query
+adapter is selected. Attachment files remain local under the conversations
+attachments directory; `cloud-runtime` sync omits local attachment metadata and
+file paths until an object-store migration exists. S3/AWS object storage,
+production writes, secret creation, data migration, terraform apply, or
+spend-affecting changes require a separate approval task.
 
 ## Data Directory
 

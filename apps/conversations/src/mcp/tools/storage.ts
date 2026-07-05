@@ -8,7 +8,9 @@ import {
   getStorageConfig,
   getStorageDatabaseUrl,
   getStoragePg,
+  getStorageReadiness,
   listConflicts,
+  listDuplicateMessageUuids,
   resolveTables,
   runStorageMigrations,
   saveFeedback,
@@ -28,6 +30,7 @@ export function registerStorageSyncTools(server: McpServer): void {
       try {
         const config = getStorageConfig();
         const canonical = getCanonicalConversationsRdsConfig();
+        const readiness = getStorageReadiness();
         const lines = [
           `Mode: ${config.mode}`,
           "Service: conversations",
@@ -36,6 +39,9 @@ export function registerStorageSyncTools(server: McpServer): void {
           `Runtime secret path: ${canonical.runtimeSecretPath}`,
           `Database env: ${canonical.env} (fallback: ${canonical.fallbackEnv})`,
           `RDS Host: ${config.rds.host || (getStorageDatabaseUrl() ? "(env database url)" : "(not configured)")}`,
+          `Default sync group: metadata (${DEFAULT_STORAGE_TABLES.join(", ")})`,
+          `Cloud runtime group: cloud-runtime (${readiness.tableGroups.cloudRuntime.join(", ")})`,
+          "Attachments: local files only; S3 object storage is an approval-gated follow-up.",
         ];
 
         if (config.mode === "local" && !getStorageDatabaseUrl()) {
@@ -57,9 +63,24 @@ export function registerStorageSyncTools(server: McpServer): void {
           const unresolved = listConflicts(local, { resolved: false });
           const resolved = listConflicts(local, { resolved: true });
           lines.push(`Sync conflicts: ${unresolved.length} unresolved, ${resolved.length} resolved`);
+          lines.push(`Message UUID duplicates: ${listDuplicateMessageUuids(local).length}`);
         } catch {}
 
         return { content: [{ type: "text", text: lines.join("\n") }] };
+      } catch (e) {
+        return { content: [{ type: "text", text: formatError(e) }], isError: true };
+      }
+    },
+  );
+
+  server.tool(
+    "conversations_storage_readiness",
+    "Show local SQLite, remote PostgreSQL, message/read-state, digest/search, attachment, and production migration readiness without exposing secrets",
+    {},
+    async () => {
+      try {
+        const readiness = getStorageReadiness();
+        return { content: [{ type: "text", text: JSON.stringify(readiness, null, 2) }] };
       } catch (e) {
         return { content: [{ type: "text", text: formatError(e) }], isError: true };
       }

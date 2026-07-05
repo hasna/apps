@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { getDb, getDbPath, closeDb } from "./db";
 import { createChannel, getChannel } from "./channels";
 import { sendMessage } from "./messages";
+import { listDuplicateMessageUuids } from "./storage-sync";
 import { unlinkSync } from "fs";
 import { Database } from "bun:sqlite";
 import { tmpdir } from "os";
@@ -93,6 +94,34 @@ describe("db", () => {
     const cols = db.prepare("PRAGMA table_info(messages)").all() as { name: string }[];
     const colNames = cols.map((c) => c.name);
     expect(colNames).toContain("channel");
+  });
+
+  test("keeps duplicate UUID preflight diagnosable instead of crashing on unique index creation", () => {
+    closeDb();
+    const legacyDb = new Database(TEST_DB);
+    legacyDb.exec(`
+      CREATE TABLE messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT NOT NULL,
+        from_agent TEXT NOT NULL,
+        to_agent TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now')),
+        uuid TEXT
+      );
+      INSERT INTO messages (session_id, from_agent, to_agent, content, uuid)
+      VALUES
+        ('dm:a:b', 'a', 'b', 'first', 'duplicate-uuid'),
+        ('dm:a:b', 'a', 'b', 'second', 'duplicate-uuid');
+    `);
+    legacyDb.close();
+
+    const db = getDb();
+    expect(listDuplicateMessageUuids(db)).toEqual([{ uuid: "duplicate-uuid", count: 2 }]);
+    const uniqueIndex = db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_messages_uuid'").get();
+    expect(uniqueIndex).toBeNull();
+    const preflightIndex = db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_messages_uuid_preflight'").get() as { name: string } | null;
+    expect(preflightIndex?.name).toBe("idx_messages_uuid_preflight");
   });
 
   test("migrates legacy channel messages before creating channel indexes", () => {
