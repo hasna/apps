@@ -395,6 +395,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["nft", "web3", "blockchain"],
   },
   {
+    name: "walmart-marketplace",
+    displayName: "Walmart Marketplace",
+    description: "Walmart Marketplace seller API for items, inventory, and orders",
+    category: "Commerce & Finance",
+    tags: ["ecommerce", "marketplace", "orders"],
+  },
+  {
     name: "woocommerce",
     displayName: "WooCommerce",
     description: "WordPress e-commerce plugin for orders, products, and customers",
