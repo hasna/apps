@@ -561,12 +561,14 @@ on the remote machine. The generated agent target includes worktree metadata
 inspection expose the exact checkout.
 
 Before a worker starts, worktree preparation verifies that any existing
-managed path is a real git worktree with the same top-level checkout, the same
-git common directory as the source repo, and the expected generated branch. A
-detached HEAD or unexpected branch fails closed with evidence
-(`worktreeMode=required`) instead of silently running a mutating workflow in
-the wrong state; `worktreeMode=auto` falls back to the original checkout and
-records the fallback.
+managed path is a real git worktree with the same top-level checkout and the
+same git common directory as the source repo. If the checkout is on a detached
+HEAD or unexpected branch, OpenLoops only reattaches it to the expected
+generated branch when the worktree is clean. Dirty worktrees, symlinked paths,
+non-worktree paths, different common dirs, and unrecoverable branch switches
+fail closed with cleanup evidence (`worktreeMode=required`) instead of
+silently running a mutating workflow in the wrong state; `worktreeMode=auto`
+falls back to the original checkout and records the fallback.
 
 Use explicit main/default checkout mode only when the task truly requires it:
 

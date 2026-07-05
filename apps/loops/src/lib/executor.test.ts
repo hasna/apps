@@ -279,7 +279,7 @@ describe("executeLoop", () => {
       return bin;
     }
 
-    test("prepares and enters a required git worktree before spawning", async () => {
+    test("prepares, enters, and recovers a clean required git worktree before spawning", async () => {
       const root = mkdtempSync(join(tmpdir(), "loops-worktree-required-"));
       const repo = initRepo(root);
       const bin = fakePwdBinary(root);
@@ -322,6 +322,16 @@ describe("executeLoop", () => {
         });
         expect(again.status).toBe("succeeded");
         expect(again.stdout.trim()).toBe(realpathSync(wtPath));
+
+        execFileSync("git", ["-C", wtPath, "checkout", "--detach"], { stdio: "ignore" });
+        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("");
+
+        const recovered = await executeLoop(loop, claim!.run, {
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        });
+        expect(recovered.status).toBe("succeeded");
+        expect(recovered.stdout.trim()).toBe(realpathSync(wtPath));
+        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
       } finally {
         store.close();
         rmSync(root, { recursive: true, force: true });
@@ -466,13 +476,15 @@ describe("executeLoop", () => {
         expect(result.stdout.trim()).toBe(wtPath);
         expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
 
-        // Second run reuses the existing worktree.
+        // Second run recovers a clean detached worktree before entering it.
+        execFileSync("git", ["-C", wtPath, "checkout", "--detach"], { stdio: "ignore" });
         const again = await executeLoop(loop, claim!.run, {
           ...remoteHooks,
           env: { HOME: home, PATH: "/usr/bin:/bin" },
         });
         expect(again.status).toBe("succeeded");
         expect(again.stdout.trim()).toBe(wtPath);
+        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
       } finally {
         store.close();
         rmSync(root, { recursive: true, force: true });
