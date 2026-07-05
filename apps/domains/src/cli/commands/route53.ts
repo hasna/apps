@@ -22,6 +22,7 @@ import type { DomainContactInfo } from "../../lib/route53.js";
 import { setupDomainZone } from "../../lib/zone-setup.js";
 import { createDomain, getDomainByName, updateDomain } from "../../db/domains.js";
 import { resolveContact } from "../../lib/config.js";
+import { compactHint, pageItemsOrExit, truncateText } from "../../lib/compact-output.js";
 
 export function registerRoute53Commands(program: Command): void {
   const r53 = program.command("r53").description("AWS Route 53 — domain purchase, hosted zones & DNS");
@@ -128,26 +129,29 @@ export function registerRoute53Commands(program: Command): void {
   r53
     .command("domains")
     .description("List domains registered in Route 53")
+    .option("--limit <n>", "Limit number of displayed domains")
+    .option("--all", "Show all registered domains")
     .option("--json", "Output JSON")
-    .action(async (opts: { json?: boolean }) => {
+    .action(async (opts: { limit?: string; all?: boolean; json?: boolean }) => {
       try {
         const domains = await listRegisteredDomains();
         if (opts.json) {
           console.log(JSON.stringify(domains, null, 2));
           return;
         }
-        if (domains.length === 0) {
+        const page = pageItemsOrExit(domains, { limit: opts.limit, all: opts.all });
+        if (page.items.length === 0) {
           console.log("No registered domains.");
           return;
         }
         console.log("\nRegistered Domains:");
-        for (const d of domains) {
+        for (const d of page.items) {
           const expiry = d.expiry ? ` (expires ${d.expiry.split("T")[0]})` : "";
           const renew = d.auto_renew ? " [auto-renew]" : "";
           const lock = d.transfer_lock ? " [locked]" : "";
           console.log(`  ${d.domain}${expiry}${renew}${lock}`);
         }
-        console.log();
+        console.log(`\n${compactHint(page, "domain(s)", "Use --all for every Route53 domain or r53 domain-info <domain> for details.", { paging: "limit" })}`);
       } catch (e) {
         console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
@@ -208,24 +212,27 @@ export function registerRoute53Commands(program: Command): void {
   r53
     .command("zones")
     .description("List hosted zones")
+    .option("--limit <n>", "Limit number of displayed zones")
+    .option("--all", "Show all hosted zones")
     .option("--json", "Output JSON")
-    .action(async (opts: { json?: boolean }) => {
+    .action(async (opts: { limit?: string; all?: boolean; json?: boolean }) => {
       try {
         const zones = await listHostedZones();
         if (opts.json) {
           console.log(JSON.stringify(zones, null, 2));
           return;
         }
-        if (zones.length === 0) {
+        const page = pageItemsOrExit(zones, { limit: opts.limit, all: opts.all });
+        if (page.items.length === 0) {
           console.log("No hosted zones.");
           return;
         }
         console.log("\nHosted Zones:");
-        for (const z of zones) {
-          const comment = z.comment ? ` — ${z.comment}` : "";
+        for (const z of page.items) {
+          const comment = z.comment ? ` — ${truncateText(z.comment, 60)}` : "";
           console.log(`  ${z.id}  ${z.name}  ${z.record_count} records${comment}`);
         }
-        console.log();
+        console.log(`\n${compactHint(page, "zone(s)", "Use --all for every zone or r53 zone-info <zoneId> for details.", { paging: "limit" })}`);
       } catch (e) {
         console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);
@@ -288,8 +295,10 @@ export function registerRoute53Commands(program: Command): void {
   r53
     .command("records <domain>")
     .description("List DNS records for a domain")
+    .option("--limit <n>", "Limit number of displayed records")
+    .option("--all", "Show all DNS records")
     .option("--json", "Output JSON")
-    .action(async (domain: string, opts: { json?: boolean }) => {
+    .action(async (domain: string, opts: { limit?: string; all?: boolean; json?: boolean }) => {
       try {
         const zone = await findHostedZoneByDomain(domain);
         if (!zone) {
@@ -301,19 +310,20 @@ export function registerRoute53Commands(program: Command): void {
           console.log(JSON.stringify(records, null, 2));
           return;
         }
-        if (records.length === 0) {
+        const page = pageItemsOrExit(records, { limit: opts.limit, all: opts.all });
+        if (page.items.length === 0) {
           console.log("No records.");
           return;
         }
         console.log(`\nDNS Records for ${domain}:`);
-        for (const r of records) {
+        for (const r of page.items) {
           const val = r.alias_target
             ? `ALIAS → ${r.alias_target.dns_name}`
-            : r.values.join(", ");
+            : truncateText(r.values.join(", "), 90);
           const ttl = r.alias_target ? "" : `  TTL:${r.ttl}`;
           console.log(`  ${r.type.padEnd(6)} ${r.name.padEnd(40)}${ttl}  ${val}`);
         }
-        console.log();
+        console.log(`\n${compactHint(page, "record(s)", "Use --all for every record or --json for full values.", { paging: "limit" })}`);
       } catch (e) {
         console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
         process.exit(1);

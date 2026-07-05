@@ -119,6 +119,58 @@ describe("stdio mode", () => {
     await client.close();
   });
 
+  it("list_domains returns compact pages by default and full records with verbose", async () => {
+    useTempDb();
+    const { createDomain } = await import("../db/domains.js");
+    for (let i = 0; i < 25; i += 1) {
+      createDomain({
+        name: `mcp-compact-${String(i).padStart(2, "0")}.example`,
+        registrar: "Example Registrar",
+        expires_at: "2031-01-01T00:00:00Z",
+        notes: `long MCP note ${i} ${"y".repeat(140)}`,
+        metadata: { index: i },
+      });
+    }
+
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+    await buildServer().connect(serverTransport);
+    await client.connect(clientTransport);
+
+    const compactResult = await client.callTool({ name: "list_domains", arguments: {} });
+    const compactText = (compactResult.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
+    const compact = JSON.parse(compactText) as {
+      domains: Array<{ name: string; metadata?: unknown; notes?: string }>;
+      count: number;
+      total: number;
+      has_more: boolean;
+      compact: boolean;
+      hint: string;
+    };
+
+    expect(compact.count).toBe(20);
+    expect(compact.total).toBe(25);
+    expect(compact.has_more).toBe(true);
+    expect(compact.compact).toBe(true);
+    expect(compact.hint).toContain("Set verbose=true");
+    expect(compact.domains[0]!.metadata).toBeUndefined();
+    expect(compact.domains[0]!.notes).not.toContain("y".repeat(120));
+
+    const verboseResult = await client.callTool({ name: "list_domains", arguments: { limit: 1, verbose: true } });
+    const verboseText = (verboseResult.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
+    const verbose = JSON.parse(verboseText) as {
+      domains: Array<{ metadata?: unknown; notes?: string }>;
+      count: number;
+      compact: boolean;
+    };
+    expect(verbose.count).toBe(1);
+    expect(verbose.compact).toBe(false);
+    expect(verbose.domains[0]!.metadata).toEqual({ index: 0 });
+    expect(verbose.domains[0]!.notes).toContain("y".repeat(120));
+
+    await client.close();
+  });
+
   it("safe mode omits mutating tools", async () => {
     useTempDb();
     process.env["DOMAINS_MCP_SAFE_MODE"] = "1";

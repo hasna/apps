@@ -9,6 +9,13 @@ import {
   storagePush,
   storageSync,
 } from "../db/storage-sync.js";
+import { compactHint, pageItems } from "../lib/compact-output.js";
+
+const listControls = {
+  limit: z.number().int().nonnegative().optional().describe("Maximum number of sync entries to return."),
+  offset: z.number().int().nonnegative().optional().describe("Number of sync entries to skip."),
+  all: z.boolean().optional().describe("Return all sync entries instead of the compact default page."),
+};
 
 function json(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
@@ -27,9 +34,26 @@ export function registerDomainsStorageTools(server: McpServer): void {
     {
       title: "Storage Status",
       description: "Show domains remote storage configuration and local sync history.",
-      inputSchema: {},
+      inputSchema: { ...listControls },
     },
-    async () => json({ configured: Boolean(getStorageDatabaseUrl()), mode: getStorageMode(), service: "domains", tables: STORAGE_TABLES, sync: getStorageSyncMetaAll() })
+    async (args) => {
+      const sync = getStorageSyncMetaAll();
+      const page = pageItems(sync, { limit: args.limit, offset: args.offset, all: args.all });
+      return json({
+        configured: Boolean(getStorageDatabaseUrl()),
+        mode: getStorageMode(),
+        service: "domains",
+        tables: STORAGE_TABLES,
+        sync: page.items,
+        count: page.shown,
+        total: page.total,
+        limit: page.limit,
+        offset: page.offset,
+        has_more: page.hasMore,
+        next_offset: page.hasMore ? page.offset + page.shown : null,
+        hint: compactHint(page, "sync entry(s)", "Set all=true for every sync entry."),
+      });
+    }
   );
 
   server.registerTool(

@@ -7,6 +7,7 @@ import {
   storageSync,
   type StorageSyncResult,
 } from "../../db/storage-sync.js";
+import { compactHint, pageItemsOrExit } from "../../lib/compact-output.js";
 
 function parseTables(value?: string): string[] | undefined {
   if (!value) return undefined;
@@ -30,8 +31,10 @@ function installStorageSubcommands(storage: Command): void {
   storage
     .command("status")
     .description("Show remote storage config and local sync state")
+    .option("--limit <n>", "Limit number of displayed sync entries")
+    .option("--all", "Show every sync entry")
     .option("--json", "Output as JSON")
-    .action((opts: { json?: boolean }) => {
+    .action((opts: { limit?: string; all?: boolean; json?: boolean }) => {
       const info = getStorageStatus();
       if (opts.json) {
         printJson(info);
@@ -41,8 +44,12 @@ function installStorageSubcommands(storage: Command): void {
       console.log(`Remote storage configured: ${info.configured ? "yes" : "no"}`);
       console.log(`Tables: ${info.tables.join(", ")}`);
       if (info.sync.length === 0) console.log("Sync: no local sync history");
-      for (const entry of info.sync) {
+      const page = pageItemsOrExit(info.sync, { limit: opts.limit, all: opts.all });
+      for (const entry of page.items) {
         console.log(`  ${entry.table_name} ${entry.direction}: ${entry.last_synced_at ?? "never"}`);
+      }
+      if (info.sync.length > 0) {
+        console.log(`\n${compactHint(page, "sync entry(s)", "Use --all for every sync entry or --json for the full status object.", { paging: "limit" })}`);
       }
     });
 

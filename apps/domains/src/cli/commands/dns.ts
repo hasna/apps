@@ -18,6 +18,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { getDnsProvider } from "../../lib/registrar.js";
 import { loadConfig } from "../../lib/config.js";
 import { createDnsPlan, getDnsApplyBlockReason, parseDesiredDnsState, planHasChanges, type DnsPlan } from "../../lib/dns-plan.js";
+import { compactHint, pageItemsOrExit, truncateText } from "../../lib/compact-output.js";
 
 function printDnsPlan(plan: DnsPlan): void {
   console.log(`DNS plan for ${plan.domain}: ${plan.creates} create, ${plan.updates} update, ${plan.deletes} delete, ${plan.unchanged} unchanged`);
@@ -137,6 +138,8 @@ export function registerDnsCommands(program: Command): void {
     .description("List DNS records for a domain")
     .argument("<domain-id>", "Domain ID")
     .option("--type <type>", "Filter by record type (A/AAAA/CNAME/MX/TXT/NS/SRV)")
+    .option("--limit <n>", "Limit number of displayed records")
+    .option("--all", "Show all matching records")
     .option("--json", "Output as JSON", false)
     .action((domainId, opts) => {
       const records = listDnsRecords(domainId, opts.type);
@@ -144,14 +147,16 @@ export function registerDnsCommands(program: Command): void {
       if (opts.json) {
         console.log(JSON.stringify(records, null, 2));
       } else {
-        if (records.length === 0) {
+        const page = pageItemsOrExit(records, { limit: opts.limit, all: opts.all });
+        if (page.items.length === 0) {
           console.log("No DNS records found.");
           return;
         }
-        for (const r of records) {
+        for (const r of page.items) {
           const priority = r.priority !== null ? ` (priority: ${r.priority})` : "";
-          console.log(`  ${r.type}\t${r.name}\t${r.value}\tTTL:${r.ttl}${priority}`);
+          console.log(`  ${r.type}\t${r.name}\t${truncateText(r.value, 80)}\tTTL:${r.ttl}${priority}`);
         }
+        console.log(`\n${compactHint(page, "record(s)", "Use --all for every record or --json for full values.", { paging: "limit" })}`);
       }
     });
 
@@ -305,6 +310,8 @@ export function registerDnsCommands(program: Command): void {
     .command("discover-subdomains")
     .description("Discover subdomains via certificate transparency logs (crt.sh)")
     .argument("<domain>", "Domain name")
+    .option("--limit <n>", "Limit number of displayed subdomains")
+    .option("--all", "Show all discovered subdomains")
     .option("--json", "Output as JSON", false)
     .action(async (domain, opts) => {
       const result = await discoverSubdomains(domain);
@@ -319,11 +326,12 @@ export function registerDnsCommands(program: Command): void {
           console.log(`No subdomains found for ${domain}.`);
           return;
         }
+        const page = pageItemsOrExit(result.subdomains, { limit: opts.limit, all: opts.all });
         console.log(`Subdomains for ${domain} (source: ${result.source}):`);
-        for (const s of result.subdomains) {
+        for (const s of page.items) {
           console.log(`  ${s}`);
         }
-        console.log(`\n${result.subdomains.length} subdomain(s) found`);
+        console.log(`\n${compactHint(page, "subdomain(s)", "Use --all for every discovered name or --json for the full result.", { paging: "limit" })}`);
       }
     });
 
