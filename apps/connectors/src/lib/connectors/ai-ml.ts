@@ -920,6 +920,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "music", "generation"],
   },
   {
+    name: "vapi",
+    displayName: "Vapi",
+    description: "Voice AI platform for assistants, calls, phone numbers, and tools",
+    category: "AI & ML",
+    tags: ["ai", "voice", "phone", "assistants"],
+  },
+  {
     name: "voicit",
     displayName: "Voicit",
     description: "AI meeting transcription and note-taking",

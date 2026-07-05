@@ -68,6 +68,10 @@ export const TEST_ENDPOINTS: Record<string, TestEndpoint> = {
     url: "https://api.tinker.com/v1/models",
     headers: (key) => ({ Authorization: `Bearer ${key}` }),
   },
+  vapi: {
+    url: "https://api.vapi.ai/assistant",
+    headers: (key) => ({ Authorization: `Bearer ${key}` }),
+  },
 
   // ── Developer Tools ──────────────────────────────────────
   github: {
