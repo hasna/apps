@@ -33,7 +33,7 @@ const SYNONYM_MAP: Record<string, string[]> = {
   // Business
   crm: ["sales", "leads", "contacts", "hubspot", "salesforce"],
   analytics: ["data", "metrics", "tracking", "mixpanel", "amplitude"],
-  project: ["task", "issue", "board", "jira", "linear", "asana"],
+  project: ["task", "issue", "board", "jira", "linear", "asana", "wrike"],
   docs: ["documentation", "wiki", "notion", "confluence"],
 
   // Design

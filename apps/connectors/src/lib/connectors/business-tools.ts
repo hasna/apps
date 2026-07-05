@@ -1004,6 +1004,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["okr", "strategy", "goals"],
   },
   {
+    name: "wrike",
+    displayName: "Wrike",
+    description: "Work management, tasks, folders, and team collaboration",
+    category: "Business Tools",
+    tags: ["project-management", "tasks", "workflow"],
+  },
+  {
     name: "yodiz",
     displayName: "Yodiz",
     description: "Agile project management and issue tracking",
