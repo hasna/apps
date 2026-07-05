@@ -157,6 +157,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["security", "scanning", "threat-intelligence"],
   },
   {
+    name: "valgo",
+    displayName: "Valgo",
+    description: "Physical AI risk quantification and autonomy insurance simulations",
+    category: "Security & Compliance",
+    tags: ["risk", "simulation", "insurance", "physical-ai"],
+  },
+  {
     name: "virustotal",
     displayName: "VirusTotal",
     description: "File and URL malware scanning and threat intelligence",
