@@ -388,6 +388,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["nft", "blockchain", "digital collectibles", "tokens", "web3"],
   },
   {
+    name: "vivenu",
+    displayName: "Vivenu",
+    description: "Event ticketing Distribution API (sellers, events, availabilities, checkouts)",
+    category: "Commerce & Finance",
+    tags: ["events", "ticketing", "distribution"],
+  },
+  {
     name: "whal3s",
     displayName: "Whal3s",
     description: "NFT utility and Web3 engagement platform",
