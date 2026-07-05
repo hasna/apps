@@ -161,6 +161,7 @@ CREATE TABLE IF NOT EXISTS workflow_work_items (
   subject_ref TEXT NOT NULL,
   project_key TEXT,
   project_group TEXT,
+  route_scope TEXT,
   priority INTEGER NOT NULL,
   status TEXT NOT NULL,
   attempts INTEGER NOT NULL,
@@ -177,6 +178,7 @@ CREATE TABLE IF NOT EXISTS workflow_work_items (
 CREATE INDEX IF NOT EXISTS idx_workflow_work_items_status_next ON workflow_work_items(status, next_attempt_at, priority DESC, created_at ASC);
 CREATE INDEX IF NOT EXISTS idx_workflow_work_items_project ON workflow_work_items(project_key, status);
 CREATE INDEX IF NOT EXISTS idx_workflow_work_items_group ON workflow_work_items(project_group, status);
+CREATE INDEX IF NOT EXISTS idx_workflow_work_items_scope ON workflow_work_items(route_scope, status);
 CREATE INDEX IF NOT EXISTS idx_workflow_work_items_invocation ON workflow_work_items(invocation_id);
 
 CREATE TABLE IF NOT EXISTS workflow_step_runs (

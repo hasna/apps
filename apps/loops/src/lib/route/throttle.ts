@@ -71,11 +71,12 @@ export function routeProjectGroup(optsGroup: string | undefined, data: Record<st
 
 export function routeThrottleDecision(
   store: Store,
-  args: { projectPath: string; projectGroup?: string; limits: RouteThrottleLimits },
+  args: { projectPath: string; projectGroup?: string; routeScope?: string; limits: RouteThrottleLimits },
 ): RouteThrottleDecision {
   const projectPath = normalizeRoutePath(args.projectPath) ?? resolve(args.projectPath);
   const projectGroup = args.projectGroup?.trim() || undefined;
-  const counts = store.countActiveWorkflowWorkItems({ projectKey: projectPath, projectGroup });
+  const routeScope = args.routeScope?.trim() || undefined;
+  const counts = store.countActiveWorkflowWorkItems({ projectKey: projectPath, projectGroup, routeScope });
   const base = {
     projectPath,
     ...(projectGroup ? { projectGroup } : {}),

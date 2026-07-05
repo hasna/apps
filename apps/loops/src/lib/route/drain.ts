@@ -138,6 +138,11 @@ function compactDrainResult(result: TodosTaskRoutePrint): Record<string, unknown
     workflowId: stringField(workflow?.id),
     workflowName: stringField(workflow?.name),
     providerRouting,
+    // Per-role codewith account attribution + the route scope that gates
+    // --max-active, so drain reports show which account each step ran on and the
+    // least-loaded spread is auditable.
+    accountProfiles: objectField(value.accountProfiles),
+    routeScope: stringField(value.routeScope),
     requeue,
     queuedAtSource: value.queuedAtSource,
     // Preserve the non-skippable-error marker so compact/cron output still

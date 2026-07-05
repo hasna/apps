@@ -148,6 +148,9 @@ export interface AgentRoutingSpec {
   eventId?: string;
   eventType?: string;
   eventSource?: string;
+  /** Lifecycle role of this agent step (triage/planner/worker/verifier). Used
+   *  for per-account attribution and least-loaded auth-profile pool selection. */
+  role?: "triage" | "planner" | "worker" | "verifier";
 }
 
 export interface AgentPromptSource {
@@ -281,6 +284,12 @@ export interface WorkflowWorkItem {
   subjectRef: string;
   projectKey?: string;
   projectGroup?: string;
+  /**
+   * The drain/route identity (loop name) that admitted this item. Used to scope
+   * the `--max-active` global admission count to a single route instead of the
+   * whole store. Undefined for items created before route-scope support.
+   */
+  routeScope?: string;
   priority: number;
   status: WorkflowWorkItemStatus;
   attempts: number;
@@ -303,6 +312,7 @@ export interface UpsertWorkflowWorkItemInput {
   subjectRef: string;
   projectKey?: string;
   projectGroup?: string;
+  routeScope?: string;
   priority?: number;
   status?: Extract<WorkflowWorkItemStatus, "queued" | "deferred">;
   nextAttemptAt?: string;

@@ -178,6 +178,7 @@ interface WorkflowWorkItemRow {
   subject_ref: string;
   project_key: string | null;
   project_group: string | null;
+  route_scope: string | null;
   priority: number;
   status: string;
   attempts: number;
@@ -416,6 +417,7 @@ function rowToWorkflowWorkItem(row: WorkflowWorkItemRow): WorkflowWorkItem {
     subjectRef: row.subject_ref,
     projectKey: row.project_key ?? undefined,
     projectGroup: row.project_group ?? undefined,
+    routeScope: row.route_scope ?? undefined,
     priority: row.priority,
     status: row.status as WorkflowWorkItemStatus,
     attempts: row.attempts,
@@ -867,6 +869,24 @@ export class Store {
           this.db.exec("CREATE INDEX IF NOT EXISTS idx_runs_claim_token ON loop_runs(claim_token) WHERE claim_token IS NOT NULL");
         },
       },
+      {
+        id: "0008_work_item_route_scope",
+        apply: () => {
+          // Per-route --max-active scoping: the global admission count is filtered
+          // by the drain/route (loop) that set the limit instead of counting the
+          // whole store. Existing in-flight rows keep route_scope NULL and simply
+          // fall out of any new scoped count (biases toward more admission, never
+          // less); per-project/per-group counts are unaffected.
+          //
+          // route_scope is nullable + additive, so SCHEMA_USER_VERSION is
+          // intentionally NOT bumped: a rolled-back older binary must still open a
+          // DB this migration touched (it ignores the column and tolerates the
+          // extra schema_migrations row). Bumping would make the daemon refuse the
+          // DB on downgrade — a fleet-wide outage risk during rollout.
+          this.addColumnIfMissing("workflow_work_items", "route_scope", "TEXT");
+          this.db.exec("CREATE INDEX IF NOT EXISTS idx_workflow_work_items_scope ON workflow_work_items(route_scope, status)");
+        },
+      },
     ];
   }
 
@@ -1014,6 +1034,7 @@ export class Store {
         subject_ref TEXT NOT NULL,
         project_key TEXT,
         project_group TEXT,
+        route_scope TEXT,
         priority INTEGER NOT NULL,
         status TEXT NOT NULL,
         attempts INTEGER NOT NULL,
@@ -1030,6 +1051,7 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_workflow_work_items_status_next ON workflow_work_items(status, next_attempt_at, priority DESC, created_at ASC);
       CREATE INDEX IF NOT EXISTS idx_workflow_work_items_project ON workflow_work_items(project_key, status);
       CREATE INDEX IF NOT EXISTS idx_workflow_work_items_group ON workflow_work_items(project_group, status);
+      CREATE INDEX IF NOT EXISTS idx_workflow_work_items_scope ON workflow_work_items(route_scope, status);
       CREATE INDEX IF NOT EXISTS idx_workflow_work_items_invocation ON workflow_work_items(invocation_id);
 
       CREATE TABLE IF NOT EXISTS workflow_step_runs (
@@ -1963,10 +1985,10 @@ export class Store {
     this.db
       .query(
         `INSERT INTO workflow_work_items (id, route_key, idempotency_key, invocation_id, source_type, source_ref,
-          subject_ref, project_key, project_group, priority, status, attempts, next_attempt_at, lease_expires_at,
+          subject_ref, project_key, project_group, route_scope, priority, status, attempts, next_attempt_at, lease_expires_at,
           workflow_id, loop_id, workflow_run_id, last_reason, created_at, updated_at)
          VALUES ($id, $routeKey, $idempotencyKey, $invocationId, $sourceType, $sourceRef, $subjectRef,
-          $projectKey, $projectGroup, $priority, $status, 0, $nextAttemptAt, NULL, NULL, NULL, NULL,
+          $projectKey, $projectGroup, $routeScope, $priority, $status, 0, $nextAttemptAt, NULL, NULL, NULL, NULL,
           $lastReason, $created, $updated)
          ON CONFLICT(route_key, idempotency_key) DO UPDATE SET
           invocation_id=excluded.invocation_id,
@@ -1975,6 +1997,7 @@ export class Store {
           subject_ref=excluded.subject_ref,
           project_key=excluded.project_key,
           project_group=excluded.project_group,
+          route_scope=excluded.route_scope,
           priority=excluded.priority,
           status=CASE
             WHEN workflow_work_items.status IN ('succeeded', 'admitted', 'running', 'failed', 'dead_letter', 'cancelled')
@@ -2018,6 +2041,7 @@ export class Store {
         $subjectRef: input.subjectRef,
         $projectKey: input.projectKey ?? null,
         $projectGroup: input.projectGroup ?? null,
+        $routeScope: input.routeScope ?? null,
         $priority: input.priority ?? 0,
         $status: status,
         $nextAttemptAt: input.nextAttemptAt ?? null,
@@ -2075,16 +2099,29 @@ export class Store {
     return rows.map(rowToWorkflowWorkItem);
   }
 
-  countActiveWorkflowWorkItems(args: { projectKey?: string; projectGroup?: string } = {}): {
+  countActiveWorkflowWorkItems(args: { projectKey?: string; projectGroup?: string; routeScope?: string } = {}): {
     global: number;
     project: number;
     projectGroup?: number;
   } {
     const active = ["admitted", "running"];
     const placeholders = active.map(() => "?").join(",");
-    const global = this.db
-      .query<{ count: number }, string[]>(`SELECT COUNT(*) AS count FROM workflow_work_items WHERE status IN (${placeholders})`)
-      .get(...active)?.count ?? 0;
+    // `global` is the ceiling that `--max-active` compares against. When a
+    // route scope is supplied (the loop/drain identity that set the limit) the
+    // count is filtered to that route so each router's `--max-active` is its
+    // OWN ceiling rather than a store-wide one shared by every router. Without
+    // a scope it stays store-wide for back-compat. `project`/`projectGroup`
+    // counts are deliberately unscoped — they are cross-route anti-hog caps.
+    const routeScope = args.routeScope?.trim() || undefined;
+    const global = routeScope
+      ? this.db
+          .query<{ count: number }, string[]>(
+            `SELECT COUNT(*) AS count FROM workflow_work_items WHERE status IN (${placeholders}) AND route_scope = ?`,
+          )
+          .get(...active, routeScope)?.count ?? 0
+      : this.db
+          .query<{ count: number }, string[]>(`SELECT COUNT(*) AS count FROM workflow_work_items WHERE status IN (${placeholders})`)
+          .get(...active)?.count ?? 0;
     const project = args.projectKey
       ? this.db
           .query<{ count: number }, string[]>(
@@ -2100,6 +2137,28 @@ export class Store {
           .get(...active, args.projectGroup)?.count ?? 0
       : undefined;
     return { global, project, ...(projectGroup !== undefined ? { projectGroup } : {}) };
+  }
+
+  /**
+   * Number of currently-running workflow steps per resolved auth profile
+   * (account_profile). Drives least-loaded pool selection and the
+   * `--max-per-profile` guard so concurrency spreads across subscription
+   * accounts instead of stacking on one (the provider-side 429 wall). Only
+   * `running` steps are counted: within a workflow steps run sequentially, so a
+   * profile's running count is the number of concurrent workflows executing a
+   * step on that account right now — exactly the concurrency to bound.
+   */
+  countRunningWorkflowStepsByAuthProfile(): Record<string, number> {
+    const rows = this.db
+      .query<{ account_profile: string | null; count: number }, []>(
+        "SELECT account_profile, COUNT(*) AS count FROM workflow_step_runs WHERE status = 'running' AND account_profile IS NOT NULL GROUP BY account_profile",
+      )
+      .all();
+    const counts: Record<string, number> = {};
+    for (const row of rows) {
+      if (row.account_profile) counts[row.account_profile] = row.count;
+    }
+    return counts;
   }
 
   requeueWorkflowWorkItem(id: string, patch: { reason?: string } = {}): WorkflowWorkItem {
@@ -2695,6 +2754,13 @@ export class Store {
 
       input.workflow.steps.forEach((step, sequence) => {
         const account = step.account ?? step.target.account;
+        // codewith agent steps carry their subscription account in `authProfile`
+        // (passed to `codewith exec --auth-profile`), not in an AccountRef. Record
+        // it as account_profile so per-account attribution and least-loaded pool
+        // accounting see the real account instead of NULL.
+        const agentTarget = step.target.type === "agent" ? step.target : undefined;
+        const resolvedProfile = account?.profile ?? agentTarget?.authProfile ?? null;
+        const resolvedTool = account?.tool ?? (agentTarget?.authProfile ? agentTarget.provider : null);
         this.db
           .query(
             `INSERT INTO workflow_step_runs (id, workflow_run_id, step_id, sequence, status, started_at, finished_at,
@@ -2707,8 +2773,8 @@ export class Store {
             $workflowRunId: runId,
             $stepId: step.id,
             $sequence: sequence,
-            $accountProfile: account?.profile ?? null,
-            $accountTool: account?.tool ?? null,
+            $accountProfile: resolvedProfile,
+            $accountTool: resolvedTool,
             $created: now,
             $updated: now,
           });

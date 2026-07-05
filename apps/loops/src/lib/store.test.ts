@@ -1413,7 +1413,12 @@ describe("Store", () => {
         "0005_workflow_invocations_and_admission",
         "0006_run_process_tracking",
         "0007_run_claim_tokens",
+        "0008_work_item_route_scope",
       ]);
+      // 0008 adds a nullable, additive column and deliberately does NOT bump
+      // SCHEMA_USER_VERSION: an older binary must still open a DB the newer one
+      // touched (rollback safety), and the migration runner tolerates the extra
+      // ledger row + ignores the unknown column.
       const version = store["db"].query("PRAGMA user_version").get() as { user_version: number };
       expect(version.user_version).toBeGreaterThanOrEqual(7);
     } finally {
@@ -2007,5 +2012,85 @@ describe("Store", () => {
     store.close();
 
     expect(existsSync(tempRoot)).toBe(false);
+  });
+});
+
+describe("countActiveWorkflowWorkItems route scope", () => {
+  function admitItem(store: Store, idempotencyKey: string, routeScope: string, projectKey = "/tmp/scope-repo"): void {
+    const invocation = store.createWorkflowInvocation({
+      sourceRef: { kind: "event", id: `evt-${idempotencyKey}`, dedupeKey: idempotencyKey },
+      subjectRef: { kind: "task", id: idempotencyKey, path: projectKey },
+      intent: "route",
+      scope: { projectPath: projectKey },
+    });
+    const workItem = store.upsertWorkflowWorkItem({
+      routeKey: "todos-task",
+      idempotencyKey,
+      invocationId: invocation.id,
+      sourceType: "task.created",
+      sourceRef: `evt-${idempotencyKey}`,
+      subjectRef: idempotencyKey,
+      projectKey,
+      routeScope,
+    });
+    const workflow = store.createWorkflow({ name: `wf-${idempotencyKey}`, steps: [{ id: "s", target: { type: "command", command: "true" } }] });
+    const loop = store.createLoop({
+      name: `loop-${idempotencyKey}`,
+      schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+      target: { type: "workflow", workflowId: workflow.id, input: {} },
+    });
+    store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id });
+  }
+
+  test("scopes the global --max-active count to the route that set it", () => {
+    const store = new Store(":memory:");
+    try {
+      admitItem(store, "a1", "loopA");
+      admitItem(store, "a2", "loopA");
+      admitItem(store, "b1", "loopB");
+      // Each route's --max-active now counts only its own active items.
+      // Neutralization: the pre-fix store-wide global count ignored routeScope
+      // and returned 3 for every route, so these per-scope assertions fail.
+      expect(store.countActiveWorkflowWorkItems({ routeScope: "loopA" }).global).toBe(2);
+      expect(store.countActiveWorkflowWorkItems({ routeScope: "loopB" }).global).toBe(1);
+      expect(store.countActiveWorkflowWorkItems({ routeScope: "loopC" }).global).toBe(0);
+      // No scope -> store-wide count, unchanged for back-compat.
+      expect(store.countActiveWorkflowWorkItems().global).toBe(3);
+      // Per-project counting stays unscoped (cross-route anti-hog cap).
+      expect(store.countActiveWorkflowWorkItems({ projectKey: "/tmp/scope-repo", routeScope: "loopA" }).project).toBe(3);
+    } finally {
+      store.close();
+    }
+  });
+});
+
+describe("workflow step account profile attribution", () => {
+  test("persists the codewith authProfile as account_profile and counts running steps per profile", () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "codewith-attribution-wf",
+        steps: [
+          { id: "worker", target: { type: "agent", provider: "codewith", prompt: "do the work", sandbox: "workspace-write", authProfile: "account007" } },
+          { id: "verifier", target: { type: "agent", provider: "codewith", prompt: "review it", sandbox: "workspace-write", authProfile: "account009" } },
+        ],
+      });
+      const run = store.createWorkflowRun({ workflow });
+      const steps = store.listWorkflowStepRuns(run.id);
+      // Fix: codewith steps carry the account in `authProfile`, not an AccountRef;
+      // it must land in account_profile. Neutralization: the pre-fix INSERT used
+      // `account?.profile ?? null`, leaving both NULL for codewith steps.
+      expect(steps.find((step) => step.stepId === "worker")?.accountProfile).toBe("account007");
+      expect(steps.find((step) => step.stepId === "verifier")?.accountProfile).toBe("account009");
+
+      // countRunningWorkflowStepsByAuthProfile only counts running steps.
+      expect(store.countRunningWorkflowStepsByAuthProfile()).toEqual({});
+      store.startWorkflowStepRun(run.id, "worker");
+      expect(store.countRunningWorkflowStepsByAuthProfile()).toEqual({ account007: 1 });
+      store.startWorkflowStepRun(run.id, "verifier");
+      expect(store.countRunningWorkflowStepsByAuthProfile()).toEqual({ account007: 1, account009: 1 });
+    } finally {
+      store.close();
+    }
   });
 });

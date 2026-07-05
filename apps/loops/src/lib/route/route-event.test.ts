@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dbPath } from "../paths.js";
+import { Store } from "../store.js";
 import type { TodosTaskRouteOptions } from "./types.js";
 import { routeTodosTaskEvent } from "./route-event.js";
 
@@ -274,5 +275,80 @@ describe("routeTodosTaskEvent freshness skip marker", () => {
     expect(result.kind).toBe("skipped");
     expect(result.value.freshnessSkip).toBe(true);
     expect(result.value.prState).toBe("MERGED");
+  });
+});
+
+describe("routeTodosTaskEvent per-route --max-active scope", () => {
+  let env: RouteEnv;
+  beforeEach(() => {
+    env = withRouteEnv();
+  });
+  afterEach(() => {
+    env.restore();
+  });
+
+  test("--max-active counts only the routing loop's own active items", () => {
+    const optsA: TodosTaskRouteOptions = { ...ROUTE_OPTS, maxActive: "1", maxActiveScope: "loopA" };
+    const optsB: TodosTaskRouteOptions = { ...ROUTE_OPTS, maxActive: "1", maxActiveScope: "loopB" };
+    // loopA admits its first task (0 active < 1).
+    expect(routeTodosTaskEvent(plainTaskEvent("scope-a1"), optsA).kind).toBe("created");
+    // loopB is a DIFFERENT route: it is not blocked by loopA's active item.
+    // Neutralization: the pre-fix store-wide count saw 1 active >= 1 and would
+    // have throttled this — asserting "created" fails against the old counting.
+    expect(routeTodosTaskEvent(plainTaskEvent("scope-b1"), optsB).kind).toBe("created");
+    // A second loopA task IS blocked because loopA already holds one active item.
+    expect(routeTodosTaskEvent(plainTaskEvent("scope-a2"), optsA).kind).toBe("throttled");
+  });
+});
+
+describe("routeTodosTaskEvent least-loaded auth-profile pool", () => {
+  let env: RouteEnv;
+  beforeEach(() => {
+    env = withRouteEnv();
+  });
+  afterEach(() => {
+    env.restore();
+  });
+
+  // Seed a running codewith step on `profile` in the same store the route reads,
+  // so countRunningWorkflowStepsByAuthProfile() reports live per-account load.
+  function seedRunningStep(profile: string, tag: string): void {
+    const store = new Store(dbPath());
+    try {
+      const workflow = store.createWorkflow({
+        name: `seed-${tag}`,
+        steps: [{ id: "worker", target: { type: "agent", provider: "codewith", prompt: "seeded", sandbox: "workspace-write", authProfile: profile } }],
+      });
+      const run = store.createWorkflowRun({ workflow });
+      store.startWorkflowStepRun(run.id, "worker");
+    } finally {
+      store.close();
+    }
+  }
+
+  test("spreads the worker to the least-loaded pool account", () => {
+    // acctA has 2 running, acctC has 1, acctB is idle -> least loaded is acctB.
+    seedRunningStep("acctA", "s1");
+    seedRunningStep("acctA", "s2");
+    seedRunningStep("acctC", "s3");
+    const opts: TodosTaskRouteOptions = { ...ROUTE_OPTS, authProfilePool: "acctA,acctB,acctC", maxPerProfile: "0" };
+    const result = routeTodosTaskEvent(plainTaskEvent("spread-1"), opts);
+    expect(result.kind).toBe("created");
+    const profiles = result.value.accountProfiles as Record<string, string> | undefined;
+    // Neutralization: removing the route-event pool wiring leaves accountProfiles
+    // undefined and the worker on its deterministic hash pick (often a loaded
+    // account); least-loaded must place the worker on the idle acctB.
+    expect(profiles?.worker).toBe("acctB");
+    expect(result.value.routeScope).toBeDefined();
+  });
+
+  test("defers the route when every pool account is at --max-per-profile", () => {
+    seedRunningStep("acctA", "d1");
+    seedRunningStep("acctB", "d2");
+    const opts: TodosTaskRouteOptions = { ...ROUTE_OPTS, authProfilePool: "acctA,acctB", maxPerProfile: "1" };
+    const result = routeTodosTaskEvent(plainTaskEvent("defer-1"), opts);
+    // Neutralization: without the guard this is "created" and stacks a 3rd run.
+    expect(result.kind).toBe("throttled");
+    expect(String(result.value.reason)).toContain("per-profile active limit reached");
   });
 });

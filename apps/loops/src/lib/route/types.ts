@@ -33,6 +33,8 @@ export interface TodosTaskRouteOptions {
   maxActive?: string;
   maxActivePerProject?: string;
   maxActivePerProjectGroup?: string;
+  maxActiveScope?: string;
+  maxPerProfile?: string;
   worktreeMode?: string;
   worktreeRoot?: string;
   worktreeBranchPrefix?: string;

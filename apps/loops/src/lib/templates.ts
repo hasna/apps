@@ -54,6 +54,7 @@ import {
   worktreePrompt,
 } from "./template-kit.js";
 import type { AgentWorkflowRole, LifecycleGateStage } from "./template-kit.js";
+import { poolRoleOffset, stableIndex } from "./route/profile-pool.js";
 
 export {
   BOUNDED_AGENT_WORKER_VERIFIER_TEMPLATE_ID,
@@ -224,22 +225,15 @@ function parseDeterministicTimeoutMs(raw: string | undefined, fallbackMs: number
   return value;
 }
 
-function stableIndex(seed: string, size: number): number {
-  let hash = 2166136261;
-  for (let i = 0; i < seed.length; i += 1) {
-    hash ^= seed.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return Math.abs(hash >>> 0) % size;
-}
-
 function rolePoolValue<T>(pool: T[] | undefined, seed: string, role: AgentWorkflowRole): T | undefined {
   if (!pool?.length) return undefined;
   const workerIndex = stableIndex(seed, pool.length);
-  if (role === "worker" || pool.length === 1) return pool[workerIndex];
-  if (role === "verifier") return pool[(workerIndex + 1) % pool.length];
-  if (role === "planner") return pool[(workerIndex + 2) % pool.length];
-  return pool[(workerIndex + 3) % pool.length];
+  if (pool.length === 1) return pool[workerIndex];
+  // Deterministic per-role offset. This is the render-time default; live drain
+  // dispatch may override codewith auth profiles with least-loaded pool
+  // selection (see route/profile-pool.ts + route-event.ts). The tie-break there
+  // reuses this exact offset so equal-load selection is identical.
+  return pool[(workerIndex + poolRoleOffset(role)) % pool.length];
 }
 
 function authProfileForRole(input: AgentWorkflowTemplateBaseInput, role: AgentWorkflowRole, seed: string): string | undefined {
@@ -452,6 +446,7 @@ function agentTarget(
     routing: {
       projectPath: input.routeProjectPath ?? input.projectPath,
       ...(input.projectGroup ? { projectGroup: input.projectGroup } : {}),
+      role,
     },
     account: accountForRole(input, role, seed),
     timeoutMs: agentTimeoutMs(input),

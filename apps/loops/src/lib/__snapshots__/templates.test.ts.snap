@@ -55,7 +55,8 @@ exports[`builtin rendered workflow snapshots todos-task-worker-verifier 1`] = `
           "branch": "openloops/repo/task-1200-<HASH>"
         },
         "routing": {
-          "projectPath": "<REPO>"
+          "projectPath": "<REPO>",
+          "role": "worker"
         },
         "timeoutMs": null
       },
@@ -91,7 +92,8 @@ exports[`builtin rendered workflow snapshots todos-task-worker-verifier 1`] = `
           "branch": "openloops/repo/task-1200-<HASH>"
         },
         "routing": {
-          "projectPath": "<REPO>"
+          "projectPath": "<REPO>",
+          "role": "verifier"
         },
         "timeoutMs": null,
         "idleTimeoutMs": 900000
@@ -134,7 +136,8 @@ exports[`builtin rendered workflow snapshots event-worker-verifier 1`] = `
           "branch": "openloops/repo/hasna-repo.push-evt-7700-<HASH>"
         },
         "routing": {
-          "projectPath": "<REPO>"
+          "projectPath": "<REPO>",
+          "role": "worker"
         },
         "timeoutMs": null
       },
@@ -169,7 +172,8 @@ exports[`builtin rendered workflow snapshots event-worker-verifier 1`] = `
           "branch": "openloops/repo/hasna-repo.push-evt-7700-<HASH>"
         },
         "routing": {
-          "projectPath": "<REPO>"
+          "projectPath": "<REPO>",
+          "role": "verifier"
         },
         "timeoutMs": null,
         "idleTimeoutMs": 900000
@@ -234,7 +238,8 @@ exports[`builtin rendered workflow snapshots task-lifecycle with pr handoff 1`] 
           "branch": "openloops/repo/task-1200-<HASH>"
         },
         "routing": {
-          "projectPath": "<REPO>"
+          "projectPath": "<REPO>",
+          "role": "triage"
         },
         "timeoutMs": null
       },
@@ -291,7 +296,8 @@ exports[`builtin rendered workflow snapshots task-lifecycle with pr handoff 1`] 
           "branch": "openloops/repo/task-1200-<HASH>"
         },
         "routing": {
-          "projectPath": "<REPO>"
+          "projectPath": "<REPO>",
+          "role": "planner"
         },
         "timeoutMs": null
       },
@@ -348,7 +354,8 @@ exports[`builtin rendered workflow snapshots task-lifecycle with pr handoff 1`] 
           "branch": "openloops/repo/task-1200-<HASH>"
         },
         "routing": {
-          "projectPath": "<REPO>"
+          "projectPath": "<REPO>",
+          "role": "worker"
         },
         "timeoutMs": null
       },
@@ -402,7 +409,8 @@ exports[`builtin rendered workflow snapshots task-lifecycle with pr handoff 1`] 
           "branch": "openloops/repo/task-1200-<HASH>"
         },
         "routing": {
-          "projectPath": "<REPO>"
+          "projectPath": "<REPO>",
+          "role": "verifier"
         },
         "timeoutMs": null,
         "idleTimeoutMs": 900000
@@ -439,7 +447,8 @@ exports[`builtin rendered workflow snapshots bounded-agent-worker-verifier 1`] =
           "reason": "worktree mode disabled"
         },
         "routing": {
-          "projectPath": "<REPO>"
+          "projectPath": "<REPO>",
+          "role": "worker"
         },
         "timeoutMs": null
       },
@@ -468,7 +477,8 @@ exports[`builtin rendered workflow snapshots bounded-agent-worker-verifier 1`] =
           "reason": "worktree mode disabled"
         },
         "routing": {
-          "projectPath": "<REPO>"
+          "projectPath": "<REPO>",
+          "role": "verifier"
         },
         "timeoutMs": null,
         "idleTimeoutMs": 900000
@@ -505,7 +515,8 @@ exports[`builtin rendered workflow snapshots pr-review 1`] = `
           "reason": "worktree mode disabled"
         },
         "routing": {
-          "projectPath": "<REPO>"
+          "projectPath": "<REPO>",
+          "role": "worker"
         },
         "timeoutMs": null
       },
@@ -534,7 +545,8 @@ exports[`builtin rendered workflow snapshots pr-review 1`] = `
           "reason": "worktree mode disabled"
         },
         "routing": {
-          "projectPath": "<REPO>"
+          "projectPath": "<REPO>",
+          "role": "verifier"
         },
         "timeoutMs": null,
         "idleTimeoutMs": 900000
@@ -571,7 +583,8 @@ exports[`builtin rendered workflow snapshots scheduled-audit 1`] = `
           "reason": "worktree mode disabled"
         },
         "routing": {
-          "projectPath": "<REPO>"
+          "projectPath": "<REPO>",
+          "role": "worker"
         },
         "timeoutMs": null
       },
@@ -600,7 +613,8 @@ exports[`builtin rendered workflow snapshots scheduled-audit 1`] = `
           "reason": "worktree mode disabled"
         },
         "routing": {
-          "projectPath": "<REPO>"
+          "projectPath": "<REPO>",
+          "role": "verifier"
         },
         "timeoutMs": null,
         "idleTimeoutMs": 900000
@@ -637,7 +651,8 @@ exports[`builtin rendered workflow snapshots knowledge-refresh 1`] = `
           "reason": "worktree mode disabled"
         },
         "routing": {
-          "projectPath": "<REPO>"
+          "projectPath": "<REPO>",
+          "role": "worker"
         },
         "timeoutMs": null
       },
@@ -666,7 +681,8 @@ exports[`builtin rendered workflow snapshots knowledge-refresh 1`] = `
           "reason": "worktree mode disabled"
         },
         "routing": {
-          "projectPath": "<REPO>"
+          "projectPath": "<REPO>",
+          "role": "verifier"
         },
         "timeoutMs": null,
         "idleTimeoutMs": 900000
@@ -703,7 +719,8 @@ exports[`builtin rendered workflow snapshots report-only stays read-only on the 
           "reason": "explicit main/default checkout mode"
         },
         "routing": {
-          "projectPath": "<REPO>"
+          "projectPath": "<REPO>",
+          "role": "worker"
         },
         "timeoutMs": null
       },
@@ -732,7 +749,8 @@ exports[`builtin rendered workflow snapshots report-only stays read-only on the 
           "reason": "explicit main/default checkout mode"
         },
         "routing": {
-          "projectPath": "<REPO>"
+          "projectPath": "<REPO>",
+          "role": "verifier"
         },
         "timeoutMs": null,
         "idleTimeoutMs": 900000
@@ -769,7 +787,8 @@ exports[`builtin rendered workflow snapshots incident-response 1`] = `
           "reason": "worktree mode disabled"
         },
         "routing": {
-          "projectPath": "<REPO>"
+          "projectPath": "<REPO>",
+          "role": "worker"
         },
         "timeoutMs": null
       },
@@ -798,7 +817,8 @@ exports[`builtin rendered workflow snapshots incident-response 1`] = `
           "reason": "worktree mode disabled"
         },
         "routing": {
-          "projectPath": "<REPO>"
+          "projectPath": "<REPO>",
+          "role": "verifier"
         },
         "timeoutMs": null,
         "idleTimeoutMs": 900000
