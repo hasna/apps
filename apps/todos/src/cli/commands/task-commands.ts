@@ -16,6 +16,7 @@ import {
   lockTask,
   unlockTask,
 } from "../../db/tasks.js";
+import { getTaskList, getTaskListBySlug } from "../../db/task-lists.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
 import {
   formatTaskLine,
@@ -168,6 +169,24 @@ function buildExpectationMetadata(opts: Record<string, unknown>): Record<string,
   if (observed !== undefined) metadata["observed"] = parseJsonValue(String(observed));
   if (acceptance !== undefined) metadata["acceptance"] = parseJsonValue(String(acceptance));
   return metadata;
+}
+
+/**
+ * Resolve a `--list` reference to a canonical task-list UUID. UUID linkage is
+ * authoritative: an exact UUID, then a unique partial UUID, then a project-scoped
+ * slug. Returns the canonical `.id` so slug/partial input always persists as a
+ * UUID. Returns `{ error }` for unresolvable or ambiguous input rather than
+ * silently succeeding.
+ */
+function resolveTaskListRef(ref: string, projectId: string | null): { id: string } | { error: string } {
+  const db = getDatabase();
+  const exact = getTaskList(ref, db);
+  if (exact) return { id: exact.id };
+  const partial = resolvePartialId(db, "task_lists", ref);
+  if (partial) return { id: partial };
+  const bySlug = getTaskListBySlug(ref, projectId ?? undefined, db);
+  if (bySlug) return { id: bySlug.id };
+  return { error: `Could not resolve task list "${ref}" to a UUID${projectId ? " within the task's project" : ""}. Pass an exact task-list UUID.` };
 }
 
 export function registerTaskCommands(program: Command) {
@@ -326,13 +345,14 @@ export function registerTaskCommands(program: Command) {
   task
     .command("route-state <id>")
     .description("Show deterministic routing eligibility and workflow pointers for a task")
-    .action(async (id: string) => {
+    .option("--verify-project-root", "Filesystem-check the resolved project root and surface missing_project_root before admission")
+    .action(async (id: string, opts) => {
       const globalOpts = program.opts();
       const resolvedId = resolveTaskId(id);
       const { getTaskRouteState } = await import("../../lib/task-routing.js");
       let state;
       try {
-        state = getTaskRouteState(resolvedId);
+        state = getTaskRouteState(resolvedId, undefined, { verifyProjectRoot: Boolean(opts.verifyProjectRoot) });
       } catch (e) {
         handleError(e);
       }
@@ -345,8 +365,12 @@ export function registerTaskCommands(program: Command) {
       console.log(chalk.bold("Task route state"));
       console.log(`  ${chalk.dim("Task:")}       ${state.task_short_id || state.task_id.slice(0, 8)}`);
       console.log(`  ${chalk.dim("Eligible:")}   ${state.eligible ? chalk.green("yes") : chalk.yellow("no")}`);
+      console.log(`  ${chalk.dim("Class:")}      ${state.route_class}`);
       console.log(`  ${chalk.dim("Reasons:")}    ${state.reasons.length > 0 ? state.reasons.join(", ") : "none"}`);
       console.log(`  ${chalk.dim("Route:")}      ${state.route.concurrency_key}`);
+      if (state.evidence.owner) {
+        console.log(`  ${chalk.dim("Owner:")}      ${state.evidence.owner}${state.evidence.stale ? chalk.yellow(" (stale)") : ""}`);
+      }
       if (state.pointers.current_workflow_invocation_id) {
         console.log(`  ${chalk.dim("Invocation:")} ${state.pointers.current_workflow_invocation_id}`);
       }
@@ -814,8 +838,11 @@ export function registerTaskCommands(program: Command) {
     .option("--assign <agent>", "Assign to agent")
     .option("--tags <tags>", "New tags (comma-separated)")
     .option("--tag <tags>", "New tags (alias for --tags)")
-    .option("--list <id>", "Move to a task list")
+    .option("--list <id>", "Move to a task list (UUID authoritative; project-scoped slug accepted)")
     .option("--task-list <id>", "Move to a task list (alias for --list)")
+    .option("--clear-list", "Detach from its task list (reset task_list_id to null)")
+    .option("--working-dir <path>", "Repair the task's working_dir to a specific path (routing metadata)")
+    .option("--clear-working-dir", "Reset the task's working_dir to null (undo path for routing repairs)")
     .option("--plan <id>", "Move to a plan")
     .option("--clear-plan", "Remove from its current plan")
     .option("--estimated <minutes>", "Estimated time in minutes")
@@ -843,16 +870,23 @@ export function registerTaskCommands(program: Command) {
         console.error(chalk.red("Use either --approval or --clear-approval, not both."));
         process.exit(1);
       }
+      if (opts.list && opts.clearList) {
+        console.error(chalk.red("Use either --list or --clear-list, not both."));
+        process.exit(1);
+      }
+      if (opts.workingDir !== undefined && opts.clearWorkingDir) {
+        console.error(chalk.red("Use either --working-dir or --clear-working-dir, not both."));
+        process.exit(1);
+      }
 
       const taskListId = opts.list ? (() => {
-        const db = getDatabase();
-        const resolved = resolvePartialId(db, "task_lists", opts.list);
-        if (!resolved) {
-          console.error(chalk.red(`Could not resolve task list ID: ${opts.list}`));
+        const resolved = resolveTaskListRef(opts.list, current.project_id);
+        if ("error" in resolved) {
+          console.error(chalk.red(resolved.error));
           process.exit(1);
         }
-        return resolved;
-      })() : undefined;
+        return resolved.id;
+      })() : opts.clearList ? null : undefined;
       const planId = opts.plan ? resolvePlanId(opts.plan) : opts.clearPlan ? null : undefined;
 
       let task;
@@ -867,6 +901,7 @@ export function registerTaskCommands(program: Command) {
           tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
           plan_id: planId,
           task_list_id: taskListId,
+          working_dir: opts.workingDir ? resolve(opts.workingDir) : opts.clearWorkingDir ? null : undefined,
           estimated_minutes: opts.estimated !== undefined ? parseIntOption(opts.estimated, "--estimated") : undefined,
           sla_minutes: opts.slaMinutes !== undefined || opts.sla !== undefined ? parseIntOption(opts.slaMinutes ?? opts.sla, "--sla-minutes") : undefined,
           due_at: opts.due !== undefined ? (opts.due === "" ? null : opts.due.length === 10 ? opts.due + "T00:00:00.000Z" : opts.due) : undefined,

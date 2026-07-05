@@ -278,7 +278,7 @@ describe("task route source discovery", () => {
     expect(result.candidates.map((candidate) => candidate.title)).toEqual(["Alpha root task", "Zeta root task"]);
   });
 
-  it("treats auto:route as intent, not an override for manual approval gates", () => {
+  it("treats auto:route as authorization but never overrides explicit deny gates", () => {
     const tagOnlyStore = seedStore("repo-auto-intent", {
       title: "Tag intent only",
       tags: ["auto:route"],
@@ -299,18 +299,26 @@ describe("task route source discovery", () => {
     const result = discoverTaskRouteSources({ sourceStores: [tagOnlyStore, noAutoStore, approvalStore] });
     const byTitle = new Map(result.candidates.map((candidate) => [candidate.title, candidate]));
 
+    // auto:route with no explicit route_enabled is the opt-in signal the OpenLoops
+    // drain routes on, so route_state authorizes it — eligibility is computed the
+    // same single way the drain admits work (no more route_not_enabled / drain-routes
+    // disagreement).
     expect(byTitle.get("Tag intent only")?.route_state.gates.tag_opt_in).toBe(true);
-    expect(byTitle.get("Tag intent only")?.route_state.gates.route_enabled).toBe(false);
-    expect(byTitle.get("Tag intent only")?.route_state.eligible).toBe(false);
-    expect(byTitle.get("Tag intent only")?.route_state.reasons).toContain("route_not_enabled");
+    expect(byTitle.get("Tag intent only")?.route_state.gates.route_enabled).toBe(true);
+    expect(byTitle.get("Tag intent only")?.route_state.eligible).toBe(true);
+    expect(byTitle.get("Tag intent only")?.route_state.reasons).not.toContain("route_not_enabled");
+    expect(byTitle.get("Tag intent only")?.route_state.route_class).toBe("eligible");
 
+    // The tag never overrides an explicit deny gate.
     expect(byTitle.get("No auto override")?.route_state.gates.route_enabled).toBe(true);
     expect(byTitle.get("No auto override")?.route_state.eligible).toBe(false);
     expect(byTitle.get("No auto override")?.route_state.reasons).toContain("no_auto");
+    expect(byTitle.get("No auto override")?.route_state.route_class).toBe("unroutable");
 
     expect(byTitle.get("Approval override")?.route_state.gates.route_enabled).toBe(true);
     expect(byTitle.get("Approval override")?.route_state.eligible).toBe(false);
     expect(byTitle.get("Approval override")?.route_state.reasons).toContain("requires_approval");
+    expect(byTitle.get("Approval override")?.route_state.route_class).toBe("unroutable");
   });
 
   it("redacts metadata enough for persistence and does not emit task comments", () => {
