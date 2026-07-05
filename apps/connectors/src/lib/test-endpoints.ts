@@ -149,6 +149,13 @@ export const TEST_ENDPOINTS: Record<string, TestEndpoint> = {
     url: "https://www.googleapis.com/youtube/v3/channels?part=id&mine=true",
     headers: (key) => ({ Authorization: `Bearer ${key}` }),
   },
+  twitch: {
+    url: "https://api.twitch.tv/helix/users",
+    headers: (key) => ({
+      Authorization: `Bearer ${key}`,
+      "Client-Id": process.env.TWITCH_CLIENT_ID || "",
+    }),
+  },
 
   // ── Commerce & Finance ───────────────────────────────────
   stripe: {
