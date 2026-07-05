@@ -73,6 +73,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["hosting", "deployment", "serverless"],
   },
   {
+    name: "vercel-blob-platform",
+    displayName: "Vercel Blob Platform",
+    description: "Object storage for files and media via Vercel Blob",
+    category: "Developer Tools",
+    tags: ["blob", "storage", "vercel", "object-storage"],
+  },
+  {
     name: "netlify",
     displayName: "Netlify",
     description: "Web hosting and deployment",
