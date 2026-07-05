@@ -48,6 +48,16 @@ describe("secret reference status contract", () => {
         includesProviderInventory: false,
         statusOutputIsMetadataOnly: true,
       },
+      cloudRuntime: {
+        safety: {
+          includesSecretValues: false,
+          includesRawEnvValues: false,
+          includesAwsSecretString: false,
+          includesRemoteRows: false,
+          includesLocalFileContents: false,
+          metadataOnlyDiagnostics: true,
+        },
+      },
     });
     expect(status.counts.byType.token).toBe(1);
     expect(status.counts.byType.api_key).toBe(1);
@@ -59,6 +69,7 @@ describe("secret reference status contract", () => {
     expect(serialized).not.toContain("demo-host");
     expect(serialized).not.toContain(testDir);
     expect(serialized).not.toContain(privateLabel);
+    expect(serialized).not.toContain("\"SecretString\":\"");
 
     const cli = Bun.spawnSync({
       cmd: ["bun", "src/index.ts", "status", "--json"],

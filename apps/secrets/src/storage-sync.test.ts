@@ -53,7 +53,7 @@ describe("secrets storage configuration", () => {
   });
 
   it("publishes stable storage tables, fallback env, and redacted status", () => {
-    process.env["SECRETS_DATABASE_URL"] = "postgres://user:secret@example.test/secrets";
+    process.env["SECRETS_DATABASE_URL"] = "postgres://user:secret@example.test/secrets?sslmode=query-secret&password=query-secret";
 
     const status = getStorageStatus();
 
@@ -63,7 +63,8 @@ describe("secrets storage configuration", () => {
     expect(status.tables).toEqual(STORAGE_TABLES);
     expect(status.env.databaseUrl.name).toBe("HASNA_SECRETS_DATABASE_URL");
     expect(status.env.databaseUrl.active_name).toBe("SECRETS_DATABASE_URL");
-    expect(status.database.redacted_url).toBe("postgres://user:***@example.test/secrets");
+    expect(status.database.redacted_url).toBe("postgres://user:***@example.test/secrets?sslmode=***");
+    expect(JSON.stringify(status)).not.toContain("query-secret");
     expect(status.canonical).toEqual(getCanonicalSecretsRdsConfig());
   });
 
@@ -90,5 +91,7 @@ describe("secrets storage configuration", () => {
     expect(storage.getStorageMode()).toBe("local");
     expect(storage.PG_MIGRATIONS.length).toBeGreaterThan(0);
     expect(typeof storage.PgAdapterAsync).toBe("function");
+    expect(typeof storage.createAwsSecretsManagerReference).toBe("function");
+    expect(storage.getCloudRuntimeReferenceStatus().remote.s3.runtimeObjectStore).toBe(false);
   });
 });

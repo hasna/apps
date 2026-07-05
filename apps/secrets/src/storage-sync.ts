@@ -222,8 +222,37 @@ export function resolveTables(tables?: string[]): StorageTable[] {
   return requested as StorageTable[];
 }
 
+const SENSITIVE_DATABASE_URL_QUERY_PARAMS = new Set([
+  "access_key",
+  "access_key_id",
+  "api_key",
+  "database_url",
+  "password",
+  "passwd",
+  "secret",
+  "secret_access_key",
+  "secret_key",
+  "token",
+]);
+
 function redactDatabaseUrl(value: string | null): string | null {
-  return value?.replace(/:[^:@/]+@/, ":***@") ?? null;
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (url.password) url.password = "***";
+    if (url.search) {
+      const redacted = new URLSearchParams();
+      for (const [key] of url.searchParams) {
+        const normalized = key.toLowerCase();
+        if (SENSITIVE_DATABASE_URL_QUERY_PARAMS.has(normalized)) continue;
+        redacted.append(key, "***");
+      }
+      url.search = redacted.toString();
+    }
+    return url.toString();
+  } catch {
+    return value.replace(/:[^:@/]+@/, ":***@").replace(/\?.+$/, "?***");
+  }
 }
 
 function storageEnvStatus(key: SecretsStorageEnvKey): StorageEnvStatus {

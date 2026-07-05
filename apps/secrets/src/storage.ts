@@ -1,6 +1,20 @@
 export { PG_MIGRATIONS } from "./pg-migrations.js";
 export { PgAdapterAsync } from "./remote-storage.js";
 export {
+  CANONICAL_SECRETS_AWS_SECRET_PATH,
+  CANONICAL_SECRETS_S3_SECRET_PATH,
+  CLOUD_SECRET_REFERENCE_SCHEMA_VERSION,
+  createAwsSecretsManagerReference,
+  createCloudSecretReference,
+  getCloudRuntimeReferenceStatus,
+  type AwsSecretsManagerReferenceInput,
+  type AwsSecretsManagerSecretReference,
+  type CloudRuntimeReferenceStatus,
+  type CloudRuntimeStorageProvider,
+  type CloudSecretReference,
+  type CloudSecretReferenceProvider,
+} from "./cloud-runtime.js";
+export {
   CANONICAL_SECRETS_RDS_CLUSTER,
   CANONICAL_SECRETS_RDS_DATABASE,
   CANONICAL_SECRETS_RDS_SECRET_PATH,

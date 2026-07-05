@@ -59,12 +59,33 @@ secrets status --json
 The status contract reports package version, redacted local data paths, env
 override names, and aggregate counts only. It does not include secret values,
 secret key names, raw env values, provider inventory, or private key material.
+The `cloudRuntime` section is also metadata-only: it explains which references
+belong to local SQLite/local files, optional remote Postgres/RDS storage, S3
+configuration metadata, and AWS Secrets Manager runtime references without
+reading local rows, remote rows, local files, or AWS `SecretString`, and without
+outputting raw env values.
 
 ```ts
 import { getSecretReferenceStatus } from "@hasna/secrets/status";
 
 const status = getSecretReferenceStatus();
 console.log(status.counts.byType.api_key);
+```
+
+Cloud runtime consumers can build AWS Secrets Manager references without
+embedding credential values:
+
+```ts
+import { createAwsSecretsManagerReference } from "@hasna/secrets/cloud-runtime";
+
+const database = createAwsSecretsManagerReference({
+  secretId: "hasna/xyz/opensource/secrets/prod/rds",
+  region: "us-east-1",
+  field: "database_url",
+  purpose: "runtime database connection"
+});
+
+console.log(database.valueIncluded); // false
 ```
 
 ### Secret References For Automations
@@ -205,6 +226,14 @@ Use `--dry-run` or `--plan` before live sync. Plan output is metadata-only JSON:
 it reports names, regions, prefixes, credential source descriptors, and
 intended actions without printing secret values or writing AWS/local vault
 state.
+
+Cloud runtime consumers should treat AWS Secrets Manager IDs as references.
+`@hasna/secrets/cloud-runtime` validates those reference objects and refuses
+inputs that include value-bearing fields such as `secretString`, `password`,
+`token`, `databaseUrl`, or provider credential fields. The package does not
+resolve AWS values from status or diagnostics; the runtime consumer that owns a
+cloud execution environment is responsible for resolving the reference and for
+its own access audit.
 
 ### Secret Types
 
@@ -389,6 +418,11 @@ Secrets Manager at `hasna/xyz/opensource/secrets/prod/rds`; load its
 remains supported as a rollback/local fallback. Do not print rows or values from
 the canonical database; status commands expose only redacted URLs, table names,
 and non-secret metadata.
+
+S3 is explicit but not a value backing store for this package. The canonical S3
+secret reference `hasna/xyz/opensource/secrets/prod/s3` describes app/bucket
+configuration for cloud consumers; `@hasna/secrets` does not upload, download,
+list, or migrate S3 objects as part of storage status or sync.
 
 MCP exposes the same flow through `storage_status`, `storage_push`,
 `storage_pull`, and `storage_sync`.

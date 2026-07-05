@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { getCloudRuntimeReferenceStatus, type CloudRuntimeReferenceStatus } from "./cloud-runtime.js";
 import { getDb } from "./db.js";
 import type { SecretType } from "./types.js";
 
@@ -48,6 +49,7 @@ export interface SecretReferenceStatus {
     secretKeyNamesIncluded: false;
     providerInventoryIncluded: false;
   };
+  cloudRuntime: CloudRuntimeReferenceStatus;
   safety: {
     includesSecretValues: false;
     includesSecretKeys: false;
@@ -135,6 +137,7 @@ export function getSecretReferenceStatus(options: { expiringSoonDays?: number } 
       secretKeyNamesIncluded: false,
       providerInventoryIncluded: false,
     },
+    cloudRuntime: getCloudRuntimeReferenceStatus(),
     safety: {
       includesSecretValues: false,
       includesSecretKeys: false,
