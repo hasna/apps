@@ -440,9 +440,11 @@ worker finishes; pass `--verifier-idle-timeout none` or template variable
 `verifierIdleTimeoutMs=none` only when another heartbeat is guaranteed. Use a
 positive numeric `timeoutMs` only when an agentic step is intentionally bounded.
 
-To migrate existing workflow loops, do not edit `workflow_specs.steps_json`
-directly because historical workflow runs must keep pointing at their original
-spec. Use the append-only migrator:
+To migrate existing agentic loops, use the timeout migrator instead of editing
+the database directly. Workflow loops are migrated append-only because
+historical workflow runs must keep pointing at their original spec; direct
+agent loops selected with `--loop` update their stored target in place for
+future executions:
 
 ```bash
 loops workflows migrate-agent-timeouts --loop <loop-id-or-name>
@@ -450,12 +452,13 @@ loops workflows migrate-agent-timeouts --loop <loop-id-or-name> --apply
 ```
 
 The command dry-runs by default. With `--apply`, it creates a new workflow spec
-with the requested agent timeout policy, retargets only future executions of
-eligible non-running workflow loops, and leaves terminal timed-out workflow runs
-as audit history. Use `loops workflows recover` only for interrupted `running`
-workflow runs whose recorded child process is gone; terminal `timed_out` runs
-must be requeued with `loops routes requeue <work-item-id> --reason "<cause fixed>"` before
-re-delivering or draining the original task/event route.
+with the requested agent timeout policy for eligible non-running workflow loops,
+or updates a non-running direct agent loop target in place. Terminal timed-out
+runs stay as audit history. Use `loops workflows recover` only for interrupted
+`running` workflow runs whose recorded child process is gone; terminal
+`timed_out` runs must be requeued with `loops routes requeue <work-item-id>
+--reason "<cause fixed>"` before re-delivering or draining the original
+task/event route.
 
 ```json
 {
