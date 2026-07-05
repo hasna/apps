@@ -1,29 +1,17 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
-import type { OAuth2Config, OAuth2Tokens } from '../types';
 
 const CONNECTOR_NAME = 'connect-typless';
 const DEFAULT_PROFILE = 'default';
+const PRIVATE_DIR_MODE = 0o700;
+const PRIVATE_FILE_MODE = 0o600;
 
 export interface ProfileConfig {
   // API Key authentication
   apiKey?: string;
   token?: string;       // Alias for apiKey
   apiSecret?: string;
-
-  // OAuth2 authentication
-  accessToken?: string;
-  refreshToken?: string;
-  expiresAt?: number;
-  tokenType?: string;
-  scope?: string;
-
-  // OAuth2 client credentials (stored separately for security)
-  clientId?: string;
-  clientSecret?: string;
-
-  // Add more config fields as needed for your API
 }
 
 // Store for --profile flag override (set by CLI before commands run)
@@ -33,6 +21,35 @@ let profileOverride: string | undefined;
 const CONFIG_DIR = join(homedir(), '.hasna', 'connectors', CONNECTOR_NAME);
 const PROFILES_DIR = join(CONFIG_DIR, 'profiles');
 const CURRENT_PROFILE_FILE = join(CONFIG_DIR, 'current_profile');
+
+function hardenPath(path: string, mode: number): void {
+  try {
+    chmodSync(path, mode);
+  } catch {
+    // Best-effort hardening. Reads still fail closed when files are absent.
+  }
+}
+
+function writePrivateFile(path: string, content: string): void {
+  writeFileSync(path, content, { mode: PRIVATE_FILE_MODE });
+  hardenPath(path, PRIVATE_FILE_MODE);
+}
+
+function hardenExistingConfigFiles(): void {
+  if (existsSync(CURRENT_PROFILE_FILE)) {
+    hardenPath(CURRENT_PROFILE_FILE, PRIVATE_FILE_MODE);
+  }
+
+  try {
+    for (const file of readdirSync(PROFILES_DIR)) {
+      if (file.endsWith('.json')) {
+        hardenPath(join(PROFILES_DIR, file), PRIVATE_FILE_MODE);
+      }
+    }
+  } catch {
+    // Missing or unreadable profile directories are handled by callers.
+  }
+}
 
 // ============================================
 // Profile Management
@@ -44,11 +61,15 @@ export function setProfileOverride(profile: string | undefined): void {
 
 export function ensureConfigDir(): void {
   if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
+    mkdirSync(CONFIG_DIR, { recursive: true, mode: PRIVATE_DIR_MODE });
   }
+  hardenPath(CONFIG_DIR, PRIVATE_DIR_MODE);
+
   if (!existsSync(PROFILES_DIR)) {
-    mkdirSync(PROFILES_DIR, { recursive: true });
+    mkdirSync(PROFILES_DIR, { recursive: true, mode: PRIVATE_DIR_MODE });
   }
+  hardenPath(PROFILES_DIR, PRIVATE_DIR_MODE);
+  hardenExistingConfigFiles();
 }
 
 function getProfilePath(profile: string): string {
@@ -89,7 +110,7 @@ export function setCurrentProfile(profile: string): void {
     throw new Error(`Profile "${profile}" does not exist`);
   }
 
-  writeFileSync(CURRENT_PROFILE_FILE, profile);
+  writePrivateFile(CURRENT_PROFILE_FILE, profile);
 }
 
 /**
@@ -130,7 +151,7 @@ export function createProfile(profile: string, config: ProfileConfig = {}): bool
     throw new Error('Profile name can only contain letters, numbers, hyphens, and underscores');
   }
 
-  writeFileSync(getProfilePath(profile), JSON.stringify(config, null, 2));
+  writePrivateFile(getProfilePath(profile), JSON.stringify(config, null, 2));
   return true;
 }
 
@@ -180,7 +201,7 @@ export function loadProfile(profile?: string): ProfileConfig {
 export function saveProfile(config: ProfileConfig, profile?: string): void {
   ensureConfigDir();
   const profileName = profile || getCurrentProfile();
-  writeFileSync(getProfilePath(profileName), JSON.stringify(config, null, 2));
+  writePrivateFile(getProfilePath(profileName), JSON.stringify(config, null, 2));
 }
 
 // ============================================
@@ -244,82 +265,4 @@ export function setToken(token: string): void {
   config.token = token;
   config.apiKey = token; // Keep both in sync
   saveProfile(config);
-}
-
-// ============================================
-// OAuth2 Configuration Functions
-// ============================================
-
-/**
- * Get OAuth2 client configuration
- */
-export function getOAuthConfig(): OAuth2Config | null {
-  const profile = loadProfile();
-  if (profile.clientId && profile.clientSecret) {
-    return {
-      clientId: profile.clientId,
-      clientSecret: profile.clientSecret,
-    };
-  }
-  return null;
-}
-
-/**
- * Set OAuth2 client credentials
- */
-export function setOAuthConfig(config: OAuth2Config): void {
-  const profile = loadProfile();
-  profile.clientId = config.clientId;
-  profile.clientSecret = config.clientSecret;
-  saveProfile(profile);
-}
-
-/**
- * Load OAuth2 tokens
- */
-export function loadOAuthTokens(): OAuth2Tokens | null {
-  const profile = loadProfile();
-  if (profile.accessToken) {
-    return {
-      accessToken: profile.accessToken,
-      refreshToken: profile.refreshToken,
-      expiresAt: profile.expiresAt || 0,
-      tokenType: profile.tokenType,
-      scope: profile.scope,
-    };
-  }
-  return null;
-}
-
-/**
- * Save OAuth2 tokens
- */
-export function saveOAuthTokens(tokens: OAuth2Tokens): void {
-  const profile = loadProfile();
-  profile.accessToken = tokens.accessToken;
-  profile.refreshToken = tokens.refreshToken;
-  profile.expiresAt = tokens.expiresAt;
-  profile.tokenType = tokens.tokenType;
-  profile.scope = tokens.scope;
-  saveProfile(profile);
-}
-
-/**
- * Clear OAuth2 tokens (logout)
- */
-export function clearOAuthTokens(): void {
-  const profile = loadProfile();
-  delete profile.accessToken;
-  delete profile.refreshToken;
-  delete profile.expiresAt;
-  delete profile.tokenType;
-  delete profile.scope;
-  saveProfile(profile);
-}
-
-/**
- * Get the access token (for OAuth2 authentication)
- */
-export function getAccessToken(): string | undefined {
-  return loadProfile().accessToken;
 }
