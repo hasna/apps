@@ -451,6 +451,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["leads", "tracking", "attribution"],
   },
   {
+    name: "woodpecker",
+    displayName: "Woodpecker",
+    description: "Cold email outreach and follow-up automation platform",
+    category: "Marketing & Sales",
+    tags: ["email", "outreach", "sales"],
+  },
+  {
     name: "woodpeckerco",
     displayName: "Woodpecker.co",
     description: "Cold email outreach and follow-up automation",
