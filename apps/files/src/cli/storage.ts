@@ -54,17 +54,22 @@ export function registerStorageCommands(program: Command): void {
 
       console.log(`Mode: ${status.mode}`);
       console.log(`Enabled: ${status.enabled ? "yes" : "no"}`);
-      console.log(`Database: ${status.db_path}`);
+      console.log(`Local index: SQLite (${status.runtime.local_index.db_path})`);
       console.log(`Remote metadata: ${status.remote_configured ? "configured" : "not configured"}`);
       if (status.database_url_env) console.log(`Database URL env: ${status.database_url_env}`);
+      console.log(`Remote sync: ${status.runtime.remote_metadata.sync}`);
       console.log(`Object storage: ${status.object_storage.provider}`);
       if (status.object_storage.provider === "s3") {
         console.log(`  bucket: ${status.object_storage.bucket ?? "(unset)"}`);
         console.log(`  region: ${status.object_storage.region ?? "(unset)"}`);
         if (status.object_storage.prefix) console.log(`  prefix: ${status.object_storage.prefix}`);
+        console.log(`  credentials: ${status.object_storage.credential_source ?? "default_provider_chain"}`);
+        if (status.object_storage.endpoint_configured) console.log("  endpoint: configured");
+        if (status.object_storage.force_path_style) console.log("  force path style: yes");
       } else {
         console.log(`  local root: ${status.object_storage.local_root ?? "(unset)"}`);
       }
+      console.log("Boundary: status and metadata sync do not move object bytes or replace the local SQLite index.");
       for (const table of status.tables) {
         console.log(`  ${table.table}: ${table.rows}`);
       }

@@ -34,6 +34,12 @@ describe("storage CLI", () => {
       mode: string;
       remote_configured: boolean;
       object_storage: { bucket?: string; prefix?: string };
+      runtime: {
+        local_index: { provider: string };
+        remote_metadata: { provider: string; sync: string };
+        object_bytes: { provider: string; writes: string };
+        boundary: { metadata_sync_moves_object_bytes: boolean };
+      };
       tables: Array<{ table: string; rows: number }>;
     };
     expect(output.mode).toBe("hybrid");
@@ -41,6 +47,12 @@ describe("storage CLI", () => {
     expect(output.object_storage).toMatchObject({
       bucket: "hasna-xyz-opensource-files-prod",
       prefix: "objects",
+    });
+    expect(output.runtime).toMatchObject({
+      local_index: { provider: "sqlite" },
+      remote_metadata: { provider: "postgres", sync: "explicit_migrate_push_pull_sync" },
+      object_bytes: { provider: "s3", writes: "explicit_object_store_apis" },
+      boundary: { metadata_sync_moves_object_bytes: false },
     });
     expect(output.tables.map((table) => table.table)).toContain("file_assets");
     expect(output.tables.map((table) => table.table)).toContain("s3_objects");

@@ -48,11 +48,35 @@ Repo-level object storage aliases are preferred:
 HASNA_FILES_S3_BUCKET=hasna-xyz-opensource-files-prod
 HASNA_FILES_S3_PREFIX=objects
 HASNA_FILES_AWS_REGION=us-east-1
+HASNA_FILES_AWS_PROFILE=files-sync
 HASNA_FILES_S3_ENDPOINT=
+HASNA_FILES_S3_FORCE_PATH_STYLE=0
 ```
 
 The existing `HASNA_FILES_EVIDENCE_*` variables remain compatible for apps that
 already use evidence-specific configuration.
+
+## Cloud Runtime Boundary
+
+Storage status and metadata sync are intentionally separate from object-byte
+mutation:
+
+- SQLite is the local metadata index under the Hasna files data directory.
+- PostgreSQL is the remote metadata store and is touched only by explicit
+  storage migration or push/pull/sync commands.
+- S3-compatible storage owns durable bytes for evidence assets, imported Drive
+  objects, and S3 sources. Bytes move only through object APIs such as evidence
+  upload completion, Drive import, S3 upload/download, copy, delete, and signed
+  URL helpers.
+- `files storage status` is diagnostic. It reports no-secret credential source
+  diagnostics such as `aws_profile` or `default_provider_chain`, and it does not
+  call S3 listing APIs, upload objects, apply migrations, or replace the local
+  SQLite index.
+
+For hosted deployments, configure AWS credentials by named profile, environment
+provider chain, or platform secret injection. Do not write raw access keys into
+task comments, docs, logs, PRs, or public config. S3-compatible endpoints may
+set `HASNA_FILES_S3_ENDPOINT` and `HASNA_FILES_S3_FORCE_PATH_STYLE`.
 
 ## 2026-06-09 Checksum Note
 

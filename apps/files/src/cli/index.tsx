@@ -190,6 +190,7 @@ sources
   .option("--secret-key <secret>", "AWS secret access key (for S3)")
   .option("--aws-profile <profile>", "AWS shared config profile name (for S3)")
   .option("--endpoint <url>", "Custom S3 endpoint (for S3-compatible storage)")
+  .option("--force-path-style", "Use path-style S3 requests for S3-compatible storage")
   .action((pathOrS3: string, opts: {
     name?: string;
     region?: string;
@@ -198,6 +199,7 @@ sources
     secretKey?: string;
     awsProfile?: string;
     endpoint?: string;
+    forcePathStyle?: boolean;
   }) => {
     const machine = getCurrentMachine();
 
@@ -210,6 +212,7 @@ sources
       if (opts.secretKey) config.secretAccessKey = opts.secretKey;
       if (opts.awsProfile) config.profile = opts.awsProfile;
       if (opts.endpoint) config.endpoint = opts.endpoint;
+      if (opts.forcePathStyle) config.forcePathStyle = true;
       if (config.profile && config.accessKeyId) {
         console.error(chalk.red("Use either --aws-profile or static --access-key/--secret-key credentials, not both."));
         process.exit(1);

@@ -12,10 +12,12 @@ const ENV_KEYS = [
   "HASNA_FILES_S3_PREFIX",
   "HASNA_FILES_AWS_REGION",
   "HASNA_FILES_S3_ENDPOINT",
+  "HASNA_FILES_S3_FORCE_PATH_STYLE",
   "HASNA_FILES_EVIDENCE_BUCKET",
   "HASNA_FILES_EVIDENCE_PREFIX",
   "HASNA_FILES_EVIDENCE_REGION",
   "HASNA_FILES_EVIDENCE_S3_ENDPOINT",
+  "HASNA_FILES_EVIDENCE_S3_FORCE_PATH_STYLE",
   "HASNA_FILES_DATA_DIR",
   "HASNA_FILES_DB_PATH",
 ] as const;
@@ -57,6 +59,7 @@ describe("files storage config", () => {
     process.env.HASNA_FILES_S3_BUCKET = "hasna-xyz-opensource-files-prod";
     process.env.HASNA_FILES_S3_PREFIX = "objects";
     process.env.HASNA_FILES_AWS_REGION = "us-east-1";
+    process.env.HASNA_FILES_S3_FORCE_PATH_STYLE = "1";
 
     const { getStorageStatus } = await import("./storage-sync.js");
 
@@ -70,6 +73,38 @@ describe("files storage config", () => {
       bucket: "hasna-xyz-opensource-files-prod",
       prefix: "objects",
       region: "us-east-1",
+      force_path_style: true,
+      credential_source: "default_provider_chain",
+    });
+    expect(status.runtime).toMatchObject({
+      local_index: {
+        provider: "sqlite",
+        role: "local_metadata_index",
+        writes: "local_sqlite",
+      },
+      remote_metadata: {
+        provider: "postgres",
+        configured: true,
+        enabled: true,
+        database_url_env: "HASNA_FILES_DATABASE_URL",
+        sync: "explicit_migrate_push_pull_sync",
+        writes: "explicit_postgres_sync_commands",
+      },
+      object_bytes: {
+        provider: "s3",
+        configured: true,
+        role: "durable_object_bytes",
+        bucket: "hasna-xyz-opensource-files-prod",
+        prefix: "objects",
+        credential_source: "default_provider_chain",
+        force_path_style: true,
+        writes: "explicit_object_store_apis",
+      },
+      boundary: {
+        storage_status_mutates_remote: false,
+        metadata_sync_moves_object_bytes: false,
+        local_sqlite_replaced_by_remote: false,
+      },
     });
   });
 

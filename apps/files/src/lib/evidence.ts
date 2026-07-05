@@ -36,6 +36,7 @@ export interface EvidenceStorageOptions {
   region?: string;
   profile?: string;
   endpoint?: string;
+  forcePathStyle?: boolean;
   prefix?: string;
   localRoot?: string;
 }
@@ -82,6 +83,7 @@ export function getEvidenceStorageOptions(overrides: EvidenceStorageOptions = {}
     region: overrides.region ?? process.env.HASNA_FILES_AWS_REGION ?? process.env.HASNA_FILES_S3_REGION ?? process.env.HASNA_FILES_EVIDENCE_REGION ?? DEFAULT_EVIDENCE_S3_REGION,
     profile: overrides.profile ?? process.env.HASNA_FILES_AWS_PROFILE ?? process.env.HASNA_FILES_EVIDENCE_AWS_PROFILE ?? process.env.AWS_PROFILE ?? "",
     endpoint: overrides.endpoint ?? process.env.HASNA_FILES_S3_ENDPOINT ?? process.env.HASNA_FILES_EVIDENCE_S3_ENDPOINT ?? "",
+    forcePathStyle: overrides.forcePathStyle ?? envBoolean("HASNA_FILES_S3_FORCE_PATH_STYLE") ?? envBoolean("HASNA_FILES_EVIDENCE_S3_FORCE_PATH_STYLE") ?? false,
     prefix: trimSlashes(overrides.prefix ?? process.env.HASNA_FILES_S3_PREFIX ?? process.env.HASNA_FILES_EVIDENCE_PREFIX ?? ""),
     localRoot: overrides.localRoot ?? process.env.HASNA_FILES_EVIDENCE_LOCAL_ROOT ?? join(getDataDir(), "evidence"),
   };
@@ -349,6 +351,7 @@ function makeEvidenceSource(storage: Required<EvidenceStorageOptions>, asset?: F
   const config: S3Config = {};
   if (storage.profile) config.profile = storage.profile;
   if (storage.endpoint) config.endpoint = storage.endpoint;
+  if (storage.forcePathStyle) config.forcePathStyle = true;
   return {
     id: "src_evidence",
     name: "hasna-files-evidence",
@@ -418,4 +421,12 @@ function cleanFilename(value: string): string {
 
 function trimSlashes(value: string): string {
   return value.replace(/^\/+|\/+$/g, "");
+}
+
+function envBoolean(name: string): boolean | undefined {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return undefined;
+  if (/^(1|true|yes|on)$/i.test(raw)) return true;
+  if (/^(0|false|no|off)$/i.test(raw)) return false;
+  return undefined;
 }

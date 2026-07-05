@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { createS3ClientConfig, setS3CredentialProviderFactoryForTests } from "./s3.js";
+import { createS3ClientConfig, describeS3ClientConfig, setS3CredentialProviderFactoryForTests } from "./s3.js";
 import type { Source } from "../types/index.js";
 
 afterEach(() => {
@@ -44,6 +44,39 @@ describe("S3 client configuration", () => {
       accessKeyId: "static-access",
       secretAccessKey: "static-secret",
     });
+  });
+
+  test("reports no-secret diagnostics for cloud runtime configuration", () => {
+    const diagnostics = describeS3ClientConfig(s3Source({
+      config: {
+        profile: "files-sync",
+        endpoint: "https://s3-compatible.example.test",
+        forcePathStyle: true,
+      },
+    }));
+
+    expect(diagnostics).toEqual({
+      region: "us-west-2",
+      endpoint_configured: true,
+      force_path_style: true,
+      credential_source: "aws_profile",
+      profile_configured: true,
+      static_access_key_configured: false,
+      session_token_configured: false,
+    });
+    expect(JSON.stringify(diagnostics)).not.toContain("files-sync");
+  });
+
+  test("passes path-style config and rejects partial static credentials", () => {
+    const config = createS3ClientConfig(s3Source({ config: { forcePathStyle: true } }));
+
+    expect(config.forcePathStyle).toBe(true);
+    expect(() =>
+      createS3ClientConfig(s3Source({ config: { accessKeyId: "static-access" } })),
+    ).toThrow("require both accessKeyId and secretAccessKey");
+    expect(() =>
+      createS3ClientConfig(s3Source({ config: { secretAccessKey: "static-secret" } })),
+    ).toThrow("require both accessKeyId and secretAccessKey");
   });
 });
 
