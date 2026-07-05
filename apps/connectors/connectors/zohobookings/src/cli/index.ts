@@ -239,7 +239,7 @@ appointmentsCmd
         service_id: opts.serviceId,
         staff_id: opts.staffId,
         from_time: opts.fromTime,
-        timezone: opts.timezone,
+        time_zone: opts.timezone,
         notes: opts.notes,
         customer_details: {
           name: opts.name,

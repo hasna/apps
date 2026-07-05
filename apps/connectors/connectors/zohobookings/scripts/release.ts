@@ -32,21 +32,29 @@ function bumpPatch(version: string): string {
   return `${major}.${minor}.${patch + 1}`;
 }
 
+function compareVersions(a: string, b: string): number {
+  const left = a.split('.').map(Number);
+  const right = b.split('.').map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    const diff = (left[index] || 0) - (right[index] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
 async function main(): Promise<void> {
   const packageJson: PackageJson = JSON.parse(readFileSync('package.json', 'utf-8'));
   const { name, version: localVersion } = packageJson;
   const npmVersion = exec(`npm view ${name} version 2>/dev/null`, true);
   let newVersion = localVersion;
-  if (npmVersion && localVersion <= npmVersion) newVersion = bumpPatch(npmVersion);
+  if (npmVersion && compareVersions(localVersion, npmVersion) <= 0) newVersion = bumpPatch(npmVersion);
   if (newVersion !== localVersion && !isDryRun) {
     packageJson.version = newVersion;
     writeFileSync('package.json', JSON.stringify(packageJson, null, 2) + '\n');
   }
-  if (!isDryRun) {
-    exec('bun run typecheck');
-    exec('bun run build');
-    exec(isDryRun ? 'npm publish --dry-run' : 'npm publish');
-  }
+  exec('bun run typecheck');
+  exec('bun run build');
+  exec(isDryRun ? 'npm publish --dry-run' : 'npm publish');
 }
 
 main().catch((err) => {

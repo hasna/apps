@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { ZohoBookingsClient, encodeFormBody, resolveBookingsApiBase } from './client';
+import { ZohoBookings } from './index';
 import { ZohoBookingsApiError } from '../types';
 
 const realFetch = globalThis.fetch;
@@ -108,6 +109,26 @@ describe('ZohoBookingsClient', () => {
     expect(headers['Content-Type']).toBe('application/x-www-form-urlencoded');
     expect(capturedInit?.body).toContain('service_id=svc');
     expect(capturedInit?.body).toContain('customer_details');
+  });
+
+  test('bookAppointment sends time zone with Zoho snake_case field', async () => {
+    let capturedInit: RequestInit | undefined;
+    installFetch((_url, init) => {
+      capturedInit = init;
+      return { booking_id: '#NU-00001' };
+    });
+
+    const bookings = new ZohoBookings({ token: 'oauth-token' });
+    await bookings.bookAppointment({
+      service_id: 'svc',
+      staff_id: 'staff',
+      from_time: '04-Jul-2026 10:00:00',
+      time_zone: 'UTC',
+      customer_details: { name: 'Jane' },
+    });
+
+    expect(capturedInit?.body).toContain('time_zone=UTC');
+    expect(capturedInit?.body).not.toContain('timezone=UTC');
   });
 
   test('throws ZohoBookingsApiError on failure envelope', async () => {

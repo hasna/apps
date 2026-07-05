@@ -1018,11 +1018,32 @@ export const connectors: ConnectorMeta[] = [
     tags: ["helpdesk", "tickets", "support", "open-source"],
   },
   {
+    name: "zoho",
+    displayName: "Zoho CRM",
+    description: "CRM contacts, leads, accounts, and deals (v8 API)",
+    category: "Business Tools",
+    tags: ["crm", "sales", "zoho"],
+  },
+  {
+    name: "zoho-bigin",
+    displayName: "Zoho Bigin",
+    description: "Lightweight CRM and pipeline management for small teams",
+    category: "Business Tools",
+    tags: ["crm", "pipeline", "sales", "zoho"],
+  },
+  {
     name: "zohocrm",
     displayName: "Zoho CRM",
     description: "CRM for sales, marketing, and customer support",
     category: "Business Tools",
     tags: ["crm", "sales", "zoho"],
+  },
+  {
+    name: "zohoforms",
+    displayName: "Zoho Forms",
+    description: "Online form builder, surveys, and approval workflows",
+    category: "Business Tools",
+    tags: ["forms", "surveys", "zoho"],
   },
   {
     name: "zohodesk",
@@ -1037,6 +1058,20 @@ export const connectors: ConnectorMeta[] = [
     description: "Online appointment scheduling and booking management",
     category: "Business Tools",
     tags: ["scheduling", "appointments", "zoho"],
+  },
+  {
+    name: "zoho-survey",
+    displayName: "Zoho Survey",
+    description: "Online survey and feedback collection platform",
+    category: "Business Tools",
+    tags: ["surveys", "feedback", "zoho"],
+  },
+  {
+    name: "zoho-creator",
+    displayName: "Zoho Creator",
+    description: "Low-code business apps and databases",
+    category: "Business Tools",
+    tags: ["low-code", "apps", "zoho"],
   },
   {
     name: "zohoworkdrive",

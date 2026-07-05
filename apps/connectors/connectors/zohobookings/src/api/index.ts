@@ -107,7 +107,7 @@ export class ZohoBookings {
     resource_id?: string;
     group_id?: string;
     to_time?: string;
-    timezone?: string;
+    time_zone?: string;
     notes?: string;
     additional_fields?: Record<string, unknown>;
     payment_info?: Record<string, unknown>;
