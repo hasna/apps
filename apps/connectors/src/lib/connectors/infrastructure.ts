@@ -86,4 +86,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Infrastructure",
     tags: ["monitoring", "uptime", "performance", "alerts", "website"],
   },
+  {
+    name: "upcloud",
+    displayName: "UpCloud",
+    description: "European cloud infrastructure for servers, storage, and networking",
+    category: "Infrastructure",
+    tags: ["cloud", "vps", "servers", "storage", "network"],
+  },
 ];
