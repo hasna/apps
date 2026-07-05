@@ -55,6 +55,17 @@ export interface RunChatbotResponse {
   follow_up_questions?: string[];
 }
 
+export interface RunChatbotStreamEvent {
+  type: 'message' | 'done';
+  event?: string;
+  data?: unknown;
+  delta?: string;
+  status?: 'success' | 'failed';
+  conversation_id?: string;
+  output_message?: string;
+  follow_up_questions?: string[];
+}
+
 export interface PipelineVersionRef {
   id: string;
   version?: 'latest' | { major: number; minor: number; patch: number };

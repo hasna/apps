@@ -33,9 +33,14 @@ program
     }
   });
 
-function getFormat(cmd: Command): OutputFormat {
-  const parent = cmd.parent;
-  return (parent?.opts().format || 'pretty') as OutputFormat;
+export function getFormat(cmd: Command): OutputFormat {
+  let current: Command | null = cmd;
+  while (current) {
+    const format = current.opts().format;
+    if (format) return format as OutputFormat;
+    current = current.parent;
+  }
+  return 'pretty';
 }
 
 function getClient(): VectorShift {
@@ -206,12 +211,32 @@ chatbotsCmd.command('run <chatbotId> <text>')
   .action(async (chatbotId: string, text: string, opts) => {
     try {
       const client = getClient();
+      const format = getFormat(program);
+      if (opts.stream) {
+        const events = [];
+        for await (const event of client.runChatbotStream(chatbotId, {
+          text,
+          conversation_id: opts.conversationId,
+        })) {
+          if (format === 'json') {
+            events.push(event);
+          } else if (event.type === 'message') {
+            process.stdout.write(event.delta || event.output_message || '');
+          }
+        }
+        if (format === 'json') {
+          print(events, 'json');
+        } else {
+          process.stdout.write('\n');
+        }
+        return;
+      }
+
       const result = await client.runChatbot(chatbotId, {
         text,
         conversation_id: opts.conversationId,
-        stream: opts.stream,
       });
-      if (getFormat(program) === 'json') {
+      if (format === 'json') {
         print(result, 'json');
       } else {
         console.log(chalk.green('\nResponse:'));
@@ -257,4 +282,6 @@ chatbotsCmd.command('create')
     }
   });
 
-program.parse();
+if (import.meta.main) {
+  program.parse();
+}

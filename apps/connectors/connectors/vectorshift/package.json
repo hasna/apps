@@ -15,7 +15,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun && tsc --emitDeclarationOnly",
     "dev": "bun run ./src/cli/index.ts",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "bun run build"
