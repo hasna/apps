@@ -951,6 +951,62 @@
     }
   },
   {
+    "name": "loops_health_scan",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "includeStatuses": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "active",
+              "paused",
+              "stopped",
+              "expired"
+            ]
+          },
+          "description": "Loop statuses to inventory (default active and paused)."
+        },
+        "includeArchived": {
+          "type": "boolean",
+          "description": "Include archived loops in the scan (default false)."
+        },
+        "latestRun": {
+          "type": "boolean",
+          "description": "Include latest-run and stale-running checks (default true)."
+        },
+        "doctor": {
+          "type": "boolean",
+          "description": "Include doctor/preflight checks (default false)."
+        },
+        "daemon": {
+          "type": "boolean",
+          "description": "Include daemon status checks (default false)."
+        },
+        "staleRunningMs": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Minimum age before a running latest run is stale; loop lease and 10m still apply."
+        },
+        "maxFindings": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 500,
+          "description": "Maximum findings to return (0-500, default 100)."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Maximum entries to return (1-500)."
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  {
     "name": "loops_list",
     "inputSchema": {
       "type": "object",

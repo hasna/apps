@@ -868,24 +868,45 @@ agent-run failures for default-loop SLOs:
 
 ```bash
 loops health --json
+loops health scan --include active,paused --latest-run --doctor --daemon --json
 loops expectations <loop-id-or-name> --json
 ```
 
 The JSON contains the expectation result, bounded error/stdout/stderr evidence,
 a stable failure fingerprint, route metadata, and recommended task fields.
-OpenLoops does not mutate Todos from `health` or `expectations`. To turn failed
-expectations into deduped tasks, use the explicit routing command:
+OpenLoops does not mutate Todos from `health`, `expectations`, or read-only
+`health scan`. To turn failed expectations or scan findings into deduped tasks,
+use an explicit mutating command:
 
 ```bash
 loops health route-tasks \
   --project ~/.hasna/loops \
   --task-list loop-error-self-heal \
   --max-actions 5
+
+loops health scan \
+  --include active,paused \
+  --latest-run \
+  --doctor \
+  --daemon \
+  --upsert-todos \
+  --dry-run \
+  --max-actions 5 \
+  --evidence-dir ~/.hasna/loops/reports/health-scan
 ```
 
 Use `--dry-run --json` first when testing a new automation path. Routed tasks
 include the stable failure fingerprint, classification, loop id/name, and
 `no_tmux_dispatch=true` metadata.
+
+`health scan` replaces local loop-error self-heal scripts with package-owned
+CLI/SDK/MCP primitives. It inventories included loop statuses, detects daemon,
+doctor, preflight, latest-run, and stale-running issues, writes bounded
+`summary.json` and `report.md` files under
+`$LOOPS_DATA_DIR/reports/health-scan` or `--report-dir`/`--evidence-dir`, and
+keeps output compact. It is read-only by default. The only safe self-heal is
+`--start-daemon`, which starts the daemon only when status proves it is not
+running; it does not stop, resume, archive, delete, or reap loops.
 
 Use `--evidence-dir <dir>` when a deterministic loop needs a compact JSON
 heartbeat/report on disk. Use `--auto-route` only on task lists that should feed
