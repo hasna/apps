@@ -4,22 +4,7 @@ export interface ConnectorConfig {
   apiKey?: string;
   token?: string;
   apiSecret?: string;
-  accessToken?: string;
   baseUrl?: string;
-}
-
-export interface OAuth2Config {
-  clientId: string;
-  clientSecret: string;
-  redirectUri?: string;
-}
-
-export interface OAuth2Tokens {
-  accessToken: string;
-  refreshToken?: string;
-  expiresAt: number;
-  tokenType?: string;
-  scope?: string;
 }
 
 export type OutputFormat = 'json' | 'pretty';

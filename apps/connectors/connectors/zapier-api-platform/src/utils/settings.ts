@@ -6,10 +6,6 @@ import { getConfigDir, ensureConfigDir } from './config';
 // Settings Storage Utility
 // ============================================
 
-/**
- * TODO: Define your connector-specific settings
- * Add fields for user preferences, defaults, etc.
- */
 export interface Settings {
   // Display settings
   defaultFormat: 'json' | 'table' | 'pretty';
@@ -22,7 +18,6 @@ export interface Settings {
   defaultMaxResults: number;    // Default page size for list operations
   requestTimeout: number;       // Request timeout in ms
 
-  // Add more settings as needed for your connector
 }
 
 const DEFAULT_SETTINGS: Settings = {

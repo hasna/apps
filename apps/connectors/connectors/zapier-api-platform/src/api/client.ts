@@ -18,7 +18,7 @@ export class ConnectorClient {
   private readonly baseUrl: string;
 
   constructor(config: ConnectorConfig) {
-    const key = config.apiKey || config.token || config.accessToken;
+    const key = config.apiKey || config.token;
     if (!key) {
       throw new Error('Zapier API Platform API key is required');
     }
@@ -47,6 +47,24 @@ export class ConnectorClient {
 
   private getRetryDelay(attempt: number, baseDelay: number = 1000): number {
     return baseDelay * Math.pow(2, attempt) + Math.random() * 1000;
+  }
+
+  private getRetryAfterDelay(retryAfter: string | null, attempt: number): number {
+    if (!retryAfter) {
+      return this.getRetryDelay(attempt);
+    }
+
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return seconds * 1000;
+    }
+
+    const retryAt = Date.parse(retryAfter);
+    if (Number.isFinite(retryAt)) {
+      return Math.max(0, retryAt - Date.now());
+    }
+
+    return this.getRetryDelay(attempt);
   }
 
   private isRetryableStatus(status: number): boolean {
@@ -81,16 +99,17 @@ export class ConnectorClient {
     let lastStatus: number = 0;
 
     for (let attempt = 0; attempt <= retries; attempt++) {
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeout);
+        timeoutId = setTimeout(() => controller.abort(), timeout);
 
         const response = await fetch(url, {
           ...fetchOptions,
           signal: controller.signal,
         });
 
-        clearTimeout(timeoutId);
         lastStatus = response.status;
 
         if (response.status === 204) {
@@ -115,12 +134,7 @@ export class ConnectorClient {
 
         if (!response.ok) {
           if (this.isRetryableStatus(response.status) && attempt < retries) {
-            const retryAfter = response.headers.get('retry-after');
-            const delay = retryAfter
-              ? parseInt(retryAfter, 10) * 1000
-              : this.getRetryDelay(attempt);
-
-            await this.sleep(delay);
+            await this.sleep(this.getRetryAfterDelay(response.headers.get('retry-after'), attempt));
             continue;
           }
 
@@ -140,7 +154,11 @@ export class ConnectorClient {
           continue;
         }
 
-        throw err;
+        throw lastError;
+      } finally {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
       }
     }
 

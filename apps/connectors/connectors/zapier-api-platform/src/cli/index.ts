@@ -18,6 +18,7 @@ import {
 } from '../utils/config';
 import type { OutputFormat } from '../utils/output';
 import { success, error, info, print, setVerboseMode, debug } from '../utils/output';
+import { parseOptionalIntegerOption } from '../utils/parse';
 
 const CONNECTOR_NAME = 'connect-zapier-api-platform';
 const VERSION = '0.0.1';
@@ -32,8 +33,8 @@ program
   .option('-f, --format <format>', 'Output format (json, pretty)', 'pretty')
   .option('-p, --profile <profile>', 'Use a specific profile')
   .option('-v, --verbose', 'Enable verbose output for debugging')
-  .hook('preAction', (thisCommand) => {
-    const opts = thisCommand.opts();
+  .hook('preAction', (_thisCommand, actionCommand) => {
+    const opts = actionCommand.optsWithGlobals();
 
     if (opts.verbose) {
       setVerboseMode(true);
@@ -56,8 +57,7 @@ program
   });
 
 function getFormat(cmd: Command): OutputFormat {
-  const parent = cmd.parent;
-  return (parent?.opts().format || 'pretty') as OutputFormat;
+  return (cmd.optsWithGlobals().format || 'pretty') as OutputFormat;
 }
 
 function getClient(): Connector {
@@ -195,8 +195,8 @@ itemsCmd
     try {
       const client = getClient();
       const params: Record<string, string | number | boolean | undefined> = {};
-      if (opts.limit !== undefined) params.limit = parseInt(opts.limit, 10);
-      if (opts.offset !== undefined) params.offset = parseInt(opts.offset, 10);
+      params.limit = parseOptionalIntegerOption(opts.limit, '--limit');
+      params.offset = parseOptionalIntegerOption(opts.offset, '--offset');
       const result = await client.items.list(params);
       print(result, getFormat(itemsCmd));
     } catch (err) {
@@ -247,8 +247,8 @@ eventsCmd
     try {
       const client = getClient();
       const params: Record<string, string | number | boolean | undefined> = {};
-      if (opts.limit !== undefined) params.limit = parseInt(opts.limit, 10);
-      if (opts.offset !== undefined) params.offset = parseInt(opts.offset, 10);
+      params.limit = parseOptionalIntegerOption(opts.limit, '--limit');
+      params.offset = parseOptionalIntegerOption(opts.offset, '--offset');
       const result = await client.events.list(params);
       print(result, getFormat(eventsCmd));
     } catch (err) {
@@ -298,4 +298,6 @@ rawCmd
     }
   });
 
-program.parse();
+if (import.meta.main) {
+  program.parse();
+}
