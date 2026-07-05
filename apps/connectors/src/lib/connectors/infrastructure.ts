@@ -86,4 +86,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Infrastructure",
     tags: ["monitoring", "uptime", "performance", "alerts", "website"],
   },
+  {
+    name: "tyk",
+    displayName: "Tyk",
+    description: "API gateway platform",
+    category: "Infrastructure",
+    tags: ["api-gateway", "api-management", "tyk"],
+  },
 ];
