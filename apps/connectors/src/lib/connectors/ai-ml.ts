@@ -934,6 +934,14 @@ export const connectors: ConnectorMeta[] = [
     tags: ["extraction", "documents", "parsing"],
   },
   {
+    name: "wideframe",
+    displayName: "Wideframe",
+    description:
+      "AI video editing coworker: video libraries, footage indexing, semantic search, rough-cut sequences, and Premiere Pro exports",
+    category: "AI & ML",
+    tags: ["video", "editing", "ai", "premiere", "search"],
+  },
+  {
     name: "wonderchat",
     displayName: "Wonderchat",
     description: "AI chatbot builder from website content",
