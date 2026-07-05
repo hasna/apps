@@ -1053,6 +1053,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["helpdesk", "support", "zoho"],
   },
   {
+    name: "zohobookings",
+    displayName: "Zoho Bookings",
+    description: "Online appointment scheduling and booking management",
+    category: "Business Tools",
+    tags: ["scheduling", "appointments", "zoho"],
+  },
+  {
     name: "zoho-survey",
     displayName: "Zoho Survey",
     description: "Online survey and feedback collection platform",
