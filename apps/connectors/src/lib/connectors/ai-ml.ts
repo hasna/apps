@@ -913,6 +913,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["nlp", "content moderation", "sentiment", "language understanding", "api"],
   },
   {
+    name: "trycardinal-ai",
+    displayName: "Cardinal",
+    description: "Document intelligence API for markdown conversion and document splitting",
+    category: "AI & ML",
+    tags: ["ai", "document", "markdown", "ocr"],
+  },
+  {
     name: "udio",
     displayName: "Udio",
     description: "AI music generation platform",
