@@ -272,8 +272,8 @@ Safe mode registers only read-only/list/check/export tools. Mutating tools such 
 | `DOMAINS_MCP_SAFE_MODE` | Set to `1` to expose only read-only MCP tools |
 | `DOMAINS_DATABASE_URL` | Remote storage PostgreSQL database URL |
 | `HASNA_DOMAINS_DATABASE_URL` | Legacy remote storage PostgreSQL database URL fallback |
-| `DOMAINS_STORAGE_MODE` | Storage mode: `local`, `remote`, or `hybrid` |
-| `HASNA_DOMAINS_STORAGE_MODE` | Legacy storage mode fallback |
+| `DOMAINS_STORAGE_MODE` | Storage mode: `local` or `cloud` (cloud uses AWS-backed PostgreSQL via `DOMAINS_DATABASE_URL`) |
+| `HASNA_DOMAINS_STORAGE_MODE` | Legacy storage mode fallback (same values) |
 | `AWS_PROFILE` | AWS profile for Route 53 Domains and hosted zones |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` | AWS credential fallback |
 | `DOMAINS_PURCHASE_AWS_PROFILE` | Purchase profile fallback when config has no `purchase_aws_profile` |
