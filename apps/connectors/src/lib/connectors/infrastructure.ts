@@ -86,4 +86,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Infrastructure",
     tags: ["monitoring", "uptime", "performance", "alerts", "website"],
   },
+  {
+    name: "vercel-edge-config",
+    displayName: "Vercel Edge Config",
+    description: "Edge config platform",
+    category: "Infrastructure",
+    tags: ["edge", "config", "vercel", "feature-flags"],
+  },
 ];
