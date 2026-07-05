@@ -594,8 +594,15 @@ This is the intended deterministic-to-agentic path: a producer creates a todos
 task, `@hasna/events` delivers `task.created`, OpenLoops records the invocation
 and admission item, OpenLoops creates a worker/verifier workflow when admitted,
 and the workflow updates todos with evidence. Use account pools so worker and
-verifier steps do not burn the same profile; OpenLoops picks deterministically
-and uses a different verifier profile when the pool has at least two entries.
+verifier steps do not burn the same profile. For live Codewith drains, OpenLoops
+spreads each route to the **least-loaded** pool account (counting running steps
+per account) and still keeps the verifier on a different profile than the worker;
+the deterministic hash is the tie-break, so a cold store reproduces the previous
+assignment exactly. `--max-per-profile <K>` (default 2 for pools of two or more,
+`0` to disable) defers a route when every pool account already has `K` running
+steps — the guardrail that keeps higher concurrency from stacking on one
+subscription and tripping provider-side rate limits. The chosen account per role
+is recorded on each step (`account_profile`) and surfaced in drain reports.
 Use `--dry-run` to inspect the rendered invocation, work item, workflow, and
 loop input without storing anything.
 
@@ -645,10 +652,20 @@ loops routes schedule todos-task oss-task-route-drain \
   --max-active-per-project 1 \
   --max-active-per-project-group 4 \
   --max-active 12 \
+  --max-per-profile 2 \
   --worktree-mode required \
   --evidence-dir "$HOME/.hasna/loops/reports/oss-task-route-drain" \
   --compact
 ```
+
+`--max-active` counts active routed workflows **per route**. Scope precedence:
+an explicit `--max-active-scope <key>` wins, else the running loop's
+`LOOPS_LOOP_NAME`, else the route key — so each router's limit is its own
+ceiling rather than a store-wide total shared by every router.
+`--max-active-per-project` and `--max-active-per-project-group` remain cross-route
+anti-hog caps counted over all routes. Raise a router's `--max-active`
+deliberately once counting is per-route; keep `--max-per-profile` set so the
+extra concurrency spreads across subscription accounts.
 
 Only route tasks that explicitly opt in with `auto:route`, `route_enabled=true`,
 or `automation.allowed=true`. Use Codewith account pools, required worktrees,

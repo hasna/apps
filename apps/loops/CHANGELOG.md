@@ -5,6 +5,54 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.4.12 (2026-07-05)
+
+Drain throughput: `--max-active` is now a per-route ceiling instead of a
+store-wide one, drain dispatch spreads across subscription accounts by live load,
+and every step records the account it ran on.
+
+### Fixed
+
+- **Route admission — per-route `--max-active`:** the global admission count was
+  store-wide, so the busiest router's `--max-active` became a shared ceiling that
+  throttled every other router (average concurrency ~1.9 while the agent lane
+  allowed 12; ~253 items/24h deferred as `global active workflow limit reached`).
+  The global count is now scoped to the route/drain that set the limit; scope
+  precedence is an explicit `--max-active-scope <key>` first, then the running
+  loop's `LOOPS_LOOP_NAME`, then the route key as the final fallback — so each
+  router's `--max-active` is its own ceiling.
+  Existing routers get correct scoping with no config change. `project` and
+  `project_group` counts are unchanged: they remain cross-route anti-hog caps.
+- **Per-account attribution:** Codewith agent steps carry their subscription
+  account in `authProfile`, not an `AccountRef`, so `workflow_step_runs.account_profile`
+  was NULL for every drain worker and per-account burn could not be attributed.
+  The resolved auth profile (and provider as `account_tool`) is now recorded on
+  each step at run creation, and the per-role assignment is surfaced in drain
+  reports.
+
+### Added
+
+- **Least-loaded auth-profile pool selection + `--max-per-profile`:** pooled
+  Codewith dispatch picked a member by a pure hash of the work item, which stacked
+  several concurrent workers on one account at high concurrency and tripped
+  provider-side 429/stream-drop limits. Live drains now count running steps per
+  account and place each route on the least-loaded pool member (verifier/planner
+  still land on a different account than the worker; the hash is the deterministic
+  tie-break, so a cold store reproduces the prior assignment). New
+  `--max-per-profile <K>` (default 2 for pools of two or more, `0` disables) defers
+  a route when every pool account already has `K` running steps.
+
+Schema: additive sqlite migration `0008_work_item_route_scope` (nullable
+`workflow_work_items.route_scope`; its index is created only by the migration —
+never in the baseline DDL, which re-runs on every open and would crash pre-0008
+databases). `SCHEMA_USER_VERSION` is intentionally not bumped so an older binary
+can still open a database this migration touched (rollback-safe). Postgres gets
+the equivalent additive migration `0004_work_item_route_scope`; the released,
+checksummed `0002_workflows_goals` block is untouched so existing postgres
+ledgers keep verifying. Upgrade coverage: a real pre-0008 (0.4.11 schema)
+fixture database must open cleanly, gain the column + index, and keep its data;
+released postgres migration checksums are pinned in tests.
+
 ## 0.4.11 (2026-07-05)
 
 Scheduler fairness and PR-route hygiene: fast command loops no longer starve

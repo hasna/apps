@@ -149,6 +149,18 @@ const AGENT_ROUTING_OPTION_SPECS: RouteOptionSpec[] = [
     kind: "value",
     description: "skip creating a workflow when this many active routed workflows already exist for the project group",
   },
+  {
+    flags: "--max-active-scope <key>",
+    key: "maxActiveScope",
+    kind: "value",
+    description: "scope --max-active counting to this route/drain identity (defaults to the LOOPS_LOOP_NAME of the running loop, else the route key) so each drain's --max-active is its own ceiling instead of a store-wide one",
+  },
+  {
+    flags: "--max-per-profile <n>",
+    key: "maxPerProfile",
+    kind: "value",
+    description: "for codewith auth-profile pools, spread dispatch to the least-loaded account and defer when every pool member already has this many running steps (default 2 for pools of 2+; 0 disables the guard)",
+  },
   { flags: "--worktree-mode <mode>", key: "worktreeMode", kind: "value", description: "worktree isolation mode: auto, required, off, or main", defaultValue: "auto" },
   { flags: "--worktree-root <path>", key: "worktreeRoot", kind: "value", description: "base directory for OpenLoops-managed git worktrees" },
   { flags: "--worktree-branch-prefix <prefix>", key: "worktreeBranchPrefix", kind: "value", description: "branch prefix for generated worktrees", defaultValue: "openloops" },

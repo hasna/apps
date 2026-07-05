@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AmbiguousNameError, LoopArchivedError, LoopNotFoundError } from "./errors.js";
@@ -1413,7 +1413,12 @@ describe("Store", () => {
         "0005_workflow_invocations_and_admission",
         "0006_run_process_tracking",
         "0007_run_claim_tokens",
+        "0008_work_item_route_scope",
       ]);
+      // 0008 adds a nullable, additive column and deliberately does NOT bump
+      // SCHEMA_USER_VERSION: an older binary must still open a DB the newer one
+      // touched (rollback safety), and the migration runner tolerates the extra
+      // ledger row + ignores the unknown column.
       const version = store["db"].query("PRAGMA user_version").get() as { user_version: number };
       expect(version.user_version).toBeGreaterThanOrEqual(7);
     } finally {
@@ -2007,5 +2012,242 @@ describe("Store", () => {
     store.close();
 
     expect(existsSync(tempRoot)).toBe(false);
+  });
+});
+
+describe("countActiveWorkflowWorkItems route scope", () => {
+  function admitItem(store: Store, idempotencyKey: string, routeScope: string, projectKey = "/tmp/scope-repo"): void {
+    const invocation = store.createWorkflowInvocation({
+      sourceRef: { kind: "event", id: `evt-${idempotencyKey}`, dedupeKey: idempotencyKey },
+      subjectRef: { kind: "task", id: idempotencyKey, path: projectKey },
+      intent: "route",
+      scope: { projectPath: projectKey },
+    });
+    const workItem = store.upsertWorkflowWorkItem({
+      routeKey: "todos-task",
+      idempotencyKey,
+      invocationId: invocation.id,
+      sourceType: "task.created",
+      sourceRef: `evt-${idempotencyKey}`,
+      subjectRef: idempotencyKey,
+      projectKey,
+      routeScope,
+    });
+    const workflow = store.createWorkflow({ name: `wf-${idempotencyKey}`, steps: [{ id: "s", target: { type: "command", command: "true" } }] });
+    const loop = store.createLoop({
+      name: `loop-${idempotencyKey}`,
+      schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+      target: { type: "workflow", workflowId: workflow.id, input: {} },
+    });
+    store.admitWorkflowWorkItem(workItem.id, { workflowId: workflow.id, loopId: loop.id });
+  }
+
+  test("scopes the global --max-active count to the route that set it", () => {
+    const store = new Store(":memory:");
+    try {
+      admitItem(store, "a1", "loopA");
+      admitItem(store, "a2", "loopA");
+      admitItem(store, "b1", "loopB");
+      // Each route's --max-active now counts only its own active items.
+      // Neutralization: the pre-fix store-wide global count ignored routeScope
+      // and returned 3 for every route, so these per-scope assertions fail.
+      expect(store.countActiveWorkflowWorkItems({ routeScope: "loopA" }).global).toBe(2);
+      expect(store.countActiveWorkflowWorkItems({ routeScope: "loopB" }).global).toBe(1);
+      expect(store.countActiveWorkflowWorkItems({ routeScope: "loopC" }).global).toBe(0);
+      // No scope -> store-wide count, unchanged for back-compat.
+      expect(store.countActiveWorkflowWorkItems().global).toBe(3);
+      // Per-project counting stays unscoped (cross-route anti-hog cap).
+      expect(store.countActiveWorkflowWorkItems({ projectKey: "/tmp/scope-repo", routeScope: "loopA" }).project).toBe(3);
+    } finally {
+      store.close();
+    }
+  });
+});
+
+describe("pre-0008 database upgrade (real 0.4.11 schema fixture)", () => {
+  // The DDL below is copied verbatim from 0.4.11 (git e69f2bc, createBaseSchema)
+  // — workflow_work_items WITHOUT route_scope. A fresh createBaseSchema database
+  // is NOT a valid stand-in here: it already contains the new column, which is
+  // exactly the blind spot that let a crash-on-open ship. Baseline migration
+  // 0001 re-runs on every open, so any base-schema statement referencing a
+  // column that only migration 0008 adds crashes the open of every existing
+  // database ("no such column: route_scope") before 0008 can run.
+  const V0411_FIXTURE_SQL = `
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        id TEXT PRIMARY KEY,
+        applied_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS workflow_invocations (
+        id TEXT PRIMARY KEY,
+        workflow_id TEXT,
+        template_id TEXT,
+        source_kind TEXT NOT NULL,
+        source_id TEXT,
+        source_dedupe_key TEXT,
+        source_json TEXT NOT NULL,
+        subject_kind TEXT NOT NULL,
+        subject_id TEXT,
+        subject_path TEXT,
+        subject_url TEXT,
+        subject_json TEXT NOT NULL,
+        intent TEXT NOT NULL,
+        scope_json TEXT,
+        output_policy_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS workflow_work_items (
+        id TEXT PRIMARY KEY,
+        route_key TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        invocation_id TEXT NOT NULL REFERENCES workflow_invocations(id) ON DELETE CASCADE,
+        source_type TEXT NOT NULL,
+        source_ref TEXT NOT NULL,
+        subject_ref TEXT NOT NULL,
+        project_key TEXT,
+        project_group TEXT,
+        priority INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        attempts INTEGER NOT NULL,
+        next_attempt_at TEXT,
+        lease_expires_at TEXT,
+        workflow_id TEXT REFERENCES workflow_specs(id) ON DELETE SET NULL,
+        loop_id TEXT REFERENCES loops(id) ON DELETE SET NULL,
+        workflow_run_id TEXT REFERENCES workflow_runs(id) ON DELETE SET NULL,
+        last_reason TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(route_key, idempotency_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_workflow_work_items_status_next ON workflow_work_items(status, next_attempt_at, priority DESC, created_at ASC);
+      CREATE INDEX IF NOT EXISTS idx_workflow_work_items_project ON workflow_work_items(project_key, status);
+      CREATE INDEX IF NOT EXISTS idx_workflow_work_items_group ON workflow_work_items(project_group, status);
+      CREATE INDEX IF NOT EXISTS idx_workflow_work_items_invocation ON workflow_work_items(invocation_id);
+  `;
+  const V0411_MIGRATION_IDS = [
+    "0001_initial_and_workflows",
+    "0002_loop_machines",
+    "0003_goals",
+    "0004_loop_archive_metadata",
+    "0005_workflow_invocations_and_admission",
+    "0006_run_process_tracking",
+    "0007_run_claim_tokens",
+  ];
+
+  function buildV0411Fixture(dbFile: string): void {
+    const raw = new Database(dbFile);
+    try {
+      raw.exec(V0411_FIXTURE_SQL);
+      for (const id of V0411_MIGRATION_IDS) {
+        raw.query("INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)").run(id, "2026-07-05T00:00:00.000Z");
+      }
+      raw.exec("PRAGMA user_version = 7");
+      raw
+        .query(
+          `INSERT INTO workflow_invocations (id, source_kind, source_json, subject_kind, subject_json, intent, created_at, updated_at)
+           VALUES ('inv-legacy-1', 'event', '{}', 'task', '{}', 'route', '2026-07-05T00:00:00.000Z', '2026-07-05T00:00:00.000Z')`,
+        )
+        .run();
+      raw
+        .query(
+          `INSERT INTO workflow_work_items (id, route_key, idempotency_key, invocation_id, source_type, source_ref,
+            subject_ref, project_key, priority, status, attempts, created_at, updated_at)
+           VALUES ('wi-legacy-1', 'todos-task', 'todos-task:legacy-1', 'inv-legacy-1', 'task.created', 'evt-legacy-1',
+            'legacy-1', '/tmp/legacy-repo', 0, 'running', 1, '2026-07-05T00:00:00.000Z', '2026-07-05T00:00:00.000Z')`,
+        )
+        .run();
+    } finally {
+      raw.close();
+    }
+  }
+
+  test("opens a pre-0008 database cleanly, adds route_scope + index, keeps data intact", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-upgrade-0008-"));
+    const dbFile = join(root, "loops.db");
+    buildV0411Fixture(dbFile);
+
+    // The regression assertion: this open crashed on every existing database
+    // when the base schema carried the route_scope index (baseline 0001 re-ran
+    // it before migration 0008 added the column).
+    const store = new Store(dbFile);
+    try {
+      const columns = (store["db"].query("PRAGMA table_info(workflow_work_items)").all() as Array<{ name: string }>).map(
+        (row) => row.name,
+      );
+      expect(columns).toContain("route_scope");
+      const indexes = (
+        store["db"]
+          .query("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'workflow_work_items'")
+          .all() as Array<{ name: string }>
+      ).map((row) => row.name);
+      expect(indexes).toContain("idx_workflow_work_items_scope");
+      const ledger = (store["db"].query("SELECT id FROM schema_migrations ORDER BY id").all() as Array<{ id: string }>).map(
+        (row) => row.id,
+      );
+      expect(ledger).toContain("0008_work_item_route_scope");
+
+      // Pre-existing data intact; legacy rows have no route scope.
+      const legacy = store.getWorkflowWorkItem("wi-legacy-1");
+      expect(legacy?.status).toBe("running");
+      expect(legacy?.idempotencyKey).toBe("todos-task:legacy-1");
+      expect(legacy?.routeScope).toBeUndefined();
+
+      // Counting works post-upgrade: unscoped still sees the legacy active row;
+      // a scoped count excludes NULL-scope legacy rows (admission bias, never a
+      // wedge).
+      expect(store.countActiveWorkflowWorkItems().global).toBe(1);
+      expect(store.countActiveWorkflowWorkItems({ routeScope: "any-loop" }).global).toBe(0);
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("reopening an upgraded database stays clean (0008 skip-guarded, baseline re-run safe)", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-upgrade-0008-reopen-"));
+    const dbFile = join(root, "loops.db");
+    buildV0411Fixture(dbFile);
+    const first = new Store(dbFile);
+    first.close();
+    // Second open re-runs the baseline schema against the upgraded database;
+    // 0008 must be skipped (already stamped) and nothing may throw.
+    const second = new Store(dbFile);
+    try {
+      expect(second.getWorkflowWorkItem("wi-legacy-1")?.status).toBe("running");
+    } finally {
+      second.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("workflow step account profile attribution", () => {
+  test("persists the codewith authProfile as account_profile and counts running steps per profile", () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "codewith-attribution-wf",
+        steps: [
+          { id: "worker", target: { type: "agent", provider: "codewith", prompt: "do the work", sandbox: "workspace-write", authProfile: "account007" } },
+          { id: "verifier", target: { type: "agent", provider: "codewith", prompt: "review it", sandbox: "workspace-write", authProfile: "account009" } },
+        ],
+      });
+      const run = store.createWorkflowRun({ workflow });
+      const steps = store.listWorkflowStepRuns(run.id);
+      // Fix: codewith steps carry the account in `authProfile`, not an AccountRef;
+      // it must land in account_profile. Neutralization: the pre-fix INSERT used
+      // `account?.profile ?? null`, leaving both NULL for codewith steps.
+      expect(steps.find((step) => step.stepId === "worker")?.accountProfile).toBe("account007");
+      expect(steps.find((step) => step.stepId === "verifier")?.accountProfile).toBe("account009");
+
+      // countRunningWorkflowStepsByAuthProfile only counts running steps.
+      expect(store.countRunningWorkflowStepsByAuthProfile()).toEqual({});
+      store.startWorkflowStepRun(run.id, "worker");
+      expect(store.countRunningWorkflowStepsByAuthProfile()).toEqual({ account007: 1 });
+      store.startWorkflowStepRun(run.id, "verifier");
+      expect(store.countRunningWorkflowStepsByAuthProfile()).toEqual({ account007: 1, account009: 1 });
+    } finally {
+      store.close();
+    }
   });
 });

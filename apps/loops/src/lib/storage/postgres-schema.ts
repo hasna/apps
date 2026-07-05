@@ -331,4 +331,16 @@ CREATE INDEX IF NOT EXISTS idx_audit_events_subject ON audit_events(subject_type
 CREATE INDEX IF NOT EXISTS idx_audit_events_action ON audit_events(action, created_at DESC);
     `,
   ),
+  // Additive per-route --max-active scope (mirrors sqlite migration
+  // 0008_work_item_route_scope). MUST be its own migration: postgres migrations
+  // are checksummed against the ledger, so editing an already-applied
+  // migration's SQL (e.g. folding the column into 0002_workflows_goals) makes
+  // every existing database fail `migrate` with a checksum mismatch.
+  migration(
+    "0004_work_item_route_scope",
+    `
+ALTER TABLE workflow_work_items ADD COLUMN IF NOT EXISTS route_scope TEXT;
+CREATE INDEX IF NOT EXISTS idx_workflow_work_items_scope ON workflow_work_items(route_scope, status);
+    `,
+  ),
 ]);
