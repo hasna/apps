@@ -122,6 +122,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "llm", "open-source"],
   },
   {
+    name: "v0",
+    displayName: "v0",
+    description: "Vercel v0 Platform API — projects, chats, deployments, model completions",
+    category: "AI & ML",
+    tags: ["ai", "codegen", "vercel", "platform"],
+  },
+  {
     name: "cohere",
     displayName: "Cohere",
     description: "Enterprise NLP and embeddings",
