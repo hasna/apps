@@ -48,6 +48,10 @@ export interface PromptRegistryDiagnostics {
   warnings: string[]
 }
 
+export interface DbPathOptions {
+  migrateLegacy?: boolean
+}
+
 const supportedStorageModes = new Set<PromptsStorageMode>(["local", "auto", "remote"])
 
 export function resolveStorageMode(): PromptsStorageMode {
@@ -63,7 +67,7 @@ export function resolveStorageMode(): PromptsStorageMode {
 
 export function getPromptRegistryDiagnostics(): PromptRegistryDiagnostics {
   const requestedMode = resolveStorageMode()
-  const dbPath = getDbPath()
+  const dbPath = getDbPath({ migrateLegacy: false })
   const remotePostgresConfigured = Boolean(process.env["PROMPTS_REGISTRY_POSTGRES_URL"])
   const bucketConfigured = Boolean(process.env["PROMPTS_REGISTRY_S3_BUCKET"])
   const regionConfigured = Boolean(process.env["PROMPTS_REGISTRY_AWS_REGION"])
@@ -122,7 +126,9 @@ export function getPromptRegistryDiagnostics(): PromptRegistryDiagnostics {
   }
 }
 
-export function getDbPath(): string {
+export function getDbPath(options: DbPathOptions = {}): string {
+  const migrateLegacy = options.migrateLegacy ?? true
+
   // Support env var overrides
   const envPath = process.env["HASNA_PROMPTS_DB_PATH"] ?? process.env["PROMPTS_DB_PATH"]
   if (envPath) return envPath
@@ -147,7 +153,7 @@ export function getDbPath(): string {
   const oldDir = join(home, ".prompts")
 
   // Auto-migrate from old location without overwriting newer target files.
-  if (existsSync(oldDir)) {
+  if (migrateLegacy && existsSync(oldDir)) {
     try {
       mergeDirectoryContents(oldDir, newDir)
     } catch {
@@ -160,7 +166,7 @@ export function getDbPath(): string {
 
 function resolveLocalScope(dbPath: string): PromptRegistryDiagnostics["local"]["scope"] {
   if (process.env["HASNA_PROMPTS_DB_PATH"] || process.env["PROMPTS_DB_PATH"]) return "custom"
-  if (process.env["PROMPTS_DB_SCOPE"] === "project" || dbPath.includes(`${join(".prompts", "prompts.db")}`)) return "project"
+  if (dbPath.includes(`${join(".prompts", "prompts.db")}`)) return "project"
   return "home"
 }
 

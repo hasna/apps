@@ -147,6 +147,36 @@ describe("database path resolution", () => {
     expect(diagnostics.remote.configured).toBe(false)
     expect(diagnostics.warnings).toEqual([])
   })
+
+  test("diagnostics report home scope when project scope has no git ancestor", () => {
+    const home = join(tempRoot, "home")
+    process.env["HOME"] = home
+    process.env["PROMPTS_DB_SCOPE"] = "project"
+    process.chdir("/")
+
+    const diagnostics = getPromptRegistryDiagnostics()
+
+    expect(diagnostics.local).toEqual({
+      db_path: join(home, ".hasna", "prompts", "prompts.db"),
+      scope: "home",
+      storage: "SQLite",
+    })
+  })
+
+  test("diagnostics do not migrate legacy home directory", () => {
+    const home = join(tempRoot, "home")
+    const legacyDir = join(home, ".prompts")
+    const targetDir = join(home, ".hasna", "prompts")
+    mkdirSync(legacyDir, { recursive: true })
+    writeFileSync(join(legacyDir, "prompts.db"), "legacy-db")
+    process.env["HOME"] = home
+
+    const diagnostics = getPromptRegistryDiagnostics()
+
+    expect(diagnostics.local.db_path).toBe(join(targetDir, "prompts.db"))
+    expect(existsSync(join(targetDir, "prompts.db"))).toBe(false)
+    expect(readFileSync(join(legacyDir, "prompts.db"), "utf8")).toBe("legacy-db")
+  })
 })
 
 function restoreEnv(name: string, value: string | undefined): void {

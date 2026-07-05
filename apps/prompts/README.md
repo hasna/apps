@@ -58,7 +58,9 @@ prompts --json storage
 The diagnostic output reports the requested mode, active local SQLite database
 path, local scope, remote Postgres/S3/AWS configuration presence, fallback state,
 and sync behavior. It reports only whether remote environment variables are set;
-it does not print configured values.
+it does not print configured values. The diagnostic command is read-only and
+does not migrate legacy `~/.prompts/` data; normal database startup still owns
+that compatibility migration.
 
 Remote or hosted deployments should provide a prompts-owned storage adapter or
 service boundary. This package owns its database adapter and MCP tool surface.

@@ -5,6 +5,7 @@ export { listCollections, getCollection, ensureCollection, movePrompt } from "./
 export { registerAgent, listAgents } from "./db/agents.js"
 export { getDatabase, getDbPath, getPromptRegistryDiagnostics, resolveStorageMode } from "./db/database.js"
 export type {
+  DbPathOptions,
   PromptRegistryDiagnostics,
   PromptsActiveStorage,
   PromptsRegistryState,
