@@ -1902,6 +1902,7 @@ health
         const actions = Array.isArray(scan.todos?.actions) ? scan.todos.actions as Array<Record<string, unknown>> : [];
         console.log(
           `health_scan status=${scan.status} loops=${scan.counts.loops} findings=${scan.counts.findings} ` +
+            `reported=${scan.counts.reportedFindings} truncated=${scan.counts.truncatedFindings} ` +
             `latest=${scan.counts.latestRunFindings} stale_running=${scan.counts.staleRunning} ` +
             `daemon=${scan.counts.daemonFindings} doctor=${scan.counts.doctorFindings} preflight=${scan.counts.preflightFindings} ` +
             `report=${scan.reports?.markdown ?? "none"} todos_actions=${actions.length}`,

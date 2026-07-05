@@ -82,6 +82,31 @@ describe("loop health classification", () => {
     }
   });
 
+  test("health scan status and counts include findings hidden by the output limit", () => {
+    const store = new Store(":memory:");
+    try {
+      const stale = store.createLoop({
+        name: "bounded-stale-running",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "sleep", args: ["60"] },
+        leaseMs: 60_000,
+      });
+      store.claimRun(stale, "2026-01-01T00:00:00.000Z", "seed", new Date("2026-01-01T00:00:00Z"));
+
+      const scan = buildHealthScan(store, { now: new Date("2026-01-01T00:30:00Z"), maxFindings: 0 });
+
+      expect(scan.status).toBe("critical");
+      expect(scan.ok).toBe(false);
+      expect(scan.counts.findings).toBe(1);
+      expect(scan.counts.staleRunning).toBe(1);
+      expect(scan.counts.reportedFindings).toBe(0);
+      expect(scan.counts.truncatedFindings).toBe(1);
+      expect(scan.findings).toHaveLength(0);
+    } finally {
+      store.close();
+    }
+  });
+
   test("health scan turns doctor preflight checks into bounded deduped findings", () => {
     const store = new Store(":memory:");
     try {

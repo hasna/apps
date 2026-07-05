@@ -131,6 +131,8 @@ export interface LoopsHealthScan {
     doctorFindings: number;
     preflightFindings: number;
     findings: number;
+    reportedFindings: number;
+    truncatedFindings: number;
   };
   daemon?: Pick<DaemonStatus, "running" | "stale" | "pid" | "host" | "loops" | "runs" | "logPath">;
   doctor?: DoctorReport;
@@ -492,7 +494,7 @@ function healthScanMarkdown(scan: LoopsHealthScan): string {
     `- generated_at: ${scan.generatedAt}`,
     `- included_statuses: ${scan.includedStatuses.join(",")}`,
     `- loops: total=${scan.counts.loops} active=${scan.counts.active} paused=${scan.counts.paused} stopped=${scan.counts.stopped} expired=${scan.counts.expired}`,
-    `- findings: total=${scan.counts.findings} latest_run=${scan.counts.latestRunFindings} stale_running=${scan.counts.staleRunning} daemon=${scan.counts.daemonFindings} doctor=${scan.counts.doctorFindings} preflight=${scan.counts.preflightFindings}`,
+    `- findings: total=${scan.counts.findings} reported=${scan.counts.reportedFindings} truncated=${scan.counts.truncatedFindings} latest_run=${scan.counts.latestRunFindings} stale_running=${scan.counts.staleRunning} daemon=${scan.counts.daemonFindings} doctor=${scan.counts.doctorFindings} preflight=${scan.counts.preflightFindings}`,
     scan.daemon ? `- daemon: running=${scan.daemon.running} stale=${scan.daemon.stale} pid=${scan.daemon.pid ?? "none"}` : "- daemon: not checked",
     scan.doctor ? `- doctor_ok: ${scan.doctor.ok}` : "- doctor: not checked",
     scan.selfHeals.length ? `- self_heals: ${scan.selfHeals.map((action) => `${action.kind}:${action.attempted ? action.ok ? "ok" : "failed" : "skipped"}`).join(",")}` : "- self_heals: none",
@@ -862,10 +864,10 @@ export function buildHealthScan(store: Store, opts: BuildHealthScanOptions = {})
   const expectationsByLoopId = new Map(health.expectations.map((expectation) => [expectation.loop.id, expectation]));
   const loopsById = new Map(loops.map((loop) => [loop.id, loop]));
   const maxFindings = Math.max(0, opts.maxFindings ?? DEFAULT_MAX_FINDINGS);
-  const findings: HealthScanFinding[] = [];
+  const allFindings: HealthScanFinding[] = [];
   const pushFinding = (finding: HealthScanFinding | undefined): void => {
-    if (!finding || findings.length >= maxFindings) return;
-    findings.push(finding);
+    if (!finding) return;
+    allFindings.push(finding);
   };
 
   if (opts.daemon) pushFinding(daemonFinding(opts.daemon));
@@ -891,7 +893,8 @@ export function buildHealthScan(store: Store, opts: BuildHealthScanOptions = {})
     }
   }
 
-  const status = scanStatus(findings);
+  const findings = allFindings.slice(0, maxFindings);
+  const status = scanStatus(allFindings);
   const baseCounts = statusCounts(loops);
   return {
     ok: status === "ok",
@@ -900,12 +903,14 @@ export function buildHealthScan(store: Store, opts: BuildHealthScanOptions = {})
     includedStatuses: includeStatuses,
     counts: {
       ...baseCounts,
-      latestRunFindings: findings.filter((finding) => finding.kind === "latest-run").length,
-      staleRunning: findings.filter((finding) => finding.kind === "stale-running").length,
-      daemonFindings: findings.filter((finding) => finding.kind === "daemon").length,
-      doctorFindings: findings.filter((finding) => finding.kind === "doctor").length,
-      preflightFindings: findings.filter((finding) => finding.kind === "preflight").length,
-      findings: findings.length,
+      latestRunFindings: allFindings.filter((finding) => finding.kind === "latest-run").length,
+      staleRunning: allFindings.filter((finding) => finding.kind === "stale-running").length,
+      daemonFindings: allFindings.filter((finding) => finding.kind === "daemon").length,
+      doctorFindings: allFindings.filter((finding) => finding.kind === "doctor").length,
+      preflightFindings: allFindings.filter((finding) => finding.kind === "preflight").length,
+      findings: allFindings.length,
+      reportedFindings: findings.length,
+      truncatedFindings: Math.max(0, allFindings.length - findings.length),
     },
     daemon: opts.daemon
       ? {
