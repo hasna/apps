@@ -157,6 +157,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["security", "scanning", "threat-intelligence"],
   },
   {
+    name: "vanta",
+    displayName: "Vanta",
+    description: "Compliance automation platform for security and GRC workflows",
+    category: "Security & Compliance",
+    tags: ["compliance", "security", "grc", "automation"],
+  },
+  {
     name: "virustotal",
     displayName: "VirusTotal",
     description: "File and URL malware scanning and threat intelligence",
