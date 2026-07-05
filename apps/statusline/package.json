@@ -33,6 +33,7 @@
     "build": "rm -rf dist && bun build src/index.ts src/cli.ts src/mcp/index.ts --outdir dist --target bun && tsc -p tsconfig.build.json && chmod +x dist/cli.js dist/mcp/index.js",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "check": "bun run typecheck && bun test && bun run build",
     "prepack": "bun run build",
     "prepublishOnly": "bun run typecheck && bun test && bun run build"
   },
