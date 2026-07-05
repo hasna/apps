@@ -67,6 +67,7 @@ export type {
   StorageMigrationAdapter,
   StorageMode,
   StorageMutationOptions,
+  StorageRuntimePath,
   StorageStatus,
   StoredMachineRegistry,
   StoredRuntimeEvent,

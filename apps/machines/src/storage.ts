@@ -33,7 +33,7 @@ import {
 } from "./storage-sync.js";
 import { assertSdkMutationApproved, mutationArgsSha256, type SdkMutationApprovalOptions } from "./commands/mutation-approval.js";
 import type { FleetManifest } from "./types.js";
-import type { StorageEnv, StorageMode, StorageStatus, SyncMeta, SyncResult } from "./storage-sync.js";
+import type { StorageEnv, StorageMode, StorageRuntimePath, StorageStatus, SyncMeta, SyncResult } from "./storage-sync.js";
 
 export type StorageMutationOptions = SdkMutationApprovalOptions & {
   tables?: string[];
@@ -202,7 +202,7 @@ export {
   parseStorageTables,
   resolveTables,
 };
-export type { StorageEnv, StorageMode, StorageStatus, SyncMeta, SyncResult };
+export type { StorageEnv, StorageMode, StorageRuntimePath, StorageStatus, SyncMeta, SyncResult };
 export type {
   MachineRegistrySnapshot,
   RuntimeEventInput,

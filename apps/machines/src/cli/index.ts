@@ -3019,6 +3019,10 @@ storageCommand.command("status").description("Show storage sync status").option(
     ["mode", status.mode],
     ["configured", status.configured ? "yes" : "no"],
     ["active env", status.activeEnv || "none"],
+    ["local source", `${status.runtimePath.local.adapter} (${status.runtimePath.local.role})`],
+    ["declarations", `${status.runtimePath.declarations.adapter} (${status.runtimePath.declarations.role})`],
+    ["remote store", `${status.runtimePath.remote.adapter} (${status.runtimePath.remote.role}; ${status.runtimePath.remote.configured ? `configured via ${status.runtimePath.remote.activeEnv}` : "not configured"})`],
+    ["aws/s3", `${status.runtimePath.aws.s3}; runtime provisioning ${status.runtimePath.aws.provisionsRuntimeStorage ? "enabled" : "not provided"}`],
     ["tables", status.tables.join(", ")],
   ]), options.json);
 });

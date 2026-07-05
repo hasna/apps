@@ -35,6 +35,33 @@ export interface SyncMeta {
   direction: "push" | "pull";
 }
 
+export interface StorageRuntimePath {
+  local: {
+    adapter: "sqlite";
+    role: "source-of-truth";
+    pathEnv: "HASNA_MACHINES_DB_PATH";
+    defaultDir: "~/.hasna/machines";
+    tables: typeof STORAGE_TABLES;
+  };
+  declarations: {
+    adapter: "manifest-file-or-adapter";
+    role: "desired-state-source";
+  };
+  remote: {
+    adapter: "postgres";
+    role: "runtime-mirror";
+    configured: boolean;
+    activeEnv: string | null;
+    tls: "verified-for-non-loopback";
+    tables: typeof STORAGE_TABLES;
+  };
+  aws: {
+    s3: "backup-only";
+    provisionsRuntimeStorage: false;
+    provisionsInfrastructure: false;
+  };
+}
+
 export const MACHINES_STORAGE_ENV = "HASNA_MACHINES_DATABASE_URL";
 export const MACHINES_STORAGE_FALLBACK_ENV = "MACHINES_DATABASE_URL";
 export const MACHINES_STORAGE_MODE_ENV = "HASNA_MACHINES_STORAGE_MODE";
@@ -49,6 +76,7 @@ export interface StorageStatus {
   activeEnv: string | null;
   service: "machines";
   tables: typeof STORAGE_TABLES;
+  runtimePath: StorageRuntimePath;
   sync: SyncMeta[];
 }
 
@@ -160,6 +188,32 @@ export function getStorageStatus(): StorageStatus {
     activeEnv: activeEnv?.name ?? null,
     service: "machines",
     tables: STORAGE_TABLES,
+    runtimePath: {
+      local: {
+        adapter: "sqlite",
+        role: "source-of-truth",
+        pathEnv: "HASNA_MACHINES_DB_PATH",
+        defaultDir: "~/.hasna/machines",
+        tables: STORAGE_TABLES,
+      },
+      declarations: {
+        adapter: "manifest-file-or-adapter",
+        role: "desired-state-source",
+      },
+      remote: {
+        adapter: "postgres",
+        role: "runtime-mirror",
+        configured: Boolean(activeEnv),
+        activeEnv: activeEnv?.name ?? null,
+        tls: "verified-for-non-loopback",
+        tables: STORAGE_TABLES,
+      },
+      aws: {
+        s3: "backup-only",
+        provisionsRuntimeStorage: false,
+        provisionsInfrastructure: false,
+      },
+    },
     sync: getSyncMetaAll(),
   };
 }

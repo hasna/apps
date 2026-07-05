@@ -616,6 +616,11 @@ machines storage pull --json
 machines storage sync --json
 ```
 
+`machines storage status --json` includes a `runtimePath` object that names the
+local SQLite source-of-truth, the manifest file or adapter as the desired-state
+source, PostgreSQL as the remote runtime mirror, and S3/AWS as backup-only and
+not provisioned by this package.
+
 Configure database storage with `HASNA_MACHINES_DATABASE_URL` or fallback
 `MACHINES_DATABASE_URL`. Optional storage mode env vars are
 `HASNA_MACHINES_STORAGE_MODE` or `MACHINES_STORAGE_MODE` with `local`,

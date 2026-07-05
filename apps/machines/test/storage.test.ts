@@ -157,9 +157,57 @@ describe("machines storage config", () => {
         service: "machines",
         activeEnv: null,
         sync: [],
+        runtimePath: {
+          local: {
+            adapter: "sqlite",
+            role: "source-of-truth",
+            pathEnv: "HASNA_MACHINES_DB_PATH",
+            defaultDir: "~/.hasna/machines",
+          },
+          declarations: {
+            adapter: "manifest-file-or-adapter",
+            role: "desired-state-source",
+          },
+          remote: {
+            adapter: "postgres",
+            role: "runtime-mirror",
+            configured: false,
+            activeEnv: null,
+            tls: "verified-for-non-loopback",
+          },
+          aws: {
+            s3: "backup-only",
+            provisionsRuntimeStorage: false,
+            provisionsInfrastructure: false,
+          },
+        },
       });
       expect(status.tables).toEqual(STORAGE_TABLES);
+      expect(status.runtimePath.local.tables).toEqual(STORAGE_TABLES);
+      expect(status.runtimePath.remote.tables).toEqual(STORAGE_TABLES);
       expect(existsSync(dbPath)).toBe(true);
+
+      process.env[MACHINES_STORAGE_ENV] = "postgres://example/machines";
+      const configured = getStorageStatus();
+      expect(configured).toMatchObject({
+        configured: true,
+        mode: "hybrid",
+        activeEnv: MACHINES_STORAGE_ENV,
+        runtimePath: {
+          remote: {
+            adapter: "postgres",
+            role: "runtime-mirror",
+            configured: true,
+            activeEnv: MACHINES_STORAGE_ENV,
+            tls: "verified-for-non-loopback",
+          },
+          aws: {
+            s3: "backup-only",
+            provisionsRuntimeStorage: false,
+            provisionsInfrastructure: false,
+          },
+        },
+      });
     } finally {
       closeDb();
       rmSync(dir, { recursive: true, force: true });
