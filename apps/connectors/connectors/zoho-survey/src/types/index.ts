@@ -1,7 +1,7 @@
 export interface ZohoSurveyConfig {
   token: string;
-  portalId: string;
-  departmentId: string;
+  portalId?: string;
+  departmentId?: string;
   baseUrl?: string;
 }
 

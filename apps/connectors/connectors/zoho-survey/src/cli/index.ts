@@ -29,6 +29,7 @@ import {
   getAuthUrl,
   startCallbackServer,
   refreshAccessToken,
+  getValidAccessToken,
   getRedirectUri,
   DEFAULT_SCOPES,
   isAuthenticated,
@@ -69,15 +70,27 @@ function getFormat(cmd: Command): OutputFormat {
   return (cmd.parent?.opts().format || 'pretty') as OutputFormat;
 }
 
-async function getClient(): Promise<ZohoSurvey> {
-  const token = getToken();
+async function getConfiguredToken(): Promise<string | undefined> {
+  if (process.env.ZOHO_SURVEY_TOKEN) return process.env.ZOHO_SURVEY_TOKEN;
+
+  const profile = loadProfile();
+  if (profile.accessToken) {
+    return getValidAccessToken();
+  }
+
+  return profile.token;
+}
+
+async function getClient(options: { requirePortal?: boolean } = {}): Promise<ZohoSurvey> {
+  const requirePortal = options.requirePortal ?? true;
+  const token = await getConfiguredToken();
   const portalId = getPortalId();
   const departmentId = getDepartmentId();
   if (!token) {
     error(`No token configured. Run "${CONNECTOR_NAME} auth login" or set ZOHO_SURVEY_TOKEN.`);
     process.exit(1);
   }
-  if (!portalId || !departmentId) {
+  if (requirePortal && (!portalId || !departmentId)) {
     error(`Portal and department required. Run "${CONNECTOR_NAME} config set-portal" and set-department".`);
     process.exit(1);
   }
@@ -225,7 +238,7 @@ const portalCmd = program.command('portal').description('Portal operations');
 
 portalCmd.command('list').action(async () => {
   try {
-    const client = await getClient();
+    const client = await getClient({ requirePortal: false });
     print(await client.listPortals(), getFormat(portalCmd));
   } catch (err) {
     error(String(err));

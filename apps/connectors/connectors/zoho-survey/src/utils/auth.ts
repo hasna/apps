@@ -118,9 +118,24 @@ export async function refreshAccessToken(tokenUrl: string = DEFAULT_TOKEN_URL): 
 
 export function startCallbackServer(): Promise<AuthResult> {
   return new Promise((resolve) => {
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout>;
+
+    const finish = (result: AuthResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      server.close();
+      resolve(result);
+    };
+
     const server = createServer(async (req, res) => {
       const url = new URL(req.url || '', `http://localhost:${REDIRECT_PORT}`);
-      if (url.pathname !== '/callback') return;
+      if (url.pathname !== '/callback') {
+        res.writeHead(404, { 'Content-Type': 'text/html' });
+        res.end('<html><body><h1>Not Found</h1></body></html>');
+        return;
+      }
 
       const code = url.searchParams.get('code');
       const error = url.searchParams.get('error');
@@ -128,8 +143,7 @@ export function startCallbackServer(): Promise<AuthResult> {
       if (error) {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         res.end(`<html><body><h1>Authentication Failed</h1><p>${error}</p></body></html>`);
-        server.close();
-        resolve({ success: false, error });
+        finish({ success: false, error });
         return;
       }
 
@@ -138,21 +152,23 @@ export function startCallbackServer(): Promise<AuthResult> {
           const tokens = await exchangeCodeForTokens(code);
           res.writeHead(200, { 'Content-Type': 'text/html' });
           res.end('<html><body><h1>Authentication Successful</h1><p>Return to the terminal.</p></body></html>');
-          server.close();
-          resolve({ success: true, tokens });
+          finish({ success: true, tokens });
         } catch (err) {
           res.writeHead(200, { 'Content-Type': 'text/html' });
           res.end(`<html><body><h1>Authentication Failed</h1><p>${String(err)}</p></body></html>`);
-          server.close();
-          resolve({ success: false, error: String(err) });
+          finish({ success: false, error: String(err) });
         }
+        return;
       }
+
+      res.writeHead(400, { 'Content-Type': 'text/html' });
+      res.end('<html><body><h1>Authentication Failed</h1><p>Missing authorization code.</p></body></html>');
+      finish({ success: false, error: 'Missing authorization code' });
     });
 
     server.listen(REDIRECT_PORT);
-    setTimeout(() => {
-      server.close();
-      resolve({ success: false, error: 'Authentication timed out' });
+    timeout = setTimeout(() => {
+      finish({ success: false, error: 'Authentication timed out' });
     }, 5 * 60 * 1000);
   });
 }

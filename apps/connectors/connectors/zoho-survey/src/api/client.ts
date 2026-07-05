@@ -12,13 +12,13 @@ export interface RequestOptions {
 
 export class ZohoSurveyClient {
   private readonly token: string;
-  private readonly portalId: string;
-  private readonly departmentId: string;
+  private readonly portalId?: string;
+  private readonly departmentId?: string;
   private readonly baseUrl: string;
 
   constructor(config: ZohoSurveyConfig) {
-    if (!config.token || !config.portalId || !config.departmentId) {
-      throw new Error('Zoho Survey token, portalId, and departmentId are required');
+    if (!config.token) {
+      throw new Error('Zoho Survey token is required');
     }
     this.token = config.token;
     this.portalId = config.portalId;
@@ -27,15 +27,17 @@ export class ZohoSurveyClient {
   }
 
   getPortalId(): string {
+    if (!this.portalId) throw new Error('Zoho Survey portalId is required');
     return this.portalId;
   }
 
   getDepartmentId(): string {
+    if (!this.departmentId) throw new Error('Zoho Survey departmentId is required');
     return this.departmentId;
   }
 
   surveyBasePath(): string {
-    return `/portals/${this.portalId}/departments/${this.departmentId}`;
+    return `/portals/${this.getPortalId()}/departments/${this.getDepartmentId()}`;
   }
 
   private buildUrl(path: string, params?: Record<string, string | number | boolean | undefined>): string {

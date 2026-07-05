@@ -200,6 +200,7 @@ export function saveOAuthTokens(tokens: OAuth2Tokens): void {
 
 export function clearOAuthTokens(): void {
   const profile = loadProfile();
+  delete profile.token;
   delete profile.accessToken;
   delete profile.refreshToken;
   delete profile.expiresAt;

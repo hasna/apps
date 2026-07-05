@@ -39,10 +39,20 @@ afterEach(() => {
 });
 
 describe('ZohoSurveyClient transport', () => {
-  test('requires token, portalId, and departmentId', () => {
+  test('requires token and only requires portal fields for portal-scoped paths', () => {
     expect(() => new ZohoSurveyClient({ token: '', portalId: '1', departmentId: 'd' })).toThrow();
-    expect(() => new ZohoSurveyClient({ token: 't', portalId: '', departmentId: 'd' })).toThrow();
-    expect(() => new ZohoSurveyClient({ token: 't', portalId: '1', departmentId: '' })).toThrow();
+    const client = new ZohoSurveyClient({ token: 't' });
+    expect(() => client.surveyBasePath()).toThrow('portalId is required');
+  });
+
+  test('supports token-only portal listing', async () => {
+    const recorded = installFetch((url) => {
+      expect(url).toContain('/portals');
+      return { portals: [{ portalId: 'p1', portalName: 'Main' }] };
+    });
+    const survey = new ZohoSurvey({ token: 'tok123' });
+    await expect(survey.listPortals()).resolves.toEqual([{ portalId: 'p1', portalName: 'Main' }]);
+    expect(recorded[0].headers.Authorization).toBe('Zoho-oauthtoken tok123');
   });
 
   test('uses Zoho-oauthtoken header and portal path', async () => {
