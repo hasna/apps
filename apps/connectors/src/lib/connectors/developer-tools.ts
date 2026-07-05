@@ -101,6 +101,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["cloud", "hosting", "vps"],
   },
   {
+    name: "vultr",
+    displayName: "Vultr",
+    description: "Cloud infrastructure for instances, block storage, firewalls, and snapshots",
+    category: "Developer Tools",
+    tags: ["cloud", "hosting", "vps", "infrastructure"],
+  },
+  {
     name: "datadog",
     displayName: "Datadog",
     description: "Monitoring and observability",
