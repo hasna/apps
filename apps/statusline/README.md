@@ -21,7 +21,45 @@ That's it — Claude Code picks it up on the next status refresh (no restart nee
 
 ## Segments
 
-`statusline list` shows everything available:
+`statusline list` shows every segment and whether it is enabled in your config. The
+table below is the full catalog — all 18 segment ids from `src/segments/index.ts`.
+
+`renderLine` walks your configured segment order, renders each one, and **drops**
+anything that returns `null` or throws. A failed segment never breaks the host UI.
+
+| Segment | Default | Description | Data source | Omit when | Example |
+|---------|---------|-------------|-------------|-----------|---------|
+| `machine` | on | Machine hostname (short) | `os.hostname()` — first label before `.` | never (always renders) | `apple03` |
+| `project` | on | Project name with current Git branch | `gitProjectName(cwd)` + `gitBranch(cwd)`; falls back to cwd basename | no project name resolvable | `statusline (main)` |
+| `project-name` | off | Project name only | `gitProjectName(cwd)` or cwd basename | outside a git repo with no name | `statusline` |
+| `git-branch` | off | Current Git branch | `git branch --show-current` in `cwd` | outside git or detached | `main` |
+| `commit-age` | on | Time since last commit (compact) | `git log -1` epoch vs now | no commits / not a repo | `12h` |
+| `loc` | on | Lines of code tracked by Git (compact) | `git ls-files` + `wc -l` in repo root | outside git or zero lines | `1.2k` |
+| `current-dir` | off | Current working directory (basename) | `StatusContext.cwd` | never (always renders basename) | `open-statusline` |
+| `model` | off | Current model name (no context tag) | `StatusContext.model.id` via friendly formatter | no model id | `fable 5` |
+| `model-context` | on | Model name with context-size tag | same formatter, keeps `[tag]` suffix | no model id | `fable 5 [1m]` |
+| `context-used` | off | Percentage of context window used | session transcript JSONL (`contextUsage`) | transcript missing/unreadable | `10%` |
+| `context-remaining` | on | Percentage of context window remaining | transcript via `contextUsage` | transcript missing/unreadable | `90% left` |
+| `used-tokens` | off | Total tokens in the context window | transcript usage block (input + output) | transcript missing/unreadable | `102k tok` |
+| `cost` | on | Session cost in USD | `StatusContext.cost.totalCostUsd` | cost is zero or missing | `$1,234.50` |
+| `duration` | off | Session wall-clock duration | `StatusContext.cost.totalDurationMs` | duration missing | `1h30m` |
+| `lines-changed` | off | Lines added/removed this session | `cost.totalLinesAdded/Removed` | both zero | `+142/-18` |
+| `output-style` | off | Active output style | `StatusContext.outputStyle` | style is `default` or missing | `concise` |
+| `agent-version` | off | Host agent version | `StatusContext.version` | version missing | `v2.1.39` |
+| `session-id` | off | Session identifier (short) | first UUID segment of `sessionId` | no session id | `abc12345` |
+
+### Context segments and transcripts
+
+Segments that report context usage (`context-used`, `context-remaining`, `used-tokens`)
+read the session transcript path from the provider payload. `contextUsage` scans the
+JSONL for the last assistant entry with a `usage` block and sums
+`input_tokens + cache_creation_input_tokens + cache_read_input_tokens`. Window size is
+**1,000,000** when the model id contains `[1m]`, otherwise **200,000**.
+
+With the test fixture transcript (100k input-side tokens on a 1m window), expect
+`context-used` → `10%`, `context-remaining` → `90% left`, `used-tokens` → `102k tok`.
+
+### Quick reference from `statusline list`
 
 ```
   [x] machine            Machine hostname (short)
@@ -44,6 +82,8 @@ That's it — Claude Code picks it up on the next status refresh (no restart nee
   [ ] session-id         Session identifier (short)
 ```
 
+Column padding in `statusline list` is display-only — it does not affect statusbar width.
+
 ## Usage
 
 ```bash
@@ -63,6 +103,23 @@ Config lives at `~/.config/statusline/config.json` (override with `$STATUSLINE_C
   "segments": ["machine", "project", "commit-age", "loc", "model-context", "context-remaining", "cost"]
 }
 ```
+
+## Theming and layout
+
+There is no fixed width knob — the rendered line grows with enabled segments. Control
+length practically:
+
+1. **Fewer segments** — `statusline disable` segments you do not need, or `statusline order` to pick a compact set.
+2. **Shorter separator** — `statusline separator "·"` or `" | "` (default is `" · "`).
+3. **Split project info** — use `project-name` + `git-branch` instead of combined `project` if you want to omit the branch when unknown.
+4. **Rely on omit-when-null** — segments like `cost`, `context-remaining`, and `lines-changed` disappear when data is unavailable instead of showing placeholders.
+
+**Segment order matters.** `statusline order a b c` sets both the display order and the
+exact enabled set — segments not listed are disabled. `statusline enable` appends new
+ids to the end; `statusline disable` removes them.
+
+**Config path:** `~/.config/statusline/config.json`, overridable with `$STATUSLINE_CONFIG`.
+`statusline reset` restores `defaultConfig()` (separator + default segment list above).
 
 ## How it works
 
@@ -114,9 +171,61 @@ explicitly want to wire the CLI into Claude Code.
 
 ## Providers
 
+### Claude Code (implemented)
+
+```bash
+bun install -g @hasna/statusline
+statusline install claude
+```
+
+`installClaude()` writes to `~/.claude/settings.json`:
+
+```json
+{
+  "statusLine": { "type": "command", "command": "statusline render" }
+}
+```
+
+Existing settings are preserved; the previous file is backed up as
+`settings.json.bak-statusline`. Claude Code pipes JSON on stdin to `statusline render`
+on every status refresh — **no restart needed**.
+
+**stdin fields** parsed by `parseClaudeInput` (`src/providers/claude.ts`):
+
+| Payload field | Maps to `StatusContext` |
+|---------------|-------------------------|
+| `cwd` / `workspace.current_dir` | `cwd` |
+| `workspace.project_dir` | `projectDir` |
+| `model.id`, `model.display_name` | `model.id`, `model.displayName` |
+| `cost.total_cost_usd` | `cost.totalCostUsd` |
+| `cost.total_duration_ms` | `cost.totalDurationMs` |
+| `cost.total_lines_added/removed` | `cost.totalLinesAdded/Removed` |
+| `transcript_path` | `transcriptPath` |
+| `session_id` | `sessionId` |
+| `version` | `version` |
+| `output_style.name` | `outputStyle` |
+
+Every field is optional — partial or empty payloads still produce a usable context.
+
+### Codewith (not implemented)
+
+`statusline install` only accepts `claude` today. Running
+`statusline install codewith` errors with *unsupported target* (`src/cli.ts`).
+
+The renderer is provider-agnostic: a future `parseCodewithInput` would map Codewith's
+status payload into `StatusContext` (`src/providers/types.ts`) and reuse the same
+segment registry. No install wiring exists yet (tracked in STA-00003).
+
+### Cursor (not implemented)
+
+Same gap as Codewith — no `statusline install cursor` subcommand and no Cursor-specific
+parser. A future adapter would implement `parseCursorInput` → `StatusContext` and hook
+into Cursor's status bar the same way Claude does (tracked in STA-00004).
+
+### Other agents
+
 | Agent | Status |
 |-------|--------|
-| Claude Code | ✅ `statusline install claude` |
 | OpenCode | ⏳ no statusline/footer hook in its config as of v1.3.x — the renderer is provider-agnostic (`src/providers/`), so an adapter slots in the moment one exists |
 | Codex CLI | Codex ships its own built-in segment picker; no external command hook |
 
@@ -131,6 +240,12 @@ bun run typecheck
 bun test
 bun run build
 echo '{"cwd":"'$PWD'","model":{"id":"claude-fable-5[1m]"}}' | bun src/cli.ts render
+```
+
+Spot-check fixture output:
+
+```bash
+cat test/fixtures/claude-input.json | bun src/cli.ts render
 ```
 
 ## License
