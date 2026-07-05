@@ -46,9 +46,9 @@ program
     }
   });
 
-function getFormat(cmd: Command): OutputFormat {
-  const parent = cmd.parent;
-  return (parent?.opts().format || 'pretty') as OutputFormat;
+export function getFormat(cmd: Command): OutputFormat {
+  const opts = cmd.optsWithGlobals();
+  return (opts.format || cmd.parent?.opts().format || 'pretty') as OutputFormat;
 }
 
 function getClient(): Zoho {
@@ -280,4 +280,6 @@ program.command('raw-request').description('Make a raw API request')
     }
   });
 
-program.parse();
+if (import.meta.main) {
+  program.parse();
+}

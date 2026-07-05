@@ -1025,6 +1025,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["crm", "sales", "zoho"],
   },
   {
+    name: "zoho-bigin",
+    displayName: "Zoho Bigin",
+    description: "Lightweight CRM and pipeline management for small teams",
+    category: "Business Tools",
+    tags: ["crm", "pipeline", "sales", "zoho"],
+  },
+  {
     name: "zohocrm",
     displayName: "Zoho CRM",
     description: "CRM for sales, marketing, and customer support",
@@ -1032,11 +1039,32 @@ export const connectors: ConnectorMeta[] = [
     tags: ["crm", "sales", "zoho"],
   },
   {
+    name: "zohoforms",
+    displayName: "Zoho Forms",
+    description: "Online form builder, surveys, and approval workflows",
+    category: "Business Tools",
+    tags: ["forms", "surveys", "zoho"],
+  },
+  {
     name: "zohodesk",
     displayName: "Zoho Desk",
     description: "Customer support and helpdesk platform",
     category: "Business Tools",
     tags: ["helpdesk", "support", "zoho"],
+  },
+  {
+    name: "zoho-survey",
+    displayName: "Zoho Survey",
+    description: "Online survey and feedback collection platform",
+    category: "Business Tools",
+    tags: ["surveys", "feedback", "zoho"],
+  },
+  {
+    name: "zoho-creator",
+    displayName: "Zoho Creator",
+    description: "Low-code business apps and databases",
+    category: "Business Tools",
+    tags: ["low-code", "apps", "zoho"],
   },
   {
     name: "zohoworkdrive",
