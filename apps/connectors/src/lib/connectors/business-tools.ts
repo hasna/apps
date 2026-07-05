@@ -1046,6 +1046,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["crm", "sales", "zoho"],
   },
   {
+    name: "zohorecruit",
+    displayName: "Zoho Recruit",
+    description: "Applicant tracking and recruiting platform",
+    category: "Business Tools",
+    tags: ["recruiting", "ats", "hr", "zoho"],
+  },
+  {
     name: "zohoforms",
     displayName: "Zoho Forms",
     description: "Online form builder, surveys, and approval workflows",
