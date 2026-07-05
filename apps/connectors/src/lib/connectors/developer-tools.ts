@@ -983,6 +983,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["localization", "translation", "i18n", "l10n", "content"],
   },
   {
+    name: "trigger-dev-api-platform",
+    displayName: "Trigger.dev API Platform",
+    description: "Background jobs, workflows, and task run management",
+    category: "Developer Tools",
+    tags: ["background-jobs", "workflows", "trigger-dev", "automation"],
+  },
+  {
     name: "travisci",
     displayName: "Travis CI",
     description: "Continuous integration and delivery platform for testing and deploying software",
