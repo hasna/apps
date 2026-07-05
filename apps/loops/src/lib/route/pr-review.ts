@@ -70,10 +70,24 @@ export interface PrReviewRoutingDecision {
   signals: string[];
 }
 
+const GITHUB_USER_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+
+/**
+ * Normalizes a GitHub actor login. GitHub App bots surface as `app/<slug>`
+ * (GraphQL actor form) or `<slug>[bot]` (REST/`gh` form); the bare-user regex
+ * rejected both, so bot-authored PRs could never derive a valid author and were
+ * permanently skipped. Fold both into the canonical `<slug>[bot]` login so the
+ * PR-review gate can reason about them (policy on whether to auto-route
+ * dependabot etc. is decided elsewhere — this only stops the hard format fail).
+ */
 function githubLogin(value: string | undefined): string | undefined {
   if (!value?.trim()) return undefined;
-  const login = value.trim().replace(/^@/, "");
-  return /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(login) ? login : undefined;
+  let login = value.trim().replace(/^@/, "");
+  const appActor = /^app\/([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))$/.exec(login);
+  if (appActor) login = `${appActor[1]}[bot]`;
+  const bot = /^([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\[bot\]$/.exec(login);
+  if (bot) return `${bot[1]}[bot]`;
+  return GITHUB_USER_LOGIN.test(login) ? login : undefined;
 }
 
 function githubLogins(values: Array<string | undefined>): string[] {
@@ -139,6 +153,41 @@ export interface PrReference {
 /** Resolves a PR author login from a concrete `owner/repo#number` reference. */
 export type PrAuthorResolver = (ref: PrReference) => string | undefined;
 
+/** Live PR lifecycle state from a concrete `owner/repo#number` reference. */
+export interface PrLiveState {
+  state?: string;
+  mergeStateStatus?: string;
+}
+
+/** Resolves live PR state; returns undefined when it cannot be determined. */
+export type PrStateResolver = (ref: PrReference) => PrLiveState | undefined;
+
+const PR_STATE_FIELDS = [
+  "pr_state",
+  "prState",
+  "pull_request_state",
+  "pullRequestState",
+  "state",
+  "pr_status",
+  "prStatus",
+];
+
+/** Terminal PR states for which a merge/review route must not dispatch a worker. */
+const CLOSED_PR_STATES = new Set(["MERGED", "CLOSED"]);
+
+function normalizePrState(value: string | undefined): string | undefined {
+  const trimmed = value?.trim().toUpperCase();
+  return trimmed ? trimmed : undefined;
+}
+
+/** Reads a merged/closed PR state from pre-fetched route metadata or evidence text (no network). */
+function prStateFromEvidence(records: Record<string, unknown>[], text: string): string | undefined {
+  const field = normalizePrState(firstRouteField(records, PR_STATE_FIELDS));
+  if (field) return field;
+  const match = /\b(?:pr[_\s-]?state|pull[_\s-]?request[_\s-]?state|state)\s*[:=]\s*(MERGED|CLOSED|OPEN)\b/i.exec(text);
+  return match ? match[1].toUpperCase() : undefined;
+}
+
 /** Extracts a concrete owner/repo/number PR reference from route evidence text. */
 export function prReferenceFrom(text: string): PrReference | undefined {
   // Canonical PR URL: https://github.com/<owner>/<repo>/pull/<n>
@@ -160,6 +209,23 @@ function ghAuthorResolver(ref: PrReference): string | undefined {
   );
   if (result.error || result.status !== 0) return undefined;
   return githubLogin((result.stdout ?? "").trim());
+}
+
+/** Derives live PR state via `gh pr view`; returns undefined when gh is
+ * unavailable, unauthenticated, or the PR cannot be resolved (fail open). */
+function ghStateResolver(ref: PrReference): PrLiveState | undefined {
+  const result = spawnSync(
+    "gh",
+    ["pr", "view", String(ref.number), "--repo", `${ref.owner}/${ref.repo}`, "--json", "state,mergeStateStatus"],
+    { encoding: "utf8", timeout: 20_000 },
+  );
+  if (result.error || result.status !== 0) return undefined;
+  try {
+    const parsed = JSON.parse(result.stdout ?? "{}") as PrLiveState;
+    return { state: parsed.state, mergeStateStatus: parsed.mergeStateStatus };
+  } catch {
+    return undefined;
+  }
 }
 
 function authorFromPrText(text: string): string | undefined {
@@ -193,6 +259,7 @@ export function prReviewRoutingDecision(
   metadata: Record<string, unknown>,
   opts: TodosTaskRouteOptions,
   resolveAuthor: PrAuthorResolver = ghAuthorResolver,
+  resolveState: PrStateResolver = ghStateResolver,
 ): PrReviewRoutingDecision {
   const records = [...taskEventRecords(data, metadata), ...automationRecords(data, metadata)];
   const text = routeEvidenceText(records);
@@ -218,6 +285,27 @@ export function prReviewRoutingDecision(
   const required = hasPrReference && (reviewRequiredByField || reviewRequiredByText || mergeBlockedByText || approvalIntent);
   if (!required) return { required: false, allowed: true, reviewers: [], signals };
 
+  // Freshness gate: an already merged/closed PR must never dispatch a merge/review
+  // worker (they otherwise churn forever, ~1.5M tokens/run). Prefer state carried
+  // in pre-fetched metadata/evidence (no network); fall back to `gh pr view` only
+  // when a concrete PR reference is present and no state is baked in. Fails open —
+  // an undeterminable state routes as before.
+  const prRef = prReferenceFrom(text);
+  let prState = prStateFromEvidence(records, text);
+  if (!prState && prRef) {
+    const live = resolveState(prRef);
+    prState = normalizePrState(live?.state);
+  }
+  if (prState && CLOSED_PR_STATES.has(prState)) {
+    return {
+      required: true,
+      allowed: false,
+      reason: `PR is already ${prState.toLowerCase()}; skipping merge/review route (freshness gate)`,
+      reviewers: [],
+      signals: [...signals, "pr-not-open"],
+    };
+  }
+
   const reviewers = githubLogins([
     opts.githubReviewer,
     ...(splitList(opts.githubReviewerPool) ?? []),
@@ -230,14 +318,11 @@ export function prReviewRoutingDecision(
   // owner/repo#number PR, derive the author from GitHub so a resolvable PR is
   // not blocked purely for lack of pre-baked author evidence. Fails closed:
   // an unresolvable reference leaves author undefined and the route is skipped.
-  if (!author) {
-    const ref = prReferenceFrom(text);
-    if (ref) {
-      const derived = githubLogin(resolveAuthor(ref));
-      if (derived) {
-        author = derived;
-        signals.push("author-derived-gh");
-      }
+  if (!author && prRef) {
+    const derived = githubLogin(resolveAuthor(prRef));
+    if (derived) {
+      author = derived;
+      signals.push("author-derived-gh");
     }
   }
   const selectedReviewer = author
