@@ -990,6 +990,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ci/cd", "continuous integration", "testing", "deployment", "devops"],
   },
   {
+    name: "twilio-api-platform",
+    displayName: "Twilio Api Platform",
+    description: "Twilio Api Platform REST API for items, events, and search",
+    category: "Developer Tools",
+    tags: ["api", "platform", "twilio"],
+  },
+  {
     name: "tuskr",
     displayName: "Tuskr",
     description: "Test case management and QA platform",
