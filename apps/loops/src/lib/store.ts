@@ -732,6 +732,7 @@ function scrubbedOrNull(value: string | undefined | null): string | null {
  * kept as head + tail around a truncation marker so evidence stays useful.
  */
 const MAX_PERSISTED_RUN_OUTPUT_CHARS = 64 * 1024;
+const MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS = 64 * 1024;
 
 function clampPersistedRunOutput(value: string | null): string | null {
   if (value == null || value.length <= MAX_PERSISTED_RUN_OUTPUT_CHARS) return value;
@@ -745,6 +746,41 @@ function clampPersistedRunOutput(value: string | null): string | null {
 /** Scrub secrets then bound size before persisting run stdout/stderr. */
 function persistedRunOutput(value: string | undefined | null): string | null {
   return clampPersistedRunOutput(scrubbedOrNull(value));
+}
+
+function clampTextToChars(value: string, maxChars: number, reason: string): string {
+  if (value.length <= maxChars) return value;
+  const marker = `\n...[truncated by ${reason}]...\n`;
+  const budget = Math.max(0, maxChars - marker.length);
+  const headLength = Math.ceil(budget / 2);
+  const tailLength = Math.floor(budget / 2);
+  return `${value.slice(0, headLength)}${marker}${value.slice(value.length - tailLength)}`;
+}
+
+function boundedWorkflowEventPayloadJson(scrubbedJson: string): string {
+  if (scrubbedJson.length <= MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS) return scrubbedJson;
+
+  const base = {
+    truncated: true,
+    originalChars: scrubbedJson.length,
+    maxChars: MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS,
+    preview: "",
+  };
+  const baseChars = JSON.stringify(base).length;
+  let previewBudget = Math.max(0, MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS - baseChars - 64);
+
+  while (true) {
+    const preview = clampTextToChars(scrubbedJson, previewBudget, "loops workflow-event payload retention");
+    const bounded = JSON.stringify({ ...base, preview });
+    if (bounded.length <= MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS || previewBudget === 0) return bounded;
+    previewBudget = Math.max(0, previewBudget - (bounded.length - MAX_PERSISTED_WORKFLOW_EVENT_PAYLOAD_CHARS) - 64);
+  }
+}
+
+function persistedWorkflowEventPayload(payload: Record<string, unknown> | undefined | null): string | null {
+  if (payload == null) return null;
+  const scrubbed = scrubSecretsDeep(payload);
+  return boundedWorkflowEventPayloadJson(scrubSecrets(JSON.stringify(scrubbed)));
 }
 
 function chmodIfExists(path: string, mode: number): void {
@@ -2794,7 +2830,7 @@ export class Store {
         .run({
           $id: genId(),
           $workflowRunId: runId,
-          $payload: JSON.stringify({
+          $payload: persistedWorkflowEventPayload({
             workflowId: input.workflow.id,
             workflowName: input.workflow.name,
             stepCount: input.workflow.steps.length,
@@ -3233,7 +3269,7 @@ export class Store {
           $sequence: sequence,
           $eventType: eventType,
           $stepId: stepId ?? null,
-          $payload: payload ? JSON.stringify(payload) : null,
+          $payload: persistedWorkflowEventPayload(payload),
           $created: now,
         });
       const event = this.db.query<WorkflowEventRow, [string]>("SELECT * FROM workflow_events WHERE id = ?").get(id);
