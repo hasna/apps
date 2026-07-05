@@ -723,6 +723,28 @@ function scrubbedOrNull(value: string | undefined | null): string | null {
   return value == null ? null : scrubSecrets(value);
 }
 
+/**
+ * Max characters of stdout/stderr persisted per run/step. Agent runs (codewith
+ * `exec --json` rollouts) can emit multi-megabyte output; storing it verbatim on
+ * every terminal run is what regrew loops.db ~100MB/day. Oversized output is
+ * kept as head + tail around a truncation marker so evidence stays useful.
+ */
+const MAX_PERSISTED_RUN_OUTPUT_CHARS = 64 * 1024;
+
+function clampPersistedRunOutput(value: string | null): string | null {
+  if (value == null || value.length <= MAX_PERSISTED_RUN_OUTPUT_CHARS) return value;
+  const half = Math.floor(MAX_PERSISTED_RUN_OUTPUT_CHARS / 2);
+  const head = value.slice(0, half);
+  const tail = value.slice(value.length - half);
+  const omitted = value.length - head.length - tail.length;
+  return `${head}\n…[${omitted} chars truncated by loops run-output retention]…\n${tail}`;
+}
+
+/** Scrub secrets then bound size before persisting run stdout/stderr. */
+function persistedRunOutput(value: string | undefined | null): string | null {
+  return clampPersistedRunOutput(scrubbedOrNull(value));
+}
+
 function chmodIfExists(path: string, mode: number): void {
   try {
     if (existsSync(path)) chmodSync(path, mode);
@@ -2876,8 +2898,8 @@ export class Store {
         .run({
           $workflowRunId: workflowRunId,
           $stepId: stepId,
-          $stdout: progress.stdout === undefined ? null : scrubbedOrNull(progress.stdout),
-          $stderr: progress.stderr === undefined ? null : scrubbedOrNull(progress.stderr),
+          $stdout: progress.stdout === undefined ? null : persistedRunOutput(progress.stdout),
+          $stderr: progress.stderr === undefined ? null : persistedRunOutput(progress.stderr),
           $updated: now,
           $daemonLeaseId: opts.daemonLeaseId ?? null,
           $now: now,
@@ -2962,8 +2984,8 @@ export class Store {
           $finished: finishedAt,
           $exitCode: patch.exitCode ?? null,
           $durationMs: patch.durationMs ?? null,
-          $stdout: scrubbedOrNull(patch.stdout),
-          $stderr: scrubbedOrNull(patch.stderr),
+          $stdout: persistedRunOutput(patch.stdout),
+          $stderr: persistedRunOutput(patch.stderr),
           $error: error ?? null,
           $updated: finishedAt,
           $daemonLeaseId: opts.daemonLeaseId ?? null,
@@ -3475,8 +3497,8 @@ export class Store {
       $pid: patch.pid ?? null,
       $exitCode: patch.exitCode ?? null,
       $durationMs: patch.durationMs ?? null,
-      $stdout: scrubbedOrNull(patch.stdout),
-      $stderr: scrubbedOrNull(patch.stderr),
+      $stdout: persistedRunOutput(patch.stdout),
+      $stderr: persistedRunOutput(patch.stderr),
       $error: error ?? null,
       $updated: finishedAt,
       $claimedBy: opts.claimedBy ?? null,
@@ -3988,8 +4010,8 @@ export class Store {
         $processStartedAt: run.processStartedAt ?? null,
         $exitCode: run.exitCode ?? null,
         $durationMs: run.durationMs ?? null,
-        $stdout: scrubbedOrNull(run.stdout),
-        $stderr: scrubbedOrNull(run.stderr),
+        $stdout: persistedRunOutput(run.stdout),
+        $stderr: persistedRunOutput(run.stderr),
         $error: scrubbedOrNull(run.error),
         $goalRunId: run.goalRunId ?? null,
         $created: run.createdAt,

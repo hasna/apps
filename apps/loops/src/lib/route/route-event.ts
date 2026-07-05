@@ -132,6 +132,63 @@ function isUnclearedRouteWorkItem(item: { loopId?: string; status: WorkflowWorkI
   return UNCLEARED_ROUTE_WORK_ITEM_STATUSES.has(item.status);
 }
 
+/**
+ * Terminal statuses a todos-task work item may be re-admitted from when its task
+ * is still actionable. Mirrors `Store.requeueWorkflowWorkItem`'s requeueable set:
+ * a run that finished (`succeeded`/`failed`/`dead_letter`) or was `cancelled`
+ * while its todos task is still pending + route-opted-in was left permanently
+ * uncleared, which is the wedge. Re-admission is bounded (cap + backoff below) so
+ * this cannot fight an operator forever — the durable way to stop routing a task
+ * is to untag it, which the drain does automatically for non-routable tasks.
+ */
+const REACTIVATABLE_TERMINAL_STATUSES = new Set<WorkflowWorkItemStatus>([
+  "succeeded",
+  "failed",
+  "dead_letter",
+  "cancelled",
+]);
+
+/** Max times a todos-task work item is re-admitted after finishing without closing its task before it stays terminal. */
+const MAX_TODOS_TASK_ROUTE_REDISPATCHES = 8;
+
+/** Exponential backoff (2m base, 30m cap) before re-admitting a stale terminal todos-task work item so an un-completable task cannot spin a worker every tick. */
+function todosTaskRouteRedispatchBackoffMs(attempts: number): number {
+  const base = 2 * 60_000;
+  const cap = 30 * 60_000;
+  const exp = Math.max(0, Math.min(attempts - 1, 10));
+  return Math.min(cap, base * 2 ** exp);
+}
+
+/**
+ * The todos-task drain only ever presents tasks that are still actionable
+ * (pending + route opt-in). So when a *terminal* work item's task keeps
+ * reappearing, the prior run finished (workflow `succeeded`/`failed`/`dead_letter`)
+ * without actually closing the todos task. Deduping it away forever is the wedge
+ * that reports `considered=N created=0` and dispatches zero real workers.
+ * Re-admit it instead — bounded by a redispatch cap and a per-attempt backoff so
+ * a task that can never complete does not spin a worker on every drain tick.
+ * In-flight items (`admitted`/`running`) and items still inside their backoff
+ * window keep deduping. Returns the requeued (`queued`) item when it should be
+ * re-admitted, otherwise `undefined` (keep deduping).
+ */
+function reactivateStaleTodosTaskWorkItem(
+  store: Store,
+  routeKey: string,
+  item: WorkflowWorkItem,
+  now: number = Date.now(),
+): WorkflowWorkItem | undefined {
+  if (routeKey !== "todos-task") return undefined;
+  if (!REACTIVATABLE_TERMINAL_STATUSES.has(item.status)) return undefined;
+  if (item.attempts >= MAX_TODOS_TASK_ROUTE_REDISPATCHES) return undefined;
+  const finishedAt = Date.parse(item.updatedAt);
+  if (Number.isFinite(finishedAt) && now - finishedAt < todosTaskRouteRedispatchBackoffMs(item.attempts)) {
+    return undefined;
+  }
+  return store.requeueWorkflowWorkItem(item.id, {
+    reason: `re-admitted from ${item.status}: todos task still actionable after prior run (attempt ${item.attempts + 1}/${MAX_TODOS_TASK_ROUTE_REDISPATCHES})`,
+  });
+}
+
 export function todosTaskRouteTemplateId(opts: { template?: string }): string {
   const id = (opts.template ?? TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID).trim();
   if (!TODOS_TASK_ROUTE_TEMPLATE_IDS.has(id)) {
@@ -264,9 +321,14 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
       const invocation = store.createWorkflowInvocation(plan.invocationInput);
       const existingItem = store.findWorkflowWorkItem(plan.routeKey, idempotencyKey);
       if (existingItem && isUnclearedRouteWorkItem(existingItem)) {
-        const existingLoop = existingItem.loopId ? store.getLoop(existingItem.loopId) : undefined;
-        const existingWorkflow = existingItem.workflowId ? store.getWorkflow(existingItem.workflowId) : undefined;
-        return { kind: "deduped" as const, existingItem, existingLoop, existingWorkflow, invocation };
+        // A terminal work item whose todos task is still actionable is re-admitted
+        // (bounded) rather than deduped forever; the requeue drops it back to
+        // `queued` so the upsert/admit path below re-dispatches a fresh run.
+        if (!reactivateStaleTodosTaskWorkItem(store, plan.routeKey, existingItem)) {
+          const existingLoop = existingItem.loopId ? store.getLoop(existingItem.loopId) : undefined;
+          const existingWorkflow = existingItem.workflowId ? store.getWorkflow(existingItem.workflowId) : undefined;
+          return { kind: "deduped" as const, existingItem, existingLoop, existingWorkflow, invocation };
+        }
       }
       const throttle = hasThrottleLimits(plan.throttleLimits)
         ? routeThrottleDecision(store, { projectPath: plan.routeProjectPath, projectGroup: plan.projectGroup, limits: plan.throttleLimits })
@@ -412,13 +474,18 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     try {
       const existingItem = store.findWorkflowWorkItem("todos-task", idempotencyKey);
       if (existingItem && isUnclearedRouteWorkItem(existingItem)) {
-        const existingLoop = existingItem.loopId ? store.getLoop(existingItem.loopId) : undefined;
-        const existingWorkflow = existingItem.workflowId ? store.getWorkflow(existingItem.workflowId) : undefined;
-        const existingInvocation = store.getWorkflowInvocation(existingItem.invocationId);
-        return dedupedRoutePrint(
-          { event, idempotencyKey, dedupeValueExtras: {} },
-          { existingItem, existingLoop, existingWorkflow, invocation: existingInvocation },
-        );
+        // Re-admit a terminal work item whose task is still actionable instead of
+        // deduping it away forever; requeue drops it to `queued` so the full
+        // creation path below dispatches a fresh run. Otherwise dedupe as before.
+        if (!reactivateStaleTodosTaskWorkItem(store, "todos-task", existingItem)) {
+          const existingLoop = existingItem.loopId ? store.getLoop(existingItem.loopId) : undefined;
+          const existingWorkflow = existingItem.workflowId ? store.getWorkflow(existingItem.workflowId) : undefined;
+          const existingInvocation = store.getWorkflowInvocation(existingItem.invocationId);
+          return dedupedRoutePrint(
+            { event, idempotencyKey, dedupeValueExtras: {} },
+            { existingItem, existingLoop, existingWorkflow, invocation: existingInvocation },
+          );
+        }
       }
     } finally {
       store.close();

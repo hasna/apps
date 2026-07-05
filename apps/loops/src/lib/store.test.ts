@@ -64,6 +64,54 @@ describe("Store", () => {
     }
   });
 
+  test("clamps oversized run stdout/stderr but keeps small output verbatim (loops.db growth guard)", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "stdout-retention",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+
+      const bigClaim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "runner", new Date("2026-01-01T00:00:00Z"));
+      expect(bigClaim).toBeDefined();
+      const huge = "x".repeat(500_000);
+      const finishedBig = store.finalizeRun(
+        bigClaim!.run.id,
+        { status: "succeeded", finishedAt: "2026-01-01T00:00:01.000Z", durationMs: 1_000, stdout: huge, stderr: huge },
+        { claimedBy: "runner", now: new Date("2026-01-01T00:00:00.500Z") },
+      );
+      const storedBig = store.getRun(finishedBig.id)!;
+      expect(storedBig.stdout!.length).toBeLessThan(huge.length);
+      expect(storedBig.stdout!.length).toBeLessThanOrEqual(64 * 1024 + 128);
+      expect(storedBig.stdout).toContain("truncated by loops run-output retention");
+      expect(storedBig.stderr).toContain("truncated by loops run-output retention");
+
+      const smallLoop = store.createLoop(
+        {
+          name: "stdout-retention-small",
+          schedule: { type: "once", at: "2026-01-02T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2026-01-01T00:00:00Z"),
+      );
+      const smallClaim = store.claimRun(smallLoop, "2026-01-02T00:00:00.000Z", "runner", new Date("2026-01-02T00:00:00Z"));
+      expect(smallClaim).toBeDefined();
+      const finishedSmall = store.finalizeRun(
+        smallClaim!.run.id,
+        { status: "succeeded", finishedAt: "2026-01-02T00:00:01.000Z", durationMs: 1_000, stdout: "all good", stderr: "" },
+        { claimedBy: "runner", now: new Date("2026-01-02T00:00:00.500Z") },
+      );
+      const storedSmall = store.getRun(finishedSmall.id)!;
+      expect(storedSmall.stdout).toBe("all good");
+    } finally {
+      store.close();
+    }
+  });
+
   test("persists loop machine assignments", () => {
     const store = new Store(":memory:");
     try {
