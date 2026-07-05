@@ -67,7 +67,10 @@ export class ConnectorClient {
       ...headers,
     };
 
-    if (body && ['POST', 'PUT', 'PATCH'].includes(method)) {
+    const hasBody = body !== undefined;
+    const methodAllowsBody = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
+
+    if (hasBody && methodAllowsBody) {
       requestHeaders['Content-Type'] = 'application/json';
     }
 
@@ -76,7 +79,7 @@ export class ConnectorClient {
       headers: requestHeaders,
     };
 
-    if (body && ['POST', 'PUT', 'PATCH'].includes(method)) {
+    if (hasBody && methodAllowsBody) {
       fetchOptions.body = typeof body === 'string' ? body : JSON.stringify(body);
     }
 
@@ -84,9 +87,11 @@ export class ConnectorClient {
     let lastStatus = 0;
 
     for (let attempt = 0; attempt <= retries; attempt++) {
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeout);
+        timeoutId = setTimeout(() => controller.abort(), timeout);
 
         const response = await fetch(url, {
           ...fetchOptions,
@@ -94,6 +99,7 @@ export class ConnectorClient {
         });
 
         clearTimeout(timeoutId);
+        timeoutId = undefined;
         lastStatus = response.status;
 
         if (response.status === 204) {
@@ -132,6 +138,10 @@ export class ConnectorClient {
 
         return data as T;
       } catch (err) {
+        if (timeoutId !== undefined) {
+          clearTimeout(timeoutId);
+        }
+
         lastError = err instanceof Error ? err : new Error(String(err));
 
         if (lastError.name === 'AbortError') {
@@ -143,7 +153,7 @@ export class ConnectorClient {
           continue;
         }
 
-        throw err;
+        throw lastError;
       }
     }
 

@@ -110,6 +110,20 @@ describe('ConnectorClient', () => {
       expect(new Headers(recorded[0].headers).get('Content-Type')).toBe('application/json');
     });
 
+    test('request() sends DELETE body when provided', async () => {
+      const mockResponse = { deleted: true };
+      const recorded = installFetch(() => mockResponse);
+      const client = new ConnectorClient(mockConfig);
+      const body = { reason: 'cleanup' };
+
+      const result = await client.request('/scans/item-1', { method: 'DELETE', body });
+
+      expect(result).toEqual(mockResponse);
+      expect(recorded[0].method).toBe('DELETE');
+      expect(recorded[0].body).toBe(JSON.stringify(body));
+      expect(new Headers(recorded[0].headers).get('Content-Type')).toBe('application/json');
+    });
+
     test('throws ConnectorApiError on API error response', async () => {
       globalThis.fetch = (async () =>
         ({
@@ -123,6 +137,17 @@ describe('ConnectorClient', () => {
 
       const client = new ConnectorClient(mockConfig);
       await expect(client.get('/scans')).rejects.toThrow(ConnectorApiError);
+    });
+
+    test('throws timeout message after AbortError', async () => {
+      globalThis.fetch = (async () => {
+        const err = new Error('The operation was aborted');
+        err.name = 'AbortError';
+        throw err;
+      }) as typeof fetch;
+
+      const client = new ConnectorClient(mockConfig);
+      await expect(client.request('/scans', { retries: 0, timeout: 5 })).rejects.toThrow('Request timeout after 5ms');
     });
   });
 });
