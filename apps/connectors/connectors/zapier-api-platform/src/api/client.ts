@@ -1,0 +1,210 @@
+import type { ConnectorConfig, OutputFormat } from '../types';
+import { ConnectorApiError, parseApiError } from '../types';
+
+export const DEFAULT_BASE_URL = 'https://api.zapierapiplatform.com/v1';
+
+export interface RequestOptions {
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+  params?: Record<string, string | number | boolean | undefined>;
+  body?: Record<string, unknown> | unknown[] | string;
+  headers?: Record<string, string>;
+  format?: OutputFormat;
+  retries?: number;
+  timeout?: number;
+}
+
+export class ConnectorClient {
+  private readonly apiKey: string;
+  private readonly baseUrl: string;
+
+  constructor(config: ConnectorConfig) {
+    const key = config.apiKey || config.token;
+    if (!key) {
+      throw new Error('Zapier API Platform API key is required');
+    }
+    this.apiKey = key;
+    this.baseUrl = (config.baseUrl || DEFAULT_BASE_URL).replace(/\/+$/, '');
+  }
+
+  private buildUrl(path: string, params?: Record<string, string | number | boolean | undefined>): string {
+    const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+    const url = new URL(`${this.baseUrl}${normalizedPath}`);
+
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+          url.searchParams.append(key, String(value));
+        }
+      });
+    }
+
+    return url.toString();
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  private getRetryDelay(attempt: number, baseDelay: number = 1000): number {
+    return baseDelay * Math.pow(2, attempt) + Math.random() * 1000;
+  }
+
+  private getRetryAfterDelay(retryAfter: string | null, attempt: number): number {
+    if (!retryAfter) {
+      return this.getRetryDelay(attempt);
+    }
+
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return seconds * 1000;
+    }
+
+    const retryAt = Date.parse(retryAfter);
+    if (Number.isFinite(retryAt)) {
+      return Math.max(0, retryAt - Date.now());
+    }
+
+    return this.getRetryDelay(attempt);
+  }
+
+  private isRetryableStatus(status: number): boolean {
+    return status === 429 || (status >= 500 && status < 600);
+  }
+
+  async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+    const { method = 'GET', params, body, headers = {}, retries = 3, timeout = 30000 } = options;
+
+    const url = this.buildUrl(path, params);
+
+    const requestHeaders: Record<string, string> = {
+      Authorization: `Bearer ${this.apiKey}`,
+      Accept: 'application/json',
+      ...headers,
+    };
+
+    if (body && ['POST', 'PUT', 'PATCH'].includes(method)) {
+      requestHeaders['Content-Type'] = 'application/json';
+    }
+
+    const fetchOptions: RequestInit = {
+      method,
+      headers: requestHeaders,
+    };
+
+    if (body && ['POST', 'PUT', 'PATCH'].includes(method)) {
+      fetchOptions.body = typeof body === 'string' ? body : JSON.stringify(body);
+    }
+
+    let lastError: Error | null = null;
+    let lastStatus: number = 0;
+
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+      try {
+        const controller = new AbortController();
+        timeoutId = setTimeout(() => controller.abort(), timeout);
+
+        const response = await fetch(url, {
+          ...fetchOptions,
+          signal: controller.signal,
+        });
+
+        lastStatus = response.status;
+
+        if (response.status === 204) {
+          return {} as T;
+        }
+
+        let data: unknown;
+        const contentType = response.headers.get('content-type') || '';
+
+        if (contentType.includes('application/json')) {
+          const text = await response.text();
+          if (text) {
+            try {
+              data = JSON.parse(text);
+            } catch {
+              data = text;
+            }
+          }
+        } else {
+          data = await response.text();
+        }
+
+        if (!response.ok) {
+          if (this.isRetryableStatus(response.status) && attempt < retries) {
+            await this.sleep(this.getRetryAfterDelay(response.headers.get('retry-after'), attempt));
+            continue;
+          }
+
+          throw parseApiError(data, response.status);
+        }
+
+        return data as T;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+
+        if (lastError.name === 'AbortError') {
+          lastError = new Error(`Request timeout after ${timeout}ms`);
+        }
+
+        if (attempt < retries && !(err instanceof ConnectorApiError)) {
+          await this.sleep(this.getRetryDelay(attempt));
+          continue;
+        }
+
+        throw lastError;
+      } finally {
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+        }
+      }
+    }
+
+    throw lastError || new ConnectorApiError('Request failed', lastStatus);
+  }
+
+  async get<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
+    return this.request<T>(path, { method: 'GET', params });
+  }
+
+  async post<T>(
+    path: string,
+    body?: Record<string, unknown> | unknown[] | string | object,
+    params?: Record<string, string | number | boolean | undefined>,
+  ): Promise<T> {
+    return this.request<T>(path, { method: 'POST', body: body as Record<string, unknown>, params });
+  }
+
+  async put<T>(
+    path: string,
+    body?: Record<string, unknown> | object,
+    params?: Record<string, string | number | boolean | undefined>,
+  ): Promise<T> {
+    return this.request<T>(path, { method: 'PUT', body: body as Record<string, unknown>, params });
+  }
+
+  async patch<T>(
+    path: string,
+    body?: Record<string, unknown> | object,
+    params?: Record<string, string | number | boolean | undefined>,
+  ): Promise<T> {
+    return this.request<T>(path, { method: 'PATCH', body: body as Record<string, unknown>, params });
+  }
+
+  async delete<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
+    return this.request<T>(path, { method: 'DELETE', params });
+  }
+
+  getApiKeyPreview(): string {
+    if (this.apiKey.length > 10) {
+      return `${this.apiKey.substring(0, 6)}...${this.apiKey.substring(this.apiKey.length - 4)}`;
+    }
+    return '***';
+  }
+
+  getBaseUrl(): string {
+    return this.baseUrl;
+  }
+}

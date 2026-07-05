@@ -2,7 +2,7 @@
 import { readFileSync } from 'fs';
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { createWebhooksClient } from '../api';
+import { WebhooksClient, createWebhooksClient } from '../api';
 import {
   clearConfig,
   createProfile,
@@ -47,7 +47,7 @@ program
 
 function getFormat(cmd: Command): OutputFormat {
   const parent = cmd.parent;
-  return (parent?.opts().format || 'pretty') as OutputFormat;
+  return (cmd.opts().format || parent?.opts().format || 'pretty') as OutputFormat;
 }
 
 function getClient() {
@@ -145,7 +145,7 @@ configCmd
       {
         profile: getCurrentProfile(),
         configDir: getConfigDir(),
-        defaultUrl: getDefaultUrl(),
+        defaultUrlConfigured: Boolean(getDefaultUrl()),
         signingSecretConfigured: Boolean(getSigningSecret()),
       },
       getFormat(configCmd),
@@ -249,7 +249,7 @@ program
   .option('--since-ms <ms>', 'Only include events after this timestamp')
   .action(async (opts: { limit: string; sinceMs?: string }) => {
     try {
-      const result = await getClient().listIncoming({
+      const result = await new WebhooksClient().listIncoming({
         limit: Number(opts.limit),
         sinceMs: opts.sinceMs ? Number(opts.sinceMs) : undefined,
       });

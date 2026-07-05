@@ -42,9 +42,12 @@ export class WebhooksClient {
     };
 
     if (this.signingSecret) {
-      const signature = createHmac('sha256', this.signingSecret).update(payload).digest('hex');
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      const signature = createHmac('sha256', this.signingSecret)
+        .update(`${timestamp}.${payload}`)
+        .digest('hex');
       finalHeaders['X-Webhook-Signature'] = `sha256=${signature}`;
-      finalHeaders['X-Webhook-Timestamp'] = String(Math.floor(Date.now() / 1000));
+      finalHeaders['X-Webhook-Timestamp'] = timestamp;
     }
 
     return finalHeaders;

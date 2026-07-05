@@ -27,6 +27,8 @@ When a signing secret is configured, requests include:
 - `X-Webhook-Signature: sha256=<hex>`
 - `X-Webhook-Timestamp: <unix-seconds>`
 
+The signature is `HMAC-SHA256(secret, "<timestamp>.<raw-body>")`.
+
 ## Incoming Webhooks
 
 `list-incoming` documents receiver setup only. The open-source connector does not host an ingress endpoint.

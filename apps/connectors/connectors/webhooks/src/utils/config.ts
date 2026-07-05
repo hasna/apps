@@ -26,7 +26,7 @@ export function getProfileOverride(): string | undefined {
 
 function ensureBaseConfigDir(): void {
   if (!existsSync(BASE_CONFIG_DIR)) {
-    mkdirSync(BASE_CONFIG_DIR, { recursive: true });
+    mkdirSync(BASE_CONFIG_DIR, { recursive: true, mode: 0o700 });
   }
 }
 
@@ -69,7 +69,7 @@ export function setCurrentProfile(profile: string): void {
   if (!profileExists(profile) && profile !== DEFAULT_PROFILE) {
     throw new Error(`Profile "${profile}" does not exist`);
   }
-  writeFileSync(getCurrentProfileFile(), profile);
+  writeFileSync(getCurrentProfileFile(), profile, { mode: 0o600 });
 }
 
 export function listProfiles(): string[] {
@@ -96,10 +96,10 @@ export function createProfile(profile: string, config: ProfileConfig = {}): bool
   }
 
   const profileDir = join(getProfilesDir(), profile);
-  mkdirSync(profileDir, { recursive: true });
+  mkdirSync(profileDir, { recursive: true, mode: 0o700 });
 
   if (Object.keys(config).length > 0) {
-    writeFileSync(join(profileDir, 'config.json'), JSON.stringify(config, null, 2));
+    writeFileSync(join(profileDir, 'config.json'), JSON.stringify(config, null, 2), { mode: 0o600 });
   }
 
   return true;
@@ -124,7 +124,7 @@ function resolveConfigDir(): string {
   const profile = getCurrentProfile();
   const profileDir = join(getProfilesDir(), profile);
   if (!existsSync(profileDir)) {
-    mkdirSync(profileDir, { recursive: true });
+    mkdirSync(profileDir, { recursive: true, mode: 0o700 });
   }
   return profileDir;
 }
@@ -154,9 +154,9 @@ export function saveProfile(config: ProfileConfig, profile?: string): void {
   const profileName = profile || getCurrentProfile();
   const profileDir = join(getProfilesDir(), profileName);
   if (!existsSync(profileDir)) {
-    mkdirSync(profileDir, { recursive: true });
+    mkdirSync(profileDir, { recursive: true, mode: 0o700 });
   }
-  writeFileSync(join(profileDir, 'config.json'), JSON.stringify(config, null, 2));
+  writeFileSync(join(profileDir, 'config.json'), JSON.stringify(config, null, 2), { mode: 0o600 });
 }
 
 export function getDefaultUrl(): string | undefined {

@@ -283,6 +283,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["passwords", "security", "vault"],
   },
   {
+    name: "zohovault",
+    displayName: "Zoho Vault",
+    description: "Password and secrets manager with chambers, sharing, and audit",
+    category: "Developer Tools",
+    tags: ["passwords", "security", "vault", "zoho"],
+  },
+  {
     name: "bloock",
     displayName: "Bloock",
     description: "Blockchain-based data integrity and verification",
@@ -1011,6 +1018,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["webhook", "outbound", "http", "integrations"],
   },
   {
+    name: "xray",
+    displayName: "Xray",
+    description: "Test management platform for QA scans, events, and search",
+    category: "Developer Tools",
+    tags: ["testing", "test-management", "qa", "scans"],
+  },
+  {
     name: "xata",
     displayName: "Xata",
     description: "Serverless database with search and analytics",
@@ -1044,5 +1058,12 @@ export const connectors: ConnectorMeta[] = [
     description: "Enterprise network and infrastructure monitoring",
     category: "Developer Tools",
     tags: ["monitoring", "infrastructure", "network"],
+  },
+  {
+    name: "zapier-api-platform",
+    displayName: "Zapier API Platform",
+    description: "Zapier API Platform integration for items, events, and search",
+    category: "Developer Tools",
+    tags: ["zapier", "automation", "api-platform"],
   },
 ];

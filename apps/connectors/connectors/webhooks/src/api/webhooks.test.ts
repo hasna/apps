@@ -1,4 +1,5 @@
 import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
+import { createHmac } from 'node:crypto';
 import { WebhooksClient } from './webhooks';
 import { validatePublicHttpUrl } from '../utils/url';
 
@@ -39,7 +40,13 @@ describe('WebhooksClient', () => {
 
     expect(String(urlFromMock(fetchMock))).toBe('https://example.com/hook');
     const headers = capturedHeaders as Record<string, string>;
+    const body = JSON.stringify({ event: 'created' });
+    const timestamp = headers['X-Webhook-Timestamp'];
+    const expectedSignature = createHmac('sha256', 'test-secret')
+      .update(`${timestamp}.${body}`)
+      .digest('hex');
     expect(headers['X-Webhook-Signature']).toMatch(/^sha256=[a-f0-9]{64}$/);
+    expect(headers['X-Webhook-Signature']).toBe(`sha256=${expectedSignature}`);
     expect(headers['X-Webhook-Timestamp']).toMatch(/^\d+$/);
     expect(headers['Content-Type']).toBe('application/json');
   });
@@ -100,6 +107,11 @@ describe('validatePublicHttpUrl', () => {
 
   test('rejects private IPv4 addresses', () => {
     expect(() => validatePublicHttpUrl('http://192.168.1.10/hook')).toThrow(/private/i);
+  });
+
+  test('rejects IPv4-mapped IPv6 private addresses', () => {
+    expect(() => validatePublicHttpUrl('http://[::ffff:127.0.0.1]/hook')).toThrow(/private/i);
+    expect(() => validatePublicHttpUrl('http://[::ffff:169.254.169.254]/hook')).toThrow(/private/i);
   });
 });
 
