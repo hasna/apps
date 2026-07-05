@@ -1004,6 +1004,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["monitoring", "uptime", "performance"],
   },
   {
+    name: "xray",
+    displayName: "Xray",
+    description: "Test management platform for QA scans, events, and search",
+    category: "Developer Tools",
+    tags: ["testing", "test-management", "qa", "scans"],
+  },
+  {
     name: "xata",
     displayName: "Xata",
     description: "Serverless database with search and analytics",
@@ -1037,5 +1044,12 @@ export const connectors: ConnectorMeta[] = [
     description: "Enterprise network and infrastructure monitoring",
     category: "Developer Tools",
     tags: ["monitoring", "infrastructure", "network"],
+  },
+  {
+    name: "zapier-api-platform",
+    displayName: "Zapier API Platform",
+    description: "Zapier API Platform integration for items, events, and search",
+    category: "Developer Tools",
+    tags: ["zapier", "automation", "api-platform"],
   },
 ];
