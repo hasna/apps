@@ -14,11 +14,16 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "bin/",
+    "dist/",
+    "README.md"
+  ],
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun && tsc --emitDeclarationOnly",
     "dev": "bun run ./src/cli/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "bun test src/api/client.test.ts",
+    "test": "bun test src/api/client.test.ts src/utils/auth.test.ts",
     "prepublishOnly": "bun run build",
     "release": "bun run scripts/release.ts",
     "release:dry": "bun run scripts/release.ts --dry-run"
