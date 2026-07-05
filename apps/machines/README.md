@@ -602,7 +602,12 @@ machines compatibility --machine linux-dev-01 \
 
 ## Storage
 
-Machines stores runtime data locally in SQLite under its data directory and includes repo-owned PostgreSQL migrations for remote storage deployments.
+Machines stores runtime data locally in SQLite under its data directory and
+includes repo-owned PostgreSQL migrations for remote storage deployments. The
+cloud-backed path is a database mirror only: local SQLite remains the source
+for agent writes, the manifest file or adapter remains the source for desired
+machine declarations, and PostgreSQL is the remote runtime store used by
+dashboards or managed collectors.
 
 ```bash
 machines storage status --json
@@ -615,6 +620,22 @@ Configure database storage with `HASNA_MACHINES_DATABASE_URL` or fallback
 `MACHINES_DATABASE_URL`. Optional storage mode env vars are
 `HASNA_MACHINES_STORAGE_MODE` or `MACHINES_STORAGE_MODE` with `local`,
 `hybrid`, or `remote`.
+
+The synced table set is `machine_registry`, `agent_heartbeats`,
+`runtime_events`, `setup_runs`, and `sync_runs`. `machine_registry` is a
+public-safe registry snapshot derived from the local manifest or manifest
+adapter. `agent_heartbeats` contains current daemon liveness and diagnostic
+summaries. `runtime_events` is the Postgres-syncable alert/event table for
+machine runtime incidents such as tmux pane disappearance; helper APIs redact
+paths, database URLs, tokens, and secret-like payload fields by default before
+rows are stored. `setup_runs` and `sync_runs` preserve local reconcile history.
+SDK helpers that write registry snapshots or runtime event rows use the same
+scoped mutation approval model as other package write APIs.
+
+This package does not provision RDS, S3, IAM, secrets, or Terraform resources.
+S3/AWS behavior is limited to explicit backup commands and operator-managed
+deployment layers; storage sync only reads an existing database URL and fails if
+one is not configured.
 
 Remote PostgreSQL storage is fail-closed for TLS. Non-loopback database hosts
 default to verified TLS, and `sslmode=disable`, `ssl=false`,

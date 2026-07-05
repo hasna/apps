@@ -1,6 +1,9 @@
 import { Database } from "bun:sqlite";
 import { hostname } from "node:os";
+import { machineDisplayName, readManifest } from "./manifests.js";
 import { ensureParentDir, getDbPath } from "./paths.js";
+import { publicMetadataKeys, redactErrorMessage, redactSensitiveValue } from "./redaction.js";
+import type { FleetManifest, MachineManifest, MachineConnection, MachinePlatform } from "./types.js";
 
 export class SqliteAdapter {
   readonly raw: Database;
@@ -33,6 +36,71 @@ const AGENT_HEARTBEAT_COLUMNS: Array<{ name: string; definition: string }> = [
   { name: "private_metadata", definition: "INTEGER NOT NULL DEFAULT 0" },
   { name: "observed_at", definition: "TEXT" },
 ];
+
+function isReadonlyDatabaseError(error: unknown): boolean {
+  return error instanceof Error && /readonly database/i.test(error.message);
+}
+
+function execOptionalCloudSchema(db: Database, sql: string): boolean {
+  try {
+    db.exec(sql);
+    return true;
+  } catch (error) {
+    if (isReadonlyDatabaseError(error)) return false;
+    throw error;
+  }
+}
+
+function createCloudRuntimeTables(db: Database): void {
+  execOptionalCloudSchema(db, `
+    CREATE TABLE IF NOT EXISTS machine_registry (
+      machine_id TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      friendly_name TEXT,
+      platform TEXT NOT NULL,
+      connection TEXT,
+      declared INTEGER NOT NULL DEFAULT 1,
+      tags_json TEXT NOT NULL DEFAULT '[]',
+      capabilities_json TEXT NOT NULL DEFAULT '{}',
+      source_kind TEXT NOT NULL DEFAULT 'manifest',
+      source_ref TEXT,
+      manifest_updated_at TEXT,
+      updated_at TEXT NOT NULL,
+      observed_at TEXT NOT NULL,
+      private_metadata INTEGER NOT NULL DEFAULT 0
+    )
+  `);
+
+  const runtimeEventsAvailable = execOptionalCloudSchema(db, `
+    CREATE TABLE IF NOT EXISTS runtime_events (
+      event_id TEXT PRIMARY KEY,
+      machine_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      subject TEXT,
+      message TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'machines',
+      dedupe_key TEXT,
+      data_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      resolved_at TEXT,
+      private_metadata INTEGER NOT NULL DEFAULT 0
+    )
+  `);
+  if (!runtimeEventsAvailable) return;
+
+  execOptionalCloudSchema(db, `
+    CREATE INDEX IF NOT EXISTS runtime_events_machine_updated_at_idx
+    ON runtime_events (machine_id, updated_at)
+  `);
+
+  execOptionalCloudSchema(db, `
+    CREATE INDEX IF NOT EXISTS runtime_events_dedupe_key_idx
+    ON runtime_events (dedupe_key)
+  `);
+}
 
 function createTables(db: Database): void {
   db.exec(`
@@ -81,6 +149,8 @@ function createTables(db: Database): void {
       updated_at TEXT NOT NULL
     )
   `);
+
+  createCloudRuntimeTables(db);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS mutation_approval_nonces (
@@ -143,6 +213,330 @@ export function closeDb(): void {
     adapter.close();
     adapter = null;
   }
+}
+
+export interface StoredMachineRegistry {
+  machine_id: string;
+  display_name: string;
+  friendly_name: string | null;
+  platform: MachinePlatform;
+  connection: MachineConnection | null;
+  declared: number;
+  tags_json: string;
+  capabilities_json: string;
+  source_kind: string;
+  source_ref: string | null;
+  manifest_updated_at: string | null;
+  updated_at: string;
+  observed_at: string;
+  private_metadata: number;
+}
+
+export interface MachineRegistrySnapshot {
+  machineId: string;
+  displayName?: string | null;
+  friendlyName?: string | null;
+  platform: MachinePlatform;
+  connection?: MachineConnection | null;
+  declared?: boolean;
+  tags?: string[];
+  capabilities?: Record<string, unknown>;
+  sourceKind?: string;
+  sourceRef?: string | null;
+  manifestUpdatedAt?: string | null;
+  updatedAt?: string | null;
+  observedAt?: string | null;
+  privateMetadata?: boolean;
+}
+
+export type RuntimeEventSeverity = "info" | "notice" | "warning" | "error" | "critical";
+export type RuntimeEventStatus = "open" | "resolved" | "ignored";
+
+export interface RuntimeEventInput {
+  eventId?: string;
+  machineId: string;
+  eventType: string;
+  severity?: RuntimeEventSeverity;
+  status?: RuntimeEventStatus;
+  subject?: string | null;
+  message: string;
+  source?: string;
+  dedupeKey?: string | null;
+  data?: Record<string, unknown>;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  resolvedAt?: string | null;
+  privateMetadata?: boolean;
+}
+
+export interface StoredRuntimeEvent {
+  event_id: string;
+  machine_id: string;
+  event_type: string;
+  severity: RuntimeEventSeverity;
+  status: RuntimeEventStatus;
+  subject: string | null;
+  message: string;
+  source: string;
+  dedupe_key: string | null;
+  data_json: string;
+  created_at: string;
+  updated_at: string;
+  resolved_at: string | null;
+  private_metadata: number;
+}
+
+function jsonText(value: unknown): string {
+  return JSON.stringify(value ?? {});
+}
+
+function publicRuntimeData(data: Record<string, unknown> | undefined, privateMetadata: boolean): Record<string, unknown> {
+  if (privateMetadata) return data ?? {};
+  return redactRuntimeNetworkValues(
+    redactSensitiveValue(data ?? {}, "", { redactSecretReferences: true }),
+  ) as Record<string, unknown>;
+}
+
+function publicRuntimeString(value: string | null | undefined, privateMetadata: boolean): string | null {
+  if (value == null) return null;
+  return privateMetadata ? value : redactErrorMessage(value);
+}
+
+function redactRuntimeNetworkValues(value: unknown): unknown {
+  if (typeof value === "string") return redactErrorMessage(value);
+  if (Array.isArray(value)) return value.map((entry) => redactRuntimeNetworkValues(entry));
+  if (value && typeof value === "object") {
+    const redacted: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      redacted[key] = redactRuntimeNetworkValues(entry);
+    }
+    return redacted;
+  }
+  return value;
+}
+
+function registryCapabilities(machine: MachineManifest): Record<string, unknown> {
+  return {
+    packageNames: machine.packages?.map((pkg) => pkg.name).sort() ?? [],
+    appNames: machine.apps?.map((app) => app.name).sort() ?? [],
+    fileCount: machine.files?.length ?? 0,
+    metadataKeys: publicMetadataKeys(machine.metadata),
+  };
+}
+
+export function upsertMachineRegistrySnapshot(snapshot: MachineRegistrySnapshot): StoredMachineRegistry {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const updatedAt = snapshot.updatedAt ?? snapshot.manifestUpdatedAt ?? now;
+  const observedAt = snapshot.observedAt ?? now;
+  db.query(
+    `INSERT INTO machine_registry (
+       machine_id,
+       display_name,
+       friendly_name,
+       platform,
+       connection,
+       declared,
+       tags_json,
+       capabilities_json,
+       source_kind,
+       source_ref,
+       manifest_updated_at,
+       updated_at,
+       observed_at,
+       private_metadata
+     )
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(machine_id) DO UPDATE SET
+       display_name = excluded.display_name,
+       friendly_name = excluded.friendly_name,
+       platform = excluded.platform,
+       connection = excluded.connection,
+       declared = excluded.declared,
+       tags_json = excluded.tags_json,
+       capabilities_json = excluded.capabilities_json,
+       source_kind = excluded.source_kind,
+       source_ref = excluded.source_ref,
+       manifest_updated_at = excluded.manifest_updated_at,
+       updated_at = excluded.updated_at,
+       observed_at = excluded.observed_at,
+       private_metadata = excluded.private_metadata`
+  ).run(
+    snapshot.machineId,
+    snapshot.displayName ?? snapshot.friendlyName ?? snapshot.machineId,
+    snapshot.friendlyName ?? null,
+    snapshot.platform,
+    snapshot.connection ?? null,
+    snapshot.declared === false ? 0 : 1,
+    jsonText(redactSensitiveValue(snapshot.tags ?? [], "tags")),
+    jsonText(redactSensitiveValue(snapshot.capabilities ?? {}, "", { redactSecretReferences: true })),
+    snapshot.sourceKind ?? "manifest",
+    snapshot.sourceRef ?? null,
+    snapshot.manifestUpdatedAt ?? null,
+    updatedAt,
+    observedAt,
+    snapshot.privateMetadata ? 1 : 0,
+  );
+  return listMachineRegistry(snapshot.machineId)[0]!;
+}
+
+function markMissingRegistryRowsUndeclared(machineIds: string[], sourceKind: string, observedAt: string): void {
+  const db = getDb();
+  if (machineIds.length === 0) {
+    db.query(
+      `UPDATE machine_registry
+       SET declared = 0, updated_at = ?, observed_at = ?
+       WHERE source_kind = ? AND declared = 1`
+    ).run(observedAt, observedAt, sourceKind);
+    return;
+  }
+
+  const placeholders = machineIds.map(() => "?").join(", ");
+  db.query(
+    `UPDATE machine_registry
+     SET declared = 0, updated_at = ?, observed_at = ?
+     WHERE source_kind = ? AND declared = 1 AND machine_id NOT IN (${placeholders})`
+  ).run(observedAt, observedAt, sourceKind, ...machineIds);
+}
+
+export function syncMachineRegistryFromManifest(
+  manifest: FleetManifest = readManifest(),
+  options: { sourceKind?: string; sourceRef?: string | null } = {},
+): StoredMachineRegistry[] {
+  const observedAt = new Date().toISOString();
+  const sourceKind = options.sourceKind ?? "manifest";
+  const machineIds = manifest.machines.map((machine) => machine.id);
+  for (const machine of manifest.machines) {
+    upsertMachineRegistrySnapshot({
+      machineId: machine.id,
+      displayName: machineDisplayName(machine),
+      friendlyName: machine.friendlyName ?? null,
+      platform: machine.platform,
+      connection: machine.connection ?? null,
+      declared: true,
+      tags: machine.tags ?? [],
+      capabilities: registryCapabilities(machine),
+      sourceKind,
+      sourceRef: options.sourceRef ?? null,
+      manifestUpdatedAt: machine.updatedAt ?? manifest.generatedAt ?? null,
+      updatedAt: machine.updatedAt ?? manifest.generatedAt ?? observedAt,
+      observedAt,
+      privateMetadata: false,
+    });
+  }
+  markMissingRegistryRowsUndeclared(machineIds, sourceKind, observedAt);
+  return listMachineRegistry();
+}
+
+export function listMachineRegistry(machineId?: string): StoredMachineRegistry[] {
+  const db = getDb();
+  if (machineId) {
+    return db
+      .query(
+        `SELECT *
+         FROM machine_registry
+         WHERE machine_id = ?
+         ORDER BY updated_at DESC`
+      )
+      .all(machineId) as StoredMachineRegistry[];
+  }
+
+  return db
+    .query(
+      `SELECT *
+       FROM machine_registry
+       ORDER BY updated_at DESC, machine_id ASC`
+    )
+    .all() as StoredMachineRegistry[];
+}
+
+export function recordRuntimeEvent(input: RuntimeEventInput): StoredRuntimeEvent {
+  const db = getDb();
+  const now = new Date().toISOString();
+  const eventId = input.eventId ?? crypto.randomUUID();
+  const createdAt = input.createdAt ?? now;
+  const updatedAt = input.updatedAt ?? createdAt;
+  const privateMetadata = input.privateMetadata === true;
+  db.query(
+    `INSERT INTO runtime_events (
+       event_id,
+       machine_id,
+       event_type,
+       severity,
+       status,
+       subject,
+       message,
+       source,
+       dedupe_key,
+       data_json,
+       created_at,
+       updated_at,
+       resolved_at,
+       private_metadata
+     )
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(event_id) DO UPDATE SET
+       machine_id = excluded.machine_id,
+       event_type = excluded.event_type,
+       severity = excluded.severity,
+       status = excluded.status,
+       subject = excluded.subject,
+       message = excluded.message,
+       source = excluded.source,
+       dedupe_key = excluded.dedupe_key,
+       data_json = excluded.data_json,
+       updated_at = excluded.updated_at,
+       resolved_at = excluded.resolved_at,
+       private_metadata = excluded.private_metadata`
+  ).run(
+    eventId,
+    input.machineId,
+    input.eventType,
+    input.severity ?? "warning",
+    input.status ?? "open",
+    publicRuntimeString(input.subject, privateMetadata),
+    publicRuntimeString(input.message, privateMetadata) ?? "",
+    input.source ?? "machines",
+    input.dedupeKey ?? null,
+    jsonText(publicRuntimeData(input.data, privateMetadata)),
+    createdAt,
+    updatedAt,
+    input.resolvedAt ?? null,
+    privateMetadata ? 1 : 0,
+  );
+  return listRuntimeEvents({ eventId })[0]!;
+}
+
+export function listRuntimeEvents(options: { machineId?: string; eventId?: string } = {}): StoredRuntimeEvent[] {
+  const db = getDb();
+  if (options.eventId) {
+    return db
+      .query(
+        `SELECT *
+         FROM runtime_events
+         WHERE event_id = ?
+         ORDER BY updated_at DESC`
+      )
+      .all(options.eventId) as StoredRuntimeEvent[];
+  }
+  if (options.machineId) {
+    return db
+      .query(
+        `SELECT *
+         FROM runtime_events
+         WHERE machine_id = ?
+         ORDER BY updated_at DESC`
+      )
+      .all(options.machineId) as StoredRuntimeEvent[];
+  }
+
+  return db
+    .query(
+      `SELECT *
+       FROM runtime_events
+       ORDER BY updated_at DESC, event_id ASC`
+    )
+    .all() as StoredRuntimeEvent[];
 }
 
 export interface HeartbeatUpsertMetadata {

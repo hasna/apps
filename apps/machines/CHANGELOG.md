@@ -6,6 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- Prepared cloud-backed runtime storage with Postgres-syncable
+  `machine_registry` and `runtime_events` tables, approval-gated SDK helpers
+  for public-safe registry/event rows, stale-row guards, and docs for local
+  SQLite versus remote Postgres/AWS behavior.
+
 ## [0.0.63] - 2026-07-04
 
 ### Added

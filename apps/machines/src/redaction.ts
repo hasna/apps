@@ -36,7 +36,7 @@ const ALL_SENSITIVE_VALUE_PATTERNS = [
   ...ADDITIONAL_SENSITIVE_VALUE_PATTERNS,
 ];
 
-const IPV4_PATTERN = /\b(?:10|127|169\.254|172\.(?:1[6-9]|2\d|3[0-1])|192\.168|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7]))(?:\.\d{1,3}){2}\b/g;
+const IPV4_PATTERN = /\b(?:(?:10|127)(?:\.\d{1,3}){3}|169\.254(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}|192\.168(?:\.\d{1,3}){2}|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])(?:\.\d{1,3}){2})\b/g;
 const IPV6_PATTERN = /\b(?:fc|fd|fe80)[0-9a-f:]*:[0-9a-f:]+\b/gi;
 const DATABASE_URL_PATTERN = /\b(?:postgres(?:ql)?|mysql|mariadb|redis|mongodb|s3):\/\/[^\s"'<>]+/gi;
 const PRIVATE_HOST_PATTERN = /\b(?:[A-Za-z0-9._%+-]+@)?[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*(?:\.tailnet(?:\.[A-Za-z0-9-]+)*|\.ts\.net|\.private(?:\.[A-Za-z0-9-]+)*|\.internal|\.local)\b/gi;

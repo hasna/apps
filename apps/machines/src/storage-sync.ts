@@ -4,7 +4,9 @@ import { PG_MIGRATIONS } from "./pg-migrations.js";
 import { PgAdapterAsync } from "./remote-storage.js";
 
 export const STORAGE_TABLES = [
+  "machine_registry",
   "agent_heartbeats",
+  "runtime_events",
   "setup_runs",
   "sync_runs",
 ] as const;
@@ -51,7 +53,9 @@ export interface StorageStatus {
 }
 
 const PRIMARY_KEYS: Record<StorageTable, string[]> = {
+  machine_registry: ["machine_id"],
   agent_heartbeats: ["machine_id", "pid"],
+  runtime_events: ["event_id"],
   setup_runs: ["id"],
   sync_runs: ["id"],
 };
@@ -235,11 +239,14 @@ async function upsertPg(remote: PgAdapterAsync, table: StorageTable, columns: st
   const setClause = updateColumns.length > 0
     ? updateColumns.map((column) => `${quoteIdent(column)} = EXCLUDED.${quoteIdent(column)}`).join(", ")
     : `${quoteIdent(fallbackKey)} = EXCLUDED.${quoteIdent(fallbackKey)}`;
+  const conflictGuard = columns.includes("updated_at")
+    ? ` WHERE EXCLUDED.${quoteIdent("updated_at")} >= ${quoteIdent(table)}.${quoteIdent("updated_at")}`
+    : "";
 
   for (const row of rows) {
     await remote.run(
       `INSERT INTO ${quoteIdent(table)} (${columnList}) VALUES (${placeholders})
-       ON CONFLICT (${keyList}) DO UPDATE SET ${setClause}`,
+       ON CONFLICT (${keyList}) DO UPDATE SET ${setClause}${conflictGuard}`,
       ...columns.map((column) => coerceForPg(row[column])),
     );
   }
@@ -257,9 +264,12 @@ function upsertSqlite(db: Database, table: StorageTable, columns: string[], rows
   const setClause = updateColumns.length > 0
     ? updateColumns.map((column) => `${quoteIdent(column)} = excluded.${quoteIdent(column)}`).join(", ")
     : `${quoteIdent(fallbackKey)} = excluded.${quoteIdent(fallbackKey)}`;
+  const conflictGuard = columns.includes("updated_at")
+    ? ` WHERE excluded.${quoteIdent("updated_at")} >= ${quoteIdent(table)}.${quoteIdent("updated_at")}`
+    : "";
   const statement = db.query(
     `INSERT INTO ${quoteIdent(table)} (${columnList}) VALUES (${placeholders})
-     ON CONFLICT (${keyList}) DO UPDATE SET ${setClause}`,
+     ON CONFLICT (${keyList}) DO UPDATE SET ${setClause}${conflictGuard}`,
   );
   const insert = db.transaction((batch: Row[]) => {
     for (const row of batch) statement.run(...columns.map((column) => coerceForSqlite(row[column])));
