@@ -23,6 +23,7 @@
     "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun && tsc --emitDeclarationOnly",
     "dev": "bun run ./src/cli/index.ts",
     "typecheck": "tsc --noEmit",
+    "prepack": "bun run build",
     "prepublishOnly": "bun run build"
   },
   "keywords": [
