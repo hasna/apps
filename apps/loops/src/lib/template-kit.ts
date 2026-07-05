@@ -636,6 +636,59 @@ const PR_HANDOFF_SCRIPT = [
   "console.log(`PR handoff complete: ${finalPrUrl}`);",
 ].join("\n");
 
+/**
+ * No-artifact / direct-PR handoff path (bun heredoc body). Workers that push
+ * their own branch and open the PR themselves (e.g. cursor workers) write no
+ * handoff artifact. Detect that worker-opened PR by head branch and record the
+ * same `openloops:pr-handoff=done` evidence the artifact path records, so the
+ * verifier's PR-evidence gate is satisfied and the task flows to the merge
+ * lane. Always finishes 0 (best-effort): a missing PR or any gh/git/todos error
+ * is tolerated, never fails the step. Fully env-driven via OPENLOOPS_PR_HANDOFF_*.
+ */
+const PR_HANDOFF_NO_ARTIFACT_SCRIPT = [
+  "const { spawnSync } = await import('node:child_process');",
+  "const artifactPath = process.env.OPENLOOPS_PR_HANDOFF_ARTIFACT || '';",
+  "const taskId = process.env.OPENLOOPS_PR_HANDOFF_TASK_ID || '';",
+  "const todosProject = process.env.OPENLOOPS_PR_HANDOFF_TODOS_PROJECT || '';",
+  "const worktree = process.env.OPENLOOPS_PR_HANDOFF_WORKTREE || process.cwd();",
+  "const expectedBranch = process.env.OPENLOOPS_PR_HANDOFF_EXPECTED_BRANCH || '';",
+  "const todosBin = process.env.OPENLOOPS_PR_HANDOFF_TODOS_BIN || 'todos';",
+  "const gitBin = process.env.OPENLOOPS_PR_HANDOFF_GIT_BIN || 'git';",
+  "const ghBin = process.env.OPENLOOPS_PR_HANDOFF_GH_BIN || 'gh';",
+  "process.stdout.write(`no PR handoff artifact at ${artifactPath}\\n`);",
+  "const run = (command, args, options = {}) => {",
+  "  try { return spawnSync(command, args, { encoding: 'utf8', ...options }); }",
+  "  catch (error) { return { status: 1, stdout: '', stderr: String((error && error.message) || error) }; }",
+  "};",
+  "const todosArgs = (...args) => todosProject ? ['--project', todosProject, ...args] : args;",
+  "const comment = (text) => {",
+  "  const result = run(todosBin, todosArgs('comment', taskId, text));",
+  "  if (result.status !== 0) console.error(`failed to comment original task: ${result.stderr || result.stdout || result.status}`);",
+  "};",
+  "const main = () => {",
+  "  let branch = expectedBranch;",
+  "  if (!branch) {",
+  "    const shown = run(gitBin, ['-C', worktree, 'branch', '--show-current']);",
+  "    branch = String((shown.status === 0 ? shown.stdout : '') || '').trim();",
+  "  }",
+  "  if (!branch) { console.log('pr-handoff: no artifact and no resolvable branch; nothing to hand off'); return; }",
+  "  const listed = run(ghBin, ['pr', 'list', '--head', branch, '--state', 'open', '--json', 'url,number,headRefName,headRefOid'], { cwd: worktree });",
+  "  if (listed.status !== 0) { console.log(`pr-handoff: no artifact; PR lookup failed for branch ${branch}: ${String(listed.stderr || listed.stdout || listed.status).slice(0, 300)}`); return; }",
+  "  let prs = [];",
+  "  try { prs = JSON.parse(String(listed.stdout || '[]')); } catch { prs = []; }",
+  "  const pr = Array.isArray(prs) ? prs.find((entry) => entry && entry.headRefName === branch && typeof entry.url === 'string' && entry.url) : undefined;",
+  "  if (!pr) { console.log(`pr-handoff: no artifact and no open PR for branch ${branch}; worker completed without opening a PR`); return; }",
+  "  let commit = String(pr.headRefOid || '').trim();",
+  "  if (!commit) {",
+  "    const head = run(gitBin, ['-C', worktree, 'rev-parse', 'HEAD']);",
+  "    commit = String((head.status === 0 ? head.stdout : '') || '').trim();",
+  "  }",
+  "  comment(`openloops:pr-handoff=done task=${taskId} pr=${pr.url} commit=${commit || 'unknown'} branch=${branch}`);",
+  "  console.log(`PR handoff complete (worker-opened PR): ${pr.url}`);",
+  "};",
+  "try { main(); } catch (error) { console.error(`pr-handoff no-artifact detection error (ignored): ${String((error && error.message) || error)}`); }",
+].join("\n");
+
 export interface PrHandoffCommandOptions {
   artifactPath: string;
   taskId: string;
@@ -654,12 +707,22 @@ export function prHandoffCommand(opts: PrHandoffCommandOptions): string {
     `export OPENLOOPS_PR_HANDOFF_WORKTREE=${shellQuote(opts.worktreeCwd)}`,
     `export OPENLOOPS_PR_HANDOFF_WORKTREE_ROOT=${shellQuote(opts.worktreeRoot)}`,
     `export OPENLOOPS_PR_HANDOFF_EXPECTED_BRANCH=${shellQuote(opts.expectedBranch)}`,
+    // Never `exit` explicitly from this login shell (`bash -lc`): with `set -e`
+    // active, a failing ~/.bash_logout — e.g. `clear_console` with no
+    // controlling TTY when the daemon runs under systemd with SHLVL=1 — hands
+    // its own non-zero status back as the shell's exit code, overriding an
+    // explicit `exit 0`. That is what marked the no-artifact path failed
+    // (exit 1) and skipped the verifier. Both branches instead fall through to
+    // the natural end of the `if`, which preserves the intended status (matching
+    // the gate steps, which already end naturally). Covered by templates.test.ts.
     "if [ ! -s \"$OPENLOOPS_PR_HANDOFF_ARTIFACT\" ]; then",
-    "  printf 'no PR handoff artifact at %s\\n' \"$OPENLOOPS_PR_HANDOFF_ARTIFACT\"",
-    "  exit 0",
-    "fi",
+    "bun - <<'OPENLOOPS_PR_HANDOFF_NOARTIFACT'",
+    PR_HANDOFF_NO_ARTIFACT_SCRIPT,
+    "OPENLOOPS_PR_HANDOFF_NOARTIFACT",
+    "else",
     "bun - <<'BUN'",
     PR_HANDOFF_SCRIPT,
     "BUN",
+    "fi",
   ].join("\n");
 }

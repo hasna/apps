@@ -1,11 +1,13 @@
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { MockLanguageModelV3 } from "ai/test";
 import type { WorkflowStepInput } from "../types.js";
 import { tick } from "./scheduler.js";
 import { Store } from "./store.js";
+import { prHandoffCommand } from "./template-kit.js";
 import { executeLoopTarget, executeWorkflow } from "./workflow-runner.js";
 import { workflowBodyFromJson } from "./workflow-spec.js";
 import { expectMarkerNeverWritten, gatedWriteCommand, openGate, waitUntil } from "../test-helpers.js";
@@ -946,6 +948,106 @@ describe("workflow runner", () => {
       expect(runs[0]?.status).toBe("failed");
     } finally {
       store.close();
+    }
+  });
+});
+
+describe("pr-handoff direct-PR integration", () => {
+  test("cursor pattern (worker opens PR, no artifact): pr-handoff exits 0 so the verifier still runs", async () => {
+    const store = new Store(":memory:");
+    const home = mkdtempSync(join(tmpdir(), "loops-prh-int-home-"));
+    const bin = mkdtempSync(join(tmpdir(), "loops-prh-int-bin-"));
+    const wt = mkdtempSync(join(tmpdir(), "loops-prh-int-wt-"));
+    try {
+      // Reproduce the systemd login-shell exit-code corruption: a login shell
+      // (`bash -lc`, as command steps run) sources ~/.bash_logout on exit; a
+      // failing command there turns the pre-fix explicit `exit 0` into exit 1.
+      writeFileSync(join(home, ".bash_logout"), "false\n");
+      execFileSync("git", ["init", "-q", wt]);
+      execFileSync("git", ["-C", wt, "config", "user.email", "t@t"]);
+      execFileSync("git", ["-C", wt, "config", "user.name", "t"]);
+      execFileSync("git", ["-C", wt, "commit", "-q", "--allow-empty", "-m", "init"]);
+      execFileSync("git", ["-C", wt, "checkout", "-q", "-b", "feat/direct-pr"]);
+      execFileSync("git", ["-C", wt, "commit", "-q", "--allow-empty", "-m", "work"]);
+      const head = execFileSync("git", ["-C", wt, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+
+      const gh = join(bin, "gh");
+      writeFileSync(
+        gh,
+        [
+          "#!/usr/bin/env bash",
+          'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then',
+          `  printf '%s\\n' '[{"url":"https://github.com/acme/repo/pull/11","number":11,"headRefName":"feat/direct-pr","headRefOid":"${head}"}]'`,
+          "  exit 0",
+          "fi",
+          "exit 0",
+        ].join("\n"),
+      );
+      chmodSync(gh, 0o755);
+      const cap = join(bin, "todos.cap");
+      const todos = join(bin, "todos");
+      writeFileSync(todos, ["#!/usr/bin/env bash", `printf '%s\\0' "$@" >> ${JSON.stringify(cap)}`, "exit 0"].join("\n"));
+      chmodSync(todos, 0o755);
+
+      const prHandoff = prHandoffCommand({
+        artifactPath: join(wt, ".openloops", "pr-handoff", "missing.json"),
+        taskId: "task-int-direct-pr",
+        todosProjectPath: wt,
+        worktreeCwd: wt,
+        worktreeRoot: wt,
+        expectedBranch: "feat/direct-pr",
+      });
+
+      // worker -> pr-handoff -> verifier, mirroring the task-lifecycle wiring
+      // where verifier dependsOn pr-handoff when --pr-handoff is set.
+      const workflow = store.createWorkflow({
+        name: "cursor-direct-pr",
+        steps: [
+          { id: "worker", target: { type: "command", command: "bash", args: ["-lc", "printf worker-opened-pr-no-artifact"] } },
+          {
+            id: "pr-handoff",
+            dependsOn: ["worker"],
+            target: { type: "command", command: "bash", args: ["-lc", prHandoff], cwd: wt, timeoutMs: 60_000 },
+          },
+          { id: "verifier", dependsOn: ["pr-handoff"], target: { type: "command", command: "bash", args: ["-lc", "printf VERIFIER_RAN"] } },
+        ],
+      });
+
+      const env = {
+        HOME: home,
+        PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+        OPENLOOPS_PR_HANDOFF_GH_BIN: gh,
+        OPENLOOPS_PR_HANDOFF_TODOS_BIN: todos,
+        OPENLOOPS_PR_HANDOFF_GIT_BIN: "git",
+      };
+      // Canary documents that this env reproduces the corruption for explicit exit.
+      const canary = spawnSync("bash", ["-lc", "set -e; printf x; exit 0"], { env, encoding: "utf8" });
+
+      const result = await executeWorkflow(store, workflow, { env });
+
+      const runs = store.listWorkflowRuns({ workflowId: workflow.id });
+      expect(runs).toHaveLength(1);
+      const steps = store.listWorkflowStepRuns(runs[0]!.id);
+      const byId = Object.fromEntries(steps.map((step) => [step.stepId, step]));
+      // The whole point: pr-handoff succeeds on the no-artifact path...
+      expect(byId["pr-handoff"]?.status).toBe("succeeded");
+      expect(byId["pr-handoff"]?.exitCode).toBe(0);
+      // ...so the verifier is NOT skipped — it runs after pr-handoff.
+      expect(byId["verifier"]?.status).toBe("succeeded");
+      expect(byId["verifier"]?.stdout).toContain("VERIFIER_RAN");
+      expect(result.status).toBe("succeeded");
+      // The worker-opened PR was detected and recorded as the handoff result.
+      const captured = existsSync(cap) ? readFileSync(cap, "utf8") : "";
+      expect(captured).toContain("openloops:pr-handoff=done");
+      expect(captured).toContain("pr=https://github.com/acme/repo/pull/11");
+      // On corruption-reproducing envs (canary === 1) the pre-fix explicit exit 0
+      // would have failed pr-handoff and skipped the verifier.
+      if (canary.status === 1) expect(byId["verifier"]?.status).toBe("succeeded");
+    } finally {
+      store.close();
+      rmSync(home, { recursive: true, force: true });
+      rmSync(bin, { recursive: true, force: true });
+      rmSync(wt, { recursive: true, force: true });
     }
   });
 });
