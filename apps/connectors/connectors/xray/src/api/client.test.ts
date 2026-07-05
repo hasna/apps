@@ -42,7 +42,7 @@ afterEach(() => {
 
 describe('ConnectorClient', () => {
   const mockConfig = {
-    apiKey: 'xray-test-key-12345',
+    apiKey: 'test-key',
     baseUrl: 'https://api.xray.com/v1',
   };
 
@@ -80,7 +80,7 @@ describe('ConnectorClient', () => {
       expect(recorded).toHaveLength(1);
       expect(recorded[0].url).toBe('https://api.xray.com/v1/scans');
       expect(recorded[0].method).toBe('GET');
-      expect(new Headers(recorded[0].headers).get('Authorization')).toBe('Bearer xray-test-key-12345');
+      expect(new Headers(recorded[0].headers).get('Authorization')).toBe('Bearer test-key');
     });
 
     test('get() fetches scan by id', async () => {
@@ -106,7 +106,7 @@ describe('ConnectorClient', () => {
       expect(recorded[0].url).toBe('https://api.xray.com/v1/search');
       expect(recorded[0].method).toBe('POST');
       expect(recorded[0].body).toBe(JSON.stringify(body));
-      expect(new Headers(recorded[0].headers).get('Authorization')).toBe('Bearer xray-test-key-12345');
+      expect(new Headers(recorded[0].headers).get('Authorization')).toBe('Bearer test-key');
       expect(new Headers(recorded[0].headers).get('Content-Type')).toBe('application/json');
     });
 

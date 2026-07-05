@@ -18,7 +18,7 @@ async function run(args: string[], home: string): Promise<{ stdout: string; stde
       ...process.env,
       HOME: home,
       NO_COLOR: '1',
-      XRAY_API_KEY: 'xray-test-key-12345',
+      XRAY_API_KEY: 'test-key',
     },
     stdout: 'pipe',
     stderr: 'pipe',
