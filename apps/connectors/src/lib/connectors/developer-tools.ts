@@ -129,6 +129,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["auth", "identity", "oauth"],
   },
   {
+    name: "workos",
+    displayName: "WorkOS",
+    description: "Enterprise SSO, directory sync, and identity platform",
+    category: "Developer Tools",
+    tags: ["auth", "identity", "sso", "enterprise"],
+  },
+  {
     name: "homeassistant",
     displayName: "Home Assistant",
     description: "Smart home automation",
