@@ -473,4 +473,43 @@ describe("CLI QoL commands", () => {
     const help = run("--help");
     expect(help).toContain("-j, --json");
   });
+
+  // ── update routing metadata (working_dir + task_list linkage) ─────────
+
+  it("update --working-dir repairs a task's working_dir (was 'unknown option')", () => {
+    const t = JSON.parse(run("add 'wd repair' --json"));
+    const updated = JSON.parse(run(`update ${t.id} --working-dir /tmp/wd/repair --json`));
+    expect(updated.working_dir).toBe("/tmp/wd/repair");
+  });
+
+  it("update --list resolves a slug to the canonical task-list UUID", () => {
+    const list = JSON.parse(run("lists --add 'RepairList' --slug repair-list --json"));
+    const t = JSON.parse(run("add 'link me' --json"));
+    const updated = JSON.parse(run(`update ${t.id} --list repair-list --json`));
+    expect(updated.task_list_id).toBe(list.id);
+  });
+
+  it("update --list accepts an exact task-list UUID", () => {
+    const list = JSON.parse(run("lists --add 'UuidList' --slug uuid-list --json"));
+    const t = JSON.parse(run("add 'link uuid' --json"));
+    const updated = JSON.parse(run(`update ${t.id} --list ${list.id} --json`));
+    expect(updated.task_list_id).toBe(list.id);
+  });
+
+  it("update --list reports an unresolvable reference without silently succeeding", () => {
+    const t = JSON.parse(run("add 'bad link' --json"));
+    let thrown = false;
+    let errorOutput = "";
+    try {
+      run(`update ${t.id} --list todos-does-not-exist-xyz --json`);
+    } catch (e: any) {
+      thrown = true;
+      errorOutput = e.stderr?.toString() || e.message || "";
+    }
+    expect(thrown).toBe(true);
+    expect(errorOutput).toContain("Could not resolve task list");
+    // and the task_list_id must remain unset (no silent partial write)
+    const after = JSON.parse(run(`show ${t.id} --json`));
+    expect(after.task_list_id ?? null).toBeNull();
+  });
 });

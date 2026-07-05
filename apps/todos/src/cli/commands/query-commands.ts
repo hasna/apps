@@ -58,7 +58,8 @@ import {
 } from "../../lib/workflow-states.js";
 import { createLocalReport, renderLocalReportMarkdown } from "../../lib/local-reports.js";
 import type { BoardLane, BoardScope, CalendarEventKind, TaskPriority } from "../../types/index.js";
-import { autoProject, handleError, output, formatTaskLine, resolveTaskId } from "../helpers.js";
+import { autoProject, handleError, output, formatTaskLine, resolveTaskId, resolveExplicitProject } from "../helpers.js";
+import { TASK_STATUSES } from "../../types/index.js";
 
 function parseJsonObjectOption(value: string | undefined, label: string): Record<string, unknown> | undefined {
   if (!value) return undefined;
@@ -751,7 +752,7 @@ export function registerQueryCommands(program: Command) {
     });
 
   // doctor
-  program
+  const doctor = program
     .command("doctor")
     .description("Diagnose and optionally repair local task data issues")
     .option("--apply", "Apply safe repairs. Defaults to dry-run.")
@@ -789,6 +790,126 @@ export function registerQueryCommands(program: Command) {
       if (errors === 0 && warnings === 0) console.log(chalk.green("\n  All clear."));
       else if (result.dry_run) console.log(chalk[errors > 0 ? "red" : "yellow"](`\n  ${errors} error(s), ${warnings} warning(s). Run with --apply to apply safe repairs after reviewing the dry-run.`));
       else console.log(chalk[errors > 0 ? "red" : "yellow"](`\n  ${errors} error(s), ${warnings} warning(s) remain after repair.`));
+    });
+
+  // doctor routing — deterministic routing-metadata drift detection + safe repair
+  doctor
+    .command("routing")
+    .description("Diagnose (and with --apply, safely repair) task routing-metadata drift: working_dir, task_list_id linkage, invalid paths, cross-repo intent")
+    .option("--apply", "Apply safe auto-repairs (working_dir, task_list_id UUID relink) with per-task comments, a DB backup, and an undo record. Defaults to dry-run.")
+    .option("--fix", "Alias for --apply")
+    .option("--project <id>", "Scope to a single project (id, slug, or path)")
+    .option("--tag <tag>", "Scope to tasks carrying this tag")
+    .option("--status <statuses>", "Comma-separated statuses to inspect (default: pending,in_progress)")
+    .option("--shard <index/total>", "Deterministic project-stable shard, e.g. 0/6")
+    .option("--include-archived", "Include archived tasks")
+    .option("--no-verify-project-root", "Skip machine-local project-root existence checks")
+    .option("--limit <n>", "Cap the number of tasks inspected")
+    .option("--undo-record <path>", "Where to write the undo record when --apply mutates")
+    .option("-j, --json", "Emit the machine-consumable JSON contract (todos.routing_doctor.v1)")
+    .addHelpText("after", `
+Exit codes (for OpenLoops / deterministic consumers):
+  0  no findings (clean)
+  1  routing-metadata findings present (drift detected)
+  2  invalid invocation (bad --shard/--status/--project/--limit)
+
+JSON contract: --json emits { schema_version, generated_at, ok, dry_run, scope,
+summary{inspected,eligible,findings_total,by_category,by_repair_class,safe_auto,
+blockers,unsupported,repaired,repair_failed}, findings[], repairs[] }. Each finding
+carries repair_class: safe_auto | blocker_human | blocker_cross_repo |
+blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by --apply.`)
+    .action(async (opts) => {
+      const globalOpts = program.opts();
+      const { runRoutingDoctor } = await import("../../lib/routing-doctor.js");
+
+      let shardIndex: number | undefined;
+      let shardTotal: number | undefined;
+      if (opts.shard) {
+        const m = /^(\d+)\/(\d+)$/.exec(String(opts.shard).trim());
+        if (!m) { console.error(chalk.red("--shard must be <index>/<total>, e.g. 0/6")); process.exit(2); }
+        shardIndex = parseInt(m[1]!, 10);
+        shardTotal = parseInt(m[2]!, 10);
+        if (shardTotal < 1 || shardIndex >= shardTotal) { console.error(chalk.red("--shard: index must be < total and total >= 1")); process.exit(2); }
+      }
+
+      let statuses: string[] | undefined;
+      if (opts.status) {
+        statuses = String(opts.status).split(",").map((s) => s.trim()).filter(Boolean);
+        const invalid = statuses.filter((s) => !(TASK_STATUSES as readonly string[]).includes(s));
+        if (invalid.length > 0) { console.error(chalk.red(`Invalid status(es): ${invalid.join(", ")}. Valid: ${TASK_STATUSES.join(", ")}`)); process.exit(2); }
+      }
+
+      // The root program also defines `--project`, so the value can land on
+      // either the subcommand opts or the global opts depending on position.
+      const projectInput = opts.project || globalOpts.project;
+      let projectId: string | undefined;
+      if (projectInput) {
+        try { projectId = resolveExplicitProject(projectInput).id; }
+        catch { console.error(chalk.red(`Could not resolve project: ${projectInput}`)); process.exit(2); }
+      }
+
+      let limit: number | undefined;
+      if (opts.limit !== undefined) {
+        limit = parseInt(opts.limit, 10);
+        if (!Number.isFinite(limit) || limit < 1) { console.error(chalk.red("--limit must be a positive integer")); process.exit(2); }
+      }
+
+      const result = runRoutingDoctor({
+        apply: Boolean(opts.apply || opts.fix),
+        statuses: statuses as any,
+        projectId,
+        tag: opts.tag,
+        shardIndex,
+        shardTotal,
+        includeArchived: Boolean(opts.includeArchived),
+        verifyProjectRoot: opts.verifyProjectRoot !== false,
+        undoRecordPath: opts.undoRecord,
+        limit,
+        actor: globalOpts.agent || "routing-doctor",
+      });
+
+      if (opts.json || globalOpts.json) {
+        console.log(JSON.stringify(result));
+        process.exitCode = result.ok ? 0 : 1;
+        return;
+      }
+
+      const s = result.summary;
+      console.log(chalk.bold("todos doctor routing\n"));
+      console.log(`  ${chalk.dim("Mode:")}   ${result.dry_run ? "dry-run" : "apply"}`);
+      const scopeBits = [
+        `statuses=${result.scope.statuses.join(",")}`,
+        result.scope.project_id ? `project=${result.scope.project_id}` : null,
+        result.scope.tag ? `tag=${result.scope.tag}` : null,
+        result.scope.shard ? `shard=${result.scope.shard.index}/${result.scope.shard.total}` : null,
+        result.scope.include_archived ? "archived=included" : null,
+        result.scope.verify_project_root ? null : "verify-project-root=off",
+      ].filter(Boolean);
+      console.log(`  ${chalk.dim("Scope:")}  ${scopeBits.join(" · ")}`);
+      console.log(`  ${chalk.dim("Tasks:")}  ${s.inspected} inspected · ${s.eligible} route-eligible`);
+      console.log(`  ${chalk.dim("Findings:")} ${s.findings_total} (${chalk.yellow(`${s.safe_auto} safe_auto`)} · ${chalk.red(`${s.blockers} blockers`)} · ${s.unsupported} unsupported)`);
+      const cats = Object.entries(s.by_category).sort((a, b) => b[1] - a[1]);
+      for (const [cat, n] of cats) console.log(`    ${chalk.dim("·")} ${cat}: ${n}`);
+      if (!result.dry_run) {
+        console.log(`  ${chalk.dim("Repaired:")} ${s.repaired}${s.repair_failed ? chalk.red(` (${s.repair_failed} failed)`) : ""}`);
+        if (result.backup) console.log(`  ${chalk.dim("Backup:")}  ${result.backup.path}`);
+        if (result.undo_record_path) console.log(`  ${chalk.dim("Undo:")}    ${result.undo_record_path}`);
+      }
+      if (result.findings.length > 0) {
+        console.log(chalk.bold("\nFindings"));
+        const shown = result.findings.slice(0, 50);
+        for (const f of shown) {
+          const id = f.task_short_id || f.task_id.slice(0, 8);
+          const icon = f.severity === "error" ? chalk.red("x") : chalk.yellow("!");
+          console.log(`  ${icon} ${chalk.bold(id)} ${f.category} [${f.repair_class}]${f.suggested_repair ? chalk.dim(` → ${f.suggested_repair.command}`) : ""}`);
+          console.log(`      ${chalk.dim(f.detail)}`);
+        }
+        if (result.findings.length > shown.length) console.log(chalk.dim(`  … +${result.findings.length - shown.length} more (use --json for the full set)`));
+      }
+      if (result.ok) console.log(chalk.green("\n  No routing-metadata drift detected."));
+      else console.log(chalk.yellow(`\n  ${s.findings_total} finding(s). ${result.dry_run ? "Re-run with --apply to fix the safe_auto set; blockers need a human/owning repo." : "Remaining findings need a human/owning repo."}`));
+
+      process.exitCode = result.ok ? 0 : 1;
     });
 
   // health

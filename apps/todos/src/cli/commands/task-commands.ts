@@ -16,6 +16,7 @@ import {
   lockTask,
   unlockTask,
 } from "../../db/tasks.js";
+import { getTaskList, getTaskListBySlug } from "../../db/task-lists.js";
 import type { TaskPriority, TaskStatus } from "../../types/index.js";
 import {
   formatTaskLine,
@@ -168,6 +169,24 @@ function buildExpectationMetadata(opts: Record<string, unknown>): Record<string,
   if (observed !== undefined) metadata["observed"] = parseJsonValue(String(observed));
   if (acceptance !== undefined) metadata["acceptance"] = parseJsonValue(String(acceptance));
   return metadata;
+}
+
+/**
+ * Resolve a `--list` reference to a canonical task-list UUID. UUID linkage is
+ * authoritative: an exact UUID, then a unique partial UUID, then a project-scoped
+ * slug. Returns the canonical `.id` so slug/partial input always persists as a
+ * UUID. Returns `{ error }` for unresolvable or ambiguous input rather than
+ * silently succeeding.
+ */
+function resolveTaskListRef(ref: string, projectId: string | null): { id: string } | { error: string } {
+  const db = getDatabase();
+  const exact = getTaskList(ref, db);
+  if (exact) return { id: exact.id };
+  const partial = resolvePartialId(db, "task_lists", ref);
+  if (partial) return { id: partial };
+  const bySlug = getTaskListBySlug(ref, projectId ?? undefined, db);
+  if (bySlug) return { id: bySlug.id };
+  return { error: `Could not resolve task list "${ref}" to a UUID${projectId ? " within the task's project" : ""}. Pass an exact task-list UUID.` };
 }
 
 export function registerTaskCommands(program: Command) {
@@ -819,8 +838,9 @@ export function registerTaskCommands(program: Command) {
     .option("--assign <agent>", "Assign to agent")
     .option("--tags <tags>", "New tags (comma-separated)")
     .option("--tag <tags>", "New tags (alias for --tags)")
-    .option("--list <id>", "Move to a task list")
+    .option("--list <id>", "Move to a task list (UUID authoritative; project-scoped slug accepted)")
     .option("--task-list <id>", "Move to a task list (alias for --list)")
+    .option("--working-dir <path>", "Repair the task's working_dir to a specific path (routing metadata)")
     .option("--plan <id>", "Move to a plan")
     .option("--clear-plan", "Remove from its current plan")
     .option("--estimated <minutes>", "Estimated time in minutes")
@@ -850,13 +870,12 @@ export function registerTaskCommands(program: Command) {
       }
 
       const taskListId = opts.list ? (() => {
-        const db = getDatabase();
-        const resolved = resolvePartialId(db, "task_lists", opts.list);
-        if (!resolved) {
-          console.error(chalk.red(`Could not resolve task list ID: ${opts.list}`));
+        const resolved = resolveTaskListRef(opts.list, current.project_id);
+        if ("error" in resolved) {
+          console.error(chalk.red(resolved.error));
           process.exit(1);
         }
-        return resolved;
+        return resolved.id;
       })() : undefined;
       const planId = opts.plan ? resolvePlanId(opts.plan) : opts.clearPlan ? null : undefined;
 
@@ -872,6 +891,7 @@ export function registerTaskCommands(program: Command) {
           tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
           plan_id: planId,
           task_list_id: taskListId,
+          working_dir: opts.workingDir ? resolve(opts.workingDir) : undefined,
           estimated_minutes: opts.estimated !== undefined ? parseIntOption(opts.estimated, "--estimated") : undefined,
           sla_minutes: opts.slaMinutes !== undefined || opts.sla !== undefined ? parseIntOption(opts.slaMinutes ?? opts.sla, "--sla-minutes") : undefined,
           due_at: opts.due !== undefined ? (opts.due === "" ? null : opts.due.length === 10 ? opts.due + "T00:00:00.000Z" : opts.due) : undefined,
