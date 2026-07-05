@@ -934,6 +934,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["transcription", "meetings", "ai"],
   },
   {
+    name: "wato",
+    displayName: "Wato",
+    description: "Shared agent memories, workflows, tools, and artifacts",
+    category: "AI & ML",
+    tags: ["ai", "agents", "memory", "workflows"],
+  },
+  {
     name: "wavelineextract",
     displayName: "Waveline Extract",
     description: "Document data extraction and parsing",
