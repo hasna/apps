@@ -73,6 +73,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["hosting", "deployment", "serverless"],
   },
   {
+    name: "visibl-semiconductors",
+    displayName: "Visibl Semiconductors",
+    description: "Chip design coordination (projects, drift cases, fix proposals, CI signals, tapeout readiness)",
+    category: "Developer Tools",
+    tags: ["chip", "semiconductor", "design", "rtl"],
+  },
+  {
     name: "netlify",
     displayName: "Netlify",
     description: "Web hosting and deployment",
