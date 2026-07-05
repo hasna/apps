@@ -86,4 +86,12 @@ export const connectors: ConnectorMeta[] = [
     category: "Infrastructure",
     tags: ["monitoring", "uptime", "performance", "alerts", "website"],
   },
+  {
+    name: "whatsapp-cloud-api",
+    displayName: "WhatsApp Cloud API",
+    description:
+      "Third-party WhatsApp Cloud API (api.whatsappcloudapi.com) for items, events, and search — not Meta Business Cloud",
+    category: "Infrastructure",
+    tags: ["messaging", "whatsapp", "api", "infrastructure"],
+  },
 ];
