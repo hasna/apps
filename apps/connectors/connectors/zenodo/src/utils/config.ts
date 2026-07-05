@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 
@@ -16,6 +16,8 @@ let profileOverride: string | undefined;
 const CONFIG_DIR = join(homedir(), '.hasna', 'connectors', CONNECTOR_NAME);
 const PROFILES_DIR = join(CONFIG_DIR, 'profiles');
 const CURRENT_PROFILE_FILE = join(CONFIG_DIR, 'current_profile');
+const CONFIG_DIR_MODE = 0o700;
+const CONFIG_FILE_MODE = 0o600;
 
 export function setProfileOverride(profile: string | undefined): void {
   profileOverride = profile;
@@ -23,11 +25,14 @@ export function setProfileOverride(profile: string | undefined): void {
 
 export function ensureConfigDir(): void {
   if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
+    mkdirSync(CONFIG_DIR, { recursive: true, mode: CONFIG_DIR_MODE });
   }
+  chmodSync(CONFIG_DIR, CONFIG_DIR_MODE);
+
   if (!existsSync(PROFILES_DIR)) {
-    mkdirSync(PROFILES_DIR, { recursive: true });
+    mkdirSync(PROFILES_DIR, { recursive: true, mode: CONFIG_DIR_MODE });
   }
+  chmodSync(PROFILES_DIR, CONFIG_DIR_MODE);
 }
 
 function getProfilePath(profile: string): string {
@@ -62,7 +67,7 @@ export function setCurrentProfile(profile: string): void {
     throw new Error(`Profile "${profile}" does not exist`);
   }
 
-  writeFileSync(CURRENT_PROFILE_FILE, profile);
+  writeConfigFile(CURRENT_PROFILE_FILE, profile);
 }
 
 export function profileExists(profile: string): boolean {
@@ -97,7 +102,7 @@ export function createProfile(profile: string, config: ProfileConfig = {}): bool
     throw new Error('Profile name can only contain letters, numbers, hyphens, and underscores');
   }
 
-  writeFileSync(getProfilePath(profile), JSON.stringify(config, null, 2));
+  writeConfigFile(getProfilePath(profile), JSON.stringify(config, null, 2));
   return true;
 }
 
@@ -137,7 +142,12 @@ export function loadProfile(profile?: string): ProfileConfig {
 export function saveProfile(config: ProfileConfig, profile?: string): void {
   ensureConfigDir();
   const profileName = profile || getCurrentProfile();
-  writeFileSync(getProfilePath(profileName), JSON.stringify(config, null, 2));
+  writeConfigFile(getProfilePath(profileName), JSON.stringify(config, null, 2));
+}
+
+function writeConfigFile(path: string, contents: string): void {
+  writeFileSync(path, contents, { mode: CONFIG_FILE_MODE });
+  chmodSync(path, CONFIG_FILE_MODE);
 }
 
 export function getAccessToken(): string | undefined {
@@ -152,6 +162,10 @@ export function setAccessToken(token: string): void {
 
 export function getBaseUrl(): string {
   return process.env.ZENODO_BASE_URL || loadProfile().baseUrl || DEFAULT_BASE_URL;
+}
+
+export function getDefaultBaseUrl(): string {
+  return DEFAULT_BASE_URL;
 }
 
 export function setBaseUrl(baseUrl: string): void {
