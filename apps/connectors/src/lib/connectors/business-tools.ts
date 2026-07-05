@@ -1032,6 +1032,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["crm", "pipeline", "sales", "zoho"],
   },
   {
+    name: "zoho-sign",
+    displayName: "Zoho Sign",
+    description: "Electronic signature and document signing platform",
+    category: "Business Tools",
+    tags: ["esign", "documents", "zoho"],
+  },
+  {
     name: "zohocrm",
     displayName: "Zoho CRM",
     description: "CRM for sales, marketing, and customer support",
