@@ -1,4 +1,5 @@
 import type { ExecutableTarget, ExecutorResult, Loop, LoopRun, WorkflowRun, WorkflowRunStatus, WorkflowSpec, WorkflowStep, WorkflowStepRun } from "../types.js";
+import { agentSessionContract } from "./agent-adapter.js";
 import { executeLoop, executeTarget, preflightTarget, type ExecuteOptions } from "./executor.js";
 import { executionMetadata, goalExecutionContext, withGoalNodeEnv } from "./goal/metadata.js";
 import { iterationPrompt } from "./goal/prompts.js";
@@ -194,16 +195,25 @@ export async function executeWorkflow(
       }, opts.cancelPollMs ?? 500);
       cancelTimer.unref();
       try {
+        const baseTarget = targetWithStepAccount(step);
+        const executionTarget = step.goal ? baseTarget : targetWithStepAccount(step, opts.goalNodePrompt);
+        if (executionTarget.type === "agent") {
+          const contract = agentSessionContract(executionTarget);
+          if (contract) {
+            opts.beforePersist?.();
+            store.appendWorkflowEvent(run.id, "agent_session_contract", step.id, contract as unknown as Record<string, unknown>);
+          }
+        }
         if (step.goal) {
           result = await runGoal(store, step.goal, {
             ...opts,
             model: opts.goalModel,
-            target: targetWithStepAccount(step),
+            target: executionTarget,
             signal: controller.signal,
             context: stepContext,
           });
         } else {
-          result = await executeTarget(targetWithStepAccount(step, opts.goalNodePrompt), executionMetadata(stepContext), {
+          result = await executeTarget(executionTarget, executionMetadata(stepContext), {
             ...opts,
             machine: opts.machine ?? opts.loop?.machine,
             signal: controller.signal,

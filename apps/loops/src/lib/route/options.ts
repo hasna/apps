@@ -129,6 +129,21 @@ const AGENT_ROUTING_OPTION_SPECS: RouteOptionSpec[] = [
   { flags: "--permission-mode <mode>", key: "permissionMode", kind: "value", description: "provider permission mode: default, plan, auto, or bypass", defaultValue: "bypass" },
   { flags: "--sandbox <mode>", key: "sandbox", kind: "value", description: "provider sandbox" },
   {
+    flags: "--allow-tool <name>",
+    key: "allowTool",
+    kind: "repeat",
+    description: "provider session tool allowlist metadata; may be repeated or comma-separated",
+    serializeValue: (opts) => listFromRepeatedOpts(opts.allowTool as string[] | undefined),
+  },
+  {
+    flags: "--allow-command <name>",
+    key: "allowCommand",
+    kind: "repeat",
+    description: "provider session command allowlist metadata; may be repeated or comma-separated",
+    serializeValue: (opts) => listFromRepeatedOpts(opts.allowCommand as string[] | undefined),
+  },
+  { flags: "--safety-reason <reason>", key: "safetyReason", kind: "value", description: "reason for relaxed sandbox or per-session allowlist policy" },
+  {
     flags: "--manual-break-glass",
     key: "manualBreakGlass",
     kind: "boolean",

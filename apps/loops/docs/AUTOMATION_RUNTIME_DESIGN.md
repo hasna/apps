@@ -123,13 +123,23 @@ secret-safe without depending on ambient shell state.
 
 ### Allowlist Enforcement
 
-Current `allowlist` metadata is advisory. Strict automation requires real
-enforcement:
+Agent targets now carry a per-session `allowlist` contract with allowed tools,
+allowed commands, `enforcement`, and `safetyReason`. The effective run contract
+also includes provider/model, cwd, task/event ids, and timeout. OpenLoops stores
+that contract on the workflow/loop target, appends it to the prompt delivered to
+the provider, exports it in `LOOPS_AGENT_SESSION_CONTRACT` plus individual
+`LOOPS_AGENT_ALLOWED_*` environment variables, and records an
+`agent_session_contract` workflow event for agent steps.
+
+Current provider adapters declare `metadata_only` support for tool and command
+allowlists. Local Cursor and Codex CLI help do not expose stable provider-native
+allowlist flags, so OpenLoops does not claim strict enforcement for them.
+Strict automation remains future work:
 
 - If `requireEnforcement=true`, preflight must reject providers that cannot
   enforce the requested tool or command allowlist.
-- Codewith/Codex should map allowed tools and commands to provider-native flags
-  or policy files when those surfaces are available.
+- Codewith/Codex/Cursor should map allowed tools and commands to
+  provider-native flags or policy files when those surfaces are available.
 - Command targets should run through a small policy wrapper that rejects
   unlisted executables before `exec`.
 - Providers without enforceable allowlists may still run in `standard` mode,

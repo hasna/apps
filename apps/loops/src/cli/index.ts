@@ -440,14 +440,16 @@ function accountFromOpts(opts: {
   return opts.account ? { profile: opts.account, tool: opts.accountTool } : undefined;
 }
 
-function allowlistFromOpts(opts: { allowTool?: string[]; allowCommand?: string[] }): AgentAllowlistSpec | undefined {
+function allowlistFromOpts(opts: { allowTool?: string[]; allowCommand?: string[]; safetyReason?: string }): AgentAllowlistSpec | undefined {
   const tools = (opts.allowTool ?? []).flatMap((entry) => splitList(entry) ?? []);
   const commands = (opts.allowCommand ?? []).flatMap((entry) => splitList(entry) ?? []);
-  if (!tools.length && !commands.length) return undefined;
+  const safetyReason = opts.safetyReason?.trim();
+  if (!tools.length && !commands.length && !safetyReason) return undefined;
   return {
     tools: tools.length ? tools : undefined,
     commands: commands.length ? commands : undefined,
     enforcement: "metadata_only",
+    safetyReason: safetyReason || undefined,
   };
 }
 
@@ -582,6 +584,7 @@ addGoalOptions(
         .option("--sandbox <mode>", "provider sandbox: codewith/codex use read-only/workspace-write/danger-full-access; cursor uses enabled/disabled")
         .option("--allow-tool <name>", "advisory per-session tool allowlist metadata; may be repeated or comma-separated", collectValues, [] as string[])
         .option("--allow-command <name>", "advisory per-session command allowlist metadata; may be repeated or comma-separated", collectValues, [] as string[])
+        .option("--safety-reason <reason>", "reason for relaxed sandbox or per-session allowlist policy")
         .option("--config-isolation <mode>", "safe or none", "safe")
         .option("--preflight-each-run", "check provider/account readiness before every scheduled run")
         .option("--preflight", "check target executables/accounts before storing the loop"),

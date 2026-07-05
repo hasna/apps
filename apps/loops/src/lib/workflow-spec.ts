@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import type { AgentPromptSource, AgentTarget, CreateWorkflowInput, ExecutableTarget, GoalSpec, WorkflowSpec, WorkflowStep } from "../types.js";
+import type { AgentAllowlistSpec, AgentPromptSource, AgentProvider, AgentSandbox, AgentTarget, CreateWorkflowInput, ExecutableTarget, GoalSpec, WorkflowSpec, WorkflowStep } from "../types.js";
 import { AGENT_PROVIDERS, providerAdapter } from "./agent-adapter.js";
 import { GOAL_OBJECTIVE_MAX_CHARS } from "./goal/types.js";
 
@@ -48,6 +48,45 @@ function optionalStringArray(value: unknown, label: string): string[] | undefine
     })
     .filter(Boolean);
   return values.length ? values : undefined;
+}
+
+function optionalTrimmedString(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined;
+  assertString(value, label);
+  return value.trim();
+}
+
+function safetyReasonRequirement(provider: AgentProvider, sandbox: AgentSandbox | undefined): string | undefined {
+  if (provider === "cursor" && sandbox === "disabled") return "cursor sandbox disabled";
+  if ((provider === "codewith" || provider === "codex") && sandbox === "danger-full-access") return `${provider} danger-full-access`;
+  return undefined;
+}
+
+function normalizeAllowlistSpec(
+  value: unknown,
+  label: string,
+  context: { provider: AgentProvider; sandbox?: AgentSandbox },
+): AgentAllowlistSpec | undefined {
+  const requiredReason = safetyReasonRequirement(context.provider, context.sandbox);
+  if (value === undefined) {
+    if (requiredReason) throw new Error(`${label}.safetyReason is required when ${requiredReason} is used`);
+    return undefined;
+  }
+  assertObject(value, label);
+  const tools = optionalStringArray(value.tools, `${label}.tools`);
+  const commands = optionalStringArray(value.commands, `${label}.commands`);
+  const safetyReason = optionalTrimmedString(value.safetyReason, `${label}.safetyReason`);
+  if (value.enforcement !== undefined && value.enforcement !== "metadata_only") {
+    throw new Error(`${label}.enforcement must be metadata_only`);
+  }
+  if (requiredReason && !safetyReason) throw new Error(`${label}.safetyReason is required when ${requiredReason} is used`);
+  if (!tools?.length && !commands?.length && !safetyReason) return undefined;
+  return {
+    tools,
+    commands,
+    enforcement: "metadata_only",
+    safetyReason,
+  };
 }
 
 function optionalAccountRef(value: unknown, label: string) {
@@ -127,6 +166,7 @@ function validateTarget(value: unknown, label: string, opts: WorkflowNormalizeOp
   }
   if (value.type === "agent") {
     assertString(value.provider, `${label}.provider`);
+    const provider = value.provider as AgentProvider;
     const hasPrompt = typeof value.prompt === "string" && value.prompt.trim() !== "";
     const hasPromptFile = typeof value.promptFile === "string" && value.promptFile.trim() !== "";
     if (hasPrompt && hasPromptFile) throw new Error(`${label} must use either prompt or promptFile, not both`);
@@ -147,14 +187,10 @@ function validateTarget(value: unknown, label: string, opts: WorkflowNormalizeOp
       { ...value, extraArgs, ...promptFields } as unknown as AgentTarget,
       label,
     );
-    if (value.allowlist !== undefined) {
-      assertObject(value.allowlist, `${label}.allowlist`);
-      optionalStringArray(value.allowlist.tools, `${label}.allowlist.tools`);
-      optionalStringArray(value.allowlist.commands, `${label}.allowlist.commands`);
-      if (value.allowlist.enforcement !== undefined && value.allowlist.enforcement !== "metadata_only") {
-        throw new Error(`${label}.allowlist.enforcement must be metadata_only`);
-      }
-    }
+    const allowlist = normalizeAllowlistSpec(value.allowlist, `${label}.allowlist`, {
+      provider,
+      sandbox: value.sandbox as AgentSandbox | undefined,
+    });
     if (value.worktree !== undefined) {
       assertObject(value.worktree, `${label}.worktree`);
       assertString(value.worktree.mode, `${label}.worktree.mode`);
@@ -178,8 +214,9 @@ function validateTarget(value: unknown, label: string, opts: WorkflowNormalizeOp
       if (value.routing.eventType !== undefined) assertString(value.routing.eventType, `${label}.routing.eventType`);
       if (value.routing.eventSource !== undefined) assertString(value.routing.eventSource, `${label}.routing.eventSource`);
     }
-    const target: Record<string, unknown> = { ...value, extraArgs };
+    const target: Record<string, unknown> = { ...value, extraArgs, allowlist };
     if (!extraArgs) delete target.extraArgs;
+    if (!allowlist) delete target.allowlist;
     delete target.promptFile;
     delete target.promptSource;
     return { ...target, ...promptFields } as unknown as ExecutableTarget;

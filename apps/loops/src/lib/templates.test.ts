@@ -402,7 +402,41 @@ describe("permission and break-glass fail-closed rendering", () => {
     });
     const target = agentTargetOf(stepById(workflow, "worker"));
     expect(target.sandbox).toBe("danger-full-access");
-    expect(target.allowlist).toEqual({ enforcement: "metadata_only", commands: ["manual-break-glass"] });
+    expect(target.allowlist).toEqual({
+      enforcement: "metadata_only",
+      commands: ["manual-break-glass"],
+      safetyReason: "manual break-glass explicitly requested for generated workflow",
+    });
+    expect(target.prompt).toContain("OpenLoops agent session contract:");
+  });
+
+  test("cursor sandbox disabled requires and renders a safety reason", () => {
+    expect(() =>
+      renderTodosTaskWorkerVerifierWorkflow({
+        taskId: "t",
+        projectPath: plainPath,
+        provider: "cursor",
+        sandbox: "disabled",
+      }),
+    ).toThrow("safetyReason");
+    const workflow = renderTodosTaskWorkerVerifierWorkflow({
+      taskId: "t",
+      projectPath: plainPath,
+      provider: "cursor",
+      sandbox: "disabled",
+      allowCommands: ["git", "bun"],
+      allowTools: ["functions.exec_command"],
+      safetyReason: "local Cursor CLI requires sandbox disabled",
+    });
+    const target = agentTargetOf(stepById(workflow, "worker"));
+    expect(target.allowlist).toEqual({
+      enforcement: "metadata_only",
+      commands: ["git", "bun"],
+      tools: ["functions.exec_command"],
+      safetyReason: "local Cursor CLI requires sandbox disabled",
+    });
+    expect(target.routing?.taskId).toBe("t");
+    expect(target.prompt).toContain("Allowed commands: git, bun");
   });
 
   test("codewith/codex default to workspace-write sandbox with bypass permission mode", () => {

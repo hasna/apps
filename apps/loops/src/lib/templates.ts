@@ -7,6 +7,7 @@ import type {
   AgentPermissionMode,
   AgentProvider,
   AgentSandbox,
+  AgentTarget,
   AgentWorktreeMode,
   AgentWorktreeSpec,
   CreateWorkflowInput,
@@ -53,6 +54,7 @@ import {
   worktreeContextFragment,
   worktreePrompt,
 } from "./template-kit.js";
+import { agentSessionContractPrompt } from "./agent-adapter.js";
 import type { AgentWorkflowRole, LifecycleGateStage } from "./template-kit.js";
 import { poolRoleOffset, stableIndex } from "./route/profile-pool.js";
 
@@ -104,6 +106,9 @@ export interface AgentWorkflowTemplateBaseInput {
   addDirs?: string[];
   permissionMode?: AgentPermissionMode;
   sandbox?: AgentSandbox;
+  allowTools?: string[];
+  allowCommands?: string[];
+  safetyReason?: string;
   manualBreakGlass?: boolean;
   worktreeMode?: AgentWorktreeMode;
   worktreeRoot?: string;
@@ -383,13 +388,29 @@ function assertNativeAuthProfileSupport(input: AgentWorkflowTemplateBaseInput, p
   );
 }
 
-function failClosedSandbox(input: AgentWorkflowTemplateBaseInput, provider: AgentProvider, sandbox: AgentSandbox | undefined): void {
-  if (!["codewith", "codex"].includes(provider)) return;
-  if (sandbox !== "danger-full-access") return;
-  if (input.manualBreakGlass) return;
+function failClosedSandbox(input: AgentWorkflowTemplateBaseInput, provider: AgentProvider, sandbox: AgentSandbox | undefined, safetyReason?: string): void {
+  if (provider === "cursor" && sandbox === "disabled" && !safetyReason?.trim()) {
+    throw new Error("safetyReason is required when provider cursor uses sandbox=disabled");
+  }
+  if (!["codewith", "codex"].includes(provider) || sandbox !== "danger-full-access") return;
+  if (input.manualBreakGlass || safetyReason?.trim()) return;
   throw new Error(
-    "danger-full-access is manual break-glass only for generated worker/verifier workflows; use sandbox=workspace-write or set manualBreakGlass=true with explicit operator approval",
+    "danger-full-access is manual break-glass only for generated worker/verifier workflows; use sandbox=workspace-write or set manualBreakGlass=true or safetyReason with explicit operator approval",
   );
+}
+
+function agentAllowlist(input: AgentWorkflowTemplateBaseInput, safetyReason?: string) {
+  const commands = [...(input.allowCommands ?? [])];
+  if (input.manualBreakGlass) commands.push("manual-break-glass");
+  const tools = input.allowTools?.length ? input.allowTools : undefined;
+  const uniqueCommands = commands.length ? [...new Set(commands)] : undefined;
+  if (!tools?.length && !uniqueCommands?.length && !safetyReason?.trim()) return undefined;
+  return {
+    tools,
+    commands: uniqueCommands,
+    enforcement: "metadata_only" as const,
+    safetyReason: safetyReason?.trim() || undefined,
+  };
 }
 
 function agentTarget(
@@ -398,6 +419,7 @@ function agentTarget(
   role: AgentWorkflowRole,
   seed: string,
   plan: WorktreePlan,
+  routing: Partial<NonNullable<AgentTarget["routing"]>> = {},
 ): WorkflowStep["target"] {
   const provider = input.provider ?? "codewith";
   assertNativeAuthProfileSupport(input, provider);
@@ -408,7 +430,8 @@ function agentTarget(
       : provider === "cursor"
         ? "enabled"
         : undefined);
-  failClosedSandbox(input, provider, sandbox);
+  const safetyReason = input.safetyReason ?? (input.manualBreakGlass ? "manual break-glass explicitly requested for generated workflow" : undefined);
+  failClosedSandbox(input, provider, sandbox, safetyReason);
   const addDirs = [...(input.addDirs ?? [])];
   if (
     plan.enabled &&
@@ -418,7 +441,7 @@ function agentTarget(
   ) {
     addDirs.push(plan.gitMetadataDir);
   }
-  return {
+  const target: AgentTarget = {
     type: "agent",
     provider,
     prompt,
@@ -442,16 +465,19 @@ function agentTarget(
       branch: plan.branch,
       reason: plan.reason,
     },
-    allowlist: input.manualBreakGlass ? { enforcement: "metadata_only", commands: ["manual-break-glass"] } : undefined,
+    allowlist: agentAllowlist(input, safetyReason),
     routing: {
       projectPath: input.routeProjectPath ?? input.projectPath,
       ...(input.projectGroup ? { projectGroup: input.projectGroup } : {}),
+      ...routing,
       role,
     },
     account: accountForRole(input, role, seed),
     timeoutMs: agentTimeoutMs(input),
     idleTimeoutMs: role === "verifier" ? verifierIdleTimeoutMs(input) : undefined,
   };
+  const promptContract = agentSessionContractPrompt(target);
+  return promptContract ? { ...target, prompt: `${prompt}\n\n${promptContract}` } : target;
 }
 
 // ---------------------------------------------------------------------------
@@ -571,6 +597,7 @@ interface WorkerVerifierStepOptions {
   workerDescription: string;
   verifierDescription: string;
   workerDependsOn?: string[];
+  routing?: Partial<NonNullable<AgentTarget["routing"]>>;
 }
 
 function workerVerifierSteps(opts: WorkerVerifierStepOptions): WorkflowStep[] {
@@ -581,7 +608,7 @@ function workerVerifierSteps(opts: WorkerVerifierStepOptions): WorkflowStep[] {
       name: "Worker",
       description: opts.workerDescription,
       ...(opts.workerDependsOn ? { dependsOn: opts.workerDependsOn } : {}),
-      target: agentTarget(opts.input, opts.workerPrompt, "worker", opts.seed, opts.plan),
+      target: agentTarget(opts.input, opts.workerPrompt, "worker", opts.seed, opts.plan, opts.routing),
       timeoutMs,
     },
     {
@@ -589,7 +616,7 @@ function workerVerifierSteps(opts: WorkerVerifierStepOptions): WorkflowStep[] {
       name: "Verifier",
       description: opts.verifierDescription,
       dependsOn: ["worker"],
-      target: agentTarget(opts.input, opts.verifierPrompt, "verifier", opts.seed, opts.plan),
+      target: agentTarget(opts.input, opts.verifierPrompt, "verifier", opts.seed, opts.plan, opts.routing),
       timeoutMs,
     },
   ];
@@ -723,10 +750,11 @@ export function renderTodosTaskWorkerVerifierWorkflow(input: TodosTaskWorkflowTe
         plan,
         workerPrompt,
         verifierPrompt,
-        workerDescription: "Implement the todos task and record evidence.",
-        verifierDescription: "Adversarially verify worker output and update todos.",
-        workerDependsOn: ["source-task-gate"],
-      }),
+      workerDescription: "Implement the todos task and record evidence.",
+      verifierDescription: "Adversarially verify worker output and update todos.",
+      workerDependsOn: ["source-task-gate"],
+      routing: { taskId: input.taskId, eventId: input.eventId, eventType: input.eventType },
+    }),
     ],
   };
 }
@@ -833,7 +861,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
       name: "Triage",
       description: "Check task eligibility, duplicates, dependencies, and automation gates.",
       dependsOn: ["source-task-gate"],
-      target: agentTarget(input, triagePrompt, "triage", input.taskId, plan),
+      target: agentTarget(input, triagePrompt, "triage", input.taskId, plan, { taskId: input.taskId, eventId: input.eventId, eventType: input.eventType }),
       timeoutMs: agentTimeoutMs(input),
     },
     lifecycleGateStep({
@@ -851,7 +879,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
       name: "Planner",
       description: "Create a concise implementation plan and split unsafe scope before work starts.",
       dependsOn: ["triage-gate"],
-      target: agentTarget(input, plannerPrompt, "planner", input.taskId, plan),
+      target: agentTarget(input, plannerPrompt, "planner", input.taskId, plan, { taskId: input.taskId, eventId: input.eventId, eventType: input.eventType }),
       timeoutMs: agentTimeoutMs(input),
     },
     lifecycleGateStep({
@@ -869,7 +897,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
       name: "Worker",
       description: "Implement the todos task according to triage and planner evidence.",
       dependsOn: ["planner-gate"],
-      target: agentTarget(input, workerPrompt, "worker", input.taskId, plan),
+      target: agentTarget(input, workerPrompt, "worker", input.taskId, plan, { taskId: input.taskId, eventId: input.eventId, eventType: input.eventType }),
       timeoutMs: agentTimeoutMs(input),
     },
   ];
@@ -881,7 +909,7 @@ export function renderTaskLifecycleWorkflow(input: TodosTaskWorkflowTemplateInpu
     name: "Verifier",
     description: "Adversarially verify worker output and update todos.",
     dependsOn: [input.prHandoff ? "pr-handoff" : "worker"],
-    target: agentTarget(input, verifierPrompt, "verifier", input.taskId, plan),
+    target: agentTarget(input, verifierPrompt, "verifier", input.taskId, plan, { taskId: input.taskId, eventId: input.eventId, eventType: input.eventType }),
     timeoutMs: agentTimeoutMs(input),
   });
 
@@ -957,6 +985,7 @@ export function renderEventWorkerVerifierWorkflow(input: EventWorkflowTemplateIn
       verifierPrompt,
       workerDescription: "Handle the Hasna event and record evidence.",
       verifierDescription: "Adversarially verify event handling.",
+      routing: { eventId: input.eventId, eventType: input.eventType, eventSource: input.eventSource },
     }),
   };
 }
@@ -1042,6 +1071,9 @@ function agentTemplateInput(values: Record<string, string | undefined>): AgentWo
     variant: values.variant,
     agent: values.agent,
     addDirs: listVar(values.addDirs ?? values.addDir),
+    allowTools: listVar(values.allowTools ?? values.allowTool),
+    allowCommands: listVar(values.allowCommands ?? values.allowCommand),
+    safetyReason: values.safetyReason,
     permissionMode: values.permissionMode as AgentPermissionMode | undefined,
     sandbox: values.sandbox as AgentSandbox | undefined,
     manualBreakGlass: booleanVar(values.manualBreakGlass),

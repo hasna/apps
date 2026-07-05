@@ -53,6 +53,7 @@ describe("workflow goal spec validation", () => {
             permissionMode: "bypass",
             sandbox: "danger-full-access",
             variant: "low",
+            allowlist: { safetyReason: "operator approved local full access" },
           },
         },
         {
@@ -70,6 +71,38 @@ describe("workflow goal spec validation", () => {
 
     expect(workflow.steps[0]?.target.type).toBe("agent");
     expect(workflow.steps[1]?.target.type).toBe("agent");
+  });
+
+  test("normalizes per-session allowlist metadata and safety reason", () => {
+    const workflow = workflowBodyFromJson({
+      name: "allowlisted-agent",
+      steps: [
+        {
+          id: "worker",
+          target: {
+            type: "agent",
+            provider: "cursor",
+            prompt: "do the task",
+            sandbox: "disabled",
+            cwd: "/tmp/repo",
+            routing: { taskId: "task-123" },
+            allowlist: {
+              tools: [" functions.exec_command "],
+              commands: [" git ", "bun"],
+              safetyReason: "local Cursor agent requires sandbox disabled",
+            },
+          },
+        },
+      ],
+    });
+    const target = workflow.steps[0]?.target;
+    if (!target || target.type !== "agent") throw new Error("expected agent target");
+    expect(target.allowlist).toEqual({
+      tools: ["functions.exec_command"],
+      commands: ["git", "bun"],
+      enforcement: "metadata_only",
+      safetyReason: "local Cursor agent requires sandbox disabled",
+    });
   });
 
   test("accepts explicit unlimited timeoutMs on targets and steps", () => {
@@ -227,6 +260,18 @@ describe("workflow goal spec validation", () => {
         ],
       }),
     ).toThrow("permissionMode auto");
+
+    expect(() =>
+      workflowBodyFromJson({
+        name: "bad-cursor-disabled-no-reason",
+        steps: [
+          {
+            id: "worker",
+            target: { type: "agent", provider: "cursor", prompt: "do it", sandbox: "disabled" },
+          },
+        ],
+      }),
+    ).toThrow("allowlist.safetyReason");
 
     expect(() =>
       workflowBodyFromJson({

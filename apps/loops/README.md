@@ -622,6 +622,16 @@ is requested without `manualBreakGlass=true`. Use `workspace-write` for
 unattended task/event routes. Full access is an explicit manual emergency path,
 not a default automation mode.
 
+Routes and direct agent loops can also record per-session tool/command
+allowlist contracts. Use `--allow-tool`, `--allow-command`, and
+`--safety-reason` on `loops create agent`, `loops routes create`, or route drain
+commands. OpenLoops stores the contract on the agent target, appends it to the
+provider prompt, exposes it through env, and records `agent_session_contract`
+workflow events. Current adapters report `metadata_only` enforcement because
+Cursor/Codex CLI surfaces do not expose stable per-command/tool allowlist flags.
+Cursor `sandbox=disabled` and Codewith/Codex `danger-full-access` require a
+safety reason before the target is accepted.
+
 When a sandboxed Codewith/Codex worker must update app stores outside the repo
 worktree, pass those stores explicitly with `--add-dir` or template `addDirs`.
 For task-created routes, pass `--todos-project` so worker/verifier prompts use
@@ -918,6 +928,10 @@ The adapters intentionally use provider command surfaces instead of pretending e
 - When `--account` or a step `account` is set, OpenLoops resolves `accounts env <profile> --tool <tool>` before spawning the target, strips inherited tool home/API-key variables, and applies the selected profile only to that process. Missing account profiles fail before the provider binary receives the prompt.
 - `--auth-profile` and step `authProfile` are provider-native auth selectors. They currently apply to Codewith and are passed to Codewith as `--auth-profile <name>` on the `exec` invocation; they do not call OpenAccounts.
 - `--sandbox` maps to provider-native sandbox flags. Codewith/Codex accept `read-only`, `workspace-write`, or `danger-full-access`; Cursor accepts `enabled` or `disabled`.
+- `--allow-tool`, `--allow-command`, and `--safety-reason` create a
+  per-session allowlist contract. Current adapters expose it as metadata-only
+  in target JSON, prompt text, env, and workflow events; they do not add native
+  provider flags unless a provider adapter declares support.
 - `--permission-mode` maps `plan`, `auto`, and `bypass` where the provider supports it. Claude uses native permission modes, Cursor maps bypass to `--force`, and OpenCode/AICopilot map bypass to `--dangerously-skip-permissions`.
 - `--variant` is provider-specific reasoning/model effort. Claude maps it to `--effort`, Codewith/Codex map it to `model_reasoning_effort`, and OpenCode/AICopilot pass `--variant`.
 - Daemon and scheduled runs prepend common user executable directories such as `~/.local/bin` and `~/.bun/bin` before resolving provider CLIs.

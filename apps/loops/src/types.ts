@@ -121,10 +121,13 @@ export type AgentPermissionMode = "default" | "plan" | "auto" | "bypass";
 
 export type AgentSandbox = "read-only" | "workspace-write" | "danger-full-access" | "enabled" | "disabled";
 
+export type AgentAllowlistEnforcement = "metadata_only";
+
 export interface AgentAllowlistSpec {
   tools?: string[];
   commands?: string[];
-  enforcement?: "metadata_only";
+  enforcement?: AgentAllowlistEnforcement;
+  safetyReason?: string;
 }
 
 export type AgentWorktreeMode = "auto" | "required" | "off" | "main";

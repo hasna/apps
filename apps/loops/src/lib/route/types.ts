@@ -27,6 +27,9 @@ export interface TodosTaskRouteOptions {
   verifierIdleTimeout?: string;
   permissionMode?: string;
   sandbox?: string;
+  allowTool?: string[];
+  allowCommand?: string[];
+  safetyReason?: string;
   manualBreakGlass?: boolean;
   projectPath?: string;
   projectGroup?: string;

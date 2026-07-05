@@ -267,7 +267,7 @@ loops create agent opencode-smoke \
   --prompt "Reply with exactly OK."
 ```
 
-Agent loops can also carry advisory per-session allowlist metadata:
+Agent loops can also carry an explicit per-session allowlist contract:
 
 ```bash
 loops create agent repo-check \
@@ -276,13 +276,26 @@ loops create agent repo-check \
   --cwd /path/to/repo \
   --prompt "Check the repo and report concrete failures." \
   --allow-tool functions.exec_command \
-  --allow-command git,bun
+  --allow-command git,bun \
+  --safety-reason "repo status check may run git and bun in this worktree"
 ```
 
-These fields are stored on the loop target and exposed to the run environment
-as `LOOPS_AGENT_ALLOWED_TOOLS`, `LOOPS_AGENT_ALLOWED_COMMANDS`, and
-`LOOPS_AGENT_ALLOWLIST_ENFORCEMENT=metadata_only`. They are not enforced by
-OpenLoops yet; provider-native enforcement will be added separately.
+These fields are stored on the agent target as `allowlist` metadata. At
+execution time OpenLoops appends the session contract to the provider prompt and
+exposes it through the run environment as `LOOPS_AGENT_ALLOWED_TOOLS`,
+`LOOPS_AGENT_ALLOWED_COMMANDS`, `LOOPS_AGENT_ALLOWLIST_ENFORCEMENT`,
+`LOOPS_AGENT_ALLOWLIST_SAFETY_REASON`, and `LOOPS_AGENT_SESSION_CONTRACT`.
+Workflow runs also record an `agent_session_contract` event per agent step so
+`loops workflows inspect` and `loops workflows events` show the provider,
+model, cwd, task/event id, timeout, allowed tools/commands, enforcement mode,
+and safety reason without storing secret env values.
+
+Current provider adapters expose this as `metadata_only`: local Cursor and Codex
+CLI help do not expose stable tool/command allowlist flags, so OpenLoops does
+not claim native enforcement for them. Providers can add native support later
+without changing the stored contract shape. Risky modes require a safety reason:
+`cursor` with `sandbox=disabled`, and Codewith/Codex `danger-full-access`
+targets, must include `allowlist.safetyReason` or `--safety-reason`.
 
 For `codewith` and `aicopilot` account isolation, register matching OpenAccounts tools first if they are not built in on the machine:
 
@@ -829,6 +842,23 @@ is requested without `manualBreakGlass=true`. Use `workspace-write` for
 unattended task/event routes. Full access is an explicit manual emergency path,
 not a default automation mode.
 
+Routes and built-in templates accept the same session contract inputs as direct
+agent loops:
+
+```bash
+loops routes create todos-task \
+  --provider cursor \
+  --sandbox disabled \
+  --allow-tool functions.exec_command \
+  --allow-command git,bun,todos \
+  --safety-reason "local Cursor agent requires sandbox disabled; worktree and command scope are explicit"
+```
+
+For Cursor, `sandbox=disabled` is allowed only when a safety reason is recorded.
+The generated workflow target stores the allowlist contract, task/event routing
+ids, provider/model, cwd/worktree metadata, timeout, and safety reason; the same
+contract is appended to worker/verifier prompts and recorded as workflow events.
+
 ## Transcript-Driven Loops
 
 OpenLoops can turn long-form media or meeting transcripts into recurring workflow work when paired with `iapp-transcriber`. The template at `docs/workflows/transcript-feedback-to-loops.json` transcribes an authorized media URL, asks an agent to extract recurring loop candidates, authors workflow specs, and validates generated workflows before scheduling. Copy it into the target repo, replace `/path/to/repo` with that repo's absolute path, and provide `TRANSCRIBER_SOURCE_URL` through the runner environment or a private, uncommitted workflow copy before storing or scheduling it. Do not commit private or signed media URLs.
@@ -1010,6 +1040,10 @@ The adapters intentionally use provider command surfaces instead of pretending e
 - When `--account` or a step `account` is set, OpenLoops resolves `accounts env <profile> --tool <tool>` before spawning the target, strips inherited tool home/API-key variables, and applies the selected profile only to that process. Missing account profiles fail before the provider binary receives the prompt.
 - `--auth-profile` and step `authProfile` are provider-native auth selectors. They currently apply to Codewith and are passed to Codewith as `--auth-profile <name>` on the `exec` invocation; they do not call OpenAccounts.
 - `--sandbox` maps to provider-native sandbox flags. Codewith/Codex accept `read-only`, `workspace-write`, or `danger-full-access`; Cursor accepts `enabled` or `disabled`.
+- `--allow-tool`, `--allow-command`, and `--safety-reason` create a per-session
+  allowlist contract. Current adapters expose it as metadata-only in target
+  JSON, prompt text, env, and workflow events; they do not add native
+  provider flags unless a provider adapter declares support.
 - `--permission-mode` maps `plan`, `auto`, and `bypass` where the provider supports it. Claude uses native permission modes, Cursor maps bypass to `--force`, and OpenCode/AICopilot map bypass to `--dangerously-skip-permissions`.
 - `--variant` is provider-specific reasoning/model effort. Claude maps it to `--effort`, Codewith/Codex map it to `model_reasoning_effort`, and OpenCode/AICopilot pass `--variant`.
 - Daemon and scheduled runs prepend common user executable directories such as `~/.local/bin` and `~/.bun/bin` before resolving provider CLIs.

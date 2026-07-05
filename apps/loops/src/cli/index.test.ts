@@ -418,6 +418,34 @@ describe("loops CLI", () => {
     expect(JSON.parse(list.stdout)).toHaveLength(0);
   });
 
+  test("create agent requires safety reason for cursor sandbox disabled", () => {
+    const dataDir = freshDataDir("loops-cli-create-agent-cursor-safety-");
+
+    const create = runCli(dataDir, [
+      "--json",
+      "create",
+      "agent",
+      "unsafe-cursor",
+      "--provider",
+      "cursor",
+      "--prompt",
+      "noop",
+      "--sandbox",
+      "disabled",
+      "--at",
+      futureAt(),
+    ]);
+
+    expect(create.status).toBe(1);
+    const value = JSON.parse(create.stdout);
+    expect(value.created).toBe(false);
+    expect(value.validation.error).toContain("allowlist.safetyReason is required when cursor sandbox disabled is used");
+
+    const list = runCli(dataDir, ["--json", "list"]);
+    expect(list.status).toBe(0);
+    expect(JSON.parse(list.stdout)).toHaveLength(0);
+  });
+
   test("create agent supports prompt files without printing prompt contents", () => {
     const dataDir = freshDataDir("loops-cli-create-agent-prompt-file-");
     const promptFile = join(dataDir, "prompt.md");
@@ -4006,7 +4034,7 @@ describe("loops CLI", () => {
         ...step,
         target: {
           ...step.target,
-          allowlist: undefined,
+          allowlist: { enforcement: "metadata_only", safetyReason: "legacy generated workflow safety reason" },
         },
       })),
     };
@@ -4718,6 +4746,7 @@ describe("loops CLI", () => {
               provider: "codewith",
               prompt: "unsafe old workflow",
               sandbox: "danger-full-access",
+              allowlist: { enforcement: "metadata_only", safetyReason: "legacy unsafe workflow safety reason" },
             },
           },
         ],

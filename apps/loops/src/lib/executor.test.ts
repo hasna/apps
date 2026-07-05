@@ -151,6 +151,70 @@ describe("executeLoop", () => {
     }
   });
 
+  test("exposes agent allowlist contract to provider environment", async () => {
+    const store = new Store(":memory:");
+    const root = mkdtempSync(join(tmpdir(), "loops-agent-allowlist-env-"));
+    const bin = join(root, "bin");
+    mkdirSync(bin, { recursive: true });
+    const claude = join(bin, "claude");
+    writeFileSync(
+      claude,
+      [
+        "#!/usr/bin/env bash",
+        "printf 'commands=%s\\n' \"$LOOPS_AGENT_ALLOWED_COMMANDS\"",
+        "printf 'tools=%s\\n' \"$LOOPS_AGENT_ALLOWED_TOOLS\"",
+        "printf 'reason=%s\\n' \"$LOOPS_AGENT_ALLOWLIST_SAFETY_REASON\"",
+        "printf 'contract=%s\\n' \"$LOOPS_AGENT_SESSION_CONTRACT\"",
+        "cat >/dev/null",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(claude, 0o755);
+    try {
+      const loop = store.createLoop({
+        name: "agent-allowlist-env",
+        schedule: { type: "once", at: new Date().toISOString() },
+        target: {
+          type: "agent",
+          provider: "claude",
+          prompt: "work",
+          cwd: root,
+          routing: { taskId: "task-123" },
+          allowlist: {
+            tools: ["functions.exec_command"],
+            commands: ["git", "bun"],
+            enforcement: "metadata_only",
+            safetyReason: "scoped repo maintenance",
+          },
+        },
+      });
+      const claim = store.claimRun(loop, new Date().toISOString(), "test");
+      expect(claim).toBeDefined();
+      const result = await executeLoop(loop, claim!.run, {
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+      });
+      expect(result.status).toBe("succeeded");
+      expect(result.stdout).toContain("commands=git,bun");
+      expect(result.stdout).toContain("tools=functions.exec_command");
+      expect(result.stdout).toContain("reason=scoped repo maintenance");
+      const contractLine = result.stdout.split(/\r?\n/).find((line) => line.startsWith("contract="));
+      expect(contractLine).toBeTruthy();
+      const contract = JSON.parse(contractLine!.slice("contract=".length));
+      expect(contract).toMatchObject({
+        provider: "claude",
+        cwd: root,
+        taskId: "task-123",
+        allowedCommands: ["git", "bun"],
+        allowedTools: ["functions.exec_command"],
+        enforcement: "metadata_only",
+        safetyReason: "scoped repo maintenance",
+      });
+    } finally {
+      store.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("applies a default idle watchdog to agent targets without explicit timeouts", async () => {
     const store = new Store(":memory:");
     const root = mkdtempSync(join(tmpdir(), "loops-agent-watchdog-"));

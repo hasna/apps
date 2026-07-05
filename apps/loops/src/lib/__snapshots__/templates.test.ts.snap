@@ -56,6 +56,7 @@ exports[`builtin rendered workflow snapshots todos-task-worker-verifier 1`] = `
         },
         "routing": {
           "projectPath": "<REPO>",
+          "taskId": "task-1200",
           "role": "worker"
         },
         "timeoutMs": null
@@ -93,6 +94,7 @@ exports[`builtin rendered workflow snapshots todos-task-worker-verifier 1`] = `
         },
         "routing": {
           "projectPath": "<REPO>",
+          "taskId": "task-1200",
           "role": "verifier"
         },
         "timeoutMs": null,
@@ -137,6 +139,9 @@ exports[`builtin rendered workflow snapshots event-worker-verifier 1`] = `
         },
         "routing": {
           "projectPath": "<REPO>",
+          "eventId": "evt-7700",
+          "eventType": "repo.push",
+          "eventSource": "hasna",
           "role": "worker"
         },
         "timeoutMs": null
@@ -173,6 +178,9 @@ exports[`builtin rendered workflow snapshots event-worker-verifier 1`] = `
         },
         "routing": {
           "projectPath": "<REPO>",
+          "eventId": "evt-7700",
+          "eventType": "repo.push",
+          "eventSource": "hasna",
           "role": "verifier"
         },
         "timeoutMs": null,
@@ -239,6 +247,7 @@ exports[`builtin rendered workflow snapshots task-lifecycle with pr handoff 1`] 
         },
         "routing": {
           "projectPath": "<REPO>",
+          "taskId": "task-1200",
           "role": "triage"
         },
         "timeoutMs": null
@@ -297,6 +306,7 @@ exports[`builtin rendered workflow snapshots task-lifecycle with pr handoff 1`] 
         },
         "routing": {
           "projectPath": "<REPO>",
+          "taskId": "task-1200",
           "role": "planner"
         },
         "timeoutMs": null
@@ -355,6 +365,7 @@ exports[`builtin rendered workflow snapshots task-lifecycle with pr handoff 1`] 
         },
         "routing": {
           "projectPath": "<REPO>",
+          "taskId": "task-1200",
           "role": "worker"
         },
         "timeoutMs": null
@@ -410,6 +421,7 @@ exports[`builtin rendered workflow snapshots task-lifecycle with pr handoff 1`] 
         },
         "routing": {
           "projectPath": "<REPO>",
+          "taskId": "task-1200",
           "role": "verifier"
         },
         "timeoutMs": null,
@@ -938,6 +950,18 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
         "description": "Provider sandbox mode."
       },
       {
+        "name": "allowTools",
+        "description": "Comma-separated provider session tools the agent may use."
+      },
+      {
+        "name": "allowCommands",
+        "description": "Comma-separated shell commands the agent may run."
+      },
+      {
+        "name": "safetyReason",
+        "description": "Reason for relaxed sandbox or per-session allowlist policy."
+      },
+      {
         "name": "manualBreakGlass",
         "default": "false",
         "description": "Allow explicit danger-full-access in a generated workflow. Intended for manual emergency use only."
@@ -1057,6 +1081,18 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
         "description": "Provider sandbox mode."
       },
       {
+        "name": "allowTools",
+        "description": "Comma-separated provider session tools the agent may use."
+      },
+      {
+        "name": "allowCommands",
+        "description": "Comma-separated shell commands the agent may run."
+      },
+      {
+        "name": "safetyReason",
+        "description": "Reason for relaxed sandbox or per-session allowlist policy."
+      },
+      {
         "name": "manualBreakGlass",
         "default": "false",
         "description": "Allow explicit danger-full-access in a generated workflow. Intended for manual emergency use only."
@@ -1159,6 +1195,18 @@ exports[`builtin rendered workflow snapshots builtin template summaries 1`] = `
         "name": "sandbox",
         "default": "workspace-write",
         "description": "Provider sandbox mode."
+      },
+      {
+        "name": "allowTools",
+        "description": "Comma-separated provider session tools the agent may use."
+      },
+      {
+        "name": "allowCommands",
+        "description": "Comma-separated shell commands the agent may run."
+      },
+      {
+        "name": "safetyReason",
+        "description": "Reason for relaxed sandbox or per-session allowlist policy."
       },
       {
         "name": "manualBreakGlass",
