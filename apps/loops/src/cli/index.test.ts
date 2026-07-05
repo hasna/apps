@@ -3615,9 +3615,10 @@ describe("loops CLI", () => {
       expect(items[0]).toMatchObject({
         status: "admitted",
         idempotencyKey: "todos-task:task-lifecycle-smoke-one",
-        projectKey: repo,
         projectGroup: "oss",
       });
+      expect(items[0]!.projectKey).toBeDefined();
+      expect(testPath(items[0]!.projectKey!)).toBe(testPath(repo));
       const loops = store.listLoops({ includeArchived: true });
       const workflows = store.listWorkflows();
       expect(loops).toHaveLength(1);
@@ -3627,12 +3628,9 @@ describe("loops CLI", () => {
       expect(agentSteps.map((step) => step.id)).toEqual(["triage", "planner", "worker", "verifier"]);
       const worker = agentSteps.find((step) => step.id === "worker")!;
       const verifier = agentSteps.find((step) => step.id === "verifier")!;
-      expect(worker.target.worktree).toMatchObject({
-        enabled: true,
-        mode: "required",
-        originalCwd: repo,
-        repoRoot: repo,
-      });
+      expect(worker.target.worktree).toMatchObject({ enabled: true, mode: "required" });
+      expect(testPath(worker.target.worktree.originalCwd)).toBe(testPath(repo));
+      expect(testPath(worker.target.worktree.repoRoot)).toBe(testPath(repo));
       expect(verifier.target.worktree.path).toBe(worker.target.worktree.path);
       expect(worker.target.cwd).toBe(worker.target.worktree.cwd);
       expect(verifier.target.cwd).toBe(worker.target.worktree.cwd);
