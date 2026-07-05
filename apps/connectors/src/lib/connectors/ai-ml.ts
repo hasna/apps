@@ -927,6 +927,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["transcription", "meetings", "ai"],
   },
   {
+    name: "voquill",
+    displayName: "Voquill",
+    description: "Pathology report coworker",
+    category: "AI & ML",
+    tags: ["pathology", "healthcare", "reports", "medical", "ai"],
+  },
+  {
     name: "wavelineextract",
     displayName: "Waveline Extract",
     description: "Document data extraction and parsing",
