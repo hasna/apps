@@ -521,6 +521,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["data", "enrichment", "processing"],
   },
   {
+    name: "velum-data-quality",
+    displayName: "Velum",
+    description: "Data quality platform",
+    category: "Data & Analytics",
+    tags: ["data-quality", "analytics", "contracts"],
+  },
+  {
     name: "watchsignals",
     displayName: "WatchSignals",
     description: "Luxury watch market data and price tracking",
