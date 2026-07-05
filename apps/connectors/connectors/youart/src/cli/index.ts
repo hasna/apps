@@ -47,8 +47,8 @@ program
   });
 
 function getFormat(cmd: Command): OutputFormat {
-  const parent = cmd.parent;
-  return (parent?.opts().format || 'pretty') as OutputFormat;
+  const source = cmd.parent ?? cmd;
+  return (source.opts().format || 'pretty') as OutputFormat;
 }
 
 function getClient(): YouArt {

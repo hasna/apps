@@ -46,6 +46,6 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/open-connectors.git"
+    "url": "git+https://github.com/hasna/connectors.git"
   }
 }

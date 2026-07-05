@@ -85,7 +85,7 @@ describe('YouArt API client', () => {
 
     expect(recorded[2].body).toEqual({ title: 'Moon Opera', genre: 'sci-fi' });
     expect(recorded[4].body).toEqual({ visibility: 'members' });
-    expect(recorded[6].body).toEqual({ goal_cents: 500000 });
+    expect(recorded[6].body).toEqual({ project_id: 'project 1', goal_cents: 500000 });
   });
 
   test('supports raw requests with custom path and body', async () => {

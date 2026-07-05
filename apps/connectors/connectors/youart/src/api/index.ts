@@ -56,9 +56,14 @@ export class YouArt {
   }
 
   async createFundingCampaign(args: Record<string, unknown> = {}): Promise<YouArtFundingCampaign> {
+    const body = bodyFromArgs(args);
+    if (args.projectId !== undefined && body.project_id === undefined) {
+      body.project_id = args.projectId;
+    }
+
     return this.client.request<YouArtFundingCampaign>('/funding-campaigns', {
       method: 'POST',
-      body: bodyFromArgs(args),
+      body,
     });
   }
 
