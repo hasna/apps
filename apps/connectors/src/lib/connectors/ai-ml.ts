@@ -920,6 +920,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "music", "generation"],
   },
   {
+    name: "unisson",
+    displayName: "Unisson",
+    description: "Product expert agents via the Unisson Runner API",
+    category: "AI & ML",
+    tags: ["ai", "agents", "runner", "customer-success"],
+  },
+  {
     name: "voicit",
     displayName: "Voicit",
     description: "AI meeting transcription and note-taking",
