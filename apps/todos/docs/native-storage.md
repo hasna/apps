@@ -4,18 +4,18 @@
 artifact files without network access, hosted credentials, SaaS accounts, or a
 shared cloud runtime package.
 
-Cloud storage is explicit and repo-native. Internal Hasna deployments and
-future SaaS wrappers opt in with `HASNA_TODOS_STORAGE_MODE=cloud` and
-configure AWS Postgres (RDS) and optional S3 artifact storage through
-`HASNA_TODOS_*` variables. Wrappers provide the matching Postgres/S3 clients
-through the public `./storage` package export. There is no shared
-`@hasna/cloud` runtime package.
+Remote storage is explicit and repo-native. Internal Hasna deployments and
+future SaaS wrappers should configure it through `HASNA_TODOS_*` variables and
+provide the matching Postgres/S3 clients through the public `./storage` package
+export. There is no shared cloud runtime package.
 
 ## Modes
 
 - `HASNA_TODOS_STORAGE_MODE=local`: default local SQLite/file behavior.
-- `HASNA_TODOS_STORAGE_MODE=cloud`: use AWS-backed Postgres on RDS and
-  optional S3 artifact storage.
+- `HASNA_TODOS_STORAGE_MODE=remote`: use a remote adapter backed by Postgres
+  on AWS RDS and optional S3 artifact storage.
+- `HASNA_TODOS_STORAGE_MODE=hybrid`: use a local plus remote adapter with
+  explicit sync behavior.
 
 Legacy hosted API toggles are not storage selectors. They must not change the
 local CLI default.
@@ -55,7 +55,7 @@ plain fallback for local development or wrappers that have not yet migrated.
 
 A SaaS wrapper owns tenant state, billing, accounts, deployment, observability,
 and production secret wiring. The open package owns local storage, the public
-storage contract, local tests, and explicit cloud adapter interfaces.
+storage contract, local tests, and explicit remote adapter interfaces.
 
 ## Public Adapter Exports
 
@@ -67,9 +67,9 @@ The public `@hasna/todos/storage` export now includes:
 - `exportSqliteTodosStorageSnapshot` and `importSqliteTodosStorageSnapshot`
   for local SQLite state movement without a hosted service.
 - `createHybridTodosStorageAdapter` for local SQLite CRUD with explicit
-  Postgres-backed cloud snapshot push/pull (cloud-deployment building block,
-  not a separate storage-mode selector).
-- `createPostgresTodosStorageAdapter` for pure cloud CRUD backed by the same
+  Postgres-backed remote snapshot push/pull (cloud-deployment building block,
+  not a separate cloud runtime package).
+- `createPostgresTodosStorageAdapter` for pure remote CRUD backed by the same
   Postgres JSONB sync records and a caller-provided query client.
 - `createPostgresTodosSyncStore` for RDS-backed snapshot push/pull and
   cross-machine sync cursors through a caller-provided Postgres query client.
@@ -158,11 +158,10 @@ frontmatter/task comments. The CLI does not silently treat the Markdown file as
 authoritative when conflicts exist; agents should resolve the conflict through
 the CLI or an explicit migration task.
 
-## Cloud Deployment: Sync Shape
+## Hybrid Sync Shape
 
-When `HASNA_TODOS_STORAGE_MODE=cloud`, callers can use
-`createHybridTodosStorageAdapter` with a Postgres-style query client or sync
-store for local-plus-cloud sync:
+`HASNA_TODOS_STORAGE_MODE=hybrid` can now build a local-plus-remote adapter when
+the caller passes a Postgres-style query client or sync store:
 
 - Local CRUD stays SQLite-backed and works offline.
 - `adapter.sync.exportSnapshot()` and `adapter.sync.importSnapshot()` move the
@@ -175,11 +174,11 @@ store for local-plus-cloud sync:
   snapshot.
 
 This is the open-package boundary. SaaS tenant wrappers can be added on top
-without changing the local default.
+without changing the local default or depending on a shared cloud package.
 
-## Cloud CRUD Shape
+## Remote CRUD Shape
 
-`HASNA_TODOS_STORAGE_MODE=cloud` can build a pure Postgres adapter when the
+`HASNA_TODOS_STORAGE_MODE=remote` can build a pure Postgres adapter when the
 caller passes a Postgres-style query client to `createTodosStorageAdapter`:
 
 - CRUD uses the repo-owned `todos_sync_records` JSONB table rather than SaaS
@@ -188,8 +187,8 @@ caller passes a Postgres-style query client to `createTodosStorageAdapter`:
   the connected client.
 - `createPostgresTodosStorageAdapter` is also exported directly for callers
   that want to bypass mode selection.
-- Local SQLite remains the default unless `HASNA_TODOS_STORAGE_MODE=cloud` is
-  set explicitly.
+- Local SQLite remains the default unless `HASNA_TODOS_STORAGE_MODE` is set
+  explicitly.
 
 ## S3 Artifact Sync
 

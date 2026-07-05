@@ -23,6 +23,21 @@ import { approveReviewItem, claimReviewItem, requestReviewQueue } from "./review
 let home: string;
 let previousHome: string | undefined;
 
+function makeNonIsolatedHome(prefix: string): string {
+  const candidates = [previousHome, process.cwd(), "/var/tmp"].filter((value): value is string => Boolean(value));
+  for (const base of candidates) {
+    if (base.startsWith(tmpdir())) continue;
+    try {
+      return mkdtempSync(join(base, `${prefix}-`));
+    } catch (error) {
+      const code = typeof error === "object" && error !== null && "code" in error ? error.code : null;
+      if (code === "EACCES" || code === "EROFS" || code === "ENOENT") continue;
+      throw error;
+    }
+  }
+  throw new Error("unable to create a writable non-temp HOME fixture");
+}
+
 beforeEach(() => {
   previousHome = process.env["HOME"];
   home = mkdtempSync(join(tmpdir(), "todos-event-hooks-home-"));
@@ -62,12 +77,13 @@ describe("local event hooks", () => {
   test("suppresses quiet lifecycle hooks for explicit in-memory databases using a non-isolated todos home", async () => {
     const previousHome = process.env["HOME"];
     const previousDbPath = process.env["TODOS_DB_PATH"];
-    const nonTempHome = join("/home/hasna/.cache", `todos-event-hooks-home-${Date.now()}`);
+    let nonTempHome: string | null = null;
     const filePath = join(home, "explicit-lifecycle.jsonl");
     const explicitDb = new Database(":memory:");
     explicitDb.run("PRAGMA foreign_keys = ON");
     runMigrations(explicitDb);
     try {
+      nonTempHome = makeNonIsolatedHome("todos-event-hooks-home");
       process.env["HOME"] = nonTempHome;
       delete process.env["TODOS_DB_PATH"];
       resetConfig();
@@ -85,7 +101,7 @@ describe("local event hooks", () => {
     } finally {
       explicitDb.close();
       resetConfig();
-      rmSync(nonTempHome, { recursive: true, force: true });
+      if (nonTempHome) rmSync(nonTempHome, { recursive: true, force: true });
       if (previousHome === undefined) delete process.env["HOME"];
       else process.env["HOME"] = previousHome;
       if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
@@ -96,12 +112,13 @@ describe("local event hooks", () => {
   test("suppresses quiet run hooks for explicit in-memory databases using a non-isolated todos home", async () => {
     const previousHome = process.env["HOME"];
     const previousDbPath = process.env["TODOS_DB_PATH"];
-    const nonTempHome = join("/home/hasna/.cache", `todos-run-hooks-home-${Date.now()}`);
+    let nonTempHome: string | null = null;
     const filePath = join(home, "explicit-run.jsonl");
     const explicitDb = new Database(":memory:");
     explicitDb.run("PRAGMA foreign_keys = ON");
     runMigrations(explicitDb);
     try {
+      nonTempHome = makeNonIsolatedHome("todos-run-hooks-home");
       process.env["HOME"] = nonTempHome;
       delete process.env["TODOS_DB_PATH"];
       resetConfig();
@@ -123,7 +140,7 @@ describe("local event hooks", () => {
     } finally {
       explicitDb.close();
       resetConfig();
-      rmSync(nonTempHome, { recursive: true, force: true });
+      if (nonTempHome) rmSync(nonTempHome, { recursive: true, force: true });
       if (previousHome === undefined) delete process.env["HOME"];
       else process.env["HOME"] = previousHome;
       if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
@@ -134,12 +151,13 @@ describe("local event hooks", () => {
   test("suppresses quiet approval and review hooks for explicit in-memory databases using a non-isolated todos home", async () => {
     const previousHome = process.env["HOME"];
     const previousDbPath = process.env["TODOS_DB_PATH"];
-    const nonTempHome = join("/home/hasna/.cache", `todos-review-hooks-home-${Date.now()}`);
+    let nonTempHome: string | null = null;
     const filePath = join(home, "explicit-review.jsonl");
     const explicitDb = new Database(":memory:");
     explicitDb.run("PRAGMA foreign_keys = ON");
     runMigrations(explicitDb);
     try {
+      nonTempHome = makeNonIsolatedHome("todos-review-hooks-home");
       process.env["HOME"] = nonTempHome;
       delete process.env["TODOS_DB_PATH"];
       resetConfig();
@@ -163,7 +181,7 @@ describe("local event hooks", () => {
     } finally {
       explicitDb.close();
       resetConfig();
-      rmSync(nonTempHome, { recursive: true, force: true });
+      if (nonTempHome) rmSync(nonTempHome, { recursive: true, force: true });
       if (previousHome === undefined) delete process.env["HOME"];
       else process.env["HOME"] = previousHome;
       if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
