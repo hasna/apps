@@ -395,6 +395,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["nft", "web3", "blockchain"],
   },
   {
+    name: "whop",
+    displayName: "Whop",
+    description: "Creator memberships, payments, and digital product commerce",
+    category: "Commerce & Finance",
+    tags: ["payments", "memberships", "creators"],
+  },
+  {
     name: "woocommerce",
     displayName: "WooCommerce",
     description: "WordPress e-commerce plugin for orders, products, and customers",
