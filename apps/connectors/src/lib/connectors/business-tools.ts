@@ -955,6 +955,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["hr", "recruiting", "ats", "ai"],
   },
   {
+    name: "tryprism",
+    displayName: "Prism",
+    description: "AI-native recruiting searches, candidates, and shortlists",
+    category: "Business Tools",
+    tags: ["hr", "recruiting", "ats", "ai"],
+  },
+  {
     name: "unleashedsoftware",
     displayName: "Unleashed Software",
     description: "Inventory management and manufacturing software",
