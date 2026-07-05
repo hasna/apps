@@ -388,6 +388,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["nft", "blockchain", "digital collectibles", "tokens", "web3"],
   },
   {
+    name: "usebidflow",
+    displayName: "Bidflow Platform",
+    description: "Bid platform for marketplace bids and events",
+    category: "Commerce & Finance",
+    tags: ["bids", "commerce", "marketplace"],
+  },
+  {
     name: "whal3s",
     displayName: "Whal3s",
     description: "NFT utility and Web3 engagement platform",
