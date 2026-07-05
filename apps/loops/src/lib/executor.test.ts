@@ -332,6 +332,25 @@ describe("executeLoop", () => {
         expect(recovered.status).toBe("succeeded");
         expect(recovered.stdout.trim()).toBe(realpathSync(wtPath));
         expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
+
+        writeFileSync(join(wtPath, "detached-marker.txt"), "preserve detached head\n");
+        execFileSync("git", ["-C", wtPath, "-c", "user.email=test@example.com", "-c", "user.name=test", "add", "detached-marker.txt"], {
+          stdio: "ignore",
+        });
+        execFileSync("git", ["-C", wtPath, "-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-m", "detached marker"], {
+          stdio: "ignore",
+        });
+        const detachedHead = execFileSync("git", ["-C", wtPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+        execFileSync("git", ["-C", wtPath, "checkout", "--detach"], { stdio: "ignore" });
+        execFileSync("git", ["-C", repo, "branch", "-D", "openloops/exec-test"], { stdio: "ignore" });
+
+        const recreated = await executeLoop(loop, claim!.run, {
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
+        });
+        expect(recreated.status).toBe("succeeded");
+        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
+        expect(execFileSync("git", ["-C", wtPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(detachedHead);
+        expect(readFileSync(join(wtPath, "detached-marker.txt"), "utf8")).toBe("preserve detached head\n");
       } finally {
         store.close();
         rmSync(root, { recursive: true, force: true });
@@ -485,6 +504,26 @@ describe("executeLoop", () => {
         expect(again.status).toBe("succeeded");
         expect(again.stdout.trim()).toBe(wtPath);
         expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
+
+        writeFileSync(join(wtPath, "detached-marker.txt"), "preserve remote detached head\n");
+        execFileSync("git", ["-C", wtPath, "-c", "user.email=test@example.com", "-c", "user.name=test", "add", "detached-marker.txt"], {
+          stdio: "ignore",
+        });
+        execFileSync("git", ["-C", wtPath, "-c", "user.email=test@example.com", "-c", "user.name=test", "commit", "-m", "detached marker"], {
+          stdio: "ignore",
+        });
+        const detachedHead = execFileSync("git", ["-C", wtPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+        execFileSync("git", ["-C", wtPath, "checkout", "--detach"], { stdio: "ignore" });
+        execFileSync("git", ["-C", repo, "branch", "-D", "openloops/exec-test"], { stdio: "ignore" });
+
+        const recreated = await executeLoop(loop, claim!.run, {
+          ...remoteHooks,
+          env: { HOME: home, PATH: "/usr/bin:/bin" },
+        });
+        expect(recreated.status).toBe("succeeded");
+        expect(execFileSync("git", ["-C", wtPath, "branch", "--show-current"], { encoding: "utf8" }).trim()).toBe("openloops/exec-test");
+        expect(execFileSync("git", ["-C", wtPath, "rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(detachedHead);
+        expect(readFileSync(join(wtPath, "detached-marker.txt"), "utf8")).toBe("preserve remote detached head\n");
       } finally {
         store.close();
         rmSync(root, { recursive: true, force: true });

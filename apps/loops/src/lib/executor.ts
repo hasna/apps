@@ -428,7 +428,7 @@ function remoteWorktreePrepareLines(worktree: AgentWorktreeSpec): string[] {
   return [
     "__openloops_prepare_worktree() {",
     `  local repo=${shellQuote(repoRoot)} path=${shellQuote(path)} branch=${shellQuote(branch)}`,
-    "  local top expected_common actual_common current status repo_head recovered",
+    "  local top expected_common actual_common current status recovered",
     '  if [ -L "$path" ]; then echo "refusing symlinked worktree path $path" >&2; return 1; fi',
     '  if [ -e "$path" ]; then',
     '    top="$(git -C "$path" rev-parse --show-toplevel 2>/dev/null)" || { echo "refusing to reuse non-worktree path: $path" >&2; return 1; }',
@@ -442,9 +442,10 @@ function remoteWorktreePrepareLines(worktree: AgentWorktreeSpec): string[] {
     '      if [ -n "$status" ]; then echo "existing worktree $path is on branch ${current:-unknown}, expected $branch, and has local changes; commit/stash them or remove the stale worktree before retrying" >&2; return 1; fi',
     '      if git -C "$repo" show-ref --verify --quiet "refs/heads/$branch"; then',
     '        git -C "$path" checkout "$branch" 1>&2 || { echo "existing worktree $path is clean but could not switch from branch ${current:-unknown} to expected $branch; remove/prune the stale worktree or free the branch before retrying" >&2; return 1; }',
+    '      elif [ -z "$current" ]; then',
+    '        git -C "$path" checkout -b "$branch" 1>&2 || { echo "existing worktree $path is clean but could not recreate expected branch $branch at the current detached HEAD; remove/prune the stale worktree before retrying" >&2; return 1; }',
     "      else",
-    '        repo_head="$(git -C "$repo" rev-parse HEAD 2>/dev/null)" || { echo "existing worktree $path is clean but repo HEAD could not be resolved for branch recovery" >&2; return 1; }',
-    '        git -C "$path" checkout -b "$branch" "$repo_head" 1>&2 || { echo "existing worktree $path is clean but could not create expected branch $branch; remove/prune the stale worktree before retrying" >&2; return 1; }',
+    '        echo "existing worktree $path is on branch $current, expected $branch, but expected branch does not exist; remove/prune the stale worktree or recreate the expected branch before retrying" >&2; return 1',
     "      fi",
     '      recovered="$(git -C "$path" branch --show-current 2>/dev/null)"',
     '      if [ "$recovered" != "$branch" ]; then echo "existing worktree $path branch recovery ended on ${recovered:-unknown}, expected $branch; remove/prune the stale worktree before retrying" >&2; return 1; fi',
@@ -696,11 +697,15 @@ async function ensureLocalWorktree(
       const hasBranch = await git(["-C", repoRoot, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`]);
       const checkout = hasBranch.status === 0
         ? await git(["-C", path, "checkout", branch])
-        : await (async () => {
-            const repoHead = await git(["-C", repoRoot, "rev-parse", "HEAD"]);
-            if (repoHead.error || (repoHead.status ?? 1) !== 0) return repoHead;
-            return git(["-C", path, "checkout", "-b", branch, repoHead.stdout.trim()]);
-          })();
+        : actualBranch
+          ? {
+              status: 1,
+              stdout: "",
+              stderr: `existing worktree ${path} is on branch ${actualLabel}, expected ${branch}, but expected branch does not exist; remove/prune the stale worktree or recreate the expected branch before retrying`,
+              signal: null,
+              timedOut: false,
+            }
+          : await git(["-C", path, "checkout", "-b", branch]);
       if (checkout.error || (checkout.status ?? 1) !== 0) {
         const detail = spawnDetail(checkout);
         return {
