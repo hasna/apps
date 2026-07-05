@@ -820,6 +820,13 @@ carries repair_class: safe_auto | blocker_human | blocker_cross_repo |
 blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by --apply.`)
     .action(async (opts) => {
       const globalOpts = program.opts();
+      // The actionable parent `doctor` command declares its own legacy
+      // --apply/--fix, and without positional options Commander strips every
+      // option the parent recognizes from argv BEFORE dispatching the
+      // subcommand — so `doctor routing --apply` lands on doctor.opts(), not
+      // here, and the repair silently dry-ran. Read both.
+      const parentOpts = doctor.opts();
+      const applyRequested = Boolean(opts.apply || opts.fix || parentOpts.apply || parentOpts.fix);
       const { runRoutingDoctor } = await import("../../lib/routing-doctor.js");
 
       let shardIndex: number | undefined;
@@ -855,7 +862,7 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       }
 
       const result = runRoutingDoctor({
-        apply: Boolean(opts.apply || opts.fix),
+        apply: applyRequested,
         statuses: statuses as any,
         projectId,
         tag: opts.tag,
