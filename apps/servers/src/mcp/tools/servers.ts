@@ -12,6 +12,7 @@ import {
   heartbeatServer,
 } from "../../db/servers.js";
 import { dispatchWebhook } from "../../db/webhooks.js";
+import { redactSensitiveFields } from "../../utils/redaction.js";
 import { getTailscaleUrl } from "../../utils/tailscale.js";
 
 type Helpers = {
@@ -60,7 +61,7 @@ export function registerServerTools(server: McpServer, { shouldRegisterTool, for
           if (!s) return { content: [{ type: "text" as const, text: `Server not found: ${id_or_slug}` }], isError: true };
           const tailscaleUrl = getTailscaleUrl(s);
           const output = { ...s, tailscale_url: tailscaleUrl };
-          return { content: [{ type: "text" as const, text: JSON.stringify(output, null, 2) }] };
+          return { content: [{ type: "text" as const, text: JSON.stringify(redactSensitiveFields(output), null, 2) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },
     );

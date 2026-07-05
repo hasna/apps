@@ -12,6 +12,7 @@ import {
   updateAgent,
 } from "../../db/agents.js";
 import type { AgentConflictError } from "../../types/index.js";
+import { redactSensitiveFields } from "../../utils/redaction.js";
 
 type Helpers = {
   shouldRegisterTool: (name: string) => boolean;
@@ -58,7 +59,7 @@ export function registerAgentTools(server: McpServer, { shouldRegisterTool, form
           let agent = getAgent(id_or_name);
           if (!agent) agent = getAgentByName(id_or_name);
           if (!agent) return { content: [{ type: "text" as const, text: `Agent not found: ${id_or_name}` }], isError: true };
-          return { content: [{ type: "text" as const, text: JSON.stringify(agent, null, 2) }] };
+          return { content: [{ type: "text" as const, text: JSON.stringify(redactSensitiveFields(agent), null, 2) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },
     );

@@ -212,6 +212,14 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
       expect(resultJson(init).server.slug).toBe("mcp-app");
       expect(resultJson(init).server.metadata.env[sensitiveKey]).toBe("[redacted]");
 
+      const getServer = await client.callTool({
+        name: "get_server",
+        arguments: { id_or_slug: "mcp-app" },
+      });
+      expect(getServer.isError).not.toBe(true);
+      expect(resultText(getServer)).not.toContain(sensitiveValue);
+      expect(resultJson(getServer).metadata.env[sensitiveKey]).toBe("[redacted]");
+
       const duplicateInit = await client.callTool({
         name: "init_local_server",
         arguments: {

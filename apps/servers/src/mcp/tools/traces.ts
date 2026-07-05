@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createTrace, getTrace, listTraces, listTracesByAgent } from "../../db/traces.js";
+import { redactSensitiveFields } from "../../utils/redaction.js";
 
 type Helpers = {
   shouldRegisterTool: (name: string) => boolean;
@@ -39,7 +40,7 @@ export function registerTraceTools(server: McpServer, { shouldRegisterTool, form
         try {
           const trace = getTrace(id);
           if (!trace) return { content: [{ type: "text" as const, text: `Trace not found: ${id}` }], isError: true };
-          return { content: [{ type: "text" as const, text: JSON.stringify(trace, null, 2) }] };
+          return { content: [{ type: "text" as const, text: JSON.stringify(redactSensitiveFields(trace), null, 2) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },
     );

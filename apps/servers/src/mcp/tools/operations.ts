@@ -11,6 +11,7 @@ import {
   cancelOperation,
   deleteOperation,
 } from "../../db/operations.js";
+import { redactSensitiveFields } from "../../utils/redaction.js";
 
 type Helpers = {
   shouldRegisterTool: (name: string) => boolean;
@@ -49,7 +50,7 @@ export function registerOperationTools(server: McpServer, { shouldRegisterTool, 
         try {
           const op = getOperation(id);
           if (!op) return { content: [{ type: "text" as const, text: `Operation not found: ${id}` }], isError: true };
-          return { content: [{ type: "text" as const, text: JSON.stringify(op, null, 2) }] };
+          return { content: [{ type: "text" as const, text: JSON.stringify(redactSensitiveFields(op), null, 2) }] };
         } catch (e) { return { content: [{ type: "text" as const, text: formatError(e) }], isError: true }; }
       },
     );
