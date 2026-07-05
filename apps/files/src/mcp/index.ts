@@ -290,7 +290,7 @@ registerTool("add_source", "Add a local folder or S3 bucket as an indexed source
     profile: z.string().optional(),
     endpoint: z.string().optional(),
     forcePathStyle: z.boolean().optional(),
-  }).optional().describe("S3 named profile/endpoint settings only. Static credentials are rejected; use env/default chain or an AWS profile."),
+  }).strict().optional().describe("S3 named profile/endpoint settings only. Static credentials are rejected; use env/default chain or an AWS profile."),
 }, async ({ type, path, bucket, prefix, region, name, config }) => {
   const machine = getCurrentMachine();
   const source = createSource({

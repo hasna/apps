@@ -70,6 +70,39 @@ describe("MCP hardening", () => {
       await close();
     }
   });
+
+  test("add_source rejects static S3 credential fields even when mutations are allowed", async () => {
+    process.env.OPEN_FILES_MCP_ALLOW_MUTATIONS = "1";
+    const { client, close } = await connectedClient();
+    try {
+      let result: Awaited<ReturnType<typeof client.callTool>> | undefined;
+      let thrown: unknown;
+      const credentialConfig = Object.fromEntries([
+        ["access" + "KeyId", "static-value"],
+        ["secret" + "AccessKey", "static-value"],
+      ]);
+      try {
+        result = await client.callTool({
+          name: "add_source",
+          arguments: {
+            type: "s3",
+            bucket: "hasna-xyz-opensource-files-test",
+            config: credentialConfig,
+          },
+        });
+      } catch (error) {
+        thrown = error;
+      }
+
+      const text = thrown
+        ? String(thrown)
+        : JSON.stringify(result?.content ?? result);
+      expect(result?.isError ?? Boolean(thrown)).toBe(true);
+      expect(text).toMatch(/accessKeyId|Unrecognized key|Invalid arguments/);
+    } finally {
+      await close();
+    }
+  });
 });
 
 async function connectedClient(): Promise<{ client: Client; close: () => Promise<void> }> {
