@@ -114,20 +114,24 @@ export class ConnectorClient {
       body: requestBody,
     };
 
+    const maxRetries = method === 'GET' ? retries : 0;
     let lastError: Error | null = null;
     let lastStatus = 0;
 
-    for (let attempt = 0; attempt <= retries; attempt++) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-        const response = await fetch(url, {
-          ...fetchOptions,
-          signal: controller.signal,
-        });
-
-        clearTimeout(timeoutId);
+        let response: Response;
+        try {
+          response = await fetch(url, {
+            ...fetchOptions,
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timeoutId);
+        }
         lastStatus = response.status;
 
         if (response.status === 204) {
@@ -151,7 +155,7 @@ export class ConnectorClient {
         }
 
         if (!response.ok) {
-          if (this.isRetryableStatus(response.status) && attempt < retries) {
+          if (this.isRetryableStatus(response.status) && attempt < maxRetries) {
             const retryAfter = response.headers.get('retry-after');
             const delay = retryAfter
               ? parseInt(retryAfter, 10) * 1000
@@ -172,12 +176,12 @@ export class ConnectorClient {
           lastError = new Error(`Request timeout after ${timeout}ms`);
         }
 
-        if (attempt < retries && !(err instanceof ZeroBounceApiError)) {
+        if (attempt < maxRetries && !(err instanceof ZeroBounceApiError)) {
           await this.sleep(this.getRetryDelay(attempt));
           continue;
         }
 
-        throw err;
+        throw lastError;
       }
     }
 
@@ -195,7 +199,13 @@ export class ConnectorClient {
   async postJson<T>(
     path: string,
     body?: Record<string, unknown>,
-    options?: { baseUrl?: string; apiKeyInBody?: boolean; params?: Record<string, string | number | boolean | undefined> }
+    options?: {
+      baseUrl?: string;
+      apiKeyInBody?: boolean;
+      params?: Record<string, string | number | boolean | undefined>;
+      retries?: number;
+      timeout?: number;
+    }
   ): Promise<T> {
     return this.request<T>(path, {
       method: 'POST',
@@ -203,6 +213,8 @@ export class ConnectorClient {
       baseUrl: options?.baseUrl,
       apiKeyInBody: options?.apiKeyInBody ?? true,
       params: options?.params,
+      retries: options?.retries,
+      timeout: options?.timeout,
     });
   }
 

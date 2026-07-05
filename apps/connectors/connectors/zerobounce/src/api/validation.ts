@@ -29,7 +29,7 @@ export class ValidationApi {
       throw new Error('email is required');
     }
 
-    return this.client.get<ValidationResult>('/v2/validate-sandbox', {
+    return this.client.get<ValidationResult>('/v2/validate', {
       email: params.email,
       ip_address: params.ip_address,
       timeout: params.timeout,
@@ -43,11 +43,19 @@ export class ValidationApi {
       throw new Error('email_batch is required and must not be empty');
     }
 
-    return this.client.postJson<ValidateBatchResult>('/v2/validatebatch', {
-      email_batch: params.email_batch,
-      timeout: params.timeout,
-      activity_data: params.activity_data,
-      verify_plus: params.verify_plus,
-    });
+    const apiTimeoutSeconds = params.timeout ?? 120;
+
+    return this.client.postJson<ValidateBatchResult>(
+      '/v2/validatebatch',
+      {
+        email_batch: params.email_batch,
+        timeout: apiTimeoutSeconds,
+        activity_data: params.activity_data,
+        verify_plus: params.verify_plus,
+      },
+      {
+        timeout: apiTimeoutSeconds * 1000 + 10000,
+      }
+    );
   }
 }

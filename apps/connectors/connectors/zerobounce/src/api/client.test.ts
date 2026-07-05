@@ -68,7 +68,19 @@ describe('ZeroBounce ConnectorClient', () => {
     await expect(api.validate({ email: '' })).rejects.toThrow('email is required');
   });
 
-  test('POST validatebatch puts api_key in JSON body', async () => {
+  test('sandbox validation uses standard validate endpoint', async () => {
+    const recorded = installFetch(() => ({ address: 'valid@example.com', status: 'valid' }));
+    const client = new ConnectorClient({ apiKey: 'sandbox-key' });
+    const api = new ValidationApi(client);
+    await api.validateSandbox({ email: 'valid@example.com' });
+
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0].url).toContain('api.zerobounce.net/v2/validate');
+    expect(recorded[0].url).not.toContain('validate-sandbox');
+    expect(recorded[0].url).toContain('email=valid%40example.com');
+  });
+
+  test('POST validatebatch puts api_key in JSON body and uses long HTTP timeout', async () => {
     const recorded = installFetch(() => ({ email_batch: [], errors: [] }));
     const client = new ConnectorClient({ apiKey: 'batch-key' });
     const api = new ValidationApi(client);
@@ -81,7 +93,40 @@ describe('ZeroBounce ConnectorClient', () => {
     const body = JSON.parse(recorded[0].body!);
     expect(body.api_key).toBe('batch-key');
     expect(body.email_batch).toEqual([{ email_address: 'x@y.com' }]);
+    expect(body.timeout).toBe(120);
     expect(recorded[0].url).not.toContain('api_key=');
+  });
+
+  test('POST requests are not retried by default', async () => {
+    const recorded = installFetch(() => ({ error: 'temporary server failure' }), {
+      ok: false,
+      status: 503,
+    });
+    const client = new ConnectorClient({ apiKey: 'batch-key' });
+    const api = new ValidationApi(client);
+
+    await expect(api.validateBatch({
+      email_batch: [{ email_address: 'x@y.com' }],
+    })).rejects.toBeInstanceOf(ZeroBounceApiError);
+    expect(recorded).toHaveLength(1);
+  });
+
+  test('timeout errors expose configured timeout message', async () => {
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      await new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('The operation was aborted', 'AbortError'));
+        });
+      });
+      throw new Error('unreachable');
+    }) as unknown as typeof fetch;
+
+    const client = new ConnectorClient({ apiKey: 'timeout-key' });
+    await expect(client.request('/v2/validate', {
+      method: 'GET',
+      retries: 0,
+      timeout: 1,
+    })).rejects.toThrow('Request timeout after 1ms');
   });
 
   test('validateBatch throws when email_batch empty', async () => {
