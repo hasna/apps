@@ -1011,6 +1011,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["testing", "qa", "test-management"],
   },
   {
+    name: "upstash-api-platform",
+    displayName: "Upstash API Platform",
+    description: "Upstash Developer API — teams, vector indices, and audit logs",
+    category: "Developer Tools",
+    tags: ["serverless", "platform", "management-api", "qstash", "vector", "teams"],
+  },
+  {
     name: "uptimetoolbox",
     displayName: "Uptime Toolbox",
     description: "Website uptime and performance monitoring",
