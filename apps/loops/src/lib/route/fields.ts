@@ -49,6 +49,13 @@ export function taskEventField(data: Record<string, unknown>, keys: string[]): s
       const direct = stringField((payload as Record<string, unknown>)[key]);
       if (direct) return direct;
     }
+    const payloadTask = (payload as Record<string, unknown>).task;
+    if (payloadTask && typeof payloadTask === "object" && !Array.isArray(payloadTask)) {
+      for (const key of keys) {
+        const direct = stringField((payloadTask as Record<string, unknown>)[key]);
+        if (direct) return direct;
+      }
+    }
   }
   return undefined;
 }
