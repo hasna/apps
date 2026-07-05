@@ -658,9 +658,10 @@ loops routes schedule todos-task oss-task-route-drain \
   --compact
 ```
 
-`--max-active` counts active routed workflows **per route**, scoped by the
-running loop's name (or an explicit `--max-active-scope <key>`), so each router's
-limit is its own ceiling rather than a store-wide total shared by every router.
+`--max-active` counts active routed workflows **per route**. Scope precedence:
+an explicit `--max-active-scope <key>` wins, else the running loop's
+`LOOPS_LOOP_NAME`, else the route key — so each router's limit is its own
+ceiling rather than a store-wide total shared by every router.
 `--max-active-per-project` and `--max-active-per-project-group` remain cross-route
 anti-hog caps counted over all routes. Raise a router's `--max-active`
 deliberately once counting is per-route; keep `--max-per-profile` set so the

@@ -1051,8 +1051,14 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_workflow_work_items_status_next ON workflow_work_items(status, next_attempt_at, priority DESC, created_at ASC);
       CREATE INDEX IF NOT EXISTS idx_workflow_work_items_project ON workflow_work_items(project_key, status);
       CREATE INDEX IF NOT EXISTS idx_workflow_work_items_group ON workflow_work_items(project_group, status);
-      CREATE INDEX IF NOT EXISTS idx_workflow_work_items_scope ON workflow_work_items(route_scope, status);
       CREATE INDEX IF NOT EXISTS idx_workflow_work_items_invocation ON workflow_work_items(invocation_id);
+      -- idx_workflow_work_items_scope (route_scope, status) is created ONLY by
+      -- migration 0008_work_item_route_scope, never here: this baseline DDL
+      -- re-runs on EVERY open (0001 is not skip-guarded), and on a pre-0008
+      -- database the CREATE TABLE above is a no-op, so an index on route_scope
+      -- here would execute before the column exists and crash the open
+      -- ("no such column: route_scope"). New columns may be folded into the
+      -- CREATE TABLE (fresh-db only); their indexes must live in the migration.
 
       CREATE TABLE IF NOT EXISTS workflow_step_runs (
         id TEXT PRIMARY KEY,

@@ -34,6 +34,7 @@ describe("Postgres storage migrations", () => {
       "0001_core_runtime",
       "0002_workflows_goals",
       "0003_remote_runners_and_audit",
+      "0004_work_item_route_scope",
     ]);
     for (const migration of POSTGRES_STORAGE_MIGRATIONS) {
       expect(migration.checksum).toBe(checksumStorageSql(migration.sql));
@@ -48,6 +49,36 @@ describe("Postgres storage migrations", () => {
     expect(combined).toContain("CREATE TABLE IF NOT EXISTS runner_leases");
     expect(combined).toContain("idx_runner_leases_active_loop_run");
     expect(combined).toContain("CREATE TABLE IF NOT EXISTS audit_events");
+  });
+
+  test("released migration SQL is immutable — pinned checksums never change", () => {
+    // Editing an already-released migration's SQL (instead of adding a new
+    // additive migration) breaks every existing database: migrate() fails
+    // closed with "checksum mismatch" because the ledger recorded the original
+    // checksum. This pins the released checksums so that defect class fails
+    // here first. When adding schema, append a NEW migration and pin it below —
+    // never touch a released block. (Regression: route_scope was briefly folded
+    // into 0002_workflows_goals, which would have bricked upgrades of every
+    // existing postgres deployment.)
+    const pinned: Record<string, string> = {
+      "0001_core_runtime": "sha256:99cab06c75144cbcd3076ea42132fe511fe0f8c89d1c96bdcc4abef7c026ef32",
+      "0002_workflows_goals": "sha256:cf9d74beafadaf97dcb26c3d584caa634265fb99978704417886c58d1f804b42",
+      "0003_remote_runners_and_audit": "sha256:9f0816668315c08aefeda1afebb58ad74e803d6dd1bca580e0697f602486c520",
+      "0004_work_item_route_scope": "sha256:341e439861d595ce3d069b0106f1f09134042bac0a70f3d00a1374e09f5404d9",
+    };
+    for (const migration of POSTGRES_STORAGE_MIGRATIONS) {
+      expect(`${migration.id} ${migration.checksum}`).toBe(`${migration.id} ${pinned[migration.id]}`);
+    }
+    // route_scope lives ONLY in the additive 0004 migration, never in a
+    // released block.
+    for (const migration of POSTGRES_STORAGE_MIGRATIONS) {
+      if (migration.id === "0004_work_item_route_scope") {
+        expect(migration.sql).toContain("ADD COLUMN IF NOT EXISTS route_scope");
+        expect(migration.sql).toContain("idx_workflow_work_items_scope");
+      } else {
+        expect(migration.sql).not.toContain("route_scope");
+      }
+    }
   });
 
   test("plans and applies pending migrations through the checksum ledger", async () => {
@@ -84,7 +115,30 @@ describe("Postgres storage migrations", () => {
 
     expect(executor.executed).toHaveLength(0);
     expect(dryRun.applied.map((migration) => migration.id)).toEqual([POSTGRES_STORAGE_MIGRATIONS[0]!.id]);
-    expect(dryRun.plan.map((item) => item.state)).toEqual(["already_applied", "pending", "pending"]);
+    expect(dryRun.plan.map((item) => item.state)).toEqual(["already_applied", "pending", "pending", "pending"]);
+  });
+
+  test("existing pre-route_scope database upgrades by applying only the additive 0004 migration", async () => {
+    // The realistic upgrade: a deployment whose ledger recorded 0001-0003 with
+    // the released checksums. Verification must pass (no released SQL was
+    // edited) and only 0004_work_item_route_scope may execute. This is the pg
+    // twin of the sqlite pre-0008 fixture test: route_scope briefly lived
+    // inside the checksummed 0002 block, which would have failed this exact
+    // scenario with a checksum mismatch.
+    const executor = new FakePostgresExecutor();
+    executor.ledger = POSTGRES_STORAGE_MIGRATIONS.slice(0, 3).map((migration) => ({
+      id: migration.id,
+      checksum: migration.checksum,
+      applied_at: "2026-01-01T00:00:00.000Z",
+    }));
+    const storage = new PostgresStorage(executor);
+
+    const result = await storage.migrate();
+
+    const executedSql = executor.executed.filter((entry) => !entry.sql.startsWith("INSERT INTO") && !entry.sql.includes("CREATE TABLE IF NOT EXISTS open_loops_schema_migrations"));
+    expect(executedSql).toHaveLength(1);
+    expect(executedSql[0]!.sql).toContain("ADD COLUMN IF NOT EXISTS route_scope");
+    expect(result.applied.map((migration) => migration.id)).toEqual(POSTGRES_STORAGE_MIGRATIONS.map((migration) => migration.id));
   });
 
   test("dry-run fails closed when an applied migration checksum changes", async () => {

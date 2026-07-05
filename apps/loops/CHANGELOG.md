@@ -17,9 +17,10 @@ and every step records the account it ran on.
   store-wide, so the busiest router's `--max-active` became a shared ceiling that
   throttled every other router (average concurrency ~1.9 while the agent lane
   allowed 12; ~253 items/24h deferred as `global active workflow limit reached`).
-  The global count is now scoped to the route/drain that set the limit — by the
-  running loop's `LOOPS_LOOP_NAME`, an explicit `--max-active-scope <key>`, or the
-  route key as a fallback — so each router's `--max-active` is its own ceiling.
+  The global count is now scoped to the route/drain that set the limit; scope
+  precedence is an explicit `--max-active-scope <key>` first, then the running
+  loop's `LOOPS_LOOP_NAME`, then the route key as the final fallback — so each
+  router's `--max-active` is its own ceiling.
   Existing routers get correct scoping with no config change. `project` and
   `project_group` counts are unchanged: they remain cross-route anti-hog caps.
 - **Per-account attribution:** Codewith agent steps carry their subscription
@@ -41,10 +42,16 @@ and every step records the account it ran on.
   `--max-per-profile <K>` (default 2 for pools of two or more, `0` disables) defers
   a route when every pool account already has `K` running steps.
 
-Schema: additive migration `0008_work_item_route_scope` (nullable
-`workflow_work_items.route_scope`). `SCHEMA_USER_VERSION` is intentionally not
-bumped so an older binary can still open a database this migration touched
-(rollback-safe).
+Schema: additive sqlite migration `0008_work_item_route_scope` (nullable
+`workflow_work_items.route_scope`; its index is created only by the migration —
+never in the baseline DDL, which re-runs on every open and would crash pre-0008
+databases). `SCHEMA_USER_VERSION` is intentionally not bumped so an older binary
+can still open a database this migration touched (rollback-safe). Postgres gets
+the equivalent additive migration `0004_work_item_route_scope`; the released,
+checksummed `0002_workflows_goals` block is untouched so existing postgres
+ledgers keep verifying. Upgrade coverage: a real pre-0008 (0.4.11 schema)
+fixture database must open cleanly, gain the column + index, and keep its data;
+released postgres migration checksums are pinned in tests.
 
 ## 0.4.11 (2026-07-05)
 
