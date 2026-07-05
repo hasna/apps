@@ -11,6 +11,7 @@ import {
   getActiveProfileName,
   getBaseUrl,
   getCurrentProfile,
+  getDefaultBaseUrl,
   isSelectableProfile,
   listProfiles,
   loadProfile,
@@ -146,7 +147,7 @@ profileCmd
     const active = getActiveProfileName();
 
     console.log(chalk.bold(`Profile: ${profileName}${profileName === active ? chalk.green(' (active)') : ''}`));
-    info(`Base URL: ${config.baseUrl || getBaseUrl()}`);
+    info(`Base URL: ${config.baseUrl || getDefaultBaseUrl()}`);
     info(`Access token: ${config.accessToken ? chalk.green('configured') : chalk.gray('not set')}`);
   });
 
