@@ -222,6 +222,14 @@ function workflowWithAgentTimeouts(
   };
 }
 
+function agentLoopTargetWithTimeout(loop: Loop, timeoutMs: number | null): { changed: boolean; target: Extract<LoopTarget, { type: "agent" }> } {
+  if (loop.target.type !== "agent") throw new Error(`loop is not an agent loop: ${loop.name || loop.id}`);
+  const target = { ...loop.target, timeoutMs };
+  if (timeoutMs === null && target.idleTimeoutMs !== undefined) delete target.idleTimeoutMs;
+  const changed = loop.target.timeoutMs !== timeoutMs || (timeoutMs === null && loop.target.idleTimeoutMs !== undefined);
+  return { changed, target };
+}
+
 function workflowTimeoutMigrationName(workflow: WorkflowSpec, timeoutMs: number | null): string {
   const policy = timeoutMs === null ? "agent-timeout-unlimited" : `agent-timeout-${timeoutMs}ms`;
   const suffix = randomUUID().replace(/-/g, "").slice(0, 8);
@@ -1439,10 +1447,10 @@ workflows
 
 workflows
   .command("migrate-agent-timeouts")
-  .description("append-only migrate active workflow loops to a new agent timeout policy")
-  .option("--loop <idOrName>", "migrate only one loop instead of all active workflow loops")
+  .description("migrate workflow loops, or a direct agent loop selected with --loop, to a new agent timeout policy")
+  .option("--loop <idOrName>", "migrate only one loop; required for direct agent loops")
   .option("--timeout <duration>", "agent timeout policy; use none/unlimited for no timeout", "none")
-  .option("--apply", "create new workflow specs and retarget eligible loops")
+  .option("--apply", "create new workflow specs or update direct agent targets for eligible loops")
   .option("--archive-old", "archive old workflow specs after retargeting when no active loops still reference them")
   .action(runAction((opts) => {
     const store = new Store();
@@ -1458,8 +1466,47 @@ workflows
           rows.push({ loop: publicLoop(loop), status: "skipped", reason: "loop is archived" });
           continue;
         }
+        if (loop.target.type === "agent") {
+          const migration = agentLoopTargetWithTimeout(loop, timeoutMs);
+          if (!migration.changed) {
+            rows.push({ loop: publicLoop(loop), status: "skipped", reason: "agent timeout policy already matches" });
+            continue;
+          }
+          if (store.hasRunningRun(loop.id)) {
+            rows.push({ loop: publicLoop(loop), status: "blocked", reason: "loop has a running run; retry after it finishes" });
+            continue;
+          }
+
+          if (!opts.apply) {
+            rows.push({
+              loop: publicLoop(loop),
+              status: "would_update",
+              target: { ...migration.target, prompt: redact(migration.target.prompt) },
+              timeoutMs,
+            });
+            continue;
+          }
+
+          try {
+            const updated = store.updateAgentLoopTimeout(loop.id, timeoutMs);
+            rows.push({
+              loop: publicLoop(updated),
+              previousLoop: publicLoop(loop),
+              status: "updated",
+              timeoutMs,
+            });
+          } catch (error) {
+            rows.push({
+              loop: publicLoop(loop),
+              status: "blocked",
+              reason: migrationErrorReason(error),
+              timeoutMs,
+            });
+          }
+          continue;
+        }
         if (loop.target.type !== "workflow") {
-          rows.push({ loop: publicLoop(loop), status: "skipped", reason: "loop is not a workflow loop" });
+          rows.push({ loop: publicLoop(loop), status: "skipped", reason: "loop is not an agent or workflow loop" });
           continue;
         }
         const workflow = store.requireWorkflow(loop.target.workflowId);
@@ -1521,11 +1568,13 @@ workflows
         timeoutMs,
         total: rows.length,
         migrated: rows.filter((row) => row.status === "migrated").length,
+        updated: rows.filter((row) => row.status === "updated").length,
         wouldMigrate: rows.filter((row) => row.status === "would_migrate").length,
+        wouldUpdate: rows.filter((row) => row.status === "would_update").length,
         blocked: rows.filter((row) => row.status === "blocked").length,
         skipped: rows.filter((row) => row.status === "skipped").length,
       };
-      print({ summary, rows }, opts.apply ? `migrated=${summary.migrated} blocked=${summary.blocked} skipped=${summary.skipped}` : `would_migrate=${summary.wouldMigrate} blocked=${summary.blocked} skipped=${summary.skipped}`);
+      print({ summary, rows }, opts.apply ? `migrated=${summary.migrated} updated=${summary.updated} blocked=${summary.blocked} skipped=${summary.skipped}` : `would_migrate=${summary.wouldMigrate} would_update=${summary.wouldUpdate} blocked=${summary.blocked} skipped=${summary.skipped}`);
     } finally {
       store.close();
     }

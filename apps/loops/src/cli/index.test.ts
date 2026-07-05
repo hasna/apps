@@ -1193,6 +1193,123 @@ describe("loops CLI", () => {
     expect(JSON.parse(oldWorkflow.stdout).status).toBe("active");
   });
 
+  test("workflows migrate-agent-timeouts updates direct agent loops in place", () => {
+    const dataDir = freshDataDir("loops-cli-migrate-direct-agent-timeout-");
+    let loopId = "";
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      const loop = store.createLoop({
+        name: "finite-direct-agent-loop",
+        schedule: { type: "once", at: futureAt() },
+        target: {
+          type: "agent",
+          provider: "codewith",
+          prompt: "work",
+          cwd: "/tmp/direct-agent-repo",
+          model: "gpt-test",
+          authProfile: "account007",
+          addDirs: ["/tmp/direct-agent-extra"],
+          timeoutMs: 900_000,
+          idleTimeoutMs: 120_000,
+          permissionMode: "default",
+          sandbox: "workspace-write",
+          allowlist: { commands: ["todos"] },
+          preflight: { beforeRun: true },
+        },
+        overlap: "skip",
+        maxAttempts: 3,
+        leaseMs: 1_800_000,
+      });
+      loopId = loop.id;
+    } finally {
+      store.close();
+    }
+
+    const broadDryRun = runCli(dataDir, ["--json", "workflows", "migrate-agent-timeouts"]);
+    expect(broadDryRun.status).toBe(0);
+    expect(JSON.parse(broadDryRun.stdout).summary.total).toBe(0);
+
+    const dryRun = runCli(dataDir, ["--json", "workflows", "migrate-agent-timeouts", "--loop", loopId]);
+    expect(dryRun.status).toBe(0);
+    const dryRunValue = JSON.parse(dryRun.stdout);
+    expect(dryRunValue.summary.wouldUpdate).toBe(1);
+    expect(dryRunValue.rows[0].status).toBe("would_update");
+    expect(dryRunValue.rows[0].target.timeoutMs).toBeNull();
+    expect(dryRunValue.rows[0].target.idleTimeoutMs).toBeUndefined();
+
+    const shownAfterDryRun = runCli(dataDir, ["--json", "show", loopId]);
+    expect(shownAfterDryRun.status).toBe(0);
+    expect(JSON.parse(shownAfterDryRun.stdout).target.timeoutMs).toBe(900_000);
+
+    const applied = runCli(dataDir, ["--json", "workflows", "migrate-agent-timeouts", "--loop", loopId, "--apply"]);
+    expect(applied.status).toBe(0);
+    const appliedValue = JSON.parse(applied.stdout);
+    expect(appliedValue.summary.updated).toBe(1);
+    expect(appliedValue.rows[0].status).toBe("updated");
+
+    const shown = runCli(dataDir, ["--json", "show", loopId]);
+    expect(shown.status).toBe(0);
+    const shownValue = JSON.parse(shown.stdout);
+    expect(shownValue.target).toMatchObject({
+      type: "agent",
+      provider: "codewith",
+      cwd: "/tmp/direct-agent-repo",
+      model: "gpt-test",
+      authProfile: "account007",
+      addDirs: ["/tmp/direct-agent-extra"],
+      timeoutMs: null,
+      permissionMode: "default",
+      sandbox: "workspace-write",
+      allowlist: { commands: ["todos"] },
+      preflight: { beforeRun: true },
+    });
+    expect(shownValue.target.idleTimeoutMs).toBeUndefined();
+    expect(shownValue.overlap).toBe("skip");
+    expect(shownValue.maxAttempts).toBe(3);
+    expect(shownValue.leaseMs).toBe(1_800_000);
+  });
+
+  test("workflows migrate-agent-timeouts skips non-agent loops and blocks running direct agent loops", () => {
+    const dataDir = freshDataDir("loops-cli-migrate-direct-agent-guards-");
+    let commandLoopId = "";
+    let runningLoopId = "";
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      const commandLoop = store.createLoop({
+        name: "command-loop",
+        schedule: { type: "once", at: futureAt() },
+        target: { type: "command", command: "true" },
+      });
+      commandLoopId = commandLoop.id;
+
+      const runningLoop = store.createLoop({
+        name: "running-direct-agent-loop",
+        schedule: { type: "once", at: futureAt() },
+        target: { type: "agent", provider: "codewith", prompt: "work", timeoutMs: 900_000 },
+      });
+      runningLoopId = runningLoop.id;
+      const claim = store.claimRun(runningLoop, runningLoop.nextRunAt!, "test-runner");
+      expect(claim?.run.status).toBe("running");
+    } finally {
+      store.close();
+    }
+
+    const skipped = runCli(dataDir, ["--json", "workflows", "migrate-agent-timeouts", "--loop", commandLoopId]);
+    expect(skipped.status).toBe(0);
+    const skippedValue = JSON.parse(skipped.stdout);
+    expect(skippedValue.summary.skipped).toBe(1);
+    expect(skippedValue.rows[0].reason).toBe("loop is not an agent or workflow loop");
+
+    const blocked = runCli(dataDir, ["--json", "workflows", "migrate-agent-timeouts", "--loop", runningLoopId]);
+    expect(blocked.status).toBe(0);
+    const blockedValue = JSON.parse(blocked.stdout);
+    expect(blockedValue.summary.blocked).toBe(1);
+    expect(blockedValue.rows[0].reason).toBe("loop has a running run; retry after it finishes");
+
+    const shown = runCli(dataDir, ["--json", "show", runningLoopId]);
+    expect(JSON.parse(shown.stdout).target.timeoutMs).toBe(900_000);
+  });
+
   test("workflows migrate-goal-wrappers removes redundant workflow goals append-only", () => {
     const dataDir = freshDataDir("loops-cli-migrate-goal-wrappers-");
     const promptFile = join(dataDir, "worker-prompt.md");

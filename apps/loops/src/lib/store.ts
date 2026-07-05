@@ -1473,6 +1473,46 @@ export class Store {
     }
   }
 
+  updateAgentLoopTimeout(idOrName: string, timeoutMs: TimeoutMs, opts: DaemonLeaseFence = {}): Loop {
+    const updated = (opts.now ?? new Date()).toISOString();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const current = this.requireUniqueLoop(idOrName);
+      if (current.archivedAt) throw new LoopArchivedError(current.name || current.id);
+      if (current.target.type !== "agent") throw new Error(`loop is not an agent loop: ${idOrName}`);
+      if (this.hasRunningRun(current.id)) throw new Error(`refusing to update running loop: ${current.id}`);
+      const target = { ...current.target, timeoutMs };
+      if (timeoutMs === null && target.idleTimeoutMs !== undefined) delete target.idleTimeoutMs;
+      const res = this.db
+        .query(
+          `UPDATE loops SET target_json=$target, updated_at=$updated
+           WHERE id=$id
+             AND ($daemonLeaseId IS NULL OR EXISTS (
+               SELECT 1 FROM daemon_lease WHERE id=$daemonLeaseId AND expires_at > $now
+             ))`,
+        )
+        .run({
+          $id: current.id,
+          $target: JSON.stringify(target),
+          $updated: updated,
+          $daemonLeaseId: opts.daemonLeaseId ?? null,
+          $now: updated,
+        });
+      if (res.changes !== 1) throw new Error("daemon lease lost");
+      this.db.exec("COMMIT");
+      const after = this.getLoop(current.id);
+      if (!after) throw new Error(`loop not found after timeout update: ${current.id}`);
+      return after;
+    } catch (error) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* transaction may already be closed */
+      }
+      throw error;
+    }
+  }
+
   createAndRetargetWorkflowLoop(
     idOrName: string,
     workflowInput: CreateWorkflowInput,
