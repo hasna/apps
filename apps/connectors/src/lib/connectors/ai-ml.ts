@@ -920,6 +920,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "music", "generation"],
   },
   {
+    name: "usecrow",
+    displayName: "Crow Platform",
+    description: "Embedded agent platform API (chat, conversations, workflows, browser-use sessions)",
+    category: "AI & ML",
+    tags: ["ai", "agents", "embedded", "chat"],
+  },
+  {
     name: "voicit",
     displayName: "Voicit",
     description: "AI meeting transcription and note-taking",
