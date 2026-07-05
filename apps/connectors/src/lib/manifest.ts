@@ -19,6 +19,7 @@ import {
 } from "./runner.js";
 import { getAuthType, type AuthType } from "../server/auth.js";
 import {
+  getSlugAliasesForCanonical,
   legacyConnectorName,
   normalizeConnectorName,
   resolveConnectorConfigPaths,
@@ -79,7 +80,10 @@ export interface ConnectorCapabilityManifestOptions extends ConnectorCapabilityO
 function buildAliases(name: string): string[] {
   const canonicalName = normalizeConnectorName(name);
   const legacyName = legacyConnectorName(canonicalName);
-  return canonicalName === legacyName ? [canonicalName] : [canonicalName, legacyName];
+  const slugAliases = getSlugAliasesForCanonical(canonicalName);
+  const baseAliases =
+    canonicalName === legacyName ? [canonicalName] : [canonicalName, legacyName];
+  return [...new Set([...baseAliases, ...slugAliases])];
 }
 
 async function loadOperations(

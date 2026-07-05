@@ -31,6 +31,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["research", "papers", "academic"],
   },
   {
+    name: "zenodo",
+    displayName: "Zenodo",
+    description: "Open research data repository — search records and manage deposits",
+    category: "Data & Analytics",
+    tags: ["research", "open-access", "datasets"],
+  },
+  {
     name: "brandsight",
     displayName: "Brandsight",
     description: "Brand monitoring",
@@ -519,6 +526,13 @@ export const connectors: ConnectorMeta[] = [
     description: "Fitness tracking and social platform for athletes and activities",
     category: "Data & Analytics",
     tags: ["fitness", "running", "cycling", "activities", "sports"],
+  },
+  {
+    name: "typesense",
+    displayName: "Typesense",
+    description: "Open-source search engine for full-text, faceted, and vector search",
+    category: "Data & Analytics",
+    tags: ["search", "indexing", "vector", "full-text"],
   },
   {
     name: "uproc",
