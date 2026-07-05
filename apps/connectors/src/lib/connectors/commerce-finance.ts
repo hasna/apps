@@ -388,6 +388,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["nft", "blockchain", "digital collectibles", "tokens", "web3"],
   },
   {
+    name: "truelayer",
+    displayName: "TrueLayer",
+    description: "Open banking platform",
+    category: "Commerce & Finance",
+    tags: ["banking", "fintech", "open-banking", "payments"],
+  },
+  {
     name: "whal3s",
     displayName: "Whal3s",
     description: "NFT utility and Web3 engagement platform",
