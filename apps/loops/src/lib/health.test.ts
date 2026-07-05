@@ -107,6 +107,38 @@ describe("loop health classification", () => {
     }
   });
 
+  test("health scan applies the limit after filtering included statuses", () => {
+    const store = new Store(":memory:");
+    try {
+      const active = store.createLoop({
+        name: "included-active",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "true" },
+      });
+      const expired = store.createLoop({
+        name: "excluded-expired",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "true" },
+      });
+      const paused = store.createLoop({
+        name: "included-paused",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "true" },
+      });
+      store.updateLoop(expired.id, { status: "expired" });
+      store.updateLoop(paused.id, { status: "paused" });
+
+      const scan = buildHealthScan(store, { includeStatuses: ["active", "paused"], limit: 2 });
+
+      expect(scan.counts.loops).toBe(2);
+      expect(scan.counts.active).toBe(1);
+      expect(scan.counts.paused).toBe(1);
+      expect(scan.health.expectations.map((expectation) => expectation.loop.id)).toEqual([active.id, paused.id]);
+    } finally {
+      store.close();
+    }
+  });
+
   test("health scan turns doctor preflight checks into bounded deduped findings", () => {
     const store = new Store(":memory:");
     try {

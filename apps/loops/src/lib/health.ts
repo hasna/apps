@@ -291,6 +291,20 @@ function statusCounts(loops: Loop[]): Pick<LoopsHealthScan["counts"], "loops" | 
   };
 }
 
+function compareLoopsForScan(left: Loop, right: Loop): number {
+  const statusOrder = left.status.localeCompare(right.status);
+  if (statusOrder !== 0) return statusOrder;
+  return (left.nextRunAt ?? "").localeCompare(right.nextRunAt ?? "");
+}
+
+function scanLoops(store: Store, statuses: LoopStatus[], opts: Pick<BuildHealthScanOptions, "includeArchived" | "limit">): Loop[] {
+  const limit = opts.limit ?? DEFAULT_SCAN_LIMIT;
+  return statuses
+    .flatMap((status) => store.listLoops({ includeArchived: opts.includeArchived, status, limit }))
+    .sort(compareLoopsForScan)
+    .slice(0, limit);
+}
+
 function healthReportForLoops(store: Store, loops: Loop[], generatedAt: string): LoopsHealthReport {
   const expectations = loops.map((loop) => expectationForLoop(store, loop));
   const classifications = Object.fromEntries(CLASSIFICATIONS.map((key) => [key, 0])) as Record<RunFailureClassification, number>;
@@ -856,10 +870,7 @@ export function buildHealthScan(store: Store, opts: BuildHealthScanOptions = {})
   const generatedAt = (opts.now ?? new Date()).toISOString();
   const now = opts.now ?? new Date(generatedAt);
   const includeStatuses = [...includedStatusSet(opts.includeStatuses)];
-  const statusFilter = includedStatusSet(includeStatuses);
-  const loops = store
-    .listLoops({ includeArchived: opts.includeArchived, limit: opts.limit ?? DEFAULT_SCAN_LIMIT })
-    .filter((loop) => statusFilter.has(loop.status));
+  const loops = scanLoops(store, includeStatuses, opts);
   const health = healthReportForLoops(store, loops, generatedAt);
   const expectationsByLoopId = new Map(health.expectations.map((expectation) => [expectation.loop.id, expectation]));
   const loopsById = new Map(loops.map((loop) => [loop.id, loop]));
