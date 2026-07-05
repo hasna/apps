@@ -395,6 +395,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["stocks", "market-data", "finance", "api"],
   },
   {
+    name: "twelve-data",
+    displayName: "Twelve Data",
+    description: "Real-time and historical stock, forex, and crypto market data",
+    category: "Data & Analytics",
+    tags: ["stocks", "forex", "crypto", "market-data", "finance"],
+  },
+  {
     name: "metabase",
     displayName: "Metabase",
     description: "Open-source business intelligence and analytics",
