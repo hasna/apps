@@ -38,6 +38,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["banking", "startup"],
   },
   {
+    name: "unit",
+    displayName: "Unit",
+    description: "Banking-as-a-service",
+    category: "Commerce & Finance",
+    tags: ["banking", "fintech", "payments"],
+  },
+  {
     name: "pandadoc",
     displayName: "PandaDoc",
     description: "Document signing and proposals",
