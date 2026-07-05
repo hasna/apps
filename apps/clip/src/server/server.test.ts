@@ -123,7 +123,9 @@ describe("HTTP server routes", () => {
           activeWindow: {
             title: "Window",
             outputPath: join(dir, "window.png"),
+            note: `terminal editing ${join(dir, "window.log")}`,
           },
+          note: `terminal editing ${join(dir, "notes.txt")}`,
           safe: "visible",
         },
       });
@@ -137,6 +139,8 @@ describe("HTTP server routes", () => {
       const payloadText = await response.text();
       const payload = JSON.parse(payloadText) as { metadata: Record<string, unknown> };
       expect(payload.metadata.safe).toBe("visible");
+      expect(payload.metadata.note).toBe("[redacted]");
+      expect(payload.metadata.activeWindow).toEqual({ title: "Window", note: "[redacted]" });
       expect("path" in payload.metadata).toBe(false);
       expect(payloadText).not.toContain(dir);
       expect(payloadText).not.toContain("/capture.png");
