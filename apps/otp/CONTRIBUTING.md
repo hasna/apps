@@ -4,10 +4,10 @@ Use Bun for local development:
 
 ```bash
 bun install
-bun run typecheck
-bun test
-bun run build
+bun run check
 ```
+
+`bun run check` runs typecheck, tests, and build in that order (same as `prepublishOnly`).
 
 Guidelines:
 
