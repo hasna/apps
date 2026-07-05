@@ -521,6 +521,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["data", "enrichment", "processing"],
   },
   {
+    name: "velum-labs",
+    displayName: "Velum Labs",
+    description: "Data lab platform",
+    category: "Data & Analytics",
+    tags: ["analytics", "data"],
+  },
+  {
     name: "watchsignals",
     displayName: "WatchSignals",
     description: "Luxury watch market data and price tracking",
