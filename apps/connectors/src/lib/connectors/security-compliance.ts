@@ -157,6 +157,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["security", "scanning", "threat-intelligence"],
   },
   {
+    name: "veracode",
+    displayName: "Veracode",
+    description: "Application security platform for static, dynamic, and software composition analysis",
+    category: "Security & Compliance",
+    tags: ["vulnerability-management", "appsec", "security", "scanning"],
+  },
+  {
     name: "virustotal",
     displayName: "VirusTotal",
     description: "File and URL malware scanning and threat intelligence",
