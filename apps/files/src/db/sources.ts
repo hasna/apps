@@ -2,7 +2,7 @@ import { getDb } from "./database.js";
 import { nanoid } from "nanoid";
 import { appendKnowledgeSourceOutboxEvent } from "./knowledge-outbox.js";
 import type { KnowledgeSourceOutboxEventType } from "../types/index.js";
-import type { Source, SourceType, SourceConfig } from "../types/index.js";
+import type { Source, SourceType, SourceConfig, S3Config } from "../types/index.js";
 
 interface SourceRow {
   id: string;
@@ -29,7 +29,7 @@ function toSource(row: SourceRow): Source {
     bucket: row.bucket ?? undefined,
     prefix: row.prefix ?? undefined,
     region: row.region ?? undefined,
-    config: JSON.parse(row.config) as SourceConfig,
+    config: sanitizeSourceConfigJson(row.config),
     enabled: row.enabled === 1,
     last_indexed_at: row.last_indexed_at ?? undefined,
   };
@@ -47,6 +47,7 @@ export function createSource(input: {
 }): Source {
   const db = getDb();
   const id = `src_${nanoid(10)}`;
+  const config = prepareSourceConfigForStorage(input.type, input.config);
   db.run(
     `INSERT INTO sources (id, name, type, path, bucket, prefix, region, config, machine_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -58,7 +59,7 @@ export function createSource(input: {
       input.bucket ?? null,
       input.prefix ?? null,
       input.region ?? null,
-      JSON.stringify(input.config ?? {}),
+      JSON.stringify(config),
       input.machine_id,
     ]
   );
@@ -98,11 +99,14 @@ export function updateSource(
 ): Source | null {
   const db = getDb();
   const before = getSource(id);
+  const config = updates.config !== undefined
+    ? prepareSourceConfigForStorage(before?.type ?? "s3", updates.config)
+    : undefined;
   const fields: string[] = ["updated_at = datetime('now')"];
   const values: unknown[] = [];
   if (updates.name !== undefined) { fields.push("name = ?"); values.push(updates.name); }
   if (updates.enabled !== undefined) { fields.push("enabled = ?"); values.push(updates.enabled ? 1 : 0); }
-  if (updates.config !== undefined) { fields.push("config = ?"); values.push(JSON.stringify(updates.config)); }
+  if (updates.config !== undefined) { fields.push("config = ?"); values.push(JSON.stringify(config)); }
   if (updates.path !== undefined) { fields.push("path = ?"); values.push(updates.path); }
   if (updates.bucket !== undefined) { fields.push("bucket = ?"); values.push(updates.bucket); }
   if (updates.prefix !== undefined) { fields.push("prefix = ?"); values.push(updates.prefix); }
@@ -112,6 +116,49 @@ export function updateSource(
   const after = getSource(id);
   if (after) emitSourceOutboxEvent(classifySourceChange(before, after, updates), before, after, updates);
   return after;
+}
+
+export function sanitizeSourceConfig(config: SourceConfig | undefined): SourceConfig {
+  if (!config || typeof config !== "object" || Array.isArray(config)) return {};
+  const copy = { ...config } as Record<string, unknown>;
+  delete copy.accessKeyId;
+  delete copy.secretAccessKey;
+  delete copy.sessionToken;
+  return copy as SourceConfig;
+}
+
+export function sanitizeSourceConfigJson(raw: unknown): SourceConfig {
+  if (typeof raw === "string") {
+    try {
+      return sanitizeSourceConfig(JSON.parse(raw) as SourceConfig);
+    } catch {
+      return {};
+    }
+  }
+  return sanitizeSourceConfig(raw as SourceConfig | undefined);
+}
+
+export function sanitizeSourceConfigJsonString(raw: unknown): string {
+  return JSON.stringify(sanitizeSourceConfigJson(raw));
+}
+
+function prepareSourceConfigForStorage(type: SourceType, config: SourceConfig | undefined): SourceConfig {
+  if (type === "s3") assertNoStaticS3Credentials(config);
+  return sanitizeSourceConfig(config);
+}
+
+function assertNoStaticS3Credentials(config: SourceConfig | undefined): void {
+  const s3Config = config as S3Config | undefined;
+  if (!s3Config) return;
+  if (hasConfiguredSecretValue(s3Config.accessKeyId)
+    || hasConfiguredSecretValue(s3Config.secretAccessKey)
+    || hasConfiguredSecretValue(s3Config.sessionToken)) {
+    throw new Error("S3 source config must not contain static credentials. Use an AWS profile or the default AWS provider chain.");
+  }
+}
+
+function hasConfiguredSecretValue(value: unknown): boolean {
+  return typeof value === "string" ? value.trim().length > 0 : value !== undefined && value !== null;
 }
 
 export function deleteSource(id: string): boolean {

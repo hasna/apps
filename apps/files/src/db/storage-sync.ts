@@ -9,6 +9,7 @@ import { getStorageConfig, getStorageConnectionString, getStorageDatabaseUrlEnvN
 import { PgAdapterAsync } from "./remote-storage.js";
 import { PG_MIGRATIONS } from "./pg-migrations.js";
 import { getEvidenceStorageOptions } from "../lib/evidence.js";
+import { sanitizeSourceConfigJsonString } from "./sources.js";
 
 type Row = Record<string, unknown>;
 
@@ -38,6 +39,44 @@ export interface SyncResult {
   errors: string[];
 }
 
+export interface StorageRuntimeContract {
+  local_index: {
+    provider: "sqlite";
+    db_path: string;
+    role: "local_metadata_index";
+    writes: "local_sqlite";
+  };
+  remote_metadata: {
+    provider: "postgres";
+    mode: string;
+    configured: boolean;
+    enabled: boolean;
+    database_url_env?: string;
+    sync: "explicit_migrate_push_pull_sync";
+    writes: "none_from_status" | "explicit_postgres_sync_commands";
+  };
+  object_bytes: {
+    provider: "s3" | "local";
+    configured: boolean;
+    role: "durable_object_bytes";
+    bucket?: string;
+    region?: string;
+    prefix?: string;
+    endpoint_configured?: boolean;
+    force_path_style?: boolean;
+    credential_source: "aws_profile" | "default_provider_chain" | "local_filesystem";
+    credential_status: "not_checked" | "not_applicable";
+    profile_configured?: boolean;
+    local_root?: string;
+    writes: "none_from_status_or_metadata_sync" | "explicit_object_store_apis";
+  };
+  boundary: {
+    storage_status_mutates_remote: false;
+    metadata_sync_moves_object_bytes: false;
+    local_sqlite_replaced_by_remote: false;
+  };
+}
+
 export interface StorageStatus {
   mode: string;
   enabled: boolean;
@@ -51,8 +90,14 @@ export interface StorageStatus {
     region?: string;
     prefix?: string;
     endpoint?: string;
+    endpoint_configured?: boolean;
+    force_path_style?: boolean;
+    credential_source?: "aws_profile" | "default_provider_chain" | "local_filesystem";
+    credential_status?: "not_checked" | "not_applicable";
+    profile_configured?: boolean;
     local_root?: string;
   };
+  runtime: StorageRuntimeContract;
   tables: Array<{ table: string; rows: number }>;
 }
 
@@ -141,7 +186,7 @@ function quoteId(value: string): string {
 }
 
 function toPgRow(table: string, row: Row): Row {
-  const copy = { ...row };
+  const copy = sanitizeStorageRowForSync(table, row);
   for (const column of BOOLEAN_COLUMNS[table] ?? []) {
     if (column in copy) copy[column] = Boolean(copy[column]);
   }
@@ -149,9 +194,17 @@ function toPgRow(table: string, row: Row): Row {
 }
 
 function toSqliteRow(table: string, row: Row): Row {
-  const copy = { ...row };
+  const copy = sanitizeStorageRowForSync(table, row);
   for (const column of BOOLEAN_COLUMNS[table] ?? []) {
     if (column in copy) copy[column] = copy[column] ? 1 : 0;
+  }
+  return copy;
+}
+
+export function sanitizeStorageRowForSync(table: string, row: Row): Row {
+  const copy = { ...row };
+  if (table === "sources" && "config" in copy) {
+    copy.config = sanitizeSourceConfigJsonString(copy.config);
   }
   return copy;
 }
@@ -254,26 +307,87 @@ export function getStorageStatus(db: Database = getDb()): StorageStatus {
   const config = getStorageConfig();
   const objectStorage = getEvidenceStorageOptions();
   const databaseUrlEnv = getStorageDatabaseUrlEnvName();
+  const dbPath = getDbPath();
+  const remoteConfigured = Boolean(databaseUrlEnv || (config.rds.host && config.rds.username));
+  const remoteEnabled = config.mode === "hybrid" || config.mode === "remote";
+  const objectStorageConfigured = objectStorage.provider === "local"
+    ? Boolean(objectStorage.localRoot)
+    : Boolean(objectStorage.bucket && objectStorage.region);
+  const objectCredentialSource: StorageRuntimeContract["object_bytes"]["credential_source"] = objectStorage.provider === "local"
+    ? "local_filesystem"
+    : objectStorage.profile
+      ? "aws_profile"
+      : "default_provider_chain";
+  const objectStorageStatus = objectStorage.provider === "s3" ? {
+    provider: objectStorage.provider,
+    configured: objectStorageConfigured,
+    bucket: objectStorage.bucket,
+    region: objectStorage.region,
+    prefix: objectStorage.prefix || undefined,
+    endpoint: objectStorage.endpoint || undefined,
+    endpoint_configured: Boolean(objectStorage.endpoint),
+    force_path_style: Boolean(objectStorage.forcePathStyle),
+    credential_source: objectCredentialSource,
+    credential_status: "not_checked" as const,
+    profile_configured: Boolean(objectStorage.profile),
+  } : {
+    provider: objectStorage.provider,
+    configured: objectStorageConfigured,
+    local_root: objectStorage.localRoot,
+    credential_source: objectCredentialSource,
+    credential_status: "not_applicable" as const,
+  };
 
   return {
     mode: config.mode,
-    enabled: config.mode === "hybrid" || config.mode === "remote",
-    db_path: getDbPath(),
-    remote_configured: Boolean(databaseUrlEnv || (config.rds.host && config.rds.username)),
+    enabled: remoteEnabled,
+    db_path: dbPath,
+    remote_configured: remoteConfigured,
     database_url_env: databaseUrlEnv,
-    object_storage: {
-      provider: objectStorage.provider,
-      configured: objectStorage.provider === "local"
-        ? Boolean(objectStorage.localRoot)
-        : Boolean(objectStorage.bucket && objectStorage.region),
-      ...(objectStorage.provider === "s3" ? {
+    object_storage: objectStorageStatus,
+    runtime: {
+      local_index: {
+        provider: "sqlite",
+        db_path: dbPath,
+        role: "local_metadata_index",
+        writes: "local_sqlite",
+      },
+      remote_metadata: {
+        provider: "postgres",
+        mode: config.mode,
+        configured: remoteConfigured,
+        enabled: remoteEnabled,
+        database_url_env: databaseUrlEnv,
+        sync: "explicit_migrate_push_pull_sync",
+        writes: remoteEnabled ? "explicit_postgres_sync_commands" : "none_from_status",
+      },
+      object_bytes: objectStorage.provider === "s3" ? {
+        provider: "s3",
+        configured: objectStorageConfigured,
+        role: "durable_object_bytes",
         bucket: objectStorage.bucket,
         region: objectStorage.region,
         prefix: objectStorage.prefix || undefined,
-        endpoint: objectStorage.endpoint || undefined,
+        endpoint_configured: Boolean(objectStorage.endpoint),
+        force_path_style: Boolean(objectStorage.forcePathStyle),
+        credential_source: objectCredentialSource,
+        credential_status: "not_checked",
+        profile_configured: Boolean(objectStorage.profile),
+        writes: "explicit_object_store_apis",
       } : {
+        provider: "local",
+        configured: objectStorageConfigured,
+        role: "durable_object_bytes",
         local_root: objectStorage.localRoot,
-      }),
+        credential_source: objectCredentialSource,
+        credential_status: "not_applicable",
+        writes: "explicit_object_store_apis",
+      },
+      boundary: {
+        storage_status_mutates_remote: false,
+        metadata_sync_moves_object_bytes: false,
+        local_sqlite_replaced_by_remote: false,
+      },
     },
     tables: STORAGE_TABLES.map((table) => {
       try {

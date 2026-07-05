@@ -21,6 +21,7 @@ export {
   pushStorageChanges,
   runStorageMigrations,
   syncStorageChanges,
+  type StorageRuntimeContract,
   type StorageStatus,
   type SyncResult,
   type GoogleDriveMetadataImportResult,

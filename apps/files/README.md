@@ -226,14 +226,27 @@ boundary and object layout.
 
 Files stores metadata locally in SQLite under the Hasna data directory. Remote
 metadata sync uses this repo's PostgreSQL schema directly, without depending on
-the shared cloud package.
+the shared cloud package. The cloud runtime has three separate boundaries:
+
+- local index: SQLite remains the local metadata index and cache;
+- remote metadata: PostgreSQL is updated only by explicit `storage migrate`,
+  `storage push`, `storage pull`, or `storage sync` commands;
+- object bytes: S3-compatible storage is used only by explicit S3, evidence,
+  Google Drive import, upload, download, and signed URL APIs.
+
+`files storage status` is diagnostic only. It does not contact AWS, mutate
+PostgreSQL, migrate object bytes, or replace the local SQLite index.
 
 ```bash
 export HASNA_FILES_STORAGE_MODE=hybrid
-export HASNA_FILES_DATABASE_URL=postgres://user:pass@host:5432/files
+export HASNA_FILES_DATABASE_URL="$FILES_DATABASE_URL"
 export HASNA_FILES_S3_BUCKET=hasna-xyz-opensource-files-prod
 export HASNA_FILES_S3_PREFIX=objects
 export HASNA_FILES_AWS_REGION=us-east-1
+export HASNA_FILES_AWS_PROFILE=files-sync
+# Optional for S3-compatible stores such as MinIO/R2-compatible endpoints:
+export HASNA_FILES_S3_ENDPOINT=https://s3-compatible.example.test
+export HASNA_FILES_S3_FORCE_PATH_STYLE=1
 
 files storage status
 files storage push --tables machines,sources,files
@@ -244,8 +257,32 @@ files storage sync
 `HASNA_FILES_STORAGE_MODE` accepts `local`, `hybrid`, or `remote`. The older
 `HASNA_FILES_EVIDENCE_*` S3 settings are still supported for evidence uploads,
 but `HASNA_FILES_S3_BUCKET`, `HASNA_FILES_S3_PREFIX`, `HASNA_FILES_AWS_REGION`,
-and `HASNA_FILES_S3_ENDPOINT` are the canonical repo-level object storage
-aliases.
+`HASNA_FILES_AWS_PROFILE`, `HASNA_FILES_S3_ENDPOINT`, and
+`HASNA_FILES_S3_FORCE_PATH_STYLE` are the canonical repo-level object storage
+aliases. Status output reports credential source as a no-secret diagnostic
+(`aws_profile` or `default_provider_chain`) and never prints credential values
+or database URLs. It also reports credential checks as `not_checked`; readiness
+requires an explicit mocked, dry-run, or approved live operation outside
+`storage status`.
+
+Do not store static S3 access keys in `files sources`. S3 source config accepts
+named profiles, endpoints, and path-style settings only. Use platform secret
+injection, AWS environment provider chain, or a named AWS profile for
+credentials.
+
+Migration plan for hosted runtime:
+
+1. Run `files storage status --json` with only env-var names/profile names
+   configured and verify `runtime.boundary` stays false for remote mutation and
+   byte migration.
+2. Apply PostgreSQL metadata migrations with `files storage migrate`; this
+   changes schema only, not S3 bytes.
+3. Push/pull metadata tables deliberately with `files storage push`, `pull`, or
+   `sync`.
+4. Move or create object bytes only through the S3/evidence/import APIs with
+   mocked or approved credentials. Live bucket changes, production migrations,
+   secret creation, deploys, or terraform changes require a separate approval
+   task.
 
 ## Knowledge Source Contract
 

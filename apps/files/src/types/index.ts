@@ -11,6 +11,7 @@ export interface S3Config {
   sessionToken?: string;
   endpoint?: string;
   profile?: string;
+  forcePathStyle?: boolean;
 }
 
 export interface GoogleDriveExportFormats {

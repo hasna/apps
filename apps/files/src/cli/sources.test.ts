@@ -56,7 +56,7 @@ describe("sources CLI", () => {
     });
   });
 
-  test("rejects mixing AWS profile and static S3 credentials", () => {
+  test("rejects static S3 credentials instead of storing them", () => {
     const result = Bun.spawnSync({
       cmd: [
         "bun",
@@ -65,8 +65,6 @@ describe("sources CLI", () => {
         "sources",
         "add",
         "s3://hasna-xyz-prod-files",
-        "--aws-profile",
-        "hasna-xyz-infra",
         "--access-key",
         "static-access",
         "--secret-key",
@@ -78,7 +76,48 @@ describe("sources CLI", () => {
     });
 
     expect(result.exitCode).toBe(1);
-    expect(new TextDecoder().decode(result.stderr)).toContain("Use either --aws-profile");
+    expect(new TextDecoder().decode(result.stderr)).toContain("Static S3 credentials are not stored");
+  });
+
+  test("persists S3-compatible endpoint diagnostics without static secrets", () => {
+    const env = cliEnv();
+    const add = Bun.spawnSync({
+      cmd: [
+        "bun",
+        "run",
+        cliPath,
+        "sources",
+        "add",
+        "s3://example-files/objects",
+        "--region",
+        "us-east-1",
+        "--endpoint",
+        "https://s3-compatible.example.test",
+        "--force-path-style",
+      ],
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+
+    expect(add.exitCode).toBe(0);
+
+    const list = Bun.spawnSync({
+      cmd: ["bun", "run", cliPath, "sources", "list", "--json"],
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const sources = JSON.parse(new TextDecoder().decode(list.stdout)) as Array<{
+      config?: { endpoint?: string; forcePathStyle?: boolean; accessKeyId?: string; secretAccessKey?: string };
+    }>;
+
+    expect(sources[0]?.config).toMatchObject({
+      endpoint: "https://s3-compatible.example.test",
+      forcePathStyle: true,
+    });
+    expect(sources[0]?.config?.accessKeyId).toBeUndefined();
+    expect(sources[0]?.config?.secretAccessKey).toBeUndefined();
   });
 
   test("bootstraps the legacy prod-emails alias with canonical files bucket defaults", () => {

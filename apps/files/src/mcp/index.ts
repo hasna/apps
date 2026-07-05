@@ -287,12 +287,10 @@ registerTool("add_source", "Add a local folder or S3 bucket as an indexed source
   region: z.string().optional().describe("AWS region"),
   name: z.string().optional().describe("Human-readable source name"),
   config: z.object({
-    accessKeyId: z.string().optional(),
-    secretAccessKey: z.string().optional(),
-    sessionToken: z.string().optional(),
     profile: z.string().optional(),
     endpoint: z.string().optional(),
-  }).optional().describe("S3 credentials or AWS named profile (optional — uses env/default chain if omitted)"),
+    forcePathStyle: z.boolean().optional(),
+  }).strict().optional().describe("S3 named profile/endpoint settings only. Static credentials are rejected; use env/default chain or an AWS profile."),
 }, async ({ type, path, bucket, prefix, region, name, config }) => {
   const machine = getCurrentMachine();
   const source = createSource({

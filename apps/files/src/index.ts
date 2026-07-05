@@ -7,6 +7,7 @@ export { applyPgMigrations } from "./db/pg-migrate.js";
 export { PgAdapterAsync } from "./db/remote-storage.js";
 export { getStorageConfig, getStorageConnectionString, getStorageDatabaseUrlEnvName, STORAGE_CONFIG_PATH } from "./db/storage-config.js";
 export { STORAGE_TABLES, DEFAULT_GOOGLE_DRIVE_CANONICAL_MAPPING_PATH, applyGoogleDriveCanonicalMapping, getStoragePg, getStorageStatus, importGoogleDriveMetadata, parseStorageTables, pullStorageChanges, pushStorageChanges, runStorageMigrations, syncStorageChanges } from "./db/storage-sync.js";
+export type { StorageRuntimeContract, StorageStatus, SyncResult, GoogleDriveMetadataImportResult } from "./db/storage-sync.js";
 export { getCurrentMachine, listMachines, getMachine, upsertMachine } from "./db/machines.js";
 export { createSource, getSource, listSources, updateSource, deleteSource, markSourceIndexed } from "./db/sources.js";
 export { buildS3ObjectIdentity, buildS3ObjectResolverContract, findS3ObjectRecordForStorage, getS3ObjectRecord, listS3ObjectRecords, upsertS3ObjectRecord } from "./db/s3-objects.js";
@@ -28,7 +29,8 @@ export { logActivity, getFileHistory, getAgentActivity, getSessionActivity } fro
 export { indexLocalSource } from "./lib/indexer.js";
 export { listGoogleDriveProfiles, listGoogleDriveProfileStatuses, listGoogleDriveSharedDrives, listGoogleDriveItems, preflightGoogleDriveSource, syncGoogleDriveSource } from "./lib/google-drive.js";
 export { createConnectorProfileGoogleDriveClient } from "./lib/google-drive-client.js";
-export { indexS3Source, downloadFromS3, uploadToS3, uploadBufferToS3, deleteFromS3, headS3Object } from "./lib/s3.js";
+export { indexS3Source, downloadFromS3, uploadToS3, uploadBufferToS3, deleteFromS3, headS3Object, createS3ClientConfig, describeS3ClientConfig } from "./lib/s3.js";
+export type { S3ClientConfigDiagnostics, S3CredentialSource } from "./lib/s3.js";
 export { createEvidenceUploadIntent, uploadEvidenceFile, completeEvidenceUpload, linkEvidenceAsset, signEvidenceDownload, verifyEvidenceAsset, buildEvidenceObjectKey, getEvidenceStorageOptions } from "./lib/evidence.js";
 export { downloadResolvedFileObject, resolveFileObject, resolvedFileObjectSummary } from "./lib/file-object.js";
 export { extractTextFromBuffer, extractTextFromFile, isExtractableTextMime } from "./lib/extraction.js";

@@ -20,6 +20,7 @@ import { upsertFile, listFiles } from "../db/files.js";
 import { getDb } from "../db/database.js";
 import { markSourceIndexed } from "../db/sources.js";
 import { upsertS3ObjectRecord } from "../db/s3-objects.js";
+import { isMissingS3ObjectError } from "../s3.js";
 import type { Source, IndexStats, S3Config } from "../types/index.js";
 import type { StreamingBlobPayloadInputTypes } from "@smithy/types";
 
@@ -29,11 +30,28 @@ export function setS3CredentialProviderFactoryForTests(factory?: typeof fromIni)
   credentialProviderFactory = factory ?? fromIni;
 }
 
+export type S3CredentialSource =
+  | "static_config"
+  | "aws_profile"
+  | "default_provider_chain";
+
+export interface S3ClientConfigDiagnostics {
+  region: string;
+  endpoint_configured: boolean;
+  force_path_style: boolean;
+  credential_source: S3CredentialSource;
+  profile_configured: boolean;
+  static_access_key_configured: boolean;
+  session_token_configured: boolean;
+}
+
 export function createS3ClientConfig(source: Source): S3ClientConfig {
   const cfg = source.config as S3Config;
+  validateS3CredentialConfig(cfg);
   return {
     region: source.region ?? "us-east-1",
     ...(cfg.endpoint ? { endpoint: cfg.endpoint } : {}),
+    ...(cfg.forcePathStyle !== undefined ? { forcePathStyle: cfg.forcePathStyle } : {}),
     ...(cfg.accessKeyId
       ? {
           credentials: {
@@ -45,6 +63,23 @@ export function createS3ClientConfig(source: Source): S3ClientConfig {
       : cfg.profile
         ? { credentials: credentialProviderFactory({ profile: cfg.profile }) }
         : {}),
+  };
+}
+
+export function describeS3ClientConfig(source: Source): S3ClientConfigDiagnostics {
+  const cfg = source.config as S3Config;
+  return {
+    region: source.region ?? "us-east-1",
+    endpoint_configured: Boolean(cfg.endpoint),
+    force_path_style: Boolean(cfg.forcePathStyle),
+    credential_source: cfg.accessKeyId
+      ? "static_config"
+      : cfg.profile
+        ? "aws_profile"
+        : "default_provider_chain",
+    profile_configured: Boolean(cfg.profile),
+    static_access_key_configured: Boolean(cfg.accessKeyId),
+    session_token_configured: Boolean(cfg.sessionToken),
   };
 }
 
@@ -298,8 +333,9 @@ export async function headS3Object(source: Source, filePath: string): Promise<{
       sse_kms_key_id: resp.SSEKMSKeyId,
       metadata: resp.Metadata ?? {},
     };
-  } catch {
-    return null;
+  } catch (error) {
+    if (isMissingS3ObjectError(error)) return null;
+    throw error;
   }
 }
 
@@ -323,4 +359,13 @@ function normalizeSha256ChecksumToHex(checksum: string | undefined): string | un
     return checksum;
   }
   return checksum;
+}
+
+function validateS3CredentialConfig(cfg: S3Config): void {
+  if (cfg.accessKeyId && !cfg.secretAccessKey) {
+    throw new Error("S3 source static credentials require both accessKeyId and secretAccessKey. Prefer an AWS profile or the default provider chain.");
+  }
+  if (cfg.secretAccessKey && !cfg.accessKeyId) {
+    throw new Error("S3 source static credentials require both accessKeyId and secretAccessKey. Prefer an AWS profile or the default provider chain.");
+  }
 }

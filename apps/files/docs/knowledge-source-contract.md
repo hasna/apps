@@ -69,9 +69,13 @@ Remote flow:
 
 1. `open-files` owns the S3 source or canonical object bucket, for example
    `s3://example-files-prod/objects/sha256/...`.
-2. `open-files` writes manifest and extraction artifacts to a local directory or
-   S3 job prefix.
-3. `open-knowledge` can run locally or in a future SaaS worker, fetch only the
+2. `open-files` keeps its local SQLite index as the local metadata cache. Remote
+   PostgreSQL metadata is updated only through explicit storage migrate, push,
+   pull, or sync commands.
+3. `open-files` writes manifest and extraction artifacts to a local directory or
+   S3 job prefix through explicit object APIs. Metadata sync does not move S3
+   bytes or rewrite canonical object keys.
+4. `open-knowledge` can run locally or in a future SaaS worker, fetch only the
    manifest/extracted text it is allowed to read, and store knowledge artifacts
    in a local app data directory or its own configured S3 bucket.
 
@@ -89,6 +93,16 @@ pages, run ledgers, schemas, exports, citations, and embedding metadata. It
 must not become a second source-file bucket. Raw source bytes, immutable object
 identity, extraction snapshots, S3 version metadata, and access enforcement stay
 in `open-files`.
+
+`files storage status --json` exposes this boundary under `runtime`: SQLite
+local index, PostgreSQL remote metadata, S3/local object bytes, and booleans
+stating that status and metadata sync do not mutate remote bytes or replace the
+local index. The status payload reports credential source as no-secret
+diagnostics only; consumers must not expect raw credentials in manifests or
+resolver contracts. It does not verify S3 credential readiness; that remains
+`not_checked` until a separate mocked, dry-run, or approved live operation
+checks access. S3 source records persist named profiles, endpoints, and
+path-style settings, not static access keys or session tokens.
 
 For S3-backed bytes, `open-files` also owns `s3_objects`. That table stores the
 canonical object identity and metadata used by future resolvers: bucket, region,
