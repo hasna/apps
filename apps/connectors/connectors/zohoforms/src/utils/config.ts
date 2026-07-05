@@ -24,6 +24,7 @@ export interface ProfileConfig {
   clientSecret?: string;
 
   dataCenter?: string;
+  baseUrl?: string;
 }
 
 // Store for --profile flag override (set by CLI before commands run)
@@ -206,6 +207,16 @@ export function getDataCenter(): string | undefined {
 export function setDataCenter(dataCenter: string): void {
   const config = loadProfile();
   config.dataCenter = dataCenter;
+  saveProfile(config);
+}
+
+export function getBaseUrl(): string | undefined {
+  return process.env.ZOHOFORMS_BASE_URL || loadProfile().baseUrl;
+}
+
+export function setBaseUrl(baseUrl: string): void {
+  const config = loadProfile();
+  config.baseUrl = baseUrl;
   saveProfile(config);
 }
 

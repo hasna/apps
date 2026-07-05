@@ -6,6 +6,8 @@ export {
   setToken,
   getDataCenter,
   setDataCenter,
+  getBaseUrl,
+  setBaseUrl,
   getApiKey,
   setApiKey,
   getCurrentProfile,

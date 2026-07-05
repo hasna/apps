@@ -13,7 +13,7 @@ export const DC_BASES: Record<string, string> = {
 
 export function resolveBaseUrl(config: ZohoFormsConfig): string {
   if (config.baseUrl) {
-    return config.baseUrl.replace(/\/$/, '');
+    return config.baseUrl.replace(/\/$/, '').replace(/\/api\/v2$/, '');
   }
   const dc = (config.dataCenter || 'com').toLowerCase();
   const base = DC_BASES[dc];

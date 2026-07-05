@@ -123,6 +123,9 @@ export class ZohoForms {
   }
 
   async deleteEntries(formLinkName: string, entryIds: string[]): Promise<void> {
+    if (entryIds.length === 0) {
+      throw new Error('At least one entry ID is required for bulk delete');
+    }
     await this.client.request(`/forms/${enc(formLinkName)}/entries`, {
       method: 'DELETE',
       params: { entry_ids: entryIds.join(',') },

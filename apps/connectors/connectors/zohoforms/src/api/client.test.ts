@@ -71,6 +71,17 @@ describe('ZohoFormsClient', () => {
     expect(recorded[0].url).toBe('https://forms.zoho.eu/api/v2/forms');
   });
 
+  test('normalizes explicit API base URL without appending api path twice', async () => {
+    const recorded = installFetch(() => ({ ok: true, status: 200, body: { forms: [] } }));
+    const client = new ZohoFormsClient({
+      token: 'tok',
+      baseUrl: 'https://example.test/api/v2',
+    });
+    expect(client.getBaseUrl()).toBe('https://example.test/api/v2');
+    await client.request('/forms');
+    expect(recorded[0].url).toBe('https://example.test/api/v2/forms');
+  });
+
   test('listEntries uses report path when reportLinkName is set', async () => {
     const recorded = installFetch(() => ({ ok: true, status: 200, body: { entries: [] } }));
     const forms = new ZohoForms({ token: 'tok', dataCenter: 'com' });
@@ -86,6 +97,15 @@ describe('ZohoFormsClient', () => {
     expect(JSON.parse(recorded[0].body!)).toEqual({
       data: { Email: 'a@example.com', Name: 'Ada' },
     });
+  });
+
+  test('deleteEntries rejects an empty ID list before making a request', async () => {
+    const recorded = installFetch(() => ({ ok: true, status: 200, body: {} }));
+    const forms = new ZohoForms({ token: 'tok' });
+    await expect(forms.deleteEntries('contact-form', [])).rejects.toThrow(
+      'At least one entry ID is required for bulk delete',
+    );
+    expect(recorded).toHaveLength(0);
   });
 
   test('throws ZohoFormsApiError on 429', async () => {

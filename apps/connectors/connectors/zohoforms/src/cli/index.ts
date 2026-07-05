@@ -7,6 +7,8 @@ import {
   setToken,
   getDataCenter,
   setDataCenter,
+  getBaseUrl,
+  setBaseUrl,
   clearConfig,
   getConfigDir,
   setProfileOverride,
@@ -32,6 +34,7 @@ program
   .version(VERSION)
   .option('-t, --token <token>', 'OAuth access token (overrides config)')
   .option('--data-center <dc>', 'Zoho data center (com, eu, in, com.au, jp, ca, sa)')
+  .option('--base-url <url>', 'Override Zoho Forms API base URL')
   .option('-f, --format <format>', 'Output format (json, pretty)', 'pretty')
   .option('-p, --profile <profile>', 'Use a specific profile')
   .option('-v, --verbose', 'Enable verbose output for debugging')
@@ -54,6 +57,9 @@ program
     if (opts.dataCenter) {
       process.env.ZOHOFORMS_DATA_CENTER = opts.dataCenter;
     }
+    if (opts.baseUrl) {
+      process.env.ZOHOFORMS_BASE_URL = opts.baseUrl;
+    }
   });
 
 function getFormat(cmd: Command): OutputFormat {
@@ -67,7 +73,7 @@ function getClient(): ZohoForms {
     error(`No token configured. Run "${CONNECTOR_NAME} config set-token <token>" or set ZOHOFORMS_TOKEN.`);
     process.exit(1);
   }
-  return new ZohoForms({ token, dataCenter: getDataCenter() });
+  return new ZohoForms({ token, dataCenter: getDataCenter(), baseUrl: getBaseUrl() });
 }
 
 const profileCmd = program.command('profile').description('Manage configuration profiles');
@@ -100,13 +106,14 @@ profileCmd
   .description('Create a new profile')
   .option('--token <token>', 'OAuth access token')
   .option('--data-center <dc>', 'Zoho data center')
+  .option('--base-url <url>', 'Override Zoho Forms API base URL')
   .option('--use', 'Switch to this profile after creation')
   .action((name: string, opts) => {
     if (profileExists(name)) {
       error(`Profile "${name}" already exists`);
       process.exit(1);
     }
-    createProfile(name, { token: opts.token, dataCenter: opts.dataCenter });
+    createProfile(name, { token: opts.token, dataCenter: opts.dataCenter, baseUrl: opts.baseUrl });
     success(`Profile "${name}" created`);
     if (opts.use) {
       setCurrentProfile(name);
@@ -134,6 +141,7 @@ profileCmd.command('show [name]').description('Show profile configuration').acti
   console.log(chalk.bold(`Profile: ${profileName}${profileName === active ? chalk.green(' (active)') : ''}`));
   info(`Token: ${config.token ? `${config.token.substring(0, 8)}...` : chalk.gray('not set')}`);
   info(`Data center: ${config.dataCenter || chalk.gray('com (default)')}`);
+  info(`Base URL: ${config.baseUrl || chalk.gray('derived from data center')}`);
 });
 
 const configCmd = program.command('config').description('Manage CLI configuration');
@@ -148,12 +156,19 @@ configCmd.command('set-data-center <dc>').description('Set Zoho data center').ac
   success(`Data center saved to profile: ${getCurrentProfile()}`);
 });
 
+configCmd.command('set-base-url <url>').description('Set custom Zoho Forms API base URL').action((url: string) => {
+  setBaseUrl(url);
+  success(`Base URL saved to profile: ${getCurrentProfile()}`);
+});
+
 configCmd.command('show').description('Show current configuration').action(() => {
   const token = getToken();
+  const baseUrl = getBaseUrl();
   console.log(chalk.bold(`Active Profile: ${getCurrentProfile()}`));
   info(`Config directory: ${getConfigDir()}`);
   info(`Token: ${token ? `${token.substring(0, 8)}...` : chalk.gray('not set')}`);
   info(`Data center: ${getDataCenter() || chalk.gray('com (default)')}`);
+  info(`Base URL: ${baseUrl || chalk.gray('derived from data center')}`);
 });
 
 configCmd.command('clear').description('Clear configuration for active profile').action(() => {
