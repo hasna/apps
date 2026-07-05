@@ -983,6 +983,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["agile", "scrum", "kanban"],
   },
   {
+    name: "voygr",
+    displayName: "VOYGR",
+    description: "Place and business validation API (signup, recovery, status checks, usage)",
+    category: "Business Tools",
+    tags: ["validation", "places", "business", "api"],
+  },
+  {
     name: "wekan",
     displayName: "Wekan",
     description: "Open-source Kanban board for task management",
