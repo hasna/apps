@@ -1004,6 +1004,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["monitoring", "uptime", "performance"],
   },
   {
+    name: "workato-api-platform",
+    displayName: "Workato API Platform",
+    description: "Customer runtime API for items, events, and search",
+    category: "Developer Tools",
+    tags: ["workato", "api-platform", "integration"],
+  },
+  {
     name: "xata",
     displayName: "Xata",
     description: "Serverless database with search and analytics",
