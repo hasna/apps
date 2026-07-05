@@ -1,7 +1,11 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { TwitchClient } from './client';
 
 const realFetch = globalThis.fetch;
+let testConfigDir: string | undefined;
 
 interface RecordedRequest {
   url: string;
@@ -44,8 +48,16 @@ function installFetch(
   return recorded;
 }
 
+beforeEach(() => {
+  testConfigDir = mkdtempSync(join(tmpdir(), 'connect-twitch-test-'));
+  process.env.TWITCH_CONFIG_DIR = testConfigDir;
+});
+
 afterEach(() => {
   globalThis.fetch = realFetch;
+  delete process.env.TWITCH_CONFIG_DIR;
+  if (testConfigDir) rmSync(testConfigDir, { recursive: true, force: true });
+  testConfigDir = undefined;
 });
 
 describe('TwitchClient', () => {

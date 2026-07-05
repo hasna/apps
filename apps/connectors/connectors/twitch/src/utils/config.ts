@@ -17,29 +17,40 @@ export interface ProfileConfig {
 
 let profileOverride: string | undefined;
 
-const CONFIG_DIR = join(homedir(), '.hasna', 'connectors', CONNECTOR_NAME);
-const PROFILES_DIR = join(CONFIG_DIR, 'profiles');
-const CURRENT_PROFILE_FILE = join(CONFIG_DIR, 'current_profile');
+function getConfigDirPath(): string {
+  return process.env.TWITCH_CONFIG_DIR || join(homedir(), '.hasna', 'connectors', CONNECTOR_NAME);
+}
+
+function getProfilesDirPath(): string {
+  return join(getConfigDirPath(), 'profiles');
+}
+
+function getCurrentProfileFilePath(): string {
+  return join(getConfigDirPath(), 'current_profile');
+}
 
 export function setProfileOverride(profile: string | undefined): void {
   profileOverride = profile;
 }
 
 export function ensureConfigDir(): void {
-  if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true });
-  if (!existsSync(PROFILES_DIR)) mkdirSync(PROFILES_DIR, { recursive: true });
+  const configDir = getConfigDirPath();
+  const profilesDir = getProfilesDirPath();
+  if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true });
+  if (!existsSync(profilesDir)) mkdirSync(profilesDir, { recursive: true });
 }
 
 function getProfilePath(profile: string): string {
-  return join(PROFILES_DIR, `${profile}.json`);
+  return join(getProfilesDirPath(), `${profile}.json`);
 }
 
 export function getCurrentProfile(): string {
   if (profileOverride) return profileOverride;
   ensureConfigDir();
-  if (existsSync(CURRENT_PROFILE_FILE)) {
+  const currentProfileFile = getCurrentProfileFilePath();
+  if (existsSync(currentProfileFile)) {
     try {
-      const profile = readFileSync(CURRENT_PROFILE_FILE, 'utf-8').trim();
+      const profile = readFileSync(currentProfileFile, 'utf-8').trim();
       if (profile && profileExists(profile)) return profile;
     } catch {
       // fall through
@@ -53,7 +64,7 @@ export function setCurrentProfile(profile: string): void {
   if (!profileExists(profile) && profile !== DEFAULT_PROFILE) {
     throw new Error(`Profile "${profile}" does not exist`);
   }
-  writeFileSync(CURRENT_PROFILE_FILE, profile);
+  writeFileSync(getCurrentProfileFilePath(), profile);
 }
 
 export function profileExists(profile: string): boolean {
@@ -62,8 +73,9 @@ export function profileExists(profile: string): boolean {
 
 export function listProfiles(): string[] {
   ensureConfigDir();
-  if (!existsSync(PROFILES_DIR)) return [];
-  return readdirSync(PROFILES_DIR)
+  const profilesDir = getProfilesDirPath();
+  if (!existsSync(profilesDir)) return [];
+  return readdirSync(profilesDir)
     .filter((f) => f.endsWith('.json'))
     .map((f) => f.replace('.json', ''))
     .sort();
@@ -172,5 +184,5 @@ export function clearConfig(): void {
 }
 
 export function getConfigDir(): string {
-  return CONFIG_DIR;
+  return getConfigDirPath();
 }
