@@ -23,8 +23,13 @@ import { success, error, info, print, setVerboseMode, debug } from '../utils/out
 
 const CONNECTOR_NAME = 'connect-xray';
 const VERSION = '0.0.1';
+const DEFAULT_PROFILE = 'default';
 
 const program = new Command();
+
+function isKnownProfile(profile: string): boolean {
+  return profile === DEFAULT_PROFILE || profileExists(profile);
+}
 
 program
   .name(CONNECTOR_NAME)
@@ -44,7 +49,7 @@ program
     }
 
     if (opts.profile) {
-      if (!profileExists(opts.profile)) {
+      if (!isKnownProfile(opts.profile)) {
         error(`Profile "${opts.profile}" does not exist. Create it with "${CONNECTOR_NAME} profile create ${opts.profile}"`);
         process.exit(1);
       }
@@ -111,7 +116,7 @@ profileCmd
   .command('use <name>')
   .description('Switch to a profile')
   .action((name: string) => {
-    if (!profileExists(name)) {
+    if (!isKnownProfile(name)) {
       error(`Profile "${name}" does not exist. Create it with "profile create ${name}"`);
       process.exit(1);
     }
