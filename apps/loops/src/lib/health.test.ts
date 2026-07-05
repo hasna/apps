@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { LoopRun } from "../types.js";
 import type { RunFailureClassification } from "./health.js";
-import { classifyRunFailure } from "./health.js";
+import { Store } from "./store.js";
+import { buildHealthScan, classifyRunFailure } from "./health.js";
 
 function run(patch: Partial<LoopRun>): LoopRun {
   return {
@@ -45,5 +46,70 @@ describe("loop health classification", () => {
 
     expect(signal?.evidence.error).toMatch(/^\[redacted \d+ chars\]$/);
     expect(signal?.evidence.error).not.toContain("fake-project-secret");
+  });
+
+  test("health scan reports stale running runs without treating fresh running runs as findings", () => {
+    const store = new Store(":memory:");
+    try {
+      const stale = store.createLoop({
+        name: "stale-running",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "sleep", args: ["60"] },
+        leaseMs: 60_000,
+      });
+      const fresh = store.createLoop({
+        name: "fresh-running",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "sleep", args: ["1"] },
+        leaseMs: 60_000,
+      });
+      store.claimRun(stale, "2026-01-01T00:00:00.000Z", "seed", new Date("2026-01-01T00:00:00Z"));
+      store.claimRun(fresh, "2026-01-01T00:29:30.000Z", "seed", new Date("2026-01-01T00:29:30Z"));
+
+      const scan = buildHealthScan(store, { now: new Date("2026-01-01T00:30:00Z") });
+
+      expect(scan.status).toBe("critical");
+      expect(scan.counts.staleRunning).toBe(1);
+      expect(scan.findings.map((finding) => finding.kind)).toEqual(["stale-running"]);
+      expect(scan.findings[0]).toMatchObject({
+        severity: "critical",
+        loop: { id: stale.id, name: "stale-running" },
+      });
+      expect(scan.findings[0]?.fingerprint).toContain(stale.id);
+      expect(scan.findings[0]?.recommendedTask?.dedupeKey).toBe(scan.findings[0]?.fingerprint);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("health scan turns doctor preflight checks into bounded deduped findings", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "preflight-loop",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "missing-command" },
+      });
+      const scan = buildHealthScan(store, {
+        doctor: {
+          ok: false,
+          checks: [
+            { id: "loop-runs", status: "warn", message: "historical failures" },
+            { id: `loop:${loop.id}:preflight`, status: "fail", message: "active loop target preflight failed", detail: "missing-command" },
+          ],
+        },
+      });
+
+      expect(scan.counts.preflightFindings).toBe(1);
+      expect(scan.findings).toHaveLength(1);
+      expect(scan.findings[0]).toMatchObject({
+        kind: "preflight",
+        severity: "high",
+        loop: { id: loop.id, name: "preflight-loop" },
+      });
+      expect(scan.findings[0]?.recommendedTask?.futureNativeUpsert.command).toBe("todos task upsert");
+    } finally {
+      store.close();
+    }
   });
 });

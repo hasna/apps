@@ -12,6 +12,7 @@ import type {
   CreateLoopInput,
   CreateWorkflowInput,
   Loop,
+  LoopStatus,
   LoopTemplateSummary,
   LoopTarget,
   OverlapPolicy,
@@ -43,7 +44,7 @@ import { runDaemon, startDaemon } from "../daemon/daemon.js";
 import { enableStartup, installStartup } from "../daemon/install.js";
 import { normalizeGoalSpec } from "../lib/workflow-spec.js";
 import { runDoctor } from "../lib/doctor.js";
-import { buildHealthReport, expectationForLoop } from "../lib/health.js";
+import { buildHealthReport, buildHealthScan, expectationForLoop, writeHealthScanReports } from "../lib/health.js";
 import {
   applyImportMigrationBundle,
   buildImportMigrationPlan,
@@ -120,6 +121,24 @@ function isJson(): boolean {
 function print(value: unknown, human?: string): void {
   if (isJson() || !human) console.log(JSON.stringify(value, null, 2));
   else console.log(human);
+}
+
+const LOOP_STATUS_VALUES: LoopStatus[] = ["active", "paused", "stopped", "expired"];
+
+function parseLoopStatuses(value: string | undefined, label = "--include"): LoopStatus[] {
+  const raw = splitList(value) ?? ["active", "paused"];
+  const expanded = raw.flatMap((entry) => entry === "all" ? LOOP_STATUS_VALUES : [entry]);
+  const invalid = expanded.filter((entry) => !LOOP_STATUS_VALUES.includes(entry as LoopStatus));
+  if (invalid.length > 0) throw new ValidationError(`${label} has invalid loop status: ${invalid.join(", ")}`);
+  return [...new Set(expanded as LoopStatus[])];
+}
+
+function compactHealthScanOutput(scan: unknown): unknown {
+  if (!scan || typeof scan !== "object" || !("health" in scan)) return scan;
+  const healthValue = (scan as { health?: unknown }).health;
+  if (!healthValue || typeof healthValue !== "object") return scan;
+  const { expectations: _expectations, ...health } = healthValue as Record<string, unknown>;
+  return { ...(scan as Record<string, unknown>), health };
 }
 
 /**
@@ -1741,6 +1760,157 @@ const health = program
         }
       }
       if (!report.ok) process.exitCode = 1;
+    } finally {
+      store.close();
+    }
+  }));
+
+health
+  .command("scan")
+  .description("scan OpenLoops health, write bounded reports, and optionally upsert deduped todos findings")
+  .option("--include <statuses>", "comma-separated loop statuses to inventory: active,paused,stopped,expired,all", "active,paused")
+  .option("--limit <n>", "maximum loops to inspect", "200")
+  .option("--max-findings <n>", "maximum findings to include in output", "100")
+  .option("--latest-run", "include latest-run and stale-running checks")
+  .option("--no-latest-run", "skip latest-run and stale-running checks")
+  .option("--stale-running-after <duration>", "minimum age before a running latest run is stale; loop lease and 10m still apply")
+  .option("--doctor", "include doctor/preflight checks")
+  .option("--daemon", "include daemon status")
+  .option("--start-daemon", "safe self-heal: start the daemon if it is not running")
+  .option("--report-dir <path>", "write summary.json and report.md under this reports root")
+  .option("--evidence-dir <path>", "alias for --report-dir and todo evidence output")
+  .option("--upsert-todos", "upsert deduped todos tasks for scan findings")
+  .option("--project <path>", "todos project path for --upsert-todos", defaultLoopsProject())
+  .option("--task-list <slug>", "todos task-list slug for --upsert-todos", "loop-error-self-heal")
+  .option("--max-actions <n>", "maximum todos tasks to upsert", "5")
+  .option("--dry-run", "with --upsert-todos, print intended task upserts without mutating todos")
+  .option("--auto-route", "with --upsert-todos, opt routed tasks into task-created headless worker/verifier automation")
+  .option("--route-project-path <path>", "fallback project path for --auto-route when the finding has no cwd")
+  .option("-j, --json", "print JSON for this command")
+  .action(runAction(async (opts) => {
+    const store = new Store();
+    try {
+      const includeStatuses = parseLoopStatuses(opts.include, "--include");
+      let daemon = (opts.daemon || opts.startDaemon) ? daemonStatus(store) : undefined;
+      const selfHeals = [];
+      if (opts.startDaemon) {
+        if (daemon?.running) {
+          selfHeals.push({
+            kind: "daemon-start" as const,
+            attempted: false,
+            ok: true,
+            reason: "daemon already running",
+          });
+        } else {
+          const result = await startDaemon({ cliEntry: process.argv[1] ?? "loops" });
+          const ok = Boolean(result.started || result.alreadyRunning);
+          selfHeals.push({
+            kind: "daemon-start" as const,
+            attempted: true,
+            ok,
+            reason: daemon?.stale ? "daemon pid file was stale" : "daemon was not running",
+            result: result as unknown as Record<string, unknown>,
+          });
+          daemon = daemonStatus(store);
+        }
+      }
+
+      let scan = writeHealthScanReports(
+        buildHealthScan(store, {
+          includeStatuses,
+          limit: positiveInteger(opts.limit, "--limit") ?? 200,
+          maxFindings: nonNegativeInteger(opts.maxFindings, "--max-findings") ?? 100,
+          latestRun: opts.latestRun !== false,
+          staleRunningMs: opts.staleRunningAfter ? positiveDuration(opts.staleRunningAfter, "--stale-running-after") : undefined,
+          doctor: opts.doctor ? runDoctor(store) : undefined,
+          daemon,
+          selfHeals,
+        }),
+        { reportDir: opts.reportDir ?? opts.evidenceDir },
+      );
+
+      if (opts.upsertTodos) {
+        const tasks = scan.findings
+          .filter((finding) => finding.recommendedTask)
+          .map((finding) => {
+            const task = finding.recommendedTask!;
+            const description = [
+              task.description,
+              scan.reports ? `Report: ${scan.reports.markdown}` : undefined,
+            ].filter(Boolean).join("\n\n");
+            return {
+              title: task.title,
+              description,
+              priority: task.priority,
+              tags: task.tags,
+              fingerprint: task.dedupeKey,
+              extra: {
+                kind: finding.kind,
+                severity: finding.severity,
+                classification: finding.classification,
+              },
+              metadata: {
+                source: "openloops.health.scan",
+                kind: finding.kind,
+                severity: finding.severity,
+                loop_id: finding.loop?.id,
+                loop_name: finding.loop?.name,
+                loop_status: finding.loop?.status,
+                run_id: finding.run?.id,
+                classification: finding.classification,
+                fingerprint: task.dedupeKey,
+                cwd: finding.route?.cwd,
+                provider: finding.route?.provider,
+                report_dir: scan.reports?.dir,
+                no_tmux_dispatch: true,
+              },
+            };
+          });
+        const result = upsertRouteTasks({
+          project: opts.project,
+          taskList: {
+            slug: opts.taskList,
+            name: "Loop Error Self Heal",
+            description: "Deduped OpenLoops health scan findings for daemon, doctor, preflight, latest-run, and stale-running issues.",
+          },
+          cursorKey: routeCursorKey(
+            "health",
+            ["scan", opts.project, opts.taskList, includeStatuses.join(","), opts.limit, Boolean(opts.doctor), Boolean(opts.daemon)],
+            { autoRoute: Boolean(opts.autoRoute), routeProjectPath: opts.routeProjectPath },
+          ),
+          maxActions: positiveInteger(opts.maxActions, "--max-actions") ?? 5,
+          dryRun: Boolean(opts.dryRun),
+          autoRoute: Boolean(opts.autoRoute),
+          routeProjectPath: opts.routeProjectPath,
+          source: "openloops.health.scan",
+          evidence: { kind: "health-scan-route-tasks", dir: opts.evidenceDir ?? opts.reportDir },
+          summary: {
+            status: scan.status,
+            inspected: scan.counts.loops,
+            findings: scan.counts.findings,
+            reportDir: scan.reports?.dir,
+          },
+          tasks,
+        });
+        scan = { ...scan, todos: result.output };
+        if (!result.ok) process.exitCode = 1;
+      }
+
+      const jsonMode = isJson() || Boolean(opts.json);
+      if (jsonMode) console.log(JSON.stringify(compactHealthScanOutput(scan), null, 2));
+      else {
+        const actions = Array.isArray(scan.todos?.actions) ? scan.todos.actions as Array<Record<string, unknown>> : [];
+        console.log(
+          `health_scan status=${scan.status} loops=${scan.counts.loops} findings=${scan.counts.findings} ` +
+            `latest=${scan.counts.latestRunFindings} stale_running=${scan.counts.staleRunning} ` +
+            `daemon=${scan.counts.daemonFindings} doctor=${scan.counts.doctorFindings} preflight=${scan.counts.preflightFindings} ` +
+            `report=${scan.reports?.markdown ?? "none"} todos_actions=${actions.length}`,
+        );
+        for (const finding of scan.findings) {
+          console.log(`${finding.severity} ${finding.kind} ${finding.fingerprint} ${finding.loop?.name ?? ""} ${finding.message}`);
+        }
+      }
+      if (!process.exitCode && scan.status !== "ok") process.exitCode = scan.status === "critical" ? 2 : 1;
     } finally {
       store.close();
     }

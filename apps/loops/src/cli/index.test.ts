@@ -2079,6 +2079,75 @@ describe("loops CLI", () => {
     expect(value.expectations[0].check.id).toBe("latest-run-succeeded");
   });
 
+  test("health scan writes bounded reports and dry-runs deduped todo upserts", () => {
+    const dataDir = freshDataDir("loops-cli-health-scan-");
+    const reportRoot = join(dataDir, "scan-reports");
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      const active = store.createLoop({
+        name: "active-scan-failure",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "agent", provider: "codewith", prompt: "run", cwd: "/tmp/active-scan" },
+      });
+      const paused = store.createLoop({
+        name: "paused-scan-failure",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "false", cwd: "/tmp/paused-scan" },
+      });
+      store.updateLoop(paused.id, { status: "paused" });
+      for (const loop of [active, paused]) {
+        const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "seed", new Date("2026-01-01T00:00:00Z"));
+        expect(claim).toBeDefined();
+        store.finalizeRun(
+          claim!.run.id,
+          {
+            status: "failed",
+            finishedAt: "2026-01-01T00:00:01.000Z",
+            durationMs: 1_000,
+            stdout: "",
+            stderr: "runtime preflight failed: executable not found in path",
+            error: "runtime preflight failed",
+            exitCode: 1,
+          },
+          { claimedBy: "seed", now: new Date("2026-01-01T00:00:00.500Z") },
+        );
+      }
+    } finally {
+      store.close();
+    }
+
+    const scan = runCli(dataDir, [
+      "--json",
+      "health",
+      "scan",
+      "--include",
+      "active,paused",
+      "--daemon",
+      "--report-dir",
+      reportRoot,
+      "--upsert-todos",
+      "--dry-run",
+      "--max-actions",
+      "2",
+    ]);
+
+    expect(scan.status).toBe(2);
+    const value = JSON.parse(scan.stdout);
+    expect(value.status).toBe("critical");
+    expect(value.counts.loops).toBe(2);
+    expect(value.counts.latestRunFindings).toBe(2);
+    expect(value.counts.daemonFindings).toBe(1);
+    expect(value.findings.map((finding: { kind: string }) => finding.kind).sort()).toEqual(["daemon", "latest-run", "latest-run"]);
+    expect(value.reports.dir).toContain(reportRoot);
+    expect(existsSync(value.reports.json)).toBe(true);
+    expect(existsSync(value.reports.markdown)).toBe(true);
+    expect(JSON.parse(readFileSync(value.reports.json, "utf8")).status).toBe("critical");
+    expect(value.todos.actions).toHaveLength(2);
+    expect(value.todos.actions[0]).toMatchObject({ action: "would-upsert" });
+    expect(value.todos.actions[0].metadata.no_tmux_dispatch).toBe(true);
+    expect(JSON.stringify(value)).not.toContain("fake-project-");
+  });
+
   test("health route-tasks dry-run reports deduped task upserts without mutating todos", () => {
     const dataDir = freshDataDir("loops-cli-health-route-dry-run-");
     const evidenceDir = join(dataDir, "evidence");

@@ -61,6 +61,7 @@ describe("open-loops MCP server", () => {
     expect(names).toContain("loops_list");
     expect(names).toContain("loops_workflow_validate");
     expect(names).toContain("loops_health");
+    expect(names).toContain("loops_health_scan");
     expect(names).toContain("loops_diagnose");
     expect(names).toContain("loops_daemon_status");
     expect(names).toContain("loops_workflow_run_inspect");
@@ -138,6 +139,13 @@ describe("open-loops MCP server", () => {
       };
       expect(health.summary.loops).toBe(1);
       expect(health.expectations[0]?.loop.id).toBe(seeded.loopId);
+
+      const scan = textPayload(
+        await client.callTool({ name: "loops_health_scan", arguments: { daemon: true, includeStatuses: ["active"] } }),
+      ) as { counts: { loops: number; daemonFindings: number }; daemon: { running: boolean } };
+      expect(scan.counts.loops).toBe(1);
+      expect(scan.daemon.running).toBe(false);
+      expect(scan.counts.daemonFindings).toBe(1);
 
       const diagnose = textPayload(
         await client.callTool({ name: "loops_diagnose", arguments: { idOrName: "mcp-smoke" } }),

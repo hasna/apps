@@ -1,7 +1,8 @@
 import type { CreateLoopInput, Goal, GoalRun, Loop, LoopRun, LoopStatus, OpenAutomationsRuntimeBinding, RunStatus } from "../types.js";
+import { daemonStatus } from "../daemon/control.js";
 import { runDoctor, type DoctorReport } from "../lib/doctor.js";
 import { LoopNotFoundError } from "../lib/errors.js";
-import { buildHealthReport, type LoopsHealthReport } from "../lib/health.js";
+import { buildHealthReport, buildHealthScan, type BuildHealthScanOptions, type LoopsHealthReport, type LoopsHealthScan } from "../lib/health.js";
 import {
   applyImportMigrationBundle,
   buildImportMigrationPlan,
@@ -155,6 +156,14 @@ export class LoopsClient {
 
   health(opts: { includeArchived?: boolean; includeInactive?: boolean; limit?: number } = {}): LoopsHealthReport {
     return buildHealthReport(this.store, opts);
+  }
+
+  healthScan(opts: Omit<BuildHealthScanOptions, "doctor" | "daemon" | "selfHeals"> & { doctor?: boolean; daemon?: boolean } = {}): LoopsHealthScan {
+    return buildHealthScan(this.store, {
+      ...opts,
+      doctor: opts.doctor ? runDoctor(this.store) : undefined,
+      daemon: opts.daemon ? daemonStatus(this.store) : undefined,
+    });
   }
 
   goal(idOrName: string): { goal?: Goal; runs: GoalRun[] } {

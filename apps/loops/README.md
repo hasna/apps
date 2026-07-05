@@ -796,6 +796,9 @@ Use `--json` for machine-readable output. Prompt bodies and run stdout/stderr ar
 
 ```bash
 loops health --json
+loops health scan --include active,paused --latest-run --doctor --daemon --json
+loops health scan --include active,paused --latest-run --doctor --daemon \
+  --upsert-todos --dry-run --max-actions 5 --evidence-dir ~/.hasna/loops/reports/health-scan
 loops expectations <loop-id-or-name> --json
 loops health route-tasks --project ~/.hasna/loops --task-list loop-error-self-heal --max-actions 5
 loops hygiene names --json
@@ -809,6 +812,16 @@ fingerprints and bounded evidence. `health route-tasks` is the explicit
 mutating path: it upserts deduped Todos tasks for failed expectations and marks
 them with `no_tmux_dispatch=true` metadata. Use `--dry-run --json` before
 turning it into a production loop.
+
+`health scan` is the first-class replacement for local loop-error self-heal
+scripts. It inventories active/paused loops by default, can include doctor,
+daemon, preflight, latest-run, and stale-running findings, writes bounded
+`summary.json` and `report.md` files under
+`$LOOPS_DATA_DIR/reports/health-scan`, and prints compact human or stable JSON
+output. It is read-only unless `--upsert-todos` is supplied. The only built-in
+self-heal is `--start-daemon`, which attempts to start the daemon when status
+proves it is not running; it never stops, resumes, deletes, archives, or reaps
+loops.
 
 Add `--evidence-dir <dir>` to `health route-tasks` or `hygiene route-tasks`
 when the deterministic loop should write a durable JSON heartbeat/report in
