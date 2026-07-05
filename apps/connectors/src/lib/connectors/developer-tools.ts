@@ -1045,4 +1045,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Developer Tools",
     tags: ["monitoring", "infrastructure", "network"],
   },
+  {
+    name: "zapier-api-platform",
+    displayName: "Zapier API Platform",
+    description: "Zapier API Platform integration for items, events, and search",
+    category: "Developer Tools",
+    tags: ["zapier", "automation", "api-platform"],
+  },
 ];
