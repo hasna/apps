@@ -402,6 +402,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ecommerce", "wordpress", "orders"],
   },
   {
+    name: "zerosettle",
+    displayName: "ZeroSettle",
+    description: "Direct IAP billing",
+    category: "Commerce & Finance",
+    tags: ["payments", "iap", "billing"],
+  },
+  {
     name: "xero",
     displayName: "Xero",
     description: "Accounting, invoicing, and financial management",
@@ -414,5 +421,12 @@ export const connectors: ConnectorMeta[] = [
     description: "Online accounting and financial management",
     category: "Commerce & Finance",
     tags: ["accounting", "invoicing", "zoho"],
+  },
+  {
+    name: "zoho-inventory",
+    displayName: "Zoho Inventory",
+    description: "Inventory management for items, orders, and invoices",
+    category: "Commerce & Finance",
+    tags: ["inventory", "zoho", "orders"],
   },
 ];
