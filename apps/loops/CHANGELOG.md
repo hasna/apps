@@ -5,6 +5,20 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.4.10 (2026-07-05)
+
+Release-line correction for the post-0.4.9 Codewith profile preflight fix.
+The npm registry already contains `@hasna/loops@0.4.9`, while the GitHub tag
+and release for `v0.4.9` are absent, so the next publishable package version
+must move forward instead of reusing 0.4.9.
+
+### Fixed
+
+- **Agent adapter / executor:** parse the active `codewith profile list` marker
+  correctly during profile preflight. When the active row is prefixed with `*`,
+  the profile name is in the next column; treating the marker itself as the
+  profile name caused valid active-profile loop steps to fail before execution.
+
 ## 0.4.9 (2026-07-04)
 
 Unblock the PR-merge pipeline: task-lifecycle/route workers now dispatch real
