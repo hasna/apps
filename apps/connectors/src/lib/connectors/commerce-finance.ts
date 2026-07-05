@@ -395,6 +395,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["nft", "web3", "blockchain"],
   },
   {
+    name: "wave-accounting",
+    displayName: "Wave Accounting",
+    description: "Accounting, invoicing, and financial management via GraphQL API",
+    category: "Commerce & Finance",
+    tags: ["accounting", "invoicing", "finance", "graphql"],
+  },
+  {
     name: "woocommerce",
     displayName: "WooCommerce",
     description: "WordPress e-commerce plugin for orders, products, and customers",
