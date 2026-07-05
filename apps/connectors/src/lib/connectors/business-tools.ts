@@ -976,6 +976,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["feedback", "product", "customer-insights"],
   },
   {
+    name: "vitally",
+    displayName: "Vitally",
+    description: "Customer success platform",
+    category: "Business Tools",
+    tags: ["customer-success", "cs", "accounts"],
+  },
+  {
     name: "vivifyscrum",
     displayName: "VivifyScrum",
     description: "Agile project management with Scrum and Kanban boards",
