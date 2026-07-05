@@ -913,6 +913,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["nlp", "content moderation", "sentiment", "language understanding", "api"],
   },
   {
+    name: "typless",
+    displayName: "Typless",
+    description: "AI-powered document data extraction and OCR for invoices and custom documents",
+    category: "AI & ML",
+    tags: ["ai", "document", "extraction", "ocr"],
+  },
+  {
     name: "udio",
     displayName: "Udio",
     description: "AI music generation platform",
