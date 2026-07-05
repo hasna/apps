@@ -67,6 +67,14 @@ const DRAIN_FILTER_OPTION_SPECS: RouteOptionSpec[] = [
   { flags: "--limit <n>", key: "limit", kind: "value", description: "maximum filtered ready-task candidates to consider", defaultValue: "50" },
   { flags: "--scan-limit <n>", key: "scanLimit", kind: "value", description: "maximum raw todos ready rows to fetch before filters; defaults to 500 when filters are used" },
   { flags: "--max-dispatch <n>", key: "maxDispatch", kind: "value", description: "maximum new workflow loops to create in this drain run", defaultValue: "1" },
+  { flags: "--launch-gate <name>", key: "launchGate", kind: "value", description: "human label for a launch/admission gate checked before draining" },
+  {
+    flags: "--launch-gate-blocker <project::task>",
+    key: "launchGateBlocker",
+    kind: "repeat",
+    description: "skip the whole drain while this todos blocker task is not completed; format <todos-project-path>::<task-id>; may be repeated or comma-separated",
+    serializeValue: (opts) => listFromRepeatedOpts(opts.launchGateBlocker as string[] | undefined),
+  },
   { flags: "--evidence-dir <path>", key: "evidenceDir", kind: "value", description: "write a JSON drain report to this directory" },
   { flags: "--compact", key: "compact", kind: "boolean", description: "print compact JSON to stdout while preserving the full evidence file" },
 ];

@@ -653,10 +653,20 @@ loops routes schedule todos-task oss-task-route-drain \
   --max-active-per-project-group 4 \
   --max-active 12 \
   --max-per-profile 2 \
+  --launch-gate "pa19-controlled-launch" \
+  --launch-gate-blocker "$HOME/workspace/example/opensource/open-codewith::2d9d931b" \
+  --launch-gate-blocker "$HOME/workspace/example/opensource/open-loops::816e99db" \
   --worktree-mode required \
   --evidence-dir "$HOME/.hasna/loops/reports/oss-task-route-drain" \
   --compact
 ```
+
+Use `--launch-gate-blocker <todos-project-path>::<task-id>` for staged
+launches where a scheduled drain must create zero worker loops until explicit
+blocker tasks are completed. While any blocker is still pending, in progress,
+failed, cancelled, missing, or unreadable, the drain fails closed before reading
+the ready queue, writes launch-gate evidence, and leaves source tasks untouched.
+Scheduled route drains preserve these gate flags in their stored argv.
 
 `--max-active` counts active routed workflows **per route**. Scope precedence:
 an explicit `--max-active-scope <key>` wins, else the running loop's
