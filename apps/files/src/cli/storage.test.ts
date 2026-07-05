@@ -37,7 +37,7 @@ describe("storage CLI", () => {
       runtime: {
         local_index: { provider: string };
         remote_metadata: { provider: string; sync: string };
-        object_bytes: { provider: string; writes: string };
+        object_bytes: { provider: string; credential_status: string; writes: string };
         boundary: { metadata_sync_moves_object_bytes: boolean };
       };
       tables: Array<{ table: string; rows: number }>;
@@ -51,7 +51,7 @@ describe("storage CLI", () => {
     expect(output.runtime).toMatchObject({
       local_index: { provider: "sqlite" },
       remote_metadata: { provider: "postgres", sync: "explicit_migrate_push_pull_sync" },
-      object_bytes: { provider: "s3", writes: "explicit_object_store_apis" },
+      object_bytes: { provider: "s3", credential_status: "not_checked", writes: "explicit_object_store_apis" },
       boundary: { metadata_sync_moves_object_bytes: false },
     });
     expect(output.tables.map((table) => table.table)).toContain("file_assets");

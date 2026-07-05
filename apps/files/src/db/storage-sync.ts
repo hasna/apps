@@ -9,6 +9,7 @@ import { getStorageConfig, getStorageConnectionString, getStorageDatabaseUrlEnvN
 import { PgAdapterAsync } from "./remote-storage.js";
 import { PG_MIGRATIONS } from "./pg-migrations.js";
 import { getEvidenceStorageOptions } from "../lib/evidence.js";
+import { sanitizeSourceConfigJsonString } from "./sources.js";
 
 type Row = Record<string, unknown>;
 
@@ -64,6 +65,7 @@ export interface StorageRuntimeContract {
     endpoint_configured?: boolean;
     force_path_style?: boolean;
     credential_source: "aws_profile" | "default_provider_chain" | "local_filesystem";
+    credential_status: "not_checked" | "not_applicable";
     profile_configured?: boolean;
     local_root?: string;
     writes: "none_from_status_or_metadata_sync" | "explicit_object_store_apis";
@@ -91,6 +93,7 @@ export interface StorageStatus {
     endpoint_configured?: boolean;
     force_path_style?: boolean;
     credential_source?: "aws_profile" | "default_provider_chain" | "local_filesystem";
+    credential_status?: "not_checked" | "not_applicable";
     profile_configured?: boolean;
     local_root?: string;
   };
@@ -183,7 +186,7 @@ function quoteId(value: string): string {
 }
 
 function toPgRow(table: string, row: Row): Row {
-  const copy = { ...row };
+  const copy = sanitizeStorageRowForSync(table, row);
   for (const column of BOOLEAN_COLUMNS[table] ?? []) {
     if (column in copy) copy[column] = Boolean(copy[column]);
   }
@@ -191,9 +194,17 @@ function toPgRow(table: string, row: Row): Row {
 }
 
 function toSqliteRow(table: string, row: Row): Row {
-  const copy = { ...row };
+  const copy = sanitizeStorageRowForSync(table, row);
   for (const column of BOOLEAN_COLUMNS[table] ?? []) {
     if (column in copy) copy[column] = copy[column] ? 1 : 0;
+  }
+  return copy;
+}
+
+export function sanitizeStorageRowForSync(table: string, row: Row): Row {
+  const copy = { ...row };
+  if (table === "sources" && "config" in copy) {
+    copy.config = sanitizeSourceConfigJsonString(copy.config);
   }
   return copy;
 }
@@ -317,12 +328,14 @@ export function getStorageStatus(db: Database = getDb()): StorageStatus {
     endpoint_configured: Boolean(objectStorage.endpoint),
     force_path_style: Boolean(objectStorage.forcePathStyle),
     credential_source: objectCredentialSource,
+    credential_status: "not_checked" as const,
     profile_configured: Boolean(objectStorage.profile),
   } : {
     provider: objectStorage.provider,
     configured: objectStorageConfigured,
     local_root: objectStorage.localRoot,
     credential_source: objectCredentialSource,
+    credential_status: "not_applicable" as const,
   };
 
   return {
@@ -358,6 +371,7 @@ export function getStorageStatus(db: Database = getDb()): StorageStatus {
         endpoint_configured: Boolean(objectStorage.endpoint),
         force_path_style: Boolean(objectStorage.forcePathStyle),
         credential_source: objectCredentialSource,
+        credential_status: "not_checked",
         profile_configured: Boolean(objectStorage.profile),
         writes: "explicit_object_store_apis",
       } : {
@@ -366,6 +380,7 @@ export function getStorageStatus(db: Database = getDb()): StorageStatus {
         role: "durable_object_bytes",
         local_root: objectStorage.localRoot,
         credential_source: objectCredentialSource,
+        credential_status: "not_applicable",
         writes: "explicit_object_store_apis",
       },
       boundary: {

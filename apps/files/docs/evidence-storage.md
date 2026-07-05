@@ -71,12 +71,14 @@ mutation:
 - `files storage status` is diagnostic. It reports no-secret credential source
   diagnostics such as `aws_profile` or `default_provider_chain`, and it does not
   call S3 listing APIs, upload objects, apply migrations, or replace the local
-  SQLite index.
+  SQLite index. Credential readiness is reported as `not_checked` unless a
+  separate mocked, dry-run, or approved live operation verifies it.
 
 For hosted deployments, configure AWS credentials by named profile, environment
 provider chain, or platform secret injection. Do not write raw access keys into
 task comments, docs, logs, PRs, or public config. S3-compatible endpoints may
 set `HASNA_FILES_S3_ENDPOINT` and `HASNA_FILES_S3_FORCE_PATH_STYLE`.
+`files sources` does not persist static S3 access keys or session tokens.
 
 ## 2026-06-09 Checksum Note
 

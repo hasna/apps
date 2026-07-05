@@ -186,8 +186,8 @@ sources
   .option("-n, --name <name>", "Source name (defaults to path/bucket)")
   .option("--region <region>", "AWS region (for S3)")
   .option("--prefix <prefix>", "S3 key prefix (for S3)")
-  .option("--access-key <key>", "AWS access key ID (for S3)")
-  .option("--secret-key <secret>", "AWS secret access key (for S3)")
+  .option("--access-key <key>", "Deprecated: static S3 credentials are rejected")
+  .option("--secret-key <secret>", "Deprecated: static S3 credentials are rejected")
   .option("--aws-profile <profile>", "AWS shared config profile name (for S3)")
   .option("--endpoint <url>", "Custom S3 endpoint (for S3-compatible storage)")
   .option("--force-path-style", "Use path-style S3 requests for S3-compatible storage")
@@ -208,15 +208,13 @@ sources
       const bucket = url.hostname;
       const prefix = opts.prefix ?? (url.pathname.replace(/^\//, "") || undefined);
       const config: S3Config = {};
-      if (opts.accessKey) config.accessKeyId = opts.accessKey;
-      if (opts.secretKey) config.secretAccessKey = opts.secretKey;
+      if (opts.accessKey || opts.secretKey) {
+        console.error(chalk.red("Static S3 credentials are not stored by @hasna/files. Use --aws-profile or the default AWS provider chain."));
+        process.exit(1);
+      }
       if (opts.awsProfile) config.profile = opts.awsProfile;
       if (opts.endpoint) config.endpoint = opts.endpoint;
       if (opts.forcePathStyle) config.forcePathStyle = true;
-      if (config.profile && config.accessKeyId) {
-        console.error(chalk.red("Use either --aws-profile or static --access-key/--secret-key credentials, not both."));
-        process.exit(1);
-      }
 
       const source = createSource({
         name: opts.name ?? bucket,

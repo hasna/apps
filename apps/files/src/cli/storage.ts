@@ -64,6 +64,7 @@ export function registerStorageCommands(program: Command): void {
         console.log(`  region: ${status.object_storage.region ?? "(unset)"}`);
         if (status.object_storage.prefix) console.log(`  prefix: ${status.object_storage.prefix}`);
         console.log(`  credentials: ${status.object_storage.credential_source ?? "default_provider_chain"}`);
+        console.log(`  credential check: ${status.object_storage.credential_status ?? "not_checked"}`);
         if (status.object_storage.endpoint_configured) console.log("  endpoint: configured");
         if (status.object_storage.force_path_style) console.log("  force path style: yes");
       } else {

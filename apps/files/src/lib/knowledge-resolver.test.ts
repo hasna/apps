@@ -3,7 +3,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const ENV_KEYS = ["HASNA_FILES_DATA_DIR", "HASNA_FILES_DB_PATH"] as const;
+const ENV_KEYS = [
+  "HASNA_FILES_DATA_DIR",
+  "HASNA_FILES_DB_PATH",
+  "AWS_ACCESS_KEY_ID",
+  "AWS_SECRET_ACCESS_KEY",
+] as const;
 const savedEnv = new Map<string, string | undefined>();
 let testDir: string | undefined;
 
@@ -13,6 +18,8 @@ beforeEach(() => {
   testDir = mkdtempSync(join(tmpdir(), "files-knowledge-resolver-"));
   process.env.HASNA_FILES_DATA_DIR = testDir;
   process.env.HASNA_FILES_DB_PATH = join(testDir, "files.db");
+  process.env.AWS_ACCESS_KEY_ID = "test-access-key";
+  process.env.AWS_SECRET_ACCESS_KEY = "test-secret-key";
 });
 
 afterEach(async () => {
@@ -280,10 +287,7 @@ describe("knowledge source resolver", () => {
       type: "s3",
       bucket: "hasna-xyz-opensource-files-test",
       region: "us-east-1",
-      config: {
-        accessKeyId: "AKIAIOSFODNN7EXAMPLE",
-        secretAccessKey: "test-secret-key",
-      },
+      config: {},
       machine_id: machine.id,
     });
     const file = upsertFile({
@@ -329,10 +333,7 @@ describe("knowledge source resolver", () => {
       type: "s3",
       bucket: "allowed-bucket",
       region: "us-east-1",
-      config: {
-        accessKeyId: "AKIAIOSFODNN7EXAMPLE",
-        secretAccessKey: "test-secret-key",
-      },
+      config: {},
       machine_id: machine.id,
     });
     const file = upsertFile({

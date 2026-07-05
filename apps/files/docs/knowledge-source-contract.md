@@ -99,7 +99,10 @@ local index, PostgreSQL remote metadata, S3/local object bytes, and booleans
 stating that status and metadata sync do not mutate remote bytes or replace the
 local index. The status payload reports credential source as no-secret
 diagnostics only; consumers must not expect raw credentials in manifests or
-resolver contracts.
+resolver contracts. It does not verify S3 credential readiness; that remains
+`not_checked` until a separate mocked, dry-run, or approved live operation
+checks access. S3 source records persist named profiles, endpoints, and
+path-style settings, not static access keys or session tokens.
 
 For S3-backed bytes, `open-files` also owns `s3_objects`. That table stores the
 canonical object identity and metadata used by future resolvers: bucket, region,

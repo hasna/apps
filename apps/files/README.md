@@ -261,7 +261,14 @@ but `HASNA_FILES_S3_BUCKET`, `HASNA_FILES_S3_PREFIX`, `HASNA_FILES_AWS_REGION`,
 `HASNA_FILES_S3_FORCE_PATH_STYLE` are the canonical repo-level object storage
 aliases. Status output reports credential source as a no-secret diagnostic
 (`aws_profile` or `default_provider_chain`) and never prints credential values
-or database URLs.
+or database URLs. It also reports credential checks as `not_checked`; readiness
+requires an explicit mocked, dry-run, or approved live operation outside
+`storage status`.
+
+Do not store static S3 access keys in `files sources`. S3 source config accepts
+named profiles, endpoints, and path-style settings only. Use platform secret
+injection, AWS environment provider chain, or a named AWS profile for
+credentials.
 
 Migration plan for hosted runtime:
 

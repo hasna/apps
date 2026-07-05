@@ -56,7 +56,7 @@ describe("sources CLI", () => {
     });
   });
 
-  test("rejects mixing AWS profile and static S3 credentials", () => {
+  test("rejects static S3 credentials instead of storing them", () => {
     const result = Bun.spawnSync({
       cmd: [
         "bun",
@@ -65,8 +65,6 @@ describe("sources CLI", () => {
         "sources",
         "add",
         "s3://hasna-xyz-prod-files",
-        "--aws-profile",
-        "hasna-xyz-infra",
         "--access-key",
         "static-access",
         "--secret-key",
@@ -78,7 +76,7 @@ describe("sources CLI", () => {
     });
 
     expect(result.exitCode).toBe(1);
-    expect(new TextDecoder().decode(result.stderr)).toContain("Use either --aws-profile");
+    expect(new TextDecoder().decode(result.stderr)).toContain("Static S3 credentials are not stored");
   });
 
   test("persists S3-compatible endpoint diagnostics without static secrets", () => {

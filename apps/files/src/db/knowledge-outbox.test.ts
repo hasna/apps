@@ -123,14 +123,14 @@ describe("knowledge source outbox", () => {
     expect(listKnowledgeSourceOutboxEvents()).toHaveLength(1);
   });
 
-  test("emits source disabled/update events without leaking source config secrets", async () => {
+  test("emits source disabled/update events without leaking source config details", async () => {
     const { getCurrentMachine } = await import("./machines.js");
     const { createSource, updateSource } = await import("./sources.js");
     const { listKnowledgeSourceOutboxEvents } = await import("./knowledge-outbox.js");
 
     const machine = getCurrentMachine();
-    const source = createSource({
-      name: "S3 source",
+    expect(() => createSource({
+      name: "S3 source with static credentials",
       type: "s3",
       bucket: "hasna-xyz-opensource-files-test",
       region: "us-east-1",
@@ -139,12 +139,18 @@ describe("knowledge source outbox", () => {
         secretAccessKey: "do-not-store-this",
       },
       machine_id: machine.id,
+    })).toThrow("must not contain static credentials");
+
+    const source = createSource({
+      name: "S3 source",
+      type: "s3",
+      bucket: "hasna-xyz-opensource-files-test",
+      region: "us-east-1",
+      config: { profile: "files-sync" },
+      machine_id: machine.id,
     });
     updateSource(source.id, {
-      config: {
-        accessKeyId: "AKIAIOSFODNN7EXAMPLE",
-        secretAccessKey: "updated-secret",
-      },
+      config: { profile: "files-sync-2" },
     });
     updateSource(source.id, { enabled: false });
 
@@ -154,8 +160,8 @@ describe("knowledge source outbox", () => {
       config_changed: true,
       changed_fields: ["config"],
     });
-    expect(JSON.stringify(events)).not.toContain("updated-secret");
     expect(JSON.stringify(events)).not.toContain("do-not-store-this");
+    expect(JSON.stringify(events)).not.toContain("files-sync-2");
   });
 
   test("emits permission_changed events from organization ACL review updates", async () => {

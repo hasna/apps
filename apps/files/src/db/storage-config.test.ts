@@ -75,6 +75,7 @@ describe("files storage config", () => {
       region: "us-east-1",
       force_path_style: true,
       credential_source: "default_provider_chain",
+      credential_status: "not_checked",
     });
     expect(status.runtime).toMatchObject({
       local_index: {
@@ -97,6 +98,7 @@ describe("files storage config", () => {
         bucket: "hasna-xyz-opensource-files-prod",
         prefix: "objects",
         credential_source: "default_provider_chain",
+        credential_status: "not_checked",
         force_path_style: true,
         writes: "explicit_object_store_apis",
       },
