@@ -86,4 +86,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Infrastructure",
     tags: ["monitoring", "uptime", "performance", "alerts", "website"],
   },
+  {
+    name: "voxel-energy",
+    displayName: "Voxel Energy",
+    description: "Off-grid data center power / sites, capacity, reservations",
+    category: "Infrastructure",
+    tags: ["energy", "data-center", "infrastructure", "gpu", "off-grid"],
+  },
 ];
