@@ -150,6 +150,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["endpoint security", "edr", "threat response", "enterprise", "cybersecurity"],
   },
   {
+    name: "twocaptcha",
+    displayName: "2Captcha",
+    description: "Captcha solving service API for automation and anti-bot workflows",
+    category: "Security & Compliance",
+    tags: ["captcha", "automation", "anti-bot", "api"],
+  },
+  {
     name: "urlscanio",
     displayName: "urlscan.io",
     description: "Website scanning and threat analysis",
