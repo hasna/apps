@@ -50,8 +50,8 @@ program
   });
 
 function getFormat(cmd: Command): OutputFormat {
-  const parent = cmd.parent;
-  return (parent?.opts().format || 'pretty') as OutputFormat;
+  const opts = typeof cmd.optsWithGlobals === 'function' ? cmd.optsWithGlobals() : cmd.opts();
+  return (opts.format || cmd.parent?.opts().format || 'pretty') as OutputFormat;
 }
 
 function getClient(): ZohoInventory {
