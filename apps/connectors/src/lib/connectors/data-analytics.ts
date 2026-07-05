@@ -31,6 +31,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["research", "papers", "academic"],
   },
   {
+    name: "uniprot",
+    displayName: "UniProt",
+    description: "Protein and proteome search from the UniProt knowledgebase",
+    category: "Data & Analytics",
+    tags: ["protein", "bioinformatics", "research"],
+  },
+  {
     name: "brandsight",
     displayName: "Brandsight",
     description: "Brand monitoring",
