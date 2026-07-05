@@ -402,6 +402,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ecommerce", "wordpress", "orders"],
   },
   {
+    name: "xml",
+    displayName: "Xml",
+    description: "XML processing platform — documents, events, and search API",
+    category: "Commerce & Finance",
+    tags: ["xml", "documents", "api"],
+  },
+  {
     name: "xero",
     displayName: "Xero",
     description: "Accounting, invoicing, and financial management",
