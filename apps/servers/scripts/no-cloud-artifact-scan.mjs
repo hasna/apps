@@ -16,20 +16,60 @@ const forbiddenMarkers = [
   ["cloud", "sync"].join(" "),
 ]
 
-const pack = spawnSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
-  encoding: "utf8",
-})
-
-if (pack.status !== 0) {
-  process.stderr.write(pack.stderr)
-  process.exit(pack.status ?? 1)
+function writeFailure(prefix, result) {
+  const stderr = result.stderr?.toString?.() ?? ""
+  const stdout = result.stdout?.toString?.() ?? ""
+  if (stderr) process.stderr.write(stderr)
+  else if (stdout) process.stderr.write(stdout)
+  else process.stderr.write(`${prefix} failed with no output\n`)
 }
 
-const [artifact] = JSON.parse(pack.stdout)
+function packWithNpm() {
+  const result = spawnSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
+    encoding: "utf8",
+  })
+
+  if (result.error?.code === "ENOENT") return null
+  if (result.status !== 0) {
+    writeFailure("npm pack", result)
+    process.exit(result.status ?? 1)
+  }
+
+  const [artifact] = JSON.parse(result.stdout)
+  return {
+    packer: "npm",
+    files: (artifact.files ?? []).map((entry) => entry.path),
+  }
+}
+
+function packWithBun() {
+  const result = spawnSync("bun", ["pm", "pack", "--dry-run", "--ignore-scripts"], {
+    encoding: "utf8",
+  })
+
+  if (result.status !== 0) {
+    writeFailure("bun pm pack", result)
+    process.exit(result.status ?? 1)
+  }
+
+  return {
+    packer: "bun",
+    files: result.stdout
+      .split(/\r?\n/)
+      .map((line) => line.match(/^packed\s+\S+\s+(.+)$/)?.[1])
+      .filter(Boolean),
+  }
+}
+
+const artifact = packWithNpm() ?? packWithBun()
+if (artifact.files.length === 0) {
+  console.error("Packed artifact scan could not determine package files.")
+  process.exit(1)
+}
+
 const hits = []
 
-for (const entry of artifact.files ?? []) {
-  const path = entry.path
+for (const path of artifact.files) {
   try {
     const content = readFileSync(path, "utf8")
     for (const marker of forbiddenMarkers) {
@@ -46,4 +86,4 @@ if (hits.length > 0) {
   process.exit(1)
 }
 
-console.log(`Packed artifact no-cloud scan passed (${artifact.files?.length ?? 0} files).`)
+console.log(`Packed artifact no-cloud scan passed (${artifact.files.length} files via ${artifact.packer}).`)

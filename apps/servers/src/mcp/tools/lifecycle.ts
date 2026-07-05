@@ -11,6 +11,10 @@ import {
   stopLocalServer,
   type LocalLifecycleOptions,
 } from "../../runtime/local-server.js";
+import {
+  resolveServerRuntimeConvention,
+  runtimeMetadataFromConvention,
+} from "../../runtime/runtime-conventions.js";
 import type { Server } from "../../types/index.js";
 
 type Helpers = {
@@ -105,9 +109,16 @@ export function registerLifecycleTools(server: McpServer, { shouldRegisterTool, 
                 metadata: { detected_from: "mcp:command" },
               }
             : detectProjectServerConfig(path ?? process.cwd(), { port, healthUrl: health_url });
+          const runtime = resolveServerRuntimeConvention({
+            mode: "local",
+            port: detected.port,
+            healthUrl: detected.healthUrl,
+            env: env ?? {},
+          });
           const serverName = name ?? displayNameForServerConfig(detected.cwd);
           const metadata = {
             ...detected.metadata,
+            ...runtimeMetadataFromConvention(runtime),
             start_command: detected.command,
             command: detected.command,
             cwd: detected.cwd,
@@ -139,7 +150,7 @@ export function registerLifecycleTools(server: McpServer, { shouldRegisterTool, 
                 metadata,
                 project_id,
               });
-          return jsonText({ server: localServer, command: detected.command, cwd: detected.cwd, existed: Boolean(existing) });
+          return jsonText({ server: localServer, command: detected.command, cwd: detected.cwd, runtime, existed: Boolean(existing) });
         } catch (e) {
           return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
         }

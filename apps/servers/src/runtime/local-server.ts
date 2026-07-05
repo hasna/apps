@@ -35,6 +35,11 @@ import type {
   Server,
   ServerOperation,
 } from "../types/index.js";
+import {
+  assertLocalLifecycleManageable,
+  resolveServerRuntimeConvention,
+  type ServerRuntimeConvention,
+} from "./runtime-conventions.js";
 
 const DEFAULT_READY_TIMEOUT_MS = 30_000;
 const DEFAULT_STOP_TIMEOUT_MS = 15_000;
@@ -104,6 +109,18 @@ interface ResolvedLifecycleConfig {
   logFile: string;
   readyTimeoutMs: number;
   stopTimeoutMs: number;
+}
+
+function serverRuntimeConvention(
+  server: Server,
+  opts: LocalLifecycleOptions = {},
+): ServerRuntimeConvention {
+  return resolveServerRuntimeConvention({
+    metadata: server.metadata,
+    env: { ...envValue(server.metadata.env), ...(opts.env ?? {}) },
+    port: opts.port,
+    healthUrl: opts.healthUrl,
+  });
 }
 
 function sleep(ms: number): Promise<void> {
@@ -266,6 +283,9 @@ function resolveServer(idOrSlug: string, db: Database): Server {
 }
 
 function resolveLifecycleConfig(server: Server, opts: LocalLifecycleOptions = {}): ResolvedLifecycleConfig {
+  const runtime = serverRuntimeConvention(server, opts);
+  assertLocalLifecycleManageable(runtime, server.slug);
+
   const cwd = resolve(
     opts.cwd
       ?? stringValue(server.metadata.cwd)
@@ -367,6 +387,7 @@ export async function getLocalServerSnapshot(
   const port = metadataPort(server.metadata) ?? null;
   const healthUrl = stringValue(server.metadata.health_url) ?? defaultHealthUrl(port ?? undefined) ?? null;
   const running = isProcessRunning(pid);
+  const runtime = serverRuntimeConvention(server);
   let ready = false;
 
   if (healthUrl) {
@@ -388,7 +409,7 @@ export async function getLocalServerSnapshot(
     healthUrl,
     logFile: stringValue(server.metadata.log_file) ?? null,
     checkedAt: now(),
-    details: {},
+    details: { runtime },
   };
 }
 
@@ -691,6 +712,7 @@ export async function stopLocalServer(
 ): Promise<LocalLifecycleResult> {
   const agentId = opts.agentId ?? "unknown-agent";
   const server = resolveServer(idOrSlug, db);
+  assertLocalLifecycleManageable(serverRuntimeConvention(server, opts), server.slug);
   const operation = createOperation({
     server_id: server.id,
     operation_type: "stop",
@@ -794,6 +816,7 @@ export async function restartLocalServer(
 ): Promise<LocalLifecycleResult> {
   const agentId = opts.agentId ?? "unknown-agent";
   const server = resolveServer(idOrSlug, db);
+  assertLocalLifecycleManageable(serverRuntimeConvention(server, opts), server.slug);
   const config = resolveLifecycleConfig(server, opts);
   let newPid: number | undefined;
   let runtimeWasChanged = false;

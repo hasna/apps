@@ -73,6 +73,10 @@ import {
   startLocalServer,
   stopLocalServer,
 } from "../runtime/local-server.js";
+import {
+  resolveServerRuntimeConvention,
+  runtimeMetadataFromConvention,
+} from "../runtime/runtime-conventions.js";
 import type { Server, UpdateServerInput } from "../types/index.js";
 import { parseStrictInteger, type StrictIntegerOptions } from "../utils/integers.js";
 
@@ -1074,6 +1078,12 @@ program
         metadata: { detected_from: "explicit" },
       }
       : detectProjectServerConfig(projectPath, { port, healthUrl: opts.healthUrl });
+    const runtime = resolveServerRuntimeConvention({
+      mode: "local",
+      port: detected.port,
+      healthUrl: detected.healthUrl,
+      env: env ?? {},
+    });
 
     let project = getProjectByPath(projectPath, db);
     if (!project) {
@@ -1083,6 +1093,7 @@ program
 
     const metadata: Record<string, unknown> = {
       ...detected.metadata,
+      ...runtimeMetadataFromConvention(runtime),
       start_command: detected.command,
       cwd: detected.cwd,
       port: detected.port,
@@ -1120,7 +1131,7 @@ program
       await emitWebhook("server.created", { server_id: server.id, project_id: server.project_id, server }, db);
     }
 
-    const output = { project, server: serverWithComputedFields(server), command: detected.command, next: `servers servers:start ${server.slug} --agent <name> --reason <why>` };
+    const output = { project, server: serverWithComputedFields(server), command: detected.command, runtime, next: `servers servers:start ${server.slug} --agent <name> --reason <why>` };
     if (wantsJson(opts)) {
       printJson(output);
     } else {
@@ -1128,6 +1139,7 @@ program
       console.log(`  Project:    ${project.path}`);
       console.log(`  Command:    ${detected.command}`);
       console.log(`  CWD:        ${detected.cwd}`);
+      console.log(`  Runtime:    ${runtime.mode}`);
       console.log(`  Health:     ${detected.healthUrl || "-"}`);
       console.log(`  Next:       ${output.next}`);
     }

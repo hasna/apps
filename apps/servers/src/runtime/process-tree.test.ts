@@ -323,7 +323,7 @@ describe("killTree", () => {
     const port = await getFreePort();
     try {
       writeFileSync(
-        join(dir, "wrapper.js"),
+        join(dir, "wrapper.cjs"),
         `
 const { spawn } = require("node:child_process");
 const { writeFileSync } = require("node:fs");
@@ -338,7 +338,7 @@ process.on("SIGTERM", () => process.exit(0));
 setInterval(() => {}, 1000);
 `,
       );
-      const wrapper = spawn("bash", ["-lc", "node wrapper.js"], {
+      const wrapper = spawn("bash", ["-lc", "node wrapper.cjs"], {
         cwd: dir,
         detached: true,
         stdio: "ignore",
@@ -355,7 +355,7 @@ setInterval(() => {}, 1000);
       const result = await killTree({
         pid: wrapperPid,
         port,
-        command: "node wrapper.js",
+        command: "node wrapper.cjs",
         cwd: dir,
         gracePeriodMs: 500,
       });
@@ -383,7 +383,7 @@ setInterval(() => {}, 1000);
       );
       const childPid = child.pid!;
       spawned.push(childPid);
-      expect(await waitFor(() => isAlive(childPid))).toBe(true);
+      expect(await waitFor(() => findListenerPids(port).includes(childPid))).toBe(true);
 
       // escalate=false: send SIGTERM only (ignored), never SIGKILL -> still alive
       const result = await killTree({

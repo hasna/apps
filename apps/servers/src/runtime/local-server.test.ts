@@ -317,6 +317,32 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
     }
   });
 
+  it("does not process-manage production cloud-backed runtime records", async () => {
+    const db = getDatabase();
+    const server = createServer({
+      name: "production-api",
+      status: "online",
+      metadata: {
+        runtime_mode: "production-cloud",
+        port: 65535,
+        health_url: "http://127.0.0.1:65535/health",
+      },
+    }, db);
+
+    await expect(startLocalServer(server.id, {
+      agentId: "agent-1",
+      command: "bun run dev",
+    }, db)).rejects.toThrow("production-cloud runtime");
+
+    await expect(stopLocalServer(server.id, {
+      agentId: "agent-1",
+    }, db)).rejects.toThrow("production-cloud runtime");
+
+    const snapshot = await getLocalServerSnapshot(server, { timeoutMs: 50 });
+    expect((snapshot.details.runtime as Record<string, unknown>).mode).toBe("production-cloud");
+    expect((snapshot.details.runtime as Record<string, unknown>).canManageProcess).toBe(false);
+  });
+
   it("refuses to start a server while another agent owns the lifecycle lock", async () => {
     const db = getDatabase();
     const server = createServer({
@@ -509,12 +535,12 @@ process.on("SIGTERM", () => {
     let childPid: number | undefined;
 
     try {
-      // wrapper.js spawns a detached grandchild (its OWN process group / session),
+      // wrapper.cjs spawns a detached grandchild (its OWN process group / session),
       // like `bunx next dev` spawning a `node next dev` worker that detaches.
       // The wrapper exits on SIGTERM; the grandchild keeps holding the port and
       // ignores SIGTERM. A correct stop must still take the whole tree down.
       writeFileSync(
-        join(dir, "wrapper.js"),
+        join(dir, "wrapper.cjs"),
         `
 const { spawn } = require("node:child_process");
 const { writeFileSync } = require("node:fs");
@@ -543,7 +569,7 @@ setInterval(() => {}, 1000);
         metadata: {
           // No leading exec: bash is the group leader, node wrapper a child,
           // and the grandchild detaches into its own group.
-          start_command: "node wrapper.js",
+          start_command: "node wrapper.cjs",
           cwd: dir,
           port,
           health_url: `http://127.0.0.1:${port}`,
@@ -598,7 +624,7 @@ setInterval(() => {}, 1000);
       // The default stop must escalate SIGTERM -> SIGKILL (no --force required)
       // and confirm the port is no longer held before reporting success.
       writeFileSync(
-        join(dir, "wrapper.js"),
+        join(dir, "wrapper.cjs"),
         `
 const { spawn } = require("node:child_process");
 const { writeFileSync } = require("node:fs");
@@ -624,7 +650,7 @@ setInterval(() => {}, 1000);
         status: "offline",
         path: dir,
         metadata: {
-          start_command: "node wrapper.js",
+          start_command: "node wrapper.cjs",
           cwd: dir,
           port,
           health_url: `http://127.0.0.1:${port}`,
