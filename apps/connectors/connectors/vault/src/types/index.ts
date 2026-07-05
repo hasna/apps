@@ -9,6 +9,7 @@ export interface VaultRequestOptions {
   query?: Record<string, string | number | boolean | undefined | string[]>;
   namespace?: string;
   wrapTtl?: string;
+  okStatuses?: number[];
 }
 
 export type VaultHttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'LIST';

@@ -28,7 +28,9 @@ export class Vault {
   }
 
   async getHealth(): Promise<unknown> {
-    return this.client.request('GET', '/v1/sys/health');
+    return this.client.request('GET', '/v1/sys/health', {
+      okStatuses: [200, 429, 472, 473, 474, 501, 503, 530],
+    });
   }
 
   async getSealStatus(): Promise<unknown> {
@@ -183,7 +185,7 @@ export class Vault {
 
   async destroyKvSecretVersions(options: { mount?: string; path: string; versions: number[] }): Promise<unknown> {
     const mount = options.mount ?? 'secret';
-    return this.client.request('POST', `/v1/${encodeURIComponent(mount)}/destroy/${requireString(options.path, 'path')}`, {
+    return this.client.request('PUT', `/v1/${encodeURIComponent(mount)}/destroy/${requireString(options.path, 'path')}`, {
       body: { versions: options.versions },
     });
   }

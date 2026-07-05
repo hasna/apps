@@ -62,6 +62,12 @@ describe('VaultClient', () => {
     expect(req.headers.get('Accept')).toBe('application/json');
   });
 
+  test('getHealth returns meaningful non-2xx Vault health states', async () => {
+    installFetchMock(Response.json({ sealed: true, initialized: true }, { status: 503 }));
+    const vault = new Vault({ baseUrl: mockConfig.baseUrl, token: 'vlt-tok' });
+    await expect(vault.getHealth()).resolves.toEqual({ sealed: true, initialized: true });
+  });
+
   test('namespace is sent as X-Vault-Namespace', async () => {
     const captured = installFetchMock();
     const client = new VaultClient(mockConfig);
@@ -164,6 +170,7 @@ describe('Vault route matrix', () => {
     { run: (v) => v.listLeases({ prefix: 'database/creds/app' }), method: 'GET', path: '/v1/sys/leases/lookup/database/creds/app', query: { list: 'true' } },
     { run: (v) => v.listEntities(), method: 'GET', path: '/v1/identity/entity/id', query: { list: 'true' } },
     { run: (v) => v.getEntity({ id: 'entity/1' }), method: 'GET', path: '/v1/identity/entity/id/entity%2F1' },
+    { run: (v) => v.destroyKvSecretVersions({ mount: 'kv', path: 'service/api', versions: [1, 2] }), method: 'PUT', path: '/v1/kv/destroy/service/api' },
   ];
 
   for (const routeCase of routeCases) {

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 
@@ -16,14 +16,18 @@ let profileOverride: string | undefined;
 const CONFIG_DIR = join(homedir(), '.hasna', 'connectors', CONNECTOR_NAME);
 const PROFILES_DIR = join(CONFIG_DIR, 'profiles');
 const CURRENT_PROFILE_FILE = join(CONFIG_DIR, 'current_profile');
+const CONFIG_DIR_MODE = 0o700;
+const CONFIG_FILE_MODE = 0o600;
 
 export function setProfileOverride(profile: string | undefined): void {
   profileOverride = profile;
 }
 
 export function ensureConfigDir(): void {
-  if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true });
-  if (!existsSync(PROFILES_DIR)) mkdirSync(PROFILES_DIR, { recursive: true });
+  if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true, mode: CONFIG_DIR_MODE });
+  chmodSync(CONFIG_DIR, CONFIG_DIR_MODE);
+  if (!existsSync(PROFILES_DIR)) mkdirSync(PROFILES_DIR, { recursive: true, mode: CONFIG_DIR_MODE });
+  chmodSync(PROFILES_DIR, CONFIG_DIR_MODE);
 }
 
 function getProfilePath(profile: string): string {
@@ -42,7 +46,7 @@ export function getCurrentProfile(): string {
 
 export function setCurrentProfile(profile: string): void {
   ensureConfigDir();
-  writeFileSync(CURRENT_PROFILE_FILE, profile, 'utf-8');
+  writeConfigFile(CURRENT_PROFILE_FILE, profile);
 }
 
 export function listProfiles(): string[] {
@@ -67,7 +71,12 @@ export function loadProfile(profile?: string): ProfileConfig {
 
 export function saveProfile(profile: string, config: ProfileConfig): void {
   ensureConfigDir();
-  writeFileSync(getProfilePath(profile), JSON.stringify(config, null, 2), 'utf-8');
+  writeConfigFile(getProfilePath(profile), JSON.stringify(config, null, 2));
+}
+
+function writeConfigFile(path: string, contents: string): void {
+  writeFileSync(path, contents, { mode: CONFIG_FILE_MODE });
+  chmodSync(path, CONFIG_FILE_MODE);
 }
 
 export function createProfile(name: string, config: ProfileConfig = {}): void {

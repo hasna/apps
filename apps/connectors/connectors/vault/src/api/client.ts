@@ -76,7 +76,7 @@ export class VaultClient {
         })()
       : {};
 
-    if (!response.ok) {
+    if (!response.ok && !options.okStatuses?.includes(response.status)) {
       const record = asRecord(data);
       const errors = Array.isArray(record.errors) ? record.errors : null;
       const message =
