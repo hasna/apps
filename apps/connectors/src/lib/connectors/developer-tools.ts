@@ -1004,6 +1004,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["monitoring", "uptime", "performance"],
   },
   {
+    name: "webhook",
+    displayName: "Webhook",
+    description: "Webhook API: hooks, events, search, and raw API access",
+    category: "Developer Tools",
+    tags: ["hooks", "events", "api"],
+  },
+  {
     name: "xata",
     displayName: "Xata",
     description: "Serverless database with search and analytics",
