@@ -1039,6 +1039,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["helpdesk", "support", "zoho"],
   },
   {
+    name: "zoho-survey",
+    displayName: "Zoho Survey",
+    description: "Online survey and feedback collection platform",
+    category: "Business Tools",
+    tags: ["surveys", "feedback", "zoho"],
+  },
+  {
     name: "zoho-creator",
     displayName: "Zoho Creator",
     description: "Low-code business apps and databases",
