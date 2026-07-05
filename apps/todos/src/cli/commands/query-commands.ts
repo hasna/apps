@@ -869,7 +869,9 @@ blocker_invalid_path | unsupported. Only safe_auto findings are ever mutated by 
       });
 
       if (opts.json || globalOpts.json) {
-        console.log(JSON.stringify(result));
+        // Fleet-scale doctor JSON is multi-MB; use the flush-safe writer so a
+        // piped consumer (the routing-health loop) never sees truncated JSON.
+        output(result, true);
         process.exitCode = result.ok ? 0 : 1;
         return;
       }

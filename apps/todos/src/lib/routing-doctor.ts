@@ -511,6 +511,24 @@ function createBackup(dbPath: string, generatedAt: string): RoutingDoctorBackup 
   return files.length > 0 ? { path: backupDir, files } : undefined;
 }
 
+/**
+ * Supported CLI command that restores a repair's prior value. Null-origin
+ * repairs (the field was null before we set it) restore via the explicit
+ * `--clear-working-dir` / `--clear-list` reset flags — a bare `--working-dir ''`
+ * or `--list ''` is falsy in the CLI wiring and would be a silent no-op, which
+ * is exactly the fake-undo the record must never contain.
+ */
+export function routingRepairUndoCommand(repair: Pick<RoutingRepairRecord, "task_id" | "field" | "from">): string {
+  if (repair.field === "working_dir") {
+    return repair.from === null
+      ? `todos update ${repair.task_id} --clear-working-dir`
+      : `todos update ${repair.task_id} --working-dir ${repair.from}`;
+  }
+  return repair.from === null
+    ? `todos update ${repair.task_id} --clear-list`
+    : `todos update ${repair.task_id} --list ${repair.from}`;
+}
+
 function applySafeRepair(
   finding: RoutingFinding,
   actor: string,
@@ -628,7 +646,7 @@ export function runRoutingDoctor(options: RunRoutingDoctorOptions = {}): Routing
             from: r.from,
             to: r.to,
             command: r.command,
-            undo_command: `todos update ${r.task_id} --${r.field === "working_dir" ? "working-dir" : "list"} ${r.from ?? "''"}`,
+            undo_command: routingRepairUndoCommand(r),
           })),
         };
         try {

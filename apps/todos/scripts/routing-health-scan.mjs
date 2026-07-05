@@ -86,9 +86,17 @@ function parseArgs(argv) {
   return out;
 }
 
+/**
+ * Doctor JSON is large at fleet scale (measured 8.99 MB for ~8.4k tasks /
+ * ~10.9k findings; one 1/6 shard is already ~789 KB). The runtime default
+ * spawnSync maxBuffer is 1 MB, which fails deterministically with ENOBUFS on
+ * the real corpus — so every child invocation pins an explicit 256 MB ceiling.
+ */
+export const SPAWN_MAX_BUFFER = 256 * 1024 * 1024;
+
 function main() {
   const opts = parseArgs(process.argv.slice(2));
-  const doctorRun = spawnSync(opts.todosBin, ["doctor", "routing", "--json", ...opts.doctorArgs], { encoding: "utf8" });
+  const doctorRun = spawnSync(opts.todosBin, ["doctor", "routing", "--json", ...opts.doctorArgs], { encoding: "utf8", maxBuffer: SPAWN_MAX_BUFFER });
   // doctor exit: 0 clean, 1 findings, 2 usage. Anything else (spawn failure) is an error.
   if (doctorRun.error || doctorRun.status === null || doctorRun.status > 2) {
     console.error(`routing-health-scan: doctor invocation failed: ${doctorRun.error?.message ?? `exit ${doctorRun.status}`}`);
@@ -121,7 +129,7 @@ function main() {
       "--metadata-json", JSON.stringify(spec.metadata),
       "--json",
     ],
-    { encoding: "utf8" },
+    { encoding: "utf8", maxBuffer: SPAWN_MAX_BUFFER },
   );
   if (upsert.status !== 0) {
     console.error(`routing-health-scan: task upsert failed: ${upsert.stderr || `exit ${upsert.status}`}`);

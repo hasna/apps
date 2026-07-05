@@ -512,4 +512,37 @@ describe("CLI QoL commands", () => {
     const after = JSON.parse(run(`show ${t.id} --json`));
     expect(after.task_list_id ?? null).toBeNull();
   });
+
+  it("update --clear-working-dir resets working_dir to null (undo round-trip)", () => {
+    const t = JSON.parse(run("add 'wd roundtrip' --json"));
+    const set = JSON.parse(run(`update ${t.id} --working-dir /tmp/wd/roundtrip --json`));
+    expect(set.working_dir).toBe("/tmp/wd/roundtrip");
+    const cleared = JSON.parse(run(`update ${t.id} --clear-working-dir --json`));
+    expect(cleared.working_dir).toBeNull();
+  });
+
+  it("update --clear-list detaches the task from its list (undo round-trip)", () => {
+    const list = JSON.parse(run("lists --add 'ClearList' --slug clear-list --json"));
+    const t = JSON.parse(run("add 'list roundtrip' --json"));
+    const linked = JSON.parse(run(`update ${t.id} --list ${list.id} --json`));
+    expect(linked.task_list_id).toBe(list.id);
+    const cleared = JSON.parse(run(`update ${t.id} --clear-list --json`));
+    expect(cleared.task_list_id).toBeNull();
+  });
+
+  it("update rejects --working-dir together with --clear-working-dir (and --list with --clear-list)", () => {
+    const t = JSON.parse(run("add 'conflict flags' --json"));
+    for (const combo of [`--working-dir /tmp/x --clear-working-dir`, `--list some-list --clear-list`]) {
+      let thrown = false;
+      let errorOutput = "";
+      try {
+        run(`update ${t.id} ${combo} --json`);
+      } catch (e: any) {
+        thrown = true;
+        errorOutput = e.stderr?.toString() || e.message || "";
+      }
+      expect(thrown).toBe(true);
+      expect(errorOutput).toContain("not both");
+    }
+  });
 });

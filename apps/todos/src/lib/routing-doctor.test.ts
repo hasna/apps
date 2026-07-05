@@ -10,6 +10,7 @@ import { createTask, getTask } from "../db/tasks.js";
 import {
   classifyTaskRouting,
   detectCrossRepoIntent,
+  routingRepairUndoCommand,
   routingShardOf,
   runRoutingDoctor,
   TODOS_ROUTING_DOCTOR_SCHEMA_VERSION,
@@ -259,7 +260,14 @@ describe("routing doctor — safe repair (--apply)", () => {
     expect(existsSync(undoPath)).toBe(true);
     const undo = JSON.parse(readFileSync(undoPath, "utf8"));
     expect(undo.repairs.length).toBeGreaterThanOrEqual(2);
-    expect(undo.repairs[0]).toHaveProperty("undo_command");
+    // undo commands must be REAL: value-origin repairs restore the old value,
+    // null-origin repairs use the explicit clear flags (never a falsy '' no-op).
+    const wdUndo = undo.repairs.find((r: any) => r.task_id === drifted.id && r.field === "working_dir");
+    expect(wdUndo.undo_command).toBe(`todos update ${drifted.id} --working-dir ${tempDir}`);
+    const listUndo = undo.repairs.find((r: any) => r.task_id === noList.id && r.field === "task_list_id");
+    expect(listUndo.from).toBeNull();
+    expect(listUndo.undo_command).toBe(`todos update ${noList.id} --clear-list`);
+    expect(undo.repairs.every((r: any) => !r.undo_command.includes("''"))).toBe(true);
     expect(result.backup?.path).toBeDefined();
     // residual findings still include the untouched blocker
     expect(result.summary.by_repair_class["blocker_invalid_path"]).toBeGreaterThanOrEqual(1);
@@ -308,6 +316,18 @@ describe("routing doctor — sharding & scope", () => {
     const task = createTask({ title: "drifted", project_id: project.id, task_list_id: list.id, working_dir: tempDir, tags: ["auto:route"] }, db);
     const findings = classifyTaskRouting({ task, project, db, knownRepoSlugs: new Set(["open-todos"]), verifyProjectRoot: true });
     expect(findings.some((f) => f.category === "wrong_working_dir")).toBe(true);
+  });
+});
+
+describe("routing doctor — undo command unit", () => {
+  test("value-origin repairs restore the prior value", () => {
+    expect(routingRepairUndoCommand({ task_id: "t1", field: "working_dir", from: "/old/path" })).toBe("todos update t1 --working-dir /old/path");
+    expect(routingRepairUndoCommand({ task_id: "t2", field: "task_list_id", from: "list-uuid" })).toBe("todos update t2 --list list-uuid");
+  });
+
+  test("null-origin repairs use the explicit clear flags, never a falsy '' no-op", () => {
+    expect(routingRepairUndoCommand({ task_id: "t3", field: "working_dir", from: null })).toBe("todos update t3 --clear-working-dir");
+    expect(routingRepairUndoCommand({ task_id: "t4", field: "task_list_id", from: null })).toBe("todos update t4 --clear-list");
   });
 });
 

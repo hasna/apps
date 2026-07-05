@@ -840,7 +840,9 @@ export function registerTaskCommands(program: Command) {
     .option("--tag <tags>", "New tags (alias for --tags)")
     .option("--list <id>", "Move to a task list (UUID authoritative; project-scoped slug accepted)")
     .option("--task-list <id>", "Move to a task list (alias for --list)")
+    .option("--clear-list", "Detach from its task list (reset task_list_id to null)")
     .option("--working-dir <path>", "Repair the task's working_dir to a specific path (routing metadata)")
+    .option("--clear-working-dir", "Reset the task's working_dir to null (undo path for routing repairs)")
     .option("--plan <id>", "Move to a plan")
     .option("--clear-plan", "Remove from its current plan")
     .option("--estimated <minutes>", "Estimated time in minutes")
@@ -868,6 +870,14 @@ export function registerTaskCommands(program: Command) {
         console.error(chalk.red("Use either --approval or --clear-approval, not both."));
         process.exit(1);
       }
+      if (opts.list && opts.clearList) {
+        console.error(chalk.red("Use either --list or --clear-list, not both."));
+        process.exit(1);
+      }
+      if (opts.workingDir !== undefined && opts.clearWorkingDir) {
+        console.error(chalk.red("Use either --working-dir or --clear-working-dir, not both."));
+        process.exit(1);
+      }
 
       const taskListId = opts.list ? (() => {
         const resolved = resolveTaskListRef(opts.list, current.project_id);
@@ -876,7 +886,7 @@ export function registerTaskCommands(program: Command) {
           process.exit(1);
         }
         return resolved.id;
-      })() : undefined;
+      })() : opts.clearList ? null : undefined;
       const planId = opts.plan ? resolvePlanId(opts.plan) : opts.clearPlan ? null : undefined;
 
       let task;
@@ -891,7 +901,7 @@ export function registerTaskCommands(program: Command) {
           tags: opts.tags ? opts.tags.split(",").map((t: string) => t.trim()) : undefined,
           plan_id: planId,
           task_list_id: taskListId,
-          working_dir: opts.workingDir ? resolve(opts.workingDir) : undefined,
+          working_dir: opts.workingDir ? resolve(opts.workingDir) : opts.clearWorkingDir ? null : undefined,
           estimated_minutes: opts.estimated !== undefined ? parseIntOption(opts.estimated, "--estimated") : undefined,
           sla_minutes: opts.slaMinutes !== undefined || opts.sla !== undefined ? parseIntOption(opts.slaMinutes ?? opts.sla, "--sla-minutes") : undefined,
           due_at: opts.due !== undefined ? (opts.due === "" ? null : opts.due.length === 10 ? opts.due + "T00:00:00.000Z" : opts.due) : undefined,

@@ -439,6 +439,49 @@ describe("CLI integration", () => {
     expect(JSON.parse(completedJson.stdout)).toHaveLength(80);
   });
 
+  it("should emit complete parseable JSON for a >1MB doctor routing report over a pipe", async () => {
+    // Regression guard: at fleet scale `doctor routing --json` is multi-MB and
+    // a bare console.log intermittently truncated it when stdout was a pipe
+    // (the routing-health loop's exact consumption path).
+    const dbPath = join(testRoot, "large-doctor-routing.db");
+    const projectDir = join(testRoot, "large-doctor-project");
+    mkdirSync(projectDir, { recursive: true });
+    const previousDbPath = process.env["TODOS_DB_PATH"];
+    closeDatabase();
+    process.env["TODOS_DB_PATH"] = dbPath;
+    resetDatabase();
+    const db = getDatabase();
+    const project = createProject({ name: "LargeDoctor", path: projectDir }, db);
+    createTaskList({ name: "LargeDoctor list", slug: project.task_list_id!, project_id: project.id }, db);
+    const longTitle = "routing-drift-payload ".repeat(30);
+    const seed = db.transaction(() => {
+      for (let i = 0; i < 600; i += 1) {
+        // Each task yields two safe_auto findings: wrong working_dir + null task_list_id.
+        createTask({
+          title: `${longTitle}${i}`,
+          project_id: project.id,
+          working_dir: "/somewhere/drifted/away",
+          status: "pending",
+          tags: ["auto:route"],
+        }, db);
+      }
+    });
+    seed();
+    closeDatabase();
+    if (previousDbPath === undefined) delete process.env["TODOS_DB_PATH"];
+    else process.env["TODOS_DB_PATH"] = previousDbPath;
+    resetDatabase();
+
+    const run = await runCli(["doctor", "routing", "--json"], dbPath);
+    expect(run.exitCode).toBe(1); // findings present
+    expect(run.stdout.length).toBeGreaterThan(1024 * 1024);
+    const doctor = JSON.parse(run.stdout); // must never be truncated
+    expect(doctor.schema_version).toBe("todos.routing_doctor.v1");
+    expect(doctor.summary.inspected).toBe(600);
+    expect(doctor.summary.findings_total).toBe(1200);
+    expect(doctor.findings).toHaveLength(1200);
+  });
+
   it("should run usage report command", async () => {
     const dbPath = "/tmp/test-cli-usage.db";
     const { unlinkSync } = await import("node:fs");
