@@ -157,6 +157,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["security", "scanning", "threat-intelligence"],
   },
   {
+    name: "verdex",
+    displayName: "Verdex",
+    description: "Insurance claims verification, satellite monitoring, and portfolio intelligence",
+    category: "Security & Compliance",
+    tags: ["insurance", "claims", "verification", "satellite", "monitoring"],
+  },
+  {
     name: "virustotal",
     displayName: "VirusTotal",
     description: "File and URL malware scanning and threat intelligence",
