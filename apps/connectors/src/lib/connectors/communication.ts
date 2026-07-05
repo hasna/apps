@@ -535,6 +535,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["email", "sms", "marketing"],
   },
   {
+    name: "unione",
+    displayName: "UniOne",
+    description: "Transactional email API for sending, templates, and validation",
+    category: "Communication",
+    tags: ["email", "transactional", "api"],
+  },
+  {
     name: "vero",
     displayName: "Vero",
     description: "Behavioral email marketing and automation",
