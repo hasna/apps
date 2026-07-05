@@ -934,6 +934,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["extraction", "documents", "parsing"],
   },
   {
+    name: "withai",
+    displayName: "WithAI",
+    description: "Asset-manager command center (workspaces, research tasks, document search, portfolio alerts, integrations)",
+    category: "AI & ML",
+    tags: ["ai", "asset-management", "research"],
+  },
+  {
     name: "wonderchat",
     displayName: "Wonderchat",
     description: "AI chatbot builder from website content",
