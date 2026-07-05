@@ -11,6 +11,7 @@ import {
   getActiveProfileName,
   getBaseUrl,
   getCurrentProfile,
+  isSelectableProfile,
   listProfiles,
   loadProfile,
   profileExists,
@@ -36,7 +37,7 @@ program
   .hook('preAction', (thisCommand) => {
     const opts = thisCommand.opts();
     if (opts.profile) {
-      if (!profileExists(opts.profile)) {
+      if (!isSelectableProfile(opts.profile)) {
         error(`Profile "${opts.profile}" does not exist. Create it with "${CONNECTOR_NAME} profile create ${opts.profile}"`);
         process.exit(1);
       }
@@ -86,7 +87,7 @@ profileCmd
   .command('use <name>')
   .description('Switch to a profile')
   .action((name: string) => {
-    if (!profileExists(name)) {
+    if (!isSelectableProfile(name)) {
       error(`Profile "${name}" does not exist. Create it with "profile create ${name}"`);
       process.exit(1);
     }

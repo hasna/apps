@@ -69,6 +69,10 @@ export function profileExists(profile: string): boolean {
   return existsSync(getProfilePath(profile));
 }
 
+export function isSelectableProfile(profile: string): boolean {
+  return profile === DEFAULT_PROFILE || profileExists(profile);
+}
+
 export function listProfiles(): string[] {
   ensureConfigDir();
 
