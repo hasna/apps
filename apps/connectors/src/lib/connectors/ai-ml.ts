@@ -122,6 +122,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "llm", "open-source"],
   },
   {
+    name: "zatanna",
+    displayName: "Zatanna",
+    description: "AI workflow automation and orchestration",
+    category: "AI & ML",
+    tags: ["ai", "workflows", "automation"],
+  },
+  {
     name: "cohere",
     displayName: "Cohere",
     description: "Enterprise NLP and embeddings",
