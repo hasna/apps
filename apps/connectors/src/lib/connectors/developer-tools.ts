@@ -1004,6 +1004,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["monitoring", "uptime", "performance"],
   },
   {
+    name: "windmill",
+    displayName: "Windmill",
+    description: "Workflow script platform",
+    category: "Developer Tools",
+    tags: ["workflow", "automation", "scripts"],
+  },
+  {
     name: "xata",
     displayName: "Xata",
     description: "Serverless database with search and analytics",
