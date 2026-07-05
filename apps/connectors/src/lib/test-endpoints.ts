@@ -68,6 +68,10 @@ export const TEST_ENDPOINTS: Record<string, TestEndpoint> = {
     url: "https://api.tinker.com/v1/models",
     headers: (key) => ({ Authorization: `Bearer ${key}` }),
   },
+  "vercel-ai-gateway": {
+    url: "https://ai-gateway.vercel.sh/v1/models",
+    headers: (key) => ({ Authorization: `Bearer ${key}` }),
+  },
 
   // ── Developer Tools ──────────────────────────────────────
   github: {

@@ -19,6 +19,7 @@ const SYNONYM_MAP: Record<string, string[]> = {
   // AI & ML
   ai: ["llm", "ml", "model", "gpt", "claude", "anthropic", "openai"],
   llm: ["ai", "model", "gpt", "claude"],
+  gateway: ["vercel-ai-gateway", "ai-gateway", "vercel"],
 
   // Infrastructure & Dev
   auth: ["oauth", "sso", "login", "identity", "authentication"],

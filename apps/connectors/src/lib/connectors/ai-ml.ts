@@ -920,6 +920,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "music", "generation"],
   },
   {
+    name: "vercel-ai-gateway",
+    displayName: "Vercel AI Gateway",
+    description: "Unified gateway for OpenAI, Anthropic, and OpenResponses APIs",
+    category: "AI & ML",
+    tags: ["ai", "llm", "gateway", "vercel"],
+  },
+  {
     name: "voicit",
     displayName: "Voicit",
     description: "AI meeting transcription and note-taking",
