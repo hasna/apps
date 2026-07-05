@@ -56,6 +56,8 @@ export interface OAuth2Tokens {
   expiresAt: number;
   tokenType?: string;
   scope?: string;
+  accountsServer?: string;
+  apiDomain?: string;
 }
 
 export class ZohoVaultApiError extends Error {

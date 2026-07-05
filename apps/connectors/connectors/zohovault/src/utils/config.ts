@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import type { OAuth2Config, OAuth2Tokens } from '../types';
@@ -18,6 +18,8 @@ export interface ProfileConfig {
   expiresAt?: number;
   tokenType?: string;
   scope?: string;
+  accountsServer?: string;
+  apiDomain?: string;
 
   // OAuth2 client credentials (stored separately for security)
   clientId?: string;
@@ -45,10 +47,14 @@ export function setProfileOverride(profile: string | undefined): void {
 
 export function ensureConfigDir(): void {
   if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
+    mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  } else {
+    chmodSync(CONFIG_DIR, 0o700);
   }
   if (!existsSync(PROFILES_DIR)) {
-    mkdirSync(PROFILES_DIR, { recursive: true });
+    mkdirSync(PROFILES_DIR, { recursive: true, mode: 0o700 });
+  } else {
+    chmodSync(PROFILES_DIR, 0o700);
   }
 }
 
@@ -90,7 +96,8 @@ export function setCurrentProfile(profile: string): void {
     throw new Error(`Profile "${profile}" does not exist`);
   }
 
-  writeFileSync(CURRENT_PROFILE_FILE, profile);
+  writeFileSync(CURRENT_PROFILE_FILE, profile, { mode: 0o600 });
+  chmodSync(CURRENT_PROFILE_FILE, 0o600);
 }
 
 /**
@@ -131,7 +138,9 @@ export function createProfile(profile: string, config: ProfileConfig = {}): bool
     throw new Error('Profile name can only contain letters, numbers, hyphens, and underscores');
   }
 
-  writeFileSync(getProfilePath(profile), JSON.stringify(config, null, 2));
+  const profilePath = getProfilePath(profile);
+  writeFileSync(profilePath, JSON.stringify(config, null, 2), { mode: 0o600 });
+  chmodSync(profilePath, 0o600);
   return true;
 }
 
@@ -181,7 +190,9 @@ export function loadProfile(profile?: string): ProfileConfig {
 export function saveProfile(config: ProfileConfig, profile?: string): void {
   ensureConfigDir();
   const profileName = profile || getCurrentProfile();
-  writeFileSync(getProfilePath(profileName), JSON.stringify(config, null, 2));
+  const profilePath = getProfilePath(profileName);
+  writeFileSync(profilePath, JSON.stringify(config, null, 2), { mode: 0o600 });
+  chmodSync(profilePath, 0o600);
 }
 
 // ============================================
@@ -275,6 +286,13 @@ export function setToken(token: string): void {
   saveProfile(config);
 }
 
+export function clearToken(): void {
+  const config = loadProfile();
+  delete config.token;
+  delete config.apiKey;
+  saveProfile(config);
+}
+
 // ============================================
 // OAuth2 Configuration Functions
 // ============================================
@@ -315,6 +333,8 @@ export function loadOAuthTokens(): OAuth2Tokens | null {
       expiresAt: profile.expiresAt || 0,
       tokenType: profile.tokenType,
       scope: profile.scope,
+      accountsServer: profile.accountsServer,
+      apiDomain: profile.apiDomain,
     };
   }
   return null;
@@ -326,10 +346,14 @@ export function loadOAuthTokens(): OAuth2Tokens | null {
 export function saveOAuthTokens(tokens: OAuth2Tokens): void {
   const profile = loadProfile();
   profile.accessToken = tokens.accessToken;
+  profile.token = tokens.accessToken;
+  profile.apiKey = tokens.accessToken;
   profile.refreshToken = tokens.refreshToken;
   profile.expiresAt = tokens.expiresAt;
   profile.tokenType = tokens.tokenType;
   profile.scope = tokens.scope;
+  profile.accountsServer = tokens.accountsServer;
+  profile.apiDomain = tokens.apiDomain;
   saveProfile(profile);
 }
 
@@ -338,11 +362,15 @@ export function saveOAuthTokens(tokens: OAuth2Tokens): void {
  */
 export function clearOAuthTokens(): void {
   const profile = loadProfile();
+  delete profile.token;
+  delete profile.apiKey;
   delete profile.accessToken;
   delete profile.refreshToken;
   delete profile.expiresAt;
   delete profile.tokenType;
   delete profile.scope;
+  delete profile.accountsServer;
+  delete profile.apiDomain;
   saveProfile(profile);
 }
 
@@ -351,4 +379,8 @@ export function clearOAuthTokens(): void {
  */
 export function getAccessToken(): string | undefined {
   return loadProfile().accessToken;
+}
+
+export function getAccountsServer(): string | undefined {
+  return loadProfile().accountsServer;
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { Command } from 'commander';
 import chalk from 'chalk';
+import { randomUUID } from 'crypto';
 import { ZohoVault } from '../api';
 import {
   getToken,
@@ -61,8 +62,11 @@ program
   });
 
 function getFormat(cmd: Command): OutputFormat {
-  const parent = cmd.parent;
-  return (parent?.opts().format || 'pretty') as OutputFormat;
+  let current: Command = cmd;
+  while (current.parent) {
+    current = current.parent;
+  }
+  return (current.opts().format || 'pretty') as OutputFormat;
 }
 
 function getClient(): ZohoVault {
@@ -157,12 +161,14 @@ configCmd.command('clear').action(() => {
 // Auth commands
 const authCmd = program.command('auth').description('OAuth2 authentication');
 
-authCmd.command('login').option('--client-id <id>', 'OAuth client ID').option('--client-secret <secret>', 'OAuth client secret').action(async (opts) => {
+authCmd.command('login').option('--client-id <id>', 'OAuth client ID').option('--client-secret <secret>', 'OAuth client secret').option('--data-center <dc>', 'Zoho data center').action(async (opts) => {
+  if (opts.dataCenter) setDataCenter(opts.dataCenter);
   if (opts.clientId && opts.clientSecret) setOAuthConfig({ clientId: opts.clientId, clientSecret: opts.clientSecret });
-  const url = getAuthUrl();
+  const state = randomUUID();
+  const url = getAuthUrl({ state });
   info(`Open this URL in your browser:\n${url}`);
   info(`Redirect URI: ${getRedirectUri()}`);
-  const result = await startCallbackServer();
+  const result = await startCallbackServer({ expectedState: state });
   if (!result.success || !result.tokens) { error(result.error || 'Authentication failed'); process.exit(1); }
   saveOAuthTokens(result.tokens);
   setToken(result.tokens.accessToken);

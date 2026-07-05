@@ -25,6 +25,7 @@ export {
   saveOAuthTokens,
   clearOAuthTokens,
   getAccessToken,
+  getAccountsServer,
 } from './utils/config';
 
 export {
@@ -36,8 +37,13 @@ export {
   isAuthenticated,
   getRedirectUri,
   getRedirectPort,
+  getAuthorizationEndpoint,
+  getTokenEndpoint,
+  getCallbackTokenEndpoint,
+  resolveAccountsBaseUrl,
   type AuthResult,
   type AuthUrlOptions,
+  type CallbackServerOptions,
 } from './utils/auth';
 
 export {
