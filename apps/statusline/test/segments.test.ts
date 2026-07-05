@@ -1,6 +1,7 @@
 import { describe, expect, test, beforeAll } from "bun:test";
-import { writeFileSync } from "node:fs";
-import { hostname } from "node:os";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { hostname, tmpdir } from "node:os";
+import { join } from "node:path";
 import { getSegment, segments } from "../src/segments";
 import { parseClaudeInput } from "../src/providers/claude";
 import type { StatusContext } from "../src/providers/types";
@@ -10,6 +11,22 @@ const TRANSCRIPT = "/tmp/statusline-test-transcript.jsonl";
 
 function ctx(overrides: Record<string, unknown> = {}): StatusContext {
   return parseClaudeInput({ ...fixture, ...overrides });
+}
+
+function runGit(cwd: string, args: string[]): void {
+  const proc = Bun.spawnSync(["git", ...args], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  expect(proc.exitCode).toBe(0);
+}
+
+function makeGitRepo(branch: string): string {
+  const repo = mkdtempSync(join(tmpdir(), "statusline-git-"));
+  runGit(repo, ["init"]);
+  runGit(repo, ["checkout", "-b", branch]);
+  return repo;
 }
 
 beforeAll(() => {
@@ -78,10 +95,36 @@ describe("git segments", () => {
     const out = await getSegment("project")!.render(ctx());
     expect(out).toMatch(/^(open-)?statusline( \(.+\))?$/);
   });
-  test("git-branch renders branch", async () => {
-    const out = await getSegment("git-branch")!.render(ctx({ cwd: process.cwd(), workspace: { current_dir: process.cwd() } }));
-    expect(typeof out).toBe("string");
-    expect(out!.length).toBeGreaterThan(0);
+  test("git-branch renders branch in attached checkout", async () => {
+    const repo = makeGitRepo("statusline-test");
+    try {
+      const out = await getSegment("git-branch")!.render(ctx({ cwd: repo, workspace: { current_dir: repo } }));
+      expect(out).toBe("statusline-test");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+  test("git-branch omits detached checkout", async () => {
+    const repo = makeGitRepo("statusline-test");
+    try {
+      writeFileSync(join(repo, "README.md"), "test\n");
+      runGit(repo, ["add", "README.md"]);
+      runGit(repo, [
+        "-c",
+        "user.name=Statusline Test",
+        "-c",
+        "user.email=statusline@example.invalid",
+        "commit",
+        "-m",
+        "init",
+      ]);
+      runGit(repo, ["checkout", "--detach", "HEAD"]);
+
+      const out = await getSegment("git-branch")!.render(ctx({ cwd: repo, workspace: { current_dir: repo } }));
+      expect(out).toBeNull();
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
   test("commit-age null on repo without commits or non-repo", async () => {
     const out = await getSegment("commit-age")!.render(ctx({ cwd: "/tmp", workspace: { current_dir: "/tmp" } }));

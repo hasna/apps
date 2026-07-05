@@ -2,9 +2,9 @@
 
 **Task:** Scan `src/**/*.ts` for files exceeding 1000 lines of code; create per-file refactor subtasks (target ≤700 LOC) when found.
 
-**Date:** 2026-07-05  
-**Worktree:** `/home/hasna/.hasna/loops/worktrees/open-statusline/607ec477-385d-438b-a867-cb19ff1bbbd3-46167550`  
-**Branch:** `openloops/open-statusline/607ec477-385d-438b-a867-cb19ff1bbbd3-46167550`  
+**Date:** 2026-07-05
+**Worktree:** `/home/hasna/.hasna/loops/worktrees/open-statusline/607ec477-385d-438b-a867-cb19ff1bbbd3-46167550`
+**Branch:** `openloops/open-statusline/607ec477-385d-438b-a867-cb19ff1bbbd3-46167550`
 **Verify command:** `find src -name '*.ts' | xargs wc -l | sort -n`
 
 ## Thresholds
@@ -29,10 +29,10 @@
 | 35 | `src/providers/claude.ts` |
 | 23 | `src/providers/types.ts` |
 | 20 | `src/install.ts` |
-| 19 | `src/render.ts |
+| 19 | `src/render.ts` |
 
-**Files scanned:** 12  
-**Total LOC:** 1034  
+**Files scanned:** 12
+**Total LOC:** 1034
 **Files ≥1000 LOC:** 0
 
 ## Conclusion
