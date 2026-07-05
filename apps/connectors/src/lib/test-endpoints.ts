@@ -33,6 +33,10 @@ export const TEST_ENDPOINTS: Record<string, TestEndpoint> = {
     url: "https://api.x.ai/v1/models",
     headers: (key) => ({ Authorization: `Bearer ${key}` }),
   },
+  "xai-api-platform": {
+    url: "https://api.xaiapiplatform.com/v1/items",
+    headers: (key) => ({ Authorization: `Bearer ${key}` }),
+  },
   mistral: {
     url: "https://api.mistral.ai/v1/models",
     headers: (key) => ({ Authorization: `Bearer ${key}` }),

@@ -24,6 +24,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "llm", "grok"],
   },
   {
+    name: "xai-api-platform",
+    displayName: "Xai API Platform",
+    description: "Xai API Platform REST API for items, events, and search",
+    category: "AI & ML",
+    tags: ["ai", "api-platform", "rest"],
+  },
+  {
     name: "minimax",
     displayName: "Minimax",
     description: "Video, music, image, TTS, and sound effects generation",
