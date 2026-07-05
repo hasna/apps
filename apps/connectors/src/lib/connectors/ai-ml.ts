@@ -920,6 +920,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "music", "generation"],
   },
   {
+    name: "vectorshift",
+    displayName: "VectorShift",
+    description: "AI pipeline and chatbot workflow platform",
+    category: "AI & ML",
+    tags: ["ai", "pipeline", "workflow", "chatbot"],
+  },
+  {
     name: "voicit",
     displayName: "Voicit",
     description: "AI meeting transcription and note-taking",
