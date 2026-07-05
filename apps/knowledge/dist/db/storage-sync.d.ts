@@ -1,3 +1,4 @@
+import { type KnowledgeDatabaseRuntimeStatus } from '../cloud-runtime';
 export declare const STORAGE_TABLES: readonly ["sources", "wiki_pages", "source_revisions", "chunks", "chunk_embeddings", "wiki_backlinks", "citations", "knowledge_indexes", "runs", "run_events", "provider_usage", "redaction_findings", "storage_objects", "audit_events", "approval_gates", "vector_index_entries", "reindex_queue", "knowledge_machines", "knowledge_sync_snapshots", "knowledge_sync_changes", "knowledge_sync_conflicts", "knowledge_sync_table_clocks", "knowledge_sync_imports"];
 export declare const KNOWLEDGE_STORAGE_TABLES: readonly ["sources", "wiki_pages", "source_revisions", "chunks", "chunk_embeddings", "wiki_backlinks", "citations", "knowledge_indexes", "runs", "run_events", "provider_usage", "redaction_findings", "storage_objects", "audit_events", "approval_gates", "vector_index_entries", "reindex_queue", "knowledge_machines", "knowledge_sync_snapshots", "knowledge_sync_changes", "knowledge_sync_conflicts", "knowledge_sync_table_clocks", "knowledge_sync_imports"];
 type StorageTable = (typeof STORAGE_TABLES)[number];
@@ -49,6 +50,7 @@ export interface StorageStatus {
     databasePath: string;
     tables: typeof STORAGE_TABLES;
     sync: SyncMeta[];
+    runtime: KnowledgeDatabaseRuntimeStatus;
 }
 export declare function getStorageDatabaseEnvName(): (typeof STORAGE_DATABASE_ENV)[number] | null;
 export declare function getStorageDatabaseEnv(): StorageEnv | null;

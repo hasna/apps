@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import type { Database } from 'bun:sqlite';
 import { DEFAULT_KNOWLEDGE_API_URL, normalizeKnowledgeApiOrigin } from './auth';
+import { buildKnowledgeCloudRuntimePlan, type KnowledgeCloudRuntimePlan } from './cloud-runtime';
 import { REMOTE_KNOWLEDGE_CONTRACT_VERSION } from './remote-client';
 import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
 import { HASNA_KNOWLEDGE_APP_PATH, EXAMPLE_KNOWLEDGE_CANONICAL } from './workspace';
@@ -70,6 +71,7 @@ export interface StorageContract {
     remote_contract_version: typeof REMOTE_KNOWLEDGE_CONTRACT_VERSION;
     requires_hosted_account_for_local_use: false;
   };
+  cloud_runtime: KnowledgeCloudRuntimePlan;
   source_ownership: {
     owner: 'open-files';
     preferred_ref: string;
@@ -172,6 +174,7 @@ export function resolveStorageContract(
   const s3UriPrefix = s3 ? `s3://${s3.bucket}/${prefix ? `${prefix}/` : ''}` : '';
   const canonicalPrefix = EXAMPLE_KNOWLEDGE_CANONICAL.s3.prefix.replace(/^\/+|\/+$/g, '');
   const canonicalS3UriPrefix = `s3://${EXAMPLE_KNOWLEDGE_CANONICAL.s3.bucket}/${canonicalPrefix}/`;
+  const hostedApiUrl = normalizeKnowledgeApiOrigin(config.hosted?.api_url ?? DEFAULT_KNOWLEDGE_API_URL);
   const canonicalActive = config.storage.type === 's3'
     && s3?.bucket === EXAMPLE_KNOWLEDGE_CANONICAL.s3.bucket
     && (s3.region ?? null) === EXAMPLE_KNOWLEDGE_CANONICAL.s3.region;
@@ -238,13 +241,19 @@ export function resolveStorageContract(
     },
     hosted: {
       enabled: config.mode === 'hosted',
-      api_url: normalizeKnowledgeApiOrigin(config.hosted?.api_url ?? DEFAULT_KNOWLEDGE_API_URL),
+      api_url: hostedApiUrl,
       api_url_env: 'KNOWLEDGE_API_URL',
       api_key_env: 'KNOWLEDGE_API_KEY',
       auth_storage: '~/.hasna/knowledge/auth.json',
       remote_contract_version: REMOTE_KNOWLEDGE_CONTRACT_VERSION,
       requires_hosted_account_for_local_use: false,
     },
+    cloud_runtime: buildKnowledgeCloudRuntimePlan({
+      config,
+      workspace,
+      scope,
+      hostedApiUrl,
+    }),
     source_ownership: {
       owner: 'open-files',
       preferred_ref: config.sources.preferred_ref,

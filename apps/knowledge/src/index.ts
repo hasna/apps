@@ -205,6 +205,8 @@ export {
   type StorageValidationResult,
 } from './storage-contract.js';
 export {
+  KNOWLEDGE_CATALOG_MODE_ENVS,
+  KNOWLEDGE_DATABASE_URL_ENVS,
   KNOWLEDGE_STORAGE_ENV,
   KNOWLEDGE_STORAGE_FALLBACK_ENV,
   KNOWLEDGE_STORAGE_MODE_ENV,
@@ -228,6 +230,9 @@ export {
   storageSync,
 } from './storage.js';
 export type {
+  KnowledgeCatalogRuntimeMode,
+  KnowledgeCloudRuntimePlan,
+  KnowledgeDatabaseRuntimeStatus,
   StorageEnv,
   StorageMode,
   StorageStatus,

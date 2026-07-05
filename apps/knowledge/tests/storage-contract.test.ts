@@ -28,6 +28,35 @@ describe('knowledge storage contract', () => {
     expect(contract.local_layout.knowledge_db_path).toBe(join(workspace.home, 'knowledge.db'));
     expect(contract.artifact_store.type).toBe('local');
     expect(contract.artifact_store.uri_prefix).toBe(pathToFileURL(`${workspace.artifactsDir}/`).href);
+    expect(contract.cloud_runtime.catalog).toMatchObject({
+      default_mode: 'local',
+      mode_source: 'environment',
+      status_command: 'knowledge db storage status --scope project --json',
+    });
+    expect(contract.cloud_runtime.catalog.database_url_env).toEqual(['HASNA_KNOWLEDGE_DATABASE_URL', 'KNOWLEDGE_DATABASE_URL']);
+    expect(contract.cloud_runtime.catalog.mode_env).toEqual(['HASNA_KNOWLEDGE_STORAGE_MODE', 'KNOWLEDGE_STORAGE_MODE']);
+    expect(contract.cloud_runtime.catalog.local_sqlite).toMatchObject({
+      path: workspace.knowledgeDbPath,
+      active_without_remote_env: true,
+      remains_present_for_hybrid_sync: true,
+    });
+    expect(contract.cloud_runtime.artifacts.local_files).toMatchObject({
+      active: true,
+      path: workspace.artifactsDir,
+      uri_prefix: pathToFileURL(`${workspace.artifactsDir}/`).href,
+    });
+    expect(contract.cloud_runtime.artifacts.s3.active).toBe(false);
+    expect(contract.cloud_runtime.privacy_gates).toMatchObject({
+      source_owner: 'open-files',
+      raw_source_bytes_stored_in_open_knowledge: false,
+      secret_values_stored_in_open_knowledge: false,
+      bulk_private_upload_requires_approval: true,
+    });
+    expect(contract.cloud_runtime.migration_gates).toMatchObject({
+      status_commands_mutate_cloud: false,
+      provisioning_requires_external_approval: true,
+      live_data_migration_requires_external_approval: true,
+    });
     expect(contract.source_ownership.owner).toBe('open-files');
     expect(contract.source_ownership.raw_source_bytes_stored_in_open_knowledge).toBe(false);
     expect(contract.private_fleet_boundary).toMatchObject({
@@ -87,6 +116,20 @@ describe('knowledge storage contract', () => {
       region: 'us-east-1',
       server_side_encryption: 'aws:kms',
       kms_key_configured: true,
+    });
+    expect(contract.cloud_runtime.artifacts).toMatchObject({
+      selected_type: 's3',
+      generated_only: true,
+      s3: {
+        active: true,
+        bucket: 'knowledge-bucket',
+        prefix: 'org/project/knowledge',
+        uri_prefix: 's3://knowledge-bucket/org/project/knowledge/',
+        region: 'us-east-1',
+        server_side_encryption: 'aws:kms',
+        kms_key_configured: true,
+        credential_values_exposed: false,
+      },
     });
     expect(contract.source_ownership.does_not_store).toContain('raw open-files bytes');
   });

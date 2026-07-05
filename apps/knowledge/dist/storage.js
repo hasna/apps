@@ -16,6 +16,143 @@ var __export = (target, all) => {
 var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
 var __require = import.meta.require;
 
+// src/cloud-runtime.ts
+import { pathToFileURL } from "url";
+var KNOWLEDGE_DATABASE_URL_ENVS = ["HASNA_KNOWLEDGE_DATABASE_URL", "KNOWLEDGE_DATABASE_URL"];
+var KNOWLEDGE_CATALOG_MODE_ENVS = ["HASNA_KNOWLEDGE_STORAGE_MODE", "KNOWLEDGE_STORAGE_MODE"];
+function normalizedS3Prefix(storage) {
+  return storage.s3?.prefix?.replace(/^\/+|\/+$/g, "") ?? null;
+}
+function artifactUriPrefix(storage, workspace) {
+  if (storage.type === "s3" && storage.s3?.bucket) {
+    const prefix = normalizedS3Prefix(storage);
+    return `s3://${storage.s3.bucket}/${prefix ? `${prefix}/` : ""}`;
+  }
+  return pathToFileURL(`${workspace.artifactsDir}/`).href;
+}
+function privacyGates() {
+  return {
+    source_owner: "open-files",
+    raw_source_bytes_stored_in_open_knowledge: false,
+    secret_values_stored_in_open_knowledge: false,
+    bulk_private_upload_requires_approval: true
+  };
+}
+function migrationGates() {
+  return {
+    status_commands_mutate_cloud: false,
+    provisioning_requires_external_approval: true,
+    live_data_migration_requires_external_approval: true,
+    prohibited_without_approval: [
+      "production AWS mutation",
+      "RDS or S3 provisioning",
+      "secret creation or rotation",
+      "terraform apply",
+      "bulk private source upload"
+    ]
+  };
+}
+function buildKnowledgeCloudRuntimePlan(input) {
+  const { config, workspace, scope, hostedApiUrl } = input;
+  const prefix = normalizedS3Prefix(config.storage);
+  const uriPrefix = artifactUriPrefix(config.storage, workspace);
+  return {
+    catalog: {
+      default_mode: "local",
+      mode_source: "environment",
+      database_url_env: KNOWLEDGE_DATABASE_URL_ENVS,
+      mode_env: KNOWLEDGE_CATALOG_MODE_ENVS,
+      status_command: `knowledge db storage status --scope ${scope} --json`,
+      local_sqlite: {
+        path: workspace.knowledgeDbPath,
+        role: "Local working catalog for sources, chunks, citations, indexes, runs, and sync metadata.",
+        active_without_remote_env: true,
+        remains_present_for_hybrid_sync: true
+      },
+      remote_postgres: {
+        supported_modes: ["hybrid", "remote"],
+        configured_by_env: KNOWLEDGE_DATABASE_URL_ENVS,
+        status_connects_to_remote: false,
+        migration_commands: [
+          `knowledge db storage push --scope ${scope} --json`,
+          `knowledge db storage pull --scope ${scope} --json`,
+          `knowledge db storage sync --scope ${scope} --json`
+        ]
+      }
+    },
+    artifacts: {
+      selected_type: config.storage.type,
+      generated_only: true,
+      local_files: {
+        active: config.storage.type === "local",
+        path: workspace.artifactsDir,
+        uri_prefix: pathToFileURL(`${workspace.artifactsDir}/`).href
+      },
+      s3: {
+        active: config.storage.type === "s3",
+        bucket: config.storage.s3?.bucket ?? null,
+        prefix,
+        uri_prefix: config.storage.type === "s3" ? uriPrefix : null,
+        region: config.storage.s3?.region ?? null,
+        profile: config.storage.s3?.profile ?? null,
+        server_side_encryption: config.storage.s3?.server_side_encryption ?? null,
+        kms_key_configured: Boolean(config.storage.s3?.kms_key_id),
+        credential_values_exposed: false
+      }
+    },
+    hosted_api: {
+      mode_enabled: config.mode === "hosted",
+      api_url: hostedApiUrl,
+      api_url_env: "KNOWLEDGE_API_URL",
+      api_key_env: "KNOWLEDGE_API_KEY",
+      requires_hosted_account_for_local_use: false
+    },
+    privacy_gates: privacyGates(),
+    migration_gates: migrationGates()
+  };
+}
+function buildKnowledgeDatabaseRuntimeStatus(input) {
+  const { config, workspace, scope, selectedMode, activeDatabaseEnv } = input;
+  const configured = Boolean(activeDatabaseEnv);
+  const warnings = [];
+  if (selectedMode === "remote" && !configured) {
+    warnings.push("Remote catalog mode is selected, but no knowledge database URL env var is configured.");
+  }
+  if (selectedMode === "local" && configured) {
+    warnings.push("A knowledge database URL env var is configured, but catalog mode is local; push/pull/sync commands will remain opt-in.");
+  }
+  return {
+    selected_mode: selectedMode,
+    configured,
+    active_database_env: activeDatabaseEnv,
+    database_url_env: KNOWLEDGE_DATABASE_URL_ENVS,
+    mode_env: KNOWLEDGE_CATALOG_MODE_ENVS,
+    local_sqlite: {
+      active: true,
+      path: workspace.knowledgeDbPath,
+      role: selectedMode === "local" ? "Authoritative local catalog; no remote PostgreSQL sync is selected." : "Local working catalog and sync metadata cache used by explicit PostgreSQL push/pull/sync commands."
+    },
+    remote_postgres: {
+      configured,
+      active_env: activeDatabaseEnv,
+      connects_during_status: false,
+      migration_commands: [
+        `knowledge db storage push --scope ${scope} --json`,
+        `knowledge db storage pull --scope ${scope} --json`,
+        `knowledge db storage sync --scope ${scope} --json`
+      ]
+    },
+    artifacts: {
+      selected_type: config.storage.type,
+      generated_only: true,
+      status_command: `knowledge storage status --scope ${scope} --json`,
+      uri_prefix: artifactUriPrefix(config.storage, workspace)
+    },
+    privacy_gates: privacyGates(),
+    migration_gates: migrationGates(),
+    warnings
+  };
+}
 // src/knowledge-db.ts
 import { Database } from "bun:sqlite";
 
@@ -1092,8 +1229,8 @@ var KNOWLEDGE_STORAGE_ENV = "HASNA_KNOWLEDGE_DATABASE_URL";
 var KNOWLEDGE_STORAGE_FALLBACK_ENV = "KNOWLEDGE_DATABASE_URL";
 var KNOWLEDGE_STORAGE_MODE_ENV = "HASNA_KNOWLEDGE_STORAGE_MODE";
 var KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV = "KNOWLEDGE_STORAGE_MODE";
-var STORAGE_DATABASE_ENV = [KNOWLEDGE_STORAGE_ENV, KNOWLEDGE_STORAGE_FALLBACK_ENV];
-var STORAGE_MODE_ENV = [KNOWLEDGE_STORAGE_MODE_ENV, KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV];
+var STORAGE_DATABASE_ENV = KNOWLEDGE_DATABASE_URL_ENVS;
+var STORAGE_MODE_ENV = KNOWLEDGE_CATALOG_MODE_ENVS;
 var PRIMARY_KEYS = {
   sources: ["id"],
   wiki_pages: ["id"],
@@ -1135,7 +1272,8 @@ function openScopedDb(options = {}) {
   return {
     db: openKnowledgeDb(workspace.knowledgeDbPath),
     path: workspace.knowledgeDbPath,
-    scope: options.scope ?? "global"
+    scope: options.scope ?? "global",
+    workspace
   };
 }
 function getStorageDatabaseEnvName() {
@@ -1224,19 +1362,28 @@ function getSyncMetaAll(options = {}) {
 function getStorageStatus(options = {}) {
   const activeEnv = getStorageDatabaseEnv();
   const local = openScopedDb(options);
+  const mode = getStorageMode();
   try {
     ensureSyncMetaTable(local.db);
     const sync = local.db.query("SELECT table_name, last_synced_at, direction FROM _knowledge_sync_meta ORDER BY table_name, direction").all();
+    const config = readKnowledgeConfig(local.workspace.configPath);
     return {
       configured: Boolean(activeEnv),
-      mode: getStorageMode(),
+      mode,
       env: STORAGE_DATABASE_ENV,
       activeEnv: activeEnv?.name ?? null,
       service: "knowledge",
       scope: local.scope,
       databasePath: local.path,
       tables: STORAGE_TABLES,
-      sync
+      sync,
+      runtime: buildKnowledgeDatabaseRuntimeStatus({
+        config,
+        workspace: local.workspace,
+        scope: local.scope,
+        selectedMode: mode,
+        activeDatabaseEnv: activeEnv?.name ?? null
+      })
     };
   } finally {
     local.db.close();
@@ -1416,6 +1563,8 @@ export {
   getStorageDatabaseUrl,
   getStorageDatabaseEnvName,
   getStorageDatabaseEnv,
+  buildKnowledgeDatabaseRuntimeStatus,
+  buildKnowledgeCloudRuntimePlan,
   STORAGE_TABLES,
   STORAGE_MODE_ENV,
   STORAGE_DATABASE_ENV,
@@ -1425,5 +1574,7 @@ export {
   KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV,
   KNOWLEDGE_STORAGE_MODE_ENV,
   KNOWLEDGE_STORAGE_FALLBACK_ENV,
-  KNOWLEDGE_STORAGE_ENV
+  KNOWLEDGE_STORAGE_ENV,
+  KNOWLEDGE_DATABASE_URL_ENVS,
+  KNOWLEDGE_CATALOG_MODE_ENVS
 };

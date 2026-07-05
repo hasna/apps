@@ -1208,6 +1208,30 @@ describe('knowledge cli', () => {
     expect(storageOut.hosted.enabled).toBe(true);
     expect(storageOut.hosted.api_url).toBe('https://knowledge.example.com');
     expect(storageOut.canonical_example.active).toBe(false);
+    expect(storageOut.cloud_runtime).toMatchObject({
+      catalog: {
+        default_mode: 'local',
+        status_command: 'knowledge db storage status --scope project --json',
+      },
+      artifacts: {
+        selected_type: 'local',
+        generated_only: true,
+      },
+      hosted_api: {
+        mode_enabled: true,
+        api_url: 'https://knowledge.example.com',
+        requires_hosted_account_for_local_use: false,
+      },
+      privacy_gates: {
+        source_owner: 'open-files',
+        raw_source_bytes_stored_in_open_knowledge: false,
+        secret_values_stored_in_open_knowledge: false,
+      },
+      migration_gates: {
+        status_commands_mutate_cloud: false,
+        provisioning_requires_external_approval: true,
+      },
+    });
 
     const before = runCli(['auth', 'whoami', '--scope', 'project', '--json'], dir, env);
     expect(before.exitCode).toBe(0);
@@ -1287,6 +1311,61 @@ describe('knowledge cli', () => {
     expect(storageOut.mode).toBe('local');
     expect(storageOut.tables).toContain('sources');
     expect(storageOut.tables).not.toContain('chunks_fts');
+    expect(storageOut.runtime).toMatchObject({
+      selected_mode: 'local',
+      configured: false,
+      active_database_env: null,
+      local_sqlite: {
+        active: true,
+      },
+      remote_postgres: {
+        configured: false,
+        active_env: null,
+        connects_during_status: false,
+      },
+      artifacts: {
+        selected_type: 'local',
+        generated_only: true,
+      },
+      privacy_gates: {
+        raw_source_bytes_stored_in_open_knowledge: false,
+        secret_values_stored_in_open_knowledge: false,
+      },
+    });
+    expectSameExistingPath(storageOut.runtime.local_sqlite.path, join(dir, '.hasna', 'knowledge', 'knowledge.db'));
+  });
+
+  test('db storage status reports remote catalog env names without leaking database URLs', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-db-storage-runtime-cli-'));
+    const env = {
+      HASNA_KNOWLEDGE_DATABASE_URL: 'postgres://db.example.invalid/knowledge',
+      HASNA_KNOWLEDGE_STORAGE_MODE: 'remote',
+    };
+
+    const storage = runCli(['db', 'storage', 'status', '--scope', 'project', '--json'], dir, env);
+    expect(storage.exitCode).toBe(0);
+    const raw = new TextDecoder().decode(storage.stdout);
+    expect(raw).not.toContain('postgres://db.example.invalid/knowledge');
+    const storageOut = JSON.parse(raw);
+    expect(storageOut).toMatchObject({
+      configured: true,
+      mode: 'remote',
+      activeEnv: 'HASNA_KNOWLEDGE_DATABASE_URL',
+      runtime: {
+        selected_mode: 'remote',
+        configured: true,
+        active_database_env: 'HASNA_KNOWLEDGE_DATABASE_URL',
+        remote_postgres: {
+          configured: true,
+          active_env: 'HASNA_KNOWLEDGE_DATABASE_URL',
+          connects_during_status: false,
+        },
+        migration_gates: {
+          status_commands_mutate_cloud: false,
+          live_data_migration_requires_external_approval: true,
+        },
+      },
+    });
   });
 
   test('db init migrates an existing global schema v7 database to schema v8', () => {

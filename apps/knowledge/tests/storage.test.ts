@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openKnowledgeDb } from '../src/knowledge-db';
@@ -140,9 +140,66 @@ describe('knowledge database storage sync config', () => {
       activeEnv: null,
       sync: [],
     });
-    expect(status.databasePath).toBe(join(dir, '.hasna', 'knowledge', 'knowledge.db'));
+    expect(realpathSync(status.databasePath)).toBe(realpathSync(join(dir, '.hasna', 'knowledge', 'knowledge.db')));
     expect(existsSync(status.databasePath)).toBe(true);
     expect(status.tables).toEqual(STORAGE_TABLES);
+    expect(status.runtime).toMatchObject({
+      selected_mode: 'local',
+      configured: false,
+      active_database_env: null,
+      database_url_env: ['HASNA_KNOWLEDGE_DATABASE_URL', 'KNOWLEDGE_DATABASE_URL'],
+      mode_env: ['HASNA_KNOWLEDGE_STORAGE_MODE', 'KNOWLEDGE_STORAGE_MODE'],
+      local_sqlite: {
+        active: true,
+      },
+      remote_postgres: {
+        configured: false,
+        active_env: null,
+        connects_during_status: false,
+      },
+      artifacts: {
+        selected_type: 'local',
+        generated_only: true,
+        status_command: 'knowledge storage status --scope project --json',
+      },
+      privacy_gates: {
+        source_owner: 'open-files',
+        raw_source_bytes_stored_in_open_knowledge: false,
+        secret_values_stored_in_open_knowledge: false,
+        bulk_private_upload_requires_approval: true,
+      },
+      migration_gates: {
+        status_commands_mutate_cloud: false,
+        provisioning_requires_external_approval: true,
+        live_data_migration_requires_external_approval: true,
+      },
+    });
+    expect(realpathSync(status.runtime.local_sqlite.path)).toBe(realpathSync(join(dir, '.hasna', 'knowledge', 'knowledge.db')));
+    expect(status.runtime.remote_postgres.migration_commands).toContain('knowledge db storage sync --scope project --json');
+  });
+
+  test('storage status reports remote catalog mode using env names without leaking URLs', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ok-storage-runtime-env-'));
+    process.env[KNOWLEDGE_STORAGE_ENV] = 'postgres://db.example.invalid/knowledge';
+    process.env[KNOWLEDGE_STORAGE_MODE_ENV] = 'remote';
+
+    const status = getStorageStatus({ scope: 'project', cwd: dir });
+
+    expect(status.configured).toBe(true);
+    expect(status.mode).toBe('remote');
+    expect(status.activeEnv).toBe(KNOWLEDGE_STORAGE_ENV);
+    expect(status.runtime).toMatchObject({
+      selected_mode: 'remote',
+      configured: true,
+      active_database_env: KNOWLEDGE_STORAGE_ENV,
+      remote_postgres: {
+        configured: true,
+        active_env: KNOWLEDGE_STORAGE_ENV,
+        connects_during_status: false,
+      },
+    });
+    expect(JSON.stringify(status)).toContain(KNOWLEDGE_STORAGE_ENV);
+    expect(JSON.stringify(status)).not.toContain('postgres://db.example.invalid/knowledge');
   });
 
   test('pushes hosted-ready catalog rows and S3 artifact manifests through a fake PostgreSQL adapter', async () => {

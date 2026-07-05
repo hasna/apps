@@ -33,6 +33,25 @@ describe('hosted-aware config and remote contracts', () => {
       api_key_env: 'KNOWLEDGE_API_KEY',
       requires_hosted_account_for_local_use: false,
     });
+    expect(storage.cloud_runtime).toMatchObject({
+      catalog: {
+        default_mode: 'local',
+        database_url_env: ['HASNA_KNOWLEDGE_DATABASE_URL', 'KNOWLEDGE_DATABASE_URL'],
+        mode_env: ['HASNA_KNOWLEDGE_STORAGE_MODE', 'KNOWLEDGE_STORAGE_MODE'],
+      },
+      artifacts: {
+        selected_type: 'local',
+        generated_only: true,
+      },
+      hosted_api: {
+        mode_enabled: true,
+        api_url: 'https://knowledge.example.com',
+      },
+      migration_gates: {
+        status_commands_mutate_cloud: false,
+        live_data_migration_requires_external_approval: true,
+      },
+    });
 
     const local = service.setup({ mode: 'local' });
     expect(local.mode).toBe('local');
@@ -69,6 +88,17 @@ describe('hosted-aware config and remote contracts', () => {
     const storage = service.storageContract();
     expect(storage.canonical_example.secrets.s3).toBe('example/knowledge/prod/s3');
     expect(storage.source_ownership.owner).toBe('open-files');
+    expect(storage.cloud_runtime.artifacts).toMatchObject({
+      selected_type: 's3',
+      generated_only: true,
+      s3: {
+        active: true,
+        bucket: 'example-knowledge-prod',
+        prefix: '.hasna/knowledge',
+        uri_prefix: 's3://example-knowledge-prod/.hasna/knowledge/',
+        credential_values_exposed: false,
+      },
+    });
   });
 
   test('stores auth locally, lets env credentials win, and clears credentials', () => {

@@ -1,4 +1,5 @@
 import type { Database } from 'bun:sqlite';
+import { type KnowledgeCloudRuntimePlan } from './cloud-runtime';
 import { REMOTE_KNOWLEDGE_CONTRACT_VERSION } from './remote-client';
 import type { KnowledgeConfig, KnowledgeWorkspace } from './workspace';
 import { EXAMPLE_KNOWLEDGE_CANONICAL } from './workspace';
@@ -65,6 +66,7 @@ export interface StorageContract {
         remote_contract_version: typeof REMOTE_KNOWLEDGE_CONTRACT_VERSION;
         requires_hosted_account_for_local_use: false;
     };
+    cloud_runtime: KnowledgeCloudRuntimePlan;
     source_ownership: {
         owner: 'open-files';
         preferred_ref: string;

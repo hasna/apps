@@ -114,6 +114,16 @@ raw source ownership outside knowledge. Source files remain referenced via
 `open-files://`, `file://`, `s3://`, or web refs; knowledge stores derived
 chunks, citations, indexes, run logs, and generated wiki artifacts.
 
+Cloud-backed preparation is explicit in diagnostics, not implicit live
+provisioning. `knowledge storage status --scope project --json` reports a
+`cloud_runtime` contract for local SQLite, local/S3 generated artifacts, hosted
+API env var names, privacy gates, and migration approval gates.
+`knowledge db storage status --scope project --json` reports the selected
+catalog mode (`local`, `hybrid`, or `remote`) and the active database env var
+name without printing connection strings or connecting to PostgreSQL. See
+[`docs/migration/cloud-backed-runtime.md`](docs/migration/cloud-backed-runtime.md)
+for the migration plan and approval boundaries.
+
 ## Quick Start
 
 ```bash

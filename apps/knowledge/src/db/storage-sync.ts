@@ -1,6 +1,12 @@
 import type { Database } from 'bun:sqlite';
+import {
+  KNOWLEDGE_CATALOG_MODE_ENVS,
+  KNOWLEDGE_DATABASE_URL_ENVS,
+  buildKnowledgeDatabaseRuntimeStatus,
+  type KnowledgeDatabaseRuntimeStatus,
+} from '../cloud-runtime';
 import { migrateKnowledgeDb, openKnowledgeDb } from '../knowledge-db';
-import { ensureKnowledgeWorkspace, resolveScopedWorkspace } from '../workspace';
+import { ensureKnowledgeWorkspace, readKnowledgeConfig, resolveScopedWorkspace, type KnowledgeWorkspace } from '../workspace';
 import { PG_MIGRATIONS } from './pg-migrations';
 import { PgAdapterAsync } from './remote-storage';
 
@@ -76,8 +82,8 @@ export const KNOWLEDGE_STORAGE_ENV = 'HASNA_KNOWLEDGE_DATABASE_URL';
 export const KNOWLEDGE_STORAGE_FALLBACK_ENV = 'KNOWLEDGE_DATABASE_URL';
 export const KNOWLEDGE_STORAGE_MODE_ENV = 'HASNA_KNOWLEDGE_STORAGE_MODE';
 export const KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV = 'KNOWLEDGE_STORAGE_MODE';
-export const STORAGE_DATABASE_ENV = [KNOWLEDGE_STORAGE_ENV, KNOWLEDGE_STORAGE_FALLBACK_ENV] as const;
-export const STORAGE_MODE_ENV = [KNOWLEDGE_STORAGE_MODE_ENV, KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV] as const;
+export const STORAGE_DATABASE_ENV = KNOWLEDGE_DATABASE_URL_ENVS;
+export const STORAGE_MODE_ENV = KNOWLEDGE_CATALOG_MODE_ENVS;
 
 export interface StorageStatus {
   configured: boolean;
@@ -89,6 +95,7 @@ export interface StorageStatus {
   databasePath: string;
   tables: typeof STORAGE_TABLES;
   sync: SyncMeta[];
+  runtime: KnowledgeDatabaseRuntimeStatus;
 }
 
 const PRIMARY_KEYS: Record<StorageTable, string[]> = {
@@ -128,13 +135,14 @@ function normalizeStorageMode(value: string | undefined): StorageMode | undefine
   return undefined;
 }
 
-function openScopedDb(options: StorageStatusOptions = {}): { db: Database; path: string; scope: string } {
+function openScopedDb(options: StorageStatusOptions = {}): { db: Database; path: string; scope: string; workspace: KnowledgeWorkspace } {
   const workspace = ensureKnowledgeWorkspace(resolveScopedWorkspace(options.scope, options.cwd).home);
   migrateKnowledgeDb(workspace.knowledgeDbPath);
   return {
     db: openKnowledgeDb(workspace.knowledgeDbPath),
     path: workspace.knowledgeDbPath,
     scope: options.scope ?? 'global',
+    workspace,
   };
 }
 
@@ -230,12 +238,14 @@ export function getSyncMetaAll(options: StorageStatusOptions = {}): SyncMeta[] {
 export function getStorageStatus(options: StorageStatusOptions = {}): StorageStatus {
   const activeEnv = getStorageDatabaseEnv();
   const local = openScopedDb(options);
+  const mode = getStorageMode();
   try {
     ensureSyncMetaTable(local.db);
     const sync = local.db.query('SELECT table_name, last_synced_at, direction FROM _knowledge_sync_meta ORDER BY table_name, direction').all() as SyncMeta[];
+    const config = readKnowledgeConfig(local.workspace.configPath);
     return {
       configured: Boolean(activeEnv),
-      mode: getStorageMode(),
+      mode,
       env: STORAGE_DATABASE_ENV,
       activeEnv: activeEnv?.name ?? null,
       service: 'knowledge',
@@ -243,6 +253,13 @@ export function getStorageStatus(options: StorageStatusOptions = {}): StorageSta
       databasePath: local.path,
       tables: STORAGE_TABLES,
       sync,
+      runtime: buildKnowledgeDatabaseRuntimeStatus({
+        config,
+        workspace: local.workspace,
+        scope: local.scope,
+        selectedMode: mode,
+        activeDatabaseEnv: activeEnv?.name ?? null,
+      }),
     };
   } finally {
     local.db.close();

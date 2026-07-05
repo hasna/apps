@@ -1,4 +1,15 @@
 export {
+  KNOWLEDGE_CATALOG_MODE_ENVS,
+  KNOWLEDGE_DATABASE_URL_ENVS,
+  buildKnowledgeCloudRuntimePlan,
+  buildKnowledgeDatabaseRuntimeStatus,
+} from './cloud-runtime.js';
+export type {
+  KnowledgeCatalogRuntimeMode,
+  KnowledgeCloudRuntimePlan,
+  KnowledgeDatabaseRuntimeStatus,
+} from './cloud-runtime.js';
+export {
   KNOWLEDGE_STORAGE_ENV,
   KNOWLEDGE_STORAGE_FALLBACK_ENV,
   KNOWLEDGE_STORAGE_MODE_ENV,
