@@ -157,6 +157,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["security", "scanning", "threat-intelligence"],
   },
   {
+    name: "vault",
+    displayName: "HashiCorp Vault",
+    description: "Secrets management and data protection via HashiCorp Vault HTTP API",
+    category: "Security & Compliance",
+    tags: ["secrets", "vault", "security"],
+  },
+  {
     name: "virustotal",
     displayName: "VirusTotal",
     description: "File and URL malware scanning and threat intelligence",
