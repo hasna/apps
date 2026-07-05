@@ -955,6 +955,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["hr", "recruiting", "ats", "ai"],
   },
   {
+    name: "typeform",
+    displayName: "Typeform",
+    description: "Online form builder and survey platform",
+    category: "Business Tools",
+    tags: ["forms", "surveys", "api"],
+  },
+  {
     name: "unleashedsoftware",
     displayName: "Unleashed Software",
     description: "Inventory management and manufacturing software",
