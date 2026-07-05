@@ -913,6 +913,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["nlp", "content moderation", "sentiment", "language understanding", "api"],
   },
   {
+    name: "trybloom",
+    displayName: "Bloom",
+    description: "On-brand creative API",
+    category: "AI & ML",
+    tags: ["ai", "image-generation", "branding", "creative"],
+  },
+  {
     name: "udio",
     displayName: "Udio",
     description: "AI music generation platform",
