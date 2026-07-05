@@ -997,6 +997,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["testing", "qa", "test-management"],
   },
   {
+    name: "tyk-api-platform",
+    displayName: "Tyk API Platform",
+    description: "Tyk API Platform for API gateway and management",
+    category: "Developer Tools",
+    tags: ["api-gateway", "api-management", "tyk"],
+  },
+  {
     name: "uptimetoolbox",
     displayName: "Uptime Toolbox",
     description: "Website uptime and performance monitoring",
