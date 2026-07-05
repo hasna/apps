@@ -269,6 +269,7 @@ integrations. Connector-backed execution should own that provider-specific behav
 ## REST API
 
 ```bash
+export OPEN_SIGNATURES_ADMIN_TOKEN="$(openssl rand -hex 32)"
 signatures-serve
 ```
 
@@ -285,19 +286,40 @@ Selected endpoints:
 - `POST /api/sign/:token`
 - `GET /api/people`
 
+All `/api/*` endpoints except `POST /api/sign/:token` require an admin token:
+
+```bash
+curl http://localhost:19440/api/config \
+  -H "Authorization: Bearer $OPEN_SIGNATURES_ADMIN_TOKEN"
+```
+
+Signing links remain token-scoped and public at `GET /sign/:token` and
+`POST /api/sign/:token`. Same-origin signing requests are accepted. Other
+cross-origin API access is disabled unless the origin is explicitly allowed:
+
+```bash
+export OPEN_SIGNATURES_ALLOWED_ORIGINS="http://localhost:5173"
+signatures-serve
+```
+
 The server is designed for trusted local or private deployments by default. If you expose
-it publicly, put it behind authentication, TLS, request logging, and a file access policy.
+it publicly, use authentication, TLS, request logging, and a file access policy.
 
 ## Dashboard
 
 The dashboard is a separate Vite app for local operations:
 
 ```bash
+export OPEN_SIGNATURES_ADMIN_TOKEN="$(openssl rand -hex 32)"
+export OPEN_SIGNATURES_ALLOWED_ORIGINS="http://localhost:5173"
 signatures-serve
 cd dashboard
 bun install
-bun run dev
+OPEN_SIGNATURES_ADMIN_TOKEN="$OPEN_SIGNATURES_ADMIN_TOKEN" bun run dev
 ```
+
+The dashboard dev proxy injects the admin token server-side and is bound to loopback;
+do not expose it with `--host` or a public reverse proxy.
 
 It includes overview, agreement, signing session, people, signature, certificate,
 provider, and domain setup views.

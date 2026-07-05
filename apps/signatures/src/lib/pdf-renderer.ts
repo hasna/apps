@@ -38,7 +38,7 @@ export async function renderPageToPng(
   filePath: string,
   pageNumber: number,
   dpi = 150
-): Promise<Buffer | null> {
+): Promise<Uint8Array | null> {
   if (!existsSync(filePath)) {
     throw new Error(`File not found: ${filePath}`);
   }
@@ -77,7 +77,7 @@ export async function renderPageToBase64(
 ): Promise<string | null> {
   const buf = await renderPageToPng(filePath, pageNumber, dpi);
   if (!buf) return null;
-  return buf.toString("base64");
+  return Buffer.from(buf).toString("base64");
 }
 
 /**

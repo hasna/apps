@@ -9,7 +9,7 @@ type QueryResult<T> = {
   run(...params: unknown[]): unknown;
 };
 
-type SignaturesDatabase = Omit<Database, "query"> & {
+export type SignaturesDatabase = Omit<Database, "query"> & {
   query<T = unknown, P extends unknown[] = unknown[]>(sql: string): {
     get(...params: P): T | undefined;
     all(...params: P): T[];
@@ -31,6 +31,8 @@ function getDbPath(): string {
     return process.env["SIGNATURES_DB_PATH"];
   }
 
+  const home = homeDir();
+
   // Check for git root .signatures/ (project-scoped, unchanged)
   let dir = process.cwd();
   for (let i = 0; i < 10; i++) {
@@ -39,12 +41,12 @@ function getDbPath(): string {
       mkdirSync(dirname(localPath), { recursive: true });
       return localPath;
     }
+    if (dir === home) break;
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
 
-  const home = homeDir();
   const newPath = join(home, ".hasna", "signatures", "signatures.db");
   const legacyPath = join(home, ".signatures", "signatures.db");
 
