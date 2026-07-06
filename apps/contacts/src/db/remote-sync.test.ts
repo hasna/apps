@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  CONTACTS_REMOTE_CONFLICT_KEYS,
   CONTACTS_REMOTE_DEFAULT_TABLES,
   CONTACTS_REMOTE_SENSITIVE_TABLES,
   CONTACTS_REMOTE_TABLES,
@@ -65,5 +66,9 @@ describe("contacts remote sync configuration", () => {
     expect(normalizeSqliteSyncValue(false)).toBe(0);
     expect(normalizeSqliteSyncValue({ nested: true })).toBe('{"nested":true}');
     expect(normalizeSqliteSyncValue(undefined)).toBeNull();
+  });
+
+  test("uses natural suppression key for cross-machine upserts", () => {
+    expect(CONTACTS_REMOTE_CONFLICT_KEYS.contact_suppressions).toEqual(["channel", "address"]);
   });
 });

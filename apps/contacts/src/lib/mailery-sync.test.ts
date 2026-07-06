@@ -106,6 +106,21 @@ describe("syncSuppressions", () => {
     expect(listSuppressions({ channel: "email", unsyncedOnly: true }, db)).toHaveLength(1);
   });
 
+  it("dry run does not require the optional mailery adapter", async () => {
+    suppressAddress({ channel: "email", address: "preview@example.com" }, db);
+
+    const result = await syncSuppressions({ dryRun: true, db });
+
+    expect(result).toMatchObject({
+      adapter: "mailery",
+      dry_run: true,
+      pending: 1,
+      pushed: 0,
+      failed: [],
+      synced_at: null,
+    });
+  });
+
   it("no-op sync still stamps audiences (nothing pending)", async () => {
     const audience = createAudience({
       audience_id: "seg", name: "S", predicates: [{ kind: "tag", value: "x" }],

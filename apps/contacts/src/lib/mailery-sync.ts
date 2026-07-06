@@ -81,13 +81,14 @@ export interface SyncSuppressionsOptions {
  */
 export async function syncSuppressions(options: SyncSuppressionsOptions = {}): Promise<SuppressionSyncResult> {
   const d = options.db || getDatabase();
-  const adapter = options.adapter ?? (await createMaileryAdapter());
   const pending: ContactSuppression[] = listSuppressions({ channel: "email", unsyncedOnly: true }, d);
 
   if (options.dryRun) {
-    return { adapter: adapter.name, dry_run: true, pending: pending.length, pushed: 0, failed: [], synced_at: null };
+    const adapterName = options.adapter?.name ?? "mailery";
+    return { adapter: adapterName, dry_run: true, pending: pending.length, pushed: 0, failed: [], synced_at: null };
   }
 
+  const adapter = options.adapter ?? (await createMaileryAdapter());
   const pushedIds: string[] = [];
   const failed: { address: string; error: string }[] = [];
   for (const entry of pending) {

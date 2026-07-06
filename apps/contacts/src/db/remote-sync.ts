@@ -59,7 +59,7 @@ export const CONTACTS_REMOTE_DEFAULT_TABLES = CONTACTS_REMOTE_TABLES.filter(
   (table) => !(CONTACTS_REMOTE_SENSITIVE_TABLES as readonly string[]).includes(table)
 ) as RemoteTable[];
 
-const PRIMARY_KEYS: Record<RemoteTable, string[]> = {
+export const CONTACTS_REMOTE_CONFLICT_KEYS: Record<RemoteTable, string[]> = {
   companies: ["id"],
   contacts: ["id"],
   tags: ["id"],
@@ -99,7 +99,7 @@ const PRIMARY_KEYS: Record<RemoteTable, string[]> = {
   feedback: ["id"],
   audiences: ["id"],
   contact_consent: ["contact_id", "channel"],
-  contact_suppressions: ["id"],
+  contact_suppressions: ["channel", "address"],
 };
 
 export const CONTACTS_REMOTE_ENV = [
@@ -264,7 +264,7 @@ function filterLocalColumns(db: ContactsDatabase, table: string, columns: string
 
 async function upsertPg(remote: PgAdapterAsync, table: RemoteTable, columns: string[], rows: Row[], remoteColumns: Map<string, string>): Promise<number> {
   if (columns.length === 0) return 0;
-  const primaryKeys = PRIMARY_KEYS[table];
+  const primaryKeys = CONTACTS_REMOTE_CONFLICT_KEYS[table];
   const columnList = columns.map(quoteIdent).join(", ");
   const placeholders = columns.map(() => "?").join(", ");
   const keyList = primaryKeys.map(quoteIdent).join(", ");
@@ -285,7 +285,7 @@ async function upsertPg(remote: PgAdapterAsync, table: RemoteTable, columns: str
 
 function upsertSqlite(db: ContactsDatabase, table: RemoteTable, columns: string[], rows: Row[]): number {
   if (columns.length === 0) return 0;
-  const primaryKeys = PRIMARY_KEYS[table];
+  const primaryKeys = CONTACTS_REMOTE_CONFLICT_KEYS[table];
   const columnList = columns.map(quoteIdent).join(", ");
   const placeholders = columns.map(() => "?").join(", ");
   const keyList = primaryKeys.map(quoteIdent).join(", ");
