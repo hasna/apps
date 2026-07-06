@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { writeFileSync } from 'fs';
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { Tinypng } from '../api';
@@ -192,11 +193,14 @@ shrinkCmd
   .command('compress-and-preserve-copyright')
   .description('Compress an image while preserving copyright metadata')
   .requiredOption('--url <url>', 'Source image URL')
+  .requiredOption('-o, --output <path>', 'Output path for the optimized image')
   .action(async (opts) => {
     try {
       const client = getClient();
       const result = await client.compressAndPreserveCopyright(opts.url);
-      print(result, getFormat(shrinkCmd));
+      writeFileSync(opts.output, result.data);
+      const { data: _data, ...metadata } = result;
+      print({ ...metadata, outputPath: opts.output }, getFormat(shrinkCmd));
     } catch (err) {
       error(String(err));
       process.exit(1);
@@ -208,10 +212,25 @@ shrinkCmd
   .description('Compress an image and store to a cloud service')
   .requiredOption('--url <url>', 'Source image URL')
   .option('--service <service>', 'Store service (s3 or gcs)', 's3')
+  .requiredOption('--path <path>', 'Destination path, including bucket and filename')
+  .option('--aws-access-key-id <key>', 'AWS access key ID for S3')
+  .option('--aws-secret-access-key <key>', 'AWS secret access key for S3')
+  .option('--region <region>', 'AWS region for S3')
+  .option('--gcp-access-token <token>', 'GCP access token for GCS')
+  .option('--cache-control <value>', 'Optional Cache-Control header for stored image')
   .action(async (opts) => {
     try {
       const client = getClient();
-      const result = await client.compressWithStore(opts.url, opts.service as StoreService);
+      const headers = opts.cacheControl ? { 'Cache-Control': opts.cacheControl } : undefined;
+      const result = await client.compressWithStore(opts.url, {
+        service: opts.service as StoreService,
+        aws_access_key_id: opts.awsAccessKeyId,
+        aws_secret_access_key: opts.awsSecretAccessKey,
+        gcp_access_token: opts.gcpAccessToken,
+        region: opts.region,
+        path: opts.path,
+        headers,
+      });
       print(result, getFormat(shrinkCmd));
     } catch (err) {
       error(String(err));

@@ -22,8 +22,12 @@ export TINYPNG_API_KEY=YOUR_API_KEY
 
 ```bash
 tinypng shrink compress-from-url --url https://example.com/image.png
-tinypng shrink compress-and-preserve-copyright --url https://example.com/image.png
-tinypng shrink compress-with-store --url https://example.com/image.png --service s3
+tinypng shrink compress-and-preserve-copyright --url https://example.com/image.png --output optimized.jpg
+tinypng shrink compress-with-store --url https://example.com/image.png --service s3 \
+  --aws-access-key-id AWS_ACCESS_KEY_ID \
+  --aws-secret-access-key AWS_SECRET_ACCESS_KEY \
+  --region us-east-1 \
+  --path bucket/images/image.png
 
 tinypng config set-key <key>
 tinypng config show
