@@ -87,6 +87,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["monitoring", "uptime", "performance", "alerts", "website"],
   },
   {
+    name: "terraform-cloud",
+    displayName: "Terraform Cloud",
+    description: "HashiCorp Terraform Cloud infrastructure-as-code platform",
+    category: "Infrastructure",
+    tags: ["terraform", "hashicorp", "iac", "devops", "infrastructure"],
+  },
+  {
     name: "thousandeyes",
     displayName: "ThousandEyes",
     description: "Network monitoring platform",
