@@ -7,6 +7,9 @@ materialization, queue state, approvals, DLQ/replay, idempotency, and audit
 evidence. OpenLoops owns workflow invocation, admission, execution, run
 manifests, and provider routing once work is explicitly handed off.
 
+For operator-facing ownership tables, handoff path examples, and anti-patterns,
+see [Runtime Boundary](./RUNTIME_BOUNDARY.md).
+
 ## Planned Workflow Upsert SDK
 
 External compilers should not write OpenLoops SQLite rows directly. The stable
