@@ -30,6 +30,29 @@ function writeFakeCodewithProfileList(fake: string, output: string, exitCode = 0
   chmodSync(fake, 0o755);
 }
 
+function writeFakeCodewithJsonFailureThenProfileList(fake: string, output: string): void {
+  const delimiter = "__OPENLOOPS_FAKE_CODEWITH_PROFILE_LIST__";
+  writeFileSync(
+    fake,
+    [
+      "#!/usr/bin/env bash",
+      'if [[ "${1:-}" == "profile" && "${2:-}" == "list" && "${3:-}" == "--json" ]]; then',
+      "echo \"error: unexpected argument '--json' found\" >&2",
+      "exit 64",
+      "fi",
+      'if [[ "${1:-}" == "profile" && "${2:-}" == "list" ]]; then',
+      `cat <<'${delimiter}'`,
+      output.endsWith("\n") ? output.slice(0, -1) : output,
+      delimiter,
+      "exit 0",
+      "fi",
+      "exit 0",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(fake, 0o755);
+}
+
 function remoteCodewithPreflightOptions(home: string, scriptFile?: string) {
   const runner = scriptFile
     ? `cat > ${JSON.stringify(scriptFile)}; HOME=${JSON.stringify(home)} PATH=/usr/bin:/bin bash ${JSON.stringify(scriptFile)}`
@@ -1193,6 +1216,34 @@ describe("executeLoop", () => {
     }
   });
 
+  test("local codewith auth profile preflight falls back to table output when JSON is unsupported", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-local-codewith-json-fallback-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithJsonFailureThenProfileList(
+      fake,
+      [
+        "  NAME       ACCOUNT   PROVIDER MODE    PLAN",
+        "  account001 -         ChatGPT chatgpt Pro",
+        "* account002 -         ChatGPT chatgpt Pro",
+      ].join("\n"),
+    );
+    const env = { HOME: home, PATH: `${binDir}:/usr/bin:/bin` };
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account002", prompt: "run", configIsolation: "safe" },
+          {},
+          { env },
+        ),
+      ).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("remote codewith auth profile preflight accepts active and non-active listed profiles", () => {
     const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-listed-"));
     const home = join(root, "home");
@@ -1247,6 +1298,33 @@ describe("executeLoop", () => {
         null,
         2,
       ),
+    );
+    try {
+      expect(() =>
+        preflightTarget(
+          { type: "agent", provider: "codewith", authProfile: "account002", prompt: "run", configIsolation: "safe" },
+          {},
+          remoteCodewithPreflightOptions(home),
+        ),
+      ).not.toThrow();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("remote codewith auth profile preflight falls back to table output when JSON is unsupported", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-remote-codewith-auth-json-fallback-"));
+    const home = join(root, "home");
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    const fake = join(binDir, "codewith");
+    writeFakeCodewithJsonFailureThenProfileList(
+      fake,
+      [
+        "  NAME       ACCOUNT   PROVIDER MODE    PLAN",
+        "  account001 -         ChatGPT chatgpt Pro",
+        "* account002 -         ChatGPT chatgpt Pro",
+      ].join("\n"),
     );
     try {
       expect(() =>
