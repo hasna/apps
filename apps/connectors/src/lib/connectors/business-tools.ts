@@ -101,6 +101,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["support", "helpdesk"],
   },
   {
+    name: "talkdesk",
+    displayName: "Talkdesk",
+    description: "Cloud contact center and customer support",
+    category: "Business Tools",
+    tags: ["contact-center", "support", "voice", "ccaas"],
+  },
+  {
     name: "calendly",
     displayName: "Calendly",
     description: "Scheduling and appointment booking",
