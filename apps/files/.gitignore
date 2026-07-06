@@ -6,7 +6,6 @@ dashboard/dist/
 *.db-wal
 .env
 .secrets/
-bun.lock
 .codewith/codewith.db
 .codewith/private-artifacts/
 .hasna/
