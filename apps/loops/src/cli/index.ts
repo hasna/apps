@@ -101,6 +101,7 @@ import {
   sandboxFromOpts,
   splitList,
   stringField,
+  todosTaskRouteTemplateId,
   timeoutDuration,
   upsertRouteTasks,
   workflowBodyFromFile,
@@ -1145,6 +1146,7 @@ addScheduleOptions(
   ),
 ).action(runAction((kind, name, opts) => {
   if (kind !== "todos-task") throw new ValidationError("route schedule currently supports kind todos-task");
+  todosTaskRouteTemplateId(opts);
   const store = new Store();
   try {
     const target: LoopTarget = {
