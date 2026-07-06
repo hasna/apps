@@ -37,6 +37,19 @@ import { addDomainMapping, listDomainMappings, renderDomainMapping } from "../co
 import { applyFleetHosts, planFleetHosts } from "../commands/hosts.js";
 import { diffMachines } from "../commands/diff.js";
 import { buildAppsPlan, diffApps, getAppsStatus, listApps, runAppsPlan } from "../commands/apps.js";
+import { readManifest } from "../manifests.js";
+import { runMachineCommand } from "../remote.js";
+import {
+  buildFlipPlan,
+  buildFlipScript,
+  getFlipApp,
+  listFlipApps,
+  planWaves,
+  runFlip,
+  selectTargets,
+  type FlipMode,
+  type RunnerFn,
+} from "../commands/flip.js";
 import {
   buildClaudeInstallPlan,
   diffClaudeCli,
@@ -3236,6 +3249,164 @@ healCommand
       return;
     }
     console.log(renderList("uninstall", uninstallHealService()));
+  });
+
+// --- fleet env-flip -------------------------------------------------------
+
+const flipCommand = program
+  .command("flip")
+  .description("Coordinate fleet storage-mode flips (local <-> cloud) per app");
+
+function parseMachineList(value?: string): string[] | undefined {
+  if (!value) return undefined;
+  return value
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function resolveFlipWaves(spec: ReturnType<typeof getFlipApp>, options: {
+  machines?: string;
+  tags?: string;
+  exclude?: string;
+  canary?: string;
+  batch?: string;
+}) {
+  const manifest = readManifest();
+  const targets = selectTargets(manifest, {
+    machines: parseMachineList(options.machines),
+    tags: parseMachineList(options.tags),
+    exclude: parseMachineList(options.exclude),
+  });
+  const waves = planWaves(targets, {
+    canarySize: options.canary !== undefined ? Number(options.canary) : 1,
+    batchSize: options.batch !== undefined ? Number(options.batch) : 4,
+  });
+  return { manifest, targets, waves, spec };
+}
+
+const machineFlipRunner: RunnerFn = (machineId, command, opts) => {
+  const res = runMachineCommand(machineId, command, { timeoutMs: opts?.timeoutMs });
+  return { stdout: res.stdout, stderr: res.stderr, exitCode: res.exitCode };
+};
+
+flipCommand
+  .command("apps")
+  .description("List apps registered for fleet flip")
+  .option("-j, --json", "Print JSON output", false)
+  .action((options: { json?: boolean }) => {
+    if (options.json) {
+      console.log(JSON.stringify(listFlipApps(), null, 2));
+      return;
+    }
+    for (const spec of listFlipApps()) {
+      const freeze = spec.freezeRequired ? " [freeze-required]" : "";
+      console.log(`${spec.app}${freeze}\n  mode:   ${spec.modeEnv}\n  dsn:    ${spec.databaseUrlEnv} (secret: ${spec.databaseUrlSecretPath})\n  unit:   ${spec.serviceUnit}\n  verify: ${spec.cliBin} ${spec.statusArgs}${spec.note ? `\n  note:   ${spec.note}` : ""}`);
+    }
+  });
+
+flipCommand
+  .command("plan <app>")
+  .description("Show the flip plan (waves + generated script) without executing")
+  .option("--mode <mode>", "remote (flip to cloud) or local (revert)", "remote")
+  .option("--machines <ids>", "Restrict to these machine ids (comma/space separated)")
+  .option("--tags <tags>", "Restrict to machines carrying ALL of these tags")
+  .option("--exclude <ids>", "Exclude these machine ids")
+  .option("--canary <n>", "Canary wave size", "1")
+  .option("--batch <n>", "Batch size after canary", "4")
+  .option("-j, --json", "Print JSON output", false)
+  .action((app: string, options: Record<string, string | undefined> & { json?: boolean }) => {
+    const spec = getFlipApp(app);
+    const mode = (options["mode"] as FlipMode) ?? "remote";
+    const { waves } = resolveFlipWaves(spec, options as never);
+    const plan = buildFlipPlan(spec, mode, waves);
+    if (options.json) {
+      console.log(JSON.stringify(plan, null, 2));
+      return;
+    }
+    console.log(`flip plan: ${spec.app} -> ${mode}${plan.freezeRequired ? " (freeze-required)" : ""}`);
+    for (const wave of plan.waves) console.log(`  ${wave.name}: ${wave.machines.join(", ") || "(none)"}`);
+    console.log(`secrets referenced: ${plan.secretPathsReferenced.join(", ") || "(none)"}`);
+    console.log("--- remote script ---");
+    console.log(plan.scriptPreview);
+  });
+
+flipCommand
+  .command("script <app>")
+  .description("Print the generated remote flip script for one app")
+  .option("--mode <mode>", "remote or local", "remote")
+  .option("--skip-restart", "Write env only; do not restart the service", false)
+  .action((app: string, options: { mode?: string; skipRestart?: boolean }) => {
+    const spec = getFlipApp(app);
+    console.log(buildFlipScript(spec, (options.mode as FlipMode) ?? "remote", { skipRestart: options.skipRestart }));
+  });
+
+flipCommand
+  .command("apply <app>")
+  .description("Apply the flip across the fleet, wave by wave, verifying each machine")
+  .option("--mode <mode>", "remote (flip to cloud) or local (revert)", "remote")
+  .option("--machines <ids>", "Restrict to these machine ids")
+  .option("--tags <tags>", "Restrict to machines carrying ALL of these tags")
+  .option("--exclude <ids>", "Exclude these machine ids")
+  .option("--canary <n>", "Canary wave size", "1")
+  .option("--batch <n>", "Batch size after canary", "4")
+  .option("--freeze-check <cmd>", "Freeze command required for freeze-required apps")
+  .option("--execute", "Actually run (default is dry-run)", false)
+  .option("-j, --json", "Print JSON output", false)
+  .action((app: string, options: Record<string, string | undefined> & { execute?: boolean; json?: boolean; freezeCheck?: string }) => {
+    const spec = getFlipApp(app);
+    const mode = (options["mode"] as FlipMode) ?? "remote";
+    const { waves } = resolveFlipWaves(spec, options as never);
+    const report = runFlip({
+      spec,
+      mode,
+      waves,
+      runner: machineFlipRunner,
+      execute: Boolean(options.execute),
+      freezeCommand: options.freezeCheck,
+    });
+    if (options.json) {
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      console.log(`flip ${report.app} -> ${report.mode} (${report.execute ? "EXECUTE" : "dry-run"})`);
+      for (const r of report.results) {
+        const status = report.execute ? (r.verification.ok ? "ok" : "FAIL") : "planned";
+        console.log(`  [${r.wave}] ${r.machineId}: ${status}${r.error ? ` — ${r.error}` : ""}`);
+      }
+      if (report.aborted) console.log(`ABORTED: ${report.abortReason}`);
+    }
+    if (report.aborted || report.results.some((r) => report.execute && !r.verification.ok)) {
+      process.exitCode = 1;
+    }
+  });
+
+flipCommand
+  .command("revert <app>")
+  .description("Revert an app to local mode across the fleet (alias for apply --mode local)")
+  .option("--machines <ids>", "Restrict to these machine ids")
+  .option("--tags <tags>", "Restrict to machines carrying ALL of these tags")
+  .option("--exclude <ids>", "Exclude these machine ids")
+  .option("--canary <n>", "Canary wave size", "1")
+  .option("--batch <n>", "Batch size after canary", "4")
+  .option("--execute", "Actually run (default is dry-run)", false)
+  .option("-j, --json", "Print JSON output", false)
+  .action((app: string, options: Record<string, string | undefined> & { execute?: boolean; json?: boolean }) => {
+    const spec = getFlipApp(app);
+    const { waves } = resolveFlipWaves(spec, options as never);
+    const report = runFlip({ spec, mode: "local", waves, runner: machineFlipRunner, execute: Boolean(options.execute) });
+    if (options.json) {
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      console.log(`revert ${report.app} -> local (${report.execute ? "EXECUTE" : "dry-run"})`);
+      for (const r of report.results) {
+        const status = report.execute ? (r.verification.ok ? "ok" : "FAIL") : "planned";
+        console.log(`  [${r.wave}] ${r.machineId}: ${status}${r.error ? ` — ${r.error}` : ""}`);
+      }
+      if (report.aborted) console.log(`ABORTED: ${report.abortReason}`);
+    }
+    if (report.aborted || report.results.some((r) => report.execute && !r.verification.ok)) {
+      process.exitCode = 1;
+    }
   });
 
 try {
