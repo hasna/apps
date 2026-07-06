@@ -26,11 +26,19 @@ Start the API:
 feedback serve --host 127.0.0.1 --port 8787
 ```
 
-Set `FEEDBACK_API_TOKEN` to require bearer-token auth for API requests:
+Set `FEEDBACK_API_TOKEN` to require bearer-token auth for every API request.
+Shared deployments should use scoped tokens instead of one broad token:
 
-```bash
-FEEDBACK_API_TOKEN="$YOUR_TOKEN" feedback serve
-```
+- submit: accepts browser or app-server submissions.
+- read: lists feedback, reads one item, and reads stats.
+- triage: updates status.
+- export: streams JSONL exports.
+
+For public collection, enable public submit only at the app backend or feedback
+service boundary and keep read, triage, and export scoped. In shared deployment
+mode, non-local read, triage, and export routes fail closed when their scoped
+token is missing. Submit requests are still checked for spam-like payloads,
+duplicate recent submissions, and per-client rate limits before storage writes.
 
 Submit feedback:
 
