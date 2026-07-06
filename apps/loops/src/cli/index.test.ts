@@ -7053,6 +7053,7 @@ describe("loops CLI", () => {
           "GitHub author is andrei-hasna",
           "GitHub reviewer pool: andrei-hasna, kriptoburak",
         ].join("\n"),
+        pr_state: "OPEN",
         working_dir: repo,
         tags: ["auto:route", "github-pr", "pr-merge-queue"],
       },
