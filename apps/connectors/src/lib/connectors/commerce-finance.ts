@@ -17,6 +17,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["incorporation", "business"],
   },
   {
+    name: "stripe-terminal",
+    displayName: "Stripe Terminal",
+    description: "In-person payments hardware and POS",
+    category: "Commerce & Finance",
+    tags: ["payments", "terminal", "pos"],
+  },
+  {
     name: "shopify",
     displayName: "Shopify",
     description: "E-commerce platform",
