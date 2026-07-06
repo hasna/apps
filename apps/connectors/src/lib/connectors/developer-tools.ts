@@ -1038,4 +1038,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Developer Tools",
     tags: ["monitoring", "infrastructure", "network"],
   },
+  {
+    name: "syntropy",
+    displayName: "Syntropy",
+    description: "Spec-driven agentic coding builds, pull requests, and tasks",
+    category: "Developer Tools",
+    tags: ["agentic-coding", "dev", "builds"],
+  },
 ];
