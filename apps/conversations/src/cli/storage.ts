@@ -78,6 +78,10 @@ function installStorageSubcommands(storage: Command): void {
     }
   });
 
+  // CUTOVER: gate off. Bidirectional sync is forbidden under Storage Amendment
+  // A1 (pure remote). The flip lane must remove this `sync` subcommand (and the
+  // push/pull data-path subcommands) before conversations goes remote. See
+  // docs/CUTOVER-RUNBOOK.md.
   storage.command("sync").description("Bidirectional sync: pull then push").option("--tables <tables>", "Comma-separated table names").option("--json", "Output as JSON").action(async (opts: { tables?: string; json?: boolean }) => {
     try {
       const result = await storageSync({ tables: opts.tables });

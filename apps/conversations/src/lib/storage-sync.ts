@@ -1,3 +1,23 @@
+// ============================================================================
+// STORAGE AMENDMENT A1 — CUTOVER GATE-OFF NOTICE
+// ----------------------------------------------------------------------------
+// This module is the LEGACY bidirectional sync engine (local SQLite <-> remote
+// PostgreSQL). Under Storage Amendment A1 the fleet cloud cutover is PURE
+// REMOTE: reads AND writes go directly to cloud Postgres, with NO hybrid mode,
+// NO sync engine, NO merge/conflict logic. The fleet cutover WILL NOT use any
+// of the bidirectional-sync surfaces below.
+//
+// Symbols marked `CUTOVER: gate off` MUST be disabled/removed by the flip lane
+// (the one that routes getDb() to Postgres) before conversations goes remote:
+//   - StorageMode "hybrid" (and its acceptance in normalizeStorageMode)
+//   - storageSync() / `storage sync` CLI  (pull-then-push round trip)
+//   - the _sync_conflicts machinery: detectConflicts / storeConflicts /
+//     listConflicts / detectAndLogConflicts / CONFLICT_TABLES / SyncConflict
+//   - syncPush/pushTable/upsertPg and syncPull/pullTable/upsertSqlite as a
+//     RUNTIME data path (the pg schema helpers here — getStoragePg,
+//     runStorageMigrations, listPgTables — remain safe as ops/migration tools).
+// See docs/CUTOVER-RUNBOOK.md for the exact flip procedure and gate list.
+// ============================================================================
 import { existsSync, readFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
@@ -50,6 +70,9 @@ const PRIMARY_KEYS: Record<SyncTable, string[]> = {
 
 const CONFLICT_TABLES = new Set(["channels", "projects", "agent_presence"]);
 
+// CUTOVER: gate off "hybrid". A1 permits only "local" (pre-flip) and "remote"
+// (pure cloud). "hybrid" is a bidirectional-sync mode and must be rejected at
+// the flip; kept here only so pre-cutover configs still parse.
 export type StorageMode = "local" | "remote" | "hybrid";
 
 export const CANONICAL_CONVERSATIONS_RDS_CLUSTER = "hasna-xyz-infra-apps-prod-postgres";
@@ -209,6 +232,8 @@ export async function storagePull(options?: { tables?: string[] | string }): Pro
   }
 }
 
+// CUTOVER: gate off. Bidirectional pull-then-push is forbidden under A1 (pure
+// remote). The flip lane must remove this and the `storage sync` CLI command.
 export async function storageSync(options?: { tables?: string[] | string }): Promise<{ pull: StorageSyncResult[]; push: StorageSyncResult[] }> {
   const pull = await storagePull(options);
   const push = await storagePush(options);
