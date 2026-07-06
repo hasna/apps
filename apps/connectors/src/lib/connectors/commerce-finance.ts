@@ -17,6 +17,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["incorporation", "business"],
   },
   {
+    name: "stripe-sigma",
+    displayName: "Stripe Sigma",
+    description: "SQL analytics and reporting on Stripe data",
+    category: "Commerce & Finance",
+    tags: ["stripe", "analytics", "sql", "reporting"],
+  },
+  {
     name: "shopify",
     displayName: "Shopify",
     description: "E-commerce platform",
