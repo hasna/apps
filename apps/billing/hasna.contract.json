@@ -1,0 +1,20 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "billing",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.4.1",
+  "description": "Thin agent-facing billing/dunning orchestration over Stripe Billing CLI + MCP + serve. Local mode uses SQLite at ~/.hasna/billing/billing.db; cloud mode (HASNA_BILLING_STORAGE_MODE=cloud) is PURE REMOTE per Amendment A1 with all reads/writes hitting the shared cloud Postgres.",
+  "bins": [
+    "billing",
+    "billing-mcp",
+    "billing-serve"
+  ],
+  "storage": {
+    "mode": "local",
+    "envPrefix": "HASNA_BILLING_",
+    "aliasEnvPrefix": "BILLING_",
+    "databaseUrlSecretRef": "hasna/oss/billing/database-url",
+    "sqlitePath": "~/.hasna/billing/billing.db"
+  }
+}
