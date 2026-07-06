@@ -8,6 +8,7 @@ import type { WorkflowStepInput } from "../types.js";
 import { buildHealthReport } from "./health.js";
 import { tick } from "./scheduler.js";
 import { Store } from "./store.js";
+import { createOpenSessionsTraceSink, type OpenSessionsTraceEntry, type OpenSessionsTraceWriter } from "./opensessions-trace.js";
 import { prHandoffCommand } from "./template-kit.js";
 import { executeLoopTarget, executeWorkflow } from "./workflow-runner.js";
 import { workflowBodyFromJson } from "./workflow-spec.js";
@@ -46,6 +47,14 @@ function mockObjects(objects: unknown[], totalTokens = 10) {
   });
 }
 
+class MemoryTraceWriter implements OpenSessionsTraceWriter {
+  readonly entries: OpenSessionsTraceEntry[] = [];
+
+  write(entry: OpenSessionsTraceEntry): void {
+    this.entries.push(entry);
+  }
+}
+
 describe("workflow runner", () => {
   test("runs dependent command steps and records step runs and events", async () => {
     const store = new Store(":memory:");
@@ -77,6 +86,48 @@ describe("workflow runner", () => {
       const events = store.listWorkflowEvents(runs[0]!.id);
       expect(events.map((event) => event.eventType)).toContain("created");
       expect(events.map((event) => event.eventType)).toContain("step_succeeded");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("links workflow runs to OpenSessions trace entries without changing workflow events replay", async () => {
+    const store = new Store(":memory:");
+    const writer = new MemoryTraceWriter();
+    try {
+      const workflow = store.createWorkflow({
+        name: "opensessions-trace",
+        steps: [
+          {
+            id: "command",
+            target: {
+              type: "command",
+              command: "printf 'SECRET_TRACE_OUTPUT_%s' \"$(printf x%.0s {1..9000})\"",
+              shell: true,
+            },
+          },
+        ],
+      });
+
+      const result = await executeWorkflow(store, workflow, {
+        openSessionsTrace: createOpenSessionsTraceSink(writer),
+      });
+
+      expect(result.status).toBe("succeeded");
+      const run = store.listWorkflowRuns({ workflowId: workflow.id })[0]!;
+      const events = store.listWorkflowEvents(run.id);
+      expect(events.map((event) => event.eventType)).toContain("created");
+      expect(events.map((event) => event.eventType)).toContain("opensessions_trace_attached");
+      expect(events.map((event) => event.eventType)).toContain("step_started");
+      expect(events.map((event) => event.eventType)).toContain("step_succeeded");
+      const traceEvent = events.find((event) => event.eventType === "opensessions_trace_attached");
+      expect(traceEvent?.payload?.sessionId).toBe(`openloops-workflow-${run.id}`);
+      expect(writer.entries.length).toBeGreaterThanOrEqual(4);
+      expect(writer.entries.some((entry) => entry.id.includes("step-command-started"))).toBe(true);
+      expect(writer.entries.some((entry) => entry.id.includes("step-command-succeeded"))).toBe(true);
+      const traceJson = JSON.stringify(writer.entries);
+      expect(traceJson).not.toContain("SECRET_TRACE_OUTPUT");
+      expect(traceJson).toContain("[redacted");
     } finally {
       store.close();
     }

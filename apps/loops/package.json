@@ -110,7 +110,8 @@
     "zod": "4.4.3"
   },
   "optionalDependencies": {
-    "@hasna/machines": "0.0.49"
+    "@hasna/machines": "0.0.49",
+    "@hasna/sessions": "^0.11.39"
   },
   "devDependencies": {
     "@types/bun": "latest",

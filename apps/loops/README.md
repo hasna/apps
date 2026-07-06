@@ -371,6 +371,26 @@ loops workflows recover <workflow-run-id>
 loops create workflow repo-morning-loop --workflow repo-morning --cron "0 8 * * *"
 ```
 
+To mirror a workflow run into OpenSessions for live operator trace/replay, install
+the optional `@hasna/sessions` integration and run the workflow with tracing
+enabled:
+
+```bash
+OPENLOOPS_OPENSESSIONS_TRACE=1 loops workflows run repo-morning
+loops workflows inspect <workflow-run-id>
+sessions show openloops-workflow-<workflow-run-id>
+```
+
+`loops workflows inspect` includes `openSessionsTrace.sessionId` in JSON output
+and prints the `sessions show ...` replay command in human output when a trace is
+attached. OpenLoops workflow events remain the orchestration audit trail used by
+`loops workflows events`; Todos comments remain the durable task source of truth
+for planner/worker/verifier evidence. OpenSessions is only the live transcript
+and replay surface for visible activity such as step lifecycle changes, command
+starts/exits, visible agent progress summaries, tool actions, validation notes,
+and redacted errors. Hidden model reasoning, prompts, env values, and unbounded
+stdout/stderr are not streamed into the trace.
+
 Use `recover` only for interrupted `running` workflow runs whose recorded child
 process is gone. Terminal `timed_out` task/event workflow runs are audit
 history; use `loops routes requeue <work-item-id> --reason "<cause fixed>"`

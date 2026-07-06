@@ -100,6 +100,19 @@ export type {
   WriteHealthScanReportsOptions,
 } from "./lib/health.js";
 export { computeNextAfter, initialNextRun, nextCronRun, parseCron, parseDuration } from "./lib/recurrence.js";
+export {
+  createOpenSessionsTraceSink,
+  openSessionsTraceErrorMessage,
+  sanitizeOpenSessionsTracePayload,
+  traceSessionIdForWorkflowRun,
+} from "./lib/opensessions-trace.js";
+export type {
+  OpenSessionsTraceContext,
+  OpenSessionsTraceEntry,
+  OpenSessionsTraceRun,
+  OpenSessionsTraceSink,
+  OpenSessionsTraceWriter,
+} from "./lib/opensessions-trace.js";
 
 // ---------------------------------------------------------------------------
 // Experimental: scheduler internals shared by CLI/SDK/MCP

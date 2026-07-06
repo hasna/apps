@@ -4,6 +4,13 @@ import { executionMetadata, goalExecutionContext, withGoalNodeEnv } from "./goal
 import { iterationPrompt } from "./goal/prompts.js";
 import { runGoal } from "./goal/runner.js";
 import { nowIso } from "./ids.js";
+import {
+  createOpenSessionsTraceSink,
+  openSessionsTraceErrorMessage,
+  traceWorkflowEventBestEffort,
+  type OpenSessionsTraceRun,
+  type OpenSessionsTraceSink,
+} from "./opensessions-trace.js";
 import { BLOCKED_STEP_ERROR_PREFIX, isBlockedStepRun, workflowRunEnvelope } from "./run-envelope.js";
 import type { Store } from "./store.js";
 import { workflowExecutionOrder } from "./workflow-spec.js";
@@ -17,6 +24,12 @@ export interface ExecuteWorkflowOptions extends ExecuteOptions {
   signalTimeoutMessage?: () => string | undefined;
   /** Per-node goal prompt appended to agent step prompts when a goal executes this workflow. */
   goalNodePrompt?: string;
+  /**
+   * Optional OpenSessions trace sink. Pass false to disable trace emission.
+   * Set OPENLOOPS_OPENSESSIONS_TRACE=1 to enable the package-backed
+   * @hasna/sessions sink without injecting one.
+   */
+  openSessionsTrace?: OpenSessionsTraceSink | false;
 }
 
 /** Exit codes that mark a step as blocked (policy control flow) instead of failed. */
@@ -101,6 +114,7 @@ export async function executeWorkflow(
     daemonLeaseId: opts.daemonLeaseId,
   });
   const startedAt = run.startedAt ?? nowIso();
+  const trace = await attachOpenSessionsTrace(store, workflow, run, opts);
   if (run.status === "succeeded" || run.status === "failed" || run.status === "timed_out" || run.status === "cancelled") {
     return workflowResult(run, run.status, startedAt, run.finishedAt ?? nowIso(), store.listWorkflowStepRuns(run.id), run.error);
   }
@@ -158,12 +172,14 @@ export async function executeWorkflow(
         opts.beforePersist?.();
         if (isBlockedStepRun(store.getWorkflowStepRun(run.id, blockedBy))) {
           // Upstream gate blocked by policy: skip dependents without failing the workflow.
-          store.skipWorkflowStepRun(run.id, step.id, `${BLOCKED_STEP_ERROR_PREFIX} upstream step ${blockedBy} was blocked`, {
+          const skipped = store.skipWorkflowStepRun(run.id, step.id, `${BLOCKED_STEP_ERROR_PREFIX} upstream step ${blockedBy} was blocked`, {
             daemonLeaseId: opts.daemonLeaseId,
           });
+          await trace?.emitStepFinished(step, skipped).catch((error) => recordTraceWarning(store, run.id, error));
           continue;
         }
-        store.skipWorkflowStepRun(run.id, step.id, `dependency did not succeed: ${blockedBy}`, { daemonLeaseId: opts.daemonLeaseId });
+        const skipped = store.skipWorkflowStepRun(run.id, step.id, `dependency did not succeed: ${blockedBy}`, { daemonLeaseId: opts.daemonLeaseId });
+        await trace?.emitStepFinished(step, skipped).catch((error) => recordTraceWarning(store, run.id, error));
         blockingError ??= `step ${step.id} blocked by dependency ${blockedBy}`;
         terminalStatus = "failed";
         continue;
@@ -176,6 +192,7 @@ export async function executeWorkflow(
         blockingError = `step ${step.id} could not start because workflow is no longer running`;
         break;
       }
+      await trace?.emitStepStarted(step, startedStep).catch((error) => recordTraceWarning(store, run.id, error));
       const stepContext = goalExecutionContext({
         loop: opts.loop,
         loopRun: opts.loopRun,
@@ -210,17 +227,20 @@ export async function executeWorkflow(
             onAgentProgress: (progress) => {
               const stdout = JSON.stringify({ agentProgress: progress }, null, 2);
               opts.beforePersist?.();
-              store.recordWorkflowStepProgress(run.id, step.id, {
+              const progressStep = store.recordWorkflowStepProgress(run.id, step.id, {
                 stdout,
                 payload: progress as unknown as Record<string, unknown>,
               }, {
                 daemonLeaseId: opts.daemonLeaseId,
               });
+              trace?.emitAgentProgress(step, progress).catch((error) => recordTraceWarning(store, run.id, error));
+              void progressStep;
               opts.onAgentProgress?.(progress);
             },
             onSpawn: (pid) => {
               opts.beforePersist?.();
               store.markWorkflowStepPid(run.id, step.id, pid, { daemonLeaseId: opts.daemonLeaseId });
+              trace?.emitSpawn(step, pid).catch((error) => recordTraceWarning(store, run.id, error));
               opts.onSpawn?.(pid);
             },
           });
@@ -254,7 +274,7 @@ export async function executeWorkflow(
         result.status === "failed" && result.exitCode !== undefined && blockedExitCodesForStep(step).includes(result.exitCode);
       if (blockedExit) {
         // Intentional gate control flow: record as skipped/blocked, never as failure.
-        store.finalizeWorkflowStepRun(run.id, step.id, {
+        const finalStep = store.finalizeWorkflowStepRun(run.id, step.id, {
           status: "skipped",
           finishedAt: result.finishedAt,
           durationMs: result.durationMs,
@@ -265,9 +285,10 @@ export async function executeWorkflow(
         }, {
           daemonLeaseId: opts.daemonLeaseId,
         });
+        await trace?.emitStepFinished(step, finalStep).catch((error) => recordTraceWarning(store, run.id, error));
         continue;
       }
-      store.finalizeWorkflowStepRun(run.id, step.id, {
+      const finalStep = store.finalizeWorkflowStepRun(run.id, step.id, {
         status: result.status,
         finishedAt: result.finishedAt,
         durationMs: result.durationMs,
@@ -278,6 +299,7 @@ export async function executeWorkflow(
       }, {
         daemonLeaseId: opts.daemonLeaseId,
       });
+      await trace?.emitStepFinished(step, finalStep).catch((error) => recordTraceWarning(store, run.id, error));
       if (result.status !== "succeeded" && !step.continueOnFailure) {
         terminalStatus = result.status;
         blockingError = `step ${step.id} ${result.status}${result.error ? `: ${result.error}` : ""}`;
@@ -289,9 +311,10 @@ export async function executeWorkflow(
       for (const step of ordered) {
         const existing = store.getWorkflowStepRun(run.id, step.id);
         if (existing?.status === "pending" || existing?.status === "running") {
-          store.skipWorkflowStepRun(run.id, step.id, blockingError ?? "workflow stopped before step could run", {
+          const skipped = store.skipWorkflowStepRun(run.id, step.id, blockingError ?? "workflow stopped before step could run", {
             daemonLeaseId: opts.daemonLeaseId,
           });
+          await trace?.emitStepFinished(step, skipped).catch((error) => recordTraceWarning(store, run.id, error));
         }
       }
     }
@@ -316,6 +339,7 @@ export async function executeWorkflow(
     }, {
       daemonLeaseId: opts.daemonLeaseId,
     });
+    await trace?.emitWorkflowFinished(finalRun).catch((error) => recordTraceWarning(store, run.id, error));
     return workflowResult(finalRun, terminalStatus, startedAt, finishedAt, store.listWorkflowStepRuns(run.id), blockingError);
   } catch (error) {
     // Finding (3): any unexpected throw inside the step loop (SQLITE_BUSY past
@@ -349,8 +373,45 @@ export async function executeWorkflow(
       /* best-effort finalize; surface the original failure below regardless */
     }
     const current = store.getWorkflowRun(run.id) ?? run;
+    await trace?.emitWorkflowFinished(current).catch((traceError) => recordTraceWarning(store, run.id, traceError));
     const resultStatus: WorkflowRunStatus = current.status === "running" ? "failed" : current.status;
     return workflowResult(current, resultStatus, startedAt, finishedAt, store.listWorkflowStepRuns(run.id), current.error ?? message);
+  }
+}
+
+async function attachOpenSessionsTrace(
+  store: Store,
+  workflow: WorkflowSpec,
+  run: WorkflowRun,
+  opts: ExecuteWorkflowOptions,
+): Promise<OpenSessionsTraceRun | undefined> {
+  if (opts.openSessionsTrace === false) return undefined;
+  if (!opts.openSessionsTrace && process.env.OPENLOOPS_OPENSESSIONS_TRACE !== "1") return undefined;
+  const sink = opts.openSessionsTrace ?? createOpenSessionsTraceSink();
+  try {
+    const trace = await sink.attach({ workflow, workflowRun: run, loop: opts.loop, loopRun: opts.loopRun });
+    const event = store.appendWorkflowEvent(run.id, "opensessions_trace_attached", undefined, {
+      sessionId: trace.sessionId,
+      sourceId: trace.sourceId,
+    });
+    await traceWorkflowEventBestEffort(trace, event, (error) => recordTraceWarning(store, run.id, error));
+    return trace;
+  } catch (error) {
+    recordTraceWarning(store, run.id, error);
+    return undefined;
+  }
+}
+
+function recordTraceWarning(store: Store, workflowRunId: string, error: unknown): void {
+  try {
+    const message = openSessionsTraceErrorMessage(error);
+    const recent = store
+      .listWorkflowEvents(workflowRunId, 20)
+      .some((event) => event.eventType === "opensessions_trace_warning" && event.payload?.message === message);
+    if (recent) return;
+    store.appendWorkflowEvent(workflowRunId, "opensessions_trace_warning", undefined, { message });
+  } catch {
+    // Trace warnings must never become workflow execution failures.
   }
 }
 

@@ -926,6 +926,19 @@ function printWorkflowListWarning(args: { shown: number; total: number; status?:
   console.error(`showing ${args.offset + args.shown} of ${args.total} ${scope} workflows.${next}`);
 }
 
+function workflowOpenSessionsTrace(events: ReturnType<Store["listWorkflowEvents"]>): Record<string, string> | undefined {
+  const attached = events.find((event) => event.eventType === "opensessions_trace_attached");
+  const sessionId = typeof attached?.payload?.sessionId === "string" ? attached.payload.sessionId : undefined;
+  if (!sessionId) return undefined;
+  const sourceId = typeof attached?.payload?.sourceId === "string" ? attached.payload.sourceId : sessionId;
+  return {
+    sessionId,
+    sourceId,
+    replayCommand: `sessions show ${sessionId}`,
+    recentCommand: "sessions recent",
+  };
+}
+
 templates
   .command("list")
   .alias("ls")
@@ -1348,6 +1361,7 @@ workflows.command("inspect <runId>").description("show a workflow run with steps
       workflowRun: publicWorkflowRun(run),
       steps: steps.map((step) => publicWorkflowStepRun(step)),
       events: runEvents.map(publicWorkflowEvent),
+      openSessionsTrace: workflowOpenSessionsTrace(runEvents),
     };
     if (isJson()) print(value);
     else {
@@ -1357,6 +1371,8 @@ workflows.command("inspect <runId>").description("show a workflow run with steps
         console.log(`  ${String(step.sequence).padStart(2, "0")}  ${step.status.padEnd(10)}  ${step.stepId}  ${publicStep.error ?? ""}`);
       }
       console.log(`  events=${runEvents.length}`);
+      const trace = workflowOpenSessionsTrace(runEvents);
+      if (trace) console.log(`  OpenSessions: ${trace.replayCommand}`);
     }
   } finally {
     store.close();
