@@ -129,11 +129,25 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ssl", "certificates", "security", "monitoring", "tls"],
   },
   {
+    name: "tenable",
+    displayName: "Tenable",
+    description: "Cloud vulnerability management and exposure platform",
+    category: "Security & Compliance",
+    tags: ["vulnerability-management", "security", "scanning", "exposure", "cyber"],
+  },
+  {
     name: "tines",
     displayName: "Tines",
     description: "Security automation and SOAR workflow orchestration platform",
     category: "Security & Compliance",
     tags: ["security", "soar", "automation", "workflow", "orchestration"],
+  },
+  {
+    name: "the-hive-project",
+    displayName: "TheHive Project",
+    description: "TheHive 5 instance API connector for incident response and SOC workflows",
+    category: "Security & Compliance",
+    tags: ["thehive", "thehive5", "security", "soc", "cases", "incident-response"],
   },
   {
     name: "thehive",

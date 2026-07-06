@@ -101,6 +101,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "llm", "fine-tuning"],
   },
   {
+    name: "traverse",
+    displayName: "Traverse",
+    description: "RL training environments, episodes, judgments, and datasets",
+    category: "AI & ML",
+    tags: ["ai", "rl", "training", "environments"],
+  },
+  {
     name: "groq",
     displayName: "Groq",
     description: "Ultra-fast LLM inference",
@@ -1023,6 +1030,13 @@ export const connectors: ConnectorMeta[] = [
     description: "AI document data extraction and automation",
     category: "AI & ML",
     tags: ["ai", "extraction", "documents"],
+  },
+  {
+    name: "tensorboard",
+    displayName: "TensorBoard",
+    description: "TensorBoard training run metrics and scalars",
+    category: "AI & ML",
+    tags: ["ai", "ml", "metrics", "visualization"],
   },
   {
     name: "zhipu-ai",

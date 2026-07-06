@@ -24,6 +24,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["google", "ads", "ppc", "campaigns"],
   },
   {
+    name: "tiktok-events-api",
+    displayName: "TikTok Events API",
+    description: "Server-side TikTok Events API 2.0 conversion events, pixels, and event sets",
+    category: "Advertising",
+    tags: ["tiktok", "events", "pixel", "conversions"],
+  },
+  {
     name: "tiktokads",
     displayName: "TikTok Ads",
     description: "TikTok Marketing API for campaigns, ad groups, ads, reporting, pixels, and creatives",
@@ -36,5 +43,12 @@ export const connectors: ConnectorMeta[] = [
     description: "Programmatic ad platform (campaigns, events, search)",
     category: "Advertising",
     tags: ["ads", "programmatic", "dsp"],
+  },
+  {
+    name: "terminus",
+    displayName: "Terminus",
+    description: "UTM parameter and tracked link management via the Terminus API",
+    category: "Advertising",
+    tags: ["abm", "marketing", "utm", "links"],
   },
 ];

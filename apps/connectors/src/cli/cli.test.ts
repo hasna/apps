@@ -905,7 +905,7 @@ describe("CLI", () => {
         "notion", "openai", "openweathermap", "pandadoc", "quo", "reddit",
         "reducto", "resend", "revolut", "sedo", "sentry", "shadcn", "shopify",
         "snap", "stabilityai", "stripe", "stripeatlas", "substack", "tiktok",
-        "tinker", "twilio", "twitch", "uspto", "webflow", "wix", "x", "xads", "xai",
+        "tiktok-events-api", "tinker", "twilio", "twitch", "uspto", "webflow", "wix", "x", "xads", "xai",
         "youtube", "zoom",
       ];
 

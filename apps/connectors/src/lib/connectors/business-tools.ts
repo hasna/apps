@@ -164,6 +164,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["hr", "employees", "management"],
   },
   {
+    name: "teamtailor",
+    displayName: "Teamtailor",
+    description: "Recruitment ATS - candidates, jobs, and applications",
+    category: "Business Tools",
+    tags: ["recruiting", "ats", "hiring", "candidates", "jobs"],
+  },
+  {
     name: "7todos",
     displayName: "7todos",
     description: "Task management and to-do lists",
@@ -920,6 +927,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["calendar", "scheduling", "shared", "teams", "planning"],
   },
   {
+    name: "teamwork",
+    displayName: "Teamwork",
+    description: "Projects, tasks, milestones, time tracking, and people management",
+    category: "Business Tools",
+    tags: ["project-management", "tasks", "milestones", "time-tracking", "collaboration"],
+  },
+  {
     name: "thecustomerfactor",
     displayName: "The Customer Factor",
     description: "CRM and scheduling software for service businesses and field service management",
@@ -939,6 +953,13 @@ export const connectors: ConnectorMeta[] = [
     description: "Event ticketing platform for selling tickets, managing orders, and issuing tickets",
     category: "Business Tools",
     tags: ["events", "ticketing", "orders"],
+  },
+  {
+    name: "ticketbud",
+    displayName: "Ticketbud",
+    description: "Event ticketing platform for selling tickets, tracking sales, and checking in attendees",
+    category: "Business Tools",
+    tags: ["events", "ticketing", "check-in"],
   },
   {
     name: "ticketmaster",
