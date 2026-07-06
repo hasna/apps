@@ -30,6 +30,8 @@ import {
 import { loadConfig } from "../lib/config.js";
 import { importFromTodos } from "../lib/todos-connector.js";
 import { installBrowser } from "../lib/browser.js";
+import { getCloudClient, closeCloudClient, isCloudMode } from "../db/cloud.js";
+import { runPgMigrations } from "../db/pg-migrate.js";
 import { initProject } from "../lib/init.js";
 import { runSmoke, formatSmokeReport } from "../lib/smoke.js";
 import {
@@ -9238,6 +9240,56 @@ program
           `Error: ${error instanceof Error ? error.message : String(error)}`,
         ),
       );
+      process.exit(1);
+    }
+  });
+
+// ─── db: cloud (RDS Postgres) migrations ─────────────────────────────────────
+const dbCmd = program.command("db").description("Cloud database (RDS Postgres) operations");
+
+dbCmd
+  .command("migrate")
+  .description("Apply pending Postgres migrations to the cloud database (Amendment A1)")
+  .option("--dry-run", "Report the migration plan without applying")
+  .option("--json", "Output JSON")
+  .action(async (opts) => {
+    try {
+      // Migrations run as the DB OWNER (DDL). Prefer the owner DSN when the
+      // migration task injects it, falling back to the app DSN otherwise.
+      const ownerUrl = process.env["HASNA_TESTERS_DATABASE_URL_OWNER"];
+      if (ownerUrl) {
+        process.env["HASNA_TESTERS_DATABASE_URL"] = ownerUrl;
+        if (!process.env["HASNA_TESTERS_STORAGE_MODE"]) process.env["HASNA_TESTERS_STORAGE_MODE"] = "cloud";
+      }
+      if (!isCloudMode()) {
+        logError(
+          chalk.red(
+            "testers db migrate requires cloud mode. Set HASNA_TESTERS_STORAGE_MODE=cloud and HASNA_TESTERS_DATABASE_URL (or _OWNER).",
+          ),
+        );
+        process.exit(1);
+      }
+      const client = getCloudClient();
+      const result = await runPgMigrations(client, { dryRun: opts.dryRun === true });
+      await closeCloudClient();
+      const pending = result.plan.filter((p) => p.state === "pending").map((p) => p.migration.id);
+      if (opts.json) {
+        log(
+          JSON.stringify(
+            { dryRun: result.dryRun, applied: result.applied.map((a) => a.id), pending },
+            null,
+            2,
+          ),
+        );
+      } else if (opts.dryRun) {
+        log(chalk.bold(`Migration plan (${result.plan.length} total):`));
+        for (const p of result.plan) log(`  ${p.state === "pending" ? chalk.yellow("PENDING") : chalk.green("applied")}  ${p.migration.id}`);
+      } else {
+        log(chalk.green(`Migrations up to date. ${result.applied.length} applied, ${pending.length} newly pending resolved.`));
+      }
+      process.exit(0);
+    } catch (error) {
+      logError(chalk.red(`Migration error: ${error instanceof Error ? error.message : String(error)}`));
       process.exit(1);
     }
   });

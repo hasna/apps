@@ -23,6 +23,7 @@ import { PersonaNotFoundError } from "../types/index.js";
 import { createTestingWorkflow, deleteTestingWorkflow, getTestingWorkflow, listTestingWorkflows, updateTestingWorkflow } from "../db/workflows.js";
 import { runTestingWorkflow } from "../lib/workflow-runner.js";
 import { runWorkflowGoalLoop } from "../lib/workflow-agent.js";
+import { handleV1 } from "./v1.js";
 
 const cliArgs = new Set(process.argv.slice(2));
 if (cliArgs.has("--help") || cliArgs.has("-h")) {
@@ -266,6 +267,11 @@ async function handleRequest(req: Request): Promise<Response> {
       },
     });
   }
+
+  // ── Health / version / versioned /v1 (cloud Postgres + API-key auth) ─────
+  // Takes precedence over the legacy SQLite dashboard routes below.
+  const v1Response = await handleV1(req, pathname, method, searchParams);
+  if (v1Response) return v1Response;
 
   // ── API Routes ──────────────────────────────────────────────────────────
 
@@ -1243,7 +1249,7 @@ async function handleRequest(req: Request): Promise<Response> {
 
 // ─── Server ─────────────────────────────────────────────────────────────────
 
-const port = parseInt(process.env["TESTERS_PORT"] ?? "19450", 10);
+const port = parseInt(process.env["PORT"] ?? process.env["TESTERS_PORT"] ?? "19450", 10);
 
 // Prevent the server process from dying on async bugs. For long-running server mode
 // we want a single rogue promise to log and keep serving, not crash.

@@ -472,6 +472,10 @@ export {
   resolvePullRequestNumber,
 } from "./lib/ci.js";
 
+// ─── Generated HTTP SDK client (from the serve OpenAPI) ──────────────────────
+export { TestersClient, ApiError as TestersApiError } from "./sdk/client.js";
+export type { TestersClientOptions } from "./sdk/client.js";
+
 // ─── Sessions (Chrome extension import) ──────────────────────────────────────
 export {
   createSession,
