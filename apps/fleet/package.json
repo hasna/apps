@@ -46,7 +46,7 @@
     "pg": "^8.13.1"
   },
   "devDependencies": {
-    "@hasna/contracts": "file:../../../hasna/opensource/open-contracts",
+    "@hasna/contracts": "0.4.1",
     "@types/bun": "^1.2.4",
     "@types/pg": "^8.11.10",
     "@types/react": "^18.3.18",

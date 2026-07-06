@@ -3,9 +3,13 @@
   "name": "fleet",
   "class": "cli-with-store",
   "contractVersion": "v1",
-  "kitVersion": "0.4.0",
+  "kitVersion": "0.4.1",
   "description": "Read-only AgentOps control tower CLI + MCP + serve. Local mode uses SQLite at ~/.hasna/fleet/fleet.db; cloud mode (HASNA_FLEET_STORAGE_MODE=cloud) is PURE REMOTE per Amendment A1 with all reads/writes to fleet's own config tables hitting the shared cloud Postgres. Fused upstream observability data is read-only and never persisted as source-of-truth.",
-  "bins": ["fleet", "fleet-mcp", "fleet-serve"],
+  "bins": [
+    "fleet",
+    "fleet-mcp",
+    "fleet-serve"
+  ],
   "storage": {
     "mode": "local",
     "envPrefix": "HASNA_FLEET_",
