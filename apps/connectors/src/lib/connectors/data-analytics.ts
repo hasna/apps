@@ -528,6 +528,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["fitness", "running", "cycling", "activities", "sports"],
   },
   {
+    name: "sumo-logic",
+    displayName: "Sumo Logic",
+    description: "Cloud log management, SIEM and observability platform",
+    category: "Data & Analytics",
+    tags: ["logs", "monitoring", "security", "analytics", "siem", "observability"],
+  },
+  {
     name: "thoughtspot",
     displayName: "ThoughtSpot",
     description: "BI analytics platform for liveboards, search, and insights",
