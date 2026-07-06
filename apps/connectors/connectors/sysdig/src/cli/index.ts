@@ -28,6 +28,10 @@ const VERSION = '0.0.1';
 
 const program = new Command();
 
+function credentialStatus(value?: string): string {
+  return value ? 'configured' : chalk.gray('not set');
+}
+
 program
   .name(CONNECTOR_NAME)
   .description('Sysdig connector - Manage Monitor alerts, dashboards, events, notification channels, users, teams, and Secure policies')
@@ -163,7 +167,7 @@ profileCmd
     const active = getCurrentProfile();
 
     console.log(chalk.bold(`Profile: ${profileName}${profileName === active ? chalk.green(' (active)') : ''}`));
-    info(`API Token: ${config.apiToken ? `${config.apiToken.substring(0, 8)}...` : chalk.gray('not set')}`);
+    info(`API Token: ${credentialStatus(config.apiToken)}`);
     info(`Region: ${config.region || chalk.gray('us1 (default)')}`);
     info(`Base URL: ${config.baseUrl || chalk.gray('not set')}`);
   });
@@ -210,7 +214,7 @@ configCmd
 
     console.log(chalk.bold(`Active Profile: ${profileName}`));
     info(`Config directory: ${getConfigDir()}`);
-    info(`API Token: ${apiToken ? `${apiToken.substring(0, 8)}...` : chalk.gray('not set')}`);
+    info(`API Token: ${credentialStatus(apiToken)}`);
     info(`Region: ${region || chalk.gray('us1 (default)')}`);
     info(`Base URL: ${baseUrl || chalk.gray('not set')}`);
   });

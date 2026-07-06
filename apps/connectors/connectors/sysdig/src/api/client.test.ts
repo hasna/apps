@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Sysdig } from './index';
-import { resolveBaseUrl, REGIONS, DEFAULT_REGION, SysdigClient } from './client';
+import { resolveBaseUrl, resolveSecureBaseUrl, REGIONS, SECURE_REGIONS, DEFAULT_REGION, SysdigClient } from './client';
 import { SysdigApiError } from '../types';
 
 const realFetch = globalThis.fetch;
@@ -52,12 +52,22 @@ describe('SysdigClient region resolution', () => {
 
   test('resolves named regions', () => {
     expect(resolveBaseUrl({ apiToken: 't', region: 'eu1' })).toBe('https://eu1.app.sysdig.com');
+    expect(resolveBaseUrl({ apiToken: 't', region: 'eu2' })).toBe('https://app.eu2.sysdig.com');
+    expect(resolveBaseUrl({ apiToken: 't', region: 'au1' })).toBe('https://app.au1.sysdig.com');
     expect(resolveBaseUrl({ apiToken: 't', region: 'US2' })).toBe('https://us2.app.sysdig.com');
+  });
+
+  test('resolves US East Secure to the Secure endpoint', () => {
+    expect(resolveSecureBaseUrl({ apiToken: 't' })).toBe('https://secure.sysdig.com');
+    expect(SECURE_REGIONS[DEFAULT_REGION]).toBe('https://secure.sysdig.com');
   });
 
   test('baseUrl overrides region and trims trailing slashes', () => {
     expect(
       resolveBaseUrl({ apiToken: 't', region: 'eu1', baseUrl: 'https://api.sysdig.internal/' }),
+    ).toBe('https://api.sysdig.internal');
+    expect(
+      resolveSecureBaseUrl({ apiToken: 't', region: 'us1', baseUrl: 'https://api.sysdig.internal/' }),
     ).toBe('https://api.sysdig.internal');
   });
 
@@ -105,7 +115,7 @@ describe('Sysdig API transport', () => {
     const sysdig = new Sysdig({ apiToken: 't' });
     const policies = await sysdig.listSecurePolicies();
     expect(policies).toEqual([{ id: 1, name: 'default' }]);
-    expect(recorded[0].url).toBe('https://app.sysdigcloud.com/api/v1/secure/policies');
+    expect(recorded[0].url).toBe('https://secure.sysdig.com/api/v1/secure/policies');
   });
 
   test('surfaces API errors with status code and joined messages', async () => {

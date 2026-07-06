@@ -45,6 +45,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["social", "video"],
   },
   {
+    name: "twitch",
+    displayName: "Twitch",
+    description: "Live streaming, channels, chat, and followers",
+    category: "Social Media",
+    tags: ["streaming", "live", "video"],
+  },
+  {
     name: "youtube",
     displayName: "YouTube",
     description: "Videos, channels, and analytics",
@@ -90,6 +97,13 @@ export const connectors: ConnectorMeta[] = [
     name: "giphy",
     displayName: "Giphy",
     description: "GIF search and sharing",
+    category: "Social Media",
+    tags: ["gifs", "media", "search"],
+  },
+  {
+    name: "tenor",
+    displayName: "Tenor",
+    description: "Search and discover GIFs via Google's Tenor API",
     category: "Social Media",
     tags: ["gifs", "media", "search"],
   },
@@ -141,5 +155,12 @@ export const connectors: ConnectorMeta[] = [
     description: "Social media hashtag suggestions and content optimization API",
     category: "Social Media",
     tags: ["hashtags", "social-media", "content", "optimization", "twitter"],
+  },
+  {
+    name: "tumblr",
+    displayName: "Tumblr",
+    description: "Microblogging platform — blogs, posts, and social features",
+    category: "Social Media",
+    tags: ["social", "blogging", "microblog"],
   },
 ];

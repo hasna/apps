@@ -68,6 +68,12 @@ export const TEST_ENDPOINTS: Record<string, TestEndpoint> = {
     url: "https://api.tinker.com/v1/models",
     headers: (key) => ({ Authorization: `Bearer ${key}` }),
   },
+  tomtom: {
+    // TomTom uses API key as query param
+    url: "https://api.tomtom.com/search/2/geocode/test.json",
+    headers: () => ({}),
+    // Key appended as ?key= query param in the test command
+  },
 
   // ── Developer Tools ──────────────────────────────────────
   github: {
@@ -80,6 +86,10 @@ export const TEST_ENDPOINTS: Record<string, TestEndpoint> = {
   },
   sentry: {
     url: "https://sentry.io/api/0/",
+    headers: (key) => ({ Authorization: `Bearer ${key}` }),
+  },
+  testim: {
+    url: "https://api.testim.io/tests",
     headers: (key) => ({ Authorization: `Bearer ${key}` }),
   },
   cloudflare: {
@@ -148,6 +158,20 @@ export const TEST_ENDPOINTS: Record<string, TestEndpoint> = {
   youtube: {
     url: "https://www.googleapis.com/youtube/v3/channels?part=id&mine=true",
     headers: (key) => ({ Authorization: `Bearer ${key}` }),
+  },
+  tumblr: {
+    url: "https://api.tumblr.com/v2/user/info",
+    headers: (key) => ({
+      Authorization: `Bearer ${key}`,
+      "User-Agent": "@hasna/connect-tumblr/0.1",
+    }),
+  },
+  twitch: {
+    url: "https://api.twitch.tv/helix/users",
+    headers: (key) => ({
+      Authorization: `Bearer ${key}`,
+      "Client-Id": process.env.TWITCH_CLIENT_ID || "",
+    }),
   },
 
   // ── Commerce & Finance ───────────────────────────────────
@@ -229,6 +253,10 @@ export const TEST_ENDPOINTS: Record<string, TestEndpoint> = {
     url: "https://api.openweathermap.org/data/2.5/weather?q=London",
     headers: () => ({}),
     // Key appended as &appid= query param in the test command
+  },
+  "triple-whale": {
+    url: "https://api.triplewhale.com/api/v2/users/api-keys/me",
+    headers: (key) => ({ "x-api-key": key }),
   },
 
   // ── Business Tools ───────────────────────────────────────

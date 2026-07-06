@@ -143,6 +143,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["website builder", "landing pages", "design", "publishing", "no-code"],
   },
   {
+    name: "tinypng",
+    displayName: "TinyPNG",
+    description: "Image compression and optimization for AVIF, WebP, JPEG, and PNG",
+    category: "Design & Content",
+    tags: ["images", "optimization", "compression"],
+  },
+  {
     name: "vimeo",
     displayName: "Vimeo",
     description: "Video hosting, management, and streaming",

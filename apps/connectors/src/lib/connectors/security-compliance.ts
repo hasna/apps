@@ -136,6 +136,27 @@ export const connectors: ConnectorMeta[] = [
     tags: ["security", "monitoring", "observability", "cloud-security", "containers"],
   },
   {
+    name: "tenable",
+    displayName: "Tenable",
+    description: "Cloud vulnerability management and exposure platform",
+    category: "Security & Compliance",
+    tags: ["vulnerability-management", "security", "scanning", "exposure", "cyber"],
+  },
+  {
+    name: "tines",
+    displayName: "Tines",
+    description: "Security automation and SOAR workflow orchestration platform",
+    category: "Security & Compliance",
+    tags: ["security", "soar", "automation", "workflow", "orchestration"],
+  },
+  {
+    name: "the-hive-project",
+    displayName: "TheHive Project",
+    description: "TheHive 5 instance API connector for incident response and SOC workflows",
+    category: "Security & Compliance",
+    tags: ["thehive", "thehive5", "security", "soc", "cases", "incident-response"],
+  },
+  {
     name: "thehive",
     displayName: "TheHive",
     description: "Security incident response platform for managing and investigating cyber threats",
@@ -157,11 +178,25 @@ export const connectors: ConnectorMeta[] = [
     tags: ["endpoint security", "edr", "threat response", "enterprise", "cybersecurity"],
   },
   {
+    name: "twocaptcha",
+    displayName: "2Captcha",
+    description: "Captcha solving service API for automation and anti-bot workflows",
+    category: "Security & Compliance",
+    tags: ["captcha", "automation", "anti-bot", "api"],
+  },
+  {
     name: "urlscanio",
     displayName: "urlscan.io",
     description: "Website scanning and threat analysis",
     category: "Security & Compliance",
     tags: ["security", "scanning", "threat-intelligence"],
+  },
+  {
+    name: "vault",
+    displayName: "HashiCorp Vault",
+    description: "Secrets management and data protection via HashiCorp Vault HTTP API",
+    category: "Security & Compliance",
+    tags: ["secrets", "vault", "security"],
   },
   {
     name: "virustotal",

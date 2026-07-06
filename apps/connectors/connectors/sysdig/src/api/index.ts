@@ -254,7 +254,7 @@ export class Sysdig {
    * List Sysdig Secure policies.
    */
   async listSecurePolicies(): Promise<SecurePolicy[]> {
-    return this.client.get<SecurePolicy[]>('/api/v1/secure/policies');
+    return this.client.get<SecurePolicy[]>('/api/v1/secure/policies', undefined, 'secure');
   }
 
   /**

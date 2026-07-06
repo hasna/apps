@@ -1,18 +1,23 @@
 import type { SysdigConfig, OutputFormat, SysdigErrorDetail } from '../types';
 import { SysdigApiError } from '../types';
 
-// Sysdig SaaS region -> application/API base URL.
+// Sysdig SaaS region -> Monitor/API base URL.
 // See https://docs.sysdig.com/en/administration/saas-regions-and-ip-ranges/
 export const REGIONS: Record<string, string> = {
   us1: 'https://app.sysdigcloud.com',
   us2: 'https://us2.app.sysdig.com',
   us4: 'https://app.us4.sysdig.com',
   eu1: 'https://eu1.app.sysdig.com',
-  eu2: 'https://eu2.app.sysdig.com',
-  au1: 'https://au1.app.sysdig.com',
+  eu2: 'https://app.eu2.sysdig.com',
+  au1: 'https://app.au1.sysdig.com',
   me2: 'https://app.me2.sysdig.com',
   in1: 'https://app.in1.sysdig.com',
   jp1: 'https://app.jp1.sysdig.com',
+};
+
+export const SECURE_REGIONS: Record<string, string> = {
+  ...REGIONS,
+  us1: 'https://secure.sysdig.com',
 };
 
 export const DEFAULT_REGION = 'us1';
@@ -23,17 +28,29 @@ export interface RequestOptions {
   body?: Record<string, unknown> | unknown[] | string;
   headers?: Record<string, string>;
   format?: OutputFormat;
+  product?: 'monitor' | 'secure';
 }
 
 /**
  * Resolve the API base URL from an explicit base URL or a region identifier.
  */
 export function resolveBaseUrl(config: SysdigConfig): string {
+  return resolveRegionBaseUrl(config, REGIONS);
+}
+
+/**
+ * Resolve the Secure API base URL from an explicit base URL or a region identifier.
+ */
+export function resolveSecureBaseUrl(config: SysdigConfig): string {
+  return resolveRegionBaseUrl(config, SECURE_REGIONS);
+}
+
+function resolveRegionBaseUrl(config: SysdigConfig, regions: Record<string, string>): string {
   if (config.baseUrl) {
     return config.baseUrl.replace(/\/+$/, '');
   }
   const region = (config.region || DEFAULT_REGION).toLowerCase();
-  const base = REGIONS[region];
+  const base = regions[region];
   if (!base) {
     throw new Error(
       `Unknown Sysdig region "${region}". Supported regions: ${Object.keys(REGIONS).join(', ')}. ` +
@@ -46,6 +63,7 @@ export function resolveBaseUrl(config: SysdigConfig): string {
 export class SysdigClient {
   private readonly apiToken: string;
   private readonly baseUrl: string;
+  private readonly secureBaseUrl: string;
 
   constructor(config: SysdigConfig) {
     if (!config.apiToken) {
@@ -53,14 +71,23 @@ export class SysdigClient {
     }
     this.apiToken = config.apiToken;
     this.baseUrl = resolveBaseUrl(config);
+    this.secureBaseUrl = resolveSecureBaseUrl(config);
   }
 
   getBaseUrl(): string {
     return this.baseUrl;
   }
 
-  private buildUrl(path: string, params?: Record<string, string | number | boolean | undefined>): string {
-    const url = new URL(`${this.baseUrl}${path.startsWith('/') ? path : `/${path}`}`);
+  getSecureBaseUrl(): string {
+    return this.secureBaseUrl;
+  }
+
+  private buildUrl(
+    path: string,
+    params?: Record<string, string | number | boolean | undefined>,
+    baseUrl = this.baseUrl,
+  ): string {
+    const url = new URL(`${baseUrl}${path.startsWith('/') ? path : `/${path}`}`);
 
     if (params) {
       Object.entries(params).forEach(([key, value]) => {
@@ -78,9 +105,9 @@ export class SysdigClient {
    * Uses the Authorization: Bearer <token> header.
    */
   async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-    const { method = 'GET', params, body, headers = {} } = options;
+    const { method = 'GET', params, body, headers = {}, product = 'monitor' } = options;
 
-    const url = this.buildUrl(path, params);
+    const url = this.buildUrl(path, params, product === 'secure' ? this.secureBaseUrl : this.baseUrl);
 
     const requestHeaders: Record<string, string> = {
       Authorization: `Bearer ${this.apiToken}`,
@@ -141,8 +168,12 @@ export class SysdigClient {
     return data as T;
   }
 
-  async get<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
-    return this.request<T>(path, { method: 'GET', params });
+  async get<T>(
+    path: string,
+    params?: Record<string, string | number | boolean | undefined>,
+    product?: RequestOptions['product'],
+  ): Promise<T> {
+    return this.request<T>(path, { method: 'GET', params, product });
   }
 
   async post<T>(
@@ -166,12 +197,9 @@ export class SysdigClient {
   }
 
   /**
-   * Get a preview of the API token (for display/debugging).
+   * Return a non-revealing token status for display/debugging.
    */
   getTokenPreview(): string {
-    if (this.apiToken.length > 10) {
-      return `${this.apiToken.substring(0, 6)}...${this.apiToken.substring(this.apiToken.length - 4)}`;
-    }
-    return '***';
+    return this.apiToken ? 'configured' : 'not set';
   }
 }
