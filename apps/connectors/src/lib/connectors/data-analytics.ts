@@ -528,6 +528,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["fitness", "running", "cycling", "activities", "sports"],
   },
   {
+    name: "thoughtspot",
+    displayName: "ThoughtSpot",
+    description: "BI analytics platform for liveboards, search, and insights",
+    category: "Data & Analytics",
+    tags: ["bi", "analytics", "liveboard", "search"],
+  },
+  {
     name: "tinybird",
     displayName: "Tinybird",
     description: "Real-time analytics and data platform",
