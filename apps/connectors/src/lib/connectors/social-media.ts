@@ -101,6 +101,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["gifs", "media", "search"],
   },
   {
+    name: "tenor",
+    displayName: "Tenor",
+    description: "Search and discover GIFs via Google's Tenor API",
+    category: "Social Media",
+    tags: ["gifs", "media", "search"],
+  },
+  {
     name: "imgur",
     displayName: "Imgur",
     description: "Image hosting and sharing",
