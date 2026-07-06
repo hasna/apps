@@ -32,8 +32,15 @@ export {
   TODOS_STORAGE_FALLBACK_ENV,
   TODOS_STORAGE_TABLES,
   assertTodosRemoteStorageConfig,
+  assertTodosShadowConfig,
+  isTodosShadowEnabled,
+  getTodosStorageShadowEnvName,
   createLocalSqliteTodosStorageAdapter,
   createHybridTodosStorageAdapter,
+  createShadowTodosStorageAdapter,
+  createTodosCloudQueryClient,
+  createTodosCloudQueryClientFromEnv,
+  TodosShadowMirror,
   createTodosStorageAdapter,
   exportSqliteTodosStorageSnapshot,
   importSqliteTodosStorageSnapshot,
@@ -61,6 +68,14 @@ export {
   loadStorageConfig,
 } from "./storage/index.js";
 export type { CreateLocalSqliteTodosStorageAdapterOptions } from "./storage/index.js";
+export type {
+  CreateShadowTodosStorageAdapterOptions,
+  ShadowTodosStorageAdapter,
+  TodosShadowMirrorEvent,
+  TodosShadowMirrorMetrics,
+  CreateTodosCloudQueryClientOptions,
+  TodosCloudQueryClient,
+} from "./storage/index.js";
 export type {
   CanonicalTodosRdsConfig,
   CreateHybridTodosStorageAdapterOptions,
