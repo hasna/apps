@@ -24,6 +24,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["sms", "voice"],
   },
   {
+    name: "telnyx",
+    displayName: "Telnyx",
+    description: "Messaging, phone numbers, and carrier lookup APIs",
+    category: "Communication",
+    tags: ["sms", "voice", "messaging"],
+  },
+  {
     name: "resend",
     displayName: "Resend",
     description: "Email API for developers",
