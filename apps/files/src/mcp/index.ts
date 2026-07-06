@@ -2,6 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { makeCapabilityGuard } from "@hasna/mcp-harness";
 import { getCurrentMachine, listMachines } from "../db/machines.js";
 import { createSource, listSources, getSource, deleteSource } from "../db/sources.js";
 import { listFiles, getFile, getFileByPath, annotateFile } from "../db/files.js";
@@ -95,43 +96,25 @@ const MAX_MCP_READ_BYTES = 10 * 1024 * 1024;
 const DEFAULT_MCP_IMPORT_BYTES = 100 * 1024 * 1024;
 const MAX_MCP_IMPORT_BYTES = 2 * 1024 * 1024 * 1024;
 
-function mcpToolDenied(toolName: string, capabilities: McpCapability[]) {
-  const envNames = capabilities.map((capability) => capabilityEnvName(capability));
-  return {
-    content: [{
-      type: "text" as const,
-      text: [
-        `MCP tool '${toolName}' requires explicit capability: ${capabilities.join(", ")}.`,
-        `Start files-mcp with ${envNames.join(" and ")} set to 1, or OPEN_FILES_MCP_ALLOW_ALL=1.`,
-      ].join(" "),
-    }],
-    isError: true,
-  };
-}
+// Capability gating is delegated to `@hasna/mcp-harness`. The "OPEN_FILES" env
+// prefix reproduces the historical enablement rules exactly:
+//   OPEN_FILES_MCP_ALLOW_ALL / OPEN_FILES_ALLOW_ALL /
+//   OPEN_FILES_ALLOW_<CAP> / OPEN_FILES_MCP_ALLOW_<CAP>.
+const mcpCapabilityGuard = makeCapabilityGuard({
+  capabilities: MCP_TOOL_CAPABILITIES,
+  envPrefix: "OPEN_FILES",
+});
 
 function requireMcpToolCapabilities(toolName: string) {
-  const capabilities = MCP_TOOL_CAPABILITIES[toolName] ?? [];
-  const missing = capabilities.filter((capability) => !mcpCapabilityEnabled(capability));
-  return missing.length ? mcpToolDenied(toolName, missing) : null;
+  return mcpCapabilityGuard(toolName) ?? null;
 }
 
 function requireMcpCapability(toolName: string, capability: McpCapability) {
-  return mcpCapabilityEnabled(capability) ? null : mcpToolDenied(toolName, [capability]);
-}
-
-function mcpCapabilityEnabled(capability: McpCapability): boolean {
-  return truthyEnv(process.env.OPEN_FILES_MCP_ALLOW_ALL)
-    || truthyEnv(process.env.OPEN_FILES_ALLOW_ALL)
-    || truthyEnv(process.env[`OPEN_FILES_ALLOW_${capability.toUpperCase()}`])
-    || truthyEnv(process.env[capabilityEnvName(capability)]);
-}
-
-function capabilityEnvName(capability: McpCapability): string {
-  return `OPEN_FILES_MCP_ALLOW_${capability.toUpperCase()}`;
-}
-
-function truthyEnv(value: string | undefined): boolean {
-  return value === "1" || value === "true" || value === "yes" || value === "on";
+  const guard = makeCapabilityGuard({
+    capabilities: { [toolName]: [capability] },
+    envPrefix: "OPEN_FILES",
+  });
+  return guard(toolName) ?? null;
 }
 
 function normalizeMcpReadLimit(value: number | undefined): number {
