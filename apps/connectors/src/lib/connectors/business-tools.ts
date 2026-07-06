@@ -920,6 +920,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["calendar", "scheduling", "shared", "teams", "planning"],
   },
   {
+    name: "teamwork",
+    displayName: "Teamwork",
+    description: "Projects, tasks, milestones, time tracking, and people management",
+    category: "Business Tools",
+    tags: ["project-management", "tasks", "milestones", "time-tracking", "collaboration"],
+  },
+  {
     name: "thecustomerfactor",
     displayName: "The Customer Factor",
     description: "CRM and scheduling software for service businesses and field service management",
