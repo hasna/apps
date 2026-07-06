@@ -24,6 +24,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["google", "ads", "ppc", "campaigns"],
   },
   {
+    name: "tiktok-events-api",
+    displayName: "TikTok Events API",
+    description: "Server-side TikTok Events API 2.0 conversion events, pixels, and event sets",
+    category: "Advertising",
+    tags: ["tiktok", "events", "pixel", "conversions"],
+  },
+  {
     name: "tiktokads",
     displayName: "TikTok Ads",
     description: "TikTok Marketing API for campaigns, ad groups, ads, reporting, pixels, and creatives",
