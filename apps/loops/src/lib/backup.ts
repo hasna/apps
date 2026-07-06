@@ -17,6 +17,8 @@ export interface BackupDatabaseOptions {
   backupsDir?: string;
   /** Injectable clock for tests. */
   now?: Date;
+  /** Bypass the per-reason debounce and always write a backup. */
+  force?: boolean;
 }
 
 export interface BackupDatabaseResult {
@@ -76,7 +78,7 @@ export function backupDatabase(opts: BackupDatabaseOptions): BackupDatabaseResul
 
   const existing = listBackups(dir, slug);
   const newest = existing[0];
-  if (newest && now.getTime() - newest.timeMs < DEBOUNCE_MS) {
+  if (!opts.force && newest && now.getTime() - newest.timeMs < DEBOUNCE_MS) {
     return {
       skipped: true,
       skipReason: `backup for reason "${opts.reason}" already taken within the last hour`,

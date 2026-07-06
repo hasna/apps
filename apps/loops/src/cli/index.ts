@@ -545,8 +545,8 @@ function printMigrationPlan(plan: LoopsMigrationPlan, opts: { json?: boolean } =
 }
 
 /** Snapshot the database through lib/backup (VACUUM INTO, 1h per-reason debounce, keep 3). */
-function backupLoopsDatabase(reason: string): string | undefined {
-  return backupDatabase({ reason, keep: 3 }).path;
+function backupLoopsDatabase(reason: string, opts: { force?: boolean } = {}): string | undefined {
+  return backupDatabase({ reason, keep: 3, force: opts.force }).path;
 }
 
 const create = program.command("create").description("create loops");
@@ -2146,6 +2146,54 @@ hygiene
         for (const loop of report.loops) console.log(`${loop.id}\t${loop.status}\t${loop.name}\t${loop.command}`);
       }
       if (!report.ok) process.exitCode = 1;
+    } finally {
+      store.close();
+    }
+  }));
+
+hygiene
+  .command("output-quarantine")
+  .description("redact historical terminal run/workflow output stores")
+  .option("--limit <n>", "maximum rows to inspect per output table batch", "10000")
+  .option("--apply", "rewrite matching output rows in-place after creating a database backup")
+  .action(runAction((opts) => {
+    const limit = positiveInteger(opts.limit, "--limit") ?? 10_000;
+    const store = new Store();
+    try {
+      const dry = store.quarantineHistoricalOutput({ dryRun: true, limit });
+      const changed =
+        dry.loopRuns.changed +
+        dry.workflowRuns.changed +
+        dry.workflowStepRuns.changed +
+        dry.workflowEvents.changed;
+      let output = dry;
+      let backupPath: string | undefined;
+      if (opts.apply && changed > 0) {
+        backupPath = backupLoopsDatabase("output-quarantine", { force: true });
+        if (!backupPath) throw new ValidationError("output quarantine apply requires a database backup but no backup was written");
+        output = store.quarantineHistoricalOutput({ dryRun: false, limit });
+      } else if (opts.apply) {
+        output = { ...dry, dryRun: false };
+      }
+      const value = backupPath ? { ...output, backupPath } : output;
+      if (isJson()) console.log(JSON.stringify(value, null, 2));
+      else {
+        const totalChanged =
+          output.loopRuns.changed +
+          output.workflowRuns.changed +
+          output.workflowStepRuns.changed +
+          output.workflowEvents.changed;
+        console.log(
+          `hygiene_output_quarantine ${output.dryRun ? "dry-run" : "applied"} changed=${totalChanged} ` +
+            `loopRuns=${output.loopRuns.changed}/${output.loopRuns.checked} ` +
+            `workflowRuns=${output.workflowRuns.changed}/${output.workflowRuns.checked} ` +
+            `workflowStepRuns=${output.workflowStepRuns.changed}/${output.workflowStepRuns.checked} ` +
+            `workflowEvents=${output.workflowEvents.changed}/${output.workflowEvents.checked}`,
+        );
+        if (backupPath) console.log(`backup=${backupPath}`);
+        if (output.dryRun && totalChanged > 0) console.log("use --apply to rewrite historical output rows");
+      }
+      if (!opts.apply && changed > 0) process.exitCode = 1;
     } finally {
       store.close();
     }

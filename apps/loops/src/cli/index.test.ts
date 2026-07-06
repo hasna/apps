@@ -10,6 +10,8 @@ import { Store } from "../lib/store.js";
 import { RESTART_INTERRUPTED_RUN_PREFIX } from "../lib/health.js";
 
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
+const j = (...parts: string[]): string => parts.join("");
+const ANT_KEY = j("sk-", "ant-api03-abcDEF123456789_-suffix");
 
 function runCli(dataDir: string, args: string[], input?: string, env: Record<string, string> = {}) {
   return spawnSync(process.execPath, [cliPath, ...args], {
@@ -834,6 +836,76 @@ describe("loops CLI", () => {
     expect(value.applied).toBe(true);
     expect(value.changed).toBe(0);
     expect(value.backupPath).toBeUndefined();
+  });
+
+  test("hygiene output-quarantine previews and applies historical output redaction", () => {
+    const dataDir = freshDataDir("loops-cli-hygiene-output-quarantine-");
+    const store = new Store(join(dataDir, "loops.db"));
+    let runId = "";
+    try {
+      const loop = store.createLoop({
+        name: "legacy-output",
+        schedule: { type: "once", at: futureAt() },
+        target: { type: "command", command: "true" },
+      });
+      const claim = store.claimRun(loop, loop.nextRunAt!, "test");
+      const run = store.finalizeRun(claim!.run.id, {
+        status: "failed",
+        finishedAt: new Date().toISOString(),
+        durationMs: 1_000,
+        stdout: "clean",
+        stderr: "",
+      });
+      runId = run.id;
+      store["db"].query("UPDATE loop_runs SET stdout=? WHERE id=?").run(`legacy ${ANT_KEY}`, run.id);
+    } finally {
+      store.close();
+    }
+
+    const dry = runCli(dataDir, ["--json", "hygiene", "output-quarantine"]);
+    expect(dry.status).toBe(1);
+    const dryValue = JSON.parse(dry.stdout);
+    expect(dryValue.dryRun).toBe(true);
+    expect(dryValue.loopRuns.changed).toBe(1);
+
+    const dbBefore = new Database(join(dataDir, "loops.db"));
+    try {
+      const before = dbBefore.query<{ stdout: string }, [string]>("SELECT stdout FROM loop_runs WHERE id = ?").get(runId);
+      expect(before?.stdout).toContain("sk-ant-");
+    } finally {
+      dbBefore.close();
+    }
+
+    const apply = runCli(dataDir, ["--json", "hygiene", "output-quarantine", "--apply"]);
+    expect(apply.status).toBe(0);
+    const value = JSON.parse(apply.stdout);
+    expect(value.dryRun).toBe(false);
+    expect(value.loopRuns.changed).toBe(1);
+    expect(value.backupPath).toContain(join(dataDir, "backups"));
+    expect(existsSync(value.backupPath)).toBe(true);
+
+    const dbAfter = new Database(join(dataDir, "loops.db"));
+    try {
+      const after = dbAfter.query<{ stdout: string }, [string]>("SELECT stdout FROM loop_runs WHERE id = ?").get(runId);
+      expect(after?.stdout).toContain("[SCRUBBED]");
+      expect(after?.stdout).not.toContain("sk-ant-");
+    } finally {
+      dbAfter.close();
+    }
+
+    const dbAgain = new Database(join(dataDir, "loops.db"));
+    try {
+      dbAgain.query("UPDATE loop_runs SET stdout=? WHERE id=?").run(`legacy again ${ANT_KEY}`, runId);
+    } finally {
+      dbAgain.close();
+    }
+    const secondApply = runCli(dataDir, ["--json", "hygiene", "output-quarantine", "--apply"]);
+    expect(secondApply.status).toBe(0);
+    const secondValue = JSON.parse(secondApply.stdout);
+    expect(secondValue.dryRun).toBe(false);
+    expect(secondValue.loopRuns.changed).toBe(1);
+    expect(secondValue.backupPath).toContain(join(dataDir, "backups"));
+    expect(existsSync(secondValue.backupPath)).toBe(true);
   });
 
   test("created loops get default descriptions and human list cadence", () => {

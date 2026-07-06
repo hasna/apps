@@ -1867,6 +1867,157 @@ exit 0
     }
   });
 
+  test("scrubs workflow event payloads before persistence", () => {
+    const store = new Store(":memory:");
+    try {
+      const workflow = store.createWorkflow({
+        name: "scrub-events",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const run = store.createWorkflowRun({ workflow });
+      const event = store.appendWorkflowEvent(run.id, "step_progress", "worker", {
+        stdout: `progress ${ANT_KEY}`,
+        nested: { token: GH_PAT },
+      });
+      const raw = store["db"]
+        .query<{ payload_json: string | null }, [string]>("SELECT payload_json FROM workflow_events WHERE id = ?")
+        .get(event.id);
+      expect(JSON.stringify(event.payload)).not.toContain("sk-ant-");
+      expect(JSON.stringify(event.payload)).not.toContain("ghp_");
+      expect(raw?.payload_json).toContain("[SCRUBBED]");
+      expect(raw?.payload_json).not.toContain("sk-ant-");
+      expect(raw?.payload_json).not.toContain("ghp_");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("quarantines historical terminal output rows without touching them during dry-run", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "legacy-output-quarantine",
+          schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+          target: { type: "command", command: "true" },
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+      const claim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "test");
+      const run = store.finalizeRun(claim!.run.id, {
+        status: "failed",
+        finishedAt: "2026-01-01T00:00:01.000Z",
+        durationMs: 1_000,
+        stdout: "clean",
+        stderr: "clean",
+        error: "clean",
+      });
+
+      const workflow = store.createWorkflow({
+        name: "legacy-workflow-output-quarantine",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const workflowRun = store.createWorkflowRun({ workflow });
+      store.startWorkflowStepRun(workflowRun.id, "worker");
+      const step = store.finalizeWorkflowStepRun(workflowRun.id, "worker", {
+        status: "failed",
+        finishedAt: "2026-01-01T00:00:01.000Z",
+        durationMs: 1_000,
+        stdout: "clean",
+        stderr: "clean",
+        error: "clean",
+      });
+      store.finalizeWorkflowRun(workflowRun.id, "failed", { error: "clean" });
+      const event = store.appendWorkflowEvent(workflowRun.id, "custom", undefined, { note: "clean" });
+      const activeWorkflowRun = store.createWorkflowRun({ workflow });
+      const activeEvent = store.appendWorkflowEvent(activeWorkflowRun.id, "custom", undefined, { note: "active clean" });
+
+      store["db"]
+        .query("UPDATE loop_runs SET stdout=?, stderr=?, error=? WHERE id=?")
+        .run(`loop stdout ${ANT_KEY}`, `loop stderr ${GH_PAT}`, `loop error ${ANT_KEY}`, run.id);
+      store["db"]
+        .query("UPDATE workflow_runs SET error=? WHERE id=?")
+        .run(`workflow error ${GH_PAT}`, workflowRun.id);
+      store["db"]
+        .query("UPDATE workflow_step_runs SET stdout=?, stderr=?, error=? WHERE id=?")
+        .run(`step stdout ${ANT_KEY}`, `step stderr ${GH_PAT}`, `step error ${ANT_KEY}`, step.id);
+      store["db"]
+        .query("UPDATE workflow_events SET payload_json=? WHERE id=?")
+        .run(JSON.stringify({ stdout: `event stdout ${ANT_KEY}`, nested: { token: GH_PAT } }), event.id);
+      store["db"]
+        .query("UPDATE workflow_events SET payload_json=? WHERE id=?")
+        .run(JSON.stringify({ stdout: `active event stdout ${ANT_KEY}`, nested: { token: GH_PAT } }), activeEvent.id);
+
+      const dry = store.quarantineHistoricalOutput({ dryRun: true, now: new Date("2026-01-02T00:00:00Z") });
+      expect(dry).toMatchObject({
+        dryRun: true,
+        loopRuns: { checked: 1, changed: 1 },
+        workflowRuns: { checked: 1, changed: 1 },
+        workflowStepRuns: { checked: 1, changed: 1 },
+        workflowEvents: { checked: 6, changed: 2 },
+      });
+      expect(store.getRun(run.id)?.stdout).toContain("sk-ant-");
+
+      const applied = store.quarantineHistoricalOutput({ dryRun: false, now: new Date("2026-01-02T00:00:00Z") });
+      expect(applied.loopRuns.changed).toBe(1);
+      const rows = {
+        loopRun: store["db"].query<{ stdout: string; stderr: string; error: string }, [string]>("SELECT stdout, stderr, error FROM loop_runs WHERE id = ?").get(run.id),
+        workflowRun: store["db"].query<{ error: string }, [string]>("SELECT error FROM workflow_runs WHERE id = ?").get(workflowRun.id),
+        stepRun: store["db"].query<{ stdout: string; stderr: string; error: string }, [string]>("SELECT stdout, stderr, error FROM workflow_step_runs WHERE id = ?").get(step.id),
+        event: store["db"].query<{ payload_json: string }, [string]>("SELECT payload_json FROM workflow_events WHERE id = ?").get(event.id),
+        activeEvent: store["db"].query<{ payload_json: string }, [string]>("SELECT payload_json FROM workflow_events WHERE id = ?").get(activeEvent.id),
+      };
+      const persisted = JSON.stringify(rows);
+      expect(persisted).toContain("[SCRUBBED]");
+      expect(persisted).not.toContain("sk-ant-");
+      expect(persisted).not.toContain("ghp_");
+    } finally {
+      store.close();
+    }
+  });
+
+  test("continues output quarantine scans after a clean limited batch", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop(
+        {
+          name: "limited-output-quarantine",
+          schedule: { type: "interval", everyMs: 60_000 },
+          target: { type: "command", command: "true" },
+          overlap: "allow",
+        },
+        new Date("2025-12-31T00:00:00Z"),
+      );
+
+      const cleanClaim = store.claimRun(loop, "2026-01-01T00:00:00.000Z", "test", new Date("2026-01-01T00:00:00Z"));
+      const cleanRun = store.finalizeRun(cleanClaim!.run.id, {
+        status: "succeeded",
+        finishedAt: "2026-01-01T00:00:01.000Z",
+        durationMs: 1_000,
+        stdout: "clean",
+      });
+      const dirtyClaim = store.claimRun(loop, "2026-01-01T00:01:00.000Z", "test", new Date("2026-01-01T00:01:00Z"));
+      const dirtyRun = store.finalizeRun(dirtyClaim!.run.id, {
+        status: "failed",
+        finishedAt: "2026-01-01T00:01:01.000Z",
+        durationMs: 1_000,
+        stdout: "clean",
+      });
+      store["db"].query("UPDATE loop_runs SET stdout=? WHERE id=?").run(`later ${ANT_KEY}`, dirtyRun.id);
+
+      const dry = store.quarantineHistoricalOutput({ dryRun: true, limit: 1, now: new Date("2026-01-02T00:00:00Z") });
+      expect(dry.loopRuns).toEqual({ checked: 2, changed: 1 });
+      expect(store.getRun(dirtyRun.id)?.stdout).toContain("sk-ant-");
+
+      const applied = store.quarantineHistoricalOutput({ dryRun: false, limit: 1, now: new Date("2026-01-02T00:00:00Z") });
+      expect(applied.loopRuns).toEqual({ checked: 2, changed: 1 });
+      expect(store.getRun(cleanRun.id)?.stdout).toBe("clean");
+      expect(store.getRun(dirtyRun.id)?.stdout).toBe("later [SCRUBBED]");
+    } finally {
+      store.close();
+    }
+  });
+
   test("records process identity and reports abandoned vs deferred lease recovery", () => {
     const store = new Store(":memory:");
     try {

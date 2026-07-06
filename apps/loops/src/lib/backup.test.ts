@@ -57,6 +57,23 @@ describe("backupDatabase", () => {
     expect(later.path).not.toBe(first.path);
   });
 
+  test("force writes a fresh backup inside the debounce window", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-backup-force-"));
+    const dbFile = makeDb(root);
+    const first = backupDatabase({ reason: "output-quarantine", dbFile, now: new Date("2026-01-01T00:00:00.000Z") });
+    const forced = backupDatabase({
+      reason: "output-quarantine",
+      dbFile,
+      force: true,
+      now: new Date("2026-01-01T00:30:00.000Z"),
+    });
+    expect(first.skipped).toBe(false);
+    expect(forced.skipped).toBe(false);
+    expect(forced.path).toBeDefined();
+    expect(forced.path).not.toBe(first.path);
+    expect(existsSync(forced.path!)).toBe(true);
+  });
+
   test("prunes old backups beyond keep per reason", () => {
     const root = mkdtempSync(join(tmpdir(), "loops-backup-retention-"));
     const dbFile = makeDb(root);

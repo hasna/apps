@@ -63,7 +63,10 @@ const LIVE_EXPIRED_RUN_GRACE_MS = 60_000;
  */
 const SCHEMA_USER_VERSION = 7;
 const TERMINAL_RUN_STATUSES = ["succeeded", "failed", "timed_out", "abandoned", "skipped"] as const;
+const TERMINAL_WORKFLOW_RUN_STATUSES = ["succeeded", "failed", "timed_out", "cancelled"] as const;
+const TERMINAL_WORKFLOW_STEP_RUN_STATUSES = ["succeeded", "failed", "timed_out", "skipped", "cancelled"] as const;
 const PRUNE_BATCH_SIZE = 400;
+const OUTPUT_QUARANTINE_DEFAULT_LIMIT = 10_000;
 const GENERATED_ROUTE_TEMPLATE_IDS = new Set(["todos-task-worker-verifier", "task-lifecycle", "event-worker-verifier"]);
 const GENERATED_ROUTE_KEYS = new Set(["todos-task", "generic-event"]);
 const TASK_LIFECYCLE_TEMPLATE_ID = "task-lifecycle";
@@ -672,6 +675,30 @@ export interface PruneHistorySummary {
   goalRuns: number;
 }
 
+export interface OutputQuarantineOptions {
+  /** Report rows that would be rewritten without changing the database. */
+  dryRun?: boolean;
+  /** Maximum rows to inspect per output table batch. The scan paginates until each table is exhausted. */
+  limit?: number;
+  /** Injectable clock for tests. */
+  now?: Date;
+}
+
+export interface OutputQuarantineTableSummary {
+  checked: number;
+  changed: number;
+}
+
+export interface OutputQuarantineSummary {
+  dryRun: boolean;
+  generatedAt: string;
+  limit: number;
+  loopRuns: OutputQuarantineTableSummary;
+  workflowRuns: OutputQuarantineTableSummary;
+  workflowStepRuns: OutputQuarantineTableSummary;
+  workflowEvents: OutputQuarantineTableSummary;
+}
+
 export interface StoreMigrationRows {
   schemaVersion: number;
   workflows: WorkflowSpec[];
@@ -760,6 +787,23 @@ function clampPersistedRunOutput(value: string | null): string | null {
 /** Scrub secrets then bound size before persisting run stdout/stderr. */
 function persistedRunOutput(value: string | undefined | null): string | null {
   return clampPersistedRunOutput(scrubbedOrNull(value));
+}
+
+function persistedJson(value: unknown): string {
+  return scrubSecrets(JSON.stringify(scrubSecretsDeep(value)));
+}
+
+function persistedPayloadJson(payload: Record<string, unknown> | undefined): string | null {
+  return payload ? persistedJson(payload) : null;
+}
+
+function persistedHistoricalPayloadJson(value: string | null): string | null {
+  if (value == null) return null;
+  try {
+    return persistedJson(JSON.parse(value));
+  } catch {
+    return scrubSecrets(value);
+  }
 }
 
 function chmodIfExists(path: string, mode: number): void {
@@ -2933,7 +2977,7 @@ export class Store {
         .run({
           $id: genId(),
           $workflowRunId: runId,
-          $payload: JSON.stringify({
+          $payload: persistedPayloadJson({
             workflowId: input.workflow.id,
             workflowName: input.workflow.name,
             stepCount: input.workflow.steps.length,
@@ -3373,7 +3417,7 @@ export class Store {
           $sequence: sequence,
           $eventType: eventType,
           $stepId: stepId ?? null,
-          $payload: payload ? JSON.stringify(payload) : null,
+          $payload: persistedPayloadJson(payload),
           $created: now,
         });
       const event = this.db.query<WorkflowEventRow, [string]>("SELECT * FROM workflow_events WHERE id = ?").get(id);
@@ -4034,6 +4078,155 @@ export class Store {
       ? this.db.query<{ count: number }, [string]>("SELECT COUNT(*) AS count FROM loop_runs WHERE status = ?").get(status)
       : this.db.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM loop_runs").get();
     return row?.count ?? 0;
+  }
+
+  quarantineHistoricalOutput(opts: OutputQuarantineOptions = {}): OutputQuarantineSummary {
+    const limit = opts.limit ?? OUTPUT_QUARANTINE_DEFAULT_LIMIT;
+    if (!Number.isInteger(limit) || limit < 1) {
+      throw new ValidationError(`output quarantine limit must be a positive integer: ${limit}`);
+    }
+    const dryRun = opts.dryRun ?? true;
+    const generatedAt = (opts.now ?? new Date()).toISOString();
+    const terminalRunStatuses = TERMINAL_RUN_STATUSES.map((status) => `'${status}'`).join(",");
+    const terminalWorkflowStatuses = TERMINAL_WORKFLOW_RUN_STATUSES.map((status) => `'${status}'`).join(",");
+    const terminalStepStatuses = TERMINAL_WORKFLOW_STEP_RUN_STATUSES.map((status) => `'${status}'`).join(",");
+    const summary: OutputQuarantineSummary = {
+      dryRun,
+      generatedAt,
+      limit,
+      loopRuns: { checked: 0, changed: 0 },
+      workflowRuns: { checked: 0, changed: 0 },
+      workflowStepRuns: { checked: 0, changed: 0 },
+      workflowEvents: { checked: 0, changed: 0 },
+    };
+
+    this.transact(() => {
+      let cursor = { createdAt: "", id: "" };
+      while (true) {
+        const loopRows = this.db
+          .query<{ id: string; created_at: string; stdout: string | null; stderr: string | null; error: string | null }, [string, string, string, number]>(
+            `SELECT id, created_at, stdout, stderr, error FROM loop_runs
+             WHERE status IN (${terminalRunStatuses})
+               AND (stdout IS NOT NULL OR stderr IS NOT NULL OR error IS NOT NULL)
+               AND (created_at > ? OR (created_at = ? AND id > ?))
+             ORDER BY created_at ASC, id ASC
+             LIMIT ?`,
+          )
+          .all(cursor.createdAt, cursor.createdAt, cursor.id, limit);
+        if (loopRows.length === 0) break;
+        summary.loopRuns.checked += loopRows.length;
+        cursor = { createdAt: loopRows[loopRows.length - 1]!.created_at, id: loopRows[loopRows.length - 1]!.id };
+        for (const row of loopRows) {
+          const next = {
+            stdout: persistedRunOutput(row.stdout),
+            stderr: persistedRunOutput(row.stderr),
+            error: scrubbedOrNull(row.error),
+          };
+          if (next.stdout === row.stdout && next.stderr === row.stderr && next.error === row.error) continue;
+          summary.loopRuns.changed += 1;
+          if (!dryRun) {
+            this.db
+              .query(
+                `UPDATE loop_runs
+                 SET stdout=$stdout, stderr=$stderr, error=$error, updated_at=$updated
+                 WHERE id=$id`,
+              )
+              .run({ $id: row.id, $stdout: next.stdout, $stderr: next.stderr, $error: next.error, $updated: generatedAt });
+          }
+        }
+      }
+
+      cursor = { createdAt: "", id: "" };
+      while (true) {
+        const workflowRows = this.db
+          .query<{ id: string; created_at: string; error: string | null }, [string, string, string, number]>(
+            `SELECT id, created_at, error FROM workflow_runs
+             WHERE status IN (${terminalWorkflowStatuses})
+               AND error IS NOT NULL
+               AND (created_at > ? OR (created_at = ? AND id > ?))
+             ORDER BY created_at ASC, id ASC
+             LIMIT ?`,
+          )
+          .all(cursor.createdAt, cursor.createdAt, cursor.id, limit);
+        if (workflowRows.length === 0) break;
+        summary.workflowRuns.checked += workflowRows.length;
+        cursor = { createdAt: workflowRows[workflowRows.length - 1]!.created_at, id: workflowRows[workflowRows.length - 1]!.id };
+        for (const row of workflowRows) {
+          const error = scrubbedOrNull(row.error);
+          if (error === row.error) continue;
+          summary.workflowRuns.changed += 1;
+          if (!dryRun) {
+            this.db
+              .query("UPDATE workflow_runs SET error=$error, updated_at=$updated WHERE id=$id")
+              .run({ $id: row.id, $error: error, $updated: generatedAt });
+          }
+        }
+      }
+
+      cursor = { createdAt: "", id: "" };
+      while (true) {
+        const stepRows = this.db
+          .query<{ id: string; created_at: string; stdout: string | null; stderr: string | null; error: string | null }, [string, string, string, number]>(
+            `SELECT id, created_at, stdout, stderr, error FROM workflow_step_runs
+             WHERE status IN (${terminalStepStatuses})
+               AND (stdout IS NOT NULL OR stderr IS NOT NULL OR error IS NOT NULL)
+               AND (created_at > ? OR (created_at = ? AND id > ?))
+             ORDER BY created_at ASC, id ASC
+             LIMIT ?`,
+          )
+          .all(cursor.createdAt, cursor.createdAt, cursor.id, limit);
+        if (stepRows.length === 0) break;
+        summary.workflowStepRuns.checked += stepRows.length;
+        cursor = { createdAt: stepRows[stepRows.length - 1]!.created_at, id: stepRows[stepRows.length - 1]!.id };
+        for (const row of stepRows) {
+          const next = {
+            stdout: persistedRunOutput(row.stdout),
+            stderr: persistedRunOutput(row.stderr),
+            error: scrubbedOrNull(row.error),
+          };
+          if (next.stdout === row.stdout && next.stderr === row.stderr && next.error === row.error) continue;
+          summary.workflowStepRuns.changed += 1;
+          if (!dryRun) {
+            this.db
+              .query(
+                `UPDATE workflow_step_runs
+                 SET stdout=$stdout, stderr=$stderr, error=$error, updated_at=$updated
+                 WHERE id=$id`,
+              )
+              .run({ $id: row.id, $stdout: next.stdout, $stderr: next.stderr, $error: next.error, $updated: generatedAt });
+          }
+        }
+      }
+
+      cursor = { createdAt: "", id: "" };
+      while (true) {
+        const eventRows = this.db
+          .query<{ id: string; created_at: string; payload_json: string | null }, [string, string, string, number]>(
+            `SELECT id, created_at, payload_json
+             FROM workflow_events
+             WHERE payload_json IS NOT NULL
+               AND (created_at > ? OR (created_at = ? AND id > ?))
+             ORDER BY created_at ASC, id ASC
+             LIMIT ?`,
+          )
+          .all(cursor.createdAt, cursor.createdAt, cursor.id, limit);
+        if (eventRows.length === 0) break;
+        summary.workflowEvents.checked += eventRows.length;
+        cursor = { createdAt: eventRows[eventRows.length - 1]!.created_at, id: eventRows[eventRows.length - 1]!.id };
+        for (const row of eventRows) {
+          const payload = persistedHistoricalPayloadJson(row.payload_json);
+          if (payload === row.payload_json) continue;
+          summary.workflowEvents.changed += 1;
+          if (!dryRun) {
+            this.db
+              .query("UPDATE workflow_events SET payload_json=$payload WHERE id=$id")
+              .run({ $id: row.id, $payload: payload });
+          }
+        }
+      }
+    });
+
+    return summary;
   }
 
   exportMigrationRows(opts: StoreMigrationRowsOptions = {}): StoreMigrationRows {

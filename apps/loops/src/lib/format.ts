@@ -11,6 +11,7 @@ import type {
   WorkflowStepRun,
   WorkflowWorkItem,
 } from "../types.js";
+import { scrubSecrets } from "./redact.js";
 
 const TEXT_OUTPUT_LIMIT = 32 * 1024;
 const SENSITIVE_PAYLOAD_KEYS = new Set(["env", "error", "prompt", "reason", "stderr", "stdout"]);
@@ -23,13 +24,21 @@ export function redact(value: string | undefined, visible = 0): string | undefin
 }
 
 function truncateTextOutput(value: string): string {
-  if (value.length <= TEXT_OUTPUT_LIMIT) return value;
-  return `${value.slice(0, TEXT_OUTPUT_LIMIT)}\n[truncated ${value.length - TEXT_OUTPUT_LIMIT} chars]`;
+  const scrubbed = scrubSecrets(value);
+  if (scrubbed.length <= TEXT_OUTPUT_LIMIT) return scrubbed;
+  return `${scrubbed.slice(0, TEXT_OUTPUT_LIMIT)}\n[truncated ${scrubbed.length - TEXT_OUTPUT_LIMIT} chars]`;
+}
+
+function scrubOptional(value: string | undefined): string | undefined {
+  return value === undefined ? undefined : scrubSecrets(value);
 }
 
 function redactSensitivePayload(value: unknown, key?: string): unknown {
+  if (typeof value === "string") {
+    const scrubbed = scrubSecrets(value);
+    return key && SENSITIVE_PAYLOAD_KEYS.has(key) ? redact(scrubbed) : scrubbed;
+  }
   if (key && SENSITIVE_PAYLOAD_KEYS.has(key)) {
-    if (typeof value === "string") return redact(value);
     if (value === undefined || value === null) return value;
     return "[redacted]";
   }
@@ -76,17 +85,17 @@ export function publicLoop(loop: Loop): Record<string, unknown> {
 export function publicRun(run: LoopRun, showOutput = false, opts: { redactError?: boolean } = {}): Record<string, unknown> {
   return {
     ...run,
-    stdout: showOutput ? run.stdout : run.stdout ? `[redacted ${run.stdout.length} chars]` : undefined,
-    stderr: showOutput ? run.stderr : run.stderr ? `[redacted ${run.stderr.length} chars]` : undefined,
-    error: opts.redactError ? redact(run.error) : run.error,
+    stdout: showOutput ? scrubOptional(run.stdout) : run.stdout ? `[redacted ${run.stdout.length} chars]` : undefined,
+    stderr: showOutput ? scrubOptional(run.stderr) : run.stderr ? `[redacted ${run.stderr.length} chars]` : undefined,
+    error: opts.redactError ? redact(scrubOptional(run.error)) : scrubOptional(run.error),
   };
 }
 
 export function publicExecutorResult(result: ExecutorResult, showOutput = false): Record<string, unknown> {
   return {
     ...result,
-    stdout: showOutput ? result.stdout : result.stdout ? `[redacted ${result.stdout.length} chars]` : undefined,
-    stderr: showOutput ? result.stderr : result.stderr ? `[redacted ${result.stderr.length} chars]` : undefined,
+    stdout: showOutput ? scrubOptional(result.stdout) : result.stdout ? `[redacted ${result.stdout.length} chars]` : undefined,
+    stderr: showOutput ? scrubOptional(result.stderr) : result.stderr ? `[redacted ${result.stderr.length} chars]` : undefined,
     error: redact(result.error),
   };
 }
@@ -121,8 +130,8 @@ export function publicWorkflowWorkItem(item: WorkflowWorkItem): Record<string, u
 export function publicWorkflowStepRun(run: WorkflowStepRun, showOutput = false): Record<string, unknown> {
   return {
     ...run,
-    stdout: showOutput ? run.stdout : run.stdout ? `[redacted ${run.stdout.length} chars]` : undefined,
-    stderr: showOutput ? run.stderr : run.stderr ? `[redacted ${run.stderr.length} chars]` : undefined,
+    stdout: showOutput ? scrubOptional(run.stdout) : run.stdout ? `[redacted ${run.stdout.length} chars]` : undefined,
+    stderr: showOutput ? scrubOptional(run.stderr) : run.stderr ? `[redacted ${run.stderr.length} chars]` : undefined,
     error: redact(run.error),
   };
 }
