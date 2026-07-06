@@ -976,6 +976,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["url shortener", "links", "redirect", "analytics", "api"],
   },
   {
+    name: "together-api-platform",
+    displayName: "Together Api Platform",
+    description: "Together Api Platform API: items, events, search, and raw API access",
+    category: "Developer Tools",
+    tags: ["api-platform", "development", "bearer"],
+  },
+  {
     name: "transifex",
     displayName: "Transifex",
     description: "Localization and translation management platform for software and content",
