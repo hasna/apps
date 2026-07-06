@@ -934,6 +934,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["database", "project management", "kanban", "no-code", "collaboration"],
   },
   {
+    name: "ticketsource",
+    displayName: "TicketSource",
+    description: "Event ticketing platform for selling tickets, managing venues, and tracking bookings",
+    category: "Business Tools",
+    tags: ["events", "ticketing", "booking"],
+  },
+  {
     name: "toggl-track",
     displayName: "Toggl Track",
     description: "Time tracking with workspaces, projects, clients, and time entries",
