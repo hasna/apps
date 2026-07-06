@@ -23,4 +23,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Healthcare & Hospitality",
     tags: ["booking", "reservations", "scheduling", "hospitality", "appointments"],
   },
+  {
+    name: "takecareos",
+    displayName: "TakeCareOS",
+    description: "Home care agency OS — clients, caregivers, shifts, incidents, compliance",
+    category: "Healthcare & Hospitality",
+    tags: ["homecare", "healthcare", "scheduling", "caregivers", "compliance"],
+  },
 ];
