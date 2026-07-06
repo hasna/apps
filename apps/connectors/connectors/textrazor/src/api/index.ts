@@ -11,8 +11,8 @@ export class TextRazor {
   }
 
   static fromEnv(): TextRazor {
-    const apiKey = process.env.TEXTRAZOR_API_KEY;
-    if (!apiKey) throw new Error('TEXTRAZOR_API_KEY is required');
+    const apiKey = process.env.TEXTRAZOR_API_KEY || process.env.TEXTRAZOR_TOKEN;
+    if (!apiKey) throw new Error('TEXTRAZOR_API_KEY or TEXTRAZOR_TOKEN is required');
     return new TextRazor({ apiKey, baseUrl: process.env.TEXTRAZOR_BASE_URL });
   }
 

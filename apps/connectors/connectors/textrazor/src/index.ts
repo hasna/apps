@@ -6,8 +6,6 @@ export * from './types';
 export {
   getApiKey,
   setApiKey,
-  getApiSecret,
-  setApiSecret,
   getToken,
   setToken,
   getCurrentProfile,
@@ -18,12 +16,6 @@ export {
   loadProfile,
   saveProfile,
   clearConfig,
-  getOAuthConfig,
-  setOAuthConfig,
-  loadOAuthTokens,
-  saveOAuthTokens,
-  clearOAuthTokens,
-  getAccessToken,
 } from './utils/config';
 
 export {

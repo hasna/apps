@@ -72,4 +72,11 @@ export const connectors: ConnectorMeta[] = [
     category: "IoT & Messaging",
     tags: ["push notifications", "mobile", "web", "alerts", "messaging"],
   },
+  {
+    name: "triggercmd",
+    displayName: "TRIGGERcmd",
+    description: "Remote command automation and trigger execution API",
+    category: "IoT & Messaging",
+    tags: ["iot", "automation", "remote-commands", "triggers"],
+  },
 ];
