@@ -1,0 +1,141 @@
+import { describe, expect, test } from "bun:test";
+import { buildV1OpenApiDocument } from "./openapi.js";
+import { resolveCloudDatabaseUrl, resolveSigningSecret, isCloudModeEnabled, CONTACTS_APP_SLUG } from "./cloud.js";
+import { ContactsPgStore } from "./pg-store.js";
+import type { PoolQueryClient } from "../generated/storage-kit/query.js";
+
+// ── OpenAPI document is the SDK source of truth ──
+describe("buildV1OpenApiDocument", () => {
+  const doc = buildV1OpenApiDocument("9.9.9");
+
+  test("declares the v1 CRUD surface", () => {
+    expect(doc.openapi).toBe("3.1.0");
+    expect(doc.info.version).toBe("9.9.9");
+    for (const p of ["/v1/contacts", "/v1/contacts/{id}", "/v1/companies", "/v1/tags", "/v1/stats"]) {
+      expect(doc.paths).toHaveProperty(p);
+    }
+  });
+
+  test("requires api-key security", () => {
+    expect(doc.components.securitySchemes.apiKey).toMatchObject({ type: "apiKey", in: "header", name: "x-api-key" });
+    expect(doc.security).toEqual([{ apiKey: [] }]);
+  });
+
+  test("every operation has an operationId (needed for SDK generation)", () => {
+    const ids: string[] = [];
+    for (const item of Object.values(doc.paths)) {
+      for (const op of Object.values(item as Record<string, { operationId?: string }>)) {
+        if (op.operationId) ids.push(op.operationId);
+      }
+    }
+    expect(ids).toContain("listContacts");
+    expect(ids).toContain("createContact");
+    expect(ids).toContain("createCompany");
+    expect(new Set(ids).size).toBe(ids.length); // unique
+  });
+});
+
+// ── Env resolution (A1 pure-remote wiring) ──
+describe("cloud env resolution", () => {
+  test("resolveCloudDatabaseUrl honors precedence", () => {
+    expect(resolveCloudDatabaseUrl({ HASNA_CONTACTS_DATABASE_URL: "a", CONTACTS_DATABASE_URL: "b", DATABASE_URL: "c" } as never)).toBe("a");
+    expect(resolveCloudDatabaseUrl({ CONTACTS_DATABASE_URL: "b", DATABASE_URL: "c" } as never)).toBe("b");
+    expect(resolveCloudDatabaseUrl({ DATABASE_URL: "c" } as never)).toBe("c");
+    expect(resolveCloudDatabaseUrl({} as never)).toBeUndefined();
+  });
+
+  test("resolveSigningSecret honors precedence", () => {
+    expect(resolveSigningSecret({ HASNA_CONTACTS_API_SIGNING_KEY: "x", HASNA_API_SIGNING_KEY: "y" } as never)).toBe("x");
+    expect(resolveSigningSecret({ HASNA_API_SIGNING_KEY: "y" } as never)).toBe("y");
+    expect(resolveSigningSecret({} as never)).toBeUndefined();
+  });
+
+  test("isCloudModeEnabled reflects DSN presence", () => {
+    expect(isCloudModeEnabled({ DATABASE_URL: "c" } as never)).toBe(true);
+    expect(isCloudModeEnabled({} as never)).toBe(false);
+  });
+
+  test("app slug is contacts", () => {
+    expect(CONTACTS_APP_SLUG).toBe("contacts");
+  });
+});
+
+// ── ContactsPgStore issues correct SQL and maps rows (shim client, no live DB) ──
+function shim(rows: Record<string, unknown>[]): { client: PoolQueryClient; calls: { sql: string; params: unknown[] }[] } {
+  const calls: { sql: string; params: unknown[] }[] = [];
+  const record = <T>(sql: string, params: readonly unknown[] = []): T => {
+    calls.push({ sql, params: [...params] });
+    return undefined as T;
+  };
+  const client = {
+    async query<T>(sql: string, params?: readonly unknown[]) {
+      record(sql, params);
+      return { rows: rows as T[], rowCount: rows.length };
+    },
+    async many<T>(sql: string, params?: readonly unknown[]) {
+      record(sql, params);
+      return rows as T[];
+    },
+    async get<T>(sql: string, params?: readonly unknown[]) {
+      record(sql, params);
+      return (rows[0] ?? null) as T | null;
+    },
+    async one<T>(sql: string, params?: readonly unknown[]) {
+      record(sql, params);
+      return rows[0] as T;
+    },
+    async execute(sql: string, params?: readonly unknown[]) {
+      record(sql, params);
+    },
+    pool: {} as never,
+    async transaction() {
+      throw new Error("not used");
+    },
+    async close() {},
+  } as unknown as PoolQueryClient;
+  return { client, calls };
+}
+
+describe("ContactsPgStore", () => {
+  test("createContact derives display_name from first/last and maps the row", async () => {
+    const now = "2026-07-06T00:00:00.000Z";
+    const { client, calls } = shim([
+      {
+        id: "c1", first_name: "Ada", last_name: "Lovelace", display_name: "Ada Lovelace",
+        nickname: null, avatar_url: null, notes: null, birthday: null, company_id: null,
+        job_title: null, source: "manual", custom_fields: "{}", last_contacted_at: null,
+        website: null, preferred_contact_method: null, status: "active", follow_up_at: null,
+        archived: false, project_id: null, sensitivity: "normal", do_not_contact: false,
+        priority: 3, timezone: null, created_at: now, updated_at: now,
+      },
+    ]);
+    const store = new ContactsPgStore(client);
+    const contact = await store.createContact({ first_name: "Ada", last_name: "Lovelace" });
+    expect(contact.display_name).toBe("Ada Lovelace");
+    expect(contact.custom_fields).toEqual({});
+    expect(contact.created_at).toBe(now);
+    // the derived display_name landed in the INSERT params
+    expect(calls[0]!.sql).toContain("INSERT INTO contacts");
+    expect(calls[0]!.params).toContain("Ada Lovelace");
+  });
+
+  test("listContacts builds a tsquery filter and parameterizes limit/offset", async () => {
+    const { client, calls } = shim([{ count: "0" }]);
+    const store = new ContactsPgStore(client);
+    await store.listContacts({ q: "widget", limit: 10, offset: 5 });
+    const listCall = calls.find((c) => c.sql.includes("SELECT * FROM contacts"));
+    expect(listCall).toBeDefined();
+    expect(listCall!.sql).toContain("plainto_tsquery");
+    expect(listCall!.params).toContain("widget");
+    expect(listCall!.params).toContain(10);
+    expect(listCall!.params).toContain(5);
+  });
+
+  test("updateContact with no fields is a no-op read", async () => {
+    const { client, calls } = shim([]);
+    const store = new ContactsPgStore(client);
+    await store.updateContact("c1", {});
+    // should SELECT, never UPDATE, when there are no changed columns
+    expect(calls.every((c) => !c.sql.startsWith("UPDATE"))).toBe(true);
+  });
+});

@@ -482,3 +482,24 @@ export {
   DuplicateAudienceIdError,
   InvalidAudienceDefinitionError,
 } from "./types/index.js";
+
+// ─── Cloud SDK (typed /v1 client, generated from the serve OpenAPI) ─────────────
+export {
+  ContactsV1Client,
+  ContactsV1ApiError,
+} from "./sdk/index.js";
+export type {
+  ContactsV1ClientOptions,
+  ContactsV1Contact,
+  ContactsV1Company,
+  ContactsV1Tag,
+  ContactsV1CreateContactInput,
+  ContactsV1UpdateContactInput,
+  ContactsV1CreateCompanyInput,
+  ContactsV1UpdateCompanyInput,
+  ContactsV1CreateTagInput,
+  ContactsV1UpdateTagInput,
+} from "./sdk/index.js";
+
+// ─── Serve OpenAPI document (source of truth for the SDK) ───────────────────────
+export { buildV1OpenApiDocument } from "./server/openapi.js";

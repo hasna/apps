@@ -42,6 +42,10 @@ import {
   type ContactsPrincipal,
   type ContactsScope,
 } from "./security.js";
+import { handleV1Request } from "./v1.js";
+import { buildV1OpenApiDocument } from "./openapi.js";
+import { isCloudModeEnabled, pingCloud, resolveSigningSecret } from "./cloud.js";
+import { getPackageVersion } from "../lib/package-version.js";
 
 const DASHBOARD_DIST = join(import.meta.dir, "../../dashboard/dist");
 const DEFAULT_REST_HOST = "127.0.0.1";
@@ -491,16 +495,48 @@ export function createContactsRequestHandler(options: ContactsRequestHandlerOpti
       const corsHeaders = {
         "Access-Control-Allow-Origin": localRequest ? "*" : "null",
         "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Contacts-Token",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Contacts-Token, x-api-key",
       };
 
       if (req.method === "OPTIONS") {
         return new Response(null, { status: 204, headers: corsHeaders });
       }
 
+      // ── Service probes (contract: /health, /ready, /version). Unauthenticated
+      // by design — no PII, just liveness/readiness for the ALB + operators. ──
       if (url.pathname === "/health" && req.method === "GET") {
-        return json(healthPayload("contacts"));
+        return json({ ...healthPayload("contacts"), status: "ok", version: getPackageVersion(), mode: isCloudModeEnabled() ? "cloud" : "local" });
       }
+      if (url.pathname === "/version" && req.method === "GET") {
+        return json({ status: "ok", version: getPackageVersion(), mode: isCloudModeEnabled() ? "cloud" : "local" });
+      }
+      if (url.pathname === "/ready" && req.method === "GET") {
+        // Cloud mode: ready iff RDS is reachable AND a signing secret is set.
+        if (isCloudModeEnabled()) {
+          const hasSecret = Boolean(resolveSigningSecret());
+          try {
+            const dbOk = await pingCloud();
+            const ok = dbOk && hasSecret;
+            return json(
+              { status: ok ? "ready" : "not_ready", version: getPackageVersion(), mode: "cloud", db: dbOk, signing_secret: hasSecret },
+              ok ? 200 : 503,
+            );
+          } catch (e) {
+            return json({ status: "not_ready", mode: "cloud", version: getPackageVersion(), error: (e as Error).message }, 503);
+          }
+        }
+        return json({ status: "ready", version: getPackageVersion(), mode: "local" });
+      }
+      if ((url.pathname === "/openapi.json" || url.pathname === "/v1/openapi.json") && req.method === "GET") {
+        return json(buildV1OpenApiDocument());
+      }
+
+      // ── Versioned cloud API (A1 pure-remote). Auth is enforced INSIDE
+      // handleV1Request by the @hasna/contracts API-key verifier — this surface
+      // is independent of the local X-Contacts-Token / loopback trust model. ──
+      const v1 = await handleV1Request(req, url);
+      if (v1) return v1;
+
       if (url.pathname === "/mcp") {
         const principal = requireScope(req, "mcp:access", options);
         if (isResponse(principal)) return principal;
