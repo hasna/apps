@@ -934,6 +934,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["database", "project management", "kanban", "no-code", "collaboration"],
   },
   {
+    name: "toggl-track",
+    displayName: "Toggl Track",
+    description: "Time tracking with workspaces, projects, clients, and time entries",
+    category: "Business Tools",
+    tags: ["time-tracking", "productivity", "workspaces"],
+  },
+  {
     name: "trackvia",
     displayName: "TrackVia",
     description: "Low-code workflow and database platform for building operational apps",
