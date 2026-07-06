@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { LanguageModel } from 'ai';
 import type { Database } from 'bun:sqlite';
 import type { KnowledgeConfig } from './workspace';
 
@@ -235,7 +236,7 @@ export async function createAiSdkProviderRegistry(options: AiProviderRuntimeOpti
   return createProviderRegistry(providers as never);
 }
 
-export async function languageModelFor(aliasOrRef: string, options: AiProviderRuntimeOptions = {}) {
+export async function languageModelFor(aliasOrRef: string, options: AiProviderRuntimeOptions = {}): Promise<LanguageModel> {
   const modelRef = resolveModelRef(aliasOrRef, options.config);
   const parsed = parseModelRef(modelRef);
   assertProviderCredentials(parsed.provider, options.config, options.env);
