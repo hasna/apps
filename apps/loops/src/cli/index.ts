@@ -1240,11 +1240,8 @@ addScheduleOptions(
       preflight: runtimePreflightFromOpts(expandedOpts),
     };
     const input = baseCreateInput(name, expandedOpts, target);
-    const preflight = expandedOpts.preflight
-      ? preflightLoopTarget(input.target as Exclude<LoopTarget, { type: "workflow" }>, { name, type: "route-drain", kind }, { loopName: name }, { machine: input.machine })
-      : undefined;
     const loop = store.createLoop(input);
-    printCreatedLoop(loop, `created route drain loop ${loop.id} (${loop.name}) next=${loop.nextRunAt}`, preflight);
+    printCreatedLoop(loop, `created route drain loop ${loop.id} (${loop.name}) next=${loop.nextRunAt}`);
   } finally {
     store.close();
   }

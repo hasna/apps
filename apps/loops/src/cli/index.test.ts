@@ -5246,15 +5246,20 @@ describe("loops CLI", () => {
   test("routes schedule applies named policy defaults into explicit drain argv", () => {
     const dataDir = freshDataDir("loops-cli-route-policy-schedule-");
 
-    const scheduled = runCli(dataDir, [
-      "--json",
-      "routes",
-      "schedule",
-      "todos-task",
-      "oss-policy-drain",
-      "--policy",
-      "oss",
-    ]);
+    const scheduled = runCli(
+      dataDir,
+      [
+        "--json",
+        "routes",
+        "schedule",
+        "todos-task",
+        "oss-policy-drain",
+        "--policy",
+        "oss",
+      ],
+      undefined,
+      { PATH: "/usr/bin:/bin" },
+    );
     expect(scheduled.status).toBe(0);
     const scheduledValue = JSON.parse(scheduled.stdout);
     const loop = scheduledValue.loop ?? scheduledValue;
