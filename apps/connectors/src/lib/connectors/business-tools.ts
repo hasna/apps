@@ -934,6 +934,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["database", "project management", "kanban", "no-code", "collaboration"],
   },
   {
+    name: "ticketmaster",
+    displayName: "Ticketmaster",
+    description: "Discovery API for events, attractions, and venues",
+    category: "Business Tools",
+    tags: ["events", "ticketing", "venues"],
+  },
+  {
     name: "trackvia",
     displayName: "TrackVia",
     description: "Low-code workflow and database platform for building operational apps",
