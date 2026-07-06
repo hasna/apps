@@ -1,7 +1,7 @@
 {
   "name": "@hasna/domains",
-  "version": "0.0.27",
-  "description": "Domain portfolio, registrar, marketplace, and DNS management for AI agents — CLI + MCP + HTTP API + SDK, local SQLite or cloud Postgres",
+  "version": "0.0.28",
+  "description": "Domain portfolio, registrar, marketplace, and DNS management for AI agents \u2014 CLI + MCP + HTTP API + SDK, local SQLite or cloud Postgres",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
