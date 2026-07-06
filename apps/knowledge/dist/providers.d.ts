@@ -1,3 +1,4 @@
+import type { LanguageModel } from 'ai';
 import type { Database } from 'bun:sqlite';
 import type { KnowledgeConfig } from './workspace';
 export type AiProviderId = 'openai' | 'anthropic' | 'deepseek';
@@ -73,7 +74,7 @@ export declare function providerCredentialStatus(config: KnowledgeConfig | undef
 export declare function providerStatus(config?: KnowledgeConfig, env?: Record<string, string | undefined>): ProviderStatusResult;
 export declare function assertProviderCredentials(provider: AiProviderId, config?: KnowledgeConfig, env?: Record<string, string | undefined>): ProviderCredentialStatus;
 export declare function createAiSdkProviderRegistry(options?: AiProviderRuntimeOptions): Promise<import("ai").ProviderRegistryProvider<never, ":">>;
-export declare function languageModelFor(aliasOrRef: string, options?: AiProviderRuntimeOptions): Promise<import("@ai-sdk/provider").LanguageModelV3>;
+export declare function languageModelFor(aliasOrRef: string, options?: AiProviderRuntimeOptions): Promise<LanguageModel>;
 export declare function normalizeAiSdkUsage(input: {
     provider: string;
     model: string;
