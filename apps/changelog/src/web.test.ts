@@ -101,4 +101,52 @@ describe("generateChangelogSite", () => {
   test("escapeHtml covers the XML/HTML special characters", () => {
     expect(escapeHtml(`<a href="x">&'</a>`)).toBe("&lt;a href=&quot;x&quot;&gt;&amp;&#39;&lt;/a&gt;");
   });
+
+  test("escapes hostile version strings in the version heading", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "open-changelog-web-xss-"));
+    const outDir = join(dir, "site");
+    // Bypass input validation via the entries option to simulate hostile or
+    // legacy stored data reaching the generator.
+    const hostileVersion = "1.0.0 <img src=x onerror=alert(1)>";
+    await generateChangelogSite({
+      outDir,
+      entries: [{
+        id: "hostile-1",
+        appId: "open-todos",
+        version: hostileVersion,
+        kind: "added",
+        category: "added",
+        title: "Innocent title",
+        date: "2026-07-01",
+        tags: [],
+        links: [],
+        commits: [],
+        tasks: [],
+        createdAt: "2026-07-01T00:00:00.000Z",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+        source: "sdk",
+      }],
+    });
+    const page = await readFile(join(outDir, "apps/open-todos/index.html"), "utf8");
+    expect(page).not.toContain("<img src=x");
+    expect(page).toContain("1.0.0 &lt;img src=x onerror=alert(1)&gt;");
+  });
+
+  test("omits feed link fields when no baseUrl is configured", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "open-changelog-web-nolink-"));
+    const store = await seededStore(dir);
+    const outDir = join(dir, "site");
+    await generateChangelogSite({ outDir, store });
+
+    const rss = await readFile(join(outDir, "apps/open-todos/rss.xml"), "utf8");
+    expect(rss).toContain('<rss version="2.0">');
+    expect(rss).not.toContain("<link>");
+
+    const feed = JSON.parse(await readFile(join(outDir, "apps/open-todos/feed.json"), "utf8")) as Record<string, unknown> & {
+      items: Array<Record<string, unknown>>;
+    };
+    expect(feed).not.toHaveProperty("home_page_url");
+    expect(feed).not.toHaveProperty("feed_url");
+    expect(feed.items.every((item) => !("url" in item))).toBe(true);
+  });
 });

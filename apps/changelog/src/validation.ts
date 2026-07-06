@@ -85,7 +85,9 @@ export const changelogEntryInputSchema = z.object({
   // Accepts npm names (e.g. @hasna/todos) and legacy ids; parseChangelogEntryInput
   // normalizes to the hasna.app.v1 AppId slug via normalizeAppId.
   appId: z.string().trim().min(1).max(214).regex(/^@?[A-Za-z0-9][A-Za-z0-9._/-]*$/),
-  version: z.string().trim().min(1).max(80).optional().default("Unreleased"),
+  // Defense-in-depth alongside output escaping: reject HTML/XML metacharacters
+  // and line breaks so a hostile version can never look like markup.
+  version: z.string().trim().min(1).max(80).regex(/^[^<>&"'\r\n]+$/, "version must not contain HTML/XML special characters").optional().default("Unreleased"),
   kind: z.enum(changelogKinds).optional(),
   category: z.enum(changelogCategories).optional(),
   title: z.string().trim().min(1).max(500),

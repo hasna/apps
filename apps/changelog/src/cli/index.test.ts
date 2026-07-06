@@ -77,6 +77,38 @@ describe("changelog CLI", () => {
     });
   });
 
+  test("filters accept npm names and match normalized appIds", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "open-changelog-cli-filter-"));
+    const env = { CHANGELOG_DATA_DIR: dataDir };
+
+    runCli(["add", "Filter round-trip entry", "--app", "@hasna/todos", "--kind", "added"], env);
+    const listed = JSON.parse(runCli(["list", "--app", "@hasna/todos"], env)) as Array<{ appId: string; title: string }>;
+    expect(listed).toHaveLength(1);
+    expect(listed[0]!.appId).toBe("open-todos");
+    const bySlug = JSON.parse(runCli(["list", "--app", "open-todos"], env)) as unknown[];
+    expect(bySlug).toHaveLength(1);
+    expect(runCli(["generate", "--app", "@hasna/todos"], env)).toContain("Filter round-trip entry");
+  });
+
+  test("publish --release rejects --dry-run instead of silently mutating the store", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "open-changelog-cli-release-dry-"));
+    const env = { CHANGELOG_DATA_DIR: dataDir };
+    runCli(["add", "Should stay unreleased", "--app", "open-todos", "--kind", "added"], env);
+
+    const proc = Bun.spawnSync(["bun", "src/cli/index.ts", "publish", "--release", "--app", "open-todos", "--version", "9.9.9", "--dry-run"], {
+      cwd: process.cwd(),
+      env: { ...process.env, ...env },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(proc.exitCode).toBe(1);
+    expect(proc.stderr.toString()).toContain("--dry-run is not supported with --release");
+
+    // The store was not mutated: the entry is still in the Unreleased bucket.
+    const listed = JSON.parse(runCli(["list", "--app", "open-todos"], env)) as Array<{ version: string }>;
+    expect(listed[0]!.version).toBe("Unreleased");
+  });
+
   test("web generates a static site with feeds", async () => {
     const dataDir = await mkdtemp(join(tmpdir(), "open-changelog-cli-web-"));
     const outDir = await mkdtemp(join(tmpdir(), "open-changelog-cli-web-out-"));

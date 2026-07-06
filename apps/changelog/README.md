@@ -83,7 +83,9 @@ changelog web --out ./public --app open-todos --title "open-todos releases"
 ```
 
 The generator is also exported as `generateChangelogSite` from
-`@hasna/changelog/web`.
+`@hasna/changelog/web`. Pass `--base-url` when publishing: feed
+`link`/`home_page_url`/`feed_url` fields require absolute URLs and are
+omitted when no base URL is configured.
 
 ## SDK
 

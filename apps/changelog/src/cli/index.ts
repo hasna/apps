@@ -17,7 +17,7 @@ import type {
   ChangelogLink,
   JsonObject,
 } from "../types.js";
-import { parseChangelogKind } from "../validation.js";
+import { normalizeAppId, parseChangelogKind } from "../validation.js";
 import { VERSION } from "../version.js";
 
 function printJson(value: unknown): void {
@@ -58,9 +58,24 @@ function localStore(): LocalChangelogStore {
   return new LocalChangelogStore();
 }
 
+/**
+ * Normalize a user-supplied `--app` value the same way entries are normalized
+ * on write (`@hasna/todos` -> `open-todos`) so filters match stored appIds.
+ * Values that cannot be normalized fall back to the raw string, keeping
+ * exact-match behavior for legacy stored ids.
+ */
+function normalizeAppFilter(app: string | undefined): string | undefined {
+  if (!app) return undefined;
+  try {
+    return normalizeAppId(app);
+  } catch {
+    return app;
+  }
+}
+
 function commonFilter(options: { app?: string; version?: string; kind?: string; tag?: string; limit?: string }): ChangelogEntryListFilter {
   return {
-    appId: options.app,
+    appId: normalizeAppFilter(options.app),
     version: options.version,
     kind: options.kind ? parseChangelogKind(options.kind) : undefined,
     tag: options.tag,
@@ -69,7 +84,7 @@ function commonFilter(options: { app?: string; version?: string; kind?: string; 
 }
 
 async function inferredAppId(app: string | undefined): Promise<string | undefined> {
-  return app ?? (await readProjectInfo()).appId;
+  return app ? normalizeAppFilter(app) : (await readProjectInfo()).appId;
 }
 
 async function requiredAppId(app: string | undefined): Promise<string> {
@@ -272,7 +287,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--limit <n>", "Limit entries", "500")
     .option("--title <title>", "Markdown title")
     .option("--target <path>", "Target changelog file", "CHANGELOG.md")
-    .option("--dry-run", "Preview without writing", true)
+    .option("--dry-run", "Preview without writing (the default unless --write is passed; not supported with --release)")
     .option("--write", "Write the target file")
     .option("--release", "Release-publish for open-releases: promote pending entries to --version, write the changelog, and print a changelogRef")
     .option("--from-version <version>", "Source bucket promoted by --release", "Unreleased")
@@ -285,6 +300,9 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .action(async (options: { app?: string; version?: string; kind?: string; tag?: string; limit?: string; title?: string; target: string; dryRun?: boolean; write?: boolean; release?: boolean; fromVersion?: string; date?: string; baseUrl?: string; diff?: boolean; backup?: boolean; json?: boolean; apiUrl?: string }) => {
       if (options.release) {
         if (!options.version) throw new Error("--release requires --version");
+        if (options.dryRun) {
+          throw new Error("--dry-run is not supported with --release: release-publish promotes entries in the store and writes the changelog. Preview pending entries with `changelog generate` first.");
+        }
         const result = await publishRelease({
           appId: await requiredAppId(options.app),
           version: options.version,
@@ -335,13 +353,13 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .description("Generate a static web changelog site with per-app pages plus RSS and JSON feeds")
     .requiredOption("--out <dir>", "Output directory")
     .option("--app <appId>", "Restrict the site to one app")
-    .option("--base-url <url>", "Public base URL for absolute feed links")
+    .option("--base-url <url>", "Public base URL for absolute feed links; when omitted, RSS/JSON feed link fields are dropped to keep feeds valid")
     .option("--title <title>", "Site title", "Changelogs")
     .option("--limit <n>", "Limit entries per app", "500")
     .action(async (options: { out: string; app?: string; baseUrl?: string; title?: string; limit?: string }) => {
       const result = await generateChangelogSite({
         outDir: options.out,
-        appId: options.app,
+        appId: normalizeAppFilter(options.app),
         baseUrl: options.baseUrl,
         title: options.title,
         limit: options.limit ? Number.parseInt(options.limit, 10) : undefined,

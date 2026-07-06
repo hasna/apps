@@ -96,7 +96,7 @@ function entryHtml(entry: ChangelogEntry): string {
 function appPageHtml(appId: string, entries: ChangelogEntry[], generatedAt: string, siteTitle: string): string {
   const groups = groupChangelogEntries(entries);
   const sections = groups.map((group) => {
-    const heading = group.version === "Unreleased" ? "Unreleased" : `${group.version} <span class="meta">${escapeHtml(group.date)}</span>`;
+    const heading = group.version === "Unreleased" ? "Unreleased" : `${escapeHtml(group.version)} <span class="meta">${escapeHtml(group.date)}</span>`;
     const categories = categoryOrder
       .map((kind) => {
         const kindEntries = group.entries.filter((entry) => entry.kind === kind);
@@ -135,21 +135,25 @@ function rssDate(date: string, createdAt: string): string {
 }
 
 function rssXml(appId: string, entries: ChangelogEntry[], options: ChangelogSiteOptions, generatedAt: string): string {
-  const pageUrl = joinUrl(options.baseUrl, `apps/${appId}/`);
-  const items = entries.slice(0, 100).map((entry) => `  <item>
-    <title>${escapeHtml(`[${entry.version}] ${entry.title}`)}</title>
-    <link>${escapeHtml(`${pageUrl}#${encodeURIComponent(entry.version)}`)}</link>
-    <guid isPermaLink="false">${escapeHtml(entry.id)}</guid>
-    <category>${escapeHtml(entry.kind)}</category>
-    <pubDate>${escapeHtml(rssDate(entry.date, entry.createdAt))}</pubDate>
-    <description>${escapeHtml(entry.message ?? entry.details ?? entry.title)}</description>
-  </item>`).join("\n");
+  // RSS 2.0 <link> elements must be absolute URLs; without a baseUrl the
+  // link elements are omitted entirely so the feed stays valid.
+  const pageUrl = options.baseUrl ? joinUrl(options.baseUrl, `apps/${appId}/`) : null;
+  const items = entries.slice(0, 100).map((entry) => {
+    const lines = [
+      `    <title>${escapeHtml(`[${entry.version}] ${entry.title}`)}</title>`,
+      ...(pageUrl ? [`    <link>${escapeHtml(`${pageUrl}#${encodeURIComponent(entry.version)}`)}</link>`] : []),
+      `    <guid isPermaLink="false">${escapeHtml(entry.id)}</guid>`,
+      `    <category>${escapeHtml(entry.kind)}</category>`,
+      `    <pubDate>${escapeHtml(rssDate(entry.date, entry.createdAt))}</pubDate>`,
+      `    <description>${escapeHtml(entry.message ?? entry.details ?? entry.title)}</description>`,
+    ];
+    return `  <item>\n${lines.join("\n")}\n  </item>`;
+  }).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
 <channel>
   <title>${escapeHtml(`${appId} changelog`)}</title>
-  <link>${escapeHtml(pageUrl)}</link>
-  <description>${escapeHtml(`Release notes for ${appId}`)}</description>
+${pageUrl ? `  <link>${escapeHtml(pageUrl)}</link>\n` : ""}  <description>${escapeHtml(`Release notes for ${appId}`)}</description>
   <lastBuildDate>${escapeHtml(new Date(generatedAt).toUTCString())}</lastBuildDate>
   <generator>@hasna/changelog</generator>
 ${items}
@@ -159,16 +163,16 @@ ${items}
 }
 
 function jsonFeed(appId: string, entries: ChangelogEntry[], options: ChangelogSiteOptions): string {
-  const pageUrl = joinUrl(options.baseUrl, `apps/${appId}/`);
+  // JSON Feed urls must be absolute; omit them when no baseUrl is configured.
+  const pageUrl = options.baseUrl ? joinUrl(options.baseUrl, `apps/${appId}/`) : null;
   const feed = {
     version: "https://jsonfeed.org/version/1.1",
     title: `${appId} changelog`,
-    home_page_url: pageUrl,
-    feed_url: joinUrl(options.baseUrl, `apps/${appId}/feed.json`),
+    ...(pageUrl ? { home_page_url: pageUrl, feed_url: joinUrl(options.baseUrl, `apps/${appId}/feed.json`) } : {}),
     description: `Release notes for ${appId}`,
     items: entries.slice(0, 100).map((entry) => ({
       id: entry.id,
-      url: `${pageUrl}#${encodeURIComponent(entry.version)}`,
+      ...(pageUrl ? { url: `${pageUrl}#${encodeURIComponent(entry.version)}` } : {}),
       title: `[${entry.version}] ${entry.title}`,
       content_text: entry.details ?? entry.message ?? entry.title,
       date_published: entry.createdAt,
