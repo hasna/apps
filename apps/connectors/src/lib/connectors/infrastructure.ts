@@ -86,4 +86,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Infrastructure",
     tags: ["monitoring", "uptime", "performance", "alerts", "website"],
   },
+  {
+    name: "thousandeyes",
+    displayName: "ThousandEyes",
+    description: "Network monitoring platform",
+    category: "Infrastructure",
+    tags: ["monitoring", "network", "observability", "synthetic", "path-visibility"],
+  },
 ];
