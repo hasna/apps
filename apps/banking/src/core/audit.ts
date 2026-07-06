@@ -7,7 +7,9 @@ export type AuditEventType =
   | "approval.decided"
   | "provider.submitted"
   | "provider.webhook_received"
-  | "reconciliation.updated";
+  | "reconciliation.updated"
+  | "workflow.cancelled"
+  | "workflow.retry_requested";
 
 export interface AuditEvent {
   readonly id: string;
