@@ -129,6 +129,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ssl", "certificates", "security", "monitoring", "tls"],
   },
   {
+    name: "tines",
+    displayName: "Tines",
+    description: "Security automation and SOAR workflow orchestration platform",
+    category: "Security & Compliance",
+    tags: ["security", "soar", "automation", "workflow", "orchestration"],
+  },
+  {
     name: "thehive",
     displayName: "TheHive",
     description: "Security incident response platform for managing and investigating cyber threats",
