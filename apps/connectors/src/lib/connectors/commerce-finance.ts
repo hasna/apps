@@ -24,6 +24,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["identity", "verification", "kyc"],
   },
   {
+    name: "stripetreasury",
+    displayName: "Stripe Treasury",
+    description: "Banking-as-a-service financial accounts and money movement",
+    category: "Commerce & Finance",
+    tags: ["banking", "treasury", "payments", "fintech"],
+  },
+  {
     name: "shopify",
     displayName: "Shopify",
     description: "E-commerce platform",
