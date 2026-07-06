@@ -65,8 +65,8 @@ function getClient(): TerraformCloud {
   return new TerraformCloud({ apiToken, baseUrl: getBaseUrl() });
 }
 
-function runAction(cmd: Command, fn: () => Promise<void>): void {
-  fn().catch((err) => {
+function runAction(fn: () => Promise<void>): Promise<void> {
+  return fn().catch((err) => {
     error(String(err));
     process.exit(1);
   });
@@ -193,7 +193,7 @@ orgCmd
   .command('ls')
   .description('List organizations')
   .action(async function () {
-    runAction(orgCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().listOrganizations();
       print(result, getFormat(orgCmd));
     });
@@ -203,7 +203,7 @@ orgCmd
   .command('get <name>')
   .description('Get organization details')
   .action(async function (name: string) {
-    runAction(orgCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().getOrganization(name);
       print(result, getFormat(orgCmd));
     });
@@ -213,7 +213,7 @@ orgCmd
   .command('entitlements <name>')
   .description('Get organization entitlements')
   .action(async function (name: string) {
-    runAction(orgCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().getOrganizationEntitlements(name);
       print(result, getFormat(orgCmd));
     });
@@ -226,7 +226,7 @@ wsCmd
   .command('ls <org>')
   .description('List workspaces in an organization')
   .action(async function (org: string) {
-    runAction(wsCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().listWorkspaces(org);
       print(result, getFormat(wsCmd));
     });
@@ -236,7 +236,7 @@ wsCmd
   .command('get <org> <name>')
   .description('Get workspace by organization and name')
   .action(async function (org: string, name: string) {
-    runAction(wsCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().getWorkspace(org, name);
       print(result, getFormat(wsCmd));
     });
@@ -246,7 +246,7 @@ wsCmd
   .command('get-by-id <id>')
   .description('Get workspace by ID')
   .action(async function (id: string) {
-    runAction(wsCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().getWorkspaceById(id);
       print(result, getFormat(wsCmd));
     });
@@ -257,7 +257,7 @@ wsCmd
   .description('Create a workspace')
   .option('--description <text>', 'Workspace description')
   .action(async function (org: string, name: string, opts) {
-    runAction(wsCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().createWorkspace(org, {
         name,
         description: opts.description,
@@ -271,7 +271,7 @@ wsCmd
   .command('delete <org> <name>')
   .description('Delete a workspace')
   .action(async function (org: string, name: string) {
-    runAction(wsCmd, async () => {
+    await runAction(async () => {
       await getClient().deleteWorkspace(org, name);
       success(`Workspace ${name} deleted`);
     });
@@ -284,7 +284,7 @@ runCmd
   .command('ls <workspaceId>')
   .description('List runs for a workspace')
   .action(async function (workspaceId: string) {
-    runAction(runCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().listWorkspaceRuns(workspaceId);
       print(result, getFormat(runCmd));
     });
@@ -294,7 +294,7 @@ runCmd
   .command('get <runId>')
   .description('Get run details')
   .action(async function (runId: string) {
-    runAction(runCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().getRun(runId);
       print(result, getFormat(runCmd));
     });
@@ -306,7 +306,7 @@ runCmd
   .option('-m, --message <text>', 'Run message')
   .option('--destroy', 'Destroy run')
   .action(async function (workspaceId: string, opts) {
-    runAction(runCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().createRun(workspaceId, {
         message: opts.message,
         'is-destroy': opts.destroy || false,
@@ -321,7 +321,7 @@ runCmd
   .description('Apply a run')
   .option('-c, --comment <text>', 'Apply comment')
   .action(async function (runId: string, opts) {
-    runAction(runCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().applyRun(runId, opts.comment);
       success('Run apply initiated');
       print(result, getFormat(runCmd));
@@ -333,7 +333,7 @@ runCmd
   .description('Cancel a run')
   .option('-c, --comment <text>', 'Cancel comment')
   .action(async function (runId: string, opts) {
-    runAction(runCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().cancelRun(runId, opts.comment);
       success('Run cancel initiated');
       print(result, getFormat(runCmd));
@@ -347,7 +347,7 @@ varCmd
   .command('ls <workspaceId>')
   .description('List workspace variables')
   .action(async function (workspaceId: string) {
-    runAction(varCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().listWorkspaceVars(workspaceId);
       print(result, getFormat(varCmd));
     });
@@ -361,7 +361,7 @@ varCmd
   .option('--category <category>', 'terraform or env', 'terraform')
   .option('--sensitive', 'Mark as sensitive')
   .action(async function (workspaceId: string, opts) {
-    runAction(varCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().createWorkspaceVar(workspaceId, {
         key: opts.key,
         value: opts.value,
@@ -377,7 +377,7 @@ varCmd
   .command('delete <varId>')
   .description('Delete a variable')
   .action(async function (varId: string) {
-    runAction(varCmd, async () => {
+    await runAction(async () => {
       await getClient().deleteVar(varId);
       success(`Variable ${varId} deleted`);
     });
@@ -390,7 +390,7 @@ stateCmd
   .command('ls <workspaceId>')
   .description('List state versions')
   .action(async function (workspaceId: string) {
-    runAction(stateCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().listStateVersions(workspaceId);
       print(result, getFormat(stateCmd));
     });
@@ -400,7 +400,7 @@ stateCmd
   .command('get <stateVersionId>')
   .description('Get state version')
   .action(async function (stateVersionId: string) {
-    runAction(stateCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().getStateVersion(stateVersionId);
       print(result, getFormat(stateCmd));
     });
@@ -413,7 +413,7 @@ configVerCmd
   .command('ls <workspaceId>')
   .description('List configuration versions')
   .action(async function (workspaceId: string) {
-    runAction(configVerCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().listConfigurationVersions(workspaceId);
       print(result, getFormat(configVerCmd));
     });
@@ -423,7 +423,7 @@ configVerCmd
   .command('get <configVersionId>')
   .description('Get configuration version')
   .action(async function (configVersionId: string) {
-    runAction(configVerCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().getConfigurationVersion(configVersionId);
       print(result, getFormat(configVerCmd));
     });
@@ -434,7 +434,7 @@ configVerCmd
   .description('Create configuration version')
   .option('--auto-queue-runs', 'Auto-queue runs after upload')
   .action(async function (workspaceId: string, opts) {
-    runAction(configVerCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().createConfigurationVersion(workspaceId, {
         'auto-queue-runs': opts.autoQueueRuns || false,
       });
@@ -450,7 +450,7 @@ teamCmd
   .command('ls <org>')
   .description('List teams')
   .action(async function (org: string) {
-    runAction(teamCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().listTeams(org);
       print(result, getFormat(teamCmd));
     });
@@ -460,7 +460,7 @@ teamCmd
   .command('get <teamId>')
   .description('Get team details')
   .action(async function (teamId: string) {
-    runAction(teamCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().getTeam(teamId);
       print(result, getFormat(teamCmd));
     });
@@ -470,7 +470,7 @@ teamCmd
   .command('create <org> <name>')
   .description('Create a team')
   .action(async function (org: string, name: string) {
-    runAction(teamCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().createTeam(org, { name });
       success('Team created');
       print(result, getFormat(teamCmd));
@@ -481,7 +481,7 @@ teamCmd
   .command('delete <teamId>')
   .description('Delete a team')
   .action(async function (teamId: string) {
-    runAction(teamCmd, async () => {
+    await runAction(async () => {
       await getClient().deleteTeam(teamId);
       success(`Team ${teamId} deleted`);
     });
@@ -494,7 +494,7 @@ projectCmd
   .command('ls <org>')
   .description('List projects')
   .action(async function (org: string) {
-    runAction(projectCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().listProjects(org);
       print(result, getFormat(projectCmd));
     });
@@ -504,7 +504,7 @@ projectCmd
   .command('get <projectId>')
   .description('Get project details')
   .action(async function (projectId: string) {
-    runAction(projectCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().getProject(projectId);
       print(result, getFormat(projectCmd));
     });
@@ -515,7 +515,7 @@ projectCmd
   .description('Create a project')
   .option('--description <text>', 'Project description')
   .action(async function (org: string, name: string, opts) {
-    runAction(projectCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().createProject(org, {
         name,
         description: opts.description,
@@ -529,7 +529,7 @@ projectCmd
   .command('delete <projectId>')
   .description('Delete a project')
   .action(async function (projectId: string) {
-    runAction(projectCmd, async () => {
+    await runAction(async () => {
       await getClient().deleteProject(projectId);
       success(`Project ${projectId} deleted`);
     });
@@ -542,7 +542,7 @@ policyCmd
   .command('ls <org>')
   .description('List policy sets')
   .action(async function (org: string) {
-    runAction(policyCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().listPolicySets(org);
       print(result, getFormat(policyCmd));
     });
@@ -552,7 +552,7 @@ policyCmd
   .command('get <policySetId>')
   .description('Get policy set details')
   .action(async function (policySetId: string) {
-    runAction(policyCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().getPolicySet(policySetId);
       print(result, getFormat(policyCmd));
     });
@@ -564,7 +564,7 @@ policyCmd
   .option('--description <text>', 'Policy set description')
   .option('--global', 'Global policy set')
   .action(async function (org: string, name: string, opts) {
-    runAction(policyCmd, async () => {
+    await runAction(async () => {
       const result = await getClient().createPolicySet(org, {
         name,
         description: opts.description,
@@ -579,7 +579,7 @@ policyCmd
   .command('delete <policySetId>')
   .description('Delete a policy set')
   .action(async function (policySetId: string) {
-    runAction(policyCmd, async () => {
+    await runAction(async () => {
       await getClient().deletePolicySet(policySetId);
       success(`Policy set ${policySetId} deleted`);
     });
