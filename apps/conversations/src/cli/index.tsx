@@ -13,6 +13,8 @@ import { registerChannelCommands } from "./commands/channels.js";
 import { registerProjectCommands } from "./commands/projects.js";
 import { registerAgentCommands } from "./commands/agents.js";
 import { registerAnalyticsCommands } from "./commands/analytics.js";
+import { registerReceiptCommands } from "./commands/receipts.js";
+import { registerLockCommands } from "./commands/locks.js";
 import { registerTmuxCommands } from "./commands/tmux.js";
 import pkg from "../../package.json";
 
@@ -29,6 +31,8 @@ registerChannelCommands(program);
 registerProjectCommands(program);
 registerAgentCommands(program);
 registerAnalyticsCommands(program);
+registerReceiptCommands(program);
+registerLockCommands(program);
 registerTmuxCommands(program);
 
 // ---- mcp ----

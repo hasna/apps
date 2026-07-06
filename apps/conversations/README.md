@@ -25,6 +25,30 @@ conversations dashboard
 conversations storage status
 ```
 
+## Coordination: Read Receipts & Locks
+
+Deterministic CLI commands over the same store as the MCP `read_receipts` /
+lock tools, for shell loops and CI checks.
+
+```bash
+conversations receipts 123                          # who has read message 123
+conversations receipts 123 --channel engineering    # ...and which members have not
+conversations locks acquire deploy --ttl 300 --from riley   # exit 0 acquired, 2 held elsewhere
+conversations locks check deploy                    # exit 0 free, 2 locked
+conversations locks release deploy --from riley
+conversations locks list --json
+conversations locks clean                           # drop expired/stale-agent locks
+```
+
+Locks share the MCP lock store: the key is the lock's `resource_id`, and
+`--type` selects the resource namespace (default `resource`). Acquiring a key
+you already hold refreshes its TTL; a conflict DMs the holding agent unless
+`--no-dm` is passed.
+
+Channels can carry a class for fleet taxonomies at
+`metadata.channel_schema.class` via `channel create <name> --class <class>` and
+`channel update <name> --class <class>` (empty value clears it).
+
 ## Compact Output Defaults
 
 Agent-facing commands are compact by default so busy stores do not flood the

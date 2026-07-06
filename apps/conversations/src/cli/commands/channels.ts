@@ -9,6 +9,43 @@ import { previewText, windowItems } from "../../lib/compact-output.js";
 import { getCliWindow, pageFromQuery, printCompactFooter, queryLimitFor } from "../compact.js";
 import { printMessageEntry } from "../message-output.js";
 
+/**
+ * Merge a channel class into existing channel metadata at `metadata.channel_schema.class`,
+ * preserving unrelated metadata keys. An empty class clears the field; returns null when
+ * the merge leaves no metadata at all.
+ */
+export function mergeChannelClassMetadata(
+  existing: Record<string, unknown> | null | undefined,
+  channelClass: string,
+): Record<string, unknown> | null {
+  const meta: Record<string, unknown> = { ...(existing ?? {}) };
+  const rawSchema = meta.channel_schema;
+  const schema: Record<string, unknown> =
+    rawSchema && typeof rawSchema === "object" && !Array.isArray(rawSchema)
+      ? { ...(rawSchema as Record<string, unknown>) }
+      : {};
+  const trimmed = channelClass.trim();
+  if (trimmed) {
+    schema.class = trimmed;
+  } else {
+    delete schema.class;
+  }
+  if (Object.keys(schema).length > 0) {
+    meta.channel_schema = schema;
+  } else {
+    delete meta.channel_schema;
+  }
+  return Object.keys(meta).length > 0 ? meta : null;
+}
+
+/** Read the channel class from channel metadata (`metadata.channel_schema.class`), if set. */
+export function channelClassOf(metadata: Record<string, unknown> | null | undefined): string | null {
+  const schema = metadata?.channel_schema;
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) return null;
+  const channelClass = (schema as Record<string, unknown>).class;
+  return typeof channelClass === "string" && channelClass.trim() ? channelClass : null;
+}
+
 export function registerChannelCommands(program: Command): void {
   const channel = program
     .command("channel")
@@ -21,6 +58,7 @@ export function registerChannelCommands(program: Command): void {
     .option("--description <text>", "Channel description")
     .option("--topic <text>", "Channel topic")
     .option("--project <id>", "Project ID to associate with")
+    .option("--class <class>", "Channel class stored at metadata.channel_schema.class (e.g. fleet, package, product, loop-lane, initiative, personal)")
     .option("--from <agent>", "Creator agent ID")
     .option("-j, --json", "Output as JSON")
     .action((name, opts) => {
@@ -41,15 +79,20 @@ export function registerChannelCommands(program: Command): void {
         const topic = typeof opts.topic === "string" && opts.topic.trim()
           ? opts.topic.trim()
           : undefined;
+        const channelClass = typeof opts.class === "string" && opts.class.trim()
+          ? opts.class.trim()
+          : undefined;
         const sp = createChannel(channelName, agent, {
           description,
           topic,
           project_id: opts.project,
+          metadata: channelClass ? mergeChannelClassMetadata(null, channelClass) ?? undefined : undefined,
         });
         if (opts.json) {
           console.log(JSON.stringify(sp, null, 2));
         } else {
-          console.log(chalk.green(`Channel #${sp.name} created`) + (sp.description ? chalk.dim(` — ${sp.description}`) : ""));
+          const clsLabel = channelClassOf(sp.metadata);
+          console.log(chalk.green(`Channel #${sp.name} created`) + (clsLabel ? chalk.cyan(` [${clsLabel}]`) : "") + (sp.description ? chalk.dim(` — ${sp.description}`) : ""));
         }
       } catch (e: any) {
         if (e.message?.includes("UNIQUE constraint")) {
@@ -89,7 +132,9 @@ export function registerChannelCommands(program: Command): void {
             const desc = sp.description ? chalk.dim(` - ${previewText(sp.description, 90)}`) : "";
             const topic = sp.topic ? chalk.dim(` topic: ${previewText(sp.topic, 70)}`) : "";
             const archived = sp.archived_at ? chalk.yellow(" [archived]") : "";
-            console.log(`${chalk.magenta(`#${sp.name}`)}${desc}${archived}  ${sp.member_count} members, ${sp.message_count} messages${topic}`);
+            const clsLabel = channelClassOf(sp.metadata);
+            const cls = clsLabel ? chalk.cyan(` [${clsLabel}]`) : "";
+            console.log(`${chalk.magenta(`#${sp.name}`)}${cls}${desc}${archived}  ${sp.member_count} members, ${sp.message_count} messages${topic}`);
           }
           printCompactFooter({
             shown: page.count,
@@ -112,6 +157,7 @@ export function registerChannelCommands(program: Command): void {
     .option("--description <text>", "New description")
     .option("--topic <text>", "New topic")
     .option("--project <id>", "New project ID")
+    .option("--class <class>", "Set channel class at metadata.channel_schema.class (empty value clears it); other metadata keys are preserved")
     .option("-j, --json", "Output as JSON")
     .action((name, opts) => {
       const channelName = typeof name === "string" ? name.trim() : "";
@@ -120,7 +166,7 @@ export function registerChannelCommands(program: Command): void {
         process.exit(1);
       }
 
-      const updates: { name?: string; description?: string; topic?: string | null; project_id?: string | null } = {};
+      const updates: { name?: string; description?: string; topic?: string | null; project_id?: string | null; metadata?: Record<string, unknown> | null } = {};
       if (opts.name !== undefined) {
         const newName = typeof opts.name === "string" ? opts.name.trim() : "";
         if (!newName) {
@@ -132,6 +178,14 @@ export function registerChannelCommands(program: Command): void {
       if (opts.description !== undefined) updates.description = opts.description;
       if (opts.topic !== undefined) updates.topic = opts.topic || null;
       if (opts.project !== undefined) updates.project_id = opts.project || null;
+      if (opts.class !== undefined) {
+        const existing = getChannel(channelName);
+        if (!existing) {
+          console.error(chalk.red(`Channel not found: ${channelName}`));
+          process.exit(1);
+        }
+        updates.metadata = mergeChannelClassMetadata(existing.metadata, String(opts.class));
+      }
 
       try {
         const sp = updateChannel(channelName, updates);

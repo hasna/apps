@@ -51,16 +51,19 @@ export function acquireLock(
     cleanExpiredLocks();
     releaseStaleAgentLocks();
 
-    const existing = db.prepare(`
+    const existingLocks = db.prepare(`
       SELECT * FROM resource_locks
-      WHERE resource_type = ? AND resource_id = ? AND lock_type = ?
-    `).get(resourceType, resourceId, lockType) as ResourceLock | null;
+      WHERE resource_type = ? AND resource_id = ?
+      ORDER BY CASE WHEN lock_type = ? THEN 0 ELSE 1 END, locked_at ASC
+    `).all(resourceType, resourceId, lockType) as ResourceLock[];
+    const conflicting = existingLocks.find((lock) => lock.agent_id !== agentId);
 
+    if (conflicting) {
+      return { acquired: false, lock: null, held_by: conflicting.agent_id };
+    }
+
+    const existing = existingLocks.find((lock) => lock.lock_type === lockType) ?? null;
     if (existing) {
-      // Another agent holds this lock
-      if (existing.agent_id !== agentId) {
-        return { acquired: false, lock: null, held_by: existing.agent_id };
-      }
       // Same agent refreshes the lock
       const expiresAt = new Date(Date.now() + expiryMs).toISOString().replace("T", "T").replace("Z", "");
       db.prepare(`
@@ -96,17 +99,20 @@ export function bulkAcquireLock(
     const acquired: ResourceLock[] = [];
 
     for (const { resource_type, resource_id, lock_type = "advisory", expiry_ms = DEFAULT_LOCK_EXPIRY_MS } of resources) {
-      const existing = db.prepare(`
+      const existingLocks = db.prepare(`
         SELECT * FROM resource_locks
-        WHERE resource_type = ? AND resource_id = ? AND lock_type = ?
-      `).get(resource_type, resource_id, lock_type) as ResourceLock | null;
+        WHERE resource_type = ? AND resource_id = ?
+        ORDER BY CASE WHEN lock_type = ? THEN 0 ELSE 1 END, locked_at ASC
+      `).all(resource_type, resource_id, lock_type) as ResourceLock[];
+      const conflicting = existingLocks.find((lock) => lock.agent_id !== agentId);
 
-      if (existing && existing.agent_id !== agentId) {
+      if (conflicting) {
         // Conflict — abort the entire transaction by throwing (SQLite rolls back)
-        throw { _bulkConflict: true, resource_type, resource_id, held_by: existing.agent_id };
+        throw { _bulkConflict: true, resource_type, resource_id, held_by: conflicting.agent_id };
       }
 
       const expiresAt = new Date(Date.now() + expiry_ms).toISOString().slice(0, -1);
+      const existing = existingLocks.find((lock) => lock.lock_type === lock_type) ?? null;
 
       if (existing) {
         // Refresh own lock

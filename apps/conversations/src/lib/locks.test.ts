@@ -55,6 +55,19 @@ describe("acquireLock", () => {
     expect(result.held_by).toBe("agent-1");
   });
 
+  test("different agent is blocked across advisory and exclusive lock types", () => {
+    acquireLock("channel", "general", "agent-1", "advisory");
+    const exclusive = acquireLock("channel", "general", "agent-2", "exclusive");
+    expect(exclusive.acquired).toBe(false);
+    expect(exclusive.held_by).toBe("agent-1");
+
+    releaseLock("channel", "general", "agent-1");
+    acquireLock("channel", "general", "agent-2", "exclusive");
+    const advisory = acquireLock("channel", "general", "agent-1", "advisory");
+    expect(advisory.acquired).toBe(false);
+    expect(advisory.held_by).toBe("agent-2");
+  });
+
   test("different resource types don't conflict", () => {
     acquireLock("channel", "general", "agent-1");
     const result = acquireLock("pinned_message", "general", "agent-2");
@@ -322,6 +335,21 @@ describe("tryBulkAcquireLock", () => {
 
     // bulk-free must NOT have been acquired (atomicity)
     expect(checkLock("channel", "bulk-free")).toBeNull();
+  });
+
+  test("blocks bulk acquire when another agent holds the resource with another lock type", () => {
+    acquireLock("channel", "bulk-cross-type", "agent-other", "advisory");
+
+    const result = tryBulkAcquireLock([
+      { resource_type: "channel", resource_id: "bulk-cross-type", lock_type: "exclusive" },
+    ], "bulk-requester");
+
+    expect(result.acquired).toBe(false);
+    expect(result.blocked_by).toEqual({
+      resource_type: "channel",
+      resource_id: "bulk-cross-type",
+      held_by: "agent-other",
+    });
   });
 
   test("same agent re-acquiring all owned locks succeeds", () => {
