@@ -487,16 +487,31 @@ future executions:
 ```bash
 loops workflows migrate-agent-timeouts --loop <loop-id-or-name>
 loops workflows migrate-agent-timeouts --loop <loop-id-or-name> --apply
+loops workflows migrate-goal-wrappers --loop <loop-id-or-name>
+loops workflows migrate-goal-wrappers --loop <loop-id-or-name> --apply
+loops workflows migrate-goal-wrappers --loop <loop-id-or-name> --apply --archive-old
 ```
 
-The command dry-runs by default. With `--apply`, it creates a new workflow spec
-with the requested agent timeout policy for eligible non-running workflow loops,
-or updates a non-running direct agent loop target in place. Terminal timed-out
-runs stay as audit history. Use `loops workflows recover` only for interrupted
-`running` workflow runs whose recorded child process is gone; terminal
-`timed_out` runs must be requeued with `loops routes requeue <work-item-id>
---reason "<cause fixed>"` before re-delivering or draining the original
-task/event route.
+Both migrators dry-run by default. For eligible non-running workflow loops,
+`--apply` creates a new workflow spec and retargets only future executions;
+historical workflow runs keep pointing at their original spec. For direct agent
+loops selected with `--loop`, `migrate-agent-timeouts --apply` updates the
+stored target in place for future executions. Use `--archive-old` to archive
+superseded workflow specs when no active loops still reference them.
+
+`migrate-agent-timeouts` clones the workflow with the requested agent timeout
+policy (`--timeout none` by default). `migrate-goal-wrappers` targets loops that
+define both a loop-level goal and a redundant workflow-level top-level goal: it
+clones a goal-free workflow spec, retargets the loop, and leaves the loop-level
+goal as the sole orchestration wrapper. Loops with only a workflow-level goal or
+only a loop-level goal are skipped. New workflow loops cannot combine both
+wrappers; use loop-level `--goal` on `loops create workflow` instead of nesting
+a top-level `"goal"` in the workflow JSON.
+
+Use `loops workflows recover` only for interrupted `running` workflow runs whose
+recorded child process is gone; terminal `timed_out` runs must be requeued with
+`loops routes requeue <work-item-id> --reason "<cause fixed>"` before
+re-delivering or draining the original task/event route.
 
 ```json
 {

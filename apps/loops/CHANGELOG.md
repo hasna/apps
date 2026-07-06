@@ -477,13 +477,63 @@ CLI/MCP/SDK surface with deprecation aliases.
   npm installs), and `@hasna/machines` is now an optional dependency —
   installs without it simply disable remote-machine assignment.
 
+## 0.3.60 (2026-07-01)
+
+Experimental Codewith durable-agent controller for long workflow steps.
+
+### Fixed
+
+- **Codewith executor:** run Codewith agent steps through the durable
+  `codewith agent start` background-agent lifecycle with rollout progress
+  recording into workflow step runs.
+
+Superseded in **0.4.9**: task-lifecycle and route workers now dispatch Codewith
+via non-interactive `codewith exec --json` because `agent start` reloaded
+multi-megabyte rollout history every turn and stalled workers with silent
+`context_length_exceeded` completions.
+
+## 0.3.59 (2026-07-01)
+
+Harden append-only workflow goal-wrapper migration.
+
+### Fixed
+
+- **`migrate-goal-wrappers`:** dry-run and apply paths now use compact migration
+  summaries, block retarget while a loop run is active, and route failures
+  through `cloneWorkflowWithoutGoalAndRetargetLoop` so only loops with both a
+  loop-level goal and a workflow-level top-level goal migrate.
+- **Store:** `cloneWorkflowWithoutGoalAndRetargetLoop` inserts a goal-free
+  workflow spec, retargets the loop, and optionally archives the old spec when
+  unreferenced — matching the append-only semantics of
+  `migrate-agent-timeouts`.
+
+## 0.3.58 (2026-07-01)
+
+Break nested workflow goal deadlocks and add a migration path.
+
+### Fixed
+
+- **Workflow loops — nested top-level goals:** a loop-level goal wrapping a
+  workflow that also defined a top-level `"goal"` deadlocked because each layer
+  waited on the other. New workflow loops that combine both wrappers are
+  rejected at creation; retargeting onto a dual-goal workflow is blocked. When
+  only a legacy dual-wrapper loop remains, the runner strips the workflow goal
+  for execution so the loop-level goal can drive orchestration.
+- **Workflow runner:** loop-level goals on workflow loops execute the underlying
+  workflow with the workflow-level goal removed when both were present.
+
+### Added
+
+- **`loops workflows migrate-goal-wrappers`:** append-only migrator that clones
+  a goal-free workflow spec and retargets eligible non-running workflow loops
+  that still carry redundant workflow-level goal wrappers alongside a loop-level
+  goal. Supports `--loop`, `--apply`, and `--archive-old` like
+  `migrate-agent-timeouts`.
+
 ## 0.3.x
 
 Compact history for the 0.3 line, newest first (`version (date) commit subject`).
 
-- 0.3.60 (2026-07-01) fix: run Codewith loops as durable agents
-- 0.3.59 (2026-07-01) fix: harden workflow goal migration
-- 0.3.58 (2026-07-01) fix: avoid nested workflow goal deadlocks
 - 0.3.57 (2026-07-01) feat: harden loop routing and add MCP server
 - 0.3.56 (2026-06-30) fix: allow worktree agents to write git metadata
 - 0.3.55 (2026-06-30) fix: agent workflow timeout policy
