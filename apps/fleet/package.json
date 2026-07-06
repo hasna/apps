@@ -1,0 +1,55 @@
+{
+  "name": "@hasna/fleet",
+  "version": "0.1.0",
+  "description": "Read-only AgentOps control tower: CLI + MCP + serve fusing monitor/logs/sessions/economy/evals into per-agent/per-company SLOs, error budgets, traces, and token/cost burn.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "fleet": "dist/cli/index.js",
+    "fleet-mcp": "dist/mcp/index.js",
+    "fleet-serve": "dist/server/index.js"
+  },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" }
+  },
+  "files": ["dist", "hasna.contract.json", "openapi.json", "docker-compose.yml", "LICENSE", "README.md"],
+  "scripts": {
+    "build": "bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk --external hono && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun --external hono && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "conformance": "bun run scripts/conformance.ts",
+    "verify": "bun run typecheck && bun run test && bun run build && bun run conformance",
+    "openapi:generate": "bun run src/cli/index.tsx openapi generate --out openapi.json",
+    "openapi:check": "bun run src/cli/index.tsx openapi check --path openapi.json",
+    "smoke:package": "bun run src/release/package-smoke.ts",
+    "dev:cli": "bun run src/cli/index.tsx",
+    "dev:mcp": "bun run src/mcp/index.ts --http --port 8889",
+    "dev:serve": "bun run src/server/index.ts",
+    "postinstall": "node -e \"const fs=require('node:fs'),path=require('node:path'),os=require('node:os');const home=process.env.HOME||process.env.USERPROFILE||os.homedir();const root=path.join(home,'.hasna','fleet');try{fs.mkdirSync(root,{recursive:true,mode:0o700});for(const dir of ['config','data','exports','backups','logs','tmp'])fs.mkdirSync(path.join(root,dir),{recursive:true,mode:0o700});}catch{}\""
+  },
+  "publishConfig": { "registry": "https://registry.npmjs.org", "access": "public" },
+  "repository": { "type": "git", "url": "git+https://github.com/hasna/fleet.git" },
+  "homepage": "https://github.com/hasna/fleet#readme",
+  "bugs": { "url": "https://github.com/hasna/fleet/issues" },
+  "engines": { "bun": ">=1.1.0" },
+  "author": "Andrei Hasna <andrei@hasna.com>",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "hono": "^4.6.0",
+    "commander": "^13.1.0",
+    "ink": "^5.2.0",
+    "react": "^18.3.1",
+    "chalk": "^5.4.1",
+    "zod": "^3.24.2",
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@hasna/contracts": "file:../../../hasna/opensource/open-contracts",
+    "@types/bun": "^1.2.4",
+    "@types/pg": "^8.11.10",
+    "@types/react": "^18.3.18",
+    "typescript": "^5.7.3"
+  }
+}
