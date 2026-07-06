@@ -904,8 +904,8 @@ describe("CLI", () => {
         "maropost", "mercury", "meta", "midjourney", "mistral", "mixpanel",
         "notion", "openai", "openweathermap", "pandadoc", "quo", "reddit",
         "reducto", "resend", "revolut", "sedo", "sentry", "shadcn", "shopify",
-        "snap", "stabilityai", "stripe", "stripeatlas", "substack", "tiktok", "tiktok-events-api",
-        "tinker", "twilio", "uspto", "webflow", "wix", "x", "xads", "xai",
+        "snap", "stabilityai", "stripe", "stripeatlas", "substack", "tiktok",
+        "tiktok-events-api", "tinker", "twilio", "twitch", "uspto", "webflow", "wix", "x", "xads", "xai",
         "youtube", "zoom",
       ];
 

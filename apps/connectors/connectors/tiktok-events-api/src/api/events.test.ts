@@ -1,5 +1,6 @@
 import { describe, expect, test, beforeEach, afterEach } from 'bun:test';
 import { createHash } from 'node:crypto';
+import { join } from 'node:path';
 import {
   buildTrackBody,
   hashUserData,
@@ -130,5 +131,41 @@ describe('TikTokEventsClient track request', () => {
         path: 'https://evil.example/open_api/v1.3/pixel/list/',
       }),
     ).rejects.toThrow(/configured TikTok Business API origin/);
+  });
+});
+
+describe('TikTok Events API CLI', () => {
+  test('hash-user-data does not require API credentials', async () => {
+    const proc = Bun.spawn(
+      [
+        'bun',
+        join(import.meta.dir, '..', 'cli', 'index.ts'),
+        '--format',
+        'json',
+        'hash-user-data',
+        '--data',
+        JSON.stringify({ user: { email: 'Ada@Example.com' } }),
+      ],
+      {
+        stdout: 'pipe',
+        stderr: 'pipe',
+        env: {
+          ...process.env,
+          TIKTOK_ACCESS_TOKEN: undefined,
+          HOME: join(import.meta.dir, '..', '..', '.test-home'),
+          NO_COLOR: '1',
+        },
+      },
+    );
+
+    const stdout = await new Response(proc.stdout).text();
+    const stderr = await new Response(proc.stderr).text();
+    const exitCode = await proc.exited;
+
+    expect(stderr).toBe('');
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(stdout)).toEqual({
+      email: createHash('sha256').update('ada@example.com').digest('hex'),
+    });
   });
 });

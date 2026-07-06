@@ -2,6 +2,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { TikTokEventsApi, tiktokEventsApiCommandSpecs } from '../api';
+import { hashUserData } from '../api/events';
 import type { JsonRecord, TikTokTrackOptions } from '../types';
 import {
   CONNECTOR_NAME,
@@ -331,10 +332,11 @@ for (const [apiMethod, cliName, description] of tiktokEventsApiCommandSpecs) {
       .description(description)
       .action(async function (this: Command, opts: { data?: string }) {
         const payload = parseDataOption(opts.data);
+        if (apiMethod === 'hashUserData') {
+          print(hashUserData((payload.user as JsonRecord | undefined) ?? {}), getFormat(this));
+          return;
+        }
         await runApi(this, async (client) => {
-          if (apiMethod === 'hashUserData') {
-            return client.hashUserData(payload as { user?: JsonRecord });
-          }
           const method = client[trackMethodMap[apiMethod] as keyof TikTokEventsApi] as (
             options: TikTokTrackOptions | JsonRecord,
           ) => Promise<unknown>;
