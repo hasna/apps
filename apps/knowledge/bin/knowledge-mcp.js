@@ -15008,13 +15008,18 @@ var package_default = {
     "./storage": {
       import: "./dist/storage.js",
       types: "./dist/storage.d.ts"
+    },
+    "./serve": {
+      import: "./dist/serve.js",
+      types: "./dist/serve.d.ts"
     }
   },
   main: "./dist/index.js",
   types: "./dist/index.d.ts",
   bin: {
     knowledge: "bin/knowledge.js",
-    "knowledge-mcp": "bin/knowledge-mcp.js"
+    "knowledge-mcp": "bin/knowledge-mcp.js",
+    "knowledge-serve": "bin/knowledge-serve.js"
   },
   files: [
     "bin",
@@ -15030,8 +15035,11 @@ var package_default = {
     "smoke:machines-adapter": "bun scripts/smoke-machines-adapter.mjs",
     "smoke:machine-sync-release": "bun scripts/smoke-machine-sync-release.mjs",
     "smoke:open-files-installed-boundary": "bun scripts/smoke-open-files-installed-boundary.mjs",
+    "generate:sdk": "bun scripts/generate-sdk.mjs",
+    "migrate:cloud": "bun scripts/apply-cloud-migrations.mjs",
+    serve: "bun src/serve-entry.ts",
     "verify:generated": "bun run build && bun scripts/verify-generated-artifacts.mjs",
-    build: "rm -rf dist && bun build --target=bun --outfile=bin/knowledge.js --minify --external pg --external @hasna/contracts --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --target=bun --outfile=bin/knowledge-mcp.js --external pg --external @hasna/contracts --external @hasna/machines --external @hasna/machines/consumer --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build ./src/index.ts ./src/storage.ts --outdir ./dist --target bun --external pg --external @hasna/contracts --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bun scripts/strip-generated-trailing-whitespace.mjs && bunx tsc -p tsconfig.build.json",
+    build: "bun run generate:sdk && rm -rf dist && bun build --target=bun --outfile=bin/knowledge.js --minify --external pg --external @hasna/contracts --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --target=bun --outfile=bin/knowledge-mcp.js --external pg --external @hasna/contracts --external @hasna/machines --external @hasna/machines/consumer --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build --target=bun --outfile=bin/knowledge-serve.js --external pg --external @hasna/contracts --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/serve-entry.ts && bun build ./src/index.ts ./src/storage.ts ./src/serve.ts --outdir ./dist --target bun --external pg --external @hasna/contracts --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bun scripts/strip-generated-trailing-whitespace.mjs && bunx tsc -p tsconfig.build.json",
     prepublishOnly: "bun run build"
   },
   keywords: [
@@ -15066,7 +15074,7 @@ var package_default = {
     "@ai-sdk/openai": "^3.0.68",
     "@aws-sdk/client-s3": "^3.1063.0",
     "@aws-sdk/credential-providers": "^3.1063.0",
-    "@hasna/contracts": "^0.2.2",
+    "@hasna/contracts": "0.4.1",
     "@hasna/events": "^0.1.3",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/json-schema": "^7.0.15",
@@ -28631,7 +28639,22 @@ var PG_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_updated ON knowledge_sync_table_clocks(updated_at)`,
   `CREATE INDEX IF NOT EXISTS idx_sync_imports_source ON knowledge_sync_imports(source_machine_id, applied_at)`,
   `CREATE INDEX IF NOT EXISTS idx_sync_imports_target ON knowledge_sync_imports(target_machine_id, applied_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_imports_status ON knowledge_sync_imports(status)`
+  `CREATE INDEX IF NOT EXISTS idx_sync_imports_status ON knowledge_sync_imports(status)`,
+  `CREATE TABLE IF NOT EXISTS knowledge_items (
+    id TEXT PRIMARY KEY,
+    short_id TEXT,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    url TEXT,
+    tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    archived BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_short_id ON knowledge_items(short_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_archived ON knowledge_items(archived)`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_created ON knowledge_items(created_at)`
 ];
 // src/generated/storage-kit/tls.ts
 import { readFileSync as readFileSync13 } from "fs";

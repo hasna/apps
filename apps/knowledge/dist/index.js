@@ -11401,29 +11401,29 @@ function toJSONSchema(input, params) {
   return finalize(ctx, input);
 }
 var formatMap, stringProcessor = (schema, ctx, _json, _params) => {
-  const json = _json;
-  json.type = "string";
+  const json2 = _json;
+  json2.type = "string";
   const { minimum, maximum, format, patterns, contentEncoding } = schema._zod.bag;
   if (typeof minimum === "number")
-    json.minLength = minimum;
+    json2.minLength = minimum;
   if (typeof maximum === "number")
-    json.maxLength = maximum;
+    json2.maxLength = maximum;
   if (format) {
-    json.format = formatMap[format] ?? format;
-    if (json.format === "")
-      delete json.format;
+    json2.format = formatMap[format] ?? format;
+    if (json2.format === "")
+      delete json2.format;
     if (format === "time") {
-      delete json.format;
+      delete json2.format;
     }
   }
   if (contentEncoding)
-    json.contentEncoding = contentEncoding;
+    json2.contentEncoding = contentEncoding;
   if (patterns && patterns.size > 0) {
     const regexes = [...patterns];
     if (regexes.length === 1)
-      json.pattern = regexes[0].source;
+      json2.pattern = regexes[0].source;
     else if (regexes.length > 1) {
-      json.allOf = [
+      json2.allOf = [
         ...regexes.map((regex) => ({
           ...ctx.target === "draft-07" || ctx.target === "draft-04" || ctx.target === "openapi-3.0" ? { type: "string" } : {},
           pattern: regex.source
@@ -11432,39 +11432,39 @@ var formatMap, stringProcessor = (schema, ctx, _json, _params) => {
     }
   }
 }, numberProcessor = (schema, ctx, _json, _params) => {
-  const json = _json;
+  const json2 = _json;
   const { minimum, maximum, format, multipleOf, exclusiveMaximum, exclusiveMinimum } = schema._zod.bag;
   if (typeof format === "string" && format.includes("int"))
-    json.type = "integer";
+    json2.type = "integer";
   else
-    json.type = "number";
+    json2.type = "number";
   const exMin = typeof exclusiveMinimum === "number" && exclusiveMinimum >= (minimum ?? Number.NEGATIVE_INFINITY);
   const exMax = typeof exclusiveMaximum === "number" && exclusiveMaximum <= (maximum ?? Number.POSITIVE_INFINITY);
   const legacy = ctx.target === "draft-04" || ctx.target === "openapi-3.0";
   if (exMin) {
     if (legacy) {
-      json.minimum = exclusiveMinimum;
-      json.exclusiveMinimum = true;
+      json2.minimum = exclusiveMinimum;
+      json2.exclusiveMinimum = true;
     } else {
-      json.exclusiveMinimum = exclusiveMinimum;
+      json2.exclusiveMinimum = exclusiveMinimum;
     }
   } else if (typeof minimum === "number") {
-    json.minimum = minimum;
+    json2.minimum = minimum;
   }
   if (exMax) {
     if (legacy) {
-      json.maximum = exclusiveMaximum;
-      json.exclusiveMaximum = true;
+      json2.maximum = exclusiveMaximum;
+      json2.exclusiveMaximum = true;
     } else {
-      json.exclusiveMaximum = exclusiveMaximum;
+      json2.exclusiveMaximum = exclusiveMaximum;
     }
   } else if (typeof maximum === "number") {
-    json.maximum = maximum;
+    json2.maximum = maximum;
   }
   if (typeof multipleOf === "number")
-    json.multipleOf = multipleOf;
-}, booleanProcessor = (_schema, _ctx, json, _params) => {
-  json.type = "boolean";
+    json2.multipleOf = multipleOf;
+}, booleanProcessor = (_schema, _ctx, json2, _params) => {
+  json2.type = "boolean";
 }, bigintProcessor = (_schema, ctx, _json, _params) => {
   if (ctx.unrepresentable === "throw") {
     throw new Error("BigInt cannot be represented in JSON Schema");
@@ -11473,13 +11473,13 @@ var formatMap, stringProcessor = (schema, ctx, _json, _params) => {
   if (ctx.unrepresentable === "throw") {
     throw new Error("Symbols cannot be represented in JSON Schema");
   }
-}, nullProcessor = (_schema, ctx, json, _params) => {
+}, nullProcessor = (_schema, ctx, json2, _params) => {
   if (ctx.target === "openapi-3.0") {
-    json.type = "string";
-    json.nullable = true;
-    json.enum = [null];
+    json2.type = "string";
+    json2.nullable = true;
+    json2.enum = [null];
   } else {
-    json.type = "null";
+    json2.type = "null";
   }
 }, undefinedProcessor = (_schema, ctx, _json, _params) => {
   if (ctx.unrepresentable === "throw") {
@@ -11489,21 +11489,21 @@ var formatMap, stringProcessor = (schema, ctx, _json, _params) => {
   if (ctx.unrepresentable === "throw") {
     throw new Error("Void cannot be represented in JSON Schema");
   }
-}, neverProcessor = (_schema, _ctx, json, _params) => {
-  json.not = {};
+}, neverProcessor = (_schema, _ctx, json2, _params) => {
+  json2.not = {};
 }, anyProcessor = (_schema, _ctx, _json, _params) => {}, unknownProcessor = (_schema, _ctx, _json, _params) => {}, dateProcessor = (_schema, ctx, _json, _params) => {
   if (ctx.unrepresentable === "throw") {
     throw new Error("Date cannot be represented in JSON Schema");
   }
-}, enumProcessor = (schema, _ctx, json, _params) => {
+}, enumProcessor = (schema, _ctx, json2, _params) => {
   const def = schema._zod.def;
   const values = getEnumValues(def.entries);
   if (values.every((v) => typeof v === "number"))
-    json.type = "number";
+    json2.type = "number";
   if (values.every((v) => typeof v === "string"))
-    json.type = "string";
-  json.enum = values;
-}, literalProcessor = (schema, ctx, json, _params) => {
+    json2.type = "string";
+  json2.enum = values;
+}, literalProcessor = (schema, ctx, json2, _params) => {
   const def = schema._zod.def;
   const vals = [];
   for (const val of def.values) {
@@ -11523,36 +11523,36 @@ var formatMap, stringProcessor = (schema, ctx, _json, _params) => {
   }
   if (vals.length === 0) {} else if (vals.length === 1) {
     const val = vals[0];
-    json.type = val === null ? "null" : typeof val;
+    json2.type = val === null ? "null" : typeof val;
     if (ctx.target === "draft-04" || ctx.target === "openapi-3.0") {
-      json.enum = [val];
+      json2.enum = [val];
     } else {
-      json.const = val;
+      json2.const = val;
     }
   } else {
     if (vals.every((v) => typeof v === "number"))
-      json.type = "number";
+      json2.type = "number";
     if (vals.every((v) => typeof v === "string"))
-      json.type = "string";
+      json2.type = "string";
     if (vals.every((v) => typeof v === "boolean"))
-      json.type = "boolean";
+      json2.type = "boolean";
     if (vals.every((v) => v === null))
-      json.type = "null";
-    json.enum = vals;
+      json2.type = "null";
+    json2.enum = vals;
   }
 }, nanProcessor = (_schema, ctx, _json, _params) => {
   if (ctx.unrepresentable === "throw") {
     throw new Error("NaN cannot be represented in JSON Schema");
   }
-}, templateLiteralProcessor = (schema, _ctx, json, _params) => {
-  const _json = json;
+}, templateLiteralProcessor = (schema, _ctx, json2, _params) => {
+  const _json = json2;
   const pattern = schema._zod.pattern;
   if (!pattern)
     throw new Error("Pattern not found in template literal");
   _json.type = "string";
   _json.pattern = pattern.source;
-}, fileProcessor = (schema, _ctx, json, _params) => {
-  const _json = json;
+}, fileProcessor = (schema, _ctx, json2, _params) => {
+  const _json = json2;
   const file = {
     type: "string",
     format: "binary",
@@ -11574,8 +11574,8 @@ var formatMap, stringProcessor = (schema, ctx, _json, _params) => {
   } else {
     Object.assign(_json, file);
   }
-}, successProcessor = (_schema, _ctx, json, _params) => {
-  json.type = "boolean";
+}, successProcessor = (_schema, _ctx, json2, _params) => {
+  json2.type = "boolean";
 }, customProcessor = (_schema, ctx, _json, _params) => {
   if (ctx.unrepresentable === "throw") {
     throw new Error("Custom types cannot be represented in JSON Schema");
@@ -11597,26 +11597,26 @@ var formatMap, stringProcessor = (schema, ctx, _json, _params) => {
     throw new Error("Set cannot be represented in JSON Schema");
   }
 }, arrayProcessor = (schema, ctx, _json, params) => {
-  const json = _json;
+  const json2 = _json;
   const def = schema._zod.def;
   const { minimum, maximum } = schema._zod.bag;
   if (typeof minimum === "number")
-    json.minItems = minimum;
+    json2.minItems = minimum;
   if (typeof maximum === "number")
-    json.maxItems = maximum;
-  json.type = "array";
-  json.items = process2(def.element, ctx, {
+    json2.maxItems = maximum;
+  json2.type = "array";
+  json2.items = process2(def.element, ctx, {
     ...params,
     path: [...params.path, "items"]
   });
 }, objectProcessor = (schema, ctx, _json, params) => {
-  const json = _json;
+  const json2 = _json;
   const def = schema._zod.def;
-  json.type = "object";
-  json.properties = {};
+  json2.type = "object";
+  json2.properties = {};
   const shape = def.shape;
   for (const key in shape) {
-    json.properties[key] = process2(shape[key], ctx, {
+    json2.properties[key] = process2(shape[key], ctx, {
       ...params,
       path: [...params.path, "properties", key]
     });
@@ -11631,20 +11631,20 @@ var formatMap, stringProcessor = (schema, ctx, _json, _params) => {
     }
   }));
   if (requiredKeys.size > 0) {
-    json.required = Array.from(requiredKeys);
+    json2.required = Array.from(requiredKeys);
   }
   if (def.catchall?._zod.def.type === "never") {
-    json.additionalProperties = false;
+    json2.additionalProperties = false;
   } else if (!def.catchall) {
     if (ctx.io === "output")
-      json.additionalProperties = false;
+      json2.additionalProperties = false;
   } else if (def.catchall) {
-    json.additionalProperties = process2(def.catchall, ctx, {
+    json2.additionalProperties = process2(def.catchall, ctx, {
       ...params,
       path: [...params.path, "additionalProperties"]
     });
   }
-}, unionProcessor = (schema, ctx, json, params) => {
+}, unionProcessor = (schema, ctx, json2, params) => {
   const def = schema._zod.def;
   const isExclusive = def.inclusive === false;
   const options = def.options.map((x, i) => process2(x, ctx, {
@@ -11652,11 +11652,11 @@ var formatMap, stringProcessor = (schema, ctx, _json, _params) => {
     path: [...params.path, isExclusive ? "oneOf" : "anyOf", i]
   }));
   if (isExclusive) {
-    json.oneOf = options;
+    json2.oneOf = options;
   } else {
-    json.anyOf = options;
+    json2.anyOf = options;
   }
-}, intersectionProcessor = (schema, ctx, json, params) => {
+}, intersectionProcessor = (schema, ctx, json2, params) => {
   const def = schema._zod.def;
   const a = process2(def.left, ctx, {
     ...params,
@@ -11671,11 +11671,11 @@ var formatMap, stringProcessor = (schema, ctx, _json, _params) => {
     ...isSimpleIntersection(a) ? a.allOf : [a],
     ...isSimpleIntersection(b) ? b.allOf : [b]
   ];
-  json.allOf = allOf;
+  json2.allOf = allOf;
 }, tupleProcessor = (schema, ctx, _json, params) => {
-  const json = _json;
+  const json2 = _json;
   const def = schema._zod.def;
-  json.type = "array";
+  json2.type = "array";
   const prefixPath = ctx.target === "draft-2020-12" ? "prefixItems" : "items";
   const restPath = ctx.target === "draft-2020-12" ? "items" : ctx.target === "openapi-3.0" ? "items" : "additionalItems";
   const prefixItems = def.items.map((x, i) => process2(x, ctx, {
@@ -11687,36 +11687,36 @@ var formatMap, stringProcessor = (schema, ctx, _json, _params) => {
     path: [...params.path, restPath, ...ctx.target === "openapi-3.0" ? [def.items.length] : []]
   }) : null;
   if (ctx.target === "draft-2020-12") {
-    json.prefixItems = prefixItems;
+    json2.prefixItems = prefixItems;
     if (rest) {
-      json.items = rest;
+      json2.items = rest;
     }
   } else if (ctx.target === "openapi-3.0") {
-    json.items = {
+    json2.items = {
       anyOf: prefixItems
     };
     if (rest) {
-      json.items.anyOf.push(rest);
+      json2.items.anyOf.push(rest);
     }
-    json.minItems = prefixItems.length;
+    json2.minItems = prefixItems.length;
     if (!rest) {
-      json.maxItems = prefixItems.length;
+      json2.maxItems = prefixItems.length;
     }
   } else {
-    json.items = prefixItems;
+    json2.items = prefixItems;
     if (rest) {
-      json.additionalItems = rest;
+      json2.additionalItems = rest;
     }
   }
   const { minimum, maximum } = schema._zod.bag;
   if (typeof minimum === "number")
-    json.minItems = minimum;
+    json2.minItems = minimum;
   if (typeof maximum === "number")
-    json.maxItems = maximum;
+    json2.maxItems = maximum;
 }, recordProcessor = (schema, ctx, _json, params) => {
-  const json = _json;
+  const json2 = _json;
   const def = schema._zod.def;
-  json.type = "object";
+  json2.type = "object";
   const keyType = def.keyType;
   const keyBag = keyType._zod.bag;
   const patterns = keyBag?.patterns;
@@ -11725,18 +11725,18 @@ var formatMap, stringProcessor = (schema, ctx, _json, _params) => {
       ...params,
       path: [...params.path, "patternProperties", "*"]
     });
-    json.patternProperties = {};
+    json2.patternProperties = {};
     for (const pattern of patterns) {
-      json.patternProperties[pattern.source] = valueSchema;
+      json2.patternProperties[pattern.source] = valueSchema;
     }
   } else {
     if (ctx.target === "draft-07" || ctx.target === "draft-2020-12") {
-      json.propertyNames = process2(def.keyType, ctx, {
+      json2.propertyNames = process2(def.keyType, ctx, {
         ...params,
         path: [...params.path, "propertyNames"]
       });
     }
-    json.additionalProperties = process2(def.valueType, ctx, {
+    json2.additionalProperties = process2(def.valueType, ctx, {
       ...params,
       path: [...params.path, "additionalProperties"]
     });
@@ -11745,38 +11745,38 @@ var formatMap, stringProcessor = (schema, ctx, _json, _params) => {
   if (keyValues) {
     const validKeyValues = [...keyValues].filter((v) => typeof v === "string" || typeof v === "number");
     if (validKeyValues.length > 0) {
-      json.required = validKeyValues;
+      json2.required = validKeyValues;
     }
   }
-}, nullableProcessor = (schema, ctx, json, params) => {
+}, nullableProcessor = (schema, ctx, json2, params) => {
   const def = schema._zod.def;
   const inner = process2(def.innerType, ctx, params);
   const seen = ctx.seen.get(schema);
   if (ctx.target === "openapi-3.0") {
     seen.ref = def.innerType;
-    json.nullable = true;
+    json2.nullable = true;
   } else {
-    json.anyOf = [inner, { type: "null" }];
+    json2.anyOf = [inner, { type: "null" }];
   }
 }, nonoptionalProcessor = (schema, ctx, _json, params) => {
   const def = schema._zod.def;
   process2(def.innerType, ctx, params);
   const seen = ctx.seen.get(schema);
   seen.ref = def.innerType;
-}, defaultProcessor = (schema, ctx, json, params) => {
+}, defaultProcessor = (schema, ctx, json2, params) => {
   const def = schema._zod.def;
   process2(def.innerType, ctx, params);
   const seen = ctx.seen.get(schema);
   seen.ref = def.innerType;
-  json.default = JSON.parse(JSON.stringify(def.defaultValue));
-}, prefaultProcessor = (schema, ctx, json, params) => {
+  json2.default = JSON.parse(JSON.stringify(def.defaultValue));
+}, prefaultProcessor = (schema, ctx, json2, params) => {
   const def = schema._zod.def;
   process2(def.innerType, ctx, params);
   const seen = ctx.seen.get(schema);
   seen.ref = def.innerType;
   if (ctx.io === "input")
-    json._prefault = JSON.parse(JSON.stringify(def.defaultValue));
-}, catchProcessor = (schema, ctx, json, params) => {
+    json2._prefault = JSON.parse(JSON.stringify(def.defaultValue));
+}, catchProcessor = (schema, ctx, json2, params) => {
   const def = schema._zod.def;
   process2(def.innerType, ctx, params);
   const seen = ctx.seen.get(schema);
@@ -11787,7 +11787,7 @@ var formatMap, stringProcessor = (schema, ctx, _json, _params) => {
   } catch {
     throw new Error("Dynamic catch values are not supported in JSON Schema");
   }
-  json.default = catchValue;
+  json2.default = catchValue;
 }, pipeProcessor = (schema, ctx, _json, params) => {
   const def = schema._zod.def;
   const inIsTransform = def.in._zod.traits.has("$ZodTransform");
@@ -11795,12 +11795,12 @@ var formatMap, stringProcessor = (schema, ctx, _json, _params) => {
   process2(innerType, ctx, params);
   const seen = ctx.seen.get(schema);
   seen.ref = innerType;
-}, readonlyProcessor = (schema, ctx, json, params) => {
+}, readonlyProcessor = (schema, ctx, json2, params) => {
   const def = schema._zod.def;
   process2(def.innerType, ctx, params);
   const seen = ctx.seen.get(schema);
   seen.ref = def.innerType;
-  json.readOnly = true;
+  json2.readOnly = true;
 }, promiseProcessor = (schema, ctx, _json, params) => {
   const def = schema._zod.def;
   process2(def.innerType, ctx, params);
@@ -12433,7 +12433,7 @@ __export(exports_schemas2, {
   ksuid: () => ksuid2,
   keyof: () => keyof,
   jwt: () => jwt,
-  json: () => json,
+  json: () => json2,
   ipv6: () => ipv62,
   ipv4: () => ipv42,
   invertCodec: () => invertCodec,
@@ -13043,7 +13043,7 @@ function _instanceof(cls, params = {}) {
   };
   return inst;
 }
-function json(params) {
+function json2(params) {
   const jsonSchema = lazy(() => {
     return union([string2(params), number2(), boolean2(), _null3(), array(jsonSchema), record(string2(), jsonSchema)]);
   });
@@ -13202,7 +13202,7 @@ var init_schemas2 = __esm(() => {
   _ZodString = /* @__PURE__ */ $constructor("_ZodString", (inst, def) => {
     $ZodString.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => stringProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => stringProcessor(inst, ctx, json2, params);
     const bag = inst._zod.bag;
     inst.format = bag.format ?? null;
     inst.minLength = bag.minimum ?? null;
@@ -13377,7 +13377,7 @@ var init_schemas2 = __esm(() => {
   ZodNumber = /* @__PURE__ */ $constructor("ZodNumber", (inst, def) => {
     $ZodNumber.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => numberProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => numberProcessor(inst, ctx, json2, params);
     _installLazyMethods(inst, "ZodNumber", {
       gt(value, params) {
         return this.check(_gt(value, params));
@@ -13439,12 +13439,12 @@ var init_schemas2 = __esm(() => {
   ZodBoolean = /* @__PURE__ */ $constructor("ZodBoolean", (inst, def) => {
     $ZodBoolean.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => booleanProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => booleanProcessor(inst, ctx, json2, params);
   });
   ZodBigInt = /* @__PURE__ */ $constructor("ZodBigInt", (inst, def) => {
     $ZodBigInt.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => bigintProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => bigintProcessor(inst, ctx, json2, params);
     inst.gte = (value, params) => inst.check(_gte(value, params));
     inst.min = (value, params) => inst.check(_gte(value, params));
     inst.gt = (value, params) => inst.check(_gt(value, params));
@@ -13470,42 +13470,42 @@ var init_schemas2 = __esm(() => {
   ZodSymbol = /* @__PURE__ */ $constructor("ZodSymbol", (inst, def) => {
     $ZodSymbol.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => symbolProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => symbolProcessor(inst, ctx, json2, params);
   });
   ZodUndefined = /* @__PURE__ */ $constructor("ZodUndefined", (inst, def) => {
     $ZodUndefined.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => undefinedProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => undefinedProcessor(inst, ctx, json2, params);
   });
   ZodNull = /* @__PURE__ */ $constructor("ZodNull", (inst, def) => {
     $ZodNull.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => nullProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => nullProcessor(inst, ctx, json2, params);
   });
   ZodAny = /* @__PURE__ */ $constructor("ZodAny", (inst, def) => {
     $ZodAny.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => anyProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => anyProcessor(inst, ctx, json2, params);
   });
   ZodUnknown = /* @__PURE__ */ $constructor("ZodUnknown", (inst, def) => {
     $ZodUnknown.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => unknownProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => unknownProcessor(inst, ctx, json2, params);
   });
   ZodNever = /* @__PURE__ */ $constructor("ZodNever", (inst, def) => {
     $ZodNever.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => neverProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => neverProcessor(inst, ctx, json2, params);
   });
   ZodVoid = /* @__PURE__ */ $constructor("ZodVoid", (inst, def) => {
     $ZodVoid.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => voidProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => voidProcessor(inst, ctx, json2, params);
   });
   ZodDate = /* @__PURE__ */ $constructor("ZodDate", (inst, def) => {
     $ZodDate.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => dateProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => dateProcessor(inst, ctx, json2, params);
     inst.min = (value, params) => inst.check(_gte(value, params));
     inst.max = (value, params) => inst.check(_lte(value, params));
     const c = inst._zod.bag;
@@ -13515,7 +13515,7 @@ var init_schemas2 = __esm(() => {
   ZodArray = /* @__PURE__ */ $constructor("ZodArray", (inst, def) => {
     $ZodArray.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => arrayProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => arrayProcessor(inst, ctx, json2, params);
     inst.element = def.element;
     _installLazyMethods(inst, "ZodArray", {
       min(n, params) {
@@ -13538,7 +13538,7 @@ var init_schemas2 = __esm(() => {
   ZodObject = /* @__PURE__ */ $constructor("ZodObject", (inst, def) => {
     $ZodObjectJIT.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => objectProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => objectProcessor(inst, ctx, json2, params);
     exports_util.defineLazy(inst, "shape", () => {
       return def.shape;
     });
@@ -13587,13 +13587,13 @@ var init_schemas2 = __esm(() => {
   ZodUnion = /* @__PURE__ */ $constructor("ZodUnion", (inst, def) => {
     $ZodUnion.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => unionProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => unionProcessor(inst, ctx, json2, params);
     inst.options = def.options;
   });
   ZodXor = /* @__PURE__ */ $constructor("ZodXor", (inst, def) => {
     ZodUnion.init(inst, def);
     $ZodXor.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => unionProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => unionProcessor(inst, ctx, json2, params);
     inst.options = def.options;
   });
   ZodDiscriminatedUnion = /* @__PURE__ */ $constructor("ZodDiscriminatedUnion", (inst, def) => {
@@ -13603,12 +13603,12 @@ var init_schemas2 = __esm(() => {
   ZodIntersection = /* @__PURE__ */ $constructor("ZodIntersection", (inst, def) => {
     $ZodIntersection.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => intersectionProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => intersectionProcessor(inst, ctx, json2, params);
   });
   ZodTuple = /* @__PURE__ */ $constructor("ZodTuple", (inst, def) => {
     $ZodTuple.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => tupleProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => tupleProcessor(inst, ctx, json2, params);
     inst.rest = (rest) => inst.clone({
       ...inst._zod.def,
       rest
@@ -13617,14 +13617,14 @@ var init_schemas2 = __esm(() => {
   ZodRecord = /* @__PURE__ */ $constructor("ZodRecord", (inst, def) => {
     $ZodRecord.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => recordProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => recordProcessor(inst, ctx, json2, params);
     inst.keyType = def.keyType;
     inst.valueType = def.valueType;
   });
   ZodMap = /* @__PURE__ */ $constructor("ZodMap", (inst, def) => {
     $ZodMap.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => mapProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => mapProcessor(inst, ctx, json2, params);
     inst.keyType = def.keyType;
     inst.valueType = def.valueType;
     inst.min = (...args) => inst.check(_minSize(...args));
@@ -13635,7 +13635,7 @@ var init_schemas2 = __esm(() => {
   ZodSet = /* @__PURE__ */ $constructor("ZodSet", (inst, def) => {
     $ZodSet.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => setProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => setProcessor(inst, ctx, json2, params);
     inst.min = (...args) => inst.check(_minSize(...args));
     inst.nonempty = (params) => inst.check(_minSize(1, params));
     inst.max = (...args) => inst.check(_maxSize(...args));
@@ -13644,7 +13644,7 @@ var init_schemas2 = __esm(() => {
   ZodEnum = /* @__PURE__ */ $constructor("ZodEnum", (inst, def) => {
     $ZodEnum.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => enumProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => enumProcessor(inst, ctx, json2, params);
     inst.enum = def.entries;
     inst.options = Object.values(def.entries);
     const keys = new Set(Object.keys(def.entries));
@@ -13682,7 +13682,7 @@ var init_schemas2 = __esm(() => {
   ZodLiteral = /* @__PURE__ */ $constructor("ZodLiteral", (inst, def) => {
     $ZodLiteral.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => literalProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => literalProcessor(inst, ctx, json2, params);
     inst.values = new Set(def.values);
     Object.defineProperty(inst, "value", {
       get() {
@@ -13696,7 +13696,7 @@ var init_schemas2 = __esm(() => {
   ZodFile = /* @__PURE__ */ $constructor("ZodFile", (inst, def) => {
     $ZodFile.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => fileProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => fileProcessor(inst, ctx, json2, params);
     inst.min = (size, params) => inst.check(_minSize(size, params));
     inst.max = (size, params) => inst.check(_maxSize(size, params));
     inst.mime = (types, params) => inst.check(_mime(Array.isArray(types) ? types : [types], params));
@@ -13704,7 +13704,7 @@ var init_schemas2 = __esm(() => {
   ZodTransform = /* @__PURE__ */ $constructor("ZodTransform", (inst, def) => {
     $ZodTransform.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => transformProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => transformProcessor(inst, ctx, json2, params);
     inst._zod.parse = (payload, _ctx) => {
       if (_ctx.direction === "backward") {
         throw new $ZodEncodeError(inst.constructor.name);
@@ -13738,62 +13738,62 @@ var init_schemas2 = __esm(() => {
   ZodOptional = /* @__PURE__ */ $constructor("ZodOptional", (inst, def) => {
     $ZodOptional.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => optionalProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => optionalProcessor(inst, ctx, json2, params);
     inst.unwrap = () => inst._zod.def.innerType;
   });
   ZodExactOptional = /* @__PURE__ */ $constructor("ZodExactOptional", (inst, def) => {
     $ZodExactOptional.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => optionalProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => optionalProcessor(inst, ctx, json2, params);
     inst.unwrap = () => inst._zod.def.innerType;
   });
   ZodNullable = /* @__PURE__ */ $constructor("ZodNullable", (inst, def) => {
     $ZodNullable.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => nullableProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => nullableProcessor(inst, ctx, json2, params);
     inst.unwrap = () => inst._zod.def.innerType;
   });
   ZodDefault = /* @__PURE__ */ $constructor("ZodDefault", (inst, def) => {
     $ZodDefault.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => defaultProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => defaultProcessor(inst, ctx, json2, params);
     inst.unwrap = () => inst._zod.def.innerType;
     inst.removeDefault = inst.unwrap;
   });
   ZodPrefault = /* @__PURE__ */ $constructor("ZodPrefault", (inst, def) => {
     $ZodPrefault.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => prefaultProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => prefaultProcessor(inst, ctx, json2, params);
     inst.unwrap = () => inst._zod.def.innerType;
   });
   ZodNonOptional = /* @__PURE__ */ $constructor("ZodNonOptional", (inst, def) => {
     $ZodNonOptional.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => nonoptionalProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => nonoptionalProcessor(inst, ctx, json2, params);
     inst.unwrap = () => inst._zod.def.innerType;
   });
   ZodSuccess = /* @__PURE__ */ $constructor("ZodSuccess", (inst, def) => {
     $ZodSuccess.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => successProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => successProcessor(inst, ctx, json2, params);
     inst.unwrap = () => inst._zod.def.innerType;
   });
   ZodCatch = /* @__PURE__ */ $constructor("ZodCatch", (inst, def) => {
     $ZodCatch.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => catchProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => catchProcessor(inst, ctx, json2, params);
     inst.unwrap = () => inst._zod.def.innerType;
     inst.removeCatch = inst.unwrap;
   });
   ZodNaN = /* @__PURE__ */ $constructor("ZodNaN", (inst, def) => {
     $ZodNaN.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => nanProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => nanProcessor(inst, ctx, json2, params);
   });
   ZodPipe = /* @__PURE__ */ $constructor("ZodPipe", (inst, def) => {
     $ZodPipe.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => pipeProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => pipeProcessor(inst, ctx, json2, params);
     inst.in = def.in;
     inst.out = def.out;
   });
@@ -13808,35 +13808,35 @@ var init_schemas2 = __esm(() => {
   ZodReadonly = /* @__PURE__ */ $constructor("ZodReadonly", (inst, def) => {
     $ZodReadonly.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => readonlyProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => readonlyProcessor(inst, ctx, json2, params);
     inst.unwrap = () => inst._zod.def.innerType;
   });
   ZodTemplateLiteral = /* @__PURE__ */ $constructor("ZodTemplateLiteral", (inst, def) => {
     $ZodTemplateLiteral.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => templateLiteralProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => templateLiteralProcessor(inst, ctx, json2, params);
   });
   ZodLazy = /* @__PURE__ */ $constructor("ZodLazy", (inst, def) => {
     $ZodLazy.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => lazyProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => lazyProcessor(inst, ctx, json2, params);
     inst.unwrap = () => inst._zod.def.getter();
   });
   ZodPromise = /* @__PURE__ */ $constructor("ZodPromise", (inst, def) => {
     $ZodPromise.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => promiseProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => promiseProcessor(inst, ctx, json2, params);
     inst.unwrap = () => inst._zod.def.innerType;
   });
   ZodFunction = /* @__PURE__ */ $constructor("ZodFunction", (inst, def) => {
     $ZodFunction.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => functionProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => functionProcessor(inst, ctx, json2, params);
   });
   ZodCustom = /* @__PURE__ */ $constructor("ZodCustom", (inst, def) => {
     $ZodCustom.init(inst, def);
     ZodType.init(inst, def);
-    inst._zod.processJSONSchema = (ctx, json, params) => customProcessor(inst, ctx, json, params);
+    inst._zod.processJSONSchema = (ctx, json2, params) => customProcessor(inst, ctx, json2, params);
   });
   describe2 = describe;
   meta2 = meta;
@@ -14472,7 +14472,7 @@ __export(exports_external, {
   ksuid: () => ksuid2,
   keyof: () => keyof,
   jwt: () => jwt,
-  json: () => json,
+  json: () => json2,
   iso: () => exports_iso,
   ipv6: () => ipv62,
   ipv4: () => ipv42,
@@ -14734,7 +14734,7 @@ __export(exports_zod, {
   ksuid: () => ksuid2,
   keyof: () => keyof,
   jwt: () => jwt,
-  json: () => json,
+  json: () => json2,
   iso: () => exports_iso,
   ipv6: () => ipv62,
   ipv4: () => ipv42,
@@ -15896,7 +15896,22 @@ var PG_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_sync_table_clocks_updated ON knowledge_sync_table_clocks(updated_at)`,
   `CREATE INDEX IF NOT EXISTS idx_sync_imports_source ON knowledge_sync_imports(source_machine_id, applied_at)`,
   `CREATE INDEX IF NOT EXISTS idx_sync_imports_target ON knowledge_sync_imports(target_machine_id, applied_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_sync_imports_status ON knowledge_sync_imports(status)`
+  `CREATE INDEX IF NOT EXISTS idx_sync_imports_status ON knowledge_sync_imports(status)`,
+  `CREATE TABLE IF NOT EXISTS knowledge_items (
+    id TEXT PRIMARY KEY,
+    short_id TEXT,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    url TEXT,
+    tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    archived BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TEXT NOT NULL DEFAULT NOW()::text,
+    updated_at TEXT NOT NULL DEFAULT NOW()::text
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_short_id ON knowledge_items(short_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_archived ON knowledge_items(archived)`,
+  `CREATE INDEX IF NOT EXISTS idx_knowledge_items_created ON knowledge_items(created_at)`
 ];
 
 // src/generated/storage-kit/mode.ts
@@ -16650,187 +16665,14 @@ function coerceForSqlite(value) {
     return JSON.stringify(value);
   return String(value);
 }
-// src/artifact-store.ts
-import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync3, statSync, writeFileSync as writeFileSync2 } from "fs";
-import { dirname as dirname2, join as join2, relative, sep } from "path";
-import { pathToFileURL } from "url";
-function normalizeArtifactKey(key) {
-  const raw = key.replace(/\\/g, "/").trim();
-  if (!raw || raw.startsWith("/")) {
-    throw new Error(`Invalid artifact key: ${key}`);
-  }
-  const segments = raw.split("/").filter(Boolean);
-  if (segments.length === 0 || segments.some((segment) => segment === "." || segment === "..")) {
-    throw new Error(`Invalid artifact key: ${key}`);
-  }
-  return segments.join("/");
-}
-function assertInside(root, target) {
-  const rel = relative(root, target);
-  if (rel.startsWith("..") || rel === ".." || rel.startsWith(`..${sep}`)) {
-    throw new Error(`Artifact path escapes root: ${target}`);
-  }
-}
-function s3UserMetadata(metadata) {
-  if (!metadata)
-    return;
-  const output = {};
-  for (const [key, value] of Object.entries(metadata)) {
-    if (typeof value === "string")
-      output[key] = value;
-    else if (typeof value === "number" || typeof value === "boolean")
-      output[key] = String(value);
-  }
-  return Object.keys(output).length > 0 ? output : undefined;
-}
-
-class LocalArtifactStore {
-  root;
-  type = "local";
-  canRead = true;
-  canWrite = true;
-  constructor(root) {
-    this.root = root;
-    mkdirSync2(root, { recursive: true });
-  }
-  async put(entry) {
-    const key = normalizeArtifactKey(entry.key);
-    const path = join2(this.root, key);
-    assertInside(this.root, path);
-    mkdirSync2(dirname2(path), { recursive: true });
-    writeFileSync2(path, entry.body);
-    return { key, uri: pathToFileURL(path).href, modified_at: statSync(path).mtime.toISOString() };
-  }
-  async getText(key) {
-    const normalizedKey = normalizeArtifactKey(key);
-    const path = join2(this.root, normalizedKey);
-    assertInside(this.root, path);
-    return readFileSync3(path, "utf8");
-  }
-  async exists(key) {
-    const normalizedKey = normalizeArtifactKey(key);
-    const path = join2(this.root, normalizedKey);
-    assertInside(this.root, path);
-    return existsSync2(path);
-  }
-}
-
-class S3ArtifactStore {
-  options;
-  type = "s3";
-  canRead = true;
-  canWrite = true;
-  client;
-  constructor(options) {
-    this.options = options;
-    this.client = options.client;
-  }
-  async getClient() {
-    if (this.client)
-      return this.client;
-    const [{ S3Client }, { fromIni }] = await Promise.all([
-      import("@aws-sdk/client-s3"),
-      import("@aws-sdk/credential-providers")
-    ]);
-    this.client = new S3Client({
-      region: this.options.region,
-      credentials: this.options.profile ? fromIni({ profile: this.options.profile }) : undefined,
-      maxAttempts: this.options.max_attempts
-    });
-    return this.client;
-  }
-  objectKey(key) {
-    const normalizedKey = normalizeArtifactKey(key);
-    const prefix = this.options.prefix ? normalizeArtifactKey(this.options.prefix) : "";
-    return prefix ? `${prefix}/${normalizedKey}` : normalizedKey;
-  }
-  async put(entry) {
-    const [{ PutObjectCommand }, client] = await Promise.all([
-      import("@aws-sdk/client-s3"),
-      this.getClient()
-    ]);
-    const logicalKey = normalizeArtifactKey(entry.key);
-    const key = this.objectKey(logicalKey);
-    await client.send(new PutObjectCommand({
-      Bucket: this.options.bucket,
-      Key: key,
-      Body: entry.body,
-      ContentType: entry.content_type,
-      Metadata: s3UserMetadata(entry.metadata),
-      ServerSideEncryption: this.options.server_side_encryption,
-      SSEKMSKeyId: this.options.kms_key_id
-    }));
-    return { key: logicalKey, uri: `s3://${this.options.bucket}/${key}`, modified_at: new Date().toISOString() };
-  }
-  async getText(key) {
-    const [{ GetObjectCommand }, client] = await Promise.all([
-      import("@aws-sdk/client-s3"),
-      this.getClient()
-    ]);
-    const objectKey = this.objectKey(key);
-    const response = await client.send(new GetObjectCommand({
-      Bucket: this.options.bucket,
-      Key: objectKey
-    }));
-    if (!response.Body)
-      return "";
-    return await response.Body.transformToString();
-  }
-  async exists(key) {
-    const [{ HeadObjectCommand }, client] = await Promise.all([
-      import("@aws-sdk/client-s3"),
-      this.getClient()
-    ]);
-    const objectKey = this.objectKey(key);
-    try {
-      await client.send(new HeadObjectCommand({
-        Bucket: this.options.bucket,
-        Key: objectKey
-      }));
-      return true;
-    } catch (error) {
-      const name = error instanceof Error ? error.name : "";
-      if (name === "NotFound" || name === "NoSuchKey" || name === "NotFoundError")
-        return false;
-      throw error;
-    }
-  }
-}
-function createArtifactStore(config, workspace) {
-  if (config.storage.type === "s3") {
-    if (!config.storage.s3?.bucket)
-      throw new Error("S3 artifact storage requires storage.s3.bucket");
-    return new S3ArtifactStore({
-      bucket: config.storage.s3.bucket,
-      prefix: config.storage.s3.prefix,
-      region: config.storage.s3.region,
-      profile: config.storage.s3.profile,
-      max_attempts: config.storage.s3.max_attempts,
-      server_side_encryption: config.storage.s3.server_side_encryption,
-      kms_key_id: config.storage.s3.kms_key_id
-    });
-  }
-  return new LocalArtifactStore(workspace.artifactsDir);
-}
-
-// src/service.ts
-import { createHash as createHash18 } from "crypto";
-import { spawnSync as spawnSync2 } from "child_process";
-import { existsSync as existsSync12, readFileSync as readFileSync13 } from "fs";
-import { hostname as hostname5 } from "os";
-import { join as join6, resolve as resolve5 } from "path";
-
-// src/app-wiki.ts
-import { createHash as createHash6, randomUUID as randomUUID3 } from "crypto";
-
-// src/storage-contract.ts
-import { createHash as createHash2, randomUUID } from "crypto";
-import { pathToFileURL as pathToFileURL2 } from "url";
+// src/serve.ts
+import { readFileSync as readFileSync5 } from "fs";
+import { verifyApiKey, ApiKeyStore } from "@hasna/contracts/auth";
 
 // src/auth.ts
-import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync4, unlinkSync, writeFileSync as writeFileSync3 } from "fs";
+import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync as readFileSync3, unlinkSync, writeFileSync as writeFileSync2 } from "fs";
 import { homedir as homedir2 } from "os";
-import { dirname as dirname3, join as join3 } from "path";
+import { dirname as dirname2, join as join2 } from "path";
 var DEFAULT_KNOWLEDGE_API_URL = "https://knowledge.hasna.xyz";
 function normalizeKnowledgeApiOrigin(apiUrl) {
   const url = new URL(apiUrl);
@@ -16850,8 +16692,8 @@ function normalizeKnowledgeApiOrigin(apiUrl) {
 function knowledgeAuthPath(env = process.env) {
   if (env.HASNA_KNOWLEDGE_AUTH_PATH)
     return env.HASNA_KNOWLEDGE_AUTH_PATH;
-  const root = env.HASNA_KNOWLEDGE_AUTH_DIR ?? join3(homedir2(), ".hasna", "knowledge");
-  return join3(root, "auth.json");
+  const root = env.HASNA_KNOWLEDGE_AUTH_DIR ?? join2(homedir2(), ".hasna", "knowledge");
+  return join2(root, "auth.json");
 }
 function resolveKnowledgeApiUrl(config, env = process.env) {
   return normalizeKnowledgeApiOrigin(env.KNOWLEDGE_API_URL ?? config?.hosted?.api_url ?? DEFAULT_KNOWLEDGE_API_URL);
@@ -16859,9 +16701,9 @@ function resolveKnowledgeApiUrl(config, env = process.env) {
 function getKnowledgeAuth(env = process.env) {
   try {
     const path = knowledgeAuthPath(env);
-    if (!existsSync3(path))
+    if (!existsSync2(path))
       return null;
-    const parsed = JSON.parse(readFileSync4(path, "utf8"));
+    const parsed = JSON.parse(readFileSync3(path, "utf8"));
     return typeof parsed.api_key === "string" && parsed.api_key.length > 0 ? parsed : null;
   } catch {
     return null;
@@ -16874,8 +16716,8 @@ function saveKnowledgeAuth(auth, env = process.env) {
     api_url: auth.api_url ? normalizeKnowledgeApiOrigin(auth.api_url) : undefined,
     created_at: auth.created_at ?? new Date().toISOString()
   };
-  mkdirSync3(dirname3(path), { recursive: true, mode: 448 });
-  writeFileSync3(path, `${JSON.stringify(stored, null, 2)}
+  mkdirSync2(dirname2(path), { recursive: true, mode: 448 });
+  writeFileSync2(path, `${JSON.stringify(stored, null, 2)}
 `, { mode: 384 });
   return stored;
 }
@@ -17070,7 +16912,678 @@ class RemoteKnowledgeClient {
   }
 }
 
+// src/store.ts
+import { readFileSync as readFileSync4, writeFileSync as writeFileSync3, existsSync as existsSync3, renameSync, unlinkSync as unlinkSync2 } from "fs";
+import { randomUUID } from "crypto";
+function defaultStorePath() {
+  return workspaceForHome(globalKnowledgeHome()).jsonStorePath;
+}
+function ensureStore(path) {
+  if (!existsSync3(path)) {
+    ensureParentDir(path);
+    if (path === defaultStorePath() && existsSync3(legacyGlobalStorePath())) {
+      writeFileSync3(path, readFileSync4(legacyGlobalStorePath(), "utf8"));
+    } else {
+      writeFileSync3(path, JSON.stringify({ items: [] }, null, 2));
+    }
+  }
+}
+function loadStoreIfExists(path) {
+  if (!existsSync3(path))
+    return { exists: false, items: [] };
+  const raw = readFileSync4(path, "utf8");
+  const parsed = JSON.parse(raw);
+  if (!parsed || !Array.isArray(parsed.items)) {
+    return { exists: true, items: [] };
+  }
+  return { exists: true, items: parsed.items };
+}
+function lockPath(path) {
+  return `${path}.lock`;
+}
+function acquireLock(lockPath2, ownerId) {
+  const maxWait = 5000;
+  const interval = 50;
+  const start = Date.now();
+  while (Date.now() - start < maxWait) {
+    try {
+      if (!existsSync3(lockPath2)) {
+        writeFileSync3(lockPath2, JSON.stringify({ owner: ownerId, ts: Date.now() }));
+        return;
+      }
+      const lock = JSON.parse(readFileSync4(lockPath2, "utf8"));
+      if (Date.now() - lock.ts > 1e4) {
+        unlinkSync2(lockPath2);
+      }
+    } catch {}
+    const start2 = Date.now();
+    while (Date.now() - start2 < interval) {}
+  }
+  throw new Error(`Could not acquire lock on ${lockPath2} after ${maxWait}ms`);
+}
+function releaseLock(lockPath2, ownerId) {
+  try {
+    if (existsSync3(lockPath2)) {
+      const lock = JSON.parse(readFileSync4(lockPath2, "utf8"));
+      if (lock.owner === ownerId) {
+        unlinkSync2(lockPath2);
+      }
+    }
+  } catch {}
+}
+function saveStore(path, store) {
+  const tmp = `${path}.tmp.${randomUUID()}`;
+  writeFileSync3(tmp, JSON.stringify(store, null, 2));
+  renameSync(tmp, path);
+}
+function withLock(path, fn, options = {}) {
+  const owner = randomUUID();
+  const lpath = lockPath(path);
+  if (options.createParent)
+    ensureParentDir(lpath);
+  acquireLock(lpath, owner);
+  try {
+    return fn();
+  } finally {
+    releaseLock(lpath, owner);
+  }
+}
+function makeId() {
+  return `k_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+function makeShortId(id) {
+  return id.replace(/^k_/, "").slice(0, 12);
+}
+
+// src/serve.ts
+var KNOWLEDGE_SERVE_APP = "knowledge";
+function normalizeCloudDatabaseUrl(env = process.env) {
+  const key = "HASNA_KNOWLEDGE_DATABASE_URL";
+  const url = env[key] ?? env.KNOWLEDGE_DATABASE_URL;
+  if (!url)
+    return url;
+  const lower = url.toLowerCase();
+  const needsCompat = (lower.includes("sslmode=require") || lower.includes("sslmode=prefer")) && !lower.includes("uselibpqcompat");
+  if (!needsCompat)
+    return url;
+  const updated = url.includes("?") ? `${url}&uselibpqcompat=true` : `${url}?uselibpqcompat=true`;
+  env[key] = updated;
+  return updated;
+}
+function resolveVersion() {
+  if (process.env.HASNA_KNOWLEDGE_VERSION)
+    return process.env.HASNA_KNOWLEDGE_VERSION;
+  try {
+    const url = new URL("../package.json", import.meta.url);
+    const pkg = JSON.parse(readFileSync5(url, "utf8"));
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return process.env.npm_package_version ?? "0.0.0";
+  }
+}
+function resolveSigningSecret(env = process.env) {
+  const secret = env.HASNA_KNOWLEDGE_API_SIGNING_KEY ?? env.API_KEY_SIGNING_SECRET ?? env.HASNA_API_SIGNING_KEY;
+  if (!secret) {
+    throw new Error("knowledge-serve requires an API signing secret: set HASNA_KNOWLEDGE_API_SIGNING_KEY " + "(or API_KEY_SIGNING_SECRET / HASNA_API_SIGNING_KEY).");
+  }
+  return secret;
+}
+function rowToItem(row) {
+  const parseJson = (value, fallback) => {
+    if (value == null)
+      return fallback;
+    if (typeof value === "string") {
+      try {
+        return JSON.parse(value);
+      } catch {
+        return fallback;
+      }
+    }
+    return value;
+  };
+  return {
+    id: String(row.id),
+    short_id: row.short_id ?? null,
+    title: String(row.title ?? ""),
+    content: String(row.content ?? ""),
+    url: row.url ?? null,
+    tags: parseJson(row.tags, []),
+    metadata: parseJson(row.metadata, {}),
+    archived: Boolean(row.archived),
+    created_at: String(row.created_at),
+    updated_at: String(row.updated_at)
+  };
+}
+
+class NoteRepo {
+  client;
+  constructor(client) {
+    this.client = client;
+  }
+  async create(input) {
+    if (!input.title || typeof input.title !== "string") {
+      throw new HttpError(400, "title is required");
+    }
+    const id = makeId();
+    const now = new Date().toISOString();
+    const row = await this.client.get(`INSERT INTO knowledge_items (id, short_id, title, content, url, tags, metadata, archived, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7::jsonb,FALSE,$8,$9)
+       RETURNING *`, [
+      id,
+      makeShortId(id),
+      input.title,
+      input.content ?? "",
+      input.url ?? null,
+      JSON.stringify(input.tags ?? []),
+      JSON.stringify(input.metadata ?? {}),
+      now,
+      now
+    ]);
+    return rowToItem(row);
+  }
+  async list(options = {}) {
+    const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
+    const offset = Math.max(options.offset ?? 0, 0);
+    const where = [];
+    const params = [];
+    if (!options.includeArchived)
+      where.push("archived = FALSE");
+    if (options.search) {
+      params.push(`%${options.search}%`);
+      where.push(`(title ILIKE $${params.length} OR content ILIKE $${params.length})`);
+    }
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const totalRow = await this.client.get(`SELECT count(*)::text AS count FROM knowledge_items ${whereSql}`, params);
+    const rows = await this.client.many(`SELECT * FROM knowledge_items ${whereSql} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`, params);
+    return { items: rows.map(rowToItem), total: Number(totalRow?.count ?? 0) };
+  }
+  async get(idOrShort) {
+    const row = await this.client.get(`SELECT * FROM knowledge_items WHERE id = $1 OR short_id = $1 LIMIT 1`, [idOrShort]);
+    return row ? rowToItem(row) : null;
+  }
+  async update(idOrShort, patch) {
+    const existing = await this.get(idOrShort);
+    if (!existing)
+      return null;
+    const sets = [];
+    const params = [];
+    const push = (col, val, cast = "") => {
+      params.push(val);
+      sets.push(`${col} = $${params.length}${cast}`);
+    };
+    if (patch.title !== undefined)
+      push("title", patch.title);
+    if (patch.content !== undefined)
+      push("content", patch.content);
+    if (patch.url !== undefined)
+      push("url", patch.url);
+    if (patch.tags !== undefined)
+      push("tags", JSON.stringify(patch.tags), "::jsonb");
+    if (patch.metadata !== undefined)
+      push("metadata", JSON.stringify(patch.metadata), "::jsonb");
+    if (patch.archived !== undefined)
+      push("archived", patch.archived);
+    push("updated_at", new Date().toISOString());
+    params.push(existing.id);
+    const row = await this.client.get(`UPDATE knowledge_items SET ${sets.join(", ")} WHERE id = $${params.length} RETURNING *`, params);
+    return row ? rowToItem(row) : null;
+  }
+  async delete(idOrShort) {
+    const existing = await this.get(idOrShort);
+    if (!existing)
+      return false;
+    await this.client.execute(`DELETE FROM knowledge_items WHERE id = $1`, [existing.id]);
+    return true;
+  }
+}
+function knowledgeOpenApi(version) {
+  const noteSchema = {
+    type: "object",
+    properties: {
+      id: { type: "string" },
+      short_id: { type: "string", nullable: true },
+      title: { type: "string" },
+      content: { type: "string" },
+      url: { type: "string", nullable: true },
+      tags: { type: "array", items: { type: "string" } },
+      metadata: { type: "object", additionalProperties: true },
+      archived: { type: "boolean" },
+      created_at: { type: "string" },
+      updated_at: { type: "string" }
+    },
+    required: ["id", "title", "content", "tags", "archived", "created_at", "updated_at"]
+  };
+  const noteInput = {
+    type: "object",
+    properties: {
+      title: { type: "string" },
+      content: { type: "string" },
+      url: { type: "string", nullable: true },
+      tags: { type: "array", items: { type: "string" } },
+      metadata: { type: "object", additionalProperties: true }
+    },
+    required: ["title"]
+  };
+  const notePatch = {
+    type: "object",
+    properties: {
+      title: { type: "string" },
+      content: { type: "string" },
+      url: { type: "string", nullable: true },
+      tags: { type: "array", items: { type: "string" } },
+      metadata: { type: "object", additionalProperties: true },
+      archived: { type: "boolean" }
+    }
+  };
+  return {
+    openapi: "3.0.3",
+    info: { title: "Knowledge", version, description: "@hasna/knowledge self-hosted HTTP API" },
+    components: {
+      securitySchemes: { apiKey: { type: "apiKey", in: "header", name: "x-api-key" } },
+      schemas: {
+        Note: noteSchema,
+        NoteInput: noteInput,
+        NotePatch: notePatch,
+        NoteList: {
+          type: "object",
+          properties: {
+            items: { type: "array", items: { $ref: "#/components/schemas/Note" } },
+            total: { type: "integer" }
+          },
+          required: ["items", "total"]
+        }
+      }
+    },
+    security: [{ apiKey: [] }],
+    paths: {
+      "/v1/notes": {
+        get: {
+          operationId: "listNotes",
+          summary: "List knowledge items",
+          parameters: [
+            { name: "limit", in: "query", schema: { type: "integer" } },
+            { name: "offset", in: "query", schema: { type: "integer" } },
+            { name: "search", in: "query", schema: { type: "string" } }
+          ],
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/NoteList" } } } }
+          }
+        },
+        post: {
+          operationId: "createNote",
+          summary: "Create a knowledge item",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/NoteInput" } } }
+          },
+          responses: {
+            "201": { content: { "application/json": { schema: { $ref: "#/components/schemas/Note" } } } }
+          }
+        }
+      },
+      "/v1/notes/{id}": {
+        get: {
+          operationId: "getNote",
+          summary: "Fetch a knowledge item",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/Note" } } } }
+          }
+        },
+        patch: {
+          operationId: "updateNote",
+          summary: "Update a knowledge item",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/NotePatch" } } }
+          },
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/Note" } } } }
+          }
+        },
+        delete: {
+          operationId: "deleteNote",
+          summary: "Delete a knowledge item",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "204": {} }
+        }
+      },
+      "/v1/registry": {
+        get: {
+          operationId: "getRegistry",
+          summary: "Knowledge registry contract",
+          responses: {
+            "200": { content: { "application/json": { schema: { type: "object", additionalProperties: true } } } }
+          }
+        }
+      }
+    }
+  };
+}
+
+class HttpError extends Error {
+  status;
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+function json(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" }
+  });
+}
+function createServeHandler(deps) {
+  const repo = new NoteRepo(deps.client);
+  const mode2 = "cloud";
+  const authOrThrow = async (req, requiredScopes) => {
+    const url = new URL(req.url);
+    const decision = await deps.verifier.authenticate(req.headers, {
+      method: req.method,
+      path: url.pathname,
+      requiredScopes
+    });
+    if (decision.ok === false) {
+      throw new HttpError(decision.status, decision.message);
+    }
+    deps.store.touchLastUsed(decision.principal.kid).catch(() => {});
+    return decision.principal;
+  };
+  return async (req) => {
+    const url = new URL(req.url);
+    const path = url.pathname.replace(/\/+$/, "") || "/";
+    const method = req.method.toUpperCase();
+    try {
+      if (path === "/health" && method === "GET") {
+        return json({ status: "ok", version: deps.version, mode: mode2 });
+      }
+      if (path === "/version" && method === "GET") {
+        return json({ status: "ok", version: deps.version, mode: mode2 });
+      }
+      if (path === "/ready" && method === "GET") {
+        try {
+          await deps.client.query("SELECT 1");
+          return json({ status: "ready", version: deps.version, mode: mode2 });
+        } catch {
+          return json({ status: "unavailable", version: deps.version, mode: mode2 }, 503);
+        }
+      }
+      if (path === "/openapi.json" && method === "GET") {
+        return json(knowledgeOpenApi(deps.version));
+      }
+      if (path === "/v1/registry" && method === "GET") {
+        await authOrThrow(req, ["knowledge:read"]);
+        return json(knowledgeRegistryContract({
+          mode: "hosted",
+          sourceSchemes: ["open-files", "s3", "web", "file"],
+          storageType: "s3",
+          artifactUriPrefix: process.env.HASNA_KNOWLEDGE_S3_PREFIX ?? null
+        }));
+      }
+      if (path === "/v1/notes") {
+        if (method === "GET") {
+          await authOrThrow(req, ["knowledge:read"]);
+          const result = await repo.list({
+            limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : undefined,
+            offset: url.searchParams.has("offset") ? Number(url.searchParams.get("offset")) : undefined,
+            search: url.searchParams.get("search") ?? undefined,
+            includeArchived: url.searchParams.get("includeArchived") === "true"
+          });
+          return json(result);
+        }
+        if (method === "POST") {
+          await authOrThrow(req, ["knowledge:write"]);
+          const body = await req.json().catch(() => ({}));
+          const item = await repo.create(body);
+          return json(item, 201);
+        }
+        return json({ error: "method_not_allowed" }, 405);
+      }
+      const noteMatch = path.match(/^\/v1\/notes\/([^/]+)$/);
+      if (noteMatch) {
+        const id = decodeURIComponent(noteMatch[1]);
+        if (method === "GET") {
+          await authOrThrow(req, ["knowledge:read"]);
+          const item = await repo.get(id);
+          return item ? json(item) : json({ error: "not_found" }, 404);
+        }
+        if (method === "PATCH") {
+          await authOrThrow(req, ["knowledge:write"]);
+          const body = await req.json().catch(() => ({}));
+          const item = await repo.update(id, body);
+          return item ? json(item) : json({ error: "not_found" }, 404);
+        }
+        if (method === "DELETE") {
+          await authOrThrow(req, ["knowledge:write"]);
+          const ok = await repo.delete(id);
+          return ok ? new Response(null, { status: 204 }) : json({ error: "not_found" }, 404);
+        }
+        return json({ error: "method_not_allowed" }, 405);
+      }
+      return json({ error: "not_found", path }, 404);
+    } catch (error) {
+      if (error instanceof HttpError) {
+        const reason = error.status === 401 || error.status === 403 ? "unauthorized" : "error";
+        return json({ error: reason, message: error.message }, error.status);
+      }
+      const message = error instanceof Error ? error.message : "internal error";
+      return json({ error: "internal", message }, 500);
+    }
+  };
+}
+async function startKnowledgeServe(options = {}) {
+  const env = options.env ?? process.env;
+  const port = options.port ?? Number(env.PORT ?? env.HASNA_KNOWLEDGE_SERVE_PORT ?? 8080);
+  const hostname = options.hostname ?? env.HOST ?? "0.0.0.0";
+  const version = resolveVersion();
+  normalizeCloudDatabaseUrl(env);
+  const client = createKnowledgeCloudClient();
+  const store = new ApiKeyStore(client);
+  const verifier = verifyApiKey({
+    app: KNOWLEDGE_SERVE_APP,
+    signingSecret: resolveSigningSecret(env),
+    isRevoked: store.isRevoked,
+    audit: (e) => {
+      if (e.outcome === "deny") {
+        console.warn(`[knowledge-serve] auth deny kid=${e.kid ?? "-"} reason=${e.reason} ${e.method} ${e.path}`);
+      }
+    }
+  });
+  const handler = createServeHandler({ client, verifier, store, version });
+  const BunGlobal = globalThis.Bun;
+  if (!BunGlobal?.serve) {
+    throw new Error("knowledge-serve requires the Bun runtime (Bun.serve unavailable).");
+  }
+  const server = BunGlobal.serve({ port, hostname, fetch: handler });
+  console.log(`[knowledge-serve] listening on http://${hostname}:${server.port} (mode=cloud, version=${version})`);
+  return {
+    port: server.port,
+    hostname,
+    stop: async () => {
+      server.stop();
+      await client.close();
+    }
+  };
+}
+
+// src/artifact-store.ts
+import { existsSync as existsSync4, mkdirSync as mkdirSync3, readFileSync as readFileSync6, statSync, writeFileSync as writeFileSync4 } from "fs";
+import { dirname as dirname3, join as join3, relative, sep } from "path";
+import { pathToFileURL } from "url";
+function normalizeArtifactKey(key) {
+  const raw = key.replace(/\\/g, "/").trim();
+  if (!raw || raw.startsWith("/")) {
+    throw new Error(`Invalid artifact key: ${key}`);
+  }
+  const segments = raw.split("/").filter(Boolean);
+  if (segments.length === 0 || segments.some((segment) => segment === "." || segment === "..")) {
+    throw new Error(`Invalid artifact key: ${key}`);
+  }
+  return segments.join("/");
+}
+function assertInside(root, target) {
+  const rel = relative(root, target);
+  if (rel.startsWith("..") || rel === ".." || rel.startsWith(`..${sep}`)) {
+    throw new Error(`Artifact path escapes root: ${target}`);
+  }
+}
+function s3UserMetadata(metadata) {
+  if (!metadata)
+    return;
+  const output = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    if (typeof value === "string")
+      output[key] = value;
+    else if (typeof value === "number" || typeof value === "boolean")
+      output[key] = String(value);
+  }
+  return Object.keys(output).length > 0 ? output : undefined;
+}
+
+class LocalArtifactStore {
+  root;
+  type = "local";
+  canRead = true;
+  canWrite = true;
+  constructor(root) {
+    this.root = root;
+    mkdirSync3(root, { recursive: true });
+  }
+  async put(entry) {
+    const key = normalizeArtifactKey(entry.key);
+    const path = join3(this.root, key);
+    assertInside(this.root, path);
+    mkdirSync3(dirname3(path), { recursive: true });
+    writeFileSync4(path, entry.body);
+    return { key, uri: pathToFileURL(path).href, modified_at: statSync(path).mtime.toISOString() };
+  }
+  async getText(key) {
+    const normalizedKey = normalizeArtifactKey(key);
+    const path = join3(this.root, normalizedKey);
+    assertInside(this.root, path);
+    return readFileSync6(path, "utf8");
+  }
+  async exists(key) {
+    const normalizedKey = normalizeArtifactKey(key);
+    const path = join3(this.root, normalizedKey);
+    assertInside(this.root, path);
+    return existsSync4(path);
+  }
+}
+
+class S3ArtifactStore {
+  options;
+  type = "s3";
+  canRead = true;
+  canWrite = true;
+  client;
+  constructor(options) {
+    this.options = options;
+    this.client = options.client;
+  }
+  async getClient() {
+    if (this.client)
+      return this.client;
+    const [{ S3Client }, { fromIni }] = await Promise.all([
+      import("@aws-sdk/client-s3"),
+      import("@aws-sdk/credential-providers")
+    ]);
+    this.client = new S3Client({
+      region: this.options.region,
+      credentials: this.options.profile ? fromIni({ profile: this.options.profile }) : undefined,
+      maxAttempts: this.options.max_attempts
+    });
+    return this.client;
+  }
+  objectKey(key) {
+    const normalizedKey = normalizeArtifactKey(key);
+    const prefix = this.options.prefix ? normalizeArtifactKey(this.options.prefix) : "";
+    return prefix ? `${prefix}/${normalizedKey}` : normalizedKey;
+  }
+  async put(entry) {
+    const [{ PutObjectCommand }, client] = await Promise.all([
+      import("@aws-sdk/client-s3"),
+      this.getClient()
+    ]);
+    const logicalKey = normalizeArtifactKey(entry.key);
+    const key = this.objectKey(logicalKey);
+    await client.send(new PutObjectCommand({
+      Bucket: this.options.bucket,
+      Key: key,
+      Body: entry.body,
+      ContentType: entry.content_type,
+      Metadata: s3UserMetadata(entry.metadata),
+      ServerSideEncryption: this.options.server_side_encryption,
+      SSEKMSKeyId: this.options.kms_key_id
+    }));
+    return { key: logicalKey, uri: `s3://${this.options.bucket}/${key}`, modified_at: new Date().toISOString() };
+  }
+  async getText(key) {
+    const [{ GetObjectCommand }, client] = await Promise.all([
+      import("@aws-sdk/client-s3"),
+      this.getClient()
+    ]);
+    const objectKey = this.objectKey(key);
+    const response = await client.send(new GetObjectCommand({
+      Bucket: this.options.bucket,
+      Key: objectKey
+    }));
+    if (!response.Body)
+      return "";
+    return await response.Body.transformToString();
+  }
+  async exists(key) {
+    const [{ HeadObjectCommand }, client] = await Promise.all([
+      import("@aws-sdk/client-s3"),
+      this.getClient()
+    ]);
+    const objectKey = this.objectKey(key);
+    try {
+      await client.send(new HeadObjectCommand({
+        Bucket: this.options.bucket,
+        Key: objectKey
+      }));
+      return true;
+    } catch (error) {
+      const name = error instanceof Error ? error.name : "";
+      if (name === "NotFound" || name === "NoSuchKey" || name === "NotFoundError")
+        return false;
+      throw error;
+    }
+  }
+}
+function createArtifactStore(config, workspace) {
+  if (config.storage.type === "s3") {
+    if (!config.storage.s3?.bucket)
+      throw new Error("S3 artifact storage requires storage.s3.bucket");
+    return new S3ArtifactStore({
+      bucket: config.storage.s3.bucket,
+      prefix: config.storage.s3.prefix,
+      region: config.storage.s3.region,
+      profile: config.storage.s3.profile,
+      max_attempts: config.storage.s3.max_attempts,
+      server_side_encryption: config.storage.s3.server_side_encryption,
+      kms_key_id: config.storage.s3.kms_key_id
+    });
+  }
+  return new LocalArtifactStore(workspace.artifactsDir);
+}
+
+// src/service.ts
+import { createHash as createHash18 } from "crypto";
+import { spawnSync as spawnSync2 } from "child_process";
+import { existsSync as existsSync12, readFileSync as readFileSync14 } from "fs";
+import { hostname as hostname5 } from "os";
+import { join as join6, resolve as resolve5 } from "path";
+
+// src/app-wiki.ts
+import { createHash as createHash6, randomUUID as randomUUID4 } from "crypto";
+
 // src/storage-contract.ts
+import { createHash as createHash2, randomUUID as randomUUID2 } from "crypto";
+import { pathToFileURL as pathToFileURL2 } from "url";
 var GENERATED_ARTIFACTS = [
   {
     kind: "schema",
@@ -17304,7 +17817,7 @@ function recordStorageObjects(db, objects, now = new Date) {
         ...entry.modified_at ? { artifact_modified_at: entry.modified_at } : {},
         ...entry.metadata ?? {}
       };
-      statement.run(randomUUID(), entry.uri, entry.kind, entry.content_type ?? null, entry.hash ?? null, entry.size_bytes ?? null, JSON.stringify(metadata), timestamp, timestamp);
+      statement.run(randomUUID2(), entry.uri, entry.kind, entry.content_type ?? null, entry.hash ?? null, entry.size_bytes ?? null, JSON.stringify(metadata), timestamp, timestamp);
     }
   });
   insert(objects);
@@ -17354,12 +17867,12 @@ function withProvenance(metadata, provenance) {
 
 // src/source-ingest.ts
 import { createHash as createHash5 } from "crypto";
-import { existsSync as existsSync5, readFileSync as readFileSync6 } from "fs";
+import { existsSync as existsSync6, readFileSync as readFileSync8 } from "fs";
 import { basename as basename2 } from "path";
 
 // src/manifest-ingest.ts
 import { createHash as createHash4 } from "crypto";
-import { existsSync as existsSync4, readFileSync as readFileSync5 } from "fs";
+import { existsSync as existsSync5, readFileSync as readFileSync7 } from "fs";
 import { basename } from "path";
 
 // src/source-ref.ts
@@ -17435,7 +17948,7 @@ function isSupportedSourceRef(uri) {
 }
 
 // src/safety.ts
-import { createHash as createHash3, randomUUID as randomUUID2 } from "crypto";
+import { createHash as createHash3, randomUUID as randomUUID3 } from "crypto";
 import { relative as relative2, resolve as resolve2, sep as sep2 } from "path";
 function envEnabled(name) {
   const value = process.env[name];
@@ -17530,7 +18043,7 @@ function redactSecrets(text, policy) {
   return { text: output, findings };
 }
 function auditId(input) {
-  return `audit_${createHash3("sha256").update(`${input.event_type}\x00${input.action}\x00${input.target_uri ?? ""}\x00${input.created_at ?? ""}\x00${JSON.stringify(input.metadata ?? {})}\x00${randomUUID2()}`).digest("hex").slice(0, 24)}`;
+  return `audit_${createHash3("sha256").update(`${input.event_type}\x00${input.action}\x00${input.target_uri ?? ""}\x00${input.created_at ?? ""}\x00${JSON.stringify(input.metadata ?? {})}\x00${randomUUID3()}`).digest("hex").slice(0, 24)}`;
 }
 function truncateAuditMetadata(value, depth = 0) {
   if (depth > 6)
@@ -17579,7 +18092,7 @@ function recordRedactionFindings(db, input) {
   for (const finding of input.findings) {
     db.run(`INSERT INTO redaction_findings (id, source_uri, run_id, severity, finding_type, metadata_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`, [
-      `redact_${randomUUID2()}`,
+      `redact_${randomUUID3()}`,
       input.source_uri ?? null,
       input.run_id ?? null,
       finding.severity,
@@ -17823,9 +18336,9 @@ async function readS3Text(uri, config, safetyPolicy) {
 }
 async function readManifestInput(input, config, safetyPolicy, maxInputBytes = DEFAULT_MAX_MANIFEST_INPUT_BYTES) {
   const text = input.startsWith("s3://") ? await readS3Text(input, config, safetyPolicy) : (() => {
-    if (!existsSync4(input))
+    if (!existsSync5(input))
       throw new Error(`Manifest not found: ${input}`);
-    return readFileSync5(input, "utf8");
+    return readFileSync7(input, "utf8");
   })();
   const bytes = Buffer.byteLength(text);
   if (bytes > maxInputBytes) {
@@ -18439,9 +18952,9 @@ function titleForRef(parsed) {
 }
 async function readDirectSourceText(parsed, config, safetyPolicy) {
   if (parsed.kind === "file") {
-    if (!existsSync5(parsed.path))
+    if (!existsSync6(parsed.path))
       throw new Error(`Source file not found: ${parsed.path}`);
-    const text = readFileSync6(parsed.path, "utf8");
+    const text = readFileSync8(parsed.path, "utf8");
     return {
       text,
       contentSource: "file",
@@ -18761,7 +19274,7 @@ function replaceNoteCitations(db, pageId, sourceRefs, now) {
   for (const citation of citations) {
     db.run(`INSERT INTO citations (id, wiki_page_id, chunk_id, source_uri, quote, start_offset, end_offset, metadata_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-      stableId2("cit", `${pageId}\x00${citation.source_uri}\x00${citation.chunk_id ?? randomUUID3()}`),
+      stableId2("cit", `${pageId}\x00${citation.source_uri}\x00${citation.chunk_id ?? randomUUID4()}`),
       pageId,
       citation.chunk_id,
       citation.source_uri,
@@ -19058,10 +19571,10 @@ async function ingestAppWikiSourceRef(options) {
 }
 
 // src/agent.ts
-import { randomUUID as randomUUID5 } from "crypto";
+import { randomUUID as randomUUID6 } from "crypto";
 
 // src/providers.ts
-import { randomUUID as randomUUID4 } from "crypto";
+import { randomUUID as randomUUID5 } from "crypto";
 var DEFAULT_PROVIDER_SETTINGS = {
   openai: {
     api_key_env: "OPENAI_API_KEY",
@@ -19247,7 +19760,7 @@ function normalizeAiSdkUsage(input) {
   };
 }
 function recordProviderUsage(db, input) {
-  const id = `usage_${randomUUID4()}`;
+  const id = `usage_${randomUUID5()}`;
   db.run(`INSERT INTO provider_usage (id, run_id, provider, model, input_tokens, output_tokens, cost_usd, metadata_json, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
     id,
@@ -19267,7 +19780,7 @@ function recordProviderUsage(db, input) {
 import { createHash as createHash8 } from "crypto";
 
 // src/search.ts
-import { existsSync as existsSync6, readFileSync as readFileSync7 } from "fs";
+import { existsSync as existsSync7, readFileSync as readFileSync9 } from "fs";
 
 // src/embeddings.ts
 import { createHash as createHash7 } from "crypto";
@@ -19758,10 +20271,10 @@ function selectKnowledgeIndexes(db, terms, limit) {
      LIMIT ?`).all(...likeParams(terms, fields.length), limit);
 }
 function readLegacyItems(path) {
-  if (!path || !existsSync6(path))
+  if (!path || !existsSync7(path))
     return [];
   try {
-    const parsed = JSON.parse(readFileSync7(path, "utf8"));
+    const parsed = JSON.parse(readFileSync9(path, "utf8"));
     if (!parsed || !Array.isArray(parsed.items))
       return [];
     return parsed.items.filter((item) => {
@@ -20381,7 +20894,7 @@ function addRunEvent(dbPath, input) {
   try {
     db.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`, [
-      `evt_${randomUUID5()}`,
+      `evt_${randomUUID6()}`,
       input.runId,
       input.level,
       input.event,
@@ -20431,7 +20944,7 @@ async function runKnowledgePrompt(options) {
   if (!prompt)
     throw new Error("Knowledge prompt is required.");
   const now = (options.now ?? new Date).toISOString();
-  const runId = `run_${randomUUID5()}`;
+  const runId = `run_${randomUUID6()}`;
   const modelRef = resolveModelRef(options.modelRef ?? "default", options.config);
   const parsed = parseModelRef(modelRef);
   migrateKnowledgeDb(options.dbPath);
@@ -21158,11 +21671,11 @@ async function buildKnowledgeAgentContextPack(options) {
 }
 
 // src/conflict-agent.ts
-import { randomUUID as randomUUID7 } from "crypto";
+import { randomUUID as randomUUID8 } from "crypto";
 
 // src/sync.ts
-import { createHash as createHash10, randomUUID as randomUUID6 } from "crypto";
-import { existsSync as existsSync7, readFileSync as readFileSync8 } from "fs";
+import { createHash as createHash10, randomUUID as randomUUID7 } from "crypto";
+import { existsSync as existsSync8, readFileSync as readFileSync10 } from "fs";
 import { hostname } from "os";
 import { fileURLToPath as fileURLToPath2 } from "url";
 import { relative as relative3, resolve as resolve3, sep as sep3 } from "path";
@@ -21228,7 +21741,7 @@ function nowIso(now = new Date) {
   return now.toISOString();
 }
 function makeSyncId(prefix) {
-  return `${prefix}_${Date.now().toString(36)}_${randomUUID6().slice(0, 8)}`;
+  return `${prefix}_${Date.now().toString(36)}_${randomUUID7().slice(0, 8)}`;
 }
 function defaultSyncMachineId(input) {
   const explicit = input?.trim();
@@ -21954,8 +22467,8 @@ function createKnowledgeSyncBundle(options) {
       if (options.includeArtifactContent !== false && key && row.artifact_uri.startsWith("file://")) {
         try {
           const path = fileURLToPath2(row.artifact_uri);
-          if (existsSync7(path))
-            artifact.content_base64 = readFileSync8(path).toString("base64");
+          if (existsSync8(path))
+            artifact.content_base64 = readFileSync10(path).toString("base64");
           else
             warnings.push(`artifact_missing:${row.artifact_uri}`);
         } catch (error) {
@@ -23030,7 +23543,7 @@ function addConflictRunEvent(options) {
   try {
     db.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`, [
-      `event_${randomUUID7()}`,
+      `event_${randomUUID8()}`,
       options.runId,
       options.level,
       options.event,
@@ -23116,7 +23629,7 @@ async function proposeKnowledgeSyncConflictResolutionWithAi(options) {
   const evidence = getKnowledgeSyncConflictEvidence(options.dbPath, options.id);
   const resolvedModelRef = resolveModelRef(options.modelRef ?? "default", options.config);
   const parsed = parseModelRef(resolvedModelRef);
-  const runId = `run_${randomUUID7()}`;
+  const runId = `run_${randomUUID8()}`;
   const prompt = promptForConflict({ deterministic, evidence });
   insertConflictRun({
     dbPath: options.dbPath,
@@ -23278,8 +23791,8 @@ async function proposeKnowledgeSyncConflictResolutionWithAi(options) {
 }
 
 // src/outbox-consume.ts
-import { createHash as createHash11, randomUUID as randomUUID8 } from "crypto";
-import { existsSync as existsSync8, readFileSync as readFileSync9 } from "fs";
+import { createHash as createHash11, randomUUID as randomUUID9 } from "crypto";
+import { existsSync as existsSync9, readFileSync as readFileSync11 } from "fs";
 import { basename as basename3 } from "path";
 function stableId6(prefix, value) {
   return `${prefix}_${createHash11("sha256").update(value).digest("hex").slice(0, 20)}`;
@@ -23424,9 +23937,9 @@ async function readS3Text3(uri, config2, safetyPolicy) {
 async function readOutboxInput(input, config2, safetyPolicy) {
   if (input.startsWith("s3://"))
     return readS3Text3(input, config2, safetyPolicy);
-  if (!existsSync8(input))
+  if (!existsSync9(input))
     throw new Error(`Outbox not found: ${input}`);
-  return readFileSync9(input, "utf8");
+  return readFileSync11(input, "utf8");
 }
 function mergeJson(existing, patch) {
   let base = {};
@@ -23546,7 +24059,7 @@ async function consumeOpenFilesOutbox(options) {
   const text = await readOutboxInput(options.input, options.config, options.safetyPolicy);
   const events = parseOutboxText(text);
   const db = openKnowledgeDb(options.dbPath);
-  const runId = `run_${randomUUID8()}`;
+  const runId = `run_${randomUUID9()}`;
   try {
     return db.transaction(() => {
       db.run(`INSERT INTO runs (id, type, prompt, status, provider, model, metadata_json, created_at, updated_at)
@@ -24878,7 +25391,7 @@ function createKnowledgeMachinesAdapter(defaults = {}) {
 }
 
 // src/reindex.ts
-import { createHash as createHash12, randomUUID as randomUUID9 } from "crypto";
+import { createHash as createHash12, randomUUID as randomUUID10 } from "crypto";
 function stableId7(prefix, value) {
   return `${prefix}_${createHash12("sha256").update(value).digest("hex").slice(0, 20)}`;
 }
@@ -25002,7 +25515,7 @@ function completeIndexedQueueItems(dbPath, options, now) {
 async function refreshEmbeddingIndex(options) {
   migrateKnowledgeDb(options.dbPath);
   const now = (options.now ?? new Date).toISOString();
-  const runId = `run_${randomUUID9()}`;
+  const runId = `run_${randomUUID10()}`;
   const deleted = options.full ? clearEmbeddingIndex(options.dbPath) : { embeddings: 0, vectorEntries: 0 };
   const queued = enqueueMissingEmbeddings({ ...options, reason: options.full ? "full_embedding_rebuild" : "missing_embedding" });
   const db = openKnowledgeDb(options.dbPath);
@@ -25043,7 +25556,7 @@ async function refreshEmbeddingIndex(options) {
     ]);
     doneDb.run(`INSERT INTO run_events (id, run_id, level, event, metadata_json, created_at)
        VALUES (?, ?, ?, ?, ?, ?)`, [
-      `evt_${randomUUID9()}`,
+      `evt_${randomUUID10()}`,
       runId,
       "info",
       "embedding_refresh_completed",
@@ -25066,88 +25579,9 @@ async function refreshEmbeddingIndex(options) {
 
 // src/rules-provenance.ts
 import { createHash as createHash13 } from "crypto";
-import { existsSync as existsSync10, lstatSync, readdirSync, readFileSync as readFileSync11, statSync as statSync2 } from "fs";
+import { existsSync as existsSync10, lstatSync, readdirSync, readFileSync as readFileSync12, statSync as statSync2 } from "fs";
 import { basename as basename4, extname, join as join4, relative as relative4, resolve as resolve4, sep as sep4 } from "path";
 import { pathToFileURL as pathToFileURL3 } from "url";
-
-// src/store.ts
-import { readFileSync as readFileSync10, writeFileSync as writeFileSync4, existsSync as existsSync9, renameSync, unlinkSync as unlinkSync2 } from "fs";
-import { randomUUID as randomUUID10 } from "crypto";
-function defaultStorePath() {
-  return workspaceForHome(globalKnowledgeHome()).jsonStorePath;
-}
-function ensureStore(path) {
-  if (!existsSync9(path)) {
-    ensureParentDir(path);
-    if (path === defaultStorePath() && existsSync9(legacyGlobalStorePath())) {
-      writeFileSync4(path, readFileSync10(legacyGlobalStorePath(), "utf8"));
-    } else {
-      writeFileSync4(path, JSON.stringify({ items: [] }, null, 2));
-    }
-  }
-}
-function loadStoreIfExists(path) {
-  if (!existsSync9(path))
-    return { exists: false, items: [] };
-  const raw = readFileSync10(path, "utf8");
-  const parsed = JSON.parse(raw);
-  if (!parsed || !Array.isArray(parsed.items)) {
-    return { exists: true, items: [] };
-  }
-  return { exists: true, items: parsed.items };
-}
-function lockPath(path) {
-  return `${path}.lock`;
-}
-function acquireLock(lockPath2, ownerId) {
-  const maxWait = 5000;
-  const interval = 50;
-  const start = Date.now();
-  while (Date.now() - start < maxWait) {
-    try {
-      if (!existsSync9(lockPath2)) {
-        writeFileSync4(lockPath2, JSON.stringify({ owner: ownerId, ts: Date.now() }));
-        return;
-      }
-      const lock = JSON.parse(readFileSync10(lockPath2, "utf8"));
-      if (Date.now() - lock.ts > 1e4) {
-        unlinkSync2(lockPath2);
-      }
-    } catch {}
-    const start2 = Date.now();
-    while (Date.now() - start2 < interval) {}
-  }
-  throw new Error(`Could not acquire lock on ${lockPath2} after ${maxWait}ms`);
-}
-function releaseLock(lockPath2, ownerId) {
-  try {
-    if (existsSync9(lockPath2)) {
-      const lock = JSON.parse(readFileSync10(lockPath2, "utf8"));
-      if (lock.owner === ownerId) {
-        unlinkSync2(lockPath2);
-      }
-    }
-  } catch {}
-}
-function saveStore(path, store) {
-  const tmp = `${path}.tmp.${randomUUID10()}`;
-  writeFileSync4(tmp, JSON.stringify(store, null, 2));
-  renameSync(tmp, path);
-}
-function withLock(path, fn, options = {}) {
-  const owner = randomUUID10();
-  const lpath = lockPath(path);
-  if (options.createParent)
-    ensureParentDir(lpath);
-  acquireLock(lpath, owner);
-  try {
-    return fn();
-  } finally {
-    releaseLock(lpath, owner);
-  }
-}
-
-// src/rules-provenance.ts
 var DEFAULT_MAX_ITEMS2 = 100;
 var DEFAULT_EVIDENCE_LIMIT = 25;
 var DEFAULT_MAX_BYTES_PER_FILE = 256 * 1024;
@@ -25491,7 +25925,7 @@ function prepareFileRecord(input) {
     };
     return { evidence: evidence2, text: "", manifest: null };
   }
-  const bytes = readFileSync11(sourcePath);
+  const bytes = readFileSync12(sourcePath);
   const rawText = bytes.toString("utf8");
   const redacted = redactSecrets(rawText, input.safetyPolicy);
   const highSeverity = redacted.findings.some((finding) => finding.severity === "high");
@@ -26706,7 +27140,7 @@ import {
   lstatSync as lstatSync2,
   mkdirSync as mkdirSync4,
   readdirSync as readdirSync2,
-  readFileSync as readFileSync12,
+  readFileSync as readFileSync13,
   renameSync as renameSync2,
   rmSync,
   writeFileSync as writeFileSync5
@@ -26729,7 +27163,7 @@ function hashFiles(root, files) {
   let bytes = 0;
   for (const file2 of files) {
     const path = join5(root, file2);
-    const body = readFileSync12(path);
+    const body = readFileSync13(path);
     const fileHash = createHash17("sha256").update(body).digest("hex");
     bytes += body.byteLength;
     tree.update(file2);
@@ -26742,7 +27176,7 @@ function hashFiles(root, files) {
 function jsonItemCount(path) {
   if (!existsSync11(path))
     return null;
-  const parsed = JSON.parse(readFileSync12(path, "utf8"));
+  const parsed = JSON.parse(readFileSync13(path, "utf8"));
   return Array.isArray(parsed.items) ? parsed.items.length : null;
 }
 function sqliteSummary(path) {
@@ -26796,7 +27230,7 @@ function isDefaultScaffold(workspace, summary) {
   if (!summary.files.includes("config.json"))
     return true;
   try {
-    return JSON.stringify(JSON.parse(readFileSync12(workspace.configPath, "utf8"))) === JSON.stringify(defaultKnowledgeConfig());
+    return JSON.stringify(JSON.parse(readFileSync13(workspace.configPath, "utf8"))) === JSON.stringify(defaultKnowledgeConfig());
   } catch {
     return false;
   }
@@ -26876,7 +27310,7 @@ function isMigrationTombstone(workspace, summary, currentHome) {
   if (summary.files.some((file2) => !isRetainedTombstoneFile(file2)))
     return false;
   try {
-    const metadata = JSON.parse(readFileSync12(join5(workspace.home, "migration.json"), "utf8"));
+    const metadata = JSON.parse(readFileSync13(join5(workspace.home, "migration.json"), "utf8"));
     return metadata.new_path === currentHome && typeof metadata.backup_path === "string";
   } catch {
     return false;
@@ -27337,7 +27771,7 @@ function readLegacyInventoryStore(path) {
   if (!existsSync12(path))
     return { exists: false, read_error: null, items: [] };
   try {
-    const parsed = JSON.parse(readFileSync13(path, "utf8"));
+    const parsed = JSON.parse(readFileSync14(path, "utf8"));
     if (!parsed || !Array.isArray(parsed.items)) {
       return { exists: true, read_error: "invalid_store_shape", items: [] };
     }
@@ -29702,6 +30136,104 @@ function formatKnowledgeProjectPanel(panel) {
   return lines.join(`
 `);
 }
+// src/generated/knowledge-api-client.ts
+class ApiError extends Error {
+  status;
+  body;
+  constructor(status, message, body) {
+    super(message);
+    this.status = status;
+    this.body = body;
+    this.name = "ApiError";
+  }
+}
+
+class KnowledgeApiClient {
+  baseUrl;
+  apiKey;
+  fetchImpl;
+  baseHeaders;
+  constructor(options) {
+    if (!options.baseUrl)
+      throw new Error("KnowledgeApiClient requires a baseUrl.");
+    this.baseUrl = options.baseUrl.replace(/\/$/, "");
+    this.apiKey = options.apiKey;
+    this.fetchImpl = options.fetch ?? globalThis.fetch;
+    this.baseHeaders = options.headers ?? {};
+  }
+  async request(method, path, opts) {
+    const url2 = new URL(this.baseUrl + path);
+    if (opts.query) {
+      for (const [key, value] of Object.entries(opts.query)) {
+        if (value !== undefined && value !== null)
+          url2.searchParams.set(key, String(value));
+      }
+    }
+    const headers = { Accept: "application/json", ...this.baseHeaders, ...opts.init?.headers };
+    if (this.apiKey)
+      headers["x-api-key"] = this.apiKey;
+    let payload;
+    if (opts.body !== undefined) {
+      headers["Content-Type"] = "application/json";
+      payload = JSON.stringify(opts.body);
+    }
+    const response = await this.fetchImpl(url2.toString(), { ...opts.init, method, headers, body: payload });
+    const text = await response.text();
+    const data = text ? (() => {
+      try {
+        return JSON.parse(text);
+      } catch {
+        return text;
+      }
+    })() : undefined;
+    if (!response.ok) {
+      throw new ApiError(response.status, `${method} ${path} failed: ${response.status}`, data);
+    }
+    return data;
+  }
+  async listNotes(query2, init) {
+    return this.request("GET", `/v1/notes`, {
+      body: undefined,
+      query: query2,
+      init
+    });
+  }
+  async createNote(body, init) {
+    return this.request("POST", `/v1/notes`, {
+      body,
+      query: undefined,
+      init
+    });
+  }
+  async getNote(id, init) {
+    return this.request("GET", `/v1/notes/${encodeURIComponent(String(id))}`, {
+      body: undefined,
+      query: undefined,
+      init
+    });
+  }
+  async deleteNote(id, init) {
+    return this.request("DELETE", `/v1/notes/${encodeURIComponent(String(id))}`, {
+      body: undefined,
+      query: undefined,
+      init
+    });
+  }
+  async updateNote(id, body, init) {
+    return this.request("PATCH", `/v1/notes/${encodeURIComponent(String(id))}`, {
+      body,
+      query: undefined,
+      init
+    });
+  }
+  async getRegistry(init) {
+    return this.request("GET", `/v1/registry`, {
+      body: undefined,
+      query: undefined,
+      init
+    });
+  }
+}
 export {
   writeKnowledgeConfig,
   writeAppWikiNote,
@@ -29713,6 +30245,7 @@ export {
   storageSync,
   storagePush,
   storagePull,
+  startKnowledgeServe,
   searchVectorIndex,
   saveKnowledgeAuth,
   runStorageMigrations,
@@ -29759,6 +30292,7 @@ export {
   legacyGlobalKnowledgeHome,
   languageModelFor,
   knowledgeRegistryContract,
+  knowledgeOpenApi,
   knowledgeAuthStatus,
   knowledgeAuthPath,
   isSupportedSourceRef,
@@ -29791,6 +30325,7 @@ export {
   embedTexts,
   discoverKnowledgeMachineTopology,
   defaultKnowledgeConfig,
+  createServeHandler,
   createKnowledgeSyncSnapshot,
   createKnowledgeSyncBundle,
   createKnowledgeService,
@@ -29816,9 +30351,12 @@ export {
   S3ArtifactStore,
   RemoteKnowledgeClient,
   REMOTE_KNOWLEDGE_CONTRACT_VERSION,
+  NoteRepo,
   LocalArtifactStore,
   LEGACY_HASNA_KNOWLEDGE_APP_PATH,
   KnowledgeService,
+  ApiError as KnowledgeApiError,
+  KnowledgeApiClient,
   KNOWLEDGE_SYNC_TABLES,
   CURRENT_SCHEMA_VERSION as KNOWLEDGE_SYNC_SCHEMA_VERSION,
   KNOWLEDGE_SYNC_PROTOCOL_VERSION,
@@ -29828,6 +30366,7 @@ export {
   KNOWLEDGE_STORAGE_MODE_ENV,
   KNOWLEDGE_STORAGE_FALLBACK_ENV,
   KNOWLEDGE_STORAGE_ENV,
+  KNOWLEDGE_SERVE_APP,
   KNOWLEDGE_MACHINES_ADAPTER_PACKAGE,
   KNOWLEDGE_MACHINES_ADAPTER_ENTRYPOINT,
   KNOWLEDGE_MACHINES_ADAPTER_CONTRACT_VERSION,

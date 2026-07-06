@@ -384,6 +384,27 @@ export {
   type KnowledgeAuthStatus,
 } from './auth.js';
 export {
+  KnowledgeApiClient,
+  ApiError as KnowledgeApiError,
+  type KnowledgeApiClientOptions,
+  type Note as KnowledgeNote,
+  type NoteInput as KnowledgeNoteInput,
+  type NotePatch as KnowledgeNotePatch,
+  type NoteList as KnowledgeNoteList,
+} from './generated/knowledge-api-client.js';
+export {
+  KNOWLEDGE_SERVE_APP,
+  createServeHandler,
+  startKnowledgeServe,
+  knowledgeOpenApi,
+  NoteRepo,
+  type NoteInput as KnowledgeServeNoteInput,
+  type NoteListOptions as KnowledgeServeNoteListOptions,
+  type ServeDeps as KnowledgeServeDeps,
+  type StartServeOptions as KnowledgeStartServeOptions,
+  type RunningServe as KnowledgeRunningServe,
+} from './serve.js';
+export {
   REMOTE_KNOWLEDGE_CONTRACT_VERSION,
   RemoteKnowledgeClient,
   knowledgeRegistryContract,

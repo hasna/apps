@@ -355,6 +355,7 @@ describe('knowledge cli', () => {
     expect(packageJson.bin).toEqual({
       knowledge: 'bin/knowledge.js',
       'knowledge-mcp': 'bin/knowledge-mcp.js',
+      'knowledge-serve': 'bin/knowledge-serve.js',
     });
     expect(packageJson.bin['open-knowledge']).toBeUndefined();
     expect(packageJson.bin['open-knowledge-mcp']).toBeUndefined();
