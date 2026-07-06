@@ -23,4 +23,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Advertising",
     tags: ["google", "ads", "ppc", "campaigns"],
   },
+  {
+    name: "taboola",
+    displayName: "Taboola",
+    description: "Native advertising campaigns, items, reports, and audiences via the Backstage API",
+    category: "Advertising",
+    tags: ["taboola", "native-advertising", "campaigns", "backstage"],
+  },
 ];
