@@ -990,6 +990,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["url shortener", "links", "redirect", "analytics", "api"],
   },
   {
+    name: "trackjs",
+    displayName: "TrackJS",
+    description: "JavaScript error tracking and monitoring platform",
+    category: "Developer Tools",
+    tags: ["monitoring", "errors", "error-tracking", "javascript", "frontend"],
+  },
+  {
     name: "transifex",
     displayName: "Transifex",
     description: "Localization and translation management platform for software and content",
