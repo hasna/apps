@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AmbiguousNameError, LoopArchivedError, LoopNotFoundError } from "./errors.js";
@@ -200,6 +200,103 @@ describe("Store", () => {
       expect(store.listWorkflowEvents(run.id).map((event) => event.eventType)).toContain("workflow_archived");
     } finally {
       store.close();
+    }
+  });
+
+  test("syncs successful task-lifecycle todos workflow pointers after requeued cancellation", () => {
+    const root = mkdtempSync(join(tmpdir(), "loops-task-lifecycle-pointers-"));
+    const fakeBin = join(root, "bin");
+    const todosLog = join(root, "todos-args.log");
+    mkdirSync(fakeBin);
+    writeFileSync(
+      join(fakeBin, "todos"),
+      `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$TODOS_POINTER_LOG"
+exit 0
+`,
+      { mode: 0o700 },
+    );
+    const previousPath = process.env.PATH;
+    const previousLog = process.env.TODOS_POINTER_LOG;
+    process.env.PATH = `${fakeBin}:${previousPath ?? ""}`;
+    process.env.TODOS_POINTER_LOG = todosLog;
+    const store = new Store(join(root, "loops.db"));
+    try {
+      const invocation = store.createWorkflowInvocation({
+        templateId: "task-lifecycle",
+        sourceRef: { kind: "event", id: "evt-task-1", dedupeKey: "todos-task:task-1:task.created" },
+        subjectRef: { kind: "task", id: "task-1", path: "/tmp/open-loops" },
+        intent: "route",
+        scope: { projectPath: "/tmp/open-loops", worktreePolicy: "required" },
+      });
+      const workItem = store.upsertWorkflowWorkItem({
+        routeKey: "todos-task",
+        idempotencyKey: "todos-task:task-1:task.created",
+        invocationId: invocation.id,
+        sourceType: "task.created",
+        sourceRef: "evt-task-1",
+        subjectRef: "task-1",
+        projectKey: "/tmp/open-loops",
+      });
+      const cancelledWorkflow = store.createWorkflow({
+        name: "route-task-1-cancelled",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const cancelledLoop = store.createLoop({
+        name: "route-task-1-cancelled-run",
+        schedule: { type: "once", at: "2026-01-01T00:00:00Z" },
+        target: {
+          type: "workflow",
+          workflowId: cancelledWorkflow.id,
+          input: {
+            workflowInvocationId: invocation.id,
+            workflowWorkItemId: workItem.id,
+          },
+        },
+      });
+      store.admitWorkflowWorkItem(workItem.id, { workflowId: cancelledWorkflow.id, loopId: cancelledLoop.id });
+      const cancelledRun = store.createWorkflowRun({ workflow: cancelledWorkflow, loop: cancelledLoop, scheduledFor: "2026-01-01T00:00:00.000Z" });
+      store.cancelWorkflowRun(cancelledRun.id);
+      expect(existsSync(todosLog)).toBe(false);
+
+      store.requeueWorkflowWorkItem(workItem.id, { reason: "task still actionable after cancelled lifecycle run" });
+      const successWorkflow = store.createWorkflow({
+        name: "route-task-1-success",
+        steps: [{ id: "worker", target: { type: "command", command: "true" } }],
+      });
+      const successLoop = store.createLoop({
+        name: "route-task-1-success-run",
+        schedule: { type: "once", at: "2026-01-01T00:01:00Z" },
+        target: {
+          type: "workflow",
+          workflowId: successWorkflow.id,
+          input: {
+            workflowInvocationId: invocation.id,
+            workflowWorkItemId: workItem.id,
+          },
+        },
+      });
+      store.admitWorkflowWorkItem(workItem.id, { workflowId: successWorkflow.id, loopId: successLoop.id });
+      const successRun = store.createWorkflowRun({ workflow: successWorkflow, loop: successLoop, scheduledFor: "2026-01-01T00:01:00.000Z" });
+
+      store.finalizeWorkflowRun(successRun.id, "succeeded");
+
+      const args = readFileSync(todosLog, "utf8").trim();
+      expect(args).toContain("--project /tmp/open-loops task workflow-pointers task-1 --clear");
+      expect(args).toContain(`--invocation ${invocation.id}`);
+      expect(args).toContain(`--run ${successRun.id}`);
+      expect(args).toContain(`--manifest ${successRun.manifestPath}`);
+      expect(args).toContain("--state succeeded");
+      expect(args).toContain("--actor openloops:task-lifecycle");
+      expect(args).not.toContain(cancelledRun.id);
+      expect(store.listWorkflowEvents(successRun.id).map((event) => event.eventType)).toContain("todos_workflow_pointers_synced");
+    } finally {
+      store.close();
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (previousLog === undefined) delete process.env.TODOS_POINTER_LOG;
+      else process.env.TODOS_POINTER_LOG = previousLog;
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
