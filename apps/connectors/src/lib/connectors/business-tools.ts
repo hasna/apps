@@ -934,6 +934,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["database", "project management", "kanban", "no-code", "collaboration"],
   },
   {
+    name: "ticket-tailor",
+    displayName: "Ticket Tailor",
+    description: "Event ticketing platform for selling tickets, managing orders, and issuing tickets",
+    category: "Business Tools",
+    tags: ["events", "ticketing", "orders"],
+  },
+  {
     name: "ticketmaster",
     displayName: "Ticketmaster",
     description: "Discovery API for events, attractions, and venues",
