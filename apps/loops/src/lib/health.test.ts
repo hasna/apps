@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { LoopRun } from "../types.js";
 import type { RunFailureClassification } from "./health.js";
-import { classifyRunFailure } from "./health.js";
+import { buildHealthReport, classifyRunFailure, RESTART_INTERRUPTED_RUN_PREFIX } from "./health.js";
+import { Store } from "./store.js";
 
 function run(patch: Partial<LoopRun>): LoopRun {
   return {
@@ -29,6 +30,7 @@ describe("loop health classification", () => {
       ["preflight", { error: "runtime preflight failed: Executable not found in PATH: codewith" }],
       ["timeout", { status: "timed_out", error: "timed out after 1000ms" }],
       ["sigsegv", { error: "terminated by SIGSEGV" }],
+      ["restart_interrupted", { status: "skipped", error: `${RESTART_INTERRUPTED_RUN_PREFIX}: child process terminated by SIGTERM during daemon stop/restart` }],
       ["skipped_previous_active", { status: "skipped", error: "previous run still active" }],
       ["unknown", { error: "provider exited unexpectedly" }],
     ];
@@ -45,5 +47,31 @@ describe("loop health classification", () => {
 
     expect(signal?.evidence.error).toMatch(/^\[redacted \d+ chars\]$/);
     expect(signal?.evidence.error).not.toContain("fake-project-secret");
+  });
+
+  test("reports restart-interrupted latest runs as warnings, not unhealthy workload failures", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "restart-interrupted-loop",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "sleep", args: ["10"] },
+      });
+      store.createSkippedRun(
+        loop,
+        "2026-01-01T00:00:00.000Z",
+        `${RESTART_INTERRUPTED_RUN_PREFIX}: child process terminated by SIGTERM during daemon stop/restart`,
+      );
+
+      const report = buildHealthReport(store);
+      expect(report.ok).toBe(true);
+      expect(report.summary.unhealthy).toBe(0);
+      expect(report.summary.warnings).toBe(1);
+      expect(report.classifications.restart_interrupted).toBe(1);
+      expect(report.expectations[0]?.check.status).toBe("warn");
+      expect(report.expectations[0]?.recommendedTask).toBeUndefined();
+    } finally {
+      store.close();
+    }
   });
 });

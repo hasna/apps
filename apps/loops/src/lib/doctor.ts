@@ -7,6 +7,7 @@ import { preflightTarget } from "./executor.js";
 import { workflowExecutionOrder } from "./workflow-spec.js";
 import { listOpenMachines } from "./machines.js";
 import { buildDeploymentStatus } from "./mode.js";
+import { RESTART_INTERRUPTED_RUN_PREFIX } from "./health.js";
 
 export type DoctorSeverity = "ok" | "warn" | "fail";
 
@@ -108,11 +109,21 @@ export function runDoctor(store: Store): DoctorReport {
   );
 
   const failedRuns = store.countRuns("failed");
+  const restartInterruptedRuns = store
+    .listRuns({ status: "skipped", limit: 1_000 })
+    .filter((run) => run.error?.startsWith(RESTART_INTERRUPTED_RUN_PREFIX)).length;
   checks.push(
     failedRuns === 0
       ? { id: "loop-runs", status: "ok", message: "no failed loop runs recorded" }
       : { id: "loop-runs", status: "warn", message: `${failedRuns} failed loop run(s) recorded` },
   );
+  if (restartInterruptedRuns > 0) {
+    checks.push({
+      id: "loop-runs:restart-interrupted",
+      status: "warn",
+      message: `${restartInterruptedRuns} daemon restart-interrupted loop run(s) recorded`,
+    });
+  }
 
   const deployment = buildDeploymentStatus();
   const schedulerState = deployment.schedulerState;

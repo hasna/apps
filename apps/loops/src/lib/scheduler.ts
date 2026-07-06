@@ -358,6 +358,7 @@ export async function executeClaimedRun(deps: {
   beforeFinalize?: (loop: Loop, run: LoopRun) => void;
   daemonLeaseId?: string;
   execute?: (loop: Loop, run: LoopRun) => Promise<ExecutorResult>;
+  finalizeResult?: (result: ExecutorResult, loop: Loop, run: LoopRun) => Omit<ExecutorResult, "status"> & { status: LoopRun["status"] };
   onError?: (loop: Loop, error: unknown) => void;
 }): Promise<LoopRun> {
   let heartbeat: ReturnType<typeof setInterval> | undefined;
@@ -375,20 +376,21 @@ export async function executeClaimedRun(deps: {
         daemonLeaseId: deps.daemonLeaseId,
         onSpawn: (pid) => deps.store.markRunPid(run.id, pid, deps.runnerId, { daemonLeaseId: deps.daemonLeaseId }),
       })))(deps.loop, deps.run);
+    const finalResult = deps.finalizeResult?.(result, deps.loop, deps.run) ?? result;
     deps.beforeFinalize?.(deps.loop, deps.run);
     return deps.store.finalizeRun(deps.run.id, {
-      status: result.status,
-      finishedAt: result.finishedAt,
-      durationMs: result.durationMs,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      exitCode: result.exitCode,
-      error: result.error,
-      pid: result.pid,
+      status: finalResult.status,
+      finishedAt: finalResult.finishedAt,
+      durationMs: finalResult.durationMs,
+      stdout: finalResult.stdout,
+      stderr: finalResult.stderr,
+      exitCode: finalResult.exitCode,
+      error: finalResult.error,
+      pid: finalResult.pid,
     }, {
       claimedBy: deps.runnerId,
       daemonLeaseId: deps.daemonLeaseId,
-      now: deps.now?.() ?? new Date(result.finishedAt),
+      now: deps.now?.() ?? new Date(finalResult.finishedAt),
     });
   } catch (err) {
     deps.onError?.(deps.loop, err);
