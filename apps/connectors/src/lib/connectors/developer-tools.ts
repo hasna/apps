@@ -1011,6 +1011,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ci/cd", "continuous integration", "testing", "deployment", "devops"],
   },
   {
+    name: "trigger-dev",
+    displayName: "Trigger.dev",
+    description: "Background job platform",
+    category: "Developer Tools",
+    tags: ["background-jobs", "workflows", "trigger-dev", "automation"],
+  },
+  {
     name: "tuskr",
     displayName: "Tuskr",
     description: "Test case management and QA platform",
