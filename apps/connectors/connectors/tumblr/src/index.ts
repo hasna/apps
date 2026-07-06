@@ -8,6 +8,7 @@ export {
   TagsApi,
   blogPath,
   TUMBLR_API_BASE,
+  TUMBLR_USER_AGENT,
 } from './api';
 
 export {

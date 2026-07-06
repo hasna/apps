@@ -70,7 +70,7 @@ export class Tumblr {
   }
 }
 
-export { TumblrClient, blogPath, TUMBLR_API_BASE } from './client';
+export { TumblrClient, blogPath, TUMBLR_API_BASE, TUMBLR_USER_AGENT } from './client';
 export { UsersApi } from './users';
 export { BlogsApi } from './blogs';
 export { PostsApi } from './posts';

@@ -1,4 +1,5 @@
 import type { OAuthTokenResponse } from '../types';
+import { TUMBLR_USER_AGENT } from '../constants';
 
 export const TUMBLR_AUTH_URL = 'https://www.tumblr.com/oauth2/authorize';
 export const TUMBLR_TOKEN_URL = 'https://api.tumblr.com/v2/oauth2/token';
@@ -31,6 +32,7 @@ export async function exchangeCode(
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': TUMBLR_USER_AGENT,
     },
     body: new URLSearchParams({
       grant_type: 'authorization_code',
@@ -58,6 +60,7 @@ export async function refreshAccessToken(
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': TUMBLR_USER_AGENT,
     },
     body: new URLSearchParams({
       grant_type: 'refresh_token',

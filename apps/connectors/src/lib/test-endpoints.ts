@@ -151,7 +151,10 @@ export const TEST_ENDPOINTS: Record<string, TestEndpoint> = {
   },
   tumblr: {
     url: "https://api.tumblr.com/v2/user/info",
-    headers: (key) => ({ Authorization: `Bearer ${key}` }),
+    headers: (key) => ({
+      Authorization: `Bearer ${key}`,
+      "User-Agent": "@hasna/connect-tumblr/0.1",
+    }),
   },
 
   // ── Commerce & Finance ───────────────────────────────────

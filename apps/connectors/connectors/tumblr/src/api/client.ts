@@ -9,8 +9,9 @@ import {
   saveTokens,
 } from '../utils/config';
 import { refreshAccessToken } from '../utils/auth';
+import { TUMBLR_API_BASE, TUMBLR_USER_AGENT } from '../constants';
 
-export const TUMBLR_API_BASE = 'https://api.tumblr.com/v2';
+export { TUMBLR_API_BASE, TUMBLR_USER_AGENT } from '../constants';
 
 export interface TumblrRequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
@@ -21,12 +22,15 @@ export interface TumblrRequestOptions {
 
 /**
  * Normalize a blog identifier to a full Tumblr hostname.
- * Accepts "staff" or "staff.tumblr.com".
+ * Accepts "staff", "staff.tumblr.com", or a Tumblr "t:" identifier.
  */
 export function blogPath(blog: string): string {
   const value = blog.trim();
   if (!value) {
     throw new Error('blog is required');
+  }
+  if (value.startsWith('t:')) {
+    return value;
   }
   return value.includes('.') ? value : `${value}.tumblr.com`;
 }
@@ -54,8 +58,18 @@ export class TumblrClient {
   }
 
   private async getValidAccessToken(): Promise<string> {
-    let token = this.accessToken || getAccessToken();
-    const expiresAt = this.tokenExpiresAt ?? getTokenExpiresAt();
+    if (this.accessToken) {
+      const expired = this.tokenExpiresAt ? Date.now() >= this.tokenExpiresAt - 60000 : false;
+      if (!expired) {
+        return this.accessToken;
+      }
+
+      await this.refreshTokenIfNeeded(false);
+      return this.accessToken;
+    }
+
+    let token = getAccessToken();
+    const expiresAt = getTokenExpiresAt();
     const expired = expiresAt ? Date.now() >= expiresAt - 60000 : false;
 
     if (token && !expired) {
@@ -63,7 +77,7 @@ export class TumblrClient {
     }
 
     if (expired) {
-      await this.refreshTokenIfNeeded();
+      await this.refreshTokenIfNeeded(true);
       token = this.accessToken || getAccessToken();
     }
 
@@ -74,10 +88,10 @@ export class TumblrClient {
     return token;
   }
 
-  private async refreshTokenIfNeeded(): Promise<void> {
-    const refreshToken = this.refreshToken || getRefreshToken();
-    const clientId = this.clientId || getClientId();
-    const clientSecret = this.clientSecret || getClientSecret();
+  private async refreshTokenIfNeeded(allowProfileFallback: boolean): Promise<void> {
+    const refreshToken = this.refreshToken || (allowProfileFallback ? getRefreshToken() : undefined);
+    const clientId = this.clientId || (allowProfileFallback ? getClientId() : undefined);
+    const clientSecret = this.clientSecret || (allowProfileFallback ? getClientSecret() : undefined);
 
     if (!refreshToken || !clientId || !clientSecret) {
       throw new TumblrApiError('No refresh token available. Please re-authenticate.', 401);
@@ -89,7 +103,9 @@ export class TumblrClient {
       this.refreshToken = data.refresh_token;
     }
     this.tokenExpiresAt = Date.now() + data.expires_in * 1000;
-    saveTokens(data.access_token, data.refresh_token || refreshToken, data.expires_in, data.scope);
+    if (allowProfileFallback) {
+      saveTokens(data.access_token, data.refresh_token || refreshToken, data.expires_in, data.scope);
+    }
   }
 
   async request<T = unknown>(
@@ -111,6 +127,7 @@ export class TumblrClient {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${accessToken}`,
       Accept: 'application/json',
+      'User-Agent': TUMBLR_USER_AGENT,
     };
 
     let requestBody: string | undefined;
