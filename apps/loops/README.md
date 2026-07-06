@@ -8,6 +8,12 @@ Naming: the product is **OpenLoops**, published on npm as
 binaries are `loops`, `loops-daemon`, `loops-api`, `loops-runner`, and
 `loops-mcp`.
 
+OpenLoops is the **runtime, scheduler, and workflow engine** for automations —
+not the automation domain model. Specs, triggers, queue ownership, approvals,
+DLQ/replay, and audit live in `@hasna/automations` and `@hasna/actions`; see
+[Runtime Boundary](docs/RUNTIME_BOUNDARY.md) for ownership split and external
+compiler handoff examples.
+
 It supports deterministic command loops, JSON-defined workflows, and guarded CLI adapters for headless coding agents:
 
 - `claude`
@@ -393,6 +399,9 @@ Use `shell: true` only when you intentionally want shell parsing:
 ## Templates And Task Events
 
 Built-in templates turn common orchestration flows into reusable workflow JSON.
+Todos-task routes are OpenLoops-native runtime admission — see
+[Runtime Boundary](docs/RUNTIME_BOUNDARY.md) for how this differs from
+OpenAutomations queue ownership.
 `todos-task-worker-verifier` performs one todos task and then verifies it.
 `event-worker-verifier` handles any Hasna event envelope and then verifies the
 handling. `bounded-agent-worker-verifier` is for recurring bounded agent work:
@@ -722,74 +731,29 @@ Workflow run manifests are written under
 
 ## OpenAutomations Runtime Binding
 
-OpenLoops can be used as an execution runtime for deterministic OpenAutomations
-product automations, but it does not own the automation product surface.
-`@hasna/automations` owns automation specs, trigger materialization, product
-automation action queues, DLQ/replay, idempotency, approvals, and audit
-evidence. OpenLoops owns agent workflow invocation/admission/runs. OpenLoops
-only executes work that OpenAutomations has explicitly handed off; it does not
-make OpenAutomations the queue owner for todos task/PR/review agent workflows.
+OpenLoops executes automations that external compilers have materialized; it
+does not own the automation product surface. See
+[Runtime Boundary](docs/RUNTIME_BOUNDARY.md) for the full ownership table,
+three handoff paths (claim-queue, planned `@hasna/actions` upsert-one-shot, and
+explicit event-envelope routing), todos-task route distinction, and
+anti-patterns.
 
-The SDK exposes the boundary descriptor:
+Quick reference:
 
 ```ts
 import { openAutomationsRuntimeBinding } from "@hasna/loops";
-
 const binding = openAutomationsRuntimeBinding();
-console.log(binding.handoff); // "claim-queue"
-console.log(binding.eventHandoff.handlerCommand); // "loops routes create generic"
+// binding.handoff === "claim-queue"
+// binding.eventHandoff.handlerCommand === "loops routes create generic"
 ```
-
-The claim-queue handoff uses the OpenAutomations CLI or SDK:
 
 ```bash
 automations queue claim --runner open-loops:<worker-id>
 automations queue complete <action-id> --runner open-loops:<worker-id>
-automations queue fail <action-id> --runner open-loops:<worker-id> --code <code> --message <message>
 ```
 
-For explicit event workflow routing, OpenAutomations can export the normalized
-event envelope and OpenLoops can consume it through the existing generic event
-route:
-
-```bash
-automations --json webhooks event <route> --body-json '<json>' \
-  | loops --json routes create generic
-```
-
-This is not automation materialization in OpenLoops. It is an explicit
-event-envelope workflow handoff: OpenAutomations owns deterministic automation
-specs, webhook normalization, queue state, approvals, DLQ, and replay; OpenLoops
-owns agent workflow invocation after the operator routes the envelope to
-`loops routes create generic`.
-
-Do not store automation specs in OpenLoops, infer automation triggers from event
-transport alone, or replace the OpenAutomations queue with loop/workflow rows.
-When a loop or workflow is used for execution, keep `HASNA_AUTOMATIONS_DIR`
-pointing at the owning OpenAutomations data root and preserve the runner id in
-completion/failure calls so OpenAutomations can enforce action leases.
-
-### Planned Workflow Upsert SDK
-
-External compilers such as `@hasna/actions` and `@hasna/automations` should not
-write OpenLoops SQLite rows directly. The stable contract should be an
-idempotent CLI/SDK upsert that accepts a fully rendered one-shot workflow loop
-request and returns durable refs.
-
-The canonical `WorkflowUpsertRequest` / `WorkflowUpsertResult` shapes and their
-required semantics (dry-run/preflight/commit modes, `idempotencyKey` +
-`specHash` idempotency, dispatch behavior, and redaction-before-persistence)
-are specified in `docs/AUTOMATION_RUNTIME_DESIGN.md`; this README intentionally
-does not duplicate that spec.
-
-The same design doc covers the planned DLQ/dead-letter lifecycle, including
-`loops dlq list/show/replay/resolve`, idempotent replay keys, and compatibility
-rules for `@hasna/actions`.
-
-The same design doc also defines the planned strict automation execution mode:
-minimal env inheritance, scoped secret refs, enforced allowlists,
-redaction-before-persistence, and provider-safe defaults for automation-created
-work.
+Planned upsert/DLQ/strict-mode contracts:
+[`docs/AUTOMATION_RUNTIME_DESIGN.md`](docs/AUTOMATION_RUNTIME_DESIGN.md).
 
 ## Transcript-Driven Loops
 

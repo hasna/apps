@@ -418,6 +418,13 @@ for those. Set `"blockedExitCodes": []` on a gate-named step to opt out.
 
 ## Templates And Task Events
 
+OpenLoops is the runtime/scheduler/workflow engine for these flows — not the
+automation domain model. Todos-task routes are OpenLoops-native admission; they
+do not replace the OpenAutomations product queue. See
+[Runtime Boundary](./RUNTIME_BOUNDARY.md) for ownership split and external
+compiler handoff paths (`@hasna/automations` claim-queue,
+`@hasna/actions` planned upsert-one-shot).
+
 Built-in templates turn common orchestration flows into reusable workflow JSON.
 `todos-task-worker-verifier` performs one todos task and then verifies it.
 `event-worker-verifier` handles any Hasna event envelope and then verifies the

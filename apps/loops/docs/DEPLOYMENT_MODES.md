@@ -5,6 +5,13 @@ defines the mode vocabulary, local cache behavior, API shape, and runner
 contract. Hosted multi-tenant operation is implemented outside this public
 package.
 
+Deployment modes describe **where the OpenLoops runtime stores and executes**
+loops and workflows (`local` SQLite, `self_hosted` control plane, or `cloud`
+contract). They are runtime placement concerns, not the automation product
+surface — specs, queues, approvals, and audit for product automations remain in
+`@hasna/automations` and `@hasna/actions`. See
+[Runtime Boundary](./RUNTIME_BOUNDARY.md).
+
 ## Modes
 
 | Mode | Source of truth | Local storage role | Executor |
