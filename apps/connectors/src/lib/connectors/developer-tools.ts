@@ -990,6 +990,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["url shortener", "links", "redirect", "analytics", "api"],
   },
   {
+    name: "tomtom",
+    displayName: "TomTom",
+    description: "Maps platform for geocoding, POI search, and routing",
+    category: "Developer Tools",
+    tags: ["maps", "geocoding", "routing", "navigation", "location"],
+  },
+  {
     name: "trackjs",
     displayName: "TrackJS",
     description: "JavaScript error tracking and monitoring platform",
