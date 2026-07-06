@@ -37,7 +37,7 @@ connect-thousandeyes validate                    # Validate credentials
 # Tests
 connect-thousandeyes tests list                  # List tests
 connect-thousandeyes tests get <testId>          # Get a test
-connect-thousandeyes tests create --body <json>  # Create a test
+connect-thousandeyes tests create --type <type> --body <json>  # Create a test
 
 # Events
 connect-thousandeyes events list [--start] [--end] [--test-id] [--type]
@@ -52,7 +52,7 @@ connect-thousandeyes request --path <path> [--method] [--query] [--body]
 | Variable | Description |
 |----------|-------------|
 | `THOUSANDEYES_API_KEY` | API token (overrides profile) |
-| `THOUSANDEYES_BASE_URL` | API base URL (default `https://api.thousandeyes.com/v1`) |
+| `THOUSANDEYES_BASE_URL` | API base URL (default `https://api.thousandeyes.com/v7`) |
 
 ## Authentication
 
@@ -76,7 +76,7 @@ Profile JSON structure:
 ```json
 {
   "apiKey": "xxx",
-  "baseUrl": "https://api.thousandeyes.com/v1"
+  "baseUrl": "https://api.thousandeyes.com/v7"
 }
 ```
 

@@ -174,7 +174,7 @@ profileCmd
 
     console.log(chalk.bold(`Profile: ${profileName}${profileName === active ? chalk.green(' (active)') : ''}`));
     info(`API Key: ${config.apiKey ? `${config.apiKey.substring(0, 8)}...` : chalk.gray('not set')}`);
-    info(`Base URL: ${config.baseUrl || chalk.gray('https://api.thousandeyes.com/v1 (default)')}`);
+    info(`Base URL: ${config.baseUrl || chalk.gray('https://api.thousandeyes.com/v7 (default)')}`);
   });
 
 const configCmd = program.command('config').description('Manage CLI configuration');
@@ -206,7 +206,7 @@ configCmd
     console.log(chalk.bold(`Active Profile: ${profileName}`));
     info(`Config directory: ${getConfigDir()}`);
     info(`API Key: ${apiKey ? `${apiKey.substring(0, 8)}...` : chalk.gray('not set')}`);
-    info(`Base URL: ${baseUrl || chalk.gray('https://api.thousandeyes.com/v1 (default)')}`);
+    info(`Base URL: ${baseUrl || chalk.gray('https://api.thousandeyes.com/v7 (default)')}`);
   });
 
 configCmd
@@ -257,12 +257,13 @@ testsCmd
 testsCmd
   .command('create')
   .description('Create a test')
+  .requiredOption('--type <type>', 'ThousandEyes test type path segment (for example, agent-to-server)')
   .requiredOption('--body <json>', 'Test definition JSON')
   .action(async function(this: Command, opts) {
     try {
       const client = getClient();
       const body = parseJsonOption(opts.body, '--body');
-      const result = await client.createTest(body);
+      const result = await client.createTest(opts.type, body);
       print(result, getFormat(this));
       success('Test created');
     } catch (err) {

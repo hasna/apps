@@ -1,7 +1,7 @@
 import type { ThousandEyesConfig } from '../types';
 import { ThousandEyesApiError } from '../types';
 
-export const DEFAULT_BASE_URL = 'https://api.thousandeyes.com/v1';
+export const DEFAULT_BASE_URL = 'https://api.thousandeyes.com/v7';
 
 export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';

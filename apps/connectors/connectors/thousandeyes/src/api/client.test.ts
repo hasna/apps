@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { ThousandEyes } from './index';
 import { ThousandEyesClient } from './client';
 import { ThousandEyesApiError } from '../types';
 
@@ -45,21 +46,21 @@ afterEach(() => {
 describe('ThousandEyesClient', () => {
   const mockConfig = {
     apiKey: 'test-api-key-1234567890',
-    baseUrl: 'https://api.thousandeyes.com/v1',
+    baseUrl: 'https://api.thousandeyes.com/v7',
   };
 
   test('throws error when apiKey is missing', () => {
     expect(() => new ThousandEyesClient({ apiKey: '' })).toThrow('API key is required');
   });
 
-  test('get() sends Bearer authorization and hits /v1/tests', async () => {
+  test('get() sends Bearer authorization and hits /v7/tests', async () => {
     const recorded = installFetch(() => ({ tests: [] }));
     const client = new ThousandEyesClient(mockConfig);
     const result = await client.get('/tests');
 
     expect(result).toEqual({ tests: [] });
     expect(recorded).toHaveLength(1);
-    expect(recorded[0].url).toBe('https://api.thousandeyes.com/v1/tests');
+    expect(recorded[0].url).toBe('https://api.thousandeyes.com/v7/tests');
     expect(recorded[0].method).toBe('GET');
     expect(recorded[0].headers.Authorization).toBe('Bearer test-api-key-1234567890');
   });
@@ -69,7 +70,7 @@ describe('ThousandEyesClient', () => {
     const client = new ThousandEyesClient(mockConfig);
     await client.get('/tests/123');
 
-    expect(recorded[0].url).toBe('https://api.thousandeyes.com/v1/tests/123');
+    expect(recorded[0].url).toBe('https://api.thousandeyes.com/v7/tests/123');
   });
 
   test('post() sends JSON body for createTest', async () => {
@@ -80,6 +81,16 @@ describe('ThousandEyesClient', () => {
     expect(recorded[0].method).toBe('POST');
     expect(recorded[0].body).toBe(JSON.stringify({ testName: 'HTTP test', type: 'http-server' }));
     expect(recorded[0].headers['Content-Type']).toBe('application/json');
+  });
+
+  test('createTest uses type-specific v7 test endpoint', async () => {
+    const recorded = installFetch(() => ({ testId: 'new' }));
+    const api = new ThousandEyes(mockConfig);
+    await api.createTest('agent-to-server', { testName: 'Agent test', server: 'example.com' });
+
+    expect(recorded[0].method).toBe('POST');
+    expect(recorded[0].url).toBe('https://api.thousandeyes.com/v7/tests/agent-to-server/');
+    expect(recorded[0].body).toBe(JSON.stringify({ testName: 'Agent test', server: 'example.com' }));
   });
 
   test('throws ThousandEyesApiError on non-OK response', async () => {

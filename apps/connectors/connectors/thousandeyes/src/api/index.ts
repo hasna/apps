@@ -31,8 +31,11 @@ export class ThousandEyes {
     return this.client.get('/tests', params);
   }
 
-  async createTest(body: Record<string, unknown>): Promise<unknown> {
-    return this.client.post('/tests', body);
+  async createTest(testType: string, body: Record<string, unknown>): Promise<unknown> {
+    if (!testType) {
+      throw new Error('Test type is required');
+    }
+    return this.client.post(`/tests/${encodeURIComponent(testType)}/`, body);
   }
 
   async getTest(testId: string): Promise<unknown> {

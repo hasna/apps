@@ -30,7 +30,7 @@ connect-thousandeyes validate
 # Tests
 connect-thousandeyes tests list
 connect-thousandeyes tests get <testId>
-connect-thousandeyes tests create --body '{"testName":"Example","type":"http-server",...}'
+connect-thousandeyes tests create --type agent-to-server --body '{"testName":"Example","server":"www.thousandeyes.com",...}'
 
 # Events
 connect-thousandeyes events list --start <ms> --end <ms>
