@@ -129,6 +129,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ssl", "certificates", "security", "monitoring", "tls"],
   },
   {
+    name: "teleport",
+    displayName: "Teleport",
+    description: "Zero-trust access, PAM, and identity-aware infrastructure access",
+    category: "Security & Compliance",
+    tags: ["teleport", "pam", "zero-trust", "identity", "access"],
+  },
+  {
     name: "thehive",
     displayName: "TheHive",
     description: "Security incident response platform for managing and investigating cyber threats",
