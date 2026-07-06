@@ -45,6 +45,7 @@ import { enableStartup, installStartup } from "../daemon/install.js";
 import { normalizeGoalSpec } from "../lib/workflow-spec.js";
 import { runDoctor } from "../lib/doctor.js";
 import { buildHealthReport, buildHealthScan, expectationForLoop, writeHealthScanReports } from "../lib/health.js";
+import { runLoopsUiApp } from "./ui.js";
 import {
   applyImportMigrationBundle,
   buildImportMigrationPlan,
@@ -1735,6 +1736,21 @@ program
     } finally {
       store.close();
     }
+  }));
+
+program
+  .command("ui")
+  .description("open a live table of active loops")
+  .option("--refresh <duration>", "refresh interval", "2s")
+  .action(runAction(async (opts: { refresh?: string }) => {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      console.error("OpenLoops UI requires a TTY terminal.");
+      console.error("Use `loops list`, `loops runs`, or `loops daemon status` non-interactively.");
+      process.exitCode = 1;
+      return;
+    }
+    const refreshMs = Math.max(500, parseDuration(opts.refresh ?? "2s"));
+    await runLoopsUiApp({ refreshMs });
   }));
 
 program.command("show <idOrName>").description("show one loop by id or name").action(runAction((idOrName) => {
