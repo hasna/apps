@@ -45,6 +45,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["banking", "treasury", "payments", "fintech"],
   },
   {
+    name: "stripeclimate",
+    displayName: "Stripe Climate",
+    description: "Carbon removal products, suppliers, and orders",
+    category: "Commerce & Finance",
+    tags: ["payments", "climate", "carbon"],
+  },
+  {
     name: "shopify",
     displayName: "Shopify",
     description: "E-commerce platform",
