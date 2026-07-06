@@ -1,0 +1,202 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "OpenLoops",
+    "version": "0.4.13",
+    "description": "OpenLoops self-hosted control-plane HTTP API (loops-serve). RDS-direct (Amendment A1). All /v1 routes require an API key (x-api-key or Authorization: Bearer) with a loops:* scope."
+  },
+  "servers": [{ "url": "https://loops.hasna.xyz" }],
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "healthCheck",
+        "summary": "Liveness probe",
+        "responses": { "200": { "description": "alive", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Foundation" } } } } }
+      }
+    },
+    "/ready": {
+      "get": {
+        "operationId": "readyCheck",
+        "summary": "Readiness probe (storage reachable + migrated)",
+        "responses": {
+          "200": { "description": "ready", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Foundation" } } } },
+          "503": { "description": "not ready", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Foundation" } } } }
+        }
+      }
+    },
+    "/version": {
+      "get": {
+        "operationId": "getVersion",
+        "summary": "Service version",
+        "responses": { "200": { "description": "version", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Foundation" } } } } }
+      }
+    },
+    "/v1/loops": {
+      "get": {
+        "operationId": "listLoops",
+        "summary": "List loops",
+        "parameters": [
+          { "name": "status", "in": "query", "required": false, "schema": { "type": "string", "enum": ["active", "paused", "stopped", "expired"] } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer" } },
+          { "name": "includeArchived", "in": "query", "required": false, "schema": { "type": "boolean" } },
+          { "name": "archived", "in": "query", "required": false, "schema": { "type": "boolean" } }
+        ],
+        "responses": { "200": { "description": "loops", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LoopListResponse" } } } } }
+      },
+      "post": {
+        "operationId": "createLoop",
+        "summary": "Create a loop",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateLoopInput" } } } },
+        "responses": { "201": { "description": "created", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LoopResponse" } } } } }
+      }
+    },
+    "/v1/loops/{id}": {
+      "get": {
+        "operationId": "getLoop",
+        "summary": "Get a loop by id",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "loop", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LoopResponse" } } } } }
+      },
+      "patch": {
+        "operationId": "updateLoop",
+        "summary": "Update a loop (status / schedule fields)",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateLoopInput" } } } },
+        "responses": { "200": { "description": "loop", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LoopResponse" } } } } }
+      },
+      "delete": {
+        "operationId": "deleteLoop",
+        "summary": "Delete a loop",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "deleted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/DeleteResponse" } } } } }
+      }
+    },
+    "/v1/loops/{id}/archive": {
+      "post": {
+        "operationId": "archiveLoop",
+        "summary": "Archive a loop",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "loop", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LoopResponse" } } } } }
+      }
+    },
+    "/v1/loops/{id}/unarchive": {
+      "post": {
+        "operationId": "unarchiveLoop",
+        "summary": "Unarchive a loop",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "loop", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LoopResponse" } } } } }
+      }
+    },
+    "/v1/runs": {
+      "get": {
+        "operationId": "listRuns",
+        "summary": "List runs",
+        "parameters": [
+          { "name": "loopId", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "status", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "required": false, "schema": { "type": "integer" } }
+        ],
+        "responses": { "200": { "description": "runs", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RunListResponse" } } } } }
+      }
+    },
+    "/v1/runs/{id}": {
+      "get": {
+        "operationId": "getRun",
+        "summary": "Get a run by id",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "run", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RunResponse" } } } } }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Foundation": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string" },
+          "version": { "type": "string" },
+          "mode": { "type": "string" },
+          "service": { "type": "string" },
+          "detail": { "type": "string" }
+        },
+        "required": ["status", "version", "mode"]
+      },
+      "Loop": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "description": { "type": "string", "nullable": true },
+          "status": { "type": "string" },
+          "schedule": { "type": "object", "additionalProperties": true },
+          "target": { "type": "object", "additionalProperties": true },
+          "nextRunAt": { "type": "string", "nullable": true },
+          "createdAt": { "type": "string" },
+          "updatedAt": { "type": "string" }
+        },
+        "required": ["id", "name", "status"]
+      },
+      "CreateLoopInput": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "schedule": { "type": "object", "additionalProperties": true },
+          "target": { "type": "object", "additionalProperties": true }
+        },
+        "required": ["name", "schedule", "target"]
+      },
+      "UpdateLoopInput": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "string", "enum": ["active", "paused", "stopped", "expired"] },
+          "nextRunAt": { "type": "string", "nullable": true },
+          "retryScheduledFor": { "type": "string", "nullable": true },
+          "expiresAt": { "type": "string", "nullable": true }
+        }
+      },
+      "Run": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string" },
+          "loopId": { "type": "string" },
+          "status": { "type": "string" },
+          "attempt": { "type": "integer" },
+          "scheduledFor": { "type": "string" },
+          "startedAt": { "type": "string", "nullable": true },
+          "finishedAt": { "type": "string", "nullable": true }
+        },
+        "required": ["id", "loopId", "status"]
+      },
+      "LoopResponse": {
+        "type": "object",
+        "properties": { "ok": { "type": "boolean" }, "loop": { "$ref": "#/components/schemas/Loop" } },
+        "required": ["ok", "loop"]
+      },
+      "LoopListResponse": {
+        "type": "object",
+        "properties": { "ok": { "type": "boolean" }, "loops": { "type": "array", "items": { "$ref": "#/components/schemas/Loop" } } },
+        "required": ["ok", "loops"]
+      },
+      "RunResponse": {
+        "type": "object",
+        "properties": { "ok": { "type": "boolean" }, "run": { "$ref": "#/components/schemas/Run" } },
+        "required": ["ok", "run"]
+      },
+      "RunListResponse": {
+        "type": "object",
+        "properties": { "ok": { "type": "boolean" }, "runs": { "type": "array", "items": { "$ref": "#/components/schemas/Run" } } },
+        "required": ["ok", "runs"]
+      },
+      "DeleteResponse": {
+        "type": "object",
+        "properties": { "ok": { "type": "boolean" }, "deleted": { "type": "boolean" } },
+        "required": ["ok", "deleted"]
+      }
+    },
+    "securitySchemes": {
+      "apiKey": { "type": "apiKey", "in": "header", "name": "x-api-key" }
+    }
+  },
+  "security": [{ "apiKey": [] }]
+}

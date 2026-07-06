@@ -9,6 +9,7 @@
     "loops": "dist/cli/index.js",
     "loops-daemon": "dist/daemon/index.js",
     "loops-api": "dist/api/index.js",
+    "loops-serve": "dist/serve/index.js",
     "loops-runner": "dist/runner/index.js",
     "loops-mcp": "dist/mcp/index.js"
   },
@@ -20,6 +21,14 @@
     "./sdk": {
       "types": "./dist/sdk/index.d.ts",
       "import": "./dist/sdk/index.js"
+    },
+    "./sdk/http": {
+      "types": "./dist/sdk/http.d.ts",
+      "import": "./dist/sdk/http.js"
+    },
+    "./serve": {
+      "types": "./dist/serve/index.d.ts",
+      "import": "./dist/serve/index.js"
     },
     "./mcp": {
       "types": "./dist/mcp/index.d.ts",
@@ -66,7 +75,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts src/daemon/index.ts src/api/index.ts src/runner/index.ts src/mcp/index.ts src/index.ts src/sdk/index.ts src/lib/store.ts src/lib/mode.ts src/lib/storage/index.ts src/lib/storage/contract.ts src/lib/storage/sqlite.ts src/lib/storage/postgres.ts src/lib/storage/postgres-schema.ts --root src --outdir dist --target bun --packages external && chmod +x dist/cli/index.js dist/daemon/index.js dist/api/index.js dist/runner/index.js dist/mcp/index.js && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist && bun build src/cli/index.ts src/daemon/index.ts src/api/index.ts src/serve/index.ts src/runner/index.ts src/mcp/index.ts src/index.ts src/sdk/index.ts src/sdk/http.ts src/lib/store.ts src/lib/mode.ts src/lib/storage/index.ts src/lib/storage/contract.ts src/lib/storage/sqlite.ts src/lib/storage/postgres.ts src/lib/storage/postgres-schema.ts --root src --outdir dist --target bun --packages external && chmod +x dist/cli/index.js dist/daemon/index.js dist/api/index.js dist/serve/index.js dist/runner/index.js dist/mcp/index.js && tsc -p tsconfig.build.json --emitDeclarationOnly --outDir dist",
     "build:bin": "bun build src/cli/index.ts --compile --outfile dist/loops",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
