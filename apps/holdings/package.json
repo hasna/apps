@@ -1,6 +1,6 @@
 {
   "name": "@hasna/holdings",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "IP portfolio system-of-record: trademarks, patents, copyrights, brand assets — registration/renewal & deadline tracking, jurisdiction status, filing docs. CLI + MCP + serve over a Hasna-contract store.",
   "type": "module",
   "main": "dist/index.js",
