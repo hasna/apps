@@ -3,9 +3,13 @@
   "name": "logs",
   "class": "service",
   "contractVersion": "v1",
-  "kitVersion": "0.4.1",
+  "kitVersion": "0.4.2",
   "description": "Agent-friendly log + telemetry sink. CLI + MCP + HTTP API (logs-serve) + generated SDK. Local mode uses SQLite at ~/.hasna/logs/logs.db; cloud mode (HASNA_LOGS_STORAGE_MODE=cloud) is PURE REMOTE per Amendment A1: the serve process reads/writes the shared cloud Postgres directly, with API-key auth via @hasna/contracts. This is the shared S3-backed log sink other apps route to.",
-  "bins": ["logs", "logs-mcp", "logs-serve"],
+  "bins": [
+    "logs",
+    "logs-mcp",
+    "logs-serve"
+  ],
   "storage": {
     "mode": "local",
     "envPrefix": "HASNA_LOGS_",
@@ -23,7 +27,11 @@
       "apiVersion": "v1",
       "auth": "api-key",
       "signingSecretSecretRef": "hasna/oss/logs/api-key-signing-secret",
-      "migrationCommand": ["logs", "db", "migrate"],
+      "migrationCommand": [
+        "logs",
+        "db",
+        "migrate"
+      ],
       "ownerDatabaseUrlSecretRef": "hasna/oss/logs/database-url-owner"
     },
     "client": {
