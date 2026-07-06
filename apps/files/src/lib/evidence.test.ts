@@ -4,6 +4,19 @@ import { tmpdir } from "os";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 
+// Capture prior values so the global process.env mutations below are restored
+// in afterAll — otherwise these leak into later CLI tests that spread
+// ...process.env into spawned subprocesses (e.g. storage status).
+const POLLUTED_ENV_KEYS = [
+  "HASNA_FILES_DATA_DIR",
+  "HASNA_FILES_DB_PATH",
+  "HASNA_FILES_EVIDENCE_STORAGE",
+  "HASNA_FILES_EVIDENCE_LOCAL_ROOT",
+] as const;
+const priorEnv: Record<string, string | undefined> = Object.fromEntries(
+  POLLUTED_ENV_KEYS.map((k) => [k, process.env[k]]),
+);
+
 const testDir = mkdtempSync(join(tmpdir(), "open-files-evidence-"));
 process.env.HASNA_FILES_DATA_DIR = testDir;
 process.env.HASNA_FILES_DB_PATH = join(testDir, "files.db");
@@ -37,6 +50,11 @@ beforeEach(() => {
 afterAll(() => {
   closeDb();
   rmSync(testDir, { recursive: true, force: true });
+  // Restore global env so these do not leak into later CLI tests.
+  for (const k of POLLUTED_ENV_KEYS) {
+    if (priorEnv[k] === undefined) delete process.env[k];
+    else process.env[k] = priorEnv[k];
+  }
 });
 
 describe("evidence vault", () => {
