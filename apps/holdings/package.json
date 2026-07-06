@@ -26,7 +26,7 @@
     "dev:cli": "bun run src/cli/index.tsx",
     "dev:mcp": "bun run src/mcp/index.ts --http --port 8893",
     "dev:serve": "bun run src/server/index.ts",
-    "postinstall": "bun run scripts/postinstall.ts"
+    "postinstall": "node -e \"const fs=require('node:fs'),path=require('node:path'),os=require('node:os');const home=process.env.HOME||process.env.USERPROFILE||os.homedir();const root=path.join(home,'.hasna','holdings');try{fs.mkdirSync(root,{recursive:true,mode:0o700});for(const dir of ['config','data','exports','backups','logs','tmp'])fs.mkdirSync(path.join(root,dir),{recursive:true,mode:0o700});}catch{}\""
   },
   "publishConfig": { "registry": "https://registry.npmjs.org", "access": "public" },
   "repository": { "type": "git", "url": "https://github.com/hasna/holdings.git" },
