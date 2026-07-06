@@ -5,6 +5,20 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## Unreleased
+
+### Changed
+
+- Documentation now names `loops-serve` as the Postgres-backed Hasna-owned
+  self-hosted control-plane host, keeps `loops-api` as the shared embeddable API
+  contract, and reserves `cloud` wording for the hosted SaaS contract rather
+  than the Hasna-owned self-hosted deployment.
+- The cutover and migration docs now match the 0.4.14 self-hosted backend:
+  `PostgresLoopStorage`, API-key auth, HTTP SDK, ARM64 deploy artifacts, and
+  `loops-serve migrate` are shipped; long-running runner daemon mode, workflow
+  execution over the runner protocol, and id-preserving remote import remain
+  follow-up work.
+
 ## 0.4.14 (2026-07-06)
 
 Self-hosted control-plane service brought to the full Hasna standard: all four

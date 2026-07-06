@@ -1,10 +1,10 @@
 // Postgres implementation of the LoopStorageContract.
 //
-// This is the cloud/remote backend counterpart to SqliteLoopStorage. It speaks
-// the exact same ~60-method surface as the local sqlite `Store`, but every
-// method is async and every statement runs against a live `pg.Pool` through the
-// vendored @hasna/contracts storage kit (PURE REMOTE, Amendment A1: reads and
-// writes hit the same cloud Postgres — no cache, no local mirror).
+// This is the self-hosted Postgres backend counterpart to SqliteLoopStorage. It
+// speaks the exact same ~60-method surface as the local sqlite `Store`, but
+// every method is async and every statement runs against a live `pg.Pool`
+// through the vendored @hasna/contracts storage kit (direct Postgres, no cache,
+// no local mirror).
 //
 // Row shape parity with sqlite is achieved by three pg type-parser overrides
 // registered at module load (see below): JSONB/JSON come back as raw text and

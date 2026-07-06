@@ -10,14 +10,16 @@ package.
 | Mode | Source of truth | Local storage role | Executor |
 | --- | --- | --- | --- |
 | `local` | SQLite in `LOOPS_DATA_DIR` | Authoritative | `loops-daemon` |
-| `self_hosted` | A user-operated `loops-api` control plane contract | Cache and offline spool | `loops-runner` foundation |
+| `self_hosted` | Hasna-owned AWS/RDS control plane served by `loops-serve`/`loops-api` | Cache and offline spool | `loops-runner` foundation |
 | `cloud` | A configured hosted control plane contract | Cache and offline spool | `loops-runner` foundation |
 
 `local` remains the default. It must keep working without network access,
 tokens, Postgres, or hosted infrastructure.
 
-`self_hosted` is for users or teams running their own control plane. The public
-`@hasna/loops` package owns the API and runner contract for this mode.
+`self_hosted` is the Hasna-owned AWS/RDS control-plane deployment. The public
+`@hasna/loops` package owns `loops-serve`, the embeddable `loops-api` contract,
+the Postgres storage adapter, migrations, HTTP SDK, and runner contract for this
+mode.
 
 `cloud` is the hosted control-plane contract. The public package exposes the
 client and runner contract, but tenant auth, account administration, and hosted
@@ -58,6 +60,8 @@ loops self-hosted runner-register --runner-id <id> --machine-id <machine>
 loops self-hosted runner-register --runner-id <id> --machine-id <machine> --apply
 loops cloud status
 loops-api status
+loops-serve version
+HASNA_LOOPS_DATABASE_URL=... loops-serve migrate --dry-run
 loops-runner status
 loops export --file ./loops-export.json --dry-run
 loops export --file ./loops-export.json
@@ -88,11 +92,12 @@ JSON uses these field names:
 - `schedulerState.localStore`: always names the local SQLite store and local
   run artifact files. In `local` mode this store is authoritative; in
   non-local modes it is a cache, offline spool, and audit copy.
-- `schedulerState.remoteStore`: names the remote scheduler contract:
+- `schedulerState.remoteStore`: names the non-local scheduler contract:
   `api_control_plane_contract`, `postgres_contract`,
   `hosted_control_plane_contract`, `unconfigured`, or `none`. Remote apply is
-  `false` in this public package until a control-plane host wires a full
-  storage adapter.
+  `false` in the standalone CLI until the control-plane API exposes
+  id-preserving import endpoints. `loops-serve` itself wires the Postgres
+  storage adapter for normal control-plane CRUD and runner protocol routes.
 - `schedulerState.remoteStore.objectArtifacts`: `object_store_contract` means
   remote artifact/object storage is a control-plane contract. The public package
   does not create or mutate S3 buckets, AWS resources, or hosted credentials.
@@ -102,13 +107,18 @@ JSON uses these field names:
   Live active counts use admitted/running work items; dry-runs do not open or
   migrate the live store to compute counts.
 
-`loops-api` is a separate process in the same public package. It is not a
-separate package at this stage because self-hosted users and the hosted service
-must share the same public contract. The API server can expose storage-backed
-`/v1` loop CRUD and run listing when an embedding host injects the public
-storage contract. The standalone `loops-api serve` binary still fails closed
-for those routes until a self-hosted storage adapter is wired by the operator or
-platform host.
+`loops-serve` is the self-hosted HTTP control-plane binary in this public
+package. It reads and writes Postgres directly, serves open foundation probes
+(`GET /health`, `/ready`, `/version`, `/openapi.json`), gates `/v1` loop/run and
+runner-protocol routes with API-key auth on non-local binds, and applies the
+Postgres migrations plus the shared `api_keys` table with `loops-serve migrate`.
+
+`loops-api` is the embeddable API contract and local/dev foundation server in
+the same public package. It is not a separate package because self-hosted users
+and the hosted service must share the same public contract. The standalone
+`loops-api serve` path still fails closed for storage-backed routes unless an
+embedding host injects a storage adapter; `loops-serve` is the shipped
+Postgres-backed self-hosted host.
 
 `loops-runner` is the process that connects a machine to a non-local control
 plane. The current public package supports a bounded one-shot protocol:
@@ -166,9 +176,10 @@ would generate new ids, so it is not a no-loss migration. Local SQLite remains
 authoritative until a safe import is applied; in non-local modes it may remain
 a cache, offline spool, and audit copy.
 
-`LOOPS_DATABASE_URL` selects the self-hosted Postgres scheduler-state contract,
-but it does not make the standalone CLI mutate a remote database by itself.
-Remote execution still flows through a configured control-plane API and runner
+`LOOPS_DATABASE_URL` or `HASNA_LOOPS_DATABASE_URL` selects the self-hosted
+Postgres scheduler-state contract and is required by `loops-serve`. It does not
+make the standalone `loops` CLI mutate a remote database by itself. Remote
+execution still flows through a configured control-plane API and runner
 protocol. `loops-runner` needs `LOOPS_API_URL` or `HASNA_LOOPS_API_URL` to claim
 work; a database URL alone is migration/readiness configuration.
 
@@ -203,9 +214,8 @@ mode.
 
 ## Follow-Up Work
 
-Non-local execution needs these follow-up releases before it is live:
+Non-local execution needs these follow-up releases before it is complete:
 
-- A full Postgres control-plane adapter behind the public storage contract.
 - Long-running runner daemon mode with backoff, fleet observability, and
   durable machine registration records.
 - Workflow target execution over the remote protocol.
