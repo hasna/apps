@@ -41,6 +41,10 @@ export interface ContactsAuthResult {
   message?: string;
 }
 
+export interface ContactsAuthContext {
+  allowUnauthenticatedLoopback: boolean;
+}
+
 interface TokenRecord {
   token: string;
   scopes: Set<string>;
@@ -80,11 +84,13 @@ function bearerToken(req: Request): string | null {
   return match?.[1]?.trim() || null;
 }
 
-function isLoopbackRequest(req: Request): boolean {
-  const url = new URL(req.url);
-  const host = req.headers.get("host") ?? url.host;
-  const hostname = host.split(":")[0] ?? "";
-  return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(hostname);
+export function allowUnauthenticatedLoopbackEnv(): boolean {
+  return process.env["CONTACTS_ALLOW_UNAUTHENTICATED_LOOPBACK"] === "1";
+}
+
+export function isLoopbackBindHost(hostname: string): boolean {
+  const normalized = hostname.trim().toLowerCase();
+  return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(normalized);
 }
 
 export function hasScope(principal: ContactsPrincipal, required: ContactsScope): boolean {
@@ -92,7 +98,11 @@ export function hasScope(principal: ContactsPrincipal, required: ContactsScope):
   return principal.scopes.has("*") || principal.scopes.has(required) || principal.scopes.has(`${prefix}:*`);
 }
 
-export function authenticateContactsRequest(req: Request, required: ContactsScope): ContactsAuthResult {
+export function authenticateContactsRequest(
+  req: Request,
+  required: ContactsScope,
+  context: ContactsAuthContext = { allowUnauthenticatedLoopback: false },
+): ContactsAuthResult {
   const configured = parseTokenRecords();
   const token = bearerToken(req) ?? req.headers.get("x-contacts-token");
   if (token) {
@@ -103,7 +113,7 @@ export function authenticateContactsRequest(req: Request, required: ContactsScop
     return { ok: true, principal };
   }
 
-  if (configured.length === 0 && isLoopbackRequest(req)) {
+  if (configured.length === 0 && context.allowUnauthenticatedLoopback) {
     return {
       ok: true,
       principal: { id: "local-loopback", scopes: new Set(["*"]), localDevelopment: true },

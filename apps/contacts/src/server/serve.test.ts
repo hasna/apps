@@ -9,6 +9,7 @@ import { createContactsRequestHandler } from "./serve.js";
 const originalDbPath = process.env["CONTACTS_DB_PATH"];
 const originalToken = process.env["HASNA_CONTACTS_API_TOKENS"];
 const originalSensitive = process.env["HASNA_CONTACTS_ALLOW_SENSITIVE_SYNC"];
+const originalAllowUnauthenticatedLoopback = process.env["CONTACTS_ALLOW_UNAUTHENTICATED_LOOPBACK"];
 
 let tmpDir: string;
 
@@ -45,6 +46,7 @@ afterEach(() => {
   restore("CONTACTS_DB_PATH", originalDbPath);
   restore("HASNA_CONTACTS_API_TOKENS", originalToken);
   restore("HASNA_CONTACTS_ALLOW_SENSITIVE_SYNC", originalSensitive);
+  restore("CONTACTS_ALLOW_UNAUTHENTICATED_LOOPBACK", originalAllowUnauthenticatedLoopback);
   try { rmSync(tmpDir, { recursive: true, force: true }); } catch {}
 });
 
@@ -57,6 +59,30 @@ describe("contacts serve auth and PII controls", () => {
 
     const dashboard = await handler(request("/"));
     expect(dashboard.status).toBe(401);
+  });
+
+  test("does not trust spoofed Host localhost for unauthenticated shared requests", async () => {
+    delete process.env["HASNA_CONTACTS_API_TOKENS"];
+    process.env["CONTACTS_ALLOW_UNAUTHENTICATED_LOOPBACK"] = "1";
+    const handler = createContactsRequestHandler();
+
+    const res = await handler(request("/api/contacts", {
+      headers: { host: "localhost" },
+    }));
+
+    expect(res.status).toBe(401);
+  });
+
+  test("allows explicit unauthenticated loopback only with trusted bind context", async () => {
+    delete process.env["HASNA_CONTACTS_API_TOKENS"];
+    process.env["CONTACTS_ALLOW_UNAUTHENTICATED_LOOPBACK"] = "1";
+    const handler = createContactsRequestHandler({ trustedLoopbackBind: true });
+
+    const res = await handler(request("/api/contacts", {
+      headers: { host: "contacts.example" },
+    }));
+
+    expect(res.status).toBe(200);
   });
 
   test("enforces dedicated export scopes and redacts PII by default", async () => {

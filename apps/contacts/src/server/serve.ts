@@ -34,14 +34,25 @@ import { getDocumentsDir } from "../lib/vault.js";
 import { handleMcpRequest, healthPayload } from "../mcp/http.js";
 import { buildServer } from "../mcp/index.js";
 import {
+  allowUnauthenticatedLoopbackEnv,
   auditServerAccess,
   authenticateContactsRequest,
+  isLoopbackBindHost,
   redactContactForExport,
   type ContactsPrincipal,
   type ContactsScope,
 } from "./security.js";
 
 const DASHBOARD_DIST = join(import.meta.dir, "../../dashboard/dist");
+const DEFAULT_REST_HOST = "127.0.0.1";
+
+export interface ContactsRequestHandlerOptions {
+  trustedLoopbackBind?: boolean;
+}
+
+export interface StartServerOptions {
+  hostname?: string;
+}
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -66,8 +77,14 @@ function getSegments(url: URL): string[] {
   return url.pathname.split("/").filter(Boolean);
 }
 
-function requireScope(req: Request, scope: ContactsScope): ContactsPrincipal | Response {
-  const result = authenticateContactsRequest(req, scope);
+function requireScope(
+  req: Request,
+  scope: ContactsScope,
+  options: ContactsRequestHandlerOptions,
+): ContactsPrincipal | Response {
+  const result = authenticateContactsRequest(req, scope, {
+    allowUnauthenticatedLoopback: Boolean(options.trustedLoopbackBind) && allowUnauthenticatedLoopbackEnv(),
+  });
   if (!result.ok || !result.principal) {
     return apiError(result.message ?? "Unauthorized", result.status ?? 401);
   }
@@ -99,10 +116,15 @@ function isPathInside(baseDir: string, filePath: string): boolean {
 
 // ─── /api/contacts ────────────────────────────────────────────────────────────
 
-async function handleContacts(req: Request, url: URL, segments: string[]): Promise<Response> {
+async function handleContacts(
+  req: Request,
+  url: URL,
+  segments: string[],
+  options: ContactsRequestHandlerOptions,
+): Promise<Response> {
   const method = req.method;
   const id = segments[2];
-  const principal = requireScope(req, method === "GET" ? "contacts:read" : "contacts:write");
+  const principal = requireScope(req, method === "GET" ? "contacts:read" : "contacts:write", options);
   if (isResponse(principal)) return principal;
 
   if (method === "GET" && !id) {
@@ -168,10 +190,15 @@ async function handleContacts(req: Request, url: URL, segments: string[]): Promi
 
 // ─── /api/companies ───────────────────────────────────────────────────────────
 
-async function handleCompanies(req: Request, url: URL, segments: string[]): Promise<Response> {
+async function handleCompanies(
+  req: Request,
+  url: URL,
+  segments: string[],
+  options: ContactsRequestHandlerOptions,
+): Promise<Response> {
   const method = req.method;
   const id = segments[2];
-  const principal = requireScope(req, method === "GET" ? "companies:read" : "companies:write");
+  const principal = requireScope(req, method === "GET" ? "companies:read" : "companies:write", options);
   if (isResponse(principal)) return principal;
 
   if (method === "GET" && !id) {
@@ -229,10 +256,15 @@ async function handleCompanies(req: Request, url: URL, segments: string[]): Prom
 
 // ─── /api/tags ────────────────────────────────────────────────────────────────
 
-async function handleTags(req: Request, _url: URL, segments: string[]): Promise<Response> {
+async function handleTags(
+  req: Request,
+  _url: URL,
+  segments: string[],
+  options: ContactsRequestHandlerOptions,
+): Promise<Response> {
   const method = req.method;
   const id = segments[2];
-  const principal = requireScope(req, method === "GET" ? "tags:read" : "tags:write");
+  const principal = requireScope(req, method === "GET" ? "tags:read" : "tags:write", options);
   if (isResponse(principal)) return principal;
 
   if (method === "GET" && !id) {
@@ -264,8 +296,8 @@ async function handleTags(req: Request, _url: URL, segments: string[]): Promise<
 
 // ─── /api/stats ───────────────────────────────────────────────────────────────
 
-function handleStats(req: Request): Response {
-  const principal = requireScope(req, "stats:read");
+function handleStats(req: Request, options: ContactsRequestHandlerOptions): Response {
+  const principal = requireScope(req, "stats:read", options);
   if (isResponse(principal)) return principal;
   const db = getDatabase();
   const contactCount = (db.prepare("SELECT COUNT(*) as count FROM contacts").get() as { count: number }).count;
@@ -276,8 +308,8 @@ function handleStats(req: Request): Response {
 
 // ─── /api/import ──────────────────────────────────────────────────────────────
 
-async function handleImport(req: Request): Promise<Response> {
-  const principal = requireScope(req, "contacts:import");
+async function handleImport(req: Request, options: ContactsRequestHandlerOptions): Promise<Response> {
+  const principal = requireScope(req, "contacts:import", options);
   if (isResponse(principal)) return principal;
   const body = await parseJson(req);
   if (!body || typeof body !== "object") return apiError("Invalid body");
@@ -306,15 +338,15 @@ async function handleImport(req: Request): Promise<Response> {
 
 // ─── /api/export ──────────────────────────────────────────────────────────────
 
-async function handleExport(req: Request): Promise<Response> {
-  const principal = requireScope(req, "contacts:export");
+async function handleExport(req: Request, options: ContactsRequestHandlerOptions): Promise<Response> {
+  const principal = requireScope(req, "contacts:export", options);
   if (isResponse(principal)) return principal;
   const url = new URL(req.url);
   const format = (url.searchParams.get("format") ?? "json") as "json" | "csv" | "vcf";
   if (!["json", "csv", "vcf"].includes(format)) return apiError("format must be json, csv, or vcf");
   const includeSensitive = url.searchParams.get("include_sensitive") === "1" || url.searchParams.get("include_sensitive") === "true";
   if (includeSensitive) {
-    const full = requireScope(req, "contacts:export:full");
+    const full = requireScope(req, "contacts:export:full", options);
     if (isResponse(full)) return full;
   }
 
@@ -341,8 +373,8 @@ async function handleExport(req: Request): Promise<Response> {
 
 // ─── /api/documents/:id/file — serve plain document attachments ───────────────
 
-function handleDocumentFiles(req: Request, segments: string[]): Response {
-  const principal = requireScope(req, "documents:read");
+function handleDocumentFiles(req: Request, segments: string[], options: ContactsRequestHandlerOptions): Response {
+  const principal = requireScope(req, "documents:read", options);
   if (isResponse(principal)) return principal;
   const docId = segments[2]; // /api/documents/:id
   const sub = segments[3];   // /api/documents/:id/file
@@ -367,7 +399,12 @@ function handleDocumentFiles(req: Request, segments: string[]): Response {
 
 // ─── /api/images ─────────────────────────────────────────────────────────────
 
-async function handleImages(req: Request, _url: URL, segments: string[]): Promise<Response> {
+async function handleImages(
+  req: Request,
+  _url: URL,
+  segments: string[],
+  options: ContactsRequestHandlerOptions,
+): Promise<Response> {
   const entityId = segments[2]; // /api/images/:entity-id
 
   if (!entityId) return apiError("Entity ID required");
@@ -375,7 +412,7 @@ async function handleImages(req: Request, _url: URL, segments: string[]): Promis
 
   // GET /api/images/:id — serve the image file
   if (req.method === "GET") {
-    const principal = requireScope(req, "images:read");
+    const principal = requireScope(req, "images:read", options);
     if (isResponse(principal)) return principal;
     const imagePath = getImagePath(entityId);
     if (!imagePath || !existsSync(imagePath)) {
@@ -388,7 +425,7 @@ async function handleImages(req: Request, _url: URL, segments: string[]): Promis
 
   // POST /api/images/:id — upload image (multipart form-data or base64 JSON)
   if (req.method === "POST") {
-    const principal = requireScope(req, "images:write");
+    const principal = requireScope(req, "images:write", options);
     if (isResponse(principal)) return principal;
     const contentType = req.headers.get("content-type") || "";
 
@@ -426,7 +463,7 @@ async function handleImages(req: Request, _url: URL, segments: string[]): Promis
 
   // DELETE /api/images/:id — remove image
   if (req.method === "DELETE") {
-    const principal = requireScope(req, "images:write");
+    const principal = requireScope(req, "images:write", options);
     if (isResponse(principal)) return principal;
     const deleted = deleteImage(entityId);
     auditServerAccess("server.image.deleted", { entity_id: entityId, deleted }, principal);
@@ -445,11 +482,11 @@ function serveStaticFile(filePath: string): Response | null {
 
 // ─── Main server ──────────────────────────────────────────────────────────────
 
-export function createContactsRequestHandler(): (req: Request) => Promise<Response> {
+export function createContactsRequestHandler(options: ContactsRequestHandlerOptions = {}): (req: Request) => Promise<Response> {
   return async function fetch(req) {
       const url = new URL(req.url);
       const segments = getSegments(url);
-      const localRequest = ["localhost", "127.0.0.1", "::1", "[::1]"].includes((req.headers.get("host") ?? url.host).split(":")[0] ?? "");
+      const localRequest = Boolean(options.trustedLoopbackBind);
 
       const corsHeaders = {
         "Access-Control-Allow-Origin": localRequest ? "*" : "null",
@@ -465,7 +502,7 @@ export function createContactsRequestHandler(): (req: Request) => Promise<Respon
         return json(healthPayload("contacts"));
       }
       if (url.pathname === "/mcp") {
-        const principal = requireScope(req, "mcp:access");
+        const principal = requireScope(req, "mcp:access", options);
         if (isResponse(principal)) return principal;
         return handleMcpRequest(req, buildServer);
       }
@@ -476,38 +513,38 @@ export function createContactsRequestHandler(): (req: Request) => Promise<Respon
         if (segments[0] === "api") {
           switch (segments[1]) {
             case "contacts":
-              response = await handleContacts(req, url, segments);
+              response = await handleContacts(req, url, segments, options);
               break;
             case "companies":
-              response = await handleCompanies(req, url, segments);
+              response = await handleCompanies(req, url, segments, options);
               break;
             case "tags":
-              response = await handleTags(req, url, segments);
+              response = await handleTags(req, url, segments, options);
               break;
             case "stats":
-              response = handleStats(req);
+              response = handleStats(req, options);
               break;
             case "import":
               response = req.method === "POST"
-                ? await handleImport(req)
+                ? await handleImport(req, options)
                 : apiError("Method not allowed", 405);
               break;
             case "export":
               response = req.method === "GET"
-                ? await handleExport(req)
+                ? await handleExport(req, options)
                 : apiError("Method not allowed", 405);
               break;
             case "images":
-              response = await handleImages(req, url, segments);
+              response = await handleImages(req, url, segments, options);
               break;
             case "documents":
-              response = handleDocumentFiles(req, segments);
+              response = handleDocumentFiles(req, segments, options);
               break;
             default:
               response = apiError("Not found", 404);
           }
         } else {
-          const principal = requireScope(req, "dashboard:read");
+          const principal = requireScope(req, "dashboard:read", options);
           if (isResponse(principal)) {
             response = principal;
           } else {
@@ -535,11 +572,14 @@ export function createContactsRequestHandler(): (req: Request) => Promise<Respon
 
 // ─── Main server ──────────────────────────────────────────────────────────────
 
-export function startServer(port: number): void {
+export function startServer(port: number, options: StartServerOptions = {}): void {
+  const hostname = options.hostname ?? process.env["CONTACTS_HOST"] ?? DEFAULT_REST_HOST;
+  const trustedLoopbackBind = isLoopbackBindHost(hostname);
   Bun.serve({
+    hostname,
     port,
-    fetch: createContactsRequestHandler(),
+    fetch: createContactsRequestHandler({ trustedLoopbackBind }),
   });
 
-  console.log(`Contacts server running at http://localhost:${port}`);
+  console.log(`Contacts server running at http://${hostname}:${port}`);
 }

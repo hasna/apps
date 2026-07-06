@@ -71,6 +71,18 @@ The REST server (`contacts-serve`) also exposes `/health` and `/mcp` when runnin
 contacts-serve
 ```
 
+`contacts-serve` binds to `127.0.0.1` by default. Use `--host <host>` or
+`CONTACTS_HOST=<host>` only when intentionally exposing it beyond loopback.
+Shared binds still fail closed unless a valid contacts token is configured and
+sent with the request. The unauthenticated local development fallback is disabled
+by default and only activates when all of the following are true:
+
+- no contacts API token environment variable is configured
+- `CONTACTS_ALLOW_UNAUTHENTICATED_LOOPBACK=1`
+- the server is explicitly bound to a loopback host
+
+The fallback does not trust the HTTP `Host` header.
+
 ## Storage
 
 Contacts owns its local SQLite storage directly. It does not depend on shared
