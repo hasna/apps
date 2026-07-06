@@ -17,10 +17,6 @@ export {
   getApiKey,
   setApiKey,
   getBaseUrl,
-  getApiSecret,
-  setApiSecret,
-  getToken,
-  setToken,
   getCurrentProfile,
   setCurrentProfile,
   listProfiles,
@@ -29,26 +25,7 @@ export {
   loadProfile,
   saveProfile,
   clearConfig,
-  getOAuthConfig,
-  setOAuthConfig,
-  loadOAuthTokens,
-  saveOAuthTokens,
-  clearOAuthTokens,
-  getAccessToken,
 } from './utils/config';
-
-export {
-  getAuthUrl,
-  exchangeCodeForTokens,
-  refreshAccessToken,
-  startCallbackServer,
-  getValidAccessToken,
-  isAuthenticated,
-  getRedirectUri,
-  getRedirectPort,
-  type AuthResult,
-  type AuthUrlOptions,
-} from './utils/auth';
 
 export {
   loadSettings,

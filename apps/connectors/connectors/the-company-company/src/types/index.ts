@@ -13,24 +13,6 @@ export interface ConnectorConfig {
 }
 
 // ============================================
-// OAuth2 Types
-// ============================================
-
-export interface OAuth2Config {
-  clientId: string;
-  clientSecret: string;
-  redirectUri?: string;
-}
-
-export interface OAuth2Tokens {
-  accessToken: string;
-  refreshToken?: string;
-  expiresAt: number;
-  tokenType?: string;
-  scope?: string;
-}
-
-// ============================================
 // Common Types
 // ============================================
 

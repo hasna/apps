@@ -1,30 +1,13 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
-import type { OAuth2Config, OAuth2Tokens } from '../types';
 
 const CONNECTOR_NAME = 'connect-the-company-company';
 const DEFAULT_PROFILE = 'default';
 
 export interface ProfileConfig {
-  // API Key authentication
   apiKey?: string;
-  token?: string;       // Alias for apiKey
-  apiSecret?: string;
   baseUrl?: string;
-
-  // OAuth2 authentication
-  accessToken?: string;
-  refreshToken?: string;
-  expiresAt?: number;
-  tokenType?: string;
-  scope?: string;
-
-  // OAuth2 client credentials (stored separately for security)
-  clientId?: string;
-  clientSecret?: string;
-
-  // Add more config fields as needed for your API
 }
 
 // Store for --profile flag override (set by CLI before commands run)
@@ -45,15 +28,22 @@ export function setProfileOverride(profile: string | undefined): void {
 
 export function ensureConfigDir(): void {
   if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
+    mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   }
+  chmodSync(CONFIG_DIR, 0o700);
   if (!existsSync(PROFILES_DIR)) {
-    mkdirSync(PROFILES_DIR, { recursive: true });
+    mkdirSync(PROFILES_DIR, { recursive: true, mode: 0o700 });
   }
+  chmodSync(PROFILES_DIR, 0o700);
 }
 
 function getProfilePath(profile: string): string {
   return join(PROFILES_DIR, `${profile}.json`);
+}
+
+function writePrivateFile(path: string, content: string): void {
+  writeFileSync(path, content, { mode: 0o600 });
+  chmodSync(path, 0o600);
 }
 
 /**
@@ -90,7 +80,7 @@ export function setCurrentProfile(profile: string): void {
     throw new Error(`Profile "${profile}" does not exist`);
   }
 
-  writeFileSync(CURRENT_PROFILE_FILE, profile);
+  writePrivateFile(CURRENT_PROFILE_FILE, profile);
 }
 
 /**
@@ -131,7 +121,7 @@ export function createProfile(profile: string, config: ProfileConfig = {}): bool
     throw new Error('Profile name can only contain letters, numbers, hyphens, and underscores');
   }
 
-  writeFileSync(getProfilePath(profile), JSON.stringify(config, null, 2));
+  saveProfile(config, profile);
   return true;
 }
 
@@ -181,12 +171,11 @@ export function loadProfile(profile?: string): ProfileConfig {
 export function saveProfile(config: ProfileConfig, profile?: string): void {
   ensureConfigDir();
   const profileName = profile || getCurrentProfile();
-  writeFileSync(getProfilePath(profileName), JSON.stringify(config, null, 2));
+  writePrivateFile(getProfilePath(profileName), JSON.stringify(config, null, 2));
 }
 
 // ============================================
 // API Key Management
-// TODO: Update env var name for your API (e.g., PERPLEXITY_API_KEY)
 // ============================================
 
 export function getApiKey(): string | undefined {
@@ -200,16 +189,6 @@ export function getBaseUrl(): string | undefined {
 export function setApiKey(apiKey: string): void {
   const config = loadProfile();
   config.apiKey = apiKey;
-  saveProfile(config);
-}
-
-export function getApiSecret(): string | undefined {
-  return loadProfile().apiSecret;
-}
-
-export function setApiSecret(apiSecret: string): void {
-  const config = loadProfile();
-  config.apiSecret = apiSecret;
   saveProfile(config);
 }
 
@@ -227,104 +206,4 @@ export function getConfigDir(): string {
 
 export function getActiveProfileName(): string {
   return getCurrentProfile();
-}
-
-// ============================================
-// Token/API Key Alias Functions
-// TODO: Update env var name for your API
-// ============================================
-
-/**
- * Get token (alias for getApiKey - some connectors prefer 'token' naming)
- */
-export function getToken(): string | undefined {
-  return process.env.THE_COMPANY_COMPANY_API_KEY || loadProfile().token || loadProfile().apiKey;
-}
-
-/**
- * Set token (alias for setApiKey)
- */
-export function setToken(token: string): void {
-  const config = loadProfile();
-  config.token = token;
-  config.apiKey = token; // Keep both in sync
-  saveProfile(config);
-}
-
-// ============================================
-// OAuth2 Configuration Functions
-// ============================================
-
-/**
- * Get OAuth2 client configuration
- */
-export function getOAuthConfig(): OAuth2Config | null {
-  const profile = loadProfile();
-  if (profile.clientId && profile.clientSecret) {
-    return {
-      clientId: profile.clientId,
-      clientSecret: profile.clientSecret,
-    };
-  }
-  return null;
-}
-
-/**
- * Set OAuth2 client credentials
- */
-export function setOAuthConfig(config: OAuth2Config): void {
-  const profile = loadProfile();
-  profile.clientId = config.clientId;
-  profile.clientSecret = config.clientSecret;
-  saveProfile(profile);
-}
-
-/**
- * Load OAuth2 tokens
- */
-export function loadOAuthTokens(): OAuth2Tokens | null {
-  const profile = loadProfile();
-  if (profile.accessToken) {
-    return {
-      accessToken: profile.accessToken,
-      refreshToken: profile.refreshToken,
-      expiresAt: profile.expiresAt || 0,
-      tokenType: profile.tokenType,
-      scope: profile.scope,
-    };
-  }
-  return null;
-}
-
-/**
- * Save OAuth2 tokens
- */
-export function saveOAuthTokens(tokens: OAuth2Tokens): void {
-  const profile = loadProfile();
-  profile.accessToken = tokens.accessToken;
-  profile.refreshToken = tokens.refreshToken;
-  profile.expiresAt = tokens.expiresAt;
-  profile.tokenType = tokens.tokenType;
-  profile.scope = tokens.scope;
-  saveProfile(profile);
-}
-
-/**
- * Clear OAuth2 tokens (logout)
- */
-export function clearOAuthTokens(): void {
-  const profile = loadProfile();
-  delete profile.accessToken;
-  delete profile.refreshToken;
-  delete profile.expiresAt;
-  delete profile.tokenType;
-  delete profile.scope;
-  saveProfile(profile);
-}
-
-/**
- * Get the access token (for OAuth2 authentication)
- */
-export function getAccessToken(): string | undefined {
-  return loadProfile().accessToken;
 }

@@ -15,8 +15,9 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
+    "build": "tsc --emitDeclarationOnly && bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
     "dev": "bun run ./src/cli/index.ts",
+    "test": "bun test src/api/client.test.ts",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "bun run build",
     "release": "bun run scripts/release.ts",
@@ -48,6 +49,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/connect-the-company-company.git"
+    "url": "git+https://github.com/hasna/connectors.git",
+    "directory": "connectors/the-company-company"
   }
 }

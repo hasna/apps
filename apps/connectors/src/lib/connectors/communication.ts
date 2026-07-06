@@ -500,6 +500,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["sms", "text messaging", "bulk sms", "two-way messaging", "notifications"],
   },
   {
+    name: "timelinesai",
+    displayName: "TimelinesAI",
+    description: "WhatsApp team inbox API for chats, messages, and connected accounts",
+    category: "Communication",
+    tags: ["whatsapp", "messaging", "api"],
+  },
+  {
     name: "trengo",
     displayName: "Trengo",
     description: "Multi-channel customer communication platform for managing conversations at scale",
