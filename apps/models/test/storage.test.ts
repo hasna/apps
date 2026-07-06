@@ -34,6 +34,6 @@ test("stores catalog entries and installs", () => {
   const schema = store.db.query<Record<string, unknown>, []>(
     "SELECT value FROM schema_meta WHERE key = 'schema_version' LIMIT 1",
   ).get();
-  expect(Number(schema?.value)).toBe(1);
+  expect(Number(schema?.value)).toBe(2);
   store.close();
 });

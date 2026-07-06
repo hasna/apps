@@ -16,8 +16,9 @@ import {
   listHuggingFaceFiles,
   searchHuggingFace,
 } from "../huggingface.js";
+import { MODEL_CAPABILITY_FIXTURES } from "../capabilities.js";
 import { ModelsStore } from "../storage.js";
-import type { CatalogEntry, DownloadPlan, EntityKind, InstalledArtifact, RemoteFileEntry, SearchInput } from "../types.js";
+import type { CatalogEntry, DownloadPlan, EntityKind, InstalledArtifact, ModelCapability, RemoteFileEntry, SearchInput } from "../types.js";
 
 const program = new Command();
 type CheckStatus = "ok" | "warn" | "fail";
@@ -126,6 +127,18 @@ function renderPlan(plan: DownloadPlan): string {
     plan.unknownSizeFiles.length > 0 ? `unknown-size files: ${plan.unknownSizeFiles.length}` : null,
     plan.exceedsMaxBytes ? chalk.red(`exceeds max bytes: ${humanBytes(plan.maxBytes)}`) : null,
   ].filter(Boolean).join("\n");
+}
+
+function renderCapability(capability: ModelCapability): string {
+  return [
+    capability.provider.padEnd(18),
+    capability.modelId.padEnd(36),
+    `ctx:${capability.contextWindowTokens}`,
+    `tools:${capability.toolUse}`,
+    `json:${capability.jsonMode}`,
+    `health:${capability.providerHealth.status}`,
+    `version:${capability.capabilityVersion}`,
+  ].join("  ");
 }
 
 function commandError(error: unknown): never {
@@ -415,6 +428,54 @@ program
       }
       const installs = store.listInstalls();
       printResult(installs, installs.map((item) => `${item.id}  ${item.repoId}  ${humanBytes(item.bytes)}  ${item.installPath}`).join("\n") || "no installs", opts);
+    } catch (error) {
+      commandError(error);
+    }
+  });
+
+const capabilities = program.command("capabilities").description("Model/provider capability metadata for routing consumers");
+
+capabilities
+  .command("seed-fixtures")
+  .description("Load golden capability fixtures for tests and consumer contract development")
+  .option("-j, --json", "output JSON")
+  .action((opts) => {
+    try {
+      const store = new ModelsStore();
+      const count = store.upsertCapabilities(MODEL_CAPABILITY_FIXTURES);
+      const result = { ok: true, count, stats: store.catalogStats(), capabilities: MODEL_CAPABILITY_FIXTURES };
+      printResult(result, `seeded ${count} capability fixtures`, opts);
+    } catch (error) {
+      commandError(error);
+    }
+  });
+
+capabilities
+  .command("list")
+  .description("List stored model capabilities")
+  .option("--provider <provider>", "filter by provider")
+  .option("--health <status>", "filter by provider health")
+  .option("--limit <n>", "result limit", parsePositiveInt, 50)
+  .option("-j, --json", "output JSON")
+  .action((opts) => {
+    try {
+      const items = new ModelsStore().listCapabilities({ provider: opts.provider, health: opts.health, limit: opts.limit });
+      printResult(items, items.map(renderCapability).join("\n") || "no capabilities", opts);
+    } catch (error) {
+      commandError(error);
+    }
+  });
+
+capabilities
+  .command("get")
+  .argument("<model-or-alias>", "model id, provider:model id, or alias")
+  .description("Resolve a stored capability by model id or alias")
+  .option("-j, --json", "output JSON")
+  .action((input, opts) => {
+    try {
+      const capability = new ModelsStore().findCapability(input);
+      if (!capability) throw new Error(`Capability not found: ${input}`);
+      printResult(capability, renderCapability(capability), opts);
     } catch (error) {
       commandError(error);
     }

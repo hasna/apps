@@ -25,7 +25,8 @@ right format/quantization, managing disk, and actually running it is still fiddl
 
 First CLI slice implemented. The package now has a Bun/TypeScript `models` CLI,
 Hugging Face provider access, local SQLite catalog storage, selected-file
-downloads, dataset search/install parity, and a local implementation goal chain.
+downloads, dataset search/install parity, a model capability schema for routing
+consumers, and a local implementation goal chain.
 
 See [PLAN.md](PLAN.md) for the full architecture and [docs/GOALS.md](docs/GOALS.md)
 for the chained build goals.
@@ -38,6 +39,8 @@ bun run build
 bun run src/cli/index.ts providers status --json
 bun run src/cli/index.ts search tiny-gpt2 --limit 3
 bun run src/cli/index.ts index best --limit 500 --json
+bun run src/cli/index.ts capabilities seed-fixtures --json
+bun run src/cli/index.ts capabilities get ollama:llama3.1:8b --json
 bun run src/cli/index.ts install hf:sshleifer/tiny-gpt2 \
   --include config.json \
   --include tokenizer_config.json \
@@ -61,6 +64,49 @@ models providers auth huggingface --secret-key <your/local/hf/token/key>
 
 This package targets Bun for the CLI and library surface because it uses
 `bun:sqlite`.
+
+## Capability Schema
+
+`@hasna/models` publishes `hasna.model-capability.v1` through the root SDK export
+and `@hasna/models/capabilities`. Capability records describe provider/model
+identity, aliases, context and output limits, input/output modalities, tool use,
+function calling, structured output, JSON mode, pricing, latency class, safety
+labels, privacy posture, runtime requirements, provider health, source, and a
+capability version.
+
+The local store persists validated records and resolves them by model id,
+`provider:model`, `provider/model`, or alias:
+
+```bash
+models capabilities seed-fixtures --json
+models capabilities list --provider ollama --json
+models capabilities get gpt-4.1-mini --json
+```
+
+Golden fixtures cover OpenAI-compatible hosted models, Ollama, LM Studio,
+Hugging Face artifacts, and provider-unavailable states. Missing pricing,
+unknown tool support, invalid modalities, invalid runtime kinds, and stale
+provider-health shapes fail validation before records are stored.
+
+## Consumer Exposure Plan
+
+Current implemented surfaces:
+
+- SDK: `ModelCapability`, `validateModelCapability`,
+  `assertModelCapability`, `MODEL_CAPABILITY_FIXTURES`.
+- Storage: `ModelsStore.upsertCapabilities`, `listCapabilities`, and
+  `findCapability`.
+- CLI: `models capabilities seed-fixtures`, `list`, and `get`.
+
+MCP should expose the same contract as read-only tools first:
+`models_capabilities_list`, `models_capabilities_get`, and
+`models_capabilities_validate`. Mutation tools should stay local/operator-gated
+until provider probes and capability refresh jobs exist.
+
+First consumer adoption candidates are `open-swarm` for process-agent routing,
+`open-testers` for provider matrices and regression runs, `open-coders` for
+tool/function support checks, `open-prompts` for prompt/model/result/cost
+provenance, and `open-brains` for training/artifact boundaries.
 
 ## License
 
