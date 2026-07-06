@@ -129,6 +129,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ssl", "certificates", "security", "monitoring", "tls"],
   },
   {
+    name: "sysdig",
+    displayName: "Sysdig",
+    description: "Cloud security and monitoring platform (Sysdig Monitor & Secure)",
+    category: "Security & Compliance",
+    tags: ["security", "monitoring", "observability", "cloud-security", "containers"],
+  },
+  {
     name: "thehive",
     displayName: "TheHive",
     description: "Security incident response platform for managing and investigating cyber threats",
