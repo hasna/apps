@@ -542,6 +542,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["analytics", "data", "sql"],
   },
   {
+    name: "travo-real-estate",
+    displayName: "Travo Data",
+    description: "Real estate data platform",
+    category: "Data & Analytics",
+    tags: ["real-estate", "analytics", "data"],
+  },
+  {
     name: "triple-whale",
     displayName: "Triple Whale",
     description: "Ecommerce analytics - summary, attribution, data-in, SQL, Moby",
