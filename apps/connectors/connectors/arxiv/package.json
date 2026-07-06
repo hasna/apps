@@ -11,7 +11,7 @@
     "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
     "dev": "bun run ./src/cli/index.ts",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "bun run build"
+    "prepublishOnly": "bun run ../../scripts/scan-npmrc-auth.mjs && bun run build"
   },
   "keywords": ["arxiv", "research", "papers", "academic", "search", "api", "connector", "cli", "typescript", "bun", "hasna"],
   "author": "Hasna",
