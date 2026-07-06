@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@hasna/contracts':
+        specifier: ^0.4.1
+        version: 0.4.1
       '@hasna/events':
         specifier: ^0.1.9
         version: 0.1.13
@@ -61,6 +64,11 @@ packages:
   '@ai-sdk/provider@3.0.10':
     resolution: {integrity: sha512-Q3BZ27qfpYqnCYGvE3vt+Qi6LGOF9R5Nmzn+9JoM1lCRsD9mYaIhfJLkSunN48nfGXJ6n+XNV0J/XVpqGQl7Dw==}
     engines: {node: '>=18'}
+
+  '@hasna/contracts@0.4.1':
+    resolution: {integrity: sha512-oubsu1FFyVvxbt5d+85iBXEK6M81ZsaeODycoQGZuFNqQ3ecfXFujlQz3cL+NHwHJPVmy4wBGLPcaXcRTjO/IQ==}
+    engines: {bun: '>=1.0.0'}
+    hasBin: true
 
   '@hasna/events@0.1.13':
     resolution: {integrity: sha512-DzmEiDrBoibxzCBeZPEmdpWsNh+5SXTSnilqCeHxi0Do3a9mQJ43ZSxq/Ipzw/xNa2rShAx48KzduCZrGDHi9g==}
@@ -577,6 +585,11 @@ snapshots:
   '@ai-sdk/provider@3.0.10':
     dependencies:
       json-schema: 0.4.0
+
+  '@hasna/contracts@0.4.1':
+    dependencies:
+      commander: 13.1.0
+      zod: 3.25.76
 
   '@hasna/events@0.1.13':
     dependencies:
@@ -1113,7 +1126,6 @@ snapshots:
     dependencies:
       zod: 4.4.3
 
-  zod@3.25.76:
-    optional: true
+  zod@3.25.76: {}
 
   zod@4.4.3: {}

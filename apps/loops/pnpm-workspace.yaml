@@ -1,2 +1,4 @@
 allowBuilds:
   '@hasna/machines': set this to true or false
+minimumReleaseAgeExclude:
+  - '@hasna/contracts@0.4.1'
