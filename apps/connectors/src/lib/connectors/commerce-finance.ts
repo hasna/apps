@@ -17,6 +17,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["incorporation", "business"],
   },
   {
+    name: "stripeidentity",
+    displayName: "Stripe Identity",
+    description: "Identity verification",
+    category: "Commerce & Finance",
+    tags: ["identity", "verification", "kyc"],
+  },
+  {
     name: "shopify",
     displayName: "Shopify",
     description: "E-commerce platform",
