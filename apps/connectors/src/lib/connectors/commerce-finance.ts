@@ -17,6 +17,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["incorporation", "business"],
   },
   {
+    name: "stripe-tax-advanced",
+    displayName: "Stripe Tax Advanced",
+    description: "Stripe Tax calculations, transactions, and registrations",
+    category: "Commerce & Finance",
+    tags: ["tax", "payments", "billing"],
+  },
+  {
     name: "shopify",
     displayName: "Shopify",
     description: "E-commerce platform",
