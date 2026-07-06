@@ -286,10 +286,42 @@ export async function startServer(port: number, options?: { open?: boolean; host
         });
       }
 
-      // ── Liveness probe (trivial payload, intentionally unauthenticated) ──
-      if (path === "/health" && method === "GET") {
-        const { healthResponse } = await import("../mcp/http.js");
-        return healthResponse("todos");
+      // ── Service surface probes (unauthenticated): /health /ready /version ──
+      if ((path === "/health" || path === "/ready" || path === "/version") && method === "GET") {
+        const { getPackageVersion } = await import("../lib/package-version.js");
+        const { isCloudModeEnabled, pingCloud } = await import("./cloud.js");
+        const mode = isCloudModeEnabled() ? "remote" : "local";
+        const version = getPackageVersion();
+        if (path === "/version") {
+          return Response.json({ status: "ok", version, mode, name: "todos" });
+        }
+        if (path === "/ready") {
+          if (mode === "remote") {
+            try {
+              await pingCloud();
+            } catch (e) {
+              return Response.json(
+                { status: "unavailable", version, mode, error: (e as Error).message },
+                { status: 503 },
+              );
+            }
+          }
+          return Response.json({ status: "ready", version, mode });
+        }
+        return Response.json({ status: "ok", version, mode, name: "todos" });
+      }
+
+      // ── OpenAPI document (unauthenticated; source of truth for the SDK) ──
+      if ((path === "/openapi.json" || path === "/v1/openapi.json") && method === "GET") {
+        const { buildV1OpenApiDocument } = await import("./openapi.js");
+        return Response.json(buildV1OpenApiDocument());
+      }
+
+      // ── Versioned cloud API (/v1/*): A1 pure-remote, self-authenticating ──
+      if (path === "/v1" || path.startsWith("/v1/")) {
+        const { handleV1Request } = await import("./v1.js");
+        const res = await handleV1Request(req, url);
+        if (res) return res;
       }
 
       // ── MCP Streamable HTTP (shared long-lived server) ──

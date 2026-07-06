@@ -11,6 +11,18 @@
 export { TodosClient, createClient } from "./client.js";
 export type { TodosClientOptions } from "./client.js";
 
+// Versioned /v1 cloud client, generated from the serve OpenAPI document
+// (src/server/openapi.ts). Regenerate with `bun run scripts/generate-sdk.ts`.
+export { TodosV1Client, ApiError as TodosV1ApiError } from "./v1.generated.js";
+export type {
+  TodosV1ClientOptions,
+  Task as TodosV1Task,
+  Project as TodosV1Project,
+  CreateTaskInput as TodosV1CreateTaskInput,
+  UpdateTaskInput as TodosV1UpdateTaskInput,
+  CreateProjectInput as TodosV1CreateProjectInput,
+} from "./v1.generated.js";
+
 export {
   TodosAPIError,
   TodosNotFoundError,

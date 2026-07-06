@@ -47,6 +47,9 @@
   ],
   "scripts": {
     "build": "rm -rf dist dashboard/dist && cd dashboard && bun install --frozen-lockfile && bun run build && cd .. && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts src/mcp.ts src/registry.ts src/contracts.ts src/storage.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+    "build:server": "rm -rf dist && bun build src/cli/index.tsx --outdir dist/cli --target bun --external ink --external react --external chalk --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/server/index.ts --outdir dist/server --target bun && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts src/mcp.ts src/registry.ts src/contracts.ts src/storage.ts --outdir dist --target bun",
+    "migrate": "bun run src/server/index.ts migrate",
+    "generate:sdk": "bun run scripts/generate-sdk.ts",
     "build:dashboard": "cd dashboard && bun install --frozen-lockfile && bun run build",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
@@ -89,7 +92,7 @@
   "author": "Andrei Hasna <andrei@hasna.com>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@hasna/contracts": "^0.2.2",
+    "@hasna/contracts": "0.4.1",
     "@hasna/events": "^0.1.11",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "chalk": "^5.4.1",
