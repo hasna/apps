@@ -134,6 +134,36 @@ Without `--freeze-check`, `flip apply todos --execute` aborts immediately with
 - The env file is written atomically (`mktemp` + `mv`); a failed secret fetch
   leaves the previous state untouched.
 
+## Interim RDS access — per-machine tunnel (until the Tailscale router)
+
+The shared prod Postgres is **private**. Until the Tailscale subnet router
+(task `129be116`) lands, every machine must run the durable SSM port-forward
+service **before** it can be flipped to `cloud`. That tunnel exposes the RDS at
+the same loopback endpoint on every machine — `127.0.0.1:15439` — so a single
+DSN routed through it works fleet-wide.
+
+**Per-machine rollout step (do this first, per target machine):**
+
+1. Install + enable `hasna-rds-tunnel.service` and `hasna-rds-tunnel-health.timer`
+   (see the infra repo `docs/RDS-TUNNEL.md`). Verify `127.0.0.1:15439` accepts TCP.
+2. Point the flip DSN at the loopback endpoint. Two options:
+   - **secret-ref (preferred):** seed the on-target secret store so
+     `secrets get hasna/oss/<app>/database-url` returns the loopback-routed DSN
+     (`…@127.0.0.1:15439/<db>?sslmode=require&uselibpqcompat=true`).
+   - **env-file fallback:** write `~/.hasna/<app>/cloud.env` `0600` with
+     `HASNA_<APP>_STORAGE_MODE=cloud` + the loopback `HASNA_<APP>_DATABASE_URL`;
+     wire it into the service. Note DSN rotation (RDS-managed in AWS SM).
+3. Then run `machines flip apply <app> --machines <id> --execute`.
+
+When the router lands, retire the tunnel units and switch DSNs back to the
+canonical real-host `hasna/oss/<app>/database-url` (no host rewrite).
+
+> Contract note (spark01 first-flip finding, 2026-07-06): `verifyStorageMode`
+> currently requires `mode=remote` + `remote_enabled=true`, but the storage-kit
+> apps emit `mode` ∈ `{local,cloud}` (A1) and no `remote_enabled` field. Align
+> the verifier to accept `mode=cloud` (and drop/optionalize `remote_enabled`)
+> before relying on `flip apply` verification for these apps.
+
 ## Pre-migration backup (Amendment A1)
 
 Flipping only changes runtime env; it does **not** migrate data. Data migration
