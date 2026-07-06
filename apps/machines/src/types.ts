@@ -9,6 +9,12 @@ export interface ManifestPackageSpec {
   appId?: string;
   /** CLI bin used to verify installs via `<bin> --version`. Defaults to the unscoped package name. */
   bin?: string;
+  /**
+   * Set false for library-only packages without a CLI: skips the
+   * `<bin> --version` verification so rollouts succeed on install exit code
+   * alone (an mcpHealthUrl, when declared, is still checked).
+   */
+  verify?: boolean;
   /** Optional MCP health endpoint checked after install/update (expects HTTP 200). */
   mcpHealthUrl?: string;
 }

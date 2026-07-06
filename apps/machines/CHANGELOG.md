@@ -24,9 +24,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and manifest-declared fleet-wide freeze entries.
 - Extended the `machines.json` schema (backward compatible): fleet-wide
   `packages` desired-state list, `freeze` list, and per-package `appId`,
-  `bin`, and `mcpHealthUrl` fields aligned with the distribution contracts.
+  `bin`, `verify`, and `mcpHealthUrl` fields aligned with the distribution
+  contracts. `verify: false` marks library-only packages without a CLI so
+  reconcile skips the `<bin> --version` check instead of flapping through
+  verify-fail/rollback cycles.
 
 ### Fixed
+
+- Closed a freeze-gate bypass for programmatic callers: `buildReconcilePlan`
+  (and `reconcileFromReleaseEvent`) with an in-memory `manifest` now merge the
+  on-disk `freeze.json` entries (`machines freeze add`) with the manifest's
+  freeze list instead of skipping the disk gate entirely.
 
 - Made the consumer conformance fixture hermetic: "SDK absent" cases now
   install an always-failing tombstone package so ambient `node_modules`

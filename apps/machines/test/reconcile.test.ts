@@ -26,6 +26,11 @@ import type { FleetManifest } from "../src/types.js";
 const repoRoot = resolve(import.meta.dir, "..");
 const cliPath = join(repoRoot, "src", "cli", "index.ts");
 
+// Hermetic freeze.json path: in-memory manifests now merge the on-disk freeze
+// gate, so unit tests point it at an empty temp file instead of the machine's
+// real freeze.json.
+const emptyFreezePath = join(mkdtempSync(join(tmpdir(), "machines-reconcile-freeze-")), "freeze.json");
+
 function manifestFixture(): FleetManifest {
   return {
     version: 1,
@@ -163,6 +168,7 @@ describe("reconcile plan", () => {
     const plan = buildReconcilePlan({
       manifest,
       machineId: "demo-node-01",
+      freezePath: emptyFreezePath,
       installed: [
         { name: "@hasna/todos", version: "1.2.3" },
         { name: "@hasna/events", version: "0.2.0" },
@@ -188,16 +194,37 @@ describe("reconcile plan", () => {
     const plan = buildReconcilePlan({
       manifest,
       machineId: "demo-node-01",
+      freezePath: emptyFreezePath,
       installed: [],
       now: new Date("2026-07-06T00:00:00.000Z"),
     });
     expect(plan.actions.find((action) => action.package === "@hasna/todos")?.action).toBe("install");
   });
 
+  test("on-disk freeze.json still blocks when an in-memory manifest is provided", () => {
+    const dir = mkdtempSync(join(tmpdir(), "machines-reconcile-disk-freeze-"));
+    const freezePath = join(dir, "freeze.json");
+    writeFileSync(freezePath, `${JSON.stringify({
+      version: 1,
+      packages: [{ name: "left-pad", reason: "operator freeze via machines freeze add" }],
+    })}\n`, "utf8");
+    const plan = buildReconcilePlan({
+      manifest: manifestFixture(),
+      machineId: "demo-node-01",
+      freezePath,
+      installed: [],
+      now: new Date("2026-07-06T00:00:00.000Z"),
+    });
+    const leftPad = plan.actions.find((action) => action.package === "left-pad");
+    expect(leftPad?.action).toBe("freeze-blocked");
+    expect(leftPad?.reason).toContain("operator freeze");
+  });
+
   test("unpinned packages adopt release.published event versions", () => {
     const plan = buildReconcilePlan({
       manifest: manifestFixture(),
       machineId: "demo-node-01",
+      freezePath: emptyFreezePath,
       installed: [{ name: "@hasna/knowledge", version: "0.9.0" }],
       packageFilter: "@hasna/knowledge",
       eventVersions: { "@hasna/knowledge": "1.0.0" },
@@ -218,6 +245,7 @@ describe("reconcile execution", () => {
     const plan = buildReconcilePlan({
       manifest: manifestFixture(),
       machineId: "demo-node-01",
+      freezePath: emptyFreezePath,
       installed: [],
     });
     const result = await executeReconcilePlan(plan, { dryRun: true, exec, recordsPath: null });
@@ -242,6 +270,7 @@ describe("reconcile execution", () => {
     const plan = buildReconcilePlan({
       manifest: manifestFixture(),
       machineId: "demo-node-01",
+      freezePath: emptyFreezePath,
       installed: [
         { name: "@hasna/todos", version: "1.2.3" },
         { name: "@hasna/events", version: "0.2.0" },
@@ -295,6 +324,7 @@ describe("reconcile execution", () => {
     const plan = buildReconcilePlan({
       manifest: manifestFixture(),
       machineId: "demo-node-01",
+      freezePath: emptyFreezePath,
       installed: [{ name: "@hasna/todos", version: "1.2.3" }],
       packageFilter: "@hasna/todos",
     });
@@ -317,6 +347,28 @@ describe("reconcile execution", () => {
     ]);
   });
 
+  test("verify: false packages succeed on install exit code without a CLI check", async () => {
+    const manifest = manifestFixture();
+    manifest.packages!.push({ name: "@hasna/contracts", version: "0.1.0", verify: false });
+    const { exec, calls } = mockExec((command, args) => {
+      if (command === "bun" && args[0] === "install") return { status: 0 };
+      return { status: 1, stderr: "no CLI available" };
+    });
+    const plan = buildReconcilePlan({
+      manifest,
+      machineId: "demo-node-01",
+      freezePath: emptyFreezePath,
+      installed: [],
+      packageFilter: "@hasna/contracts",
+    });
+    expect(plan.actions[0]?.verify).toBe(false);
+    const result = await executeReconcilePlan(plan, { dryRun: false, exec, recordsPath: null });
+    const contracts = result.results[0]!;
+    expect(contracts.status).toBe("succeeded");
+    expect(contracts.verifiedBy).toEqual({ mcpHealth: "not_checked" });
+    expect(calls.every((call) => call.args[0] !== "--version")).toBe(true);
+  });
+
   test("freeze gate blocks frozen packages and emits a blocked rollout record", async () => {
     const manifest = manifestFixture();
     manifest.packages!.push({ name: "@hasna/frozen-pkg", version: "9.9.9" });
@@ -325,6 +377,7 @@ describe("reconcile execution", () => {
     const plan = buildReconcilePlan({
       manifest,
       machineId: "demo-node-01",
+      freezePath: emptyFreezePath,
       installed: [],
       packageFilter: "@hasna/frozen-pkg",
     });
@@ -363,6 +416,7 @@ describe("release.published trigger", () => {
     }, {
       manifest: manifestFixture(),
       machineId: "demo-node-01",
+      freezePath: emptyFreezePath,
       installed: [{ name: "@hasna/knowledge", version: "0.9.0" }],
       dryRun: false,
       exec,
@@ -374,7 +428,7 @@ describe("release.published trigger", () => {
     expect(result!.results[0]).toMatchObject({ package: "@hasna/knowledge", action: "update", status: "succeeded" });
     expect(events.some((event) => event.type === DISTRIBUTION_EVENT_TYPES.rolloutCompleted)).toBe(true);
 
-    const ignored = await reconcileFromReleaseEvent({ type: "app.installed", data: {} }, { manifest: manifestFixture() });
+    const ignored = await reconcileFromReleaseEvent({ type: "app.installed", data: {} }, { manifest: manifestFixture(), freezePath: emptyFreezePath });
     expect(ignored).toBeNull();
   });
 });

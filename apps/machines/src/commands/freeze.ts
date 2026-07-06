@@ -80,12 +80,19 @@ export function listActiveFreezes(options: {
   freezePath?: string;
   manifestPath?: string;
   now?: Date;
+  /** Full override: skips freeze.json and the manifest entirely. */
   entries?: FreezeEntry[];
+  /**
+   * Manifest-declared freeze entries from an already-loaded manifest; merged
+   * with freeze.json from disk (unlike `entries`, this never bypasses the
+   * operator's `machines freeze add` gate).
+   */
+  manifestEntries?: FreezeEntry[];
 } = {}): FreezeEntry[] {
   const now = options.now ?? new Date();
   const entries = options.entries ?? [
     ...readFreezeFile(options.freezePath ?? getFreezePath()).packages,
-    ...(readManifestSafe(options.manifestPath).freeze ?? []),
+    ...(options.manifestEntries ?? readManifestSafe(options.manifestPath).freeze ?? []),
   ];
   const seen = new Set<string>();
   return entries.filter((entry) => {

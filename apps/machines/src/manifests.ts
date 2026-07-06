@@ -28,6 +28,7 @@ const packageSchema = z.object({
   version: z.string().optional(),
   appId: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "appId must be a lowercase slug (hasna.app.v1 AppId)").optional(),
   bin: z.string().min(1).optional(),
+  verify: z.boolean().optional(),
   mcpHealthUrl: z.string().min(1).optional(),
 });
 

@@ -104,7 +104,9 @@ machine (per-machine `packages` override by name), and a `freeze` list for the
 supply-chain freeze gate. Package specs accept optional `version` (the pin),
 `appId` (the `hasna.app.v1` join key, defaulting to the `open-<name>`
 convention for `@hasna/*` packages), `bin` (verification CLI, defaulting to
-the unscoped package name), and `mcpHealthUrl`.
+the unscoped package name), `verify` (set `false` for library-only packages
+without a CLI: rollouts succeed on install exit code alone, though a declared
+`mcpHealthUrl` is still checked), and `mcpHealthUrl`.
 
 ```bash
 machines reconcile --dry-run --json            # plan only, never executes

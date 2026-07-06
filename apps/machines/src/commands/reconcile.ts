@@ -86,6 +86,8 @@ export interface DesiredPackage {
   version?: string;
   appId: string;
   bin: string;
+  /** False for library-only packages: skip `<bin> --version` verification. */
+  verify: boolean;
   mcpHealthUrl?: string;
 }
 
@@ -99,6 +101,7 @@ function toDesired(spec: ManifestPackageSpec): DesiredPackage {
     version: spec.version,
     appId: spec.appId ?? defaultAppIdForPackage(spec.name),
     bin: spec.bin ?? defaultBinForPackage(spec.name),
+    verify: spec.verify !== false,
     mcpHealthUrl: spec.mcpHealthUrl,
   };
 }
@@ -126,6 +129,8 @@ export interface ReconcilePlanAction {
   package: string;
   appId: string;
   bin: string;
+  /** False for library-only packages: skip `<bin> --version` verification. */
+  verify: boolean;
   mcpHealthUrl?: string;
   action: ReconcileActionKind;
   desiredVersion: string | null;
@@ -168,10 +173,13 @@ export function buildReconcilePlan(options: BuildReconcilePlanOptions = {}): Rec
   }
   const installedByName = new Map(installed.map((entry) => [entry.name, entry.version]));
 
+  // An in-memory manifest supplies its own freeze entries, but the on-disk
+  // freeze.json gate (operator `machines freeze add`) is still merged in so
+  // programmatic callers cannot bypass an active supply-chain freeze.
   const freezes = options.freezes ?? listActiveFreezes({
     freezePath: options.freezePath,
     manifestPath: options.manifestPath,
-    entries: options.manifest ? [...(options.manifest.freeze ?? [])] : undefined,
+    manifestEntries: options.manifest ? [...(options.manifest.freeze ?? [])] : undefined,
     now,
   });
 
@@ -185,6 +193,7 @@ export function buildReconcilePlan(options: BuildReconcilePlanOptions = {}): Rec
       package: spec.name,
       appId: spec.appId,
       bin: spec.bin,
+      verify: spec.verify,
       mcpHealthUrl: spec.mcpHealthUrl,
       desiredVersion: target,
       installedVersion,
@@ -305,6 +314,18 @@ async function verifyInstalledPackage(
   exec: ExecFn,
   healthCheck: (url: string) => Promise<McpHealth>,
 ): Promise<VerifyOutcome> {
+  // Library-only packages (verify: false) have no CLI to interrogate: success
+  // rests on the install exit code, plus the MCP health check when declared.
+  if (!action.verify) {
+    const verifiedBy: RolloutVerification = { mcpHealth: "not_checked" };
+    if (action.mcpHealthUrl) {
+      verifiedBy.mcpHealth = await healthCheck(action.mcpHealthUrl);
+      if (verifiedBy.mcpHealth === "unavailable") {
+        return { ok: false, verifiedBy, error: `verify failed: MCP health unavailable at declared endpoint` };
+      }
+    }
+    return { ok: true, verifiedBy };
+  }
   const versionResult = exec(action.bin, ["--version"]);
   const cliVersion = versionResult.status === 0 ? versionFromOutput(versionResult.stdout) : null;
   const verifiedBy: RolloutVerification = {
