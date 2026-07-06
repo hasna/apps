@@ -4,23 +4,29 @@ import { join } from 'path';
 import { DEFAULT_BASE_URL } from '../api/client';
 
 const CONNECTOR_NAME = 'connect-tensorboard';
-const CONFIG_DIR = join(homedir(), '.hasna', 'connectors', CONNECTOR_NAME);
-const CONFIG_FILE = join(CONFIG_DIR, 'config.json');
-
 export { DEFAULT_BASE_URL };
 
 export interface CliConfig {
   baseUrl?: string;
 }
 
+function configDir(): string {
+  return join(process.env.HOME || homedir(), '.hasna', 'connectors', CONNECTOR_NAME);
+}
+
+function configFile(): string {
+  return join(configDir(), 'config.json');
+}
+
 function ensureConfigDir(): void {
+  const CONFIG_DIR = configDir();
   if (!existsSync(CONFIG_DIR)) {
     mkdirSync(CONFIG_DIR, { recursive: true });
   }
 }
 
 export function loadConfig(): CliConfig {
-  ensureConfigDir();
+  const CONFIG_FILE = configFile();
   if (!existsSync(CONFIG_FILE)) {
     return {};
   }
@@ -33,7 +39,7 @@ export function loadConfig(): CliConfig {
 
 export function saveConfig(config: CliConfig): void {
   ensureConfigDir();
-  writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+  writeFileSync(configFile(), JSON.stringify(config, null, 2));
 }
 
 /**
