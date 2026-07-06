@@ -12,6 +12,35 @@ Open Signatures is not a qualified trust service or a substitute for regulated d
 signature infrastructure. It is intended for regular electronic signatures, internal
 workflows, and developer-owned signing flows where local audit evidence is sufficient.
 
+## Legal, IP, and Filing Boundary
+
+Open Signatures is the signing ceremony and evidence package for Hasna legal/IP
+workflows. It does not by itself file trademark, IP, or legal-office submissions.
+Apps such as `iapp-ip`, `iapp-trademarks`, `iapp-signatures`, `open-contracts`,
+and document/file storage integrations should exchange `hasna.legal-boundary.v1`
+packets from the SDK.
+
+Boundary rules:
+
+- `workflow_only`: local signing ceremony, audit certificate, document hashes,
+  and provenance are recorded. No external filing is claimed.
+- `prepared_packet`: a filing packet is prepared for legal review. It requires
+  approved legal review before external use.
+- `provider_submitted`: an external provider/office submission has happened. It
+  requires approved legal review, provider evidence, filing reference, and audit
+  events.
+
+Every legal/IP packet must include document provenance (`sourceApp`, `sourceId`,
+hash, version/storage reference, creator, created time), signing ceremony
+requirements (signer identity, signer consent, pinned document hash, certificate,
+tamper evidence, retention policy), and an evidence bundle (certificate id/path
+plus audit event ids). Provider-submitted filings must also include provider
+evidence and the filing reference returned by that provider or office.
+
+The default exported policy, `DEFAULT_WORKFLOW_ONLY_BOUNDARY`, is intentionally
+conservative: legal review is required and the app may only claim workflow/evidence
+status until an explicit prepared/submitted filing packet passes validation.
+
 ## Install
 
 ```bash
