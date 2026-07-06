@@ -93,7 +93,29 @@ function openDatabase(path: string): Database {
   backfillTaskTags(db);
   backfillMachineId(db);
 
+  // Durable dual-write shadow (sanctioned Amendment A1 exception): when
+  // HASNA_TODOS_SHADOW=1, install capture triggers so EVERY local write path
+  // (CLI, MCP, serve, raw src/db SQL) enqueues a durable mirror op. This is the
+  // single chokepoint that makes the shadow real without refactoring every
+  // direct-SQL call site onto the storage adapter. Pure SQLite; no network here.
+  maybeInstallShadowCapture(db);
+
   return db;
+}
+
+function maybeInstallShadowCapture(db: Database): void {
+  try {
+    // Lazy require keeps the hot path free of the storage-adapter import chain.
+    const { isTodosShadowEnabled } = require("../storage/config.js") as typeof import("../storage/config.js");
+    if (!isTodosShadowEnabled()) return;
+    const { installShadowOutboxSchema } = require("../storage/shadow-outbox-schema.js") as typeof import("../storage/shadow-outbox-schema.js");
+    installShadowOutboxSchema(db);
+  } catch (error) {
+    // Capture must never break normal DB open; log and continue local-only.
+    console.error(
+      `[todos] shadow capture install failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 }
 
 export function getDatabase(dbPath?: string): Database {
