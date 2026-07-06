@@ -1032,6 +1032,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "extraction", "documents"],
   },
   {
+    name: "tensorboard",
+    displayName: "TensorBoard",
+    description: "TensorBoard training run metrics and scalars",
+    category: "AI & ML",
+    tags: ["ai", "ml", "metrics", "visualization"],
+  },
+  {
     name: "zhipu-ai",
     displayName: "Zhipu AI",
     description: "GLM large language models via Zhipu Open Platform",
