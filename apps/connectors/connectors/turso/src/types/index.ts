@@ -138,11 +138,11 @@ export interface DatabaseUsageOutput {
 export interface OrganizationUsage {
   uuid: string;
   usage: UsageQuota;
+  databases: DatabaseUsageOutput[];
 }
 
 export interface OrganizationUsageResponse {
   organization: OrganizationUsage;
-  databases: DatabaseUsageOutput[];
 }
 
 // ============================================
