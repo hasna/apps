@@ -899,6 +899,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["nlp", "text analytics", "sentiment", "language detection", "api"],
   },
   {
+    name: "the-token-company",
+    displayName: "The Token Company",
+    description: "LLM prompt compression",
+    category: "AI & ML",
+    tags: ["ai", "llm", "compression", "tokens", "middleware"],
+  },
+  {
     name: "thoughtfulgpt",
     displayName: "Thoughtful GPT",
     description: "AI-powered healthcare automation platform for revenue cycle and patient management",
