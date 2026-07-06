@@ -65,6 +65,23 @@ function bumpPatch(version: string): string {
   return `${major}.${minor}.${patch + 1}`;
 }
 
+function runStagedSecretsScan(): void {
+  const stagedDiff = exec('git diff --cached -U0', true);
+  const secretPatterns = [
+    /BEGIN (RSA|OPENSSH|EC|DSA|PRIVATE) KEY/,
+    /github_pat_[A-Za-z0-9_]+/,
+    /gh[pousr]_[A-Za-z0-9_]{20,}/,
+    /sk-[A-Za-z0-9_-]{20,}/,
+    /xox[baprs]-[A-Za-z0-9-]+/,
+    /\/\/registry\.npmjs\.org\/:_authToken=(?!\$\{NPM_TOKEN\})\S+/,
+  ];
+
+  const matchedPattern = secretPatterns.find(pattern => pattern.test(stagedDiff));
+  if (matchedPattern) {
+    throw new Error(`Staged secrets scan failed: matched ${matchedPattern}`);
+  }
+}
+
 async function main(): Promise<void> {
   // Read package.json
   const packageJsonPath = 'package.json';
@@ -119,6 +136,13 @@ async function main(): Promise<void> {
     success('Typecheck passed');
   }
 
+  // Run tests
+  log('Running tests...');
+  if (!isDryRun) {
+    exec('bun test');
+    success('Tests passed');
+  }
+
   // Build
   log('Building...');
   if (!isDryRun) {
@@ -132,6 +156,9 @@ async function main(): Promise<void> {
     log('Staging changes...');
     if (!isDryRun) {
       exec('git add package.json');
+      log('Running staged secrets scan...');
+      runStagedSecretsScan();
+      success('Staged secrets scan passed');
       exec(`git commit -m "chore: release v${newVersion}"`);
     }
   }
@@ -162,6 +189,7 @@ async function main(): Promise<void> {
   if (!isDryRun) {
     log('Pushing tags...');
     try {
+      runStagedSecretsScan();
       exec('git push --tags');
       success('Tags pushed');
     } catch {
