@@ -388,6 +388,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["nft", "blockchain", "digital collectibles", "tokens", "web3"],
   },
   {
+    name: "transload",
+    displayName: "Transload",
+    description: "Freight dimension measurement and warehouse computer vision",
+    category: "Commerce & Finance",
+    tags: ["freight", "logistics", "warehouse", "vision"],
+  },
+  {
     name: "truelayer",
     displayName: "TrueLayer",
     description: "Open banking platform",
