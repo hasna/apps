@@ -151,3 +151,15 @@ export { sendSigningEmail } from "./lib/email-integration.js";
 export { setupSigningDomain } from "./lib/domain-integration.js";
 export { prepareProviderRequest, sendWithProvider } from "./lib/provider-integration.js";
 export type { ProviderConnectorOptions, ProviderRecipient, ProviderSendInput, ProviderSendResult } from "./lib/provider-integration.js";
+export {
+  DEFAULT_WORKFLOW_ONLY_BOUNDARY,
+  validateLegalBoundaryPacket,
+} from "./lib/legal-boundary.js";
+export type {
+  DocumentProvenanceRef,
+  FilingBoundary,
+  FilingScope,
+  LegalBoundaryPacket,
+  LegalReviewStatus,
+  SigningCeremonyRequirements,
+} from "./lib/legal-boundary.js";
