@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import chalk from "chalk";
 import { handleError, output } from "../helpers.js";
 import type { NativeStorageStatus, NativeStorageSyncPlan } from "../../lib/native-storage-status.js";
+import type { ShadowStatusReport } from "../../lib/shadow-status.js";
 import type { TodosRunArtifactSyncPlan, TodosRunArtifactSyncResult } from "../../storage/index.js";
 
 function globalOptions(program: Command): Record<string, any> {
@@ -38,6 +39,32 @@ function printSyncPlan(plan: NativeStorageSyncPlan): void {
   }
   for (const issue of plan.status.issues) console.error(chalk.red(`  ${issue}`));
   for (const warning of plan.status.warnings) console.error(chalk.yellow(`  ${warning}`));
+}
+
+function printShadowStatus(report: ShadowStatusReport, enabled: boolean, shadowEnv: string): void {
+  console.log(chalk.bold("todos storage shadow-status"));
+  console.log(`Shadow mirror: ${enabled ? "enabled" : "disabled"} (${shadowEnv})`);
+  console.log(`Service: ${report.service}`);
+  console.log(`Cloud reachable: ${report.cloud_reachable ? "yes" : "no"}`);
+  if (report.error) {
+    console.error(chalk.red(`  ${report.error}`));
+    return;
+  }
+  console.log(`In sync: ${report.in_sync ? "yes" : "no"}`);
+  console.log(`Last mirror: ${report.last_mirror_at ?? "never"}`);
+  console.log(
+    `Last mirror lag: ${report.last_mirror_lag_ms === null ? "n/a" : `${report.last_mirror_lag_ms}ms`}`,
+  );
+  console.log("Rows (local -> cloud):");
+  for (const entry of report.objects) {
+    const flag = entry.diff === 0 ? "" : chalk.yellow(`  (diff ${entry.diff > 0 ? "+" : ""}${entry.diff})`);
+    console.log(
+      `  ${entry.object_type.padEnd(14)} local=${String(entry.local).padStart(6)} cloud=${String(entry.cloud).padStart(6)} tombstones=${entry.cloud_tombstones}${flag}`,
+    );
+  }
+  console.log(
+    `  ${"TOTAL".padEnd(14)} local=${String(report.totals.local).padStart(6)} cloud=${String(report.totals.cloud).padStart(6)} diff=${report.totals.diff}`,
+  );
 }
 
 function printArtifactPlan(plan: TodosRunArtifactSyncPlan): void {
@@ -144,6 +171,46 @@ export function registerStorageCommands(program: Command) {
         printSyncPlan(plan);
       } catch (error) {
         handleError(error);
+      }
+    });
+
+  storage
+    .command("shadow-status")
+    .description("Report dual-write shadow divergence: local vs cloud row counts and last mirror lag (opens a read-only DB connection)")
+    .option("-j, --json", "Output as JSON")
+    .action(async (opts: { json?: boolean }) => {
+      let cloud: { close: () => Promise<void> } | null = null;
+      try {
+        const globalOpts = globalOptions(program);
+        const asJson = Boolean(opts.json || globalOpts.json);
+        const {
+          createTodosCloudQueryClientFromEnv,
+          createLocalSqliteTodosStorageAdapter,
+          isTodosShadowEnabled,
+          getTodosStorageShadowEnvName,
+          getTodosStorageDatabaseEnv,
+        } = await import("../../storage/index.js");
+        const client = createTodosCloudQueryClientFromEnv();
+        if (!client) {
+          const message = `Shadow mirror not configured: set ${getTodosStorageDatabaseEnv()} to a remote Postgres DSN`;
+          if (asJson) { output({ configured: false, message }, true); return; }
+          console.log(chalk.yellow(message));
+          return;
+        }
+        cloud = client;
+        const { getTodosShadowStatus } = await import("../../lib/shadow-status.js");
+        const local = createLocalSqliteTodosStorageAdapter();
+        const report = await getTodosShadowStatus({ local, cloud: client });
+        const enabled = isTodosShadowEnabled();
+        if (asJson) {
+          output({ shadow_enabled: enabled, shadow_env: getTodosStorageShadowEnvName(), ...report }, true);
+          return;
+        }
+        printShadowStatus(report, enabled, getTodosStorageShadowEnvName());
+      } catch (error) {
+        handleError(error);
+      } finally {
+        if (cloud) await cloud.close().catch(() => {});
       }
     });
 
