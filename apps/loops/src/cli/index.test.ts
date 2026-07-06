@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { Database } from "bun:sqlite";
 import { describe, expect, test } from "bun:test";
 import { Store } from "../lib/store.js";
+import { RESTART_INTERRUPTED_RUN_PREFIX } from "../lib/health.js";
 
 const cliPath = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
 
@@ -2078,6 +2079,30 @@ describe("loops CLI", () => {
     expect(value.expectations[0].recommendedTask.compatibilityFallback.search).toEqual(
       expect.arrayContaining(["todos", "search"]),
     );
+  });
+
+  test("health human output surfaces restart-interrupted warnings", () => {
+    const dataDir = freshDataDir("loops-cli-health-restart-warning-");
+    const store = new Store(join(dataDir, "loops.db"));
+    try {
+      const loop = store.createLoop({
+        name: "restart-warning-loop",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "sleep", args: ["10"] },
+      });
+      store.createSkippedRun(
+        loop,
+        "2026-01-01T00:00:00.000Z",
+        `${RESTART_INTERRUPTED_RUN_PREFIX}: child process terminated by SIGTERM during daemon stop/restart`,
+      );
+    } finally {
+      store.close();
+    }
+
+    const health = runCli(dataDir, ["health"]);
+    expect(health.status).toBe(0);
+    expect(health.stdout).toContain("warnings=1");
+    expect(health.stdout).toContain("warn  restart-warning-loop  restart_interrupted");
   });
 
   test("health JSON reports functional route blockers even when latest drain run succeeded", () => {

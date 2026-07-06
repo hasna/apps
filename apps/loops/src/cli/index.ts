@@ -1820,9 +1820,10 @@ const health = program
         console.log(
           `loops=${report.summary.loops} healthy=${report.summary.healthy} unhealthy=${report.summary.unhealthy} warnings=${report.summary.warnings}`,
         );
-        for (const expectation of report.expectations.filter((entry) => !entry.ok)) {
+        for (const expectation of report.expectations.filter((entry) => !entry.ok || entry.check.status === "warn")) {
+          const status = expectation.ok ? "warn" : "fail";
           console.log(
-            `fail  ${expectation.loop.name}  ${expectation.failure?.classification ?? "unknown"}  ${expectation.failure?.fingerprint ?? "-"}`,
+            `${status}  ${expectation.loop.name}  ${expectation.failure?.classification ?? "unknown"}  ${expectation.failure?.fingerprint ?? "-"}`,
           );
         }
       }

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Store } from "./store.js";
 import { runDoctor, type DoctorReport } from "./doctor.js";
+import { RESTART_INTERRUPTED_RUN_PREFIX } from "./health.js";
 
 function check(report: DoctorReport, id: string) {
   return report.checks.find((entry) => entry.id === id);
@@ -113,6 +114,31 @@ describe("doctor", () => {
       const report = runDoctor(store);
       expect(check(report, "loop-runs")?.status).toBe("warn");
       expect(check(report, "loop-runs")?.message).toContain("1 failed loop run(s)");
+      expect(report.ok).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
+
+  test("surfaces restart-interrupted runs separately from failed loop runs", () => {
+    const store = new Store(":memory:");
+    try {
+      const loop = store.createLoop({
+        name: "doctor-restart-interrupted-run",
+        schedule: { type: "interval", everyMs: 60_000 },
+        target: { type: "command", command: "sleep", args: ["10"] },
+      });
+      store.createSkippedRun(
+        loop,
+        "2026-01-01T00:00:00.000Z",
+        `${RESTART_INTERRUPTED_RUN_PREFIX}: child process terminated by SIGTERM during daemon stop/restart`,
+      );
+
+      const report = runDoctor(store);
+      expect(check(report, "loop-runs")?.status).toBe("ok");
+      expect(check(report, "loop-runs")?.message).toBe("no failed loop runs recorded");
+      expect(check(report, "loop-runs:restart-interrupted")?.status).toBe("warn");
+      expect(check(report, "loop-runs:restart-interrupted")?.message).toContain("1 daemon restart-interrupted");
       expect(report.ok).toBe(true);
     } finally {
       store.close();
