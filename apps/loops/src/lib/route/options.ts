@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID } from "../templates.js";
 import { collectValues, listFromRepeatedOpts } from "./parse.js";
+import { providerActiveCapFromOpts } from "./provider-admission.js";
 import { defaultLoopsProject } from "./todos-cli.js";
 import type { TodosDrainOptions } from "./types.js";
 
@@ -156,6 +157,24 @@ const AGENT_ROUTING_OPTION_SPECS: RouteOptionSpec[] = [
     description: "scope --max-active counting to this route/drain identity (defaults to the LOOPS_LOOP_NAME of the running loop, else the route key) so each drain's --max-active is its own ceiling instead of a store-wide one",
   },
   {
+    flags: "--provider-active-cap <n>",
+    key: "providerActiveCap",
+    kind: "value",
+    description: "skip creating a workflow when provider-native diagnostics report at least this many active background-agent runs",
+  },
+  {
+    flags: "--codewith-active-cap <n>",
+    key: "codewithActiveCap",
+    kind: "value",
+    description: "alias for --provider-active-cap for Codewith background-agent diagnostics",
+  },
+  {
+    flags: "--provider-admission-check",
+    key: "providerAdmissionCheck",
+    kind: "boolean",
+    description: "check provider-native admission diagnostics before creating workflow loops; currently implemented for Codewith",
+  },
+  {
     flags: "--max-per-profile <n>",
     key: "maxPerProfile",
     kind: "value",
@@ -276,6 +295,7 @@ function serializeOptionSpecs(specs: RouteOptionSpec[], opts: Record<string, unk
  * operator passed to `routes schedule`.
  */
 export function routeDrainArgs(opts: TodosDrainOptions): string[] {
+  providerActiveCapFromOpts(opts);
   const args = ["routes", "drain", "todos-task"];
   serializeOptionSpecs(DRAIN_FILTER_OPTION_SPECS, opts as Record<string, unknown>, args);
   serializeOptionSpecs(AGENT_ROUTING_OPTION_SPECS, opts as Record<string, unknown>, args);

@@ -40,6 +40,15 @@ export {
   SUPPORTED_AGENT_PROVIDERS,
   type ProviderRoutingDecision,
 } from "./provider.js";
+export {
+  checkProviderAdmission,
+  parseCodewithAdmissionDiagnostics,
+  providerActiveCapFromOpts,
+  providerAdmissionPlanFromOpts,
+  type CodewithAdmissionDiagnostics,
+  type ProviderAdmissionDecision,
+  type ProviderAdmissionPlan,
+} from "./provider-admission.js";
 export { prReviewRoutingDecision, type PrReviewRoutingDecision } from "./pr-review.js";
 export {
   hasThrottleLimits,

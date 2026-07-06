@@ -34,6 +34,9 @@ export interface TodosTaskRouteOptions {
   maxActivePerProject?: string;
   maxActivePerProjectGroup?: string;
   maxActiveScope?: string;
+  providerActiveCap?: string;
+  codewithActiveCap?: string;
+  providerAdmissionCheck?: boolean;
   maxPerProfile?: string;
   worktreeMode?: string;
   worktreeRoot?: string;

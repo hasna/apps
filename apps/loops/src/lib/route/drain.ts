@@ -4,6 +4,7 @@ import { redact } from "../format.js";
 import type { Loop, WorkflowSpec } from "../../types.js";
 import { objectField, stringField, tagsFromValue, taskEventField } from "./fields.js";
 import { listFromRepeatedOpts, positiveInteger, splitList } from "./parse.js";
+import { providerActiveCapFromOpts } from "./provider-admission.js";
 import { routeTodosTaskEvent, todosTaskRouteTemplateId } from "./route-event.js";
 import { normalizeRoutePath } from "./throttle.js";
 import { defaultLoopsProject, runLocalCommand, runLocalCommandWithStdoutFile, todosMutationSummary } from "./todos-cli.js";
@@ -127,6 +128,7 @@ function compactDrainResult(result: TodosTaskRoutePrint): Record<string, unknown
   const throttle = objectField(value.throttle) as { reason?: string; allowed?: boolean } | undefined;
   const requeue = objectField(value.requeue);
   const providerRouting = objectField(value.providerRouting);
+  const providerAdmission = objectField(value.providerAdmission);
   return {
     kind: result.kind,
     taskId: event?.subject,
@@ -138,6 +140,7 @@ function compactDrainResult(result: TodosTaskRoutePrint): Record<string, unknown
     workflowId: stringField(workflow?.id),
     workflowName: stringField(workflow?.name),
     providerRouting,
+    providerAdmission,
     // Per-role codewith account attribution + the route scope that gates
     // --max-active, so drain reports show which account each step ran on and the
     // least-loaded spread is auditable.
@@ -359,6 +362,7 @@ export interface DrainResult {
 }
 
 export function drainTodosTaskRoutes(opts: TodosDrainOptions): DrainResult {
+  providerActiveCapFromOpts(opts);
   const maxDispatch = positiveInteger(opts.maxDispatch ?? "1", "--max-dispatch") ?? 1;
   const todosProject = opts.todosProject ?? defaultLoopsProject();
   const requiredTags = splitList(opts.tags ?? opts.tag) ?? [];
