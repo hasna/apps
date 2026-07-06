@@ -782,6 +782,12 @@ required semantics (dry-run/preflight/commit modes, `idempotencyKey` +
 are specified in `docs/AUTOMATION_RUNTIME_DESIGN.md`; this README intentionally
 does not duplicate that spec.
 
+That design doc also defines the planned `@hasna/actions` target binding. The
+binding reuses `ActionManifest`, `ActionInvocation`, `ActionRunStatus`,
+`ActionQueueStatus`, action-owned idempotency keys, action audit events, and
+dead-letter/replay records. OpenLoops only admits and executes the handed-off
+workflow, then returns workflow refs for action-owned evidence.
+
 The same design doc covers the planned DLQ/dead-letter lifecycle, including
 `loops dlq list/show/replay/resolve`, idempotent replay keys, and compatibility
 rules for `@hasna/actions`.
