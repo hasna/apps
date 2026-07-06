@@ -2,6 +2,14 @@
 
 All notable changes to this repository are tracked here. This project follows semantic versioning for published npm packages when practical.
 
+## @hasna/economy 0.2.43 - 2026-07-06
+
+- Added the self_hosted service surface: `economy-serve` foundation probes (`GET /health`, `/ready`, `/version` -> `{ status, version, mode }`) and a versioned `/v1` API covering summaries, sessions, breakdowns, budgets, goals, pricing, subscriptions, billing, and sync.
+- Added API-key authentication for the internet-facing `/v1` surface via `@hasna/contracts/auth` (stateless HMAC verify + revocation check).
+- Added Amendment A1 PURE-REMOTE cloud storage: the serve reads/writes the shared RDS Postgres directly through a worker-backed synchronous PG adapter (no local cache, no sync engine in the service).
+- Added a typed SDK client generated from the serve OpenAPI (`ECONOMY_API_URL` + `ECONOMY_API_KEY`).
+- Added the deploy surface: ARM64/bun `Dockerfile`, `docker-compose.yml`, `hasna.contract.json`, a `migrations/` directory + runner (`economy-serve migrate`).
+
 ## @hasna/economy 0.2.41 - 2026-06-24
 
 - Added root open-source project files for release notes, security reporting, contributing guidance, and conduct expectations.
