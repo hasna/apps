@@ -418,6 +418,51 @@ The vault database lives at `~/.hasna/secrets/vault.db`. Key material lives in
 - Never paste secret values into commits, logs, issues, PRs, or chat messages.
 - Keep `.env`, `.env.local`, `.secrets/`, and `.connect/` out of git.
 
+## Cloud service (`self_hosted`)
+
+Beyond the local vault, `@hasna/secrets` ships a deployable HTTP service and a
+typed SDK. Four surfaces cover the same core:
+
+- **`secrets`** — the CLI.
+- **`secrets-mcp`** — the MCP server (stdio by default, `--http` for Streamable HTTP).
+- **`secrets-serve`** — the HTTP API. Unauthenticated probes `GET /health`,
+  `/ready`, `/version` (`{status, version, mode}`) and `GET /openapi.json`; a
+  versioned `/v1` surface (secrets + vault-item CRUD, search, audit, users)
+  behind **strict API-key auth** (`@hasna/contracts`). Scopes: `secrets:read`,
+  `secrets:write`.
+- **`@hasna/secrets/sdk`** — a typed, dependency-free fetch client generated
+  from the serve OpenAPI. Client `self_hosted` mode uses `SECRETS_API_URL` +
+  `SECRETS_API_KEY` (never a DSN).
+
+Storage is **PURE REMOTE (Amendment A1)** in cloud mode: `secrets-serve` reads
+and writes the shared Postgres directly (no cache, no local mirror). Secret and
+vault-item values are **encrypted at rest** (AES-256-GCM) with a master key
+injected via `HASNA_SECRETS_MASTER_KEY` — the service fails closed without it.
+
+```bash
+# migrate the cloud database (one-shot), then serve
+export HASNA_SECRETS_STORAGE_MODE=cloud
+export HASNA_SECRETS_DATABASE_URL=postgres://…            # or DATABASE_URL
+export HASNA_SECRETS_API_SIGNING_KEY=$(openssl rand -hex 32)
+export HASNA_SECRETS_MASTER_KEY=$(openssl rand -base64 32)
+secrets db migrate
+secrets-serve                                             # listens on $PORT (default 8080)
+
+# issue an API key (@hasna/contracts issuer), then call the SDK
+bunx @hasna/contracts issue-key --app secrets --agent my-agent --scopes 'secrets:read,secrets:write'
+```
+
+```ts
+import { createSecretsClientFromEnv } from "@hasna/secrets/sdk";
+const client = createSecretsClientFromEnv(); // SECRETS_API_URL + SECRETS_API_KEY
+await client.putSecret({ key: "openai/api_key", value: "sk-…", type: "api_key" });
+const secret = await client.getSecret({ key: "openai/api_key" });
+```
+
+Migrations live in [`migrations/`](migrations) (canonical checksummed set in
+`src/server/cloud-migrations.ts`). Container image: `Dockerfile.package`
+(ARM64/bun); local stack: `docker-compose.yml`.
+
 ## License
 
 Apache-2.0 -- see [LICENSE](LICENSE)

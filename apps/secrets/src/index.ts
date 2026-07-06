@@ -92,6 +92,9 @@ Commands:
 
   serve                       start local HTTP server for Chrome extension (port 27462)
   serve token                 print the current serve token
+  serve-cloud                 start the cloud HTTP API (PURE REMOTE; == secrets-serve)
+  db migrate                  run cloud Postgres migrations (PURE REMOTE, A1)
+  db status                   show applied/pending cloud migrations
 
   feedback <message>          send feedback [--email <email>] [--category <cat>]
   mcp                         start MCP server (stdio)
@@ -1003,6 +1006,21 @@ switch (command) {
         await startMcpServer();
       }
     }
+    break;
+  }
+
+  case "db": {
+    // Cloud (PURE REMOTE, A1) migration runner: secrets db <migrate|status|init>
+    const [sub] = positional;
+    const { runDbCommand } = await import("./server/db-cli.js");
+    await runDbCommand(sub);
+    break;
+  }
+
+  case "serve-cloud": {
+    // Explicit entry to the deployed HTTP API (also available via secrets-serve).
+    const { startCloudServer } = await import("./server/serve.js");
+    await startCloudServer();
     break;
   }
 
