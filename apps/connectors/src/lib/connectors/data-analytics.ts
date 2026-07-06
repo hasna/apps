@@ -514,6 +514,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["fitness", "running", "cycling", "activities", "sports"],
   },
   {
+    name: "travo",
+    displayName: "Travo",
+    description: "Real estate data platform",
+    category: "Data & Analytics",
+    tags: ["real-estate", "property", "research", "comps"],
+  },
+  {
     name: "uproc",
     displayName: "uProc",
     description: "Data processing and enrichment tools",
