@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { closeDatabase, getDatabase, resetDatabase } from "../db/database.js";
+import { setMachineLocalPath } from "../db/projects.js";
 import {
   createLocalSqliteTodosStorageAdapter,
   createShadowTodosStorageAdapter,
@@ -157,9 +158,18 @@ describe("dual-write shadow adapter", () => {
     const postgres = createMemoryPostgresClient();
     const adapter = createShadowTodosStorageAdapter({ local: { db }, postgresClient: postgres.client });
     const project = await adapter.projects.create({ name: "Divergence", path: "/tmp/divergence" });
+    const machinePath = setMachineLocalPath(project.id, "/tmp/divergence", db);
     await adapter.tasks.create({ title: "T1", project_id: project.id });
     await adapter.tasks.create({ title: "T2", project_id: project.id });
     await adapter.shadow.flush();
+    postgres.rows.set(`todos:project_machine_paths:${machinePath.id}`, {
+      service: "todos",
+      objectType: "project_machine_paths",
+      objectId: machinePath.id,
+      payload: machinePath as unknown as Record<string, unknown>,
+      updatedAt: machinePath.updated_at,
+      deletedAt: null,
+    });
 
     const local = createLocalSqliteTodosStorageAdapter({ db });
     const report = await getTodosShadowStatus({ local, cloud: postgres.client });
@@ -167,6 +177,10 @@ describe("dual-write shadow adapter", () => {
     expect(report.cloud_reachable).toBe(true);
     const tasks = report.objects.find((o) => o.object_type === "tasks");
     expect(tasks).toMatchObject({ local: 2, cloud: 2, diff: 0 });
+    const projectMachinePaths = report.objects.find((o) => o.object_type === "project_machine_paths");
+    expect(projectMachinePaths).toMatchObject({ local: 1, cloud: 1, diff: 0 });
+    expect(postgres.rows.get(`todos:project_machine_paths:${machinePath.id}`)?.payload)
+      .toMatchObject({ id: machinePath.id, project_id: project.id });
     expect(report.in_sync).toBe(true);
     expect(report.last_mirror_at).not.toBeNull();
     expect(report.last_mirror_lag_ms).not.toBeNull();

@@ -67,6 +67,24 @@ function printShadowStatus(report: ShadowStatusReport, enabled: boolean, shadowE
   );
 }
 
+interface OutboxDepth { pending: number; failed: number; depth: number }
+
+function readOutboxDepth(): OutboxDepth {
+  try {
+    const { getDatabase } = require("../../db/database.js") as typeof import("../../db/database.js");
+    const db = getDatabase();
+    const has = db
+      .query(`SELECT name FROM sqlite_master WHERE type='table' AND name='shadow_outbox'`)
+      .get();
+    if (!has) return { pending: 0, failed: 0, depth: 0 };
+    const pending = (db.query<{ n: number }, []>(`SELECT count(*) AS n FROM shadow_outbox WHERE status='pending'`).get()?.n) ?? 0;
+    const failed = (db.query<{ n: number }, []>(`SELECT count(*) AS n FROM shadow_outbox WHERE status='failed'`).get()?.n) ?? 0;
+    return { pending, failed, depth: pending + failed };
+  } catch {
+    return { pending: 0, failed: 0, depth: 0 };
+  }
+}
+
 function printArtifactPlan(plan: TodosRunArtifactSyncPlan): void {
   console.log(chalk.bold(`todos storage artifacts ${plan.direction}`));
   console.log("Dry run: yes");
@@ -202,15 +220,59 @@ export function registerStorageCommands(program: Command) {
         const local = createLocalSqliteTodosStorageAdapter();
         const report = await getTodosShadowStatus({ local, cloud: client });
         const enabled = isTodosShadowEnabled();
+        const outbox = readOutboxDepth();
         if (asJson) {
-          output({ shadow_enabled: enabled, shadow_env: getTodosStorageShadowEnvName(), ...report }, true);
+          output({ shadow_enabled: enabled, shadow_env: getTodosStorageShadowEnvName(), outbox, ...report }, true);
           return;
         }
         printShadowStatus(report, enabled, getTodosStorageShadowEnvName());
+        console.log(
+          `Outbox depth: ${outbox.depth} (pending=${outbox.pending} failed=${outbox.failed})`,
+        );
       } catch (error) {
         handleError(error);
       } finally {
         if (cloud) await cloud.close().catch(() => {});
+      }
+    });
+
+  storage
+    .command("shadow-drain")
+    .description("Drain the durable dual-write shadow outbox to cloud Postgres (one-way, write-only)")
+    .option("-j, --json", "Output as JSON")
+    .option("--timeout <ms>", "Max drain time in milliseconds", "30000")
+    .action(async (opts: { json?: boolean; timeout?: string }) => {
+      try {
+        const globalOpts = globalOptions(program);
+        const asJson = Boolean(opts.json || globalOpts.json);
+        const {
+          isTodosShadowEnabled,
+          getTodosStorageShadowEnvName,
+          getRuntimeShadowOutbox,
+          closeRuntimeShadowCloud,
+        } = await import("../../storage/index.js");
+        if (!isTodosShadowEnabled()) {
+          const message = `Shadow disabled: set ${getTodosStorageShadowEnvName()}=1 to enable the dual-write shadow`;
+          if (asJson) { output({ shadow_enabled: false, message }, true); return; }
+          console.log(chalk.yellow(message));
+          return;
+        }
+        const { getDatabase } = await import("../../db/database.js");
+        const timeout = Number.parseInt(opts.timeout ?? "30000", 10);
+        const outbox = getRuntimeShadowOutbox(getDatabase());
+        const stats = await outbox.flush(Number.isFinite(timeout) ? timeout : 30000);
+        await closeRuntimeShadowCloud();
+        if (asJson) { output({ shadow_enabled: true, ...stats }, true); return; }
+        console.log(chalk.bold("todos storage shadow-drain"));
+        console.log(`Mirrored: ${stats.mirrored}`);
+        console.log(`Retries: ${stats.retries}`);
+        console.log(`Pending: ${stats.pending}`);
+        console.log(`Failed (parked): ${stats.failed}`);
+        console.log(`Outbox depth: ${stats.depth}`);
+        console.log(`Last mirror: ${stats.lastMirrorAt ?? "never"}`);
+        if (stats.lastError) console.error(chalk.yellow(`Last error: ${stats.lastError}`));
+      } catch (error) {
+        handleError(error);
       }
     });
 

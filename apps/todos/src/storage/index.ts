@@ -71,6 +71,24 @@ export type {
   TodosShadowMirrorMetrics,
 } from "./shadow.js";
 export {
+  TodosShadowOutbox,
+  createTodosShadowOutbox,
+  installShadowOutboxSchema,
+  SHADOW_TRIGGER_TABLES,
+} from "./shadow-outbox.js";
+export type {
+  CreateTodosShadowOutboxOptions,
+  TodosShadowOutboxEvent,
+  TodosShadowOutboxStats,
+} from "./shadow-outbox.js";
+export {
+  maybeInstallShadowCapture,
+  getRuntimeShadowOutbox,
+  startRuntimeShadowDrain,
+  registerShadowExitFlush,
+  closeRuntimeShadowCloud,
+} from "./shadow-runtime.js";
+export {
   createTodosCloudQueryClient,
   createTodosCloudQueryClientFromEnv,
 } from "./cloud-client.js";

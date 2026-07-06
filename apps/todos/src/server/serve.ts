@@ -189,7 +189,14 @@ export async function startServer(port: number, options?: { open?: boolean; host
   const apiKey = options?.apiKey || process.env.TODOS_API_KEY || null;
 
   // Initialize database
-  getDatabase();
+  const db = getDatabase();
+
+  // Durable dual-write shadow: capture triggers are installed at getDatabase();
+  // this long-running server also drains the outbox to cloud Postgres.
+  try {
+    const { startRuntimeShadowDrain } = await import("../storage/shadow-runtime.js");
+    startRuntimeShadowDrain(db);
+  } catch { /* shadow disabled or unavailable — local writes stay durable */ }
 
   // SSE event stream — clients subscribe to /api/events
   const sseClients = new Set<ReadableStreamDefaultController>();

@@ -29,6 +29,7 @@ export interface ShadowStatusReport {
 const OBJECT_TYPES = [
   "tasks",
   "projects",
+  "project_machine_paths",
   "plans",
   "agents",
   "task_lists",
@@ -44,17 +45,19 @@ interface CloudCountRow {
 }
 
 async function localCounts(adapter: TodosStorageAdapter): Promise<Record<string, number>> {
-  const [tasks, projects, plans, agents, taskLists, templates] = await Promise.all([
+  const [tasks, projects, plans, agents, taskLists, templates, snapshot] = await Promise.all([
     Promise.resolve(adapter.tasks.count({})),
     Promise.resolve(adapter.projects.list()).then((rows) => rows.length),
     Promise.resolve(adapter.plans.list()).then((rows) => rows.length),
     Promise.resolve(adapter.agents.list()).then((rows) => rows.length),
     Promise.resolve(adapter.taskLists.list()).then((rows) => rows.length),
     Promise.resolve(adapter.templates.list()).then((rows) => rows.length),
+    Promise.resolve(adapter.sync.exportSnapshot?.()).catch(() => null),
   ]);
   return {
     tasks,
     projects,
+    project_machine_paths: snapshot?.projectMachinePaths?.length ?? 0,
     plans,
     agents,
     task_lists: taskLists,
