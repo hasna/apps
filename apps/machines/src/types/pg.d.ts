@@ -9,7 +9,11 @@ declare module "pg" {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   export type PoolClient = any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  export type PoolConfig = any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   export type QueryResult = any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  export type QueryResultRow = any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const pg: any;
   export default pg;

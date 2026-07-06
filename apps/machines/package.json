@@ -18,16 +18,22 @@
     "./storage": {
       "import": "./dist/storage.js",
       "types": "./dist/storage.d.ts"
+    },
+    "./sdk": {
+      "import": "./dist/sdk/index.js",
+      "types": "./dist/sdk/index.d.ts"
     }
   },
   "bin": {
     "machines": "dist/cli/index.js",
     "machines-mcp": "dist/mcp/index.js",
-    "machines-agent": "dist/agent/index.js"
+    "machines-agent": "dist/agent/index.js",
+    "machines-serve": "dist/server/index.js"
   },
   "files": [
     "dist",
     "schemas",
+    "hasna.contract.json",
     "scripts/consumer-conformance.mjs",
     "LICENSE",
     "README.md",
@@ -37,14 +43,17 @@
     "CODE_OF_CONDUCT.md"
   ],
   "scripts": {
-    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external @hasna/events --external @hasna/events/* --external pg && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @hasna/events --external @hasna/events/* --external @modelcontextprotocol/sdk --external pg && bun build src/agent/index.ts --outdir dist/agent --target bun && bun build src/index.ts src/storage.ts src/consumer.ts --outdir dist --target bun --external @hasna/events --external @hasna/events/* --external pg && tsc --emitDeclarationOnly --outDir dist",
+    "build": "rm -rf dist && bun build src/cli/index.ts --outdir dist/cli --target bun --external @hasna/events --external @hasna/events/* --external @hasna/contracts --external @hasna/contracts/* --external pg && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @hasna/events --external @hasna/events/* --external @modelcontextprotocol/sdk --external pg && bun build src/agent/index.ts --outdir dist/agent --target bun && bun build src/server/index.ts --outdir dist/server --target bun --external @hasna/events --external @hasna/events/* --external @hasna/contracts --external @hasna/contracts/* --external pg && bun build src/sdk/index.ts --outdir dist/sdk --target bun && bun build src/index.ts src/storage.ts src/consumer.ts --outdir dist --target bun --external @hasna/events --external @hasna/events/* --external @hasna/contracts --external @hasna/contracts/* --external pg && tsc --emitDeclarationOnly --outDir dist",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "sdk:generate": "bun run scripts/generate-sdk.ts",
+    "kit:check": "bunx @hasna/contracts vendor-kit --check",
     "smoke:consumer-conformance": "bun scripts/consumer-conformance.mjs",
     "verify:release": "bun run typecheck && bun test && bun run build && bun run smoke:consumer-conformance && bun run scripts/verify-release.ts",
     "dev": "bun run src/cli/index.ts",
     "dev:mcp": "bun run src/mcp/index.ts",
     "dev:agent": "bun run src/agent/index.ts",
+    "dev:serve": "bun run src/server/index.ts",
     "prepublishOnly": "bun run verify:release",
     "postinstall": "mkdir -p $HOME/.hasna/machines 2>/dev/null || true"
   },
@@ -73,6 +82,7 @@
     "bun": ">=1.0.0"
   },
   "dependencies": {
+    "@hasna/contracts": "0.4.1",
     "@hasna/events": "^0.1.7",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "chalk": "^5.6.2",

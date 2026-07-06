@@ -15,6 +15,7 @@ import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import chalk from "chalk";
 import { getPackageVersion } from "../version.js";
+import { runMigrations } from "../server/migrate.js";
 import {
   manifestAdd,
   manifestBootstrapCurrentMachine,
@@ -3117,6 +3118,28 @@ program
     }
     const server = startDashboardServer({ host: info.host, port: info.port });
     console.log(chalk.green(`machines dashboard listening on http://${server.hostname}:${server.port}`));
+  });
+
+const dbCommand = program.command("db").description("Cloud database schema operations (Amendment A1: shared RDS machines database)");
+
+dbCommand
+  .command("migrate")
+  .description("Apply pending cloud migrations (api-keys + machines registry). Connects as the owner role.")
+  .option("--dry-run", "Report the migration plan without applying", false)
+  .option("-j, --json", "Print JSON output", false)
+  .action(async (options: { dryRun?: boolean; json?: boolean }) => {
+    const result = await runMigrations({ dryRun: options.dryRun === true });
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+      return;
+    }
+    if (options.dryRun) {
+      console.log(chalk.cyan(`pending migrations: ${result.pending.length ? result.pending.join(", ") : "(none)"}`));
+      console.log(chalk.gray(`already applied: ${result.alreadyApplied.length}`));
+      return;
+    }
+    console.log(chalk.green(`applied ${result.applied.length} migration(s)${result.applied.length ? ": " + result.applied.join(", ") : ""}`));
+    console.log(chalk.gray(`already applied: ${result.alreadyApplied.length}`));
   });
 
 const healCommand = program.command("heal").description("Self-healing network watchdog: keeps a Wi-Fi node reachable (SSID pinning + peer-reachability + gated reboot)");

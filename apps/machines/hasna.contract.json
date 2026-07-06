@@ -1,0 +1,31 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "machines",
+  "class": "service",
+  "contractVersion": "v1",
+  "kitVersion": "0.4.1",
+  "description": "Machine fleet control-plane: CLI + MCP + serve (HTTP /v1 registry API) + typed SDK. Local mode uses SQLite at ~/.hasna/machines/machines.db for the CLI/agent; the deployed serve runs cloud mode (HASNA_MACHINES_STORAGE_MODE=cloud), PURE REMOTE per Amendment A1 with all reads/writes hitting the shared cloud Postgres. Every /v1 route requires an @hasna/contracts API key.",
+  "bins": ["machines", "machines-mcp", "machines-serve", "machines-agent"],
+  "storage": {
+    "mode": "cloud",
+    "envPrefix": "HASNA_MACHINES_",
+    "aliasEnvPrefix": "MACHINES_",
+    "databaseUrlSecretRef": "hasna/oss/machines/database-url"
+  },
+  "metadata": {
+    "serve": {
+      "healthPath": "/health",
+      "readyPath": "/ready",
+      "versionPath": "/version",
+      "openapiPath": "/openapi.json",
+      "apiBase": "/v1",
+      "authHeader": "x-api-key",
+      "scopes": ["machines:read", "machines:write"]
+    },
+    "client": {
+      "mode": "self_hosted",
+      "apiUrlEnv": "MACHINES_API_URL",
+      "apiKeyEnv": "MACHINES_API_KEY"
+    }
+  }
+}

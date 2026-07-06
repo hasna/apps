@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import packageJson from "../package.json" assert { type: "json" };
 
-const MACHINES_BINS = ["machines", "machines-agent", "machines-mcp"];
+const MACHINES_BINS = ["machines", "machines-agent", "machines-mcp", "machines-serve"];
 const EVENT_BINS = ["events", "hasna-events"];
 
 describe("dependency event bin boundary", () => {

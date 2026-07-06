@@ -1,0 +1,10 @@
+.git
+node_modules
+dist
+*.log
+.takumi
+docs
+test
+**/*.test.ts
+.github
+pnpm-lock.yaml
