@@ -17,6 +17,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["incorporation", "business"],
   },
   {
+    name: "stripe-reporting-advanced",
+    displayName: "Stripe Reporting (Advanced)",
+    description: "Scheduled financial report generation",
+    category: "Commerce & Finance",
+    tags: ["payments", "reporting", "finance", "stripe"],
+  },
+  {
     name: "shopify",
     displayName: "Shopify",
     description: "E-commerce platform",
