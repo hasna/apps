@@ -72,7 +72,7 @@ describe("loops-api foundation", () => {
     });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("non-local loops-api binds require");
+    expect(result.stderr).toContain("non-local loops-serve binds require");
   });
 
   test("non-local serve requires the configured bearer token", async () => {

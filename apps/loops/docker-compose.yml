@@ -1,0 +1,44 @@
+# Local development stack for @hasna/loops in cloud (PURE REMOTE) mode.
+#   docker compose run --rm loops-migrate   # apply schema first
+#   docker compose up --build loops-serve
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: loops
+      POSTGRES_PASSWORD: loops
+      POSTGRES_DB: loops
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U loops"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  loops-migrate:
+    build: .
+    command: ["bun", "dist/serve/index.js", "migrate"]
+    environment:
+      HASNA_LOOPS_STORAGE_MODE: cloud
+      HASNA_LOOPS_DATABASE_URL: postgres://loops:loops@postgres:5432/loops?sslmode=disable
+      HASNA_LOOPS_API_SIGNING_KEY: dev-signing-secret-change-me
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  loops-serve:
+    build: .
+    ports:
+      - "8787:8787"
+    environment:
+      PORT: "8787"
+      HOST: 0.0.0.0
+      HASNA_LOOPS_STORAGE_MODE: cloud
+      HASNA_LOOPS_DATABASE_URL: postgres://loops:loops@postgres:5432/loops?sslmode=disable
+      HASNA_LOOPS_API_SIGNING_KEY: dev-signing-secret-change-me
+    depends_on:
+      postgres:
+        condition: service_healthy
+      loops-migrate:
+        condition: service_completed_successfully

@@ -9,6 +9,12 @@ import { computeNextAfter, dueSlots } from "../lib/recurrence.js";
 import { scrubSecretsDeep } from "../lib/redact.js";
 import type { LoopStorageContract } from "../lib/storage/contract.js";
 import { packageVersion } from "../lib/version.js";
+import openApiSpec from "../../openapi/loops.json" with { type: "json" };
+
+/** The serve OpenAPI document (source of the generated SDK), version-synced. */
+export function openApiDocument(): Record<string, unknown> {
+  return { ...(openApiSpec as Record<string, unknown>), info: { ...(openApiSpec as { info?: object }).info, version: packageVersion() } };
+}
 
 const program = new Command();
 const DEFAULT_BODY_LIMIT_BYTES = 64 * 1024;
@@ -72,6 +78,19 @@ export function apiStatus() {
   };
 }
 
+/**
+ * Framework-agnostic API-key verifier shape (matches
+ * `@hasna/contracts/auth` `ApiKeyVerifier`). Kept structural so the api module
+ * has no hard dependency on the auth package: the serve entry injects the real
+ * verifier built from the vendored kit's client + the HMAC signing secret.
+ */
+export interface ApiAuthenticator {
+  authenticate(
+    headers: Headers,
+    context?: { method?: string | null; path?: string | null; requiredScopes?: readonly string[] },
+  ): Promise<{ ok: boolean; status: number; reason?: string; message?: string }>;
+}
+
 export interface LoopsApiServerOptions {
   host?: string;
   port?: number;
@@ -79,22 +98,89 @@ export interface LoopsApiServerOptions {
   bodyLimitBytes?: number;
   evidenceLimitBytes?: number;
   now?: () => Date;
+  /**
+   * API-key verifier (from `@hasna/contracts/auth`). When present, every
+   * request outside the open foundation probes (`/health`, `/ready`,
+   * `/version`, `/status`) must present a valid `loops:*` scoped key. This is
+   * the internet-facing auth path (no bearer token, no loopback bypass).
+   */
+  authenticator?: ApiAuthenticator;
+  /**
+   * Readiness probe. Should prove the storage backend is reachable AND fully
+   * migrated. Returns `{ ready, detail? }`. Defaults to a storage list probe.
+   */
+  readyCheck?: () => Promise<{ ready: boolean; detail?: string }>;
+}
+
+/** Deployment mode for the foundation probes ({ status, version, mode }). */
+function foundationMode(): string {
+  return buildDeploymentStatus({}).activeDeploymentMode;
+}
+
+/** Shared { status, version, mode } envelope for /health, /ready, /version. */
+function foundationEnvelope(status: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return { status, version: packageVersion(), mode: foundationMode(), service: "loops", ...extra };
 }
 
 export function createLoopsApiServer(opts: LoopsApiServerOptions = {}) {
   const host = opts.host ?? "127.0.0.1";
   const port = opts.port ?? 8787;
-  if (!isLocalBind(host) && !configuredAuthToken()) {
-    throw new Error("non-local loops-api binds require LOOPS_API_TOKEN or HASNA_LOOPS_API_TOKEN");
+  // A non-local bind must be gated by EITHER the contracts API-key verifier
+  // (internet-facing path) OR the legacy bearer token (local/dev path). Never
+  // expose the control plane unauthenticated.
+  if (!isLocalBind(host) && !opts.authenticator && !configuredAuthToken()) {
+    throw new Error("non-local loops-serve binds require an API-key authenticator or LOOPS_API_TOKEN");
   }
+  const defaultReady = async (): Promise<{ ready: boolean; detail?: string }> => {
+    if (!opts.storage) return { ready: false, detail: "storage_unconfigured" };
+    try {
+      await opts.storage.listLoops({ limit: 1 });
+      return { ready: true };
+    } catch (error) {
+      return { ready: false, detail: error instanceof Error ? error.message : "storage_unreachable" };
+    }
+  };
+  const readyCheck = opts.readyCheck ?? defaultReady;
   return Bun.serve({
     hostname: host,
     port,
-    fetch(request) {
-      const unauthorized = authorizeRequest(request, host);
-      if (unauthorized) return unauthorized;
+    idleTimeout: 60,
+    async fetch(request) {
       const url = new URL(request.url);
-      if (url.pathname === "/health" || url.pathname === "/status") {
+      // ── Open foundation probes ({ status, version, mode }) ───────────────
+      if (request.method === "GET" && (url.pathname === "/health" || url.pathname === "/healthz")) {
+        return Response.json(foundationEnvelope("ok"));
+      }
+      if (request.method === "GET" && (url.pathname === "/version" || url.pathname === "/v1/version")) {
+        return Response.json(foundationEnvelope("ok"));
+      }
+      if (request.method === "GET" && (url.pathname === "/ready" || url.pathname === "/readyz")) {
+        const result = await readyCheck();
+        return Response.json(
+          foundationEnvelope(result.ready ? "ready" : "not_ready", result.detail ? { detail: result.detail } : {}),
+          { status: result.ready ? 200 : 503 },
+        );
+      }
+      if (request.method === "GET" && url.pathname === "/openapi.json") {
+        return Response.json(openApiDocument());
+      }
+      // ── Authenticated control plane (/status included) ───────────────────
+      if (opts.authenticator) {
+        const decision = await opts.authenticator.authenticate(request.headers, {
+          method: request.method,
+          path: url.pathname,
+        });
+        if (!decision.ok) {
+          return Response.json(
+            { ok: false, error: decision.reason ?? "unauthorized", message: decision.message },
+            { status: decision.status || 401 },
+          );
+        }
+      } else {
+        const unauthorized = authorizeRequest(request, host);
+        if (unauthorized) return unauthorized;
+      }
+      if (request.method === "GET" && url.pathname === "/status") {
         return Response.json(apiStatus());
       }
       return handleV1Request({
@@ -583,7 +669,11 @@ program
     console.log(`loops-api listening on http://${server.hostname}:${server.port}`);
   });
 
-if (import.meta.main) {
+// Only auto-run the loops-api CLI when THIS file is the direct entry. When bun
+// bundles api/index.ts into another entry (e.g. loops-serve), it inlines this
+// code and sets import.meta.main=true for the whole bundle; the URL check keeps
+// this CLI from double-parsing argv against the serve program.
+if (import.meta.main && (import.meta.url.endsWith("api/index.ts") || import.meta.url.endsWith("api/index.js"))) {
   main().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
