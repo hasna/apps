@@ -1,0 +1,17 @@
+node_modules/
+dist/
+bin/
+.env
+.env.local
+.env.*.local
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+*.log
+.cache/
+*.tsbuildinfo
+coverage/
+.npmrc
