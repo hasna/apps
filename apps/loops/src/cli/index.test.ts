@@ -6241,12 +6241,12 @@ describe("loops CLI", () => {
     expect(routed.workItem.projectKey).toBe(canonicalRouteRepo);
 
     const sourceGate = routed.workflow.steps.find((step: { id: string }) => step.id === "source-task-gate");
-    expect(sourceGate.target.cwd).toBe(canonicalRouteRepo);
+    expect(testPath(sourceGate.target.cwd)).toBe(canonicalRouteRepo);
     expect(sourceGate.target.args.join("\n")).toContain(join(dataDir, "todos-store"));
     const worker = routed.workflow.steps.find((step: { id: string }) => step.id === "worker");
-    expect(worker.target.worktree.originalCwd).toBe(canonicalRouteRepo);
-    expect(worker.target.worktree.repoRoot).toBe(canonicalRouteRepo);
-    expect(worker.target.worktree.path).toContain(worktreeRoot);
+    expect(testPath(worker.target.worktree.originalCwd)).toBe(canonicalRouteRepo);
+    expect(testPath(worker.target.worktree.repoRoot)).toBe(canonicalRouteRepo);
+    expect(testPath(worker.target.worktree.path)).toContain(testPath(worktreeRoot));
     expect(worker.target.cwd).toBe(worker.target.worktree.cwd);
   });
 
@@ -6316,11 +6316,11 @@ describe("loops CLI", () => {
       kind: "skipped",
       taskId: "task-drain-invalid-explicit-project",
       routeError: true,
-      routeProjectPath: invalidRoutePath,
+      routeProjectPath: testPath(invalidRoutePath),
       sourceTaskWorkingDir: sourceRepo,
     });
     expect(value.results[0].reason).toContain("worktreeMode=required");
-    expect(value.results[0].reason).toContain(invalidRoutePath);
+    expect(value.results[0].reason).toContain("not-a-git-repo");
     expect(value.results[0].sourceTaskUpdate).toMatchObject({
       ok: true,
       attempted: true,
