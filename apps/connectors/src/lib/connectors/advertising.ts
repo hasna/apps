@@ -23,4 +23,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Advertising",
     tags: ["google", "ads", "ppc", "campaigns"],
   },
+  {
+    name: "tiktokads",
+    displayName: "TikTok Ads",
+    description: "TikTok Marketing API for campaigns, ad groups, ads, reporting, pixels, and creatives",
+    category: "Advertising",
+    tags: ["tiktok", "ads", "campaigns"],
+  },
 ];
