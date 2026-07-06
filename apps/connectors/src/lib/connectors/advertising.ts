@@ -44,4 +44,11 @@ export const connectors: ConnectorMeta[] = [
     category: "Advertising",
     tags: ["ads", "programmatic", "dsp"],
   },
+  {
+    name: "terminus",
+    displayName: "Terminus",
+    description: "UTM parameter and tracked link management via the Terminus API",
+    category: "Advertising",
+    tags: ["abm", "marketing", "utm", "links"],
+  },
 ];
