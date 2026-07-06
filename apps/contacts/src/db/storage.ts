@@ -52,6 +52,9 @@ export const CONTACTS_STORAGE_TABLES = [
   "contact_documents",
   "contact_health",
   "feedback",
+  "audiences",
+  "contact_consent",
+  "contact_suppressions",
 ] as const;
 
 function quoteId(identifier: string): string {

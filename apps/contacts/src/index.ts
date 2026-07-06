@@ -426,3 +426,59 @@ export type { ContactHealth, SetHealthInput, EmergencyContact } from "./db/healt
 // Document Scanner (CON-00087)
 export { scanDocument } from "./lib/document-scanner.js";
 export type { DocumentScanResult } from "./lib/document-scanner.js";
+
+// Audiences / consent / suppression (distribution apps plan)
+export {
+  createAudience,
+  getAudience,
+  listAudiences,
+  updateAudience,
+  deleteAudience,
+  markAudienceSuppressionSynced,
+  setContactConsent,
+  getContactConsent,
+  listContactConsent,
+  suppressAddress,
+  unsuppressAddress,
+  listSuppressions,
+  markSuppressionsSynced,
+  matchAudienceContacts,
+  resolveAudience,
+} from "./db/audiences.js";
+export type { SuppressInput } from "./db/audiences.js";
+export {
+  AUDIENCE_CONTRACT_SCHEMA_ID,
+  AudienceContractSchema,
+  toAudienceContract,
+  validateAudienceContract,
+} from "./lib/audience-contract.js";
+export type { AudienceContract } from "./lib/audience-contract.js";
+export { createMaileryAdapter, syncSuppressions, MaileryNotAvailableError } from "./lib/mailery-sync.js";
+export type { SuppressionSyncAdapter, SuppressionSyncResult, SyncSuppressionsOptions } from "./lib/mailery-sync.js";
+export type {
+  AudienceChannel,
+  ConsentStatus,
+  ConsentPolicy,
+  AudienceMatch,
+  AudiencePredicateKind,
+  AudiencePredicateOp,
+  AudiencePredicateValue,
+  AudiencePredicate,
+  Audience,
+  AudienceRow,
+  CreateAudienceInput,
+  UpdateAudienceInput,
+  ContactConsent,
+  ContactSuppression,
+  AudienceRecipient,
+  AudienceExclusion,
+  AudienceResolution,
+} from "./types/index.js";
+export {
+  AUDIENCE_CHANNELS,
+  CONSENT_STATUSES,
+  CONSENT_POLICIES,
+  AudienceNotFoundError,
+  DuplicateAudienceIdError,
+  InvalidAudienceDefinitionError,
+} from "./types/index.js";

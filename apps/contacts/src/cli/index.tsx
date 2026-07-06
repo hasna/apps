@@ -4,6 +4,7 @@ import { program } from "commander";
 import { registerCoreCommands } from "./commands/core.js";
 import { registerCrmCommands } from "./commands/crm.js";
 import { registerAdvancedCommands } from "./commands/advanced.js";
+import { registerAudienceCommands } from "./commands/audience.js";
 import { registerStorageCommands } from "./storage.js";
 import { createRequire } from "node:module";
 
@@ -18,6 +19,7 @@ program
 registerCoreCommands(program);
 registerCrmCommands(program);
 registerAdvancedCommands(program);
+registerAudienceCommands(program);
 registerStorageCommands(program);
 registerWebhookCommands(program, { source: "contacts" });
 registerEventCommands(program, { source: "contacts", eventsCommandName: "hasna-events" });
