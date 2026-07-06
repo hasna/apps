@@ -990,6 +990,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ci/cd", "continuous integration", "testing", "deployment", "devops"],
   },
   {
+    name: "transform",
+    displayName: "Transform",
+    description: "Data transform platform for building and running pipelines",
+    category: "Developer Tools",
+    tags: ["data", "transformation", "etl", "pipelines", "events"],
+  },
+  {
     name: "tuskr",
     displayName: "Tuskr",
     description: "Test case management and QA platform",
