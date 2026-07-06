@@ -5,6 +5,27 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.4.14 (2026-07-06)
+
+Self-hosted control-plane service brought to the full Hasna standard: all four
+surfaces (CLI, MCP, serve, SDK) are real over the Postgres backend, with
+internet-facing API-key auth and a deployable ARM64 image.
+
+### Added
+
+- **`loops-serve` HTTP control plane:** RDS-direct (Amendment A1) Postgres
+  storage wired into the serve; public `GET /health`, `/ready` (storage
+  reachable + fully migrated), `/version` (all `{status, version, mode}`) and
+  `/openapi.json`; the versioned `/v1` loops + runs API is gated behind
+  `@hasna/contracts` API-key auth (`verifyApiKey`, strict revocation via the
+  shared `api_keys` table). `loops-serve migrate` applies the ledger-tracked
+  schema + api_keys table.
+- **Generated HTTP SDK:** `@hasna/loops/sdk/http` exports a typed dependency-free
+  `LoopsClient` generated from `openapi/loops.json` (the serve contract).
+- **Deploy artifacts:** ARM64/bun `Dockerfile` (Amazon RDS CA baked for
+  verify-full TLS), `docker-compose.yml`, `hasna.contract.json` service
+  manifest, and a `migrations/` mirror of the ledger migrations.
+
 ## 0.4.13 (2026-07-05)
 
 `--pr-handoff` workflows whose worker pushes its own branch and opens the PR

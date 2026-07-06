@@ -1,7 +1,7 @@
 // @generated from openapi/loops.json by scripts/gen-sdk.ts — DO NOT EDIT.
 // Regenerate: bun run scripts/gen-sdk.ts
 // @generated from OpenAPI by @hasna/contracts SDK generator — DO NOT EDIT.
-// Source: OpenLoops 0.4.13
+// Source: OpenLoops 0.4.14
 
 export interface Foundation { "status": string; "version": string; "mode": string; "service"?: string; "detail"?: string }
 
