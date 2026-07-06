@@ -10,12 +10,14 @@ import { createKnowledgeService } from './service';
 import { createKnowledgeProjectPanel, formatKnowledgeProjectPanel } from './project-panel';
 import {
   getStorageStatus as getDatabaseStorageStatus,
+  getStorageMode,
   parseStorageTables,
   storagePull as databaseStoragePull,
   storagePush as databaseStoragePush,
   storageSync as databaseStorageSync,
   type SyncResult,
 } from './storage';
+import { cloudAddItem, cloudGetItem, cloudListItems } from './db/cloud-catalog';
 import { assertProviderCredentials, parseModelRef, resolveModelRef, type AiProviderId } from './providers';
 import { approvalStatus, assertS3ReadAllowed, assertWebSearchAllowed, createApprovalGate, recordAuditEvent, recordRedactionFindings, redactSecrets } from './safety';
 import { Command } from 'commander';
@@ -568,6 +570,21 @@ async function run(argv: string[]): Promise<void> {
   }
   if (!storePathOverridden && (command === 'ask' || command === 'build')) {
     ensureStore(storePath);
+  }
+
+  // PURE REMOTE (Amendment A1): in cloud storage mode the catalog lives in the
+  // knowledge_items Postgres table. list/get/add are wired to cloud below. The
+  // remaining catalog mutators are not yet cloud-wired — guard them explicitly
+  // so they never silently operate on the local JSON store while in cloud mode.
+  const cloudMode = getStorageMode() === 'cloud';
+  const CLOUD_CATALOG_UNWIRED = new Set([
+    'update', 'archive', 'restore', 'untag', 'delete', 'upsert', 'prune', 'dedupe', 'export', 'stats', 'inventory',
+  ]);
+  if (cloudMode && CLOUD_CATALOG_UNWIRED.has(command)) {
+    throw new Error(
+      `knowledge '${command}' is not yet wired for cloud storage mode (HASNA_KNOWLEDGE_STORAGE_MODE=cloud); ` +
+        `cloud currently supports catalog: list, get, add. Run in local mode for '${command}'.`,
+    );
   }
 
   if (command === 'inventory') {
@@ -1481,6 +1498,24 @@ async function run(argv: string[]): Promise<void> {
     const title = positional[1];
     const content = positional[2];
     if (!title || !content) throw new Error('Usage: knowledge add <title> <content>');
+    if (cloudMode) {
+      const now = new Date().toISOString();
+      const id = makeId();
+      const item: KnowledgeItem = {
+        id,
+        short_id: makeShortId(id),
+        title,
+        content,
+        url: flags.url ?? null,
+        tags: flags.tag ? [flags.tag] : [],
+        created_at: now,
+        updated_at: now,
+      };
+      await cloudAddItem(item);
+      log('info', 'Item added (cloud)', { id: item.id, title: item.title });
+      output({ ok: true, item, message: `Added ${item.id}` }, flags.json);
+      return;
+    }
     withLock(storePath, () => {
       const db = loadStore(storePath);
       const item: KnowledgeItem = {
@@ -1504,7 +1539,9 @@ async function run(argv: string[]): Promise<void> {
     if (flags.format !== undefined && flags.format !== 'table' && flags.format !== 'json') {
       throw new Error("Invalid --format value for list. Use 'table' or 'json'.");
     }
-    const db = loadStoreIfExists(storePath);
+    const db = cloudMode
+      ? { items: await cloudListItems({ includeArchived: true }), exists: true }
+      : loadStoreIfExists(storePath);
     const page = Number.isFinite(flags.page) && (flags.page as number) > 0 ? flags.page as number : 1;
     const limit = Number.isFinite(flags.limit) && (flags.limit as number) > 0 ? flags.limit as number : 20;
     const search = flags.search ? String(flags.search).toLowerCase() : '';
@@ -1544,6 +1581,12 @@ async function run(argv: string[]): Promise<void> {
 
   if (command === 'get') {
     requireId(flags);
+    if (cloudMode) {
+      const item = await cloudGetItem(String(flags.id));
+      if (!item) throw new Error(`Item not found: ${flags.id}`);
+      output({ ok: true, item, store_exists: true, message: `${item.id}: ${item.title}` }, flags.json);
+      return;
+    }
     const db = loadStoreIfExists(storePath);
     const item = db.items.find((x) => x.id === flags.id || x.short_id === flags.id);
     if (!item) throw new Error(`Item not found: ${flags.id}`);
