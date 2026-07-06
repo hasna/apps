@@ -1,0 +1,172 @@
+# Shared Cloud Task Store — Cutover Runbook
+
+This runbook covers the migration of `@hasna/todos` from disjoint per-machine
+local SQLite stores to a single shared Postgres task store, using the sanctioned
+two-phase plan:
+
+1. **Dual-write shadow** (pre-cutover, reversible at any time): local SQLite
+   stays the sole source of truth for reads **and** writes; every successful
+   local write is mirrored asynchronously to the cloud Postgres sync tables.
+   Nothing is ever read from the cloud during this phase.
+2. **Single-writer flip** (Amendment A1, pure remote): all machines switch to
+   reading and writing directly against the shared Postgres store in one
+   coordinated window. Local SQLite becomes a dated backup file.
+
+The council rejected per-machine cloud flips because they create a split-brain
+across disjoint stores. Machines therefore flip **together**, never one at a
+time.
+
+## Terminology and knobs
+
+| Env var | Meaning |
+| --- | --- |
+| `HASNA_TODOS_STORAGE_MODE` | `local` (default) \| `remote` \| `hybrid` |
+| `HASNA_TODOS_SHADOW` | `1` enables the dual-write shadow mirror (requires `MODE=local` + a DSN) |
+| `HASNA_TODOS_DATABASE_URL` | Postgres DSN for the shared store (from Secrets Manager) |
+| `HASNA_TODOS_DATABASE_SSL` | boolean, defaults to `true` |
+
+Local-development fallbacks without the `HASNA_` prefix are accepted
+(`TODOS_SHADOW`, `TODOS_DATABASE_URL`, ...).
+
+## Canonical infrastructure
+
+- Cluster/database: `hasna-xyz-infra-apps-prod-postgres` / `todos`
+  (account `789877399345`, region `us-east-1`).
+- Runtime DSN secret (name only): `hasna/xyz/opensource/todos/prod/rds`.
+- The instance is **not** publicly accessible. Reach it from outside the VPC
+  only through the SSM port-forward bastion documented in the secret's `ssm`
+  block (`AWS-StartPortForwardingSessionToRemoteHost`).
+
+### Opening the sanctioned tunnel (reachability fallback)
+
+```
+aws ssm start-session \
+  --target <ssm.target_instance_id> \
+  --document-name AWS-StartPortForwardingSessionToRemoteHost \
+  --parameters '{"host":["<rds host>"],"portNumber":["5432"],"localPortNumber":["15432"]}'
+```
+
+Then point tooling at `127.0.0.1:15432` with `sslmode=require`. Never paste the
+password on a command line; pull the DSN from Secrets Manager and pipe it
+directly into `psql` / the app.
+
+## Schema
+
+The shared store uses the repo-native sync schema
+(`postgresTodosSyncSchemaSql()` in `./storage`): `todos_sync_records`
+(keyed by `service, object_type, object_id`) plus `todos_sync_cursors`. Apply
+it idempotently before any mirror or cutover:
+
+```
+bun -e "const m=await import('./src/storage/postgres-sync.ts'); \
+  console.log(m.postgresTodosSyncSchemaSql().join(';\n')+';');" > /tmp/todos-schema.sql
+psql "$DSN" -v ON_ERROR_STOP=1 -f /tmp/todos-schema.sql
+```
+
+All statements use `IF NOT EXISTS`, so re-running is safe.
+
+---
+
+## Phase 1 — Dual-write shadow (already implemented)
+
+Shadow mode wraps the local adapter so successful writes are mirrored
+fire-and-forget to the cloud with bounded retries and a divergence counter. It
+never reads from the cloud. Enable it per machine:
+
+```
+HASNA_TODOS_STORAGE_MODE=local
+HASNA_TODOS_SHADOW=1
+HASNA_TODOS_DATABASE_URL=<DSN from hasna/xyz/opensource/todos/prod/rds>
+```
+
+Watch divergence with the read-only diagnostic (this command **does** open a DB
+connection, unlike `todos storage status`):
+
+```
+todos storage shadow-status            # human-readable
+todos storage shadow-status --json     # machine-readable
+```
+
+`shadow-status` reports per-object-type local vs cloud row counts, cloud
+tombstones, `in_sync`, and last mirror lag.
+
+> **Runtime-wiring caveat.** The mirror lives in the storage adapter
+> (`createShadowTodosStorageAdapter`). The current CLI/MCP write path still calls
+> the `db/*` helpers directly, so `HASNA_TODOS_SHADOW=1` only mirrors writes that
+> flow through the storage adapter. Routing the CLI/MCP/server write path through
+> the adapter is the prerequisite readiness task before the shadow becomes a full
+> live mirror of every machine write, and before Phase 2 is meaningful.
+
+---
+
+## Phase 2 — Single-writer flip (all machines together, Amendment A1)
+
+Perform this as one coordinated operation across every fleet machine.
+
+### Preconditions
+
+- Shadow has been running long enough that `shadow-status` shows small, stable,
+  and shrinking `diff` values on every machine.
+- The CLI/MCP/server write path routes through the storage adapter (see caveat).
+- A maintenance/freeze window is scheduled and announced.
+
+### Steps
+
+1. **Freeze writes.** Stop all agents, loops, routers, and MCP servers that write
+   todos on every machine. Confirm no `todos` writers remain.
+2. **Final mirror + drain.** Let each machine's mirror queue drain
+   (`shadow-status` → `pending: 0`, `divergence: 0`). For any residual
+   divergence, run a one-shot reconcile from that machine's local SQLite into the
+   cloud sync tables (adapter snapshot push) until counts match.
+3. **Verify counts.** On each machine, `todos storage shadow-status --json` and
+   confirm `diff == 0` for `tasks`, `projects`, `plans`, `agents`, `task_lists`,
+   and `templates`. Reconcile any machine that is behind before proceeding.
+   The cloud is the union of all machines; local subsets may be smaller, so
+   verify that every local row exists in the cloud, not strict equality.
+4. **Flip env on ALL machines via config-sync.** In one push, set on every
+   machine:
+
+   ```
+   HASNA_TODOS_STORAGE_MODE=remote
+   HASNA_TODOS_DATABASE_URL=<DSN>
+   # remove HASNA_TODOS_SHADOW (shadow is only valid in local mode)
+   ```
+
+   Use the fleet config-sync mechanism so the change lands atomically rather than
+   machine-by-machine.
+5. **Back up local SQLite.** Rename each machine's local DB to a dated backup
+   (e.g. `todos.sqlite.pre-cutover-YYYYMMDD`). Do not delete it.
+6. **Unfreeze.** Restart writers. All machines now read and write the shared
+   store; `todos storage status` shows `Mode: remote`, `Remote: enabled`.
+7. **Validate co-drain.** Confirm two machines can claim disjoint tasks from the
+   shared queue without double-claim (claim-safety is enforced by the shared
+   `route_state`/optimistic locking now that the store is shared).
+
+### Rollback
+
+Rollback is a flip back, accepting that rows written to the cloud during the
+`remote` window stay in the cloud:
+
+1. Re-freeze writers on all machines.
+2. Reconcile the shared cloud store back into each machine's local SQLite
+   (adapter snapshot pull/import) so no cloud-written work is lost.
+3. Flip env back on all machines via config-sync:
+
+   ```
+   HASNA_TODOS_STORAGE_MODE=local
+   # optionally re-enable HASNA_TODOS_SHADOW=1 to resume mirroring
+   ```
+
+4. Restore reads from local SQLite (the dated backup plus reconciled cloud
+   rows). Unfreeze.
+
+Because the shadow phase is a pure mirror and the flip is coordinated, at no
+point do two machines act as independent writers of the same logical store —
+avoiding the split-brain the council rejected.
+
+## Safety invariants
+
+- Never make the RDS instance publicly accessible.
+- Never echo the DSN password; pull from Secrets Manager and pipe directly.
+- Shadow mode is read-never: it must not introduce a cloud read path.
+- The flip is all-machines-together; per-machine flips are prohibited.

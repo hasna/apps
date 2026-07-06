@@ -32,7 +32,10 @@ export {
   TODOS_STORAGE_FALLBACK_ENV,
   TODOS_STORAGE_TABLES,
   assertTodosRemoteStorageConfig,
+  assertTodosShadowConfig,
   getCanonicalTodosRdsConfig,
+  getTodosStorageShadowEnvName,
+  isTodosShadowEnabled,
   getStorageDatabaseEnv,
   getStorageDatabaseUrl,
   getStorageMode,
@@ -57,6 +60,24 @@ export type {
 } from "./config.js";
 export { createTodosStorageAdapter } from "./factory.js";
 export type { CreateTodosStorageAdapterOptions } from "./factory.js";
+export {
+  TodosShadowMirror,
+  createShadowTodosStorageAdapter,
+} from "./shadow.js";
+export type {
+  CreateShadowTodosStorageAdapterOptions,
+  ShadowTodosStorageAdapter,
+  TodosShadowMirrorEvent,
+  TodosShadowMirrorMetrics,
+} from "./shadow.js";
+export {
+  createTodosCloudQueryClient,
+  createTodosCloudQueryClientFromEnv,
+} from "./cloud-client.js";
+export type {
+  CreateTodosCloudQueryClientOptions,
+  TodosCloudQueryClient,
+} from "./cloud-client.js";
 export { createHybridTodosStorageAdapter } from "./hybrid.js";
 export type {
   CreateHybridTodosStorageAdapterOptions,
