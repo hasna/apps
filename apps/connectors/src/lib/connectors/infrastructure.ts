@@ -87,6 +87,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["monitoring", "uptime", "performance", "alerts", "website"],
   },
   {
+    name: "turbot-pipes",
+    displayName: "Turbot Pipes",
+    description: "Cloud intelligence platform for SQL queries across cloud APIs",
+    category: "Infrastructure",
+    tags: ["cloud", "intelligence", "steampipe", "sql", "turbot"],
+  },
+  {
     name: "zibra-labs",
     displayName: "Zibra Labs",
     description: "Quant backtesting HPC",
