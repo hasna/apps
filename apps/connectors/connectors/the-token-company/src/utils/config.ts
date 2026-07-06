@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { DEFAULT_BASE_URL } from '../api/client';
@@ -23,15 +23,38 @@ export function setProfileOverride(profile: string | undefined): void {
 
 export function ensureConfigDir(): void {
   if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
+    mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   }
   if (!existsSync(PROFILES_DIR)) {
-    mkdirSync(PROFILES_DIR, { recursive: true });
+    mkdirSync(PROFILES_DIR, { recursive: true, mode: 0o700 });
+  }
+  try {
+    chmodSync(CONFIG_DIR, 0o700);
+    chmodSync(PROFILES_DIR, 0o700);
+  } catch {
+    // Best effort for filesystems without chmod support.
   }
 }
 
 function getProfilePath(profile: string): string {
+  if (!isValidProfileName(profile)) {
+    throw new Error('Profile name can only contain letters, numbers, hyphens, and underscores');
+  }
   return join(PROFILES_DIR, `${profile}.json`);
+}
+
+function isValidProfileName(profile: string): boolean {
+  return /^[a-zA-Z0-9_-]+$/.test(profile);
+}
+
+function writeProfileFile(profile: string, config: ProfileConfig): void {
+  const profilePath = getProfilePath(profile);
+  writeFileSync(profilePath, JSON.stringify(config, null, 2), { mode: 0o600 });
+  try {
+    chmodSync(profilePath, 0o600);
+  } catch {
+    // Best effort for filesystems without chmod support.
+  }
 }
 
 export function getCurrentProfile(): string {
@@ -89,11 +112,11 @@ export function createProfile(profile: string, config: ProfileConfig = {}): bool
     return false;
   }
 
-  if (!/^[a-zA-Z0-9_-]+$/.test(profile)) {
+  if (!isValidProfileName(profile)) {
     throw new Error('Profile name can only contain letters, numbers, hyphens, and underscores');
   }
 
-  writeFileSync(getProfilePath(profile), JSON.stringify(config, null, 2));
+  writeProfileFile(profile, config);
   return true;
 }
 
@@ -133,7 +156,7 @@ export function loadProfile(profile?: string): ProfileConfig {
 export function saveProfile(config: ProfileConfig, profile?: string): void {
   ensureConfigDir();
   const profileName = profile || getCurrentProfile();
-  writeFileSync(getProfilePath(profileName), JSON.stringify(config, null, 2));
+  writeProfileFile(profileName, config);
 }
 
 export function getApiKey(): string | undefined {

@@ -55,9 +55,7 @@ describe('The Token Company API transport', () => {
     const recorded = installFetch(() => ({
       output: 'compressed text',
       output_tokens: 5,
-      input_tokens: 12,
-      tokens_saved: 7,
-      compression_ratio: 2.4,
+      original_input_tokens: 12,
     }));
 
     const client = new TheTokenCompany({ apiKey: 'ttc-test-key' });
@@ -82,6 +80,25 @@ describe('The Token Company API transport', () => {
       input_tokens: 12,
       tokens_saved: 7,
       compression_ratio: 2.4,
+    });
+  });
+
+  test('maps raw API token stats to connector response fields', async () => {
+    installFetch(() => ({
+      output: 'compressed text',
+      output_tokens: 4,
+      original_input_tokens: 10,
+    }));
+
+    const client = new TheTokenCompany({ apiKey: 'ttc-test-key' });
+    const result = await client.compress.compress({ input: 'Long prompt text' });
+
+    expect(result).toEqual({
+      output: 'compressed text',
+      output_tokens: 4,
+      input_tokens: 10,
+      tokens_saved: 6,
+      compression_ratio: 2.5,
     });
   });
 
