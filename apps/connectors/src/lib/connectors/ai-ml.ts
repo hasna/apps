@@ -906,6 +906,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["nlp", "text analytics", "sentiment", "language detection", "api"],
   },
   {
+    name: "the-company-company",
+    displayName: "The Company Company",
+    description: "Business agent platform",
+    category: "AI & ML",
+    tags: ["ai", "agents", "business-automation", "integrations"],
+  },
+  {
     name: "the-token-company",
     displayName: "The Token Company",
     description: "LLM prompt compression",
