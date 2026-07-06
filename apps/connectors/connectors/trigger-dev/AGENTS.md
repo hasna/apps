@@ -4,12 +4,12 @@ Guidance for AI agents working with the Trigger.dev connector.
 
 ## Overview
 
-`@hasna/connect-trigger-dev` is a thin REST client for Trigger.dev's v1 API (`https://api.trigger.dev/v1`).
+`@hasna/connect-trigger-dev` is a thin REST client for Trigger.dev's management API (`https://api.trigger.dev/api/v1`).
 
 ## Auth
 
-- Type: Bearer API key
-- Env: `TRIGGER_DEV_API_KEY`
+- Type: Bearer secret key
+- Env: `TRIGGER_SECRET_KEY` preferred, `TRIGGER_DEV_API_KEY` supported for compatibility
 - Profiles: `~/.hasna/connectors/connect-trigger-dev/`
 
 ## Commands
@@ -17,10 +17,10 @@ Guidance for AI agents working with the Trigger.dev connector.
 | Operation | HTTP | Path |
 |-----------|------|------|
 | listRuns | GET | /runs |
-| createRun | POST | /runs |
+| triggerTask/createRun | POST | /tasks/{taskIdentifier}/trigger |
 | getRun | GET | /runs/{runId} |
-| listEvents | GET | /events |
-| search | POST | /search |
+| listEvents | GET | /runs/{runId}/events |
+| search | POST | /query |
 | rawRequest | * | custom |
 
 ## Security
@@ -31,4 +31,4 @@ Guidance for AI agents working with the Trigger.dev connector.
 
 ## Distinction
 
-This is **trigger-dev** (real Trigger.dev API at `/v1`). Do not confuse with sibling slug **trigger-dev-api-platform**.
+This is **trigger-dev** (real Trigger.dev management API at `/api/v1`). Do not confuse with sibling slug **trigger-dev-api-platform**.

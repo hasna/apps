@@ -34,6 +34,25 @@ export interface RunListResponse {
   [key: string]: unknown;
 }
 
+export interface RunListParams {
+  limit?: number | string;
+  status?: string | string[];
+  taskIdentifier?: string | string[];
+  version?: string | number;
+  after?: string;
+  before?: string;
+  from?: string;
+  to?: string;
+  period?: string;
+}
+
+export interface TriggerRunRequest {
+  taskIdentifier: string;
+  payload?: unknown;
+  context?: unknown;
+  options?: Record<string, unknown>;
+}
+
 export interface Event {
   id?: string;
   type?: string;
@@ -47,21 +66,30 @@ export interface EventListResponse {
   [key: string]: unknown;
 }
 
-export interface SearchRequest {
-  query?: string;
+export interface QueryRequest {
+  query: string;
+  scope?: 'environment' | 'project' | 'organization';
+  period?: string | null;
+  from?: string | null;
+  to?: string | null;
+  format?: 'json' | 'csv';
   [key: string]: unknown;
 }
 
-export interface SearchResponse {
+export interface QueryResponse {
+  format?: 'json' | 'csv';
   data?: unknown[];
   results?: unknown[];
   [key: string]: unknown;
 }
 
+export type SearchRequest = QueryRequest;
+export type SearchResponse = QueryResponse;
+
 export interface RawRequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   path: string;
-  params?: Record<string, string | number | boolean | undefined>;
+  params?: Record<string, string | number | boolean | readonly (string | number | boolean)[] | undefined>;
   body?: Record<string, unknown> | unknown[] | string;
   headers?: Record<string, string>;
 }

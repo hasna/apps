@@ -2,7 +2,9 @@ import { TriggerDevClient } from './client';
 import type {
   TriggerDevConfig,
   Run,
+  RunListParams,
   RunListResponse,
+  TriggerRunRequest,
   EventListResponse,
   SearchRequest,
   SearchResponse,
@@ -12,7 +14,7 @@ import type {
 export { TriggerDevClient };
 
 /**
- * Trigger.dev API wrapper (v1 REST surface)
+ * Trigger.dev management API wrapper.
  */
 export class TriggerDev {
   private client: TriggerDevClient;
@@ -28,15 +30,34 @@ export class TriggerDev {
   /**
    * List runs (GET /runs)
    */
-  async listRuns(params?: Record<string, string | number | boolean | undefined>): Promise<RunListResponse> {
-    return this.client.get<RunListResponse>('/runs', params);
+  async listRuns(params: RunListParams = {}): Promise<RunListResponse> {
+    const queryParams: Record<string, string | number | readonly (string | number | boolean)[] | undefined> = {
+      'page[size]': params.limit,
+      'page[after]': params.after,
+      'page[before]': params.before,
+      'filter[status]': params.status,
+      'filter[taskIdentifier]': params.taskIdentifier,
+      'filter[version]': params.version,
+      'filter[createdAt][from]': params.from,
+      'filter[createdAt][to]': params.to,
+      'filter[createdAt][period]': params.period,
+    };
+    return this.client.get<RunListResponse>('/runs', queryParams);
   }
 
   /**
-   * Create a run (POST /runs)
+   * Trigger a task (POST /tasks/{taskIdentifier}/trigger)
    */
-  async createRun(body: Record<string, unknown>): Promise<Run> {
-    return this.client.post<Run>('/runs', body);
+  async triggerTask(request: TriggerRunRequest): Promise<Run> {
+    const { taskIdentifier, ...body } = request;
+    return this.client.post<Run>(`/tasks/${encodeURIComponent(taskIdentifier)}/trigger`, body);
+  }
+
+  /**
+   * Backwards-compatible alias for triggering a task.
+   */
+  async createRun(body: TriggerRunRequest): Promise<Run> {
+    return this.triggerTask(body);
   }
 
   /**
@@ -47,17 +68,17 @@ export class TriggerDev {
   }
 
   /**
-   * List events (GET /events)
+   * List run events (GET /runs/{runId}/events)
    */
-  async listEvents(params?: Record<string, string | number | boolean | undefined>): Promise<EventListResponse> {
-    return this.client.get<EventListResponse>('/events', params);
+  async listEvents(runId: string): Promise<EventListResponse> {
+    return this.client.get<EventListResponse>(`/runs/${encodeURIComponent(runId)}/events`);
   }
 
   /**
-   * Search (POST /search)
+   * Execute a TRQL query (POST /query)
    */
   async search(body: SearchRequest): Promise<SearchResponse> {
-    return this.client.post<SearchResponse>('/search', body);
+    return this.client.post<SearchResponse>('/query', body);
   }
 
   /**

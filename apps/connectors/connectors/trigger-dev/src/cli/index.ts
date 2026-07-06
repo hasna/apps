@@ -20,6 +20,7 @@ import {
 } from '../utils/config';
 import type { OutputFormat } from '../utils/output';
 import { success, error, info, print } from '../utils/output';
+import type { QueryRequest } from '../types';
 
 const CONNECTOR_NAME = 'connect-trigger-dev';
 const VERSION = '0.0.1';
@@ -28,7 +29,7 @@ const program = new Command();
 
 program
   .name(CONNECTOR_NAME)
-  .description('Trigger.dev connector - Manage runs, events, and search queries')
+  .description('Trigger.dev connector - Manage runs, events, and TRQL queries')
   .version(VERSION)
   .option('-k, --api-key <key>', 'API key (overrides config)')
   .option('-b, --base-url <url>', 'API base URL')
@@ -45,6 +46,7 @@ program
     }
     if (opts.apiKey) {
       process.env.TRIGGER_DEV_API_KEY = opts.apiKey;
+      process.env.TRIGGER_SECRET_KEY = opts.apiKey;
     }
     if (opts.baseUrl) {
       process.env.TRIGGER_DEV_BASE_URL = opts.baseUrl;
@@ -59,7 +61,7 @@ function getFormat(cmd: Command): OutputFormat {
 function getClient(): TriggerDev {
   const apiKey = getApiKey();
   if (!apiKey) {
-    error(`No API key configured. Run "${CONNECTOR_NAME} config set-key <key>" or set TRIGGER_DEV_API_KEY.`);
+    error(`No API key configured. Run "${CONNECTOR_NAME} config set-key <key>" or set TRIGGER_SECRET_KEY.`);
     process.exit(1);
   }
   return new TriggerDev({ apiKey, baseUrl: getBaseUrl() });
@@ -82,14 +84,13 @@ function parseJsonBody(value: string | undefined, label: string): Record<string,
   }
 }
 
-function queryParamsFromOptions(opts: Record<string, unknown>): Record<string, string | number | boolean | undefined> {
-  const params: Record<string, string | number | boolean | undefined> = {};
-  for (const [key, value] of Object.entries(opts)) {
-    if (value !== undefined && value !== null && value !== '') {
-      params[key] = value as string | number | boolean;
-    }
+function parseQueryBody(value: string | undefined): QueryRequest {
+  const parsed = parseJsonBody(value, 'search') as Record<string, unknown>;
+  if (typeof parsed.query !== 'string' || parsed.query.trim() === '') {
+    error('search requires a JSON body with a non-empty string "query" field');
+    process.exit(1);
   }
-  return params;
+  return parsed as QueryRequest;
 }
 
 // Profile commands
@@ -227,16 +228,26 @@ runsCmd
   .command('list')
   .description('List runs (GET /runs)')
   .option('--limit <n>', 'Limit results')
-  .option('--status <status>', 'Filter by status')
+  .option('--status <status>', 'Filter by status, comma-separated for multiple values')
   .option('--task <identifier>', 'Filter by task identifier')
+  .option('--after <runId>', 'Start page after this run ID')
+  .option('--before <runId>', 'Start page before this run ID')
+  .option('--from <isoDate>', 'Filter createdAt from ISO timestamp')
+  .option('--to <isoDate>', 'Filter createdAt to ISO timestamp')
+  .option('--period <period>', 'Filter createdAt by shorthand period, e.g. 1d')
   .action(async (opts) => {
     try {
       const client = getClient();
-      const params = queryParamsFromOptions({
+      const params = {
         limit: opts.limit,
-        status: opts.status,
+        status: opts.status ? String(opts.status).split(',').map((value: string) => value.trim()).filter(Boolean) : undefined,
         taskIdentifier: opts.task,
-      });
+        after: opts.after,
+        before: opts.before,
+        from: opts.from,
+        to: opts.to,
+        period: opts.period,
+      };
       const result = await client.listRuns(params);
       print(result, getFormat(runsCmd));
     } catch (err) {
@@ -261,12 +272,20 @@ runsCmd
 
 runsCmd
   .command('create')
-  .description('Create a run (POST /runs)')
-  .requiredOption('--body <json>', 'JSON request body')
+  .description('Trigger a task (POST /tasks/{taskIdentifier}/trigger)')
+  .requiredOption('--task <identifier>', 'Task identifier')
+  .option('--payload <json>', 'Task payload JSON object')
+  .option('--context <json>', 'Task context JSON object')
+  .option('--options <json>', 'Task trigger options JSON object')
   .action(async (opts) => {
     try {
       const client = getClient();
-      const body = parseJsonBody(opts.body, 'create run');
+      const body = {
+        taskIdentifier: opts.task,
+        ...(opts.payload ? { payload: parseJsonBody(opts.payload, 'trigger payload') } : {}),
+        ...(opts.context ? { context: parseJsonBody(opts.context, 'trigger context') } : {}),
+        ...(opts.options ? { options: parseJsonBody(opts.options, 'trigger options') } : {}),
+      };
       const result = await client.createRun(body);
       success('Run created');
       print(result, getFormat(runsCmd));
@@ -280,18 +299,12 @@ runsCmd
 const eventsCmd = program.command('events').description('Event operations');
 
 eventsCmd
-  .command('list')
-  .description('List events (GET /events)')
-  .option('--limit <n>', 'Limit results')
-  .option('--type <type>', 'Filter by event type')
-  .action(async (opts) => {
+  .command('list <runId>')
+  .description('List run events (GET /runs/{runId}/events)')
+  .action(async (runId: string) => {
     try {
       const client = getClient();
-      const params = queryParamsFromOptions({
-        limit: opts.limit,
-        type: opts.type,
-      });
-      const result = await client.listEvents(params);
+      const result = await client.listEvents(runId);
       print(result, getFormat(eventsCmd));
     } catch (err) {
       error(String(err));
@@ -302,12 +315,12 @@ eventsCmd
 // Search command
 program
   .command('search')
-  .description('Search (POST /search)')
+  .description('Execute a TRQL query (POST /query)')
   .requiredOption('--body <json>', 'JSON request body')
   .action(async (opts) => {
     try {
       const client = getClient();
-      const body = parseJsonBody(opts.body, 'search');
+      const body = parseQueryBody(opts.body);
       const result = await client.search(body);
       print(result, getFormat(program));
     } catch (err) {
@@ -320,7 +333,7 @@ program
 program
   .command('raw')
   .description('Send a raw authenticated API request')
-  .requiredOption('--path <path>', 'API path (e.g. /runs)')
+  .requiredOption('--path <path>', 'API path relative to /api/v1 (e.g. /runs)')
   .option('-X, --method <method>', 'HTTP method', 'GET')
   .option('--body <json>', 'JSON request body')
   .action(async (opts) => {

@@ -7,7 +7,7 @@ const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
 
 export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
-  params?: Record<string, string | number | boolean | undefined>;
+  params?: Record<string, string | number | boolean | readonly (string | number | boolean)[] | undefined>;
   body?: Record<string, unknown> | unknown[] | string;
   headers?: Record<string, string>;
 }
@@ -24,14 +24,18 @@ export class TriggerDevClient {
     this.baseUrl = (config.baseUrl || DEFAULT_BASE_URL).replace(/\/$/, '');
   }
 
-  private buildUrl(path: string, params?: Record<string, string | number | boolean | undefined>): string {
+  private buildUrl(
+    path: string,
+    params?: Record<string, string | number | boolean | readonly (string | number | boolean)[] | undefined>,
+  ): string {
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
     const url = new URL(`${this.baseUrl}${normalizedPath}`);
 
     if (params) {
       for (const [key, value] of Object.entries(params)) {
         if (value !== undefined && value !== null && value !== '') {
-          url.searchParams.append(key, String(value));
+          const stringValue = Array.isArray(value) ? value.join(',') : String(value);
+          url.searchParams.append(key, stringValue);
         }
       }
     }
@@ -116,14 +120,17 @@ export class TriggerDevClient {
     throw lastError ?? new TriggerDevApiError('Request failed after retries', 500);
   }
 
-  async get<T>(path: string, params?: Record<string, string | number | boolean | undefined>): Promise<T> {
+  async get<T>(
+    path: string,
+    params?: Record<string, string | number | boolean | readonly (string | number | boolean)[] | undefined>,
+  ): Promise<T> {
     return this.request<T>(path, { method: 'GET', params });
   }
 
   async post<T>(
     path: string,
     body?: Record<string, unknown> | unknown[] | string | object,
-    params?: Record<string, string | number | boolean | undefined>,
+    params?: Record<string, string | number | boolean | readonly (string | number | boolean)[] | undefined>,
   ): Promise<T> {
     return this.request<T>(path, { method: 'POST', body: body as Record<string, unknown>, params });
   }

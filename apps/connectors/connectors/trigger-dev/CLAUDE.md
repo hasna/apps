@@ -4,7 +4,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ## Project Overview
 
-connect-trigger-dev is a TypeScript connector for Trigger.dev's REST API (v1). It provides a CLI and programmatic interface for listing runs, creating runs, listing events, and searching.
+connect-trigger-dev is a TypeScript connector for Trigger.dev's management API. It provides a CLI and programmatic interface for listing runs, triggering tasks, reading run events, and executing TRQL queries.
 
 ## Build & Run Commands
 
@@ -33,13 +33,13 @@ connect-trigger-dev profile delete <name>
 # Runs
 connect-trigger-dev runs list
 connect-trigger-dev runs get <runId>
-connect-trigger-dev runs create --body '{"taskIdentifier":"my-task"}'
+connect-trigger-dev runs create --task my-task --payload '{"hello":"world"}'
 
 # Events
-connect-trigger-dev events list
+connect-trigger-dev events list <runId>
 
 # Search
-connect-trigger-dev search --body '{"query":"status:failed"}'
+connect-trigger-dev search --body '{"query":"SELECT run_id, status FROM runs LIMIT 10"}'
 
 # Raw API access
 connect-trigger-dev raw --path /runs -X GET
@@ -49,12 +49,13 @@ connect-trigger-dev raw --path /runs -X GET
 
 | Variable | Description |
 |----------|-------------|
-| `TRIGGER_DEV_API_KEY` | API key (overrides profile config) |
-| `TRIGGER_DEV_BASE_URL` | API base URL (default `https://api.trigger.dev/v1`) |
+| `TRIGGER_SECRET_KEY` | Secret key (overrides profile config) |
+| `TRIGGER_DEV_API_KEY` | Legacy API key env var, still supported |
+| `TRIGGER_DEV_BASE_URL` | API base URL (default `https://api.trigger.dev/api/v1`) |
 
 ## Authentication
 
-Uses Bearer token authentication. Create API keys in the Trigger.dev dashboard.
+Uses Bearer token authentication. Create secret keys in the Trigger.dev dashboard.
 
 ## Data Storage
 
@@ -69,7 +70,7 @@ Profile JSON structure:
 ```json
 {
   "apiKey": "tr_dev_xxx",
-  "baseUrl": "https://api.trigger.dev/v1"
+  "baseUrl": "https://api.trigger.dev/api/v1"
 }
 ```
 
@@ -99,7 +100,8 @@ src/
 
 ## API Coverage
 
-- Runs: list, get, create
-- Events: list
-- Search: query
+- Runs: list, get
+- Tasks: trigger
+- Events: list run events
+- Query: execute TRQL
 - Raw: generic method + path escape hatch

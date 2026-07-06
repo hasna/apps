@@ -1,11 +1,19 @@
 {
   "name": "@hasna/connect-trigger-dev",
   "version": "0.0.1",
-  "description": "Trigger.dev connector - Manage runs, events, and search queries",
+  "description": "Trigger.dev connector - Manage runs, events, and TRQL queries",
   "type": "module",
   "bin": {
     "connect-trigger-dev": "./bin/index.js"
   },
+  "files": [
+    "dist/",
+    "bin/",
+    "README.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "package.json"
+  ],
   "exports": {
     ".": {
       "import": "./dist/index.js",
@@ -15,7 +23,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist --target bun && bun build ./src/cli/index.ts --outdir ./bin --target bun",
+    "build": "bun build ./src/index.ts --outdir ./dist --target bun && tsc --emitDeclarationOnly && bun build ./src/cli/index.ts --outdir ./bin --target bun",
     "dev": "bun run ./src/cli/index.ts",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "bun run build"

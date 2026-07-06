@@ -6,7 +6,7 @@ TypeScript connector for [Trigger.dev](https://trigger.dev) — background jobs,
 
 - Bearer API key authentication
 - Multi-profile configuration
-- Runs, events, and search API coverage
+- Runs, task trigger, run events, and TRQL query API coverage
 - Raw request escape hatch
 - CLI and programmatic library exports
 
@@ -21,9 +21,9 @@ bun run dev runs list
 ## Environment Variables
 
 ```bash
-TRIGGER_DEV_API_KEY=your-api-key-here
+TRIGGER_SECRET_KEY=your-secret-key-here
 # optional:
-TRIGGER_DEV_BASE_URL=https://api.trigger.dev/v1
+TRIGGER_DEV_BASE_URL=https://api.trigger.dev/api/v1
 ```
 
 ## CLI
@@ -31,9 +31,9 @@ TRIGGER_DEV_BASE_URL=https://api.trigger.dev/v1
 ```bash
 connect-trigger-dev runs list
 connect-trigger-dev runs get <runId>
-connect-trigger-dev runs create --body '{"taskIdentifier":"my-task","payload":{}}'
-connect-trigger-dev events list
-connect-trigger-dev search --body '{"query":"status:failed"}'
+connect-trigger-dev runs create --task my-task --payload '{"hello":"world"}'
+connect-trigger-dev events list <runId>
+connect-trigger-dev search --body '{"query":"SELECT run_id, status FROM runs LIMIT 10"}'
 connect-trigger-dev raw --path /runs -X GET
 ```
 
@@ -42,8 +42,9 @@ connect-trigger-dev raw --path /runs -X GET
 ```typescript
 import { TriggerDev } from '@hasna/connect-trigger-dev';
 
-const client = new TriggerDev({ apiKey: process.env.TRIGGER_DEV_API_KEY! });
+const client = new TriggerDev({ apiKey: process.env.TRIGGER_SECRET_KEY! });
 const runs = await client.listRuns();
+const triggered = await client.triggerTask({ taskIdentifier: 'my-task', payload: { hello: 'world' } });
 ```
 
 ## License

@@ -49,56 +49,70 @@ afterEach(() => {
 describe('TriggerDevClient', () => {
   test('sends Bearer authorization header', async () => {
     const recorded = installFetch(() => ({ data: [] }));
-    const client = new TriggerDev({ apiKey: 'tr_dev_test_key_12345' });
+    const client = new TriggerDev({ apiKey: 'test-secret-key' });
     await client.listRuns();
-    expect(recorded[0].headers.authorization).toBe('Bearer tr_dev_test_key_12345');
+    expect(recorded[0].headers.authorization).toBe('Bearer test-secret-key');
   });
 
-  test('listRuns calls GET https://api.trigger.dev/v1/runs', async () => {
+  test('listRuns calls GET https://api.trigger.dev/api/v1/runs', async () => {
     const recorded = installFetch(() => ({ data: [{ id: 'run_1' }] }));
     const client = new TriggerDev({ apiKey: 'key' });
     const result = await client.listRuns();
-    expect(recorded[0].url).toBe('https://api.trigger.dev/v1/runs');
+    expect(recorded[0].url).toBe('https://api.trigger.dev/api/v1/runs');
     expect(recorded[0].method).toBe('GET');
     expect(result).toEqual({ data: [{ id: 'run_1' }] });
   });
 
-  test('getRun calls GET https://api.trigger.dev/v1/runs/{id}', async () => {
+  test('listRuns encodes documented filter and page query parameters', async () => {
+    const recorded = installFetch(() => ({ data: [] }));
+    const client = new TriggerDev({ apiKey: 'key' });
+    await client.listRuns({
+      limit: 25,
+      status: ['QUEUED', 'EXECUTING'],
+      taskIdentifier: 'my-task',
+      after: 'run_after',
+      period: '1d',
+    });
+    expect(recorded[0].url).toBe(
+      'https://api.trigger.dev/api/v1/runs?page%5Bsize%5D=25&page%5Bafter%5D=run_after&filter%5Bstatus%5D=QUEUED%2CEXECUTING&filter%5BtaskIdentifier%5D=my-task&filter%5BcreatedAt%5D%5Bperiod%5D=1d',
+    );
+  });
+
+  test('getRun calls GET https://api.trigger.dev/api/v1/runs/{id}', async () => {
     const recorded = installFetch(() => ({ id: 'run_abc' }));
     const client = new TriggerDev({ apiKey: 'key' });
     const result = await client.getRun('run_abc');
-    expect(recorded[0].url).toBe('https://api.trigger.dev/v1/runs/run_abc');
+    expect(recorded[0].url).toBe('https://api.trigger.dev/api/v1/runs/run_abc');
     expect(recorded[0].method).toBe('GET');
     expect(result).toEqual({ id: 'run_abc' });
   });
 
-  test('createRun posts JSON body to /runs', async () => {
+  test('createRun triggers a task with JSON body', async () => {
     const recorded = installFetch(() => ({ id: 'run_new' }));
     const client = new TriggerDev({ apiKey: 'key' });
     await client.createRun({ taskIdentifier: 'my-task', payload: { foo: 'bar' } });
-    expect(recorded[0].url).toBe('https://api.trigger.dev/v1/runs');
+    expect(recorded[0].url).toBe('https://api.trigger.dev/api/v1/tasks/my-task/trigger');
     expect(recorded[0].method).toBe('POST');
     expect(JSON.parse(recorded[0].body!)).toEqual({
-      taskIdentifier: 'my-task',
       payload: { foo: 'bar' },
     });
   });
 
-  test('listEvents calls GET /events', async () => {
+  test('listEvents calls GET /runs/{runId}/events', async () => {
     const recorded = installFetch(() => ({ events: [] }));
     const client = new TriggerDev({ apiKey: 'key' });
-    await client.listEvents({ limit: 10 });
-    expect(recorded[0].url).toBe('https://api.trigger.dev/v1/events?limit=10');
+    await client.listEvents('run_123');
+    expect(recorded[0].url).toBe('https://api.trigger.dev/api/v1/runs/run_123/events');
     expect(recorded[0].method).toBe('GET');
   });
 
-  test('search posts to /search', async () => {
+  test('search posts to /query', async () => {
     const recorded = installFetch(() => ({ results: [] }));
     const client = new TriggerDev({ apiKey: 'key' });
-    await client.search({ query: 'status:failed' });
-    expect(recorded[0].url).toBe('https://api.trigger.dev/v1/search');
+    await client.search({ query: "SELECT run_id FROM runs WHERE status = 'FAILED'" });
+    expect(recorded[0].url).toBe('https://api.trigger.dev/api/v1/query');
     expect(recorded[0].method).toBe('POST');
-    expect(JSON.parse(recorded[0].body!)).toEqual({ query: 'status:failed' });
+    expect(JSON.parse(recorded[0].body!)).toEqual({ query: "SELECT run_id FROM runs WHERE status = 'FAILED'" });
   });
 
   test('respects custom base URL', async () => {
