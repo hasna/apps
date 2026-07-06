@@ -1,0 +1,32 @@
+# Local/self-hosted compose for conversations-serve against a Postgres.
+# PURE REMOTE (A1): the service reads/writes Postgres directly.
+#
+# Usage:
+#   HASNA_CONVERSATIONS_DATABASE_URL=postgres://... \
+#   HASNA_CONVERSATIONS_API_SIGNING_KEY=$(openssl rand -hex 32) \
+#   docker compose up --build
+#
+# Run migrations once before first serve:
+#   docker compose run --rm migrate
+services:
+  serve:
+    build: .
+    image: conversations-serve:local
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      HOST: "0.0.0.0"
+      HASNA_CONVERSATIONS_STORAGE_MODE: "cloud"
+      HASNA_CONVERSATIONS_DATABASE_URL: "${HASNA_CONVERSATIONS_DATABASE_URL:?set the app DSN}"
+      HASNA_CONVERSATIONS_API_SIGNING_KEY: "${HASNA_CONVERSATIONS_API_SIGNING_KEY:?set the signing secret}"
+    restart: unless-stopped
+
+  migrate:
+    build: .
+    image: conversations-serve:local
+    command: ["bun", "run", "src/server/migrate.ts"]
+    environment:
+      HASNA_CONVERSATIONS_DATABASE_URL_OWNER: "${HASNA_CONVERSATIONS_DATABASE_URL_OWNER:-}"
+      HASNA_CONVERSATIONS_DATABASE_URL: "${HASNA_CONVERSATIONS_DATABASE_URL:?set the DSN}"
+    restart: "no"

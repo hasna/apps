@@ -129,6 +129,52 @@ MCP_HTTP=1 conversations-mcp
 
 The dashboard server also exposes `/health` and `/mcp` when running.
 
+## Self-hosted HTTP API (`conversations-serve`)
+
+`conversations-serve` is the self_hosted service surface. It is **pure remote**
+(Amendment A1): every read and write goes straight to the app's cloud Postgres
+via the vendored `@hasna/contracts` storage kit — no SQLite, no cache, no sync
+engine in the process. Requests to `/v1/*` are authenticated with
+`@hasna/contracts` API keys (scope grammar `conversations:read` /
+`conversations:write`).
+
+```bash
+export HASNA_CONVERSATIONS_STORAGE_MODE=cloud
+export HASNA_CONVERSATIONS_DATABASE_URL="postgres://…?sslmode=require&uselibpqcompat=true"
+export HASNA_CONVERSATIONS_API_SIGNING_KEY="$(openssl rand -hex 32)"
+conversations-serve                     # listens on :8080 (PORT/HOST configurable)
+
+# one-shot schema migration (owner role, idempotent)
+HASNA_CONVERSATIONS_DATABASE_URL_OWNER="postgres://…" bun run src/server/migrate.ts
+```
+
+Endpoints:
+
+- `GET /health` · `GET /ready` · `GET /version` → `{status, version, mode}` (unauthenticated probes)
+- `GET /v1/openapi.json` → the OpenAPI document the SDK is generated from
+- `/v1/messages`, `/v1/channels`, `/v1/projects`, `/v1/agents` → versioned CRUD (API-key auth)
+
+Issue a key with the contracts CLI:
+
+```bash
+contracts issue-key --app conversations --agent my-agent \
+  --scopes "conversations:read,conversations:write"
+```
+
+### Typed SDK client
+
+The SDK is generated from the serve OpenAPI (`bun run sdk:generate`) and shipped
+under the `@hasna/conversations/sdk` export:
+
+```ts
+import { ConversationsClient } from "@hasna/conversations/sdk";
+const client = new ConversationsClient({
+  baseUrl: process.env.CONVERSATIONS_API_URL!,
+  apiKey: process.env.CONVERSATIONS_API_KEY!,
+});
+await client.sendMessage({ from: "me", to: "you", content: "hi", channel: "deploys" });
+```
+
 ## Channels
 
 Conversations uses flat channels. There is no runtime hierarchy and no

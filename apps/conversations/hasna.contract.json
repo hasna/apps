@@ -1,0 +1,33 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "conversations",
+  "class": "service",
+  "contractVersion": "v1",
+  "kitVersion": "0.4.1",
+  "description": "Real-time messaging + coordination for AI agents: channels, messages, projects, presence, tasks. CLI + MCP + HTTP API (conversations-serve) + generated SDK. Cloud mode (HASNA_CONVERSATIONS_STORAGE_MODE=cloud / HASNA_CONVERSATIONS_DATABASE_URL set) is PURE REMOTE per Amendment A1: the serve process reads/writes the shared cloud Postgres directly with API-key auth via @hasna/contracts.",
+  "bins": ["conversations", "conversations-mcp", "conversations-serve"],
+  "storage": {
+    "mode": "local",
+    "envPrefix": "HASNA_CONVERSATIONS_",
+    "aliasEnvPrefix": "CONVERSATIONS_",
+    "databaseUrlSecretRef": "hasna/oss/conversations/database-url",
+    "sqlitePath": "~/.hasna/conversations/conversations.db"
+  },
+  "metadata": {
+    "service": {
+      "port": 8080,
+      "healthPath": "/health",
+      "readyPath": "/ready",
+      "versionPath": "/version",
+      "openapiPath": "/v1/openapi.json",
+      "apiVersion": "v1",
+      "auth": "api-key",
+      "signingSecretSecretRef": "hasna/oss/conversations/api-key-signing-secret",
+      "databaseUrlOwnerSecretRef": "hasna/oss/conversations/database-url-owner"
+    },
+    "client": {
+      "apiUrlEnv": "CONVERSATIONS_API_URL",
+      "apiKeyEnv": "CONVERSATIONS_API_KEY"
+    }
+  }
+}
