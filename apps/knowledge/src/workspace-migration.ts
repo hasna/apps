@@ -171,6 +171,49 @@ function migrationTimestamp(now: Date): string {
   return now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
 }
 
+function sleepSync(milliseconds: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+function isRetriableFsLock(error: unknown): boolean {
+  return error instanceof Error && /\b(EBUSY|EPERM)\b/.test(error.message);
+}
+
+function removeWorkspaceWithRetries(path: string): void {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      rmSync(path, { recursive: true, force: false });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isRetriableFsLock(error)) throw error;
+      sleepSync(50 * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+
+function isRetainedTombstoneFile(file: string): boolean {
+  return file === 'TOMBSTONE.md'
+    || file === 'migration.json'
+    || file === 'knowledge.db'
+    || file === 'knowledge.db-shm'
+    || file === 'knowledge.db-wal'
+    || file === 'knowledge.db-journal';
+}
+
+function prepareLegacyTombstoneDirectory(home: string): void {
+  for (const file of readdirSync(home)) {
+    if (file === 'TOMBSTONE.md' || file === 'migration.json') continue;
+    try {
+      rmSync(join(home, file), { recursive: true, force: false });
+    } catch (error) {
+      if (!isRetriableFsLock(error) || !file.startsWith('knowledge.db')) throw error;
+    }
+  }
+}
+
 function moveWorkspace(sourceHome: string, targetHome: string): void {
   try {
     renameSync(sourceHome, targetHome);
@@ -183,8 +226,12 @@ function moveWorkspace(sourceHome: string, targetHome: string): void {
       preserveTimestamps: true,
     });
     try {
-      rmSync(sourceHome, { recursive: true, force: false });
+      removeWorkspaceWithRetries(sourceHome);
     } catch (removeError) {
+      if (isRetriableFsLock(removeError)) {
+        prepareLegacyTombstoneDirectory(sourceHome);
+        return;
+      }
       rmSync(targetHome, { recursive: true, force: true });
       throw removeError;
     }
@@ -199,7 +246,7 @@ function isMigrationTombstone(
 ): boolean {
   if (!summary.exists) return false;
   if (!summary.files.includes('TOMBSTONE.md') || !summary.files.includes('migration.json')) return false;
-  if (summary.files.some((file) => file !== 'TOMBSTONE.md' && file !== 'migration.json')) return false;
+  if (summary.files.some((file) => !isRetainedTombstoneFile(file))) return false;
   try {
     const metadata = JSON.parse(readFileSync(join(workspace.home, 'migration.json'), 'utf8')) as {
       new_path?: unknown;

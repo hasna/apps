@@ -25814,6 +25814,42 @@ function summariesMatch(left, right) {
 function migrationTimestamp(now) {
   return now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
 }
+function sleepSync(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+function isRetriableFsLock(error51) {
+  return error51 instanceof Error && /\b(EBUSY|EPERM)\b/.test(error51.message);
+}
+function removeWorkspaceWithRetries(path) {
+  let lastError;
+  for (let attempt = 0;attempt < 8; attempt += 1) {
+    try {
+      rmSync(path, { recursive: true, force: false });
+      return;
+    } catch (error51) {
+      lastError = error51;
+      if (!isRetriableFsLock(error51))
+        throw error51;
+      sleepSync(50 * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+function isRetainedTombstoneFile(file2) {
+  return file2 === "TOMBSTONE.md" || file2 === "migration.json" || file2 === "knowledge.db" || file2 === "knowledge.db-shm" || file2 === "knowledge.db-wal" || file2 === "knowledge.db-journal";
+}
+function prepareLegacyTombstoneDirectory(home) {
+  for (const file2 of readdirSync2(home)) {
+    if (file2 === "TOMBSTONE.md" || file2 === "migration.json")
+      continue;
+    try {
+      rmSync(join5(home, file2), { recursive: true, force: false });
+    } catch (error51) {
+      if (!isRetriableFsLock(error51) || !file2.startsWith("knowledge.db"))
+        throw error51;
+    }
+  }
+}
 function moveWorkspace(sourceHome, targetHome) {
   try {
     renameSync2(sourceHome, targetHome);
@@ -25826,8 +25862,12 @@ function moveWorkspace(sourceHome, targetHome) {
       preserveTimestamps: true
     });
     try {
-      rmSync(sourceHome, { recursive: true, force: false });
+      removeWorkspaceWithRetries(sourceHome);
     } catch (removeError) {
+      if (isRetriableFsLock(removeError)) {
+        prepareLegacyTombstoneDirectory(sourceHome);
+        return;
+      }
       rmSync(targetHome, { recursive: true, force: true });
       throw removeError;
     }
@@ -25840,7 +25880,7 @@ function isMigrationTombstone(workspace, summary, currentHome) {
     return false;
   if (!summary.files.includes("TOMBSTONE.md") || !summary.files.includes("migration.json"))
     return false;
-  if (summary.files.some((file2) => file2 !== "TOMBSTONE.md" && file2 !== "migration.json"))
+  if (summary.files.some((file2) => !isRetainedTombstoneFile(file2)))
     return false;
   try {
     const metadata = JSON.parse(readFileSync11(join5(workspace.home, "migration.json"), "utf8"));
