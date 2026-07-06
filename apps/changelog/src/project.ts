@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { normalizeAppId } from "./validation.js";
 
 export interface ChangelogProjectInfo {
   appId?: string;
@@ -11,10 +12,19 @@ interface PackageJson {
   repository?: string | { url?: string };
 }
 
+/**
+ * Infer the hasna.app.v1 appId from an npm package name. `@hasna/*` packages
+ * map to the `open-<name>` repo-folder convention so the inferred appId is
+ * the join key used by the distribution contracts (`@hasna/todos` ->
+ * `open-todos`).
+ */
 function appIdFromPackageName(name: string | undefined): string | undefined {
   if (!name) return undefined;
-  const withoutScope = name.includes("/") ? name.split("/").at(-1) : name;
-  return withoutScope?.replace(/^open-/, "") || undefined;
+  try {
+    return normalizeAppId(name);
+  } catch {
+    return undefined;
+  }
 }
 
 export function normalizeRepositoryUrl(value: string | undefined): string | undefined {

@@ -5,6 +5,8 @@ import { dirname } from "node:path";
 import { ChangelogClient } from "../client.js";
 import { generateChangelogMarkdown } from "../markdown.js";
 import { publishChangelog } from "../publisher.js";
+import { publishRelease } from "../release.js";
+import { generateChangelogSite } from "../web.js";
 import { readProjectInfo } from "../project.js";
 import { LocalChangelogStore, resolveChangelogFilePath } from "../storage.js";
 import type {
@@ -262,7 +264,7 @@ export async function main(argv: string[] = process.argv): Promise<void> {
 
   program
     .command("publish")
-    .description("Preview or write a generated CHANGELOG.md")
+    .description("Preview or write a generated CHANGELOG.md; with --release, promote appId+version and return a changelogRef")
     .option("--app <appId>", "Filter by app id")
     .option("--version <version>", "Filter by version")
     .option("--kind <kind>", "Filter by kind/category")
@@ -272,11 +274,31 @@ export async function main(argv: string[] = process.argv): Promise<void> {
     .option("--target <path>", "Target changelog file", "CHANGELOG.md")
     .option("--dry-run", "Preview without writing", true)
     .option("--write", "Write the target file")
+    .option("--release", "Release-publish for open-releases: promote pending entries to --version, write the changelog, and print a changelogRef")
+    .option("--from-version <version>", "Source bucket promoted by --release", "Unreleased")
+    .option("--date <date>", "Release date as YYYY-MM-DD used by --release")
+    .option("--base-url <url>", "Published changelog site base URL used for the changelogRef uri")
     .option("--diff", "Print a line diff during dry-run or include it in JSON")
     .option("--no-backup", "Do not write a backup before overwriting an existing file")
     .option("--json", "Print JSON result instead of Markdown preview")
     .option("--api-url <url>", "Remote Open Changelog API URL")
-    .action(async (options: { app?: string; version?: string; kind?: string; tag?: string; limit?: string; title?: string; target: string; dryRun?: boolean; write?: boolean; diff?: boolean; backup?: boolean; json?: boolean; apiUrl?: string }) => {
+    .action(async (options: { app?: string; version?: string; kind?: string; tag?: string; limit?: string; title?: string; target: string; dryRun?: boolean; write?: boolean; release?: boolean; fromVersion?: string; date?: string; baseUrl?: string; diff?: boolean; backup?: boolean; json?: boolean; apiUrl?: string }) => {
+      if (options.release) {
+        if (!options.version) throw new Error("--release requires --version");
+        const result = await publishRelease({
+          appId: await requiredAppId(options.app),
+          version: options.version,
+          fromVersion: options.fromVersion,
+          date: options.date,
+          targetPath: options.target,
+          title: options.title,
+          repositoryUrl: await inferredRepositoryUrl(),
+          baseUrl: options.baseUrl,
+          write: options.write !== false,
+        });
+        printJson(result);
+        return;
+      }
       const client = maybeClient(options);
       const filter = commonFilter({ ...options, app: await inferredAppId(options.app) });
       const repositoryUrl = await inferredRepositoryUrl();
@@ -306,6 +328,25 @@ export async function main(argv: string[] = process.argv): Promise<void> {
       } else {
         process.stdout.write(result.markdown.endsWith("\n") ? result.markdown : `${result.markdown}\n`);
       }
+    });
+
+  program
+    .command("web")
+    .description("Generate a static web changelog site with per-app pages plus RSS and JSON feeds")
+    .requiredOption("--out <dir>", "Output directory")
+    .option("--app <appId>", "Restrict the site to one app")
+    .option("--base-url <url>", "Public base URL for absolute feed links")
+    .option("--title <title>", "Site title", "Changelogs")
+    .option("--limit <n>", "Limit entries per app", "500")
+    .action(async (options: { out: string; app?: string; baseUrl?: string; title?: string; limit?: string }) => {
+      const result = await generateChangelogSite({
+        outDir: options.out,
+        appId: options.app,
+        baseUrl: options.baseUrl,
+        title: options.title,
+        limit: options.limit ? Number.parseInt(options.limit, 10) : undefined,
+      });
+      printJson(result);
     });
 
   program
