@@ -528,6 +528,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["fitness", "running", "cycling", "activities", "sports"],
   },
   {
+    name: "tinybird",
+    displayName: "Tinybird",
+    description: "Real-time analytics and data platform",
+    category: "Data & Analytics",
+    tags: ["analytics", "data", "sql"],
+  },
+  {
     name: "triple-whale",
     displayName: "Triple Whale",
     description: "Ecommerce analytics - summary, attribution, data-in, SQL, Moby",
