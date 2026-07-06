@@ -11,6 +11,7 @@ import type {
   CatchUpPolicy,
   CreateLoopInput,
   CreateWorkflowInput,
+  KnowledgeFeedbackConfig,
   Loop,
   LoopTemplateSummary,
   LoopTarget,
@@ -409,6 +410,49 @@ function addGoalOptions(command: Command): Command {
     .option("--goal-max-turns <n>", "maximum goal orchestration turns");
 }
 
+function addKnowledgeFeedbackOptions(command: Command): Command {
+  return command
+    .option("--knowledge-feedback", "emit failed loop outcomes to Knowledge and read Knowledge context before agent runs")
+    .option("--knowledge-store <path>", "Knowledge CLI store path for feedback records and context lookup")
+    .option("--knowledge-scope <scope>", "Knowledge CLI scope: local, global, or project")
+    .option("--knowledge-command <command>", "Knowledge CLI executable")
+    .option("--knowledge-max-items <n>", "maximum Knowledge context items")
+    .option("--knowledge-max-tokens <n>", "maximum Knowledge context-pack tokens")
+    .option("--knowledge-timeout <duration>", "Knowledge CLI timeout");
+}
+
+function knowledgeFeedbackFromOpts(opts: {
+  knowledgeFeedback?: boolean;
+  knowledgeStore?: string;
+  knowledgeScope?: string;
+  knowledgeCommand?: string;
+  knowledgeMaxItems?: string;
+  knowledgeMaxTokens?: string;
+  knowledgeTimeout?: string;
+}): KnowledgeFeedbackConfig | undefined {
+  const hasConfig =
+    Boolean(opts.knowledgeFeedback) ||
+    opts.knowledgeStore !== undefined ||
+    opts.knowledgeScope !== undefined ||
+    opts.knowledgeMaxItems !== undefined ||
+    opts.knowledgeMaxTokens !== undefined ||
+    opts.knowledgeTimeout !== undefined ||
+    opts.knowledgeCommand !== undefined;
+  if (!hasConfig) return undefined;
+  if (opts.knowledgeScope !== undefined && !["local", "global", "project"].includes(opts.knowledgeScope)) {
+    throw new ValidationError("--knowledge-scope must be local, global, or project");
+  }
+  return {
+    enabled: true,
+    command: opts.knowledgeCommand,
+    store: opts.knowledgeStore,
+    scope: opts.knowledgeScope as KnowledgeFeedbackConfig["scope"],
+    maxItems: positiveInteger(opts.knowledgeMaxItems, "--knowledge-max-items"),
+    maxTokens: positiveInteger(opts.knowledgeMaxTokens, "--knowledge-max-tokens"),
+    timeoutMs: positiveDuration(opts.knowledgeTimeout, "--knowledge-timeout"),
+  };
+}
+
 function goalFromOpts(opts: Record<string, string | boolean | undefined>) {
   const hasGoalOption = opts.goal !== undefined || opts.goalBudget !== undefined || opts.goalModel !== undefined || opts.goalMaxTurns !== undefined;
   if (!hasGoalOption) return undefined;
@@ -526,15 +570,17 @@ addGoalOptions(
   addAccountOptions(
     addMachineOptions(
       addScheduleOptions(
-      create
-        .command("command <name>")
-        .description("create a deterministic shell command loop")
-        .requiredOption("--cmd <command>", "command string to execute")
-        .option("--cwd <dir>", "working directory")
-        .option("--timeout <duration>", "run timeout; use none/unlimited for no timeout")
-        .option("--no-shell", "execute without a shell")
-        .option("--preflight-each-run", "check target executables/accounts before every scheduled run")
-        .option("--preflight", "check target executables/accounts before storing the loop"),
+        addKnowledgeFeedbackOptions(
+          create
+            .command("command <name>")
+            .description("create a deterministic shell command loop")
+            .requiredOption("--cmd <command>", "command string to execute")
+            .option("--cwd <dir>", "working directory")
+            .option("--timeout <duration>", "run timeout; use none/unlimited for no timeout")
+            .option("--no-shell", "execute without a shell")
+            .option("--preflight-each-run", "check target executables/accounts before every scheduled run")
+            .option("--preflight", "check target executables/accounts before storing the loop"),
+        ),
       ),
     ),
   ),
@@ -549,6 +595,7 @@ addGoalOptions(
       timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
       account: accountFromOpts(opts),
       preflight: runtimePreflightFromOpts(opts),
+      knowledgeFeedback: knowledgeFeedbackFromOpts(opts),
     };
     const input = baseCreateInput(name, opts, target);
     const preflight = opts.preflight
@@ -565,26 +612,28 @@ addGoalOptions(
   addAccountOptions(
     addMachineOptions(
       addScheduleOptions(
-      create
-        .command("agent <name>")
-        .description("create a headless coding-agent loop")
-        .requiredOption("--provider <provider>", "claude, cursor, codewith, aicopilot, opencode, or codex")
-        .option("--prompt <prompt>", "agent prompt")
-        .option("--prompt-file <file>", "read the agent prompt from a markdown/text file")
-        .option("--cwd <dir>", "working directory")
-        .option("--model <model>", "model")
-        .option("--variant <variant>", "provider-specific model variant or reasoning effort")
-        .option("--agent <agent>", "provider-specific agent")
-        .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
-        .option("--add-dir <dir>", "additional writable directory for provider sandboxes; may be repeated or comma-separated", collectValues, [] as string[])
-        .option("--timeout <duration>", "run timeout; use none/unlimited for no timeout")
-        .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass")
-        .option("--sandbox <mode>", "provider sandbox: codewith/codex use read-only/workspace-write/danger-full-access; cursor uses enabled/disabled")
-        .option("--allow-tool <name>", "advisory per-session tool allowlist metadata; may be repeated or comma-separated", collectValues, [] as string[])
-        .option("--allow-command <name>", "advisory per-session command allowlist metadata; may be repeated or comma-separated", collectValues, [] as string[])
-        .option("--config-isolation <mode>", "safe or none", "safe")
-        .option("--preflight-each-run", "check provider/account readiness before every scheduled run")
-        .option("--preflight", "check target executables/accounts before storing the loop"),
+        addKnowledgeFeedbackOptions(
+          create
+            .command("agent <name>")
+            .description("create a headless coding-agent loop")
+            .requiredOption("--provider <provider>", "claude, cursor, codewith, aicopilot, opencode, or codex")
+            .option("--prompt <prompt>", "agent prompt")
+            .option("--prompt-file <file>", "read the agent prompt from a markdown/text file")
+            .option("--cwd <dir>", "working directory")
+            .option("--model <model>", "model")
+            .option("--variant <variant>", "provider-specific model variant or reasoning effort")
+            .option("--agent <agent>", "provider-specific agent")
+            .option("--auth-profile <profile>", "provider-native auth profile; currently supported for codewith")
+            .option("--add-dir <dir>", "additional writable directory for provider sandboxes; may be repeated or comma-separated", collectValues, [] as string[])
+            .option("--timeout <duration>", "run timeout; use none/unlimited for no timeout")
+            .option("--permission-mode <mode>", "provider permission mode: default, plan, auto, or bypass")
+            .option("--sandbox <mode>", "provider sandbox: codewith/codex use read-only/workspace-write/danger-full-access; cursor uses enabled/disabled")
+            .option("--allow-tool <name>", "advisory per-session tool allowlist metadata; may be repeated or comma-separated", collectValues, [] as string[])
+            .option("--allow-command <name>", "advisory per-session command allowlist metadata; may be repeated or comma-separated", collectValues, [] as string[])
+            .option("--config-isolation <mode>", "safe or none", "safe")
+            .option("--preflight-each-run", "check provider/account readiness before every scheduled run")
+            .option("--preflight", "check target executables/accounts before storing the loop"),
+        ),
       ),
     ),
   ),
@@ -616,6 +665,7 @@ addGoalOptions(
       allowlist: allowlistFromOpts(opts),
       account: accountFromOpts(opts),
       preflight: runtimePreflightFromOpts(opts),
+      knowledgeFeedback: knowledgeFeedbackFromOpts(opts),
     }, { name, type: "agent", provider }, { baseDir: process.cwd() });
     const input = baseCreateInput(name, opts, target);
     const preflight = opts.preflight
@@ -631,13 +681,15 @@ addGoalOptions(
 addGoalOptions(
   addMachineOptions(
     addScheduleOptions(
-    create
-      .command("workflow <name>")
-      .description("schedule a stored workflow")
-      .requiredOption("--workflow <idOrName>", "workflow id or name")
-      .option("--timeout <duration>", "workflow run timeout; use none/unlimited for no workflow-level timeout")
-      .option("--preflight-each-run", "check workflow steps before every scheduled run")
-      .option("--preflight", "check workflow step executables/accounts before storing the loop"),
+      addKnowledgeFeedbackOptions(
+        create
+          .command("workflow <name>")
+          .description("schedule a stored workflow")
+          .requiredOption("--workflow <idOrName>", "workflow id or name")
+          .option("--timeout <duration>", "workflow run timeout; use none/unlimited for no workflow-level timeout")
+          .option("--preflight-each-run", "check workflow steps before every scheduled run")
+          .option("--preflight", "check workflow step executables/accounts before storing the loop"),
+      ),
     ),
   ),
 ).action(runAction((name, opts) => {
@@ -649,6 +701,7 @@ addGoalOptions(
       workflowId: workflow.id,
       timeoutMs: timeoutDuration(opts.timeout, "--timeout"),
       preflight: runtimePreflightFromOpts(opts),
+      knowledgeFeedback: knowledgeFeedbackFromOpts(opts),
     };
     const input = baseCreateInput(name, opts, target);
     const preflight = opts.preflight

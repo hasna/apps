@@ -205,6 +205,7 @@ async function executeUnderlyingTarget(
     daemonLeaseId: opts.daemonLeaseId,
     beforePersist: opts.beforePersist,
     signal: opts.signal,
+    knowledgeFeedback: opts.knowledgeFeedback,
   });
 }
 

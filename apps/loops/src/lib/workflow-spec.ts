@@ -1,6 +1,15 @@
 import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import type { AgentPromptSource, AgentTarget, CreateWorkflowInput, ExecutableTarget, GoalSpec, WorkflowSpec, WorkflowStep } from "../types.js";
+import type {
+  AgentPromptSource,
+  AgentTarget,
+  CreateWorkflowInput,
+  ExecutableTarget,
+  GoalSpec,
+  KnowledgeFeedbackConfig,
+  WorkflowSpec,
+  WorkflowStep,
+} from "../types.js";
 import { AGENT_PROVIDERS, providerAdapter } from "./agent-adapter.js";
 import { GOAL_OBJECTIVE_MAX_CHARS } from "./goal/types.js";
 
@@ -48,6 +57,30 @@ function optionalStringArray(value: unknown, label: string): string[] | undefine
     })
     .filter(Boolean);
   return values.length ? values : undefined;
+}
+
+function optionalKnowledgeFeedback(value: unknown, label: string): KnowledgeFeedbackConfig | undefined {
+  if (value === undefined) return undefined;
+  assertObject(value, label);
+  const scope = value.scope === undefined ? undefined : String(value.scope);
+  if (scope !== undefined && !["local", "global", "project"].includes(scope)) {
+    throw new Error(`${label}.scope must be local, global, or project`);
+  }
+  if (value.command !== undefined) assertString(value.command, `${label}.command`);
+  if (value.store !== undefined) assertString(value.store, `${label}.store`);
+  return {
+    enabled: optionalBoolean(value.enabled, `${label}.enabled`),
+    emit: optionalBoolean(value.emit, `${label}.emit`),
+    readContext: optionalBoolean(value.readContext, `${label}.readContext`),
+    command: typeof value.command === "string" ? value.command.trim() : undefined,
+    store: typeof value.store === "string" ? value.store.trim() : undefined,
+    scope: scope as KnowledgeFeedbackConfig["scope"],
+    maxItems: optionalPositiveInteger(value.maxItems, `${label}.maxItems`),
+    maxTokens: optionalPositiveInteger(value.maxTokens, `${label}.maxTokens`),
+    timeoutMs: optionalPositiveInteger(value.timeoutMs, `${label}.timeoutMs`),
+    tags: optionalStringArray(value.tags, `${label}.tags`),
+    required: optionalBoolean(value.required, `${label}.required`),
+  };
 }
 
 function optionalAccountRef(value: unknown, label: string) {
@@ -120,10 +153,11 @@ function validateTarget(value: unknown, label: string, opts: WorkflowNormalizeOp
     assertString(value.command, `${label}.command`);
     optionalTimeoutMs(value.timeoutMs, `${label}.timeoutMs`);
     optionalPositiveInteger(value.idleTimeoutMs, `${label}.idleTimeoutMs`);
+    const knowledgeFeedback = optionalKnowledgeFeedback(value.knowledgeFeedback, `${label}.knowledgeFeedback`);
     if (value.shell !== true && /\s/.test(value.command.trim())) {
       throw new Error(`${label}.command must be an executable without spaces when shell is false; put flags in args or set shell true`);
     }
-    return value as unknown as ExecutableTarget;
+    return { ...value, knowledgeFeedback } as unknown as ExecutableTarget;
   }
   if (value.type === "agent") {
     assertString(value.provider, `${label}.provider`);
@@ -178,7 +212,8 @@ function validateTarget(value: unknown, label: string, opts: WorkflowNormalizeOp
       if (value.routing.eventType !== undefined) assertString(value.routing.eventType, `${label}.routing.eventType`);
       if (value.routing.eventSource !== undefined) assertString(value.routing.eventSource, `${label}.routing.eventSource`);
     }
-    const target: Record<string, unknown> = { ...value, extraArgs };
+    const knowledgeFeedback = optionalKnowledgeFeedback(value.knowledgeFeedback, `${label}.knowledgeFeedback`);
+    const target: Record<string, unknown> = { ...value, extraArgs, knowledgeFeedback };
     if (!extraArgs) delete target.extraArgs;
     delete target.promptFile;
     delete target.promptSource;

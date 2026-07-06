@@ -1,6 +1,7 @@
 import type { ExecutorResult, Loop, LoopRun } from "../types.js";
 import { LoopArchivedError } from "./errors.js";
 import { classifyRunFailure } from "./health.js";
+import { emitKnowledgeForLoopRun } from "./knowledge-feedback.js";
 import { computeNextAfter, dueSlots } from "./recurrence.js";
 import type { Store } from "./store.js";
 import { executeLoopTarget } from "./workflow-runner.js";
@@ -359,7 +360,7 @@ export async function executeClaimedRun(deps: {
         onSpawn: (pid) => deps.store.markRunPid(run.id, pid, deps.runnerId, { daemonLeaseId: deps.daemonLeaseId }),
       })))(deps.loop, deps.run);
     deps.beforeFinalize?.(deps.loop, deps.run);
-    return deps.store.finalizeRun(deps.run.id, {
+    const finalRun = deps.store.finalizeRun(deps.run.id, {
       status: result.status,
       finishedAt: result.finishedAt,
       durationMs: result.durationMs,
@@ -373,6 +374,10 @@ export async function executeClaimedRun(deps: {
       daemonLeaseId: deps.daemonLeaseId,
       now: deps.now?.() ?? new Date(result.finishedAt),
     });
+    await emitKnowledgeForLoopRun(deps.loop, finalRun, {
+      log: (message) => deps.onError?.(deps.loop, new Error(message)),
+    });
+    return finalRun;
   } catch (err) {
     deps.onError?.(deps.loop, err);
     try {
@@ -381,7 +386,7 @@ export async function executeClaimedRun(deps: {
       return deps.store.getRun(deps.run.id) ?? deps.run;
     }
     const finishedAt = new Date();
-    return deps.store.finalizeRun(deps.run.id, {
+    const finalRun = deps.store.finalizeRun(deps.run.id, {
       status: "failed",
       finishedAt: finishedAt.toISOString(),
       durationMs: finishedAt.getTime() - new Date(deps.run.startedAt ?? deps.run.createdAt).getTime(),
@@ -393,6 +398,10 @@ export async function executeClaimedRun(deps: {
       daemonLeaseId: deps.daemonLeaseId,
       now: deps.now?.() ?? finishedAt,
     });
+    await emitKnowledgeForLoopRun(deps.loop, finalRun, {
+      log: (message) => deps.onError?.(deps.loop, new Error(message)),
+    });
+    return finalRun;
   } finally {
     if (heartbeat) clearInterval(heartbeat);
   }

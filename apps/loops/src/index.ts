@@ -33,6 +33,8 @@ export type {
   CreateLoopInput,
   ExecutorResult,
   IntervalAnchor,
+  KnowledgeFeedbackConfig,
+  KnowledgeFeedbackScope,
   Loop,
   LoopRun,
   LoopStatus,

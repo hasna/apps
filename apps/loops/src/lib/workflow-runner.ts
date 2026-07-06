@@ -395,6 +395,7 @@ export async function executeLoopTarget(
   run: LoopRun,
   opts: ExecuteOptions = {},
 ): Promise<ExecutorResult> {
+  const inheritedKnowledgeFeedback = loop.target.knowledgeFeedback ?? opts.knowledgeFeedback;
   if (loop.target.type !== "workflow") {
     if (loop.goal && loop.target.preflight?.beforeRun) {
       const startedAt = nowIso();
@@ -416,12 +417,13 @@ export async function executeLoopTarget(
     if (loop.goal) {
       return runGoal(store, loop.goal, {
         ...opts,
+        knowledgeFeedback: inheritedKnowledgeFeedback,
         model: opts.goalModel,
         target: loop.target,
         context: goalExecutionContext({ loop, loopRun: run }),
       });
     }
-    return executeLoop(loop, run, opts);
+    return executeLoop(loop, run, { ...opts, knowledgeFeedback: inheritedKnowledgeFeedback });
   }
   const workflow = store.requireWorkflow(loop.target.workflowId);
   if (loop.target.preflight?.beforeRun) {
@@ -442,6 +444,7 @@ export async function executeLoopTarget(
       executeNode: async (node) =>
         executeWorkflow(store, workflowForLoopGoal, {
           ...opts,
+          knowledgeFeedback: inheritedKnowledgeFeedback,
           loop,
           loopRun: run,
           scheduledFor: run.scheduledFor,
@@ -467,6 +470,7 @@ export async function executeLoopTarget(
   try {
     return await executeWorkflow(store, workflow, {
       ...opts,
+      knowledgeFeedback: inheritedKnowledgeFeedback,
       signal: controller?.signal ?? opts.signal,
       signalTimeoutMessage: () =>
         workflowTimedOut && loop.target.type === "workflow" ? `workflow timed out after ${workflowTimeoutMs}ms` : undefined,

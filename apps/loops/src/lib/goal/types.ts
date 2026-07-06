@@ -1,5 +1,5 @@
 import type { LanguageModel } from "ai";
-import type { ExecutableTarget, ExecutorResult } from "../../types.js";
+import type { ExecutableTarget, ExecutorResult, KnowledgeFeedbackConfig } from "../../types.js";
 import type { Store } from "../store.js";
 
 export type GoalStatus = "active" | "paused" | "blocked" | "usageLimited" | "budgetLimited" | "complete" | "cancelled";
@@ -126,6 +126,7 @@ export interface RunGoalOptions {
   signal?: AbortSignal;
   cancelPollMs?: number;
   context?: GoalExecutionContext;
+  knowledgeFeedback?: KnowledgeFeedbackConfig;
 }
 
 export interface GoalExecutorResult extends ExecutorResult {

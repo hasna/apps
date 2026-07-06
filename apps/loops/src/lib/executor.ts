@@ -12,6 +12,7 @@ import type {
   CommandTarget,
   ExecutableTarget,
   ExecutorResult,
+  KnowledgeFeedbackConfig,
   Loop,
   LoopMachineRef,
   LoopRun,
@@ -20,6 +21,7 @@ import type {
 import { accountToolForProvider, resolveAccountEnv, resolveAccountEnvSync } from "./accounts.js";
 import { BoundedOutputBuffer, killProcessGroup, providerAdapter, spawnCapture } from "./agent-adapter.js";
 import { commandNotFoundMessage, executableExists, normalizeExecutionPath } from "./env.js";
+import { targetWithKnowledgeContext } from "./knowledge-feedback.js";
 import { nowIso } from "./ids.js";
 import { refreshLoopMachine, resolveMachineCommand } from "./machines.js";
 import { processStartTimeMs } from "./process-identity.js";
@@ -68,6 +70,8 @@ export interface ExecuteOptions extends PersistGuardOptions {
   onSpawnProcess?: (info: SpawnedProcessInfo) => void;
   /** Progress from durable provider controllers, for example Codewith background agents. */
   onAgentProgress?: (info: AgentProgressInfo) => void;
+  /** Inherited knowledge feedback config, used mainly by workflow loops for step agents. */
+  knowledgeFeedback?: KnowledgeFeedbackConfig;
   machine?: LoopMachineRef;
   machineResolver?: (machine: LoopMachineRef) => LoopMachineRef;
   machineCommandResolver?: (machineId: string, command: string) => MachineCommandPlan;
@@ -1152,7 +1156,12 @@ export async function executeTarget(
   metadata: ExecutionMetadata = {},
   opts: ExecuteOptions = {},
 ): Promise<ExecutorResult> {
-  let spec = commandSpec(target, opts);
+  let executionTarget = await targetWithKnowledgeContext(target, metadata, {
+    env: opts.env,
+    log: opts.log,
+    knowledgeFeedback: opts.knowledgeFeedback,
+  });
+  let spec = commandSpec(executionTarget, opts);
   const machine = resolvedMachine(opts);
   if (machine && !machine.local && spec.codewithDurableAgent) {
     return failureResult(
@@ -1165,7 +1174,7 @@ export async function executeTarget(
     // cwd into argv), so the remote script carries both and picks at runtime.
     const remoteFallbackSpec =
       spec.worktree?.enabled && spec.worktree.mode === "auto"
-        ? worktreeFallbackSpec(target, opts, spec.worktree.originalCwd)
+        ? worktreeFallbackSpec(executionTarget, opts, spec.worktree.originalCwd)
         : undefined;
     return executeRemoteSpec(spec, machine, metadata, opts, remoteFallbackSpec);
   }
@@ -1193,7 +1202,7 @@ export async function executeTarget(
   const worktreeEntry = await enterWorktree(spec, opts, env, startedAt);
   if (worktreeEntry?.failure) return worktreeEntry.failure;
   if (worktreeEntry?.fallbackCwd) {
-    spec = worktreeFallbackSpec(target, opts, worktreeEntry.fallbackCwd) ?? spec;
+    spec = worktreeFallbackSpec(executionTarget, opts, worktreeEntry.fallbackCwd) ?? spec;
   }
   if (spec.codewithDurableAgent) {
     return executeCodewithDurableAgent(spec, metadata, opts, env, startedAt);

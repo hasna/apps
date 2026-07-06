@@ -830,6 +830,72 @@ loops workflows run transcript-feedback-to-loops --show-output
 
 See `docs/TRANSCRIPT_LOOP_PATTERNS.md` for transcript-to-loop guardrails and example schedules for review, maintenance, CI optimization, feedback triage, and knowledge-capture loops.
 
+## Knowledge Feedback
+
+OpenLoops can close the loop between failed automation and future agent runs by
+using the Knowledge CLI as the durable store. Enable it per loop with
+`--knowledge-feedback`, or set `knowledgeFeedback` on a command, agent, or
+workflow target in JSON. Existing loops are unchanged unless feedback is
+configured or `LOOPS_KNOWLEDGE_FEEDBACK=1` is set in the runner environment.
+
+```bash
+loops create command repo-health \
+  --every 30m \
+  --cmd "bun test" \
+  --cwd /path/to/repo \
+  --knowledge-feedback \
+  --knowledge-store /path/to/knowledge-store
+```
+
+When enabled, terminal non-successful loop outcomes are summarized into a
+deduped `knowledge upsert` record keyed by the run failure fingerprint. The
+first event set covers failed, timed-out, and abandoned loop runs finalized by
+the shared scheduler path. The shared classifier also recognizes skipped
+circuit-breaker rows for future skipped-row emission points. Records include
+bounded redacted error/stdout/stderr evidence, failure classification, loop/run
+ids, target metadata, and workflow step summaries when the failed loop ran a
+workflow.
+
+Before an agent target starts, OpenLoops runs a bounded
+`knowledge context pack` query using the loop/workflow/step metadata, routing
+task/event metadata, cwd, and provider. Matching records are appended to the
+agent prompt under a read-only `Relevant durable knowledge` section. This is
+context data, not executable instructions.
+
+Useful options:
+
+```text
+--knowledge-store <path>       pass --store to the Knowledge CLI
+--knowledge-scope <scope>      local, global, or project (default local)
+--knowledge-command <command>  executable name/path (default knowledge)
+--knowledge-max-items <n>      context-pack item budget
+--knowledge-max-tokens <n>     context-pack token budget
+--knowledge-timeout <duration> Knowledge CLI timeout
+```
+
+The JSON shape is:
+
+```json
+{
+  "type": "agent",
+  "provider": "claude",
+  "prompt": "Review the latest failure and propose the smallest fix.",
+  "knowledgeFeedback": {
+    "enabled": true,
+    "store": "/path/to/knowledge-store",
+    "scope": "local",
+    "maxItems": 3,
+    "maxTokens": 1600
+  }
+}
+```
+
+Knowledge feedback never writes ad hoc home-level Markdown. Durable lessons go
+through `knowledge upsert`; prompt context is read with `knowledge context
+pack`. Missing or failing Knowledge CLI calls are logged and do not crash run
+finalization. Set `required: true` only when an agent should fail closed if it
+cannot read the configured knowledge context before starting.
+
 ## Manage
 
 ```bash

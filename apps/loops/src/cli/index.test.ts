@@ -1357,6 +1357,85 @@ describe("loops CLI", () => {
     expect(JSON.parse(workflow.stdout).target.preflight).toEqual({ beforeRun: true });
   });
 
+  test("create stores knowledge feedback config on command, agent, and workflow loops", () => {
+    const dataDir = freshDataDir("loops-cli-knowledge-feedback-");
+    const knowledgeStore = join(dataDir, "knowledge-store");
+    const expected = {
+      enabled: true,
+      command: "knowledge",
+      store: knowledgeStore,
+      scope: "local",
+      maxItems: 4,
+      maxTokens: 1200,
+      timeoutMs: 7000,
+    };
+    const flags = [
+      "--knowledge-feedback",
+      "--knowledge-store",
+      knowledgeStore,
+      "--knowledge-scope",
+      "local",
+      "--knowledge-command",
+      "knowledge",
+      "--knowledge-max-items",
+      "4",
+      "--knowledge-max-tokens",
+      "1200",
+      "--knowledge-timeout",
+      "7s",
+    ];
+
+    const command = runCli(dataDir, [
+      "--json",
+      "create",
+      "command",
+      "knowledge-command",
+      "--at",
+      futureAt(),
+      "--cmd",
+      "true",
+      "--no-shell",
+      ...flags,
+    ]);
+    expect(command.status).toBe(0);
+    expect(JSON.parse(command.stdout).target.knowledgeFeedback).toEqual(expected);
+
+    const agent = runCli(dataDir, [
+      "--json",
+      "create",
+      "agent",
+      "knowledge-agent",
+      "--provider",
+      "codewith",
+      "--at",
+      futureAt(),
+      "--prompt",
+      "inspect status",
+      ...flags,
+    ]);
+    expect(agent.status).toBe(0);
+    expect(JSON.parse(agent.stdout).target.knowledgeFeedback).toEqual(expected);
+
+    const file = workflowFile(dataDir, {
+      name: "knowledge-feedback-workflow",
+      steps: [{ id: "step", target: { type: "command", command: "true" } }],
+    });
+    expect(runCli(dataDir, ["workflows", "create", file]).status).toBe(0);
+    const workflow = runCli(dataDir, [
+      "--json",
+      "create",
+      "workflow",
+      "knowledge-workflow-loop",
+      "--workflow",
+      "knowledge-feedback-workflow",
+      "--at",
+      futureAt(),
+      ...flags,
+    ]);
+    expect(workflow.status).toBe(0);
+    expect(JSON.parse(workflow.stdout).target.knowledgeFeedback).toEqual(expected);
+  });
+
   test("machines commands expose OpenMachines topology", () => {
     const dataDir = freshDataDir("loops-cli-machines-");
     const list = runCli(dataDir, ["--json", "machines", "list"]);
