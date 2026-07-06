@@ -6,6 +6,33 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.0.64] - 2026-07-06
+
+### Added
+
+- Added `machines reconcile`: desired-state package reconcile for
+  machines-agent. Plans and executes `bun install -g pkg@version` against the
+  manifest, verifies CLI `--version` (and declared `hasna-*-mcp` health
+  endpoints), rolls back to the prior version on verification failure, and
+  emits `hasna.rollout_record.v1` events (`release.rollout.started/completed/
+  failed`, `app.installed`) through the `@hasna/events` envelope. Dry-run by
+  default; `--apply` requires scoped mutation approval. Triggerable from a
+  `release.published` event via `--event-json` or `reconcileFromReleaseEvent`.
+- Added `machines freeze add|remove|list|check`: supply-chain freeze gate that
+  blocks reconcile installs/updates of frozen packages (ported from the
+  skill-package-update incident-freeze rule), with optional `--until` expiry
+  and manifest-declared fleet-wide freeze entries.
+- Extended the `machines.json` schema (backward compatible): fleet-wide
+  `packages` desired-state list, `freeze` list, and per-package `appId`,
+  `bin`, and `mcpHealthUrl` fields aligned with the distribution contracts.
+
+### Fixed
+
+- Made the consumer conformance fixture hermetic: "SDK absent" cases now
+  install an always-failing tombstone package so ambient `node_modules`
+  directories above the temp app (for example `/tmp/node_modules`) cannot leak
+  a real `@hasna/machines` into resolution.
+
 ## [0.0.63] - 2026-07-04
 
 ### Added

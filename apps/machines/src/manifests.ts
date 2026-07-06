@@ -26,6 +26,16 @@ const packageSchema = z.object({
   name: z.string(),
   manager: z.enum(["bun", "brew", "apt", "custom"]).optional(),
   version: z.string().optional(),
+  appId: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "appId must be a lowercase slug (hasna.app.v1 AppId)").optional(),
+  bin: z.string().min(1).optional(),
+  mcpHealthUrl: z.string().min(1).optional(),
+});
+
+const freezeEntrySchema = z.object({
+  name: z.string().min(1),
+  reason: z.string().optional(),
+  frozenAt: z.string().optional(),
+  until: z.string().optional(),
 });
 
 const appSchema = z.object({
@@ -61,6 +71,8 @@ export const machineSchema = z.object({
 export const fleetSchema = z.object({
   version: z.literal(1),
   generatedAt: z.string().optional(),
+  packages: z.array(packageSchema).optional(),
+  freeze: z.array(freezeEntrySchema).optional(),
   machines: z.array(machineSchema),
 });
 

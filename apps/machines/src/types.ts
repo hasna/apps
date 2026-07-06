@@ -5,6 +5,19 @@ export interface ManifestPackageSpec {
   name: string;
   manager?: "bun" | "brew" | "apt" | "custom";
   version?: string;
+  /** Distribution appId (hasna.app.v1 join key), e.g. "open-todos". Defaults to a slug derived from the package name. */
+  appId?: string;
+  /** CLI bin used to verify installs via `<bin> --version`. Defaults to the unscoped package name. */
+  bin?: string;
+  /** Optional MCP health endpoint checked after install/update (expects HTTP 200). */
+  mcpHealthUrl?: string;
+}
+
+export interface FreezeEntry {
+  name: string;
+  reason?: string;
+  frozenAt?: string;
+  until?: string;
 }
 
 export interface ManifestAppSpec {
@@ -40,6 +53,10 @@ export interface MachineManifest {
 export interface FleetManifest {
   version: 1;
   generatedAt?: string;
+  /** Fleet-wide desired-state packages applied to every machine; per-machine packages override by name. */
+  packages?: ManifestPackageSpec[];
+  /** Supply-chain freeze list; frozen packages are blocked from reconcile installs/updates. */
+  freeze?: FreezeEntry[];
   machines: MachineManifest[];
 }
 
