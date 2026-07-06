@@ -4090,6 +4090,7 @@ describe("loops CLI", () => {
 
   test("todos task provider rules fall back to fixed Codewith pools and reject invalid hints", () => {
     const dataDir = freshDataDir("loops-cli-event-provider-fallback-");
+    const repo = createGitRepo("loops-cli-event-provider-fallback-repo-");
     const event = {
       id: "evt-task-created-provider-fallback",
       type: "task.created",
@@ -4105,6 +4106,116 @@ describe("loops CLI", () => {
       },
       timestamp: new Date().toISOString(),
     };
+
+    const colonAreaTag = runCli(dataDir, [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--dry-run",
+      "--provider-rule",
+      "tags=area:frontend:claude:claude-ui-a,claude-ui-b",
+      "--provider-rule",
+      "tags=task-lifecycle:codewith:account004,account005",
+      "--worktree-mode",
+      "required",
+      "--worktree-root",
+      join(dataDir, "worktrees"),
+    ], JSON.stringify({
+      ...event,
+      id: "evt-task-created-provider-rule-colon-area-tag",
+      data: {
+        ...event.data,
+        working_dir: repo,
+        tags: ["auto:route", "area:frontend"],
+      },
+      metadata: {
+        area: "backend",
+      },
+    }));
+
+    expect(colonAreaTag.status).toBe(0);
+    const colonAreaTagValue = JSON.parse(colonAreaTag.stdout);
+    expect(colonAreaTagValue.providerRouting).toMatchObject({
+      provider: "claude",
+      source: "rule",
+      reason: "matched provider rule tags=area:frontend",
+    });
+    expect(colonAreaTagValue.providerRouting.accountPool).toEqual([
+      { profile: "claude-ui-a", tool: "claude" },
+      { profile: "claude-ui-b", tool: "claude" },
+    ]);
+    expect(agentStepsOf(colonAreaTagValue.workflow)[0].target.provider).toBe("claude");
+    expect(agentStepsOf(colonAreaTagValue.workflow)[1].target.provider).toBe("claude");
+
+    const colonProviderTag = runCli(dataDir, [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--dry-run",
+      "--provider-rule",
+      "tags=provider:claude-code:claude:claude-code-a,claude-code-b",
+      "--worktree-mode",
+      "required",
+      "--worktree-root",
+      join(dataDir, "worktrees"),
+    ], JSON.stringify({
+      ...event,
+      id: "evt-task-created-provider-rule-colon-provider-tag",
+      data: {
+        ...event.data,
+        working_dir: repo,
+        tags: ["auto:route", "provider:claude-code"],
+      },
+      metadata: {},
+    }));
+
+    expect(colonProviderTag.status).toBe(0);
+    const colonProviderTagValue = JSON.parse(colonProviderTag.stdout);
+    expect(colonProviderTagValue.providerRouting.rule.value).toBe("provider:claude-code");
+    expect(colonProviderTagValue.providerRouting.provider).toBe("claude");
+    expect(new Set(agentStepsOf(colonProviderTagValue.workflow).map((step) => step.target.account.profile))).toEqual(new Set(["claude-code-a", "claude-code-b"]));
+
+    const lifecycleTagsCodewith = runCli(dataDir, [
+      "--json",
+      "events",
+      "handle",
+      "todos-task",
+      "--dry-run",
+      "--provider-rule",
+      "tags=area:frontend:claude:claude-ui-a,claude-ui-b",
+      "--provider-rule",
+      "tags=provider:claude-code:claude:claude-code-a,claude-code-b",
+      "--provider-rule",
+      "tags=task-lifecycle:codewith:account004,account005",
+      "--sandbox",
+      "workspace-write",
+      "--worktree-mode",
+      "required",
+      "--worktree-root",
+      join(dataDir, "worktrees"),
+    ], JSON.stringify({
+      ...event,
+      id: "evt-task-created-provider-rule-lifecycle-codewith",
+      data: {
+        ...event.data,
+        working_dir: repo,
+        tags: ["auto:route", "task-lifecycle", "workflow"],
+      },
+      metadata: {},
+    }));
+
+    expect(lifecycleTagsCodewith.status).toBe(0);
+    const lifecycleTagsCodewithValue = JSON.parse(lifecycleTagsCodewith.stdout);
+    expect(lifecycleTagsCodewithValue.providerRouting).toMatchObject({
+      provider: "codewith",
+      source: "rule",
+      reason: "matched provider rule tags=task-lifecycle",
+      authProfilePool: ["account004", "account005"],
+    });
+    expect(agentStepsOf(lifecycleTagsCodewithValue.workflow)[0].target.provider).toBe("codewith");
+    expect(agentStepsOf(lifecycleTagsCodewithValue.workflow)[0].target.account).toBeUndefined();
 
     const fallback = runCli(dataDir, [
       "--json",
