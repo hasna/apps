@@ -20,6 +20,11 @@
       "id": "0004_work_item_route_scope",
       "file": "0004_work_item_route_scope.sql",
       "checksum": "sha256:341e439861d595ce3d069b0106f1f09134042bac0a70f3d00a1374e09f5404d9"
+    },
+    {
+      "id": "0005_run_receipts",
+      "file": "0005_run_receipts.sql",
+      "checksum": "sha256:27228e19e0101d31ce9da18d76d918a96dd8afff576fb291cbf8d018e97fe5d6"
     }
   ]
 }

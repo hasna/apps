@@ -375,6 +375,32 @@ describe("loops sdk", () => {
     }
   });
 
+  test("writes and reads scheduler-neutral run receipts", () => {
+    const store = new Store(":memory:");
+    const client = new LoopsClient({ store, runnerId: "manual" });
+    try {
+      const receipt = client.writeReceipt({
+        loop_id: "loop-sdk",
+        run_id: "run-sdk",
+        machine: "spark01",
+        repo: "/workspace/open-loops",
+        task_ids: ["task-sdk"],
+        knowledge_ids: ["knowledge-sdk"],
+        status: "succeeded",
+        summary: "sdk receipt",
+        evidence_paths: ["/tmp/sdk-receipt.json"],
+        stdout: "s".repeat(50_000),
+      });
+      expect(receipt.digest_id).toMatch(/^sha256:/);
+      expect(receipt.summary.stdout_bytes).toBe(50_000);
+      expect(receipt.summary.stdout_excerpt).toContain("chars omitted");
+      expect(client.receipt("run-sdk")?.summary.text).toBe("sdk receipt");
+      expect(client.receipts({ taskId: "task-sdk" }).map((value) => value.run_id)).toEqual(["run-sdk"]);
+    } finally {
+      client.close();
+    }
+  });
+
   test("runNow falls back to ad hoc when the due slot is already terminal", async () => {
     const store = new Store(":memory:");
     const client = new LoopsClient({ store, runnerId: "manual" });

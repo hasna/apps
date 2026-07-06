@@ -18,8 +18,11 @@ import type {
   LoopRun,
   LoopStatus,
   LoopTarget,
+  RunReceipt,
+  RunReceiptMachine,
   RunStatus,
   TimeoutMs,
+  WriteRunReceiptInput,
   WorkflowEvent,
   WorkflowInvocation,
   WorkflowRun,
@@ -45,6 +48,7 @@ import {
   discardWorkflowRunManifest,
   stageWorkflowRunManifest,
 } from "./run-artifacts.js";
+import { normalizeRunReceipt } from "./run-receipts.js";
 import { runLocalCommand, todosMutationSummary } from "./route/todos-cli.js";
 
 interface DaemonLeaseFence {
@@ -61,7 +65,7 @@ const LIVE_EXPIRED_RUN_GRACE_MS = 60_000;
  * numbered migration so older binaries refuse to open newer databases instead
  * of silently misreading them (checked against PRAGMA user_version).
  */
-const SCHEMA_USER_VERSION = 7;
+const SCHEMA_USER_VERSION = 8;
 const TERMINAL_RUN_STATUSES = ["succeeded", "failed", "timed_out", "abandoned", "skipped"] as const;
 const PRUNE_BATCH_SIZE = 400;
 const GENERATED_ROUTE_TEMPLATE_IDS = new Set(["todos-task-worker-verifier", "task-lifecycle", "event-worker-verifier"]);
@@ -113,6 +117,24 @@ export interface RunRow {
   stderr: string | null;
   error: string | null;
   goal_run_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RunReceiptRow {
+  loop_id: string;
+  run_id: string;
+  machine_json: string;
+  repo: string;
+  task_ids_json: string;
+  knowledge_ids_json: string;
+  digest_id: string;
+  started_at: string | null;
+  finished_at: string | null;
+  status: string;
+  exit_code: number | null;
+  summary_json: string;
+  evidence_paths_json: string;
   created_at: string;
   updated_at: string;
 }
@@ -362,6 +384,26 @@ export function rowToRun(row: RunRow): LoopRun {
     goalRunId: row.goal_run_id ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+export function rowToRunReceipt(row: RunReceiptRow): RunReceipt {
+  return {
+    loop_id: row.loop_id,
+    run_id: row.run_id,
+    machine: JSON.parse(row.machine_json) as RunReceiptMachine,
+    repo: row.repo,
+    task_ids: JSON.parse(row.task_ids_json) as string[],
+    knowledge_ids: JSON.parse(row.knowledge_ids_json) as string[],
+    digest_id: row.digest_id,
+    started_at: row.started_at,
+    finished_at: row.finished_at,
+    status: row.status,
+    exit_code: row.exit_code,
+    summary: JSON.parse(row.summary_json) as RunReceipt["summary"],
+    evidence_paths: JSON.parse(row.evidence_paths_json) as string[],
+    created_at: row.created_at,
+    updated_at: row.updated_at,
   };
 }
 
@@ -902,6 +944,10 @@ export class Store {
           this.db.exec("CREATE INDEX IF NOT EXISTS idx_workflow_work_items_scope ON workflow_work_items(route_scope, status)");
         },
       },
+      {
+        id: "0009_run_receipts",
+        apply: () => this.createRunReceiptsSchema(),
+      },
     ];
   }
 
@@ -962,6 +1008,28 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_runs_status ON loop_runs(status);
       CREATE INDEX IF NOT EXISTS idx_runs_status_lease ON loop_runs(status, lease_expires_at);
       CREATE INDEX IF NOT EXISTS idx_runs_scheduled ON loop_runs(scheduled_for);
+
+      CREATE TABLE IF NOT EXISTS run_receipts (
+        run_id TEXT PRIMARY KEY,
+        loop_id TEXT NOT NULL,
+        machine_json TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        task_ids_json TEXT NOT NULL,
+        knowledge_ids_json TEXT NOT NULL,
+        digest_id TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        status TEXT NOT NULL,
+        exit_code INTEGER,
+        summary_json TEXT NOT NULL,
+        evidence_paths_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_loop ON run_receipts(loop_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_repo ON run_receipts(repo, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_digest ON run_receipts(digest_id);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_status ON run_receipts(status, created_at DESC);
 
       CREATE TABLE IF NOT EXISTS daemon_lease (
         id TEXT PRIMARY KEY,
@@ -1179,6 +1247,32 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_goal_runs_goal_created ON goal_runs(goal_id, created_at);
       CREATE INDEX IF NOT EXISTS idx_goal_runs_loop_run ON goal_runs(loop_run_id);
       CREATE INDEX IF NOT EXISTS idx_goal_runs_workflow_run ON goal_runs(workflow_run_id);
+    `);
+  }
+
+  private createRunReceiptsSchema(): void {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS run_receipts (
+        run_id TEXT PRIMARY KEY,
+        loop_id TEXT NOT NULL,
+        machine_json TEXT NOT NULL,
+        repo TEXT NOT NULL,
+        task_ids_json TEXT NOT NULL,
+        knowledge_ids_json TEXT NOT NULL,
+        digest_id TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        status TEXT NOT NULL,
+        exit_code INTEGER,
+        summary_json TEXT NOT NULL,
+        evidence_paths_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_loop ON run_receipts(loop_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_repo ON run_receipts(repo, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_digest ON run_receipts(digest_id);
+      CREATE INDEX IF NOT EXISTS idx_run_receipts_status ON run_receipts(status, created_at DESC);
     `);
   }
 
@@ -3833,6 +3927,89 @@ export class Store {
       rows = this.db.query<RunRow, [number]>("SELECT * FROM loop_runs ORDER BY created_at DESC LIMIT ?").all(limit);
     }
     return rows.map(rowToRun);
+  }
+
+  writeRunReceipt(input: WriteRunReceiptInput, opts: { now?: Date } = {}): RunReceipt {
+    const inputRunId = typeof input.run_id === "string" && input.run_id.trim() ? input.run_id : undefined;
+    const existing = inputRunId ? this.getRunReceipt(inputRunId) : undefined;
+    const run = inputRunId ? this.getRun(inputRunId) : undefined;
+    const loop = input.loop_id ? this.getLoop(input.loop_id) : run ? this.getLoop(run.loopId) : undefined;
+    const receipt = normalizeRunReceipt(input, { now: opts.now, run, loop, existing });
+    this.db
+      .query(
+        `INSERT INTO run_receipts (run_id, loop_id, machine_json, repo, task_ids_json, knowledge_ids_json, digest_id,
+          started_at, finished_at, status, exit_code, summary_json, evidence_paths_json, created_at, updated_at)
+         VALUES ($runId, $loopId, $machineJson, $repo, $taskIdsJson, $knowledgeIdsJson, $digestId,
+          $startedAt, $finishedAt, $status, $exitCode, $summaryJson, $evidencePathsJson, $createdAt, $updatedAt)
+         ON CONFLICT(run_id) DO UPDATE SET
+          loop_id=excluded.loop_id,
+          machine_json=excluded.machine_json,
+          repo=excluded.repo,
+          task_ids_json=excluded.task_ids_json,
+          knowledge_ids_json=excluded.knowledge_ids_json,
+          digest_id=excluded.digest_id,
+          started_at=excluded.started_at,
+          finished_at=excluded.finished_at,
+          status=excluded.status,
+          exit_code=excluded.exit_code,
+          summary_json=excluded.summary_json,
+          evidence_paths_json=excluded.evidence_paths_json,
+          updated_at=excluded.updated_at`,
+      )
+      .run({
+        $runId: receipt.run_id,
+        $loopId: receipt.loop_id,
+        $machineJson: JSON.stringify(receipt.machine),
+        $repo: receipt.repo,
+        $taskIdsJson: JSON.stringify(receipt.task_ids),
+        $knowledgeIdsJson: JSON.stringify(receipt.knowledge_ids),
+        $digestId: receipt.digest_id,
+        $startedAt: receipt.started_at,
+        $finishedAt: receipt.finished_at,
+        $status: receipt.status,
+        $exitCode: receipt.exit_code,
+        $summaryJson: JSON.stringify(receipt.summary),
+        $evidencePathsJson: JSON.stringify(receipt.evidence_paths),
+        $createdAt: receipt.created_at,
+        $updatedAt: receipt.updated_at,
+      });
+    return this.getRunReceipt(receipt.run_id) ?? receipt;
+  }
+
+  getRunReceipt(runId: string): RunReceipt | undefined {
+    const row = this.db.query<RunReceiptRow, [string]>("SELECT * FROM run_receipts WHERE run_id = ?").get(runId);
+    return row ? rowToRunReceipt(row) : undefined;
+  }
+
+  listRunReceipts(opts: { loopId?: string; repo?: string; taskId?: string; knowledgeId?: string; status?: string; limit?: number } = {}): RunReceipt[] {
+    const limit = opts.limit ?? 100;
+    const filters: string[] = [];
+    const params: unknown[] = [];
+    if (opts.loopId) {
+      filters.push("loop_id = ?");
+      params.push(opts.loopId);
+    }
+    if (opts.repo) {
+      filters.push("repo = ?");
+      params.push(opts.repo);
+    }
+    if (opts.status) {
+      filters.push("status = ?");
+      params.push(opts.status);
+    }
+    if (opts.taskId) {
+      filters.push("EXISTS (SELECT 1 FROM json_each(run_receipts.task_ids_json) WHERE value = ?)");
+      params.push(opts.taskId);
+    }
+    if (opts.knowledgeId) {
+      filters.push("EXISTS (SELECT 1 FROM json_each(run_receipts.knowledge_ids_json) WHERE value = ?)");
+      params.push(opts.knowledgeId);
+    }
+    const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+    const rows = this.db
+      .query<RunReceiptRow, any>(`SELECT * FROM run_receipts ${where} ORDER BY created_at DESC LIMIT ?`)
+      .all(...params, limit);
+    return rows.map(rowToRunReceipt);
   }
 
   private deferLiveExpiredRun(id: string, now: Date, opts: DaemonLeaseFence = {}): void {

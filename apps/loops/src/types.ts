@@ -480,6 +480,56 @@ export interface LoopRun {
   updatedAt: string;
 }
 
+export type RunReceiptMachine = string | Record<string, unknown>;
+
+export interface RunReceiptSummary {
+  text?: string;
+  stdout_bytes: number;
+  stderr_bytes: number;
+  stdout_excerpt?: string;
+  stderr_excerpt?: string;
+  error?: string;
+  duration_ms?: number;
+}
+
+export interface RunReceipt {
+  loop_id: string;
+  run_id: string;
+  machine: RunReceiptMachine;
+  repo: string;
+  task_ids: string[];
+  knowledge_ids: string[];
+  digest_id: string;
+  started_at: string | null;
+  finished_at: string | null;
+  status: string;
+  exit_code: number | null;
+  summary: RunReceiptSummary;
+  evidence_paths: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WriteRunReceiptInput {
+  loop_id?: string;
+  run_id: string;
+  machine?: RunReceiptMachine;
+  repo?: string;
+  task_ids?: string[];
+  knowledge_ids?: string[];
+  digest_id?: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  status?: string;
+  exit_code?: number | null;
+  summary?: string | Partial<RunReceiptSummary> | null;
+  evidence_paths?: string[];
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+  duration_ms?: number;
+}
+
 export interface CreateLoopInput {
   name: string;
   description?: string;

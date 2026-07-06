@@ -18,6 +18,7 @@ import type {
   OverlapPolicy,
   ScheduleSpec,
   WorkflowSpec,
+  WriteRunReceiptInput,
 } from "../types.js";
 import { dataDir, daemonLogPath, dbPath } from "../lib/paths.js";
 import {
@@ -26,6 +27,7 @@ import {
   publicGoal,
   publicGoalRun,
   publicRun,
+  publicRunReceipt,
   publicWorkflow,
   publicWorkflowEvent,
   publicWorkflowInvocation,
@@ -500,6 +502,16 @@ function parseJsonFile(file: string): unknown {
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new ValidationError(`failed to read JSON file ${file}: ${reason}`);
+  }
+}
+
+function parseReceiptFile(file: string): WriteRunReceiptInput {
+  const raw = file === "-" ? readFileSync(0, "utf8") : readFileSync(file, "utf8");
+  try {
+    return JSON.parse(raw) as WriteRunReceiptInput;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new ValidationError(`failed to read receipt JSON from ${file}: ${reason}`);
   }
 }
 
@@ -1779,6 +1791,67 @@ program
             `${run.id}  ${run.status.padEnd(10)}  attempt=${run.attempt}  slot=${run.scheduledFor}  ${run.loopName}`,
           );
           if (opts.showOutput) printTextOutput(run);
+        }
+      }
+    } finally {
+      store.close();
+    }
+  }));
+
+const receipts = program.command("receipts").description("read and write scheduler-neutral run receipts");
+
+receipts
+  .command("write")
+  .description("write a bounded run receipt from JSON")
+  .option("--file <path>", "receipt JSON file; use - for stdin", "-")
+  .action(runAction((opts) => {
+    const store = new Store();
+    try {
+      const receipt = store.writeRunReceipt(parseReceiptFile(opts.file));
+      print(publicRunReceipt(receipt), `receipt ${receipt.run_id} ${receipt.status} digest=${receipt.digest_id}`);
+    } finally {
+      store.close();
+    }
+  }));
+
+receipts
+  .command("read <runId>")
+  .description("read one run receipt by run id")
+  .action(runAction((runId) => {
+    const store = new Store();
+    try {
+      const receipt = store.getRunReceipt(runId);
+      if (!receipt) throw new ValidationError(`run receipt not found: ${runId}`);
+      print(publicRunReceipt(receipt), `receipt ${receipt.run_id} ${receipt.status} digest=${receipt.digest_id}`);
+    } finally {
+      store.close();
+    }
+  }));
+
+receipts
+  .command("list")
+  .description("list run receipts")
+  .option("--loop-id <id>", "filter by loop_id")
+  .option("--repo <repo>", "filter by repo")
+  .option("--task-id <id>", "filter by task id")
+  .option("--knowledge-id <id>", "filter by knowledge id")
+  .option("--status <status>", "filter by status")
+  .option("--limit <n>", "limit", "50")
+  .action(runAction((opts) => {
+    const store = new Store();
+    try {
+      const values = store.listRunReceipts({
+        loopId: opts.loopId,
+        repo: opts.repo,
+        taskId: opts.taskId,
+        knowledgeId: opts.knowledgeId,
+        status: opts.status,
+        limit: positiveInteger(opts.limit, "--limit") ?? 50,
+      });
+      if (isJson()) print(values.map(publicRunReceipt));
+      else {
+        for (const receipt of values) {
+          console.log(`${receipt.run_id}  ${receipt.status.padEnd(10)}  loop=${receipt.loop_id}  repo=${receipt.repo}`);
         }
       }
     } finally {

@@ -36,6 +36,7 @@ import {
   rowToLease,
   rowToLoop,
   rowToRun,
+  rowToRunReceipt,
   rowToWorkflow,
   rowToWorkflowEvent,
   rowToWorkflowInvocation,
@@ -48,6 +49,7 @@ import {
   type GoalRunRow,
   type LeaseRow,
   type LoopRow,
+  type RunReceiptRow,
   type RunRow,
   type WorkflowEventRow,
   type WorkflowInvocationRow,
@@ -66,8 +68,11 @@ import type {
   LoopRun,
   LoopStatus,
   LoopTarget,
+  RunReceipt,
   WorkflowWorkItemStatus,
+  WriteRunReceiptInput,
 } from "../../types.js";
+import { normalizeRunReceipt } from "../run-receipts.js";
 import type { PoolQueryClient, TypedQueryClient } from "../../generated/storage-kit/query.js";
 import type { LoopStorageContract, LoopStorageMethodName } from "./contract.js";
 
@@ -711,6 +716,98 @@ export class PostgresLoopStorage implements LoopStorageContract {
       rows = await this.client.many<RunRow>("SELECT * FROM loop_runs ORDER BY created_at DESC LIMIT $1", [limit]);
     }
     return rows.map(rowToRun);
+  }
+
+  async writeRunReceipt(...args: M<"writeRunReceipt">["args"]): Promise<M<"writeRunReceipt">["result"]> {
+    const [input, opts = {}] = args as [WriteRunReceiptInput, { now?: Date }?];
+    const inputRunId = typeof input.run_id === "string" && input.run_id.trim() ? input.run_id : undefined;
+    const existing = inputRunId ? await this.getRunReceipt(inputRunId) : undefined;
+    const run = inputRunId ? await this.getRun(inputRunId) : undefined;
+    const loop = input.loop_id ? await this.getLoop(input.loop_id) : run ? await this.getLoop(run.loopId) : undefined;
+    const receipt = normalizeRunReceipt(input, { now: opts.now, run, loop, existing });
+    await this.client.execute(
+      `INSERT INTO run_receipts (run_id, loop_id, machine_json, repo, task_ids_json, knowledge_ids_json, digest_id,
+        started_at, finished_at, status, exit_code, summary_json, evidence_paths_json, created_at, updated_at)
+       VALUES ($1,$2,$3::jsonb,$4,$5::jsonb,$6::jsonb,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15)
+       ON CONFLICT(run_id) DO UPDATE SET
+        loop_id=EXCLUDED.loop_id,
+        machine_json=EXCLUDED.machine_json,
+        repo=EXCLUDED.repo,
+        task_ids_json=EXCLUDED.task_ids_json,
+        knowledge_ids_json=EXCLUDED.knowledge_ids_json,
+        digest_id=EXCLUDED.digest_id,
+        started_at=EXCLUDED.started_at,
+        finished_at=EXCLUDED.finished_at,
+        status=EXCLUDED.status,
+        exit_code=EXCLUDED.exit_code,
+        summary_json=EXCLUDED.summary_json,
+        evidence_paths_json=EXCLUDED.evidence_paths_json,
+        updated_at=EXCLUDED.updated_at`,
+      [
+        receipt.run_id,
+        receipt.loop_id,
+        JSON.stringify(receipt.machine),
+        receipt.repo,
+        JSON.stringify(receipt.task_ids),
+        JSON.stringify(receipt.knowledge_ids),
+        receipt.digest_id,
+        receipt.started_at,
+        receipt.finished_at,
+        receipt.status,
+        receipt.exit_code,
+        JSON.stringify(receipt.summary),
+        JSON.stringify(receipt.evidence_paths),
+        receipt.created_at,
+        receipt.updated_at,
+      ],
+    );
+    return (await this.getRunReceipt(receipt.run_id)) ?? receipt;
+  }
+
+  async getRunReceipt(...args: M<"getRunReceipt">["args"]): Promise<M<"getRunReceipt">["result"]> {
+    const row = await this.client.get<RunReceiptRow>("SELECT * FROM run_receipts WHERE run_id = $1", [args[0]]);
+    return row ? rowToRunReceipt(row) : undefined;
+  }
+
+  async listRunReceipts(...args: M<"listRunReceipts">["args"]): Promise<M<"listRunReceipts">["result"]> {
+    const opts = args[0] ?? {};
+    const limit = opts.limit ?? 100;
+    const filters: string[] = [];
+    const params: unknown[] = [];
+    const next = () => `$${params.length + 1}`;
+    if (opts.loopId) {
+      const slot = next();
+      filters.push(`loop_id = ${slot}`);
+      params.push(opts.loopId);
+    }
+    if (opts.repo) {
+      const slot = next();
+      filters.push(`repo = ${slot}`);
+      params.push(opts.repo);
+    }
+    if (opts.status) {
+      const slot = next();
+      filters.push(`status = ${slot}`);
+      params.push(opts.status);
+    }
+    if (opts.taskId) {
+      const slot = next();
+      filters.push(`task_ids_json ? ${slot}`);
+      params.push(opts.taskId);
+    }
+    if (opts.knowledgeId) {
+      const slot = next();
+      filters.push(`knowledge_ids_json ? ${slot}`);
+      params.push(opts.knowledgeId);
+    }
+    const limitSlot = next();
+    params.push(limit);
+    const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+    const rows = await this.client.many<RunReceiptRow>(
+      `SELECT * FROM run_receipts ${where} ORDER BY created_at DESC LIMIT ${limitSlot}`,
+      params,
+    );
+    return rows.map(rowToRunReceipt);
   }
 
   async countRuns(...args: M<"countRuns">["args"]): Promise<M<"countRuns">["result"]> {

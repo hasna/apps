@@ -187,6 +187,42 @@ describe("loops CLI", () => {
     expect(pausedListed?.latestRunId).toBeUndefined();
   });
 
+  test("receipts write/read/list expose bounded JSON receipts", () => {
+    const dataDir = freshDataDir("loops-cli-receipts-");
+    const input = {
+      loop_id: "loop-cli",
+      run_id: "run-cli",
+      machine: "spark01",
+      repo: "/workspace/open-loops",
+      task_ids: ["task-cli"],
+      knowledge_ids: ["knowledge-cli"],
+      started_at: "2026-01-01T00:00:00Z",
+      finished_at: "2026-01-01T00:00:01Z",
+      status: "succeeded",
+      exit_code: 0,
+      summary: "cli receipt",
+      evidence_paths: ["/tmp/receipt.json"],
+      stdout: "x".repeat(50_000),
+    };
+
+    const write = runCli(dataDir, ["--json", "receipts", "write", "--file", "-"], JSON.stringify(input));
+    expect(write.status).toBe(0);
+    const written = JSON.parse(write.stdout) as { run_id: string; digest_id: string; summary: { stdout_bytes: number; stdout_excerpt: string } };
+    expect(written.run_id).toBe("run-cli");
+    expect(written.digest_id).toMatch(/^sha256:/);
+    expect(written.summary.stdout_bytes).toBe(50_000);
+    expect(written.summary.stdout_excerpt).toContain("chars omitted");
+
+    const read = runCli(dataDir, ["--json", "receipts", "read", "run-cli"]);
+    expect(read.status).toBe(0);
+    expect(JSON.parse(read.stdout)).toMatchObject({ run_id: "run-cli", summary: { text: "cli receipt" } });
+
+    const list = runCli(dataDir, ["--json", "receipts", "list", "--task-id", "task-cli"]);
+    expect(list.status).toBe(0);
+    const receipts = JSON.parse(list.stdout) as Array<{ run_id: string }>;
+    expect(receipts.map((receipt) => receipt.run_id)).toEqual(["run-cli"]);
+  });
+
   test("reports local deployment mode by default", () => {
     const dataDir = mkdtempSync(join(tmpdir(), "loops-cli-mode-local-"));
     const mode = runCli(dataDir, ["--json", "mode"], undefined, {
