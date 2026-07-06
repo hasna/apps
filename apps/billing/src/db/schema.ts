@@ -94,6 +94,22 @@ CREATE TABLE IF NOT EXISTS events (
   processed_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS accounting_reconciliation_events (
+  id TEXT PRIMARY KEY,
+  entity_id TEXT NOT NULL,
+  source TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  accounting_entry_ref TEXT,
+  amount INTEGER,
+  currency TEXT,
+  state TEXT NOT NULL DEFAULT 'pending',
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (source, source_id, event_type)
+);
+
 CREATE TABLE IF NOT EXISTS audit_log (
   id TEXT PRIMARY KEY,
   entity_id TEXT,
@@ -113,6 +129,7 @@ CREATE INDEX IF NOT EXISTS idx_invoices_entity ON invoices(entity_id);
 CREATE INDEX IF NOT EXISTS idx_dunning_policies_entity ON dunning_policies(entity_id);
 CREATE INDEX IF NOT EXISTS idx_dunning_runs_entity ON dunning_runs(entity_id);
 CREATE INDEX IF NOT EXISTS idx_events_entity ON events(entity_id);
+CREATE INDEX IF NOT EXISTS idx_accounting_reconciliation_entity ON accounting_reconciliation_events(entity_id);
 
 -- Append-only enforcement: the audit_log admits INSERTs only.
 CREATE TRIGGER IF NOT EXISTS audit_log_no_update

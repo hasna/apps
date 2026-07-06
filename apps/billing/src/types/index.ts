@@ -51,6 +51,9 @@ export type DunningRunOutcome = (typeof DUNNING_RUN_OUTCOMES)[number];
 export const EVENT_STATUSES = ["received", "processed", "ignored", "failed"] as const;
 export type EventStatus = (typeof EVENT_STATUSES)[number];
 
+export const RECONCILIATION_STATES = ["pending", "written", "failed"] as const;
+export type ReconciliationState = (typeof RECONCILIATION_STATES)[number];
+
 // ---- Row shapes ----------------------------------------------------------
 
 export interface CustomerRow {
@@ -136,6 +139,21 @@ export interface EventRow {
   processed_at: string | null;
 }
 
+export interface AccountingReconciliationRow {
+  id: string;
+  entity_id: string;
+  source: string;
+  source_id: string;
+  event_type: string;
+  accounting_entry_ref: string | null;
+  amount: number | null;
+  currency: string | null;
+  state: ReconciliationState;
+  payload_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface AuditRow {
   id: string;
   entity_id: string | null;
@@ -195,6 +213,9 @@ export class DunningRunNotFoundError extends NotFoundError {
 export class EventNotFoundError extends NotFoundError {
   static override code = "EVENT_NOT_FOUND";
 }
+export class ReconciliationNotFoundError extends NotFoundError {
+  static override code = "RECONCILIATION_NOT_FOUND";
+}
 
 export class ValidationError extends BillingError {
   static override code = "VALIDATION_ERROR";
@@ -251,6 +272,7 @@ export const ERROR_STATUS: Record<string, number> = {
   DUNNING_POLICY_NOT_FOUND: 404,
   DUNNING_RUN_NOT_FOUND: 404,
   EVENT_NOT_FOUND: 404,
+  RECONCILIATION_NOT_FOUND: 404,
   VALIDATION_ERROR: 400,
   INVALID_TRANSITION: 422,
   WEBHOOK_VERIFICATION_FAILED: 400,

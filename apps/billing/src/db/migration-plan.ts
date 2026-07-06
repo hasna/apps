@@ -107,6 +107,27 @@ export const CLOUD_MIGRATIONS: readonly Migration[] = [
     -- FROM the app role (managed by infra role grants, BUILD-SPEC §4.7).
     `,
   ),
+  defineMigration(
+    "0003-accounting-reconciliation-events",
+    `
+    CREATE TABLE IF NOT EXISTS accounting_reconciliation_events (
+      id TEXT PRIMARY KEY,
+      entity_id TEXT NOT NULL,
+      source TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      event_type TEXT NOT NULL,
+      accounting_entry_ref TEXT,
+      amount INTEGER,
+      currency TEXT,
+      state TEXT NOT NULL DEFAULT 'pending',
+      payload_json TEXT NOT NULL DEFAULT '{}',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (source, source_id, event_type)
+    );
+    CREATE INDEX IF NOT EXISTS idx_accounting_reconciliation_entity ON accounting_reconciliation_events(entity_id);
+    `,
+  ),
 ];
 
 export function migrationIds(): string[] {

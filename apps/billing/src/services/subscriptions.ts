@@ -34,8 +34,14 @@ const listInput = z.object({
   entity_id: entityIdSchema.optional(),
   status: z.enum(SUBSCRIPTION_STATUSES).optional(),
 });
-const cancelInput = z.object({ id: z.string().min(1), at_period_end: z.boolean().optional() });
-const changePlanInput = z.object({ id: z.string().min(1), plan: z.string().min(1) });
+const approvalRef = z.string().min(8).describe("Operator approval reference for destructive or financially material billing changes.");
+const cancelInput = z.object({ id: z.string().min(1), at_period_end: z.boolean().optional(), approval_ref: approvalRef.optional() });
+const changePlanInput = z.object({ id: z.string().min(1), plan: z.string().min(1), approval_ref: approvalRef });
+
+function requireApprovalRef(value: string | undefined, action: string): string {
+  if (!value) throw new InvalidTransitionError(`${action} requires an operator approval_ref.`);
+  return value;
+}
 
 export const subscriptionOps: ServiceOp[] = [
   {
@@ -151,8 +157,17 @@ export const subscriptionOps: ServiceOp[] = [
       if (input.at_period_end) {
         ctx.db.run("UPDATE subscriptions SET cancel_at_period_end = 1, updated_at = ? WHERE id = ?", [nowIso(), input.id]);
       } else {
+        const approval = requireApprovalRef(input.approval_ref, "Immediate subscription cancellation");
         if (row.stripe_subscription_id) await ctx.stripe.cancelSubscription(row.stripe_subscription_id);
         ctx.db.run("UPDATE subscriptions SET status = 'canceled', cancel_at_period_end = 0, updated_at = ? WHERE id = ?", [nowIso(), input.id]);
+        appendAudit(ctx.db, {
+          entity_id: row.entity_id,
+          actor_id: ctx.actor_id,
+          action: "approve_cancel_subscription",
+          resource: "subscriptions",
+          resource_id: input.id,
+          detail: approval,
+        });
       }
       appendAudit(ctx.db, {
         entity_id: row.entity_id,
@@ -181,6 +196,7 @@ export const subscriptionOps: ServiceOp[] = [
       const row = requireSubscription(ctx, input.id);
       assertEntity(ctx, "write", row.entity_id, "subscriptions");
       if (row.status === "canceled") throw new InvalidTransitionError("Cannot change plan on a canceled subscription.");
+      const approval = requireApprovalRef(input.approval_ref, "Subscription plan change");
       if (row.stripe_subscription_id) await ctx.stripe.updateSubscriptionPlan(row.stripe_subscription_id, input.plan);
       ctx.db.run("UPDATE subscriptions SET plan = ?, updated_at = ? WHERE id = ?", [input.plan, nowIso(), input.id]);
       appendAudit(ctx.db, {
@@ -189,7 +205,7 @@ export const subscriptionOps: ServiceOp[] = [
         action: "change_subscription_plan",
         resource: "subscriptions",
         resource_id: input.id,
-        detail: `${row.plan}->${input.plan}`,
+        detail: `${row.plan}->${input.plan} approval=${approval}`,
       });
       return requireSubscription(ctx, input.id);
     },
