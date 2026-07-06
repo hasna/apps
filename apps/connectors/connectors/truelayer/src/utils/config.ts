@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 
@@ -15,9 +15,11 @@ export interface ProfileConfig {
 
 let profileOverride: string | undefined;
 
-const CONFIG_DIR = join(homedir(), '.hasna', 'connectors', CONNECTOR_NAME);
+const CONFIG_DIR = join(process.env.HOME || homedir(), '.hasna', 'connectors', CONNECTOR_NAME);
 const PROFILES_DIR = join(CONFIG_DIR, 'profiles');
 const CURRENT_PROFILE_FILE = join(CONFIG_DIR, 'current_profile');
+const CONFIG_DIR_MODE = 0o700;
+const CONFIG_FILE_MODE = 0o600;
 
 export function setProfileOverride(profile: string | undefined): void {
   profileOverride = profile;
@@ -25,10 +27,14 @@ export function setProfileOverride(profile: string | undefined): void {
 
 export function ensureConfigDir(): void {
   if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
+    mkdirSync(CONFIG_DIR, { recursive: true, mode: CONFIG_DIR_MODE });
+  } else {
+    chmodSync(CONFIG_DIR, CONFIG_DIR_MODE);
   }
   if (!existsSync(PROFILES_DIR)) {
-    mkdirSync(PROFILES_DIR, { recursive: true });
+    mkdirSync(PROFILES_DIR, { recursive: true, mode: CONFIG_DIR_MODE });
+  } else {
+    chmodSync(PROFILES_DIR, CONFIG_DIR_MODE);
   }
 }
 
@@ -64,7 +70,8 @@ export function setCurrentProfile(profile: string): void {
     throw new Error(`Profile "${profile}" does not exist`);
   }
 
-  writeFileSync(CURRENT_PROFILE_FILE, profile);
+  writeFileSync(CURRENT_PROFILE_FILE, profile, { mode: CONFIG_FILE_MODE });
+  chmodSync(CURRENT_PROFILE_FILE, CONFIG_FILE_MODE);
 }
 
 export function profileExists(profile: string): boolean {
@@ -95,7 +102,9 @@ export function createProfile(profile: string, config: ProfileConfig = {}): bool
     throw new Error('Profile name can only contain letters, numbers, hyphens, and underscores');
   }
 
-  writeFileSync(getProfilePath(profile), JSON.stringify(config, null, 2));
+  const profilePath = getProfilePath(profile);
+  writeFileSync(profilePath, JSON.stringify(config, null, 2), { mode: CONFIG_FILE_MODE });
+  chmodSync(profilePath, CONFIG_FILE_MODE);
   return true;
 }
 
@@ -135,7 +144,9 @@ export function loadProfile(profile?: string): ProfileConfig {
 export function saveProfile(config: ProfileConfig, profile?: string): void {
   ensureConfigDir();
   const profileName = profile || getCurrentProfile();
-  writeFileSync(getProfilePath(profileName), JSON.stringify(config, null, 2));
+  const profilePath = getProfilePath(profileName);
+  writeFileSync(profilePath, JSON.stringify(config, null, 2), { mode: CONFIG_FILE_MODE });
+  chmodSync(profilePath, CONFIG_FILE_MODE);
 }
 
 export function getAccessToken(): string | undefined {
