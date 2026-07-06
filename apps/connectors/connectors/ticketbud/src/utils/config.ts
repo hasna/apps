@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import type { OAuth2Config, OAuth2Tokens } from '../types';
@@ -37,6 +37,11 @@ export function ensureConfigDir(): void {
 
 function getProfilePath(profile: string): string {
   return join(PROFILES_DIR, `${profile}.json`);
+}
+
+function writeProfileFile(profilePath: string, config: ProfileConfig): void {
+  writeFileSync(profilePath, JSON.stringify(config, null, 2), { mode: 0o600 });
+  chmodSync(profilePath, 0o600);
 }
 
 export function getCurrentProfile(): string {
@@ -91,7 +96,7 @@ export function createProfile(profile: string, config: ProfileConfig = {}): bool
   if (!/^[a-zA-Z0-9_-]+$/.test(profile)) {
     throw new Error('Profile name can only contain letters, numbers, hyphens, and underscores');
   }
-  writeFileSync(getProfilePath(profile), JSON.stringify(config, null, 2));
+  writeProfileFile(getProfilePath(profile), config);
   return true;
 }
 
@@ -123,7 +128,7 @@ export function loadProfile(profile?: string): ProfileConfig {
 export function saveProfile(config: ProfileConfig, profile?: string): void {
   ensureConfigDir();
   const profileName = profile || getCurrentProfile();
-  writeFileSync(getProfilePath(profileName), JSON.stringify(config, null, 2));
+  writeProfileFile(getProfilePath(profileName), config);
 }
 
 export function getAccessToken(): string | undefined {
