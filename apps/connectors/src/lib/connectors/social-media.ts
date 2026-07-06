@@ -45,6 +45,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["social", "video"],
   },
   {
+    name: "twitch",
+    displayName: "Twitch",
+    description: "Live streaming, channels, chat, and followers",
+    category: "Social Media",
+    tags: ["streaming", "live", "video"],
+  },
+  {
     name: "youtube",
     displayName: "YouTube",
     description: "Videos, channels, and analytics",
