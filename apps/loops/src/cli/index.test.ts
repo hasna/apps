@@ -5967,6 +5967,213 @@ describe("loops CLI", () => {
     expect(loops).toHaveLength(1);
   });
 
+  test("todos task event handler dedupes PR backlog tasks by GitHub fingerprint", () => {
+    const dataDir = freshDataDir("loops-cli-event-pr-fingerprint-dedupe-");
+    const repo = createGitRepo("loops-cli-event-pr-fingerprint-dedupe-repo-");
+    const event = {
+      id: "evt-task-created-pr-fingerprint-a",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-pr-fingerprint-a",
+        title: "Review and safely merge hasna/loops#39",
+        description: [
+          "Fingerprint: github-pr:hasna/loops#39",
+          `Repository: ${repo}`,
+          "GitHub author is andrei-hasna",
+          "GitHub reviewer pool: andrei-hasna, kriptoburak",
+        ].join("\n"),
+        working_dir: repo,
+        tags: ["auto:route", "github-pr", "pr-merge-queue"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const first = runCli(
+      dataDir,
+      ["--json", "events", "handle", "todos-task", "--github-reviewer-pool", "andrei-hasna,kriptoburak"],
+      JSON.stringify(event),
+    );
+    expect(first.status).toBe(0);
+    const created = JSON.parse(first.stdout);
+    expect(created.idempotencyKey).toBe("todos-task:pr:hasna/loops#39");
+
+    const duplicate = runCli(
+      dataDir,
+      ["--json", "events", "handle", "todos-task", "--github-reviewer-pool", "andrei-hasna,kriptoburak"],
+      JSON.stringify({
+        ...event,
+        id: "evt-task-created-pr-fingerprint-b",
+        data: {
+          ...event.data,
+          id: "task-pr-fingerprint-b",
+        },
+      }),
+    );
+
+    expect(duplicate.status).toBe(0);
+    const value = JSON.parse(duplicate.stdout);
+    expect(value.deduped).toBe(true);
+    expect(value.idempotencyKey).toBe("todos-task:pr:hasna/loops#39");
+    expect(value.loop.id).toBe(created.loop.id);
+
+    const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loops).toHaveLength(1);
+  });
+
+  test("todos task event handler keeps ordinary PR-link tasks on task idempotency", () => {
+    const dataDir = freshDataDir("loops-cli-event-pr-link-non-backlog-");
+    const repo = createGitRepo("loops-cli-event-pr-link-non-backlog-repo-");
+    const event = {
+      id: "evt-task-created-pr-link-a",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-pr-link-a",
+        title: "Track upstream change https://github.com/hasna/loops/pull/39",
+        description: "Capture notes about an upstream change without routing PR operations.",
+        working_dir: repo,
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const first = runCli(dataDir, ["--json", "events", "handle", "todos-task"], JSON.stringify(event));
+    expect(first.status).toBe(0);
+    expect(JSON.parse(first.stdout).idempotencyKey).toBe("todos-task:task-pr-link-a");
+
+    const second = runCli(
+      dataDir,
+      ["--json", "events", "handle", "todos-task"],
+      JSON.stringify({
+        ...event,
+        id: "evt-task-created-pr-link-b",
+        data: {
+          ...event.data,
+          id: "task-pr-link-b",
+        },
+      }),
+    );
+    expect(second.status).toBe(0);
+    const value = JSON.parse(second.stdout);
+    expect(value.deduped).toBe(false);
+    expect(value.idempotencyKey).toBe("todos-task:task-pr-link-b");
+
+    const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loops).toHaveLength(2);
+  });
+
+  test("todos task event handler dedupes PR fingerprint routes against legacy task keys", () => {
+    const dataDir = freshDataDir("loops-cli-event-pr-fingerprint-legacy-dedupe-");
+    const repo = createGitRepo("loops-cli-event-pr-fingerprint-legacy-dedupe-repo-");
+    const legacy = {
+      id: "evt-task-created-pr-legacy-a",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-pr-legacy",
+        title: "Route before PR fingerprint backfill",
+        working_dir: repo,
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const first = runCli(dataDir, ["--json", "events", "handle", "todos-task"], JSON.stringify(legacy));
+    expect(first.status).toBe(0);
+    const created = JSON.parse(first.stdout);
+    expect(created.idempotencyKey).toBe("todos-task:task-pr-legacy");
+
+    const replay = runCli(
+      dataDir,
+      ["--json", "events", "handle", "todos-task", "--github-reviewer-pool", "andrei-hasna,kriptoburak"],
+      JSON.stringify({
+        ...legacy,
+        id: "evt-task-created-pr-legacy-b",
+        data: {
+          ...legacy.data,
+          title: "Review and safely merge hasna/loops#39",
+          description: [
+            "Fingerprint: github-pr:hasna/loops#39",
+            `Repository: ${repo}`,
+            "GitHub author is andrei-hasna",
+            "GitHub reviewer pool: andrei-hasna, kriptoburak",
+          ].join("\n"),
+          tags: ["auto:route", "github-pr", "pr-merge-queue"],
+        },
+      }),
+    );
+    expect(replay.status).toBe(0);
+    const value = JSON.parse(replay.stdout);
+    expect(value.deduped).toBe(true);
+    expect(value.idempotencyKey).toBe("todos-task:pr:hasna/loops#39");
+    expect(value.workItem.id).toBe(created.workItem.id);
+    expect(value.loop.id).toBe(created.loop.id);
+
+    const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loops).toHaveLength(1);
+  });
+
+  test("todos task event handler dedupes queued legacy PR work items", () => {
+    const dataDir = freshDataDir("loops-cli-event-pr-fingerprint-queued-legacy-dedupe-");
+    const repo = createGitRepo("loops-cli-event-pr-fingerprint-queued-legacy-dedupe-repo-");
+    const legacy = {
+      id: "evt-task-created-pr-queued-legacy-a",
+      type: "task.created",
+      source: "@hasna/todos",
+      data: {
+        id: "task-pr-queued-legacy",
+        title: "Route before PR fingerprint backfill",
+        working_dir: repo,
+        tags: ["auto:route"],
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    const first = runCli(dataDir, ["--json", "events", "handle", "todos-task"], JSON.stringify(legacy));
+    expect(first.status).toBe(0);
+    const created = JSON.parse(first.stdout);
+    const db = new Database(join(dataDir, "loops.db"));
+    try {
+      db.query("UPDATE workflow_work_items SET status='failed', loop_id=NULL, last_reason='dispatcher parse failed' WHERE id=?").run(created.workItem.id);
+    } finally {
+      db.close();
+    }
+    const requeue = runCli(dataDir, ["--json", "routes", "requeue", created.workItem.id, "--reason", "retry after dispatcher repair"]);
+    expect(requeue.status).toBe(0);
+    expect(JSON.parse(requeue.stdout).status).toBe("queued");
+
+    const replay = runCli(
+      dataDir,
+      ["--json", "events", "handle", "todos-task", "--github-reviewer-pool", "andrei-hasna,kriptoburak"],
+      JSON.stringify({
+        ...legacy,
+        id: "evt-task-created-pr-queued-legacy-b",
+        data: {
+          ...legacy.data,
+          title: "Review and safely merge hasna/loops#39",
+          description: [
+            "Fingerprint: github-pr:hasna/loops#39",
+            `Repository: ${repo}`,
+            "GitHub author is andrei-hasna",
+            "GitHub reviewer pool: andrei-hasna, kriptoburak",
+          ].join("\n"),
+          tags: ["auto:route", "github-pr", "pr-merge-queue"],
+        },
+      }),
+    );
+
+    expect(replay.status).toBe(0);
+    const value = JSON.parse(replay.stdout);
+    expect(value.deduped).toBe(true);
+    expect(value.idempotencyKey).toBe("todos-task:pr:hasna/loops#39");
+    expect(value.workItem.id).toBe(created.workItem.id);
+    expect(value.workItem.status).toBe("queued");
+
+    const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loops).toHaveLength(1);
+  });
+
   test("todos task event handler dedupes task updates against the same task route", () => {
     const dataDir = freshDataDir("loops-cli-event-task-update-dedupe-");
     const event = {

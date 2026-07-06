@@ -23,7 +23,7 @@ import {
   TASK_LIFECYCLE_TEMPLATE_ID,
   TODOS_TASK_WORKER_VERIFIER_TEMPLATE_ID,
 } from "../templates.js";
-import { eventData, eventMetadata, slugSegment, stableSuffix, stringField, taskEventField, taskRouteEligibility } from "./fields.js";
+import { eventData, eventMetadata, routeFieldValues, slugSegment, stableSuffix, stringField, taskEventField, taskEventRecords, taskRouteEligibility } from "./fields.js";
 import { normalizeWorkflowForStorage, preflightStoredWorkflow, workflowSpecForPreflight } from "./gates.js";
 import { idleTimeoutDuration, listFromRepeatedOpts, timeoutDuration } from "./parse.js";
 import { prReviewRoutingDecision } from "./pr-review.js";
@@ -120,6 +120,8 @@ const TODOS_TASK_ROUTE_TEMPLATE_IDS = new Set([
 ]);
 
 const UNCLEARED_ROUTE_WORK_ITEM_STATUSES = new Set<WorkflowWorkItemStatus>([
+  "queued",
+  "deferred",
   "admitted",
   "running",
   "succeeded",
@@ -130,6 +132,41 @@ const UNCLEARED_ROUTE_WORK_ITEM_STATUSES = new Set<WorkflowWorkItemStatus>([
 
 function isUnclearedRouteWorkItem(item: { loopId?: string; status: WorkflowWorkItemStatus }): boolean {
   return UNCLEARED_ROUTE_WORK_ITEM_STATUSES.has(item.status);
+}
+
+const TASK_FINGERPRINT_FIELDS = [
+  "fingerprint",
+  "dedupe_fingerprint",
+  "dedupeFingerprint",
+  "route_fingerprint",
+  "routeFingerprint",
+];
+
+function findRouteWorkItemByKeys(store: Store, routeKey: "todos-task" | "generic-event", idempotencyKeys: string[]): WorkflowWorkItem | undefined {
+  for (const key of idempotencyKeys) {
+    const existingItem = store.findWorkflowWorkItem(routeKey, key);
+    if (existingItem && isUnclearedRouteWorkItem(existingItem)) return existingItem;
+  }
+  return undefined;
+}
+
+function prIdempotencySubject(data: Record<string, unknown>, metadata: Record<string, unknown>, taskId: string): string {
+  const records = taskEventRecords(data, metadata);
+  const tags = new Set(records.flatMap((record) => routeFieldValues([record], "tags")).map((tag) => tag.toLowerCase()));
+  const isPrBacklogTask = tags.has("github-pr") && tags.has("pr-merge-queue");
+  if (!isPrBacklogTask) return taskId;
+  const text = [
+    ...TASK_FINGERPRINT_FIELDS.flatMap((field) => routeFieldValues(records, field)),
+    taskEventField(data, ["title", "task_title", "taskTitle"]),
+    taskEventField(data, ["description", "body"]),
+  ].filter(Boolean).join("\n");
+  const fingerprintMatch = /\bgithub-pr:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#\d+)\b/i.exec(text);
+  if (fingerprintMatch?.[1]) return `pr:${fingerprintMatch[1].toLowerCase()}`;
+  const urlMatch = /\bhttps:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/pull\/(\d+)\b/i.exec(text);
+  if (urlMatch?.[1] && urlMatch[2] && urlMatch[3]) {
+    return `pr:${urlMatch[1].toLowerCase()}/${urlMatch[2].toLowerCase()}#${urlMatch[3]}`;
+  }
+  return taskId;
 }
 
 export function todosTaskRouteTemplateId(opts: { template?: string }): string {
@@ -158,6 +195,7 @@ interface RouteEventPlan {
   event: EventEnvelope;
   opts: TodosTaskRouteOptions;
   idempotencyKey: string;
+  dedupeAliases?: string[];
   /** Rendered, named, and normalized workflow to store. */
   workflowBody: CreateWorkflowInput;
   /** Structured context reported when validation/preflight gates fail. */
@@ -206,6 +244,7 @@ function dedupedRoutePrint(
 function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
   const { event, opts, idempotencyKey, workflowBody } = plan;
   const sandboxPreflight = generatedRouteSandboxPreflight(workflowBody);
+  const dedupeKeys = [idempotencyKey, ...(plan.dedupeAliases ?? [])];
   const workItemInput: UpsertWorkflowWorkItemInput = {
     routeKey: plan.routeKey,
     idempotencyKey,
@@ -262,8 +301,8 @@ function routeEvent(plan: RouteEventPlan): TodosTaskRoutePrint {
       : undefined;
     const outcome = store.writeTransaction(() => {
       const invocation = store.createWorkflowInvocation(plan.invocationInput);
-      const existingItem = store.findWorkflowWorkItem(plan.routeKey, idempotencyKey);
-      if (existingItem && isUnclearedRouteWorkItem(existingItem)) {
+      const existingItem = findRouteWorkItemByKeys(store, plan.routeKey, dedupeKeys);
+      if (existingItem) {
         const existingLoop = existingItem.loopId ? store.getLoop(existingItem.loopId) : undefined;
         const existingWorkflow = existingItem.workflowId ? store.getWorkflow(existingItem.workflowId) : undefined;
         return { kind: "deduped" as const, existingItem, existingLoop, existingWorkflow, invocation };
@@ -386,7 +425,10 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
   const routeProjectPath = normalizeRoutePath(projectPath) ?? resolve(projectPath);
   const projectGroup = routeProjectGroup(opts.projectGroup, data, metadata);
   const throttleLimits = routeThrottleLimitsFromOpts(opts);
-  const idempotencyKey = `todos-task:${taskId}`;
+  const idempotencySubject = prIdempotencySubject(data, metadata, taskId);
+  const idempotencyKey = `todos-task:${idempotencySubject}`;
+  const legacyTaskIdempotencyKey = `todos-task:${taskId}`;
+  const dedupeAliases = legacyTaskIdempotencyKey === idempotencyKey ? [] : [legacyTaskIdempotencyKey];
   const idempotencySuffix = stableSuffix(idempotencyKey);
   const namePrefix = opts.namePrefix ?? "event:todos-task";
   const workflowName = `${namePrefix}:${taskId.slice(0, 8)}:${idempotencySuffix}:workflow`;
@@ -396,8 +438,8 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     // events never fail on since-broken project paths or provider options.
     const store = new Store();
     try {
-      const existingItem = store.findWorkflowWorkItem("todos-task", idempotencyKey);
-      if (existingItem && isUnclearedRouteWorkItem(existingItem)) {
+      const existingItem = findRouteWorkItemByKeys(store, "todos-task", [idempotencyKey, ...dedupeAliases]);
+      if (existingItem) {
         const existingLoop = existingItem.loopId ? store.getLoop(existingItem.loopId) : undefined;
         const existingWorkflow = existingItem.workflowId ? store.getWorkflow(existingItem.workflowId) : undefined;
         const existingInvocation = store.getWorkflowInvocation(existingItem.invocationId);
@@ -522,6 +564,7 @@ export function routeTodosTaskEvent(event: EventEnvelope, opts: TodosTaskRouteOp
     event,
     opts,
     idempotencyKey,
+    dedupeAliases,
     workflowBody,
     workflowContext,
     invocationInput,
