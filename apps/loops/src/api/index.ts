@@ -669,7 +669,11 @@ program
     console.log(`loops-api listening on http://${server.hostname}:${server.port}`);
   });
 
-if (import.meta.main) {
+// Only auto-run the loops-api CLI when THIS file is the direct entry. When bun
+// bundles api/index.ts into another entry (e.g. loops-serve), it inlines this
+// code and sets import.meta.main=true for the whole bundle; the URL check keeps
+// this CLI from double-parsing argv against the serve program.
+if (import.meta.main && (import.meta.url.endsWith("api/index.ts") || import.meta.url.endsWith("api/index.js"))) {
   main().catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);

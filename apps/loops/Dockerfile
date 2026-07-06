@@ -7,7 +7,9 @@
 FROM --platform=linux/arm64 oven/bun:1 AS deps
 WORKDIR /app
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+# --ignore-scripts: the package `prepare` script builds from src/ (absent here);
+# the build stage runs `bun run build` explicitly after src/ is copied.
+RUN bun install --frozen-lockfile --ignore-scripts
 
 FROM --platform=linux/arm64 oven/bun:1 AS build
 WORKDIR /app

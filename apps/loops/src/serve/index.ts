@@ -48,18 +48,15 @@ function buildExecutor(applicationName: string): PgPoolExecutor {
   });
 }
 
-const program = new Command();
-program
-  .name("loops-serve")
-  .description("OpenLoops self-hosted HTTP control-plane (RDS-direct, API-key auth)")
-  .version(packageVersion());
+function defaultHost(): string {
+  return process.env.LOOPS_API_HOST ?? "0.0.0.0";
+}
+function defaultPort(): number {
+  return Number(process.env.PORT ?? process.env.LOOPS_API_PORT ?? "8787");
+}
 
-program
-  .command("serve", { isDefault: true })
-  .description("serve the control-plane API (GET /health,/ready,/version + /v1)")
-  .option("--host <host>", "bind host", process.env.LOOPS_API_HOST ?? "0.0.0.0")
-  .option("--port <port>", "bind port", (v) => Number(v), Number(process.env.PORT ?? process.env.LOOPS_API_PORT ?? "8787"))
-  .action(async (opts: { host: string; port: number }) => {
+async function runServe(opts: { host: string; port: number }): Promise<void> {
+  {
     const executor = buildExecutor("loops-serve");
     const client = executor.queryClient;
     const storage = createPostgresLoopStorage(client);
@@ -116,7 +113,21 @@ program
         version: packageVersion(),
       }),
     );
-  });
+  }
+}
+
+const program = new Command();
+program
+  .name("loops-serve")
+  .description("OpenLoops self-hosted HTTP control-plane (RDS-direct, API-key auth)")
+  .version(packageVersion());
+
+program
+  .command("serve")
+  .description("serve the control-plane API (GET /health,/ready,/version + /v1)")
+  .option("--host <host>", "bind host", defaultHost())
+  .option("--port <port>", "bind port", (v) => Number(v), defaultPort())
+  .action((opts: { host: string; port: number }) => runServe(opts));
 
 program
   .command("migrate")
@@ -143,7 +154,19 @@ program
   .action(() => console.log(JSON.stringify({ status: "ok", version: packageVersion(), mode: "self_hosted" })));
 
 if (import.meta.main) {
-  program.parseAsync(process.argv).catch((error) => {
+  // Bare `loops-serve` (no subcommand) defaults to `serve`. Commander cannot
+  // combine a root action with subcommand dispatch without swallowing the
+  // subcommand name, so we inject the default subcommand here instead.
+  const known = new Set(["serve", "migrate", "version", "help"]);
+  const passthroughFlags = new Set(["-h", "--help", "-V", "--version"]);
+  const argv = [...process.argv];
+  const firstArg = argv[2];
+  // Bare invocation, or leading serve flags, default to `serve`; but let
+  // top-level --help/--version reach the program.
+  if (!firstArg || (!known.has(firstArg) && !passthroughFlags.has(firstArg))) {
+    argv.splice(2, 0, "serve");
+  }
+  program.parseAsync(argv).catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   });
