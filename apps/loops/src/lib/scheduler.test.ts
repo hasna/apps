@@ -563,10 +563,11 @@ describe("scheduler", () => {
     }
   });
 
-  test("rate-limit and auth failures back off harder and everything caps at six hours", () => {
+  test("provider-gated failures back off harder and everything caps at six hours", () => {
     const loop = loopFixture({ retryDelayMs: 1_000 });
     expect(retryBackoffDelayMs(loop, runFixture({ error: "429 too many requests" }), noJitter)).toBe(4_000);
     expect(retryBackoffDelayMs(loop, runFixture({ error: "invalid token" }), noJitter)).toBe(4_000);
+    expect(retryBackoffDelayMs(loop, runFixture({ stderr: "Error: [unavailable] getaddrinfo EAI_AGAIN api2.cursor.sh" }), noJitter)).toBe(4_000);
     expect(retryBackoffDelayMs(loop, runFixture({ error: "boom" }), noJitter)).toBe(1_000);
     const slow = loopFixture({ retryDelayMs: 3_600_000 });
     expect(retryBackoffDelayMs(slow, runFixture({ attempt: 10, error: "429 too many requests" }), noJitter)).toBe(MAX_RETRY_DELAY_MS);
