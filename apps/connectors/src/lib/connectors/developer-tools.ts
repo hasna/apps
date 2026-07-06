@@ -934,6 +934,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["blockchain", "smart contracts", "web3", "api", "infrastructure"],
   },
   {
+    name: "stoplight-api-platform",
+    displayName: "Stoplight",
+    description: "API design, docs, and governance platform",
+    category: "Developer Tools",
+    tags: ["api", "documentation", "openapi", "developer"],
+  },
+  {
     name: "strapi",
     displayName: "Strapi",
     description: "Open-source headless CMS and content API platform",
