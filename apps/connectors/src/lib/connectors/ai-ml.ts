@@ -836,6 +836,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["ai", "chatbot", "white-label", "agencies", "automation"],
   },
   {
+    name: "strand-ai",
+    displayName: "Strand AI",
+    description: "Multimodal bio-data: WSI uploads, Lattice inference jobs, imputation results",
+    category: "AI & ML",
+    tags: ["ai", "biology", "imputation", "research"],
+  },
+  {
     name: "studiobyai21labs",
     displayName: "Studio by AI21 Labs",
     description: "AI writing and language models API by AI21 Labs",
