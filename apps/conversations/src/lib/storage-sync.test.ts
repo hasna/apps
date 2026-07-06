@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import {
+  ALL_STORAGE_TABLES,
   CANONICAL_CONVERSATIONS_DATABASE_ENV,
   CANONICAL_CONVERSATIONS_RDS_CLUSTER,
   CANONICAL_CONVERSATIONS_RDS_DATABASE,
@@ -76,7 +77,9 @@ describe("conversations storage configuration", () => {
   });
 
   it("returns default storage tables and rejects unsupported tables", () => {
-    expect(resolveTables()).toEqual([...DEFAULT_STORAGE_TABLES]);
+    expect(resolveTables()).toEqual([...ALL_STORAGE_TABLES]);
+    expect(resolveTables()).toEqual([...DEFAULT_STORAGE_TABLES, "messages", "message_read_receipts"]);
+    expect(resolveTables("messages,message_read_receipts")).toEqual(["messages", "message_read_receipts"]);
     expect(() => resolveTables("channels,missing")).toThrow("Unsupported conversations storage table");
   });
 

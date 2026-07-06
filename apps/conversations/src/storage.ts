@@ -1,6 +1,21 @@
 export { PG_MIGRATIONS } from "./lib/pg-migrations.js";
 export { PgAdapterAsync } from "./lib/remote-storage.js";
 export {
+  MESSAGE_SYNC_STATE_TABLE,
+  MESSAGE_SYNC_TABLES,
+  ensureLocalMessageSyncReady,
+  ensureRemoteMessageSyncReady,
+  messageSyncStatus,
+  pullMessages,
+  pullReceipts,
+  pushMessages,
+  pushReceipts,
+  type MessageSyncResult,
+  type MessageSyncStatus,
+  type RemoteAdapter,
+} from "./lib/message-sync.js";
+export {
+  ALL_STORAGE_TABLES,
   CANONICAL_CONVERSATIONS_DATABASE_ENV,
   CANONICAL_CONVERSATIONS_RDS_CLUSTER,
   CANONICAL_CONVERSATIONS_RDS_DATABASE,

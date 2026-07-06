@@ -23,9 +23,21 @@ import { homedir } from "os";
 import { join } from "path";
 import type { Database } from "./db.js";
 import { getDb } from "./db.js";
+import {
+  MESSAGE_SYNC_STATE_TABLE,
+  MESSAGE_SYNC_TABLES,
+  pullMessages,
+  pullReceipts,
+  pushMessages,
+  pushReceipts,
+} from "./message-sync.js";
 import { PG_MIGRATIONS } from "./pg-migrations.js";
 import { PgAdapterAsync } from "./remote-storage.js";
 
+// Tables the GENERIC full-table engine below must never touch. `messages` and
+// `message_read_receipts` stay in this set: they replicate through the
+// uuid-keyed incremental engine in message-sync.ts (per-machine integer ids
+// collide fleet-wide, so full-table pk upserts would corrupt them).
 export const SYNC_EXCLUDED = new Set([
   "messages",
   "reactions",
@@ -40,6 +52,7 @@ export const SYNC_EXCLUDED = new Set([
   "tasks_fts",
   "_sync_conflicts",
   "_migrations",
+  MESSAGE_SYNC_STATE_TABLE,
   "sqlite_sequence",
 ]);
 
@@ -54,8 +67,13 @@ export const DEFAULT_STORAGE_TABLES = [
   "feedback",
 ] as const;
 
+/** Full default sync surface: legacy pk-upsert tables + the uuid-keyed message engine tables. */
+export const ALL_STORAGE_TABLES = [...DEFAULT_STORAGE_TABLES, ...MESSAGE_SYNC_TABLES] as const;
+
 type SyncTable = (typeof DEFAULT_STORAGE_TABLES)[number];
 type Row = Record<string, unknown>;
+
+const MESSAGE_SYNC_TABLE_SET = new Set<string>(MESSAGE_SYNC_TABLES);
 
 const PRIMARY_KEYS: Record<SyncTable, string[]> = {
   projects: ["id"],
@@ -196,18 +214,18 @@ export async function listPgTables(remote: PgAdapterAsync): Promise<string[]> {
   return rows.map((row) => row.tablename);
 }
 
-export function resolveTables(tables?: string[] | string): SyncTable[] {
+export function resolveTables(tables?: string[] | string): string[] {
   const requested = Array.isArray(tables)
     ? tables
     : typeof tables === "string"
       ? tables.split(",")
       : [];
-  if (requested.length === 0) return [...DEFAULT_STORAGE_TABLES];
-  const allowed = new Set<string>(DEFAULT_STORAGE_TABLES);
+  if (requested.length === 0) return [...ALL_STORAGE_TABLES];
+  const allowed = new Set<string>(ALL_STORAGE_TABLES);
   const clean = requested.map((table) => table.trim()).filter(Boolean);
   const invalid = clean.filter((table) => !allowed.has(table));
   if (invalid.length > 0) throw new Error(`Unsupported conversations storage table(s): ${invalid.join(", ")}`);
-  return clean as SyncTable[];
+  return clean;
 }
 
 export async function storagePush(options?: { tables?: string[] | string }): Promise<StorageSyncResult[]> {
@@ -242,13 +260,23 @@ export async function storageSync(options?: { tables?: string[] | string }): Pro
 
 export async function syncPush(db: Database, remote: PgAdapterAsync, options: { tables: string[] }): Promise<StorageSyncResult[]> {
   const results: StorageSyncResult[] = [];
-  for (const table of options.tables) results.push(await pushTable(db, remote, table as SyncTable));
+  for (const table of options.tables) {
+    if (MESSAGE_SYNC_TABLE_SET.has(table)) continue; // routed below (messages before receipts)
+    results.push(await pushTable(db, remote, table as SyncTable));
+  }
+  if (options.tables.includes("messages")) results.push(await pushMessages(db, remote));
+  if (options.tables.includes("message_read_receipts")) results.push(await pushReceipts(db, remote));
   return results;
 }
 
 export async function syncPull(remote: PgAdapterAsync, db: Database, options: { tables: string[] }): Promise<StorageSyncResult[]> {
   const results: StorageSyncResult[] = [];
-  for (const table of options.tables) results.push(await pullTable(remote, db, table as SyncTable));
+  for (const table of options.tables) {
+    if (MESSAGE_SYNC_TABLE_SET.has(table)) continue; // routed below (messages before receipts)
+    results.push(await pullTable(remote, db, table as SyncTable));
+  }
+  if (options.tables.includes("messages")) results.push(await pullMessages(remote, db));
+  if (options.tables.includes("message_read_receipts")) results.push(await pullReceipts(remote, db));
   return results;
 }
 

@@ -838,6 +838,16 @@ export function getDb(): Database {
     db.exec("UPDATE messages SET uuid = lower(hex(randomblob(16))) WHERE uuid IS NULL");
     db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_uuid ON messages(uuid)");
   }
+  // Repair pass: older versions added the uuid column without backfilling, so
+  // long-lived databases carry NULL uuids (and, in principle, duplicates).
+  // uuid is the fleet-wide replication key (message-sync.ts) — keep it total
+  // and unique. Idempotent and cheap; runs on every open.
+  db.exec("UPDATE messages SET uuid = lower(hex(randomblob(16))) WHERE uuid IS NULL OR uuid = ''");
+  db.exec(`
+    UPDATE messages SET uuid = lower(hex(randomblob(16)))
+    WHERE id IN (SELECT m2.id FROM messages m1 JOIN messages m2 ON m1.uuid = m2.uuid AND m1.id < m2.id)
+  `);
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_uuid ON messages(uuid)");
 
   // Migrate agent_presence: add id, session_id, role, created_at columns
   let presenceCols = db.prepare("PRAGMA table_info(agent_presence)").all() as PresenceColumnInfo[];

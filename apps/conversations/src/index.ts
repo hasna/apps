@@ -102,6 +102,7 @@ export {
 } from "./lib/db.js";
 
 export {
+  ALL_STORAGE_TABLES,
   CANONICAL_CONVERSATIONS_DATABASE_ENV,
   CANONICAL_CONVERSATIONS_RDS_CLUSTER,
   CANONICAL_CONVERSATIONS_RDS_DATABASE,
@@ -133,6 +134,23 @@ export type {
   SyncConflict,
   SyncResult,
 } from "./lib/storage-sync.js";
+
+export {
+  MESSAGE_SYNC_STATE_TABLE,
+  MESSAGE_SYNC_TABLES,
+  ensureLocalMessageSyncReady,
+  ensureRemoteMessageSyncReady,
+  messageSyncStatus,
+  pullMessages,
+  pullReceipts,
+  pushMessages,
+  pushReceipts,
+} from "./lib/message-sync.js";
+export type {
+  MessageSyncResult,
+  MessageSyncStatus,
+  RemoteAdapter,
+} from "./lib/message-sync.js";
 
 export {
   startPolling,
