@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { defaultAdapters } from "../../adapters/index.js";
 import { getDatabase } from "../../db/database.js";
 import { toErrorEnvelope } from "../../types/index.js";
-import { principalHasScopes, type ApiPrincipal } from "../../server/auth.js";
+import { principalHasScope, type ApiPrincipal } from "../../server/auth.js";
 import { REGISTRY, opInProfile, validateInput, type OpContext, type Profile } from "../../services/registry.js";
 import { mcpError, mcpText } from "../compact.js";
 
@@ -18,7 +18,7 @@ export function registerDomainTools(server: McpServer, principal: ApiPrincipal, 
     if (!opInProfile(op, profile)) continue;
 
     server.tool(op.mcpTool, op.summary, op.inputShape, async (args: Record<string, unknown>) => {
-      const missing = principalHasScopes(principal, op.scopes);
+      const missing = op.scopes.filter((scope) => !principalHasScope(principal, scope));
       if (missing.length > 0) {
         return mcpError({
           code: "PERMISSION_DENIED",

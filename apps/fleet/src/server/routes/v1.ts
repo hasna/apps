@@ -3,7 +3,7 @@ import type { Database } from "bun:sqlite";
 import type { FleetAdapters } from "../../adapters/types.js";
 import { matchHttpRoute, validateInput, type OpContext } from "../../services/registry.js";
 import { toErrorEnvelope } from "../../types/index.js";
-import { principalHasScopes, type ApiPrincipal } from "../auth.js";
+import { principalHasScope, type ApiPrincipal } from "../auth.js";
 import { queryToInput } from "../list-query.js";
 
 type Variables = { principal: ApiPrincipal };
@@ -40,7 +40,7 @@ export function registerV1Routes(
 
     const { op, params } = matched;
     const principal = c.get("principal");
-    const missing = principalHasScopes(principal, op.scopes);
+    const missing = op.scopes.filter((scope) => !principalHasScope(principal, scope));
     if (missing.length > 0) {
       return c.json(
         { code: "PERMISSION_DENIED", message: `Credential lacks required scope: ${missing.join(", ")}.`, suggestion: "Request a credential with the needed scope." },

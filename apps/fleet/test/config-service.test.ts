@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { configService } from "../src/services/index.js";
+import { listSavedViews } from "../src/db/crud.js";
 import { verifyAuditChain, listAudit } from "../src/db/audit.js";
 import { EntityAccessDeniedError, SavedViewNotFoundError } from "../src/types/index.js";
 import { HASNA_INC, ACME_RO } from "../src/adapters/index.js";
@@ -69,6 +70,21 @@ describe("config service CRUD + audit + scoping", () => {
     const list = configService.listSavedViews(restricted);
     expect(list.length).toBe(1);
     expect(list[0]!.entity_id).toBe(HASNA_INC);
+  });
+
+  it("scopedRows treats an EMPTY allow-list as deny-by-default (no rows), undefined as all", () => {
+    const owner = ownerCtx();
+    configService.createSavedView(owner, { entity_id: HASNA_INC, name: "h", kind: "dashboard" });
+    configService.createSavedView(owner, { entity_id: ACME_RO, name: "a", kind: "dashboard" });
+    const db = getDbHelper();
+
+    // undefined => unconstrained (bypass/SYSTEM path) => every row.
+    expect(listSavedViews(db, undefined).length).toBe(2);
+    // EMPTY array => constrained-but-empty principal => NO rows (deny-by-default),
+    // NOT "all rows". This is the hardened path for an unscoped non-bypass caller.
+    expect(listSavedViews(db, [])).toEqual([]);
+    // Non-empty allow-list => exactly the scoped rows.
+    expect(listSavedViews(db, [HASNA_INC]).map((v) => v.entity_id)).toEqual([HASNA_INC]);
   });
 
   it("denies a get by id across entities even when the id is known", () => {

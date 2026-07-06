@@ -421,9 +421,14 @@ export function getEntitySlug(db: Database, id: string): string | null {
 // --- shared entity-scoped select ---
 
 function scopedRows<T>(db: Database, table: string, entityIds?: string[]): T[] {
-  if (!entityIds || entityIds.length === 0) {
+  // Deny-by-default: ONLY an `undefined` scope (the bypass/SYSTEM path where no
+  // allowlist was supplied) selects every row. An EMPTY allow-list array is a
+  // constrained-but-empty principal and MUST resolve to NO rows — never "all
+  // rows" — so an unscoped non-bypass caller can never leak cross-entity data.
+  if (entityIds === undefined) {
     return db.query(`SELECT * FROM ${table} ORDER BY created_at DESC`).all() as T[];
   }
+  if (entityIds.length === 0) return [];
   const placeholders = entityIds.map(() => "?").join(", ");
   return db
     .query(`SELECT * FROM ${table} WHERE entity_id IN (${placeholders}) ORDER BY created_at DESC`)
