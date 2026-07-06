@@ -7028,6 +7028,7 @@ describe("loops CLI", () => {
         title: "Review and safely merge hasna/loops#39",
         description: [
           "Fingerprint: github-pr:hasna/loops#39",
+          "pr_state=OPEN",
           `Repository: ${repo}`,
           "GitHub author is andrei-hasna",
           "GitHub reviewer pool: andrei-hasna, kriptoburak",

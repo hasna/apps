@@ -5,6 +5,30 @@ documented in this file. Version entries are generated from the
 conventional-commit git history; one commit maps to one released patch version
 unless noted.
 
+## 0.4.14 (2026-07-06)
+
+Health scan and task-routing reliability patch for the post-0.4.13 release
+line.
+
+### Fixed
+
+- **Health scan classifiers:** provider DNS failures are now classified as
+  retry-pending provider outages, Claude login failures are classified as auth
+  failures, status limits apply consistently, and bounded findings keep their
+  reported status.
+- **Task lifecycle routing:** smoke coverage uses portable paths, PR backlog
+  routes dedupe by GitHub PR fingerprint, and duplicate checkout paths no longer
+  spawn duplicate PR-review work.
+- **Workflow execution:** direct agent timeout migrations are supported, and
+  Codewith durable agent commands request JSON output so human-readable banners
+  do not poison adapter parsing.
+
+### Added
+
+- **OpenLoops health scan command:** CLI, MCP, SDK, and docs surfaces now expose
+  health scan reporting for daemon, doctor, preflight, latest-run, and
+  stale-running findings.
+
 ## 0.4.13 (2026-07-05)
 
 `--pr-handoff` workflows whose worker pushes its own branch and opens the PR
