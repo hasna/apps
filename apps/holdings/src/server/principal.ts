@@ -26,5 +26,5 @@ export const LOCAL_DEV_PRINCIPAL: ApiPrincipal = {
   credential_id: "local-dev",
   credential_type: "api_key",
   roles: ["owner"],
-  scopes: ["holdings:read", "holdings:write", "holdings:register", "holdings:renew", "holdings:export", "storage:admin", "org:admin"],
+  scopes: ["holdings:read", "holdings:write", "holdings:register", "holdings:renew", "holdings:export", "holdings:admin", "storage:admin"],
 };

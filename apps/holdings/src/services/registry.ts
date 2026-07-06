@@ -50,7 +50,7 @@ export const OP_REGISTRY: OpDef[] = [
   {
     op: "entity.seed",
     resource: "entity",
-    scope: "org:admin",
+    scope: "holdings:admin",
     mutates: true,
     api: { method: "POST", path: "/v1/entities" },
     mcpTool: "seed_entity",
