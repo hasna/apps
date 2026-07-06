@@ -948,6 +948,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["events", "ticketing", "orders"],
   },
   {
+    name: "ticketbud",
+    displayName: "Ticketbud",
+    description: "Event ticketing platform for selling tickets, tracking sales, and checking in attendees",
+    category: "Business Tools",
+    tags: ["events", "ticketing", "check-in"],
+  },
+  {
     name: "ticketmaster",
     displayName: "Ticketmaster",
     description: "Discovery API for events, attractions, and venues",
