@@ -87,6 +87,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["database", "auth", "postgres"],
   },
   {
+    name: "supabase-api-platform",
+    displayName: "Supabase Api Platform",
+    description: "Supabase Management API: projects, audit events, search, and raw API access",
+    category: "Developer Tools",
+    tags: ["api-platform", "supabase", "management", "bearer"],
+  },
+  {
     name: "mongodb",
     displayName: "MongoDB",
     description: "Document database and Atlas",
