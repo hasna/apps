@@ -899,6 +899,13 @@ export const connectors: ConnectorMeta[] = [
     tags: ["nlp", "text analytics", "sentiment", "language detection", "api"],
   },
   {
+    name: "textrazor",
+    displayName: "TextRazor",
+    description: "NLP API for entity extraction, topic detection, sentiment analysis, and text understanding",
+    category: "AI & ML",
+    tags: ["nlp", "entities", "topics", "sentiment", "text-analysis"],
+  },
+  {
     name: "thoughtfulgpt",
     displayName: "Thoughtful GPT",
     description: "AI-powered healthcare automation platform for revenue cycle and patient management",
