@@ -35,7 +35,16 @@ export const KNOWLEDGE_STORAGE_TABLES = STORAGE_TABLES;
 type StorageTable = (typeof STORAGE_TABLES)[number];
 type Row = Record<string, unknown>;
 
-export type StorageMode = 'local' | 'hybrid' | 'remote';
+/**
+ * Runtime storage mode per Amendment A1 (PURE REMOTE):
+ *   - `local`: SQLite knowledge.db is authoritative.
+ *   - `cloud`: reads AND writes go directly to the cloud Postgres.
+ * The legacy words `hybrid`, `remote`, and `self_hosted` are accepted only as
+ * deprecated aliases that normalize to `cloud` (no sync engine, no cache-mode).
+ */
+export type StorageMode = 'local' | 'cloud';
+
+const DEPRECATED_CLOUD_ALIASES = ['remote', 'hybrid', 'self_hosted'] as const;
 
 export interface StorageEnv {
   name: string;
@@ -69,6 +78,8 @@ export interface SyncMeta {
 export interface StorageRemoteAdapter {
   run(sql: string, ...params: unknown[]): Promise<{ changes: number }>;
   all(sql: string, ...params: unknown[]): Promise<unknown[]>;
+  /** First row or null. Restored via the vendored storage kit's typed get(). */
+  get?(sql: string, ...params: unknown[]): Promise<unknown | null>;
   close(): Promise<void>;
 }
 
@@ -123,8 +134,10 @@ function readEnv(name: string): string | undefined {
 }
 
 function normalizeStorageMode(value: string | undefined): StorageMode | undefined {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === 'local' || normalized === 'hybrid' || normalized === 'remote') return normalized;
+  const normalized = value?.trim().toLowerCase().replace(/-/g, '_');
+  if (normalized === 'local') return 'local';
+  if (normalized === 'cloud') return 'cloud';
+  if (normalized && (DEPRECATED_CLOUD_ALIASES as readonly string[]).includes(normalized)) return 'cloud';
   return undefined;
 }
 
@@ -159,7 +172,9 @@ export function getStorageMode(): StorageMode {
   const mode = normalizeStorageMode(readEnv(KNOWLEDGE_STORAGE_MODE_ENV))
     ?? normalizeStorageMode(readEnv(KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV));
   if (mode) return mode;
-  return getStorageDatabaseUrl() ? 'hybrid' : 'local';
+  // PURE REMOTE (A1): presence of a DATABASE_URL no longer auto-enables a
+  // hybrid runtime. Cloud mode must be requested explicitly; default is local.
+  return 'local';
 }
 
 export async function getStoragePg(): Promise<StorageRemoteAdapter> {

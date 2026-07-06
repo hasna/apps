@@ -11250,7 +11250,7 @@ function finalize(ctx, schema) {
     result.$schema = "http://json-schema.org/draft-07/schema#";
   } else if (ctx.target === "draft-04") {
     result.$schema = "http://json-schema.org/draft-04/schema#";
-  } else if (ctx.target === "openapi-3.0") {}
+  } else if (ctx.target === "openapi-3.0") {} else {}
   if (ctx.external?.uri) {
     const id = ctx.external.registry.get(schema)?.id;
     if (!id)
@@ -11511,7 +11511,7 @@ var formatMap, stringProcessor = (schema, ctx, _json, _params) => {
     if (val === undefined) {
       if (ctx.unrepresentable === "throw") {
         throw new Error("Literal `undefined` cannot be represented in JSON Schema");
-      }
+      } else {}
     } else if (typeof val === "bigint") {
       if (ctx.unrepresentable === "throw") {
         throw new Error("BigInt literals cannot be represented in JSON Schema");
@@ -14993,7 +14993,7 @@ var init_mcp_http = () => {};
 init_zod();
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { existsSync as existsSync13, readFileSync as readFileSync13, writeFileSync as writeFileSync6 } from "fs";
+import { existsSync as existsSync13, readFileSync as readFileSync14, writeFileSync as writeFileSync6 } from "fs";
 // package.json
 var package_default = {
   name: "@hasna/knowledge",
@@ -15031,7 +15031,7 @@ var package_default = {
     "smoke:machine-sync-release": "bun scripts/smoke-machine-sync-release.mjs",
     "smoke:open-files-installed-boundary": "bun scripts/smoke-open-files-installed-boundary.mjs",
     "verify:generated": "bun run build && bun scripts/verify-generated-artifacts.mjs",
-    build: "rm -rf dist && bun build --target=bun --outfile=bin/knowledge.js --minify --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --target=bun --outfile=bin/knowledge-mcp.js --external pg --external @hasna/machines --external @hasna/machines/consumer --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build ./src/index.ts ./src/storage.ts --outdir ./dist --target bun --external pg --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bun scripts/strip-generated-trailing-whitespace.mjs && bunx tsc -p tsconfig.build.json",
+    build: "rm -rf dist && bun build --target=bun --outfile=bin/knowledge.js --minify --external pg --external @hasna/contracts --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/cli.ts && bun build --target=bun --outfile=bin/knowledge-mcp.js --external pg --external @hasna/contracts --external @hasna/machines --external @hasna/machines/consumer --external @modelcontextprotocol/sdk --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek src/mcp.js && bun build ./src/index.ts ./src/storage.ts --outdir ./dist --target bun --external pg --external @hasna/contracts --external @hasna/machines --external @hasna/machines/consumer --external @aws-sdk/client-s3 --external @aws-sdk/credential-providers --external ai --external @ai-sdk/openai --external @ai-sdk/anthropic --external @ai-sdk/deepseek && bun scripts/strip-generated-trailing-whitespace.mjs && bunx tsc -p tsconfig.build.json",
     prepublishOnly: "bun run build"
   },
   keywords: [
@@ -25814,6 +25814,27 @@ function summariesMatch(left, right) {
 function migrationTimestamp(now) {
   return now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
 }
+function moveWorkspace(sourceHome, targetHome) {
+  try {
+    renameSync2(sourceHome, targetHome);
+    return;
+  } catch (error51) {
+    cpSync(sourceHome, targetHome, {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+      preserveTimestamps: true
+    });
+    try {
+      rmSync(sourceHome, { recursive: true, force: false });
+    } catch (removeError) {
+      rmSync(targetHome, { recursive: true, force: true });
+      throw removeError;
+    }
+    if (error51 instanceof Error && error51.message.includes("EXDEV"))
+      return;
+  }
+}
 function isMigrationTombstone(workspace, summary, currentHome) {
   if (!summary.exists)
     return false;
@@ -25929,7 +25950,7 @@ function migrateLegacyKnowledgeWorkspace(options) {
   if (currentBefore.exists && currentIsDefaultScaffold) {
     rmSync(options.current.home, { recursive: true, force: true });
   }
-  renameSync2(options.legacy.home, options.current.home);
+  moveWorkspace(options.legacy.home, options.current.home);
   const currentAfter = summarizeWorkspaceTree(options.current);
   checks3.migrated_matches_backup = summariesMatch(backupAfter, currentAfter);
   mkdirSync4(options.legacy.home, { recursive: true });
@@ -28572,9 +28593,129 @@ var PG_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_sync_imports_target ON knowledge_sync_imports(target_machine_id, applied_at)`,
   `CREATE INDEX IF NOT EXISTS idx_sync_imports_status ON knowledge_sync_imports(status)`
 ];
-
-// src/db/remote-storage.ts
+// src/generated/storage-kit/tls.ts
+import { readFileSync as readFileSync13 } from "fs";
+function sslModeFromConnectionString(connectionString) {
+  const queryStart = connectionString.indexOf("?");
+  const params = new URLSearchParams(queryStart === -1 ? "" : connectionString.slice(queryStart + 1));
+  const sslmode = params.get("sslmode")?.trim().toLowerCase();
+  if (sslmode) {
+    switch (sslmode) {
+      case "disable":
+      case "prefer":
+      case "require":
+      case "verify-ca":
+      case "verify-full":
+        return sslmode;
+      case "allow":
+        return "prefer";
+      default:
+        throw new Error(`Unknown sslmode '${sslmode}' in connection string.`);
+    }
+  }
+  const ssl = params.get("ssl")?.trim().toLowerCase();
+  if (ssl && ["1", "true", "yes", "on", "require"].includes(ssl))
+    return "require";
+  return "disable";
+}
+function loadCaBundle(options) {
+  const env = options.env ?? process.env;
+  if (options.ca && options.ca.trim())
+    return options.ca;
+  const path = options.caCertPath ?? env.PGSSLROOTCERT ?? env.NODE_EXTRA_CA_CERTS;
+  if (path && path.trim())
+    return readFileSync13(path.trim(), "utf8");
+  return null;
+}
+function resolveTlsConfig(connectionString, options = {}) {
+  const mode = sslModeFromConnectionString(connectionString);
+  if (mode === "disable") {
+    return;
+  }
+  const ca = loadCaBundle(options);
+  if (mode === "prefer" || mode === "require") {
+    return ca ? { rejectUnauthorized: false, ca } : { rejectUnauthorized: false };
+  }
+  if (!ca) {
+    throw new Error(`sslmode=${mode} requires a CA bundle. Set PGSSLROOTCERT (or pass caCertPath/ca) to the ` + `Amazon RDS global bundle: https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem`);
+  }
+  return { rejectUnauthorized: true, ca };
+}
+// src/generated/storage-kit/query.ts
+function wrapExecutor(executor) {
+  return {
+    async query(sql, params) {
+      const result = await executor.query(sql, params);
+      return { rows: result.rows, rowCount: result.rowCount ?? result.rows.length };
+    },
+    async many(sql, params) {
+      const result = await executor.query(sql, params);
+      return result.rows;
+    },
+    async get(sql, params) {
+      const result = await executor.query(sql, params);
+      return result.rows[0] ?? null;
+    },
+    async one(sql, params) {
+      const result = await executor.query(sql, params);
+      if (result.rows.length !== 1) {
+        throw new Error(`Expected exactly one row, got ${result.rows.length}.`);
+      }
+      return result.rows[0];
+    },
+    async execute(sql, params) {
+      await executor.query(sql, params);
+    }
+  };
+}
+function createQueryClient(pool) {
+  const base = wrapExecutor(pool);
+  return {
+    ...base,
+    pool,
+    async transaction(fn) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const result = await fn(wrapExecutor(client));
+        await client.query("COMMIT");
+        return result;
+      } catch (error51) {
+        try {
+          await client.query("ROLLBACK");
+        } catch {}
+        throw error51;
+      } finally {
+        client.release();
+      }
+    },
+    async close() {
+      await pool.end();
+    }
+  };
+}
+// src/generated/storage-kit/pool.ts
 import pg from "pg";
+function createPgPool(options) {
+  const ssl = resolveTlsConfig(options.connectionString, {
+    ...options.ca !== undefined ? { ca: options.ca } : {},
+    ...options.caCertPath !== undefined ? { caCertPath: options.caCertPath } : {},
+    ...options.env !== undefined ? { env: options.env } : {}
+  });
+  const config2 = { connectionString: options.connectionString };
+  if (ssl !== undefined)
+    config2.ssl = ssl;
+  if (options.max !== undefined)
+    config2.max = options.max;
+  if (options.idleTimeoutMillis !== undefined)
+    config2.idleTimeoutMillis = options.idleTimeoutMillis;
+  if (options.connectionTimeoutMillis !== undefined)
+    config2.connectionTimeoutMillis = options.connectionTimeoutMillis;
+  if (options.applicationName !== undefined)
+    config2.application_name = options.applicationName;
+  return new pg.Pool(config2);
+}
+// src/db/remote-storage.ts
 function translatePlaceholders(sql) {
   let index = 0;
   return sql.replace(/\?/g, () => `$${++index}`);
@@ -28583,25 +28724,32 @@ function normalizeParams2(params) {
   const flat = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
   return flat.map((value) => value === undefined ? null : value);
 }
-function sslConfigFor(connectionString) {
-  return connectionString.includes("sslmode=require") || connectionString.includes("ssl=true") ? { rejectUnauthorized: false } : undefined;
-}
 
 class PgAdapterAsync {
-  pool;
+  client;
   constructor(connectionString) {
-    this.pool = new pg.Pool({ connectionString, ssl: sslConfigFor(connectionString) });
+    const pool2 = createPgPool({
+      connectionString,
+      applicationName: "@hasna/knowledge"
+    });
+    this.client = createQueryClient(pool2);
+  }
+  get pool() {
+    return this.client.pool;
   }
   async run(sql, ...params) {
-    const result = await this.pool.query(translatePlaceholders(sql), normalizeParams2(params));
-    return { changes: result.rowCount ?? 0 };
+    const result = await this.client.query(translatePlaceholders(sql), normalizeParams2(params));
+    return { changes: result.rowCount };
   }
   async all(sql, ...params) {
-    const result = await this.pool.query(translatePlaceholders(sql), normalizeParams2(params));
+    const result = await this.client.query(translatePlaceholders(sql), normalizeParams2(params));
     return result.rows;
   }
+  async get(sql, ...params) {
+    return this.client.get(translatePlaceholders(sql), normalizeParams2(params));
+  }
   async close() {
-    await this.pool.end();
+    await this.client.close();
   }
 }
 
@@ -28631,6 +28779,7 @@ var STORAGE_TABLES = [
   "knowledge_sync_table_clocks",
   "knowledge_sync_imports"
 ];
+var DEPRECATED_CLOUD_ALIASES = ["remote", "hybrid", "self_hosted"];
 var KNOWLEDGE_STORAGE_ENV = "HASNA_KNOWLEDGE_DATABASE_URL";
 var KNOWLEDGE_STORAGE_FALLBACK_ENV = "KNOWLEDGE_DATABASE_URL";
 var KNOWLEDGE_STORAGE_MODE_ENV = "HASNA_KNOWLEDGE_STORAGE_MODE";
@@ -28666,9 +28815,13 @@ function readEnv(name) {
   return value || undefined;
 }
 function normalizeStorageMode(value) {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === "local" || normalized === "hybrid" || normalized === "remote")
-    return normalized;
+  const normalized = value?.trim().toLowerCase().replace(/-/g, "_");
+  if (normalized === "local")
+    return "local";
+  if (normalized === "cloud")
+    return "cloud";
+  if (normalized && DEPRECATED_CLOUD_ALIASES.includes(normalized))
+    return "cloud";
   return;
 }
 function openScopedDb(options = {}) {
@@ -28696,10 +28849,10 @@ function getStorageDatabaseUrl() {
   return env ? readEnv(env.name) ?? null : null;
 }
 function getStorageMode() {
-  const mode = normalizeStorageMode(readEnv(KNOWLEDGE_STORAGE_MODE_ENV)) ?? normalizeStorageMode(readEnv(KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV));
-  if (mode)
-    return mode;
-  return getStorageDatabaseUrl() ? "hybrid" : "local";
+  const mode2 = normalizeStorageMode(readEnv(KNOWLEDGE_STORAGE_MODE_ENV)) ?? normalizeStorageMode(readEnv(KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV));
+  if (mode2)
+    return mode2;
+  return "local";
 }
 async function getStoragePg() {
   const url2 = getStorageDatabaseUrl();
@@ -29587,11 +29740,11 @@ function buildServer() {
     model: exports_external.string().optional().describe("Embedding model ref"),
     dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
     fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings")
-  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
+  }, async ({ scope, query: query2, limit, semantic, model, dimensions, fake }) => {
     const service = createKnowledgeService({ scope: scope ?? "project" });
     try {
       return jsonText({ ok: true, ...await service.searchAppWiki({
-        query,
+        query: query2,
         limit,
         semantic,
         modelRef: model,
@@ -29610,11 +29763,11 @@ function buildServer() {
     model: exports_external.string().optional().describe("Embedding model ref"),
     dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
     fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings")
-  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
+  }, async ({ scope, query: query2, limit, semantic, model, dimensions, fake }) => {
     const service = createKnowledgeService({ scope: scope ?? "project" });
     try {
       return jsonText({ ok: true, ...await service.queryAppWiki({
-        query,
+        query: query2,
         limit,
         semantic,
         modelRef: model,
@@ -29748,10 +29901,10 @@ function buildServer() {
     mode: exports_external.enum(["deterministic", "ai"]).optional().describe("Proposal mode; ai uses configured AI SDK provider and remains read-only"),
     model: exports_external.string().optional().describe("Model alias/ref for AI mode"),
     fake: exports_external.boolean().optional().describe("Use deterministic fake AI proposal output for local tests")
-  }, async ({ scope, id, mode, model, fake }) => {
+  }, async ({ scope, id, mode: mode2, model, fake }) => {
     const service = createKnowledgeService({ scope });
     try {
-      return jsonText(mode === "ai" ? await service.proposeSyncConflictResolutionWithAi({ id, modelRef: model, fake }) : service.proposeSyncConflictResolution(id));
+      return jsonText(mode2 === "ai" ? await service.proposeSyncConflictResolutionWithAi({ id, modelRef: model, fake }) : service.proposeSyncConflictResolution(id));
     } catch (error51) {
       return errorText(error51 instanceof Error ? error51.message : String(error51));
     }
@@ -29952,10 +30105,10 @@ function buildServer() {
     model: exports_external.string().optional().describe("Embedding model ref, default openai:text-embedding-3-small"),
     dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
     fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings for local tests")
-  }, async ({ scope, query, limit, model, dimensions, fake }) => {
+  }, async ({ scope, query: query2, limit, model, dimensions, fake }) => {
     const service = createKnowledgeService({ scope });
     try {
-      return jsonText({ ok: true, ...await service.semanticSearch({ query, limit, modelRef: model, dimensions, fake }) });
+      return jsonText({ ok: true, ...await service.semanticSearch({ query: query2, limit, modelRef: model, dimensions, fake }) });
     } catch (error51) {
       return errorText(error51 instanceof Error ? error51.message : String(error51));
     }
@@ -29968,10 +30121,10 @@ function buildServer() {
     model: exports_external.string().optional().describe("Embedding model ref, default openai:text-embedding-3-small"),
     dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
     fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings for local tests")
-  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
+  }, async ({ scope, query: query2, limit, semantic, model, dimensions, fake }) => {
     const service = createKnowledgeService({ scope });
     try {
-      return jsonText({ ok: true, ...await service.search({ query, limit, semantic, modelRef: model, dimensions, fake }) });
+      return jsonText({ ok: true, ...await service.search({ query: query2, limit, semantic, modelRef: model, dimensions, fake }) });
     } catch (error51) {
       return errorText(error51 instanceof Error ? error51.message : String(error51));
     }
@@ -29984,10 +30137,10 @@ function buildServer() {
     model: exports_external.string().optional().describe("Embedding model ref, default openai:text-embedding-3-small"),
     dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
     fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings for local tests")
-  }, async ({ scope, query, limit, semantic, model, dimensions, fake }) => {
+  }, async ({ scope, query: query2, limit, semantic, model, dimensions, fake }) => {
     const service = createKnowledgeService({ scope });
     try {
-      return jsonText({ ok: true, ...await service.retrieveContext({ query, limit, semantic, modelRef: model, dimensions, fake }) });
+      return jsonText({ ok: true, ...await service.retrieveContext({ query: query2, limit, semantic, modelRef: model, dimensions, fake }) });
     } catch (error51) {
       return errorText(error51 instanceof Error ? error51.message : String(error51));
     }
@@ -30006,7 +30159,7 @@ function buildServer() {
     model: exports_external.string().optional().describe("Embedding model ref, default openai:text-embedding-3-small"),
     dimensions: exports_external.number().optional().describe("Embedding dimensions for deterministic fake mode"),
     fake: exports_external.boolean().optional().describe("Use deterministic fake embeddings for local tests")
-  }, async ({ scope, query, topic, from, since, max_tokens, max_items, limit, semantic, dedupe, model, dimensions, fake }) => {
+  }, async ({ scope, query: query2, topic, from, since, max_tokens, max_items, limit, semantic, dedupe, model, dimensions, fake }) => {
     const service = createKnowledgeService({ scope });
     try {
       return compactJsonText({
@@ -30014,7 +30167,7 @@ function buildServer() {
         ...await service.contextPack({
           source: from ?? "search",
           purpose: from === "loops" || from === "runs" ? "proposal" : "agent_context",
-          query: query ?? topic ?? "",
+          query: query2 ?? topic ?? "",
           topic,
           since,
           maxTokens: max_tokens,
@@ -30129,10 +30282,10 @@ function buildServer() {
     domains: exports_external.array(exports_external.string()).optional().describe("Allowed domains"),
     fake: exports_external.boolean().optional().describe("Use deterministic fake web results"),
     file_results: exports_external.boolean().optional().describe("File web snippets as web source refs")
-  }, async ({ scope, query, limit, provider, model, domains, fake, file_results }) => {
+  }, async ({ scope, query: query2, limit, provider, model, domains, fake, file_results }) => {
     const service = createKnowledgeService({ scope });
     try {
-      return jsonText({ ok: true, ...await service.webSearch({ query, limit, provider, modelRef: model, domains, fake, fileResults: file_results }) });
+      return jsonText({ ok: true, ...await service.webSearch({ query: query2, limit, provider, modelRef: model, domains, fake, fileResults: file_results }) });
     } catch (error51) {
       return errorText(error51 instanceof Error ? error51.message : String(error51));
     }
@@ -30202,10 +30355,10 @@ function buildServer() {
     domains: exports_external.array(exports_external.string()).optional().describe("Allowed domains"),
     fake: exports_external.boolean().optional().describe("Use deterministic fake web results"),
     file_results: exports_external.boolean().optional().describe("File web snippets as web source refs")
-  }, async ({ scope, query, limit, provider, model, domains, fake, file_results }) => {
+  }, async ({ scope, query: query2, limit, provider, model, domains, fake, file_results }) => {
     const service = createKnowledgeService({ scope });
     try {
-      return jsonText({ ok: true, ...await service.webSearch({ query, limit, provider, modelRef: model, domains, fake, fileResults: file_results }) });
+      return jsonText({ ok: true, ...await service.webSearch({ query: query2, limit, provider, modelRef: model, domains, fake, fileResults: file_results }) });
     } catch (error51) {
       return errorText(error51 instanceof Error ? error51.message : String(error51));
     }
@@ -30545,7 +30698,7 @@ function buildServer() {
   }, async ({ file: file2, store_path, scope }) => {
     if (!existsSync13(file2))
       return errorText(`File not found: ${file2}`);
-    const imported = JSON.parse(readFileSync13(file2, "utf8"));
+    const imported = JSON.parse(readFileSync14(file2, "utf8"));
     if (!imported || !Array.isArray(imported.items))
       return errorText('Invalid import file: expected {"items": [...]}');
     const storePath = resolveStorePath(store_path, scope);

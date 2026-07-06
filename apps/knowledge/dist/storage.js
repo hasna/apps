@@ -1029,8 +1029,371 @@ var PG_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_sync_imports_status ON knowledge_sync_imports(status)`
 ];
 
-// src/db/remote-storage.ts
+// src/generated/storage-kit/mode.ts
+var DEPRECATED_STORAGE_MODE_ALIASES = [
+  "remote",
+  "hybrid",
+  "self_hosted"
+];
+function normalizeStorageMode(value) {
+  const normalized = value.trim().toLowerCase().replace(/-/g, "_");
+  if (normalized === "local")
+    return { mode: "local", deprecatedAlias: null };
+  if (normalized === "cloud")
+    return { mode: "cloud", deprecatedAlias: null };
+  if (DEPRECATED_STORAGE_MODE_ALIASES.includes(normalized)) {
+    return { mode: "cloud", deprecatedAlias: normalized };
+  }
+  throw new Error(`Unknown storage mode: ${value}. Use local or cloud.`);
+}
+function envToken(name) {
+  return name.toUpperCase().replace(/-/g, "_");
+}
+function storageEnvKeys(name) {
+  const token = envToken(name);
+  return {
+    modeKeys: [`HASNA_${token}_STORAGE_MODE`, `${token}_STORAGE_MODE`],
+    databaseUrlKeys: [`HASNA_${token}_DATABASE_URL`, `${token}_DATABASE_URL`]
+  };
+}
+function firstEnv(env, keys) {
+  for (const key of keys) {
+    const value = env[key]?.trim();
+    if (value)
+      return { key, value };
+  }
+  return null;
+}
+function resolveStorageMode(name, env = process.env) {
+  const { modeKeys, databaseUrlKeys } = storageEnvKeys(name);
+  const dbHit = firstEnv(env, databaseUrlKeys);
+  const databaseUrlPresent = Boolean(dbHit);
+  const databaseUrlSource = dbHit ? dbHit.key : null;
+  const modeHit = firstEnv(env, modeKeys);
+  if (!modeHit) {
+    return {
+      mode: "local",
+      source: "default",
+      deprecatedAlias: null,
+      databaseUrlPresent,
+      databaseUrlSource,
+      warning: null
+    };
+  }
+  const { mode, deprecatedAlias } = normalizeStorageMode(modeHit.value);
+  const warnings = [];
+  if (deprecatedAlias) {
+    warnings.push(`Deprecated storage mode '${deprecatedAlias}' from ${modeHit.key} is treated as 'cloud'. Set ${modeKeys[0]}=cloud instead.`);
+  }
+  if (mode === "cloud" && !databaseUrlPresent) {
+    warnings.push(`cloud mode needs ${databaseUrlKeys[0]} (PURE REMOTE: reads and writes go to cloud Postgres).`);
+  }
+  if (modeHit.key !== modeKeys[0]) {
+    warnings.push(`Using alias env ${modeHit.key}; the canonical key is ${modeKeys[0]}.`);
+  }
+  return {
+    mode,
+    source: modeHit.key,
+    deprecatedAlias,
+    databaseUrlPresent,
+    databaseUrlSource,
+    warning: warnings.length > 0 ? warnings.join(" ") : null
+  };
+}
+function resolveDatabaseUrl(name, env = process.env) {
+  const { databaseUrlKeys } = storageEnvKeys(name);
+  const hit = firstEnv(env, databaseUrlKeys);
+  return hit ? hit.value : null;
+}
+// src/generated/storage-kit/tls.ts
+import { readFileSync as readFileSync2 } from "fs";
+function sslModeFromConnectionString(connectionString) {
+  const queryStart = connectionString.indexOf("?");
+  const params = new URLSearchParams(queryStart === -1 ? "" : connectionString.slice(queryStart + 1));
+  const sslmode = params.get("sslmode")?.trim().toLowerCase();
+  if (sslmode) {
+    switch (sslmode) {
+      case "disable":
+      case "prefer":
+      case "require":
+      case "verify-ca":
+      case "verify-full":
+        return sslmode;
+      case "allow":
+        return "prefer";
+      default:
+        throw new Error(`Unknown sslmode '${sslmode}' in connection string.`);
+    }
+  }
+  const ssl = params.get("ssl")?.trim().toLowerCase();
+  if (ssl && ["1", "true", "yes", "on", "require"].includes(ssl))
+    return "require";
+  return "disable";
+}
+function loadCaBundle(options) {
+  const env = options.env ?? process.env;
+  if (options.ca && options.ca.trim())
+    return options.ca;
+  const path = options.caCertPath ?? env.PGSSLROOTCERT ?? env.NODE_EXTRA_CA_CERTS;
+  if (path && path.trim())
+    return readFileSync2(path.trim(), "utf8");
+  return null;
+}
+function resolveTlsConfig(connectionString, options = {}) {
+  const mode = sslModeFromConnectionString(connectionString);
+  if (mode === "disable") {
+    return;
+  }
+  const ca = loadCaBundle(options);
+  if (mode === "prefer" || mode === "require") {
+    return ca ? { rejectUnauthorized: false, ca } : { rejectUnauthorized: false };
+  }
+  if (!ca) {
+    throw new Error(`sslmode=${mode} requires a CA bundle. Set PGSSLROOTCERT (or pass caCertPath/ca) to the ` + `Amazon RDS global bundle: https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem`);
+  }
+  return { rejectUnauthorized: true, ca };
+}
+// src/generated/storage-kit/query.ts
+function wrapExecutor(executor) {
+  return {
+    async query(sql, params) {
+      const result = await executor.query(sql, params);
+      return { rows: result.rows, rowCount: result.rowCount ?? result.rows.length };
+    },
+    async many(sql, params) {
+      const result = await executor.query(sql, params);
+      return result.rows;
+    },
+    async get(sql, params) {
+      const result = await executor.query(sql, params);
+      return result.rows[0] ?? null;
+    },
+    async one(sql, params) {
+      const result = await executor.query(sql, params);
+      if (result.rows.length !== 1) {
+        throw new Error(`Expected exactly one row, got ${result.rows.length}.`);
+      }
+      return result.rows[0];
+    },
+    async execute(sql, params) {
+      await executor.query(sql, params);
+    }
+  };
+}
+function createQueryClient(pool) {
+  const base = wrapExecutor(pool);
+  return {
+    ...base,
+    pool,
+    async transaction(fn) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const result = await fn(wrapExecutor(client));
+        await client.query("COMMIT");
+        return result;
+      } catch (error) {
+        try {
+          await client.query("ROLLBACK");
+        } catch {}
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+    async close() {
+      await pool.end();
+    }
+  };
+}
+// src/generated/storage-kit/pool.ts
 import pg from "pg";
+function createPgPool(options) {
+  const ssl = resolveTlsConfig(options.connectionString, {
+    ...options.ca !== undefined ? { ca: options.ca } : {},
+    ...options.caCertPath !== undefined ? { caCertPath: options.caCertPath } : {},
+    ...options.env !== undefined ? { env: options.env } : {}
+  });
+  const config = { connectionString: options.connectionString };
+  if (ssl !== undefined)
+    config.ssl = ssl;
+  if (options.max !== undefined)
+    config.max = options.max;
+  if (options.idleTimeoutMillis !== undefined)
+    config.idleTimeoutMillis = options.idleTimeoutMillis;
+  if (options.connectionTimeoutMillis !== undefined)
+    config.connectionTimeoutMillis = options.connectionTimeoutMillis;
+  if (options.applicationName !== undefined)
+    config.application_name = options.applicationName;
+  return new pg.Pool(config);
+}
+function createCloudPoolFromEnv(appName, options = {}) {
+  const env = options.env ?? process.env;
+  const resolution = resolveStorageMode(appName, env);
+  if (resolution.mode !== "cloud") {
+    throw new Error(`createCloudPoolFromEnv requires ${appName} storage mode 'cloud', got '${resolution.mode}'. ` + `Set HASNA_${appName.toUpperCase().replace(/-/g, "_")}_STORAGE_MODE=cloud.`);
+  }
+  const connectionString = resolveDatabaseUrl(appName, env);
+  if (!connectionString) {
+    throw new Error(`cloud mode for ${appName} needs a database URL. Set ` + `HASNA_${appName.toUpperCase().replace(/-/g, "_")}_DATABASE_URL.`);
+  }
+  const pool = createPgPool({
+    connectionString,
+    ...options.ca !== undefined ? { ca: options.ca } : {},
+    ...options.caCertPath !== undefined ? { caCertPath: options.caCertPath } : {},
+    env,
+    ...options.max !== undefined ? { max: options.max } : {},
+    ...options.idleTimeoutMillis !== undefined ? { idleTimeoutMillis: options.idleTimeoutMillis } : {},
+    ...options.connectionTimeoutMillis !== undefined ? { connectionTimeoutMillis: options.connectionTimeoutMillis } : {},
+    ...options.applicationName !== undefined ? { applicationName: options.applicationName } : {}
+  });
+  return {
+    client: createQueryClient(pool),
+    connectionSource: resolution.databaseUrlSource ?? "unknown"
+  };
+}
+// src/generated/storage-kit/migrations.ts
+import { createHash } from "crypto";
+var DEFAULT_MIGRATION_LEDGER_TABLE = "schema_migrations";
+function checksumSql(sql) {
+  const normalized = sql.trim().replace(/\r\n/g, `
+`);
+  return `sha256:${createHash("sha256").update(normalized).digest("hex")}`;
+}
+function defineMigration(id, sql) {
+  return Object.freeze({ id, sql: sql.trim(), checksum: checksumSql(sql) });
+}
+function hasTransaction(client) {
+  return typeof client.transaction === "function";
+}
+
+class MigrationLedger {
+  client;
+  migrations;
+  ledgerTable;
+  constructor(client, migrations, options = {}) {
+    this.client = client;
+    this.migrations = migrations;
+    this.ledgerTable = options.ledgerTable ?? DEFAULT_MIGRATION_LEDGER_TABLE;
+    const seen = new Set;
+    for (const migration of migrations) {
+      if (seen.has(migration.id))
+        throw new Error(`Duplicate migration id: ${migration.id}`);
+      seen.add(migration.id);
+    }
+  }
+  async ensureLedger() {
+    await this.client.execute(`CREATE TABLE IF NOT EXISTS ${this.ledgerTable} (
+         id TEXT PRIMARY KEY,
+         checksum TEXT NOT NULL,
+         applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+       )`);
+  }
+  async listApplied() {
+    await this.ensureLedger();
+    return this.readApplied();
+  }
+  async readApplied() {
+    const rows = await this.client.many(`SELECT id, checksum, applied_at FROM ${this.ledgerTable} ORDER BY id ASC`);
+    return rows.map((row) => ({
+      id: row.id,
+      checksum: row.checksum,
+      appliedAt: row.applied_at instanceof Date ? row.applied_at.toISOString() : String(row.applied_at)
+    }));
+  }
+  buildPlan(applied) {
+    const known = new Set(this.migrations.map((m) => m.id));
+    for (const row of applied) {
+      if (!known.has(row.id)) {
+        throw new Error(`Applied migration '${row.id}' is not recognized by this build (downgrade?).`);
+      }
+    }
+    const appliedById = new Map(applied.map((row) => [row.id, row]));
+    for (const migration of this.migrations) {
+      const existing = appliedById.get(migration.id);
+      if (existing && existing.checksum !== migration.checksum) {
+        throw new Error(`Migration checksum mismatch for '${migration.id}': the SQL changed after it was applied.`);
+      }
+    }
+    return this.migrations.map((migration) => ({
+      migration,
+      state: appliedById.has(migration.id) ? "already_applied" : "pending"
+    }));
+  }
+  async migrate(opts = {}) {
+    const dryRun = opts.dryRun === true;
+    await this.ensureLedger();
+    const applied = await this.readApplied();
+    const plan = this.buildPlan(applied);
+    if (dryRun)
+      return { dryRun, applied, plan };
+    for (const item of plan) {
+      if (item.state === "already_applied")
+        continue;
+      await this.applyPendingMigration(item.migration);
+    }
+    return { dryRun, applied: await this.readApplied(), plan };
+  }
+  async applyPendingMigration(migration) {
+    const apply = async (client) => {
+      await client.execute(migration.sql);
+      await client.execute(`INSERT INTO ${this.ledgerTable} (id, checksum, applied_at) VALUES ($1, $2, now())`, [migration.id, migration.checksum]);
+    };
+    if (hasTransaction(this.client)) {
+      await this.client.transaction(apply);
+      return;
+    }
+    await this.client.execute("BEGIN");
+    try {
+      await apply(this.client);
+      await this.client.execute("COMMIT");
+    } catch (error) {
+      try {
+        await this.client.execute("ROLLBACK");
+      } catch {}
+      throw error;
+    }
+  }
+}
+function createMigrationLedger(client, migrations, options = {}) {
+  return new MigrationLedger(client, migrations, options);
+}
+// src/generated/storage-kit/health.ts
+async function checkHealth(client) {
+  const start = Date.now();
+  try {
+    await client.get("SELECT 1 AS ok");
+    return { ok: true, latencyMs: Date.now() - start };
+  } catch (error) {
+    return {
+      ok: false,
+      latencyMs: Date.now() - start,
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+async function checkReady(client, migrations, options = {}) {
+  const start = Date.now();
+  try {
+    const ledger = new MigrationLedger(client, migrations, options);
+    const result = await ledger.migrate({ dryRun: true });
+    const pending = result.plan.filter((item) => item.state === "pending").map((item) => item.migration.id);
+    return { ok: pending.length === 0, latencyMs: Date.now() - start, pendingMigrations: pending };
+  } catch (error) {
+    return {
+      ok: false,
+      latencyMs: Date.now() - start,
+      pendingMigrations: [],
+      error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+// src/generated/storage-kit/index.ts
+var KIT_VERSION = "0.4.0";
+
+// src/db/remote-storage.ts
+var KNOWLEDGE_APP_NAME = "knowledge";
 function translatePlaceholders(sql) {
   let index = 0;
   return sql.replace(/\?/g, () => `$${++index}`);
@@ -1039,26 +1402,36 @@ function normalizeParams(params) {
   const flat = params.length === 1 && Array.isArray(params[0]) ? params[0] : params;
   return flat.map((value) => value === undefined ? null : value);
 }
-function sslConfigFor(connectionString) {
-  return connectionString.includes("sslmode=require") || connectionString.includes("ssl=true") ? { rejectUnauthorized: false } : undefined;
-}
 
 class PgAdapterAsync {
-  pool;
+  client;
   constructor(connectionString) {
-    this.pool = new pg.Pool({ connectionString, ssl: sslConfigFor(connectionString) });
+    const pool2 = createPgPool({
+      connectionString,
+      applicationName: "@hasna/knowledge"
+    });
+    this.client = createQueryClient(pool2);
+  }
+  get pool() {
+    return this.client.pool;
   }
   async run(sql, ...params) {
-    const result = await this.pool.query(translatePlaceholders(sql), normalizeParams(params));
-    return { changes: result.rowCount ?? 0 };
+    const result = await this.client.query(translatePlaceholders(sql), normalizeParams(params));
+    return { changes: result.rowCount };
   }
   async all(sql, ...params) {
-    const result = await this.pool.query(translatePlaceholders(sql), normalizeParams(params));
+    const result = await this.client.query(translatePlaceholders(sql), normalizeParams(params));
     return result.rows;
   }
-  async close() {
-    await this.pool.end();
+  async get(sql, ...params) {
+    return this.client.get(translatePlaceholders(sql), normalizeParams(params));
   }
+  async close() {
+    await this.client.close();
+  }
+}
+function createKnowledgeCloudClient() {
+  return createCloudPoolFromEnv(KNOWLEDGE_APP_NAME, { applicationName: "@hasna/knowledge" }).client;
 }
 
 // src/db/storage-sync.ts
@@ -1088,6 +1461,7 @@ var STORAGE_TABLES = [
   "knowledge_sync_imports"
 ];
 var KNOWLEDGE_STORAGE_TABLES = STORAGE_TABLES;
+var DEPRECATED_CLOUD_ALIASES = ["remote", "hybrid", "self_hosted"];
 var KNOWLEDGE_STORAGE_ENV = "HASNA_KNOWLEDGE_DATABASE_URL";
 var KNOWLEDGE_STORAGE_FALLBACK_ENV = "KNOWLEDGE_DATABASE_URL";
 var KNOWLEDGE_STORAGE_MODE_ENV = "HASNA_KNOWLEDGE_STORAGE_MODE";
@@ -1123,10 +1497,14 @@ function readEnv(name) {
   const value = process.env[name]?.trim();
   return value || undefined;
 }
-function normalizeStorageMode(value) {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === "local" || normalized === "hybrid" || normalized === "remote")
-    return normalized;
+function normalizeStorageMode2(value) {
+  const normalized = value?.trim().toLowerCase().replace(/-/g, "_");
+  if (normalized === "local")
+    return "local";
+  if (normalized === "cloud")
+    return "cloud";
+  if (normalized && DEPRECATED_CLOUD_ALIASES.includes(normalized))
+    return "cloud";
   return;
 }
 function openScopedDb(options = {}) {
@@ -1154,10 +1532,10 @@ function getStorageDatabaseUrl() {
   return env ? readEnv(env.name) ?? null : null;
 }
 function getStorageMode() {
-  const mode = normalizeStorageMode(readEnv(KNOWLEDGE_STORAGE_MODE_ENV)) ?? normalizeStorageMode(readEnv(KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV));
-  if (mode)
-    return mode;
-  return getStorageDatabaseUrl() ? "hybrid" : "local";
+  const mode2 = normalizeStorageMode2(readEnv(KNOWLEDGE_STORAGE_MODE_ENV)) ?? normalizeStorageMode2(readEnv(KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV));
+  if (mode2)
+    return mode2;
+  return "local";
 }
 async function getStoragePg() {
   const url = getStorageDatabaseUrl();
@@ -1403,12 +1781,18 @@ function coerceForSqlite(value) {
   return String(value);
 }
 export {
+  wrapExecutor,
   storageSync,
   storagePush,
   storagePull,
+  storageEnvKeys,
   runStorageMigrations,
+  resolveTlsConfig,
   resolveTables,
+  resolveStorageMode,
+  resolveDatabaseUrl,
   parseStorageTables,
+  normalizeStorageMode as normalizeCloudStorageMode,
   getSyncMetaAll,
   getStorageStatus,
   getStoragePg,
@@ -1416,14 +1800,26 @@ export {
   getStorageDatabaseUrl,
   getStorageDatabaseEnvName,
   getStorageDatabaseEnv,
+  defineMigration,
+  createQueryClient,
+  createPgPool,
+  createMigrationLedger,
+  createKnowledgeCloudClient,
+  createCloudPoolFromEnv,
+  checksumSql,
+  checkReady,
+  checkHealth,
   STORAGE_TABLES,
   STORAGE_MODE_ENV,
   STORAGE_DATABASE_ENV,
   PgAdapterAsync,
   PG_MIGRATIONS,
+  MigrationLedger,
   KNOWLEDGE_STORAGE_TABLES,
   KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV,
   KNOWLEDGE_STORAGE_MODE_ENV,
   KNOWLEDGE_STORAGE_FALLBACK_ENV,
-  KNOWLEDGE_STORAGE_ENV
+  KNOWLEDGE_STORAGE_ENV,
+  KNOWLEDGE_APP_NAME,
+  KIT_VERSION
 };

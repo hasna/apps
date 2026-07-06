@@ -1,0 +1,16 @@
+{
+  "schema": "hasna.service_contract.v1",
+  "name": "knowledge",
+  "class": "cli-with-store",
+  "contractVersion": "v1",
+  "kitVersion": "0.4.0",
+  "description": "Agent-friendly knowledge store CLI + MCP. Local mode uses SQLite at ~/.hasna/knowledge/knowledge.db; cloud mode (HASNA_KNOWLEDGE_STORAGE_MODE=cloud) is PURE REMOTE per Amendment A1 with all reads/writes hitting the shared cloud Postgres and artifacts in S3.",
+  "bins": ["knowledge", "knowledge-mcp"],
+  "storage": {
+    "mode": "local",
+    "envPrefix": "HASNA_KNOWLEDGE_",
+    "aliasEnvPrefix": "KNOWLEDGE_",
+    "databaseUrlSecretRef": "hasna/oss/knowledge/database-url",
+    "sqlitePath": "~/.hasna/knowledge/knowledge.db"
+  }
+}

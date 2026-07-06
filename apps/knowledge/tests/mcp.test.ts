@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +23,10 @@ function makeTempDir(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   tempDirs.push(dir);
   return dir;
+}
+
+function expectedProjectKnowledgeHome(projectDir: string): string {
+  return join(realpathSync(projectDir), '.hasna', 'knowledge');
 }
 
 function writeWindowsCmdShim(bin: string, name: string): void {
@@ -771,7 +775,7 @@ describe('knowledge MCP', () => {
         arguments: { scope: 'project' },
       }));
       expect(appWikiInit.scope).toBe('project');
-      expect(appWikiInit.workspace_home).toBe(join(dir, '.hasna', 'knowledge'));
+      expect(appWikiInit.workspace_home).toBe(expectedProjectKnowledgeHome(dir));
 
       const appWikiNote = parseToolJson(await client.callTool({
         name: 'knowledge_app_wiki_note_add',

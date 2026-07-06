@@ -81,6 +81,10 @@ function expectSameExistingPath(actual: string, expected: string): void {
   expect(realpathSync(actual)).toBe(realpathSync(expected));
 }
 
+function expectedProjectKnowledgeHome(projectDir: string): string {
+  return join(realpathSync(projectDir), '.hasna', 'knowledge');
+}
+
 function createSchema7KnowledgeDb(dbPath: string): void {
   migrateKnowledgeDb(dbPath);
   const db = openKnowledgeDb(dbPath);
@@ -552,7 +556,7 @@ describe('knowledge cli', () => {
     const paths = runCli(['paths', '--scope', 'project', '--json'], dir);
     expect(paths.exitCode).toBe(0);
     const pathsOut = JSON.parse(new TextDecoder().decode(paths.stdout));
-    expect(pathsOut.home).toBe(join(dir, '.hasna', 'knowledge'));
+    expect(pathsOut.home).toBe(expectedProjectKnowledgeHome(dir));
     expect(pathsOut.exists).toBe(false);
     expect(pathsOut.config_exists).toBe(false);
     expect(pathsOut.json_store_exists).toBe(false);
@@ -616,7 +620,7 @@ describe('knowledge cli', () => {
     expect(panel.exitCode).toBe(0);
     const panelOut = JSON.parse(new TextDecoder().decode(panel.stdout));
     expect(panelOut.schema).toBe('hasna.project_panel.v1');
-    expect(panelOut.metadata.home).toBe(join(dir, '.hasna', 'knowledge'));
+    expect(panelOut.metadata.home).toBe(expectedProjectKnowledgeHome(dir));
     expect(panelOut.metadata.json_store_exists).toBe(false);
     expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
 
@@ -740,7 +744,13 @@ describe('knowledge cli', () => {
       'cli-test',
       '--json',
     ], dir);
-    expect(applied.exitCode).toBe(0);
+    if (applied.exitCode !== 0) {
+      throw new Error([
+        `migrate-legacy-path failed with exit code ${applied.exitCode}`,
+        `stdout: ${new TextDecoder().decode(applied.stdout)}`,
+        `stderr: ${new TextDecoder().decode(applied.stderr)}`,
+      ].join('\n'));
+    }
     const appliedOut = JSON.parse(new TextDecoder().decode(applied.stdout));
     expect(appliedOut.ok).toBe(true);
     expect(appliedOut.dry_run).toBe(false);
@@ -824,8 +834,13 @@ describe('knowledge cli', () => {
 
   test('machines topology command exposes adapter-aware topology shape', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ok-machines-cli-'));
+    const home = mkdtempSync(join(tmpdir(), 'ok-machines-cli-home-'));
 
-    const result = runCli(['machines', 'topology', '--scope', 'project', '--no-tailscale', '--json'], dir);
+    const result = runCli(
+      ['machines', 'topology', '--scope', 'project', '--no-tailscale', '--json'],
+      dir,
+      isolatedHomeEnv(home),
+    );
     expect(result.exitCode).toBe(0);
     const out = JSON.parse(new TextDecoder().decode(result.stdout));
     expect(out.ok).toBe(true);
@@ -833,7 +848,7 @@ describe('knowledge cli', () => {
     expect(out.adapter.package).toBe('@hasna/machines');
     expect(typeof out.adapter.available).toBe('boolean');
     expect(out.knowledge.app_path).toBe(join('.hasna', 'knowledge'));
-    expect(out.knowledge.workspace_home).toBe(join(dir, '.hasna', 'knowledge'));
+    expect(out.knowledge.workspace_home).toBe(expectedProjectKnowledgeHome(dir));
     expect(existsSync(join(dir, '.hasna', 'knowledge'))).toBe(false);
     expect(out.machines.length).toBeGreaterThanOrEqual(1);
     expect(out.machines.some((machine: any) => machine.local)).toBe(true);

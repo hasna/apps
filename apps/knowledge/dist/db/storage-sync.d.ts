@@ -1,7 +1,14 @@
 export declare const STORAGE_TABLES: readonly ["sources", "wiki_pages", "source_revisions", "chunks", "chunk_embeddings", "wiki_backlinks", "citations", "knowledge_indexes", "runs", "run_events", "provider_usage", "redaction_findings", "storage_objects", "audit_events", "approval_gates", "vector_index_entries", "reindex_queue", "knowledge_machines", "knowledge_sync_snapshots", "knowledge_sync_changes", "knowledge_sync_conflicts", "knowledge_sync_table_clocks", "knowledge_sync_imports"];
 export declare const KNOWLEDGE_STORAGE_TABLES: readonly ["sources", "wiki_pages", "source_revisions", "chunks", "chunk_embeddings", "wiki_backlinks", "citations", "knowledge_indexes", "runs", "run_events", "provider_usage", "redaction_findings", "storage_objects", "audit_events", "approval_gates", "vector_index_entries", "reindex_queue", "knowledge_machines", "knowledge_sync_snapshots", "knowledge_sync_changes", "knowledge_sync_conflicts", "knowledge_sync_table_clocks", "knowledge_sync_imports"];
 type StorageTable = (typeof STORAGE_TABLES)[number];
-export type StorageMode = 'local' | 'hybrid' | 'remote';
+/**
+ * Runtime storage mode per Amendment A1 (PURE REMOTE):
+ *   - `local`: SQLite knowledge.db is authoritative.
+ *   - `cloud`: reads AND writes go directly to the cloud Postgres.
+ * The legacy words `hybrid`, `remote`, and `self_hosted` are accepted only as
+ * deprecated aliases that normalize to `cloud` (no sync engine, no cache-mode).
+ */
+export type StorageMode = 'local' | 'cloud';
 export interface StorageEnv {
     name: string;
 }
@@ -31,6 +38,8 @@ export interface StorageRemoteAdapter {
         changes: number;
     }>;
     all(sql: string, ...params: unknown[]): Promise<unknown[]>;
+    /** First row or null. Restored via the vendored storage kit's typed get(). */
+    get?(sql: string, ...params: unknown[]): Promise<unknown | null>;
     close(): Promise<void>;
 }
 export declare const KNOWLEDGE_STORAGE_ENV = "HASNA_KNOWLEDGE_DATABASE_URL";

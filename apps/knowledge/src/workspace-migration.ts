@@ -171,6 +171,27 @@ function migrationTimestamp(now: Date): string {
   return now.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
 }
 
+function moveWorkspace(sourceHome: string, targetHome: string): void {
+  try {
+    renameSync(sourceHome, targetHome);
+    return;
+  } catch (error) {
+    cpSync(sourceHome, targetHome, {
+      recursive: true,
+      force: false,
+      errorOnExist: true,
+      preserveTimestamps: true,
+    });
+    try {
+      rmSync(sourceHome, { recursive: true, force: false });
+    } catch (removeError) {
+      rmSync(targetHome, { recursive: true, force: true });
+      throw removeError;
+    }
+    if (error instanceof Error && error.message.includes('EXDEV')) return;
+  }
+}
+
 function isMigrationTombstone(
   workspace: KnowledgeWorkspace,
   summary: WorkspaceTreeSummary,
@@ -301,7 +322,7 @@ export function migrateLegacyKnowledgeWorkspace(
   if (currentBefore.exists && currentIsDefaultScaffold) {
     rmSync(options.current.home, { recursive: true, force: true });
   }
-  renameSync(options.legacy.home, options.current.home);
+  moveWorkspace(options.legacy.home, options.current.home);
   const currentAfter = summarizeWorkspaceTree(options.current);
   checks.migrated_matches_backup = summariesMatch(backupAfter, currentAfter);
 

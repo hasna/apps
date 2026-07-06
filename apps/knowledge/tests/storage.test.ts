@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openKnowledgeDb } from '../src/knowledge-db';
@@ -29,6 +29,10 @@ const ENV_KEYS = [
   KNOWLEDGE_STORAGE_MODE_ENV,
   KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV,
 ] as const;
+
+function expectedProjectKnowledgeHome(projectDir: string): string {
+  return join(realpathSync(projectDir), '.hasna', 'knowledge');
+}
 
 class FakePgStorageAdapter implements StorageRemoteAdapter {
   readonly tables = new Map<string, Map<string, Record<string, unknown>>>();
@@ -95,17 +99,23 @@ describe('knowledge database storage sync config', () => {
     expect(getStorageDatabaseUrl()).toBeNull();
     expect(getStorageMode()).toBe('local');
 
+    // PURE REMOTE (A1): a DATABASE_URL alone no longer implies cloud/hybrid.
     process.env[KNOWLEDGE_STORAGE_FALLBACK_ENV] = 'postgres://fallback/knowledge';
     expect(getStorageDatabaseEnv()?.name).toBe(KNOWLEDGE_STORAGE_FALLBACK_ENV);
     expect(getStorageDatabaseUrl()).toBe('postgres://fallback/knowledge');
-    expect(getStorageMode()).toBe('hybrid');
+    expect(getStorageMode()).toBe('local');
 
     process.env[KNOWLEDGE_STORAGE_ENV] = 'postgres://primary/knowledge';
     expect(getStorageDatabaseEnv()?.name).toBe(KNOWLEDGE_STORAGE_ENV);
     expect(getStorageDatabaseUrl()).toBe('postgres://primary/knowledge');
 
+    // Canonical cloud mode, plus deprecated aliases that normalize to cloud.
+    process.env[KNOWLEDGE_STORAGE_MODE_ENV] = 'cloud';
+    expect(getStorageMode()).toBe('cloud');
     process.env[KNOWLEDGE_STORAGE_MODE_ENV] = 'remote';
-    expect(getStorageMode()).toBe('remote');
+    expect(getStorageMode()).toBe('cloud');
+    process.env[KNOWLEDGE_STORAGE_MODE_ENV] = 'hybrid';
+    expect(getStorageMode()).toBe('cloud');
 
     process.env[KNOWLEDGE_STORAGE_MODE_ENV] = 'invalid';
     process.env[KNOWLEDGE_STORAGE_MODE_FALLBACK_ENV] = 'local';
@@ -140,8 +150,8 @@ describe('knowledge database storage sync config', () => {
       activeEnv: null,
       sync: [],
     });
-    expect(status.databasePath).toBe(join(dir, '.hasna', 'knowledge', 'knowledge.db'));
     expect(existsSync(status.databasePath)).toBe(true);
+    expect(realpathSync(status.databasePath)).toBe(realpathSync(join(dir, '.hasna', 'knowledge', 'knowledge.db')));
     expect(status.tables).toEqual(STORAGE_TABLES);
   });
 
