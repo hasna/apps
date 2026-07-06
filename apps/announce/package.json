@@ -86,11 +86,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hasna/open-announce.git"
+    "url": "git+https://github.com/hasna/announce.git"
   },
-  "homepage": "https://github.com/hasna/open-announce#readme",
+  "homepage": "https://github.com/hasna/announce#readme",
   "bugs": {
-    "url": "https://github.com/hasna/open-announce/issues"
+    "url": "https://github.com/hasna/announce/issues"
   },
   "engines": {
     "bun": ">=1.0.0"
