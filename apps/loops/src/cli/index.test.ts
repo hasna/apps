@@ -4572,6 +4572,27 @@ describe("loops CLI", () => {
     expect(loop.target.args).toEqual(expect.arrayContaining(["--max-dispatch", "2"]));
   });
 
+  test("routes schedule rejects unsupported todos task templates before storing a drain loop", () => {
+    const dataDir = freshDataDir("loops-cli-routes-template-schedule-invalid-");
+
+    const scheduled = runCli(dataDir, [
+      "--json",
+      "routes",
+      "schedule",
+      "todos-task",
+      "route-drain-invalid-template",
+      "--every",
+      "5m",
+      "--template",
+      "pr-review",
+    ]);
+    expect(scheduled.status).not.toBe(0);
+    expect(scheduled.stderr).toContain("--template must be todos-task-worker-verifier or task-lifecycle");
+
+    const loops = JSON.parse(runCli(dataDir, ["--json", "list"]).stdout);
+    expect(loops).toHaveLength(0);
+  });
+
   test("routes schedule preserves registry drain options", () => {
     const dataDir = freshDataDir("loops-cli-routes-template-schedule-registry-");
 
